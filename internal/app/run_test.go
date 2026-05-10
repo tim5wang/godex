@@ -368,6 +368,37 @@ func TestRunnerSubcommandHelp(t *testing.T) {
 	}
 }
 
+func TestParseServiceInstallRuntimeOptions(t *testing.T) {
+	root := t.TempDir()
+	runner := &Runner{
+		Cfg: &config.Config{
+			HomeDir:      filepath.Join(root, "home"),
+			ProjectDir:   filepath.Join(root, "workspace"),
+			WorkspaceDir: filepath.Join(root, "workspace"),
+		},
+		Stderr: &bytes.Buffer{},
+	}
+	opts, err := runner.parseServiceOptions("install", []string{
+		"--addr", "127.0.0.1:3800",
+		"--gomemlimit", "180MiB",
+		"--gogc", "40",
+		"--gomaxprocs", "2",
+		"--godebug", "madvdontneed=1,gctrace=1",
+		"--watchdog-sec", "20",
+		"--memory-high", "240M",
+		"--memory-max", "300M",
+	}, true)
+	if err != nil {
+		t.Fatalf("parse service options: %v", err)
+	}
+	if opts.GOMEMLIMIT != "180MiB" || opts.GOGC != "40" || opts.GOMAXPROCS != "2" || opts.GODEBUG != "madvdontneed=1,gctrace=1" {
+		t.Fatalf("unexpected runtime options: %+v", opts)
+	}
+	if opts.WatchdogSec != 20 || opts.MemoryHigh != "240M" || opts.MemoryMax != "300M" {
+		t.Fatalf("unexpected watchdog/memory options: %+v", opts)
+	}
+}
+
 func TestRunnerImportClaudeDryRun(t *testing.T) {
 	source := t.TempDir()
 	writeTestFile(t, filepath.Join(source, "commands", "review.md"), `---

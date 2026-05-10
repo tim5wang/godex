@@ -30,6 +30,14 @@ type InstallOptions struct {
 	HomeDir    string
 	ProjectDir string
 	LogPath    string
+
+	GOMEMLIMIT  string
+	GOGC        string
+	GOMAXPROCS  string
+	GODEBUG     string
+	WatchdogSec int
+	MemoryHigh  string
+	MemoryMax   string
 }
 
 type Status struct {
@@ -395,6 +403,13 @@ func NormalizeOptions(opts InstallOptions) (InstallOptions, error) {
 	if opts.LogPath == "" {
 		opts.LogPath = filepath.Join(opts.HomeDir, "log", opts.Name+".service.log")
 	}
+	opts.GOMEMLIMIT = defaultString(opts.GOMEMLIMIT, "220MiB")
+	opts.GOGC = defaultString(opts.GOGC, "50")
+	opts.GOMAXPROCS = defaultString(opts.GOMAXPROCS, "1")
+	opts.GODEBUG = defaultString(opts.GODEBUG, "madvdontneed=1")
+	if opts.WatchdogSec <= 0 {
+		opts.WatchdogSec = 30
+	}
 	return opts, nil
 }
 
@@ -406,17 +421,32 @@ func RenderSystemdUnit(opts InstallOptions) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString("[Unit]\n")
 	b.WriteString("Description=GoDex Web UI\n")
-	b.WriteString("After=network-online.target\n\n")
+	b.WriteString("After=network-online.target\n")
+	b.WriteString("StartLimitIntervalSec=0\n\n")
 	b.WriteString("[Service]\n")
-	b.WriteString("Type=simple\n")
+	b.WriteString("Type=notify\n")
+	b.WriteString("NotifyAccess=main\n")
 	b.WriteString("WorkingDirectory=" + systemdEscape(opts.WorkingDir) + "\n")
 	b.WriteString("Environment=GODEX_HOME=" + systemdEscape(opts.HomeDir) + "\n")
 	b.WriteString("Environment=GODEX_PROJECT_DIR=" + systemdEscape(opts.ProjectDir) + "\n")
 	b.WriteString("Environment=GODEX_SERVICE_NAME=" + systemdEscape(opts.Name) + "\n")
 	b.WriteString("Environment=GODEX_SERVICE_SCOPE=" + systemdEscape(string(opts.Scope)) + "\n")
+	b.WriteString("Environment=GOMEMLIMIT=" + systemdEscape(opts.GOMEMLIMIT) + "\n")
+	b.WriteString("Environment=GOGC=" + systemdEscape(opts.GOGC) + "\n")
+	b.WriteString("Environment=GOMAXPROCS=" + systemdEscape(opts.GOMAXPROCS) + "\n")
+	b.WriteString("Environment=GODEBUG=" + systemdEscape(opts.GODEBUG) + "\n")
 	b.WriteString("ExecStart=" + systemdEscape(opts.BinaryPath) + " serve --addr " + systemdEscape(opts.Addr) + "\n")
-	b.WriteString("Restart=on-failure\n")
-	b.WriteString("RestartSec=5\n\n")
+	b.WriteString("Restart=always\n")
+	b.WriteString("RestartSec=3\n")
+	b.WriteString("WatchdogSec=" + strconv.Itoa(opts.WatchdogSec) + "\n")
+	b.WriteString("MemoryAccounting=yes\n")
+	if strings.TrimSpace(opts.MemoryHigh) != "" {
+		b.WriteString("MemoryHigh=" + systemdEscape(opts.MemoryHigh) + "\n")
+	}
+	if strings.TrimSpace(opts.MemoryMax) != "" {
+		b.WriteString("MemoryMax=" + systemdEscape(opts.MemoryMax) + "\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("[Install]\n")
 	b.WriteString("WantedBy=default.target\n")
 	return []byte(b.String()), nil
@@ -433,6 +463,10 @@ func RenderLaunchdPlist(opts InstallOptions) ([]byte, error) {
 		"GODEX_PROJECT_DIR":   opts.ProjectDir,
 		"GODEX_SERVICE_NAME":  opts.Name,
 		"GODEX_SERVICE_SCOPE": string(opts.Scope),
+		"GOMEMLIMIT":          opts.GOMEMLIMIT,
+		"GOGC":                opts.GOGC,
+		"GOMAXPROCS":          opts.GOMAXPROCS,
+		"GODEBUG":             opts.GODEBUG,
 	}
 	plist := launchdPlist{
 		Version:              "1.0",
@@ -493,7 +527,7 @@ func writeKeyArray(buf *bytes.Buffer, key string, values []string) {
 
 func writeKeyDict(buf *bytes.Buffer, key string, values map[string]string) {
 	buf.WriteString("<key>" + xmlEscape(key) + "</key>\n<dict>\n")
-	for _, name := range []string{"GODEX_HOME", "GODEX_PROJECT_DIR", "GODEX_SERVICE_NAME", "GODEX_SERVICE_SCOPE"} {
+	for _, name := range []string{"GODEX_HOME", "GODEX_PROJECT_DIR", "GODEX_SERVICE_NAME", "GODEX_SERVICE_SCOPE", "GOMEMLIMIT", "GOGC", "GOMAXPROCS", "GODEBUG"} {
 		writeKeyString(buf, name, values[name])
 	}
 	buf.WriteString("</dict>\n")
@@ -608,6 +642,10 @@ func windowsServeCommand(opts InstallOptions) string {
 		`set "GODEX_PROJECT_DIR=` + opts.ProjectDir + `"`,
 		`set "GODEX_SERVICE_NAME=` + opts.Name + `"`,
 		`set "GODEX_SERVICE_SCOPE=` + string(opts.Scope) + `"`,
+		`set "GOMEMLIMIT=` + opts.GOMEMLIMIT + `"`,
+		`set "GOGC=` + opts.GOGC + `"`,
+		`set "GOMAXPROCS=` + opts.GOMAXPROCS + `"`,
+		`set "GODEBUG=` + opts.GODEBUG + `"`,
 		windowsQuote(opts.BinaryPath) + " serve --addr " + opts.Addr,
 	}
 	return `cmd /c "` + strings.Join(parts, " && ") + `"`

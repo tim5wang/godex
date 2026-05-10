@@ -97,10 +97,26 @@ func (r *Runner) parseServiceOptions(command string, args []string, includeAddr 
 	scope := "user"
 	name := "godex"
 	addr := "127.0.0.1:8088"
+	gomemlimit := "220MiB"
+	gogc := "50"
+	gomaxprocs := "1"
+	godebug := "madvdontneed=1"
+	watchdogSec := 30
+	memoryHigh := ""
+	memoryMax := ""
 	fs.StringVar(&scope, "scope", scope, "service scope: user or system")
 	fs.StringVar(&name, "name", name, "service name")
 	if includeAddr {
 		fs.StringVar(&addr, "addr", addr, "HTTP listen address for godex serve")
+	}
+	if command == "install" {
+		fs.StringVar(&gomemlimit, "gomemlimit", gomemlimit, "Go runtime GOMEMLIMIT for the service")
+		fs.StringVar(&gogc, "gogc", gogc, "Go runtime GOGC percentage for the service")
+		fs.StringVar(&gomaxprocs, "gomaxprocs", gomaxprocs, "Go runtime GOMAXPROCS for the service")
+		fs.StringVar(&godebug, "godebug", godebug, "Go runtime GODEBUG value for the service")
+		fs.IntVar(&watchdogSec, "watchdog-sec", watchdogSec, "systemd watchdog interval in seconds")
+		fs.StringVar(&memoryHigh, "memory-high", memoryHigh, "optional systemd MemoryHigh value, such as 260M")
+		fs.StringVar(&memoryMax, "memory-max", memoryMax, "optional systemd MemoryMax value, such as 300M")
 	}
 	if err := fs.Parse(args); err != nil {
 		return servicecontrol.InstallOptions{}, err
@@ -111,6 +127,15 @@ func (r *Runner) parseServiceOptions(command string, args []string, includeAddr 
 	opts := r.serviceOptions(name, scope)
 	if includeAddr {
 		opts.Addr = addr
+	}
+	if command == "install" {
+		opts.GOMEMLIMIT = gomemlimit
+		opts.GOGC = gogc
+		opts.GOMAXPROCS = gomaxprocs
+		opts.GODEBUG = godebug
+		opts.WatchdogSec = watchdogSec
+		opts.MemoryHigh = memoryHigh
+		opts.MemoryMax = memoryMax
 	}
 	return opts, nil
 }
@@ -185,6 +210,8 @@ func serviceHelpText() string {
 		"  godex service logs [--scope user|system] [--name godex] [--follow]",
 		"",
 		"Default scope is user. Use --scope system for a machine-level service when the OS account has permission.",
+		"Install defaults include GOMEMLIMIT=220MiB, GOGC=50, GOMAXPROCS=1, GODEBUG=madvdontneed=1, and systemd WatchdogSec=30.",
+		"Use --memory-high and --memory-max on Linux to add systemd memory pressure limits.",
 	}, "\n")
 }
 

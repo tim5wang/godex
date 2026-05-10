@@ -60,10 +60,15 @@ func newHTTPTransport(cfg config.WeixinConfig, botToken string) (*httpTransport,
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
+	timeoutMs := cfg.LongPollTimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = defaultPollTimeoutMs
+	}
+	requestTimeout := time.Duration(timeoutMs)*time.Millisecond + 10*time.Second
 	return &httpTransport{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		cdnBaseURL: strings.TrimRight(defaultIfEmpty(strings.TrimSpace(cfg.CDNBaseURL), defaultCDNBaseURL), "/"),
-		client:     &http.Client{Timeout: 45 * time.Second, Transport: transportConfig},
+		client:     &http.Client{Timeout: requestTimeout, Transport: transportConfig},
 		botToken:   strings.TrimSpace(botToken),
 	}, nil
 }
@@ -87,8 +92,9 @@ func (t *httpTransport) GetUpdates(ctx context.Context, cursor string, timeoutMs
 	}
 	var out getUpdatesResponse
 	err := t.doJSON(ctx, http.MethodPost, "/ilink/bot/getupdates", getUpdatesRequest{
-		BaseInfo:      baseInfo{ChannelVersion: defaultChannelVer},
-		GetUpdatesBuf: strings.TrimSpace(cursor),
+		BaseInfo:           baseInfo{ChannelVersion: defaultChannelVer},
+		GetUpdatesBuf:      strings.TrimSpace(cursor),
+		LongPollingTimeout: timeoutMs,
 	}, true, &out)
 	if err != nil {
 		return getUpdatesResponse{}, err

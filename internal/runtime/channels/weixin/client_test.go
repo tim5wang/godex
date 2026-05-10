@@ -2,6 +2,7 @@ package weixin
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -52,5 +53,32 @@ func TestBuildCDNUploadURLIncludesFileKey(t *testing.T) {
 	}
 	if !strings.Contains(url, "filekey=file-key") {
 		t.Fatalf("unexpected upload url %q", url)
+	}
+}
+
+func TestHTTPTransportGetUpdatesSendsLongPollTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ilink/bot/getupdates" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		var req getUpdatesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.LongPollingTimeout != 12000 {
+			t.Fatalf("expected long poll timeout 12000, got %d", req.LongPollingTimeout)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ret":0,"get_updates_buf":"next"}`))
+	}))
+	defer server.Close()
+
+	transport := &httpTransport{baseURL: server.URL, client: server.Client(), botToken: "token"}
+	resp, err := transport.GetUpdates(context.Background(), "cursor", 12000)
+	if err != nil {
+		t.Fatalf("get updates: %v", err)
+	}
+	if resp.GetUpdatesBuf != "next" {
+		t.Fatalf("unexpected cursor %q", resp.GetUpdatesBuf)
 	}
 }

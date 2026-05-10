@@ -28,6 +28,7 @@ const (
 	weixinUploadMediaTypeVoice = 4
 
 	maxReplyChunkRunes = 1200
+	maxInboundHandlers = 2
 	qrPollInterval     = time.Second
 	qrSetupTimeout     = 2 * time.Minute
 	pollRetryDelay     = 2 * time.Second
@@ -60,8 +61,9 @@ type apiStatus struct {
 }
 
 type getUpdatesRequest struct {
-	BaseInfo      baseInfo `json:"base_info"`
-	GetUpdatesBuf string   `json:"get_updates_buf"`
+	BaseInfo           baseInfo `json:"base_info"`
+	GetUpdatesBuf      string   `json:"get_updates_buf"`
+	LongPollingTimeout int      `json:"longpolling_timeout_ms,omitempty"`
 }
 
 type getUpdatesResponse struct {

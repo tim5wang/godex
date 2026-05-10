@@ -762,6 +762,66 @@ func TestChannelAutoResumesAfterExternalSetup(t *testing.T) {
 	}
 }
 
+func TestChannelPollContinuesWhileInboundTurnRuns(t *testing.T) {
+	cfg := newWeixinTestConfig(t)
+	service := newWeixinTestService(cfg, &stubCaller{
+		delay:     500 * time.Millisecond,
+		responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("assistant reply")}}},
+	})
+	manager := channels.NewManager(cfg, service)
+
+	fake := &fakeTransport{
+		updates: []getUpdatesResponse{{
+			apiStatus:     apiStatus{Ret: 0},
+			GetUpdatesBuf: "cursor-2",
+			Msgs: []weixinMessage{{
+				MessageID:    404,
+				FromUserID:   "user-1@im.wechat",
+				ToUserID:     "bot@im.bot",
+				MessageType:  weixinMessageTypeUser,
+				MessageState: weixinMessageStateFinish,
+				ContextToken: "ctx-1",
+				ItemList: []messageItem{{
+					Type:     weixinItemTypeText,
+					TextItem: &textItem{Text: "slow task"},
+				}},
+			}},
+		}},
+	}
+	channel, err := New(cfg, manager, WithTransport(fake))
+	if err != nil {
+		t.Fatalf("new channel: %v", err)
+	}
+	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL}); err != nil {
+		t.Fatalf("save account state: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := channel.Start(ctx); err != nil {
+		t.Fatalf("start channel: %v", err)
+	}
+	defer channel.Stop(context.Background())
+
+	waitFor(t, 150*time.Millisecond, func() bool {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return len(fake.getUpdatesBufs) >= 2
+	})
+
+	fake.mu.Lock()
+	if len(fake.sendMessages) != 0 {
+		t.Fatalf("expected no reply before slow turn completes, got %#v", fake.sendMessages)
+	}
+	fake.mu.Unlock()
+
+	waitFor(t, time.Second, func() bool {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return len(fake.sendMessages) > 0
+	})
+}
+
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

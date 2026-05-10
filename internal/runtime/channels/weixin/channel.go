@@ -67,6 +67,9 @@ type Channel struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	inboundSem chan struct{}
+	inboundWG  sync.WaitGroup
 }
 
 func New(cfg *config.Config, manager *channels.Manager, opts ...Option) (*Channel, error) {
@@ -85,10 +88,11 @@ func New(cfg *config.Config, manager *channels.Manager, opts ...Option) (*Channe
 		weixinCfg.LongPollTimeoutMs = defaultPollTimeoutMs
 	}
 	ch := &Channel{
-		cfg:      weixinCfg,
-		stateDir: cfg.StateDir,
-		manager:  manager,
-		store:    newStateStore(cfg.StateDir, weixinCfg.AccountID),
+		cfg:        weixinCfg,
+		stateDir:   cfg.StateDir,
+		manager:    manager,
+		store:      newStateStore(cfg.StateDir, weixinCfg.AccountID),
+		inboundSem: make(chan struct{}, maxInboundHandlers),
 	}
 	for _, opt := range opts {
 		opt(ch)
@@ -179,6 +183,9 @@ func (c *Channel) Stop(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+	if err := c.waitInboundHandlers(ctx); err != nil {
+		return err
 	}
 	c.manager.SetStatus(channelName, channels.ChannelStatusUpdate{
 		Running:    boolRef(false),

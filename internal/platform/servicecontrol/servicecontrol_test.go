@@ -52,6 +52,31 @@ func TestRenderSystemdUnitCarriesRuntimeEnvironment(t *testing.T) {
 	}
 }
 
+func TestRenderSystemdUnitCarriesGCAndWatchdogPolicy(t *testing.T) {
+	opts := testInstallOptions(t)
+	unit, err := RenderSystemdUnit(opts)
+	if err != nil {
+		t.Fatalf("render systemd unit: %v", err)
+	}
+	text := string(unit)
+	for _, want := range []string{
+		"Type=notify",
+		"NotifyAccess=main",
+		"Environment=GOMEMLIMIT=220MiB",
+		"Environment=GOGC=50",
+		"Environment=GOMAXPROCS=1",
+		"Environment=GODEBUG=madvdontneed=1",
+		"Restart=always",
+		"RestartSec=3",
+		"WatchdogSec=30",
+		"MemoryAccounting=yes",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected systemd unit to contain %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestRenderLaunchdPlistCarriesRuntimeEnvironment(t *testing.T) {
 	opts := testInstallOptions(t)
 	plist, err := RenderLaunchdPlist(opts)

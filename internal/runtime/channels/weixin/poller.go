@@ -167,18 +167,56 @@ func (c *Channel) pollAccount(ctx context.Context, accountID string, account *ac
 		})
 
 		for _, msg := range resp.Msgs {
-			if err := c.handleInboundMessage(ctx, msg); err != nil {
-				weixinLog.Warnf("handle Weixin inbound failed account=%s: %v", accountID, err)
-				c.manager.SetStatus(channelName, channels.ChannelStatusUpdate{
-					Enabled:   boolRef(true),
-					Running:   boolRef(true),
-					State:     channels.StateError,
-					Detail:    "handle inbound failed",
-					LastError: err.Error(),
-					LastEvent: "inbound_error",
-				})
-			}
+			c.dispatchInboundMessage(ctx, accountID, msg)
 		}
+	}
+}
+
+func (c *Channel) dispatchInboundMessage(ctx context.Context, accountID string, msg weixinMessage) {
+	if c.inboundSem == nil {
+		c.handleInboundResult(accountID, c.handleInboundMessage(ctx, msg))
+		return
+	}
+	select {
+	case c.inboundSem <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+
+	c.inboundWG.Add(1)
+	go func() {
+		defer c.inboundWG.Done()
+		defer func() { <-c.inboundSem }()
+		c.handleInboundResult(accountID, c.handleInboundMessage(ctx, msg))
+	}()
+}
+
+func (c *Channel) handleInboundResult(accountID string, err error) {
+	if err == nil {
+		return
+	}
+	weixinLog.Warnf("handle Weixin inbound failed account=%s: %v", accountID, err)
+	c.manager.SetStatus(channelName, channels.ChannelStatusUpdate{
+		Enabled:   boolRef(true),
+		Running:   boolRef(true),
+		State:     channels.StateError,
+		Detail:    "handle inbound failed",
+		LastError: err.Error(),
+		LastEvent: "inbound_error",
+	})
+}
+
+func (c *Channel) waitInboundHandlers(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		c.inboundWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

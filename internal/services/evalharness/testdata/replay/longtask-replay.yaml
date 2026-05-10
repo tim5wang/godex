@@ -1,0 +1,10 @@
+name: longtask-replay
+cases:
+  - id: weixin-deploy-loop
+    title: Detect repeated tool-search loop in a sanitized deployment session
+    replay_fixture: weixin-deploy-loop
+    expected:
+      expected_instability_signals:
+        - repeated_assistant_message
+        - repeated_tool_call
+        - empty_tool_exchange_recommendation

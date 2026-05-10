@@ -1,0 +1,39 @@
+name: smoke
+cases:
+  - id: basic-chat
+    title: Basic chat response
+    prompt: "Reply with exactly: GoDex eval smoke ready"
+    timeout_seconds: 120
+    expected:
+      required_substrings:
+        - "GoDex eval smoke ready"
+      forbidden_tools:
+        - "bash"
+      max_tool_failures: 0
+
+  - id: desktop-status
+    title: Desktop tool status
+    prompt: "Use the desktop tool status action, then summarize whether the desktop backend is supported."
+    timeout_seconds: 180
+    expected:
+      required_tools:
+        - "desktop"
+      max_tool_failures: 0
+
+  - id: package-prompts
+    title: Package prompt discovery
+    prompt: "List available package prompt templates if any, and say when none are installed."
+    timeout_seconds: 180
+    expected:
+      required_tools:
+        - "list_prompts"
+      max_tool_failures: 0
+
+  - id: history-search
+    title: History search availability
+    prompt: "Check whether prior relevant session history exists for eval smoke, then briefly summarize the result."
+    timeout_seconds: 180
+    expected:
+      required_tools:
+        - "history_search"
+      max_tool_failures: 1

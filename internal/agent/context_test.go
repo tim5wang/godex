@@ -1,0 +1,1923 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/modelcontext"
+	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/skill"
+	"github.com/tim5wang/godex/internal/domain/automation"
+	"github.com/tim5wang/godex/internal/platform/stringutil"
+	"github.com/tim5wang/godex/internal/tools"
+
+	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/domain/message"
+)
+
+type fakeCaller struct {
+	resp protocol.Response
+	err  error
+}
+
+func (f fakeCaller) Call(ctx context.Context, req protocol.Request) (*protocol.Response, error) {
+	_ = ctx
+	_ = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	resp := f.resp
+	return &resp, nil
+}
+
+func TestBuildContextIncludesStructuredRuntimeMessages(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.RegisterTools()
+	a.AddMessage("hello")
+	a.appendMessage(protocol.NewMessage(protocol.RoleAssistant,
+		protocol.TextBlock("working"),
+		protocol.ToolUseBlock("tool-1", "read_file", map[string]interface{}{"path": "README.md"}),
+	))
+	a.appendMessage(protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("tool-1", "done")))
+
+	a.mu.Lock()
+	a.prompts.Skills = append(a.prompts.Skills, "Follow the loaded skill.")
+	a.mu.Unlock()
+
+	if err := a.msgBus.Send(message.Message{
+		Type:    message.MsgTypeMessage,
+		From:    "teammate",
+		To:      "lead",
+		Content: "need review",
+	}); err != nil {
+		t.Fatalf("send inbox message: %v", err)
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	if !strings.Contains(build.System, "Follow the loaded skill.") {
+		t.Fatalf("expected skill prompt in system prompt, got %q", build.System)
+	}
+	if len(build.Messages) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(build.Messages))
+	}
+	if build.Messages[2].Content[0].Type != protocol.BlockToolResult {
+		t.Fatalf("expected third message to contain tool results, got %+v", build.Messages[2].Content)
+	}
+	if build.Messages[3].Metadata == nil || build.Messages[3].Metadata.Kind != protocol.KindInbox {
+		t.Fatalf("expected last message to be inbox runtime message, got %+v", build.Messages[3].Metadata)
+	}
+	apiMessages := protocol.ToAPIMessages(build.Messages)
+	if got := apiMessages[2].Content[0].ToolUseID; got != "tool-1" {
+		t.Fatalf("expected tool result block for tool-1, got %q", got)
+	}
+	if got := protocol.MessageText(build.Messages[3]); !strings.Contains(got, "Inbox updates") {
+		t.Fatalf("expected inbox summary text, got %q", got)
+	}
+	if got := a.msgBus.PeekInbox("lead"); len(got) != 1 {
+		t.Fatalf("expected inbox preview to remain before ack, got %d messages", len(got))
+	}
+	build.AckRuntime()
+	if got := a.msgBus.PeekInbox("lead"); len(got) != 0 {
+		t.Fatalf("expected inbox to be acked after explicit ack, got %d messages", len(got))
+	}
+}
+
+func TestBuildContextConservativeAutoCompactTrigger(t *testing.T) {
+	t.Run("history over threshold compacts", func(t *testing.T) {
+		a := newTestAgent(t, 80)
+		a.AddMessage(strings.Repeat("history ", 80))
+
+		build, err := a.buildContext(context.Background())
+		if err != nil {
+			t.Fatalf("build context: %v", err)
+		}
+		if !build.Compacted {
+			t.Fatalf("expected history over threshold to compact, breakdown=%+v reasons=%v", build.TokenBreakdown, build.CompressionReasons)
+		}
+	})
+
+	t.Run("total over threshold with tiny history does not compact", func(t *testing.T) {
+		a := newTestAgent(t, 10)
+
+		build, err := a.buildContext(context.Background())
+		if err != nil {
+			t.Fatalf("build context: %v", err)
+		}
+		if build.Compacted {
+			t.Fatalf("did not expect tiny history to compact, breakdown=%+v reasons=%v", build.TokenBreakdown, build.CompressionReasons)
+		}
+		if build.TokenBreakdown.Total <= a.cfg.CompressThreshold {
+			t.Fatalf("test setup expected total over threshold, breakdown=%+v", build.TokenBreakdown)
+		}
+	})
+
+	t.Run("total over threshold with compactable history compacts", func(t *testing.T) {
+		a := newTestAgent(t, 1000)
+		a.RegisterTools()
+		a.AddMessage(strings.Repeat("compactable ", 260))
+
+		build, err := a.buildContext(context.Background())
+		if err != nil {
+			t.Fatalf("build context: %v", err)
+		}
+		if !build.Compacted {
+			t.Fatalf("expected total pressure with compactable history to compact, breakdown=%+v reasons=%v", build.TokenBreakdown, build.CompressionReasons)
+		}
+	})
+}
+
+func TestBuildContextDedupesRepeatedLargeToolResultSummaries(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	summary := modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
+		ToolName:     "bash",
+		ToolUseID:    "tool-large",
+		Bytes:        100000,
+		SHA256:       "abc123",
+		ArtifactPath: ".godex/.tool-results/session/tool-large.json",
+		Preview:      strings.Repeat("preview ", 200),
+	})
+	a.appendMessage(protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("tool-large-1", summary)))
+	a.appendMessage(protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("tool-large-2", summary)))
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if len(build.Messages) < 2 {
+		t.Fatalf("expected two messages, got %d", len(build.Messages))
+	}
+	first := build.Messages[0].Content[0].Content
+	second := build.Messages[1].Content[0].Content
+	if !strings.Contains(first, "tool_result_truncated") {
+		t.Fatalf("expected first summary to remain full reference, got %q", first)
+	}
+	if !strings.Contains(second, "tool_result_duplicate") {
+		t.Fatalf("expected repeated summary to become duplicate reference, got %q", second)
+	}
+	if strings.Contains(second, strings.Repeat("preview ", 20)) {
+		t.Fatalf("expected duplicate reference to omit repeated preview, got %q", second)
+	}
+}
+
+func TestActiveSkillsPromptAppliesContextBudget(t *testing.T) {
+	longCore := strings.Repeat("This skill section has many details about workflows and examples. ", 2000)
+	prompt := buildActiveSkillsPrompt([]activeSkillState{{
+		catalog: skill.CatalogEntry{
+			ID:          "large-skill",
+			Name:        "Large Skill",
+			Description: "A deliberately large skill.",
+		},
+		core: longCore,
+		expanded: map[string]string{
+			"details": strings.Repeat("Extra section detail. ", 1000),
+		},
+		expandedOrder: []string{"details"},
+	}})
+
+	if !strings.Contains(prompt, "# Active Skills") || !strings.Contains(prompt, "Context Budget Notes") {
+		t.Fatalf("expected active skill prompt with budget notes, got %q", prompt)
+	}
+	if strings.Contains(prompt, strings.Repeat("This skill section has many details", 200)) {
+		t.Fatalf("expected large skill section to be truncated")
+	}
+	if !strings.Contains(prompt, "[skill section truncated]") {
+		t.Fatalf("expected truncation marker, got %q", prompt)
+	}
+}
+
+func TestInspectContextReportsTokenBreakdownAndToolResultReferences(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Runtime context",
+		Summary: "Runtime context includes memory previews.",
+		Content: "Use memory previews when debugging context compression.",
+		Type:    memory.TypeProject,
+		Source:  "test",
+	}); err != nil {
+		t.Fatalf("remember memory: %v", err)
+	}
+	if err := a.msgBus.Send(message.Message{
+		Type:    message.MsgTypeMessage,
+		From:    "teammate",
+		To:      "lead",
+		Content: "runtime note",
+	}); err != nil {
+		t.Fatalf("send inbox message: %v", err)
+	}
+
+	a.appendMessage(protocol.Message{
+		Role: protocol.RoleUser,
+		Content: []protocol.Block{
+			protocol.TextBlock("please debug context compression with memory"),
+		},
+		Metadata: &protocol.Metadata{
+			Attachments: []protocol.Attachment{{
+				ID:        "att-1",
+				Name:      "report.txt",
+				MIMEType:  "text/plain",
+				Path:      "/tmp/report.txt",
+				SizeBytes: 1024,
+			}},
+		},
+	})
+	a.appendMessage(protocol.NewMessage(protocol.RoleAssistant,
+		protocol.ToolUseBlock("tool-large", "read_file", map[string]interface{}{"path": "large.log"}),
+	))
+	a.appendMessage(protocol.NewMessage(protocol.RoleUser,
+		protocol.ToolResultBlock("tool-large", modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
+			ToolName:     "read_file",
+			ToolUseID:    "tool-large",
+			Bytes:        65536,
+			SHA256:       strings.Repeat("a", 64),
+			ArtifactPath: ".godex/.tool-results/session/tool-large.json",
+			Preview:      "head\n...\ntail",
+		})),
+	))
+
+	inspection, err := a.InspectContext(context.Background(), "session-context")
+	if err != nil {
+		t.Fatalf("inspect context: %v", err)
+	}
+	if inspection.TokenEstimate != inspection.TokenBreakdown.Total || inspection.TotalTokenEstimate != inspection.TokenBreakdown.Total {
+		t.Fatalf("expected total estimate fields to match breakdown: %+v", inspection)
+	}
+	if inspection.TokenBreakdown.System == 0 || inspection.TokenBreakdown.History == 0 || inspection.TokenBreakdown.Memory == 0 || inspection.TokenBreakdown.Runtime == 0 || inspection.TokenBreakdown.ToolSchemas == 0 {
+		t.Fatalf("expected non-zero primary breakdown fields, got %+v", inspection.TokenBreakdown)
+	}
+	if inspection.TokenBreakdown.ToolResults == 0 || inspection.TokenBreakdown.Attachments == 0 {
+		t.Fatalf("expected tool result and attachment pressure, got %+v", inspection.TokenBreakdown)
+	}
+	if inspection.LargeToolResultReferenceCount != 1 || len(inspection.ToolResultReferences) != 1 {
+		t.Fatalf("expected one large tool result reference, got %+v", inspection)
+	}
+	if got := inspection.ToolResultReferences[0].ArtifactPath; !strings.Contains(got, "tool-large.json") {
+		t.Fatalf("expected artifact reference, got %+v", inspection.ToolResultReferences[0])
+	}
+}
+
+func TestBuildContextDoesNotExposeIdleToolForPrimaryAgent(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, schema := range build.ToolSchemas {
+		if schema.Name == "idle" {
+			t.Fatalf("did not expect primary agent to expose idle tool, got %+v", build.ToolSchemas)
+		}
+	}
+}
+
+func TestBuildContextIncludesEnvironmentPrompt(t *testing.T) {
+	a := newTestAgent(t, 4096)
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, want := range []string{
+		"# Memory",
+		"Memory directory: " + a.cfg.MemoryDir,
+		"# Environment",
+		"This is optional runtime context.",
+		"Skills directory: " + a.cfg.SkillsDir,
+		"Temporary files directory: " + a.cfg.TempDir,
+		"Local date: 2026-04-17",
+		"Weekday: Friday",
+		"Timezone: Asia/Shanghai",
+	} {
+		if !strings.Contains(build.System, want) {
+			t.Fatalf("expected system prompt to contain %q, got %q", want, build.System)
+		}
+	}
+}
+
+func TestBuildContextIncludesCapabilityCheckPrompt(t *testing.T) {
+	a := newTestAgent(t, 4096)
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, want := range []string{
+		"You are a helpful AI agent working inside this workspace.",
+		"# Capability Check",
+		"Check what is already configured in this workspace before calling a capability unavailable.",
+		"Start with relevant skills and active tools, then use tool_exchange if another bundle would help.",
+		"Keep the active tool workspace small: when calling tool_exchange, disable bundles that are clearly irrelevant to the current conversation",
+		"When a tool generates a local file such as a screenshot or export, treat it as a generated artifact.",
+		"When the user wants a local file sent or attached without reading its contents, prefer attach_file instead of read_file.",
+		"Do not use read_file for binary or large artifacts such as PDFs, images, media, or archives",
+		"Skip canned self-introductions and stay focused on the request.",
+	} {
+		if !strings.Contains(build.System, want) {
+			t.Fatalf("expected system prompt to contain %q, got %q", want, build.System)
+		}
+	}
+}
+
+func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	names := make(map[string]struct{}, len(build.ToolSchemas))
+	for _, schema := range build.ToolSchemas {
+		names[schema.Name] = struct{}{}
+	}
+
+	for _, expected := range []string{
+		"bash",
+		"glob",
+		"read_file",
+		"write_file",
+		"edit_file",
+		"attach_file",
+		"todo_write",
+		"todo_list",
+		"list_skills",
+		"load_skill",
+		"tool_exchange",
+	} {
+		if _, ok := names[expected]; !ok {
+			t.Fatalf("expected active tool schema %q, got %+v", expected, build.ToolSchemas)
+		}
+	}
+
+	for _, unexpected := range []string{
+		"background_run",
+		"check_background",
+		"web_search",
+		"web_fetch",
+		"task_create",
+		"task_list",
+		"read_inbox",
+		"send_message",
+		"task",
+		"list_skill_sources",
+		"install_skill",
+		"list_memory",
+		"get_memory",
+		"search_memory",
+		"list_memory_candidates",
+		"remember_memory",
+		"forget_memory",
+		"compress",
+		"accept_memory_candidate",
+		"dismiss_memory_candidate",
+		"expand_skill",
+		"unload_skill",
+	} {
+		if _, ok := names[unexpected]; ok {
+			t.Fatalf("did not expect inactive tool schema %q, got %+v", unexpected, build.ToolSchemas)
+		}
+	}
+
+	if got := len(build.ToolSchemas); got != 11 {
+		t.Fatalf("expected 11 active tool schemas by default, got %d", got)
+	}
+}
+
+func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{AgentProfile: config.AgentProfileCoding})
+
+	build, err := a.buildContext(ctx)
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	names := make(map[string]struct{}, len(build.ToolSchemas))
+	for _, schema := range build.ToolSchemas {
+		names[schema.Name] = struct{}{}
+	}
+	for _, want := range []string{
+		"bash",
+		"glob",
+		"read_file",
+		"write_file",
+		"edit_file",
+		"attach_file",
+		"todo_write",
+		"todo_list",
+		"tool_exchange",
+	} {
+		if _, ok := names[want]; !ok {
+			t.Fatalf("expected coding profile tool %q, got %+v", want, build.ToolSchemas)
+		}
+	}
+	for _, blocked := range []string{
+		"list_skills",
+		"load_skill",
+		"list_memory",
+		"remember_memory",
+		"compress",
+		"manage_session",
+		"history_search",
+		"web_search",
+		"background_run",
+		"task",
+	} {
+		if _, ok := names[blocked]; ok {
+			t.Fatalf("did not expect coding profile to expose %q by default, got %+v", blocked, build.ToolSchemas)
+		}
+	}
+	if strings.Contains(build.System, "# Skill Availability") {
+		t.Fatalf("did not expect coding profile to inject skill catalog prompt, got %q", build.System)
+	}
+	if !strings.Contains(build.System, "Effective profile: coding") {
+		t.Fatalf("expected coding profile prompt, got %q", build.System)
+	}
+	for _, want := range []string{
+		"Keep user-visible replies compact like a coding agent",
+		"Do not narrate routine steps",
+		"Response style: concise by default",
+	} {
+		if !strings.Contains(build.System, want) {
+			t.Fatalf("expected coding profile prompt to contain %q, got %q", want, build.System)
+		}
+	}
+}
+
+func TestBuildContextCodingProfileCanExposeSkillsWhenRequested(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("请加载适合代码评审的 skill")
+	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{AgentProfile: config.AgentProfileCoding})
+
+	build, err := a.buildContext(ctx)
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	for _, want := range []string{"list_skills", "load_skill", "list_skill_sources"} {
+		if _, ok := schemaByName(build.ToolSchemas, want); !ok {
+			t.Fatalf("expected %s for explicit skill request in coding profile, got %+v", want, build.ToolSchemas)
+		}
+	}
+}
+
+func TestBuildContextPreloadsWebForWeatherQueries(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("今天深圳天气怎么样？")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	if _, ok := schemaByName(build.ToolSchemas, "web_search"); !ok {
+		t.Fatalf("expected web_search schema for weather query, got %+v", build.ToolSchemas)
+	}
+	if _, ok := schemaByName(build.ToolSchemas, "web_fetch"); !ok {
+		t.Fatalf("expected web_fetch schema for weather query, got %+v", build.ToolSchemas)
+	}
+	if !strings.Contains(build.System, "web (current information lookup and page fetching)") {
+		t.Fatalf("expected system prompt to show active web bundle, got %q", build.System)
+	}
+}
+
+func TestBuildContextPreloadsWebForExplicitWebSearchQueries(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("网络搜索一下 GoDex agent runtime 的资料")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	if _, ok := schemaByName(build.ToolSchemas, "web_search"); !ok {
+		t.Fatalf("expected web_search schema for explicit web search query, got %+v", build.ToolSchemas)
+	}
+	if _, ok := schemaByName(build.ToolSchemas, "web_fetch"); !ok {
+		t.Fatalf("expected web_fetch schema for explicit web search query, got %+v", build.ToolSchemas)
+	}
+}
+
+func TestBuildContextDoesNotPreloadWebForPlainCodeQueries(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("帮我重构这个函数")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	if _, ok := schemaByName(build.ToolSchemas, "web_search"); ok {
+		t.Fatalf("did not expect web_search schema for plain code query, got %+v", build.ToolSchemas)
+	}
+}
+
+func TestBuildContextExposesHistorySearchForExplicitRecall(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("刚才我们定过哪个方案？")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if build.HistoryRecall == nil || !build.HistoryRecall.AllowTool || !build.HistoryRecall.ExplicitRequest {
+		t.Fatalf("expected explicit history recall decision, got %+v", build.HistoryRecall)
+	}
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); !ok {
+		t.Fatalf("expected history_search to be exposed, got %+v", build.ToolSchemas)
+	}
+}
+
+func TestBuildContextHidesHistorySearchForOrdinaryQuery(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("请修一下这个函数")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
+		t.Fatalf("did not expect history_search for ordinary query, got %+v", build.ToolSchemas)
+	}
+}
+
+func TestBuildContextAutoExposesHistorySearchAfterClearOrCompact(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.RestoreStateForSession("session-1", SessionState{
+		Messages:       []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "还记得这个 PDF 放在哪吗？")},
+		TranscriptRefs: []string{"transcript_20260424_120000.json"},
+	})
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if build.HistoryRecall == nil || !build.HistoryRecall.AllowTool || !build.HistoryRecall.Automatic {
+		t.Fatalf("expected weak automatic history recall, got %+v", build.HistoryRecall)
+	}
+	if build.HistoryRecall.RecommendedScope != tools.HistorySearchScopeSessionArchive {
+		t.Fatalf("expected session_archive recommendation, got %+v", build.HistoryRecall)
+	}
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); !ok {
+		t.Fatalf("expected history_search to be exposed, got %+v", build.ToolSchemas)
+	}
+}
+
+func TestBuildContextDoesNotAutoExposeAllArchives(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.cfg.Tools.History.Auto.DefaultScope = tools.HistorySearchScopeAllArchives
+	a.RegisterTools()
+	a.RestoreStateForSession("session-1", SessionState{
+		Messages:       []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "还记得 rollback checklist 吗？")},
+		TranscriptRefs: []string{"transcript_20260424_120000.json"},
+	})
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if build.HistoryRecall == nil {
+		t.Fatal("expected history recall decision")
+	}
+	if build.HistoryRecall.RecommendedScope == tools.HistorySearchScopeAllArchives {
+		t.Fatalf("did not expect automatic all_archives recommendation, got %+v", build.HistoryRecall)
+	}
+}
+
+func TestBuildContextLimitsAutomaticHistoryRecallToOncePerTurn(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.RestoreStateForSession("session-1", SessionState{
+		Messages:       []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "还记得上线窗口吗？")},
+		TranscriptRefs: []string{"transcript_20260424_120000.json"},
+	})
+	ctx := withHistoryRecallTurnState(context.Background())
+	if state := historyRecallTurnStateFromContext(ctx); state != nil {
+		state.setAutomaticExposure(true)
+		state.consumeAutomaticExposure()
+	}
+
+	build, err := a.buildContext(ctx)
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
+		t.Fatalf("did not expect history_search after automatic recall limit, got %+v", build.ToolSchemas)
+	}
+}
+
+func TestBuildContextBlocksAutomaticHistoryRecallForSessionSource(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.RestoreStateForSession("session-1", SessionState{
+		Messages:       []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "还记得巡检规则吗？")},
+		TranscriptRefs: []string{"transcript_20260424_120000.json"},
+	})
+	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{Source: "cron"})
+
+	build, err := a.buildContext(ctx)
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
+		t.Fatalf("did not expect history_search for blocked session source, got %+v", build.ToolSchemas)
+	}
+}
+
+func TestBuildContextIncludesProjectLedger(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{
+		SessionID:     "session-ledger",
+		ProjectLedger: "Goal: ship the long task\nCurrent phase: validation",
+	})
+
+	build, err := a.buildContext(ctx)
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if strings.Contains(build.System, "Long-task project ledger") || strings.Contains(build.System, "Goal: ship the long task") {
+		t.Fatalf("did not expect volatile project ledger in system prompt, got %q", build.System)
+	}
+	foundLedger := false
+	for _, msg := range build.Messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
+			continue
+		}
+		text := protocol.MessageText(msg)
+		if strings.Contains(text, "Long-task project ledger") && strings.Contains(text, "Goal: ship the long task") {
+			foundLedger = true
+			break
+		}
+	}
+	if !foundLedger {
+		t.Fatalf("expected project ledger as ephemeral runtime message, got %+v", build.Messages)
+	}
+}
+
+func TestBuildContextIncludesToolAvailabilityPrompt(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, want := range []string{
+		"# Tool Availability",
+		"Only active tools are callable right now.",
+		"Use tool_exchange with a short query to discover or change bundle state when needed.",
+		"Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.",
+		"Keep the active tool workspace tidy: use disable_bundles for active bundles that this conversation no longer needs.",
+		"- Active bundles: core_code (workspace shell commands and code file access), planning (lightweight todo planning and progress tracking)",
+		"- Available bundles: background (long-running command execution and status checks), desktop (local desktop screenshots, clipboard, keyboard, mouse, and window inspection), external_agents (external ACP agent delegation over stdio), mcp (configured MCP resource servers), packages (declaration-only package and prompt ecosystem), subagent (isolated delegated exploration or implementation work), task_board (persistent task board operations), team (teammate inbox, messaging, and approval workflows), web (current information lookup and page fetching)",
+	} {
+		if !strings.Contains(build.System, want) {
+			t.Fatalf("expected system prompt to contain %q, got %q", want, build.System)
+		}
+	}
+}
+
+func TestBuildContextIncludesSkillCatalogPrompt(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	skillPath := filepath.Join(a.cfg.SkillsDir, "review-helper", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte(`---
+description: Review code changes with a structured checklist
+when_to_use:
+  - when the user asks for review
+recommended_bundles:
+  - background
+sections:
+  - core
+  - workflow
+---
+## Core
+Focus on regressions and missing tests.
+
+## Workflow
+Read the diff first.`), 0644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, want := range []string{
+		"# Skill Availability",
+		"Installed and discoverable skills. Use list_skills or list_skill_sources for more detail, install_skill to add one, load_skill to activate it, expand_skill for extra sections, and unload_skill when it is no longer helpful. If the user says find-skills or asks to find a skill, use list_skill_sources with a query; do not use tool_exchange for skill search.",
+		"- review-helper: Review code changes with a structured checklist",
+		"Recommended bundles: background.",
+		"Sections: core, workflow.",
+	} {
+		if !strings.Contains(build.System, want) {
+			t.Fatalf("expected skill catalog prompt to contain %q, got %q", want, build.System)
+		}
+	}
+}
+
+func TestSkillCatalogPromptCompactsNestedSkillSuites(t *testing.T) {
+	items := []skill.CatalogEntry{
+		{ID: "solo", Name: "solo", Description: "Standalone skill"},
+		{ID: "gstack", Name: "gstack", Description: "Gstack suite root skill"},
+	}
+	for _, name := range []string{
+		"plan-ceo-review",
+		"plan-eng-review",
+		"plan-design-review",
+		"qa",
+		"review",
+		"ship",
+		"debug",
+	} {
+		items = append(items, skill.CatalogEntry{
+			ID:          "gstack/" + name,
+			Name:        name,
+			Description: "gstack " + name,
+			Compatibility: skill.Compatibility{
+				Status: skill.CompatibilityNativeSupported,
+			},
+		})
+	}
+
+	prompt := buildSkillCatalogPrompt(items)
+	for _, want := range []string{
+		"- solo: Standalone skill",
+		"- gstack: Gstack suite root skill 7 nested skills available:",
+		"gstack/plan-ceo-review",
+		"gstack/plan-eng-review",
+		"gstack/ship",
+		`Use list_skills with suite="gstack" and offset/limit to inspect child details on demand`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected compact catalog prompt to contain %q, got %q", want, prompt)
+		}
+	}
+	for _, omitted := range []string{"gstack plan-ceo-review", "gstack plan-eng-review", "gstack ship"} {
+		if strings.Contains(prompt, omitted) {
+			t.Fatalf("expected suite prompt to omit child descriptions such as %q, got %q", omitted, prompt)
+		}
+	}
+	if strings.Contains(prompt, "- gstack suite:") {
+		t.Fatalf("expected root skill line to carry nested skill summary instead of separate suite line, got %q", prompt)
+	}
+}
+
+func TestSkillCatalogExposesSuiteMetadata(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	rootPath := filepath.Join(a.cfg.SkillsDir, "gstack", "SKILL.md")
+	childPath := filepath.Join(a.cfg.SkillsDir, "gstack", "plan-eng-review", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(rootPath), 0755); err != nil {
+		t.Fatalf("mkdir root skill: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(childPath), 0755); err != nil {
+		t.Fatalf("mkdir child skill: %v", err)
+	}
+	if err := os.WriteFile(rootPath, []byte(`---
+description: Gstack suite root skill
+---
+## Core
+Use gstack for specialist workflows.`), 0644); err != nil {
+		t.Fatalf("write root skill: %v", err)
+	}
+	if err := os.WriteFile(childPath, []byte(`---
+description: Engineering manager architecture review
+---
+## Core
+Review architecture.`), 0644); err != nil {
+		t.Fatalf("write child skill: %v", err)
+	}
+
+	items, err := a.ListSkills()
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	var root, child skill.CatalogEntry
+	for _, item := range items {
+		switch item.ID {
+		case "gstack":
+			root = item
+		case "gstack/plan-eng-review":
+			child = item
+		}
+	}
+	if root.SkillKind != "suite_root" || root.ChildSkillCount != 1 || len(root.ChildSkillIDs) != 1 || root.ChildSkillIDs[0] != "gstack/plan-eng-review" {
+		t.Fatalf("expected suite root metadata, got %+v", root)
+	}
+	if !strings.Contains(root.ChildSkillHint, `suite="gstack"`) {
+		t.Fatalf("expected child skill hint to mention suite lookup, got %q", root.ChildSkillHint)
+	}
+	if child.SkillKind != "child_skill" || child.SuiteID != "gstack" {
+		t.Fatalf("expected child skill metadata, got %+v", child)
+	}
+
+	detail, err := a.GetSkill("gstack")
+	if err != nil {
+		t.Fatalf("get root skill: %v", err)
+	}
+	if detail.SkillKind != "suite_root" || detail.ChildSkillCount != 1 {
+		t.Fatalf("expected get skill to preserve suite metadata, got %+v", detail)
+	}
+
+	activated, err := a.ActivateSkill("gstack")
+	if err != nil {
+		t.Fatalf("activate root skill: %v", err)
+	}
+	if activated.SkillKind != "suite_root" || activated.ChildSkillCount != 1 || len(activated.ChildSkillIDs) != 1 {
+		t.Fatalf("expected activation to expose loaded suite root metadata, got %+v", activated)
+	}
+}
+
+func TestBuildContextExposesSkillManagementSchemasOnlyWhenNeeded(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	skillPath := filepath.Join(a.cfg.SkillsDir, "example", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte(`---
+description: Use the example skill.
+sections:
+  - core
+  - workflow
+---
+## Core
+Core.
+
+## Workflow
+Workflow.`), 0644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	before, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context before load: %v", err)
+	}
+	for _, schema := range before.ToolSchemas {
+		if schema.Name == "expand_skill" || schema.Name == "unload_skill" {
+			t.Fatalf("did not expect %s before any skill is active", schema.Name)
+		}
+	}
+
+	if _, err := a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"}); err != nil {
+		t.Fatalf("load skill: %v", err)
+	}
+
+	after, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context after load: %v", err)
+	}
+	names := make(map[string]struct{}, len(after.ToolSchemas))
+	for _, schema := range after.ToolSchemas {
+		names[schema.Name] = struct{}{}
+	}
+	for _, want := range []string{"expand_skill", "unload_skill"} {
+		if _, ok := names[want]; !ok {
+			t.Fatalf("expected %s after skill activation, got %+v", want, after.ToolSchemas)
+		}
+	}
+}
+
+func TestBuildContextExposesMemoryCandidateActionsOnlyWhenNeeded(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	before, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context before candidates: %v", err)
+	}
+	for _, schema := range before.ToolSchemas {
+		if schema.Name == "accept_memory_candidate" || schema.Name == "dismiss_memory_candidate" {
+			t.Fatalf("did not expect %s before any candidates exist", schema.Name)
+		}
+	}
+
+	a.AddMessage("以后请用中文回复。")
+	a.client = fakeCaller{resp: protocol.Response{
+		Content: []protocol.Block{protocol.TextBlock("好的，我之后会使用中文回复。")},
+	}}
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("run agent to capture candidate: %v", err)
+	}
+
+	after, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context after candidates: %v", err)
+	}
+	names := make(map[string]struct{}, len(after.ToolSchemas))
+	for _, schema := range after.ToolSchemas {
+		names[schema.Name] = struct{}{}
+	}
+	for _, want := range []string{"accept_memory_candidate", "dismiss_memory_candidate"} {
+		if _, ok := names[want]; !ok {
+			t.Fatalf("expected %s after candidate capture, got %+v", want, after.ToolSchemas)
+		}
+	}
+}
+
+func TestBuildContextExposesSkillMarketSchemasWhenUserRequestsSkillInstall(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("帮我安装一个适合代码评审的 skill。")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	names := make(map[string]struct{}, len(build.ToolSchemas))
+	for _, schema := range build.ToolSchemas {
+		names[schema.Name] = struct{}{}
+	}
+	for _, want := range []string{"list_skill_sources", "install_skill"} {
+		if _, ok := names[want]; !ok {
+			t.Fatalf("expected %s for skill-install request, got %+v", want, build.ToolSchemas)
+		}
+	}
+}
+
+func TestBuildContextExposesMemoryAdminSchemasWhenUserMentionsMemory(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("记住这个偏好，并列出当前 memory。")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	names := make(map[string]struct{}, len(build.ToolSchemas))
+	for _, schema := range build.ToolSchemas {
+		names[schema.Name] = struct{}{}
+	}
+	for _, want := range []string{"list_memory", "remember_memory", "forget_memory"} {
+		if _, ok := names[want]; !ok {
+			t.Fatalf("expected %s for memory request, got %+v", want, build.ToolSchemas)
+		}
+	}
+}
+
+func TestBuildContextExposesCompressWhenRequested(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.AddMessage("请先压缩上下文，再继续回答。")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, schema := range build.ToolSchemas {
+		if schema.Name == "compress" {
+			return
+		}
+	}
+	t.Fatalf("expected compress schema when user asks to compress context, got %+v", build.ToolSchemas)
+}
+
+func TestBuildContextShowsThirdPartySkillCompatibility(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	skillPath := filepath.Join(a.cfg.SkillsDir, "round-table", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte(`/round-table <topic>
+
+Use bash tools and smoke_test.sh before continuing.
+Preferred search path: mcp__MiniMax__web_search.
+Coordinate with rt-tech and rt-risk subagent roles.`), 0644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, want := range []string{
+		"- round-table: Skill: round-table",
+		"Compatibility: degraded_supported.",
+		"Recommended bundles: core_code, background, subagent, mcp.",
+		"Missing capabilities: mcp.",
+	} {
+		if !strings.Contains(build.System, want) {
+			t.Fatalf("expected third-party skill prompt to contain %q, got %q", want, build.System)
+		}
+	}
+}
+
+func TestListSkillsResolvesMCPCompatibilityWhenServersConfigured(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	if err := os.MkdirAll(filepath.Dir(a.cfg.MCPConfigPath), 0755); err != nil {
+		t.Fatalf("mkdir mcp config dir: %v", err)
+	}
+	if err := os.WriteFile(a.cfg.MCPConfigPath, []byte(`{"servers":[{"name":"docs","type":"filesystem","root":"docs"}]}`), 0644); err != nil {
+		t.Fatalf("write mcp config: %v", err)
+	}
+
+	skillPath := filepath.Join(a.cfg.SkillsDir, "round-table", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte(`/round-table <topic>
+
+Preferred search path: mcp__MiniMax__web_search.`), 0644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	items, err := a.ListSkills()
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 skill, got %+v", items)
+	}
+	if items[0].Compatibility.Status != skill.CompatibilityNativeSupported {
+		t.Fatalf("expected mcp and slash-command runtime adapters to resolve compatibility, got %+v", items[0].Compatibility)
+	}
+	if stringutil.Contains(items[0].Compatibility.MissingCapabilities, "mcp") {
+		t.Fatalf("did not expect mcp to remain missing, got %+v", items[0].Compatibility)
+	}
+	if stringutil.Contains(items[0].Compatibility.MissingCapabilities, "slash_command_runtime") {
+		t.Fatalf("did not expect slash-command runtime to remain missing, got %+v", items[0].Compatibility)
+	}
+}
+
+func TestListSkillsAdaptsForkHooksAndAllowedTools(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	skillPath := filepath.Join(a.cfg.SkillsDir, "forked-review", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte(`---
+description: Forked review workflow
+---
+allowed-tools: bash, background_run
+context: fork
+hooks: on_complete
+`), 0644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	items, err := a.ListSkills()
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 skill, got %+v", items)
+	}
+
+	if items[0].Compatibility.Status != skill.CompatibilityNativeSupported {
+		t.Fatalf("expected runtime adapters to resolve fork+hooks skill, got %+v", items[0].Compatibility)
+	}
+	for _, want := range []string{"core_code", "background", "subagent"} {
+		if !stringutil.Contains(items[0].RecommendedBundles, want) {
+			t.Fatalf("expected recommended bundle %q, got %+v", want, items[0].RecommendedBundles)
+		}
+	}
+}
+
+func TestBuildContextDoesNotMisclassifyPlainJSONText(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.appendMessage(protocol.NewTextMessage(protocol.RoleUser, `[{"type":"tool_result","tool_use_id":"tool-1","content":"done"}]`))
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	if len(build.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(build.Messages))
+	}
+	if len(build.Messages[0].Content) != 1 || build.Messages[0].Content[0].Type != protocol.BlockText {
+		t.Fatalf("expected plain JSON string to remain text, got %+v", build.Messages[0].Content)
+	}
+}
+
+func TestBuildContextCompactsPersistentHistoryButKeepsRuntimeMessages(t *testing.T) {
+	a := newTestAgent(t, 8)
+	a.AddMessage(strings.Repeat("user message ", 20))
+	a.appendMessage(protocol.NewTextMessage(protocol.RoleAssistant, strings.Repeat("assistant message ", 20)))
+
+	if err := a.msgBus.Send(message.Message{
+		Type:    message.MsgTypeMessage,
+		From:    "teammate",
+		To:      "lead",
+		Content: "fresh inbox update",
+	}); err != nil {
+		t.Fatalf("send inbox message: %v", err)
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	if !build.Compacted {
+		t.Fatal("expected context to be compacted")
+	}
+
+	foundSummary := false
+	foundInbox := false
+	for _, msg := range build.Messages {
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
+			foundSummary = true
+		}
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindInbox {
+			foundInbox = true
+		}
+	}
+	if !foundSummary {
+		t.Fatal("expected compacted context to include summary message")
+	}
+	if !foundInbox {
+		t.Fatal("expected compacted context to keep inbox runtime message")
+	}
+
+	stored := a.GetMessages()
+	if len(stored) == 0 || stored[0].Metadata == nil || stored[0].Metadata.Kind != protocol.KindSummary {
+		t.Fatalf("expected persistent history to be compacted in memory, got %+v", stored)
+	}
+	for _, msg := range stored {
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindInbox {
+			t.Fatal("did not expect runtime inbox message to be persisted")
+		}
+	}
+
+	entries, err := os.ReadDir(a.cfg.TranscriptsDir)
+	if err != nil {
+		t.Fatalf("read transcript dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 transcript after first compaction, got %d", len(entries))
+	}
+
+	secondBuild, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context second time: %v", err)
+	}
+	if secondBuild.Compacted {
+		t.Fatal("expected unchanged compacted history not to compact again")
+	}
+	entries, err = os.ReadDir(a.cfg.TranscriptsDir)
+	if err != nil {
+		t.Fatalf("read transcript dir again: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected transcript count to remain 1, got %d", len(entries))
+	}
+}
+
+func TestBuildContextIncludesInstructionPrompt(t *testing.T) {
+	a := newTestAgent(t, 4096)
+
+	projectInstructions := filepath.Join(a.cfg.WorkspaceDir, "AGENT.md")
+	if err := os.WriteFile(projectInstructions, []byte("Follow project instruction."), 0644); err != nil {
+		t.Fatalf("write project instructions: %v", err)
+	}
+	rulePath := filepath.Join(a.cfg.RulesDir, "testing.md")
+	if err := os.WriteFile(rulePath, []byte("Always run tests after runtime changes."), 0644); err != nil {
+		t.Fatalf("write rule: %v", err)
+	}
+	localInstructions := filepath.Join(a.cfg.StateDir, "AGENT.local.md")
+	if err := os.WriteFile(localInstructions, []byte("Keep local debug notes private."), 0644); err != nil {
+		t.Fatalf("write local instructions: %v", err)
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, want := range []string{
+		"# Instructions",
+		"## AGENT.md",
+		"Follow project instruction.",
+		"## .godex/rules/testing.md",
+		"Always run tests after runtime changes.",
+		"## .godex/AGENT.local.md",
+		"Keep local debug notes private.",
+	} {
+		if !strings.Contains(build.System, want) {
+			t.Fatalf("expected system prompt to contain %q, got %q", want, build.System)
+		}
+	}
+}
+
+func TestBuildContextInjectsRelevantMemoryForCurrentQuery(t *testing.T) {
+	a := newTestAgent(t, 4096)
+
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Testing Workflow",
+		Summary: "Run go test ./... and go test -race ./... after runtime changes.",
+		Content: "After changing core agent runtime code, run go test ./... and go test -race ./... before wrapping up.",
+		Type:    memory.TypeWorkflow,
+	}); err != nil {
+		t.Fatalf("remember memory: %v", err)
+	}
+
+	a.AddMessage("Please update the runtime and run the tests afterwards.")
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	foundMemory := false
+	for _, msg := range build.Messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindMemory {
+			continue
+		}
+		foundMemory = true
+		text := protocol.MessageText(msg)
+		for _, want := range []string{
+			"Memory context:",
+			"Relevant recall for the current request:",
+			"Testing Workflow [workflow]",
+			"Run go test ./... and go test -race ./... after runtime changes.",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("expected memory runtime message to contain %q, got %q", want, text)
+			}
+		}
+	}
+	if !foundMemory {
+		t.Fatal("expected relevant memory message to be injected")
+	}
+
+	stored := a.GetMessages()
+	for _, msg := range stored {
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindMemory {
+			t.Fatalf("did not expect relevant memory to persist in stored history, got %+v", stored)
+		}
+	}
+}
+
+func TestBuildContextInjectsStableCoreMemoryWithoutQueryMatch(t *testing.T) {
+	a := newTestAgent(t, 4096)
+
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Project Identity",
+		Summary: "GoDex is a shared backend workspace for Web, TUI, and IM.",
+		Content: "Treat GoDex as a shared backend workspace coordinating Web, TUI, and IM channels.",
+		Type:    memory.TypeIdentity,
+	}); err != nil {
+		t.Fatalf("remember identity memory: %v", err)
+	}
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Chinese Preference",
+		Summary: "Reply in concise Chinese.",
+		Content: "以后请用中文回复，并保持简洁。",
+		Type:    memory.TypeUser,
+	}); err != nil {
+		t.Fatalf("remember user memory: %v", err)
+	}
+
+	a.AddMessage("What should we work on next?")
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	foundMemory := false
+	for _, msg := range build.Messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindMemory {
+			continue
+		}
+		foundMemory = true
+		text := protocol.MessageText(msg)
+		for _, want := range []string{
+			"Memory context:",
+			"L0 identity:",
+			"Project Identity [identity]",
+			"Core project memory:",
+			"Chinese Preference [user]",
+			"Reply in concise Chinese.",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("expected memory runtime message to contain %q, got %q", want, text)
+			}
+		}
+		if strings.Contains(text, "Relevant recall for the current request:") {
+			t.Fatalf("did not expect relevant recall section for unmatched query, got %q", text)
+		}
+		if strings.Contains(text, "Treat GoDex as a shared backend workspace coordinating Web, TUI, and IM channels.") {
+			t.Fatalf("did not expect identity memory full content in context, got %q", text)
+		}
+	}
+	if !foundMemory {
+		t.Fatal("expected stable core memory message to be injected")
+	}
+}
+
+func TestBuildContextTruncatesRelevantMemoryContent(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	longContent := strings.Repeat("repeat detail ", 160) + "UNIQUE_TAIL_SHOULD_NOT_APPEAR"
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Testing Workflow",
+		Summary: "Runtime context includes memory previews.",
+		Content: longContent,
+		Type:    memory.TypeWorkflow,
+	}); err != nil {
+		t.Fatalf("remember memory: %v", err)
+	}
+
+	a.AddMessage("Please debug runtime context memory previews.")
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, msg := range build.Messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindMemory {
+			continue
+		}
+		text := protocol.MessageText(msg)
+		if !strings.Contains(text, "Testing Workflow [workflow]") || !strings.Contains(text, "repeat detail") {
+			t.Fatalf("expected relevant memory preview, got %q", text)
+		}
+		if strings.Contains(text, "UNIQUE_TAIL_SHOULD_NOT_APPEAR") {
+			t.Fatalf("expected long relevant memory content to be truncated, got %q", text)
+		}
+		return
+	}
+	t.Fatal("expected memory context message")
+}
+
+func TestRunDoesNotAckRuntimeInputsOnCallError(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.AddMessage("hello")
+	a.client = fakeCaller{err: errors.New("boom")}
+
+	if err := a.msgBus.Send(message.Message{
+		Type:    message.MsgTypeMessage,
+		From:    "teammate",
+		To:      "lead",
+		Content: "need review",
+	}); err != nil {
+		t.Fatalf("send inbox message: %v", err)
+	}
+
+	task, err := a.bgMgr.Start("bg-fail", exec.Command("sh", "-c", "printf done"), 0)
+	if err != nil {
+		t.Fatalf("start background task: %v", err)
+	}
+	<-task.Done
+
+	err = a.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected boom error, got %v", err)
+	}
+	if got := a.msgBus.PeekInbox("lead"); len(got) != 1 {
+		t.Fatalf("expected inbox message to remain after failed call, got %d", len(got))
+	}
+	if got := a.bgMgr.PeekNotifications(); len(got) != 1 {
+		t.Fatalf("expected background notification to remain after failed call, got %d", len(got))
+	}
+}
+
+func TestRunAcksRuntimeInputsAfterSuccessfulTurn(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.AddMessage("hello")
+	a.client = fakeCaller{resp: protocol.Response{}}
+
+	if err := a.msgBus.Send(message.Message{
+		Type:    message.MsgTypeMessage,
+		From:    "teammate",
+		To:      "lead",
+		Content: "need review",
+	}); err != nil {
+		t.Fatalf("send inbox message: %v", err)
+	}
+
+	task, err := a.bgMgr.Start("bg-success", exec.Command("sh", "-c", "printf done"), 0)
+	if err != nil {
+		t.Fatalf("start background task: %v", err)
+	}
+	<-task.Done
+
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("run agent: %v", err)
+	}
+	if got := a.msgBus.PeekInbox("lead"); len(got) != 0 {
+		t.Fatalf("expected inbox to be acked after success, got %d", len(got))
+	}
+	if got := a.bgMgr.PeekNotifications(); len(got) != 0 {
+		t.Fatalf("expected background notifications to be acked after success, got %d", len(got))
+	}
+}
+
+func TestRunCapturesMemoryCandidatesAfterSuccessfulTurn(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.AddMessage("以后请用中文回复。")
+	a.client = fakeCaller{resp: protocol.Response{
+		Content: []protocol.Block{protocol.TextBlock("好的，我之后会使用中文回复。")},
+	}}
+
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("run agent: %v", err)
+	}
+
+	candidates, err := memory.LoadCandidates(filepath.Join(a.cfg.MemoryDir, memory.CandidatesFileName))
+	if err != nil {
+		t.Fatalf("load captured memory candidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 captured memory candidate, got %+v", candidates)
+	}
+	if candidates[0].Title != "User Preference: Reply in Chinese" {
+		t.Fatalf("unexpected candidate %+v", candidates[0])
+	}
+}
+
+func TestLoadSkillToolActivatesSkillForFutureTurnsAndDeduplicates(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	skillPath := filepath.Join(a.cfg.SkillsDir, "example", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte(`---
+description: Use the example skill.
+recommended_bundles:
+  - background
+sections:
+  - core
+  - workflow
+---
+## Core
+Use the example skill core.
+
+## Workflow
+Run the example workflow.`), 0644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	result, err := a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"})
+	if err != nil {
+		t.Fatalf("load skill tool: %v", err)
+	}
+	for _, want := range []string{`"status":"activated"`, `"loaded_sections":["core"]`, `"recommended_bundles":["background"]`} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected load result to contain %q, got %q", want, result)
+		}
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if !strings.Contains(build.System, "# Active Skills") {
+		t.Fatalf("expected active skills prompt, got %q", build.System)
+	}
+	if !strings.Contains(build.System, "Use the example skill core.") {
+		t.Fatalf("expected system prompt to include core skill content, got %q", build.System)
+	}
+	if strings.Contains(build.System, "Run the example workflow.") {
+		t.Fatalf("did not expect workflow section before expand, got %q", build.System)
+	}
+
+	result, err = a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"})
+	if err != nil {
+		t.Fatalf("reload skill tool: %v", err)
+	}
+	if !strings.Contains(result, `"status":"already_active"`) {
+		t.Fatalf("expected activated status, got %q", result)
+	}
+
+	build, err = a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context again: %v", err)
+	}
+	if got := strings.Count(build.System, "Use the example skill core."); got != 1 {
+		t.Fatalf("expected skill core to be injected once, got %d copies in %q", got, build.System)
+	}
+}
+
+func TestExpandSkillToolAddsRequestedSectionForFutureTurns(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	skillPath := filepath.Join(a.cfg.SkillsDir, "example", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte(`---
+description: Use the example skill.
+sections:
+  - core
+  - workflow
+  - references
+---
+## Core
+Use the example skill core.
+
+## Workflow
+Run the example workflow.
+
+## References
+Review the reference checklist.`), 0644); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
+
+	if _, err := a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"}); err != nil {
+		t.Fatalf("load skill tool: %v", err)
+	}
+
+	result, err := a.handleTool(context.Background(), "expand_skill", map[string]interface{}{
+		"name":     "example",
+		"sections": []interface{}{"workflow"},
+	})
+	if err != nil {
+		t.Fatalf("expand skill tool: %v", err)
+	}
+	for _, want := range []string{`"status":"expanded"`, `"expanded_sections":["workflow"]`} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected expand result to contain %q, got %q", want, result)
+		}
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if !strings.Contains(build.System, "Run the example workflow.") {
+		t.Fatalf("expected expanded workflow section in system prompt, got %q", build.System)
+	}
+	if strings.Contains(build.System, "Review the reference checklist.") {
+		t.Fatalf("did not expect unexpanded references section in system prompt, got %q", build.System)
+	}
+}
+
+func TestRememberMemoryToolPersistsEntryAndUpdatesIndex(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	result, err := a.handleTool(context.Background(), "remember_memory", map[string]interface{}{
+		"title":       "Testing Workflow",
+		"summary":     "Run go test ./... after runtime changes.",
+		"content":     "Run go test ./... and go test -race ./... when runtime code changes.",
+		"memory_type": "workflow",
+	})
+	if err != nil {
+		t.Fatalf("remember memory tool: %v", err)
+	}
+	if !strings.Contains(result, `"status":"saved"`) {
+		t.Fatalf("expected saved status, got %q", result)
+	}
+
+	indexData, err := os.ReadFile(filepath.Join(a.cfg.MemoryDir, memory.EntrypointName))
+	if err != nil {
+		t.Fatalf("read memory index: %v", err)
+	}
+	if got := string(indexData); !strings.Contains(got, "[Testing Workflow](testing_workflow.md) - workflow - Run go test ./... after runtime changes.") {
+		t.Fatalf("expected index to contain saved entry, got %q", got)
+	}
+
+	fileData, err := os.ReadFile(filepath.Join(a.cfg.MemoryDir, "testing_workflow.md"))
+	if err != nil {
+		t.Fatalf("read memory file: %v", err)
+	}
+	if got := string(fileData); !strings.Contains(got, "Run go test ./... and go test -race ./... when runtime code changes.") {
+		t.Fatalf("expected memory file to contain saved content, got %q", got)
+	}
+}
+
+func TestForgetMemoryToolDeletesEntryAndRewritesIndex(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Outdated Workflow",
+		Summary: "Old memory to remove.",
+		Content: "This workflow is stale.",
+		Type:    memory.TypeWorkflow,
+	}); err != nil {
+		t.Fatalf("seed memory: %v", err)
+	}
+
+	result, err := a.handleTool(context.Background(), "forget_memory", map[string]interface{}{
+		"title": "Outdated Workflow",
+	})
+	if err != nil {
+		t.Fatalf("forget memory tool: %v", err)
+	}
+	if !strings.Contains(result, `"status":"forgotten"`) {
+		t.Fatalf("expected forgotten status, got %q", result)
+	}
+
+	indexData, err := os.ReadFile(filepath.Join(a.cfg.MemoryDir, memory.EntrypointName))
+	if err != nil {
+		t.Fatalf("read memory index: %v", err)
+	}
+	if strings.Contains(string(indexData), "Outdated Workflow") {
+		t.Fatalf("expected index to remove forgotten memory, got %q", string(indexData))
+	}
+	if _, err := os.Stat(filepath.Join(a.cfg.MemoryDir, "outdated_workflow.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected memory file to be removed, got %v", err)
+	}
+}
+
+func TestMemoryBrowseAndCandidateTools(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	if _, err := a.handleTool(context.Background(), "remember_memory", map[string]interface{}{
+		"title":       "Delivery Rule",
+		"summary":     "Prefer explicit delivery confirmations.",
+		"content":     "When automation delivers to a channel, make the result visible to the user.",
+		"memory_type": "project",
+		"source":      "manual",
+		"tags":        []interface{}{"delivery", "automation"},
+	}); err != nil {
+		t.Fatalf("seed remember memory: %v", err)
+	}
+
+	listResult, err := a.handleTool(context.Background(), "list_memory", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("list memory tool: %v", err)
+	}
+	for _, want := range []string{`"title":"Delivery Rule"`, `"tags":["automation","delivery"]`, `"source":"manual"`} {
+		if !strings.Contains(listResult, want) {
+			t.Fatalf("expected list_memory result to contain %q, got %q", want, listResult)
+		}
+	}
+
+	searchResult, err := a.handleTool(context.Background(), "search_memory", map[string]interface{}{
+		"tag": "automation",
+	})
+	if err != nil {
+		t.Fatalf("search memory tool: %v", err)
+	}
+	if !strings.Contains(searchResult, `"title":"Delivery Rule"`) {
+		t.Fatalf("expected search_memory result to contain saved memory, got %q", searchResult)
+	}
+
+	getResult, err := a.handleTool(context.Background(), "get_memory", map[string]interface{}{
+		"id_or_title": "Delivery Rule",
+	})
+	if err != nil {
+		t.Fatalf("get memory tool: %v", err)
+	}
+	if !strings.Contains(getResult, `"content":"When automation delivers to a channel, make the result visible to the user."`) {
+		t.Fatalf("expected get_memory result to contain content, got %q", getResult)
+	}
+
+	a.AddMessage("以后请用中文回复。")
+	a.client = fakeCaller{resp: protocol.Response{
+		Content: []protocol.Block{protocol.TextBlock("好的，我之后会使用中文回复。")},
+	}}
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("run agent to capture candidate: %v", err)
+	}
+
+	candidatesResult, err := a.handleTool(context.Background(), "list_memory_candidates", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("list memory candidates tool: %v", err)
+	}
+	if !strings.Contains(candidatesResult, `"title":"User Preference: Reply in Chinese"`) {
+		t.Fatalf("expected candidate to be listed, got %q", candidatesResult)
+	}
+
+	candidates, err := a.memoryMgr.ListCandidates()
+	if err != nil {
+		t.Fatalf("list candidates directly: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %+v", candidates)
+	}
+
+	acceptResult, err := a.handleTool(context.Background(), "accept_memory_candidate", map[string]interface{}{
+		"fingerprint": candidates[0].Fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("accept memory candidate tool: %v", err)
+	}
+	if !strings.Contains(acceptResult, `"status":"accepted"`) {
+		t.Fatalf("expected accepted status, got %q", acceptResult)
+	}
+
+	a.AddMessage("修一下 runtime。")
+	a.client = fakeCaller{resp: protocol.Response{
+		Content: []protocol.Block{protocol.TextBlock("Run go test ./... after Go changes.")},
+	}}
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("run agent to capture second candidate: %v", err)
+	}
+
+	candidates, err = a.memoryMgr.ListCandidates()
+	if err != nil {
+		t.Fatalf("list candidates after second capture: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected one candidate after accept+second capture, got %+v", candidates)
+	}
+
+	dismissResult, err := a.handleTool(context.Background(), "dismiss_memory_candidate", map[string]interface{}{
+		"fingerprint": candidates[0].Fingerprint,
+	})
+	if err != nil {
+		t.Fatalf("dismiss memory candidate tool: %v", err)
+	}
+	if !strings.Contains(dismissResult, `"status":"dismissed"`) {
+		t.Fatalf("expected dismissed status, got %q", dismissResult)
+	}
+}
+
+func TestInactiveToolIsRejectedUntilBundleEnabled(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	_, err := a.handleTool(context.Background(), "background_run", map[string]interface{}{
+		"command": `sh -c 'printf ok'`,
+	})
+	if err == nil || !strings.Contains(err.Error(), `enable bundle "background" with tool_exchange`) {
+		t.Fatalf("expected inactive tool guidance, got %v", err)
+	}
+
+	if _, err := a.handleTool(context.Background(), "tool_exchange", map[string]interface{}{
+		"enable_bundles": []interface{}{"background"},
+	}); err != nil {
+		t.Fatalf("enable background bundle: %v", err)
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context after enabling bundle: %v", err)
+	}
+	names := make(map[string]struct{}, len(build.ToolSchemas))
+	for _, schema := range build.ToolSchemas {
+		names[schema.Name] = struct{}{}
+	}
+	if _, ok := names["background_run"]; !ok {
+		t.Fatalf("expected background_run schema after enabling bundle, got %+v", build.ToolSchemas)
+	}
+	if _, ok := names["check_background"]; !ok {
+		t.Fatalf("expected check_background schema after enabling bundle, got %+v", build.ToolSchemas)
+	}
+
+	if _, err := a.handleTool(context.Background(), "background_run", map[string]interface{}{
+		"command": `sh -c 'printf ok'`,
+	}); err != nil {
+		t.Fatalf("expected background_run to work after enabling bundle, got %v", err)
+	}
+}
+
+func newTestAgent(t *testing.T, compressThreshold int) *Agent {
+	t.Helper()
+
+	workspace := t.TempDir()
+	cfg := &config.Config{
+		Model:             "test-model",
+		BaseURL:           "http://127.0.0.1",
+		MaxTokens:         1024,
+		WorkspaceDir:      workspace,
+		StateDir:          filepath.Join(workspace, ".godex"),
+		TeamDir:           filepath.Join(workspace, ".godex", ".team"),
+		TasksDir:          filepath.Join(workspace, ".godex", ".tasks"),
+		TodosDir:          filepath.Join(workspace, ".godex", ".todos"),
+		MemoryDir:         filepath.Join(workspace, ".godex", "memory"),
+		RulesDir:          filepath.Join(workspace, ".godex", "rules"),
+		SkillsDir:         filepath.Join(workspace, ".godex", "skills"),
+		MCPConfigPath:     filepath.Join(workspace, ".godex", "mcp.json"),
+		TempDir:           filepath.Join(workspace, ".godex", ".tmp"),
+		TranscriptsDir:    filepath.Join(workspace, ".godex", ".transcripts"),
+		CompressThreshold: compressThreshold,
+		LeadName:          "lead",
+		TeamName:          "default",
+		Tools: config.ToolsConfig{
+			WebSearch: config.WebSearchConfig{
+				Enabled:         true,
+				ProviderOrder:   []string{"brave", "exa", "tavily", "duckduckgo"},
+				CacheTTLSeconds: 300,
+			},
+			WebFetch: config.WebFetchConfig{
+				Enabled:        true,
+				MaxChars:       60000,
+				TimeoutSeconds: 30,
+				Policy:         "allow_all",
+			},
+			Glob: config.GlobConfig{
+				DefaultMaxResults: 200,
+			},
+			Browser: config.BrowserConfig{
+				Enabled:              false,
+				Headless:             true,
+				ActionTimeoutSeconds: 30,
+				IdleTimeoutSeconds:   600,
+				MaxPagesPerSession:   3,
+			},
+			Permissions: config.PermissionConfig{
+				BlockAutomationMutations:   true,
+				InteractiveApprovalEnabled: true,
+				InteractiveApprovalSources: []string{"web", "gateway", "feishu", "weixin"},
+				InteractiveApprovalTools: []string{
+					"bash",
+					"background_run",
+					"write_file",
+					"edit_file",
+					"install_skill",
+					"tool_exchange",
+					"cron",
+					"heartbeat",
+					"browser",
+				},
+			},
+		},
+	}
+
+	for _, dir := range []string{
+		filepath.Join(cfg.TeamDir, "inbox"),
+		cfg.TasksDir,
+		cfg.TodosDir,
+		cfg.MemoryDir,
+		cfg.RulesDir,
+		cfg.SkillsDir,
+		cfg.TempDir,
+		cfg.TranscriptsDir,
+	} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	a := New(cfg)
+	a.now = func() time.Time {
+		return time.Date(2026, time.April, 17, 9, 30, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	}
+	return a
+}
+
+func TestSubagentSchemaUsesJSONSchemaEnumArray(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, schema := range build.ToolSchemas {
+		if schema.Name != "task" {
+			continue
+		}
+		properties, _ := schema.InputSchema["properties"].(map[string]interface{})
+		agentType, _ := properties["agent_type"].(map[string]interface{})
+		if _, ok := agentType["enum"]; ok {
+			t.Fatalf("did not expect fixed agent_type enum after named role support, got %#v", agentType)
+		}
+		description, _ := agentType["description"].(string)
+		if !strings.Contains(description, "named role") {
+			t.Fatalf("expected agent_type description to mention named roles, got %#v", agentType)
+		}
+		return
+	}
+
+	t.Fatal("expected task subagent schema to be present")
+}
+
+func schemaByName(items []protocol.ToolSchema, name string) (protocol.ToolSchema, bool) {
+	for _, item := range items {
+		if item.Name == name {
+			return item, true
+		}
+	}
+	return protocol.ToolSchema{}, false
+}

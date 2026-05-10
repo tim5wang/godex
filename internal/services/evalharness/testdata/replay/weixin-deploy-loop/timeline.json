@@ -1,0 +1,181 @@
+[
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "user_message_accepted",
+    "timestamp": "2026-04-25T18:45:00+08:00",
+    "payload": {
+      "source": "weixin",
+      "sender": "sanitized-user",
+      "text": "通过 ssh 登录 REMOTE_HOST，然后把 GoDex 部署上去。运维日志在 /root/目录下，安装前先参考运维日志，web ui 域名可以是 godex.example.invalid，密码设置为 REDACTED_PASSWORD，GoDex 的其它配置和本地一样即可。"
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "assistant_message_completed",
+    "timestamp": "2026-04-25T18:45:12+08:00",
+    "payload": {
+      "role": "assistant",
+      "text": "我看到当前的 bash 工具不支持 SSH 远程连接。我需要先修改 godex.yaml 配置以启用 SSH 模式。让我修改配置："
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "tool_call_started",
+    "timestamp": "2026-04-25T18:45:13+08:00",
+    "payload": {
+      "id": "tool-read-1",
+      "name": "read_file",
+      "input": {
+        "path": "godex.yaml",
+        "offset": 147,
+        "limit": 20
+      }
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "tool_call_finished",
+    "timestamp": "2026-04-25T18:45:13+08:00",
+    "payload": {
+      "id": "tool-read-1",
+      "name": "read_file",
+      "input": {
+        "path": "godex.yaml",
+        "offset": 147,
+        "limit": 20
+      },
+      "output": "tools.execution.mode: local\n# SSH remote execution is reserved for future support."
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "assistant_message_completed",
+    "timestamp": "2026-04-25T18:45:20+08:00",
+    "payload": {
+      "role": "assistant",
+      "text": "我看到当前的 bash 工具不支持 SSH 远程连接。我需要先修改 godex.yaml 配置以启用 SSH 模式。让我修改配置："
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "tool_call_started",
+    "timestamp": "2026-04-25T18:45:21+08:00",
+    "payload": {
+      "id": "tool-read-2",
+      "name": "read_file",
+      "input": {
+        "path": "godex.yaml",
+        "offset": 147,
+        "limit": 20
+      }
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "tool_call_finished",
+    "timestamp": "2026-04-25T18:45:21+08:00",
+    "payload": {
+      "id": "tool-read-2",
+      "name": "read_file",
+      "input": {
+        "path": "godex.yaml",
+        "offset": 147,
+        "limit": 20
+      },
+      "output": "tools.execution.mode: local\n# SSH remote execution is reserved for future support."
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "assistant_message_completed",
+    "timestamp": "2026-04-25T18:45:29+08:00",
+    "payload": {
+      "role": "assistant",
+      "text": "我看到当前的 bash 工具不支持 SSH 远程连接。我需要先修改 godex.yaml 配置以启用 SSH 模式。让我修改配置："
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "tool_call_started",
+    "timestamp": "2026-04-25T18:45:30+08:00",
+    "payload": {
+      "id": "tool-read-3",
+      "name": "read_file",
+      "input": {
+        "path": "godex.yaml",
+        "offset": 147,
+        "limit": 20
+      }
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "tool_call_finished",
+    "timestamp": "2026-04-25T18:45:30+08:00",
+    "payload": {
+      "id": "tool-read-3",
+      "name": "read_file",
+      "input": {
+        "path": "godex.yaml",
+        "offset": 147,
+        "limit": 20
+      },
+      "output": "tools.execution.mode: local\n# SSH remote execution is reserved for future support."
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "tool_call_started",
+    "timestamp": "2026-04-25T18:46:12+08:00",
+    "payload": {
+      "id": "tool-exchange-1",
+      "name": "tool_exchange",
+      "input": {
+        "query": "ssh deploy"
+      }
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "tool_call_finished",
+    "timestamp": "2026-04-25T18:46:12+08:00",
+    "payload": {
+      "id": "tool-exchange-1",
+      "name": "tool_exchange",
+      "input": {
+        "query": "ssh deploy"
+      },
+      "output": "{\"active_bundles\":[\"browser\",\"core_code\",\"mcp\",\"planning\",\"web\"],\"always_active_tools\":[\"tool_exchange\"],\"recommended_bundles\":[],\"summary\":{\"active_bundle_count\":5,\"available_bundle_count\":12,\"returned_bundle_count\":0}}"
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "error_raised",
+    "timestamp": "2026-04-25T18:46:13+08:00",
+    "payload": {
+      "message": "model request interrupted after repeated unavailable tool search loop"
+    }
+  },
+  {
+    "session_id": "replay-weixin-deploy-loop",
+    "turn_id": "turn-sanitized-deploy-loop-1",
+    "type": "turn_completed",
+    "timestamp": "2026-04-25T18:46:13+08:00",
+    "payload": {
+      "status": "error"
+    }
+  }
+]

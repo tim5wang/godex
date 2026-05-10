@@ -1,0 +1,194 @@
+import { Suspense, useMemo, useState } from "react";
+import { Routes, useLocation, useNavigate } from "react-router-dom";
+import {
+  Alert,
+  App as AntApp,
+  Button,
+  Card,
+  ConfigProvider,
+  Drawer,
+  Grid,
+  Layout,
+  Menu,
+  Space,
+  Spin,
+  Typography,
+  theme,
+} from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import enUS from "antd/locale/en_US";
+import zhCN from "antd/locale/zh_CN";
+import { MenuOutlined } from "@ant-design/icons";
+import { activeBuiltinApp, builtinApps, renderBuiltinAppRoutes } from "./app/appRegistry";
+import { useI18n } from "./i18n";
+import { ResizeHandle } from "./components/ResizeHandle";
+import { useResizableWidth } from "./hooks/useResizableWidth";
+import { getMeta, listProviders } from "./lib/api";
+import { useSettingsStore } from "./store/settings";
+
+export default function App() {
+  const { locale, t } = useI18n();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const token = useSettingsStore((state) => state.token);
+  const screens = Grid.useBreakpoint();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [navWidth, beginNavResize] = useResizableWidth({
+    storageKey: "godex.navWidth",
+    defaultWidth: 228,
+    min: 176,
+    max: 360,
+  });
+  const activeApp = activeBuiltinApp(location.pathname);
+  const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
+  const providersQuery = useQuery({
+    queryKey: ["providers", token],
+    enabled: !(metaQuery.data?.auth_required ?? false) || token.trim().length > 0,
+    queryFn: () => listProviders(token || null),
+  });
+  const needsProviderSetup =
+    activeApp.id !== "settings" &&
+    providersQuery.isSuccess &&
+    !providersQuery.data.providers.some((provider) => provider.has_credential || provider.token_present);
+  const shellClassName = ["godex-shell", activeApp.shellClassName].filter(Boolean).join(" ");
+  const headerTitleKey = activeApp.headerTitleKey ?? activeApp.labelKey;
+  const headerSubtitleKey = activeApp.headerSubtitleKey ?? "";
+  const navItems = useMemo(
+    () => builtinApps.map((app) => ({ key: app.navPath, icon: app.icon, label: t(app.labelKey), onMouseEnter: app.preload })),
+    [t],
+  );
+  const selectedKey = activeApp.navPath;
+  const menu = (
+    <Menu
+      mode={screens.lg ? "inline" : "vertical"}
+      selectedKeys={[selectedKey]}
+      items={navItems}
+      onClick={(info) => {
+        navigate(info.key);
+        setMobileNavOpen(false);
+      }}
+    />
+  );
+
+  return (
+    <ConfigProvider
+      locale={locale === "zh" ? zhCN : enUS}
+      theme={{
+        algorithm: theme.defaultAlgorithm,
+        token: {
+          colorPrimary: "#0f766e",
+          borderRadius: 8,
+          colorInfo: "#2563eb",
+          colorWarning: "#b45309",
+          colorError: "#b42318",
+          fontFamily:
+            'Inter, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif',
+        },
+      }}
+    >
+      <AntApp>
+        <Layout className={shellClassName}>
+          {screens.lg ? (
+            <Layout.Sider className="godex-sider" width={navWidth}>
+              <Brand />
+              {menu}
+              <ResizeHandle label="Resize navigation" onPointerDown={beginNavResize} />
+            </Layout.Sider>
+          ) : null}
+          <Layout>
+            <Layout.Header className="godex-header">
+              <Space size={12}>
+                {!screens.lg ? (
+                  <Button
+                    type="text"
+                    icon={<MenuOutlined />}
+                    aria-label="Open navigation"
+                    onClick={() => setMobileNavOpen(true)}
+                  />
+                ) : null}
+                <Space direction="vertical" size={0} className="godex-header-title">
+                  <Typography.Text strong>{t(headerTitleKey)}</Typography.Text>
+                  {headerSubtitleKey ? (
+                    <Typography.Text className="muted" ellipsis>
+                      {t(headerSubtitleKey)}
+                    </Typography.Text>
+                  ) : null}
+                </Space>
+              </Space>
+            </Layout.Header>
+            <Layout.Content className="godex-content">
+              {needsProviderSetup ? (
+                <FirstRunProviderGuide
+                  onOpenSettings={() => navigate("/settings")}
+                  onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["providers", token] })}
+                />
+              ) : (
+                <Suspense fallback={<RouteLoadingFallback />}>
+                  <Routes>{renderBuiltinAppRoutes()}</Routes>
+                </Suspense>
+              )}
+            </Layout.Content>
+          </Layout>
+          <Drawer
+            title={<Brand compact />}
+            placement="left"
+            width={280}
+            open={mobileNavOpen}
+            onClose={() => setMobileNavOpen(false)}
+          >
+            {menu}
+          </Drawer>
+        </Layout>
+      </AntApp>
+    </ConfigProvider>
+  );
+}
+
+function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: () => void }) {
+  return (
+    <main className="page-shell">
+      <Card>
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Configure a model provider to start using GoDex."
+            description="GoDex can open before credentials are ready, but chat turns need at least one provider with an API key or OAuth token."
+          />
+          <Space wrap>
+            <Button type="primary" onClick={props.onOpenSettings}>
+              Configure provider
+            </Button>
+            <Button onClick={props.onRefresh}>Recheck providers</Button>
+          </Space>
+        </Space>
+      </Card>
+    </main>
+  );
+}
+
+function Brand({ compact = false }: { compact?: boolean }) {
+  const { t } = useI18n();
+  const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
+  const version = metaQuery.data?.version?.version;
+  return (
+    <div className={compact ? "" : "godex-brand"} title={version ? `GoDex ${version}` : undefined}>
+      <span className="godex-brand-mark">G</span>
+      <span>{t("app.title")}</span>
+      {version ? <Typography.Text type="secondary">{version}</Typography.Text> : null}
+    </div>
+  );
+}
+
+function RouteLoadingFallback() {
+  const { t } = useI18n();
+  return (
+    <div style={{ display: "grid", minHeight: 260, placeItems: "center" }}>
+      <Space direction="vertical" align="center">
+        <Spin />
+        <Typography.Text type="secondary">{t("app.loading")}</Typography.Text>
+      </Space>
+    </div>
+  );
+}

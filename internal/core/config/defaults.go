@@ -1,0 +1,264 @@
+package config
+
+import "github.com/tim5wang/godex/internal/core/llm"
+
+func defaultConfigFile() ConfigFile {
+	return ConfigFile{
+		API: APISection{
+			DefaultProfile:      "",
+			DefaultModel:        "",
+			AutoFallbackEnabled: true,
+			Providers:           map[string]llm.ProviderConfig{},
+			ModelStrategy: llm.StrategyConfig{
+				Type: llm.StrategyFallback,
+			},
+			TimeoutSeconds: 600,
+		},
+		ACP: ACPSection{
+			Agents: map[string]ACPAgentSection{},
+		},
+		Agent: AgentSection{
+			CompressThreshold: 100000,
+			MaxTurns:          1000,
+			Profile:           AgentProfileGeneral,
+			DefaultProfiles: AgentDefaultProfilesSection{
+				ACP:    AgentProfileCoding,
+				CLI:    AgentProfileCoding,
+				TUI:    AgentProfileCoding,
+				Web:    AgentProfileGeneral,
+				Weixin: AgentProfileGeneral,
+				Feishu: AgentProfileGeneral,
+			},
+		},
+		Logging: LoggingSection{
+			Level:      "info",
+			FilePath:   "log/godex.log",
+			AlsoStderr: true,
+		},
+		Web: WebSection{
+			Token: "",
+		},
+		Cron: CronSection{
+			Enabled:           true,
+			TickSeconds:       1,
+			DefaultTimezone:   "Local",
+			MaxConcurrentRuns: 2,
+		},
+		Heartbeat: HeartbeatSection{
+			Enabled:                false,
+			TickSeconds:            30,
+			ChecklistPath:          "HEARTBEAT.md",
+			OKToken:                "HEARTBEAT_OK",
+			DefaultIntervalSeconds: 1800,
+			DefaultTimezone:        "Local",
+		},
+		Control: ControlSection{
+			NodeName:            "",
+			CenterURL:           "",
+			HeartbeatSeconds:    15,
+			OfflineAfterSeconds: 60,
+			Nodes:               []ControlNodeSection{},
+		},
+		Runtime: RuntimeSection{
+			Recovery: RuntimeRecoverySection{
+				AutoResumeInterruptedTurns: false,
+				AutoRepairSessions:         true,
+			},
+		},
+		Storage: StorageSection{
+			TmpTTLHours:                 72,
+			ArtifactTTLHours:            168,
+			BrowserCacheAutoClean:       true,
+			BrowserCacheMaxMB:           256,
+			SessionCheckpointKeepLatest: 20,
+			SessionCheckpointTTLHours:   168,
+			SessionCheckpointAutoPrune:  true,
+		},
+		Security: SecuritySection{
+			Profile: "guarded-local",
+		},
+		Team: TeamSection{
+			LeadName:                "lead",
+			TeamName:                "default",
+			DefaultSkills:           []string{},
+			TeammateWorkLimit:       50,
+			TeammatePollSeconds:     5,
+			TeammateIdleTimeoutSecs: 60,
+		},
+		Paths: PathsSection{
+			StateDir:       "state",
+			TeamDir:        "team",
+			TasksDir:       "tasks",
+			TodosDir:       "todos",
+			MemoryDir:      "memory",
+			RulesDir:       "rules",
+			SkillsDir:      "skills",
+			MCPConfigPath:  "mcp.json",
+			TempDir:        "tmp",
+			TranscriptsDir: "transcripts",
+			SessionsDir:    "sessions",
+		},
+		Tools: ToolsSection{
+			WebSearch: WebSearchSection{
+				Enabled:         true,
+				ProviderOrder:   []string{"brave", "exa", "tavily", "duckduckgo"},
+				CacheTTLSeconds: 300,
+				Browser: WebSearchBrowserSection{
+					Engine:         "duckduckgo",
+					EngineFallback: []string{"bing", "brave"},
+					Engines: map[string]WebSearchBrowserEngineSection{
+						"duckduckgo": {
+							SearchURLTemplate: "https://duckduckgo.com/?q={{query}}&ia=web",
+							BlockedHosts:      []string{"duckduckgo.com", "*.duckduckgo.com"},
+						},
+						"bing": {
+							SearchURLTemplate: "https://www.bing.com/search?q={{query}}",
+							BlockedHosts:      []string{"bing.com", "*.bing.com"},
+						},
+						"brave": {
+							SearchURLTemplate: "https://search.brave.com/search?q={{query}}&source=web",
+							BlockedHosts:      []string{"search.brave.com", "*.search.brave.com"},
+						},
+						"custom": {},
+					},
+					WaitNetworkIdleMS:    1500,
+					WaitAfterLoadMS:      800,
+					MaxScrolls:           0,
+					ResultTimeoutSeconds: 20,
+					PreferredHosts:       []string{},
+				},
+			},
+			WebFetch: WebFetchSection{
+				Enabled:           true,
+				MaxChars:          60000,
+				TimeoutSeconds:    30,
+				Policy:            "allow_all",
+				AllowedDomains:    []string{},
+				BlockedDomains:    []string{},
+				AllowPrivateHosts: false,
+			},
+			Glob: GlobSection{
+				DefaultMaxResults: 200,
+			},
+			Subagent: SubagentSection{
+				MaxBatchSize:         8,
+				MaxConcurrentJobs:    4,
+				DefaultMaxTurns:      45,
+				MaxJobTimeoutMs:      7200000,
+				ReadOnlyIsolation:    "shared_readonly",
+				GitDirtyIsolation:    "dirty_overlay",
+				NonGitWriteIsolation: "copy_snapshot",
+				WorkspaceTTLHours:    168,
+			},
+			Execution: ExecutionSection{
+				Mode:          "local",
+				DockerImage:   "golang:1.26",
+				DockerNetwork: "",
+				SSHTarget:     "",
+				SSHWorkspace:  "",
+				SSHOptions:    []string{},
+			},
+			Browser: BrowserSection{
+				Enabled:              false,
+				Headless:             true,
+				BrowserPath:          "",
+				CDPURL:               "",
+				ActionTimeoutSeconds: 30,
+				IdleTimeoutSeconds:   600,
+				MaxPagesPerSession:   3,
+				AllowPrivateHosts:    false,
+			},
+			History: HistorySearchSection{
+				Enabled: true,
+				Auto: HistorySearchAutoSection{
+					Enabled:                   true,
+					MaxPerTurn:                1,
+					DefaultScope:              "current_session",
+					AllowArchiveOnClear:       true,
+					AllowArchiveOnCompact:     true,
+					AllowAllArchivesAutomatic: false,
+					MinScore:                  3,
+				},
+				Cues: HistorySearchCueSection{
+					Explicit: []string{
+						"刚才", "之前", "上次", "前面", "聊天记录", "你说过", "我提过",
+						"earlier", "previously", "chat history", "you said", "i mentioned",
+					},
+					Implicit: []string{
+						"不是说过", "定过", "还记得", "previous", "remember", "mentioned before",
+					},
+				},
+				Blocks: HistorySearchBlockSection{
+					SessionSources: []string{"automation", "heartbeat", "cron", "review"},
+				},
+			},
+			Permissions: PermissionsSection{
+				BlockAutomationMutations:   true,
+				InteractiveApprovalEnabled: true,
+				InteractiveApprovalMode:    "manual",
+				InteractiveApprovalSources: []string{"web", "gateway", "feishu", "weixin"},
+				InteractiveApprovalTools: []string{
+					"bash",
+					"background_run",
+					"write_file",
+					"edit_file",
+					"install_skill",
+					"tool_exchange",
+					"cron",
+					"heartbeat",
+					"browser",
+					"desktop",
+				},
+				TrustedPathPrefixes:    []string{},
+				TrustedCommandPrefixes: []string{},
+			},
+		},
+		Media: MediaSection{
+			Moonshot: MediaMoonshotSection{
+				Enabled: false,
+				BaseURL: "https://api.moonshot.ai/v1",
+				APIKey:  "",
+			},
+			Document: MediaDocumentSection{
+				MaxChars:      60000,
+				PDFToTextPath: "pdftotext",
+			},
+			OCR: MediaOCRSection{
+				Mode:          "auto",
+				TesseractPath: "tesseract",
+				MaxChars:      12000,
+			},
+			Audio: MediaAudioSection{
+				Enabled:          false,
+				FFmpegPath:       "ffmpeg",
+				FFprobePath:      "ffprobe",
+				WhisperCPPPath:   "whisper-cli",
+				WhisperModelPath: "",
+				MaxChars:         60000,
+			},
+			Video: MediaVideoSection{
+				Enabled:                 false,
+				KeyframeIntervalSeconds: 8,
+				MaxFrames:               12,
+			},
+		},
+		Channels: ChannelsSection{
+			Feishu: FeishuSection{
+				Enabled:   false,
+				AppID:     "",
+				AppSecret: "",
+				Domain:    "lark",
+			},
+			Weixin: WeixinSection{
+				Enabled:           false,
+				BaseURL:           "https://ilinkai.weixin.qq.com",
+				CDNBaseURL:        "https://novac2c.cdn.weixin.qq.com/c2c",
+				AccountID:         "default",
+				AllowFrom:         nil,
+				RouteTag:          "",
+				LongPollTimeoutMs: 35000,
+				Proxy:             "",
+			},
+		},
+	}
+}

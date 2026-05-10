@@ -16,6 +16,7 @@
 .env
 godex.yaml
 godex
+dist/
 /log/
 /temp/
 /skills/

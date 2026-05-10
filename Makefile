@@ -1,12 +1,44 @@
-dev:
-	pnpm --dir ui/web build && scripts/sync_embedded_web.sh \
-	&& go build -ldflags "-s -w -X github.com/tim5wang/godex/internal/version.Version=v0.1.0" -o godex ./cmd/godex  \
-	&& ./godex service uninstall && ./godex service install && ./godex service start
-	 
+APP := godex
+VERSION ?= v1.0.0
+DIST_DIR ?= dist
+COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+LDFLAGS := -s -w -X github.com/tim5wang/godex/internal/version.Version=$(VERSION) -X github.com/tim5wang/godex/internal/version.Commit=$(COMMIT) -X github.com/tim5wang/godex/internal/version.Date=$(BUILD_DATE)
 
-build-linux:
-	pnpm --dir ui/web build && scripts/sync_embedded_web.sh \
-	&& GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X github.com/tim5wang/godex/internal/version.Version=v0.1.0" -o godex-linux-amd64 ./cmd/godex
+.PHONY: dev web build-linux release release-clean deploy-linux
+
+web:
+	pnpm --dir ui/web build && scripts/sync_embedded_web.sh
+
+dev: web
+	go build -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/godex \
+	&& ./godex service uninstall && ./godex service install && ./godex service start
+
+build-linux: web
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP)-linux-amd64 ./cmd/godex
+
+release: release-clean web
+	mkdir -p "$(DIST_DIR)"
+	set -eu; \
+	build() { \
+		platform="$$1"; goos="$$2"; goarch="$$3"; ext="$$4"; \
+		pkg="$(APP)-$(VERSION)-$$platform"; \
+		stage="$(DIST_DIR)/.stage/$$pkg"; \
+		mkdir -p "$$stage"; \
+		echo "[release] build $$platform ($$goos/$$goarch)"; \
+		CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch go build -trimpath -ldflags "$(LDFLAGS)" -o "$$stage/$(APP)$$ext" ./cmd/godex; \
+		cp README.md README.en.md "$$stage/"; \
+		tar -cf - -C "$(DIST_DIR)/.stage" "$$pkg" | gzip -9 > "$(DIST_DIR)/$$pkg.tar.gz"; \
+	}; \
+	build win-x86-64 windows amd64 .exe; \
+	build mac-x86-64 darwin amd64 ""; \
+	build mac-apple darwin arm64 ""; \
+	build linux-x86-64 linux amd64 ""; \
+	rm -rf "$(DIST_DIR)/.stage"; \
+	ls -lh "$(DIST_DIR)"/*.tar.gz
+
+release-clean:
+	rm -rf "$(DIST_DIR)"
 
 deploy-linux:
 	scp godex-linux-amd64 mycloud:/opt/godex/godex \

@@ -6,14 +6,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/platform/stringutil"
 )
 
 // ToolCatalogManager manages bundle activation state for tool exchange.
 type ToolCatalogManager interface {
 	Catalog() ToolCatalog
-	Schemas(names ...string) []protocol.ToolSchema
 	ActivateBundles(names ...string) []string
 	DeactivateBundles(names ...string) (changed []string, blocked []string)
 }
@@ -23,7 +21,6 @@ type toolExchangeArgs struct {
 	DisableBundles []string `json:"disable_bundles,omitempty"`
 	Query          string   `json:"query,omitempty"`
 	IncludeTools   bool     `json:"include_tools,omitempty"`
-	IncludeSchemas bool     `json:"include_schemas,omitempty"`
 	MaxResults     int      `json:"max_results,omitempty"`
 }
 
@@ -260,27 +257,6 @@ func bundleAliases(name string) []string {
 	}
 }
 
-func schemaNamesForRecommendations(catalog ToolCatalog, recs []bundleRecommendation, includeAll bool) []string {
-	names := make([]string, 0)
-	if includeAll {
-		names = append(names, catalog.AlwaysActiveTools...)
-		for _, bundle := range catalog.Bundles {
-			if bundle.Active {
-				names = append(names, bundle.Tools...)
-			}
-		}
-	}
-	for _, rec := range recs {
-		for _, bundle := range catalog.Bundles {
-			if bundle.Name == rec.Name {
-				names = append(names, bundle.Tools...)
-				break
-			}
-		}
-	}
-	return stringutil.UniqueNonEmpty(names)
-}
-
 func toolExchangeStatus(query string, enabled, disabled, blocked []string, recs []bundleRecommendation) string {
 	if len(enabled) > 0 || len(disabled) > 0 || len(blocked) > 0 {
 		return "ok"
@@ -343,10 +319,6 @@ func NewToolExchangeTool(manager ToolCatalogManager) Tool {
 				"type":        "boolean",
 				"description": "Return tool names for matching bundles. Defaults to false to keep context small.",
 			},
-			"include_schemas": map[string]interface{}{
-				"type":        "boolean",
-				"description": "Return JSON schemas for matching or active tools. Defaults to false.",
-			},
 			"max_results": map[string]interface{}{
 				"type":        "integer",
 				"description": "Maximum bundles to return for query/catalog views. Defaults to 5 and caps at 20.",
@@ -388,14 +360,6 @@ func NewToolExchangeTool(manager ToolCatalogManager) Tool {
 		}
 		if strings.TrimSpace(args.Query) == "" {
 			structured["bundles"] = summarizeBundles(catalog, args.IncludeTools, maxResults)
-		}
-		if args.IncludeSchemas {
-			names := schemaNamesForRecommendations(catalog, recommendations, strings.TrimSpace(args.Query) == "")
-			if len(names) > 0 {
-				structured["tool_schemas"] = manager.Schemas(names...)
-			} else {
-				structured["tool_schemas"] = []protocol.ToolSchema{}
-			}
 		}
 		return ToolResult{Structured: structured}, nil
 	})

@@ -213,6 +213,7 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 		"Only active tools are callable right now.",
 		"Use tool_exchange with a short query to discover or change bundle state when needed.",
 		"If a listed bundle is clearly needed by name, call tool_exchange with enable_bundles for that bundle directly; use query only when the bundle name is unclear.",
+		"Do not ask tool_exchange for tool schemas; enabled bundle tools appear in the next function list automatically.",
 		"Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.",
 		"Keep the active tool workspace tidy: use disable_bundles for active bundles that this conversation no longer needs.",
 	}
@@ -237,6 +238,7 @@ func buildToolAvailabilityPromptForProfile(catalog tools.ToolCatalog, profile st
 	lines := []string{
 		"# Tool Availability",
 		"Only active tools are callable right now. Use tool_exchange with enable_bundles for heavier capabilities when needed.",
+		"Do not ask tool_exchange for tool schemas; enabled bundle tools appear in the next function list automatically.",
 		"Do not use bash/curl/python/node to replace web_search, web_fetch, browser, package, or external-agent tools when those bundles are the right capability.",
 	}
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {

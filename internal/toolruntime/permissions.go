@@ -48,6 +48,31 @@ const (
 	SecurityProfileDevRepair      = "dev/repair"
 )
 
+var defaultTrustedCommandPrefixes = []string{
+	"cat ",
+	"curl ",
+	"date",
+	"diff ",
+	"echo ",
+	"find ",
+	"git diff",
+	"git log",
+	"git show",
+	"git status",
+	"grep ",
+	"head ",
+	"jq ",
+	"ls",
+	"pwd",
+	"rg ",
+	"sed -n",
+	"tail ",
+	"uname",
+	"wc ",
+	"wget ",
+	"whoami",
+}
+
 // PermissionPolicy controls workspace-wide permission behavior.
 type PermissionPolicy struct {
 	BlockAutomationMutations bool                      `json:"block_automation_mutations"`
@@ -207,7 +232,7 @@ func DefaultPermissionPolicy() PermissionPolicy {
 				"desktop",
 			},
 			TrustedPathPrefixes:    []string{},
-			TrustedCommandPrefixes: []string{},
+			TrustedCommandPrefixes: append([]string{}, defaultTrustedCommandPrefixes...),
 		},
 	}
 }

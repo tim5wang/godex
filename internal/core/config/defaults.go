@@ -2,6 +2,31 @@ package config
 
 import "github.com/tim5wang/godex/internal/core/llm"
 
+var defaultTrustedCommandPrefixes = []string{
+	"cat ",
+	"curl ",
+	"date",
+	"diff ",
+	"echo ",
+	"find ",
+	"git diff",
+	"git log",
+	"git show",
+	"git status",
+	"grep ",
+	"head ",
+	"jq ",
+	"ls",
+	"pwd",
+	"rg ",
+	"sed -n",
+	"tail ",
+	"uname",
+	"wc ",
+	"wget ",
+	"whoami",
+}
+
 func defaultConfigFile() ConfigFile {
 	return ConfigFile{
 		API: APISection{
@@ -210,7 +235,7 @@ func defaultConfigFile() ConfigFile {
 					"desktop",
 				},
 				TrustedPathPrefixes:    []string{},
-				TrustedCommandPrefixes: []string{},
+				TrustedCommandPrefixes: append([]string{}, defaultTrustedCommandPrefixes...),
 			},
 		},
 		Media: MediaSection{

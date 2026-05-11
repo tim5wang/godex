@@ -1603,7 +1603,7 @@ func TestSessionPermissionEndpointsListAndApprovePendingRequests(t *testing.T) {
 	cfg := newTestConfig(t)
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{
-		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"})}},
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 	}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
@@ -1615,8 +1615,8 @@ func TestSessionPermissionEndpointsListAndApprovePendingRequests(t *testing.T) {
 		"envelope": map[string]interface{}{
 			"source":  "web",
 			"sender":  cfg.LeadName,
-			"text":    "run pwd",
-			"content": "run pwd",
+			"text":    "run command -v sh",
+			"content": "run command -v sh",
 		},
 	})
 	if messageResp.StatusCode != http.StatusAccepted {

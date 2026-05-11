@@ -465,8 +465,8 @@ func TestReplyPlanRenderTextIncludesTodoSummary(t *testing.T) {
 func TestManagerRouteInboundApproveCommandResumesPendingTurn(t *testing.T) {
 	cfg := newTestConfig(t)
 	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{
-		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"})}},
-		{Content: []protocol.Block{protocol.TextBlock("pwd output")}},
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
+		{Content: []protocol.Block{protocol.TextBlock("command output")}},
 	}})
 	manager := NewManager(cfg, service)
 
@@ -474,7 +474,7 @@ func TestManagerRouteInboundApproveCommandResumesPendingTurn(t *testing.T) {
 		Channel:    "weixin",
 		SessionKey: "wx-chat-approval",
 		Sender:     "wx-user-1",
-		Text:       "run pwd",
+		Text:       "run command -v sh",
 	}
 	firstReply := &captureReply{}
 	if err := manager.RouteInbound(context.Background(), inbound, firstReply); err != nil {
@@ -494,7 +494,7 @@ func TestManagerRouteInboundApproveCommandResumesPendingTurn(t *testing.T) {
 	}, secondReply); err != nil {
 		t.Fatalf("route inbound approve command: %v", err)
 	}
-	if !strings.Contains(secondReply.text, "Permission approved") || !strings.Contains(secondReply.text, "Resume: completed") || !strings.Contains(secondReply.text, "pwd output") {
+	if !strings.Contains(secondReply.text, "Permission approved") || !strings.Contains(secondReply.text, "Resume: completed") || !strings.Contains(secondReply.text, "command output") {
 		t.Fatalf("unexpected approve command output: %q", secondReply.text)
 	}
 
@@ -509,7 +509,7 @@ func TestManagerRouteInboundApproveCommandResumesPendingTurn(t *testing.T) {
 	if len(snapshot.PendingPermissions) != 0 {
 		t.Fatalf("expected no pending permissions after approve, got %+v", snapshot.PendingPermissions)
 	}
-	if got := protocol.MessageText(snapshot.Messages[len(snapshot.Messages)-1]); got != "pwd output" {
+	if got := protocol.MessageText(snapshot.Messages[len(snapshot.Messages)-1]); got != "command output" {
 		t.Fatalf("expected resumed assistant output in snapshot, got %q", got)
 	}
 }

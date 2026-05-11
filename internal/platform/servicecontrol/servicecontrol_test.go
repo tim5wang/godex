@@ -61,7 +61,7 @@ func TestRenderSystemdUnitCarriesGCAndWatchdogPolicy(t *testing.T) {
 	text := string(unit)
 	for _, want := range []string{
 		"Type=notify",
-		"NotifyAccess=main",
+		"NotifyAccess=all",
 		"Environment=GOMEMLIMIT=220MiB",
 		"Environment=GOGC=50",
 		"Environment=GOMAXPROCS=1",

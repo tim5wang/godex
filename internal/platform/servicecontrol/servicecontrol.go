@@ -425,7 +425,7 @@ func RenderSystemdUnit(opts InstallOptions) ([]byte, error) {
 	b.WriteString("StartLimitIntervalSec=0\n\n")
 	b.WriteString("[Service]\n")
 	b.WriteString("Type=notify\n")
-	b.WriteString("NotifyAccess=main\n")
+	b.WriteString("NotifyAccess=all\n")
 	b.WriteString("WorkingDirectory=" + systemdEscape(opts.WorkingDir) + "\n")
 	b.WriteString("Environment=GODEX_HOME=" + systemdEscape(opts.HomeDir) + "\n")
 	b.WriteString("Environment=GODEX_PROJECT_DIR=" + systemdEscape(opts.ProjectDir) + "\n")

@@ -203,7 +203,7 @@ func TestToolExchangeReportsRequestedBundleAlreadyActive(t *testing.T) {
 	}
 }
 
-func TestToolExchangeCanIncludeToolsAndSchemas(t *testing.T) {
+func TestToolExchangeCanIncludeToolsButNotSchemas(t *testing.T) {
 	handler := NewToolHandler()
 	handler.RegisterWithMeta(fakeTool("web_search"), ToolMeta{
 		Bundle:  "web",
@@ -223,9 +223,7 @@ func TestToolExchangeCanIncludeToolsAndSchemas(t *testing.T) {
 
 	var parsed struct {
 		Recommended []bundleRecommendation `json:"recommended_bundles"`
-		ToolSchemas []struct {
-			Name string `json:"name"`
-		} `json:"tool_schemas"`
+		ToolSchemas json.RawMessage        `json:"tool_schemas"`
 	}
 	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
@@ -233,8 +231,21 @@ func TestToolExchangeCanIncludeToolsAndSchemas(t *testing.T) {
 	if len(parsed.Recommended) != 1 || len(parsed.Recommended[0].Tools) != 1 || parsed.Recommended[0].Tools[0] != "web_search" {
 		t.Fatalf("expected recommended web tool list, got %+v", parsed.Recommended)
 	}
-	if len(parsed.ToolSchemas) != 1 || parsed.ToolSchemas[0].Name != "web_search" {
-		t.Fatalf("expected web_search schema, got %+v", parsed.ToolSchemas)
+	if len(parsed.ToolSchemas) != 0 {
+		t.Fatalf("expected tool_exchange result not to include tool_schemas, got %s", string(parsed.ToolSchemas))
+	}
+}
+
+func TestToolExchangeInputSchemaDoesNotExposeIncludeSchemas(t *testing.T) {
+	handler := NewToolHandler()
+	tool := NewToolExchangeTool(handler)
+	schema := tool.Spec().ToolSchema()
+	props, ok := schema.InputSchema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected input schema properties, got %+v", schema.InputSchema)
+	}
+	if _, ok := props["include_schemas"]; ok {
+		t.Fatalf("tool_exchange should not expose include_schemas in input schema: %+v", props)
 	}
 }
 

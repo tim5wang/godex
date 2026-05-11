@@ -645,8 +645,8 @@ func TestPostRuntimeReplyWithArtifactPathsPersistsFileAttachments(t *testing.T) 
 func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	cfg := newTestConfig(t)
 	caller := &stubCaller{responses: []protocol.Response{
-		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"})}},
-		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"})}},
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 	}}
 	service := newTestService(cfg, caller)
@@ -655,7 +655,7 @@ func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if _, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "run pwd", time.Now())); err != nil {
+	if _, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "run command -v sh", time.Now())); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 
@@ -692,7 +692,7 @@ func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	}
 
 	restored := newTestService(cfg, &stubCaller{responses: []protocol.Response{
-		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"})}},
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
 	}})
 	reopened, err := restored.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "permissions"})
 	if err != nil {
@@ -746,7 +746,7 @@ func TestSnapshotDisplayMessagesExpandCompactedTranscript(t *testing.T) {
 func TestPendingPermissionsPersistAcrossServiceRestart(t *testing.T) {
 	cfg := newTestConfig(t)
 	caller := &stubCaller{responses: []protocol.Response{
-		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"})}},
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 	}}
 	service := newTestService(cfg, caller)
@@ -755,12 +755,12 @@ func TestPendingPermissionsPersistAcrossServiceRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if _, err := service.Submit(context.Background(), opened.SessionID, message.NewRuntimeEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "show pwd", time.Now(), nil)); err != nil {
+	if _, err := service.Submit(context.Background(), opened.SessionID, message.NewRuntimeEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "show command -v sh", time.Now(), nil)); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 
 	restoredCaller := &stubCaller{responses: []protocol.Response{
-		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"})}},
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
 		{Content: []protocol.Block{protocol.TextBlock("done after restart")}},
 	}}
 	restored := newTestService(cfg, restoredCaller)
@@ -812,8 +812,8 @@ func TestPendingPermissionsPersistAcrossServiceRestart(t *testing.T) {
 func TestApprovePermissionIncludesResumedOutputWhenAssistantPlaceholderIsUpdated(t *testing.T) {
 	cfg := newTestConfig(t)
 	caller := &stubCaller{responses: []protocol.Response{
-		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"})}},
-		{Content: []protocol.Block{protocol.TextBlock("pwd output")}},
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
+		{Content: []protocol.Block{protocol.TextBlock("command output")}},
 	}}
 	service := newTestService(cfg, caller)
 
@@ -821,7 +821,7 @@ func TestApprovePermissionIncludesResumedOutputWhenAssistantPlaceholderIsUpdated
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if _, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeixin, opened.SessionID, "wx-user-1", "run pwd", time.Now())); err != nil {
+	if _, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeixin, opened.SessionID, "wx-user-1", "run command -v sh", time.Now())); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 
@@ -837,7 +837,7 @@ func TestApprovePermissionIncludesResumedOutputWhenAssistantPlaceholderIsUpdated
 	if err != nil {
 		t.Fatalf("approve permission: %v", err)
 	}
-	if !resolution.Resumed || resolution.ResumeStatus != "completed" || resolution.ResumeOutput != "pwd output" {
+	if !resolution.Resumed || resolution.ResumeStatus != "completed" || resolution.ResumeOutput != "command output" {
 		t.Fatalf("expected resumed approval output, got %+v", resolution)
 	}
 }

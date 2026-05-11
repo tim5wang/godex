@@ -860,6 +860,30 @@ func TestApplyConfigKeepsToolHandlerInstanceStable(t *testing.T) {
 	}
 }
 
+func TestApplyConfigRebindsToolExchangeToStableHandler(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	nextCfg := a.cfg.Clone()
+	nextCfg.MaxTokens = a.cfg.MaxTokens + 1
+	shared := NewSharedDependenciesWithCaller(nextCfg, a.client)
+
+	a.ApplyConfig(nextCfg, shared)
+
+	if _, err := a.handleTool(context.Background(), "tool_exchange", map[string]interface{}{
+		"enable_bundles": []interface{}{bundleBackground},
+	}); err != nil {
+		t.Fatalf("enable background bundle after ApplyConfig: %v", err)
+	}
+	if !a.toolHandler.IsActive("background_run") {
+		t.Fatal("expected tool_exchange to activate background_run on the stable handler")
+	}
+	if _, err := a.handleTool(context.Background(), "background_run", map[string]interface{}{
+		"command": `sh -c 'printf ok'`,
+	}); err != nil {
+		t.Fatalf("expected background_run to execute after tool_exchange activation: %v", err)
+	}
+}
+
 func TestApplyConfigRefreshesPermissionPolicyWhilePreservingManager(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	cfg := a.cfg

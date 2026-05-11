@@ -173,6 +173,10 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	a.registerToolsWith(nextHandler)
 	nextHandler.SetActiveBundles(activeBundles...)
 	handler.ReplaceWith(nextHandler)
+	// tool_exchange mutates the handler it is constructed with. Rebind it to
+	// the stable session handler after registry replacement, not the temporary
+	// rebuild handler.
+	a.registerToolTo(handler, tools.NewToolExchangeTool(handler), tools.ToolMeta{AlwaysActive: true})
 }
 
 // ApplyModelProfile swaps only the model caller/config for this session.

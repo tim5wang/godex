@@ -19,6 +19,7 @@ type ContextInspection struct {
 	HistoryTokenEstimate          int                   `json:"history_token_estimate,omitempty"`
 	TotalTokenEstimate            int                   `json:"total_token_estimate,omitempty"`
 	TokenBreakdown                ContextTokenBreakdown `json:"token_breakdown,omitempty"`
+	PrefixCache                   PrefixCacheInspection `json:"prefix_cache,omitempty"`
 	CompressThreshold             int                   `json:"compress_threshold"`
 	SuggestCompact                bool                  `json:"suggest_compact"`
 	CompressionReasons            []string              `json:"compression_reasons,omitempty"`
@@ -39,6 +40,17 @@ type ContextTokenBreakdown struct {
 	Attachments int `json:"attachments"`
 	ToolResults int `json:"tool_results"`
 	Total       int `json:"total"`
+}
+
+// PrefixCacheInspection describes prompt stability signals for providers that
+// cache repeated request prefixes.
+type PrefixCacheInspection struct {
+	SystemHash           string         `json:"system_hash,omitempty"`
+	ToolSchemasHash      string         `json:"tool_schemas_hash,omitempty"`
+	StablePrefixHash     string         `json:"stable_prefix_hash,omitempty"`
+	StableSystemTokens   int            `json:"stable_system_tokens,omitempty"`
+	DynamicRuntimeTokens int            `json:"dynamic_runtime_tokens,omitempty"`
+	DynamicSectionTokens map[string]int `json:"dynamic_section_tokens,omitempty"`
 }
 
 // ToolResultReference summarizes a model-visible placeholder for a large tool

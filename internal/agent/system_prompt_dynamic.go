@@ -12,6 +12,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/instructions"
+	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/platform/textutil"
 	"github.com/tim5wang/godex/internal/tools"
@@ -36,33 +37,90 @@ const (
 	skillCatalogPromptTokenBudget = 1800
 )
 
+type runtimePromptSection struct {
+	Key    string
+	Kind   protocol.MessageKind
+	Text   string
+	Tokens int
+}
+
 func (a *Agent) buildDynamicSystemPrompt(agentProfile string) (string, error) {
 	instructionPrompt, err := a.buildInstructionPrompt()
 	if err != nil {
 		return "", err
 	}
-	memoryPrompt, err := a.memoryMgr.BuildPromptSection()
-	if err != nil {
-		return "", err
-	}
 	profile := config.NormalizeAgentProfile(agentProfile)
-	skillCatalogPrompt := ""
-	if profile != config.AgentProfileCoding {
-		skillCatalogPrompt, err = a.buildSkillCatalogPrompt()
-		if err != nil {
-			return "", err
-		}
-	}
 	return strings.Join(filterNonEmpty(
 		instructionPrompt,
-		memoryPrompt,
-		skillCatalogPrompt,
 		buildCodingProfilePrompt(profile),
-		buildActiveSkillsPrompt(a.activeSkillStates()),
-		buildEnvironmentPrompt(a.environmentPromptInput()),
 		buildCapabilityCheckPromptForProfile(a.toolHandler.Catalog(), profile),
-		buildToolAvailabilityPromptForProfile(a.toolHandler.Catalog(), profile),
 	), "\n\n"), nil
+}
+
+func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtimePromptSection, error) {
+	profile := config.NormalizeAgentProfile(agentProfile)
+	sections := make([]runtimePromptSection, 0, 5)
+
+	memoryPrompt, err := a.memoryMgr.BuildPromptSection()
+	if err != nil {
+		return nil, err
+	}
+	sections = appendRuntimePromptSection(sections, "memory_index", protocol.KindMemory, memoryPrompt)
+
+	if profile != config.AgentProfileCoding {
+		skillCatalogPrompt, err := a.buildSkillCatalogPrompt()
+		if err != nil {
+			return nil, err
+		}
+		sections = appendRuntimePromptSection(sections, "skill_catalog", protocol.KindBackground, skillCatalogPrompt)
+	}
+	sections = appendRuntimePromptSection(sections, "active_skills", protocol.KindBackground, buildActiveSkillsPrompt(a.activeSkillStates()))
+	sections = appendRuntimePromptSection(sections, "environment", protocol.KindBackground, buildEnvironmentPrompt(a.environmentPromptInput()))
+	sections = appendRuntimePromptSection(sections, "tool_availability", protocol.KindBackground, buildToolAvailabilityPromptForProfile(a.toolHandler.Catalog(), profile))
+
+	return sections, nil
+}
+
+func appendRuntimePromptSection(sections []runtimePromptSection, key string, kind protocol.MessageKind, text string) []runtimePromptSection {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return sections
+	}
+	return append(sections, runtimePromptSection{
+		Key:    key,
+		Kind:   kind,
+		Text:   text,
+		Tokens: compress.CountTokens(text),
+	})
+}
+
+func runtimePromptMessages(sections []runtimePromptSection) []protocol.Message {
+	messages := make([]protocol.Message, 0, 2)
+	backgroundSections := make([]string, 0, len(sections))
+	for _, section := range sections {
+		switch section.Kind {
+		case protocol.KindMemory:
+			messages = append(messages, protocol.NewEphemeralTextMessage(protocol.KindMemory, section.Text))
+		default:
+			backgroundSections = append(backgroundSections, section.Text)
+		}
+	}
+	if len(backgroundSections) > 0 {
+		text := "# Runtime Prompt State\n\n" + strings.Join(backgroundSections, "\n\n")
+		messages = append(messages, protocol.NewEphemeralTextMessage(protocol.KindBackground, text))
+	}
+	return messages
+}
+
+func runtimePromptSectionTokenMap(sections []runtimePromptSection) map[string]int {
+	if len(sections) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(sections))
+	for _, section := range sections {
+		out[section.Key] += section.Tokens
+	}
+	return out
 }
 
 func (a *Agent) environmentPromptInput() EnvironmentPromptInput {

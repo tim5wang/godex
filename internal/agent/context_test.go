@@ -68,20 +68,21 @@ func TestBuildContextIncludesStructuredRuntimeMessages(t *testing.T) {
 	if !strings.Contains(build.System, "Follow the loaded skill.") {
 		t.Fatalf("expected skill prompt in system prompt, got %q", build.System)
 	}
-	if len(build.Messages) != 4 {
-		t.Fatalf("expected 4 messages, got %d", len(build.Messages))
+	if len(build.Messages) < 5 {
+		t.Fatalf("expected persistent history plus runtime prompt state, got %d messages", len(build.Messages))
 	}
 	if build.Messages[2].Content[0].Type != protocol.BlockToolResult {
 		t.Fatalf("expected third message to contain tool results, got %+v", build.Messages[2].Content)
 	}
-	if build.Messages[3].Metadata == nil || build.Messages[3].Metadata.Kind != protocol.KindInbox {
-		t.Fatalf("expected last message to be inbox runtime message, got %+v", build.Messages[3].Metadata)
+	last := build.Messages[len(build.Messages)-1]
+	if last.Metadata == nil || last.Metadata.Kind != protocol.KindInbox {
+		t.Fatalf("expected last message to be inbox runtime message, got %+v", last.Metadata)
 	}
 	apiMessages := protocol.ToAPIMessages(build.Messages)
 	if got := apiMessages[2].Content[0].ToolUseID; got != "tool-1" {
 		t.Fatalf("expected tool result block for tool-1, got %q", got)
 	}
-	if got := protocol.MessageText(build.Messages[3]); !strings.Contains(got, "Inbox updates") {
+	if got := protocol.MessageText(last); !strings.Contains(got, "Inbox updates") {
 		t.Fatalf("expected inbox summary text, got %q", got)
 	}
 	if got := a.msgBus.PeekInbox("lead"); len(got) != 1 {
@@ -265,6 +266,20 @@ func TestInspectContextReportsTokenBreakdownAndToolResultReferences(t *testing.T
 	if got := inspection.ToolResultReferences[0].ArtifactPath; !strings.Contains(got, "tool-large.json") {
 		t.Fatalf("expected artifact reference, got %+v", inspection.ToolResultReferences[0])
 	}
+	if inspection.PrefixCache.SystemHash == "" || inspection.PrefixCache.ToolSchemasHash == "" || inspection.PrefixCache.StablePrefixHash == "" {
+		t.Fatalf("expected prefix cache hashes, got %+v", inspection.PrefixCache)
+	}
+	if inspection.PrefixCache.StableSystemTokens == 0 {
+		t.Fatalf("expected stable system token estimate, got %+v", inspection.PrefixCache)
+	}
+	if inspection.PrefixCache.DynamicRuntimeTokens == 0 {
+		t.Fatalf("expected dynamic runtime token estimate, got %+v", inspection.PrefixCache)
+	}
+	for _, want := range []string{"memory_index", "environment", "tool_availability"} {
+		if inspection.PrefixCache.DynamicSectionTokens[want] == 0 {
+			t.Fatalf("expected dynamic section token estimate for %q, got %+v", want, inspection.PrefixCache.DynamicSectionTokens)
+		}
+	}
 }
 
 func TestBuildContextDoesNotExposeIdleToolForPrimaryAgent(t *testing.T) {
@@ -291,19 +306,97 @@ func TestBuildContextIncludesEnvironmentPrompt(t *testing.T) {
 		t.Fatalf("build context: %v", err)
 	}
 
-	for _, want := range []string{
+	for _, notWant := range []string{
+		"# Environment",
+		"Local date: 2026-04-17",
+		"Timezone: Asia/Shanghai",
+	} {
+		if strings.Contains(build.System, notWant) {
+			t.Fatalf("did not expect dynamic environment prompt %q in system prompt, got %q", notWant, build.System)
+		}
+	}
+	foundEnvironment := false
+	for _, msg := range build.Messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
+			continue
+		}
+		text := protocol.MessageText(msg)
+		if !strings.Contains(text, "# Runtime Prompt State") || !strings.Contains(text, "# Environment") {
+			continue
+		}
+		foundEnvironment = true
+		for _, want := range []string{
+			"# Environment",
+			"This is optional runtime context.",
+			"Skills directory: " + a.cfg.SkillsDir,
+			"Temporary files directory: " + a.cfg.TempDir,
+			"Local date: 2026-04-17",
+			"Weekday: Friday",
+			"Timezone: Asia/Shanghai",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("expected environment runtime message to contain %q, got %q", want, text)
+			}
+		}
+	}
+	if !foundEnvironment {
+		t.Fatalf("expected environment prompt in runtime messages, got %+v", build.Messages)
+	}
+}
+
+func TestBuildContextKeepsDynamicPromptStateOutOfStableSystem(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Runtime context",
+		Summary: "Memory index should be dynamic prompt state.",
+		Content: "Keep memory index out of the stable system prompt.",
+		Type:    memory.TypeProject,
+		Source:  "test",
+	}); err != nil {
+		t.Fatalf("remember memory: %v", err)
+	}
+
+	a.AddMessage("please inspect the runtime context")
+	first, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	a.now = func() time.Time {
+		return time.Date(2026, time.April, 18, 9, 30, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	}
+	second, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context after date change: %v", err)
+	}
+	if first.System != second.System {
+		t.Fatalf("expected stable system prompt across date changes\nfirst: %q\nsecond: %q", first.System, second.System)
+	}
+
+	for _, notWant := range []string{
 		"# Memory",
 		"Memory directory: " + a.cfg.MemoryDir,
 		"# Environment",
-		"This is optional runtime context.",
-		"Skills directory: " + a.cfg.SkillsDir,
-		"Temporary files directory: " + a.cfg.TempDir,
-		"Local date: 2026-04-17",
-		"Weekday: Friday",
-		"Timezone: Asia/Shanghai",
+		"# Tool Availability",
+		"Active bundles:",
 	} {
-		if !strings.Contains(build.System, want) {
-			t.Fatalf("expected system prompt to contain %q, got %q", want, build.System)
+		if strings.Contains(first.System, notWant) {
+			t.Fatalf("did not expect dynamic prompt state %q in system prompt, got %q", notWant, first.System)
+		}
+	}
+
+	firstRuntime := runtimePromptStateText(first.Messages)
+	secondRuntime := runtimePromptStateText(second.Messages)
+	if !strings.Contains(firstRuntime, "Local date: 2026-04-17") || !strings.Contains(secondRuntime, "Local date: 2026-04-18") {
+		t.Fatalf("expected environment date to move through runtime messages, first=%q second=%q", firstRuntime, secondRuntime)
+	}
+	if firstRuntime == secondRuntime {
+		t.Fatalf("expected runtime prompt state to change after date change")
+	}
+
+	for _, msg := range a.GetMessages() {
+		if msg.Metadata != nil && msg.Metadata.Ephemeral {
+			t.Fatalf("did not expect dynamic prompt state to persist in history, got %+v", a.GetMessages())
 		}
 	}
 }
@@ -493,8 +586,11 @@ func TestBuildContextPreloadsWebForWeatherQueries(t *testing.T) {
 	if _, ok := schemaByName(build.ToolSchemas, "web_fetch"); !ok {
 		t.Fatalf("expected web_fetch schema for weather query, got %+v", build.ToolSchemas)
 	}
-	if !strings.Contains(build.System, "web (current information lookup and page fetching)") {
-		t.Fatalf("expected system prompt to show active web bundle, got %q", build.System)
+	if strings.Contains(build.System, "web (current information lookup and page fetching)") {
+		t.Fatalf("did not expect active web bundle state in system prompt, got %q", build.System)
+	}
+	if got := runtimePromptStateText(build.Messages); !strings.Contains(got, "web (current information lookup and page fetching)") {
+		t.Fatalf("expected runtime prompt state to show active web bundle, got %q", got)
 	}
 }
 
@@ -695,10 +791,28 @@ func TestBuildContextIncludesToolAvailabilityPrompt(t *testing.T) {
 		"- Active bundles: core_code (workspace shell commands and code file access), planning (lightweight todo planning and progress tracking)",
 		"- Available bundles: background (long-running command execution and status checks), desktop (local desktop screenshots, clipboard, keyboard, mouse, and window inspection), external_agents (external ACP agent delegation over stdio), mcp (configured MCP resource servers), packages (declaration-only package and prompt ecosystem), subagent (isolated delegated exploration or implementation work), task_board (persistent task board operations), team (teammate inbox, messaging, and approval workflows), web (current information lookup and page fetching)",
 	} {
-		if !strings.Contains(build.System, want) {
-			t.Fatalf("expected system prompt to contain %q, got %q", want, build.System)
+		if strings.Contains(build.System, want) {
+			t.Fatalf("did not expect tool availability prompt %q in system prompt, got %q", want, build.System)
+		}
+		runtimeState := runtimePromptStateText(build.Messages)
+		if !strings.Contains(runtimeState, want) {
+			t.Fatalf("expected runtime prompt state to contain %q, got %q", want, runtimeState)
 		}
 	}
+}
+
+func runtimePromptStateText(messages []protocol.Message) string {
+	var parts []string
+	for _, msg := range messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
+			continue
+		}
+		text := protocol.MessageText(msg)
+		if strings.Contains(text, "# Runtime Prompt State") {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func TestBuildContextIncludesSkillCatalogPrompt(t *testing.T) {
@@ -732,6 +846,7 @@ Read the diff first.`), 0644); err != nil {
 		t.Fatalf("build context: %v", err)
 	}
 
+	runtimeState := runtimePromptStateText(build.Messages)
 	for _, want := range []string{
 		"# Skill Availability",
 		"Installed and discoverable skills. Use list_skills or list_skill_sources for more detail, install_skill to add one, load_skill to activate it, expand_skill for extra sections, and unload_skill when it is no longer helpful. If the user says find-skills or asks to find a skill, use list_skill_sources with a query; do not use tool_exchange for skill search.",
@@ -739,8 +854,8 @@ Read the diff first.`), 0644); err != nil {
 		"Recommended bundles: background.",
 		"Sections: core, workflow.",
 	} {
-		if !strings.Contains(build.System, want) {
-			t.Fatalf("expected skill catalog prompt to contain %q, got %q", want, build.System)
+		if !strings.Contains(runtimeState, want) {
+			t.Fatalf("expected skill catalog runtime prompt to contain %q, got %q", want, runtimeState)
 		}
 	}
 }
@@ -1026,14 +1141,15 @@ Coordinate with rt-tech and rt-risk subagent roles.`), 0644); err != nil {
 		t.Fatalf("build context: %v", err)
 	}
 
+	runtimeState := runtimePromptStateText(build.Messages)
 	for _, want := range []string{
 		"- round-table: Skill: round-table",
 		"Compatibility: degraded_supported.",
 		"Recommended bundles: core_code, background, subagent, mcp.",
 		"Missing capabilities: mcp.",
 	} {
-		if !strings.Contains(build.System, want) {
-			t.Fatalf("expected third-party skill prompt to contain %q, got %q", want, build.System)
+		if !strings.Contains(runtimeState, want) {
+			t.Fatalf("expected third-party skill runtime prompt to contain %q, got %q", want, runtimeState)
 		}
 	}
 }
@@ -1122,8 +1238,8 @@ func TestBuildContextDoesNotMisclassifyPlainJSONText(t *testing.T) {
 		t.Fatalf("build context: %v", err)
 	}
 
-	if len(build.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(build.Messages))
+	if len(build.Messages) < 1 {
+		t.Fatalf("expected at least one message, got %d", len(build.Messages))
 	}
 	if len(build.Messages[0].Content) != 1 || build.Messages[0].Content[0].Type != protocol.BlockText {
 		t.Fatalf("expected plain JSON string to remain text, got %+v", build.Messages[0].Content)
@@ -1263,8 +1379,11 @@ func TestBuildContextInjectsRelevantMemoryForCurrentQuery(t *testing.T) {
 		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindMemory {
 			continue
 		}
-		foundMemory = true
 		text := protocol.MessageText(msg)
+		if !strings.Contains(text, "Memory context:") {
+			continue
+		}
+		foundMemory = true
 		for _, want := range []string{
 			"Memory context:",
 			"Relevant recall for the current request:",
@@ -1319,8 +1438,11 @@ func TestBuildContextInjectsStableCoreMemoryWithoutQueryMatch(t *testing.T) {
 		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindMemory {
 			continue
 		}
-		foundMemory = true
 		text := protocol.MessageText(msg)
+		if !strings.Contains(text, "Memory context:") {
+			continue
+		}
+		foundMemory = true
 		for _, want := range []string{
 			"Memory context:",
 			"L0 identity:",
@@ -1503,14 +1625,15 @@ Run the example workflow.`), 0644); err != nil {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if !strings.Contains(build.System, "# Active Skills") {
-		t.Fatalf("expected active skills prompt, got %q", build.System)
+	runtimeState := runtimePromptStateText(build.Messages)
+	if !strings.Contains(runtimeState, "# Active Skills") {
+		t.Fatalf("expected active skills runtime prompt, got %q", runtimeState)
 	}
-	if !strings.Contains(build.System, "Use the example skill core.") {
-		t.Fatalf("expected system prompt to include core skill content, got %q", build.System)
+	if !strings.Contains(runtimeState, "Use the example skill core.") {
+		t.Fatalf("expected runtime prompt to include core skill content, got %q", runtimeState)
 	}
-	if strings.Contains(build.System, "Run the example workflow.") {
-		t.Fatalf("did not expect workflow section before expand, got %q", build.System)
+	if strings.Contains(runtimeState, "Run the example workflow.") {
+		t.Fatalf("did not expect workflow section before expand, got %q", runtimeState)
 	}
 
 	result, err = a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"})
@@ -1525,8 +1648,9 @@ Run the example workflow.`), 0644); err != nil {
 	if err != nil {
 		t.Fatalf("build context again: %v", err)
 	}
-	if got := strings.Count(build.System, "Use the example skill core."); got != 1 {
-		t.Fatalf("expected skill core to be injected once, got %d copies in %q", got, build.System)
+	runtimeState = runtimePromptStateText(build.Messages)
+	if got := strings.Count(runtimeState, "Use the example skill core."); got != 1 {
+		t.Fatalf("expected skill core to be injected once, got %d copies in %q", got, runtimeState)
 	}
 }
 
@@ -1577,11 +1701,12 @@ Review the reference checklist.`), 0644); err != nil {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if !strings.Contains(build.System, "Run the example workflow.") {
-		t.Fatalf("expected expanded workflow section in system prompt, got %q", build.System)
+	runtimeState := runtimePromptStateText(build.Messages)
+	if !strings.Contains(runtimeState, "Run the example workflow.") {
+		t.Fatalf("expected expanded workflow section in runtime prompt, got %q", runtimeState)
 	}
-	if strings.Contains(build.System, "Review the reference checklist.") {
-		t.Fatalf("did not expect unexpanded references section in system prompt, got %q", build.System)
+	if strings.Contains(runtimeState, "Review the reference checklist.") {
+		t.Fatalf("did not expect unexpanded references section in runtime prompt, got %q", runtimeState)
 	}
 }
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -55,23 +56,30 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
+	if err != nil {
+		return nil, err
+	}
+	promptStateMessages := runtimePromptMessages(promptStateSections)
 	runtimeMessages, ackRuntime := a.collectRuntimeMessages()
 	if ledger := strings.TrimSpace(tools.SessionContextFromContext(ctx).ProjectLedger); ledger != "" {
 		runtimeMessages = append([]protocol.Message{protocol.NewEphemeralTextMessage(protocol.KindBackground, formatProjectLedgerRuntimeMessage(ledger))}, runtimeMessages...)
 	}
+	allRuntimeMessages := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
 
-	preliminary := estimateContextBudget(system, history, memoryMessages, runtimeMessages, a.toolHandler.ActiveSchemas(), a.cfg.CompressThreshold)
+	preliminary := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), a.cfg.CompressThreshold)
 	compactedHistory, compacted, err := a.maybeAutoCompact(ctx, history, version, system, preliminary)
 	if err != nil {
 		return nil, err
 	}
 	combined := append(protocol.CloneMessages(compactedHistory), memoryMessages...)
+	combined = append(combined, promptStateMessages...)
 	combined = append(combined, runtimeMessages...)
-	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, runtimeMessages, a.toolHandler.ActiveSchemas(), a.cfg.CompressThreshold)
+	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), a.cfg.CompressThreshold)
 	historyRecall := a.evaluateHistoryRecall(ctx, query, compactedHistory, memoryLayers, compacted)
 	hints := deriveToolExposureHints(query, postCompactEstimate.Breakdown.Total, historyRecall)
 	toolSchemas := a.activeToolSchemas(hints, agentProfile)
-	estimate := estimateContextBudget(system, compactedHistory, memoryMessages, runtimeMessages, toolSchemas, a.cfg.CompressThreshold)
+	estimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, toolSchemas, a.cfg.CompressThreshold)
 	reasons := estimate.Reasons
 	compactionBefore := 0
 	compactionAfter := 0
@@ -526,6 +534,36 @@ func estimateContextBudget(system string, history, memoryMessages, runtimeMessag
 	estimate.LargeToolResultReferenceCount = historyRefCount + memoryRefCount + runtimeRefCount
 	estimate.Reasons = compressionReasons(estimate.Breakdown, threshold)
 	return estimate
+}
+
+func prefixCacheInspection(system string, toolSchemas []protocol.ToolSchema, history []protocol.Message, dynamicSections []runtimePromptSection, dynamicMessages []protocol.Message) tools.PrefixCacheInspection {
+	return tools.PrefixCacheInspection{
+		SystemHash:           sha256Hex([]byte(system)),
+		ToolSchemasHash:      sha256Canonical(toolSchemas),
+		StablePrefixHash:     sha256Canonical(stablePrefixCacheInput{System: system, ToolSchemas: toolSchemas, History: history}),
+		StableSystemTokens:   compress.CountTokens(system),
+		DynamicRuntimeTokens: estimateMessages(dynamicMessages),
+		DynamicSectionTokens: runtimePromptSectionTokenMap(dynamicSections),
+	}
+}
+
+type stablePrefixCacheInput struct {
+	System      string                `json:"system"`
+	ToolSchemas []protocol.ToolSchema `json:"tool_schemas"`
+	History     []protocol.Message    `json:"history"`
+}
+
+func sha256Canonical(value interface{}) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return sha256Hex([]byte(fmt.Sprintf("%#v", value)))
+	}
+	return sha256Hex(data)
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func estimateMessageSet(messages []protocol.Message) (baseTokens, toolResultTokens, attachmentTokens int, refs []tools.ToolResultReference, refCount int) {

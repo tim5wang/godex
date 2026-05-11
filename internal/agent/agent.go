@@ -1141,10 +1141,17 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 	if err != nil {
 		return tools.ContextInspection{}, err
 	}
+	agentProfile := agentProfileFromContext(ctx)
+	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
+	if err != nil {
+		return tools.ContextInspection{}, err
+	}
+	promptStateMessages := runtimePromptMessages(promptStateSections)
 	runtimeMessages, _ := a.collectRuntimeMessages()
+	allRuntimeMessages := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
 
 	toolSchemas := a.toolHandler.ActiveSchemas()
-	estimate := estimateContextBudget(system, history, memoryMessages, runtimeMessages, toolSchemas, a.cfg.CompressThreshold)
+	estimate := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, toolSchemas, a.cfg.CompressThreshold)
 	pendingCount := 0
 	if a.permissions != nil && strings.TrimSpace(sessionID) != "" {
 		pendingCount = len(a.permissions.ListPending(sessionID))
@@ -1156,6 +1163,7 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 		HistoryTokenEstimate:          estimate.Breakdown.History,
 		TotalTokenEstimate:            estimate.Breakdown.Total,
 		TokenBreakdown:                estimate.Breakdown,
+		PrefixCache:                   prefixCacheInspection(system, toolSchemas, history, promptStateSections, promptStateMessages),
 		CompressThreshold:             a.cfg.CompressThreshold,
 		SuggestCompact:                len(estimate.Reasons) > 0,
 		CompressionReasons:            append([]string{}, estimate.Reasons...),

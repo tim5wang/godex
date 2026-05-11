@@ -150,8 +150,33 @@ examples/skills/package-developer
 
 当 coding profile 需要联网、浏览器、subagent、skill、memory、package 等能力时，agent 会通过 `tool_exchange` 按需启用对应 bundle。CLI/TUI/ACP 可用 `--profile general|coding` 临时覆盖；也可在 Web `Settings` 修改 `agent.default_profiles.*`。
 
+## 里程碑
+
+### 1.0 已实现
+
+GoDex 1.0 的目标是成为本地优先、可部署、可审计的 Agent 工作台：
+
+- 多入口共享同一个 session runtime：CLI、TUI、Web、HTTP API、Feishu、Weixin。
+- Web 工作台覆盖 Chat、Settings、Nodes、Notes、Skills、Memory、Automation、Context & Recall 和审批。
+- 工具体系支持 shell/file/browser/web/memory/skill/package/MCP/automation，并接入 approval/security policy。
+- 支持 durable memory、history recall、context compaction、transcript archive 和 context inspection。
+- 支持 durable subagent job、workflow、longtask、review/merge/cancel/resume 和运行进度追踪。
+- 支持单二进制 Web UI、自部署 service install、storage doctor 和 GC。
+
+### 2.0 规划
+
+GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的 Agent Runtime 平台：
+
+- **Agent 与 Sandbox 解耦**：Agent 表达“我是谁、我能干什么、我会怎么干”，Sandbox 表达“在哪里干活、能动哪些手、坏了如何重建”。
+- **Orchestrator 与 Worker 解耦**：主 Agent 保持上下文干净，负责规划、指挥、验收和合并；Worker Agent 在独立 sandbox 中执行脏活累活。
+- **Session 记忆树**：支持 branch、clone、rollback、merge、rebuild，让主线和 worker 探索可以像版本化上下文一样管理。
+- **Session 与存储介质解耦**：通过 store/repository 接口支持 JSON、SQLite、数据库和云存储等后端。
+
+详细架构方向见 [SPEC.md](SPEC.md)。
+
 ## 文档
 
+- [GoDex 2.0 架构 SPEC](SPEC.md)：Agent/Sandbox、Orchestrator/Worker、Session Graph 和存储解耦路线。
 - [用户指南](docs/user-guide.md)：安装、配置、Provider、Web UI、工具、Memory、API、发布检查。
 - [项目结构](docs/project-structure.md)：目录职责和重构边界。
 - [Memory 设计原则](docs/memory-design-principles.md)：长期记忆、候选、召回和审计设计。

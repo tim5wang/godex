@@ -124,6 +124,7 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 		"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, consider the browser tool for dynamic pages. Do not repeat the same search query or fetch the same URL.",
 		"- If tool_exchange returns no match, do not repeat similar capability queries; switch to active tools or say the capability is unavailable.",
 		"- When the user explicitly asks you to read, inspect, review, or verify specific workspace files or code paths, use the relevant file or shell tools before giving findings.",
+		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if task reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
 		"- When using durable subagents, use task wait for any/all completion instead of repeatedly polling task status; use task logs only for bounded diagnostics.",
 		"- When a tool generates a local file such as a screenshot or export, treat it as a generated artifact. In supported runtimes the artifact may be attached automatically, so do not claim you can only provide a local path unless the user explicitly asks for the path.",
 		"- When the user wants a local file sent or attached without reading its contents, prefer attach_file instead of read_file.",
@@ -151,6 +152,7 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 		"- Read the relevant code first, make focused edits, then run the smallest useful verification.",
 		"- Use todo tools for multi-step coding work, but keep plans short and update them as work changes.",
 		"- If the user asks for current web information, use tool_exchange to enable the web bundle, then use web_search or web_fetch. Do not use bash with curl/wget as a substitute for the web tools.",
+		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if task reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
 		"- Enable browser, subagent, background, package, skill, memory, MCP, or external agent bundles only when the user explicitly asks for that capability or the active task clearly requires it.",
 		"- If tool_exchange returns no match, continue with active coding tools or state the missing capability plainly.",
 	}

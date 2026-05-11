@@ -1167,12 +1167,14 @@ func subagentEventTargetFromContext(ctx context.Context) subagentEventTarget {
 }
 
 type durableSubagentStartRequest struct {
-	Prompt        string
-	AgentType     string
-	WriteScope    []string
-	PreviewJobIDs []string
-	MaxTurns      int
-	JobTimeoutMS  int
+	Prompt          string
+	AgentType       string
+	WriteScope      []string
+	RequiredBundles []string
+	RequiredTools   []string
+	PreviewJobIDs   []string
+	MaxTurns        int
+	JobTimeoutMS    int
 }
 
 func (a *Agent) StartDurableSubagent(prompt, agentType string, writeScope []string) (*subagentJob, error) {
@@ -1198,6 +1200,7 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 	if strings.TrimSpace(runtimeCtx.Source) == "" && strings.HasPrefix(strings.TrimSpace(runtimeCtx.SessionID), "web-") {
 		runtimeCtx.Source = string(message.SourceWeb)
 	}
+	requiredBundles := subagentRequiredBundles(prompt, req.RequiredBundles)
 	start := subagentStartOptions{
 		SessionID:      target.sessionID,
 		ParentTurnID:   target.turnID,
@@ -1226,9 +1229,13 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		start.BudgetHint = role.BudgetHint
 		start.Display = roleDisplayMap(role.Display)
 	}
+	start.ToolNames = appendRequiredSubagentTools(start.ToolNames, requiredBundles, req.RequiredTools)
 	start.ToolNames = narrowSubagentWriteTools(start.ToolNames, req.WriteScope)
 	if hasRole {
 		start.Capabilities = roleCapabilitySummary(role, start.ToolNames, req.WriteScope)
+	}
+	if err := a.validateSubagentRequiredCapabilities(requiredBundles, req.RequiredTools); err != nil {
+		return nil, err
 	}
 	if err := a.validateSubagentToolInheritance(start.ToolNames); err != nil {
 		return nil, err
@@ -2444,6 +2451,9 @@ func (a *Agent) executeSubagentToolForJob(ctx context.Context, name string, inpu
 			return conversation.ToolExecutionResult{}, fmt.Errorf("shared read-only subagent cannot run shell command %q; use read_file or request an isolated write-capable subagent", strings.TrimSpace(command))
 		}
 	}
+	if isDurableSubagentInheritedParentTool(name) {
+		return a.handleToolResult(ctx, name, input)
+	}
 	workspace := strings.TrimSpace(job.WorktreeDir)
 	if workspace == "" {
 		return a.executeSubagentToolWithScope(ctx, name, input, job.WriteScope)
@@ -3066,6 +3076,52 @@ func subagentToolNames(agentType string) []string {
 	return []string{"read_file"}
 }
 
+func subagentRequiredBundles(prompt string, explicit []string) []string {
+	bundles := append([]string{}, explicit...)
+	bundles = append(bundles, implicitBundlesForQuery(prompt)...)
+	if looksLikeWebResearchPrompt(prompt) {
+		bundles = append(bundles, bundleWeb)
+	}
+	return uniqueStrings(bundles)
+}
+
+func looksLikeWebResearchPrompt(prompt string) bool {
+	query := strings.ToLower(strings.TrimSpace(prompt))
+	if query == "" {
+		return false
+	}
+	if containsAny(query,
+		"网络检索", "网页检索", "联网检索", "网上调研", "网络调研", "联网调研",
+		"源头链接", "来源链接", "引用链接", "官方来源", "网页来源",
+		"web research", "online research", "internet research", "source links", "official sources", "official pages",
+	) {
+		return true
+	}
+	hasResearchCue := containsAny(query, "调研", "研究", "research", "investigate")
+	if !hasResearchCue {
+		return false
+	}
+	return containsAny(query, "网页", "网站", "网上", "联网", "搜索", "检索", "链接", "来源", "source", "search", "web", "online", "internet", "url", "link")
+}
+
+func appendRequiredSubagentTools(base, bundles, explicitTools []string) []string {
+	out := append([]string{}, base...)
+	for _, bundle := range bundles {
+		out = append(out, subagentToolsForRequiredBundle(bundle)...)
+	}
+	out = append(out, explicitTools...)
+	return uniqueStrings(out)
+}
+
+func subagentToolsForRequiredBundle(bundle string) []string {
+	switch strings.ToLower(strings.TrimSpace(bundle)) {
+	case bundleWeb:
+		return []string{"web_search", "web_fetch"}
+	default:
+		return nil
+	}
+}
+
 func (a *Agent) resolveSubagentRole(agentType string) (pkgregistry.Role, bool) {
 	agentType = strings.TrimSpace(agentType)
 	if agentType == "" || strings.EqualFold(agentType, "Explore") || agentType == "general-purpose" || a == nil || a.cfg == nil {
@@ -3108,7 +3164,16 @@ func subagentToolNamesForRole(agentType string, role *pkgregistry.Role) []string
 
 func supportedDurableSubagentTool(name string) bool {
 	switch strings.TrimSpace(name) {
-	case "bash", "read_file", "write_file", "edit_file":
+	case "bash", "read_file", "write_file", "edit_file", "web_search", "web_fetch":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDurableSubagentInheritedParentTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "web_search", "web_fetch":
 		return true
 	default:
 		return false
@@ -3173,6 +3238,48 @@ func (a *Agent) validateSubagentToolInheritance(toolNames []string) error {
 		}
 	}
 	return nil
+}
+
+func (a *Agent) validateSubagentRequiredCapabilities(requiredBundles, requiredTools []string) error {
+	missingBundles := make([]string, 0)
+	for _, bundle := range uniqueStrings(requiredBundles) {
+		bundle = strings.TrimSpace(bundle)
+		if bundle == "" {
+			continue
+		}
+		for _, toolName := range subagentToolsForRequiredBundle(bundle) {
+			if !a.subagentParentToolActive(toolName) {
+				missingBundles = append(missingBundles, bundle)
+				break
+			}
+		}
+	}
+	missingTools := make([]string, 0)
+	for _, toolName := range uniqueStrings(requiredTools) {
+		toolName = strings.TrimSpace(toolName)
+		if toolName == "" {
+			continue
+		}
+		if !a.subagentParentToolActive(toolName) {
+			missingTools = append(missingTools, toolName)
+		}
+	}
+	if len(missingBundles) == 0 && len(missingTools) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"subagent_capability_required: missing active parent capability for bundle(s) %s tool(s) %s; enable required bundle(s) with tool_exchange and retry task",
+		strings.Join(uniqueStrings(missingBundles), ","),
+		strings.Join(uniqueStrings(missingTools), ","),
+	)
+}
+
+func (a *Agent) subagentParentToolActive(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || a == nil || a.toolHandler == nil {
+		return false
+	}
+	return a.toolHandler.Get(name) != nil && a.toolHandler.IsActive(name)
 }
 
 func roleCapabilitySummary(role pkgregistry.Role, toolNames []string, writeScope []string) []string {

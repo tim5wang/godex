@@ -1417,6 +1417,42 @@ func TestDurableSubagentWithoutWriteScopeIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestDurableSubagentInheritsActiveWebToolsForResearchPrompt(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleWeb)
+	a.client = &sequenceCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.TextBlock("research handoff")}},
+	}}
+
+	job, err := a.StartDurableSubagent("请进行网络检索调研，并返回带源头链接的报告", "general-purpose", nil)
+	if err != nil {
+		t.Fatalf("start durable web research subagent: %v", err)
+	}
+	if !containsString(job.ToolNames, "web_search") || !containsString(job.ToolNames, "web_fetch") {
+		t.Fatalf("expected web tools to be granted to research subagent, got %+v", job.ToolNames)
+	}
+	if containsString(job.ToolNames, "bash") || containsString(job.ToolNames, "write_file") || containsString(job.ToolNames, "edit_file") {
+		t.Fatalf("expected web research subagent without write scope to stay read-only except web tools, got %+v", job.ToolNames)
+	}
+	waitForSubagentStatus(t, a.subagentJobs, job.ID, subagentStatusCompleted)
+}
+
+func TestDurableSubagentRequiresWebBundleBeforeResearchPrompt(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	_, err := a.StartDurableSubagent("web research with source links and official pages", "general-purpose", nil)
+	if err == nil {
+		t.Fatal("expected missing web capability error")
+	}
+	for _, want := range []string{"subagent_capability_required", "web", "tool_exchange"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to mention %q, got %v", want, err)
+		}
+	}
+}
+
 func TestDurableSubagentResolvesPackageRole(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.client = &sequenceCaller{responses: []protocol.Response{

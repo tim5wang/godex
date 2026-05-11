@@ -1523,27 +1523,31 @@ func (a *Agent) registerSubagentTool(handler *tools.ToolHandler) {
 }
 
 type subagentArgs struct {
-	Action       string              `json:"action,omitempty"`
-	JobID        string              `json:"job_id,omitempty"`
-	JobIDs       []string            `json:"job_ids,omitempty"`
-	Prompt       string              `json:"prompt,omitempty"`
-	AgentType    string              `json:"agent_type,omitempty"`
-	Mode         string              `json:"mode,omitempty"`
-	WriteScope   []string            `json:"write_scope,omitempty"`
-	Limit        int                 `json:"limit,omitempty"`
-	TimeoutMS    int                 `json:"timeout_ms,omitempty"`
-	JobTimeoutMS int                 `json:"job_timeout_ms,omitempty"`
-	MaxTurns     int                 `json:"max_turns,omitempty"`
-	Wait         bool                `json:"wait,omitempty"`
-	Tasks        []subagentBatchItem `json:"tasks,omitempty"`
+	Action          string              `json:"action,omitempty"`
+	JobID           string              `json:"job_id,omitempty"`
+	JobIDs          []string            `json:"job_ids,omitempty"`
+	Prompt          string              `json:"prompt,omitempty"`
+	AgentType       string              `json:"agent_type,omitempty"`
+	Mode            string              `json:"mode,omitempty"`
+	WriteScope      []string            `json:"write_scope,omitempty"`
+	RequiredBundles []string            `json:"required_bundles,omitempty"`
+	RequiredTools   []string            `json:"required_tools,omitempty"`
+	Limit           int                 `json:"limit,omitempty"`
+	TimeoutMS       int                 `json:"timeout_ms,omitempty"`
+	JobTimeoutMS    int                 `json:"job_timeout_ms,omitempty"`
+	MaxTurns        int                 `json:"max_turns,omitempty"`
+	Wait            bool                `json:"wait,omitempty"`
+	Tasks           []subagentBatchItem `json:"tasks,omitempty"`
 }
 
 type subagentBatchItem struct {
-	Prompt       string   `json:"prompt,omitempty"`
-	AgentType    string   `json:"agent_type,omitempty"`
-	WriteScope   []string `json:"write_scope,omitempty"`
-	JobTimeoutMS int      `json:"job_timeout_ms,omitempty"`
-	MaxTurns     int      `json:"max_turns,omitempty"`
+	Prompt          string   `json:"prompt,omitempty"`
+	AgentType       string   `json:"agent_type,omitempty"`
+	WriteScope      []string `json:"write_scope,omitempty"`
+	RequiredBundles []string `json:"required_bundles,omitempty"`
+	RequiredTools   []string `json:"required_tools,omitempty"`
+	JobTimeoutMS    int      `json:"job_timeout_ms,omitempty"`
+	MaxTurns        int      `json:"max_turns,omitempty"`
 }
 
 type subagentLogsView struct {
@@ -1654,6 +1658,16 @@ func newSubagentTool(agent *Agent) tools.Tool {
 				"items":       map[string]string{"type": "string"},
 				"description": "Workspace-relative paths a write-capable durable subagent may edit",
 			},
+			"required_bundles": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]string{"type": "string"},
+				"description": "Tool bundles this subagent needs, such as web for web_search/web_fetch. The parent agent must have the bundle active before it can be inherited.",
+			},
+			"required_tools": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]string{"type": "string"},
+				"description": "Specific tools this subagent needs. Tools are inherited only when active in the parent agent.",
+			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
 				"description": "For action='logs', number of recent progress events to return. Defaults to 20 and caps at 80.",
@@ -1688,6 +1702,16 @@ func newSubagentTool(agent *Agent) tools.Tool {
 							"type":        "array",
 							"items":       map[string]string{"type": "string"},
 							"description": "Workspace-relative paths this durable subagent may edit.",
+						},
+						"required_bundles": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]string{"type": "string"},
+							"description": "Tool bundles this subagent needs, such as web.",
+						},
+						"required_tools": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]string{"type": "string"},
+							"description": "Specific active parent tools this subagent needs.",
 						},
 						"job_timeout_ms": map[string]interface{}{
 							"type":        "integer",
@@ -1763,11 +1787,13 @@ func newSubagentTool(agent *Agent) tools.Tool {
 				return tools.ToolResult{}, fmt.Errorf("missing prompt argument")
 			}
 			job, err := agent.startDurableSubagentWithContext(ctx, durableSubagentStartRequest{
-				Prompt:       prompt,
-				AgentType:    args.AgentType,
-				WriteScope:   args.WriteScope,
-				MaxTurns:     args.MaxTurns,
-				JobTimeoutMS: args.JobTimeoutMS,
+				Prompt:          prompt,
+				AgentType:       args.AgentType,
+				WriteScope:      args.WriteScope,
+				RequiredBundles: args.RequiredBundles,
+				RequiredTools:   args.RequiredTools,
+				MaxTurns:        args.MaxTurns,
+				JobTimeoutMS:    args.JobTimeoutMS,
 			})
 			if err != nil {
 				return tools.ToolResult{}, err
@@ -1789,11 +1815,13 @@ func newSubagentTool(agent *Agent) tools.Tool {
 			agentType = "Explore"
 		}
 		result, err := agent.runDurableSubagentSync(ctx, durableSubagentStartRequest{
-			Prompt:       prompt,
-			AgentType:    agentType,
-			WriteScope:   args.WriteScope,
-			MaxTurns:     args.MaxTurns,
-			JobTimeoutMS: args.JobTimeoutMS,
+			Prompt:          prompt,
+			AgentType:       agentType,
+			WriteScope:      args.WriteScope,
+			RequiredBundles: args.RequiredBundles,
+			RequiredTools:   args.RequiredTools,
+			MaxTurns:        args.MaxTurns,
+			JobTimeoutMS:    args.JobTimeoutMS,
 		}, args.TimeoutMS)
 		if err != nil {
 			return tools.ToolResult{}, err
@@ -1902,11 +1930,13 @@ func startSubagentBatch(ctx context.Context, agent *Agent, tasks []subagentBatch
 			continue
 		}
 		job, err := agent.startDurableSubagentWithContext(ctx, durableSubagentStartRequest{
-			Prompt:       prompt,
-			AgentType:    item.AgentType,
-			WriteScope:   item.WriteScope,
-			MaxTurns:     item.MaxTurns,
-			JobTimeoutMS: item.JobTimeoutMS,
+			Prompt:          prompt,
+			AgentType:       item.AgentType,
+			WriteScope:      item.WriteScope,
+			RequiredBundles: item.RequiredBundles,
+			RequiredTools:   item.RequiredTools,
+			MaxTurns:        item.MaxTurns,
+			JobTimeoutMS:    item.JobTimeoutMS,
 		})
 		if err != nil {
 			view.Errors = append(view.Errors, subagentBatchErrorView{Index: i, Error: err.Error()})

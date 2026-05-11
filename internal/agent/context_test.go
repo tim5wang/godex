@@ -1907,6 +1907,12 @@ func TestSubagentSchemaUsesJSONSchemaEnumArray(t *testing.T) {
 		if !strings.Contains(description, "named role") {
 			t.Fatalf("expected agent_type description to mention named roles, got %#v", agentType)
 		}
+		if _, ok := properties["required_bundles"]; !ok {
+			t.Fatalf("expected task schema to expose required_bundles, got %#v", properties)
+		}
+		if _, ok := properties["required_tools"]; !ok {
+			t.Fatalf("expected task schema to expose required_tools, got %#v", properties)
+		}
 		return
 	}
 

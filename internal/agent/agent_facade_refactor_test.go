@@ -5,6 +5,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -38,9 +39,13 @@ func TestAgentRefactorKeepsSessionFacadeCopies(t *testing.T) {
 	if len(messages) != 1 {
 		t.Fatalf("expected one message, got %d", len(messages))
 	}
-	messages = nil
-	if got := len(a.GetMessages()); got != 1 {
-		t.Fatalf("mutating returned slice must not mutate agent messages, got %d", got)
+	messages[0] = protocol.NewTextMessage(protocol.RoleUser, "changed")
+	fresh := a.GetMessages()
+	if len(fresh) != 1 {
+		t.Fatalf("mutating returned slice must not mutate agent message count, got %d", len(fresh))
+	}
+	if got := protocol.MessageText(fresh[0]); got != "first" {
+		t.Fatalf("mutating returned slice must not mutate agent message text, got %q", got)
 	}
 }
 

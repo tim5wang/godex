@@ -4186,6 +4186,16 @@ func (s *Service) sessionGraphPath(sessionID string) string {
 }
 
 func (s *Service) loadSessionGraph(sessionID string) (*sessiongraph.SessionGraph, error) {
+	if data, ok, err := s.readSessionStoreData(context.Background(), sessionID); err != nil {
+		return nil, err
+	} else if ok && len(data.Graph) > 0 {
+		var graph sessiongraph.SessionGraph
+		if err := json.Unmarshal(data.Graph, &graph); err != nil {
+			return nil, err
+		}
+		graph.EnsureMainBranch()
+		return &graph, nil
+	}
 	store := sessiongraph.NewStore(s.sessionGraphPath(sessionID))
 	graph, err := store.Load()
 	if err != nil {
@@ -4513,6 +4523,12 @@ func (s *Service) readSessionState(sessionID string) (*agent.SessionState, error
 }
 
 func (s *Service) readSessionTimeline(sessionID string) []events.Event {
+	if data, ok, err := s.readSessionStoreData(context.Background(), sessionID); err == nil && ok && len(data.Timeline) > 0 {
+		var decoded []events.Event
+		if json.Unmarshal(data.Timeline, &decoded) == nil {
+			return decoded
+		}
+	}
 	if journal := s.readSessionEventJournal(sessionID); len(journal) > 0 {
 		return journal
 	}
@@ -4547,6 +4563,9 @@ func (s *Service) legacyFileNewerThanCheckpoint(sessionID, name string) bool {
 }
 
 func (s *Service) readSessionEventJournal(sessionID string) []events.Event {
+	if data, ok, err := s.readSessionStoreData(context.Background(), sessionID); err == nil && ok && len(data.EventJournal) > 0 {
+		return decodeSessionEventJournal(data.EventJournal)
+	}
 	file, err := os.Open(filepath.Join(s.sessionDir(sessionID), eventJournalFileName))
 	if err != nil {
 		return nil
@@ -4876,6 +4895,7 @@ func (s *Service) saveSessionToStore(session *sessionState, manifest SessionMani
 			Pointer:  pointerData,
 			Manifest: manifestData,
 			State:    append([]byte{}, stateData...),
+			Timeline: timelineData,
 			Turns:    turnsData,
 			Queue:    queueData,
 		},

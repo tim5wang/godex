@@ -1279,6 +1279,15 @@ func TestSQLiteSessionBackendRestoresSessionAfterRestart(t *testing.T) {
 	if err := service.persistSession(session, time.Now()); err != nil {
 		t.Fatalf("persist session: %v", err)
 	}
+	session.events.Emit(events.Event{
+		SessionID: opened.SessionID,
+		Type:      events.EventSnapshotReady,
+		Timestamp: time.Now(),
+		Payload:   events.SnapshotPayload{Running: false},
+	})
+	if err := service.writeSessionTimeline(session); err != nil {
+		t.Fatalf("write timeline: %v", err)
+	}
 	now := time.Now()
 	session.recordTurnStarted("turn-after-sqlite-row", message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "turn after sqlite row", now), len(session.agent.GetMessages()), now)
 	if err := service.writeSessionTurns(session); err != nil {
@@ -1296,6 +1305,12 @@ func TestSQLiteSessionBackendRestoresSessionAfterRestart(t *testing.T) {
 	if !strings.Contains(string(data.Turns), "turn-after-sqlite-row") {
 		t.Fatalf("expected sqlite store to include incremental turn update, got %s", data.Turns)
 	}
+	if len(data.Timeline) == 0 || len(data.Graph) == 0 {
+		t.Fatalf("expected sqlite store to include timeline and graph, timeline=%q graph=%q", data.Timeline, data.Graph)
+	}
+	if err := os.RemoveAll(filepath.Join(cfg.SessionsDir, opened.SessionID)); err != nil {
+		t.Fatalf("remove json session dir: %v", err)
+	}
 	reopened, err := restored.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "sqlite-restore"})
 	if err != nil {
 		t.Fatalf("reopen sqlite session: %v", err)
@@ -1306,6 +1321,9 @@ func TestSQLiteSessionBackendRestoresSessionAfterRestart(t *testing.T) {
 	}
 	if len(snapshot.Messages) != 1 || protocol.MessageText(snapshot.Messages[0]) != "persist through sqlite" {
 		t.Fatalf("expected sqlite-restored message, got %+v", snapshot.Messages)
+	}
+	if timeline := restored.readSessionTimeline(reopened.SessionID); len(timeline) == 0 {
+		t.Fatalf("expected sqlite-restored timeline")
 	}
 	graph := readTestSessionGraph(t, restored, reopened.SessionID)
 	if head, ok := graph.Head(sessiongraph.MainBranchID); !ok || head.Head == "" {

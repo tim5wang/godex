@@ -694,6 +694,13 @@ Acceptance criteria:
 - Mainline chat still behaves like a normal linear conversation.
 - Worker explorations can happen on cloned branches.
 
+Implementation note:
+
+- The current implementation adds `internal/sessiongraph` and records `branch:main`, graph nodes, checkpoint nodes, and merge records as compatibility metadata in `graph.json`.
+- Existing `state.json`, `manifest.json`, `checkpoint.json`, timeline, turns, and queue files remain compatible; missing or malformed graph metadata does not block legacy session reads.
+- Backend session persistence projects checkpoints into main-branch graph nodes; `ForkSession` records fork branch metadata; durable subagent jobs record source/worker branches and source nodes, then write merge records when merged.
+- Phase 4 does not implement distributed graph coordination and does not replace all session mutation with a graph-only runtime.
+
 ### Phase 5: Storage Backend Abstraction
 
 Goal: make session state independent from storage media.
@@ -710,6 +717,14 @@ Acceptance criteria:
 - Current JSON/file state remains supported.
 - New code uses store interfaces rather than direct paths.
 - SQLite can be enabled without changing entry/channel code.
+
+Implementation note:
+
+- The current implementation adds `internal/sessionstore`, a blob-level store interface with JSON backend, SQLite backend, diagnostics, and a single-session copy/import/export helper.
+- JSON/file storage remains the default; SQLite is enabled only with `storage.session_backend: sqlite` or `GODEX_STORAGE_SESSION_BACKEND=sqlite`. The default SQLite path is `StateDir/session-store.sqlite`, and can be overridden with `storage.sqlite_path` or `GODEX_STORAGE_SQLITE_PATH`.
+- When SQLite is enabled, backend persistence and restore use session store blobs for manifest, state, timeline, turns, queue, event journal, graph, and checkpoint data while preserving existing entry/channel behavior.
+- Storage doctor reports the active session backend, path, schema version, and health.
+- Phase 5 does not implement cloud/object storage, server database storage, or forced JSON-to-SQLite migration.
 
 ## Compatibility Rules
 

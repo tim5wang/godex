@@ -694,6 +694,13 @@ Inbound MCP 初始应优先暴露低风险、可审计能力：
 - Mainline chat 仍像普通线性 conversation 一样工作。
 - Worker explorations 可以在 cloned branches 上发生。
 
+实施说明：
+
+- 当前实现新增 `internal/sessiongraph`，用 `graph.json` 作为兼容旁路元数据记录 `branch:main`、graph nodes、checkpoint nodes 和 merge records。
+- 现有 `state.json`、`manifest.json`、`checkpoint.json`、timeline、turns 和 queue 仍保持兼容；缺失或损坏的 graph metadata 不阻断旧 session 读取。
+- Backend session persist 会把 checkpoint 投影成 main branch graph node；`ForkSession` 会记录 fork branch metadata；durable subagent jobs 会记录 source/worker branch 和 source node，并在 merge 时写入 merge record。
+- Phase 4 不实现 distributed graph coordination，也不把所有 session mutation 一次性替换为 graph-only runtime。
+
 ### Phase 5：Storage Backend Abstraction
 
 目标：让 session state 独立于存储介质。
@@ -710,6 +717,14 @@ Inbound MCP 初始应优先暴露低风险、可审计能力：
 - 当前 JSON/file state 继续支持。
 - 新代码使用 store interfaces，而不是直接路径。
 - SQLite 可以启用而不改变 entry/channel code。
+
+实施说明：
+
+- 当前实现新增 `internal/sessionstore` blob-level store interface，包含 JSON backend、SQLite backend、diagnostics 以及单 session copy/import/export helper。
+- JSON/file backend 仍是默认；`storage.session_backend: sqlite` 或 `GODEX_STORAGE_SESSION_BACKEND=sqlite` 才启用 SQLite，默认 SQLite path 为 `StateDir/session-store.sqlite`，也可通过 `storage.sqlite_path`/`GODEX_STORAGE_SQLITE_PATH` 指定。
+- Backend 在 SQLite opt-in 时通过 session store 持久化和恢复 session manifest/state/timeline/turns/queue/event journal/graph/checkpoint，同时保留现有 entry/channel behavior。
+- Storage doctor 会报告 active session backend、path、schema version 和 health。
+- Phase 5 不实现 cloud/object storage、server database 或强制 JSON 到 SQLite 迁移。
 
 ## 兼容规则
 

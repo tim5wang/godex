@@ -669,6 +669,13 @@ Acceptance criteria:
 - Current durable subagent jobs are implemented through the worker runtime interface.
 - The orchestrator can dispatch to local GoDex workers through the same contract future remote workers will use.
 
+Implementation note:
+
+- The current implementation adds an `internal/workerruntime` contract package for job request, progress event, result/artifact, capability, review, and merge contracts.
+- Durable subagent start/resume/cancel/review/merge execute through the local GoDex worker runtime adapter, while the default behavior remains the current local durable subagent.
+- Durable subagent records, API/model views, and events expose `worker_id` and continue to expose the Phase 2 `sandbox_id`.
+- Phase 3 does not implement remote transport, distributed scheduling, or Session Graph branch handoff; those remain later-phase work.
+
 ### Phase 4: Session Graph
 
 Goal: replace linear session mutation with branchable context state.

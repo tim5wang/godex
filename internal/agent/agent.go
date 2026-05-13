@@ -24,6 +24,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/historysearch"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/tools"
+	"github.com/tim5wang/godex/internal/workerruntime"
 )
 
 // Agent is the main agent orchestrator.
@@ -55,6 +56,7 @@ type Agent struct {
 	workflows     *workflowStore
 	client        conversation.Caller
 	sandbox       *sandbox.Sandbox
+	workerRuntime workerruntime.Runtime
 
 	prompts              conversation.PromptLayers
 	messages             []protocol.Message

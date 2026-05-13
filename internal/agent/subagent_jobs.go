@@ -28,6 +28,7 @@ import (
 	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/sandbox"
 	"github.com/tim5wang/godex/internal/tools"
+	"github.com/tim5wang/godex/internal/workerruntime"
 )
 
 type subagentJobStatus string
@@ -109,6 +110,7 @@ type subagentJob struct {
 	WriteScope      []string                  `json:"write_scope,omitempty"`
 	DefaultBundles  []string                  `json:"default_bundles,omitempty"`
 	ToolPolicy      []string                  `json:"tool_policy,omitempty"`
+	WorkerID        string                    `json:"worker_id,omitempty"`
 	SandboxID       string                    `json:"sandbox_id,omitempty"`
 	WorktreeDir     string                    `json:"worktree_dir,omitempty"`
 	BaselineDir     string                    `json:"baseline_dir,omitempty"`
@@ -247,6 +249,7 @@ type DurableSubagentJobView struct {
 	DefaultBundles    []string                      `json:"default_bundles,omitempty"`
 	ToolPolicy        []string                      `json:"tool_policy,omitempty"`
 	ToolNames         []string                      `json:"tool_names,omitempty"`
+	WorkerID          string                        `json:"worker_id,omitempty"`
 	SandboxID         string                        `json:"sandbox_id,omitempty"`
 	WorktreeDir       string                        `json:"worktree_dir,omitempty"`
 	Isolation         string                        `json:"isolation,omitempty"`
@@ -299,29 +302,32 @@ type subagentJobStore struct {
 }
 
 type subagentStartOptions struct {
-	SessionID      string
-	ParentTurnID   string
-	ParentID       string
-	AgentType      string
-	RoleID         string
-	RoleName       string
-	PackageName    string
-	Prompt         string
-	BasePrompt     string
-	ToolNames      []string
-	WriteScope     []string
-	PreviewJobIDs  []string
-	DefaultBundles []string
-	ToolPolicy     []string
-	Capabilities   []string
-	SandboxID      string
-	ModelHint      string
-	BudgetHint     string
-	Display        map[string]string
-	RuntimeContext automation.SessionContext
-	MaxTurns       int
-	MaxConcurrent  int
-	JobTimeoutMS   int
+	SessionID       string
+	ParentTurnID    string
+	ParentID        string
+	AgentType       string
+	RoleID          string
+	RoleName        string
+	PackageName     string
+	Prompt          string
+	BasePrompt      string
+	ToolNames       []string
+	WriteScope      []string
+	PreviewJobIDs   []string
+	RequiredBundles []string
+	RequiredTools   []string
+	DefaultBundles  []string
+	ToolPolicy      []string
+	Capabilities    []string
+	WorkerID        string
+	SandboxID       string
+	ModelHint       string
+	BudgetHint      string
+	Display         map[string]string
+	RuntimeContext  automation.SessionContext
+	MaxTurns        int
+	MaxConcurrent   int
+	JobTimeoutMS    int
 }
 
 func subagentJobsDir(cfg *config.Config) string {
@@ -531,6 +537,7 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 		PreviewJobIDs:   normalizeWorkflowStrings(opts.PreviewJobIDs),
 		DefaultBundles:  append([]string{}, opts.DefaultBundles...),
 		ToolPolicy:      normalizeWorkflowStrings(opts.ToolPolicy),
+		WorkerID:        firstNonEmpty(strings.TrimSpace(opts.WorkerID), localGoDexWorkerID),
 		SandboxID:       strings.TrimSpace(opts.SandboxID),
 		Isolation:       subagentIsolationSnapshot,
 		WorkspaceOrigin: "snapshot",
@@ -1208,19 +1215,21 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 	}
 	requiredBundles := subagentRequiredBundles(prompt, req.RequiredBundles)
 	start := subagentStartOptions{
-		SessionID:      target.sessionID,
-		ParentTurnID:   target.turnID,
-		ParentID:       target.turnID,
-		AgentType:      req.AgentType,
-		Prompt:         prompt,
-		ToolNames:      subagentToolNamesForRole(req.AgentType, nil),
-		WriteScope:     req.WriteScope,
-		PreviewJobIDs:  req.PreviewJobIDs,
-		RuntimeContext: runtimeCtx,
-		SandboxID:      a.SandboxID(),
-		MaxTurns:       a.normalizeSubagentMaxTurns(req.MaxTurns),
-		MaxConcurrent:  a.subagentMaxConcurrentJobs(),
-		JobTimeoutMS:   a.normalizeSubagentJobTimeoutMS(req.JobTimeoutMS),
+		SessionID:       target.sessionID,
+		ParentTurnID:    target.turnID,
+		ParentID:        target.turnID,
+		AgentType:       req.AgentType,
+		Prompt:          prompt,
+		ToolNames:       subagentToolNamesForRole(req.AgentType, nil),
+		WriteScope:      req.WriteScope,
+		PreviewJobIDs:   req.PreviewJobIDs,
+		RequiredBundles: req.RequiredBundles,
+		RequiredTools:   req.RequiredTools,
+		RuntimeContext:  runtimeCtx,
+		SandboxID:       a.SandboxID(),
+		MaxTurns:        a.normalizeSubagentMaxTurns(req.MaxTurns),
+		MaxConcurrent:   a.subagentMaxConcurrentJobs(),
+		JobTimeoutMS:    a.normalizeSubagentJobTimeoutMS(req.JobTimeoutMS),
 	}
 	if hasRole {
 		start.AgentType = role.ID
@@ -1250,27 +1259,19 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 	if len(start.Capabilities) == 0 {
 		start.Capabilities = capabilitySummaryForTools(start.ToolNames, req.WriteScope)
 	}
-	job, err := a.subagentJobs.StartWithOptions(start)
+	start.WorkerID = localGoDexWorkerID
+	handle, err := a.WorkerRuntime().Dispatch(ctx, workerRequestFromSubagentStartOptions(start))
 	if err != nil {
 		return nil, err
 	}
-	a.subagentJobs.RegisterTarget(job.ID, target)
-	target.emitIdentity(job)
-	if job.Status == subagentStatusPending {
-		target.emit(job, "pending", "Subagent job queued.", "", "", "", "")
-		return job, nil
-	}
-	target.emit(job, "started", "Subagent job started.", "", "", "", "")
-	jobID := job.ID
-	job, err = a.prepareSubagentWorkspace(job)
+	job, err := a.subagentJobs.Get(handle.JobID)
 	if err != nil {
-		finished, _ := a.subagentJobs.Finish(jobID, subagentStatusError, "", err.Error())
-		target.emit(finished, string(subagentStatusError), "Subagent workspace preparation failed.", "", "", err.Error(), "")
-		a.startPendingSubagents(target.sink)
-		return nil, err
+		return &subagentJob{
+			ID:       handle.JobID,
+			WorkerID: handle.WorkerID,
+			Status:   subagentJobStatus(handle.Status),
+		}, nil
 	}
-	target.emit(job, "worktree_prepared", "Subagent isolated workspace prepared.", "", "", "", "")
-	a.runSubagentJobAsync(job.ID, target)
 	return job, nil
 }
 
@@ -1375,24 +1376,18 @@ func (a *Agent) ResumeDurableSubagent(id string) (*subagentJob, error) {
 }
 
 func (a *Agent) ResumeDurableSubagentWithContext(ctx context.Context, id string) (*subagentJob, error) {
-	job, err := a.subagentJobs.ResumeWithLimit(id, a.subagentMaxConcurrentJobs())
+	handle, err := a.WorkerRuntime().Resume(ctx, workerruntime.JobRef{JobID: id, WorkerID: localGoDexWorkerID})
 	if err != nil {
 		return nil, err
 	}
-	target := subagentEventTargetFromContext(ctx)
-	a.subagentJobs.RegisterTarget(job.ID, target)
-	if job.Status == subagentStatusPending {
-		target.emit(job, "pending", "Subagent job queued for resume.", "", "", "", "")
-		return job, nil
+	job, err := a.subagentJobs.Get(handle.JobID)
+	if err != nil {
+		return &subagentJob{
+			ID:       handle.JobID,
+			WorkerID: handle.WorkerID,
+			Status:   subagentJobStatus(handle.Status),
+		}, nil
 	}
-	target.emit(job, "resumed", "Subagent job resumed.", "", "", "", "")
-	if err := a.ensureSubagentWorkspace(job); err != nil {
-		finished, _ := a.subagentJobs.Finish(job.ID, subagentStatusError, "", err.Error())
-		target.emit(finished, string(subagentStatusError), "Subagent isolated workspace is unavailable.", "", "", err.Error(), "")
-		a.startPendingSubagents(target.sink)
-		return nil, err
-	}
-	a.runSubagentJobAsync(job.ID, target)
 	return job, nil
 }
 
@@ -1428,11 +1423,14 @@ func (a *Agent) CancelDurableSubagentWithContext(ctx context.Context, sessionID,
 	if _, err := a.getDurableSubagentForSession(sessionID, id); err != nil {
 		return DurableSubagentJobView{}, err
 	}
-	job, err := a.subagentJobs.Cancel(id)
+	handle, err := a.WorkerRuntime().Cancel(ctx, workerruntime.JobRef{JobID: id, SessionID: sessionID, WorkerID: localGoDexWorkerID})
 	if err != nil {
 		return DurableSubagentJobView{}, err
 	}
-	subagentEventTargetFromContext(ctx).emit(job, "canceled", "Subagent job canceled.", "", "", job.Error, "")
+	job, err := a.subagentJobs.Get(handle.JobID)
+	if err != nil {
+		return DurableSubagentJobView{}, err
+	}
 	return durableSubagentJobView(job), nil
 }
 
@@ -1987,6 +1985,14 @@ func (a *Agent) ensureSubagentWorkspace(job *subagentJob) error {
 }
 
 func (a *Agent) ReviewDurableSubagent(id string) (subagentReview, error) {
+	result, err := a.WorkerRuntime().Review(context.Background(), workerruntime.ReviewRequest{JobID: id, WorkerID: localGoDexWorkerID})
+	if err != nil {
+		return subagentReview{}, err
+	}
+	return subagentReviewFromWorkerReview(result), nil
+}
+
+func (a *Agent) reviewDurableSubagentDirect(id string) (subagentReview, error) {
 	job, err := a.subagentJobs.Get(id)
 	if err != nil {
 		return subagentReview{}, err
@@ -1999,6 +2005,14 @@ func (a *Agent) MergeDurableSubagent(id string) (subagentMergeResult, error) {
 }
 
 func (a *Agent) MergeDurableSubagentWithContext(ctx context.Context, id string) (subagentMergeResult, error) {
+	result, err := a.WorkerRuntime().Merge(ctx, workerruntime.MergeRequest{JobID: id, WorkerID: localGoDexWorkerID})
+	if err != nil {
+		return subagentMergeResult{}, err
+	}
+	return subagentMergeFromWorkerMerge(result), nil
+}
+
+func (a *Agent) mergeDurableSubagentDirect(ctx context.Context, id string) (subagentMergeResult, error) {
 	job, err := a.subagentJobs.Get(id)
 	if err != nil {
 		return subagentMergeResult{}, err
@@ -2323,6 +2337,7 @@ func durableSubagentJobView(job *subagentJob) DurableSubagentJobView {
 		DefaultBundles:    append([]string{}, job.DefaultBundles...),
 		ToolPolicy:        append([]string{}, job.ToolPolicy...),
 		ToolNames:         append([]string{}, job.ToolNames...),
+		WorkerID:          firstNonEmpty(job.WorkerID, localGoDexWorkerID),
 		SandboxID:         job.SandboxID,
 		WorktreeDir:       job.WorktreeDir,
 		Isolation:         job.Isolation,
@@ -3554,6 +3569,7 @@ func (t subagentEventTarget) emit(job *subagentJob, phase, message, toolID, tool
 			Objective:         objective,
 			DisplayTitle:      displayTitle,
 			IdentityID:        job.Identity.ID,
+			WorkerID:          firstNonEmpty(job.WorkerID, localGoDexWorkerID),
 			AgentType:         job.AgentType,
 			RoleID:            job.RoleID,
 			RoleName:          job.RoleName,

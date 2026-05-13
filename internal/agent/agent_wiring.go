@@ -158,6 +158,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		agent.historySearch = deps.history.Bind(agent)
 	}
 	agent.toolHandler.AddBeforeInterceptors(tools.NewPermissionInterceptorWithReview(deps.permissions, agent.reviewPermissionRequest))
+	agent.workerRuntime = localGoDexWorkerRuntime{agent: agent}
 	return agent
 }
 

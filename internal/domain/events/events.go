@@ -174,6 +174,7 @@ type SubagentJobPayload struct {
 	Objective         string    `json:"objective,omitempty"`
 	DisplayTitle      string    `json:"display_title,omitempty"`
 	IdentityID        string    `json:"identity_id,omitempty"`
+	WorkerID          string    `json:"worker_id,omitempty"`
 	AgentType         string    `json:"agent_type,omitempty"`
 	RoleID            string    `json:"role_id,omitempty"`
 	RoleName          string    `json:"role_name,omitempty"`

@@ -140,6 +140,67 @@ func TestDurableSubagentRecordsSandboxID(t *testing.T) {
 	}
 }
 
+func TestDurableSubagentExposesWorkerID(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.client = repeatedTextCaller("done")
+	got := make(chan events.Event, 8)
+	ctx := withSubagentEventTarget(context.Background(), subagentEventTarget{
+		sessionID: "session-worker",
+		turnID:    "turn-worker",
+		sink: events.SinkFunc(func(event events.Event) {
+			got <- event
+		}),
+	})
+
+	job, err := a.StartDurableSubagentWithContext(ctx, "inspect worker id", "Explore", nil)
+	if err != nil {
+		t.Fatalf("start durable subagent: %v", err)
+	}
+	completed := waitForSubagentStatus(t, a.subagentJobs, job.ID, subagentStatusCompleted)
+	if completed.WorkerID != localGoDexWorkerID {
+		t.Fatalf("worker id %q", completed.WorkerID)
+	}
+	view := durableSubagentJobView(completed)
+	if view.WorkerID != localGoDexWorkerID {
+		t.Fatalf("view worker id %q", view.WorkerID)
+	}
+	model := formatSubagentModelJob(completed)
+	if model.WorkerID != localGoDexWorkerID {
+		t.Fatalf("model worker id %q", model.WorkerID)
+	}
+
+	foundEventWorkerID := false
+	deadline := time.After(2 * time.Second)
+	for !foundEventWorkerID {
+		select {
+		case event := <-got:
+			if event.Type != events.EventSubagentJobUpdated {
+				continue
+			}
+			payload, _ := event.Payload.(events.SubagentJobPayload)
+			if payload.WorkerID == localGoDexWorkerID {
+				foundEventWorkerID = true
+			}
+		case <-deadline:
+			t.Fatalf("expected subagent event payload worker id %q", localGoDexWorkerID)
+		}
+	}
+}
+
+func TestWorkerRuntimePreservesRequiredToolValidation(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	_, err := a.startDurableSubagentWithContext(context.Background(), durableSubagentStartRequest{
+		Prompt:        "need inactive web",
+		AgentType:     "Explore",
+		RequiredTools: []string{"web_search"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "web_search") {
+		t.Fatalf("expected missing required tool validation, got %v", err)
+	}
+}
+
 func TestSubagentModelViewIncludesSandboxID(t *testing.T) {
 	job := &subagentJob{
 		ID:        "job-1",

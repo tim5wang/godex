@@ -61,6 +61,7 @@ type subagentModelJobView struct {
 	SessionID     string    `json:"session_id,omitempty"`
 	ParentTurnID  string    `json:"parent_turn_id,omitempty"`
 	IdentityID    string    `json:"identity_id,omitempty"`
+	WorkerID      string    `json:"worker_id,omitempty"`
 	AgentType     string    `json:"agent_type,omitempty"`
 	RoleID        string    `json:"role_id,omitempty"`
 	RoleName      string    `json:"role_name,omitempty"`
@@ -256,11 +257,14 @@ func newSubagentTool(agent *Agent) tools.Tool {
 			}
 			return tools.ToolResult{Structured: result}, nil
 		case "cancel":
-			job, err := agent.subagentJobs.Cancel(args.JobID)
+			view, err := agent.CancelDurableSubagentWithContext(ctx, "", args.JobID)
 			if err != nil {
 				return tools.ToolResult{}, err
 			}
-			subagentEventTargetFromContext(ctx).emit(job, "canceled", "Subagent job canceled.", "", "", job.Error, "")
+			job, err := agent.subagentJobs.Get(view.JobID)
+			if err != nil {
+				return tools.ToolResult{}, err
+			}
 			return tools.ToolResult{Structured: formatSubagentModelJob(job)}, nil
 		case "resume":
 			job, err := agent.ResumeDurableSubagentWithContext(ctx, args.JobID)
@@ -347,6 +351,7 @@ func formatSubagentModelJob(job *subagentJob) subagentModelJobView {
 		SessionID:     job.SessionID,
 		ParentTurnID:  job.ParentTurnID,
 		IdentityID:    job.Identity.ID,
+		WorkerID:      firstNonEmpty(job.WorkerID, localGoDexWorkerID),
 		AgentType:     job.AgentType,
 		RoleID:        job.RoleID,
 		RoleName:      job.RoleName,
@@ -688,6 +693,7 @@ func formatSubagentJob(job *subagentJob, includeMessages bool) map[string]interf
 		"write_scope":     append([]string{}, job.WriteScope...),
 		"default_bundles": append([]string{}, job.DefaultBundles...),
 		"tool_names":      append([]string{}, job.ToolNames...),
+		"worker_id":       firstNonEmpty(job.WorkerID, localGoDexWorkerID),
 		"sandbox_id":      job.SandboxID,
 		"worktree_dir":    job.WorktreeDir,
 		"isolation":       job.Isolation,

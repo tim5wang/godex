@@ -669,6 +669,13 @@ Inbound MCP 初始应优先暴露低风险、可审计能力：
 - 当前 durable subagent jobs 通过 worker runtime interface 实现。
 - Orchestrator 可以通过同一 contract 派发到 local GoDex workers，未来 remote workers 也使用该 contract。
 
+实施说明：
+
+- 当前实现新增 `internal/workerruntime` contract package，定义 job request、progress event、result/artifact、capability、review 和 merge contract。
+- Durable subagent start/resume/cancel/review/merge 通过 local GoDex worker runtime adapter 执行，默认行为仍是当前本地 durable subagent。
+- Durable subagent records、API/model views 和 events 暴露 `worker_id`，并继续暴露 Phase 2 的 `sandbox_id`。
+- Phase 3 不实现 remote transport、distributed scheduling 或 Session Graph branch handoff；这些属于后续阶段。
+
 ### Phase 4：Session Graph
 
 目标：用 branchable context state 替代线性 session mutation。

@@ -29,6 +29,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/evalharness"
 	"github.com/tim5wang/godex/internal/services/sessionrepair"
+	"github.com/tim5wang/godex/internal/sessionstore"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/version"
 )
@@ -502,7 +503,39 @@ func (r *Runner) runGC(ctx context.Context, args []string) error {
 func (r *Runner) runDoctorStorage() error {
 	result := storagegc.Scan(r.storageGCOptions(false, 0))
 	r.printStorageGCResult("Storage", result)
+	diag := sessionStoreDiagnostics(r.currentConfig())
+	status := "unhealthy"
+	if diag.Healthy {
+		status = "healthy"
+	}
+	path := diag.Path
+	if path == "" {
+		path = diag.SQLitePath
+	}
+	fmt.Fprintf(r.Stdout, "Session store: backend=%s status=%s path=%s schema=%d\n", diag.Backend, status, path, diag.SchemaVersion)
+	if diag.Error != "" {
+		fmt.Fprintf(r.Stdout, "Session store error: %s\n", diag.Error)
+	}
 	return nil
+}
+
+func sessionStoreDiagnostics(cfg *config.Config) sessionstore.Diagnostics {
+	if cfg == nil {
+		return sessionstore.Diagnostics{Healthy: false, Error: "missing config"}
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Storage.SessionBackend), "sqlite") {
+		path := strings.TrimSpace(cfg.Storage.SQLitePath)
+		if path == "" {
+			path = filepath.Join(cfg.StateDir, "session-store.sqlite")
+		}
+		store, err := sessionstore.NewSQLiteStore(path)
+		if err != nil {
+			return sessionstore.Diagnostics{Backend: string(sessionstore.BackendSQLite), SQLitePath: path, Error: err.Error()}
+		}
+		defer store.Close()
+		return store.Diagnostics(context.Background())
+	}
+	return sessionstore.NewJSONStore(cfg.SessionsDir).Diagnostics(context.Background())
 }
 
 func (r *Runner) runGCAll(args []string) error {

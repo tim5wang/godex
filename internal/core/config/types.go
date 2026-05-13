@@ -43,13 +43,15 @@ type SecuritySection struct {
 }
 
 type StorageSection struct {
-	TmpTTLHours                 int  `yaml:"tmp_ttl_hours"`
-	ArtifactTTLHours            int  `yaml:"artifact_ttl_hours"`
-	BrowserCacheAutoClean       bool `yaml:"browser_cache_auto_clean"`
-	BrowserCacheMaxMB           int  `yaml:"browser_cache_max_mb"`
-	SessionCheckpointKeepLatest int  `yaml:"session_checkpoint_keep_latest"`
-	SessionCheckpointTTLHours   int  `yaml:"session_checkpoint_ttl_hours"`
-	SessionCheckpointAutoPrune  bool `yaml:"session_checkpoint_auto_prune"`
+	TmpTTLHours                 int    `yaml:"tmp_ttl_hours"`
+	ArtifactTTLHours            int    `yaml:"artifact_ttl_hours"`
+	BrowserCacheAutoClean       bool   `yaml:"browser_cache_auto_clean"`
+	BrowserCacheMaxMB           int    `yaml:"browser_cache_max_mb"`
+	SessionCheckpointKeepLatest int    `yaml:"session_checkpoint_keep_latest"`
+	SessionCheckpointTTLHours   int    `yaml:"session_checkpoint_ttl_hours"`
+	SessionCheckpointAutoPrune  bool   `yaml:"session_checkpoint_auto_prune"`
+	SessionBackend              string `yaml:"session_backend"`
+	SQLitePath                  string `yaml:"sqlite_path"`
 }
 
 type APISection struct {

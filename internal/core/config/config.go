@@ -137,6 +137,8 @@ type StorageConfig struct {
 	SessionCheckpointKeepLatest int
 	SessionCheckpointTTLHours   int
 	SessionCheckpointAutoPrune  bool
+	SessionBackend              string
+	SQLitePath                  string
 }
 
 // ModelProfileConfig describes one selectable model provider profile.
@@ -783,6 +785,9 @@ func (c *Config) EnsureDirs() error {
 	}
 
 	dirs := []string{c.TeamDir, c.TasksDir, c.MemoryDir, c.RulesDir, c.SkillsDir, c.PackagesDir, c.TodosDir, c.TempDir, c.TranscriptsDir, c.SessionsDir}
+	if strings.TrimSpace(c.Storage.SQLitePath) != "" {
+		dirs = append(dirs, filepath.Dir(c.Storage.SQLitePath))
+	}
 	for _, dir := range dirs {
 		if dir == "" {
 			continue

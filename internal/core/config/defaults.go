@@ -98,6 +98,8 @@ func defaultConfigFile() ConfigFile {
 			SessionCheckpointKeepLatest: 20,
 			SessionCheckpointTTLHours:   168,
 			SessionCheckpointAutoPrune:  true,
+			SessionBackend:              "json",
+			SQLitePath:                  "",
 		},
 		Security: SecuritySection{
 			Profile: "guarded-local",

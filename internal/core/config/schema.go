@@ -135,6 +135,8 @@ func baseSchema() []SectionSchema {
 				{Path: "storage.session_checkpoint_keep_latest", Label: "Checkpoint Keep Latest", Description: "Number of latest checkpoints to keep per session.", Type: "int", LiveApply: true, Env: "GODEX_STORAGE_SESSION_CHECKPOINT_KEEP_LATEST"},
 				{Path: "storage.session_checkpoint_ttl_hours", Label: "Checkpoint TTL Hours", Description: "Checkpoint retention window used by session GC.", Type: "int", LiveApply: true, Env: "GODEX_STORAGE_SESSION_CHECKPOINT_TTL_HOURS"},
 				{Path: "storage.session_checkpoint_auto_prune", Label: "Checkpoint Auto Prune", Description: "Prune old checkpoints after writing a new checkpoint.", Type: "bool", LiveApply: true, Env: "GODEX_STORAGE_SESSION_CHECKPOINT_AUTO_PRUNE"},
+				{Path: "storage.session_backend", Label: "Session Backend", Description: "Session state backend: json or sqlite.", Type: "string", LiveApply: true, Env: "GODEX_STORAGE_SESSION_BACKEND"},
+				{Path: "storage.sqlite_path", Label: "SQLite Path", Description: "Optional SQLite database path for session storage.", Type: "string", LiveApply: true, Env: "GODEX_STORAGE_SQLITE_PATH"},
 			},
 		},
 		{

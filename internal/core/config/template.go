@@ -188,6 +188,10 @@ storage:
   session_checkpoint_ttl_hours: {{ .Storage.SessionCheckpointTTLHours }}
   # Prune old checkpoints after writing a new checkpoint. Environment override: GODEX_STORAGE_SESSION_CHECKPOINT_AUTO_PRUNE.
   session_checkpoint_auto_prune: {{ .Storage.SessionCheckpointAutoPrune }}
+  # Session storage backend: json or sqlite. Environment override: GODEX_STORAGE_SESSION_BACKEND.
+  session_backend: {{ yamlString .Storage.SessionBackend }}
+  # Optional SQLite database path for session storage. Environment override: GODEX_STORAGE_SQLITE_PATH.
+  sqlite_path: {{ yamlString .Storage.SQLitePath }}
 
 team:
   # Lead identity used across local sessions and teammate tools.

@@ -28,6 +28,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/sessiongraph"
+	"github.com/tim5wang/godex/internal/sessionstore"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -1258,6 +1259,119 @@ func TestPersistSessionAdvancesSessionGraphCheckpoint(t *testing.T) {
 	node := graph.NodeSet[head.Head]
 	if node.Checkpoint == nil || strings.TrimSpace(node.Checkpoint.CheckpointID) == "" {
 		t.Fatalf("expected checkpoint node metadata, got %+v", node)
+	}
+}
+
+func TestSQLiteSessionBackendRestoresSessionAfterRestart(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Storage.SessionBackend = "sqlite"
+	cfg.Storage.SQLitePath = filepath.Join(cfg.StateDir, "session-store.sqlite")
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "sqlite-restore"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	session, err := service.requireSession(opened.SessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+	session.agent.AddEnvelope(message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "persist through sqlite", time.Now()))
+	if err := service.persistSession(session, time.Now()); err != nil {
+		t.Fatalf("persist session: %v", err)
+	}
+	now := time.Now()
+	session.recordTurnStarted("turn-after-sqlite-row", message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "turn after sqlite row", now), len(session.agent.GetMessages()), now)
+	if err := service.writeSessionTurns(session); err != nil {
+		t.Fatalf("write turns: %v", err)
+	}
+	if diag := service.SessionStoreDiagnostics(context.Background()); !diag.Healthy || diag.Backend != "sqlite" || diag.SQLitePath == "" {
+		t.Fatalf("expected healthy sqlite diagnostics, got %+v", diag)
+	}
+
+	restored := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("restored")}}}})
+	data, ok, err := restored.store.Load(context.Background(), opened.SessionID)
+	if err != nil || !ok {
+		t.Fatalf("load sqlite session store ok=%v err=%v", ok, err)
+	}
+	if !strings.Contains(string(data.Turns), "turn-after-sqlite-row") {
+		t.Fatalf("expected sqlite store to include incremental turn update, got %s", data.Turns)
+	}
+	reopened, err := restored.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "sqlite-restore"})
+	if err != nil {
+		t.Fatalf("reopen sqlite session: %v", err)
+	}
+	snapshot, err := restored.Snapshot(context.Background(), reopened.SessionID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snapshot.Messages) != 1 || protocol.MessageText(snapshot.Messages[0]) != "persist through sqlite" {
+		t.Fatalf("expected sqlite-restored message, got %+v", snapshot.Messages)
+	}
+	graph := readTestSessionGraph(t, restored, reopened.SessionID)
+	if head, ok := graph.Head(sessiongraph.MainBranchID); !ok || head.Head == "" {
+		t.Fatalf("expected sqlite-restored graph head, got %+v ok=%v", head, ok)
+	}
+}
+
+func TestSQLiteSessionBackendInitFailureDoesNotReportJSON(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Storage.SessionBackend = "sqlite"
+	blocker := filepath.Join(t.TempDir(), "not-dir")
+	if err := os.WriteFile(blocker, []byte("file"), 0644); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	cfg.Storage.SQLitePath = filepath.Join(blocker, "session-store.sqlite")
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	diag := service.SessionStoreDiagnostics(context.Background())
+	if diag.Healthy || diag.Backend != "sqlite" || !strings.Contains(diag.Error, "not a directory") {
+		t.Fatalf("expected sqlite init failure diagnostics, got %+v", diag)
+	}
+}
+
+func TestSQLiteImportedSessionListsAndDeletes(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Storage.SessionBackend = "sqlite"
+	cfg.Storage.SQLitePath = filepath.Join(cfg.StateDir, "session-store.sqlite")
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	source := sessionstore.NewJSONStore(t.TempDir())
+	sessionID := "imported-sqlite"
+	stateData := mustJSON(t, agent.SessionState{Messages: []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "imported")}})
+	manifestData := mustJSON(t, SessionManifest{
+		SessionID:      sessionID,
+		Locator:        SessionLocator{Channel: "web", Key: "imported"},
+		StateDigest:    stateDigest(stateData),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+		LastActivityAt: time.Now(),
+	})
+	if err := source.Save(context.Background(), sessionstore.SessionData{
+		SessionID: sessionID,
+		Manifest:  manifestData,
+		State:     stateData,
+	}); err != nil {
+		t.Fatalf("save source session: %v", err)
+	}
+	if err := service.ImportSessionFromStore(context.Background(), sessionID, source); err != nil {
+		t.Fatalf("import session: %v", err)
+	}
+	listed, err := service.ListSessions(context.Background(), SessionListFilter{})
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	found := false
+	for _, item := range listed {
+		if item.SessionID == sessionID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected imported sqlite session in list, got %+v", listed)
+	}
+	if err := service.DeleteSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("delete imported session: %v", err)
+	}
+	if _, ok, err := service.store.Load(context.Background(), sessionID); err != nil || ok {
+		t.Fatalf("expected imported sqlite row deleted, ok=%v err=%v", ok, err)
 	}
 }
 

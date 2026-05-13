@@ -1302,6 +1302,12 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveBool("storage.session_checkpoint_auto_prune", file.Storage.SessionCheckpointAutoPrune, "GODEX_STORAGE_SESSION_CHECKPOINT_AUTO_PRUNE", func(v bool) {
 		current.Storage.SessionCheckpointAutoPrune = v
 	})
+	resolveString("storage.session_backend", file.Storage.SessionBackend, "GODEX_STORAGE_SESSION_BACKEND", func(v string) {
+		current.Storage.SessionBackend = normalizeSessionStorageBackend(v)
+	})
+	resolveString("storage.sqlite_path", file.Storage.SQLitePath, "GODEX_STORAGE_SQLITE_PATH", func(v string) {
+		current.Storage.SQLitePath = strings.TrimSpace(v)
+	})
 	resolveString("security.profile", file.Security.Profile, "GODEX_SECURITY_PROFILE", func(v string) {
 		current.Security.Profile = normalizeSecurityProfileName(v)
 	})
@@ -1716,6 +1722,8 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			SessionCheckpointKeepLatest: file.Storage.SessionCheckpointKeepLatest,
 			SessionCheckpointTTLHours:   file.Storage.SessionCheckpointTTLHours,
 			SessionCheckpointAutoPrune:  file.Storage.SessionCheckpointAutoPrune,
+			SessionBackend:              normalizeSessionStorageBackend(file.Storage.SessionBackend),
+			SQLitePath:                  strings.TrimSpace(file.Storage.SQLitePath),
 		},
 		Security: SecurityConfig{
 			Profile: normalizeSecurityProfileName(file.Security.Profile),
@@ -2026,6 +2034,15 @@ func normalizeSecurityProfileName(profile string) string {
 		return "guarded-local"
 	default:
 		return "guarded-local"
+	}
+}
+
+func normalizeSessionStorageBackend(backend string) string {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "sqlite":
+		return "sqlite"
+	default:
+		return "json"
 	}
 }
 
@@ -2528,6 +2545,10 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Storage.SessionCheckpointTTLHours = asInt(value)
 	case "storage.session_checkpoint_auto_prune":
 		file.Storage.SessionCheckpointAutoPrune = asBool(value)
+	case "storage.session_backend":
+		file.Storage.SessionBackend = normalizeSessionStorageBackend(asString(value))
+	case "storage.sqlite_path":
+		file.Storage.SQLitePath = asString(value)
 	case "tools.web_search.enabled":
 		file.Tools.WebSearch.Enabled = asBool(value)
 	case "tools.web_search.provider_order":
@@ -2960,6 +2981,8 @@ func storedValues(file ConfigFile) map[string]any {
 		"storage.session_checkpoint_keep_latest":                 file.Storage.SessionCheckpointKeepLatest,
 		"storage.session_checkpoint_ttl_hours":                   file.Storage.SessionCheckpointTTLHours,
 		"storage.session_checkpoint_auto_prune":                  file.Storage.SessionCheckpointAutoPrune,
+		"storage.session_backend":                                normalizeSessionStorageBackend(file.Storage.SessionBackend),
+		"storage.sqlite_path":                                    file.Storage.SQLitePath,
 		"tools.web_search.enabled":                               file.Tools.WebSearch.Enabled,
 		"tools.web_search.provider_order":                        append([]string{}, file.Tools.WebSearch.ProviderOrder...),
 		"tools.web_search.cache_ttl_seconds":                     file.Tools.WebSearch.CacheTTLSeconds,
@@ -3124,6 +3147,8 @@ func effectiveValues(cfg *Config) map[string]any {
 		"storage.session_checkpoint_keep_latest":                 cfg.Storage.SessionCheckpointKeepLatest,
 		"storage.session_checkpoint_ttl_hours":                   cfg.Storage.SessionCheckpointTTLHours,
 		"storage.session_checkpoint_auto_prune":                  cfg.Storage.SessionCheckpointAutoPrune,
+		"storage.session_backend":                                normalizeSessionStorageBackend(cfg.Storage.SessionBackend),
+		"storage.sqlite_path":                                    cfg.Storage.SQLitePath,
 		"tools.web_search.enabled":                               cfg.Tools.WebSearch.Enabled,
 		"tools.web_search.provider_order":                        append([]string{}, cfg.Tools.WebSearch.ProviderOrder...),
 		"tools.web_search.cache_ttl_seconds":                     cfg.Tools.WebSearch.CacheTTLSeconds,

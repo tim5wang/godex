@@ -40,6 +40,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/sessionrepair"
 	"github.com/tim5wang/godex/internal/sessiongraph"
+	"github.com/tim5wang/godex/internal/sessionstore"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -310,6 +311,8 @@ type Service struct {
 
 	mu       sync.Mutex
 	sessions map[string]*sessionState
+	store    sessionstore.Store
+	storeErr error
 }
 
 type sessionLockContextKey struct{}
@@ -419,9 +422,100 @@ func NewService(cfg *config.Config, shared *agent.SharedDependencies, commandSer
 		now:      time.Now,
 		sessions: make(map[string]*sessionState),
 	}
+	service.store, service.storeErr = newSessionStore(cfg)
 	service.autoRepairSessions()
 	service.recoverQueuedSessions()
 	return service
+}
+
+func newSessionStore(cfg *config.Config) (sessionstore.Store, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("missing config")
+	}
+	backend := strings.ToLower(strings.TrimSpace(cfg.Storage.SessionBackend))
+	if backend == "sqlite" {
+		path := strings.TrimSpace(cfg.Storage.SQLitePath)
+		if path == "" {
+			path = filepath.Join(cfg.StateDir, "session-store.sqlite")
+		}
+		store, err := sessionstore.NewSQLiteStore(path)
+		if err == nil {
+			return store, nil
+		}
+		return nil, err
+	}
+	return sessionstore.NewJSONStore(cfg.SessionsDir), nil
+}
+
+func (s *Service) sqliteSessionStore() sessionstore.Store {
+	if s == nil || s.store == nil || s.cfg == nil {
+		return nil
+	}
+	if strings.ToLower(strings.TrimSpace(s.cfg.Storage.SessionBackend)) != "sqlite" {
+		return nil
+	}
+	return s.store
+}
+
+func (s *Service) sqliteSessionStoreError() error {
+	if s == nil || s.cfg == nil || strings.ToLower(strings.TrimSpace(s.cfg.Storage.SessionBackend)) != "sqlite" {
+		return nil
+	}
+	if s.storeErr != nil {
+		return s.storeErr
+	}
+	if s.store == nil {
+		return fmt.Errorf("sqlite session store unavailable")
+	}
+	return nil
+}
+
+func (s *Service) SessionStoreDiagnostics(ctx context.Context) sessionstore.Diagnostics {
+	if s == nil {
+		return sessionstore.Diagnostics{Healthy: false, Error: "session store unavailable"}
+	}
+	if s.storeErr != nil {
+		backend := ""
+		sqlitePath := ""
+		if s.cfg != nil {
+			backend = strings.ToLower(strings.TrimSpace(s.cfg.Storage.SessionBackend))
+			sqlitePath = strings.TrimSpace(s.cfg.Storage.SQLitePath)
+			if backend == "sqlite" && sqlitePath == "" {
+				sqlitePath = filepath.Join(s.cfg.StateDir, "session-store.sqlite")
+			}
+		}
+		return sessionstore.Diagnostics{Backend: backend, SQLitePath: sqlitePath, Healthy: false, Error: s.storeErr.Error()}
+	}
+	if s.store == nil {
+		return sessionstore.Diagnostics{Healthy: false, Error: "session store unavailable"}
+	}
+	return s.store.Diagnostics(ctx)
+}
+
+func (s *Service) ExportSessionToStore(ctx context.Context, sessionID string, dst sessionstore.Store) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("session store unavailable")
+	}
+	if s.storeErr != nil {
+		return s.storeErr
+	}
+	return sessionstore.CopySession(ctx, dst, s.store, sessionID)
+}
+
+func (s *Service) ImportSessionFromStore(ctx context.Context, sessionID string, src sessionstore.Store) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("session store unavailable")
+	}
+	if s.storeErr != nil {
+		return s.storeErr
+	}
+	if err := sessionstore.CopySession(ctx, s.store, src, sessionID); err != nil {
+		return err
+	}
+	if s.cfg != nil {
+		return sessionstore.CopySession(ctx, sessionstore.NewJSONStore(s.cfg.SessionsDir), s.store, sessionID)
+	}
+	return nil
 }
 
 func (s *Service) autoRepairSessions() {
@@ -505,6 +599,7 @@ func (s *Service) ApplyConfig(cfg *config.Config) error {
 
 	s.mu.Lock()
 	s.cfg = cfg
+	s.store, s.storeErr = newSessionStore(cfg)
 	s.shared.ApplyConfig(cfg)
 	sessions := make([]*sessionState, 0, len(s.sessions))
 	for _, session := range s.sessions {
@@ -3629,23 +3724,37 @@ func (s *Service) UnloadSessionSkill(ctx context.Context, sessionID, name string
 
 // ListSessions returns persisted sessions ordered by most recent update first.
 func (s *Service) ListSessions(ctx context.Context, filter SessionListFilter) ([]ListedSession, error) {
-	_ = ctx
-
+	ids := map[string]struct{}{}
 	entries, err := os.ReadDir(s.cfg.SessionsDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+		if !os.IsNotExist(err) {
+			return nil, err
 		}
-		return nil, err
+	} else {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				ids[entry.Name()] = struct{}{}
+			}
+		}
+	}
+	if store := s.sqliteSessionStore(); store != nil && s.storeErr == nil {
+		storeIDs, err := store.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range storeIDs {
+			ids[id] = struct{}{}
+		}
 	}
 
-	listed := make([]ListedSession, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		manifest, state, err := s.readSessionListFiles(entry.Name())
+	sessionIDs := make([]string, 0, len(ids))
+	for id := range ids {
+		sessionIDs = append(sessionIDs, id)
+	}
+	sort.Strings(sessionIDs)
+	listed := make([]ListedSession, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		manifest, state, err := s.readSessionListFiles(sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -3660,7 +3769,7 @@ func (s *Service) ListSessions(ctx context.Context, filter SessionListFilter) ([
 		title := strings.TrimSpace(manifest.Title)
 		if title == "" {
 			if state == nil {
-				return nil, newSessionCorruptError(entry.Name(), "missing %s while backfilling title", stateFileName)
+				return nil, newSessionCorruptError(sessionID, "missing %s while backfilling title", stateFileName)
 			}
 			title = deriveSessionTitle(*state)
 			if title != "" {
@@ -3740,7 +3849,15 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
 			s.mu.Lock()
 			_, loaded := s.sessions[sessionID]
 			s.mu.Unlock()
-			if !loaded {
+			storeFound := false
+			if s.store != nil && s.storeErr == nil {
+				if _, ok, loadErr := s.store.Load(ctx, sessionID); loadErr != nil {
+					return loadErr
+				} else {
+					storeFound = ok
+				}
+			}
+			if !loaded && !storeFound {
 				return newSessionNotFoundError(sessionID)
 			}
 		} else {
@@ -3781,6 +3898,14 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
 	}
 	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if err := s.sqliteSessionStoreError(); err != nil {
+		return err
+	}
+	if s.store != nil {
+		if err := s.store.Delete(ctx, sessionID); err != nil {
+			return err
+		}
 	}
 	_ = loadedSession
 	return nil
@@ -3975,6 +4100,11 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 }
 
 func (s *Service) readSessionFiles(sessionID string) (*SessionManifest, *agent.SessionState, error) {
+	if data, ok, err := s.readSessionStoreData(context.Background(), sessionID); err != nil {
+		return nil, nil, err
+	} else if ok {
+		return s.decodeStoredSessionFiles(sessionID, data)
+	}
 	var checkpointErr error
 	var checkpoint *sessionCheckpointSnapshot
 	if snapshot, ok, err := s.readSessionCheckpoint(sessionID); ok {
@@ -4000,6 +4130,55 @@ func (s *Service) readSessionFiles(sessionID string) (*SessionManifest, *agent.S
 		return nil, nil, checkpointErr
 	}
 	return nil, nil, err
+}
+
+func (s *Service) readSessionStoreData(ctx context.Context, sessionID string) (sessionstore.SessionData, bool, error) {
+	if err := s.sqliteSessionStoreError(); err != nil {
+		return sessionstore.SessionData{}, false, err
+	}
+	store := s.sqliteSessionStore()
+	if store == nil {
+		return sessionstore.SessionData{}, false, nil
+	}
+	return store.Load(ctx, sessionID)
+}
+
+func (s *Service) syncSessionStoreFromJSON(ctx context.Context, sessionID string) error {
+	if err := s.sqliteSessionStoreError(); err != nil {
+		return err
+	}
+	store := s.sqliteSessionStore()
+	if store == nil || s == nil || s.cfg == nil {
+		return nil
+	}
+	source := sessionstore.NewJSONStore(s.cfg.SessionsDir)
+	data, ok, err := source.Load(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return store.Save(ctx, data)
+}
+
+func (s *Service) decodeStoredSessionFiles(sessionID string, data sessionstore.SessionData) (*SessionManifest, *agent.SessionState, error) {
+	if len(data.Manifest) == 0 || len(data.State) == 0 {
+		return nil, nil, nil
+	}
+	var manifest SessionManifest
+	if err := json.Unmarshal(data.Manifest, &manifest); err != nil {
+		return nil, nil, newSessionCorruptError(sessionID, "decode %s: %v", manifestFileName, err)
+	}
+	var state agent.SessionState
+	if err := json.Unmarshal(data.State, &state); err != nil {
+		return nil, nil, newSessionCorruptError(sessionID, "decode %s: %v", stateFileName, err)
+	}
+	expected := strings.TrimSpace(manifest.StateDigest)
+	if expected != "" && stateDigest(data.State) != expected {
+		return nil, nil, newSessionCorruptError(sessionID, "state digest mismatch")
+	}
+	return &manifest, &state, nil
 }
 
 func (s *Service) sessionGraphPath(sessionID string) string {
@@ -4033,7 +4212,10 @@ func (s *Service) writeSessionGraph(session *sessionState) error {
 	graph := session.graph.Clone()
 	sessionID := session.id
 	session.mu.Unlock()
-	return sessiongraph.NewStore(s.sessionGraphPath(sessionID)).Save(graph)
+	if err := sessiongraph.NewStore(s.sessionGraphPath(sessionID)).Save(graph); err != nil {
+		return err
+	}
+	return s.syncSessionStoreFromJSON(context.Background(), sessionID)
 }
 
 func sessionGraphNodeID(prefix, id string) sessiongraph.NodeID {
@@ -4191,6 +4373,11 @@ func (s *Service) readLegacySessionFiles(sessionID string) (*SessionManifest, *a
 }
 
 func (s *Service) readSessionCheckpoint(sessionID string) (*sessionCheckpointSnapshot, bool, error) {
+	if data, ok, err := s.readSessionStoreData(context.Background(), sessionID); err != nil {
+		return nil, false, err
+	} else if ok && data.Checkpoint != nil && len(data.Checkpoint.Manifest) > 0 && len(data.Checkpoint.State) > 0 {
+		return decodeStoredSessionCheckpoint(sessionID, data.Checkpoint)
+	}
 	dir := s.sessionDir(sessionID)
 	pointerData, exists, err := readOptionalFile(filepath.Join(dir, checkpointPointerName))
 	if err != nil || !exists {
@@ -4269,6 +4456,45 @@ func (s *Service) readSessionCheckpoint(sessionID string) (*sessionCheckpointSna
 	return snapshot, true, nil
 }
 
+func decodeStoredSessionCheckpoint(sessionID string, cp *sessionstore.CheckpointData) (*sessionCheckpointSnapshot, bool, error) {
+	var manifest SessionManifest
+	if err := json.Unmarshal(cp.Manifest, &manifest); err != nil {
+		return nil, true, newSessionCorruptError(sessionID, "decode checkpoint %s: %v", manifestFileName, err)
+	}
+	expected := strings.TrimSpace(manifest.StateDigest)
+	actual := stateDigest(cp.State)
+	if expected != "" && actual != expected {
+		return nil, true, newSessionCorruptError(sessionID, "checkpoint state digest mismatch")
+	}
+	var state agent.SessionState
+	if err := json.Unmarshal(cp.State, &state); err != nil {
+		return nil, true, newSessionCorruptError(sessionID, "decode checkpoint %s: %v", stateFileName, err)
+	}
+	snapshot := &sessionCheckpointSnapshot{Manifest: &manifest, State: &state}
+	if len(cp.Timeline) > 0 {
+		var timeline []events.Event
+		if err := json.Unmarshal(cp.Timeline, &timeline); err != nil {
+			return nil, true, newSessionCorruptError(sessionID, "decode checkpoint %s: %v", timelineFileName, err)
+		}
+		snapshot.Timeline = timeline
+	}
+	if len(cp.Turns) > 0 {
+		var turns []TurnRecord
+		if err := json.Unmarshal(cp.Turns, &turns); err != nil {
+			return nil, true, newSessionCorruptError(sessionID, "decode checkpoint %s: %v", turnsFileName, err)
+		}
+		snapshot.Turns = normalizeTurnRecords(turns)
+	}
+	if len(cp.Queue) > 0 {
+		var queue []QueuedTurn
+		if err := json.Unmarshal(cp.Queue, &queue); err != nil {
+			return nil, true, newSessionCorruptError(sessionID, "decode checkpoint %s: %v", turnQueueFileName, err)
+		}
+		snapshot.Queue = normalizeQueuedTurns(queue)
+	}
+	return snapshot, true, nil
+}
+
 func (s *Service) readSessionState(sessionID string) (*agent.SessionState, error) {
 	if _, state, err := s.readSessionFiles(sessionID); err != nil || state != nil {
 		return state, err
@@ -4327,8 +4553,15 @@ func (s *Service) readSessionEventJournal(sessionID string) []events.Event {
 	}
 	defer file.Close()
 
+	return decodeSessionEventJournalReader(bufio.NewReader(file))
+}
+
+func decodeSessionEventJournal(data []byte) []events.Event {
+	return decodeSessionEventJournalReader(bufio.NewReader(bytes.NewReader(data)))
+}
+
+func decodeSessionEventJournalReader(reader *bufio.Reader) []events.Event {
 	var out []events.Event
-	reader := bufio.NewReader(file)
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		line = bytes.TrimSpace(line)
@@ -4403,7 +4636,10 @@ func (s *Service) appendSessionEventJournal(session *sessionState, event events.
 	if writeErr != nil {
 		return writeErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	return s.syncSessionStoreFromJSON(context.Background(), session.id)
 }
 
 func (s *Service) writeSessionTimeline(session *sessionState) error {
@@ -4412,21 +4648,30 @@ func (s *Service) writeSessionTimeline(session *sessionState) error {
 	}
 	session.timelineMu.Lock()
 	defer session.timelineMu.Unlock()
-	return fsutil.WriteJSONAtomic(filepath.Join(s.sessionDir(session.id), timelineFileName), session.timeline.Entries(0), 0644)
+	if err := fsutil.WriteJSONAtomic(filepath.Join(s.sessionDir(session.id), timelineFileName), session.timeline.Entries(0), 0644); err != nil {
+		return err
+	}
+	return s.syncSessionStoreFromJSON(context.Background(), session.id)
 }
 
 func (s *Service) writeSessionTurns(session *sessionState) error {
 	if session == nil {
 		return nil
 	}
-	return fsutil.WriteJSONAtomic(filepath.Join(s.sessionDir(session.id), turnsFileName), session.turnRecords(0), 0644)
+	if err := fsutil.WriteJSONAtomic(filepath.Join(s.sessionDir(session.id), turnsFileName), session.turnRecords(0), 0644); err != nil {
+		return err
+	}
+	return s.syncSessionStoreFromJSON(context.Background(), session.id)
 }
 
 func (s *Service) writeSessionQueue(session *sessionState) error {
 	if session == nil {
 		return nil
 	}
-	return fsutil.WriteJSONAtomic(filepath.Join(s.sessionDir(session.id), turnQueueFileName), session.queuedTurns(0), 0644)
+	if err := fsutil.WriteJSONAtomic(filepath.Join(s.sessionDir(session.id), turnQueueFileName), session.queuedTurns(0), 0644); err != nil {
+		return err
+	}
+	return s.syncSessionStoreFromJSON(context.Background(), session.id)
 }
 
 func (s *Service) recoverInterruptedTurn(session *sessionState, now time.Time) error {
@@ -4580,7 +4825,65 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 	_ = fsutil.WriteJSONAtomic(filepath.Join(dir, turnsFileName), turns, 0644)
 	_ = fsutil.WriteJSONAtomic(filepath.Join(dir, turnQueueFileName), queue, 0644)
 	_ = s.appendSessionGraphCheckpoint(session, checkpointID, session.title)
-	return nil
+	return s.saveSessionToStore(session, manifest, stateData, timeline, turns, queue, checkpointID, updatedAt)
+}
+
+func (s *Service) saveSessionToStore(session *sessionState, manifest SessionManifest, stateData []byte, timeline []events.Event, turns []TurnRecord, queue []QueuedTurn, checkpointID string, updatedAt time.Time) error {
+	if err := s.sqliteSessionStoreError(); err != nil {
+		return err
+	}
+	store := s.sqliteSessionStore()
+	if store == nil || session == nil {
+		return nil
+	}
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	timelineData, err := json.MarshalIndent(timeline, "", "  ")
+	if err != nil {
+		return err
+	}
+	turnsData, err := json.MarshalIndent(turns, "", "  ")
+	if err != nil {
+		return err
+	}
+	queueData, err := json.MarshalIndent(queue, "", "  ")
+	if err != nil {
+		return err
+	}
+	var graphData []byte
+	session.mu.RLock()
+	if session.graph != nil {
+		graphData, _ = json.MarshalIndent(session.graph.Clone(), "", "  ")
+	}
+	sessionID := session.id
+	session.mu.RUnlock()
+	pointerData, err := json.MarshalIndent(sessionCheckpointPointer{Current: checkpointID, CreatedAt: updatedAt}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data := sessionstore.SessionData{
+		SessionID: sessionID,
+		Manifest:  manifestData,
+		State:     append([]byte{}, stateData...),
+		Timeline:  timelineData,
+		Turns:     turnsData,
+		Queue:     queueData,
+		Graph:     graphData,
+		Checkpoint: &sessionstore.CheckpointData{
+			ID:       checkpointID,
+			Pointer:  pointerData,
+			Manifest: manifestData,
+			State:    append([]byte{}, stateData...),
+			Turns:    turnsData,
+			Queue:    queueData,
+		},
+	}
+	if journal, exists, err := readOptionalFile(filepath.Join(s.sessionDir(sessionID), eventJournalFileName)); err == nil && exists {
+		data.EventJournal = journal
+	}
+	return store.Save(context.Background(), data)
 }
 
 func (s *Service) writeSessionCheckpoint(sessionID string, manifest SessionManifest, stateData []byte, timeline []events.Event, turns []TurnRecord, queue []QueuedTurn, at time.Time) (string, error) {

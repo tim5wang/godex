@@ -138,6 +138,8 @@ func TestDefaultConfigReadsRuntimeSettingsFromEnv(t *testing.T) {
 	t.Setenv("GODEX_SUBAGENT_MAX_JOB_TIMEOUT_MS", "123456")
 	t.Setenv("GODEX_RUNTIME_RECOVERY_AUTO_RESUME_INTERRUPTED_TURNS", "true")
 	t.Setenv("GODEX_RUNTIME_RECOVERY_AUTO_REPAIR_SESSIONS", "false")
+	t.Setenv("GODEX_STORAGE_SESSION_BACKEND", "sqlite")
+	t.Setenv("GODEX_STORAGE_SQLITE_PATH", filepath.Join(workspace, "session-store.sqlite"))
 	t.Setenv("GODEX_BROWSER_ENABLED", "true")
 	t.Setenv("GODEX_BROWSER_PATH", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 	t.Setenv("WEIXIN_ENABLED", "true")
@@ -206,6 +208,9 @@ func TestDefaultConfigReadsRuntimeSettingsFromEnv(t *testing.T) {
 	}
 	if cfg.Runtime.Recovery.AutoRepairSessions {
 		t.Fatalf("expected runtime recovery auto-repair to be disabled from env")
+	}
+	if cfg.Storage.SessionBackend != "sqlite" || cfg.Storage.SQLitePath == "" {
+		t.Fatalf("expected storage backend env overrides, got %+v", cfg.Storage)
 	}
 	if cfg.Feishu.AppID != "cli_app" || cfg.Feishu.AppSecret != "top-secret" || cfg.Feishu.Domain != "feishu" {
 		t.Fatalf("unexpected feishu config: %#v", cfg.Feishu)
@@ -421,6 +426,12 @@ func TestDefaultConfigIncludesStoragePolicy(t *testing.T) {
 	if !cfg.Storage.SessionCheckpointAutoPrune {
 		t.Fatalf("expected checkpoint auto prune enabled, got %#v", cfg.Storage)
 	}
+	if cfg.Storage.SessionBackend != "json" {
+		t.Fatalf("expected json session backend default, got %#v", cfg.Storage)
+	}
+	if cfg.Storage.SQLitePath != "" {
+		t.Fatalf("expected empty sqlite path default, got %#v", cfg.Storage)
+	}
 }
 
 func TestManagerUpdateStorageConfig(t *testing.T) {
@@ -436,6 +447,8 @@ func TestManagerUpdateStorageConfig(t *testing.T) {
 			"storage.session_checkpoint_keep_latest": 7,
 			"storage.session_checkpoint_ttl_hours":   48,
 			"storage.session_checkpoint_auto_prune":  false,
+			"storage.session_backend":                "sqlite",
+			"storage.sqlite_path":                    filepath.Join(workspace, "sessions.sqlite"),
 		},
 	})
 	if err != nil {
@@ -456,6 +469,12 @@ func TestManagerUpdateStorageConfig(t *testing.T) {
 	}
 	if got := manager.Current().Storage.SessionCheckpointAutoPrune; got {
 		t.Fatalf("expected checkpoint auto prune disabled")
+	}
+	if got := manager.Current().Storage.SessionBackend; got != "sqlite" {
+		t.Fatalf("expected sqlite session backend, got %q", got)
+	}
+	if got := view.EffectiveValues["storage.sqlite_path"]; got == "" {
+		t.Fatalf("expected effective sqlite path, got %#v", got)
 	}
 }
 

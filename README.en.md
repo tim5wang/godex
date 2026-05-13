@@ -152,6 +152,7 @@ When the coding profile needs networking, browser, subagent, skill, memory, pack
 
 ## Documentation
 
+- [GoDex 2.0 Architecture SPEC](docs/SPEC.en.md): Agent/Sandbox, Orchestrator/Worker, Session Graph, and storage decoupling roadmap.
 - [User Guide](docs/user-guide.md): Installation, configuration, providers, Web UI, tools, Memory, API, and release checks.
 - [Project Structure](docs/project-structure.md): Directory responsibilities and refactoring boundaries.
 - [Memory Design Principles](docs/memory-design-principles.md): Long-term memory, candidates, recall, and audit design.

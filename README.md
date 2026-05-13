@@ -172,11 +172,11 @@ GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的
 - **Session 记忆树**：支持 branch、clone、rollback、merge、rebuild，让主线和 worker 探索可以像版本化上下文一样管理。
 - **Session 与存储介质解耦**：通过 store/repository 接口支持 JSON、SQLite、数据库和云存储等后端。
 
-详细架构方向见 [SPEC.md](SPEC.md)。
+详细架构方向见 [GoDex 2.0 架构 SPEC](docs/SPEC.md)。
 
 ## 文档
 
-- [GoDex 2.0 架构 SPEC](SPEC.md)：Agent/Sandbox、Orchestrator/Worker、Session Graph 和存储解耦路线。
+- [GoDex 2.0 架构 SPEC](docs/SPEC.md)：Agent/Sandbox、Orchestrator/Worker、Session Graph 和存储解耦路线。
 - [用户指南](docs/user-guide.md)：安装、配置、Provider、Web UI、工具、Memory、API、发布检查。
 - [项目结构](docs/project-structure.md)：目录职责和重构边界。
 - [Memory 设计原则](docs/memory-design-principles.md)：长期记忆、候选、召回和审计设计。

@@ -166,6 +166,10 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 		a.subagentJobs = newSubagentJobStore(subagentJobsDir(cfg))
 	}
 	a.todoMgr = deps.todoMgr
+	a.sandbox = deps.sandbox
+	if a.sandbox == nil {
+		a.sandbox = localSandboxFromConfig(cfg)
+	}
 	a.mu.Unlock()
 
 	nextHandler := tools.NewToolHandler()

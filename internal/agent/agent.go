@@ -20,6 +20,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/sandbox"
 	"github.com/tim5wang/godex/internal/services/historysearch"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/tools"
@@ -53,6 +54,7 @@ type Agent struct {
 	subagentJobs  *subagentJobStore
 	workflows     *workflowStore
 	client        conversation.Caller
+	sandbox       *sandbox.Sandbox
 
 	prompts              conversation.PromptLayers
 	messages             []protocol.Message
@@ -91,6 +93,7 @@ type dependencies struct {
 	subagentJobs *subagentJobStore
 	workflows    *workflowStore
 	todoMgr      *todo.Manager
+	sandbox      *sandbox.Sandbox
 }
 
 // New creates a new agent.

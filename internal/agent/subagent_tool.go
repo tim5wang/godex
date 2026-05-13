@@ -64,6 +64,7 @@ type subagentModelJobView struct {
 	AgentType     string    `json:"agent_type,omitempty"`
 	RoleID        string    `json:"role_id,omitempty"`
 	RoleName      string    `json:"role_name,omitempty"`
+	SandboxID     string    `json:"sandbox_id,omitempty"`
 	Status        string    `json:"status,omitempty"`
 	Error         string    `json:"error,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -349,6 +350,7 @@ func formatSubagentModelJob(job *subagentJob) subagentModelJobView {
 		AgentType:     job.AgentType,
 		RoleID:        job.RoleID,
 		RoleName:      job.RoleName,
+		SandboxID:     job.SandboxID,
 		Status:        string(job.Status),
 		Error:         job.Error,
 		CreatedAt:     job.CreatedAt,
@@ -686,6 +688,7 @@ func formatSubagentJob(job *subagentJob, includeMessages bool) map[string]interf
 		"write_scope":     append([]string{}, job.WriteScope...),
 		"default_bundles": append([]string{}, job.DefaultBundles...),
 		"tool_names":      append([]string{}, job.ToolNames...),
+		"sandbox_id":      job.SandboxID,
 		"worktree_dir":    job.WorktreeDir,
 		"isolation":       job.Isolation,
 		"merge_status":    job.MergeStatus,

@@ -15,6 +15,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
+	"github.com/tim5wang/godex/internal/sandbox"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -86,6 +87,71 @@ func TestDurableSubagentCompletesAndPersistsResult(t *testing.T) {
 	}
 	if persisted.Status != subagentStatusCompleted || persisted.Result != "subagent handoff" {
 		t.Fatalf("expected completed persisted job, got %+v", persisted)
+	}
+}
+
+func TestDurableSubagentRecordsSandboxID(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.client = repeatedTextCaller("done")
+	got := make(chan events.Event, 8)
+	ctx := withSubagentEventTarget(context.Background(), subagentEventTarget{
+		sessionID: "session-sandbox",
+		turnID:    "turn-sandbox",
+		sink: events.SinkFunc(func(event events.Event) {
+			got <- event
+		}),
+	})
+
+	parentSandboxID := a.SandboxID()
+	job, err := a.StartDurableSubagentWithContext(ctx, "inspect sandbox id", "general-purpose", []string{"notes"})
+	if err != nil {
+		t.Fatalf("start subagent: %v", err)
+	}
+	completed := waitForSubagentStatus(t, a.subagentJobs, job.ID, subagentStatusCompleted)
+	if completed.SandboxID == "" {
+		t.Fatalf("expected stored sandbox id")
+	}
+	if completed.SandboxID == parentSandboxID {
+		t.Fatalf("expected worker sandbox id to reference prepared workspace, got parent sandbox id %q", completed.SandboxID)
+	}
+	if want := sandbox.StableLocalID(completed.WorktreeDir); completed.SandboxID != want {
+		t.Fatalf("stored sandbox id %q, want %q", completed.SandboxID, want)
+	}
+
+	view := durableSubagentJobView(completed)
+	if view.SandboxID != completed.SandboxID {
+		t.Fatalf("view sandbox id %q, want %q", view.SandboxID, completed.SandboxID)
+	}
+	foundEventSandboxID := false
+	deadline := time.After(2 * time.Second)
+	for !foundEventSandboxID {
+		select {
+		case event := <-got:
+			if event.Type != events.EventSubagentJobUpdated {
+				continue
+			}
+			payload, _ := event.Payload.(events.SubagentJobPayload)
+			if payload.SandboxID == completed.SandboxID {
+				foundEventSandboxID = true
+			}
+		case <-deadline:
+			t.Fatalf("expected subagent event payload sandbox id %q", completed.SandboxID)
+		}
+	}
+}
+
+func TestSubagentModelViewIncludesSandboxID(t *testing.T) {
+	job := &subagentJob{
+		ID:        "job-1",
+		SandboxID: "sandbox:local:worker",
+		Status:    subagentStatusCompleted,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	view := formatSubagentModelJob(job)
+	if view.SandboxID != "sandbox:local:worker" {
+		t.Fatalf("model view sandbox id %q", view.SandboxID)
 	}
 }
 
@@ -623,7 +689,7 @@ func TestCleanupMergedSubagentWorkspaceRemovesWorktreeAndBaseline(t *testing.T) 
 	if err := os.MkdirAll(filepath.Join(baselineDir, "notes"), 0755); err != nil {
 		t.Fatalf("mkdir baseline: %v", err)
 	}
-	if _, err := a.subagentJobs.SetWorkspace(job.ID, worktreeDir, baselineDir, subagentIsolationSnapshot, "", "snapshot"); err != nil {
+	if _, err := a.subagentJobs.SetWorkspace(job.ID, worktreeDir, baselineDir, subagentIsolationSnapshot, "", "snapshot", "sandbox:local:test"); err != nil {
 		t.Fatalf("set workspace: %v", err)
 	}
 	if _, err := a.subagentJobs.Finish(job.ID, subagentStatusCompleted, "done", ""); err != nil {

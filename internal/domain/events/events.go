@@ -196,6 +196,7 @@ type SubagentJobPayload struct {
 	LastIteration     int       `json:"last_iteration,omitempty"`
 	LastRecoveryHint  string    `json:"last_recovery_hint,omitempty"`
 	WriteScope        []string  `json:"write_scope,omitempty"`
+	SandboxID         string    `json:"sandbox_id,omitempty"`
 	WorktreeDir       string    `json:"worktree_dir,omitempty"`
 	Isolation         string    `json:"isolation,omitempty"`
 	WorkspaceOrigin   string    `json:"workspace_origin,omitempty"`

@@ -49,33 +49,36 @@ func (a *Agent) RegisterTools() {
 }
 
 func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
-	execution := executionConfigFromRuntime(a.cfg.Tools.Execution)
-	a.registerToolTo(handler, tools.NewBashToolWithExecution(a.cfg.WorkspaceDir, a.cfg.TempDir, execution), tools.ToolMeta{
+	binding := a.SandboxBinding()
+	workspaceDir := binding.WorkspaceDir
+	tempDir := binding.TempDir
+	execution := binding.Execution
+	a.registerToolTo(handler, tools.NewBashToolWithExecution(workspaceDir, tempDir, execution), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewGlobTool(a.cfg.WorkspaceDir, a.cfg.Tools.Glob.DefaultMaxResults), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewGlobTool(workspaceDir, a.cfg.Tools.Glob.DefaultMaxResults), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewReadFileTool(a.cfg.WorkspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewReadFileTool(workspaceDir), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewWriteFileTool(a.cfg.WorkspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewWriteFileTool(workspaceDir), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewEditFileTool(a.cfg.WorkspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewEditFileTool(workspaceDir), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewAttachFileTool(a.cfg.WorkspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewAttachFileTool(workspaceDir), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
@@ -175,17 +178,17 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		})
 	}
 	if a.browser != nil && a.cfg.Tools.Browser.Enabled {
-		a.registerToolTo(handler, tools.NewBrowserTool(a.browser, a.cfg.WorkspaceDir), tools.ToolMeta{
+		a.registerToolTo(handler, tools.NewBrowserTool(a.browser, workspaceDir), tools.ToolMeta{
 			Bundle:  bundleBrowser,
 			Summary: "interactive browser automation for dynamic pages",
 		})
 	}
-	a.registerToolTo(handler, tools.NewDesktopTool(tools.NewDesktopService(a.cfg.TempDir)), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewDesktopTool(tools.NewDesktopService(tempDir)), tools.ToolMeta{
 		Bundle:  bundleDesktop,
 		Summary: "local desktop screenshots, clipboard, keyboard, mouse, and window inspection",
 	})
 
-	a.registerToolTo(handler, tools.NewBackgroundRunToolWithExecution(a.bgMgr, a.cfg.WorkspaceDir, a.cfg.TempDir, execution), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewBackgroundRunToolWithExecution(a.bgMgr, workspaceDir, tempDir, execution), tools.ToolMeta{
 		Bundle:  bundleBackground,
 		Summary: "long-running command execution and status checks",
 	})
@@ -202,7 +205,7 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary: "Ralph-style prioritized long task orchestration over durable workflow nodes",
 	})
 	a.registerSubagentTool(handler)
-	a.registerToolTo(handler, tools.NewACPAgentTool(a.cfg.ACP.Agents, a.cfg.WorkspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewACPAgentTool(a.cfg.ACP.Agents, workspaceDir), tools.ToolMeta{
 		Bundle:  bundleExternal,
 		Summary: "external ACP agent delegation over stdio",
 	})

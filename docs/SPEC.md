@@ -645,6 +645,13 @@ Inbound MCP 初始应优先暴露低风险、可审计能力：
 - Worker jobs 可以通过 ID 引用 sandbox。
 - Sandbox 可以重建而不改变 Agent identity。
 
+实施说明：
+
+- 当前实现新增 `internal/sandbox` local sandbox model，并为每个 `Agent` 挂载默认 local sandbox。
+- Workspace-sensitive tools 通过 sandbox tool binding 获取 workspace、temp 和 execution config，public tool names 和 schemas 不变。
+- Tool execution context 携带 `sandbox_id`，durable subagent jobs 持久化并在 API/model views 中暴露 worker sandbox ID。
+- Phase 2 不引入 remote/disposable sandbox runtime，也不扩大 Context Inspector schema；这些属于后续阶段。
+
 ### Phase 3：Worker Runtime Protocol
 
 目标：让 workers 成为一等 runtime，而不是只作为 tool implementation detail。

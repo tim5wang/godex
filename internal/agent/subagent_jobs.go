@@ -26,6 +26,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/platform/fsutil"
 	"github.com/tim5wang/godex/internal/platform/tooling"
+	"github.com/tim5wang/godex/internal/sandbox"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -108,6 +109,7 @@ type subagentJob struct {
 	WriteScope      []string                  `json:"write_scope,omitempty"`
 	DefaultBundles  []string                  `json:"default_bundles,omitempty"`
 	ToolPolicy      []string                  `json:"tool_policy,omitempty"`
+	SandboxID       string                    `json:"sandbox_id,omitempty"`
 	WorktreeDir     string                    `json:"worktree_dir,omitempty"`
 	BaselineDir     string                    `json:"baseline_dir,omitempty"`
 	PreviewJobIDs   []string                  `json:"preview_job_ids,omitempty"`
@@ -245,6 +247,7 @@ type DurableSubagentJobView struct {
 	DefaultBundles    []string                      `json:"default_bundles,omitempty"`
 	ToolPolicy        []string                      `json:"tool_policy,omitempty"`
 	ToolNames         []string                      `json:"tool_names,omitempty"`
+	SandboxID         string                        `json:"sandbox_id,omitempty"`
 	WorktreeDir       string                        `json:"worktree_dir,omitempty"`
 	Isolation         string                        `json:"isolation,omitempty"`
 	WorkspaceOrigin   string                        `json:"workspace_origin,omitempty"`
@@ -311,6 +314,7 @@ type subagentStartOptions struct {
 	DefaultBundles []string
 	ToolPolicy     []string
 	Capabilities   []string
+	SandboxID      string
 	ModelHint      string
 	BudgetHint     string
 	Display        map[string]string
@@ -527,6 +531,7 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 		PreviewJobIDs:   normalizeWorkflowStrings(opts.PreviewJobIDs),
 		DefaultBundles:  append([]string{}, opts.DefaultBundles...),
 		ToolPolicy:      normalizeWorkflowStrings(opts.ToolPolicy),
+		SandboxID:       strings.TrimSpace(opts.SandboxID),
 		Isolation:       subagentIsolationSnapshot,
 		WorkspaceOrigin: "snapshot",
 		CleanupState:    subagentCleanupPending,
@@ -701,7 +706,7 @@ func (s *subagentJobStore) nextSequenceLocked(sessionID, parentTurnID string) in
 	return next
 }
 
-func (s *subagentJobStore) SetWorkspace(id, worktreeDir, baselineDir, isolation, gitBranch, workspaceOrigin string) (*subagentJob, error) {
+func (s *subagentJobStore) SetWorkspace(id, worktreeDir, baselineDir, isolation, gitBranch, workspaceOrigin, sandboxID string) (*subagentJob, error) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -720,6 +725,7 @@ func (s *subagentJobStore) SetWorkspace(id, worktreeDir, baselineDir, isolation,
 	if job.WorkspaceOrigin == "" {
 		job.WorkspaceOrigin = job.Isolation
 	}
+	job.SandboxID = strings.TrimSpace(sandboxID)
 	if job.CleanupState == "" || job.CleanupState == subagentCleanupPending {
 		job.CleanupState = subagentCleanupActive
 	}
@@ -1211,6 +1217,7 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		WriteScope:     req.WriteScope,
 		PreviewJobIDs:  req.PreviewJobIDs,
 		RuntimeContext: runtimeCtx,
+		SandboxID:      a.SandboxID(),
 		MaxTurns:       a.normalizeSubagentMaxTurns(req.MaxTurns),
 		MaxConcurrent:  a.subagentMaxConcurrentJobs(),
 		JobTimeoutMS:   a.normalizeSubagentJobTimeoutMS(req.JobTimeoutMS),
@@ -1465,6 +1472,9 @@ func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEv
 	if strings.TrimSpace(job.RuntimeContext.SessionID) != "" || strings.TrimSpace(job.RuntimeContext.Source) != "" {
 		ctx = tools.WithSessionContext(ctx, job.RuntimeContext)
 	}
+	if strings.TrimSpace(job.SandboxID) != "" {
+		ctx = tools.WithSandboxID(ctx, job.SandboxID)
+	}
 	runCtx := ctx
 	var timeoutCancel context.CancelFunc
 	if job.JobTimeoutMS > 0 {
@@ -1665,7 +1675,7 @@ func (a *Agent) prepareSubagentWorkspace(job *subagentJob) (*subagentJob, error)
 	}
 
 	if a.subagentReadOnlyIsolation() == subagentIsolationSharedReadOnly && subagentJobReadOnly(job) {
-		return a.subagentJobs.SetWorkspace(job.ID, workspace, "", subagentIsolationSharedReadOnly, "", "shared_workspace")
+		return a.subagentJobs.SetWorkspace(job.ID, workspace, "", subagentIsolationSharedReadOnly, "", "shared_workspace", sandbox.StableLocalID(workspace))
 	}
 
 	worktreeDir := filepath.Join(root, "worktrees", job.ID)
@@ -1702,7 +1712,7 @@ func (a *Agent) prepareSubagentWorkspace(job *subagentJob) (*subagentJob, error)
 				return nil, fmt.Errorf("prepare subagent baseline: %w", err)
 			}
 		}
-		return a.subagentJobs.SetWorkspace(job.ID, workspace, baselineDir, subagentIsolationSharedApproval, "", "non_git_shared_with_approval")
+		return a.subagentJobs.SetWorkspace(job.ID, workspace, baselineDir, subagentIsolationSharedApproval, "", "non_git_shared_with_approval", sandbox.StableLocalID(workspace))
 	} else {
 		if err := copyWorkspaceSnapshot(workspace, worktreeDir); err != nil {
 			return nil, fmt.Errorf("prepare subagent worktree: %w", err)
@@ -1721,7 +1731,7 @@ func (a *Agent) prepareSubagentWorkspace(job *subagentJob) (*subagentJob, error)
 	if err := a.applyPreviewJobsToSubagentWorkspace(job, worktreeDir, baselineDir); err != nil {
 		return nil, err
 	}
-	return a.subagentJobs.SetWorkspace(job.ID, worktreeDir, baselineDir, isolation, gitBranch, origin)
+	return a.subagentJobs.SetWorkspace(job.ID, worktreeDir, baselineDir, isolation, gitBranch, origin, sandbox.StableLocalID(worktreeDir))
 }
 
 func (a *Agent) subagentReadOnlyIsolation() string {
@@ -2313,6 +2323,7 @@ func durableSubagentJobView(job *subagentJob) DurableSubagentJobView {
 		DefaultBundles:    append([]string{}, job.DefaultBundles...),
 		ToolPolicy:        append([]string{}, job.ToolPolicy...),
 		ToolNames:         append([]string{}, job.ToolNames...),
+		SandboxID:         job.SandboxID,
 		WorktreeDir:       job.WorktreeDir,
 		Isolation:         job.Isolation,
 		WorkspaceOrigin:   job.WorkspaceOrigin,
@@ -2433,6 +2444,9 @@ func reviewSubagentJob(job *subagentJob) (subagentReview, error) {
 func (a *Agent) executeSubagentToolForJob(ctx context.Context, name string, input map[string]interface{}, job *subagentJob) (conversation.ToolExecutionResult, error) {
 	if job == nil {
 		return conversation.ToolExecutionResult{}, fmt.Errorf("missing subagent job")
+	}
+	if strings.TrimSpace(job.SandboxID) != "" {
+		ctx = tools.WithSandboxID(ctx, job.SandboxID)
 	}
 	if !subagentJobAllowsTool(job.ToolNames, name) {
 		return conversation.ToolExecutionResult{}, fmt.Errorf("capability denied: subagent %s is not allowed to call tool:%s", job.ID, strings.TrimSpace(name))
@@ -3562,6 +3576,7 @@ func (t subagentEventTarget) emit(job *subagentJob, phase, message, toolID, tool
 			LastIteration:     diagnostics.LastIteration,
 			LastRecoveryHint:  diagnostics.LastRecoveryHint,
 			WriteScope:        append([]string{}, job.WriteScope...),
+			SandboxID:         job.SandboxID,
 			WorktreeDir:       job.WorktreeDir,
 			Isolation:         job.Isolation,
 			WorkspaceOrigin:   job.WorkspaceOrigin,

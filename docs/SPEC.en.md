@@ -645,6 +645,13 @@ Acceptance criteria:
 - Worker jobs can reference a sandbox by ID.
 - A sandbox can be recreated without changing Agent identity.
 
+Implementation note:
+
+- The current implementation adds an `internal/sandbox` local sandbox model and attaches one default local sandbox to each `Agent`.
+- Workspace-sensitive tools obtain workspace, temp, and execution config through the sandbox tool binding while public tool names and schemas stay unchanged.
+- Tool execution context carries `sandbox_id`, and durable subagent jobs persist and expose the worker sandbox ID through API/model views.
+- Phase 2 does not introduce remote/disposable sandbox runtime and does not expand the Context Inspector schema; those remain later-phase work.
+
 ### Phase 3: Worker Runtime Protocol
 
 Goal: make workers first-class runtimes instead of only a tool implementation detail.

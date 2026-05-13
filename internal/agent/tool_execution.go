@@ -17,6 +17,9 @@ func (a *Agent) handleTool(ctx context.Context, name string, input map[string]in
 }
 
 func (a *Agent) handleToolResult(ctx context.Context, name string, input map[string]interface{}) (conversation.ToolExecutionResult, error) {
+	if tools.SandboxIDFromContext(ctx) == "" {
+		ctx = tools.WithSandboxID(ctx, a.SandboxID())
+	}
 	result, err := a.toolHandler.HandleResult(ctx, name, input)
 	if err != nil {
 		execution := conversation.ToolExecutionResult{
@@ -50,6 +53,9 @@ func (a *Agent) handleToolResult(ctx context.Context, name string, input map[str
 // through the normal tool handler and permission chain.
 func (a *Agent) RunPackageSmokeCommand(ctx context.Context, runtimeCtx automation.SessionContext, command string) (tools.ToolResult, error) {
 	ctx = tools.WithSessionContext(ctx, runtimeCtx)
+	if tools.SandboxIDFromContext(ctx) == "" {
+		ctx = tools.WithSandboxID(ctx, a.SandboxID())
+	}
 	return a.toolHandler.HandleResult(ctx, "bash", map[string]interface{}{"command": command})
 }
 

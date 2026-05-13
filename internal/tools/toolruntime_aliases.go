@@ -85,6 +85,14 @@ func SessionIDFromContext(ctx context.Context) string {
 	return toolruntime.SessionIDFromContext(ctx)
 }
 
+func WithSandboxID(ctx context.Context, sandboxID string) context.Context {
+	return toolruntime.WithSandboxID(ctx, sandboxID)
+}
+
+func SandboxIDFromContext(ctx context.Context) string {
+	return toolruntime.SandboxIDFromContext(ctx)
+}
+
 func WithSessionContext(ctx context.Context, runtimeContext automation.SessionContext) context.Context {
 	return toolruntime.WithSessionContext(ctx, runtimeContext)
 }

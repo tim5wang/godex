@@ -860,6 +860,33 @@ func TestApplyConfigKeepsToolHandlerInstanceStable(t *testing.T) {
 	}
 }
 
+func TestApplyConfigRefreshesSandboxBinding(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	nextWorkspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(nextWorkspace, "marker.txt"), []byte("from refreshed sandbox"), 0644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	nextCfg := a.cfg.Clone()
+	nextCfg.WorkspaceDir = nextWorkspace
+	nextCfg.TempDir = filepath.Join(nextWorkspace, ".godex", ".tmp")
+	shared := NewSharedDependenciesWithCaller(nextCfg, a.client)
+
+	a.ApplyConfig(nextCfg, shared)
+
+	if got, want := a.SandboxBinding().WorkspaceDir, filepath.Clean(nextWorkspace); got != want {
+		t.Fatalf("sandbox workspace %q, want %q", got, want)
+	}
+	output, err := a.handleTool(context.Background(), "read_file", map[string]interface{}{"path": "marker.txt"})
+	if err != nil {
+		t.Fatalf("read marker through rebound tool: %v", err)
+	}
+	if !strings.Contains(output, "from refreshed sandbox") {
+		t.Fatalf("expected read_file to use refreshed sandbox, got %q", output)
+	}
+}
+
 func TestApplyConfigRebindsToolExchangeToStableHandler(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()

@@ -65,6 +65,7 @@ func buildDependencies(cfg *config.Config) dependencies {
 		subagentJobs: newSubagentJobStore(subagentJobsDir(cfg)),
 		workflows:    newWorkflowStore(filepath.Join(cfg.StateDir, "workflows")),
 		todoMgr:      todo.NewManager(cfg.TodosDir),
+		sandbox:      localSandboxFromConfig(cfg),
 	}
 }
 
@@ -111,6 +112,9 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 	if deps.summarizer == nil {
 		deps.summarizer = compress.NewRuleBasedSessionSummarizer(deps.compressor)
 	}
+	if deps.sandbox == nil {
+		deps.sandbox = localSandboxFromConfig(cfg)
+	}
 	agent := &Agent{
 		cfg:            cfg,
 		toolHandler:    handler,
@@ -138,6 +142,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		subagentJobs:   deps.subagentJobs,
 		workflows:      deps.workflows,
 		client:         deps.client,
+		sandbox:        deps.sandbox,
 		messages:       []protocol.Message{},
 		activeSkills:   make(map[string]*activeSkillState),
 		transcriptRefs: nil,

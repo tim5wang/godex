@@ -8,6 +8,7 @@ import (
 
 type sessionIDKey struct{}
 type sessionContextKey struct{}
+type sandboxIDKey struct{}
 
 // WithSessionID annotates tool execution context with the current session ID.
 func WithSessionID(ctx context.Context, sessionID string) context.Context {
@@ -20,6 +21,22 @@ func WithSessionID(ctx context.Context, sessionID string) context.Context {
 // SessionIDFromContext returns the active session ID for the current tool turn.
 func SessionIDFromContext(ctx context.Context) string {
 	if value, ok := ctx.Value(sessionIDKey{}).(string); ok {
+		return value
+	}
+	return ""
+}
+
+// WithSandboxID annotates tool execution context with the active sandbox ID.
+func WithSandboxID(ctx context.Context, sandboxID string) context.Context {
+	if sandboxID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sandboxIDKey{}, sandboxID)
+}
+
+// SandboxIDFromContext returns the active sandbox ID for the current tool turn.
+func SandboxIDFromContext(ctx context.Context) string {
+	if value, ok := ctx.Value(sandboxIDKey{}).(string); ok {
 		return value
 	}
 	return ""

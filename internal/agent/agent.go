@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -821,65 +820,6 @@ func (a *Agent) runScopedSubagent(ctx context.Context, prompt, basePrompt string
 		ToolResultFilter: a.filterModelToolResult,
 		MaxTurns:         maxTurns,
 	}.Run(ctx)
-}
-
-func buildPermissionReviewPrompt(req tools.PermissionRequest) string {
-	lines := []string{
-		"Review this protected tool call from a remote session.",
-		"Decide whether it is safe enough to auto-approve right now.",
-		"",
-		fmt.Sprintf("Tool: %s", req.ToolName),
-		fmt.Sprintf("Action: %s", req.Action),
-		fmt.Sprintf("Source: %s", req.Source),
-		fmt.Sprintf("Sender: %s", req.Sender),
-		fmt.Sprintf("Mutation: %t", req.Mutation),
-	}
-	if command := strings.TrimSpace(req.Command); command != "" {
-		lines = append(lines, "", "Command:", command)
-	}
-	if len(req.Paths) > 0 {
-		lines = append(lines, "", "Paths:")
-		lines = append(lines, req.Paths...)
-	}
-	if len(req.Input) > 0 {
-		lines = append(lines, "", "Normalized input:")
-		lines = append(lines, formatPermissionReviewInput(req.Input))
-	}
-	lines = append(lines,
-		"",
-		"Reply with exactly one line:",
-		"ALLOW: <short reason>",
-		"DENY: <short reason>",
-		"MANUAL: <short reason>",
-	)
-	return strings.Join(lines, "\n")
-}
-
-func parsePermissionReviewResult(text string) tools.PermissionResult {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return tools.PermissionResult{Decision: tools.PermissionPending, Reason: "automatic review returned no decision"}
-	}
-	for _, line := range strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(strings.Trim(line, "`"))
-		switch {
-		case strings.HasPrefix(strings.ToUpper(line), "ALLOW:"):
-			return tools.PermissionResult{Decision: tools.PermissionAllow, Reason: strings.TrimSpace(line[len("ALLOW:"):]), Scope: "review"}
-		case strings.HasPrefix(strings.ToUpper(line), "DENY:"):
-			return tools.PermissionResult{Decision: tools.PermissionDeny, Reason: strings.TrimSpace(line[len("DENY:"):]), Scope: "review"}
-		case strings.HasPrefix(strings.ToUpper(line), "MANUAL:"):
-			return tools.PermissionResult{Decision: tools.PermissionPending, Reason: strings.TrimSpace(line[len("MANUAL:"):]), Scope: "review"}
-		}
-	}
-	return tools.PermissionResult{Decision: tools.PermissionPending, Reason: "automatic review returned an unrecognized decision"}
-}
-
-func formatPermissionReviewInput(input map[string]interface{}) string {
-	data, err := json.MarshalIndent(input, "", "  ")
-	if err != nil {
-		return fmt.Sprint(input)
-	}
-	return string(data)
 }
 
 func (a *Agent) executeSubagentTool(ctx context.Context, name string, input map[string]interface{}) (conversation.ToolExecutionResult, error) {

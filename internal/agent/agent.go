@@ -14,7 +14,6 @@ import (
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
-	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/instructions"
 	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/media"
@@ -22,7 +21,6 @@ import (
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
-	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
@@ -102,143 +100,6 @@ type dependencies struct {
 // New creates a new agent.
 func New(cfg *config.Config) *Agent {
 	return newAgentWithDependencies(cfg, buildDependencies(cfg))
-}
-
-func permissionPolicyFromConfig(cfg *config.Config) tools.PermissionPolicy {
-	if cfg == nil {
-		return tools.DefaultPermissionPolicy()
-	}
-	if strings.TrimSpace(cfg.Security.Profile) == "" &&
-		!cfg.Tools.Permissions.BlockAutomationMutations &&
-		!cfg.Tools.Permissions.InteractiveApprovalEnabled &&
-		cfg.Tools.Permissions.InteractiveApprovalMode == "" &&
-		len(cfg.Tools.Permissions.InteractiveApprovalSources) == 0 &&
-		len(cfg.Tools.Permissions.InteractiveApprovalTools) == 0 &&
-		len(cfg.Tools.Permissions.TrustedPathPrefixes) == 0 &&
-		len(cfg.Tools.Permissions.TrustedCommandPrefixes) == 0 {
-		return tools.DefaultPermissionPolicy()
-	}
-	policy := tools.PermissionPolicyForSecurityProfile(cfg.Security.Profile, cfg.Tools.Permissions.InteractiveApprovalMode)
-	policy.BlockAutomationMutations = cfg.Tools.Permissions.BlockAutomationMutations
-	if cfg.Tools.Permissions.InteractiveApprovalMode != "" {
-		policy.InteractiveApproval.Mode = cfg.Tools.Permissions.InteractiveApprovalMode
-	}
-	policy.InteractiveApproval.Enabled = cfg.Tools.Permissions.InteractiveApprovalEnabled
-	if len(cfg.Tools.Permissions.InteractiveApprovalSources) > 0 {
-		policy.InteractiveApproval.Sources = append([]string{}, cfg.Tools.Permissions.InteractiveApprovalSources...)
-	}
-	if len(cfg.Tools.Permissions.InteractiveApprovalTools) > 0 {
-		policy.InteractiveApproval.Tools = append([]string{}, cfg.Tools.Permissions.InteractiveApprovalTools...)
-	}
-	if len(cfg.Tools.Permissions.TrustedPathPrefixes) > 0 {
-		policy.InteractiveApproval.TrustedPathPrefixes = append([]string{}, cfg.Tools.Permissions.TrustedPathPrefixes...)
-	}
-	if len(cfg.Tools.Permissions.TrustedCommandPrefixes) > 0 {
-		policy.InteractiveApproval.TrustedCommandPrefixes = append([]string{}, cfg.Tools.Permissions.TrustedCommandPrefixes...)
-	}
-	return policy
-}
-
-// InspectContext summarizes the current prompt budget without mutating history.
-func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.ContextInspection, error) {
-	system, err := a.buildRuntimeSystemPrompt(agentProfileFromContext(ctx))
-	if err != nil {
-		return tools.ContextInspection{}, err
-	}
-	history, _ := a.messageState()
-	history = dedupeRepeatedLargeToolResultSummaries(history)
-	memoryMessages, _, err := a.collectMemoryMessages(history)
-	if err != nil {
-		return tools.ContextInspection{}, err
-	}
-	agentProfile := agentProfileFromContext(ctx)
-	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
-	if err != nil {
-		return tools.ContextInspection{}, err
-	}
-	promptStateMessages := runtimePromptMessages(promptStateSections)
-	runtimeMessages, _ := a.collectRuntimeMessages()
-	allRuntimeMessages := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
-
-	toolSchemas := a.toolHandler.ActiveSchemas()
-	estimate := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, toolSchemas, a.cfg.CompressThreshold)
-	pendingCount := 0
-	if a.permissions != nil && strings.TrimSpace(sessionID) != "" {
-		pendingCount = len(a.permissions.ListPending(sessionID))
-	}
-	return tools.ContextInspection{
-		SessionID:                     strings.TrimSpace(sessionID),
-		MessageCount:                  len(history),
-		TokenEstimate:                 estimate.Breakdown.Total,
-		HistoryTokenEstimate:          estimate.Breakdown.History,
-		TotalTokenEstimate:            estimate.Breakdown.Total,
-		TokenBreakdown:                estimate.Breakdown,
-		PrefixCache:                   prefixCacheInspection(system, toolSchemas, history, promptStateSections, promptStateMessages),
-		CompressThreshold:             a.cfg.CompressThreshold,
-		SuggestCompact:                len(estimate.Reasons) > 0,
-		CompressionReasons:            append([]string{}, estimate.Reasons...),
-		ActiveSkillCount:              len(a.ActiveSkillNames()),
-		PendingPermissionCount:        pendingCount,
-		LargeToolResultReferenceCount: estimate.LargeToolResultReferenceCount,
-		ToolResultReferences:          append([]tools.ToolResultReference{}, estimate.ToolResultReferences...),
-	}, nil
-}
-
-// CompactConversation manually compacts the persistent conversation history.
-func (a *Agent) CompactConversation() (string, error) {
-	system, err := a.buildRuntimeSystemPrompt()
-	if err != nil {
-		return "", err
-	}
-	history, _ := a.messageState()
-	if len(history) == 0 {
-		return "No messages to compress", nil
-	}
-
-	result, err := a.summarizer.SummarizeSession(context.Background(), compress.SessionSummaryRequest{
-		System:               system,
-		History:              protocol.CloneMessages(history),
-		RecentUserMessages:   recentPersistentUserMessages(history, 6),
-		ContinuationSnapshot: a.continuationSnapshot("", history),
-	})
-	if err != nil {
-		return "", err
-	}
-	compacted := result.Messages
-
-	a.storeCompactedMessages(compacted)
-
-	summary := "Conversation compressed."
-	if len(compacted) > 0 {
-		if text := protocol.MessageText(compacted[0]); text != "" {
-			summary = text
-		}
-	}
-	return summary, nil
-}
-
-// PendingPermissions returns session-scoped pending permission approvals.
-func (a *Agent) PendingPermissions(sessionID string) []tools.PendingPermission {
-	if a.permissions == nil {
-		return nil
-	}
-	return a.permissions.ListPending(sessionID)
-}
-
-// ApprovePendingPermission resolves a pending permission request.
-func (a *Agent) ApprovePendingPermission(sessionID, requestID string, scope tools.PermissionGrantScope) (tools.PermissionResolution, error) {
-	if a.permissions == nil {
-		return tools.PermissionResolution{}, fmt.Errorf("permission manager unavailable")
-	}
-	return a.permissions.ApprovePending(sessionID, requestID, scope)
-}
-
-// DenyPendingPermission resolves a pending permission request with denial.
-func (a *Agent) DenyPendingPermission(sessionID, requestID, reason string) (tools.PermissionResolution, error) {
-	if a.permissions == nil {
-		return tools.PermissionResolution{}, fmt.Errorf("permission manager unavailable")
-	}
-	return a.permissions.DenyPending(sessionID, requestID, reason)
 }
 
 func (a *Agent) registerSubagentTool(handler *tools.ToolHandler) {
@@ -962,18 +823,6 @@ func (a *Agent) runScopedSubagent(ctx context.Context, prompt, basePrompt string
 	}.Run(ctx)
 }
 
-func (a *Agent) reviewPermissionRequest(ctx context.Context, req tools.PermissionRequest) (tools.PermissionResult, error) {
-	prompt := buildPermissionReviewPrompt(req)
-	result, err := a.runScopedSubagent(ctx, prompt, "You are a security review subagent. Review one protected tool call from a remote session. You may use read_file when file context matters. Be conservative. Reply with exactly one line beginning with ALLOW:, DENY:, or MANUAL: followed by a short reason.", []string{"read_file"}, 8)
-	if err != nil && !errors.Is(err, conversation.ErrMaxTurnsReached) {
-		return tools.PermissionResult{}, err
-	}
-	if result == nil {
-		return tools.PermissionResult{}, fmt.Errorf("permission review returned no result")
-	}
-	return parsePermissionReviewResult(result.LastAssistantText), nil
-}
-
 func buildPermissionReviewPrompt(req tools.PermissionRequest) string {
 	lines := []string{
 		"Review this protected tool call from a remote session.",
@@ -1067,79 +916,6 @@ func (a *Agent) executeSubagentTool(ctx context.Context, name string, input map[
 // Run runs the agent loop.
 func (a *Agent) Run(ctx context.Context) error {
 	return a.RunWithOptions(ctx, RunOptions{})
-}
-
-func (a *Agent) captureMemoryCandidates() error {
-	if a.memoryExt == nil {
-		return nil
-	}
-	messages, _ := a.messageState()
-	_, err := a.memoryExt.Capture(messages)
-	return err
-}
-
-// CaptureInsightMemoryCandidates stores durable memory suggestions derived from an insights report.
-func (a *Agent) CaptureInsightMemoryCandidates(report *insights.Report) error {
-	if a.memoryExt == nil {
-		return nil
-	}
-	_, err := a.memoryExt.CaptureInsightsReport(report)
-	return err
-}
-
-// CaptureTimelineMemoryCandidates stores durable memory suggestions derived from runtime timeline events.
-func (a *Agent) CaptureTimelineMemoryCandidates(items []events.Event) error {
-	if a.memoryExt == nil {
-		return nil
-	}
-	_, err := a.memoryExt.CaptureTimeline(items)
-	return err
-}
-
-func (a *Agent) storeCompactedMessages(messages []protocol.Message) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.messages = protocol.CloneMessages(messages)
-	a.transcriptRefs = mergeTranscriptRefs(a.transcriptRefs, extractTranscriptRefs(messages))
-	a.historyVersion++
-	a.lastCompactedVersion = a.historyVersion
-}
-
-func (a *Agent) maybeAutoCompact(ctx context.Context, history []protocol.Message, version int64, system string, estimate contextBudgetEstimate) ([]protocol.Message, bool, error) {
-	if !shouldAutoCompact(estimate, a.cfg.CompressThreshold) {
-		return history, false, nil
-	}
-
-	a.mu.Lock()
-	if a.lastCompactedVersion == version {
-		current := protocol.CloneMessages(a.messages)
-		a.mu.Unlock()
-		return current, false, nil
-	}
-	a.mu.Unlock()
-
-	result, err := a.summarizer.SummarizeSession(ctx, compress.SessionSummaryRequest{
-		System:               system,
-		History:              protocol.CloneMessages(history),
-		TokenBreakdown:       tokenBreakdownMap(estimate.Breakdown),
-		RecentUserMessages:   recentPersistentUserMessages(history, 6),
-		ContinuationSnapshot: a.continuationSnapshot(tools.SessionContextFromContext(ctx).SessionID, history),
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	compacted := result.Messages
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.historyVersion != version {
-		return protocol.CloneMessages(a.messages), false, nil
-	}
-	a.messages = protocol.CloneMessages(compacted)
-	a.transcriptRefs = mergeTranscriptRefs(a.transcriptRefs, extractTranscriptRefs(compacted))
-	a.historyVersion++
-	a.lastCompactedVersion = a.historyVersion
-	return protocol.CloneMessages(a.messages), true, nil
 }
 
 func extractTranscriptRefs(messages []protocol.Message) []string {

@@ -27,6 +27,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/services/commands"
+	"github.com/tim5wang/godex/internal/sessiongraph"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -1155,6 +1156,108 @@ func TestForkSessionCopiesTranscriptAndBranchMetadata(t *testing.T) {
 	}
 	if got := protocol.MessageText(snapshot.Messages[0]); got != "hello" {
 		t.Fatalf("expected forked user message, got %q", got)
+	}
+	sourceGraph := readTestSessionGraph(t, service, opened.SessionID)
+	if _, ok := sourceGraph.Head(sessiongraph.BranchID("branch:" + forked.SessionID)); !ok {
+		t.Fatalf("expected source graph to include fork branch for %s, got %+v", forked.SessionID, sourceGraph.Branches)
+	}
+	forkGraph := readTestSessionGraph(t, service, forked.SessionID)
+	if head, ok := forkGraph.Head(sessiongraph.MainBranchID); !ok || head.Head == "" {
+		t.Fatalf("expected fork graph main branch head, got %+v ok=%v", head, ok)
+	}
+}
+
+func TestOpenLegacySessionInitializesSessionGraph(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	locator := SessionLocator{Channel: "web", Key: "legacy-graph"}
+	sessionID := stableSessionID(normalizeLocator(service.withDefaultLocatorMetadata(locator)))
+	dir := filepath.Join(cfg.SessionsDir, sessionID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	stateData := mustJSON(t, agent.SessionState{Messages: []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "legacy")}})
+	manifest := SessionManifest{
+		SessionID:      sessionID,
+		Locator:        normalizeLocator(service.withDefaultLocatorMetadata(locator)),
+		StateDigest:    stateDigest(stateData),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+		LastActivityAt: time.Now(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifestFileName), mustJSON(t, manifest), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), stateData, 0644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	opened, err := service.OpenSession(context.Background(), locator)
+	if err != nil {
+		t.Fatalf("open legacy session: %v", err)
+	}
+	graph := readTestSessionGraph(t, service, opened.SessionID)
+	if head, ok := graph.Head(sessiongraph.MainBranchID); !ok || head.BranchID != sessiongraph.MainBranchID {
+		t.Fatalf("expected initialized main branch, got %+v ok=%v", head, ok)
+	}
+}
+
+func TestOpenSessionIgnoresMalformedGraphMetadata(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	locator := SessionLocator{Channel: "web", Key: "bad-graph"}
+	normalized := normalizeLocator(service.withDefaultLocatorMetadata(locator))
+	sessionID := stableSessionID(normalized)
+	dir := filepath.Join(cfg.SessionsDir, sessionID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	stateData := mustJSON(t, agent.SessionState{Messages: []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "legacy")}})
+	manifest := SessionManifest{
+		SessionID:      sessionID,
+		Locator:        normalized,
+		StateDigest:    stateDigest(stateData),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+		LastActivityAt: time.Now(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifestFileName), mustJSON(t, manifest), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), stateData, 0644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, sessionGraphFileName), []byte("{bad json"), 0644); err != nil {
+		t.Fatalf("write bad graph: %v", err)
+	}
+	if _, err := service.OpenSession(context.Background(), locator); err != nil {
+		t.Fatalf("open session with malformed graph metadata: %v", err)
+	}
+}
+
+func TestPersistSessionAdvancesSessionGraphCheckpoint(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "graph-checkpoint"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	session, err := service.requireSession(opened.SessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+	session.agent.AddEnvelope(message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "hello graph", time.Now()))
+	if err := service.persistSession(session, time.Now()); err != nil {
+		t.Fatalf("persist session: %v", err)
+	}
+	graph := readTestSessionGraph(t, service, opened.SessionID)
+	head, ok := graph.Head(sessiongraph.MainBranchID)
+	if !ok || head.Head == "" {
+		t.Fatalf("expected main branch head after persist, got %+v ok=%v", head, ok)
+	}
+	node := graph.NodeSet[head.Head]
+	if node.Checkpoint == nil || strings.TrimSpace(node.Checkpoint.CheckpointID) == "" {
+		t.Fatalf("expected checkpoint node metadata, got %+v", node)
 	}
 }
 
@@ -2536,7 +2639,7 @@ func TestWriteSessionCheckpointPrunesAndOmitsTimeline(t *testing.T) {
 	manifest := SessionManifest{SessionID: sessionID, StateDigest: stateDigest(stateData)}
 	for i := 0; i < 4; i++ {
 		at := time.Date(2026, 1, 1, 0, i, 0, 0, time.UTC)
-		if err := service.writeSessionCheckpoint(sessionID, manifest, stateData, []events.Event{{SessionID: sessionID, Type: events.EventUserMessageAccepted}}, nil, nil, at); err != nil {
+		if _, err := service.writeSessionCheckpoint(sessionID, manifest, stateData, []events.Event{{SessionID: sessionID, Type: events.EventUserMessageAccepted}}, nil, nil, at); err != nil {
 			t.Fatalf("write checkpoint %d: %v", i, err)
 		}
 	}
@@ -2597,6 +2700,15 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatalf("marshal json: %v", err)
 	}
 	return data
+}
+
+func readTestSessionGraph(t *testing.T, service *Service, sessionID string) *sessiongraph.SessionGraph {
+	t.Helper()
+	graph, err := sessiongraph.NewStore(service.sessionGraphPath(sessionID)).Load()
+	if err != nil {
+		t.Fatalf("read session graph: %v", err)
+	}
+	return graph
 }
 
 func apiMessagesText(messages []protocol.APIMessage) string {

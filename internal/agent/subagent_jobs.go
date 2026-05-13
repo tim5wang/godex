@@ -73,6 +73,11 @@ const (
 
 const subagentDiffPreviewLimit = 48 * 1024
 
+const (
+	subagentSessionGraphBranchMetadataKey = "session_graph_branch_id"
+	subagentSessionGraphNodeMetadataKey   = "session_graph_node_id"
+)
+
 // ErrDurableSubagentNotFound indicates a requested durable subagent is absent
 // or does not belong to the requested session.
 var ErrDurableSubagentNotFound = errors.New("durable subagent job not found")
@@ -112,6 +117,9 @@ type subagentJob struct {
 	ToolPolicy      []string                  `json:"tool_policy,omitempty"`
 	WorkerID        string                    `json:"worker_id,omitempty"`
 	SandboxID       string                    `json:"sandbox_id,omitempty"`
+	SourceBranchID  string                    `json:"source_branch_id,omitempty"`
+	SourceNodeID    string                    `json:"source_node_id,omitempty"`
+	WorkerBranchID  string                    `json:"worker_branch_id,omitempty"`
 	WorktreeDir     string                    `json:"worktree_dir,omitempty"`
 	BaselineDir     string                    `json:"baseline_dir,omitempty"`
 	PreviewJobIDs   []string                  `json:"preview_job_ids,omitempty"`
@@ -251,6 +259,9 @@ type DurableSubagentJobView struct {
 	ToolNames         []string                      `json:"tool_names,omitempty"`
 	WorkerID          string                        `json:"worker_id,omitempty"`
 	SandboxID         string                        `json:"sandbox_id,omitempty"`
+	SourceBranchID    string                        `json:"source_branch_id,omitempty"`
+	SourceNodeID      string                        `json:"source_node_id,omitempty"`
+	WorkerBranchID    string                        `json:"worker_branch_id,omitempty"`
 	WorktreeDir       string                        `json:"worktree_dir,omitempty"`
 	Isolation         string                        `json:"isolation,omitempty"`
 	WorkspaceOrigin   string                        `json:"workspace_origin,omitempty"`
@@ -539,6 +550,8 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 		ToolPolicy:      normalizeWorkflowStrings(opts.ToolPolicy),
 		WorkerID:        firstNonEmpty(strings.TrimSpace(opts.WorkerID), localGoDexWorkerID),
 		SandboxID:       strings.TrimSpace(opts.SandboxID),
+		SourceBranchID:  strings.TrimSpace(opts.RuntimeContext.Metadata[subagentSessionGraphBranchMetadataKey]),
+		SourceNodeID:    strings.TrimSpace(opts.RuntimeContext.Metadata[subagentSessionGraphNodeMetadataKey]),
 		Isolation:       subagentIsolationSnapshot,
 		WorkspaceOrigin: "snapshot",
 		CleanupState:    subagentCleanupPending,
@@ -550,6 +563,12 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 		CreatedAt:       now,
 		UpdatedAt:       now,
 		StartedAt:       now,
+	}
+	if job.SourceBranchID == "" && job.SourceNodeID != "" {
+		job.SourceBranchID = "branch:main"
+	}
+	if job.SourceBranchID != "" || job.SourceNodeID != "" {
+		job.WorkerBranchID = firstNonEmpty(strings.TrimSpace(opts.RuntimeContext.Metadata["worker_branch_id"]), "branch:"+job.ID)
 	}
 	job.Identity = NewAgentIdentity(now, job.SessionID, "subagent", subagentIdentityName(job), firstNonEmpty(job.RoleID, job.AgentType), opts.ParentID, "durable_subagent", opts.Capabilities)
 	job.Identity.ModelHint = strings.TrimSpace(opts.ModelHint)
@@ -2339,6 +2358,9 @@ func durableSubagentJobView(job *subagentJob) DurableSubagentJobView {
 		ToolNames:         append([]string{}, job.ToolNames...),
 		WorkerID:          firstNonEmpty(job.WorkerID, localGoDexWorkerID),
 		SandboxID:         job.SandboxID,
+		SourceBranchID:    job.SourceBranchID,
+		SourceNodeID:      job.SourceNodeID,
+		WorkerBranchID:    job.WorkerBranchID,
 		WorktreeDir:       job.WorktreeDir,
 		Isolation:         job.Isolation,
 		WorkspaceOrigin:   job.WorkspaceOrigin,
@@ -3570,6 +3592,9 @@ func (t subagentEventTarget) emit(job *subagentJob, phase, message, toolID, tool
 			DisplayTitle:      displayTitle,
 			IdentityID:        job.Identity.ID,
 			WorkerID:          firstNonEmpty(job.WorkerID, localGoDexWorkerID),
+			SourceBranchID:    job.SourceBranchID,
+			SourceNodeID:      job.SourceNodeID,
+			WorkerBranchID:    job.WorkerBranchID,
 			AgentType:         job.AgentType,
 			RoleID:            job.RoleID,
 			RoleName:          job.RoleName,

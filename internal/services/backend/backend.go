@@ -39,24 +39,28 @@ import (
 	"github.com/tim5wang/godex/internal/platform/stringutil"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/sessionrepair"
+	"github.com/tim5wang/godex/internal/sessiongraph"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
 const (
-	manifestFileName             = "manifest.json"
-	stateFileName                = "state.json"
-	timelineFileName             = "timeline.json"
-	eventJournalFileName         = "events.jsonl"
-	turnsFileName                = "turns.json"
-	turnQueueFileName            = "turn_queue.json"
-	checkpointPointerName        = "checkpoint.json"
-	checkpointsDirName           = "checkpoints"
-	securityAuditFileName        = "security/audit.jsonl"
-	attachmentsDir               = "attachments"
-	snapshotTimelineLimit        = 80
-	snapshotTurnLimit            = 20
-	persistedTurnLimit           = 200
-	sessionProjectDirMetadataKey = "project_dir"
+	manifestFileName              = "manifest.json"
+	stateFileName                 = "state.json"
+	timelineFileName              = "timeline.json"
+	eventJournalFileName          = "events.jsonl"
+	turnsFileName                 = "turns.json"
+	turnQueueFileName             = "turn_queue.json"
+	sessionGraphFileName          = "graph.json"
+	checkpointPointerName         = "checkpoint.json"
+	checkpointsDirName            = "checkpoints"
+	securityAuditFileName         = "security/audit.jsonl"
+	attachmentsDir                = "attachments"
+	snapshotTimelineLimit         = 80
+	snapshotTurnLimit             = 20
+	persistedTurnLimit            = 200
+	sessionProjectDirMetadataKey  = "project_dir"
+	sessionGraphBranchMetadataKey = "session_graph_branch_id"
+	sessionGraphNodeMetadataKey   = "session_graph_node_id"
 )
 
 var maxAttachmentBytes int64 = 128 << 20
@@ -327,6 +331,7 @@ type sessionState struct {
 	forkedFromMessageIndex *int
 	branchTitle            string
 	identity               agent.AgentIdentity
+	graph                  *sessiongraph.SessionGraph
 	turnCounter            uint64
 
 	mu       sync.RWMutex
@@ -699,13 +704,16 @@ func (s *Service) ForkSession(ctx context.Context, sessionID string, req ForkReq
 		createdAt:              now,
 		updatedAt:              now,
 		lastActive:             now,
+		graph:                  &sessiongraph.SessionGraph{},
 		timeline:               events.NewRecorder(200),
 	}
+	fork.graph.EnsureMainBranch()
 	fork.gate <- struct{}{}
 	fork.events.Attach(persistentTimelineSink{service: s, session: fork})
 	if err := s.persistSession(fork, now); err != nil {
 		return nil, err
 	}
+	_ = s.cloneSessionGraphBranch(source, sessiongraph.MainBranchID, sessiongraph.BranchID("branch:"+newID), "")
 	s.appendSecurityEvent(security.SecurityEvent{
 		At:        now,
 		Category:  "knowledge",
@@ -1152,6 +1160,7 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	now := s.now()
 	turnID := session.nextTurnID(now)
 	runtimeCtx := s.buildRuntimeContext(sessionID, session.locator, envelope)
+	attachSessionGraphContext(session, &runtimeCtx)
 	runtimeCtx.ProjectLedger = s.compactProjectLedgerForSession(sessionID)
 	priorMessageCount := len(session.agent.GetMessages())
 	if envelope.Timestamp.IsZero() {
@@ -3020,6 +3029,10 @@ func (s *Service) MergeSubagent(ctx context.Context, sessionID, jobID string) (a
 	if err != nil {
 		return agent.DurableSubagentMergeView{}, err
 	}
+	job, jobErr := session.agent.GetDurableSubagent(sessionID, jobID)
+	if jobErr == nil {
+		_ = s.appendSessionGraphMerge(session, job, "merged durable subagent "+jobID)
+	}
 	updatedAt := s.now()
 	if err := s.persistSession(session, updatedAt); err != nil {
 		return agent.DurableSubagentMergeView{}, err
@@ -3895,6 +3908,11 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	if err != nil {
 		return nil, err
 	}
+	graph, err := s.loadSessionGraph(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	session.graph = graph
 	session.timeline.Seed(s.readSessionTimeline(sessionID))
 	session.seedTurns(s.readSessionTurns(sessionID))
 	session.seedQueue(s.readSessionQueue(sessionID))
@@ -3931,6 +3949,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	isNewSession := manifest == nil && state == nil
 	if !isNewSession {
 		a.RestoreStateForSession(sessionID, *state)
+		_ = s.writeSessionGraph(session)
 	} else {
 		a.LoadDefaultSkills()
 	}
@@ -3981,6 +4000,124 @@ func (s *Service) readSessionFiles(sessionID string) (*SessionManifest, *agent.S
 		return nil, nil, checkpointErr
 	}
 	return nil, nil, err
+}
+
+func (s *Service) sessionGraphPath(sessionID string) string {
+	return filepath.Join(s.sessionDir(sessionID), sessionGraphFileName)
+}
+
+func (s *Service) loadSessionGraph(sessionID string) (*sessiongraph.SessionGraph, error) {
+	store := sessiongraph.NewStore(s.sessionGraphPath(sessionID))
+	graph, err := store.Load()
+	if err != nil {
+		graph = &sessiongraph.SessionGraph{}
+	}
+	if graph == nil {
+		graph = &sessiongraph.SessionGraph{}
+	}
+	if _, ok := graph.Head(sessiongraph.MainBranchID); !ok {
+		graph.EnsureMainBranch()
+	}
+	return graph, nil
+}
+
+func (s *Service) writeSessionGraph(session *sessionState) error {
+	if session == nil {
+		return nil
+	}
+	session.mu.Lock()
+	if session.graph == nil {
+		session.graph = &sessiongraph.SessionGraph{}
+	}
+	session.graph.EnsureMainBranch()
+	graph := session.graph.Clone()
+	sessionID := session.id
+	session.mu.Unlock()
+	return sessiongraph.NewStore(s.sessionGraphPath(sessionID)).Save(graph)
+}
+
+func sessionGraphNodeID(prefix, id string) sessiongraph.NodeID {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = randomSuffix(8)
+	}
+	return sessiongraph.NodeID("node:" + strings.TrimSpace(prefix) + ":" + id)
+}
+
+func (s *Service) appendSessionGraphCheckpoint(session *sessionState, checkpointID, summary string) error {
+	if session == nil {
+		return nil
+	}
+	session.mu.Lock()
+	if session.graph == nil {
+		session.graph = &sessiongraph.SessionGraph{}
+	}
+	session.graph.EnsureMainBranch()
+	nodeID := sessionGraphNodeID("checkpoint", checkpointID)
+	if _, err := session.graph.AppendNode(sessiongraph.MainBranchID, nodeID, sessiongraph.CheckpointRecord{
+		CheckpointID: strings.TrimSpace(checkpointID),
+		Summary:      strings.TrimSpace(summary),
+	}); err != nil && !errors.Is(err, sessiongraph.ErrDuplicateID) {
+		session.mu.Unlock()
+		return err
+	}
+	session.mu.Unlock()
+	return s.writeSessionGraph(session)
+}
+
+func (s *Service) cloneSessionGraphBranch(session *sessionState, fromBranch, branchID sessiongraph.BranchID, sourceNode sessiongraph.NodeID) error {
+	if session == nil || branchID == "" {
+		return nil
+	}
+	if fromBranch == "" {
+		fromBranch = sessiongraph.MainBranchID
+	}
+	session.mu.Lock()
+	if session.graph == nil {
+		session.graph = &sessiongraph.SessionGraph{}
+	}
+	session.graph.EnsureMainBranch()
+	if _, ok := session.graph.Head(branchID); !ok {
+		if _, err := session.graph.CloneBranch(fromBranch, branchID); err != nil && !errors.Is(err, sessiongraph.ErrBranchExists) {
+			session.mu.Unlock()
+			return err
+		}
+	}
+	if sourceNode != "" {
+		if _, err := session.graph.RollbackBranch(branchID, sourceNode); err != nil && !errors.Is(err, sessiongraph.ErrNotFound) {
+			session.mu.Unlock()
+			return err
+		}
+	}
+	session.mu.Unlock()
+	return s.writeSessionGraph(session)
+}
+
+func (s *Service) appendSessionGraphMerge(session *sessionState, job agent.DurableSubagentJobView, summary string) error {
+	workerBranch := sessiongraph.BranchID(firstNonEmpty(strings.TrimSpace(job.WorkerBranchID), strings.TrimSpace(job.SourceBranchID)))
+	if session == nil || workerBranch == "" {
+		return nil
+	}
+	sourceBranch := sessiongraph.BranchID(firstNonEmpty(strings.TrimSpace(job.SourceBranchID), string(sessiongraph.MainBranchID)))
+	sourceNode := sessiongraph.NodeID(strings.TrimSpace(job.SourceNodeID))
+	if err := s.cloneSessionGraphBranch(session, sourceBranch, workerBranch, sourceNode); err != nil {
+		return err
+	}
+	session.mu.Lock()
+	if session.graph == nil {
+		session.graph = &sessiongraph.SessionGraph{}
+	}
+	session.graph.EnsureMainBranch()
+	nodeID := sessionGraphNodeID("merge", firstNonEmpty(job.JobID, randomSuffix(8)))
+	if _, err := session.graph.MergeBranch(sessiongraph.MainBranchID, workerBranch, nodeID, sessiongraph.MergeRecord{
+		MergeID: strings.TrimSpace(job.JobID),
+		Summary: strings.TrimSpace(summary),
+	}); err != nil && !errors.Is(err, sessiongraph.ErrDuplicateID) {
+		session.mu.Unlock()
+		return err
+	}
+	session.mu.Unlock()
+	return s.writeSessionGraph(session)
 }
 
 func (s *Service) legacySessionFilesNewerThanCheckpoint(sessionID string) bool {
@@ -4433,7 +4570,8 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 	timeline := session.timeline.Entries(0)
 	turns := session.turnRecords(0)
 	queue := session.queuedTurns(0)
-	if err := s.writeSessionCheckpoint(session.id, manifest, stateData, timeline, turns, queue, updatedAt); err != nil {
+	checkpointID, err := s.writeSessionCheckpoint(session.id, manifest, stateData, timeline, turns, queue, updatedAt)
+	if err != nil {
 		return err
 	}
 	_ = fsutil.WriteFileAtomic(filepath.Join(dir, stateFileName), stateData, 0644)
@@ -4441,10 +4579,11 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 	_ = fsutil.WriteJSONAtomic(filepath.Join(dir, timelineFileName), timeline, 0644)
 	_ = fsutil.WriteJSONAtomic(filepath.Join(dir, turnsFileName), turns, 0644)
 	_ = fsutil.WriteJSONAtomic(filepath.Join(dir, turnQueueFileName), queue, 0644)
+	_ = s.appendSessionGraphCheckpoint(session, checkpointID, session.title)
 	return nil
 }
 
-func (s *Service) writeSessionCheckpoint(sessionID string, manifest SessionManifest, stateData []byte, timeline []events.Event, turns []TurnRecord, queue []QueuedTurn, at time.Time) error {
+func (s *Service) writeSessionCheckpoint(sessionID string, manifest SessionManifest, stateData []byte, timeline []events.Event, turns []TurnRecord, queue []QueuedTurn, at time.Time) (string, error) {
 	_ = timeline
 	suffix := randomSuffix(4)
 	if suffix == "" {
@@ -4453,23 +4592,23 @@ func (s *Service) writeSessionCheckpoint(sessionID string, manifest SessionManif
 	checkpointID := at.UTC().Format("20060102T150405.000000000Z") + "-" + suffix
 	checkpointDir := filepath.Join(s.sessionDir(sessionID), checkpointsDirName, checkpointID)
 	if err := os.MkdirAll(checkpointDir, 0755); err != nil {
-		return err
+		return "", err
 	}
 	if err := fsutil.WriteFileAtomic(filepath.Join(checkpointDir, stateFileName), stateData, 0644); err != nil {
-		return err
+		return "", err
 	}
 	if err := fsutil.WriteJSONAtomic(filepath.Join(checkpointDir, manifestFileName), manifest, 0644); err != nil {
-		return err
+		return "", err
 	}
 	if err := fsutil.WriteJSONAtomic(filepath.Join(checkpointDir, turnsFileName), turns, 0644); err != nil {
-		return err
+		return "", err
 	}
 	if err := fsutil.WriteJSONAtomic(filepath.Join(checkpointDir, turnQueueFileName), queue, 0644); err != nil {
-		return err
+		return "", err
 	}
 	pointer := sessionCheckpointPointer{Current: checkpointID, CreatedAt: at}
 	if err := fsutil.WriteJSONAtomic(filepath.Join(s.sessionDir(sessionID), checkpointPointerName), pointer, 0644); err != nil {
-		return err
+		return "", err
 	}
 	if s.cfg != nil && s.cfg.Storage.SessionCheckpointAutoPrune {
 		_, err := storagegc.CleanSessionCheckpoints(storagegc.Options{
@@ -4478,9 +4617,9 @@ func (s *Service) writeSessionCheckpoint(sessionID string, manifest SessionManif
 			SessionCheckpointTTL:        time.Duration(s.cfg.Storage.SessionCheckpointTTLHours) * time.Hour,
 			Now:                         at,
 		})
-		return err
+		return checkpointID, err
 	}
-	return nil
+	return checkpointID, nil
 }
 
 func (s *Service) writeManifest(manifest SessionManifest) error {
@@ -5723,6 +5862,31 @@ func (s *Service) buildRuntimeContext(sessionID string, locator SessionLocator, 
 	}
 	ctx.DefaultDelivery = defaultDeliveryTarget(sessionID, locator, envelope)
 	return ctx
+}
+
+func attachSessionGraphContext(session *sessionState, ctx *automation.SessionContext) {
+	if session == nil || ctx == nil {
+		return
+	}
+	session.mu.RLock()
+	graph := session.graph
+	if graph == nil {
+		session.mu.RUnlock()
+		return
+	}
+	head, ok := graph.Head(sessiongraph.MainBranchID)
+	if !ok {
+		session.mu.RUnlock()
+		return
+	}
+	session.mu.RUnlock()
+	if ctx.Metadata == nil {
+		ctx.Metadata = map[string]string{}
+	}
+	ctx.Metadata[sessionGraphBranchMetadataKey] = string(sessiongraph.MainBranchID)
+	if head.Head != "" {
+		ctx.Metadata[sessionGraphNodeMetadataKey] = string(head.Head)
+	}
 }
 
 func (s *Service) effectiveSecurityProfile() string {

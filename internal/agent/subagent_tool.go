@@ -57,28 +57,31 @@ type subagentLogsView struct {
 }
 
 type subagentModelJobView struct {
-	JobID         string    `json:"job_id"`
-	SessionID     string    `json:"session_id,omitempty"`
-	ParentTurnID  string    `json:"parent_turn_id,omitempty"`
-	IdentityID    string    `json:"identity_id,omitempty"`
-	WorkerID      string    `json:"worker_id,omitempty"`
-	AgentType     string    `json:"agent_type,omitempty"`
-	RoleID        string    `json:"role_id,omitempty"`
-	RoleName      string    `json:"role_name,omitempty"`
-	SandboxID     string    `json:"sandbox_id,omitempty"`
-	Status        string    `json:"status,omitempty"`
-	Error         string    `json:"error,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	FinishedAt    time.Time `json:"finished_at,omitempty"`
-	MergeStatus   string    `json:"merge_status,omitempty"`
-	LastPhase     string    `json:"last_phase,omitempty"`
-	LastMessage   string    `json:"last_message,omitempty"`
-	LastToolName  string    `json:"last_tool_name,omitempty"`
-	ProgressCount int       `json:"progress_count"`
-	ResultPreview string    `json:"result_preview,omitempty"`
-	ResultBytes   int       `json:"result_bytes,omitempty"`
-	ResultDigest  string    `json:"result_digest,omitempty"`
+	JobID          string    `json:"job_id"`
+	SessionID      string    `json:"session_id,omitempty"`
+	ParentTurnID   string    `json:"parent_turn_id,omitempty"`
+	IdentityID     string    `json:"identity_id,omitempty"`
+	WorkerID       string    `json:"worker_id,omitempty"`
+	SourceBranchID string    `json:"source_branch_id,omitempty"`
+	SourceNodeID   string    `json:"source_node_id,omitempty"`
+	WorkerBranchID string    `json:"worker_branch_id,omitempty"`
+	AgentType      string    `json:"agent_type,omitempty"`
+	RoleID         string    `json:"role_id,omitempty"`
+	RoleName       string    `json:"role_name,omitempty"`
+	SandboxID      string    `json:"sandbox_id,omitempty"`
+	Status         string    `json:"status,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	FinishedAt     time.Time `json:"finished_at,omitempty"`
+	MergeStatus    string    `json:"merge_status,omitempty"`
+	LastPhase      string    `json:"last_phase,omitempty"`
+	LastMessage    string    `json:"last_message,omitempty"`
+	LastToolName   string    `json:"last_tool_name,omitempty"`
+	ProgressCount  int       `json:"progress_count"`
+	ResultPreview  string    `json:"result_preview,omitempty"`
+	ResultBytes    int       `json:"result_bytes,omitempty"`
+	ResultDigest   string    `json:"result_digest,omitempty"`
 }
 
 type subagentBatchView struct {
@@ -347,22 +350,25 @@ func formatSubagentModelJob(job *subagentJob) subagentModelJobView {
 	}
 	progress := durableSubagentProgressViews(job.Progress)
 	view := subagentModelJobView{
-		JobID:         job.ID,
-		SessionID:     job.SessionID,
-		ParentTurnID:  job.ParentTurnID,
-		IdentityID:    job.Identity.ID,
-		WorkerID:      firstNonEmpty(job.WorkerID, localGoDexWorkerID),
-		AgentType:     job.AgentType,
-		RoleID:        job.RoleID,
-		RoleName:      job.RoleName,
-		SandboxID:     job.SandboxID,
-		Status:        string(job.Status),
-		Error:         job.Error,
-		CreatedAt:     job.CreatedAt,
-		UpdatedAt:     job.UpdatedAt,
-		FinishedAt:    job.FinishedAt,
-		MergeStatus:   job.MergeStatus,
-		ProgressCount: len(job.Progress),
+		JobID:          job.ID,
+		SessionID:      job.SessionID,
+		ParentTurnID:   job.ParentTurnID,
+		IdentityID:     job.Identity.ID,
+		WorkerID:       firstNonEmpty(job.WorkerID, localGoDexWorkerID),
+		SourceBranchID: job.SourceBranchID,
+		SourceNodeID:   job.SourceNodeID,
+		WorkerBranchID: job.WorkerBranchID,
+		AgentType:      job.AgentType,
+		RoleID:         job.RoleID,
+		RoleName:       job.RoleName,
+		SandboxID:      job.SandboxID,
+		Status:         string(job.Status),
+		Error:          job.Error,
+		CreatedAt:      job.CreatedAt,
+		UpdatedAt:      job.UpdatedAt,
+		FinishedAt:     job.FinishedAt,
+		MergeStatus:    job.MergeStatus,
+		ProgressCount:  len(job.Progress),
 	}
 	if len(progress) > 0 {
 		latest := progress[len(progress)-1]
@@ -676,29 +682,32 @@ func formatSubagentJob(job *subagentJob, includeMessages bool) map[string]interf
 		return map[string]interface{}{}
 	}
 	out := map[string]interface{}{
-		"job_id":          job.ID,
-		"session_id":      job.SessionID,
-		"parent_turn_id":  job.ParentTurnID,
-		"agent_type":      job.AgentType,
-		"role_id":         job.RoleID,
-		"role_name":       job.RoleName,
-		"package_name":    job.PackageName,
-		"status":          job.Status,
-		"result":          job.Result,
-		"error":           job.Error,
-		"created_at":      job.CreatedAt,
-		"updated_at":      job.UpdatedAt,
-		"started_at":      job.StartedAt,
-		"finished_at":     job.FinishedAt,
-		"write_scope":     append([]string{}, job.WriteScope...),
-		"default_bundles": append([]string{}, job.DefaultBundles...),
-		"tool_names":      append([]string{}, job.ToolNames...),
-		"worker_id":       firstNonEmpty(job.WorkerID, localGoDexWorkerID),
-		"sandbox_id":      job.SandboxID,
-		"worktree_dir":    job.WorktreeDir,
-		"isolation":       job.Isolation,
-		"merge_status":    job.MergeStatus,
-		"merged_at":       job.MergedAt,
+		"job_id":           job.ID,
+		"session_id":       job.SessionID,
+		"parent_turn_id":   job.ParentTurnID,
+		"agent_type":       job.AgentType,
+		"role_id":          job.RoleID,
+		"role_name":        job.RoleName,
+		"package_name":     job.PackageName,
+		"status":           job.Status,
+		"result":           job.Result,
+		"error":            job.Error,
+		"created_at":       job.CreatedAt,
+		"updated_at":       job.UpdatedAt,
+		"started_at":       job.StartedAt,
+		"finished_at":      job.FinishedAt,
+		"write_scope":      append([]string{}, job.WriteScope...),
+		"default_bundles":  append([]string{}, job.DefaultBundles...),
+		"tool_names":       append([]string{}, job.ToolNames...),
+		"worker_id":        firstNonEmpty(job.WorkerID, localGoDexWorkerID),
+		"sandbox_id":       job.SandboxID,
+		"source_branch_id": job.SourceBranchID,
+		"source_node_id":   job.SourceNodeID,
+		"worker_branch_id": job.WorkerBranchID,
+		"worktree_dir":     job.WorktreeDir,
+		"isolation":        job.Isolation,
+		"merge_status":     job.MergeStatus,
+		"merged_at":        job.MergedAt,
 	}
 	out["progress"] = cloneSubagentProgress(job.Progress)
 	return out

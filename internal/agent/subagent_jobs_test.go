@@ -187,6 +187,68 @@ func TestDurableSubagentExposesWorkerID(t *testing.T) {
 	}
 }
 
+func TestDurableSubagentPersistsSessionGraphSource(t *testing.T) {
+	store := newSubagentJobStore(filepath.Join(t.TempDir(), "subagents"))
+	job, err := store.StartWithOptions(subagentStartOptions{
+		SessionID:  "session-graph",
+		AgentType:  "general-purpose",
+		Prompt:     "inspect graph branch",
+		ToolNames:  []string{"todo_read"},
+		MaxTurns:   1,
+		WorkerID:   localGoDexWorkerID,
+		SandboxID:  "sandbox:local:test",
+		ParentID:   "turn-graph",
+		BasePrompt: "base",
+		RuntimeContext: automation.SessionContext{Metadata: map[string]string{
+			subagentSessionGraphBranchMetadataKey: "branch:main",
+			subagentSessionGraphNodeMetadataKey:   "node:checkpoint:one",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("start subagent: %v", err)
+	}
+	if job.SourceBranchID != "branch:main" {
+		t.Fatalf("expected source branch to persist, got %q", job.SourceBranchID)
+	}
+	if !strings.HasPrefix(job.WorkerBranchID, "branch:"+job.ID) {
+		t.Fatalf("expected worker branch to derive from job id, got %q", job.WorkerBranchID)
+	}
+	if job.SourceNodeID != "node:checkpoint:one" {
+		t.Fatalf("expected source node to persist, got %q", job.SourceNodeID)
+	}
+	reloaded, err := store.Get(job.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	view := durableSubagentJobView(reloaded)
+	if view.SourceBranchID != job.SourceBranchID || view.SourceNodeID != job.SourceNodeID || view.WorkerBranchID != job.WorkerBranchID {
+		t.Fatalf("expected graph fields in view, got source=%q node=%q worker=%q", view.SourceBranchID, view.SourceNodeID, view.WorkerBranchID)
+	}
+	model := formatSubagentModelJob(reloaded)
+	if model.SourceBranchID != job.SourceBranchID || model.SourceNodeID != job.SourceNodeID || model.WorkerBranchID != job.WorkerBranchID {
+		t.Fatalf("expected graph fields in model view, got source=%q node=%q worker=%q", model.SourceBranchID, model.SourceNodeID, model.WorkerBranchID)
+	}
+}
+
+func TestDurableSubagentOmitsSessionGraphFieldsWithoutContext(t *testing.T) {
+	store := newSubagentJobStore(filepath.Join(t.TempDir(), "subagents"))
+	job, err := store.StartWithOptions(subagentStartOptions{
+		SessionID:  "session-no-graph",
+		AgentType:  "general-purpose",
+		Prompt:     "no graph context",
+		ToolNames:  []string{"todo_read"},
+		MaxTurns:   1,
+		WorkerID:   localGoDexWorkerID,
+		BasePrompt: "base",
+	})
+	if err != nil {
+		t.Fatalf("start subagent: %v", err)
+	}
+	if job.SourceBranchID != "" || job.SourceNodeID != "" || job.WorkerBranchID != "" {
+		t.Fatalf("expected graph fields to be empty without context, got source=%q node=%q worker=%q", job.SourceBranchID, job.SourceNodeID, job.WorkerBranchID)
+	}
+}
+
 func TestWorkerRuntimePreservesRequiredToolValidation(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()

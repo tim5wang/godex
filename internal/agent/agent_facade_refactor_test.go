@@ -39,13 +39,16 @@ func TestAgentRefactorKeepsSessionFacadeCopies(t *testing.T) {
 	if len(messages) != 1 {
 		t.Fatalf("expected one message, got %d", len(messages))
 	}
-	messages[0] = protocol.NewTextMessage(protocol.RoleUser, "changed")
+	if len(messages[0].Content) == 0 {
+		t.Fatalf("expected message content")
+	}
+	messages[0].Content[0].Text = "changed"
 	fresh := a.GetMessages()
 	if len(fresh) != 1 {
-		t.Fatalf("mutating returned slice must not mutate agent message count, got %d", len(fresh))
+		t.Fatalf("mutating returned message content must not mutate agent message count, got %d", len(fresh))
 	}
 	if got := protocol.MessageText(fresh[0]); got != "first" {
-		t.Fatalf("mutating returned slice must not mutate agent message text, got %q", got)
+		t.Fatalf("mutating returned message content must not mutate agent message text, got %q", got)
 	}
 }
 

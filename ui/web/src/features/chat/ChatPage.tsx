@@ -29,6 +29,10 @@ import { Composer, type ComposerSubmission } from "../../components/Composer";
 import { MessageFeed } from "../../components/MessageFeed";
 import { ResizeHandle } from "../../components/ResizeHandle";
 import { SubagentCard } from "../../components/SubagentCard";
+import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
+import { TaskCenterPanel } from "./TaskCenterPanel";
+import { buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview, type ReviewMergeFilter } from "./reviewMergeCenter";
+import { buildTaskOutcomes } from "./taskCenterOutcome";
 import { useI18n } from "../../i18n";
 import {
   APIError,
@@ -169,6 +173,11 @@ export function ChatPage() {
   const [timelineItems, setTimelineItems] = useState<SessionTimelineEntry[]>([]);
   const [subagentReview, setSubagentReview] = useState<DurableSubagentReview | null>(null);
   const [subagentReviewOpen, setSubagentReviewOpen] = useState(false);
+  const [reviewMergeOpen, setReviewMergeOpen] = useState(false);
+  const [reviewMergeFilter, setReviewMergeFilter] = useState<ReviewMergeFilter>("reviewable");
+  const [reviewMergeSelectedJobId, setReviewMergeSelectedJobId] = useState("");
+  const reviewSubagentTargetRef = useRef<"drawer" | "center">("drawer");
+  const reviewMergeAutoLoadJobRef = useRef("");
   const [channelFilter, setChannelFilter] = useState("all");
   const [queueMode, setQueueMode] = useState<"follow_up" | "steering">("follow_up");
   const [pendingModelProfileID, setPendingModelProfileID] = useState<string | null>(null);
@@ -176,6 +185,7 @@ export function ChatPage() {
   const [timelineFilters, setTimelineFilters] = useState<TimelineFilterState>(() => defaultTimelineFilters());
   const [timelineCursor, setTimelineCursor] = useState("");
   const [timelineCursorStack, setTimelineCursorStack] = useState<string[]>([]);
+  const [taskCenterCollapsed, setTaskCenterCollapsed] = useState(() => window.localStorage.getItem("godex.taskCenterCollapsed") === "1");
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const [sessionPaneWidth, beginSessionPaneResize] = useResizableWidth({
     storageKey: "godex.chatSessionsWidth",
@@ -268,6 +278,10 @@ export function ChatPage() {
       setSession(openQuery.data.session_id, sessionKey);
     }
   }, [openQuery.data, sessionKey, setSession]);
+
+  useEffect(() => {
+    window.localStorage.setItem("godex.taskCenterCollapsed", taskCenterCollapsed ? "1" : "0");
+  }, [taskCenterCollapsed]);
 
   const snapshotQuery = useQuery({
     queryKey: ["snapshot", token, openQuery.data?.session_id],
@@ -436,9 +450,26 @@ export function ChatPage() {
     () => mergeSubagentItems((subagentsQuery.data ?? []).map(subagentJobToFeedItem), collectSubagentJobs(timelineItems)),
     [subagentsQuery.data, timelineItems],
   );
+  const reviewMergeSummary = useMemo(
+    () => buildReviewMergeSummary(subagentJobs, { reviewedJobId: subagentReview?.job_id }),
+    [subagentJobs, subagentReview?.job_id],
+  );
   const pendingPermissions = snapshotQuery.data?.pending_permissions ?? [];
   const turnRecords = snapshotQuery.data?.turns ?? [];
   const queuedTurns = snapshotQuery.data?.queued_turns ?? [];
+  const taskOutcomes = useMemo(
+    () =>
+      buildTaskOutcomes({
+        longTasks: longTasksQuery.data ?? [],
+        subagents: subagentJobs,
+        pendingPermissions,
+        queuedTurns,
+        running: snapshotQuery.data?.running ?? running,
+        activeTurnId: snapshotQuery.data?.active_turn_id || currentTurnId,
+        activePhase: snapshotQuery.data?.active_phase,
+      }),
+    [currentTurnId, longTasksQuery.data, pendingPermissions, queuedTurns, running, snapshotQuery.data?.active_phase, snapshotQuery.data?.active_turn_id, snapshotQuery.data?.running, subagentJobs],
+  );
   const contextInspector = contextInspectorQuery.data ?? null;
   const contextStatus = useMemo(
     () => buildContextStatusSummary(contextInspector, timelineItems, subagentJobs),
@@ -699,7 +730,9 @@ export function ChatPage() {
     mutationFn: async (jobId: string) => reviewSessionSubagent(token || null, openQuery.data!.session_id, jobId),
     onSuccess: (review) => {
       setSubagentReview(review);
-      setSubagentReviewOpen(true);
+      if (reviewSubagentTargetRef.current === "drawer") {
+        setSubagentReviewOpen(true);
+      }
     },
     onError: (error) => {
       message.error(error instanceof APIError ? error.message : String(error));
@@ -773,6 +806,47 @@ export function ChatPage() {
       message.error(error instanceof APIError ? error.message : String(error));
     },
   });
+
+  const reviewSubagentInDrawer = (jobId: string) => {
+    reviewSubagentTargetRef.current = "drawer";
+    reviewSubagentMutation.mutate(jobId);
+  };
+
+  const reviewSubagentInCenter = (jobId: string) => {
+    setReviewMergeSelectedJobId(jobId);
+    reviewSubagentTargetRef.current = "center";
+    reviewSubagentMutation.mutate(jobId);
+  };
+
+  const openReviewMergeCenter = (jobId?: string) => {
+    setReviewMergeFilter("reviewable");
+    const selectedJobId = jobId || defaultReviewMergeJobId(reviewMergeSummary.items);
+    reviewMergeAutoLoadJobRef.current = "";
+    setReviewMergeSelectedJobId(selectedJobId);
+    setReviewMergeOpen(true);
+  };
+
+  useEffect(() => {
+    if (!reviewMergeOpen) {
+      return;
+    }
+    const selected = reviewMergeSummary.items.find((item) => item.jobId === reviewMergeSelectedJobId);
+    if (!selected) {
+      const nextJobId = defaultReviewMergeJobId(reviewMergeSummary.items);
+      if (nextJobId && nextJobId !== reviewMergeSelectedJobId) {
+        setReviewMergeSelectedJobId(nextJobId);
+      }
+      return;
+    }
+    if (
+      reviewMergeAutoLoadJobRef.current !== selected.jobId &&
+      shouldAutoLoadReview(selected, subagentReview?.job_id, reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined)
+    ) {
+      reviewMergeAutoLoadJobRef.current = selected.jobId;
+      reviewSubagentTargetRef.current = "center";
+      reviewSubagentMutation.mutate(selected.jobId);
+    }
+  }, [reviewMergeOpen, reviewMergeSelectedJobId, reviewMergeSummary.items, reviewSubagentMutation, subagentReview?.job_id]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -925,7 +999,7 @@ export function ChatPage() {
       cancelingSubagent={cancelSubagentMutation}
       resumingSubagent={resumeSubagentMutation}
       mergingSubagent={mergeSubagentMutation}
-      onReviewSubagent={(jobId) => reviewSubagentMutation.mutate(jobId)}
+      onReviewSubagent={reviewSubagentInDrawer}
       onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
       onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
       onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
@@ -1075,6 +1149,26 @@ export function ChatPage() {
           </div>
         ) : (
           <>
+            <TaskCenterPanel
+              outcomes={taskOutcomes}
+              collapsed={taskCenterCollapsed}
+              onCollapsedChange={setTaskCenterCollapsed}
+              reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
+              mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
+              resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
+              cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
+              runningWorkflowId={runLongTaskMutation.isPending ? runLongTaskMutation.variables : undefined}
+              cancelingLongTask={cancelLongTaskMutation.isPending ? cancelLongTaskMutation.variables : undefined}
+              finalizingLongTask={finalizeLongTaskMutation.isPending ? finalizeLongTaskMutation.variables : undefined}
+              onReviewSubagent={reviewSubagentInDrawer}
+              onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
+              onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
+              onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
+              onRunLongTask={(workflowId) => runLongTaskMutation.mutate(workflowId)}
+              onCancelLongTask={(workflowId, nodeId) => cancelLongTaskMutation.mutate({ workflowId, nodeId })}
+              onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
+              onOpenReviewMergeCenter={openReviewMergeCenter}
+            />
             <div ref={scrollerRef} className="chat-feed">
               <div className="chat-feed-inner">
                 <MessageFeed
@@ -1151,6 +1245,27 @@ export function ChatPage() {
       >
         <SubagentReviewPanel review={subagentReview} loading={reviewSubagentMutation.isPending} />
       </Drawer>
+      <ReviewMergeCenterPanel
+        open={reviewMergeOpen}
+        summary={reviewMergeSummary}
+        filter={reviewMergeFilter}
+        selectedJobId={reviewMergeSelectedJobId}
+        review={subagentReview}
+        reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
+        mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
+        resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
+        cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
+        onClose={() => setReviewMergeOpen(false)}
+        onFilterChange={setReviewMergeFilter}
+        onSelectJob={setReviewMergeSelectedJobId}
+        onReview={reviewSubagentInCenter}
+        onMerge={(jobId) => {
+          setReviewMergeSelectedJobId(jobId);
+          mergeSubagentMutation.mutate(jobId);
+        }}
+        onResume={(jobId) => resumeSubagentMutation.mutate(jobId)}
+        onCancel={(jobId) => cancelSubagentMutation.mutate(jobId)}
+      />
     </div>
   );
 }

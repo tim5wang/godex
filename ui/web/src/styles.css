@@ -542,6 +542,142 @@ samp {
   border-left: 0;
 }
 
+.task-center-band {
+  border-bottom: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+}
+
+.task-center-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.task-center-card .ant-card-head {
+  min-height: 40px;
+  padding: 0 16px;
+}
+
+.task-center-card .ant-card-body {
+  padding: 10px 16px 12px;
+}
+
+.task-center-band-collapsed .task-center-card .ant-card-body {
+  padding-top: 8px;
+}
+
+.task-center-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.task-center-section {
+  min-width: 0;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  padding: 10px;
+}
+
+.task-center-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.task-outcome-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel);
+  padding: 8px;
+}
+
+.task-outcome-row + .task-outcome-row {
+  margin-top: 8px;
+}
+
+.task-outcome-row-compact {
+  padding: 7px;
+}
+
+.task-outcome-main {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.task-outcome-actions {
+  min-width: max-content;
+}
+
+.review-merge-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+.review-merge-queue,
+.review-merge-detail {
+  min-width: 0;
+}
+
+.review-merge-filter {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.review-merge-queue .ant-list-item {
+  cursor: pointer;
+  border-radius: 6px;
+  padding-inline: 8px;
+}
+
+.review-merge-queue-item-selected {
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.review-merge-title {
+  max-width: 220px;
+}
+
+.review-merge-row-detail {
+  width: 100%;
+  min-width: 0;
+}
+
+.review-merge-file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.review-merge-safety-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-merge-diff {
+  max-height: 52vh;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 6px;
+  background: var(--godex-panel-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .chat-session-header {
   display: flex;
   min-width: 0;
@@ -1121,6 +1257,14 @@ samp {
 
   .chat-page .column-resize-handle {
     display: none;
+  }
+
+  .task-center-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-merge-layout {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .chat-mobile-action {

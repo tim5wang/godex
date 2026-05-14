@@ -35,11 +35,11 @@ The TUI should reuse existing backend APIs:
 
 The TUI remains keyboard-first:
 
-- `1`: Task Center
-- `2`: Workers
-- `3`: Graph
-- `4`: Diff
-- `5`: Logs
+- `Alt+1`: Task Center
+- `Alt+2`: Workers
+- `Alt+3`: Graph
+- `Alt+4`: Diff
+- `Alt+5`: Logs
 - Existing feed navigation, composer input, permission approval, and slash commands continue to work.
 
 The composer remains available at the bottom in every tab. This keeps the workbench commandable and avoids splitting the product into separate chat and task modes.

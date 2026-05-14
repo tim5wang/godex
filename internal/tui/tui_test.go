@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -362,6 +363,155 @@ func TestWorkbenchSummarySurfacesLongTasksSubagentsAndReviewState(t *testing.T) 
 	}
 }
 
+func TestWorkbenchSummaryReconcilesRecoveredLongTaskWithMergedWorker(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+	m.longTasks = []agent.LongTaskView{longTaskViewFromJSON(t, `{
+		"longtask_id": "lt_demo",
+		"workflow_id": "lt_demo",
+		"project": "godex",
+		"description": "Create docs/superpowers/tmp/tui-mvp-demo.md for the TUI MVP.",
+		"status": "error",
+		"total": 1,
+		"failed": 1,
+		"stories": [{
+			"id": "tui-mvp-demo-doc",
+			"title": "Create TUI MVP demo doc",
+			"description": "Write docs/superpowers/tmp/tui-mvp-demo.md",
+			"status": "error",
+			"verdict": "fail",
+			"error": "subagent_capability_required"
+		}]
+	}`)}
+	m.subagents = []agent.DurableSubagentJobView{{
+		JobID:        "subagent_demo",
+		DisplayTitle: "Create TUI MVP demo doc",
+		Objective:    "Create docs/superpowers/tmp/tui-mvp-demo.md as a short product-value document.",
+		Status:       "completed",
+		MergeStatus:  "merged",
+		Result:       "Created docs/superpowers/tmp/tui-mvp-demo.md.",
+		WriteScope:   []string{"docs/superpowers/tmp"},
+	}}
+
+	summary := m.buildWorkbenchSummary()
+	if !summaryContains(summary.Plan, "Merged") || !summaryContains(summary.Plan, "recovered from failed longtask lt_demo") {
+		t.Fatalf("expected recovered merged outcome, got %+v", summary.Plan)
+	}
+	if summaryContains(summary.Plan, "failed 1") {
+		t.Fatalf("expected recovered longtask failure to be hidden from unresolved plan failures, got %+v", summary.Plan)
+	}
+	if !summaryContains(summary.Review, "Merged") || !summaryContains(summary.Review, "subagent_demo") {
+		t.Fatalf("expected merged worker in review summary, got %+v", summary.Review)
+	}
+}
+
+func TestWorkbenchSummaryMatchesLongTaskStoryJobIDDirectly(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{})
+	m.longTasks = []agent.LongTaskView{longTaskViewFromJSON(t, `{
+		"longtask_id": "lt_direct",
+		"workflow_id": "lt_direct",
+		"project": "Direct Match",
+		"status": "error",
+		"failed": 1,
+		"stories": [{
+			"id": "story-1",
+			"title": "Story one",
+			"status": "error",
+			"job_id": "subagent_direct"
+		}]
+	}`)}
+	m.subagents = []agent.DurableSubagentJobView{{
+		JobID:       "subagent_direct",
+		Status:      "completed",
+		MergeStatus: "merged",
+	}}
+
+	summary := m.buildWorkbenchSummary()
+	if !summaryContains(summary.Plan, "Merged") || !summaryContains(summary.Plan, "lt_direct") {
+		t.Fatalf("expected direct job match to reconcile outcome, got %+v", summary.Plan)
+	}
+}
+
+func TestWorkbenchSummaryDoesNotMergeUnrelatedFailuresByGenericText(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{})
+	m.longTasks = []agent.LongTaskView{longTaskViewFromJSON(t, `{
+		"longtask_id": "lt_generic",
+		"workflow_id": "lt_generic",
+		"project": "Task Center",
+		"description": "Improve Task Center",
+		"status": "error",
+		"failed": 1,
+		"stories": [{"id": "story-1", "title": "Task Center", "status": "error"}]
+	}`)}
+	m.subagents = []agent.DurableSubagentJobView{{
+		JobID:        "subagent_generic",
+		DisplayTitle: "Task Center",
+		Objective:    "Improve Task Center",
+		Status:       "completed",
+		MergeStatus:  "merged",
+	}}
+
+	summary := m.buildWorkbenchSummary()
+	if !summaryContains(summary.Plan, "Failed") || !summaryContains(summary.Plan, "lt_generic") {
+		t.Fatalf("expected unrelated longtask failure to remain visible, got %+v", summary.Plan)
+	}
+	if summaryContains(summary.Plan, "recovered from failed longtask lt_generic") {
+		t.Fatalf("expected generic text match not to reconcile failure, got %+v", summary.Plan)
+	}
+}
+
+func TestWorkbenchSummaryClassifiesReviewAndBlockedOutcomes(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{})
+	m.subagents = []agent.DurableSubagentJobView{{
+		JobID:        "subagent_ready",
+		DisplayTitle: "Ready patch",
+		Status:       "completed",
+		MergeStatus:  "pending",
+	}, {
+		JobID:        "subagent_blocked",
+		DisplayTitle: "Blocked patch",
+		Status:       "pending_approval",
+		LastMessage:  "waiting for tool approval",
+	}}
+
+	summary := m.buildWorkbenchSummary()
+	if !summaryContains(summary.Review, "Ready for review") || !summaryContains(summary.Review, "subagent_ready") {
+		t.Fatalf("expected ready worker in review lines, got %+v", summary.Review)
+	}
+	if !summaryContains(summary.Active, "Blocked") || !summaryContains(summary.Active, "subagent_blocked") {
+		t.Fatalf("expected blocked worker in active lines, got %+v", summary.Active)
+	}
+}
+
+func TestWorkbenchOutcomeSmallTerminalRenderKeepsStatusVisible(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+	m.longTasks = []agent.LongTaskView{longTaskViewFromJSON(t, `{
+		"longtask_id": "lt_demo",
+		"workflow_id": "lt_demo",
+		"description": "Create docs/superpowers/tmp/tui-mvp-demo.md",
+		"status": "error",
+		"failed": 1
+	}`)}
+	m.subagents = []agent.DurableSubagentJobView{{
+		JobID:       "subagent_demo",
+		Objective:   "Create docs/superpowers/tmp/tui-mvp-demo.md",
+		Status:      "completed",
+		MergeStatus: "merged",
+		WriteScope:  []string{"docs/superpowers/tmp"},
+	}}
+	m.Update(tea.WindowSizeMsg{Width: 48, Height: 18})
+
+	view := m.View()
+	for _, want := range []string{"Merged", "recovered"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected small terminal view to contain %q, got %q", want, view)
+		}
+	}
+}
+
 func TestViewDefaultsToTaskCenterAndLogsTabShowsConversation(t *testing.T) {
 	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model", WorkspaceDir: "/workspace"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
 		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
@@ -379,7 +529,7 @@ func TestViewDefaultsToTaskCenterAndLogsTabShowsConversation(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 
 	view := m.View()
-	for _, want := range []string{"1 Task", "2 Workers", "3 Graph", "4 Diff", "5 Logs", "Plan", "Active Execution", "Review & Merge", "Task Center"} {
+	for _, want := range []string{"Alt+1 Task", "Alt+2 Workers", "Alt+3 Graph", "Alt+4 Diff", "Alt+5 Logs", "Plan", "Active Execution", "Review & Merge", "Task Center"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected default task center view to contain %q, got %q", want, view)
 		}
@@ -426,7 +576,7 @@ func TestWorkbenchInitLoadsLongTasksAndSubagents(t *testing.T) {
 	}
 }
 
-func TestNumberKeysSwitchWorkbenchTabs(t *testing.T) {
+func TestAltNumberKeysSwitchWorkbenchTabs(t *testing.T) {
 	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
 		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
 	})
@@ -442,27 +592,26 @@ func TestNumberKeysSwitchWorkbenchTabs(t *testing.T) {
 		{"5", workbenchTabLogs},
 		{"1", workbenchTabTask},
 	} {
-		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key), Alt: true})
 		if m.activeWorkbenchTab != tc.tab {
-			t.Fatalf("key %s selected tab %v, want %v", tc.key, m.activeWorkbenchTab, tc.tab)
+			t.Fatalf("alt+%s selected tab %v, want %v", tc.key, m.activeWorkbenchTab, tc.tab)
 		}
 	}
 }
 
-func TestNumberKeysDoNotStealComposerInput(t *testing.T) {
+func TestBareNumberKeysDoNotSwitchWorkbenchTabs(t *testing.T) {
 	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
 		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
 	})
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	m.composer.SetValue("run ")
 
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 
 	if m.activeWorkbenchTab != workbenchTabTask {
-		t.Fatalf("expected active tab to stay task while composing, got %v", m.activeWorkbenchTab)
+		t.Fatalf("expected bare number to keep active tab at task, got %v", m.activeWorkbenchTab)
 	}
-	if !strings.Contains(m.composer.Value(), "2") {
-		t.Fatalf("expected numeric key to reach composer, got %q", m.composer.Value())
+	if m.composer.Value() != "2" {
+		t.Fatalf("expected bare number to reach composer, got %q", m.composer.Value())
 	}
 }
 
@@ -482,6 +631,15 @@ func summaryContains(lines []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func longTaskViewFromJSON(t *testing.T, raw string) agent.LongTaskView {
+	t.Helper()
+	var view agent.LongTaskView
+	if err := json.Unmarshal([]byte(raw), &view); err != nil {
+		t.Fatalf("unmarshal longtask view: %v", err)
+	}
+	return view
 }
 
 func TestRenderHeaderShowsBotModelAndWorkspace(t *testing.T) {

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -39,11 +38,11 @@ func (m *model) renderWorkbenchTabs() string {
 		tab   workbenchTab
 		label string
 	}{
-		{workbenchTabTask, "1 Task"},
-		{workbenchTabWorkers, "2 Workers"},
-		{workbenchTabGraph, "3 Graph"},
-		{workbenchTabDiff, "4 Diff"},
-		{workbenchTabLogs, "5 Logs"},
+		{workbenchTabTask, "Alt+1 Task"},
+		{workbenchTabWorkers, "Alt+2 Workers"},
+		{workbenchTabGraph, "Alt+3 Graph"},
+		{workbenchTabDiff, "Alt+4 Diff"},
+		{workbenchTabLogs, "Alt+5 Logs"},
 	}
 	out := make([]string, 0, len(labels))
 	for _, item := range labels {
@@ -82,30 +81,12 @@ func (m *model) renderTaskCenter() string {
 
 func (m *model) renderWorkersTab() string {
 	width := maxInt(20, m.viewport.Width)
-	lines := make([]string, 0, len(m.subagents))
-	for _, job := range m.subagents {
-		lines = append(lines, formatSubagentExecutionLine(job))
-	}
-	if len(lines) == 0 {
-		lines = append(lines, "No durable workers in this session")
-	}
-	return m.renderWorkbenchSection("Workers", lines, width)
+	return m.renderWorkbenchSection("Workers", m.workbenchWorkerLines(), width)
 }
 
 func (m *model) renderGraphTab() string {
 	width := maxInt(20, m.viewport.Width)
-	lines := []string{
-		"session · " + m.sessionID,
-		"active branch · main",
-	}
-	for _, job := range m.subagents {
-		if job.SourceBranchID == "" && job.SourceNodeID == "" && job.WorkerBranchID == "" {
-			continue
-		}
-		title := firstNonBlank(job.DisplayTitle, job.JobID)
-		lines = append(lines, fmt.Sprintf("%s · source %s@%s · worker %s", title, firstNonBlank(job.SourceBranchID, "main"), firstNonBlank(job.SourceNodeID, "head"), firstNonBlank(job.WorkerBranchID, "n/a")))
-	}
-	return m.renderWorkbenchSection("Graph", lines, width)
+	return m.renderWorkbenchSection("Graph", m.workbenchGraphLines(), width)
 }
 
 func (m *model) renderDiffTab() string {

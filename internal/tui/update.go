@@ -42,12 +42,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = fmt.Sprintf("Snapshot refreshed at %s", formatClock(msg.Snapshot.UpdatedAt))
 		m.refreshViewport(false)
-		return m, m.fetchContextSummaryCmd()
+		return m, tea.Batch(m.fetchContextSummaryCmd(), m.fetchWorkbenchCmd())
 	case contextSummaryLoadedMsg:
 		if msg.Err != nil {
 			return m, nil
 		}
 		m.contextSummary = msg.Summary
+		m.refreshViewport(false)
+		return m, nil
+	case workbenchLoadedMsg:
+		if msg.Err != nil {
+			m.workbenchErr = msg.Err
+			m.status = "Task Center refresh failed"
+			m.refreshViewport(false)
+			return m, nil
+		}
+		m.longTasks = msg.LongTasks
+		m.subagents = msg.Subagents
+		m.workbenchErr = nil
 		m.refreshViewport(false)
 		return m, nil
 	case submitFinishedMsg:
@@ -68,7 +80,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = "Command completed"
-		return m, tea.Batch(m.fetchSnapshotCmd(), m.fetchContextSummaryCmd())
+		return m, tea.Batch(m.fetchSnapshotCmd(), m.fetchContextSummaryCmd(), m.fetchWorkbenchCmd())
 	case permissionFinishedMsg:
 		m.resolvingPermission = false
 		if msg.Err != nil {
@@ -116,7 +128,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "ctrl+l":
 		m.status = "Refreshing session snapshot..."
-		return m, m.fetchSnapshotCmd()
+		return m, tea.Batch(m.fetchSnapshotCmd(), m.fetchWorkbenchCmd())
 	case "tab":
 		return m, m.toggleFocus()
 	}
@@ -126,6 +138,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if handled := m.handleFeedNavigation(msg); handled {
+		return m, nil
+	}
+
+	if tab, ok := parseWorkbenchTabKey(msg.String()); ok && m.canHandleWorkbenchTabShortcut() {
+		m.setWorkbenchTab(tab)
 		return m, nil
 	}
 
@@ -178,6 +195,36 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.composer, cmd = m.composer.Update(msg)
 	m.resetInputHistoryNavigation()
 	return m, cmd
+}
+
+func parseWorkbenchTabKey(key string) (workbenchTab, bool) {
+	switch key {
+	case "1":
+		return workbenchTabTask, true
+	case "2":
+		return workbenchTabWorkers, true
+	case "3":
+		return workbenchTabGraph, true
+	case "4":
+		return workbenchTabDiff, true
+	case "5":
+		return workbenchTabLogs, true
+	default:
+		return workbenchTabTask, false
+	}
+}
+
+func (m *model) canHandleWorkbenchTabShortcut() bool {
+	return m.focus == focusFeed || strings.TrimSpace(m.composer.Value()) == ""
+}
+
+func (m *model) setWorkbenchTab(tab workbenchTab) {
+	if m.activeWorkbenchTab == tab {
+		return
+	}
+	m.activeWorkbenchTab = tab
+	m.autoFollow = true
+	m.refreshViewport(true)
 }
 
 func (m *model) handleFeedNavigation(msg tea.KeyMsg) bool {

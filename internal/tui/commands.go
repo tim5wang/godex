@@ -58,3 +58,17 @@ func (m *model) fetchContextSummaryCmd() tea.Cmd {
 		return contextSummaryLoadedMsg{Summary: summary, Err: err}
 	}
 }
+
+func (m *model) fetchWorkbenchCmd() tea.Cmd {
+	return func() tea.Msg {
+		longTasks, err := m.backend.ListLongTasks(m.ctx, m.sessionID)
+		if err != nil {
+			return workbenchLoadedMsg{Err: err}
+		}
+		subagents, err := m.backend.ListSubagents(m.ctx, m.sessionID)
+		if err != nil {
+			return workbenchLoadedMsg{Err: err}
+		}
+		return workbenchLoadedMsg{LongTasks: longTasks, Subagents: subagents}
+	}
+}

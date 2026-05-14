@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -25,6 +26,8 @@ type Backend interface {
 	OpenSession(context.Context, rtbackend.SessionLocator) (*rtbackend.OpenedSession, error)
 	Snapshot(context.Context, string) (rtbackend.Snapshot, error)
 	ContextSummary(context.Context, string) (tools.ContextInspection, error)
+	ListLongTasks(context.Context, string) ([]agent.LongTaskView, error)
+	ListSubagents(context.Context, string) ([]agent.DurableSubagentJobView, error)
 	Submit(context.Context, string, message.Envelope) (*rtbackend.SubmitResult, error)
 	ExecuteCommand(context.Context, string, commands.Command) (commands.Result, error)
 	ApprovePermission(context.Context, string, string, tools.PermissionGrantScope) (tools.PermissionResolution, error)
@@ -60,6 +63,12 @@ type commandFinishedMsg struct {
 type contextSummaryLoadedMsg struct {
 	Summary tools.ContextInspection
 	Err     error
+}
+
+type workbenchLoadedMsg struct {
+	LongTasks []agent.LongTaskView
+	Subagents []agent.DurableSubagentJobView
+	Err       error
 }
 
 type permissionFinishedMsg struct {
@@ -149,6 +158,10 @@ type model struct {
 	inputDraft        string
 
 	contextSummary     tools.ContextInspection
+	activeWorkbenchTab workbenchTab
+	longTasks          []agent.LongTaskView
+	subagents          []agent.DurableSubagentJobView
+	workbenchErr       error
 	modelCallCount     int
 	seenModelCallEvent map[string]struct{}
 	activePhase        string

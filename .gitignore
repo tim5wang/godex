@@ -2,6 +2,7 @@
 .claude
 .tasks
 .team
+.superpowers/
 .playwright-cli
 .transcripts
 .vscode

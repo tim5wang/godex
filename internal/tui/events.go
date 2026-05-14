@@ -128,7 +128,7 @@ func (m *model) handleEvent(event events.Event) []tea.Cmd {
 			m.stopWorking()
 			m.status = "Turn " + payload.Status
 			m.refreshViewport(false)
-			return []tea.Cmd{m.fetchContextSummaryCmd()}
+			return []tea.Cmd{m.fetchContextSummaryCmd(), m.fetchWorkbenchCmd()}
 		}
 	}
 
@@ -229,7 +229,7 @@ func (m *model) expansionState() map[string]bool {
 
 func (m *model) refreshViewport(forceBottom bool) {
 	oldOffset := m.viewport.YOffset
-	content, spans := m.renderFeedContent()
+	content, spans := m.renderActiveViewportContent()
 	m.viewport.SetContent(content)
 	m.itemSpans = spans
 

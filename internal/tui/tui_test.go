@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -20,6 +21,8 @@ import (
 type fakeBackend struct {
 	snapshot       rtbackend.Snapshot
 	contextSummary tools.ContextInspection
+	longTasks      []agent.LongTaskView
+	subagents      []agent.DurableSubagentJobView
 	submitted      []message.Envelope
 	executed       []commands.Command
 	approved       []approvedPermission
@@ -100,6 +103,18 @@ func (f *fakeBackend) ContextSummary(ctx context.Context, sessionID string) (too
 	_ = ctx
 	_ = sessionID
 	return f.contextSummary, nil
+}
+
+func (f *fakeBackend) ListLongTasks(ctx context.Context, sessionID string) ([]agent.LongTaskView, error) {
+	_ = ctx
+	_ = sessionID
+	return f.longTasks, nil
+}
+
+func (f *fakeBackend) ListSubagents(ctx context.Context, sessionID string) ([]agent.DurableSubagentJobView, error) {
+	_ = ctx
+	_ = sessionID
+	return f.subagents, nil
 }
 
 func (f *fakeBackend) Submit(ctx context.Context, sessionID string, envelope message.Envelope) (*rtbackend.SubmitResult, error) {
@@ -224,6 +239,7 @@ func TestPermissionCollapsedLineShowsRequestAndSessionDetails(t *testing.T) {
 		Locator:            rtbackend.SessionLocator{Channel: "local", Key: "default"},
 		PendingPermissions: []tools.PendingPermission{pending},
 	})
+	m.activeWorkbenchTab = workbenchTabLogs
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
 	view := m.viewport.View()
 	for _, want := range []string{"perm-1", "session-1", "bash", "execute", "git status --sh", "a once", "s session", "x deny"} {
@@ -259,6 +275,213 @@ func TestPermissionCopyIncludesDetailsAndRedactsSensitiveInput(t *testing.T) {
 	if !strings.Contains(text, "[redacted]") {
 		t.Fatalf("expected redacted marker, got %q", text)
 	}
+}
+
+func TestWorkbenchSummaryIncludesEmptySessionGuidance(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+
+	summary := m.buildWorkbenchSummary()
+	if !containsLine(summary.Plan, "No active plan. Start with a request or run a longtask.") {
+		t.Fatalf("expected empty plan guidance, got %+v", summary.Plan)
+	}
+	if !containsLine(summary.Active, "Idle") {
+		t.Fatalf("expected idle active state, got %+v", summary.Active)
+	}
+	if !containsLine(summary.Review, "Nothing waiting for review") {
+		t.Fatalf("expected empty review guidance, got %+v", summary.Review)
+	}
+}
+
+func TestWorkbenchSummarySurfacesLongTasksSubagentsAndReviewState(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator:      rtbackend.SessionLocator{Channel: "local", Key: "default"},
+		Running:      true,
+		ActiveTurnID: "turn-1",
+		ActivePhase:  "tool:bash",
+		QueuedTurns: []rtbackend.QueuedTurn{{
+			ID:      "queued-1",
+			Status:  "queued",
+			Summary: "follow-up request",
+		}},
+		PendingPermissions: []tools.PendingPermission{{
+			ID: "perm-1",
+			Request: tools.PermissionRequest{
+				ToolName: "bash",
+				Action:   "execute",
+			},
+		}},
+	})
+	m.longTasks = []agent.LongTaskView{{
+		WorkflowID:  "workflow-1",
+		Project:     "GoDex TUI",
+		Status:      "running",
+		Total:       3,
+		Pending:     1,
+		Running:     1,
+		Completed:   1,
+		Failed:      0,
+		Description: "Build task center",
+	}}
+	m.subagents = []agent.DurableSubagentJobView{{
+		JobID:          "job-1",
+		DisplayTitle:   "Implement Task Center",
+		Status:         "completed",
+		MergeStatus:    "ready",
+		WorkerID:       "worker:godex:local",
+		SandboxID:      "sandbox:local:repo",
+		WorkerBranchID: "branch:worker-1",
+		SourceBranchID: "main",
+		LastPhase:      "finished",
+		LastMessage:    "patch ready",
+	}, {
+		JobID:        "job-2",
+		DisplayTitle: "Run tests",
+		Status:       "running",
+		WorkerID:     "worker:godex:local",
+		SandboxID:    "sandbox:local:repo",
+		LastPhase:    "testing",
+	}}
+
+	summary := m.buildWorkbenchSummary()
+	for _, want := range []string{"GoDex TUI", "running 1/3", "queued-1"} {
+		if !summaryContains(summary.Plan, want) {
+			t.Fatalf("expected plan summary to contain %q, got %+v", want, summary.Plan)
+		}
+	}
+	for _, want := range []string{"turn-1", "tool:bash", "job-2", "sandbox:local:repo"} {
+		if !summaryContains(summary.Active, want) {
+			t.Fatalf("expected active summary to contain %q, got %+v", want, summary.Active)
+		}
+	}
+	for _, want := range []string{"perm-1", "job-1", "ready"} {
+		if !summaryContains(summary.Review, want) {
+			t.Fatalf("expected review summary to contain %q, got %+v", want, summary.Review)
+		}
+	}
+}
+
+func TestViewDefaultsToTaskCenterAndLogsTabShowsConversation(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model", WorkspaceDir: "/workspace"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+		Messages: []protocol.Message{
+			protocol.NewTextMessage(protocol.RoleAssistant, "conversation log line"),
+		},
+	})
+	m.longTasks = []agent.LongTaskView{{
+		WorkflowID: "workflow-1",
+		Project:    "Task Center",
+		Status:     "running",
+		Total:      2,
+		Running:    1,
+	}}
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	view := m.View()
+	for _, want := range []string{"1 Task", "2 Workers", "3 Graph", "4 Diff", "5 Logs", "Plan", "Active Execution", "Review & Merge", "Task Center"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected default task center view to contain %q, got %q", want, view)
+		}
+	}
+	if strings.Contains(view, "conversation log line") {
+		t.Fatalf("expected conversation to stay in Logs tab, got %q", view)
+	}
+
+	m.activeWorkbenchTab = workbenchTabLogs
+	m.refreshViewport(false)
+	view = m.View()
+	if !strings.Contains(view, "conversation log line") {
+		t.Fatalf("expected Logs tab to contain conversation, got %q", view)
+	}
+}
+
+func TestWorkbenchInitLoadsLongTasksAndSubagents(t *testing.T) {
+	backend := &fakeBackend{
+		longTasks: []agent.LongTaskView{{
+			WorkflowID: "workflow-1",
+			Project:    "Loaded Work",
+			Status:     "running",
+			Total:      1,
+			Running:    1,
+		}},
+		subagents: []agent.DurableSubagentJobView{{
+			JobID:        "job-1",
+			DisplayTitle: "Loaded Worker",
+			Status:       "running",
+			WorkerID:     "worker:godex:local",
+		}},
+	}
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, backend, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+
+	pumpModelCmd(m, m.Init())
+
+	if len(m.longTasks) != 1 || m.longTasks[0].Project != "Loaded Work" {
+		t.Fatalf("expected init to load long tasks, got %+v", m.longTasks)
+	}
+	if len(m.subagents) != 1 || m.subagents[0].DisplayTitle != "Loaded Worker" {
+		t.Fatalf("expected init to load subagents, got %+v", m.subagents)
+	}
+}
+
+func TestNumberKeysSwitchWorkbenchTabs(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+
+	for _, tc := range []struct {
+		key string
+		tab workbenchTab
+	}{
+		{"2", workbenchTabWorkers},
+		{"3", workbenchTabGraph},
+		{"4", workbenchTabDiff},
+		{"5", workbenchTabLogs},
+		{"1", workbenchTabTask},
+	} {
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
+		if m.activeWorkbenchTab != tc.tab {
+			t.Fatalf("key %s selected tab %v, want %v", tc.key, m.activeWorkbenchTab, tc.tab)
+		}
+	}
+}
+
+func TestNumberKeysDoNotStealComposerInput(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m.composer.SetValue("run ")
+
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+
+	if m.activeWorkbenchTab != workbenchTabTask {
+		t.Fatalf("expected active tab to stay task while composing, got %v", m.activeWorkbenchTab)
+	}
+	if !strings.Contains(m.composer.Value(), "2") {
+		t.Fatalf("expected numeric key to reach composer, got %q", m.composer.Value())
+	}
+}
+
+func containsLine(lines []string, want string) bool {
+	for _, line := range lines {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
+func summaryContains(lines []string, want string) bool {
+	for _, line := range lines {
+		if strings.Contains(line, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRenderHeaderShowsBotModelAndWorkspace(t *testing.T) {
@@ -344,6 +567,7 @@ func TestToolLifecycleMergesByIDAndCanToggleExpansion(t *testing.T) {
 		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
 	})
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	m.setWorkbenchTab(workbenchTabLogs)
 
 	m.handleEvent(events.Event{
 		TurnID: "turn-1",
@@ -372,6 +596,7 @@ func TestToolLifecycleMergesByIDAndCanToggleExpansion(t *testing.T) {
 		t.Fatalf("expected finished tool item, got %+v", m.overlayItems[0])
 	}
 	m.focus = focusFeed
+	m.selectedItemID = "tool:tool-1"
 	m.toggleSelectedItem()
 	if !m.overlayItems[0].Expanded {
 		t.Fatalf("expected selected tool item to expand, got %+v", m.overlayItems[0])
@@ -479,6 +704,7 @@ func TestFeedSelectionCanCopyVisibleAssistantMessage(t *testing.T) {
 		},
 	})
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m.setWorkbenchTab(workbenchTabLogs)
 	m.focus = focusFeed
 
 	var copied string

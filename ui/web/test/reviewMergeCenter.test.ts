@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import {
+  buildReviewMergeDiffPreview,
+  buildReviewMergeMergeResult,
+  buildReviewMergeOutcomeTrail,
   buildReviewMergeSafety,
   buildReviewMergeSummary,
   defaultReviewMergeJobId,
@@ -7,7 +10,7 @@ import {
   reviewMergeStatusLabel,
   shouldAutoLoadReview,
 } from "../src/features/chat/reviewMergeCenter.ts";
-import type { DurableSubagentReview, FeedItem } from "../src/lib/types.ts";
+import type { DurableSubagentMerge, DurableSubagentReview, FeedItem } from "../src/lib/types.ts";
 
 function worker(partial: Partial<FeedItem>): FeedItem {
   return {
@@ -129,6 +132,57 @@ function worker(partial: Partial<FeedItem>): FeedItem {
   assert.equal(safety.changedFiles, 2);
   assert.deepEqual(safety.writeScope, ["ui/web/src"]);
   assert.equal(safety.mergeCaution, true);
+}
+
+{
+  const review: DurableSubagentReview = {
+    job_id: "job-ready",
+    changes: [
+      { path: "ui/web/src/App.tsx", status: "modified" },
+      { path: "ui/web/src/styles.css", status: "added" },
+    ],
+    diff: "0123456789abcdef",
+    diff_truncated: true,
+  };
+  const collapsed = buildReviewMergeDiffPreview(review, 8, false);
+  const expanded = buildReviewMergeDiffPreview(review, 8, true);
+
+  assert.equal(collapsed.large, true);
+  assert.equal(collapsed.diff, "01234567\n...");
+  assert.equal(collapsed.files[0]?.path, "ui/web/src/App.tsx");
+  assert.equal(collapsed.truncatedByBackend, true);
+  assert.equal(expanded.diff, "0123456789abcdef");
+}
+
+{
+  const summary = buildReviewMergeSummary([worker({ jobId: "job-ready", status: "completed" })]);
+  const review: DurableSubagentReview = { job_id: "job-ready", changes: [], diff: "" };
+  const trail = buildReviewMergeOutcomeTrail(summary.items[0]!, [
+    {
+      status: "merged",
+      recovered: true,
+      longTask: { longtask_id: "lt_demo", status: "error" },
+      worker: { jobId: "job-ready" },
+    },
+  ], review);
+
+  assert.equal(trail.recovered, true);
+  assert.deepEqual(trail.steps.map((step) => step.label), ["LongTask failed", "Worker completed", "Review loaded", "Merge pending"]);
+}
+
+{
+  const summary = buildReviewMergeSummary([worker({ jobId: "job-ready", status: "completed" })]);
+  const merge: DurableSubagentMerge = {
+    job_id: "job-ready",
+    status: "merged",
+    applied: [{ path: "ui/web/src/App.tsx", status: "modified" }],
+  };
+  const result = buildReviewMergeMergeResult(summary.items[0]!, merge);
+
+  assert.equal(result?.status, "merged");
+  assert.equal(result?.appliedCount, 1);
+  assert.equal(result?.applied[0]?.path, "ui/web/src/App.tsx");
+  assert.equal(buildReviewMergeMergeResult(summary.items[0]!, { ...merge, job_id: "other" }), null);
 }
 
 console.log("reviewMergeCenter tests passed");

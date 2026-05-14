@@ -1,4 +1,4 @@
-import type { DurableSubagentReview, FeedItem } from "../../lib/types";
+import type { DurableSubagentFileChange, DurableSubagentMerge, DurableSubagentReview, FeedItem } from "../../lib/types";
 
 export type ReviewMergeStatus = "running" | "blocked" | "ready" | "review_loaded" | "merged" | "no_changes" | "conflicted" | "failed";
 export type ReviewMergeFilter = "reviewable" | "conflicted" | "merged" | "failed" | "all";
@@ -37,6 +37,39 @@ export interface ReviewMergeSafety {
   changedFiles: number;
   writeScope: string[];
   mergeCaution: boolean;
+}
+
+export interface ReviewMergeDiffPreview {
+  files: DurableSubagentFileChange[];
+  diff: string;
+  fullDiff: string;
+  large: boolean;
+  truncatedByBackend: boolean;
+}
+
+export interface ReviewMergeOutcomeTrailStep {
+  label: string;
+  tone: "default" | "processing" | "success" | "warning" | "danger";
+}
+
+export interface ReviewMergeOutcomeTrail {
+  recovered: boolean;
+  steps: ReviewMergeOutcomeTrailStep[];
+}
+
+export interface ReviewMergeMergeResult {
+  status: string;
+  appliedCount: number;
+  applied: DurableSubagentFileChange[];
+  conflicts: string[];
+  worktreeDir?: string;
+}
+
+interface ReviewMergeOutcomeSource {
+  status?: string;
+  recovered?: boolean;
+  longTask?: { longtask_id?: string; workflow_id?: string; status?: string };
+  worker?: { jobId?: string; job_id?: string; status?: string; mergeStatus?: string; merge_status?: string };
 }
 
 export function buildReviewMergeSummary(workers: FeedItem[] = [], options: BuildReviewMergeSummaryOptions = {}): ReviewMergeSummary {
@@ -98,6 +131,59 @@ export function buildReviewMergeSafety(item: ReviewMergeItem, review?: DurableSu
     changedFiles: review.changes.length,
     writeScope: review.write_scope?.length ? review.write_scope : item.writeScope,
     mergeCaution: review.diff_truncated || conflictStatus === "conflicts",
+  };
+}
+
+export function buildReviewMergeDiffPreview(review?: DurableSubagentReview | null, maxLength = 8000, expanded = false): ReviewMergeDiffPreview {
+  const fullDiff = review?.diff?.trim() || "";
+  const large = fullDiff.length > maxLength;
+  return {
+    files: review?.changes ?? [],
+    fullDiff,
+    diff: large && !expanded ? `${fullDiff.slice(0, maxLength).trimEnd()}\n...` : fullDiff,
+    large,
+    truncatedByBackend: !!review?.diff_truncated,
+  };
+}
+
+export function buildReviewMergeOutcomeTrail(
+  item: ReviewMergeItem,
+  outcomes: ReviewMergeOutcomeSource[] = [],
+  review?: DurableSubagentReview | null,
+  merge?: DurableSubagentMerge | null,
+): ReviewMergeOutcomeTrail {
+  const outcome = outcomes.find((candidate) => candidate.worker?.jobId === item.jobId || candidate.worker?.job_id === item.jobId);
+  const steps: ReviewMergeOutcomeTrailStep[] = [];
+  const longTaskStatus = outcome?.longTask?.status?.toLowerCase() || "";
+  if (outcome?.longTask) {
+    const failed = longTaskStatus === "error" || longTaskStatus === "failed";
+    steps.push({ label: failed ? "LongTask failed" : "LongTask linked", tone: failed ? "danger" : "default" });
+  }
+  steps.push({ label: `Worker ${workerTrailStatus(item)}`, tone: workerTrailTone(item) });
+  steps.push({ label: review?.job_id === item.jobId ? "Review loaded" : "Review pending", tone: review?.job_id === item.jobId ? "success" : "warning" });
+  const mergeResult = buildReviewMergeMergeResult(item, merge);
+  if (mergeResult) {
+    steps.push({ label: `Merge ${mergeResult.status}`, tone: mergeResult.status === "merged" || mergeResult.status === "no_changes" ? "success" : "warning" });
+  } else {
+    steps.push({ label: item.status === "merged" || item.status === "no_changes" ? `Merge ${item.status}` : "Merge pending", tone: item.status === "merged" || item.status === "no_changes" ? "success" : "warning" });
+  }
+  return {
+    recovered: !!outcome?.recovered,
+    steps,
+  };
+}
+
+export function buildReviewMergeMergeResult(item: ReviewMergeItem, merge?: DurableSubagentMerge | null): ReviewMergeMergeResult | null {
+  if (!merge || merge.job_id !== item.jobId) {
+    return null;
+  }
+  const applied = merge.applied ?? [];
+  return {
+    status: merge.status,
+    appliedCount: applied.length,
+    applied,
+    conflicts: merge.conflicts ?? [],
+    worktreeDir: merge.worktree_dir,
   };
 }
 
@@ -217,6 +303,35 @@ function reviewMergeRank(item: ReviewMergeItem) {
 function itemTime(item: ReviewMergeItem) {
   const value = Date.parse(item.updatedAt || item.finishedAt || "");
   return Number.isFinite(value) ? value : 0;
+}
+
+function workerTrailStatus(item: ReviewMergeItem) {
+  switch (item.status) {
+    case "ready":
+    case "review_loaded":
+      return "completed";
+    case "no_changes":
+      return "completed";
+    default:
+      return item.status;
+  }
+}
+
+function workerTrailTone(item: ReviewMergeItem): ReviewMergeOutcomeTrailStep["tone"] {
+  switch (item.status) {
+    case "merged":
+    case "no_changes":
+    case "ready":
+    case "review_loaded":
+      return "success";
+    case "running":
+      return "processing";
+    case "blocked":
+    case "conflicted":
+      return "warning";
+    case "failed":
+      return "danger";
+  }
 }
 
 function firstNonBlank(...values: Array<string | undefined>) {

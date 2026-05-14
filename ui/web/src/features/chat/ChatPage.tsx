@@ -84,6 +84,7 @@ import type {
   SessionTimelineEntry,
   TimelinePage,
   DurableSubagentJob,
+  DurableSubagentMerge,
   DurableSubagentReview,
   FeedItem,
   Note,
@@ -172,6 +173,7 @@ export function ChatPage() {
   const [uploading, setUploading] = useState(false);
   const [timelineItems, setTimelineItems] = useState<SessionTimelineEntry[]>([]);
   const [subagentReview, setSubagentReview] = useState<DurableSubagentReview | null>(null);
+  const [subagentMergeResult, setSubagentMergeResult] = useState<DurableSubagentMerge | null>(null);
   const [subagentReviewOpen, setSubagentReviewOpen] = useState(false);
   const [reviewMergeOpen, setReviewMergeOpen] = useState(false);
   const [reviewMergeFilter, setReviewMergeFilter] = useState<ReviewMergeFilter>("reviewable");
@@ -764,6 +766,7 @@ export function ChatPage() {
   const mergeSubagentMutation = useMutation({
     mutationFn: async (jobId: string) => mergeSessionSubagent(token || null, openQuery.data!.session_id, jobId),
     onSuccess: async (result) => {
+      setSubagentMergeResult(result);
       message.success(`Subagent merge ${result.status}.`);
       await refreshSubagentViews();
     },
@@ -1250,7 +1253,9 @@ export function ChatPage() {
         summary={reviewMergeSummary}
         filter={reviewMergeFilter}
         selectedJobId={reviewMergeSelectedJobId}
+        outcomes={taskOutcomes}
         review={subagentReview}
+        mergeResult={subagentMergeResult}
         reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
         mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
         resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}

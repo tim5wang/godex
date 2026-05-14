@@ -109,3 +109,9 @@ The first product optimization pass adds three review ergonomics:
 - Opening the center selects the first ready or conflicted worker and automatically loads its review.
 - The detail panel shows a safety strip for diff completeness, conflicts, changed file count, and write scope before merge.
 - The queue has `Ready`, `Conflicted`, `Merged`, `Failed`, and `All` filters, with the default `Ready` view including both ready and conflicted workers.
+
+The second product optimization pass improves review depth without adding backend APIs:
+
+- The changed-file list can focus the diff, copy individual paths, and expose a compact large-diff preview with a `Show full diff` toggle.
+- The detail panel shows the task lineage from LongTask state to worker state, review state, and merge state, including recovered outcomes.
+- The last merge result remains visible in the center with merge status, applied files, conflicts, and worktree path when available.

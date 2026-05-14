@@ -658,10 +658,26 @@ samp {
   gap: 8px;
 }
 
+.review-merge-file-jump {
+  height: auto;
+  padding: 0;
+}
+
 .review-merge-safety-bar {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.review-merge-trail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-merge-diff-toolbar {
+  display: flex;
+  justify-content: space-between;
 }
 
 .review-merge-diff {
@@ -676,6 +692,18 @@ samp {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.review-merge-diff pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-merge-diff-section + .review-merge-diff-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--godex-border);
 }
 
 .chat-session-header {

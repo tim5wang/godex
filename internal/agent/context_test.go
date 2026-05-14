@@ -94,6 +94,18 @@ func TestBuildContextIncludesStructuredRuntimeMessages(t *testing.T) {
 	}
 }
 
+func TestImplicitBundlesDoesNotTreatDescribingAsBing(t *testing.T) {
+	bundles := implicitBundlesForQuery("Create a markdown document describing GoDex Local Task Center TUI MVP value.")
+	if len(bundles) != 0 {
+		t.Fatalf("expected no implicit bundles for describing, got %+v", bundles)
+	}
+
+	bundles = implicitBundlesForQuery("Search Bing for current GoDex release notes.")
+	if !containsString(bundles, bundleWeb) {
+		t.Fatalf("expected explicit Bing search to require web bundle, got %+v", bundles)
+	}
+}
+
 func TestBuildContextConservativeAutoCompactTrigger(t *testing.T) {
 	t.Run("history over threshold compacts", func(t *testing.T) {
 		a := newTestAgent(t, 80)

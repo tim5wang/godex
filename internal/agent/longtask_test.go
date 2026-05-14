@@ -45,6 +45,28 @@ func TestLongTaskToolCompilesStoriesToWorkflow(t *testing.T) {
 	}
 }
 
+func TestLongTaskWritableStoryDefaultsToGeneralPurposeAgent(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	created := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_writable_default",
+		"stories": []map[string]interface{}{
+			{
+				"id":          "write-doc",
+				"title":       "Write doc",
+				"write_scope": []string{"docs/superpowers/tmp/"},
+			},
+		},
+	})
+
+	if got := created.Workflow.Nodes[0].AgentType; got != "general-purpose" {
+		t.Fatalf("expected writable longtask story to default to general-purpose, got %q", got)
+	}
+}
+
 func TestLongTaskToolStartWaitAndCompleteStory(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()

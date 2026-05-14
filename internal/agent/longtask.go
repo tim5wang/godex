@@ -452,6 +452,9 @@ func normalizeLongTaskStories(input []longTaskStoryInput) []longTaskStoryInput {
 		story.AcceptanceCriteria = normalizeWorkflowStrings(story.AcceptanceCriteria)
 		story.AgentType = strings.TrimSpace(story.AgentType)
 		story.WriteScope = normalizeWorkflowStrings(story.WriteScope)
+		if story.AgentType == "" && len(story.WriteScope) > 0 {
+			story.AgentType = "general-purpose"
+		}
 		stories = append(stories, story)
 	}
 	sort.SliceStable(stories, func(i, j int) bool {

@@ -90,6 +90,19 @@ func TestDurableSubagentCompletesAndPersistsResult(t *testing.T) {
 	}
 }
 
+func TestSubagentRequiredBundlesIgnoresGenericCurrentStatusPrompt(t *testing.T) {
+	prompt := "Write a local product status note describing the current Task Center state. Do not browse."
+	bundles := subagentRequiredBundles(prompt, nil)
+	if len(bundles) != 0 {
+		t.Fatalf("expected local writing prompt not to require bundles, got %+v", bundles)
+	}
+
+	bundles = subagentRequiredBundles("Do web research and include official source links.", nil)
+	if !containsString(bundles, bundleWeb) {
+		t.Fatalf("expected web research prompt to require web bundle, got %+v", bundles)
+	}
+}
+
 func TestDurableSubagentRecordsSandboxID(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.client = repeatedTextCaller("done")

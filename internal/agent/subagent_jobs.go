@@ -3129,11 +3129,22 @@ func subagentToolNames(agentType string) []string {
 
 func subagentRequiredBundles(prompt string, explicit []string) []string {
 	bundles := append([]string{}, explicit...)
-	bundles = append(bundles, implicitBundlesForQuery(prompt)...)
+	bundles = append(bundles, implicitSubagentBundlesForPrompt(prompt)...)
 	if looksLikeWebResearchPrompt(prompt) {
 		bundles = append(bundles, bundleWeb)
 	}
 	return uniqueStrings(bundles)
+}
+
+func implicitSubagentBundlesForPrompt(prompt string) []string {
+	prompt = strings.ToLower(strings.TrimSpace(prompt))
+	if prompt == "" {
+		return nil
+	}
+	if looksLikeExplicitWebQuery(prompt) {
+		return []string{bundleWeb}
+	}
+	return nil
 }
 
 func looksLikeWebResearchPrompt(prompt string) bool {

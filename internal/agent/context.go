@@ -292,8 +292,8 @@ func looksLikeExplicitWebQuery(query string) bool {
 		"网络搜索", "网页搜索", "上网搜索", "网上搜索", "上网查", "网上查", "联网搜索", "联网查",
 		"查一下网页", "查网页", "搜索网页", "访问网页", "打开网页", "抓取网页", "读取网页",
 		"web search", "search web", "search the web", "internet search", "online search",
-		"google", "bing", "brave search", "duckduckgo", "fetch url", "fetch the url",
-	)
+		"brave search", "fetch url", "fetch the url",
+	) || containsAnyASCIIWord(query, "google", "bing", "duckduckgo")
 }
 
 func looksLikeCurrentInformationQuery(query string) bool {
@@ -323,6 +323,41 @@ func containsAny(query string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func containsAnyASCIIWord(query string, words ...string) bool {
+	for _, word := range words {
+		word = strings.ToLower(strings.TrimSpace(word))
+		if word != "" && containsASCIIWord(query, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsASCIIWord(query, word string) bool {
+	if query == "" || word == "" {
+		return false
+	}
+	start := 0
+	for {
+		index := strings.Index(query[start:], word)
+		if index < 0 {
+			return false
+		}
+		index += start
+		beforeOK := index == 0 || !isASCIIAlphaNum(query[index-1])
+		afterIndex := index + len(word)
+		afterOK := afterIndex >= len(query) || !isASCIIAlphaNum(query[afterIndex])
+		if beforeOK && afterOK {
+			return true
+		}
+		start = index + 1
+	}
+}
+
+func isASCIIAlphaNum(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9')
 }
 
 func (a *Agent) evaluateHistoryRecall(ctx context.Context, query string, history []protocol.Message, layers memory.ContextLayers, compacted bool) *tools.HistoryRecallEvaluation {

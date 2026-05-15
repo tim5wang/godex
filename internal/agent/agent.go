@@ -66,6 +66,9 @@ type Agent struct {
 	transcriptRefs       []string
 	historyVersion       int64
 	lastCompactedVersion int64
+	compactionMu         sync.Mutex
+	compactionCandidate  *compactionCandidate
+	compactionRunning    bool
 	now                  func() time.Time
 	mu                   sync.Mutex
 }

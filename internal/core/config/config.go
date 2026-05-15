@@ -52,6 +52,7 @@ type Config struct {
 	TranscriptsDir       string
 	SessionsDir          string
 	CompressThreshold    int
+	Compaction           AgentCompactionConfig
 	MaxTurns             int
 	AgentProfile         string
 	AgentDefaultProfiles AgentDefaultProfilesConfig
@@ -91,6 +92,15 @@ type AgentDefaultProfilesConfig struct {
 	Feishu string
 }
 
+type AgentCompactionConfig struct {
+	AutoEnabled         bool
+	TriggerTokens       int
+	TargetHistoryTokens int
+	Mode                string
+	ModelProfileID      string
+	MaxLatencyMS        int
+}
+
 const (
 	AgentProfileGeneral = "general"
 	AgentProfileCoding  = "coding"
@@ -102,6 +112,17 @@ func NormalizeAgentProfile(profile string) string {
 		return AgentProfileCoding
 	default:
 		return AgentProfileGeneral
+	}
+}
+
+func NormalizeCompactionMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "model", "deep":
+		return "model"
+	case "hybrid":
+		return "hybrid"
+	default:
+		return "fast"
 	}
 }
 

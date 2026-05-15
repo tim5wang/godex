@@ -77,9 +77,19 @@ type ACPAgentSection struct {
 
 type AgentSection struct {
 	CompressThreshold int                         `yaml:"compress_threshold"`
+	Compaction        AgentCompactionSection      `yaml:"compaction"`
 	MaxTurns          int                         `yaml:"max_turns"`
 	Profile           string                      `yaml:"profile"`
 	DefaultProfiles   AgentDefaultProfilesSection `yaml:"default_profiles"`
+}
+
+type AgentCompactionSection struct {
+	AutoEnabled         bool   `yaml:"auto_enabled"`
+	TriggerTokens       int    `yaml:"trigger_tokens"`
+	TargetHistoryTokens int    `yaml:"target_history_tokens"`
+	Mode                string `yaml:"mode"`
+	ModelProfileID      string `yaml:"model_profile_id"`
+	MaxLatencyMS        int    `yaml:"max_latency_ms"`
 }
 
 type AgentDefaultProfilesSection struct {

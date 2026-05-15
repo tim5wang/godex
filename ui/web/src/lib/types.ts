@@ -128,10 +128,20 @@ export interface ContextInspection {
   compress_threshold: number;
   suggest_compact: boolean;
   compression_reasons?: string[];
+  pre_compaction_total?: number;
+  post_compaction_total?: number;
+  compaction_mode?: string;
+  compaction_latency_ms?: number;
+  largest_context_sources?: ContextSourcePressure[];
   active_skill_count: number;
   pending_permission_count: number;
   large_tool_result_reference_count?: number;
   tool_result_references?: ToolResultReference[];
+}
+
+export interface ContextSourcePressure {
+  source: string;
+  tokens: number;
 }
 
 export interface ContextTokenBreakdown {

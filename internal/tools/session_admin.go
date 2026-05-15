@@ -13,20 +13,31 @@ import (
 // ContextInspection describes the current session prompt budget and history shape
 // without mutating the conversation state.
 type ContextInspection struct {
-	SessionID                     string                `json:"session_id,omitempty"`
-	MessageCount                  int                   `json:"message_count"`
-	TokenEstimate                 int                   `json:"token_estimate"`
-	HistoryTokenEstimate          int                   `json:"history_token_estimate,omitempty"`
-	TotalTokenEstimate            int                   `json:"total_token_estimate,omitempty"`
-	TokenBreakdown                ContextTokenBreakdown `json:"token_breakdown,omitempty"`
-	PrefixCache                   PrefixCacheInspection `json:"prefix_cache,omitempty"`
-	CompressThreshold             int                   `json:"compress_threshold"`
-	SuggestCompact                bool                  `json:"suggest_compact"`
-	CompressionReasons            []string              `json:"compression_reasons,omitempty"`
-	ActiveSkillCount              int                   `json:"active_skill_count"`
-	PendingPermissionCount        int                   `json:"pending_permission_count"`
-	LargeToolResultReferenceCount int                   `json:"large_tool_result_reference_count,omitempty"`
-	ToolResultReferences          []ToolResultReference `json:"tool_result_references,omitempty"`
+	SessionID                     string                  `json:"session_id,omitempty"`
+	MessageCount                  int                     `json:"message_count"`
+	TokenEstimate                 int                     `json:"token_estimate"`
+	HistoryTokenEstimate          int                     `json:"history_token_estimate,omitempty"`
+	TotalTokenEstimate            int                     `json:"total_token_estimate,omitempty"`
+	TokenBreakdown                ContextTokenBreakdown   `json:"token_breakdown,omitempty"`
+	PrefixCache                   PrefixCacheInspection   `json:"prefix_cache,omitempty"`
+	CompressThreshold             int                     `json:"compress_threshold"`
+	SuggestCompact                bool                    `json:"suggest_compact"`
+	CompressionReasons            []string                `json:"compression_reasons,omitempty"`
+	PreCompactionTotal            int                     `json:"pre_compaction_total,omitempty"`
+	PostCompactionTotal           int                     `json:"post_compaction_total,omitempty"`
+	CompactionMode                string                  `json:"compaction_mode,omitempty"`
+	CompactionLatencyMS           int64                   `json:"compaction_latency_ms,omitempty"`
+	LargestContextSources         []ContextSourcePressure `json:"largest_context_sources,omitempty"`
+	ActiveSkillCount              int                     `json:"active_skill_count"`
+	PendingPermissionCount        int                     `json:"pending_permission_count"`
+	LargeToolResultReferenceCount int                     `json:"large_tool_result_reference_count,omitempty"`
+	ToolResultReferences          []ToolResultReference   `json:"tool_result_references,omitempty"`
+}
+
+// ContextSourcePressure identifies the largest contributors to prompt size.
+type ContextSourcePressure struct {
+	Source string `json:"source"`
+	Tokens int    `json:"tokens"`
 }
 
 // ContextTokenBreakdown describes prompt-budget pressure by source. The Total

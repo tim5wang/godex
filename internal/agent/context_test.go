@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/modelcontext"
 	"github.com/tim5wang/godex/internal/core/protocol"
@@ -35,6 +36,57 @@ func (f fakeCaller) Call(ctx context.Context, req protocol.Request) (*protocol.R
 	}
 	resp := f.resp
 	return &resp, nil
+}
+
+type failingSessionSummarizer struct{}
+
+func (failingSessionSummarizer) SummarizeSession(context.Context, compress.SessionSummaryRequest) (compress.SessionSummaryResult, error) {
+	return compress.SessionSummaryResult{}, errors.New("model summarizer should not be used")
+}
+
+type recordingSessionSummarizer struct {
+	calls int
+}
+
+func (r *recordingSessionSummarizer) SummarizeSession(_ context.Context, req compress.SessionSummaryRequest) (compress.SessionSummaryResult, error) {
+	r.calls++
+	return compress.SessionSummaryResult{
+		Messages: []protocol.Message{
+			protocol.NewSummaryMessage("model compact summary", ""),
+		},
+	}, nil
+}
+
+func TestCompactConversationDefaultsToFastSummarizer(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.AddMessage(strings.Repeat("slow model compact should be avoided ", 40))
+	a.summarizer = failingSessionSummarizer{}
+
+	output, err := a.CompactConversation()
+	if err != nil {
+		t.Fatalf("default compact should use fast summarizer: %v", err)
+	}
+	if !strings.Contains(output, "Semantic compaction summary") {
+		t.Fatalf("expected fast compact summary, got %q", output)
+	}
+}
+
+func TestCompactConversationModelModeUsesConfiguredSummarizer(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.AddMessage("use deep model compact")
+	recorder := &recordingSessionSummarizer{}
+	a.summarizer = recorder
+
+	output, err := a.CompactConversationWithMode("model")
+	if err != nil {
+		t.Fatalf("model compact: %v", err)
+	}
+	if recorder.calls != 1 {
+		t.Fatalf("expected model summarizer call, got %d", recorder.calls)
+	}
+	if output != "model compact summary" {
+		t.Fatalf("expected model summary output, got %q", output)
+	}
 }
 
 func TestBuildContextIncludesStructuredRuntimeMessages(t *testing.T) {
@@ -148,6 +200,64 @@ func TestBuildContextConservativeAutoCompactTrigger(t *testing.T) {
 			t.Fatalf("expected total pressure with compactable history to compact, breakdown=%+v reasons=%v", build.TokenBreakdown, build.CompressionReasons)
 		}
 	})
+}
+
+func TestBuildContextUsesCompactionPolicyTrigger(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.cfg.Compaction.TriggerTokens = 80
+	a.cfg.Compaction.TargetHistoryTokens = 20
+	a.AddMessage(strings.Repeat("policy trigger ", 90))
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if !build.Compacted {
+		t.Fatalf("expected compaction policy trigger to compact before legacy threshold, breakdown=%+v", build.TokenBreakdown)
+	}
+	if build.CompactionMode != "fast" {
+		t.Fatalf("expected fast compaction mode, got %q", build.CompactionMode)
+	}
+	if build.PreCompactionTotal == 0 || build.PostCompactionTotal == 0 {
+		t.Fatalf("expected compaction totals, got before=%d after=%d", build.PreCompactionTotal, build.PostCompactionTotal)
+	}
+	if len(build.LargestContextSources) == 0 {
+		t.Fatalf("expected largest context source diagnostics")
+	}
+}
+
+func TestBuildContextUsesMatchingBackgroundCompactionCandidate(t *testing.T) {
+	a := newTestAgent(t, 80)
+	a.AddMessage(strings.Repeat("background candidate ", 90))
+	history, version := a.messageState()
+	system, err := a.buildRuntimeSystemPrompt()
+	if err != nil {
+		t.Fatalf("system prompt: %v", err)
+	}
+	estimate := estimateContextBudget(system, history, nil, nil, nil, a.compactionTriggerTokens())
+	result, err := a.runCompaction(context.Background(), "fast", compress.SessionSummaryRequest{
+		System:         system,
+		History:        history,
+		TokenBreakdown: tokenBreakdownMap(estimate.Breakdown),
+	})
+	if err != nil {
+		t.Fatalf("prepare candidate: %v", err)
+	}
+	a.storeCompactionCandidate(compactionCandidate{HistoryVersion: version, Result: result})
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if !build.Compacted {
+		t.Fatalf("expected matching background candidate to be applied")
+	}
+	if build.CompactionMode != "fast" {
+		t.Fatalf("expected fast candidate diagnostics, got %q", build.CompactionMode)
+	}
+	if a.takeCompactionCandidate(version) != nil {
+		t.Fatalf("expected candidate to be consumed")
+	}
 }
 
 func TestBuildContextDedupesRepeatedLargeToolResultSummaries(t *testing.T) {
@@ -561,6 +671,34 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 	} {
 		if !strings.Contains(build.System, want) {
 			t.Fatalf("expected coding profile prompt to contain %q, got %q", want, build.System)
+		}
+	}
+}
+
+func TestBuildContextCodingProfileIncludesRepoMap(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	if err := os.MkdirAll(filepath.Join(a.cfg.WorkspaceDir, "internal", "demo"), 0755); err != nil {
+		t.Fatalf("mkdir demo: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(a.cfg.WorkspaceDir, "internal", "demo", "worker.go"), []byte(`package demo
+
+type Worker struct{}
+
+func RunTask() {}
+`), 0644); err != nil {
+		t.Fatalf("write demo file: %v", err)
+	}
+	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{AgentProfile: config.AgentProfileCoding})
+
+	build, err := a.buildContext(ctx)
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	runtimeState := runtimePromptStateText(build.Messages)
+	for _, want := range []string{"# Repo Map", "internal/demo/worker.go", "type Worker", "func RunTask"} {
+		if !strings.Contains(runtimeState, want) {
+			t.Fatalf("expected repo map runtime state to contain %q, got %q", want, runtimeState)
 		}
 	}
 }
@@ -1956,8 +2094,15 @@ func newTestAgent(t *testing.T, compressThreshold int) *Agent {
 		TempDir:           filepath.Join(workspace, ".godex", ".tmp"),
 		TranscriptsDir:    filepath.Join(workspace, ".godex", ".transcripts"),
 		CompressThreshold: compressThreshold,
-		LeadName:          "lead",
-		TeamName:          "default",
+		Compaction: config.AgentCompactionConfig{
+			AutoEnabled:         true,
+			TriggerTokens:       compressThreshold,
+			TargetHistoryTokens: 12000,
+			Mode:                "fast",
+			MaxLatencyMS:        3000,
+		},
+		LeadName: "lead",
+		TeamName: "default",
 		Tools: config.ToolsConfig{
 			WebSearch: config.WebSearchConfig{
 				Enabled:         true,

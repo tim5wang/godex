@@ -100,6 +100,14 @@ acp:
 agent:
   # Approximate threshold before session compression is useful.
   compress_threshold: {{ .Agent.CompressThreshold }}
+  # Fast compaction is used by default to keep model calls off the hot path.
+  compaction:
+    auto_enabled: {{ .Agent.Compaction.AutoEnabled }}
+    trigger_tokens: {{ .Agent.Compaction.TriggerTokens }}
+    target_history_tokens: {{ .Agent.Compaction.TargetHistoryTokens }}
+    mode: {{ yamlString .Agent.Compaction.Mode }}
+    model_profile_id: {{ yamlString .Agent.Compaction.ModelProfileID }}
+    max_latency_ms: {{ .Agent.Compaction.MaxLatencyMS }}
   # Maximum model/tool loop iterations for one main-agent turn. Environment override: GODEX_AGENT_MAX_TURNS.
   max_turns: {{ .Agent.MaxTurns }}
   # general | coding. Environment override: GODEX_AGENT_PROFILE.

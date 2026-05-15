@@ -68,7 +68,15 @@ func (m *model) contextUsageText() string {
 		return "ctx " + formatCompactNumber(total)
 	}
 	pct := int(math.Round(float64(total) / float64(threshold) * 100))
-	return fmt.Sprintf("ctx %s/%s %d%%", formatCompactNumber(total), formatCompactNumber(threshold), pct)
+	text := fmt.Sprintf("ctx %s/%s %d%%", formatCompactNumber(total), formatCompactNumber(threshold), pct)
+	if len(m.contextSummary.LargestContextSources) > 0 {
+		source := m.contextSummary.LargestContextSources[0]
+		text += fmt.Sprintf(" · top %s %s", source.Source, formatCompactNumber(source.Tokens))
+	}
+	if mode := strings.TrimSpace(m.contextSummary.CompactionMode); mode != "" {
+		text += " · compact " + mode
+	}
+	return text
 }
 
 func (m *model) rebuildModelCallStats() {

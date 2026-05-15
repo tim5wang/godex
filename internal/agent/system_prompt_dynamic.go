@@ -73,6 +73,8 @@ func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtim
 			return nil, err
 		}
 		sections = appendRuntimePromptSection(sections, "skill_catalog", protocol.KindBackground, skillCatalogPrompt)
+	} else {
+		sections = appendRuntimePromptSection(sections, "repo_map", protocol.KindBackground, a.buildRepoMapPrompt(latestPersistentUserText(a.GetMessages())))
 	}
 	sections = appendRuntimePromptSection(sections, "active_skills", protocol.KindBackground, buildActiveSkillsPrompt(a.activeSkillStates()))
 	sections = appendRuntimePromptSection(sections, "environment", protocol.KindBackground, buildEnvironmentPrompt(a.environmentPromptInput()))

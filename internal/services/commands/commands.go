@@ -311,10 +311,16 @@ func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Res
 	}
 	switch cmd.Name {
 	case "compact":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
+		mode := "fast"
+		for _, arg := range cmd.Args {
+			switch strings.TrimSpace(arg) {
+			case "--model", "--deep":
+				mode = "model"
+			default:
+				return Result{}, fmt.Errorf("usage: /compact [--model|--deep]")
+			}
 		}
-		output, err := a.CompactConversation()
+		output, err := a.CompactConversationWithMode(mode)
 		return Result{Name: cmd.Name, Output: output, RefreshSnapshot: true}, err
 	case "tasks":
 		if len(cmd.Args) > 0 {

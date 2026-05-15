@@ -1704,6 +1704,7 @@ function ContextRecallPanel({
   const totalTokens = context?.total_token_estimate ?? context?.token_estimate ?? breakdown?.total ?? 0;
   const historyTokens = context?.history_token_estimate ?? breakdown?.history ?? 0;
   const compressionReasons = context?.compression_reasons ?? [];
+  const largestSources = context?.largest_context_sources ?? [];
   const toolRefs = context?.tool_result_references ?? [];
   const budgetPercent =
     context && context.compress_threshold > 0 ? Math.min(100, Math.round((totalTokens / context.compress_threshold) * 100)) : 0;
@@ -1802,6 +1803,16 @@ function ContextRecallPanel({
               ))}
             </Space>
           ) : null}
+          {context?.compaction_mode ? (
+            <Typography.Text type="secondary">
+              {t("chat.contextInspectorCompactionDiagnostics", {
+                mode: context.compaction_mode,
+                before: context.pre_compaction_total ?? totalTokens,
+                after: context.post_compaction_total ?? totalTokens,
+                latency: context.compaction_latency_ms ?? 0,
+              })}
+            </Typography.Text>
+          ) : null}
         </Space>
       </Card>
       <Card size="small" title={t("chat.contextInspectorBreakdownTitle")}>
@@ -1814,6 +1825,18 @@ function ContextRecallPanel({
             children: item.value,
           }))}
         />
+        {largestSources.length > 0 ? (
+          <Space direction="vertical" size={4} style={{ width: "100%", marginTop: 10 }}>
+            <Typography.Text type="secondary">{t("chat.contextInspectorLargestSources")}</Typography.Text>
+            <Space wrap size={4}>
+              {largestSources.map((item) => (
+                <Tag key={item.source}>
+                  {item.source}: {item.tokens}
+                </Tag>
+              ))}
+            </Space>
+          </Space>
+        ) : null}
       </Card>
       <Card size="small" title={t("chat.contextInspectorToolResultTitle")}>
         <Space direction="vertical" size={8} style={{ width: "100%" }}>

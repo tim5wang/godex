@@ -1230,6 +1230,24 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	origins["api.model_strategy"] = fieldOrigin{Source: SourceYAML, YAMLValue: file.API.ModelStrategy, Effective: current.LLMStrategy}
 	origins["acp.agents"] = fieldOrigin{Source: SourceYAML, YAMLValue: file.ACP.Agents, Effective: maskACPAgentSecrets(acpAgentsFromConfigFile(file))}
 	resolveInt("agent.compress_threshold", file.Agent.CompressThreshold, "COMPRESS_THRESHOLD", func(v int) { current.CompressThreshold = v })
+	resolveBool("agent.compaction.auto_enabled", file.Agent.Compaction.AutoEnabled, "GODEX_AGENT_COMPACTION_AUTO_ENABLED", func(v bool) {
+		current.Compaction.AutoEnabled = v
+	})
+	resolveInt("agent.compaction.trigger_tokens", file.Agent.Compaction.TriggerTokens, "GODEX_AGENT_COMPACTION_TRIGGER_TOKENS", func(v int) {
+		current.Compaction.TriggerTokens = positiveOrDefault(v, 60000)
+	})
+	resolveInt("agent.compaction.target_history_tokens", file.Agent.Compaction.TargetHistoryTokens, "GODEX_AGENT_COMPACTION_TARGET_HISTORY_TOKENS", func(v int) {
+		current.Compaction.TargetHistoryTokens = positiveOrDefault(v, 12000)
+	})
+	resolveString("agent.compaction.mode", file.Agent.Compaction.Mode, "GODEX_AGENT_COMPACTION_MODE", func(v string) {
+		current.Compaction.Mode = NormalizeCompactionMode(v)
+	})
+	resolveString("agent.compaction.model_profile_id", file.Agent.Compaction.ModelProfileID, "GODEX_AGENT_COMPACTION_MODEL_PROFILE_ID", func(v string) {
+		current.Compaction.ModelProfileID = strings.TrimSpace(v)
+	})
+	resolveInt("agent.compaction.max_latency_ms", file.Agent.Compaction.MaxLatencyMS, "GODEX_AGENT_COMPACTION_MAX_LATENCY_MS", func(v int) {
+		current.Compaction.MaxLatencyMS = positiveOrDefault(v, 3000)
+	})
 	resolveInt("agent.max_turns", file.Agent.MaxTurns, "GODEX_AGENT_MAX_TURNS", func(v int) { current.MaxTurns = v })
 	resolveString("agent.profile", file.Agent.Profile, "GODEX_AGENT_PROFILE", func(v string) {
 		current.AgentProfile = NormalizeAgentProfile(v)
@@ -1748,8 +1766,16 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 		TranscriptsDir:    resolvePath(homeDir, file.Paths.TranscriptsDir),
 		SessionsDir:       resolvePath(homeDir, file.Paths.SessionsDir),
 		CompressThreshold: file.Agent.CompressThreshold,
-		MaxTurns:          file.Agent.MaxTurns,
-		AgentProfile:      NormalizeAgentProfile(file.Agent.Profile),
+		Compaction: AgentCompactionConfig{
+			AutoEnabled:         file.Agent.Compaction.AutoEnabled,
+			TriggerTokens:       positiveOrDefault(file.Agent.Compaction.TriggerTokens, 60000),
+			TargetHistoryTokens: positiveOrDefault(file.Agent.Compaction.TargetHistoryTokens, 12000),
+			Mode:                NormalizeCompactionMode(file.Agent.Compaction.Mode),
+			ModelProfileID:      strings.TrimSpace(file.Agent.Compaction.ModelProfileID),
+			MaxLatencyMS:        positiveOrDefault(file.Agent.Compaction.MaxLatencyMS, 3000),
+		},
+		MaxTurns:     file.Agent.MaxTurns,
+		AgentProfile: NormalizeAgentProfile(file.Agent.Profile),
 		AgentDefaultProfiles: AgentDefaultProfilesConfig{
 			ACP:    NormalizeAgentProfile(file.Agent.DefaultProfiles.ACP),
 			CLI:    NormalizeAgentProfile(file.Agent.DefaultProfiles.CLI),
@@ -2437,6 +2463,18 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.API.TimeoutSeconds = asInt(value)
 	case "agent.compress_threshold":
 		file.Agent.CompressThreshold = asInt(value)
+	case "agent.compaction.auto_enabled":
+		file.Agent.Compaction.AutoEnabled = asBool(value)
+	case "agent.compaction.trigger_tokens":
+		file.Agent.Compaction.TriggerTokens = asInt(value)
+	case "agent.compaction.target_history_tokens":
+		file.Agent.Compaction.TargetHistoryTokens = asInt(value)
+	case "agent.compaction.mode":
+		file.Agent.Compaction.Mode = NormalizeCompactionMode(asString(value))
+	case "agent.compaction.model_profile_id":
+		file.Agent.Compaction.ModelProfileID = strings.TrimSpace(asString(value))
+	case "agent.compaction.max_latency_ms":
+		file.Agent.Compaction.MaxLatencyMS = asInt(value)
 	case "agent.max_turns":
 		file.Agent.MaxTurns = asInt(value)
 	case "agent.profile":
@@ -2927,6 +2965,12 @@ func storedValues(file ConfigFile) map[string]any {
 		"acp.agents":                                             maskACPAgentSections(file.ACP.Agents),
 		"api.timeout_seconds":                                    file.API.TimeoutSeconds,
 		"agent.compress_threshold":                               file.Agent.CompressThreshold,
+		"agent.compaction.auto_enabled":                          file.Agent.Compaction.AutoEnabled,
+		"agent.compaction.trigger_tokens":                        file.Agent.Compaction.TriggerTokens,
+		"agent.compaction.target_history_tokens":                 file.Agent.Compaction.TargetHistoryTokens,
+		"agent.compaction.mode":                                  NormalizeCompactionMode(file.Agent.Compaction.Mode),
+		"agent.compaction.model_profile_id":                      strings.TrimSpace(file.Agent.Compaction.ModelProfileID),
+		"agent.compaction.max_latency_ms":                        file.Agent.Compaction.MaxLatencyMS,
 		"agent.max_turns":                                        file.Agent.MaxTurns,
 		"agent.profile":                                          NormalizeAgentProfile(file.Agent.Profile),
 		"agent.default_profiles.acp":                             NormalizeAgentProfile(file.Agent.DefaultProfiles.ACP),
@@ -3093,6 +3137,12 @@ func effectiveValues(cfg *Config) map[string]any {
 		"acp.agents":                                             maskACPAgentSecrets(cfg.ACP.Agents),
 		"api.timeout_seconds":                                    cfg.APITimeoutSeconds,
 		"agent.compress_threshold":                               cfg.CompressThreshold,
+		"agent.compaction.auto_enabled":                          cfg.Compaction.AutoEnabled,
+		"agent.compaction.trigger_tokens":                        cfg.Compaction.TriggerTokens,
+		"agent.compaction.target_history_tokens":                 cfg.Compaction.TargetHistoryTokens,
+		"agent.compaction.mode":                                  cfg.Compaction.Mode,
+		"agent.compaction.model_profile_id":                      cfg.Compaction.ModelProfileID,
+		"agent.compaction.max_latency_ms":                        cfg.Compaction.MaxLatencyMS,
 		"agent.max_turns":                                        cfg.MaxTurns,
 		"agent.profile":                                          cfg.AgentProfile,
 		"agent.default_profiles.acp":                             cfg.AgentDefaultProfiles.ACP,

@@ -44,8 +44,16 @@ func defaultConfigFile() ConfigFile {
 		},
 		Agent: AgentSection{
 			CompressThreshold: 100000,
-			MaxTurns:          1000,
-			Profile:           AgentProfileGeneral,
+			Compaction: AgentCompactionSection{
+				AutoEnabled:         true,
+				TriggerTokens:       60000,
+				TargetHistoryTokens: 12000,
+				Mode:                "fast",
+				ModelProfileID:      "",
+				MaxLatencyMS:        3000,
+			},
+			MaxTurns: 1000,
+			Profile:  AgentProfileGeneral,
 			DefaultProfiles: AgentDefaultProfilesSection{
 				ACP:    AgentProfileCoding,
 				CLI:    AgentProfileCoding,

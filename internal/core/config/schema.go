@@ -29,6 +29,12 @@ func baseSchema() []SectionSchema {
 			Description: "Conversation and compression tuning.",
 			Fields: []FieldSchema{
 				{Path: "agent.compress_threshold", Label: "Compress Threshold", Description: "Approximate threshold before auto-compaction becomes worthwhile.", Type: "int", LiveApply: true, Env: "COMPRESS_THRESHOLD"},
+				{Path: "agent.compaction.auto_enabled", Label: "Auto Compaction", Description: "Enable automatic fast compaction before context gets too large.", Type: "bool", LiveApply: true, Env: "GODEX_AGENT_COMPACTION_AUTO_ENABLED"},
+				{Path: "agent.compaction.trigger_tokens", Label: "Compaction Trigger Tokens", Description: "Estimated token threshold that triggers fast history compaction.", Type: "int", LiveApply: true, Env: "GODEX_AGENT_COMPACTION_TRIGGER_TOKENS"},
+				{Path: "agent.compaction.target_history_tokens", Label: "Target History Tokens", Description: "Target estimated history budget after fast compaction.", Type: "int", LiveApply: true, Env: "GODEX_AGENT_COMPACTION_TARGET_HISTORY_TOKENS"},
+				{Path: "agent.compaction.mode", Label: "Compaction Mode", Description: "Default compaction mode for manual and background compaction.", Type: "string", LiveApply: true, Env: "GODEX_AGENT_COMPACTION_MODE", Options: []string{"fast", "model", "hybrid"}},
+				{Path: "agent.compaction.model_profile_id", Label: "Compaction Model Profile", Description: "Optional model profile used only for explicit model or hybrid compaction.", Type: "string", LiveApply: true, Env: "GODEX_AGENT_COMPACTION_MODEL_PROFILE_ID"},
+				{Path: "agent.compaction.max_latency_ms", Label: "Compaction Max Latency Ms", Description: "Latency budget for compaction diagnostics and model fallback decisions.", Type: "int", LiveApply: true, Env: "GODEX_AGENT_COMPACTION_MAX_LATENCY_MS"},
 				{Path: "agent.max_turns", Label: "Max Turns", Description: "Maximum model/tool loop iterations for one main-agent turn.", Type: "int", LiveApply: true, Env: "GODEX_AGENT_MAX_TURNS"},
 				{Path: "agent.profile", Label: "Agent Profile", Description: "Default agent capability profile for channels without a specific override.", Type: "string", LiveApply: true, Env: "GODEX_AGENT_PROFILE", Options: []string{"general", "coding"}},
 				{Path: "agent.default_profiles.acp", Label: "ACP Default Profile", Description: "Default agent profile for ACP/IDE sessions.", Type: "string", LiveApply: true, Env: "GODEX_AGENT_DEFAULT_PROFILE_ACP", Options: []string{"coding", "general"}},

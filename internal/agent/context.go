@@ -19,17 +19,22 @@ import (
 )
 
 type BuildContextResult struct {
-	System             string
-	Messages           []protocol.Message
-	ToolSchemas        []protocol.ToolSchema
-	TokenEstimate      int
-	TokenBreakdown     tools.ContextTokenBreakdown
-	CompressionReasons []string
-	Compacted          bool
-	CompactionBefore   int
-	CompactionAfter    int
-	AckRuntime         func()
-	HistoryRecall      *tools.HistoryRecallEvaluation
+	System                string
+	Messages              []protocol.Message
+	ToolSchemas           []protocol.ToolSchema
+	TokenEstimate         int
+	TokenBreakdown        tools.ContextTokenBreakdown
+	CompressionReasons    []string
+	Compacted             bool
+	CompactionBefore      int
+	CompactionAfter       int
+	PreCompactionTotal    int
+	PostCompactionTotal   int
+	CompactionMode        string
+	CompactionLatencyMS   int64
+	LargestContextSources []tools.ContextSourcePressure
+	AckRuntime            func()
+	HistoryRecall         *tools.HistoryRecallEvaluation
 }
 
 type toolExposureHints struct {
@@ -67,19 +72,20 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	}
 	allRuntimeMessages := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
 
-	preliminary := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), a.cfg.CompressThreshold)
-	compactedHistory, compacted, err := a.maybeAutoCompact(ctx, history, version, system, preliminary)
+	triggerTokens := a.compactionTriggerTokens()
+	preliminary := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), triggerTokens)
+	compactedHistory, compacted, compactionDiag, err := a.maybeAutoCompact(ctx, history, version, system, preliminary)
 	if err != nil {
 		return nil, err
 	}
 	combined := append(protocol.CloneMessages(compactedHistory), memoryMessages...)
 	combined = append(combined, promptStateMessages...)
 	combined = append(combined, runtimeMessages...)
-	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), a.cfg.CompressThreshold)
+	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), triggerTokens)
 	historyRecall := a.evaluateHistoryRecall(ctx, query, compactedHistory, memoryLayers, compacted)
 	hints := deriveToolExposureHints(query, postCompactEstimate.Breakdown.Total, historyRecall)
 	toolSchemas := a.activeToolSchemas(hints, agentProfile)
-	estimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, toolSchemas, a.cfg.CompressThreshold)
+	estimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, toolSchemas, triggerTokens)
 	reasons := estimate.Reasons
 	compactionBefore := 0
 	compactionAfter := 0
@@ -92,17 +98,22 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	}
 
 	return &BuildContextResult{
-		System:             system,
-		Messages:           combined,
-		ToolSchemas:        toolSchemas,
-		TokenEstimate:      estimate.Breakdown.Total,
-		TokenBreakdown:     estimate.Breakdown,
-		CompressionReasons: reasons,
-		Compacted:          compacted,
-		CompactionBefore:   compactionBefore,
-		CompactionAfter:    compactionAfter,
-		AckRuntime:         ackRuntime,
-		HistoryRecall:      historyRecall,
+		System:                system,
+		Messages:              combined,
+		ToolSchemas:           toolSchemas,
+		TokenEstimate:         estimate.Breakdown.Total,
+		TokenBreakdown:        estimate.Breakdown,
+		CompressionReasons:    reasons,
+		Compacted:             compacted,
+		CompactionBefore:      compactionBefore,
+		CompactionAfter:       compactionAfter,
+		PreCompactionTotal:    preliminary.Breakdown.Total,
+		PostCompactionTotal:   postCompactEstimate.Breakdown.Total,
+		CompactionMode:        compactionDiag.Mode,
+		CompactionLatencyMS:   compactionDiag.LatencyMS,
+		LargestContextSources: largestContextSources(estimate.Breakdown),
+		AckRuntime:            ackRuntime,
+		HistoryRecall:         historyRecall,
 	}, nil
 }
 

@@ -33,7 +33,8 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 	allRuntimeMessages := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
 
 	toolSchemas := a.toolHandler.ActiveSchemas()
-	estimate := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, toolSchemas, a.cfg.CompressThreshold)
+	triggerTokens := a.compactionTriggerTokens()
+	estimate := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, toolSchemas, triggerTokens)
 	pendingCount := 0
 	if a.permissions != nil && strings.TrimSpace(sessionID) != "" {
 		pendingCount = len(a.permissions.ListPending(sessionID))
@@ -46,9 +47,13 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 		TotalTokenEstimate:            estimate.Breakdown.Total,
 		TokenBreakdown:                estimate.Breakdown,
 		PrefixCache:                   prefixCacheInspection(system, toolSchemas, history, promptStateSections, promptStateMessages),
-		CompressThreshold:             a.cfg.CompressThreshold,
+		CompressThreshold:             triggerTokens,
 		SuggestCompact:                len(estimate.Reasons) > 0,
 		CompressionReasons:            append([]string{}, estimate.Reasons...),
+		PreCompactionTotal:            estimate.Breakdown.Total,
+		PostCompactionTotal:           estimate.Breakdown.Total,
+		CompactionMode:                normalizeAgentCompactionMode(a.cfg.Compaction.Mode),
+		LargestContextSources:         largestContextSources(estimate.Breakdown),
 		ActiveSkillCount:              len(a.ActiveSkillNames()),
 		PendingPermissionCount:        pendingCount,
 		LargeToolResultReferenceCount: estimate.LargeToolResultReferenceCount,
@@ -58,6 +63,11 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 
 // CompactConversation manually compacts the persistent conversation history.
 func (a *Agent) CompactConversation() (string, error) {
+	return a.CompactConversationWithMode("fast")
+}
+
+// CompactConversationWithMode manually compacts persistent conversation history.
+func (a *Agent) CompactConversationWithMode(mode string) (string, error) {
 	system, err := a.buildRuntimeSystemPrompt()
 	if err != nil {
 		return "", err
@@ -67,7 +77,7 @@ func (a *Agent) CompactConversation() (string, error) {
 		return "No messages to compress", nil
 	}
 
-	result, err := a.summarizer.SummarizeSession(context.Background(), compress.SessionSummaryRequest{
+	result, err := a.runCompaction(context.Background(), mode, compress.SessionSummaryRequest{
 		System:               system,
 		History:              protocol.CloneMessages(history),
 		RecentUserMessages:   recentPersistentUserMessages(history, 6),
@@ -125,20 +135,34 @@ func (a *Agent) storeCompactedMessages(messages []protocol.Message) {
 	a.lastCompactedVersion = a.historyVersion
 }
 
-func (a *Agent) maybeAutoCompact(ctx context.Context, history []protocol.Message, version int64, system string, estimate contextBudgetEstimate) ([]protocol.Message, bool, error) {
-	if !shouldAutoCompact(estimate, a.cfg.CompressThreshold) {
-		return history, false, nil
+func (a *Agent) maybeAutoCompact(ctx context.Context, history []protocol.Message, version int64, system string, estimate contextBudgetEstimate) ([]protocol.Message, bool, compactionRunResult, error) {
+	if !a.shouldAutoCompact(estimate) {
+		return history, false, compactionRunResult{}, nil
 	}
 
 	a.mu.Lock()
 	if a.lastCompactedVersion == version {
 		current := protocol.CloneMessages(a.messages)
 		a.mu.Unlock()
-		return current, false, nil
+		return current, false, compactionRunResult{}, nil
 	}
 	a.mu.Unlock()
 
-	result, err := a.summarizer.SummarizeSession(ctx, compress.SessionSummaryRequest{
+	if candidate := a.takeCompactionCandidate(version); candidate != nil {
+		compacted := candidate.Result.Messages
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.historyVersion != version {
+			return protocol.CloneMessages(a.messages), false, compactionRunResult{}, nil
+		}
+		a.messages = protocol.CloneMessages(compacted)
+		a.transcriptRefs = mergeTranscriptRefs(a.transcriptRefs, extractTranscriptRefs(compacted))
+		a.historyVersion++
+		a.lastCompactedVersion = a.historyVersion
+		return protocol.CloneMessages(a.messages), true, candidate.Result, nil
+	}
+
+	result, err := a.runCompaction(ctx, "fast", compress.SessionSummaryRequest{
 		System:               system,
 		History:              protocol.CloneMessages(history),
 		TokenBreakdown:       tokenBreakdownMap(estimate.Breakdown),
@@ -146,18 +170,18 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, history []protocol.Message
 		ContinuationSnapshot: a.continuationSnapshot(tools.SessionContextFromContext(ctx).SessionID, history),
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, false, compactionRunResult{}, err
 	}
 	compacted := result.Messages
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.historyVersion != version {
-		return protocol.CloneMessages(a.messages), false, nil
+		return protocol.CloneMessages(a.messages), false, compactionRunResult{}, nil
 	}
 	a.messages = protocol.CloneMessages(compacted)
 	a.transcriptRefs = mergeTranscriptRefs(a.transcriptRefs, extractTranscriptRefs(compacted))
 	a.historyVersion++
 	a.lastCompactedVersion = a.historyVersion
-	return protocol.CloneMessages(a.messages), true, nil
+	return protocol.CloneMessages(a.messages), true, result, nil
 }

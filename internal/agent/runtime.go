@@ -525,6 +525,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 				Message: fmt.Sprintf("failed to capture memory candidates: %v", captureErr),
 			})
 		}
+		a.maybeStartBackgroundCompaction(ctx)
 	}
 	if errors.Is(err, conversation.ErrMaxTurnsReached) {
 		err = fmt.Errorf("%w after %d turns", conversation.ErrMaxTurnsReached, maxTurns)

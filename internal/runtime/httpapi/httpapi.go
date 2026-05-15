@@ -27,6 +27,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/usage"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/version"
 )
@@ -252,8 +253,9 @@ func NewHandler(
 	weixinAuth weixinAuthProvider,
 	cronRuntime cronAutomationProvider,
 	heartbeatRuntime heartbeatAutomationProvider,
+	usageService *usage.Service,
 ) http.Handler {
-	return NewHandlerWithRuntime(manager, service, channels, weixinAuth, cronRuntime, heartbeatRuntime, nil)
+	return NewHandlerWithRuntime(manager, service, channels, weixinAuth, cronRuntime, heartbeatRuntime, nil, usageService)
 }
 
 func NewHandlerWithRuntime(
@@ -264,6 +266,7 @@ func NewHandlerWithRuntime(
 	cronRuntime cronAutomationProvider,
 	heartbeatRuntime heartbeatAutomationProvider,
 	serviceRuntime serviceRuntimeProvider,
+	usageService *usage.Service,
 	controlRegistries ...controlNodeRegistry,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -440,9 +443,25 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, channels.StatusReport())
 	})))
-	mux.Handle("POST /v1/chat/completions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleOpenAIChatCompletions(w, r, service)
-	})))
+	mux.Handle("POST /v1/chat/completions", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is a usage gateway request (proxy key auth)
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(auth), "bearer gdx_") {
+			if usageService != nil {
+				handleUsageGatewayChatCompletions(w, r, usageService, manager)
+			} else {
+				writeError(w, http.StatusServiceUnavailable, fmt.Errorf("usage gateway not configured"))
+			}
+			return
+		}
+		// Otherwise use existing web-token-protected handler
+		protected := withBearerAuthProvider(func() string {
+			return manager.Current().WebToken
+		})
+		protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handleOpenAIChatCompletions(w, r, service)
+		})).ServeHTTP(w, r)
+	}))
 	mux.Handle("GET /models", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		view, err := service.Models(r.Context(), strings.TrimSpace(r.URL.Query().Get("session_id")))
 		if err != nil {
@@ -1615,7 +1634,189 @@ func NewHandlerWithRuntime(
 			}
 		}
 	})))
+	// ---- Usage Gateway Management Routes ----
+	if usageService != nil {
+		mux.Handle("GET /usage/keys", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			keys, err := usageService.ListKeys()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, keys)
+		})))
+		mux.Handle("POST /usage/keys", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req usage.KeyCreateRequest
+			if err := decodeJSON(r, &req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			resp, err := usageService.CreateKey(req)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			writeJSON(w, http.StatusCreated, resp)
+		})))
+		mux.Handle("PATCH /usage/keys/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req usage.KeyUpdateRequest
+			if err := decodeJSON(r, &req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			key, err := usageService.UpdateKey(r.PathValue("id"), req)
+			if err != nil {
+				writeError(w, http.StatusNotFound, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, key)
+		})))
+		mux.Handle("GET /usage/models", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			models, err := usageService.ListModels()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, models)
+		})))
+		mux.Handle("POST /usage/models", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req usage.ModelCreateRequest
+			if err := decodeJSON(r, &req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			m, err := usageService.CreateModel(req)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			writeJSON(w, http.StatusCreated, m)
+		})))
+		mux.Handle("PATCH /usage/models/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req usage.ModelUpdateRequest
+			if err := decodeJSON(r, &req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			m, err := usageService.UpdateModel(r.PathValue("id"), req)
+			if err != nil {
+				writeError(w, http.StatusNotFound, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, m)
+		})))
+		mux.Handle("GET /usage/summary", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rangeType := r.URL.Query().Get("range")
+			apiKeyID := r.URL.Query().Get("api_key_id")
+			if rangeType == "" {
+				rangeType = "day"
+			}
+			summary, err := usageService.GetSummary(rangeType, apiKeyID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+		})))
+		mux.Handle("GET /usage/calls", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			date := r.URL.Query().Get("date")
+			apiKeyID := r.URL.Query().Get("api_key_id")
+			calls, err := usageService.GetCalls(date, apiKeyID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, calls)
+		})))
+	}
 	return mux
+}
+
+	// ---- Usage Gateway Chat Completions ----
+func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, usageService *usage.Service, manager *config.Manager) {
+	start := time.Now()
+
+	// Authenticate proxy key
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	secret := strings.TrimPrefix(auth, "Bearer ")
+	secret = strings.TrimSpace(secret)
+
+	key, err := usageService.AuthenticateKey(secret)
+	if err != nil {
+		writeUsageGatewayError(w, http.StatusUnauthorized, "invalid_api_key", "Invalid API Key. Please provide a valid proxy key.")
+		return
+	}
+
+	var req openAIChatCompletionRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeUsageGatewayError(w, http.StatusBadRequest, "invalid_request", "Invalid request body.")
+		return
+	}
+
+	// Resolve model
+	if req.Model == "" {
+		writeUsageGatewayError(w, http.StatusBadRequest, "invalid_model", "Model is required.")
+		return
+	}
+
+	// Check allowed models
+	if len(key.AllowedModels) > 0 {
+		allowed := false
+		for _, m := range key.AllowedModels {
+			if m == req.Model {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeUsageGatewayError(w, http.StatusForbidden, "model_not_allowed", fmt.Sprintf("Model '%s' is not allowed for this API key.", req.Model))
+			return
+		}
+	}
+
+	// Resolve model mapping
+	modelMapping, err := usageService.ResolveModel(req.Model)
+	if err != nil {
+		writeUsageGatewayError(w, http.StatusNotFound, "model_not_found", fmt.Sprintf("Model '%s' not found or disabled.", req.Model))
+		return
+	}
+
+	latencyMs := time.Since(start).Milliseconds()
+
+	// MVP: record call and return 501 - provider forwarding TBD
+	now := time.Now()
+	call := &usage.UsageCall{
+		Timestamp:       now,
+		APIKeyID:        key.ID,
+		PublicModel:     req.Model,
+		TargetProfileID: modelMapping.TargetProfileID,
+		TargetModel:     modelMapping.TargetModel,
+		CreditWeight:    modelMapping.CreditWeight,
+		Status:          "success",
+		LatencyMs:       latencyMs,
+		Estimated:       true,
+	}
+	if err := usageService.RecordCall(call); err != nil {
+		// Non-fatal: log but still return 501
+	}
+
+	// Return 501 with info about the resolved mapping
+	writeJSON(w, http.StatusNotImplemented, map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": "Provider forwarding not yet implemented. Resolved: " + modelMapping.TargetProfileID + "/" + modelMapping.TargetModel,
+			"type":    "not_implemented",
+			"code":    "501",
+		},
+	})
+}
+
+func writeUsageGatewayError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": message,
+			"type":    code,
+			"code":    fmt.Sprintf("%d", status),
+		},
+	})
 }
 
 func handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Request, service *backend.Service) {

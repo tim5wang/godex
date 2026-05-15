@@ -51,6 +51,11 @@ import type {
   SessionContextInspector,
   SessionLocator,
   Snapshot,
+  UsageCall,
+  UsageKey,
+  UsageKeyCreateResponse,
+  UsageModelMapping,
+  UsageSummary,
   WeixinAuthStatus,
 } from "./types";
 
@@ -944,4 +949,93 @@ export function executeCommand(token: string | null, sessionId: string, command:
     },
     token,
   );
+}
+
+// ---- Usage Gateway API ----
+
+export function listUsageKeys(token: string | null) {
+  return request<UsageKey[]>("/usage/keys", { method: "GET" }, token);
+}
+
+export function createUsageKey(
+  token: string | null,
+  body: { name: string; budget_credits?: number; warning_threshold?: number; allowed_models?: string[] },
+) {
+  return request<UsageKeyCreateResponse>(
+    "/usage/keys",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export function updateUsageKey(
+  token: string | null,
+  id: string,
+  body: { name?: string; enabled?: boolean; budget_credits?: number; warning_threshold?: number; allowed_models?: string[] },
+) {
+  return request<UsageKey>(
+    `/usage/keys/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export function listUsageModels(token: string | null) {
+  return request<UsageModelMapping[]>("/usage/models", { method: "GET" }, token);
+}
+
+export function createUsageModel(
+  token: string | null,
+  body: { public_model: string; target_profile_id: string; target_model: string; credit_weight?: number },
+) {
+  return request<UsageModelMapping>(
+    "/usage/models",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export function updateUsageModel(
+  token: string | null,
+  id: string,
+  body: { public_model?: string; target_profile_id?: string; target_model?: string; credit_weight?: number; enabled?: boolean },
+) {
+  return request<UsageModelMapping>(
+    `/usage/models/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export function getUsageSummary(token: string | null, range: "day" | "week" = "day", apiKeyId?: string) {
+  const search = new URLSearchParams();
+  search.set("range", range);
+  if (apiKeyId?.trim()) {
+    search.set("api_key_id", apiKeyId.trim());
+  }
+  return request<UsageSummary[]>(`/usage/summary?${search.toString()}`, { method: "GET" }, token);
+}
+
+export function listUsageCalls(token: string | null, date?: string, apiKeyId?: string) {
+  const search = new URLSearchParams();
+  if (date?.trim()) {
+    search.set("date", date.trim());
+  }
+  if (apiKeyId?.trim()) {
+    search.set("api_key_id", apiKeyId.trim());
+  }
+  const query = search.toString();
+  return request<UsageCall[]>(`/usage/calls${query ? `?${query}` : ""}`, { method: "GET" }, token);
 }

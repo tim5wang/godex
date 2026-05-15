@@ -1,0 +1,655 @@
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Alert,
+  App as AntApp,
+  AutoComplete,
+  Button,
+  Card,
+  DatePicker,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Switch,
+  Table,
+  Tabs,
+  Tag,
+  Typography,
+} from "antd";
+import {
+  CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+} from "@ant-design/icons";
+import dayjs from "dayjs";
+import { useI18n } from "../../i18n";
+import { showError } from "../../lib/notifications";
+import { writeClipboardText } from "../../lib/clipboard";
+import {
+  createUsageKey,
+  createUsageModel,
+  getModels,
+  getUsageSummary,
+  listProviders,
+  listUsageCalls,
+  listUsageKeys,
+  listUsageModels,
+  updateUsageKey,
+  updateUsageModel,
+} from "../../lib/api";
+import type { ModelsView, ProviderListResponse, UsageCall, UsageKey, UsageModelMapping, UsageSummary } from "../../lib/types";
+
+const { Title, Text } = Typography;
+
+function maskKeyPrefix(prefix: string): string {
+  if (prefix.length > 8) {
+    return prefix.slice(0, 8) + "****";
+  }
+  return prefix;
+}
+
+export function UsagePage() {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const { message: antMessage } = AntApp.useApp();
+  const [token] = useState(() => localStorage.getItem("godex_token"));
+
+  // ---- Modal state ----
+  const [createKeyOpen, setCreateKeyOpen] = useState(false);
+  const [editKeyOpen, setEditKeyOpen] = useState(false);
+  const [editingKey, setEditingKey] = useState<UsageKey | null>(null);
+  const [createModelOpen, setCreateModelOpen] = useState(false);
+  const [editModelOpen, setEditModelOpen] = useState(false);
+  const [editingModel, setEditingModel] = useState<UsageModelMapping | null>(null);
+
+  // ---- Form instances ----
+  const [createKeyForm] = Form.useForm();
+  const [editKeyForm] = Form.useForm();
+  const [createModelForm] = Form.useForm();
+  const [editModelForm] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
+
+  // ---- Queries ----
+  const keysQuery = useQuery<UsageKey[]>({
+    queryKey: ["usage", "keys"],
+    queryFn: () => listUsageKeys(token),
+  });
+
+  const modelsQuery = useQuery<UsageModelMapping[]>({
+    queryKey: ["usage", "models"],
+    queryFn: () => listUsageModels(token),
+  });
+
+  const [summaryRange, setSummaryRange] = useState<"day" | "week">("day");
+  const [summaryKeyId, setSummaryKeyId] = useState<string>("");
+
+  const summaryQuery = useQuery<UsageSummary[]>({
+    queryKey: ["usage", "summary", summaryRange, summaryKeyId],
+    queryFn: () => getUsageSummary(token, summaryRange, summaryKeyId || undefined),
+  });
+
+  const [callsDate, setCallsDate] = useState(() => dayjs().format("YYYY-MM-DD"));
+  const [callsKeyId, setCallsKeyId] = useState<string>("");
+
+  // ---- Provider data (for model mapping target_profile_id options) ----
+  const providersQuery = useQuery<ProviderListResponse>({
+    queryKey: ["providers", token],
+    queryFn: () => listProviders(token),
+  });
+
+  // ---- Provider models (all configured model profiles, filtered by selected provider) ----
+  const allModelsQuery = useQuery<ModelsView>({
+    queryKey: ["models", token],
+    queryFn: () => getModels(token),
+  });
+
+  const providerModelOptions = useMemo(() => {
+    if (!selectedProfileId) return [];
+    return (allModelsQuery.data?.profiles ?? [])
+      .filter((p) => p.provider === selectedProfileId)
+      .map((p) => ({
+        value: p.model,
+        label: p.name ? `${p.name} (${p.model})` : p.model,
+      }));
+  }, [allModelsQuery.data, selectedProfileId]);
+
+  // ---- Model mapping option lists (unique values from existing mappings) ----
+  const publicModelOptions = useMemo(
+    () => [...new Set((modelsQuery.data ?? []).map((m) => m.public_model))].map((v) => ({ value: v })),
+    [modelsQuery.data],
+  );
+  const allowedModelOptions = useMemo(
+    () => [...new Set((modelsQuery.data ?? []).map((m) => m.public_model))].map((v) => ({ value: v })),
+    [modelsQuery.data],
+  );
+  const providerSelectOptions = useMemo(
+    () => (providersQuery.data?.providers ?? []).map((p) => ({
+      value: p.id,
+      label: p.name ? `${p.name} (${p.type})` : `${p.id} (${p.type})`,
+    })),
+    [providersQuery.data],
+  );
+
+  const callsQuery = useQuery<UsageCall[]>({
+    queryKey: ["usage", "calls", callsDate, callsKeyId],
+    queryFn: () => listUsageCalls(token, callsDate, callsKeyId || undefined),
+  });
+
+  // ---- Handlers ----
+  const handleCreateKey = async (values: { name: string; budget_credits: number; warning_threshold: number; allowed_models: string[] }) => {
+    setSubmitting(true);
+    try {
+      const res = await createUsageKey(token, {
+        name: values.name,
+        budget_credits: values.budget_credits || 0,
+        warning_threshold: values.warning_threshold || 0,
+        allowed_models: values.allowed_models ?? [],
+      });
+      antMessage.success(`Key created! Secret: ${res.secret}. Copy it now - it won't be shown again.`);
+      queryClient.invalidateQueries({ queryKey: ["usage", "keys"] });
+      setCreateKeyOpen(false);
+      createKeyForm.resetFields();
+    } catch (err) {
+      showError(antMessage, err, "Failed to create key");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleEditKey = async (values: { name: string; budget_credits: number; warning_threshold: number; allowed_models: string[] }) => {
+    if (!editingKey) return;
+    setSubmitting(true);
+    try {
+      await updateUsageKey(token, editingKey.id, {
+        name: values.name,
+        budget_credits: values.budget_credits,
+        warning_threshold: values.warning_threshold,
+        allowed_models: values.allowed_models,
+      });
+      antMessage.success("Key updated");
+      queryClient.invalidateQueries({ queryKey: ["usage", "keys"] });
+      setEditKeyOpen(false);
+      setEditingKey(null);
+    } catch (err) {
+      showError(antMessage, err, "Failed to update key");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleToggleKey = async (id: string, enabled: boolean) => {
+    try {
+      await updateUsageKey(token, id, { enabled });
+      queryClient.invalidateQueries({ queryKey: ["usage", "keys"] });
+    } catch (err) {
+      showError(antMessage, err, "Failed to update key");
+    }
+  };
+
+  const handleCreateModel = async (values: { public_model: string; target_profile_id: string; target_model: string; credit_weight: number }) => {
+    setSubmitting(true);
+    try {
+      await createUsageModel(token, values);
+      antMessage.success("Model mapping created");
+      queryClient.invalidateQueries({ queryKey: ["usage", "models"] });
+      setCreateModelOpen(false);
+      createModelForm.resetFields();
+    } catch (err) {
+      showError(antMessage, err, "Failed to create model");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleEditModel = async (values: { public_model: string; target_profile_id: string; target_model: string; credit_weight: number }) => {
+    if (!editingModel) return;
+    setSubmitting(true);
+    try {
+      await updateUsageModel(token, editingModel.id, values);
+      antMessage.success("Model mapping updated");
+      queryClient.invalidateQueries({ queryKey: ["usage", "models"] });
+      setEditModelOpen(false);
+      setEditingModel(null);
+    } catch (err) {
+      showError(antMessage, err, "Failed to update model");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleToggleModel = async (id: string, enabled: boolean) => {
+    try {
+      await updateUsageModel(token, id, { enabled });
+      queryClient.invalidateQueries({ queryKey: ["usage", "models"] });
+    } catch (err) {
+      showError(antMessage, err, "Failed to update model");
+    }
+  };
+
+  // ---- Key columns ----
+  const keyColumns = [
+    { title: "Name", dataIndex: "name", key: "name" },
+    {
+      title: "Key",
+      dataIndex: "key_prefix",
+      key: "key_prefix",
+      render: (v: string) => (
+        <Space size={4}>
+          <Text code>{maskKeyPrefix(v)}</Text>
+          <CopyOutlined
+            aria-label="Copy key prefix"
+            style={{ cursor: "pointer", color: "#1677ff", fontSize: 13 }}
+            onClick={async () => {
+              try {
+                await writeClipboardText(v);
+                antMessage.success("Key prefix copied");
+              } catch (err) {
+                showError(antMessage, err, "Failed to copy");
+              }
+            }}
+          />
+        </Space>
+      ),
+    },
+    {
+      title: "Enabled",
+      dataIndex: "enabled",
+      key: "enabled",
+      render: (_: boolean, record: UsageKey) => (
+        <Switch
+          checked={record.enabled}
+          onChange={(checked) => handleToggleKey(record.id, checked)}
+        />
+      ),
+    },
+    { title: "Budget", dataIndex: "budget_credits", key: "budget_credits", render: (v: number) => v.toLocaleString() },
+    { title: "Warning", dataIndex: "warning_threshold", key: "warning_threshold", render: (v: number) => v.toLocaleString() },
+    {
+      title: "Allowed Models",
+      dataIndex: "allowed_models",
+      key: "allowed_models",
+      render: (v: string[]) => v?.map((m) => <Tag key={m}>{m}</Tag>) ?? <Text type="secondary">all</Text>,
+    },
+    {
+      title: "",
+      key: "actions",
+      width: 48,
+      render: (_: unknown, record: UsageKey) => (
+        <Button
+          type="text"
+          size="small"
+          icon={<EditOutlined />}
+          aria-label={`Edit key ${record.name}`}
+          onClick={() => {
+            setEditingKey(record);
+            editKeyForm.setFieldsValue({
+              name: record.name,
+              budget_credits: record.budget_credits,
+              warning_threshold: record.warning_threshold,
+              allowed_models: record.allowed_models ?? [],
+            });
+            setEditKeyOpen(true);
+          }}
+        />
+      ),
+    },
+  ];
+
+  // ---- Model columns ----
+  const modelColumns = [
+    { title: "Public Model", dataIndex: "public_model", key: "public_model" },
+    { title: "Target Provider", dataIndex: "target_profile_id", key: "target_profile_id" },
+    { title: "Target Model", dataIndex: "target_model", key: "target_model" },
+    { title: "Weight", dataIndex: "credit_weight", key: "credit_weight" },
+    {
+      title: "Enabled",
+      dataIndex: "enabled",
+      key: "enabled",
+      render: (_: boolean, record: UsageModelMapping) => (
+        <Switch
+          checked={record.enabled}
+          onChange={(checked) => handleToggleModel(record.id, checked)}
+        />
+      ),
+    },
+    {
+      title: "",
+      key: "actions",
+      width: 48,
+      render: (_: unknown, record: UsageModelMapping) => (
+        <Button
+          type="text"
+          size="small"
+          icon={<EditOutlined />}
+          aria-label={`Edit mapping ${record.public_model}`}
+          onClick={() => {
+            setEditingModel(record);
+            setSelectedProfileId(record.target_profile_id);
+            editModelForm.setFieldsValue({
+              public_model: record.public_model,
+              target_profile_id: record.target_profile_id,
+              target_model: record.target_model,
+              credit_weight: record.credit_weight,
+            });
+            setEditModelOpen(true);
+          }}
+        />
+      ),
+    },
+  ];
+
+  // ---- Summary columns ----
+  const summaryColumns = [
+    { title: "Key ID", dataIndex: "api_key_id", key: "api_key_id", render: (v?: string) => v ? <Text code>{v.slice(0, 12)}...</Text> : <Text type="secondary">all</Text> },
+    { title: "Calls", dataIndex: "call_count", key: "call_count" },
+    { title: "Errors", dataIndex: "error_count", key: "error_count" },
+    { title: "Input", dataIndex: "input_tokens", key: "input_tokens" },
+    { title: "Output", dataIndex: "output_tokens", key: "output_tokens" },
+    { title: "Cache R", dataIndex: "cache_read_tokens", key: "cache_read_tokens" },
+    { title: "Cache W", dataIndex: "cache_write_tokens", key: "cache_write_tokens" },
+    { title: "Billable", dataIndex: "billable_tokens", key: "billable_tokens" },
+    { title: "Credits", dataIndex: "credits", key: "credits", render: (v: number) => v.toFixed(2) },
+  ];
+
+  // ---- Calls columns ----
+  const callsColumns = [
+    { title: "Time", dataIndex: "timestamp", key: "timestamp", render: (v: string) => dayjs(v).format("HH:mm:ss") },
+    { title: "Key", dataIndex: "api_key_id", key: "api_key_id", render: (v: string) => <Text code>{v.slice(0, 8)}...</Text> },
+    { title: "Model", dataIndex: "public_model", key: "public_model" },
+    { title: "Target", dataIndex: "target_model", key: "target_model", render: (_: string, r: UsageCall) => `${r.target_profile_id}/${r.target_model}` },
+    { title: "In", dataIndex: "input_tokens", key: "input_tokens" },
+    { title: "Out", dataIndex: "output_tokens", key: "output_tokens" },
+    { title: "Cache R", dataIndex: "cache_read_tokens", key: "cache_read_tokens" },
+    { title: "Cache W", dataIndex: "cache_write_tokens", key: "cache_write_tokens" },
+    { title: "Weight", dataIndex: "credit_weight", key: "credit_weight" },
+    { title: "Credits", dataIndex: "credits", key: "credits", render: (v: number) => v.toFixed(2) },
+    {
+      title: "Status",
+      dataIndex: "status",
+      key: "status",
+      render: (v: string) => v === "success" ? <Tag color="green">success</Tag> : <Tag color="red">{v}</Tag>,
+    },
+  ];
+
+  return (
+    <div style={{ padding: 24 }}>
+      <Title level={3}>Usage Gateway</Title>
+
+      <Tabs defaultActiveKey="keys" items={[
+        {
+          key: "keys",
+          label: "API Keys",
+          children: (
+            <Card
+              title="Proxy API Keys"
+              extra={
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={() => setCreateKeyOpen(true)}
+                >
+                  Create Key
+                </Button>
+              }
+            >
+              <Table
+                dataSource={keysQuery.data ?? []}
+                columns={keyColumns}
+                rowKey="id"
+                loading={keysQuery.isLoading}
+                size="small"
+              />
+            </Card>
+          ),
+        },
+        {
+          key: "models",
+          label: "Model Mappings",
+          children: (
+            <Card
+              title="Proxy Model Mappings"
+              extra={
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={() => setCreateModelOpen(true)}
+                >
+                  Add Model
+                </Button>
+              }
+            >
+              <Table
+                dataSource={modelsQuery.data ?? []}
+                columns={modelColumns}
+                rowKey="id"
+                loading={modelsQuery.isLoading}
+                size="small"
+              />
+            </Card>
+          ),
+        },
+        {
+          key: "summary",
+          label: "Summary",
+          children: (
+            <Card
+              title="Token & Credit Summary"
+              extra={
+                <Space>
+                  <Select
+                    value={summaryRange}
+                    onChange={setSummaryRange}
+                    options={[
+                      { value: "day", label: "Day" },
+                      { value: "week", label: "Week" },
+                    ]}
+                    style={{ width: 100 }}
+                  />
+                  <Select
+                    value={summaryKeyId}
+                    onChange={setSummaryKeyId}
+                    allowClear
+                    placeholder="All keys"
+                    style={{ width: 200 }}
+                    options={(keysQuery.data ?? []).map((k) => ({ value: k.id, label: k.name }))}
+                  />
+                  <Button icon={<ReloadOutlined />} onClick={() => summaryQuery.refetch()} />
+                </Space>
+              }
+            >
+              <Table
+                dataSource={summaryQuery.data ?? []}
+                columns={summaryColumns}
+                rowKey={(r) => r.api_key_id ?? "all"}
+                loading={summaryQuery.isLoading}
+                size="small"
+              />
+            </Card>
+          ),
+        },
+        {
+          key: "calls",
+          label: "Daily Calls",
+          children: (
+            <Card
+              title="Usage Calls"
+              extra={
+                <Space>
+                  <DatePicker
+                    value={dayjs(callsDate)}
+                    onChange={(d) => setCallsDate(d?.format("YYYY-MM-DD") ?? dayjs().format("YYYY-MM-DD"))}
+                  />
+                  <Select
+                    value={callsKeyId}
+                    onChange={setCallsKeyId}
+                    allowClear
+                    placeholder="All keys"
+                    style={{ width: 200 }}
+                    options={(keysQuery.data ?? []).map((k) => ({ value: k.id, label: k.name }))}
+                  />
+                  <Button icon={<ReloadOutlined />} onClick={() => callsQuery.refetch()} />
+                </Space>
+              }
+            >
+              <Table
+                dataSource={callsQuery.data ?? []}
+                columns={callsColumns}
+                rowKey="id"
+                loading={callsQuery.isLoading}
+                size="small"
+              />
+            </Card>
+          ),
+        },
+      ]} />
+
+      {/* ===== Create Key Modal ===== */}
+      <Modal
+        title="Create API Key"
+        open={createKeyOpen}
+        confirmLoading={submitting}
+        onOk={() => createKeyForm.submit()}
+        onCancel={() => { setCreateKeyOpen(false); createKeyForm.resetFields(); }}
+        destroyOnClose
+      >
+        <Form form={createKeyForm} layout="vertical" onFinish={handleCreateKey}>
+          <Form.Item name="name" label="Name" rules={[{ required: true, message: "Key name is required" }]}>
+            <Input placeholder="e.g. my-app-key" />
+          </Form.Item>
+          <Form.Item name="budget_credits" label="Budget Credits" initialValue={0}>
+            <InputNumber min={0} style={{ width: "100%" }} placeholder="0 = unlimited" />
+          </Form.Item>
+          <Form.Item name="warning_threshold" label="Warning Threshold" initialValue={0}>
+            <InputNumber min={0} style={{ width: "100%" }} placeholder="0 = no warning" />
+          </Form.Item>
+          <Form.Item name="allowed_models" label="Allowed Models" initialValue={[]}>
+            <Select mode="tags" placeholder="Leave empty for all models" options={allowedModelOptions} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ===== Edit Key Modal ===== */}
+      <Modal
+        title="Edit API Key"
+        open={editKeyOpen}
+        confirmLoading={submitting}
+        onOk={() => editKeyForm.submit()}
+        onCancel={() => { setEditKeyOpen(false); setEditingKey(null); }}
+        destroyOnClose
+      >
+        <Form form={editKeyForm} layout="vertical" onFinish={handleEditKey}>
+          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="budget_credits" label="Budget Credits">
+            <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="warning_threshold" label="Warning Threshold">
+            <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="allowed_models" label="Allowed Models">
+            <Select mode="tags" placeholder="Leave empty for all models" options={allowedModelOptions} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ===== Create Model Mapping Modal ===== */}
+      <Modal
+        title="Add Model Mapping"
+        open={createModelOpen}
+        confirmLoading={submitting}
+        onOk={() => createModelForm.submit()}
+        onCancel={() => { setCreateModelOpen(false); createModelForm.resetFields(); setSelectedProfileId(""); }}
+        destroyOnClose
+      >
+        <Form form={createModelForm} layout="vertical" onFinish={handleCreateModel}>
+          <Form.Item name="public_model" label="Public Model" rules={[{ required: true }]}>
+            <AutoComplete options={publicModelOptions} placeholder="e.g. gpt-4" />
+          </Form.Item>
+          <Form.Item name="target_profile_id" label="Target Provider" rules={[{ required: true }]}>
+            <Select
+              showSearch
+              placeholder="Select a provider"
+              options={providerSelectOptions}
+              filterOption={(input, option) =>
+                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+              }
+              onChange={(value) => {
+                setSelectedProfileId(value);
+                createModelForm.setFieldValue("target_model", undefined);
+              }}
+            />
+          </Form.Item>
+          <Form.Item name="target_model" label="Target Model" rules={[{ required: true }]}>
+            <Select
+              showSearch
+              placeholder={selectedProfileId ? "Select a model" : "Select a provider first"}
+              loading={allModelsQuery.isLoading}
+              options={providerModelOptions}
+              filterOption={(input, option) =>
+                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+              }
+              notFoundContent={allModelsQuery.isLoading ? "Loading models…" : "No models found"}
+            />
+          </Form.Item>
+          <Form.Item name="credit_weight" label="Credit Weight" initialValue={1}>
+            <InputNumber min={0} step={0.1} style={{ width: "100%" }} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ===== Edit Model Mapping Modal ===== */}
+      <Modal
+        title="Edit Model Mapping"
+        open={editModelOpen}
+        confirmLoading={submitting}
+        onOk={() => editModelForm.submit()}
+        onCancel={() => { setEditModelOpen(false); setEditingModel(null); setSelectedProfileId(""); }}
+        destroyOnClose
+      >
+        <Form form={editModelForm} layout="vertical" onFinish={handleEditModel}>
+          <Form.Item name="public_model" label="Public Model" rules={[{ required: true }]}>
+            <AutoComplete options={publicModelOptions} />
+          </Form.Item>
+          <Form.Item name="target_profile_id" label="Target Provider" rules={[{ required: true }]}>
+            <Select
+              showSearch
+              placeholder="Select a provider"
+              options={providerSelectOptions}
+              filterOption={(input, option) =>
+                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+              }
+              onChange={(value) => {
+                setSelectedProfileId(value);
+                editModelForm.setFieldValue("target_model", undefined);
+              }}
+            />
+          </Form.Item>
+          <Form.Item name="target_model" label="Target Model" rules={[{ required: true }]}>
+            <Select
+              showSearch
+              placeholder={selectedProfileId ? "Select a model" : "Select a provider first"}
+              loading={allModelsQuery.isLoading}
+              options={providerModelOptions}
+              filterOption={(input, option) =>
+                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+              }
+              notFoundContent={allModelsQuery.isLoading ? "Loading models…" : "No models found"}
+            />
+          </Form.Item>
+          <Form.Item name="credit_weight" label="Credit Weight">
+            <InputNumber min={0} step={0.1} style={{ width: "100%" }} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  );
+}

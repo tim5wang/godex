@@ -1261,3 +1261,67 @@ export interface TodoFeedStats {
   inProgress: number;
   pending: number;
 }
+
+// ---- Usage Gateway Types ----
+
+export interface UsageKey {
+  id: string;
+  name: string;
+  key_prefix: string;
+  key_hash?: string;
+  enabled: boolean;
+  budget_credits: number;
+  warning_threshold: number;
+  allowed_models: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UsageKeyCreateResponse {
+  key: UsageKey;
+  secret: string;
+}
+
+export interface UsageModelMapping {
+  id: string;
+  public_model: string;
+  target_profile_id: string;
+  target_model: string;
+  credit_weight: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UsageSummary {
+  api_key_id?: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  billable_tokens: number;
+  credits: number;
+  call_count: number;
+  error_count: number;
+}
+
+export interface UsageCall {
+  id: string;
+  timestamp: string;
+  api_key_id: string;
+  public_model: string;
+  target_profile_id: string;
+  target_model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  billable_tokens: number;
+  credit_weight: number;
+  credits: number;
+  estimated: boolean;
+  status: string;
+  error?: string;
+  latency_ms: number;
+}
+

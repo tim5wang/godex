@@ -209,7 +209,7 @@ func TestSessionEndpointsAndSSE(t *testing.T) {
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 	}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSession(t, server.URL)
@@ -300,7 +300,7 @@ func TestProviderModelsEndpointDiscoversModels(t *testing.T) {
 		t.Fatalf("update config: %v", err)
 	}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	resp := postJSON(t, server.URL+"/providers/openai/models", map[string]any{})
@@ -326,7 +326,7 @@ func TestSessionLedgerEndpoints(t *testing.T) {
 	cfg := newTestConfig(t)
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "ledger"})
@@ -362,7 +362,7 @@ func TestPackagesQualityEndpoint(t *testing.T) {
 	cfg := newTestConfig(t)
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	source := t.TempDir()
@@ -457,7 +457,7 @@ func TestMessagesEndpointAcceptsAsyncTurn(t *testing.T) {
 		block:     make(chan struct{}),
 	}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "async-message"})
@@ -498,7 +498,7 @@ func TestCancelTurnEndpointStopsAsyncTurn(t *testing.T) {
 		block:     make(chan struct{}),
 	}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "cancel-turn"})
@@ -550,7 +550,7 @@ func TestRetryTurnEndpointReplaysCanceledTurn(t *testing.T) {
 		block:     make(chan struct{}),
 	}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "retry-turn"})
@@ -607,7 +607,7 @@ func TestResumeTurnEndpointContinuesInterruptedCheckpoint(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("continued")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	locator := backend.SessionLocator{Channel: "web", Key: "resume-turn"}
@@ -703,7 +703,7 @@ func TestEventsEndpointReplaysActiveTurn(t *testing.T) {
 		block:     make(chan struct{}),
 	}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "events-replay"})
@@ -743,7 +743,7 @@ func TestMetaEndpointIsPublic(t *testing.T) {
 	cfg.WebToken = "secret"
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/meta")
@@ -770,7 +770,7 @@ func TestProtectedEndpointsRequireBearerToken(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	resp, err := http.Post(server.URL+"/sessions", "application/json", strings.NewReader(`{"locator":{"channel":"web","key":"default"}}`))
@@ -802,7 +802,7 @@ func TestListSessionsEndpointFiltersByChannel(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	createPersistedSessionWithLocator(t, service, server.URL, map[string]string{"channel": "web", "key": "alpha"})
@@ -835,7 +835,7 @@ func TestListSessionsEndpointIncludesAllChannelsAndReflectsDelete(t *testing.T) 
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 	}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	webSession := createPersistedSessionWithLocator(t, service, server.URL, map[string]string{"channel": "web", "key": "alpha"})
@@ -910,7 +910,7 @@ func TestCommandsEndpointSupportsHistorySearch(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("Logged the rollout note.")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "history-command"})
@@ -956,7 +956,7 @@ func TestAttachmentUploadAndDownloadEndpoints(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "attachments"})
@@ -1017,7 +1017,7 @@ func TestAttachmentUploadAndDownloadPDFEndpoints(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "pdf-attachments"})
@@ -1074,7 +1074,7 @@ Read the diff first.`)
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "skills"})
@@ -1202,7 +1202,7 @@ Read the diff first.`)
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "skills-status"})
@@ -1279,7 +1279,7 @@ Open then capture.`)
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "skills-install"})
@@ -1316,7 +1316,7 @@ func TestSessionSkillSourcesEndpoint(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "skills-sources"})
@@ -1363,7 +1363,7 @@ func TestSessionSkillSourcesEndpointSupportsSkillsHubSearch(t *testing.T) {
 	defer searchServer.Close()
 	t.Setenv("SKILLS_API_URL", searchServer.URL)
 
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "skills-sources-search"})
@@ -1420,7 +1420,7 @@ func TestSessionSkillSourcesEndpointSupportsTrendingMode(t *testing.T) {
 	defer searchServer.Close()
 	t.Setenv("SKILLS_API_URL", searchServer.URL)
 
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "skills-sources-trending"})
@@ -1450,7 +1450,7 @@ func TestSessionTimelineEndpointIncludesTurnAndSkillLifecycle(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	sourceDir := filepath.Join(t.TempDir(), "playwright-cli")
@@ -1543,7 +1543,7 @@ func TestSessionTimelinePageEndpointFiltersAndKeepsArrayEndpoint(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("paged reply")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "timeline-page"})
@@ -1607,7 +1607,7 @@ func TestSessionPermissionEndpointsListAndApprovePendingRequests(t *testing.T) {
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 	}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "permissions"})
@@ -1688,7 +1688,7 @@ func TestMemoryEndpoints(t *testing.T) {
 	cfg.WebToken = "secret-token"
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	rememberResp := doJSONWithToken(t, http.MethodPost, server.URL+"/memory/remember", map[string]any{
@@ -2089,7 +2089,7 @@ func TestSessionContextInspectorEndpoint(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("remember relevant memory: %v", err)
 	}
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened, err := service.OpenSession(context.Background(), backend.SessionLocator{Channel: "web", Key: "context-inspector"})
@@ -2144,7 +2144,7 @@ func TestSessionContextInspectorEndpointIncludesEmptyMemoryPreviewArrays(t *test
 	cfg.WebToken = "secret-token"
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened, err := service.OpenSession(context.Background(), backend.SessionLocator{Channel: "web", Key: "context-inspector-empty-arrays"})
@@ -2195,7 +2195,7 @@ func TestConfigEndpoints(t *testing.T) {
 	cfg.WebToken = "secret-token"
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/config/schema", nil)
@@ -2314,7 +2314,7 @@ func TestConfigReloadAPIReadsDiskAndAppliesRuntime(t *testing.T) {
 	cfg.WebToken = "secret-token"
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	meta := manager.Meta()
@@ -2354,7 +2354,7 @@ func TestRuntimeServiceAPIReportsStatusAndAcceptsRestart(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{}), commands.NewService(cfg))
 	runtime := &stubServiceRuntime{status: map[string]any{"managed": true, "running": true, "name": "godex"}}
-	server := httptest.NewServer(NewHandlerWithRuntime(manager, service, nil, nil, nil, nil, runtime))
+	server := httptest.NewServer(NewHandlerWithRuntime(manager, service, nil, nil, nil, nil, runtime, nil))
 	defer server.Close()
 
 	statusResp := doJSONWithToken(t, http.MethodGet, server.URL+"/runtime/service", nil, cfg.WebToken)
@@ -2393,7 +2393,7 @@ func TestControlNodeRegistryEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new node registry: %v", err)
 	}
-	server := httptest.NewServer(NewHandlerWithRuntime(manager, service, nil, nil, nil, nil, nil, registry))
+	server := httptest.NewServer(NewHandlerWithRuntime(manager, service, nil, nil, nil, nil, nil, nil, registry))
 	defer server.Close()
 
 	resp := doJSONWithToken(t, http.MethodPost, server.URL+"/control/nodes/register", map[string]any{
@@ -2462,7 +2462,7 @@ func TestAutomationCronEndpoints(t *testing.T) {
 			"job-1": {{ID: "run-1", JobID: "job-1", Status: "completed"}},
 		},
 	}
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, cronRuntime, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, cronRuntime, nil, nil))
 	defer server.Close()
 
 	listResp := doJSONWithToken(t, http.MethodGet, server.URL+"/automation/cron/jobs", nil, cfg.WebToken)
@@ -2514,7 +2514,7 @@ func TestAutomationHeartbeatEndpoints(t *testing.T) {
 			{ID: "hb-run-1", RuleID: "default", Status: "suppressed", Suppressed: true},
 		},
 	}
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, heartbeatRuntime))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, heartbeatRuntime, nil))
 	defer server.Close()
 
 	getResp := doJSONWithToken(t, http.MethodGet, server.URL+"/automation/heartbeat", nil, cfg.WebToken)
@@ -2560,7 +2560,7 @@ func TestChannelsStatusEndpoint(t *testing.T) {
 		MarkPoll:    true,
 		MarkInbound: true,
 	})
-	server := httptest.NewServer(NewHandler(manager, service, channelManager, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, channelManager, nil, nil, nil, nil))
 	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/channels")
@@ -2599,7 +2599,7 @@ func TestWeixinAuthEndpoints(t *testing.T) {
 			QRCodeImgURL: "https://example.com/qr.png",
 		},
 	}}
-	server := httptest.NewServer(NewHandler(manager, service, nil, auth, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, auth, nil, nil, nil))
 	defer server.Close()
 
 	statusResp := doJSONWithToken(t, http.MethodGet, server.URL+"/channels/weixin/auth", nil, cfg.WebToken)
@@ -2633,7 +2633,7 @@ func TestOpenAICompatibleChatCompletionEndpoint(t *testing.T) {
 	cfg.WebToken = "secret-token"
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("openai reply")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	resp := doJSONWithToken(t, http.MethodPost, server.URL+"/v1/chat/completions", map[string]interface{}{
@@ -2673,7 +2673,7 @@ func TestOpenAICompatibleChatCompletionStreaming(t *testing.T) {
 	cfg.WebToken = "secret-token"
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("stream reply")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	resp := doJSONWithToken(t, http.MethodPost, server.URL+"/v1/chat/completions", map[string]interface{}{
@@ -2703,7 +2703,7 @@ func TestOpenCorruptSessionReturnsConflict(t *testing.T) {
 	cfg.WebToken = "secret-token"
 	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	locator := backend.SessionLocator{Channel: "web", Key: "corrupt"}
@@ -2745,7 +2745,7 @@ func TestDeleteSessionEndpointRemovesPersistedSession(t *testing.T) {
 	manager := newTestManager(t, cfg)
 	caller := &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
-	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	defer server.Close()
 
 	opened := createSessionWithLocator(t, server.URL, map[string]string{"channel": "web", "key": "delete-me"})

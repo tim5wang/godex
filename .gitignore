@@ -29,3 +29,4 @@ ui/web/*.tsbuildinfo
 # ignore files that changed erery time we build the ui
 internal/uiassets/embedded_dist/assets
 internal/uiassets/embedded_dist/index.html
+godex-linux-amd64

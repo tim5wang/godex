@@ -41,19 +41,20 @@ func (m *model) renderFeedContent() (string, []itemSpan) {
 
 func (m *model) renderItemLines(item feedItem, width int) []string {
 	selected := m.focus == focusFeed && item.ID == m.selectedItemID
+	bodyWidth := maxInt(10, width-2)
 	switch item.Kind {
 	case feedUser:
 		style := userLineStyle
 		if selected {
 			style = selectedTextStyle
 		}
-		return renderPrefixedBlock(item.Body, "› ", "  ", width, style)
+		return withSelectionMarker(renderPrefixedBlock(item.Body, "› ", "  ", bodyWidth, style), selected)
 	case feedAssistant:
 		style := assistantLineStyle
 		if selected {
 			style = selectedTextStyle
 		}
-		return renderPrefixedBlock(item.Body, "• ", "  ", width, style)
+		return withSelectionMarker(renderPrefixedBlock(item.Body, "• ", "  ", bodyWidth, style), selected)
 	case feedTool:
 		return m.renderToolLines(item, width)
 	case feedTodo:
@@ -61,7 +62,7 @@ func (m *model) renderItemLines(item feedItem, width int) []string {
 		if selected {
 			labelStyle = selectedTextStyle
 		}
-		return renderLabeledBlock("☑ "+item.Title, item.Body, width, labelStyle, assistantLineStyle)
+		return withSelectionMarker(renderLabeledBlock("☑ "+item.Title, item.Body, bodyWidth, labelStyle, assistantLineStyle), selected)
 	case feedPermission:
 		return m.renderPermissionLines(item, width)
 	case feedCommand:
@@ -69,22 +70,41 @@ func (m *model) renderItemLines(item feedItem, width int) []string {
 		if selected {
 			labelStyle = selectedTextStyle
 		}
-		return renderLabeledBlock("· "+item.Title, item.Body, width, labelStyle, assistantLineStyle)
+		return withSelectionMarker(renderLabeledBlock("· "+item.Title, item.Body, bodyWidth, labelStyle, assistantLineStyle), selected)
 	case feedWarning:
 		labelStyle := warningLineStyle
 		if selected {
 			labelStyle = selectedTextStyle
 		}
-		return renderLabeledBlock("! "+item.Title, item.Body, width, labelStyle, assistantLineStyle)
+		return withSelectionMarker(renderLabeledBlock("! "+item.Title, item.Body, bodyWidth, labelStyle, assistantLineStyle), selected)
 	case feedError:
 		labelStyle := errorLineStyle
 		if selected {
 			labelStyle = selectedTextStyle
 		}
-		return renderLabeledBlock("x "+item.Title, item.Body, width, labelStyle, assistantLineStyle)
+		return withSelectionMarker(renderLabeledBlock("x "+item.Title, item.Body, bodyWidth, labelStyle, assistantLineStyle), selected)
 	default:
-		return renderPrefixedBlock(item.Body, "", "", width, assistantLineStyle)
+		return withSelectionMarker(renderPrefixedBlock(item.Body, "", "", bodyWidth, assistantLineStyle), selected)
 	}
+}
+
+func withSelectionMarker(lines []string, selected bool) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	prefix := "  "
+	if selected {
+		prefix = "▶ "
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		if i == 0 {
+			out[i] = prefix + line
+			continue
+		}
+		out[i] = "  " + line
+	}
+	return out
 }
 
 func (m *model) renderToolLines(item feedItem, width int) []string {
@@ -113,19 +133,19 @@ func (m *model) renderToolLines(item feedItem, width int) []string {
 		headStyle = toolSelectedStyle
 	}
 
-	lines := []string{headStyle.Render(head)}
+	lines := withSelectionMarker([]string{headStyle.Render(head)}, m.focus == focusFeed && item.ID == m.selectedItemID)
 	if !item.Expanded {
 		if item.Permission != nil {
 			summary := permissionCompactDetailText(*item.Permission)
 			if summary != "" {
-				lines = append(lines, mutedLineStyle.Render(ellipsize("  "+summary, width)))
+				lines = append(lines, "  "+mutedLineStyle.Render(ellipsize("  "+summary, maxInt(10, width-2))))
 			}
 		}
 		return lines
 	}
 
-	for _, line := range wrapWithIndent(toolDetailText(item), "  ", "  ", width) {
-		lines = append(lines, mutedLineStyle.Render(line))
+	for _, line := range wrapWithIndent(toolDetailText(item), "  ", "  ", maxInt(10, width-2)) {
+		lines = append(lines, "  "+mutedLineStyle.Render(line))
 	}
 	return lines
 }
@@ -147,21 +167,21 @@ func (m *model) renderPermissionLines(item feedItem, width int) []string {
 		headStyle = permissionSelectedStyle
 	}
 
-	lines := []string{headStyle.Render(head)}
+	lines := withSelectionMarker([]string{headStyle.Render(head)}, m.focus == focusFeed && item.ID == m.selectedItemID)
 	if !item.Expanded {
 		if item.Permission != nil {
 			if summary := strings.TrimSpace(permissionCompactDetailText(*item.Permission)); summary != "" {
-				lines = append(lines, mutedLineStyle.Render(ellipsize("  "+summary, width)))
+				lines = append(lines, "  "+mutedLineStyle.Render(ellipsize("  "+summary, maxInt(10, width-2))))
 			}
 			if intent := strings.TrimSpace(tools.PermissionIntentSummary(*item.Permission)); intent != "" {
-				lines = append(lines, mutedLineStyle.Render(ellipsize("  "+intent, width)))
+				lines = append(lines, "  "+mutedLineStyle.Render(ellipsize("  "+intent, maxInt(10, width-2))))
 			}
 		}
 		return lines
 	}
 
-	for _, line := range wrapWithIndent(permissionDetailText(item), "  ", "  ", width) {
-		lines = append(lines, mutedLineStyle.Render(line))
+	for _, line := range wrapWithIndent(permissionDetailText(item), "  ", "  ", maxInt(10, width-2)) {
+		lines = append(lines, "  "+mutedLineStyle.Render(line))
 	}
 	return lines
 }

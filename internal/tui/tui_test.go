@@ -638,6 +638,36 @@ func TestFocusStatusLineShowsActiveFocus(t *testing.T) {
 	}
 }
 
+func TestFeedSelectionMarkerIsVisibleAndJKMovesVimStyle(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+		Messages: []protocol.Message{
+			protocol.NewTextMessage(protocol.RoleUser, "first"),
+			protocol.NewTextMessage(protocol.RoleAssistant, "second"),
+			protocol.NewTextMessage(protocol.RoleAssistant, "third"),
+		},
+	})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m.focus = focusFeed
+	m.refreshViewport(false)
+
+	first := m.itemSpans[0].ID
+	second := m.itemSpans[1].ID
+	m.selectedItemID = first
+	if view := m.viewport.View(); !strings.Contains(view, "▶") {
+		t.Fatalf("expected visible selection marker, got %q", view)
+	}
+
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.selectedItemID != second {
+		t.Fatalf("expected j to move down to %q, got %q", second, m.selectedItemID)
+	}
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.selectedItemID != first {
+		t.Fatalf("expected k to move up to %q, got %q", first, m.selectedItemID)
+	}
+}
+
 func TestStatusLineShowsActivePermissionBlocker(t *testing.T) {
 	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
 		Locator: rtbackend.SessionLocator{Channel: "web", Key: "default"},

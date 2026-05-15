@@ -402,6 +402,8 @@ tools:
     interactive_approval_enabled: {{ .Tools.Permissions.InteractiveApprovalEnabled }}
     # manual keeps a pending approval queue; review asks a reviewer subagent first; yolo auto-approves matching protected remote tool calls. Environment override: GODEX_TOOLS_PERMISSIONS_INTERACTIVE_APPROVAL_MODE.
     interactive_approval_mode: {{ yamlString .Tools.Permissions.InteractiveApprovalMode }}
+    # Pending approval time-to-live in seconds. Environment override: GODEX_TOOLS_PERMISSIONS_PENDING_TTL_SECONDS.
+    pending_ttl_seconds: {{ .Tools.Permissions.PendingTTLSeconds }}
     # Remote sources that require approval. Environment override: GODEX_TOOLS_PERMISSIONS_INTERACTIVE_APPROVAL_SOURCES.
     interactive_approval_sources: {{ yamlListIndent .Tools.Permissions.InteractiveApprovalSources 6 }}
     # Tool names subject to approval for the configured sources. Environment override: GODEX_TOOLS_PERMISSIONS_INTERACTIVE_APPROVAL_TOOLS.

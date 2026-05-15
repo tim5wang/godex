@@ -1541,6 +1541,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("tools.permissions.interactive_approval_mode", file.Tools.Permissions.InteractiveApprovalMode, "GODEX_TOOLS_PERMISSIONS_INTERACTIVE_APPROVAL_MODE", func(v string) {
 		current.Tools.Permissions.InteractiveApprovalMode = v
 	})
+	resolveInt("tools.permissions.pending_ttl_seconds", file.Tools.Permissions.PendingTTLSeconds, "GODEX_TOOLS_PERMISSIONS_PENDING_TTL_SECONDS", func(v int) {
+		current.Tools.Permissions.PendingTTLSeconds = v
+	})
 	resolveCSV("tools.permissions.interactive_approval_sources", file.Tools.Permissions.InteractiveApprovalSources, "GODEX_TOOLS_PERMISSIONS_INTERACTIVE_APPROVAL_SOURCES", func(v []string) {
 		current.Tools.Permissions.InteractiveApprovalSources = append([]string{}, v...)
 	})
@@ -1884,6 +1887,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 				InteractiveApprovalMode:    file.Tools.Permissions.InteractiveApprovalMode,
 				InteractiveApprovalSources: append([]string{}, file.Tools.Permissions.InteractiveApprovalSources...),
 				InteractiveApprovalTools:   append([]string{}, file.Tools.Permissions.InteractiveApprovalTools...),
+				PendingTTLSeconds:          file.Tools.Permissions.PendingTTLSeconds,
 				TrustedPathPrefixes:        append([]string{}, file.Tools.Permissions.TrustedPathPrefixes...),
 				TrustedCommandPrefixes:     append([]string{}, file.Tools.Permissions.TrustedCommandPrefixes...),
 			},
@@ -2705,6 +2709,8 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Tools.Permissions.InteractiveApprovalEnabled = asBool(value)
 	case "tools.permissions.interactive_approval_mode":
 		file.Tools.Permissions.InteractiveApprovalMode = asString(value)
+	case "tools.permissions.pending_ttl_seconds":
+		file.Tools.Permissions.PendingTTLSeconds = asInt(value)
 	case "tools.permissions.interactive_approval_sources":
 		file.Tools.Permissions.InteractiveApprovalSources = asStringList(value)
 	case "tools.permissions.interactive_approval_tools":
@@ -3086,6 +3092,7 @@ func storedValues(file ConfigFile) map[string]any {
 		"tools.permissions.block_automation_mutations":           file.Tools.Permissions.BlockAutomationMutations,
 		"tools.permissions.interactive_approval_enabled":         file.Tools.Permissions.InteractiveApprovalEnabled,
 		"tools.permissions.interactive_approval_mode":            file.Tools.Permissions.InteractiveApprovalMode,
+		"tools.permissions.pending_ttl_seconds":                  file.Tools.Permissions.PendingTTLSeconds,
 		"tools.permissions.interactive_approval_sources":         append([]string{}, file.Tools.Permissions.InteractiveApprovalSources...),
 		"tools.permissions.interactive_approval_tools":           append([]string{}, file.Tools.Permissions.InteractiveApprovalTools...),
 		"tools.permissions.trusted_path_prefixes":                append([]string{}, file.Tools.Permissions.TrustedPathPrefixes...),
@@ -3258,6 +3265,7 @@ func effectiveValues(cfg *Config) map[string]any {
 		"tools.permissions.block_automation_mutations":           cfg.Tools.Permissions.BlockAutomationMutations,
 		"tools.permissions.interactive_approval_enabled":         cfg.Tools.Permissions.InteractiveApprovalEnabled,
 		"tools.permissions.interactive_approval_mode":            cfg.Tools.Permissions.InteractiveApprovalMode,
+		"tools.permissions.pending_ttl_seconds":                  cfg.Tools.Permissions.PendingTTLSeconds,
 		"tools.permissions.interactive_approval_sources":         append([]string{}, cfg.Tools.Permissions.InteractiveApprovalSources...),
 		"tools.permissions.interactive_approval_tools":           append([]string{}, cfg.Tools.Permissions.InteractiveApprovalTools...),
 		"tools.permissions.trusted_path_prefixes":                append([]string{}, cfg.Tools.Permissions.TrustedPathPrefixes...),

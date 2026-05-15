@@ -58,6 +58,52 @@ func TestOpenAIClientToolParametersAreObjects(t *testing.T) {
 	}
 }
 
+func TestOpenAIClientStrictToolParametersDisallowExtraFields(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	_, err := client.Call(context.Background(), protocol.Request{
+		Model: "gpt-test",
+		Tools: []protocol.ToolSchema{{
+			Name:        "write_file",
+			Description: "Write a file",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path":    map[string]interface{}{"type": "string"},
+					"content": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"path", "content"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("openai-compatible call: %v", err)
+	}
+
+	tools, ok := body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected one tool in body, got %#v", body["tools"])
+	}
+	tool := tools[0].(map[string]any)
+	function := tool["function"].(map[string]any)
+	if function["strict"] != true {
+		t.Fatalf("expected strict tool schema, got %#v", function)
+	}
+	parameters := function["parameters"].(map[string]any)
+	if parameters["additionalProperties"] != false {
+		t.Fatalf("expected additionalProperties=false, got %#v", parameters)
+	}
+}
+
 func TestOpenAIClientPreservesReasoningContentForToolFollowUp(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

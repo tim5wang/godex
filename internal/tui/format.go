@@ -102,6 +102,15 @@ func permissionDetailText(item feedItem) string {
 	if toolName := strings.TrimSpace(request.ToolName); toolName != "" {
 		sections = append(sections, "Tool\n"+toolName)
 	}
+	if intent := strings.TrimSpace(tools.PermissionIntentSummary(*pending)); intent != "" {
+		sections = append(sections, "Intent\n"+intent)
+	}
+	if risk := strings.TrimSpace(tools.PermissionRiskSummary(request)); risk != "" {
+		sections = append(sections, "Risk\n"+risk)
+	}
+	if expiry := strings.TrimSpace(tools.PermissionExpirySummary(*pending, time.Now())); expiry != "" {
+		sections = append(sections, "Expiry\n"+expiry)
+	}
 	if reason := strings.TrimSpace(pending.Reason); reason != "" {
 		sections = append(sections, "Reason\n"+reason)
 	}
@@ -134,7 +143,7 @@ func permissionDetailText(item feedItem) string {
 	if len(request.Input) > 0 {
 		sections = append(sections, "Input\n"+formatPermissionInput(request.Input, true))
 	}
-	sections = append(sections, "Shortcuts\na allow once\ns allow session\nx deny")
+	sections = append(sections, "Shortcuts\na allow once\np allow pattern\nt allow 10m\ns allow session\nx deny")
 	return strings.Join(sections, "\n\n")
 }
 
@@ -163,7 +172,19 @@ func permissionHeaderSummary(item feedItem) string {
 	} else if summary := strings.TrimSpace(item.Summary); summary != "" {
 		parts = append(parts, summary)
 	}
-	parts = append(parts, "a once", "s session", "x deny")
+	parts = append(parts, "a once", "p pattern", "t timebox", "s session", "x deny")
+	return strings.Join(parts, " · ")
+}
+
+func permissionCompactDetailText(pending tools.PendingPermission) string {
+	parts := make([]string, 0, 3)
+	parts = append(parts, "a once", "p pattern", "t timebox", "s session", "x deny")
+	if risk := strings.TrimSpace(tools.PermissionRiskSummary(pending.Request)); risk != "" {
+		parts = append(parts, risk)
+	}
+	if expiry := strings.TrimSpace(tools.PermissionExpirySummary(pending, time.Now())); expiry != "" {
+		parts = append(parts, expiry)
+	}
 	return strings.Join(parts, " · ")
 }
 

@@ -327,6 +327,7 @@ type PermissionsSection struct {
 	InteractiveApprovalMode    string   `yaml:"interactive_approval_mode"`
 	InteractiveApprovalSources []string `yaml:"interactive_approval_sources"`
 	InteractiveApprovalTools   []string `yaml:"interactive_approval_tools"`
+	PendingTTLSeconds          int      `yaml:"pending_ttl_seconds"`
 	TrustedPathPrefixes        []string `yaml:"trusted_path_prefixes"`
 	TrustedCommandPrefixes     []string `yaml:"trusted_command_prefixes"`
 }

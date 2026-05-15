@@ -673,6 +673,12 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 			t.Fatalf("expected coding profile prompt to contain %q, got %q", want, build.System)
 		}
 	}
+	runtimeState := runtimePromptStateText(build.Messages)
+	for _, want := range []string{"Active tools:", "bash", "read_file", "write_file", "No separate grep tool is available"} {
+		if !strings.Contains(runtimeState, want) {
+			t.Fatalf("expected runtime tool availability to contain %q, got %q", want, runtimeState)
+		}
+	}
 }
 
 func TestBuildContextCodingProfileIncludesRepoMap(t *testing.T) {

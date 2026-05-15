@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/tim5wang/godex/internal/domain/automation"
@@ -47,6 +48,21 @@ func (t fakeTool) invoke(ctx context.Context, call *ToolCall) (ToolResult, error
 	_ = ctx
 	_ = call
 	return ToolResult{Text: t.name + " ok"}, nil
+}
+
+type requiredArgTool struct {
+	fakeTool
+}
+
+func (t requiredArgTool) Spec() ToolSpec {
+	return NewToolSpec(t.name, t.Description(), map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"path":    map[string]interface{}{"type": "string"},
+			"content": map[string]interface{}{"type": "string"},
+		},
+		"required": []string{"path", "content"},
+	}, nil)
 }
 
 func TestToolHandlerActivateDefaults(t *testing.T) {
@@ -117,6 +133,39 @@ func TestToolHandlerRejectsInactiveTool(t *testing.T) {
 	}
 	if inactive.Bundle != "background" {
 		t.Fatalf("expected inactive bundle %q, got %q", "background", inactive.Bundle)
+	}
+}
+
+func TestToolHandlerRejectsMissingRequiredArgumentsBeforeExecution(t *testing.T) {
+	handler := NewToolHandler()
+	handler.Register(requiredArgTool{fakeTool{name: "write_file"}})
+
+	_, err := handler.Handle(context.Background(), "write_file", map[string]interface{}{"content": "hello"})
+	var invalid ErrToolInvalidInput
+	if !errors.As(err, &invalid) {
+		t.Fatalf("expected invalid input error, got %v", err)
+	}
+	if invalid.Tool != "write_file" || len(invalid.Missing) != 1 || invalid.Missing[0] != "path" {
+		t.Fatalf("unexpected invalid input details: %+v", invalid)
+	}
+}
+
+func TestToolHandlerUnknownToolErrorSuggestsActiveAlternatives(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool{name: "bash"}, ToolMeta{Bundle: "core_code", DefaultActive: true})
+	handler.RegisterWithMeta(fakeTool{name: "read_file"}, ToolMeta{Bundle: "core_code", DefaultActive: true})
+	handler.ActivateDefaults()
+
+	_, err := handler.Handle(context.Background(), "grep", map[string]interface{}{"pattern": "foo"})
+	var notFound ErrToolNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected tool not found error, got %v", err)
+	}
+	message := err.Error()
+	for _, want := range []string{"tool not found: grep", "Active tools:", "bash", "read_file", "grep is not a separate tool"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected error to contain %q, got %q", want, message)
+		}
 	}
 }
 

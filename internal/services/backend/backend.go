@@ -2297,6 +2297,7 @@ func (s *Service) SecuritySummary(ctx context.Context) (security.CIKSummary, err
 		InteractiveApprovalMode:    cfg.Tools.Permissions.InteractiveApprovalMode,
 		ApprovalSources:            append([]string{}, cfg.Tools.Permissions.InteractiveApprovalSources...),
 		ApprovalTools:              append([]string{}, cfg.Tools.Permissions.InteractiveApprovalTools...),
+		PendingTTLSeconds:          cfg.Tools.Permissions.PendingTTLSeconds,
 		TrustedPathPrefixes:        append([]string{}, cfg.Tools.Permissions.TrustedPathPrefixes...),
 		TrustedCommandPrefixes:     append([]string{}, cfg.Tools.Permissions.TrustedCommandPrefixes...),
 		BlockAutomationMutations:   cfg.Tools.Permissions.BlockAutomationMutations,
@@ -2763,6 +2764,42 @@ func (s *Service) appendSecurityEvent(event security.SecurityEvent) {
 	if writeErr != nil || closeErr != nil {
 		return
 	}
+}
+
+func (s *Service) appendPermissionAuditEvent(action, severity, sessionID string, resolution tools.PermissionResolution) {
+	if s == nil {
+		return
+	}
+	req := resolution.Request
+	metadata := map[string]string{
+		"request_id": strings.TrimSpace(resolution.RequestID),
+		"scope":      strings.TrimSpace(string(resolution.Scope)),
+		"decision":   strings.TrimSpace(string(resolution.Decision)),
+		"tool":       strings.TrimSpace(req.ToolName),
+		"action":     strings.TrimSpace(req.Action),
+		"source":     strings.TrimSpace(req.Source),
+		"risk":       tools.PermissionRiskSummary(req),
+	}
+	if command := strings.TrimSpace(req.Command); command != "" {
+		metadata["command"] = command
+	}
+	if len(req.Paths) > 0 {
+		metadata["paths"] = strings.Join(req.Paths, ",")
+	}
+	summary := strings.TrimSpace(tools.PermissionIntentSummary(tools.PendingPermission{Request: req}))
+	if summary == "" {
+		summary = action + " " + strings.TrimSpace(resolution.RequestID)
+	}
+	s.appendSecurityEvent(security.SecurityEvent{
+		At:        resolution.ResolvedAt,
+		Category:  "capability",
+		Action:    action,
+		Severity:  severity,
+		SessionID: strings.TrimSpace(sessionID),
+		Source:    strings.TrimSpace(req.Source),
+		Summary:   summary,
+		Metadata:  metadata,
+	})
 }
 
 // AppendSecurityEvent records an audit-relevant event from runtime adapters.
@@ -3266,6 +3303,7 @@ func (s *Service) ApprovePermission(ctx context.Context, sessionID, requestID st
 	if err != nil {
 		return tools.PermissionResolution{}, err
 	}
+	s.appendPermissionAuditEvent("approve_permission", "info", sessionID, resolution)
 	if session.agent.PendingResumeState() != nil {
 		beforeMessages := session.agent.GetMessages()
 		beforeCount := len(beforeMessages)
@@ -3337,6 +3375,7 @@ func (s *Service) DenyPermission(ctx context.Context, sessionID, requestID, reas
 	if err != nil {
 		return tools.PermissionResolution{}, err
 	}
+	s.appendPermissionAuditEvent("deny_permission", "warning", sessionID, resolution)
 	if pending := session.agent.PendingResumeState(); pending != nil && strings.TrimSpace(pending.RequestID) == strings.TrimSpace(requestID) {
 		session.agent.ClearPendingResume()
 	}

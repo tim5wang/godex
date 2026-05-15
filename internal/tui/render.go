@@ -2,6 +2,8 @@ package tui
 
 import (
 	"strings"
+
+	"github.com/tim5wang/godex/internal/tools"
 )
 
 func (m *model) renderFeedContent() (string, []itemSpan) {
@@ -113,6 +115,12 @@ func (m *model) renderToolLines(item feedItem, width int) []string {
 
 	lines := []string{headStyle.Render(head)}
 	if !item.Expanded {
+		if item.Permission != nil {
+			summary := permissionCompactDetailText(*item.Permission)
+			if summary != "" {
+				lines = append(lines, mutedLineStyle.Render(ellipsize("  "+summary, width)))
+			}
+		}
 		return lines
 	}
 
@@ -141,6 +149,14 @@ func (m *model) renderPermissionLines(item feedItem, width int) []string {
 
 	lines := []string{headStyle.Render(head)}
 	if !item.Expanded {
+		if item.Permission != nil {
+			if summary := strings.TrimSpace(permissionCompactDetailText(*item.Permission)); summary != "" {
+				lines = append(lines, mutedLineStyle.Render(ellipsize("  "+summary, width)))
+			}
+			if intent := strings.TrimSpace(tools.PermissionIntentSummary(*item.Permission)); intent != "" {
+				lines = append(lines, mutedLineStyle.Render(ellipsize("  "+intent, width)))
+			}
+		}
 		return lines
 	}
 

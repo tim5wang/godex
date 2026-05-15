@@ -31,6 +31,7 @@ type PermissionGrantScope string
 const (
 	PermissionGrantOnce    PermissionGrantScope = "once"
 	PermissionGrantSession PermissionGrantScope = "session"
+	PermissionGrantPattern PermissionGrantScope = "pattern"
 )
 
 const (
@@ -88,6 +89,7 @@ type InteractiveApprovalPolicy struct {
 	Tools                  []string `json:"tools,omitempty"`
 	TrustedPathPrefixes    []string `json:"trusted_path_prefixes,omitempty"`
 	TrustedCommandPrefixes []string `json:"trusted_command_prefixes,omitempty"`
+	PendingTTLSeconds      int      `json:"pending_ttl_seconds,omitempty"`
 }
 
 // PermissionRequest is the normalized security context for one tool call.
@@ -109,6 +111,7 @@ type PendingPermission struct {
 	Request   PermissionRequest `json:"request"`
 	Reason    string            `json:"reason,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
+	ExpiresAt time.Time         `json:"expires_at,omitempty"`
 }
 
 // PermissionOverrideState is one persisted session-scoped override.
@@ -116,6 +119,7 @@ type PermissionOverrideState struct {
 	Request   PermissionRequest `json:"request"`
 	Result    PermissionResult  `json:"result"`
 	Remaining int               `json:"remaining"`
+	ExpiresAt time.Time         `json:"expires_at,omitempty"`
 }
 
 // PermissionSessionState contains all persisted permission data for one session.
@@ -169,6 +173,13 @@ type permissionOverride struct {
 	request   PermissionRequest
 	result    PermissionResult
 	remaining int
+	expiresAt time.Time
+}
+
+type parsedPermissionGrant struct {
+	kind     PermissionGrantScope
+	count    int
+	duration time.Duration
 }
 
 // PermissionManager stores rules, pending requests, and session-scoped overrides.
@@ -178,6 +189,8 @@ type PermissionManager struct {
 	decisions  map[string]permissionOverride
 	pending    map[string]PendingPermission
 	pendingKey map[string]string
+	pendingTTL time.Duration
+	now        func() time.Time
 }
 
 // NewPermissionManager creates a permission manager with the provided rules.
@@ -186,6 +199,8 @@ func NewPermissionManager(rules ...PermissionRule) *PermissionManager {
 		decisions:  make(map[string]permissionOverride),
 		pending:    make(map[string]PendingPermission),
 		pendingKey: make(map[string]string),
+		pendingTTL: 5 * time.Minute,
+		now:        time.Now,
 	}
 	manager.AddRules(rules...)
 	return manager
@@ -208,8 +223,9 @@ func DefaultPermissionPolicy() PermissionPolicy {
 	return PermissionPolicy{
 		BlockAutomationMutations: true,
 		InteractiveApproval: InteractiveApprovalPolicy{
-			Mode:    InteractiveApprovalModeManual,
-			Enabled: true,
+			Mode:              InteractiveApprovalModeManual,
+			Enabled:           true,
+			PendingTTLSeconds: 300,
 			Sources: []string{
 				string(message.SourceWeb),
 				string(message.SourceGateway),
@@ -278,7 +294,22 @@ func (m *PermissionManager) ApplyPolicy(policy PermissionPolicy) {
 	if m == nil {
 		return
 	}
+	policy = normalizePermissionPolicy(policy)
+	m.setPendingTTL(policy.InteractiveApproval.PendingTTLSeconds)
 	m.ReplaceRules(permissionRulesForPolicy(policy)...)
+}
+
+func (m *PermissionManager) setPendingTTL(seconds int) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if seconds <= 0 {
+		m.pendingTTL = 5 * time.Minute
+		return
+	}
+	m.pendingTTL = time.Duration(seconds) * time.Second
 }
 
 // AddRules appends ordered permission rules.
@@ -322,6 +353,7 @@ func (m *PermissionManager) Evaluate(req PermissionRequest) PermissionResult {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.pruneExpiredLocked()
 
 	for _, candidate := range permissionDecisionKeys(req) {
 		if result, ok := m.consumeOverrideLocked(candidate); ok {
@@ -392,8 +424,9 @@ func (m *PermissionManager) ListPending(sessionID string) []PendingPermission {
 		return nil
 	}
 	sessionID = strings.TrimSpace(sessionID)
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneExpiredLocked()
 
 	items := make([]PendingPermission, 0, len(m.pending))
 	for _, item := range m.pending {
@@ -418,8 +451,9 @@ func (m *PermissionManager) ExportSession(sessionID string) PermissionSessionSta
 		return PermissionSessionState{}
 	}
 
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneExpiredLocked()
 
 	state := PermissionSessionState{}
 	for _, override := range m.decisions {
@@ -430,6 +464,7 @@ func (m *PermissionManager) ExportSession(sessionID string) PermissionSessionSta
 			Request:   clonePermissionRequest(override.request),
 			Result:    override.result,
 			Remaining: override.remaining,
+			ExpiresAt: override.expiresAt,
 		})
 	}
 	sort.Slice(state.Overrides, func(i, j int) bool {
@@ -478,6 +513,7 @@ func (m *PermissionManager) RestoreSession(sessionID string, state PermissionSes
 			request:   req,
 			result:    item.Result,
 			remaining: item.Remaining,
+			expiresAt: item.ExpiresAt,
 		}
 	}
 
@@ -493,7 +529,10 @@ func (m *PermissionManager) RestoreSession(sessionID string, state PermissionSes
 			pending.ID = pendingPermissionID(permissionDecisionKey(pending.Request))
 		}
 		if pending.CreatedAt.IsZero() {
-			pending.CreatedAt = time.Now().UTC()
+			pending.CreatedAt = m.nowUTCLocked()
+		}
+		if pending.ExpiresAt.IsZero() {
+			pending.ExpiresAt = pending.CreatedAt.Add(m.pendingTTL)
 		}
 		m.pending[pending.ID] = pending
 		m.pendingKey[permissionDecisionKey(pending.Request)] = pending.ID
@@ -509,7 +548,14 @@ func (m *PermissionManager) ApprovePending(sessionID, requestID string, scope Pe
 	if scope == "" {
 		scope = PermissionGrantSession
 	}
-	if scope != PermissionGrantOnce && scope != PermissionGrantSession {
+	parsed, err := parsePermissionGrantScope(scope)
+	if err != nil {
+		return PermissionResolution{}, err
+	}
+	if parsed.kind == "" {
+		parsed.kind = PermissionGrantSession
+	}
+	if parsed.kind != PermissionGrantOnce && parsed.kind != PermissionGrantSession && parsed.kind != PermissionGrantPattern && parsed.kind != "count" && parsed.kind != "timebox" {
 		return PermissionResolution{}, fmt.Errorf("unsupported permission grant scope %q", scope)
 	}
 	m.mu.Lock()
@@ -518,6 +564,11 @@ func (m *PermissionManager) ApprovePending(sessionID, requestID string, scope Pe
 	pending, ok := m.pending[requestID]
 	if !ok || !sameSession(pending.Request.SessionID, sessionID) {
 		return PermissionResolution{}, fmt.Errorf("permission request not found")
+	}
+	if m.pendingExpiredLocked(pending) {
+		delete(m.pending, requestID)
+		delete(m.pendingKey, permissionDecisionKey(pending.Request))
+		return PermissionResolution{}, fmt.Errorf("permission request expired")
 	}
 	delete(m.pending, requestID)
 	delete(m.pendingKey, permissionDecisionKey(pending.Request))
@@ -607,9 +658,18 @@ func (m *PermissionManager) setSessionDecisionLocked(req PermissionRequest, resu
 	if req.SessionID == "" {
 		return
 	}
+	parsed, err := parsePermissionGrantScope(scope)
+	if err != nil {
+		parsed = parsedPermissionGrant{kind: PermissionGrantSession}
+	}
 	override := permissionOverride{request: clonePermissionRequest(req), result: result, remaining: -1}
-	if scope == PermissionGrantOnce {
+	switch parsed.kind {
+	case PermissionGrantOnce:
 		override.remaining = 1
+	case "count":
+		override.remaining = parsed.count
+	case "timebox":
+		override.expiresAt = m.nowUTCLocked().Add(parsed.duration)
 	}
 	key := permissionOverrideKey(req, scope)
 	m.decisions[key] = override
@@ -623,6 +683,10 @@ func (m *PermissionManager) setSessionDecisionLocked(req PermissionRequest, resu
 func (m *PermissionManager) consumeOverrideLocked(key string) (PermissionResult, bool) {
 	override, ok := m.decisions[key]
 	if !ok {
+		return PermissionResult{}, false
+	}
+	if !override.expiresAt.IsZero() && !m.nowUTCLocked().Before(override.expiresAt) {
+		delete(m.decisions, key)
 		return PermissionResult{}, false
 	}
 	if override.remaining == 1 {
@@ -647,11 +711,45 @@ func (m *PermissionManager) ensurePendingLocked(req PermissionRequest, result Pe
 		ID:        pendingPermissionID(key),
 		Request:   clonePermissionRequest(req),
 		Reason:    reason,
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: m.nowUTCLocked(),
 	}
+	pending.ExpiresAt = pending.CreatedAt.Add(m.pendingTTL)
 	m.pending[pending.ID] = pending
 	m.pendingKey[key] = pending.ID
 	return pending
+}
+
+func (m *PermissionManager) nowUTCLocked() time.Time {
+	if m == nil || m.now == nil {
+		return time.Now().UTC()
+	}
+	return m.now().UTC()
+}
+
+func (m *PermissionManager) pendingExpiredLocked(pending PendingPermission) bool {
+	if pending.ExpiresAt.IsZero() {
+		return false
+	}
+	return !m.nowUTCLocked().Before(pending.ExpiresAt)
+}
+
+func (m *PermissionManager) pruneExpiredLocked() {
+	if m == nil {
+		return
+	}
+	now := m.nowUTCLocked()
+	for key, override := range m.decisions {
+		if !override.expiresAt.IsZero() && !now.Before(override.expiresAt) {
+			delete(m.decisions, key)
+		}
+	}
+	for id, pending := range m.pending {
+		if pending.ExpiresAt.IsZero() || now.Before(pending.ExpiresAt) {
+			continue
+		}
+		delete(m.pending, id)
+		delete(m.pendingKey, permissionDecisionKey(pending.Request))
+	}
 }
 
 // RequestApproval creates or reuses a pending approval request for one tool call.
@@ -1023,6 +1121,9 @@ func repairDiagnosticCommands(profile string) []string {
 
 func normalizeInteractiveApprovalPolicy(policy InteractiveApprovalPolicy) InteractiveApprovalPolicy {
 	policy.Mode = normalizeInteractiveApprovalMode(policy.Mode)
+	if policy.PendingTTLSeconds <= 0 {
+		policy.PendingTTLSeconds = 300
+	}
 	policy.Sources = normalizeStringList(policy.Sources)
 	policy.Tools = normalizeStringList(policy.Tools)
 	policy.TrustedPathPrefixes = normalizePathPrefixes(policy.TrustedPathPrefixes)
@@ -1061,10 +1162,19 @@ func permissionDecisionKeys(req PermissionRequest) []string {
 	if broad := permissionSessionToolKey(req); broad != "" && broad != keys[0] {
 		keys = append(keys, broad)
 	}
+	if pattern := permissionPatternKey(req); pattern != "" && pattern != keys[0] {
+		keys = append(keys, pattern)
+	}
 	return keys
 }
 
 func permissionOverrideKey(req PermissionRequest, scope PermissionGrantScope) string {
+	parsed, err := parsePermissionGrantScope(scope)
+	if err == nil && parsed.kind == PermissionGrantPattern {
+		if pattern := permissionPatternKey(req); pattern != "" {
+			return pattern
+		}
+	}
 	if scope == PermissionGrantSession {
 		if broad := permissionSessionToolKey(req); broad != "" {
 			return broad
@@ -1081,22 +1191,133 @@ func permissionSessionToolKey(req PermissionRequest) string {
 	}
 	switch toolName {
 	case "browser":
-		return strings.Join([]string{sessionID, toolName, "*"}, "|")
+		action := strings.TrimSpace(req.Action)
+		if action == "" {
+			action = "*"
+		}
+		return strings.Join([]string{sessionID, toolName, action}, "|")
 	case "desktop":
-		return strings.Join([]string{sessionID, toolName, "*"}, "|")
+		action := strings.TrimSpace(req.Action)
+		if action == "" {
+			action = "*"
+		}
+		return strings.Join([]string{sessionID, toolName, action}, "|")
 	default:
 		return ""
 	}
 }
 
+func permissionPatternKey(req PermissionRequest) string {
+	sessionID := strings.TrimSpace(req.SessionID)
+	toolName := strings.TrimSpace(req.ToolName)
+	if sessionID == "" || toolName == "" {
+		return ""
+	}
+	parts := []string{sessionID, toolName, "pattern", strings.TrimSpace(req.Action)}
+	switch toolName {
+	case "bash", "background_run":
+		pattern := commandApprovalPattern(req.Command)
+		if pattern == "" {
+			return ""
+		}
+		parts = append(parts, pattern)
+	case "write_file", "edit_file", "attach_file", "install_skill", "install_package", "remove_package":
+		pattern := pathApprovalPattern(req.Paths)
+		if pattern == "" {
+			return ""
+		}
+		parts = append(parts, pattern)
+	default:
+		return ""
+	}
+	return strings.Join(parts, "|")
+}
+
+func commandApprovalPattern(command string) string {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return ""
+	}
+	limit := 1
+	if len(fields) > 1 {
+		limit = 2
+	}
+	return strings.Join(fields[:limit], " ")
+}
+
+func pathApprovalPattern(paths []string) string {
+	for _, path := range paths {
+		path = normalizePermissionPath(path)
+		if path == "" {
+			continue
+		}
+		dir := filepath.Dir(path)
+		if dir == "." || dir == "" {
+			return path
+		}
+		return dir
+	}
+	return ""
+}
+
 func storedPermissionGrantScope(state PermissionOverrideState) PermissionGrantScope {
+	scope := PermissionGrantScope(strings.TrimSpace(state.Result.Scope))
+	if parsed, err := parsePermissionGrantScope(scope); err == nil {
+		switch parsed.kind {
+		case PermissionGrantOnce, PermissionGrantSession, PermissionGrantPattern, "count", "timebox":
+			return scope
+		}
+	}
 	if state.Remaining == 1 {
 		return PermissionGrantOnce
 	}
-	if strings.EqualFold(strings.TrimSpace(state.Result.Scope), string(PermissionGrantSession)) {
-		return PermissionGrantSession
-	}
 	return PermissionGrantSession
+}
+
+func parsePermissionGrantScope(scope PermissionGrantScope) (parsedPermissionGrant, error) {
+	raw := strings.ToLower(strings.TrimSpace(string(scope)))
+	switch raw {
+	case "", string(PermissionGrantOnce):
+		return parsedPermissionGrant{kind: PermissionGrantOnce}, nil
+	case string(PermissionGrantSession):
+		return parsedPermissionGrant{kind: PermissionGrantSession}, nil
+	case string(PermissionGrantPattern):
+		return parsedPermissionGrant{kind: PermissionGrantPattern}, nil
+	}
+	if strings.HasPrefix(raw, "count:") {
+		countText := strings.TrimSpace(strings.TrimPrefix(raw, "count:"))
+		count, err := parsePositiveInt(countText)
+		if err != nil {
+			return parsedPermissionGrant{}, fmt.Errorf("unsupported permission grant scope %q", scope)
+		}
+		return parsedPermissionGrant{kind: "count", count: count}, nil
+	}
+	if strings.HasPrefix(raw, "timebox:") {
+		durationText := strings.TrimSpace(strings.TrimPrefix(raw, "timebox:"))
+		duration, err := time.ParseDuration(durationText)
+		if err != nil || duration <= 0 {
+			return parsedPermissionGrant{}, fmt.Errorf("unsupported permission grant scope %q", scope)
+		}
+		return parsedPermissionGrant{kind: "timebox", duration: duration}, nil
+	}
+	return parsedPermissionGrant{}, fmt.Errorf("unsupported permission grant scope %q", scope)
+}
+
+func parsePositiveInt(text string) (int, error) {
+	if text == "" {
+		return 0, fmt.Errorf("missing count")
+	}
+	value := 0
+	for _, ch := range text {
+		if ch < '0' || ch > '9' {
+			return 0, fmt.Errorf("invalid count")
+		}
+		value = value*10 + int(ch-'0')
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("invalid count")
+	}
+	return value, nil
 }
 
 func pendingPermissionID(key string) string {
@@ -1243,6 +1464,105 @@ func approvalReason(req PermissionRequest) string {
 	default:
 		return "approval required before running this tool"
 	}
+}
+
+func PermissionIntentSummary(pending PendingPermission) string {
+	req := pending.Request
+	switch req.ToolName {
+	case "bash", "background_run":
+		if command := strings.TrimSpace(req.Command); command != "" {
+			return "Agent wants to run shell command: " + command
+		}
+		return "Agent wants to run a shell command"
+	case "write_file":
+		if len(req.Paths) > 0 {
+			return "Agent wants to write file: " + strings.TrimSpace(req.Paths[0])
+		}
+		return "Agent wants to write a workspace file"
+	case "edit_file":
+		if len(req.Paths) > 0 {
+			return "Agent wants to edit file: " + strings.TrimSpace(req.Paths[0])
+		}
+		return "Agent wants to edit a workspace file"
+	case "attach_file":
+		if len(req.Paths) > 0 {
+			return "Agent wants to attach local file: " + strings.TrimSpace(req.Paths[0])
+		}
+		return "Agent wants to attach a local file"
+	case "browser":
+		action := strings.TrimSpace(req.Action)
+		if action == "" {
+			action = "control browser"
+		}
+		return "Agent wants to " + action + " in the browser"
+	case "desktop":
+		action := strings.TrimSpace(req.Action)
+		if action == "" {
+			action = "control desktop"
+		}
+		return "Agent wants to " + action + " on the desktop"
+	case "install_skill", "install_package", "remove_package":
+		return "Agent wants to change installed capabilities with " + req.ToolName
+	case "tool_exchange":
+		return "Agent wants to change active tool bundles"
+	case "cron", "heartbeat":
+		return "Agent wants to change automation settings"
+	default:
+		if action := strings.TrimSpace(req.Action); action != "" {
+			return "Agent wants to run " + req.ToolName + " " + action
+		}
+		if req.ToolName != "" {
+			return "Agent wants to run " + req.ToolName
+		}
+		return "Agent wants to run a protected action"
+	}
+}
+
+func PermissionRiskSummary(req PermissionRequest) string {
+	switch req.ToolName {
+	case "desktop":
+		return "high risk: desktop control can interact with local apps and clipboard"
+	case "browser":
+		return "medium risk: browser control may navigate, click, type, or access web accounts"
+	case "bash", "background_run":
+		if strings.Contains(strings.ToLower(req.Command), "rm -rf") {
+			return "high risk: recursive deletion command"
+		}
+		if risk := tooling.ClassifyShellCommandRisk(req.Command); risk.Level == tooling.ShellRiskHigh {
+			return "high risk: " + risk.Reason
+		}
+		return "medium risk: shell execution can read, write, or run local programs"
+	case "write_file", "edit_file":
+		return "medium risk: workspace file mutation"
+	case "attach_file":
+		return "high risk: local file content may leave the machine"
+	case "install_skill", "install_package", "remove_package", "tool_exchange":
+		return "high risk: capability set changes can affect future tool behavior"
+	case "cron", "heartbeat":
+		return "medium risk: automation settings can run future work"
+	default:
+		if req.Mutation {
+			return "medium risk: protected mutation"
+		}
+		return "low risk: protected read or inspection"
+	}
+}
+
+func PermissionExpirySummary(pending PendingPermission, now time.Time) string {
+	if pending.ExpiresAt.IsZero() {
+		return ""
+	}
+	remaining := pending.ExpiresAt.Sub(now)
+	if remaining <= 0 {
+		return "expired"
+	}
+	if remaining >= time.Hour {
+		return fmt.Sprintf("expires in %dh", int(remaining/time.Hour))
+	}
+	if remaining >= time.Minute {
+		return fmt.Sprintf("expires in %dm", int(remaining/time.Minute))
+	}
+	return fmt.Sprintf("expires in %ds", int(remaining/time.Second))
 }
 
 func requiresInteractiveApproval(req PermissionRequest) bool {
@@ -1405,6 +1725,7 @@ func clonePendingPermission(input PendingPermission) PendingPermission {
 		Request:   clonePermissionRequest(input.Request),
 		Reason:    input.Reason,
 		CreatedAt: input.CreatedAt,
+		ExpiresAt: input.ExpiresAt,
 	}
 }
 

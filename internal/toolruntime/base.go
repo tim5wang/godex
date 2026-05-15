@@ -189,17 +189,22 @@ func (h *ToolHandler) HandleResult(ctx context.Context, name string, args map[st
 	h.mu.RLock()
 	tool, ok := h.tools[name]
 	if !ok {
+		active := h.activeNamesLocked()
 		h.mu.RUnlock()
-		return ToolResult{}, ErrToolNotFound{name}
+		return ToolResult{}, ErrToolNotFound{Name: name, Available: active}
 	}
 	if _, ok := h.activeTools[name]; !ok {
 		bundle := h.meta[name].Bundle
 		h.mu.RUnlock()
 		return ToolResult{}, ErrToolInactive{Name: name, Bundle: bundle}
 	}
+	schema := tool.Spec().ToolSchema().InputSchema
 	before := append([]BeforeInterceptor{}, h.before...)
 	after := append([]AfterInterceptor{}, h.after...)
 	h.mu.RUnlock()
+	if err := validateToolInputSchema(name, args, schema); err != nil {
+		return ToolResult{}, err
+	}
 	return executeToolRuntimeResult(ctx, tool, args, before, after)
 }
 
@@ -429,6 +434,15 @@ func (h *ToolHandler) activeNames(names ...string) []string {
 			active = append(active, name)
 		}
 	}
+	return active
+}
+
+func (h *ToolHandler) activeNamesLocked() []string {
+	active := make([]string, 0, len(h.activeTools))
+	for name := range h.activeTools {
+		active = append(active, name)
+	}
+	sort.Strings(active)
 	return active
 }
 

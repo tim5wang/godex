@@ -355,6 +355,21 @@ func renderPendingApproval(requestID string, items []tools.PendingPermission) st
 	b.WriteString("\n")
 	if ok {
 		req := item.Request
+		if intent := strings.TrimSpace(tools.PermissionIntentSummary(item)); intent != "" {
+			b.WriteString("Intent: ")
+			b.WriteString(intent)
+			b.WriteString("\n")
+		}
+		if risk := strings.TrimSpace(tools.PermissionRiskSummary(req)); risk != "" {
+			b.WriteString("Risk: ")
+			b.WriteString(risk)
+			b.WriteString("\n")
+		}
+		if expiry := strings.TrimSpace(tools.PermissionExpirySummary(item, time.Now())); expiry != "" {
+			b.WriteString("Expiry: ")
+			b.WriteString(expiry)
+			b.WriteString("\n")
+		}
 		if toolName := strings.TrimSpace(req.ToolName); toolName != "" {
 			b.WriteString("Tool: ")
 			b.WriteString(toolName)
@@ -382,6 +397,9 @@ func renderPendingApproval(requestID string, items []tools.PendingPermission) st
 		}
 	}
 	b.WriteString("\nApprove once: /approve")
+	b.WriteString("\nApprove pattern: /approve pattern")
+	b.WriteString("\nApprove 10 minutes: /approve timebox:10m")
+	b.WriteString("\nApprove 5 uses: /approve count:5")
 	b.WriteString("\nApprove for session: /approve session")
 	b.WriteString("\nInspect all pending: /approve list")
 	b.WriteString("\nDeny: /deny ")

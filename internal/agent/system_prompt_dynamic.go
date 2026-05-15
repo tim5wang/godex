@@ -283,9 +283,13 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {
 		lines = append(lines, "- Active bundles: "+active)
 	}
+	if activeTools := formatActiveToolNames(catalog); activeTools != "" {
+		lines = append(lines, "- Active tools: "+activeTools)
+	}
 	if available := formatBundleSummary(catalog.Bundles, false); available != "" {
 		lines = append(lines, "- Available bundles: "+available)
 	}
+	lines = append(lines, "No separate grep tool is available. For text search, use bash with rg/grep commands or use read_file/glob.")
 
 	return strings.Join(lines, "\n")
 }
@@ -306,9 +310,13 @@ func buildToolAvailabilityPromptForProfile(catalog tools.ToolCatalog, profile st
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {
 		lines = append(lines, "- Active bundles: "+active)
 	}
+	if activeTools := formatActiveToolNames(catalog); activeTools != "" {
+		lines = append(lines, "- Active tools: "+activeTools)
+	}
 	if available := formatBundleNames(catalog.Bundles, false); available != "" {
 		lines = append(lines, "- Available bundles: "+available)
 	}
+	lines = append(lines, "No separate grep tool is available. For text search, use bash with rg/grep commands or use read_file/glob.")
 	return strings.Join(lines, "\n")
 }
 
@@ -488,6 +496,31 @@ func formatBundleNames(items []tools.BundleCatalogItem, active bool) string {
 		}
 	}
 	return strings.Join(names, ", ")
+}
+
+func formatActiveToolNames(catalog tools.ToolCatalog) string {
+	seen := map[string]struct{}{}
+	names := append([]string{}, catalog.AlwaysActiveTools...)
+	for _, item := range catalog.Bundles {
+		if !item.Active {
+			continue
+		}
+		names = append(names, item.Tools...)
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
 }
 
 func catalogHasTool(catalog tools.ToolCatalog, name string) bool {

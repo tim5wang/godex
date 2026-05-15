@@ -231,6 +231,7 @@ func defaultConfigFile() ConfigFile {
 				BlockAutomationMutations:   true,
 				InteractiveApprovalEnabled: true,
 				InteractiveApprovalMode:    "manual",
+				PendingTTLSeconds:          300,
 				InteractiveApprovalSources: []string{"web", "gateway", "feishu", "weixin"},
 				InteractiveApprovalTools: []string{
 					"bash",

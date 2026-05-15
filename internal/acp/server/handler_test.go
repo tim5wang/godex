@@ -442,6 +442,10 @@ func TestBackendPromptHandlerReturnsPendingApprovalSummary(t *testing.T) {
 		"perm-1",
 		"bash",
 		"rm -rf build",
+		"Agent wants to run shell command",
+		"high risk",
+		"timebox:10m",
+		"pattern",
 		"/approve",
 		"/deny perm-1",
 	} {

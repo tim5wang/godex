@@ -52,7 +52,7 @@ func NewWriteFileTool(workspace string) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.WriteFileDefinition(), nil), func(ctx context.Context, args writeFileArgs) (ToolResult, error) {
 		_ = ctx
 		if strings.TrimSpace(args.Path) == "" {
-			return ToolResult{}, fmt.Errorf("missing path argument")
+			return ToolResult{}, fmt.Errorf("missing path argument: write_file requires path and content, for example {\"path\":\"docs/plan.md\",\"content\":\"...\"}")
 		}
 		output, err := executor.WriteFile(args.Path, args.Content)
 		return ToolResult{Text: output}, err

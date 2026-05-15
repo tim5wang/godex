@@ -952,6 +952,87 @@ func TestRunnerStopsImmediatelyWhenToolRequestsApproval(t *testing.T) {
 	}
 }
 
+func TestRunnerBackfillsSiblingToolResultsWhenApprovalStopsBatch(t *testing.T) {
+	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "start")}
+	caller := &fakeCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{
+			protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "xargs grep"}),
+			protocol.ToolUseBlock("tool-2", "read_file", map[string]interface{}{"path": "internal/acp/server/agent.go"}),
+		}},
+	}}
+
+	_, err := Runner{
+		Caller: caller,
+		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
+			_ = ctx
+			return NewRequest("model", 1024, "", "system", messages, nil), nil
+		},
+		AppendAssistant: func(msg protocol.Message) {
+			messages = append(messages, msg)
+		},
+		AppendToolResults: func(msg protocol.Message) {
+			messages = append(messages, msg)
+		},
+		ExecuteTool: func(ctx context.Context, name string, input map[string]interface{}) (ToolExecutionResult, error) {
+			_ = ctx
+			_ = input
+			if name != "bash" {
+				t.Fatalf("runner should stop before executing sibling tool, got %q", name)
+			}
+			return ToolExecutionResult{}, pendingStopError{}
+		},
+		MaxTurns: 5,
+	}.Run(context.Background())
+	if !errors.As(err, new(pendingStopError)) {
+		t.Fatalf("expected pending-stop error, got %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("expected assistant + tool result appended before stop, got %d messages", len(messages))
+	}
+	results := messages[2].Content
+	if len(results) != 2 {
+		t.Fatalf("expected result plus skipped sibling backfill, got %+v", results)
+	}
+	if results[0].ToolUseID != "tool-1" || results[1].ToolUseID != "tool-2" {
+		t.Fatalf("unexpected tool result ids: %+v", results)
+	}
+	if !strings.Contains(results[1].Content, "skipped_due_to_pending_approval") {
+		t.Fatalf("expected skipped sibling result, got %q", results[1].Content)
+	}
+}
+
+func TestSanitizeMessagesForProviderBackfillsMissingToolResultBeforeNextMessage(t *testing.T) {
+	messages := []protocol.APIMessage{
+		{
+			Role: protocol.RoleAssistant,
+			Content: []protocol.Block{
+				protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "xargs grep"}),
+				protocol.ToolUseBlock("tool-2", "read_file", map[string]interface{}{"path": "internal/acp/server/agent.go"}),
+			},
+		},
+		{Role: protocol.RoleUser, Content: []protocol.Block{
+			protocol.ToolResultBlock("tool-1", `{"status":"error"}`),
+		}},
+		{Role: protocol.RoleUser, Content: []protocol.Block{
+			protocol.TextBlock("继续"),
+		}},
+	}
+
+	sanitized := SanitizeMessagesForProvider(messages)
+	if len(sanitized) != 4 {
+		t.Fatalf("expected assistant, actual result, backfill, user text; got %+v", sanitized)
+	}
+	if sanitized[2].Role != protocol.RoleUser || len(sanitized[2].Content) != 1 || sanitized[2].Content[0].ToolUseID != "tool-2" {
+		t.Fatalf("expected missing tool result backfilled before user text, got %+v", sanitized)
+	}
+	if !strings.Contains(sanitized[2].Content[0].Content, "missing_tool_result_backfilled") {
+		t.Fatalf("expected missing result marker, got %q", sanitized[2].Content[0].Content)
+	}
+	if sanitized[3].Content[0].Text != "继续" {
+		t.Fatalf("expected user text after backfill, got %+v", sanitized[3])
+	}
+}
+
 func TestExecuteToolUsesPreservesArtifactPaths(t *testing.T) {
 	blocks := []protocol.Block{
 		protocol.ToolUseBlock("tool-1", "attach_file", map[string]interface{}{"path": ".godex/.tmp/report.pdf"}),

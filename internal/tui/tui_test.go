@@ -243,7 +243,7 @@ func TestPermissionCollapsedLineShowsRequestAndSessionDetails(t *testing.T) {
 	m.activeWorkbenchTab = workbenchTabLogs
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
 	view := m.viewport.View()
-	for _, want := range []string{"perm-1", "session-1", "bash", "execute", "git status --sh", "a once", "s session", "x deny"} {
+	for _, want := range []string{"perm-1", "session-1", "bash", "execute", "git status --sh", "Agent wants to run shell command", "medium risk", "a once", "p pattern", "t timebox", "s session", "x deny"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected permission line to contain %q, got %q", want, view)
 		}

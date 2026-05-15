@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -76,6 +77,8 @@ func TestPermissionManagerSessionDecisionOverridesRule(t *testing.T) {
 
 func TestPermissionManagerCreatesPendingApprovalForRemoteShell(t *testing.T) {
 	manager := NewDefaultPermissionManager()
+	now := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
 	req := PermissionRequest{
 		SessionID: "web-session",
 		Source:    string(message.SourceWeb),
@@ -96,6 +99,44 @@ func TestPermissionManagerCreatesPendingApprovalForRemoteShell(t *testing.T) {
 	}
 	if pending[0].ID != result.RequestID || pending[0].Request.Command != "go test ./..." {
 		t.Fatalf("unexpected pending approval: %+v", pending[0])
+	}
+	if pending[0].ExpiresAt.IsZero() || !pending[0].ExpiresAt.After(now) {
+		t.Fatalf("expected pending approval expiry after now, got %+v", pending[0])
+	}
+}
+
+func TestPermissionManagerExpiresPendingApproval(t *testing.T) {
+	now := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
+	manager := NewPermissionManagerForPolicy(PermissionPolicy{
+		InteractiveApproval: InteractiveApprovalPolicy{
+			Enabled:           true,
+			Mode:              InteractiveApprovalModeManual,
+			Sources:           []string{string(message.SourceWeb)},
+			Tools:             []string{"bash"},
+			PendingTTLSeconds: 5,
+		},
+	})
+	manager.now = func() time.Time { return now }
+	req := PermissionRequest{
+		SessionID: "web-session",
+		Source:    string(message.SourceWeb),
+		ToolName:  "bash",
+		Action:    "exec",
+		Command:   "cargo --version",
+		Mutation:  true,
+	}
+
+	result := manager.Evaluate(req)
+	if result.Decision != PermissionPending || result.RequestID == "" {
+		t.Fatalf("expected pending approval, got %+v", result)
+	}
+	now = now.Add(6 * time.Second)
+
+	if _, err := manager.ApprovePending("web-session", result.RequestID, PermissionGrantOnce); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expected expired approval error, got %v", err)
+	}
+	if pending := manager.ListPending("web-session"); len(pending) != 0 {
+		t.Fatalf("expected expired pending request to be pruned, got %+v", pending)
 	}
 }
 
@@ -722,6 +763,129 @@ func TestPermissionManagerExportAndRestoreSessionState(t *testing.T) {
 	}
 }
 
+func TestPermissionManagerCountApprovalAllowsExactNumberOfUses(t *testing.T) {
+	manager := NewDefaultPermissionManager()
+	req := PermissionRequest{
+		SessionID: "web-session",
+		Source:    string(message.SourceWeb),
+		ToolName:  "write_file",
+		Action:    "write",
+		Paths:     []string{"notes/todo.txt"},
+		Mutation:  true,
+	}
+	result := manager.Evaluate(req)
+	if result.Decision != PermissionPending {
+		t.Fatalf("expected approval request, got %+v", result)
+	}
+	if _, err := manager.ApprovePending("web-session", result.RequestID, PermissionGrantScope("count:2")); err != nil {
+		t.Fatalf("approve count scope: %v", err)
+	}
+	if first := manager.Evaluate(req); first.Decision != PermissionAllow {
+		t.Fatalf("expected first count use to allow, got %+v", first)
+	}
+	if second := manager.Evaluate(req); second.Decision != PermissionAllow {
+		t.Fatalf("expected second count use to allow, got %+v", second)
+	}
+	if third := manager.Evaluate(req); third.Decision != PermissionPending {
+		t.Fatalf("expected count approval to be consumed, got %+v", third)
+	}
+}
+
+func TestPermissionManagerTimeboxApprovalExpires(t *testing.T) {
+	now := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
+	manager := NewDefaultPermissionManager()
+	manager.now = func() time.Time { return now }
+	req := PermissionRequest{
+		SessionID: "web-session",
+		Source:    string(message.SourceWeb),
+		ToolName:  "write_file",
+		Action:    "write",
+		Paths:     []string{"notes/todo.txt"},
+		Mutation:  true,
+	}
+	result := manager.Evaluate(req)
+	if result.Decision != PermissionPending {
+		t.Fatalf("expected approval request, got %+v", result)
+	}
+	if _, err := manager.ApprovePending("web-session", result.RequestID, PermissionGrantScope("timebox:10m")); err != nil {
+		t.Fatalf("approve timebox scope: %v", err)
+	}
+	if allowed := manager.Evaluate(req); allowed.Decision != PermissionAllow {
+		t.Fatalf("expected timebox approval to allow, got %+v", allowed)
+	}
+	now = now.Add(11 * time.Minute)
+	if expired := manager.Evaluate(req); expired.Decision != PermissionPending {
+		t.Fatalf("expected expired timebox to require approval again, got %+v", expired)
+	}
+}
+
+func TestPermissionManagerPatternApprovalCoversSimilarShellCommands(t *testing.T) {
+	manager := NewDefaultPermissionManager()
+	req := PermissionRequest{
+		SessionID: "web-session",
+		Source:    string(message.SourceWeb),
+		ToolName:  "bash",
+		Action:    "exec",
+		Command:   "go test ./internal/toolruntime",
+		Mutation:  true,
+	}
+	result := manager.Evaluate(req)
+	if result.Decision != PermissionPending {
+		t.Fatalf("expected approval request, got %+v", result)
+	}
+	if _, err := manager.ApprovePending("web-session", result.RequestID, PermissionGrantPattern); err != nil {
+		t.Fatalf("approve pattern scope: %v", err)
+	}
+	if similar := manager.Evaluate(PermissionRequest{
+		SessionID: "web-session",
+		Source:    string(message.SourceWeb),
+		ToolName:  "bash",
+		Action:    "exec",
+		Command:   "go test ./internal/agent",
+		Mutation:  true,
+	}); similar.Decision != PermissionAllow {
+		t.Fatalf("expected similar go test command to allow, got %+v", similar)
+	}
+	if unrelated := manager.Evaluate(PermissionRequest{
+		SessionID: "web-session",
+		Source:    string(message.SourceWeb),
+		ToolName:  "bash",
+		Action:    "exec",
+		Command:   "cargo test",
+		Mutation:  true,
+	}); unrelated.Decision != PermissionPending {
+		t.Fatalf("expected unrelated command to remain pending, got %+v", unrelated)
+	}
+}
+
+func TestPermissionSummariesDescribeIntentRiskAndExpiry(t *testing.T) {
+	expiresAt := time.Date(2026, 5, 16, 10, 5, 0, 0, time.UTC)
+	pending := PendingPermission{
+		ID:        "perm-1",
+		Reason:    "shell execution requires approval in remote sessions",
+		CreatedAt: expiresAt.Add(-5 * time.Minute),
+		ExpiresAt: expiresAt,
+		Request: PermissionRequest{
+			SessionID: "web-session",
+			Source:    string(message.SourceWeb),
+			ToolName:  "bash",
+			Action:    "exec",
+			Command:   "go test ./...",
+			Mutation:  true,
+		},
+	}
+
+	if got := PermissionIntentSummary(pending); !strings.Contains(got, "run shell command") || !strings.Contains(got, "go test ./...") {
+		t.Fatalf("unexpected intent summary: %q", got)
+	}
+	if got := PermissionRiskSummary(pending.Request); !strings.Contains(got, "medium") || !strings.Contains(got, "shell") {
+		t.Fatalf("unexpected risk summary: %q", got)
+	}
+	if got := PermissionExpirySummary(pending, expiresAt.Add(-time.Minute)); !strings.Contains(got, "expires in 1m") {
+		t.Fatalf("unexpected expiry summary: %q", got)
+	}
+}
+
 func TestBrowserSessionApprovalCoversSubsequentBrowserActions(t *testing.T) {
 	manager := NewDefaultPermissionManager()
 
@@ -748,8 +912,8 @@ func TestBrowserSessionApprovalCoversSubsequentBrowserActions(t *testing.T) {
 		Mutation:  true,
 	}
 	navigateResult := manager.Evaluate(navigateReq)
-	if navigateResult.Decision != PermissionAllow {
-		t.Fatalf("expected browser navigate to inherit session approval, got %+v", navigateResult)
+	if navigateResult.Decision != PermissionPending {
+		t.Fatalf("expected browser session approval to remain action-scoped, got %+v", navigateResult)
 	}
 
 	screenshotReq := PermissionRequest{
@@ -760,8 +924,8 @@ func TestBrowserSessionApprovalCoversSubsequentBrowserActions(t *testing.T) {
 		Mutation:  true,
 	}
 	screenshotResult := manager.Evaluate(screenshotReq)
-	if screenshotResult.Decision != PermissionAllow {
-		t.Fatalf("expected browser screenshot to inherit session approval, got %+v", screenshotResult)
+	if screenshotResult.Decision != PermissionPending {
+		t.Fatalf("expected browser session approval to remain action-scoped, got %+v", screenshotResult)
 	}
 
 	otherToolReq := PermissionRequest{
@@ -804,8 +968,8 @@ func TestDesktopSessionApprovalCoversSubsequentDesktopActions(t *testing.T) {
 		Mutation:  true,
 	}
 	keyResult := manager.Evaluate(keyReq)
-	if keyResult.Decision != PermissionAllow {
-		t.Fatalf("expected desktop key to inherit session approval, got %+v", keyResult)
+	if keyResult.Decision != PermissionPending {
+		t.Fatalf("expected desktop session approval to remain action-scoped, got %+v", keyResult)
 	}
 
 	clipboardReadReq := PermissionRequest{
@@ -816,8 +980,8 @@ func TestDesktopSessionApprovalCoversSubsequentDesktopActions(t *testing.T) {
 		Mutation:  false,
 	}
 	clipboardReadResult := manager.Evaluate(clipboardReadReq)
-	if clipboardReadResult.Decision != PermissionAllow {
-		t.Fatalf("expected desktop session approval to cover read after approval, got %+v", clipboardReadResult)
+	if clipboardReadResult.Decision != PermissionAbstain {
+		t.Fatalf("expected desktop read-only action to bypass approval rules, got %+v", clipboardReadResult)
 	}
 }
 
@@ -850,7 +1014,7 @@ func TestBrowserSessionApprovalPersistsAcrossRestore(t *testing.T) {
 		Mutation:  true,
 	}
 	restoredResult := restored.Evaluate(navigateReq)
-	if restoredResult.Decision != PermissionAllow {
-		t.Fatalf("expected restored browser session approval to allow navigate, got %+v", restoredResult)
+	if restoredResult.Decision != PermissionPending {
+		t.Fatalf("expected restored browser session approval to remain action-scoped, got %+v", restoredResult)
 	}
 }

@@ -102,6 +102,20 @@ func TestWriteFileToolKeepsPathsInsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestWriteFileToolMissingPathExplainsRequiredArguments(t *testing.T) {
+	tool := NewWriteFileTool(t.TempDir())
+
+	_, err := tool.Execute(context.Background(), map[string]interface{}{})
+	if err == nil {
+		t.Fatal("expected missing path error")
+	}
+	for _, want := range []string{"missing path argument", "write_file requires", "path", "content"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+		}
+	}
+}
+
 func TestAttachFileToolReturnsExplicitArtifactPath(t *testing.T) {
 	workspace := t.TempDir()
 	target := filepath.Join(workspace, ".godex", ".tmp", "report.pdf")

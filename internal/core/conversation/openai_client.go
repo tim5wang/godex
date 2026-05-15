@@ -155,6 +155,7 @@ type openAIFunction struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description,omitempty"`
 	Parameters  map[string]interface{} `json:"parameters,omitempty"`
+	Strict      bool                   `json:"strict,omitempty"`
 }
 
 type openAIToolCall struct {
@@ -285,12 +286,14 @@ func openAIAssistantMessage(msg protocol.APIMessage) openAIMessage {
 func openAIToolsFromProtocol(tools []protocol.ToolSchema) []openAITool {
 	out := make([]openAITool, 0, len(tools))
 	for _, tool := range tools {
+		params := openAIFunctionParameters(tool.InputSchema)
 		out = append(out, openAITool{
 			Type: "function",
 			Function: openAIFunction{
 				Name:        tool.Name,
 				Description: tool.Description,
-				Parameters:  openAIFunctionParameters(tool.InputSchema),
+				Parameters:  params,
+				Strict:      openAIJSONSchemaStrictCompatible(params),
 			},
 		})
 	}
@@ -323,11 +326,73 @@ func normalizeOpenAIJSONSchemaObject(schema map[string]interface{}) map[string]i
 			}
 			schema["properties"] = cloned
 		}
+		if _, ok := schema["additionalProperties"]; !ok {
+			schema["additionalProperties"] = false
+		}
 	}
 	if items, ok := schema["items"]; ok {
 		schema["items"] = normalizeOpenAIJSONSchemaValue(items)
 	}
 	return schema
+}
+
+func openAIJSONSchemaStrictCompatible(schema map[string]interface{}) bool {
+	if schema == nil {
+		return true
+	}
+	if schema["type"] == "object" {
+		if schema["additionalProperties"] != false {
+			return false
+		}
+		properties, ok := schema["properties"].(map[string]interface{})
+		if !ok {
+			return false
+		}
+		required := openAIRequiredSet(schema["required"])
+		for name, property := range properties {
+			if _, ok := required[name]; !ok {
+				return false
+			}
+			if !openAIJSONSchemaValueStrictCompatible(property) {
+				return false
+			}
+		}
+	}
+	if items, ok := schema["items"]; ok {
+		return openAIJSONSchemaValueStrictCompatible(items)
+	}
+	return true
+}
+
+func openAIJSONSchemaValueStrictCompatible(value interface{}) bool {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return openAIJSONSchemaStrictCompatible(typed)
+	case []interface{}:
+		for _, item := range typed {
+			if !openAIJSONSchemaValueStrictCompatible(item) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func openAIRequiredSet(value interface{}) map[string]struct{} {
+	required := map[string]struct{}{}
+	switch typed := value.(type) {
+	case []string:
+		for _, item := range typed {
+			required[item] = struct{}{}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if name, ok := item.(string); ok {
+				required[name] = struct{}{}
+			}
+		}
+	}
+	return required
 }
 
 func normalizeOpenAIJSONSchemaValue(value interface{}) interface{} {

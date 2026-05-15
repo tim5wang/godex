@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"time"
 
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/platform/tooling"
@@ -48,6 +49,7 @@ const (
 
 	PermissionGrantOnce    = toolruntime.PermissionGrantOnce
 	PermissionGrantSession = toolruntime.PermissionGrantSession
+	PermissionGrantPattern = toolruntime.PermissionGrantPattern
 
 	InteractiveApprovalModeManual = toolruntime.InteractiveApprovalModeManual
 	InteractiveApprovalModeReview = toolruntime.InteractiveApprovalModeReview
@@ -119,6 +121,18 @@ func DefaultPermissionPolicy() PermissionPolicy {
 
 func PermissionPolicyForSecurityProfile(profile, approvalMode string) PermissionPolicy {
 	return toolruntime.PermissionPolicyForSecurityProfile(profile, approvalMode)
+}
+
+func PermissionIntentSummary(pending PendingPermission) string {
+	return toolruntime.PermissionIntentSummary(pending)
+}
+
+func PermissionRiskSummary(req PermissionRequest) string {
+	return toolruntime.PermissionRiskSummary(req)
+}
+
+func PermissionExpirySummary(pending PendingPermission, now time.Time) string {
+	return toolruntime.PermissionExpirySummary(pending, now)
 }
 
 func NewPermissionInterceptor(manager *PermissionManager) BeforeInterceptor {

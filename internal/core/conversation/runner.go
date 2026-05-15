@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -440,6 +441,7 @@ func SanitizeMessagesForProvider(messages []protocol.APIMessage) []protocol.APIM
 	out := make([]protocol.APIMessage, 0, len(messages))
 	openTools := map[string]struct{}{}
 	for _, msg := range messages {
+		hadOpenTools := len(openTools) > 0
 		blocks := sanitizeBlocks(msg.Content, openTools, msg.Role == protocol.RoleAssistant)
 		if len(blocks) == 0 {
 			continue
@@ -447,6 +449,10 @@ func SanitizeMessagesForProvider(messages []protocol.APIMessage) []protocol.APIM
 		role := strings.TrimSpace(msg.Role)
 		if role == "" {
 			role = protocol.RoleUser
+		}
+		if hadOpenTools && len(openTools) > 0 && !onlyToolResults(blocks) {
+			out = append(out, protocol.APIMessage{Role: protocol.RoleUser, Content: missingToolResultBlocks(openTools, "missing_tool_result_backfilled")})
+			clear(openTools)
 		}
 		if len(out) > 0 && role == protocol.RoleUser && out[len(out)-1].Role == protocol.RoleUser &&
 			onlyUserMergeable(out[len(out)-1].Content) && onlyUserMergeable(blocks) {
@@ -461,11 +467,7 @@ func SanitizeMessagesForProvider(messages []protocol.APIMessage) []protocol.APIM
 		out = append(out, apiMessage)
 	}
 	if len(openTools) > 0 {
-		toolResults := make([]protocol.Block, 0, len(openTools))
-		for id := range openTools {
-			toolResults = append(toolResults, protocol.ToolResultBlock(id, `{"status":"missing_tool_result_backfilled","note":"The original tool result was missing from provider context."}`))
-		}
-		out = append(out, protocol.APIMessage{Role: protocol.RoleUser, Content: toolResults})
+		out = append(out, protocol.APIMessage{Role: protocol.RoleUser, Content: missingToolResultBlocks(openTools, "missing_tool_result_backfilled")})
 	}
 	return out
 }
@@ -517,6 +519,34 @@ func onlyUserMergeable(blocks []protocol.Block) bool {
 		}
 	}
 	return true
+}
+
+func onlyToolResults(blocks []protocol.Block) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Type != protocol.BlockToolResult {
+			return false
+		}
+	}
+	return true
+}
+
+func missingToolResultBlocks(openTools map[string]struct{}, status string) []protocol.Block {
+	if len(openTools) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(openTools))
+	for id := range openTools {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	blocks := make([]protocol.Block, 0, len(ids))
+	for _, id := range ids {
+		blocks = append(blocks, protocol.ToolResultBlock(id, fmt.Sprintf(`{"status":%q,"note":"The original tool result was missing from provider context."}`, status)))
+	}
+	return blocks
 }
 
 type pollingToolRepeatState struct {
@@ -760,7 +790,7 @@ func ExecuteToolUsesWithOptions(
 
 	resultBlocks := make([]protocol.Block, 0, len(toolUses))
 	executed := make([]ExecutedTool, 0, len(toolUses))
-	for _, block := range toolUses {
+	for idx, block := range toolUses {
 		if onStarted != nil {
 			onStarted(block)
 		}
@@ -799,11 +829,18 @@ func ExecuteToolUsesWithOptions(
 			onFinished(executedTool)
 		}
 		if shouldStopAfterTool(err) {
+			for _, skipped := range toolUses[idx+1:] {
+				resultBlocks = append(resultBlocks, protocol.ToolResultBlock(skipped.ID, skippedToolOutput("skipped_due_to_pending_approval")))
+			}
 			return protocol.NewMessage(protocol.RoleUser, resultBlocks...), executed, err
 		}
 	}
 
 	return protocol.NewMessage(protocol.RoleUser, resultBlocks...), executed, nil
+}
+
+func skippedToolOutput(status string) string {
+	return fmt.Sprintf(`{"status":%q,"note":"Tool execution was skipped because an earlier tool in the same assistant message stopped the conversation."}`, status)
 }
 
 func executeToolWithTimeout(

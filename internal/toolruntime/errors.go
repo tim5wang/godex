@@ -1,14 +1,39 @@
 package toolruntime
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ErrToolNotFound is returned when a tool is not found
 type ErrToolNotFound struct {
-	Name string
+	Name      string
+	Available []string
 }
 
 func (e ErrToolNotFound) Error() string {
-	return fmt.Sprintf("tool not found: %s", e.Name)
+	if len(e.Available) == 0 {
+		return fmt.Sprintf("tool not found: %s", e.Name)
+	}
+	message := fmt.Sprintf("tool not found: %s. Active tools: %s.", e.Name, strings.Join(e.Available, ", "))
+	if e.Name == "grep" {
+		message += ` grep is not a separate tool; use bash with a command such as "rg <pattern> <path>".`
+	}
+	return message
+}
+
+// ErrToolInvalidInput is returned before execution when arguments cannot match
+// a tool's declared input schema.
+type ErrToolInvalidInput struct {
+	Tool    string
+	Missing []string
+}
+
+func (e ErrToolInvalidInput) Error() string {
+	if len(e.Missing) == 0 {
+		return fmt.Sprintf("tool %q received invalid arguments", e.Tool)
+	}
+	return fmt.Sprintf("tool %q missing required argument(s): %s", e.Tool, strings.Join(e.Missing, ", "))
 }
 
 // ErrToolInactive is returned when a registered tool is not currently active.

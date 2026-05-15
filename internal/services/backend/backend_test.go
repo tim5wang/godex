@@ -689,6 +689,20 @@ func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	if len(snapshot.PendingPermissions) != 0 {
 		t.Fatalf("expected approvals to clear pending queue, got %+v", snapshot.PendingPermissions)
 	}
+	audit, err := service.SecurityAudit(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("security audit: %v", err)
+	}
+	foundApprovalAudit := false
+	for _, event := range audit {
+		if event.Action == "approve_permission" && event.Metadata["request_id"] == resolution.RequestID && event.Metadata["scope"] == string(tools.PermissionGrantSession) {
+			foundApprovalAudit = true
+			break
+		}
+	}
+	if !foundApprovalAudit {
+		t.Fatalf("expected approval audit event, got %+v", audit)
+	}
 	if got := protocol.MessageText(snapshot.Messages[len(snapshot.Messages)-1]); got != "done" {
 		t.Fatalf("expected resumed assistant reply, got %q", got)
 	}

@@ -400,6 +400,7 @@ type PermissionConfig struct {
 	InteractiveApprovalMode    string
 	InteractiveApprovalSources []string
 	InteractiveApprovalTools   []string
+	PendingTTLSeconds          int
 	TrustedPathPrefixes        []string
 	TrustedCommandPrefixes     []string
 }

@@ -8,6 +8,7 @@ type SecurityPolicy struct {
 	InteractiveApprovalMode    string   `json:"interactive_approval_mode,omitempty"`
 	ApprovalSources            []string `json:"approval_sources,omitempty"`
 	ApprovalTools              []string `json:"approval_tools,omitempty"`
+	PendingTTLSeconds          int      `json:"pending_ttl_seconds,omitempty"`
 	TrustedPathPrefixes        []string `json:"trusted_path_prefixes,omitempty"`
 	TrustedCommandPrefixes     []string `json:"trusted_command_prefixes,omitempty"`
 	BlockAutomationMutations   bool     `json:"block_automation_mutations"`

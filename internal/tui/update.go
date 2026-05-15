@@ -158,6 +158,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "a":
 			return m, m.approveSelectedPermissionCmd(tools.PermissionGrantOnce)
+		case "p":
+			return m, m.approveSelectedPermissionCmd(tools.PermissionGrantPattern)
+		case "t":
+			return m, m.approveSelectedPermissionCmd(tools.PermissionGrantScope("timebox:10m"))
 		case "s":
 			return m, m.approveSelectedPermissionCmd(tools.PermissionGrantSession)
 		case "x":

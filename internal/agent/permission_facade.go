@@ -20,6 +20,7 @@ func permissionPolicyFromConfig(cfg *config.Config) tools.PermissionPolicy {
 		!cfg.Tools.Permissions.BlockAutomationMutations &&
 		!cfg.Tools.Permissions.InteractiveApprovalEnabled &&
 		cfg.Tools.Permissions.InteractiveApprovalMode == "" &&
+		cfg.Tools.Permissions.PendingTTLSeconds == 0 &&
 		len(cfg.Tools.Permissions.InteractiveApprovalSources) == 0 &&
 		len(cfg.Tools.Permissions.InteractiveApprovalTools) == 0 &&
 		len(cfg.Tools.Permissions.TrustedPathPrefixes) == 0 &&
@@ -30,6 +31,9 @@ func permissionPolicyFromConfig(cfg *config.Config) tools.PermissionPolicy {
 	policy.BlockAutomationMutations = cfg.Tools.Permissions.BlockAutomationMutations
 	if cfg.Tools.Permissions.InteractiveApprovalMode != "" {
 		policy.InteractiveApproval.Mode = cfg.Tools.Permissions.InteractiveApprovalMode
+	}
+	if cfg.Tools.Permissions.PendingTTLSeconds > 0 {
+		policy.InteractiveApproval.PendingTTLSeconds = cfg.Tools.Permissions.PendingTTLSeconds
 	}
 	policy.InteractiveApproval.Enabled = cfg.Tools.Permissions.InteractiveApprovalEnabled
 	if len(cfg.Tools.Permissions.InteractiveApprovalSources) > 0 {

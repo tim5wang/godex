@@ -507,6 +507,38 @@ func TestApproveHandlerApprovesSinglePendingWithoutRequestID(t *testing.T) {
 	}
 }
 
+func TestApproveHandlerAcceptsRicherApprovalScopes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		scope tools.PermissionGrantScope
+	}{
+		{name: "pattern implicit id", args: []string{"pattern"}, scope: tools.PermissionGrantPattern},
+		{name: "count implicit id", args: []string{"count:5"}, scope: tools.PermissionGrantScope("count:5")},
+		{name: "timebox implicit id", args: []string{"timebox:10m"}, scope: tools.PermissionGrantScope("timebox:10m")},
+		{name: "pattern explicit id", args: []string{"perm-1", "pattern"}, scope: tools.PermissionGrantPattern},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adminBackend := &fakeSessionAdminBackend{
+				pending: []tools.PendingPermission{{
+					ID:      "perm-1",
+					Request: tools.PermissionRequest{ToolName: "bash", Action: "execute"},
+				}},
+			}
+			admin := newFakeSessionAdmin(t, adminBackend)
+			ctx := commands.WithSessionContext(context.Background(), commands.SessionContext{SessionID: "session-1"})
+
+			result, err := NewApproveCommandHandler(admin)(ctx, nil, commands.Command{Name: "approve", Args: tc.args})
+			if err != nil {
+				t.Fatalf("approve %v: %v", tc.args, err)
+			}
+			if adminBackend.lastApproveID != "perm-1" || adminBackend.lastApproveScope != tc.scope {
+				t.Fatalf("unexpected approval id/scope: id=%q scope=%q output=%q", adminBackend.lastApproveID, adminBackend.lastApproveScope, result.Output)
+			}
+		})
+	}
+}
+
 func TestApproveHandlerListsWhenMultiplePendingAndNoRequestID(t *testing.T) {
 	adminBackend := &fakeSessionAdminBackend{
 		pending: []tools.PendingPermission{

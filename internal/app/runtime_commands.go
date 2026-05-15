@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -252,7 +253,7 @@ func NewApproveCommandHandler(admin *sessionadmin.Service) func(context.Context,
 func resolveApproveCommandArgs(args []string, items []tools.PendingPermission) (requestID string, scope tools.PermissionGrantScope, listOnly bool, err error) {
 	scope = tools.PermissionGrantOnce
 	if len(args) > 2 {
-		return "", "", false, fmt.Errorf("usage: /approve [list|request-id] [once|session]")
+		return "", "", false, errors.New(approveUsage())
 	}
 	if len(args) == 0 {
 		switch len(items) {
@@ -273,7 +274,7 @@ func resolveApproveCommandArgs(args []string, items []tools.PendingPermission) (
 		return "", "", true, nil
 	case string(tools.PermissionGrantSession):
 		if len(args) != 1 {
-			return "", "", false, fmt.Errorf("usage: /approve [list|request-id] [once|session]")
+			return "", "", false, errors.New(approveUsage())
 		}
 		if len(items) == 1 {
 			return strings.TrimSpace(items[0].ID), tools.PermissionGrantSession, false, nil
@@ -282,21 +283,50 @@ func resolveApproveCommandArgs(args []string, items []tools.PendingPermission) (
 	case "list":
 		return "", "", true, nil
 	}
+	if isApproveScope(first) {
+		if len(args) != 1 {
+			return "", "", false, errors.New(approveUsage())
+		}
+		scope = tools.PermissionGrantScope(strings.ToLower(first))
+		if len(items) == 1 {
+			return strings.TrimSpace(items[0].ID), scope, false, nil
+		}
+		return "", "", true, nil
+	}
 	requestID = first
 	if requestID == "" {
-		return "", "", false, fmt.Errorf("usage: /approve [list|request-id] [once|session]")
+		return "", "", false, errors.New(approveUsage())
 	}
 	if len(args) == 2 {
-		switch strings.ToLower(strings.TrimSpace(args[1])) {
+		nextScope := strings.ToLower(strings.TrimSpace(args[1]))
+		switch nextScope {
 		case "", string(tools.PermissionGrantOnce):
 			scope = tools.PermissionGrantOnce
 		case string(tools.PermissionGrantSession):
 			scope = tools.PermissionGrantSession
+		case string(tools.PermissionGrantPattern):
+			scope = tools.PermissionGrantPattern
 		default:
-			return "", "", false, fmt.Errorf("usage: /approve [list|request-id] [once|session]")
+			if !isApproveScope(nextScope) {
+				return "", "", false, errors.New(approveUsage())
+			}
+			scope = tools.PermissionGrantScope(nextScope)
 		}
 	}
 	return requestID, scope, false, nil
+}
+
+func isApproveScope(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == string(tools.PermissionGrantOnce) ||
+		value == string(tools.PermissionGrantSession) ||
+		value == string(tools.PermissionGrantPattern) ||
+		strings.HasPrefix(value, "count:") ||
+		strings.HasPrefix(value, "timebox:")
+}
+
+func approveUsage() string {
+	return "usage: /approve [list|request-id] [once|session|pattern|count:N|timebox:10m]"
 }
 
 func renderApproveListOrEmpty(items []tools.PendingPermission) string {

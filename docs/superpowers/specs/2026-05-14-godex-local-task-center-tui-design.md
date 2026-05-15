@@ -35,11 +35,10 @@ The TUI should reuse existing backend APIs:
 
 The TUI remains keyboard-first:
 
-- `Alt+1`: Task Center
-- `Alt+2`: Workers
-- `Alt+3`: Graph
-- `Alt+4`: Diff
-- `Alt+5`: Logs
+- `Tab`: toggle focus between Input and Workbench.
+- Input focus: number keys are normal composer input.
+- Workbench focus: `1` Task Center, `2` Workers, `3` Graph, `4` Diff, `5` Logs.
+- The status line displays the active focus so users can tell whether number keys will type or switch tabs.
 - Existing feed navigation, composer input, permission approval, and slash commands continue to work.
 
 The composer remains available at the bottom in every tab. This keeps the workbench commandable and avoids splitting the product into separate chat and task modes.

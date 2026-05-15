@@ -2854,7 +2854,7 @@ func TestUsageGatewayChatCompletionInvokesMappedProfile(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("update config: %v", err)
 	}
-	store, err := usage.NewJSONStore(t.TempDir())
+	store, err := usage.NewSQLiteStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2917,7 +2917,7 @@ func TestUsageGatewayRejectsOverBudgetBeforeProviderCall(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("update config: %v", err)
 	}
-	store, err := usage.NewJSONStore(t.TempDir())
+	store, err := usage.NewSQLiteStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

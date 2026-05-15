@@ -45,7 +45,7 @@
 
 - [x] Render Task Center as the default tab.
 - [x] Keep the composer visible below the workbench.
-- [x] Add tab labels: `Alt+1 Task`, `Alt+2 Workers`, `Alt+3 Graph`, `Alt+4 Diff`, `Alt+5 Logs`.
+- [x] Add tab labels: `1 Task`, `2 Workers`, `3 Graph`, `4 Diff`, `5 Logs`.
 - [x] Render the existing conversation feed in Logs.
 - [x] Add tests for default Task tab and Logs tab behavior.
 
@@ -55,7 +55,8 @@
 - Modify: `internal/tui/update.go`
 - Modify: `internal/tui/tui_test.go`
 
-- [x] Map `Alt+1` through `Alt+5` to workbench tabs without stealing numeric composer input.
+- [x] Map `1` through `5` to workbench tabs only when Workbench has focus.
+- [x] Show the active focus in the status line so users know whether number keys type or switch tabs.
 - [x] Keep existing composer submission and feed navigation behavior intact.
 - [x] In Logs tab, feed focus and item expansion continue to work as before.
 

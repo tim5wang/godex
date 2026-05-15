@@ -502,6 +502,7 @@ func TestWorkbenchOutcomeSmallTerminalRenderKeepsStatusVisible(t *testing.T) {
 		MergeStatus: "merged",
 		WriteScope:  []string{"docs/superpowers/tmp"},
 	}}
+	m.activeWorkbenchTab = workbenchTabTask
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 18})
 
 	view := m.View()
@@ -512,7 +513,7 @@ func TestWorkbenchOutcomeSmallTerminalRenderKeepsStatusVisible(t *testing.T) {
 	}
 }
 
-func TestViewDefaultsToTaskCenterAndLogsTabShowsConversation(t *testing.T) {
+func TestViewDefaultsToLogsAndTaskTabShowsTaskCenter(t *testing.T) {
 	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model", WorkspaceDir: "/workspace"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
 		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
 		Messages: []protocol.Message{
@@ -529,20 +530,24 @@ func TestViewDefaultsToTaskCenterAndLogsTabShowsConversation(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 
 	view := m.View()
-	for _, want := range []string{"1 Task", "2 Workers", "3 Graph", "4 Diff", "5 Logs", "Focus: Input", "Plan", "Active Execution", "Review & Merge", "Task Center"} {
+	for _, want := range []string{"conversation log line", "Focus: Input"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("expected default task center view to contain %q, got %q", want, view)
+			t.Fatalf("expected default Logs view to contain %q, got %q", want, view)
 		}
 	}
-	if strings.Contains(view, "conversation log line") {
-		t.Fatalf("expected conversation to stay in Logs tab, got %q", view)
+	for _, hidden := range []string{"Plan", "Active Execution", "Review & Merge", "Task Center"} {
+		if strings.Contains(view, hidden) {
+			t.Fatalf("expected Task Center content to stay in Task tab, got %q", view)
+		}
 	}
 
-	m.activeWorkbenchTab = workbenchTabLogs
+	m.activeWorkbenchTab = workbenchTabTask
 	m.refreshViewport(false)
 	view = m.View()
-	if !strings.Contains(view, "conversation log line") {
-		t.Fatalf("expected Logs tab to contain conversation, got %q", view)
+	for _, want := range []string{"1 Task", "2 Workers", "3 Graph", "4 Diff", "5 Logs", "Plan", "Active Execution", "Review & Merge", "Task Center"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected Task tab to contain %q, got %q", want, view)
+		}
 	}
 }
 
@@ -609,8 +614,8 @@ func TestNumberKeysReachComposerWhenInputFocused(t *testing.T) {
 
 	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 
-	if m.activeWorkbenchTab != workbenchTabTask {
-		t.Fatalf("expected bare number to keep active tab at task, got %v", m.activeWorkbenchTab)
+	if m.activeWorkbenchTab != workbenchTabLogs {
+		t.Fatalf("expected bare number to keep active tab at logs, got %v", m.activeWorkbenchTab)
 	}
 	if m.composer.Value() != "2" {
 		t.Fatalf("expected bare number to reach composer, got %q", m.composer.Value())

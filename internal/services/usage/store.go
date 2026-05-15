@@ -2,12 +2,15 @@ package usage
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
+	"strings"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func sha256Hex(s string) string {
@@ -15,258 +18,378 @@ func sha256Hex(s string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// JSONStore implements Store using a local JSON file.
-type JSONStore struct {
-	mu   sync.RWMutex
+// SQLiteStore implements Store using a local SQLite database.
+type SQLiteStore struct {
 	path string
-	data *storeData
+	db   *sql.DB
 }
 
-type storeData struct {
-	Keys   []ProxyAPIKey `json:"keys"`
-	Models []ProxyModel  `json:"models"`
-	Calls  []UsageCall   `json:"calls"`
-}
-
-// NewJSONStore creates or loads a JSON-backed store.
-func NewJSONStore(stateDir string) (*JSONStore, error) {
-	p := filepath.Join(stateDir, "usage-gateway.json")
-	s := &JSONStore{
-		path: p,
-		data: &storeData{
-			Keys:   []ProxyAPIKey{},
-			Models: []ProxyModel{},
-			Calls:  []UsageCall{},
-		},
+// NewSQLiteStore creates or loads the SQLite-backed usage store under stateDir.
+func NewSQLiteStore(stateDir string) (*SQLiteStore, error) {
+	if strings.TrimSpace(stateDir) == "" {
+		return nil, fmt.Errorf("missing usage store directory")
 	}
-	if _, err := os.Stat(p); err == nil {
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			return nil, fmt.Errorf("read usage store: %w", err)
-		}
-		if len(raw) > 0 {
-			if err := json.Unmarshal(raw, s.data); err != nil {
-				return nil, fmt.Errorf("parse usage store: %w", err)
-			}
-		}
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		return nil, fmt.Errorf("mkdir usage store: %w", err)
 	}
-	return s, nil
-}
-
-func (s *JSONStore) save() error {
-	raw, err := json.MarshalIndent(s.data, "", "  ")
+	path := filepath.Join(stateDir, "usage-gateway.sqlite")
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		return fmt.Errorf("marshal usage store: %w", err)
+		return nil, fmt.Errorf("open usage sqlite store: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
-		return fmt.Errorf("mkdir usage store: %w", err)
+	store := &SQLiteStore{path: path, db: db}
+	if err := store.init(); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
-	return os.WriteFile(s.path, raw, 0644)
+	return store, nil
 }
 
-// ListKeys returns all proxy keys (hash field cleared for safety).
-func (s *JSONStore) ListKeys() ([]ProxyAPIKey, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]ProxyAPIKey, len(s.data.Keys))
-	for i, k := range s.data.Keys {
-		k.KeyHash = "" // never expose hash in list responses
-		out[i] = k
+func (s *SQLiteStore) init() error {
+	stmts := []string{
+		`PRAGMA journal_mode=WAL`,
+		`CREATE TABLE IF NOT EXISTS usage_keys (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			key_hash TEXT NOT NULL,
+			key_prefix TEXT NOT NULL,
+			enabled INTEGER NOT NULL,
+			budget_credits REAL NOT NULL,
+			warning_threshold REAL NOT NULL,
+			allowed_models TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_keys_hash ON usage_keys(key_hash)`,
+		`CREATE TABLE IF NOT EXISTS usage_models (
+			id TEXT PRIMARY KEY,
+			public_model TEXT NOT NULL UNIQUE,
+			target_profile_id TEXT NOT NULL,
+			target_model TEXT NOT NULL,
+			credit_weight REAL NOT NULL,
+			enabled INTEGER NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS usage_calls (
+			id TEXT PRIMARY KEY,
+			timestamp TEXT NOT NULL,
+			api_key_id TEXT NOT NULL,
+			public_model TEXT NOT NULL,
+			target_profile_id TEXT NOT NULL,
+			target_model TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL,
+			cache_read_tokens INTEGER NOT NULL,
+			cache_write_tokens INTEGER NOT NULL,
+			billable_tokens INTEGER NOT NULL,
+			credit_weight REAL NOT NULL,
+			credits REAL NOT NULL,
+			estimated INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			error TEXT NOT NULL,
+			latency_ms INTEGER NOT NULL,
+			source_channel TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			turn_id TEXT NOT NULL,
+			job_id TEXT NOT NULL,
+			error_code TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_calls_day_key ON usage_calls(substr(timestamp, 1, 10), api_key_id)`,
 	}
-	return out, nil
-}
-
-// GetKey returns a key by ID.
-func (s *JSONStore) GetKey(id string) (*ProxyAPIKey, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for i := range s.data.Keys {
-		if s.data.Keys[i].ID == id {
-			key := s.data.Keys[i]
-			return &key, nil
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("initialize usage sqlite store: %w", err)
 		}
 	}
-	return nil, fmt.Errorf("key not found: %s", id)
+	return nil
 }
 
-// GetKeyByHash looks up a key by its SHA-256 hash.
-func (s *JSONStore) GetKeyByHash(hash string) (*ProxyAPIKey, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for i := range s.data.Keys {
-		if s.data.Keys[i].KeyHash == hash {
-			key := s.data.Keys[i]
-			return &key, nil
-		}
+func (s *SQLiteStore) Close() error {
+	if s == nil || s.db == nil {
+		return nil
 	}
-	return nil, fmt.Errorf("key not found by hash")
+	return s.db.Close()
 }
 
-// CreateKey stores a new key.
-func (s *JSONStore) CreateKey(key *ProxyAPIKey) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data.Keys = append(s.data.Keys, *key)
-	return s.save()
-}
-
-// UpdateKey updates an existing key.
-func (s *JSONStore) UpdateKey(key *ProxyAPIKey) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.data.Keys {
-		if s.data.Keys[i].ID == key.ID {
-			s.data.Keys[i] = *key
-			return s.save()
-		}
+func (s *SQLiteStore) ListKeys() ([]ProxyAPIKey, error) {
+	rows, err := s.db.Query(`SELECT id, name, key_prefix, enabled, budget_credits, warning_threshold, allowed_models, created_at, updated_at FROM usage_keys ORDER BY created_at`)
+	if err != nil {
+		return nil, err
 	}
-	return fmt.Errorf("key not found: %s", key.ID)
-}
-
-// ListModels returns all model mappings.
-func (s *JSONStore) ListModels() ([]ProxyModel, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]ProxyModel, len(s.data.Models))
-	copy(out, s.data.Models)
-	return out, nil
-}
-
-// GetModel returns a model mapping by ID.
-func (s *JSONStore) GetModel(id string) (*ProxyModel, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for i := range s.data.Models {
-		if s.data.Models[i].ID == id {
-			model := s.data.Models[i]
-			return &model, nil
+	defer rows.Close()
+	var out []ProxyAPIKey
+	for rows.Next() {
+		var key ProxyAPIKey
+		var enabled int
+		var allowed string
+		var created, updated string
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &enabled, &key.BudgetCredits, &key.WarningThreshold, &allowed, &created, &updated); err != nil {
+			return nil, err
 		}
+		key.Enabled = enabled != 0
+		key.AllowedModels = decodeStringSlice(allowed)
+		key.CreatedAt = parseTime(created)
+		key.UpdatedAt = parseTime(updated)
+		out = append(out, key)
 	}
-	return nil, fmt.Errorf("model not found: %s", id)
+	return out, rows.Err()
 }
 
-// GetModelByPublicName looks up a model mapping by public model name.
-func (s *JSONStore) GetModelByPublicName(name string) (*ProxyModel, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for i := range s.data.Models {
-		if s.data.Models[i].PublicModel == name {
-			model := s.data.Models[i]
-			return &model, nil
+func (s *SQLiteStore) GetKey(id string) (*ProxyAPIKey, error) {
+	return s.getKey(`id = ?`, id)
+}
+
+func (s *SQLiteStore) GetKeyByHash(hash string) (*ProxyAPIKey, error) {
+	return s.getKey(`key_hash = ?`, hash)
+}
+
+func (s *SQLiteStore) getKey(where string, arg string) (*ProxyAPIKey, error) {
+	row := s.db.QueryRow(`SELECT id, name, key_hash, key_prefix, enabled, budget_credits, warning_threshold, allowed_models, created_at, updated_at FROM usage_keys WHERE `+where, arg)
+	var key ProxyAPIKey
+	var enabled int
+	var allowed string
+	var created, updated string
+	if err := row.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &enabled, &key.BudgetCredits, &key.WarningThreshold, &allowed, &created, &updated); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("key not found")
 		}
+		return nil, err
 	}
-	return nil, fmt.Errorf("model mapping not found: %s", name)
+	key.Enabled = enabled != 0
+	key.AllowedModels = decodeStringSlice(allowed)
+	key.CreatedAt = parseTime(created)
+	key.UpdatedAt = parseTime(updated)
+	return &key, nil
 }
 
-// CreateModel stores a new model mapping.
-func (s *JSONStore) CreateModel(model *ProxyModel) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data.Models = append(s.data.Models, *model)
-	return s.save()
+func (s *SQLiteStore) CreateKey(key *ProxyAPIKey) error {
+	_, err := s.db.Exec(`INSERT INTO usage_keys (id, name, key_hash, key_prefix, enabled, budget_credits, warning_threshold, allowed_models, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key.ID, key.Name, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled), key.BudgetCredits, key.WarningThreshold, encodeStringSlice(key.AllowedModels), formatTime(key.CreatedAt), formatTime(key.UpdatedAt))
+	return err
 }
 
-// UpdateModel updates an existing model mapping.
-func (s *JSONStore) UpdateModel(model *ProxyModel) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.data.Models {
-		if s.data.Models[i].ID == model.ID {
-			s.data.Models[i] = *model
-			return s.save()
+func (s *SQLiteStore) UpdateKey(key *ProxyAPIKey) error {
+	result, err := s.db.Exec(`UPDATE usage_keys SET name = ?, key_hash = ?, key_prefix = ?, enabled = ?, budget_credits = ?, warning_threshold = ?, allowed_models = ?, created_at = ?, updated_at = ? WHERE id = ?`,
+		key.Name, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled), key.BudgetCredits, key.WarningThreshold, encodeStringSlice(key.AllowedModels), formatTime(key.CreatedAt), formatTime(key.UpdatedAt), key.ID)
+	return resultError(result, err, "key not found: "+key.ID)
+}
+
+func (s *SQLiteStore) ListModels() ([]ProxyModel, error) {
+	rows, err := s.db.Query(`SELECT id, public_model, target_profile_id, target_model, credit_weight, enabled, created_at, updated_at FROM usage_models ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProxyModel
+	for rows.Next() {
+		model, err := scanModel(rows)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, model)
 	}
-	return fmt.Errorf("model not found: %s", model.ID)
+	return out, rows.Err()
 }
 
-// RecordCall appends a usage call to the ledger.
-func (s *JSONStore) RecordCall(call *UsageCall) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data.Calls = append(s.data.Calls, *call)
-	return s.save()
+func (s *SQLiteStore) GetModel(id string) (*ProxyModel, error) {
+	return s.getModel(`id = ?`, id)
 }
 
-// GetCalls returns calls for a given date and optionally filtered by api key ID.
-func (s *JSONStore) GetCalls(date string, apiKeyID string) ([]UsageCall, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []UsageCall
-	datePrefix := date // "2006-01-02"
-	for _, c := range s.data.Calls {
-		if c.Timestamp.Format("2006-01-02") != datePrefix {
-			continue
+func (s *SQLiteStore) GetModelByPublicName(name string) (*ProxyModel, error) {
+	return s.getModel(`public_model = ?`, name)
+}
+
+func (s *SQLiteStore) getModel(where string, arg string) (*ProxyModel, error) {
+	row := s.db.QueryRow(`SELECT id, public_model, target_profile_id, target_model, credit_weight, enabled, created_at, updated_at FROM usage_models WHERE `+where, arg)
+	model, err := scanModel(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("model mapping not found")
 		}
-		if apiKeyID != "" && c.APIKeyID != apiKeyID {
-			continue
-		}
-		out = append(out, c)
+		return nil, err
 	}
-	if out == nil {
-		out = []UsageCall{}
-	}
-	return out, nil
+	return &model, nil
 }
 
-// GetSummary returns aggregated usage summaries by day or week, optionally filtered by key.
-func (s *JSONStore) GetSummary(rangeType, apiKeyID string) ([]UsageSummary, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *SQLiteStore) CreateModel(model *ProxyModel) error {
+	_, err := s.db.Exec(`INSERT INTO usage_models (id, public_model, target_profile_id, target_model, credit_weight, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		model.ID, model.PublicModel, model.TargetProfileID, model.TargetModel, model.CreditWeight, boolInt(model.Enabled), formatTime(model.CreatedAt), formatTime(model.UpdatedAt))
+	return err
+}
 
-	// Group by date-period and optionally by key
+func (s *SQLiteStore) UpdateModel(model *ProxyModel) error {
+	result, err := s.db.Exec(`UPDATE usage_models SET public_model = ?, target_profile_id = ?, target_model = ?, credit_weight = ?, enabled = ?, created_at = ?, updated_at = ? WHERE id = ?`,
+		model.PublicModel, model.TargetProfileID, model.TargetModel, model.CreditWeight, boolInt(model.Enabled), formatTime(model.CreatedAt), formatTime(model.UpdatedAt), model.ID)
+	return resultError(result, err, "model not found: "+model.ID)
+}
+
+func (s *SQLiteStore) RecordCall(call *UsageCall) error {
+	_, err := s.db.Exec(`INSERT INTO usage_calls (id, timestamp, api_key_id, public_model, target_profile_id, target_model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, billable_tokens, credit_weight, credits, estimated, status, error, latency_ms, source_channel, session_id, turn_id, job_id, error_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		call.ID, formatTime(call.Timestamp), call.APIKeyID, call.PublicModel, call.TargetProfileID, call.TargetModel, call.InputTokens, call.OutputTokens, call.CacheReadTokens, call.CacheWriteTokens, call.BillableTokens, call.CreditWeight, call.Credits, boolInt(call.Estimated), call.Status, call.Error, call.LatencyMs, call.SourceChannel, call.SessionID, call.TurnID, call.JobID, call.ErrorCode)
+	return err
+}
+
+func (s *SQLiteStore) GetCalls(date string, apiKeyID string) ([]UsageCall, error) {
+	query := `SELECT id, timestamp, api_key_id, public_model, target_profile_id, target_model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, billable_tokens, credit_weight, credits, estimated, status, error, latency_ms, source_channel, session_id, turn_id, job_id, error_code FROM usage_calls WHERE 1=1`
+	args := []any{}
+	if date != "" {
+		query += ` AND substr(timestamp, 1, 10) = ?`
+		args = append(args, date)
+	}
+	if apiKeyID != "" {
+		query += ` AND api_key_id = ?`
+		args = append(args, apiKeyID)
+	}
+	query += ` ORDER BY timestamp`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanCalls(rows)
+}
+
+func (s *SQLiteStore) GetSummary(rangeType, apiKeyID string) ([]UsageSummary, error) {
+	rows, err := s.db.Query(`SELECT id, timestamp, api_key_id, public_model, target_profile_id, target_model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, billable_tokens, credit_weight, credits, estimated, status, error, latency_ms, source_channel, session_id, turn_id, job_id, error_code FROM usage_calls ORDER BY timestamp`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	calls, err := scanCalls(rows)
+	if err != nil {
+		return nil, err
+	}
 	type groupKey struct {
 		period string
 		keyID  string
 	}
 	groups := make(map[groupKey]*UsageSummary)
-
-	for _, c := range s.data.Calls {
+	for _, c := range calls {
 		if apiKeyID != "" && c.APIKeyID != apiKeyID {
 			continue
 		}
-
-		var period string
-		t := c.Timestamp
-		switch rangeType {
-		case "week":
-			year, week := t.ISOWeek()
+		period := c.Timestamp.Format("2006-01-02")
+		if rangeType == "week" {
+			year, week := c.Timestamp.ISOWeek()
 			period = fmt.Sprintf("%d-W%02d", year, week)
-		default: // "day"
-			period = t.Format("2006-01-02")
 		}
-
 		gk := groupKey{period: period, keyID: c.APIKeyID}
-		s, ok := groups[gk]
+		summary, ok := groups[gk]
 		if !ok {
-			s = &UsageSummary{Period: period, APIKeyID: c.APIKeyID}
-			groups[gk] = s
+			summary = &UsageSummary{Period: period, APIKeyID: c.APIKeyID}
+			groups[gk] = summary
 		}
-		s.InputTokens += c.InputTokens
-		s.OutputTokens += c.OutputTokens
-		s.CacheReadTokens += c.CacheReadTokens
-		s.CacheWriteTokens += c.CacheWriteTokens
-		s.BillableTokens += c.BillableTokens
-		s.Credits += c.Credits
-		s.CallCount++
+		summary.InputTokens += c.InputTokens
+		summary.OutputTokens += c.OutputTokens
+		summary.CacheReadTokens += c.CacheReadTokens
+		summary.CacheWriteTokens += c.CacheWriteTokens
+		summary.BillableTokens += c.BillableTokens
+		summary.Credits += c.Credits
+		summary.CallCount++
 		if c.Status == "error" {
-			s.ErrorCount++
+			summary.ErrorCount++
 		}
 	}
-
-	var out []UsageSummary
-	for _, s := range groups {
-		// Round credits to 6 decimal places
-		s.Credits = float64(int(s.Credits*1e6+0.5)) / 1e6
-		out = append(out, *s)
-	}
-	if out == nil {
-		out = []UsageSummary{}
+	out := make([]UsageSummary, 0, len(groups))
+	for _, summary := range groups {
+		summary.Credits = float64(int(summary.Credits*1e6+0.5)) / 1e6
+		out = append(out, *summary)
 	}
 	return out, nil
 }
 
-// Ensure JSONStore implements Store.
-var _ Store = (*JSONStore)(nil)
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanModel(row scanner) (ProxyModel, error) {
+	var model ProxyModel
+	var enabled int
+	var created, updated string
+	if err := row.Scan(&model.ID, &model.PublicModel, &model.TargetProfileID, &model.TargetModel, &model.CreditWeight, &enabled, &created, &updated); err != nil {
+		return ProxyModel{}, err
+	}
+	model.Enabled = enabled != 0
+	model.CreatedAt = parseTime(created)
+	model.UpdatedAt = parseTime(updated)
+	return model, nil
+}
+
+func scanCalls(rows *sql.Rows) ([]UsageCall, error) {
+	var out []UsageCall
+	for rows.Next() {
+		var call UsageCall
+		var timestamp string
+		var estimated int
+		if err := rows.Scan(&call.ID, &timestamp, &call.APIKeyID, &call.PublicModel, &call.TargetProfileID, &call.TargetModel, &call.InputTokens, &call.OutputTokens, &call.CacheReadTokens, &call.CacheWriteTokens, &call.BillableTokens, &call.CreditWeight, &call.Credits, &estimated, &call.Status, &call.Error, &call.LatencyMs, &call.SourceChannel, &call.SessionID, &call.TurnID, &call.JobID, &call.ErrorCode); err != nil {
+			return nil, err
+		}
+		call.Timestamp = parseTime(timestamp)
+		call.Estimated = estimated != 0
+		out = append(out, call)
+	}
+	if out == nil {
+		out = []UsageCall{}
+	}
+	return out, rows.Err()
+}
+
+func resultError(result sql.Result, err error, notFound string) error {
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%s", notFound)
+	}
+	return nil
+}
+
+func encodeStringSlice(values []string) string {
+	if values == nil {
+		values = []string{}
+	}
+	raw, _ := json.Marshal(values)
+	return string(raw)
+}
+
+func decodeStringSlice(raw string) []string {
+	var values []string
+	_ = json.Unmarshal([]byte(raw), &values)
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339Nano)
+}
+
+func parseTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	t, _ := time.Parse(time.RFC3339Nano, value)
+	return t
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+// Ensure SQLiteStore implements Store.
+var _ Store = (*SQLiteStore)(nil)
 
 // NewID generates a simple unique ID for demo/testing purposes.
 // In production, use UUIDs.

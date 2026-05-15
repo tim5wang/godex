@@ -105,7 +105,7 @@ func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func
 		status:             status,
 		autoFollow:         true,
 		focus:              focusComposer,
-		activeWorkbenchTab: workbenchTabTask,
+		activeWorkbenchTab: workbenchTabLogs,
 		working:            working,
 		workingSince:       workingSince,
 		historyItems:       snapshotToItems(snapshot.Messages, snapshot.PendingPermissions, nil, sessionID),

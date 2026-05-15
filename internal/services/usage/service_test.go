@@ -13,7 +13,7 @@ import (
 
 func TestCreateKeyReturnsSecret(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestCreateKeyReturnsSecret(t *testing.T) {
 
 func TestVerifyKey(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestVerifyKey(t *testing.T) {
 
 func TestDisabledKeyIsRejected(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestDisabledKeyIsRejected(t *testing.T) {
 
 func TestKeyAllowedModels(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestKeyAllowedModels(t *testing.T) {
 
 func TestDisabledModelMappingRejected(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestDisabledModelMappingRejected(t *testing.T) {
 
 func TestCreditCalculation(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestCreditCalculation(t *testing.T) {
 
 func TestSummaryAggregation(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestSummaryAggregation(t *testing.T) {
 
 func TestSummaryIncludesDistinctPeriods(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestSummaryIncludesDistinctPeriods(t *testing.T) {
 
 func TestCreateModelRejectsDuplicatePublicModel(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestCreateModelRejectsDuplicatePublicModel(t *testing.T) {
 
 func TestRecordLLMUsageUsesSystemKey(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
+	store, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,9 +388,9 @@ func TestRecordLLMUsageUsesSystemKey(t *testing.T) {
 	}
 }
 
-func TestJSONStorePersistence(t *testing.T) {
+func TestSQLiteStorePersistence(t *testing.T) {
 	dir := t.TempDir()
-	store1, err := NewJSONStore(dir)
+	store1, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +402,7 @@ func TestJSONStorePersistence(t *testing.T) {
 	}
 
 	// Re-create store from same dir
-	store2, err := NewJSONStore(dir)
+	store2, err := NewSQLiteStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,6 +420,75 @@ func TestJSONStorePersistence(t *testing.T) {
 	_, err = svc2.AuthenticateKey(resp.Secret)
 	if err != nil {
 		t.Fatalf("should authenticate persisted key: %v", err)
+	}
+}
+
+func TestSQLiteStorePersistsCallsInSQLite(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewSQLiteStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+	keyResp, err := svc.CreateKey(KeyCreateRequest{Name: "jsonl-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.RecordCall(&UsageCall{
+		APIKeyID:      keyResp.Key.ID,
+		PublicModel:   "public-fast",
+		InputTokens:   10,
+		OutputTokens:  5,
+		CreditWeight:  1,
+		Status:        "success",
+		SourceChannel: "web",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "usage-gateway.sqlite")); err != nil {
+		t.Fatalf("expected sqlite usage store: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "usage-gateway.json")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect legacy json usage store, got %v", err)
+	}
+	reopened, err := NewSQLiteStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls, err := reopened.GetCalls(time.Now().Format("2006-01-02"), keyResp.Key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].PublicModel != "public-fast" || calls[0].InputTokens != 10 || calls[0].OutputTokens != 5 {
+		t.Fatalf("unexpected persisted call: %+v", calls)
+	}
+}
+
+func TestSQLiteStoreDoesNotUseLegacyJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "usage-gateway.json"), []byte(`{"keys":[{"id":"key-legacy","name":"legacy","key_prefix":"gdx_lege****","enabled":true}],"calls":[{"id":"call-legacy","timestamp":"2026-05-16T10:00:00Z","api_key_id":"key-legacy","public_model":"legacy-model","input_tokens":3,"output_tokens":4,"credit_weight":1,"status":"success"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewSQLiteStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := store.ListKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("expected sqlite store to ignore legacy json keys, got %+v", keys)
+	}
+	calls, err := store.GetCalls("2026-05-16", "key-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("expected sqlite store to ignore legacy json calls, got %+v", calls)
 	}
 }
 

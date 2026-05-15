@@ -141,9 +141,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if tab, ok := parseWorkbenchTabKey(msg.String()); ok {
-		m.setWorkbenchTab(tab)
-		return m, nil
+	if m.focus == focusFeed {
+		if tab, ok := parseWorkbenchTabKey(msg.String()); ok {
+			m.setWorkbenchTab(tab)
+			return m, nil
+		}
 	}
 
 	if m.focus == focusFeed {
@@ -199,15 +201,15 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func parseWorkbenchTabKey(key string) (workbenchTab, bool) {
 	switch key {
-	case "alt+1":
+	case "1":
 		return workbenchTabTask, true
-	case "alt+2":
+	case "2":
 		return workbenchTabWorkers, true
-	case "alt+3":
+	case "3":
 		return workbenchTabGraph, true
-	case "alt+4":
+	case "4":
 		return workbenchTabDiff, true
-	case "alt+5":
+	case "5":
 		return workbenchTabLogs, true
 	default:
 		return workbenchTabTask, false

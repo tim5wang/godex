@@ -38,11 +38,11 @@ func (m *model) renderWorkbenchTabs() string {
 		tab   workbenchTab
 		label string
 	}{
-		{workbenchTabTask, "Alt+1 Task"},
-		{workbenchTabWorkers, "Alt+2 Workers"},
-		{workbenchTabGraph, "Alt+3 Graph"},
-		{workbenchTabDiff, "Alt+4 Diff"},
-		{workbenchTabLogs, "Alt+5 Logs"},
+		{workbenchTabTask, "1 Task"},
+		{workbenchTabWorkers, "2 Workers"},
+		{workbenchTabGraph, "3 Graph"},
+		{workbenchTabDiff, "4 Diff"},
+		{workbenchTabLogs, "5 Logs"},
 	}
 	out := make([]string, 0, len(labels))
 	for _, item := range labels {

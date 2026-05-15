@@ -11,6 +11,9 @@ import (
 
 func (m *model) renderRuntimeStatus() string {
 	parts := []string{m.baseRuntimeStatus()}
+	if focus := m.focusStatusText(); focus != "" {
+		parts = append(parts, focus)
+	}
 	if ctx := m.contextUsageText(); ctx != "" {
 		parts = append(parts, ctx)
 	}
@@ -21,6 +24,13 @@ func (m *model) renderRuntimeStatus() string {
 		parts = append(parts, fmt.Sprintf("msgs %d", m.contextSummary.MessageCount))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func (m *model) focusStatusText() string {
+	if m.focus == focusFeed {
+		return "Focus: Workbench · 1-5 tabs · Tab input"
+	}
+	return "Focus: Input · Tab workbench"
 }
 
 func (m *model) baseRuntimeStatus() string {

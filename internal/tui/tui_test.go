@@ -529,7 +529,7 @@ func TestViewDefaultsToTaskCenterAndLogsTabShowsConversation(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 
 	view := m.View()
-	for _, want := range []string{"Alt+1 Task", "Alt+2 Workers", "Alt+3 Graph", "Alt+4 Diff", "Alt+5 Logs", "Plan", "Active Execution", "Review & Merge", "Task Center"} {
+	for _, want := range []string{"1 Task", "2 Workers", "3 Graph", "4 Diff", "5 Logs", "Focus: Input", "Plan", "Active Execution", "Review & Merge", "Task Center"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected default task center view to contain %q, got %q", want, view)
 		}
@@ -576,11 +576,13 @@ func TestWorkbenchInitLoadsLongTasksAndSubagents(t *testing.T) {
 	}
 }
 
-func TestAltNumberKeysSwitchWorkbenchTabs(t *testing.T) {
+func TestNumberKeysSwitchWorkbenchTabsWhenWorkbenchFocused(t *testing.T) {
 	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
 		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
 	})
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m.focus = focusFeed
+	m.composer.Blur()
 
 	for _, tc := range []struct {
 		key string
@@ -592,14 +594,14 @@ func TestAltNumberKeysSwitchWorkbenchTabs(t *testing.T) {
 		{"5", workbenchTabLogs},
 		{"1", workbenchTabTask},
 	} {
-		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key), Alt: true})
+		_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
 		if m.activeWorkbenchTab != tc.tab {
-			t.Fatalf("alt+%s selected tab %v, want %v", tc.key, m.activeWorkbenchTab, tc.tab)
+			t.Fatalf("%s selected tab %v, want %v", tc.key, m.activeWorkbenchTab, tc.tab)
 		}
 	}
 }
 
-func TestBareNumberKeysDoNotSwitchWorkbenchTabs(t *testing.T) {
+func TestNumberKeysReachComposerWhenInputFocused(t *testing.T) {
 	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
 		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
 	})
@@ -612,6 +614,22 @@ func TestBareNumberKeysDoNotSwitchWorkbenchTabs(t *testing.T) {
 	}
 	if m.composer.Value() != "2" {
 		t.Fatalf("expected bare number to reach composer, got %q", m.composer.Value())
+	}
+}
+
+func TestFocusStatusLineShowsActiveFocus(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+
+	if got := m.renderRuntimeStatus(); !strings.Contains(got, "Focus: Input") || !strings.Contains(got, "Tab workbench") {
+		t.Fatalf("expected input focus hint, got %q", got)
+	}
+
+	_ = m.toggleFocus()
+	if got := m.renderRuntimeStatus(); !strings.Contains(got, "Focus: Workbench") || !strings.Contains(got, "1-5 tabs") {
+		t.Fatalf("expected workbench focus hint, got %q", got)
 	}
 }
 

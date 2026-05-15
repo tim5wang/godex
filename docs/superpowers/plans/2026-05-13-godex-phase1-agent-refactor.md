@@ -12,7 +12,7 @@
 
 ## Scope
 
-This plan implements only the first GoDex 2.0 migration step from `docs/SPEC.md`: behavior-preserving `agent.go` decomposition. Sandbox, Worker Runtime Protocol, Session Graph, and Storage Backend abstraction remain separate future plans.
+This plan implements only the first GoDex 2.0 migration step from `docs/architecture-v2-spec.md`: behavior-preserving `agent.go` decomposition. Sandbox, Worker Runtime Protocol, Session Graph, and Storage Backend abstraction remain separate future plans.
 
 ## Target File Structure
 
@@ -599,7 +599,7 @@ git commit -m "refactor(agent): complete phase 1 facade split"
 
 ## Self-Review Notes
 
-- Spec coverage: this plan covers only `docs/SPEC.md` Phase 1. It intentionally does not implement Sandbox Boundary, Worker Runtime Protocol, Session Graph, Storage Backend Abstraction, Orchestration DSL, Run Model, Knowledge, Gallery, or Inbound MCP.
+- Spec coverage: this plan covers only `docs/architecture-v2-spec.md` Phase 1. It intentionally does not implement Sandbox Boundary, Worker Runtime Protocol, Session Graph, Storage Backend Abstraction, Orchestration DSL, Run Model, Knowledge, Gallery, or Inbound MCP.
 - Placeholder scan: no step depends on unspecified future behavior; each move names concrete functions and files.
 - Type consistency: all functions remain in package `agent`, so unexported helper names remain callable across the new files.
 

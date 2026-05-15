@@ -12,7 +12,7 @@
 
 ## Scope
 
-This plan implements only Phase 3 from `docs/SPEC.md`: Worker Runtime Protocol.
+This plan implements only Phase 3 from `docs/architecture-v2-spec.md`: Worker Runtime Protocol.
 
 Included:
 
@@ -58,9 +58,9 @@ Excluded:
   - Add `worker_id` to subagent job event payload.
 - Modify: `internal/agent/subagent_jobs_test.go`
   - Extend existing durable subagent tests to assert worker ID and runtime route behavior.
-- Modify: `docs/SPEC.md`
+- Modify: `docs/architecture-v2-spec.md`
   - Add Phase 3 implementation note after Phase 3 acceptance criteria.
-- Modify: `docs/SPEC.en.md`
+- Modify: `docs/architecture-v2-spec.en.md`
   - Mirror the Phase 3 implementation note.
 
 ## Behavior Invariants
@@ -1691,12 +1691,12 @@ git commit -m "test(agent): guard worker capability inheritance"
 ### Task 7: Document Phase 3 Local Worker Runtime Boundary
 
 **Files:**
-- Modify: `docs/SPEC.md`
-- Modify: `docs/SPEC.en.md`
+- Modify: `docs/architecture-v2-spec.md`
+- Modify: `docs/architecture-v2-spec.en.md`
 
 - [ ] **Step 1: Update Chinese SPEC**
 
-In `docs/SPEC.md`, after Phase 3 acceptance criteria, add:
+In `docs/architecture-v2-spec.md`, after Phase 3 acceptance criteria, add:
 
 ```markdown
 实施说明：
@@ -1709,7 +1709,7 @@ In `docs/SPEC.md`, after Phase 3 acceptance criteria, add:
 
 - [ ] **Step 2: Update English SPEC**
 
-In `docs/SPEC.en.md`, after Phase 3 acceptance criteria, add:
+In `docs/architecture-v2-spec.en.md`, after Phase 3 acceptance criteria, add:
 
 ```markdown
 Implementation note:
@@ -1723,7 +1723,7 @@ Implementation note:
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/SPEC.md docs/SPEC.en.md
+git add docs/architecture-v2-spec.md docs/architecture-v2-spec.en.md
 git commit -m "docs: describe phase 3 worker runtime boundary"
 ```
 
@@ -1803,7 +1803,7 @@ Expected:
 If gofmt changed files after previous commits, run:
 
 ```bash
-git add internal/workerruntime internal/agent internal/domain/events docs/SPEC.md docs/SPEC.en.md
+git add internal/workerruntime internal/agent internal/domain/events docs/architecture-v2-spec.md docs/architecture-v2-spec.en.md
 git commit -m "chore: finalize phase 3 worker runtime protocol"
 ```
 

@@ -193,8 +193,8 @@ credits = billable_tokens * credit_weight
 ## Task 6: Final Verification and Docs
 
 **Files:**
-- Modify: `docs/SPEC.md`
-- Modify: `docs/SPEC.en.md`
+- Modify: `docs/architecture-v2-spec.md`
+- Modify: `docs/architecture-v2-spec.en.md`
 - Keep: `docs/superpowers/specs/2026-05-14-godex-usage-gateway-design.md`
 - Keep: `docs/superpowers/plans/2026-05-14-godex-usage-gateway.md`
 
@@ -217,7 +217,7 @@ git commit -m "feat(usage): add gateway ledger service"
 git add ui/web/src ui/web/test
 git commit -m "feat(web): add usage app"
 
-git add docs/SPEC.md docs/SPEC.en.md
+git add docs/architecture-v2-spec.md docs/architecture-v2-spec.en.md
 git commit -m "docs(spec): document usage gateway"
 ```
 

@@ -1,6 +1,6 @@
 # GoDex 能力增强与 Agent 基座产品化规划（修订版 v2）
 
-> 本计划基于 v1 版本（`capability-enhencement.md`）的用户反馈和代码审核修订。
+> 本计划基于 v1 版本（`capability-enhancement-v1.md`）的用户反馈和代码审核修订。
 > 核心调整：砍掉过度设计的 Orchestrator、替换 RO I 低迷的 Study Assistant、补入 UX 打磨工作。
 
 ## 背景（不变）
@@ -16,7 +16,7 @@ GoDex 当前已经具备可用的单实例 Agent 能力：Web Chat、TUI、packa
 
 ## 当前进展（2026-05-04）
 
-本轮已在 `capability-enhencement` 分支落地以下阶段性能力：
+本轮已在 `capability-enhancement-v1` 分支落地以下阶段性能力：
 
 - **P0 App Shell**：已完成内置 `AppRegistry`，Chat、Automation、Nodes、Notes、Skills、Memory、Settings 统一以 builtin app 注册和路由。
 - **P1 Node Registry**：已完成轻量 node identity、register/heartbeat API、只读 Nodes 页面、手动 nodes 配置和离线检测。

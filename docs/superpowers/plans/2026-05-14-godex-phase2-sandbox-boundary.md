@@ -12,7 +12,7 @@
 
 ## Scope
 
-This plan implements only Phase 2 from `docs/SPEC.md`: explicit local sandbox boundary.
+This plan implements only Phase 2 from `docs/architecture-v2-spec.md`: explicit local sandbox boundary.
 
 Included:
 
@@ -66,9 +66,9 @@ Excluded:
   - Include `sandbox_id` in compact model-visible subagent job views and legacy `formatSubagentJob`.
 - Create or modify: `internal/agent/subagent_jobs_test.go`
   - Add focused tests that subagent jobs expose sandbox IDs.
-- Modify: `docs/SPEC.md`
+- Modify: `docs/architecture-v2-spec.md`
   - Add a short Phase 2 implementation note after Phase 2 acceptance criteria.
-- Modify: `docs/SPEC.en.md`
+- Modify: `docs/architecture-v2-spec.en.md`
   - Mirror the Phase 2 implementation note.
 
 ## Behavior Invariants
@@ -1170,12 +1170,12 @@ git commit -m "test(agent): guard sandbox compatibility surface"
 ### Task 7: Document Phase 2 Local Sandbox Boundary
 
 **Files:**
-- Modify: `docs/SPEC.md`
-- Modify: `docs/SPEC.en.md`
+- Modify: `docs/architecture-v2-spec.md`
+- Modify: `docs/architecture-v2-spec.en.md`
 
 - [ ] **Step 1: Update Chinese SPEC Phase 2 section**
 
-In `docs/SPEC.md`, after the Phase 2 acceptance criteria, add:
+In `docs/architecture-v2-spec.md`, after the Phase 2 acceptance criteria, add:
 
 ```markdown
 Phase 2 首次落地只要求 local sandbox boundary：
@@ -1189,7 +1189,7 @@ Phase 2 首次落地只要求 local sandbox boundary：
 
 - [ ] **Step 2: Update English SPEC Phase 2 section**
 
-In `docs/SPEC.en.md`, after the Phase 2 acceptance criteria, add:
+In `docs/architecture-v2-spec.en.md`, after the Phase 2 acceptance criteria, add:
 
 ```markdown
 The first Phase 2 implementation only requires a local sandbox boundary:
@@ -1204,7 +1204,7 @@ The first Phase 2 implementation only requires a local sandbox boundary:
 - [ ] **Step 3: Commit docs**
 
 ```bash
-git add docs/SPEC.md docs/SPEC.en.md
+git add docs/architecture-v2-spec.md docs/architecture-v2-spec.en.md
 git commit -m "docs(spec): define phase 2 local sandbox boundary"
 ```
 
@@ -1261,7 +1261,7 @@ Expected: no whitespace errors. `git status --short` is empty if `gofmt` did not
 If `git status --short` shows changed files after `gofmt`, commit them:
 
 ```bash
-git add internal/sandbox internal/agent internal/toolruntime internal/tools docs/SPEC.md docs/SPEC.en.md
+git add internal/sandbox internal/agent internal/toolruntime internal/tools docs/architecture-v2-spec.md docs/architecture-v2-spec.en.md
 git commit -m "chore: finalize phase 2 sandbox boundary"
 ```
 

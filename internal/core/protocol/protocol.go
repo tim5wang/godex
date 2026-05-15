@@ -110,6 +110,15 @@ type Response struct {
 	Content          []Block `json:"content"`
 	StopReason       string  `json:"stop_reason"`
 	ReasoningContent string  `json:"reasoning_content,omitempty"`
+	Usage            *Usage  `json:"usage,omitempty"`
+}
+
+type Usage struct {
+	InputTokens      int  `json:"input_tokens,omitempty"`
+	OutputTokens     int  `json:"output_tokens,omitempty"`
+	CacheReadTokens  int  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int  `json:"cache_write_tokens,omitempty"`
+	Estimated        bool `json:"estimated,omitempty"`
 }
 
 func TextBlock(text string) Block {

@@ -1489,6 +1489,7 @@ func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEv
 	if strings.TrimSpace(job.RuntimeContext.SessionID) != "" || strings.TrimSpace(job.RuntimeContext.Source) != "" {
 		ctx = tools.WithSessionContext(ctx, job.RuntimeContext)
 	}
+	ctx = conversation.WithUsageContext(ctx, a.usageContext(job.RuntimeContext, job.SessionID, "", job.ID))
 	if strings.TrimSpace(job.SandboxID) != "" {
 		ctx = tools.WithSandboxID(ctx, job.SandboxID)
 	}

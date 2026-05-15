@@ -65,6 +65,12 @@ func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
 
 // Call executes the provider request.
 func (c *Client) Call(ctx context.Context, req protocol.Request) (*protocol.Response, error) {
+	start := time.Now()
+	var finalResp *protocol.Response
+	var finalErr error
+	defer func() {
+		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start)})
+	}()
 	var lastErr error
 	visionFallbackUsed := false
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -77,6 +83,7 @@ func (c *Client) Call(ctx context.Context, req protocol.Request) (*protocol.Resp
 			logger.Debugf("LLM Call: %s", reqBody)
 			jsonResp, _ := json.Marshal(apiResp)
 			logger.Debugf("LLM Response: %s", jsonResp)
+			finalResp = apiResp
 			return apiResp, nil
 		}
 		lastErr = err
@@ -87,20 +94,30 @@ func (c *Client) Call(ctx context.Context, req protocol.Request) (*protocol.Resp
 			continue
 		}
 		if attempt == c.maxRetries || !shouldRetryError(err) {
+			finalErr = err
 			return nil, err
 		}
 		if err := c.sleep(ctx, c.retryDelay(attempt, retryAfter)); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				finalErr = err
 				return nil, err
 			}
+			finalErr = lastErr
 			return nil, lastErr
 		}
 	}
+	finalErr = lastErr
 	return nil, lastErr
 }
 
 // Stream executes the provider request with Anthropic-compatible SSE streaming.
 func (c *Client) Stream(ctx context.Context, req protocol.Request, handler StreamHandler) (*protocol.Response, error) {
+	start := time.Now()
+	var finalResp *protocol.Response
+	var finalErr error
+	defer func() {
+		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start), Stream: true})
+	}()
 	var lastErr error
 	visionFallbackUsed := false
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -114,10 +131,12 @@ func (c *Client) Stream(ctx context.Context, req protocol.Request, handler Strea
 			logger.Debugf("LLM Stream Call: %s", reqBody)
 			jsonResp, _ := json.Marshal(apiResp)
 			logger.Debugf("LLM Stream Response: %s", jsonResp)
+			finalResp = apiResp
 			return apiResp, nil
 		}
 		lastErr = err
 		if streamed {
+			finalErr = err
 			return nil, err
 		}
 		if !visionFallbackUsed && requestHasImageInputs(req) && shouldFallbackVision(err) {
@@ -127,15 +146,19 @@ func (c *Client) Stream(ctx context.Context, req protocol.Request, handler Strea
 			continue
 		}
 		if attempt == c.maxRetries || !shouldRetryError(err) {
+			finalErr = err
 			return nil, err
 		}
 		if err := c.sleep(ctx, c.retryDelay(attempt, retryAfter)); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				finalErr = err
 				return nil, err
 			}
+			finalErr = lastErr
 			return nil, lastErr
 		}
 	}
+	finalErr = lastErr
 	return nil, lastErr
 }
 

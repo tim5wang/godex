@@ -53,6 +53,12 @@ func (c *OpenAICodexClient) Call(ctx context.Context, req protocol.Request) (*pr
 }
 
 func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, handler StreamHandler) (*protocol.Response, error) {
+	start := time.Now()
+	var finalResp *protocol.Response
+	var finalErr error
+	defer func() {
+		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start), Stream: true})
+	}()
 	params := codexResponsesParams(req)
 	logParams, _ := json.Marshal(params)
 	logger.Debugf("OpenAI Codex Responses Stream Call: %s", string(logParams))
@@ -66,16 +72,20 @@ func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, ha
 	for stream.Next() {
 		evt := stream.Current()
 		if err := applyCodexResponsesSDKEvent(state, evt, handler); err != nil {
+			finalErr = err
 			return nil, err
 		}
 	}
 	if err := stream.Err(); err != nil {
 		if ctx.Err() != nil {
+			finalErr = ctx.Err()
 			return nil, ctx.Err()
 		}
+		finalErr = err
 		return nil, err
 	}
 	response := codexStreamStateToProtocol(state)
+	finalResp = response
 	debug, _ := json.Marshal(response)
 	logger.Debugf("OpenAI Codex Responses Stream Response: %s", string(debug))
 	return response, nil

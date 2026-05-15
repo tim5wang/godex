@@ -35,45 +35,66 @@ func NewOpenAIClient(baseURL, apiKey string, timeout time.Duration) *OpenAIClien
 }
 
 func (c *OpenAIClient) Call(ctx context.Context, req protocol.Request) (*protocol.Response, error) {
+	start := time.Now()
+	var finalResp *protocol.Response
+	var finalErr error
+	defer func() {
+		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start)})
+	}()
 	body, err := c.buildRequest(req, false)
 	if err != nil {
+		finalErr = err
 		return nil, err
 	}
 	httpResp, err := c.do(ctx, body, false)
 	if err != nil {
+		finalErr = err
 		return nil, err
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(httpResp.Body)
-		return nil, formatAPIError(httpResp.StatusCode, data)
+		finalErr = formatAPIError(httpResp.StatusCode, data)
+		return nil, finalErr
 	}
 	var decoded openAIResponse
 	if err := json.NewDecoder(httpResp.Body).Decode(&decoded); err != nil {
+		finalErr = err
 		return nil, err
 	}
 	logger.Debugf("OpenAI-compatible LLM Call: %s", string(body))
 	response := openAIResponseToProtocol(decoded)
+	finalResp = response
 	debug, _ := json.Marshal(response)
 	logger.Debugf("OpenAI-compatible LLM Response: %s", string(debug))
 	return response, nil
 }
 
 func (c *OpenAIClient) Stream(ctx context.Context, req protocol.Request, handler StreamHandler) (*protocol.Response, error) {
+	start := time.Now()
+	var finalResp *protocol.Response
+	var finalErr error
+	defer func() {
+		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start), Stream: true})
+	}()
 	body, err := c.buildRequest(req, true)
 	if err != nil {
+		finalErr = err
 		return nil, err
 	}
 	httpResp, err := c.do(ctx, body, true)
 	if err != nil {
+		finalErr = err
 		return nil, err
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(httpResp.Body)
-		return nil, formatAPIError(httpResp.StatusCode, data)
+		finalErr = formatAPIError(httpResp.StatusCode, data)
+		return nil, finalErr
 	}
-	return parseOpenAIStream(httpResp.Body, handler)
+	finalResp, finalErr = parseOpenAIStream(httpResp.Body, handler)
+	return finalResp, finalErr
 }
 
 func (c *OpenAIClient) buildRequest(req protocol.Request, stream bool) ([]byte, error) {
@@ -150,6 +171,25 @@ type openAIToolCallFn struct {
 
 type openAIResponse struct {
 	Choices []openAIChoice `json:"choices"`
+	Usage   openAIUsage    `json:"usage,omitempty"`
+}
+
+type openAIUsage struct {
+	PromptTokens            int                     `json:"prompt_tokens,omitempty"`
+	CompletionTokens        int                     `json:"completion_tokens,omitempty"`
+	PromptTokensDetails     openAITokenUsageDetails `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails openAITokenUsageDetails `json:"completion_tokens_details,omitempty"`
+	InputTokens             int                     `json:"input_tokens,omitempty"`
+	OutputTokens            int                     `json:"output_tokens,omitempty"`
+	InputTokensDetails      openAITokenUsageDetails `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails     openAITokenUsageDetails `json:"output_tokens_details,omitempty"`
+}
+
+type openAITokenUsageDetails struct {
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 }
 
 type openAIChoice struct {
@@ -311,7 +351,7 @@ func normalizeOpenAIJSONSchemaValue(value interface{}) interface{} {
 
 func openAIResponseToProtocol(resp openAIResponse) *protocol.Response {
 	if len(resp.Choices) == 0 {
-		return &protocol.Response{}
+		return &protocol.Response{Usage: openAIUsageToProtocol(resp.Usage)}
 	}
 	choice := resp.Choices[0]
 	blocks := make([]protocol.Block, 0, 1+len(choice.Message.ToolCalls))
@@ -321,7 +361,29 @@ func openAIResponseToProtocol(resp openAIResponse) *protocol.Response {
 	for _, call := range choice.Message.ToolCalls {
 		blocks = append(blocks, openAIToolCallToBlock(call))
 	}
-	return &protocol.Response{Content: blocks, StopReason: choice.FinishReason, ReasoningContent: choice.Message.ReasoningContent}
+	return &protocol.Response{Content: blocks, StopReason: choice.FinishReason, ReasoningContent: choice.Message.ReasoningContent, Usage: openAIUsageToProtocol(resp.Usage)}
+}
+
+func openAIUsageToProtocol(usage openAIUsage) *protocol.Usage {
+	input := usage.PromptTokens
+	if input == 0 {
+		input = usage.InputTokens
+	}
+	output := usage.CompletionTokens
+	if output == 0 {
+		output = usage.OutputTokens
+	}
+	cacheRead := usage.PromptTokensDetails.CachedTokens + usage.PromptTokensDetails.CacheReadTokens + usage.InputTokensDetails.CachedTokens + usage.InputTokensDetails.CacheReadTokens
+	cacheWrite := usage.PromptTokensDetails.CacheWriteTokens + usage.InputTokensDetails.CacheWriteTokens
+	if input == 0 && output == 0 && cacheRead == 0 && cacheWrite == 0 {
+		return nil
+	}
+	return &protocol.Usage{
+		InputTokens:      input,
+		OutputTokens:     output,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+	}
 }
 
 func openAIToolCallToBlock(call openAIToolCall) protocol.Block {

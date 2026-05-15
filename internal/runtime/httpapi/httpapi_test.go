@@ -33,6 +33,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/usage"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -2815,6 +2816,139 @@ func TestDeleteSessionEndpointRemovesPersistedSession(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.TranscriptsDir, "transcript_delete_me.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected deleted transcript, got %v", err)
+	}
+}
+
+func TestUsageGatewayChatCompletionInvokesMappedProfile(t *testing.T) {
+	var providerCalls int
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls++
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected provider path: %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode provider body: %v", err)
+		}
+		if body["model"] != "real-model" {
+			t.Fatalf("expected target model real-model, got %#v", body["model"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"proxied ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":7}}`))
+	}))
+	defer provider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers": map[string]any{
+			"openai": map[string]any{
+				"type":     "openai_compatible",
+				"base_url": provider.URL,
+				"api_key":  "sk-test",
+				"models": map[string]any{
+					"fast": map[string]any{"model": "real-model", "max_tokens": 1024},
+				},
+			},
+		},
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+	store, err := usage.NewJSONStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	usageService := usage.NewService(store)
+	keyResp, err := usageService.CreateKey(usage.KeyCreateRequest{Name: "client", BudgetCredits: 1000, AllowedModels: []string{"public-fast"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{PublicModel: "public-fast", TargetProfileID: "openai.fast", TargetModel: "real-model", CreditWeight: 2}); err != nil {
+		t.Fatal(err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("unused")}}}}), commands.NewService(cfg))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, usageService))
+	defer server.Close()
+
+	resp := doJSONWithToken(t, http.MethodPost, server.URL+"/v1/chat/completions", map[string]any{
+		"model": "public-fast",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+	}, keyResp.Secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected gateway status 200, got %d: %s", resp.StatusCode, body)
+	}
+	if providerCalls != 1 {
+		t.Fatalf("expected one provider call, got %d", providerCalls)
+	}
+	calls, err := usageService.GetCalls(time.Now().Format("2006-01-02"), keyResp.Key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].Status != "success" || calls[0].InputTokens != 11 || calls[0].OutputTokens != 7 || calls[0].Credits != 36 {
+		t.Fatalf("unexpected recorded usage: %+v", calls)
+	}
+}
+
+func TestUsageGatewayRejectsOverBudgetBeforeProviderCall(t *testing.T) {
+	providerCalls := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer provider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers": map[string]any{
+			"openai": map[string]any{
+				"type":     "openai_compatible",
+				"base_url": provider.URL,
+				"api_key":  "sk-test",
+				"models": map[string]any{
+					"fast": map[string]any{"model": "real-model", "max_tokens": 1024},
+				},
+			},
+		},
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+	store, err := usage.NewJSONStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	usageService := usage.NewService(store)
+	keyResp, err := usageService.CreateKey(usage.KeyCreateRequest{Name: "client", BudgetCredits: 1, AllowedModels: []string{"public-fast"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{PublicModel: "public-fast", TargetProfileID: "openai.fast", TargetModel: "real-model", CreditWeight: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := usageService.RecordCall(&usage.UsageCall{APIKeyID: keyResp.Key.ID, PublicModel: "public-fast", InputTokens: 2, CreditWeight: 1, Status: "success"}); err != nil {
+		t.Fatal(err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("unused")}}}}), commands.NewService(cfg))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, usageService))
+	defer server.Close()
+
+	resp := doJSONWithToken(t, http.MethodPost, server.URL+"/v1/chat/completions", map[string]any{
+		"model": "public-fast",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+	}, keyResp.Secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired && resp.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected budget rejection, got %d: %s", resp.StatusCode, body)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("expected provider not to be called, got %d calls", providerCalls)
 	}
 }
 

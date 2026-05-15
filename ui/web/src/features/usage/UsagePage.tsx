@@ -37,14 +37,13 @@ import {
   createUsageModel,
   getModels,
   getUsageSummary,
-  listProviders,
   listUsageCalls,
   listUsageKeys,
   listUsageModels,
   updateUsageKey,
   updateUsageModel,
 } from "../../lib/api";
-import type { ModelsView, ProviderListResponse, UsageCall, UsageKey, UsageModelMapping, UsageSummary } from "../../lib/types";
+import type { ModelsView, UsageCall, UsageKey, UsageModelMapping, UsageSummary } from "../../lib/types";
 
 const { Title, Text } = Typography;
 
@@ -99,27 +98,27 @@ export function UsagePage() {
   const [callsDate, setCallsDate] = useState(() => dayjs().format("YYYY-MM-DD"));
   const [callsKeyId, setCallsKeyId] = useState<string>("");
 
-  // ---- Provider data (for model mapping target_profile_id options) ----
-  const providersQuery = useQuery<ProviderListResponse>({
-    queryKey: ["providers", token],
-    queryFn: () => listProviders(token),
-  });
-
-  // ---- Provider models (all configured model profiles, filtered by selected provider) ----
+  // ---- Model profiles (target_profile_id maps to a configured model profile) ----
   const allModelsQuery = useQuery<ModelsView>({
     queryKey: ["models", token],
     queryFn: () => getModels(token),
   });
 
-  const providerModelOptions = useMemo(() => {
-    if (!selectedProfileId) return [];
-    return (allModelsQuery.data?.profiles ?? [])
-      .filter((p) => p.provider === selectedProfileId)
-      .map((p) => ({
-        value: p.model,
-        label: p.name ? `${p.name} (${p.model})` : p.model,
-      }));
-  }, [allModelsQuery.data, selectedProfileId]);
+  const profileByID = useMemo(() => {
+    const map = new Map<string, ModelsView["profiles"][number]>();
+    for (const profile of allModelsQuery.data?.profiles ?? []) {
+      map.set(profile.id, profile);
+    }
+    return map;
+  }, [allModelsQuery.data]);
+
+  const profileSelectOptions = useMemo(
+    () => (allModelsQuery.data?.profiles ?? []).map((p) => ({
+      value: p.id,
+      label: `${p.name || p.id} · ${p.provider}/${p.model}`,
+    })),
+    [allModelsQuery.data],
+  );
 
   // ---- Model mapping option lists (unique values from existing mappings) ----
   const publicModelOptions = useMemo(
@@ -130,13 +129,23 @@ export function UsagePage() {
     () => [...new Set((modelsQuery.data ?? []).map((m) => m.public_model))].map((v) => ({ value: v })),
     [modelsQuery.data],
   );
-  const providerSelectOptions = useMemo(
-    () => (providersQuery.data?.providers ?? []).map((p) => ({
-      value: p.id,
-      label: p.name ? `${p.name} (${p.type})` : `${p.id} (${p.type})`,
-    })),
-    [providersQuery.data],
+  const usageKeyFilterOptions = useMemo(
+    () => {
+      const keys = keysQuery.data ?? [];
+      const proxyKeys = keys
+        .filter((k) => !k.id.startsWith("system:"))
+        .map((k) => ({ value: k.id, label: k.name }));
+      const systemKeys = keys
+        .filter((k) => k.id.startsWith("system:"))
+        .map((k) => ({ value: k.id, label: k.name }));
+      return [
+        { label: "Proxy Keys", options: proxyKeys },
+        { label: "System Entries", options: systemKeys },
+      ].filter((group) => group.options.length > 0);
+    },
+    [keysQuery.data],
   );
+  const proxyKeys = useMemo(() => (keysQuery.data ?? []).filter((k) => !k.id.startsWith("system:")), [keysQuery.data]);
 
   const callsQuery = useQuery<UsageCall[]>({
     queryKey: ["usage", "calls", callsDate, callsKeyId],
@@ -197,7 +206,11 @@ export function UsagePage() {
   const handleCreateModel = async (values: { public_model: string; target_profile_id: string; target_model: string; credit_weight: number }) => {
     setSubmitting(true);
     try {
-      await createUsageModel(token, values);
+      const profile = profileByID.get(values.target_profile_id);
+      await createUsageModel(token, {
+        ...values,
+        target_model: values.target_model || profile?.model || "",
+      });
       antMessage.success("Model mapping created");
       queryClient.invalidateQueries({ queryKey: ["usage", "models"] });
       setCreateModelOpen(false);
@@ -213,7 +226,11 @@ export function UsagePage() {
     if (!editingModel) return;
     setSubmitting(true);
     try {
-      await updateUsageModel(token, editingModel.id, values);
+      const profile = profileByID.get(values.target_profile_id);
+      await updateUsageModel(token, editingModel.id, {
+        ...values,
+        target_model: values.target_model || profile?.model || "",
+      });
       antMessage.success("Model mapping updated");
       queryClient.invalidateQueries({ queryKey: ["usage", "models"] });
       setEditModelOpen(false);
@@ -306,7 +323,7 @@ export function UsagePage() {
   // ---- Model columns ----
   const modelColumns = [
     { title: "Public Model", dataIndex: "public_model", key: "public_model" },
-    { title: "Target Provider", dataIndex: "target_profile_id", key: "target_profile_id" },
+    { title: "Target Profile", dataIndex: "target_profile_id", key: "target_profile_id" },
     { title: "Target Model", dataIndex: "target_model", key: "target_model" },
     { title: "Weight", dataIndex: "credit_weight", key: "credit_weight" },
     {
@@ -348,6 +365,7 @@ export function UsagePage() {
 
   // ---- Summary columns ----
   const summaryColumns = [
+    { title: "Period", dataIndex: "period", key: "period", render: (v?: string) => v || "all" },
     { title: "Key ID", dataIndex: "api_key_id", key: "api_key_id", render: (v?: string) => v ? <Text code>{v.slice(0, 12)}...</Text> : <Text type="secondary">all</Text> },
     { title: "Calls", dataIndex: "call_count", key: "call_count" },
     { title: "Errors", dataIndex: "error_count", key: "error_count" },
@@ -365,6 +383,7 @@ export function UsagePage() {
     { title: "Key", dataIndex: "api_key_id", key: "api_key_id", render: (v: string) => <Text code>{v.slice(0, 8)}...</Text> },
     { title: "Model", dataIndex: "public_model", key: "public_model" },
     { title: "Target", dataIndex: "target_model", key: "target_model", render: (_: string, r: UsageCall) => `${r.target_profile_id}/${r.target_model}` },
+    { title: "Source", dataIndex: "source_channel", key: "source_channel", render: (v?: string) => v || <Text type="secondary">proxy</Text> },
     { title: "In", dataIndex: "input_tokens", key: "input_tokens" },
     { title: "Out", dataIndex: "output_tokens", key: "output_tokens" },
     { title: "Cache R", dataIndex: "cache_read_tokens", key: "cache_read_tokens" },
@@ -401,7 +420,7 @@ export function UsagePage() {
               }
             >
               <Table
-                dataSource={keysQuery.data ?? []}
+                dataSource={proxyKeys}
                 columns={keyColumns}
                 rowKey="id"
                 loading={keysQuery.isLoading}
@@ -459,7 +478,7 @@ export function UsagePage() {
                     allowClear
                     placeholder="All keys"
                     style={{ width: 200 }}
-                    options={(keysQuery.data ?? []).map((k) => ({ value: k.id, label: k.name }))}
+                    options={usageKeyFilterOptions}
                   />
                   <Button icon={<ReloadOutlined />} onClick={() => summaryQuery.refetch()} />
                 </Space>
@@ -468,7 +487,7 @@ export function UsagePage() {
               <Table
                 dataSource={summaryQuery.data ?? []}
                 columns={summaryColumns}
-                rowKey={(r) => r.api_key_id ?? "all"}
+                rowKey={(r) => `${r.period ?? "all"}:${r.api_key_id ?? "all"}`}
                 loading={summaryQuery.isLoading}
                 size="small"
               />
@@ -493,7 +512,7 @@ export function UsagePage() {
                     allowClear
                     placeholder="All keys"
                     style={{ width: 200 }}
-                    options={(keysQuery.data ?? []).map((k) => ({ value: k.id, label: k.name }))}
+                    options={usageKeyFilterOptions}
                   />
                   <Button icon={<ReloadOutlined />} onClick={() => callsQuery.refetch()} />
                 </Space>
@@ -574,34 +593,25 @@ export function UsagePage() {
           <Form.Item name="public_model" label="Public Model" rules={[{ required: true }]}>
             <AutoComplete options={publicModelOptions} placeholder="e.g. gpt-4" />
           </Form.Item>
-          <Form.Item name="target_profile_id" label="Target Provider" rules={[{ required: true }]}>
+          <Form.Item name="target_profile_id" label="Target Profile" rules={[{ required: true }]}>
             <Select
               showSearch
-              placeholder="Select a provider"
-              options={providerSelectOptions}
+              placeholder="Select a model profile"
+              options={profileSelectOptions}
               filterOption={(input, option) =>
                 (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
               }
               onChange={(value) => {
                 setSelectedProfileId(value);
-                createModelForm.setFieldValue("target_model", undefined);
+                createModelForm.setFieldValue("target_model", profileByID.get(value)?.model ?? "");
               }}
             />
           </Form.Item>
-          <Form.Item name="target_model" label="Target Model" rules={[{ required: true }]}>
-            <Select
-              showSearch
-              placeholder={selectedProfileId ? "Select a model" : "Select a provider first"}
-              loading={allModelsQuery.isLoading}
-              options={providerModelOptions}
-              filterOption={(input, option) =>
-                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-              }
-              notFoundContent={allModelsQuery.isLoading ? "Loading models…" : "No models found"}
-            />
+          <Form.Item name="target_model" label="Target Model Override">
+            <Input placeholder={selectedProfileId ? profileByID.get(selectedProfileId)?.model : "Defaults to selected profile model"} />
           </Form.Item>
           <Form.Item name="credit_weight" label="Credit Weight" initialValue={1}>
-            <InputNumber min={0} step={0.1} style={{ width: "100%" }} />
+            <InputNumber min={0.1} step={0.1} style={{ width: "100%" }} />
           </Form.Item>
         </Form>
       </Modal>
@@ -619,34 +629,25 @@ export function UsagePage() {
           <Form.Item name="public_model" label="Public Model" rules={[{ required: true }]}>
             <AutoComplete options={publicModelOptions} />
           </Form.Item>
-          <Form.Item name="target_profile_id" label="Target Provider" rules={[{ required: true }]}>
+          <Form.Item name="target_profile_id" label="Target Profile" rules={[{ required: true }]}>
             <Select
               showSearch
-              placeholder="Select a provider"
-              options={providerSelectOptions}
+              placeholder="Select a model profile"
+              options={profileSelectOptions}
               filterOption={(input, option) =>
                 (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
               }
               onChange={(value) => {
                 setSelectedProfileId(value);
-                editModelForm.setFieldValue("target_model", undefined);
+                editModelForm.setFieldValue("target_model", profileByID.get(value)?.model ?? "");
               }}
             />
           </Form.Item>
-          <Form.Item name="target_model" label="Target Model" rules={[{ required: true }]}>
-            <Select
-              showSearch
-              placeholder={selectedProfileId ? "Select a model" : "Select a provider first"}
-              loading={allModelsQuery.isLoading}
-              options={providerModelOptions}
-              filterOption={(input, option) =>
-                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-              }
-              notFoundContent={allModelsQuery.isLoading ? "Loading models…" : "No models found"}
-            />
+          <Form.Item name="target_model" label="Target Model Override">
+            <Input placeholder={selectedProfileId ? profileByID.get(selectedProfileId)?.model : "Defaults to selected profile model"} />
           </Form.Item>
           <Form.Item name="credit_weight" label="Credit Weight">
-            <InputNumber min={0} step={0.1} style={{ width: "100%" }} />
+            <InputNumber min={0.1} step={0.1} style={{ width: "100%" }} />
           </Form.Item>
         </Form>
       </Modal>

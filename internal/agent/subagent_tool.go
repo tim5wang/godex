@@ -734,6 +734,8 @@ func (a *Agent) RunSubagent(ctx context.Context, prompt string, agentType string
 func (a *Agent) runScopedSubagent(ctx context.Context, prompt, basePrompt string, toolNames []string, maxTurns int) (*conversation.Result, error) {
 	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, prompt)}
 	prompts := conversation.PromptLayers{Base: strings.TrimSpace(basePrompt)}
+	runtimeCtx := tools.SessionContextFromContext(ctx)
+	ctx = conversation.WithUsageContext(ctx, a.usageContext(runtimeCtx, runtimeCtx.SessionID, "", "scoped"))
 	return conversation.Runner{
 		Caller: a.client,
 		BuildRequest: func(ctx context.Context) (protocol.Request, error) {

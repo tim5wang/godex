@@ -17,9 +17,9 @@ func sha256Hex(s string) string {
 
 // JSONStore implements Store using a local JSON file.
 type JSONStore struct {
-	mu     sync.RWMutex
-	path   string
-	data   *storeData
+	mu   sync.RWMutex
+	path string
+	data *storeData
 }
 
 type storeData struct {
@@ -82,7 +82,8 @@ func (s *JSONStore) GetKey(id string) (*ProxyAPIKey, error) {
 	defer s.mu.RUnlock()
 	for i := range s.data.Keys {
 		if s.data.Keys[i].ID == id {
-			return &s.data.Keys[i], nil
+			key := s.data.Keys[i]
+			return &key, nil
 		}
 	}
 	return nil, fmt.Errorf("key not found: %s", id)
@@ -94,7 +95,8 @@ func (s *JSONStore) GetKeyByHash(hash string) (*ProxyAPIKey, error) {
 	defer s.mu.RUnlock()
 	for i := range s.data.Keys {
 		if s.data.Keys[i].KeyHash == hash {
-			return &s.data.Keys[i], nil
+			key := s.data.Keys[i]
+			return &key, nil
 		}
 	}
 	return nil, fmt.Errorf("key not found by hash")
@@ -136,7 +138,8 @@ func (s *JSONStore) GetModel(id string) (*ProxyModel, error) {
 	defer s.mu.RUnlock()
 	for i := range s.data.Models {
 		if s.data.Models[i].ID == id {
-			return &s.data.Models[i], nil
+			model := s.data.Models[i]
+			return &model, nil
 		}
 	}
 	return nil, fmt.Errorf("model not found: %s", id)
@@ -148,7 +151,8 @@ func (s *JSONStore) GetModelByPublicName(name string) (*ProxyModel, error) {
 	defer s.mu.RUnlock()
 	for i := range s.data.Models {
 		if s.data.Models[i].PublicModel == name {
-			return &s.data.Models[i], nil
+			model := s.data.Models[i]
+			return &model, nil
 		}
 	}
 	return nil, fmt.Errorf("model mapping not found: %s", name)
@@ -211,8 +215,8 @@ func (s *JSONStore) GetSummary(rangeType, apiKeyID string) ([]UsageSummary, erro
 
 	// Group by date-period and optionally by key
 	type groupKey struct {
-		period   string
-		keyID    string
+		period string
+		keyID  string
 	}
 	groups := make(map[groupKey]*UsageSummary)
 
@@ -234,7 +238,7 @@ func (s *JSONStore) GetSummary(rangeType, apiKeyID string) ([]UsageSummary, erro
 		gk := groupKey{period: period, keyID: c.APIKeyID}
 		s, ok := groups[gk]
 		if !ok {
-			s = &UsageSummary{APIKeyID: c.APIKeyID}
+			s = &UsageSummary{Period: period, APIKeyID: c.APIKeyID}
 			groups[gk] = s
 		}
 		s.InputTokens += c.InputTokens

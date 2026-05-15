@@ -101,3 +101,31 @@ func TestOpenAIClientPreservesReasoningContentForToolFollowUp(t *testing.T) {
 		t.Fatalf("expected reasoning_content to be passed back, got %#v in body %s", got, string(body))
 	}
 }
+
+func TestOpenAIClientParsesTokenUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{
+				"prompt_tokens":12,
+				"completion_tokens":5,
+				"prompt_tokens_details":{"cached_tokens":3},
+				"completion_tokens_details":{"reasoning_tokens":2}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Call(context.Background(), protocol.Request{Model: "gpt-test"})
+	if err != nil {
+		t.Fatalf("openai-compatible call: %v", err)
+	}
+	if resp.Usage == nil {
+		t.Fatal("expected token usage")
+	}
+	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 || resp.Usage.CacheReadTokens != 3 || resp.Usage.Estimated {
+		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+}

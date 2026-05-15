@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tim5wang/godex/internal/core/conversation"
+	"github.com/tim5wang/godex/internal/core/protocol"
 )
 
 func TestCreateKeyReturnsSecret(t *testing.T) {
@@ -194,14 +198,14 @@ func TestCreditCalculation(t *testing.T) {
 
 	// Record a call with cache read tokens
 	call := &UsageCall{
-		APIKeyID:       keyResp.Key.ID,
-		PublicModel:    "test-model",
-		InputTokens:    100,
-		OutputTokens:   50,
-		CacheReadTokens: 40,
+		APIKeyID:         keyResp.Key.ID,
+		PublicModel:      "test-model",
+		InputTokens:      100,
+		OutputTokens:     50,
+		CacheReadTokens:  40,
 		CacheWriteTokens: 10,
-		CreditWeight:   2.0,
-		Status:         "success",
+		CreditWeight:     2.0,
+		Status:           "success",
 	}
 	if err := svc.RecordCall(call); err != nil {
 		t.Fatal(err)
@@ -236,12 +240,12 @@ func TestSummaryAggregation(t *testing.T) {
 	// Record two calls on same key
 	for i := 0; i < 2; i++ {
 		call := &UsageCall{
-			APIKeyID:      keyResp.Key.ID,
-			PublicModel:   "test-model",
-			InputTokens:   100,
-			OutputTokens:  50,
-			CreditWeight:  1.0,
-			Status:        "success",
+			APIKeyID:     keyResp.Key.ID,
+			PublicModel:  "test-model",
+			InputTokens:  100,
+			OutputTokens: 50,
+			CreditWeight: 1.0,
+			Status:       "success",
 		}
 		if err := svc.RecordCall(call); err != nil {
 			t.Fatal(err)
@@ -270,6 +274,117 @@ func TestSummaryAggregation(t *testing.T) {
 	}
 	if total < 290 || total > 310 {
 		t.Fatalf("expected ~300 credits total, got %.2f", total)
+	}
+}
+
+func TestSummaryIncludesDistinctPeriods(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+
+	keyResp, err := svc.CreateKey(KeyCreateRequest{Name: "test", BudgetCredits: 10000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ts := range []string{"2026-05-14T10:00:00Z", "2026-05-15T10:00:00Z"} {
+		parsed, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.RecordCall(&UsageCall{
+			Timestamp:    parsed,
+			APIKeyID:     keyResp.Key.ID,
+			PublicModel:  "test-model",
+			InputTokens:  10,
+			OutputTokens: 5,
+			CreditWeight: 1,
+			Status:       "success",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	summaries, err := svc.GetSummary("day", keyResp.Key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	periods := map[string]bool{}
+	for _, summary := range summaries {
+		periods[summary.Period] = true
+	}
+	if !periods["2026-05-14"] || !periods["2026-05-15"] {
+		t.Fatalf("expected distinct day periods, got %+v", summaries)
+	}
+}
+
+func TestCreateModelRejectsDuplicatePublicModel(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+
+	_, err = svc.CreateModel(ModelCreateRequest{
+		PublicModel:     "fast",
+		TargetProfileID: "coding",
+		TargetModel:     "gpt-4o-mini",
+		CreditWeight:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.CreateModel(ModelCreateRequest{
+		PublicModel:     "fast",
+		TargetProfileID: "other",
+		TargetModel:     "gpt-4o",
+		CreditWeight:    2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "public model already exists") {
+		t.Fatalf("expected duplicate public model error, got %v", err)
+	}
+}
+
+func TestRecordLLMUsageUsesSystemKey(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+
+	err = svc.RecordLLMUsage(conversation.UsageEvent{
+		Context: conversation.UsageContext{
+			SourceChannel:   "web",
+			SessionID:       "sess-1",
+			TurnID:          "turn-1",
+			TargetProfileID: "openai.fast",
+			TargetModel:     "gpt-4o-mini",
+		},
+		Request: protocol.Request{
+			Model: "gpt-4o-mini",
+			Messages: []protocol.APIMessage{{
+				Role:    protocol.RoleUser,
+				Content: []protocol.Block{protocol.TextBlock("hello world")},
+			}},
+		},
+		Response: &protocol.Response{
+			Content: []protocol.Block{protocol.TextBlock("ok")},
+			Usage:   &protocol.Usage{InputTokens: 9, OutputTokens: 2},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls, err := svc.GetCalls(time.Now().Format("2006-01-02"), SystemKeyID("web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].APIKeyID != "system:web" || calls[0].SessionID != "sess-1" || calls[0].InputTokens != 9 || calls[0].OutputTokens != 2 {
+		t.Fatalf("unexpected internal usage call: %+v", calls)
 	}
 }
 

@@ -33,27 +33,33 @@ type ProxyModel struct {
 
 // UsageCall records a single gateway chat completion call.
 type UsageCall struct {
-	ID              string    `json:"id"`
-	Timestamp       time.Time `json:"timestamp"`
-	APIKeyID        string    `json:"api_key_id"`
-	PublicModel     string    `json:"public_model"`
-	TargetProfileID string    `json:"target_profile_id"`
-	TargetModel     string    `json:"target_model"`
-	InputTokens     int       `json:"input_tokens"`
-	OutputTokens    int       `json:"output_tokens"`
-	CacheReadTokens int       `json:"cache_read_tokens"`
-	CacheWriteTokens int      `json:"cache_write_tokens"`
-	BillableTokens  int       `json:"billable_tokens"`
-	CreditWeight    float64   `json:"credit_weight"`
-	Credits         float64   `json:"credits"`
-	Estimated       bool      `json:"estimated"`
-	Status          string    `json:"status"`
-	Error           string    `json:"error,omitempty"`
-	LatencyMs       int64     `json:"latency_ms"`
+	ID               string    `json:"id"`
+	Timestamp        time.Time `json:"timestamp"`
+	APIKeyID         string    `json:"api_key_id"`
+	PublicModel      string    `json:"public_model"`
+	TargetProfileID  string    `json:"target_profile_id"`
+	TargetModel      string    `json:"target_model"`
+	InputTokens      int       `json:"input_tokens"`
+	OutputTokens     int       `json:"output_tokens"`
+	CacheReadTokens  int       `json:"cache_read_tokens"`
+	CacheWriteTokens int       `json:"cache_write_tokens"`
+	BillableTokens   int       `json:"billable_tokens"`
+	CreditWeight     float64   `json:"credit_weight"`
+	Credits          float64   `json:"credits"`
+	Estimated        bool      `json:"estimated"`
+	Status           string    `json:"status"`
+	Error            string    `json:"error,omitempty"`
+	LatencyMs        int64     `json:"latency_ms"`
+	SourceChannel    string    `json:"source_channel,omitempty"`
+	SessionID        string    `json:"session_id,omitempty"`
+	TurnID           string    `json:"turn_id,omitempty"`
+	JobID            string    `json:"job_id,omitempty"`
+	ErrorCode        string    `json:"error_code,omitempty"`
 }
 
 // UsageSummary aggregates usage data by time period and optionally by API key.
 type UsageSummary struct {
+	Period           string  `json:"period"`
 	APIKeyID         string  `json:"api_key_id"`
 	InputTokens      int     `json:"input_tokens"`
 	OutputTokens     int     `json:"output_tokens"`

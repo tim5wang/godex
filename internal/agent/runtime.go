@@ -351,6 +351,7 @@ func restorePermissionState(manager *tools.PermissionManager, sessionID string, 
 func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	ctx = tools.WithSessionID(ctx, opts.SessionID)
 	ctx = tools.WithSessionContext(ctx, opts.RuntimeContext)
+	ctx = conversation.WithUsageContext(ctx, a.usageContext(opts.RuntimeContext, opts.SessionID, opts.TurnID, ""))
 	ctx = withHistoryRecallTurnState(ctx)
 	a.resetIdle()
 	var ackRuntime func()
@@ -553,6 +554,26 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 		emit(events.EventErrorRaised, payload)
 	}
 	return err
+}
+
+func (a *Agent) usageContext(runtimeCtx automation.SessionContext, sessionID, turnID, jobID string) conversation.UsageContext {
+	source := strings.ToLower(strings.TrimSpace(firstNonEmpty(runtimeCtx.Source, runtimeCtx.LocatorChannel)))
+	if source == "" {
+		source = "unknown"
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = runtimeCtx.SessionID
+	}
+	return conversation.UsageContext{
+		APIKeyID:        "system:" + source,
+		SourceChannel:   source,
+		SessionID:       strings.TrimSpace(sessionID),
+		TurnID:          strings.TrimSpace(turnID),
+		JobID:           strings.TrimSpace(jobID),
+		TargetProfileID: strings.TrimSpace(a.cfg.DefaultProfileID),
+		TargetModel:     strings.TrimSpace(a.cfg.Model),
+		CreditWeight:    1,
+	}
 }
 
 func (a *Agent) maxTurns() int {

@@ -1294,6 +1294,7 @@ export interface UsageModelMapping {
 }
 
 export interface UsageSummary {
+  period?: string;
   api_key_id?: string;
   input_tokens: number;
   output_tokens: number;
@@ -1322,6 +1323,10 @@ export interface UsageCall {
   estimated: boolean;
   status: string;
   error?: string;
+  source_channel?: string;
+  session_id?: string;
+  turn_id?: string;
+  job_id?: string;
+  error_code?: string;
   latency_ms: number;
 }
-

@@ -93,6 +93,9 @@ This plan keeps the current security baseline but improves the approval workflow
 - Client visibility:
   - TUI status line displays the active blocker as `Blocked by approval ...`.
   - ACP native approval title includes intent, risk, and expiry so the VSCode-side prompt is harder to miss.
+  - `/approve status` is a read-only diagnostics alias for listing approval blockers with status, intent, risk, expiry, source, and exact approve/deny commands.
+  - `/deny` without a request id denies the only pending approval when exactly one exists; with multiple pending approvals it lists blockers instead of guessing.
+  - REPL pending approval fallback includes the same status, intent, risk, expiry, and points users to `/approve status`.
 
 ## Deferred Work
 
@@ -119,6 +122,8 @@ This plan keeps the current security baseline but improves the approval workflow
   - denied pending approval appends recovery feedback and a later continue turn can proceed normally.
   - expired pending approval clears pending resume before the next user turn and marks the original turn expired.
   - Snapshot exposes `active_permission_blocker`; turn records expose `blocked_by_permission_id` and `permission_status`.
+  - `/approve status` must not approve anything; it only lists current pending approval blockers and actionable commands.
+  - `/deny` with no arguments denies only when there is exactly one pending approval; otherwise it must stay read-only.
 - Regression:
   - `go test ./internal/core/conversation ./internal/toolruntime ./internal/app ./internal/tui ./internal/acp/server ./internal/services/backend -count=1`
   - `go test ./...`

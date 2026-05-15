@@ -146,6 +146,7 @@ func (f *fakeSessionAdminBackend) DenyPermission(ctx context.Context, sessionID,
 	f.lastDenyReason = reason
 	return tools.PermissionResolution{
 		RequestID: requestID,
+		Status:    tools.PermissionStatusDenied,
 		Request: tools.PermissionRequest{
 			ToolName: "write_file",
 			Action:   "write",
@@ -557,6 +558,100 @@ func TestApproveHandlerListsWhenMultiplePendingAndNoRequestID(t *testing.T) {
 		t.Fatalf("did not expect approval when multiple requests are pending, got %q", adminBackend.lastApproveID)
 	}
 	if !strings.Contains(result.Output, "perm-1") || !strings.Contains(result.Output, "perm-2") {
+		t.Fatalf("expected multiple pending requests in output, got %q", result.Output)
+	}
+}
+
+func TestApproveHandlerStatusShowsRiskExpiryAndActions(t *testing.T) {
+	adminBackend := &fakeSessionAdminBackend{
+		pending: []tools.PendingPermission{
+			{
+				ID:        "perm-1",
+				Status:    tools.PermissionStatusPending,
+				Reason:    "remote shell command needs approval",
+				ExpiresAt: time.Now().Add(10 * time.Minute),
+				Request: tools.PermissionRequest{
+					ToolName: "bash",
+					Action:   "exec",
+					Command:  "rm -rf build",
+					Source:   "acp",
+					Sender:   "vscode",
+				},
+			},
+		},
+	}
+	admin := newFakeSessionAdmin(t, adminBackend)
+	ctx := commands.WithSessionContext(context.Background(), commands.SessionContext{SessionID: "session-1"})
+
+	result, err := NewApproveCommandHandler(admin)(ctx, nil, commands.Command{Name: "approve", Args: []string{"status"}})
+	if err != nil {
+		t.Fatalf("approve status: %v", err)
+	}
+	if adminBackend.lastApproveID != "" {
+		t.Fatalf("did not expect approval from status command, got %q", adminBackend.lastApproveID)
+	}
+	for _, want := range []string{
+		"Pending permission requests",
+		"perm-1",
+		"status=pending",
+		"Agent wants to run shell command",
+		"high risk",
+		"expires in",
+		"command=rm -rf build",
+		"source=acp/vscode",
+		"/approve perm-1",
+		"/approve perm-1 timebox:10m",
+		"/deny perm-1",
+	} {
+		if !strings.Contains(result.Output, want) {
+			t.Fatalf("expected approve status output to contain %q, got %q", want, result.Output)
+		}
+	}
+}
+
+func TestDenyHandlerDeniesSinglePendingWithoutRequestID(t *testing.T) {
+	adminBackend := &fakeSessionAdminBackend{
+		pending: []tools.PendingPermission{{
+			ID:      "perm-1",
+			Request: tools.PermissionRequest{ToolName: "bash", Action: "exec"},
+		}},
+	}
+	admin := newFakeSessionAdmin(t, adminBackend)
+	ctx := commands.WithSessionContext(context.Background(), commands.SessionContext{SessionID: "session-1"})
+
+	result, err := NewDenyCommandHandler(admin)(ctx, nil, commands.Command{Name: "deny"})
+	if err != nil {
+		t.Fatalf("deny shortcut: %v", err)
+	}
+	if adminBackend.lastDenyID != "perm-1" {
+		t.Fatalf("expected shortcut to deny only pending request, got %q output=%q", adminBackend.lastDenyID, result.Output)
+	}
+	if !strings.Contains(result.Output, "Permission denied") {
+		t.Fatalf("unexpected deny shortcut output: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "Status: denied") {
+		t.Fatalf("expected deny output to include lifecycle status, got %q", result.Output)
+	}
+}
+
+func TestDenyHandlerListsWhenMultiplePendingAndNoRequestID(t *testing.T) {
+	adminBackend := &fakeSessionAdminBackend{
+		pending: []tools.PendingPermission{
+			{ID: "perm-1", Request: tools.PermissionRequest{ToolName: "bash"}},
+			{ID: "perm-2", Request: tools.PermissionRequest{ToolName: "write_file"}},
+		},
+	}
+	admin := newFakeSessionAdmin(t, adminBackend)
+	ctx := commands.WithSessionContext(context.Background(), commands.SessionContext{SessionID: "session-1"})
+
+	result, err := NewDenyCommandHandler(admin)(ctx, nil, commands.Command{Name: "deny"})
+	if err != nil {
+		t.Fatalf("deny list fallback: %v", err)
+	}
+	if adminBackend.lastDenyID != "" {
+		t.Fatalf("did not expect denial when multiple requests are pending, got %q", adminBackend.lastDenyID)
+	}
+	if !strings.Contains(result.Output, "perm-1") || !strings.Contains(result.Output, "perm-2") || !strings.Contains(result.Output, "/deny perm-1") {
 		t.Fatalf("expected multiple pending requests in output, got %q", result.Output)
 	}
 }

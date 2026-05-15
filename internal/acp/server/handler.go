@@ -401,7 +401,7 @@ func renderPendingApproval(requestID string, items []tools.PendingPermission) st
 	b.WriteString("\nApprove 10 minutes: /approve timebox:10m")
 	b.WriteString("\nApprove 5 uses: /approve count:5")
 	b.WriteString("\nApprove for session: /approve session")
-	b.WriteString("\nInspect all pending: /approve list")
+	b.WriteString("\nInspect approvals: /approve status")
 	b.WriteString("\nDeny: /deny ")
 	b.WriteString(requestID)
 	return b.String()

@@ -128,11 +128,25 @@ func renderPendingApproval(requestID, sessionID string, items []tools.PendingPer
 	}
 	if ok {
 		req := item.Request
+		status := item.Status
+		if status == "" {
+			status = tools.PermissionStatusPending
+		}
+		lines = append(lines, "Status: "+string(status))
 		if toolName := strings.TrimSpace(req.ToolName); toolName != "" {
 			lines = append(lines, "Tool: "+toolName)
 		}
 		if action := strings.TrimSpace(req.Action); action != "" {
 			lines = append(lines, "Action: "+action)
+		}
+		if intent := strings.TrimSpace(tools.PermissionIntentSummary(item)); intent != "" {
+			lines = append(lines, "Intent: "+intent)
+		}
+		if risk := strings.TrimSpace(tools.PermissionRiskSummary(req)); risk != "" {
+			lines = append(lines, "Risk: "+risk)
+		}
+		if expiry := strings.TrimSpace(tools.PermissionExpirySummary(item, time.Now())); expiry != "" {
+			lines = append(lines, "Expiry: "+expiry)
 		}
 		if command := strings.TrimSpace(req.Command); command != "" {
 			lines = append(lines, "Command: "+command)
@@ -146,6 +160,7 @@ func renderPendingApproval(requestID, sessionID string, items []tools.PendingPer
 	}
 	lines = append(lines,
 		"",
+		"Inspect approvals: /approve status",
 		"Approve once: /approve",
 		"Approve for session: /approve session",
 		"Deny: /deny "+requestID,

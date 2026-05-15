@@ -232,7 +232,7 @@ func NewApproveCommandHandler(admin *sessionadmin.Service) func(context.Context,
 		if err != nil {
 			return commands.Result{}, err
 		}
-		if len(cmd.Args) == 1 && strings.EqualFold(strings.TrimSpace(cmd.Args[0]), "list") {
+		if len(cmd.Args) == 1 && isApproveStatusArg(cmd.Args[0]) {
 			return commands.Result{Name: "approve", Output: renderApproveListOrEmpty(items)}, nil
 		}
 		requestID, scope, listOnly, err := resolveApproveCommandArgs(cmd.Args, items)
@@ -280,7 +280,7 @@ func resolveApproveCommandArgs(args []string, items []tools.PendingPermission) (
 			return strings.TrimSpace(items[0].ID), tools.PermissionGrantSession, false, nil
 		}
 		return "", "", true, nil
-	case "list":
+	case "list", "status":
 		return "", "", true, nil
 	}
 	if isApproveScope(first) {
@@ -326,7 +326,16 @@ func isApproveScope(value string) bool {
 }
 
 func approveUsage() string {
-	return "usage: /approve [list|request-id] [once|session|pattern|count:N|timebox:10m]"
+	return "usage: /approve [status|list|request-id] [once|session|pattern|count:N|timebox:10m]"
+}
+
+func isApproveStatusArg(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "list", "status":
+		return true
+	default:
+		return false
+	}
 }
 
 func renderApproveListOrEmpty(items []tools.PendingPermission) string {
@@ -346,10 +355,29 @@ func NewDenyCommandHandler(admin *sessionadmin.Service) func(context.Context, *a
 		if !ok {
 			return commands.Result{Name: "deny", Output: "Current session context is unavailable in this process."}, nil
 		}
+		requestID := ""
+		reason := ""
 		if len(cmd.Args) == 0 {
-			return commands.Result{}, fmt.Errorf("usage: /deny <request-id> [reason...]")
+			items, err := runtime.ListPendingPermissions(ctx, sessionID, runtimeCtx)
+			if err != nil {
+				return commands.Result{}, err
+			}
+			switch len(items) {
+			case 0:
+				return commands.Result{Name: "deny", Output: "No pending permission requests for this session."}, nil
+			case 1:
+				requestID = strings.TrimSpace(items[0].ID)
+			default:
+				return commands.Result{Name: "deny", Output: renderApproveListOrEmpty(items)}, nil
+			}
+		} else {
+			requestID = strings.TrimSpace(cmd.Args[0])
+			reason = strings.TrimSpace(strings.Join(cmd.Args[1:], " "))
 		}
-		resolution, err := runtime.DenyPermission(ctx, sessionID, runtimeCtx, strings.TrimSpace(cmd.Args[0]), strings.TrimSpace(strings.Join(cmd.Args[1:], " ")))
+		if requestID == "" {
+			return commands.Result{}, fmt.Errorf("usage: /deny [request-id] [reason...]")
+		}
+		resolution, err := runtime.DenyPermission(ctx, sessionID, runtimeCtx, requestID, reason)
 		if err != nil {
 			return commands.Result{}, err
 		}
@@ -600,10 +628,24 @@ func renderPendingPermissions(items []tools.PendingPermission) string {
 		return "No pending permission requests."
 	}
 	lines := []string{"Pending permission requests:"}
+	now := time.Now()
 	for _, item := range items {
-		line := fmt.Sprintf("- %s tool=%s", item.ID, item.Request.ToolName)
+		status := item.Status
+		if status == "" {
+			status = tools.PermissionStatusPending
+		}
+		line := fmt.Sprintf("- %s status=%s tool=%s", item.ID, status, item.Request.ToolName)
 		if item.Request.Action != "" {
 			line += " action=" + item.Request.Action
+		}
+		if intent := strings.TrimSpace(tools.PermissionIntentSummary(item)); intent != "" {
+			line += " intent=" + intent
+		}
+		if risk := strings.TrimSpace(tools.PermissionRiskSummary(item.Request)); risk != "" {
+			line += " risk=" + risk
+		}
+		if expiry := strings.TrimSpace(tools.PermissionExpirySummary(item, now)); expiry != "" {
+			line += " " + expiry
 		}
 		if item.Reason != "" {
 			line += " reason=" + item.Reason
@@ -614,7 +656,23 @@ func renderPendingPermissions(items []tools.PendingPermission) string {
 		if len(item.Request.Paths) > 0 {
 			line += " paths=" + strings.Join(item.Request.Paths, ",")
 		}
+		if item.Request.Source != "" || item.Request.Sender != "" {
+			source := strings.TrimSpace(item.Request.Source)
+			if sender := strings.TrimSpace(item.Request.Sender); sender != "" {
+				if source != "" {
+					source += "/"
+				}
+				source += sender
+			}
+			line += " source=" + source
+		}
 		lines = append(lines, line)
+		lines = append(lines,
+			fmt.Sprintf("  approve once: /approve %s", item.ID),
+			fmt.Sprintf("  approve pattern: /approve %s pattern", item.ID),
+			fmt.Sprintf("  approve 10m: /approve %s timebox:10m", item.ID),
+			fmt.Sprintf("  deny: /deny %s", item.ID),
+		)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -629,6 +687,9 @@ func renderPermissionResolution(status string, resolution tools.PermissionResolu
 	}
 	if resolution.Scope != "" {
 		lines = append(lines, "Scope: "+string(resolution.Scope))
+	}
+	if resolution.Status != "" {
+		lines = append(lines, "Status: "+string(resolution.Status))
 	}
 	if resolution.Reason != "" {
 		lines = append(lines, "Reason: "+resolution.Reason)

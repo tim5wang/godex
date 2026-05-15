@@ -465,7 +465,8 @@ func TestBackendPromptHandlerRequestsNativeApprovalAllowSession(t *testing.T) {
 			PendingRequestID: "perm-1",
 		},
 		pending: []tools.PendingPermission{{
-			ID: "perm-1",
+			ID:        "perm-1",
+			ExpiresAt: time.Now().Add(10 * time.Minute),
 			Request: tools.PermissionRequest{
 				ToolName: "bash",
 				Action:   "execute",
@@ -539,6 +540,18 @@ func TestBackendPromptHandlerRequestsNativeApprovalAllowSession(t *testing.T) {
 	}
 	if !fake.approveCalled || fake.approvedScope != tools.PermissionGrantSession {
 		t.Fatalf("expected session approval, called=%v scope=%q", fake.approveCalled, fake.approvedScope)
+	}
+	if len(requester.requests) != 1 {
+		t.Fatalf("expected one native approval request, got %+v", requester.requests)
+	}
+	title := ""
+	if requester.requests[0].ToolCall.Title != nil {
+		title = *requester.requests[0].ToolCall.Title
+	}
+	for _, want := range []string{"Agent wants to run shell command", "medium risk", "expires in"} {
+		if !strings.Contains(title, want) {
+			t.Fatalf("expected native approval title to contain %q, got %q", want, title)
+		}
 	}
 	if result.FinalText != "tests passed" {
 		t.Fatalf("expected resume output, got %q", result.FinalText)

@@ -22,6 +22,7 @@ type AfterInterceptor = toolruntime.AfterInterceptor
 type Tool = toolruntime.Tool
 
 type PermissionDecision = toolruntime.PermissionDecision
+type PermissionStatus = toolruntime.PermissionStatus
 type PermissionGrantScope = toolruntime.PermissionGrantScope
 type PermissionPolicy = toolruntime.PermissionPolicy
 type InteractiveApprovalPolicy = toolruntime.InteractiveApprovalPolicy
@@ -46,6 +47,12 @@ const (
 	PermissionAllow   = toolruntime.PermissionAllow
 	PermissionDeny    = toolruntime.PermissionDeny
 	PermissionPending = toolruntime.PermissionPending
+
+	PermissionStatusPending  = toolruntime.PermissionStatusPending
+	PermissionStatusApproved = toolruntime.PermissionStatusApproved
+	PermissionStatusDenied   = toolruntime.PermissionStatusDenied
+	PermissionStatusExpired  = toolruntime.PermissionStatusExpired
+	PermissionStatusResumed  = toolruntime.PermissionStatusResumed
 
 	PermissionGrantOnce    = toolruntime.PermissionGrantOnce
 	PermissionGrantSession = toolruntime.PermissionGrantSession

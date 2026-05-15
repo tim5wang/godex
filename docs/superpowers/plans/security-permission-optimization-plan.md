@@ -71,9 +71,32 @@ This plan keeps the current security baseline but improves the approval workflow
 - Include scope, tool, action, source, risk, request id, and fingerprint.
 - Security summary should expose pending approval count and oldest pending age in a later UI pass.
 
+### Phase 4: Pending Recovery Hardening
+
+- Runner tool results distinguish approval waits from ordinary failures:
+  - pending approval returns `status=permission_pending`.
+  - payload includes the permission `request_id`.
+  - sibling tool calls in the same assistant message still receive skipped tool results so OpenAI-compatible transcripts remain valid.
+- Backend snapshots expose a first-class active permission blocker:
+  - `active_permission_blocker` includes request id, status, turn id, intent, risk, expiry, tool/action, command/path, and source.
+  - pending turns persist `blocked_by_permission_id` and `permission_status`.
+  - permission status values are `pending`, `approved`, `denied`, `expired`, and `resumed`.
+- Denial clears the blocked pending resume and appends model-visible runtime feedback:
+  - the model is told not to retry the denied blocked tool call.
+  - the next user "continue" turn can proceed from the current transcript instead of being tied to the old pending approval.
+- Expiry is recoverable:
+  - before a new user turn starts, stale pending resume state is reconciled against the pending queue.
+  - if the approval expired, the original turn is marked `permission_status=expired`, pending resume is cleared, and runtime feedback tells the model not to retry the old blocked call automatically.
+- Approval resume keeps its existing recovery feedback:
+  - retry only the approved call if needed.
+  - do not restart completed analysis or reread unchanged files unnecessarily.
+- Client visibility:
+  - TUI status line displays the active blocker as `Blocked by approval ...`.
+  - ACP native approval title includes intent, risk, and expiry so the VSCode-side prompt is harder to miss.
+
 ## Deferred Work
 
-- Non-blocking tool continuation inside a single model turn is deferred. It requires runner protocol work so pending tool calls can return structured `permission_pending` tool results while the model safely continues with independent work.
+- Non-blocking tool continuation inside a single model turn remains deferred. The runner now records structured `permission_pending` tool results and keeps the transcript valid, but it still stops the current turn for explicit user approval.
 - Full policy-as-code, domain-level network allowlists, and Trust Budget are deferred until the approval state model is stable.
 - Plan pre-approval is deferred until task planning and work scopes are more structured.
 
@@ -91,8 +114,13 @@ This plan keeps the current security baseline but improves the approval workflow
   - invalid scope errors include supported formats.
 - TUI/ACP:
   - pending approval render includes intent, risk, expiry, and command options.
+- Runner/backend:
+  - pending approval tool result uses `permission_pending` and carries `request_id`.
+  - denied pending approval appends recovery feedback and a later continue turn can proceed normally.
+  - expired pending approval clears pending resume before the next user turn and marks the original turn expired.
+  - Snapshot exposes `active_permission_blocker`; turn records expose `blocked_by_permission_id` and `permission_status`.
 - Regression:
-  - `go test ./internal/toolruntime ./internal/app ./internal/tui ./internal/acp/server ./internal/services/backend -count=1`
+  - `go test ./internal/core/conversation ./internal/toolruntime ./internal/app ./internal/tui ./internal/acp/server ./internal/services/backend -count=1`
   - `go test ./...`
   - `git diff --check`
 

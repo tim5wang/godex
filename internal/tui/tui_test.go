@@ -638,6 +638,26 @@ func TestFocusStatusLineShowsActiveFocus(t *testing.T) {
 	}
 }
 
+func TestStatusLineShowsActivePermissionBlocker(t *testing.T) {
+	m := newModel(context.Background(), &config.Config{LeadName: "lead", Model: "test-model"}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "web", Key: "default"},
+		ActivePermissionBlocker: &rtbackend.PermissionBlocker{
+			RequestID: "perm-1",
+			Status:    tools.PermissionStatusPending,
+			ToolName:  "bash",
+			Action:    "exec",
+			Expiry:    "expires in 4m",
+		},
+	})
+
+	got := m.renderRuntimeStatus()
+	for _, want := range []string{"Blocked by approval", "perm-1", "bash exec", "expires in 4m"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected status line to contain %q, got %q", want, got)
+		}
+	}
+}
+
 func containsLine(lines []string, want string) bool {
 	for _, line := range lines {
 		if line == want {

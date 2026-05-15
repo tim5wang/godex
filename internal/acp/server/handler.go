@@ -539,6 +539,15 @@ func renderPermissionResolution(resolution tools.PermissionResolution) string {
 func approvalTitle(item tools.PendingPermission) string {
 	req := item.Request
 	parts := []string{"Approval"}
+	if intent := strings.TrimSpace(tools.PermissionIntentSummary(item)); intent != "" {
+		parts = append(parts, truncateString(intent, 120))
+	}
+	if risk := strings.TrimSpace(tools.PermissionRiskSummary(req)); risk != "" {
+		parts = append(parts, truncateString(risk, 80))
+	}
+	if expiry := strings.TrimSpace(tools.PermissionExpirySummary(item, time.Now())); expiry != "" {
+		parts = append(parts, expiry)
+	}
 	if toolName := strings.TrimSpace(req.ToolName); toolName != "" {
 		parts = append(parts, toolName)
 	}

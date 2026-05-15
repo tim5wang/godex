@@ -88,6 +88,10 @@ func (e ErrPermissionPending) Error() string {
 	}
 }
 
+func (e ErrPermissionPending) PendingPermissionRequestID() string {
+	return strings.TrimSpace(e.RequestID)
+}
+
 // StopConversationAfterTool tells the shared runner to halt the current turn
 // immediately after this tool result is appended.
 func (e ErrPermissionPending) StopConversationAfterTool() bool {

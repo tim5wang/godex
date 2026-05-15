@@ -14,6 +14,9 @@ func (m *model) renderRuntimeStatus() string {
 	if focus := m.focusStatusText(); focus != "" {
 		parts = append(parts, focus)
 	}
+	if blocker := m.permissionBlockerStatusText(); blocker != "" {
+		parts = append(parts, blocker)
+	}
 	if ctx := m.contextUsageText(); ctx != "" {
 		parts = append(parts, ctx)
 	}
@@ -24,6 +27,25 @@ func (m *model) renderRuntimeStatus() string {
 		parts = append(parts, fmt.Sprintf("msgs %d", m.contextSummary.MessageCount))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func (m *model) permissionBlockerStatusText() string {
+	blocker := m.snapshot.ActivePermissionBlocker
+	if blocker == nil {
+		return ""
+	}
+	parts := []string{"Blocked by approval"}
+	if requestID := strings.TrimSpace(blocker.RequestID); requestID != "" {
+		parts = append(parts, requestID)
+	}
+	action := strings.Join(strings.Fields(strings.TrimSpace(blocker.ToolName)+" "+strings.TrimSpace(blocker.Action)), " ")
+	if action != "" {
+		parts = append(parts, action)
+	}
+	if expiry := strings.TrimSpace(blocker.Expiry); expiry != "" {
+		parts = append(parts, expiry)
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m *model) focusStatusText() string {

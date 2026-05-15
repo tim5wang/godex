@@ -18,6 +18,7 @@ func (pendingStopError) Error() string { return "pending approval" }
 func (pendingStopError) StopConversationAfterTool() bool {
 	return true
 }
+func (pendingStopError) PendingPermissionRequestID() string { return "perm-1" }
 
 type fakeCaller struct {
 	responses []protocol.Response
@@ -949,6 +950,10 @@ func TestRunnerStopsImmediatelyWhenToolRequestsApproval(t *testing.T) {
 	}
 	if len(messages) != 3 {
 		t.Fatalf("expected assistant + tool result appended before stop, got %d messages", len(messages))
+	}
+	output := messages[2].Content[0].Content
+	if !strings.Contains(output, `"status":"permission_pending"`) || !strings.Contains(output, `"request_id":"perm-1"`) {
+		t.Fatalf("expected structured permission_pending tool result, got %q", output)
 	}
 }
 

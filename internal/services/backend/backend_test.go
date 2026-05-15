@@ -671,6 +671,15 @@ func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	if snapshot.PendingPermissions[0].Request.ToolName != "bash" {
 		t.Fatalf("unexpected pending permission: %+v", snapshot.PendingPermissions[0])
 	}
+	if snapshot.ActivePermissionBlocker == nil || snapshot.ActivePermissionBlocker.RequestID != snapshot.PendingPermissions[0].ID {
+		t.Fatalf("expected active permission blocker for pending request, got %+v", snapshot.ActivePermissionBlocker)
+	}
+	if snapshot.ActivePermissionBlocker.Status != tools.PermissionStatusPending {
+		t.Fatalf("expected pending blocker status, got %+v", snapshot.ActivePermissionBlocker)
+	}
+	if len(snapshot.Turns) == 0 || snapshot.Turns[len(snapshot.Turns)-1].BlockedByPermissionID != snapshot.PendingPermissions[0].ID || snapshot.Turns[len(snapshot.Turns)-1].PermissionStatus != tools.PermissionStatusPending {
+		t.Fatalf("expected pending turn permission status, got %+v", snapshot.Turns)
+	}
 
 	resolution, err := service.ApprovePermission(context.Background(), opened.SessionID, snapshot.PendingPermissions[0].ID, tools.PermissionGrantSession)
 	if err != nil {
@@ -688,6 +697,12 @@ func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	}
 	if len(snapshot.PendingPermissions) != 0 {
 		t.Fatalf("expected approvals to clear pending queue, got %+v", snapshot.PendingPermissions)
+	}
+	if snapshot.ActivePermissionBlocker != nil {
+		t.Fatalf("expected approvals to clear active blocker, got %+v", snapshot.ActivePermissionBlocker)
+	}
+	if len(snapshot.Turns) == 0 || snapshot.Turns[0].PermissionStatus != tools.PermissionStatusResumed {
+		t.Fatalf("expected resumed turn permission status, got %+v", snapshot.Turns)
 	}
 	audit, err := service.SecurityAudit(context.Background(), 10)
 	if err != nil {
@@ -721,6 +736,108 @@ func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	exported := session.agent.ExportStateForSession(reopened.SessionID)
 	if len(exported.PermissionState.Overrides) != 1 {
 		t.Fatalf("expected restored approval override, got %+v", exported.PermissionState)
+	}
+}
+
+func TestDenyPermissionClearsPendingResumeAndAddsRecoveryFeedback(t *testing.T) {
+	cfg := newTestConfig(t)
+	caller := &stubCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
+		{Content: []protocol.Block{protocol.TextBlock("continued safely")}},
+	}}
+	service := newTestService(cfg, caller)
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "permissions-deny"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	result, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "run command -v sh", time.Now()))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if result == nil || !result.PendingApproval || result.PendingRequestID == "" {
+		t.Fatalf("expected pending approval result, got %+v", result)
+	}
+
+	if _, err := service.DenyPermission(context.Background(), opened.SessionID, result.PendingRequestID, "not needed"); err != nil {
+		t.Fatalf("deny permission: %v", err)
+	}
+	snapshot, err := service.Snapshot(context.Background(), opened.SessionID)
+	if err != nil {
+		t.Fatalf("snapshot after deny: %v", err)
+	}
+	if len(snapshot.PendingPermissions) != 0 {
+		t.Fatalf("expected denied permission to clear pending queue, got %+v", snapshot.PendingPermissions)
+	}
+	if snapshot.ActivePermissionBlocker != nil {
+		t.Fatalf("expected denied permission to clear active blocker, got %+v", snapshot.ActivePermissionBlocker)
+	}
+	if len(snapshot.Turns) == 0 || snapshot.Turns[len(snapshot.Turns)-1].PermissionStatus != tools.PermissionStatusDenied {
+		t.Fatalf("expected denied turn permission status, got %+v", snapshot.Turns)
+	}
+	foundFeedback := false
+	for _, msg := range snapshot.Messages {
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindBackground && strings.Contains(protocol.MessageText(msg), "previously blocked tool permission was denied") {
+			foundFeedback = true
+			break
+		}
+	}
+	if !foundFeedback {
+		t.Fatalf("expected denial recovery feedback in model messages, got %+v", snapshot.Messages)
+	}
+
+	continued, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "继续", time.Now()))
+	if err != nil {
+		t.Fatalf("continue after deny: %v", err)
+	}
+	if continued == nil || continued.Status != "completed" {
+		t.Fatalf("expected continue after deny to complete, got %+v", continued)
+	}
+}
+
+func TestExpiredPendingPermissionClearsResumeBeforeContinue(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Tools.Permissions.InteractiveApprovalEnabled = true
+	cfg.Tools.Permissions.PendingTTLSeconds = 1
+	caller := &stubCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "command -v sh"})}},
+		{Content: []protocol.Block{protocol.TextBlock("continued after expiry")}},
+	}}
+	service := newTestService(cfg, caller)
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "permissions-expire"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	result, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "run command -v sh", time.Now()))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if result == nil || !result.PendingApproval || result.PendingRequestID == "" {
+		t.Fatalf("expected pending approval result, got %+v", result)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+
+	continued, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "继续", time.Now()))
+	if err != nil {
+		t.Fatalf("continue after expiry: %v", err)
+	}
+	if continued == nil || continued.Status != "completed" {
+		t.Fatalf("expected continue after expired approval to complete, got %+v", continued)
+	}
+	snapshot, err := service.Snapshot(context.Background(), opened.SessionID)
+	if err != nil {
+		t.Fatalf("snapshot after expiry continue: %v", err)
+	}
+	if len(snapshot.PendingPermissions) != 0 || snapshot.ActivePermissionBlocker != nil {
+		t.Fatalf("expected expired permission to clear blockers, pending=%+v active=%+v", snapshot.PendingPermissions, snapshot.ActivePermissionBlocker)
+	}
+	if len(snapshot.Turns) < 2 || snapshot.Turns[0].PermissionStatus != tools.PermissionStatusExpired {
+		t.Fatalf("expected original turn marked expired, got %+v", snapshot.Turns)
+	}
+	if !containsBackgroundText(snapshot.Messages, "previously blocked tool permission expired") {
+		t.Fatalf("expected expiry recovery feedback in messages, got %+v", snapshot.Messages)
 	}
 }
 
@@ -2875,6 +2992,15 @@ func apiMessagesText(messages []protocol.APIMessage) string {
 func newTestService(cfg *config.Config, caller *stubCaller) *Service {
 	shared := agent.NewSharedDependenciesWithCaller(cfg, caller)
 	return NewService(cfg, shared, commands.NewService(cfg))
+}
+
+func containsBackgroundText(messages []protocol.Message, needle string) bool {
+	for _, msg := range messages {
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindBackground && strings.Contains(protocol.MessageText(msg), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitForBackendSnapshot(t *testing.T, service *Service, sessionID string, ready func(Snapshot) bool) Snapshot {

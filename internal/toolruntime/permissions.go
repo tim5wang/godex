@@ -25,6 +25,17 @@ const (
 	PermissionPending PermissionDecision = "pending"
 )
 
+// PermissionStatus is the durable lifecycle state of an approval request.
+type PermissionStatus string
+
+const (
+	PermissionStatusPending  PermissionStatus = "pending"
+	PermissionStatusApproved PermissionStatus = "approved"
+	PermissionStatusDenied   PermissionStatus = "denied"
+	PermissionStatusExpired  PermissionStatus = "expired"
+	PermissionStatusResumed  PermissionStatus = "resumed"
+)
+
 // PermissionGrantScope controls how long an approval should remain effective.
 type PermissionGrantScope string
 
@@ -108,6 +119,7 @@ type PermissionRequest struct {
 // PendingPermission is one request waiting for explicit approval.
 type PendingPermission struct {
 	ID        string            `json:"id"`
+	Status    PermissionStatus  `json:"status,omitempty"`
 	Request   PermissionRequest `json:"request"`
 	Reason    string            `json:"reason,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
@@ -132,6 +144,7 @@ type PermissionSessionState struct {
 type PermissionResolution struct {
 	RequestID              string               `json:"request_id"`
 	Decision               PermissionDecision   `json:"decision"`
+	Status                 PermissionStatus     `json:"status,omitempty"`
 	Scope                  PermissionGrantScope `json:"scope,omitempty"`
 	Reason                 string               `json:"reason,omitempty"`
 	Request                PermissionRequest    `json:"request"`
@@ -534,6 +547,9 @@ func (m *PermissionManager) RestoreSession(sessionID string, state PermissionSes
 		if pending.ExpiresAt.IsZero() {
 			pending.ExpiresAt = pending.CreatedAt.Add(m.pendingTTL)
 		}
+		if pending.Status == "" {
+			pending.Status = PermissionStatusPending
+		}
 		m.pending[pending.ID] = pending
 		m.pendingKey[permissionDecisionKey(pending.Request)] = pending.ID
 	}
@@ -579,6 +595,7 @@ func (m *PermissionManager) ApprovePending(sessionID, requestID string, scope Pe
 	return PermissionResolution{
 		RequestID:  requestID,
 		Decision:   PermissionAllow,
+		Status:     PermissionStatusApproved,
 		Scope:      scope,
 		Request:    clonePermissionRequest(pending.Request),
 		ResolvedAt: time.Now().UTC(),
@@ -611,6 +628,7 @@ func (m *PermissionManager) DenyPending(sessionID, requestID, reason string) (Pe
 	return PermissionResolution{
 		RequestID:  requestID,
 		Decision:   PermissionDeny,
+		Status:     PermissionStatusDenied,
 		Scope:      PermissionGrantSession,
 		Reason:     trimmedReason,
 		Request:    clonePermissionRequest(pending.Request),
@@ -709,6 +727,7 @@ func (m *PermissionManager) ensurePendingLocked(req PermissionRequest, result Pe
 	}
 	pending := PendingPermission{
 		ID:        pendingPermissionID(key),
+		Status:    PermissionStatusPending,
 		Request:   clonePermissionRequest(req),
 		Reason:    reason,
 		CreatedAt: m.nowUTCLocked(),
@@ -1722,6 +1741,7 @@ func normalizePermissionPath(value string) string {
 func clonePendingPermission(input PendingPermission) PendingPermission {
 	return PendingPermission{
 		ID:        input.ID,
+		Status:    input.Status,
 		Request:   clonePermissionRequest(input.Request),
 		Reason:    input.Reason,
 		CreatedAt: input.CreatedAt,

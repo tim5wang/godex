@@ -212,26 +212,45 @@ type AttachmentUpload struct {
 
 // Snapshot is the unified frontend view of one session.
 type Snapshot struct {
-	SessionID          string                    `json:"session_id"`
-	Locator            SessionLocator            `json:"locator"`
-	Messages           []protocol.Message        `json:"messages"`
-	DisplayMessages    []protocol.Message        `json:"display_messages,omitempty"`
-	Tasks              []*task.FileTask          `json:"tasks"`
-	Todos              []todo.Item               `json:"todos"`
-	Team               []*teammate.Teammate      `json:"team"`
-	ActiveSkills       []string                  `json:"active_skills"`
-	ToolCatalog        tools.ToolCatalog         `json:"tool_catalog"`
-	PendingPermissions []tools.PendingPermission `json:"pending_permissions,omitempty"`
-	Timeline           []events.Event            `json:"timeline,omitempty"`
-	Turns              []TurnRecord              `json:"turns,omitempty"`
-	Running            bool                      `json:"running"`
-	ActiveTurnID       string                    `json:"active_turn_id,omitempty"`
-	ActivePhase        string                    `json:"active_phase,omitempty"`
-	Identity           agent.AgentIdentity       `json:"identity,omitempty"`
-	ModelProfileID     string                    `json:"model_profile_id,omitempty"`
-	ReasoningEffort    string                    `json:"reasoning_effort,omitempty"`
-	QueuedTurns        []QueuedTurn              `json:"queued_turns,omitempty"`
-	UpdatedAt          time.Time                 `json:"updated_at"`
+	SessionID               string                    `json:"session_id"`
+	Locator                 SessionLocator            `json:"locator"`
+	Messages                []protocol.Message        `json:"messages"`
+	DisplayMessages         []protocol.Message        `json:"display_messages,omitempty"`
+	Tasks                   []*task.FileTask          `json:"tasks"`
+	Todos                   []todo.Item               `json:"todos"`
+	Team                    []*teammate.Teammate      `json:"team"`
+	ActiveSkills            []string                  `json:"active_skills"`
+	ToolCatalog             tools.ToolCatalog         `json:"tool_catalog"`
+	PendingPermissions      []tools.PendingPermission `json:"pending_permissions,omitempty"`
+	ActivePermissionBlocker *PermissionBlocker        `json:"active_permission_blocker,omitempty"`
+	Timeline                []events.Event            `json:"timeline,omitempty"`
+	Turns                   []TurnRecord              `json:"turns,omitempty"`
+	Running                 bool                      `json:"running"`
+	ActiveTurnID            string                    `json:"active_turn_id,omitempty"`
+	ActivePhase             string                    `json:"active_phase,omitempty"`
+	Identity                agent.AgentIdentity       `json:"identity,omitempty"`
+	ModelProfileID          string                    `json:"model_profile_id,omitempty"`
+	ReasoningEffort         string                    `json:"reasoning_effort,omitempty"`
+	QueuedTurns             []QueuedTurn              `json:"queued_turns,omitempty"`
+	UpdatedAt               time.Time                 `json:"updated_at"`
+}
+
+// PermissionBlocker is the frontend-facing current approval blocker for one session.
+type PermissionBlocker struct {
+	RequestID string                 `json:"request_id"`
+	Status    tools.PermissionStatus `json:"status"`
+	TurnID    string                 `json:"turn_id,omitempty"`
+	Intent    string                 `json:"intent,omitempty"`
+	Risk      string                 `json:"risk,omitempty"`
+	Expiry    string                 `json:"expiry,omitempty"`
+	ToolName  string                 `json:"tool_name,omitempty"`
+	Action    string                 `json:"action,omitempty"`
+	Command   string                 `json:"command,omitempty"`
+	Paths     []string               `json:"paths,omitempty"`
+	Source    string                 `json:"source,omitempty"`
+	Sender    string                 `json:"sender,omitempty"`
+	CreatedAt time.Time              `json:"created_at,omitempty"`
+	ExpiresAt time.Time              `json:"expires_at,omitempty"`
 }
 
 // CancelTurnResult summarizes a requested turn cancellation.
@@ -244,24 +263,26 @@ type CancelTurnResult struct {
 
 // TurnRecord is the persisted lifecycle state for one user turn.
 type TurnRecord struct {
-	ID               string     `json:"id"`
-	Status           string     `json:"status"`
-	Source           string     `json:"source,omitempty"`
-	Sender           string     `json:"sender,omitempty"`
-	Summary          string     `json:"summary,omitempty"`
-	StartedAt        time.Time  `json:"started_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	CompletedAt      *time.Time `json:"completed_at,omitempty"`
-	PendingRequestID string     `json:"pending_request_id,omitempty"`
-	Error            string     `json:"error,omitempty"`
-	RetryOf          string     `json:"retry_of,omitempty"`
-	CanRetry         bool       `json:"can_retry,omitempty"`
-	CanResume        bool       `json:"can_resume,omitempty"`
-	ResumeAvailable  bool       `json:"resume_available,omitempty"`
-	RecoveryHint     string     `json:"recovery_hint,omitempty"`
-	Phase            string     `json:"phase,omitempty"`
-	InjectionCount   int        `json:"injection_count,omitempty"`
-	LastToolName     string     `json:"last_tool_name,omitempty"`
+	ID                    string                 `json:"id"`
+	Status                string                 `json:"status"`
+	Source                string                 `json:"source,omitempty"`
+	Sender                string                 `json:"sender,omitempty"`
+	Summary               string                 `json:"summary,omitempty"`
+	StartedAt             time.Time              `json:"started_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
+	CompletedAt           *time.Time             `json:"completed_at,omitempty"`
+	PendingRequestID      string                 `json:"pending_request_id,omitempty"`
+	BlockedByPermissionID string                 `json:"blocked_by_permission_id,omitempty"`
+	PermissionStatus      tools.PermissionStatus `json:"permission_status,omitempty"`
+	Error                 string                 `json:"error,omitempty"`
+	RetryOf               string                 `json:"retry_of,omitempty"`
+	CanRetry              bool                   `json:"can_retry,omitempty"`
+	CanResume             bool                   `json:"can_resume,omitempty"`
+	ResumeAvailable       bool                   `json:"resume_available,omitempty"`
+	RecoveryHint          string                 `json:"recovery_hint,omitempty"`
+	Phase                 string                 `json:"phase,omitempty"`
+	InjectionCount        int                    `json:"injection_count,omitempty"`
+	LastToolName          string                 `json:"last_tool_name,omitempty"`
 
 	PriorMessageCount int                `json:"prior_message_count,omitempty"`
 	Envelope          *message.Envelope  `json:"envelope,omitempty"`
@@ -1253,6 +1274,7 @@ func (s *Service) runUserTurnLocked(ctx context.Context, session *sessionState, 
 func (s *Service) startUserTurnLocked(session *sessionState, envelope message.Envelope, persistRunning bool) (preparedUserTurn, *SubmitResult, error) {
 	sessionID := session.id
 	now := s.now()
+	s.reconcileExpiredPermissionResume(session, now)
 	turnID := session.nextTurnID(now)
 	runtimeCtx := s.buildRuntimeContext(sessionID, session.locator, envelope)
 	attachSessionGraphContext(session, &runtimeCtx)
@@ -1675,6 +1697,26 @@ func (s *Service) resumePendingTurnLocked(ctx context.Context, session *sessionS
 	}
 	session.setTitleIfEmpty(sessionTitleFromEnvelope(envelope))
 	return s.finishAgentTurnLocked(ctx, session, turnID, envelope, pending.RuntimeContext.Clone(), resumePriorMessageCount)
+}
+
+func (s *Service) reconcileExpiredPermissionResume(session *sessionState, now time.Time) {
+	if session == nil {
+		return
+	}
+	pending := session.agent.PendingResumeState()
+	if pending == nil || strings.TrimSpace(pending.RequestID) == "" {
+		return
+	}
+	requestID := strings.TrimSpace(pending.RequestID)
+	for _, item := range session.agent.PendingPermissions(session.id) {
+		if strings.TrimSpace(item.ID) == requestID {
+			return
+		}
+	}
+	session.updateTurnPermissionStatus(requestID, tools.PermissionStatusExpired, now)
+	session.agent.AppendRuntimeFeedback("The previously blocked tool permission expired before it was approved. Do not retry that blocked tool call automatically. Continue from the current transcript with a safer alternative, or ask for fresh approval if the tool call is still necessary.")
+	session.agent.ClearPendingResume()
+	_ = s.writeSessionTurns(session)
 }
 
 // PostRuntimeReply appends a background/runtime assistant reply into an existing session.
@@ -3303,8 +3345,14 @@ func (s *Service) ApprovePermission(ctx context.Context, sessionID, requestID st
 	if err != nil {
 		return tools.PermissionResolution{}, err
 	}
+	now := s.now()
+	resolvedRequestID := strings.TrimSpace(resolution.RequestID)
+	if resolvedRequestID == "" {
+		resolvedRequestID = strings.TrimSpace(requestID)
+	}
+	session.updateTurnPermissionStatus(resolvedRequestID, tools.PermissionStatusApproved, now)
 	s.appendPermissionAuditEvent("approve_permission", "info", sessionID, resolution)
-	if session.agent.PendingResumeState() != nil {
+	if pending := session.agent.PendingResumeState(); pending != nil && strings.TrimSpace(pending.RequestID) == resolvedRequestID {
 		beforeMessages := session.agent.GetMessages()
 		beforeCount := len(beforeMessages)
 		resumeStart := beforeCount
@@ -3328,6 +3376,9 @@ func (s *Service) ApprovePermission(ctx context.Context, sessionID, requestID st
 		if resumeErr != nil {
 			resolution.ResumeStatus = "error"
 			resolution.ResumeError = resumeErr.Error()
+		} else {
+			resolution.Status = tools.PermissionStatusResumed
+			session.updateTurnPermissionStatus(resolvedRequestID, tools.PermissionStatusResumed, s.now())
 		}
 	} else if jobID := subagentJobIDFromPermissionRequest(resolution.Request); jobID != "" {
 		resolution.Resumed = true
@@ -3336,6 +3387,8 @@ func (s *Service) ApprovePermission(ctx context.Context, sessionID, requestID st
 			resolution.ResumeStatus = "error"
 			resolution.ResumeError = resumeErr.Error()
 		} else {
+			resolution.Status = tools.PermissionStatusResumed
+			session.updateTurnPermissionStatus(resolvedRequestID, tools.PermissionStatusResumed, s.now())
 			if status := strings.TrimSpace(view.Status); status != "" {
 				resolution.ResumeStatus = "subagent_" + status
 			} else {
@@ -3346,6 +3399,9 @@ func (s *Service) ApprovePermission(ctx context.Context, sessionID, requestID st
 		if err := s.touchSession(session, s.now()); err != nil {
 			return tools.PermissionResolution{}, err
 		}
+	}
+	if lockedHere {
+		_ = s.writeSessionTurns(session)
 	}
 	return resolution, nil
 }
@@ -3376,11 +3432,19 @@ func (s *Service) DenyPermission(ctx context.Context, sessionID, requestID, reas
 		return tools.PermissionResolution{}, err
 	}
 	s.appendPermissionAuditEvent("deny_permission", "warning", sessionID, resolution)
-	if pending := session.agent.PendingResumeState(); pending != nil && strings.TrimSpace(pending.RequestID) == strings.TrimSpace(requestID) {
+	now := s.now()
+	resolvedRequestID := strings.TrimSpace(resolution.RequestID)
+	if resolvedRequestID == "" {
+		resolvedRequestID = strings.TrimSpace(requestID)
+	}
+	session.updateTurnPermissionStatus(resolvedRequestID, tools.PermissionStatusDenied, now)
+	if pending := session.agent.PendingResumeState(); pending != nil && strings.TrimSpace(pending.RequestID) == resolvedRequestID {
+		session.agent.AppendRuntimeFeedback("The previously blocked tool permission was denied. Do not retry that blocked tool call. Explain the denial and continue with a safer alternative if possible.")
 		session.agent.ClearPendingResume()
 	}
+	_ = s.writeSessionTurns(session)
 	if lockedHere {
-		if err := s.touchSession(session, s.now()); err != nil {
+		if err := s.touchSession(session, now); err != nil {
 			return tools.PermissionResolution{}, err
 		}
 		return resolution, nil
@@ -5009,27 +5073,30 @@ func (s *Service) snapshotFromSession(session *sessionState) Snapshot {
 	session.mu.RUnlock()
 
 	modelMessages := session.agent.GetMessages()
+	pendingPermissions := session.agent.PendingPermissions(session.id)
+	turns := session.snapshotTurnRecords(snapshotTurnLimit)
 	return Snapshot{
-		SessionID:          session.id,
-		Locator:            locator,
-		Messages:           modelMessages,
-		DisplayMessages:    s.displayMessages(modelMessages),
-		Tasks:              session.agent.TaskMgr().List(),
-		Todos:              session.agent.TodoMgr().List(),
-		Team:               session.agent.TeamMgr().List(),
-		ActiveSkills:       session.agent.ActiveSkillNames(),
-		ToolCatalog:        session.agent.ToolCatalog(),
-		PendingPermissions: session.agent.PendingPermissions(session.id),
-		Timeline:           session.timeline.Entries(snapshotTimelineLimit),
-		Turns:              session.snapshotTurnRecords(snapshotTurnLimit),
-		Running:            running,
-		ActiveTurnID:       activeTurnID,
-		ActivePhase:        activePhase,
-		Identity:           identity,
-		ModelProfileID:     modelProfileID,
-		ReasoningEffort:    reasoningEffort,
-		QueuedTurns:        session.snapshotQueuedTurns(snapshotTurnLimit),
-		UpdatedAt:          updatedAt,
+		SessionID:               session.id,
+		Locator:                 locator,
+		Messages:                modelMessages,
+		DisplayMessages:         s.displayMessages(modelMessages),
+		Tasks:                   session.agent.TaskMgr().List(),
+		Todos:                   session.agent.TodoMgr().List(),
+		Team:                    session.agent.TeamMgr().List(),
+		ActiveSkills:            session.agent.ActiveSkillNames(),
+		ToolCatalog:             session.agent.ToolCatalog(),
+		PendingPermissions:      pendingPermissions,
+		ActivePermissionBlocker: activePermissionBlocker(pendingPermissions, turns, s.now()),
+		Timeline:                session.timeline.Entries(snapshotTimelineLimit),
+		Turns:                   turns,
+		Running:                 running,
+		ActiveTurnID:            activeTurnID,
+		ActivePhase:             activePhase,
+		Identity:                identity,
+		ModelProfileID:          modelProfileID,
+		ReasoningEffort:         reasoningEffort,
+		QueuedTurns:             session.snapshotQueuedTurns(snapshotTurnLimit),
+		UpdatedAt:               updatedAt,
 	}
 }
 
@@ -5039,6 +5106,45 @@ func (s *Service) displayMessages(messages []protocol.Message) []protocol.Messag
 		return nil
 	}
 	return expanded
+}
+
+func activePermissionBlocker(pending []tools.PendingPermission, turns []TurnRecord, now time.Time) *PermissionBlocker {
+	if len(pending) == 0 {
+		return nil
+	}
+	item := pending[0]
+	for _, candidate := range pending {
+		if candidate.CreatedAt.Before(item.CreatedAt) {
+			item = candidate
+		}
+	}
+	turnID := ""
+	for i := len(turns) - 1; i >= 0; i-- {
+		if strings.TrimSpace(turns[i].BlockedByPermissionID) == strings.TrimSpace(item.ID) || strings.TrimSpace(turns[i].PendingRequestID) == strings.TrimSpace(item.ID) {
+			turnID = strings.TrimSpace(turns[i].ID)
+			break
+		}
+	}
+	status := item.Status
+	if status == "" {
+		status = tools.PermissionStatusPending
+	}
+	return &PermissionBlocker{
+		RequestID: strings.TrimSpace(item.ID),
+		Status:    status,
+		TurnID:    turnID,
+		Intent:    strings.TrimSpace(tools.PermissionIntentSummary(item)),
+		Risk:      strings.TrimSpace(tools.PermissionRiskSummary(item.Request)),
+		Expiry:    strings.TrimSpace(tools.PermissionExpirySummary(item, now)),
+		ToolName:  strings.TrimSpace(item.Request.ToolName),
+		Action:    strings.TrimSpace(item.Request.Action),
+		Command:   strings.TrimSpace(item.Request.Command),
+		Paths:     append([]string{}, item.Request.Paths...),
+		Source:    strings.TrimSpace(item.Request.Source),
+		Sender:    strings.TrimSpace(item.Request.Sender),
+		CreatedAt: item.CreatedAt,
+		ExpiresAt: item.ExpiresAt,
+	}
 }
 
 func (s *Service) expandSummaryMessages(messages []protocol.Message, seen map[string]struct{}) []protocol.Message {
@@ -5476,6 +5582,10 @@ func (s *sessionState) updateTurnStatus(turnID, status, pendingRequestID, errorT
 	record.Status = status
 	record.UpdatedAt = now
 	record.PendingRequestID = strings.TrimSpace(pendingRequestID)
+	if record.PendingRequestID != "" {
+		record.BlockedByPermissionID = record.PendingRequestID
+		record.PermissionStatus = tools.PermissionStatusPending
+	}
 	record.Error = strings.TrimSpace(errorText)
 	if isTerminalTurnStatus(status) {
 		completedAt := now
@@ -5489,6 +5599,23 @@ func (s *sessionState) updateTurnStatus(turnID, status, pendingRequestID, errorT
 		s.turns = append(s.turns, record)
 	}
 	s.turns = trimTurnRecords(s.turns, persistedTurnLimit)
+}
+
+func (s *sessionState) updateTurnPermissionStatus(requestID string, status tools.PermissionStatus, now time.Time) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" || status == "" {
+		return
+	}
+	s.turnsMu.Lock()
+	defer s.turnsMu.Unlock()
+	for idx := range s.turns {
+		if strings.TrimSpace(s.turns[idx].BlockedByPermissionID) != requestID && strings.TrimSpace(s.turns[idx].PendingRequestID) != requestID {
+			continue
+		}
+		s.turns[idx].BlockedByPermissionID = requestID
+		s.turns[idx].PermissionStatus = status
+		s.turns[idx].UpdatedAt = now
+	}
 }
 
 func (s *sessionState) markTurnResumeAvailable(turnID, hint string, now time.Time) {
@@ -5824,6 +5951,7 @@ func normalizeTurnRecords(records []TurnRecord) []TurnRecord {
 		record.Sender = strings.TrimSpace(record.Sender)
 		record.Summary = turnSummary(record.Summary)
 		record.PendingRequestID = strings.TrimSpace(record.PendingRequestID)
+		record.BlockedByPermissionID = strings.TrimSpace(record.BlockedByPermissionID)
 		record.Error = strings.TrimSpace(record.Error)
 		record.RetryOf = strings.TrimSpace(record.RetryOf)
 		record.CanRetry = false
@@ -5930,6 +6058,12 @@ func mergeTurnRecord(existing, next TurnRecord) TurnRecord {
 	}
 	if next.PendingRequestID != "" {
 		merged.PendingRequestID = next.PendingRequestID
+	}
+	if next.BlockedByPermissionID != "" {
+		merged.BlockedByPermissionID = next.BlockedByPermissionID
+	}
+	if next.PermissionStatus != "" {
+		merged.PermissionStatus = next.PermissionStatus
 	}
 	if next.Error != "" {
 		merged.Error = next.Error

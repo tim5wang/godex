@@ -117,6 +117,10 @@ type stopAfterToolError interface {
 	StopConversationAfterTool() bool
 }
 
+type permissionPendingToolError interface {
+	PendingPermissionRequestID() string
+}
+
 // Runner executes the shared assistant/tool loop.
 type Runner struct {
 	Caller                     Caller
@@ -941,6 +945,14 @@ func formatToolFailureOutput(name string, err error, execution ToolExecutionResu
 		"tool":          strings.TrimSpace(name),
 		"error":         strings.TrimSpace(err.Error()),
 		"recovery_hint": hint,
+	}
+	var pending permissionPendingToolError
+	if errors.As(err, &pending) {
+		code = "permission_pending"
+		payload["status"] = "permission_pending"
+		payload["code"] = code
+		payload["request_id"] = strings.TrimSpace(pending.PendingPermissionRequestID())
+		payload["recovery_hint"] = "Wait for approval before retrying this exact tool call. The user can approve once, pattern, timebox, count, or session scope."
 	}
 	if strings.TrimSpace(execution.Output) != "" {
 		payload["output"] = execution.Output

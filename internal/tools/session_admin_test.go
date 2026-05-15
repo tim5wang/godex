@@ -119,6 +119,19 @@ func TestManageSessionToolApproveRequiresRequestID(t *testing.T) {
 	}
 }
 
+func TestManageSessionToolApproveSupportsTaskScope(t *testing.T) {
+	runtime := &fakeSessionAdminRuntime{}
+	tool := NewManageSessionTool(runtime)
+	ctx := WithSessionContext(context.Background(), automation.SessionContext{SessionID: "session-1"})
+
+	if _, err := tool.Execute(ctx, map[string]interface{}{"action": "approve_permission", "request_id": "perm-1", "scope": "task"}); err != nil {
+		t.Fatalf("approve task scope: %v", err)
+	}
+	if runtime.lastID != "perm-1" || runtime.lastScope != PermissionGrantTask {
+		t.Fatalf("expected task scope approval, id=%q scope=%q", runtime.lastID, runtime.lastScope)
+	}
+}
+
 func TestManageSessionToolMutationDeniedDuringHeartbeatRuns(t *testing.T) {
 	handler := NewToolHandler()
 	handler.AddBeforeInterceptors(NewPermissionInterceptor(NewDefaultPermissionManager()))

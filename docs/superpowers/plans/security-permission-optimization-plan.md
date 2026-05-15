@@ -40,6 +40,7 @@ This plan keeps the current security baseline but improves the approval workflow
   - Expired pending requests are pruned from `Evaluate()`, `ListPending()`, `ExportSession()`, and approval attempts fail clearly.
 - Add grant scopes:
   - `once`: exact fingerprint, one use.
+  - `task`: exact fingerprint, current task/turn only.
   - `count:N`: exact fingerprint, N uses.
   - `timebox:duration`: exact fingerprint until expiry, for example `timebox:10m`.
   - `pattern`: command/path pattern level for bash/background/file actions.
@@ -62,8 +63,8 @@ This plan keeps the current security baseline but improves the approval workflow
   - Native approval keeps once/session because ACP option kinds are limited; fallback text advertises richer slash commands.
 - Slash commands:
   - `/approve` defaults to once.
-  - `/approve session`, `/approve pattern`, `/approve count:5`, `/approve timebox:10m`.
-  - `/approve <id> pattern`, `/approve <id> count:5`, `/approve <id> timebox:10m`.
+  - `/approve task`, `/approve session`, `/approve pattern`, `/approve count:5`, `/approve timebox:10m`.
+  - `/approve <id> task`, `/approve <id> pattern`, `/approve <id> count:5`, `/approve <id> timebox:10m`.
 
 ### Phase 3: Audit And Diagnostics
 
@@ -96,6 +97,8 @@ This plan keeps the current security baseline but improves the approval workflow
   - `/approve status` is a read-only diagnostics alias for listing approval blockers with status, intent, risk, expiry, source, and exact approve/deny commands.
   - `/deny` without a request id denies the only pending approval when exactly one exists; with multiple pending approvals it lists blockers instead of guessing.
   - REPL pending approval fallback includes the same status, intent, risk, expiry, and points users to `/approve status`.
+  - `/approve task` grants the exact pending request only for the originating turn. The backend injects `turn_id` into runtime permission requests so a later turn must request fresh approval.
+  - TUI uses `u` for task-scope approval because `k` is already feed navigation.
 
 ## Deferred Work
 
@@ -124,6 +127,7 @@ This plan keeps the current security baseline but improves the approval workflow
   - Snapshot exposes `active_permission_blocker`; turn records expose `blocked_by_permission_id` and `permission_status`.
   - `/approve status` must not approve anything; it only lists current pending approval blockers and actionable commands.
   - `/deny` with no arguments denies only when there is exactly one pending approval; otherwise it must stay read-only.
+  - `/approve task` allows a repeated matching request in the same turn, but not in a later turn.
 - Regression:
   - `go test ./internal/core/conversation ./internal/toolruntime ./internal/app ./internal/tui ./internal/acp/server ./internal/services/backend -count=1`
   - `go test ./...`

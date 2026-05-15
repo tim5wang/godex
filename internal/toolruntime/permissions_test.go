@@ -819,6 +819,38 @@ func TestPermissionManagerTimeboxApprovalExpires(t *testing.T) {
 	}
 }
 
+func TestPermissionManagerTaskApprovalStaysWithinTurn(t *testing.T) {
+	manager := NewDefaultPermissionManager()
+	req := PermissionRequest{
+		SessionID: "web-session",
+		TurnID:    "turn-1",
+		Source:    string(message.SourceWeb),
+		ToolName:  "write_file",
+		Action:    "write",
+		Paths:     []string{"notes/todo.txt"},
+		Mutation:  true,
+	}
+	result := manager.Evaluate(req)
+	if result.Decision != PermissionPending {
+		t.Fatalf("expected approval request, got %+v", result)
+	}
+	resolution, err := manager.ApprovePending("web-session", result.RequestID, PermissionGrantTask)
+	if err != nil {
+		t.Fatalf("approve task scope: %v", err)
+	}
+	if resolution.Scope != PermissionGrantTask {
+		t.Fatalf("expected task scope in resolution, got %+v", resolution)
+	}
+	if sameTurn := manager.Evaluate(req); sameTurn.Decision != PermissionAllow {
+		t.Fatalf("expected same turn request to allow, got %+v", sameTurn)
+	}
+	nextTurnReq := req
+	nextTurnReq.TurnID = "turn-2"
+	if nextTurn := manager.Evaluate(nextTurnReq); nextTurn.Decision != PermissionPending {
+		t.Fatalf("expected next turn to require fresh approval, got %+v", nextTurn)
+	}
+}
+
 func TestPermissionManagerPatternApprovalCoversSimilarShellCommands(t *testing.T) {
 	manager := NewDefaultPermissionManager()
 	req := PermissionRequest{

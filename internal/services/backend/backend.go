@@ -1277,6 +1277,10 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	s.reconcileExpiredPermissionResume(session, now)
 	turnID := session.nextTurnID(now)
 	runtimeCtx := s.buildRuntimeContext(sessionID, session.locator, envelope)
+	if runtimeCtx.Metadata == nil {
+		runtimeCtx.Metadata = map[string]string{}
+	}
+	runtimeCtx.Metadata["turn_id"] = turnID
 	attachSessionGraphContext(session, &runtimeCtx)
 	runtimeCtx.ProjectLedger = s.compactProjectLedgerForSession(sessionID)
 	priorMessageCount := len(session.agent.GetMessages())

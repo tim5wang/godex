@@ -657,7 +657,8 @@ func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if _, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "run command -v sh", time.Now())); err != nil {
+	result, err := service.Submit(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "run command -v sh", time.Now()))
+	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 
@@ -670,6 +671,9 @@ func TestSnapshotIncludesPendingPermissionsAndApprovalClearsThem(t *testing.T) {
 	}
 	if snapshot.PendingPermissions[0].Request.ToolName != "bash" {
 		t.Fatalf("unexpected pending permission: %+v", snapshot.PendingPermissions[0])
+	}
+	if snapshot.PendingPermissions[0].Request.TurnID != result.TurnID {
+		t.Fatalf("expected pending permission to carry turn id %q, got %+v", result.TurnID, snapshot.PendingPermissions[0].Request)
 	}
 	if snapshot.ActivePermissionBlocker == nil || snapshot.ActivePermissionBlocker.RequestID != snapshot.PendingPermissions[0].ID {
 		t.Fatalf("expected active permission blocker for pending request, got %+v", snapshot.ActivePermissionBlocker)

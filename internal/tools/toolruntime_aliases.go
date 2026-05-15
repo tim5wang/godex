@@ -55,6 +55,7 @@ const (
 	PermissionStatusResumed  = toolruntime.PermissionStatusResumed
 
 	PermissionGrantOnce    = toolruntime.PermissionGrantOnce
+	PermissionGrantTask    = toolruntime.PermissionGrantTask
 	PermissionGrantSession = toolruntime.PermissionGrantSession
 	PermissionGrantPattern = toolruntime.PermissionGrantPattern
 

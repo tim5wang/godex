@@ -243,7 +243,7 @@ func TestPermissionCollapsedLineShowsRequestAndSessionDetails(t *testing.T) {
 	m.activeWorkbenchTab = workbenchTabLogs
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
 	view := m.viewport.View()
-	for _, want := range []string{"perm-1", "session-1", "bash", "execute", "git status --sh", "Agent wants to run shell command", "medium risk", "a once", "p pattern", "t timebox", "s session", "x deny"} {
+	for _, want := range []string{"perm-1", "session-1", "bash", "execute", "git status --sh", "Agent wants to run shell command", "medium risk", "a once", "u task", "p pattern", "t timebox", "s session", "x deny"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected permission line to contain %q, got %q", want, view)
 		}
@@ -1310,6 +1310,34 @@ func TestPermissionShortcutApprovesAndRefreshesSnapshot(t *testing.T) {
 	}
 	if strings.Contains(m.viewport.View(), "pending approval") {
 		t.Fatalf("expected pending permission to disappear after approval, got %q", m.viewport.View())
+	}
+}
+
+func TestPermissionTaskShortcutApprovesTaskScope(t *testing.T) {
+	backend := &fakeBackend{
+		snapshot: rtbackend.Snapshot{
+			Locator: rtbackend.SessionLocator{Channel: "web", Key: "default"},
+			PendingPermissions: []tools.PendingPermission{
+				{
+					ID:      "perm-1",
+					Request: tools.PermissionRequest{ToolName: "bash", Command: "pwd", Source: string(message.SourceWeb)},
+				},
+			},
+		},
+	}
+	m := newModel(context.Background(), &config.Config{Model: "test-model", WorkspaceDir: "/workspace", LeadName: "lead"}, backend, time.Now, "session-1", backend.snapshot)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	m.focus = focusFeed
+	m.selectedItemID = "permission:perm-1"
+
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if cmd == nil {
+		t.Fatal("expected task approval command")
+	}
+	pumpModelCmd(m, cmd)
+
+	if len(backend.approved) != 1 || backend.approved[0].Scope != tools.PermissionGrantTask {
+		t.Fatalf("expected task scope approval, got %+v", backend.approved)
 	}
 }
 

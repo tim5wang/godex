@@ -41,6 +41,7 @@ type PermissionGrantScope string
 
 const (
 	PermissionGrantOnce    PermissionGrantScope = "once"
+	PermissionGrantTask    PermissionGrantScope = "task"
 	PermissionGrantSession PermissionGrantScope = "session"
 	PermissionGrantPattern PermissionGrantScope = "pattern"
 )
@@ -106,6 +107,7 @@ type InteractiveApprovalPolicy struct {
 // PermissionRequest is the normalized security context for one tool call.
 type PermissionRequest struct {
 	SessionID string                 `json:"session_id,omitempty"`
+	TurnID    string                 `json:"turn_id,omitempty"`
 	Source    string                 `json:"source,omitempty"`
 	Sender    string                 `json:"sender,omitempty"`
 	ToolName  string                 `json:"tool_name"`
@@ -571,7 +573,7 @@ func (m *PermissionManager) ApprovePending(sessionID, requestID string, scope Pe
 	if parsed.kind == "" {
 		parsed.kind = PermissionGrantSession
 	}
-	if parsed.kind != PermissionGrantOnce && parsed.kind != PermissionGrantSession && parsed.kind != PermissionGrantPattern && parsed.kind != "count" && parsed.kind != "timebox" {
+	if parsed.kind != PermissionGrantOnce && parsed.kind != PermissionGrantTask && parsed.kind != PermissionGrantSession && parsed.kind != PermissionGrantPattern && parsed.kind != "count" && parsed.kind != "timebox" {
 		return PermissionResolution{}, fmt.Errorf("unsupported permission grant scope %q", scope)
 	}
 	m.mu.Lock()
@@ -906,6 +908,7 @@ func markApprovedShellCommand(call *ToolCall, req PermissionRequest) {
 func PermissionRequestFromCall(call ToolCall) PermissionRequest {
 	req := PermissionRequest{
 		SessionID: strings.TrimSpace(call.SessionContext.SessionID),
+		TurnID:    strings.TrimSpace(call.SessionContext.Metadata["turn_id"]),
 		Source:    strings.TrimSpace(call.SessionContext.Source),
 		Sender:    strings.TrimSpace(call.SessionContext.Sender),
 		ToolName:  strings.TrimSpace(call.Name),
@@ -1178,6 +1181,9 @@ func permissionDecisionKey(req PermissionRequest) string {
 
 func permissionDecisionKeys(req PermissionRequest) []string {
 	keys := []string{permissionDecisionKey(req)}
+	if task := permissionTaskKey(req); task != "" && task != keys[0] {
+		keys = append(keys, task)
+	}
 	if broad := permissionSessionToolKey(req); broad != "" && broad != keys[0] {
 		keys = append(keys, broad)
 	}
@@ -1194,12 +1200,25 @@ func permissionOverrideKey(req PermissionRequest, scope PermissionGrantScope) st
 			return pattern
 		}
 	}
+	if err == nil && parsed.kind == PermissionGrantTask {
+		if task := permissionTaskKey(req); task != "" {
+			return task
+		}
+	}
 	if scope == PermissionGrantSession {
 		if broad := permissionSessionToolKey(req); broad != "" {
 			return broad
 		}
 	}
 	return permissionDecisionKey(req)
+}
+
+func permissionTaskKey(req PermissionRequest) string {
+	turnID := strings.TrimSpace(req.TurnID)
+	if turnID == "" {
+		return ""
+	}
+	return strings.TrimSpace(req.SessionID) + "|task:" + turnID + "|" + permissionDecisionKey(req)
 }
 
 func permissionSessionToolKey(req PermissionRequest) string {
@@ -1283,7 +1302,7 @@ func storedPermissionGrantScope(state PermissionOverrideState) PermissionGrantSc
 	scope := PermissionGrantScope(strings.TrimSpace(state.Result.Scope))
 	if parsed, err := parsePermissionGrantScope(scope); err == nil {
 		switch parsed.kind {
-		case PermissionGrantOnce, PermissionGrantSession, PermissionGrantPattern, "count", "timebox":
+		case PermissionGrantOnce, PermissionGrantTask, PermissionGrantSession, PermissionGrantPattern, "count", "timebox":
 			return scope
 		}
 	}
@@ -1298,6 +1317,8 @@ func parsePermissionGrantScope(scope PermissionGrantScope) (parsedPermissionGran
 	switch raw {
 	case "", string(PermissionGrantOnce):
 		return parsedPermissionGrant{kind: PermissionGrantOnce}, nil
+	case string(PermissionGrantTask):
+		return parsedPermissionGrant{kind: PermissionGrantTask}, nil
 	case string(PermissionGrantSession):
 		return parsedPermissionGrant{kind: PermissionGrantSession}, nil
 	case string(PermissionGrantPattern):
@@ -1752,6 +1773,7 @@ func clonePendingPermission(input PendingPermission) PendingPermission {
 func clonePermissionRequest(input PermissionRequest) PermissionRequest {
 	return PermissionRequest{
 		SessionID: input.SessionID,
+		TurnID:    input.TurnID,
 		Source:    input.Source,
 		Sender:    input.Sender,
 		ToolName:  input.ToolName,

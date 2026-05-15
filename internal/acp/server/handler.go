@@ -397,6 +397,7 @@ func renderPendingApproval(requestID string, items []tools.PendingPermission) st
 		}
 	}
 	b.WriteString("\nApprove once: /approve")
+	b.WriteString("\nApprove current task: /approve task")
 	b.WriteString("\nApprove pattern: /approve pattern")
 	b.WriteString("\nApprove 10 minutes: /approve timebox:10m")
 	b.WriteString("\nApprove 5 uses: /approve count:5")

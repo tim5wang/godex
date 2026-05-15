@@ -183,7 +183,7 @@ func NewManageSessionTool(runtime SessionAdminRuntime) Tool {
 			"request_id": map[string]string{"type": "string"},
 			"scope": map[string]interface{}{
 				"type": "string",
-				"enum": []string{string(PermissionGrantOnce), string(PermissionGrantSession)},
+				"enum": []string{string(PermissionGrantOnce), string(PermissionGrantTask), string(PermissionGrantSession), string(PermissionGrantPattern)},
 			},
 			"reveal": map[string]string{"type": "boolean"},
 			"reason": map[string]string{"type": "string"},
@@ -240,8 +240,13 @@ func NewManageSessionTool(runtime SessionAdminRuntime) Tool {
 				return ToolResult{}, fmt.Errorf("missing request_id for approve_permission")
 			}
 			scope := PermissionGrantOnce
-			if strings.EqualFold(strings.TrimSpace(args.Scope), string(PermissionGrantSession)) {
+			switch strings.ToLower(strings.TrimSpace(args.Scope)) {
+			case string(PermissionGrantTask):
+				scope = PermissionGrantTask
+			case string(PermissionGrantSession):
 				scope = PermissionGrantSession
+			case string(PermissionGrantPattern):
+				scope = PermissionGrantPattern
 			}
 			result, err := runtime.ApprovePermission(ctx, sessionID, runtimeCtx, requestID, scope)
 			if err != nil {

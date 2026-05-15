@@ -162,6 +162,7 @@ func renderPendingApproval(requestID, sessionID string, items []tools.PendingPer
 		"",
 		"Inspect approvals: /approve status",
 		"Approve once: /approve",
+		"Approve current task: /approve task",
 		"Approve for session: /approve session",
 		"Deny: /deny "+requestID,
 	)

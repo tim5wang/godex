@@ -143,7 +143,7 @@ func permissionDetailText(item feedItem) string {
 	if len(request.Input) > 0 {
 		sections = append(sections, "Input\n"+formatPermissionInput(request.Input, true))
 	}
-	sections = append(sections, "Shortcuts\na allow once\np allow pattern\nt allow 10m\ns allow session\nx deny")
+	sections = append(sections, "Shortcuts\na allow once\nu allow task\np allow pattern\nt allow 10m\ns allow session\nx deny")
 	return strings.Join(sections, "\n\n")
 }
 
@@ -172,13 +172,13 @@ func permissionHeaderSummary(item feedItem) string {
 	} else if summary := strings.TrimSpace(item.Summary); summary != "" {
 		parts = append(parts, summary)
 	}
-	parts = append(parts, "a once", "p pattern", "t timebox", "s session", "x deny")
+	parts = append(parts, "a once", "u task", "p pattern", "t timebox", "s session", "x deny")
 	return strings.Join(parts, " · ")
 }
 
 func permissionCompactDetailText(pending tools.PendingPermission) string {
 	parts := make([]string, 0, 3)
-	parts = append(parts, "a once", "p pattern", "t timebox", "s session", "x deny")
+	parts = append(parts, "a once", "u task", "p pattern", "t timebox", "s session", "x deny")
 	if risk := strings.TrimSpace(tools.PermissionRiskSummary(pending.Request)); risk != "" {
 		parts = append(parts, risk)
 	}

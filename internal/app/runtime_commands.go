@@ -302,6 +302,8 @@ func resolveApproveCommandArgs(args []string, items []tools.PendingPermission) (
 		switch nextScope {
 		case "", string(tools.PermissionGrantOnce):
 			scope = tools.PermissionGrantOnce
+		case string(tools.PermissionGrantTask):
+			scope = tools.PermissionGrantTask
 		case string(tools.PermissionGrantSession):
 			scope = tools.PermissionGrantSession
 		case string(tools.PermissionGrantPattern):
@@ -319,6 +321,7 @@ func resolveApproveCommandArgs(args []string, items []tools.PendingPermission) (
 func isApproveScope(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	return value == string(tools.PermissionGrantOnce) ||
+		value == string(tools.PermissionGrantTask) ||
 		value == string(tools.PermissionGrantSession) ||
 		value == string(tools.PermissionGrantPattern) ||
 		strings.HasPrefix(value, "count:") ||
@@ -326,7 +329,7 @@ func isApproveScope(value string) bool {
 }
 
 func approveUsage() string {
-	return "usage: /approve [status|list|request-id] [once|session|pattern|count:N|timebox:10m]"
+	return "usage: /approve [status|list|request-id] [once|task|session|pattern|count:N|timebox:10m]"
 }
 
 func isApproveStatusArg(value string) bool {
@@ -669,6 +672,7 @@ func renderPendingPermissions(items []tools.PendingPermission) string {
 		lines = append(lines, line)
 		lines = append(lines,
 			fmt.Sprintf("  approve once: /approve %s", item.ID),
+			fmt.Sprintf("  approve task: /approve %s task", item.ID),
 			fmt.Sprintf("  approve pattern: /approve %s pattern", item.ID),
 			fmt.Sprintf("  approve 10m: /approve %s timebox:10m", item.ID),
 			fmt.Sprintf("  deny: /deny %s", item.ID),

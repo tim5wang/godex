@@ -515,9 +515,11 @@ func TestApproveHandlerAcceptsRicherApprovalScopes(t *testing.T) {
 		scope tools.PermissionGrantScope
 	}{
 		{name: "pattern implicit id", args: []string{"pattern"}, scope: tools.PermissionGrantPattern},
+		{name: "task implicit id", args: []string{"task"}, scope: tools.PermissionGrantTask},
 		{name: "count implicit id", args: []string{"count:5"}, scope: tools.PermissionGrantScope("count:5")},
 		{name: "timebox implicit id", args: []string{"timebox:10m"}, scope: tools.PermissionGrantScope("timebox:10m")},
 		{name: "pattern explicit id", args: []string{"perm-1", "pattern"}, scope: tools.PermissionGrantPattern},
+		{name: "task explicit id", args: []string{"perm-1", "task"}, scope: tools.PermissionGrantTask},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adminBackend := &fakeSessionAdminBackend{

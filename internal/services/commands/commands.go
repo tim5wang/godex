@@ -81,7 +81,7 @@ func AvailableMetadata() []CommandMetadata {
 		{Name: "memory-restore", Description: "restore a memory audit snapshot", InputHint: "<audit-id> [before|after]"},
 		{Name: "ledger", Description: "show the current long-task project ledger"},
 		{Name: "model", Description: "list models, switch this session, or update the default model", InputHint: "list|use <profile-id>|default <profile-or-model>|get"},
-		{Name: "approve", Description: "approve the current pending permission request, or inspect approval blockers", InputHint: "[status|list|request-id] [once|session|pattern|count:N|timebox:10m]"},
+		{Name: "approve", Description: "approve the current pending permission request, or inspect approval blockers", InputHint: "[status|list|request-id] [once|task|session|pattern|count:N|timebox:10m]"},
 		{Name: "deny", Description: "deny a pending permission request for this session", InputHint: "[request-id] [reason...]"},
 		{Name: "session", Description: "inspect or create sessions", InputHint: "current|list [channel]|new [key|channel:key]|context|tokens|auth ..."},
 		{Name: "history", Description: "inspect or search session history", InputHint: "show|tail [count]|search <query> [scope=...] [limit=N] [role=...]"},

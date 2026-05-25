@@ -97,10 +97,28 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = "Command completed"
 		return m, tea.Batch(m.fetchSnapshotCmd(), m.fetchContextSummaryCmd(), m.fetchWorkbenchCmd())
+	case bashChunkMsg:
+		// streaming update: upsert the running feed item with latest output
+		m.upsertOverlay(feedItem{
+			ID:          "bash:" + msg.command,
+			Kind:        feedCommand,
+			Title:       "/bash (running)",
+			Body:        msg.chunk,
+			Summary:     firstSummaryLine(msg.chunk),
+			RuntimeOnly: true,
+			CreatedAt:   m.now(),
+		})
+		m.refreshViewport(false)
+		// continue listening for more chunks
+		if m.bashCh != nil {
+			return m, listenBashStream(m.bashCh)
+		}
+		return m, nil
 	case bashFinishedMsg:
 		m.submitting = false
 		m.stopWorking()
 		m.bashCancel = nil
+		m.bashCh = nil
 		kind := feedCommand
 		title := "/bash"
 		body := msg.output
@@ -111,7 +129,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if body == "" {
 			body = "(no output)"
 		}
-		m.appendOverlay(feedItem{
+		m.upsertOverlay(feedItem{
 			ID:          "bash:" + msg.command,
 			Kind:        kind,
 			Title:       title,

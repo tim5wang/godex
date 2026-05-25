@@ -154,6 +154,7 @@ type model struct {
 	clipboardWrite func(string) error
 
 	bashCancel context.CancelFunc
+	bashCh     chan bashStreamEvent
 
 	inputHistory      []string
 	inputHistoryIndex int

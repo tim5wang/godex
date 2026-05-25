@@ -46,7 +46,7 @@ func TestToAPIMessagesPreservesToolResults(t *testing.T) {
 	}
 }
 
-func TestToAPIMessagesDropsUnsupportedBlocks(t *testing.T) {
+func TestToAPIMessagesRepairsUnsupportedBlocks(t *testing.T) {
 	messages := []Message{
 		NewMessage(RoleAssistant,
 			Block{Type: BlockType("thinking"), Text: "skip"},
@@ -58,8 +58,15 @@ func TestToAPIMessagesDropsUnsupportedBlocks(t *testing.T) {
 	if len(apiMessages) != 1 {
 		t.Fatalf("expected 1 api message, got %d", len(apiMessages))
 	}
-	if len(apiMessages[0].Content) != 1 || apiMessages[0].Content[0].Type != BlockText {
-		t.Fatalf("expected unsupported blocks to be filtered, got %+v", apiMessages[0].Content)
+	// Unsupported blocks are now repaired to text blocks instead of being dropped.
+	if len(apiMessages[0].Content) != 2 {
+		t.Fatalf("expected 2 blocks (repaired unsupported + keep), got %d: %+v", len(apiMessages[0].Content), apiMessages[0].Content)
+	}
+	if apiMessages[0].Content[0].Type != BlockText || apiMessages[0].Content[0].Text != "skip" {
+		t.Fatalf("expected unsupported thinking block repaired to text with 'skip', got %+v", apiMessages[0].Content[0])
+	}
+	if apiMessages[0].Content[1].Type != BlockText || apiMessages[0].Content[1].Text != "keep" {
+		t.Fatalf("expected keep text block preserved, got %+v", apiMessages[0].Content[1])
 	}
 }
 

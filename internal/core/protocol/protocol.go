@@ -245,7 +245,10 @@ func ToAPIMessages(messages []Message) []APIMessage {
 	for _, msg := range messages {
 		content := apiBlocks(msg.Content)
 		if len(content) == 0 {
-			continue
+			// Repair: don't skip the message; insert a placeholder so the
+			// conversation structure is preserved and the API never sees a
+			// message with a missing "content" field.
+			content = []Block{TextBlock("(message content unavailable)")}
 		}
 		apiMessage := APIMessage{Role: msg.Role, Content: content}
 		if msg.Metadata != nil && msg.Role == RoleAssistant {
@@ -302,9 +305,31 @@ func apiBlocks(blocks []Block) []Block {
 			result = append(result, ToolUseBlock(block.ID, block.Name, input))
 		case BlockToolResult:
 			result = append(result, ToolResultBlock(block.ToolUseID, block.Content))
+		default:
+			// Repair: convert unrecognized block types to text blocks
+			// so the message content is never silently lost.
+			fallback := blockTextOrDefault(block)
+			if fallback != "" {
+				result = append(result, TextBlock(fallback))
+			}
 		}
 	}
 	return result
+}
+
+// blockTextOrDefault extracts the best available text from any block,
+// used as a fallback when a block has an unrecognized type.
+func blockTextOrDefault(block Block) string {
+	if block.Text != "" {
+		return block.Text
+	}
+	if block.Content != "" {
+		return block.Content
+	}
+	if block.Name != "" {
+		return block.Name
+	}
+	return ""
 }
 
 func cloneMetadata(metadata *Metadata) *Metadata {

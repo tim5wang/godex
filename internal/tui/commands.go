@@ -3,16 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/services/commands"
+	"github.com/tim5wang/godex/internal/services/localbash"
 )
 
 func (m *model) submitComposer() tea.Cmd {
@@ -85,6 +83,12 @@ func (m *model) execLocalBash(line string) tea.Cmd {
 	}
 	shellCmd := strings.TrimSpace(raw[strings.Index(raw, " "):])
 
+	// determine shell: /bash → bash, /sh → sh
+	shellName := "sh"
+	if fields[0] == "/bash" {
+		shellName = "bash"
+	}
+
 	// cancel any previous still-running bash
 	if m.bashCancel != nil {
 		m.bashCancel()
@@ -93,128 +97,46 @@ func (m *model) execLocalBash(line string) tea.Cmd {
 
 	ctx, cancel := context.WithTimeout(m.ctx, bashTimeout)
 	m.bashCancel = cancel
-	m.status = "Running /bash (Ctrl+C to cancel)..."
+	m.status = "Running /" + shellName + " (Ctrl+C to cancel)..."
 	startCmd := m.startWorking(m.status)
 
 	// seed the feed item so we can see it's running
 	m.upsertOverlay(feedItem{
 		ID:          "bash:" + shellCmd,
 		Kind:        feedCommand,
-		Title:       "/bash (running)",
+		Title:       "/" + shellName + " (running)",
 		Body:        "Running...",
 		Summary:     "Running...",
 		RuntimeOnly: true,
 		CreatedAt:   m.now(),
 	})
 
-	// channel for streaming events from reader goroutine to main loop
-	ch := make(chan bashStreamEvent, 64)
-	m.bashCh = ch
+	// use shared localbash executor for streaming output
+	var outCh <-chan localbash.OutputChunk
+	if shellName == "bash" {
+		outCh = localbash.RunBash(ctx, m.cfg.WorkspaceDir, shellCmd)
+	} else {
+		outCh = localbash.Run(ctx, m.cfg.WorkspaceDir, shellCmd)
+	}
 
-	// launch reader goroutine
+	// bridge localbash.OutputChunk -> bashStreamEvent
+	bridgeCh := make(chan bashStreamEvent, 64)
+	m.bashCh = bridgeCh
 	go func() {
 		defer cancel()
-		defer close(ch)
-
-		cmd := exec.CommandContext(ctx, "sh", "-c", shellCmd)
-		cmd.Dir = m.cfg.WorkspaceDir
-
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			ch <- bashStreamEvent{command: shellCmd, final: true, exitCode: -1, err: err}
-			return
-		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			ch <- bashStreamEvent{command: shellCmd, final: true, exitCode: -1, err: err}
-			return
-		}
-
-		if err := cmd.Start(); err != nil {
-			ch <- bashStreamEvent{command: shellCmd, final: true, exitCode: -1, err: err}
-			return
-		}
-
-		var (
-			accumulated strings.Builder
-			mu          sync.Mutex
-		)
-
-		// read both pipes concurrently into accumulated
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() { defer wg.Done(); copyTo(&accumulated, &mu, stdout) }()
-		go func() { defer wg.Done(); copyTo(&accumulated, &mu, stderr) }()
-
-		// ticker to flush chunks periodically
-		ticker := time.NewTicker(bashChunkInterval)
-		defer ticker.Stop()
-
-		readDone := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(readDone)
-		}()
-
-	loop:
-		for {
-			select {
-			case <-ticker.C:
-				mu.Lock()
-				if accumulated.Len() > 0 {
-					ch <- bashStreamEvent{command: shellCmd, chunk: accumulated.String()}
-				}
-				mu.Unlock()
-			case <-readDone:
-				break loop
-			case <-ctx.Done():
-				// context cancelled (timeout or user), kill the process
-				if cmd.Process != nil {
-					cmd.Process.Kill()
-				}
-				break loop
+		defer close(bridgeCh)
+		for chunk := range outCh {
+			bridgeCh <- bashStreamEvent{
+				command:  chunk.Command,
+				chunk:    chunk.Output,
+				final:    chunk.Final,
+				exitCode: chunk.ExitCode,
+				err:      chunk.Err,
 			}
-		}
-
-		// drain remaining chunks after loop exit
-		mu.Lock()
-		finalOutput := accumulated.String()
-		mu.Unlock()
-
-		waitErr := cmd.Wait()
-		code := exitCode(waitErr)
-		if ctx.Err() != nil {
-			if finalOutput == "" {
-				finalOutput = "(cancelled)"
-			}
-			code = -1
-		}
-
-		ch <- bashStreamEvent{
-			command:  shellCmd,
-			chunk:    finalOutput,
-			final:    true,
-			exitCode: code,
-			err:      waitErr,
 		}
 	}()
 
-	return tea.Batch(startCmd, listenBashStream(ch))
-}
-
-func copyTo(dst *strings.Builder, mu *sync.Mutex, src io.Reader) {
-	buf := make([]byte, 4096)
-	for {
-		n, readErr := src.Read(buf)
-		if n > 0 {
-			mu.Lock()
-			dst.Write(buf[:n])
-			mu.Unlock()
-		}
-		if readErr != nil {
-			break
-		}
-	}
+	return tea.Batch(startCmd, listenBashStream(bridgeCh))
 }
 
 func listenBashStream(ch <-chan bashStreamEvent) tea.Cmd {
@@ -233,16 +155,6 @@ func listenBashStream(ch <-chan bashStreamEvent) tea.Cmd {
 		}
 		return bashChunkMsg{command: ev.command, chunk: ev.chunk}
 	}
-}
-
-func exitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return exitErr.ExitCode()
-	}
-	return -1
 }
 
 type bashChunkMsg struct {

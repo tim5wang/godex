@@ -872,6 +872,12 @@ export function ChatPage() {
       if (commandResult.dispatched_turn_id) {
         setRunningTurn(commandResult.dispatched_turn_id);
       }
+      // Show output for commands like /bash that don't dispatch a turn
+      if (commandResult.output && !commandResult.dispatched_turn_id) {
+        const maxLen = 2000;
+        const displayOutput = commandResult.output.length > maxLen ? commandResult.output.slice(0, maxLen) + `\n\n... (${commandResult.output.length - maxLen} more bytes)` : commandResult.output;
+        message.info(displayOutput, 6);
+      }
     } else {
       try {
         const attachments =

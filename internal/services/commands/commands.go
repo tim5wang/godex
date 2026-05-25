@@ -24,6 +24,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
 	"github.com/tim5wang/godex/internal/platform/stringutil"
+	"github.com/tim5wang/godex/internal/services/localbash"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -63,6 +64,8 @@ type CommandMetadata struct {
 // AvailableMetadata returns the stable list of built-in slash commands.
 func AvailableMetadata() []CommandMetadata {
 	items := []CommandMetadata{
+		{Name: "bash", Description: "run a shell command in the workspace without an LLM turn", InputHint: "<shell command>"},
+		{Name: "sh", Description: "alias for /bash", InputHint: "<shell command>"},
 		{Name: "compact", Description: "compact the current session conversation"},
 		{Name: "clear", Description: "clear current prompt state and reset transient tools"},
 		{Name: "tasks", Description: "show task board items"},
@@ -310,6 +313,8 @@ func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Res
 		return Result{}, fmt.Errorf("%w: empty command", ErrUnknownCommand)
 	}
 	switch cmd.Name {
+	case "bash", "sh":
+		return s.executeLocalBash(ctx, cmd)
 	case "compact":
 		mode := "fast"
 		for _, arg := range cmd.Args {
@@ -401,6 +406,29 @@ func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Res
 		}
 		return Result{}, fmt.Errorf("%w: /%s", ErrUnknownCommand, cmd.Name)
 	}
+}
+
+// executeLocalBash executes /bash and /sh commands locally via shell.
+func (s *Service) executeLocalBash(ctx context.Context, cmd Command) (Result, error) {
+	shellCommand, ok := localbash.ParseCommand(cmd.Raw)
+	if !ok {
+		return Result{}, fmt.Errorf("usage: /%s <shell command>", cmd.Name)
+	}
+	var result localbash.Result
+	if cmd.Name == "bash" {
+		result = localbash.CollectBashWithTimeout(ctx, s.cfg.WorkspaceDir, shellCommand)
+	} else {
+		result = localbash.CollectWithTimeout(ctx, s.cfg.WorkspaceDir, shellCommand)
+	}
+	// Always return output (incl. stderr). Non-zero exit codes are
+	// not fatal — the caller sees the same messages a terminal user would.
+	if result.Err != nil && result.Output == "" {
+		return Result{}, result.Err
+	}
+	return Result{
+		Name:   cmd.Name,
+		Output: result.Output,
+	}, nil
 }
 
 func (s *Service) executeChannels() (Result, error) {

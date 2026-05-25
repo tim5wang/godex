@@ -153,6 +153,8 @@ type model struct {
 	selectedItemID string
 	clipboardWrite func(string) error
 
+	bashCancel context.CancelFunc
+
 	inputHistory      []string
 	inputHistoryIndex int
 	inputDraft        string

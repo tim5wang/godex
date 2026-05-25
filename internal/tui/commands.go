@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -26,6 +29,9 @@ func (m *model) submitComposer() tea.Cmd {
 	m.autoFollow = true
 
 	if cmd, ok := commands.Parse(input); ok {
+		if cmd.Name == "bash" || cmd.Name == "sh" {
+			return m.execLocalBash(input)
+		}
 		m.status = fmt.Sprintf("Running /%s...", cmd.Name)
 		startCmd := m.startWorking(m.status)
 		execCmd := func() tea.Msg {
@@ -43,6 +49,94 @@ func (m *model) submitComposer() tea.Cmd {
 		return submitFinishedMsg{Err: err}
 	}
 	return tea.Batch(startCmd, submitCmd)
+}
+
+const bashTimeout = 30 * time.Second
+
+func (m *model) execLocalBash(line string) tea.Cmd {
+	raw := strings.TrimSpace(line)
+	fields := strings.Fields(raw)
+	if len(fields) < 2 {
+		m.submitting = false
+		m.appendOverlay(feedItem{
+			ID:          "bash-usage",
+			Kind:        feedError,
+			Title:       "Usage",
+			Body:        "Usage: /bash <shell command>",
+			Summary:     "Usage: /bash <shell command>",
+			RuntimeOnly: true,
+			CreatedAt:   m.now(),
+		})
+		m.status = "Usage: /bash <shell command>"
+		m.refreshViewport(false)
+		return nil
+	}
+	shellCmd := strings.TrimSpace(raw[strings.Index(raw, " "):])
+
+	// cancel any previous still-running bash
+	if m.bashCancel != nil {
+		m.bashCancel()
+		m.bashCancel = nil
+	}
+
+	ctx, cancel := context.WithTimeout(m.ctx, bashTimeout)
+	m.bashCancel = cancel
+	m.status = "Running /bash (Ctrl+C to cancel)..."
+	startCmd := m.startWorking(m.status)
+
+	// seed the feed item so we can see it's running
+	m.upsertOverlay(feedItem{
+		ID:          "bash:" + shellCmd,
+		Kind:        feedCommand,
+		Title:       "/bash (running)",
+		Body:        "Running...",
+		Summary:     "Running...",
+		RuntimeOnly: true,
+		CreatedAt:   m.now(),
+	})
+
+	execCmd := func() tea.Msg {
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "sh", "-c", shellCmd)
+		cmd.Dir = m.cfg.WorkspaceDir
+		output, err := cmd.CombinedOutput()
+
+		code := exitCode(err)
+		outputStr := string(output)
+
+		if ctx.Err() != nil {
+			if outputStr == "" {
+				outputStr = "(cancelled)"
+			}
+			code = -1
+		}
+
+		return bashFinishedMsg{
+			command:  shellCmd,
+			output:   outputStr,
+			exitCode: code,
+			err:      err,
+		}
+	}
+	return tea.Batch(startCmd, execCmd)
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return exitErr.ExitCode()
+	}
+	return -1
+}
+
+type bashFinishedMsg struct {
+	command  string
+	output   string
+	exitCode int
+	err      error
 }
 
 func (m *model) fetchSnapshotCmd() tea.Cmd {

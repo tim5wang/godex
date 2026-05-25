@@ -21,7 +21,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.handleEvent(msg.Event)...)
 	case snapshotLoadedMsg:
 		if msg.Err != nil {
-			m.appendOverlay(simpleFeedItem(feedError, "snapshot-error", "Snapshot error", msg.Err.Error(), "", true))
+			m.appendOverlay(feedItem{
+			ID:          "snapshot-error",
+			Kind:        feedError,
+			Title:       "Snapshot error",
+			Body:        msg.Err.Error(),
+			Summary:     firstSummaryLine(msg.Err.Error()),
+			RuntimeOnly: true,
+			CreatedAt:   m.now(),
+		})
 			m.status = "Snapshot refresh failed"
 			m.refreshViewport(false)
 			return m, nil
@@ -66,7 +74,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.submitting = false
 		if msg.Err != nil {
 			m.stopWorking()
-			m.appendOverlay(simpleFeedItem(feedError, "submit-error", "Turn error", msg.Err.Error(), "", true))
+			m.appendOverlay(feedItem{
+			ID:          "submit-error",
+			Kind:        feedError,
+			Title:       "Turn error",
+			Body:        msg.Err.Error(),
+			Summary:     firstSummaryLine(msg.Err.Error()),
+			RuntimeOnly: true,
+			CreatedAt:   m.now(),
+		})
 			m.status = "Turn failed"
 			m.refreshViewport(false)
 		}
@@ -81,10 +97,44 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = "Command completed"
 		return m, tea.Batch(m.fetchSnapshotCmd(), m.fetchContextSummaryCmd(), m.fetchWorkbenchCmd())
+	case bashFinishedMsg:
+		m.submitting = false
+		m.stopWorking()
+		m.bashCancel = nil
+		kind := feedCommand
+		title := "/bash"
+		body := msg.output
+		if msg.exitCode != 0 || msg.err != nil {
+			kind = feedError
+			title = "/bash (exit " + fmt.Sprintf("%d", msg.exitCode) + ")"
+		}
+		if body == "" {
+			body = "(no output)"
+		}
+		m.appendOverlay(feedItem{
+			ID:          "bash:" + msg.command,
+			Kind:        kind,
+			Title:       title,
+			Body:        body,
+			Summary:     firstSummaryLine(body),
+			RuntimeOnly: true,
+			CreatedAt:   m.now(),
+		})
+		m.status = title
+		m.refreshViewport(false)
+		return m, nil
 	case permissionFinishedMsg:
 		m.resolvingPermission = false
 		if msg.Err != nil {
-			m.appendOverlay(simpleFeedItem(feedError, "permission-error", "Permission error", msg.Err.Error(), "", true))
+			m.appendOverlay(feedItem{
+			ID:          "permission-error",
+			Kind:        feedError,
+			Title:       "Permission error",
+			Body:        msg.Err.Error(),
+			Summary:     firstSummaryLine(msg.Err.Error()),
+			RuntimeOnly: true,
+			CreatedAt:   m.now(),
+		})
 			m.status = "Permission action failed"
 			m.refreshViewport(false)
 			return m, nil
@@ -125,6 +175,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
+		if m.bashCancel != nil {
+			m.bashCancel()
+			m.bashCancel = nil
+			m.status = "Bash cancelled"
+			m.stopWorking()
+			m.submitting = false
+			m.refreshViewport(false)
+			return m, nil
+		}
 		return m, tea.Quit
 	case "ctrl+l":
 		m.status = "Refreshing session snapshot..."

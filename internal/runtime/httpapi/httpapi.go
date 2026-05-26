@@ -1420,6 +1420,7 @@ func NewHandlerWithRuntime(
 		}
 	})))
 	registerUsageRoutes(mux, protected, usageService, manager)
+	registerFileRoutes(mux, protected, manager)
 	return mux
 }
 

@@ -6,6 +6,7 @@ import {
   CommentOutlined,
   DatabaseOutlined,
   FileTextOutlined,
+  FolderViewOutlined,
   SettingOutlined,
   DashboardOutlined,
 } from "@ant-design/icons";
@@ -31,6 +32,7 @@ export interface BuiltinAppEntry {
 }
 
 const loadChatPage = () => import("../pages/ChatPage");
+const loadFilesPage = () => import("../pages/FilesPage");
 const loadAutomationPage = () => import("../pages/AutomationPage");
 const loadNodesPage = () => import("../pages/NodesPage");
 const loadNotesPage = () => import("../pages/NotesPage");
@@ -63,6 +65,17 @@ export const builtinApps: BuiltinAppEntry[] = [
     shellClassName: "chat-shell",
     headerTitleKey: "app.chatWorkspace",
     headerSubtitleKey: "app.subtitle",
+  }),
+  entry({
+    id: "files",
+    navPath: "/files",
+    routePaths: ["/files"],
+    icon: <FolderViewOutlined />,
+    labelKey: "app.nav.files",
+    load: loadFilesPage,
+    component: pageComponent(loadFilesPage, "FilesPage"),
+    isActive: (pathname) => pathname.startsWith("/files"),
+    headerSubtitleKey: "files.pageSubtitle",
   }),
   entry({
     id: "automation",

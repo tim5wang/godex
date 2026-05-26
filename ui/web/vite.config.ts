@@ -31,6 +31,9 @@ export default defineConfig({
           if (id.includes("react") || id.includes("scheduler")) {
             return "vendor-react";
           }
+          if (id.includes("@codemirror") || id.includes("@lezer")) {
+            return "vendor-codemirror";
+          }
         },
       },
     },

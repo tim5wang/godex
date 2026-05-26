@@ -249,15 +249,15 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !m.selectAdjacentItem(1) {
 				m.viewport.LineDown(1)
 			}
-			m.syncAutoFollow()
-			m.reconcileSelectedItem()
+			m.autoFollow = false
+			m.refreshViewport(false)
 			return m, nil
 		case "k":
 			if !m.selectAdjacentItem(-1) {
 				m.viewport.LineUp(1)
 			}
-			m.syncAutoFollow()
-			m.reconcileSelectedItem()
+			m.autoFollow = false
+			m.refreshViewport(false)
 			return m, nil
 		}
 		return m, nil
@@ -336,6 +336,6 @@ func (m *model) handleFeedNavigation(msg tea.KeyMsg) bool {
 	}
 
 	m.syncAutoFollow()
-	m.reconcileSelectedItem()
+	m.refreshViewport(false)
 	return true
 }

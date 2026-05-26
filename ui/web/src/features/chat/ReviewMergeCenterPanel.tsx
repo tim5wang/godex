@@ -13,6 +13,7 @@ import {
   reviewMergeStatusColor,
   reviewMergeStatusLabel,
 } from "./reviewMergeCenter";
+import { useReviewMergeText, reviewMergeStatusI18n, type ReviewMergeText } from "./reviewMergeCenter.i18n";
 
 interface ReviewMergeCenterPanelProps {
   open: boolean;
@@ -36,16 +37,17 @@ interface ReviewMergeCenterPanelProps {
 }
 
 export function ReviewMergeCenterPanel(props: ReviewMergeCenterPanelProps) {
+  const t = useReviewMergeText();
   const visibleItems = filterReviewMergeItems(props.summary.items, props.filter);
   const selected = visibleItems.find((item) => item.jobId === props.selectedJobId) ?? visibleItems[0] ?? props.summary.items.find((item) => item.jobId === props.selectedJobId);
   return (
     <Drawer
-      title="Review & Merge"
+      title={t.title}
       width={860}
       open={props.open}
       onClose={props.onClose}
       className="review-merge-drawer"
-      extra={<ReviewMergeCounters summary={props.summary} />}
+      extra={<ReviewMergeCounters summary={props.summary} t={t} />}
     >
       <div className="review-merge-layout">
         <section className="review-merge-queue">
@@ -54,28 +56,28 @@ export function ReviewMergeCenterPanel(props: ReviewMergeCenterPanelProps) {
             value={props.filter}
             onChange={(value) => props.onFilterChange(value as ReviewMergeFilter)}
             options={[
-              { value: "reviewable", label: "Ready" },
-              { value: "conflicted", label: "Conflicted" },
-              { value: "merged", label: "Merged" },
-              { value: "failed", label: "Failed" },
-              { value: "all", label: "All" },
+              { value: "reviewable", label: t.ready },
+              { value: "conflicted", label: t.conflicted },
+              { value: "merged", label: t.merged },
+              { value: "failed", label: t.failed },
+              { value: "all", label: t.all },
             ]}
             className="review-merge-filter"
           />
           <List
             size="small"
             dataSource={visibleItems}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No workers to review" /> }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t.noWorkers} /> }}
             renderItem={(item) => (
               <List.Item
                 className={item.jobId === selected?.jobId ? "review-merge-queue-item-selected" : "review-merge-queue-item"}
                 onClick={() => props.onSelectJob(item.jobId)}
-                actions={[<ReviewMergeActions key="actions" item={item} {...props} />]}
+                actions={[<ReviewMergeActions key="actions" item={item} t={t} {...props} />]}
               >
                 <List.Item.Meta
                   title={
                     <Space size={6} wrap>
-                      <Tag color={reviewMergeStatusColor(item.status)}>{reviewMergeStatusLabel(item.status)}</Tag>
+                      <Tag color={reviewMergeStatusColor(item.status)}>{reviewMergeStatusI18n(item.status, t)}</Tag>
                       <Typography.Text strong ellipsis className="review-merge-title">
                         {item.title}
                       </Typography.Text>
@@ -104,9 +106,10 @@ export function ReviewMergeCenterPanel(props: ReviewMergeCenterPanelProps) {
               review={props.review}
               mergeResult={props.mergeResult}
               loading={props.reviewingJobId === selected.jobId}
+              t={t}
             />
           ) : (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Select a worker" />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t.selectWorker} />
           )}
         </section>
       </div>
@@ -114,19 +117,19 @@ export function ReviewMergeCenterPanel(props: ReviewMergeCenterPanelProps) {
   );
 }
 
-function ReviewMergeCounters({ summary }: { summary: ReviewMergeSummary }) {
+function ReviewMergeCounters({ summary, t }: { summary: ReviewMergeSummary; t: ReviewMergeText }) {
   return (
     <Space size={6} wrap>
-      <Tag color={summary.ready ? "blue" : "default"}>{summary.ready} ready</Tag>
-      <Tag color={summary.blocked ? "gold" : "default"}>{summary.blocked} blocked</Tag>
-      <Tag color={summary.merged ? "green" : "default"}>{summary.merged} merged</Tag>
-      <Tag color={summary.failed ? "red" : "default"}>{summary.failed} failed</Tag>
+      <Tag color={summary.ready ? "blue" : "default"}>{summary.ready} {t.readyCount}</Tag>
+      <Tag color={summary.blocked ? "gold" : "default"}>{summary.blocked} {t.blockedCount}</Tag>
+      <Tag color={summary.merged ? "green" : "default"}>{summary.merged} {t.mergedCount}</Tag>
+      <Tag color={summary.failed ? "red" : "default"}>{summary.failed} {t.failedCount}</Tag>
     </Space>
   );
 }
 
-function ReviewMergeActions(props: ReviewMergeCenterPanelProps & { item: ReviewMergeItem }) {
-  const { item } = props;
+function ReviewMergeActions(props: ReviewMergeCenterPanelProps & { item: ReviewMergeItem; t: ReviewMergeText }) {
+  const { item, t } = props;
   const workerStatus = (item.workerStatus || "").toLowerCase();
   const reviewLoaded = props.review?.job_id === item.jobId;
   const canReview = !!item.jobId && workerStatus !== "running";
@@ -138,28 +141,28 @@ function ReviewMergeActions(props: ReviewMergeCenterPanelProps & { item: ReviewM
   return (
     <Space size={4} onClick={stop}>
       {canReview ? (
-        <Tooltip title="Load review">
+        <Tooltip title={t.loadReview}>
           <Button size="small" type="text" icon={<EyeOutlined />} loading={props.reviewingJobId === item.jobId} onClick={() => props.onReview(item.jobId)} />
         </Tooltip>
       ) : null}
       {canMerge ? (
         <Popconfirm
-          title={item.status === "conflicted" ? "This worker has conflicts. Merge anyway?" : "Merge this worker's changes into the workspace?"}
+          title={item.status === "conflicted" ? t.mergeConflicted : t.mergeConfirm}
           onConfirm={() => props.onMerge(item.jobId)}
         >
-          <Tooltip title="Merge">
+          <Tooltip title={t.merge}>
             <Button size="small" type="text" icon={<CheckOutlined />} loading={props.mergingJobId === item.jobId} />
           </Tooltip>
         </Popconfirm>
       ) : null}
       {canResume ? (
-        <Tooltip title="Resume">
+        <Tooltip title={t.resume}>
           <Button size="small" type="text" icon={<PlayCircleOutlined />} loading={props.resumingJobId === item.jobId} onClick={() => props.onResume(item.jobId)} />
         </Tooltip>
       ) : null}
       {canCancel ? (
-        <Popconfirm title="Cancel this worker?" onConfirm={() => props.onCancel(item.jobId)}>
-          <Tooltip title="Cancel">
+        <Popconfirm title={t.cancelWorker} onConfirm={() => props.onCancel(item.jobId)}>
+          <Tooltip title={t.cancel}>
             <Button size="small" danger type="text" icon={<StopOutlined />} loading={props.cancelingJobId === item.jobId} />
           </Tooltip>
         </Popconfirm>
@@ -174,12 +177,14 @@ function ReviewMergeDetail({
   review,
   mergeResult,
   loading,
+  t,
 }: {
   item: ReviewMergeItem;
   outcomes: TaskOutcome[];
   review?: DurableSubagentReview | null;
   mergeResult?: DurableSubagentMerge | null;
   loading?: boolean;
+  t: ReviewMergeText;
 }) {
   const [diffExpanded, setDiffExpanded] = useState(false);
   const [activePath, setActivePath] = useState("");
@@ -195,24 +200,24 @@ function ReviewMergeDetail({
   }, [item.jobId, review?.job_id]);
 
   if (loading && !review) {
-    return <Alert type="info" showIcon message="Loading review..." />;
+    return <Alert type="info" showIcon message={t.loadingReview} />;
   }
   if (!review || review.job_id !== item.jobId) {
     return (
       <Space direction="vertical" size={12} style={{ width: "100%" }}>
-        <ReviewMergeTrail trail={trail} />
-        <ReviewMergeSafetyBar safety={safety} />
-        <Alert type="info" showIcon message="Review not loaded" description="Load review to inspect changed files and diff before merge." />
+        <ReviewMergeTrail trail={trail} t={t} />
+        <ReviewMergeSafetyBar safety={safety} t={t} />
+        <Alert type="info" showIcon message={t.reviewNotLoaded} description={t.reviewNotLoadedDesc} />
       </Space>
     );
   }
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      <ReviewMergeTrail trail={trail} />
-      <ReviewMergeSafetyBar safety={safety} />
-      {merge ? <ReviewMergeResultPanel merge={merge} /> : null}
-      {review.conflicts?.length ? <Alert type="warning" showIcon message="Merge conflicts" description={review.conflicts.join("\n")} /> : null}
-      {review.diff_truncated ? <Alert type="warning" showIcon message="Diff is truncated" description="Use the changed file list and worktree path for deeper inspection." /> : null}
+      <ReviewMergeTrail trail={trail} t={t} />
+      <ReviewMergeSafetyBar safety={safety} t={t} />
+      {merge ? <ReviewMergeResultPanel merge={merge} t={t} /> : null}
+      {review.conflicts?.length ? <Alert type="warning" showIcon message={t.mergeConflicts} description={review.conflicts.join("\n")} /> : null}
+      {review.diff_truncated ? <Alert type="warning" showIcon message={t.diffTruncated} description={t.diffTruncatedDesc} /> : null}
       <div className="review-merge-file-list">
         {review.changes.length ? (
           review.changes.map((change) => (
@@ -230,27 +235,27 @@ function ReviewMergeDetail({
               >
                 <Typography.Text code>{change.path}</Typography.Text>
               </Button>
-              <Tooltip title="Copy path">
+              <Tooltip title={t.copyPath}>
                 <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => void copyText(change.path)} />
               </Tooltip>
-              {change.binary ? <Tag>binary</Tag> : null}
+              {change.binary ? <Tag>{t.binary}</Tag> : null}
             </Space>
           ))
         ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No changed files" />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t.noChangedFiles} />
         )}
       </div>
       <div className="review-merge-diff-toolbar">
         <Space size={6} wrap>
           {diffPreview.large ? (
             <Button size="small" onClick={() => setDiffExpanded((value) => !value)}>
-              {diffExpanded ? "Collapse diff" : "Show full diff"}
+              {diffExpanded ? t.collapseDiff : t.showFullDiff}
             </Button>
           ) : null}
           <Button size="small" icon={<CopyOutlined />} onClick={() => void copyText(diffPreview.fullDiff)}>
-            Copy diff
+            {t.copyDiff}
           </Button>
-          {activePath ? <Tag color="blue">Focused {activePath}</Tag> : null}
+          {activePath ? <Tag color="blue">{t.focused} {activePath}</Tag> : null}
         </Space>
       </div>
       <div className="review-merge-diff">
@@ -264,14 +269,14 @@ function ReviewMergeDetail({
             </section>
           ))
         ) : (
-          <pre>{diffPreview.diff || "No diff"}</pre>
+          <pre>{diffPreview.diff || t.noDiff}</pre>
         )}
       </div>
     </Space>
   );
 }
 
-function ReviewMergeTrail({ trail }: { trail: ReturnType<typeof buildReviewMergeOutcomeTrail> }) {
+function ReviewMergeTrail({ trail, t }: { trail: ReturnType<typeof buildReviewMergeOutcomeTrail>; t: ReviewMergeText }) {
   return (
     <div className="review-merge-trail">
       {trail.steps.map((step) => (
@@ -279,20 +284,20 @@ function ReviewMergeTrail({ trail }: { trail: ReturnType<typeof buildReviewMerge
           {step.label}
         </Tag>
       ))}
-      {trail.recovered ? <Tag color="green">recovered</Tag> : null}
+      {trail.recovered ? <Tag color="green">{t.recovered}</Tag> : null}
     </div>
   );
 }
 
-function ReviewMergeResultPanel({ merge }: { merge: NonNullable<ReturnType<typeof buildReviewMergeMergeResult>> }) {
+function ReviewMergeResultPanel({ merge, t }: { merge: NonNullable<ReturnType<typeof buildReviewMergeMergeResult>>; t: ReviewMergeText }) {
   return (
     <Alert
       type={merge.conflicts.length ? "warning" : "success"}
       showIcon
-      message={`Merge ${merge.status}`}
+      message={`${t.mergeStatus} ${merge.status}`}
       description={
         <Space direction="vertical" size={6}>
-          <Typography.Text>{merge.appliedCount} applied file{merge.appliedCount === 1 ? "" : "s"}</Typography.Text>
+          <Typography.Text>{merge.appliedCount} {t.appliedFiles}{merge.appliedCount === 1 ? "" : "s"}</Typography.Text>
           {merge.worktreeDir ? <Typography.Text code>{merge.worktreeDir}</Typography.Text> : null}
           {merge.applied.map((change) => (
             <Typography.Text key={`${change.status}:${change.path}`} code>
@@ -310,18 +315,18 @@ function ReviewMergeResultPanel({ merge }: { merge: NonNullable<ReturnType<typeo
   );
 }
 
-function ReviewMergeSafetyBar({ safety }: { safety: ReturnType<typeof buildReviewMergeSafety> }) {
+function ReviewMergeSafetyBar({ safety, t }: { safety: ReturnType<typeof buildReviewMergeSafety>; t: ReviewMergeText }) {
   return (
     <div className="review-merge-safety-bar">
       <Tag color={safety.diffStatus === "truncated" ? "gold" : safety.diffStatus === "complete" ? "green" : "default"}>
-        Diff {safety.diffStatus.replace("_", " ")}
+        {t.diffLabel} {safety.diffStatus === "not_loaded" ? t.notLoaded : safety.diffStatus === "complete" ? t.complete : t.truncated}
       </Tag>
       <Tag color={safety.conflictStatus === "conflicts" ? "volcano" : safety.conflictStatus === "none" ? "green" : "default"}>
-        {safety.conflictStatus === "conflicts" ? "Conflicts" : safety.conflictStatus === "none" ? "No conflicts" : "Conflicts unknown"}
+        {safety.conflictStatus === "conflicts" ? t.conflicts : safety.conflictStatus === "none" ? t.noConflicts : t.conflictsUnknown}
       </Tag>
-      <Tag>{safety.changedFiles} files</Tag>
-      <Tag>{safety.writeScope.length ? safety.writeScope.join(", ") : "scope unknown"}</Tag>
-      {safety.mergeCaution ? <Tag color="gold">extra confirmation</Tag> : null}
+      <Tag>{safety.changedFiles} {t.files}</Tag>
+      <Tag>{safety.writeScope.length ? safety.writeScope.join(", ") : t.scopeUnknown}</Tag>
+      {safety.mergeCaution ? <Tag color="gold">{t.extraConfirmation}</Tag> : null}
     </div>
   );
 }

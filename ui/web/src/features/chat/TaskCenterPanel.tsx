@@ -1,15 +1,19 @@
-import type { ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Badge, Button, Card, Empty, Popconfirm, Progress, Space, Tag, Tooltip, Typography } from "antd";
 import {
   CheckOutlined,
+  CloseOutlined,
   CompressOutlined,
+  DownOutlined,
   EyeOutlined,
   PlayCircleOutlined,
   SafetyCertificateOutlined,
   StopOutlined,
+  UpOutlined,
 } from "@ant-design/icons";
 import type { TaskOutcome } from "./taskCenterOutcome";
 import { outcomeIsActive, outcomeNeedsReview, taskOutcomeColor, taskOutcomeLabel } from "./taskCenterOutcome";
+import { useTaskCenterText, type TaskCenterText } from "./taskCenter.i18n";
 
 interface TaskCenterPanelProps {
   outcomes: TaskOutcome[];
@@ -33,10 +37,20 @@ interface TaskCenterPanelProps {
 }
 
 export function TaskCenterPanel(props: TaskCenterPanelProps) {
-  const active = props.outcomes.filter(outcomeIsActive);
-  const review = props.outcomes.filter(outcomeNeedsReview);
-  const visibleOutcomes = props.outcomes.filter((outcome) => outcome.status !== "idle");
-  const unresolved = props.outcomes.filter((outcome) => outcome.status === "blocked" || outcome.status === "failed" || outcome.status === "ready_for_review").length;
+  const t = useTaskCenterText();
+  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
+  const [showDismissed, setShowDismissed] = useState(false);
+
+  const dismiss = useCallback((id: string) => setDismissed((prev) => new Set(prev).add(id)), []);
+
+  const visibleOutcomes = props.outcomes.filter(
+    (o) => o.status !== "idle" && (showDismissed || !dismissed.has(o.id)),
+  );
+  const active = visibleOutcomes.filter(outcomeIsActive);
+  const review = visibleOutcomes.filter(outcomeNeedsReview);
+  const unresolved = visibleOutcomes.filter(
+    (o) => o.status === "blocked" || o.status === "failed" || o.status === "ready_for_review",
+  ).length;
 
   return (
     <section className={`task-center-band ${props.collapsed ? "task-center-band-collapsed" : ""}`}>
@@ -46,43 +60,43 @@ export function TaskCenterPanel(props: TaskCenterPanelProps) {
         title={
           <Space size={8} wrap>
             <SafetyCertificateOutlined />
-            <span>Task Center</span>
+            <span>{t.title}</span>
             {unresolved ? <Badge count={unresolved} size="small" /> : null}
           </Space>
         }
         extra={
           <Space size={4}>
             <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => props.onOpenReviewMergeCenter()}>
-              Review
+              {t.review}
             </Button>
-            <Button
-              type="text"
-              size="small"
-              icon={<CompressOutlined />}
-              onClick={() => props.onCollapsedChange(!props.collapsed)}
-            >
-              {props.collapsed ? "Expand" : "Collapse"}
+            {dismissed.size > 0 ? (
+              <Button type="text" size="small" icon={showDismissed ? <UpOutlined /> : <DownOutlined />} onClick={() => setShowDismissed((v) => !v)}>
+                {showDismissed ? t.hideDismissed : `${t.showDismissed} (${dismissed.size})`}
+              </Button>
+            ) : null}
+            <Button type="text" size="small" icon={<CompressOutlined />} onClick={() => props.onCollapsedChange(!props.collapsed)}>
+              {props.collapsed ? t.expand : t.collapse}
             </Button>
           </Space>
         }
       >
         {props.collapsed ? (
-          <CollapsedSummary outcomes={props.outcomes} />
+          <CollapsedSummary outcomes={props.outcomes} t={t} />
         ) : (
           <div className="task-center-grid">
-            <TaskCenterSection title="Outcomes" empty="No task outcomes yet">
+            <TaskCenterSection title={t.outcomes} empty={t.noOutcomes}>
               {visibleOutcomes.map((outcome) => (
-                <OutcomeRow key={outcome.id} outcome={outcome} actions={<OutcomeActions outcome={outcome} {...props} />} />
+                <OutcomeRow key={outcome.id} outcome={outcome} t={t} onDismiss={dismiss} actions={<OutcomeActions outcome={outcome} t={t} {...props} />} />
               ))}
             </TaskCenterSection>
-            <TaskCenterSection title="Active" empty="Idle">
+            <TaskCenterSection title={t.active} empty={t.idle}>
               {active.map((outcome) => (
-                <OutcomeRow key={outcome.id} outcome={outcome} compact actions={<OutcomeActions outcome={outcome} {...props} />} />
+                <OutcomeRow key={outcome.id} outcome={outcome} compact t={t} onDismiss={dismiss} actions={<OutcomeActions outcome={outcome} t={t} {...props} />} />
               ))}
             </TaskCenterSection>
-            <TaskCenterSection title="Review" empty="Nothing waiting for review">
+            <TaskCenterSection title={t.review} empty={t.nothingReview}>
               {review.map((outcome) => (
-                <OutcomeRow key={outcome.id} outcome={outcome} compact actions={<OutcomeActions outcome={outcome} {...props} />} />
+                <OutcomeRow key={outcome.id} outcome={outcome} compact t={t} onDismiss={dismiss} actions={<OutcomeActions outcome={outcome} t={t} {...props} />} />
               ))}
             </TaskCenterSection>
           </div>
@@ -92,27 +106,42 @@ export function TaskCenterPanel(props: TaskCenterPanelProps) {
   );
 }
 
-function TaskCenterSection({ title, empty, children }: { title: string; empty: string; children: ReactNode[] }) {
+function TaskCenterSection({ title, empty, children, defaultCollapsed = false }: { title: string; empty: string; children: ReactNode[]; defaultCollapsed?: boolean }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const items = children.filter(Boolean);
   return (
     <div className="task-center-section">
       <div className="task-center-section-title">
         <Typography.Text strong>{title}</Typography.Text>
+        {items.length > 0 ? (
+          <Button type="text" size="small" icon={collapsed ? <DownOutlined /> : <UpOutlined />} onClick={() => setCollapsed((v) => !v)}>
+            {items.length}
+          </Button>
+        ) : null}
       </div>
-      {items.length ? items : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} />}
+      {collapsed ? null : items.length ? items : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} />}
     </div>
   );
 }
 
-function OutcomeRow({ outcome, compact = false, actions }: { outcome: TaskOutcome; compact?: boolean; actions?: ReactNode }) {
+function OutcomeRow({ outcome, compact = false, actions, t, onDismiss }: { outcome: TaskOutcome; compact?: boolean; actions?: ReactNode; t: TaskCenterText; onDismiss?: (id: string) => void }) {
+  const isTerminal = outcome.status === "merged" || outcome.status === "failed";
   return (
     <div className={`task-outcome-row ${compact ? "task-outcome-row-compact" : ""}`}>
       <div className="task-outcome-main">
         <Space size={6} wrap>
-          <Tag color={taskOutcomeColor(outcome.status)}>{taskOutcomeLabel(outcome.status)}</Tag>
-          {outcome.recovered ? <Tag color="green">recovered</Tag> : null}
-          {outcome.longTask ? <Tag>{shortId(outcome.longTask.longtask_id || outcome.longTask.workflow_id)}</Tag> : null}
-          {outcome.worker?.jobId ? <Tag color="cyan">{shortId(outcome.worker.jobId)}</Tag> : null}
+          <Tag color={taskOutcomeColor(outcome.status)}>{taskOutcomeLabel(outcome.status, t)}</Tag>
+          {outcome.recovered ? <Tag color="green">{t.recovered}</Tag> : null}
+          {outcome.longTask ? (
+            <Tooltip title={outcome.longTask.longtask_id || outcome.longTask.workflow_id}>
+              <Tag>{shortId(outcome.longTask.longtask_id || outcome.longTask.workflow_id)}</Tag>
+            </Tooltip>
+          ) : null}
+          {outcome.worker?.jobId ? (
+            <Tooltip title={outcome.worker.jobId}>
+              <Tag color="cyan">{shortId(outcome.worker.jobId)}</Tag>
+            </Tooltip>
+          ) : null}
         </Space>
         <Tooltip title={outcome.title}>
           <Typography.Text strong ellipsis>
@@ -121,18 +150,25 @@ function OutcomeRow({ outcome, compact = false, actions }: { outcome: TaskOutcom
         </Tooltip>
         {outcome.detail ? (
           <Typography.Text type="secondary" ellipsis={{ tooltip: outcome.detail }}>
-            {outcome.recovered && outcome.longTask ? `Recovered from failed longtask ${outcome.longTask.longtask_id}. ${outcome.detail}` : outcome.detail}
+            {outcome.recovered && outcome.longTask ? `${t.recovered} — ${outcome.longTask.longtask_id}. ${outcome.detail}` : outcome.detail}
           </Typography.Text>
         ) : null}
         <Progress percent={outcomeProgress(outcome)} size="small" status={progressStatus(outcome.status)} showInfo={false} />
       </div>
-      {actions ? <div className="task-outcome-actions">{actions}</div> : null}
+      <div className="task-outcome-actions">
+        {actions}
+        {isTerminal && onDismiss ? (
+          <Tooltip title={t.dismissed}>
+            <Button size="small" type="text" icon={<CloseOutlined />} onClick={() => onDismiss(outcome.id)} />
+          </Tooltip>
+        ) : null}
+      </div>
     </div>
   );
 }
 
-function OutcomeActions(props: TaskCenterPanelProps & { outcome: TaskOutcome }) {
-  const { outcome } = props;
+function OutcomeActions(props: TaskCenterPanelProps & { outcome: TaskOutcome; t: TaskCenterText }) {
+  const { outcome, t } = props;
   const jobId = outcome.worker?.jobId || "";
   const workerStatus = (outcome.worker?.status || "").toLowerCase();
   const canCancelWorker = jobId && ["running", "pending", "resuming"].includes(workerStatus);
@@ -146,88 +182,88 @@ function OutcomeActions(props: TaskCenterPanelProps & { outcome: TaskOutcome }) 
   return (
     <Space size={4} wrap>
       {canReviewWorker ? (
-        <Tooltip title="Review subagent changes">
+        <Tooltip title={t.reviewSubagent}>
           <Button
             size="small"
             type="text"
             icon={<EyeOutlined />}
-            aria-label="Review subagent changes"
+            aria-label={t.reviewSubagent}
             loading={props.reviewingJobId === jobId}
             onClick={() => props.onReviewSubagent(jobId)}
           />
         </Tooltip>
       ) : null}
       {canMergeWorker ? (
-        <Popconfirm title="Merge subagent changes?" onConfirm={() => props.onMergeSubagent(jobId)}>
-          <Tooltip title="Merge subagent changes">
+        <Popconfirm title={t.mergeConfirm} onConfirm={() => props.onMergeSubagent(jobId)}>
+          <Tooltip title={t.mergeSubagent}>
             <Button
               size="small"
               type="text"
               icon={<CheckOutlined />}
-              aria-label="Merge subagent changes"
+              aria-label={t.mergeSubagent}
               loading={props.mergingJobId === jobId}
             />
           </Tooltip>
         </Popconfirm>
       ) : null}
       {canResumeWorker ? (
-        <Tooltip title="Resume subagent">
+        <Tooltip title={t.resumeSubagent}>
           <Button
             size="small"
             type="text"
             icon={<PlayCircleOutlined />}
-            aria-label="Resume subagent"
+            aria-label={t.resumeSubagent}
             loading={props.resumingJobId === jobId}
             onClick={() => props.onResumeSubagent(jobId)}
           />
         </Tooltip>
       ) : null}
       {canCancelWorker ? (
-        <Tooltip title="Cancel subagent">
+        <Tooltip title={t.cancelSubagent}>
           <Button
             size="small"
             danger
             type="text"
             icon={<StopOutlined />}
-            aria-label="Cancel subagent"
+            aria-label={t.cancelSubagent}
             loading={props.cancelingJobId === jobId}
             onClick={() => props.onCancelSubagent(jobId)}
           />
         </Tooltip>
       ) : null}
       {longTask && longTask.status !== "completed" ? (
-        <Tooltip title="Run LongTask">
+        <Tooltip title={t.runLongTask}>
           <Button
             size="small"
             type="text"
             icon={<PlayCircleOutlined />}
-            aria-label="Run LongTask"
+            aria-label={t.runLongTask}
             loading={props.runningWorkflowId === longTask.workflow_id}
             onClick={() => props.onRunLongTask(longTask.workflow_id)}
           />
         </Tooltip>
       ) : null}
       {finalizable?.node_id && longTask ? (
-        <Tooltip title="Finalize LongTask story">
+        <Tooltip title={t.finalizeLongTask}>
           <Button
             size="small"
             type="text"
             icon={<CheckOutlined />}
-            aria-label="Finalize LongTask story"
+            aria-label={t.finalizeLongTask}
             loading={props.finalizingLongTask?.workflowId === longTask.workflow_id && props.finalizingLongTask?.nodeId === finalizable.node_id}
             onClick={() => props.onFinalizeLongTask(longTask.workflow_id, finalizable.node_id!)}
           />
         </Tooltip>
       ) : null}
       {activeStory?.node_id && longTask ? (
-        <Popconfirm title="Cancel this LongTask node?" onConfirm={() => props.onCancelLongTask(longTask.workflow_id, activeStory.node_id!)}>
-          <Tooltip title="Cancel LongTask node">
+        <Popconfirm title={t.cancelLongTaskConfirm} onConfirm={() => props.onCancelLongTask(longTask.workflow_id, activeStory.node_id!)}>
+          <Tooltip title={t.cancelLongTaskNode}>
             <Button
               size="small"
               danger
               type="text"
               icon={<StopOutlined />}
-              aria-label="Cancel LongTask node"
+              aria-label={t.cancelLongTaskNode}
               loading={props.cancelingLongTask?.workflowId === longTask.workflow_id && props.cancelingLongTask?.nodeId === activeStory.node_id}
             />
           </Tooltip>
@@ -237,18 +273,18 @@ function OutcomeActions(props: TaskCenterPanelProps & { outcome: TaskOutcome }) 
   );
 }
 
-function CollapsedSummary({ outcomes }: { outcomes: TaskOutcome[] }) {
+function CollapsedSummary({ outcomes, t }: { outcomes: TaskOutcome[]; t: TaskCenterText }) {
   const counts = outcomes.reduce<Record<string, number>>((acc, outcome) => {
     acc[outcome.status] = (acc[outcome.status] ?? 0) + 1;
     return acc;
   }, {});
   return (
     <Space size={8} wrap>
-      <Tag color={counts.running ? "processing" : "default"}>{counts.running ?? 0} running</Tag>
-      <Tag color={counts.blocked ? "gold" : "default"}>{counts.blocked ?? 0} blocked</Tag>
-      <Tag color={counts.ready_for_review ? "blue" : "default"}>{counts.ready_for_review ?? 0} review</Tag>
-      <Tag color={counts.merged ? "green" : "default"}>{counts.merged ?? 0} merged</Tag>
-      <Tag color={counts.failed ? "red" : "default"}>{counts.failed ?? 0} failed</Tag>
+      <Tag color={counts.running ? "processing" : "default"}>{counts.running ?? 0} {t.running}</Tag>
+      <Tag color={counts.blocked ? "gold" : "default"}>{counts.blocked ?? 0} {t.blocked}</Tag>
+      <Tag color={counts.ready_for_review ? "blue" : "default"}>{counts.ready_for_review ?? 0} {t.readyForReview}</Tag>
+      <Tag color={counts.merged ? "green" : "default"}>{counts.merged ?? 0} {t.merged}</Tag>
+      <Tag color={counts.failed ? "red" : "default"}>{counts.failed ?? 0} {t.failed}</Tag>
     </Space>
   );
 }
@@ -291,5 +327,6 @@ function progressStatus(status: TaskOutcome["status"]) {
 }
 
 function shortId(value: string) {
-  return value.length <= 18 ? value : `${value.slice(0, 15)}...`;
+  if (value.length <= 18) return value;
+  return `${value.slice(0, 8)}…${value.slice(-6)}`;
 }

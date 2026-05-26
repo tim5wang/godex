@@ -77,7 +77,23 @@ export function buildTaskOutcomes(input: BuildTaskOutcomesInput): TaskOutcome[] 
   return outcomes.length ? outcomes : [idleOutcome()];
 }
 
-export function taskOutcomeLabel(status: TaskOutcomeStatus) {
+export function taskOutcomeLabel(status: TaskOutcomeStatus, t?: { running: string; blocked: string; readyForReview: string; merged: string; failed: string; idle: string }) {
+  if (t) {
+    switch (status) {
+      case "running":
+        return t.running;
+      case "blocked":
+        return t.blocked;
+      case "ready_for_review":
+        return t.readyForReview;
+      case "merged":
+        return t.merged;
+      case "failed":
+        return t.failed;
+      default:
+        return t.idle;
+    }
+  }
   switch (status) {
     case "running":
       return "Running";
@@ -111,10 +127,12 @@ export function taskOutcomeColor(status: TaskOutcomeStatus) {
   }
 }
 
+/** Review pool: only items requiring human review action. */
 export function outcomeNeedsReview(outcome: TaskOutcome) {
-  return outcome.status === "ready_for_review" || outcome.status === "merged" || outcome.status === "failed" || outcome.status === "blocked";
+  return outcome.status === "ready_for_review";
 }
 
+/** Active pool: items currently in-flight or waiting for approval. */
 export function outcomeIsActive(outcome: TaskOutcome) {
   return outcome.status === "running" || outcome.status === "blocked";
 }

@@ -67,6 +67,7 @@ func ReadFileDefinition() Definition {
 				"limit":      map[string]interface{}{"type": "integer", "description": "Maximum bytes to return. Required for large files."},
 				"offset":     map[string]interface{}{"type": "integer", "description": "Optional byte offset to start reading from. Use either offset or start_line, not both."},
 				"start_line": map[string]interface{}{"type": "integer", "description": "Optional 1-based line number to start reading from. Use either start_line or offset, not both."},
+				"max_lines":  map[string]interface{}{"type": "integer", "description": "Optional maximum number of lines to return. When set, the output is capped by line count instead of (or in addition to) the byte limit."},
 			},
 			"required": []string{"path"},
 		},
@@ -463,10 +464,10 @@ func shellQuote(value string) string {
 }
 
 func (e *WorkspaceExecutor) ReadFile(path string, limit int) (string, error) {
-	return e.ReadFileRange(path, limit, 0, 0)
+	return e.ReadFileRange(path, limit, 0, 0, 0)
 }
 
-func (e *WorkspaceExecutor) ReadFileRange(path string, limit, offset, startLine int) (string, error) {
+func (e *WorkspaceExecutor) ReadFileRange(path string, limit, offset, startLine, maxLines int) (string, error) {
 	if offset < 0 {
 		return "", fmt.Errorf("offset must be non-negative")
 	}
@@ -539,6 +540,34 @@ func (e *WorkspaceExecutor) ReadFileRange(path string, limit, offset, startLine 
 			return "", err
 		}
 	}
+
+	// When max_lines is set, read line-by-line and cap at maxLines.
+	if maxLines > 0 {
+		var buf strings.Builder
+		lineReader := bufio.NewReader(reader)
+		for i := 0; i < maxLines; i++ {
+			line, err := lineReader.ReadString('\n')
+			if len(line) > 0 {
+				buf.WriteString(line)
+			}
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return "", err
+			}
+			// Byte limit still acts as a safety cap.
+			if limit > 0 && buf.Len() >= limit {
+				break
+			}
+		}
+		result := buf.String()
+		if limit > 0 && len(result) > limit {
+			result = result[:limit]
+		}
+		return result, nil
+	}
+
 	data, err := io.ReadAll(io.LimitReader(reader, int64(readLimit)+1))
 	if err != nil {
 		return "", err

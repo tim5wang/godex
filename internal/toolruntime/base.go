@@ -199,9 +199,14 @@ func (h *ToolHandler) HandleResult(ctx context.Context, name string, args map[st
 		return ToolResult{}, ErrToolInactive{Name: name, Bundle: bundle}
 	}
 	schema := tool.Spec().ToolSchema().InputSchema
+	aliases := tool.Spec().Aliases
 	before := append([]BeforeInterceptor{}, h.before...)
 	after := append([]AfterInterceptor{}, h.after...)
 	h.mu.RUnlock()
+	// Apply aliases before validation so legacy parameter names (e.g. "todos"
+	// → "items") pass schema-required checks. The map mutation is safe because
+	// prepare() applies aliases idempotently.
+	applyAliases(args, aliases)
 	if err := validateToolInputSchema(name, args, schema); err != nil {
 		return ToolResult{}, err
 	}

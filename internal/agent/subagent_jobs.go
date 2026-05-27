@@ -2609,7 +2609,7 @@ func (a *Agent) executeSubagentToolWithScope(ctx context.Context, name string, i
 
 type subagentToolHandlers struct {
 	runBash   func(context.Context, string, bool) (conversation.ToolExecutionResult, error)
-	readFile  func(context.Context, string, int, int, int) (conversation.ToolExecutionResult, error)
+	readFile  func(context.Context, string, int, int, int, int) (conversation.ToolExecutionResult, error)
 	writeFile func(context.Context, string, string) (conversation.ToolExecutionResult, error)
 	editFile  func(context.Context, string, string, string) (conversation.ToolExecutionResult, error)
 }
@@ -2622,7 +2622,7 @@ func executeSubagentToolWithHandlers(ctx context.Context, name string, input map
 		return handlers.runBash(ctx, cmd, allowUnlisted)
 	case "read_file":
 		path, _ := input["path"].(string)
-		return handlers.readFile(ctx, path, subagentToolLimit(input["limit"]), subagentToolLimit(input["offset"]), subagentToolLimit(input["start_line"]))
+		return handlers.readFile(ctx, path, subagentToolLimit(input["limit"]), subagentToolLimit(input["offset"]), subagentToolLimit(input["start_line"]), subagentToolLimit(input["max_lines"]))
 	case "write_file":
 		path, _ := input["path"].(string)
 		content, _ := input["content"].(string)
@@ -2650,8 +2650,8 @@ func workspaceSubagentToolHandlers(workspace, tempDir string, execution tooling.
 				ArtifactPaths: compactNonEmptyStrings(output.FilePath),
 			}, err
 		},
-		readFile: func(_ context.Context, path string, limit, offset, startLine int) (conversation.ToolExecutionResult, error) {
-			output, err := executor.ReadFileRange(path, limit, offset, startLine)
+		readFile: func(_ context.Context, path string, limit, offset, startLine, maxLines int) (conversation.ToolExecutionResult, error) {
+			output, err := executor.ReadFileRange(path, limit, offset, startLine, maxLines)
 			return conversation.ToolExecutionResult{Output: output}, err
 		},
 		writeFile: func(_ context.Context, path, content string) (conversation.ToolExecutionResult, error) {

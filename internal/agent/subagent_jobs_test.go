@@ -1538,7 +1538,7 @@ func TestSubagentReadFilePassesRangeArguments(t *testing.T) {
 		"offset":     7,
 		"start_line": 3,
 	}, subagentToolHandlers{
-		readFile: func(ctx context.Context, path string, limit, offset, startLine int) (conversation.ToolExecutionResult, error) {
+		readFile: func(ctx context.Context, path string, limit, offset, startLine, maxLines int) (conversation.ToolExecutionResult, error) {
 			_ = ctx
 			gotPath = path
 			gotLimit = limit

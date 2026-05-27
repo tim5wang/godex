@@ -763,7 +763,7 @@ func (a *Agent) executeSubagentTool(ctx context.Context, name string, input map[
 			}
 			return a.handleToolResult(ctx, "bash", input)
 		},
-		readFile: func(ctx context.Context, path string, limit, offset, startLine int) (conversation.ToolExecutionResult, error) {
+		readFile: func(ctx context.Context, path string, limit, offset, startLine, maxLines int) (conversation.ToolExecutionResult, error) {
 			input := map[string]interface{}{"path": path}
 			if limit > 0 {
 				input["limit"] = limit
@@ -773,6 +773,9 @@ func (a *Agent) executeSubagentTool(ctx context.Context, name string, input map[
 			}
 			if startLine > 0 {
 				input["start_line"] = startLine
+			}
+			if maxLines > 0 {
+				input["max_lines"] = maxLines
 			}
 			return a.handleToolResult(ctx, "read_file", input)
 		},

@@ -16,6 +16,7 @@ type readFileArgs struct {
 	Limit     int    `json:"limit,omitempty"`
 	Offset    int    `json:"offset,omitempty"`
 	StartLine int    `json:"start_line,omitempty"`
+	MaxLines  int    `json:"max_lines,omitempty"`
 }
 
 type writeFileArgs struct {
@@ -41,7 +42,7 @@ func NewReadFileTool(workspace string) Tool {
 		if strings.TrimSpace(args.Path) == "" {
 			return ToolResult{}, fmt.Errorf("missing path argument")
 		}
-		output, err := executor.ReadFileRange(args.Path, args.Limit, args.Offset, args.StartLine)
+		output, err := executor.ReadFileRange(args.Path, args.Limit, args.Offset, args.StartLine, args.MaxLines)
 		return ToolResult{Text: output}, err
 	})
 }

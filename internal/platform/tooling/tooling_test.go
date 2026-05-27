@@ -401,7 +401,7 @@ func TestReadFileRangeSupportsOffsetAndStartLine(t *testing.T) {
 	}
 
 	executor := NewWorkspaceExecutor(workspace)
-	content, err := executor.ReadFileRange("notes.txt", 100, 0, 2)
+	content, err := executor.ReadFileRange("notes.txt", 100, 0, 2, 0)
 	if err != nil {
 		t.Fatalf("read with start line: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestReadFileRangeSupportsOffsetAndStartLine(t *testing.T) {
 		t.Fatalf("unexpected start line content: %q", content)
 	}
 
-	content, err = executor.ReadFileRange("notes.txt", 5, 6, 0)
+	content, err = executor.ReadFileRange("notes.txt", 5, 6, 0, 0)
 	if err != nil {
 		t.Fatalf("read with offset: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestReadFileRangeSupportsOffsetAndStartLine(t *testing.T) {
 		t.Fatalf("unexpected offset content: %q", content)
 	}
 
-	if _, err := executor.ReadFileRange("notes.txt", 5, 1, 2); err == nil || !strings.Contains(err.Error(), "either offset or start_line") {
+	if _, err := executor.ReadFileRange("notes.txt", 5, 1, 2, 0); err == nil || !strings.Contains(err.Error(), "either offset or start_line") {
 		t.Fatalf("expected mutually exclusive range error, got %v", err)
 	}
 }

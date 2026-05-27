@@ -40,7 +40,7 @@ release: release-clean web
 release-clean:
 	rm -rf "$(DIST_DIR)"
 
-deploy-linux:
-	scp godex-linux-amd64 mycloud:/opt/godex/godex \
+deploy-linux: build-linux
+	ssh mycloud "rm /opt/godex/godex" && scp godex-linux-amd64 mycloud:/opt/godex/godex \
 	&& ssh mycloud "cd /opt/godex && ./godex service uninstall && ./godex service install --addr 127.0.0.1:3800 && ./godex service start" \
-	&& rm godex-linux-amd64
+	&& ssh mycloud "systemctl stop godex.service && systemctl start godex.service" && rm godex-linux-amd64

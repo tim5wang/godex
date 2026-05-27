@@ -30,6 +30,7 @@ const (
 	defaultDeliveryDelay   = 100 * time.Millisecond
 	maxDeliveryRecords     = 20
 
+
 	StateDisabled   = "disabled"
 	StateStarting   = "starting"
 	StateRunning    = "running"
@@ -1196,7 +1197,17 @@ func (m *Manager) Deliver(ctx context.Context, target automation.DeliveryTarget,
 		}
 		return m.deliverWithTracking(ctx, target, plan, func(ctx context.Context, plan ReplyPlan) error {
 			_ = plan
-			return m.backend.PostRuntimeReplyWithArtifactPaths(ctx, sessionID, text, artifactPaths)
+			chunks := splitSessionReplyChunks(text, maxSessionReplyChunkRunes)
+			for i, chunk := range chunks {
+				chunkArtifacts := artifactPaths
+				if i > 0 {
+					chunkArtifacts = nil // only attach artifacts to the first chunk
+				}
+				if err := m.backend.PostRuntimeReplyWithArtifactPaths(ctx, sessionID, chunk, chunkArtifacts); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	case automation.DeliveryKindChannel:
 		channelName := strings.TrimSpace(target.Channel)
@@ -1238,6 +1249,64 @@ func lastAssistantText(messages []protocol.Message) string {
 		}
 	}
 	return ""
+}
+
+// maxSessionReplyChunkRunes is the default maximum rune count for session
+// delivery chunks.  The value matches the weixin channel limit so that
+// replies posted through session delivery (e.g. cron tasks) can be forwarded
+// to channels without exceeding per-message size limits.
+//
+// It is defined here (not as a const) so tests can override it.
+var maxSessionReplyChunkRunes = 1200
+
+// splitSessionReplyChunks splits text into chunks of at most maxRunes runes,
+// breaking at natural sentence/punctuation boundaries when possible.
+// It mirrors the weixin-channel splitReplyChunks logic but lives in the
+// shared channels package so Manager.Deliver can use it for session delivery.
+func splitSessionReplyChunks(text string, maxRunes int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if maxRunes <= 0 {
+		return []string{text}
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return []string{text}
+	}
+	chunks := make([]string, 0, len(runes)/maxRunes+1)
+	start := 0
+	for start < len(runes) {
+		end := start + maxRunes
+		if end >= len(runes) {
+			chunks = append(chunks, strings.TrimSpace(string(runes[start:])))
+			break
+		}
+		split := findSessionChunkBoundary(runes, start, end)
+		chunks = append(chunks, strings.TrimSpace(string(runes[start:split])))
+		start = split
+	}
+	out := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		if strings.TrimSpace(chunk) != "" {
+			out = append(out, chunk)
+		}
+	}
+	return out
+}
+
+// findSessionChunkBoundary walks backwards from end looking for a natural
+// break point (newline, CJK/ASCII punctuation, or space).
+func findSessionChunkBoundary(runes []rune, start, end int) int {
+	limit := end - start
+	for i := end; i > start+limit/3; i-- {
+		switch runes[i] {
+		case '\n', '。', '！', '？', '.', '!', '?', '，', ',', ';', '；', ' ':
+			return i + 1
+		}
+	}
+	return end
 }
 
 func currentTurnAssistantText(messages []protocol.Message) string {

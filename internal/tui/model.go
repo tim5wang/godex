@@ -230,4 +230,13 @@ var (
 
 	ruleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#D1D5DB", Dark: "#4B5563"})
+
+	readyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#059669", Dark: "#34D399"})
+
+	thinkingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#A78BFA"})
+
+	workingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"})
 )

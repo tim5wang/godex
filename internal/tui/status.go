@@ -6,8 +6,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/tim5wang/godex/internal/domain/events"
 )
+
+// statusStyle returns the lipgloss style appropriate for the current runtime state.
+func (m *model) statusStyle() lipgloss.Style {
+	if !m.working {
+		return readyStyle
+	}
+	phase := strings.TrimSpace(m.activePhase)
+	switch {
+	case phase == "model_request" || phase == "context_sanitized":
+		return thinkingStyle
+	case phase == "interrupted" || phase == "error":
+		return errorLineStyle
+	case m.snapshot.ActivePermissionBlocker != nil:
+		return permissionLineStyle
+	default:
+		return workingStyle
+	}
+}
 
 func (m *model) renderRuntimeStatus() string {
 	parts := []string{m.baseRuntimeStatus()}
@@ -61,14 +81,37 @@ func (m *model) baseRuntimeStatus() string {
 	}
 	frame := heartbeatFrames[m.heartbeatFrame%len(heartbeatFrames)]
 	elapsed := formatElapsed(m.now().Sub(m.workingSince))
-	status := fmt.Sprintf("%s Working for %s", frame, elapsed)
-	if phase := strings.TrimSpace(m.activePhase); phase != "" {
-		status += " · " + phase
+
+	phase := strings.TrimSpace(m.activePhase)
+	tool := strings.TrimSpace(m.activeToolName)
+
+	// Map runner phase + tool state to a descriptive status.
+	var label string
+	switch {
+	case tool != "" && phase != "":
+		// Active tool execution with a known phase context.
+		label = fmt.Sprintf("Executing %s", tool)
+	case tool != "":
+		label = fmt.Sprintf("Executing %s", tool)
+	case phase == "model_request" || phase == "context_sanitized":
+		label = "Thinking"
+	case phase == "awaiting_tools":
+		label = "Waiting for tools"
+	case phase == "tools_completed":
+		label = "Processing results"
+	case phase == "final_response":
+		label = "Writing response"
+	case phase == "recovery_attempted":
+		label = "Recovering"
+	case phase == "interrupted" || phase == "error":
+		label = "Handling error"
+	case phase == "injection_drained":
+		label = "Processing input"
+	default:
+		label = "Working"
 	}
-	if tool := strings.TrimSpace(m.activeToolName); tool != "" {
-		status += " · " + tool
-	}
-	return status
+
+	return fmt.Sprintf("%s %s · %s", frame, label, elapsed)
 }
 
 func (m *model) contextUsageText() string {

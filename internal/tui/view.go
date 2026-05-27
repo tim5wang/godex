@@ -96,5 +96,5 @@ func (m *model) renderComposer() string {
 }
 
 func (m *model) renderHeartbeatLine() string {
-	return mutedLineStyle.Render(ellipsize(m.renderRuntimeStatus(), m.width))
+	return m.statusStyle().Render(ellipsize(m.renderRuntimeStatus(), m.width))
 }

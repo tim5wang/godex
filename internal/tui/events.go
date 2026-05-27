@@ -153,6 +153,8 @@ func (m *model) stopWorking() {
 	m.working = false
 	m.workingSince = time.Time{}
 	m.heartbeatFrame = 0
+	m.activePhase = ""
+	m.activeToolName = ""
 }
 
 func (m *model) toggleFocus() tea.Cmd {

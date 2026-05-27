@@ -143,7 +143,16 @@ func listenBashStream(ch <-chan bashStreamEvent) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return nil
+			// Channel closed without a final event (context cancelled,
+			// goroutine error, etc.). Return a synthetic finished message
+			// so the TUI clears submitting/working state. A nil return
+			// would be silently dropped by bubbletea, causing a permanent hang.
+			return bashFinishedMsg{
+				command:  "",
+				output:   "(stream closed unexpectedly)",
+				exitCode: -1,
+				err:      fmt.Errorf("bash stream closed without final event"),
+			}
 		}
 		if ev.final {
 			return bashFinishedMsg{

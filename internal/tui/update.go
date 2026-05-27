@@ -47,6 +47,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshViewport(false)
 				return m, tea.Batch(cmd, m.fetchContextSummaryCmd())
 			}
+		} else {
+			// Snapshot confirms agent is not running. Clear working state.
+			// This handles the race where EventSnapshotReady (e.g. from
+			// compaction) arrives after the turn has already completed,
+			// and startWorking was called by permissionFinishedMsg or an
+			// earlier snapshot with Running=true.
+			m.stopWorking()
 		}
 		m.status = fmt.Sprintf("Snapshot refreshed at %s", formatClock(msg.Snapshot.UpdatedAt))
 		m.refreshViewport(false)
@@ -85,12 +92,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 			m.status = "Turn failed"
 			m.refreshViewport(false)
+		} else {
+			// Always clear working on success. EventTurnCompleted may
+			// arrive before this msg (race with backend resume/approval)
+			// or may never arrive (event sink disconnected, compaction
+			// error, etc.). Leaving working=true causes permanent hang.
+			m.stopWorking()
 		}
 		return m, nil
 	case commandFinishedMsg:
 		m.submitting = false
+		m.stopWorking()
 		if msg.Err != nil {
-			m.stopWorking()
 			m.status = "Command failed"
 			m.refreshViewport(false)
 			return m, nil
@@ -160,12 +173,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		title, body := formatPermissionResolution(msg.Resolution)
 		m.appendOverlay(simpleFeedItem(feedCommand, "permission:"+msg.Resolution.RequestID, title, body, "", true))
 		m.status = title
-		cmds := []tea.Cmd{m.fetchSnapshotCmd()}
-		if cmd := m.startWorking(title); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		// Do NOT call startWorking here. The backend's ApprovePermission
+		// synchronously runs the resumed turn, so EventTurnCompleted may
+		// have already arrived and cleared working. Blindly re-setting
+		// working=true here causes a permanent hang with no subsequent
+		// event to clear it. Instead, let snapshotLoadedMsg decide: if
+		// Snapshot.Running is true, it will call startWorking.
 		m.refreshViewport(false)
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(m.fetchSnapshotCmd(), m.fetchContextSummaryCmd(), m.fetchWorkbenchCmd())
 	case heartbeatTickMsg:
 		if !m.working {
 			return m, nil

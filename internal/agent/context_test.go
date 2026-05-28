@@ -509,11 +509,19 @@ func TestBuildContextKeepsDynamicPromptStateOutOfStableSystem(t *testing.T) {
 
 	firstRuntime := runtimePromptStateText(first.Messages)
 	secondRuntime := runtimePromptStateText(second.Messages)
-	if !strings.Contains(firstRuntime, "Local date: 2026-04-17") || !strings.Contains(secondRuntime, "Local date: 2026-04-18") {
-		t.Fatalf("expected environment date to move through runtime messages, first=%q second=%q", firstRuntime, secondRuntime)
+	// Date is now fixed to sessionStartTime, so both builds should show the same date.
+	if !strings.Contains(firstRuntime, "Local date: 2026-04-17") || !strings.Contains(secondRuntime, "Local date: 2026-04-17") {
+		t.Fatalf("expected environment date to be fixed to sessionStartTime in both builds, first=%q second=%q", firstRuntime, secondRuntime)
 	}
-	if firstRuntime == secondRuntime {
-		t.Fatalf("expected runtime prompt state to change after date change")
+	// Runtime prompt state should still carry dynamic sections (environment, tool availability) even though date is stable.
+	if firstRuntime != secondRuntime {
+		// If they differ, that's fine — dynamic state is in runtime messages.
+	} else {
+		for _, want := range []string{"# Environment", "# Tool Availability"} {
+			if !strings.Contains(firstRuntime, want) {
+				t.Fatalf("expected runtime prompt state to contain %q, got %q", want, firstRuntime)
+			}
+		}
 	}
 
 	for _, msg := range a.GetMessages() {
@@ -590,27 +598,16 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 		"read_inbox",
 		"send_message",
 		"task",
-		"list_skill_sources",
-		"install_skill",
-		"list_memory",
-		"get_memory",
-		"search_memory",
-		"list_memory_candidates",
-		"remember_memory",
-		"forget_memory",
-		"compress",
 		"accept_memory_candidate",
 		"dismiss_memory_candidate",
-		"expand_skill",
-		"unload_skill",
 	} {
 		if _, ok := names[unexpected]; ok {
 			t.Fatalf("did not expect inactive tool schema %q, got %+v", unexpected, build.ToolSchemas)
 		}
 	}
 
-	if got := len(build.ToolSchemas); got != 11 {
-		t.Fatalf("expected 11 active tool schemas by default, got %d", got)
+	if got := len(build.ToolSchemas); got != 21 {
+		t.Fatalf("expected 21 active tool schemas by default (core_code + planning bundles), got %d", got)
 	}
 }
 
@@ -643,13 +640,7 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 		}
 	}
 	for _, blocked := range []string{
-		"list_skills",
-		"load_skill",
-		"list_memory",
-		"remember_memory",
-		"compress",
 		"manage_session",
-		"history_search",
 		"web_search",
 		"background_run",
 		"task",
@@ -809,8 +800,14 @@ func TestBuildContextHidesHistorySearchForOrdinaryQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
-		t.Fatalf("did not expect history_search for ordinary query, got %+v", build.ToolSchemas)
+	// After P0-3 (remove hints filtering), history_search is always exposed
+	// when the core_code bundle is active. The HistoryRecall evaluation still
+	// controls behavioral hints but no longer gates tool visibility.
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); !ok {
+		t.Fatalf("expected history_search to be exposed (always visible now), got %+v", build.ToolSchemas)
+	}
+	if build.HistoryRecall != nil && build.HistoryRecall.AllowTool {
+		t.Fatalf("expected HistoryRecall.AllowTool to be false for ordinary query, got %+v", build.HistoryRecall)
 	}
 }
 
@@ -875,8 +872,13 @@ func TestBuildContextLimitsAutomaticHistoryRecallToOncePerTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
-		t.Fatalf("did not expect history_search after automatic recall limit, got %+v", build.ToolSchemas)
+	// After P0-3 (remove hints filtering), history_search is always visible.
+	// The per-turn limit now controls the HistoryRecall decision, not tool visibility.
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); !ok {
+		t.Fatalf("expected history_search to be exposed (always visible now), got %+v", build.ToolSchemas)
+	}
+	if build.HistoryRecall != nil && build.HistoryRecall.AllowTool {
+		t.Fatalf("expected HistoryRecall.AllowTool to be false after automatic recall limit, got %+v", build.HistoryRecall)
 	}
 }
 
@@ -893,8 +895,13 @@ func TestBuildContextBlocksAutomaticHistoryRecallForSessionSource(t *testing.T) 
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
-		t.Fatalf("did not expect history_search for blocked session source, got %+v", build.ToolSchemas)
+	// After P0-3 (remove hints filtering), history_search is always visible.
+	// Blocked session source now controls the HistoryRecall decision, not tool visibility.
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); !ok {
+		t.Fatalf("expected history_search to be exposed (always visible now), got %+v", build.ToolSchemas)
+	}
+	if build.HistoryRecall != nil && build.HistoryRecall.AllowTool {
+		t.Fatalf("expected HistoryRecall.AllowTool to be false for blocked session source, got %+v", build.HistoryRecall)
 	}
 }
 
@@ -2166,9 +2173,11 @@ func newTestAgent(t *testing.T, compressThreshold int) *Agent {
 	}
 
 	a := New(cfg)
+	fixedTime := time.Date(2026, time.April, 17, 9, 30, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
 	a.now = func() time.Time {
-		return time.Date(2026, time.April, 17, 9, 30, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+		return fixedTime
 	}
+	a.sessionStartTime = fixedTime
 	return a
 }
 

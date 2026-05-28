@@ -37,15 +37,6 @@ type BuildContextResult struct {
 	HistoryRecall         *tools.HistoryRecallEvaluation
 }
 
-type toolExposureHints struct {
-	memoryAdmin   bool
-	skillMarket   bool
-	automation    bool
-	compression   bool
-	sessionAdmin  bool
-	historyRecall bool
-}
-
 func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	history, version := a.messageState()
 	history = dedupeRepeatedLargeToolResultSummaries(history)
@@ -83,8 +74,7 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	combined = append(combined, runtimeMessages...)
 	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), triggerTokens)
 	historyRecall := a.evaluateHistoryRecall(ctx, query, compactedHistory, memoryLayers, compacted)
-	hints := deriveToolExposureHints(query, postCompactEstimate.Breakdown.Total, historyRecall)
-	toolSchemas := a.activeToolSchemas(hints, agentProfile)
+	toolSchemas := a.activeToolSchemas(agentProfile)
 	estimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, toolSchemas, triggerTokens)
 	reasons := estimate.Reasons
 	compactionBefore := 0
@@ -121,7 +111,7 @@ func agentProfileFromContext(ctx context.Context) string {
 	return config.NormalizeAgentProfile(tools.SessionContextFromContext(ctx).AgentProfile)
 }
 
-func (a *Agent) activeToolSchemas(hints toolExposureHints, agentProfile string) []protocol.ToolSchema {
+func (a *Agent) activeToolSchemas(agentProfile string) []protocol.ToolSchema {
 	schemas := a.toolHandler.ActiveSchemas()
 	if len(schemas) == 0 {
 		return nil
@@ -137,35 +127,8 @@ func (a *Agent) activeToolSchemas(hints toolExposureHints, agentProfile string) 
 		blocked["accept_memory_candidate"] = struct{}{}
 		blocked["dismiss_memory_candidate"] = struct{}{}
 	}
-	if !hints.skillMarket {
-		blocked["list_skill_sources"] = struct{}{}
-		blocked["install_skill"] = struct{}{}
-	}
-	if !hints.memoryAdmin {
-		blocked["list_memory"] = struct{}{}
-		blocked["get_memory"] = struct{}{}
-		blocked["search_memory"] = struct{}{}
-		blocked["remember_memory"] = struct{}{}
-		blocked["forget_memory"] = struct{}{}
-		if !hasMemoryCandidates {
-			blocked["list_memory_candidates"] = struct{}{}
-		}
-	}
-	if !hints.automation {
-		blocked["cron"] = struct{}{}
-		blocked["heartbeat"] = struct{}{}
-	}
-	if !hints.compression {
-		blocked["compress"] = struct{}{}
-	}
-	if !hints.sessionAdmin {
-		blocked["manage_session"] = struct{}{}
-	}
-	if !hints.historyRecall {
-		blocked["history_search"] = struct{}{}
-	}
 	if config.NormalizeAgentProfile(agentProfile) == config.AgentProfileCoding {
-		applyCodingProfileToolFilter(blocked, hints, hasMemoryCandidates)
+		applyCodingProfileToolFilter(blocked, hasMemoryCandidates)
 	}
 	if len(blocked) == 0 {
 		return schemas
@@ -181,41 +144,10 @@ func (a *Agent) activeToolSchemas(hints toolExposureHints, agentProfile string) 
 	return filtered
 }
 
-func applyCodingProfileToolFilter(blocked map[string]struct{}, hints toolExposureHints, hasMemoryCandidates bool) {
-	if !hints.skillMarket {
-		blocked["list_skills"] = struct{}{}
-		blocked["load_skill"] = struct{}{}
-		blocked["expand_skill"] = struct{}{}
-		blocked["unload_skill"] = struct{}{}
-		blocked["list_skill_sources"] = struct{}{}
-		blocked["install_skill"] = struct{}{}
-	}
-	if !hints.memoryAdmin {
-		blocked["list_memory"] = struct{}{}
-		blocked["get_memory"] = struct{}{}
-		blocked["search_memory"] = struct{}{}
-		blocked["remember_memory"] = struct{}{}
-		blocked["forget_memory"] = struct{}{}
-		blocked["list_memory_candidates"] = struct{}{}
-		blocked["accept_memory_candidate"] = struct{}{}
-		blocked["dismiss_memory_candidate"] = struct{}{}
-	}
+func applyCodingProfileToolFilter(blocked map[string]struct{}, hasMemoryCandidates bool) {
 	if !hasMemoryCandidates {
 		blocked["accept_memory_candidate"] = struct{}{}
 		blocked["dismiss_memory_candidate"] = struct{}{}
-	}
-	if !hints.automation {
-		blocked["cron"] = struct{}{}
-		blocked["heartbeat"] = struct{}{}
-	}
-	if !hints.compression {
-		blocked["compress"] = struct{}{}
-	}
-	if !hints.sessionAdmin {
-		blocked["manage_session"] = struct{}{}
-	}
-	if !hints.historyRecall {
-		blocked["history_search"] = struct{}{}
 	}
 }
 
@@ -234,48 +166,6 @@ func (a *Agent) hasMemoryCandidates() bool {
 		return true
 	}
 	return count > 0
-}
-
-func deriveToolExposureHints(query string, tokenEstimate int, historyRecall *tools.HistoryRecallEvaluation) toolExposureHints {
-	query = strings.ToLower(strings.TrimSpace(query))
-	hints := toolExposureHints{
-		memoryAdmin: containsAny(query,
-			"remember", "memory", "memories", "forget", "recall", "note this", "save this",
-			"记住", "记忆", "回忆", "忘记", "偏好", "保存这个",
-			// compounds only — no single-char Chinese or short English stems
-			"store this", "keep this", "dont forget", "don't forget",
-			"remember that", "remembers",
-		),
-		skillMarket: containsAny(query,
-			"skill", "skills", "skills.sh", "skillhub", "install", "market", "source",
-			"技能", "安装", "市场", "来源",
-			"find skill", "find a skill", "discover skill", "activate", "load skill",
-			"unload", "list skill", "skill search", "add skill",
-		),
-		automation: containsAny(query,
-			"cron", "heartbeat", "remind", "reminder", "schedule", "scheduled", "every day", "every week", "follow-up",
-			"定时", "提醒", "周期", "巡检", "心跳", "每周", "每天",
-			"定期", "定期执行", "自动", "automation", "cron job", "定时任务",
-			"repeat", "recurring", "interval", "every morning", "every hour",
-		),
-		compression: tokenEstimate >= 12000 || containsAny(query,
-			"compress", "compression", "summarize the history", "context window", "token budget",
-			"压缩", "窗口",
-			// compound phrases — not bare "context" or "token" to avoid false hits
-			"too many tokens", "history is long", "清理历史", "清理上下文",
-		),
-		sessionAdmin: containsAny(query,
-			"session", "approve", "approval", "deny", "clear", "auth",
-			"会话", "批准", "授权", "拒绝", "清理", "清空",
-			// compound phrases — not bare "context" or "admin" or "review"
-			"manage session", "approve tool", "deny tool",
-			"permission", "安全", "security", "审计", "audit",
-		),
-	}
-	if historyRecall != nil {
-		hints.historyRecall = historyRecall.AllowTool
-	}
-	return hints
 }
 
 func (a *Agent) activateImplicitBundlesForQuery(query string) []string {

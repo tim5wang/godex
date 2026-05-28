@@ -85,8 +85,11 @@ func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtim
 
 func appendRuntimePromptSection(sections []runtimePromptSection, key string, kind protocol.MessageKind, text string) []runtimePromptSection {
 	text = strings.TrimSpace(text)
+	// Always append a section to keep the order stable across turns.
+	// Empty sections use a minimal placeholder so the prefix cache is not
+	// broken by section presence/absence changes.
 	if text == "" {
-		return sections
+		text = "(" + key + ": none)"
 	}
 	return append(sections, runtimePromptSection{
 		Key:    key,
@@ -126,9 +129,14 @@ func runtimePromptSectionTokenMap(sections []runtimePromptSection) map[string]in
 }
 
 func (a *Agent) environmentPromptInput() EnvironmentPromptInput {
-	now := a.now()
+	// Use session start time instead of per-turn time to keep the environment
+	// section stable across turns for better DeepSeek prefix cache hit rate.
+	sessionTime := a.sessionStartTime
+	if sessionTime.IsZero() {
+		sessionTime = a.now()
+	}
 	timezone := "Local"
-	if loc := now.Location(); loc != nil && loc.String() != "" {
+	if loc := sessionTime.Location(); loc != nil && loc.String() != "" {
 		timezone = loc.String()
 	}
 
@@ -148,7 +156,7 @@ func (a *Agent) environmentPromptInput() EnvironmentPromptInput {
 		Shell:        shell,
 		Platform:     runtime.GOOS,
 		Timezone:     timezone,
-		Now:          now,
+		Now:          sessionTime,
 	}
 }
 

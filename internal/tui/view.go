@@ -9,6 +9,8 @@ func (m *model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Loading TUI..."
 	}
+	// Recalculate layout to track dynamic composer height.
+	m.resize()
 
 	parts := []string{
 		m.renderHeader(),
@@ -19,13 +21,8 @@ func (m *model) View() string {
 }
 
 func (m *model) resize() {
-	composerRows := 3
-	if m.height < 14 {
-		composerRows = 2
-	}
-	if m.height < 10 {
-		composerRows = 1
-	}
+	// Dynamic composer height: 1–10 lines based on content, scroll when >10.
+	composerRows := clampInt(m.composerLineCount(), 1, 10)
 	m.showRules = m.height >= 12
 	m.composer.SetHeight(composerRows)
 	m.composer.SetWidth(maxInt(12, m.width-1))
@@ -93,6 +90,24 @@ func (m *model) renderComposer() string {
 	}
 	lines = append(lines, mutedLineStyle.Render(ellipsize(m.status, m.width)))
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) composerLineCount() int {
+	val := m.composer.Value()
+	if val == "" {
+		return 1
+	}
+	return strings.Count(val, "\n") + 1
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 func (m *model) renderHeartbeatLine() string {

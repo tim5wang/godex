@@ -118,12 +118,20 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 	case "import":
 		return r.runImport(ctx, args[1:])
 	case "longtask":
+		if containsHelpArg(args[1:]) {
+			fmt.Fprintln(r.Stdout, longtaskHelpText())
+			return nil
+		}
 		return r.runLongTaskCommand(ctx, args[1:])
 	case "setup":
 		return RunSetupCommand(ctx, args[1:], r.Stdout, r.Stderr)
 	case "init":
 		return runSetupCommandNamed(ctx, "init", args[1:], r.Stdout, r.Stderr)
 	case "repl":
+		if containsHelpArg(args[1:]) {
+			fmt.Fprintln(r.Stdout, replHelpText())
+			return nil
+		}
 		if r.RunREPL == nil {
 			return fmt.Errorf("repl mode unavailable")
 		}
@@ -349,11 +357,15 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 }
 
 func (r *Runner) runDoctor(ctx context.Context, args []string) error {
-	if len(args) == 1 && args[0] == "storage" {
+	if len(args) > 0 && (args[0] == "storage") {
 		return r.runDoctorStorage()
 	}
 	if len(args) > 0 && args[0] == "sessions" {
 		return r.runDoctorSessions(ctx, args[1:])
+	}
+	if len(args) > 0 && isHelpArg(args[0]) {
+		fmt.Fprintln(r.Stdout, doctorHelpText())
+		return nil
 	}
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(r.Stderr)
@@ -794,8 +806,9 @@ func providersHelpText() string {
 }
 
 func (r *Runner) runLogin(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: godex login openai|codex [--mode platform-api-key|codex-oauth|auto]")
+	if len(args) == 0 || isHelpArg(args[0]) {
+		fmt.Fprintln(r.Stdout, loginHelpText())
+		return nil
 	}
 	target := strings.ToLower(strings.TrimSpace(args[0]))
 	fs := flag.NewFlagSet("login "+target, flag.ContinueOnError)
@@ -823,6 +836,10 @@ func (r *Runner) runLogin(ctx context.Context, args []string) error {
 }
 
 func (r *Runner) runLogout(ctx context.Context, args []string) error {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		fmt.Fprintln(r.Stdout, logoutHelpText())
+		return nil
+	}
 	if len(args) != 1 {
 		return fmt.Errorf("usage: godex logout openai|codex")
 	}
@@ -854,7 +871,11 @@ func (r *Runner) runLogout(ctx context.Context, args []string) error {
 
 func (r *Runner) runMigrate(ctx context.Context, args []string) error {
 	_ = ctx
-	if len(args) == 0 || strings.TrimSpace(args[0]) != "home" {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		fmt.Fprintln(r.Stdout, migrateHelpText())
+		return nil
+	}
+	if strings.TrimSpace(args[0]) != "home" {
 		return fmt.Errorf("usage: godex migrate home [--dry-run]")
 	}
 	fs := flag.NewFlagSet("migrate home", flag.ContinueOnError)
@@ -1334,4 +1355,94 @@ func (p *consolePrinter) Finish() {
 		fmt.Fprintln(p.stdout)
 		p.assistantOpen = false
 	}
+}
+
+// isHelpArg returns true if the argument is a help flag.
+func isHelpArg(arg string) bool {
+	switch strings.TrimSpace(strings.ToLower(arg)) {
+	case "help", "-h", "--help":
+		return true
+	default:
+		return false
+	}
+}
+
+// containsHelpArg returns true if any of the arguments is a help flag.
+func containsHelpArg(args []string) bool {
+	for _, a := range args {
+		if isHelpArg(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func replHelpText() string {
+	return strings.Join([]string{
+		"Usage:",
+		"  godex repl [--session key] [--profile general|coding]",
+		"",
+		"Open an interactive readline session for chatting with the agent.",
+		"",
+		"Flags:",
+		"  --session string   session key or channel:key",
+		"  --profile string   agent profile: general or coding",
+	}, "\n")
+}
+
+func longtaskHelpText() string {
+	return strings.Join([]string{
+		"Usage:",
+		"  godex longtask list [--session key]",
+		"  godex longtask create --file spec.json [--session key]",
+		"  godex longtask run <id> [--session key] [--auto-repair] [--max-iterations N]",
+		"  godex longtask status <id> [--session key]",
+		"  godex longtask cancel <id> --node <node_id> [--session key]",
+		"  godex longtask finalize <id> --node <node_id> [--session key]",
+		"",
+		"Create, run, and inspect durable story-loop tasks.",
+	}, "\n")
+}
+
+func doctorHelpText() string {
+	return strings.Join([]string{
+		"Usage:",
+		"  godex doctor              Diagnose config and runtime problems",
+		"  godex doctor sessions     Diagnose persisted session state",
+		"  godex doctor storage      Diagnose storage directories",
+		"",
+		"Run health checks on configuration, channels, sessions, and storage.",
+	}, "\n")
+}
+
+func loginHelpText() string {
+	return strings.Join([]string{
+		"Usage:",
+		"  godex login openai [--mode platform-api-key|auto]",
+		"  godex login codex [--mode codex-oauth|platform-api-key|auto]",
+		"",
+		"Configure OpenAI or Codex credentials for the current workspace.",
+	}, "\n")
+}
+
+func logoutHelpText() string {
+	return strings.Join([]string{
+		"Usage:",
+		"  godex logout openai",
+		"  godex logout codex",
+		"",
+		"Remove stored credentials for the given provider.",
+	}, "\n")
+}
+
+func migrateHelpText() string {
+	return strings.Join([]string{
+		"Usage:",
+		"  godex migrate home [--dry-run]",
+		"",
+		"Migrate project-level config files into ~/.godex home directory.",
+		"",
+		"Flags:",
+		"  --dry-run   show what would be copied without changing files",
+	}, "\n")
 }

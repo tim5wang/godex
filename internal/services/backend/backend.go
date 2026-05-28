@@ -5113,11 +5113,18 @@ func (s *Service) displayMessages(messages []protocol.Message) []protocol.Messag
 }
 
 func activePermissionBlocker(pending []tools.PendingPermission, turns []TurnRecord, now time.Time) *PermissionBlocker {
-	if len(pending) == 0 {
+	// Only consider permissions that are still actually pending (not approved/denied/expired).
+	var stillPending []tools.PendingPermission
+	for _, p := range pending {
+		if p.Status == "" || p.Status == tools.PermissionStatusPending {
+			stillPending = append(stillPending, p)
+		}
+	}
+	if len(stillPending) == 0 {
 		return nil
 	}
-	item := pending[0]
-	for _, candidate := range pending {
+	item := stillPending[0]
+	for _, candidate := range stillPending {
 		if candidate.CreatedAt.Before(item.CreatedAt) {
 			item = candidate
 		}

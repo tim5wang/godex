@@ -48,11 +48,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmd, m.fetchContextSummaryCmd())
 			}
 		} else {
-			// Snapshot confirms agent is not running. Clear working state.
-			// This handles the race where EventSnapshotReady (e.g. from
-			// compaction) arrives after the turn has already completed,
-			// and startWorking was called by permissionFinishedMsg or an
-			// earlier snapshot with Running=true.
 			m.stopWorking()
 		}
 		m.status = fmt.Sprintf("Snapshot refreshed at %s", formatClock(msg.Snapshot.UpdatedAt))
@@ -174,11 +169,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendOverlay(simpleFeedItem(feedCommand, "permission:"+msg.Resolution.RequestID, title, body, "", true))
 		m.status = title
 		// Do NOT call startWorking here. The backend's ApprovePermission
-		// synchronously runs the resumed turn, so EventTurnCompleted may
-		// have already arrived and cleared working. Blindly re-setting
-		// working=true here causes a permanent hang with no subsequent
-		// event to clear it. Instead, let snapshotLoadedMsg decide: if
-		// Snapshot.Running is true, it will call startWorking.
+		// synchronously runs the resumed turn. The snapshot fetch below
+		// runs after ApprovePermission returns, so Snapshot.Running will
+		// be false and snapshotLoadedMsg will call stopWorking().
 		m.refreshViewport(false)
 		return m, tea.Batch(m.fetchSnapshotCmd(), m.fetchContextSummaryCmd(), m.fetchWorkbenchCmd())
 	case heartbeatTickMsg:

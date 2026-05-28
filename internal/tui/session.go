@@ -65,7 +65,7 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func() time.Time, sessionID string, snapshot rtbackend.Snapshot) *model {
 	composer := textarea.New()
 	composer.Prompt = "› "
-	composer.Placeholder = "Type a message or /help. Enter sends. Ctrl+P/N recalls input history."
+	composer.Placeholder = "Type a message or /help. Enter sends. Alt+Enter newline. Ctrl+P/N recalls history."
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 20000
 	composer.SetHeight(3)

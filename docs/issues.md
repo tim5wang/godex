@@ -29,3 +29,5 @@
 - [x] tui 有三个问题：1. approve时，看不到要approve什么权限，approve什么session_id; 2. tui 里的command记录会显示在末尾，导致要往上滚动才能看到agent回复； 3. tui里没办法鼠标划词复制文本
 
 - [x] godex的默认(repl)命令行对话里，似乎不能支持权限审批，入口可以改一下， godex命令默认是tui实现，去掉godex tui命令，增加godex repl命令
+
+- [x] godex用read_file 用着用着就改用bash了，是因为read_file 的 start_line 和 limit并不生效，无法完成代码阅读任务，在这里添乱呢

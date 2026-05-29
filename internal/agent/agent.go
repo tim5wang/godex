@@ -70,7 +70,6 @@ type Agent struct {
 	compactionCandidate  *compactionCandidate
 	compactionRunning    bool
 	now                  func() time.Time
-	sessionStartTime     time.Time
 	mu                   sync.Mutex
 }
 

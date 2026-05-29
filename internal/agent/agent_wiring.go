@@ -146,8 +146,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		messages:       []protocol.Message{},
 		activeSkills:   make(map[string]*activeSkillState),
 		transcriptRefs: nil,
-		now:              time.Now,
-		sessionStartTime: time.Now(),
+		now:            time.Now,
 		prompts: conversation.PromptLayers{
 			Base: "You are a helpful AI agent working inside this workspace. Use available tools and skills to solve tasks.",
 		},

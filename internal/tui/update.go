@@ -168,6 +168,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		title, body := formatPermissionResolution(msg.Resolution)
 		m.appendOverlay(simpleFeedItem(feedCommand, "permission:"+msg.Resolution.RequestID, title, body, "", true))
 		m.status = title
+		// Clear the permission blocker immediately so the status bar
+		// does not continue to show "Blocked by approval" while the
+		// async snapshot fetch is in flight.
+		m.snapshot.ActivePermissionBlocker = nil
 		// Do NOT call startWorking here. The backend's ApprovePermission
 		// synchronously runs the resumed turn. The snapshot fetch below
 		// runs after ApprovePermission returns, so Snapshot.Running will

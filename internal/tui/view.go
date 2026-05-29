@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/rivo/uniseg"
 )
 
 func (m *model) View() string {
@@ -21,13 +23,17 @@ func (m *model) View() string {
 }
 
 func (m *model) resize() {
-	// Dynamic composer height: 1–10 lines based on content, scroll when >10.
-	composerRows := clampInt(m.composerLineCount(), 1, 10)
+	// Dynamic composer height: 1–10 lines based on content.
+	// The textarea appends m.height end-of-buffer lines internally, so we set
+	// height = visualLines + 1 to prevent the viewport from scrolling down
+	// and hiding the top content lines when height == visualLines exactly.
+	visualLines := clampInt(m.composerLineCount(), 1, 10)
+	textareaHeight := clampInt(visualLines+1, 2, 10)
 	m.showRules = m.height >= 12
-	m.composer.SetHeight(composerRows)
+	m.composer.SetHeight(textareaHeight)
 	m.composer.SetWidth(maxInt(12, m.width-1))
 
-	composerBlockHeight := composerRows + 2
+	composerBlockHeight := textareaHeight + 2
 	if m.showRules {
 		composerBlockHeight += 2
 	}
@@ -97,7 +103,18 @@ func (m *model) composerLineCount() int {
 	if val == "" {
 		return 1
 	}
-	return strings.Count(val, "\n") + 1
+	// m.composer.Width() is the text content width already (prompt subtracted internally).
+	textWidth := maxInt(1, m.composer.Width())
+	total := 0
+	for _, line := range strings.Split(val, "\n") {
+		dispWidth := uniseg.StringWidth(line)
+		if dispWidth == 0 {
+			total++
+		} else {
+			total += (dispWidth + textWidth - 1) / textWidth
+		}
+	}
+	return maxInt(1, total)
 }
 
 func clampInt(v, lo, hi int) int {

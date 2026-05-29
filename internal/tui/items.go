@@ -32,6 +32,48 @@ func (m *model) syncAutoFollow() {
 	m.autoFollow = m.viewport.AtBottom()
 }
 
+// focusFirstPendingPermission switches focus to the feed and scrolls to the
+// first pending-permission item, if one exists. It must be called after
+// refreshViewport so that m.itemSpans is populated.
+func (m *model) focusFirstPendingPermission() bool {
+	// Find the first permission item in allItems (sorted by CreatedAt).
+	targetID := ""
+	for _, item := range m.allItems() {
+		if item.Kind == feedPermission {
+			targetID = item.ID
+			break
+		}
+	}
+	if targetID == "" {
+		return false
+	}
+
+	// Find its span and scroll to it.
+	for _, span := range m.itemSpans {
+		if span.ID == targetID {
+			m.selectedItemID = span.ID
+			m.ensureSpanVisible(span)
+			// Switch focus to feed so the user can immediately press
+			// a/u/p/s/x to approve or x to deny.
+			m.focus = focusFeed
+			m.composer.Blur()
+			m.autoFollow = false
+			return true
+		}
+	}
+	return false
+}
+
+// autoFocusNewPermission switches focus to the first pending-permission item
+// when newPermissions is true. It must be called after refreshViewport so that
+// m.itemSpans is populated.
+func (m *model) autoFocusNewPermission(newPermissions bool) {
+	if !newPermissions {
+		return
+	}
+	m.focusFirstPendingPermission()
+}
+
 func (m *model) reconcileSelectedItem() {
 	visibleStart := m.viewport.YOffset
 	visibleEnd := visibleStart + maxInt(1, m.viewport.Height)

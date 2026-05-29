@@ -1426,3 +1426,86 @@ func TestCtrlCStillQuitsTUI(t *testing.T) {
 		t.Fatal("expected ctrl+c command to be tea.Quit")
 	}
 }
+
+func TestSnapshotWithNewPendingPermissionAutoFocusesFeed(t *testing.T) {
+	backend := &fakeBackend{
+		snapshot: rtbackend.Snapshot{
+			Locator: rtbackend.SessionLocator{Channel: "web", Key: "default"},
+		},
+	}
+	m := newModel(context.Background(), &config.Config{
+		Model:        "test-model",
+		WorkspaceDir: "/workspace",
+		LeadName:     "lead",
+	}, backend, time.Now, "session-1", backend.snapshot)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+
+	// Initially composer is focused, no pending permissions.
+	if m.focus != focusComposer {
+		t.Fatalf("expected focusComposer, got %v", m.focus)
+	}
+	if len(m.snapshot.PendingPermissions) != 0 {
+		t.Fatalf("expected no pending permissions initially, got %d", len(m.snapshot.PendingPermissions))
+	}
+
+	// Simulate a snapshot refresh that introduces a pending permission.
+	backend.snapshot.PendingPermissions = []tools.PendingPermission{
+		{
+			ID:     "perm-auto-1",
+			Reason: "Need approval to run bash.",
+			Request: tools.PermissionRequest{
+				ToolName: "bash",
+				Command:  "ls -la",
+			},
+		},
+	}
+
+	msg := snapshotLoadedMsg{Snapshot: backend.snapshot}
+	m.Update(msg)
+
+	// After snapshot with new permission, focus should switch to feed.
+	if m.focus != focusFeed {
+		t.Fatalf("expected focusFeed after new pending permission, got %v", m.focus)
+	}
+	// The selected item should be the permission item.
+	if m.selectedItemID != "permission:perm-auto-1" {
+		t.Fatalf("expected selected item to be permission:perm-auto-1, got %q", m.selectedItemID)
+	}
+	// The composer should be blurred.
+	if m.composer.Focused() {
+		t.Fatal("expected composer to be blurred after auto-focus on permission")
+	}
+}
+
+func TestSnapshotWithSamePermissionCountDoesNotAutoFocus(t *testing.T) {
+	backend := &fakeBackend{
+		snapshot: rtbackend.Snapshot{
+			Locator: rtbackend.SessionLocator{Channel: "web", Key: "default"},
+			PendingPermissions: []tools.PendingPermission{
+				{
+					ID:     "perm-existing",
+					Reason: "Existing permission.",
+					Request: tools.PermissionRequest{
+						ToolName: "bash",
+						Command:  "pwd",
+					},
+				},
+			},
+		},
+	}
+	m := newModel(context.Background(), &config.Config{
+		Model:        "test-model",
+		WorkspaceDir: "/workspace",
+		LeadName:     "lead",
+	}, backend, time.Now, "session-1", backend.snapshot)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+
+	// Simulate a snapshot refresh with same permission count (no new ones).
+	msg := snapshotLoadedMsg{Snapshot: backend.snapshot}
+	m.Update(msg)
+
+	// Focus should remain on composer since no NEW permissions appeared.
+	if m.focus != focusComposer {
+		t.Fatalf("expected focusComposer when no new permissions, got %v", m.focus)
+	}
+}

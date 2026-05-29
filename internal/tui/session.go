@@ -69,7 +69,7 @@ func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 20000
 	composer.SetHeight(3)
-	composer.MaxHeight = 6
+	composer.MaxHeight = 10
 	composer.Focus()
 	composer.FocusedStyle.Base = composer.FocusedStyle.Base.
 		Foreground(lipgloss.AdaptiveColor{Light: "#111827", Dark: "#F9FAFB"})

@@ -35,6 +35,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		expanded := m.expansionState()
+		prevPendingCount := len(m.snapshot.PendingPermissions)
 		dropCommandOverlays := assistantMessageCount(msg.Snapshot.Messages) > assistantMessageCount(m.snapshot.Messages)
 		m.snapshot = msg.Snapshot
 		m.locator = msg.Snapshot.Locator
@@ -45,6 +46,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Snapshot.Running {
 			if cmd := m.startWorking(""); cmd != nil {
 				m.refreshViewport(false)
+				m.autoFocusNewPermission(len(msg.Snapshot.PendingPermissions) > prevPendingCount)
 				return m, tea.Batch(cmd, m.fetchContextSummaryCmd())
 			}
 		} else {
@@ -52,6 +54,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = fmt.Sprintf("Snapshot refreshed at %s", formatClock(msg.Snapshot.UpdatedAt))
 		m.refreshViewport(false)
+		m.autoFocusNewPermission(len(msg.Snapshot.PendingPermissions) > prevPendingCount)
 		return m, tea.Batch(m.fetchContextSummaryCmd(), m.fetchWorkbenchCmd())
 	case contextSummaryLoadedMsg:
 		if msg.Err != nil {

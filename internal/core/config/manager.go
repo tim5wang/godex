@@ -191,6 +191,8 @@ func (m *Manager) Reveal(path string) (string, error) {
 		return m.current.Tools.WebSearch.ExaAPIKey, nil
 	case "tools.web_search.tavily.api_key":
 		return m.current.Tools.WebSearch.TavilyAPIKey, nil
+	case "tools.web_search.serpapi.api_key":
+		return m.current.Tools.WebSearch.SerpAPIKey, nil
 	case "media.moonshot.api_key":
 		return m.current.Media.Moonshot.APIKey, nil
 	default:
@@ -745,6 +747,7 @@ func (m *Manager) Doctor() DoctorReport {
 		strings.TrimSpace(current.Tools.WebSearch.BraveAPIKey) == "" &&
 		strings.TrimSpace(current.Tools.WebSearch.ExaAPIKey) == "" &&
 		strings.TrimSpace(current.Tools.WebSearch.TavilyAPIKey) == "" &&
+		strings.TrimSpace(current.Tools.WebSearch.SerpAPIKey) == "" &&
 		!webSearchBrowserProviderEnabled(current) {
 		add(DoctorCheck{
 			Severity:   "warning",
@@ -1405,6 +1408,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("tools.web_search.tavily.api_key", file.Tools.WebSearch.Tavily.APIKey, "GODEX_WEB_SEARCH_TAVILY_API_KEY", func(v string) {
 		current.Tools.WebSearch.TavilyAPIKey = v
 	})
+	resolveString("tools.web_search.serpapi.api_key", file.Tools.WebSearch.SerpAPI.APIKey, "GODEX_WEB_SEARCH_SERPAPI_API_KEY", func(v string) {
+		current.Tools.WebSearch.SerpAPIKey = v
+	})
 	resolveBool("tools.web_fetch.enabled", file.Tools.WebFetch.Enabled, "GODEX_WEB_FETCH_ENABLED", func(v bool) { current.Tools.WebFetch.Enabled = v })
 	resolveInt("tools.web_fetch.max_chars", file.Tools.WebFetch.MaxChars, "GODEX_WEB_FETCH_MAX_CHARS", func(v int) {
 		current.Tools.WebFetch.MaxChars = v
@@ -1625,6 +1631,7 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 		strings.TrimSpace(current.Tools.WebSearch.BraveAPIKey) != "" ||
 		strings.TrimSpace(current.Tools.WebSearch.ExaAPIKey) != "" ||
 		strings.TrimSpace(current.Tools.WebSearch.TavilyAPIKey) != "" ||
+		strings.TrimSpace(current.Tools.WebSearch.SerpAPIKey) != "" ||
 		strings.TrimSpace(current.Media.Moonshot.APIKey) != ""
 	return current, origins, nil
 }
@@ -1819,6 +1826,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 				BraveAPIKey:  file.Tools.WebSearch.Brave.APIKey,
 				ExaAPIKey:    file.Tools.WebSearch.Exa.APIKey,
 				TavilyAPIKey: file.Tools.WebSearch.Tavily.APIKey,
+				SerpAPIKey:   file.Tools.WebSearch.SerpAPI.APIKey,
 			},
 			WebFetch: WebFetchConfig{
 				Enabled:           file.Tools.WebFetch.Enabled,
@@ -1861,6 +1869,16 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 				IdleTimeoutSeconds:   file.Tools.Browser.IdleTimeoutSeconds,
 				MaxPagesPerSession:   file.Tools.Browser.MaxPagesPerSession,
 				AllowPrivateHosts:    file.Tools.Browser.AllowPrivateHosts,
+			},
+			Lightpanda: LightpandaConfig{
+				Enabled:        file.Tools.Lightpanda.Enabled,
+				BinaryPath:     file.Tools.Lightpanda.BinaryPath,
+				AutoDownload:   file.Tools.Lightpanda.AutoDownload,
+				SearchEngine:   file.Tools.Lightpanda.SearchEngine,
+				SearchTemplate: file.Tools.Lightpanda.SearchTemplate,
+				WaitNetworkMS:  file.Tools.Lightpanda.WaitNetworkMS,
+				ObeyRobots:     file.Tools.Lightpanda.ObeyRobots,
+				LogLevel:       file.Tools.Lightpanda.LogLevel,
 			},
 			History: HistorySearchConfig{
 				Enabled: file.Tools.History.Enabled,
@@ -2617,6 +2635,8 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Tools.WebSearch.Exa.APIKey = asString(value)
 	case "tools.web_search.tavily.api_key":
 		file.Tools.WebSearch.Tavily.APIKey = asString(value)
+	case "tools.web_search.serpapi.api_key":
+		file.Tools.WebSearch.SerpAPI.APIKey = asString(value)
 	case "tools.web_fetch.enabled":
 		file.Tools.WebFetch.Enabled = asBool(value)
 	case "tools.web_fetch.max_chars":
@@ -2719,6 +2739,22 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Tools.Permissions.TrustedPathPrefixes = asStringList(value)
 	case "tools.permissions.trusted_command_prefixes":
 		file.Tools.Permissions.TrustedCommandPrefixes = asStringList(value)
+	case "tools.lightpanda.enabled":
+		file.Tools.Lightpanda.Enabled = asBool(value)
+	case "tools.lightpanda.binary_path":
+		file.Tools.Lightpanda.BinaryPath = asString(value)
+	case "tools.lightpanda.auto_download":
+		file.Tools.Lightpanda.AutoDownload = asBool(value)
+	case "tools.lightpanda.search_engine":
+		file.Tools.Lightpanda.SearchEngine = asString(value)
+	case "tools.lightpanda.search_template":
+		file.Tools.Lightpanda.SearchTemplate = asString(value)
+	case "tools.lightpanda.wait_network_ms":
+		file.Tools.Lightpanda.WaitNetworkMS = asInt(value)
+	case "tools.lightpanda.obey_robots":
+		file.Tools.Lightpanda.ObeyRobots = asBool(value)
+	case "tools.lightpanda.log_level":
+		file.Tools.Lightpanda.LogLevel = asString(value)
 	case "media.moonshot.enabled":
 		file.Media.Moonshot.Enabled = asBool(value)
 	case "media.moonshot.base_url":
@@ -3046,6 +3082,7 @@ func storedValues(file ConfigFile) map[string]any {
 		"tools.web_search.brave.api_key":                         "",
 		"tools.web_search.exa.api_key":                           "",
 		"tools.web_search.tavily.api_key":                        "",
+		"tools.web_search.serpapi.api_key":                       "",
 		"tools.web_fetch.enabled":                                file.Tools.WebFetch.Enabled,
 		"tools.web_fetch.max_chars":                              file.Tools.WebFetch.MaxChars,
 		"tools.web_fetch.timeout_seconds":                        file.Tools.WebFetch.TimeoutSeconds,
@@ -3097,6 +3134,14 @@ func storedValues(file ConfigFile) map[string]any {
 		"tools.permissions.interactive_approval_tools":           append([]string{}, file.Tools.Permissions.InteractiveApprovalTools...),
 		"tools.permissions.trusted_path_prefixes":                append([]string{}, file.Tools.Permissions.TrustedPathPrefixes...),
 		"tools.permissions.trusted_command_prefixes":             append([]string{}, file.Tools.Permissions.TrustedCommandPrefixes...),
+		"tools.lightpanda.enabled":                               file.Tools.Lightpanda.Enabled,
+		"tools.lightpanda.binary_path":                           file.Tools.Lightpanda.BinaryPath,
+		"tools.lightpanda.auto_download":                         file.Tools.Lightpanda.AutoDownload,
+		"tools.lightpanda.search_engine":                         file.Tools.Lightpanda.SearchEngine,
+		"tools.lightpanda.search_template":                       file.Tools.Lightpanda.SearchTemplate,
+		"tools.lightpanda.wait_network_ms":                       file.Tools.Lightpanda.WaitNetworkMS,
+		"tools.lightpanda.obey_robots":                           file.Tools.Lightpanda.ObeyRobots,
+		"tools.lightpanda.log_level":                             file.Tools.Lightpanda.LogLevel,
 		"media.moonshot.enabled":                                 file.Media.Moonshot.Enabled,
 		"media.moonshot.base_url":                                file.Media.Moonshot.BaseURL,
 		"media.moonshot.api_key":                                 "",
@@ -3219,6 +3264,7 @@ func effectiveValues(cfg *Config) map[string]any {
 		"tools.web_search.brave.api_key":                         cfg.Tools.WebSearch.BraveAPIKey,
 		"tools.web_search.exa.api_key":                           cfg.Tools.WebSearch.ExaAPIKey,
 		"tools.web_search.tavily.api_key":                        cfg.Tools.WebSearch.TavilyAPIKey,
+		"tools.web_search.serpapi.api_key":                       cfg.Tools.WebSearch.SerpAPIKey,
 		"tools.web_fetch.enabled":                                cfg.Tools.WebFetch.Enabled,
 		"tools.web_fetch.max_chars":                              cfg.Tools.WebFetch.MaxChars,
 		"tools.web_fetch.timeout_seconds":                        cfg.Tools.WebFetch.TimeoutSeconds,
@@ -3270,6 +3316,14 @@ func effectiveValues(cfg *Config) map[string]any {
 		"tools.permissions.interactive_approval_tools":           append([]string{}, cfg.Tools.Permissions.InteractiveApprovalTools...),
 		"tools.permissions.trusted_path_prefixes":                append([]string{}, cfg.Tools.Permissions.TrustedPathPrefixes...),
 		"tools.permissions.trusted_command_prefixes":             append([]string{}, cfg.Tools.Permissions.TrustedCommandPrefixes...),
+		"tools.lightpanda.enabled":                               cfg.Tools.Lightpanda.Enabled,
+		"tools.lightpanda.binary_path":                           cfg.Tools.Lightpanda.BinaryPath,
+		"tools.lightpanda.auto_download":                         cfg.Tools.Lightpanda.AutoDownload,
+		"tools.lightpanda.search_engine":                         cfg.Tools.Lightpanda.SearchEngine,
+		"tools.lightpanda.search_template":                       cfg.Tools.Lightpanda.SearchTemplate,
+		"tools.lightpanda.wait_network_ms":                       cfg.Tools.Lightpanda.WaitNetworkMS,
+		"tools.lightpanda.obey_robots":                           cfg.Tools.Lightpanda.ObeyRobots,
+		"tools.lightpanda.log_level":                             cfg.Tools.Lightpanda.LogLevel,
 		"media.moonshot.enabled":                                 cfg.Media.Moonshot.Enabled,
 		"media.moonshot.base_url":                                cfg.Media.Moonshot.BaseURL,
 		"media.moonshot.api_key":                                 cfg.Media.Moonshot.APIKey,
@@ -3340,6 +3394,8 @@ func fieldConfigured(path string, stored ConfigFile, current *Config, origin fie
 		return strings.TrimSpace(current.Tools.WebSearch.ExaAPIKey) != "" || strings.TrimSpace(stored.Tools.WebSearch.Exa.APIKey) != ""
 	case "tools.web_search.tavily.api_key":
 		return strings.TrimSpace(current.Tools.WebSearch.TavilyAPIKey) != "" || strings.TrimSpace(stored.Tools.WebSearch.Tavily.APIKey) != ""
+	case "tools.web_search.serpapi.api_key":
+		return strings.TrimSpace(current.Tools.WebSearch.SerpAPIKey) != "" || strings.TrimSpace(stored.Tools.WebSearch.SerpAPI.APIKey) != ""
 	case "media.moonshot.api_key":
 		return strings.TrimSpace(current.Media.Moonshot.APIKey) != "" || strings.TrimSpace(stored.Media.Moonshot.APIKey) != ""
 	case "channels.feishu.app_id":

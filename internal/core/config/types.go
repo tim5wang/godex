@@ -215,8 +215,20 @@ type ToolsSection struct {
 	Subagent    SubagentSection      `yaml:"subagent"`
 	Execution   ExecutionSection     `yaml:"execution"`
 	Browser     BrowserSection       `yaml:"browser"`
+	Lightpanda  LightpandaSection    `yaml:"lightpanda"`
 	History     HistorySearchSection `yaml:"history_search"`
 	Permissions PermissionsSection   `yaml:"permissions"`
+}
+
+type LightpandaSection struct {
+	Enabled        bool   `yaml:"enabled"`
+	BinaryPath     string `yaml:"binary_path"`
+	AutoDownload   bool   `yaml:"auto_download"`
+	SearchEngine   string `yaml:"search_engine"`
+	SearchTemplate string `yaml:"search_template"`
+	WaitNetworkMS  int    `yaml:"wait_network_ms"`
+	ObeyRobots     bool   `yaml:"obey_robots"`
+	LogLevel       string `yaml:"log_level"`
 }
 
 type WebSearchSection struct {
@@ -227,6 +239,7 @@ type WebSearchSection struct {
 	Brave           APIKeyRefSection        `yaml:"brave"`
 	Exa             APIKeyRefSection        `yaml:"exa"`
 	Tavily          APIKeyRefSection        `yaml:"tavily"`
+	SerpAPI         APIKeyRefSection        `yaml:"serpapi"`
 }
 
 type WebSearchBrowserSection struct {

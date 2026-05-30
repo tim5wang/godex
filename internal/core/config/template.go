@@ -368,6 +368,24 @@ tools:
     # Allow localhost/private-network navigation. Environment override: GODEX_BROWSER_ALLOW_PRIVATE_HOSTS.
     allow_private_hosts: {{ .Tools.Browser.AllowPrivateHosts }}
 
+  lightpanda:
+    # Enable Lightpanda as an alternative search and fetch backend. Environment override: GODEX_LIGHTPANDA_ENABLED.
+    enabled: {{ .Tools.Lightpanda.Enabled }}
+    # Optional explicit path to the lightpanda binary. Leave empty to auto-resolve. Environment override: GODEX_LIGHTPANDA_BINARY_PATH.
+    binary_path: {{ yamlString .Tools.Lightpanda.BinaryPath }}
+    # Automatically download the lightpanda binary if not found locally. Environment override: GODEX_LIGHTPANDA_AUTO_DOWNLOAD.
+    auto_download: {{ .Tools.Lightpanda.AutoDownload }}
+    # Default search engine used by Lightpanda for web search. Environment override: GODEX_LIGHTPANDA_SEARCH_ENGINE.
+    search_engine: {{ yamlString .Tools.Lightpanda.SearchEngine }}
+    # Custom search URL template. Use {{ "{{query}}" }} for URL-encoded query. Leave empty for engine default. Environment override: GODEX_LIGHTPANDA_SEARCH_TEMPLATE.
+    search_template: {{ yamlString .Tools.Lightpanda.SearchTemplate }}
+    # Milliseconds to wait for network idle before extracting page content. Environment override: GODEX_LIGHTPANDA_WAIT_NETWORK_MS.
+    wait_network_ms: {{ .Tools.Lightpanda.WaitNetworkMS }}
+    # Respect robots.txt restrictions when fetching pages via Lightpanda. Environment override: GODEX_LIGHTPANDA_OBEY_ROBOTS.
+    obey_robots: {{ .Tools.Lightpanda.ObeyRobots }}
+    # Lightpanda binary log verbosity. Environment override: GODEX_LIGHTPANDA_LOG_LEVEL.
+    log_level: {{ yamlString .Tools.Lightpanda.LogLevel }}
+
   history_search:
     # Enable policy-driven history recall. Environment override: GODEX_TOOLS_HISTORY_SEARCH_ENABLED.
     enabled: {{ .Tools.History.Enabled }}

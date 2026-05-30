@@ -56,12 +56,13 @@ type WebFetchChunk struct {
 
 // WebFetchService performs safe URL fetch + extraction with live config.
 type WebFetchService struct {
-	mu      sync.RWMutex
-	cfg     config.WebFetchConfig
-	tempDir string
-	client  *http.Client
-	cache   map[string]webFetchCacheEntry
-	now     func() time.Time
+	mu         sync.RWMutex
+	cfg        config.WebFetchConfig
+	tempDir    string
+	client     *http.Client
+	cache      map[string]webFetchCacheEntry
+	now        func() time.Time
+	lightpanda *LightpandaBinary
 }
 
 func NewWebFetchService(cfg config.WebFetchConfig, tempDir string) *WebFetchService {
@@ -85,12 +86,20 @@ func (s *WebFetchService) ApplyConfig(cfg config.WebFetchConfig, tempDir string)
 	s.cache = make(map[string]webFetchCacheEntry)
 }
 
+func (s *WebFetchService) SetLightpandaFetcher(binary *LightpandaBinary) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lightpanda = binary
+	s.cache = make(map[string]webFetchCacheEntry)
+}
+
 func (s *WebFetchService) Fetch(ctx context.Context, rawURL, mode string, maxChars int, query ...string) (WebFetchResponse, error) {
 	s.mu.RLock()
 	cfg := s.cfg
 	now := s.now
 	client := s.client
 	tempDir := s.tempDir
+	lightpanda := s.lightpanda
 	s.mu.RUnlock()
 
 	if !cfg.Enabled {
@@ -169,6 +178,16 @@ func (s *WebFetchService) Fetch(ctx context.Context, rawURL, mode string, maxCha
 		PublishedAt:        extracted.Metadata.PublishedAt,
 		NeedsBrowser:       extracted.NeedsBrowser,
 		ExtractionWarnings: append([]string{}, extracted.Warnings...),
+	}
+
+	// Lightpanda fallback: when NeedsBrowser=true and lightpanda binary is available,
+	// retry the fetch with lightpanda CLI to get rendered content without LLM calls.
+	if result.NeedsBrowser && lightpanda != nil {
+		if lpContent, lpErr := lightpanda.FetchDump(ctx, result.URL, mode, WithFetchWaitUntil("networkidle"), WithFetchLogLevel("warn")); lpErr == nil && strings.TrimSpace(lpContent) != "" {
+			result.Content = lpContent
+			result.NeedsBrowser = false
+			result.ExtractionWarnings = append(result.ExtractionWarnings, "re-fetched with lightpanda browser")
+		}
 	}
 	fullContent := result.Content
 	result.Chunks = selectFetchChunks(fullContent, queryText+" "+result.Title, false)

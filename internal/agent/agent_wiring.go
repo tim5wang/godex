@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,24 @@ func buildDependencies(cfg *config.Config) dependencies {
 	browser := tools.NewBrowserService(cfg.Tools.Browser, cfg.TempDir, cfg.Storage)
 	webSearch.SetPreviewFetcher(webFetch)
 	webSearch.SetBrowserSearcher(tools.NewBrowserSearchProvider(browser, cfg.Tools.WebSearch.Browser))
+
+	// Lightpanda integration: initialize binary and inject into search/fetch.
+	if cfg.Tools.Lightpanda.Enabled {
+		lpBin := tools.NewLightpandaBinary()
+		if _, err := lpBin.EnsureBinary(context.Background(), cfg.Tools.Lightpanda.BinaryPath, cfg.TempDir, cfg.Tools.Lightpanda.AutoDownload); err == nil {
+			lpSearcher := tools.NewLightpandaSearchProvider(
+				lpBin,
+				cfg.Tools.Lightpanda.SearchEngine,
+				cfg.Tools.Lightpanda.SearchTemplate,
+				cfg.Tools.Lightpanda.WaitNetworkMS,
+				cfg.Tools.Lightpanda.ObeyRobots,
+				cfg.Tools.Lightpanda.LogLevel,
+			)
+			webSearch.SetLightpandaSearcher(lpSearcher)
+			webFetch.SetLightpandaFetcher(lpBin)
+		}
+	}
+
 	return dependencies{
 		taskMgr:      taskMgr,
 		msgBus:       msgBus,

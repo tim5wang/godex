@@ -1245,3 +1245,115 @@ func TestManagerUpdatePreservesCurrentOnWriteFailure(t *testing.T) {
 		t.Fatalf("expected skipped runtime status, got %q", got)
 	}
 }
+
+func TestManagerUpdateLightpandaConfig(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newTestManager(t, workspace)
+
+	// Step 1: Update lightpanda config via the UI save path.
+	view, err := manager.Update(t.Context(), UpdateRequest{
+		Values: map[string]any{
+			"tools.lightpanda.enabled":       true,
+			"tools.lightpanda.binary_path":   "/usr/local/bin/lightpanda",
+			"tools.lightpanda.auto_download": true,
+			"tools.lightpanda.search_engine": "duckduckgo",
+			"tools.lightpanda.wait_network_ms": 3000,
+			"tools.lightpanda.obey_robots":   true,
+			"tools.lightpanda.log_level":     "info",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update lightpanda config: %v", err)
+	}
+
+	// Step 2: Verify effective runtime config.
+	cfg := manager.Current()
+	if !cfg.Tools.Lightpanda.Enabled {
+		t.Fatalf("expected lightpanda enabled, got false")
+	}
+	if cfg.Tools.Lightpanda.BinaryPath != "/usr/local/bin/lightpanda" {
+		t.Fatalf("expected binary path /usr/local/bin/lightpanda, got %q", cfg.Tools.Lightpanda.BinaryPath)
+	}
+	if !cfg.Tools.Lightpanda.AutoDownload {
+		t.Fatalf("expected auto_download true")
+	}
+	if cfg.Tools.Lightpanda.SearchEngine != "duckduckgo" {
+		t.Fatalf("expected search_engine duckduckgo, got %q", cfg.Tools.Lightpanda.SearchEngine)
+	}
+	if cfg.Tools.Lightpanda.WaitNetworkMS != 3000 {
+		t.Fatalf("expected wait_network_ms 3000, got %d", cfg.Tools.Lightpanda.WaitNetworkMS)
+	}
+	if !cfg.Tools.Lightpanda.ObeyRobots {
+		t.Fatalf("expected obey_robots true")
+	}
+	if cfg.Tools.Lightpanda.LogLevel != "info" {
+		t.Fatalf("expected log_level info, got %q", cfg.Tools.Lightpanda.LogLevel)
+	}
+
+	// Step 3: Verify stored_values round-trip (what the UI reads back).
+	if got := view.StoredValues["tools.lightpanda.enabled"]; got != true {
+		t.Fatalf("stored_values lightpanda.enabled = %#v, want true", got)
+	}
+	if got := view.StoredValues["tools.lightpanda.binary_path"]; got != "/usr/local/bin/lightpanda" {
+		t.Fatalf("stored_values lightpanda.binary_path = %#v, want /usr/local/bin/lightpanda", got)
+	}
+	if got := view.StoredValues["tools.lightpanda.auto_download"]; got != true {
+		t.Fatalf("stored_values lightpanda.auto_download = %#v, want true", got)
+	}
+	if got := view.StoredValues["tools.lightpanda.search_engine"]; got != "duckduckgo" {
+		t.Fatalf("stored_values lightpanda.search_engine = %#v, want duckduckgo", got)
+	}
+	if got := view.StoredValues["tools.lightpanda.wait_network_ms"]; got != 3000 {
+		t.Fatalf("stored_values lightpanda.wait_network_ms = %#v, want 3000", got)
+	}
+	if got := view.StoredValues["tools.lightpanda.obey_robots"]; got != true {
+		t.Fatalf("stored_values lightpanda.obey_robots = %#v, want true", got)
+	}
+	if got := view.StoredValues["tools.lightpanda.log_level"]; got != "info" {
+		t.Fatalf("stored_values lightpanda.log_level = %#v, want info", got)
+	}
+
+	// Step 4: Verify effective_values also round-trips.
+	if got := view.EffectiveValues["tools.lightpanda.enabled"]; got != true {
+		t.Fatalf("effective_values lightpanda.enabled = %#v, want true", got)
+	}
+
+	// Step 5: Simulate disk reload — the critical persistence test.
+	// Reload from the YAML file that was written in step 1.
+	reloaded, err := manager.ReloadFromDisk(t.Context())
+	if err != nil {
+		t.Fatalf("reload from disk: %v", err)
+	}
+
+	// After reload, stored_values must still contain lightpanda settings.
+	if got := reloaded.StoredValues["tools.lightpanda.enabled"]; got != true {
+		t.Fatalf("after reload stored_values lightpanda.enabled = %#v, want true", got)
+	}
+	if got := reloaded.StoredValues["tools.lightpanda.binary_path"]; got != "/usr/local/bin/lightpanda" {
+		t.Fatalf("after reload stored_values lightpanda.binary_path = %#v, want /usr/local/bin/lightpanda", got)
+	}
+	if got := reloaded.StoredValues["tools.lightpanda.auto_download"]; got != true {
+		t.Fatalf("after reload stored_values lightpanda.auto_download = %#v, want true", got)
+	}
+	if got := reloaded.StoredValues["tools.lightpanda.search_engine"]; got != "duckduckgo" {
+		t.Fatalf("after reload stored_values lightpanda.search_engine = %#v, want duckduckgo", got)
+	}
+	if got := reloaded.StoredValues["tools.lightpanda.wait_network_ms"]; got != 3000 {
+		t.Fatalf("after reload stored_values lightpanda.wait_network_ms = %#v, want 3000", got)
+	}
+	if got := reloaded.StoredValues["tools.lightpanda.obey_robots"]; got != true {
+		t.Fatalf("after reload stored_values lightpanda.obey_robots = %#v, want true", got)
+	}
+	if got := reloaded.StoredValues["tools.lightpanda.log_level"]; got != "info" {
+		t.Fatalf("after reload stored_values lightpanda.log_level = %#v, want info", got)
+	}
+
+	// Step 6: Verify effective config after reload.
+	cfg2 := manager.Current()
+	if !cfg2.Tools.Lightpanda.Enabled {
+		t.Fatalf("after reload: expected lightpanda enabled, got false")
+	}
+	if cfg2.Tools.Lightpanda.SearchEngine != "duckduckgo" {
+		t.Fatalf("after reload: expected search_engine duckduckgo, got %q", cfg2.Tools.Lightpanda.SearchEngine)
+	}
+}

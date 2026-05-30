@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -324,5 +325,121 @@ func TestBrowserSearchEngineAttemptsDedupesPrimaryAndFallback(t *testing.T) {
 	attempts := browserSearchEngineAttempts(cfg)
 	if strings.Join(attempts, ",") != "bing,brave,duckduckgo" {
 		t.Fatalf("unexpected browser search attempts: %#v", attempts)
+	}
+}
+
+func TestProviderOrderIncludesLightpanda(t *testing.T) {
+	order := providerOrder([]string{"lightpanda", "brave", "duckduckgo"})
+	found := false
+	for _, p := range order {
+		if p == "lightpanda" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("providerOrder should include lightpanda, got %v", order)
+	}
+}
+
+func TestProviderOrderLightpandaFirst(t *testing.T) {
+	order := providerOrder([]string{"lightpanda", "brave", "exa", "tavily", "duckduckgo"})
+	if order[0] != "lightpanda" {
+		t.Fatalf("expected lightpanda first, got %v", order)
+	}
+}
+
+type mockSearchProvider struct {
+	results []SearchResult
+	err     error
+}
+
+func (m *mockSearchProvider) BrowserSearch(ctx context.Context, sessionID, query string, maxResults int) ([]SearchResult, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if len(m.results) > maxResults {
+		return m.results[:maxResults], nil
+	}
+	return m.results, nil
+}
+
+func TestSearchWithProvider_Lightpanda(t *testing.T) {
+	mock := &mockSearchProvider{
+		results: []SearchResult{
+			{Title: "Go Docs", URL: "https://go.dev/doc/", Snippet: "Go documentation"},
+		},
+	}
+	svc := NewWebSearchService(config.WebSearchConfig{
+		Enabled:       true,
+		ProviderOrder: []string{"lightpanda"},
+	})
+	svc.SetLightpandaSearcher(mock)
+
+	ctx := context.Background()
+	resp, err := svc.Search(ctx, "golang docs", 5, "")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if resp.Provider != "lightpanda" {
+		t.Fatalf("expected provider lightpanda, got %q", resp.Provider)
+	}
+	if len(resp.Results) == 0 {
+		t.Fatal("expected results, got 0")
+	}
+}
+
+func TestSearchFallbackFromLightpanda(t *testing.T) {
+	lightpandaErr := &mockSearchProvider{err: fmt.Errorf("lightpanda binary not found")}
+	ddg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>
+<a class="result__a" href="https://example.com/result1">Example Result</a>
+<div class="result__snippet">This is a snippet.</div>
+</body></html>`))
+	}))
+	defer ddg.Close()
+
+	svc := NewWebSearchService(config.WebSearchConfig{
+		Enabled:       true,
+		ProviderOrder: []string{"lightpanda", "duckduckgo"},
+	})
+	svc.SetLightpandaSearcher(lightpandaErr)
+	svc.endpoints.DuckDuckGo = ddg.URL
+
+	ctx := context.Background()
+	resp, err := svc.Search(ctx, "test query", 5, "")
+	if err != nil {
+		t.Fatalf("search should fallback to duckduckgo: %v", err)
+	}
+	if resp.Provider != "duckduckgo" {
+		t.Fatalf("expected provider duckduckgo after fallback, got %q", resp.Provider)
+	}
+}
+
+func TestSearchLightpandaUnavailableFallsBack(t *testing.T) {
+	ddg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>
+<a class="result__a" href="https://example.com/fallback">Fallback Result</a>
+<div class="result__snippet">A fallback snippet.</div>
+</body></html>`))
+	}))
+	defer ddg.Close()
+
+	svc := NewWebSearchService(config.WebSearchConfig{
+		Enabled:       true,
+		ProviderOrder: []string{"lightpanda", "duckduckgo"},
+	})
+	// Don't call SetLightpandaSearcher — lightpanda remains nil
+	svc.endpoints.DuckDuckGo = ddg.URL
+
+	ctx := context.Background()
+	resp, err := svc.Search(ctx, "test query", 5, "")
+	if err != nil {
+		t.Fatalf("search should fallback when lightpanda nil: %v", err)
+	}
+	if resp.Provider != "duckduckgo" {
+		t.Fatalf("expected provider duckduckgo, got %q", resp.Provider)
 	}
 }

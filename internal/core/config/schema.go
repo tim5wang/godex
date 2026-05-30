@@ -169,7 +169,7 @@ func baseSchema() []SectionSchema {
 			Description: "Built-in current-information search providers and cache policy.",
 			Fields: []FieldSchema{
 				{Path: "tools.web_search.enabled", Label: "Enabled", Description: "Enable the built-in web_search tool.", Type: "bool", LiveApply: true, Env: "GODEX_WEB_SEARCH_ENABLED"},
-				{Path: "tools.web_search.provider_order", Label: "Provider Order", Description: "Comma-separated provider order. Supported: brave, exa, tavily, browser, duckduckgo.", Type: "string_list", LiveApply: true, Env: "GODEX_WEB_SEARCH_PROVIDER_ORDER"},
+				{Path: "tools.web_search.provider_order", Label: "Provider Order", Description: "Comma-separated provider order. Supported: brave, exa, tavily, serpapi, browser, lightpanda, duckduckgo.", Type: "string_list", LiveApply: true, Env: "GODEX_WEB_SEARCH_PROVIDER_ORDER"},
 				{Path: "tools.web_search.cache_ttl_seconds", Label: "Cache TTL Seconds", Description: "In-memory cache lifetime for repeated searches.", Type: "int", LiveApply: true, Env: "GODEX_WEB_SEARCH_CACHE_TTL_SECONDS"},
 				{Path: "tools.web_search.browser.engine", Label: "Browser Engine", Description: "Browser search engine preset: duckduckgo, bing, brave, or custom.", Type: "string", LiveApply: true, Env: "GODEX_WEB_SEARCH_BROWSER_ENGINE", Options: []string{"duckduckgo", "bing", "brave", "custom"}},
 				{Path: "tools.web_search.browser.engine_fallback", Label: "Browser Engine Fallback", Description: "Comma-separated browser engines to try when the primary engine fails or returns no results.", Type: "string_list", LiveApply: true, Env: "GODEX_WEB_SEARCH_BROWSER_ENGINE_FALLBACK"},
@@ -201,6 +201,7 @@ func baseSchema() []SectionSchema {
 				{Path: "tools.web_search.brave.api_key", Label: "Brave API Key", Description: "Optional Brave Search API key.", Type: "string", Secret: true, LiveApply: true, Env: "GODEX_WEB_SEARCH_BRAVE_API_KEY"},
 				{Path: "tools.web_search.exa.api_key", Label: "Exa API Key", Description: "Optional Exa API key.", Type: "string", Secret: true, LiveApply: true, Env: "GODEX_WEB_SEARCH_EXA_API_KEY"},
 				{Path: "tools.web_search.tavily.api_key", Label: "Tavily API Key", Description: "Optional Tavily API key.", Type: "string", Secret: true, LiveApply: true, Env: "GODEX_WEB_SEARCH_TAVILY_API_KEY"},
+				{Path: "tools.web_search.serpapi.api_key", Label: "SerpAPI Key", Description: "Optional SerpAPI API key.", Type: "string", Secret: true, LiveApply: true, Env: "GODEX_WEB_SEARCH_SERPAPI_API_KEY"},
 			},
 		},
 		{
@@ -268,6 +269,21 @@ func baseSchema() []SectionSchema {
 				{Path: "tools.browser.idle_timeout_seconds", Label: "Idle Timeout Seconds", Description: "Close idle browser pages after this many seconds.", Type: "int", LiveApply: true, Env: "GODEX_BROWSER_IDLE_TIMEOUT_SECONDS"},
 				{Path: "tools.browser.max_pages_per_session", Label: "Max Pages Per Session", Description: "Maximum open browser pages tracked per Godex session.", Type: "int", LiveApply: true, Env: "GODEX_BROWSER_MAX_PAGES_PER_SESSION"},
 				{Path: "tools.browser.allow_private_hosts", Label: "Allow Private Hosts", Description: "Permit localhost and private-network browser navigation.", Type: "bool", LiveApply: true, Env: "GODEX_BROWSER_ALLOW_PRIVATE_HOSTS"},
+			},
+		},
+		{
+			ID:          "tools-lightpanda",
+			Label:       "Tools / Lightpanda",
+			Description: "Lightpanda headless browser integration for search and page fetching without a full Chromium stack.",
+			Fields: []FieldSchema{
+				{Path: "tools.lightpanda.enabled", Label: "Enabled", Description: "Enable Lightpanda as an alternative search and fetch backend.", Type: "bool", LiveApply: true, Env: "GODEX_LIGHTPANDA_ENABLED"},
+				{Path: "tools.lightpanda.binary_path", Label: "Binary Path", Description: "Optional explicit path to the lightpanda binary. Leave empty to auto-resolve.", Type: "string", LiveApply: true, Env: "GODEX_LIGHTPANDA_BINARY_PATH"},
+				{Path: "tools.lightpanda.auto_download", Label: "Auto Download", Description: "Automatically download the lightpanda binary if not found locally.", Type: "bool", LiveApply: true, Env: "GODEX_LIGHTPANDA_AUTO_DOWNLOAD"},
+				{Path: "tools.lightpanda.search_engine", Label: "Search Engine", Description: "Default search engine used by Lightpanda for web search.", Type: "string", LiveApply: true, Env: "GODEX_LIGHTPANDA_SEARCH_ENGINE", Options: []string{"duckduckgo", "brave", "bing", "google"}},
+				{Path: "tools.lightpanda.search_template", Label: "Search URL Template", Description: "Custom search URL template. Use {{query}} for URL-encoded query. Leave empty for engine default.", Type: "string", LiveApply: true, Env: "GODEX_LIGHTPANDA_SEARCH_TEMPLATE"},
+				{Path: "tools.lightpanda.wait_network_ms", Label: "Wait Network MS", Description: "Milliseconds to wait for network idle before extracting page content.", Type: "int", LiveApply: true, Env: "GODEX_LIGHTPANDA_WAIT_NETWORK_MS"},
+				{Path: "tools.lightpanda.obey_robots", Label: "Obey Robots", Description: "Respect robots.txt restrictions when fetching pages via Lightpanda.", Type: "bool", LiveApply: true, Env: "GODEX_LIGHTPANDA_OBEY_ROBOTS"},
+				{Path: "tools.lightpanda.log_level", Label: "Log Level", Description: "Lightpanda binary log verbosity.", Type: "string", LiveApply: true, Env: "GODEX_LIGHTPANDA_LOG_LEVEL", Options: []string{"error", "warn", "info", "debug", "trace"}},
 			},
 		},
 		{

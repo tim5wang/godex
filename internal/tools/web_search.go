@@ -52,6 +52,7 @@ type webSearchEndpoints struct {
 	Brave      string
 	Exa        string
 	Tavily     string
+	SerpAPI    string
 	DuckDuckGo string
 }
 
@@ -65,6 +66,7 @@ type WebSearchService struct {
 	endpoints webSearchEndpoints
 	preview   *WebFetchService
 	browser   BrowserSearchProvider
+	lightpanda BrowserSearchProvider
 }
 
 type BrowserSearchProvider interface {
@@ -81,6 +83,7 @@ func NewWebSearchService(cfg config.WebSearchConfig) *WebSearchService {
 			Brave:      "https://api.search.brave.com/res/v1/web/search",
 			Exa:        "https://api.exa.ai/search",
 			Tavily:     "https://api.tavily.com/search",
+			SerpAPI:    "https://serpapi.com/search",
 			DuckDuckGo: "https://html.duckduckgo.com/html/",
 		},
 	}
@@ -99,6 +102,13 @@ func (s *WebSearchService) SetBrowserSearcher(searcher BrowserSearchProvider) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.browser = searcher
+	s.cache = make(map[string]webSearchCacheEntry)
+}
+
+func (s *WebSearchService) SetLightpandaSearcher(searcher BrowserSearchProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lightpanda = searcher
 	s.cache = make(map[string]webSearchCacheEntry)
 }
 
@@ -124,6 +134,7 @@ func (s *WebSearchService) Search(ctx context.Context, query string, maxResults 
 	endpoints := s.endpoints
 	preview := s.preview
 	browser := s.browser
+	lightpanda := s.lightpanda
 	s.mu.RUnlock()
 
 	if !cfg.Enabled {
@@ -142,7 +153,7 @@ func (s *WebSearchService) Search(ctx context.Context, query string, maxResults 
 	for _, name := range providers {
 		var merged []SearchResult
 		for _, variant := range searchProviderQueryVariants(name, query) {
-			results, err := s.searchWithProvider(ctx, client, endpoints, cfg, browser, name, variant, maxResults, freshness)
+			results, err := s.searchWithProvider(ctx, client, endpoints, cfg, browser, lightpanda, name, variant, maxResults, freshness)
 			if err != nil {
 				lastErr = err
 				continue
@@ -411,7 +422,7 @@ func (s *WebSearchService) storeCache(key string, entry webSearchCacheEntry) {
 	s.cache[key] = entry
 }
 
-func (s *WebSearchService) searchWithProvider(ctx context.Context, client *http.Client, endpoints webSearchEndpoints, cfg config.WebSearchConfig, browser BrowserSearchProvider, provider, query string, maxResults int, freshness string) ([]SearchResult, error) {
+func (s *WebSearchService) searchWithProvider(ctx context.Context, client *http.Client, endpoints webSearchEndpoints, cfg config.WebSearchConfig, browser BrowserSearchProvider, lightpanda BrowserSearchProvider, provider, query string, maxResults int, freshness string) ([]SearchResult, error) {
 	switch provider {
 	case "brave":
 		if strings.TrimSpace(cfg.BraveAPIKey) == "" {
@@ -428,11 +439,21 @@ func (s *WebSearchService) searchWithProvider(ctx context.Context, client *http.
 			return nil, fmt.Errorf("tavily api key not configured")
 		}
 		return tavilySearch(ctx, client, endpoints.Tavily, cfg.TavilyAPIKey, query, maxResults)
+	case "serpapi":
+		if strings.TrimSpace(cfg.SerpAPIKey) == "" {
+			return nil, fmt.Errorf("serpapi api key not configured")
+		}
+		return serpapiSearch(ctx, client, endpoints.SerpAPI, cfg.SerpAPIKey, query, maxResults)
 	case "browser":
 		if browser == nil {
 			return nil, fmt.Errorf("browser search provider is unavailable")
 		}
 		return browser.BrowserSearch(ctx, webSearchBrowserSessionID(ctx), query, maxResults)
+	case "lightpanda":
+		if lightpanda == nil {
+			return nil, fmt.Errorf("lightpanda search provider is unavailable")
+		}
+		return lightpanda.BrowserSearch(ctx, webSearchBrowserSessionID(ctx), query, maxResults)
 	case "duckduckgo":
 		return duckDuckGoSearch(ctx, client, endpoints.DuckDuckGo, query, maxResults)
 	default:
@@ -490,7 +511,7 @@ func normalizeWebSearchConfig(cfg config.WebSearchConfig) config.WebSearchConfig
 		cfg.CacheTTLSeconds = int(defaultSearchTTL / time.Second)
 	}
 	if len(cfg.ProviderOrder) == 0 {
-		cfg.ProviderOrder = []string{"brave", "exa", "tavily", "duckduckgo"}
+		cfg.ProviderOrder = []string{"brave", "exa", "tavily", "serpapi", "duckduckgo"}
 	}
 	cfg.ProviderOrder = providerOrder(cfg.ProviderOrder)
 	return cfg
@@ -502,7 +523,7 @@ func providerOrder(order []string) []string {
 	for _, item := range order {
 		item = strings.ToLower(strings.TrimSpace(item))
 		switch item {
-		case "brave", "exa", "tavily", "browser", "duckduckgo":
+		case "brave", "exa", "tavily", "serpapi", "browser", "lightpanda", "duckduckgo":
 			if _, ok := seen[item]; ok {
 				continue
 			}
@@ -669,6 +690,49 @@ func tavilySearch(ctx context.Context, client *http.Client, endpoint, apiKey, qu
 			Title:   strings.TrimSpace(item.Title),
 			URL:     strings.TrimSpace(item.URL),
 			Snippet: strings.TrimSpace(item.Content),
+		})
+	}
+	return trimSearchResults(results, maxResults), nil
+}
+
+func serpapiSearch(ctx context.Context, client *http.Client, endpoint, apiKey, query string, maxResults int) ([]SearchResult, error) {
+	values := url.Values{}
+	values.Set("q", query)
+	values.Set("api_key", apiKey)
+	values.Set("engine", "google")
+	values.Set("num", fmt.Sprintf("%d", maxResults))
+	searchURL := endpoint + "?" + values.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", searchUserAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("serpapi search failed: %s", strings.TrimSpace(string(data)))
+	}
+	var parsed struct {
+		OrganicResults []struct {
+			Title   string `json:"title"`
+			Link    string `json:"link"`
+			Snippet string `json:"snippet"`
+		} `json:"organic_results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+	results := make([]SearchResult, 0, len(parsed.OrganicResults))
+	for _, item := range parsed.OrganicResults {
+		results = append(results, SearchResult{
+			Title:   strings.TrimSpace(item.Title),
+			URL:     strings.TrimSpace(item.Link),
+			Snippet: strings.TrimSpace(item.Snippet),
 		})
 	}
 	return trimSearchResults(results, maxResults), nil

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -202,4 +203,85 @@ func TestWebFetchServiceHonorsPolicyAndPrivateHostGuard(t *testing.T) {
 	if _, err := service.Fetch(context.Background(), server.URL, "text", 0); err == nil {
 		t.Fatalf("expected allowlist enforcement error")
 	}
+}
+
+func TestFetchLightpandaFallback_NeedsBrowser(t *testing.T) {
+	// Server returns minimal HTML that triggers NeedsBrowser detection.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!DOCTYPE html>
+<html><head><title>SPA Page</title></head>
+<body>
+<div id="app"></div>
+<script>document.getElementById("app").innerHTML = "rendered";</script>
+<noscript>This page requires JavaScript.</noscript>
+</body></html>`))
+	}))
+	defer server.Close()
+
+	// Mock lightpanda binary that returns markdown content.
+	dir := t.TempDir()
+	mock := filepath.Join(dir, "lightpanda")
+	if err := os.WriteFile(mock, []byte("#!/bin/sh\necho '# SPA Page Content'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	lightpanda := &LightpandaBinary{path: mock}
+
+	service := NewWebFetchService(config.WebFetchConfig{
+		Enabled:          true,
+		AllowPrivateHosts: true,
+	}, t.TempDir())
+	service.SetLightpandaFetcher(lightpanda)
+
+	resp, err := service.Fetch(context.Background(), server.URL, "markdown", 0)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if resp.NeedsBrowser {
+		t.Error("expected NeedsBrowser=false after lightpanda fallback")
+	}
+	if !strings.Contains(resp.Content, "SPA Page Content") {
+		t.Errorf("expected lightpanda content in response, got %q", resp.Content[:100])
+	}
+}
+
+func TestFetchLightpandaFallback_Unavailable(t *testing.T) {
+	// Server returns minimal HTML that triggers NeedsBrowser detection.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!DOCTYPE html>
+<html><head><title>SPA Page</title></head>
+<body>
+<div id="app"></div>
+<script>document.getElementById("app").innerHTML = "rendered";</script>
+<noscript>This page requires JavaScript.</noscript>
+</body></html>`))
+	}))
+	defer server.Close()
+
+	service := NewWebFetchService(config.WebFetchConfig{
+		Enabled:          true,
+		AllowPrivateHosts: true,
+	}, t.TempDir())
+	// Don't call SetLightpandaFetcher — lightpanda remains nil
+
+	resp, err := service.Fetch(context.Background(), server.URL, "markdown", 0)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	// Without lightpanda, NeedsBrowser should remain true.
+	if !resp.NeedsBrowser {
+		t.Error("expected NeedsBrowser=true when lightpanda unavailable")
+	}
+}
+
+func TestSetLightpandaFetcher(t *testing.T) {
+	service := NewWebFetchService(config.WebFetchConfig{}, t.TempDir())
+	binary := &LightpandaBinary{}
+	service.SetLightpandaFetcher(binary)
+	service.mu.RLock()
+	if service.lightpanda != binary {
+		t.Error("expected lightpanda to be set")
+	}
+	service.mu.RUnlock()
 }

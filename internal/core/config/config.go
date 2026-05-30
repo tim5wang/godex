@@ -277,8 +277,21 @@ type ToolsConfig struct {
 	Subagent    SubagentConfig
 	Execution   ToolExecutionConfig
 	Browser     BrowserConfig
+	Lightpanda  LightpandaConfig
 	History     HistorySearchConfig
 	Permissions PermissionConfig
+}
+
+// LightpandaConfig controls the lightpanda headless browser integration.
+type LightpandaConfig struct {
+	Enabled        bool
+	BinaryPath     string
+	AutoDownload   bool
+	SearchEngine   string
+	SearchTemplate string
+	WaitNetworkMS  int
+	ObeyRobots     bool
+	LogLevel       string
 }
 
 // WebSearchConfig controls the built-in web_search tool.
@@ -290,6 +303,7 @@ type WebSearchConfig struct {
 	BraveAPIKey     string
 	ExaAPIKey       string
 	TavilyAPIKey    string
+	SerpAPIKey      string
 }
 
 type WebSearchBrowserConfig struct {

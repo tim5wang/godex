@@ -608,17 +608,10 @@ func marshalAnthropicBody(req protocol.Request) ([]byte, error) {
 		"stream":     req.Stream,
 	}
 
-	// System prompt: convert to content-block array with cache_control breakpoint.
+	// System prompt: keep as plain string for broad provider compatibility.
+	// (The Anthropic API accepts both string and content-block array formats.)
 	if strings.TrimSpace(req.System) != "" {
-		payload["system"] = []map[string]interface{}{
-			{
-				"type": "text",
-				"text": req.System,
-				"cache_control": map[string]interface{}{
-					"type": "ephemeral",
-				},
-			},
-		}
+		payload["system"] = req.System
 	}
 
 	// Tools: mark the last tool definition with cache_control.

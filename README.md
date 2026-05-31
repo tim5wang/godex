@@ -126,11 +126,10 @@ Web UI 是当前最完整的产品入口：
 - **Skills**：package/skill 管理、质量诊断、smoke run、reinstall。
 - **Automation**：Cron、Heartbeat、运行日志。
 
-前端构建和内置资源同步：
+前端构建（自动输出到 Go embed 目录）：
 
 ```bash
 pnpm -C ui/web build
-./scripts/sync_embedded_web.sh
 ```
 
 Package 开发流程可以使用示例 skill 辅助：
@@ -218,6 +217,5 @@ docs/             产品、架构、验证和部署文档
 ```bash
 go test ./...
 pnpm -C ui/web build
-./scripts/sync_embedded_web.sh
 git diff --check
 ```

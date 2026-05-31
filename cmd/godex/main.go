@@ -219,7 +219,7 @@ func main() {
 				controller: servicecontrol.NewController(),
 				options:    serviceRuntimeOptions(manager),
 			}, usageService, controlRegistry)
-			handler, err := webui.NewHandler(apiHandler, filepath.Join(cfg.WorkspaceDir, "ui", "web", "dist"))
+			handler, err := webui.NewHandler(apiHandler, filepath.Join(cfg.WorkspaceDir, "internal", "uiassets", "embedded_dist"))
 			if err != nil {
 				return err
 			}

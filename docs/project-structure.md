@@ -57,12 +57,8 @@ Shared UI primitives stay in `components/`; API/SSE/types/notification helpers s
 
 ## Embedded UI
 
-Build and sync the Web UI with:
+Build the Web UI (Vite outputs directly to `internal/uiassets/embedded_dist`):
 
 ```bash
 cd ui/web && pnpm build
-cd ../..
-./scripts/sync_embedded_web.sh
 ```
-
-The sync target is `internal/uiassets/embedded_dist`.

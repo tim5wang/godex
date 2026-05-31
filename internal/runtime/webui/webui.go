@@ -5,14 +5,14 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 
 	uiassets "github.com/tim5wang/godex/internal/uiassets"
 )
 
 // NewHandler serves the built web UI and falls back to the API handler for
-// backend routes. It prefers a built ui/web/dist on disk for development, then
+// backend routes. It prefers a built dist on disk for development, then
 // falls back to embedded assets for single-binary deployments.
 func NewHandler(api http.Handler, distDir string) (http.Handler, error) {
 	if api == nil {
@@ -81,13 +81,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := strings.TrimPrefix(filepath.Clean(r.URL.Path), "/")
-	if path == "." || path == "" {
-		path = "index.html"
+	urlPath := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+	if urlPath == "." || urlPath == "" {
+		urlPath = "index.html"
 	}
 
-	if info, err := fs.Stat(h.fs, path); err == nil && !info.IsDir() {
-		if strings.HasPrefix(path, "assets/") {
+	if info, err := fs.Stat(h.fs, urlPath); err == nil && !info.IsDir() {
+		if strings.HasPrefix(urlPath, "assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		h.fileServer.ServeHTTP(w, r)

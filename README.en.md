@@ -126,11 +126,10 @@ The Web UI is currently the most complete product entry point:
 - **Skills**: Package/skill management, quality diagnostics, smoke runs, and reinstall.
 - **Automation**: Cron, Heartbeat, and run logs.
 
-Build the frontend and sync embedded assets:
+Build the frontend (outputs directly to Go embed directory):
 
 ```bash
 pnpm -C ui/web build
-./scripts/sync_embedded_web.sh
 ```
 
 The package development flow can use the example skill:
@@ -191,6 +190,5 @@ It runs Go tests, builds the Go binary, and builds the Web frontend. Locally, yo
 ```bash
 go test ./...
 pnpm -C ui/web build
-./scripts/sync_embedded_web.sh
 git diff --check
 ```

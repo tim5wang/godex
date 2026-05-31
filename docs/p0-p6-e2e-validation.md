@@ -8,7 +8,6 @@
 
    ```bash
    PATH="/usr/local/bin:$PATH" pnpm --dir ui/web build
-   scripts/sync_embedded_web.sh
    /usr/local/go/bin/go run ./cmd/godex serve --addr 127.0.0.1:8088
    ```
 
@@ -484,6 +483,5 @@
   ```bash
   go test ./...
   pnpm -C ui/web build
-  scripts/sync_embedded_web.sh
   git diff --check
   ```

@@ -8,7 +8,7 @@ LDFLAGS := -s -w -X github.com/tim5wang/godex/internal/version.Version=$(VERSION
 .PHONY: dev web build-linux release release-clean deploy-linux
 
 web:
-	pnpm --dir ui/web build && scripts/sync_embedded_web.sh
+	pnpm --dir ui/web build
 
 dev: web
 	go build -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/godex \

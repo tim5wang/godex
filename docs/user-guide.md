@@ -303,11 +303,10 @@ examples/skills/package-developer
 - 优先使用磁盘上的 `ui/web/dist`
 - 若磁盘资源不存在，则回退到二进制内置资源
 
-更新前端后同步内置资源：
+更新前端后构建（自动输出到 embed 目录）：
 
 ```bash
 pnpm -C ui/web build
-./scripts/sync_embedded_web.sh
 ```
 
 ## Channel 接入

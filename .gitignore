@@ -16,7 +16,8 @@
 *.zip
 .env
 godex.yaml
-godex
+/godex
+/bin/godex
 dist/
 /log/
 /temp/

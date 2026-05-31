@@ -3979,3 +3979,32 @@ func (m *Manager) writeConfigFile(file ConfigFile) error {
 	}
 	return fsutil.WriteFileAtomic(m.configPath, rendered, 0600)
 }
+
+// UpdateProviders atomically replaces the full provider set in the stored
+// config and writes it to disk. It does not trigger live apply — callers
+// should invoke ReloadFromDisk or the applier separately if needed.
+func (m *Manager) UpdateProviders(providers map[string]llm.ProviderConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cloned := make(map[string]llm.ProviderConfig, len(providers))
+	for id, provider := range providers {
+		cloned[id] = llm.NormalizeProvider(id, provider)
+	}
+	m.stored.API.Providers = cloned
+	m.revision++
+	return m.writeConfigFile(m.stored)
+}
+
+// ConfigFilePath returns the path of the configuration file managed by this config manager.
+func (m *Manager) ConfigFilePath() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.configPath
+}
+
+// EnvFilePath returns the path of the .env file managed by this config manager.
+func (m *Manager) EnvFilePath() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.envPath
+}

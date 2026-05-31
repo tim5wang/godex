@@ -105,6 +105,8 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 		return r.runLogin(ctx, args[1:])
 	case "logout":
 		return r.runLogout(ctx, args[1:])
+	case "config":
+		return RunConfigWizard(ctx, args[1:], r.Stdin, r.Stdout, r.Stderr)
 	case "providers":
 		return r.runProviders(ctx, args[1:])
 	case "migrate":
@@ -1155,6 +1157,7 @@ func rootHelpText() string {
 		"    doctor     Diagnose config and runtime problems",
 		"    login      Configure OpenAI or Codex credentials",
 		"    logout     Remove stored credentials",
+		"    config     Interactive provider configuration wizard",
 		"    providers  List and test provider configuration",
 		"    migrate    Migrate project config into ~/.godex",
 		"    repair     Diagnose or repair persisted session state",

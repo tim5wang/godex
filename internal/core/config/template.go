@@ -81,16 +81,260 @@ func renderYAMLValue(value any, indent int) string {
 	return "\n" + strings.Join(lines, "\n")
 }
 
-const configTemplate = `# GoDex canonical configuration
-# This file is safe for GoDex itself to rewrite. Comments are regenerated on save.
-# Precedence: godex.yaml < .env < process environment variables.
+const configTemplate = `# =============================================================================
+# GoDex Canonical Configuration — Self-Describing Design Document
+# =============================================================================
+#
+# This file IS the design specification for GoDex's runtime behavior.
+# Every section below maps directly to internal types in the codebase:
+#   internal/core/config/types.go   — ConfigFile, APISection, AgentSection, ...
+#   internal/core/llm/types.go      — ProviderConfig, ModelConfig, Registry
+#   internal/core/config/defaults.go — defaultConfigFile()
+#
+# When GoDex starts, it reads this YAML, overlays .env and process environment
+# variables, validates the result, and builds its internal runtime state.
+# GoDex code can also REWRITE this file (e.g., from the Web UI /config editor),
+# preserving all comments and structure through the template engine.
+#
+# HOW GODEX READS THIS CONFIG (Self-Understanding Guide):
+#   1. config.Manager.NewManager() loads godex.yaml → unmarshals into ConfigFile
+#   2. Manager overlays .env file values using godotenv
+#   3. Manager overlays OS process environment variables
+#   4. The result becomes the "effective config" (Manager.Current())
+#   5. llm.NewRegistry(providers, strategy) builds the model routing table
+#   6. Agent wiring uses cfg.Tools.*, cfg.Agent.*, etc. to configure tools
+#
+# CONFIGURATION PRECEDENCE (highest to lowest):
+#   process environment > .env file > godex.yaml > hard-coded defaults
+#
+# Each field below documents its environment variable override name.
+# Example: "timeout_seconds: 600" can be overridden with GODEX_API_TIMEOUT_SECONDS=30
+#
+# QUICK START — the absolute minimum you need:
+#   1. Set up at least one provider under api.providers (see examples below)
+#   2. Set your API key in .env (recommended) or as api_key_env in the provider
+#   3. Run "godex doctor" to verify everything works
+#
+# Run "godex init --interactive" for a guided configuration wizard.
+# Run "godex doctor" to diagnose configuration issues.
+#
+# This file is safe for GoDex to rewrite. Comments are regenerated on save.
+# =============================================================================
 
 api:
-  # Default provider.model id for new sessions. Environment override: GODEX_API_DEFAULT_MODEL.
-  default_model: {{ yamlString .API.DefaultModel }}
-  # LLM suppliers and the models each supplier exposes. Supported provider types: anthropic_compatible, openai_compatible.
+  # ===========================================================================
+  # LLM PROVIDERS — the heart of GoDex's intelligence.
+  # ===========================================================================
+  # GoDex uses a provider → model abstraction to support any LLM backend.
+  # The internal routing table is built by llm.NewRegistry(providers, strategy).
+  #
+  # Provider type determines the HTTP protocol GoDex will speak:
+  #   anthropic_compatible — Anthropic Messages API   (POST /v1/messages)
+  #   openai_compatible    — OpenAI Chat Completions   (POST /v1/chat/completions)
+  #   openai_codex         — OpenAI Codex OAuth flow   (device-code + token exchange)
+  #
+  # Each provider block:
+  #   name:             display name shown in UI and logs
+  #   type:             one of the three provider types above
+  #   base_url:         API endpoint origin (e.g. https://api.anthropic.com)
+  #                     Do NOT add trailing /v1 — GoDex appends protocol paths.
+  #   api_key:          plaintext API key (⚠️ avoid committing to VCS)
+  #   api_key_env:      env var name holding the key (RECOMMENDED for security)
+  #   credential_kind:  "api-key" (default) or "oauth"
+  #   timeout_seconds:  HTTP request timeout, default 600
+  #   models:           map of model_id → ModelConfig (at least one required)
+  #
+  # Each model block:
+  #   name:              human-readable model name
+  #   model:             API model string sent to the provider
+  #   max_tokens:        max output tokens, default 4096
+  #   supports_streaming: SSE streaming, default true
+  #   supports_vision:   image input support, auto-detected from model name
+  #   reasoning_effort:  optional hint: none|minimal|low|medium|high|xhigh
+  #   tags:              string labels for model selection in profiles
+  #
+  # ── PROVIDER CONFIGURATION EXAMPLES ────────────────────────────────────────
+  # Uncomment any block below and edit to enable. Mix and match as needed.
+  #
+  # ── Anthropic Claude (anthropic_compatible) ──
+  # Recommended for: general coding, reasoning, and analysis.
+  #   anthropic:
+  #     name: Anthropic
+  #     type: anthropic_compatible
+  #     base_url: https://api.anthropic.com
+  #     api_key_env: ANTHROPIC_API_KEY          # put key in .env
+  #     models:
+  #       sonnet:
+  #         name: Claude Sonnet 4
+  #         model: claude-sonnet-4-20250514
+  #         max_tokens: 8192
+  #       opus:
+  #         name: Claude Opus 4
+  #         model: claude-opus-4-20250514
+  #         max_tokens: 8192
+  #       haiku:
+  #         name: Claude Haiku 4
+  #         model: claude-haiku-4-20250514
+  #         max_tokens: 4096
+  #
+  # ── OpenAI GPT (openai_compatible) ──
+  # Recommended for: broad task coverage, vision, structured output.
+  #   openai:
+  #     name: OpenAI
+  #     type: openai_compatible
+  #     base_url: https://api.openai.com
+  #     api_key_env: OPENAI_API_KEY
+  #     models:
+  #       gpt4o:
+  #         name: GPT-4o
+  #         model: gpt-4o
+  #         max_tokens: 16384
+  #       gpt4mini:
+  #         name: GPT-4o Mini
+  #         model: gpt-4o-mini
+  #         max_tokens: 16384
+  #       o3:
+  #         name: o3
+  #         model: o3
+  #         max_tokens: 16384
+  #
+  # ── DeepSeek (openai_compatible) ──
+  # Recommended for: cost-effective reasoning, Chinese-language tasks.
+  #   deepseek:
+  #     name: DeepSeek
+  #     type: openai_compatible
+  #     base_url: https://api.deepseek.com
+  #     api_key_env: DEEPSEEK_API_KEY
+  #     models:
+  #       v3:
+  #         name: DeepSeek V3
+  #         model: deepseek-chat
+  #         max_tokens: 8192
+  #       r1:
+  #         name: DeepSeek R1
+  #         model: deepseek-reasoner
+  #         max_tokens: 8192
+  #
+  # ── Ollama / Local LLM (openai_compatible) ──
+  # Recommended for: offline work, privacy, zero cost.
+  # Requires a running Ollama server (e.g. "ollama serve").
+  #   ollama:
+  #     name: Ollama
+  #     type: openai_compatible
+  #     base_url: http://localhost:11434
+  #     api_key: ollama                          # dummy key, not sent
+  #     models:
+  #       llama3:
+  #         name: Llama 3
+  #         model: llama3
+  #         max_tokens: 4096
+  #       qwen3:
+  #         name: Qwen 3
+  #         model: qwen3
+  #         max_tokens: 8192
+  #
+  # ── OpenRouter (openai_compatible) ──
+  # Recommended for: multi-model access through a single API.
+  # Model string format: provider/model-name (e.g. anthropic/claude-sonnet-4)
+  #   openrouter:
+  #     name: OpenRouter
+  #     type: openai_compatible
+  #     base_url: https://openrouter.ai/api
+  #     api_key_env: OPENROUTER_API_KEY
+  #     models:
+  #       sonnet:
+  #         name: Claude Sonnet via OpenRouter
+  #         model: anthropic/claude-sonnet-4
+  #         max_tokens: 8192
+  #       gpt4o:
+  #         name: GPT-4o via OpenRouter
+  #         model: openai/gpt-4o
+  #         max_tokens: 16384
+  #
+  # ── Groq (openai_compatible) ──
+  # Recommended for: ultra-fast inference with open-source models.
+  #   groq:
+  #     name: Groq
+  #     type: openai_compatible
+  #     base_url: https://api.groq.com/openai
+  #     api_key_env: GROQ_API_KEY
+  #     models:
+  #       llama3:
+  #         name: Llama 3 70B
+  #         model: llama3-70b-8192
+  #         max_tokens: 8192
+  #
+  # ── Moonshot / Kimi (openai_compatible) ──
+  # Recommended for: Chinese-language tasks, long-context processing.
+  #   moonshot:
+  #     name: Moonshot
+  #     type: openai_compatible
+  #     base_url: https://api.moonshot.cn
+  #     api_key_env: MOONSHOT_API_KEY
+  #     models:
+  #       kimi:
+  #         name: Kimi K2.5
+  #         model: kimi-k2.5
+  #         max_tokens: 8192
+  #
+  # ── ZhipuAI / GLM (openai_compatible) ──
+  # Recommended for: Chinese-language tasks, cost-effective models.
+  #   zhipu:
+  #     name: ZhipuAI
+  #     type: openai_compatible
+  #     base_url: https://open.bigmodel.cn/api/paas/v4
+  #     api_key_env: ZHIPU_API_KEY
+  #     models:
+  #       glm4:
+  #         name: GLM-4
+  #         model: glm-4
+  #         max_tokens: 4096
+  #
+  # ── Qwen / Tongyi Bailian (openai_compatible) ──
+  # Recommended for: Chinese-language tasks, Alibaba Cloud ecosystem.
+  #   qwen:
+  #     name: Qwen (Tongyi)
+  #     type: openai_compatible
+  #     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  #     api_key_env: DASHSCOPE_API_KEY
+  #     models:
+  #       qwen3:
+  #         name: Qwen3 235B
+  #         model: qwen3-235b-a22b
+  #         max_tokens: 8192
+  #
+  # ── Custom / Self-hosted (openai_compatible) ──
+  # For any OpenAI-compatible endpoint (vLLM, LiteLLM, local proxy, etc.).
+  #   custom:
+  #     name: Custom LLM
+  #     type: openai_compatible
+  #     base_url: https://your-llm-proxy.example.com
+  #     api_key_env: CUSTOM_API_KEY
+  #     models:
+  #       default:
+  #         name: Custom Model
+  #         model: your-model-name
+  #         max_tokens: 4096
+  # ===========================================================================
   providers:{{ yamlValue .API.Providers 4 }}
-  # Runtime model selection strategy. type: primary | fallback | round_robin.
+
+  # Default provider.model reference used for new sessions.
+  # Format: <provider_id>.<model_id> (e.g. "anthropic.sonnet").
+  # When empty, GoDex uses the first available provider+model.
+  # Environment override: GODEX_API_DEFAULT_MODEL.
+  default_model: {{ yamlString .API.DefaultModel }}
+
+  # Automatically fall back to the next candidate when the primary model fails.
+  # Environment override: GODEX_AUTO_FALLBACK.
+  auto_fallback_enabled: {{ .API.AutoFallbackEnabled }}
+
+  # HTTP timeout in seconds for each LLM API call. Environment override: GODEX_API_TIMEOUT_SECONDS.
+  timeout_seconds: {{ .API.TimeoutSeconds }}
+
+  # Runtime model selection strategy.
+  #   primary:     always use the first listed candidate
+  #   fallback:    try candidates in order on failure (default)
+  #   round_robin: rotate through candidates
   model_strategy:{{ yamlValue .API.ModelStrategy 4 }}
 
 acp:

@@ -74,7 +74,7 @@ func (c *Client) Call(ctx context.Context, req protocol.Request) (*protocol.Resp
 	var lastErr error
 	visionFallbackUsed := false
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		reqBody, err := json.Marshal(req)
+		reqBody, err := marshalAnthropicBody(req)
 		if err != nil {
 			return nil, err
 		}
@@ -124,7 +124,7 @@ func (c *Client) Stream(ctx context.Context, req protocol.Request, handler Strea
 	visionFallbackUsed := false
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		req.Stream = true
-		reqBody, err := json.Marshal(req)
+		reqBody, err := marshalAnthropicBody(req)
 		if err != nil {
 			return nil, err
 		}
@@ -597,4 +597,118 @@ func cloneInput(input map[string]interface{}) map[string]interface{} {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+// marshalAnthropicBody builds the Anthropic /v1/messages wire format with
+// prompt-cache breakpoints on the system prompt, last tool, and last message.
+func marshalAnthropicBody(req protocol.Request) ([]byte, error) {
+	payload := map[string]interface{}{
+		"model":      req.Model,
+		"max_tokens": req.MaxTokens,
+		"stream":     req.Stream,
+	}
+
+	// System prompt: convert to content-block array with cache_control breakpoint.
+	if strings.TrimSpace(req.System) != "" {
+		payload["system"] = []map[string]interface{}{
+			{
+				"type": "text",
+				"text": req.System,
+				"cache_control": map[string]interface{}{
+					"type": "ephemeral",
+				},
+			},
+		}
+	}
+
+	// Tools: mark the last tool definition with cache_control.
+	if len(req.Tools) > 0 {
+		tools := make([]map[string]interface{}, 0, len(req.Tools))
+		for i, tool := range req.Tools {
+			t := map[string]interface{}{
+				"name":         tool.Name,
+				"description":  tool.Description,
+				"input_schema": tool.InputSchema,
+			}
+			if i == len(req.Tools)-1 {
+				t["cache_control"] = map[string]interface{}{
+					"type": "ephemeral",
+				}
+			}
+			tools = append(tools, t)
+		}
+		payload["tools"] = tools
+	}
+
+	// Messages: mark the last text block in the last message with cache_control.
+	msgs := make([]map[string]interface{}, 0, len(req.Messages))
+	for mi, apiMsg := range req.Messages {
+		isLast := mi == len(req.Messages)-1
+		content, lastTextIdx := anthropicContentBlocks(apiMsg, isLast)
+		m := map[string]interface{}{
+			"role":    apiMsg.Role,
+			"content": content,
+		}
+		if isLast && lastTextIdx >= 0 {
+			if block, ok := content[lastTextIdx].(map[string]interface{}); ok {
+				block["cache_control"] = map[string]interface{}{
+					"type": "ephemeral",
+				}
+			}
+		}
+		msgs = append(msgs, m)
+	}
+	payload["messages"] = msgs
+
+	return json.Marshal(payload)
+}
+
+// anthropicContentBlocks converts APIMessage content blocks into the
+// Anthropic wire format and returns the index of the last text block.
+func anthropicContentBlocks(msg protocol.APIMessage, trackLastText bool) ([]interface{}, int) {
+	blocks := make([]interface{}, 0, len(msg.Content))
+	lastTextIdx := -1
+	for _, block := range msg.Content {
+		switch block.Type {
+		case protocol.BlockText:
+			if strings.TrimSpace(block.Text) != "" {
+				if trackLastText {
+					lastTextIdx = len(blocks)
+				}
+				blocks = append(blocks, map[string]interface{}{
+					"type": "text",
+					"text": block.Text,
+				})
+			}
+		case protocol.BlockImage:
+			if block.Source != nil {
+				blocks = append(blocks, map[string]interface{}{
+					"type": "image",
+					"source": map[string]interface{}{
+						"type":       block.Source.Type,
+						"media_type": block.Source.MediaType,
+						"data":       block.Source.Data,
+					},
+				})
+			}
+		case protocol.BlockToolUse:
+			input := block.Input
+			if input == nil {
+				input = map[string]interface{}{}
+			}
+			blocks = append(blocks, map[string]interface{}{
+				"type":  "tool_use",
+				"id":    block.ID,
+				"name":  block.Name,
+				"input": input,
+			})
+		case protocol.BlockToolResult:
+			blocks = append(blocks, map[string]interface{}{
+				"type":        "tool_result",
+				"tool_use_id": block.ToolUseID,
+				"content":     block.Content,
+			})
+		}
+	}
+	return blocks, lastTextIdx
 }

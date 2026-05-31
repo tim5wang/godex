@@ -417,7 +417,12 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			if err != nil {
 				return protocol.Request{}, err
 			}
-			return conversation.NewRequestFromAPIMessages(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, build.System, apiMessages, build.ToolSchemas), nil
+			req := conversation.NewRequestFromAPIMessages(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, build.System, apiMessages, build.ToolSchemas)
+			if strings.TrimSpace(opts.SessionID) != "" {
+				req.PromptCacheKey = clampCacheKey(opts.SessionID)
+				req.PromptCacheRetention = protocol.CacheRetentionLong
+			}
+			return req, nil
 		},
 		AppendAssistant: func(msg protocol.Message) {
 			a.appendMessage(msg)
@@ -674,4 +679,15 @@ func todoListPayload(items []todo.Item, sourceToolCallID, sourceToolName string)
 // LoadDefaultSkills activates configured default skills for a fresh session.
 func (a *Agent) LoadDefaultSkills() DefaultSkillLoadResult {
 	return loadDefaultSkills(a)
+}
+
+// clampCacheKey truncates a session ID to the 64-char limit required by
+// OpenAI prompt_cache_key. Characters beyond 64 are silently dropped.
+func clampCacheKey(sessionID string) string {
+	const maxCacheKeyLen = 64
+	runes := []rune(sessionID)
+	if len(runes) <= maxCacheKeyLen {
+		return sessionID
+	}
+	return string(runes[:maxCacheKeyLen])
 }

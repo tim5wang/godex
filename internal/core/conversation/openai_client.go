@@ -62,11 +62,15 @@ func (c *OpenAIClient) Call(ctx context.Context, req protocol.Request) (*protoco
 		finalErr = err
 		return nil, err
 	}
-	logger.Debugf("OpenAI-compatible LLM Call: %s", string(body))
+	if logger.LevelEnabled(logger.LevelDebug) {
+		logger.Debugf("OpenAI-compatible LLM Call: %s", string(body))
+	}
 	response := openAIResponseToProtocol(decoded)
 	finalResp = response
-	debug, _ := json.Marshal(response)
-	logger.Debugf("OpenAI-compatible LLM Response: %s", string(debug))
+	if logger.LevelEnabled(logger.LevelDebug) {
+		debug, _ := json.Marshal(response)
+		logger.Debugf("OpenAI-compatible LLM Response: %s", string(debug))
+	}
 	return response, nil
 }
 
@@ -99,11 +103,13 @@ func (c *OpenAIClient) Stream(ctx context.Context, req protocol.Request, handler
 
 func (c *OpenAIClient) buildRequest(req protocol.Request, stream bool) ([]byte, error) {
 	wire := openAIRequest{
-		Model:     req.Model,
-		MaxTokens: req.MaxTokens,
-		Stream:    stream,
-		Messages:  openAIMessagesFromProtocol(req),
-		Tools:     openAIToolsFromProtocol(req.Tools),
+		Model:                req.Model,
+		MaxTokens:            req.MaxTokens,
+		Stream:               stream,
+		Messages:             openAIMessagesFromProtocol(req),
+		Tools:                openAIToolsFromProtocol(req.Tools),
+		PromptCacheKey:       req.PromptCacheKey,
+		PromptCacheRetention: req.PromptCacheRetention,
 	}
 	if strings.TrimSpace(req.System) != "" {
 		wire.Messages = append([]openAIMessage{{Role: "system", Content: req.System}}, wire.Messages...)
@@ -127,15 +133,24 @@ func (c *OpenAIClient) do(ctx context.Context, body []byte, stream bool) (*http.
 	if strings.TrimSpace(c.apiKey) != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
+	// Session affinity headers for cache-aware routing.
+	if usage, ok := UsageContextFromContext(ctx); ok && strings.TrimSpace(usage.SessionID) != "" {
+		sid := strings.TrimSpace(usage.SessionID)
+		httpReq.Header.Set("session_id", sid)
+		httpReq.Header.Set("x-client-request-id", sid)
+		httpReq.Header.Set("x-session-affinity", sid)
+	}
 	return c.httpClient.Do(httpReq)
 }
 
 type openAIRequest struct {
-	Model     string          `json:"model"`
-	Messages  []openAIMessage `json:"messages"`
-	MaxTokens int             `json:"max_tokens,omitempty"`
-	Tools     []openAITool    `json:"tools,omitempty"`
-	Stream    bool            `json:"stream,omitempty"`
+	Model                string          `json:"model"`
+	Messages             []openAIMessage `json:"messages"`
+	MaxTokens            int             `json:"max_tokens,omitempty"`
+	Tools                []openAITool    `json:"tools,omitempty"`
+	Stream               bool            `json:"stream,omitempty"`
+	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"`
 }
 
 type openAIMessage struct {

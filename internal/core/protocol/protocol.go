@@ -96,14 +96,22 @@ type ToolSchema struct {
 	InputSchema map[string]interface{} `json:"input_schema"`
 }
 
+// CacheRetentionShort is the default cache retention duration (~5 minutes).
+const CacheRetentionShort = "short"
+
+// CacheRetentionLong requests 24-hour cache retention where supported.
+const CacheRetentionLong = "24h"
+
 type Request struct {
-	Model           string       `json:"model"`
-	MaxTokens       int          `json:"max_tokens"`
-	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
-	System          string       `json:"system"`
-	Messages        []APIMessage `json:"messages"`
-	Tools           []ToolSchema `json:"tools,omitempty"`
-	Stream          bool         `json:"stream,omitempty"`
+	Model                string       `json:"model"`
+	MaxTokens            int          `json:"max_tokens"`
+	ReasoningEffort      string       `json:"reasoning_effort,omitempty"`
+	System               string       `json:"system"`
+	Messages             []APIMessage `json:"messages"`
+	Tools                []ToolSchema `json:"tools,omitempty"`
+	Stream               bool         `json:"stream,omitempty"`
+	PromptCacheKey       string       `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string       `json:"prompt_cache_retention,omitempty"`
 }
 
 type Response struct {

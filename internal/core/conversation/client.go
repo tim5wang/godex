@@ -80,9 +80,11 @@ func (c *Client) Call(ctx context.Context, req protocol.Request) (*protocol.Resp
 		}
 		apiResp, retryAfter, err := c.callOnce(ctx, reqBody)
 		if err == nil {
-			logger.Debugf("LLM Call: %s", reqBody)
-			jsonResp, _ := json.Marshal(apiResp)
-			logger.Debugf("LLM Response: %s", jsonResp)
+			if logger.LevelEnabled(logger.LevelDebug) {
+				logger.Debugf("LLM Call: %s", reqBody)
+				jsonResp, _ := json.Marshal(apiResp)
+				logger.Debugf("LLM Response: %s", jsonResp)
+			}
 			finalResp = apiResp
 			return apiResp, nil
 		}
@@ -128,9 +130,11 @@ func (c *Client) Stream(ctx context.Context, req protocol.Request, handler Strea
 		}
 		apiResp, retryAfter, streamed, err := c.streamOnce(ctx, reqBody, handler)
 		if err == nil {
-			logger.Debugf("LLM Stream Call: %s", reqBody)
-			jsonResp, _ := json.Marshal(apiResp)
-			logger.Debugf("LLM Stream Response: %s", jsonResp)
+			if logger.LevelEnabled(logger.LevelDebug) {
+				logger.Debugf("LLM Stream Call: %s", reqBody)
+				jsonResp, _ := json.Marshal(apiResp)
+				logger.Debugf("LLM Stream Response: %s", jsonResp)
+			}
 			finalResp = apiResp
 			return apiResp, nil
 		}
@@ -171,6 +175,11 @@ func (c *Client) callOnce(ctx context.Context, reqBody []byte) (*protocol.Respon
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", c.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	// Session affinity for cache-aware routing.
+	if usage, ok := UsageContextFromContext(ctx); ok && strings.TrimSpace(usage.SessionID) != "" {
+		sid := strings.TrimSpace(usage.SessionID)
+		httpReq.Header.Set("session_id", sid)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -200,6 +209,11 @@ func (c *Client) streamOnce(ctx context.Context, reqBody []byte, handler StreamH
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("x-api-key", c.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	// Session affinity for cache-aware routing.
+	if usage, ok := UsageContextFromContext(ctx); ok && strings.TrimSpace(usage.SessionID) != "" {
+		sid := strings.TrimSpace(usage.SessionID)
+		httpReq.Header.Set("session_id", sid)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

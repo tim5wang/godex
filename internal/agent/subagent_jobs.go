@@ -1508,7 +1508,12 @@ func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEv
 		Caller: a.client,
 		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
 			_ = ctx
-			return conversation.NewRequest(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, prompts.Build(), messages, a.toolHandler.ActiveSchemas(job.ToolNames...)), nil
+			req := conversation.NewRequest(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, prompts.Build(), messages, a.toolHandler.ActiveSchemas(job.ToolNames...))
+			if sid := strings.TrimSpace(job.SessionID); sid != "" {
+				req.PromptCacheKey = clampCacheKey(sid + ":" + job.ID)
+				req.PromptCacheRetention = protocol.CacheRetentionShort
+			}
+			return req, nil
 		},
 		AppendAssistant: func(msg protocol.Message) {
 			messages = append(messages, msg)

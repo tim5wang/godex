@@ -740,7 +740,12 @@ func (a *Agent) runScopedSubagent(ctx context.Context, prompt, basePrompt string
 		Caller: a.client,
 		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
 			_ = ctx
-			return conversation.NewRequest(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, prompts.Build(), messages, a.toolHandler.ActiveSchemas(toolNames...)), nil
+			req := conversation.NewRequest(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, prompts.Build(), messages, a.toolHandler.ActiveSchemas(toolNames...))
+			if sid := strings.TrimSpace(runtimeCtx.SessionID); sid != "" {
+				req.PromptCacheKey = clampCacheKey(sid)
+				req.PromptCacheRetention = protocol.CacheRetentionShort
+			}
+			return req, nil
 		},
 		AppendAssistant: func(msg protocol.Message) {
 			messages = append(messages, msg)

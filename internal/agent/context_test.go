@@ -569,6 +569,9 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 		"write_file",
 		"edit_file",
 		"attach_file",
+		"grep",
+		"find",
+		"ls",
 		"todo_write",
 		"todo_list",
 		"list_skills",
@@ -609,8 +612,8 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 		}
 	}
 
-	if got := len(build.ToolSchemas); got != 11 {
-		t.Fatalf("expected 11 active tool schemas by default, got %d", got)
+	if got := len(build.ToolSchemas); got != 14 {
+		t.Fatalf("expected 14 active tool schemas by default, got %d", got)
 	}
 }
 
@@ -674,7 +677,7 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 		}
 	}
 	runtimeState := runtimePromptStateText(build.Messages)
-	for _, want := range []string{"Active tools:", "bash", "read_file", "write_file", "No separate grep tool is available"} {
+	for _, want := range []string{"Active tools:", "bash", "read_file", "write_file", "grep"} {
 		if !strings.Contains(runtimeState, want) {
 			t.Fatalf("expected runtime tool availability to contain %q, got %q", want, runtimeState)
 		}

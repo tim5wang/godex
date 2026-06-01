@@ -251,7 +251,7 @@ func bundleAliases(name string) []string {
 	case "planning":
 		return []string{"todo", "计划", "步骤", "planning"}
 	case "core_code":
-		return []string{"代码", "文件", "shell", "bash", "读文件", "写文件", "终端", "命令行", "ssh", "部署", "运维日志", "code", "file", "terminal", "command line", "deploy", "ops log"}
+		return []string{"代码", "文件", "shell", "bash", "读文件", "写文件", "终端", "命令行", "ssh", "部署", "运维日志", "搜索", "查找", "目录", "code", "file", "terminal", "command line", "deploy", "ops log", "grep", "search", "find", "ls", "list"}
 	default:
 		return nil
 	}

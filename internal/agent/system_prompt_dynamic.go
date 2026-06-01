@@ -289,7 +289,7 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 	if available := formatBundleSummary(catalog.Bundles, false); available != "" {
 		lines = append(lines, "- Available bundles: "+available)
 	}
-	lines = append(lines, "No separate grep tool is available. For text search, use bash with rg/grep commands or use read_file/glob.")
+	lines = append(lines, "Use grep for code search, find for file lookup, and ls for directory listing.")
 
 	return strings.Join(lines, "\n")
 }
@@ -316,7 +316,7 @@ func buildToolAvailabilityPromptForProfile(catalog tools.ToolCatalog, profile st
 	if available := formatBundleNames(catalog.Bundles, false); available != "" {
 		lines = append(lines, "- Available bundles: "+available)
 	}
-	lines = append(lines, "No separate grep tool is available. For text search, use bash with rg/grep commands or use read_file/glob.")
+	lines = append(lines, "Use grep for code search, find for file lookup, and ls for directory listing.")
 	return strings.Join(lines, "\n")
 }
 

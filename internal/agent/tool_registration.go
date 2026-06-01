@@ -83,6 +83,21 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
+	a.registerToolTo(handler, tools.NewGrepTool(workspaceDir), tools.ToolMeta{
+		Bundle:        bundleCoreCode,
+		Summary:       "workspace shell commands and code file access",
+		DefaultActive: true,
+	})
+	a.registerToolTo(handler, tools.NewFindTool(workspaceDir), tools.ToolMeta{
+		Bundle:        bundleCoreCode,
+		Summary:       "workspace shell commands and code file access",
+		DefaultActive: true,
+	})
+	a.registerToolTo(handler, tools.NewLsTool(workspaceDir), tools.ToolMeta{
+		Bundle:        bundleCoreCode,
+		Summary:       "workspace shell commands and code file access",
+		DefaultActive: true,
+	})
 
 	a.registerToolTo(handler, tools.NewTaskCreateTool(a.taskMgr), tools.ToolMeta{
 		Bundle:  bundleTaskBoard,

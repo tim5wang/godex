@@ -14,7 +14,7 @@ func TestReadFileToolResolvesWorkspaceRelativeAndDuplicatedBasenamePaths(t *test
 	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 		t.Fatalf("mkdir target dir: %v", err)
 	}
-	if err := os.WriteFile(target, []byte("package skill"), 0644); err != nil {
+	if err := os.WriteFile(target, []byte("package skill\n"), 0644); err != nil {
 		t.Fatalf("write target file: %v", err)
 	}
 
@@ -29,44 +29,85 @@ func TestReadFileToolResolvesWorkspaceRelativeAndDuplicatedBasenamePaths(t *test
 		if err != nil {
 			t.Fatalf("read %q: %v", path, err)
 		}
-		if got != "package skill" {
-			t.Fatalf("unexpected content for %q: %q", path, got)
+		// New format: line-numbered output
+		if !strings.Contains(got, "package skill") {
+			t.Fatalf("expected content for %q, got: %q", path, got)
 		}
 	}
 }
 
-func TestReadFileToolSupportsOffsetsAndStartLines(t *testing.T) {
+func TestReadFileToolLineNumberedOutput(t *testing.T) {
 	workspace := t.TempDir()
-	target := filepath.Join(workspace, "notes.txt")
 	content := "line1\nline2\nline3\n"
-	if err := os.WriteFile(target, []byte(content), 0644); err != nil {
-		t.Fatalf("write target file: %v", err)
+	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte(content), 0644); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
 	tool := NewReadFileTool(workspace)
 
-	got, err := tool.Execute(context.Background(), map[string]interface{}{
-		"path":       "notes.txt",
-		"start_line": 2,
-		"limit":      100,
-	})
+	// Default: line numbers included
+	got, err := tool.Execute(context.Background(), map[string]interface{}{"path": "notes.txt"})
 	if err != nil {
-		t.Fatalf("read with start_line: %v", err)
+		t.Fatalf("read: %v", err)
 	}
-	if got != "line2\nline3\n" {
-		t.Fatalf("unexpected start_line content: %q", got)
+	if !strings.Contains(got, "     1\tline1") {
+		t.Fatalf("expected line-numbered output, got: %q", got)
+	}
+	if !strings.Contains(got, "     3\tline3") {
+		t.Fatalf("expected line 3, got: %q", got)
 	}
 
+	// Without line numbers
 	got, err = tool.Execute(context.Background(), map[string]interface{}{
+		"path":                 "notes.txt",
+		"include_line_numbers": false,
+	})
+	if err != nil {
+		t.Fatalf("read without line numbers: %v", err)
+	}
+	if strings.Contains(got, "\tline1") {
+		t.Fatalf("expected no line numbers, got: %q", got)
+	}
+	if !strings.Contains(got, "line1") {
+		t.Fatalf("expected content, got: %q", got)
+	}
+}
+
+func TestReadFileToolSupportsLineOffsetAndLimit(t *testing.T) {
+	workspace := t.TempDir()
+	content := "line1\nline2\nline3\nline4\nline5\n"
+	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte(content), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	tool := NewReadFileTool(workspace)
+
+	// offset=3 (start from line 3), limit=2 (show 2 lines)
+	got, err := tool.Execute(context.Background(), map[string]interface{}{
 		"path":   "notes.txt",
-		"offset": 6,
-		"limit":  5,
+		"offset": 3,
+		"limit":  2,
 	})
 	if err != nil {
 		t.Fatalf("read with offset: %v", err)
 	}
-	if got != "line2" {
-		t.Fatalf("unexpected offset content: %q", got)
+	if !strings.Contains(got, "     3\tline3") || !strings.Contains(got, "     4\tline4") {
+		t.Fatalf("expected lines 3-4, got: %q", got)
+	}
+	if strings.Contains(got, "line5") {
+		t.Fatalf("should not contain line5, got: %q", got)
+	}
+
+	// Backward compat: start_line
+	got, err = tool.Execute(context.Background(), map[string]interface{}{
+		"path":       "notes.txt",
+		"start_line": 4,
+	})
+	if err != nil {
+		t.Fatalf("read with start_line: %v", err)
+	}
+	if !strings.Contains(got, "     4\tline4") || !strings.Contains(got, "     5\tline5") {
+		t.Fatalf("expected lines 4-5, got: %q", got)
 	}
 }
 

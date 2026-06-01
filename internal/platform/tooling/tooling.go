@@ -11,7 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -59,15 +61,23 @@ func BashDefinition() Definition {
 func ReadFileDefinition() Definition {
 	return Definition{
 		Name:        "read_file",
-		Description: "Read UTF-8 text file contents from a workspace-relative path. Do not use for binary or large files such as PDFs, images, media, or archives.",
+		Description: "Read UTF-8 text file contents from a workspace-relative path. Returns content with line numbers. Source code files are returned in full; other files default to 2000 lines. Do not use for binary files such as PDFs, images, media, or archives — use attach_file instead.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path":       map[string]interface{}{"type": "string", "description": "Workspace-relative path such as agent/agent.go"},
-				"limit":      map[string]interface{}{"type": "integer", "description": "Maximum bytes to return. Required for large files."},
-				"offset":     map[string]interface{}{"type": "integer", "description": "Optional byte offset to start reading from. Use either offset or start_line, not both."},
-				"start_line": map[string]interface{}{"type": "integer", "description": "Optional 1-based line number to start reading from. Use either start_line or offset, not both."},
-				"max_lines":  map[string]interface{}{"type": "integer", "description": "Optional maximum number of lines to return. When set, the output is capped by line count instead of (or in addition to) the byte limit."},
+				"path": map[string]interface{}{"type": "string", "description": "Workspace-relative path such as agent/agent.go"},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "1-based line number to start reading from. Default: 1.",
+				},
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of lines to return. Source code files default to all lines; other files default to 2000.",
+				},
+				"include_line_numbers": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Include line numbers in output. Default: true.",
+				},
 			},
 			"required": []string{"path"},
 		},
@@ -92,15 +102,113 @@ func WriteFileDefinition() Definition {
 func EditFileDefinition() Definition {
 	return Definition{
 		Name:        "edit_file",
-		Description: "Replace exact text in a file at a workspace-relative path",
+		Description: "Make precise text replacements in a workspace-relative file. Supports single edit (old_text/new_text) or multiple non-overlapping edits (edits[] array). Each old_text must be unique in the file. Multiple edits are applied in order.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path":     map[string]interface{}{"type": "string", "description": "Workspace-relative path such as skill/skill.go"},
-				"old_text": map[string]string{"type": "string"},
-				"new_text": map[string]string{"type": "string"},
+				"path": map[string]interface{}{"type": "string", "description": "Workspace-relative path such as skill/skill.go"},
+				"old_text": map[string]interface{}{
+					"type":        "string",
+					"description": "Exact text to find and replace. Must be unique in the file. Use with new_text for single edit.",
+				},
+				"new_text": map[string]interface{}{
+					"type":        "string",
+					"description": "Replacement text. Omit or use empty string to delete old_text.",
+				},
+				"edits": map[string]interface{}{
+					"type":        "array",
+					"description": "Multiple non-overlapping edits to apply in order. Each edit has old_text and new_text. Old texts must be unique and non-overlapping.",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"old_text": map[string]string{"type": "string"},
+							"new_text": map[string]string{"type": "string"},
+						},
+						"required": []string{"old_text", "new_text"},
+					},
+				},
 			},
-			"required": []string{"path", "old_text", "new_text"},
+			"required": []string{"path"},
+		},
+	}
+}
+
+// FileEdit represents a single find-and-replace operation.
+type FileEdit struct {
+	OldText string `json:"old_text"`
+	NewText string `json:"new_text"`
+}
+
+func GrepDefinition() Definition {
+	return Definition{
+		Name:        "grep",
+		Description: "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Supports glob filtering and case-insensitive search.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"pattern": map[string]interface{}{
+					"type":        "string",
+					"description": "Regex pattern to search for, e.g. 'func.*Handler' or 'TODO'.",
+				},
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "File or directory to search in. Defaults to workspace root.",
+				},
+				"glob": map[string]interface{}{
+					"type":        "string",
+					"description": "Glob pattern to filter files, e.g. '*.go', '*.{ts,tsx}'.",
+				},
+				"case_insensitive": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Perform case-insensitive matching. Default: false.",
+				},
+				"max_results": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum matches to return. Default: 100, max: 500.",
+				},
+			},
+			"required": []string{"pattern"},
+		},
+	}
+}
+
+func FindDefinition() Definition {
+	return Definition{
+		Name:        "find",
+		Description: "Find files matching a glob pattern. Searches recursively through directories. Supports patterns like '*.go', '**/*_test.go', 'cmd/**/main.go'.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"pattern": map[string]interface{}{
+					"type":        "string",
+					"description": "Glob pattern to match files, e.g. '**/*.go' or '*.md'.",
+				},
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Directory to search in. Defaults to workspace root.",
+				},
+				"max_results": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum files to return. Default: 200, max: 1000.",
+				},
+			},
+			"required": []string{"pattern"},
+		},
+	}
+}
+
+func LsDefinition() Definition {
+	return Definition{
+		Name:        "ls",
+		Description: "List the contents of a directory. Returns file names, types (file/directory), and sizes.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Directory path to list. Defaults to workspace root.",
+				},
+			},
 		},
 	}
 }
@@ -153,6 +261,12 @@ func SupportedToolSchemas(names ...string) []protocol.ToolSchema {
 			result = append(result, AttachFileDefinition().ToolSchema())
 		case "background_run":
 			result = append(result, BackgroundRunDefinition().ToolSchema())
+		case "grep":
+			result = append(result, GrepDefinition().ToolSchema())
+		case "find":
+			result = append(result, FindDefinition().ToolSchema())
+		case "ls":
+			result = append(result, LsDefinition().ToolSchema())
 		}
 	}
 	return result
@@ -176,7 +290,256 @@ type ShellCommandOptions struct {
 const (
 	readFileBinarySampleBytes = 8192
 	readFileDefaultMaxBytes   = 256 * 1024
+	readFileDefaultMaxLines   = 2000
 )
+
+// ReadFileLinesOptions controls how ReadFileLines reads and formats output.
+type ReadFileLinesOptions struct {
+	Path               string
+	Offset             int  // 1-based line number to start from (default: 1)
+	Limit              int  // max lines to return (0 = use smart default)
+	IncludeLineNumbers bool // prefix each line with line number (default: true)
+}
+
+// ReadFileLinesResult contains the read output and metadata.
+type ReadFileLinesResult struct {
+	Content    string
+	Path       string
+	TotalLines int
+	Truncated  bool
+	// Image detection fields.
+	IsImage  bool   // true when file is a recognized image format
+	MimeType string // e.g. "image/png" when IsImage is true
+	Data     []byte // raw image bytes when IsImage is true (capped at 5MB)
+}
+
+// sourceCodeExts lists file extensions for which the default line limit is
+// skipped so that source files are returned in full (the 256KB byte safety
+// net still applies).
+var sourceCodeExts = map[string]bool{
+	".go": true, ".rs": true, ".py": true, ".ts": true, ".tsx": true,
+	".js": true, ".jsx": true, ".java": true, ".c": true, ".cpp": true,
+	".h": true, ".hpp": true, ".cs": true, ".rb": true, ".swift": true,
+	".kt": true, ".scala": true, ".zig": true, ".lua": true, ".sh": true,
+	".sql": true, ".yaml": true, ".yml": true, ".toml": true, ".json": true,
+	".xml": true, ".proto": true, ".mod": true, ".sum": true, ".lock": true,
+	".md": true, ".txt": true, ".css": true, ".scss": true, ".html": true,
+}
+
+// base64ImagePattern matches markdown image references with base64 data URIs.
+var base64ImagePattern = regexp.MustCompile(`!\[([^\]]*)\]\(data:[^)]+\)`)
+
+// detectImageMimeType checks the file header bytes for known image signatures.
+// Returns the MIME type (e.g. "image/png") or empty string if not a recognized image.
+func detectImageMimeType(sample []byte) string {
+	if len(sample) < 8 {
+		return ""
+	}
+	// JPEG: FF D8 FF (且第4字节不是F7，排除未知变体)
+	if sample[0] == 0xFF && sample[1] == 0xD8 && sample[2] == 0xFF {
+		if len(sample) > 3 && sample[3] == 0xF7 {
+			return ""
+		}
+		return "image/jpeg"
+	}
+	// PNG: 89 50 4E 47 0D 0A 1A 0A (需验证 IHDR chunk，排除动画PNG)
+	if sample[0] == 0x89 && sample[1] == 0x50 && sample[2] == 0x4E && sample[3] == 0x47 &&
+		sample[4] == 0x0D && sample[5] == 0x0A && sample[6] == 0x1A && sample[7] == 0x0A {
+		if isStaticPNG(sample) {
+			return "image/png"
+		}
+		return ""
+	}
+	// GIF: 47 49 46 (ASCII "GIF")
+	if sample[0] == 0x47 && sample[1] == 0x49 && sample[2] == 0x46 && sample[3] == 0x38 {
+		return "image/gif"
+	}
+	// WebP: 52 49 46 46 (RIFF) + 57 45 42 50 (WEBP at offset 8)
+	if sample[0] == 0x52 && sample[1] == 0x49 && sample[2] == 0x46 && sample[3] == 0x46 &&
+		len(sample) >= 12 &&
+		sample[8] == 0x57 && sample[9] == 0x45 && sample[10] == 0x42 && sample[11] == 0x50 {
+		return "image/webp"
+	}
+	// BMP: 42 4D ("BM")
+	if sample[0] == 0x42 && sample[1] == 0x4D {
+		return "image/bmp"
+	}
+	return ""
+}
+
+// isStaticPNG checks whether a PNG buffer is a static (non-animated) PNG.
+// Animated PNGs have an acTL chunk before the first IDAT chunk.
+func isStaticPNG(data []byte) bool {
+	if len(data) < 41 { // 8(sig) + 4(len) + 4(IHDR) + 13(data) + 4(crc) + 4(len) + 4(type) = 41 minimum
+		return true // too short to be animated, treat as static
+	}
+	offset := 8 // skip PNG signature
+	for offset+8 <= len(data) {
+		chunkLen := int(uint32(data[offset])<<24 | uint32(data[offset+1])<<16 | uint32(data[offset+2])<<8 | uint32(data[offset+3]))
+		chunkType := string(data[offset+4 : offset+8])
+		switch chunkType {
+		case "acTL":
+			return false // animated PNG
+		case "IDAT":
+			return true // reached image data without seeing acTL
+		}
+		offset += 12 + chunkLen // 4(len) + 4(type) + len(data) + 4(crc)
+	}
+	return true // truncated but likely static
+}
+
+const maxImageReadBytes = 5 * 1024 * 1024 // 5MB cap for inline image reading
+
+// ReadFileLines reads a text file with line-numbered output and smart defaults.
+func (e *WorkspaceExecutor) ReadFileLines(opts ReadFileLinesOptions) (ReadFileLinesResult, error) {
+	path := strings.TrimSpace(opts.Path)
+	if path == "" {
+		return ReadFileLinesResult{}, fmt.Errorf("missing path argument")
+	}
+	offset := opts.Offset
+	if offset < 1 {
+		offset = 1
+	}
+
+	root, err := workspacefs.New(e.WorkspaceDir)
+	if err != nil {
+		return ReadFileLinesResult{}, err
+	}
+	defer root.Close()
+
+	absPath, err := root.Abs(path)
+	if err != nil {
+		return ReadFileLinesResult{}, err
+	}
+	info, err := root.Stat(path)
+	if err != nil {
+		return ReadFileLinesResult{}, err
+	}
+	if info.IsDir() {
+		return ReadFileLinesResult{}, fmt.Errorf("path is a directory: %s", path)
+	}
+
+	// Binary detection.
+	file, err := root.Open(path)
+	if err != nil {
+		return ReadFileLinesResult{}, err
+	}
+	sampleLimit := readFileBinarySampleBytes
+	if info.Size() > 0 && info.Size() < int64(sampleLimit) {
+		sampleLimit = int(info.Size())
+	}
+	sample, err := io.ReadAll(io.LimitReader(file, int64(sampleLimit)))
+	if err != nil {
+		file.Close()
+		return ReadFileLinesResult{}, err
+	}
+	// Check for recognized image first — don't treat as error.
+	if imageMime := detectImageMimeType(sample); imageMime != "" {
+		// Read full image data (capped at 5MB).
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			file.Close()
+			return ReadFileLinesResult{}, err
+		}
+		imageData, err := io.ReadAll(io.LimitReader(file, maxImageReadBytes+1))
+		file.Close()
+		if err != nil {
+			return ReadFileLinesResult{}, err
+		}
+		if len(imageData) > maxImageReadBytes {
+			imageData = imageData[:maxImageReadBytes]
+		}
+		return ReadFileLinesResult{
+			Path:     filepath.ToSlash(path),
+			IsImage:  true,
+			MimeType: imageMime,
+			Data:     imageData,
+		}, nil
+	}
+
+	// Not a recognized image — apply full binary check.
+	if looksLikeBinaryFile(absPath, sample) {
+		file.Close()
+		return ReadFileLinesResult{}, fmt.Errorf("read_file only supports text files; %s appears to be binary or unsupported (for example PDF, document, media, or archive). Treat it as a file to copy, attach, or send instead of reading its contents", path)
+	}
+
+	// Re-read full file.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		file.Close()
+		return ReadFileLinesResult{}, err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, readFileDefaultMaxBytes+1))
+	file.Close()
+	if err != nil {
+		return ReadFileLinesResult{}, err
+	}
+	if len(data) > readFileDefaultMaxBytes {
+		data = data[:readFileDefaultMaxBytes]
+	}
+
+	content := string(data)
+	// Strip base64 images from markdown to reduce output size.
+	content = base64ImagePattern.ReplaceAllString(content, "![$1](data:image/png;base64,...[stripped])")
+
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+
+	// Clamp offset.
+	if offset > totalLines {
+		return ReadFileLinesResult{
+			Content:    "",
+			Path:       filepath.ToSlash(path),
+			TotalLines: totalLines,
+		}, nil
+	}
+
+	startIdx := offset - 1
+
+	// Determine effective limit.
+	// For source code files, skip the default line limit so the full file
+	// is returned (the byte safety net still applies).
+	limit := opts.Limit
+	if limit <= 0 {
+		ext := strings.ToLower(filepath.Ext(path))
+		if sourceCodeExts[ext] {
+			limit = totalLines // no line truncation for source code
+		} else {
+			limit = readFileDefaultMaxLines
+		}
+	}
+
+	endIdx := startIdx + limit
+	if endIdx > totalLines {
+		endIdx = totalLines
+	}
+	truncated := endIdx < totalLines && opts.Limit <= 0
+
+	// Format output.
+	var out strings.Builder
+	if opts.IncludeLineNumbers {
+		for i := startIdx; i < endIdx; i++ {
+			fmt.Fprintf(&out, "%6d\t%s\n", i+1, lines[i])
+		}
+	} else {
+		for i := startIdx; i < endIdx; i++ {
+			out.WriteString(lines[i])
+			if i < endIdx-1 {
+				out.WriteByte('\n')
+			}
+		}
+	}
+
+	output := out.String()
+	if truncated {
+		output += fmt.Sprintf("\n... (truncated: showing %d of %d lines, use offset/limit to read more)", endIdx-startIdx, totalLines)
+	}
+
+	return ReadFileLinesResult{
+		Content:    output,
+		Path:       filepath.ToSlash(path),
+		TotalLines: totalLines,
+		Truncated:  truncated,
+	}, nil
+}
 
 const (
 	ExecutionModeLocal  = "local"
@@ -509,8 +872,13 @@ func (e *WorkspaceExecutor) ReadFileRange(path string, limit, offset, startLine,
 	if err != nil {
 		return "", err
 	}
+	// Check for recognized images before binary rejection.
+	if imageMime := detectImageMimeType(sample); imageMime != "" {
+		return fmt.Sprintf("[Image: %s, %s, %d bytes. Use read_file with the main agent or attach_file for OCR/vision analysis.]",
+			filepath.Base(path), imageMime, info.Size()), nil
+	}
 	if looksLikeBinaryFile(absPath, sample) {
-		return "", fmt.Errorf("read_file only supports text files; %s appears to be binary or unsupported (for example PDF, image, media, or archive). Treat it as a file to copy, attach, or send instead of reading its contents", path)
+		return "", fmt.Errorf("read_file only supports text files; %s appears to be binary or unsupported (for example PDF, document, media, or archive). Treat it as a file to copy, attach, or send instead of reading its contents", path)
 	}
 
 	readLimit := limit
@@ -599,19 +967,181 @@ func (e *WorkspaceExecutor) EditFile(path, oldText, newText string) (string, err
 	if oldText == "" {
 		return "", fmt.Errorf("missing old_text argument")
 	}
+	if oldText == newText {
+		return "", fmt.Errorf("old_text and new_text must be different")
+	}
 	data, err := root.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 	content := string(data)
-	if !strings.Contains(content, oldText) {
-		return "", fmt.Errorf("old_text not found in file: %s", preview(oldText))
+	count := strings.Count(content, oldText)
+	if count == 0 {
+		return "", buildEditNotFoundError(oldText, content)
+	}
+	if count > 1 {
+		locations := findEditLocations(content, oldText)
+		return "", fmt.Errorf("old_text found %d times in file. Provide more context to make it unique, or use edits[] for multiple replacements.\nLocations: %s", count, strings.Join(locations, ", "))
 	}
 	newContent := strings.Replace(content, oldText, newText, 1)
 	if err := root.WriteFile(path, []byte(newContent), 0644); err != nil {
 		return "", err
 	}
 	return "OK", nil
+}
+
+// EditFileMulti applies multiple non-overlapping edits to a file.
+// All edits are validated for uniqueness and non-overlap before any writes occur.
+func (e *WorkspaceExecutor) EditFileMulti(path string, edits []FileEdit) (string, error) {
+	if len(edits) == 0 {
+		return "", fmt.Errorf("edits must not be empty")
+	}
+	if len(edits) > 50 {
+		return "", fmt.Errorf("too many edits (%d); maximum is 50 per call", len(edits))
+	}
+	root, err := workspacefs.New(e.WorkspaceDir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	data, err := root.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	content := string(data)
+
+	// Validate each edit: must exist, must be unique in file, and must differ from new_text.
+	for i, edit := range edits {
+		if edit.OldText == "" {
+			return "", fmt.Errorf("edits[%d]: old_text must not be empty", i)
+		}
+		if edit.OldText == edit.NewText {
+			return "", fmt.Errorf("edits[%d]: old_text and new_text must be different", i)
+		}
+		count := strings.Count(content, edit.OldText)
+		if count == 0 {
+			return "", fmt.Errorf("edits[%d]: old_text not found in file: %s", i, preview(edit.OldText))
+		}
+		if count > 1 {
+			locations := findEditLocations(content, edit.OldText)
+			return "", fmt.Errorf("edits[%d]: old_text found %d times in file. Provide more context to make it unique.\nLocations: %s", i, count, strings.Join(locations, ", "))
+		}
+	}
+
+	// Check for overlapping edit ranges.
+	ranges := make([]editRange, len(edits))
+	for i, edit := range edits {
+		idx := strings.Index(content, edit.OldText)
+		ranges[i] = editRange{start: idx, end: idx + len(edit.OldText), index: i}
+	}
+	for i := 0; i < len(ranges); i++ {
+		for j := i + 1; j < len(ranges); j++ {
+			if rangesOverlap(ranges[i], ranges[j]) {
+				return "", fmt.Errorf("edits[%d] and edits[%d] overlap in the file. Merge them into a single edit or adjust the ranges.", ranges[i].index, ranges[j].index)
+			}
+		}
+	}
+
+	// Apply edits in order. Later edits adjust their target positions by the net
+	// size change from earlier edits that appear before them.
+	sort.SliceStable(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
+
+	var buf strings.Builder
+	pos := 0
+	for _, r := range ranges {
+		edit := edits[r.index]
+		// Write content from current position to the edit start.
+		buf.WriteString(content[pos:r.start])
+		// Write the replacement.
+		buf.WriteString(edit.NewText)
+		// Advance past the old text.
+		pos = r.start + len(edit.OldText)
+	}
+	// Write remaining content.
+	buf.WriteString(content[pos:])
+
+	if err := root.WriteFile(path, []byte(buf.String()), 0644); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Applied %d edit(s) to %s", len(edits), path), nil
+}
+
+type editRange struct {
+	start int
+	end   int
+	index int
+}
+
+func rangesOverlap(a, b editRange) bool {
+	return a.start < b.end && b.start < a.end
+}
+
+func buildEditNotFoundError(oldText, content string) error {
+	lines := strings.Split(content, "\n")
+	var preview string
+	if len(lines) > 0 {
+		preview = truncateLine(lines[0], 500)
+	}
+	var suggestions []string
+	for i, line := range lines {
+		if len(line) > 0 && len(oldText) > 0 {
+			diff := len(line) - len(oldText)
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff <= 5 {
+				sim := stringSimilarity(line, oldText)
+				if sim > 0.5 {
+					suggestions = append(suggestions, fmt.Sprintf("line %d: %q", i+1, truncateLine(line, 60)))
+				}
+			}
+		}
+	}
+	suggestionStr := ""
+	if len(suggestions) > 0 {
+		suggestionStr = fmt.Sprintf("\nSimilar lines found:\n  %s\n\nSuggestions:", strings.Join(suggestions, "\n  "))
+	}
+	return fmt.Errorf("old_text not found in file\n\nExpected:\n%q\n\nFile preview (first 500 chars of first line):\n%s\n%s\n- Verify exact text matches including whitespace and indentation\n- Use read_file to see current file content\n- Try a smaller, unique portion of the old_text", oldText, preview, suggestionStr)
+}
+
+func findEditLocations(content, oldText string) []string {
+	lines := strings.Split(content, "\n")
+	var locations []string
+	for lineNum, line := range lines {
+		idx := strings.Index(line, oldText)
+		if idx >= 0 {
+			locations = append(locations, fmt.Sprintf("line %d (col %d)", lineNum+1, idx+1))
+		}
+	}
+	return locations
+}
+
+func stringSimilarity(a, b string) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	setA := make(map[rune]bool)
+	for _, r := range a {
+		setA[r] = true
+	}
+	intersection := 0
+	for _, r := range b {
+		if setA[r] {
+			intersection++
+		}
+	}
+	union := len(setA) + len(b) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+func truncateLine(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 func looksLikeBinaryFile(path string, sample []byte) bool {

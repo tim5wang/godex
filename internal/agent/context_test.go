@@ -601,7 +601,6 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 		"list_memory_candidates",
 		"remember_memory",
 		"forget_memory",
-		"compress",
 		"accept_memory_candidate",
 		"dismiss_memory_candidate",
 		"expand_skill",
@@ -612,8 +611,8 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 		}
 	}
 
-	if got := len(build.ToolSchemas); got != 14 {
-		t.Fatalf("expected 14 active tool schemas by default, got %d", got)
+	if got := len(build.ToolSchemas); got != 16 {
+		t.Fatalf("expected 16 active tool schemas by default, got %d", got)
 	}
 }
 
@@ -650,7 +649,6 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 		"load_skill",
 		"list_memory",
 		"remember_memory",
-		"compress",
 		"manage_session",
 		"history_search",
 		"web_search",

@@ -155,9 +155,6 @@ func (a *Agent) activeToolSchemas(hints toolExposureHints, agentProfile string) 
 		blocked["cron"] = struct{}{}
 		blocked["heartbeat"] = struct{}{}
 	}
-	if !hints.compression {
-		blocked["compress"] = struct{}{}
-	}
 	if !hints.sessionAdmin {
 		blocked["manage_session"] = struct{}{}
 	}
@@ -207,9 +204,6 @@ func applyCodingProfileToolFilter(blocked map[string]struct{}, hints toolExposur
 	if !hints.automation {
 		blocked["cron"] = struct{}{}
 		blocked["heartbeat"] = struct{}{}
-	}
-	if !hints.compression {
-		blocked["compress"] = struct{}{}
 	}
 	if !hints.sessionAdmin {
 		blocked["manage_session"] = struct{}{}

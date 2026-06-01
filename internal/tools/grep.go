@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io/fs"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/platform/workspacefs"
@@ -19,11 +21,11 @@ const (
 )
 
 type grepArgs struct {
-	Pattern        string `json:"pattern"`
-	Path           string `json:"path,omitempty"`
-	Glob           string `json:"glob,omitempty"`
+	Pattern         string `json:"pattern"`
+	Path            string `json:"path,omitempty"`
+	Glob            string `json:"glob,omitempty"`
 	CaseInsensitive bool   `json:"case_insensitive,omitempty"`
-	MaxResults     int    `json:"max_results,omitempty"`
+	MaxResults      int    `json:"max_results,omitempty"`
 }
 
 type grepResult struct {
@@ -38,15 +40,260 @@ type grepMatch struct {
 	Content string `json:"content"`
 }
 
-// NewGrepTool creates a new grep tool for searching file contents.
+// GrepOptions configures a grep search. MaxResults must already be clamped
+// by the caller to [1, maxGrepMatches].
+type GrepOptions struct {
+	Pattern         string
+	Path            string
+	Glob            string
+	CaseInsensitive bool
+	MaxResults      int
+}
+
+// GrepResult contains the search results from a backend.
+type GrepResult struct {
+	Matches      []grepMatch
+	TotalMatches int
+	Truncated    bool
+}
+
+// GrepBackend is the interface for grep search implementations.
+type GrepBackend interface {
+	// Search performs a regex search. The caller guarantees opts.MaxResults is
+	// already clamped and non-zero.
+	Search(ctx context.Context, opts GrepOptions) (GrepResult, error)
+}
+
+// ──────────────────────────────────────────────────────────────
+// GoGrepBackend (pure Go regexp)
+// ──────────────────────────────────────────────────────────────
+
+// regexCacheEntry stores a compiled regex with a TTL.
+type regexCacheEntry struct {
+	re      *regexp.Regexp
+	created time.Time
+}
+
+// grepRegexCache is an LRU-style cache for compiled regex patterns,
+// shared across all GoGrepBackend searches.
+type grepRegexCache struct {
+	mu      sync.Mutex
+	entries map[string]*regexCacheEntry
+	maxSize int
+	maxAge  time.Duration
+}
+
+var sharedGrepRegexCache = &grepRegexCache{
+	entries: make(map[string]*regexCacheEntry),
+	maxSize: 50,
+	maxAge:  10 * time.Minute,
+}
+
+func (c *grepRegexCache) get(key string) *regexp.Regexp {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil
+	}
+	if time.Since(entry.created) > c.maxAge {
+		delete(c.entries, key)
+		return nil
+	}
+	return entry.re
+}
+
+func (c *grepRegexCache) put(key string, re *regexp.Regexp) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) >= c.maxSize {
+		var oldest string
+		var oldestTime time.Time
+		for k, e := range c.entries {
+			if oldestTime.IsZero() || e.created.Before(oldestTime) {
+				oldest = k
+				oldestTime = e.created
+			}
+		}
+		if oldest != "" {
+			delete(c.entries, oldest)
+		}
+	}
+	c.entries[key] = &regexCacheEntry{re: re, created: time.Now()}
+}
+
+// GoGrepBackend is a pure Go grep implementation using regexp.
+type GoGrepBackend struct {
+	workspace string
+}
+
+// NewGoGrepBackend creates a new pure Go grep backend.
+func NewGoGrepBackend(workspace string) *GoGrepBackend {
+	return &GoGrepBackend{workspace: workspace}
+}
+
+func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResult, error) {
+	_ = ctx
+	// Cache key includes case-insensitive flag.
+	cacheKey := opts.Pattern
+	if opts.CaseInsensitive {
+		cacheKey = "(?i)" + cacheKey
+	}
+
+	re := sharedGrepRegexCache.get(cacheKey)
+	if re == nil {
+		flags := ""
+		if opts.CaseInsensitive {
+			flags = "(?i)"
+		}
+		var err error
+		re, err = regexp.Compile(flags + opts.Pattern)
+		if err != nil {
+			return GrepResult{}, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+		sharedGrepRegexCache.put(cacheKey, re)
+	}
+
+	searchPath := "."
+	if strings.TrimSpace(opts.Path) != "" {
+		searchPath = strings.TrimSpace(opts.Path)
+	}
+
+	root, err := workspacefs.New(b.workspace)
+	if err != nil {
+		return GrepResult{}, err
+	}
+	defer root.Close()
+
+	info, err := root.Stat(searchPath)
+	if err != nil {
+		return GrepResult{}, fmt.Errorf("path not found: %s: %w", searchPath, err)
+	}
+
+	maxResults := opts.MaxResults
+
+	if info.IsDir() {
+		matches, total, err := b.searchDir(root, searchPath, re, opts.Glob, maxResults)
+		if err != nil {
+			return GrepResult{}, err
+		}
+		return GrepResult{
+			Matches:      matches,
+			TotalMatches: total,
+			Truncated:    total > len(matches),
+		}, nil
+	}
+
+	matches, fileTotal := grepFile(root, re, searchPath, maxResults)
+	return GrepResult{
+		Matches:      matches,
+		TotalMatches: fileTotal,
+		Truncated:    false,
+	}, nil
+}
+
+// searchDir walks a directory tree collecting up to maxResults regex matches.
+// Returns (collected matches, total matches found, error).
+func (b *GoGrepBackend) searchDir(root *workspacefs.FS, relDir string, re *regexp.Regexp, glob string, maxResults int) ([]grepMatch, int, error) {
+	entries, err := root.ReadDir(relDir)
+	if err != nil {
+		return nil, 0, nil // skip unreadable directories
+	}
+
+	collected := make([]grepMatch, 0, min(maxResults, 64))
+	total := 0
+
+	for _, entry := range entries {
+		if len(collected) >= maxResults {
+			break
+		}
+		name := entry.Name()
+		if shouldSkipGrepEntry(name) {
+			continue
+		}
+		entryRel := filepath.Join(relDir, name)
+		if entry.IsDir() {
+			subMatches, subTotal, _ := b.searchDir(root, entryRel, re, glob, maxResults-len(collected))
+			total += subTotal
+			collected = append(collected, subMatches...)
+		} else {
+			if glob != "" {
+				matched, _ := filepath.Match(glob, name)
+				if !matched {
+					continue
+				}
+			}
+			fileMatches, fileTotal := grepFile(root, re, entryRel, maxResults-len(collected))
+			total += fileTotal
+			collected = append(collected, fileMatches...)
+		}
+	}
+	return collected, total, nil
+}
+
+func shouldSkipGrepEntry(name string) bool {
+	return strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "__pycache__"
+}
+
+// grepFile searches a single file for regex matches.
+// collectLimit caps how many matches are returned; total still counts all matches.
+func grepFile(root *workspacefs.FS, re *regexp.Regexp, path string, collectLimit int) ([]grepMatch, int) {
+	f, err := root.Open(path)
+	if err != nil {
+		return nil, 0
+	}
+	defer f.Close()
+
+	matches := make([]grepMatch, 0, min(collectLimit, 32))
+	total := 0
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 256*1024), 2*1024*1024)
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		if re.MatchString(line) {
+			total++
+			if len(matches) < collectLimit {
+				matches = append(matches, grepMatch{
+					File:    filepath.ToSlash(path),
+					Line:    lineNum,
+					Content: truncateGrepLine(line, 500),
+				})
+			}
+		}
+	}
+	return matches, total
+}
+
+// ──────────────────────────────────────────────────────────────
+// Tool construction
+// ──────────────────────────────────────────────────────────────
+
+// newGrepBackend creates the best available grep backend.
+// Prefers ripgrep if available, falls back to pure Go regexp.
+func newGrepBackend(workspace string) GrepBackend {
+	if rgPath, err := exec.LookPath("rg"); err == nil {
+		return NewRipGrepBackend(workspace, rgPath)
+	}
+	return NewGoGrepBackend(workspace)
+}
+
+// NewGrepTool creates a new grep tool with automatic backend selection.
 func NewGrepTool(workspace string) Tool {
+	backend := newGrepBackend(workspace)
+	return NewGrepToolWithBackend(backend)
+}
+
+// NewGrepToolWithBackend creates a grep tool using a specific backend (for testing).
+func NewGrepToolWithBackend(backend GrepBackend) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.GrepDefinition(), nil), func(ctx context.Context, args grepArgs) (ToolResult, error) {
-		_ = ctx
 		pattern := strings.TrimSpace(args.Pattern)
 		if pattern == "" {
 			return ToolResult{}, fmt.Errorf("missing pattern argument")
 		}
 
+		// Clamp maxResults once here; backends trust the clamped value.
 		maxResults := defaultGrepMatch
 		if args.MaxResults > 0 {
 			maxResults = args.MaxResults
@@ -55,126 +302,23 @@ func NewGrepTool(workspace string) Tool {
 			maxResults = maxGrepMatches
 		}
 
-		// Build the regex.
-		flags := ""
-		if args.CaseInsensitive {
-			flags = "(?i)"
-		}
-		re, err := regexp.Compile(flags + pattern)
-		if err != nil {
-			return ToolResult{}, fmt.Errorf("invalid regex pattern: %w", err)
-		}
-
-		searchPath := "."
-		if strings.TrimSpace(args.Path) != "" {
-			searchPath = strings.TrimSpace(args.Path)
-		}
-
-		root, err := workspacefs.New(workspace)
+		result, err := backend.Search(ctx, GrepOptions{
+			Pattern:         args.Pattern,
+			Path:            args.Path,
+			Glob:            args.Glob,
+			CaseInsensitive: args.CaseInsensitive,
+			MaxResults:      maxResults,
+		})
 		if err != nil {
 			return ToolResult{}, err
 		}
-		defer root.Close()
-
-		info, err := root.Stat(searchPath)
-		if err != nil {
-			return ToolResult{}, fmt.Errorf("path not found: %s: %w", searchPath, err)
-		}
-
-		var matches []grepMatch
-		total := 0
-
-		if info.IsDir() {
-			absSearchDir, err := root.Abs(searchPath)
-			if err != nil {
-				return ToolResult{}, err
-			}
-			entries, err := root.ReadDir(searchPath)
-			if err != nil {
-				return ToolResult{}, err
-			}
-			walkGrepDir(root, absSearchDir, searchPath, entries, re, args.Glob, &matches, &total, maxResults)
-		} else {
-			fileMatches := grepFile(root, re, searchPath)
-			total = len(fileMatches)
-			matches = trimGrepMatches(fileMatches, maxResults)
-		}
 
 		return ToolResult{Structured: grepResult{
-			Matches:      matches,
-			TotalMatches: total,
-			Truncated:    total > len(matches),
+			Matches:      result.Matches,
+			TotalMatches: result.TotalMatches,
+			Truncated:    result.Truncated,
 		}}, nil
 	})
-}
-
-func walkGrepDir(root *workspacefs.FS, absDir, relDir string, entries []fs.DirEntry, re *regexp.Regexp, glob string, matches *[]grepMatch, total *int, maxResults int) {
-	for _, entry := range entries {
-		if len(*matches) >= maxResults {
-			return
-		}
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "__pycache__" {
-			continue
-		}
-		entryRel := filepath.Join(relDir, name)
-		if entry.IsDir() {
-			subEntries, err := root.ReadDir(entryRel)
-			if err != nil {
-				continue
-			}
-			walkGrepDir(root, filepath.Join(absDir, name), entryRel, subEntries, re, glob, matches, total, maxResults)
-		} else {
-			if glob != "" {
-				matched, _ := filepath.Match(glob, name)
-				if !matched {
-					continue
-				}
-			}
-			fileMatches := grepFile(root, re, entryRel)
-			*total += len(fileMatches)
-			remaining := maxResults - len(*matches)
-			if remaining > 0 {
-				if len(fileMatches) > remaining {
-					fileMatches = fileMatches[:remaining]
-				}
-				*matches = append(*matches, fileMatches...)
-			}
-		}
-	}
-}
-
-func grepFile(root *workspacefs.FS, re *regexp.Regexp, path string) []grepMatch {
-	f, err := root.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	var matches []grepMatch
-	scanner := bufio.NewScanner(f)
-	// Increase buffer for long lines.
-	scanner.Buffer(make([]byte, 0, 256*1024), 2*1024*1024)
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		if re.MatchString(line) {
-			matches = append(matches, grepMatch{
-				File:    filepath.ToSlash(path),
-				Line:    lineNum,
-				Content: truncateGrepLine(line, 500),
-			})
-		}
-	}
-	return matches
-}
-
-func trimGrepMatches(matches []grepMatch, maxResults int) []grepMatch {
-	if len(matches) > maxResults {
-		return matches[:maxResults]
-	}
-	return matches
 }
 
 func truncateGrepLine(s string, max int) string {

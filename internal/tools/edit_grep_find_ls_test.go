@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,7 +228,7 @@ func TestGrepToolSearchesContent(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	tool := NewGrepTool(workspace)
+	tool := NewGrepToolWithBackend(NewGoGrepBackend(workspace))
 
 	resultStr, err := tool.Execute(context.Background(), map[string]interface{}{
 		"pattern": "func hello",
@@ -240,5 +241,103 @@ func TestGrepToolSearchesContent(t *testing.T) {
 	}
 	if !strings.Contains(resultStr, `"total_matches":1`) {
 		t.Fatalf("expected 1 match: %s", resultStr)
+	}
+}
+
+func TestGrepToolCaseInsensitive(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "file.txt"), []byte("HELLO\nhello\n"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	tool := NewGrepToolWithBackend(NewGoGrepBackend(workspace))
+
+	resultStr, err := tool.Execute(context.Background(), map[string]interface{}{
+		"pattern": "HELLO",
+	})
+	if err != nil {
+		t.Fatalf("grep: %v", err)
+	}
+	if strings.Contains(resultStr, `"total_matches":2`) {
+		t.Fatalf("case-sensitive should match once, got: %s", resultStr)
+	}
+
+	resultStr, err = tool.Execute(context.Background(), map[string]interface{}{
+		"pattern":          "hello",
+		"case_insensitive": true,
+	})
+	if err != nil {
+		t.Fatalf("grep -i: %v", err)
+	}
+	if !strings.Contains(resultStr, `"total_matches":2`) {
+		t.Fatalf("case-insensitive should match twice, got: %s", resultStr)
+	}
+}
+
+func TestGrepToolRespectsMaxResults(t *testing.T) {
+	workspace := t.TempDir()
+	var content strings.Builder
+	for i := 0; i < 100; i++ {
+		content.WriteString(fmt.Sprintf("match %d\n", i))
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "big.txt"), []byte(content.String()), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	tool := NewGrepToolWithBackend(NewGoGrepBackend(workspace))
+
+	resultStr, err := tool.Execute(context.Background(), map[string]interface{}{
+		"pattern":     "match",
+		"max_results": 5,
+	})
+	if err != nil {
+		t.Fatalf("grep: %v", err)
+	}
+	if !strings.Contains(resultStr, `"total_matches":100`) {
+		t.Fatalf("expected 100 total matches, got: %s", resultStr)
+	}
+	if !strings.Contains(resultStr, `"truncated":true`) {
+		t.Fatalf("expected truncated=true, got: %s", resultStr)
+	}
+	if strings.Count(resultStr, `"line":`) > 5 {
+		t.Fatalf("expected at most 5 results, got more in: %s", resultStr)
+	}
+}
+
+func TestGrepToolGlobFilter(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "a.go"), []byte("match"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "b.txt"), []byte("match"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	tool := NewGrepToolWithBackend(NewGoGrepBackend(workspace))
+
+	resultStr, err := tool.Execute(context.Background(), map[string]interface{}{
+		"pattern": "match",
+		"glob":    "*.go",
+	})
+	if err != nil {
+		t.Fatalf("grep: %v", err)
+	}
+	if !strings.Contains(resultStr, "a.go") {
+		t.Fatalf("expected a.go, got: %s", resultStr)
+	}
+	if strings.Contains(resultStr, "b.txt") {
+		t.Fatalf("b.txt should be filtered out, got: %s", resultStr)
+	}
+}
+
+func TestGrepToolRegexError(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewGrepToolWithBackend(NewGoGrepBackend(workspace))
+
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"pattern": "[unclosed",
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid regex") {
+		t.Fatalf("expected regex error, got: %v", err)
 	}
 }

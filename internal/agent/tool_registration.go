@@ -183,14 +183,16 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 
 	if a.webSearch != nil && a.cfg.Tools.WebSearch.Enabled {
 		a.registerToolTo(handler, tools.NewWebSearchTool(a.webSearch), tools.ToolMeta{
-			Bundle:  bundleWeb,
-			Summary: "current information lookup and page fetching",
+			Bundle:        bundleWeb,
+			Summary:       "current information lookup and page fetching",
+			DefaultActive: true,
 		})
 	}
 	if a.webFetch != nil && a.cfg.Tools.WebFetch.Enabled {
 		a.registerToolTo(handler, tools.NewWebFetchTool(a.webFetch), tools.ToolMeta{
-			Bundle:  bundleWeb,
-			Summary: "current information lookup and page fetching",
+			Bundle:        bundleWeb,
+			Summary:       "current information lookup and page fetching",
+			DefaultActive: true,
 		})
 	}
 	if a.browser != nil && a.cfg.Tools.Browser.Enabled {

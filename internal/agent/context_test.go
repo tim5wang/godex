@@ -586,8 +586,6 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 	for _, unexpected := range []string{
 		"background_run",
 		"check_background",
-		"web_search",
-		"web_fetch",
 		"task_create",
 		"task_list",
 		"read_inbox",
@@ -611,8 +609,8 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 		}
 	}
 
-	if got := len(build.ToolSchemas); got != 16 {
-		t.Fatalf("expected 16 active tool schemas by default, got %d", got)
+	if got := len(build.ToolSchemas); got != 18 {
+		t.Fatalf("expected 18 active tool schemas by default, got %d", got)
 	}
 }
 
@@ -651,7 +649,6 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 		"remember_memory",
 		"manage_session",
 		"history_search",
-		"web_search",
 		"background_run",
 		"task",
 	} {
@@ -769,7 +766,7 @@ func TestBuildContextPreloadsWebForExplicitWebSearchQueries(t *testing.T) {
 	}
 }
 
-func TestBuildContextDoesNotPreloadWebForPlainCodeQueries(t *testing.T) {
+func TestBuildContextPreloadsWebForAllQueries(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	a.AddMessage("帮我重构这个函数")
@@ -779,8 +776,11 @@ func TestBuildContextDoesNotPreloadWebForPlainCodeQueries(t *testing.T) {
 		t.Fatalf("build context: %v", err)
 	}
 
-	if _, ok := schemaByName(build.ToolSchemas, "web_search"); ok {
-		t.Fatalf("did not expect web_search schema for plain code query, got %+v", build.ToolSchemas)
+	if _, ok := schemaByName(build.ToolSchemas, "web_search"); !ok {
+		t.Fatalf("expected web_search schema for all queries, got %+v", build.ToolSchemas)
+	}
+	if _, ok := schemaByName(build.ToolSchemas, "web_fetch"); !ok {
+		t.Fatalf("expected web_fetch schema for all queries, got %+v", build.ToolSchemas)
 	}
 }
 

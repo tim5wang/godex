@@ -42,6 +42,13 @@ func NewLLMSessionSummarizer(caller conversation.Caller, model string, maxTokens
 	if maxTokens <= 0 {
 		maxTokens = defaultSummaryMaxTokens
 	}
+	// Cap at a reasonable upper bound to prevent runaway generation.
+	// llmSummaryReserveTokens (16384) is the default reserve budget;
+	// allow up to 2x for users who explicitly configure larger.
+	maxReserve := llmSummaryReserveTokens * 2
+	if maxTokens > maxReserve {
+		maxTokens = maxReserve
+	}
 	return &LLMSessionSummarizer{
 		caller:     caller,
 		model:      strings.TrimSpace(model),
@@ -75,9 +82,10 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 		return s.fallbackSummary(ctx, req, nil, "")
 	}
 
+	historyForLLM := req.History
+
 	// Incremental update: if PreviousSummary is provided, filter history to only
 	// include messages after the last compaction boundary.
-	historyForLLM := req.History
 	if strings.TrimSpace(req.PreviousSummary) != "" {
 		historyForLLM = filterNewMessagesSinceLastCompaction(req.History)
 		if len(historyForLLM) == 0 {
@@ -85,6 +93,20 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 			return SessionSummaryResult{Messages: cached, TranscriptRefs: transcriptRefs(cached)}, nil
 		}
 	}
+
+	// Hash-based dedup: skip LLM call when the input is unchanged.
+	// Use the full history (not filtered) so all callers benefit from caching.
+	hash, err := s.compressor.hashMessagesWithSnapshot(req.History, req.ContinuationSnapshot)
+	if err != nil {
+		return s.fallbackSummary(ctx, req, []string{"llm_summary_hash_failed: " + err.Error()}, llmSummaryFailureRecovery)
+	}
+	s.compressor.mu.Lock()
+	if s.compressor.hasCached && hash == s.compressor.lastHash {
+		cached := protocol.CloneMessages(s.compressor.lastResult)
+		s.compressor.mu.Unlock()
+		return SessionSummaryResult{Messages: cached, TranscriptRefs: transcriptRefs(cached)}, nil
+	}
+	s.compressor.mu.Unlock()
 
 	transcript, err := s.compressor.saveTranscript(req.History)
 	if err != nil {
@@ -116,6 +138,11 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 		}
 
 		result := s.compactWithModelSummary(req.History, text, transcript, req.ContinuationSnapshot)
+		s.compressor.mu.Lock()
+		s.compressor.lastHash = hash
+		s.compressor.lastResult = protocol.CloneMessages(result)
+		s.compressor.hasCached = true
+		s.compressor.mu.Unlock()
 		return SessionSummaryResult{
 			Messages:       result,
 			TranscriptRefs: transcriptRefs(result),

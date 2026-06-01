@@ -251,12 +251,12 @@ func buildSemanticSummary(messages []protocol.Message, transcript string, at tim
 				})
 				// Collect file operations from tool calls
 				if path := extractPathFromToolInput(block.Name, block.Input); path != "" {
-					switch block.Name {
-					case "read_file", "read", "read_multiple", "read_files":
+					switch knownFileToolNames[block.Name] {
+					case "read":
 						state.fileOps.Read = addUnique(state.fileOps.Read, path)
-					case "write_file", "write":
+					case "write":
 						state.fileOps.Written = addUnique(state.fileOps.Written, path)
-					case "edit_file", "edit", "edit_files":
+					case "edit":
 						state.fileOps.Edited = addUnique(state.fileOps.Edited, path)
 					default:
 						state.fileOps.Read = addUnique(state.fileOps.Read, path)
@@ -526,12 +526,12 @@ func extractFileOpsFromHistory(messages []protocol.Message) FileOperations {
 			if path == "" {
 				continue
 			}
-			switch block.Name {
-			case "read_file", "read", "read_multiple", "read_files":
+			switch knownFileToolNames[block.Name] {
+			case "read":
 				ops.Read = addUnique(ops.Read, path)
-			case "write_file", "write":
+			case "write":
 				ops.Written = addUnique(ops.Written, path)
-			case "edit_file", "edit", "edit_files":
+			case "edit":
 				ops.Edited = addUnique(ops.Edited, path)
 			default:
 				ops.Read = addUnique(ops.Read, path)

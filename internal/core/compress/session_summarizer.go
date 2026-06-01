@@ -34,15 +34,19 @@ func ExtractFileOperationsFromMessages(messages []protocol.Message) FileOperatio
 			if path == "" {
 				continue
 			}
-			switch block.Name {
-			case "read_file", "read", "read_multiple", "read_files":
+			opType, known := knownFileToolNames[block.Name]
+			switch {
+			case opType == "read":
 				reads[path] = struct{}{}
-			case "write_file", "write":
+			case opType == "write":
 				writes[path] = struct{}{}
-			case "edit_file", "edit", "edit_files":
+			case opType == "edit":
 				edits[path] = struct{}{}
+			case known:
+				// Known tool with unrecognized operation type — safe fallback
+				reads[path] = struct{}{}
 			default:
-				// Tools like bash, grep, search may read files; treat as read
+				// Unknown tool — treat path reference as read (conservative)
 				if path != "" {
 					reads[path] = struct{}{}
 				}
@@ -57,21 +61,58 @@ func ExtractFileOperationsFromMessages(messages []protocol.Message) FileOperatio
 	}
 }
 
+// knownFileToolNames maps tool names to file operation categories.
+// The keys are tool names used by the godex agent tool catalog.
+var knownFileToolNames = map[string]string{
+	// Read operations
+	"read_file":        "read",
+	"read":             "read",
+	"read_multiple":    "read",
+	"read_files":       "read",
+	"grep":             "read",
+	"glob":             "read",
+	"find":             "read",
+	"ls":               "read",
+	"search":           "read",
+	"history_search":   "read",
+	"get_memory":       "read",
+	"search_memory":    "read",
+	"list_memory":      "read",
+	// Write operations
+	"write_file":       "write",
+	"write":            "write",
+	"overwrite_file":   "write",
+	"append_file":      "write",
+	"remember_memory":  "write",
+	// Edit operations
+	"edit_file":        "edit",
+	"edit":             "edit",
+	"edit_files":       "edit",
+	"apply_diff":       "edit",
+	"patch":            "edit",
+	"replace":          "edit",
+	"rename":           "edit",
+	"move":             "edit",
+	"copy":             "write",
+	"delete_file":      "edit",
+	"delete":           "edit",
+	"remove":           "edit",
+	"attach_file":      "write",
+}
+
+// filePathParamKeys lists common parameter names that hold file paths.
+var filePathParamKeys = []string{
+	"path", "file_path", "filepath", "file",
+	"target", "source", "destination", "src", "dst",
+	"old_path", "new_path", "from", "to",
+	"dir", "directory", "folder",
+}
+
 func extractPathFromToolInput(name string, input map[string]interface{}) string {
 	if input == nil {
 		return ""
 	}
-	// Most file tools use "path" or "file_path" as the key
-	for _, key := range []string{"path", "file_path", "filepath"} {
-		if v, ok := input[key]; ok {
-			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-				return strings.TrimSpace(s)
-			}
-		}
-	}
-	// edit_file uses "old_string" as content, but also has "path"
-	// Try "target" or "file" as fallback
-	for _, key := range []string{"target", "file"} {
+	for _, key := range filePathParamKeys {
 		if v, ok := input[key]; ok {
 			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
 				return strings.TrimSpace(s)

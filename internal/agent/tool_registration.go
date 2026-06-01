@@ -20,6 +20,7 @@ const (
 	bundleDesktop    = "desktop"
 	bundlePackages   = "packages"
 	bundleExternal   = "external_agents"
+	bundleLSP        = "lsp"
 )
 
 func (a *Agent) registerToolTo(handler *tools.ToolHandler, tool tools.Tool, meta tools.ToolMeta) {
@@ -231,6 +232,11 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 	a.registerToolTo(handler, tools.NewReadMCPResourceTool(a.mcpMgr), tools.ToolMeta{
 		Bundle:  bundleMCP,
 		Summary: "configured MCP resource servers",
+	})
+	a.registerToolTo(handler, tools.NewLSPTool(workspaceDir), tools.ToolMeta{
+		Bundle:        bundleLSP,
+		Summary:       "LSP code intelligence (definitions, references, hover, diagnostics, completions)",
+		DefaultActive: true,
 	})
 	a.registerToolTo(handler, tools.NewTodoWriteTool(a.todoMgr), tools.ToolMeta{
 		Bundle:        bundlePlanning,

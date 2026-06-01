@@ -210,6 +210,7 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 		"- Keep user-visible replies compact like a coding agent: lead with the result, changed files, blockers, or next action.",
 		"- Avoid narration such as \"let me check\", broad progress commentary, or restating obvious tool outputs. Mention process only when it changes the user's decision.",
 		"- Read the relevant code first, make focused edits, then run the smallest useful verification.",
+		"- For precise code intelligence (symbol definitions, references, type info), prefer the lsp tool. Use grep for full-text search across files.",
 		"- Use todo tools for multi-step coding work, but keep plans short and update them as work changes.",
 		"- If the user asks for current web information, use tool_exchange to enable the web bundle, then use web_search or web_fetch. Do not use bash with curl/wget as a substitute for the web tools.",
 		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if task reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
@@ -289,7 +290,7 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 	if available := formatBundleSummary(catalog.Bundles, false); available != "" {
 		lines = append(lines, "- Available bundles: "+available)
 	}
-	lines = append(lines, "Use grep for code search, find for file lookup, and ls for directory listing.")
+	lines = append(lines, "For precise code intelligence (symbol definitions, references, type info, hover docs), prefer the lsp tool over grep. Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
 
 	return strings.Join(lines, "\n")
 }
@@ -316,7 +317,7 @@ func buildToolAvailabilityPromptForProfile(catalog tools.ToolCatalog, profile st
 	if available := formatBundleNames(catalog.Bundles, false); available != "" {
 		lines = append(lines, "- Available bundles: "+available)
 	}
-	lines = append(lines, "Use grep for code search, find for file lookup, and ls for directory listing.")
+	lines = append(lines, "For precise code intelligence (symbol definitions, references, type info, hover docs), prefer the lsp tool over grep. Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
 	return strings.Join(lines, "\n")
 }
 

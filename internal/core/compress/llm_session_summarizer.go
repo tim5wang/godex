@@ -24,6 +24,7 @@ const (
 	llmSummaryPromptSystem      = "You are GoDex's session compaction engine. Produce a dense continuation summary for the next assistant turn. Do not call tools."
 	llmSummaryFailureRecovery   = "model_summary_failed_fallback_rule_based"
 	llmSummaryEmptyResponseHint = "model_summary_empty_fallback_rule_based"
+	llmSummaryReserveTokens     = 16384
 )
 
 // LLMSessionSummarizer asks the configured model to write the compaction
@@ -41,9 +42,6 @@ func NewLLMSessionSummarizer(caller conversation.Caller, model string, maxTokens
 	if maxTokens <= 0 {
 		maxTokens = defaultSummaryMaxTokens
 	}
-	if maxTokens > defaultSummaryMaxTokens {
-		maxTokens = defaultSummaryMaxTokens
-	}
 	return &LLMSessionSummarizer{
 		caller:     caller,
 		model:      strings.TrimSpace(model),
@@ -51,6 +49,22 @@ func NewLLMSessionSummarizer(caller conversation.Caller, model string, maxTokens
 		compressor: compressor,
 		fallback:   fallback,
 	}
+}
+
+// reserveTokensFromContextWindow estimates a reasonable token budget for the
+// summarization model based on the configured model's max tokens.
+func reserveTokensFromContextWindow(modelMaxTokens int) int {
+	if modelMaxTokens <= 0 {
+		return defaultSummaryMaxTokens
+	}
+	reserve := modelMaxTokens / 10
+	if reserve > llmSummaryReserveTokens {
+		reserve = llmSummaryReserveTokens
+	}
+	if reserve < defaultSummaryMaxTokens {
+		reserve = defaultSummaryMaxTokens
+	}
+	return reserve
 }
 
 func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req SessionSummaryRequest) (SessionSummaryResult, error) {
@@ -61,24 +75,23 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 		return s.fallbackSummary(ctx, req, nil, "")
 	}
 
-	hash, err := s.compressor.hashMessagesWithSnapshot(req.History, req.ContinuationSnapshot)
-	if err != nil {
-		return s.fallbackSummary(ctx, req, []string{"llm_summary_hash_failed: " + err.Error()}, llmSummaryFailureRecovery)
+	// Incremental update: if PreviousSummary is provided, filter history to only
+	// include messages after the last compaction boundary.
+	historyForLLM := req.History
+	if strings.TrimSpace(req.PreviousSummary) != "" {
+		historyForLLM = filterNewMessagesSinceLastCompaction(req.History)
+		if len(historyForLLM) == 0 {
+			cached := protocol.CloneMessages(req.History)
+			return SessionSummaryResult{Messages: cached, TranscriptRefs: transcriptRefs(cached)}, nil
+		}
 	}
-	s.compressor.mu.Lock()
-	if s.compressor.hasCached && hash == s.compressor.lastHash {
-		cached := protocol.CloneMessages(s.compressor.lastResult)
-		s.compressor.mu.Unlock()
-		return SessionSummaryResult{Messages: cached, TranscriptRefs: transcriptRefs(cached)}, nil
-	}
-	s.compressor.mu.Unlock()
 
 	transcript, err := s.compressor.saveTranscript(req.History)
 	if err != nil {
 		return s.fallbackSummary(ctx, req, []string{"llm_summary_transcript_failed: " + err.Error()}, llmSummaryFailureRecovery)
 	}
 
-	messagesForSummary := sanitizeMessagesForSummaryModel(req.History, transcript)
+	messagesForSummary := sanitizeMessagesForSummaryModel(historyForLLM, transcript)
 	prompt := buildLLMSummaryPrompt(req, transcript, messagesForSummary)
 	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, prompt)}
 	providerReq := conversation.NewRequest(s.model, s.maxTokens, "", llmSummaryPromptSystem, messages, nil)
@@ -103,15 +116,11 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 		}
 
 		result := s.compactWithModelSummary(req.History, text, transcript, req.ContinuationSnapshot)
-		s.compressor.mu.Lock()
-		s.compressor.lastHash = hash
-		s.compressor.lastResult = protocol.CloneMessages(result)
-		s.compressor.hasCached = true
-		s.compressor.mu.Unlock()
 		return SessionSummaryResult{
 			Messages:       result,
 			TranscriptRefs: transcriptRefs(result),
 			Diagnostics:    diagnostics,
+			FileOps:        extractFileOpsFromHistory(historyForLLM),
 		}, nil
 	}
 
@@ -120,6 +129,25 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 		hint = llmSummaryEmptyResponseHint
 	}
 	return s.fallbackSummary(ctx, req, diagnostics, hint)
+}
+
+// filterNewMessagesSinceLastCompaction returns messages that appeared after the
+// last KindSummary (compaction boundary) in the history.
+func filterNewMessagesSinceLastCompaction(messages []protocol.Message) []protocol.Message {
+	lastSummaryIdx := -1
+	for i, msg := range messages {
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
+			lastSummaryIdx = i
+		}
+	}
+	if lastSummaryIdx < 0 {
+		return messages
+	}
+	out := messages[lastSummaryIdx+1:]
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (s *LLMSessionSummarizer) fallbackSummary(ctx context.Context, req SessionSummaryRequest, diagnostics []string, hint string) (SessionSummaryResult, error) {
@@ -167,52 +195,97 @@ func buildModelSummaryMessage(summaryText, transcript, continuationSnapshot stri
 
 func buildLLMSummaryPrompt(req SessionSummaryRequest, transcript string, messages []protocol.Message) string {
 	var builder strings.Builder
-	builder.WriteString("Write a compact continuation summary for this GoDex session.\n")
-	builder.WriteString("The full transcript has been saved as: ")
-	builder.WriteString(transcript)
-	builder.WriteString("\n\n")
-	builder.WriteString("Preserve, in this order:\n")
-	builder.WriteString("- User goals and latest instructions; preserve recent user messages with minimal loss.\n")
-	builder.WriteString("- Constraints, policies, and non-goals.\n")
-	builder.WriteString("- Decisions already made and rationale when important.\n")
-	builder.WriteString("- Files, commands, APIs, tests, and verification state.\n")
-	builder.WriteString("- Tool and subagent outcomes, but summarize large tool results by reference only.\n")
-	builder.WriteString("- Open questions, blockers, and next actions.\n\n")
-	builder.WriteString("Do not invent completed work. Do not include raw large tool output. Keep the summary dense enough for a future assistant turn to continue safely.\n")
-	if snapshot := strings.TrimSpace(req.ContinuationSnapshot); snapshot != "" {
-		builder.WriteString("\nPinned continuation state (preserve this section explicitly):\n")
-		builder.WriteString(limitRunes(snapshot, 5000))
-		builder.WriteString("\n")
+
+	// Check if this is an incremental update (previous summary exists)
+	previousSummary := strings.TrimSpace(req.PreviousSummary)
+	isIncremental := previousSummary != ""
+
+	if isIncremental {
+		builder.WriteString("Update the existing session summary with new conversation messages.\n")
+		builder.WriteString("RULES:\n")
+		builder.WriteString("- PRESERVE all existing information from the previous summary\n")
+		builder.WriteString("- ADD new progress, decisions, and context from the new messages\n")
+		builder.WriteString("- UPDATE the Progress section: move items to Done when completed\n")
+		builder.WriteString("- UPDATE Next Steps based on what was accomplished\n")
+		builder.WriteString("- PRESERVE exact file paths, function names, and error messages\n")
+		builder.WriteString("- If something is no longer relevant, remove it\n\n")
+	} else {
+		builder.WriteString("Write a compact continuation summary for this GoDex session.\n")
+		builder.WriteString("The full transcript has been saved as: ")
+		builder.WriteString(transcript)
+		builder.WriteString("\n\n")
+		builder.WriteString("Preserve, in this order:\n")
+		builder.WriteString("- User goals and latest instructions\n")
+		builder.WriteString("- Constraints, policies, and non-goals\n")
+		builder.WriteString("- Decisions already made and rationale when important\n")
+		builder.WriteString("- Files, commands, APIs, tests, and verification state\n")
+		builder.WriteString("- Tool and subagent outcomes (summarize large results by reference)\n")
+		builder.WriteString("- Open questions, blockers, and next actions\n\n")
+	}
+	builder.WriteString("Use this EXACT format:\n\n")
+	builder.WriteString("## Goal\n")
+	builder.WriteString("- [What is the user trying to accomplish?]\n\n")
+	builder.WriteString("## Constraints & Preferences\n")
+	builder.WriteString("- [Any constraints or preferences]\n\n")
+	builder.WriteString("## Progress\n")
+	builder.WriteString("### Done\n")
+	builder.WriteString("- [x] [Completed items]\n")
+	builder.WriteString("### In Progress\n")
+	builder.WriteString("- [ ] [Current work]\n")
+	builder.WriteString("### Blocked\n")
+	builder.WriteString("- [Blockers, if any]\n\n")
+	builder.WriteString("## Key Decisions\n")
+	builder.WriteString("- **[Decision]**: [Rationale]\n\n")
+	builder.WriteString("## Next Steps\n")
+	builder.WriteString("1. [Ordered list]\n\n")
+	builder.WriteString("## Critical Context\n")
+	builder.WriteString("- [File paths, error messages, data needed to continue]\n\n")
+
+	if isIncremental {
+		builder.WriteString("<previous-summary>\n")
+		builder.WriteString(limitRunes(previousSummary, 5000))
+		builder.WriteString("\n</previous-summary>\n\n")
 	}
 
-	if strings.TrimSpace(req.System) != "" {
-		builder.WriteString("\nSystem context excerpt:\n")
-		builder.WriteString(limitRunes(req.System, llmSummaryMaxBlockRunes))
-		builder.WriteString("\n")
+	if snapshot := strings.TrimSpace(req.ContinuationSnapshot); snapshot != "" {
+		builder.WriteString("<continuation-state>\n")
+		builder.WriteString(limitRunes(snapshot, 5000))
+		builder.WriteString("\n</continuation-state>\n")
 	}
-	if len(req.TokenBreakdown) > 0 {
-		builder.WriteString("\nToken pressure estimate:\n")
+
+	if strings.TrimSpace(req.System) != "" && !isIncremental {
+		builder.WriteString("\n<system-context>\n")
+		builder.WriteString(limitRunes(req.System, llmSummaryMaxBlockRunes))
+		builder.WriteString("\n</system-context>\n")
+	}
+	if len(req.TokenBreakdown) > 0 && !isIncremental {
+		builder.WriteString("\n<token-pressure>\n")
 		for _, key := range sortedMapKeys(req.TokenBreakdown) {
-			builder.WriteString("- ")
-			builder.WriteString(key)
-			builder.WriteString(": ")
-			builder.WriteString(fmt.Sprintf("%d", req.TokenBreakdown[key]))
-			builder.WriteString("\n")
+			builder.WriteString(fmt.Sprintf("- %s: %d\n", key, req.TokenBreakdown[key]))
 		}
+		builder.WriteString("</token-pressure>\n")
 	}
 	if len(req.RecentUserMessages) > 0 {
-		builder.WriteString("\nRecent user messages (verbatim, dedicated budget):\n")
+		builder.WriteString("\n<recent-user-messages>\n")
 		for i, msg := range limitRecentUserMessages(req.RecentUserMessages) {
 			if strings.TrimSpace(msg) == "" {
 				continue
 			}
-			builder.WriteString(fmt.Sprintf("%d. ```text\n", i+1))
-			builder.WriteString(limitRunes(strings.TrimSpace(msg), maxRecentUserRunes))
-			builder.WriteString("\n```\n")
+			builder.WriteString(fmt.Sprintf("%d. ```text\n%s\n```\n", i+1, limitRunes(strings.TrimSpace(msg), maxRecentUserRunes)))
 		}
+		builder.WriteString("</recent-user-messages>\n")
 	}
-	builder.WriteString("\nSanitized transcript excerpt:\n")
-	builder.WriteString(renderMessagesForSummaryPrompt(messages, llmSummaryMaxRenderedRunes))
+
+	if isIncremental {
+		builder.WriteString("\n<new-conversation>\n")
+		builder.WriteString(renderMessagesForSummaryPrompt(messages, llmSummaryMaxRenderedRunes))
+		builder.WriteString("\n</new-conversation>\n")
+	} else {
+		builder.WriteString("\n<conversation>\n")
+		builder.WriteString(renderMessagesForSummaryPrompt(messages, llmSummaryMaxRenderedRunes))
+		builder.WriteString("\n</conversation>\n")
+	}
+
 	return builder.String()
 }
 

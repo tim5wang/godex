@@ -66,7 +66,7 @@ func TestCompactConversationDefaultsToFastSummarizer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default compact should use fast summarizer: %v", err)
 	}
-	if !strings.Contains(output, "Semantic compaction summary") {
+	if !strings.Contains(output, "## Session Compaction Summary") {
 		t.Fatalf("expected fast compact summary, got %q", output)
 	}
 }

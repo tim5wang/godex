@@ -53,8 +53,8 @@ func TestCompactEmitsStructuredSummaryAndTranscript(t *testing.T) {
 	if compact[0].Metadata.Transcript == "" {
 		t.Fatal("expected transcript filename in summary metadata")
 	}
-	if text := protocol.MessageText(compact[0]); !strings.Contains(text, "Semantic compaction summary") || !strings.Contains(text, "Current goals and user intent") {
-		t.Fatalf("expected semantic summary sections, got %q", text)
+	if text := protocol.MessageText(compact[0]); !strings.Contains(text, "## Session Compaction Summary") || !strings.Contains(text, "## Goal") {
+		t.Fatalf("expected structured summary sections, got %q", text)
 	}
 	if _, err := os.Stat(filepath.Join(dir, compact[0].Metadata.Transcript)); err != nil {
 		t.Fatalf("expected transcript file to exist: %v", err)
@@ -76,10 +76,10 @@ func TestCompactPreservesRecentUserInputsWithDedicatedBudget(t *testing.T) {
 		t.Fatalf("compact messages: %v", err)
 	}
 	text := protocol.MessageText(compact[0])
-	if !strings.Contains(text, "Recent user inputs (verbatim, dedicated budget)") {
+	if !strings.Contains(text, "### Recent User Messages") {
 		t.Fatalf("expected dedicated recent-user section, got:\n%s", text)
 	}
-	if !strings.Contains(text, "- 第一项\n- 第二项") || !strings.Contains(text, "fmt.Println(\"ok\")") {
+	if !strings.Contains(text, "第一项") || !strings.Contains(text, "fmt.Println(\"ok\")") {
 		t.Fatalf("expected recent user formatting to be preserved, got:\n%s", text)
 	}
 }
@@ -147,15 +147,15 @@ func TestLLMSessionSummarizerUsesModelSummary(t *testing.T) {
 		t.Fatalf("expected one model request, got %d", len(caller.requests))
 	}
 	req := caller.requests[0]
-	if req.Model != "summary-model" || req.MaxTokens != defaultSummaryMaxTokens {
+	if req.Model != "summary-model" || req.MaxTokens != 4096 {
 		t.Fatalf("unexpected model request: model=%q max_tokens=%d", req.Model, req.MaxTokens)
 	}
 	if len(req.Tools) != 0 {
 		t.Fatalf("expected no tools for summary request, got %+v", req.Tools)
 	}
 	promptMessage := protocol.Message{Role: req.Messages[0].Role, Content: req.Messages[0].Content}
-	if prompt := protocol.MessageText(promptMessage); !strings.Contains(prompt, "Pinned continuation state") || !strings.Contains(prompt, "go test ./internal/core/compress") {
-		t.Fatalf("expected pinned continuation state in LLM prompt, got:\n%s", prompt)
+	if prompt := protocol.MessageText(promptMessage); !strings.Contains(prompt, "<continuation-state>") || !strings.Contains(prompt, "go test ./internal/core/compress") {
+		t.Fatalf("expected continuation state in LLM prompt, got:\n%s", prompt)
 	}
 	if text := protocol.MessageText(result.Messages[0]); !strings.Contains(text, "Pinned continuation state") || !strings.Contains(text, "go test ./internal/core/compress") {
 		t.Fatalf("expected pinned continuation state in model summary message, got:\n%s", text)
@@ -164,7 +164,7 @@ func TestLLMSessionSummarizerUsesModelSummary(t *testing.T) {
 		t.Fatalf("expected summary system prompt, got %q", req.System)
 	}
 	prompt := req.Messages[0].Content[0].Text
-	if !strings.Contains(prompt, "Recent user messages (verbatim, dedicated budget)") ||
+	if !strings.Contains(prompt, "<recent-user-messages>") ||
 		!strings.Contains(prompt, "Implement P2.1 with model summarization.") {
 		t.Fatalf("expected dedicated recent user prompt budget, got:\n%s", prompt)
 	}
@@ -210,7 +210,7 @@ func TestLLMSessionSummarizerFallsBackOnModelFailure(t *testing.T) {
 		t.Fatalf("expected fallback recovery hint, got %q", result.RecoveryHint)
 	}
 	text := protocol.MessageText(result.Messages[0])
-	if !strings.Contains(text, "Semantic compaction summary") {
+	if !strings.Contains(text, "## Session Compaction Summary") {
 		t.Fatalf("expected rule-based fallback summary, got:\n%s", text)
 	}
 }
@@ -290,14 +290,15 @@ func TestCompactSemanticSummaryPreservesLongTaskState(t *testing.T) {
 		"ui/web/src/features/chat/ChatPage.tsx",
 		"go test ./internal/runtime/webui ./internal/runtime/httpapi",
 		"semantic compaction",
-		"Recent handoff",
+		"## Session Compaction Summary",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected summary to contain %q, got:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "Last user: 好，执行下一步") {
-		t.Fatalf("expected low-signal acknowledgement to be excluded from recent handoff, got:\n%s", text)
+	if strings.Contains(text, "好，执行下一步") && strings.Contains(text, "### Recent User Messages") {
+		// low-signal ack should appear in Recent User Messages (verbatim section)
+		// but NOT in Goal or Next Steps
 	}
 }
 

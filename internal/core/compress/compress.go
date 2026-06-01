@@ -220,6 +220,7 @@ type semanticSummary struct {
 	recentAssistant string
 	recentUsers     []string
 	toolNames       map[string]struct{}
+	fileOps         FileOperations
 }
 
 func buildSemanticSummary(messages []protocol.Message, transcript string, at time.Time, continuationSnapshot string) string {
@@ -248,6 +249,19 @@ func buildSemanticSummary(messages []protocol.Message, transcript string, at tim
 					state.collectValidation(value)
 					state.collectOpenItems(value)
 				})
+				// Collect file operations from tool calls
+				if path := extractPathFromToolInput(block.Name, block.Input); path != "" {
+					switch block.Name {
+					case "read_file", "read", "read_multiple", "read_files":
+						state.fileOps.Read = addUnique(state.fileOps.Read, path)
+					case "write_file", "write":
+						state.fileOps.Written = addUnique(state.fileOps.Written, path)
+					case "edit_file", "edit", "edit_files":
+						state.fileOps.Edited = addUnique(state.fileOps.Edited, path)
+					default:
+						state.fileOps.Read = addUnique(state.fileOps.Read, path)
+					}
+				}
 			case protocol.BlockToolResult:
 				state.collectValidation(block.Content)
 				state.collectOpenItems(block.Content)
@@ -294,36 +308,164 @@ func buildSemanticSummary(messages []protocol.Message, transcript string, at tim
 		}
 	}
 
+	// Compute merged file operations (edited/written files excluded from read-only)
+	mergedReads := mergeFileOps(state.fileOps)
+
 	var builder strings.Builder
-	builder.WriteString("Semantic compaction summary\n")
+	builder.WriteString("## Session Compaction Summary\n")
 	builder.WriteString("Compressed at: ")
 	builder.WriteString(at.Format("2006-01-02 15:04"))
 	builder.WriteString("\nTranscript: ")
 	builder.WriteString(transcript)
 	builder.WriteString("\n\n")
-	builder.WriteString("Use history_search with this transcript when exact older details are needed.\n")
+	builder.WriteString("Use `history_search` with this transcript when exact older details are needed.\n")
 	writePinnedContinuationSnapshot(&builder, continuationSnapshot)
 
-	writeVerbatimSection(&builder, "Recent user inputs (verbatim, dedicated budget)", state.recentUsers)
-	writeSection(&builder, "Current goals and user intent", compactItems(state.goals, maxSummaryGoals))
-	writeSection(&builder, "Constraints and preferences", state.constraints)
-	writeSection(&builder, "Decisions and implementation notes", state.decisions)
-	writeSection(&builder, "Files and artifacts mentioned", sortedKeys(state.files, maxSummaryFiles))
-	writeSection(&builder, "Validation and commands", state.validation)
-	writeSection(&builder, "Open issues and next steps", state.openItems)
-	writeSection(&builder, "Prior compacted state", state.previous)
-	writeSection(&builder, "Recent tool activity", sortedKeys(state.toolNames, 12))
+	builder.WriteString("\n## Goal\n")
+	if len(state.goals) > 0 {
+		for _, g := range compactItems(state.goals, maxSummaryGoals) {
+			builder.WriteString("- ")
+			builder.WriteString(truncateRunes(g, maxSummaryItemRunes))
+			builder.WriteString("\n")
+		}
+	} else {
+		builder.WriteString("- (not explicitly stated)\n")
+	}
 
-	recent := make([]string, 0, 2)
-	if state.recentUser != "" {
-		recent = append(recent, "Last user: "+state.recentUser)
+	builder.WriteString("\n## Constraints & Preferences\n")
+	if len(state.constraints) > 0 {
+		for _, c := range state.constraints {
+			builder.WriteString("- ")
+			builder.WriteString(c)
+			builder.WriteString("\n")
+		}
+	} else {
+		builder.WriteString("- (none explicitly stated)\n")
 	}
+
+	builder.WriteString("\n## Progress\n")
+	builder.WriteString("### Done\n")
+	doneCount := 0
+	for _, d := range state.decisions {
+		builder.WriteString("- [x] ")
+		builder.WriteString(d)
+		builder.WriteString("\n")
+		doneCount++
+	}
+	if doneCount == 0 {
+		builder.WriteString("- (no completed items recorded)\n")
+	}
+
+	builder.WriteString("\n### In Progress\n")
+	builder.WriteString("- (see Next Steps)\n")
+
+	builder.WriteString("\n### Blocked\n")
+	blockedCount := 0
+	for _, item := range state.openItems {
+		lower := strings.ToLower(item)
+		if strings.Contains(lower, "blocked") || strings.Contains(lower, "阻塞") || strings.Contains(lower, "风险") || strings.Contains(lower, "blocker") {
+			builder.WriteString("- ")
+			builder.WriteString(item)
+			builder.WriteString("\n")
+			blockedCount++
+		}
+	}
+	if blockedCount == 0 {
+		builder.WriteString("- (none)\n")
+	}
+
+	builder.WriteString("\n## Key Decisions\n")
+	if len(mergedReads.Edited) > 0 || len(mergedReads.Written) > 0 {
+		builder.WriteString("### Files Modified\n")
+		for _, f := range mergedReads.Edited {
+			builder.WriteString("- (edited) ")
+			builder.WriteString(f)
+			builder.WriteString("\n")
+		}
+		for _, f := range mergedReads.Written {
+			builder.WriteString("- (written) ")
+			builder.WriteString(f)
+			builder.WriteString("\n")
+		}
+	}
+	filesSection := sortedKeys(state.files, maxSummaryFiles)
+	if len(filesSection) > 0 {
+		builder.WriteString("### Files Referenced\n")
+		for _, f := range filesSection {
+			builder.WriteString("- ")
+			builder.WriteString(f)
+			builder.WriteString("\n")
+		}
+	}
+
+	builder.WriteString("\n## Next Steps\n")
+	for _, item := range state.openItems {
+		lower := strings.ToLower(item)
+		if !strings.Contains(lower, "blocked") && !strings.Contains(lower, "阻塞") && !strings.Contains(lower, "blocker") {
+			builder.WriteString("- [ ] ")
+			builder.WriteString(item)
+			builder.WriteString("\n")
+		}
+	}
+	if len(state.validation) > 0 {
+		builder.WriteString("\n### Validation / Commands\n")
+		for _, v := range state.validation {
+			builder.WriteString("- ")
+			builder.WriteString(v)
+			builder.WriteString("\n")
+		}
+	}
+
+	builder.WriteString("\n## Critical Context\n")
 	if state.recentAssistant != "" {
-		recent = append(recent, "Last assistant: "+state.recentAssistant)
+		builder.WriteString("- Last assistant: ")
+		builder.WriteString(truncateRunes(state.recentAssistant, maxSummaryItemRunes))
+		builder.WriteString("\n")
 	}
-	writeSection(&builder, "Recent handoff", recent)
+	if len(state.toolNames) > 0 {
+		builder.WriteString("- Tools used: ")
+		builder.WriteString(strings.Join(sortedKeys(state.toolNames, 12), ", "))
+		builder.WriteString("\n")
+	}
+
+	// Recent user messages verbatim
+	if len(state.recentUsers) > 0 {
+		builder.WriteString("\n### Recent User Messages\n")
+		for i, m := range state.recentUsers {
+			builder.WriteString(fmt.Sprintf("%d. ```text\n%s\n```\n", i+1, m))
+		}
+	}
 
 	return truncateRunes(strings.TrimRight(builder.String(), "\n"), maxSummaryTotalRunes)
+}
+
+// addUnique appends value to slice if not already present, returning the slice.
+func addUnique(slice []string, value string) []string {
+	for _, s := range slice {
+		if s == value {
+			return slice
+		}
+	}
+	return append(slice, value)
+}
+
+// mergeFileOps removes read-only entries that overlap with edited/written files.
+func mergeFileOps(ops FileOperations) FileOperations {
+	modified := make(map[string]struct{}, len(ops.Edited)+len(ops.Written))
+	for _, f := range ops.Edited {
+		modified[f] = struct{}{}
+	}
+	for _, f := range ops.Written {
+		modified[f] = struct{}{}
+	}
+	readOnly := make([]string, 0, len(ops.Read))
+	for _, f := range ops.Read {
+		if _, ok := modified[f]; !ok {
+			readOnly = append(readOnly, f)
+		}
+	}
+	ops.Read = readOnly
+	return ops
 }
 
 func (s *semanticSummary) collectPaths(text string) {
@@ -367,6 +509,69 @@ func messageSemanticText(msg protocol.Message) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// extractFileOpsFromHistory extracts FileOperations from a message history.
+func extractFileOpsFromHistory(messages []protocol.Message) FileOperations {
+	var ops FileOperations
+	for _, msg := range messages {
+		if msg.Role != protocol.RoleAssistant {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type != protocol.BlockToolUse {
+				continue
+			}
+			path := extractPathFromToolInput(block.Name, block.Input)
+			if path == "" {
+				continue
+			}
+			switch block.Name {
+			case "read_file", "read", "read_multiple", "read_files":
+				ops.Read = addUnique(ops.Read, path)
+			case "write_file", "write":
+				ops.Written = addUnique(ops.Written, path)
+			case "edit_file", "edit", "edit_files":
+				ops.Edited = addUnique(ops.Edited, path)
+			default:
+				ops.Read = addUnique(ops.Read, path)
+			}
+		}
+	}
+	return mergeFileOps(ops)
+}
+
+// ExtractFileOpsSummary returns a formatted string of file operations.
+func ExtractFileOpsSummary(ops FileOperations) string {
+	if len(ops.Read) == 0 && len(ops.Written) == 0 && len(ops.Edited) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if len(ops.Edited) > 0 {
+		b.WriteString("\nEdited files:\n")
+		for _, f := range ops.Edited {
+			b.WriteString("- ")
+			b.WriteString(f)
+			b.WriteString("\n")
+		}
+	}
+	if len(ops.Written) > 0 {
+		b.WriteString("\nWritten files:\n")
+		for _, f := range ops.Written {
+			b.WriteString("- ")
+			b.WriteString(f)
+			b.WriteString("\n")
+		}
+	}
+	if len(ops.Read) > 0 {
+		b.WriteString("\nReferenced files (read):\n")
+		for _, f := range ops.Read {
+			b.WriteString("- ")
+			b.WriteString(f)
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func hasToolResult(msg protocol.Message) bool {

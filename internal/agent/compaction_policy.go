@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/compress"
@@ -79,7 +80,23 @@ func (a *Agent) compactionSummarizer(mode string) (compress.SessionSummarizer, s
 	return compress.NewRuleBasedSessionSummarizer(a.compressor), "fast"
 }
 
+// extractPreviousSummary scans history for the last KindSummary and returns its text.
+func extractPreviousSummary(history []protocol.Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
+			return strings.TrimSpace(protocol.MessageText(msg))
+		}
+	}
+	return ""
+}
+
 func (a *Agent) runCompaction(ctx context.Context, mode string, req compress.SessionSummaryRequest) (compactionRunResult, error) {
+	// Extract previous summary from history for incremental updates.
+	if strings.TrimSpace(req.PreviousSummary) == "" {
+		req.PreviousSummary = extractPreviousSummary(req.History)
+	}
+
 	summarizer, effectiveMode := a.compactionSummarizer(mode)
 	if summarizer == nil {
 		summarizer = compress.NewRuleBasedSessionSummarizer(a.compressor)

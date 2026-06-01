@@ -64,6 +64,11 @@ func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
 }
 
 // Call executes the provider request.
+func (c *Client) isAnthropicNative() bool {
+	baseURL := strings.TrimSpace(c.baseURL)
+	return strings.Contains(baseURL, "api.anthropic.com") || strings.Contains(baseURL, "api.anthropic.eu")
+}
+
 func (c *Client) Call(ctx context.Context, req protocol.Request) (*protocol.Response, error) {
 	start := time.Now()
 	var finalResp *protocol.Response
@@ -71,6 +76,7 @@ func (c *Client) Call(ctx context.Context, req protocol.Request) (*protocol.Resp
 	defer func() {
 		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start)})
 	}()
+	req.AnthropicNative = c.isAnthropicNative()
 	var lastErr error
 	visionFallbackUsed := false
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -120,6 +126,7 @@ func (c *Client) Stream(ctx context.Context, req protocol.Request, handler Strea
 	defer func() {
 		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start), Stream: true})
 	}()
+	req.AnthropicNative = c.isAnthropicNative()
 	var lastErr error
 	visionFallbackUsed := false
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -608,10 +615,26 @@ func marshalAnthropicBody(req protocol.Request) ([]byte, error) {
 		"stream":     req.Stream,
 	}
 
-	// System prompt: keep as plain string for broad provider compatibility.
-	// (The Anthropic API accepts both string and content-block array formats.)
+	// Build cache_control value with optional TTL based on PromptCacheRetention.
+	// - "short" / "" → {type: "ephemeral"} (no TTL, default)
+	// - "24h"        → {type: "ephemeral", ttl: "24h"}
+	cacheCtrl := cacheControlValue(req.PromptCacheRetention)
+
+	// System prompt: use content-block array with cache_control for native
+	// Anthropic API calls. For compatible providers, keep as plain string
+	// since some reject the array format.
 	if strings.TrimSpace(req.System) != "" {
-		payload["system"] = req.System
+		if req.AnthropicNative && cacheCtrl != nil {
+			payload["system"] = []map[string]interface{}{
+				{
+					"type":         "text",
+					"text":         req.System,
+					"cache_control": cacheCtrl,
+				},
+			}
+		} else {
+			payload["system"] = req.System
+		}
 	}
 
 	// Tools: mark the last tool definition with cache_control.
@@ -623,10 +646,8 @@ func marshalAnthropicBody(req protocol.Request) ([]byte, error) {
 				"description":  tool.Description,
 				"input_schema": tool.InputSchema,
 			}
-			if i == len(req.Tools)-1 {
-				t["cache_control"] = map[string]interface{}{
-					"type": "ephemeral",
-				}
+			if i == len(req.Tools)-1 && cacheCtrl != nil {
+				t["cache_control"] = cacheCtrl
 			}
 			tools = append(tools, t)
 		}
@@ -642,11 +663,9 @@ func marshalAnthropicBody(req protocol.Request) ([]byte, error) {
 			"role":    apiMsg.Role,
 			"content": content,
 		}
-		if isLast && lastTextIdx >= 0 {
+		if isLast && lastTextIdx >= 0 && cacheCtrl != nil {
 			if block, ok := content[lastTextIdx].(map[string]interface{}); ok {
-				block["cache_control"] = map[string]interface{}{
-					"type": "ephemeral",
-				}
+				block["cache_control"] = cacheCtrl
 			}
 		}
 		msgs = append(msgs, m)
@@ -654,6 +673,22 @@ func marshalAnthropicBody(req protocol.Request) ([]byte, error) {
 	payload["messages"] = msgs
 
 	return json.Marshal(payload)
+}
+
+// cacheControlValue returns a cache_control map based on the retention setting.
+// Returns nil when there is no cache key (caching disabled).
+func cacheControlValue(retention string) map[string]interface{} {
+	switch strings.TrimSpace(retention) {
+	case "":
+		return nil
+	case "short":
+		return map[string]interface{}{"type": "ephemeral"}
+	case "24h", "long":
+		return map[string]interface{}{"type": "ephemeral", "ttl": "24h"}
+	default:
+		// Custom TTL: use the retention value as TTL (e.g. "1h", "30m")
+		return map[string]interface{}{"type": "ephemeral", "ttl": strings.TrimSpace(retention)}
+	}
 }
 
 // anthropicContentBlocks converts APIMessage content blocks into the

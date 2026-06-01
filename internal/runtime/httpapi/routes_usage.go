@@ -108,6 +108,21 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, calls)
 	})))
+	mux.Handle("GET /usage/cache-stats", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := usage.CacheStatsQuery{
+			RangeType: r.URL.Query().Get("range"),
+			Model:     r.URL.Query().Get("model"),
+		}
+		if query.RangeType == "" {
+			query.RangeType = "day"
+		}
+		stats, err := usageService.GetCacheStats(query)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
+	})))
 }
 
 func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, usageService *usage.Service, manager *config.Manager) {

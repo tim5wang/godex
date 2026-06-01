@@ -306,6 +306,11 @@ func (s *Service) GetSummary(rangeType, apiKeyID string) ([]UsageSummary, error)
 	return s.store.GetSummary(rangeType, apiKeyID)
 }
 
+// GetCacheStats returns cache performance statistics grouped by model and period.
+func (s *Service) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error) {
+	return s.store.GetCacheStats(query)
+}
+
 // RecordLLMUsage records one observed model-provider call.
 func (s *Service) RecordLLMUsage(event conversation.UsageEvent) error {
 	ctx := event.Context

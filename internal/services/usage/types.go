@@ -111,6 +111,26 @@ type ModelUpdateRequest struct {
 	Enabled         *bool    `json:"enabled,omitempty"`
 }
 
+// CacheStats aggregates cache performance by model and time period.
+type CacheStats struct {
+	Period         string  `json:"period"`
+	Model          string  `json:"model"`
+	TotalCalls     int     `json:"total_calls"`
+	InputTokens    int64   `json:"input_tokens"`
+	CacheReadTokens int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	// HitRate is the percentage of input tokens served from cache.
+	// HitRate = cache_read_tokens / (input_tokens + cache_read_tokens) * 100
+	HitRate float64 `json:"hit_rate"`
+	TokensSaved int64 `json:"tokens_saved"`
+}
+
+// CacheStatsQuery groups the filtering parameters for GetCacheStats.
+type CacheStatsQuery struct {
+	RangeType string `json:"range_type"` // "day", "week", "month", "all"
+	Model     string `json:"model"`      // filter by model name (optional)
+}
+
 // Store is the persistence interface for usage gateway data.
 type Store interface {
 	ListKeys() ([]ProxyAPIKey, error)
@@ -128,4 +148,5 @@ type Store interface {
 	RecordCall(call *UsageCall) error
 	GetCalls(date string, apiKeyID string) ([]UsageCall, error)
 	GetSummary(rangeType string, apiKeyID string) ([]UsageSummary, error)
+	GetCacheStats(query CacheStatsQuery) ([]CacheStats, error)
 }

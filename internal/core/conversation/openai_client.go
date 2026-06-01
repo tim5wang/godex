@@ -102,19 +102,80 @@ func (c *OpenAIClient) Stream(ctx context.Context, req protocol.Request, handler
 }
 
 func (c *OpenAIClient) buildRequest(req protocol.Request, stream bool) ([]byte, error) {
+	msgs := openAIMessagesFromProtocol(req)
+	tools := openAIToolsFromProtocol(req.Tools)
+
+	// Anthropic-style cache_control breakpoints for OpenRouter / Anthropic routing.
+	// Only apply when:
+	// 1. We have a PromptCacheKey (caching is desired)
+	// 2. The model name starts with "anthropic/" (meaning OpenRouter routing to Anthropic)
+	// 3. We have tools or messages to annotate
+	//
+	// Other OpenAI-compatible providers (DeepSeek, etc.) don't understand
+	// Anthropic-style content array format, so they are safely skipped.
+	useAnthropicCache := req.PromptCacheKey != "" && strings.HasPrefix(req.Model, "anthropic/")
+	if useAnthropicCache {
+		cacheCtrl := cacheControlValueOpenAI(req.PromptCacheRetention)
+
+		// Mark the last tool definition with cache_control.
+		if cacheCtrl != nil && len(tools) > 0 {
+			lastTool := tools[len(tools)-1]
+			lastTool.CacheControl = cacheCtrl
+			tools[len(tools)-1] = lastTool
+		}
+
+		// Convert the last message's string content to array format with cache_control.
+		if cacheCtrl != nil && len(msgs) > 0 {
+			lastMsg := msgs[len(msgs)-1]
+			if lastMsg.Content != "" {
+				lastMsg.ContentParts = []openAIContentPart{
+					{Type: "text", Text: lastMsg.Content, CacheControl: cacheCtrl},
+				}
+				lastMsg.Content = ""
+				msgs[len(msgs)-1] = lastMsg
+			}
+		}
+	}
+
 	wire := openAIRequest{
 		Model:                req.Model,
 		MaxTokens:            req.MaxTokens,
 		Stream:               stream,
-		Messages:             openAIMessagesFromProtocol(req),
-		Tools:                openAIToolsFromProtocol(req.Tools),
+		Messages:             msgs,
+		Tools:                tools,
 		PromptCacheKey:       req.PromptCacheKey,
 		PromptCacheRetention: req.PromptCacheRetention,
 	}
 	if strings.TrimSpace(req.System) != "" {
-		wire.Messages = append([]openAIMessage{{Role: "system", Content: req.System}}, wire.Messages...)
+		sysMsg := openAIMessage{Role: "system", Content: req.System}
+		// For OpenRouter + Anthropic models, add cache_control to system prompt.
+		if useAnthropicCache {
+			cacheCtrl := cacheControlValueOpenAI(req.PromptCacheRetention)
+			if cacheCtrl != nil {
+				sysMsg.ContentParts = []openAIContentPart{
+					{Type: "text", Text: req.System, CacheControl: cacheCtrl},
+				}
+				sysMsg.Content = ""
+			}
+		}
+		wire.Messages = append([]openAIMessage{sysMsg}, wire.Messages...)
 	}
 	return json.Marshal(wire)
+}
+
+// cacheControlValueOpenAI returns a cache_control object based on retention.
+// Returns nil when retention is empty (caching disabled).
+func cacheControlValueOpenAI(retention string) *openAICacheControl {
+	switch strings.TrimSpace(retention) {
+	case "":
+		return nil
+	case "short":
+		return &openAICacheControl{Type: "ephemeral"}
+	case "24h", "long":
+		return &openAICacheControl{Type: "ephemeral", TTL: "24h"}
+	default:
+		return &openAICacheControl{Type: "ephemeral", TTL: strings.TrimSpace(retention)}
+	}
 }
 
 func (c *OpenAIClient) do(ctx context.Context, body []byte, stream bool) (*http.Response, error) {
@@ -153,17 +214,52 @@ type openAIRequest struct {
 	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"`
 }
 
+type openAIContentPart struct {
+	Type         string              `json:"type"`
+	Text         string              `json:"text,omitempty"`
+	CacheControl *openAICacheControl `json:"cache_control,omitempty"`
+}
+
+type openAICacheControl struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
 type openAIMessage struct {
-	Role             string           `json:"role"`
-	Content          string           `json:"content,omitempty"`
-	ReasoningContent string           `json:"reasoning_content,omitempty"`
-	ToolCallID       string           `json:"tool_call_id,omitempty"`
-	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
+	Role             string              `json:"role"`
+	Content          string              `json:"content,omitempty"`
+	ContentParts     []openAIContentPart `json:"-"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
+	ToolCalls        []openAIToolCall    `json:"tool_calls,omitempty"`
+}
+
+// MarshalJSON supports both string content and array content with cache_control.
+func (m openAIMessage) MarshalJSON() ([]byte, error) {
+	payload := map[string]interface{}{
+		"role": m.Role,
+	}
+	if len(m.ContentParts) > 0 {
+		payload["content"] = m.ContentParts
+	} else if m.Content != "" {
+		payload["content"] = m.Content
+	}
+	if m.ReasoningContent != "" {
+		payload["reasoning_content"] = m.ReasoningContent
+	}
+	if m.ToolCallID != "" {
+		payload["tool_call_id"] = m.ToolCallID
+	}
+	if len(m.ToolCalls) > 0 {
+		payload["tool_calls"] = m.ToolCalls
+	}
+	return json.Marshal(payload)
 }
 
 type openAITool struct {
-	Type     string         `json:"type"`
-	Function openAIFunction `json:"function"`
+	Type         string              `json:"type"`
+	Function     openAIFunction      `json:"function"`
+	CacheControl *openAICacheControl `json:"cache_control,omitempty"`
 }
 
 type openAIFunction struct {

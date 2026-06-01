@@ -112,6 +112,10 @@ type Request struct {
 	Stream               bool         `json:"stream,omitempty"`
 	PromptCacheKey       string       `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention string       `json:"prompt_cache_retention,omitempty"`
+	// AnthropicNative signals that the target provider is a native Anthropic API.
+	// When true, marshalAnthropicBody may use content-block array format with
+	// cache_control on the system prompt (which some compatible providers reject).
+	AnthropicNative bool `json:"-"`
 }
 
 type Response struct {

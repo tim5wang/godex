@@ -388,6 +388,82 @@ func boolInt(value bool) int {
 	return 0
 }
 
+func (s *SQLiteStore) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error) {
+	// Build WHERE clauses
+	conditions := []string{}
+	args := []any{}
+
+	switch strings.TrimSpace(query.RangeType) {
+	case "day":
+		conditions = append(conditions, "substr(timestamp, 1, 10) = date('now')")
+	case "week":
+		conditions = append(conditions, "timestamp >= datetime('now', '-7 days')")
+	case "month":
+		conditions = append(conditions, "timestamp >= datetime('now', '-30 days')")
+	}
+	if query.Model != "" {
+		conditions = append(conditions, "target_model = ?")
+		args = append(args, query.Model)
+	}
+	conditions = append(conditions, "status = 'success'")
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	periodExpr := "substr(timestamp, 1, 10)"
+	if query.RangeType == "week" {
+		periodExpr = "strftime('%Y-W%W', timestamp)"
+	} else if query.RangeType == "month" {
+		periodExpr = "substr(timestamp, 1, 7)"
+	}
+
+	querySQL := `SELECT ` + periodExpr + ` AS period,
+		target_model,
+		COUNT(*) AS total_calls,
+		COALESCE(SUM(input_tokens), 0) AS input_tokens,
+		COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+		COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens
+		FROM usage_calls` + whereClause + `
+		GROUP BY period, target_model
+		ORDER BY period DESC, target_model`
+
+	rows, err := s.db.Query(querySQL, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []CacheStats
+	for rows.Next() {
+		var stat CacheStats
+		var period, model string
+		var totalCalls int
+		var inputTokens, cacheRead, cacheWrite int64
+		if err := rows.Scan(&period, &model, &totalCalls, &inputTokens, &cacheRead, &cacheWrite); err != nil {
+			return nil, err
+		}
+		stat.Period = period
+		stat.Model = model
+		stat.TotalCalls = totalCalls
+		stat.InputTokens = inputTokens
+		stat.CacheReadTokens = cacheRead
+		stat.CacheWriteTokens = cacheWrite
+		total := inputTokens + cacheRead
+		if total > 0 {
+			stat.HitRate = float64(cacheRead) / float64(total) * 100.0
+			stat.HitRate = float64(int(stat.HitRate*100+0.5)) / 100
+		}
+		stat.TokensSaved = cacheRead
+		out = append(out, stat)
+	}
+	if out == nil {
+		out = []CacheStats{}
+	}
+	return out, rows.Err()
+}
+
 // Ensure SQLiteStore implements Store.
 var _ Store = (*SQLiteStore)(nil)
 

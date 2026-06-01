@@ -279,7 +279,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "alt+enter":
+	case "shift+enter", "alt+enter":
 		m.composer.InsertRune('\n')
 		m.resetInputHistoryNavigation()
 		return m, nil

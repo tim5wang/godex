@@ -50,7 +50,9 @@ func (m *model) renderItemLines(item feedItem, width int) []string {
 		}
 		return withSelectionMarker(renderPrefixedBlock(item.Body, "› ", "  ", bodyWidth, style), selected)
 	case feedAssistant:
-		if m.markdownRenderer != nil {
+		// RuntimeOnly == true 表示流式传输中的叠加层项目 → 使用简单文本换行（避免反复解析 markdown）
+		// RuntimeOnly == false 表示已完成的历史记录项目 → 使用完整的 markdown 渲染
+		if m.markdownRenderer != nil && !item.RuntimeOnly {
 			lines := m.markdownRenderer.Render(item.Body, bodyWidth)
 			return withSelectionMarker(lines, selected)
 		}

@@ -50,6 +50,10 @@ func (m *model) renderItemLines(item feedItem, width int) []string {
 		}
 		return withSelectionMarker(renderPrefixedBlock(item.Body, "› ", "  ", bodyWidth, style), selected)
 	case feedAssistant:
+		if m.markdownRenderer != nil {
+			lines := m.markdownRenderer.Render(item.Body, bodyWidth)
+			return withSelectionMarker(lines, selected)
+		}
 		style := assistantLineStyle
 		if selected {
 			style = selectedTextStyle
@@ -142,6 +146,17 @@ func (m *model) renderToolLines(item feedItem, width int) []string {
 			}
 		}
 		return lines
+	}
+
+	// 编辑工具展开时显示差异视图
+	if item.Title == "edit" && len(item.Input) > 0 {
+		diffLines := renderEditDiff(item.Input, maxInt(10, width-2))
+		if len(diffLines) > 0 {
+			for _, line := range diffLines {
+				lines = append(lines, "  "+line)
+			}
+			return lines
+		}
 	}
 
 	for _, line := range wrapWithIndent(toolDetailText(item), "  ", "  ", maxInt(10, width-2)) {

@@ -94,6 +94,9 @@ func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func
 		status = "Restored running session"
 	}
 
+	hl := NewHighlighter()
+	md := NewMarkdownRenderer(hl)
+
 	return &model{
 		ctx:                ctx,
 		cfg:                cfg,
@@ -113,6 +116,8 @@ func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func
 		seenModelCallEvent: make(map[string]struct{}),
 		inputHistoryIndex:  -1,
 		clipboardWrite:     defaultClipboardWrite,
+		highlighter:        hl,
+		markdownRenderer:   md,
 		viewport:           vp,
 		composer:           composer,
 		selectedItemID:     "",

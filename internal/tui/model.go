@@ -170,6 +170,9 @@ type model struct {
 	activePhase        string
 	activeToolName     string
 
+	highlighter      *Highlighter
+	markdownRenderer *MarkdownRenderer
+
 	viewport viewport.Model
 	composer textarea.Model
 }
@@ -239,4 +242,62 @@ var (
 
 	workingStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"})
+
+	// === Markdown Styles ===
+	headingStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.AdaptiveColor{Light: "#6B21A8", Dark: "#C084FC"})
+
+	heading1Style = lipgloss.NewStyle().
+		Bold(true).
+		Underline(true).
+		Foreground(lipgloss.AdaptiveColor{Light: "#6B21A8", Dark: "#C084FC"})
+
+	codeStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#B91C1C", Dark: "#FCA5A5"})
+
+	codeBlockStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#1F2937", Dark: "#E5E7EB"})
+
+	codeBlockBorderStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#4B5563", Dark: "#6B7280"})
+
+	linkStyle = lipgloss.NewStyle().
+		Underline(true).
+		Foreground(lipgloss.AdaptiveColor{Light: "#1D4ED8", Dark: "#93C5FD"})
+
+	quoteStyle = lipgloss.NewStyle().
+		Italic(true).
+		Foreground(lipgloss.AdaptiveColor{Light: "#4B5563", Dark: "#9CA3AF"})
+
+	quoteBorderStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#9CA3AF", Dark: "#4B5563"})
+
+	listBulletStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#059669", Dark: "#34D399"})
+
+	hrStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#D1D5DB", Dark: "#4B5563"})
+
+	boldStyle = lipgloss.NewStyle().Bold(true)
+	italicStyle = lipgloss.NewStyle().Italic(true)
+	strikethroughStyle = lipgloss.NewStyle().Strikethrough(true)
+
+	tableBorderStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"})
+
+	taskDoneStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#059669", Dark: "#34D399"})
+	taskPendingStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"})
+
+	// === Diff Styles ===
+	diffRemovedStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#B91C1C", Dark: "#FCA5A5"})
+	diffAddedStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#059669", Dark: "#34D399"})
+	diffContextStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"})
+	diffFileHeaderStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#374151", Dark: "#D1D5DB"})
 )

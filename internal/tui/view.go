@@ -23,6 +23,8 @@ func (m *model) View() string {
 }
 
 func (m *model) resize() {
+	oldWidth := m.viewport.Width
+
 	// Dynamic composer height: 1–10 lines based on content.
 	// The textarea appends m.height end-of-buffer lines internally, so we set
 	// height = visualLines + 1 to prevent the viewport from scrolling down
@@ -41,6 +43,11 @@ func (m *model) resize() {
 
 	m.viewport.Width = maxInt(10, m.width)
 	m.viewport.Height = m.feedHeight
+
+	// 宽度变化时使 markdown 缓存失效
+	if m.markdownRenderer != nil && m.viewport.Width != oldWidth {
+		m.markdownRenderer.InvalidateCache()
+	}
 }
 
 func (m *model) renderHeader() string {

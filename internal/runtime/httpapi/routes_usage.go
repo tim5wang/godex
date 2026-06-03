@@ -123,6 +123,52 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, stats)
 	})))
+
+	// ---- Time-series (trend charts) ----
+	mux.Handle("GET /usage/time-series", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		query := usage.TimeSeriesQuery{
+			Granularity: q.Get("granularity"),
+			StartTime:   q.Get("start_time"),
+			EndTime:     q.Get("end_time"),
+			APIKeyID:    q.Get("api_key_id"),
+			SessionID:   q.Get("session_id"),
+			Model:       q.Get("model"),
+		}
+		if query.Granularity == "" {
+			query.Granularity = "day"
+		}
+		points, err := usageService.GetTimeSeries(query)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, points)
+	})))
+
+	// ---- Session usage ----
+	mux.Handle("GET /usage/sessions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		apiKeyID := q.Get("api_key_id")
+		limit := parseIntQuery(q.Get("limit"), 20)
+		offset := parseIntQuery(q.Get("offset"), 0)
+		sessions, err := usageService.ListSessions(apiKeyID, limit, offset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, sessions)
+	})))
+
+	mux.Handle("GET /usage/sessions/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		summary, err := usageService.GetSessionUsage(id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, summary)
+	})))
 }
 
 func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, usageService *usage.Service, manager *config.Manager) {
@@ -345,6 +391,20 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func parseIntQuery(value string, defaultVal int) int {
+	if value == "" {
+		return defaultVal
+	}
+	n := 0
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return defaultVal
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 func writeUsageGatewayError(w http.ResponseWriter, status int, code, message string) {

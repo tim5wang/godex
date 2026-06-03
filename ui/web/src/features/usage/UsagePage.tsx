@@ -44,6 +44,10 @@ import {
   updateUsageModel,
 } from "../../lib/api";
 import type { ModelsView, UsageCall, UsageKey, UsageModelMapping, UsageSummary } from "../../lib/types";
+import { useSettingsStore } from "../../store/settings";
+import { OverviewTab } from "./overview/OverviewTab";
+import { SessionTab } from "./sessions/SessionTab";
+import { CacheStatsTab } from "./cache/CacheStatsTab";
 
 const { Title, Text } = Typography;
 
@@ -58,7 +62,7 @@ export function UsagePage() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const { message: antMessage } = AntApp.useApp();
-  const [token] = useState(() => localStorage.getItem("godex_token"));
+  const token = useSettingsStore((state) => state.token);
 
   // ---- Modal state ----
   const [createKeyOpen, setCreateKeyOpen] = useState(false);
@@ -402,10 +406,15 @@ export function UsagePage() {
     <div style={{ padding: 24 }}>
       <Title level={3}>Usage Gateway</Title>
 
-      <Tabs defaultActiveKey="keys" items={[
+      <Tabs defaultActiveKey="overview" items={[
+        {
+          key: "overview",
+          label: t("usage.overview"),
+          children: <OverviewTab token={token} />,
+        },
         {
           key: "keys",
-          label: "API Keys",
+          label: t("usage.apiKeys"),
           children: (
             <Card
               title="Proxy API Keys"
@@ -431,7 +440,7 @@ export function UsagePage() {
         },
         {
           key: "models",
-          label: "Model Mappings",
+          label: t("usage.modelMappings"),
           children: (
             <Card
               title="Proxy Model Mappings"
@@ -457,7 +466,7 @@ export function UsagePage() {
         },
         {
           key: "summary",
-          label: "Summary",
+          label: t("usage.summary"),
           children: (
             <Card
               title="Token & Credit Summary"
@@ -495,8 +504,13 @@ export function UsagePage() {
           ),
         },
         {
+          key: "sessions",
+          label: t("usage.sessions"),
+          children: <SessionTab token={token} />,
+        },
+        {
           key: "calls",
-          label: "Daily Calls",
+          label: t("usage.dailyCalls"),
           children: (
             <Card
               title="Usage Calls"
@@ -527,6 +541,11 @@ export function UsagePage() {
               />
             </Card>
           ),
+        },
+        {
+          key: "cache",
+          label: t("usage.cacheStats"),
+          children: <CacheStatsTab token={token} />,
         },
       ]} />
 

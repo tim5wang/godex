@@ -31,6 +31,10 @@ export default defineConfig({
             return "vendor-state";
           }
           if (id.includes("react") || id.includes("scheduler")) {
+            // Exclude packages that depend on antd to avoid circular deps
+            if (id.includes("react-redux") || id.includes("@reduxjs/toolkit") || id.includes("use-sync-external-store") || id.includes("immer") || id.includes("redux")) {
+              return "vendor-state";
+            }
             return "vendor-react";
           }
           if (id.includes("@codemirror") || id.includes("@lezer")) {

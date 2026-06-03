@@ -311,6 +311,21 @@ func (s *Service) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error) {
 	return s.store.GetCacheStats(query)
 }
 
+// GetTimeSeries returns time-bucketed usage data for trend charts.
+func (s *Service) GetTimeSeries(query TimeSeriesQuery) ([]TimeSeriesPoint, error) {
+	return s.store.GetTimeSeries(query)
+}
+
+// GetSessionUsage returns aggregated usage for a single session.
+func (s *Service) GetSessionUsage(sessionID string) (*SessionUsageSummary, error) {
+	return s.store.GetSessionUsage(sessionID)
+}
+
+// ListSessions returns a paginated list of session usage summaries.
+func (s *Service) ListSessions(apiKeyID string, limit, offset int) ([]SessionUsageSummary, error) {
+	return s.store.ListSessions(apiKeyID, limit, offset)
+}
+
 // RecordLLMUsage records one observed model-provider call.
 func (s *Service) RecordLLMUsage(event conversation.UsageEvent) error {
 	ctx := event.Context

@@ -56,6 +56,9 @@ import type {
   UsageKeyCreateResponse,
   UsageModelMapping,
   UsageSummary,
+  UsageTimeSeriesPoint,
+  SessionUsageSummary,
+  CacheStats,
   WeixinAuthStatus,
 } from "./types";
 
@@ -1038,6 +1041,66 @@ export function listUsageCalls(token: string | null, date?: string, apiKeyId?: s
   }
   const query = search.toString();
   return request<UsageCall[]>(`/usage/calls${query ? `?${query}` : ""}`, { method: "GET" }, token);
+}
+
+export function getUsageTimeSeries(
+  token: string | null,
+  params: {
+    granularity: "hour" | "day";
+    start_time?: string;
+    end_time?: string;
+    api_key_id?: string;
+    session_id?: string;
+    model?: string;
+  },
+) {
+  const search = new URLSearchParams();
+  search.set("granularity", params.granularity);
+  if (params.start_time) search.set("start_time", params.start_time);
+  if (params.end_time) search.set("end_time", params.end_time);
+  if (params.api_key_id) search.set("api_key_id", params.api_key_id);
+  if (params.session_id) search.set("session_id", params.session_id);
+  if (params.model) search.set("model", params.model);
+  return request<UsageTimeSeriesPoint[]>(
+    `/usage/time-series?${search.toString()}`,
+    { method: "GET" },
+    token,
+  );
+}
+
+export function listUsageSessions(token: string | null, params?: { api_key_id?: string; limit?: number; offset?: number }) {
+  const search = new URLSearchParams();
+  if (params?.api_key_id) search.set("api_key_id", params.api_key_id);
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
+  const query = search.toString();
+  return request<SessionUsageSummary[]>(
+    `/usage/sessions${query ? `?${query}` : ""}`,
+    { method: "GET" },
+    token,
+  );
+}
+
+export function getUsageSessionDetail(token: string | null, sessionId: string) {
+  return request<SessionUsageSummary>(
+    `/usage/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "GET" },
+    token,
+  );
+}
+
+export function getCacheStats(
+  token: string | null,
+  params?: { range?: string; model?: string },
+) {
+  const search = new URLSearchParams();
+  search.set("range", params?.range ?? "day");
+  if (params?.model) search.set("model", params.model);
+  return request<CacheStats[]>(
+    `/usage/cache-stats?${search.toString()}`,
+    { method: "GET" },
+    token,
+  );
 }
 
 // ---- File API ----

@@ -131,6 +131,53 @@ type CacheStatsQuery struct {
 	Model     string `json:"model"`      // filter by model name (optional)
 }
 
+// SessionUsageSummary aggregates usage by session.
+type SessionUsageSummary struct {
+	SessionID       string           `json:"session_id"`
+	CallCount       int              `json:"call_count"`
+	InputTokens     int              `json:"input_tokens"`
+	OutputTokens    int              `json:"output_tokens"`
+	CacheReadTokens int              `json:"cache_read_tokens"`
+	CacheWriteTokens int             `json:"cache_write_tokens"`
+	BillableTokens  int              `json:"billable_tokens"`
+	Credits         float64          `json:"credits"`
+	FirstCall       string           `json:"first_call"`
+	LastCall        string           `json:"last_call"`
+	ModelUsage      []ModelTokenUsage `json:"model_usage"`
+}
+
+// ModelTokenUsage records token usage per model within a session.
+type ModelTokenUsage struct {
+	Model        string `json:"model"`
+	CallCount    int    `json:"call_count"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+}
+
+// TimeSeriesQuery groups the filtering parameters for GetTimeSeries.
+type TimeSeriesQuery struct {
+	Granularity string `json:"granularity"` // "hour" or "day"
+	StartTime   string `json:"start_time"`
+	EndTime     string `json:"end_time"`
+	APIKeyID    string `json:"api_key_id"`
+	SessionID   string `json:"session_id"`
+	Model       string `json:"model"`
+}
+
+// TimeSeriesPoint is a single bucket of time-series usage data.
+type TimeSeriesPoint struct {
+	Bucket          string  `json:"bucket"`
+	CallCount       int     `json:"call_count"`
+	ErrorCount      int     `json:"error_count"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	CacheReadTokens int     `json:"cache_read_tokens"`
+	CacheWriteTokens int    `json:"cache_write_tokens"`
+	BillableTokens  int     `json:"billable_tokens"`
+	Credits         float64 `json:"credits"`
+	AvgLatencyMs    float64 `json:"avg_latency_ms"`
+}
+
 // Store is the persistence interface for usage gateway data.
 type Store interface {
 	ListKeys() ([]ProxyAPIKey, error)
@@ -149,4 +196,8 @@ type Store interface {
 	GetCalls(date string, apiKeyID string) ([]UsageCall, error)
 	GetSummary(rangeType string, apiKeyID string) ([]UsageSummary, error)
 	GetCacheStats(query CacheStatsQuery) ([]CacheStats, error)
+
+	GetTimeSeries(query TimeSeriesQuery) ([]TimeSeriesPoint, error)
+	GetSessionUsage(sessionID string) (*SessionUsageSummary, error)
+	ListSessions(apiKeyID string, limit, offset int) ([]SessionUsageSummary, error)
 }

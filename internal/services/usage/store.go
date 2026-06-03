@@ -251,52 +251,71 @@ func (s *SQLiteStore) GetCalls(date string, apiKeyID string) ([]UsageCall, error
 }
 
 func (s *SQLiteStore) GetSummary(rangeType, apiKeyID string) ([]UsageSummary, error) {
-	rows, err := s.db.Query(`SELECT id, timestamp, api_key_id, public_model, target_profile_id, target_model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, billable_tokens, credit_weight, credits, estimated, status, error, latency_ms, source_channel, session_id, turn_id, job_id, error_code FROM usage_calls ORDER BY timestamp`)
+	conditions := []string{}
+	args := []any{}
+
+	if apiKeyID != "" {
+		conditions = append(conditions, "api_key_id = ?")
+		args = append(args, apiKeyID)
+	}
+
+	// Build period expression
+	var periodExpr string
+	switch rangeType {
+	case "week":
+		// strftime('%Y-W%W') gives ISO-like week, pad single-digit weeks
+		periodExpr = "printf('%d-W%02d', cast(strftime('%Y', timestamp) as integer), cast(strftime('%W', timestamp) as integer))"
+	case "year":
+		periodExpr = "substr(timestamp, 1, 4)"
+	case "month":
+		periodExpr = "substr(timestamp, 1, 7)"
+	default: // "day" or anything else
+		periodExpr = "substr(timestamp, 1, 10)"
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	query := fmt.Sprintf(`SELECT %s AS period,
+		api_key_id,
+		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(cache_write_tokens), 0),
+		COALESCE(SUM(billable_tokens), 0),
+		COALESCE(SUM(credits), 0),
+		COUNT(*) AS call_count,
+		COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS error_count
+		FROM usage_calls%s
+		GROUP BY period, api_key_id
+		ORDER BY period`, periodExpr, whereClause)
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	calls, err := scanCalls(rows)
-	if err != nil {
-		return nil, err
-	}
-	type groupKey struct {
-		period string
-		keyID  string
-	}
-	groups := make(map[groupKey]*UsageSummary)
-	for _, c := range calls {
-		if apiKeyID != "" && c.APIKeyID != apiKeyID {
-			continue
+
+	var out []UsageSummary
+	for rows.Next() {
+		var s UsageSummary
+		var period, keyID string
+		if err := rows.Scan(&period, &keyID, &s.InputTokens, &s.OutputTokens,
+			&s.CacheReadTokens, &s.CacheWriteTokens, &s.BillableTokens,
+			&s.Credits, &s.CallCount, &s.ErrorCount); err != nil {
+			return nil, err
 		}
-		period := c.Timestamp.Format("2006-01-02")
-		if rangeType == "week" {
-			year, week := c.Timestamp.ISOWeek()
-			period = fmt.Sprintf("%d-W%02d", year, week)
-		}
-		gk := groupKey{period: period, keyID: c.APIKeyID}
-		summary, ok := groups[gk]
-		if !ok {
-			summary = &UsageSummary{Period: period, APIKeyID: c.APIKeyID}
-			groups[gk] = summary
-		}
-		summary.InputTokens += c.InputTokens
-		summary.OutputTokens += c.OutputTokens
-		summary.CacheReadTokens += c.CacheReadTokens
-		summary.CacheWriteTokens += c.CacheWriteTokens
-		summary.BillableTokens += c.BillableTokens
-		summary.Credits += c.Credits
-		summary.CallCount++
-		if c.Status == "error" {
-			summary.ErrorCount++
-		}
+		s.Period = period
+		s.APIKeyID = keyID
+		s.Credits = float64(int(s.Credits*1e6+0.5)) / 1e6
+		out = append(out, s)
 	}
-	out := make([]UsageSummary, 0, len(groups))
-	for _, summary := range groups {
-		summary.Credits = float64(int(summary.Credits*1e6+0.5)) / 1e6
-		out = append(out, *summary)
+	if out == nil {
+		out = []UsageSummary{}
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 type scanner interface {
@@ -460,6 +479,207 @@ func (s *SQLiteStore) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error)
 	}
 	if out == nil {
 		out = []CacheStats{}
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) GetTimeSeries(query TimeSeriesQuery) ([]TimeSeriesPoint, error) {
+	conditions := []string{}
+	args := []any{}
+
+	if query.StartTime != "" {
+		conditions = append(conditions, "timestamp >= ?")
+		args = append(args, query.StartTime)
+	}
+	if query.EndTime != "" {
+		conditions = append(conditions, "timestamp <= ?")
+		args = append(args, query.EndTime)
+	}
+	if query.APIKeyID != "" {
+		conditions = append(conditions, "api_key_id = ?")
+		args = append(args, query.APIKeyID)
+	}
+	if query.SessionID != "" {
+		conditions = append(conditions, "session_id = ?")
+		args = append(args, query.SessionID)
+	}
+	if query.Model != "" {
+		conditions = append(conditions, "(public_model = ? OR target_model = ?)")
+		args = append(args, query.Model, query.Model)
+	}
+
+	periodExpr := "substr(timestamp, 1, 10)"
+	if query.Granularity == "hour" {
+		periodExpr = "substr(timestamp, 1, 13)"
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	sqlQuery := `SELECT ` + periodExpr + ` AS bucket,
+		COUNT(*) AS call_count,
+		COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS error_count,
+		COALESCE(SUM(input_tokens), 0) AS input_tokens,
+		COALESCE(SUM(output_tokens), 0) AS output_tokens,
+		COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+		COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+		COALESCE(SUM(billable_tokens), 0) AS billable_tokens,
+		COALESCE(SUM(credits), 0) AS credits,
+		CASE WHEN COUNT(*) > 0 THEN CAST(SUM(latency_ms) AS REAL) / COUNT(*) ELSE 0 END AS avg_latency_ms
+		FROM usage_calls` + whereClause + `
+		GROUP BY bucket
+		ORDER BY bucket`
+
+	rows, err := s.db.Query(sqlQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TimeSeriesPoint
+	for rows.Next() {
+		var p TimeSeriesPoint
+		var bucket string
+		var callCount, errCount, inTokens, outTokens, cacheR, cacheW, billable int
+		var credits float64
+		var avgLatency float64
+		if err := rows.Scan(&bucket, &callCount, &errCount, &inTokens, &outTokens, &cacheR, &cacheW, &billable, &credits, &avgLatency); err != nil {
+			return nil, err
+		}
+		p.Bucket = bucket
+		p.CallCount = callCount
+		p.ErrorCount = errCount
+		p.InputTokens = inTokens
+		p.OutputTokens = outTokens
+		p.CacheReadTokens = cacheR
+		p.CacheWriteTokens = cacheW
+		p.BillableTokens = billable
+		p.Credits = credits
+		p.AvgLatencyMs = avgLatency
+		out = append(out, p)
+	}
+	if out == nil {
+		out = []TimeSeriesPoint{}
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) GetSessionUsage(sessionID string) (*SessionUsageSummary, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+
+	// Aggregate top-level session stats
+	row := s.db.QueryRow(`SELECT
+		COUNT(*) AS call_count,
+		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(cache_write_tokens), 0),
+		COALESCE(SUM(billable_tokens), 0),
+		COALESCE(SUM(credits), 0),
+		MIN(timestamp),
+		MAX(timestamp)
+		FROM usage_calls WHERE session_id = ?`, sessionID)
+
+	var summary SessionUsageSummary
+	var firstCall, lastCall string
+	if err := row.Scan(&summary.CallCount, &summary.InputTokens, &summary.OutputTokens,
+		&summary.CacheReadTokens, &summary.CacheWriteTokens, &summary.BillableTokens,
+		&summary.Credits, &firstCall, &lastCall); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("session not found")
+		}
+		return nil, err
+	}
+	summary.SessionID = sessionID
+	summary.FirstCall = firstCall
+	summary.LastCall = lastCall
+
+	// Aggregate per-model breakdown
+	modelRows, err := s.db.Query(`SELECT
+		public_model,
+		COUNT(*),
+		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(output_tokens), 0)
+		FROM usage_calls WHERE session_id = ?
+		GROUP BY public_model
+		ORDER BY COUNT(*) DESC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer modelRows.Close()
+
+	for modelRows.Next() {
+		var m ModelTokenUsage
+		if err := modelRows.Scan(&m.Model, &m.CallCount, &m.InputTokens, &m.OutputTokens); err != nil {
+			return nil, err
+		}
+		summary.ModelUsage = append(summary.ModelUsage, m)
+	}
+	if summary.ModelUsage == nil {
+		summary.ModelUsage = []ModelTokenUsage{}
+	}
+	return &summary, modelRows.Err()
+}
+
+func (s *SQLiteStore) ListSessions(apiKeyID string, limit, offset int) ([]SessionUsageSummary, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	conditions := []string{"session_id != ''"}
+	args := []any{}
+	if apiKeyID != "" {
+		conditions = append(conditions, "api_key_id = ?")
+		args = append(args, apiKeyID)
+	}
+	whereClause := " WHERE " + strings.Join(conditions, " AND ")
+
+	query := `SELECT session_id,
+		COUNT(*) AS call_count,
+		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(cache_write_tokens), 0),
+		COALESCE(SUM(billable_tokens), 0),
+		COALESCE(SUM(credits), 0),
+		MIN(timestamp),
+		MAX(timestamp)
+		FROM usage_calls` + whereClause + `
+		GROUP BY session_id
+		ORDER BY MAX(timestamp) DESC
+		LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SessionUsageSummary
+	for rows.Next() {
+		var s SessionUsageSummary
+		var sessionID, firstCall, lastCall string
+		if err := rows.Scan(&sessionID, &s.CallCount, &s.InputTokens, &s.OutputTokens,
+			&s.CacheReadTokens, &s.CacheWriteTokens, &s.BillableTokens,
+			&s.Credits, &firstCall, &lastCall); err != nil {
+			return nil, err
+		}
+		s.SessionID = sessionID
+		s.FirstCall = firstCall
+		s.LastCall = lastCall
+		s.ModelUsage = []ModelTokenUsage{}
+		out = append(out, s)
+	}
+	if out == nil {
+		out = []SessionUsageSummary{}
 	}
 	return out, rows.Err()
 }

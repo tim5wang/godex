@@ -1340,3 +1340,48 @@ export interface UsageCall {
   error_code?: string;
   latency_ms: number;
 }
+
+export interface UsageTimeSeriesPoint {
+  bucket: string;
+  call_count: number;
+  error_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  billable_tokens: number;
+  credits: number;
+  avg_latency_ms: number;
+}
+
+export interface ModelTokenUsage {
+  model: string;
+  call_count: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface SessionUsageSummary {
+  session_id: string;
+  call_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  billable_tokens: number;
+  credits: number;
+  first_call: string;
+  last_call: string;
+  model_usage: ModelTokenUsage[];
+}
+
+export interface CacheStats {
+  period: string;
+  model: string;
+  total_calls: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  hit_rate: number;
+  tokens_saved: number;
+}

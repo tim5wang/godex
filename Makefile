@@ -5,15 +5,47 @@ COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -s -w -X github.com/tim5wang/godex/internal/version.Version=$(VERSION) -X github.com/tim5wang/godex/internal/version.Commit=$(COMMIT) -X github.com/tim5wang/godex/internal/version.Date=$(BUILD_DATE)
 
-.PHONY: dev web build-linux release release-clean deploy-linux
+.PHONY: dev dev-fast dev-frontend web web-dev web-typecheck web-clean build-linux release release-clean deploy-linux
 
+# ── Web UI build targets ───────────────────────────────────────────
+
+## web:     Full production build (tsc type-check + vite bundle)
 web:
 	pnpm --dir ui/web build
 
+## web-dev: Quick build for development (skip tsc, vite bundle only)
+web-dev:
+	pnpm --dir ui/web run dev:build
+
+## web-typecheck: Run TypeScript type-checking only (CI gate)
+web-typecheck:
+	pnpm --dir ui/web run typecheck
+
+## web-clean: Remove all web build artifacts
+web-clean:
+	rm -rf ui/web/dist
+	rm -rf internal/uiassets/embedded_dist/assets
+	rm -f internal/uiassets/embedded_dist/index.html
+
+# ── Development targets ────────────────────────────────────────────
+
+## dev-frontend: Start Vite dev server with HMR (standalone, use with a separate Go backend)
+dev-frontend:
+	cd ui/web && pnpm dev
+
+## dev-fast: Quick rebuild + service restart (skip tsc type-check, uses web-dev)
+dev-fast: web-dev
+	go build -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/godex \
+		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
+
+## dev: Full rebuild + service restart (with tsc type-check, legacy)
 dev: web
 	go build -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/godex \
-	&& ./godex service uninstall && ./godex service install && ./godex service start
+		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
 
+# ── Release targets ────────────────────────────────────────────────
+
+## build-linux: Full build for Linux amd64
 build-linux: web
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP)-linux-amd64 ./cmd/godex
 

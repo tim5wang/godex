@@ -466,6 +466,120 @@ export const messages = {
       noTimelineEvents: "No timeline events yet.",
       currentSessionFallback: "New chat",
     },
+    usage: {
+      // Tab labels
+      overview: "Overview",
+      apiKeys: "API Keys",
+      modelMappings: "Model Mappings",
+      summary: "Summary",
+      sessions: "Sessions",
+      dailyCalls: "Daily Calls",
+      cacheStats: "Cache Stats",
+
+      // Filter bar
+      filter: {
+        allKeys: "All keys",
+        allModels: "All models",
+        hourly: "Hourly",
+        daily: "Daily",
+        proxyKeys: "Proxy Keys",
+        systemEntries: "System Entries",
+      },
+
+      // Overview dashboard
+      overviewTab: {
+        totalCalls: "Total Calls",
+        totalTokens: "Total Tokens (In + Out)",
+        totalCredits: "Total Credits",
+        errorRate: "Error Rate",
+        cacheSaved: "Cache Saved",
+        cacheHitRate: "Cache Hit Rate",
+        noData: "No data available",
+      },
+
+      // Token trend chart
+      tokenChart: {
+        title: "Token Usage vs Cache Savings",
+        inputTokens: "Input Tokens",
+        outputTokens: "Output Tokens",
+        cacheRead: "Cache Read (Saved)",
+      },
+
+      // Credit trend chart
+      creditChart: {
+        title: "Credit Consumption",
+        credits: "Credits",
+        cumulative: "Cumulative",
+      },
+
+      // Error rate chart
+      errorChart: {
+        title: "Call Volume & Error Rate",
+        callCount: "Call Count",
+        errorRate: "Error Rate",
+      },
+
+      // Session panel
+      sessionPanel: {
+        title: "Session Usage",
+        searchPlaceholder: "Search session ID...",
+        filterByKey: "Filter by key",
+        sessionId: "Session ID",
+        calls: "Calls",
+        inputTokens: "Input Tokens",
+        outputTokens: "Output Tokens",
+        credits: "Credits",
+        firstCall: "First Call",
+        lastCall: "Last Call",
+        models: "Models",
+        modelBreakdown: "Model Breakdown",
+        model: "Model",
+      },
+
+      // Cache stats
+      cachePanel: {
+        title: "Cache Performance by Model",
+        today: "Today",
+        last7Days: "Last 7 Days",
+        last30Days: "Last 30 Days",
+        allTime: "All Time",
+        totalCalls: "Total Calls",
+        inputTokens: "Input Tokens",
+        cacheRead: "Cache Read",
+        hitRate: "Hit Rate",
+        tokensSaved: "Tokens Saved",
+      },
+
+      // Summary table
+      summaryTable: {
+        period: "Period",
+        keyId: "Key ID",
+        calls: "Calls",
+        errors: "Errors",
+        input: "Input",
+        output: "Output",
+        cacheR: "Cache R",
+        cacheW: "Cache W",
+        billable: "Billable",
+        credits: "Credits",
+      },
+
+      // Calls table
+      callsTable: {
+        time: "Time",
+        key: "Key",
+        model: "Model",
+        target: "Target",
+        source: "Source",
+        in: "In",
+        out: "Out",
+        cacheR: "Cache R",
+        cacheW: "Cache W",
+        weight: "Weight",
+        credits: "Credits",
+        status: "Status",
+      },
+    },
   },
   zh: {
     app: {
@@ -930,6 +1044,120 @@ export const messages = {
       sessionTimelineSubtitle: "当前会话最近的结构化运行事件。",
       noTimelineEvents: "还没有时间线事件。",
       currentSessionFallback: "新会话",
+    },
+    usage: {
+      // Tab labels
+      overview: "概览",
+      apiKeys: "API 密钥",
+      modelMappings: "模型映射",
+      summary: "汇总",
+      sessions: "会话",
+      dailyCalls: "每日调用",
+      cacheStats: "缓存统计",
+
+      // Filter bar
+      filter: {
+        allKeys: "所有密钥",
+        allModels: "所有模型",
+        hourly: "按小时",
+        daily: "按天",
+        proxyKeys: "代理密钥",
+        systemEntries: "系统条目",
+      },
+
+      // Overview dashboard
+      overviewTab: {
+        totalCalls: "总调用次数",
+        totalTokens: "总 Token（输入 + 输出）",
+        totalCredits: "总 Credits",
+        errorRate: "错误率",
+        cacheSaved: "缓存节省",
+        cacheHitRate: "缓存命中率",
+        noData: "暂无数据",
+      },
+
+      // Token trend chart
+      tokenChart: {
+        title: "Token 用量 vs 缓存节省",
+        inputTokens: "输入 Token",
+        outputTokens: "输出 Token",
+        cacheRead: "缓存读取（节省）",
+      },
+
+      // Credit trend chart
+      creditChart: {
+        title: "Credits 消耗",
+        credits: "Credits",
+        cumulative: "累计",
+      },
+
+      // Error rate chart
+      errorChart: {
+        title: "调用量与错误率",
+        callCount: "调用次数",
+        errorRate: "错误率",
+      },
+
+      // Session panel
+      sessionPanel: {
+        title: "会话用量",
+        searchPlaceholder: "搜索会话 ID...",
+        filterByKey: "按密钥筛选",
+        sessionId: "会话 ID",
+        calls: "调用次数",
+        inputTokens: "输入 Token",
+        outputTokens: "输出 Token",
+        credits: "Credits",
+        firstCall: "首次调用",
+        lastCall: "最后调用",
+        models: "模型",
+        modelBreakdown: "模型细分",
+        model: "模型",
+      },
+
+      // Cache stats
+      cachePanel: {
+        title: "按模型的缓存性能",
+        today: "今天",
+        last7Days: "最近 7 天",
+        last30Days: "最近 30 天",
+        allTime: "全部",
+        totalCalls: "总调用",
+        inputTokens: "输入 Token",
+        cacheRead: "缓存读取",
+        hitRate: "命中率",
+        tokensSaved: "节省 Token",
+      },
+
+      // Summary table
+      summaryTable: {
+        period: "时间段",
+        keyId: "密钥 ID",
+        calls: "调用",
+        errors: "错误",
+        input: "输入",
+        output: "输出",
+        cacheR: "缓存 R",
+        cacheW: "缓存 W",
+        billable: "计费",
+        credits: "Credits",
+      },
+
+      // Calls table
+      callsTable: {
+        time: "时间",
+        key: "密钥",
+        model: "模型",
+        target: "目标",
+        source: "来源",
+        in: "输入",
+        out: "输出",
+        cacheR: "缓存 R",
+        cacheW: "缓存 W",
+        weight: "权重",
+        credits: "Credits",
+        status: "状态",
+      },
     },
   },
 } as const satisfies Record<Locale, Record<string, unknown>>;

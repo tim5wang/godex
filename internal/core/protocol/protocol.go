@@ -128,9 +128,40 @@ type Response struct {
 type Usage struct {
 	InputTokens      int  `json:"input_tokens,omitempty"`
 	OutputTokens     int  `json:"output_tokens,omitempty"`
-	CacheReadTokens  int  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int  `json:"cache_write_tokens,omitempty"`
-	Estimated        bool `json:"estimated,omitempty"`
+	// CacheReadTokens is the canonical cache-read field used by OpenAI-style
+	// providers (cached_tokens / cache_read_tokens) and is also what the
+	// usage reporting layer aggregates. The Anthropic alias
+	// (cache_read_input_tokens) is decoded into the same field below.
+	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+	// CacheWriteTokens is the canonical cache-write field used by OpenAI-style
+	// providers (cache_creation_tokens). Anthropic's
+	// cache_creation_input_tokens is decoded into the same field below.
+	CacheWriteTokens int    `json:"cache_write_tokens,omitempty"`
+	Estimated        bool   `json:"estimated,omitempty"`
+	// CacheReadTokensAnthropic / CacheWriteTokensAnthropic are alternate
+	// names that Anthropic uses; they are decoded into the canonical
+	// CacheReadTokens / CacheWriteTokens fields above. They are kept here
+	// purely so the JSON decoder can match them by name; downstream code
+	// should always read the canonical fields.
+	CacheReadTokensAnthropic  int `json:"cache_read_input_tokens,omitempty"`
+	CacheWriteTokensAnthropic int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// Normalize collapses the Anthropic and OpenAI cache field aliases into the
+// canonical CacheReadTokens / CacheWriteTokens fields and clears the alias
+// fields so the rest of the system only ever sees the canonical names.
+func (u *Usage) Normalize() {
+	if u == nil {
+		return
+	}
+	if u.CacheReadTokens == 0 {
+		u.CacheReadTokens = u.CacheReadTokensAnthropic
+	}
+	if u.CacheWriteTokens == 0 {
+		u.CacheWriteTokens = u.CacheWriteTokensAnthropic
+	}
+	u.CacheReadTokensAnthropic = 0
+	u.CacheWriteTokensAnthropic = 0
 }
 
 func TextBlock(text string) Block {

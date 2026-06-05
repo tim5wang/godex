@@ -267,6 +267,7 @@ type codexResponsesStreamState struct {
 	text         strings.Builder
 	finishReason string
 	toolCalls    map[int64]codexToolCallAcc
+	usage        *protocol.Usage
 }
 
 type codexToolCallAcc struct {
@@ -287,6 +288,7 @@ func applyCodexResponsesSDKEvent(state *codexResponsesStreamState, event respons
 		}
 	case "response.completed":
 		state.finishReason = string(event.Response.Status)
+		state.usage = codexUsageToProtocol(event.Response.Usage)
 	case "response.function_call_arguments.delta":
 		updateCodexResponsesToolCall(state, event.OutputIndex, "", "", event.Delta, true)
 	case "response.function_call_arguments.done":
@@ -340,7 +342,26 @@ func codexStreamStateToProtocol(state *codexResponsesStreamState) *protocol.Resp
 		}
 		blocks = append(blocks, protocol.ToolUseBlock(call.id, call.name, input))
 	}
-	return &protocol.Response{Content: blocks, StopReason: state.finishReason}
+	if state.usage != nil {
+		state.usage.Normalize()
+	}
+	return &protocol.Response{Content: blocks, StopReason: state.finishReason, Usage: state.usage}
+}
+
+// codexUsageToProtocol converts the Codex Responses API usage payload into
+// the protocol.Usage struct. The Codex SDK exposes input_tokens_details as a
+// struct with a CachedTokens field (OpenAI prompt caching). We also pick up
+// output_tokens / total_tokens so the rest of the system can rely on a
+// complete usage record.
+func codexUsageToProtocol(usage responses.ResponseUsage) *protocol.Usage {
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 && usage.InputTokensDetails.CachedTokens == 0 {
+		return nil
+	}
+	return &protocol.Usage{
+		InputTokens:     int(usage.InputTokens),
+		OutputTokens:    int(usage.OutputTokens),
+		CacheReadTokens: int(usage.InputTokensDetails.CachedTokens),
+	}
 }
 
 func codexAccountIDFromToken(token string) string {

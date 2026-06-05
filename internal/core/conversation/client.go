@@ -203,6 +203,9 @@ func (c *Client) callOnce(ctx context.Context, reqBody []byte) (*protocol.Respon
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		return nil, "", err
 	}
+	if apiResp.Usage != nil {
+		apiResp.Usage.Normalize()
+	}
 	return &apiResp, "", nil
 }
 
@@ -362,10 +365,11 @@ type streamWireEvent struct {
 }
 
 type streamWireDelta struct {
-	Type        string `json:"type"`
-	Text        string `json:"text,omitempty"`
-	PartialJSON string `json:"partial_json,omitempty"`
-	StopReason  string `json:"stop_reason,omitempty"`
+	Type        string         `json:"type"`
+	Text        string         `json:"text,omitempty"`
+	PartialJSON string         `json:"partial_json,omitempty"`
+	StopReason  string         `json:"stop_reason,omitempty"`
+	Usage       *protocol.Usage `json:"usage,omitempty"`
 }
 
 type streamWireError struct {
@@ -376,6 +380,30 @@ type streamWireError struct {
 type streamBlockState struct {
 	block       protocol.Block
 	partialJSON strings.Builder
+}
+
+// mergeUsageDelta folds a non-message_start usage payload (Anthropic's
+// message_delta.usage) into the baseline accumulated earlier. The delta
+// typically only contains the fields that have grown since message_start
+// (output_tokens, cache_creation_input_tokens, cache_read_input_tokens),
+// so we only ever raise a counter — never shrink it — to keep the
+// message_stop view monotonic.
+func mergeUsageDelta(base, delta *protocol.Usage) {
+	if base == nil || delta == nil {
+		return
+	}
+	if delta.OutputTokens > base.OutputTokens {
+		base.OutputTokens = delta.OutputTokens
+	}
+	if delta.InputTokens > base.InputTokens {
+		base.InputTokens = delta.InputTokens
+	}
+	if delta.CacheReadTokens > base.CacheReadTokens {
+		base.CacheReadTokens = delta.CacheReadTokens
+	}
+	if delta.CacheWriteTokens > base.CacheWriteTokens {
+		base.CacheWriteTokens = delta.CacheWriteTokens
+	}
 }
 
 func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Response, bool, error) {
@@ -419,6 +447,11 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 		case "message_start":
 			if event.Message != nil {
 				response.StopReason = event.Message.StopReason
+				if event.Message.Usage != nil {
+					usageCopy := *event.Message.Usage
+					usageCopy.Normalize()
+					response.Usage = &usageCopy
+				}
 			}
 		case "content_block_start":
 			block := protocol.Block{}
@@ -462,6 +495,19 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 		case "message_delta":
 			if event.Delta.StopReason != "" {
 				response.StopReason = event.Delta.StopReason
+			}
+			if event.Delta.Usage != nil {
+				if response.Usage == nil {
+					usage := *event.Delta.Usage
+					usage.Normalize()
+					response.Usage = &usage
+				} else {
+					// Anthropic sends deltas with only the fields that
+					// changed. Merge: cache / output token deltas override
+					// the message_start baseline, but we never shrink a
+					// non-zero value because that would be lossy.
+					mergeUsageDelta(response.Usage, event.Delta.Usage)
+				}
 			}
 		case "message_stop":
 			return nil

@@ -39,7 +39,7 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 		return fmt.Errorf("load tui snapshot: %w", err)
 	}
 
-	m := newModel(ctx, s.cfg, s.backend, s.now, opened.SessionID, snapshot)
+	m := newModelWithDeferredInit(ctx, s.cfg, s.backend, s.now, opened.SessionID, snapshot)
 	options := []tea.ProgramOption{
 		tea.WithAltScreen(),
 		tea.WithContext(ctx),
@@ -63,6 +63,17 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 }
 
 func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func() time.Time, sessionID string, snapshot rtbackend.Snapshot) *model {
+	m := newModelWithDeferredInit(ctx, cfg, backend, now, sessionID, snapshot)
+	// Synchronously create heavy components.
+	m.highlighter = NewHighlighter()
+	m.markdownRenderer = NewMarkdownRenderer(m.highlighter)
+	return m
+}
+
+// newModelWithDeferredInit creates a model but defers initialization of heavy components.
+// Heavy components (Highlighter, MarkdownRenderer) are created in Init() instead of newModel(),
+// which allows the tea program to start quickly without blocking on heavy initialization.
+func newModelWithDeferredInit(ctx context.Context, cfg *config.Config, backend Backend, now func() time.Time, sessionID string, snapshot rtbackend.Snapshot) *model {
 	composer := textarea.New()
 	composer.Prompt = "› "
 	composer.Placeholder = "Type a message or /help. Enter sends. Alt+Enter newline. Ctrl+P/N recalls history."
@@ -94,9 +105,6 @@ func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func
 		status = "Restored running session"
 	}
 
-	hl := NewHighlighter()
-	md := NewMarkdownRenderer(hl)
-
 	return &model{
 		ctx:                ctx,
 		cfg:                cfg,
@@ -116,8 +124,7 @@ func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func
 		seenModelCallEvent: make(map[string]struct{}),
 		inputHistoryIndex:  -1,
 		clipboardWrite:     defaultClipboardWrite,
-		highlighter:        hl,
-		markdownRenderer:   md,
+		// highlighter and markdownRenderer are created in Init() to avoid blocking.
 		viewport:           vp,
 		composer:           composer,
 		selectedItemID:     "",
@@ -126,6 +133,17 @@ func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func
 
 func (m *model) Init() tea.Cmd {
 	m.rebuildModelCallStats()
+
+	// Initialize heavy components lazily to avoid blocking the tea program startup.
+	// Highlighter and MarkdownRenderer involve I/O and parsing initialization,
+	// so creating them in Init() allows the TUI to render immediately.
+	if m.highlighter == nil {
+		m.highlighter = NewHighlighter()
+	}
+	if m.markdownRenderer == nil {
+		m.markdownRenderer = NewMarkdownRenderer(m.highlighter)
+	}
+
 	cmds := []tea.Cmd{
 		m.composer.Focus(),
 		func() tea.Msg { return textarea.Blink() },

@@ -484,7 +484,7 @@ func (a *Agent) buildRuntimeSystemPrompt(agentProfile ...string) (string, error)
 const conciseDefaultResponsePrompt = "Default response style: be concise unless the user asks for a detailed report. Do not restate stable context, raw tool output, or lengthy process notes unless they directly change the answer."
 
 func (a *Agent) collectRuntimeMessages() ([]protocol.Message, func()) {
-	messages := make([]protocol.Message, 0, 2)
+	messages := make([]protocol.Message, 0, 3)
 	var inboxPreview []message.Message
 	var backgroundPreview []background.Notification
 
@@ -498,6 +498,15 @@ func (a *Agent) collectRuntimeMessages() ([]protocol.Message, func()) {
 		messages = append(messages, protocol.NewEphemeralTextMessage(protocol.KindInbox, message.FormatInboxMessages(inbox)))
 	}
 
+	// Todo status is appended as a separate ephemeral background message so the
+	// model can see current progress every turn without making the todo list a
+	// persistent history entry. The whole runtime block is per-turn cache miss
+	// (driven by a.now() and background notifications), so adding one more
+	// ephemeral block here does not affect the stable system or history caches.
+	if todoStatus := a.collectTodoStatus(); todoStatus != "" {
+		messages = append(messages, protocol.NewEphemeralTextMessage(protocol.KindBackground, todoStatus))
+	}
+
 	ack := func() {
 		if len(backgroundPreview) > 0 {
 			a.bgMgr.AckNotifications(backgroundPreview)
@@ -508,6 +517,17 @@ func (a *Agent) collectRuntimeMessages() ([]protocol.Message, func()) {
 	}
 
 	return messages, ack
+}
+
+func (a *Agent) collectTodoStatus() string {
+	if a.todoMgr == nil {
+		return ""
+	}
+	rendered := strings.TrimSpace(a.todoMgr.Render())
+	if rendered == "" || rendered == "No todos." {
+		return ""
+	}
+	return "Current todos:\n" + rendered
 }
 
 func formatProjectLedgerRuntimeMessage(ledger string) string {

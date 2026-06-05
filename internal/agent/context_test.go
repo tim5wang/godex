@@ -2208,6 +2208,91 @@ func TestSubagentSchemaUsesJSONSchemaEnumArray(t *testing.T) {
 	t.Fatal("expected task subagent schema to be present")
 }
 
+func TestBuildContextIncludesTodoStatusWhenTodoListNotEmpty(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.RegisterTools()
+	if _, err := a.todoMgr.Add("Ship C fix", "Shipping C fix"); err != nil {
+		t.Fatalf("seed todo: %v", err)
+	}
+	if _, err := a.todoMgr.Add("Verify tests", "Verifying tests"); err != nil {
+		t.Fatalf("seed todo: %v", err)
+	}
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	// System prompt must not be polluted (lock long-cache anchor).
+	for _, leak := range []string{"Ship C fix", "Verifying tests", "Current todos:"} {
+		if strings.Contains(build.System, leak) {
+			t.Fatalf("todo status must not leak into system prompt, found %q in system", leak)
+		}
+	}
+
+	found := false
+	for _, msg := range build.Messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
+			continue
+		}
+		text := protocol.MessageText(msg)
+		// Manager.Render() outputs Item.Content (not ActiveForm) and appends
+		// the (X/N completed) footer, so assert against Content.
+		if strings.Contains(text, "Ship C fix") && strings.Contains(text, "Verify tests") && strings.Contains(text, "Current todos:") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected todo status rendered in a KindBackground ephemeral message, got %+v", build.Messages)
+	}
+}
+
+func TestBuildContextSkipsTodoStatusWhenTodoListEmpty(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.RegisterTools()
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	for _, msg := range build.Messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
+			continue
+		}
+		if strings.Contains(protocol.MessageText(msg), "Current todos:") {
+			t.Fatalf("todo status must be skipped when list is empty, got %q", protocol.MessageText(msg))
+		}
+	}
+	if strings.Contains(build.System, "Current todos:") {
+		t.Fatalf("system prompt must not carry an empty todo section, got %q", build.System)
+	}
+}
+
+func TestBuildContextKeepsSystemPromptUnchangedWhenTodoStatusAdded(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.RegisterTools()
+
+	empty, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context (empty): %v", err)
+	}
+
+	if _, err := a.todoMgr.Add("Pin system prompt", "Pinning system prompt"); err != nil {
+		t.Fatalf("seed todo: %v", err)
+	}
+
+	withTodo, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context (with todo): %v", err)
+	}
+
+	if empty.System != withTodo.System {
+		t.Fatalf("system prompt must be byte-identical before and after adding todos; diff: %q vs %q", empty.System, withTodo.System)
+	}
+}
+
 func schemaByName(items []protocol.ToolSchema, name string) (protocol.ToolSchema, bool) {
 	for _, item := range items {
 		if item.Name == name {

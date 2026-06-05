@@ -24,6 +24,16 @@ type Backend interface {
 	OpenSession(context.Context, rtbackend.SessionLocator) (*rtbackend.OpenedSession, error)
 	Submit(context.Context, string, message.Envelope) (*rtbackend.SubmitResult, error)
 	AttachSink(string, events.Sink) (func(), error)
+	// SetSessionModelProfile pins a freshly opened session to the given model
+	// profile. The real backend implements this via SetSessionModelProfile so
+	// that subsequent turns — including those run by cron — use the selected
+	// profile (and the configured strategy / fallback chain for that profile)
+	// rather than the global default.
+	//
+	// The call is best-effort: a nil error means the profile is now in effect
+	// for sessionID. Implementations should treat a "profile not found" error
+	// as terminal — the cron run should be marked failed and surfaced in logs.
+	SetSessionModelProfile(ctx context.Context, sessionID, profileID string) error
 }
 
 type Deliverer interface {
@@ -192,6 +202,7 @@ func (s *Service) CreateJob(input CreateJobInput) (Job, error) {
 		Timezone:           input.Timezone,
 		Schedule:           input.Schedule,
 		SessionMode:        input.SessionMode,
+		ModelProfileID:     strings.TrimSpace(input.ModelProfileID),
 		DeliveryTarget:     input.DeliveryTarget.Clone(),
 		Enabled:            input.Enabled,
 		CreatedBy:          strings.TrimSpace(input.CreatedBy),
@@ -236,6 +247,11 @@ func (s *Service) UpdateJob(input UpdateJobInput) (Job, error) {
 	}
 	if input.SessionMode != nil {
 		job.SessionMode = *input.SessionMode
+	}
+	if input.ModelProfileID != nil {
+		// tri-state: nil keeps the current value, "" clears it (use default),
+		// non-empty pins to the new profile.
+		job.ModelProfileID = strings.TrimSpace(*input.ModelProfileID)
 	}
 	if input.DeliveryTarget != nil {
 		job.DeliveryTarget = input.DeliveryTarget.Clone()
@@ -379,6 +395,25 @@ func (s *Service) runJob(ctx context.Context, job Job, startedAt time.Time) (Run
 	}
 	run.SessionID = opened.SessionID
 
+	// Pin the session to the job's selected model profile (if any) so that
+	// Submit / fallback behavior is anchored to that profile. We do this
+	// before attaching the sink so that any model-related error short-circuits
+	// the run and is recorded as a clean JobStatusError with no partial
+	// assistant output collected.
+	if profileID := strings.TrimSpace(job.ModelProfileID); profileID != "" {
+		if modelErr := s.backend.SetSessionModelProfile(ctx, opened.SessionID, profileID); modelErr != nil {
+			run.Status = JobStatusError
+			run.Error = modelErr.Error()
+			run.FinishedAt = s.now()
+			_ = s.store.AppendRunLog(run)
+			job.LastStatus = JobStatusError
+			job.LastError = modelErr.Error()
+			job.UpdatedAt = run.FinishedAt
+			_ = s.store.SaveJob(job)
+			return run, modelErr
+		}
+	}
+
 	collector := &replyPlanCollector{}
 	unsubscribe, err := s.backend.AttachSink(opened.SessionID, collector)
 	if err != nil {
@@ -520,7 +555,7 @@ func (s *Service) jobLocator(job Job, runID string) rtbackend.SessionLocator {
 	if job.SessionMode == SessionModeIsolated {
 		key = job.ID + ":" + runID
 	}
-	return rtbackend.SessionLocator{
+	locator := rtbackend.SessionLocator{
 		Channel: "cron",
 		Key:     key,
 		Metadata: map[string]string{
@@ -528,6 +563,10 @@ func (s *Service) jobLocator(job Job, runID string) rtbackend.SessionLocator {
 			"run_id": runID,
 		},
 	}
+	if profileID := strings.TrimSpace(job.ModelProfileID); profileID != "" {
+		locator.Metadata["model_profile_id"] = profileID
+	}
+	return locator
 }
 
 func buildCronPrompt(job Job) string {

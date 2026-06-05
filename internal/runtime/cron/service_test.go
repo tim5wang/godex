@@ -79,6 +79,13 @@ func (b *fakeBackend) AttachSink(sessionID string, sink events.Sink) (func(), er
 	}, nil
 }
 
+// SetSessionModelProfile is the default no-op for the Backend interface. The
+// dedicated fakeBackendWithModel override records calls and returns
+// configurable errors for the model-selection tests.
+func (b *fakeBackend) SetSessionModelProfile(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 type fakeDeliverer struct {
 	targets []automation.DeliveryTarget
 	plans   []channels.ReplyPlan

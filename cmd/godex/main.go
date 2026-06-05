@@ -103,7 +103,7 @@ func main() {
 		TickSeconds:       cfg.Cron.TickSeconds,
 		DefaultTimezone:   cfg.Cron.DefaultTimezone,
 		MaxConcurrentRuns: cfg.Cron.MaxConcurrentRuns,
-	}, rtcron.NewFileStore(cfg.StateDir), service, channelManager)
+	}, rtcron.NewFileStore(cfg.StateDir), rtcron.NewBackendAdapter(service), channelManager)
 	cronToolAdapter := rtcron.NewToolAdapter(cronService)
 	shared.SetCronService(cronToolAdapter)
 	heartbeatService := rtheartbeat.NewService(rtheartbeat.Config{

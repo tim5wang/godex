@@ -42,6 +42,7 @@ func (a *ToolAdapter) CreateJob(input automation.CronCreateInput) (automation.Cr
 		Timezone:           input.Timezone,
 		Schedule:           fromAutomationSchedule(input.Schedule),
 		SessionMode:        SessionMode(input.SessionMode),
+		ModelProfileID:     input.ModelProfileID,
 		DeliveryTarget:     input.DeliveryTarget.Clone(),
 		Enabled:            input.Enabled,
 		CreatedBy:          input.CreatedBy,
@@ -71,6 +72,10 @@ func (a *ToolAdapter) UpdateJob(input automation.CronUpdateInput) (automation.Cr
 	if input.SessionMode != nil {
 		mode := SessionMode(*input.SessionMode)
 		update.SessionMode = &mode
+	}
+	if input.ModelProfileID != nil {
+		profile := *input.ModelProfileID
+		update.ModelProfileID = &profile
 	}
 	if input.DeliveryTarget != nil {
 		target := input.DeliveryTarget.Clone()
@@ -126,6 +131,7 @@ func toAutomationJob(job Job) automation.CronJob {
 		Timezone:           job.Timezone,
 		Schedule:           toAutomationSchedule(job.Schedule),
 		SessionMode:        string(job.SessionMode),
+		ModelProfileID:     job.ModelProfileID,
 		DeliveryTarget:     job.DeliveryTarget.Clone(),
 		Enabled:            job.Enabled,
 		CreatedBy:          job.CreatedBy,

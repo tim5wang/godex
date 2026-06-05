@@ -16,6 +16,10 @@ type CronJob struct {
 	Timezone           string         `json:"timezone,omitempty"`
 	Schedule           CronSchedule   `json:"schedule"`
 	SessionMode        string         `json:"session_mode,omitempty"`
+	// ModelProfileID optionally pins the job to a configured model profile.
+	// Empty means "use the current default profile" (and the configured
+	// strategy / fallback chain still applies).
+	ModelProfileID     string         `json:"model_profile_id,omitempty"`
 	DeliveryTarget     DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool           `json:"enabled"`
 	CreatedBy          string         `json:"created_by,omitempty"`
@@ -46,6 +50,9 @@ type CronCreateInput struct {
 	Timezone           string         `json:"timezone,omitempty"`
 	Schedule           CronSchedule   `json:"schedule"`
 	SessionMode        string         `json:"session_mode,omitempty"`
+	// ModelProfileID optionally pins the job to a configured model profile.
+	// Empty means "use the current default profile".
+	ModelProfileID     string         `json:"model_profile_id,omitempty"`
 	DeliveryTarget     DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool           `json:"enabled"`
 	CreatedBy          string         `json:"created_by,omitempty"`
@@ -59,6 +66,10 @@ type CronUpdateInput struct {
 	Timezone       *string         `json:"timezone,omitempty"`
 	Schedule       *CronSchedule   `json:"schedule,omitempty"`
 	SessionMode    *string         `json:"session_mode,omitempty"`
+	// ModelProfileID is a tri-state: nil means "leave unchanged", empty
+	// string means "clear and use the default profile", non-empty means
+	// "pin to this profile".
+	ModelProfileID *string         `json:"model_profile_id,omitempty"`
 	DeliveryTarget *DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled        *bool           `json:"enabled,omitempty"`
 }

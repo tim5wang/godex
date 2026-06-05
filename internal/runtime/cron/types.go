@@ -48,6 +48,10 @@ type Job struct {
 	Timezone           string                    `json:"timezone,omitempty"`
 	Schedule           Schedule                  `json:"schedule"`
 	SessionMode        SessionMode               `json:"session_mode,omitempty"`
+	// ModelProfileID optionally pins the job to a configured model profile.
+	// Empty means "use the current default profile" — the configured
+	// strategy / fallback chain still applies to that run.
+	ModelProfileID     string                    `json:"model_profile_id,omitempty"`
 	DeliveryTarget     automation.DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool                      `json:"enabled"`
 	CreatedBy          string                    `json:"created_by,omitempty"`
@@ -78,6 +82,9 @@ type CreateJobInput struct {
 	Timezone           string
 	Schedule           Schedule
 	SessionMode        SessionMode
+	// ModelProfileID optionally pins the job to a configured model profile.
+	// Empty means "use the current default profile".
+	ModelProfileID     string
 	DeliveryTarget     automation.DeliveryTarget
 	Enabled            bool
 	CreatedBy          string
@@ -91,6 +98,10 @@ type UpdateJobInput struct {
 	Timezone       *string
 	Schedule       *Schedule
 	SessionMode    *SessionMode
+	// ModelProfileID is a tri-state: nil means "leave unchanged", empty
+	// string means "clear and use the default profile", non-empty means
+	// "pin to this profile".
+	ModelProfileID *string
 	DeliveryTarget *automation.DeliveryTarget
 	Enabled        *bool
 }
@@ -114,6 +125,7 @@ func (j Job) normalize(defaultTZ string) Job {
 	if j.SessionMode == "" {
 		j.SessionMode = SessionModeShared
 	}
+	j.ModelProfileID = strings.TrimSpace(j.ModelProfileID)
 	j.DeliveryTarget = j.DeliveryTarget.Clone()
 	return j
 }

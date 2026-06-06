@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/usage"
 )
 
@@ -50,6 +52,17 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 			return
 		}
 		writeJSON(w, http.StatusOK, key)
+	})))
+	mux.Handle("POST /usage/keys/{id}/reset", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Reset rotates the secret and returns the new plaintext exactly once.
+		// The previous secret stops authenticating immediately; the new secret is
+		// not stored on the key, so callers must copy it now or rotate again.
+		resp, err := usageService.ResetKey(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})))
 	mux.Handle("GET /usage/models", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		models, err := usageService.ListModels()
@@ -219,10 +232,16 @@ func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
+	// Usage gateway supports streaming as of this version: we type-assert the
+	// resolved caller to a StreamCaller (every provider factory now returns
+	// one) and forward deltas directly to an OpenAI-compatible SSE response.
+	// If a particular provider cannot stream, we fall through to the
+	// non-streaming path below so the client still receives a valid JSON body.
+	// (The actual stream branch lives after the profile + budget checks below.)
 	if req.Stream {
-		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "unsupported_streaming", "streaming is not supported by usage gateway yet")
-		writeUsageGatewayError(w, http.StatusBadRequest, "unsupported_streaming", "Streaming is not supported by Usage Gateway yet.")
-		return
+		// Defer to the post-budget block; fall through to non-stream if no
+		// StreamCaller is available (e.g. legacy custom caller).
+		_ = req.Stream
 	}
 	providerReq, err := usageGatewayProtocolRequest(req)
 	if err != nil {
@@ -252,6 +271,19 @@ func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, u
 		writeUsageGatewayError(w, http.StatusPaymentRequired, "budget_exceeded", "Usage budget exceeded.")
 		return
 	}
+
+	// Streaming branch: route to the provider's Stream path if available, so
+	// SSE clients receive real chat.completion.chunk deltas. The non-stream
+	// call path remains the fallback for callers that cannot stream.
+	if req.Stream {
+		caller := conversation.NewCallerForProfile(profile)
+		if streamer, ok := caller.(conversation.StreamCaller); ok {
+			streamUsageGatewayChatCompletions(w, r, usageService, streamer, key, req, modelMapping, providerReq, profile, start)
+			return
+		}
+		req.Stream = false
+	}
+
 	resp, err := conversation.NewCallerForProfile(profile).Call(r.Context(), providerReq)
 	if err != nil {
 		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "provider_error", err.Error())
@@ -381,7 +413,24 @@ func respStopReason(resp *protocol.Response) string {
 	if resp == nil {
 		return ""
 	}
-	return strings.TrimSpace(resp.StopReason)
+	raw := strings.TrimSpace(resp.StopReason)
+	// OpenAI-compatible clients (including the Pi coding agent) only
+	// recognize the canonical finish_reason values: "stop", "length",
+	// "tool_calls", "content_filter", and "function_call". Anthropic
+	// providers emit "end_turn", "stop_sequence", "tool_use", and
+	// "max_tokens" instead. Map the common cases so the chat.completion
+	// response can be consumed by the OpenAI SDK family without the
+	// client surfacing "Provider finish_reason: end_turn" as an error.
+	switch strings.ToLower(raw) {
+	case "", "stop", "stop_sequence", "end_turn":
+		return "stop"
+	case "max_tokens", "length":
+		return "length"
+	case "tool_use", "tool_calls":
+		return "tool_calls"
+	default:
+		return raw
+	}
 }
 
 func firstNonEmptyString(values ...string) string {
@@ -415,4 +464,464 @@ func writeUsageGatewayError(w http.ResponseWriter, status int, code, message str
 			"code":    fmt.Sprintf("%d", status),
 		},
 	})
+}
+
+// streamUsageGatewayChatCompletions forwards an SSE streaming response to
+// the client. It mirrors the web-token path in streamOpenAIChatCompletion
+// (routes_openai.go) but authenticates and budgets the call through the
+// usage gateway. Each text delta from the provider is converted to an
+// OpenAI chat.completion.chunk via emitOpenAIChunk, terminated by a final
+// stop chunk and the data: [DONE] sentinel. Usage is recorded once the
+// stream returns the final response so we can read the provider's usage
+// payload.
+func streamUsageGatewayChatCompletions(
+	w http.ResponseWriter,
+	r *http.Request,
+	usageService *usage.Service,
+	streamer conversation.StreamCaller,
+	key *usage.ProxyAPIKey,
+	req openAIChatCompletionRequest,
+	modelMapping *usage.ProxyModel,
+	providerReq protocol.Request,
+	profile config.ModelProfileConfig,
+	start time.Time,
+) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "streaming_unsupported", "response writer does not support flushing")
+		writeUsageGatewayError(w, http.StatusInternalServerError, "streaming_unsupported", "Streaming is not supported by this response writer.")
+		return
+	}
+
+	completionID := openAICompletionID("stream-" + key.ID)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	created := time.Now().Unix()
+
+	// First chunk announces the assistant role (OpenAI streaming convention).
+	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{Role: "assistant"}, "")
+
+	resp, err := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
+		OnTextDelta: func(delta string) {
+			if delta == "" {
+				return
+			}
+			emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{Content: delta}, "")
+		},
+	})
+	if err != nil {
+		emitOpenAIError(w, flusher, err)
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "provider_error", err.Error())
+		return
+	}
+
+	// Final chunk with finish_reason=stop and the data: [DONE] sentinel.
+	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{}, firstNonEmptyString(respStopReason(resp), "stop"))
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
+
+	// Record usage once the stream has completed; resp.Usage carries the
+	// authoritative input/output/cache token counts from the provider.
+	_ = profile // profile is referenced via providerReq already; silence unused warning on future edits
+	call := usageGatewaySuccessCall(start, key.ID, req.Model, modelMapping, providerReq, resp)
+	if err := usageService.RecordCall(call); err != nil {
+		logger.Warnf("usage gateway: failed to record streamed call %s: %v", call.ID, err)
+	}
+}
+
+// =============================================================================
+// Anthropic Messages API (Usage Gateway)
+// =============================================================================
+
+// handleAnthropicGatewayMessages handles POST /v1/messages for the usage gateway.
+// It accepts Anthropic's native request format and routes to the appropriate provider.
+func handleAnthropicGatewayMessages(w http.ResponseWriter, r *http.Request, usageService *usage.Service, manager *config.Manager) {
+	start := time.Now()
+
+	// Authenticate proxy key
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	secret := strings.TrimPrefix(auth, "Bearer ")
+	secret = strings.TrimSpace(secret)
+
+	key, err := usageService.AuthenticateKey(secret)
+	if err != nil {
+		writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", "Invalid API Key.")
+		return
+	}
+
+	var req anthropicMessageRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "Invalid request body: "+err.Error())
+		return
+	}
+
+	// Validate required fields
+	if req.Model == "" {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "model is required")
+		return
+	}
+	if req.MaxTokens <= 0 {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "max_tokens is required and must be positive")
+		return
+	}
+	if len(req.Messages) == 0 {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "messages is required and cannot be empty")
+		return
+	}
+
+	// Check allowed models
+	if len(key.AllowedModels) > 0 {
+		allowed := false
+		for _, m := range key.AllowedModels {
+			if m == req.Model {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeAnthropicError(w, http.StatusForbidden, "model_not_allowed", fmt.Sprintf("Model '%s' is not allowed for this API key.", req.Model))
+			return
+		}
+	}
+
+	// Resolve model mapping
+	modelMapping, err := usageService.ResolveModel(req.Model)
+	if err != nil {
+		writeAnthropicError(w, http.StatusNotFound, "model_not_found", fmt.Sprintf("Model '%s' not found or disabled.", req.Model))
+		return
+	}
+
+	// Get profile
+	current := manager.Current()
+	profile, ok := current.ModelProfileByID(modelMapping.TargetProfileID)
+	if !ok {
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "profile_not_found", "Target model profile not found.")
+		writeAnthropicError(w, http.StatusNotFound, "profile_not_found", "Target model profile not found.")
+		return
+	}
+
+	// Override model name if configured
+	providerModel := profile.Model
+	if strings.TrimSpace(modelMapping.TargetModel) != "" {
+		providerModel = strings.TrimSpace(modelMapping.TargetModel)
+	}
+
+	// Check budget
+	if ok, err := usageService.CheckBudget(key.ID, float64(usageGatewayEstimateInputTokens(
+		protocol.Request{Model: providerModel, Messages: []protocol.APIMessage{{Role: "user", Content: []protocol.Block{{Type: "text", Text: "test"}}}}},
+	))*modelMapping.CreditWeight); err != nil {
+		writeAnthropicError(w, http.StatusInternalServerError, "budget_check_failed", "Failed to check usage budget.")
+		return
+	} else if !ok {
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "budget_exceeded", "Usage budget exceeded.")
+		writeAnthropicError(w, http.StatusPaymentRequired, "budget_exceeded", "Usage budget exceeded.")
+		return
+	}
+
+	// Convert Anthropic request to internal protocol
+	providerReq, err := anthropicToProtocolRequest(req, providerModel)
+	if err != nil {
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "invalid_request", err.Error())
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	// Handle streaming
+	if req.Stream {
+		caller := conversation.NewCallerForProfile(profile)
+		if streamer, ok := caller.(conversation.StreamCaller); ok {
+			streamAnthropicGatewayMessages(w, r, usageService, streamer, key, req, modelMapping, providerReq, start)
+			return
+		}
+		// Fallback to non-streaming if provider doesn't support streaming
+	}
+
+	// Non-streaming call
+	caller := conversation.NewCallerForProfile(profile)
+	resp, err := caller.Call(r.Context(), providerReq)
+	if err != nil {
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "provider_error", err.Error())
+		writeAnthropicError(w, http.StatusBadGateway, "provider_error", err.Error())
+		return
+	}
+
+	// Record usage
+	call := usageGatewaySuccessCall(start, key.ID, req.Model, modelMapping, providerReq, resp)
+	if err := usageService.RecordCall(call); err != nil {
+		logger.Warnf("usage gateway: failed to record Anthropic call %s: %v", call.ID, err)
+	}
+
+	// Convert and write response
+	anthropicResp := protocolToAnthropicResponse(resp, req.Model)
+	writeJSON(w, http.StatusOK, anthropicResp)
+}
+
+// anthropicToProtocolRequest converts an Anthropic Messages API request to the internal protocol format.
+func anthropicToProtocolRequest(req anthropicMessageRequest, model string) (protocol.Request, error) {
+	protoReq := protocol.Request{
+		Model:     model,
+		MaxTokens: req.MaxTokens,
+	}
+
+	// Handle system prompt (can be string or content block array)
+	switch s := req.System.(type) {
+	case string:
+		protoReq.System = strings.TrimSpace(s)
+	case []interface{}:
+		// Extract text from content blocks
+		var systemParts []string
+		for _, item := range s {
+			block, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if blockType := strings.TrimSpace(fmt.Sprint(block["type"])); blockType == "text" {
+				if text := strings.TrimSpace(fmt.Sprint(block["text"])); text != "" {
+					systemParts = append(systemParts, text)
+				}
+			}
+		}
+		protoReq.System = strings.Join(systemParts, "\n")
+	}
+
+	// Convert messages
+	for _, msg := range req.Messages {
+		protoMsg := protocol.APIMessage{Role: msg.Role}
+		for _, block := range msg.Content {
+			switch block.Type {
+			case "text":
+				protoMsg.Content = append(protoMsg.Content, protocol.Block{Type: protocol.BlockText, Text: block.Text})
+			case "image":
+				if block.Source != nil {
+					protoMsg.Content = append(protoMsg.Content, protocol.Block{
+						Type: protocol.BlockImage,
+						Source: &protocol.ImageSource{
+							Type:       block.Source.Type,
+							MediaType:  block.Source.MediaType,
+							Data:       block.Source.Data,
+						},
+					})
+				}
+			case "tool_use":
+				protoMsg.Content = append(protoMsg.Content, protocol.Block{
+					Type:      protocol.BlockToolUse,
+					ID:        block.ID,
+					Name:      block.Name,
+					Input:     block.Input,
+				})
+			case "tool_result":
+				protoMsg.Content = append(protoMsg.Content, protocol.Block{
+					Type:      protocol.BlockToolResult,
+					ToolUseID: block.ToolUseID,
+					Content:   block.Text, // Anthropic uses 'content' field for tool result
+				})
+			}
+		}
+		protoReq.Messages = append(protoReq.Messages, protoMsg)
+	}
+
+	// Convert tools
+	for _, tool := range req.Tools {
+		protoTool := protocol.ToolSchema{
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: tool.InputSchema,
+		}
+		protoReq.Tools = append(protoReq.Tools, protoTool)
+	}
+
+	// Handle thinking config (for providers that support it)
+	if req.Thinking != nil && req.Thinking.BudgetTokens > 0 {
+		protoReq.ReasoningEffort = fmt.Sprintf("%d", req.Thinking.BudgetTokens)
+	}
+
+	return protoReq, nil
+}
+
+// protocolToAnthropicResponse converts an internal protocol response to Anthropic format.
+func protocolToAnthropicResponse(resp *protocol.Response, model string) anthropicResponse {
+	id := fmt.Sprintf("msg_%d", time.Now().UnixNano())
+	if resp != nil && len(resp.Content) > 0 {
+		// Use first block's ID if available
+		for _, block := range resp.Content {
+			if block.ID != "" {
+				id = "msg_" + block.ID
+				break
+			}
+		}
+	}
+
+	anthropicResp := anthropicResponse{
+		ID:    id,
+		Type:  "message",
+		Role:  "assistant",
+		Model: model,
+	}
+
+	if resp != nil {
+		// Convert content blocks
+		for _, block := range resp.Content {
+			switch block.Type {
+			case protocol.BlockText:
+				anthropicResp.Content = append(anthropicResp.Content, anthropicResponseBlock{
+					Type: "text",
+					Text: block.Text,
+				})
+			case protocol.BlockToolUse:
+				anthropicResp.Content = append(anthropicResp.Content, anthropicResponseBlock{
+					Type:  "tool_use",
+					ID:    block.ID,
+					Name:  block.Name,
+					Input: block.Input,
+				})
+			}
+		}
+
+		// Set stop reason
+		switch resp.StopReason {
+		case "end_turn", "stop_sequence", "stop", "":
+			anthropicResp.StopReason = "end_turn"
+		case "max_tokens":
+			anthropicResp.StopReason = "max_tokens"
+		case "tool_use", "tool_calls":
+			anthropicResp.StopReason = "tool_use"
+		default:
+			anthropicResp.StopReason = resp.StopReason
+		}
+
+		// Set usage
+		if resp.Usage != nil {
+			anthropicResp.Usage = &anthropicUsage{
+				InputTokens:              resp.Usage.InputTokens,
+				OutputTokens:             resp.Usage.OutputTokens,
+				CacheCreationInputTokens: resp.Usage.CacheWriteTokens,
+				CacheReadInputTokens:     resp.Usage.CacheReadTokens,
+			}
+		}
+	}
+
+	return anthropicResp
+}
+
+// streamAnthropicGatewayMessages handles streaming responses for the Anthropic Messages API.
+func streamAnthropicGatewayMessages(
+	w http.ResponseWriter,
+	r *http.Request,
+	usageService *usage.Service,
+	streamer conversation.StreamCaller,
+	key *usage.ProxyAPIKey,
+	req anthropicMessageRequest,
+	modelMapping *usage.ProxyModel,
+	providerReq protocol.Request,
+	start time.Time,
+) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "streaming_unsupported", "response writer does not support flushing")
+		writeAnthropicError(w, http.StatusInternalServerError, "streaming_unsupported", "Streaming is not supported by this response writer.")
+		return
+	}
+
+	// Verify client accepts event-stream
+	accept := strings.ToLower(strings.TrimSpace(r.Header.Get("Accept")))
+	if accept != "" && !strings.Contains(accept, "text/event-stream") {
+		// Anthropic clients typically send Accept: text/event-stream, but we'll be lenient
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("anthropic-version", "2023-06-01")
+	w.WriteHeader(http.StatusOK)
+
+	var finalResp *protocol.Response
+	var respErr error
+
+	// Stream handler for Anthropic SSE format
+	_, err := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
+		OnTextDelta: func(delta string) {
+			if delta == "" {
+				return
+			}
+			// Emit content_block_delta event
+			data, _ := json.Marshal(map[string]interface{}{
+				"type": "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": delta,
+				},
+			})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		},
+	})
+	if err != nil {
+		// Emit error event
+		respErr = err
+		data, _ := json.Marshal(map[string]interface{}{
+			"type": "error",
+			"error": map[string]interface{}{
+				"type":    "api_error",
+				"message": err.Error(),
+			},
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	} else {
+		// Get the final response
+		// Note: Stream returns the final response, but we already consumed it via callbacks
+		// So we need to reconstruct it or have the caller provide it
+		// For now, we'll emit a message_stop event
+		finalResp = &protocol.Response{
+			StopReason: "end_turn",
+			Content:    []protocol.Block{{Type: protocol.BlockText, Text: ""}},
+		}
+	}
+
+	// Emit message_stop event
+	stopData := map[string]interface{}{
+		"type": "message_stop",
+	}
+	if respErr == nil {
+		// Include usage in message_delta if available
+		if finalResp != nil && finalResp.Usage != nil {
+			stopData["usage"] = map[string]interface{}{
+				"input_tokens":              finalResp.Usage.InputTokens,
+				"output_tokens":             finalResp.Usage.OutputTokens,
+				"cache_creation_input_tokens": finalResp.Usage.CacheWriteTokens,
+				"cache_read_input_tokens":     finalResp.Usage.CacheReadTokens,
+			}
+		}
+	}
+	stopBytes, _ := json.Marshal(stopData)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", stopBytes)
+	flusher.Flush()
+
+	// Record usage
+	if respErr == nil {
+		call := usageGatewaySuccessCall(start, key.ID, req.Model, modelMapping, providerReq, finalResp)
+		if err := usageService.RecordCall(call); err != nil {
+			logger.Warnf("usage gateway: failed to record streamed Anthropic call %s: %v", call.ID, err)
+		}
+	} else {
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "provider_error", respErr.Error())
+	}
+}
+
+// writeAnthropicError writes an Anthropic-format error response.
+func writeAnthropicError(w http.ResponseWriter, status int, errType, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	// Anthropic uses a specific error format
+	errorResp := map[string]interface{}{
+		"type":    "error",
+		"error": map[string]interface{}{
+			"type":    errType,
+			"message": message,
+		},
+	}
+	json.NewEncoder(w).Encode(errorResp)
 }

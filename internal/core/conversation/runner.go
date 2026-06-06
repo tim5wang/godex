@@ -346,7 +346,7 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 		if drained := r.tryDrainInjections(ctx, maxInjectionsPerTurn, maxInjectionCycles, &injectionCycles); drained.Count > 0 {
 			result.HadInjections = true
 		}
-		decision := guard.Observe(executed)
+		decision := guard.Observe(executed, nil)
 		if decision.Action == loopGuardRecover {
 			if r.AppendRuntimeFeedback == nil {
 				decision.Action = loopGuardAbort

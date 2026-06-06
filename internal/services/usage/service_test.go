@@ -56,6 +56,88 @@ func TestCreateKeyReturnsSecret(t *testing.T) {
 	}
 }
 
+func TestResetKeyGeneratesNewSecretAndHash(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewSQLiteStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+
+	created, err := svc.CreateKey(KeyCreateRequest{Name: "rotate-me", BudgetCredits: 100})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	oldSecret := created.Secret
+	oldKeyID := created.Key.ID
+
+	reset, err := svc.ResetKey(oldKeyID)
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if reset.Secret == "" {
+		t.Fatal("expected non-empty new secret on reset")
+	}
+	if !strings.HasPrefix(reset.Secret, "gdx_") {
+		t.Fatalf("expected reset secret to start with gdx_, got %q", reset.Secret[:8])
+	}
+	if reset.Secret == oldSecret {
+		t.Fatal("reset secret must differ from original")
+	}
+	if reset.Key.ID != oldKeyID {
+		t.Fatalf("reset must keep the same key id, got %q vs %q", reset.Key.ID, oldKeyID)
+	}
+	if reset.Key.KeyHash == "" {
+		t.Fatal("expected stored key to retain a hash after reset")
+	}
+	if reset.Key.KeyHash == created.Key.KeyHash {
+		t.Fatal("reset must rotate the stored hash")
+	}
+}
+
+func TestResetKeyInvalidatesOldSecret(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewSQLiteStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+
+	created, err := svc.CreateKey(KeyCreateRequest{Name: "rotate-me", BudgetCredits: 100})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	if _, err := svc.AuthenticateKey(created.Secret); err != nil {
+		t.Fatalf("original secret should authenticate before reset: %v", err)
+	}
+
+	reset, err := svc.ResetKey(created.Key.ID)
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	if _, err := svc.AuthenticateKey(created.Secret); err == nil {
+		t.Fatal("original secret must be rejected after reset")
+	}
+	if _, err := svc.AuthenticateKey(reset.Secret); err != nil {
+		t.Fatalf("new secret must authenticate after reset: %v", err)
+	}
+}
+
+func TestResetKeyRejectsUnknownID(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewSQLiteStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+
+	if _, err := svc.ResetKey("does-not-exist"); err == nil {
+		t.Fatal("expected error when resetting unknown key id")
+	}
+}
+
 func TestVerifyKey(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewSQLiteStore(dir)

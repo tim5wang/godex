@@ -31,6 +31,80 @@ type openAIChatCompletionRequest struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
+// Anthropic Messages API types
+type anthropicMessageRequest struct {
+	Model            string                   `json:"model"`
+	Messages         []anthropicMessage       `json:"messages"`
+	System           interface{}              `json:"system,omitempty"`
+	Tools           []anthropicTool          `json:"tools,omitempty"`
+	MaxTokens       int                      `json:"max_tokens"`
+	Stream          bool                     `json:"stream,omitempty"`
+	Thinking        *anthropicThinkingConfig  `json:"thinking,omitempty"`
+	ExtraHeaders    map[string]string        `json:"extra_headers,omitempty"`
+}
+
+type anthropicThinkingConfig struct {
+	Type      string `json:"type,omitempty"`
+	BudgetTokens int `json:"budget_tokens,omitempty"`
+}
+
+type anthropicMessage struct {
+	Role    string                    `json:"role"`
+	Content []anthropicContentBlock   `json:"content"`
+}
+
+type anthropicContentBlock struct {
+	Type string `json:"type"`
+	// Text block
+	Text string `json:"text,omitempty"`
+	// Image block
+	Source *anthropicImageSource `json:"source,omitempty"`
+	// Tool use block
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+	Input map[string]interface{} `json:"input,omitempty"`
+	// Tool result block
+	ToolUseID string `json:"tool_use_id,omitempty"`
+}
+
+type anthropicImageSource struct {
+	Type       string `json:"type"`
+	MediaType  string `json:"media_type,omitempty"`
+	Data       string `json:"data,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	InputSchema map[string]interface{} `json:"input_schema"`
+}
+
+type anthropicResponse struct {
+	ID        string                  `json:"id"`
+	Type      string                  `json:"type"`
+	Role      string                  `json:"role"`
+	Content   []anthropicResponseBlock `json:"content"`
+	Model     string                  `json:"model"`
+	StopReason string                 `json:"stop_reason,omitempty"`
+	StopSequence *string              `json:"stop_sequence,omitempty"`
+	Usage     *anthropicUsage         `json:"usage,omitempty"`
+}
+
+type anthropicResponseBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+	Input map[string]interface{} `json:"input,omitempty"`
+}
+
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens            int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens    int `json:"cache_read_input_tokens,omitempty"`
+}
+
 type openAIChatMessage struct {
 	Role    string      `json:"role"`
 	Content interface{} `json:"content"`

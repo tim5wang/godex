@@ -111,3 +111,55 @@ func TestHandlerServesAssetsAndFallsBackToIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestHandlerRoutesV1PrefixToAPI covers the regression where POST /v1/chat/completions
+// (the OpenAI-compatible usage gateway endpoint) was being intercepted by the webui SPA
+// fallthrough and answered with index.html. Any path under /v1/ must be forwarded to
+// the API handler verbatim, without stripping a prefix.
+func TestHandlerRoutesV1PrefixToAPI(t *testing.T) {
+	dist := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dist, "index.html"), []byte("<html>app</html>"), 0644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+
+	apiCalls := 0
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"path":"`+r.URL.Path+`","method":"`+r.Method+`"}`)
+	})
+	handler, err := NewHandler(api, dist)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	for _, p := range []string{"/v1/chat/completions", "/v1/models"} {
+		req, err := http.NewRequest(http.MethodPost, server.URL+p, strings.NewReader(`{"hello":"world"}`))
+		if err != nil {
+			t.Fatalf("new post %s: %v", p, err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post %s: %v", p, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 for %s, got %d body=%q", p, resp.StatusCode, string(body))
+		}
+		if strings.Contains(strings.ToLower(string(body)), "<html") {
+			t.Fatalf("expected JSON for %s, got SPA HTML: %q", p, string(body))
+		}
+		wantSub := `"path":"` + p + `"`
+		if !strings.Contains(string(body), wantSub) {
+			t.Fatalf("expected %q in body for %s, got %q", wantSub, p, string(body))
+		}
+	}
+	if apiCalls != 2 {
+		t.Fatalf("expected 2 api calls (one per path), got %d", apiCalls)
+	}
+}

@@ -20,6 +20,20 @@ type loopGuardConfig struct {
 	MaxRepeatedPollingTools    int
 	MaxStalledTaskPollingTools int
 	MaxRecoveries              int
+	// StaleTodoThreshold is the number of turns an in_progress todo item is
+	// allowed to stay unchanged while the agent keeps executing non-todo tools
+	// before the loop guard emits a stale_todo_in_progress recovery feedback.
+	// <= 0 disables the stale-todo detector.
+	StaleTodoThreshold int
+}
+
+// todoStalenessProvider reports in_progress todo items that have been
+// sitting in the same state across multiple turns. The loop guard queries
+// it after every executed-tool batch and emits a recovery feedback when
+// an item has gone stale. Implementations live in the agent package so the
+// conversation package can stay free of domain/todo imports.
+type todoStalenessProvider interface {
+	StaleInProgress(maxTurns int) (itemID int, content string, activeForm string, ok bool)
 }
 
 type loopGuard struct {
@@ -29,6 +43,12 @@ type loopGuard struct {
 	recent        []string
 	recovered     map[string]int
 	totalRecovery int
+	// staleRecovered tracks how many times the loop guard has already issued
+	// a stale_todo_in_progress recovery for a given todo itemID. It is a
+	// separate counter from `recovered` because the fingerprint space is
+	// disjoint (itemID vs tool fingerprint) and a single todo item should
+	// be re-prompted up to MaxRecoveries times before the guard aborts.
+	staleRecovered map[int]int
 }
 
 type loopGuardDecision struct {
@@ -48,15 +68,16 @@ func newLoopGuard(config loopGuardConfig) *loopGuard {
 		config.MaxRecoveries = 0
 	}
 	return &loopGuard{
-		config:    config,
-		repeated:  make(map[string]int),
-		polling:   make(map[string]pollingToolRepeatState),
-		recent:    make([]string, 0, repeatedToolCycleWindow),
-		recovered: make(map[string]int),
+		config:        config,
+		repeated:      make(map[string]int),
+		polling:       make(map[string]pollingToolRepeatState),
+		recent:        make([]string, 0, repeatedToolCycleWindow),
+		recovered:     make(map[string]int),
+		staleRecovered: make(map[int]int),
 	}
 }
 
-func (g *loopGuard) Observe(executed []ExecutedTool) loopGuardDecision {
+func (g *loopGuard) Observe(executed []ExecutedTool, staleProvider todoStalenessProvider) loopGuardDecision {
 	if g == nil || len(executed) == 0 {
 		return loopGuardDecision{Action: loopGuardAllow}
 	}
@@ -75,6 +96,21 @@ func (g *loopGuard) Observe(executed []ExecutedTool) loopGuardDecision {
 			Tool:        tool,
 			Count:       count,
 		})
+	}
+	// Stale-todo detection runs after the other detectors so a tool that is
+	// already triggering repeated-tool or stalled-polling abort paths takes
+	// priority. The detector only fires when at least one non-todo_write tool
+	// executed in this turn: if the model is actively calling todo_write, the
+	// in_progress state may be in the middle of being updated, so we do not
+	// surface a stale feedback.
+	if g.config.StaleTodoThreshold > 0 && staleProvider != nil && executedContainsNonTodoWrite(executed) {
+		if itemID, content, activeForm, ok := staleProvider.StaleInProgress(g.config.StaleTodoThreshold); ok {
+			return g.decideStaleTodo(loopGuardDecision{
+				Reason:      "stale_todo_in_progress",
+				Fingerprint: "stale_todo:" + itoa(itemID),
+				Count:       g.config.StaleTodoThreshold,
+			}, itemID, content, activeForm)
+		}
 	}
 	g.recent = appendRecentToolFingerprints(g.recent, executed)
 	if cycleLen, fingerprint, ok := repeatedToolCycleV2(g.recent); ok {
@@ -194,14 +230,23 @@ func (g *loopGuard) decide(decision loopGuardDecision) loopGuardDecision {
 }
 
 func (d loopGuardDecision) Summary() string {
-	tool := strings.TrimSpace(d.Tool.Name)
-	if tool == "" {
-		tool = "unknown_tool"
-	}
 	switch d.Reason {
 	case "tool_cycle":
+		tool := strings.TrimSpace(d.Tool.Name)
+		if tool == "" {
+			tool = "unknown_tool"
+		}
 		return fmt.Sprintf("%s detected involving %s; cycle length %d repeated", d.Reason, tool, d.CycleLength)
+	case "stale_todo_in_progress":
+		// Stale-todo decisions are keyed by todo itemID rather than by a tool
+		// name, so the summary omits `Tool.Name` and the in_progress item
+		// itself is the diagnostic anchor.
+		return fmt.Sprintf("%s detected; an in_progress todo item has not been updated for %d turns", d.Reason, d.Count)
 	default:
+		tool := strings.TrimSpace(d.Tool.Name)
+		if tool == "" {
+			tool = "unknown_tool"
+		}
 		return fmt.Sprintf("%s detected for %s after %d repeat(s)", d.Reason, tool, d.Count)
 	}
 }
@@ -210,6 +255,11 @@ func (d loopGuardDecision) AbortMessage() string {
 	reason := strings.TrimSpace(d.AbortReason)
 	if reason == "" {
 		reason = "loop guard determined there was no progress"
+	}
+	if d.Reason == "stale_todo_in_progress" {
+		// Stale-todo aborts do not have a meaningful last-tool input/output,
+		// so the abort message focuses on the in_progress item itself.
+		return fmt.Sprintf("%s; %s; stale_count=%d", d.Summary(), reason, d.Count)
 	}
 	return fmt.Sprintf("%s; %s; last tool=%s; count=%d; input=%s; output=%s; error=%s",
 		d.Summary(),
@@ -236,6 +286,106 @@ func loopGuardFeedback(decision loopGuardDecision, recovery, maxRecovery int) st
 
 func loopGuardAbortHint(decision loopGuardDecision) string {
 	return "Loop guard already attempted runtime feedback or exhausted recovery budget; review the latest tool result/error and avoid repeating the same strategy before retrying."
+}
+
+// decideStaleTodo is the stale-todo counterpart to decide. It reuses the same
+// global MaxRecoveries budget so that a session cannot be rescued forever by
+// alternating stale-todo and identical-tool recoveries, but it tracks per
+// itemID recovery counts via `staleRecovered` so that a single in_progress
+// item that the model refuses to mark completed is escalated to abort after
+// MaxRecoveries observations.
+func (g *loopGuard) decideStaleTodo(decision loopGuardDecision, itemID int, content, activeForm string) loopGuardDecision {
+	if g.config.MaxRecoveries <= 0 {
+		decision.Action = loopGuardAbort
+		decision.AbortReason = "loop guard recovery is disabled"
+		decision.RecoveryHint = loopGuardAbortHint(decision)
+		return decision
+	}
+	if g.staleRecovered[itemID] >= g.config.MaxRecoveries {
+		decision.Action = loopGuardAbort
+		decision.AbortReason = "same in_progress todo item stayed stale after runtime feedback"
+		decision.RecoveryHint = loopGuardAbortHint(decision)
+		return decision
+	}
+	if g.totalRecovery >= g.config.MaxRecoveries {
+		decision.Action = loopGuardAbort
+		decision.AbortReason = "loop guard recovery budget exhausted"
+		decision.RecoveryHint = loopGuardAbortHint(decision)
+		return decision
+	}
+	g.staleRecovered[itemID]++
+	g.totalRecovery++
+	decision.Action = loopGuardRecover
+	decision.Feedback = staleTodoFeedback(itemID, content, activeForm, g.staleRecovered[itemID], g.config.MaxRecoveries)
+	decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d/%d reminded the model to update the stale in_progress todo item.", g.totalRecovery, g.config.MaxRecoveries)
+	return decision
+}
+
+// staleTodoFeedback produces the user-visible runtime feedback that asks the
+// model to bring an in_progress todo item back in sync with the work it has
+// just performed. It is intentionally different from loopGuardFeedback
+// (which is tool-result oriented) because the failing condition here is a
+// stale todo state, not a repeated tool call.
+func staleTodoFeedback(itemID int, content, activeForm string, recovery, maxRecovery int) string {
+	heading := strings.TrimSpace(content)
+	if heading == "" {
+		heading = fmt.Sprintf("item %d", itemID)
+	}
+	form := strings.TrimSpace(activeForm)
+	lines := []string{
+		"Runtime feedback: stale_todo_in_progress.",
+		fmt.Sprintf("Reason: in_progress todo %q has not been updated for multiple turns while non-todo tools keep executing.", heading),
+	}
+	if form != "" {
+		lines = append(lines, fmt.Sprintf("Active form on file: %q.", form))
+	}
+	lines = append(lines,
+		fmt.Sprintf("Recovery budget: %d/%d.", recovery, maxRecovery),
+		"Call todo_write now to: (1) mark this item completed if the work is done, (2) flip it to the next pending item, or (3) split it into smaller steps and update the plan.",
+		"Do not advance to the next sub-step without first reflecting the current state in the todo list.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// executedContainsNonTodoWrite reports whether at least one of the executed
+// tools is something other than todo_write. Stale-todo recovery should only
+// fire when the model is busy with non-todo work; if the model is actively
+// calling todo_write, the in_progress state may be transitioning and we
+// should not surface a stale feedback.
+func executedContainsNonTodoWrite(executed []ExecutedTool) bool {
+	for _, tool := range executed {
+		if strings.TrimSpace(tool.Name) != "todo_write" {
+			return true
+		}
+	}
+	return false
+}
+
+// itoa converts a non-negative int to its decimal string representation.
+// It is used in the loop guard only for fingerprint suffixes where the
+// int is always small and non-negative, and avoids pulling in strconv
+// just for this single call site.
+func itoa(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	negative := false
+	if value < 0 {
+		negative = true
+		value = -value
+	}
+	var buf [20]byte
+	i := len(buf)
+	for value > 0 {
+		i--
+		buf[i] = byte('0' + value%10)
+		value /= 10
+	}
+	if negative {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }
 
 func repeatedToolCycleV2(recent []string) (int, string, bool) {

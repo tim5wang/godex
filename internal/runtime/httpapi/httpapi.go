@@ -247,6 +247,63 @@ func NewHandlerWithRuntime(
 			handleOpenAIChatCompletions(w, r, service)
 		})).ServeHTTP(w, r)
 	}))
+
+	// Anthropic Messages API endpoint
+	// Supports two auth modes:
+	// 1. Usage gateway: Authorization: Bearer gdx_xxx (proxy key auth)
+	// 2. Web token: Authorization: Bearer <web_token> (for clients like pi using ANTHROPIC_BASE_URL)
+	mux.Handle("POST /v1/messages", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(auth), "bearer gdx_") {
+			// Usage gateway auth
+			if usageService != nil {
+				handleAnthropicGatewayMessages(w, r, usageService, manager)
+			} else {
+				writeError(w, http.StatusServiceUnavailable, fmt.Errorf("usage gateway not configured"))
+			}
+			return
+		}
+		// Try web-token auth (for pi and other clients using ANTHROPIC_BASE_URL)
+		webToken := manager.Current().WebToken
+		if webToken != "" && bearerAuthorized(r, webToken) {
+			// Handle as direct API request with web token auth
+			// This creates a new session and processes the request
+			handleAnthropicWebTokenMessages(w, r, service)
+			return
+		}
+		// Require Bearer auth
+		writeError(w, http.StatusUnauthorized, fmt.Errorf("Invalid API Key. Please provide a valid proxy key with gdx_ prefix or use the configured web token."))
+	}))
+
+	// GET /v1/models - List available models (OpenAI-compatible format)
+	// Requires gdx_ API key authentication
+	mux.Handle("GET /v1/models", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if !strings.HasPrefix(strings.ToLower(auth), "bearer gdx_") || usageService == nil {
+			writeError(w, http.StatusUnauthorized, fmt.Errorf("Invalid API Key."))
+			return
+		}
+		models, err := usageService.ListModels()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		// Convert to OpenAI models list format
+		var openAIModels []map[string]interface{}
+		for _, m := range models {
+			openAIModels = append(openAIModels, map[string]interface{}{
+				"id":      m.PublicModel,
+				"object":  "model",
+				"created": time.Now().Unix(),
+				"owned_by": "godex",
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"object": "list",
+			"data":   openAIModels,
+		})
+	}))
+
 	mux.Handle("GET /models", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		view, err := service.Models(r.Context(), strings.TrimSpace(r.URL.Query().Get("session_id")))
 		if err != nil {
@@ -1422,6 +1479,128 @@ func NewHandlerWithRuntime(
 	registerUsageRoutes(mux, protected, usageService, manager)
 	registerFileRoutes(mux, protected, manager)
 	return mux
+}
+
+// handleAnthropicWebTokenMessages handles POST /v1/messages requests with web token auth.
+// This is used by clients like pi that use ANTHROPIC_BASE_URL pointing to godex.
+func handleAnthropicWebTokenMessages(w http.ResponseWriter, r *http.Request, service *backend.Service) {
+	var req anthropicMessageRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "Invalid request body: "+err.Error())
+		return
+	}
+
+	// Validate required fields
+	if req.Model == "" {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "model is required")
+		return
+	}
+	if req.MaxTokens <= 0 {
+		req.MaxTokens = 4096 // default max tokens
+	}
+	if len(req.Messages) == 0 {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "messages is required and cannot be empty")
+		return
+	}
+
+	// Create or get session
+	opened, err := service.OpenSession(r.Context(), backend.SessionLocator{
+		Channel: "anthropic_api",
+		Key:     fmt.Sprintf("anthropic-%d", time.Now().UnixNano()),
+		UserID:  "anthropic_api",
+	})
+	if err != nil {
+		writeError(w, statusForSessionError(err), err)
+		return
+	}
+
+	// Build message text from Anthropic format
+	text := anthropicMessagesToText(req.Messages)
+	if text == "" {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "message content is required")
+		return
+	}
+
+	// Submit message
+	envelope := message.NewRuntimeEnvelope(message.SourceGateway, opened.SessionID, "anthropic_api", text, time.Now(), nil)
+	result, err := service.SubmitAsync(r.Context(), opened.SessionID, envelope)
+	if err != nil {
+		writeError(w, statusForSessionError(err), err)
+		return
+	}
+
+	// Wait for response (simplified - in production you'd stream)
+	resp, err := collectAnthropicResponse(r.Context(), service, opened.SessionID, result.TurnID)
+	if err != nil {
+		writeAnthropicError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+
+	// Convert to Anthropic response format
+	anthropicResp := anthropicResponse{
+		ID:          fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+		Type:        "message",
+		Role:        "assistant",
+		Model:       req.Model,
+		Content:     []anthropicResponseBlock{{Type: "text", Text: resp}},
+		StopReason:  "end_turn",
+		Usage:       &anthropicUsage{InputTokens: 0, OutputTokens: len(resp) / 4}, // rough estimate
+	}
+
+	writeJSON(w, http.StatusOK, anthropicResp)
+}
+
+// anthropicMessagesToText converts Anthropic message format to plain text.
+func anthropicMessagesToText(messages []anthropicMessage) string {
+	var parts []string
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.Text != "" {
+				parts = append(parts, block.Text)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// collectAnthropicResponse waits for the agent response.
+func collectAnthropicResponse(ctx context.Context, service *backend.Service, sessionID, turnID string) (string, error) {
+	eventCh := make(chan events.Event, 128)
+	unsubscribe, err := service.AttachSink(sessionID, events.SinkFunc(func(event events.Event) {
+		select {
+		case <-ctx.Done():
+		case eventCh <- event:
+		default:
+		}
+	}))
+	if err != nil {
+		return "", err
+	}
+	defer unsubscribe()
+
+	var builder strings.Builder
+	for {
+		select {
+		case <-ctx.Done():
+			return builder.String(), ctx.Err()
+		case event := <-eventCh:
+			if event.TurnID != turnID {
+				continue
+			}
+			switch event.Type {
+			case events.EventAssistantTextDelta:
+				if payload, ok := event.Payload.(events.TextPayload); ok {
+					builder.WriteString(payload.Text)
+				}
+			case events.EventErrorRaised:
+				if payload, ok := event.Payload.(events.NoticePayload); ok {
+					return builder.String(), fmt.Errorf("error: %s", payload.Message)
+				}
+			case events.EventTurnCompleted:
+				return builder.String(), nil
+			}
+		}
+	}
 }
 
 // ---- Usage Gateway Chat Completions ----

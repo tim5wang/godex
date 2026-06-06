@@ -989,6 +989,14 @@ export function updateUsageKey(
   );
 }
 
+export function resetUsageKey(token: string | null, id: string) {
+  return request<UsageKeyCreateResponse>(
+    `/usage/keys/${encodeURIComponent(id)}/reset`,
+    { method: "POST" },
+    token,
+  );
+}
+
 export function listUsageModels(token: string | null) {
   return request<UsageModelMapping[]>("/usage/models", { method: "GET" }, token);
 }

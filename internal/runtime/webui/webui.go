@@ -80,6 +80,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.api.ServeHTTP(w, r2)
 		return
 	}
+	// /v1/* is the OpenAI-compatible surface (chat completions, models, etc.).
+	// Forward verbatim to the API handler so curl/OpenAI clients are not
+	// intercepted by the SPA fallthrough below. Do NOT strip a prefix.
+	if strings.HasPrefix(r.URL.Path, "/v1/") || r.URL.Path == "/v1" {
+		h.api.ServeHTTP(w, r)
+		return
+	}
 
 	urlPath := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 	if urlPath == "." || urlPath == "" {

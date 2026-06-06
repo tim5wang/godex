@@ -40,6 +40,7 @@ import {
   listUsageCalls,
   listUsageKeys,
   listUsageModels,
+  resetUsageKey,
   updateUsageKey,
   updateUsageModel,
 } from "../../lib/api";
@@ -49,7 +50,7 @@ import { OverviewTab } from "./overview/OverviewTab";
 import { SessionTab } from "./sessions/SessionTab";
 import { CacheStatsTab } from "./cache/CacheStatsTab";
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
 function maskKeyPrefix(prefix: string): string {
   if (prefix.length > 8) {
@@ -71,6 +72,10 @@ export function UsagePage() {
   const [createModelOpen, setCreateModelOpen] = useState(false);
   const [editModelOpen, setEditModelOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<UsageModelMapping | null>(null);
+  const [resetKeyOpen, setResetKeyOpen] = useState(false);
+  const [resetKeyName, setResetKeyName] = useState<string>("");
+  const [resetKeySecret, setResetKeySecret] = useState<string>("");
+  const [resettingKey, setResettingKey] = useState(false);
 
   // ---- Form instances ----
   const [createKeyForm] = Form.useForm();
@@ -207,6 +212,24 @@ export function UsagePage() {
     }
   };
 
+  const handleResetKey = async (record: UsageKey) => {
+    setResetKeyName(record.name);
+    setResetKeySecret("");
+    setResetKeyOpen(true);
+    setResettingKey(true);
+    try {
+      const resp = await resetUsageKey(token, record.id);
+      setResetKeySecret(resp.secret);
+      antMessage.success("Key reset — copy the new secret now");
+      queryClient.invalidateQueries({ queryKey: ["usage", "keys"] });
+    } catch (err) {
+      showError(antMessage, err, "Failed to reset key");
+      setResetKeyOpen(false);
+    } finally {
+      setResettingKey(false);
+    }
+  };
+
   const handleCreateModel = async (values: { public_model: string; target_profile_id: string; target_model: string; credit_weight: number }) => {
     setSubmitting(true);
     try {
@@ -262,20 +285,14 @@ export function UsagePage() {
       title: "Key",
       dataIndex: "key_prefix",
       key: "key_prefix",
-      render: (v: string) => (
+      render: (v: string, record: UsageKey) => (
         <Space size={4}>
           <Text code>{maskKeyPrefix(v)}</Text>
-          <CopyOutlined
-            aria-label="Copy key prefix"
+          <EyeOutlined
+            aria-label={`Reveal new secret for ${record.name}`}
+            title="Rotate this key and reveal the new plaintext secret — the masked prefix above is not the full key"
             style={{ cursor: "pointer", color: "#1677ff", fontSize: 13 }}
-            onClick={async () => {
-              try {
-                await writeClipboardText(v);
-                antMessage.success("Key prefix copied");
-              } catch (err) {
-                showError(antMessage, err, "Failed to copy");
-              }
-            }}
+            onClick={() => handleResetKey(record)}
           />
         </Space>
       ),
@@ -302,24 +319,34 @@ export function UsagePage() {
     {
       title: "",
       key: "actions",
-      width: 48,
+      width: 88,
       render: (_: unknown, record: UsageKey) => (
-        <Button
-          type="text"
-          size="small"
-          icon={<EditOutlined />}
-          aria-label={`Edit key ${record.name}`}
-          onClick={() => {
-            setEditingKey(record);
-            editKeyForm.setFieldsValue({
-              name: record.name,
-              budget_credits: record.budget_credits,
-              warning_threshold: record.warning_threshold,
-              allowed_models: record.allowed_models ?? [],
-            });
-            setEditKeyOpen(true);
-          }}
-        />
+        <Space size={0}>
+          <Button
+            type="text"
+            size="small"
+            icon={<EditOutlined />}
+            aria-label={`Edit key ${record.name}`}
+            onClick={() => {
+              setEditingKey(record);
+              editKeyForm.setFieldsValue({
+                name: record.name,
+                budget_credits: record.budget_credits,
+                warning_threshold: record.warning_threshold,
+                allowed_models: record.allowed_models ?? [],
+              });
+              setEditKeyOpen(true);
+            }}
+          />
+          <Button
+            type="text"
+            size="small"
+            danger
+            icon={<ReloadOutlined />}
+            aria-label={`Reset key ${record.name}`}
+            onClick={() => handleResetKey(record)}
+          />
+        </Space>
       ),
     },
   ];
@@ -402,6 +429,8 @@ export function UsagePage() {
     },
   ];
 
+  const baseUrl = typeof window !== "undefined" ? `${window.location.origin}` : "";
+
   return (
     <div style={{ padding: 24 }}>
       <Title level={3}>Usage Gateway</Title>
@@ -416,26 +445,55 @@ export function UsagePage() {
           key: "keys",
           label: t("usage.apiKeys"),
           children: (
-            <Card
-              title="Proxy API Keys"
-              extra={
-                <Button
-                  type="primary"
-                  icon={<PlusOutlined />}
-                  onClick={() => setCreateKeyOpen(true)}
-                >
-                  Create Key
-                </Button>
-              }
-            >
-              <Table
-                dataSource={proxyKeys}
-                columns={keyColumns}
-                rowKey="id"
-                loading={keysQuery.isLoading}
-                size="small"
-              />
-            </Card>
+            <>
+              <Card size="small" style={{ marginBottom: 16 }}>
+                <Space size={16} wrap>
+                  <div>
+                    <Text strong>OpenAI Compatible</Text>
+                    <div style={{ marginTop: 4 }}>
+                      <Text code copyable={{ text: `${baseUrl}/v1/chat/completions` }}>
+                        {baseUrl}/v1/chat/completions
+                      </Text>
+                    </div>
+                  </div>
+                  <div>
+                    <Text strong>Anthropic Compatible</Text>
+                    <div style={{ marginTop: 4 }}>
+                      <Text code copyable={{ text: `${baseUrl}/v1/messages` }}>
+                        {baseUrl}/v1/messages
+                      </Text>
+                    </div>
+                  </div>
+                  <div style={{ marginLeft: 'auto' }}>
+                    <Text type="secondary">Send POST requests with header</Text>
+                    <div style={{ marginTop: 4 }}>
+                      <Text code>Authorization: Bearer gdx_&lt;your-key&gt;</Text>
+                    </div>
+                  </div>
+                </Space>
+              </Card>
+
+              <Card
+                title="Proxy API Keys"
+                extra={
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() => setCreateKeyOpen(true)}
+                  >
+                    Create Key
+                  </Button>
+                }
+              >
+                <Table
+                  dataSource={proxyKeys}
+                  columns={keyColumns}
+                  rowKey="id"
+                  loading={keysQuery.isLoading}
+                  size="small"
+                />
+              </Card>
+            </>
           ),
         },
         {
@@ -572,6 +630,52 @@ export function UsagePage() {
             <Select mode="tags" placeholder="Leave empty for all models" options={allowedModelOptions} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ===== Reset Key Modal (shows new plaintext secret once) ===== */}
+      <Modal
+        title={resetKeySecret ? "New API Key — copy now" : "Resetting API Key…"}
+        open={resetKeyOpen}
+        footer={
+          <Space>
+            <Button onClick={() => { setResetKeyOpen(false); setResetKeySecret(""); setResetKeyName(""); }}>Close</Button>
+            {resetKeySecret ? (
+              <Button
+                type="primary"
+                icon={<CopyOutlined />}
+                onClick={async () => {
+                  try {
+                    await writeClipboardText(resetKeySecret);
+                    antMessage.success("New secret copied to clipboard");
+                  } catch (err) {
+                    showError(antMessage, err, "Failed to copy");
+                  }
+                }}
+              >
+                Copy Secret
+              </Button>
+            ) : null}
+          </Space>
+        }
+        onCancel={() => { setResetKeyOpen(false); setResetKeySecret(""); setResetKeyName(""); }}
+        destroyOnClose
+      >
+        <Paragraph>
+          Resetting <Text strong>{resetKeyName}</Text> will invalidate the previous secret immediately.
+          The new secret below is shown <Text strong>once</Text> — store it now, or reset again.
+        </Paragraph>
+        {resetKeySecret ? (
+          <Paragraph>
+            <Text strong>New secret:</Text>
+            <div style={{ marginTop: 8 }}>
+              <Text code copyable={{ text: resetKeySecret }} style={{ wordBreak: "break-all" }}>
+                {resetKeySecret}
+              </Text>
+            </div>
+          </Paragraph>
+        ) : (
+          <Paragraph type="secondary">Waiting for the gateway to issue a new secret…</Paragraph>
+        )}
       </Modal>
 
       {/* ===== Edit Key Modal ===== */}

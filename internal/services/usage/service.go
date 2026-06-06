@@ -104,6 +104,30 @@ func (s *Service) GetKey(id string) (*ProxyAPIKey, error) {
 	return s.store.GetKey(id)
 }
 
+// ResetKey rotates the secret for an existing key. The previous secret stops
+// authenticating immediately; the new plaintext secret is returned exactly
+// once, in the same shape as CreateKey, and is not stored on the key.
+func (s *Service) ResetKey(id string) (*KeyCreateResponse, error) {
+	key, err := s.store.GetKey(id)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := generateKey()
+	if err != nil {
+		return nil, err
+	}
+	key.KeyHash = sha256Hex(secret)
+	key.KeyPrefix = maskKey(secret)
+	key.UpdatedAt = time.Now()
+	if err := s.store.UpdateKey(key); err != nil {
+		return nil, err
+	}
+	return &KeyCreateResponse{
+		Key:    *key,
+		Secret: secret,
+	}, nil
+}
+
 // UpdateKey updates fields of an existing key.
 func (s *Service) UpdateKey(id string, req KeyUpdateRequest) (*ProxyAPIKey, error) {
 	key, err := s.store.GetKey(id)

@@ -33,6 +33,20 @@ type StreamCaller interface {
 // StreamHandler receives model-provider deltas during one streamed call.
 type StreamHandler struct {
 	OnTextDelta func(string)
+	// OnToolUse is invoked for every Anthropic tool_use block. It is
+	// called three times per block:
+	//   1. on content_block_start  (the block's id, name, type are set,
+	//      partialJSON is empty),
+	//   2. on each content_block_delta of type input_json_delta
+	//      (partialJSON carries the accumulated fragment so far),
+	//   3. on content_block_stop   (partialJSON carries the complete
+	//      reassembled JSON arguments string).
+	// The Anthropic-Messages usage gateway (routes_usage.go) translates
+	// these callbacks back into the canonical
+	// content_block_start / content_block_delta / content_block_stop
+	// SSE events so that strict consumers (Pi's anthropic.ts:568-660
+	// toolcall_* paths) can execute the requested tool.
+	OnToolUse func(block protocol.Block, partialJSON string)
 }
 
 // Client sends Anthropic-compatible message requests.
@@ -462,6 +476,9 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 			if block.Type == protocol.BlockText && block.Text != "" && handler.OnTextDelta != nil {
 				handler.OnTextDelta(block.Text)
 			}
+			if block.Type == protocol.BlockToolUse && handler.OnToolUse != nil {
+				handler.OnToolUse(block, "")
+			}
 		case "content_block_delta":
 			switch event.Delta.Type {
 			case "text_delta":
@@ -477,6 +494,9 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 					state.block.Type = protocol.BlockToolUse
 				}
 				state.partialJSON.WriteString(event.Delta.PartialJSON)
+				if handler.OnToolUse != nil {
+					handler.OnToolUse(state.block, state.partialJSON.String())
+				}
 			}
 		case "content_block_stop":
 			if state, ok := states[event.Index]; ok && state.block.Type == protocol.BlockToolUse {
@@ -490,6 +510,9 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 				}
 				if state.block.Input == nil {
 					state.block.Input = map[string]interface{}{}
+				}
+				if handler.OnToolUse != nil {
+					handler.OnToolUse(state.block, state.partialJSON.String())
 				}
 			}
 		case "message_delta":

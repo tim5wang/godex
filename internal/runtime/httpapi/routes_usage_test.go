@@ -559,6 +559,172 @@ func TestAnthropicGatewayMessagesStreamsAnthropicSSE(t *testing.T) {
 	}
 }
 
+// TestAnthropicGatewayMessagesStreamsToolUseSSE covers the second half of
+// the regression where the Pi agent appeared to "stop working" after a
+// text reply. Pi's agent loop is tool-driven: when the model wants to
+// run a tool it emits a `content_block_start { type: "tool_use" }`
+// followed by one or more `content_block_delta { type: "input_json_delta" }`
+// frames carrying the JSON arguments, then `content_block_stop`. Pi's
+// streamAnthropic at anthropic.ts:568-581 routes these to `toolcall_*`
+// events that the agent loop uses to invoke the tool. The GoDex proxy
+// MUST forward every tool_use frame to Pi, otherwise Pi's agent loop
+// never sees the tool call and the conversation stalls after the first
+// text reply. This regression was hidden by the previous test, which
+// only fed the proxy a text-only Anthropic SSE stream.
+//
+// The fix requires two cooperating changes:
+//  1. conversation.StreamHandler must expose an OnToolUse callback so
+//     streamAnthropicGatewayMessages can react to tool_use blocks in
+//     real time (today parseMessageStream silently buffers them into
+//     the final *protocol.Response and never notifies the caller).
+//  2. streamAnthropicGatewayMessages must forward the tool_use frames
+//     to the wire as event: content_block_start/delta/stop with
+//     content_block.type == "tool_use" and delta.type == "input_json_delta".
+func TestAnthropicGatewayMessagesStreamsToolUseSSE(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Stub emits a tool_use block followed by an end_turn stop. The
+		// proxy is expected to forward every frame intact.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-2","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"read","input":{}}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/tmp/hi\"}"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-tool-use",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"read /tmp/hi"}]}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	stream, err := readSSEDataLines(t, resp.Body)
+	if err != nil {
+		t.Fatalf("read sse: %v", err)
+	}
+
+	// Every required event: line must be present (the upstream provider
+	// emits all six; the proxy must forward them verbatim).
+	for _, evt := range []string{
+		"event: message_start",
+		"event: content_block_start",
+		"event: content_block_delta",
+		"event: content_block_stop",
+		"event: message_delta",
+		"event: message_stop",
+	} {
+		if !strings.Contains(stream, evt) {
+			t.Errorf("expected Anthropic SSE stream to contain %q line, got %q", evt, stream)
+		}
+	}
+
+	// The tool_use identity must survive: content_block_start must carry
+	// type=tool_use, name=read, id=toolu_01 so Pi's toolcall_start path
+	// at anthropic.ts:568-581 can wire the call to the read tool.
+	mustContain := []string{
+		`"type":"tool_use"`,
+		`"name":"read"`,
+		`"id":"toolu_01"`,
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(stream, s) {
+			t.Errorf("expected tool_use identity %q in forwarded stream, got %q", s, stream)
+		}
+	}
+
+	// The input JSON must be reassembled from the input_json_delta frames
+	// and delivered to Pi as the final tool input. Pi's anthropic.ts:612
+	// calls parseStreamingJson on the accumulated partial_json.
+	if !strings.Contains(stream, "/tmp/hi") {
+		t.Errorf("expected input JSON \"/tmp/hi\" to reach the client, got %q", stream)
+	}
+
+	// stop_reason must be tool_use so Pi's mapStopReason at
+	// anthropic.ts:1216 returns "toolUse" and the agent loop executes the
+	// tool rather than treating the turn as done.
+	if !strings.Contains(stream, `"stop_reason":"tool_use"`) {
+		t.Errorf("expected message_delta to carry stop_reason=tool_use, got %q", stream)
+	}
+}
+
 // payload of every `data: ...` and `event: ...` line into a single string
 // for assertions. Both lines are kept (with their original prefix) so that
 // consumers of this helper can assert on either the JSON payload or the

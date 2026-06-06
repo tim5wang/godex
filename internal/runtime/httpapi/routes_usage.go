@@ -882,6 +882,8 @@ func streamAnthropicGatewayMessages(
 	// (anthropic.ts:540-547 + 582-594).
 	const textBlockIndex = 0
 	blockStarted := false
+	toolBlockStarted := false
+	lastToolPartialJSON := ""
 	flushBlockStart := func() {
 		if blockStarted {
 			return
@@ -906,7 +908,11 @@ func streamAnthropicGatewayMessages(
 
 	// Stream the upstream response. Client.streamOnce calls OnTextDelta for
 	// every text_delta SSE event and returns a final *protocol.Response with
-	// the consolidated content + usage.
+	// the consolidated content + usage. Client.parseMessageStream calls
+	// OnToolUse three times per tool_use block (content_block_start,
+	// each input_json_delta, content_block_stop) so the gateway can
+	// forward Anthropic-SSE tool_use frames to the wire and Pi's
+	// anthropic.ts:568-660 toolcall_* paths can execute the tool.
 	finalResp, streamErr := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
 		OnTextDelta: func(delta string) {
 			if delta == "" {
@@ -924,10 +930,66 @@ func streamAnthropicGatewayMessages(
 				},
 			})
 		},
+		OnToolUse: func(block protocol.Block, partialJSON string) {
+			// 3') tool_use block: open a content_block_start on the first
+			// callback (id+name+empty input), then forward each
+			// input_json_delta fragment, then content_block_stop on the
+			// final callback. The three phases share a per-block "started"
+			// flag so we don't repeat the start event on every delta.
+			// We also track lastToolPartialJSON so the trailing
+			// content_block_stop callback (which re-delivers the full
+			// accumulated partialJSON) doesn't double-emit a delta.
+			toolBlockIndex := textBlockIndex
+			if block.Type != protocol.BlockToolUse {
+				return
+			}
+			if !toolBlockStarted {
+				toolBlockStarted = true
+				inputMap := block.Input
+				if inputMap == nil {
+					inputMap = map[string]interface{}{}
+				}
+				flushSSE("content_block_start", map[string]interface{}{
+					"type":          "content_block_start",
+					"index":         toolBlockIndex,
+					"content_block": map[string]interface{}{"type": "tool_use", "id": block.ID, "name": block.Name, "input": inputMap},
+				})
+				if fragment := strings.TrimSpace(partialJSON); fragment != "" && fragment != lastToolPartialJSON {
+					lastToolPartialJSON = fragment
+					flushSSE("content_block_delta", map[string]interface{}{
+						"type":  "content_block_delta",
+						"index": toolBlockIndex,
+						"delta": map[string]interface{}{
+							"type":         "input_json_delta",
+							"partial_json": fragment,
+						},
+					})
+				}
+				return
+			}
+			if partialJSON != lastToolPartialJSON {
+				lastToolPartialJSON = partialJSON
+				flushSSE("content_block_delta", map[string]interface{}{
+					"type":  "content_block_delta",
+					"index": toolBlockIndex,
+					"delta": map[string]interface{}{
+						"type":         "input_json_delta",
+						"partial_json": partialJSON,
+					},
+				})
+			}
+		},
 	})
 	// Close the open text block whether or not the upstream returned deltas;
 	// consumers expect a content_block_stop per started block.
 	flushBlockStop()
+	if toolBlockStarted {
+		flushSSE("content_block_stop", map[string]interface{}{
+			"type":  "content_block_stop",
+			"index": textBlockIndex,
+		})
+		toolBlockStarted = false
+	}
 
 	if streamErr != nil {
 		// Emit an SSE error event so strict consumers (Anthropic SDK, Pi) can

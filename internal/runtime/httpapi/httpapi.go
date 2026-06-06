@@ -251,13 +251,15 @@ func NewHandlerWithRuntime(
 	// Anthropic Messages API endpoint
 	// Supports two auth modes:
 	// 1. Usage gateway: Authorization: Bearer gdx_xxx (proxy key auth)
-	// 2. Web token: Authorization: Bearer <web_token> (for clients like pi using ANTHROPIC_BASE_URL)
+	// 2. Usage gateway: x-api-key: gdx_xxx (Anthropic SDK default; some clients
+	//    such as Pi send the proxy key in the x-api-key header instead of
+	//    Authorization: Bearer, so we must accept it here).
+	// 3. Web token: Authorization: Bearer <web_token> (for clients using ANTHROPIC_BASE_URL)
 	mux.Handle("POST /v1/messages", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := strings.TrimSpace(r.Header.Get("Authorization"))
-		if strings.HasPrefix(strings.ToLower(auth), "bearer gdx_") {
+		if secret := extractProxyKeySecret(r); secret != "" && strings.HasPrefix(secret, "gdx_") {
 			// Usage gateway auth
 			if usageService != nil {
-				handleAnthropicGatewayMessages(w, r, usageService, manager)
+				handleAnthropicGatewayMessages(w, r, usageService, manager, secret)
 			} else {
 				writeError(w, http.StatusServiceUnavailable, fmt.Errorf("usage gateway not configured"))
 			}
@@ -1618,6 +1620,26 @@ func withBearerAuthProvider(token func() string) func(http.Handler) http.Handler
 			handler.ServeHTTP(w, r)
 		})
 	}
+}
+
+// extractProxyKeySecret returns the presented proxy key from whichever
+// header the client used, or "" if neither header carries a non-empty
+// value. It accepts both Authorization: Bearer <secret> (OpenAI-style
+// clients) and x-api-key: <secret> (Anthropic SDK style; required for
+// clients such as Pi that send the proxy key without the Bearer prefix).
+func extractProxyKeySecret(r *http.Request) string {
+	if auth := strings.TrimSpace(r.Header.Get("Authorization")); auth != "" {
+		// Strip optional "Bearer " (case-insensitive) and surrounding whitespace.
+		lower := strings.ToLower(auth)
+		if strings.HasPrefix(lower, "bearer ") {
+			return strings.TrimSpace(auth[len("bearer "):])
+		}
+		return auth
+	}
+	if key := strings.TrimSpace(r.Header.Get("x-api-key")); key != "" {
+		return key
+	}
+	return ""
 }
 
 func bearerAuthorized(r *http.Request, token string) bool {

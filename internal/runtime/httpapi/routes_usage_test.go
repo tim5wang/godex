@@ -345,8 +345,226 @@ func TestUsageGatewayChatCompletionStreamsSSE(t *testing.T) {
 	}
 }
 
-// readSSEDataLines reads a text/event-stream body until EOF and joins the
-// payload of every `data: ...` line into a single string for assertions.
+// TestAnthropicGatewayMessagesStreamsAnthropicSSE covers the regression where
+// Pi (or any client using the Anthropic SDK) sent POST /v1/messages with
+// stream:true and the proxy returned a non-Anthropic SSE shape: only
+// `content_block_delta` + `message_stop` events, with `usage` incorrectly
+// attached to the trailing `message_stop` event. The official Anthropic
+// SDK (and Pi's anthropic-messages provider) requires the full Anthropic
+// SSE event order:
+//
+//	message_start
+//	content_block_start
+//	content_block_delta  (one or more)
+//	content_block_stop
+//	message_delta        (carries delta.stop_reason + incremental usage)
+//	message_stop
+//
+// The proxy MUST emit all six event types in order. `message_stop` MUST
+// NOT carry `usage` (Pi's anthropic.ts:1226-1230 stops on message_stop
+// without re-parsing usage, and the canonical spec places usage inside
+// message_delta). Without message_start + content_block_start, Pi's
+// `output.content` stays empty and the UI displays "thinking then
+// nothing" even though the upstream response was correct (see
+// temp/pi/packages/ai/src/providers/anthropic.ts:540-659 for the consumer
+// side that depends on these events to populate `output.content`).
+func TestAnthropicGatewayMessagesStreamsAnthropicSSE(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Respond with the full Anthropic SSE wire format. Client.Stream
+		// (Client.streamOnce -> parseMessageStream) consumes this stream
+		// and invokes OnTextDelta for every text_delta event, returning
+		// a final *protocol.Response to the proxy.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-1","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	// Inject the stub provider through the public Update + api.providers
+	// config path. Client.Stream reaches the stub via the anthropic_compatible
+	// provider type, so OnTextDelta fires once per text_delta event.
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {
+					Model: "stub-model",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-sse",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// POST /v1/messages with stream:true and x-api-key (Pi's Anthropic SDK
+	// default header shape) to exercise the proxy's Anthropic SSE gateway.
+	body := `{"model":"M3","stream":true,"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 with stream:true, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("expected Content-Type text/event-stream, got %q", ct)
+	}
+
+	stream, err := readSSEDataLines(t, resp.Body)
+	if err != nil {
+		t.Fatalf("read sse: %v", err)
+	}
+
+	// Required Anthropic SSE event types in the canonical order. The proxy
+	// must emit ALL of them so that consumers (Pi's anthropic.ts stream
+	// loop) can populate `output.content` and `output.usage` correctly.
+	requiredEvents := []string{
+		`"type":"message_start"`,
+		`"type":"content_block_start"`,
+		`"type":"content_block_delta"`,
+		`"type":"content_block_stop"`,
+		`"type":"message_delta"`,
+		`"type":"message_stop"`,
+	}
+	for _, evt := range requiredEvents {
+		if !strings.Contains(stream, evt) {
+			t.Errorf("expected Anthropic SSE stream to contain event %s, got %q", evt, stream)
+		}
+	}
+
+	// The proxy must NOT attach `usage` to the message_stop event. The
+	// canonical location is message_delta; attaching it to message_stop
+	// pollutes the terminal event and confuses strict consumers.
+	stopIdx := strings.Index(stream, `"type":"message_stop"`)
+	if stopIdx == -1 {
+		t.Fatalf("expected message_stop event in stream, got %q", stream)
+	}
+	tail := stream[stopIdx:]
+	if strings.Contains(tail, `"usage"`) {
+		t.Errorf("message_stop event must not carry `usage`; got tail=%q", tail)
+	}
+
+	// The deltas must reach the client intact. Without content_block_start
+	// upstream of these deltas, the consumer would not be able to associate
+	// them with a content block, so the proxy MUST emit the start event.
+	if !strings.Contains(stream, `"text":"hel"`) || !strings.Contains(stream, `"text":"lo"`) {
+		t.Errorf("expected text deltas to include hel+lo, got %q", stream)
+	}
+
+	// message_delta must carry the final stop_reason so consumers can map
+	// it onto their local stop-reason vocabulary (Pi's mapStopReason at
+	// anthropic.ts:1210-1230).
+	if !strings.Contains(stream, `"stop_reason":"end_turn"`) {
+		t.Errorf("expected message_delta to carry stop_reason=end_turn, got %q", stream)
+	}
+
+	// CRITICAL: Each Anthropic SSE event MUST also carry an `event:` line
+	// alongside its `data:` line. Pi's streamAnthropic at
+	// temp/pi/packages/ai/src/providers/anthropic.ts:418-424 uses the
+	// event-type from the SSE envelope (not the JSON body's `type` field)
+	// to filter via ANTHROPIC_MESSAGE_EVENTS:
+	//
+	//   if (sse.event === "error") { throw new Error(sse.data); }
+	//   if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) { continue; }
+	//
+	// Without the `event:` line, sse.event is null and EVERY frame is
+	// silently dropped — `output.usage` stays 0 and `output.content` stays
+	// empty, which exactly matches the Pi debug-log regression the user
+	// reported after the previous GREEN. The previous test only read
+	// `data:` lines (readSSEDataLines), so it never observed this gap.
+	requiredEventTypes := []string{
+		"event: message_start",
+		"event: content_block_start",
+		"event: content_block_delta",
+		"event: content_block_stop",
+		"event: message_delta",
+		"event: message_stop",
+	}
+	for _, evt := range requiredEventTypes {
+		if !strings.Contains(stream, evt) {
+			t.Errorf("expected Anthropic SSE stream to contain %q line, got %q", evt, stream)
+		}
+	}
+}
+
+// payload of every `data: ...` and `event: ...` line into a single string
+// for assertions. Both lines are kept (with their original prefix) so that
+// consumers of this helper can assert on either the JSON payload or the
+// SSE event-type discriminator (e.g. "event: message_start"). This matters
+// for the Anthropic SDK + Pi, which filter events via the SSE envelope's
+// `event:` line — see temp/pi/packages/ai/src/providers/anthropic.ts:267-274.
 func readSSEDataLines(t *testing.T, body io.Reader) (string, error) {
 	t.Helper()
 	scanner := bufio.NewScanner(body)
@@ -354,8 +572,8 @@ func readSSEDataLines(t *testing.T, body io.Reader) (string, error) {
 	var b strings.Builder
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "data:") {
-			b.WriteString(strings.TrimPrefix(line, "data:"))
+		if strings.HasPrefix(line, "data:") || strings.HasPrefix(line, "event:") {
+			b.WriteString(line)
 			b.WriteString("\n")
 		}
 	}
@@ -403,6 +621,165 @@ func TestOpenAIStopReasonMapping(t *testing.T) {
 	}
 	if got := respStopReason(nil); got != "" {
 		t.Errorf("respStopReason(nil) = %q, want empty string", got)
+	}
+}
+
+// TestAnthropicGatewayMessagesAcceptsGdxKey covers the regression where Pi
+// (or any client using the Anthropic SDK) sent POST /v1/messages with the
+// proxy key in the x-api-key header instead of Authorization: Bearer, and
+// GoDex answered 401 with "Invalid API Key". The handler must accept
+// either header so clients can use the standard Anthropic SDK as-is.
+func TestAnthropicGatewayMessagesAcceptsGdxKey(t *testing.T) {
+	handler, usageService := mustUsageHandler(t)
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-gw-bearer",
+		BudgetCredits: 100,
+		AllowedModels: []string{"claude-3-haiku"},
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "claude-3-haiku",
+		TargetProfileID: "default",
+		TargetModel:     "claude-3-haiku-20240307",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model: %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"claude-3-haiku","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+
+	// Variant 1: Authorization: Bearer gdx_<key> (the path already supported).
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do bearer request: %v", err)
+	}
+	respBody := readAll(t, resp)
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatalf("Bearer gdx_ auth should not return 401, got body=%s", respBody)
+	}
+
+	// Variant 2: x-api-key: gdx_<key> (Anthropic SDK default; previously returned 401).
+	req2, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new x-api-key request: %v", err)
+	}
+	req2.Header.Set("x-api-key", created.Secret)
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("do x-api-key request: %v", err)
+	}
+	resp2Body := readAll(t, resp2)
+	resp2.Body.Close()
+	if resp2.StatusCode == http.StatusUnauthorized {
+		t.Fatalf("x-api-key gdx_ auth should not return 401, got body=%s", resp2Body)
+	}
+}
+
+// by Pi calling POST /v1/messages with a content block that has the wrong
+// field name ("什么是 快乐星球？": "test" instead of "text": "test"). GoDex
+// must (1) not forward a text block whose "text" field is missing or empty,
+// and (2) not forward a message whose content reduces to nothing, otherwise
+// the upstream Anthropic-compatible provider (minimax) returns 2013
+// "messages is empty".
+func TestAnthropicToProtocolSkipsEmptyTextBlock(t *testing.T) {
+	cases := []struct {
+		name      string
+		req       anthropicMessageRequest
+		wantMsgs  int
+		wantBlks  int
+		wantFirst string
+	}{
+		{
+			name: "empty text field is dropped",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role:    "user",
+					Content: []anthropicContentBlock{{Type: "text", Text: ""}},
+				}},
+			},
+			wantMsgs: 0,
+			wantBlks: 0,
+		},
+		{
+			name: "missing text field (Pi client bug) is dropped",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role: "user",
+					Content: []anthropicContentBlock{
+						{Type: "text"}, // Go's zero-value: Text == "" because the JSON had no "text" key
+					},
+				}},
+			},
+			wantMsgs: 0,
+			wantBlks: 0,
+		},
+		{
+			name: "normal text is preserved",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role:    "user",
+					Content: []anthropicContentBlock{{Type: "text", Text: "hi"}},
+				}},
+			},
+			wantMsgs:  1,
+			wantBlks:  1,
+			wantFirst: "hi",
+		},
+		{
+			name: "image block is preserved even when text is missing",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role: "user",
+					Content: []anthropicContentBlock{
+						{Type: "image", Source: &anthropicImageSource{Type: "base64", MediaType: "image/png", Data: "AAAA"}},
+					},
+				}},
+			},
+			wantMsgs: 1,
+			wantBlks: 1,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := anthropicToProtocolRequest(c.req, "M3")
+			if err != nil {
+				t.Fatalf("anthropicToProtocolRequest: %v", err)
+			}
+			if len(got.Messages) != c.wantMsgs {
+				t.Fatalf("want %d messages, got %d (%+v)", c.wantMsgs, len(got.Messages), got.Messages)
+			}
+			if c.wantMsgs > 0 {
+				if len(got.Messages[0].Content) != c.wantBlks {
+					t.Fatalf("want %d content blocks in first message, got %d (%+v)", c.wantBlks, len(got.Messages[0].Content), got.Messages[0].Content)
+				}
+				if c.wantFirst != "" {
+					if got.Messages[0].Content[0].Text != c.wantFirst {
+						t.Fatalf("want first block text %q, got %q", c.wantFirst, got.Messages[0].Content[0].Text)
+					}
+				}
+			}
+		})
 	}
 }
 

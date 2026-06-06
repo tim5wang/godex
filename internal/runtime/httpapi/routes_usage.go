@@ -537,13 +537,12 @@ func streamUsageGatewayChatCompletions(
 
 // handleAnthropicGatewayMessages handles POST /v1/messages for the usage gateway.
 // It accepts Anthropic's native request format and routes to the appropriate provider.
-func handleAnthropicGatewayMessages(w http.ResponseWriter, r *http.Request, usageService *usage.Service, manager *config.Manager) {
+func handleAnthropicGatewayMessages(w http.ResponseWriter, r *http.Request, usageService *usage.Service, manager *config.Manager, secret string) {
 	start := time.Now()
 
-	// Authenticate proxy key
-	auth := strings.TrimSpace(r.Header.Get("Authorization"))
-	secret := strings.TrimPrefix(auth, "Bearer ")
-	secret = strings.TrimSpace(secret)
+	// secret is extracted by extractProxyKeySecret at the routing layer so
+	// the gdx_ prefix can be matched from either Authorization: Bearer or
+	// the Anthropic SDK's x-api-key header.
 
 	key, err := usageService.AuthenticateKey(secret)
 	if err != nil {
@@ -686,13 +685,19 @@ func anthropicToProtocolRequest(req anthropicMessageRequest, model string) (prot
 		protoReq.System = strings.Join(systemParts, "\n")
 	}
 
-	// Convert messages
+	// Convert messages. Drop blocks whose recognized fields are empty
+	// (e.g. a malformed client sends {"type":"text"} with no "text" key)
+	// and drop messages whose content reduces to nothing, so the upstream
+	// Anthropic-compatible provider does not surface "messages is empty
+	// (2013)" for a block that was never populated in the first place.
 	for _, msg := range req.Messages {
 		protoMsg := protocol.APIMessage{Role: msg.Role}
 		for _, block := range msg.Content {
 			switch block.Type {
 			case "text":
-				protoMsg.Content = append(protoMsg.Content, protocol.Block{Type: protocol.BlockText, Text: block.Text})
+				if text := strings.TrimSpace(block.Text); text != "" {
+					protoMsg.Content = append(protoMsg.Content, protocol.Block{Type: protocol.BlockText, Text: text})
+				}
 			case "image":
 				if block.Source != nil {
 					protoMsg.Content = append(protoMsg.Content, protocol.Block{
@@ -718,6 +723,9 @@ func anthropicToProtocolRequest(req anthropicMessageRequest, model string) (prot
 					Content:   block.Text, // Anthropic uses 'content' field for tool result
 				})
 			}
+		}
+		if len(protoMsg.Content) == 0 {
+			continue
 		}
 		protoReq.Messages = append(protoReq.Messages, protoMsg)
 	}
@@ -836,78 +844,148 @@ func streamAnthropicGatewayMessages(
 	w.Header().Set("anthropic-version", "2023-06-01")
 	w.WriteHeader(http.StatusOK)
 
-	var finalResp *protocol.Response
-	var respErr error
+	// flushSSE writes one Anthropic SSE frame: a `event:` line (the
+	// discriminator the Anthropic SDK + Pi use to filter events via
+	// ANTHROPIC_MESSAGE_EVENTS at anthropic.ts:267-274/417-444), a
+	// `data:` line carrying the JSON payload, and a blank line, then
+	// flushes. Centralising it keeps every event framed identically.
+	flushSSE := func(event string, payload map[string]interface{}) {
+		data, _ := json.Marshal(payload)
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+		flusher.Flush()
+	}
 
-	// Stream handler for Anthropic SSE format
-	_, err := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
+	// 1) message_start — must be the first event on the wire so consumers
+	// (e.g. the Pi Anthropic SDK at anthropic.ts:528-539) can populate
+	// output.responseId and the initial usage snapshot.
+	flushSSE("message_start", map[string]interface{}{
+		"type": "message_start",
+		"message": map[string]interface{}{
+			"id":         fmt.Sprintf("msg_%d", start.UnixNano()),
+			"type":       "message",
+			"role":       "assistant",
+			"content":    []interface{}{},
+			"model":      req.Model,
+			"stop_reason": nil,
+			"usage": map[string]interface{}{
+				"input_tokens":                0,
+				"output_tokens":               0,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens":     0,
+			},
+		},
+	})
+
+	// 2) content_block_start — must precede the first text_delta so consumers
+	// can create a content block to associate subsequent deltas with. Without
+	// it, Pi's `output.content` stays empty and the deltas are dropped
+	// (anthropic.ts:540-547 + 582-594).
+	const textBlockIndex = 0
+	blockStarted := false
+	flushBlockStart := func() {
+		if blockStarted {
+			return
+		}
+		blockStarted = true
+		flushSSE("content_block_start", map[string]interface{}{
+			"type":          "content_block_start",
+			"index":         textBlockIndex,
+			"content_block": map[string]interface{}{"type": "text", "text": ""},
+		})
+	}
+	flushBlockStop := func() {
+		if !blockStarted {
+			return
+		}
+		blockStarted = false
+		flushSSE("content_block_stop", map[string]interface{}{
+			"type":  "content_block_stop",
+			"index": textBlockIndex,
+		})
+	}
+
+	// Stream the upstream response. Client.streamOnce calls OnTextDelta for
+	// every text_delta SSE event and returns a final *protocol.Response with
+	// the consolidated content + usage.
+	finalResp, streamErr := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
 		OnTextDelta: func(delta string) {
 			if delta == "" {
 				return
 			}
-			// Emit content_block_delta event
-			data, _ := json.Marshal(map[string]interface{}{
-				"type": "content_block_delta",
-				"index": 0,
+			// 3) content_block_start + content_block_delta — first delta
+			// opens the text block; every delta appends to it.
+			flushBlockStart()
+			flushSSE("content_block_delta", map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": textBlockIndex,
 				"delta": map[string]interface{}{
 					"type": "text_delta",
 					"text": delta,
 				},
 			})
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
 		},
 	})
-	if err != nil {
-		// Emit error event
-		respErr = err
-		data, _ := json.Marshal(map[string]interface{}{
+	// Close the open text block whether or not the upstream returned deltas;
+	// consumers expect a content_block_stop per started block.
+	flushBlockStop()
+
+	if streamErr != nil {
+		// Emit an SSE error event so strict consumers (Anthropic SDK, Pi) can
+		// surface a meaningful message instead of an empty assistant turn.
+		flushSSE("error", map[string]interface{}{
 			"type": "error",
 			"error": map[string]interface{}{
 				"type":    "api_error",
-				"message": err.Error(),
+				"message": streamErr.Error(),
 			},
 		})
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
 	} else {
-		// Get the final response
-		// Note: Stream returns the final response, but we already consumed it via callbacks
-		// So we need to reconstruct it or have the caller provide it
-		// For now, we'll emit a message_stop event
-		finalResp = &protocol.Response{
-			StopReason: "end_turn",
-			Content:    []protocol.Block{{Type: protocol.BlockText, Text: ""}},
+		// 4) message_delta — must carry delta.stop_reason (Anthropic's
+		// canonical stop-reason vocabulary that consumers like Pi's
+		// mapStopReason at anthropic.ts:1210-1230 translate to local
+		// values) plus incremental usage. Usage MUST live here, not on
+		// message_stop, per the canonical spec.
+		stopReason := "end_turn"
+		if finalResp != nil && strings.TrimSpace(finalResp.StopReason) != "" {
+			stopReason = finalResp.StopReason
 		}
-	}
-
-	// Emit message_stop event
-	stopData := map[string]interface{}{
-		"type": "message_stop",
-	}
-	if respErr == nil {
-		// Include usage in message_delta if available
+		deltaPayload := map[string]interface{}{
+			"type":  "message_delta",
+			"delta": map[string]interface{}{"stop_reason": stopReason},
+		}
 		if finalResp != nil && finalResp.Usage != nil {
-			stopData["usage"] = map[string]interface{}{
-				"input_tokens":              finalResp.Usage.InputTokens,
-				"output_tokens":             finalResp.Usage.OutputTokens,
+			deltaPayload["usage"] = map[string]interface{}{
+				"input_tokens":                finalResp.Usage.InputTokens,
+				"output_tokens":               finalResp.Usage.OutputTokens,
 				"cache_creation_input_tokens": finalResp.Usage.CacheWriteTokens,
 				"cache_read_input_tokens":     finalResp.Usage.CacheReadTokens,
 			}
 		}
+		flushSSE("message_delta", deltaPayload)
 	}
-	stopBytes, _ := json.Marshal(stopData)
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", stopBytes)
-	flusher.Flush()
 
-	// Record usage
-	if respErr == nil {
+	// 5) message_stop — terminal event. Per the Anthropic spec it carries
+	// no `usage` field (usage travels in message_delta). Keep the JSON
+	// shape minimal so strict consumers do not reject the stream.
+	flushSSE("message_stop", map[string]interface{}{"type": "message_stop"})
+
+	// Record usage.
+	if streamErr == nil {
+		// Reuse the final response the streamer produced; if it returned nil
+		// (e.g. the upstream closed without a typed payload), synthesise a
+		// minimal stop record so the usage log still has an entry.
+		if finalResp == nil {
+			finalResp = &protocol.Response{
+				StopReason: "end_turn",
+				Content:    []protocol.Block{{Type: protocol.BlockText, Text: ""}},
+			}
+		}
 		call := usageGatewaySuccessCall(start, key.ID, req.Model, modelMapping, providerReq, finalResp)
 		if err := usageService.RecordCall(call); err != nil {
 			logger.Warnf("usage gateway: failed to record streamed Anthropic call %s: %v", call.ID, err)
 		}
 	} else {
-		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "provider_error", respErr.Error())
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "provider_error", streamErr.Error())
 	}
 }
 

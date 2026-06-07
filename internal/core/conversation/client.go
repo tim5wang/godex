@@ -371,11 +371,51 @@ func maxDuration(a, b time.Duration) time.Duration {
 
 type streamWireEvent struct {
 	Type         string             `json:"type"`
-	Index        int                `json:"index"`
+	Index        int                `json:"index,omitempty"`
 	Message      *protocol.Response `json:"message,omitempty"`
 	ContentBlock *protocol.Block    `json:"content_block,omitempty"`
 	Delta        streamWireDelta    `json:"delta,omitempty"`
 	Error        *streamWireError   `json:"error,omitempty"`
+	// Usage is the Anthropic streaming `message_delta.usage` field, which
+	// the spec places at the TOP level of the frame alongside `type` and
+	// `delta` (not nested inside `delta`). We keep Delta.Usage for legacy
+	// providers that nest it, and prefer the top-level field when set.
+	Usage *protocol.Usage `json:"usage,omitempty"`
+	// OpenAI chat.completion.chunk fields. The standard
+	// ProviderOpenAICompatible path uses parseOpenAIStream instead of
+	// parseMessageStream, so these fields are only reached when a
+	// provider configured as `anthropic_compatible` (or the default
+	// type) upstreams an OpenAI-shape SSE service — e.g., a reverse
+	// proxy or OpenRouter routing to a non-Anthropic model. In that
+	// niche case parseMessageStream receives chat.completion.chunk
+	// frames (no top-level "type" field, with
+	// choices[].delta.tool_calls[]) and must forward the tool_calls
+	// deltas to the handler.
+	Choices []openAIWireChoice `json:"choices,omitempty"`
+}
+
+type openAIWireChoice struct {
+	Index        int               `json:"index"`
+	Delta        openAIWireDelta   `json:"delta"`
+	FinishReason string            `json:"finish_reason"`
+}
+
+type openAIWireDelta struct {
+	Role      string             `json:"role,omitempty"`
+	Content   string             `json:"content,omitempty"`
+	ToolCalls []openAIWireToolCall `json:"tool_calls,omitempty"`
+}
+
+type openAIWireToolCall struct {
+	Index    int                `json:"index"`
+	ID       string             `json:"id,omitempty"`
+	Type     string             `json:"type,omitempty"`
+	Function openAIWireFunction `json:"function"`
+}
+
+type openAIWireFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type streamWireDelta struct {
@@ -519,9 +559,17 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 			if event.Delta.StopReason != "" {
 				response.StopReason = event.Delta.StopReason
 			}
-			if event.Delta.Usage != nil {
+			// Anthropic streaming spec puts `usage` at the top level of
+			// `message_delta` (alongside `type` and `delta`), not inside
+			// `delta`. We prefer the top-level field when set and fall
+			// back to Delta.Usage for legacy providers that nest it.
+			usageDelta := event.Usage
+			if usageDelta == nil {
+				usageDelta = event.Delta.Usage
+			}
+			if usageDelta != nil {
 				if response.Usage == nil {
-					usage := *event.Delta.Usage
+					usage := *usageDelta
 					usage.Normalize()
 					response.Usage = &usage
 				} else {
@@ -529,7 +577,7 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 					// changed. Merge: cache / output token deltas override
 					// the message_start baseline, but we never shrink a
 					// non-zero value because that would be lossy.
-					mergeUsageDelta(response.Usage, event.Delta.Usage)
+					mergeUsageDelta(response.Usage, usageDelta)
 				}
 			}
 		case "message_stop":
@@ -541,6 +589,35 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 				return fmt.Errorf("stream error: %s", event.Error.Message)
 			}
 			return fmt.Errorf("stream error")
+		}
+		// OpenAI compatibility branch for providers that emit
+		// chat.completion.chunk frames (the standard
+		// ProviderOpenAICompatible path uses parseOpenAIStream, so this
+		// branch only runs for providers configured as
+		// `anthropic_compatible` (or the default type) whose upstream
+		// is actually an OpenAI-shape service). Each frame carries one
+		// tool_calls array entry with the per-chunk fragment in
+		// call.Function.Arguments — the receiving OpenAI SDK
+		// concatenates arguments across chunks, so we forward the
+		// fragment verbatim without re-accumulating. The branch runs
+		// unconditionally (rather than gated on event.Type == "")
+		// because Anthropic-shape frames may also have an empty type
+		// for some optional events, and the empty Choices slice is a
+		// no-op. We also forward the upstream's tool call index so
+		// multiple parallel tool calls in the same turn keep their
+		// identity through the gateway.
+		if handler.OnToolUse != nil {
+			for _, choice := range event.Choices {
+				for _, call := range choice.Delta.ToolCalls {
+					block := protocol.Block{
+						Type:  protocol.BlockToolUse,
+						ID:    call.ID,
+						Name:  call.Function.Name,
+						Index: call.Index,
+					}
+					handler.OnToolUse(block, call.Function.Arguments)
+				}
+			}
 		}
 		return nil
 	}

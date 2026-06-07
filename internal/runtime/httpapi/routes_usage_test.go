@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/core/config"
@@ -343,6 +344,334 @@ func TestUsageGatewayChatCompletionStreamsSSE(t *testing.T) {
 	if strings.Contains(stream, "unsupported_streaming") {
 		t.Fatalf("response should not contain unsupported_streaming, got %q", stream)
 	}
+}
+
+// TestUsageGatewayChatCompletionsStreamsToolCallsSSE covers the third leg
+// of the streaming regression: the OpenAI usage-gateway path now has to
+// forward tool_calls deltas so OpenAI SDKs and Codex-style clients can
+// execute the model-requested tool. The upstream stub emits the full
+// OpenAI chat.completion.chunk SSE shape:
+//
+//	data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""}}]}}]}
+//	data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"/tmp/hi\"}"}}]}}]}
+//	data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+//	data: [DONE]
+//
+// The proxy must surface every tool_calls delta verbatim to the client so
+// OpenAI-compatible tool loops can reassemble the JSON arguments. Each
+// per-chunk arguments fragment is the delta between successive frames, so
+// the SDK's per-chunk concatenation yields the final JSON. finish_reason
+// must be "tool_calls" (OpenAI's canonical stop reason) so the client
+// tool loop runs the requested tool rather than treating the turn as
+// done.
+//
+// Note: the stub is wired up as an `anthropic_compatible` provider but
+// emits OpenAI-shape chat.completion.chunk frames. parseMessageStream
+// (the Anthropic-shape parser used by Client.Stream) falls through to
+// its OpenAI compatibility branch when the upstream frame is not
+// Anthropic-shaped, and forwards the tool_calls deltas to the handler.
+// The standard ProviderOpenAICompatible path uses parseOpenAIStream
+// instead; this test exercises the niche reverse-proxy / OpenRouter
+// case where an anthropic_compatible profile upstreams an OpenAI-shape
+// service.
+func TestUsageGatewayChatCompletionsStreamsToolCallsSSE(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// We emit OpenAI chat.completion.chunk frames; see the test
+		// header for why parseMessageStream can still parse them.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		events := []string{
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""}}]}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"/tmp/hi\"}"}}]}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "openai-tool-call",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"read /tmp/hi"}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("expected Content-Type text/event-stream, got %q", ct)
+	}
+	stream, err := readSSEDataLines(t, resp.Body)
+	if err != nil {
+		t.Fatalf("read sse: %v", err)
+	}
+
+	// Every chunk must surface chat.completion.chunk and the tool_call identity
+	// must be preserved end-to-end (call_1 + read + /tmp/hi).
+	for _, must := range []string{
+		`"object":"chat.completion.chunk"`,
+		`"tool_calls"`,
+		`"id":"call_1"`,
+		`"type":"function"`,
+		`"name":"read"`,
+		`/tmp/hi`,
+		`"finish_reason":"tool_calls"`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(stream, must) {
+			t.Errorf("expected OpenAI SSE stream to contain %q, got %q", must, stream)
+		}
+	}
+}
+
+// TestUsageGatewayChatCompletionsForwardsToolsToUpstream is the
+// regression test for the case where pi (or any OpenAI SDK) sent
+// POST /v1/chat/completions with a `tools` array and the proxy
+// silently dropped every entry. The model then had no schema to
+// ground its tool_calls deltas in and resorted to emitting
+// `<bash>...</bash>` text blocks, which the OpenAI SDK does not
+// parse as a tool invocation. We capture the upstream request body
+// and assert each advertised tool's name, description, and
+// parameter schema survive the conversion.
+func TestUsageGatewayChatCompletionsForwardsToolsToUpstream(t *testing.T) {
+	var capturedBody []byte
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		// Emit a minimal OpenAI chat.completion.chunk stream so the
+		// proxy returns 200 to the client and the captured body is
+		// fully read.
+		frames := []string{
+			`data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`,
+			`data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		}
+		for _, f := range frames {
+			_, _ = io.WriteString(w, f+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "openai_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "openai-tools-forward",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Pi-shaped body: a user message + a tools array with two
+	// functions (bash and read) with full JSON Schema parameters.
+	body := `{
+		"model":"M3",
+		"stream":true,
+		"max_tokens":16,
+		"messages":[{"role":"user","content":"list the directory"}],
+		"tools":[
+			{"type":"function","function":{"name":"bash","description":"Run a shell command","parameters":{"type":"object","properties":{"command":{"type":"string","description":"The command to run"}},"required":["command"]}}},
+			{"type":"function","function":{"name":"read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}
+		]
+	}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if len(capturedBody) == 0 {
+		t.Fatal("upstream did not receive a request body")
+	}
+	var captured map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &captured); err != nil {
+		t.Fatalf("decode captured upstream body: %v\nbody: %s", err, string(capturedBody))
+	}
+	toolsRaw, _ := captured["tools"].([]interface{})
+	if len(toolsRaw) != 2 {
+		t.Fatalf("expected upstream request to carry 2 tools, got %d (%+v)", len(toolsRaw), toolsRaw)
+	}
+	// Index by name so the test is order-independent.
+	byName := map[string]map[string]interface{}{}
+	for _, raw := range toolsRaw {
+		entry, _ := raw.(map[string]interface{})
+		fn, _ := entry["function"].(map[string]interface{})
+		name, _ := fn["name"].(string)
+		byName[name] = entry
+	}
+	bash, ok := byName["bash"]
+	if !ok {
+		t.Fatalf("upstream tools missing 'bash', got keys %v", keysOf(byName))
+	}
+	if bash["type"] != "function" {
+		t.Errorf("expected bash.type=function, got %v", bash["type"])
+	}
+	bashFn, _ := bash["function"].(map[string]interface{})
+	if bashFn["description"] != "Run a shell command" {
+		t.Errorf("expected bash.description='Run a shell command', got %v", bashFn["description"])
+	}
+	bashParams, _ := bashFn["parameters"].(map[string]interface{})
+	if bashParams == nil {
+		t.Fatalf("expected bash.parameters to be present, got %v", bashFn["parameters"])
+	}
+	if bashParams["type"] != "object" {
+		t.Errorf("expected bash.parameters.type=object, got %v", bashParams["type"])
+	}
+	bashProps, _ := bashParams["properties"].(map[string]interface{})
+	if _, ok := bashProps["command"]; !ok {
+		t.Errorf("expected bash.parameters.properties.command, got %v", bashProps)
+	}
+	bashRequired, _ := bashParams["required"].([]interface{})
+	if len(bashRequired) != 1 || bashRequired[0] != "command" {
+		t.Errorf("expected bash.parameters.required=[command], got %v", bashRequired)
+	}
+	read, ok := byName["read"]
+	if !ok {
+		t.Fatalf("upstream tools missing 'read', got keys %v", keysOf(byName))
+	}
+	readFn, _ := read["function"].(map[string]interface{})
+	if readFn["description"] != "Read a file" {
+		t.Errorf("expected read.description='Read a file', got %v", readFn["description"])
+	}
+}
+
+func keysOf(m map[string]map[string]interface{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // TestAnthropicGatewayMessagesStreamsAnthropicSSE covers the regression where
@@ -725,6 +1054,363 @@ func TestAnthropicGatewayMessagesStreamsToolUseSSE(t *testing.T) {
 	}
 }
 
+// TestAnthropicGatewayMessagesStreamsToolUseMultiDeltaSSE is the
+// regression test for the multi-delta tool_use streaming case. The
+// upstream provider splits the input JSON across multiple
+// input_json_delta frames (e.g. Anthropic splits long JSON arguments
+// into many small fragments to keep each SSE frame bounded). The
+// proxy must forward only the per-chunk suffix so the downstream SDK
+// (Pi) accumulates the final JSON correctly. Resending the cumulative
+// string on every callback would make Pi see the same bytes repeated
+// and end up with concatenated garbage (e.g. `{"command":` +
+// `{"command":"ls"}` = `{"command":{"command":"ls"}`).
+func TestAnthropicGatewayMessagesStreamsToolUseMultiDeltaSSE(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-multi","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_multi","name":"bash","input":{}}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":"}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"ls -la\""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":",\"timeout\":"}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"30}"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-multi-delta",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"ls -la"}]}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	body2, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	stream := string(body2)
+
+	// Parse the SSE stream into per-event (event, data) pairs so we can
+	// assert on the exact content_block_delta frames the proxy emitted.
+	type sseFrame struct {
+		event string
+		data  map[string]interface{}
+	}
+	frames := []sseFrame{}
+	for _, block := range strings.Split(stream, "\n\n") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		var evt, data string
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				evt = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		if evt == "" || data == "" {
+			continue
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+			t.Fatalf("unmarshal SSE data for %q: %v\nraw: %s", evt, err, data)
+		}
+		frames = append(frames, sseFrame{event: evt, data: parsed})
+	}
+
+	// Collect the partial_json strings from every content_block_delta
+	// frame, in order, and assert the concatenated result is the
+	// expected final JSON. Pi's streamAnthropic (anthropic.ts:612) does
+	// the same concatenation, so this pins the wire contract.
+	var partials []string
+	for _, f := range frames {
+		if f.event != "content_block_delta" {
+			continue
+		}
+		delta, _ := f.data["delta"].(map[string]interface{})
+		if delta["type"] != "input_json_delta" {
+			continue
+		}
+		pj, _ := delta["partial_json"].(string)
+		partials = append(partials, pj)
+	}
+	// The proxy must forward exactly the four deltas the upstream
+	// emitted. If the gateway resends the cumulative string, the
+	// partials list would be longer and the concatenation would be
+	// invalid JSON.
+	wantPartials := []string{
+		`{"command":`,
+		`"ls -la"`,
+		`,"timeout":`,
+		`30}`,
+	}
+	if len(partials) != len(wantPartials) {
+		t.Fatalf("expected %d input_json_delta frames, got %d: %v", len(wantPartials), len(partials), partials)
+	}
+	for i, want := range wantPartials {
+		if partials[i] != want {
+			t.Errorf("input_json_delta[%d]: expected %q, got %q", i, want, partials[i])
+		}
+	}
+	// Concatenate the partials the way Pi does and verify the result
+	// is exactly the upstream's intended JSON. If the gateway
+	// accidentally resends the cumulative string, this would parse
+	// to garbage like `{"command":{"command":"ls -la",...}}`.
+	var assembled strings.Builder
+	for _, p := range partials {
+		assembled.WriteString(p)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(assembled.String()), &got); err != nil {
+		t.Fatalf("assembled partial_json is not valid JSON: %v\nassembled: %s", err, assembled.String())
+	}
+	if got["command"] != "ls -la" {
+		t.Errorf("expected command=ls -la, got %v", got["command"])
+	}
+	// json.Unmarshal decodes numbers as float64, so compare numerically.
+	if timeout, ok := got["timeout"].(float64); !ok || timeout != 30 {
+		t.Errorf("expected timeout=30, got %v (%T)", got["timeout"], got["timeout"])
+	}
+}
+
+// TestStreamAnthropicGatewayMessagesUsageWorks is the smoke test for the
+// third leg of the OpenAI/Anthropic protocol improvement task: it pins the
+// usage gateway smoke contract. The test mirrors the Anthropic tool-use
+// stub from TestAnthropicGatewayMessagesStreamsToolUseSSE but additionally
+// asserts that the call is recorded in the usage store with the input /
+// output token counts advertised by the provider, so the dashboard,
+// billing, and rate-limit logic can observe every gateway turn.
+func TestStreamAnthropicGatewayMessagesUsageWorks(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-usage","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_usage","name":"read","input":{}}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/tmp/usage\"}"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-usage-smoke",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"read /tmp/usage"}]}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	stream, err := readSSEDataLines(t, resp.Body)
+	if err != nil {
+		t.Fatalf("read sse: %v", err)
+	}
+
+	// Every required event: line must be present.
+	for _, evt := range []string{
+		"event: message_start",
+		"event: content_block_start",
+		"event: content_block_delta",
+		"event: content_block_stop",
+		"event: message_delta",
+		"event: message_stop",
+	} {
+		if !strings.Contains(stream, evt) {
+			t.Errorf("expected Anthropic SSE stream to contain %q line, got %q", evt, stream)
+		}
+	}
+
+	// Wait briefly for the async usage flush to land (the streaming
+	// handler dispatches RecordCall in a goroutine after the SSE
+	// trailer). Five hundred milliseconds is more than enough on the
+	// test machine; if usage recording ever takes longer we can lift
+	// this bound, but in practice it returns in microseconds.
+	deadline := time.Now().Add(2 * time.Second)
+	var calls []usage.UsageCall
+	for {
+		calls, err = usageService.GetCalls(time.Now().Format("2006-01-02"), created.Key.ID)
+		if err != nil {
+			t.Fatalf("get calls: %v", err)
+		}
+		if len(calls) >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected at least one usage call for key %s, got %+v", created.Key.ID, calls)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one usage call, got %d (%+v)", len(calls), calls)
+	}
+	got := calls[0]
+	if got.PublicModel != "M3" {
+		t.Errorf("expected public model M3, got %q", got.PublicModel)
+	}
+	if got.InputTokens != 3 {
+		t.Errorf("expected input tokens 3 from message_start, got %d", got.InputTokens)
+	}
+	if got.OutputTokens != 2 {
+		t.Errorf("expected output tokens 2 from message_delta, got %d", got.OutputTokens)
+	}
+	if got.Status != "success" {
+		t.Errorf("expected status success, got %q (error=%q)", got.Status, got.Error)
+	}
+}
+
 // payload of every `data: ...` and `event: ...` line into a single string
 // for assertions. Both lines are kept (with their original prefix) so that
 // consumers of this helper can assert on either the JSON payload or the
@@ -946,6 +1632,289 @@ func TestAnthropicToProtocolSkipsEmptyTextBlock(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAnthropicToProtocolPreservesToolResult covers the regression
+// where Pi's tool results were dropped on the way to the upstream
+// provider. The Anthropic tool_result content block carries its
+// payload in the `content` field (a string for the common case, an
+// array of content blocks for text + image / multi-block results).
+// The conversion must flatten both shapes to the string the upstream
+// provider expects; otherwise the model sees the tool as having
+// returned no output and loops on the tool call.
+func TestAnthropicToProtocolPreservesToolResult(t *testing.T) {
+	cases := []struct {
+		name string
+		req  anthropicMessageRequest
+		want string
+	}{
+		{
+			name: "string content is preserved verbatim",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role: "user",
+					Content: []anthropicContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "toolu_1",
+						Content:   "Sun Jun  7 10:48:52 CST 2026",
+					}},
+				}},
+			},
+			want: "Sun Jun  7 10:48:52 CST 2026",
+		},
+		{
+			name: "single-element text array is collapsed to its text",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role: "user",
+					Content: []anthropicContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "toolu_1",
+						Content: []interface{}{
+							map[string]interface{}{"type": "text", "text": "hello world"},
+						},
+					}},
+				}},
+			},
+			want: "hello world",
+		},
+		{
+			name: "multi-text array is collapsed with newlines between blocks",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role: "user",
+					Content: []anthropicContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "toolu_1",
+						Content: []interface{}{
+							map[string]interface{}{"type": "text", "text": "line one"},
+							map[string]interface{}{"type": "text", "text": "line two"},
+						},
+					}},
+				}},
+			},
+			want: "line one\nline two",
+		},
+		{
+			name: "array with non-text blocks drops the non-text blocks",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role: "user",
+					Content: []anthropicContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "toolu_1",
+						Content: []interface{}{
+							map[string]interface{}{"type": "text", "text": "kept"},
+							map[string]interface{}{"type": "image", "source": map[string]interface{}{"type": "base64", "media_type": "image/png", "data": "AAAA"}},
+							map[string]interface{}{"type": "text", "text": "kept too"},
+						},
+					}},
+				}},
+			},
+			want: "kept\nkept too",
+		},
+		{
+			name: "empty / missing content resolves to empty string",
+			req: anthropicMessageRequest{
+				Model:     "M3",
+				MaxTokens: 10,
+				Messages: []anthropicMessage{{
+					Role: "user",
+					Content: []anthropicContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "toolu_1",
+						// no Content field
+					}},
+				}},
+			},
+			want: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := anthropicToProtocolRequest(c.req, "M3")
+			if err != nil {
+				t.Fatalf("anthropicToProtocolRequest: %v", err)
+			}
+			if len(got.Messages) != 1 {
+				t.Fatalf("want 1 message, got %d", len(got.Messages))
+			}
+			if len(got.Messages[0].Content) != 1 {
+				t.Fatalf("want 1 content block, got %d", len(got.Messages[0].Content))
+			}
+			block := got.Messages[0].Content[0]
+			if block.Type != protocol.BlockToolResult {
+				t.Fatalf("want block type %q, got %q", protocol.BlockToolResult, block.Type)
+			}
+			if block.ToolUseID != "toolu_1" {
+				t.Errorf("want tool_use_id=toolu_1, got %q", block.ToolUseID)
+			}
+			if block.Content != c.want {
+				t.Errorf("want content %q, got %q", c.want, block.Content)
+			}
+		})
+	}
+}
+
+// TestAnthropicGatewayForwardsToolResultToUpstream is the end-to-end
+// regression for the case where Pi's tool results disappeared before
+// reaching the upstream provider. We stub the upstream with an
+// httptest server that captures the POST body and replies with a
+// trivial text SSE, then assert the captured Anthropic-shape request
+// carries the tool_result content string in full. Without the fix,
+// the captured content would be empty and the model would loop on
+// the tool call (the user-reported symptom: "bash 工具似乎不返回输出").
+func TestAnthropicGatewayForwardsToolResultToUpstream(t *testing.T) {
+	var capturedBody []byte
+	var capturedContentType string
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		capturedContentType = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		frames := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-1","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, f := range frames {
+			_, _ = io.WriteString(w, f+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-tool-result-forward",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Pi sends a multi-turn request: previous assistant tool_use, then
+	// a user message carrying the tool_result with the actual command
+	// output. We mirror Pi's body shape verbatim so the conversion
+	// path is exercised end-to-end.
+	body := `{
+		"model":"M3",
+		"stream":true,
+		"max_tokens":16,
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"run date"}]},
+			{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"bash","input":{"command":"date"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"Sun Jun  7 10:48:52 CST 2026"}]}
+		]
+	}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	// Drain the response so the handler completes and the upstream
+	// request body is fully captured.
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if !strings.HasPrefix(capturedContentType, "application/json") {
+		t.Errorf("expected upstream request Content-Type application/json, got %q", capturedContentType)
+	}
+	var captured map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &captured); err != nil {
+		t.Fatalf("decode captured upstream body: %v\nbody: %s", err, string(capturedBody))
+	}
+	msgs, _ := captured["messages"].([]interface{})
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages in upstream request, got %d (%+v)", len(msgs), msgs)
+	}
+	// The third message is the user turn that carries the tool_result.
+	userMsg, _ := msgs[2].(map[string]interface{})
+	content, _ := userMsg["content"].([]interface{})
+	if len(content) != 1 {
+		t.Fatalf("expected 1 content block in tool_result message, got %d (%+v)", len(content), content)
+	}
+	tr, _ := content[0].(map[string]interface{})
+	if tr["type"] != "tool_result" {
+		t.Fatalf("expected block type=tool_result, got %v", tr)
+	}
+	if tr["tool_use_id"] != "toolu_1" {
+		t.Errorf("expected tool_use_id=toolu_1, got %v", tr["tool_use_id"])
+	}
+	gotContent, _ := tr["content"].(string)
+	if gotContent != "Sun Jun  7 10:48:52 CST 2026" {
+		t.Errorf("expected tool_result content %q, got %q", "Sun Jun  7 10:48:52 CST 2026", gotContent)
 	}
 }
 

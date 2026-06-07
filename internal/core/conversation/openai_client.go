@@ -567,7 +567,13 @@ func openAIToolCallToBlock(call openAIToolCall) protocol.Block {
 	if strings.TrimSpace(call.Function.Arguments) != "" {
 		_ = json.Unmarshal([]byte(call.Function.Arguments), &input)
 	}
-	return protocol.ToolUseBlock(call.ID, call.Function.Name, input)
+	block := protocol.ToolUseBlock(call.ID, call.Function.Name, input)
+	// Forward the OpenAI tool_calls[].index so the gateway can emit
+	// the same index on the wire and the OpenAI SDK's per-chunk
+	// dedup (which keys on index) works for multiple tool calls in
+	// a single assistant turn. Anthropic callers ignore this field.
+	block.Index = call.Index
+	return block
 }
 
 func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Response, error) {
@@ -626,6 +632,20 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 			}
 			if deltaCall.Function.Arguments != "" {
 				call.Function.Arguments += deltaCall.Function.Arguments
+			}
+			// Notify the StreamHandler that a tool_call delta arrived so the
+			// OpenAI usage-gateway (routes_usage.go streamUsageGatewayChatCompletions)
+			// can forward the delta.tool_calls chunk to the wire. OpenAI SDKs and
+			// Codex-style clients depend on these deltas to assemble JSON arguments
+			// in their tool loops. We pass deltaCall.Function.Arguments (the new
+			// fragment that just arrived in this SSE frame) rather than
+			// call.Function.Arguments (the cumulative string we accumulate
+			// locally). OpenAI SDKs concatenate arguments across chunks, so
+			// sending the cumulative string on every chunk would corrupt the
+			// final JSON. Mirror of parseMessageStream's OnToolUse hook for the
+			// Anthropic path (see internal/core/conversation/client.go).
+			if handler.OnToolUse != nil {
+				handler.OnToolUse(openAIToolCallToBlock(*call), deltaCall.Function.Arguments)
 			}
 		}
 	}

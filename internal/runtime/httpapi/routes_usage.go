@@ -345,7 +345,33 @@ func usageGatewayProtocolRequest(req openAIChatCompletionRequest) (protocol.Requ
 	if len(messages) == 0 {
 		return protocol.Request{}, fmt.Errorf("at least one non-empty user or assistant message is required")
 	}
-	return protocol.Request{MaxTokens: req.MaxTokens, System: strings.Join(systemParts, "\n\n"), Messages: messages}, nil
+	// Forward the OpenAI tools catalog to the upstream LLM. Without
+	// this, the model has no schema to ground its tool_calls deltas
+	// in, so it falls back to emitting the call as a literal
+	// `<bash>...</bash>` block in the content stream. The OpenAI
+	// SDK does not parse that as a tool call, so the client tool
+	// loop never runs. The LLM client (OpenAIClient) translates
+	// each protocol.ToolSchema into the wire shape
+	// {type:"function", function:{name, description, parameters,
+	// strict}} before sending to the upstream.
+	tools := make([]protocol.ToolSchema, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		name := strings.TrimSpace(tool.Function.Name)
+		if name == "" {
+			continue
+		}
+		tools = append(tools, protocol.ToolSchema{
+			Name:        name,
+			Description: tool.Function.Description,
+			InputSchema: tool.Function.Parameters,
+		})
+	}
+	return protocol.Request{
+		MaxTokens: req.MaxTokens,
+		System:    strings.Join(systemParts, "\n\n"),
+		Messages:  messages,
+		Tools:     tools,
+	}, nil
 }
 
 func usageGatewaySuccessCall(start time.Time, keyID, publicModel string, modelMapping *usage.ProxyModel, req protocol.Request, resp *protocol.Response) *usage.UsageCall {
@@ -503,12 +529,40 @@ func streamUsageGatewayChatCompletions(
 	// First chunk announces the assistant role (OpenAI streaming convention).
 	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{Role: "assistant"}, "")
 
+	// toolCallsSeen flips to true the moment the provider forwards an
+	// OnToolUse callback. We use it to set the OpenAI finish_reason to
+	// "tool_calls" instead of "stop" on the terminal chunk — the SDKs
+	// dedupe tool calls by id+function.name across the streaming chunks,
+	// but they still expect the wire frame to declare finish_reason.
+	toolCallsSeen := false
+
 	resp, err := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
 		OnTextDelta: func(delta string) {
 			if delta == "" {
 				return
 			}
 			emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{Content: delta}, "")
+		},
+		OnToolUse: func(block protocol.Block, partialJSON string) {
+			toolCallsSeen = true
+			// Forward OpenAI chat.completion.chunk tool_calls deltas verbatim
+			// to the client. The provider may stream the same tool_use across
+			// multiple frames (start, args, finish), so we emit a chunk per
+			// OnToolUse callback. Clients dedupe tool calls by index+id+name
+			// across chunks, so we forward the upstream's tool_calls[].index
+			// rather than hardcoding 0 — otherwise multiple parallel tool
+			// calls in the same turn would all share index 0 and overwrite
+			// each other in the SDK's accumulator.
+			calls := []openAIToolCallWire{{
+				Index: block.Index,
+				ID:    block.ID,
+				Type:  "function",
+				Function: openAIFunctionCall{
+					Name:      block.Name,
+					Arguments: partialJSON,
+				},
+			}}
+			emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{ToolCalls: calls}, "")
 		},
 	})
 	if err != nil {
@@ -517,8 +571,18 @@ func streamUsageGatewayChatCompletions(
 		return
 	}
 
-	// Final chunk with finish_reason=stop and the data: [DONE] sentinel.
-	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{}, firstNonEmptyString(respStopReason(resp), "stop"))
+	// Final chunk with finish_reason and the data: [DONE] sentinel. The
+	// provider may surface stop_reason="tool_use" (Anthropic) or
+	// "tool_calls" (OpenAI); both must be translated to the OpenAI SDK's
+	// canonical "tool_calls" finish reason. We also fall back to
+	// "tool_calls" when OnToolUse fired during the stream, even if the
+	// provider never sent an explicit stop_reason (some streaming proxies
+	// drop the terminal frame).
+	finishReason := firstNonEmptyString(respStopReason(resp), "stop")
+	if finishReason == "tool_use" || toolCallsSeen {
+		finishReason = "tool_calls"
+	}
+	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{}, finishReason)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
@@ -720,7 +784,7 @@ func anthropicToProtocolRequest(req anthropicMessageRequest, model string) (prot
 				protoMsg.Content = append(protoMsg.Content, protocol.Block{
 					Type:      protocol.BlockToolResult,
 					ToolUseID: block.ToolUseID,
-					Content:   block.Text, // Anthropic uses 'content' field for tool result
+					Content:   collapseAnthropicToolResultContent(block.Content),
 				})
 			}
 		}
@@ -936,9 +1000,19 @@ func streamAnthropicGatewayMessages(
 			// input_json_delta fragment, then content_block_stop on the
 			// final callback. The three phases share a per-block "started"
 			// flag so we don't repeat the start event on every delta.
-			// We also track lastToolPartialJSON so the trailing
-			// content_block_stop callback (which re-delivers the full
-			// accumulated partialJSON) doesn't double-emit a delta.
+			//
+			// We must forward only the *delta* suffix of partialJSON, not
+			// the cumulative string. parseMessageStream calls OnToolUse
+			// with the accumulated partialJSON built up across every
+			// upstream input_json_delta frame, but Pi's streamAnthropic
+			// (anthropic.ts:612) calls parseStreamingJson on the
+			// concatenated partial_json — so resending the cumulative
+			// string on every callback would make Pi see the same bytes
+			// repeated and end up with concatenated garbage (e.g.,
+			// `{"command":` + `{"command":"ls"}` = `{"command":{"command":"ls"}`).
+			// We track lastToolPartialJSON to compute the suffix and to
+			// suppress the trailing content_block_stop callback (which
+			// re-delivers the full accumulated partialJSON).
 			toolBlockIndex := textBlockIndex
 			if block.Type != protocol.BlockToolUse {
 				return
@@ -954,8 +1028,8 @@ func streamAnthropicGatewayMessages(
 					"index":         toolBlockIndex,
 					"content_block": map[string]interface{}{"type": "tool_use", "id": block.ID, "name": block.Name, "input": inputMap},
 				})
-				if fragment := strings.TrimSpace(partialJSON); fragment != "" && fragment != lastToolPartialJSON {
-					lastToolPartialJSON = fragment
+				if fragment := toolJSONDeltaSuffix("", partialJSON); fragment != "" {
+					lastToolPartialJSON = partialJSON
 					flushSSE("content_block_delta", map[string]interface{}{
 						"type":  "content_block_delta",
 						"index": toolBlockIndex,
@@ -967,14 +1041,14 @@ func streamAnthropicGatewayMessages(
 				}
 				return
 			}
-			if partialJSON != lastToolPartialJSON {
+			if fragment := toolJSONDeltaSuffix(lastToolPartialJSON, partialJSON); fragment != "" {
 				lastToolPartialJSON = partialJSON
 				flushSSE("content_block_delta", map[string]interface{}{
 					"type":  "content_block_delta",
 					"index": toolBlockIndex,
 					"delta": map[string]interface{}{
 						"type":         "input_json_delta",
-						"partial_json": partialJSON,
+						"partial_json": fragment,
 					},
 				})
 			}
@@ -1064,4 +1138,66 @@ func writeAnthropicError(w http.ResponseWriter, status int, errType, message str
 		},
 	}
 	json.NewEncoder(w).Encode(errorResp)
+}
+
+// collapseAnthropicToolResultContent flattens an Anthropic tool_result
+// `content` field to a string for the upstream provider. The Anthropic
+// spec lets `content` be either a string (the common case) or an array
+// of content blocks (text + image, etc.). The upstream
+// anthropic_compatible client only accepts a string, so for the array
+// form we concatenate the text blocks (and drop image / non-text
+// blocks — the upstream does not surface them in tool results
+// regardless). Returns "" for missing or unrecognized content.
+func collapseAnthropicToolResultContent(raw interface{}) string {
+	switch v := raw.(type) {
+	case string:
+		return v
+	case []interface{}:
+		var parts []string
+		for _, item := range v {
+			block, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			switch strings.TrimSpace(fmt.Sprint(block["type"])) {
+			case "text":
+				if text := strings.TrimSpace(fmt.Sprint(block["text"])); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
+}
+
+// toolJSONDeltaSuffix returns the per-chunk partial_json fragment that
+// must be forwarded to a downstream Anthropic SDK so the SDK's
+// per-chunk concatenation recovers `next`. The semantics are:
+//
+//   - prev is empty: returns next (first emission).
+//   - next is empty: returns "" (no new content; caller should skip).
+//   - next is a strict extension of prev: returns the new suffix.
+//   - next shrank or changed shape relative to prev: returns next
+//     (best-effort resync; the SDK's accumulated args may become
+//     invalid, but this is the only way to surface a mid-stream
+//     shape change).
+//
+// Pi's streamAnthropic (anthropic.ts:612) calls parseStreamingJson on
+// the concatenated partial_json, so resending the cumulative string
+// on every callback would corrupt the JSON. The upstream
+// parseMessageStream passes the CUMULATIVE partialJSON to OnToolUse;
+// this helper translates it to the per-chunk suffix the wire expects.
+func toolJSONDeltaSuffix(prev, next string) string {
+	if next == "" {
+		return ""
+	}
+	if prev == "" {
+		return next
+	}
+	if strings.HasPrefix(next, prev) {
+		return next[len(prev):]
+	}
+	return next
 }

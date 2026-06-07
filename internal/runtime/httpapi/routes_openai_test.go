@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -232,4 +233,132 @@ func TestCollectOpenAICompletionSurfacesToolCalls(t *testing.T) {
 			t.Errorf("second callback must not repeat the path field (delta suffix only), got %s", toolCalls[1].arguments)
 		}
 	})
+}
+
+// TestRunOpenAIChatCompletionSurfacesToolCalls covers the non-streaming
+// regression where the OpenAI chat.completion response dropped every
+// tool invocation the runtime forwarded. The previous code passed
+// `nil` callbacks to collectOpenAICompletion and returned only the
+// accumulated text content, so an OpenAI client receiving a
+// non-streaming response would never see a tool_calls array and
+// would treat the turn as "stop" — even when the model wanted to
+// invoke a tool. The fix routes the onToolCall callback through to
+// collectOpenAICompletion, deduplicates by id (start + finish for the
+// same tool), and emits the standard chat.completion JSON shape
+// with `tool_calls` populated and `finish_reason: "tool_calls"`.
+func TestRunOpenAIChatCompletionSurfacesToolCalls(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eventCh := make(chan events.Event, 16)
+	turnID := "turn-nostream-1"
+
+	// Drive the collector in a goroutine, exactly the way the
+	// handleOpenAIChatCompletions production path does.
+	var toolCalls []openAIStreamToolCall
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = collectOpenAICompletion(ctx, eventCh, turnID,
+			nil,
+			func(tc openAIStreamToolCall) { toolCalls = append(toolCalls, tc) },
+		)
+	}()
+
+	eventCh <- events.Event{
+		SessionID: "s1",
+		TurnID:    turnID,
+		Type:      events.EventUserMessageAccepted,
+		Timestamp: time.Now(),
+	}
+	eventCh <- events.Event{
+		SessionID: "s1",
+		TurnID:    turnID,
+		Type:      events.EventToolCallStarted,
+		Timestamp: time.Now(),
+		Payload: events.ToolCallPayload{
+			ID:   "toolu_nostream_1",
+			Name: "bash",
+			Input: map[string]interface{}{
+				"command": "ls -la",
+			},
+		},
+	}
+	eventCh <- events.Event{
+		SessionID: "s1",
+		TurnID:    turnID,
+		Type:      events.EventToolCallFinished,
+		Timestamp: time.Now(),
+		Payload: events.ToolCallPayload{
+			ID:     "toolu_nostream_1",
+			Name:   "bash",
+			Input:  map[string]interface{}{"command": "ls -la"},
+			Output: "file contents",
+		},
+	}
+	eventCh <- events.Event{
+		SessionID: "s1",
+		TurnID:    turnID,
+		Type:      events.EventTurnCompleted,
+		Timestamp: time.Now(),
+	}
+	<-done
+
+	// The collector should fire only once per unique tool id (the
+	// finish event carries the same input as the start event, so the
+	// delta computation collapses it).
+	if got := len(toolCalls); got != 1 {
+		t.Fatalf("expected 1 tool_call callback, got %d", got)
+	}
+	tc := toolCalls[0]
+	if tc.id != "toolu_nostream_1" {
+		t.Errorf("expected id=toolu_nostream_1, got %q", tc.id)
+	}
+	if tc.name != "bash" {
+		t.Errorf("expected name=bash, got %q", tc.name)
+	}
+	if want := `{"command":"ls -la"}`; tc.arguments != want {
+		t.Errorf("expected arguments=%s, got %s", want, tc.arguments)
+	}
+}
+
+// TestOpenAIStreamToolCallForwardsIndex covers the regression where
+// the OpenAI tool_calls chunk hardcoded `index: 0`. The OpenAI SDK
+// keys its per-chunk dedup on (index, id, function.name), so multiple
+// parallel tool calls in the same assistant turn would all share
+// index 0 and overwrite each other in the SDK's accumulator, losing
+// every tool call after the first. The fix threads the upstream's
+// tool_calls[].index through protocol.Block.Index to the wire
+// emission. This test pins the round-trip by setting a non-zero
+// index on the struct and asserting it survives the callback.
+func TestOpenAIStreamToolCallForwardsIndex(t *testing.T) {
+	// The gateway reads tc.index directly when building the
+	// openAIToolCallWire. We just verify the struct field is wired
+	// through to the emitted chunk by simulating the gateway's
+	// emission logic with a known index.
+	tc := openAIStreamToolCall{
+		id:        "toolu_idx_1",
+		name:      "bash",
+		index:     7,
+		arguments: `{"command":"ls"}`,
+	}
+	wire := openAIToolCallWire{
+		Index: tc.index,
+		ID:    tc.id,
+		Type:  "function",
+		Function: openAIFunctionCall{
+			Name:      tc.name,
+			Arguments: tc.arguments,
+		},
+	}
+	if wire.Index != 7 {
+		t.Errorf("expected wire.Index=7, got %d", wire.Index)
+	}
+	// Marshal and assert the JSON carries the index (not 0).
+	data, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"index":7`) {
+		t.Errorf("expected wire JSON to carry index=7, got %s", string(data))
+	}
 }

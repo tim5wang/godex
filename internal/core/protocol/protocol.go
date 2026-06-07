@@ -76,6 +76,16 @@ type Block struct {
 	Input     map[string]interface{} `json:"input,omitempty"`
 	ToolUseID string                 `json:"tool_use_id,omitempty"`
 	Content   string                 `json:"content,omitempty"`
+	// Index is the wire-level ordering hint for protocols that
+	// distinguish multiple tool calls in a single assistant turn
+	// (e.g. OpenAI's chat.completion.chunk tool_calls[].index, which
+	// the OpenAI SDK uses to dedupe chunks across a stream). It is
+	// not used by Anthropic (which uses content_block index instead)
+	// and is left at zero for upstream responses that don't surface
+	// it. The field is intentionally not part of the canonical
+	// protocol — it is a passthrough so the gateway can forward the
+	// upstream's index to the wire without losing it.
+	Index int `json:"-"`
 }
 
 type Message struct {

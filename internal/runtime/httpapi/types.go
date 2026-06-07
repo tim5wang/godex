@@ -28,7 +28,41 @@ type openAIChatCompletionRequest struct {
 	Messages  []openAIChatMessage    `json:"messages"`
 	Stream    bool                   `json:"stream,omitempty"`
 	MaxTokens int                    `json:"max_tokens,omitempty"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	// Tools is the OpenAI Chat Completions `tools` array. The
+	// upstream LLM client (internal/core/conversation/openai_client.go)
+	// converts each entry to the wire shape {type:"function",
+	// function:{name, description, parameters, strict}} and the
+	// model uses them to decide when to emit a tool_calls delta.
+	//
+	// This field was previously absent from the struct, so the
+	// OpenAI usage-gateway path silently dropped every tool the
+	// caller advertised — the model would never see the bash /
+	// read / write_file schemas and would resort to generating
+	// text-based "fake" tool calls like `<bash>...` that the
+	// OpenAI SDK does not parse as a tool invocation. The fix
+	// restores the field and routes it through to the LLM client
+	// via usageGatewayProtocolRequest.
+	Tools    []openAIToolWire       `json:"tools,omitempty"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// openAIToolWire is the OpenAI Chat Completions `tools[]` entry.
+// The shape mirrors what pi (and other OpenAI SDKs) send on the
+// wire so the JSON decoder can capture the caller's tool catalog
+// verbatim.
+type openAIToolWire struct {
+	Type     string             `json:"type"`
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Parameters  map[string]interface{} `json:"parameters,omitempty"`
+	// Strict is the OpenAI "strict mode" flag the client adds to
+	// function definitions. We pass it through to the upstream
+	// without interpretation.
+	Strict *bool `json:"strict,omitempty"`
 }
 
 // Anthropic Messages API types
@@ -60,11 +94,17 @@ type anthropicContentBlock struct {
 	// Image block
 	Source *anthropicImageSource `json:"source,omitempty"`
 	// Tool use block
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	ID    string                 `json:"id,omitempty"`
+	Name  string                 `json:"name,omitempty"`
 	Input map[string]interface{} `json:"input,omitempty"`
-	// Tool result block
-	ToolUseID string `json:"tool_use_id,omitempty"`
+	// Tool result block. The Anthropic spec lets `content` be either a
+	// string (simple text output) or an array of content blocks (text
+	// + image, etc.). We capture it as interface{} and collapse to a
+	// string at conversion time so the upstream provider (which only
+	// accepts a string) sees the tool output verbatim.
+	ToolUseID string      `json:"tool_use_id,omitempty"`
+	Content   interface{} `json:"content,omitempty"`
+	IsError   bool        `json:"is_error,omitempty"`
 }
 
 type anthropicImageSource struct {
@@ -106,8 +146,37 @@ type anthropicUsage struct {
 }
 
 type openAIChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role    string `json:"role"`
+	// Content is the assistant's text delta for this chunk. We use
+	// interface{} + omitempty so the JSON encoder can emit either a
+	// string (text deltas) or omit the field entirely (role
+	// announcement, tool_calls deltas). The OpenAI wire format
+	// expects `content` to be absent on the role announcement chunk
+	// and on tool_calls chunks; emitting `content: null` instead
+	// confuses some SDKs (notably the strict-mode parsers in the
+	// Codex CLI), which then leave the assistant's content block
+	// empty even when subsequent text deltas arrive.
+	Content interface{} `json:"content,omitempty"`
+	// ToolCalls carries an OpenAI streaming tool_calls delta emitted
+	// by streamUsageGatewayChatCompletions when the provider forwards
+	// a tool_call_delta frame. The OpenAI SDK uses the per-chunk
+	// `index` to dedupe tool calls across the stream, so we forward
+	// the upstream's index verbatim rather than hardcoding 0 —
+	// otherwise multiple tool calls in the same turn would all share
+	// index 0 and overwrite each other in the SDK's accumulator.
+	ToolCalls []openAIToolCallWire `json:"tool_calls,omitempty"`
+}
+
+type openAIToolCallWire struct {
+	Index    int                `json:"index"`
+	ID       string             `json:"id,omitempty"`
+	Type     string             `json:"type,omitempty"`
+	Function openAIFunctionCall `json:"function"`
+}
+
+type openAIFunctionCall struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type openAIChatCompletionResponse struct {

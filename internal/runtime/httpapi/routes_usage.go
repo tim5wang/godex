@@ -125,6 +125,14 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		query := usage.CacheStatsQuery{
 			RangeType: r.URL.Query().Get("range"),
 			Model:     r.URL.Query().Get("model"),
+			// The web-token admin path can request another
+			// tenant's cache stats by passing api_key_id
+			// explicitly. The proxy-key path (see
+			// /v1/usage/cache-stats below) ignores this and
+			// always pins the query to the authenticated
+			// key, so a proxy key user can't escalate to
+			// the all-tenants view.
+			APIKeyID: r.URL.Query().Get("api_key_id"),
 		}
 		if query.RangeType == "" {
 			query.RangeType = "day"
@@ -136,6 +144,53 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 		}
 		writeJSON(w, http.StatusOK, stats)
 	})))
+
+	// /v1/usage/cache-stats is the proxy-key-facing variant
+	// of the admin /usage/cache-stats endpoint. It accepts
+	// the same gdx_ auth shape the other /v1/ routes do, and
+	// always pins the query to the authenticated key so a
+	// proxy key holder can never see another tenant's cache
+	// stats. We expose it under the same /v1/ namespace so
+	// an external Anthropic-SDK-style client that wants to
+	// observe its own cache performance doesn't need to know
+	// the godex admin route. The response shape mirrors the
+	// admin endpoint so a single dashboard widget can render
+	// both.
+	mux.Handle("GET /v1/usage/cache-stats", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Authenticate the proxy key from the standard
+		// Authorization: Bearer gdx_xxx or x-api-key header.
+		// extractProxyKeySecret is shared with the other
+		// /v1/ routes so the auth contract is uniform.
+		secret := extractProxyKeySecret(r)
+		if secret == "" || !strings.HasPrefix(secret, usage.KeyPrefix) {
+			writeError(w, http.StatusUnauthorized, fmt.Errorf("Invalid API Key. Please provide a valid proxy key with gdx_ prefix."))
+			return
+		}
+		key, err := usageService.AuthenticateKey(secret)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, fmt.Errorf("Invalid API Key."))
+			return
+		}
+		// Pin to the authenticated key. We deliberately
+		// ignore any api_key_id the caller may have
+		// passed in the query string; otherwise a proxy
+		// key holder could enumerate other tenants by
+		// guessing their key IDs.
+		query := usage.CacheStatsQuery{
+			RangeType: r.URL.Query().Get("range"),
+			Model:     r.URL.Query().Get("model"),
+			APIKeyID:  key.ID,
+		}
+		if query.RangeType == "" {
+			query.RangeType = "day"
+		}
+		stats, err := usageService.GetCacheStats(query)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
+	}))
 
 	// ---- Time-series (trend charts) ----
 	mux.Handle("GET /usage/time-series", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

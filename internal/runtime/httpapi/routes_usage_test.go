@@ -2633,3 +2633,147 @@ func TestProtocolToAnthropicResponseThinkingBlocks(t *testing.T) {
 		}
 	})
 }
+
+// TestUsageV1CacheStatsPinsToAuthenticatedKey is the regression
+// test for the case where a proxy key holder calls
+// /v1/usage/cache-stats. The endpoint must accept the standard
+// gdx_ auth shape AND pin the query to the authenticated key
+// regardless of any api_key_id the caller passes in the query
+// string, so a proxy key user can never see another tenant's
+// cache stats by guessing their key IDs.
+func TestUsageV1CacheStatsPinsToAuthenticatedKey(t *testing.T) {
+	handler, usageService := mustUsageHandler(t)
+	keyA, err := usageService.CreateKey(usage.KeyCreateRequest{Name: "v1-cache-A", BudgetCredits: 100})
+	if err != nil {
+		t.Fatalf("create key A: %v", err)
+	}
+	keyB, err := usageService.CreateKey(usage.KeyCreateRequest{Name: "v1-cache-B", BudgetCredits: 100})
+	if err != nil {
+		t.Fatalf("create key B: %v", err)
+	}
+	// Seed two calls: one per key. The /v1/ endpoint must
+	// surface only the row matching the authenticated key.
+	if err := usageService.RecordCall(&usage.UsageCall{
+		APIKeyID: keyA.Key.ID, PublicModel: "m", TargetModel: "m",
+		InputTokens: 100, CacheReadTokens: 80, Status: "success",
+	}); err != nil {
+		t.Fatalf("record A: %v", err)
+	}
+	if err := usageService.RecordCall(&usage.UsageCall{
+		APIKeyID: keyB.Key.ID, PublicModel: "m", TargetModel: "m",
+		InputTokens: 100, CacheReadTokens: 0, Status: "success",
+	}); err != nil {
+		t.Fatalf("record B: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Call as key A, but try to set api_key_id=keyB.Key.ID
+	// in the query. The endpoint must IGNORE the override
+	// and pin to key A.
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/usage/cache-stats?range=all&api_key_id="+keyB.Key.ID, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", keyA.Secret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody := readAll(t, resp)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+	var stats []usage.CacheStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected exactly 1 row (key A only), got %d: %+v", len(stats), stats)
+	}
+	if stats[0].CacheReadTokens != 80 {
+		t.Errorf("expected key A cache_read=80, got %d (key B's 0 leaked through!)", stats[0].CacheReadTokens)
+	}
+	if stats[0].HitRate != 100.0 {
+		t.Errorf("expected key A HitRate=100, got %.2f", stats[0].HitRate)
+	}
+}
+
+// TestUsageV1CacheStatsRejectsMissingAuth pins the auth
+// contract: a request to /v1/usage/cache-stats without a
+// gdx_ token must 401, even if api_key_id is supplied. The
+// previous behaviour (the endpoint didn't exist) would have
+// 404'd, which is also a failure but a less informative one.
+func TestUsageV1CacheStatsRejectsMissingAuth(t *testing.T) {
+	handler, _ := mustUsageHandler(t)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/usage/cache-stats", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d", resp.StatusCode)
+	}
+}
+
+// TestUsageCacheStatsAllRange covers the lifetime
+// aggregate path. The dashboard uses range=all to render
+// the "since you started using the gateway" tile; the
+// endpoint must accept the value and return a single row
+// per target model.
+func TestUsageCacheStatsAllRange(t *testing.T) {
+	handler, usageService := mustUsageHandler(t)
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{Name: "all-range", BudgetCredits: 100})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	if err := usageService.RecordCall(&usage.UsageCall{
+		APIKeyID:        created.Key.ID,
+		PublicModel:     "M3",
+		TargetModel:     "m3",
+		InputTokens:     100,
+		CacheReadTokens: 50,
+		Status:          "success",
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/usage/cache-stats?range=all", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testWebToken(t))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody := readAll(t, resp)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+	var stats []usage.CacheStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 lifetime row, got %d: %+v", len(stats), stats)
+	}
+	if stats[0].Period != "" {
+		t.Errorf("expected empty Period for range=all, got %q", stats[0].Period)
+	}
+	if stats[0].HitRate != 100.0 {
+		t.Errorf("expected HitRate=100, got %.2f", stats[0].HitRate)
+	}
+	if stats[0].CacheEfficiency <= 0 {
+		t.Errorf("expected positive CacheEfficiency, got %.2f", stats[0].CacheEfficiency)
+	}
+}

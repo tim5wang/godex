@@ -112,23 +112,83 @@ type ModelUpdateRequest struct {
 }
 
 // CacheStats aggregates cache performance by model and time period.
+//
+// The previous version only surfaced a single `HitRate` field that
+// was actually the token-level cache efficiency (cache_read / (input
+// + cache_read) * 100), not a true call-level hit rate. This
+// revision separates the two so the dashboard can show the
+// percentage of requests that benefited from caching as well as the
+// percentage of input context that came from cache. Without this
+// split the operator can't tell whether a low HitRate means "few
+// requests qualify for caching" (low call-level hit) or "caching
+// saves only a small slice of context" (low token-level
+// efficiency), and the two failure modes need different fixes.
 type CacheStats struct {
-	Period         string  `json:"period"`
-	Model          string  `json:"model"`
-	TotalCalls     int     `json:"total_calls"`
-	InputTokens    int64   `json:"input_tokens"`
-	CacheReadTokens int64  `json:"cache_read_tokens"`
+	Period           string  `json:"period"`
+	Model            string  `json:"model"`
+
+	// Call counts. A call is considered a "cache hit" when it
+	// surfaces at least one cached token; otherwise it's a miss.
+	// Partial hits (e.g. the system prompt was cached but the
+	// user's new message wasn't) still count as hits because
+	// any cache reuse is meaningful.
+	TotalCalls     int `json:"total_calls"`
+	CacheHitCalls  int `json:"cache_hit_calls"`
+	CacheMissCalls int `json:"cache_miss_calls"`
+
+	// Token-level aggregates.
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	CacheReadTokens int64 `json:"cache_read_tokens"`
 	CacheWriteTokens int64 `json:"cache_write_tokens"`
-	// HitRate is the percentage of input tokens served from cache.
-	// HitRate = cache_read_tokens / (input_tokens + cache_read_tokens) * 100
+
+	// HitRate is the call-level cache hit rate:
+	//   cache_hit_calls / total_calls * 100
+	// This is the metric operators usually want when they ask
+	// "what fraction of requests benefit from the cache?". It is
+	// rounded to two decimal places so the JSON stays compact.
 	HitRate float64 `json:"hit_rate"`
+
+	// CacheEfficiency is the token-level cache efficiency:
+	//   cache_read_tokens / (input_tokens + cache_read_tokens) * 100
+	// It measures "what fraction of the input context came from
+	// cache" — the metric that drives the cost-saving story
+	// because cached tokens are billed at a steep discount by
+	// every provider that supports prompt caching.
+	CacheEfficiency float64 `json:"cache_efficiency"`
+
+	// TokensSaved is the wall-clock-equivalent of cache_read
+	// tokens. We expose it as a separate field so the dashboard
+	// can render "X tokens saved" without recomputing the
+	// calculation in the frontend.
 	TokensSaved int64 `json:"tokens_saved"`
+
+	// EstimatedSavingsCredits is the credit reduction the cache
+	// delivered, computed against the gateway's own 4x cache-read
+	// discount (cache_read_tokens count as 0.25x billable in
+	// RecordCall). The field lets the operator answer "how much
+	// credit did caching save me this period?" without
+	// reconstructing the math from raw counts.
+	EstimatedSavingsCredits float64 `json:"estimated_savings_credits"`
 }
 
 // CacheStatsQuery groups the filtering parameters for GetCacheStats.
 type CacheStatsQuery struct {
-	RangeType string `json:"range_type"` // "day", "week", "month", "all"
-	Model     string `json:"model"`      // filter by model name (optional)
+	// RangeType is "day", "week", "month", or "all". "all"
+	// returns the lifetime aggregate with no time filter; the
+	// Period field on each CacheStats row is then the empty
+	// string (the SQL groups by no period column).
+	RangeType string `json:"range_type"`
+	// Model filters by the upstream target model name. Empty
+	// means no filter.
+	Model string `json:"model"`
+	// APIKeyID filters by the proxy key that originated the
+	// call. The web-token admin path can leave this empty to
+	// see the global view; a proxy key calling its own
+	// /usage/cache-stats endpoint must have the gateway fill
+	// this in from the authenticated key to avoid leaking
+	// cross-tenant cache stats.
+	APIKeyID string `json:"api_key_id"`
 }
 
 // SessionUsageSummary aggregates usage by session.

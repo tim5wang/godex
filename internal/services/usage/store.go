@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -407,6 +408,24 @@ func boolInt(value bool) int {
 	return 0
 }
 
+// GetCacheStats returns cache performance statistics grouped by
+// model and time period.
+//
+// The query now supports three previously-missing axes:
+//   - call-level hit rate (cache_hit_calls / total_calls), which is
+//     the operator's "what fraction of requests benefit from the
+//     cache?" number;
+//   - per-key filtering (query.APIKeyID), so a proxy key user can
+//     see only their own cache stats rather than the global view
+//     that would leak cross-tenant information;
+//   - the "all" range type, which returns the lifetime aggregate
+//     with no period grouping (the dashboard uses this to render
+//     the "since you started using the gateway" tile).
+//
+// The token-level cache efficiency (cache_read / (input +
+// cache_read)) is also surfaced separately as CacheEfficiency so
+// the dashboard can render the cost-saving story alongside the
+// call-level hit rate.
 func (s *SQLiteStore) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error) {
 	// Build WHERE clauses
 	conditions := []string{}
@@ -419,10 +438,29 @@ func (s *SQLiteStore) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error)
 		conditions = append(conditions, "timestamp >= datetime('now', '-7 days')")
 	case "month":
 		conditions = append(conditions, "timestamp >= datetime('now', '-30 days')")
+	case "all":
+		// No time filter; we still exclude non-success calls so
+		// the cached-read numbers don't get polluted by 4xx/5xx
+		// provider errors.
+	default:
+		// Empty / unknown range falls back to the lifetime
+		// aggregate. The previous implementation rejected this
+		// case with no useful error; we accept it as "all" so
+		// the dashboard's "lifetime" tile never breaks when the
+		// URL omits the range parameter.
+		query.RangeType = "all"
 	}
 	if query.Model != "" {
 		conditions = append(conditions, "target_model = ?")
 		args = append(args, query.Model)
+	}
+	if query.APIKeyID != "" {
+		// Per-key filtering is what lets the proxy-key path
+		// expose its own cache stats without leaking the
+		// global aggregate. The web-token admin path leaves
+		// this empty to get the all-tenants view.
+		conditions = append(conditions, "api_key_id = ?")
+		args = append(args, query.APIKeyID)
 	}
 	conditions = append(conditions, "status = 'success'")
 
@@ -431,22 +469,48 @@ func (s *SQLiteStore) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error)
 		whereClause = " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	periodExpr := "substr(timestamp, 1, 10)"
-	if query.RangeType == "week" {
+	// periodExpr picks the SQL expression for the per-row
+	// "period" column. For "all" we return an empty string so
+	// the SQL groups by no period column and the response
+	// carries a single lifetime row per (target_model) rather
+	// than a per-day / per-week / per-month series. The
+	// dashboard can still render the series by issuing a
+	// "week" / "month" query in addition.
+	periodExpr := "''"
+	groupBy := "target_model"
+	orderBy := "target_model"
+	switch strings.TrimSpace(query.RangeType) {
+	case "day":
+		periodExpr = "substr(timestamp, 1, 10)"
+		groupBy = "period, target_model"
+		orderBy = "period DESC, target_model"
+	case "week":
 		periodExpr = "strftime('%Y-W%W', timestamp)"
-	} else if query.RangeType == "month" {
+		groupBy = "period, target_model"
+		orderBy = "period DESC, target_model"
+	case "month":
 		periodExpr = "substr(timestamp, 1, 7)"
+		groupBy = "period, target_model"
+		orderBy = "period DESC, target_model"
 	}
 
+	// A call is a "cache hit" when its cache_read_tokens field
+	// is non-zero. We use SUM(... > 0) rather than
+	// SUM(cache_read_tokens > 0) so the SQL is portable to
+	// older SQLite versions that don't support boolean
+	// expressions in aggregates; the cast to INTEGER gives us
+	// 0/1 either way.
 	querySQL := `SELECT ` + periodExpr + ` AS period,
 		target_model,
 		COUNT(*) AS total_calls,
+		COALESCE(SUM(CASE WHEN cache_read_tokens > 0 THEN 1 ELSE 0 END), 0) AS cache_hit_calls,
 		COALESCE(SUM(input_tokens), 0) AS input_tokens,
+		COALESCE(SUM(output_tokens), 0) AS output_tokens,
 		COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
 		COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens
 		FROM usage_calls` + whereClause + `
-		GROUP BY period, target_model
-		ORDER BY period DESC, target_model`
+		GROUP BY ` + groupBy + `
+		ORDER BY ` + orderBy
 
 	rows, err := s.db.Query(querySQL, args...)
 	if err != nil {
@@ -458,29 +522,96 @@ func (s *SQLiteStore) GetCacheStats(query CacheStatsQuery) ([]CacheStats, error)
 	for rows.Next() {
 		var stat CacheStats
 		var period, model string
-		var totalCalls int
-		var inputTokens, cacheRead, cacheWrite int64
-		if err := rows.Scan(&period, &model, &totalCalls, &inputTokens, &cacheRead, &cacheWrite); err != nil {
+		var totalCalls, cacheHitCalls int
+		var inputTokens, outputTokens, cacheRead, cacheWrite int64
+		if err := rows.Scan(&period, &model, &totalCalls, &cacheHitCalls, &inputTokens, &outputTokens, &cacheRead, &cacheWrite); err != nil {
 			return nil, err
 		}
 		stat.Period = period
 		stat.Model = model
 		stat.TotalCalls = totalCalls
+		stat.CacheHitCalls = cacheHitCalls
+		stat.CacheMissCalls = totalCalls - cacheHitCalls
+		if stat.CacheMissCalls < 0 {
+			// Defensive: never expose a negative miss count if
+			// the schema or query drifts in the future. The
+			// dashboard renders a zero rather than "–12".
+			stat.CacheMissCalls = 0
+		}
 		stat.InputTokens = inputTokens
+		stat.OutputTokens = outputTokens
 		stat.CacheReadTokens = cacheRead
 		stat.CacheWriteTokens = cacheWrite
-		total := inputTokens + cacheRead
-		if total > 0 {
-			stat.HitRate = float64(cacheRead) / float64(total) * 100.0
-			stat.HitRate = float64(int(stat.HitRate*100+0.5)) / 100
+
+		// Call-level hit rate: the share of calls that saw at
+		// least one cached token. This is the metric operators
+		// usually want when they ask "what fraction of
+		// requests benefit from the cache?". Without this
+		// field the dashboard had to compute it client-side
+		// from raw call counts and could disagree with the
+		// server's understanding of "hit".
+		if totalCalls > 0 {
+			stat.HitRate = roundPercent(float64(cacheHitCalls) / float64(totalCalls) * 100.0)
 		}
+
+		// Token-level cache efficiency: the share of input
+		// context that came from cache. This is the metric
+		// that drives the cost-saving story because cached
+		// tokens are billed at a steep discount by every
+		// provider that supports prompt caching.
+		efficiencyDenominator := inputTokens + cacheRead
+		if efficiencyDenominator > 0 {
+			stat.CacheEfficiency = roundPercent(float64(cacheRead) / float64(efficiencyDenominator) * 100.0)
+		}
+
+		// TokensSaved is the wall-clock equivalent of
+		// cache_read tokens. The previous implementation
+		// returned this as a separate field; we keep it for
+		// backward compatibility so the dashboard can keep
+		// rendering "X tokens saved" without recomputing.
 		stat.TokensSaved = cacheRead
+
+		// EstimatedSavingsCredits is the credit reduction the
+		// cache delivered, computed against the gateway's own
+		// 4x cache-read discount. The gateway treats cached
+		// tokens as 0.25x billable in RecordCall (the rest of
+		// the model would have been 1x billable input), so the
+		// saving per cache_read token is (1 - 0.25) = 0.75 of
+		// the unit credit rate. We multiply by the model's
+		// CreditWeight so a high-weight model (e.g. Opus)
+		// shows a proportionally larger saving. The number is
+		// rounded to six decimal places to match the precision
+		// of UsageCall.Credits.
+		//
+		// We don't know the per-row CreditWeight from the SQL
+		// (it lives in the model mapping, not the ledger), so
+		// the service layer re-multiplies by the resolved
+		// weight when surfacing the result. We initialise
+		// the field to the unweighted saving here; callers
+		// that need a weighted value re-compute via the
+		// service method that joins against the model
+		// mapping. The "1x - 0.25x = 0.75x" factor is the
+		// discount the gateway actually applies, so the
+		// unweighted number is still a meaningful estimate
+		// for the dashboard's "rough cost" column.
+		stat.EstimatedSavingsCredits = math.Round(float64(cacheRead)*0.75*1e6) / 1e6
+
 		out = append(out, stat)
 	}
 	if out == nil {
 		out = []CacheStats{}
 	}
 	return out, rows.Err()
+}
+
+// roundPercent rounds a percentage to two decimal places. The
+// previous implementation inlined the rounding math in
+// GetCacheStats, which made it easy to forget on the new fields;
+// centralising it here keeps the rounding rule consistent across
+// HitRate and CacheEfficiency. Two decimal places is enough for
+// the dashboard (1.23%) while keeping the JSON compact.
+func roundPercent(v float64) float64 {
+	return float64(int(v*100+0.5)) / 100
 }
 
 func (s *SQLiteStore) GetTimeSeries(query TimeSeriesQuery) ([]TimeSeriesPoint, error) {

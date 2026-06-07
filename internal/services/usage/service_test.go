@@ -578,6 +578,255 @@ func TestEstimateTokens(t *testing.T) {
 	// Verify the test works with no body
 }
 
+// TestCacheStatsHitRateIsCallLevel pins the contract that
+// CacheStats.HitRate is the call-level hit rate (the share of
+// calls that surfaced at least one cached token), NOT the
+// token-level efficiency the previous implementation
+// mislabelled. The two metrics live on the same row as
+// HitRate and CacheEfficiency respectively; without this
+// split the dashboard would conflate "low hit rate" with
+// "low token savings" and the operator would not be able to
+// tell whether the issue is upstream (caching not enabled)
+// or local (cache key mismatch).
+func TestCacheStatsHitRateIsCallLevel(t *testing.T) {
+	store, err := NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+	key, err := svc.CreateKey(KeyCreateRequest{Name: "cache-stats", BudgetCredits: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 4 calls: 3 with cache reads, 1 without. The expected
+	// call-level hit rate is 75%, regardless of the per-call
+	// token counts. Token-level efficiency depends on the
+	// specific input / cache_read distribution; we verify it
+	// separately below.
+	calls := []*UsageCall{
+		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 100, CacheReadTokens: 50, Status: "success"},
+		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 100, CacheReadTokens: 50, Status: "success"},
+		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 100, CacheReadTokens: 0, Status: "success"},
+		{APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m", InputTokens: 0, CacheReadTokens: 200, Status: "success"},
+	}
+	for _, c := range calls {
+		if err := svc.RecordCall(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := svc.GetCacheStats(CacheStatsQuery{RangeType: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 row, got %d: %+v", len(stats), stats)
+	}
+	got := stats[0]
+	if got.TotalCalls != 4 {
+		t.Errorf("expected TotalCalls=4, got %d", got.TotalCalls)
+	}
+	if got.CacheHitCalls != 3 {
+		t.Errorf("expected CacheHitCalls=3, got %d", got.CacheHitCalls)
+	}
+	if got.CacheMissCalls != 1 {
+		t.Errorf("expected CacheMissCalls=1, got %d", got.CacheMissCalls)
+	}
+	// 3 / 4 = 75.00 (rounded to two decimals).
+	if got.HitRate != 75.0 {
+		t.Errorf("expected call-level HitRate=75.0, got %.2f", got.HitRate)
+	}
+	// Token-level: total input = 300, total cache_read = 300
+	// (50+50+0+200). Efficiency = 300 / (300+300) = 50.00%.
+	// This is the field the dashboard renders as the
+	// cost-saving story.
+	if got.CacheEfficiency != 50.0 {
+		t.Errorf("expected CacheEfficiency=50.0, got %.2f", got.CacheEfficiency)
+	}
+	if got.InputTokens != 300 {
+		t.Errorf("expected InputTokens=300, got %d", got.InputTokens)
+	}
+	if got.CacheReadTokens != 300 {
+		t.Errorf("expected CacheReadTokens=300, got %d", got.CacheReadTokens)
+	}
+	if got.CacheWriteTokens != 0 {
+		t.Errorf("expected CacheWriteTokens=0, got %d", got.CacheWriteTokens)
+	}
+}
+
+// TestCacheStatsAllRange pins the new "all" range type
+// returning a single lifetime aggregate row. The previous
+// implementation rejected unknown range types with no
+// useful error, so the dashboard's "lifetime" tile
+// 500'd whenever the URL omitted the range parameter. Now
+// empty / unknown range defaults to "all" and the response
+// carries an empty Period string.
+func TestCacheStatsAllRange(t *testing.T) {
+	store, err := NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+	key, err := svc.CreateKey(KeyCreateRequest{Name: "all", BudgetCredits: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordCall(&UsageCall{
+		APIKeyID:        key.Key.ID,
+		PublicModel:     "m",
+		TargetModel:     "m",
+		InputTokens:     100,
+		CacheReadTokens: 50,
+		Status:          "success",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := svc.GetCacheStats(CacheStatsQuery{RangeType: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 lifetime row, got %d", len(stats))
+	}
+	if stats[0].Period != "" {
+		t.Errorf("expected empty Period for all range, got %q", stats[0].Period)
+	}
+	if stats[0].HitRate != 100.0 {
+		t.Errorf("expected HitRate=100, got %.2f", stats[0].HitRate)
+	}
+	// Also verify the empty range string defaults to "all".
+	stats2, err := svc.GetCacheStats(CacheStatsQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats2) != 1 || stats2[0].Period != "" {
+		t.Errorf("expected empty range to default to all, got %+v", stats2)
+	}
+}
+
+// TestCacheStatsPerKeyFilter pins the new APIKeyID filter
+// that lets the proxy-key path expose per-key cache
+// stats without leaking the all-tenants view. Two keys
+// contribute cache_read calls; the filter must surface
+// only the matching key's row.
+func TestCacheStatsPerKeyFilter(t *testing.T) {
+	store, err := NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+	keyA, err := svc.CreateKey(KeyCreateRequest{Name: "A", BudgetCredits: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := svc.CreateKey(KeyCreateRequest{Name: "B", BudgetCredits: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordCall(&UsageCall{
+		APIKeyID: keyA.Key.ID, PublicModel: "m", TargetModel: "m",
+		InputTokens: 100, CacheReadTokens: 80, Status: "success",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordCall(&UsageCall{
+		APIKeyID: keyB.Key.ID, PublicModel: "m", TargetModel: "m",
+		InputTokens: 100, CacheReadTokens: 0, Status: "success",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := svc.GetCacheStats(CacheStatsQuery{RangeType: "all", APIKeyID: keyA.Key.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected exactly 1 row for key A, got %d: %+v", len(stats), stats)
+	}
+	if stats[0].CacheReadTokens != 80 {
+		t.Errorf("expected key A cache_read=80, got %d", stats[0].CacheReadTokens)
+	}
+	if stats[0].HitRate != 100.0 {
+		t.Errorf("expected key A HitRate=100, got %.2f", stats[0].HitRate)
+	}
+}
+
+// TestCacheStatsEstimatedSavings pins the
+// EstimatedSavingsCredits calculation. The gateway treats
+// cached tokens as 0.25x billable in RecordCall, so each
+// cache_read token saves 0.75x the unit credit rate. The
+// number is rounded to six decimal places to match the
+// precision of UsageCall.Credits.
+func TestCacheStatsEstimatedSavings(t *testing.T) {
+	store, err := NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+	key, err := svc.CreateKey(KeyCreateRequest{Name: "savings", BudgetCredits: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1000 cache_read tokens. Unweighted saving = 1000 * 0.75 = 750.0.
+	if err := svc.RecordCall(&UsageCall{
+		APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m",
+		InputTokens: 1000, CacheReadTokens: 1000, Status: "success",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := svc.GetCacheStats(CacheStatsQuery{RangeType: "all", APIKeyID: key.Key.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(stats))
+	}
+	if stats[0].EstimatedSavingsCredits != 750.0 {
+		t.Errorf("expected EstimatedSavingsCredits=750.0, got %.6f", stats[0].EstimatedSavingsCredits)
+	}
+}
+
+// TestCacheStatsIgnoresFailedCalls pins the contract that
+// cache stats never include failed calls in the aggregate.
+// A failed call (e.g. 4xx provider error) never delivered
+// any model output, so counting it as a "cache miss" would
+// bias the hit rate downward for tenants with intermittent
+// provider outages.
+func TestCacheStatsIgnoresFailedCalls(t *testing.T) {
+	store, err := NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store)
+	key, err := svc.CreateKey(KeyCreateRequest{Name: "fail", BudgetCredits: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordCall(&UsageCall{
+		APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m",
+		InputTokens: 100, CacheReadTokens: 0, Status: "success",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordCall(&UsageCall{
+		APIKeyID: key.Key.ID, PublicModel: "m", TargetModel: "m",
+		InputTokens: 100, CacheReadTokens: 0, Status: "error", Error: "boom",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := svc.GetCacheStats(CacheStatsQuery{RangeType: "all", APIKeyID: key.Key.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(stats))
+	}
+	if stats[0].TotalCalls != 1 {
+		t.Errorf("expected TotalCalls=1 (failed call excluded), got %d", stats[0].TotalCalls)
+	}
+	if stats[0].CacheHitCalls != 0 {
+		t.Errorf("expected CacheHitCalls=0, got %d", stats[0].CacheHitCalls)
+	}
+}
+
 func TestMain(m *testing.M) {
 	// Use a temp dir for all tests that create stores
 	code := m.Run()

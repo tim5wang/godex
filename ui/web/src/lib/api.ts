@@ -1099,11 +1099,12 @@ export function getUsageSessionDetail(token: string | null, sessionId: string) {
 
 export function getCacheStats(
   token: string | null,
-  params?: { range?: string; model?: string },
+  params?: { range?: string; model?: string; api_key_id?: string },
 ) {
   const search = new URLSearchParams();
   search.set("range", params?.range ?? "day");
   if (params?.model) search.set("model", params.model);
+  if (params?.api_key_id) search.set("api_key_id", params.api_key_id);
   return request<CacheStats[]>(
     `/usage/cache-stats?${search.toString()}`,
     { method: "GET" },

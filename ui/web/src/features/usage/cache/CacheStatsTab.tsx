@@ -18,15 +18,21 @@ import { useI18n } from "../../../i18n";
 
 interface CacheStatsTabProps {
   token: string | null;
+  /** API key filter options (grouped) */
+  keyOptions?: { label: string; options: { value: string; label: string }[] }[];
+  /** Selected API key ID */
+  selectedKeyId?: string;
+  /** Callback when key filter changes */
+  onKeyIdChange?: (id: string) => void;
 }
 
-export function CacheStatsTab({ token }: CacheStatsTabProps) {
+export function CacheStatsTab({ token, keyOptions, selectedKeyId, onKeyIdChange }: CacheStatsTabProps) {
   const { t } = useI18n();
   const [range, setRange] = useState("day");
 
   const statsQuery = useQuery<CacheStats[]>({
-    queryKey: ["usage", "cache-stats", range],
-    queryFn: () => getCacheStats(token, { range }),
+    queryKey: ["usage", "cache-stats", range, selectedKeyId],
+    queryFn: () => getCacheStats(token, { range, api_key_id: selectedKeyId || undefined }),
   });
 
   const chartData = useMemo(() => {
@@ -106,6 +112,16 @@ export function CacheStatsTab({ token }: CacheStatsTabProps) {
       title={t("usage.cachePanel.title")}
       extra={
         <Space>
+          {keyOptions && onKeyIdChange && (
+            <Select
+              value={selectedKeyId}
+              onChange={onKeyIdChange}
+              allowClear
+              placeholder={t("usage.filter.allKeys")}
+              style={{ width: 200 }}
+              options={keyOptions}
+            />
+          )}
           <Select
             value={range}
             onChange={setRange}

@@ -3294,3 +3294,409 @@ func TestUsageGatewayProtocolRequestDropsEmptyTextUserMessage(t *testing.T) {
 		t.Errorf("expected user with tool_result block, got %+v", got.Messages[1].Content)
 	}
 }
+
+// TestAnthropicGatewayOpenAIUpstreamForwardsToolResult is the
+// end-to-end regression for the reverse cross-protocol case:
+// when Pi is on the Anthropic protocol and the godex model
+// profile is `openai_compatible`, the gateway must (a)
+// translate Pi's Anthropic-shape `role: "tool"` message and
+// the prior assistant `tool_use` block into OpenAI-shape
+// `role: "tool"` and `tool_calls` fields on the wire to the
+// upstream, and (b) translate the upstream's OpenAI-shape
+// response (text + tool_calls) into Anthropic-shape content
+// blocks (text + tool_use) on the way back to Pi. The
+// architecture is "normalize to protocol.Request /
+// protocol.Response, then adapt to the wire format at each
+// hop" — this test pins both adapters to prevent the
+// cross-protocol bugs the previous code had (the OpenAI
+// path silently dropped `role: "tool"` messages because
+// the conversion only looked at the `content` field; the
+// fix in usageGatewayProtocolRequest's sibling,
+// anthropicToProtocolRequest, restores the conversion).
+func TestAnthropicGatewayOpenAIUpstreamForwardsToolResult(t *testing.T) {
+	var capturedBody []byte
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-1",
+			"object":"chat.completion",
+			"created":1,
+			"model":"stub-model",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"hi from openai upstream"},
+				"finish_reason":"stop"
+			}]
+		}`))
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "openai_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-openai-tool-result",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Pi sends an Anthropic-shape multi-turn request: a user
+	// message, an assistant tool_use, and the tool's result.
+	// The gateway must translate the tool_use to OpenAI
+	// `tool_calls` and the tool_result to OpenAI `role: "tool"`
+	// with the matching `tool_call_id`.
+	body := `{
+		"model":"M3",
+		"max_tokens":16,
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"read /tmp/hi"}]},
+			{"role":"assistant","content":[{"type":"tool_use","id":"call_abc","name":"read","input":{"path":"/tmp/hi"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_abc","content":[{"type":"text","text":"hi from file"}]}]}
+		]
+	}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody := readAll(t, resp)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+
+	// 1) The upstream MUST receive a well-formed OpenAI
+	// request with the tool result and the prior tool call.
+	captured := string(capturedBody)
+	if !strings.Contains(captured, `"role":"tool"`) {
+		t.Errorf("expected upstream body to carry role:tool message, got body:\n%s", captured)
+	}
+	if !strings.Contains(captured, `"tool_call_id":"call_abc"`) {
+		t.Errorf("expected upstream body to bind tool to call_abc, got body:\n%s", captured)
+	}
+	if !strings.Contains(captured, `hi from file`) {
+		t.Errorf("expected upstream body to carry the tool result text, got body:\n%s", captured)
+	}
+	if !strings.Contains(captured, `"tool_calls"`) {
+		t.Errorf("expected upstream body to carry tool_calls for the assistant turn, got body:\n%s", captured)
+	}
+	if !strings.Contains(captured, `"name":"read"`) {
+		t.Errorf("expected upstream body to carry the tool name, got body:\n%s", captured)
+	}
+
+	// 2) The test client MUST receive an Anthropic-shape
+	// response that preserves the upstream's content. The
+	// upstream returned text only (no tool call), so the
+	// response is a simple text block.
+	var anth anthropicResponse
+	if err := json.NewDecoder(resp.Body).Decode(&anth); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if anth.Type != "message" || anth.Role != "assistant" {
+		t.Errorf("expected message / assistant role, got %q/%q", anth.Type, anth.Role)
+	}
+	if len(anth.Content) != 1 || anth.Content[0].Type != "text" {
+		t.Fatalf("expected one text content block, got %+v", anth.Content)
+	}
+	if anth.Content[0].Text != "hi from openai upstream" {
+		t.Errorf("expected text %q, got %q", "hi from openai upstream", anth.Content[0].Text)
+	}
+	if anth.StopReason != "end_turn" {
+		t.Errorf("expected stop_reason end_turn (mapped from OpenAI 'stop'), got %q", anth.StopReason)
+	}
+}
+
+// TestAnthropicGatewayOpenAIUpstreamStreamingForwardsToolUse is
+// the streaming variant of the reverse cross-protocol case:
+// Pi on the Anthropic protocol, godex profile is
+// `openai_compatible`. The upstream emits OpenAI-shape SSE
+// chunks (chat.completion.chunk) carrying a single tool call
+// with a multi-delta arguments stream. The gateway must
+// surface the full Anthropic SSE shape to Pi (with
+// content_block_start / content_block_delta /
+// content_block_stop), and the tool_use JSON must round-trip
+// intact. The previous gateway stream code shared the same
+// tool-call delta-suffix logic with the Anthropic-in path,
+// so the cross-protocol bug is mainly on the test-coverage
+// side: there was no test exercising the openai_compatible
+// upstream + Anthropic-protocol client combination, and
+// regressions would have shipped unnoticed.
+func TestAnthropicGatewayOpenAIUpstreamStreamingForwardsToolUse(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		// OpenAI chat.completion.chunk shape. Three per-chunk
+		// `arguments` deltas so the test pins the gateway's
+		// behaviour when the upstream fragments the JSON.
+		chunks := []string{
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"read"}}]}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":"}}]}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"/tmp/hi\""}}]}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\"limit\":100}"}}]}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"stub-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+			`data: [DONE]`,
+		}
+		for _, c := range chunks {
+			_, _ = io.WriteString(w, c+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "openai_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-openai-stream-tool",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"read /tmp/hi"}]}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody := readAll(t, resp)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, respBody)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("expected Content-Type text/event-stream, got %q", ct)
+	}
+	streamBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	stream := string(streamBytes)
+
+	// Required Anthropic SSE events must all be present and
+	// ordered.
+	for _, evt := range []string{
+		"event: message_start",
+		"event: content_block_start",
+		"event: content_block_delta",
+		"event: content_block_stop",
+		"event: message_delta",
+		"event: message_stop",
+	} {
+		if !strings.Contains(stream, evt) {
+			t.Errorf("expected Anthropic SSE stream to contain %q, got stream:\n%s", evt, stream)
+		}
+	}
+
+	// Pin the per-chunk partial_json fragments the gateway
+	// forwarded. The OpenAI upstream emitted three fragments
+	// that the gateway must reassemble into the final tool
+	// arguments. We use the gateway's own OnToolUse
+	// contract (the wire frame carries the per-chunk delta)
+	// and verify the concatenation is the assembled JSON
+	// the upstream intended.
+	type sseFrame struct {
+		data map[string]interface{}
+	}
+	frames := []sseFrame{}
+	for _, block := range strings.Split(stream, "\n\n") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		var data string
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		if data == "" {
+			continue
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+			continue
+		}
+		frames = append(frames, sseFrame{data: parsed})
+	}
+	var partials []string
+	for _, f := range frames {
+		d, _ := f.data["delta"].(map[string]interface{})
+		if d == nil {
+			continue
+		}
+		if d["type"] != "input_json_delta" {
+			continue
+		}
+		if pj, ok := d["partial_json"].(string); ok {
+			partials = append(partials, pj)
+		}
+	}
+	// The upstream emitted three per-chunk arguments
+	// fragments; the gateway must forward each one as a
+	// separate input_json_delta so the Anthropic SDK can
+	// concatenate them into the final tool arguments JSON.
+	wantPartials := []string{
+		`{"path":`,
+		`"/tmp/hi"`,
+		`,` + `"limit":100}`,
+	}
+	if len(partials) != len(wantPartials) {
+		t.Fatalf("expected %d input_json_delta fragments, got %d: %v", len(wantPartials), len(partials), partials)
+	}
+	for i, want := range wantPartials {
+		if partials[i] != want {
+			t.Errorf("partial[%d]: expected %q, got %q", i, want, partials[i])
+		}
+	}
+	// The final stop_reason must be "tool_use" (mapped from
+	// the OpenAI finish_reason "tool_calls" via
+	// protocolToAnthropicResponse).
+	if !strings.Contains(stream, `"stop_reason":"tool_use"`) {
+		t.Errorf("expected message_delta to carry stop_reason=tool_use, got stream:\n%s", stream)
+	}
+}
+
+// TestAnthropicOutputStopReasonMapping covers the cross-protocol
+// stop_reason mapping for the Anthropic messages path. When the
+// upstream is openai_compatible, the finish_reason is OpenAI's
+// "tool_calls" / "length" / "content_filter" / "function_call".
+// The Anthropic wire expects "tool_use" / "max_tokens" /
+// "refusal" / "tool_use" instead. The previous implementation
+// passed the upstream value through unchanged, which surfaced
+// OpenAI's "tool_calls" on the Anthropic wire and broke Pi's
+// agent loop after the first tool call (the Anthropic SDK
+// throws on unknown stop_reason values).
+func TestAnthropicOutputStopReasonMapping(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"", "end_turn"},
+		{"stop", "end_turn"},
+		{"end_turn", "end_turn"},
+		{"stop_sequence", "end_turn"},
+		{"length", "max_tokens"},
+		{"max_tokens", "max_tokens"},
+		{"tool_calls", "tool_use"},
+		{"tool_use", "tool_use"},
+		{"function_call", "tool_use"},
+		{"pause_turn", "pause_turn"},
+		{"refusal", "refusal"},
+		{"content_filter", "refusal"},
+		{"unknown_value", "unknown_value"},
+	}
+	for _, c := range cases {
+		got := anthropicOutputStopReason(&protocol.Response{StopReason: c.raw})
+		if got != c.want {
+			t.Errorf("anthropicOutputStopReason(%q) = %q, want %q", c.raw, got, c.want)
+		}
+	}
+	if got := anthropicOutputStopReason(nil); got != "end_turn" {
+		t.Errorf("anthropicOutputStopReason(nil) = %q, want end_turn", got)
+	}
+}

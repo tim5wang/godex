@@ -106,6 +106,7 @@ export function UsagePage() {
 
   const [callsDate, setCallsDate] = useState(() => dayjs().format("YYYY-MM-DD"));
   const [callsKeyId, setCallsKeyId] = useState<string>("");
+  const [cacheKeyId, setCacheKeyId] = useState<string>("");
 
   // ---- Model profiles (target_profile_id maps to a configured model profile) ----
   const allModelsQuery = useQuery<ModelsView>({
@@ -603,7 +604,14 @@ export function UsagePage() {
         {
           key: "cache",
           label: t("usage.cacheStats"),
-          children: <CacheStatsTab token={token} />,
+          children: (
+            <CacheStatsTab
+              token={token}
+              keyOptions={usageKeyFilterOptions}
+              selectedKeyId={cacheKeyId}
+              onKeyIdChange={setCacheKeyId}
+            />
+          ),
         },
       ]} />
 

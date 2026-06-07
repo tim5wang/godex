@@ -1189,24 +1189,16 @@ func protocolToAnthropicResponse(resp *protocol.Response, model string) anthropi
 			}
 		}
 
-		// Set stop reason
-		switch resp.StopReason {
-		case "end_turn", "stop_sequence", "stop", "":
-			anthropicResp.StopReason = "end_turn"
-		case "max_tokens":
-			anthropicResp.StopReason = "max_tokens"
-		case "tool_use", "tool_calls":
-			anthropicResp.StopReason = "tool_use"
-		case "pause_turn", "refusal":
-			// Pi's mapStopReason at anthropic.ts:1210-1230 maps
-			// these to local stop reasons. Forward them as-is
-			// so the SDK can do the translation; the
-			// chat.completion path's respStopReason helper
-			// already handles the cross-protocol mapping.
-			anthropicResp.StopReason = resp.StopReason
-		default:
-			anthropicResp.StopReason = resp.StopReason
-		}
+		// Set stop reason. We use the shared
+		// anthropicOutputStopReason helper so the streaming
+		// and non-streaming paths emit the exact same wire
+		// vocabulary; without the unification a
+		// finish_reason of "length" (OpenAI) would become
+		// "max_tokens" on the streaming wire but stay
+		// "length" on the non-streaming wire, surfacing
+		// inconsistent values to the same client depending
+		// on stream mode.
+		anthropicResp.StopReason = anthropicOutputStopReason(resp)
 
 		// Set usage
 		if resp.Usage != nil {
@@ -1622,10 +1614,17 @@ func streamAnthropicGatewayMessages(
 		// mapStopReason at anthropic.ts:1210-1230 translate to local
 		// values) plus incremental usage. Usage MUST live here, not on
 		// message_stop, per the canonical spec.
-		stopReason := "end_turn"
-		if finalResp != nil && strings.TrimSpace(finalResp.StopReason) != "" {
-			stopReason = finalResp.StopReason
-		}
+		//
+		// We map the upstream's stop_reason through the
+		// Anthropic-output vocabulary rather than the OpenAI one:
+		// OpenAI's "tool_calls" becomes Anthropic's "tool_use",
+		// "length" becomes "max_tokens", and "stop" becomes
+		// "end_turn". The previous implementation passed the
+		// upstream value through unchanged, which surfaced
+		// OpenAI's "tool_calls" on the Anthropic wire — a value
+		// the Anthropic SDK does not recognise, causing the
+		// agent loop to hang after the first tool call.
+		stopReason := anthropicOutputStopReason(finalResp)
 		deltaPayload := map[string]interface{}{
 			"type":  "message_delta",
 			"delta": map[string]interface{}{"stop_reason": stopReason},
@@ -1663,6 +1662,64 @@ func streamAnthropicGatewayMessages(
 		}
 	} else {
 		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "provider_error", streamErr.Error())
+	}
+}
+
+// anthropicOutputStopReason maps an upstream protocol.Response
+// stop_reason onto the Anthropic wire vocabulary used by the
+// /v1/messages streaming path. The mapping is the inverse of
+// the OpenAI-output mapping in respStopReason:
+//
+//	upstream         → Anthropic wire
+//	"" / "stop"      → "end_turn"
+//	"length"         → "max_tokens"
+//	"tool_calls"     → "tool_use"
+//	"function_call"  → "tool_use"
+//	"end_turn"       → "end_turn"     (passthrough)
+//	"tool_use"       → "tool_use"     (passthrough)
+//	"pause_turn"     → "pause_turn"   (passthrough; Pi's mapStopReason
+//	                                  translates this locally)
+//	"refusal"        → "refusal"      (passthrough; same)
+//	"content_filter" → "refusal"      (OpenAI -> Anthropic
+//	                                  safety-filter mapping)
+//
+// Without this mapper, an upstream finish_reason of
+// "tool_calls" (the OpenAI canonical value) would surface on
+// the Anthropic wire as "tool_calls" too, which the
+// Anthropic SDK does not recognise and would treat as a
+// malformed stream — the canonical symptom is the agent
+// loop hanging after the first tool call because the SDK
+// never sees the matching terminal stop_reason it knows
+// how to translate. The non-streaming protocolToAnthropicResponse
+// path uses the same mapping table for consistency.
+func anthropicOutputStopReason(resp *protocol.Response) string {
+	if resp == nil {
+		return "end_turn"
+	}
+	switch strings.ToLower(strings.TrimSpace(resp.StopReason)) {
+	case "", "stop", "stop_sequence", "end_turn":
+		return "end_turn"
+	case "length", "max_tokens":
+		return "max_tokens"
+	case "tool_calls", "function_call", "tool_use":
+		return "tool_use"
+	case "pause_turn":
+		return "pause_turn"
+	case "refusal":
+		return "refusal"
+	case "content_filter":
+		// OpenAI uses "content_filter" for safety-filtered
+		// completions; Anthropic's closest equivalent is
+		// "refusal". Map across so the Anthropic SDK
+		// surfaces the same intent on the user side.
+		return "refusal"
+	default:
+		// Unknown / provider-specific values pass
+		// through unchanged. Pi's mapStopReason throws
+		// on unknown values, but the passthrough is
+		// the best the gateway can do without a more
+		// specific translation table.
+		return resp.StopReason
 	}
 }
 

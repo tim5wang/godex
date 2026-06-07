@@ -239,6 +239,22 @@ type openAIChatMessage struct {
 	// otherwise multiple tool calls in the same turn would all share
 	// index 0 and overwrite each other in the SDK's accumulator.
 	ToolCalls []openAIToolCallWire `json:"tool_calls,omitempty"`
+	// ToolCallID is the OpenAI `role: "tool"` message's
+	// `tool_call_id` field. It binds the tool result back to
+	// the originating assistant tool_call so the model can
+	// associate the two. Without it the upstream cannot match
+	// the result to the call and silently drops the message
+	// (this was the root cause of the "Pi agent hangs after
+	// the first tool call" regression on the OpenAI →
+	// anthropic_compatible cross-protocol path).
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	// Name is the function name on a `role: "tool"` message.
+	// The OpenAI wire format includes it for traceability;
+	// the upstream protocol representation does not need it
+	// (the tool_use_id is sufficient), so we capture it for
+	// completeness even though we don't currently surface it
+	// on the wire to the upstream.
+	Name string `json:"name,omitempty"`
 }
 
 type openAIToolCallWire struct {

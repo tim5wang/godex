@@ -2031,6 +2031,361 @@ func TestAnthropicGatewayForwardsToolResultToUpstream(t *testing.T) {
 	}
 }
 
+// TestUsageGatewayChatCompletionsForwardToolResultToUpstream is the
+// end-to-end regression for the case where Pi (or any OpenAI SDK
+// client) called POST /v1/chat/completions on the godex gateway with
+// an `anthropic_compatible` provider profile, and the agent loop
+// hung after the first tool call. The root cause was that the
+// gateway dropped the `role: "tool"` message on the second turn
+// of the conversation (the round-trip after Pi's tool loop ran the
+// tool), so the upstream model never saw its own tool result and
+// could not produce a follow-up reply. The fix translates the
+// OpenAI `role: "tool"` message to a `BlockToolResult` block on the
+// `protocol.Request` so the upstream Anthropic client surfaces it
+// as a `tool_result` content block in the Anthropic request body.
+// The test captures the upstream request body verbatim and asserts
+// the tool_result content reaches the upstream unchanged.
+func TestUsageGatewayChatCompletionsForwardToolResultToUpstream(t *testing.T) {
+	var capturedBody []byte
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-1",
+			"object":"chat.completion",
+			"created":1,
+			"model":"stub-model",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"ok"},
+				"finish_reason":"stop"
+			}]
+		}`))
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "openai-tool-result-forward",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Pi-style OpenAI chat completion request with a multi-turn
+	// conversation: a user message, an assistant tool_call, and
+	// the tool's result. The previous implementation dropped
+	// the tool result and the assistant tool_call; the upstream
+	// saw only the original user message and the model
+	// couldn't continue.
+	body := `{
+		"model":"M3",
+		"messages":[
+			{"role":"user","content":"read /tmp/hi"},
+			{"role":"assistant","content":null,"tool_calls":[
+				{"id":"call_abc","type":"function","index":0,"function":{"name":"read","arguments":"{\"path\":\"/tmp/hi\"}"}}
+			]},
+			{"role":"tool","tool_call_id":"call_abc","content":"hi from file"}
+		]
+	}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	captured := string(capturedBody)
+	// The upstream request body (Anthropic format) MUST carry
+	// the tool_result content block with the matching
+	// tool_use_id. Without the fix, the tool result would be
+	// missing from the upstream body and the model would have
+	// no way to know what the tool returned.
+	if !strings.Contains(captured, `"tool_result"`) {
+		t.Errorf("expected upstream body to contain tool_result block, got body:\n%s", captured)
+	}
+	if !strings.Contains(captured, `"tool_use_id":"call_abc"`) {
+		t.Errorf("expected upstream body to bind tool_result to tool_use_id=call_abc, got body:\n%s", captured)
+	}
+	if !strings.Contains(captured, `hi from file`) {
+		t.Errorf("expected upstream body to carry the tool result text, got body:\n%s", captured)
+	}
+	// The assistant's prior tool_call must ALSO be in the
+	// upstream body so the model can match the result to the
+	// call. The previous implementation dropped the
+	// tool_calls array entirely.
+	if !strings.Contains(captured, `"tool_use"`) {
+		t.Errorf("expected upstream body to contain tool_use block from assistant message, got body:\n%s", captured)
+	}
+	if !strings.Contains(captured, `"name":"read"`) {
+		t.Errorf("expected upstream body to carry the tool name 'read', got body:\n%s", captured)
+	}
+	if !strings.Contains(captured, `\/tmp\/hi`) && !strings.Contains(captured, `{"path":"/tmp/hi"}`) {
+		t.Errorf("expected upstream body to carry the tool arguments, got body:\n%s", captured)
+	}
+}
+
+// TestUsageGatewayChatCompletionsStreamingForwardsToolCallDeltasAsSuffixes
+// covers the streaming variant of the cross-protocol
+// regression: when the upstream is anthropic_compatible and Pi
+// is on the OpenAI protocol, the gateway receives cumulative
+// tool_use arguments from the upstream (because parseMessageStream
+// calls OnToolUse with the cumulative JSON) and would corrupt
+// the OpenAI wire format by re-sending the same bytes on every
+// chunk. The fix tracks the previous cumulative per tool index
+// and forwards only the delta suffix, mirroring the
+// toolJSONDeltaSuffix behaviour the Anthropic streaming path
+// already had.
+func TestUsageGatewayChatCompletionsStreamingForwardsToolCallDeltasAsSuffixes(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		// The upstream emits the tool_use JSON across three
+		// input_json_delta frames. The gateway must forward
+		// only the per-chunk delta suffix, not the
+		// cumulative string on every frame.
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-x","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_x","name":"read","input":{}}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"\/tmp\/hi\""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":",\"limit\":100}"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "openai-tool-delta-suffix",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"read /tmp/hi"}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	streamBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	stream := string(streamBytes)
+
+	// Parse the chat.completion.chunk frames the gateway
+	// emitted. OpenAI's streaming wire format uses bare
+	// `data: {...}` lines (no `event:` discriminator), so we
+	// accept both shapes here. Pin the per-chunk arguments
+	// fragments the way Pi's OpenAI SDK would: extract the
+	// `arguments` field from every tool_calls chunk in
+	// order, then concatenate them and verify the result is
+	// the assembled JSON (rather than the cumulative string
+	// repeated three times, which is the previous bug).
+	type sseFrame struct {
+		data map[string]interface{}
+	}
+	frames := []sseFrame{}
+	for _, block := range strings.Split(stream, "\n\n") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		var data string
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+			continue
+		}
+		frames = append(frames, sseFrame{data: parsed})
+	}
+	var partials []string
+	for _, f := range frames {
+		// OpenAI chat.completion.chunk path: tool_calls live
+		// under choices[].delta.tool_calls[].
+		choices, _ := f.data["choices"].([]interface{})
+		for _, ch := range choices {
+			cm, _ := ch.(map[string]interface{})
+			delta, _ := cm["delta"].(map[string]interface{})
+			tcs, _ := delta["tool_calls"].([]interface{})
+			for _, tc := range tcs {
+				tcm, _ := tc.(map[string]interface{})
+				fn, _ := tcm["function"].(map[string]interface{})
+				if args, ok := fn["arguments"].(string); ok && args != "" {
+					partials = append(partials, args)
+				}
+			}
+		}
+	}
+	// The gateway must forward exactly three per-chunk
+	// fragments, not the cumulative string repeated three
+	// times. Pinning this catches the regression where the
+	// gateway would resend `{"path":"/tmp/hi","limit":100}`
+	// on every chunk, which would cause Pi to assemble
+	// `{"path":"/tmp/hi","limit":100}{"path":"/tmp/hi","limit":100}…`
+	// and fail to parse the tool arguments.
+	wantPartials := []string{
+		`{"path":`,
+		`"/tmp/hi"`,
+		`,` + `"limit":100}`,
+	}
+	if len(partials) != len(wantPartials) {
+		t.Fatalf("expected %d tool_call argument fragments, got %d: %v", len(wantPartials), len(partials), partials)
+	}
+	for i, want := range wantPartials {
+		if partials[i] != want {
+			t.Errorf("partial[%d]: expected %q, got %q", i, want, partials[i])
+		}
+	}
+	// Concatenate the per-chunk fragments the way Pi does and
+	// verify the result is the assembled JSON the upstream
+	// intended. If the gateway had forwarded the cumulative
+	// string on every chunk, this parse would fail or
+	// produce a corrupted nested object.
+	var assembled strings.Builder
+	for _, p := range partials {
+		assembled.WriteString(p)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(assembled.String()), &got); err != nil {
+		t.Fatalf("assembled arguments is not valid JSON: %v\nassembled: %s", err, assembled.String())
+	}
+	if got["path"] != "/tmp/hi" {
+		t.Errorf("expected path=/tmp/hi, got %v", got["path"])
+	}
+	if limit, ok := got["limit"].(float64); !ok || limit != 100 {
+		t.Errorf("expected limit=100, got %v (%T)", got["limit"], got["limit"])
+	}
+	_ = streamBytes
+}
+
 // TestUsageGatewayChatCompletionAcceptsStreamTrue covers the regression where
 // POST /v1/chat/completions with stream:true and a gdx_* proxy key returned
 // 400 unsupported_streaming. The usage gateway currently only supports
@@ -2775,5 +3130,167 @@ func TestUsageCacheStatsAllRange(t *testing.T) {
 	}
 	if stats[0].CacheEfficiency <= 0 {
 		t.Errorf("expected positive CacheEfficiency, got %.2f", stats[0].CacheEfficiency)
+	}
+}
+
+// TestUsageGatewayProtocolRequestPreservesToolResult is the unit
+// test for the conversion path that previously dropped the
+// `role: "tool"` message on the second turn of a tool-using
+// conversation. The test feeds Pi's exact wire shape into the
+// converter and asserts the resulting `protocol.Request` carries
+// the tool result as a `BlockToolResult` content block, plus the
+// prior assistant tool_call as a `BlockToolUse` content block, so
+// the upstream model can match the two and continue the
+// conversation. Without the fix, the model would receive only
+// the original user message and could not produce a follow-up
+// reply, causing the agent loop to hang after the first tool
+// call.
+func TestUsageGatewayProtocolRequestPreservesToolResult(t *testing.T) {
+	req := openAIChatCompletionRequest{
+		Model: "M3",
+		Messages: []openAIChatMessage{
+			{Role: "user", Content: "read /tmp/hi"},
+			{
+				Role:    "assistant",
+				Content: nil, // Pi sends null content on tool_calls turns
+				ToolCalls: []openAIToolCallWire{{
+					ID:    "call_abc",
+					Type:  "function",
+					Index: 0,
+					Function: openAIFunctionCall{
+						Name:      "read",
+						Arguments: `{"path":"/tmp/hi"}`,
+					},
+				}},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "call_abc",
+				Content:    "hi from file",
+			},
+		},
+	}
+	got, err := usageGatewayProtocolRequest(req)
+	if err != nil {
+		t.Fatalf("usageGatewayProtocolRequest: %v", err)
+	}
+
+	// We expect 3 messages in the conversation: user,
+	// assistant (with the tool_use block), and user (with
+	// the tool_result block, since Anthropic uses
+	// role=user for tool_result carriers).
+	if len(got.Messages) != 3 {
+		t.Fatalf("expected 3 messages (user + assistant + tool_result), got %d: %+v", len(got.Messages), got.Messages)
+	}
+	// Message 1: user turn with the original question.
+	if got.Messages[0].Role != "user" {
+		t.Errorf("expected first message role=user, got %q", got.Messages[0].Role)
+	}
+	if len(got.Messages[0].Content) != 1 || got.Messages[0].Content[0].Type != protocol.BlockText {
+		t.Errorf("expected first message to have one text block, got %+v", got.Messages[0].Content)
+	}
+	// Message 2: assistant turn with the tool_use block.
+	// The previous implementation would have lost the
+	// tool_calls array entirely, leaving the assistant turn
+	// with only an empty text block (or no block at all,
+	// dropping the message).
+	if got.Messages[1].Role != "assistant" {
+		t.Errorf("expected second message role=assistant, got %q", got.Messages[1].Role)
+	}
+	if len(got.Messages[1].Content) != 1 || got.Messages[1].Content[0].Type != protocol.BlockToolUse {
+		t.Fatalf("expected second message to carry one tool_use block, got %+v", got.Messages[1].Content)
+	}
+	toolUse := got.Messages[1].Content[0]
+	if toolUse.ID != "call_abc" {
+		t.Errorf("expected tool_use id=call_abc, got %q", toolUse.ID)
+	}
+	if toolUse.Name != "read" {
+		t.Errorf("expected tool_use name=read, got %q", toolUse.Name)
+	}
+	if toolUse.Input["path"] != "/tmp/hi" {
+		t.Errorf("expected tool_use input.path=/tmp/hi, got %v", toolUse.Input["path"])
+	}
+	// Message 3: the tool result, which Anthropic expects
+	// on a user-role message. The previous implementation
+	// dropped this message entirely (it had empty `content`
+	// after the role-normalisation step), so the model
+	// never saw its own tool result.
+	if got.Messages[2].Role != "user" {
+		t.Errorf("expected third message role=user (Anthropic tool_result carrier), got %q", got.Messages[2].Role)
+	}
+	if len(got.Messages[2].Content) != 1 || got.Messages[2].Content[0].Type != protocol.BlockToolResult {
+		t.Fatalf("expected third message to carry one tool_result block, got %+v", got.Messages[2].Content)
+	}
+	toolResult := got.Messages[2].Content[0]
+	if toolResult.ToolUseID != "call_abc" {
+		t.Errorf("expected tool_result tool_use_id=call_abc, got %q", toolResult.ToolUseID)
+	}
+	if toolResult.Content != "hi from file" {
+		t.Errorf("expected tool_result content='hi from file', got %q", toolResult.Content)
+	}
+}
+
+// TestUsageGatewayProtocolRequestDropsEmptyTextUserMessage covers
+// the contract that a user message with empty `content` (which
+// would otherwise be discarded by the role normalisation step)
+// is preserved when it carries a tool result. The previous
+// implementation had `if text == "" { continue }` at the top of
+// the loop, which would silently drop the tool result message
+// because `openAIContentText` returns "" for the tool message
+// shape (the result lives in `tool_call_id` and the content in
+// `content`, not in the `content` text-projection function).
+// The fix moves the empty-text check INSIDE the user /
+// assistant branches and the tool message uses its own
+// extraction path.
+func TestUsageGatewayProtocolRequestDropsEmptyTextUserMessage(t *testing.T) {
+	// An assistant tool_call followed by a tool result.
+	// The assistant message has no text, only tool_calls;
+	// the tool message has empty content but a non-empty
+	// tool_call_id. The previous implementation dropped
+	// both messages.
+	req := openAIChatCompletionRequest{
+		Model: "M3",
+		Messages: []openAIChatMessage{
+			{Role: "user", Content: ""}, // empty text but legitimate user marker
+		},
+	}
+	// Note: the empty user message IS dropped — it's
+	// neither a tool result nor a meaningful text. We just
+	// verify the converter doesn't 500 on it. A second
+	// test below verifies a tool-only conversation is
+	// preserved.
+	if _, err := usageGatewayProtocolRequest(req); err == nil {
+		t.Errorf("expected error for empty conversation, got nil")
+	}
+
+	// A tool-only conversation (assistant tool_call +
+	// tool result) must NOT be dropped.
+	req2 := openAIChatCompletionRequest{
+		Model: "M3",
+		Messages: []openAIChatMessage{
+			{Role: "assistant", ToolCalls: []openAIToolCallWire{{
+				ID:    "call_x",
+				Type:  "function",
+				Index: 0,
+				Function: openAIFunctionCall{
+					Name:      "read",
+					Arguments: `{"path":"/tmp/hi"}`,
+				},
+			}}},
+			{Role: "tool", ToolCallID: "call_x", Content: "ok"},
+		},
+	}
+	got, err := usageGatewayProtocolRequest(req2)
+	if err != nil {
+		t.Fatalf("usageGatewayProtocolRequest: %v", err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("expected 2 messages (assistant tool_call + tool result), got %d", len(got.Messages))
+	}
+	if got.Messages[0].Role != "assistant" || got.Messages[0].Content[0].Type != protocol.BlockToolUse {
+		t.Errorf("expected assistant with tool_use block, got %+v", got.Messages[0].Content)
+	}
+	if got.Messages[1].Role != "user" || got.Messages[1].Content[0].Type != protocol.BlockToolResult {
+		t.Errorf("expected user with tool_result block, got %+v", got.Messages[1].Content)
 	}
 }

@@ -381,21 +381,143 @@ func usageGatewayProtocolRequest(req openAIChatCompletionRequest) (protocol.Requ
 	messages := make([]protocol.APIMessage, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		role := strings.ToLower(strings.TrimSpace(msg.Role))
-		text := strings.TrimSpace(openAIContentText(msg.Content))
-		if text == "" {
-			continue
-		}
+
+		// System / developer messages are flattened into a
+		// single system prompt; the protocol model has no
+		// notion of "developer" vs "system" and Anthropic
+		// uses the same field for both.
 		if role == "system" || role == "developer" {
-			systemParts = append(systemParts, text)
+			text := strings.TrimSpace(openAIContentText(msg.Content))
+			if text != "" {
+				systemParts = append(systemParts, text)
+			}
 			continue
 		}
+
+		// `role: "tool"` messages carry the tool result of
+		// an earlier assistant tool_call. The OpenAI wire
+		// shape places the result in `content` and the
+		// originating tool_call's id in `tool_call_id`; we
+		// translate to a single BlockToolResult so the
+		// upstream sees a content block of type
+		// "tool_result" with the matching tool_use_id. The
+		// previous implementation dropped messages with
+		// empty `content` (which is the common case for
+		// tool result messages whose `content` may be empty
+		// but whose `tool_call_id` is the load-bearing
+		// field) and also dropped messages with `role:
+		// "tool"` because the role mapping had no special
+		// case for it. That broke the agent loop on the
+		// second turn of any tool-using conversation: the
+		// model never saw its own tool result, so it could
+		// never produce a follow-up reply. This block
+		// restores both fields.
+		if role == "tool" {
+			toolUseID := strings.TrimSpace(msg.ToolCallID)
+			if toolUseID == "" {
+				// Defensive: an OpenAI tool message
+				// without a tool_call_id is
+				// malformed (the SDK always sets it),
+				// but we surface the error rather
+				// than silently dropping the
+				// message so the caller can see the
+				// problem.
+				return protocol.Request{}, fmt.Errorf("role: \"tool\" message is missing tool_call_id")
+			}
+			content := openAIContentText(msg.Content)
+			messages = append(messages, protocol.APIMessage{
+				Role: protocol.RoleUser, // tool_result lives under role=user in Anthropic
+				Content: []protocol.Block{{
+					Type:      protocol.BlockToolResult,
+					ToolUseID: toolUseID,
+					Content:   content,
+				}},
+			})
+			continue
+		}
+
 		protoRole := role
 		switch protoRole {
 		case protocol.RoleAssistant, protocol.RoleUser:
 		default:
 			protoRole = protocol.RoleUser
 		}
-		messages = append(messages, protocol.APIMessage{Role: protoRole, Content: []protocol.Block{protocol.TextBlock(text)}})
+
+		// Assistant messages can carry (a) text content,
+		// (b) tool_calls, or (c) both. The text goes
+		// into a BlockText block; each tool_call goes
+		// into a BlockToolUse block with the
+		// arguments already-JSON-marshaled. The previous
+		// implementation only looked at `content` and
+		// dropped the tool_calls array, which meant the
+		// upstream model saw no record of its own prior
+		// tool calls on the second turn (the OpenAI
+		// client reconstructed them from the tool result
+		// message, but the upstream model lost the
+		// symmetry). The fix here makes the assistant
+		// message carry both shapes so the upstream can
+		// match each tool_use_id with its
+		// corresponding tool_result.
+		protoMsg := protocol.APIMessage{Role: protoRole}
+		// Only emit a text block when the assistant message
+		// actually carries text content. Pi sends `content:
+		// null` on tool_calls turns (and the OpenAI SDK
+		// round-trips the same shape on subsequent turns), and
+		// an empty text block would either serialize as the
+		// string "<nil>" (which Anthropic rejects) or as a
+		// zero-length content array entry (which Anthropic
+		// also rejects with 2013 "messages must have
+		// non-empty content"). Without this guard, the second
+		// turn of any tool-using conversation would 400.
+		if msg.Content != nil {
+			if text := strings.TrimSpace(openAIContentText(msg.Content)); text != "" {
+				protoMsg.Content = append(protoMsg.Content, protocol.TextBlock(text))
+			}
+		}
+		for _, call := range msg.ToolCalls {
+			if strings.TrimSpace(call.Function.Name) == "" {
+				// A tool_call fragment with no name
+				// is a partial OpenAI streaming
+				// delta (Pi sends the function name
+				// on the first frame and arguments
+				// on subsequent frames). The
+				// non-streaming path should never
+				// see those because Pi only sends
+				// assembled tool_calls on the
+				// non-streaming /v1/chat/completions
+				// path, but be defensive: skip
+				// nameless fragments so we don't
+				// emit a broken tool_use block.
+				continue
+			}
+			var input map[string]interface{}
+			if strings.TrimSpace(call.Function.Arguments) != "" {
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &input); err != nil {
+					return protocol.Request{}, fmt.Errorf("assistant tool_call %q has invalid JSON arguments: %w", call.Function.Name, err)
+				}
+			}
+			if input == nil {
+				input = map[string]interface{}{}
+			}
+			protoMsg.Content = append(protoMsg.Content, protocol.Block{
+				Type:  protocol.BlockToolUse,
+				ID:    call.ID,
+				Name:  call.Function.Name,
+				Input: input,
+				Index: call.Index,
+			})
+		}
+		// Don't drop the message if it's an empty
+		// assistant turn (text="" + no tool_calls); the
+		// model sometimes sends these as separator
+		// markers and the upstream handles them as a
+		// valid no-op. Only skip when the message is
+		// truly empty AND has no tool_calls — a
+		// tool_call-only message is meaningful.
+		if len(protoMsg.Content) == 0 {
+			continue
+		}
+		messages = append(messages, protoMsg)
 	}
 	if len(messages) == 0 {
 		return protocol.Request{}, fmt.Errorf("at least one non-empty user or assistant message is required")
@@ -555,6 +677,19 @@ func writeUsageGatewayError(w http.ResponseWriter, status int, code, message str
 // stop chunk and the data: [DONE] sentinel. Usage is recorded once the
 // stream returns the final response so we can read the provider's usage
 // payload.
+//
+// Cross-protocol contract (Pi + OpenAI protocol + anthropic_compatible
+// provider): the upstream Anthropic parser (parseMessageStream) calls
+// OnToolUse with the CUMULATIVE tool_use JSON, but Pi's OpenAI SDK
+// expects each tool_calls chunk to carry a per-chunk delta that the SDK
+// concatenates itself. Forwarding the cumulative string would make Pi
+// see the same bytes repeated and accumulate the JSON by string
+// concatenation, producing invalid JSON like
+// `{"command":"ls"}{"command":"ls","timeout":30}` — exactly the
+// pattern that made the agent loop hang after the first tool call. We
+// track the previous cumulative per tool index and forward only the
+// delta suffix, mirroring the toolJSONDeltaSuffix fix the
+// Anthropic-streaming path already had.
 func streamUsageGatewayChatCompletions(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -591,6 +726,19 @@ func streamUsageGatewayChatCompletions(
 	// but they still expect the wire frame to declare finish_reason.
 	toolCallsSeen := false
 
+	// lastPartialArgsPerIndex tracks the previous cumulative
+	// arguments string per tool call index. We need this
+	// because the upstream Anthropic parser passes the full
+	// reassembled JSON to OnToolUse on every callback, but
+	// the OpenAI SDK expects per-chunk deltas that it
+	// concatenates itself. The map is keyed on the
+	// block.Index field the upstream surfaces; for OpenAI-
+	// shape upstreams (which use 0-based indices that match
+	// chat.completion.chunk tool_calls[].index) and for the
+	// anthropic_compatible→OpenAI path, this is a faithful
+	// cross-walk. We allocate lazily on first encounter.
+	lastPartialArgsPerIndex := map[int]string{}
+
 	resp, err := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
 		OnTextDelta: func(delta string) {
 			if delta == "" {
@@ -600,21 +748,47 @@ func streamUsageGatewayChatCompletions(
 		},
 		OnToolUse: func(block protocol.Block, partialJSON string) {
 			toolCallsSeen = true
-			// Forward OpenAI chat.completion.chunk tool_calls deltas verbatim
-			// to the client. The provider may stream the same tool_use across
-			// multiple frames (start, args, finish), so we emit a chunk per
-			// OnToolUse callback. Clients dedupe tool calls by index+id+name
-			// across chunks, so we forward the upstream's tool_calls[].index
-			// rather than hardcoding 0 — otherwise multiple parallel tool
-			// calls in the same turn would all share index 0 and overwrite
-			// each other in the SDK's accumulator.
+			// Compute the per-chunk arguments fragment to
+			// forward. When the upstream is OpenAI-shape
+			// (parseOpenAIStream), partialJSON is already
+			// the per-chunk delta, so the diff is a no-op.
+			// When the upstream is Anthropic-shape
+			// (parseMessageStream), partialJSON is the
+			// cumulative reassembled JSON; we must diff
+			// against the last cumulative we saw to
+			// recover the delta suffix.
+			idx := block.Index
+			prev, seen := lastPartialArgsPerIndex[idx]
+			fragment := toolJSONDeltaSuffix(prev, partialJSON)
+			// Suppress the trailing content_block_stop
+			// callback when it carries the same cumulative
+			// string we already forwarded. The OpenAI SDK
+			// would concatenate it again and corrupt the
+			// JSON; emitting nothing here is the same
+			// behaviour the Anthropic streaming path uses.
+			if seen && partialJSON == prev {
+				return
+			}
+			lastPartialArgsPerIndex[idx] = partialJSON
+			// Always forward at least the id+name on the
+			// first emission for this index, even if the
+			// fragment is empty. OpenAI SDKs use the
+			// presence of an id+name to register the tool
+			// call in the accumulator; emitting the
+			// subsequent fragments without a name would
+			// leave the call unnamed. The empty-fragment
+			// case is the first emission (cumulative is
+			// "" because the upstream just sent the
+			// content_block_start frame with no
+			// input_json_delta yet), so we send the full
+			// block shape with arguments="".
 			calls := []openAIToolCallWire{{
-				Index: block.Index,
+				Index: idx,
 				ID:    block.ID,
 				Type:  "function",
 				Function: openAIFunctionCall{
 					Name:      block.Name,
-					Arguments: partialJSON,
+					Arguments: fragment,
 				},
 			}}
 			emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{ToolCalls: calls}, "")

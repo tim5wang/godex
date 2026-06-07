@@ -66,20 +66,61 @@ type openAIToolFunction struct {
 }
 
 // Anthropic Messages API types
+//
+// Pi (and other Anthropic SDKs) sends a superset of fields. The
+// gateway forwards every field the upstream provider understands
+// (model, max_tokens, temperature, top_p, top_k, stop_sequences,
+// metadata, tool_choice, service_tier, thinking, system) and
+// silently drops fields the upstream rejects (mcp_servers,
+// context_management — those are passed through as JSON in
+// ExtraFields so future upstreams can pick them up without us
+// having to widen this struct every time Anthropic adds one).
 type anthropicMessageRequest struct {
-	Model            string                   `json:"model"`
-	Messages         []anthropicMessage       `json:"messages"`
-	System           interface{}              `json:"system,omitempty"`
-	Tools           []anthropicTool          `json:"tools,omitempty"`
-	MaxTokens       int                      `json:"max_tokens"`
-	Stream          bool                     `json:"stream,omitempty"`
-	Thinking        *anthropicThinkingConfig  `json:"thinking,omitempty"`
-	ExtraHeaders    map[string]string        `json:"extra_headers,omitempty"`
+	Model            string                  `json:"model"`
+	Messages         []anthropicMessage      `json:"messages"`
+	System           interface{}             `json:"system,omitempty"`
+	Tools            []anthropicTool         `json:"tools,omitempty"`
+	MaxTokens        int                     `json:"max_tokens"`
+	Stream           bool                    `json:"stream,omitempty"`
+	Thinking         *anthropicThinkingConfig `json:"thinking,omitempty"`
+	ExtraHeaders     map[string]string       `json:"extra_headers,omitempty"`
+	// Optional request knobs forwarded verbatim. Pi sets most of
+	// these when the user picks a reasoning level / max_tokens
+	// override. We forward the fields the upstream understands
+	// (temperature, top_p, top_k, stop_sequences, metadata,
+	// service_tier, tool_choice) and ignore the rest.
+	Temperature      *float64                 `json:"temperature,omitempty"`
+	TopP             *float64                 `json:"top_p,omitempty"`
+	TopK             *int                     `json:"top_k,omitempty"`
+	StopSequences    []string                 `json:"stop_sequences,omitempty"`
+	Metadata         *anthropicMetadata       `json:"metadata,omitempty"`
+	ServiceTier      string                   `json:"service_tier,omitempty"`
+	ToolChoice       *anthropicToolChoice     `json:"tool_choice,omitempty"`
+	// ExtraFields is a passthrough for any other top-level field
+	// the Anthropic SDK might add (mcp_servers, context_management,
+	// container, etc.). The conversion logic merges this map into
+	// the wire payload so the upstream sees them verbatim, but the
+	// gateway never crashes on unknown keys.
+	ExtraFields      map[string]interface{}   `json:"-"`
+}
+
+// anthropicMetadata mirrors Anthropic's `metadata.user_id` shape.
+// Pi's Anthropic SDK fills it when session affinity is enabled.
+type anthropicMetadata struct {
+	UserID string `json:"user_id,omitempty"`
+}
+
+// anthropicToolChoice mirrors Anthropic's `tool_choice` field,
+// which can be a string ("auto" | "any" | "none") or an object
+// ("{type: \"tool\", name: \"...\"}"). We capture both shapes.
+type anthropicToolChoice struct {
+	Type string `json:"type,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 type anthropicThinkingConfig struct {
-	Type      string `json:"type,omitempty"`
-	BudgetTokens int `json:"budget_tokens,omitempty"`
+	Type         string `json:"type,omitempty"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -105,6 +146,25 @@ type anthropicContentBlock struct {
 	ToolUseID string      `json:"tool_use_id,omitempty"`
 	Content   interface{} `json:"content,omitempty"`
 	IsError   bool        `json:"is_error,omitempty"`
+	// Thinking block fields. Anthropic's extended thinking returns
+	// blocks of type "thinking" carrying the model's chain-of-thought
+	// text plus an opaque `signature` the client must echo back on
+	// the next turn. We forward both fields so multi-turn Pi sessions
+	// keep their thinking context intact.
+	Thinking        string `json:"thinking,omitempty"`
+	Signature       string `json:"signature,omitempty"`
+	// Cache control breakpoint. Pi attaches this to the last user
+	// message and the system prompt to mark them as ephemeral-cache
+	// breakpoints. We propagate it to the upstream so Anthropic-style
+	// cache routing (when the upstream is `anthropic_native`) honours
+	// it; compatible providers that don't understand the field see
+	// it dropped at the wire-shaping layer.
+	CacheControl    *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+type anthropicCacheControl struct {
+	Type string `json:"type,omitempty"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type anthropicImageSource struct {
@@ -136,6 +196,20 @@ type anthropicResponseBlock struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
 	Input map[string]interface{} `json:"input,omitempty"`
+	// Thinking block fields. Anthropic's extended thinking returns
+	// blocks of type "thinking" carrying the model's chain-of-thought
+	// text plus an opaque `signature` the client must echo back on
+	// the next turn. We surface both fields in non-streaming responses
+	// so Pi can keep its multi-turn reasoning context intact.
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	// Data is the opaque payload of a `redacted_thinking` block.
+	// Anthropic uses a separate shape (singular `data` field) for
+	// the safety-filtered case; the client must echo it back on
+	// the next turn the same way it echoes a `signature`. The
+	// gateway forwards the bytes verbatim so the client can keep
+	// the redacted context.
+	Data string `json:"data,omitempty"`
 }
 
 type anthropicUsage struct {

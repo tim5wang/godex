@@ -268,9 +268,14 @@ func NewHandlerWithRuntime(
 		// Try web-token auth (for pi and other clients using ANTHROPIC_BASE_URL)
 		webToken := manager.Current().WebToken
 		if webToken != "" && bearerAuthorized(r, webToken) {
-			// Handle as direct API request with web token auth
-			// This creates a new session and processes the request
-			handleAnthropicWebTokenMessages(w, r, service)
+			// Web-token auth: the caller is the admin (or anyone
+			// who knows the web token). Dispatch through the same
+			// LLM gateway the proxy-key path uses so Pi and other
+			// Anthropic SDK clients see the full streaming + tools
+			// experience. The previous implementation routed to the
+			// godex agent backend, which doesn't support streaming
+			// or tool calls and never worked for Pi.
+			handleAnthropicWebTokenMessages(w, r, usageService, manager)
 			return
 		}
 		// Require Bearer auth
@@ -1485,74 +1490,43 @@ func NewHandlerWithRuntime(
 
 // handleAnthropicWebTokenMessages handles POST /v1/messages requests with web token auth.
 // This is used by clients like pi that use ANTHROPIC_BASE_URL pointing to godex.
-func handleAnthropicWebTokenMessages(w http.ResponseWriter, r *http.Request, service *backend.Service) {
-	var req anthropicMessageRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "Invalid request body: "+err.Error())
-		return
+//
+// Unlike the previous implementation, which routed the request to the
+// godex AI agent backend (a different product surface that does not
+// support streaming, tool calls, or extended thinking), this version
+// treats the web token as an admin-level identity and dispatches the
+// request through the same Anthropic LLM gateway the proxy-key path
+// uses. The admin is implicitly allowed to invoke any model mapping,
+// and the budget is treated as unlimited (BudgetCredits == 0 maps to
+// the "unlimited" branch in usage.Service.CheckBudget). This makes
+// the web-token path a drop-in for Pi and other Anthropic SDK
+// clients that configure the web token instead of a gdx_ proxy key.
+func handleAnthropicWebTokenMessages(w http.ResponseWriter, r *http.Request, usageService *usage.Service, manager *config.Manager) {
+	// Synthesise a virtual "admin" key. We never persist this row;
+	// the dispatcher only reads AllowedModels / BudgetCredits /
+	// Enabled, and the absence of those fields means "use defaults".
+	adminKey := &usage.ProxyAPIKey{
+		ID:        "system:web_token",
+		Name:      "Web Token Admin",
+		KeyPrefix: "web_token",
+		Enabled:   true,
+		// AllowedModels is nil: the dispatcher treats nil as
+		// "allow every model".
+		// BudgetCredits is 0: CheckBudget treats 0 as
+		// unlimited (the existing contract; see
+		// service.CheckBudget in services/usage/service.go).
 	}
-
-	// Validate required fields
-	if req.Model == "" {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "model is required")
-		return
-	}
-	if req.MaxTokens <= 0 {
-		req.MaxTokens = 4096 // default max tokens
-	}
-	if len(req.Messages) == 0 {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "messages is required and cannot be empty")
-		return
-	}
-
-	// Create or get session
-	opened, err := service.OpenSession(r.Context(), backend.SessionLocator{
-		Channel: "anthropic_api",
-		Key:     fmt.Sprintf("anthropic-%d", time.Now().UnixNano()),
-		UserID:  "anthropic_api",
-	})
-	if err != nil {
-		writeError(w, statusForSessionError(err), err)
-		return
-	}
-
-	// Build message text from Anthropic format
-	text := anthropicMessagesToText(req.Messages)
-	if text == "" {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", "message content is required")
-		return
-	}
-
-	// Submit message
-	envelope := message.NewRuntimeEnvelope(message.SourceGateway, opened.SessionID, "anthropic_api", text, time.Now(), nil)
-	result, err := service.SubmitAsync(r.Context(), opened.SessionID, envelope)
-	if err != nil {
-		writeError(w, statusForSessionError(err), err)
-		return
-	}
-
-	// Wait for response (simplified - in production you'd stream)
-	resp, err := collectAnthropicResponse(r.Context(), service, opened.SessionID, result.TurnID)
-	if err != nil {
-		writeAnthropicError(w, http.StatusInternalServerError, "internal_error", err.Error())
-		return
-	}
-
-	// Convert to Anthropic response format
-	anthropicResp := anthropicResponse{
-		ID:          fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-		Type:        "message",
-		Role:        "assistant",
-		Model:       req.Model,
-		Content:     []anthropicResponseBlock{{Type: "text", Text: resp}},
-		StopReason:  "end_turn",
-		Usage:       &anthropicUsage{InputTokens: 0, OutputTokens: len(resp) / 4}, // rough estimate
-	}
-
-	writeJSON(w, http.StatusOK, anthropicResp)
+	dispatchAnthropicMessages(w, r, usageService, manager, adminKey)
 }
 
 // anthropicMessagesToText converts Anthropic message format to plain text.
+// Retained because the legacy agent-backend path used it; the LLM
+// gateway path doesn't need a string projection, but we keep the
+// helper exported for the few call sites that still want to dump an
+// Anthropic conversation to a single string (e.g. the route-time
+// debug log). The conversion is deliberately lossy — it concatenates
+// text blocks and drops images / tool_use / tool_result / thinking —
+// because the only consumer is the agent backend's text-only prompt.
 func anthropicMessagesToText(messages []anthropicMessage) string {
 	var parts []string
 	for _, msg := range messages {

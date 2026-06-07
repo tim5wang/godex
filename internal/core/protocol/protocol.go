@@ -15,6 +15,17 @@ const (
 	BlockImage      BlockType = "image"
 	BlockToolUse    BlockType = "tool_use"
 	BlockToolResult BlockType = "tool_result"
+	// BlockThinking represents an Anthropic extended-thinking block.
+	// The Text field carries the visible chain-of-thought text, and
+	// Signature carries the opaque signature the client must echo
+	// back on the next turn (Anthropic uses it to bind the
+	// chain-of-thought to a specific model run). The gateway emits
+	// these blocks to the wire as Anthropic thinking content blocks
+	// so Pi and other Anthropic SDKs can keep multi-turn reasoning
+	// context intact. Upstream OpenAI-style providers receive an
+	// aggregated reasoning_content string instead (see
+	// Response.ReasoningContent for the consolidated form).
+	BlockThinking BlockType = "thinking"
 )
 
 const (
@@ -76,6 +87,19 @@ type Block struct {
 	Input     map[string]interface{} `json:"input,omitempty"`
 	ToolUseID string                 `json:"tool_use_id,omitempty"`
 	Content   string                 `json:"content,omitempty"`
+	// Signature is the opaque Anthropic thinking signature the
+	// client must echo back on the next turn to keep multi-turn
+	// reasoning context. The gateway only sets it on BlockThinking
+	// blocks; tool_use / tool_result blocks never carry it.
+	// Upstream OpenAI-style providers ignore the field.
+	Signature string `json:"signature,omitempty"`
+	// Redacted marks a thinking block whose content was redacted by
+	// the safety filter (Anthropic emits these as `redacted_thinking`
+	// blocks). The Text field carries the placeholder
+	// "[Reasoning redacted]" and the Signature field carries the
+	// opaque data payload. The gateway forwards both fields
+	// verbatim so Pi can keep the redacted context.
+	Redacted bool `json:"redacted,omitempty"`
 	// Index is the wire-level ordering hint for protocols that
 	// distinguish multiple tool calls in a single assistant turn
 	// (e.g. OpenAI's chat.completion.chunk tool_calls[].index, which
@@ -235,6 +259,8 @@ func MessageFromResponse(resp Response) Message {
 			blocks = append(blocks, TextBlock(block.Text))
 		case BlockToolUse:
 			blocks = append(blocks, ToolUseBlock(block.ID, block.Name, block.Input))
+		case BlockThinking:
+			blocks = append(blocks, ThinkingBlock(block.Text, block.Signature, block.Redacted))
 		}
 	}
 	msg := Message{Role: RoleAssistant, Content: blocks}
@@ -256,6 +282,22 @@ func BlocksText(blocks []Block) string {
 		}
 	}
 	return builder.String()
+}
+
+// ThinkingBlock builds a BlockThinking block. Signature is the opaque
+// Anthropic signature the client must echo back on the next turn;
+// callers may pass an empty signature when the upstream did not
+// surface one (e.g. a compatible provider that doesn't emit
+// signatures) and the gateway still forwards the visible Text
+// content. Redacted is true for `redacted_thinking` blocks whose
+// payload was replaced by the safety filter.
+func ThinkingBlock(text, signature string, redacted bool) Block {
+	return Block{
+		Type:      BlockThinking,
+		Text:      text,
+		Signature: signature,
+		Redacted:  redacted,
+	}
 }
 
 func ToolUses(blocks []Block) []Block {
@@ -335,6 +377,8 @@ func cloneBlocks(blocks []Block) []Block {
 			Input:     cloneMap(block.Input),
 			ToolUseID: block.ToolUseID,
 			Content:   block.Content,
+			Signature: block.Signature,
+			Redacted:  block.Redacted,
 		})
 	}
 	return result
@@ -358,6 +402,15 @@ func apiBlocks(blocks []Block) []Block {
 			result = append(result, ToolUseBlock(block.ID, block.Name, input))
 		case BlockToolResult:
 			result = append(result, ToolResultBlock(block.ToolUseID, block.Content))
+		case BlockThinking:
+			// Thinking blocks travel separately from text; the wire
+			// serializer drops them when shaping the upstream payload
+			// (the model does not see its own previous reasoning).
+			// We preserve the visible Text as reasoning_content on
+			// the API message so reasoning-capable models can keep
+			// continuity without the signature (which is only valid
+			// when re-sent to the same provider that minted it).
+			result = append(result, ThinkingBlock(block.Text, block.Signature, block.Redacted))
 		default:
 			// Repair: convert unrecognized block types to text blocks
 			// so the message content is never silently lost.
@@ -433,6 +486,16 @@ func (b Block) MarshalJSON() ([]byte, error) {
 	case BlockToolResult:
 		payload["tool_use_id"] = b.ToolUseID
 		payload["content"] = b.Content
+	case BlockThinking:
+		// Thinking blocks use a separate shape on the wire:
+		// `{type: "thinking", thinking: "...", signature: "..."}`.
+		// We always emit the field set, even when empty, so consumers
+		// that already opened a thinking content block can match
+		// subsequent deltas back to it.
+		payload["thinking"] = b.Text
+		if b.Signature != "" {
+			payload["signature"] = b.Signature
+		}
 	default:
 		if b.Text != "" {
 			payload["text"] = b.Text
@@ -454,6 +517,9 @@ func (b Block) MarshalJSON() ([]byte, error) {
 		}
 		if b.Content != "" {
 			payload["content"] = b.Content
+		}
+		if b.Signature != "" {
+			payload["signature"] = b.Signature
 		}
 	}
 	return json.Marshal(payload)

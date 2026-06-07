@@ -9,7 +9,7 @@ import (
 func TestMessageFromResponsePreservesTextAndToolUseBlocks(t *testing.T) {
 	resp := Response{Content: []Block{
 		TextBlock("hello "),
-		{Type: BlockType("thinking"), Text: "skip"},
+		{Type: BlockType("audio"), Text: "skip"},
 		ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "pwd"}),
 	}}
 
@@ -49,7 +49,7 @@ func TestToAPIMessagesPreservesToolResults(t *testing.T) {
 func TestToAPIMessagesRepairsUnsupportedBlocks(t *testing.T) {
 	messages := []Message{
 		NewMessage(RoleAssistant,
-			Block{Type: BlockType("thinking"), Text: "skip"},
+			Block{Type: BlockType("audio"), Text: "skip"},
 			TextBlock("keep"),
 		),
 	}
@@ -63,7 +63,7 @@ func TestToAPIMessagesRepairsUnsupportedBlocks(t *testing.T) {
 		t.Fatalf("expected 2 blocks (repaired unsupported + keep), got %d: %+v", len(apiMessages[0].Content), apiMessages[0].Content)
 	}
 	if apiMessages[0].Content[0].Type != BlockText || apiMessages[0].Content[0].Text != "skip" {
-		t.Fatalf("expected unsupported thinking block repaired to text with 'skip', got %+v", apiMessages[0].Content[0])
+		t.Fatalf("expected unsupported audio block repaired to text with 'skip', got %+v", apiMessages[0].Content[0])
 	}
 	if apiMessages[0].Content[1].Type != BlockText || apiMessages[0].Content[1].Text != "keep" {
 		t.Fatalf("expected keep text block preserved, got %+v", apiMessages[0].Content[1])

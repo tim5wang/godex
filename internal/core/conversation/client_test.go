@@ -102,6 +102,140 @@ func TestClientStreamEmitsTextDeltasAndReturnsResponse(t *testing.T) {
 	}
 }
 
+// TestClientStreamAssemblesThinkingBlock covers the extended-thinking
+// case where the upstream Anthropic API emits a thinking content
+// block (chain-of-thought text + opaque signature). The previous
+// parser did not know about the `thinking` content block type and
+// silently dropped the block from the final response, so multi-turn
+// Pi sessions lost their reasoning context after the first turn.
+// The fix surfaces the block on the response (alongside the
+// consolidated reasoning text and signature) and forwards each
+// per-chunk delta to the OnThinkingDelta callback so the gateway
+// can emit the canonical `thinking_delta` / `signature_delta`
+// frames on the wire.
+func TestClientStreamAssemblesThinkingBlock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, payload := range []string{
+			`{"type":"message_start","message":{"content":[]}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"let me "}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"think..."}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-abc"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"answer"}}`,
+			`{"type":"content_block_stop","index":1}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
+			`{"type":"message_stop"}`,
+		} {
+			_, _ = w.Write([]byte("data: " + payload + "\n\n"))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-key", 5*time.Second)
+
+	var thinkingDeltas []string
+	var signatures []string
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "test-model"}, StreamHandler{
+		OnThinkingDelta: func(thinking string, signature string) {
+			if thinking != "" {
+				thinkingDeltas = append(thinkingDeltas, thinking)
+			}
+			if signature != "" {
+				signatures = append(signatures, signature)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("client stream: %v", err)
+	}
+
+	// The parser must surface the consolidated thinking block
+	// on the final response so multi-turn sessions can keep the
+	// chain-of-thought. Without the fix the block was missing
+	// and reasoningContent was empty.
+	if got := strings.Join(thinkingDeltas, ""); got != "let me think..." {
+		t.Errorf("expected per-chunk thinking %q, got %q", "let me think...", got)
+	}
+	if len(signatures) != 1 || signatures[0] != "sig-abc" {
+		t.Errorf("expected exactly one signature 'sig-abc', got %v", signatures)
+	}
+	if got := protocol.BlocksText(resp.Content); got != "answer" {
+		t.Errorf("expected final text 'answer', got %q", got)
+	}
+	// The thinking block must be present on the response so the
+	// gateway can return it on the non-streaming path and so
+	// multi-turn sessions can echo the signature back. We use
+	// the type-filtering ToolUses helper for tool calls; for
+	// thinking we walk the slice ourselves.
+	var foundThinking *protocol.Block
+	for i := range resp.Content {
+		if resp.Content[i].Type == protocol.BlockThinking {
+			foundThinking = &resp.Content[i]
+			break
+		}
+	}
+	if foundThinking == nil {
+		t.Fatalf("expected a thinking block in the response, got %+v", resp.Content)
+	}
+	if foundThinking.Text != "let me think..." {
+		t.Errorf("expected thinking text %q, got %q", "let me think...", foundThinking.Text)
+	}
+	if foundThinking.Signature != "sig-abc" {
+		t.Errorf("expected thinking signature 'sig-abc', got %q", foundThinking.Signature)
+	}
+	if foundThinking.Redacted {
+		t.Errorf("expected non-redacted thinking block, got Redacted=true")
+	}
+}
+
+// TestClientStreamAssemblesRedactedThinkingBlock covers the safety-
+// filter case where Anthropic emits a `redacted_thinking` content
+// block (opaque data payload, no visible text). The parser must
+// surface the block with the redacted marker set so the gateway
+// forwards the correct wire shape on the non-streaming path.
+func TestClientStreamAssemblesRedactedThinkingBlock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, payload := range []string{
+			`{"type":"message_start","message":{"content":[]}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque-data"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"ok"}}`,
+			`{"type":"content_block_stop","index":1}`,
+			`{"type":"message_stop"}`,
+		} {
+			_, _ = w.Write([]byte("data: " + payload + "\n\n"))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "test-model"}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("client stream: %v", err)
+	}
+	var found *protocol.Block
+	for i := range resp.Content {
+		if resp.Content[i].Type == protocol.BlockThinking {
+			found = &resp.Content[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a redacted thinking block in the response, got %+v", resp.Content)
+	}
+	if !found.Redacted {
+		t.Errorf("expected Redacted=true on the redacted thinking block")
+	}
+	if found.Signature != "opaque-data" {
+		t.Errorf("expected signature to carry the opaque data, got %q", found.Signature)
+	}
+}
+
 func TestClientStreamAssemblesToolUseInput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

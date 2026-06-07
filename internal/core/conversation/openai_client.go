@@ -653,6 +653,15 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 		return nil, err
 	}
 	blocks := make([]protocol.Block, 0, 1+len(order))
+	// Surface OpenAI `reasoning_content` deltas as a thinking block
+	// (alongside the consolidated `ReasoningContent` string the
+	// OpenAI response shape expects). Pi's OpenAI provider does the
+	// same — reasoning is just a thinking block with no signature —
+	// so the gateway can round-trip to either OpenAI or Anthropic
+	// shape without losing the model's chain-of-thought.
+	if strings.TrimSpace(reasoning.String()) != "" {
+		blocks = append(blocks, protocol.ThinkingBlock(reasoning.String(), "", false))
+	}
 	if strings.TrimSpace(text.String()) != "" {
 		blocks = append(blocks, protocol.TextBlock(text.String()))
 	}

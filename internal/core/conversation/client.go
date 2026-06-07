@@ -47,6 +47,17 @@ type StreamHandler struct {
 	// SSE events so that strict consumers (Pi's anthropic.ts:568-660
 	// toolcall_* paths) can execute the requested tool.
 	OnToolUse func(block protocol.Block, partialJSON string)
+	// OnThinkingDelta is invoked for every Anthropic extended-
+	// thinking content block delta. The parser calls it with
+	// the chain-of-thought text fragment the upstream just
+	// emitted (NOT the cumulative string — callers must
+	// concatenate across deltas themselves, mirroring how
+	// OnTextDelta is called per text chunk). The signature
+	// argument is non-empty only on the trailing
+	// signature_delta frame. Without this hook the gateway
+	// can't tell a text_delta from a thinking_delta, and the
+	// thinking chain-of-thought would be silently dropped.
+	OnThinkingDelta func(thinking string, signature string)
 }
 
 // Client sends Anthropic-compatible message requests.
@@ -372,10 +383,10 @@ func maxDuration(a, b time.Duration) time.Duration {
 type streamWireEvent struct {
 	Type         string             `json:"type"`
 	Index        int                `json:"index,omitempty"`
-	Message      *protocol.Response `json:"message,omitempty"`
-	ContentBlock *protocol.Block    `json:"content_block,omitempty"`
-	Delta        streamWireDelta    `json:"delta,omitempty"`
-	Error        *streamWireError   `json:"error,omitempty"`
+	Message      *protocol.Response   `json:"message,omitempty"`
+	ContentBlock *streamContentBlock  `json:"content_block,omitempty"`
+	Delta        streamWireDelta      `json:"delta,omitempty"`
+	Error        *streamWireError     `json:"error,omitempty"`
 	// Usage is the Anthropic streaming `message_delta.usage` field, which
 	// the spec places at the TOP level of the frame alongside `type` and
 	// `delta` (not nested inside `delta`). We keep Delta.Usage for legacy
@@ -422,6 +433,18 @@ type streamWireDelta struct {
 	Type        string         `json:"type"`
 	Text        string         `json:"text,omitempty"`
 	PartialJSON string         `json:"partial_json,omitempty"`
+	// Thinking is the partial chain-of-thought text from an
+	// extended-thinking content_block_delta. The wire shape is
+	// `{type:"thinking_delta", thinking:"..."}` per the Anthropic
+	// streaming spec; the client concatenates across chunks.
+	Thinking string `json:"thinking,omitempty"`
+	// Signature is the partial thinking signature from a
+	// `{type:"signature_delta", signature:"..."}` content_block_delta.
+	// The signature is opaque and only valid when the model run that
+	// minted it is resumed on the same upstream; the gateway
+	// forwards it verbatim so Pi can keep multi-turn reasoning
+	// context intact.
+	Signature string `json:"signature,omitempty"`
 	StopReason  string         `json:"stop_reason,omitempty"`
 	Usage       *protocol.Usage `json:"usage,omitempty"`
 }
@@ -431,9 +454,35 @@ type streamWireError struct {
 	Message string `json:"message,omitempty"`
 }
 
+// streamContentBlock captures the wire-side content_block fields
+// for non-text, non-tool blocks. Anthropic emits
+// `content_block_start { content_block: { type: "thinking",
+// thinking: "...", signature: "..." } }` for thinking blocks
+// (with the chain-of-thought already populated, not a delta), and
+// `{ type: "redacted_thinking", data: "..." }` for redacted ones.
+// We surface both shapes into the parser so the final response
+// can round-trip them.
+type streamContentBlock struct {
+	Type      string `json:"type,omitempty"`
+	Text      string `json:"text,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Input     map[string]interface{} `json:"input,omitempty"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"`
+}
+
 type streamBlockState struct {
 	block       protocol.Block
 	partialJSON strings.Builder
+	// partialThinking accumulates the visible chain-of-thought text
+	// across successive `{type:"thinking_delta"}` content_block_delta
+	// frames. The final text is what we keep on the response's
+	// BlockThinking entry (along with the signature we accumulated
+	// in partialSignature).
+	partialThinking strings.Builder
+	partialSignature strings.Builder
 }
 
 // mergeUsageDelta folds a non-message_start usage payload (Anthropic's
@@ -510,9 +559,52 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 		case "content_block_start":
 			block := protocol.Block{}
 			if event.ContentBlock != nil {
-				block = *event.ContentBlock
+				switch event.ContentBlock.Type {
+				case "thinking":
+					// Anthropic emits a thinking content_block_start
+					// with the chain-of-thought already attached in
+					// the same frame. We seed the partialThinking
+					// buffer with the seed text so subsequent
+					// thinking_delta frames concatenate onto it.
+					block = protocol.Block{
+						Type:      protocol.BlockThinking,
+						Text:      event.ContentBlock.Thinking,
+						Signature: event.ContentBlock.Signature,
+					}
+				case "redacted_thinking":
+					// Safety filter replaced the chain-of-thought
+					// with an opaque payload. The block is final on
+					// creation (no deltas), so we mark it redacted
+					// and store the opaque data in the Signature
+					// field so the client can echo it back on the
+					// next turn.
+					block = protocol.Block{
+						Type:      protocol.BlockThinking,
+						Text:      "[Reasoning redacted]",
+						Signature: event.ContentBlock.Data,
+						Redacted:  true,
+					}
+				default:
+					block = protocol.Block{
+						Type:  protocol.BlockType(event.ContentBlock.Type),
+						Text:  event.ContentBlock.Text,
+						ID:    event.ContentBlock.ID,
+						Name:  event.ContentBlock.Name,
+						Input: event.ContentBlock.Input,
+					}
+				}
 			}
-			ensureState(event.Index, block)
+			state := ensureState(event.Index, block)
+			if block.Type == protocol.BlockThinking {
+				if block.Text != "" {
+					state.partialThinking.WriteString(block.Text)
+				}
+				if block.Signature != "" {
+					state.partialSignature.WriteString(block.Signature)
+				}
+				state.block.Signature = state.partialSignature.String()
+				state.block.Text = state.partialThinking.String()
+			}
 			if block.Type == protocol.BlockText && block.Text != "" && handler.OnTextDelta != nil {
 				handler.OnTextDelta(block.Text)
 			}
@@ -537,22 +629,68 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 				if handler.OnToolUse != nil {
 					handler.OnToolUse(state.block, state.partialJSON.String())
 				}
+			case "thinking_delta":
+				// Extended-thinking chain-of-thought text. The
+				// client concatenates successive deltas into the
+				// final reasoning text. We forward each delta to
+				// OnThinkingDelta so the gateway can emit a
+				// thinking_delta content_block_delta on the wire
+				// (NOT a text_delta — Anthropic's SDK uses the
+				// delta type to route the fragment into the
+				// chain-of-thought buffer rather than the visible
+				// text buffer). The running buffer on the parser
+				// side lets the final response carry the full
+				// reasoning text.
+				state := ensureState(event.Index, protocol.Block{Type: protocol.BlockThinking})
+				state.block.Type = protocol.BlockThinking
+				state.partialThinking.WriteString(event.Delta.Thinking)
+				state.block.Text = state.partialThinking.String()
+				if event.Delta.Thinking != "" && handler.OnThinkingDelta != nil {
+					handler.OnThinkingDelta(event.Delta.Thinking, "")
+				}
+			case "signature_delta":
+				// The opaque signature the client must echo back.
+				// We forward it through OnThinkingDelta so the
+				// gateway can emit a signature_delta on the
+				// wire; the parser's running buffer lets the
+				// final response carry the full signature even
+				// when the upstream splits it across multiple
+				// frames.
+				state := ensureState(event.Index, protocol.Block{Type: protocol.BlockThinking})
+				state.block.Type = protocol.BlockThinking
+				state.partialSignature.WriteString(event.Delta.Signature)
+				state.block.Signature = state.partialSignature.String()
+				if event.Delta.Signature != "" && handler.OnThinkingDelta != nil {
+					handler.OnThinkingDelta("", event.Delta.Signature)
+				}
 			}
 		case "content_block_stop":
-			if state, ok := states[event.Index]; ok && state.block.Type == protocol.BlockToolUse {
-				raw := strings.TrimSpace(state.partialJSON.String())
-				if raw != "" {
-					var input map[string]interface{}
-					if err := json.Unmarshal([]byte(raw), &input); err != nil {
-						return fmt.Errorf("decode streamed tool input: %w", err)
+			if state, ok := states[event.Index]; ok {
+				switch state.block.Type {
+				case protocol.BlockToolUse:
+					raw := strings.TrimSpace(state.partialJSON.String())
+					if raw != "" {
+						var input map[string]interface{}
+						if err := json.Unmarshal([]byte(raw), &input); err != nil {
+							return fmt.Errorf("decode streamed tool input: %w", err)
+						}
+						state.block.Input = input
 					}
-					state.block.Input = input
-				}
-				if state.block.Input == nil {
-					state.block.Input = map[string]interface{}{}
-				}
-				if handler.OnToolUse != nil {
-					handler.OnToolUse(state.block, state.partialJSON.String())
+					if state.block.Input == nil {
+						state.block.Input = map[string]interface{}{}
+					}
+					if handler.OnToolUse != nil {
+						handler.OnToolUse(state.block, state.partialJSON.String())
+					}
+				case protocol.BlockThinking:
+					// Lock in the final accumulated text and
+					// signature. The upstream Anthropic server
+					// sends the signature as the trailing frame
+					// (sometimes inside a signature_delta, sometimes
+					// inline on content_block_start), so we read
+					// whichever the upstream provided.
+					state.block.Text = state.partialThinking.String()
+					state.block.Signature = state.partialSignature.String()
 				}
 			}
 		case "message_delta":
@@ -649,6 +787,11 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 			response.Content = append(response.Content, protocol.TextBlock(block.Text))
 		case protocol.BlockToolUse:
 			response.Content = append(response.Content, protocol.ToolUseBlock(block.ID, block.Name, block.Input))
+		case protocol.BlockThinking:
+			// Preserve the visible chain-of-thought text and
+			// signature so the gateway can return a non-streamed
+			// response containing the full reasoning context.
+			response.Content = append(response.Content, protocol.ThinkingBlock(block.Text, block.Signature, block.Redacted))
 		}
 	}
 	return response, streamed, nil

@@ -1765,6 +1765,119 @@ func TestAnthropicToProtocolPreservesToolResult(t *testing.T) {
 	}
 }
 
+// TestAnthropicToProtocolRequestThinkingBlock covers the round-trip
+// of an Anthropic thinking content block from a multi-turn Pi
+// request back into the protocol.Request shape. The previous
+// implementation silently dropped the block, so the model never
+// saw its own prior chain-of-thought and the multi-turn reasoning
+// buffer was lost between turns. The fix surfaces the block on
+// the API message and the protocol.Block list so the upstream
+// can keep the conversation context.
+func TestAnthropicToProtocolRequestThinkingBlock(t *testing.T) {
+	req := anthropicMessageRequest{
+		Model:     "M3",
+		MaxTokens: 16,
+		Messages: []anthropicMessage{{
+			Role: "assistant",
+			Content: []anthropicContentBlock{
+				{Type: "thinking", Thinking: "let me think...", Signature: "sig-1"},
+				{Type: "text", Text: "answer"},
+			},
+		}},
+	}
+	got, err := anthropicToProtocolRequest(req, "M3")
+	if err != nil {
+		t.Fatalf("anthropicToProtocolRequest: %v", err)
+	}
+	if len(got.Messages) != 1 {
+		t.Fatalf("want 1 message, got %d", len(got.Messages))
+	}
+	msg := got.Messages[0]
+	if msg.Role != "assistant" {
+		t.Fatalf("want assistant role, got %q", msg.Role)
+	}
+	// We expect 2 blocks: thinking + text. The order is
+	// preserved (thinking first, then text), which is the
+	// canonical Anthropic layout.
+	if len(msg.Content) != 2 {
+		t.Fatalf("want 2 content blocks, got %d: %+v", len(msg.Content), msg.Content)
+	}
+	if msg.Content[0].Type != protocol.BlockThinking {
+		t.Errorf("want first block thinking, got %q", msg.Content[0].Type)
+	}
+	if msg.Content[0].Text != "let me think..." {
+		t.Errorf("want thinking text %q, got %q", "let me think...", msg.Content[0].Text)
+	}
+	if msg.Content[0].Signature != "sig-1" {
+		t.Errorf("want signature sig-1, got %q", msg.Content[0].Signature)
+	}
+	// The reasoning_content mirror must be populated so the
+	// upstream sees the chain-of-thought alongside the regular
+	// content. Without it, OpenAI-style upstreams would treat
+	// the message as if the model had no prior reasoning.
+	if msg.ReasoningContent != "let me think..." {
+		t.Errorf("want reasoning_content %q, got %q", "let me think...", msg.ReasoningContent)
+	}
+	if msg.Content[1].Type != protocol.BlockText {
+		t.Errorf("want second block text, got %q", msg.Content[1].Type)
+	}
+}
+
+// TestAnthropicToProtocolRequestThinkingConfig covers the case
+// where Pi sends `thinking: {type: "enabled", budget_tokens: 1024}`
+// to request extended reasoning. The conversion must surface the
+// budget as ReasoningEffort so the upstream LLM client can
+// translate it to a local reasoning knob (Anthropic native uses
+// thinking.budget_tokens; OpenAI uses reasoning_effort). Without
+// the fix the thinking knob was ignored and the model ran in
+// non-thinking mode, breaking the user's reasoning setting.
+func TestAnthropicToProtocolRequestThinkingConfig(t *testing.T) {
+	req := anthropicMessageRequest{
+		Model:     "M3",
+		MaxTokens: 16,
+		Thinking: &anthropicThinkingConfig{
+			Type:         "enabled",
+			BudgetTokens: 2048,
+		},
+		Messages: []anthropicMessage{{
+			Role:    "user",
+			Content: []anthropicContentBlock{{Type: "text", Text: "explain"}},
+		}},
+	}
+	got, err := anthropicToProtocolRequest(req, "M3")
+	if err != nil {
+		t.Fatalf("anthropicToProtocolRequest: %v", err)
+	}
+	if got.ReasoningEffort != "2048" {
+		t.Errorf("want ReasoningEffort=2048, got %q", got.ReasoningEffort)
+	}
+
+	// Adaptive thinking: the client sends
+	// `{type: "adaptive"}` (no budget_tokens). We MUST NOT
+	// surface a numeric ReasoningEffort in that case, because
+	// the upstream Anthropic-native API expects the
+	// thinking.type=adaptive knob on the wire, not a numeric
+	// effort. For non-Anthropic upstreams (OpenAI-style) the
+	// client library decides the effort level from the model
+	// config.
+	req2 := anthropicMessageRequest{
+		Model:    "M3",
+		MaxTokens: 16,
+		Thinking: &anthropicThinkingConfig{Type: "adaptive"},
+		Messages: []anthropicMessage{{
+			Role:    "user",
+			Content: []anthropicContentBlock{{Type: "text", Text: "explain"}},
+		}},
+	}
+	got2, err := anthropicToProtocolRequest(req2, "M3")
+	if err != nil {
+		t.Fatalf("anthropicToProtocolRequest (adaptive): %v", err)
+	}
+	if got2.ReasoningEffort != "" {
+		t.Errorf("want empty ReasoningEffort for adaptive thinking, got %q", got2.ReasoningEffort)
+	}
+}
+
 // TestAnthropicGatewayForwardsToolResultToUpstream is the end-to-end
 // regression for the case where Pi's tool results disappeared before
 // reaching the upstream provider. We stub the upstream with an
@@ -2010,4 +2123,513 @@ func TestUsageGatewayChatCompletionAcceptsStreamTrue(t *testing.T) {
 		// here; covering the provider path belongs to a dedicated test.
 		t.Logf("non-200 status %d accepted: stream:true was no longer rejected as unsupported_streaming", resp.StatusCode)
 	}
+}
+
+// TestAnthropicGatewayStreamsParallelToolUseSSE is the regression test
+// for the case where a model emits two parallel tool_use blocks in the
+// same assistant turn (e.g. `read` + `glob` to gather context before
+// answering). The previous gateway implementation re-used content
+// block index 0 for every block, so the second tool_use silently
+// overwrote the first one in Pi's streamAnthropic accumulator and
+// Pi's agent loop saw only one tool call. This test stubs the
+// upstream to emit TWO tool_use blocks with different content_block
+// indices and asserts the wire-side stream carries both:
+//
+//   data: {"type":"content_block_start","index":1, ...}
+//   data: {"type":"content_block_start","index":2, ...}
+//   ...
+//   data: {"type":"content_block_stop","index":1}
+//   data: {"type":"content_block_stop","index":2}
+//
+// plus a final text block at index 3 (or whatever the gateway
+// assigns) so the assistant can chain the tool results into a reply.
+func TestAnthropicGatewayStreamsParallelToolUseSSE(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		// The upstream emits two tool_use blocks in parallel. The
+		// first (id=toolu_read) reads a file; the second
+		// (id=toolu_glob) globs the directory. We pick two
+		// non-zero upstream indices so we can verify the gateway
+		// emits two distinct wire indices (and doesn't accidentally
+		// re-use index 0 for both blocks).
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-p","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_read","name":"read","input":{}}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/tmp/x\"}"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_glob","name":"glob","input":{}}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"pattern\":\"/tmp/*\"}"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":1}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-parallel-tools",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"show me /tmp"}]}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	stream, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	streamStr := string(stream)
+
+	// Both tool_use blocks must be present on the wire with their
+	// full identity (id + name + arguments). The previous bug
+	// dropped the second tool call because the gateway reused
+	// index 0 for both blocks; this assertion fails the test
+	// when that's still the case.
+	for _, must := range []string{
+		`"name":"read"`,
+		`"name":"glob"`,
+		`"id":"toolu_read"`,
+		`"id":"toolu_glob"`,
+		`/tmp/x`,
+		`/tmp/*`,
+	} {
+		if !strings.Contains(streamStr, must) {
+			t.Errorf("expected Anthropic SSE stream to contain %q (parallel tool_use regression), got stream:\n%s", must, streamStr)
+		}
+	}
+
+	// Both blocks must carry their own start + stop events.
+	// Count the content_block_start and content_block_stop events;
+	// the previous implementation emitted only one of each.
+	startCount := strings.Count(streamStr, `"type":"content_block_start"`)
+	stopCount := strings.Count(streamStr, `"type":"content_block_stop"`)
+	if startCount != 2 {
+		t.Errorf("expected exactly 2 content_block_start events, got %d:\n%s", startCount, streamStr)
+	}
+	if stopCount != 2 {
+		t.Errorf("expected exactly 2 content_block_stop events, got %d:\n%s", stopCount, streamStr)
+	}
+}
+
+// TestAnthropicGatewayStreamsThinkingBlockSSE is the regression test
+// for Anthropic extended thinking support. Pi (and any Anthropic-SDK
+// client) sets `thinking: {type: "enabled", budget_tokens: N}` to
+// request extended reasoning, and expects the response stream to
+// carry `content_block_start` / `thinking_delta` /
+// `content_block_stop` events for the thinking block so the
+// chain-of-thought text and signature are surfaced to the user and
+// echoed back on the next turn. The previous implementation
+// silently dropped all thinking content because the SSE parser
+// didn't know about the `thinking` content block type. This test
+// stubs the upstream to emit a thinking block + a text block, then
+// asserts the wire-side stream carries both.
+func TestAnthropicGatewayStreamsThinkingBlockSSE(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher, _ := w.(http.Flusher)
+		// The upstream emits a thinking block, then a text block.
+		// We use Anthropic's canonical wire shape with the
+		// signature attached inline on content_block_start (the
+		// common case for non-streamed reasoning servers).
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-th","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":"sig-abc"}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"let me think..."}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-abc"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":1}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if stubProfileID == "" {
+		t.Fatalf("expected a default profile id after update, got empty")
+	}
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M3",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "anthropic-thinking",
+		BudgetCredits: 100,
+		AllowedModels: []string{"M3"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Pi sends the thinking knob in the request body. The gateway
+	// should propagate it to the upstream so the model is invoked
+	// in thinking mode. We don't assert on the wire here — the
+	// upstream stub doesn't echo its input — but we do verify the
+	// gateway doesn't 400 on the field.
+	body := `{"model":"M3","stream":true,"max_tokens":16,"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":[{"type":"text","text":"think then say hello"}]}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("x-api-key", created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	stream, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	streamStr := string(stream)
+
+	// Both blocks must be present on the wire.
+	for _, must := range []string{
+		`"type":"thinking"`,
+		`let me think...`,
+		`"type":"text"`,
+		`hello`,
+		`"type":"content_block_start"`,
+		`"type":"thinking_delta"`,
+		`"type":"content_block_stop"`,
+	} {
+		if !strings.Contains(streamStr, must) {
+			t.Errorf("expected Anthropic SSE stream to contain %q, got stream:\n%s", must, streamStr)
+		}
+	}
+}
+
+// TestAnthropicGatewayWebTokenRoutedThroughLLMGateway is the
+// regression test for the case where the user configured Pi (or any
+// Anthropic SDK) with the godex web token in `ANTHROPIC_AUTH_TOKEN`
+// and `ANTHROPIC_BASE_URL=http://localhost:port`. The previous
+// implementation routed those requests to the godex AI agent
+// backend (a different product surface) which did not support
+// streaming, tool calls, or images — so Pi would either hang or
+// return a one-line text reply. The new implementation dispatches
+// the request through the same LLM gateway the proxy-key path uses,
+// so the wire format Pi sees is identical and the tool loop works.
+func TestAnthropicGatewayWebTokenRoutedThroughLLMGateway(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		events := []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg-wt","type":"message","role":"assistant","content":[],"model":"stub-model","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi from web token"}}`,
+			`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}`,
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			_, _ = io.WriteString(w, e+"\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	cfg.WebToken = "test-web-token"
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "anthropic_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	stubProfileID := manager.Current().DefaultProfileID
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "claude-3-haiku",
+		TargetProfileID: stubProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"claude-3-haiku","stream":true,"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	// Web-token auth: Pi uses ANTHROPIC_AUTH_TOKEN which the
+	// Anthropic SDK forwards as `Authorization: Bearer <token>`.
+	req.Header.Set("Authorization", "Bearer test-web-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("expected Content-Type text/event-stream, got %q", ct)
+	}
+	stream, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	streamStr := string(stream)
+
+	// The web-token path must reach the LLM gateway (not the agent
+	// backend) and surface the same Anthropic SSE shape the proxy-
+	// key path uses. The "hi from web token" string is the
+	// distinct marker that we routed through the stub provider,
+	// not the agent backend (which would emit a generic fallback
+	// reply that the test doesn't seed).
+	for _, must := range []string{
+		"event: message_start",
+		"event: content_block_start",
+		"event: content_block_delta",
+		"event: content_block_stop",
+		"event: message_delta",
+		"event: message_stop",
+		`"text":"hi from web token"`,
+	} {
+		if !strings.Contains(streamStr, must) {
+			t.Errorf("expected web-token Anthropic SSE stream to contain %q, got stream:\n%s", must, streamStr)
+		}
+	}
+}
+
+// TestProtocolToAnthropicResponseThinkingBlocks pins the
+// non-streaming conversion path for extended-thinking blocks.
+// Pi's Anthropic SDK reads the `content` array in declaration
+// order, so a thinking block MUST appear before any text /
+// tool_use blocks (matching the upstream Anthropic API), and
+// redacted_thinking blocks must use the `data` field for the
+// opaque payload. The previous implementation dropped thinking
+// blocks entirely on the non-streaming path, so multi-turn
+// sessions lost their chain-of-thought on the first response.
+func TestProtocolToAnthropicResponseThinkingBlocks(t *testing.T) {
+	t.Run("thinking block appears first and carries signature", func(t *testing.T) {
+		resp := &protocol.Response{
+			StopReason: "end_turn",
+			Content: []protocol.Block{
+				protocol.TextBlock("answer"),
+				protocol.ThinkingBlock("chain of thought", "sig-xyz", false),
+			},
+		}
+		got := protocolToAnthropicResponse(resp, "claude")
+		if len(got.Content) != 2 {
+			t.Fatalf("expected 2 content blocks, got %d: %+v", len(got.Content), got.Content)
+		}
+		// Thinking MUST come first so Pi's anthropic.ts:540-660
+		// stream loop attaches it to the right output index.
+		if got.Content[0].Type != "thinking" {
+			t.Errorf("expected first block to be thinking, got %q", got.Content[0].Type)
+		}
+		if got.Content[0].Thinking != "chain of thought" {
+			t.Errorf("expected thinking text %q, got %q", "chain of thought", got.Content[0].Thinking)
+		}
+		if got.Content[0].Signature != "sig-xyz" {
+			t.Errorf("expected signature sig-xyz, got %q", got.Content[0].Signature)
+		}
+		if got.Content[1].Type != "text" || got.Content[1].Text != "answer" {
+			t.Errorf("expected second block to be text 'answer', got %+v", got.Content[1])
+		}
+	})
+
+	t.Run("redacted thinking uses data field", func(t *testing.T) {
+		resp := &protocol.Response{
+			StopReason: "end_turn",
+			Content: []protocol.Block{
+				protocol.ThinkingBlock("[Reasoning redacted]", "opaque-payload", true),
+				protocol.TextBlock("answer"),
+			},
+		}
+		got := protocolToAnthropicResponse(resp, "claude")
+		if got.Content[0].Type != "redacted_thinking" {
+			t.Errorf("expected redacted_thinking, got %q", got.Content[0].Type)
+		}
+		if got.Content[0].Data != "opaque-payload" {
+			t.Errorf("expected data field to carry opaque payload, got %q", got.Content[0].Data)
+		}
+		// The `signature` field is reserved for the regular
+		// thinking case; for redacted_thinking it must stay
+		// empty so the SDK doesn't try to decode it.
+		if got.Content[0].Signature != "" {
+			t.Errorf("expected empty signature on redacted_thinking, got %q", got.Content[0].Signature)
+		}
+	})
+
+	t.Run("stop reason mapping covers pause_turn and refusal", func(t *testing.T) {
+		cases := []struct {
+			raw  string
+			want string
+		}{
+			{"end_turn", "end_turn"},
+			{"max_tokens", "max_tokens"},
+			{"tool_use", "tool_use"},
+			{"pause_turn", "pause_turn"},
+			{"refusal", "refusal"},
+			{"", "end_turn"},
+		}
+		for _, c := range cases {
+			got := protocolToAnthropicResponse(&protocol.Response{
+				StopReason: c.raw,
+				Content:    []protocol.Block{protocol.TextBlock("x")},
+			}, "claude")
+			if got.StopReason != c.want {
+				t.Errorf("stop reason %q: expected %q, got %q", c.raw, c.want, got.StopReason)
+			}
+		}
+	})
 }

@@ -408,3 +408,178 @@ func runLongTaskTool(t *testing.T, a *Agent, ctx context.Context, input map[stri
 	}
 	return view
 }
+
+// TestPickNextActionCompleted verifies that the run loop exits as soon as
+// all stories have passed. T1 acceptance: single-step state machine covers
+// the completed terminal state in the very first action.
+func TestPickNextActionCompleted(t *testing.T) {
+	view := longTaskView{
+		Stories: []longTaskStoryView{
+			{ID: "US-001", Status: workflowStatusCompleted, Verdict: workflowVerdictPass, Passes: true},
+			{ID: "US-002", Status: workflowStatusCompleted, Verdict: workflowVerdictPass, Passes: true},
+		},
+	}
+	args := longTaskArgs{}
+	action, _, _ := pickNextAction(view, args)
+	if action != longTaskActionCompleted {
+		t.Fatalf("expected longTaskActionCompleted, got %d", action)
+	}
+}
+
+// TestPickNextActionFinalizeThenStart verifies the single-step state machine
+// sees a pending finalization as the next action even when other stories are
+// ready to start. T1 acceptance: the loop finalizes first before fanning
+// into a new start, instead of waiting for an extra iteration.
+func TestPickNextActionFinalizeThenStart(t *testing.T) {
+	view := longTaskView{
+		Stories: []longTaskStoryView{
+			{ID: "US-001", Status: workflowStatusCompleted, Verdict: workflowVerdictPass, ValidationStatus: longTaskValidationPending, Priority: 1},
+			{ID: "US-002", Status: workflowStatusPending, Priority: 2},
+		},
+		Workflow: workflowView{
+			Nodes: []workflowNodeView{
+				{ID: "US-001", Status: workflowStatusCompleted},
+				{ID: "US-002", Status: workflowStatusPending},
+			},
+		},
+	}
+	args := longTaskArgs{}
+	action, storyID, _ := pickNextAction(view, args)
+	if action != longTaskActionFinalizeStory {
+		t.Fatalf("expected longTaskActionFinalizeStory, got %d", action)
+	}
+	if storyID != "US-001" {
+		t.Fatalf("expected storyID=US-001, got %s", storyID)
+	}
+}
+
+// TestPickNextActionStopsOnBlockedByDefault verifies that the default
+// stop_on_failure=true stops the run on the first blocked story. T1
+// acceptance: StopOnFailure is opt-out, not opt-in.
+func TestPickNextActionStopsOnBlockedByDefault(t *testing.T) {
+	view := longTaskView{
+		Stories: []longTaskStoryView{
+			{ID: "US-001", Status: workflowStatusError, Error: "boom"},
+			{ID: "US-002", Status: workflowStatusPending},
+		},
+		Workflow: workflowView{
+			Nodes: []workflowNodeView{
+				{ID: "US-001", Status: workflowStatusError},
+				{ID: "US-002", Status: workflowStatusPending},
+			},
+		},
+	}
+	args := longTaskArgs{} // StopOnFailure left nil => default true
+	action, blockedBy, _ := pickNextAction(view, args)
+	if action != longTaskActionBlocked {
+		t.Fatalf("expected longTaskActionBlocked by default, got %d", action)
+	}
+	if blockedBy != "US-001" {
+		t.Fatalf("expected blockedBy=US-001, got %s", blockedBy)
+	}
+}
+
+// TestPickNextActionContinuesOnBlockedWhenOptOut verifies that
+// stop_on_failure=false keeps the run going past a blocked story. T1
+// acceptance: explicit opt-out.
+func TestPickNextActionContinuesOnBlockedWhenOptOut(t *testing.T) {
+	f := false
+	view := longTaskView{
+		Stories: []longTaskStoryView{
+			{ID: "US-001", Status: workflowStatusError, Error: "boom"},
+			{ID: "US-002", Status: workflowStatusPending, Priority: 2},
+		},
+		Workflow: workflowView{
+			Nodes: []workflowNodeView{
+				{ID: "US-001", Status: workflowStatusError},
+				{ID: "US-002", Status: workflowStatusPending},
+			},
+		},
+	}
+	args := longTaskArgs{StopOnFailure: &f}
+	action, _, _ := pickNextAction(view, args)
+	// Without stop-on-failure, the loop should pick the next actionable
+	// story (US-002 start).
+	if action != longTaskActionStartOne {
+		t.Fatalf("expected longTaskActionStartOne when stop_on_failure=false, got %d", action)
+	}
+}
+
+// TestLongTaskRunFinalizeThenStartSameIteration verifies that finalize and
+// start happen in the same run loop iteration, not split across iterations.
+// T1 acceptance: single-step state machine avoids the extra-scan latency
+// the old polling loop had.
+func TestLongTaskRunFinalizeThenStartSameIteration(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_finalize_start",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+			{"id": "US-002", "title": "Second", "priority": 2},
+		},
+	})
+	run := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":          "run",
+		"longtask_id":     "lt_finalize_start",
+		"max_iterations":  4,
+		"wait_timeout_ms": 2000,
+	})
+	if run.Run == nil || run.Run.Status != workflowStatusCompleted {
+		t.Fatalf("expected completed run, got %+v", run.Run)
+	}
+	// With the old polling loop finalize+start took 2+ iterations per
+	// story. Single-step keeps total iterations close to story count.
+	if run.Run.Iterations > 6 {
+		t.Fatalf("expected at most 6 iterations for 2 stories, got %d (single-step regression?)", run.Run.Iterations)
+	}
+	for _, story := range run.Stories {
+		if !story.Passes {
+			t.Fatalf("expected all stories to pass, got %+v", story)
+		}
+	}
+}
+
+// TestLongTaskRunStopOnFailureFalseContinuesPastBlocked verifies that with
+// stop_on_failure=false the run keeps going past a blocked story. T1
+// acceptance: explicit opt-out is honored.
+func TestLongTaskRunStopOnFailureFalseContinuesPastBlocked(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":         "create",
+		"longtask_id":    "lt_continue_past_block",
+		"quality_checks": []string{"cat missing-file-for-longtask-continue"},
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+			{"id": "US-002", "title": "Second", "priority": 2},
+		},
+	})
+	// stop_on_failure=false: US-001 validation fails, but the run keeps
+	// going to US-002 which should also reach a terminal state.
+	f := false
+	run := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":          "run",
+		"longtask_id":     "lt_continue_past_block",
+		"max_iterations":  6,
+		"wait_timeout_ms": 2000,
+		"stop_on_failure": f,
+	})
+	if run.Run == nil {
+		t.Fatalf("expected a run summary, got nil")
+	}
+	if run.Run.Status == "blocked" && run.Run.BlockedBy == "US-001" {
+		t.Fatalf("expected run to continue past blocked US-001 with stop_on_failure=false, got %+v", run.Run)
+	}
+	// US-001 should still be in error state from validation failure.
+	if run.Stories[0].Status != workflowStatusError {
+		t.Fatalf("expected US-001 to remain in error, got %+v", run.Stories[0])
+	}
+}

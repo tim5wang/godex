@@ -628,47 +628,17 @@ func (a *Agent) startWorkflowReadyNodes(ctx context.Context, id string) (workflo
 	if err != nil {
 		return workflowView{}, err
 	}
-	now := time.Now().UTC()
 	started := []string{}
 	for i := range state.Nodes {
 		node := &state.Nodes[i]
 		if node.Status != workflowStatusPending || !workflowDepsCompleted(state.Nodes, node.DependsOn) {
 			continue
 		}
-		prompt, err := a.workflowNodePrompt(state, *node)
-		if err != nil {
-			node.Status = workflowStatusError
-			node.Error = err.Error()
-			node.FinishedAt = now
-			node.UpdatedAt = now
-			if handoffErr := a.finalizeWorkflowNodeHandoff(&state, node, nil, ""); handoffErr != nil {
-				node.Error = handoffErr.Error()
-			}
-			continue
-		}
-		job, err := a.startDurableSubagentWithContext(ctx, durableSubagentStartRequest{
-			Prompt:        prompt,
-			AgentType:     node.AgentType,
-			WriteScope:    node.WriteScope,
-			PreviewJobIDs: a.workflowPreviewJobIDs(state, *node),
-		})
-		if err != nil {
-			node.Status = workflowStatusError
-			node.Error = err.Error()
-			node.FinishedAt = now
-			node.UpdatedAt = now
-			if handoffErr := a.finalizeWorkflowNodeHandoff(&state, node, nil, ""); handoffErr != nil {
-				node.Error = handoffErr.Error()
-			}
-		} else {
-			node.Status = workflowStatusRunning
-			node.JobID = job.ID
-			node.IdentityID = job.Identity.ID
-			node.AgentIdentity = job.Identity
-			node.UpdatedAt = now
+		if _, ok := a.startWorkflowNode(ctx, &state, node); ok {
 			started = append(started, node.ID)
 		}
 	}
+	now := time.Now().UTC()
 	state.Summary.UpdatedAt = now
 	a.refreshWorkflowStatus(&state)
 	if _, err := a.processWorkflowEdges(&state); err != nil {
@@ -681,6 +651,51 @@ func (a *Agent) startWorkflowReadyNodes(ctx context.Context, id string) (workflo
 	view := workflowViewFromState(state)
 	view.Started = started
 	return view, nil
+}
+
+// startWorkflowNode attempts to start a single workflow node. It mutates
+// state.Nodes[i] in place. Returns the started node id and a boolean
+// indicating whether the node transitioned from pending to running.
+// On failure the node is moved to error state with the failure captured in
+// node.Error and a handoff finalized.
+func (a *Agent) startWorkflowNode(ctx context.Context, state *workflowState, node *workflowNode) (string, bool) {
+	now := time.Now().UTC()
+	if node.Status != workflowStatusPending {
+		return "", false
+	}
+	prompt, err := a.workflowNodePrompt(*state, *node)
+	if err != nil {
+		node.Status = workflowStatusError
+		node.Error = err.Error()
+		node.FinishedAt = now
+		node.UpdatedAt = now
+		if handoffErr := a.finalizeWorkflowNodeHandoff(state, node, nil, ""); handoffErr != nil {
+			node.Error = handoffErr.Error()
+		}
+		return node.ID, false
+	}
+	job, err := a.startDurableSubagentWithContext(ctx, durableSubagentStartRequest{
+		Prompt:        prompt,
+		AgentType:     node.AgentType,
+		WriteScope:    node.WriteScope,
+		PreviewJobIDs: a.workflowPreviewJobIDs(*state, *node),
+	})
+	if err != nil {
+		node.Status = workflowStatusError
+		node.Error = err.Error()
+		node.FinishedAt = now
+		node.UpdatedAt = now
+		if handoffErr := a.finalizeWorkflowNodeHandoff(state, node, nil, ""); handoffErr != nil {
+			node.Error = handoffErr.Error()
+		}
+		return node.ID, false
+	}
+	node.Status = workflowStatusRunning
+	node.JobID = job.ID
+	node.IdentityID = job.Identity.ID
+	node.AgentIdentity = job.Identity
+	node.UpdatedAt = now
+	return node.ID, true
 }
 
 func (a *Agent) waitWorkflow(ctx context.Context, id, mode string, timeoutMS int) (workflowView, error) {

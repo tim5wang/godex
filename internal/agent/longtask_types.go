@@ -76,7 +76,7 @@ type longTaskArgs struct {
 	TimeoutMS            int                  `json:"timeout_ms,omitempty"`
 	MaxIterations        int                  `json:"max_iterations,omitempty"`
 	WaitTimeoutMS        int                  `json:"wait_timeout_ms,omitempty"`
-	StopOnFailure        bool                 `json:"stop_on_failure,omitempty"`
+	StopOnFailure        *bool                `json:"stop_on_failure,omitempty"`
 	AutoRepair           bool                 `json:"auto_repair,omitempty"`
 	MaxRepairAttempts    int                  `json:"max_repair_attempts,omitempty"`
 	Async                bool                 `json:"async,omitempty"`

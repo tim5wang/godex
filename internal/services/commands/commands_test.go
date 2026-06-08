@@ -1094,6 +1094,89 @@ func newTestConfig(t *testing.T) *config.Config {
 	return cfg
 }
 
+func TestExecuteTodosClearResetsAndRefreshesSnapshot(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := NewService(cfg)
+	a := newTestAgent(t, cfg)
+	if _, err := a.TodoMgr().Add("ship A", "shipping A"); err != nil {
+		t.Fatalf("add todo: %v", err)
+	}
+	if _, err := a.TodoMgr().Add("verify B", "verifying B"); err != nil {
+		t.Fatalf("add todo: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), a, Command{Name: "todos", Args: []string{"clear"}})
+	if err != nil {
+		t.Fatalf("execute /todos clear: %v", err)
+	}
+	if !result.RefreshSnapshot {
+		t.Fatalf("expected RefreshSnapshot=true so TUI plan panel re-fetches, got %+v", result)
+	}
+	if got := len(a.TodoMgr().List()); got != 0 {
+		t.Fatalf("expected todo list to be empty after /todos clear, got %d items", got)
+	}
+	if !strings.Contains(result.Output, "Cleared") {
+		t.Fatalf("expected output to mention clear, got %q", result.Output)
+	}
+}
+
+func TestExecuteTodosListKeepsExistingBehaviour(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := NewService(cfg)
+	a := newTestAgent(t, cfg)
+	if _, err := a.TodoMgr().Add("ship A", ""); err != nil {
+		t.Fatalf("add todo: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), a, Command{Name: "todos", Args: []string{"list"}})
+	if err != nil {
+		t.Fatalf("execute /todos list: %v", err)
+	}
+	if !strings.Contains(result.Output, "ship A") {
+		t.Fatalf("expected render output to include todo content, got %q", result.Output)
+	}
+	if result.RefreshSnapshot {
+		t.Fatalf("list should not request a snapshot refresh, got %+v", result)
+	}
+	if got := len(a.TodoMgr().List()); got != 1 {
+		t.Fatalf("expected list subcommand to leave todos intact, got %d items", got)
+	}
+}
+
+func TestExecuteTodosRejectsUnknownSubcommand(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := NewService(cfg)
+	a := newTestAgent(t, cfg)
+
+	_, err := service.Execute(context.Background(), a, Command{Name: "todos", Args: []string{"nuke"}})
+	if err == nil {
+		t.Fatalf("expected usage error for unknown subcommand, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown /todos subcommand") {
+		t.Fatalf("expected unknown subcommand error, got %v", err)
+	}
+}
+
+func TestAvailableMetadataTodosCarriesClearHint(t *testing.T) {
+	metadata := AvailableMetadata()
+	var found *CommandMetadata
+	for i, item := range metadata {
+		if item.Name == "todos" {
+			found = &metadata[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("missing /todos metadata")
+	}
+	if !strings.Contains(found.InputHint, "clear") {
+		t.Fatalf("expected InputHint to mention clear so ACP clients surface it, got %q", found.InputHint)
+	}
+	if !strings.Contains(found.InputHint, "list") {
+		t.Fatalf("expected InputHint to mention list, got %q", found.InputHint)
+	}
+}
+
 func writeTestSkill(t *testing.T, skillsDir, name, body string) {
 	t.Helper()
 	path := filepath.Join(skillsDir, name, "SKILL.md")

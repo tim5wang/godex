@@ -71,7 +71,7 @@ func AvailableMetadata() []CommandMetadata {
 		{Name: "tasks", Description: "show task board items"},
 		{Name: "team", Description: "show teammates and their current status"},
 		{Name: "inbox", Description: "read the lead inbox"},
-		{Name: "todos", Description: "show the todo list"},
+		{Name: "todos", Description: "show or clear the todo list", InputHint: "list|clear"},
 		{Name: "insights", Description: "generate a workspace insights report"},
 		{Name: "doctor", Description: "diagnose the active Godex configuration"},
 		{Name: "channels", Description: "show runtime channel status"},
@@ -343,10 +343,7 @@ func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Res
 		}
 		return Result{Name: cmd.Name, Output: fmt.Sprint(a.MsgBus().ReadInbox(s.cfg.LeadName))}, nil
 	case "todos":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return Result{Name: cmd.Name, Output: a.TodoMgr().Render()}, nil
+		return s.executeTodos(a, cmd)
 	case "insights":
 		if len(cmd.Args) > 0 {
 			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
@@ -1164,6 +1161,21 @@ func (s *Service) executeHeartbeat(ctx context.Context, cmd Command) (Result, er
 		return Result{Name: "heartbeat", Output: "Heartbeat runtime is unavailable in this process."}, nil
 	}
 	return handler(ctx, cmd)
+}
+
+func (s *Service) executeTodos(a *agent.Agent, cmd Command) (Result, error) {
+	if len(cmd.Args) == 0 {
+		cmd.Args = []string{"list"}
+	}
+	switch strings.ToLower(strings.TrimSpace(cmd.Args[0])) {
+	case "list":
+		return Result{Name: cmd.Name, Output: a.TodoMgr().Render()}, nil
+	case "clear":
+		a.TodoMgr().Reset()
+		return Result{Name: cmd.Name, Output: "Cleared todo list.", RefreshSnapshot: true}, nil
+	default:
+		return Result{}, fmt.Errorf("unknown /todos subcommand %q (usage: /todos list|clear)", cmd.Args[0])
+	}
 }
 
 func (s *Service) executeInsights(a *agent.Agent) (Result, error) {

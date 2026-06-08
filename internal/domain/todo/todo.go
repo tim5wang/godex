@@ -156,6 +156,18 @@ func (m *Manager) Replace(items []Item) ([]Item, error) {
 	return cloneItems(replaced), nil
 }
 
+// Reset empties the in-memory todo list, rewinds the next-id counter, and
+// persists the empty state to disk so subsequent Add() calls start from id 1.
+func (m *Manager) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.persist([]Item{}); err != nil {
+		return
+	}
+	m.items = []Item{}
+	m.nextID = 1
+}
+
 // List returns all todo items.
 func (m *Manager) List() []Item {
 	m.mu.RLock()

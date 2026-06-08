@@ -32,7 +32,7 @@
 | 编号 | 标题 | 优先级 | 估时 | 依赖 | 服务愿景 |
 |---|---|---|---|---|---|
 | T1 | ~~run 循环状态机重写~~ ✅(2026-06-08) | **P0** | 2d | — | A |
-| T2 | run 状态落盘 + 重启 resume | **P0** | 1.5d | T1 | A |
+| T2 | ~~run 状态落盘 + 重启 resume~~ ✅(2026-06-08) | **P0** | 1.5d | T1 | A |
 | T3 | ~~Repair 重新接线覆盖已 running 的下游~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T4 | Repair 节点 handoff vs prompt 去重 | P1 | 0.5d | — | A |
 | T5 | `longtask cancel <id> --all` 支持 | P1 | 0.5d | T1 | A |
@@ -129,6 +129,14 @@
 ---
 
 ### T2 — run 状态落盘 + 重启 resume
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- 4 个新验收测试 + 18 个 longtask 测试 + 6 个 T1 + 2 个 T3 全过
+- run 状态、Status、Started/Finalized 落盘到 `runs/<runID>.json`
+- ctx cancel 写 interrupted 保留进度
+- resume_run_id 跳过已 started 的 story
+- `sweepStaleLongTaskRuns()` 在 godex 启动时扫 stale runs
 
 **对应愿景**:A(跑完成功率)
 

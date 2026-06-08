@@ -25,6 +25,31 @@ var longTaskAsyncRuns sync.Map
 // without dragging in a global mock framework.
 var timeNow = func() time.Time { return time.Now().UTC() }
 
+// randomID returns a short pseudo-random suffix for run ids. crypto/rand
+// would be overkill; the worst case is a name collision in a single
+// workflow, which the caller can retry.
+func randomID() string {
+	const alphabet = "0123456789abcdef"
+	now := time.Now().UTC().UnixNano()
+	const mask = 0xf
+	out := make([]byte, 12)
+	for i := 0; i < 12; i++ {
+		out[i] = alphabet[(now>>uint(i*4))&mask]
+	}
+	return string(out)
+}
+
+func containsString_(items []string, want string) bool {
+	for _, it := range items {
+		if it == want {
+			return true
+		}
+	}
+	return false
+}
+
+func slicesContainString(items []string, want string) bool { return containsString_(items, want) }
+
 // stopOnFailureDefault is the default for the longtask run loop when the
 // caller does not set StopOnFailure. Default true: any blocked story stops
 // the run, matching the documented "任一失败 = 停" semantics.
@@ -248,10 +273,92 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 	if maxRepairAttempts <= 0 {
 		maxRepairAttempts = 2
 	}
+
+	// Resume: when caller supplies ResumeRunID we keep the existing run
+	// id and re-use its progress (Started, Finalized, Repaired). The
+	// state machine is otherwise identical to a fresh run.
+	runID := strings.TrimSpace(args.ResumeRunID)
+	rec := longTaskRunRecord{
+		RunID:         runID,
+		WorkflowID:    workflowID,
+		SessionID:     strings.TrimSpace(args.SessionID),
+		StartedAt:     timeNow(),
+		UpdatedAt:     timeNow(),
+		Status:        workflowStatusRunning,
+		MaxIterations: maxIterations,
+		Async:         args.Async,
+	}
+	if runID != "" {
+		existing, err := a.workflows.loadLongTaskRun(workflowID, runID)
+		if err != nil {
+			return longTaskView{}, fmt.Errorf("resume longtask run: %w", err)
+		}
+		existing.Status = workflowStatusRunning
+		existing.UpdatedAt = timeNow()
+		existing.SessionID = firstNonEmpty(existing.SessionID, rec.SessionID)
+		rec = existing
+		rec.MaxIterations = maxIterations
+	} else {
+		rec.RunID = "run_" + randomID()
+		_ = a.workflows.writeLongTaskRun(rec)
+	}
+
 	summary := &longTaskRunSummary{Status: workflowStatusRunning, MaxIterations: maxIterations}
+	// Carry over progress from any resumed run so that user-visible
+	// counters in the run summary reflect the full lifetime of the run.
+	summary.Iterations = rec.Iterations
+	summary.Started = append([]string{}, rec.Started...)
+	summary.Finalized = append([]string{}, rec.Finalized...)
+	summary.Repaired = append([]longTaskRepairSummary{}, rec.Repaired...)
+	rec.LastRefluxKey = rec.LastRefluxKey // preserve across resume
+
+	finalize := func(view longTaskView, status, message, blockedBy string) (longTaskView, error) {
+		now := timeNow()
+		view.Run = summary
+		view.Run.Status = status
+		view.Run.Message = message
+		view.Run.BlockedBy = blockedBy
+		rec.Status = status
+		rec.UpdatedAt = now
+		rec.Iterations = summary.Iterations
+		rec.Started = summary.Started
+		rec.Finalized = summary.Finalized
+		rec.Repaired = summary.Repaired
+		rec.BlockedBy = blockedBy
+		rec.Message = message
+		_ = a.workflows.writeLongTaskRun(rec)
+		return view, nil
+	}
+
+	// On ctx cancellation (HTTP client disconnect, Ctrl+C, godex shutdown)
+	// preserve progress and return an "interrupted" view so callers know
+	// to resume later.
+	defer func() {
+		if ctx.Err() == nil {
+			return
+		}
+		now := timeNow()
+		rec.Status = "interrupted"
+		rec.UpdatedAt = now
+		rec.Iterations = summary.Iterations
+		rec.Started = summary.Started
+		rec.Finalized = summary.Finalized
+		rec.Repaired = summary.Repaired
+		rec.Message = firstNonEmpty(rec.Message, "context canceled")
+		_ = a.workflows.writeLongTaskRun(rec)
+	}()
+
 	var view longTaskView
 	for i := 0; i < maxIterations; i++ {
+		if ctx.Err() != nil {
+			view, _ = a.longTaskStatus(workflowID)
+			return finalize(view, "interrupted", firstNonEmpty(summary.Message, "context canceled"), summary.BlockedBy)
+		}
 		summary.Iterations = i + 1
+		rec.Iterations = summary.Iterations
+		rec.UpdatedAt = timeNow()
+		_ = a.workflows.writeLongTaskRun(rec)
+
 		current, err := a.longTaskStatus(workflowID)
 		if err != nil {
 			return longTaskView{}, err
@@ -259,21 +366,11 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 		action, storyID, arg := pickNextAction(current, args)
 		switch action {
 		case longTaskActionCompleted:
-			current.Run = summary
-			current.Run.Status = workflowStatusCompleted
-			current.Run.Message = "all stories passed"
-			return current, nil
+			return finalize(current, workflowStatusCompleted, "all stories passed", "")
 		case longTaskActionBlocked:
-			current.Run = summary
-			current.Run.Status = "blocked"
-			current.Run.BlockedBy = storyID
-			current.Run.Message = arg
-			return current, nil
+			return finalize(current, "blocked", arg, storyID)
 		case longTaskActionStalled:
-			current.Run = summary
-			current.Run.Status = "stalled"
-			current.Run.Message = "no ready stories, running jobs, or pending validations"
-			return current, nil
+			return finalize(current, "stalled", "no ready stories, running jobs, or pending validations", "")
 		case longTaskActionFinalizeStory:
 			finalized, err := a.finalizeLongTaskStory(ctx, workflowID, firstNonEmpty(arg, storyID))
 			if err != nil {
@@ -281,9 +378,6 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 			}
 			summary.Finalized = append(summary.Finalized, storyID)
 			view = finalized
-			// Re-check immediately: a finalize can produce a blocked/error
-			// status. Single-step lets the next iteration pick that up
-			// without spinning on the same story.
 			continue
 		case longTaskActionWaitRunning:
 			waited, err := a.waitLongTask(ctx, workflowID, "all", waitTimeoutMS)
@@ -294,6 +388,14 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 			continue
 		case longTaskActionStartOne:
 			nodeID := firstNonEmpty(arg, storyID)
+			// On resume, do not re-start a story that was already started
+			// in the previous run. The story may be running, completed,
+			// or already finalized; pickNextAction + the workflow store
+			// decide whether the node is actionable.
+			if containsString_(summary.Started, nodeID) {
+				view, _ = a.longTaskStatus(workflowID)
+				continue
+			}
 			started, err := a.startLongTaskOneNode(ctx, workflowID, nodeID)
 			if err != nil {
 				return longTaskView{}, err
@@ -319,16 +421,9 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 				view = repairView
 				continue
 			}
-			// Repair budget exhausted. Decide per stop-on-failure.
 			if stopOnFailure(args) {
-				current.Run = summary
-				current.Run.Status = "blocked"
-				current.Run.BlockedBy = storyID
-				current.Run.Message = arg
-				return current, nil
+				return finalize(current, "blocked", arg, storyID)
 			}
-			// Without stop-on-failure, fall through to a fresh status read
-			// and let the next iteration continue.
 			view = current
 			continue
 		}
@@ -340,10 +435,7 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 			return longTaskView{}, err
 		}
 	}
-	view.Run = summary
-	view.Run.Status = "max_iterations"
-	view.Run.Message = "reached max_iterations before completion"
-	return view, nil
+	return finalize(view, "max_iterations", "reached max_iterations before completion", "")
 }
 
 // startLongTaskOneNode starts exactly one story node in the workflow. It

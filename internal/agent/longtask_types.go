@@ -80,6 +80,9 @@ type longTaskArgs struct {
 	AutoRepair           bool                 `json:"auto_repair,omitempty"`
 	MaxRepairAttempts    int                  `json:"max_repair_attempts,omitempty"`
 	Async                bool                 `json:"async,omitempty"`
+	ResumeRunID          string               `json:"resume_run_id,omitempty"`
+	NoReflux             bool                 `json:"no_reflux,omitempty"`
+	SessionID            string               `json:"session_id,omitempty"`
 }
 
 type longTaskValidationCheck struct {

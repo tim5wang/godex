@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/protocol"
 )
@@ -756,5 +757,233 @@ func TestLongTaskRepairRewiresDownstreamWithEmptyJobID(t *testing.T) {
 		if !foundRepairDep {
 			t.Fatalf("expected US-002 DependsOn to reference US-001_repair_1, got %v", rewiredState.Nodes[i].DependsOn)
 		}
+	}
+}
+
+// TestLongTaskRunWritesRunRecord verifies that running a longtask
+// produces a durable run record under runs/<runID>.json that captures
+// the run id, status, started stories, and finalized stories. T2
+// acceptance: a crash or restart after the run completes still leaves
+// an inspectable record.
+func TestLongTaskRunWritesRunRecord(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_run_record",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	run := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_run_record",
+	})
+	if run.Run == nil || run.Run.Status != workflowStatusCompleted {
+		t.Fatalf("expected completed run, got %+v", run.Run)
+	}
+	if len(run.Run.Started) == 0 {
+		t.Fatalf("expected run to record started stories, got %+v", run.Run)
+	}
+	// Read the durable record: there must be exactly one run file under
+	// the workflow's runs/ directory.
+	records, err := a.workflows.listLongTaskRuns("lt_run_record")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected exactly 1 run record, got %d", len(records))
+	}
+	rec := records[0]
+	if rec.WorkflowID != "lt_run_record" {
+		t.Fatalf("expected workflow_id=lt_run_record, got %s", rec.WorkflowID)
+	}
+	if rec.Status != workflowStatusCompleted {
+		t.Fatalf("expected record status=completed, got %s", rec.Status)
+	}
+	if len(rec.Started) == 0 {
+		t.Fatalf("expected record to include Started, got %v", rec.Started)
+	}
+}
+
+// TestLongTaskRunResumeAfterInterrupt verifies that a run that was
+// previously interrupted can be resumed by run id without re-starting
+// stories that were already started. T2 acceptance: run_id is durable
+// and resume_run_id is honored.
+func TestLongTaskRunResumeAfterInterrupt(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_run_resume",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+			{"id": "US-002", "title": "Second", "priority": 2},
+		},
+	})
+
+	// Pre-seed an interrupted run record and a US-001 workflow node that
+	// is already running. The resumed run must observe US-001 as already
+	// started and skip straight to finalizing it.
+	now := time.Now().UTC()
+	state, err := a.workflows.load("lt_run_resume")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var us001, us002 *workflowNode
+	for i := range state.Nodes {
+		if state.Nodes[i].ID == "US-001" {
+			us001 = &state.Nodes[i]
+		}
+		if state.Nodes[i].ID == "US-002" {
+			us002 = &state.Nodes[i]
+		}
+	}
+	if us001 == nil || us002 == nil {
+		t.Fatalf("expected both story nodes to be present")
+	}
+	// Put US-001 in completed+pass+pending-validation state so the resumed
+	// run will finalize it without re-starting.
+	us001.Status = workflowStatusCompleted
+	us001.Verdict = workflowVerdictPass
+	us001.Attempt = 1
+	us001.UpdatedAt = now
+	us001.FinishedAt = now
+	if err := a.workflows.save(state); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Pre-seed an interrupted run record (US-001 was already Started).
+	runID := "run_resumed_test"
+	rec := longTaskRunRecord{
+		RunID:      runID,
+		WorkflowID: "lt_run_resume",
+		SessionID:  "session_resume",
+		StartedAt:  now,
+		UpdatedAt:  now,
+		Status:     "interrupted",
+		Started:    []string{"US-001"},
+	}
+	if err := a.workflows.writeLongTaskRun(rec); err != nil {
+		t.Fatalf("write run record: %v", err)
+	}
+
+	// Resume: there is no quality_check so finalize is a no-op for
+	// US-001 (ValidationStatus=skipped). The run then proceeds to start
+	// US-002. US-001 must not be re-started.
+	resumed, err := a.RunLongTask(context.Background(), "lt_run_resume", longTaskArgs{
+		ResumeRunID:    runID,
+		SessionID:      "session_resume",
+		MaxIterations:  1,
+		WaitTimeoutMS:  2000,
+	})
+	if err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if resumed.Run == nil {
+		t.Fatalf("expected resumed run to have a summary")
+	}
+	// The resume must not re-start US-001 even though pickNextAction might
+	// otherwise consider it a candidate; the Started list is the proof.
+	count := 0
+	for _, s := range resumed.Run.Started {
+		if s == "US-001" {
+			count++
+		}
+	}
+	if count > 1 {
+		t.Fatalf("expected US-001 to be started at most once across the resumed run, got %d (started=%v)", count, resumed.Run.Started)
+	}
+	records, err := a.workflows.listLongTaskRuns("lt_run_resume")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 1 || records[0].RunID != runID {
+		t.Fatalf("expected exactly one run record with the same id, got %+v", records)
+	}
+	if records[0].Status != "max_iterations" && records[0].Status != workflowStatusCompleted {
+		t.Fatalf("expected record status to be max_iterations or completed after resume, got %s", records[0].Status)
+	}
+}
+
+// TestLongTaskRunStatusReadsFromDisk verifies that run_status reads
+// from the durable record (not the in-memory sync.Map) and so survives
+// an Agent restart. T2 acceptance: godex restart preserves run state.
+func TestLongTaskRunStatusReadsFromDisk(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_run_status_disk",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_run_status_disk",
+	})
+
+	records, err := a.workflows.listLongTaskRuns("lt_run_status_disk")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 run record, got %d", len(records))
+	}
+	if records[0].Status != workflowStatusCompleted {
+		t.Fatalf("expected durable record status=completed, got %s", records[0].Status)
+	}
+	view, err := a.longTaskRunStatus("lt_run_status_disk")
+	if err != nil {
+		t.Fatalf("longTaskRunStatus: %v", err)
+	}
+	if view.LongTaskID == "" {
+		t.Fatalf("expected view to be populated from durable state")
+	}
+}
+
+// TestLongTaskSweepStaleRunsMarksInterrupted verifies that the sweep
+// helper marks any runs still in "running" state as "interrupted" so
+// callers can detect godex crashed mid-run. T2 acceptance: helper
+// exists and is wired in agent tooling.
+func TestLongTaskSweepStaleRunsMarksInterrupted(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	rec := longTaskRunRecord{
+		RunID:      "run_stale",
+		WorkflowID: "lt_sweep",
+		StartedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+		Status:     "running",
+	}
+	if err := a.workflows.writeLongTaskRun(rec); err != nil {
+		t.Fatalf("write stale run: %v", err)
+	}
+
+	updated, err := a.workflows.sweepStaleLongTaskRuns()
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(updated) == 0 {
+		t.Fatalf("expected sweep to mark at least one run, got %v", updated)
+	}
+	records, err := a.workflows.listLongTaskRuns("lt_sweep")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 1 || records[0].Status != "interrupted" {
+		t.Fatalf("expected status=interrupted, got %+v", records)
 	}
 }

@@ -583,3 +583,178 @@ func TestLongTaskRunStopOnFailureFalseContinuesPastBlocked(t *testing.T) {
 		t.Fatalf("expected US-001 to remain in error, got %+v", run.Stories[0])
 	}
 }
+
+// TestLongTaskRepairCancelsRunningDownstream is the T3 acceptance test:
+// when a story fails and the run loop appends a repair node, any
+// downstream story that is currently running must be cancelled and reset
+// to pending so it observes the new repair node before resuming.
+func TestLongTaskRepairCancelsRunningDownstream(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_repair_cascade",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+			{"id": "US-002", "title": "Second", "priority": 2},
+		},
+	})
+
+	// Manually put the workflow into a state where US-001 is errored and
+	// US-002 is running with a fake subagent job. T3 fixes the case where
+	// a downstream node started before its upstream failed.
+	state, err := a.workflows.load("lt_repair_cascade")
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	var downstream *workflowNode
+	for i := range state.Nodes {
+		switch state.Nodes[i].ID {
+		case "US-001":
+			state.Nodes[i].Status = workflowStatusError
+			state.Nodes[i].Error = "upstream failed"
+		case "US-002":
+			state.Nodes[i].Status = workflowStatusRunning
+			state.Nodes[i].JobID = "subagent_fake_for_repair_cascade"
+			downstream = &state.Nodes[i]
+		}
+	}
+	if downstream == nil {
+		t.Fatalf("expected US-002 node to exist")
+	}
+	downstream.DependsOn = []string{"US-001"}
+	if err := a.workflows.save(state); err != nil {
+		t.Fatalf("save workflow: %v", err)
+	}
+
+	view, err := a.longTaskStatus("lt_repair_cascade")
+	if err != nil {
+		t.Fatalf("longTaskStatus: %v", err)
+	}
+
+	summary, repairView, err := a.appendLongTaskRepair(context.Background(), "lt_repair_cascade", view, "US-001", "test failure", 1)
+	if err != nil {
+		t.Fatalf("appendLongTaskRepair: %v", err)
+	}
+	if summary.RepairNodeID != "US-001_repair_1" {
+		t.Fatalf("expected repair node US-001_repair_1, got %s", summary.RepairNodeID)
+	}
+
+	// After repair, US-002 must be reset to pending with a rewired dep.
+	rewiredState, err := a.workflows.load("lt_repair_cascade")
+	if err != nil {
+		t.Fatalf("reload workflow: %v", err)
+	}
+	var us001, us002 *workflowNode
+	for i := range rewiredState.Nodes {
+		switch rewiredState.Nodes[i].ID {
+		case "US-001":
+			us001 = &rewiredState.Nodes[i]
+		case "US-002":
+			us002 = &rewiredState.Nodes[i]
+		}
+	}
+	if us001 == nil || us002 == nil {
+		t.Fatalf("expected both US-001 and US-002 nodes after repair")
+	}
+	if us002.Status != workflowStatusPending {
+		t.Fatalf("expected US-002 to be reset to pending after cascade cancel, got %s", us002.Status)
+	}
+	if us002.JobID != "" {
+		t.Fatalf("expected US-002 job to be cleared after cascade cancel, got %s", us002.JobID)
+	}
+	foundRepairDep := false
+	for _, dep := range us002.DependsOn {
+		if dep == "US-001_repair_1" {
+			foundRepairDep = true
+			break
+		}
+	}
+	if !foundRepairDep {
+		t.Fatalf("expected US-002 DependsOn to reference US-001_repair_1, got %v", us002.DependsOn)
+	}
+
+	// repairView should reflect the reset US-002 and a new repair node.
+	var viewRepair bool
+	for _, s := range repairView.Workflow.Nodes {
+		if s.ID == "US-001_repair_1" {
+			viewRepair = true
+			break
+		}
+	}
+	if !viewRepair {
+		t.Fatalf("expected repairView to include US-001_repair_1 node, got %+v", repairView.Workflow.Nodes)
+	}
+}
+
+// TestLongTaskRepairCancelsDownstreamEvenWithEmptyJobID covers the edge case
+// where a downstream node is in a weird running-like state with no job id
+// (e.g. an interrupted resume). The repair should still rewire deps and
+// not panic.
+func TestLongTaskRepairRewiresDownstreamWithEmptyJobID(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_repair_nojob",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+			{"id": "US-002", "title": "Second", "priority": 2},
+		},
+	})
+
+	state, err := a.workflows.load("lt_repair_nojob")
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	for i := range state.Nodes {
+		switch state.Nodes[i].ID {
+		case "US-001":
+			state.Nodes[i].Status = workflowStatusError
+			state.Nodes[i].Error = "upstream failed"
+		case "US-002":
+			// Running but without a job id: represents a node left in an
+			// inconsistent state from an interrupted prior run. The repair
+			// path must still rewire its deps.
+			state.Nodes[i].Status = workflowStatusRunning
+			state.Nodes[i].JobID = ""
+			state.Nodes[i].DependsOn = []string{"US-001"}
+		}
+	}
+	if err := a.workflows.save(state); err != nil {
+		t.Fatalf("save workflow: %v", err)
+	}
+
+	view, err := a.longTaskStatus("lt_repair_nojob")
+	if err != nil {
+		t.Fatalf("longTaskStatus: %v", err)
+	}
+
+	if _, _, err := a.appendLongTaskRepair(context.Background(), "lt_repair_nojob", view, "US-001", "test failure", 1); err != nil {
+		t.Fatalf("appendLongTaskRepair: %v", err)
+	}
+
+	rewiredState, err := a.workflows.load("lt_repair_nojob")
+	if err != nil {
+		t.Fatalf("reload workflow: %v", err)
+	}
+	for i := range rewiredState.Nodes {
+		if rewiredState.Nodes[i].ID != "US-002" {
+			continue
+		}
+		foundRepairDep := false
+		for _, dep := range rewiredState.Nodes[i].DependsOn {
+			if dep == "US-001_repair_1" {
+				foundRepairDep = true
+				break
+			}
+		}
+		if !foundRepairDep {
+			t.Fatalf("expected US-002 DependsOn to reference US-001_repair_1, got %v", rewiredState.Nodes[i].DependsOn)
+		}
+	}
+}

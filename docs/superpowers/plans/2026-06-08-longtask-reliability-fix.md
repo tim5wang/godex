@@ -33,7 +33,7 @@
 |---|---|---|---|---|---|
 | T1 | ~~run 循环状态机重写~~ ✅(2026-06-08) | **P0** | 2d | — | A |
 | T2 | run 状态落盘 + 重启 resume | **P0** | 1.5d | T1 | A |
-| T3 | Repair 重新接线覆盖已 running 的下游 | P1 | 0.5d | T1 | A |
+| T3 | ~~Repair 重新接线覆盖已 running 的下游~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T4 | Repair 节点 handoff vs prompt 去重 | P1 | 0.5d | — | A |
 | T5 | `longtask cancel <id> --all` 支持 | P1 | 0.5d | T1 | A |
 | T6 | async run 状态落盘(`runs/<id>.json`) | P1 | 1d | T2 | A |
@@ -780,7 +780,12 @@ msg.Metadata.SetExtra("status", view.Status)
 
 ### T3 — Repair 重新接线覆盖已 running 的下游
 
-**对应愿景**:A
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- `appendLongTaskRepair` 取消所有 Status=Running 下游并重置为 pending,同时 replace `DependsOn` + `HandoffFrom`
+- 2 个新验收测试 + 18 个 longtask 测试 + 6 个 T1 pickNextAction 测试全过
+
+**对应愿景**:A(跑完成功率)
 
 **问题**
 `internal/agent/longtask_repair.go::appendLongTaskRepair` 的 `rewired` 循环:

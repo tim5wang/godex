@@ -48,17 +48,54 @@ func (a *Agent) appendLongTaskRepair(ctx context.Context, workflowID string, vie
 	if err != nil {
 		return longTaskRepairSummary{}, longTaskView{}, err
 	}
+	now := time.Now().UTC()
 	rewired := false
+	cascadedCancels := 0
 	for i := range state.Nodes {
-		if state.Nodes[i].ID == repairID || state.Nodes[i].Status != workflowStatusPending {
+		node := &state.Nodes[i]
+		if node.ID == repairID {
 			continue
 		}
-		if replaceWorkflowDep(state.Nodes[i].DependsOn, failedNodeID, repairID) {
-			rewired = true
+		// Reference replacement applies to both DependsOn and HandoffFrom
+		// regardless of node status. Downstream nodes that were already
+		// running when the failure happened need to be cancelled and
+		// re-queued so the new repair node is observed before they resume.
+		depChanged := replaceWorkflowDep(node.DependsOn, failedNodeID, repairID)
+		handoffChanged := replaceWorkflowDep(node.HandoffFrom, failedNodeID, repairID)
+		if !depChanged && !handoffChanged {
+			continue
+		}
+		rewired = true
+		if node.Status == workflowStatusRunning && strings.TrimSpace(node.JobID) != "" {
+			if _, cancelErr := a.subagentJobs.Cancel(node.JobID); cancelErr == nil {
+				cascadedCancels++
+				_ = a.workflows.appendEvent(workflowID, map[string]interface{}{
+					"event":      "repair_cascade_cancel",
+					"story_id":   storyID,
+					"node_id":    node.ID,
+					"job_id":     node.JobID,
+					"failed":     failedNodeID,
+					"repair":     repairID,
+					"cascade_at": now,
+				})
+			}
+			node.Status = workflowStatusPending
+			node.JobID = ""
+			node.IdentityID = ""
+			node.AgentIdentity = AgentIdentity{}
+			node.Error = ""
+			node.HandoffRef = ""
+			node.HandoffDigest = ""
+			node.ResultPreview = ""
+			node.Verdict = ""
+			node.Attempt = 0
+			node.CreatedAt = now
+			node.UpdatedAt = now
+			node.FinishedAt = time.Time{}
 		}
 	}
 	if rewired {
-		state.Summary.UpdatedAt = time.Now().UTC()
+		state.Summary.UpdatedAt = now
 		if err := a.workflows.save(state); err != nil {
 			return longTaskRepairSummary{}, longTaskView{}, err
 		}

@@ -83,6 +83,7 @@ type longTaskArgs struct {
 	ResumeRunID          string               `json:"resume_run_id,omitempty"`
 	NoReflux             bool                 `json:"no_reflux,omitempty"`
 	SessionID            string               `json:"session_id,omitempty"`
+	CancelAll            bool                 `json:"cancel_all,omitempty"`
 }
 
 type longTaskValidationCheck struct {

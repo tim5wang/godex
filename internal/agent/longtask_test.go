@@ -968,6 +968,127 @@ func TestLongTaskRepairPromptDoesNotDuplicateHandoff(t *testing.T) {
 	}
 }
 
+// TestLongTaskRunStopOnFailureDefaultTrue verifies the documented
+// default behavior: when the caller does not set StopOnFailure, any
+// blocked story stops the run. T9 acceptance: default is opt-out
+// rather than opt-in.
+func TestLongTaskRunStopOnFailureDefaultTrue(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":         "create",
+		"longtask_id":    "lt_stop_on_failure_default",
+		"quality_checks": []string{"cat missing-file-for-stop-on-failure-default"},
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+			{"id": "US-002", "title": "Second", "priority": 2},
+		},
+	})
+	// StopOnFailure intentionally left unset.
+	run := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":          "run",
+		"longtask_id":     "lt_stop_on_failure_default",
+		"max_iterations":  4,
+		"wait_timeout_ms": 2000,
+	})
+	if run.Run == nil || run.Run.Status != "blocked" || run.Run.BlockedBy != "US-001" {
+		t.Fatalf("expected default stop-on-failure to block on US-001, got %+v", run.Run)
+	}
+	if run.Stories[1].Status != workflowStatusPending {
+		t.Fatalf("expected US-002 to remain pending under default stop-on-failure, got %+v", run.Stories[1])
+	}
+}
+
+// TestLongTaskCancelAllCascades verifies that a `cancel --all` call
+// marks every story in the longtask as canceled, cancels any running
+// subagent, and reflects the cascade in the durable workflow state.
+// T5 acceptance: a single tool invocation replaces per-node cancel
+// across the whole longtask.
+func TestLongTaskCancelAllCascades(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_cancel_all",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+			{"id": "US-002", "title": "Second", "priority": 2},
+			{"id": "US-003", "title": "Third", "priority": 3},
+		},
+	})
+
+	// Manually mark US-001 completed and US-002 running, then cascade.
+	state, err := a.workflows.load("lt_cancel_all")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	now := time.Now().UTC()
+	for i := range state.Nodes {
+		switch state.Nodes[i].ID {
+		case "US-001":
+			state.Nodes[i].Status = workflowStatusCompleted
+			state.Nodes[i].Verdict = workflowVerdictPass
+			state.Nodes[i].FinishedAt = now
+			state.Nodes[i].UpdatedAt = now
+		case "US-002":
+			state.Nodes[i].Status = workflowStatusRunning
+			state.Nodes[i].JobID = "subagent_fake_for_cancel_all"
+		}
+	}
+	if err := a.workflows.save(state); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	view, err := a.cancelLongTask(context.Background(), longTaskArgs{
+		WorkflowID: "lt_cancel_all",
+		CancelAll: true,
+	})
+	if err != nil {
+		t.Fatalf("cancelLongTask: %v", err)
+	}
+	if view.Workflow.Status != workflowStatusCanceled {
+		t.Fatalf("expected workflow status=canceled after cascade, got %s", view.Workflow.Status)
+	}
+	statuses := map[string]string{}
+	for _, s := range view.Stories {
+		statuses[s.ID] = s.Status
+	}
+	// Already-completed stories keep their status; pending and running
+	// stories must be flipped to canceled.
+	if statuses["US-001"] != workflowStatusCompleted {
+		t.Fatalf("expected US-001 (already completed) to stay completed, got %s", statuses["US-001"])
+	}
+	if statuses["US-002"] != workflowStatusCanceled {
+		t.Fatalf("expected US-002 (was running) to be canceled, got %s", statuses["US-002"])
+	}
+	if statuses["US-003"] != workflowStatusCanceled {
+		t.Fatalf("expected US-003 (was pending) to be canceled, got %s", statuses["US-003"])
+	}
+	// US-001 was already completed; cancelling it must not be reverted
+	// but the cascade must record it as canceled in the workflow state.
+	state2, err := a.workflows.load("lt_cancel_all")
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	for i := range state2.Nodes {
+		// US-001 was already completed; cascade cancel does not revert it.
+		if state2.Nodes[i].ID == "US-001" {
+			if state2.Nodes[i].Status != workflowStatusCompleted {
+				t.Fatalf("expected US-001 to remain completed, got %s", state2.Nodes[i].Status)
+			}
+			continue
+		}
+		if state2.Nodes[i].Status != workflowStatusCanceled {
+			t.Fatalf("expected node %s status=canceled, got %s", state2.Nodes[i].ID, state2.Nodes[i].Status)
+		}
+	}
+}
+
 // TestLongTaskRunStatusReadsFromDisk verifies that run_status reads
 // from the durable record (not the in-memory sync.Map) and so survives
 // an Agent restart. T2 acceptance: godex restart preserves run state.

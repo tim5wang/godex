@@ -438,6 +438,17 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 	return finalize(view, "max_iterations", "reached max_iterations before completion", "")
 }
 
+// countCanceled is a tiny helper used by cancelLongTaskAll.
+func countCanceled(nodes []workflowNode) int {
+	n := 0
+	for _, node := range nodes {
+		if node.Status == workflowStatusCanceled {
+			n++
+		}
+	}
+	return n
+}
+
 // startLongTaskOneNode starts exactly one story node in the workflow. It
 // does not fan out: even if multiple deps-complete stories are pending, only
 // the requested story id is started. This is what gives longtask its
@@ -481,4 +492,90 @@ func (a *Agent) startLongTaskOneNode(ctx context.Context, workflowID, storyID st
 		view.Started = []string{storyID}
 	}
 	return view, nil
+}
+
+// cancelLongTask routes a tool-level cancel action. With args.CancelAll
+// it cascades the cancel across every story and any in-flight
+// subagent; otherwise it delegates to the existing single-node cancel.
+func (a *Agent) cancelLongTask(ctx context.Context, args longTaskArgs) (longTaskView, error) {
+	workflowID := args.longTaskWorkflowID()
+	if workflowID == "" {
+		return longTaskView{}, fmt.Errorf("missing longtask id")
+	}
+	if args.CancelAll {
+		return a.cancelLongTaskAll(ctx, workflowID)
+	}
+	state, err := a.cancelWorkflowNode(ctx, workflowID, args.NodeID)
+	if err != nil {
+		return longTaskView{}, err
+	}
+	return a.longTaskViewForState(state)
+}
+
+// cancelLongTaskAll cancels every story in the longtask: any running
+// subagent job is cancelled cooperatively, every pending story node is
+// flipped to the canceled state, and any in-flight run record is
+// marked canceled so the run loop sees a terminal state.
+func (a *Agent) cancelLongTaskAll(ctx context.Context, workflowID string) (longTaskView, error) {
+	state, err := a.workflowState(workflowID)
+	if err != nil {
+		return longTaskView{}, err
+	}
+	now := timeNow()
+	cancelled := []string{}
+	for i := range state.Nodes {
+		node := &state.Nodes[i]
+		switch node.Status {
+		case workflowStatusPending:
+			node.Status = workflowStatusCanceled
+			node.FinishedAt = now
+			node.UpdatedAt = now
+			cancelled = append(cancelled, node.ID)
+		case workflowStatusRunning:
+			if node.JobID != "" {
+				_, _ = a.subagentJobs.Cancel(node.JobID)
+			}
+			node.Status = workflowStatusCanceled
+			node.FinishedAt = now
+			node.UpdatedAt = now
+			cancelled = append(cancelled, node.ID)
+		}
+	}
+	state.Summary.UpdatedAt = now
+	a.refreshWorkflowStatus(&state)
+	if _, err := a.processWorkflowEdges(&state); err != nil {
+		return longTaskView{}, err
+	}
+	if canceled := countCanceled(state.Nodes); canceled > 0 {
+		// When at least one node is canceled, the longtask is considered
+		// canceled from the user's point of view. Already-completed
+		// stories stay completed (their work was done before the cancel
+		// was issued); pending and running nodes are flipped to canceled
+		// by the loop above. The workflow status follows the user's
+		// intent rather than re-deriving purely from node counts.
+		state.Summary.Status = workflowStatusCanceled
+	}
+	if err := a.workflows.save(state); err != nil {
+		return longTaskView{}, err
+	}
+	_ = a.workflows.appendEvent(workflowID, map[string]interface{}{
+		"event":     "longtask_cancelled",
+		"nodes":     cancelled,
+		"cascade":   true,
+		"at":        now,
+	})
+	// If a run record exists and is in progress, mark it canceled so
+	// the run loop sees a terminal state if it polls later.
+	if records, err := a.workflows.listLongTaskRuns(workflowID); err == nil {
+		for _, rec := range records {
+			if rec.Status != "running" && rec.Status != "interrupted" {
+				continue
+			}
+			rec.Status = workflowStatusCanceled
+			rec.UpdatedAt = now
+			rec.Message = "cascade cancel via longtask cancel --all"
+			_ = a.workflows.writeLongTaskRun(rec)
+		}
+	}
+	return a.longTaskViewForState(state)
 }

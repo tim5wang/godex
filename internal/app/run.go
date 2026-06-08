@@ -51,6 +51,7 @@ type Backend interface {
 	CreateLongTask(context.Context, string, agent.LongTaskArgs) (agent.LongTaskView, error)
 	RunLongTask(context.Context, string, string, agent.LongTaskArgs) (agent.LongTaskView, error)
 	CancelLongTask(context.Context, string, string, string) (agent.LongTaskView, error)
+	CancelLongTaskAll(context.Context, string, string) (agent.LongTaskView, error)
 	FinalizeLongTaskStory(context.Context, string, string, string) (agent.LongTaskView, error)
 }
 
@@ -1398,12 +1399,16 @@ func longtaskHelpText() string {
 		"Usage:",
 		"  godex longtask list [--session key]",
 		"  godex longtask create --file spec.json [--session key]",
-		"  godex longtask run <id> [--session key] [--auto-repair] [--max-iterations N]",
+		"  godex longtask run <id> [--session key] [--auto-repair] [--max-repair-attempts N] [--max-iterations N] [--wait-timeout-ms N] [--async] [--no-stop-on-failure] [--resume-run-id <id>]",
 		"  godex longtask status <id> [--session key]",
-		"  godex longtask cancel <id> --node <node_id> [--session key]",
+		"  godex longtask cancel <id> (--node <node_id> | --all) [--session key]",
 		"  godex longtask finalize <id> --node <node_id> [--session key]",
 		"",
 		"Create, run, and inspect durable story-loop tasks.",
+		"Default run behavior: stop on the first blocked story. Pass",
+		"--no-stop-on-failure to keep running past blocked stories.",
+		"Pass --resume-run-id to continue a run that was interrupted",
+		"(e.g. by Ctrl+C or HTTP client disconnect).",
 	}, "\n")
 }
 

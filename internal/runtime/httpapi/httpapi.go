@@ -1117,7 +1117,15 @@ func NewHandlerWithRuntime(
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		view, err := service.CancelLongTask(r.Context(), r.PathValue("id"), r.PathValue("workflowID"), req.NodeID)
+		var (
+			view agent.LongTaskView
+			err  error
+		)
+		if req.CancelAll {
+			view, err = service.CancelLongTaskAll(r.Context(), r.PathValue("id"), r.PathValue("workflowID"))
+		} else {
+			view, err = service.CancelLongTask(r.Context(), r.PathValue("id"), r.PathValue("workflowID"), req.NodeID)
+		}
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
 			return

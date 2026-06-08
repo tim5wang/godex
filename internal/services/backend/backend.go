@@ -3301,6 +3301,29 @@ func (s *Service) CancelLongTask(ctx context.Context, sessionID, workflowID, nod
 	return result, nil
 }
 
+// CancelLongTaskAll cascades a cancel across every story in a longtask.
+// Used by `godex longtask cancel --all` and the matching HTTP body
+// `{"cancel_all": true}`.
+func (s *Service) CancelLongTaskAll(ctx context.Context, sessionID, workflowID string) (agent.LongTaskView, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return agent.LongTaskView{}, err
+	}
+	release, err := session.acquire(ctx)
+	if err != nil {
+		return agent.LongTaskView{}, err
+	}
+	defer release()
+	result, err := session.agent.CancelLongTaskAll(agent.WithSubagentEvents(ctx, session.id, "", session.events), workflowID)
+	if err != nil {
+		return agent.LongTaskView{}, err
+	}
+	if err := s.persistSession(session, s.now()); err != nil {
+		return agent.LongTaskView{}, err
+	}
+	return result, nil
+}
+
 // FinalizeLongTaskStory validates, merges, and commits one completed LongTask story node.
 func (s *Service) FinalizeLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID string) (agent.LongTaskView, error) {
 	session, err := s.requireSession(sessionID)

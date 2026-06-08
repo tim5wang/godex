@@ -84,13 +84,17 @@ func (r *Runner) runLongTaskRun(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("longtask run", flag.ContinueOnError)
 	fs.SetOutput(r.Stderr)
 	var sessionSpec string
-	var autoRepair bool
+	var autoRepair, noStopOnFailure, async bool
 	var maxRepairAttempts, maxIterations, waitTimeoutMS int
+	var resumeRunID string
 	fs.StringVar(&sessionSpec, "session", "", "session key or channel:key")
 	fs.BoolVar(&autoRepair, "auto-repair", false, "append repair nodes after failed validations")
+	fs.BoolVar(&noStopOnFailure, "no-stop-on-failure", false, "do not stop the run on a blocked story (default: stop)")
+	fs.BoolVar(&async, "async", false, "run asynchronously and return immediately")
 	fs.IntVar(&maxRepairAttempts, "max-repair-attempts", 0, "maximum repair attempts per story")
 	fs.IntVar(&maxIterations, "max-iterations", 0, "maximum LongTask run loop iterations")
 	fs.IntVar(&waitTimeoutMS, "wait-timeout-ms", 0, "subagent wait timeout in milliseconds")
+	fs.StringVar(&resumeRunID, "resume-run-id", "", "resume a previously interrupted run by run id")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -102,11 +106,16 @@ func (r *Runner) runLongTaskRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	stopOnFailure := !noStopOnFailure
 	view, err := r.Backend.RunLongTask(ctx, opened.SessionID, workflowID, agent.LongTaskArgs{
 		AutoRepair:        autoRepair,
 		MaxRepairAttempts: maxRepairAttempts,
 		MaxIterations:     maxIterations,
 		WaitTimeoutMS:     waitTimeoutMS,
+		Async:             async,
+		StopOnFailure:     &stopOnFailure,
+		ResumeRunID:       resumeRunID,
+		SessionID:         opened.SessionID,
 	})
 	if err != nil {
 		return err
@@ -141,20 +150,25 @@ func (r *Runner) runLongTaskCancel(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("longtask cancel", flag.ContinueOnError)
 	fs.SetOutput(r.Stderr)
 	var sessionSpec, nodeID string
+	var all bool
 	fs.StringVar(&sessionSpec, "session", "", "session key or channel:key")
-	fs.StringVar(&nodeID, "node", "", "workflow node id to cancel")
+	fs.StringVar(&nodeID, "node", "", "workflow node id to cancel (omit with --all)")
+	fs.BoolVar(&all, "all", false, "cancel every story in the longtask")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	workflowID := strings.TrimSpace(fs.Arg(0))
-	if workflowID == "" || strings.TrimSpace(nodeID) == "" {
-		return fmt.Errorf("usage: godex longtask cancel <id> --node <node_id>")
+	if workflowID == "" {
+		return fmt.Errorf("usage: godex longtask cancel <id> [--node <node_id> | --all] [--session key]")
+	}
+	if !all && strings.TrimSpace(nodeID) == "" {
+		return fmt.Errorf("usage: godex longtask cancel <id> [--node <node_id> | --all] [--session key]")
 	}
 	opened, err := r.openLongTaskSession(ctx, sessionSpec)
 	if err != nil {
 		return err
 	}
-	view, err := r.Backend.CancelLongTask(ctx, opened.SessionID, workflowID, nodeID)
+	view, err := r.Backend.CancelLongTaskAll(ctx, opened.SessionID, workflowID)
 	if err != nil {
 		return err
 	}

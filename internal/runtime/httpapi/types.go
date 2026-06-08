@@ -374,7 +374,8 @@ type permissionDenyRequest struct {
 }
 
 type longTaskNodeRequest struct {
-	NodeID string `json:"node_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+	CancelAll bool   `json:"cancel_all,omitempty"`
 }
 
 type acceptMemoryCandidateRequest struct {

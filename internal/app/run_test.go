@@ -175,6 +175,12 @@ func (f *fakeBackend) CancelLongTask(ctx context.Context, sessionID, workflowID,
 	return agent.LongTaskView{LongTaskID: workflowID, WorkflowID: workflowID}, nil
 }
 
+func (f *fakeBackend) CancelLongTaskAll(ctx context.Context, sessionID, workflowID string) (agent.LongTaskView, error) {
+	_ = ctx
+	_ = sessionID
+	return agent.LongTaskView{LongTaskID: workflowID, WorkflowID: workflowID, Status: "canceled"}, nil
+}
+
 func (f *fakeBackend) FinalizeLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID string) (agent.LongTaskView, error) {
 	_ = ctx
 	_ = sessionID

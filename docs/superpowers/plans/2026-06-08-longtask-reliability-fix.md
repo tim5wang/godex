@@ -35,11 +35,11 @@
 | T2 | ~~run 状态落盘 + 重启 resume~~ ✅(2026-06-08) | **P0** | 1.5d | T1 | A |
 | T3 | ~~Repair 重新接线覆盖已 running 的下游~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T4 | ~~Repair 节点 handoff vs prompt 去重~~ ✅(2026-06-08) | P1 | 0.5d | — | A |
-| T5 | `longtask cancel <id> --all` 支持 | P1 | 0.5d | T1 | A |
+| T5 | ~~`longtask cancel <id> --all` 支持~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T6 | async run 状态落盘(`runs/<id>.json`) | P1 | 1d | T2 | A |
 | T7 | validation 全局 timeout + ctx 取消传播 | P1 | 0.5d | — | A |
 | T8 | worktree GC 条件修正(failed 不清) | P1 | 0.5d | — | C |
-| T9 | stop_on_failure 字段真正生效 + 默认语义 | P1 | 0.5d | T1 | A |
+| T9 | ~~stop_on_failure 字段真正生效 + 默认语义~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T10 | 修复路径解析走 `safeJoinUnderRoot` | P2 | 0.5d | — | C |
 | **T11** | **longtask 完成 / 中断时回流对话历史(B)** | **P0** | 1.5d | T1 | B |
 | **T12** | **artifact 永久可查 + commit 反查 + rollback 入口** | **P0** | 1.5d | T8 | C |
@@ -859,6 +859,13 @@ for i := range state.Nodes {
 
 ### T5 — `longtask cancel <id> --all` 支持
 
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- CancelAll 透传到 cancelLongTaskAll:取消所有 pending+running,保持 completed 不动
+- workflow.Summary.Status 标 canceled(只要有 ≥1 canceled 节点)
+- CLI `--all` flag + HTTP body `cancel_all: true` + Service.CancelLongTaskAll
+- 1 个新验收测试 + 22 个 longtask 测试全过
+
 **对应愿景**:A
 
 **问题**
@@ -997,6 +1004,13 @@ for i := range state.Nodes {
 ---
 
 ### T9 — `stop_on_failure` 真正生效 + 默认语义
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD(合并到 T5 commit 里)
+- StopOnFailure *bool 默认 true 实现(在 T1)
+- 新增 `TestLongTaskRunStopOnFailureDefaultTrue` 验收测试
+- CLI `--no-stop-on-failure` flag + help 文本更新
+- 同时扩展了 run 接受 `--async`, `--resume-run-id`
 
 **对应愿景**:A
 

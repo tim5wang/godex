@@ -87,11 +87,7 @@ func newLongTaskTool(agent *Agent) tools.Tool {
 			}
 			return tools.ToolResult{Structured: view}, nil
 		case "cancel":
-			state, err := agent.cancelWorkflowNode(ctx, args.longTaskWorkflowID(), args.NodeID)
-			if err != nil {
-				return tools.ToolResult{}, err
-			}
-			view, err := agent.longTaskViewForState(state)
+			view, err := agent.cancelLongTask(ctx, args)
 			if err != nil {
 				return tools.ToolResult{}, err
 			}
@@ -196,12 +192,19 @@ func (a *Agent) RunLongTask(ctx context.Context, workflowID string, args LongTas
 }
 
 // CancelLongTask cancels a LongTask workflow node.
+// CancelLongTask cancels one LongTask workflow node or, with CancelAll,
+// every story in the workflow. The public signature is unchanged for
+// single-node cancellation; the cascade path is selected by passing
+// `args.CancelAll = true`.
 func (a *Agent) CancelLongTask(ctx context.Context, workflowID, nodeID string) (LongTaskView, error) {
-	state, err := a.cancelWorkflowNode(ctx, workflowID, nodeID)
-	if err != nil {
-		return LongTaskView{}, err
-	}
-	return a.longTaskViewForState(state)
+	return a.cancelLongTask(ctx, longTaskArgs{WorkflowID: workflowID, NodeID: nodeID})
+}
+
+// CancelLongTaskAll cancels every story in the workflow. Exposed
+// separately so the backend service and HTTP layer do not have to
+// poke at the args struct directly.
+func (a *Agent) CancelLongTaskAll(ctx context.Context, workflowID string) (LongTaskView, error) {
+	return a.cancelLongTask(ctx, longTaskArgs{WorkflowID: workflowID, CancelAll: true})
 }
 
 // FinalizeLongTaskStory validates and finalizes one completed story node.

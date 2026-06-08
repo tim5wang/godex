@@ -34,7 +34,7 @@
 | T1 | ~~run 循环状态机重写~~ ✅(2026-06-08) | **P0** | 2d | — | A |
 | T2 | ~~run 状态落盘 + 重启 resume~~ ✅(2026-06-08) | **P0** | 1.5d | T1 | A |
 | T3 | ~~Repair 重新接线覆盖已 running 的下游~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
-| T4 | Repair 节点 handoff vs prompt 去重 | P1 | 0.5d | — | A |
+| T4 | ~~Repair 节点 handoff vs prompt 去重~~ ✅(2026-06-08) | P1 | 0.5d | — | A |
 | T5 | `longtask cancel <id> --all` 支持 | P1 | 0.5d | T1 | A |
 | T6 | async run 状态落盘(`runs/<id>.json`) | P1 | 1d | T2 | A |
 | T7 | validation 全局 timeout + ctx 取消传播 | P1 | 0.5d | — | A |
@@ -830,6 +830,11 @@ for i := range state.Nodes {
 ---
 
 ### T4 — Repair 节点 handoff vs prompt 去重
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- repair 节点 HandoffPolicy=none, HandoffFrom=空
+- 1 个新验收测试 + 19 个 longtask 测试全过
 
 **对应愿景**:A
 

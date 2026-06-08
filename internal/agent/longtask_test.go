@@ -912,6 +912,62 @@ func TestLongTaskRunResumeAfterInterrupt(t *testing.T) {
 	}
 }
 
+// TestLongTaskRepairPromptDoesNotDuplicateHandoff verifies that repair
+// nodes do not carry an explicit handoff policy. The repair prompt
+// already includes the failed attempt's preview, validation reference,
+// and failure reason inline; re-asking the subagent to also read a
+// handoff artifact would burn 8 KB of token budget on duplicated
+// context. T4 acceptance: HandoffPolicy=none, HandoffFrom empty.
+func TestLongTaskRepairPromptDoesNotDuplicateHandoff(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":         "create",
+		"longtask_id":    "lt_repair_no_handoff",
+		"quality_checks": []string{"cat missing-file-for-repair-prompt-test"},
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	// First run: US-001 will fail validation and trigger a repair.
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":              "run",
+		"longtask_id":         "lt_repair_no_handoff",
+		"max_iterations":      6,
+		"wait_timeout_ms":     2000,
+		"auto_repair":         true,
+		"max_repair_attempts": 1,
+	})
+
+	// Reload the workflow and find the appended repair node.
+	state, err := a.workflows.load("lt_repair_no_handoff")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var repair *workflowNode
+	for i := range state.Nodes {
+		if strings.HasPrefix(state.Nodes[i].ID, "US-001_repair_") {
+			repair = &state.Nodes[i]
+			break
+		}
+	}
+	if repair == nil {
+		t.Fatalf("expected a repair node to be appended, got %+v", state.Nodes)
+	}
+	if repair.HandoffPolicy != workflowHandoffPolicyNone {
+		t.Fatalf("expected repair HandoffPolicy=%q, got %q", workflowHandoffPolicyNone, repair.HandoffPolicy)
+	}
+	if len(repair.HandoffFrom) != 0 {
+		t.Fatalf("expected repair HandoffFrom to be empty, got %v", repair.HandoffFrom)
+	}
+	if !strings.Contains(repair.Prompt, "Previous result preview") {
+		t.Fatalf("expected repair prompt to include Previous result preview section, got prompt:\n%s", repair.Prompt)
+	}
+}
+
 // TestLongTaskRunStatusReadsFromDisk verifies that run_status reads
 // from the durable record (not the in-memory sync.Map) and so survives
 // an Agent restart. T2 acceptance: godex restart preserves run state.

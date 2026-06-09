@@ -45,7 +45,7 @@
 | **T12** | ~~artifact 永久可查 + commit 反查 + rollback 入口~~ ✅(2026-06-08) | **P0** | 1.5d | T8 | C |
 | T13-e2e | ~~10 个端到端 e2e(长链+repair+cancel+resume+回流+rollback+retention)~~ ✅(2026-06-08) | **P0** | 1d | T1~T12 | A+B+C |
 | **T15** | ~~TUI + Web UI 完善(覆盖 T1~T12 所有用户可见能力,Web 拆 5 个组件)~~ ✅(2026-06-08) | **P1** | **2.0d** | T1~T12 | A+B+C |
-| T14 | docs 更新:validation 不在 subagent 沙箱里 | P3 | 0.2d | T15 之后 | — |
+| T14 | ~~docs 更新:validation 不在 subagent 沙箱里~~ ✅(2026-06-08) | P3 | 0.2d | T15 之后 | — |
 
 **总估时: ~13.2 工作日**
 
@@ -1148,6 +1148,15 @@ for i := range state.Nodes {
 ## P3 任务
 
 ### T14 — docs 更新:validation 不在 subagent 沙箱里
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- `docs/workflow-runtime.md` validation 段重新写:明确说明
+  - **WorkspaceDir** 优先在 subagent worktree(隔离变更),否则 host workspace
+  - **Sandbox** 永远是主 agent `Tools.Execution` (host / docker / ssh),不是 subagent inner sandbox
+  - 区分原因:(1) 与 subagent 共享同一 executor 边界, (2) 严格化 runtime 同时严格化 subagent + validation
+- 不改 spec schema、不改 CLI help (范围控制:纯文档)
+- 验收:读 docs 不会误以为 validation 在 subagent 沙箱里 ✅
 
 **对应愿景**:— (文档)
 

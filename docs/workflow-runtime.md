@@ -195,9 +195,31 @@ output preview, status, error, and duration. If no `quality_checks` are
 configured, a completed story with `Verdict: pass` is marked with
 `validation_status: "skipped"`.
 
-Validation runs in the completed story subagent workspace when one exists, so
-checks can validate isolated changes before they are merged into the main
-workspace.
+Validation runs in the completed story subagent worktree when one
+exists (so checks can validate the isolated changes before they are
+merged), and otherwise falls back to the host workspace. In either
+case the quality check is executed through the agent's runtime
+`Tools.Execution` sandbox (host / docker / ssh per the runtime
+config), **not** the subagent's inner sandbox. This is the same
+sandbox the subagent itself runs in, so a `docker` runtime puts
+both the subagent and the validation commands in the same docker
+sandbox; an `ssh` runtime forwards both to the same SSH target.
+A story with no `JobID` (i.e. one that was created without
+running a subagent first) runs its checks against the host
+workspace inside the runtime sandbox.
+
+The distinction matters for two reasons:
+
+1. The validation workspace is **not** the subagent's
+   private sandbox. The subagent and the validation share the
+   same executor. Configuring the runtime to use a stricter
+   sandbox (e.g. `mode: docker` with a read-only root
+   filesystem) tightens both at once.
+2. The validation workspace is **not** the host filesystem
+   outside any sandbox either. The runtime `Tools.Execution`
+   config is the boundary; running with the default
+   `mode: host` is equivalent to running the quality check
+   on the operator's machine.
 
 ## LongTask Repair, Merge, and Commit
 

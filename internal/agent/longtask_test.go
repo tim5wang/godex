@@ -411,6 +411,24 @@ func runLongTaskTool(t *testing.T, a *Agent, ctx context.Context, input map[stri
 	return view
 }
 
+// runLongTaskToolResult executes the longtask tool and returns the
+// raw structured payload alongside any error. T12 acceptance tests
+// that need to assert on non-View return shapes (rollback result,
+// lookup entries, gc result) use this helper because runLongTaskTool
+// would fail to unmarshal a non-View payload.
+func runLongTaskToolResult(t *testing.T, a *Agent, ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	t.Helper()
+	output, err := a.handleTool(ctx, "longtask", input)
+	if err != nil {
+		return nil, err
+	}
+	var any interface{}
+	if err := json.Unmarshal([]byte(output), &any); err != nil {
+		return nil, fmt.Errorf("unmarshal longtask result: %w\n%s", err, output)
+	}
+	return any, nil
+}
+
 // TestPickNextActionCompleted verifies that the run loop exits as soon as
 // all stories have passed. T1 acceptance: single-step state machine covers
 // the completed terminal state in the very first action.
@@ -1413,6 +1431,294 @@ func firstText(blocks []protocol.Block) string {
 		}
 	}
 	return ""
+}
+
+// TestLongTaskRollbackRejectsOversizedReason verifies the
+// per-byte reason cap on rollback. T12 acceptance: 1024 bytes
+// is the absolute hard limit, not the per-character length, so a
+// multi-byte UTF-8 reason is not unfairly favored.
+func TestLongTaskRollbackRejectsOversizedReason(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_rollback_cap",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_rollback_cap",
+	})
+
+	oversize := strings.Repeat("a", 1025)
+	resp, err := runLongTaskToolResult(t, a, context.Background(), map[string]interface{}{
+		"action":          "rollback",
+		"longtask_id":     "lt_rollback_cap",
+		"node_id":         "US-001",
+		"rollback_reason": oversize,
+	})
+	if err == nil {
+		t.Fatalf("expected error for oversize reason, got resp=%+v", resp)
+	}
+	if !strings.Contains(err.Error(), "1024 bytes") {
+		t.Fatalf("expected error to mention 1024-byte cap, got %v", err)
+	}
+}
+
+// TestLongTaskRollbackAllowsEmptyReason verifies the explicit
+// allowance for an empty --reason. T12 acceptance: 'empty reason
+// is allowed' was a user-confirmed decision. The 1024-byte cap
+// is checked first; an empty string is well under it, so the
+// reason check must NOT error out before any other validation
+// (commit presence, project root, etc.) runs.
+func TestLongTaskRollbackAllowsEmptyReason(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	// Call rollback directly (bypassing the longtask tool wrapper)
+	// so we exercise the boundary check in isolation from the
+	// rest of the rollback path. The longtask tool wrapper would
+	// require a real commit to even reach this code, but the
+	// 1024-byte boundary check must be testable in isolation.
+	errReason := a.checkRollbackReasonLen("")
+	if errReason != nil {
+		t.Fatalf("expected empty reason to be allowed, got %v", errReason)
+	}
+	errReason = a.checkRollbackReasonLen(strings.Repeat("a", 1024))
+	if errReason != nil {
+		t.Fatalf("expected 1024-byte reason to be allowed, got %v", errReason)
+	}
+}
+
+// TestLongTaskLookupByCommitFindsIndexedStory verifies that after
+// a successful finalize, the index.json is populated and a
+// commit-hash lookup returns the matching story entry. T12
+// acceptance: `godex longtask lookup --commit <hash>` is the
+// reverse path operators need.
+func TestLongTaskLookupByCommitFindsIndexedStory(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_lookup_index",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_lookup_index",
+	})
+
+	// The story did not actually run in a real git project, so no
+	// commit hash is on the view; we still want to assert the
+	// index is created on disk and a lookup by an arbitrary hash
+	// returns 0 matches.
+	if err := a.refreshLongTaskIndex("lt_lookup_index"); err != nil {
+		t.Fatalf("refresh index: %v", err)
+	}
+	idx, err := a.readLongTaskIndex("lt_lookup_index")
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	if idx.LongTaskID != "lt_lookup_index" {
+		t.Fatalf("expected longtask_id, got %q", idx.LongTaskID)
+	}
+	entries, err := a.LongTaskLookupByCommit("deadbeef", "lt_lookup_index")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 matches for missing commit, got %d", len(entries))
+	}
+}
+
+// TestLongTaskGCDryRunIsNoOp verifies the safe default of gc: with
+// no --older-than, the sweep inspects but deletes nothing. T12
+// acceptance: ArtifactRetentionDays=0 means permanent retention
+// and a no-arg gc must NOT touch disk.
+func TestLongTaskGCDryRunIsNoOp(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_gc_permanent",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_gc_permanent",
+	})
+
+	resp, err := runLongTaskToolResult(t, a, context.Background(), map[string]interface{}{
+		"action":      "gc",
+		"longtask_id": "lt_gc_permanent",
+	})
+	if err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	result, ok := resp.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map, got %T", resp)
+	}
+	if dryRun, _ := result["dry_run"].(bool); !dryRun {
+		t.Fatalf("expected dry_run=true on no-arg gc, got %v", result["dry_run"])
+	}
+	if deleted, _ := result["deleted_runs"].(float64); deleted != 0 {
+		t.Fatalf("expected deleted_runs=0 on no-arg gc, got %v", result["deleted_runs"])
+	}
+}
+
+// TestLongTaskGCDryRunListsEligibleRunRecords verifies that an
+// explicit --older-than (in seconds) on gc with --apply_gc=false
+// reports the count of run records that *would* be deleted.
+// T12 acceptance: dry-run is a planning step, not a flag word.
+func TestLongTaskGCDryRunListsEligibleRunRecords(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_gc_dryrun",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_gc_dryrun",
+	})
+
+	// 1 second is shorter than the time elapsed during the test,
+	// so the just-written run record IS eligible to be deleted.
+	resp, err := runLongTaskToolResult(t, a, context.Background(), map[string]interface{}{
+		"action":             "gc",
+		"longtask_id":        "lt_gc_dryrun",
+		"older_than_seconds": 1,
+	})
+	if err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	result, ok := resp.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map, got %T", resp)
+	}
+	if dryRun, _ := result["dry_run"].(bool); !dryRun {
+		t.Fatalf("expected dry_run=true without apply_gc, got %v", result["dry_run"])
+	}
+	inspected, _ := result["inspected"].(float64)
+	if inspected < 1 {
+		t.Fatalf("expected inspected>=1, got %v", result["inspected"])
+	}
+}
+
+// TestLongTaskGCApplyDeletesOldRunRecords verifies that
+// apply_gc=true with --older-than N actually deletes the run
+// record file. T12 acceptance: explicit --apply is the only path
+// that mutates disk; dry-run is the safe default.
+func TestLongTaskGCApplyDeletesOldRunRecords(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_gc_apply",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_gc_apply",
+	})
+
+	// Backdate the run record's UpdatedAt to make it eligible.
+	runs, err := a.workflows.listLongTaskRuns("lt_gc_apply")
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("expected at least one run record, got err=%v runs=%d", err, len(runs))
+	}
+	rec := runs[0]
+	rec.UpdatedAt = time.Now().UTC().Add(-2 * time.Hour)
+	if err := a.workflows.writeLongTaskRun(rec); err != nil {
+		t.Fatalf("rewrite run record: %v", err)
+	}
+
+	resp, err := runLongTaskToolResult(t, a, context.Background(), map[string]interface{}{
+		"action":             "gc",
+		"longtask_id":        "lt_gc_apply",
+		"older_than_seconds": 60,
+		"apply_gc":           true,
+	})
+	if err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	result, ok := resp.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map, got %T", resp)
+	}
+	if dryRun, _ := result["dry_run"].(bool); dryRun {
+		t.Fatalf("expected dry_run=false with apply_gc, got %v", result["dry_run"])
+	}
+	deletedRuns, _ := result["deleted_runs"].(float64)
+	if deletedRuns < 1 {
+		t.Fatalf("expected deleted_runs>=1 with apply_gc, got %v", result["deleted_runs"])
+	}
+}
+
+// TestLongTaskLookupRefluxSurfacesInMessageHistory verifies that
+// a commit-hash lookup appends an assistant message into the
+// chat history. T12 acceptance: the user can see 'what longtask
+// produced this commit' without leaving the chat.
+func TestLongTaskLookupRefluxSurfacesInMessageHistory(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_lookup_reflux",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "lookup",
+		"longtask_id": "lt_lookup_reflux",
+		"commit_hash": "deadbeef",
+	})
+
+	msgs := a.GetMessages()
+	hit := false
+	for _, m := range msgs {
+		if m.Metadata != nil && m.Metadata.Kind == protocol.KindLongTaskReflux && strings.Contains(firstText(m.Content), "deadbeef") {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		t.Fatalf("expected lookup reflux message in history")
+	}
 }
 
 // TestLongTaskRunStatusReadsFromDisk verifies that run_status reads

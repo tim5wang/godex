@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -120,6 +121,33 @@ func newLongTaskTool(agent *Agent) tools.Tool {
 				return tools.ToolResult{}, err
 			}
 			return tools.ToolResult{Structured: view}, nil
+		case "lookup":
+			entries, err := agent.LongTaskLookupByCommit(strings.TrimSpace(args.CommitHash), args.longTaskWorkflowID())
+			if err != nil {
+				return tools.ToolResult{}, err
+			}
+			agent.appendLongTaskLookupReflux(strings.TrimSpace(args.CommitHash), entries)
+			return tools.ToolResult{Structured: map[string]interface{}{
+				"commit":   strings.TrimSpace(args.CommitHash),
+				"longtask": args.longTaskWorkflowID(),
+				"matches":  entries,
+			}}, nil
+		case "rollback":
+			result, err := agent.RollbackLongTaskStory(ctx, args.longTaskWorkflowID(), args.NodeID, args.RollbackReason)
+			if err != nil {
+				return tools.ToolResult{}, err
+			}
+			return tools.ToolResult{Structured: result}, nil
+		case "gc":
+			olderThan := time.Unix(0, 0)
+			if args.OlderThanSeconds > 0 {
+				olderThan = time.Now().UTC().Add(-time.Duration(args.OlderThanSeconds) * time.Second)
+			}
+			result, err := agent.SweepLongTaskArtifacts(args.longTaskWorkflowID(), olderThan, args.ApplyGC)
+			if err != nil {
+				return tools.ToolResult{}, err
+			}
+			return tools.ToolResult{Structured: result}, nil
 		default:
 			return tools.ToolResult{}, fmt.Errorf("unsupported longtask action %q", action)
 		}

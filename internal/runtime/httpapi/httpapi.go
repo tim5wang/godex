@@ -1145,6 +1145,57 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
+	// T12: commit-hash reverse lookup.
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/lookup", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req longTaskLookupRequest
+		if err := decodeJSONAllowEmpty(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if strings.TrimSpace(req.Commit) == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("missing commit"))
+			return
+		}
+		out, err := service.LookupLongTask(r.Context(), r.PathValue("id"), req.Commit, r.PathValue("workflowID"))
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+	})))
+	// T12: rollback. Empty reason is allowed; >1024 bytes is rejected.
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/rollback", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req longTaskRollbackRequest
+		if err := decodeJSONAllowEmpty(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if len(req.Reason) > 1024 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("rollback reason exceeds 1024 bytes (got %d)", len(req.Reason)))
+			return
+		}
+		result, err := service.RollbackLongTaskStory(r.Context(), r.PathValue("id"), r.PathValue("workflowID"), req.NodeID, req.Reason)
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})))
+	// T12: explicit lazy GC. Default dry-run; older_than_seconds=0
+	// means permanent retention (T12 default).
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/gc", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req longTaskGCRequest
+		if err := decodeJSONAllowEmpty(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		result, err := service.GCLongTaskArtifacts(r.Context(), r.PathValue("id"), r.PathValue("workflowID"), req.OlderThanSeconds, req.Apply)
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})))
 	mux.Handle("GET /sessions/{id}/permissions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.PendingPermissions(r.Context(), r.PathValue("id"))
 		if err != nil {

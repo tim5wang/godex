@@ -188,6 +188,39 @@ func (f *fakeBackend) FinalizeLongTaskStory(ctx context.Context, sessionID, work
 	return agent.LongTaskView{LongTaskID: workflowID, WorkflowID: workflowID}, nil
 }
 
+func (f *fakeBackend) LookupLongTask(ctx context.Context, sessionID, commit, longtaskID string) (interface{}, error) {
+	_ = ctx
+	_ = sessionID
+	return map[string]interface{}{
+		"commit":   commit,
+		"longtask": longtaskID,
+		"matches":  []agent.LongTaskIndexEntry{},
+	}, nil
+}
+
+func (f *fakeBackend) RollbackLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID, reason string) (agent.LongTaskRollbackResult, error) {
+	_ = ctx
+	_ = sessionID
+	return agent.LongTaskRollbackResult{
+		WorkflowID:  workflowID,
+		NodeID:      nodeID,
+		StoryID:     nodeID,
+		ReasonBytes: len(reason),
+		NewRevertAt: time.Now().UTC(),
+	}, nil
+}
+
+func (f *fakeBackend) GCLongTaskArtifacts(ctx context.Context, sessionID, workflowID string, olderThanSeconds int, apply bool) (agent.LongTaskGCSweepResult, error) {
+	_ = ctx
+	_ = sessionID
+	_ = olderThanSeconds
+	return agent.LongTaskGCSweepResult{
+		WorkflowID: workflowID,
+		DryRun:     !apply,
+		Now:        time.Now().UTC(),
+	}, nil
+}
+
 func TestRunnerAskUsesPromptArguments(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}

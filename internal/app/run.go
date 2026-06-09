@@ -53,6 +53,9 @@ type Backend interface {
 	CancelLongTask(context.Context, string, string, string) (agent.LongTaskView, error)
 	CancelLongTaskAll(context.Context, string, string) (agent.LongTaskView, error)
 	FinalizeLongTaskStory(context.Context, string, string, string) (agent.LongTaskView, error)
+	LookupLongTask(context.Context, string, string, string) (interface{}, error)
+	RollbackLongTaskStory(context.Context, string, string, string, string) (agent.LongTaskRollbackResult, error)
+	GCLongTaskArtifacts(context.Context, string, string, int, bool) (agent.LongTaskGCSweepResult, error)
 }
 
 // Runner dispatches top-level process modes onto the shared backend.
@@ -1403,12 +1406,25 @@ func longtaskHelpText() string {
 		"  godex longtask status <id> [--session key]",
 		"  godex longtask cancel <id> (--node <node_id> | --all) [--session key]",
 		"  godex longtask finalize <id> --node <node_id> [--session key]",
+		"  godex longtask lookup --commit <hash> [--longtask <id>] [--session key]",
+		"  godex longtask rollback <id> --node <node_id> [--reason <text>] [--session key]",
+		"  godex longtask gc <id> [--older-than N] [--apply] [--session key]",
 		"",
 		"Create, run, and inspect durable story-loop tasks.",
 		"Default run behavior: stop on the first blocked story. Pass",
 		"--no-stop-on-failure to keep running past blocked stories.",
 		"Pass --resume-run-id to continue a run that was interrupted",
 		"(e.g. by Ctrl+C or HTTP client disconnect).",
+		"",
+		"lookup / rollback / gc are T12 audit-and-undo surfaces:",
+		"  - lookup --commit reverse-finds the longtask story that",
+		"    produced a given commit hash",
+		"  - rollback --reason is optional (empty reason is allowed)",
+		"    and capped at 1024 bytes; a conflicted revert is",
+		"    refluxed back to chat history as a refusal",
+		"  - gc is dry-run by default (ArtifactRetentionDays=0 means",
+		"    permanent); pass --older-than N and --apply to actually",
+		"    delete run records older than N seconds",
 	}, "\n")
 }
 

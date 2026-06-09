@@ -189,6 +189,110 @@ func (a *Agent) appendLongTaskReflux(view longTaskView, runID string) (string, e
 	return key, nil
 }
 
+// appendLongTaskRefluxExtra writes a free-form assistant message
+// into the agent's history using the same longtask_reflux marker
+// kind. It is used by T12 to surface rollbacks and lookups that
+// happen outside a longtask run, so the chat history reflects the
+// operator's actions even when no run is in flight.
+func (a *Agent) appendLongTaskRefluxExtra(text string, extras map[string]string) {
+	rendered := strings.TrimSpace(text)
+	if rendered == "" {
+		return
+	}
+	msg := protocol.NewTextMessage(protocol.RoleAssistant, rendered)
+	msg.Metadata = &protocol.Metadata{
+		Kind:      protocol.KindLongTaskReflux,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Ephemeral: true,
+	}
+	// Extras ride on the metadata as AppObjectID / AppObjectTitle
+	// because the protocol does not have a free-form map field.
+	// The keys we care about are well-known: longtask_id, node_id,
+	// commit_hash, status (always 'rollback' or 'lookup' here).
+	for k, v := range extras {
+		switch k {
+		case "longtask_id":
+			msg.Metadata.AppObjectID = v
+			msg.Metadata.AppObjectType = "longtask"
+			msg.Metadata.AppObjectTitle = v
+		case "node_id":
+			if msg.Metadata.Source == "" {
+				msg.Metadata.Source = v
+			}
+		case "commit_hash":
+			msg.Metadata.Transcript = v
+		case "status":
+			msg.Metadata.Text = v
+		}
+	}
+	a.appendMessage(msg)
+}
+
+// appendLongTaskRollbackReflux is the T12 reflux entry point for
+// rollback outcomes. It always emits (no dedupe) because rollbacks
+// are user-initiated events, not progress events.
+func (a *Agent) appendLongTaskRollbackReflux(result LongTaskRollbackResult) {
+	var b strings.Builder
+	if result.Conflict {
+		fmt.Fprintf(&b, "LongTask %s: rollback of %s CONFLICTED\n", result.WorkflowID, result.NodeID)
+		if result.ConflictRef != "" {
+			fmt.Fprintf(&b, "  detail: %s\n", truncateForReflux(result.ConflictRef, 240))
+		}
+		if result.Message != "" {
+			fmt.Fprintf(&b, "  %s\n", result.Message)
+		}
+		fmt.Fprintf(&b, "  next: resolve the conflict, then re-run `godex longtask rollback`.")
+	} else {
+		fmt.Fprintf(&b, "LongTask %s: rolled back %s (commit %s)\n", result.WorkflowID, result.NodeID, truncateForReflux(result.CommitHash, 12))
+		if result.ReasonBytes > 0 {
+			fmt.Fprintf(&b, "  reason: %d bytes recorded in revert_history\n", result.ReasonBytes)
+		} else {
+			b.WriteString("  reason: <empty; allowed per T12>\n")
+		}
+	}
+	extras := map[string]string{
+		"longtask_id": result.WorkflowID,
+		"node_id":     result.NodeID,
+		"commit_hash": result.CommitHash,
+		"status":      "rollback",
+	}
+	if result.Conflict {
+		extras["status"] = "rollback_conflict"
+	}
+	a.appendLongTaskRefluxExtra(b.String(), extras)
+}
+
+// appendLongTaskLookupReflux surfaces a commit-hash lookup result
+// back to the chat history so the user has a single record of
+// which longtask story produced the commit they asked about.
+func (a *Agent) appendLongTaskLookupReflux(commit string, entries []LongTaskIndexEntry) {
+	if len(entries) == 0 {
+		a.appendLongTaskRefluxExtra(
+			fmt.Sprintf("No longtask story found for commit %s.", truncateForReflux(commit, 12)),
+			map[string]string{"commit_hash": commit, "status": "lookup_miss"},
+		)
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "LongTask lookup for commit %s:\n", truncateForReflux(commit, 12))
+	for _, e := range entries {
+		fmt.Fprintf(&b, "  - %s / %s (node %s", e.LongTaskID, e.StoryID, e.NodeID)
+		if e.Reverted {
+			fmt.Fprintf(&b, ", reverted x%d", e.RevertCount)
+		}
+		b.WriteString(")\n")
+	}
+	extras := map[string]string{
+		"commit_hash": commit,
+		"status":      "lookup_hit",
+	}
+	if len(entries) > 0 {
+		extras["longtask_id"] = entries[0].LongTaskID
+		extras["node_id"] = entries[0].NodeID
+	}
+	a.appendLongTaskRefluxExtra(b.String(), extras)
+}
+
 // args_no_reflux_disable returns true when the agent's current run was
 // configured with NoReflux. The check is best-effort: if no
 // in-flight args are recorded we default to enabled (so a call site

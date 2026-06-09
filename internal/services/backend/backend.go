@@ -3345,6 +3345,84 @@ func (s *Service) FinalizeLongTaskStory(ctx context.Context, sessionID, workflow
 	return result, nil
 }
 
+// LookupLongTask is the commit-hash reverse-lookup entry point.
+// The result is a small wrapper that holds the matches and the
+// queried commit so the CLI / TUI / Web can render a single
+// "this commit came from longtask X, story Y" line.
+func (s *Service) LookupLongTask(ctx context.Context, sessionID, commit, longtaskID string) (interface{}, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	release, err := session.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	entries, err := session.agent.LongTaskLookupByCommit(commit, longtaskID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"commit":   commit,
+		"longtask": longtaskID,
+		"matches":  entries,
+	}, nil
+}
+
+// RollbackLongTaskStory is the agent-level entry point for
+// `godex longtask rollback`. The reason byte cap is enforced at
+// the CLI / HTTP boundary AND inside the agent (defense in depth)
+// so a misbehaving client cannot bypass the cap by talking
+// directly to the HTTP API.
+func (s *Service) RollbackLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID, reason string) (agent.LongTaskRollbackResult, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return agent.LongTaskRollbackResult{}, err
+	}
+	release, err := session.acquire(ctx)
+	if err != nil {
+		return agent.LongTaskRollbackResult{}, err
+	}
+	defer release()
+	result, err := session.agent.RollbackLongTaskStory(agent.WithSubagentEvents(ctx, session.id, "", session.events), workflowID, nodeID, reason)
+	if err != nil {
+		return agent.LongTaskRollbackResult{}, err
+	}
+	if err := s.persistSession(session, s.now()); err != nil {
+		return agent.LongTaskRollbackResult{}, err
+	}
+	return result, nil
+}
+
+// GCLongTaskArtifacts drives the explicit lazy GC for longtask
+// run records. olderThanSeconds == 0 means permanent retention
+// (T12 default); only an explicit --older-than triggers deletes,
+// and --apply is the only path that mutates disk.
+func (s *Service) GCLongTaskArtifacts(ctx context.Context, sessionID, workflowID string, olderThanSeconds int, apply bool) (agent.LongTaskGCSweepResult, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return agent.LongTaskGCSweepResult{}, err
+	}
+	release, err := session.acquire(ctx)
+	if err != nil {
+		return agent.LongTaskGCSweepResult{}, err
+	}
+	defer release()
+	olderThan := time.Time{}
+	if olderThanSeconds > 0 {
+		olderThan = s.now().Add(-time.Duration(olderThanSeconds) * time.Second)
+	}
+	result, err := session.agent.SweepLongTaskArtifacts(workflowID, olderThan, apply)
+	if err != nil {
+		return agent.LongTaskGCSweepResult{}, err
+	}
+	if err := s.persistSession(session, s.now()); err != nil {
+		return agent.LongTaskGCSweepResult{}, err
+	}
+	return result, nil
+}
+
 // PendingPermissions returns pending approval requests for one session.
 func (s *Service) PendingPermissions(ctx context.Context, sessionID string) ([]tools.PendingPermission, error) {
 	_ = ctx

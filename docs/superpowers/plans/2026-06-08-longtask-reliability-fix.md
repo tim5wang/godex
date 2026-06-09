@@ -42,7 +42,7 @@
 | T9 | ~~stop_on_failure 字段真正生效 + 默认语义~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T10 | 修复路径解析走 `safeJoinUnderRoot` | P2 | 0.5d | — | C |
 | **T11** | ~~longtask 完成 / 中断时回流对话历史(B)~~ ✅(2026-06-08) | **P0** | 1.5d | T1 | B |
-| **T12** | **artifact 永久可查 + commit 反查 + rollback 入口** | **P0** | 1.5d | T8 | C |
+| **T12** | ~~artifact 永久可查 + commit 反查 + rollback 入口~~ ✅(2026-06-08) | **P0** | 1.5d | T8 | C |
 | T13-e2e | 10 个端到端 e2e(长链+repair+cancel+resume+回流+rollback+retention) | **P0** | 1d | T1~T12 | A+B+C |
 | **T15** | **TUI + Web UI 完善(覆盖 T1~T12 所有用户可见能力,Web 拆 5 个组件)** | **P1** | **2.0d** | T1~T12 | A+B+C |
 | T14 | docs 更新:validation 不在 subagent 沙箱里 | P3 | 0.2d | T15 之后 | — |
@@ -350,6 +350,16 @@
 ---
 
 ### T12 — artifact 永久可查 + commit 反查 + rollback 入口
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- 新增 `longtask_rollback.go`: `LongTaskIndex` 写入 + `LongTaskLookupByCommit` + `RollbackLongTaskStory` (git revert --no-commit dry-run, conflict 路由回流) + `SweepLongTaskArtifacts` (默认 0 永久, --apply 真删)
+- 新增 `longtaskArgs` 字段: `CommitHash` / `RollbackReason` / `OlderThanSeconds` / `ApplyGC`
+- 3 个新工具 action: `lookup` / `rollback` / `gc`;对应 backend method + CLI 子命令 + HTTP endpoint
+- 3 个新 reflux helper: `appendLongTaskRefluxExtra` / `appendLongTaskRollbackReflux` (success + conflict 都回流) / `appendLongTaskLookupReflux`
+- `longTaskStoryView` 加 `Reverted` + `RevertHistory`;新增 `revert_history.json` 永久追录(append-only)
+- rollback --reason hard cap 1024 bytes (CLI + HTTP + agent 三处防线,空 reason 允许)
+- 6 个新验收测试(oversize reason 拒、空 reason 允许、index 写入、lookup miss、gc dry-run is no-op、gc dry-run 计数、gc apply 真删、lookup reflux) + 40 个 longtask 测试全过
 
 **对应愿景**:C(可审计可回滚)
 

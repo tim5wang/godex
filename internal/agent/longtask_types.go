@@ -85,6 +85,11 @@ type longTaskArgs struct {
 	NoReflux             bool                 `json:"no_reflux,omitempty"`
 	SessionID            string               `json:"session_id,omitempty"`
 	CancelAll            bool                 `json:"cancel_all,omitempty"`
+	// T12 fields: lookup / rollback / gc
+	CommitHash        string `json:"commit_hash,omitempty"`
+	RollbackReason    string `json:"rollback_reason,omitempty"`
+	OlderThanSeconds  int    `json:"older_than_seconds,omitempty"`
+	ApplyGC           bool   `json:"apply_gc,omitempty"`
 }
 
 type longTaskValidationCheck struct {
@@ -144,6 +149,18 @@ type longTaskStoryView struct {
 	CommitHash         string    `json:"commit_hash,omitempty"`
 	CommitRef          string    `json:"commit_ref,omitempty"`
 	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+	// Reverted is set after a successful rollback. The story is not
+	// re-executed automatically; passes stays true because the test
+	// ran and the user is responsible for re-running if they want a
+	// different outcome. RevertHistory is appended-to, never reset.
+	Reverted      bool                    `json:"reverted,omitempty"`
+	RevertHistory []longTaskRevertEntry   `json:"revert_history,omitempty"`
+}
+
+type longTaskRevertEntry struct {
+	Commit  string    `json:"commit"`
+	Reason  string    `json:"reason,omitempty"`
+	At      time.Time `json:"at"`
 }
 
 type longTaskRepairSummary struct {

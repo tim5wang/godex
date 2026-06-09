@@ -378,6 +378,20 @@ type longTaskNodeRequest struct {
 	CancelAll bool   `json:"cancel_all,omitempty"`
 }
 
+type longTaskLookupRequest struct {
+	Commit string `json:"commit,omitempty"`
+}
+
+type longTaskRollbackRequest struct {
+	NodeID string `json:"node_id,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type longTaskGCRequest struct {
+	OlderThanSeconds int  `json:"older_than_seconds,omitempty"`
+	Apply            bool `json:"apply,omitempty"`
+}
+
 type acceptMemoryCandidateRequest struct {
 	AlwaysInclude bool `json:"always_include,omitempty"`
 }

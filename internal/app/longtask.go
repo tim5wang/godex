@@ -14,7 +14,7 @@ import (
 
 func (r *Runner) runLongTaskCommand(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("missing longtask subcommand: list, create, run, status, cancel, finalize")
+		return fmt.Errorf("missing longtask subcommand: list, create, run, status, cancel, finalize, lookup, rollback, gc")
 	}
 	switch args[0] {
 	case "list":
@@ -29,6 +29,12 @@ func (r *Runner) runLongTaskCommand(ctx context.Context, args []string) error {
 		return r.runLongTaskCancel(ctx, args[1:])
 	case "finalize":
 		return r.runLongTaskFinalize(ctx, args[1:])
+	case "lookup":
+		return r.runLongTaskLookup(ctx, args[1:])
+	case "rollback":
+		return r.runLongTaskRollback(ctx, args[1:])
+	case "gc":
+		return r.runLongTaskGC(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown longtask subcommand %q", args[0])
 	}
@@ -193,6 +199,95 @@ func (r *Runner) runLongTaskFinalize(ctx context.Context, args []string) error {
 		return err
 	}
 	view, err := r.Backend.FinalizeLongTaskStory(ctx, opened.SessionID, workflowID, nodeID)
+	if err != nil {
+		return err
+	}
+	return r.printLongTaskJSON(view)
+}
+
+// runLongTaskLookup implements `godex longtask lookup` for
+// commit-hash reverse lookup. The --longtask flag is optional:
+// if absent, all longtask indexes are scanned.
+func (r *Runner) runLongTaskLookup(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("longtask lookup", flag.ContinueOnError)
+	fs.SetOutput(r.Stderr)
+	var sessionSpec, longtaskFilter, commit string
+	fs.StringVar(&sessionSpec, "session", "", "session key or channel:key")
+	fs.StringVar(&longtaskFilter, "longtask", "", "restrict scan to a single longtask id")
+	fs.StringVar(&commit, "commit", "", "commit hash (or prefix) to look up")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(commit) == "" {
+		return fmt.Errorf("usage: godex longtask lookup --commit <hash> [--longtask <id>]")
+	}
+	opened, err := r.openLongTaskSession(ctx, sessionSpec)
+	if err != nil {
+		return err
+	}
+	view, err := r.Backend.LookupLongTask(ctx, opened.SessionID, commit, longtaskFilter)
+	if err != nil {
+		return err
+	}
+	return r.printLongTaskJSON(view)
+}
+
+// runLongTaskRollback implements `godex longtask rollback`. The
+// --reason flag is optional (empty reason is allowed per T12);
+// when present it is hard-capped at 1024 bytes.
+func (r *Runner) runLongTaskRollback(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("longtask rollback", flag.ContinueOnError)
+	fs.SetOutput(r.Stderr)
+	var sessionSpec, nodeID, reason string
+	fs.StringVar(&sessionSpec, "session", "", "session key or channel:key")
+	fs.StringVar(&nodeID, "node", "", "completed story node id to roll back")
+	fs.StringVar(&reason, "reason", "", "optional reason; max 1024 bytes (empty allowed)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	workflowID := strings.TrimSpace(fs.Arg(0))
+	if workflowID == "" || strings.TrimSpace(nodeID) == "" {
+		return fmt.Errorf("usage: godex longtask rollback <id> --node <node_id> [--reason <text>]")
+	}
+	if len(reason) > 1024 {
+		return fmt.Errorf("rollback reason exceeds 1024 bytes (got %d)", len(reason))
+	}
+	opened, err := r.openLongTaskSession(ctx, sessionSpec)
+	if err != nil {
+		return err
+	}
+	view, err := r.Backend.RollbackLongTaskStory(ctx, opened.SessionID, workflowID, nodeID, reason)
+	if err != nil {
+		return err
+	}
+	return r.printLongTaskJSON(view)
+}
+
+// runLongTaskGC implements `godex longtask gc` with the safe
+// default of dry-run. --apply is the only path that mutates
+// disk; --older-than (in seconds) is required for --apply to
+// have any effect because the default retention is 0 == permanent.
+func (r *Runner) runLongTaskGC(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("longtask gc", flag.ContinueOnError)
+	fs.SetOutput(r.Stderr)
+	var sessionSpec string
+	var olderThanSeconds int
+	var apply bool
+	fs.StringVar(&sessionSpec, "session", "", "session key or channel:key")
+	fs.IntVar(&olderThanSeconds, "older-than", 0, "delete run records whose UpdatedAt is older than N seconds")
+	fs.BoolVar(&apply, "apply", false, "actually delete (default: dry-run)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	workflowID := strings.TrimSpace(fs.Arg(0))
+	if workflowID == "" {
+		return fmt.Errorf("usage: godex longtask gc <id> [--older-than N] [--apply]")
+	}
+	opened, err := r.openLongTaskSession(ctx, sessionSpec)
+	if err != nil {
+		return err
+	}
+	view, err := r.Backend.GCLongTaskArtifacts(ctx, opened.SessionID, workflowID, olderThanSeconds, apply)
 	if err != nil {
 		return err
 	}

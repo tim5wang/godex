@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useTaskCenterText } from "./taskCenter.i18n";
 import { LongTaskRollbackModal } from "./LongTaskRollbackModal";
@@ -35,7 +35,7 @@ export interface LongTaskCardProps {
 // longtask, supports default-collapsed / click-to-expand, and
 // owns the rollback / lookup modal visibility (so the chat page
 // does not have to track which card has an open modal).
-export function LongTaskCard(props: LongTaskCardProps): JSX.Element {
+export function LongTaskCard(props: LongTaskCardProps): ReactNode {
   const text = useTaskCenterText();
   const [expanded, setExpanded] = useState(false);
   const [rollbackNode, setRollbackNode] = useState<string | null>(null);

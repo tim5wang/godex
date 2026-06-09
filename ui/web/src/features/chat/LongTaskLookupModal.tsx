@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useTaskCenterText } from "./taskCenter.i18n";
 
@@ -13,7 +13,7 @@ export interface LongTaskLookupModalProps {
 // LongTaskLookupModal is the Web entry point for the T12
 // commit-hash / story-id reverse-lookup. The same modal chrome
 // covers both modes so the user can switch without re-rendering.
-export function LongTaskLookupModal(props: LongTaskLookupModalProps): JSX.Element | null {
+export function LongTaskLookupModal(props: LongTaskLookupModalProps): ReactNode {
   const text = useTaskCenterText();
   const [mode, setMode] = useState<LongTaskLookupMode>("commit");
   const [query, setQuery] = useState("");

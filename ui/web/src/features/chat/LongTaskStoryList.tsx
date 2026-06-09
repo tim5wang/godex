@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useTaskCenterText } from "./taskCenter.i18n";
 import type { LongTaskCardStory } from "./LongTaskCard";
 
@@ -9,11 +10,9 @@ export interface LongTaskStoryListProps {
 // longtask. Active (running / blocked) stories come first so
 // the user can spot what is in flight without scrolling. T15
 // acceptance: rolled-back stories are visibly tagged.
-export function LongTaskStoryList(props: LongTaskStoryListProps): JSX.Element {
+export function LongTaskStoryList(props: LongTaskStoryListProps): ReactNode {
   const text = useTaskCenterText();
-  const sorted = [...props.stories].sort((a, b) => {
-    return storyOrderKey(a) - storyOrderKey(b);
-  });
+  const sorted = [...props.stories].sort(compareStoryOrder);
   if (sorted.length === 0) {
     return <div style={{ opacity: 0.6, fontSize: 12 }}>(no stories)</div>;
   }
@@ -73,4 +72,12 @@ function storyOrderKey(s: LongTaskCardStory): string {
       return "3" + s.id;
   }
   return "9" + s.id;
+}
+
+function compareStoryOrder(a: LongTaskCardStory, b: LongTaskCardStory): number {
+  const ka = storyOrderKey(a);
+  const kb = storyOrderKey(b);
+  if (ka < kb) return -1;
+  if (ka > kb) return 1;
+  return 0;
 }

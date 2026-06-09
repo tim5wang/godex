@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useTaskCenterText } from "./taskCenter.i18n";
 
@@ -16,7 +16,7 @@ export interface LongTaskRollbackModalProps {
 // 1024-byte cap the agent / CLI / HTTP layer enforce (defense
 // in depth) and shows a live byte counter so the user knows
 // when they are about to exceed the cap.
-export function LongTaskRollbackModal(props: LongTaskRollbackModalProps): JSX.Element | null {
+export function LongTaskRollbackModal(props: LongTaskRollbackModalProps): ReactNode {
   const text = useTaskCenterText();
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);

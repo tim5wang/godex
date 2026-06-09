@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { useTaskCenterText } from "./taskCenter.i18n";
 
@@ -28,7 +28,7 @@ export interface LongTaskRefluxBubbleProps {
 
 const MAX_VISIBLE_BODY = 600;
 
-export function LongTaskRefluxBubble(props: LongTaskRefluxBubbleProps): JSX.Element {
+export function LongTaskRefluxBubble(props: LongTaskRefluxBubbleProps): ReactNode {
   const text = useTaskCenterText();
   const [expanded, setExpanded] = useState(false);
   const body = useMemo(() => extractRefluxBody(props.content), [props.content]);

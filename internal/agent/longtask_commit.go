@@ -180,7 +180,11 @@ func (s *workflowStore) writeLongTaskValidation(workflowID string, validation lo
 	if err := validateWorkflowID(workflowID); err != nil {
 		return err
 	}
-	path := filepath.Join(s.dir, workflowID, longTaskValidationRef(validation.NodeID, validation.Attempt))
+	root := filepath.Join(s.dir, workflowID)
+	path, err := safeJoinUnderRoot(root, longTaskValidationRef(validation.NodeID, validation.Attempt))
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -201,7 +205,11 @@ func (s *workflowStore) writeLongTaskCommit(workflowID string, artifact longTask
 	if artifact.CreatedAt.IsZero() {
 		artifact.CreatedAt = time.Now().UTC()
 	}
-	path := filepath.Join(s.dir, workflowID, longTaskCommitRef(artifact.NodeID, artifact.Attempt))
+	root := filepath.Join(s.dir, workflowID)
+	path, err := safeJoinUnderRoot(root, longTaskCommitRef(artifact.NodeID, artifact.Attempt))
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}

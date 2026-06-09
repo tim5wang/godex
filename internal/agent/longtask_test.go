@@ -1714,6 +1714,82 @@ func firstText(blocks []protocol.Block) string {
 	return ""
 }
 
+// TestSafeJoinUnderRootRejectsParentTraversal verifies that the
+// path escape guard refuses to leave its root. T10 acceptance:
+// a node id like "../../etc/passwd" must not produce a path
+// outside the workflow directory. The existing helper trims
+// leading separators and treats the trimmed result as a relative
+// path, so an "absolute-looking" string like "/etc/passwd" is
+// actually constrained to <root>/etc/passwd and is not a true
+// escape; the test focuses on the canonical escape patterns.
+func TestSafeJoinUnderRootRejectsParentTraversal(t *testing.T) {
+	root := t.TempDir()
+	bad := []string{
+		"../etc/passwd",
+		"..",
+		"../../",
+		"./../../etc",
+		"foo/../../etc",
+	}
+	for _, b := range bad {
+		out, err := safeJoinUnderRoot(root, b)
+		if err == nil {
+			t.Fatalf("expected safeJoinUnderRoot(%q, %q) to fail; got %q", root, b, out)
+		}
+	}
+}
+
+// TestSafeJoinUnderRootAllowsValidRelativePath verifies the happy
+// path. T10 acceptance: ordinary node ids and validation refs
+// produce the expected nested path.
+func TestSafeJoinUnderRootAllowsValidRelativePath(t *testing.T) {
+	root := t.TempDir()
+	got, err := safeJoinUnderRoot(root, "validations/US-001/1.json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(got, root) {
+		t.Fatalf("expected %q to be under %q", got, root)
+	}
+	if !strings.HasSuffix(got, "validations/US-001/1.json") {
+		t.Fatalf("expected relative suffix preserved, got %q", got)
+	}
+}
+
+// TestSafeJoinUnderRootRejectsEmptyRoot verifies the trivial
+// case that *must* fail closed. T10 acceptance: a missing or
+// empty root cannot be the base of a join; the function fails
+// rather than silently producing a path relative to the current
+// working directory. The empty-relative case is intentionally
+// allowed to return root unchanged (existing subagent behavior).
+func TestSafeJoinUnderRootRejectsEmptyRoot(t *testing.T) {
+	if _, err := safeJoinUnderRoot("", "validations/US-001/1.json"); err == nil {
+		t.Fatalf("expected empty root to fail")
+	}
+}
+
+// TestLongTaskWriteValidationRejectsTraversalNodeID verifies that
+// a node id designed to escape the workflow directory is rejected
+// at the write path. T10 acceptance: a hostile spec / repair
+// payload cannot reach outside workflows/<id>/.
+func TestLongTaskWriteValidationRejectsTraversalNodeID(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	// Drive writeLongTaskValidation directly with a hostile node id.
+	err := a.workflows.writeLongTaskValidation("lt_safejoin", longTaskValidation{
+		NodeID:  "../../../etc/passwd",
+		Attempt: 1,
+		Status:  longTaskValidationPass,
+	})
+	if err == nil {
+		t.Fatalf("expected writeLongTaskValidation to reject traversal node id")
+	}
+	if !strings.Contains(err.Error(), "outside workspace") && !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("expected error to mention path escape, got %v", err)
+	}
+}
+
 // TestLongTaskRollbackRejectsOversizedReason verifies the
 // per-byte reason cap on rollback. T12 acceptance: 1024 bytes
 // is the absolute hard limit, not the per-character length, so a

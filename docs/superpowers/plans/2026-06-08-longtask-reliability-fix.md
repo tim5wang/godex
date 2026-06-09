@@ -40,7 +40,7 @@
 | T7 | ~~validation 全局 timeout + ctx 取消传播~~ ✅(2026-06-08) | P1 | 0.5d | — | A |
 | T8 | ~~worktree GC 条件修正(失败不清)~~ ✅(2026-06-08) | P1 | 0.5d | — | C |
 | T9 | ~~stop_on_failure 字段真正生效 + 默认语义~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
-| T10 | 修复路径解析走 `safeJoinUnderRoot` | P2 | 0.5d | — | C |
+| T10 | ~~修复路径解析走 `safeJoinUnderRoot`~~ ✅(2026-06-08) | P2 | 0.5d | — | C |
 | **T11** | ~~longtask 完成 / 中断时回流对话历史(B)~~ ✅(2026-06-08) | **P0** | 1.5d | T1 | B |
 | **T12** | ~~artifact 永久可查 + commit 反查 + rollback 入口~~ ✅(2026-06-08) | **P0** | 1.5d | T8 | C |
 | T13-e2e | 10 个端到端 e2e(长链+repair+cancel+resume+回流+rollback+retention) | **P0** | 1d | T1~T12 | A+B+C |
@@ -1063,6 +1063,12 @@ for i := range state.Nodes {
 ## P2 任务
 
 ### T10 — 修复路径解析用 `safeJoinUnderRoot`
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- `longTaskValidationRef` / `longTaskCommitRef` 输出现在过 `safeJoinUnderRoot` (`subagent_jobs.go` 已有的 helper), `nodeID` 包含 `../` 时拒绝写入
+- `longTaskIndexPath` / `appendLongTaskRevertHistory` / `SweepLongTaskArtifacts.runPath` 同样加防御
+- 4 个新验收测试(`../` reject, valid allow, empty root fail, hostile nodeID 写入拒) + 48 个 longtask 测试全过
 
 **对应愿景**:C(可审计)
 

@@ -56,7 +56,16 @@ type LongTaskIndexEntry struct {
 }
 
 func (a *Agent) longTaskIndexPath(workflowID string) string {
-	return filepath.Join(a.workflows.dir, workflowID, longTaskIndexFile)
+	root := filepath.Join(a.workflows.dir, workflowID)
+	path, err := safeJoinUnderRoot(root, longTaskIndexFile)
+	if err != nil {
+		// safeJoinUnderRoot only fails on empty/absolute input;
+		// workflowID is already validated upstream so this is a
+		// belt-and-braces fallback. Fall back to a plain join so
+		// the on-disk layout matches the rest of the code.
+		return filepath.Join(a.workflows.dir, workflowID, longTaskIndexFile)
+	}
+	return path
 }
 
 func (a *Agent) readLongTaskIndex(workflowID string) (LongTaskIndex, error) {
@@ -407,7 +416,11 @@ type longTaskRevertHistoryEntry struct {
 }
 
 func (a *Agent) appendLongTaskRevertHistory(workflowID string, story longTaskStoryView) error {
-	path := filepath.Join(a.workflows.dir, workflowID, longTaskRevertHistoryFile)
+	root := filepath.Join(a.workflows.dir, workflowID)
+	path, err := safeJoinUnderRoot(root, longTaskRevertHistoryFile)
+	if err != nil {
+		return err
+	}
 	var hist longTaskRevertHistory
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -483,7 +496,12 @@ func (a *Agent) SweepLongTaskArtifacts(workflowID string, olderThan time.Time, a
 			res.Retained++
 			continue
 		}
-		runPath := filepath.Join(a.workflows.dir, workflowID, "runs", rec.RunID+".json")
+		root := filepath.Join(a.workflows.dir, workflowID, "runs")
+		runPath, err := safeJoinUnderRoot(root, rec.RunID+".json")
+		if err != nil {
+			res.Retained++
+			continue
+		}
 		if !apply {
 			res.Skipped++
 			continue

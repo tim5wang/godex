@@ -598,9 +598,15 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 			if block.Type == protocol.BlockThinking {
 				if block.Text != "" {
 					state.partialThinking.WriteString(block.Text)
+					if handler.OnThinkingDelta != nil {
+						handler.OnThinkingDelta(block.Text, "")
+					}
 				}
 				if block.Signature != "" {
 					state.partialSignature.WriteString(block.Signature)
+					if handler.OnThinkingDelta != nil {
+						handler.OnThinkingDelta("", block.Signature)
+					}
 				}
 				state.block.Signature = state.partialSignature.String()
 				state.block.Text = state.partialThinking.String()

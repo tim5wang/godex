@@ -346,8 +346,10 @@ func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 	content := ""
+	var toolCalls []openAIToolCallWire
 	if resp != nil {
 		content = strings.TrimSpace(protocol.BlocksText(resp.Content))
+		toolCalls = protocolToolUsesToOpenAIToolCalls(resp.Content)
 	}
 	call := usageGatewaySuccessCall(start, key.ID, req.Model, modelMapping, providerReq, resp)
 	if err := usageService.RecordCall(call); err != nil {
@@ -362,8 +364,9 @@ func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, u
 		Choices: []openAIChatChoice{{
 			Index: 0,
 			Message: &openAIChatMessage{
-				Role:    "assistant",
-				Content: content,
+				Role:      "assistant",
+				Content:   content,
+				ToolCalls: toolCalls,
 			},
 			FinishReason: firstNonEmptyString(respStopReason(resp), "stop"),
 		}},
@@ -807,8 +810,18 @@ func streamUsageGatewayChatCompletions(
 	// "tool_calls" when OnToolUse fired during the stream, even if the
 	// provider never sent an explicit stop_reason (some streaming proxies
 	// drop the terminal frame).
+	//
+	// IMPORTANT: if the upstream stop_reason was "length" (max_tokens hit),
+	// we MUST NOT override it to "tool_calls" even if toolCallsSeen is
+	// true. A truncated tool call with finish_reason="tool_calls" makes
+	// the downstream client (Pi) believe the tool call is complete, so it
+	// tries to execute the truncated arguments and fails with "parameter
+	// error" or "source text not found". Preserving "length" lets Pi's
+	// agent loop know the response was truncated and handle recovery.
 	finishReason := firstNonEmptyString(respStopReason(resp), "stop")
-	if finishReason == "tool_use" || toolCallsSeen {
+	if finishReason == "tool_use" {
+		finishReason = "tool_calls"
+	} else if toolCallsSeen && finishReason != "length" {
 		finishReason = "tool_calls"
 	}
 	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{}, finishReason)
@@ -908,15 +921,27 @@ func dispatchAnthropicMessages(
 		providerModel = strings.TrimSpace(modelMapping.TargetModel)
 	}
 
+	// Convert Anthropic request to internal protocol first so we can use
+	// the real request for the budget estimate (not a dummy placeholder).
+	providerReq, err := anthropicToProtocolRequest(req, providerModel)
+	if err != nil {
+		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "invalid_request", err.Error())
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
 	// Check budget. The virtual web-token identity (`ID == "system:web_token"`)
 	// is not stored in the usage store, so a budget lookup would
 	// 500. We treat it as an admin override with unlimited budget
 	// and skip the check entirely. Real proxy keys still go through
 	// the normal path so the dashboard can enforce per-key budgets.
+	//
+	// Use the real providerReq for the input token estimate rather than
+	// a dummy placeholder — the previous implementation passed a hardcoded
+	// `"test"` message which always estimated ≈1 token and made the budget
+	// check a no-op for real requests.
 	if !strings.HasPrefix(key.ID, "system:") {
-		if ok, err := usageService.CheckBudget(key.ID, float64(usageGatewayEstimateInputTokens(
-			protocol.Request{Model: providerModel, Messages: []protocol.APIMessage{{Role: "user", Content: []protocol.Block{{Type: "text", Text: "test"}}}}},
-		))*modelMapping.CreditWeight); err != nil {
+		if ok, err := usageService.CheckBudget(key.ID, float64(usageGatewayEstimateInputTokens(providerReq))*modelMapping.CreditWeight); err != nil {
 			writeAnthropicError(w, http.StatusInternalServerError, "budget_check_failed", "Failed to check usage budget.")
 			return
 		} else if !ok {
@@ -924,14 +949,6 @@ func dispatchAnthropicMessages(
 			writeAnthropicError(w, http.StatusPaymentRequired, "budget_exceeded", "Usage budget exceeded.")
 			return
 		}
-	}
-
-	// Convert Anthropic request to internal protocol
-	providerReq, err := anthropicToProtocolRequest(req, providerModel)
-	if err != nil {
-		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "invalid_request", err.Error())
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
 	}
 
 	// Handle streaming
@@ -1768,6 +1785,39 @@ func collapseAnthropicToolResultContent(raw interface{}) string {
 	default:
 		return ""
 	}
+}
+
+// protocolToolUsesToOpenAIToolCalls converts protocol response tool_use
+// blocks to the OpenAI tool_calls wire format for non-streaming responses.
+// This is the inverse of the streaming path's per-chunk emission: the
+// non-streaming response carries the final assembled tool calls in a single
+// message.tool_calls array so the OpenAI SDK can execute them immediately
+// without concatenating per-chunk deltas.
+func protocolToolUsesToOpenAIToolCalls(blocks []protocol.Block) []openAIToolCallWire {
+	var calls []openAIToolCallWire
+	callIdx := 0
+	for _, block := range blocks {
+		if block.Type != protocol.BlockToolUse {
+			continue
+		}
+		args := ""
+		if block.Input != nil {
+			if raw, err := json.Marshal(block.Input); err == nil {
+				args = string(raw)
+			}
+		}
+		calls = append(calls, openAIToolCallWire{
+			Index: callIdx,
+			ID:    block.ID,
+			Type:  "function",
+			Function: openAIFunctionCall{
+				Name:      block.Name,
+				Arguments: args,
+			},
+		})
+		callIdx++
+	}
+	return calls
 }
 
 // toolJSONDeltaSuffix returns the per-chunk partial_json fragment that

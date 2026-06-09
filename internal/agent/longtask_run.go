@@ -258,6 +258,14 @@ func findWorkflowNodeByID(state workflowState, nodeID string) *workflowNode {
 }
 
 func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args longTaskArgs) (longTaskView, error) {
+	a.mu.Lock()
+	a.currentLongTaskArgs = &args
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.currentLongTaskArgs = nil
+		a.mu.Unlock()
+	}()
 	maxIterations := args.MaxIterations
 	if maxIterations <= 0 {
 		maxIterations = longTaskDefaultRunMaxIterations
@@ -318,6 +326,7 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 		view.Run.Status = status
 		view.Run.Message = message
 		view.Run.BlockedBy = blockedBy
+		view.Run.UpdatedAt = now
 		rec.Status = status
 		rec.UpdatedAt = now
 		rec.Iterations = summary.Iterations
@@ -327,6 +336,16 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 		rec.BlockedBy = blockedBy
 		rec.Message = message
 		_ = a.workflows.writeLongTaskRun(rec)
+		// T11: emit a deduped assistant message that reflects the new
+		// terminal status. Reflux writes to message history only; the
+		// durable source of truth is the run record above.
+		if _, err := a.appendLongTaskReflux(view, rec.RunID); err != nil {
+			_ = a.workflows.appendEvent(workflowID, map[string]interface{}{
+				"event": "longtask_reflux_failed",
+				"err":   err.Error(),
+				"at":    now,
+			})
+		}
 		return view, nil
 	}
 

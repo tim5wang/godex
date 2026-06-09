@@ -163,6 +163,7 @@ type longTaskRunSummary struct {
 	Repaired      []longTaskRepairSummary `json:"repaired,omitempty"`
 	BlockedBy     string                  `json:"blocked_by,omitempty"`
 	Message       string                  `json:"message,omitempty"`
+	UpdatedAt     time.Time               `json:"updated_at,omitempty"`
 }
 
 type longTaskView struct {

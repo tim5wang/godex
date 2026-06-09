@@ -71,6 +71,11 @@ type Agent struct {
 	compactionRunning    bool
 	now                  func() time.Time
 	mu                   sync.Mutex
+	// currentLongTaskArgs is a transient pointer set by runLongTaskSync
+	// for the duration of a single run so helpers like
+	// appendLongTaskReflux can see args such as NoReflux without
+	// having to thread the value through every call site.
+	currentLongTaskArgs *longTaskArgs
 }
 
 type dependencies struct {

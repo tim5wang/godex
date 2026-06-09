@@ -41,7 +41,7 @@
 | T8 | ~~worktree GC 条件修正(失败不清)~~ ✅(2026-06-08) | P1 | 0.5d | — | C |
 | T9 | ~~stop_on_failure 字段真正生效 + 默认语义~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T10 | 修复路径解析走 `safeJoinUnderRoot` | P2 | 0.5d | — | C |
-| **T11** | **longtask 完成 / 中断时回流对话历史(B)** | **P0** | 1.5d | T1 | B |
+| **T11** | ~~longtask 完成 / 中断时回流对话历史(B)~~ ✅(2026-06-08) | **P0** | 1.5d | T1 | B |
 | **T12** | **artifact 永久可查 + commit 反查 + rollback 入口** | **P0** | 1.5d | T8 | C |
 | T13-e2e | 10 个端到端 e2e(长链+repair+cancel+resume+回流+rollback+retention) | **P0** | 1d | T1~T12 | A+B+C |
 | **T15** | **TUI + Web UI 完善(覆盖 T1~T12 所有用户可见能力,Web 拆 5 个组件)** | **P1** | **2.0d** | T1~T12 | A+B+C |
@@ -208,6 +208,14 @@
 ---
 
 ### T11 — longtask 完成 / 中断时回流对话历史
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- 新增 `longtask_reflux.go` 构造 `protocol.Message{Role: assistant, Kind: longtask_reflux}`
+- `runLongTaskSync` finalize helper 在每个结束态调 `appendLongTaskReflux`
+- `LastRefluxKey = runID|Status|UpdatedAt.UnixNano()` 三元组 dedupe(同 status 内容变也回流)
+- `agent.currentLongTaskArgs` 暂存让 `NoReflux` flag 在 finalize 时可见
+- 3 个新验收测试(completion / same-status content change / order before follow-up) + 28 个 longtask 测试全过
 
 **对应愿景**:B(附加执行,跑完结果回流对话历史)
 

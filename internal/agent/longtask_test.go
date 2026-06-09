@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1220,6 +1221,198 @@ func TestLongTaskFinalizeRetainsWorktreeOnFailure(t *testing.T) {
 	if !strings.Contains(string(data), "worktree_retained_for_diagnosis") {
 		t.Fatalf("expected worktree_retained_for_diagnosis event, got events:\n%s", string(data))
 	}
+}
+
+// TestLongTaskRefluxInjectsAssistantMessageOnCompletion verifies that
+// finishing a longtask appends an assistant-role message to the
+// agent's message history. T11 acceptance: reflux is the user's
+// single-glance summary, not a raw tool result.
+func TestLongTaskRefluxInjectsAssistantMessageOnCompletion(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_reflux_completion",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_reflux_completion",
+	})
+
+	msgs := a.GetMessages()
+	if len(msgs) == 0 {
+		t.Fatalf("expected at least one message after reflux")
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != protocol.RoleAssistant {
+		t.Fatalf("expected reflux message role=assistant, got %s", last.Role)
+	}
+	if last.Metadata == nil || last.Metadata.Kind != protocol.KindLongTaskReflux {
+		t.Fatalf("expected reflux kind=%q, got metadata=%+v", protocol.KindLongTaskReflux, last.Metadata)
+	}
+	if !strings.Contains(last.Content[0].Text, "lt_reflux_completion") {
+		t.Fatalf("expected reflux content to mention longtask id, got %q", firstText(last.Content))
+	}
+}
+
+// TestLongTaskRefluxAllowsSameStatusContentChange verifies the
+// fine-grained dedupe: Status being equal does not block a fresh
+// emission when the run summary's UpdatedAt has advanced. T11
+// acceptance: a blocked run that re-blocks with different
+// BlockedBy still produces a new reflux message.
+func TestLongTaskRefluxAllowsSameStatusContentChange(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":         "create",
+		"longtask_id":    "lt_reflux_dedupe",
+		"quality_checks": []string{"cat missing-file-for-reflux-dedupe"},
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	// First run: blocked by US-001 validation failure.
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":          "run",
+		"longtask_id":     "lt_reflux_dedupe",
+		"max_iterations":  4,
+		"wait_timeout_ms": 2000,
+	})
+	countAfterFirst := countRefluxMessages(t, a)
+
+	// Second run: same blocked outcome but the run record now has a
+	// new UpdatedAt (because runLongTaskSync records a fresh
+	// timestamp on every iteration). The reflux key changes, so a
+	// second message must be appended.
+	time.Sleep(1 * time.Millisecond)
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":          "run",
+		"longtask_id":     "lt_reflux_dedupe",
+		"max_iterations":  4,
+		"wait_timeout_ms": 2000,
+	})
+	countAfterSecond := countRefluxMessages(t, a)
+	if countAfterSecond <= countAfterFirst {
+		t.Fatalf("expected a second reflux message after a fresh run, got first=%d second=%d", countAfterFirst, countAfterSecond)
+	}
+
+	// A third back-to-back run_status check with no underlying
+	// state change must not append another message because the
+	// lastRefluxKey still matches.
+	viewBefore, err := a.longTaskStatus("lt_reflux_dedupe")
+	if err != nil {
+		t.Fatalf("longTaskStatus: %v", err)
+	}
+	keyBefore, err := refluxDedupeKeyForView(t, a, "lt_reflux_dedupe")
+	if err != nil {
+		t.Fatalf("refluxDedupeKeyForView: %v", err)
+	}
+	_, _ = a.appendLongTaskReflux(viewBefore, keyBefore.runID)
+	countAfterRedundant := countRefluxMessages(t, a)
+	if countAfterRedundant != countAfterSecond {
+		t.Fatalf("expected dedupe to suppress a no-change reflux, got before=%d after=%d", countAfterSecond, countAfterRedundant)
+	}
+}
+
+// TestLongTaskRefluxRunsBeforeFollowUp verifies that when a longtask
+// run reaches a terminal state in the same call as a follow-up
+// submission, the reflux message lands in message history before the
+// follow-up is processed. T11 acceptance: assistant > user order in
+// the resulting history.
+func TestLongTaskRefluxRunsBeforeFollowUp(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_reflux_order",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_reflux_order",
+	})
+	beforeFollowUp := countRefluxMessages(t, a)
+
+	// Add a synthetic follow-up user message. In production this
+	// would be routed via SubmitAsync + startQueuedTurns, but at the
+	// agent layer we just append it directly to verify the order.
+	a.appendMessage(protocol.NewTextMessage(protocol.RoleUser, "thank you"))
+
+	msgs := a.GetMessages()
+	refluxIdx := -1
+	followUpIdx := -1
+	for i, m := range msgs {
+		if m.Role == protocol.RoleAssistant && m.Metadata != nil && m.Metadata.Kind == protocol.KindLongTaskReflux {
+			refluxIdx = i
+		}
+		if m.Role == protocol.RoleUser && m.Content != nil && len(m.Content) > 0 && firstText(m.Content) == "thank you" {
+			followUpIdx = i
+		}
+	}
+	if refluxIdx < 0 {
+		t.Fatalf("expected at least one longtask reflux message; got %d", beforeFollowUp)
+	}
+	if followUpIdx < 0 {
+		t.Fatalf("expected the synthetic follow-up message to be present")
+	}
+	if refluxIdx >= followUpIdx {
+		t.Fatalf("expected reflux (idx=%d) to precede follow-up (idx=%d)", refluxIdx, followUpIdx)
+	}
+}
+
+func countRefluxMessages(t *testing.T, a *Agent) int {
+	t.Helper()
+	n := 0
+	for _, m := range a.GetMessages() {
+		if m.Role == protocol.RoleAssistant && m.Metadata != nil && m.Metadata.Kind == protocol.KindLongTaskReflux {
+			n++
+		}
+	}
+	return n
+}
+
+type refluxKey struct {
+	runID string
+	view  longTaskView
+}
+
+func refluxDedupeKeyForView(t *testing.T, a *Agent, workflowID string) (refluxKey, error) {
+	t.Helper()
+	records, err := a.workflows.listLongTaskRuns(workflowID)
+	if err != nil {
+		return refluxKey{}, err
+	}
+	if len(records) == 0 {
+		return refluxKey{}, fmt.Errorf("no run record for %s", workflowID)
+	}
+	view, err := a.longTaskStatus(workflowID)
+	if err != nil {
+		return refluxKey{}, err
+	}
+	return refluxKey{runID: records[0].RunID, view: view}, nil
+}
+
+func firstText(blocks []protocol.Block) string {
+	for _, b := range blocks {
+		if b.Text != "" {
+			return b.Text
+		}
+	}
+	return ""
 }
 
 // TestLongTaskRunStatusReadsFromDisk verifies that run_status reads

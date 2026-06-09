@@ -29,10 +29,11 @@ const (
 )
 
 const (
-	KindSummary    MessageKind = "summary"
-	KindInbox      MessageKind = "inbox"
-	KindBackground MessageKind = "background"
-	KindMemory     MessageKind = "memory"
+	KindSummary      MessageKind = "summary"
+	KindInbox        MessageKind = "inbox"
+	KindBackground   MessageKind = "background"
+	KindMemory       MessageKind = "memory"
+	KindLongTaskReflux MessageKind = "longtask_reflux"
 )
 
 const (

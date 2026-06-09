@@ -434,7 +434,7 @@ func runLongTaskToolResult(t *testing.T, a *Agent, ctx context.Context, input ma
 // the completed terminal state in the very first action.
 func TestPickNextActionCompleted(t *testing.T) {
 	view := longTaskView{
-		Stories: []longTaskStoryView{
+		Stories: []LongTaskStoryView{
 			{ID: "US-001", Status: workflowStatusCompleted, Verdict: workflowVerdictPass, Passes: true},
 			{ID: "US-002", Status: workflowStatusCompleted, Verdict: workflowVerdictPass, Passes: true},
 		},
@@ -452,7 +452,7 @@ func TestPickNextActionCompleted(t *testing.T) {
 // into a new start, instead of waiting for an extra iteration.
 func TestPickNextActionFinalizeThenStart(t *testing.T) {
 	view := longTaskView{
-		Stories: []longTaskStoryView{
+		Stories: []LongTaskStoryView{
 			{ID: "US-001", Status: workflowStatusCompleted, Verdict: workflowVerdictPass, ValidationStatus: longTaskValidationPending, Priority: 1},
 			{ID: "US-002", Status: workflowStatusPending, Priority: 2},
 		},
@@ -478,7 +478,7 @@ func TestPickNextActionFinalizeThenStart(t *testing.T) {
 // acceptance: StopOnFailure is opt-out, not opt-in.
 func TestPickNextActionStopsOnBlockedByDefault(t *testing.T) {
 	view := longTaskView{
-		Stories: []longTaskStoryView{
+		Stories: []LongTaskStoryView{
 			{ID: "US-001", Status: workflowStatusError, Error: "boom"},
 			{ID: "US-002", Status: workflowStatusPending},
 		},
@@ -505,7 +505,7 @@ func TestPickNextActionStopsOnBlockedByDefault(t *testing.T) {
 func TestPickNextActionContinuesOnBlockedWhenOptOut(t *testing.T) {
 	f := false
 	view := longTaskView{
-		Stories: []longTaskStoryView{
+		Stories: []LongTaskStoryView{
 			{ID: "US-001", Status: workflowStatusError, Error: "boom"},
 			{ID: "US-002", Status: workflowStatusPending, Priority: 2},
 		},

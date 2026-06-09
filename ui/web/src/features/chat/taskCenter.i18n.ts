@@ -28,6 +28,20 @@ interface TaskCenterStrings {
   dismissed: string;
   showDismissed: string;
   hideDismissed: string;
+  // T15: rollback / lookup / gc / reflux bubble keys.
+  rollbackLongTask: string;
+  rollbackReason: string;
+  rollbackReasonTooLong: string;
+  rollbackReasonPlaceholder: string;
+  lookupLongTask: string;
+  lookupByCommit: string;
+  lookupByStory: string;
+  gcLongTask: string;
+  gcDryRun: string;
+  gcApply: string;
+  resumeLongTask: string;
+  refluxPrefix: string;
+  reverted: string;
 }
 
 const taskCenterText: Record<"en" | "zh", TaskCenterStrings> = {
@@ -59,6 +73,19 @@ const taskCenterText: Record<"en" | "zh", TaskCenterStrings> = {
     dismissed: "Dismissed",
     showDismissed: "Show dismissed",
     hideDismissed: "Hide dismissed",
+    rollbackLongTask: "Rollback LongTask story",
+    rollbackReason: "Rollback reason (optional, max 1024 bytes)",
+    rollbackReasonTooLong: "Reason exceeds 1024 bytes",
+    rollbackReasonPlaceholder: "Optional: explain why you are rolling back",
+    lookupLongTask: "Lookup LongTask",
+    lookupByCommit: "By commit hash",
+    lookupByStory: "By story id",
+    gcLongTask: "Garbage-collect LongTask",
+    gcDryRun: "Dry run (default)",
+    gcApply: "Apply (delete)",
+    resumeLongTask: "Resume LongTask",
+    refluxPrefix: "[LongTask]",
+    reverted: "reverted",
   },
   zh: {
     title: "任务中心",
@@ -88,6 +115,19 @@ const taskCenterText: Record<"en" | "zh", TaskCenterStrings> = {
     dismissed: "已忽略",
     showDismissed: "显示已忽略",
     hideDismissed: "隐藏已忽略",
+    rollbackLongTask: "回滚 LongTask story",
+    rollbackReason: "回滚原因（可选，最多 1024 字节）",
+    rollbackReasonTooLong: "回滚原因超过 1024 字节",
+    rollbackReasonPlaceholder: "可选：说明为什么回滚",
+    lookupLongTask: "反查 LongTask",
+    lookupByCommit: "按 commit hash",
+    lookupByStory: "按 story id",
+    gcLongTask: "清理 LongTask",
+    gcDryRun: "预演（默认）",
+    gcApply: "执行（删除）",
+    resumeLongTask: "恢复 LongTask",
+    refluxPrefix: "[LongTask]",
+    reverted: "已回滚",
   },
 };
 

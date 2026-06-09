@@ -58,6 +58,13 @@ func (m *model) renderWorkbenchTabs() string {
 }
 
 func (m *model) renderTaskCenter() string {
+	// T15: when the user has drilled into a longtask, render the
+	// detail view (5 components: card + story list + rollback
+	// modal + lookup modal + reflux bubble hint) instead of the
+	// 3-column workbench summary.
+	if m.longTaskDetailVisible {
+		return m.renderLongTaskDetail()
+	}
 	summary := m.buildWorkbenchSummary()
 	width := maxInt(20, m.viewport.Width)
 	if width < 88 {

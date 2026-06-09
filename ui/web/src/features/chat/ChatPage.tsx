@@ -31,6 +31,7 @@ import { ResizeHandle } from "../../components/ResizeHandle";
 import { SubagentCard } from "../../components/SubagentCard";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
 import { TaskCenterPanel } from "./TaskCenterPanel";
+import { LongTaskRefluxBubble, isLongTaskRefluxMessage } from "./LongTaskRefluxBubble";
 import { buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview, type ReviewMergeFilter } from "./reviewMergeCenter";
 import { buildTaskOutcomes } from "./taskCenterOutcome";
 import { useI18n } from "../../i18n";
@@ -188,6 +189,12 @@ export function ChatPage() {
   const [timelineCursor, setTimelineCursor] = useState("");
   const [timelineCursorStack, setTimelineCursorStack] = useState<string[]>([]);
   const [taskCenterCollapsed, setTaskCenterCollapsed] = useState(() => window.localStorage.getItem("godex.taskCenterCollapsed") === "1");
+  // T15: track longtask reflux bubbles. The chat list still
+  // renders the message itself; the bubble is a floating
+  // notification that the user can act on without scrolling to
+  // the reflux message. We keep the last 5 refluxes (newest at
+  // the front) and let the user dismiss them.
+  const [refluxDismissed, setRefluxDismissed] = useState<Record<string, boolean>>({});
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const [sessionPaneWidth, beginSessionPaneResize] = useResizableWidth({
     storageKey: "godex.chatSessionsWidth",
@@ -448,6 +455,29 @@ export function ChatPage() {
   }, [authRequired, handleEvent, queryClient, sessionId, setStreamConnected, token]);
 
   const items = useMemo(() => mergeChronologicalFeedItems(historyItems, overlayItems), [historyItems, overlayItems]);
+  // T15: derive the list of longtask reflux bubbles from the
+  // chat feed. We pick the last 5 reflux items (newest first) and
+  // hide the ones the user has dismissed. The strict authority is
+  // the metadata.kind marker the agent sets; the body sniff is a
+  // fallback for messages that lost the metadata.
+  const refluxBubbles = useMemo(() => {
+    const out: Array<{ id: string; longtaskId: string; status: string; content: string }> = [];
+    for (let i = items.length - 1; i >= 0 && out.length < 5; i--) {
+      const it = items[i];
+      if (it.kind !== "assistant") continue;
+      if (refluxDismissed[it.id]) continue;
+      // Look for a metadata marker. The chat feed exposes
+      // metadata via the protocol envelope upstream of
+      // mergeChronologicalFeedItems; we use the body sniff as
+      // the lowest-common-denominator check.
+      if (!isLongTaskRefluxMessage(it.body)) continue;
+      const m = it.body.match(/LongTask\s+(\S+):\s+(\S+)/);
+      const longtaskId = m ? m[1] : "";
+      const status = m ? m[2] : "";
+      out.push({ id: it.id, longtaskId, status, content: it.body });
+    }
+    return out;
+  }, [items, refluxDismissed]);
   const subagentJobs = useMemo(
     () => mergeSubagentItems((subagentsQuery.data ?? []).map(subagentJobToFeedItem), collectSubagentJobs(timelineItems)),
     [subagentsQuery.data, timelineItems],
@@ -1277,6 +1307,20 @@ export function ChatPage() {
         onResume={(jobId) => resumeSubagentMutation.mutate(jobId)}
         onCancel={(jobId) => cancelSubagentMutation.mutate(jobId)}
       />
+      {refluxBubbles.length > 0 ? (
+        <>
+          {refluxBubbles.map((b, i) => (
+            <LongTaskRefluxBubble
+              key={b.id}
+              longtaskId={b.longtaskId}
+              status={b.status}
+              content={b.content}
+              stackIndex={i}
+              onDismiss={() => setRefluxDismissed((prev) => ({ ...prev, [b.id]: true }))}
+            />
+          ))}
+        </>
+      ) : null}
     </div>
   );
 }

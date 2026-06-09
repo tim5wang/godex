@@ -127,7 +127,7 @@ type longTaskCommitArtifact struct {
 	CreatedAt     time.Time            `json:"created_at"`
 }
 
-type longTaskStoryView struct {
+type LongTaskStoryView struct {
 	ID                 string    `json:"id"`
 	NodeID             string    `json:"node_id,omitempty"`
 	RepairAttempts     int       `json:"repair_attempts,omitempty"`
@@ -171,7 +171,7 @@ type longTaskRepairSummary struct {
 	Reason       string `json:"reason,omitempty"`
 }
 
-type longTaskRunSummary struct {
+type LongTaskRunSummary struct {
 	Status        string                  `json:"status"`
 	Iterations    int                     `json:"iterations"`
 	MaxIterations int                     `json:"max_iterations,omitempty"`
@@ -196,11 +196,11 @@ type longTaskView struct {
 	Running       int                 `json:"running"`
 	Completed     int                 `json:"completed"`
 	Failed        int                 `json:"failed"`
-	Stories       []longTaskStoryView `json:"stories"`
+	Stories       []LongTaskStoryView `json:"stories"`
 	Workflow      workflowView        `json:"workflow"`
 	Started       []string            `json:"started,omitempty"`
 	Wait          *subagentWaitView   `json:"wait,omitempty"`
-	Run           *longTaskRunSummary `json:"run,omitempty"`
+	Run           *LongTaskRunSummary `json:"run,omitempty"`
 }
 
 // LongTaskArgs is the public API/CLI input shape for durable LongTask actions.

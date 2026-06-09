@@ -112,6 +112,33 @@ func (f *fakeBackend) ListLongTasks(ctx context.Context, sessionID string) ([]ag
 	return f.longTasks, nil
 }
 
+func (f *fakeBackend) GetLongTask(ctx context.Context, sessionID, workflowID string) (agent.LongTaskView, error) {
+	_ = ctx
+	_ = sessionID
+	return agent.LongTaskView{LongTaskID: workflowID, WorkflowID: workflowID}, nil
+}
+
+func (f *fakeBackend) LookupLongTask(ctx context.Context, sessionID, workflowID, commit string) (interface{}, error) {
+	_ = ctx
+	_ = sessionID
+	_ = workflowID
+	_ = commit
+	return map[string]interface{}{"commit": commit, "longtask": workflowID, "matches": []agent.LongTaskIndexEntry{}}, nil
+}
+
+func (f *fakeBackend) RollbackLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID, reason string) (agent.LongTaskRollbackResult, error) {
+	_ = ctx
+	_ = sessionID
+	return agent.LongTaskRollbackResult{WorkflowID: workflowID, NodeID: nodeID, StoryID: nodeID, ReasonBytes: len(reason)}, nil
+}
+
+func (f *fakeBackend) GCLongTaskArtifacts(ctx context.Context, sessionID, workflowID string, olderThanSeconds int, apply bool) (agent.LongTaskGCSweepResult, error) {
+	_ = ctx
+	_ = sessionID
+	_ = olderThanSeconds
+	return agent.LongTaskGCSweepResult{WorkflowID: workflowID, DryRun: !apply}, nil
+}
+
 func (f *fakeBackend) ListSubagents(ctx context.Context, sessionID string) ([]agent.DurableSubagentJobView, error) {
 	_ = ctx
 	_ = sessionID

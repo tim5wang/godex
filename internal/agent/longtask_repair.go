@@ -103,13 +103,13 @@ func (a *Agent) appendLongTaskRepair(ctx context.Context, workflowID string, vie
 	return summary, a.longTaskViewFromSpec(spec, appended), nil
 }
 
-func longTaskStoryByID(view longTaskView, storyID string) (longTaskStoryView, bool) {
+func longTaskStoryByID(view longTaskView, storyID string) (LongTaskStoryView, bool) {
 	for _, story := range view.Stories {
 		if story.ID == storyID {
 			return story, true
 		}
 	}
-	return longTaskStoryView{}, false
+	return LongTaskStoryView{}, false
 }
 
 func replaceWorkflowDep(deps []string, oldID, newID string) bool {
@@ -127,7 +127,7 @@ func longTaskRepairNodeID(storyID string, attempt int) string {
 	return fmt.Sprintf("%s_repair_%d", storyID, attempt)
 }
 
-func renderLongTaskRepairPrompt(spec longTaskSpec, story longTaskStoryView, failedNodeID, reason string) string {
+func renderLongTaskRepairPrompt(spec longTaskSpec, story LongTaskStoryView, failedNodeID, reason string) string {
 	var builder strings.Builder
 	builder.WriteString("You are executing a fresh repair attempt for one Ralph-style GoDex long-task story. Fix this story only.\n\n")
 	if spec.Project != "" {

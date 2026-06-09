@@ -369,13 +369,13 @@ func buildRollbackCommitMessage(storyID, reason string) string {
 	return fmt.Sprintf("longtask: rollback %s\n\n%s", storyID, reason)
 }
 
-func findLongTaskStoryByNodeID(stories []longTaskStoryView, nodeID string) (longTaskStoryView, int) {
+func findLongTaskStoryByNodeID(stories []LongTaskStoryView, nodeID string) (LongTaskStoryView, int) {
 	for i, s := range stories {
 		if s.NodeID == nodeID {
 			return s, i
 		}
 	}
-	return longTaskStoryView{}, -1
+	return LongTaskStoryView{}, -1
 }
 
 // persistLongTaskViewForRollback is the rollback counterpart to
@@ -385,7 +385,7 @@ func findLongTaskStoryByNodeID(stories []longTaskStoryView, nodeID string) (long
 // by the longtask layer). The view itself is updated in-memory and
 // the caller returns the updated view; the spec is bumped only to
 // reflect the new UpdatedAt timestamp.
-func (a *Agent) persistLongTaskViewForRollback(state workflowState, view longTaskView, story longTaskStoryView) error {
+func (a *Agent) persistLongTaskViewForRollback(state workflowState, view longTaskView, story LongTaskStoryView) error {
 	if err := a.appendLongTaskRevertHistory(view.WorkflowID, story); err != nil {
 		return err
 	}
@@ -412,10 +412,10 @@ type longTaskRevertHistoryEntry struct {
 	ReasonLen int                    `json:"reason_len"`
 	Conflict  bool                   `json:"conflict,omitempty"`
 	Detail    string                 `json:"detail,omitempty"`
-	AtView    longTaskStoryView      `json:"story_view"`
+	AtView    LongTaskStoryView      `json:"story_view"`
 }
 
-func (a *Agent) appendLongTaskRevertHistory(workflowID string, story longTaskStoryView) error {
+func (a *Agent) appendLongTaskRevertHistory(workflowID string, story LongTaskStoryView) error {
 	root := filepath.Join(a.workflows.dir, workflowID)
 	path, err := safeJoinUnderRoot(root, longTaskRevertHistoryFile)
 	if err != nil {

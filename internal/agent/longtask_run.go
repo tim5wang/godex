@@ -179,7 +179,7 @@ func (a *Agent) startAsyncLongTask(ctx context.Context, workflowID string, args 
 		return longTaskView{}, err
 	}
 	if current.Run == nil {
-		current.Run = &longTaskRunSummary{}
+		current.Run = &LongTaskRunSummary{}
 	}
 	current.Run.Status = workflowStatusRunning
 	current.Run.UpdatedAt = time.Now().UTC()
@@ -213,7 +213,7 @@ func (a *Agent) longTaskRunStatus(workflowID string) (longTaskView, error) {
 		if err != nil {
 			return longTaskView{}, err
 		}
-		current.Run = &longTaskRunSummary{Status: workflowStatusRunning, Message: "async run in progress"}
+		current.Run = &LongTaskRunSummary{Status: workflowStatusRunning, Message: "async run in progress"}
 		return current, nil
 	}
 	if state.err != nil {
@@ -272,8 +272,8 @@ func pickNextAction(view longTaskView, args longTaskArgs) (longTaskRunAction, st
 
 // sortedStoriesByPriority returns a copy of stories ordered by priority
 // ascending (ties broken by story id for determinism).
-func sortedStoriesByPriority(stories []longTaskStoryView) []longTaskStoryView {
-	out := make([]longTaskStoryView, len(stories))
+func sortedStoriesByPriority(stories []LongTaskStoryView) []LongTaskStoryView {
+	out := make([]LongTaskStoryView, len(stories))
 	copy(out, stories)
 	sort.SliceStable(out, func(i, j int) bool {
 		pi, pj := out[i].Priority, out[j].Priority
@@ -369,7 +369,7 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 		_ = a.workflows.writeLongTaskRun(rec)
 	}
 
-	summary := &longTaskRunSummary{Status: workflowStatusRunning, MaxIterations: maxIterations}
+	summary := &LongTaskRunSummary{Status: workflowStatusRunning, MaxIterations: maxIterations}
 	// Carry over progress from any resumed run so that user-visible
 	// counters in the run summary reflect the full lifetime of the run.
 	summary.Iterations = rec.Iterations

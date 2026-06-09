@@ -27,6 +27,10 @@ type Backend interface {
 	Snapshot(context.Context, string) (rtbackend.Snapshot, error)
 	ContextSummary(context.Context, string) (tools.ContextInspection, error)
 	ListLongTasks(context.Context, string) ([]agent.LongTaskView, error)
+	GetLongTask(context.Context, string, string) (agent.LongTaskView, error)
+	LookupLongTask(context.Context, string, string, string) (interface{}, error)
+	RollbackLongTaskStory(context.Context, string, string, string, string) (agent.LongTaskRollbackResult, error)
+	GCLongTaskArtifacts(context.Context, string, string, int, bool) (agent.LongTaskGCSweepResult, error)
 	ListSubagents(context.Context, string) ([]agent.DurableSubagentJobView, error)
 	Submit(context.Context, string, message.Envelope) (*rtbackend.SubmitResult, error)
 	ExecuteCommand(context.Context, string, commands.Command) (commands.Result, error)
@@ -163,6 +167,14 @@ type model struct {
 	contextSummary     tools.ContextInspection
 	activeWorkbenchTab workbenchTab
 	longTasks          []agent.LongTaskView
+	// longTaskDetailVisible is true when the user has drilled into
+	// a specific longtask from the workbench task tab. T15
+	// acceptance: the 5 longtask components render in this mode
+	// and the keyboard shortcuts (r/w/c/f/R/l/g) drive actions.
+	longTaskDetailVisible bool
+	longTaskDetailID      string
+	longTaskRollback      longTaskRollbackReasonState
+	longTaskLookup        longTaskLookupState
 	subagents          []agent.DurableSubagentJobView
 	workbenchErr       error
 	modelCallCount     int

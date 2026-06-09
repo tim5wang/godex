@@ -41,7 +41,7 @@ func (a *Agent) longTaskViewFromSpec(spec longTaskSpec, workflow workflowView) l
 			normalizeWorkflowVerdict(node.Verdict) == workflowVerdictPass &&
 			(validationStatus == longTaskValidationPass || validationStatus == longTaskValidationSkipped) &&
 			longTaskMergeCommitAllowsPass(mergeStatus, commitStatus)
-		view.Stories = append(view.Stories, longTaskStoryView{
+		view.Stories = append(view.Stories, LongTaskStoryView{
 			ID:                 story.ID,
 			NodeID:             node.ID,
 			RepairAttempts:     repairs,

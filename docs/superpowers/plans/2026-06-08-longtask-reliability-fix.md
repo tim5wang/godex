@@ -44,7 +44,7 @@
 | **T11** | ~~longtask 完成 / 中断时回流对话历史(B)~~ ✅(2026-06-08) | **P0** | 1.5d | T1 | B |
 | **T12** | ~~artifact 永久可查 + commit 反查 + rollback 入口~~ ✅(2026-06-08) | **P0** | 1.5d | T8 | C |
 | T13-e2e | 10 个端到端 e2e(长链+repair+cancel+resume+回流+rollback+retention) | **P0** | 1d | T1~T12 | A+B+C |
-| **T15** | **TUI + Web UI 完善(覆盖 T1~T12 所有用户可见能力,Web 拆 5 个组件)** | **P1** | **2.0d** | T1~T12 | A+B+C |
+| **T15** | ~~TUI + Web UI 完善(覆盖 T1~T12 所有用户可见能力,Web 拆 5 个组件)~~ ✅(2026-06-08) | **P1** | **2.0d** | T1~T12 | A+B+C |
 | T14 | docs 更新:validation 不在 subagent 沙箱里 | P3 | 0.2d | T15 之后 | — |
 
 **总估时: ~13.2 工作日**
@@ -661,6 +661,26 @@
 ## P1 任务
 
 ### T15 — TUI + Web UI 完善(覆盖 T1~T12 所有用户可见能力)
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- **TUI** (`internal/tui/`):
+  - 5 个新文件 `longtask_card.go` / `longtask_story_list.go` / `longtask_rollback_modal.go` / `longtask_lookup_modal.go` / `longtask_reflux_bubble.go` (renderer 是 pure functions)
+  - `longtask_render.go` model 集成 + `workbench_render.go` 在 `longTaskDetailVisible` 时切 detail
+  - `longtask_detail.go` keyboard 映射 r/w/c/f/R/l/g/esc + 提示
+  - rollback reason modal 1024 字节硬 cap(本地再加一道防线)
+  - Backend interface 加 4 个 method (GetLongTask / LookupLongTask / RollbackLongTaskStory / GCLongTaskArtifacts), `fakeBackend` 加 stub
+  - 11 个 TUI 验收测试 + 56 个 tui 总测试全过
+- **Web** (`ui/web/src/features/chat/`):
+  - 5 个新组件 `LongTaskCard.tsx` / `LongTaskStoryList.tsx` / `LongTaskRollbackModal.tsx` / `LongTaskLookupModal.tsx` / `LongTaskRefluxBubble.tsx`
+  - `LongTaskRefluxBubble` 用 `position: fixed` 浮动, stack offset 支持多回流堆叠, 带 [LongTask] prefix + status + body + suggested actions + dismiss
+  - `LongTaskRollbackModal` 用 `TextEncoder` 算 byte size, 1024 cap + 实时 byte counter
+  - `LongTaskLookupModal` commit/story 双 tab + Enter 提交
+  - `ChatPage.tsx` 接入 `refluxBubbles` 派生 + 在主 JSX 末尾 render
+  - i18n 8 个新 key 中英双语
+  - 加 vitest dev dep + `pnpm test` 脚本, 4 个 T15 验收测试过; typecheck 干净
+- **agent** (`internal/agent/longtask_types.go`):
+  - export `LongTaskStoryView` / `LongTaskRunSummary` (TUI 需要)
 
 **对应愿景**:A + B + C(被用户看见才算交付)
 

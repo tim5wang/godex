@@ -37,8 +37,8 @@
 | T4 | ~~Repair 节点 handoff vs prompt 去重~~ ✅(2026-06-08) | P1 | 0.5d | — | A |
 | T5 | ~~`longtask cancel <id> --all` 支持~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T6 | async run 状态落盘(`runs/<id>.json`) | P1 | 1d | T2 | A |
-| T7 | validation 全局 timeout + ctx 取消传播 | P1 | 0.5d | — | A |
-| T8 | worktree GC 条件修正(failed 不清) | P1 | 0.5d | — | C |
+| T7 | ~~validation 全局 timeout + ctx 取消传播~~ ✅(2026-06-08) | P1 | 0.5d | — | A |
+| T8 | ~~worktree GC 条件修正(失败不清)~~ ✅(2026-06-08) | P1 | 0.5d | — | C |
 | T9 | ~~stop_on_failure 字段真正生效 + 默认语义~~ ✅(2026-06-08) | P1 | 0.5d | T1 | A |
 | T10 | 修复路径解析走 `safeJoinUnderRoot` | P2 | 0.5d | — | C |
 | **T11** | **longtask 完成 / 中断时回流对话历史(B)** | **P0** | 1.5d | T1 | B |

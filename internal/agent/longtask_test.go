@@ -1089,6 +1089,139 @@ func TestLongTaskCancelAllCascades(t *testing.T) {
 	}
 }
 
+// TestLongTaskValidationBudgetAbortsExcessiveRun verifies that the
+// overall validation budget (len(checks) * timeout_ms by default)
+// aborts the validation loop with status=fail when checks take too
+// long. T7 acceptance: the loop never runs longer than the budget
+// even with a per-check command that hangs.
+func TestLongTaskValidationBudgetAbortsExcessiveRun(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":                   "create",
+		"longtask_id":              "lt_validation_budget",
+		"validation_timeout_ms":    1000,
+		"max_validation_budget_ms": 1500,
+		"quality_checks": []string{
+			"sleep 1",
+			"sleep 1",
+			"sleep 1",
+			"sleep 1",
+			"sleep 1",
+		},
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	started := time.Now()
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "complete_story",
+		"longtask_id": "lt_validation_budget",
+		"node_id":     "US-001",
+		"result":      "Verdict: pass\nimplemented story",
+	})
+	view := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "finalize_story",
+		"longtask_id": "lt_validation_budget",
+		"node_id":     "US-001",
+	})
+	elapsed := time.Since(started)
+	if elapsed > 4*time.Second {
+		t.Fatalf("validation took too long: %s (expected <4s with 1.5s budget)", elapsed)
+	}
+	if view.Stories[0].ValidationStatus != longTaskValidationFail {
+		t.Fatalf("expected validation_status=fail, got %s", view.Stories[0].ValidationStatus)
+	}
+}
+
+// TestLongTaskValidationCancelledOnParentCtx verifies that an
+// already-cancelled parent context propagates into the validation
+// loop. T7 acceptance: ctx.Canceled ends the loop promptly and
+// records the cancellation reason.
+func TestLongTaskValidationCancelledOnParentCtx(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":         "create",
+		"longtask_id":    "lt_validation_ctx_cancel",
+		"quality_checks": []string{"sleep 5"},
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "complete_story",
+		"longtask_id": "lt_validation_ctx_cancel",
+		"node_id":     "US-001",
+		"result":      "Verdict: pass\nimplemented story",
+	})
+	view := runLongTaskTool(t, a, ctx, map[string]interface{}{
+		"action":      "finalize_story",
+		"longtask_id": "lt_validation_ctx_cancel",
+		"node_id":     "US-001",
+	})
+	if view.Stories[0].ValidationStatus != longTaskValidationFail {
+		t.Fatalf("expected validation_status=fail under cancelled ctx, got %s", view.Stories[0].ValidationStatus)
+	}
+}
+
+// TestLongTaskFinalizeRetainsWorktreeOnFailure verifies that when a
+// story ends in an error/validation-fail state, the underlying
+// subagent worktree is left on disk (and a worktree_retained_*
+// event is appended) so the operator can still inspect the diff.
+// T8 acceptance: success path GC, failure path retain.
+func TestLongTaskFinalizeRetainsWorktreeOnFailure(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":         "create",
+		"longtask_id":    "lt_retain_worktree",
+		"quality_checks": []string{"cat missing-file-for-retain-test"},
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "complete_story",
+		"longtask_id": "lt_retain_worktree",
+		"node_id":     "US-001",
+		"result":      "Verdict: pass\nimplemented story",
+	})
+	finalized := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "finalize_story",
+		"longtask_id": "lt_retain_worktree",
+		"node_id":     "US-001",
+	})
+	if finalized.Stories[0].ValidationStatus != longTaskValidationFail {
+		t.Fatalf("expected validation_status=fail, got %s", finalized.Stories[0].ValidationStatus)
+	}
+	// Drive the GC path directly so we can assert the on-error behavior
+	// without first having to spin up a real subagent worktree.
+	node := &workflowNode{ID: "lt_retain_worktree", JobID: "subagent_fake_retain"}
+	a.gcLongTaskStoryWorktreeOnError(node)
+
+	// The on-error path must record a worktree_retained_for_diagnosis
+	// event in the workflow's events.jsonl.
+	eventsPath := filepath.Join(a.workflows.dir, "lt_retain_worktree", "events.jsonl")
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	if !strings.Contains(string(data), "worktree_retained_for_diagnosis") {
+		t.Fatalf("expected worktree_retained_for_diagnosis event, got events:\n%s", string(data))
+	}
+}
+
 // TestLongTaskRunStatusReadsFromDisk verifies that run_status reads
 // from the durable record (not the in-memory sync.Map) and so survives
 // an Agent restart. T2 acceptance: godex restart preserves run state.

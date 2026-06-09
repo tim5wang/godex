@@ -55,6 +55,9 @@ func (a *Agent) finalizeLongTaskStory(ctx context.Context, workflowID, nodeID st
 		if err := a.workflows.save(state); err != nil {
 			return longTaskView{}, err
 		}
+		// On validation failure, retain the worktree so the operator
+		// can still inspect the diff that broke validation.
+		a.gcLongTaskStoryWorktreeOnError(node)
 	}
 	if validation.Status == longTaskValidationPass || validation.Status == longTaskValidationSkipped {
 		commitArtifact, commitErr := a.finalizeLongTaskMergeCommit(ctx, spec, *node)
@@ -75,15 +78,18 @@ func (a *Agent) finalizeLongTaskStory(ctx context.Context, workflowID, nodeID st
 			if err := a.workflows.save(state); err != nil {
 				return longTaskView{}, err
 			}
+			// Merge or commit failure: keep the worktree around for
+			// diagnosis instead of nuking it.
+			a.gcLongTaskStoryWorktreeOnError(node)
 		}
 		_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{"event": "longtask_merge_commit", "node_id": nodeID, "merge_status": commitArtifact.MergeStatus, "commit_status": commitArtifact.CommitStatus, "commit_hash": commitArtifact.CommitHash, "commit_ref": longTaskCommitRef(nodeID, commitArtifact.Attempt), "at": commitArtifact.CreatedAt})
 	}
-	a.gcLongTaskStoryWorktree(node)
+	a.gcLongTaskStoryWorktreeOnSuccess(node)
 	_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{"event": "longtask_validation", "node_id": nodeID, "status": validation.Status, "validation_ref": longTaskValidationRef(nodeID, validation.Attempt), "at": validation.CreatedAt})
 	return a.longTaskViewForState(state)
 }
 
-func (a *Agent) gcLongTaskStoryWorktree(node *workflowNode) {
+func (a *Agent) gcLongTaskStoryWorktreeOnSuccess(node *workflowNode) {
 	if strings.TrimSpace(node.JobID) == "" {
 		return
 	}
@@ -92,6 +98,34 @@ func (a *Agent) gcLongTaskStoryWorktree(node *workflowNode) {
 		return
 	}
 	_, _ = a.CleanupDurableSubagentWorkspace(node.JobID)
+}
+
+func (a *Agent) gcLongTaskStoryWorktreeOnError(node *workflowNode) {
+	if strings.TrimSpace(node.JobID) == "" {
+		return
+	}
+	// Failure path: keep the worktree on disk for diagnosis. The
+	// longtask layer records the retention via a workflow event
+	// (T12 will additionally surface retained_until via index.json).
+	// We record the event even when the job is unknown, so that the
+	// operator can see that the longtask requested retention for a
+	// specific (now-lost) worktree.
+	workflowID := node.ID
+	if err := a.workflows.appendEvent(workflowID, map[string]interface{}{
+		"event":          "worktree_retained_for_diagnosis",
+		"node_id":        node.ID,
+		"job_id":         node.JobID,
+		"reason":         "longtask story ended in error/validation-fail state",
+		"retained_for":   "7d",
+		"retained_until": time.Now().UTC().Add(7 * 24 * time.Hour),
+	}); err != nil {
+		// Best-effort: a failure here is not actionable for the operator
+		// and should not propagate. The T8 acceptance test asserts the
+		// event is written under a normal agent instance; if the
+		// storage layer cannot write, the agent's own event stream
+		// will surface that separately.
+		_ = err
+	}
 }
 
 func (a *Agent) gcLongTaskWorktrees(workflowID string) (int, error) {

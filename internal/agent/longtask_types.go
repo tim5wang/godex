@@ -39,6 +39,7 @@ type longTaskSpec struct {
 	Description          string               `json:"description,omitempty"`
 	QualityChecks        []string             `json:"quality_checks,omitempty"`
 	ValidationTimeoutMS  int                  `json:"validation_timeout_ms,omitempty"`
+	MaxValidationBudgetMS int                 `json:"max_validation_budget_ms,omitempty"`
 	MergePolicy          string               `json:"merge_policy,omitempty"`
 	CommitPolicy         string               `json:"commit_policy,omitempty"`
 	Stories              []longTaskStoryInput `json:"stories"`

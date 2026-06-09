@@ -94,10 +94,32 @@ func (a *Agent) runLongTaskValidation(ctx context.Context, spec longTaskSpec, no
 	if timeoutMS <= 0 {
 		timeoutMS = longTaskDefaultValidationTimeoutMS
 	}
+	// Per-spec overall budget. Defaults to len(checks) * per-check
+	// timeout so an N-check spec can run to completion under normal
+	// conditions but still aborts in bounded time when one of the
+	// checks hangs.
+	budgetMS := spec.MaxValidationBudgetMS
+	if budgetMS <= 0 {
+		budgetMS = timeoutMS * len(checks)
+		if budgetMS <= 0 {
+			budgetMS = longTaskDefaultValidationTimeoutMS * len(checks)
+		}
+	}
+	validateCtx, cancelAll := context.WithTimeout(ctx, time.Duration(budgetMS)*time.Millisecond)
+	defer cancelAll()
 	workspaceDir := a.longTaskValidationWorkspace(node)
 	executor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspaceDir, a.cfg.TempDir, executionConfigFromRuntime(a.cfg.Tools.Execution))
 	for _, command := range checks {
-		checkCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMS)*time.Millisecond)
+		if err := validateCtx.Err(); err != nil {
+			validation.Status = longTaskValidationFail
+			validation.Checks = append(validation.Checks, longTaskValidationCheck{
+				Command: command,
+				Status:  longTaskValidationFail,
+				Error:   fmt.Sprintf("validation budget exceeded: %v", err),
+			})
+			break
+		}
+		checkCtx, cancel := context.WithTimeout(validateCtx, time.Duration(timeoutMS)*time.Millisecond)
 		started := time.Now().UTC()
 		output, err := executor.RunShellBudgeted(checkCtx, command)
 		finished := time.Now().UTC()

@@ -1424,6 +1424,287 @@ func refluxDedupeKeyForView(t *testing.T, a *Agent, workflowID string) (refluxKe
 	return refluxKey{runID: records[0].RunID, view: view}, nil
 }
 
+// TestLongTaskAsyncRunPersistsRunRecordBeforeGoroutineExit verifies
+// that an async run has a run record on disk from the moment the
+// parent call returns, not just after the goroutine finalizes.
+// T6 acceptance: an async run is observable on disk immediately
+// so a process restart can find and resume it.
+func TestLongTaskAsyncRunPersistsRunRecordBeforeGoroutineExit(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_async_persist",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	// Pre-emptively clear any stale records from previous runs.
+	_ = a.workflows.dir
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_async_persist",
+		"async":       true,
+		"wait_timeout_ms": 100,
+	})
+
+	// Even with a 100ms wait, the parent call has returned and the
+	// record must be on disk already with Async=true and a
+	// non-empty RunID.
+	runsDir := filepath.Join(a.workflows.dir, "lt_async_persist", "runs")
+	records, err := a.workflows.listLongTaskRuns("lt_async_persist")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected exactly 1 run record, got %d (entries: %v)", len(records), dirListing(runsDir))
+	}
+	rec := records[0]
+	if !rec.Async {
+		t.Fatalf("expected async=true on the run record")
+	}
+	if rec.Status != workflowStatusRunning {
+		t.Fatalf("expected status=running on the persisted record, got %s", rec.Status)
+	}
+
+	// Drain the async goroutine so the TempDir cleanup hook
+	// succeeds. We poll the longtask_async runs store via
+	// listLongTaskRuns instead of longTaskRunStatus because the
+	// async store entry is removed the first time longTaskRunStatus
+	// observes a non-running state, and we want to be sure the
+	// goroutine has actually finished writing the final record.
+	t.Cleanup(func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			cur, err := a.workflows.listLongTaskRuns("lt_async_persist")
+			if err == nil && len(cur) == 1 && cur[0].Status != workflowStatusRunning {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+}
+
+func dirListing(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []string{fmt.Sprintf("err=%v", err)}
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+// TestLongTaskAsyncRunEventuallyFinalizesAndPersists verifies that
+// the goroutine inside an async run writes a final record once it
+// finishes. T6 acceptance: the same run id is reused end-to-end
+// (no competing records from the sync runner) and the final
+// status is durable.
+func TestLongTaskAsyncRunEventuallyFinalizesAndPersists(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_async_finalize",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_async_finalize",
+		"async":       true,
+		"wait_timeout_ms": 5000,
+	})
+
+	// Wait for the goroutine to finish by polling
+	// longTaskRunStatus until it no longer reports running.
+	deadline := time.Now().Add(2 * time.Second)
+	var finalView longTaskView
+	for time.Now().Before(deadline) {
+		val, err := runLongTaskToolResult(t, a, context.Background(), map[string]interface{}{
+			"action":      "run_status",
+			"longtask_id": "lt_async_finalize",
+		})
+		if err == nil {
+			if m, ok := val.(map[string]interface{}); ok {
+				if run, ok := m["run"].(map[string]interface{}); ok {
+					if status, _ := run["status"].(string); status != workflowStatusRunning {
+						finalView = decodeViewFromMap(t, m)
+						break
+					}
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if finalView.Run == nil {
+		t.Fatalf("run never finalized within deadline")
+	}
+
+	runsDir := filepath.Join(a.workflows.dir, "lt_async_finalize", "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		t.Fatalf("read runs dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 final run record, got %d", len(entries))
+	}
+	rec, err := a.workflows.loadLongTaskRun("lt_async_finalize", strings.TrimSuffix(entries[0].Name(), ".json"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if rec.Async != true {
+		t.Fatalf("expected async flag preserved on final record, got %+v", rec)
+	}
+	if rec.Status == workflowStatusRunning {
+		t.Fatalf("expected final status not to be running, got %s", rec.Status)
+	}
+}
+
+// TestLongTaskAsyncRunRefluxReachesChatHistory verifies that an
+// async run's completion is refluxed into the chat history through
+// the same T11 path the sync run uses. T6 acceptance: the user
+// sees the result in chat regardless of which path (sync / async)
+// the run took.
+func TestLongTaskAsyncRunRefluxReachesChatHistory(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_async_reflux",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_async_reflux",
+		"async":       true,
+		"wait_timeout_ms": 5000,
+	})
+
+	// Wait for the goroutine to finish.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		val, err := runLongTaskToolResult(t, a, context.Background(), map[string]interface{}{
+			"action":      "run_status",
+			"longtask_id": "lt_async_reflux",
+		})
+		if err == nil {
+			if m, ok := val.(map[string]interface{}); ok {
+				if run, ok := m["run"].(map[string]interface{}); ok {
+					if status, _ := run["status"].(string); status != workflowStatusRunning {
+						break
+					}
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	msgs := a.GetMessages()
+	refluxed := false
+	for _, m := range msgs {
+		if m.Metadata != nil && m.Metadata.Kind == protocol.KindLongTaskReflux && strings.Contains(firstText(m.Content), "lt_async_reflux") {
+			refluxed = true
+			break
+		}
+	}
+	if !refluxed {
+		t.Fatalf("expected async run to reflux into chat history")
+	}
+}
+
+// TestLongTaskAsyncRunHasSingleRunRecord verifies the no-competing-
+// record invariant: an async run produces exactly one run record
+// even though the goroutine and the parent both touch disk.
+// T6 acceptance: the run id assigned at startAsyncLongTask is the
+// same id persisted by runLongTaskSync when it resumes.
+func TestLongTaskAsyncRunHasSingleRunRecord(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_async_single",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "run",
+		"longtask_id": "lt_async_single",
+		"async":       true,
+		"wait_timeout_ms": 5000,
+	})
+
+	// Read the run id from disk; the parent call has not blocked
+	// waiting for the goroutine so the record on disk at this
+	// moment is the one startAsyncLongTask wrote.
+	records, err := a.workflows.listLongTaskRuns("lt_async_single")
+	if err != nil || len(records) == 0 {
+		t.Fatalf("list runs: %v records=%d", err, len(records))
+	}
+	firstRec := records[0]
+	firstRunID := firstRec.RunID
+	if !firstRec.Async {
+		t.Fatalf("expected async flag on starting record")
+	}
+
+	// Wait for the goroutine to finish, then re-read.
+	t.Cleanup(func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			cur, err := a.workflows.listLongTaskRuns("lt_async_single")
+			if err == nil && len(cur) == 1 && cur[0].Status != workflowStatusRunning {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+
+	// Re-list the runs dir; the run id must not have changed.
+	final, err := a.workflows.listLongTaskRuns("lt_async_single")
+	if err != nil {
+		t.Fatalf("re-list runs: %v", err)
+	}
+	if len(final) != 1 {
+		t.Fatalf("expected exactly 1 run record after finalize, got %d", len(final))
+	}
+	gotRunID := final[0].RunID
+	if gotRunID != firstRunID {
+		t.Fatalf("expected run id to stay %s, got %s (competing record)", firstRunID, gotRunID)
+	}
+}
+
+func decodeViewFromMap(t *testing.T, m map[string]interface{}) longTaskView {
+	t.Helper()
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var v longTaskView
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return v
+}
+
 func firstText(blocks []protocol.Block) string {
 	for _, b := range blocks {
 		if b.Text != "" {

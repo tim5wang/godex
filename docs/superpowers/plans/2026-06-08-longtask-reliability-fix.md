@@ -43,7 +43,7 @@
 | T10 | ~~修复路径解析走 `safeJoinUnderRoot`~~ ✅(2026-06-08) | P2 | 0.5d | — | C |
 | **T11** | ~~longtask 完成 / 中断时回流对话历史(B)~~ ✅(2026-06-08) | **P0** | 1.5d | T1 | B |
 | **T12** | ~~artifact 永久可查 + commit 反查 + rollback 入口~~ ✅(2026-06-08) | **P0** | 1.5d | T8 | C |
-| T13-e2e | 10 个端到端 e2e(长链+repair+cancel+resume+回流+rollback+retention) | **P0** | 1d | T1~T12 | A+B+C |
+| T13-e2e | ~~10 个端到端 e2e(长链+repair+cancel+resume+回流+rollback+retention)~~ ✅(2026-06-08) | **P0** | 1d | T1~T12 | A+B+C |
 | **T15** | ~~TUI + Web UI 完善(覆盖 T1~T12 所有用户可见能力,Web 拆 5 个组件)~~ ✅(2026-06-08) | **P1** | **2.0d** | T1~T12 | A+B+C |
 | T14 | docs 更新:validation 不在 subagent 沙箱里 | P3 | 0.2d | T15 之后 | — |
 
@@ -563,6 +563,22 @@
 ---
 
 ### T13-e2e — 端到端 e2e 测试(长链+repair+cancel+resume+回流+rollback)
+
+**状态:✅ 完成 (2026-06-08)**
+- commit: TBD
+- 新增 `internal/agent/longtask_e2e_test.go`,10 个端到端测试覆盖整条 pipeline
+  - 1 create/list/status 圆环
+  - 2 sync run + T11 reflux
+  - 3 blocked / stop on failure
+  - 4 resume after interrupted (no competing record)
+  - 5 async run persist + finalize
+  - 6 repair rewire downstream surface
+  - 7 validation budget fires
+  - 8 lookup by commit miss
+  - 9 rollback 1024-byte cap boundary
+  - 10 gc dry-run no-op
+- 10 个 e2e + 48 个 longtask + 0 个 pre-existing fail,58 个总过
+- 验收:规划表 T13-e2e.1~10 全部 ✅
 
 **对应愿景**:A + B + C(综合验证)
 

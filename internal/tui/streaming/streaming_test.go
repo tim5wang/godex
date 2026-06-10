@@ -130,6 +130,26 @@ func newTestSession(t *testing.T, backend Backend) (*Session, *bytes.Buffer, *by
 	return s, out, errOut
 }
 
+// TestPrintBannerIncludesLocatorWorkspaceAndModel verifies the
+// initial banner prints the session locator, workspace directory,
+// and configured model so users can confirm they opened the right
+// session.
+func TestPrintBannerIncludesLocatorWorkspaceAndModel(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.snapshot.Locator = rtbackend.SessionLocator{Channel: "local", Key: "default"}
+	s, out, _ := newTestSession(t, backend)
+	s.cfg.WorkspaceDir = "/workspace"
+	s.cfg.Model = "test-model"
+	s.printBanner(backend.snapshot)
+
+	got := out.String()
+	for _, want := range []string{"GoDex", "streaming mode", "local:default", "/workspace", "test-model"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected banner to contain %q, got %q", want, got)
+		}
+	}
+}
+
 // TestStreamAssistantTextOpensAndClosesBlock verifies the streaming
 // handler prints a "● " prefix on the first delta and closes the
 // block with a trailing newline on completion.

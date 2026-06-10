@@ -171,6 +171,13 @@ func runWithShell(ctx context.Context, workspaceDir, shell, shellCommand string,
 			close(readDone)
 		}()
 
+		// Hard ceiling: even if both pipes and ctx misbehave (e.g. a child
+		// that refuses to die on Kill, or a pipe FD that takes forever to
+		// close), the loop must exit. ctx timeout + a generous grace
+		// period (3x) is the absolute upper bound.
+		hardCeiling := time.NewTimer(3 * chunkInterval)
+		defer hardCeiling.Stop()
+
 	loop:
 		for {
 			select {
@@ -183,6 +190,14 @@ func runWithShell(ctx context.Context, workspaceDir, shell, shellCommand string,
 			case <-readDone:
 				break loop
 			case <-ctx.Done():
+				if cmd.Process != nil {
+					cmd.Process.Kill()
+				}
+				break loop
+			case <-hardCeiling.C:
+				// Defensive: the loop has been idle for an unreasonable
+				// amount of time. Force-kill and break to ensure we
+				// always emit a final chunk and close ch.
 				if cmd.Process != nil {
 					cmd.Process.Kill()
 				}
@@ -216,7 +231,19 @@ func runWithShell(ctx context.Context, workspaceDir, shell, shellCommand string,
 	return ch
 }
 
+// copyTo drains src into dst under mu. It is the read pump used by
+// runWithShell for cmd stdout/stderr pipes.
+//
+// io.Reader implementations are allowed to return (0, nil) for a brief
+// window when the underlying source has no data available (e.g. an
+// exec.Cmd StdoutPipe before the child writes anything, or after the
+// child has been killed but the pipe FD has not yet been closed). The
+// old implementation re-entered src.Read with no backoff, which would
+// spin a goroutine at 100% CPU while the pipe sat empty. We now yield
+// briefly when Read reports zero progress so the runtime can park us,
+// but still drain the pipe promptly once data starts flowing.
 func copyTo(dst *strings.Builder, mu *sync.Mutex, src io.Reader) {
+	const emptyReadBackoff = 5 * time.Millisecond
 	buf := make([]byte, 4096)
 	for {
 		n, readErr := src.Read(buf)
@@ -226,7 +253,13 @@ func copyTo(dst *strings.Builder, mu *sync.Mutex, src io.Reader) {
 			mu.Unlock()
 		}
 		if readErr != nil {
-			break
+			return
+		}
+		if n == 0 {
+			// No progress this iteration: yield the CPU. We deliberately
+			// keep the delay small (a few ms) so interactive shell output
+			// is not noticeably chunkier when pipes are mostly idle.
+			time.Sleep(emptyReadBackoff)
 		}
 	}
 }

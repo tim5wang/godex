@@ -485,6 +485,75 @@ type streamBlockState struct {
 	partialSignature strings.Builder
 }
 
+// recoverPartialToolInput tries to decode the accumulated partial_json from
+// an upstream Anthropic-style streamed tool_use input frame. When the stream
+// is truncated mid-way (the connection drops, a content_block_stop frame is
+// lost, or the closing brace is missing) json.Unmarshal fails. Rather than
+// aborting the whole turn with a hard error, we attempt a structural
+// best-effort close: open string and open `{` / `[` brackets are closed in
+// order from the deepest scope outwards. If recovery succeeds the second
+// bool is false and the returned map is the parsed input. If recovery still
+// fails we surface the fragment to the caller via the reserved
+// `__error__` / `__partial__` keys on the returned map and return true so
+// the caller can distinguish a degraded result.
+func recoverPartialToolInput(raw string) (map[string]interface{}, bool) {
+	var input map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &input); err == nil {
+		return input, false
+	}
+	// Best-effort structural close: walk the bytes, track whether we are
+	// inside a string literal (skipping backslash-escaped characters), and
+	// count the open / close depth of `{` and `[`. Anything left open at
+	// the end is closed in reverse order so the JSON decoder sees a
+	// balanced object.
+	var out strings.Builder
+	out.Grow(len(raw) + 8)
+	out.WriteString(raw)
+	inString := false
+	var stack []byte
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if inString {
+			if c == '\\' && i+1 < len(raw) {
+				i++
+				continue
+			}
+			if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, c)
+		case '}', ']':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	if inString {
+		out.WriteByte('"')
+	}
+	for i := len(stack) - 1; i >= 0; i-- {
+		switch stack[i] {
+		case '{':
+			out.WriteByte('}')
+		case '[':
+			out.WriteByte(']')
+		}
+	}
+	if err := json.Unmarshal([]byte(out.String()), &input); err == nil {
+		return input, false
+	}
+	return map[string]interface{}{
+		"__error__":   "streamed_tool_input_truncated",
+		"__partial__": raw,
+	}, true
+}
+
 // mergeUsageDelta folds a non-message_start usage payload (Anthropic's
 // message_delta.usage) into the baseline accumulated earlier. The delta
 // typically only contains the fields that have grown since message_start
@@ -676,10 +745,7 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 				case protocol.BlockToolUse:
 					raw := strings.TrimSpace(state.partialJSON.String())
 					if raw != "" {
-						var input map[string]interface{}
-						if err := json.Unmarshal([]byte(raw), &input); err != nil {
-							return fmt.Errorf("decode streamed tool input: %w", err)
-						}
+						input, _ := recoverPartialToolInput(raw)
 						state.block.Input = input
 					}
 					if state.block.Input == nil {
@@ -725,6 +791,35 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 				}
 			}
 		case "message_stop":
+			// Soft-close any blocks the upstream did not send a
+			// content_block_stop for (e.g. the connection dropped
+			// between the last input_json_delta and the stop frame).
+			// Without this, those tool_use blocks would land on the
+			// response with an empty Input even though their partial
+			// JSON accumulated fine. We only re-run the recovery path
+			// on blocks whose Input is empty (or nil) — a populated
+			// map means the upstream already gave us a complete
+			// object and we should not overwrite it.
+			for _, st := range states {
+				if st == nil {
+					continue
+				}
+				if st.block.Type != protocol.BlockToolUse {
+					continue
+				}
+				if len(st.block.Input) > 0 {
+					continue
+				}
+				raw := strings.TrimSpace(st.partialJSON.String())
+				if raw == "" {
+					if st.block.Input == nil {
+						st.block.Input = map[string]interface{}{}
+					}
+					continue
+				}
+				input, _ := recoverPartialToolInput(raw)
+				st.block.Input = input
+			}
 			return nil
 		case "ping":
 			return nil

@@ -437,3 +437,116 @@ type temporaryTestError struct {
 func (e temporaryTestError) Error() string   { return e.msg }
 func (e temporaryTestError) Timeout() bool   { return false }
 func (e temporaryTestError) Temporary() bool { return true }
+
+// TestClientStreamToleratesTruncatedToolInputJSON covers the case where the
+// upstream closes the content_block_stop frame with partial_json left in an
+// invalid state that even the structural recovery path cannot salvage
+// (e.g. a fragment with mismatched delimiters or a trailing colon that
+// would parse as an unterminated key/value). The parser must NOT abort the
+// whole stream — it should surface the fragment to the caller so the runner
+// can decide whether to retry or skip the tool call.
+func TestClientStreamToleratesTruncatedToolInputJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, payload := range []string{
+			`{"type":"message_start","message":{"content":[]}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"bash","input":{}}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":":[\"a\","}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_stop"}`,
+		} {
+			_, _ = w.Write([]byte("data: " + payload + "\n\n"))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "test-model"}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("client stream should not error on truncated tool input, got: %v", err)
+	}
+	tools := protocol.ToolUses(resp.Content)
+	if len(tools) != 1 || tools[0].Name != "bash" {
+		t.Fatalf("expected one bash tool_use even on truncation, got: %+v", resp.Content)
+	}
+	if reason, ok := tools[0].Input["__error__"].(string); !ok || reason != "streamed_tool_input_truncated" {
+		t.Fatalf("expected __error__=streamed_tool_input_truncated, got input=%#v", tools[0].Input)
+	}
+	if partial, ok := tools[0].Input["__partial__"].(string); !ok || !strings.Contains(partial, `"command"`) {
+		t.Fatalf("expected __partial__ to carry the raw fragment, got input=%#v", tools[0].Input)
+	}
+}
+
+// TestClientStreamToleratesMessageStopBeforeContentBlockStop covers the case
+// where the upstream sends message_stop without ever emitting the
+// content_block_stop for a tool_use block (e.g. the connection drops between
+// the last input_json_delta and the stop frame). The parser must treat
+// message_stop as a soft close for any blocks still missing a stop frame.
+func TestClientStreamToleratesMessageStopBeforeContentBlockStop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, payload := range []string{
+			`{"type":"message_start","message":{"content":[]}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"bash","input":{}}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"pwd\"}"}}`,
+			// NOTE: no content_block_stop for index 0
+			`{"type":"message_stop"}`,
+		} {
+			_, _ = w.Write([]byte("data: " + payload + "\n\n"))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "test-model"}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("client stream should not error when content_block_stop is missing, got: %v", err)
+	}
+	tools := protocol.ToolUses(resp.Content)
+	if len(tools) != 1 || tools[0].Name != "bash" {
+		t.Fatalf("expected one bash tool_use, got: %+v", resp.Content)
+	}
+	if tools[0].Input["command"] != "pwd" {
+		t.Fatalf("expected parsed command=pwd, got input=%#v", tools[0].Input)
+	}
+	if _, hasError := tools[0].Input["__error__"]; hasError {
+		t.Fatalf("a complete JSON should not carry __error__, got input=%#v", tools[0].Input)
+	}
+}
+
+// TestClientStreamToleratesToolInputMissingClosingBrace covers the case where
+// partial_json is missing the closing brace (the upstream cuts the frame
+// after the last value but before the structural close). The parser should
+// close the JSON before decoding so the call does not abort.
+func TestClientStreamToleratesToolInputMissingClosingBrace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, payload := range []string{
+			`{"type":"message_start","message":{"content":[]}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"bash","input":{}}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"pwd\""}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_stop"}`,
+		} {
+			_, _ = w.Write([]byte("data: " + payload + "\n\n"))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "test-model"}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("client stream should not error on missing closing brace, got: %v", err)
+	}
+	tools := protocol.ToolUses(resp.Content)
+	if len(tools) != 1 || tools[0].Name != "bash" {
+		t.Fatalf("expected one bash tool_use, got: %+v", resp.Content)
+	}
+	if tools[0].Input["command"] != "pwd" {
+		t.Fatalf("expected parsed command=pwd, got input=%#v", tools[0].Input)
+	}
+	if _, hasError := tools[0].Input["__error__"]; hasError {
+		t.Fatalf("a brace-recovered JSON should not carry __error__, got input=%#v", tools[0].Input)
+	}
+}

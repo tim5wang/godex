@@ -51,7 +51,7 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	p := tea.NewProgram(m, options...)
 
 	unsubscribe, err := s.backend.AttachSink(opened.SessionID, events.SinkFunc(func(event events.Event) {
-		p.Send(runtimeEventMsg{Event: event})
+		forwardEvent(ctx, p, event)
 	}))
 	if err != nil {
 		return fmt.Errorf("attach tui event sink: %w", err)
@@ -60,6 +60,54 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 
 	_, err = p.Run()
 	return err
+}
+
+// forwardEvent hands a backend event to the tea program without
+// blocking the emitting goroutine.
+//
+// events.Broadcaster.Emit dispatches synchronously on whatever
+// goroutine produced the event (agent runner, subagent, tool loop,
+// heartbeat, session repair, etc.). Calling p.Send directly on that
+// goroutine is unsafe because tea.Program.Send documents that
+// "If the program hasn't started yet this will be a blocking
+// operation" and the in-program queue is also bounded. A blocked
+// emitter freezes the backend event loop, which in turn blocks the
+// very SnapshotReady / WindowSizeMsg / TurnCompleted events the TUI
+// needs to render — the original "TUI appears frozen" and
+// "re-launching TUI stuck on 'Loading TUI...'" symptoms.
+//
+// The fix: if the program hasn't been started yet, or its
+// input channel cannot accept the message right now, drop the event.
+// Dropping transient events is safe because the TUI's next snapshot
+// fetch (driven by EventSnapshotReady and refreshViewport) is
+// authoritative for visible state. Persistent state changes (turn
+// completion, permission decisions) are always recoverable through
+// Snapshot() on reconnect.
+func forwardEvent(ctx context.Context, p *tea.Program, event events.Event) {
+	if p == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	// We cannot peek at p's internal queue length, so we use a
+	// short-timeout guarded send. tea.Program.Send is a no-op
+	// once the program has exited, so the only failure mode we need
+	// to defend against is the pre-Run / full-queue blocking case.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.Send(runtimeEventMsg{Event: event})
+	}()
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		// The program is stuck (pre-Run, or render loop wedged).
+		// Drop the event so the emitter can keep producing.
+	case <-ctx.Done():
+	}
 }
 
 func newModel(ctx context.Context, cfg *config.Config, backend Backend, now func() time.Time, sessionID string, snapshot rtbackend.Snapshot) *model {

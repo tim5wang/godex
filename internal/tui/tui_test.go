@@ -28,6 +28,13 @@ type fakeBackend struct {
 	executed       []commands.Command
 	approved       []approvedPermission
 	denied         []deniedPermission
+
+	// attachedSink records the live sink handed to the TUI via
+	// AttachSink, so tests can emit events on behalf of the backend.
+	// sinkAttached flips to true once the TUI has called AttachSink,
+	// so tests can wait for the registration race window to close.
+	attachedSink   events.Sink
+	sinkAttached   bool
 }
 
 type approvedPermission struct {
@@ -185,8 +192,11 @@ func (f *fakeBackend) DenyPermission(ctx context.Context, sessionID, requestID, 
 
 func (f *fakeBackend) AttachSink(sessionID string, sink events.Sink) (func(), error) {
 	_ = sessionID
-	_ = sink
-	return func() {}, nil
+	f.attachedSink = sink
+	f.sinkAttached = true
+	return func() {
+		f.attachedSink = nil
+	}, nil
 }
 
 func (f *fakeBackend) removePendingPermission(requestID string) tools.PendingPermission {
@@ -1534,5 +1544,82 @@ func TestSnapshotWithSamePermissionCountDoesNotAutoFocus(t *testing.T) {
 	// Focus should remain on composer since no NEW permissions appeared.
 	if m.focus != focusComposer {
 		t.Fatalf("expected focusComposer when no new permissions, got %v", m.focus)
+	}
+}
+
+// TestForwardEventDoesNotBlockOnUnstartedProgram verifies that when the
+// tea program has not been started (p.Run was never called), the
+// backend emitter goroutine is NOT blocked by p.Send. This is the
+// "TUI stuck on 'Loading TUI...'" reproducer: pre-fix, the first
+// event arriving between AttachSink and p.Run would block p.Send
+// until the program started, which the program never did because
+// the WindowSizeMsg needed to drive the renderer was itself stuck
+// behind the same Send call.
+func TestForwardEventDoesNotBlockOnUnstartedProgram(t *testing.T) {
+	t.Parallel()
+
+	// Build a real program the same way Run does, but DO NOT call Run.
+	m := newModelWithDeferredInit(context.Background(), &config.Config{
+		Model: "test-model", WorkspaceDir: "/workspace", LeadName: "lead",
+	}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+	p := tea.NewProgram(m)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Emitter goroutine: must return well under 1s even though
+	// p.Send on an unstarted program blocks indefinitely.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		forwardEvent(ctx, p, events.Event{
+			SessionID: "session-1",
+			Type:      events.EventSnapshotReady,
+		})
+	}()
+
+	select {
+	case <-done:
+		// emitter exited; p.Send was either guarded by the 50ms
+		// timeout or p was nil; either way we did not hang.
+	case <-time.After(2 * time.Second):
+		t.Fatalf("forwardEvent blocked the emitter goroutine (pre-Run p.Send)")
+	}
+}
+
+// TestForwardEventAbortsOnContextCancel verifies that once the
+// session context is cancelled, forwardEvent returns immediately
+// and does not touch p.Send. This is the "Ctrl+C exits cleanly"
+// case: pre-fix, a stuck p.Send in a separate goroutine could keep
+// the runtime from unwinding promptly.
+func TestForwardEventAbortsOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	m := newModelWithDeferredInit(context.Background(), &config.Config{
+		Model: "test-model", WorkspaceDir: "/workspace", LeadName: "lead",
+	}, &fakeBackend{}, time.Now, "session-1", rtbackend.Snapshot{
+		Locator: rtbackend.SessionLocator{Channel: "local", Key: "default"},
+	})
+	p := tea.NewProgram(m)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel BEFORE calling forwardEvent
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		forwardEvent(ctx, p, events.Event{
+			SessionID: "session-1",
+			Type:      events.EventSnapshotReady,
+		})
+	}()
+
+	select {
+	case <-done:
+		// ctx-cancelled path returned without touching p.Send.
+	case <-time.After(2 * time.Second):
+		t.Fatalf("forwardEvent did not honour cancelled context")
 	}
 }

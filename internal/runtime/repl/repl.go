@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chzyer/readline"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -27,7 +24,6 @@ type Session struct {
 	backend *backend.Service
 	stdout  io.Writer
 	stderr  io.Writer
-	newRL   func(*readline.Config) (*readline.Instance, error)
 	session string
 	printMu sync.Mutex
 }
@@ -39,7 +35,6 @@ func New(cfg *config.Config, service *backend.Service, stdout, stderr io.Writer)
 		backend: service,
 		stdout:  stdout,
 		stderr:  stderr,
-		newRL:   readline.NewEx,
 	}
 }
 
@@ -58,20 +53,11 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 	defer unsubscribe()
 
-	rl, err := s.newReadline()
-	if err != nil {
-		return fmt.Errorf("initialize interactive prompt: %w", err)
-	}
-	defer rl.Close()
+	// Use the line editor for grapheme-aware input.
+	ed := newLineEditor("> ")
 
 	for {
-		line, err := rl.Readline()
-		if err == readline.ErrInterrupt {
-			if strings.TrimSpace(line) == "" {
-				return nil
-			}
-			continue
-		}
+		line, err := ed.ReadLine()
 		if err == io.EOF {
 			return nil
 		}
@@ -182,17 +168,6 @@ func findPendingApproval(requestID string, items []tools.PendingPermission) (too
 		return items[0], true
 	}
 	return tools.PendingPermission{}, false
-}
-
-func (s *Session) newReadline() (*readline.Instance, error) {
-	historyPath := filepath.Join(s.cfg.TeamDir, "repl_history")
-	return s.newRL(&readline.Config{
-		Prompt:            "> ",
-		HistoryFile:       historyPath,
-		HistorySearchFold: true,
-		InterruptPrompt:   "^C",
-		EOFPrompt:         "exit",
-	})
 }
 
 func (s *Session) printBanner() {

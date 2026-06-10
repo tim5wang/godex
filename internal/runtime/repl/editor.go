@@ -110,8 +110,14 @@ var ErrEmptyLine = errors.New("repl: empty line")
 // SIGINT / SIGTERM via signal.NotifyContext).
 //
 // `in` is the user's stdin; it can be nil at construction time
-// and provided later via AttachInput. `out` is where the prompt
-// and any in-progress edit (the cursor blink) is rendered.
+// and provided later via AttachInput. `out` is accepted for
+// signature compatibility with future swap-in line editors, but
+// is currently ignored: tea.Program's renderer always writes to
+// io.Discard, because the REPL loop owns its own prompt writer
+// (Session.writePrompt) and concurrent writes to REPL stdout by
+// the renderer and by handleEvent would interleave and corrupt
+// the on-screen history. See repl_test.go TestSessionWritePrompt
+// and the accompanying commit for the bug being prevented.
 func newEditor(ctx context.Context, prompt string, in io.Reader, out io.Writer) (*Editor, error) {
 	results := make(chan string, 1)
 	quits := make(chan error, 1)
@@ -128,13 +134,20 @@ func newEditor(ctx context.Context, prompt string, in io.Reader, out io.Writer) 
 		// forever waiting for the terminal to respond to the
 		// enter-alt-screen escape sequence.
 		tea.WithoutRenderer(),
+		// Force the renderer to a sink. Even with WithoutRenderer
+		// bubbletea still emits View() output on Update, and on a
+		// real TTY it also emits cursor-positioning escape codes
+		// that overwrite any concurrent printf from handleEvent.
+		// Routing that output to Discard means the REPL loop is
+		// the sole writer of REPL stdout, which is the only way
+		// to keep multi-line history messages from being squashed
+		// onto a single line.
+		tea.WithOutput(io.Discard),
 	}
 	if in != nil {
 		options = append(options, tea.WithInput(in))
 	}
-	if out != nil {
-		options = append(options, tea.WithOutput(out))
-	}
+	_ = out // accepted for caller convenience; see doc comment.
 
 	program := tea.NewProgram(m, options...)
 

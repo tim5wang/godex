@@ -35,7 +35,14 @@ type Session struct {
 	// a tea.Program.
 	newEd   func(ctx context.Context, prompt string, in io.Reader, out io.Writer) (*Editor, error)
 	session string
-	printMu sync.Mutex
+	// printMu is held by both handleEvent (via printf) and the
+	// Run loop (via writePrompt and println) so a streaming
+	// assistant text delta cannot interleave with the prompt or
+	// with command output. It is a *sync.Mutex (not a value) so
+	// the field never gets copied by struct literals; go vet's
+	// copylocks checker would otherwise flag any test or future
+	// helper that does &Session{printMu: someMutex}.
+	printMu *sync.Mutex
 }
 
 // New creates a REPL session bound to the shared backend.
@@ -46,6 +53,7 @@ func New(cfg *config.Config, service *backend.Service, stdout, stderr io.Writer)
 		stdout:  stdout,
 		stderr:  stderr,
 		newEd:   newEditor,
+		printMu: &sync.Mutex{},
 	}
 }
 
@@ -71,6 +79,13 @@ func (s *Session) Run(ctx context.Context) error {
 	defer ed.Close()
 
 	for {
+		// The REPL loop owns the prompt. Editor is configured
+		// with io.Discard (see newEditor) so tea.Program never
+		// touches REPL stdout, and we print "> " ourselves under
+		// the same printMu that guards handleEvent's printf calls
+		// so a streaming assistant text delta cannot tear the
+		// prompt from the line the user is about to type on.
+		s.writePrompt(s.stdout)
 		line, err := ed.ReadLine()
 		// Ctrl+D (EOF) and Ctrl+C (clean quit) both flow through
 		// here. The editor returns io.EOF on either path; a
@@ -232,6 +247,19 @@ func (s *Session) println(w io.Writer, args ...interface{}) {
 	s.printMu.Lock()
 	defer s.printMu.Unlock()
 	fmt.Fprintln(w, args...)
+}
+
+// writePrompt writes the REPL's interactive prompt prefix ("> ")
+// to w under the session's printMu. It does NOT append a newline
+// — chzyer/readline parity, and the user types on the same line
+// as the prompt in a non-TUI REPL. The function exists as a
+// single point of truth for the prompt string so the test in
+// repl_test.go can pin both the literal and the no-newline
+// guarantee.
+func (s *Session) writePrompt(w io.Writer) {
+	s.printMu.Lock()
+	defer s.printMu.Unlock()
+	fmt.Fprint(w, "> ")
 }
 
 func (s *Session) printf(w io.Writer, format string, args ...interface{}) {

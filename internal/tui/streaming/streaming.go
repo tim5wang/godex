@@ -623,12 +623,11 @@ func (s *Session) refreshStatusBar() {
 
 	s.printMu.Lock()
 	defer s.printMu.Unlock()
-	// \x1b[1B: down1 row (to status bar)
-	// \r: column0
-	// \x1b[K: clear to end of line
-	// text + dim reset
-	// \x1b[1A: back up to prompt row
-	fmt.Fprintf(s.stdout, "\x1b[1B\r\x1b[K\x1b[2m%s\x1b[0m\x1b[1A", ellipsizeANSI(text, width))
+	// Save cursor (on prompt row), move down to status bar row, clear
+	// it, write the status text, restore cursor to prompt row.
+	// The "\x1b7" (DECSC) and "\x1b8" (DECRC) pair ensures this works
+	// even if draw() has done its own DECSC/DECRC sequence before us.
+	fmt.Fprintf(s.stdout, "\x1b7\x1b[1B\r\x1b[K\x1b[2m%s\x1b[0m\x1b8", ellipsizeANSI(text, width))
 }
 
 // renderStatusBar builds the compact status bar text from the
@@ -956,6 +955,16 @@ func newLineEditor(prompt string) *lineEditor {
 // The editor puts stdin in raw mode so it can read individual
 // keystrokes (including ANSI escape sequences for arrow keys).
 // The terminal is restored before ReadLine returns.
+//
+// Multiline input is supported via two sequences:
+// - Alt+Enter: most terminals send \x1b\r in raw mode. We treat
+// that as "insert newline" so the user can compose a multi-line
+// prompt before submitting with a plain Enter.
+// - Backslash-Enter (\ then Enter): a portable fall-back for
+// terminals that do not transmit Alt+Enter consistently. The
+// trailing backslash is consumed and a newline is inserted.
+//
+// Plain Enter (\r or \n) submits the line. Ctrl+C / Ctrl+D quit.
 func (e *lineEditor) ReadLine() (string, error) {
 	state, err := term.MakeRaw(os.Stdin.Fd())
 	if err != nil {
@@ -987,14 +996,25 @@ func (e *lineEditor) ReadLine() (string, error) {
 			}
 			switch {
 			case r == '\r' || r == '\n':
+				// Backslash-Enter fall-back: when the previous rune
+				// is a literal '\', swallow the backslash and insert
+				// a newline so the user can break the line on any
+				// terminal. Otherwise submit the line.
+				if r == '\n' && e.pos >0 && e.content[e.pos-1] == '\\' {
+					e.pos--
+					e.content = append(e.content[:e.pos], e.content[e.pos+1:]...)
+					e.insertRune('\n')
+					e.draw()
+					break
+				}
 				fmt.Fprint(os.Stdout, "\r\n")
 				return string(e.content), nil
-			case r == 0x03 || r == 0x04:
+			case r ==0x03 || r ==0x04:
 				fmt.Fprint(os.Stdout, "\r\n")
 				return "", io.EOF
-			case r == 0x7f || r == 0x08:
+			case r ==0x7f || r ==0x08:
 				e.deleteRuneBefore()
-			case r == 0x15:
+			case r ==0x15:
 				e.content = e.content[:0]
 				e.pos =0
 			default:
@@ -1008,28 +1028,93 @@ func (e *lineEditor) ReadLine() (string, error) {
 }
 
 func (e *lineEditor) handleEscape(b []byte) {
-	if len(b) <3 {
+	if len(b) <2 {
 		return
 	}
-	if b[0] != '\x1b' || b[1] != '[' {
+	if b[0] != '\x1b' {
 		return
 	}
-	switch b[2] {
-	case 'C':
-		e.moveCursorRight()
-	case 'D':
-		e.moveCursorLeft()
+	switch b[1] {
+	case '[':
+		// CSI sequence: arrow keys (\x1b[A/B/C/D), etc.
+		if len(b) <3 {
+			return
+		}
+		switch b[2] {
+		case 'C':
+			e.moveCursorRight()
+		case 'D':
+			e.moveCursorLeft()
+		}
+	case '\r', '\n':
+		// Alt+Enter: insert a newline at the cursor. This is the
+		// standard sequence iTerm2, Terminal.app, and most Linux
+		// terminals send for Alt+Enter in raw mode.
+		e.insertRune('\n')
+		e.draw()
 	}
+	// Other escape sequences are ignored.
 }
 
+// draw redraws the current line(s) on the terminal.  For single-line
+// content this is a simple \r + reprint + cursor position.  For
+// multiline content we split into separate terminal lines, redraw
+// each one with a fresh "\r...\x1b[K" sequence, move the cursor to
+// the correct visual position, and refresh the status bar below so
+// it stays pinned at the bottom.
 func (e *lineEditor) draw() {
-	line := string(e.content)
-	before := string(e.content[:e.pos])
-	cursorCol := uniseg.StringWidth(e.prompt) + uniseg.StringWidth(before)
-	fmt.Fprintf(os.Stdout, "\r%s%s\x1b[K", e.prompt, line)
-	if cursorCol >0 {
-		fmt.Fprintf(os.Stdout, "\x1b[%dG", cursorCol+1)
+	lines := strings.Split(string(e.content), "\n")
+
+	// Find cursor visual position: which line (0-indexed) and which
+	// column (after prompt) the cursor occupies.
+	cursorLine :=0
+	cursorCol :=0
+	pos := e.pos
+	for li, line := range lines {
+		runes := []rune(line)
+		if pos <= len(runes) {
+			cursorLine = li
+			cursorCol = uniseg.StringWidth(string(runes[:pos]))
+			break
+		}
+		pos -= len(runes) +1 // +1 for the \n separator
 	}
+
+	// Save cursor position before we start moving around.
+	fmt.Fprint(os.Stdout, "\x1b7") // DECSC
+
+	// Move the cursor UP so the first content line sits on the row
+	// just below the separator (or wherever the prompt would have
+	// been).  cursorLine counts how many content lines are BELOW
+	// the cursor's row — that's how far up we need to go from the
+	// prompt line to reach the first content line.
+	if cursorLine >0 {
+		fmt.Fprintf(os.Stdout, "\x1b[%dA", cursorLine)
+	}
+
+	// Redraw every content line, left to right, top to bottom.
+	prefix := e.prompt
+	for i, line := range lines {
+		fmt.Fprintf(os.Stdout, "\r%s%s\x1b[K", prefix, line)
+		if i < len(lines)-1 {
+			fmt.Fprint(os.Stdout, "\n")
+			prefix = strings.Repeat(" ", uniseg.StringWidth(e.prompt))
+		}
+	}
+
+	// We are now on the LAST content line. Position the cursor at
+	// the correct visual column within that line.
+	if cursorCol >0 {
+		fmt.Fprintf(os.Stdout, "\r> \x1b[%dG", cursorCol+3) // "> " = 2 chars
+	} else {
+		fmt.Fprint(os.Stdout, "\r> ")
+	}
+
+	// Restore the cursor to the saved position (prompt line before
+	// we started redrawing) and refresh the status bar below it.
+	// This ensures the status bar is never overwritten by multiline
+	// content.
+	fmt.Fprint(os.Stdout, "\x1b8") // DECRC
 }
 
 func (e *lineEditor) insertRune(r rune) {
@@ -1051,6 +1136,34 @@ func (e *lineEditor) moveCursorLeft() {
 	if e.pos <= 0 {
 		return
 	}
+	// If the character before the cursor is a newline, jump to the
+	// end of the previous line (multiline wraparound).
+	if e.pos >0 && e.content[e.pos-1] == '\n' {
+		// Find the start of the current line, then back up to the end
+		// of the previous line.
+		if e.pos-2 >=0 {
+			// Scan backward for the second-to-last newline
+			e.pos -=2
+			for e.pos >0 && e.content[e.pos] != '\n' {
+				e.pos--
+			}
+			if e.content[e.pos] == '\n' {
+				e.pos++ // move past the \n to first char of the line we just jumped to
+			} else {
+				e.pos =0
+			}
+			// Now e.pos is at start of previous line. Advance to end.
+			for e.pos < len(e.content) && e.content[e.pos] != '\n' {
+				e.pos++
+			}
+		} else {
+			// Cursor is right after the very first newline, so
+			// jump to position0.
+			e.pos =0
+		}
+		e.draw()
+		return
+	}
 	line := string(e.content[:e.pos])
 	bytePos := runeOffsetToByteOffset(e.content[:e.pos], e.pos)
 	newBytePos := graphemeCursorLeft(line, bytePos)
@@ -1060,6 +1173,14 @@ func (e *lineEditor) moveCursorLeft() {
 
 func (e *lineEditor) moveCursorRight() {
 	if e.pos >= len(e.content) {
+		return
+	}
+	// If the character at the cursor is a newline, jump to the first
+	// character of the next line (multiline wraparound).
+	if e.content[e.pos] == '\n' {
+		e.pos++
+		// Skip any consecutive newlines (only one, but be safe).
+		e.draw()
 		return
 	}
 	line := string(e.content)

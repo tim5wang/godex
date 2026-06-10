@@ -43,6 +43,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Debug flags are parsed before config so an operator can recover
+	// a clean goroutine or heap dump even when the rest of the program
+	// is wedged (Loading TUI... forever, alt-screen corrupt, etc.).
+	debugArgs, args := splitDebugArgs(args)
+	debug, err := parseDebugFlags(debugArgs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := startPprofServer(debug.PprofAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	installSignalDumpHandlers(debug)
 	if len(args) > 0 && (args[0] == "setup" || args[0] == "init") {
 		if err := app.RunSetupCommand(context.Background(), args[1:], os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -253,6 +268,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// splitDebugArgs separates debug flags from the rest of the argv
+// before config parsing. We accept the same prefix set as
+// parseDebugFlags. Unknown debug-prefixed arguments are left in the
+// remainder so parseDebugFlags can report them with a precise error.
+func splitDebugArgs(args []string) (debug []string, remainder []string) {
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "--pprof-addr="),
+			strings.HasPrefix(arg, "--dump-dir="),
+			strings.HasPrefix(arg, "--heap-dump="):
+			debug = append(debug, arg)
+		default:
+			remainder = append(remainder, arg)
+		}
+	}
+	return debug, remainder
 }
 
 func extractGlobalConfigArgs(args []string) (config.Options, []string, error) {

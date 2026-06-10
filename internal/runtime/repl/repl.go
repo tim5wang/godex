@@ -2,13 +2,14 @@ package repl
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chzyer/readline"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -26,23 +27,9 @@ type Session struct {
 	backend *backend.Service
 	stdout  io.Writer
 	stderr  io.Writer
-	// newEd produces a grapheme-aware line editor backed by
-	// bubbles/textarea + tea.Program. It replaces the previous
-	// chzyer/readline factory, which moved the cursor by raw byte
-	// offset and left the cursor "half a character" in when the
-	// line contained CJK. Overridable by tests so they can inject
-	// a fake editor that returns canned lines without spawning
-	// a tea.Program.
-	newEd   func(ctx context.Context, prompt string, in io.Reader, out io.Writer) (*Editor, error)
+	newRL   func(*readline.Config) (*readline.Instance, error)
 	session string
-	// printMu is held by both handleEvent (via printf) and the
-	// Run loop (via writePrompt and println) so a streaming
-	// assistant text delta cannot interleave with the prompt or
-	// with command output. It is a *sync.Mutex (not a value) so
-	// the field never gets copied by struct literals; go vet's
-	// copylocks checker would otherwise flag any test or future
-	// helper that does &Session{printMu: someMutex}.
-	printMu *sync.Mutex
+	printMu sync.Mutex
 }
 
 // New creates a REPL session bound to the shared backend.
@@ -52,8 +39,7 @@ func New(cfg *config.Config, service *backend.Service, stdout, stderr io.Writer)
 		backend: service,
 		stdout:  stdout,
 		stderr:  stderr,
-		newEd:   newEditor,
-		printMu: &sync.Mutex{},
+		newRL:   readline.NewEx,
 	}
 }
 
@@ -72,31 +58,22 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 	defer unsubscribe()
 
-	ed, err := s.newEd(ctx, "> ", os.Stdin, s.stdout)
+	rl, err := s.newReadline()
 	if err != nil {
 		return fmt.Errorf("initialize interactive prompt: %w", err)
 	}
-	defer ed.Close()
+	defer rl.Close()
 
 	for {
-		// The REPL loop owns the prompt. Editor is configured
-		// with io.Discard (see newEditor) so tea.Program never
-		// touches REPL stdout, and we print "> " ourselves under
-		// the same printMu that guards handleEvent's printf calls
-		// so a streaming assistant text delta cannot tear the
-		// prompt from the line the user is about to type on.
-		s.writePrompt(s.stdout)
-		line, err := ed.ReadLine()
-		// Ctrl+D (EOF) and Ctrl+C (clean quit) both flow through
-		// here. The editor returns io.EOF on either path; a
-		// genuinely empty buffer on Enter is reported as
-		// ErrEmptyLine and silently re-prompts, matching the
-		// historical readline behaviour.
+		line, err := rl.Readline()
+		if err == readline.ErrInterrupt {
+			if strings.TrimSpace(line) == "" {
+				return nil
+			}
+			continue
+		}
 		if err == io.EOF {
 			return nil
-		}
-		if errors.Is(err, ErrEmptyLine) {
-			continue
 		}
 		if err != nil {
 			return fmt.Errorf("read input: %w", err)
@@ -207,6 +184,17 @@ func findPendingApproval(requestID string, items []tools.PendingPermission) (too
 	return tools.PendingPermission{}, false
 }
 
+func (s *Session) newReadline() (*readline.Instance, error) {
+	historyPath := filepath.Join(s.cfg.TeamDir, "repl_history")
+	return s.newRL(&readline.Config{
+		Prompt:            "> ",
+		HistoryFile:       historyPath,
+		HistorySearchFold: true,
+		InterruptPrompt:   "^C",
+		EOFPrompt:         "exit",
+	})
+}
+
 func (s *Session) printBanner() {
 	s.println(s.stdout, "🤖 GoDex - AI Coding Agent")
 	s.println(s.stdout, "Type your messages (Ctrl+C to exit)")
@@ -247,19 +235,6 @@ func (s *Session) println(w io.Writer, args ...interface{}) {
 	s.printMu.Lock()
 	defer s.printMu.Unlock()
 	fmt.Fprintln(w, args...)
-}
-
-// writePrompt writes the REPL's interactive prompt prefix ("> ")
-// to w under the session's printMu. It does NOT append a newline
-// — chzyer/readline parity, and the user types on the same line
-// as the prompt in a non-TUI REPL. The function exists as a
-// single point of truth for the prompt string so the test in
-// repl_test.go can pin both the literal and the no-newline
-// guarantee.
-func (s *Session) writePrompt(w io.Writer) {
-	s.printMu.Lock()
-	defer s.printMu.Unlock()
-	fmt.Fprint(w, "> ")
 }
 
 func (s *Session) printf(w io.Writer, format string, args ...interface{}) {

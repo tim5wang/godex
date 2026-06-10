@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/charmbracelet/lipgloss"
@@ -42,12 +44,69 @@ func NewHighlighter() *Highlighter {
 	}
 }
 
-// Highlight returns syntax-highlighted lines for the given code and language.
+// highlightTimeout caps how long a single call to chroma/regexp2 may
+// run before we abandon the result and fall back to plain text. The
+// default is generous enough to highlight thousands of lines on a
+// fast machine, but tight enough that a runaway regexp2 NFA
+// (chroma v2.23.1 + dlclark/regexp2 v1.11.5) can no longer wedge the
+// TUI's Update loop. See ./godex.dump from 2026-06-10 for the
+// captured runaway: chroma -> matchRules -> regexp2.(*Regexp).run
+// in runner.go:76 spinning forever, WindowSizeMsg never delivered,
+// m.width stuck at 0, "Loading TUI..." forever.
+const highlightTimeout = 150 * time.Millisecond
+
+// Highlight returns syntax-highlighted lines for the given code and
+// language. It exists for backwards compatibility; new callers should
+// prefer HighlightWithTimeout so a runaway chroma/regexp2 NFA cannot
+// pin the TUI's Update goroutine.
 func (h *Highlighter) Highlight(code string, lang string) []string {
+	return h.HighlightWithTimeout(context.Background(), code, lang, highlightTimeout)
+}
+
+// HighlightWithTimeout runs the same pipeline as Highlight but abandons
+// the result after the given timeout. The return contract matches
+// Highlight: a non-nil []string on success, nil when the input is
+// empty or the language cannot be detected, and []string of plain
+// text lines when chroma itself errors out. The timeout case
+// additionally returns nil so the caller can fall back to a plain
+// text rendering of the code block.
+//
+// The timeout is enforced by running chroma on a fresh goroutine and
+// racing its result against a context-aware select. The chroma
+// goroutine is left to run to completion (or until process exit); we
+// cannot cancel it because chroma v2.23.1 does not take a context.
+// This is acceptable: a leaked goroutine that the runtime reclaims
+// at process exit is strictly better than a TUI that never recovers
+// from "Loading TUI...".
+func (h *Highlighter) HighlightWithTimeout(ctx context.Context, code string, lang string, timeout time.Duration) []string {
 	if strings.TrimSpace(code) == "" {
 		return nil
 	}
 
+	type result struct {
+		lines []string
+	}
+	done := make(chan result, 1)
+	go func() {
+		done <- result{lines: h.highlightNoTimeout(code, lang)}
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case r := <-done:
+		return r.lines
+	case <-ctx.Done():
+		return nil
+	case <-timer.C:
+		return nil
+	}
+}
+
+// highlightNoTimeout is the original chroma pipeline extracted so
+// HighlightWithTimeout can race it against a timer.
+func (h *Highlighter) highlightNoTimeout(code, lang string) []string {
 	var lexer chroma.Lexer
 	if lang != "" {
 		lexer = h.registry.Get(lang)
@@ -56,11 +115,9 @@ func (h *Highlighter) Highlight(code string, lang string) []string {
 		lexer = h.registry.Match("file." + lang)
 	}
 	if lexer == nil {
-		// 尝试自动检测: 用注册表中的所有 lexer 逐个尝试
 		lexer = h.detectLanguage(code)
 	}
 	if lexer == nil {
-		// 没有匹配的 lexer → 返回原始代码
 		return strings.Split(code, "\n")
 	}
 

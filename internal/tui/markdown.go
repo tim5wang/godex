@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -494,6 +496,35 @@ func (mr *MarkdownRenderer) applyInlineStyles(n ast.Node, text string) string {
 	return result
 }
 
+// maxCodeBlockLines caps how many lines of a single fenced code block
+// the TUI will feed to chroma. Code blocks longer than this are
+// folded into a head + "... N lines skipped ..." + tail
+// representation. This is the second line of defence against the
+// chroma v2.23.1 + dlclark/regexp2 v1.11.5 runaway that pinned the
+// TUI's Update goroutine at 100% CPU in 2026-06-10: the first line
+// is HighlightWithTimeout (bounds latency); this line bounds input
+// size so chroma never sees the pathological inputs that trigger
+// regexp2's catastrophic backtracking in the first place.
+const maxCodeBlockLines = 500
+
+// truncateCodeBlock folds very long code blocks into a head+tail
+// representation so the highlighter only ever sees a small, bounded
+// amount of input. The returned slice of strings is what feeds
+// chroma; the original code is not retained.
+func truncateCodeBlock(code string) (folded []string, skipped int) {
+	lines := strings.Split(code, "\n")
+	if len(lines) <= maxCodeBlockLines {
+		return lines, 0
+	}
+	head := maxCodeBlockLines * 2 / 3
+	tail := maxCodeBlockLines - head
+	out := make([]string, 0, head+tail+1)
+	out = append(out, lines[:head]...)
+	out = append(out, fmt.Sprintf("\u2026 %d lines skipped \u2026", len(lines)-head-tail))
+	out = append(out, lines[len(lines)-tail:]...)
+	return out, len(lines) - head - tail
+}
+
 // renderCodeBlock renders a code block with syntax highlighting and borders.
 func renderCodeBlock(hl *Highlighter, code, lang string, width int) []string {
 	var lines []string
@@ -507,13 +538,14 @@ func renderCodeBlock(hl *Highlighter, code, lang string, width int) []string {
 	lines = append(lines, codeBlockBorderStyle.Render("```"+langTag))
 
 	if hl != nil && code != "" {
-		highlighted := hl.Highlight(code, lang)
+		folded, _ := truncateCodeBlock(code)
+		highlighted := hl.HighlightWithTimeout(context.Background(), strings.Join(folded, "\n"), lang, highlightTimeout)
 		if len(highlighted) > 0 {
 			for _, line := range highlighted {
 				lines = append(lines, indent+line)
 			}
 		} else {
-			for _, line := range strings.Split(code, "\n") {
+			for _, line := range folded {
 				lines = append(lines, indent+codeBlockStyle.Render(line))
 			}
 		}

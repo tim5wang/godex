@@ -162,9 +162,13 @@ func TestStreamAssistantTextOpensAndClosesBlock(t *testing.T) {
 	s.handleEvent(events.Event{TurnID: "turn-1", Type: events.EventAssistantMessageComplete, Payload: events.TextPayload{}})
 
 	got := out.String()
-	want := "● hello world\n"
-	if got != want {
-		t.Fatalf("unexpected output:\nwant %q\ngot %q", want, got)
+	if !strings.HasPrefix(got, "● hello world\n") {
+		t.Fatalf("expected output to start with %q, got %q", "● hello world\n", got)
+	}
+	// The complete event also refreshes the status bar; verify it
+	// landed in the same write.
+	if !strings.Contains(got, "Assistant replied") {
+		t.Fatalf("expected status-bar refresh after completion, got %q", got)
 	}
 }
 
@@ -179,9 +183,8 @@ func TestStreamAssistantTextSwitchesBlockOnTurnChange(t *testing.T) {
 	s.handleEvent(events.Event{TurnID: "turn-2", Type: events.EventAssistantMessageComplete, Payload: events.TextPayload{}})
 
 	got := out.String()
-	want := "● first\n● second\n"
-	if got != want {
-		t.Fatalf("unexpected output:\nwant %q\ngot %q", want, got)
+	if !strings.HasPrefix(got, "● first\n● second\n") {
+		t.Fatalf("expected output to start with two assistant blocks, got %q", got)
 	}
 }
 
@@ -275,8 +278,11 @@ func TestHandleEventTurnCompletedEndsBlock(t *testing.T) {
 	s.handleEvent(events.Event{TurnID: "turn-1", Type: events.EventAssistantTextDelta, Payload: events.TextPayload{Text: "partial"}})
 	s.handleEvent(events.Event{TurnID: "turn-1", Type: events.EventTurnCompleted, Payload: events.TurnPayload{Status: "completed"}})
 
-	if !strings.HasSuffix(out.String(), "● partial\n") {
+	if !strings.Contains(out.String(), "● partial\n") {
 		t.Fatalf("expected partial block to end with newline, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "Turn completed") {
+		t.Fatalf("expected status bar to mention Turn completed, got %q", out.String())
 	}
 	if s.working {
 		t.Fatal("expected working=false after turn completion")
@@ -284,7 +290,8 @@ func TestHandleEventTurnCompletedEndsBlock(t *testing.T) {
 }
 
 // TestHandleEventTurnCompletedIsIdempotent verifies repeated
-// turn-complete events do not print extra newlines.
+// turn-complete events do not double-print the assistant block, but
+// each one does refresh the status bar.
 func TestHandleEventTurnCompletedIsIdempotent(t *testing.T) {
 	backend := newFakeBackend(t)
 	s, out, _ := newTestSession(t, backend)
@@ -293,8 +300,12 @@ func TestHandleEventTurnCompletedIsIdempotent(t *testing.T) {
 	s.handleEvent(events.Event{TurnID: "turn-1", Type: events.EventAssistantMessageComplete, Payload: events.TextPayload{}})
 	s.handleEvent(events.Event{TurnID: "turn-1", Type: events.EventAssistantMessageComplete, Payload: events.TextPayload{}})
 
-	if got := out.String(); got != "● partial\n" {
-		t.Fatalf("expected single trailing newline, got %q", got)
+	got := out.String()
+	if strings.Count(got, "● partial\n") !=1 {
+		t.Fatalf("expected exactly one assistant block, got %q", got)
+	}
+	if strings.Count(got, "Assistant replied") !=2 {
+		t.Fatalf("expected two status-bar refreshes, got %d in %q", strings.Count(got, "Assistant replied"), got)
 	}
 }
 
@@ -431,7 +442,7 @@ func TestMarkWorkingAndIdle(t *testing.T) {
 	go func() {
 		s.markWorking()
 		s.markIdle()
-		s.setStatus("hello")
+		s.setStatusOverride("hello")
 		close(done)
 	}()
 	select {
@@ -481,5 +492,187 @@ func TestHandleEventCommandCompletedErrorMarker(t *testing.T) {
 
 	if !strings.Contains(out.String(), "Command error: boom") {
 		t.Fatalf("expected error marker, got %q", out.String())
+	}
+}
+
+// TestRenderStatusBarReadyShape verifies the idle status bar
+// carries the model name and the focus chip and looks like the
+// legacy TUI's "Ready · Focus: Input" line.
+func TestRenderStatusBarReadyShape(t *testing.T) {
+	backend := newFakeBackend(t)
+	s, _, _ := newTestSession(t, backend)
+	s.cfg.Model = "test-model"
+	s.editorMu.Lock()
+	s.width =200
+	text := s.renderStatusBar()
+	s.editorMu.Unlock()
+
+	for _, want := range []string{"Ready", "Input", "test-model"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected status bar to contain %q, got %q", want, text)
+		}
+	}
+}
+
+// TestRenderStatusBarContextChip verifies the status bar shows the
+// context usage chip once the context summary has data.
+func TestRenderStatusBarContextChip(t *testing.T) {
+	backend := newFakeBackend(t)
+	s, _, _ := newTestSession(t, backend)
+	s.cfg.Model = "test-model"
+	s.editorMu.Lock()
+	s.contextSummary = tools.ContextInspection{
+		TotalTokenEstimate:6800,
+		CompressThreshold:256000,
+	}
+	s.width =200
+	text := s.renderStatusBar()
+	s.editorMu.Unlock()
+
+	for _, want := range []string{"6.8k/256k", "3%"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected status bar to contain %q, got %q", want, text)
+		}
+	}
+}
+
+// TestRenderStatusBarModelCallCountChip verifies the calls chip
+// appears only when at least one model_request event has been seen.
+func TestRenderStatusBarModelCallCountChip(t *testing.T) {
+	backend := newFakeBackend(t)
+	s, _, _ := newTestSession(t, backend)
+	s.editorMu.Lock()
+	s.modelCallCount =5
+	s.messageCount =2
+	s.width =200
+	text := s.renderStatusBar()
+	s.editorMu.Unlock()
+
+	for _, want := range []string{"calls 5", "msgs 2"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected status bar to contain %q, got %q", want, text)
+		}
+	}
+}
+
+// TestRenderStatusBarPermissionBlockerChip verifies the blocker
+// chip appears only when ActivePermissionBlocker is non-nil.
+func TestRenderStatusBarPermissionBlockerChip(t *testing.T) {
+	backend := newFakeBackend(t)
+	s, _, _ := newTestSession(t, backend)
+	s.editorMu.Lock()
+	s.pendingApproval = &rtbackend.PermissionBlocker{
+		RequestID: "perm-1",
+		ToolName: "bash",
+		Action: "exec",
+		Expiry: "expires in 4m",
+	}
+	s.width =200
+	text := s.renderStatusBar()
+	s.editorMu.Unlock()
+
+	for _, want := range []string{"Blocked by approval", "perm-1", "bash exec"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected status bar to contain %q, got %q", want, text)
+		}
+	}
+}
+
+// TestRenderStatusBarWorkingPhase verifies a model_request runner
+// phase flips the base label from Ready to a "Thinking" chip.
+func TestRenderStatusBarWorkingPhase(t *testing.T) {
+	backend := newFakeBackend(t)
+	s, _, _ := newTestSession(t, backend)
+	s.editorMu.Lock()
+	s.working = true
+	s.workingSince = s.now().Add(-3 * time.Second)
+	s.activePhase = "model_request"
+	s.width =200
+	text := s.renderStatusBar()
+	s.editorMu.Unlock()
+
+	if !strings.Contains(text, "Thinking") {
+		t.Fatalf("expected status bar to mention Thinking, got %q", text)
+	}
+}
+
+// TestRecordRunnerPhaseCountsModelRequest verifies a single
+// model_request runner phase event bumps the counter by one and a
+// duplicate event does not bump it again.
+func TestRecordRunnerPhaseCountsModelRequest(t *testing.T) {
+	backend := newFakeBackend(t)
+	s, _, _ := newTestSession(t, backend)
+
+	at := time.Unix(1700000000,0)
+	event := events.Event{
+		TurnID: "turn-1",
+		Type: events.EventRunnerPhaseChanged,
+		Timestamp: at,
+		Payload: events.RunnerPhasePayload{Phase: "model_request", Iteration:1},
+	}
+	s.recordRunnerPhase(event)
+	s.recordRunnerPhase(event)
+	s.recordRunnerPhase(events.Event{
+		TurnID: "turn-1",
+		Type: events.EventRunnerPhaseChanged,
+		Timestamp: at.Add(time.Second),
+		Payload: events.RunnerPhasePayload{Phase: "model_request", Iteration:2},
+	})
+
+	if s.modelCallCount !=2 {
+		t.Fatalf("expected two distinct model_request events, got %d", s.modelCallCount)
+	}
+}
+
+// TestApplySnapshotPullsMessageCountAndBlocker verifies the
+// bookkeeping helper copies the fields the status bar needs.
+func TestApplySnapshotPullsMessageCountAndBlocker(t *testing.T) {
+	backend := newFakeBackend(t)
+	s, _, _ := newTestSession(t, backend)
+
+	snap := &rtbackend.Snapshot{
+		Messages: []protocol.Message{
+			protocol.NewTextMessage(protocol.RoleUser, "a"),
+			protocol.NewTextMessage(protocol.RoleAssistant, "b"),
+		},
+		ActivePermissionBlocker: &rtbackend.PermissionBlocker{RequestID: "perm-1"},
+	}
+	s.applySnapshot(snap)
+
+	if s.messageCount !=2 {
+		t.Fatalf("expected messageCount=2, got %d", s.messageCount)
+	}
+	if s.pendingApproval == nil || s.pendingApproval.RequestID != "perm-1" {
+		t.Fatalf("expected blocker perm-1, got %+v", s.pendingApproval)
+	}
+}
+
+// TestFormatElapsed verifies the duration formatter produces the
+// expected shape for the common buckets we display in the status bar.
+func TestFormatElapsed(t *testing.T) {
+	cases := []struct {
+		d time.Duration
+		want string
+	}{
+		{500 * time.Millisecond, "<1s"},
+		{3 * time.Second, "3s"},
+		{65 * time.Second, "1m5s"},
+		{120 * time.Second, "2m"},
+	}
+	for _, c := range cases {
+		if got := formatElapsed(c.d); got != c.want {
+			t.Fatalf("formatElapsed(%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+// TestEllipsizeANSILeavesShortStringsAlone verifies the ellipsizer
+// only truncates strings that would otherwise overflow.
+func TestEllipsizeANSILeavesShortStringsAlone(t *testing.T) {
+	if got := ellipsizeANSI("hello",100); got != "hello" {
+		t.Fatalf("expected short string to pass through, got %q", got)
+	}
+	if got := ellipsizeANSI("hello",3); !strings.HasSuffix(got, "\u2026") {
+		t.Fatalf("expected long string to be ellipsized, got %q", got)
 	}
 }

@@ -53,12 +53,15 @@
 - 帮助文本已更新
 -8 个 flag parsing tests
 
-### Phase3:优化 streaming模式（未来）
+### Phase3:优化 streaming模式（部分完成）
 
-- 添加 glamour风格的 markdown渲染（streaming暂以原始 markdown 输出）
--监听 SIGWINCH，宽度变化时重画
-- 支持 terminal resize 时重绘状态行
--考虑把 streaming设为默认（需调研用户习惯）
+- ✅ 状态栏固定到输入框下方，ANSI行内刷新
+- ✅ 复用 legacy TUI 的 baseStatusLabel / contextUsageText / permissionBlocker 等渲染逻辑
+- ✅ 紧凑布局：`Ready · Input · MiniMax-M3 · 13k/256k 5% · msgs 18`
+- ✅ 模型调用计数（model_request runner phase 去重）
+- ✅ SIGWINCH 监听，resize 后状态栏自动 ellipsize
+- ⏳ glamour风格的 markdown渲染（streaming暂以原始 markdown 输出）
+- ⏳ 考虑把 streaming设为默认（需调研用户习惯）
 
 ### Phase4:移除 legacy bubbletea（暂缓）
 

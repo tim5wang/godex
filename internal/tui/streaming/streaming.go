@@ -3,19 +3,11 @@
 // In this mode the conversation history is written line-by-line to
 // stdout and relies on the terminal's native scrollback buffer for
 // history navigation. There is no alt-screen, no viewport diffing,
-// and no renderer loop. The bottom of the screen is reserved for
-// the line editor (input prompt) and a status line that is updated
-// in place using ANSI escape sequences.
+// and no renderer loop. The bottom of the screen is reserved for the
+// line editor (input prompt) and a status bar that is updated in
+// place using ANSI escape sequences.
 //
-// This package is the primary implementation of the perf refactor
-// described in docs/superpowers/plans/2026-06-11-tui-scrollback-streaming.md.
-// It coexists with the legacy full-screen bubbletea TUI in the
-// parent package, which is still used for interactive prompts that
-// require rich layouts (workbench, longtask detail, permission
-// review UI). The legacy TUI is suspended while the streaming mode
-// is the active surface.
-//
-// Architecture:
+// Layout:
 //
 // ┌──────────────────────────────────────────┐
 // │ Header (printed once at startup) │
@@ -24,20 +16,27 @@
 // │ conversation history (stdout, terminal │
 // │ scrolls naturally — no viewport) │
 // │──────────────────────────────────────────│
-// │ status line (ANSI in-place update) │
 // │ > _ (line editor) │
+// │ status bar (ANSI in-place update) │
 // └──────────────────────────────────────────┘
+//
+// The status bar carries the same information the legacy bubbletea
+// TUI's `renderHeartbeatLine` prints (Ready / Working / Thinking,
+// focus chip, model name, context usage, model call count, message
+// count) but in a flatter, terminal-scrollback-friendly layout.
 //
 // Concurrency model:
 //
 // - main goroutine: reads keystrokes via lineEditor.
 // - event goroutine: receives backend events from the sink channel
-// and writes formatted output to stdout under a mutex.
-// - status goroutine: tick refreshes the status line under the
-// same mutex while the agent is working.
+// and writes formatted output to stdout under printMu.
+// - SIGWINCH goroutine: updates s.width on terminal resize so the
+// status bar ellipsizes correctly.
 //
-// All stdout writes are serialized through printMu so a status-line
-// refresh never interleaves with a streaming text delta.
+// All stdout writes are serialized through printMu so a status-bar
+// refresh never interleaves with a streaming text delta. The line
+// editor and the status bar share the bottom rows; cross-region
+// redraws go through editorMu.
 package streaming
 
 import (
@@ -45,9 +44,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -63,28 +65,93 @@ import (
 	"github.com/tim5wang/godex/internal/tools"
 )
 
+// statusFocus mirrors tui.focusMode but only the values that the
+// streaming TUI exposes. It exists so the status bar can render the
+// same "Focus: Input / Workbench" hint the legacy TUI prints without
+// pulling in the bubbletea model.
+type statusFocus int
+
+const (
+	focusInput statusFocus = iota
+	focusWorkbench
+)
+
 // Session runs the streaming TUI loop against the shared runtime
 // backend. It is the streaming-mode counterpart of tui.Session.
 type Session struct {
-	cfg     *config.Config
+	cfg *config.Config
 	backend Backend
-	stdout  io.Writer
-	stderr  io.Writer
-	now     func() time.Time
+	stdout io.Writer
+	stderr io.Writer
+	now func() time.Time
 	printMu sync.Mutex
 
-	// editorMu guards the working flag and the status text. The line
-	// editor and the status bar share the bottom rows and must
-	// coordinate when they redraw.
+	// editorMu guards the working flag, the focus mode, and the
+	// other status-bar fields that the line editor and the bottom
+	// status bar share. All cross-region redraws go through this
+	// mutex so we never tear the bottom rows.
 	editorMu sync.Mutex
 
 	// working indicates the agent is producing output and the input
-	// prompt should be replaced with a "waiting" placeholder. Mirrors
-	// the heartbeat "working" state in the legacy TUI.
+	// prompt should be replaced with a "waiting" placeholder.
 	working bool
 
-	// status is the human-readable text shown on the bottom status line.
-	status string
+	// workingSince tracks when the current turn started so the status
+	// bar can show an elapsed-time indicator while working.
+	workingSince time.Time
+
+	// activePhase / activeToolName mirror the legacy TUI's runner
+	// phase tracking. They drive the "Thinking3s" / "Executing bash"
+	// labels in the status bar.
+	activePhase string
+	activeToolName string
+
+	// focus tracks which region the user is interacting with. The
+	// streaming TUI currently exposes only "Input" because the
+	// workbench lives behind a separate command, but we still surface
+	// the focus hint so muscle-memory for the legacy TUI carries over.
+	focus statusFocus
+
+	// pendingApproval is the most recent pending permission blocker.
+	// While non-nil the status bar shows a "Blocked by approval" chip
+	// alongside the regular fields.
+	pendingApproval *rtbackend.PermissionBlocker
+
+	// contextSummary is the latest context-usage snapshot from
+	// backend.ContextSummary. Refreshed after each turn completion
+	// and on demand via the snapshot ready event.
+	contextSummary tools.ContextInspection
+
+	// modelCallCount counts the number of model_request runner-phase
+	// events seen so far in this session. Drives the "calls N" chip.
+	modelCallCount int
+
+	// seenModelCallEvent tracks the dedup key of model_request events
+	// so the same event emitted twice (e.g. backend replay) does not
+	// inflate the call counter.
+	seenModelCallEvent map[string]struct{}
+
+	// messageCount is the number of messages in the most recent
+	// snapshot. Refreshed whenever a snapshot arrives.
+	messageCount int
+
+	// sessionID is the opened session id, kept here so renderStatus
+	// does not need to thread it through every call.
+	sessionID string
+
+	// locator is the session locator (channel:key) used by the
+	// banner and the status bar.
+	locator rtbackend.SessionLocator
+
+	// statusOverride is a free-form status message that takes
+	// precedence over the auto-derived labels (Ready / Thinking /
+	// etc.) until the next runner phase change or turn completion.
+	statusOverride string
+
+	// width is the latest terminal width observed via SIGWINCH or
+	// term.GetSize. Used to ellipsize the status bar so we never wrap
+	// onto a second line.
+	width int
 
 	// currentTurnID tracks the assistant turn we are appending text
 	// to, so consecutive deltas land on the same logical block.
@@ -113,12 +180,19 @@ type Backend interface {
 
 // New creates a streaming TUI session bound to the given backend.
 func New(cfg *config.Config, backend Backend, stdout, stderr io.Writer) *Session {
+	width, _, _ := term.GetSize(os.Stdout.Fd())
+	if width <= 0 {
+		width =100
+	}
 	return &Session{
-		cfg:     cfg,
+		cfg: cfg,
 		backend: backend,
-		stdout:  stdout,
-		stderr:  stderr,
-		now:     time.Now,
+		stdout: stdout,
+		stderr: stderr,
+		now: time.Now,
+		focus: focusInput,
+		width: width,
+		seenModelCallEvent: make(map[string]struct{}),
 	}
 }
 
@@ -126,10 +200,10 @@ func New(cfg *config.Config, backend Backend, stdout, stderr io.Writer) *Session
 //
 // The loop:
 //
-// 1. opens (or resumes) a session via the backend;
-// 2. prints the header and an initial snapshot of recent history;
-// 3. attaches an event sink that streams new content to stdout;
-// 4. reads input from the line editor and submits it.
+//1. opens (or resumes) a session via the backend;
+//2. prints the header and an initial snapshot of recent history;
+//3. attaches an event sink that streams new content to stdout;
+//4. reads input from the line editor and submits it.
 //
 // Ctrl+C cancels the current agent turn (if any) and exits on the
 // second press. Ctrl+D exits immediately.
@@ -138,11 +212,14 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	if err != nil {
 		return fmt.Errorf("open streaming session: %w", err)
 	}
+	s.sessionID = opened.SessionID
+	s.locator = locator
 
 	initial, err := s.backend.Snapshot(ctx, opened.SessionID)
 	if err != nil {
 		return fmt.Errorf("load streaming snapshot: %w", err)
 	}
+	s.applySnapshot(&initial)
 
 	unsubscribe, err := s.backend.AttachSink(opened.SessionID, events.SinkFunc(s.handleEvent))
 	if err != nil {
@@ -150,8 +227,30 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	}
 	defer unsubscribe()
 
+	// Best-effort initial context summary. Failure here is non-fatal
+	// because the status bar just omits the ctx chip until the next
+	// snapshot refresh surfaces one.
+	if summary, err := s.backend.ContextSummary(ctx, opened.SessionID); err == nil {
+		s.editorMu.Lock()
+		s.contextSummary = summary
+		s.editorMu.Unlock()
+	}
+
+	// Listen for SIGWINCH so the status bar can ellipsize itself to
+	// the new terminal width. We do not interrupt the line editor
+	// mid-keystroke; the next loop iteration redraws the bottom rows
+	// with the new width.
+	winchCh := make(chan os.Signal,1)
+	signal.Notify(winchCh, syscall.SIGWINCH)
+	defer signal.Stop(winchCh)
+	go s.watchWidth(winchCh)
+
 	s.printBanner(initial)
 	s.printHistory(initial)
+	// Print the initial layout: separator, prompt placeholder,
+	// status bar. After this the cursor sits on the input prompt row
+	// ready for the line editor to take over.
+	s.printInitialBottom()
 
 	ed := newLineEditor("> ")
 
@@ -164,6 +263,7 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 		} else {
 			s.drawPrompt("")
 		}
+		s.refreshStatusBar()
 
 		line, err := ed.ReadLine()
 		if err != nil {
@@ -198,7 +298,8 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 		if result.DispatchError != "" {
 			s.println(s.stdout, "Error: "+result.DispatchError)
 		}
-		s.setStatus(fmt.Sprintf("/%s completed", cmd.Name))
+		s.setStatusOverride("/" + cmd.Name + " completed")
+		s.refreshStatusBar()
 		return err
 	}
 
@@ -213,14 +314,15 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 	}
 	if err == nil {
 		s.markWorking()
-		s.setStatus("Submitted, waiting for assistant")
+		s.setStatusOverride("Submitted, waiting for assistant")
+		s.refreshStatusBar()
 	}
 	return err
 }
 
 // handleEvent is invoked by the backend on every event the TUI has
 // subscribed to. It writes user-facing content to stdout under the
-// print mutex.
+// print mutex and updates the status-bar fields.
 func (s *Session) handleEvent(event events.Event) {
 	switch event.Type {
 	case events.EventAssistantTextDelta:
@@ -230,7 +332,8 @@ func (s *Session) handleEvent(event events.Event) {
 	case events.EventAssistantMessageComplete:
 		s.finishAssistantBlock(event.TurnID)
 		s.markIdle()
-		s.setStatus("Assistant replied")
+		s.setStatusOverride("Assistant replied")
+		s.refreshStatusBar()
 	case events.EventUserMessageAccepted:
 		if payload, ok := event.Payload.(events.MessagePayload); ok {
 			s.println(s.stdout, renderUserLine(payload.Sender, payload.Text))
@@ -261,7 +364,8 @@ func (s *Session) handleEvent(event events.Event) {
 				s.println(s.stdout, payload.Output)
 			}
 			s.markIdle()
-			s.setStatus("/" + payload.Name + " completed")
+			s.setStatusOverride("/" + payload.Name + " completed")
+			s.refreshStatusBar()
 		}
 	case events.EventWarningRaised:
 		if payload, ok := event.Payload.(events.NoticePayload); ok && payload.Message != "" {
@@ -271,14 +375,85 @@ func (s *Session) handleEvent(event events.Event) {
 		if payload, ok := event.Payload.(events.NoticePayload); ok && payload.Message != "" {
 			s.println(s.stderr, "Error: "+payload.Message)
 		}
+	case events.EventRunnerPhaseChanged:
+		s.recordRunnerPhase(event)
+		s.refreshStatusBar()
 	case events.EventTurnCompleted:
 		s.finishAssistantBlock(event.TurnID)
 		s.markIdle()
 		if payload, ok := event.Payload.(events.TurnPayload); ok {
-			s.setStatus("Turn " + payload.Status)
+			s.setStatusOverride("Turn " + payload.Status)
 		} else {
-			s.setStatus("Turn completed")
+			s.setStatusOverride("Turn completed")
 		}
+		// Refresh context summary in the background; the next status
+		// bar draw will pick it up.
+		go s.refreshContextSummary()
+		s.refreshStatusBar()
+	case events.EventSnapshotReady:
+		// Fetch the snapshot on a background goroutine so the
+		// event sink stays responsive. The next status bar draw will
+		// pick up the new messageCount / pendingApproval.
+		go s.refreshSnapshot()
+	}
+}
+
+// applySnapshot copies the bookkeeping fields the status bar needs
+// out of the snapshot into the session. Caller must hold no locks;
+// this acquires editorMu.
+func (s *Session) applySnapshot(snap *rtbackend.Snapshot) {
+	if snap == nil {
+		return
+	}
+	s.editorMu.Lock()
+	defer s.editorMu.Unlock()
+	s.messageCount = len(snap.Messages)
+	s.pendingApproval = snap.ActivePermissionBlocker
+	s.rebuildModelCallStatsFromTimeline(snap.Timeline)
+}
+
+// refreshSnapshot reloads the snapshot from the backend and applies
+// the bookkeeping fields. Safe to call from a background goroutine.
+func (s *Session) refreshSnapshot() {
+	if s.sessionID == "" {
+		return
+	}
+	snap, err := s.backend.Snapshot(context.Background(), s.sessionID)
+	if err != nil {
+		return
+	}
+	s.applySnapshot(&snap)
+	s.refreshStatusBar()
+}
+
+// refreshContextSummary reloads the context summary from the
+// backend. Safe to call from a background goroutine.
+func (s *Session) refreshContextSummary() {
+	if s.sessionID == "" {
+		return
+	}
+	summary, err := s.backend.ContextSummary(context.Background(), s.sessionID)
+	if err != nil {
+		return
+	}
+	s.editorMu.Lock()
+	s.contextSummary = summary
+	s.editorMu.Unlock()
+	s.refreshStatusBar()
+}
+
+// watchWidth listens for SIGWINCH and updates s.width so the status
+// bar ellipsizes correctly. Runs until the channel is closed.
+func (s *Session) watchWidth(ch <-chan os.Signal) {
+	for range ch {
+		w, _, err := term.GetSize(os.Stdout.Fd())
+		if err != nil || w <= 0 {
+			continue
+		}
+		s.editorMu.Lock()
+		s.width = w
+		s.editorMu.Unlock()
+		s.refreshStatusBar()
 	}
 }
 
@@ -320,56 +495,381 @@ func (s *Session) finishAssistantBlock(turnID string) {
 func (s *Session) markWorking() {
 	s.editorMu.Lock()
 	s.working = true
+	s.workingSince = s.now()
 	s.editorMu.Unlock()
 }
 
 func (s *Session) markIdle() {
 	s.editorMu.Lock()
 	s.working = false
+	s.workingSince = time.Time{}
+	s.activePhase = ""
+	s.activeToolName = ""
 	s.editorMu.Unlock()
 }
 
-func (s *Session) setStatus(text string) {
+func (s *Session) setStatusOverride(text string) {
 	s.editorMu.Lock()
-	s.status = text
+	s.statusOverride = text
 	s.editorMu.Unlock()
+}
+
+// recordRunnerPhase updates the activePhase / activeToolName fields
+// from an EventRunnerPhaseChanged and bumps the model-call counter
+// when the phase is "model_request".
+func (s *Session) recordRunnerPhase(event events.Event) {
+	payload, ok := event.Payload.(events.RunnerPhasePayload)
+	if !ok {
+		return
+	}
+	s.editorMu.Lock()
+	defer s.editorMu.Unlock()
+	s.activePhase = payload.Phase
+	s.activeToolName = payload.ToolName
+	if payload.Phase == "model_request" {
+		key := modelCallEventKey(event)
+		if _, dup := s.seenModelCallEvent[key]; !dup {
+			s.seenModelCallEvent[key] = struct{}{}
+			s.modelCallCount++
+		}
+	}
+	s.statusOverride = "" // auto-derived labels win again
+}
+
+// rebuildModelCallStatsFromTimeline walks a snapshot's timeline once
+// to rebuild the model-call counter, mirroring the legacy TUI's
+// rebuildModelCallStats.
+func (s *Session) rebuildModelCallStatsFromTimeline(timeline []events.Event) {
+	s.seenModelCallEvent = make(map[string]struct{})
+	s.modelCallCount =0
+	for _, event := range timeline {
+		if event.Type != events.EventRunnerPhaseChanged {
+			continue
+		}
+		payload, ok := event.Payload.(events.RunnerPhasePayload)
+		if !ok {
+			continue
+		}
+		if payload.Phase != "model_request" {
+			continue
+		}
+		key := modelCallEventKey(event)
+		if _, dup := s.seenModelCallEvent[key]; dup {
+			continue
+		}
+		s.seenModelCallEvent[key] = struct{}{}
+		s.modelCallCount++
+	}
+}
+
+// modelCallEventKey produces a dedup key for a model_request event.
+// It intentionally mirrors the legacy TUI's implementation so the
+// two TUIs agree on what counts as a "call".
+func modelCallEventKey(event events.Event) string {
+	payload, ok := event.Payload.(events.RunnerPhasePayload)
+	phase := ""
+	iter :=0
+	if ok {
+		phase = payload.Phase
+		iter = payload.Iteration
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%d", event.Type, event.TurnID, event.Timestamp.UTC().Format(time.RFC3339Nano), phase, iter)
+}
+
+// printInitialBottom writes the prompt row + the first status bar
+// row, ending with the cursor on the prompt line so the line editor
+// can take over.
+func (s *Session) printInitialBottom() {
+	s.printMu.Lock()
+	defer s.printMu.Unlock()
+	sep := strings.Repeat("─", s.width)
+	fmt.Fprintln(s.stdout, sep)
+	fmt.Fprint(s.stdout, "> ")
+	fmt.Fprintf(s.stdout, "\x1b[2m%s\x1b[0m", s.renderStatusBar())
+	fmt.Fprintln(s.stdout)
 }
 
 // drawPrompt rewrites the input prompt region. `placeholder` is shown
 // in dim gray when the agent is working; empty string shows the live
 // line editor prompt.
+//
+// The line editor expects to be in charge of its own prompt row.
+// We only normalize the cursor position before the editor starts so
+// any stale ANSI sequences from a previous status-bar refresh are
+// cleared.
 func (s *Session) drawPrompt(placeholder string) {
 	s.editorMu.Lock()
 	defer s.editorMu.Unlock()
+	s.printMu.Lock()
+	defer s.printMu.Unlock()
 	if placeholder == "" {
-		// The line editor is responsible for its own prompt; we only
-		// emit the ANSI sequence to make sure the cursor is at column0
-		// in case a previous status-line refresh left it elsewhere.
-		fmt.Fprint(s.stdout, "\r\x1b[K")
-		fmt.Fprint(s.stdout, "> ")
+		fmt.Fprint(s.stdout, "\r\x1b[K> ")
 		return
 	}
 	fmt.Fprintf(s.stdout, "\r\x1b[K\x1b[2m> %s\x1b[0m", placeholder)
 }
 
-// drawStatus refreshes the status line that lives one row above the
-// input prompt. We use ANSI cursor up + clear-line + redraw to
-// update it in place.
+// refreshStatusBar rewrites the status bar in place. It assumes the
+// cursor is on the prompt row (one row above the status bar). We
+// move down one row, clear it, redraw, then move back up to the
+// prompt row.
 //
-// IMPORTANT: this function should only be called BEFORE the input
-// prompt has been drawn. Once the user has a live prompt, status
-// updates are deferred to the next prompt boundary so they don't
-// race with the user's keystrokes. We keep the public surface
-// because commands.Run() calls setStatus after a slash command — at
-// that point the prompt has been redrawn by the next loop iteration.
-func (s *Session) drawStatus() {
+// Safe to call from any goroutine.
+func (s *Session) refreshStatusBar() {
 	s.editorMu.Lock()
-	text := s.status
+	width := s.width
+	text := s.renderStatusBar()
 	s.editorMu.Unlock()
 
 	s.printMu.Lock()
 	defer s.printMu.Unlock()
-	fmt.Fprintf(s.stdout, "\n\x1b[2m%s\x1b[0m\n", text)
+	// \x1b[1B: down1 row (to status bar)
+	// \r: column0
+	// \x1b[K: clear to end of line
+	// text + dim reset
+	// \x1b[1A: back up to prompt row
+	fmt.Fprintf(s.stdout, "\x1b[1B\r\x1b[K\x1b[2m%s\x1b[0m\x1b[1A", ellipsizeANSI(text, width))
+}
+
+// renderStatusBar builds the compact status bar text from the
+// current session state. Caller must hold editorMu.
+//
+// Layout: Ready · Input · MiniMax-M3 ·6.8k/256k3% · calls5 · msgs2
+//
+// Working turns prepend a heartbeat label:
+//
+// Thinking3s · Input · MiniMax-M3 · ...
+func (s *Session) renderStatusBar() string {
+	parts := make([]string,0,8)
+
+	//1. base status (Ready / Working / Thinking / Executing ...)
+	parts = append(parts, s.baseStatusLabel())
+
+	//2. focus
+	parts = append(parts, s.focusLabel())
+
+	//3. model name
+	if model := s.modelLabel(); model != "" {
+		parts = append(parts, model)
+	}
+
+	//4. context usage (only if summary has data)
+	if ctx := s.contextUsageLabel(); ctx != "" {
+		parts = append(parts, ctx)
+	}
+
+	//5. permission blocker (only when pending)
+	if block := s.permissionBlockerLabel(); block != "" {
+		parts = append(parts, block)
+	}
+
+	//6. call count
+	if s.modelCallCount >0 {
+		parts = append(parts, fmt.Sprintf("calls %d", s.modelCallCount))
+	}
+
+	//7. message count
+	if s.messageCount >0 {
+		parts = append(parts, fmt.Sprintf("msgs %d", s.messageCount))
+	}
+
+	//8. transient override (slash command results, transient errors)
+	if s.statusOverride != "" {
+		parts = append(parts, s.statusOverride)
+	}
+
+	return strings.Join(parts, " \u00b7 ")
+}
+
+// baseStatusLabel produces the leading "Ready" / "Thinking3s" /
+// "Executing bash" label. Mirrors the legacy TUI's baseRuntimeStatus.
+//
+// The free-form statusOverride (slash command results, transient
+// errors) is appended at the end of renderStatusBar so we do not
+// duplicate it here.
+func (s *Session) baseStatusLabel() string {
+	if !s.working && s.statusOverride == "" {
+		return "Ready"
+	}
+	if !s.working {
+		// When idle but a status override is set (slash command just
+		// ran) we still want a "Ready" prefix so the override reads
+		// naturally: "Ready · /tasks completed".
+		return "Ready"
+	}
+	elapsed := ""
+	if !s.workingSince.IsZero() {
+		elapsed = formatElapsed(s.now().Sub(s.workingSince))
+	}
+	phase := strings.TrimSpace(s.activePhase)
+	tool := strings.TrimSpace(s.activeToolName)
+	switch {
+	case tool != "":
+		return "Executing " + tool + " " + elapsed
+	case phase == "model_request", phase == "context_sanitized":
+		return "Thinking " + elapsed
+	case phase == "awaiting_tools":
+		return "Awaiting tools " + elapsed
+	case phase == "tools_completed":
+		return "Processing results " + elapsed
+	case phase == "final_response":
+		return "Writing response " + elapsed
+	case phase == "recovery_attempted":
+		return "Recovering " + elapsed
+	case phase == "interrupted", phase == "error":
+		return "Handling error " + elapsed
+	case phase == "injection_drained":
+		return "Processing input " + elapsed
+	default:
+		return "Working " + elapsed
+	}
+}
+
+// focusLabel returns the focus chip. In streaming mode the focus is
+// always Input because the workbench is a separate command, but we
+// still surface the chip so users can tell which keys are live.
+func (s *Session) focusLabel() string {
+	switch s.focus {
+	case focusWorkbench:
+		return "Workbench"
+	default:
+		return "Input"
+	}
+}
+
+// modelLabel returns the configured model name. We use cfg.Model
+// directly for now; a later iteration can resolve the active profile
+// to pull a friendlier display name the way the legacy TUI does.
+func (s *Session) modelLabel() string {
+	if s.cfg == nil {
+		return ""
+	}
+	name := strings.TrimSpace(s.cfg.Model)
+	if name == "" {
+		return ""
+	}
+	return name
+}
+
+// contextUsageLabel produces the "ctx6.8k/256k3%" chip. Returns
+// empty string when no context usage is known so the caller can omit
+// the chip entirely.
+func (s *Session) contextUsageLabel() string {
+	total := s.contextSummary.TotalTokenEstimate
+	if total <= 0 {
+		total = s.contextSummary.TokenEstimate
+	}
+	if total <= 0 {
+		total = s.contextSummary.TokenBreakdown.Total
+	}
+	if total <= 0 {
+		return ""
+	}
+	threshold := s.contextSummary.CompressThreshold
+	if threshold <= 0 && s.cfg != nil {
+		threshold = s.cfg.CompressThreshold
+	}
+	if threshold <= 0 {
+		return "ctx " + formatCompactNumber(total)
+	}
+	pct := int(math.Round(float64(total) / float64(threshold) *100))
+	if pct <0 {
+		pct =0
+	}
+	if pct >100 {
+		pct =100
+	}
+	return fmt.Sprintf("%s/%s %d%%", formatCompactNumber(total), formatCompactNumber(threshold), pct)
+}
+
+// permissionBlockerLabel returns the "Blocked by approval" chip when
+// a pending approval is blocking the turn. Empty otherwise.
+func (s *Session) permissionBlockerLabel() string {
+	if s.pendingApproval == nil {
+		return ""
+	}
+	parts := []string{"Blocked by approval"}
+	if id := strings.TrimSpace(s.pendingApproval.RequestID); id != "" {
+		parts = append(parts, id)
+	}
+	action := strings.TrimSpace(s.pendingApproval.ToolName) + " " + strings.TrimSpace(s.pendingApproval.Action)
+	action = strings.Join(strings.Fields(action), " ")
+	if action != "" {
+		parts = append(parts, action)
+	}
+	if expiry := strings.TrimSpace(s.pendingApproval.Expiry); expiry != "" {
+		parts = append(parts, expiry)
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatElapsed renders a duration as "1s", "12s", "2m3s", etc.
+func formatElapsed(d time.Duration) string {
+	if d <0 {
+		d =0
+	}
+	if d < time.Second {
+		return "<1s"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	minutes := int(d.Minutes())
+	seconds := int(d.Seconds()) - minutes*60
+	if seconds == 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dm%ds", minutes, seconds)
+}
+
+// formatCompactNumber formats a token count with k/m suffixes.
+func formatCompactNumber(value int) string {
+	switch {
+	case value >=1_000_000:
+		return fmt.Sprintf("%.1fm", float64(value)/1_000_000)
+	case value >=10_000:
+		return fmt.Sprintf("%dk", value/1000)
+	case value >=1_000:
+		return fmt.Sprintf("%.1fk", float64(value)/1_000)
+	default:
+		return fmt.Sprintf("%d", value)
+	}
+}
+
+// ellipsizeANSI truncates a string to fit maxWidth display columns,
+// accounting for ANSI escape sequences so a `\x1b[2m...\x1b[0m`
+// wrapper does not get cut in half. We approximate by counting only
+// printable runes; this is good enough for the short status chips.
+func ellipsizeANSI(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return s
+	}
+	// Walk the string, skipping CSI sequences (\x1b[...m).
+	width :=0
+	out := strings.Builder{}
+	inEscape := false
+	for _, r := range s {
+		if r == 0x1b {
+			inEscape = true
+			out.WriteRune(r)
+			continue
+		}
+		if inEscape {
+			out.WriteRune(r)
+			if r == 'm' || r == 'K' || r == 'A' || r == 'B' {
+				inEscape = false
+			}
+			continue
+		}
+		w := uniseg.StringWidth(string(r))
+		if width+w > maxWidth-1 {
+			out.WriteString("\u2026")
+			break
+		}
+		width += w
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 // printBanner prints the initial header that lives at the top of the
@@ -391,7 +891,7 @@ func (s *Session) printBanner(snap rtbackend.Snapshot) {
 // backend knows. We do not print every message from a long history;
 // only the most recent N to avoid dumping megabytes into the buffer.
 func (s *Session) printHistory(snap rtbackend.Snapshot) {
-	const maxRecent = 30
+	const maxRecent =30
 	msgs := snap.Messages
 	if len(msgs) > maxRecent {
 		s.println(s.stdout, fmt.Sprintf("… showing last %d of %d messages; press /history to inspect older entries …", maxRecent, len(msgs)))
@@ -442,9 +942,9 @@ func isInterrupt(err error) bool {
 // near-clone of internal/runtime/repl.editor — duplicated here so
 // the streaming package does not pull in the full REPL surface area.
 type lineEditor struct {
-	prompt  string
+	prompt string
 	content []rune
-	pos     int
+	pos int
 }
 
 func newLineEditor(prompt string) *lineEditor {
@@ -464,24 +964,24 @@ func (e *lineEditor) ReadLine() (string, error) {
 	defer term.Restore(os.Stdin.Fd(), state)
 
 	e.content = e.content[:0]
-	e.pos = 0
+	e.pos =0
 
 	for {
-		buf := make([]byte, 64)
+		buf := make([]byte,64)
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
 			return "", err
 		}
 		b := buf[:n]
 
-		if b[0] == '\x1b' && n > 1 {
+		if b[0] == '\x1b' && n >1 {
 			e.handleEscape(b)
 			continue
 		}
 
-		for i := 0; i < n; {
+		for i :=0; i < n; {
 			r, size := utf8.DecodeRune(b[i:])
-			if r == utf8.RuneError && size == 1 {
+			if r == utf8.RuneError && size ==1 {
 				i++
 				continue
 			}
@@ -496,7 +996,7 @@ func (e *lineEditor) ReadLine() (string, error) {
 				e.deleteRuneBefore()
 			case r == 0x15:
 				e.content = e.content[:0]
-				e.pos = 0
+				e.pos =0
 			default:
 				e.insertRune(r)
 			}
@@ -508,7 +1008,7 @@ func (e *lineEditor) ReadLine() (string, error) {
 }
 
 func (e *lineEditor) handleEscape(b []byte) {
-	if len(b) < 3 {
+	if len(b) <3 {
 		return
 	}
 	if b[0] != '\x1b' || b[1] != '[' {
@@ -527,13 +1027,13 @@ func (e *lineEditor) draw() {
 	before := string(e.content[:e.pos])
 	cursorCol := uniseg.StringWidth(e.prompt) + uniseg.StringWidth(before)
 	fmt.Fprintf(os.Stdout, "\r%s%s\x1b[K", e.prompt, line)
-	if cursorCol > 0 {
+	if cursorCol >0 {
 		fmt.Fprintf(os.Stdout, "\x1b[%dG", cursorCol+1)
 	}
 }
 
 func (e *lineEditor) insertRune(r rune) {
-	e.content = append(e.content, 0)
+	e.content = append(e.content,0)
 	copy(e.content[e.pos+1:], e.content[e.pos:])
 	e.content[e.pos] = r
 	e.pos++
@@ -576,8 +1076,8 @@ func runeOffsetToByteOffset(runes []rune, pos int) int {
 	if pos >= len(runes) {
 		pos = len(runes)
 	}
-	offset := 0
-	for i := 0; i < pos; i++ {
+	offset :=0
+	for i :=0; i < pos; i++ {
 		offset += utf8.RuneLen(runes[i])
 	}
 	return offset
@@ -587,7 +1087,7 @@ func byteOffsetToRuneOffset(runes []rune, bytePos int) int {
 	if bytePos <= 0 {
 		return 0
 	}
-	offset := 0
+	offset :=0
 	for i, r := range runes {
 		offset += utf8.RuneLen(r)
 		if offset > bytePos {
@@ -610,7 +1110,7 @@ func graphemeCursorLeft(line string, from int) int {
 		from = len(line)
 	}
 	clusters := uniseg.NewGraphemes(line)
-	candidate := 0
+	candidate :=0
 	for clusters.Next() {
 		start, end := clusters.Positions()
 		if end > from {
@@ -631,7 +1131,7 @@ func graphemeCursorRight(line string, from int) int {
 		return len(line)
 	}
 	if from <= 0 {
-		from = 0
+		from =0
 	}
 	boundary := nextRuneBoundary(line, from)
 	clusters := uniseg.NewGraphemes(line[boundary:])
@@ -680,7 +1180,7 @@ func renderToolFinishLine(name, output, errMsg string) string {
 		name = "tool"
 	}
 	preview := output
-	if len(preview) > 240 {
+	if len(preview) >240 {
 		preview = preview[:240] + "…"
 	}
 	if errMsg != "" {
@@ -707,7 +1207,7 @@ func formatToolInput(input map[string]interface{}) string {
 		return ""
 	}
 	if cmd, ok := input["command"].(string); ok {
-		return fmt.Sprintf("%q", truncate(cmd, 80))
+		return fmt.Sprintf("%q", truncate(cmd,80))
 	}
 	if path, ok := input["path"].(string); ok {
 		return fmt.Sprintf("%q", path)
@@ -767,7 +1267,7 @@ func findPendingApproval(requestID string, items []tools.PendingPermission) (too
 			}
 		}
 	}
-	if len(items) > 0 {
+	if len(items) >0 {
 		return items[0], true
 	}
 	return tools.PendingPermission{}, false

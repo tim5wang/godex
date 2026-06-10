@@ -34,11 +34,12 @@ import (
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/services/usage"
 	"github.com/tim5wang/godex/internal/tui"
+	"github.com/tim5wang/godex/internal/tui/streaming"
 	"github.com/tim5wang/godex/internal/version"
 )
 
 func main() {
-	configOptions, args, err := extractGlobalConfigArgs(os.Args[1:])
+	configOptions, tuiMode, args, err := extractGlobalConfigArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -195,6 +196,9 @@ func main() {
 			return repl.New(cfg, service, os.Stdout, os.Stderr).Run(ctx)
 		},
 		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
+			if tuiMode == "scrollback" || tuiMode == "streaming" {
+				return streaming.New(cfg, service, os.Stdout, os.Stderr).Run(ctx, locator)
+			}
 			return tui.New(cfg, service, os.Stdout).Run(ctx, locator)
 		},
 		Doctor: func(ctx context.Context) (string, error) {
@@ -288,28 +292,45 @@ func splitDebugArgs(args []string) (debug []string, remainder []string) {
 	return debug, remainder
 }
 
-func extractGlobalConfigArgs(args []string) (config.Options, []string, error) {
+func extractGlobalConfigArgs(args []string) (config.Options, string, []string, error) {
 	options := config.Options{}
+	tuiMode := ""
 	remaining := make([]string, 0, len(args))
 	for idx := 0; idx < len(args); idx++ {
 		arg := args[idx]
 		switch {
 		case arg == "--config":
 			if idx+1 >= len(args) {
-				return options, nil, fmt.Errorf("missing value for --config")
+				return options, tuiMode, nil, fmt.Errorf("missing value for --config")
 			}
 			options.ConfigPath = args[idx+1]
 			idx++
 		case strings.HasPrefix(arg, "--config="):
 			options.ConfigPath = strings.TrimSpace(strings.TrimPrefix(arg, "--config="))
 			if options.ConfigPath == "" {
-				return options, nil, fmt.Errorf("missing value for --config")
+				return options, tuiMode, nil, fmt.Errorf("missing value for --config")
+			}
+		case arg == "--tui-mode" || strings.HasPrefix(arg, "--tui-mode="):
+			value := ""
+			if strings.HasPrefix(arg, "--tui-mode=") {
+				value = strings.TrimSpace(strings.TrimPrefix(arg, "--tui-mode="))
+			} else if idx+1 < len(args) {
+				value = args[idx+1]
+				idx++
+			}
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "", "full", "bubbletea":
+				tuiMode = ""
+			case "scrollback", "streaming", "plain":
+				tuiMode = "scrollback"
+			default:
+				return options, tuiMode, nil, fmt.Errorf("invalid --tui-mode value %q (want scrollback|full)", value)
 			}
 		default:
 			remaining = append(remaining, arg)
 		}
 	}
-	return options, remaining, nil
+	return options, tuiMode, remaining, nil
 }
 
 func applyRuntimeConfig(

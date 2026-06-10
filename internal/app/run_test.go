@@ -354,6 +354,8 @@ func TestRunnerRootHelpIsGroupedAndExampleDriven(t *testing.T) {
 		"  Automation & channels",
 		"Examples:",
 		"godex service install --scope user --addr 127.0.0.1:8088",
+		"--tui-mode mode",
+		"scrollback streams",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected help to contain %q:\n%s", want, output)

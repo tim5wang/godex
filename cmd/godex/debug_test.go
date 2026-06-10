@@ -16,9 +16,9 @@ func TestDebugFlagsParsePprofAddr(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		raw      string
+		raw       string
 		wantPprof string
-		wantErr  bool
+		wantErr   bool
 	}{
 		{raw: "--pprof-addr=:6060", wantPprof: ":6060"},
 		{raw: "--pprof-addr=localhost:7000", wantPprof: "localhost:7000"},

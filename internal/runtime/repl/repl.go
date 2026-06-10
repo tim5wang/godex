@@ -2,14 +2,13 @@ package repl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
+	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chzyer/readline"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -27,7 +26,14 @@ type Session struct {
 	backend *backend.Service
 	stdout  io.Writer
 	stderr  io.Writer
-	newRL   func(*readline.Config) (*readline.Instance, error)
+	// newEd produces a grapheme-aware line editor backed by
+	// bubbles/textarea + tea.Program. It replaces the previous
+	// chzyer/readline factory, which moved the cursor by raw byte
+	// offset and left the cursor "half a character" in when the
+	// line contained CJK. Overridable by tests so they can inject
+	// a fake editor that returns canned lines without spawning
+	// a tea.Program.
+	newEd   func(ctx context.Context, prompt string, in io.Reader, out io.Writer) (*Editor, error)
 	session string
 	printMu sync.Mutex
 }
@@ -39,7 +45,7 @@ func New(cfg *config.Config, service *backend.Service, stdout, stderr io.Writer)
 		backend: service,
 		stdout:  stdout,
 		stderr:  stderr,
-		newRL:   readline.NewEx,
+		newEd:   newEditor,
 	}
 }
 
@@ -58,22 +64,24 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 	defer unsubscribe()
 
-	rl, err := s.newReadline()
+	ed, err := s.newEd(ctx, "> ", os.Stdin, s.stdout)
 	if err != nil {
 		return fmt.Errorf("initialize interactive prompt: %w", err)
 	}
-	defer rl.Close()
+	defer ed.Close()
 
 	for {
-		line, err := rl.Readline()
-		if err == readline.ErrInterrupt {
-			if strings.TrimSpace(line) == "" {
-				return nil
-			}
-			continue
-		}
+		line, err := ed.ReadLine()
+		// Ctrl+D (EOF) and Ctrl+C (clean quit) both flow through
+		// here. The editor returns io.EOF on either path; a
+		// genuinely empty buffer on Enter is reported as
+		// ErrEmptyLine and silently re-prompts, matching the
+		// historical readline behaviour.
 		if err == io.EOF {
 			return nil
+		}
+		if errors.Is(err, ErrEmptyLine) {
+			continue
 		}
 		if err != nil {
 			return fmt.Errorf("read input: %w", err)
@@ -182,17 +190,6 @@ func findPendingApproval(requestID string, items []tools.PendingPermission) (too
 		return items[0], true
 	}
 	return tools.PendingPermission{}, false
-}
-
-func (s *Session) newReadline() (*readline.Instance, error) {
-	historyPath := filepath.Join(s.cfg.TeamDir, "repl_history")
-	return s.newRL(&readline.Config{
-		Prompt:            "> ",
-		HistoryFile:       historyPath,
-		HistorySearchFold: true,
-		InterruptPrompt:   "^C",
-		EOFPrompt:         "exit",
-	})
 }
 
 func (s *Session) printBanner() {

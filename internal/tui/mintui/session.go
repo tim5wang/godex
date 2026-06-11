@@ -38,18 +38,6 @@ import (
 	"github.com/tim5wang/godex/internal/tools"
 )
 
-// ANSI style constants for mintui output color differentiation.
-const (
-	ansiReset   = "\x1b[0m"
-	ansiBold    = "\x1b[1m"
-	ansiDim     = "\x1b[2m"
-	ansiCyan    = "\x1b[36m"
-	ansiGreen   = "\x1b[32m"
-	ansiYellow  = "\x1b[33m"
-	ansiRed     = "\x1b[31m"
-	ansiMagenta = "\x1b[35m"
-)
-
 // Backend is the surface area of the runtime backend that the
 // min-tui frontend depends on. Mirrors the streaming Backend
 // interface; trimming happens at the wiring site.
@@ -365,11 +353,11 @@ func (s *Session) handleEvent(event events.Event) {
 		s.refreshSnapshot()
 	case events.EventWarningRaised:
 		if np, ok := event.Payload.(events.NoticePayload); ok && np.Message != "" {
-			s.tui.WriteString("\n" + ansiYellow + "⚠ " + np.Message + ansiReset + "\n")
+			s.tui.WriteString("\n⚠ " + np.Message + "\n")
 		}
 	case events.EventErrorRaised:
 		if np, ok := event.Payload.(events.NoticePayload); ok && np.Message != "" {
-			s.tui.WriteString("\n" + ansiRed + "✗ " + np.Message + ansiReset + "\n")
+			s.tui.WriteString("\n✗ " + np.Message + "\n")
 		}
 	}
 }
@@ -383,10 +371,10 @@ func (s *Session) renderToolCallStarted(event events.Event) {
 		return
 	}
 	// Build a one-line summary: name + optional input snippet.
-	line := "\n" + ansiMagenta + "● " + ansiReset + ansiBold + name + ansiReset
+	line := "\n▶ " + name
 	// Extract a short input preview (up to ~120 chars).
 	if input := extractToolInputSummary(event); input != "" {
-		line += " " + ansiDim + input + ansiReset
+		line += "  " + input
 	}
 	s.tui.WriteString(line + "\n")
 }
@@ -399,16 +387,16 @@ func (s *Session) renderToolCallFinished(event events.Event) {
 
 	switch {
 	case errText != "":
-		s.tui.WriteString(ansiRed + "  ✗ " + errText + ansiReset + "\n")
+		s.tui.WriteString("  ✗ " + errText + "\n")
 	case output != "":
 		// Show a condensed output (first line, capped).
 		summary := firstLine(output, 200)
-		s.tui.WriteString(ansiGreen + "  ✓ " + ansiDim + summary + ansiReset + "\n")
+		s.tui.WriteString("  ✓ " + summary + "\n")
 	default:
 		if name == "" {
-			s.tui.WriteString(ansiGreen + "  ✓ done" + ansiReset + "\n")
+			s.tui.WriteString("  ✓ done\n")
 		} else {
-			s.tui.WriteString(ansiGreen + "  ✓ " + name + ansiReset + "\n")
+			s.tui.WriteString("  ✓ " + name + "\n")
 		}
 	}
 }
@@ -514,7 +502,7 @@ func (s *Session) writeStoredMessage(msg protocol.Message) {
 	switch role {
 	case "user":
 		if text != "" {
-			s.tui.WriteString(ansiBold + ansiCyan + "› you: " + ansiReset + text + "\n\n")
+			s.tui.WriteString("› you: " + text + "\n\n")
 		}
 	case "assistant":
 		if text != "" {
@@ -522,7 +510,7 @@ func (s *Session) writeStoredMessage(msg protocol.Message) {
 		}
 	case "tool", "system":
 		if text != "" {
-			s.tui.WriteString(ansiDim + text + ansiReset + "\n\n")
+			s.tui.WriteString(text + "\n\n")
 		}
 	}
 }
@@ -587,8 +575,10 @@ func (s *Session) renderStatusWith(summary tools.ContextInspection, label string
 		}
 		parts = append(parts, strings.Join(blockerParts, " "))
 	}
-	// Context usage: "128k/512k 25%"
-	if pct := ctxPct(summary); pct != "" {
+	// Context usage: "128k/512k 25%" — denominator is the
+	// compress threshold (same as bubbletea TUI), not
+	// TotalTokenEstimate which often equals TokenEstimate.
+	if pct := ctxPctWithThreshold(summary, s.cfg.CompressThreshold); pct != "" {
 		parts = append(parts, pct)
 	}
 	// Largest context source (top 1).
@@ -608,9 +598,42 @@ func (s *Session) renderStatusWith(summary tools.ContextInspection, label string
 	return strings.Join(parts, " · ")
 }
 
-// ctxPct formats a "used/total pct" string.  Token counts are
-// rendered as integer k (e.g. "128k/512k 25%") so the status
-// bar stays scannable; non-integer k values round half-up.
+// ctxPctWithThreshold formats a "used/threshold pct" string
+// matching the bubbletea TUI semantics: denominator is the
+// compress threshold (from config), and numerator uses the
+// summary's TotalTokenEstimate (current total). Falls back to
+// the summary's own CompressThreshold, then TokenEstimate.
+func ctxPctWithThreshold(summary tools.ContextInspection, cfgThreshold int) string {
+	threshold := cfgThreshold
+	if threshold <= 0 {
+		threshold = summary.CompressThreshold
+	}
+	if threshold <= 0 {
+		return ""
+	}
+	// Use the current pressure, preferring TotalTokenEstimate
+	// (which includes overhead) over TokenEstimate.
+	used := summary.TotalTokenEstimate
+	if used <= 0 {
+		used = summary.TokenEstimate
+	}
+	if used <= 0 {
+		used = summary.TokenBreakdown.Total
+	}
+	if used <= 0 {
+		return ""
+	}
+	pct := int((float64(used) * 100.0 / float64(threshold)) + 0.5)
+	if pct > 100 {
+		pct = 100
+	}
+	usedK := (used + 500) / 1000
+	thresholdK := (threshold + 500) / 1000
+	return fmt.Sprintf("%dk/%dk %d%%", usedK, thresholdK, pct)
+}
+
+// ctxPct is kept for test compatibility. It uses the summary's
+// own TotalTokenEstimate field as denominator.
 func ctxPct(summary tools.ContextInspection) string {
 	if summary.TotalTokenEstimate <= 0 {
 		return ""

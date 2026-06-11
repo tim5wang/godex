@@ -245,9 +245,10 @@ func TestRefreshSnapshotRefreshesContextSummary(t *testing.T) {
 	b := newFakeBackend()
 	b.ctx = tools.ContextInspection{
 		TokenEstimate:      128000,
-		TotalTokenEstimate: 512000,
+		TotalTokenEstimate: 128000,
+		CompressThreshold:  512000,
 	}
-	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"}, b, &strings.Builder{}, &strings.Builder{})
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3", CompressThreshold: 512000}, b, &strings.Builder{}, &strings.Builder{})
 
 	// Before any snapshot: no ctx chip.
 	if got := s.renderStatus("Ready"); strings.Contains(got, "128k/512k 25%") {

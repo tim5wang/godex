@@ -32,7 +32,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
-	minitui "github.com/tim5wang/godex/internal/tui/mintui/minitui"
+	minitui "github.com/tim5wang/min-tui"
 	rtbackend "github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/tools"

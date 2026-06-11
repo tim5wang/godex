@@ -86,23 +86,32 @@ type Session struct {
 	// summary refresh and event filtering.
 	sessionID string
 
-	// modelCallCount / messageCount mirror the streaming TUI's
-	// bookkeeping so the status bar can show "calls N · msgs M".
-	modelCallCount int
-	messageCount   int
-	seenModelEvent map[string]struct{}
+	// messageCount tracks the number of messages in the
+	// session, refreshed on each snapshot.
+	messageCount int
+
+	// ctxSummary is the latest context-usage snapshot from
+	// backend.ContextSummary.  Refreshed on every snapshot so
+	// the status bar can show live "128k/512k 25%" pressure.
+	ctxSummary tools.ContextInspection
+
+	// lastStatusText / lastStatusStyle are the most recent
+	// values passed to setStatus.  Cached locally (under
+	// statusMu) so tests can assert what the bar would show
+	// without needing a real min-tui frontend.
+	lastStatusText  string
+	lastStatusStyle minitui.StatusStyle
 }
 
 // New constructs a Session bound to the given backend. It does
 // not touch the terminal; the terminal is acquired in Run.
 func New(cfg *config.Config, backend Backend, stdout, stderr io.Writer) *Session {
 	return &Session{
-		cfg:           cfg,
-		backend:       backend,
-		stdout:        stdout,
-		stderr:        stderr,
-		now:           time.Now,
-		seenModelEvent: make(map[string]struct{}),
+		cfg:     cfg,
+		backend: backend,
+		stdout:  stdout,
+		stderr:  stderr,
+		now:     time.Now,
 	}
 }
 
@@ -147,6 +156,9 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	// canvas along with the input box.
 	s.writeBanner(locator, initial)
 	s.writeHistory(initial)
+	// Set an initial status now so the bar has a heartbeat
+	// before the context summary round-trip completes; the
+	// final status with the ctx chip is set just below.
 	s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
 
 	// Subscribe to backend events. The sink handler writes
@@ -159,8 +171,12 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	defer unsubscribe()
 
 	// Best-effort initial context summary for the status bar.
+	// Cache it on the session so subsequent turn-completion
+	// redraws continue to show the live "128k/512k 25%"
+	// pressure until the next refresh.
 	if summary, err := s.backend.ContextSummary(ctx, opened.SessionID); err == nil {
-		s.setStatus(s.renderStatusWith(summary, "Ready"), minitui.StatusDefault)
+		s.ctxSummary = summary
+		s.setStatus(s.renderStatusWith(s.ctxSummary, "Ready"), minitui.StatusDefault)
 	}
 
 	for {
@@ -229,7 +245,13 @@ func (s *Session) registerSlashCommands() {
 				if err != nil {
 					ctx.Write("Error: " + err.Error() + "\n")
 				}
-				ctx.SetStatus("/"+cmd.Name+" completed", minitui.StatusInfo)
+				// Status-bar feedback is intentionally omitted
+				// so the godex heartbeat (Ready · Input ·
+				// Model · ctx · calls · msgs) stays visible.
+				// The /command completed line below is a
+				// short confirmation written to the output
+				// area instead.
+				ctx.Write("✓ /" + cmd.Name + " completed\n")
 			},
 		})
 	}
@@ -264,8 +286,11 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 			if result.DispatchError != "" {
 				s.tui.WriteString("Error: " + result.DispatchError + "\n")
 			}
+			// Short confirmation in the output area; do not
+			// touch the status bar so the godex heartbeat
+			// stays visible.
+			s.tui.WriteString("✓ /" + cmd.Name + " completed\n")
 		}
-		s.setStatus("/"+cmd.Name+" completed", minitui.StatusInfo)
 		return err
 	}
 
@@ -358,7 +383,14 @@ func (s *Session) refreshSnapshot() {
 		return
 	}
 	s.messageCount = len(snap.Messages)
-	s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
+	// Refresh the context-usage snapshot so the status bar
+	// shows live "128k/512k 25%" pressure.  Best-effort: a
+	// failure here is non-fatal because the status bar just
+	// omits the ctx chip until the next refresh succeeds.
+	if summary, sumErr := s.backend.ContextSummary(context.Background(), s.sessionID); sumErr == nil {
+		s.ctxSummary = summary
+	}
+	s.setStatus(s.renderStatusWith(s.ctxSummary, "Ready"), minitui.StatusDefault)
 }
 
 // ── output rendering ─────────────────────────────────────────────
@@ -424,6 +456,11 @@ func firstNMessages(msgs []protocol.Message, n int) []protocol.Message {
 func (s *Session) setStatus(text string, style minitui.StatusStyle) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
+	// Cache the latest text locally so tests can assert the
+	// bar's content without needing a real min-tui frontend
+	// (s.tui may be nil in tests).
+	s.lastStatusText = text
+	s.lastStatusStyle = style
 	if s.tui != nil {
 		s.tui.SetStatus(text, style)
 	}
@@ -449,7 +486,7 @@ func (s *Session) applyRunnerPhase(phase, tool string) {
 }
 
 func (s *Session) renderStatus(label string) string {
-	return s.renderStatusWith(tools.ContextInspection{}, label)
+	return s.renderStatusWith(s.ctxSummary, label)
 }
 
 func (s *Session) renderStatusWith(summary tools.ContextInspection, label string) string {
@@ -458,20 +495,24 @@ func (s *Session) renderStatusWith(summary tools.ContextInspection, label string
 	if pct := ctxPct(summary); pct != "" {
 		parts = append(parts, pct)
 	}
-	parts = append(parts, fmt.Sprintf("calls %d", s.modelCallCount))
 	parts = append(parts, fmt.Sprintf("msgs %d", s.messageCount))
 	return strings.Join(parts, " · ")
 }
 
+// ctxPct formats a "used/total pct" string.  Token counts are
+// rendered as integer k (e.g. "128k/512k 25%") so the status
+// bar stays scannable; non-integer k values round half-up.
 func ctxPct(summary tools.ContextInspection) string {
 	if summary.TotalTokenEstimate <= 0 {
 		return ""
 	}
-	pct := int(float64(summary.TokenEstimate) * 100.0 / float64(summary.TotalTokenEstimate))
-	return fmt.Sprintf("%.1fk/%dk %d%%",
-		float64(summary.TokenEstimate)/1000.0,
-		summary.TotalTokenEstimate/1000,
-		pct)
+	pct := int((float64(summary.TokenEstimate) * 100.0 / float64(summary.TotalTokenEstimate)) + 0.5)
+	if pct > 100 {
+		pct = 100
+	}
+	usedK := (summary.TokenEstimate + 500) / 1000
+	totalK := (summary.TotalTokenEstimate + 500) / 1000
+	return fmt.Sprintf("%dk/%dk %d%%", usedK, totalK, pct)
 }
 
 // ── event payload helpers ────────────────────────────────────────

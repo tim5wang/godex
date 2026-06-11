@@ -9,6 +9,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
+	minitui "github.com/tim5wang/min-tui"
 	rtbackend "github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/tools"
@@ -138,6 +139,121 @@ func TestDispatchRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	}
 	if b.asyncCalls != 0 {
 		t.Fatalf("SubmitAsync should not have been called for slash commands")
+	}
+}
+
+// TestSlashCommandDoesNotOverwriteStatusBar verifies that
+// running a slash command leaves the godex heartbeat status
+// ("Ready · Input · Model · ctx · msgs") visible.
+//
+// Regression for: dispatchInput used to call
+// s.setStatus("/"+cmd.Name+" completed", StatusInfo) after
+// each /command, which clobbered the carefully designed
+// heartbeat.  The fix moves the confirmation to the output
+// area ("✓ /name completed\n") and leaves SetStatus untouched.
+func TestSlashCommandDoesNotOverwriteStatusBar(t *testing.T) {
+	b := newFakeBackend()
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"}, b, &strings.Builder{}, &strings.Builder{})
+
+	// Pretend a heartbeat status is already on the bar.
+	heartbeat := s.renderStatus("Ready")
+	s.setStatus(heartbeat, minitui.StatusDefault)
+
+	if err := s.dispatchInput(context.Background(), b.sess.SessionID, "/help"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	// The status bar must still show the heartbeat, NOT
+	// "/help completed".
+	if s.lastStatusText != heartbeat {
+		t.Fatalf("status bar was clobbered: want %q, got %q", heartbeat, s.lastStatusText)
+	}
+	if strings.Contains(s.lastStatusText, "completed") {
+		t.Fatalf("status bar contains 'completed': %q", s.lastStatusText)
+	}
+}
+
+// TestCtxPctFormatsAsIntegerK verifies that the ctx chip in
+// the status bar is rendered as "<used>k/<total>k <pct>%"
+// with integer k values (no decimal point) so it stays
+// scannable.  Regression for: the previous format was
+// "128.0k/512k 25%" which cluttered the status bar.
+func TestCtxPctFormatsAsIntegerK(t *testing.T) {
+	cases := []struct {
+		name   string
+		used   int
+		total  int
+		want   string
+	}{
+		{"evenly_divisible", 128000, 512000, "128k/512k 25%"},
+		{"rounds_up", 128500, 512000, "129k/512k 25%"},
+		{"rounds_down", 127499, 512000, "127k/512k 25%"},
+		{"half_rounds_up", 127500, 512000, "128k/512k 25%"},
+		{"tiny", 1, 1000, "0k/1k 0%"},
+		{"half_full", 256000, 512000, "256k/512k 50%"},
+		{"overrides_at_100", 600000, 512000, "600k/512k 100%"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ctxPct(tools.ContextInspection{
+				TokenEstimate:      c.used,
+				TotalTokenEstimate: c.total,
+			})
+			if got != c.want {
+				t.Fatalf("ctxPct(used=%d, total=%d) = %q, want %q", c.used, c.total, got, c.want)
+			}
+		})
+	}
+}
+
+// TestCtxPctEmptyWhenTotalZero verifies that the ctx chip is
+// omitted (empty string) when the backend hasn't reported a
+// context budget yet, instead of rendering a misleading
+// "0k/0k 0%" string.
+func TestCtxPctEmptyWhenTotalZero(t *testing.T) {
+	if got := ctxPct(tools.ContextInspection{}); got != "" {
+		t.Fatalf("ctxPct() with zero total = %q, want empty string", got)
+	}
+}
+
+// TestRenderStatusDoesNotIncludeModelRequestCount verifies
+// that the status bar no longer shows the "calls N" chip
+// (which tracked model_request runner-phase events).
+// Regression for: users reported the model_request counter
+// was uninformative and cluttered the bar.
+func TestRenderStatusDoesNotIncludeModelRequestCount(t *testing.T) {
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"},
+		newFakeBackend(), &strings.Builder{}, &strings.Builder{})
+
+	got := s.renderStatus("Ready")
+	if strings.Contains(got, "calls ") {
+		t.Fatalf("status bar should not contain 'calls' chip, got %q", got)
+	}
+}
+
+// TestRefreshSnapshotRefreshesContextSummary verifies that
+// calling refreshSnapshot updates s.ctxSummary from the
+// backend, so the next renderStatus includes the live
+// "128k/512k 25%" pressure chip.
+func TestRefreshSnapshotRefreshesContextSummary(t *testing.T) {
+	b := newFakeBackend()
+	b.ctx = tools.ContextInspection{
+		TokenEstimate:      128000,
+		TotalTokenEstimate: 512000,
+	}
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"}, b, &strings.Builder{}, &strings.Builder{})
+
+	// Before any snapshot: no ctx chip.
+	if got := s.renderStatus("Ready"); strings.Contains(got, "128k/512k 25%") {
+		t.Fatalf("before refresh: status bar should not contain ctx chip, got %q", got)
+	}
+
+	// refreshSnapshot should pull the summary from the backend
+	// and update the cached ctxSummary.  The next renderStatus
+	// must include the chip.
+	s.refreshSnapshot()
+	if got := s.renderStatus("Ready"); !strings.Contains(got, "128k/512k 25%") {
+		t.Fatalf("after refresh: status bar should contain ctx chip, got %q", got)
 	}
 }
 

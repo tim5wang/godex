@@ -347,15 +347,13 @@ func TestRunnerRootHelpIsGroupedAndExampleDriven(t *testing.T) {
 		"Quick start:",
 		"Commands:",
 		"  Chat",
-		"repl",
+		"    tui        Start the full bubbletea TUI",
 		"  Web & service",
 		"acp-server",
 		"  Config",
 		"  Automation & channels",
 		"Examples:",
 		"godex service install --scope user --addr 127.0.0.1:8088",
-		"--tui-mode mode",
-		"scrollback streams",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected help to contain %q:\n%s", want, output)
@@ -364,8 +362,8 @@ func TestRunnerRootHelpIsGroupedAndExampleDriven(t *testing.T) {
 	if strings.Contains(output, "godex [--config path] login openai|codex") {
 		t.Fatalf("expected root help to avoid dense ungrouped command list:\n%s", output)
 	}
-	if strings.Contains(output, "    tui") || strings.Contains(output, "godex tui") {
-		t.Fatalf("expected root help to omit removed tui subcommand:\n%s", output)
+	if !strings.Contains(output, "    tui") || !strings.Contains(output, "godex tui") {
+		t.Fatalf("expected root help to include tui subcommand:\n%s", output)
 	}
 }
 
@@ -704,7 +702,6 @@ func TestRunnerServeUsesInjectedServeFunction(t *testing.T) {
 
 func TestRunnerDefaultsToTUI(t *testing.T) {
 	var got backend.SessionLocator
-	replCalled := false
 	runner := &Runner{
 		Cfg:     &config.Config{},
 		Backend: &fakeBackend{},
@@ -712,11 +709,6 @@ func TestRunnerDefaultsToTUI(t *testing.T) {
 		Stderr:  &bytes.Buffer{},
 		Stdin:   strings.NewReader(""),
 		Now:     time.Now,
-		RunREPL: func(ctx context.Context) error {
-			_ = ctx
-			replCalled = true
-			return nil
-		},
 		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
 			_ = ctx
 			got = locator
@@ -727,52 +719,63 @@ func TestRunnerDefaultsToTUI(t *testing.T) {
 	if err := runner.Run(context.Background(), nil); err != nil {
 		t.Fatalf("run default tui: %v", err)
 	}
-	if replCalled {
-		t.Fatal("expected default command not to call repl")
-	}
 	if got.Channel != "local" || got.Key != "default" {
 		t.Fatalf("unexpected default tui locator: %+v", got)
 	}
 }
 
-func TestRunnerExplicitREPLUsesReadline(t *testing.T) {
-	called := false
-	runner := &Runner{
-		Cfg:     &config.Config{},
-		Backend: &fakeBackend{},
-		Stdout:  &bytes.Buffer{},
-		Stderr:  &bytes.Buffer{},
-		Stdin:   strings.NewReader(""),
-		Now:     time.Now,
-		RunREPL: func(ctx context.Context) error {
-			_ = ctx
-			called = true
-			return nil
-		},
-	}
-
-	if err := runner.Run(context.Background(), []string{"repl"}); err != nil {
-		t.Fatalf("run repl: %v", err)
-	}
-	if !called {
-		t.Fatal("expected repl runner to be called")
-	}
-}
-
-func TestRunnerTUISubcommandRemoved(t *testing.T) {
+func TestRunnerReplSubcommandIsRemoved(t *testing.T) {
+	// The repl subcommand was removed when the legacy readline
+	// TUI was replaced by min-tui.  An operator who still types
+	// "godex repl" gets an "unknown subcommand" error rather
+	// than a silent fallback to the TUI.
 	runner := &Runner{
 		Cfg:    &config.Config{},
 		Stdout: &bytes.Buffer{},
 		Stderr: &bytes.Buffer{},
 		Now:    time.Now,
 		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
-			t.Fatalf("tui subcommand should not call RunTUI")
+			t.Fatalf("repl subcommand should not fall through to RunTUI")
+			return nil
+		},
+	}
+	err := runner.Run(context.Background(), []string{"repl"})
+	if err == nil || !strings.Contains(err.Error(), `unknown subcommand "repl"`) {
+		t.Fatalf("expected unknown subcommand error, got %v", err)
+	}
+}
+
+func TestRunnerTUISubcommandCallsRunTUI(t *testing.T) {
+	var got backend.SessionLocator
+	var fullCalled, tuiCalled bool
+	runner := &Runner{
+		Cfg:    &config.Config{},
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+		Now:    time.Now,
+		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
+			tuiCalled = true
+			got = locator
+			return nil
+		},
+		RunFullTUI: func(ctx context.Context, locator backend.SessionLocator) error {
+			fullCalled = true
+			got = locator
 			return nil
 		},
 	}
 	err := runner.Run(context.Background(), []string{"tui"})
-	if err == nil || !strings.Contains(err.Error(), `unknown subcommand "tui"`) {
-		t.Fatalf("expected unknown tui subcommand, got %v", err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Channel != "web" || got.Key != "default" {
+		t.Fatalf("expected locator web:default, got %s:%s", got.Channel, got.Key)
+	}
+	if !fullCalled {
+		t.Fatalf("expected godex tui to call RunFullTUI")
+	}
+	if tuiCalled {
+		t.Fatalf("expected godex tui to prefer RunFullTUI over RunTUI")
 	}
 }
 

@@ -68,8 +68,8 @@ type Runner struct {
 	Stderr        io.Writer
 
 	Now          func() time.Time
-	RunREPL      func(context.Context) error
 	RunTUI       func(context.Context, backend.SessionLocator) error
+	RunFullTUI   func(context.Context, backend.SessionLocator) error
 	Serve        func(context.Context, string) error
 	Doctor       func(context.Context) (string, error)
 	WeixinSetup  func(context.Context) error
@@ -97,6 +97,8 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "tui":
+		return r.runTUI(ctx, args[1:])
 	case "ask":
 		return r.runAsk(ctx, args[1:])
 	case "command":
@@ -133,15 +135,6 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 		return RunSetupCommand(ctx, args[1:], r.Stdout, r.Stderr)
 	case "init":
 		return runSetupCommandNamed(ctx, "init", args[1:], r.Stdout, r.Stderr)
-	case "repl":
-		if containsHelpArg(args[1:]) {
-			fmt.Fprintln(r.Stdout, replHelpText())
-			return nil
-		}
-		if r.RunREPL == nil {
-			return fmt.Errorf("repl mode unavailable")
-		}
-		return r.RunREPL(ctx)
 	case "serve":
 		return r.runServe(ctx, args[1:])
 	case "service":
@@ -350,7 +343,13 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 	if len(fs.Args()) > 0 {
 		return fmt.Errorf("unexpected tui arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	if r.RunTUI == nil {
+	// godex tui always uses the full bubbletea TUI. Fall back
+	// to RunTUI if RunFullTUI is not wired (test compat).
+	fn := r.RunFullTUI
+	if fn == nil {
+		fn = r.RunTUI
+	}
+	if fn == nil {
 		return fmt.Errorf("tui mode unavailable")
 	}
 
@@ -359,7 +358,7 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 		profile = r.Cfg.DefaultAgentProfileForChannel("tui")
 	}
 	applyLocatorAgentProfile(&locator, profile)
-	return r.RunTUI(ctx, locator)
+	return fn(ctx, locator)
 }
 
 func (r *Runner) runDoctor(ctx context.Context, args []string) error {
@@ -1133,7 +1132,8 @@ func rootHelpText() string {
 		"",
 		"Usage:",
 		"  godex [global flags] <command> [flags]",
-		"  godex                         Start the terminal UI",
+		"  godex                         Start the lightweight min-tui",
+		"  godex tui                     Start the full bubbletea TUI",
 		"",
 		"Quick start:",
 		"  godex init                     Initialize a workspace",
@@ -1144,9 +1144,9 @@ func rootHelpText() string {
 		"",
 		"Commands:",
 		"  Chat",
+		"    tui        Start the full bubbletea TUI",
 		"    ask        Run a one-shot prompt",
 		"    command    Run a slash command",
-		"    repl       Open the legacy readline session",
 		"    longtask   Create, run, and inspect durable story-loop tasks",
 		"",
 		"  Web & service",
@@ -1174,10 +1174,6 @@ func rootHelpText() string {
 		"",
 		"Global flags:",
 		"  --config path    Use an explicit godex.yaml for this process",
-		"  --tui-mode mode  TUI frontend for interactive use: full (default) or scrollback",
-		"                   scrollback streams conversation history to the terminal",
-		"                   scrollback and relies on the terminal scrollback buffer;",
-		"                   it avoids the full-screen redraw cost of the legacy UI.",
 		"",
 		"Profiles:",
 		"  ACP/CLI/TUI default to the lean coding profile; Web and IM channels default to general.",
@@ -1386,19 +1382,6 @@ func containsHelpArg(args []string) bool {
 		}
 	}
 	return false
-}
-
-func replHelpText() string {
-	return strings.Join([]string{
-		"Usage:",
-		"  godex repl [--session key] [--profile general|coding]",
-		"",
-		"Open an interactive readline session for chatting with the agent.",
-		"",
-		"Flags:",
-		"  --session string   session key or channel:key",
-		"  --profile string   agent profile: general or coding",
-	}, "\n")
 }
 
 func longtaskHelpText() string {

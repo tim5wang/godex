@@ -38,6 +38,18 @@ import (
 	"github.com/tim5wang/godex/internal/tools"
 )
 
+// ANSI style constants for mintui output color differentiation.
+const (
+	ansiReset   = "\x1b[0m"
+	ansiBold    = "\x1b[1m"
+	ansiDim     = "\x1b[2m"
+	ansiCyan    = "\x1b[36m"
+	ansiGreen   = "\x1b[32m"
+	ansiYellow  = "\x1b[33m"
+	ansiRed     = "\x1b[31m"
+	ansiMagenta = "\x1b[35m"
+)
+
 // Backend is the surface area of the runtime backend that the
 // min-tui frontend depends on. Mirrors the streaming Backend
 // interface; trimming happens at the wiring site.
@@ -101,17 +113,24 @@ type Session struct {
 	// without needing a real min-tui frontend.
 	lastStatusText  string
 	lastStatusStyle minitui.StatusStyle
+
+	// snapshot tracks the latest backend snapshot so the status
+	// bar can surface permission blockers.
+	snapshot         rtbackend.Snapshot
+	modelCallCount   int
+	seenModelCallIDs map[string]struct{}
 }
 
 // New constructs a Session bound to the given backend. It does
 // not touch the terminal; the terminal is acquired in Run.
 func New(cfg *config.Config, backend Backend, stdout, stderr io.Writer) *Session {
 	return &Session{
-		cfg:     cfg,
-		backend: backend,
-		stdout:  stdout,
-		stderr:  stderr,
-		now:     time.Now,
+		cfg:              cfg,
+		backend:          backend,
+		stdout:           stdout,
+		stderr:           stderr,
+		now:              time.Now,
+		seenModelCallIDs: make(map[string]struct{}),
 	}
 }
 
@@ -332,10 +351,9 @@ func (s *Session) handleEvent(event events.Event) {
 		text := extractTextField(event)
 		s.finishAssistantBlock(text)
 	case events.EventToolCallStarted:
-		name := extractToolName(event)
-		s.tui.WriteString("\n● " + name + "\n")
+		s.renderToolCallStarted(event)
 	case events.EventToolCallFinished:
-		s.tui.WriteString("  done\n")
+		s.renderToolCallFinished(event)
 	case events.EventRunnerPhaseChanged:
 		phase, tool := extractRunnerPhase(event)
 		s.applyRunnerPhase(phase, tool)
@@ -347,11 +365,50 @@ func (s *Session) handleEvent(event events.Event) {
 		s.refreshSnapshot()
 	case events.EventWarningRaised:
 		if np, ok := event.Payload.(events.NoticePayload); ok && np.Message != "" {
-			s.tui.WriteString("\n⚠ " + np.Message + "\n")
+			s.tui.WriteString("\n" + ansiYellow + "⚠ " + np.Message + ansiReset + "\n")
 		}
 	case events.EventErrorRaised:
 		if np, ok := event.Payload.(events.NoticePayload); ok && np.Message != "" {
-			s.tui.WriteString("\n✗ " + np.Message + "\n")
+			s.tui.WriteString("\n" + ansiRed + "✗ " + np.Message + ansiReset + "\n")
+		}
+	}
+}
+
+// renderToolCallStarted renders a tool call start with name and
+// condensed input summary so the user can see what the agent is
+// doing without needing to expand.
+func (s *Session) renderToolCallStarted(event events.Event) {
+	name := extractToolName(event)
+	if name == "" {
+		return
+	}
+	// Build a one-line summary: name + optional input snippet.
+	line := "\n" + ansiMagenta + "● " + ansiReset + ansiBold + name + ansiReset
+	// Extract a short input preview (up to ~120 chars).
+	if input := extractToolInputSummary(event); input != "" {
+		line += " " + ansiDim + input + ansiReset
+	}
+	s.tui.WriteString(line + "\n")
+}
+
+// renderToolCallFinished renders completion status: ✓ done
+// or ✗ error with a short output/error summary.
+func (s *Session) renderToolCallFinished(event events.Event) {
+	name := extractToolName(event)
+	output, errText := extractToolOutputError(event)
+
+	switch {
+	case errText != "":
+		s.tui.WriteString(ansiRed + "  ✗ " + errText + ansiReset + "\n")
+	case output != "":
+		// Show a condensed output (first line, capped).
+		summary := firstLine(output, 200)
+		s.tui.WriteString(ansiGreen + "  ✓ " + ansiDim + summary + ansiReset + "\n")
+	default:
+		if name == "" {
+			s.tui.WriteString(ansiGreen + "  ✓ done" + ansiReset + "\n")
+		} else {
+			s.tui.WriteString(ansiGreen + "  ✓ " + name + ansiReset + "\n")
 		}
 	}
 }
@@ -382,7 +439,34 @@ func (s *Session) refreshSnapshot() {
 	if err != nil {
 		return
 	}
+	s.snapshot = snap
 	s.messageCount = len(snap.Messages)
+	// Rebuild model-call count from timeline events.
+	s.modelCallCount = 0
+	s.seenModelCallIDs = make(map[string]struct{})
+	for _, ev := range snap.Timeline {
+		if ev.Type != events.EventRunnerPhaseChanged {
+			continue
+		}
+		switch p := ev.Payload.(type) {
+		case events.RunnerPhasePayload:
+			if p.Phase == "model_request" {
+				key := ev.TurnID + "|" + ev.Timestamp.String()
+				if _, ok := s.seenModelCallIDs[key]; !ok {
+					s.seenModelCallIDs[key] = struct{}{}
+					s.modelCallCount++
+				}
+			}
+		case map[string]interface{}:
+			if phase, _ := p["phase"].(string); phase == "model_request" {
+				key := ev.TurnID + "|" + ev.Timestamp.String()
+				if _, ok := s.seenModelCallIDs[key]; !ok {
+					s.seenModelCallIDs[key] = struct{}{}
+					s.modelCallCount++
+				}
+			}
+		}
+	}
 	// Refresh the context-usage snapshot so the status bar
 	// shows live "128k/512k 25%" pressure.  Best-effort: a
 	// failure here is non-fatal because the status bar just
@@ -430,7 +514,7 @@ func (s *Session) writeStoredMessage(msg protocol.Message) {
 	switch role {
 	case "user":
 		if text != "" {
-			s.tui.WriteString("› you: " + text + "\n\n")
+			s.tui.WriteString(ansiBold + ansiCyan + "› you: " + ansiReset + text + "\n\n")
 		}
 	case "assistant":
 		if text != "" {
@@ -438,7 +522,7 @@ func (s *Session) writeStoredMessage(msg protocol.Message) {
 		}
 	case "tool", "system":
 		if text != "" {
-			s.tui.WriteString(text + "\n\n")
+			s.tui.WriteString(ansiDim + text + ansiReset + "\n\n")
 		}
 	}
 }
@@ -492,10 +576,35 @@ func (s *Session) renderStatus(label string) string {
 func (s *Session) renderStatusWith(summary tools.ContextInspection, label string) string {
 	parts := []string{label}
 	parts = append(parts, "Input", s.cfg.Model)
+	// Permission blocker takes priority if present.
+	if blocker := s.snapshot.ActivePermissionBlocker; blocker != nil {
+		blockerParts := []string{"Blocked"}
+		if id := strings.TrimSpace(blocker.RequestID); id != "" {
+			blockerParts = append(blockerParts, id)
+		}
+		if action := strings.TrimSpace(blocker.ToolName + " " + blocker.Action); strings.TrimSpace(action) != "" {
+			blockerParts = append(blockerParts, action)
+		}
+		parts = append(parts, strings.Join(blockerParts, " "))
+	}
+	// Context usage: "128k/512k 25%"
 	if pct := ctxPct(summary); pct != "" {
 		parts = append(parts, pct)
 	}
-	parts = append(parts, fmt.Sprintf("msgs %d", s.messageCount))
+	// Largest context source (top 1).
+	if len(summary.LargestContextSources) > 0 {
+		parts = append(parts, fmt.Sprintf("top %s %dk",
+			summary.LargestContextSources[0].Source,
+			(summary.LargestContextSources[0].Tokens+500)/1000))
+	}
+	// Model call count.
+	if s.modelCallCount > 0 {
+		parts = append(parts, fmt.Sprintf("calls %d", s.modelCallCount))
+	}
+	// Message count.
+	if s.messageCount > 0 {
+		parts = append(parts, fmt.Sprintf("msgs %d", s.messageCount))
+	}
 	return strings.Join(parts, " · ")
 }
 
@@ -548,6 +657,75 @@ func extractToolName(event events.Event) string {
 		}
 	}
 	return ""
+}
+
+// extractToolInputSummary returns a one-line text preview of the
+// tool call input. Capped to ~120 display characters so it fits
+// in the output area without cluttering.
+func extractToolInputSummary(event events.Event) string {
+	if event.Payload == nil {
+		return ""
+	}
+	var input map[string]interface{}
+	if tp, ok := event.Payload.(events.ToolCallPayload); ok {
+		input = tp.Input
+	} else if m, ok := event.Payload.(map[string]interface{}); ok {
+		if v, ok := m["input"].(map[string]interface{}); ok {
+			input = v
+		}
+	}
+	if len(input) == 0 {
+		return ""
+	}
+	// Pick the first meaningful string value as a preview.
+	for _, key := range []string{"command", "path", "pattern", "url", "content", "query"} {
+		if v, ok := input[key]; ok {
+			s := strings.TrimSpace(fmt.Sprint(v))
+			if s != "" {
+				return key + ":" + ellipsizeMint(s, 100)
+			}
+		}
+	}
+	return ""
+}
+
+// extractToolOutputError returns the output and error fields from a
+// ToolCallPayload. Output is empty on errors so the caller sees at
+// most one of the two.
+func extractToolOutputError(event events.Event) (output, errText string) {
+	if tp, ok := event.Payload.(events.ToolCallPayload); ok {
+		output = strings.TrimSpace(tp.Output)
+		errText = strings.TrimSpace(tp.Error)
+		return
+	}
+	if m, ok := event.Payload.(map[string]interface{}); ok {
+		output, _ = m["output"].(string)
+		errText, _ = m["error"].(string)
+	}
+	return strings.TrimSpace(output), strings.TrimSpace(errText)
+}
+
+// firstLine returns the first non-empty line of text, capped at maxLen.
+func firstLine(text string, maxLen int) string {
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > maxLen {
+			return line[:maxLen] + "…"
+		}
+		return line
+	}
+	return ""
+}
+
+// ellipsizeMint truncates s to maxLen, appending "…" if needed.
+func ellipsizeMint(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "…"
 }
 
 func extractRunnerPhase(event events.Event) (phase, tool string) {

@@ -216,18 +216,24 @@ func TestCtxPctEmptyWhenTotalZero(t *testing.T) {
 	}
 }
 
-// TestRenderStatusDoesNotIncludeModelRequestCount verifies
-// that the status bar no longer shows the "calls N" chip
-// (which tracked model_request runner-phase events).
-// Regression for: users reported the model_request counter
-// was uninformative and cluttered the bar.
-func TestRenderStatusDoesNotIncludeModelRequestCount(t *testing.T) {
+// TestRenderStatusIncludesModelRequestCount verifies
+// that the status bar shows the "calls N" chip after
+// a snapshot with model_request events, matching the
+// full bubbletea TUI status bar format.
+func TestRenderStatusIncludesModelRequestCount(t *testing.T) {
 	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"},
 		newFakeBackend(), &strings.Builder{}, &strings.Builder{})
 
+	// Without snapshot data, calls should be 0 and omitted.
 	got := s.renderStatus("Ready")
 	if strings.Contains(got, "calls ") {
-		t.Fatalf("status bar should not contain 'calls' chip, got %q", got)
+		t.Fatalf("status bar should not contain 'calls' chip with 0 calls, got %q", got)
+	}
+	// With calls > 0, the chip must appear.
+	s.modelCallCount = 3
+	got = s.renderStatus("Ready")
+	if !strings.Contains(got, "calls 3") {
+		t.Fatalf("status bar should contain 'calls 3' chip, got %q", got)
 	}
 }
 

@@ -34,7 +34,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/services/usage"
 	"github.com/tim5wang/godex/internal/tui"
-	"github.com/tim5wang/godex/internal/tui/streaming"
+	"github.com/tim5wang/godex/internal/tui/mintui"
 	"github.com/tim5wang/godex/internal/version"
 )
 
@@ -197,7 +197,7 @@ func main() {
 		},
 		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
 			if tuiMode == "scrollback" || tuiMode == "streaming" {
-				return streaming.New(cfg, service, os.Stdout, os.Stderr).Run(ctx, locator)
+				return mintui.New(cfg, service, os.Stdout, os.Stderr).Run(ctx, locator)
 			}
 			return tui.New(cfg, service, os.Stdout).Run(ctx, locator)
 		},

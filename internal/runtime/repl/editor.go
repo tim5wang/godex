@@ -30,6 +30,13 @@ type lineEditor struct {
 	content []rune
 	// pos is the cursor position in rune indices (not byte offsets).
 	pos int
+	// lastLines is the number of content lines the previous
+	// drawTo() call painted.  When the new draw has fewer
+	// lines (e.g. the user pressed backspace enough to merge
+	// two lines), drawTo uses this to know how many rows to
+	// walk up to reach the top of the editable area, and how
+	// many leftover rows to clear.
+	lastLines int
 }
 
 // newLineEditor creates an editor that will print the given prompt.
@@ -199,13 +206,21 @@ func (e *lineEditor) handleEscape(b []byte) {
 }
 
 // drawTo is the testable variant of draw: writes the editable
-// region onto w.  draw is the production wrapper that writes to
-// os.Stdout.
+// region onto w without ever emitting a newline. Newlines in
+// the terminal scroll the history above the prompt upward; we
+// use explicit CUD/CUU moves to walk between rows instead.
+//
+// The caller is expected to have placed the cursor on the
+// prompt row before calling drawTo.  After drawTo returns the
+// cursor is on the content line and column indicated by e.pos.
+//
+// To handle shrinking (e.g. backspace merged two lines), we
+// track the previous line count in e.lastLines and clear the
+// leftover rows so they don't show stale characters.
 func (e *lineEditor) drawTo(w io.Writer) {
 	lines := strings.Split(string(e.content), "\n")
 
-	// Find cursor visual position: which line (0-indexed) and the
-	// rune width column within it.
+	// Find cursor visual position.
 	cursorLine := 0
 	cursorCol := 0
 	pos := e.pos
@@ -220,33 +235,50 @@ func (e *lineEditor) drawTo(w io.Writer) {
 	}
 
 	continuationCol := uniseg.StringWidth(e.prompt)
+	newLines := len(lines)
 
-	// If the cursor is below the first content line, walk up so
-	// we paint the editable region from the top.
-	if cursorLine > 0 {
-		fmt.Fprintf(w, "\x1b[%dA", cursorLine)
+	// Walk up to the top of the editable area.
+	topOffset := cursorLine
+	if e.lastLines-1 > topOffset {
+		topOffset = e.lastLines - 1
+	}
+	if topOffset > 0 {
+		fmt.Fprintf(w, "\x1b[%dA", topOffset)
 	}
 
-	// Paint every content line.
+	// Paint every content line, top to bottom, using CUD
+	// (cursor down) to descend without scrolling.
 	for i, line := range lines {
 		prefix := e.prompt
 		if i > 0 {
 			prefix = strings.Repeat(" ", continuationCol)
 		}
 		fmt.Fprintf(w, "\r%s%s\x1b[K", prefix, line)
-		if i < len(lines)-1 {
-			fmt.Fprint(w, "\n")
+		if i < newLines-1 {
+			fmt.Fprint(w, "\x1b[1B")
 		}
 	}
 
-	// Walk back up to the cursor's content line.
-	walkUp := len(lines) - cursorLine
+	// If the new content is shorter than the previous draw,
+	// clear the leftover rows so they don't show stale
+	// characters.  The cursor is on the last new content
+	// line; we walk down and clear the remaining rows.
+	if e.lastLines > newLines {
+		leftover := e.lastLines - newLines
+		for j := 0; j < leftover; j++ {
+			fmt.Fprint(w, "\x1b[1B\r\x1b[K")
+		}
+		fmt.Fprintf(w, "\x1b[%dA", leftover)
+	}
+
+	// Walk back up to the cursor's content line and position.
+	walkUp := newLines - cursorLine
 	if walkUp > 0 {
 		fmt.Fprintf(w, "\x1b[%dA", walkUp)
 	}
-
-	// Position the cursor at column (cursorCol + prompt prefix width).
 	fmt.Fprintf(w, "\x1b[%dG", cursorCol+continuationCol+1)
+
+	e.lastLines = newLines
 }
 
 // draw is the production wrapper around drawTo.

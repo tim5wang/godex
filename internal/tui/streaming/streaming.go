@@ -967,6 +967,13 @@ type lineEditor struct {
 	// The user can still type and edit; the placeholder is just
 	// a visual hint that the agent is producing output.
 	placeholder string
+	// lastLines is the number of content lines the previous
+	// drawTo() call painted.  When the new draw has fewer
+	// lines (e.g. the user pressed backspace enough to merge
+	// two lines), drawTo uses this to know how many rows to
+	// walk up to reach the top of the editable area, and how
+	// many leftover rows to clear.
+	lastLines int
 }
 
 func newLineEditor(prompt string) *lineEditor {
@@ -1176,20 +1183,30 @@ func (e *lineEditor) handleEscape(b []byte) {
 // own assumptions about cursor position.  Working from a known
 // anchor and using CUP / CUU / CUD for explicit moves is much
 // more predictable.
-// drawTo paints the editable region onto w:
+// drawTo paints the editable region onto w without ever
+// emitting a newline. Newlines in the terminal scroll the
+// history above the prompt upward and would overwrite the
+// conversation log; we use explicit CUD/CUU moves to walk
+// between rows instead.
 //
-// row P:    prompt + first line of content (or placeholder)
-// row P+1:  continuation lines (if content has multiple lines)
-// row P+N:  status bar
-// cursor:   at the correct visual position within the content
+// Layout relative to the cursor position when drawTo is
+// entered (the prompt row):
 //
-// The caller is expected to have placed the cursor on the prompt
-// row before calling drawTo.  After drawTo returns the cursor is
-// on the content line and column indicated by e.pos.
+//   prompt row:    prompt + first content line
+//   prompt+1:      continuation line
+//   prompt+2:      ...
+//   prompt+N-1:    last continuation line
+//   prompt+N:      status bar
 //
-// Working from a known anchor and using explicit CUP/CUU/CUD moves
-// is much more predictable than DECSC/DECRC save-restore, which
-// get confusing when interleaved with newlines.
+// To handle the case where the new content is shorter than
+// the previous draw (e.g. the user backspaced a newline, so
+// the on-screen height shrinks by 1 row), we walk up to the
+// top of the editable area first, then re-paint every row
+// with a trailing "\x1b[K" so any leftover residue from a
+// taller previous draw is cleared.  When the new content is
+// taller (e.g. the user just inserted a newline), we still
+// anchor on the prompt row and paint downward, using
+// "\x1b[1B" to descend without scrolling.
 func (e *lineEditor) drawTo(w io.Writer, statusBar string) {
 	// When a placeholder is set we render it instead of the
 	// typed content. The actual content is preserved across
@@ -1201,8 +1218,7 @@ func (e *lineEditor) drawTo(w io.Writer, statusBar string) {
 	}
 	displayLines = strings.Split(strings.Join(displayLines, "\n"), "\n")
 
-	// Find the cursor's visual position: which line (0-indexed)
-	// and the rune width column within it.
+	// Find the cursor's visual position.
 	cursorLine := 0
 	cursorCol := 0
 	pos := e.pos
@@ -1217,14 +1233,24 @@ func (e *lineEditor) drawTo(w io.Writer, statusBar string) {
 	}
 
 	continuationCol := uniseg.StringWidth(e.prompt)
+	newLines := len(displayLines)
 
-	// If the cursor is below the first content line, walk up so
-	// we paint the editable region from the top.
-	if cursorLine > 0 {
-		fmt.Fprintf(w, "\x1b[%dA", cursorLine)
+	// Walk up to the top of the editable area.  The previous
+	// draw painted lastLines rows below the prompt; if the
+	// cursor was anywhere on those rows we need to climb back
+	// up.  Use the larger of (cursorLine, lastLines-1) to make
+	// sure we land on the prompt row even if the cursor used
+	// to be on the status bar row.
+	topOffset := cursorLine
+	if e.lastLines-1 > topOffset {
+		topOffset = e.lastLines - 1
+	}
+	if topOffset > 0 {
+		fmt.Fprintf(w, "\x1b[%dA", topOffset)
 	}
 
-	// Paint every content line.
+	// Paint every content line, top to bottom, using CUD
+	// (cursor down) to descend without scrolling.
 	for i, line := range displayLines {
 		prefix := e.prompt
 		if i > 0 {
@@ -1235,23 +1261,39 @@ func (e *lineEditor) drawTo(w io.Writer, statusBar string) {
 		} else {
 			fmt.Fprintf(w, "\r%s%s\x1b[K", prefix, line)
 		}
-		if i < len(displayLines)-1 {
-			fmt.Fprint(w, "\n")
+		if i < newLines-1 {
+			fmt.Fprint(w, "\x1b[1B")
 		}
 	}
 
-	// Paint the status bar on the next row.
-	fmt.Fprint(w, "\n")
+	// If the new content is shorter than the previous draw,
+	// clear the leftover rows so they don't show stale
+	// characters.  The cursor is on the last new content
+	// line; we walk down and clear the remaining rows.
+	if e.lastLines > newLines {
+		leftover := e.lastLines - newLines
+		for j := 0; j < leftover; j++ {
+			fmt.Fprint(w, "\x1b[1B\r\x1b[K")
+		}
+		// Walk back up past the cleared rows to the last new
+		// content line.
+		fmt.Fprintf(w, "\x1b[%dA", leftover)
+	}
+
+	// Paint the status bar on the row below the last content
+	// line.
+	fmt.Fprint(w, "\x1b[1B")
 	fmt.Fprintf(w, "\r\x1b[2m%s\x1b[0m\x1b[K", statusBar)
 
-	// Walk back up to the cursor's content line.
-	walkUp := len(displayLines) - cursorLine
+	// Walk back up to the cursor's content line and position.
+	walkUp := newLines - cursorLine
 	if walkUp > 0 {
 		fmt.Fprintf(w, "\x1b[%dA", walkUp)
 	}
-
-	// Position the cursor at column (cursorCol + prompt prefix width).
 	fmt.Fprintf(w, "\x1b[%dG", cursorCol+continuationCol+1)
+
+	// Remember the row count for the next draw.
+	e.lastLines = newLines
 }
 
 // draw is the production wrapper around drawTo.

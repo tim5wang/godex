@@ -255,15 +255,23 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	ed := newLineEditor("> ")
 
 	for {
-		// While the agent is producing output we replace the prompt
-		// with a "waiting" placeholder. We don't disable the editor
-		// outright so that an interrupt (Ctrl+C) is still possible.
+		// While the agent is producing output we hand a "waiting"
+		// placeholder to the editor. The editor uses this to dim
+		// the prompt while the agent is producing text.  We don't
+		// disable the editor outright so that an interrupt (Ctrl+C)
+		// is still possible.
+		s.editorMu.Lock()
 		if s.working {
-			s.drawPrompt("(waiting for response...)")
+			ed.placeholder = "(waiting for response...)"
 		} else {
-			s.drawPrompt("")
+			ed.placeholder = ""
 		}
-		s.refreshStatusBar()
+		// Hand the current status bar text to the editor.  The
+		// editor's draw() paints it on the row immediately below
+		// the content so the bar stays visible no matter how many
+		// lines the user has typed.
+		ed.statusBar = ellipsizeANSI(s.renderStatusBar(), s.width)
+		s.editorMu.Unlock()
 
 		line, err := ed.ReadLine()
 		if err != nil {
@@ -579,14 +587,19 @@ func modelCallEventKey(event events.Event) string {
 // printInitialBottom writes the prompt row + the first status bar
 // row, ending with the cursor on the prompt line so the line editor
 // can take over.
+// printInitialBottom writes the separator line and the prompt
+// placeholder.  The status bar is NOT drawn here – it is the line
+// editor's responsibility to paint it (and keep it pinned) during
+// the read loop.  Keeping that responsibility in one place means
+// the multiline content and the status bar stay in lockstep: when
+// the user types a newline, the editor's draw() moves the status
+// bar down by one row to stay immediately below the new line.
 func (s *Session) printInitialBottom() {
 	s.printMu.Lock()
 	defer s.printMu.Unlock()
 	sep := strings.Repeat("─", s.width)
 	fmt.Fprintln(s.stdout, sep)
 	fmt.Fprint(s.stdout, "> ")
-	fmt.Fprintf(s.stdout, "\x1b[2m%s\x1b[0m", s.renderStatusBar())
-	fmt.Fprintln(s.stdout)
 }
 
 // drawPrompt rewrites the input prompt region. `placeholder` is shown
@@ -944,10 +957,20 @@ type lineEditor struct {
 	prompt string
 	content []rune
 	pos int
+	// statusBar is the text drawn on the row below the content
+	// during every redraw.  The session updates it before
+	// entering the read loop so the line editor can paint it
+	// in sync with the content.
+	statusBar string
+	// placeholder, when non-empty, replaces the typed content
+	// with a dim message such as "(waiting for response...)".
+	// The user can still type and edit; the placeholder is just
+	// a visual hint that the agent is producing output.
+	placeholder string
 }
 
 func newLineEditor(prompt string) *lineEditor {
-	return &lineEditor{prompt: prompt}
+	return &lineEditor{prompt: prompt, statusBar: "Ready"}
 }
 
 // ReadLine reads one line of input from os.Stdin.
@@ -971,60 +994,134 @@ func (e *lineEditor) ReadLine() (string, error) {
 		return "", fmt.Errorf("line editor: enter raw mode: %w", err)
 	}
 	defer term.Restore(os.Stdin.Fd(), state)
+	return e.readFrom(os.Stdin, os.Stdout)
+}
 
+// readFrom is the test-friendly inner loop.  It reads keystrokes
+// from r and writes terminal output to w.  Returning the content
+// when the user presses Enter, io.EOF on Ctrl+C / Ctrl+D.
+// readFrom is the test-friendly inner loop.  It reads keystrokes
+// from r and writes terminal output to w.  Returning the content
+// when the user presses Enter, io.EOF on Ctrl+C / Ctrl+D.
+//
+// The function handles two important cases correctly:
+//  1. Alt+Enter embedded mid-burst: a Read() may return bytes like
+//     "line1\\x1b\\rline2" all at once. We tokenize the entire
+//     burst and process escape sequences wherever they appear.
+//  2. Multi-line paste: if a single Read() returns text that
+//     contains newlines alongside printable characters, the newlines
+//     are inserted literally instead of triggering submit, so the
+//     entire paste becomes one input.
+func (e *lineEditor) readFrom(r io.Reader, w io.Writer) (string, error) {
 	e.content = e.content[:0]
-	e.pos =0
+	e.pos = 0
+	e.drawTo(w, e.statusBar)
 
 	for {
-		buf := make([]byte,64)
-		n, err := os.Stdin.Read(buf)
+		buf := make([]byte, 64)
+		n, err := r.Read(buf)
 		if err != nil {
+			if err == io.EOF && len(e.content) > 0 {
+				// Pipe closed mid-paste: submit whatever we have.
+				fmt.Fprint(w, "\r\n")
+				return string(e.content), nil
+			}
 			return "", err
 		}
 		b := buf[:n]
 
-		if b[0] == '\x1b' && n >1 {
-			e.handleEscape(b)
-			continue
-		}
+		// Paste detection: if this burst contains newlines together
+		// with non-whitespace content, treat the newlines as literal
+		// inserts so the entire paste becomes one input.
+		isPaste := detectPaste(b)
 
-		for i :=0; i < n; {
-			r, size := utf8.DecodeRune(b[i:])
-			if r == utf8.RuneError && size ==1 {
-				i++
-				continue
-			}
+		// Tokenize the buffer and dispatch.
+		i := 0
+		for i < n {
+			c := b[i]
 			switch {
-			case r == '\r' || r == '\n':
-				// Backslash-Enter fall-back: when the previous rune
-				// is a literal '\', swallow the backslash and insert
-				// a newline so the user can break the line on any
-				// terminal. Otherwise submit the line.
-				if r == '\n' && e.pos >0 && e.content[e.pos-1] == '\\' {
+			case c == '\x1b' && i+1 < n:
+				// Escape sequence starting at b[i]. Find its end:
+				// CSI ends at the first byte in 0x40..0x7E (typically
+				// a letter); SS3 sequences are two bytes. For our
+				// needs (arrow keys, Alt+Enter) we only need to look
+				// at b[i+1] and (sometimes) b[i+2].
+				seqLen := 1
+				switch b[i+1] {
+				case '[':
+					if i+2 < n {
+						seqLen =3
+					}
+				case '\r', '\n':
+					seqLen =2
+				}
+				e.handleEscape(b[i: i+seqLen])
+				i += seqLen
+			case c == '\r' || c == '\n':
+				if isPaste {
+					e.insertRune('\n')
+					i++
+					continue
+				}
+				// Backslash-Enter fall-back: swallow trailing backslash.
+				if c == '\n' && e.pos > 0 && e.content[e.pos-1] == '\\' {
 					e.pos--
 					e.content = append(e.content[:e.pos], e.content[e.pos+1:]...)
 					e.insertRune('\n')
-					e.draw()
-					break
+					i++
+					continue
 				}
-				fmt.Fprint(os.Stdout, "\r\n")
+				fmt.Fprint(w, "\r\n")
 				return string(e.content), nil
-			case r ==0x03 || r ==0x04:
-				fmt.Fprint(os.Stdout, "\r\n")
+			case c == 0x03 || c == 0x04:
+				fmt.Fprint(w, "\r\n")
 				return "", io.EOF
-			case r ==0x7f || r ==0x08:
+			case c == 0x7f || c == 0x08:
 				e.deleteRuneBefore()
-			case r ==0x15:
+				i++
+				continue
+			case c == 0x15:
 				e.content = e.content[:0]
-				e.pos =0
+				e.pos = 0
+				i++
+				continue
 			default:
+				// Decode a UTF-8 rune and insert it.
+				r, size := utf8.DecodeRune(b[i:])
+				if r == utf8.RuneError && size == 1 {
+					i++
+					continue
+				}
 				e.insertRune(r)
-			}
-			i += size
+				i += size
 		}
-
-		e.draw()
 	}
+
+		e.drawTo(w, e.statusBar)
+	}
+}
+
+// detectPaste returns true when the input burst looks like a paste:
+// at least TWO newlines together with at least 4 non-whitespace
+// content bytes.  A single Enter press arrives as a lone \\r/\\n
+// and is correctly not flagged as paste.  An Alt+Enter keystroke
+// sends a 2-byte burst ("\\x1b\\r") so isPaste stays false.  A
+// backslash-Enter fall-back sends "\\\\" + LF + at least one
+// printable char; with the 4-content threshold that is also not
+// flagged as paste, so the backslash-enter fall-back works.
+func detectPaste(b []byte) bool {
+	var newlineCount, hasContent int
+	for _, c := range b {
+		switch c {
+		case '\r', '\n':
+			newlineCount++
+		case 0x20, '\t':
+			// whitespace is not "content" by itself
+		default:
+			hasContent++
+		}
+	}
+	return newlineCount >= 2 && hasContent >= 4
 }
 
 func (e *lineEditor) handleEscape(b []byte) {
@@ -1051,7 +1148,6 @@ func (e *lineEditor) handleEscape(b []byte) {
 		// standard sequence iTerm2, Terminal.app, and most Linux
 		// terminals send for Alt+Enter in raw mode.
 		e.insertRune('\n')
-		e.draw()
 	}
 	// Other escape sequences are ignored.
 }
@@ -1062,59 +1158,105 @@ func (e *lineEditor) handleEscape(b []byte) {
 // each one with a fresh "\r...\x1b[K" sequence, move the cursor to
 // the correct visual position, and refresh the status bar below so
 // it stays pinned at the bottom.
-func (e *lineEditor) draw() {
-	lines := strings.Split(string(e.content), "\n")
+// draw redraws the editable region from a known anchor point.
+//
+// The anchor is the prompt row (the row this line editor was
+// launched on).  From there the editor paints the full multi-line
+// content top-to-bottom, the status bar on the next row, and
+// positions the cursor at the correct (row, column) within the
+// content.
+//
+// The caller is expected to have placed the cursor on the prompt
+// row before calling draw().  After draw() returns the cursor
+// is on the content line and column indicated by e.pos.
+//
+// We deliberately do NOT use DECSC/DECRC save-restore here.  Those
+// sequences are too easy to get wrong when interleaved with newlines
+// and the line editor is invoked from a goroutine that holds its
+// own assumptions about cursor position.  Working from a known
+// anchor and using CUP / CUU / CUD for explicit moves is much
+// more predictable.
+// drawTo paints the editable region onto w:
+//
+// row P:    prompt + first line of content (or placeholder)
+// row P+1:  continuation lines (if content has multiple lines)
+// row P+N:  status bar
+// cursor:   at the correct visual position within the content
+//
+// The caller is expected to have placed the cursor on the prompt
+// row before calling drawTo.  After drawTo returns the cursor is
+// on the content line and column indicated by e.pos.
+//
+// Working from a known anchor and using explicit CUP/CUU/CUD moves
+// is much more predictable than DECSC/DECRC save-restore, which
+// get confusing when interleaved with newlines.
+func (e *lineEditor) drawTo(w io.Writer, statusBar string) {
+	// When a placeholder is set we render it instead of the
+	// typed content. The actual content is preserved across
+	// placeholder changes so toggling the "working" flag does
+	// not lose what was typed.
+	displayLines := []string{string(e.content)}
+	if e.placeholder != "" {
+		displayLines = []string{e.placeholder}
+	}
+	displayLines = strings.Split(strings.Join(displayLines, "\n"), "\n")
 
-	// Find cursor visual position: which line (0-indexed) and which
-	// column (after prompt) the cursor occupies.
-	cursorLine :=0
-	cursorCol :=0
+	// Find the cursor's visual position: which line (0-indexed)
+	// and the rune width column within it.
+	cursorLine := 0
+	cursorCol := 0
 	pos := e.pos
-	for li, line := range lines {
+	for li, line := range displayLines {
 		runes := []rune(line)
 		if pos <= len(runes) {
 			cursorLine = li
 			cursorCol = uniseg.StringWidth(string(runes[:pos]))
 			break
 		}
-		pos -= len(runes) +1 // +1 for the \n separator
+		pos -= len(runes) + 1
 	}
 
-	// Save cursor position before we start moving around.
-	fmt.Fprint(os.Stdout, "\x1b7") // DECSC
+	continuationCol := uniseg.StringWidth(e.prompt)
 
-	// Move the cursor UP so the first content line sits on the row
-	// just below the separator (or wherever the prompt would have
-	// been).  cursorLine counts how many content lines are BELOW
-	// the cursor's row — that's how far up we need to go from the
-	// prompt line to reach the first content line.
-	if cursorLine >0 {
-		fmt.Fprintf(os.Stdout, "\x1b[%dA", cursorLine)
+	// If the cursor is below the first content line, walk up so
+	// we paint the editable region from the top.
+	if cursorLine > 0 {
+		fmt.Fprintf(w, "\x1b[%dA", cursorLine)
 	}
 
-	// Redraw every content line, left to right, top to bottom.
-	prefix := e.prompt
-	for i, line := range lines {
-		fmt.Fprintf(os.Stdout, "\r%s%s\x1b[K", prefix, line)
-		if i < len(lines)-1 {
-			fmt.Fprint(os.Stdout, "\n")
-			prefix = strings.Repeat(" ", uniseg.StringWidth(e.prompt))
+	// Paint every content line.
+	for i, line := range displayLines {
+		prefix := e.prompt
+		if i > 0 {
+			prefix = strings.Repeat(" ", continuationCol)
+		}
+		if e.placeholder != "" {
+			fmt.Fprintf(w, "\r%s\x1b[2m%s\x1b[0m\x1b[K", prefix, line)
+		} else {
+			fmt.Fprintf(w, "\r%s%s\x1b[K", prefix, line)
+		}
+		if i < len(displayLines)-1 {
+			fmt.Fprint(w, "\n")
 		}
 	}
 
-	// We are now on the LAST content line. Position the cursor at
-	// the correct visual column within that line.
-	if cursorCol >0 {
-		fmt.Fprintf(os.Stdout, "\r> \x1b[%dG", cursorCol+3) // "> " = 2 chars
-	} else {
-		fmt.Fprint(os.Stdout, "\r> ")
+	// Paint the status bar on the next row.
+	fmt.Fprint(w, "\n")
+	fmt.Fprintf(w, "\r\x1b[2m%s\x1b[0m\x1b[K", statusBar)
+
+	// Walk back up to the cursor's content line.
+	walkUp := len(displayLines) - cursorLine
+	if walkUp > 0 {
+		fmt.Fprintf(w, "\x1b[%dA", walkUp)
 	}
 
-	// Restore the cursor to the saved position (prompt line before
-	// we started redrawing) and refresh the status bar below it.
-	// This ensures the status bar is never overwritten by multiline
-	// content.
-	fmt.Fprint(os.Stdout, "\x1b8") // DECRC
+	// Position the cursor at column (cursorCol + prompt prefix width).
+	fmt.Fprintf(w, "\x1b[%dG", cursorCol+continuationCol+1)
+}
+
+// draw is the production wrapper around drawTo.
+func (e *lineEditor) draw(statusBar string) {
+	e.drawTo(os.Stdout, statusBar)
 }
 
 func (e *lineEditor) insertRune(r rune) {
@@ -1161,14 +1303,12 @@ func (e *lineEditor) moveCursorLeft() {
 			// jump to position0.
 			e.pos =0
 		}
-		e.draw()
 		return
 	}
 	line := string(e.content[:e.pos])
 	bytePos := runeOffsetToByteOffset(e.content[:e.pos], e.pos)
 	newBytePos := graphemeCursorLeft(line, bytePos)
 	e.pos = byteOffsetToRuneOffset(e.content, newBytePos)
-	e.draw()
 }
 
 func (e *lineEditor) moveCursorRight() {
@@ -1180,14 +1320,12 @@ func (e *lineEditor) moveCursorRight() {
 	if e.content[e.pos] == '\n' {
 		e.pos++
 		// Skip any consecutive newlines (only one, but be safe).
-		e.draw()
 		return
 	}
 	line := string(e.content)
 	bytePos := runeOffsetToByteOffset(e.content, e.pos)
 	newBytePos := graphemeCursorRight(line, bytePos)
 	e.pos = byteOffsetToRuneOffset(e.content, newBytePos)
-	e.draw()
 }
 
 func runeOffsetToByteOffset(runes []rune, pos int) int {

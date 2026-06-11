@@ -82,6 +82,26 @@ func (f *fakeBackend) DenyPermission(ctx context.Context, id, p, r string) (tool
 func (f *fakeBackend) AttachSink(id string, sink events.Sink) (func(), error) {
 	return func() {}, nil
 }
+func (f *fakeBackend) Models(ctx context.Context, id string) (rtbackend.ModelsView, error) {
+	return rtbackend.ModelsView{
+		DefaultProfileID: "gpt",
+		SessionProfileID: "gpt",
+		Profiles: []rtbackend.ModelProfile{
+			{ID: "gpt", Name: "GPT-5.4", Model: "gpt-5.4-mini", Default: true, Selected: true},
+			{ID: "claude", Name: "Claude 4", Model: "claude-4"},
+		},
+	}, nil
+}
+func (f *fakeBackend) SetSessionModelProfile(ctx context.Context, id, profileID string) (rtbackend.ModelsView, error) {
+	return rtbackend.ModelsView{
+		DefaultProfileID: "gpt",
+		SessionProfileID: profileID,
+		Profiles: []rtbackend.ModelProfile{
+			{ID: "gpt", Name: "GPT-5.4", Model: "gpt-5.4-mini", Default: true},
+			{ID: "claude", Name: "Claude 4", Model: "claude-4", Selected: profileID == "claude"},
+		},
+	}, nil
+}
 
 func TestSessionRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	b := newFakeBackend()

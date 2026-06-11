@@ -57,6 +57,8 @@ type Backend interface {
 	ApprovePermission(context.Context, string, string, tools.PermissionGrantScope) (tools.PermissionResolution, error)
 	DenyPermission(context.Context, string, string, string) (tools.PermissionResolution, error)
 	AttachSink(string, events.Sink) (func(), error)
+	Models(context.Context, string) (rtbackend.ModelsView, error)
+	SetSessionModelProfile(context.Context, string, string) (rtbackend.ModelsView, error)
 }
 
 // Session drives a min-tui frontend against a shared runtime backend.
@@ -226,42 +228,130 @@ func (s *Session) registerSlashCommands() {
 			Name:        cmd.Name,
 			Description: cmd.Description,
 			Handler: func(ctx *minitui.CommandContext) {
-				// Reconstruct a commands.Command from the
-				// typed line that min-tui stripped down to
-				// "name args...".  We pass the raw line as
-				// Raw so the dispatcher can re-split it.
-				raw := "/" + cmd.Name
-				if ctx.Args != "" {
-					raw += " " + ctx.Args
-				}
-				parsed, _ := commands.Parse(raw)
-				if parsed.Name == "" {
-					ctx.Write(fmt.Sprintf("Error: failed to parse /%s arguments\n", cmd.Name))
-					return
-				}
-				result, err := s.backend.ExecuteCommand(context.Background(), s.sessionID, parsed)
-				if result.Output != "" {
-					ctx.Write(result.Output)
-					if !strings.HasSuffix(result.Output, "\n") {
-						ctx.Write("\n")
-					}
-				}
-				if result.DispatchError != "" {
-					ctx.Write("Error: " + result.DispatchError + "\n")
-				}
-				if err != nil {
-					ctx.Write("Error: " + err.Error() + "\n")
-				}
-				// Status-bar feedback is intentionally omitted
-				// so the godex heartbeat (Ready · Input ·
-				// Model · ctx · calls · msgs) stays visible.
-				// The /command completed line below is a
-				// short confirmation written to the output
-				// area instead.
-				ctx.Write("✓ /" + cmd.Name + " completed\n")
+				s.handleSlashCommand(ctx, cmd)
 			},
 		})
 	}
+}
+
+// handleSlashCommand dispatches one slash command.  Most commands
+// are forwarded to ExecuteCommand exactly as before.  /model with
+// no arguments opens an interactive dropdown selector so the user
+// can pick a model with arrow keys instead of typing a profile ID.
+func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.CommandMetadata) {
+	if cmd.Name == "model" && strings.TrimSpace(ctx.Args) == "" {
+		s.handleModelSelect(ctx)
+		return
+	}
+
+	// Reconstruct a commands.Command from the typed line that
+	// min-tui stripped down to "name args...".  We pass the raw
+	// line as Raw so the dispatcher can re-split it.
+	raw := "/" + cmd.Name
+	if ctx.Args != "" {
+		raw += " " + ctx.Args
+	}
+	parsed, _ := commands.Parse(raw)
+	if parsed.Name == "" {
+		ctx.Write(fmt.Sprintf("Error: failed to parse /%s arguments\n", cmd.Name))
+		return
+	}
+	result, err := s.backend.ExecuteCommand(context.Background(), s.sessionID, parsed)
+	if result.Output != "" {
+		ctx.Write(result.Output)
+		if !strings.HasSuffix(result.Output, "\n") {
+			ctx.Write("\n")
+		}
+	}
+	if result.DispatchError != "" {
+		ctx.Write("Error: " + result.DispatchError + "\n")
+	}
+	if err != nil {
+		ctx.Write("Error: " + err.Error() + "\n")
+	}
+	ctx.Write("✓ /" + cmd.Name + " completed\n")
+}
+
+// handleModelSelect shows a secondary dropdown to pick a model
+// profile.  The currently active profile is pre-selected so the
+// user can just press Enter to confirm, or use ↑/↓ to switch.
+func (s *Session) handleModelSelect(ctx *minitui.CommandContext) {
+	mv, err := s.backend.Models(context.Background(), s.sessionID)
+	if err != nil {
+		ctx.Write("Error: failed to list models: " + err.Error() + "\n")
+		return
+	}
+	if len(mv.Profiles) == 0 {
+		ctx.Write("No model profiles configured.\n")
+		return
+	}
+
+	// Build select options with the currently selected profile
+	// marked so the dropdown auto-focuses on it.
+	currentProfileID := mv.SessionProfileID
+	if currentProfileID == "" {
+		currentProfileID = mv.DefaultProfileID
+	}
+	options := make([]minitui.SelectOption, 0, len(mv.Profiles))
+	selectedIdx := 0
+	for i, profile := range mv.Profiles {
+		desc := profile.Model
+		if profile.Provider != "" {
+			desc += " · " + profile.Provider
+		}
+		if profile.Selected || profile.ID == currentProfileID {
+			selectedIdx = i
+			desc += " [active]"
+		}
+		options = append(options, minitui.SelectOption{
+			Label:       profile.Name,
+			Description: desc,
+		})
+	}
+
+	// The select API puts the cursor on the first item.  Since
+	// min-tui v0.2.0 doesn't have a SetSelectIndex API, we
+	// rotate the options so the active profile is at index 0
+	// and cursor lands on it.
+	if selectedIdx > 0 {
+		options = append(options[selectedIdx:], options[:selectedIdx]...)
+	}
+
+	idx := ctx.Select("Choose model · ↑↓ navigate · Enter confirm · Esc cancel", options)
+	if idx < 0 {
+		ctx.Write("Model selection cancelled.\n")
+		return
+	}
+
+	// Map rotated index back to actual profile index.
+	actualIdx := idx + selectedIdx
+	if actualIdx >= len(mv.Profiles) {
+		actualIdx -= len(mv.Profiles)
+	}
+	chosen := mv.Profiles[actualIdx]
+
+	// Switch the session to the chosen profile.
+	newMV, err := s.backend.SetSessionModelProfile(context.Background(), s.sessionID, chosen.ID)
+	if err != nil {
+		ctx.Write("Error: failed to switch model: " + err.Error() + "\n")
+		return
+	}
+
+	ctx.Write(fmt.Sprintf("Model switched to %s (%s).\n", chosen.Name, chosen.Model))
+
+	// Refresh the snapshot so the status bar picks up the new
+	// model name on the next renderStatus call.
+	s.refreshSnapshot()
+
+	// Show the updated model list.
+	ctx.Write("Current: ")
+	for _, p := range newMV.Profiles {
+		if p.Selected || (p.ID == newMV.SessionProfileID) {
+			ctx.Write(fmt.Sprintf("%s (%s)", p.Name, p.Model))
+			break
+		}
+	}
+	ctx.Write("\n✓ /model completed\n")
 }
 
 // cancelActiveTurn cancels the currently-running turn, if any.
@@ -561,9 +651,33 @@ func (s *Session) renderStatus(label string) string {
 	return s.renderStatusWith(s.ctxSummary, label)
 }
 
+// resolveModelName returns the model name the session is actually
+// using, falling back to the config default.  Mirrors the bubbletea
+// TUI's activeModelLabel logic so the status bar shows the
+// session-specific model (not always the config default).
+func (s *Session) resolveModelName() string {
+	if s.cfg == nil {
+		return "unknown"
+	}
+	profileID := strings.TrimSpace(s.snapshot.ModelProfileID)
+	if profileID == "" {
+		profileID = strings.TrimSpace(s.cfg.DefaultProfileID)
+	}
+	if profile, ok := s.cfg.ModelProfileByID(profileID); ok {
+		if model := strings.TrimSpace(profile.Model); model != "" {
+			return model
+		}
+	}
+	// Fall back to config default model.
+	if model := strings.TrimSpace(s.cfg.Model); model != "" {
+		return model
+	}
+	return "unknown"
+}
+
 func (s *Session) renderStatusWith(summary tools.ContextInspection, label string) string {
 	parts := []string{label}
-	parts = append(parts, "Input", s.cfg.Model)
+	parts = append(parts, "Input", s.resolveModelName())
 	// Permission blocker takes priority if present.
 	if blocker := s.snapshot.ActivePermissionBlocker; blocker != nil {
 		blockerParts := []string{"Blocked"}
@@ -599,20 +713,11 @@ func (s *Session) renderStatusWith(summary tools.ContextInspection, label string
 }
 
 // ctxPctWithThreshold formats a "used/threshold pct" string
-// matching the bubbletea TUI semantics: denominator is the
-// compress threshold (from config), and numerator uses the
-// summary's TotalTokenEstimate (current total). Falls back to
-// the summary's own CompressThreshold, then TokenEstimate.
+// matching the bubbletea TUI semantics: numerator is the
+// current total context estimate, denominator is the compress
+// threshold.  Falls back through the same cascade as the
+// bubbletea TUI's contextUsageText.
 func ctxPctWithThreshold(summary tools.ContextInspection, cfgThreshold int) string {
-	threshold := cfgThreshold
-	if threshold <= 0 {
-		threshold = summary.CompressThreshold
-	}
-	if threshold <= 0 {
-		return ""
-	}
-	// Use the current pressure, preferring TotalTokenEstimate
-	// (which includes overhead) over TokenEstimate.
 	used := summary.TotalTokenEstimate
 	if used <= 0 {
 		used = summary.TokenEstimate
@@ -622,6 +727,15 @@ func ctxPctWithThreshold(summary tools.ContextInspection, cfgThreshold int) stri
 	}
 	if used <= 0 {
 		return ""
+	}
+	threshold := summary.CompressThreshold
+	if threshold <= 0 {
+		threshold = cfgThreshold
+	}
+	if threshold <= 0 {
+		// No threshold known: just show used.
+		usedK := (used + 500) / 1000
+		return fmt.Sprintf("%dk", usedK)
 	}
 	pct := int((float64(used) * 100.0 / float64(threshold)) + 0.5)
 	if pct > 100 {

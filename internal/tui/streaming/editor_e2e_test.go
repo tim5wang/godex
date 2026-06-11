@@ -68,8 +68,8 @@ func TestEditorEnterSubmits(t *testing.T) {
 // the content rather than submitting.
 func TestEditorAltEnterInsertsNewline(t *testing.T) {
 	out, line := runEditorWithInput(t, "line1\x1b\rline2\r")
-	if line != "line1\nline2\n" {
-		t.Fatalf("expected %q, got %q", "line1\nline2\n", line)
+	if line != "line1\nline2" {
+		t.Fatalf("expected %q, got %q", "line1\nline2", line)
 	}
 	if !strings.Contains(out, "TEST_STATUS") {
 		t.Fatalf("expected output to contain status bar, got %q", out)
@@ -94,8 +94,8 @@ func TestEditorBackslashEnterInsertsNewline(t *testing.T) {
 // core fix for issue #3.
 func TestEditorStatusBarPinnedBelowContent(t *testing.T) {
 	out, line := runEditorWithInput(t, "L1\x1b\rL2\x1b\rL3\r")
-	if line != "L1\nL2\nL3\n" {
-		t.Fatalf("expected %q, got %q", "L1\nL2\nL3\n", line)
+	if line != "L1\nL2\nL3" {
+		t.Fatalf("expected %q, got %q", "L1\nL2\nL3", line)
 	}
 	if !strings.Contains(out, "TEST_STATUS") {
 		t.Fatalf("expected status bar marker, got %q", out)

@@ -974,6 +974,12 @@ type lineEditor struct {
 	// walk up to reach the top of the editable area, and how
 	// many leftover rows to clear.
 	lastLines int
+	// lastCursorRow is the row (counted from the prompt row,
+	// 0-indexed) the cursor was placed on by the previous
+	// drawTo() call.  We use this instead of lastLines-1 to
+	// walk up to the prompt row in the new draw, so we never
+	// overshoot into the history above.
+	lastCursorRow int
 }
 
 func newLineEditor(prompt string) *lineEditor {
@@ -1078,6 +1084,13 @@ func (e *lineEditor) readFrom(r io.Reader, w io.Writer) (string, error) {
 					i++
 					continue
 				}
+				// Paint the final content state so the user
+				// sees what they typed before we move the
+				// cursor down to the submit line.  Without
+				// this, the prompt row would still show the
+				// previous draw's state (or nothing at all
+				// if the entire input arrived in one burst).
+				e.drawTo(w, e.statusBar)
 				fmt.Fprint(w, "\r\n")
 				return string(e.content), nil
 			case c == 0x03 || c == 0x04:
@@ -1108,19 +1121,32 @@ func (e *lineEditor) readFrom(r io.Reader, w io.Writer) (string, error) {
 	}
 }
 
-// detectPaste returns true when the input burst looks like a paste:
-// at least TWO newlines together with at least 4 non-whitespace
-// content bytes.  A single Enter press arrives as a lone \\r/\\n
-// and is correctly not flagged as paste.  An Alt+Enter keystroke
-// sends a 2-byte burst ("\\x1b\\r") so isPaste stays false.  A
-// backslash-Enter fall-back sends "\\\\" + LF + at least one
-// printable char; with the 4-content threshold that is also not
-// flagged as paste, so the backslash-enter fall-back works.
+// detectPaste returns true when the input burst looks like a
+// paste: at least TWO non-escape newlines together with at
+// least 4 non-whitespace content bytes.
+//
+// The "non-escape" qualifier matters: the user might type
+// several Alt+Enter sequences in one burst, each of which is
+// "\x1b\r" -- without subtracting those escape-wrapped CRs
+// from the newline count, a fast typist who inserts 2
+// Alt+Enters before any printable character would be
+// misclassified as a paste.  Subtracting ESC-prefixed newlines
+// from the count leaves only "bare" \r/\n as paste markers.
+//
+// The 4-content-byte threshold prevents a 2-byte
+// backslash-Enter fall-back burst ("\\\n" followed by a
+// single printable char) from being misclassified.
 func detectPaste(b []byte) bool {
 	var newlineCount, hasContent int
-	for _, c := range b {
+	for i, c := range b {
 		switch c {
 		case '\r', '\n':
+			// An ESC immediately before this newline means
+			// it's part of an Alt+Enter sequence, not a
+			// paste-newline.
+			if i > 0 && b[i-1] == '\x1b' {
+				continue
+			}
 			newlineCount++
 		case 0x20, '\t':
 			// whitespace is not "content" by itself
@@ -1236,17 +1262,16 @@ func (e *lineEditor) drawTo(w io.Writer, statusBar string) {
 	newLines := len(displayLines)
 
 	// Walk up to the top of the editable area.  The previous
-	// draw painted lastLines rows below the prompt; if the
-	// cursor was anywhere on those rows we need to climb back
-	// up.  Use the larger of (cursorLine, lastLines-1) to make
-	// sure we land on the prompt row even if the cursor used
-	// to be on the status bar row.
-	topOffset := cursorLine
-	if e.lastLines-1 > topOffset {
-		topOffset = e.lastLines - 1
-	}
-	if topOffset > 0 {
-		fmt.Fprintf(w, "\x1b[%dA", topOffset)
+	// draw left the cursor on row P + lastCursorRow (counted
+	// from the prompt row P).  Walking up lastCursorRow rows
+	// lands us exactly on P, no matter where the cursor was.
+	// This is critical: walking up "lastLines-1" rows would
+	// overshoot the prompt row when the new content is much
+	// taller than the previous draw (e.g. a big paste arrives
+	// in one burst), wiping the conversation history above
+	// the prompt with paint+clear.
+	if e.lastCursorRow > 0 {
+		fmt.Fprintf(w, "\x1b[%dA", e.lastCursorRow)
 	}
 
 	// Paint every content line, top to bottom, using CUD
@@ -1292,8 +1317,10 @@ func (e *lineEditor) drawTo(w io.Writer, statusBar string) {
 	}
 	fmt.Fprintf(w, "\x1b[%dG", cursorCol+continuationCol+1)
 
-	// Remember the row count for the next draw.
+	// Remember the row count and the cursor's row for the
+	// next draw.
 	e.lastLines = newLines
+	e.lastCursorRow = cursorLine
 }
 
 // draw is the production wrapper around drawTo.

@@ -55,8 +55,8 @@ func TestReplEditorEnterSubmits(t *testing.T) {
 // sequence inserts a newline rather than submitting.
 func TestReplEditorAltEnterInsertsNewline(t *testing.T) {
 	_, line := runReplEditorWithInput(t, "line1\x1b\rline2\r")
-	if line != "line1\nline2\n" {
-		t.Fatalf("expected %q, got %q", "line1\nline2\n", line)
+	if line != "line1\nline2" {
+		t.Fatalf("expected %q, got %q", "line1\nline2", line)
 	}
 }
 

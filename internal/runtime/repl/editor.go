@@ -37,6 +37,12 @@ type lineEditor struct {
 	// walk up to reach the top of the editable area, and how
 	// many leftover rows to clear.
 	lastLines int
+	// lastCursorRow is the row (counted from the prompt row,
+	// 0-indexed) the cursor was placed on by the previous
+	// drawTo() call.  We use this instead of lastLines-1 to
+	// walk up to the prompt row in the new draw, so we never
+	// overshoot into the history above.
+	lastCursorRow int
 }
 
 // newLineEditor creates an editor that will print the given prompt.
@@ -75,7 +81,6 @@ func (e *lineEditor) readFrom(r io.Reader, w io.Writer) (string, error) {
 	e.content = e.content[:0]
 	e.pos = 0
 	e.drawTo(w)
-
 	for {
 		buf := make([]byte, 64)
 		n, err := r.Read(buf)
@@ -134,6 +139,13 @@ func (e *lineEditor) readFrom(r io.Reader, w io.Writer) (string, error) {
 					i++
 					continue
 				}
+				// Paint the final content state so the user
+				// sees what they typed before we move the
+				// cursor down to the submit line.  Without
+				// this, the prompt row would still show the
+				// previous draw's state (or nothing at all
+				// if the entire input arrived in one burst).
+				e.drawTo(w)
 				fmt.Fprint(w, "\r\n")
 				return string(e.content), nil
 			case c == 0x03 || c == 0x04:
@@ -163,14 +175,22 @@ func (e *lineEditor) readFrom(r io.Reader, w io.Writer) (string, error) {
 	}
 }
 
-// detectPaste returns true when the input burst looks like a paste.
-// See streaming.detectPaste for the heuristic; the two should stay
+// detectPaste returns true when the input burst looks like a
+// paste: at least TWO non-escape newlines together with at
+// least 4 non-whitespace content bytes.  See
+// streaming.detectPaste for the full rationale; the two stay
 // in sync.
 func detectPaste(b []byte) bool {
 	var newlineCount, hasContent int
-	for _, c := range b {
+	for i, c := range b {
 		switch c {
 		case '\r', '\n':
+			// An ESC immediately before this newline means
+			// it's part of an Alt+Enter sequence, not a
+			// paste-newline.
+			if i > 0 && b[i-1] == '\x1b' {
+				continue
+			}
 			newlineCount++
 		case 0x20, '\t':
 			// whitespace is not "content" by itself
@@ -237,13 +257,17 @@ func (e *lineEditor) drawTo(w io.Writer) {
 	continuationCol := uniseg.StringWidth(e.prompt)
 	newLines := len(lines)
 
-	// Walk up to the top of the editable area.
-	topOffset := cursorLine
-	if e.lastLines-1 > topOffset {
-		topOffset = e.lastLines - 1
-	}
-	if topOffset > 0 {
-		fmt.Fprintf(w, "\x1b[%dA", topOffset)
+	// Walk up to the top of the editable area.  The previous
+	// draw left the cursor on row P + lastCursorRow (counted
+	// from the prompt row P).  Walking up lastCursorRow rows
+	// lands us exactly on P, no matter where the cursor was.
+	// This is critical: walking up "lastLines-1" rows would
+	// overshoot the prompt row when the new content is much
+	// taller than the previous draw (e.g. a big paste arrives
+	// in one burst), wiping the conversation history above
+	// the prompt with paint+clear.
+	if e.lastCursorRow > 0 {
+		fmt.Fprintf(w, "\x1b[%dA", e.lastCursorRow)
 	}
 
 	// Paint every content line, top to bottom, using CUD
@@ -261,8 +285,7 @@ func (e *lineEditor) drawTo(w io.Writer) {
 
 	// If the new content is shorter than the previous draw,
 	// clear the leftover rows so they don't show stale
-	// characters.  The cursor is on the last new content
-	// line; we walk down and clear the remaining rows.
+	// characters.
 	if e.lastLines > newLines {
 		leftover := e.lastLines - newLines
 		for j := 0; j < leftover; j++ {
@@ -279,6 +302,7 @@ func (e *lineEditor) drawTo(w io.Writer) {
 	fmt.Fprintf(w, "\x1b[%dG", cursorCol+continuationCol+1)
 
 	e.lastLines = newLines
+	e.lastCursorRow = cursorLine
 }
 
 // draw is the production wrapper around drawTo.

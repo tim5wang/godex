@@ -7,13 +7,16 @@
 // Architecture:
 //
 //   - min-tui owns the terminal: it sets raw mode, draws the
-//     full-screen canvas, and manages the input editor.
+//     full-screen canvas, manages the input editor, and provides
+//     a slash-command dropdown UI.
 //   - This package translates godex backend events into min-tui
-//     output: banner, history, assistant text deltas, tool calls,
-//     slash command results, status updates.
-//   - The main loop reads input from min-tui and dispatches it to
-//     the backend (Submit for chat, ExecuteCommand for /-prefixed
-//     slash commands).
+//     output (banner, history, assistant text deltas, tool calls,
+//     slash command results, status updates) and registers
+//     godex slash commands with min-tui so they appear in the
+//     input box's `/`-triggered dropdown.
+//   - The main loop reads input from min-tui and submits each
+//     turn asynchronously so the user can keep typing (or
+//     press Ctrl+C to cancel) while the agent is responding.
 package mintui
 
 import (
@@ -38,11 +41,17 @@ import (
 // Backend is the surface area of the runtime backend that the
 // min-tui frontend depends on. Mirrors the streaming Backend
 // interface; trimming happens at the wiring site.
+//
+// SubmitAsync and CancelTurn are required so the main loop can
+// return to tui.ReadLine() immediately and let the user cancel
+// an in-flight turn with Ctrl+C.
 type Backend interface {
 	OpenSession(context.Context, rtbackend.SessionLocator) (*rtbackend.OpenedSession, error)
 	Snapshot(context.Context, string) (rtbackend.Snapshot, error)
 	ContextSummary(context.Context, string) (tools.ContextInspection, error)
 	Submit(context.Context, string, message.Envelope) (*rtbackend.SubmitResult, error)
+	SubmitAsync(context.Context, string, message.Envelope, ...rtbackend.SubmitOptions) (*rtbackend.SubmitResult, error)
+	CancelTurn(context.Context, string, string) (*rtbackend.CancelTurnResult, error)
 	ExecuteCommand(context.Context, string, commands.Command) (commands.Result, error)
 	PendingPermissions(context.Context, string) ([]tools.PendingPermission, error)
 	ApprovePermission(context.Context, string, string, tools.PermissionGrantScope) (tools.PermissionResolution, error)
@@ -58,19 +67,20 @@ type Session struct {
 	stderr  io.Writer
 	now     func() time.Time
 
-	// tui is the min-tui frontend. It is lazily created in Run
-	// so that callers (and tests) can construct a Session
-	// without immediately touching the terminal.
+	// tui is the min-tui frontend. Lazily created in Run so that
+	// callers (and tests) can construct a Session without
+	// immediately touching the terminal.
 	tui *minitui.TUI
-
-	// pendingAppend is a one-line buffer for partial text that
-	// arrived without a trailing newline; flushed on next event
-	// or on session end.
-	pendingAppend string
 
 	// statusMu serializes status-bar updates so a SetStatus call
 	// never interleaves with a streaming write.
 	statusMu sync.Mutex
+
+	// activeTurnID is the turn id of the currently-running
+	// background turn (empty if no turn is active). Used to
+	// translate Ctrl+C into a CancelTurn call.
+	activeTurnMu sync.Mutex
+	activeTurnID string
 
 	// sessionID is the opened session id, kept here for context
 	// summary refresh and event filtering.
@@ -98,7 +108,10 @@ func New(cfg *config.Config, backend Backend, stdout, stderr io.Writer) *Session
 
 // Run starts the min-tui session. It opens a session via the
 // backend, prints the initial banner + history, subscribes to
-// the backend event sink, and reads user input in a loop.
+// the backend event sink, registers slash commands with min-tui
+// so they appear in the input dropdown, and reads user input in
+// a loop. Each turn is submitted asynchronously so the user can
+// keep typing (or cancel) while the agent is responding.
 func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) error {
 	opened, err := s.backend.OpenSession(ctx, locator)
 	if err != nil {
@@ -112,9 +125,8 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	}
 	s.messageCount = len(initial.Messages)
 
-	// tui.Close() is called via defer; on early error returns the
-// terminal is still in raw mode and must be restored.
-tui, err := minitui.NewWithConfig(minitui.Config{
+	// tui.Close() restores the terminal even on early returns.
+	tui, err := minitui.NewWithConfig(minitui.Config{
 		BorderColor:  "\x1b[2m", // dim border
 		MaxInputRows: 8,
 	})
@@ -124,9 +136,18 @@ tui, err := minitui.NewWithConfig(minitui.Config{
 	s.tui = tui
 	defer tui.Close()
 
-	s.printBanner(locator, initial)
-	s.printHistory(initial)
-	s.setStatus("Ready", minitui.StatusDefault)
+	// Register godex slash commands so they appear in the
+	// /-triggered dropdown in the input box. Each command's
+	// handler writes its output to the TUI through the
+	// CommandContext min-tui provides.
+	s.registerSlashCommands()
+
+	// Banner + history go to the TUI output area (NOT raw
+	// stdout) so min-tui's fullDraw can render them on the
+	// canvas along with the input box.
+	s.writeBanner(locator, initial)
+	s.writeHistory(initial)
+	s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
 
 	// Subscribe to backend events. The sink handler writes
 	// assistant text deltas to the TUI output area and updates
@@ -143,17 +164,18 @@ tui, err := minitui.NewWithConfig(minitui.Config{
 	}
 
 	for {
-		// Reset "working" indicator when returning to the
-		// prompt; the placeholder will be re-applied on
-		// phase change events.
-		s.setPlaceholder("")
-
 		input, err := tui.ReadLine()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if isInterruptErr(err) {
+				// Ctrl+C: if a turn is running, cancel it
+				// and continue the loop. Otherwise exit.
+				if s.cancelActiveTurn() {
+					s.setStatus("Turn cancelled", minitui.StatusWarning)
+					continue
+				}
 				return nil
 			}
-			if isInterruptErr(err) {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return fmt.Errorf("read input: %w", err)
@@ -169,32 +191,107 @@ tui, err := minitui.NewWithConfig(minitui.Config{
 	}
 }
 
+// registerSlashCommands wires the godex slash-command list into
+// min-tui's dropdown UI. When the user types `/` in the input
+// box, min-tui shows a filterable list of these commands; arrow
+// keys + Enter invokes the handler with a CommandContext that
+// can write to the TUI and call back for multi-turn input.
+func (s *Session) registerSlashCommands() {
+	for _, item := range commands.AvailableMetadata() {
+		cmd := item // capture for the closure
+		s.tui.RegisterCommand(minitui.SlashCommand{
+			Name:        cmd.Name,
+			Description: cmd.Description,
+			Handler: func(ctx *minitui.CommandContext) {
+				// Reconstruct a commands.Command from the
+				// typed line that min-tui stripped down to
+				// "name args...".  We pass the raw line as
+				// Raw so the dispatcher can re-split it.
+				raw := "/" + cmd.Name
+				if ctx.Args != "" {
+					raw += " " + ctx.Args
+				}
+				parsed, _ := commands.Parse(raw)
+				if parsed.Name == "" {
+					ctx.Write(fmt.Sprintf("Error: failed to parse /%s arguments\n", cmd.Name))
+					return
+				}
+				result, err := s.backend.ExecuteCommand(context.Background(), s.sessionID, parsed)
+				if result.Output != "" {
+					ctx.Write(result.Output)
+					if !strings.HasSuffix(result.Output, "\n") {
+						ctx.Write("\n")
+					}
+				}
+				if result.DispatchError != "" {
+					ctx.Write("Error: " + result.DispatchError + "\n")
+				}
+				if err != nil {
+					ctx.Write("Error: " + err.Error() + "\n")
+				}
+				ctx.SetStatus("/"+cmd.Name+" completed", minitui.StatusInfo)
+			},
+		})
+	}
+}
+
+// cancelActiveTurn cancels the currently-running turn, if any.
+// Returns true if a turn was actually cancelled.
+func (s *Session) cancelActiveTurn() bool {
+	s.activeTurnMu.Lock()
+	turnID := s.activeTurnID
+	s.activeTurnMu.Unlock()
+	if turnID == "" {
+		return false
+	}
+	_, err := s.backend.CancelTurn(context.Background(), s.sessionID, turnID)
+	return err == nil
+}
+
 // dispatchInput routes the user-typed line. Slash commands go
-// to ExecuteCommand; everything else goes to Submit as a chat
-// turn.
+// to ExecuteCommand synchronously; everything else goes to
+// SubmitAsync so the main loop returns to ReadLine immediately.
 func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) error {
 	if strings.TrimSpace(input) == "" {
 		return nil
 	}
 	if cmd, ok := commands.Parse(input); ok {
 		result, err := s.backend.ExecuteCommand(ctx, sessionID, cmd)
-		if result.Output != "" {
-			s.tui.WriteString(result.Output + "\n")
-		}
-		if result.DispatchError != "" {
-			s.tui.WriteString("Error: " + result.DispatchError + "\n")
+		if s.tui != nil {
+			if result.Output != "" {
+				s.tui.WriteString(result.Output + "\n")
+			}
+			if result.DispatchError != "" {
+				s.tui.WriteString("Error: " + result.DispatchError + "\n")
+			}
 		}
 		s.setStatus("/"+cmd.Name+" completed", minitui.StatusInfo)
 		return err
 	}
 
 	envelope := message.NewCLIEnvelope(sessionID, s.cfg.LeadName, input, s.now())
-	res, err := s.backend.Submit(ctx, sessionID, envelope)
+	res, err := s.backend.SubmitAsync(ctx, sessionID, envelope)
 	if err != nil {
 		return err
 	}
-	_ = res // submit result currently unused in TUI
+	if res != nil {
+		s.setActiveTurn(res.TurnID)
+	}
 	return nil
+}
+
+func (s *Session) setActiveTurn(turnID string) {
+	s.activeTurnMu.Lock()
+	s.activeTurnID = turnID
+	s.activeTurnMu.Unlock()
+}
+
+func (s *Session) clearActiveTurn(turnID string) {
+	s.activeTurnMu.Lock()
+	if s.activeTurnID == turnID {
+		s.activeTurnID = ""
+	}
+	s.activeTurnMu.Unlock()
 }
 
 // ── event handling ───────────────────────────────────────────────
@@ -205,12 +302,10 @@ func (s *Session) handleEvent(event events.Event) {
 	switch event.Type {
 	case events.EventAssistantTextDelta:
 		text := extractTextField(event)
-		turnID := event.TurnID
-		s.appendAssistantText(turnID, text)
+		s.appendAssistantText(text)
 	case events.EventAssistantMessageComplete:
 		text := extractTextField(event)
-		turnID := event.TurnID
-		s.finishAssistantBlock(turnID, text)
+		s.finishAssistantBlock(text)
 	case events.EventToolCallStarted:
 		name := extractToolName(event)
 		s.tui.WriteString("\n● " + name + "\n")
@@ -219,24 +314,36 @@ func (s *Session) handleEvent(event events.Event) {
 	case events.EventRunnerPhaseChanged:
 		phase, tool := extractRunnerPhase(event)
 		s.applyRunnerPhase(phase, tool)
-	case events.EventSnapshotReady:
-		s.refreshSnapshot()
 	case events.EventTurnCompleted:
+		s.clearActiveTurn(event.TurnID)
 		s.refreshSnapshot()
 		s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
+	case events.EventSnapshotReady:
+		s.refreshSnapshot()
+	case events.EventWarningRaised:
+		if np, ok := event.Payload.(events.NoticePayload); ok && np.Message != "" {
+			s.tui.WriteString("\n⚠ " + np.Message + "\n")
+		}
+	case events.EventErrorRaised:
+		if np, ok := event.Payload.(events.NoticePayload); ok && np.Message != "" {
+			s.tui.WriteString("\n✗ " + np.Message + "\n")
+		}
 	}
 }
 
-// appendAssistantText appends a streaming text delta to the
-// current assistant block, opening a new block when the turn
-// id changes.
-func (s *Session) appendAssistantText(turnID, text string) {
+// appendAssistantText writes a streaming text delta to the
+// current assistant block.  Min-tui buffers the bytes and
+// renders them incrementally.
+func (s *Session) appendAssistantText(text string) {
+	if text == "" {
+		return
+	}
 	s.tui.WriteString(text)
 }
 
 // finishAssistantBlock ensures the assistant block ends with a
-// trailing blank line, then clears the working flag.
-func (s *Session) finishAssistantBlock(turnID, text string) {
+// trailing newline.
+func (s *Session) finishAssistantBlock(text string) {
 	if text != "" {
 		s.tui.WriteString(text)
 	}
@@ -256,41 +363,36 @@ func (s *Session) refreshSnapshot() {
 
 // ── output rendering ─────────────────────────────────────────────
 
-// printBanner writes the initial header. The header is the
-// godex icon, the workspace path, the model, and the session
-// locator. We do NOT print a separator line: min-tui draws its
-// own input box border above the input.
-func (s *Session) printBanner(locator rtbackend.SessionLocator, snap rtbackend.Snapshot) {
+// writeBanner writes the initial header to the TUI output area
+// so it appears on the canvas above the input box.
+func (s *Session) writeBanner(locator rtbackend.SessionLocator, snap rtbackend.Snapshot) {
 	workspace := s.cfg.WorkspaceDir
 	if workspace == "" {
 		workspace = "(unknown workspace)"
 	}
-	fmt.Fprintf(s.stdout, "🤖 GoDex · min-tui mode\n")
-	fmt.Fprintf(s.stdout, " session %s:%s\n", locator.Channel, locator.Key)
-	fmt.Fprintf(s.stdout, " workspace %s\n", workspace)
-	fmt.Fprintf(s.stdout, " model %s\n", s.cfg.Model)
+	s.tui.WriteString(fmt.Sprintf("🤖 GoDex · min-tui mode\n session %s:%s\n workspace %s\n model %s\n",
+		locator.Channel, locator.Key, workspace, s.cfg.Model))
 	for _, msg := range firstNMessages(snap.Messages, 30) {
-		s.printStoredMessage(msg)
+		s.writeStoredMessage(msg)
 	}
-	_ = protocol.MessageText
 }
 
-// printHistory replays the most recent messages from a freshly
+// writeHistory replays the most recent messages from a freshly
 // opened session. We only print the most recent 30 to avoid
 // dumping megabytes into the output area; older messages are
 // available via the /history command.
-func (s *Session) printHistory(snap rtbackend.Snapshot) {
+func (s *Session) writeHistory(snap rtbackend.Snapshot) {
 	msgs := snap.Messages
 	if len(msgs) > 30 {
-		s.tui.WriteString(fmt.Sprintf("… showing last 30 of %d messages; press /history to inspect older entries …\n\n", len(msgs)))
+		s.tui.WriteString(fmt.Sprintf("\n… showing last 30 of %d messages; press /history to inspect older entries …\n\n", len(msgs)))
 		msgs = msgs[len(msgs)-30:]
 	}
 	for _, msg := range msgs {
-		s.printStoredMessage(msg)
+		s.writeStoredMessage(msg)
 	}
 }
 
-func (s *Session) printStoredMessage(msg protocol.Message) {
+func (s *Session) writeStoredMessage(msg protocol.Message) {
 	text := protocol.MessageText(msg)
 	role := strings.ToLower(strings.TrimSpace(msg.Role))
 	switch role {
@@ -325,14 +427,6 @@ func (s *Session) setStatus(text string, style minitui.StatusStyle) {
 	if s.tui != nil {
 		s.tui.SetStatus(text, style)
 	}
-}
-
-// setPlaceholder flips the working indicator. The min-tui input
-// box does not expose a placeholder, so this is a no-op kept
-// for parity with the streaming TUI; we rely on SetStatus to
-// communicate the state.
-func (s *Session) setPlaceholder(text string) {
-	_ = text
 }
 
 func (s *Session) applyRunnerPhase(phase, tool string) {
@@ -430,5 +524,11 @@ func extractRunnerPhase(event events.Event) (phase, tool string) {
 }
 
 func isInterruptErr(err error) bool {
-	return err != nil && (errors.Is(err, io.EOF) || strings.Contains(err.Error(), "interrupt"))
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	return strings.Contains(err.Error(), "interrupt")
 }

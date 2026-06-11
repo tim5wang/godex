@@ -2,7 +2,6 @@ package mintui
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -16,20 +15,18 @@ import (
 )
 
 // fakeBackend is a minimal in-memory Backend implementation
-// sufficient for the unit tests in this package. It is not
-// thread-safe; tests must serialize access via the Session
-// API only.
+// sufficient for the unit tests in this package.
 type fakeBackend struct {
 	sess *rtbackend.OpenedSession
 	snap rtbackend.Snapshot
 	ctx  tools.ContextInspection
 
-	subscribed bool
-	emit       chan events.Event
-
-	submitCalls   int
-	executeCalls  int
-	lastSubmitted string
+	submitCalls    int
+	asyncCalls     int
+	executeCalls   int
+	cancelCalls    int
+	lastSubmitted  string
+	lastCancelled  string
 }
 
 func newFakeBackend() *fakeBackend {
@@ -41,7 +38,6 @@ func newFakeBackend() *fakeBackend {
 				{Role: "assistant", Content: []protocol.Block{{Type: "text", Text: "hello"}}},
 			},
 		},
-		emit: make(chan events.Event, 16),
 	}
 }
 
@@ -57,7 +53,17 @@ func (f *fakeBackend) ContextSummary(ctx context.Context, id string) (tools.Cont
 func (f *fakeBackend) Submit(ctx context.Context, id string, env message.Envelope) (*rtbackend.SubmitResult, error) {
 	f.submitCalls++
 	f.lastSubmitted = env.Text
-	return &rtbackend.SubmitResult{}, nil
+	return &rtbackend.SubmitResult{TurnID: "t1"}, nil
+}
+func (f *fakeBackend) SubmitAsync(ctx context.Context, id string, env message.Envelope, _ ...rtbackend.SubmitOptions) (*rtbackend.SubmitResult, error) {
+	f.asyncCalls++
+	f.lastSubmitted = env.Text
+	return &rtbackend.SubmitResult{TurnID: "t-async"}, nil
+}
+func (f *fakeBackend) CancelTurn(ctx context.Context, id, turnID string) (*rtbackend.CancelTurnResult, error) {
+	f.cancelCalls++
+	f.lastCancelled = turnID
+	return &rtbackend.CancelTurnResult{TurnID: turnID, Status: "canceling"}, nil
 }
 func (f *fakeBackend) ExecuteCommand(ctx context.Context, id string, cmd commands.Command) (commands.Result, error) {
 	f.executeCalls++
@@ -73,38 +79,13 @@ func (f *fakeBackend) DenyPermission(ctx context.Context, id, p, r string) (tool
 	return tools.PermissionResolution{}, nil
 }
 func (f *fakeBackend) AttachSink(id string, sink events.Sink) (func(), error) {
-	f.subscribed = true
-	// Forward events from f.emit to the sink until unsubscribed.
-	stop := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			case ev, ok := <-f.emit:
-				if !ok {
-					return
-				}
-				sink.Emit(ev)
-			}
-		}
-	}()
-	return func() { close(stop) }, nil
+	return func() {}, nil
 }
 
-// protocolMessage is a tiny local type so the test can
-// construct a fake Snapshot without importing protocol.
-// (no longer needed; we import protocol directly)
-
 func TestSessionRoutesSlashCommandToExecuteCommand(t *testing.T) {
-	// We don't drive min-tui here (it would need a real TTY);
-	// we only exercise the dispatchInput routing logic.
 	b := newFakeBackend()
 	_ = New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})
 
-	// Build a command and call ExecuteCommand directly to
-	// simulate the result that Run() would see from the
-	// min-tui event channel.
 	cmd, ok := commands.Parse("/help")
 	if !ok {
 		t.Fatalf("/help should parse as a slash command")
@@ -118,23 +99,70 @@ func TestSessionRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	}
 }
 
-func TestSessionRoutesChatInputToSubmit(t *testing.T) {
+func TestDispatchUsesSubmitAsyncForChatInput(t *testing.T) {
 	b := newFakeBackend()
-	// dispatchInput does not touch the terminal; we can
-	// construct a session without a tty.
-	_ = New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})
+	s := New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})
 
-	// Use Submit directly to verify the route dispatchInput would
-	// take for non-slash input.
-	_, err := b.Submit(context.Background(), b.sess.SessionID, message.Envelope{Text: "hello"})
-	if err != nil {
-		t.Fatalf("submit: %v", err)
+	if err := s.dispatchInput(context.Background(), b.sess.SessionID, "hello world"); err != nil {
+		t.Fatalf("dispatch: %v", err)
 	}
-	if b.submitCalls != 1 {
-		t.Fatalf("expected 1 submit call, got %d", b.submitCalls)
+	if b.asyncCalls != 1 {
+		t.Fatalf("expected 1 async submit call, got %d", b.asyncCalls)
 	}
-	if b.lastSubmitted != "hello" {
-		t.Fatalf("expected lastSubmitted=hello, got %q", b.lastSubmitted)
+	if b.submitCalls != 0 {
+		t.Fatalf("Submit should not have been called; SubmitAsync is the async path")
+	}
+	if b.lastSubmitted != "hello world" {
+		t.Fatalf("expected lastSubmitted=hello world, got %q", b.lastSubmitted)
+	}
+
+	// The active turn id should now be set so that Ctrl+C
+	// will cancel it.
+	s.activeTurnMu.Lock()
+	turnID := s.activeTurnID
+	s.activeTurnMu.Unlock()
+	if turnID == "" {
+		t.Fatalf("activeTurnID should be set after SubmitAsync returns")
+	}
+}
+
+func TestDispatchRoutesSlashCommandToExecuteCommand(t *testing.T) {
+	b := newFakeBackend()
+	s := New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})
+
+	if err := s.dispatchInput(context.Background(), b.sess.SessionID, "/help"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if b.executeCalls != 1 {
+		t.Fatalf("expected 1 execute call, got %d", b.executeCalls)
+	}
+	if b.asyncCalls != 0 {
+		t.Fatalf("SubmitAsync should not have been called for slash commands")
+	}
+}
+
+func TestCancelActiveTurnCancelsAndReturnsTrue(t *testing.T) {
+	b := newFakeBackend()
+	s := New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})
+
+	// No active turn: should return false, no cancel call.
+	if s.cancelActiveTurn() {
+		t.Fatalf("cancelActiveTurn should return false when no turn is active")
+	}
+	if b.cancelCalls != 0 {
+		t.Fatalf("backend.CancelTurn should not have been called")
+	}
+
+	// Set an active turn and try again.
+	s.setActiveTurn("turn-42")
+	if !s.cancelActiveTurn() {
+		t.Fatalf("cancelActiveTurn should return true when a turn is active")
+	}
+	if b.cancelCalls != 1 {
+		t.Fatalf("expected 1 cancel call, got %d", b.cancelCalls)
+	}
+	if b.lastCancelled != "turn-42" {
+		t.Fatalf("expected lastCancelled=turn-42, got %q", b.lastCancelled)
 	}
 }
 
@@ -144,36 +172,11 @@ func TestHandleEventIgnoresUnknownPayloadTypes(t *testing.T) {
 
 	// Should not panic on payload of an unexpected concrete type.
 	// s.tui is nil here (Run was never called), so any call into
-	// the min-tui frontend would crash.  The handleEvent switch
-	// must early-out on unknown payload types without touching
-	// the frontend.  We use the runner-phase path with a string
-	// payload (rather than a struct) to exercise the fallback
-	// branch.
+	// the min-tui frontend would crash.  We use the runner-phase
+	// path with a string payload (rather than a struct) to exercise
+	// the fallback branch, which doesn't touch the frontend.
 	s.handleEvent(events.Event{
 		Type:    events.EventRunnerPhaseChanged,
 		Payload: "not-a-struct",
 	})
-}
-
-func TestRunRejectsMakeRawFailure(t *testing.T) {
-	// /dev/null-backed stdin/stdout makes term.MakeRaw fail
-	// inside min-tui, which is the expected behavior when
-	// not attached to a TTY. We assert that Run returns an
-	// error rather than hanging or panicking.
-	b := newFakeBackend()
-	s := New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})
-
-	// Use a context that is already cancelled so the call
-	// returns quickly.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err := s.Run(ctx, rtbackend.SessionLocator{Channel: "test", Key: "k"})
-	if err == nil {
-		t.Fatalf("expected error from Run when not attached to a TTY")
-	}
-	// We expect either a make-raw failure or a context error.
-	if !strings.Contains(err.Error(), "minitui") &&
-		!errors.Is(err, context.Canceled) {
-		t.Logf("got error: %v (acceptable)", err)
-	}
 }

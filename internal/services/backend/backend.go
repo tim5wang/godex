@@ -736,7 +736,65 @@ func (s *Service) legacySessionIDIfPresent(locator SessionLocator, scopedSession
 	if _, err := os.Stat(filepath.Join(s.cfg.SessionsDir, legacySessionID)); err == nil {
 		return legacySessionID
 	}
+	// Last-resort fallback: the computed id and the metadata-stripped id
+	// are both missing on disk, but a sibling on-disk directory may still
+	// represent the same logical (Channel, Key) pair under a different
+	// hash. This happens in practice when a TUI/REPL session and a web
+	// session inject different `project_dir` metadata, producing different
+	// hashes for what the user perceives as the same conversation. Reuse
+	// the existing directory when we find exactly one match so the web UI
+	// can resume the REPL session instead of forking an empty one.
+	if reused := s.findExistingOnDiskSessionIDForLocator(locator); reused != "" {
+		return reused
+	}
 	return ""
+}
+
+// findExistingOnDiskSessionIDForLocator scans the sessions directory for a
+// persisted session whose manifest locator matches the supplied locator's
+// channel/key/user_id and returns its session id. It returns "" when zero
+// or more than one directory match, to avoid silently merging unrelated
+// sessions that happen to share the same (channel, key) pair.
+func (s *Service) findExistingOnDiskSessionIDForLocator(locator SessionLocator) string {
+	if s == nil || s.cfg == nil || strings.TrimSpace(s.cfg.SessionsDir) == "" {
+		return ""
+	}
+	normalized := normalizeLocator(locator)
+	targetChannel := normalized.Channel
+	targetKey := normalized.Key
+	targetUserID := normalized.UserID
+	entries, err := os.ReadDir(s.cfg.SessionsDir)
+	if err != nil {
+		return ""
+	}
+	var match string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		manifestPath := filepath.Join(s.cfg.SessionsDir, entry.Name(), manifestFileName)
+		data, err := os.ReadFile(manifestPath)
+		if err != nil {
+			continue
+		}
+		var manifest SessionManifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			continue
+		}
+		ml := normalizeLocator(manifest.Locator)
+		if ml.Channel != targetChannel || ml.Key != targetKey || ml.UserID != targetUserID {
+			continue
+		}
+		if match != "" {
+			// Multiple matches: refuse to guess which one the caller meant.
+			return ""
+		}
+		match = strings.TrimSpace(manifest.SessionID)
+		if match == "" {
+			match = entry.Name()
+		}
+	}
+	return match
 }
 
 // ForkSession creates a new linked session from the current transcript.

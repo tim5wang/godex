@@ -2960,6 +2960,168 @@ func TestOpenSessionRejectsLegacyStateDigestMismatch(t *testing.T) {
 	}
 }
 
+// TestOpenSessionReusesExistingLocalDefaultDirectoryOnDisk reproduces the
+// regression where a TUI/REPL user opens a `local` session and persists it
+// on disk as a directory named after a `local-<hash>` session id, but a
+// later web request for `Channel=local Key=default` computes a different
+// hash and ends up creating an empty parallel session. The contract is:
+// when the computed id is missing on disk but another `local-*` directory
+// already exists with a manifest that declares the same Channel+Key, the
+// service must reuse that directory's id and surface its existing state.
+func TestOpenSessionReusesExistingLocalDefaultDirectoryOnDisk(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+
+	// Pre-seed disk with the "TUI/REPL" local default session: a directory
+	// whose name is some other local-<hash> (not the one the service will
+	// recompute from the web request) and whose manifest declares the same
+	// (Channel, Key) pair the web URL uses.
+	existingID := "local-2e89dede86fda9f7"
+	dir := filepath.Join(cfg.SessionsDir, existingID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir existing session: %v", err)
+	}
+	stateData := mustJSON(t, agent.SessionState{
+		Messages: []protocol.Message{
+			protocol.NewTextMessage(protocol.RoleUser, "hello from REPL"),
+		},
+	})
+	manifest := SessionManifest{
+		SessionID:      existingID,
+		Locator:        SessionLocator{Channel: "local", Key: "default"},
+		Title:          "REPL hello",
+		StateDigest:    stateDigest(stateData),
+		CreatedAt:      time.Now().Add(-time.Hour),
+		UpdatedAt:      time.Now(),
+		LastActivityAt: time.Now(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifestFileName), mustJSON(t, manifest), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), stateData, 0644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	// Simulate the web request: a `local` channel with the canonical `default`
+	// key. The computed stable id is unlikely to match the on-disk directory
+	// because TUI/REPL inject project_dir metadata that web does not.
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "local", Key: "default"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	if opened.SessionID != existingID {
+		t.Fatalf("expected web OpenSession to reuse existing local directory %q, got %q", existingID, opened.SessionID)
+	}
+
+	// And the snapshot pulled from the reused id must reflect the on-disk
+	// state (i.e. the REPL message) rather than an empty fresh session.
+	snap, err := service.Snapshot(context.Background(), opened.SessionID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snap.Messages) != 1 || protocol.MessageText(snap.Messages[0]) != "hello from REPL" {
+		t.Fatalf("expected reused session to surface the REPL state, got %+v", snap.Messages)
+	}
+}
+
+// TestListSessionsIncludesLocalDefaultReusedByWeb guarantees the web UI's
+// session list can see the `local` session that was originally created by
+// TUI/REPL and then reused via OpenSession. Today the web list is filtered
+// by channel and the local directory is invisible to it.
+func TestListSessionsIncludesLocalDefaultReusedByWeb(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+
+	existingID := "local-2e89dede86fda9f7"
+	dir := filepath.Join(cfg.SessionsDir, existingID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stateData := mustJSON(t, agent.SessionState{
+		Messages: []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "hi")},
+	})
+	manifest := SessionManifest{
+		SessionID:      existingID,
+		Locator:        SessionLocator{Channel: "local", Key: "default"},
+		Title:          "REPL local",
+		StateDigest:    stateDigest(stateData),
+		CreatedAt:      time.Now().Add(-time.Hour),
+		UpdatedAt:      time.Now(),
+		LastActivityAt: time.Now(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifestFileName), mustJSON(t, manifest), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), stateData, 0644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	listed, err := service.ListSessions(context.Background(), SessionListFilter{Channel: "local"})
+	if err != nil {
+		t.Fatalf("list local sessions: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("expected the REPL local session to be visible in the local list, got %d entries", len(listed))
+	}
+	if listed[0].SessionID != existingID {
+		t.Fatalf("expected listed session id %q, got %q", existingID, listed[0].SessionID)
+	}
+	if listed[0].Locator.Key != "default" {
+		t.Fatalf("expected listed locator key=default, got %q", listed[0].Locator.Key)
+	}
+}
+
+// TestHTTPOpenSessionReusesLocalDefaultDirectory exercises the /sessions
+// HTTP endpoint the web UI calls, asserting that a POST {channel:local,
+// key:default} body reuses the existing on-disk local directory. We use the
+// public OpenSession service method here; the httpapi layer is a thin
+// decoder on top of it and is covered by its own tests.
+func TestHTTPOpenSessionReusesLocalDefaultDirectory(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+
+	existingID := "local-2e89dede86fda9f7"
+	dir := filepath.Join(cfg.SessionsDir, existingID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stateData := mustJSON(t, agent.SessionState{
+		Messages: []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "hello")},
+	})
+	manifest := SessionManifest{
+		SessionID:      existingID,
+		Locator:        SessionLocator{Channel: "local", Key: "default"},
+		Title:          "REPL local",
+		StateDigest:    stateDigest(stateData),
+		CreatedAt:      time.Now().Add(-time.Hour),
+		UpdatedAt:      time.Now(),
+		LastActivityAt: time.Now(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifestFileName), mustJSON(t, manifest), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), stateData, 0644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	// Simulate the HTTP request body the web client sends and decode the
+	// payload using the same JSON shape the httpapi handler decodes.
+	type openRequest struct {
+		Locator SessionLocator `json:"locator"`
+	}
+	var decoded openRequest
+	if err := json.Unmarshal([]byte(`{"locator":{"channel":"local","key":"default"}}`), &decoded); err != nil {
+		t.Fatalf("decode simulated request body: %v", err)
+	}
+	opened, err := service.OpenSession(context.Background(), decoded.Locator)
+	if err != nil {
+		t.Fatalf("open via simulated http body: %v", err)
+	}
+	if opened.SessionID != existingID {
+		t.Fatalf("expected HTTP OpenSession to reuse %q, got %q", existingID, opened.SessionID)
+	}
+}
+
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)

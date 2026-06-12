@@ -25,7 +25,7 @@ import { ResizeHandle } from "./components/ResizeHandle";
 import { useResizableWidth } from "./hooks/useResizableWidth";
 import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
-import { selectAppNavLayoutState, useLayoutStore } from "./store/layout";
+import { selectAppNavLayoutState, selectTaskCenterDrawerState, useLayoutStore } from "./store/layout";
 
 export default function App() {
   const { locale, t } = useI18n();
@@ -38,11 +38,24 @@ export default function App() {
   // P0-B: AppNav collapsed state lives in the layout store (SPEC §3.2).
   const appNav = useLayoutStore(selectAppNavLayoutState);
   const toggleAppNav = useLayoutStore((state) => state.toggle);
+  // P1-c: Task Center Drawer width envelope (SPEC §4.1.1).
+  // The Drawer doubles as the mobile AppNav drawer and the PC task
+  // center entry point. On mobile (<1024px) we always render full-
+  // width (100vw) so the persisted width envelope only applies on
+  // the PC layout. The setter is exposed on the window for the chip
+  // click handler in P1-e.
+  const taskCenterDrawer = useLayoutStore(selectTaskCenterDrawerState);
   const [navWidth, beginNavResize] = useResizableWidth({
     storageKey: "godex.navWidth",
     defaultWidth: 228,
     min: 176,
     max: 360,
+  });
+  const [taskCenterWidth, beginTaskCenterResize] = useResizableWidth({
+    storageKey: "godex.taskCenterWidth",
+    defaultWidth: taskCenterDrawer.width,
+    min: taskCenterDrawer.min,
+    max: taskCenterDrawer.max,
   });
   const activeApp = activeBuiltinApp(location.pathname);
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
@@ -151,14 +164,22 @@ export default function App() {
               )}
             </Layout.Content>
           </Layout>
+          {/* P1-c: Drawer doubles as mobile AppNav (left, full-screen) and
+              PC Task Center entry point. On <1024px we ignore the
+              taskCenterWidth envelope and let antd render full-width. */}
           <Drawer
             title={<Brand compact />}
             placement="left"
-            width={280}
+            width={screens.lg ? taskCenterWidth : "100vw"}
             open={mobileNavOpen}
             onClose={() => setMobileNavOpen(false)}
+            data-testid="task-center-drawer"
+            data-mode={screens.lg ? "pc-task-center" : "mobile-appnav"}
           >
             {menu}
+            {screens.lg ? (
+              <ResizeHandle label="Resize task center" onPointerDown={beginTaskCenterResize} />
+            ) : null}
           </Drawer>
         </Layout>
       </AntApp>

@@ -810,7 +810,7 @@ func TestApplyConfigPreservesCronToolFromSharedDependencies(t *testing.T) {
 	shared := NewSharedDependencies(cfg)
 	shared.SetCronService(fakeCronManager{})
 
-	a = NewWithSharedDependencies(cfg, shared)
+	a = NewWithSharedDependencies(cfg, shared, "")
 	a.RegisterTools()
 	before := a.ToolCatalog()
 	foundBefore := false

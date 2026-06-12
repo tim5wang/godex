@@ -848,7 +848,7 @@ func (s *Service) ForkSession(ctx context.Context, sessionID string, req ForkReq
 		title = "Branch"
 	}
 
-	a := agent.NewWithSharedDependencies(s.cfg, s.shared)
+	a := agent.NewForSession(s.cfg, s.shared, newID)
 	a.RegisterTools()
 	if modelProfileID != "" {
 		if profile, ok := s.cfg.ModelProfileByID(modelProfileID); ok {
@@ -4327,7 +4327,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	}
 	session.identity = agent.NormalizeAgentIdentity(session.identity, now, sessionID, "main", "GoDex", s.mainCapabilitySummary())
 
-	a := agent.NewWithSharedDependencies(s.cfg, s.shared)
+	a := agent.NewForSession(s.cfg, s.shared, sessionID)
 	a.RegisterTools()
 	if session.modelProfileID != "" {
 		if profile, ok := s.cfg.ModelProfileByID(session.modelProfileID); ok {

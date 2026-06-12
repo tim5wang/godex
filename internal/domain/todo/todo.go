@@ -47,6 +47,32 @@ func NewManager(dataDir string) *Manager {
 	return m
 }
 
+// NewManagerForSession creates a todo manager whose storage
+// is scoped to a single session, so that todos from one
+// session never leak into a freshly-opened web / weixin /
+// local session on the same workspace.
+//
+// The on-disk path is <sessionsDir>/<sessionID>/todos.json,
+// matching the existing per-session layout used for the
+// conversation graph, manifests, and turn records.  An empty
+// sessionID falls back to the bare <sessionsDir>/todos.json
+// so unit tests and the legacy global wiring keep working
+// without changes.
+func NewManagerForSession(sessionsDir, sessionID string) *Manager {
+	dir := strings.TrimSpace(sessionsDir)
+	id := strings.TrimSpace(sessionID)
+	if dir == "" {
+		// Without a base directory we cannot persist;
+		// return an in-memory manager so callers do not
+		// have to special-case nil.
+		return &Manager{items: []Item{}, nextID: 1}
+	}
+	if id == "" {
+		return NewManager(dir)
+	}
+	return NewManager(filepath.Join(dir, id))
+}
+
 func (m *Manager) load() {
 	path := filepath.Join(m.dataDir, "todos.json")
 	data, err := os.ReadFile(path)
@@ -158,14 +184,19 @@ func (m *Manager) Replace(items []Item) ([]Item, error) {
 
 // Reset empties the in-memory todo list, rewinds the next-id counter, and
 // persists the empty state to disk so subsequent Add() calls start from id 1.
-func (m *Manager) Reset() {
+// Returns any error encountered while writing the empty file so the caller
+// can surface a real diagnostic instead of silently believing the list was
+// cleared — a silent failure here is exactly what caused stale todos to
+// haunt later sessions.
+func (m *Manager) Reset() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.persist([]Item{}); err != nil {
-		return
+		return fmt.Errorf("reset todos: %w", err)
 	}
 	m.items = []Item{}
 	m.nextID = 1
+	return nil
 }
 
 // List returns all todo items.

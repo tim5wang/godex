@@ -3427,3 +3427,132 @@ func newTestConfig(t *testing.T) *config.Config {
 	}
 	return cfg
 }
+
+// TestOpenSessionScopesTodosPerSession asserts that the
+// per-session Agent created by loadSession has its own
+// todo manager rooted under
+// <sessionsDir>/<sessionID>/todos.json, so a web session
+// opened in the same workspace as a local session never
+// sees the local session's todos.
+//
+// Regression guard for the cross-session pollution bug
+// where the legacy code created one process-wide todo
+// manager at <TodosDir>/todos.json.
+func TestOpenSessionScopesTodosPerSession(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+
+	local, err := service.OpenSession(context.Background(), SessionLocator{Channel: "local", Key: "alpha"})
+	if err != nil {
+		t.Fatalf("open local session: %v", err)
+	}
+	web, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "alpha"})
+	if err != nil {
+		t.Fatalf("open web session: %v", err)
+	}
+	if local.SessionID == web.SessionID {
+		t.Fatalf("local and web locators must hash to different session ids, got %q", local.SessionID)
+	}
+
+	// Drop a synthetic todo file into the local session's
+	// per-session todo directory.  Without our fix the
+	// global todo manager would have read it for the web
+	// session too.
+	localTodoPath := filepath.Join(cfg.SessionsDir, local.SessionID, "todos.json")
+	if err := os.MkdirAll(filepath.Dir(localTodoPath), 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	if err := os.WriteFile(localTodoPath, []byte(`[{"id":1,"content":"from local","status":"pending","active_form":""}]`), 0o644); err != nil {
+		t.Fatalf("write local todos.json: %v", err)
+	}
+
+	// Drop a synthetic todo into the web session's dir too
+	// so we can verify each session reads its OWN file.
+	webTodoPath := filepath.Join(cfg.SessionsDir, web.SessionID, "todos.json")
+	if err := os.MkdirAll(filepath.Dir(webTodoPath), 0o755); err != nil {
+		t.Fatalf("mkdir web session dir: %v", err)
+	}
+	if err := os.WriteFile(webTodoPath, []byte(`[{"id":1,"content":"from web","status":"pending","active_form":""}]`), 0o644); err != nil {
+		t.Fatalf("write web todos.json: %v", err)
+	}
+
+	// Evict both sessions from the in-memory cache so the
+	// next Snapshot reloads their agents and TodoMgrs from
+	// disk.  Without this the freshly opened sessions would
+	// still report empty todo lists (the file was written
+	// AFTER OpenSession ran).
+	reloadSessionForTest(service, local.SessionID)
+	reloadSessionForTest(service, web.SessionID)
+	if _, err := service.OpenSession(context.Background(), SessionLocator{Channel: "local", Key: "alpha"}); err != nil {
+		t.Fatalf("reopen local: %v", err)
+	}
+	if _, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "alpha"}); err != nil {
+		t.Fatalf("reopen web: %v", err)
+	}
+
+	if err := assertSessionTodoCount(t, service, local.SessionID, 1, "local after seed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertSessionTodoCount(t, service, web.SessionID, 1, "web after seed"); err != nil {
+		t.Fatal(err)
+	}
+
+	// /todos clear on the local session must leave ONLY the
+	// local session empty; the web session must still see
+	// its own todo (no cross-session file deletion).
+	if _, err := service.ExecuteCommand(context.Background(), local.SessionID, commands.Command{Name: "todos", Args: []string{"clear"}}); err != nil {
+		t.Fatalf("/todos clear: %v", err)
+	}
+	if err := assertSessionTodoCount(t, service, local.SessionID, 0, "local after /todos clear"); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertSessionTodoCount(t, service, web.SessionID, 1, "web after local /todos clear (must remain untouched)"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(localTodoPath)
+	if err != nil {
+		t.Fatalf("read todos.json after clear: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "[]" {
+		t.Fatalf("expected /todos clear to write an empty array, got %q", string(data))
+	}
+
+	// Opening yet another channel after local has been
+	// cleared must start with zero todos — this is the
+	// regression scenario from the bug report.
+	weixin, err := service.OpenSession(context.Background(), SessionLocator{Channel: "weixin", Key: "alpha"})
+	if err != nil {
+		t.Fatalf("open weixin session: %v", err)
+	}
+	if err := assertSessionTodoCount(t, service, weixin.SessionID, 0, "fresh weixin must not inherit any session's todos"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertSessionTodoCount checks the public Snapshot's Todos
+// field.  We use the public API rather than poking at the
+// private session map so the test stays robust to internal
+// refactors.
+func assertSessionTodoCount(t *testing.T, service *Service, sessionID string, want int, label string) error {
+	t.Helper()
+	snap, err := service.Snapshot(context.Background(), sessionID)
+	if err != nil {
+		return fmt.Errorf("%s: snapshot: %w", label, err)
+	}
+	if len(snap.Todos) != want {
+		return fmt.Errorf("%s: want %d todos, got %d (items=%+v)", label, want, len(snap.Todos), snap.Todos)
+	}
+	return nil
+}
+
+// reloadSessionForTest evicts a session from the service's
+// in-memory cache so the next OpenSession call reloads its
+// todo state from disk.  Used by the cross-session isolation
+// test to prove that what is persisted in one session's
+// todos.json does not leak into a sibling session.
+func reloadSessionForTest(service *Service, sessionID string) error {
+	service.mu.Lock()
+	delete(service.sessions, sessionID)
+	service.mu.Unlock()
+	return nil
+}

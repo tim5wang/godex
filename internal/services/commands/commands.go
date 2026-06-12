@@ -1171,7 +1171,16 @@ func (s *Service) executeTodos(a *agent.Agent, cmd Command) (Result, error) {
 	case "list":
 		return Result{Name: cmd.Name, Output: a.TodoMgr().Render()}, nil
 	case "clear":
-		a.TodoMgr().Reset()
+		// Reset persists the empty list to disk and clears
+		// the in-memory state.  If persistence fails we
+		// surface the error instead of reporting success —
+		// otherwise the next session's todos would silently
+		// reappear from the stale on-disk file, which is
+		// exactly the cross-session pollution bug we are
+		// guarding against.
+		if err := a.TodoMgr().Reset(); err != nil {
+			return Result{Name: cmd.Name, Output: "Failed to clear todos: " + err.Error()}, err
+		}
 		return Result{Name: cmd.Name, Output: "Cleared todo list.", RefreshSnapshot: true}, nil
 	default:
 		return Result{}, fmt.Errorf("unknown /todos subcommand %q (usage: /todos list|clear)", cmd.Args[0])

@@ -74,3 +74,93 @@ func TestManagerResetPersistsEmptyFile(t *testing.T) {
 		t.Fatalf("expected re-opened manager to load 0 items, got %d", got)
 	}
 }
+
+// TestManagerResetReturnsErrorOnDiskFailure asserts that Reset()
+// surfaces persistence errors instead of silently swallowing them,
+// so the caller (the /todos clear command) can warn the user that
+// stale todos may still haunt the next session.
+func TestManagerResetReturnsErrorOnDiskFailure(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	if _, err := mgr.Add("alpha", ""); err != nil {
+		t.Fatalf("add alpha: %v", err)
+	}
+	// Make the data directory unwritable so persist() fails.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("chmod dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	err := mgr.Reset()
+	if err == nil {
+		t.Fatalf("expected Reset to surface persistence error, got nil")
+	}
+}
+
+// TestNewManagerForSessionScopesToSubdirectory asserts that
+// todos written through one per-session manager never appear in
+// another per-session manager, even when both managers live
+// under the same base sessions directory.
+//
+// Regression guard for the cross-session pollution bug: local
+// session A writes todos, the user runs /todos clear, then a
+// freshly-opened web session B must not see session A's todos.
+func TestNewManagerForSessionScopesToSubdirectory(t *testing.T) {
+	sessions := t.TempDir()
+	a := NewManagerForSession(sessions, "session-A")
+	b := NewManagerForSession(sessions, "session-B")
+
+	if _, err := a.Add("from A", ""); err != nil {
+		t.Fatalf("A.Add: %v", err)
+	}
+	if _, err := a.Add("also from A", ""); err != nil {
+		t.Fatalf("A.Add: %v", err)
+	}
+
+	if got := len(b.List()); got != 0 {
+		t.Fatalf("session B should see 0 todos while session A holds 2, got %d", got)
+	}
+
+	// Resetting session A must not touch session B.
+	if err := a.Reset(); err != nil {
+		t.Fatalf("A.Reset: %v", err)
+	}
+	if _, err := b.Add("from B", ""); err != nil {
+		t.Fatalf("B.Add: %v", err)
+	}
+
+	if got := len(a.List()); got != 0 {
+		t.Fatalf("session A should still be empty after Reset, got %d", got)
+	}
+	if got := len(b.List()); got != 1 {
+		t.Fatalf("session B should have 1 todo, got %d", got)
+	}
+
+	// A fresh manager reopened for session A still reads empty;
+	// a fresh manager for session B reads the one B wrote.
+	a2 := NewManagerForSession(sessions, "session-A")
+	b2 := NewManagerForSession(sessions, "session-B")
+	if got := len(a2.List()); got != 0 {
+		t.Fatalf("reopened session A should be empty, got %d", got)
+	}
+	if got := len(b2.List()); got != 1 {
+		t.Fatalf("reopened session B should have 1 todo, got %d", got)
+	}
+}
+
+// TestNewManagerForSessionEmptyIDFallsBackToBase asserts that
+// passing an empty sessionID yields the legacy single-file
+// manager rooted directly at <baseDir>/todos.json.  This is
+// the safety net for unit tests and tooling that don't know
+// which session they belong to.
+func TestNewManagerForSessionEmptyIDFallsBackToBase(t *testing.T) {
+	base := t.TempDir()
+	mgr := NewManagerForSession(base, "")
+	if _, err := mgr.Add("global", ""); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	// The file should live at <base>/todos.json (not nested).
+	if _, err := os.Stat(filepath.Join(base, "todos.json")); err != nil {
+		t.Fatalf("expected todos.json directly under base dir, got %v", err)
+	}
+}

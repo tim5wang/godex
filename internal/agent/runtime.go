@@ -111,11 +111,36 @@ func (s *SharedDependencies) SetSessionAdminService(admin *sessionadmin.Service)
 }
 
 // NewWithSharedDependencies creates a session-scoped agent on top of shared workspace services.
-func NewWithSharedDependencies(cfg *config.Config, shared *SharedDependencies) *Agent {
+//
+// The sessionID argument scopes per-session state — most importantly the
+// todo list — to the given session, so that todos from one session never
+// leak into a freshly-opened web / weixin / local session on the same
+// workspace.  An empty sessionID is treated as a legacy "global" scope
+// and is kept around only for unit tests and tooling that have no notion
+// of a session.
+func NewWithSharedDependencies(cfg *config.Config, shared *SharedDependencies, sessionID string) *Agent {
 	if shared == nil {
 		shared = NewSharedDependencies(cfg)
 	}
-	return newAgentWithDependencies(cfg, shared.snapshot())
+	deps := shared.snapshot()
+	if strings.TrimSpace(sessionID) != "" {
+		// Always rebuild the todo manager per session so
+		// two sessions opened in the same workspace can
+		// never read each other's todos.json.  Without
+		// this guard the shared deps' global todo
+		// manager would carry over across sessions.
+		deps.todoMgr = todo.NewManagerForSession(cfg.SessionsDir, sessionID)
+	}
+	return newAgentWithDependencies(cfg, deps)
+}
+
+// NewForSession is the preferred entry point when a sessionID is
+// known.  It wires a per-session todo manager rooted at
+// <sessionsDir>/<sessionID>/todos.json so that todos cannot cross
+// session boundaries.  All other dependencies are still sourced
+// from the shared workspace services.
+func NewForSession(cfg *config.Config, shared *SharedDependencies, sessionID string) *Agent {
+	return NewWithSharedDependencies(cfg, shared, sessionID)
 }
 
 // ApplyConfig swaps the agent runtime dependencies to a fresh config snapshot.

@@ -34,7 +34,13 @@ export default function App() {
   const queryClient = useQueryClient();
   const token = useSettingsStore((state) => state.token);
   const screens = Grid.useBreakpoint();
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // P1-e: Drawer open state is a workspace-level flag (SPEC §4.6). The
+  // mobile AppNav hamburger and the chat-header <TaskCenterChip> both
+  // set the same flag via openTaskCenterDrawer() so the panel doubles
+  // as the PC task-center entry point and the mobile AppNav.
+  const drawerOpen = useLayoutStore((state) => state.taskCenterDrawerOpen);
+  const closeTaskCenterDrawer = useLayoutStore((state) => state.closeTaskCenterDrawer);
+  const setMobileNavOpen = closeTaskCenterDrawer;
   // P0-B: AppNav collapsed state lives in the layout store (SPEC §3.2).
   const appNav = useLayoutStore(selectAppNavLayoutState);
   const toggleAppNav = useLayoutStore((state) => state.toggle);
@@ -166,13 +172,16 @@ export default function App() {
           </Layout>
           {/* P1-c: Drawer doubles as mobile AppNav (left, full-screen) and
               PC Task Center entry point. On <1024px we ignore the
-              taskCenterWidth envelope and let antd render full-width. */}
+              taskCenterWidth envelope and let antd render full-width.
+              P1-f: open state is driven by useLayoutStore.taskCenterDrawerOpen
+              (see chat-header <TaskCenterChip>); the close handler is
+              the same closeTaskCenterDrawer action. */}
           <Drawer
             title={<Brand compact />}
             placement="left"
             width={screens.lg ? taskCenterWidth : "100vw"}
-            open={mobileNavOpen}
-            onClose={() => setMobileNavOpen(false)}
+            open={drawerOpen}
+            onClose={closeTaskCenterDrawer}
             data-testid="task-center-drawer"
             data-mode={screens.lg ? "pc-task-center" : "mobile-appnav"}
           >

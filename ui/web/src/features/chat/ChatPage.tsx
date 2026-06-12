@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLayoutStore } from "../../store/layout";
 import {
   Alert,
   App as AntApp,
@@ -174,6 +175,11 @@ export function ChatPage() {
   // header strip is gone — its expanded form is reached via the chip.
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  // P1-f: wire the chat-header <TaskCenterChip>'s onOpen to the
+  // workspace-level drawer flag (SPEC §4.6). The Drawer is owned by
+  // App.tsx; opening it from ChatPage goes through the store so we
+  // do not need ad-hoc cross-page plumbing.
+  const openTaskCenterDrawer = useLayoutStore((state) => state.openTaskCenterDrawer);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [timelineItems, setTimelineItems] = useState<SessionTimelineEntry[]>([]);
@@ -1153,9 +1159,9 @@ export function ChatPage() {
               </Tooltip>
               {/* P1-d: task center header chip (SPEC §5) — replaces the
                   legacy TaskCenterPanel band that previously sat at the
-                  top of the chat workspace. P1-e will wire onOpen to
-                  the App.tsx <Drawer>. */}
-              <TaskCenterChip onOpen={() => { /* P1-e: open task center drawer via App.tsx setMobileNavOpen */ }} label={t("chat.taskCenter") || "Task Center"} />
+                  top of the chat workspace. P1-f wires onOpen to the
+                  App.tsx <Drawer> open state via useLayoutStore. */}
+              <TaskCenterChip onOpen={openTaskCenterDrawer} label={t("chat.taskCenter") || "Task Center"} />
               <Tooltip title="Fork session">
                 <Button
                   size={compactHeader ? "small" : "middle"}

@@ -25,6 +25,7 @@ import { ResizeHandle } from "./components/ResizeHandle";
 import { useResizableWidth } from "./hooks/useResizableWidth";
 import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
+import { selectAppNavLayoutState, useLayoutStore } from "./store/layout";
 
 export default function App() {
   const { locale, t } = useI18n();
@@ -34,6 +35,9 @@ export default function App() {
   const token = useSettingsStore((state) => state.token);
   const screens = Grid.useBreakpoint();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // P0-B: AppNav collapsed state lives in the layout store (SPEC §3.2).
+  const appNav = useLayoutStore(selectAppNavLayoutState);
+  const toggleAppNav = useLayoutStore((state) => state.toggle);
   const [navWidth, beginNavResize] = useResizableWidth({
     storageKey: "godex.navWidth",
     defaultWidth: 228,
@@ -62,6 +66,7 @@ export default function App() {
   const menu = (
     <Menu
       mode={screens.lg ? "inline" : "vertical"}
+      inlineCollapsed={screens.lg ? appNav.collapsed : false}
       selectedKeys={[selectedKey]}
       items={navItems}
       onClick={(info) => {
@@ -90,10 +95,26 @@ export default function App() {
       <AntApp>
         <Layout className={shellClassName}>
           {screens.lg ? (
-            <Layout.Sider className="godex-sider" width={navWidth}>
-              <Brand />
+            <Layout.Sider
+              className="godex-sider"
+              width={appNav.collapsed ? appNav.iconOnlyWidth : navWidth}
+              collapsed={appNav.collapsed}
+              collapsedWidth={appNav.iconOnlyWidth}
+              trigger={null}
+            >
+              <div className="godex-sider-top">
+                <Brand compact={appNav.collapsed} />
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label={appNav.collapsed ? "Expand navigation" : "Collapse navigation"}
+                  title={appNav.collapsed ? "Expand" : "Collapse"}
+                  onClick={() => toggleAppNav("appNav")}
+                  icon={appNav.collapsed ? <MenuOutlined /> : <MenuOutlined />}
+                />
+              </div>
               {menu}
-              <ResizeHandle label="Resize navigation" onPointerDown={beginNavResize} />
+              {!appNav.collapsed ? <ResizeHandle label="Resize navigation" onPointerDown={beginNavResize} /> : null}
             </Layout.Sider>
           ) : null}
           <Layout>

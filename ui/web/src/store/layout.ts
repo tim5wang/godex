@@ -156,6 +156,33 @@ export const DEFAULT_LAYOUT_SNAPSHOT: LayoutSnapshot = {
   dockSide: "right",
 };
 
+// ---------------------------------------------------------------------------
+// AppNav contract (T2 / SPEC §3.2). The AppNav (top-level app navigation) is
+// the leftmost column with chat / files / automation / … . It can be
+// collapsed to an icon-only column. The collapsed flag and the panel width
+// live in panels.appNav (see DEFAULT_PANELS); this module exports a
+// selector that derives the layout snapshot a Sider component needs.
+//
+// The selector is a pure function so it can be unit-tested without a React
+// renderer (no jsdom / @testing-library/react dependency).
+// ---------------------------------------------------------------------------
+
+export const APP_NAV_ICON_ONLY_WIDTH = 48;
+
+export type AppNavLayoutSnapshot = {
+  collapsed: boolean;
+  width: number; // expanded width in px
+  iconOnlyWidth: 48; // SPEC §3.2 fixed narrow width
+};
+
+export function selectAppNavLayoutState(state: LayoutState): AppNavLayoutSnapshot {
+  return {
+    collapsed: state.panels.appNav.collapsed,
+    width: state.panels.appNav.width ?? 200,
+    iconOnlyWidth: 48,
+  };
+}
+
 function clonePanels(panels: Record<PanelKey, PanelState>): Record<PanelKey, PanelState> {
   return Object.fromEntries(Object.entries(panels).map(([k, v]) => [k, { ...v }])) as Record<PanelKey, PanelState>;
 }

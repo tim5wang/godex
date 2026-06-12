@@ -206,6 +206,43 @@ export function selectSessionListLayoutState(state: LayoutState): SessionListLay
   };
 }
 
+// ---------------------------------------------------------------------------
+// MobileWorkspaceTabs contract (T9 / SPEC §3.3). On screens <1024px the chat
+// workspace exposes a 5-tab secondary navigation bar: chat | terminal | files
+// | drawer | tasks. The active tab is stored in mobileActiveTab; this module
+// exports a selector that derives the render payload (tab list + active
+// flag) so the component layer is a thin renderer. UI concerns (visibility
+// driven by Grid.useBreakpoint) stay in the component layer — we don't push
+// viewport state into the layout store.
+// ---------------------------------------------------------------------------
+
+export const MOBILE_TABS_ORDER: ReadonlyArray<MobileTab> = ["chat", "terminal", "files", "drawer", "tasks"];
+
+export type MobileWorkspaceTabDescriptor = {
+  key: MobileTab;
+  i18nKey: string;
+  iconKey: string;
+  active: boolean;
+};
+
+export type MobileWorkspaceTabsSnapshot = {
+  active: MobileTab;
+  tabs: ReadonlyArray<MobileWorkspaceTabDescriptor>;
+};
+
+export function selectMobileWorkspaceTabs(state: LayoutState): MobileWorkspaceTabsSnapshot {
+  const active = state.mobileActiveTab;
+  return {
+    active,
+    tabs: MOBILE_TABS_ORDER.map((key) => ({
+      key,
+      i18nKey: `mobile.tabs.${key}`,
+      iconKey: key,
+      active: key === active,
+    })),
+  };
+}
+
 function clonePanels(panels: Record<PanelKey, PanelState>): Record<PanelKey, PanelState> {
   return Object.fromEntries(Object.entries(panels).map(([k, v]) => [k, { ...v }])) as Record<PanelKey, PanelState>;
 }

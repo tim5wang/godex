@@ -353,7 +353,7 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 		return fmt.Errorf("tui mode unavailable")
 	}
 
-	locator := parseSessionSpecifier(sessionSpec, "web", "default")
+	locator := parseSessionSpecifier(sessionSpec, "local", "default")
 	if strings.TrimSpace(profile) == "" && r.Cfg != nil {
 		profile = r.Cfg.DefaultAgentProfileForChannel("tui")
 	}

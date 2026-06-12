@@ -381,8 +381,11 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 
 	maxTurns := a.maxTurns()
+	a.mu.Lock()
+	caller := a.client
+	a.mu.Unlock()
 	result, err := conversation.Runner{
-		Caller: a.client,
+		Caller: caller,
 		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
 			build, err := a.buildContext(ctx)
 			if err != nil {

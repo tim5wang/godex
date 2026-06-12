@@ -109,6 +109,12 @@ type Session struct {
 	snapshot         rtbackend.Snapshot
 	modelCallCount   int
 	seenModelCallIDs map[string]struct{}
+
+	// assistantStreaming is true while a turn is producing
+	// assistant_text_delta events.  Used to avoid writing the
+	// full text on assistant_message_completed (which would
+	// duplicate the already-streamed deltas).
+	assistantStreaming bool
 }
 
 // New constructs a Session bound to the given backend. It does
@@ -141,6 +147,7 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	if err != nil {
 		return fmt.Errorf("load min-tui snapshot: %w", err)
 	}
+	s.snapshot = initial
 	s.messageCount = len(initial.Messages)
 
 	// tui.Close() restores the terminal even on early returns.
@@ -286,6 +293,14 @@ func (s *Session) handleModelSelect(ctx *minitui.CommandContext) {
 		return
 	}
 
+	// Single model: no need for a select UI.
+	if len(mv.Profiles) == 1 {
+		ctx.Write(fmt.Sprintf("Only one model available: %s (%s).\n",
+			mv.Profiles[0].Name, mv.Profiles[0].Model))
+		ctx.Write("✓ /model completed\n")
+		return
+	}
+
 	// Build select options with the currently selected profile
 	// marked so the dropdown auto-focuses on it.
 	currentProfileID := mv.SessionProfileID
@@ -317,6 +332,11 @@ func (s *Session) handleModelSelect(ctx *minitui.CommandContext) {
 		options = append(options[selectedIdx:], options[:selectedIdx]...)
 	}
 
+	// Render a header line in the output area so the user
+	// knows a selection is in progress (the dropdown appears
+	// as an overlay, not inline).
+	ctx.Write(fmt.Sprintf("Available models (%d profiles):\n", len(mv.Profiles)))
+
 	idx := ctx.Select("Choose model · ↑↓ navigate · Enter confirm · Esc cancel", options)
 	if idx < 0 {
 		ctx.Write("Model selection cancelled.\n")
@@ -330,8 +350,15 @@ func (s *Session) handleModelSelect(ctx *minitui.CommandContext) {
 	}
 	chosen := mv.Profiles[actualIdx]
 
+	// No-op if selecting the already-active profile.
+	if chosen.Selected || chosen.ID == currentProfileID {
+		ctx.Write(fmt.Sprintf("Already using %s (%s).\n", chosen.Name, chosen.Model))
+		ctx.Write("✓ /model completed\n")
+		return
+	}
+
 	// Switch the session to the chosen profile.
-	newMV, err := s.backend.SetSessionModelProfile(context.Background(), s.sessionID, chosen.ID)
+	_, err = s.backend.SetSessionModelProfile(context.Background(), s.sessionID, chosen.ID)
 	if err != nil {
 		ctx.Write("Error: failed to switch model: " + err.Error() + "\n")
 		return
@@ -342,16 +369,7 @@ func (s *Session) handleModelSelect(ctx *minitui.CommandContext) {
 	// Refresh the snapshot so the status bar picks up the new
 	// model name on the next renderStatus call.
 	s.refreshSnapshot()
-
-	// Show the updated model list.
-	ctx.Write("Current: ")
-	for _, p := range newMV.Profiles {
-		if p.Selected || (p.ID == newMV.SessionProfileID) {
-			ctx.Write(fmt.Sprintf("%s (%s)", p.Name, p.Model))
-			break
-		}
-	}
-	ctx.Write("\n✓ /model completed\n")
+	ctx.Write("✓ /model completed\n")
 }
 
 // cancelActiveTurn cancels the currently-running turn, if any.
@@ -391,6 +409,14 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 		return err
 	}
 
+	// Echo the user's message to the output area immediately
+	// so it appears inline with the assistant response that
+	// follows.  Without this the message only exists
+	// server-side and only appears after a session reload.
+	if s.tui != nil {
+		s.tui.WriteString("› you: " + input + "\n\n")
+	}
+
 	envelope := message.NewCLIEnvelope(sessionID, s.cfg.LeadName, input, s.now())
 	res, err := s.backend.SubmitAsync(ctx, sessionID, envelope)
 	if err != nil {
@@ -423,11 +449,21 @@ func (s *Session) clearActiveTurn(turnID string) {
 func (s *Session) handleEvent(event events.Event) {
 	switch event.Type {
 	case events.EventAssistantTextDelta:
+		s.assistantStreaming = true
 		text := extractTextField(event)
 		s.appendAssistantText(text)
 	case events.EventAssistantMessageComplete:
 		text := extractTextField(event)
-		s.finishAssistantBlock(text)
+		if s.assistantStreaming {
+			// Text was already rendered via deltas; just close
+			// the block with a newline.
+			s.tui.WriteString("\n")
+		} else {
+			// No deltas received (small/instant response);
+			// render the full text now.
+			s.finishAssistantBlock(text)
+		}
+		s.assistantStreaming = false
 	case events.EventToolCallStarted:
 		s.renderToolCallStarted(event)
 	case events.EventToolCallFinished:
@@ -437,6 +473,7 @@ func (s *Session) handleEvent(event events.Event) {
 		s.applyRunnerPhase(phase, tool)
 	case events.EventTurnCompleted:
 		s.clearActiveTurn(event.TurnID)
+		s.assistantStreaming = false
 		s.refreshSnapshot()
 		s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
 	case events.EventSnapshotReady:
@@ -558,17 +595,16 @@ func (s *Session) refreshSnapshot() {
 // ── output rendering ─────────────────────────────────────────────
 
 // writeBanner writes the initial header to the TUI output area
-// so it appears on the canvas above the input box.
+// so it appears on the canvas above the input box.  History
+// replay is handled separately by writeHistory to avoid
+// duplication.
 func (s *Session) writeBanner(locator rtbackend.SessionLocator, snap rtbackend.Snapshot) {
 	workspace := s.cfg.WorkspaceDir
 	if workspace == "" {
 		workspace = "(unknown workspace)"
 	}
 	s.tui.WriteString(fmt.Sprintf("🤖 GoDex · min-tui mode\n session %s:%s\n workspace %s\n model %s\n",
-		locator.Channel, locator.Key, workspace, s.cfg.Model))
-	for _, msg := range firstNMessages(snap.Messages, 30) {
-		s.writeStoredMessage(msg)
-	}
+		locator.Channel, locator.Key, workspace, s.resolveModelName()))
 }
 
 // writeHistory replays the most recent messages from a freshly

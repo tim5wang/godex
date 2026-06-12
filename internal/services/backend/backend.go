@@ -4277,6 +4277,11 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 				profile.ReasoningEffort = effort
 			}
 			a.ApplyModelProfile(profile)
+		} else {
+			// The persisted profile no longer exists in config.
+			// Fall back to the default so the agent and
+			// status bar agree on which model is active.
+			session.modelProfileID = s.cfg.DefaultProfileID
 		}
 	}
 	isNewSession := manifest == nil && state == nil

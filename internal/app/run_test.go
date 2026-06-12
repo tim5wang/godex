@@ -768,8 +768,8 @@ func TestRunnerTUISubcommandCallsRunTUI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.Channel != "web" || got.Key != "default" {
-		t.Fatalf("expected locator web:default, got %s:%s", got.Channel, got.Key)
+	if got.Channel != "local" || got.Key != "default" {
+		t.Fatalf("expected locator local:default, got %s:%s", got.Channel, got.Key)
 	}
 	if !fullCalled {
 		t.Fatalf("expected godex tui to call RunFullTUI")

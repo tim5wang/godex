@@ -1710,6 +1710,53 @@ default_bundles:
 	}
 }
 
+// TestDurableSubagentViewNoWriteScopeMarksReadOnlyJobAsNoChanges pins the
+// path-A contract for read-only subagents (e.g. Explore with no write_scope):
+// a completed read-only job has no files in its worktree to merge or review,
+// so the API view must surface MergeStatus = "no_changes" instead of an empty
+// string. The Web frontend's classifyWorkerStatus promotes empty mergeStatus
+// to "ready_for_review", which is the user-visible "待审核" badge the operator
+// reported as un-actionable in the longtask panel.
+func TestDurableSubagentViewNoWriteScopeMarksReadOnlyJobAsNoChanges(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.client = repeatedTextCaller("read-only handoff")
+
+	job, err := a.StartDurableSubagentWithContext(context.Background(), "read-only inspect", "Explore", nil)
+	if err != nil {
+		t.Fatalf("start read-only durable subagent: %v", err)
+	}
+	completed := waitForSubagentStatus(t, a.subagentJobs, job.ID, subagentStatusCompleted)
+
+	view := durableSubagentJobView(completed)
+	if view.MergeStatus != subagentMergeNoChanges {
+		t.Fatalf("expected read-only completed job to surface mergeStatus=%q, got %q (job=%+v)", subagentMergeNoChanges, view.MergeStatus, completed)
+	}
+}
+
+// TestDurableSubagentViewPreservesExplicitMergeStatus guards against the
+// path-A normalizer accidentally clobbering an already-recorded mergeStatus.
+// A job that has been explicitly marked "merged" via SetMergeStatus must keep
+// that status even when it has no write_scope; the normalizer only fills the
+// empty slot, never overwrites a recorded value.
+func TestDurableSubagentViewPreservesExplicitMergeStatus(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.client = repeatedTextCaller("general-purpose handoff")
+
+	job, err := a.StartDurableSubagent("write then merge", "general-purpose", []string{"notes"})
+	if err != nil {
+		t.Fatalf("start general-purpose durable subagent: %v", err)
+	}
+	if _, err := a.subagentJobs.SetMergeStatus(job.ID, subagentMergeMerged, subagentProgressEvent{Phase: "merge_reviewed"}); err != nil {
+		t.Fatalf("set explicit merge status: %v", err)
+	}
+	completed := waitForSubagentStatus(t, a.subagentJobs, job.ID, subagentStatusCompleted)
+
+	view := durableSubagentJobView(completed)
+	if view.MergeStatus != subagentMergeMerged {
+		t.Fatalf("expected explicit merge status %q to be preserved, got %q", subagentMergeMerged, view.MergeStatus)
+	}
+}
+
 func waitForSubagentStatus(t *testing.T, store *subagentJobStore, id string, status subagentJobStatus) *subagentJob {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

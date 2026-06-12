@@ -2398,6 +2398,16 @@ func durableSubagentJobView(job *subagentJob) DurableSubagentJobView {
 			view.LastMessage = progress[i].Message
 		}
 	}
+	// Path-A: a read-only subagent (no write_scope) that has finished has
+	// nothing in its worktree to merge or review. Surface that as
+	// "no_changes" so the Web frontend's classifyWorkerStatus (which
+	// promotes an empty/pending mergeStatus to "ready_for_review") does not
+	// surface an un-actionable "待审核" badge in the longtask panel.
+	// Already-recorded terminal merge statuses (merged/failed/conflicted)
+	// are preserved — this normalizer only fills the pending/empty slot.
+	if (view.MergeStatus == "" || view.MergeStatus == subagentMergePending) && view.Status == string(subagentStatusCompleted) && len(job.WriteScope) == 0 {
+		view.MergeStatus = subagentMergeNoChanges
+	}
 	return view
 }
 

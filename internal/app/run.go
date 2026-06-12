@@ -67,15 +67,16 @@ type Runner struct {
 	Stdout        io.Writer
 	Stderr        io.Writer
 
-	Now          func() time.Time
-	RunTUI       func(context.Context, backend.SessionLocator) error
-	RunFullTUI   func(context.Context, backend.SessionLocator) error
-	Serve        func(context.Context, string) error
-	Doctor       func(context.Context) (string, error)
-	WeixinSetup  func(context.Context) error
-	WeixinLogout func(context.Context) error
-	OpenBrowser  func(string) error
-	Eval         *evalharness.Service
+	Now                func() time.Time
+	RunTUI             func(context.Context, backend.SessionLocator) error
+	RunFullTUI         func(context.Context, backend.SessionLocator) error
+	Serve              func(context.Context, string) error
+	Doctor             func(context.Context) (string, error)
+	WeixinSetup        func(context.Context) error
+	WeixinLogout       func(context.Context) error
+	OpenBrowser        func(string) error
+	Eval               *evalharness.Service
+	DefaultSessionSpec string
 }
 
 // Run executes the selected top-level mode.
@@ -87,7 +88,7 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 		if r.RunTUI == nil {
 			return fmt.Errorf("tui mode unavailable")
 		}
-		locator := backend.SessionLocator{Channel: "local", Key: "default"}
+		locator := parseSessionSpecifier(r.DefaultSessionSpec, "local", "default")
 		profile := ""
 		if r.Cfg != nil {
 			profile = r.Cfg.DefaultAgentProfileForChannel("tui")

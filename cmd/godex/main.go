@@ -185,12 +185,13 @@ func main() {
 	})
 
 	runner := &app.Runner{
-		Cfg:           cfg,
-		ConfigManager: manager,
-		Backend:       service,
-		Stdin:         os.Stdin,
-		Stdout:        os.Stdout,
-		Stderr:        os.Stderr,
+		Cfg:                cfg,
+		ConfigManager:      manager,
+		Backend:            service,
+		Stdin:              os.Stdin,
+		Stdout:             os.Stdout,
+		Stderr:             os.Stderr,
+		DefaultSessionSpec: configOptions.SessionSpec,
 		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
 			return mintui.New(cfg, service, os.Stdout, os.Stderr).Run(ctx, locator)
 		},
@@ -306,6 +307,17 @@ func extractGlobalConfigArgs(args []string) (config.Options, []string, error) {
 			options.ConfigPath = strings.TrimSpace(strings.TrimPrefix(arg, "--config="))
 			if options.ConfigPath == "" {
 				return options, nil, fmt.Errorf("missing value for --config")
+			}
+		case arg == "--session":
+			if idx+1 >= len(args) {
+				return options, nil, fmt.Errorf("missing value for --session")
+			}
+			options.SessionSpec = args[idx+1]
+			idx++
+		case strings.HasPrefix(arg, "--session="):
+			options.SessionSpec = strings.TrimSpace(strings.TrimPrefix(arg, "--session="))
+			if options.SessionSpec == "" {
+				return options, nil, fmt.Errorf("missing value for --session")
 			}
 		default:
 			remaining = append(remaining, arg)

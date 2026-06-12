@@ -91,7 +91,7 @@ func AvailableMetadata() []CommandMetadata {
 		{Name: "cron", Description: "inspect, run, or toggle cron jobs"},
 		{Name: "heartbeat", Description: "inspect, test, or toggle heartbeat"},
 		{Name: "new", Description: "create a new empty session for the current workspace"},
-	{Name: "resume", Description: "list and resume a previous session from this workspace"},
+	{Name: "resume", Description: "list and resume a previous session from this workspace", InputHint: "[session-id|session-name]"},
 	{Name: "help", Description: "show this help message"},
 	}
 	return append([]CommandMetadata(nil), items...)
@@ -1140,9 +1140,6 @@ func (s *Service) executeResumeSession(a *agent.Agent, ctx context.Context, cmd 
 	s.mu.RUnlock()
 	if handler == nil {
 		return Result{Name: "resume", Output: "Resume session runtime is unavailable in this process."}, nil
-	}
-	if len(cmd.Args) > 0 {
-		return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
 	}
 	return handler(ctx, a, cmd)
 }

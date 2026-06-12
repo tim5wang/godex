@@ -264,7 +264,7 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 		}
 		input = strings.TrimRight(input, "\n")
 
-		if err := s.dispatchInput(ctx, opened.SessionID, input); err != nil {
+		if err := s.dispatchInput(ctx, s.sessionID, input); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -305,6 +305,10 @@ func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.C
 	}
 	if cmd.Name == "resume" && strings.TrimSpace(ctx.Args) == "" {
 		s.handleResumeSelect(ctx)
+		return
+	}
+	if cmd.Name == "resume" && strings.TrimSpace(ctx.Args) != "" {
+		s.handleResumeArgs(ctx, strings.TrimSpace(ctx.Args))
 		return
 	}
 
@@ -537,6 +541,71 @@ func (s *Session) handleNewSession(ctx *minitui.CommandContext) {
 		return
 	}
 	ctx.Write(fmt.Sprintf("✓ New session %s:%s ready\n", locator.Channel, locator.Key))
+}
+
+// handleResumeArgs searches for a session matching the query (by session ID,
+// key, or title) and switches to it if a unique match is found. If multiple
+// matches are found, it lists them.
+func (s *Session) handleResumeArgs(ctx *minitui.CommandContext, query string) {
+	allSessions, err := s.backend.ListSessions(context.Background(), rtbackend.SessionListFilter{})
+	if err != nil {
+		ctx.Write("Error: " + err.Error() + "\n")
+		return
+	}
+
+	queryLower := strings.ToLower(query)
+	var matches []rtbackend.ListedSession
+	for _, session := range allSessions {
+		if strings.HasPrefix(strings.ToLower(session.SessionID), queryLower) ||
+			strings.EqualFold(session.Locator.Key, query) ||
+			strings.Contains(strings.ToLower(session.Title), queryLower) {
+			matches = append(matches, session)
+		}
+	}
+
+	if len(matches) == 0 {
+		ctx.Write(fmt.Sprintf("No session found matching %q.\n", query))
+		return
+	}
+
+	if len(matches) == 1 {
+		chosen := matches[0]
+		ctx.Write(fmt.Sprintf("Switching to %s:%s...\n", chosen.Locator.Channel, chosen.Locator.Key))
+		locator := rtbackend.SessionLocator{
+			Channel:  chosen.Locator.Channel,
+			Key:      chosen.Locator.Key,
+			Metadata: chosen.Locator.Metadata,
+		}
+		if err := s.switchSession(context.Background(), locator); err != nil {
+			ctx.Write("Error: " + err.Error() + "\n")
+			return
+		}
+		ctx.Write("✓ /resume completed\n")
+		return
+	}
+
+	// Multiple matches: list them
+	ctx.Write(fmt.Sprintf("Multiple sessions match %q:\n", query))
+	for _, session := range matches {
+		ctx.Write("  " + sessionSelectDesc(session) + "\n")
+	}
+	ctx.Write("Use /resume (no args) to pick from the full list.\n")
+}
+
+// sessionSelectDesc builds a one-line description string for a session.
+func sessionSelectDesc(session rtbackend.ListedSession) string {
+	name := strings.TrimSpace(session.Title)
+	if name == "" || name == "-" {
+		name = session.Locator.Key
+	}
+	desc := fmt.Sprintf("%s · %s:%s", name, session.Locator.Channel, session.Locator.Key)
+	if !session.LastActivityAt.IsZero() {
+		desc += fmt.Sprintf(" · %s", session.LastActivityAt.Format("2006-01-02 15:04"))
+	}
+	if session.Running {
+		desc += " [running]"
+	}
+	return desc
 }
 
 // switchSession detaches from the current session and attaches to a new one,

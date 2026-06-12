@@ -16,6 +16,7 @@ type Options struct {
 	ProjectDir   string
 	ConfigPath   string
 	EnvFile      string
+	SessionSpec  string
 }
 
 // ConfigFile is the canonical YAML shape persisted to godex.yaml.

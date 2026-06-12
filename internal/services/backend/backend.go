@@ -4133,6 +4133,33 @@ func (s *Service) wireSlashCommandHandlers() {
 			return commands.Result{}, err
 		}
 
+		// If args are provided, filter by session ID or name/key
+		query := strings.TrimSpace(strings.Join(cmd.Args, " "))
+		if query != "" {
+			var matched []ListedSession
+			queryLower := strings.ToLower(query)
+			for _, session := range allSessions {
+				if strings.HasPrefix(strings.ToLower(session.SessionID), queryLower) ||
+					strings.EqualFold(session.Locator.Key, query) ||
+					strings.Contains(strings.ToLower(session.Title), queryLower) {
+					matched = append(matched, session)
+				}
+			}
+			if len(matched) == 0 {
+				return commands.Result{Name: "resume", Output: fmt.Sprintf("No session found matching %q.", query)}, nil
+			}
+			var lines []string
+			lines = append(lines, fmt.Sprintf("Sessions matching %q:", query))
+			for _, session := range matched {
+				lines = append(lines, formatSessionLine(session))
+			}
+			lines = append(lines, "", "To resume a session, restart godex with: godex tui --session <channel:key>")
+			return commands.Result{
+				Name:   "resume",
+				Output: strings.Join(lines, "\n"),
+			}, nil
+		}
+
 		currentProjectDir := ""
 		if s.cfg != nil {
 			currentProjectDir = strings.TrimSpace(s.cfg.WorkspaceDir)

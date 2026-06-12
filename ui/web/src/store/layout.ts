@@ -56,6 +56,8 @@ export type LayoutActions = {
   swapPanelInGrid: (panel: PanelKey, slot: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
   setGridRatio: (key: keyof GridRatios, v: number) => void;
   setMobileActiveTab: (t: MobileTab) => void;
+  openTaskCenterDrawer: () => void;
+  closeTaskCenterDrawer: () => void;
   reset: () => void;
 };
 
@@ -153,6 +155,7 @@ export const DEFAULT_LAYOUT_SNAPSHOT: LayoutSnapshot = {
   centerGridRatios: { ...DEFAULT_GRID_RATIOS },
   centerGrid: { ...DEFAULT_GRID_OCCUPANCY[DEFAULT_GRID_PRESET] },
   mobileActiveTab: "chat",
+  taskCenterDrawerOpen: false,
   dockSide: "right",
 };
 
@@ -405,6 +408,14 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   setMobileActiveTab: (t) => {
     if (!isMobileTab(t)) return;
     set(() => ({ mobileActiveTab: t }));
+  },
+
+  openTaskCenterDrawer: () => {
+    set(() => ({ taskCenterDrawerOpen: true }));
+  },
+
+  closeTaskCenterDrawer: () => {
+    set(() => ({ taskCenterDrawerOpen: false }));
   },
 
   reset: () => {

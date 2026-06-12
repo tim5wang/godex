@@ -118,6 +118,21 @@
   4. `<DockPanel>` —— 右侧(以及可选底部)抽屉,内容根据 dock 选中态决定。
 - **移动端(< 1024px)**:`AppNavRail` 与 `SessionListRail` 隐藏(`display: none`),Workspace 占满全宽;Workspace 顶部渲染 `<MobileWorkspaceTabs>`(`对话框 / terminal / 文件 / 抽屉 / 任务`),根据选中态切到对应子视图。
 
+### 4.1.1 任务中心走右侧 Drawer(用户决定,P1 推进点)
+
+- **不**新增独立 dock;**复用 App.tsx 现有右侧 `<Drawer>`**(`<Brand compact />` + `placement="left"`,原本用于移动端 AppNav,本 SPEC 扩展为"PC 任务中心 + 移动端 AppNav"二合一抽屉)。**P0-B 改造已新增汉堡唤起逻辑;P1 额外增加 PC 上"任务 N 🔴" chip 唤起该 Drawer。**
+- **Drawer 宽度可调**:
+  - 任务中心面板需要展示列表 + 状态计数 + 时间线 + (未来)详情预览,默认宽 560px。
+  - 通过 `useLayoutStore.panels.tasks.width` 持久化(默认 560,clamp 到 [320, 800])。
+  - Drawer 内部提供拖拽右边缘改宽度的 `ResizeHandle`(同 P0-B 模式)。
+  - 移动端 (<1024px) 时 Drawer 仍走全屏 100vw 逻辑,不受 `panels.tasks.width` 影响。
+- **抽离位置**:`features/tasks/` 独立模块(方案 A,SPEC §4.2 字面要求),提供:
+  - `<TaskCenterChip />` —— chat header 角标(`任务 N 🔴` / `任务 N 🟠`)
+  - `<TaskCenterDockPanel />` —— 完整列表,放进 Drawer 的 children
+  - `useTaskCenterStats()` —— 数据 hook(从 `useChatStore` 取,只读不修改)
+  - `selectTaskCenterHeaderContract(state) => { running, blocked, pendingReview, merged, failed, total, hasUnread, dotColor }` —— 纯函数 selector
+- **数据源不动**:任务统计来自现有 `useChatStore.overlayItems` 中 `kind === "command" | "subagent" | "warning" | "error"` 的事件流;P1 只重组视图。
+
 ### 4.2 任务中心迁移
 
 - 抽出 `features/chat/components/TaskCenterInline.tsx`(当前内联在 `ChatPage.tsx` 顶栏),重构为 `features/tasks` 模块,提供:

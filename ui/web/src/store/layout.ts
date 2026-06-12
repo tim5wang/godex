@@ -78,7 +78,7 @@ export const DEFAULT_GRID_RATIOS: GridRatios = {
 const DEFAULT_PANELS: Record<PanelKey, PanelState> = {
   appNav: { collapsed: false, width: 200, visible: true },
   sessions: { collapsed: false, width: 280, visible: true },
-  tasks: { collapsed: true, width: 320, visible: true },
+  tasks: { collapsed: true, width: 560, visible: true },
   files: { collapsed: true, width: 320, visible: true },
   terminal: { collapsed: true, width: 320, visible: true },
   drawer: { collapsed: true, width: 320, visible: true },

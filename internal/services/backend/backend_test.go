@@ -101,6 +101,60 @@ func TestStableSessionIDIncludesProjectDirMetadata(t *testing.T) {
 	}
 }
 
+// TestStableSessionIDNormalisesProjectDir asserts that the
+// session id is stable across surface-level variations of the
+// same physical project directory.  Without normalisation,
+// "/a/b" vs "/a/b/" vs "/a/./b" would each hash to a
+// different id, so a user running the same session from
+// different shells, IDEs, or CI scripts would get a brand-new
+// session every time and their old history would seem to
+// disappear.
+func TestStableSessionIDNormalisesProjectDir(t *testing.T) {
+	base := stableSessionID(SessionLocator{
+		Channel: "local",
+		Key:     "default",
+		Metadata: map[string]string{
+			sessionProjectDirMetadataKey: "/Users/foo/proj",
+		},
+	})
+	variants := []struct {
+		name, projectDir string
+	}{
+		{"trailing slash", "/Users/foo/proj/"},
+		{"double slash", "/Users//foo/proj"},
+		{"dot segment", "/Users/foo/./proj"},
+		{"parent traversal that lands on base", "/Users/foo/sub/../proj"},
+		{"trailing whitespace", "  /Users/foo/proj  "},
+	}
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			got := stableSessionID(SessionLocator{
+				Channel: "local",
+				Key:     "default",
+				Metadata: map[string]string{
+					sessionProjectDirMetadataKey: v.projectDir,
+				},
+			})
+			if got != base {
+				t.Fatalf("variant %q (raw %q) produced id %q, want %q", v.name, v.projectDir, got, base)
+			}
+		})
+	}
+}
+
+// TestStableSessionIDEmptyProjectDirStable asserts that an
+// empty project dir (e.g. a CLI invocation with no
+// workspace and no GODEX_PROJECT_DIR) still hashes
+// deterministically — a missing directory must not produce
+// a different id on each call.
+func TestStableSessionIDEmptyProjectDirStable(t *testing.T) {
+	a := stableSessionID(SessionLocator{Channel: "local", Key: "default"})
+	b := stableSessionID(SessionLocator{Channel: "local", Key: "default"})
+	if a != b {
+		t.Fatalf("empty project dir must produce stable id, got %q then %q", a, b)
+	}
+}
+
 func TestOpenSessionDoesNotListOrPersistEmptySession(t *testing.T) {
 	cfg := newTestConfig(t)
 	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
@@ -2576,7 +2630,7 @@ func TestSubmitPersistsDerivedSessionTitle(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected one session, got %d", len(sessions))
 	}
-	if sessions[0].Title != "今天深圳天气怎么样…" {
+	if sessions[0].Title != "今天深圳天气怎么样，需要穿什么" {
 		t.Fatalf("expected derived title, got %#v", sessions[0].Title)
 	}
 }
@@ -2622,7 +2676,7 @@ func TestListSessionsBackfillsMissingManifestTitle(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected one session, got %d", len(sessions))
 	}
-	if sessions[0].Title != "这是一个很长的旧会话…" {
+	if sessions[0].Title != "这是一个很长的旧会话标题示例" {
 		t.Fatalf("expected backfilled title, got %#v", sessions[0].Title)
 	}
 
@@ -2634,7 +2688,7 @@ func TestListSessionsBackfillsMissingManifestTitle(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatalf("decode manifest: %v", err)
 	}
-	if persisted.Title != "这是一个很长的旧会话…" {
+	if persisted.Title != "这是一个很长的旧会话标题示例" {
 		t.Fatalf("expected persisted backfill title, got %#v", persisted.Title)
 	}
 	if persisted.StateDigest == "" {

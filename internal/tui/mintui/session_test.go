@@ -102,6 +102,12 @@ func (f *fakeBackend) SetSessionModelProfile(ctx context.Context, id, profileID 
 		},
 	}, nil
 }
+func (f *fakeBackend) ListSessions(ctx context.Context, filter rtbackend.SessionListFilter) ([]rtbackend.ListedSession, error) {
+	return nil, nil
+}
+func (f *fakeBackend) CreateNewSession(ctx context.Context) (rtbackend.SessionLocator, error) {
+	return rtbackend.SessionLocator{Channel: "local", Key: "new-test"}, nil
+}
 
 func TestSessionRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	b := newFakeBackend()

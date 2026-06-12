@@ -169,3 +169,32 @@ func mergeTranscriptRefs(existing, incoming []string) []string {
 	}
 	return merged
 }
+
+// GenerateTitle sends the first user message to the LLM for a concise session
+// title. Returns the generated title or an error. Intended for async use.
+func (a *Agent) GenerateTitle(ctx context.Context, firstMessage string) (string, error) {
+	if a.client == nil {
+		return "", nil
+	}
+	req := protocol.Request{
+		System: "You are a title generator. Generate a concise session title (max 6 words) for a conversation that starts with the following user message. Output ONLY the title, no explanation, no quotes.",
+		Messages: []protocol.APIMessage{
+			{
+				Role:    protocol.RoleUser,
+				Content: []protocol.Block{{Type: protocol.BlockText, Text: firstMessage}},
+			},
+		},
+		MaxTokens: 30,
+	}
+	resp, err := a.client.Call(ctx, req)
+	if err != nil || resp == nil {
+		return "", err
+	}
+	text := strings.TrimSpace(protocol.MessageText(protocol.MessageFromResponse(*resp)))
+	text = strings.Trim(text, "\"'`「」『』")
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" || len(text) > 120 {
+		return "", nil
+	}
+	return text, nil
+}

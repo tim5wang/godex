@@ -90,7 +90,9 @@ func AvailableMetadata() []CommandMetadata {
 		{Name: "history", Description: "inspect or search session history", InputHint: "show|tail [count]|search <query> [scope=...] [limit=N] [role=...]"},
 		{Name: "cron", Description: "inspect, run, or toggle cron jobs"},
 		{Name: "heartbeat", Description: "inspect, test, or toggle heartbeat"},
-		{Name: "help", Description: "show this help message"},
+		{Name: "new", Description: "create a new empty session for the current workspace"},
+	{Name: "resume", Description: "list and resume a previous session from this workspace"},
+	{Name: "help", Description: "show this help message"},
 	}
 	return append([]CommandMetadata(nil), items...)
 }
@@ -165,6 +167,8 @@ type Service struct {
 	heartbeat func(context.Context, Command) (Result, error)
 	model     func(context.Context, Command) (Result, error)
 	session   func(context.Context, *agent.Agent, Command) (Result, error)
+	newSession    func(context.Context, *agent.Agent, Command) (Result, error)
+	resumeSession func(context.Context, *agent.Agent, Command) (Result, error)
 	clear     func(context.Context, *agent.Agent, Command) (Result, error)
 	approve   func(context.Context, *agent.Agent, Command) (Result, error)
 	deny      func(context.Context, *agent.Agent, Command) (Result, error)
@@ -250,6 +254,20 @@ func (s *Service) SetSession(handler func(context.Context, *agent.Agent, Command
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.session = handler
+}
+
+// SetNewSession installs a runtime /new command handler.
+func (s *Service) SetNewSession(handler func(context.Context, *agent.Agent, Command) (Result, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.newSession = handler
+}
+
+// SetResumeSession installs a runtime /resume command handler.
+func (s *Service) SetResumeSession(handler func(context.Context, *agent.Agent, Command) (Result, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resumeSession = handler
 }
 
 // SetClear installs a runtime clear command handler.
@@ -386,6 +404,10 @@ func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Res
 		return s.executeDeny(a, ctx, cmd)
 	case "session":
 		return s.executeSession(a, ctx, cmd)
+	case "new":
+		return s.executeNewSession(a, ctx, cmd)
+	case "resume":
+		return s.executeResumeSession(a, ctx, cmd)
 	case "history":
 		return s.executeHistory(a, ctx, cmd)
 	case "cron":
@@ -1095,6 +1117,32 @@ func (s *Service) executeSession(a *agent.Agent, ctx context.Context, cmd Comman
 	}
 	if len(cmd.Args) == 0 {
 		cmd.Args = []string{"current"}
+	}
+	return handler(ctx, a, cmd)
+}
+
+func (s *Service) executeNewSession(a *agent.Agent, ctx context.Context, cmd Command) (Result, error) {
+	s.mu.RLock()
+	handler := s.newSession
+	s.mu.RUnlock()
+	if handler == nil {
+		return Result{Name: "new", Output: "New session runtime is unavailable in this process."}, nil
+	}
+	if len(cmd.Args) > 0 {
+		return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
+	}
+	return handler(ctx, a, cmd)
+}
+
+func (s *Service) executeResumeSession(a *agent.Agent, ctx context.Context, cmd Command) (Result, error) {
+	s.mu.RLock()
+	handler := s.resumeSession
+	s.mu.RUnlock()
+	if handler == nil {
+		return Result{Name: "resume", Output: "Resume session runtime is unavailable in this process."}, nil
+	}
+	if len(cmd.Args) > 0 {
+		return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
 	}
 	return handler(ctx, a, cmd)
 }

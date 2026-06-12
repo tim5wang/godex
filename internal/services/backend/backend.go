@@ -62,6 +62,7 @@ const (
 	sessionProjectDirMetadataKey  = "project_dir"
 	sessionGraphBranchMetadataKey = "session_graph_branch_id"
 	sessionGraphNodeMetadataKey   = "session_graph_node_id"
+	latestSessionFileName         = "latest-session"
 )
 
 var maxAttachmentBytes int64 = 128 << 20
@@ -446,6 +447,7 @@ func NewService(cfg *config.Config, shared *agent.SharedDependencies, commandSer
 	service.store, service.storeErr = newSessionStore(cfg)
 	service.autoRepairSessions()
 	service.recoverQueuedSessions()
+	service.wireSlashCommandHandlers()
 	return service
 }
 
@@ -654,6 +656,12 @@ func (s *Service) ApplyConfig(cfg *config.Config) error {
 func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*OpenedSession, error) {
 	_ = ctx
 	locator = s.withDefaultLocatorMetadata(locator)
+	// Resolve "default" key to the latest session when a pointer exists.
+	if strings.TrimSpace(locator.Key) == "default" {
+		if latestKey := s.readLatestSessionKey(); latestKey != "" {
+			locator.Key = latestKey
+		}
+	}
 	normalized := normalizeLocator(locator)
 	sessionID := stableSessionID(normalized)
 	if legacySessionID := s.legacySessionIDIfPresent(normalized, sessionID); legacySessionID != "" {
@@ -692,6 +700,90 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 	return s.describeSession(loaded), nil
 }
 
+// CreateNewSession creates a new session with a timestamp-based key
+// for the current workspace, writes it as the latest-session pointer,
+// and returns the locator so the frontend can switch to it.
+func (s *Service) CreateNewSession(ctx context.Context) (SessionLocator, error) {
+	now := s.now()
+	key := fmt.Sprintf("new-%s", now.Format("20060102-150405"))
+
+	channel := "local"
+	projectDir := ""
+	if s.cfg != nil {
+		projectDir = strings.TrimSpace(s.cfg.WorkspaceDir)
+		if projectDir == "" {
+			projectDir = strings.TrimSpace(s.cfg.ProjectDir)
+		}
+	}
+	projectDir = cleanProjectDir(projectDir)
+
+	locator := SessionLocator{
+		Channel: channel,
+		Key:     key,
+	}
+	if projectDir != "" {
+		locator.Metadata = map[string]string{
+			sessionProjectDirMetadataKey: projectDir,
+		}
+	}
+
+	if _, err := s.OpenSession(ctx, locator); err != nil {
+		return SessionLocator{}, err
+	}
+
+	if err := s.writeLatestSessionKey(key); err != nil {
+		return SessionLocator{}, err
+	}
+
+	return locator, nil
+}
+
+// readLatestSessionKey returns the latest session key for the current
+// workspace from the .godex/latest-session pointer file.
+func (s *Service) readLatestSessionKey() string {
+	if s.cfg == nil {
+		return ""
+	}
+	path := filepath.Join(s.cfg.StateDir, latestSessionFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" || key == "default" {
+		return ""
+	}
+	return key
+}
+
+// writeLatestSessionKey writes the latest session key pointer file
+// so future godex/godex tui invocations open this session by default.
+func (s *Service) writeLatestSessionKey(key string) error {
+	if s.cfg == nil {
+		return fmt.Errorf("missing config")
+	}
+	if err := os.MkdirAll(s.cfg.StateDir, 0755); err != nil {
+		return err
+	}
+	path := filepath.Join(s.cfg.StateDir, latestSessionFileName)
+	return os.WriteFile(path, []byte(key+"\n"), 0644)
+}
+
+// cleanProjectDir normalises a project directory string for
+// use as session identity input.  Two paths that resolve to
+// the same physical directory should hash to the same session
+// id, so we strip trailing slashes, collapse "a/./b" segments
+// and remove doubled separators via filepath.Clean.  Empty
+// input is preserved as the empty string so callers can still
+// tell "no project" apart from a real path.
+func cleanProjectDir(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return filepath.Clean(value)
+}
+
 func (s *Service) withDefaultLocatorMetadata(locator SessionLocator) SessionLocator {
 	projectDir := ""
 	if s != nil && s.cfg != nil {
@@ -700,6 +792,14 @@ func (s *Service) withDefaultLocatorMetadata(locator SessionLocator) SessionLoca
 			projectDir = strings.TrimSpace(s.cfg.WorkspaceDir)
 		}
 	}
+	if projectDir == "" {
+		return locator
+	}
+	// Normalise once at the boundary so the same physical
+	// directory always hashes to the same session id,
+	// regardless of trailing slashes or "./" segments the
+	// caller may have passed in via cfg.
+	projectDir = cleanProjectDir(projectDir)
 	if projectDir == "" {
 		return locator
 	}
@@ -1326,7 +1426,14 @@ func (s *Service) runUserTurnLocked(ctx context.Context, session *sessionState, 
 	if err != nil {
 		return nil, err
 	}
-	return s.finishAgentTurnLocked(ctx, session, turn.TurnID, turn.Envelope, turn.RuntimeContext, turn.PriorMessageCount)
+	result, err := s.finishAgentTurnLocked(ctx, session, turn.TurnID, turn.Envelope, turn.RuntimeContext, turn.PriorMessageCount)
+	// Fire async title generation only when the turn completes cleanly (no
+	// pending permission). This avoids racing with recovery/continuation LLM
+	// calls in tests and real scenarios.
+	if result != nil && !result.PendingApproval && err == nil {
+		s.maybeGenerateTitleAsync(session, envelope)
+	}
+	return result, err
 }
 
 func (s *Service) startUserTurnLocked(session *sessionState, envelope message.Envelope, persistRunning bool) (preparedUserTurn, *SubmitResult, error) {
@@ -3988,6 +4095,129 @@ func (s *Service) UnloadSessionSkill(ctx context.Context, sessionID, name string
 	return result, err
 }
 
+// wireSlashCommandHandlers installs session management slash-command handlers
+// so the commands service can delegate /new and /resume to the backend.
+func (s *Service) wireSlashCommandHandlers() {
+	if s.commands == nil {
+		return
+	}
+	s.commands.SetNewSession(func(ctx context.Context, a *agent.Agent, cmd commands.Command) (commands.Result, error) {
+		locator, err := s.CreateNewSession(ctx)
+		if err != nil {
+			return commands.Result{}, err
+		}
+
+		projectDir := ""
+		if s.cfg != nil {
+			projectDir = strings.TrimSpace(s.cfg.WorkspaceDir)
+			if projectDir == "" {
+				projectDir = strings.TrimSpace(s.cfg.ProjectDir)
+			}
+		}
+
+		output := fmt.Sprintf("✓ New session created.\n\nSession: %s:%s", locator.Channel, locator.Key)
+		if projectDir != "" {
+			output += fmt.Sprintf("\nWorkspace: %s", projectDir)
+		}
+		output += "\n\nSwitched to the new session. Next time you run godex in this directory, it will open this session."
+
+		return commands.Result{
+			Name:   "new",
+			Output: output,
+		}, nil
+	})
+
+	s.commands.SetResumeSession(func(ctx context.Context, a *agent.Agent, cmd commands.Command) (commands.Result, error) {
+		allSessions, err := s.ListSessions(ctx, SessionListFilter{})
+		if err != nil {
+			return commands.Result{}, err
+		}
+
+		currentProjectDir := ""
+		if s.cfg != nil {
+			currentProjectDir = strings.TrimSpace(s.cfg.WorkspaceDir)
+			if currentProjectDir == "" {
+				currentProjectDir = strings.TrimSpace(s.cfg.ProjectDir)
+			}
+		}
+		currentProjectDir = cleanProjectDir(currentProjectDir)
+
+		var current, others []ListedSession
+		for _, session := range allSessions {
+			sessionProjectDir := ""
+			if session.Locator.Metadata != nil {
+				sessionProjectDir = cleanProjectDir(session.Locator.Metadata[sessionProjectDirMetadataKey])
+			}
+			if currentProjectDir != "" && sessionProjectDir == currentProjectDir {
+				current = append(current, session)
+			} else {
+				others = append(others, session)
+			}
+		}
+
+		var lines []string
+		if len(current) > 0 {
+			lines = append(lines, fmt.Sprintf("Sessions for %s:", currentProjectDir))
+			for _, session := range current {
+				lines = append(lines, formatSessionLine(session))
+			}
+		}
+		if len(others) > 0 {
+			if len(lines) > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, "Other sessions:")
+			for _, session := range others {
+				lines = append(lines, formatSessionLine(session))
+			}
+		}
+		if len(lines) == 0 {
+			return commands.Result{Name: "resume", Output: "No saved sessions found."}, nil
+		}
+		lines = append(lines, "", "To resume a session, restart godex with: godex tui --session <channel:key>")
+
+		return commands.Result{
+			Name:   "resume",
+			Output: strings.Join(lines, "\n"),
+		}, nil
+	})
+}
+
+// formatSessionLine renders one listed session as: name · date · ID · working-dir.
+func formatSessionLine(session ListedSession) string {
+	name := strings.TrimSpace(session.Title)
+	if name == "" || name == "-" {
+		name = fmt.Sprintf("%s:%s", session.Locator.Channel, session.Locator.Key)
+	}
+	line := fmt.Sprintf("- %s", name)
+
+	if !session.LastActivityAt.IsZero() {
+		line += fmt.Sprintf(" · %s", session.LastActivityAt.Format("2006-01-02 15:04"))
+	}
+
+	line += fmt.Sprintf(" · %s:%s", session.Locator.Channel, session.Locator.Key)
+
+	if session.Locator.Metadata != nil {
+		if projectDir := strings.TrimSpace(session.Locator.Metadata[sessionProjectDirMetadataKey]); projectDir != "" {
+			line += fmt.Sprintf(" · %s", truncatePathTail(projectDir, 40))
+		}
+	}
+
+	if session.Running {
+		line += " [running]"
+	}
+	return line
+}
+
+// truncatePathTail keeps only the last maxLen characters of a path, adding
+// "..." prefix when truncation occurs. Useful for dense directory display.
+func truncatePathTail(path string, maxLen int) string {
+	if len(path) <= maxLen {
+		return path
+	}
+	return "..." + path[len(path)-maxLen:]
+}
+
 // ListSessions returns persisted sessions ordered by most recent update first.
 func (s *Service) ListSessions(ctx context.Context, filter SessionListFilter) ([]ListedSession, error) {
 	ids := map[string]struct{}{}
@@ -5480,6 +5710,65 @@ func (s *sessionState) setTitleIfEmpty(title string) {
 	s.title = title
 }
 
+// maybeGenerateTitleAsync fires an async LLM call to generate a better title
+// when the first user message is received. On success the session title and
+// manifest are updated. Best-effort: failures and panics are silently ignored.
+func (s *Service) maybeGenerateTitleAsync(session *sessionState, envelope message.Envelope) {
+	if session == nil || session.agent == nil {
+		return
+	}
+	firstMessage := strings.TrimSpace(envelope.BodyText())
+	if firstMessage == "" {
+		return
+	}
+	go func() {
+		defer func() { recover() }()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		// Additional recover because client.Call may panic in test stubs
+		var title string
+		func() {
+			defer func() { recover() }()
+			t, err := session.agent.GenerateTitle(ctx, firstMessage)
+			if err == nil {
+				title = t
+			}
+		}()
+		if title == "" {
+			return
+		}
+		session.mu.Lock()
+		session.title = title
+		session.mu.Unlock()
+		s.writeManifestForSession(session)
+	}()
+}
+
+func (s *Service) writeManifestForSession(session *sessionState) {
+	if session == nil || s == nil {
+		return
+	}
+	session.mu.RLock()
+	manifest := SessionManifest{
+		SessionID:              session.id,
+		Locator:                session.locator,
+		Identity:               session.identity,
+		Title:                  session.title,
+		ModelProfileID:         session.modelProfileID,
+		ReasoningEffort:        session.reasoningEffort,
+		ParentSessionID:        session.parentSessionID,
+		ForkedFromTurnID:       session.forkedFromTurnID,
+		ForkedFromMessageIndex: session.forkedFromMessageIndex,
+		BranchTitle:            session.branchTitle,
+		StateDigest:            "",
+		CreatedAt:              session.createdAt,
+		UpdatedAt:              session.updatedAt,
+		LastActivityAt:         session.lastActive,
+	}
+	session.mu.RUnlock()
+	_ = s.writeManifest(manifest)
+}
+
 func (s *Service) sessionDir(sessionID string) string {
 	return filepath.Join(s.cfg.SessionsDir, sessionID)
 }
@@ -6486,6 +6775,12 @@ func mergeCommandContextMetadata(base map[string]string, override map[string]str
 
 func stableSessionID(locator SessionLocator) string {
 	normalized := normalizeLocator(locator)
+	// Clean the project dir on the way into the hash so
+	// "/a/b" and "/a/b/" or "/a/./b" — the same directory,
+	// different surface forms — all map to the same session
+	// id.  This keeps the session identity stable across
+	// shells, editors, and CI scripts that often normalise
+	// paths differently.
 	data, _ := json.Marshal(struct {
 		Channel    string `json:"channel"`
 		Key        string `json:"key,omitempty"`
@@ -6495,7 +6790,7 @@ func stableSessionID(locator SessionLocator) string {
 		Channel:    normalized.Channel,
 		Key:        normalized.Key,
 		UserID:     normalized.UserID,
-		ProjectDir: strings.TrimSpace(normalized.Metadata[sessionProjectDirMetadataKey]),
+		ProjectDir: cleanProjectDir(normalized.Metadata[sessionProjectDirMetadataKey]),
 	})
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("%s-%s", normalized.Channel, hex.EncodeToString(sum[:8]))
@@ -6689,13 +6984,28 @@ func summarizeTitle(raw string) string {
 	if raw == "" {
 		return "New chat"
 	}
+	// Use up to 50 chars for better distinguishability.
 	runes := []rune(raw)
-	if len(runes) <= 10 {
+	maxLen := 50
+	if len(runes) <= maxLen {
 		return raw
 	}
-	truncated := strings.TrimRight(string(runes[:10]), " \t\r\n,.;:!?，。！？、；：")
+	// Find a natural break point: prefer sentence-ending punctuation or whitespace.
+	cut := maxLen
+	for i := maxLen - 1; i >= maxLen*2/3 && i >= 0; i-- {
+		switch runes[i] {
+		case '.', '!', '?', '。', '！', '？', '\n', ';', '；':
+			cut = i + 1
+			goto done
+		case ' ', '\t', ',', '，':
+			cut = i
+			goto done
+		}
+	}
+done:
+	truncated := strings.TrimRight(string(runes[:cut]), " \t\r\n,.;:!?，。！？、；：")
 	if truncated == "" {
-		truncated = string(runes[:10])
+		truncated = string(runes[:maxLen])
 	}
 	return truncated + "…"
 }

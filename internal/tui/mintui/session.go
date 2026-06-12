@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,8 @@ type Backend interface {
 	AttachSink(string, events.Sink) (func(), error)
 	Models(context.Context, string) (rtbackend.ModelsView, error)
 	SetSessionModelProfile(context.Context, string, string) (rtbackend.ModelsView, error)
+	ListSessions(context.Context, rtbackend.SessionListFilter) ([]rtbackend.ListedSession, error)
+	CreateNewSession(context.Context) (rtbackend.SessionLocator, error)
 }
 
 // Session drives a min-tui frontend against a shared runtime backend.
@@ -87,6 +90,10 @@ type Session struct {
 	// sessionID is the opened session id, kept here for context
 	// summary refresh and event filtering.
 	sessionID string
+
+	// unsubscribe detaches the event sink from the current session.
+	// Nil when no sink is attached.
+	unsubscribe func()
 
 	// messageCount tracks the number of messages in the
 	// session, refreshed on each snapshot.
@@ -217,6 +224,7 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	if err != nil {
 		return fmt.Errorf("attach event sink: %w", err)
 	}
+	s.unsubscribe = unsubscribe
 	defer unsubscribe()
 
 	// Best-effort initial context summary for the status bar.
@@ -284,12 +292,19 @@ func (s *Session) registerSlashCommands() {
 }
 
 // handleSlashCommand dispatches one slash command.  Most commands
-// are forwarded to ExecuteCommand exactly as before.  /model with
-// no arguments opens an interactive dropdown selector so the user
-// can pick a model with arrow keys instead of typing a profile ID.
+// are forwarded to ExecuteCommand exactly as before.  /model and
+// /resume with no arguments open an interactive dropdown selector.
 func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.CommandMetadata) {
 	if cmd.Name == "model" && strings.TrimSpace(ctx.Args) == "" {
 		s.handleModelSelect(ctx)
+		return
+	}
+	if cmd.Name == "new" && strings.TrimSpace(ctx.Args) == "" {
+		s.handleNewSession(ctx)
+		return
+	}
+	if cmd.Name == "resume" && strings.TrimSpace(ctx.Args) == "" {
+		s.handleResumeSelect(ctx)
 		return
 	}
 
@@ -412,6 +427,214 @@ func (s *Session) handleModelSelect(ctx *minitui.CommandContext) {
 	// model name on the next renderStatus call.
 	s.refreshSnapshot()
 	ctx.Write("✓ /model completed\n")
+}
+
+// handleResumeSelect shows a secondary dropdown to pick a session
+// to resume. Sessions from the current workspace are listed first,
+// sorted by most recent activity (newest first).
+func (s *Session) handleResumeSelect(ctx *minitui.CommandContext) {
+	allSessions, err := s.backend.ListSessions(context.Background(), rtbackend.SessionListFilter{})
+	if err != nil {
+		ctx.Write("Error: failed to list sessions: " + err.Error() + "\n")
+		return
+	}
+	if len(allSessions) == 0 {
+		ctx.Write("No saved sessions found.\n")
+		return
+	}
+
+	// Determine current workspace project dir
+	currentProjectDir := ""
+	if s.cfg != nil {
+		currentProjectDir = strings.TrimSpace(s.cfg.WorkspaceDir)
+		if currentProjectDir == "" {
+			currentProjectDir = strings.TrimSpace(s.cfg.ProjectDir)
+		}
+	}
+	currentProjectDir = filepath.Clean(currentProjectDir)
+
+	// Split into current workspace vs others, both already sorted by UpdatedAt desc
+	var current, others []rtbackend.ListedSession
+	for _, session := range allSessions {
+		sessionProjectDir := ""
+		if session.Locator.Metadata != nil {
+			sessionProjectDir = filepath.Clean(strings.TrimSpace(session.Locator.Metadata["project_dir"]))
+		}
+		if currentProjectDir != "" && sessionProjectDir == currentProjectDir {
+			current = append(current, session)
+		} else {
+			others = append(others, session)
+		}
+	}
+
+	// Build select options: current workspace first, then others
+	options := make([]minitui.SelectOption, 0, len(allSessions))
+	for _, session := range current {
+		options = append(options, sessionSelectOption(session))
+	}
+	if len(current) > 0 && len(others) > 0 {
+		options = append(options, minitui.SelectOption{
+			Label:       "────────── other workspaces ──────────",
+			Description: "",
+		})
+	}
+	for _, session := range others {
+		options = append(options, sessionSelectOption(session))
+	}
+
+	ctx.Write(fmt.Sprintf("Sessions (%d total):\n", len(allSessions)))
+
+	idx := ctx.Select("Choose session · ↑↓ navigate · Enter select · Esc cancel", options)
+	if idx < 0 {
+		ctx.Write("Session selection cancelled.\n")
+		return
+	}
+
+	// Map back through our split lists
+	var chosen rtbackend.ListedSession
+	if idx < len(current) {
+		chosen = current[idx]
+	} else if len(current) > 0 && len(others) > 0 && idx == len(current) {
+		ctx.Write("Session selection cancelled.\n")
+		return
+	} else {
+		offset := idx - len(current)
+		if len(current) > 0 && len(others) > 0 {
+			offset--
+		}
+		if offset >= 0 && offset < len(others) {
+			chosen = others[offset]
+		} else {
+			ctx.Write("Session selection cancelled.\n")
+			return
+		}
+	}
+
+	ctx.Write(fmt.Sprintf("Switching to session %s:%s...\n", chosen.Locator.Channel, chosen.Locator.Key))
+
+	locator := rtbackend.SessionLocator{
+		Channel:  chosen.Locator.Channel,
+		Key:      chosen.Locator.Key,
+		Metadata: chosen.Locator.Metadata,
+	}
+	if err := s.switchSession(context.Background(), locator); err != nil {
+		ctx.Write("Error: failed to switch session: " + err.Error() + "\n")
+		return
+	}
+	ctx.Write("✓ /resume completed\n")
+}
+
+// handleNewSession creates a new session and switches to it.
+func (s *Session) handleNewSession(ctx *minitui.CommandContext) {
+	ctx.Write("Creating new session...\n")
+	locator, err := s.backend.CreateNewSession(context.Background())
+	if err != nil {
+		ctx.Write("Error: failed to create new session: " + err.Error() + "\n")
+		return
+	}
+	if err := s.switchSession(context.Background(), locator); err != nil {
+		ctx.Write("Error: failed to switch to new session: " + err.Error() + "\n")
+		return
+	}
+	ctx.Write(fmt.Sprintf("✓ New session %s:%s ready\n", locator.Channel, locator.Key))
+}
+
+// switchSession detaches from the current session and attaches to a new one,
+// clearing the display and reloading the new session's state and history.
+func (s *Session) switchSession(ctx context.Context, locator rtbackend.SessionLocator) error {
+	// Unsubscribe from old session events
+	if s.unsubscribe != nil {
+		s.unsubscribe()
+		s.unsubscribe = nil
+	}
+
+	// Clear any lingering activity chip
+	s.clearActivityChip()
+
+	opened, err := s.backend.OpenSession(ctx, locator)
+	if err != nil {
+		return fmt.Errorf("open session: %w", err)
+	}
+	s.sessionID = opened.SessionID
+
+	snapshot, err := s.backend.Snapshot(ctx, opened.SessionID)
+	if err != nil {
+		return fmt.Errorf("load snapshot: %w", err)
+	}
+	s.snapshot = snapshot
+	s.messageCount = len(snapshot.Messages)
+	s.seenModelCallIDs = make(map[string]struct{})
+	s.modelCallCount = 0
+	s.assistantStreaming = false
+
+	// Reset output: min-tui doesn't expose a clear method, so we output
+	// a visual separator then re-render the new session's banner + history.
+	if s.tui != nil {
+		s.tui.WriteString("\n─── session switched ───\n\n")
+		s.writeBanner(locator, snapshot)
+		s.writeHistory(snapshot)
+	}
+
+	// Subscribe to new session events
+	unsub, err := s.backend.AttachSink(opened.SessionID, events.SinkFunc(s.handleEvent))
+	if err != nil {
+		return fmt.Errorf("attach event sink: %w", err)
+	}
+	s.unsubscribe = unsub
+
+	// Refresh context summary
+	if summary, err := s.backend.ContextSummary(ctx, opened.SessionID); err == nil {
+		s.ctxSummary = summary
+	}
+	s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
+
+	return nil
+}
+
+// sessionSelectOption builds a SelectOption from a ListedSession for /resume.
+// Format: name · date · channel:key · working-dir
+func sessionSelectOption(session rtbackend.ListedSession) minitui.SelectOption {
+	key := session.Locator.Key
+	channel := session.Locator.Channel
+
+	// Build description: name · date · channel:key · working-dir
+	var parts []string
+
+	name := strings.TrimSpace(session.Title)
+	if name == "" || name == "-" {
+		name = key
+	}
+	parts = append(parts, name)
+
+	if !session.LastActivityAt.IsZero() {
+		parts = append(parts, session.LastActivityAt.Format("2006-01-02 15:04"))
+	}
+
+	parts = append(parts, fmt.Sprintf("%s:%s", channel, key))
+
+	if session.Locator.Metadata != nil {
+		if projectDir := strings.TrimSpace(session.Locator.Metadata["project_dir"]); projectDir != "" {
+			parts = append(parts, truncatePathTailMint(projectDir, 40))
+		}
+	}
+
+	if session.Running {
+		parts = append(parts, "[running]")
+	}
+
+	return minitui.SelectOption{
+		Label:       key,
+		Description: strings.Join(parts, " · "),
+	}
+}
+
+// truncatePathTailMint keeps only the last maxLen chars of a path, adding
+// "..." prefix when truncation occurs.
+func truncatePathTailMint(path string, maxLen int) string {
+	if len(path) <= maxLen {
+		return path
+	}
+	return "..." + path[len(path)-maxLen:]
 }
 
 // cancelActiveTurn cancels the currently-running turn, if any.

@@ -323,3 +323,222 @@ func TestHandleEventIgnoresUnknownPayloadTypes(t *testing.T) {
 		Payload: "not-a-struct",
 	})
 }
+
+// TestRunnerPhaseChipSilencesModelRequest verifies that the
+// dominant in-flight phase ("model_request") does NOT surface
+// as a status-bar chip, so the heartbeat ("Ready · Input ·
+// Model · ctx · calls · msgs") stays continuously visible
+// while the agent waits for the model.  This is the regression
+// guard for the previous behaviour, where model_request
+// overwrote the bar with a transient "Thinking…" label.
+func TestRunnerPhaseChipSilencesModelRequest(t *testing.T) {
+	if chip, _ := runnerPhaseChip("model_request", ""); chip != "" {
+		t.Fatalf("model_request must produce empty chip, got %q", chip)
+	}
+	if chip, _ := runnerPhaseChip("context_sanitized", ""); chip != "" {
+		t.Fatalf("context_sanitized must produce empty chip, got %q", chip)
+	}
+}
+
+// TestRunnerPhaseChipSurfacesToolExecution verifies that
+// executing + tool name does inject a chip — it carries
+// information the heartbeat does not already convey.
+func TestRunnerPhaseChipSurfacesToolExecution(t *testing.T) {
+	chip, style := runnerPhaseChip("executing", "bash")
+	if chip != "Running bash" {
+		t.Fatalf("executing+tool chip = %q, want %q", chip, "Running bash")
+	}
+	if style != minitui.StatusInfo {
+		t.Fatalf("executing+tool style = %v, want StatusInfo", style)
+	}
+	// executing without a tool name still surfaces a chip.
+	if chip, _ := runnerPhaseChip("executing", ""); chip != "Running tools" {
+		t.Fatalf("executing without tool = %q, want %q", chip, "Running tools")
+	}
+}
+
+// TestApplyRunnerPhasePreservesHeartbeat verifies that
+// applyRunnerPhase("model_request", "") does not clobber the
+// heartbeat — the bar must still show the full
+// "Ready · Input · Model · ctx · ..." line, with no
+// transient "Thinking…" / "model_request" label.
+func TestApplyRunnerPhasePreservesHeartbeat(t *testing.T) {
+	b := newFakeBackend()
+	b.ctx = tools.ContextInspection{
+		TokenEstimate:     128000,
+		CompressThreshold: 512000,
+	}
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3", CompressThreshold: 512000}, b, &strings.Builder{}, &strings.Builder{})
+	s.messageCount = 138
+	s.modelCallCount = 10
+
+	// Compute the expected heartbeat as it would render
+	// without any activity chip.
+	want := s.renderStatus("Ready")
+	if !strings.Contains(want, "MiniMax-M3") || !strings.Contains(want, "msgs 138") {
+		t.Fatalf("baseline heartbeat missing key chips: %q", want)
+	}
+
+	// Injecting the model_request phase must leave the bar
+	// visually unchanged.  setStatus IS called (to refresh
+	// the bar), but the rendered text must equal the
+	// heartbeat because the chip is empty for this phase.
+	s.applyRunnerPhase("model_request", "")
+	if got := s.renderStatus("Ready"); got != want {
+		t.Fatalf("model_request clobbered heartbeat:\n want %q\n got  %q", want, got)
+	}
+	if s.lastStatusText != want {
+		t.Fatalf("lastStatusText != heartbeat after model_request:\n want %q\n got  %q", want, s.lastStatusText)
+	}
+}
+
+// TestApplyRunnerPhaseInsertsChip verifies that non-silent
+// phases inject a chip between the model name and the rest of
+// the heartbeat, instead of replacing the whole line.
+func TestApplyRunnerPhaseInsertsChip(t *testing.T) {
+	b := newFakeBackend()
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"}, b, &strings.Builder{}, &strings.Builder{})
+
+	s.applyRunnerPhase("executing", "bash")
+	got := s.renderStatus("Ready")
+	if !strings.Contains(got, "Running bash") {
+		t.Fatalf("expected chip 'Running bash' in status, got %q", got)
+	}
+	// The chip must come AFTER the model name (so the
+	// heartbeat prefix stays continuously visible).
+	modelIdx := strings.Index(got, "MiniMax-M3")
+	chipIdx := strings.Index(got, "Running bash")
+	if modelIdx < 0 || chipIdx < 0 || chipIdx <= modelIdx {
+		t.Fatalf("chip should follow model name, got %q", got)
+	}
+	// The heartbeat's trailing chips (calls / msgs) must
+	// still be present, proving the chip is non-clobbering.
+	if !strings.Contains(got, "Ready") || !strings.Contains(got, "Input") {
+		t.Fatalf("heartbeat prefix lost after chip insert, got %q", got)
+	}
+}
+
+// TestClearActivityChipRestoresHeartbeat verifies that
+// clearActivityChip returns the bar to its pure heartbeat
+// form even when an activity chip was previously set.
+func TestClearActivityChipRestoresHeartbeat(t *testing.T) {
+	b := newFakeBackend()
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"}, b, &strings.Builder{}, &strings.Builder{})
+
+	s.applyRunnerPhase("executing", "bash")
+	withChip := s.renderStatus("Ready")
+	if !strings.Contains(withChip, "Running bash") {
+		t.Fatalf("precondition: expected chip in status, got %q", withChip)
+	}
+
+	s.clearActivityChip()
+	clean := s.renderStatus("Ready")
+	if strings.Contains(clean, "Running bash") {
+		t.Fatalf("chip should be cleared, got %q", clean)
+	}
+	if !strings.Contains(clean, "Ready") || !strings.Contains(clean, "Input") || !strings.Contains(clean, "MiniMax-M3") {
+		t.Fatalf("heartbeat chips missing after clear, got %q", clean)
+	}
+}
+
+// TestQuoteLinePrefixesEveryLine verifies that quoteLine
+// prepends "> " to every line of its input, including lines
+// produced by internal "\n" splits.  This is the contract
+// that lets us rely on min-tui's built-in renderer to apply
+// its grey blockquote background uniformly across a multi-
+// line user message.
+func TestQuoteLinePrefixesEveryLine(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"single", "hello", "> hello"},
+		{"empty", "", ">"},
+		{"multi", "first\nsecond\nthird", "> first\n> second\n> third"},
+		{"trailing newline", "first\n", "> first\n> "},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := quoteLine(c.in); got != c.want {
+				t.Fatalf("quoteLine(%q):\n want %q\n got  %q", c.in, c.want, got)
+			}
+		})
+	}
+}
+
+// TestQuoteBlockIsBlockquoteSafe verifies that the rendered
+// user block never contains lines that min-tui's renderer
+// would misclassify.  Specifically:
+//
+//   - every line must start with "> " or be exactly ">",
+//     so min-tui applies the grey background uniformly;
+//   - no line may start with a backtick sequence, which
+//     would otherwise trigger a code-fence branch and wrap
+//     the line in dim instead of the intended blockquote
+//     background.
+func TestQuoteBlockIsBlockquoteSafe(t *testing.T) {
+	got := quoteLine("hello world\nsecond line\nthird line")
+	for _, line := range strings.Split(got, "\n") {
+		if !strings.HasPrefix(line, "> ") && line != ">" {
+			t.Fatalf("every output line must be a blockquote, got %q (in %q)", line, got)
+		}
+		if strings.HasPrefix(line, "```") {
+			t.Fatalf("line must not start a code fence, got %q", line)
+		}
+	}
+}
+
+// TestUserAndToolBlocksAreNilSafe verifies that all output
+// helpers (writeUserTurn, writeQuoteBlock, renderToolCall*
+// Started/Finished) are no-ops when s.tui is nil — the test
+// harness never runs Run, so the real min-tui frontend is
+// never constructed.  Guards against future regressions that
+// would dereference a nil frontend in unit-test contexts.
+func TestUserAndToolBlocksAreNilSafe(t *testing.T) {
+	b := newFakeBackend()
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"}, b, &strings.Builder{}, &strings.Builder{})
+
+	s.writeUserTurn("hello world")
+	s.writeQuoteBlock("⚠ something")
+	s.renderToolCallStarted(events.Event{
+		Type:    events.EventToolCallStarted,
+		Payload: events.ToolCallPayload{Name: "bash"},
+	})
+	s.renderToolCallFinished(events.Event{
+		Type:    events.EventToolCallFinished,
+		Payload: events.ToolCallPayload{Name: "bash", Output: "ok"},
+	})
+	// EventWarningRaised / EventErrorRaised touch the
+	// output area via writeQuoteBlock; with tui == nil
+	// they must still not panic.
+	s.handleEvent(events.Event{
+		Type:    events.EventWarningRaised,
+		Payload: events.NoticePayload{Message: "be careful"},
+	})
+	s.handleEvent(events.Event{
+		Type:    events.EventErrorRaised,
+		Payload: events.NoticePayload{Message: "boom"},
+	})
+}
+
+// TestWriteUserTurnUsesBlockquoteSyntax verifies that the
+// bytes written to the output area for a user turn are
+// exactly "> "-prefixed lines followed by a blank line.
+// This is the regression guard for "user messages are
+// crammed against assistant prose with no background colour".
+func TestWriteUserTurnUsesBlockquoteSyntax(t *testing.T) {
+	// We can't intercept min-tui's bytes without a
+	// capturing stub, so we exercise the pure helper
+	// quoteLine directly to assert the shape that the
+	// session then writes verbatim.
+	combined := quoteLine("hello") + "\n" + quoteLine("line two") + "\n"
+	want := "> hello\n> line two\n"
+	if combined != want {
+		t.Fatalf("user block lines mismatch:\n want %q\n got  %q", want, combined)
+	}
+	// Every line must begin with the blockquote marker.
+	for _, l := range strings.Split(strings.TrimRight(combined, "\n"), "\n") {
+		if !strings.HasPrefix(l, "> ") {
+			t.Fatalf("expected blockquote prefix, got %q", l)
+		}
+	}
+}

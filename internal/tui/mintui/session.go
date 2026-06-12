@@ -115,6 +115,23 @@ type Session struct {
 	// full text on assistant_message_completed (which would
 	// duplicate the already-streamed deltas).
 	assistantStreaming bool
+
+	// activityChip / activityStyle describe a short "what's
+	// happening right now" indicator that is injected into the
+	// status bar right after the model name (i.e. between the
+	// "Ready · Input · <Model>" prefix and the rest of the
+	// chips).  Guarded by statusMu (same lock as setStatus).
+	//
+	// Crucially, the chip is a *non-clobbering* overlay: we
+	// never replace the entire status bar line to surface a
+	// phase change.  model_request — which dominates ~95% of
+	// any in-flight turn — is intentionally NOT mapped to a
+	// chip so the underlying heartbeat ("Ready · Input ·
+	// MiniMax-M3 · 132k/256k 51% · top tool_results 104k ·
+	// calls 10 · msgs 138") stays continuously visible while
+	// the user waits for the model.
+	activityChip   string
+	activityStyle  minitui.StatusStyle
 }
 
 // New constructs a Session bound to the given backend. It does
@@ -154,6 +171,22 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	tui, err := minitui.NewWithConfig(minitui.Config{
 		BorderColor:  "\x1b[2m", // dim border
 		MaxInputRows: 8,
+		// Spacious=true asks min-tui to insert a blank line
+		// before/after markdown headings, code fences, and
+		// tables — which gives the conversation a natural
+		// rhythm instead of letting every block collapse
+		// onto adjacent rows.  Without it, every header the
+		// assistant emits hugs the previous paragraph and
+		// the conversation becomes a wall of text.
+		Spacious: true,
+		// No custom RenderLine: we delegate markdown
+		// rendering to min-tui's built-in renderer so we
+		// inherit its native styling, including the grey
+		// background it applies to blockquote lines.  We
+		// use the blockquote syntax ourselves to give user
+		// messages, tool calls, and warnings a coloured
+		// background that visually separates them from
+		// assistant prose.
 	})
 	if err != nil {
 		return fmt.Errorf("init min-tui: %w", err)
@@ -202,7 +235,16 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 				// Ctrl+C: if a turn is running, cancel it
 				// and continue the loop. Otherwise exit.
 				if s.cancelActiveTurn() {
-					s.setStatus("Turn cancelled", minitui.StatusWarning)
+					// Preserve the heartbeat: surface
+					// cancellation as an activity
+					// chip instead of overwriting the
+					// whole bar (the previous
+					// behaviour clobbered
+					// "Ready · Input · <Model> · ctx"
+					// for the entire turn after
+					// cancel).
+					s.setActivityChip("Cancelled", minitui.StatusWarning)
+					s.refreshStatusBar()
 					continue
 				}
 				return nil
@@ -413,8 +455,12 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 	// so it appears inline with the assistant response that
 	// follows.  Without this the message only exists
 	// server-side and only appears after a session reload.
+	// writeUserTurn renders the message as a markdown
+	// blockquote so min-tui's built-in renderer paints it
+	// with a grey background, separating it visually from
+	// the assistant's plain-background prose.
 	if s.tui != nil {
-		s.tui.WriteString("› you: " + input + "\n\n")
+		s.writeUserTurn(input)
 	}
 
 	envelope := message.NewCLIEnvelope(sessionID, s.cfg.LeadName, input, s.now())
@@ -423,6 +469,14 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 		return err
 	}
 	if res != nil {
+		// A new turn is starting — drop any stale activity
+		// chip left over from a previous turn (e.g. a
+		// "Running bash" that never emitted a terminal
+		// phase event) so the heartbeat returns to its
+		// clean form while we wait for the runner to emit
+		// its first phase.
+		s.clearActivityChip()
+		s.refreshStatusBar()
 		s.setActiveTurn(res.TurnID)
 	}
 	return nil
@@ -446,23 +500,58 @@ func (s *Session) clearActiveTurn(turnID string) {
 
 // handleEvent consumes a single backend event and renders it to
 // the TUI. It is called by the backend's sink goroutine.
+//
+// Output layout strategy
+// ---------------------
+//
+// Every non-prose block (user message, tool call, warning,
+// error) is emitted as a MARKDOWN BLOCKQUOTE — that is, every
+// line is prefixed with "> ".  min-tui v0.3.0's built-in
+// renderer recognises lines starting with "> " and applies a
+// grey background (ANSI 100m), which gives us a coloured
+// backdrop "for free" without us having to inject any ANSI
+// escape codes ourselves.  Assistant prose, by contrast, is
+// written verbatim so min-tui's renderer can apply bold,
+// italic, inline code, headings, code fences, tables, etc.
+//
+// Why blockquote and not custom ANSI?
+//
+//   - We get the background colour without writing a custom
+//     RenderLine, so min-tui's native markdown pipeline
+//     (including Spacious-mode gaps around headings / fences
+//     / tables) keeps working unmodified.
+//   - Every quoted line is non-empty by construction (it
+//     contains at least "> "), so it survives min-tui's
+//     appendRendered guard that would otherwise drop blank
+//     lines.
+//   - Visual contrast is automatic: grey backdrop = anything
+//     but the assistant's prose, plain backdrop = assistant
+//     prose.  No colour-palette coordination required.
 func (s *Session) handleEvent(event events.Event) {
 	switch event.Type {
 	case events.EventAssistantTextDelta:
+		// First delta of a new block: ensure the
+		// previous turn's content is visually closed
+		// off with a blank line, then let deltas
+		// stream straight through to the output
+		// area.  Subsequent deltas in the same block
+		// skip this guard.
+		if !s.assistantStreaming {
+			s.tui.WriteString("\n")
+		}
 		s.assistantStreaming = true
 		text := extractTextField(event)
 		s.appendAssistantText(text)
 	case events.EventAssistantMessageComplete:
 		text := extractTextField(event)
-		if s.assistantStreaming {
-			// Text was already rendered via deltas; just close
-			// the block with a newline.
-			s.tui.WriteString("\n")
-		} else {
-			// No deltas received (small/instant response);
-			// render the full text now.
-			s.finishAssistantBlock(text)
-		}
+		// Always close the block with a blank line so
+		// the next blockquote (user/tool/warning) has
+		// visual breathing room.  When deltas were
+		// streamed, the text is already on screen;
+		// when no deltas were emitted (small/instant
+		// response), we render the full text now.
+		s.appendAssistantText(text)
+		s.tui.WriteString("\n\n")
 		s.assistantStreaming = false
 	case events.EventToolCallStarted:
 		s.renderToolCallStarted(event)
@@ -475,62 +564,90 @@ func (s *Session) handleEvent(event events.Event) {
 		s.clearActiveTurn(event.TurnID)
 		s.assistantStreaming = false
 		s.refreshSnapshot()
+		// refreshSnapshot already re-renders the bar; we
+		// additionally drop any lingering activity chip so
+		// the heartbeat returns to its pure "Ready" form
+		// even if the runner emitted no terminal phase
+		// event before completing.
+		s.clearActivityChip()
 		s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
 	case events.EventSnapshotReady:
 		s.refreshSnapshot()
 	case events.EventWarningRaised:
 		if np, ok := event.Payload.(events.NoticePayload); ok && np.Message != "" {
-			s.tui.WriteString("\n⚠ " + np.Message + "\n")
+			s.writeQuoteBlock("⚠ " + np.Message)
 		}
+		s.setActivityChip("Warning", minitui.StatusWarning)
+		s.refreshStatusBar()
 	case events.EventErrorRaised:
 		if np, ok := event.Payload.(events.NoticePayload); ok && np.Message != "" {
-			s.tui.WriteString("\n✗ " + np.Message + "\n")
+			s.writeQuoteBlock("✗ " + np.Message)
 		}
+		s.setActivityChip("Error", minitui.StatusError)
+		s.refreshStatusBar()
 	}
 }
 
-// renderToolCallStarted renders a tool call start with name and
-// condensed input summary so the user can see what the agent is
-// doing without needing to expand.
+// renderToolCallStarted renders a tool call start with name
+// and a condensed input summary as a blockquote block.  The
+// grey background visually distinguishes tool activity from
+// both user input and assistant prose.
 func (s *Session) renderToolCallStarted(event events.Event) {
+	if s.tui == nil {
+		return
+	}
 	name := extractToolName(event)
 	if name == "" {
 		return
 	}
-	// Build a one-line summary: name + optional input snippet.
-	line := "\n▶ " + name
-	// Extract a short input preview (up to ~120 chars).
-	if input := extractToolInputSummary(event); input != "" {
-		line += "  " + input
+	inputSummary := extractToolInputSummary(event)
+	lines := []string{"> ▶ " + name}
+	if inputSummary != "" {
+		lines = append(lines, ">   "+inputSummary)
 	}
-	s.tui.WriteString(line + "\n")
+	s.tui.WriteString(strings.Join(lines, "\n") + "\n\n")
 }
 
-// renderToolCallFinished renders completion status: ✓ done
-// or ✗ error with a short output/error summary.
+// renderToolCallFinished appends a status line (✓ / ✗) to
+// the same blockquote block opened by renderToolCallStarted.
+// We do NOT add a trailing blank here — that responsibility
+// belongs to the next caller, so consecutive tool calls don't
+// accumulate excessive whitespace.
 func (s *Session) renderToolCallFinished(event events.Event) {
+	if s.tui == nil {
+		return
+	}
 	name := extractToolName(event)
 	output, errText := extractToolOutputError(event)
 
 	switch {
 	case errText != "":
-		s.tui.WriteString("  ✗ " + errText + "\n")
+		s.tui.WriteString(">   ✗ " + errText + "\n")
 	case output != "":
 		// Show a condensed output (first line, capped).
 		summary := firstLine(output, 200)
-		s.tui.WriteString("  ✓ " + summary + "\n")
+		s.tui.WriteString(">   ✓ " + summary + "\n")
 	default:
 		if name == "" {
-			s.tui.WriteString("  ✓ done\n")
+			s.tui.WriteString(">   ✓ done\n")
 		} else {
-			s.tui.WriteString("  ✓ " + name + "\n")
+			s.tui.WriteString(">   ✓ " + name + "\n")
 		}
 	}
+	// Trailing blank closes the block.  Even when no
+	// start event was received, the cost of one empty
+	// row is small and the readability win is large.
+	s.tui.WriteString("\n")
 }
+
+// ── turn rendering helpers ─────────────────────────────────────
 
 // appendAssistantText writes a streaming text delta to the
 // current assistant block.  Min-tui buffers the bytes and
-// renders them incrementally.
+// renders them incrementally.  We do NOT inject any prefix —
+// assistant prose goes straight through so min-tui's markdown
+// pipeline (bold, italic, inline code, headings, code
+// fences, tables) applies unchanged.
 func (s *Session) appendAssistantText(text string) {
 	if text == "" {
 		return
@@ -538,13 +655,52 @@ func (s *Session) appendAssistantText(text string) {
 	s.tui.WriteString(text)
 }
 
-// finishAssistantBlock ensures the assistant block ends with a
-// trailing newline.
-func (s *Session) finishAssistantBlock(text string) {
-	if text != "" {
-		s.tui.WriteString(text)
+// quoteLine formats a single body line as a markdown
+// blockquote line ("> ...") that min-tui's built-in renderer
+// will paint with a grey background.  Internal newlines are
+// preserved by prefixing every line of the input.
+func quoteLine(text string) string {
+	if text == "" {
+		return ">"
 	}
-	s.tui.WriteString("\n")
+	var b strings.Builder
+	first := true
+	for _, line := range strings.Split(text, "\n") {
+		if !first {
+			b.WriteByte('\n')
+		}
+		b.WriteString("> ")
+		b.WriteString(line)
+		first = false
+	}
+	return b.String()
+}
+
+// writeQuoteBlock emits the given text as a blockquote block
+// — one "> "-prefixed line per source line, followed by a
+// trailing blank.  Used for user messages, tool calls,
+// warnings and errors: anything that is NOT assistant prose.
+//
+// Every line in the resulting block is non-empty (because of
+// the "> " prefix), which means min-tui's appendRendered
+// guard keeps them on the canvas; a plain blank line would
+// have been dropped and the visual gap would disappear.
+func (s *Session) writeQuoteBlock(text string) {
+	if s.tui == nil || text == "" {
+		return
+	}
+	s.tui.WriteString(quoteLine(text))
+	s.tui.WriteString("\n\n")
+}
+
+// writeUserTurn emits the user's message as a blockquote
+// block so min-tui's renderer paints it with the grey
+// background.  This is the core of the readability fix:
+// every line of the user's message sits on a coloured
+// backdrop that visually distinguishes it from the assistant's
+// plain-background prose.
+func (s *Session) writeUserTurn(text string) {
+	s.writeQuoteBlock(text)
 }
 
 // ── snapshot & status bar ────────────────────────────────────────
@@ -595,16 +751,29 @@ func (s *Session) refreshSnapshot() {
 // ── output rendering ─────────────────────────────────────────────
 
 // writeBanner writes the initial header to the TUI output area
-// so it appears on the canvas above the input box.  History
-// replay is handled separately by writeHistory to avoid
-// duplication.
+// as plain markdown so min-tui's renderer applies its native
+// styling (bold for the title, italic / inline code for the
+// metadata).  This avoids us having to hand-roll a colour
+// palette; the visual hierarchy comes from markdown itself.
 func (s *Session) writeBanner(locator rtbackend.SessionLocator, snap rtbackend.Snapshot) {
 	workspace := s.cfg.WorkspaceDir
 	if workspace == "" {
 		workspace = "(unknown workspace)"
 	}
-	s.tui.WriteString(fmt.Sprintf("🤖 GoDex · min-tui mode\n session %s:%s\n workspace %s\n model %s\n",
-		locator.Channel, locator.Key, workspace, s.resolveModelName()))
+	var b strings.Builder
+	b.WriteString("# 🤖 GoDex — min-tui\n")
+	b.WriteString("\n")
+	b.WriteString("- session:  `")
+	b.WriteString(locator.Channel + ":" + locator.Key)
+	b.WriteString("`\n")
+	b.WriteString("- workspace: `")
+	b.WriteString(workspace)
+	b.WriteString("`\n")
+	b.WriteString("- model:     `")
+	b.WriteString(s.resolveModelName())
+	b.WriteString("`\n")
+	b.WriteString("\n")
+	s.tui.WriteString(b.String())
 }
 
 // writeHistory replays the most recent messages from a freshly
@@ -622,21 +791,32 @@ func (s *Session) writeHistory(snap rtbackend.Snapshot) {
 	}
 }
 
+// writeStoredMessage re-emits a single replayed message
+// using the same blockquote / prose split as live events:
+// user → quoted, assistant → plain markdown, tool/system →
+// plain markdown.  Keeping the layout identical to live
+// rendering avoids the jarring "history was styled one way,
+// live messages are styled another" mismatch.
 func (s *Session) writeStoredMessage(msg protocol.Message) {
 	text := protocol.MessageText(msg)
 	role := strings.ToLower(strings.TrimSpace(msg.Role))
 	switch role {
 	case "user":
 		if text != "" {
-			s.tui.WriteString("› you: " + text + "\n\n")
+			s.writeUserTurn(text)
 		}
 	case "assistant":
 		if text != "" {
-			s.tui.WriteString("● " + text + "\n\n")
+			// Replayed assistant prose flows verbatim;
+			// the trailing blank closes the block the same
+			// way EventAssistantMessageComplete does.
+			s.tui.WriteString(text)
+			s.tui.WriteString("\n\n")
 		}
 	case "tool", "system":
 		if text != "" {
-			s.tui.WriteString(text + "\n\n")
+			s.tui.WriteString(text)
+			s.tui.WriteString("\n\n")
 		}
 	}
 }
@@ -664,23 +844,98 @@ func (s *Session) setStatus(text string, style minitui.StatusStyle) {
 	}
 }
 
+// applyRunnerPhase translates a runner-phase event into a
+// short activity chip that is *inserted* into the heartbeat
+// status bar instead of replacing it.  The reasoning is that
+// during a normal turn the model_request phase dominates the
+// wall-clock time (it is when the agent is waiting on the
+// upstream model) and is exactly when the user most wants to
+// see the live context-pressure/calls/msgs heartbeat.  So we
+// only surface phases that carry new, scannable information
+// beyond "the model is thinking":
+//
+//   - executing + tool name        -> "Running <tool>"
+//   - awaiting_tools / final_...   -> "Waiting for tools" / etc.
+//   - recovery / error / interrupted -> error-styled chip
+//
+// model_request (and the closely related context_sanitized
+// "thinking" indicator) are deliberately not rendered: the
+// streaming assistant text deltas already make it visually
+// obvious that work is happening, and overwriting the
+// heartbeat with a transient "Thinking…" label was the
+// regression this rewrite fixes.
 func (s *Session) applyRunnerPhase(phase, tool string) {
+	chip, style := runnerPhaseChip(phase, tool)
+	s.setActivityChip(chip, style)
+	s.refreshStatusBar()
+}
+
+// runnerPhaseChip returns the chip text + style for a given
+// runner phase.  Empty chip means "do not surface this
+// phase", which keeps the heartbeat intact.
+func runnerPhaseChip(phase, tool string) (string, minitui.StatusStyle) {
 	switch phase {
-	case "thinking":
-		s.setStatus("Thinking…", minitui.StatusInfo)
+	case "model_request", "context_sanitized", "":
+		// Deliberately silent: this is the steady state of
+		// any in-flight turn and would otherwise drown out
+		// the heartbeat.
+		return "", minitui.StatusDefault
 	case "executing":
 		if tool != "" {
-			s.setStatus("Executing "+tool, minitui.StatusInfo)
-		} else {
-			s.setStatus("Executing", minitui.StatusInfo)
+			return "Running " + tool, minitui.StatusInfo
 		}
-	case "finished":
-		s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
+		return "Running tools", minitui.StatusInfo
+	case "awaiting_tools":
+		return "Awaiting tools", minitui.StatusInfo
+	case "tools_completed":
+		return "Processing results", minitui.StatusInfo
+	case "final_response":
+		return "Writing response", minitui.StatusInfo
+	case "recovery_attempted":
+		return "Recovering", minitui.StatusWarning
+	case "interrupted":
+		return "Interrupted", minitui.StatusWarning
+	case "error":
+		return "Error", minitui.StatusError
+	case "injection_drained":
+		return "Processing input", minitui.StatusInfo
 	default:
-		if phase != "" {
-			s.setStatus(phase, minitui.StatusInfo)
+		// Unknown phases are surfaced only if they look
+		// user-meaningful; otherwise stay silent so we do
+		// not regress the heartbeat for benign runtime
+		// noise.
+		if phase == "" {
+			return "", minitui.StatusDefault
 		}
+		return phase, minitui.StatusInfo
 	}
+}
+
+// setActivityChip stores a new activity chip under statusMu.
+// It does NOT push the change to the bar — callers should
+// invoke refreshStatusBar (or the next status refresh will
+// pick it up on its own, e.g. via refreshSnapshot).
+func (s *Session) setActivityChip(chip string, style minitui.StatusStyle) {
+	s.statusMu.Lock()
+	s.activityChip = chip
+	s.activityStyle = style
+	s.statusMu.Unlock()
+}
+
+// clearActivityChip removes any active chip so the bar
+// returns to its pure heartbeat form.  Used when a turn
+// finishes or the user cancels.
+func (s *Session) clearActivityChip() {
+	s.setActivityChip("", minitui.StatusDefault)
+}
+
+// refreshStatusBar re-renders the heartbeat status line using
+// the currently cached ctx summary, message count, model
+// call count, and activity chip, and pushes it to the
+// min-tui frontend.  Cheap to call: it does no I/O against
+// the backend.
+func (s *Session) refreshStatusBar() {
+	s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
 }
 
 func (s *Session) renderStatus(label string) string {
@@ -714,6 +969,15 @@ func (s *Session) resolveModelName() string {
 func (s *Session) renderStatusWith(summary tools.ContextInspection, label string) string {
 	parts := []string{label}
 	parts = append(parts, "Input", s.resolveModelName())
+	// Activity chip (if any) sits between the model name and
+	// the blocker chip so the heartbeat prefix remains
+	// continuously visible.  Empty when no special phase is
+	// active — this is the common case (including the
+	// long-running model_request phase, which we deliberately
+	// do not surface as a chip so the heartbeat stays calm).
+	if chip := strings.TrimSpace(s.activityChip); chip != "" {
+		parts = append(parts, chip)
+	}
 	// Permission blocker takes priority if present.
 	if blocker := s.snapshot.ActivePermissionBlocker; blocker != nil {
 		blockerParts := []string{"Blocked"}

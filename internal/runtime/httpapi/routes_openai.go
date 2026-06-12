@@ -185,7 +185,7 @@ func streamOpenAIChatCompletion(w http.ResponseWriter, r *http.Request, service 
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	created := time.Now().Unix()
-	emitOpenAIChunk(w, flusher, openAICompletionID(result.TurnID), model, created, openAIChatMessage{Role: "assistant"}, "")
+	emitOpenAIChunk(w, flusher, openAICompletionID(result.TurnID), model, created, openAIChatMessage{Role: "assistant"}, "", nil)
 	// toolCallsSeen flips when the runtime forwards a tool invocation so
 	// the terminal chunk can declare finish_reason="tool_calls" (OpenAI's
 	// canonical stop reason) instead of "stop". The OpenAI SDK uses this
@@ -193,7 +193,7 @@ func streamOpenAIChatCompletion(w http.ResponseWriter, r *http.Request, service 
 	// done.
 	toolCallsSeen := false
 	_, err = collectOpenAICompletion(ctx, eventCh, result.TurnID, func(delta string) {
-		emitOpenAIChunk(w, flusher, openAICompletionID(result.TurnID), model, created, openAIChatMessage{Content: delta}, "")
+		emitOpenAIChunk(w, flusher, openAICompletionID(result.TurnID), model, created, openAIChatMessage{Content: delta}, "", nil)
 	}, func(tc openAIStreamToolCall) {
 		toolCallsSeen = true
 		calls := []openAIToolCallWire{{
@@ -205,7 +205,7 @@ func streamOpenAIChatCompletion(w http.ResponseWriter, r *http.Request, service 
 				Arguments: tc.arguments,
 			},
 		}}
-		emitOpenAIChunk(w, flusher, openAICompletionID(result.TurnID), model, created, openAIChatMessage{ToolCalls: calls}, "")
+		emitOpenAIChunk(w, flusher, openAICompletionID(result.TurnID), model, created, openAIChatMessage{ToolCalls: calls}, "", nil)
 	})
 	if err != nil {
 		emitOpenAIError(w, flusher, err)
@@ -215,7 +215,7 @@ func streamOpenAIChatCompletion(w http.ResponseWriter, r *http.Request, service 
 	if toolCallsSeen {
 		finishReason = "tool_calls"
 	}
-	emitOpenAIChunk(w, flusher, openAICompletionID(result.TurnID), model, created, openAIChatMessage{}, finishReason)
+	emitOpenAIChunk(w, flusher, openAICompletionID(result.TurnID), model, created, openAIChatMessage{}, finishReason, nil)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
@@ -323,7 +323,7 @@ func collectOpenAICompletion(ctx context.Context, eventCh <-chan events.Event, t
 	}
 }
 
-func emitOpenAIChunk(w http.ResponseWriter, flusher http.Flusher, id, model string, created int64, delta openAIChatMessage, finishReason string) {
+func emitOpenAIChunk(w http.ResponseWriter, flusher http.Flusher, id, model string, created int64, delta openAIChatMessage, finishReason string, usage map[string]interface{}) {
 	chunk := openAIChatCompletionResponse{
 		ID:      id,
 		Object:  "chat.completion.chunk",
@@ -334,6 +334,7 @@ func emitOpenAIChunk(w http.ResponseWriter, flusher http.Flusher, id, model stri
 			Delta:        &delta,
 			FinishReason: finishReason,
 		}},
+		Usage: usage,
 	}
 	data, err := json.Marshal(chunk)
 	if err != nil {

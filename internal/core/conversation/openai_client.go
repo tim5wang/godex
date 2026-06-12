@@ -584,6 +584,14 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 	order := make([]int, 0)
 	finishReason := ""
 	var reasoning strings.Builder
+	// Track the latest usage from the stream. OpenAI providers emit
+	// usage in the final chunk (the one with finish_reason), and some
+	// providers also include it in every chunk. We capture the last
+	// non-empty usage so the gateway can surface input/output/cache
+	// token counts to the downstream client (e.g. pi's context-usage
+	// display). Without this, pi always shows 0% because the upstream
+	// provider's token counts never reach the client.
+	var lastUsage *protocol.Usage
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -596,6 +604,14 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 		var event openAIResponse
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			return nil, err
+		}
+		// Capture usage from the stream. OpenAI providers emit usage in
+		// the final chunk (the one with finish_reason) and optionally in
+		// every chunk. We convert the last non-empty usage payload to
+		// protocol.Usage so the gateway can relay it to downstream
+		// clients (e.g. pi for context usage display).
+		if usage := openAIUsageToProtocol(event.Usage); usage != nil {
+			lastUsage = usage
 		}
 		if len(event.Choices) == 0 {
 			continue
@@ -670,5 +686,5 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 			blocks = append(blocks, openAIToolCallToBlock(*calls[idx]))
 		}
 	}
-	return &protocol.Response{Content: blocks, StopReason: finishReason, ReasoningContent: reasoning.String()}, nil
+	return &protocol.Response{Content: blocks, StopReason: finishReason, ReasoningContent: reasoning.String(), Usage: lastUsage}, nil
 }

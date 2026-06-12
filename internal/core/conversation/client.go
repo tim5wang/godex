@@ -58,6 +58,14 @@ type StreamHandler struct {
 	// can't tell a text_delta from a thinking_delta, and the
 	// thinking chain-of-thought would be silently dropped.
 	OnThinkingDelta func(thinking string, signature string)
+	// OnMessageStart is invoked when parseMessageStream receives the
+	// upstream's message_start SSE event. The usage parameter carries
+	// the initial token counts (input_tokens, cache tokens) the upstream
+	// provider reported. The Anthropic streaming gateway uses this to
+	// emit a properly-initialised message_start event to the downstream
+	// client (pi), without which the client sees input_tokens=0 and
+	// displays 0% context usage indefinitely.
+	OnMessageStart func(usage protocol.Usage)
 }
 
 // Client sends Anthropic-compatible message requests.
@@ -623,6 +631,17 @@ func parseMessageStream(reader io.Reader, handler StreamHandler) (*protocol.Resp
 					usageCopy := *event.Message.Usage
 					usageCopy.Normalize()
 					response.Usage = &usageCopy
+					// Notify the gateway so it can emit a properly-
+					// initialised message_start to the downstream
+					// client (pi). Without this hook, the gateway
+					// emits message_start with zero usage before
+					// the upstream stream starts, and the
+					// downstream Anthropic SDK never learns the
+					// real input token count — pi displays 0%
+					// context usage forever.
+					if handler.OnMessageStart != nil {
+						handler.OnMessageStart(usageCopy)
+					}
 				}
 			}
 		case "content_block_start":

@@ -720,7 +720,7 @@ func streamUsageGatewayChatCompletions(
 	created := time.Now().Unix()
 
 	// First chunk announces the assistant role (OpenAI streaming convention).
-	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{Role: "assistant"}, "")
+	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{Role: "assistant"}, "", nil)
 
 	// toolCallsSeen flips to true the moment the provider forwards an
 	// OnToolUse callback. We use it to set the OpenAI finish_reason to
@@ -747,7 +747,7 @@ func streamUsageGatewayChatCompletions(
 			if delta == "" {
 				return
 			}
-			emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{Content: delta}, "")
+			emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{Content: delta}, "", nil)
 		},
 		OnToolUse: func(block protocol.Block, partialJSON string) {
 			toolCallsSeen = true
@@ -794,7 +794,7 @@ func streamUsageGatewayChatCompletions(
 					Arguments: fragment,
 				},
 			}}
-			emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{ToolCalls: calls}, "")
+			emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{ToolCalls: calls}, "", nil)
 		},
 	})
 	if err != nil {
@@ -824,7 +824,24 @@ func streamUsageGatewayChatCompletions(
 	} else if toolCallsSeen && finishReason != "length" {
 		finishReason = "tool_calls"
 	}
-	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{}, finishReason)
+	// Build the usage payload for the final chunk. OpenAI-compatible
+	// clients (including pi) read the usage from the last chunk before
+	// [DONE] to compute context-usage percentages. Without this, they
+	// see all-zero token counts and display 0% context usage forever.
+	var usagePayload map[string]interface{}
+	if resp != nil && resp.Usage != nil {
+		usagePayload = map[string]interface{}{
+			"prompt_tokens":     resp.Usage.InputTokens,
+			"completion_tokens": resp.Usage.OutputTokens,
+			"total_tokens":      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+		}
+		if resp.Usage.CacheReadTokens > 0 {
+			usagePayload["prompt_tokens_details"] = map[string]interface{}{
+				"cached_tokens": resp.Usage.CacheReadTokens,
+			}
+		}
+	}
+	emitOpenAIChunk(w, flusher, completionID, req.Model, created, openAIChatMessage{}, finishReason, usagePayload)
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
@@ -1280,26 +1297,45 @@ func streamAnthropicGatewayMessages(
 		flusher.Flush()
 	}
 
-	// 1) message_start — must be the first event on the wire so consumers
-	// (e.g. the Pi Anthropic SDK at anthropic.ts:528-539) can populate
-	// output.responseId and the initial usage snapshot.
-	flushSSE("message_start", map[string]interface{}{
-		"type": "message_start",
-		"message": map[string]interface{}{
-			"id":          fmt.Sprintf("msg_%d", start.UnixNano()),
-			"type":        "message",
-			"role":        "assistant",
-			"content":     []interface{}{},
-			"model":       req.Model,
-			"stop_reason": nil,
-			"usage": map[string]interface{}{
+	// messageStartEmitted guards against emitting message_start more
+	// than once. We delay message_start until the upstream's
+	// message_start arrives (via OnMessageStart) so we can forward the
+	// real input_token count. If the upstream never sends message_start
+	// (e.g. it's an OpenAI shim), the first content delta triggers a
+	// zero-usage fallback so the downstream SDK still sees a valid
+	// stream header.
+	messageID := fmt.Sprintf("msg_%d", start.UnixNano())
+	messageStartEmitted := false
+
+	emitMessageStart := func(usage map[string]interface{}) {
+		if messageStartEmitted {
+			return
+		}
+		messageStartEmitted = true
+		flushSSE("message_start", map[string]interface{}{
+			"type": "message_start",
+			"message": map[string]interface{}{
+				"id":          messageID,
+				"type":        "message",
+				"role":        "assistant",
+				"content":     []interface{}{},
+				"model":       req.Model,
+				"stop_reason": nil,
+				"usage":       usage,
+			},
+		})
+	}
+
+	ensureMessageStart := func() {
+		if !messageStartEmitted {
+			emitMessageStart(map[string]interface{}{
 				"input_tokens":                0,
 				"output_tokens":               0,
 				"cache_creation_input_tokens": 0,
 				"cache_read_input_tokens":     0,
-			},
-		},
-	})
+			})
+		}
+	}
 
 	// anthropicStreamState tracks the per-block state the gateway
 	// needs to keep the wire in sync with the upstream SSE stream.
@@ -1417,7 +1453,22 @@ func streamAnthropicGatewayMessages(
 	// through this hook so the gateway can emit the right wire
 	// shape on the Anthropic SSE stream).
 	finalResp, streamErr := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
+		OnMessageStart: func(usage protocol.Usage) {
+			// The upstream's message_start arrived with the real
+			// input token count. Emit our message_start NOW (it was
+			// delayed from the preamble) so the downstream
+			// Anthropic SDK (pi) initialises its usage accumulator
+			// with the correct input_tokens. Without this, pi sees
+			// input_tokens=0 and displays 0% context usage forever.
+			emitMessageStart(map[string]interface{}{
+				"input_tokens":                usage.InputTokens,
+				"output_tokens":               0,
+				"cache_creation_input_tokens": usage.CacheWriteTokens,
+				"cache_read_input_tokens":     usage.CacheReadTokens,
+			})
+		},
 		OnTextDelta: func(delta string) {
+			ensureMessageStart()
 			if delta == "" {
 				return
 			}
@@ -1440,6 +1491,7 @@ func streamAnthropicGatewayMessages(
 			})
 		},
 		OnThinkingDelta: func(thinking string, signature string) {
+			ensureMessageStart()
 			// Each thinking block gets its own wire index.
 			// The previous implementation forwarded thinking
 			// deltas as text deltas, which (a) left Pi's
@@ -1527,6 +1579,7 @@ func streamAnthropicGatewayMessages(
 			}
 		},
 		OnToolUse: func(block protocol.Block, partialJSON string) {
+			ensureMessageStart()
 			// The upstream parser calls OnToolUse three
 			// times per tool_use block:
 			//

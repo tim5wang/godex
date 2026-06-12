@@ -30,7 +30,7 @@ import { MessageFeed } from "../../components/MessageFeed";
 import { ResizeHandle } from "../../components/ResizeHandle";
 import { SubagentCard } from "../../components/SubagentCard";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
-import { TaskCenterPanel } from "./TaskCenterPanel";
+import { TaskCenterChip } from "../tasks/TaskCenterChip";
 import { LongTaskRefluxBubble, isLongTaskRefluxMessage } from "./LongTaskRefluxBubble";
 import { buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview, type ReviewMergeFilter } from "./reviewMergeCenter";
 import { buildTaskOutcomes } from "./taskCenterOutcome";
@@ -168,6 +168,10 @@ export function ChatPage() {
   const setStreamConnected = useChatStore((state) => state.setStreamConnected);
   const reset = useChatStore((state) => state.reset);
 
+  // P1-d: removed localStorage-backed taskCenterCollapsed state and its
+  // useEffect; the task center is now a header chip (TaskCenterChip) that
+  // opens the existing App.tsx <Drawer>. The legacy TaskCenterPanel
+  // header strip is gone — its expanded form is reached via the chip.
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
@@ -188,7 +192,11 @@ export function ChatPage() {
   const [timelineFilters, setTimelineFilters] = useState<TimelineFilterState>(() => defaultTimelineFilters());
   const [timelineCursor, setTimelineCursor] = useState("");
   const [timelineCursorStack, setTimelineCursorStack] = useState<string[]>([]);
-  const [taskCenterCollapsed, setTaskCenterCollapsed] = useState(() => window.localStorage.getItem("godex.taskCenterCollapsed") === "1");
+  // P1-d: removed the legacy taskCenterCollapsed state and its localStorage
+  // effect — the task center is now a header chip (TaskCenterChip) that
+  // opens the App.tsx <Drawer> instead of inlining a band in the chat
+  // workspace. The expanded list view lives in the drawer's children
+  // (P1-f).
   // T15: track longtask reflux bubbles. The chat list still
   // renders the message itself; the bubble is a floating
   // notification that the user can act on without scrolling to
@@ -289,7 +297,7 @@ export function ChatPage() {
   }, [openQuery.data, sessionKey, setSession]);
 
   useEffect(() => {
-    window.localStorage.setItem("godex.taskCenterCollapsed", taskCenterCollapsed ? "1" : "0");
+    // P1-d: removed localStorage sync for godex.taskCenterCollapsed.
   }, [taskCenterCollapsed]);
 
   const snapshotQuery = useQuery({
@@ -1143,6 +1151,11 @@ export function ChatPage() {
                   onClick={() => void copySessionInfo()}
                 />
               </Tooltip>
+              {/* P1-d: task center header chip (SPEC §5) — replaces the
+                  legacy TaskCenterPanel band that previously sat at the
+                  top of the chat workspace. P1-e will wire onOpen to
+                  the App.tsx <Drawer>. */}
+              <TaskCenterChip onOpen={() => { /* P1-e: open task center drawer via App.tsx setMobileNavOpen */ }} label={t("chat.taskCenter") || "Task Center"} />
               <Tooltip title="Fork session">
                 <Button
                   size={compactHeader ? "small" : "middle"}
@@ -1188,27 +1201,7 @@ export function ChatPage() {
           </div>
         ) : (
           <>
-            <TaskCenterPanel
-              outcomes={taskOutcomes}
-              collapsed={taskCenterCollapsed}
-              onCollapsedChange={setTaskCenterCollapsed}
-              reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
-              mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
-              resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
-              cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
-              runningWorkflowId={runLongTaskMutation.isPending ? runLongTaskMutation.variables : undefined}
-              cancelingLongTask={cancelLongTaskMutation.isPending ? cancelLongTaskMutation.variables : undefined}
-              finalizingLongTask={finalizeLongTaskMutation.isPending ? finalizeLongTaskMutation.variables : undefined}
-              onReviewSubagent={reviewSubagentInDrawer}
-              onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
-              onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
-              onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
-              onRunLongTask={(workflowId) => runLongTaskMutation.mutate(workflowId)}
-              onCancelLongTask={(workflowId, nodeId) => cancelLongTaskMutation.mutate({ workflowId, nodeId })}
-              onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
-              onOpenReviewMergeCenter={openReviewMergeCenter}
-            />
-            <div ref={scrollerRef} className="chat-feed">
+            <div className="chat-feed" ref={scrollerRef} style={{ minHeight: 0 }}>
               <div className="chat-feed-inner">
                 <MessageFeed
                   items={items}

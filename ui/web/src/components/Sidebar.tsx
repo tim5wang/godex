@@ -1,5 +1,6 @@
 import { useI18n } from "../i18n";
 import type { ListedSession } from "../lib/types";
+import { useLayoutStore, selectSessionListLayoutState } from "../store/layout";
 
 interface SidebarProps {
   sessions: ListedSession[];
@@ -26,6 +27,10 @@ export function Sidebar({
   mobileOpen = false,
   onClose,
 }: SidebarProps) {
+  // P0-C (SPEC §3.2): sessions column width is driven by the layout store.
+  const sessionsLayout = useLayoutStore(selectSessionListLayoutState);
+  const sessionsCollapsed = sessionsLayout.collapsed;
+  const sessionsWidth = sessionsCollapsed ? sessionsLayout.iconOnlyWidth : sessionsLayout.width;
   const panel = (
     <SidebarPanel
       sessions={sessions}
@@ -37,12 +42,18 @@ export function Sidebar({
       onDelete={onDelete}
       onCreate={onCreate}
       onClose={onClose}
+      collapsed={sessionsCollapsed}
     />
   );
 
   return (
     <>
-      <aside className="hidden h-full w-80 shrink-0 border-r border-[color:var(--border)] bg-[color:var(--panel)] md:flex md:flex-col">
+      <aside
+        className="hidden h-full shrink-0 border-r border-[color:var(--border)] bg-[color:var(--panel)] md:flex md:flex-col"
+        style={{ width: sessionsWidth }}
+        data-testid="sessions-rail"
+        data-collapsed={sessionsCollapsed ? "true" : "false"}
+      >
         {panel}
       </aside>
 
@@ -73,10 +84,55 @@ function SidebarPanel({
   onDelete,
   onCreate,
   onClose,
-}: SidebarProps) {
+  collapsed = false,
+}: SidebarProps & { collapsed?: boolean }) {
   const { t } = useI18n();
+  const toggleSessions = useLayoutStore((state) => state.toggle);
   const channels = ["all", ...Array.from(new Set(sessions.map((session) => session.locator.channel || "web"))).sort()];
   const filteredSessions = channelFilter === "all" ? sessions : sessions.filter((session) => (session.locator.channel || "web") === channelFilter);
+
+  // Collapsed: render only the strip (SPEC §4.5 bookmark + quick "+ New" affordance).
+  if (collapsed) {
+    return (
+      <div className="flex h-full flex-col items-stretch gap-2 px-1.5 py-3" data-testid="sessions-rail-strip">
+        <button
+          type="button"
+          aria-label={t("sessions.expand") || "Expand sessions"}
+          title={t("sessions.expand") || "Expand sessions"}
+          onClick={() => toggleSessions("sessions")}
+          className="rounded-md border border-[color:var(--border)] px-1.5 py-1 text-[color:var(--muted)] hover:bg-[color:var(--panel-strong)]"
+        >
+          <span aria-hidden>»</span>
+        </button>
+        <button
+          type="button"
+          aria-label={t("sessions.new")}
+          title={t("sessions.new")}
+          onClick={() => {
+            onCreate();
+            onClose?.();
+          }}
+          className="rounded-md bg-[color:var(--accent-soft)] px-1.5 py-1 text-sm font-medium text-[color:var(--accent)] hover:opacity-90"
+        >
+          +
+        </button>
+        {onClose ? (
+          <button
+            type="button"
+            aria-label={t("sessions.close")}
+            title={t("sessions.close")}
+            onClick={onClose}
+            className="rounded-md border border-[color:var(--border)] px-1.5 py-1 text-[10px] text-[color:var(--muted)] hover:bg-[color:var(--panel-strong)] md:hidden"
+          >
+            ×
+          </button>
+        ) : null}
+        <div className="mt-auto text-center text-[10px] text-[color:var(--muted)]" aria-hidden>
+          {filteredSessions.length}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -105,6 +161,17 @@ function SidebarPanel({
               {t("sessions.close")}
             </button>
           ) : null}
+          {/* P0-C: collapse the sessions column to a 40px strip. */}
+          <button
+            type="button"
+            aria-label={t("sessions.collapse") || "Collapse sessions"}
+            title={t("sessions.collapse") || "Collapse sessions"}
+            onClick={() => toggleSessions("sessions")}
+            className="hidden rounded-full border border-[color:var(--border)] px-2 py-1 text-xs text-[color:var(--muted)] hover:bg-[color:var(--panel-strong)] md:inline-block"
+            data-testid="sessions-collapse"
+          >
+            «
+          </button>
         </div>
       </div>
       <div className="border-b border-[color:var(--border)] px-3 py-3">

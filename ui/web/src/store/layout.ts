@@ -183,6 +183,29 @@ export function selectAppNavLayoutState(state: LayoutState): AppNavLayoutSnapsho
   };
 }
 
+// ---------------------------------------------------------------------------
+// SessionList contract (T3 / SPEC §3.2). The session list is the second
+// column from the left in the chat workspace. When collapsed it shrinks to
+// a 40px strip with a quick "+ New" affordance and a popover that reveals
+// the full session list on demand (SPEC §4.5 bookmark behavior).
+// ---------------------------------------------------------------------------
+
+export const SESSIONS_ICON_ONLY_WIDTH = 40;
+
+export type SessionListLayoutSnapshot = {
+  collapsed: boolean;
+  width: number; // expanded width in px
+  iconOnlyWidth: 40; // SPEC §3.2 fixed narrow width
+};
+
+export function selectSessionListLayoutState(state: LayoutState): SessionListLayoutSnapshot {
+  return {
+    collapsed: state.panels.sessions.collapsed,
+    width: state.panels.sessions.width ?? 280,
+    iconOnlyWidth: 40,
+  };
+}
+
 function clonePanels(panels: Record<PanelKey, PanelState>): Record<PanelKey, PanelState> {
   return Object.fromEntries(Object.entries(panels).map(([k, v]) => [k, { ...v }])) as Record<PanelKey, PanelState>;
 }

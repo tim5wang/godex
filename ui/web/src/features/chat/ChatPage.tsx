@@ -35,6 +35,7 @@ import { TaskCenterChip } from "../tasks/TaskCenterChip";
 import { TaskCenterProvider } from "../tasks/TaskCenterContext";
 import { TaskCenterPanel } from "../chat/TaskCenterPanel";
 import { ChatWorkspaceCanvas } from "./ChatWorkspaceCanvas";
+import { MobileWorkspaceTabs } from "../../components/workspace/MobileWorkspaceTabs";
 import { LongTaskRefluxBubble, isLongTaskRefluxMessage } from "./LongTaskRefluxBubble";
 import { buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview, type ReviewMergeFilter } from "./reviewMergeCenter";
 import { buildTaskOutcomes } from "./taskCenterOutcome";

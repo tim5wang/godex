@@ -1,4 +1,4 @@
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useLayoutEffect, useMemo, useState } from "react";
 import { Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   Alert,
@@ -27,6 +27,14 @@ import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
 import { selectAppNavLayoutState, selectTaskCenterDrawerState, useLayoutStore } from "./store/layout";
+import {
+  LAYOUT_STORAGE_KEY,
+  applyLayoutSnapshot,
+  clearPersistedLayoutSnapshot,
+  readPersistedLayoutSnapshot,
+  serializeLayoutSnapshot,
+  writePersistedLayoutSnapshot,
+} from "./store/layoutPersistence";
 import { TaskCenterDrawerContent } from "./features/tasks/TaskCenterDrawerContent";
 
 export default function App() {
@@ -52,6 +60,45 @@ export default function App() {
   // width (100vw) so the persisted width envelope only applies on
   // the PC layout. The setter is exposed on the window for the chip
   // click handler in P1-e.
+  // P4 / T8 (SPEC §3.1 + §4.6): hydrate the layout store from
+  // localStorage on first mount, subscribe to subsequent changes
+  // and write them back, and listen for the cross-tab `storage`
+  // event so multiple tabs stay in sync. We hand-roll the
+  // persistence layer (see store/layoutPersistence.ts) instead of
+  // adopting zustand/middleware/persist so the snapshot shape
+  // stays under our control and the cross-tab path is a single
+  // dispatch. The hydrate call uses a one-shot effect that runs
+  // *before* the first paint, so the user never sees the default
+  // snapshot flicker into a hydrated one.
+  useLayoutEffect(() => {
+    const persisted = readPersistedLayoutSnapshot();
+    if (persisted) {
+      useLayoutStore.setState(applyLayoutSnapshot(persisted));
+    }
+    const unsubscribe = useLayoutStore.subscribe((state) => {
+      writePersistedLayoutSnapshot(serializeLayoutSnapshot(state));
+    });
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== LAYOUT_STORAGE_KEY) return;
+      if (!event.newValue) {
+        // Another tab cleared the snapshot (e.g. reset()).
+        // Apply the default snapshot locally so the two tabs
+        // converge.
+        useLayoutStore.getState().reset();
+        return;
+      }
+      // Reuse the same hydrate path so malformed payloads are
+      // dropped on the floor instead of corrupting the store.
+      const incoming = JSON.parse(event.newValue) as Parameters<typeof applyLayoutSnapshot>[0];
+      useLayoutStore.setState(applyLayoutSnapshot(incoming));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
   const taskCenterDrawer = useLayoutStore(selectTaskCenterDrawerState);
   // P3 / T7 (SPEC §4.4): Ctrl/Cmd + ` toggles the terminal panel
   // visibility (PC only — mobile surfaces the terminal via the

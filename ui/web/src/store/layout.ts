@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { clearPersistedLayoutSnapshot } from "./layoutPersistence";
 
 // ---------------------------------------------------------------------------
 // Public types (mirror SPEC §4.6). Pure types only — no React, no IO.
@@ -425,6 +426,10 @@ export const useLayoutStore = create<LayoutState>((set) => ({
       centerGrid: { ...DEFAULT_GRID_OCCUPANCY[DEFAULT_GRID_PRESET] },
       centerGridRatios: { ...DEFAULT_GRID_RATIOS },
     }));
+    // P4 / T8: also wipe the persisted snapshot so the next
+    // reload returns to the factory defaults (not to whatever
+    // was in localStorage before the reset).
+    clearPersistedLayoutSnapshot();
   },
 }));
 

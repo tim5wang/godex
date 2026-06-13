@@ -81,6 +81,26 @@ export const messages = {
       createDirPrompt: "Enter directory name:",
       renamePrompt: "Enter new name:",
     },
+    mobile: {
+      tabs: {
+        chat: "Chat",
+        terminal: "Terminal",
+        files: "Files",
+        drawer: "Drawer",
+        tasks: "Task center",
+      },
+    },
+    terminal: {
+      title: "Terminal",
+      ready: "ready (mock PTY v1.0).",
+      hint: "Type something. Polling fallback is active; real PTY lands in v2.0.",
+      shortcutHint: "Toggle with Ctrl/Cmd + `",
+    },
+    panel: {
+      toggleTerminal: "Toggle terminal",
+      collapse: "Collapse",
+      expand: "Expand",
+    },
     notes: {
       eyebrow: "Workspace notes",
       pageTitle: "Notes",
@@ -660,6 +680,26 @@ export const messages = {
       createDirPrompt: "输入目录名：",
       renamePrompt: "输入新名称：",
     },
+    mobile: {
+      tabs: {
+        chat: "聊天",
+        terminal: "终端",
+        files: "文件",
+        drawer: "抽屉",
+        tasks: "任务中心",
+      },
+    },
+    terminal: {
+      title: "终端",
+      ready: "已就绪（Mock PTY v1.0）。",
+      hint: "请输入。v1.0 使用轮询回退模式，真正的 PTY 将在 v2.0 接入。",
+      shortcutHint: "使用 Ctrl/Cmd + ` 切换",
+    },
+    panel: {
+      toggleTerminal: "切换终端",
+      collapse: "收起",
+      expand: "展开",
+    },
     notes: {
       eyebrow: "工作区笔记",
       pageTitle: "笔记",
@@ -1160,4 +1200,4 @@ export const messages = {
       },
     },
   },
-} as const satisfies Record<Locale, Record<string, unknown>>;
+} as const satisfies Record<Locale, unknown>;

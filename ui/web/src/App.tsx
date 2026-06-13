@@ -23,6 +23,7 @@ import { activeBuiltinApp, builtinApps, renderBuiltinAppRoutes } from "./app/app
 import { useI18n } from "./i18n";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { useResizableWidth } from "./hooks/useResizableWidth";
+import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
 import { selectAppNavLayoutState, selectTaskCenterDrawerState, useLayoutStore } from "./store/layout";
@@ -52,6 +53,16 @@ export default function App() {
   // the PC layout. The setter is exposed on the window for the chip
   // click handler in P1-e.
   const taskCenterDrawer = useLayoutStore(selectTaskCenterDrawerState);
+  // P3 / T7 (SPEC §4.4): Ctrl/Cmd + ` toggles the terminal panel
+  // visibility (PC only — mobile surfaces the terminal via the
+  // secondary tab bar, not a keyboard shortcut). The hook is
+  // wired into the layout store's toggle action so the change
+  // persists with the rest of the workspace state.
+  const toggleTerminal = useLayoutStore((state) => state.toggle);
+  useTerminalShortcut(
+    () => toggleTerminal("terminal"),
+    { active: screens.lg },
+  );
   const [navWidth, beginNavResize] = useResizableWidth({
     storageKey: "godex.navWidth",
     defaultWidth: 228,

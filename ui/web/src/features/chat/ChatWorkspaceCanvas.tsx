@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { CenterGrid, type CenterGridRenderSlot } from "../../components/workspace/CenterGrid";
 import { useLayoutStore } from "../../store/layout";
 import { FilesPanel } from "../files/FilesPanel";
+import { TerminalPanel } from "../terminal/TerminalPanel";
 
 // P2 / T6b (SPEC §3.2 + §4.1 + §4.3): ChatWorkspaceCanvas is the
 // thin shell that ChatPage mounts inside its <section className="chat-main">.
@@ -64,21 +65,19 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
           </div>
         );
       }
-      // v1 placeholder for the terminal panel (P3 lands the real xterm).
+      // P3 / T7 (SPEC §4.4 v1.0 polling fallback): when the parent
+      // does not pass a custom renderTerminal, mount the default
+      // <TerminalPanel> which drives a mock PTY on a polling
+      // interval. v2.0 will swap the mock client for the real Go
+      // PTY (internal/acp CreateTerminal / TerminalOutput) without
+      // touching this slot.
       return (
         <div
-          data-testid="center-grid-cell-terminal-placeholder"
-          className="center-grid-cell-terminal-placeholder"
-          style={{
-            height: "100%",
-            display: "grid",
-            placeItems: "center",
-            background: "var(--panel)",
-            color: "var(--muted)",
-            fontSize: 12,
-          }}
+          data-testid="center-grid-cell-terminal-default"
+          className="center-grid-cell-terminal-default"
+          style={{ height: "100%", minHeight: 0 }}
         >
-          Terminal (P3)
+          <TerminalPanel />
         </div>
       );
     }

@@ -8,6 +8,7 @@ import {
 } from "../../store/layout";
 import { useI18n } from "../../i18n";
 import { FilesPanel } from "../../features/files/FilesPanel";
+import { TerminalPanel } from "../../features/terminal/TerminalPanel";
 
 // P0-D / T9 + P2 / T6d (SPEC §3.3 + §3.4): Secondary workspace tab bar
 // for screens < 1024px. Shows 5 tabs: chat | terminal | files | drawer
@@ -114,7 +115,20 @@ function renderActive(active: MobileTab, props: MobileWorkspaceTabsProps): React
     );
   }
   if (active === "terminal") {
-    return <PlaceholderPanel tabKey="terminal" label="Terminal (P3)" />;
+    // P3 / T7 (SPEC §4.4 v1.0): mount the same <TerminalPanel> the
+    // PC center grid uses. Mobile users get a full-width xterm;
+    // the polling-fallback mock PTY is the same code path on
+    // both surfaces.
+    return (
+      <div
+        data-testid="mobile-workspace-terminal"
+        data-tab="terminal"
+        className="mobile-workspace-terminal"
+        style={{ height: "100%" }}
+      >
+        <TerminalPanel />
+      </div>
+    );
   }
   if (active === "drawer") {
     return <PlaceholderPanel tabKey="drawer" label="Drawer" />;

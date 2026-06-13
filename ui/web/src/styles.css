@@ -571,6 +571,13 @@ samp {
   min-height: 0;
 }
 
+/* prevent antd Splitter.Panel from collapsing below 5px (antd autoPtgSizes
+   doesn't clamp defined sizes to min, and the panel div lacks min-* CSS) */
+.center-grid .ant-splitter-panel {
+  min-width: 5px;
+  min-height: 5px;
+}
+
 .center-grid-action-feedback {
   position: absolute;
   top: 10px;
@@ -593,11 +600,11 @@ samp {
 
 .center-grid-panel {
   display: flex;
-  min-width: 0;
-  min-height: 0;
+  min-width: 5px;
+  min-height: 5px;
   height: 100%;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   outline: 2px solid transparent;
   outline-offset: -2px;
   background: var(--godex-panel);
@@ -646,7 +653,10 @@ samp {
 .center-grid-panel-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
+  /* xterm.js positions its hidden textarea absolutely inside the
+     viewport; overflow:hidden/clip on a parent can clip it and
+     prevent the browser from dispatching keyboard events to it. */
 }
 
 .center-grid-cell-chat,

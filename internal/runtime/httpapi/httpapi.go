@@ -1806,5 +1806,6 @@ func registerTerminalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/terminal/create", tm.handleCreateTerminal)
 	mux.HandleFunc("GET /v1/terminal/{id}/output", tm.handleTerminalOutput)
 	mux.HandleFunc("POST /v1/terminal/{id}/input", tm.handleTerminalInput)
+	mux.HandleFunc("POST /v1/terminal/{id}/resize", tm.handleTerminalResize)
 	mux.HandleFunc("DELETE /v1/terminal/{id}", tm.handleTerminalDelete)
 }

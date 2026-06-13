@@ -44,7 +44,7 @@ type CenterGridDragState = {
   overSlot: CenterGridCellSlot | null;
 };
 
-const COLLAPSE_RATIO_THRESHOLD = 0.06;
+const COLLAPSE_RATIO_THRESHOLD = 0;
 
 export type CenterGridProps = {
   preset: GridPresetId;
@@ -188,12 +188,12 @@ function Grid2x2({
       >
         <Splitter.Panel
           size={ratioToPercent(outer)}
-          min="0%"
+          min={5}
           data-testid="center-grid-top-row"
         >
           {render2x2Row(occ, occ.topLeft, occ.topRight, innerTop, renderSlot, "top", onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, onGridNearZeroCollapse, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
         </Splitter.Panel>
-        <Splitter.Panel size={ratioToPercent(1 - outer)} min="0%" data-testid="center-grid-bottom-row">
+        <Splitter.Panel size={ratioToPercent(1 - outer)} min={5} data-testid="center-grid-bottom-row">
           {render2x2Row(occ, occ.bottomLeft, occ.bottomRight, innerBottom, renderSlot, "bottom", onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, onGridNearZeroCollapse, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
         </Splitter.Panel>
       </Splitter>
@@ -259,7 +259,7 @@ function render2x2Row(
     >
       <Splitter.Panel
         size={ratioToPercent(split)}
-        min="0%"
+        min={5}
         data-testid={leftTestId}
         data-panel={left ?? ""}
       >
@@ -267,7 +267,7 @@ function render2x2Row(
           {renderSlot(left)}
         </SlotFrame>
       </Splitter.Panel>
-      <Splitter.Panel size={ratioToPercent(1 - split)} min="0%" data-testid={rightTestId} data-panel={right ?? ""}>
+      <Splitter.Panel size={ratioToPercent(1 - split)} min={5} data-testid={rightTestId} data-panel={right ?? ""}>
         <SlotFrame panel={right} slot={rightSlot} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(right)}
         </SlotFrame>
@@ -324,21 +324,21 @@ function Grid3x3({
       >
         <Splitter.Panel
           size={ratioToPercent(row0)}
-          min="0%"
+          min={5}
           data-testid="center-grid-row-0"
         >
           {render3x3Row(occ, rows[0], col0, col1, col2Percent, renderSlot, 0, onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel
           size={ratioToPercent(row1)}
-          min="0%"
+          min={5}
           data-testid="center-grid-row-1"
         >
           {render3x3Row(occ, rows[1], col0, col1, col2Percent, renderSlot, 1, onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel
           size={`${row2Percent}%`}
-          min="0%"
+          min={5}
           data-testid="center-grid-row-2"
         >
           {render3x3Row(occ, rows[2], col0, col1, col2Percent, renderSlot, 2, onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, dragState, setDragState, dragRef)}
@@ -389,7 +389,7 @@ function render3x3Row(
     >
       <Splitter.Panel
         size={ratioToPercent(col0)}
-        min="0%"
+        min={5}
         data-testid={`center-grid-r${rowIdx}c0`}
         data-panel={cells[0] ?? ""}
       >
@@ -399,7 +399,7 @@ function render3x3Row(
       </Splitter.Panel>
       <Splitter.Panel
         size={ratioToPercent(col1)}
-        min="0%"
+        min={5}
         data-testid={`center-grid-r${rowIdx}c1`}
         data-panel={cells[1] ?? ""}
       >
@@ -409,7 +409,7 @@ function render3x3Row(
       </Splitter.Panel>
       <Splitter.Panel
         size={`${col2Percent}%`}
-        min="0%"
+        min={5}
         data-testid={`center-grid-r${rowIdx}c2`}
         data-panel={cells[2] ?? ""}
       >

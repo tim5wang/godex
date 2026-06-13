@@ -15,14 +15,19 @@ import type { CreateTerminalResponse, TerminalInputRequest, TerminalOutputChunk 
 
 // ---- internal buffer per terminal ----
 
+export type TerminalStatus = "idle" | "connecting" | "connected" | "error" | "exited";
+
 type TerminalState = {
   cursor: number;
   buffer: string;
   exited: boolean;
+  status: TerminalStatus;
+  error: string;
   poller: ReturnType<typeof setInterval> | null;
   baseUrl: string;
   serverTerminalId?: string;
   pendingInput: string[];
+  createdAt: number;
 };
 
 const terminals = new Map<string, TerminalState>();
@@ -120,9 +125,12 @@ export function createTerminal(workspaceDir?: string): CreateTerminalResponse {
     cursor: 0,
     buffer: "",
     exited: false,
+    status: "connecting",
+    error: "",
     poller: null,
     baseUrl,
     pendingInput: [],
+    createdAt: Date.now(),
   });
 
   // Fire-and-forget: tell the Go backend to spawn a shell.
@@ -135,13 +143,18 @@ export function createTerminal(workspaceDir?: string): CreateTerminalResponse {
       });
       if (!resp.ok) {
         const state = terminals.get(terminalId);
-        if (state) state.exited = true;
+        if (state) {
+          state.status = "error";
+          state.error = `Server returned ${resp.status}`;
+          state.exited = true;
+        }
         return;
       }
       const created = await resp.json() as Partial<CreateTerminalResponse>;
       const state = terminals.get(terminalId);
       if (!state) return;
       state.serverTerminalId = created.terminalId || terminalId;
+      state.status = "connected";
       flushPendingInput(terminalId);
       // Start polling once the backend confirms creation.
       // If the create fails, poll will get 404 and mark exited.
@@ -150,7 +163,11 @@ export function createTerminal(workspaceDir?: string): CreateTerminalResponse {
       await fetchOutput(terminalId);
     } catch {
       const state = terminals.get(terminalId);
-      if (state) state.exited = true;
+      if (state) {
+        state.status = "error";
+        state.error = "Failed to connect to terminal backend";
+        state.exited = true;
+      }
     }
   })();
 
@@ -240,8 +257,54 @@ export function destroyTerminal(terminalId: string): void {
   })();
 }
 
+/**
+ * Notify the backend of a terminal resize so the PTY gets the
+ * new dimensions (needed for line-wrapping in the shell).
+ */
+export function resizeTerminal(terminalId: string, cols: number, rows: number): void {
+  const state = terminals.get(terminalId);
+  if (!state || state.exited || !state.serverTerminalId) return;
+  void (async () => {
+    try {
+      await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(state.serverTerminalId!)}/resize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cols, rows }),
+      });
+    } catch {
+      // Best-effort.
+    }
+  })();
+}
+
+/**
+ * Get the current status of a terminal session.
+ * TerminalPanel calls this to detect errors / connection failures.
+ */
+export function getTerminalStatus(terminalId: string): { status: TerminalStatus; error: string } {
+  const state = terminals.get(terminalId);
+  if (!state) return { status: "error", error: "Terminal not found" };
+
+  // Timeout: if still connecting after 8s, treat as error.
+  if (state.status === "connecting" && Date.now() - state.createdAt > TERMINAL_CONNECT_TIMEOUT_MS) {
+    state.status = "error";
+    state.error = "Terminal backend unreachable (timeout)";
+    state.exited = true;
+    stopPolling(terminalId);
+  }
+
+  if (state.exited && state.status === "connecting") {
+    return { status: "error", error: state.error || "Terminal exited unexpectedly" };
+  }
+
+  return { status: state.status, error: state.error };
+}
+
 /** Polling interval in ms. Matches mock v1.0 cadence. */
 export const TERMINAL_POLL_MS = 500;
+
+/** Max time to wait for backend to respond after create (ms). */
+export const TERMINAL_CONNECT_TIMEOUT_MS = 8000;
 
 /**
  * Predicate: should the renderer keep polling?

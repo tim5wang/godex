@@ -296,7 +296,7 @@ async function handleV1Route(route: Route): Promise<void> {
     return;
   }
 
-  if (path === "/terminal/create" || path === "/terminal/create/") {
+  if (path === "/v1/terminal/create" || path === "/v1/terminal/create/") {
     await route.fulfill({
       status: 201,
       contentType: "application/json",
@@ -305,7 +305,8 @@ async function handleV1Route(route: Route): Promise<void> {
     return;
   }
 
-  if (path === "/terminal/term-playwright/output") {
+  // Match any /v1/terminal/:id/output requests (id is random client-side).
+  if (/^\/v1\/terminal\/[^/]+\/output$/.test(path)) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -319,11 +320,20 @@ async function handleV1Route(route: Route): Promise<void> {
     return;
   }
 
-  if (path === "/terminal/term-playwright/input" || path === "/terminal/term-playwright") {
+  if (/^\/v1\/terminal\/[^/]+\/input$/.test(path)) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ terminalId: "term-playwright", accepted: true }),
+    });
+    return;
+  }
+
+  if (/^\/v1\/terminal\/[^/]+$/.test(path)) {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ terminalId: "term-playwright", exited: true }),
     });
     return;
   }

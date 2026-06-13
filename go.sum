@@ -34,6 +34,8 @@ github.com/charmbracelet/x/term v0.2.1 h1:AQeHeLZ1OqSXhrAWpYUtZyX1T3zVxfpZuEQMIQ
 github.com/charmbracelet/x/term v0.2.1/go.mod h1:oQ4enTYFV7QN4m0i9mzHrViD7TQKvNEEkHUMCmsxdUg=
 github.com/coder/acp-go-sdk v0.11.7 h1:gjP2Okcjd4H0L4fnSN5ktKJdGguNptyDDH5TOibZ2pQ=
 github.com/coder/acp-go-sdk v0.11.7/go.mod h1:yKzM/3R9uELp4+nBAwwtkS0aN1FOFjo11CNPy37yFko=
+github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
+github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -126,6 +128,8 @@ github.com/tim5wang/min-tui v0.3.0 h1:4NeBEUIhcyh2qIOVbcQ6fmQc/PJRD65TBKCmmelWbs
 github.com/tim5wang/min-tui v0.3.0/go.mod h1:Nz39pdvttNzXn4nFvLcv4nL3eEdHGNV/ag9i9AH51Lw=
 github.com/tim5wang/min-tui v0.3.1 h1:MK/8/HkDt4BVBkv/abEVuaq7Rk1RH6lR2M+CQxNQvgU=
 github.com/tim5wang/min-tui v0.3.1/go.mod h1:Nz39pdvttNzXn4nFvLcv4nL3eEdHGNV/ag9i9AH51Lw=
+github.com/tim5wang/min-tui v0.3.2-0.20260613165214-78d5582e1c18 h1:TvmBIuiaYqPnSYKsyBCX0cqDIiVO2KJljsGXxefpxKA=
+github.com/tim5wang/min-tui v0.3.2-0.20260613165214-78d5582e1c18/go.mod h1:Nz39pdvttNzXn4nFvLcv4nL3eEdHGNV/ag9i9AH51Lw=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
 github.com/xuri/efp v0.0.1 h1:fws5Rv3myXyYni8uwj2qKjVaRP30PdjeYe2Y6FDsCL8=

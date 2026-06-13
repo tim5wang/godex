@@ -16,19 +16,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
 // terminalManager owns the in-memory set of active terminal sessions.
-// Each session wraps a live bash/sh process with pipe-based I/O.
-// Output is continuously read from the process stdout/stderr combined
-// and appended to a ring buffer so polling clients can request data
-// since a given cursor.
+// Each session wraps a live bash/sh process with PTY-based I/O
+// (github.com/creack/pty). Falls back to pipes on platforms where
+// PTY is unavailable.
 //
-// v2.0 ships with pipe-based I/O (works for basic commands like ls,
-// pwd, cat).  A future upgrade can replace pipe I/O with a real PTY
-// (e.g. github.com/creack/pty) to get interactive-capable terminals
-// with ANSI color support.
+// v3.0 (PTY upgrade): replaces the v2.0 pipe-based I/O with a real
+// PTY so the shell sees a true terminal — prompts, ANSI colors,
+// Ctrl+C, and interactive programs all work correctly.
 type terminalManager struct {
 	mu        sync.Mutex
 	terminals map[string]*terminalSession
@@ -37,11 +36,11 @@ type terminalManager struct {
 type terminalSession struct {
 	id        string
 	cmd       *exec.Cmd
-	stdin     io.WriteCloser
+	ptyFile   io.ReadWriteCloser // PTY master (or pipe wrapper on fallback)
 	cancel    context.CancelFunc
 	sessionMu sync.Mutex
 	buffer    []byte
-	cursor    atomic.Int64 // monotonically increasing output cursor
+	cursor    atomic.Int64
 	exited    atomic.Bool
 	createdAt time.Time
 	done      chan struct{}
@@ -55,17 +54,12 @@ func newTerminalManager() *terminalManager {
 
 var globalTerminalManager = newTerminalManager()
 
-// create spawns a bash (or sh) shell with pipe-based I/O and starts a
-// goroutine that continuously reads output into the ring buffer.
+// create spawns a bash (or sh) shell with PTY-based I/O. Falls back to
+// pipes when the platform doesn't support PTY.
 func (m *terminalManager) create(ctx context.Context, workspaceDir string) (*terminalSession, error) {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "bash"
-		if _, err := exec.LookPath(shell); err != nil {
-			shell = "sh"
-		}
-	}
-	cmd := exec.Command(shell)
+	shell, shellArgs := resolveShell()
+
+	cmd := exec.Command(shell, shellArgs...)
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
 		"LANG=en_US.UTF-8",
@@ -83,27 +77,20 @@ func (m *terminalManager) create(ctx context.Context, workspaceDir string) (*ter
 		cmd.Env = append(cmd.Env, "HOME="+workspaceDir)
 	}
 
-	// Attach pipes for stdin / combined stdout+stderr.
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("stdin pipe: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	cmd.Stderr = cmd.Stdout // merge stderr into stdout
-
 	ctx, cancel := context.WithCancel(ctx)
-	if err := cmd.Start(); err != nil {
+
+	// Try PTY first.
+	ptyFile, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	if err != nil {
+		// PTY failed — fall back to pipes.
 		cancel()
-		return nil, fmt.Errorf("start shell: %w", err)
+		return m.createWithPipes(cmd, workspaceDir)
 	}
 
 	session := &terminalSession{
 		id:        randomTerminalID(),
 		cmd:       cmd,
-		stdin:     stdin,
+		ptyFile:   ptyFile,
 		cancel:    cancel,
 		buffer:    make([]byte, 0, defaultTerminalBufferSize),
 		createdAt: time.Now(),
@@ -116,23 +103,79 @@ func (m *terminalManager) create(ctx context.Context, workspaceDir string) (*ter
 	m.terminals[session.id] = session
 	m.mu.Unlock()
 
-	// Background goroutine: read combined stdout/stderr into the ring
-	// buffer and track the exit state.
-	go session.readLoop(stdout)
+	go session.readLoop(ptyFile)
 
-	// Background goroutine: wait for the process to exit and mark it.
 	go func() {
 		_ = cmd.Wait()
 		session.exited.Store(true)
 		close(session.done)
 	}()
 
+	logger.Infof("terminal %s started (PTY) pid=%d shell=%s", session.id, cmd.Process.Pid, shell)
 	return session, nil
 }
 
-// output returns buffered output since cursor, together with the
-// latest cursor and exit flag. Returns empty data string if nothing
-// new is available.
+// createWithPipes is the fallback when PTY is unavailable.
+func (m *terminalManager) createWithPipes(cmd *exec.Cmd, _ string) (*terminalSession, error) {
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start shell: %w", err)
+	}
+
+	pw := &pipeWrapper{stdin: stdin, stdout: stdout}
+	_, cancel := context.WithCancel(context.Background())
+
+	session := &terminalSession{
+		id:        randomTerminalID(),
+		cmd:       cmd,
+		ptyFile:   pw,
+		cancel:    cancel,
+		buffer:    make([]byte, 0, defaultTerminalBufferSize),
+		createdAt: time.Now(),
+		done:      make(chan struct{}),
+	}
+	session.cursor.Store(0)
+	session.exited.Store(false)
+
+	m.mu.Lock()
+	m.terminals[session.id] = session
+	m.mu.Unlock()
+
+	go session.readLoop(pw)
+
+	go func() {
+		_ = cmd.Wait()
+		session.exited.Store(true)
+		close(session.done)
+	}()
+
+	logger.Infof("terminal %s started (pipe fallback) pid=%d", session.id, cmd.Process.Pid)
+	return session, nil
+}
+
+// resolveShell picks bash, falling back to sh with -i for PTY.
+func resolveShell() (string, []string) {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "bash"
+		if _, err := exec.LookPath(shell); err != nil {
+			shell = "sh"
+		}
+	}
+	// With PTY we pass -i to get interactive behavior (prompts, job control).
+	return shell, []string{"-i"}
+}
+
+// output returns buffered output since cursor.
 func (m *terminalManager) output(terminalID string, cursor int64) (outputChunk, error) {
 	m.mu.Lock()
 	session, ok := m.terminals[terminalID]
@@ -169,9 +212,7 @@ func (m *terminalManager) output(terminalID string, cursor int64) (outputChunk, 
 	}, nil
 }
 
-// writeInput sends data to the shell's stdin. It does NOT echo the
-// data back — the shell's own echo (or the program being run) will
-// produce output that appears in the next poll response.
+// writeInput sends data to the shell's stdin via the PTY.
 func (m *terminalManager) writeInput(terminalID string, data string) error {
 	m.mu.Lock()
 	session, ok := m.terminals[terminalID]
@@ -184,12 +225,28 @@ func (m *terminalManager) writeInput(terminalID string, data string) error {
 	}
 
 	session.sessionMu.Lock()
-	_, err := io.WriteString(session.stdin, data)
+	_, err := io.WriteString(session.ptyFile, data)
 	session.sessionMu.Unlock()
 	return err
 }
 
-// kill terminates the terminal session and removes it from the manager.
+// resize updates the PTY window size. No-op on pipe fallback.
+func (m *terminalManager) resize(terminalID string, cols, rows int) error {
+	m.mu.Lock()
+	session, ok := m.terminals[terminalID]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("terminal %s not found", terminalID)
+	}
+
+	f, ok := session.ptyFile.(*os.File)
+	if !ok || f == nil {
+		return nil // pipe fallback — silently ignore
+	}
+	return pty.Setsize(f, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+}
+
+// kill terminates the terminal session.
 func (m *terminalManager) kill(terminalID string) error {
 	m.mu.Lock()
 	session, ok := m.terminals[terminalID]
@@ -201,11 +258,13 @@ func (m *terminalManager) kill(terminalID string) error {
 	m.mu.Unlock()
 
 	session.cancel()
-	session.stdin.Close()
+	if session.ptyFile != nil {
+		session.ptyFile.Close()
+	}
 	return nil
 }
 
-// readLoop continuously reads from stdout into the session buffer.
+// readLoop continuously reads output from the PTY into the buffer.
 func (s *terminalSession) readLoop(reader io.Reader) {
 	buf := make([]byte, 4096)
 	for {
@@ -213,7 +272,6 @@ func (s *terminalSession) readLoop(reader io.Reader) {
 		if n > 0 {
 			s.sessionMu.Lock()
 			s.buffer = append(s.buffer, buf[:n]...)
-			// Trim the buffer if it grows too large (keep last 1 MB).
 			if len(s.buffer) > maxTerminalBufferSize {
 				overflow := len(s.buffer) - maxTerminalBufferSize
 				s.buffer = s.buffer[overflow:]
@@ -230,6 +288,22 @@ func (s *terminalSession) readLoop(reader io.Reader) {
 	}
 }
 
+// pipeWrapper combines stdin/stdout pipes into io.ReadWriteCloser.
+type pipeWrapper struct {
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+}
+
+func (pw *pipeWrapper) Read(p []byte) (n int, err error)  { return pw.stdout.Read(p) }
+func (pw *pipeWrapper) Write(p []byte) (n int, err error) { return pw.stdin.Write(p) }
+func (pw *pipeWrapper) Close() error {
+	pw.stdin.Close()
+	if c, ok := pw.stdout.(io.Closer); ok {
+		c.Close()
+	}
+	return nil
+}
+
 // --- API types ---
 
 type createTerminalRequest struct {
@@ -243,6 +317,11 @@ type createTerminalResponse struct {
 
 type terminalInputRequest struct {
 	Data string `json:"data"`
+}
+
+type terminalResizeRequest struct {
+	Cols int `json:"cols"`
+	Rows int `json:"rows"`
 }
 
 type outputChunk struct {
@@ -311,6 +390,30 @@ func (m *terminalManager) handleTerminalInput(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "accepted": true})
+}
+
+func (m *terminalManager) handleTerminalResize(w http.ResponseWriter, r *http.Request) {
+	terminalID := strings.TrimSpace(r.PathValue("id"))
+	if terminalID == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("missing terminal id"))
+		return
+	}
+	var req terminalResizeRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Cols < 1 {
+		req.Cols = 80
+	}
+	if req.Rows < 1 {
+		req.Rows = 24
+	}
+	if err := m.resize(terminalID, req.Cols, req.Rows); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "cols": req.Cols, "rows": req.Rows})
 }
 
 func (m *terminalManager) handleTerminalDelete(w http.ResponseWriter, r *http.Request) {

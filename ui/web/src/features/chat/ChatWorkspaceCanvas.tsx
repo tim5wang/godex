@@ -32,6 +32,8 @@ export type ChatWorkspaceCanvasProps = {
   renderTerminal?: () => ReactNode;
   /** Optional: render the tasks panel (used by future presets). */
   renderTasks?: () => ReactNode;
+  /** Attach a workspace file from the files grid panel to the chat composer. */
+  onAttachFile?: (file: File) => void;
 };
 
 export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
@@ -76,7 +78,7 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
     if (panel === "files") {
       return (
         <div data-testid="center-grid-cell-files" className="center-grid-cell-files" style={{ height: "100%", minHeight: 0 }}>
-          <FilesPanel mode="dock" cwd={props.filesCwd ?? "."} fillContainer />
+          <FilesPanel mode="dock" cwd={props.filesCwd ?? "."} fillContainer onAttachFile={props.onAttachFile} />
         </div>
       );
     }

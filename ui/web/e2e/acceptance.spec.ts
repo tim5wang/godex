@@ -1,6 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { mockBackend } from "./fixtures";
 
+async function resetBrowserState(page: import("@playwright/test").Page) {
+  await page.goto("/");
+  await page.evaluate(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  });
+}
+
 test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () => {
   test.beforeEach(async ({ page }) => {
     // These tests require a desktop viewport. Skip on mobile.
@@ -9,6 +17,7 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
       test.skip();
     }
     await mockBackend(page);
+    await resetBrowserState(page);
     await page.goto("/chat");
     // Wait for the main layout to render.
     await page.waitForSelector(".godex-sider", { timeout: 10000 });
@@ -43,6 +52,7 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     // The main content area should be visible.
     const content = page.locator(".godex-content");
     await expect(content).toBeVisible({ timeout: 5000 });
+    await expect(page.locator(".godex-header")).toContainText("/tmp/godex-playwright");
     await page.waitForTimeout(1000);
     await expect(content).not.toContainText(/crashed|Maximum update depth exceeded|Element type is invalid/i);
   });
@@ -60,6 +70,26 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
     await expect(page.locator('[data-testid="files-panel-dock"]')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('[data-testid="files-panel-dock-collapsed"]')).toHaveCount(0);
+  });
+
+  test("CenterGrid files panel previews and attaches selected files", async ({ page }) => {
+    await page.getByText("SPEC.md").click();
+    await expect(page.locator('[data-testid="files-panel-preview-path"]')).toContainText("SPEC.md");
+    await expect(page.locator('[data-testid="files-panel-preview"]')).toContainText("GoDex Web UI");
+    await page.locator('[data-testid="files-panel-attach-selected"]').click();
+    await expect(page.locator(".chat-composer")).toContainText("SPEC.md");
+  });
+
+  test("CenterGrid chat cell pins composer to the bottom of the panel", async ({ page }) => {
+    const chatBox = await page.locator('[data-testid="center-grid-panel-topRight"]').boundingBox();
+    const composerBox = await page.locator(".chat-composer").boundingBox();
+    expect(chatBox).not.toBeNull();
+    expect(composerBox).not.toBeNull();
+    expect(Math.abs((composerBox!.y + composerBox!.height) - (chatBox!.y + chatBox!.height))).toBeLessThan(20);
+  });
+
+  test("CenterGrid terminal panel exposes connection status", async ({ page }) => {
+    await expect(page.locator('[data-testid="terminal-status"]')).toContainText(/connected|ready/i, { timeout: 7000 });
   });
 
   test("CenterGrid panel titlebar drag swaps panels", async ({ page }) => {
@@ -121,6 +151,7 @@ test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {
       test.skip();
     }
     await mockBackend(page);
+    await resetBrowserState(page);
     await page.goto("/chat");
     // Wait for the mobile layout to render.
     await page.waitForSelector(".godex-header", { timeout: 10000 });
@@ -151,6 +182,7 @@ test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {
 test.describe("M0 Acceptance Checklist — Cross-cutting", () => {
   test.beforeEach(async ({ page }) => {
     await mockBackend(page);
+    await resetBrowserState(page);
   });
 
   async function expectNoRouteCrash(page: import("@playwright/test").Page) {

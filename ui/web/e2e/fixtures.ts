@@ -209,6 +209,18 @@ async function handleAPIRoute(route: Route): Promise<void> {
       });
       return;
 
+    case path.startsWith("/files/read"):
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          path: "SPEC.md",
+          content: "# GoDex Web UI\n\nMock SPEC content for Playwright.\n",
+          size: 48,
+        }),
+      });
+      return;
+
     case path === "/skills/catalog" || path.startsWith("/skills/"):
       await route.fulfill({
         status: 200,

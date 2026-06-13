@@ -155,6 +155,10 @@ export default function App() {
   const shellClassName = ["godex-shell", activeApp.shellClassName].filter(Boolean).join(" ");
   const headerTitleKey = activeApp.headerTitleKey ?? activeApp.labelKey;
   const headerSubtitleKey = activeApp.headerSubtitleKey ?? "";
+  const workspaceSubtitle = activeApp.id === "chat" && metaQuery.data?.workspace_dir
+    ? [metaQuery.data.workspace_dir, metaQuery.data.model, metaQuery.data.version?.version].filter(Boolean).join(" · ")
+    : "";
+  const headerSubtitle = workspaceSubtitle || (headerSubtitleKey ? t(headerSubtitleKey) : "");
   const navItems = useMemo(
     () => builtinApps.map((app) => ({ key: app.navPath, icon: app.icon, label: t(app.labelKey), onMouseEnter: app.preload })),
     [t],
@@ -227,9 +231,9 @@ export default function App() {
                 ) : null}
                 <Space direction="vertical" size={0} className="godex-header-title">
                   <Typography.Text strong>{t(headerTitleKey)}</Typography.Text>
-                  {headerSubtitleKey ? (
+                  {headerSubtitle ? (
                     <Typography.Text className="muted" ellipsis>
-                      {t(headerSubtitleKey)}
+                      {headerSubtitle}
                     </Typography.Text>
                   ) : null}
                 </Space>

@@ -82,3 +82,21 @@
 - [x] Drop on occupied slots using slot-to-slot swap and on empty slots using move.
 - [x] Keep the menu-button path working alongside drag/drop.
 - [x] Add Playwright coverage for titlebar drag swapping panels.
+
+### Task 7: Screenshot Usability Regression Fixes
+
+**Files:**
+- Modify: `ui/web/src/App.tsx`
+- Modify: `ui/web/src/features/files/FilesPanel.tsx`
+- Modify: `ui/web/src/features/terminal/TerminalPanel.tsx`
+- Modify: `ui/web/src/components/Composer.tsx`
+- Modify: `ui/web/src/features/chat/ChatPage.tsx`
+- Modify: `ui/web/src/styles.css`
+- Test: `ui/web/e2e/acceptance.spec.ts`
+
+- [x] Replace the generic chat route subtitle with workspace/model/version context.
+- [x] Make the grid files panel load and preview selected files.
+- [x] Add a grid files action that attaches the selected file to the active chat composer.
+- [x] Make the grid chat cell a real flex column so the composer stays at the bottom.
+- [x] Add visible terminal connection status instead of a blank black panel.
+- [x] Isolate Playwright localStorage state so layout tests are deterministic.

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Progress, Space, Tag, Typography, type UploadFile } from "antd";
 import { PaperClipOutlined } from "@ant-design/icons";
 import { Attachments, Sender } from "@ant-design/x";
@@ -16,10 +16,12 @@ interface ComposerProps {
   uploading?: boolean;
   uploadProgress?: number | null;
   packageCommands?: PackageCommandEntry[];
+  queuedFiles?: File[];
+  onQueuedFilesConsumed?: () => void;
   onSubmit: (submission: ComposerSubmission) => Promise<void>;
 }
 
-export function Composer({ disabled, uploading = false, uploadProgress = null, packageCommands = [], onSubmit }: ComposerProps) {
+export function Composer({ disabled, uploading = false, uploadProgress = null, packageCommands = [], queuedFiles = [], onQueuedFilesConsumed, onSubmit }: ComposerProps) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -39,6 +41,12 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, p
   );
   const commandMatches = useMemo(() => matchPackageCommands(value, packageCommands), [packageCommands, value]);
   const showCommandPalette = value.trimStart().startsWith("/") && !value.endsWith(" ") && files.length === 0 && commandMatches.length > 0;
+
+  useEffect(() => {
+    if (queuedFiles.length === 0) return;
+    setFiles((current) => [...current, ...queuedFiles]);
+    onQueuedFilesConsumed?.();
+  }, [onQueuedFilesConsumed, queuedFiles]);
 
   const submit = async (text: string) => {
     const trimmed = text.trim();

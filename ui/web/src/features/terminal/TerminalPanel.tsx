@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -52,9 +52,11 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const tickRef = useRef<number>(0);
   const idRef = useRef<string>("");
   const stoppedRef = useRef<boolean>(false);
+  const [status, setStatus] = useState("connecting");
 
   useEffect(() => {
     if (!hostRef.current) return;
+    setStatus("connecting");
     const term = new Terminal({
       convertEol: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -71,10 +73,14 @@ export function TerminalPanel(props: TerminalPanelProps) {
     // Seed the terminal with a real backend PTY (v2.0).
     const { terminalId } = createTerminal();
     idRef.current = terminalId;
+    setStatus("connected");
     const first = pollTerminal(terminalId, 0, 0);
     cursorRef.current = first.cursor;
     tickRef.current = 1;
-    if (first.data) term.write(first.data);
+    if (first.data) {
+      term.write(first.data);
+      setStatus("ready");
+    }
 
     // Polling loop.
     const handle = window.setInterval(() => {
@@ -82,9 +88,13 @@ export function TerminalPanel(props: TerminalPanelProps) {
       const next = pollTerminal(idRef.current, cursorRef.current, tickRef.current);
       cursorRef.current = next.cursor;
       tickRef.current += 1;
-      term.write(next.data);
+      if (next.data) {
+        term.write(next.data);
+        setStatus("ready");
+      }
       if (!shouldKeepPolling(next, true)) {
         window.clearInterval(handle);
+        setStatus(next.exited ? "exited" : "idle");
       }
     }, pollIntervalMs);
 
@@ -120,11 +130,28 @@ export function TerminalPanel(props: TerminalPanelProps) {
 
   return (
     <div
-      ref={hostRef}
       data-testid={testId}
       data-terminal-id={idRef.current || ""}
       className="terminal-panel"
-      style={{ width: "100%", height: "100%", minHeight: 0, background: "#0b1020", padding: 4 }}
-    />
+      style={{ display: "flex", width: "100%", height: "100%", minHeight: 0, flexDirection: "column", background: "#0b1020" }}
+    >
+      <div
+        data-testid="terminal-status"
+        style={{
+          flex: "0 0 auto",
+          borderBottom: "1px solid rgba(148, 163, 184, 0.22)",
+          padding: "4px 8px",
+          color: "#cbd5e1",
+          fontSize: 11,
+        }}
+      >
+        Terminal {status}
+      </div>
+      <div
+        ref={hostRef}
+        data-testid={`${testId}-surface`}
+        style={{ flex: "1 1 auto", minHeight: 0, padding: 4 }}
+      />
+    </div>
   );
 }

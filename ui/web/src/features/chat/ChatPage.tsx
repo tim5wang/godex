@@ -186,6 +186,7 @@ export function ChatPage() {
   const openTaskCenterDrawer = useLayoutStore((state) => state.openTaskCenterDrawer);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [queuedComposerFiles, setQueuedComposerFiles] = useState<File[]>([]);
   const [timelineItems, setTimelineItems] = useState<SessionTimelineEntry[]>([]);
   const [subagentReview, setSubagentReview] = useState<DurableSubagentReview | null>(null);
   const [subagentMergeResult, setSubagentMergeResult] = useState<DurableSubagentMerge | null>(null);
@@ -1242,6 +1243,7 @@ export function ChatPage() {
         ) : (
           <ChatWorkspaceCanvas
             filesCwd="."
+            onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])}
             renderCenter={() => (
               <>
             <div className="chat-feed" ref={scrollerRef} style={{ minHeight: 0 }}>
@@ -1296,6 +1298,8 @@ export function ChatPage() {
               uploading={uploading}
               uploadProgress={uploadProgress}
               packageCommands={packageCommandsQuery.data ?? []}
+              queuedFiles={queuedComposerFiles}
+              onQueuedFilesConsumed={() => setQueuedComposerFiles([])}
               onSubmit={onSend}
             />
               </>

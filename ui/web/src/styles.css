@@ -619,6 +619,17 @@ samp {
   overflow: hidden;
 }
 
+.center-grid-cell-chat,
+.center-grid-cell-files,
+.center-grid-cell-terminal,
+.center-grid-cell-terminal-default,
+.center-grid-cell-tasks {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
 .chat-session-card {
   border-radius: 0;
   border-top: 0;

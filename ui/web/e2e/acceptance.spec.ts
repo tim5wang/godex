@@ -92,6 +92,52 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     await expect(page.locator('[data-testid="terminal-status"]')).toContainText(/connected|ready/i, { timeout: 7000 });
   });
 
+  test("CenterGrid splitter double-click collapse persists across reload", async ({ page }) => {
+    const outerDragger = page.locator('.center-grid > .ant-splitter-vertical > .ant-splitter-bar .ant-splitter-bar-dragger').first();
+    await expect(outerDragger).toBeVisible({ timeout: 5000 });
+    await outerDragger.dblclick();
+    await expect.poll(async () => page.evaluate(() => {
+      const raw = window.localStorage.getItem("godex.web.layout.v1");
+      return raw ? JSON.parse(raw).centerGridRatios.outerSplit : null;
+    })).toBe(0);
+
+    await page.reload();
+    await page.waitForSelector(".godex-sider", { timeout: 10000 });
+    await expect.poll(async () => page.evaluate(() => {
+      const raw = window.localStorage.getItem("godex.web.layout.v1");
+      return raw ? JSON.parse(raw).centerGridRatios.outerSplit : null;
+    })).toBe(0);
+  });
+
+  test("CenterGrid splitter drag ratio persists across reload", async ({ page }) => {
+    const outerDragger = page.locator('.center-grid > .ant-splitter-vertical > .ant-splitter-bar .ant-splitter-bar-dragger').first();
+    await expect(outerDragger).toBeVisible({ timeout: 5000 });
+    const box = await outerDragger.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2 + 120, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(async () => page.evaluate(() => {
+      const raw = window.localStorage.getItem("godex.web.layout.v1");
+      return raw ? JSON.parse(raw).centerGridRatios.outerSplit : null;
+    })).not.toBeNull();
+    const persisted = await page.evaluate(() => {
+      const raw = window.localStorage.getItem("godex.web.layout.v1");
+      return raw ? JSON.parse(raw).centerGridRatios.outerSplit as number : null;
+    });
+    expect(persisted).not.toBeNull();
+    expect(Math.abs(persisted! - 0.6)).toBeGreaterThan(0.03);
+
+    await page.reload();
+    await page.waitForSelector(".godex-sider", { timeout: 10000 });
+    const afterReload = await page.evaluate(() => {
+      const raw = window.localStorage.getItem("godex.web.layout.v1");
+      return raw ? JSON.parse(raw).centerGridRatios.outerSplit as number : null;
+    });
+    expect(afterReload).toBeCloseTo(persisted!, 2);
+  });
+
   test("CenterGrid panel titlebar drag swaps panels", async ({ page }) => {
     const dragHandle = page.locator('[data-testid="center-grid-panel-drag-topLeft"]');
     const dropTarget = page.locator('[data-testid="center-grid-panel-topRight"]');

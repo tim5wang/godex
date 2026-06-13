@@ -5,7 +5,15 @@ import {
   useLayoutStore,
   type GridPresetId,
 } from "../src/store/layout";
-import { buildPanelMoveMenuItems, getPanelDropAction, panelLabel, presetShape, slotLabel } from "../src/components/workspace/CenterGrid";
+import {
+  buildPanelMoveMenuItems,
+  getPanelDropAction,
+  panelLabel,
+  presetShape,
+  slotLabel,
+  splitterSizesTo3WayRatios,
+  splitterSizesToRatio,
+} from "../src/components/workspace/CenterGrid";
 
 function reset() {
   useLayoutStore.getState().reset();
@@ -258,6 +266,14 @@ describe("3×3 grid presets (v2.0, M1+ candidate C)", () => {
 });
 
 describe("setGridRatio updates the persisted ratio envelope", () => {
+  it("derives persisted ratios from antd Splitter pixel sizes", () => {
+    expect(splitterSizesToRatio([300, 700], 0)).toBe(0.3);
+    expect(splitterSizesToRatio([300, 700], 1)).toBe(0.7);
+    expect(splitterSizesToRatio([0, 0], 0)).toBe(0);
+    expect(splitterSizesTo3WayRatios([200, 300, 500], "row")).toEqual({ row0Split: 0.2, row1Split: 0.3 });
+    expect(splitterSizesTo3WayRatios([200, 300, 500], "col")).toEqual({ col0Split: 0.2, col1Split: 0.3 });
+  });
+
   it("clamps to [0, 1]", () => {
     useLayoutStore.getState().setGridRatio("outerSplit", 0.3);
     expect(useLayoutStore.getState().centerGridRatios.outerSplit).toBe(0.3);
@@ -265,5 +281,18 @@ describe("setGridRatio updates the persisted ratio envelope", () => {
     expect(useLayoutStore.getState().centerGridRatios.outerSplit).toBe(1);
     useLayoutStore.getState().setGridRatio("outerSplit", -0.5);
     expect(useLayoutStore.getState().centerGridRatios.outerSplit).toBe(0);
+  });
+
+  it("toggleGridRowCollapse collapses and restores persisted 2x2 ratios", () => {
+    useLayoutStore.getState().setGridRatio("outerSplit", 0.42);
+    useLayoutStore.getState().toggleGridRowCollapse("top");
+    expect(useLayoutStore.getState().centerGridRatios.outerSplit).toBe(0);
+    useLayoutStore.getState().toggleGridRowCollapse("top");
+    expect(useLayoutStore.getState().centerGridRatios.outerSplit).toBe(0.6);
+
+    useLayoutStore.getState().setGridRatio("innerTopSplit", 0.32);
+    useLayoutStore.getState().toggleGridRowCollapse("left");
+    expect(useLayoutStore.getState().centerGridRatios.innerTopSplit).toBe(0);
+    expect(useLayoutStore.getState().centerGridRatios.innerBottomSplit).toBe(0);
   });
 });

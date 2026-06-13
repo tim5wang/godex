@@ -22,6 +22,7 @@ import { MenuOutlined } from "@ant-design/icons";
 import { activeBuiltinApp, builtinApps, renderBuiltinAppRoutes } from "./app/appRegistry";
 import { useI18n } from "./i18n";
 import { ResizeHandle } from "./components/ResizeHandle";
+import { WorkspaceShell, buildWorkspaceShellClassName } from "./components/workspace/WorkspaceShell";
 import { useResizableWidth } from "./hooks/useResizableWidth";
 import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
@@ -152,7 +153,7 @@ export default function App() {
     activeApp.id !== "settings" &&
     providersQuery.isSuccess &&
     !providersQuery.data.providers.some((provider) => provider.has_credential || provider.token_present);
-  const shellClassName = ["godex-shell", activeApp.shellClassName].filter(Boolean).join(" ");
+  const shellClassName = buildWorkspaceShellClassName(activeApp.shellClassName);
   const headerTitleKey = activeApp.headerTitleKey ?? activeApp.labelKey;
   const headerSubtitleKey = activeApp.headerSubtitleKey ?? "";
   const workspaceSubtitle = activeApp.id === "chat" && metaQuery.data?.workspace_dir
@@ -194,8 +195,9 @@ export default function App() {
       }}
     >
       <AntApp>
-        <Layout className={shellClassName}>
-          {screens.lg ? (
+        <WorkspaceShell
+          shellClassName={shellClassName}
+          appNav={screens.lg ? (
             <Layout.Sider
               className="godex-sider"
               width={appNavCollapsed ? APP_NAV_ICON_WIDTH : navWidth}
@@ -218,7 +220,7 @@ export default function App() {
               {!appNavCollapsed ? <ResizeHandle label="Resize navigation" onPointerDown={beginNavResize} /> : null}
             </Layout.Sider>
           ) : null}
-          <Layout>
+          header={(
             <Layout.Header className="godex-header">
               <Space size={12}>
                 {!screens.lg ? (
@@ -239,6 +241,8 @@ export default function App() {
                 </Space>
               </Space>
             </Layout.Header>
+          )}
+          content={(
             <Layout.Content className="godex-content">
               {needsProviderSetup ? (
                 <FirstRunProviderGuide
@@ -251,8 +255,10 @@ export default function App() {
                 </Suspense>
               )}
             </Layout.Content>
-          </Layout>
-          {/* P1-c: Drawer doubles as mobile AppNav (left, full-screen) and
+          )}
+          drawer={(
+            <>
+              {/* P1-c: Drawer doubles as mobile AppNav (left, full-screen) and
               PC Task Center entry point. On <1024px we ignore the
               taskCenterWidth envelope and let antd render full-width.
               P1-f: open state is driven by useLayoutStore.taskCenterDrawerOpen
@@ -263,21 +269,23 @@ export default function App() {
               Drawer children surface here. Before the chat page mounts
               (e.g. on the home route or during a route transition) the
               bridge is null and we fall back to the AppNav <Menu>. */}
-          <Drawer
-            title={<Brand compact />}
-            placement="left"
-            width={screens.lg ? taskCenterWidth : "100vw"}
-            open={drawerOpen}
-            onClose={closeTaskCenterDrawer}
-            data-testid="task-center-drawer"
-            data-mode={screens.lg ? "pc-task-center" : "mobile-appnav"}
-          >
-            <TaskCenterDrawerContent fallback={menu} />
-            {screens.lg ? (
-              <ResizeHandle label="Resize task center" onPointerDown={beginTaskCenterResize} />
-            ) : null}
-          </Drawer>
-        </Layout>
+              <Drawer
+                title={<Brand compact />}
+                placement="left"
+                width={screens.lg ? taskCenterWidth : "100vw"}
+                open={drawerOpen}
+                onClose={closeTaskCenterDrawer}
+                data-testid="task-center-drawer"
+                data-mode={screens.lg ? "pc-task-center" : "mobile-appnav"}
+              >
+                <TaskCenterDrawerContent fallback={menu} />
+                {screens.lg ? (
+                  <ResizeHandle label="Resize task center" onPointerDown={beginTaskCenterResize} />
+                ) : null}
+              </Drawer>
+            </>
+          )}
+        />
       </AntApp>
     </ConfigProvider>
   );

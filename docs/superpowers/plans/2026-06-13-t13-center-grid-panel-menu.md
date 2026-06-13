@@ -100,3 +100,20 @@
 - [x] Make the grid chat cell a real flex column so the composer stays at the bottom.
 - [x] Add visible terminal connection status instead of a blank black panel.
 - [x] Isolate Playwright localStorage state so layout tests are deterministic.
+
+### Task 8: Phase 4 Splitter Ratio Persistence + Double-Click Collapse
+
+**Files:**
+- Modify: `ui/web/src/components/workspace/CenterGrid.tsx`
+- Modify: `ui/web/src/features/chat/ChatWorkspaceCanvas.tsx`
+- Modify: `ui/web/src/store/layout.ts`
+- Modify: `ui/web/src/store/layoutPersistence.ts`
+- Test: `ui/web/test/centerGrid.test.ts`
+- Test: `ui/web/test/layoutPersistence.test.ts`
+- Test: `ui/web/e2e/acceptance.spec.ts`
+
+- [x] Make CenterGrid Splitter sizes controlled by persisted `centerGridRatios`.
+- [x] Write antd Splitter resize sizes back to `centerGridRatios`.
+- [x] Wire Splitter double-click to the existing row collapse/restore policy.
+- [x] Keep the new store action out of the persisted JSON snapshot.
+- [x] Add Playwright coverage for splitter drag persistence and double-click collapse persistence across reload.

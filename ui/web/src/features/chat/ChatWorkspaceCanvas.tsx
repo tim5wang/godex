@@ -42,6 +42,8 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
   const ratios = useLayoutStore((state) => state.centerGridRatios);
   const movePanelToGrid = useLayoutStore((state) => state.movePanelToGrid);
   const swapGridSlots = useLayoutStore((state) => state.swapGridSlots);
+  const setGridRatio = useLayoutStore((state) => state.setGridRatio);
+  const toggleGridRowCollapse = useLayoutStore((state) => state.toggleGridRowCollapse);
   const [feedback, setFeedback] = useState("");
   const feedbackTimerRef = useRef<number | null>(null);
 
@@ -142,6 +144,14 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
         col0Split={ratios.col0Split}
         col1Split={ratios.col1Split}
         renderSlot={renderSlot}
+        onGridRatiosChange={(nextRatios) => {
+          for (const [key, value] of Object.entries(nextRatios)) {
+            if (typeof value === "number") {
+              setGridRatio(key as keyof typeof ratios, value);
+            }
+          }
+        }}
+        onGridRowCollapseToggle={toggleGridRowCollapse}
         onPanelMove={(panel, from, to, action) => {
           if (action === "move") {
             movePanelToGrid(panel, to);

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { toggleRowCollapse, type GridRow } from "./layoutGridToggles";
 import { clearPersistedLayoutSnapshot } from "./layoutPersistence";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,7 @@ export type LayoutActions = {
   swapPanelInGrid: (panel: PanelKey, slot: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
   swapGridSlots: (from: Exclude<GridSlot, "topFull" | "bottomFull">, to: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
   setGridRatio: (key: keyof GridRatios, v: number) => void;
+  toggleGridRowCollapse: (row: GridRow) => void;
   setMobileActiveTab: (t: MobileTab) => void;
   openTaskCenterDrawer: () => void;
   closeTaskCenterDrawer: () => void;
@@ -483,6 +485,12 @@ export const useLayoutStore = create<LayoutState>((set) => ({
       const next: GridRatios = { ...state.centerGridRatios, [key]: clamp01(v) };
       return { centerGridRatios: next };
     });
+  },
+
+  toggleGridRowCollapse: (row) => {
+    set((state) => ({
+      centerGridRatios: toggleRowCollapse(state.centerGridRatios, row),
+    }));
   },
 
   setMobileActiveTab: (t) => {

@@ -10,6 +10,7 @@ import {
   type GridSlot,
   type PanelKey,
 } from "../../store/layout";
+import type { GridRow } from "../../store/layoutGridToggles";
 
 // P2 / T6b (SPEC §3.2 + §4.1) — v2.0 upgrade (M1+ candidate C):
 // CenterGrid now supports both 2×2 (legacy 5 presets) and 3×3
@@ -56,6 +57,8 @@ export type CenterGridProps = {
   col1Split?: number;
   renderSlot: CenterGridRenderSlot;
   onPanelMove?: (panel: PanelKey, from: CenterGridCellSlot, to: CenterGridCellSlot, action: CenterGridPanelMoveAction) => void;
+  onGridRatiosChange?: (ratios: Partial<GridRatios>) => void;
+  onGridRowCollapseToggle?: (row: GridRow) => void;
 };
 
 function is3x3(occ: GridOccupancy): boolean {
@@ -86,21 +89,23 @@ export function CenterGrid(props: CenterGridProps) {
   const dragRef = useRef<DraggedPanel | null>(null);
 
   if (is3x3(occ)) {
-    return <Grid3x3 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
+    return <Grid3x3 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onGridRatiosChange={props.onGridRatiosChange} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
   }
-  return <Grid2x2 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
+  return <Grid2x2 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onGridRatiosChange={props.onGridRatiosChange} onGridRowCollapseToggle={props.onGridRowCollapseToggle} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
 }
 
 // ---- 2×2 grid (legacy) ----
 
 function Grid2x2({
-  occ, ratios, renderSlot, preset, onPanelMove, dragState, setDragState, dragRef,
+  occ, ratios, renderSlot, preset, onPanelMove, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef,
 }: {
   occ: GridOccupancy;
   ratios: GridRatios;
   renderSlot: CenterGridRenderSlot;
   preset: GridPresetId;
   onPanelMove?: CenterGridProps["onPanelMove"];
+  onGridRatiosChange?: CenterGridProps["onGridRatiosChange"];
+  onGridRowCollapseToggle?: CenterGridProps["onGridRowCollapseToggle"];
   dragState: CenterGridDragState;
   setDragState: (state: CenterGridDragState) => void;
   dragRef: MutableRefObject<DraggedPanel | null>;
@@ -117,16 +122,23 @@ function Grid2x2({
       className="center-grid"
       style={{ height: "100%", minHeight: 0 }}
     >
-      <Splitter layout="vertical" style={{ height: "100%" }}>
+      <Splitter
+        layout="vertical"
+        style={{ height: "100%" }}
+        className="center-grid-outer-splitter"
+        onResize={(sizes) => onGridRatiosChange?.({ outerSplit: splitterSizesToRatio(sizes, 0) })}
+        onResizeEnd={(sizes) => onGridRatiosChange?.({ outerSplit: splitterSizesToRatio(sizes, 0) })}
+        onDraggerDoubleClick={() => onGridRowCollapseToggle?.("top")}
+      >
         <Splitter.Panel
-          defaultSize={`${Math.round(outer * 100)}%`}
+          size={ratioToPercent(outer)}
           min="0%"
           data-testid="center-grid-top-row"
         >
-          {render2x2Row(occ, occ.topLeft, occ.topRight, innerTop, renderSlot, "top", onPanelMove, dragState, setDragState, dragRef)}
+          {render2x2Row(occ, occ.topLeft, occ.topRight, innerTop, renderSlot, "top", onPanelMove, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
         </Splitter.Panel>
-        <Splitter.Panel min="0%" data-testid="center-grid-bottom-row">
-          {render2x2Row(occ, occ.bottomLeft, occ.bottomRight, innerBottom, renderSlot, "bottom", onPanelMove, dragState, setDragState, dragRef)}
+        <Splitter.Panel size={ratioToPercent(1 - outer)} min="0%" data-testid="center-grid-bottom-row">
+          {render2x2Row(occ, occ.bottomLeft, occ.bottomRight, innerBottom, renderSlot, "bottom", onPanelMove, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
         </Splitter.Panel>
       </Splitter>
     </div>
@@ -141,6 +153,8 @@ function render2x2Row(
   renderSlot: CenterGridRenderSlot,
   row: "top" | "bottom",
   onPanelMove?: CenterGridProps["onPanelMove"],
+  onGridRatiosChange?: CenterGridProps["onGridRatiosChange"],
+  onGridRowCollapseToggle?: CenterGridProps["onGridRowCollapseToggle"],
   dragState?: CenterGridDragState,
   setDragState?: (state: CenterGridDragState) => void,
   dragRef?: MutableRefObject<DraggedPanel | null>,
@@ -160,9 +174,17 @@ function render2x2Row(
   const leftTestId = row === "top" ? "center-grid-top-left" : "center-grid-bottom-left";
   const rightTestId = row === "top" ? "center-grid-top-right" : "center-grid-bottom-right";
   return (
-    <Splitter layout="horizontal" style={{ height: "100%" }} data-testid={testId}>
+    <Splitter
+      layout="horizontal"
+      style={{ height: "100%" }}
+      className={`center-grid-${row}-splitter`}
+      data-testid={testId}
+      onResize={(sizes) => onGridRatiosChange?.({ [row === "top" ? "innerTopSplit" : "innerBottomSplit"]: splitterSizesToRatio(sizes, 0) })}
+      onResizeEnd={(sizes) => onGridRatiosChange?.({ [row === "top" ? "innerTopSplit" : "innerBottomSplit"]: splitterSizesToRatio(sizes, 0) })}
+      onDraggerDoubleClick={() => onGridRowCollapseToggle?.("left")}
+    >
       <Splitter.Panel
-        defaultSize={`${Math.round(split * 100)}%`}
+        size={ratioToPercent(split)}
         min="0%"
         data-testid={leftTestId}
         data-panel={left ?? ""}
@@ -171,7 +193,7 @@ function render2x2Row(
           {renderSlot(left)}
         </SlotFrame>
       </Splitter.Panel>
-      <Splitter.Panel min="0%" data-testid={rightTestId} data-panel={right ?? ""}>
+      <Splitter.Panel size={ratioToPercent(1 - split)} min="0%" data-testid={rightTestId} data-panel={right ?? ""}>
         <SlotFrame panel={right} slot={row === "top" ? "topRight" : "bottomRight"} occ={occ} onPanelMove={onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(right)}
         </SlotFrame>
@@ -183,13 +205,14 @@ function render2x2Row(
 // ---- 3×3 grid (v2.0) ----
 
 function Grid3x3({
-  occ, ratios, renderSlot, preset, onPanelMove, dragState, setDragState, dragRef,
+  occ, ratios, renderSlot, preset, onPanelMove, onGridRatiosChange, dragState, setDragState, dragRef,
 }: {
   occ: GridOccupancy;
   ratios: GridRatios;
   renderSlot: CenterGridRenderSlot;
   preset: GridPresetId;
   onPanelMove?: CenterGridProps["onPanelMove"];
+  onGridRatiosChange?: CenterGridProps["onGridRatiosChange"];
   dragState: CenterGridDragState;
   setDragState: (state: CenterGridDragState) => void;
   dragRef: MutableRefObject<DraggedPanel | null>;
@@ -216,27 +239,33 @@ function Grid3x3({
       className="center-grid"
       style={{ height: "100%", minHeight: 0 }}
     >
-      <Splitter layout="vertical" style={{ height: "100%" }}>
+      <Splitter
+        layout="vertical"
+        style={{ height: "100%" }}
+        className="center-grid-outer-splitter"
+        onResize={(sizes) => onGridRatiosChange?.(splitterSizesTo3WayRatios(sizes, "row"))}
+        onResizeEnd={(sizes) => onGridRatiosChange?.(splitterSizesTo3WayRatios(sizes, "row"))}
+      >
         <Splitter.Panel
-          defaultSize={`${Math.round(row0 * 100)}%`}
+          size={ratioToPercent(row0)}
           min="0%"
           data-testid="center-grid-row-0"
         >
-          {render3x3Row(occ, rows[0], col0, col1, col2Percent, renderSlot, 0, onPanelMove, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[0], col0, col1, col2Percent, renderSlot, 0, onPanelMove, onGridRatiosChange, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel
-          defaultSize={`${Math.round(row1 * 100)}%`}
+          size={ratioToPercent(row1)}
           min="0%"
           data-testid="center-grid-row-1"
         >
-          {render3x3Row(occ, rows[1], col0, col1, col2Percent, renderSlot, 1, onPanelMove, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[1], col0, col1, col2Percent, renderSlot, 1, onPanelMove, onGridRatiosChange, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel
-          defaultSize={`${row2Percent}%`}
+          size={`${row2Percent}%`}
           min="0%"
           data-testid="center-grid-row-2"
         >
-          {render3x3Row(occ, rows[2], col0, col1, col2Percent, renderSlot, 2, onPanelMove, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[2], col0, col1, col2Percent, renderSlot, 2, onPanelMove, onGridRatiosChange, dragState, setDragState, dragRef)}
         </Splitter.Panel>
       </Splitter>
     </div>
@@ -252,6 +281,7 @@ function render3x3Row(
   renderSlot: CenterGridRenderSlot,
   rowIdx: number,
   onPanelMove?: CenterGridProps["onPanelMove"],
+  onGridRatiosChange?: CenterGridProps["onGridRatiosChange"],
   dragState?: CenterGridDragState,
   setDragState?: (state: CenterGridDragState) => void,
   dragRef?: MutableRefObject<DraggedPanel | null>,
@@ -271,9 +301,16 @@ function render3x3Row(
     );
   }
   return (
-    <Splitter layout="horizontal" style={{ height: "100%" }} data-testid={`center-grid-row-${rowIdx}-splitter`}>
+    <Splitter
+      layout="horizontal"
+      style={{ height: "100%" }}
+      className={`center-grid-row-${rowIdx}-splitter`}
+      data-testid={`center-grid-row-${rowIdx}-splitter`}
+      onResize={(sizes) => onGridRatiosChange?.(splitterSizesTo3WayRatios(sizes, "col"))}
+      onResizeEnd={(sizes) => onGridRatiosChange?.(splitterSizesTo3WayRatios(sizes, "col"))}
+    >
       <Splitter.Panel
-        defaultSize={`${Math.round(col0 * 100)}%`}
+        size={ratioToPercent(col0)}
         min="0%"
         data-testid={`center-grid-r${rowIdx}c0`}
         data-panel={cells[0] ?? ""}
@@ -283,7 +320,7 @@ function render3x3Row(
         </SlotFrame>
       </Splitter.Panel>
       <Splitter.Panel
-        defaultSize={`${Math.round(col1 * 100)}%`}
+        size={ratioToPercent(col1)}
         min="0%"
         data-testid={`center-grid-r${rowIdx}c1`}
         data-panel={cells[1] ?? ""}
@@ -293,7 +330,7 @@ function render3x3Row(
         </SlotFrame>
       </Splitter.Panel>
       <Splitter.Panel
-        defaultSize={`${col2Percent}%`}
+        size={`${col2Percent}%`}
         min="0%"
         data-testid={`center-grid-r${rowIdx}c2`}
         data-panel={cells[2] ?? ""}
@@ -505,6 +542,25 @@ function clamp01(v: number): number {
   if (v < 0) return 0;
   if (v > 1) return 1;
   return v;
+}
+
+function ratioToPercent(ratio: number): string {
+  return `${clamp01(ratio) * 100}%`;
+}
+
+export function splitterSizesToRatio(sizes: number[], index: number): number {
+  const total = sizes.reduce((sum, size) => sum + Math.max(0, size), 0);
+  if (total <= 0) return 0;
+  return clamp01((sizes[index] ?? 0) / total);
+}
+
+export function splitterSizesTo3WayRatios(sizes: number[], axis: "row" | "col"): Partial<GridRatios> {
+  const first = splitterSizesToRatio(sizes, 0);
+  const second = splitterSizesToRatio(sizes, 1);
+  if (axis === "row") {
+    return { row0Split: first, row1Split: second };
+  }
+  return { col0Split: first, col1Split: second };
 }
 
 // Pure helper (exported for tests) — encodes the shape of a preset.

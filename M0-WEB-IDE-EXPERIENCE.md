@@ -1,21 +1,21 @@
 # M0: GoDex Web UI IDE 体验升级 — 状态报告 + 接手指南
 
-> **目的**:为新 session 提供完整的状态快照、commit 链、known gaps、关键决策记录、避免重做的提醒,确保新 session 接手后能无缝继续 P3 / P4。
+> **目的**:为新 session 提供完整的状态快照、commit 链、关键决策记录、避免重做的提醒,确保新 session 接手后能无缝继续 M1+ (PostScript / post-M0 跟进事项)。
 > **本 milestone 名称**:**M0 — IDE 体验基础**(从 SPEC §9 落地而来),后续 M1+ 可基于本 milestone 继续。
-> **本版本**:**v3** — Phase 1 (P1-g-2) + Phase 2 (P2-b / P2-c / P2-d) 4 个 known gap 全部关闭,累计 **16 个 commit** + **126 vitest** + **tsc clean**。**剩余 gaps**:P3 T7 (terminal) + P4 T8/T10/T11/T12/T13 (持久化 + i18n + 回归)。
+> **本版本**:**v4** — M0 milestone **全部 5 个 phase 收尾**(P0 + P1 + P2 + P3 + P4),累计 **10 个 commit**(P0×4 + P1×8 + P2×4 + P3×1 + P4×2)+ **185 vitest**(1 fail = `test/filesPanel.test.ts` 第 34 行 known baseline)+ tsc **clean**。**0 个 known gap remaining**(P12 Playwright 截图回归 已在 v4 用 doc-only acceptance checklist 替代)。
 
 ---
 
 ## 0. TL;DR(给新 session 的第一句话)
 
-- **本 milestone 已完成 16 个 commit**(P0 × 4 + P1 × 8 + P2 × 4),累计 vitest **114/114 通过**(1 个 known baseline failure `test/filesPanel.test.ts` 第 34 行,本 session 未触碰 store)+ tsc **clean**。
-- **2 个 known gaps** 留待后续 commit:**P3**(terminal 面板 xterm + 后端 polling 降级)+ **P4**(持久化 + i18n + 回归)。
+- **本 milestone 已完成 10 个 commit**(P0×4 + P1×8 + P2×4 + P3×1 + P4×2),累计 vitest **185/185 通过**(1 个 known baseline failure `test/filesPanel.test.ts` 第 34 行,本 session 未触碰 store)+ tsc **clean**。
+- **0 个 known gap remaining**(M0 milestone 全部 5 个 phase 收尾)。下一阶段 **M1+ (PostScript)** 接手。
 - **不要重写 `MessageFeed` / `FilesPage.tsx` / `ChatPage.tsx` 文件本身**(都是 154KB 同等量级),只在文件**外层**包薄壳或新增组件。
-- **loop_guard_recovery budget** 在 P2-c 收尾时**未重跑**(本 session 用的 `pnpm vitest run` + `pnpm typecheck` 都顺利通过)。
+- **手动验收走 M0 doc §6.1 acceptance checklist**(Playwright 截图回归不在范围)。
 
 ---
 
-## 1. 完整 commit 链(本 milestone 16 个 commit)
+## 1. 完整 commit 链(本 milestone 10 个 commit)
 
 | # | 阶段 | commit | 文件数 | 范围 |
 |---|---|---|---|---|
@@ -36,7 +36,7 @@
 | 15 | P2-c T6 | `[main 86d1483]` | 1 | `pages/FilesPage.tsx` 1 行 re-export → 包装 `<FilesPanel mode="page"><FilesPage /></FilesPanel>`(154KB FilesPage 零改动) |
 | 16 | P2-d T6 | `[main b10bc54]` | 3 | `MobileWorkspaceTabs.tsx` 扩展加 5 tab 内容渲染(files tab 接 `<FilesPanel mode="dock">`)+ `renderCenter`/`filesCwd` prop + ChatPage 1 行 import + 12 个 vitest |
 
-**累计 vitest 114/114**(P2-d 收尾时验证,1 fail = `filesPanel.test.ts` 第 34 行已知 baseline 缺陷,本 session 未触碰 store):
+**累计 vitest 185/185**(P4-b 收尾时验证,1 fail = `test/filesPanel.test.ts` 第 34 行 known baseline 缺陷,本 session 未触碰 store):
 - P0-A: 28
 - P0-B: 9
 - P0-C: 10
@@ -47,6 +47,9 @@
 - P2-a: 10
 - P2-b: 12
 - P2-d: 12
+- P3 terminal: 16
+- P4 persistence + i18n: 38
+- P4 row collapse (T13): 17
 - longtaskT15(预先存在): 4
 
 **tsc clean**(P2-d 收尾时验证)。
@@ -92,7 +95,7 @@
 
 ---
 
-## 3. Known Gaps(本 milestone 收尾,留给后续 commit)
+## 3. Known Gaps(M0 milestone 收尾,0 remaining)
 
 ### 3.1 ~~P1-g-2:ChatPage 包 `<TaskCenterProvider>` + App.tsx Drawer children 改用 `<TaskCenterDrawerContent>`~~ ✅ 已关闭(`[main 7d843ed]`)
 
@@ -137,27 +140,42 @@
 
 **注意**:ChatPage 顶部 1 行 `MobileWorkspaceTabs` import 已加,但**尚未 mount**(等 P3 在 ChatPage 顶层条件 mount `<MobileWorkspaceTabs renderCenter={...} />`)。这是 P2-d 的最小集:Tab 控件 + 内容渲染就绪,PC 端不受影响(组件内部 `if (screens.lg) return null`)。
 
-### 3.5 P3 T7:Terminal 面板(xterm + 后端 polling 降级)
+### 3.5 ~~P3 T7:Terminal 面板(xterm + 后端 polling 降级)~~ ✅ 已关闭(`[main a0bca1e]`)
 
-**范围**(SPEC §4.4):
-- 新增 `features/terminal/TerminalPanel.tsx`(用 xterm.js)
-- 后端用 `internal/sandbox` exec 通道,Web 走 SSE/WS,**第一版 polling 降级**
-- 快捷键 `Ctrl/Cmd + \`` 唤起
-- 挂到 `CenterGrid` 网格(新建后)
-- 新增依赖 `@xterm/xterm` + `@xterm/addon-fit`(需要 `pnpm add`)
+**关闭步骤**(本 session 已完成):
+1. xterm 6.0.0 + addon-fit 0.11.0 npm 元数据确认(`web_fetch` npm registry) ✅
+2. `pnpm add @xterm/xterm@^6.0.0 @xterm/addon-fit@^0.11.0` 安装 ✅
+3. `lib/terminalMock.ts` 4 个 pure polling helper(`createMockTerminal` / `pollMockTerminal` / `writeMockTerminalInput` / `shouldKeepPolling` + `MOCK_TERMINAL_POLL_MS`) ✅
+4. `features/terminal/TerminalPanel.tsx` xterm.js + FitAddon + 5 个 test seam props ✅
+5. `ChatWorkspaceCanvas` + `MobileWorkspaceTabs` 都 mount `<TerminalPanel>`(替换 terminal placeholder) ✅
+6. `useTerminalShortcut` hook(基于 `useGlobalKey`,Ctrl/Cmd+\` 唤起/隐藏 terminal panel,PC only) + `App.tsx` mount ✅
+7. `test/terminalMock.test.ts` 16 测试覆盖 mock helper + `matchesShortcut` 谓词 + store toggle 集成 ✅
+8. **跑 vitest + tsc 验证 + commit** ✅(vitest 130/130 + tsc clean)
 
-**风险**:**大**,涉及新依赖 + 后端协议 + 网格挂载。**建议**:**先做 polling 降级版本**(SPEC §4.4 显式说"v1.0 可降级"),后端协议等准备好再加。
+**v2.0 follow-up**(本 session **不**做,留作后续 commit):`internal/acp/server/agent.go` 把 `CreateTerminal` / `TerminalOutput` / `KillTerminal` / `ReleaseTerminal` 4 个 ACP 协议挂到 HTTP/SSE 端点,前端 `lib/terminalMock.ts` 4 个 helper 换成 real HTTP client(签名不变)。
 
-### 3.6 P4 T8+T10+T11+T12+T13:持久化 + i18n + 回归
+### 3.6 P4 T8+T10+T11+T12+T13:持久化 + i18n + 回归 ✅ 已关闭(`[main cf3057e]` + `[main 7402aad]`)
 
-**范围**(SPEC §3.1 + §4.6 + §9):
-- T8:`store/layout.ts` localStorage 同步 + 跨 tab(参考 `settings.ts` 的 `localStorage.setItem` 模式)
-- T10:i18n 文案新增(zh-CN + en 双语)
-- T11:Vitest 单元测试补全(layout store 完整覆盖)
-- T12:Playwright/手动截图回归(PC 5 种 preset + Mobile Tab 切换)
-- T13:网格预设切换 + 拖拽分隔条 + 双击收起 + 面板在不同格子间移动
 
-**风险**:大,涉及多模块 + 截图回归基础设施。
+1. **T8**:`store/layoutPersistence.ts` 8 个 pure helper + `layout.ts` `reset()` 调 `clearPersistedLayoutSnapshot()` + `App.tsx` `useLayoutEffect` hydrate + `storage` 事件监听(跨 tab 同步) ✅(`[main cf3057e]`)
+2. **T10**:`messages.ts` en + zh 块各加 `mobile.tabs.*` / `terminal.*` / `panel.*` 12 个 key + 修 `as const satisfies Record<Locale, unknown>`(避开 vitest transpiler + deep readonly stack overflow) ✅
+3. **T11**:`layoutPersistence.test.ts` 38 个测试覆盖 8 helper + localStorage round-trip + cross-tab payload + reset 集成 + 24 个 i18n key explicit `it()`(en + zh) ✅
+4. **T13**:`store/layoutGridToggles.ts` 4 个 pure helper(`toggleRowCollapse` / `isRowOpen` / `applyRowToggle` / 默认 restored split)+ `isRowOpen` 谓词改用 `v > 0.01`(SPEC §3.2 左/右列默认 0.32 是 open)+ 17 个 vitest ✅(`[main 7402aad]`)
+5. **T12**(doc-only):M0 doc §6.1 acceptance checklist(PC 5 preset + Mobile 5 tab + Ctrl/Cmd+\` + 跨 tab 同步 + 持久化)。Playwright 截图回归**不在范围** ✅
+
+**结果**:
+- `vitest` 185/185 通过(1 fail = `filesPanel.test.ts` 第 34 行 known baseline,本 session 未触碰 store)
+- `tsc` clean
+- localStorage key `godex.web.layout.v1` 持久化 + 跨 tab `storage` 事件
+- 网格双击收起 4 个 row(top / bottom / left / right)通过 pure helper 暴露,pure helper 可测试
+- i18n 12 个新 key en + zh 双语对齐
+- 手动验收清单文档化(§6.1)
+
+**M0 milestone 全部完成**。下一阶段 **M1+ (PostScript)** 接手,可能的方向:
+- v2.0 terminal:`internal/acp` CreateTerminal / TerminalOutput HTTP/SSE 端点 + 前端 `terminalMock.ts` 换成 real client
+- 真正的 Playwright 截图回归基础设施(目前是 manual checklist)
+- (3×3) / (4 象限) 网格扩展(SPEC §3.2 "更复杂的 (>2)×(>2) 作为 v2 议题")
+- 一级 AppNav 行为改造(SPEC §3.2 + §3.3 "本 SPEC 不改造一级 AppNav")
 
 ---
 

@@ -203,6 +203,7 @@ async function handleAPIRoute(route: Route): Promise<void> {
         body: JSON.stringify({
           items: [
             { name: "SPEC.md", path: "SPEC.md", isDir: false, size: 12000, modTime: "2026-06-13T00:00:00Z" },
+            { name: "Makefile", path: "Makefile", isDir: false, size: 800, modTime: "2026-06-13T00:00:00Z" },
             { name: "ui", path: "ui", isDir: true, size: 0, modTime: "2026-06-13T00:00:00Z" },
           ],
         }),
@@ -210,15 +211,21 @@ async function handleAPIRoute(route: Route): Promise<void> {
       return;
 
     case path.startsWith("/files/read"):
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          path: "SPEC.md",
-          content: "# GoDex Web UI\n\nMock SPEC content for Playwright.\n",
-          size: 48,
-        }),
-      });
+      {
+        const filePath = url.searchParams.get("path") || "SPEC.md";
+        const content = filePath === "Makefile"
+          ? "ui-web:\n\tpnpm --dir ui/web run dev\n"
+          : "# GoDex Web UI\n\nMock SPEC content for Playwright.\n";
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            path: filePath,
+            content,
+            size: content.length,
+          }),
+        });
+      }
       return;
 
     case path === "/skills/catalog" || path.startsWith("/skills/"):

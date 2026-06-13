@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent, type MouseEvent, type MutableRefObject, type ReactNode } from "react";
 import { Button, Dropdown, Splitter, type MenuProps } from "antd";
-import { MoreOutlined } from "@ant-design/icons";
+import { CompressOutlined, MoreOutlined } from "@ant-design/icons";
 import {
   DEFAULT_GRID_OCCUPANCY,
   DEFAULT_GRID_RATIOS,
@@ -57,6 +57,7 @@ export type CenterGridProps = {
   col1Split?: number;
   renderSlot: CenterGridRenderSlot;
   onPanelMove?: (panel: PanelKey, from: CenterGridCellSlot, to: CenterGridCellSlot, action: CenterGridPanelMoveAction) => void;
+  onPanelCollapse?: (panel: PanelKey, from: CenterGridCellSlot) => void;
   onGridRatiosChange?: (ratios: Partial<GridRatios>) => void;
   onGridRowCollapseToggle?: (row: GridRow) => void;
 };
@@ -89,21 +90,22 @@ export function CenterGrid(props: CenterGridProps) {
   const dragRef = useRef<DraggedPanel | null>(null);
 
   if (is3x3(occ)) {
-    return <Grid3x3 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onGridRatiosChange={props.onGridRatiosChange} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
+    return <Grid3x3 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onPanelCollapse={props.onPanelCollapse} onGridRatiosChange={props.onGridRatiosChange} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
   }
-  return <Grid2x2 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onGridRatiosChange={props.onGridRatiosChange} onGridRowCollapseToggle={props.onGridRowCollapseToggle} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
+  return <Grid2x2 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onPanelCollapse={props.onPanelCollapse} onGridRatiosChange={props.onGridRatiosChange} onGridRowCollapseToggle={props.onGridRowCollapseToggle} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
 }
 
 // ---- 2×2 grid (legacy) ----
 
 function Grid2x2({
-  occ, ratios, renderSlot, preset, onPanelMove, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef,
+  occ, ratios, renderSlot, preset, onPanelMove, onPanelCollapse, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef,
 }: {
   occ: GridOccupancy;
   ratios: GridRatios;
   renderSlot: CenterGridRenderSlot;
   preset: GridPresetId;
   onPanelMove?: CenterGridProps["onPanelMove"];
+  onPanelCollapse?: CenterGridProps["onPanelCollapse"];
   onGridRatiosChange?: CenterGridProps["onGridRatiosChange"];
   onGridRowCollapseToggle?: CenterGridProps["onGridRowCollapseToggle"];
   dragState: CenterGridDragState;
@@ -135,10 +137,10 @@ function Grid2x2({
           min="0%"
           data-testid="center-grid-top-row"
         >
-          {render2x2Row(occ, occ.topLeft, occ.topRight, innerTop, renderSlot, "top", onPanelMove, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
+          {render2x2Row(occ, occ.topLeft, occ.topRight, innerTop, renderSlot, "top", onPanelMove, onPanelCollapse, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel size={ratioToPercent(1 - outer)} min="0%" data-testid="center-grid-bottom-row">
-          {render2x2Row(occ, occ.bottomLeft, occ.bottomRight, innerBottom, renderSlot, "bottom", onPanelMove, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
+          {render2x2Row(occ, occ.bottomLeft, occ.bottomRight, innerBottom, renderSlot, "bottom", onPanelMove, onPanelCollapse, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
         </Splitter.Panel>
       </Splitter>
     </div>
@@ -153,6 +155,7 @@ function render2x2Row(
   renderSlot: CenterGridRenderSlot,
   row: "top" | "bottom",
   onPanelMove?: CenterGridProps["onPanelMove"],
+  onPanelCollapse?: CenterGridProps["onPanelCollapse"],
   onGridRatiosChange?: CenterGridProps["onGridRatiosChange"],
   onGridRowCollapseToggle?: CenterGridProps["onGridRowCollapseToggle"],
   dragState?: CenterGridDragState,
@@ -164,7 +167,7 @@ function render2x2Row(
     const slot = row === "top" ? "topLeft" : "bottomLeft";
     return (
       <div data-testid={testId} data-panel={left} style={{ height: "100%" }}>
-        <SlotFrame panel={left} slot={slot} occ={occ} onPanelMove={onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={left} slot={slot} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(left)}
         </SlotFrame>
       </div>
@@ -189,12 +192,12 @@ function render2x2Row(
         data-testid={leftTestId}
         data-panel={left ?? ""}
       >
-        <SlotFrame panel={left} slot={row === "top" ? "topLeft" : "bottomLeft"} occ={occ} onPanelMove={onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={left} slot={row === "top" ? "topLeft" : "bottomLeft"} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(left)}
         </SlotFrame>
       </Splitter.Panel>
       <Splitter.Panel size={ratioToPercent(1 - split)} min="0%" data-testid={rightTestId} data-panel={right ?? ""}>
-        <SlotFrame panel={right} slot={row === "top" ? "topRight" : "bottomRight"} occ={occ} onPanelMove={onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={right} slot={row === "top" ? "topRight" : "bottomRight"} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(right)}
         </SlotFrame>
       </Splitter.Panel>
@@ -205,13 +208,14 @@ function render2x2Row(
 // ---- 3×3 grid (v2.0) ----
 
 function Grid3x3({
-  occ, ratios, renderSlot, preset, onPanelMove, onGridRatiosChange, dragState, setDragState, dragRef,
+  occ, ratios, renderSlot, preset, onPanelMove, onPanelCollapse, onGridRatiosChange, dragState, setDragState, dragRef,
 }: {
   occ: GridOccupancy;
   ratios: GridRatios;
   renderSlot: CenterGridRenderSlot;
   preset: GridPresetId;
   onPanelMove?: CenterGridProps["onPanelMove"];
+  onPanelCollapse?: CenterGridProps["onPanelCollapse"];
   onGridRatiosChange?: CenterGridProps["onGridRatiosChange"];
   dragState: CenterGridDragState;
   setDragState: (state: CenterGridDragState) => void;
@@ -251,21 +255,21 @@ function Grid3x3({
           min="0%"
           data-testid="center-grid-row-0"
         >
-          {render3x3Row(occ, rows[0], col0, col1, col2Percent, renderSlot, 0, onPanelMove, onGridRatiosChange, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[0], col0, col1, col2Percent, renderSlot, 0, onPanelMove, onPanelCollapse, onGridRatiosChange, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel
           size={ratioToPercent(row1)}
           min="0%"
           data-testid="center-grid-row-1"
         >
-          {render3x3Row(occ, rows[1], col0, col1, col2Percent, renderSlot, 1, onPanelMove, onGridRatiosChange, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[1], col0, col1, col2Percent, renderSlot, 1, onPanelMove, onPanelCollapse, onGridRatiosChange, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel
           size={`${row2Percent}%`}
           min="0%"
           data-testid="center-grid-row-2"
         >
-          {render3x3Row(occ, rows[2], col0, col1, col2Percent, renderSlot, 2, onPanelMove, onGridRatiosChange, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[2], col0, col1, col2Percent, renderSlot, 2, onPanelMove, onPanelCollapse, onGridRatiosChange, dragState, setDragState, dragRef)}
         </Splitter.Panel>
       </Splitter>
     </div>
@@ -281,6 +285,7 @@ function render3x3Row(
   renderSlot: CenterGridRenderSlot,
   rowIdx: number,
   onPanelMove?: CenterGridProps["onPanelMove"],
+  onPanelCollapse?: CenterGridProps["onPanelCollapse"],
   onGridRatiosChange?: CenterGridProps["onGridRatiosChange"],
   dragState?: CenterGridDragState,
   setDragState?: (state: CenterGridDragState) => void,
@@ -294,7 +299,7 @@ function render3x3Row(
         data-panel={cells[0]}
         style={{ height: "100%" }}
       >
-        <SlotFrame panel={cells[0]} slot={`r${rowIdx}c0` as CenterGridCellSlot} occ={occ} onPanelMove={onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={cells[0]} slot={`r${rowIdx}c0` as CenterGridCellSlot} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(cells[0])}
         </SlotFrame>
       </div>
@@ -315,7 +320,7 @@ function render3x3Row(
         data-testid={`center-grid-r${rowIdx}c0`}
         data-panel={cells[0] ?? ""}
       >
-        <SlotFrame panel={cells[0]} slot={`r${rowIdx}c0` as CenterGridCellSlot} occ={occ} onPanelMove={onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={cells[0]} slot={`r${rowIdx}c0` as CenterGridCellSlot} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(cells[0])}
         </SlotFrame>
       </Splitter.Panel>
@@ -325,7 +330,7 @@ function render3x3Row(
         data-testid={`center-grid-r${rowIdx}c1`}
         data-panel={cells[1] ?? ""}
       >
-        <SlotFrame panel={cells[1]} slot={`r${rowIdx}c1` as CenterGridCellSlot} occ={occ} onPanelMove={onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={cells[1]} slot={`r${rowIdx}c1` as CenterGridCellSlot} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(cells[1])}
         </SlotFrame>
       </Splitter.Panel>
@@ -335,7 +340,7 @@ function render3x3Row(
         data-testid={`center-grid-r${rowIdx}c2`}
         data-panel={cells[2] ?? ""}
       >
-        <SlotFrame panel={cells[2]} slot={`r${rowIdx}c2` as CenterGridCellSlot} occ={occ} onPanelMove={onPanelMove} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={cells[2]} slot={`r${rowIdx}c2` as CenterGridCellSlot} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(cells[2])}
         </SlotFrame>
       </Splitter.Panel>
@@ -348,6 +353,7 @@ function SlotFrame({
   slot,
   occ,
   onPanelMove,
+  onPanelCollapse,
   dragState,
   setDragState,
   dragRef,
@@ -357,6 +363,7 @@ function SlotFrame({
   slot: CenterGridCellSlot;
   occ: GridOccupancy;
   onPanelMove?: CenterGridProps["onPanelMove"];
+  onPanelCollapse?: CenterGridProps["onPanelCollapse"];
   dragState?: CenterGridDragState;
   setDragState?: (state: CenterGridDragState) => void;
   dragRef?: MutableRefObject<DraggedPanel | null>;
@@ -470,10 +477,6 @@ function SlotFrame({
     event.dataTransfer.setData("text/plain", panelLabel(panel));
     setDragState({ dragging: payload, overSlot: null });
   };
-  const handleDragEnd = () => {
-    if (dragRef) dragRef.current = null;
-    setDragState?.({ dragging: null, overSlot: null });
-  };
   const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     if (target.closest("button")) return;
@@ -492,6 +495,14 @@ function SlotFrame({
     };
     window.addEventListener("mouseup", onMouseUp, { once: true });
     window.addEventListener("dragend", onDragEnd, { once: true });
+  };
+  const handleDragEnd = (event: DragEvent<HTMLDivElement>) => {
+    if (event.clientX > 0 || event.clientY > 0) {
+      completeDropAt(event.clientX, event.clientY);
+      return;
+    }
+    if (dragRef) dragRef.current = null;
+    setDragState?.({ dragging: null, overSlot: null });
   };
 
   return (
@@ -528,6 +539,17 @@ function SlotFrame({
               data-testid={`center-grid-panel-menu-${slot}`}
             />
           </Dropdown>
+        ) : null}
+        {onPanelCollapse && panel !== "chat" ? (
+          <Button
+            type="text"
+            size="small"
+            icon={<CompressOutlined />}
+            aria-label={`Collapse ${panelLabel(panel)} panel`}
+            title={`Collapse ${panelLabel(panel)}`}
+            data-testid={`center-grid-panel-collapse-${slot}`}
+            onClick={() => onPanelCollapse(panel, slot)}
+          />
         ) : null}
       </div>
       <div className="center-grid-panel-body">{children}</div>

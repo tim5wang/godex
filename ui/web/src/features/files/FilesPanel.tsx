@@ -69,6 +69,7 @@ function FilesPanelDock(props: FilesPanelProps) {
   const layoutCollapsed = useLayoutStore((state) => state.panels.files.collapsed);
   const layoutWidth = useLayoutStore((state) => state.panels.files.width ?? 320);
   const setWidth = useLayoutStore((state) => state.setWidth);
+  const togglePanel = useLayoutStore((state) => state.toggle);
   const [search, setSearch] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | undefined>(props.selectedPath);
   const [previewContent, setPreviewContent] = useState("");
@@ -132,7 +133,10 @@ function FilesPanelDock(props: FilesPanelProps) {
           size="small"
           aria-label={t("files.expand") || "Expand files"}
           title={t("files.expand") || "Expand files"}
-          onClick={() => setWidth("files", Math.max(320, layoutWidth))}
+          onClick={() => {
+            setWidth("files", Math.max(320, layoutWidth));
+            togglePanel("files");
+          }}
         >
           <FolderOpenOutlined />
         </Button>
@@ -174,7 +178,7 @@ function FilesPanelDock(props: FilesPanelProps) {
             type="text"
             aria-label={t("files.collapse") || "Collapse files"}
             title={t("files.collapse") || "Collapse files"}
-            onClick={() => setWidth("files", 40)}
+            onClick={() => togglePanel("files")}
             data-testid="files-panel-collapse"
           >
             «
@@ -204,7 +208,7 @@ function FilesPanelDock(props: FilesPanelProps) {
                   setSelectedPath(path);
                   props.onSelect?.(path);
                 }}
-                onUnsavedPrompt={async () => "cancel" as const}
+                onUnsavedPrompt={async () => "discard" as const}
                 onNewFile={() => {}}
                 onNewFolder={() => {}}
                 onDelete={() => {}}

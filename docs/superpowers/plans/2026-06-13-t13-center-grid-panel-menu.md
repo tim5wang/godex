@@ -117,3 +117,30 @@
 - [x] Wire Splitter double-click to the existing row collapse/restore policy.
 - [x] Keep the new store action out of the persisted JSON snapshot.
 - [x] Add Playwright coverage for splitter drag persistence and double-click collapse persistence across reload.
+
+### Task 9: Phase 5 Remaining Observed Interaction Fixes
+
+**Files:**
+- Modify: `ui/web/src/components/workspace/CenterGrid.tsx`
+- Modify: `ui/web/src/features/chat/ChatWorkspaceCanvas.tsx`
+- Modify: `ui/web/src/features/chat/ChatPage.tsx`
+- Modify: `ui/web/src/features/files/FilesPanel.tsx`
+- Modify: `ui/web/src/lib/terminalClient.ts`
+- Modify: `ui/web/src/App.tsx`
+- Test: `ui/web/test/layoutStore.test.ts`
+- Test: `ui/web/test/terminalClient.test.ts`
+- Test: `ui/web/e2e/acceptance.spec.ts`
+
+- [x] Queue terminal input typed before the backend terminal id is known, then flush it to the real terminal id.
+- [x] Allow the grid files preview to switch between selected files.
+- [x] Merge TaskCenter into the shared ChatPage inspector tabs with approvals/context/turns instead of using an App-level Drawer.
+- [x] Reuse the existing TaskCenter chip to expand/select the inspector task tab and fold the shared inspector.
+- [x] Add CenterGrid non-chat panel collapse-to-bookmark and restore.
+- [x] Wire the actual ChatPage session list to the layout store collapse rail.
+- [x] Fix FilesPanel dock collapse/expand to toggle the collapsed flag, not only width.
+- [x] Add Playwright coverage for terminal input, file switching, shared inspector TaskCenter entry, CenterGrid bookmarks, and session rail collapse.
+
+**Verified:**
+- `pnpm --dir ui/web typecheck`
+- `pnpm --dir ui/web test -- layoutStore.test.ts`
+- `pnpm --dir ui/web test:e2e --project=chromium-desktop --grep "collapses to a bookmark|Session list collapses|switches preview|terminal panel sends|Task center chip|Shared inspector"`

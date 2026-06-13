@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Button, Space } from "antd";
+import { FolderOpenOutlined } from "@ant-design/icons";
 import { CenterGrid, panelLabel, slotLabel, type CenterGridRenderSlot } from "../../components/workspace/CenterGrid";
-import { useLayoutStore } from "../../store/layout";
+import { useLayoutStore, type GridOccupancy, type PanelKey } from "../../store/layout";
 import { FilesPanel } from "../files/FilesPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 
@@ -39,9 +41,11 @@ export type ChatWorkspaceCanvasProps = {
 export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
   const preset = useLayoutStore((state) => state.centerGridPreset);
   const occupancy = useLayoutStore((state) => state.centerGrid);
+  const collapsedPanels = useLayoutStore((state) => state.centerGridCollapsedPanels);
   const ratios = useLayoutStore((state) => state.centerGridRatios);
   const movePanelToGrid = useLayoutStore((state) => state.movePanelToGrid);
   const swapGridSlots = useLayoutStore((state) => state.swapGridSlots);
+  const setCenterGridPanelCollapsed = useLayoutStore((state) => state.setCenterGridPanelCollapsed);
   const setGridRatio = useLayoutStore((state) => state.setGridRatio);
   const toggleGridRowCollapse = useLayoutStore((state) => state.toggleGridRowCollapse);
   const [feedback, setFeedback] = useState("");
@@ -65,6 +69,9 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
       feedbackTimerRef.current = null;
     }, 1800);
   };
+
+  const visibleOccupancy = hideCollapsedPanels(occupancy, collapsedPanels);
+  const bookmarkPanels = panelsInOccupancy(occupancy).filter((panel) => panel !== "chat" && collapsedPanels[panel]);
 
   const renderSlot: CenterGridRenderSlot = (panel) => {
     if (panel === null) {
@@ -133,9 +140,24 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
 
   return (
     <div className="center-grid-shell">
+      {bookmarkPanels.length > 0 ? (
+        <Space className="center-grid-bookmarks" size={6} wrap data-testid="center-grid-bookmarks">
+          {bookmarkPanels.map((panel) => (
+            <Button
+              key={panel}
+              size="small"
+              icon={<FolderOpenOutlined />}
+              data-testid={`center-grid-bookmark-${panel}`}
+              onClick={() => setCenterGridPanelCollapsed(panel, false)}
+            >
+              {panelLabel(panel)}
+            </Button>
+          ))}
+        </Space>
+      ) : null}
       <CenterGrid
         preset={preset}
-        occupancy={occupancy}
+        occupancy={visibleOccupancy}
         outerSplit={ratios.outerSplit}
         innerTopSplit={ratios.innerTopSplit}
         innerBottomSplit={ratios.innerBottomSplit}
@@ -152,6 +174,10 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
           }
         }}
         onGridRowCollapseToggle={toggleGridRowCollapse}
+        onPanelCollapse={(panel) => {
+          setCenterGridPanelCollapsed(panel, true);
+          announceFeedback(`${panelLabel(panel)} collapsed to bookmark`);
+        }}
         onPanelMove={(panel, from, to, action) => {
           if (action === "move") {
             movePanelToGrid(panel, to);
@@ -170,4 +196,28 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
       ) : null}
     </div>
   );
+}
+
+function hideCollapsedPanels(
+  occupancy: GridOccupancy,
+  collapsedPanels: Partial<Record<PanelKey, boolean>>,
+): GridOccupancy {
+  const next: GridOccupancy = { ...occupancy };
+  for (const key of Object.keys(next) as Array<keyof GridOccupancy>) {
+    const value = next[key];
+    if (typeof value === "string" && collapsedPanels[value]) {
+      (next as Record<string, unknown>)[key] = null;
+    }
+  }
+  return next;
+}
+
+function panelsInOccupancy(occupancy: GridOccupancy): PanelKey[] {
+  const seen = new Set<PanelKey>();
+  for (const value of Object.values(occupancy)) {
+    if (typeof value === "string") {
+      seen.add(value);
+    }
+  }
+  return [...seen];
 }

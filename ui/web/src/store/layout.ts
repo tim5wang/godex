@@ -70,6 +70,7 @@ export type LayoutSnapshot = {
   centerGridPreset: GridPresetId;
   centerGridRatios: GridRatios;
   centerGrid: GridOccupancy;
+  centerGridCollapsedPanels: Partial<Record<PanelKey, boolean>>;
   mobileActiveTab: MobileTab;
   dockSide: "right" | "bottom";
   taskCenterDrawerOpen: boolean;
@@ -82,6 +83,7 @@ export type LayoutActions = {
   movePanelToGrid: (panel: PanelKey, slot: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
   swapPanelInGrid: (panel: PanelKey, slot: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
   swapGridSlots: (from: Exclude<GridSlot, "topFull" | "bottomFull">, to: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
+  setCenterGridPanelCollapsed: (panel: PanelKey, collapsed: boolean) => void;
   setGridRatio: (key: keyof GridRatios, v: number) => void;
   toggleGridRowCollapse: (row: GridRow) => void;
   setMobileActiveTab: (t: MobileTab) => void;
@@ -228,6 +230,7 @@ export const DEFAULT_LAYOUT_SNAPSHOT: LayoutSnapshot = {
   centerGridPreset: DEFAULT_GRID_PRESET,
   centerGridRatios: { ...DEFAULT_GRID_RATIOS },
   centerGrid: { ...DEFAULT_GRID_OCCUPANCY[DEFAULT_GRID_PRESET] },
+  centerGridCollapsedPanels: {},
   mobileActiveTab: "chat",
   taskCenterDrawerOpen: false,
   dockSide: "right",
@@ -418,6 +421,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     set(() => ({
       centerGridPreset: id,
       centerGrid: { ...DEFAULT_GRID_OCCUPANCY[id] },
+      centerGridCollapsedPanels: {},
     }));
   },
 
@@ -480,6 +484,19 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     });
   },
 
+  setCenterGridPanelCollapsed: (panel, collapsed) => {
+    if (!isPanelKey(panel) || panel === "chat") return;
+    set((state) => {
+      const next = { ...state.centerGridCollapsedPanels };
+      if (collapsed) {
+        next[panel] = true;
+      } else {
+        delete next[panel];
+      }
+      return { centerGridCollapsedPanels: next };
+    });
+  },
+
   setGridRatio: (key, v) => {
     set((state) => {
       const next: GridRatios = { ...state.centerGridRatios, [key]: clamp01(v) };
@@ -512,6 +529,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
       panels: clonePanels(DEFAULT_PANELS),
       centerGrid: { ...DEFAULT_GRID_OCCUPANCY[DEFAULT_GRID_PRESET] },
       centerGridRatios: { ...DEFAULT_GRID_RATIOS },
+      centerGridCollapsedPanels: {},
     }));
     // P4 / T8: also wipe the persisted snapshot so the next
     // reload returns to the factory defaults (not to whatever

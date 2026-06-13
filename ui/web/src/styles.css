@@ -97,6 +97,8 @@ samp {
 }
 
 .godex-header {
+  position: relative;
+  z-index: 1200;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -525,6 +527,15 @@ samp {
 .chat-inspector {
   position: relative;
   border-left: 1px solid var(--godex-border);
+}
+
+.chat-inspector[data-collapsed="true"] {
+  border-left: 0;
+  pointer-events: none;
+}
+
+.chat-inspector[data-collapsed="true"] > * {
+  display: none;
 }
 
 .chat-main {

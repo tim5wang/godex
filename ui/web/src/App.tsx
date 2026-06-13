@@ -29,11 +29,6 @@ import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
 import { useLayoutStore } from "./store/layout";
 import {
-  TASK_CENTER_DRAWER_DEFAULT_WIDTH,
-  TASK_CENTER_DRAWER_MIN_WIDTH,
-  TASK_CENTER_DRAWER_MAX_WIDTH,
-} from "./features/tasks/selectors";
-import {
   LAYOUT_STORAGE_KEY,
   applyLayoutSnapshot,
   clearPersistedLayoutSnapshot,
@@ -41,7 +36,6 @@ import {
   serializeLayoutSnapshot,
   writePersistedLayoutSnapshot,
 } from "./store/layoutPersistence";
-import { TaskCenterDrawerContent } from "./features/tasks/TaskCenterDrawerContent";
 
 export default function App() {
   const { locale, t } = useI18n();
@@ -50,10 +44,9 @@ export default function App() {
   const queryClient = useQueryClient();
   const token = useSettingsStore((state) => state.token);
   const screens = Grid.useBreakpoint();
-  // P1-e: Drawer open state is a workspace-level flag (SPEC §4.6). The
-  // mobile AppNav hamburger and the chat-header <TaskCenterChip> both
-  // set the same flag via openTaskCenterDrawer() so the panel doubles
-  // as the PC task-center entry point and the mobile AppNav.
+  // The legacy layout drawer flag is now only used for the mobile
+  // AppNav drawer. PC TaskCenter lives inside ChatPage's shared
+  // inspector panel, not in an App-level Drawer.
   const drawerOpen = useLayoutStore((state) => state.taskCenterDrawerOpen);
   const closeTaskCenterDrawer = useLayoutStore((state) => state.closeTaskCenterDrawer);
   const openTaskCenterDrawer = useLayoutStore((state) => state.openTaskCenterDrawer);
@@ -131,12 +124,6 @@ export default function App() {
     defaultWidth: 228,
     min: 176,
     max: 360,
-  });
-  const [taskCenterWidth, beginTaskCenterResize] = useResizableWidth({
-    storageKey: "godex.taskCenterWidth",
-    defaultWidth: TASK_CENTER_DRAWER_DEFAULT_WIDTH,
-    min: TASK_CENTER_DRAWER_MIN_WIDTH,
-    max: TASK_CENTER_DRAWER_MAX_WIDTH,
   });
   const activeApp = activeBuiltinApp(location.pathname);
   // Memoize route elements so App re-renders do not recreate
@@ -258,31 +245,19 @@ export default function App() {
           )}
           drawer={(
             <>
-              {/* P1-c: Drawer doubles as mobile AppNav (left, full-screen) and
-              PC Task Center entry point. On <1024px we ignore the
-              taskCenterWidth envelope and let antd render full-width.
-              P1-f: open state is driven by useLayoutStore.taskCenterDrawerOpen
-              (see chat-header <TaskCenterChip>); the close handler is
-              the same closeTaskCenterDrawer action.
-              P1-g-2: when the chat workspace is mounted it provides a
-              <TaskCenterPanel> bridge via React context, which the
-              Drawer children surface here. Before the chat page mounts
-              (e.g. on the home route or during a route transition) the
-              bridge is null and we fall back to the AppNav <Menu>. */}
-              <Drawer
-                title={<Brand compact />}
-                placement="left"
-                width={screens.lg ? taskCenterWidth : "100vw"}
-                open={drawerOpen}
-                onClose={closeTaskCenterDrawer}
-                data-testid="task-center-drawer"
-                data-mode={screens.lg ? "pc-task-center" : "mobile-appnav"}
-              >
-                <TaskCenterDrawerContent fallback={menu} />
-                {screens.lg ? (
-                  <ResizeHandle label="Resize task center" onPointerDown={beginTaskCenterResize} />
-                ) : null}
-              </Drawer>
+              {!screens.lg ? (
+                <Drawer
+                  title={<Brand compact />}
+                  placement="left"
+                  width="100vw"
+                  open={drawerOpen}
+                  onClose={closeTaskCenterDrawer}
+                  data-testid="mobile-appnav-drawer"
+                  data-mode="mobile-appnav"
+                >
+                  {menu}
+                </Drawer>
+              ) : null}
             </>
           )}
         />

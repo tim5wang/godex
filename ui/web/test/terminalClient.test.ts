@@ -56,4 +56,36 @@ describe("terminalClient real backend id mapping", () => {
 
     expect(calls).not.toContain(`GET /v1/terminal/${created.terminalId}/output?cursor=0`);
   });
+
+  it("queues input typed before the backend terminalId is known", async () => {
+    const calls: string[] = [];
+    let resolveCreate: ((response: Response) => void) | null = null;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "/v1/terminal/create") {
+        return new Promise<Response>((resolve) => {
+          resolveCreate = resolve;
+        });
+      }
+      if (url === "/v1/terminal/term-server/output?cursor=0") {
+        return new Response(JSON.stringify({ terminalId: "term-server", cursor: 0, data: "", exited: false }), { status: 200 });
+      }
+      if (url === "/v1/terminal/term-server/input") {
+        return new Response(JSON.stringify({ terminalId: "term-server", accepted: true }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    });
+
+    const created = createTerminal(".");
+    writeTerminalInput({ terminalId: created.terminalId, data: "pwd\n" }, 1);
+    await waitFor(() => calls.length >= 1);
+    expect(calls).not.toContain(`POST /v1/terminal/${created.terminalId}/input`);
+
+    resolveCreate?.(new Response(JSON.stringify({ terminalId: "term-server", initialCursor: 0 }), { status: 201 }));
+    await waitFor(() => calls.includes("POST /v1/terminal/term-server/input"));
+
+    expect(calls).not.toContain(`POST /v1/terminal/${created.terminalId}/input`);
+    destroyTerminal(created.terminalId);
+  });
 });

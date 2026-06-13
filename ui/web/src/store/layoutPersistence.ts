@@ -32,8 +32,8 @@ export const LAYOUT_STORAGE_KEY = "godex.web.layout.v1";
 /** Strip the action fields from the layout state so we can JSON-
  *  serialize the snapshot. We keep everything else verbatim. */
 export function serializeLayoutSnapshot(state: LayoutState): LayoutSnapshot {
-  const { toggle: _t, setWidth: _sw, setGridPreset: _sgp, movePanelToGrid: _mp, swapPanelInGrid: _sp, swapGridSlots: _sgs, setGridRatio: _sgr, toggleGridRowCollapse: _tgrc, setMobileActiveTab: _sm, openTaskCenterDrawer: _o, closeTaskCenterDrawer: _c, reset: _r, ...snapshot } = state;
-  void _t; void _sw; void _sgp; void _mp; void _sp; void _sgs; void _sgr; void _tgrc; void _sm; void _o; void _c; void _r;
+  const { toggle: _t, setWidth: _sw, setGridPreset: _sgp, movePanelToGrid: _mp, swapPanelInGrid: _sp, swapGridSlots: _sgs, setCenterGridPanelCollapsed: _scgpc, setGridRatio: _sgr, toggleGridRowCollapse: _tgrc, setMobileActiveTab: _sm, openTaskCenterDrawer: _o, closeTaskCenterDrawer: _c, reset: _r, ...snapshot } = state;
+  void _t; void _sw; void _sgp; void _mp; void _sp; void _sgs; void _scgpc; void _sgr; void _tgrc; void _sm; void _o; void _c; void _r;
   return snapshot;
 }
 

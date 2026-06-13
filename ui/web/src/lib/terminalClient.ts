@@ -22,6 +22,7 @@ type TerminalState = {
   poller: ReturnType<typeof setInterval> | null;
   baseUrl: string;
   serverTerminalId?: string;
+  pendingInput: string[];
 };
 
 const terminals = new Map<string, TerminalState>();
@@ -77,6 +78,33 @@ function stopPolling(terminalId: string): void {
   }
 }
 
+async function postTerminalInput(state: TerminalState, terminalId: string, data: string): Promise<void> {
+  const serverTerminalId = state.serverTerminalId ?? terminalId;
+  await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data }),
+  });
+}
+
+function flushPendingInput(terminalId: string): void {
+  const state = terminals.get(terminalId);
+  if (!state || state.exited || !state.serverTerminalId || state.pendingInput.length === 0) return;
+  const pending = [...state.pendingInput];
+  state.pendingInput = [];
+  void (async () => {
+    for (let index = 0; index < pending.length; index += 1) {
+      const data = pending[index]!;
+      try {
+        await postTerminalInput(state, terminalId, data);
+      } catch {
+        state.pendingInput = [...pending.slice(index), ...state.pendingInput];
+        return;
+      }
+    }
+  })();
+}
+
 // ---- public API (same signatures as terminalMock.ts) ----
 
 /**
@@ -94,6 +122,7 @@ export function createTerminal(workspaceDir?: string): CreateTerminalResponse {
     exited: false,
     poller: null,
     baseUrl,
+    pendingInput: [],
   });
 
   // Fire-and-forget: tell the Go backend to spawn a shell.
@@ -113,6 +142,7 @@ export function createTerminal(workspaceDir?: string): CreateTerminalResponse {
       const state = terminals.get(terminalId);
       if (!state) return;
       state.serverTerminalId = created.terminalId || terminalId;
+      flushPendingInput(terminalId);
       // Start polling once the backend confirms creation.
       // If the create fails, poll will get 404 and mark exited.
       startPolling(terminalId);
@@ -173,12 +203,11 @@ export function writeTerminalInput(
     try {
       const state = terminals.get(input.terminalId);
       if (!state || state.exited) return;
-      const serverTerminalId = state.serverTerminalId ?? input.terminalId;
-      await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}/input`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: input.data }),
-      });
+      if (!state.serverTerminalId) {
+        state.pendingInput.push(input.data);
+        return;
+      }
+      await postTerminalInput(state, input.terminalId, input.data);
     } catch {
       // Best-effort.
     }

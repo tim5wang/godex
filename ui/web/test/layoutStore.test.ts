@@ -226,6 +226,31 @@ describe("swapGridSlots (T13 slot-to-slot swap)", () => {
   });
 });
 
+describe("center grid panel bookmarks", () => {
+  it("collapses and restores non-chat panels without changing occupancy", () => {
+    useLayoutStore.getState().setGridPreset("topFilesChat_bottomTerminal");
+    const before = { ...useLayoutStore.getState().centerGrid };
+    useLayoutStore.getState().setCenterGridPanelCollapsed("files", true);
+    expect(useLayoutStore.getState().centerGridCollapsedPanels.files).toBe(true);
+    expect(useLayoutStore.getState().centerGrid).toEqual(before);
+
+    useLayoutStore.getState().setCenterGridPanelCollapsed("files", false);
+    expect(useLayoutStore.getState().centerGridCollapsedPanels.files).toBeUndefined();
+    expect(useLayoutStore.getState().centerGrid).toEqual(before);
+  });
+
+  it("does not collapse the pinned chat panel into a bookmark", () => {
+    useLayoutStore.getState().setCenterGridPanelCollapsed("chat", true);
+    expect(useLayoutStore.getState().centerGridCollapsedPanels.chat).toBeUndefined();
+  });
+
+  it("clears panel bookmarks when switching preset", () => {
+    useLayoutStore.getState().setCenterGridPanelCollapsed("terminal", true);
+    useLayoutStore.getState().setGridPreset("single");
+    expect(useLayoutStore.getState().centerGridCollapsedPanels).toEqual({});
+  });
+});
+
 describe("setGridRatio", () => {
   it("clamps to [0, 1] for outerSplit", () => {
     useLayoutStore.getState().setGridRatio("outerSplit", 2);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useLayoutStore } from "../../store/layout";
@@ -24,7 +24,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { ApartmentOutlined, CheckOutlined, CopyOutlined, DeleteOutlined, EyeOutlined, FileTextOutlined, HistoryOutlined, MenuOutlined, PlayCircleOutlined, PlusOutlined, RedoOutlined, SafetyCertificateOutlined, StopOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, CheckOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EyeOutlined, FileTextOutlined, HistoryOutlined, MenuOutlined, PlayCircleOutlined, PlusOutlined, RedoOutlined, SafetyCertificateOutlined, StopOutlined } from "@ant-design/icons";
 import { Conversations } from "@ant-design/x";
 import { Composer, type ComposerSubmission } from "../../components/Composer";
 import { MessageFeed } from "../../components/MessageFeed";
@@ -32,7 +32,6 @@ import { ResizeHandle } from "../../components/ResizeHandle";
 import { SubagentCard } from "../../components/SubagentCard";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
 import { TaskCenterChip } from "../tasks/TaskCenterChip";
-import { TaskCenterProvider } from "../tasks/TaskCenterContext";
 import { TaskCenterPanel } from "../chat/TaskCenterPanel";
 import { ChatWorkspaceCanvas } from "./ChatWorkspaceCanvas";
 import { MobileWorkspaceTabs } from "../../components/workspace/MobileWorkspaceTabs";
@@ -173,17 +172,10 @@ export function ChatPage() {
   const setStreamConnected = useChatStore((state) => state.setStreamConnected);
   const reset = useChatStore((state) => state.reset);
 
-  // P1-d: removed localStorage-backed taskCenterCollapsed state and its
-  // useEffect; the task center is now a header chip (TaskCenterChip) that
-  // opens the existing App.tsx <Drawer>. The legacy TaskCenterPanel
-  // header strip is gone — its expanded form is reached via the chip.
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  // P1-f: wire the chat-header <TaskCenterChip>'s onOpen to the
-  // workspace-level drawer flag (SPEC §4.6). The Drawer is owned by
-  // App.tsx; opening it from ChatPage goes through the store so we
-  // do not need ad-hoc cross-page plumbing.
-  const openTaskCenterDrawer = useLayoutStore((state) => state.openTaskCenterDrawer);
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [inspectorActiveKey, setInspectorActiveKey] = useState("approvals");
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [queuedComposerFiles, setQueuedComposerFiles] = useState<File[]>([]);
@@ -203,11 +195,16 @@ export function ChatPage() {
   const [timelineFilters, setTimelineFilters] = useState<TimelineFilterState>(() => defaultTimelineFilters());
   const [timelineCursor, setTimelineCursor] = useState("");
   const [timelineCursorStack, setTimelineCursorStack] = useState<string[]>([]);
-  // P1-d: removed the legacy taskCenterCollapsed state and its localStorage
-  // effect — the task center is now a header chip (TaskCenterChip) that
-  // opens the App.tsx <Drawer> instead of inlining a band in the chat
-  // workspace. The expanded list view lives in the drawer's children
-  // (P1-f).
+  const openTaskCenterPanel = () => {
+    if (inspectorActiveKey === "taskCenter" && !inspectorCollapsed) {
+      setInspectorCollapsed(true);
+      setInspectorOpen(false);
+      return;
+    }
+    setInspectorActiveKey("taskCenter");
+    setInspectorCollapsed(false);
+    setInspectorOpen(!screens.lg);
+  };
   // T15: track longtask reflux bubbles. The chat list still
   // renders the message itself; the bubble is a floating
   // notification that the user can act on without scrolling to
@@ -221,6 +218,8 @@ export function ChatPage() {
     min: 240,
     max: 560,
   });
+  const sessionsCollapsed = useLayoutStore((state) => state.panels.sessions.collapsed);
+  const toggleSessionsPanel = useLayoutStore((state) => state.toggle);
   const [inspectorPaneWidth, beginInspectorPaneResize] = useResizableWidth({
     storageKey: "godex.chatInspectorWidth",
     defaultWidth: 380,
@@ -1003,6 +1002,8 @@ export function ChatPage() {
         navigate(buildChatRouteForSession(session));
         setSessionsOpen(false);
       }}
+      collapsed={sessionsCollapsed}
+      onCollapsedChange={() => toggleSessionsPanel("sessions")}
     />
   );
   const updateTimelineFilters = (next: TimelineFilterState) => {
@@ -1030,6 +1031,37 @@ export function ChatPage() {
   };
   const inspectorPanel = (
     <InspectorTabs
+      activeKey={inspectorActiveKey}
+      onActiveKeyChange={setInspectorActiveKey}
+      onCollapseInspector={() => {
+        setInspectorCollapsed(true);
+        setInspectorOpen(false);
+      }}
+      taskCenterPanel={(
+        <TaskCenterPanel
+          outcomes={taskOutcomes}
+          collapsed={false}
+          onCollapsedChange={() => {
+            setInspectorCollapsed(true);
+            setInspectorOpen(false);
+          }}
+          reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
+          mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
+          resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
+          cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
+          runningWorkflowId={runLongTaskMutation.isPending ? runLongTaskMutation.variables : undefined}
+          cancelingLongTask={cancelLongTaskMutation.isPending ? cancelLongTaskMutation.variables : undefined}
+          finalizingLongTask={finalizeLongTaskMutation.isPending ? finalizeLongTaskMutation.variables : undefined}
+          onReviewSubagent={reviewSubagentInDrawer}
+          onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
+          onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
+          onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
+          onRunLongTask={(workflowId) => runLongTaskMutation.mutate(workflowId)}
+          onCancelLongTask={(workflowId, nodeId) => cancelLongTaskMutation.mutate({ workflowId, nodeId })}
+          onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
+          onOpenReviewMergeCenter={openReviewMergeCenter}
+        />
+      )}
       pendingPermissions={pendingPermissions}
       longTasks={longTasksQuery.data ?? []}
       longTasksLoading={longTasksQuery.isLoading || longTasksQuery.isFetching}
@@ -1083,44 +1115,14 @@ export function ChatPage() {
     />
   );
 
-  // P1-g-2 (SPEC §4.1.1): bridge the full <TaskCenterPanel> tree through
-  // React context so the App.tsx <Drawer> can render it without
-  // centralizing the 18 mutation hooks. The 18 props mirror
-  // TaskCenterPanelProps exactly. `collapsed` is forced false because the
-  // Drawer has its own header actions (close / resize); onCollapsedChange
-  // is intentionally a no-op — the chip toggle is the canonical control.
-  const taskCenterBridge = (
-    <TaskCenterPanel
-      outcomes={taskOutcomes}
-      collapsed={false}
-      onCollapsedChange={() => undefined}
-      reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
-      mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
-      resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
-      cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
-      runningWorkflowId={runLongTaskMutation.isPending ? runLongTaskMutation.variables : undefined}
-      cancelingLongTask={cancelLongTaskMutation.isPending ? cancelLongTaskMutation.variables : undefined}
-      finalizingLongTask={finalizeLongTaskMutation.isPending ? finalizeLongTaskMutation.variables : undefined}
-      onReviewSubagent={reviewSubagentInDrawer}
-      onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
-      onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
-      onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
-      onRunLongTask={(workflowId) => runLongTaskMutation.mutate(workflowId)}
-      onCancelLongTask={(workflowId, nodeId) => cancelLongTaskMutation.mutate({ workflowId, nodeId })}
-      onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
-      onOpenReviewMergeCenter={openReviewMergeCenter}
-    />
-  );
-
   return (
-    <TaskCenterProvider value={taskCenterBridge}>
       <div
         className="chat-page"
-        style={{ "--chat-sessions-width": `${sessionPaneWidth}px`, "--chat-inspector-width": `${inspectorPaneWidth}px` } as CSSProperties}
+        style={{ "--chat-sessions-width": `${sessionsCollapsed ? 40 : sessionPaneWidth}px`, "--chat-inspector-width": `${inspectorCollapsed ? 0 : inspectorPaneWidth}px` } as CSSProperties}
       >
-      <aside className="chat-sessions">
+      <aside className="chat-sessions" data-testid="sessions-rail" data-collapsed={sessionsCollapsed ? "true" : "false"}>
         {sessionPanel}
-        <ResizeHandle label="Resize sessions" onPointerDown={beginSessionPaneResize} />
+        {!sessionsCollapsed ? <ResizeHandle label="Resize sessions" onPointerDown={beginSessionPaneResize} /> : null}
       </aside>
       <section className="chat-main">
         <Card className="chat-session-card" size="small" styles={{ body: { padding: "10px 16px" } }}>
@@ -1192,11 +1194,7 @@ export function ChatPage() {
                   onClick={() => void copySessionInfo()}
                 />
               </Tooltip>
-              {/* P1-d: task center header chip (SPEC §5) — replaces the
-                  legacy TaskCenterPanel band that previously sat at the
-                  top of the chat workspace. P1-f wires onOpen to the
-                  App.tsx <Drawer> open state via useLayoutStore. */}
-              <TaskCenterChip onOpen={openTaskCenterDrawer} label={t("chat.taskCenter") || "Task Center"} />
+              <TaskCenterChip onOpen={openTaskCenterPanel} label={t("chat.taskCenter") || "Task Center"} />
               <Tooltip title="Fork session">
                 <Button
                   size={compactHeader ? "small" : "middle"}
@@ -1307,8 +1305,8 @@ export function ChatPage() {
           />
         )}
       </section>
-      <aside className="chat-inspector">
-        <ResizeHandle label="Resize inspector" placement="left" onPointerDown={beginInspectorPaneResize} />
+      <aside className="chat-inspector" data-testid="chat-inspector" data-collapsed={inspectorCollapsed ? "true" : "false"}>
+        {!inspectorCollapsed ? <ResizeHandle label="Resize inspector" placement="left" onPointerDown={beginInspectorPaneResize} /> : null}
         {inspectorPanel}
       </aside>
       <Drawer title={t("sessions.title")} placement="left" width={320} open={sessionsOpen} onClose={() => setSessionsOpen(false)}>
@@ -1364,7 +1362,6 @@ export function ChatPage() {
         </>
       ) : null}
     </div>
-    </TaskCenterProvider>
   );
 }
 
@@ -1378,15 +1375,56 @@ function SessionPanel(props: {
   onCreate: () => void;
   onSelect: (session: ListedSession) => void;
   onDelete: (session: ListedSession) => void;
+  collapsed?: boolean;
+  onCollapsedChange?: () => void;
 }) {
   const { t } = useI18n();
   const active = props.sessions.find((session) => session.session_id === props.activeSessionId);
+  if (props.collapsed) {
+    return (
+      <div className="panel-scroll" data-testid="sessions-rail-strip" style={{ padding: 6 }}>
+        <Space direction="vertical" size={8} style={{ width: "100%", alignItems: "stretch" }}>
+          <Button
+            size="small"
+            aria-label={t("sessions.expand") || "Expand sessions"}
+            title={t("sessions.expand") || "Expand sessions"}
+            onClick={props.onCollapsedChange}
+            data-testid="sessions-expand"
+          >
+            »
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            aria-label={t("sessions.new")}
+            title={t("sessions.new")}
+            onClick={props.onCreate}
+          >
+            +
+          </Button>
+          <Typography.Text type="secondary" style={{ textAlign: "center", fontSize: 11 }}>
+            {props.sessions.length}
+          </Typography.Text>
+        </Space>
+      </div>
+    );
+  }
   return (
     <div className="panel-scroll">
       <Space direction="vertical" size={14} style={{ width: "100%" }}>
-        <Button block type="primary" icon={<PlusOutlined />} aria-label={t("sessions.new")} onClick={props.onCreate}>
-          {t("sessions.new")}
-        </Button>
+        <Space size={8} style={{ width: "100%", justifyContent: "space-between" }}>
+          <Button block type="primary" icon={<PlusOutlined />} aria-label={t("sessions.new")} onClick={props.onCreate}>
+            {t("sessions.new")}
+          </Button>
+          <Button
+            aria-label={t("sessions.collapse") || "Collapse sessions"}
+            title={t("sessions.collapse") || "Collapse sessions"}
+            onClick={props.onCollapsedChange}
+            data-testid="sessions-collapse"
+          >
+            «
+          </Button>
+        </Space>
         <Tabs
           size="small"
           activeKey={props.channelFilter}
@@ -1437,6 +1475,10 @@ function SessionPanel(props: {
 }
 
 function InspectorTabs(props: {
+  activeKey: string;
+  onActiveKeyChange: (key: string) => void;
+  onCollapseInspector: () => void;
+  taskCenterPanel: ReactNode;
   pendingPermissions: PendingPermission[];
   longTasks: LongTaskView[];
   longTasksLoading: boolean;
@@ -1485,7 +1527,25 @@ function InspectorTabs(props: {
     <div className="panel-scroll">
       <Tabs
         size="small"
+        activeKey={props.activeKey}
+        onChange={props.onActiveKeyChange}
+        tabBarExtraContent={(
+          <Button
+            type="text"
+            size="small"
+            icon={<CompressOutlined />}
+            onClick={props.onCollapseInspector}
+            data-testid="inspector-collapse"
+          >
+            {t("panel.collapse") || "Collapse"}
+          </Button>
+        )}
         items={[
+          {
+            key: "taskCenter",
+            label: t("chat.taskCenter") || "Task Center",
+            children: props.taskCenterPanel,
+          },
           {
             key: "approvals",
             label: (

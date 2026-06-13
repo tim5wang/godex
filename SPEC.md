@@ -14,11 +14,11 @@
 
 > 本节是实现进展索引,不替代下面的产品设计。详细接手记录见 `M0-WEB-IDE-EXPERIENCE.md`。
 
-- **M0 IDE 基础已完成**:布局 store、AppNav 折叠、SessionList 折叠、任务中心 chip + Drawer、FilesPanel 双模式、CenterGrid、移动端二级 Tab、TerminalPanel、布局持久化、i18n 与基础验收均已落地。
+- **M0 IDE 基础已完成**:布局 store、AppNav 折叠、SessionList 折叠、任务中心 chip + 共享右侧 inspector 抽屉、FilesPanel 双模式、CenterGrid、移动端二级 Tab、TerminalPanel、布局持久化、i18n 与基础验收均已落地。
 - **M1+ candidate A 已完成**:Terminal 已从前端 mock/polling fallback 升级为真实 Go PTY HTTP client + 后端 terminal routes。
-- **M1+ candidate C 已进一步推进**:store 与 CenterGrid 已支持 3x3 preset;2x2/3x3 面板标题栏菜单、标题栏拖拽/目标高亮、slot-to-slot swap 已落地;2x2 splitter 拖拽比例持久化与双击收起/恢复已接入。4 象限与任意拖拽布局仍作为后续议题。
-- **崩溃与截图可用性修复已完成**:修复 Chat React #185、Files React #306;补齐 workspace header 有效信息、grid files 预览/附加到 composer、chat composer 贴底、terminal 状态可见;并加固 Playwright 验收,避免错误边界页面被误判为通过。
-- **仍需后续推进**:把最近的 debug/isolate/feature 提交整理成干净历史;补统一书签条抽象;补真实截图 diff/视觉基线;继续评估 M1-C 的 4 象限/任意布局与可能的一级 AppNav 新 SPEC。
+- **M1+ candidate C 已进一步推进**:store 与 CenterGrid 已支持 3x3 preset;2x2/3x3 面板标题栏菜单、标题栏拖拽/目标高亮、slot-to-slot swap、面板折叠到书签并恢复已落地;2x2 splitter 拖拽比例持久化与双击收起/恢复已接入。4 象限与任意拖拽布局仍作为后续议题。
+- **崩溃与截图可用性修复已完成**:修复 Chat React #185、Files React #306;补齐 workspace header 有效信息、grid files 预览/附加到 composer/多文件切换、chat composer 贴底、terminal 状态可见且可输入执行、TaskCenter 并入右侧 inspector Tab 且复用任务中心 chip 折叠/展开;并加固 Playwright 验收,避免错误边界页面被误判为通过。
+- **仍需后续推进**:把最近的 debug/isolate/feature 提交整理成干净历史;把目前分散在 CenterGrid/Session/Files 的书签条实现收敛成统一抽象;补真实截图 diff/视觉基线;继续评估 M1-C 的 4 象限/任意布局与可能的一级 AppNav 新 SPEC。
 
 状态标记:
 
@@ -134,18 +134,14 @@
   4. `<DockPanel>` —— 右侧(以及可选底部)抽屉,内容根据 dock 选中态决定。
 - **移动端(< 1024px)**:`AppNavRail` 与 `SessionListRail` 隐藏(`display: none`),Workspace 占满全宽;Workspace 顶部渲染 `<MobileWorkspaceTabs>`(`对话框 / terminal / 文件 / 抽屉 / 任务`),根据选中态切到对应子视图。
 
-### 4.1.1 任务中心走右侧 Drawer(用户决定,P1 推进点)
+### 4.1.1 任务中心进入共享右侧 inspector 抽屉(用户决定,P1 修正点)
 
-- **不**新增独立 dock;**复用 App.tsx 现有右侧 `<Drawer>`**(`<Brand compact />` + `placement="left"`,原本用于移动端 AppNav,本 SPEC 扩展为"PC 任务中心 + 移动端 AppNav"二合一抽屉)。**P0-B 改造已新增汉堡唤起逻辑;P1 额外增加 PC 上"任务 N 🔴" chip 唤起该 Drawer。**
-- **Drawer 宽度可调**:
-  - 任务中心面板需要展示列表 + 状态计数 + 时间线 + (未来)详情预览,默认宽 560px。
-  - 通过 `useLayoutStore.panels.tasks.width` 持久化(默认 560,clamp 到 [320, 800])。
-  - Drawer 内部提供拖拽右边缘改宽度的 `ResizeHandle`(同 P0-B 模式)。
-  - 移动端 (<1024px) 时 Drawer 仍走全屏 100vw 逻辑,不受 `panels.tasks.width` 影响。
-- **抽离位置**:`features/tasks/` 独立模块(方案 A,SPEC §4.2 字面要求),提供:
+- **不**新增独立 TaskCenter Drawer;任务中心与 `待审批 / 上下文与召回 / 轮次 / Subagents / LongTasks / Timeline` 共用 ChatPage 右侧 `chat-inspector` 面板。
+- **Tab 位置**:任务中心是 inspector 的第一个 Tab。点击聊天 header 里的 `任务 N` chip 会展开右侧 inspector 并选中 `任务中心`;如果当前已经展开且选中任务中心,再次点击 chip 会收起 inspector。
+- **收起入口**:共享 inspector 顶部提供 `收起` 按钮;任务中心面板自身的收起动作也折叠整个 inspector,而不是打开另一个 App 级 Drawer。
+- **移动端**:任务中心仍显示在移动端 inspector Drawer 内,与其他 inspector Tab 共用同一抽屉;一级 AppNav hamburger 只负责移动端 AppNav。
+- **抽离位置**:`features/tasks/` 保留轻量 header chip 与 selector;完整任务中心面板仍由 ChatPage 传入 inspector,因为它依赖 ChatPage 本地 mutation/query。
   - `<TaskCenterChip />` —— chat header 角标(`任务 N 🔴` / `任务 N 🟠`)
-  - `<TaskCenterDockPanel />` —— 完整列表,放进 Drawer 的 children
-  - `useTaskCenterStats()` —— 数据 hook(从 `useChatStore` 取,只读不修改)
   - `selectTaskCenterHeaderContract(state) => { running, blocked, pendingReview, merged, failed, total, hasUnread, dotColor }` —— 纯函数 selector
 - **数据源不动**:任务统计来自现有 `useChatStore.overlayItems` 中 `kind === "command" | "subagent" | "warning" | "error"` 的事件流;P1 只重组视图。
 
@@ -155,7 +151,7 @@
   - `<TaskCenterDockPanel />`:完整列表(运行/阻塞/待审核/合并/失败 tab + 时间线)
   - `<TaskCenterChip />`:折叠态顶栏 chip(显示"任务 N"+ 红色未读角标)
   - `<TaskCenterTrigger />`:右侧 dock 书签条上的入口
-- 在聊天页 header 中,任务中心替换为一个 **chip + 展开按钮**;展开动作 = 把 dock 切到 `tasks` 面板、或把 tasks 放到网格的某个空格(可在设置里选)。
+- 在聊天页 header 中,任务中心替换为一个 **chip + 展开/收起按钮语义**;展开动作 = 展开右侧 inspector 并切到 `任务中心` Tab;再次点击当前任务中心 chip = 收起右侧 inspector。
 - 任务中心状态/数据来源不动(继续走 `features/chat` 现有 store / SSE),只重组视图。
 
 ### 4.3 文件 app 内嵌
@@ -239,12 +235,12 @@ type LayoutState = {
 聊天 header 自左到右:
 
 ```
-[新会话] [模型▾] [Reasoning▾] [●流连接已建立] [Idle] [🗑][⎇]   ……   [任务 N 🔴] [Drawer 入口] [⋮]
+[新会话] [模型▾] [Reasoning▾] [●流连接已建立] [Idle] [🗑][⎇]   ……   [任务 N 🔴] [⋮]
 ```
 
 - 任务中心不再占据整行,而是一个 chip 形式:`任务 N`,有红点(待审核>0)或橙点(阻塞>0)。
-- 点击 `任务 N` = 在 dock 选中 `tasks`(若 dock 在右侧)或把 tasks 放到 Workspace 网格的某个空格里(可在设置里选)。
-- 当前 header 中的 `待审批 / 上下文与召回 / 轮次` 按钮组移到 chip 右侧的 `⋮` 菜单 + chip 内展开层(避免行内拥挤)。
+- 点击 `任务 N` = 展开共享右侧 inspector 并选中 `任务中心` Tab;当前已展开且选中任务中心时再次点击会收起 inspector。
+- `待审批 / 上下文与召回 / 轮次 / Subagents / LongTasks / Timeline` 与 `任务中心` 同属右侧 inspector Tabs,不再有独立 TaskCenter Drawer。
 
 ---
 
@@ -287,7 +283,7 @@ type LayoutState = {
 | 阶段 | 状态 | 内容 | 当前实现/验证 |
 |---|---:|---|---|
 | P0 | [x] | `WorkspaceShell` 骨架 + AppNav/Session 折叠 + CenterGrid 2×2 + 5 种预设 + 移动端二级 Tab(不改造一级 AppNav) | 已抽出 `components/workspace/WorkspaceShell.tsx`;其余能力分布在 `ChatWorkspaceCanvas.tsx`、`CenterGrid.tsx`、`MobileWorkspaceTabs.tsx`;有 layout / centerGrid / mobile tabs / workspace shell 单测 |
-| P1 | [x] | 任务中心抽离 + 顶栏 chip 化 | `features/tasks` selector/chip/context/drawer bridge 已落地;chip 打开 Drawer 显示任务中心内容 |
+| P1 | [x] | 任务中心抽离 + 顶栏 chip 化 | `features/tasks` selector/chip 已落地;完整 TaskCenterPanel 并入 ChatPage 右侧 inspector Tabs,chip 负责展开/收起并选中任务中心 |
 | P2 | [x] | 文件 panel 内嵌(dock / 网格内) | `FilesPanel mode="dock" | "page"` 已落地;`/files` 路由兼容;移动端 files tab 使用 dock panel |
 | P3 | [x] | Terminal panel(xterm + 后端协议) | `TerminalPanel` + `terminalClient.ts` + Go HTTP terminal routes 已落地;M1+ 已替换 mock client |
 | P4 | [x] | 布局持久化 + 快捷键 + i18n | `layoutPersistence.ts`、跨 tab storage sync、`Ctrl/Cmd+\``、en/zh 文案与测试已落地 |
@@ -301,11 +297,11 @@ type LayoutState = {
 > 这里按当前代码状态标注。已完成项仍可能需要视觉 polish,但核心能力与测试已落地。
 
 - [~] T1:WorkspaceShell 组件 + 折叠/书签条交互;CenterGrid 2×2 网格 + 5 种预设
-  - 已完成:独立 `WorkspaceShell.tsx`、AppNav/Session/CenterGrid/MobileTabs 的等价工作区骨架、2×2 preset、基础折叠。
-  - 未完成:完整书签条统一抽象。
+  - 已完成:独立 `WorkspaceShell.tsx`、AppNav/Session/CenterGrid/MobileTabs 的等价工作区骨架、2×2 preset、基础折叠;CenterGrid 非 chat 面板可折叠成顶部书签并恢复;SessionList 可收起为 40px rail。
+  - 未完成:把 CenterGrid/Session/Files 当前分散实现收敛为完整书签条统一抽象。
 - [x] T2:AppNav collapsible(`components/Sidebar.tsx` / `App.tsx` 改造)
 - [x] T3:SessionList collapsible + 折叠态下浮层入口
-- [x] T4:聊天 header 顶栏重排(任务 chip / 抽屉入口 / 菜单)
+- [x] T4:聊天 header 顶栏重排(任务 chip / 共享 inspector 入口 / 菜单)
 - [x] T5:`features/tasks` 模块拆分 + 顶栏 chip 实时角标
 - [x] T6:文件 panel `mode="dock"` + 与 `FilesPage` 复用
 - [x] T7:Terminal panel + xterm 集成 + 后端通讯;支持在网格和移动端 Tab 中安放
@@ -319,12 +315,12 @@ type LayoutState = {
   - 已完成:Playwright 验收基础设施 + desktop/mobile route smoke + 错误边界断言 + 截图反馈问题的功能验收覆盖。
   - 未完成:真正截图 diff/视觉基线。
 - [x] T13:网格预设切换 + 拖拽分隔条 + 双击收起;面板在不同格子间移动(右键菜单或拖拽标题栏)
-  - 已完成:store preset 切换、ratio 持久化、splitter 拖拽回写、双击收起/恢复、3x3 preset、`movePanelToGrid` / `swapPanelInGrid` / `swapGridSlots` store actions、标题栏菜单、标题栏拖拽、目标高亮与用户可见反馈。
+  - 已完成:store preset 切换、ratio 持久化、splitter 拖拽回写、双击收起/恢复、3x3 preset、`movePanelToGrid` / `swapPanelInGrid` / `swapGridSlots` store actions、标题栏菜单、标题栏拖拽、目标高亮、用户可见反馈、非 chat 面板折叠成书签并恢复。
 
 ## 10. 下一步建议
 
 1. **先整理最近提交历史**:把 debug/isolate/patch/feature 提交压成清晰的 crash fix、T13 interaction、e2e hardening,避免远端历史包含排障噪声。
-2. **补书签条统一抽象**:当前折叠入口仍分别落在 AppNav、SessionList、FilesPanel 等局部实现里;下一步可抽统一的 bookmark rail/strip contract。
-3. **补视觉回归**:在现有 Playwright 基础上加固定 viewport 截图 diff,覆盖 PC 默认布局、3x3 preset、mobile tabs、任务 Drawer 和 terminal。
+2. **收敛书签条统一抽象**:CenterGrid/SessionList/FilesPanel 已有可用折叠入口;下一步可抽统一的 bookmark rail/strip contract,减少重复 UI 与状态策略。
+3. **补视觉回归**:在现有 Playwright 基础上加固定 viewport 截图 diff,覆盖 PC 默认布局、3x3 preset、mobile tabs、共享 inspector 任务中心和 terminal。
 4. **继续 M1-C 后半段**:如确有产品需求,再单独推进 4 象限 / 任意拖拽布局;不要和已完成的 2x2/3x3 面板移动交互混为一项。
 5. **如要改一级 AppNav**,另开新 SPEC:当前 SPEC 明确不改造一级 AppNav,不要混入本工作区升级尾项。

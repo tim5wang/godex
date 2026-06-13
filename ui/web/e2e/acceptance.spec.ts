@@ -72,12 +72,31 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     await expect(page.locator('[data-testid="files-panel-dock-collapsed"]')).toHaveCount(0);
   });
 
+  test("CenterGrid files panel collapses to a bookmark and restores", async ({ page }) => {
+    await page.locator('[data-testid="center-grid-panel-collapse-topLeft"]').click();
+    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "");
+    await expect(page.locator('[data-testid="center-grid-bookmark-files"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="files-panel-dock"]')).toHaveCount(0);
+
+    await page.locator('[data-testid="center-grid-bookmark-files"]').click();
+    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
+    await expect(page.locator('[data-testid="files-panel-dock"]')).toBeVisible({ timeout: 5000 });
+  });
+
   test("CenterGrid files panel previews and attaches selected files", async ({ page }) => {
     await page.getByText("SPEC.md").click();
     await expect(page.locator('[data-testid="files-panel-preview-path"]')).toContainText("SPEC.md");
     await expect(page.locator('[data-testid="files-panel-preview"]')).toContainText("GoDex Web UI");
     await page.locator('[data-testid="files-panel-attach-selected"]').click();
     await expect(page.locator(".chat-composer")).toContainText("SPEC.md");
+  });
+
+  test("CenterGrid files panel switches preview between selected files", async ({ page }) => {
+    await page.getByText("SPEC.md").click();
+    await expect(page.locator('[data-testid="files-panel-preview"]')).toContainText("GoDex Web UI");
+    await page.getByText("Makefile").click();
+    await expect(page.locator('[data-testid="files-panel-preview-path"]')).toContainText("Makefile");
+    await expect(page.locator('[data-testid="files-panel-preview"]')).toContainText("pnpm --dir ui/web");
   });
 
   test("CenterGrid chat cell pins composer to the bottom of the panel", async ({ page }) => {
@@ -90,6 +109,14 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
 
   test("CenterGrid terminal panel exposes connection status", async ({ page }) => {
     await expect(page.locator('[data-testid="terminal-status"]')).toContainText(/connected|ready/i, { timeout: 7000 });
+  });
+
+  test("CenterGrid terminal panel sends typed input to the backend", async ({ page }) => {
+    const inputRequest = page.waitForRequest((request) => request.url().includes("/v1/terminal/term-playwright/input") && request.method() === "POST");
+    await page.locator('[data-testid="terminal-panel-surface"]').click();
+    await page.keyboard.type("pwd");
+    await page.keyboard.press("Enter");
+    await inputRequest;
   });
 
   test("CenterGrid splitter double-click collapse persists across reload", async ({ page }) => {
@@ -170,22 +197,45 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     expect(box!.width).toBeLessThan(80);
   });
 
-  test("Task center Drawer opens via chip click (P1-g-2)", async ({ page }) => {
-    // Wait for chat header to render.
+  test("Session list collapses to a compact rail and expands", async ({ page }) => {
+    const rail = page.locator('[data-testid="sessions-rail"]');
+    await page.locator('[data-testid="sessions-collapse"]').click();
+    await expect(rail).toHaveAttribute("data-collapsed", "true");
+    const collapsedBox = await rail.boundingBox();
+    expect(collapsedBox).not.toBeNull();
+    expect(collapsedBox!.width).toBeLessThanOrEqual(48);
+
+    await page.locator('[data-testid="sessions-expand"]').click();
+    await expect(rail).toHaveAttribute("data-collapsed", "false");
+    const expandedBox = await rail.boundingBox();
+    expect(expandedBox).not.toBeNull();
+    expect(expandedBox!.width).toBeGreaterThan(120);
+  });
+
+  test("Task center chip selects the shared inspector task tab", async ({ page }) => {
     await page.waitForSelector(".godex-header", { timeout: 5000 });
+    const chip = page.locator('[data-testid="task-center-chip-button"]');
+    await expect(chip).toBeVisible({ timeout: 5000 });
+    await chip.click();
 
-    // Try to find and click the task center chip.
-    const chip = page.locator('[data-testid*="task-center"], .task-center-chip').first();
-    if (await chip.isVisible()) {
-      await chip.click();
-      await page.waitForTimeout(500);
+    const inspector = page.locator('[data-testid="chat-inspector"]');
+    await expect(inspector).toHaveAttribute("data-collapsed", "false");
+    await expect(inspector.locator(".task-center-band")).toBeVisible({ timeout: 3000 });
+    await expect(inspector.locator('[role="tab"][aria-selected="true"]')).toContainText(/Task Center|任务中心/);
+  });
 
-      // Drawer should be open now.
-      const drawer = page.locator('[data-testid="task-center-drawer"]');
-      await expect(drawer).toBeVisible({ timeout: 3000 });
-    }
-    // If the chip isn't visible yet (no tasks yet), that's acceptable —
-    // the infrastructure is in place for when data flows.
+  test("Shared inspector collapse button folds the task center drawer", async ({ page }) => {
+    const chip = page.locator('[data-testid="task-center-chip-button"]');
+    await chip.click();
+    const inspector = page.locator('[data-testid="chat-inspector"]');
+    await expect(inspector).toHaveAttribute("data-collapsed", "false");
+
+    await page.locator('[data-testid="inspector-collapse"]').click();
+    await expect(inspector).toHaveAttribute("data-collapsed", "true");
+
+    await chip.click();
+    await expect(inspector).toHaveAttribute("data-collapsed", "false");
+    await expect(inspector.locator(".task-center-band")).toBeVisible({ timeout: 3000 });
   });
 });
 
@@ -220,7 +270,7 @@ test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {
     await page.waitForTimeout(500);
 
     // The Drawer should now be open.
-    const drawer = page.locator('[data-testid="task-center-drawer"]');
+    const drawer = page.locator('[data-testid="mobile-appnav-drawer"]');
     await expect(drawer).toBeVisible({ timeout: 3000 });
   });
 });

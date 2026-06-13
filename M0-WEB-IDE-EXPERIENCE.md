@@ -247,12 +247,45 @@ pnpm -C ui/web dev
 #       + 点击 chip → Drawer 打开(560px 宽,但显示 AppNav menu 而非任务中心列表 = P1-g-2 known gap)
 ```
 
+### 6.1 M0 acceptance checklist (P4 / T12)
+
+> **注**:Playwright 截图回归不在本 milestone 范围(M0 doc §3.6 “Playwright 基础设施不在范围”)。本节是 *手动验收检查表* — M0 交付后需要人工逐项走一遍以在 PC + Mobile 两个 breakpoint 上验证 SPEC §6 的 visual / functional 验收点。
+
+**PC (≥ 1024px) 网格布局验收**
+
+- [ ] **Preset 1 — `topChat_bottomTerminal`**:中心网格上整行 chat,下整行 terminal;dock 折叠为右侧 40px 书签条。
+- [ ] **Preset 2 — `topFilesChat_bottomTerminal` (默认)**:上 files(32%) | chat(68%),下整行 terminal;左 AppNav + SessionList 均展开。
+- [ ] **Preset 3 — `topChat_bottomFilesTerminal`**:上整行 chat,下 files | terminal。
+- [ ] **Preset 4 — `leftCol2x2`**:左列上下为 files / terminal,右列整列 chat。
+- [ ] **Preset 5 — `single`**:单格 chat,files / terminal 均折叠到 0。
+- [ ] 拖拽外/内 Splitter 改比例,刷页面后保留(走 `useLayoutEffect` + `storage` 事件)。
+- [ ] 双击外/内 Splitter 收起(设 ratio=0),再双击恢复(设 ratio=0.6);验证 `layoutGridToggles.ts` 的 `toggleRowCollapse` 路径。
+
+**Mobile (< 1024px) 二级 Tab 验收**
+
+- [ ] 顶部出现二级 Tab 栏: `对话框 | 终端 | 文件 | 抽屉 | 任务`。
+- [ ] 默认选中 `对话框`;切换到 `终端` 后看到 `<TerminalPanel>` 的 mock xterm banner。
+- [ ] 切换到 `文件` 后看到 `<FilesPanel mode="dock">`(tree + 预览)。
+- [ ] 切换到 `任务` / `抽屉` 后看到 labelled placeholder(`Task Center` / `Drawer`)。
+
+**快捷键 + Drawer 验收**
+
+- [ ] 在 PC 上按 `Ctrl/Cmd + \` 唤起/隐藏 terminal panel(PC only,走 `useTerminalShortcut` hook + `useLayoutStore.toggle(\"terminal\")`)。
+- [ ] 点击 chat header `任务 N` chip 打开 Drawer(560px),显示 `<TaskCenterPanel>` 完整列表(不再是 AppNav menu = P1-g-2 关闭)。
+- [ ] 拖拽 Drawer 右边缘改宽(320–800 envelope),刷页面后保留。
+
+**持久化验收 (P4 / T8)**
+
+- [ ] 折叠/展开 AppNav 或 SessionList,刷新页面后状态保留(走 `godex.web.layout.v1` localStorage key + cross-tab `storage` 事件)。
+- [ ] 在两个 tab 中打开同一 workspace,在 A tab 折叠 AppNav,B tab 自动同步。
+- [ ] 点 chat header 的 “Reset workspace”(如已实现)后 localStorage key 被清除,重载恢复 factory defaults。
+
 ---
 
 ## 7. 文档版本
 
-- **版本**:v3(本 session 收尾)
+- **版本**:v4(本 session 收尾)
 - **创建时间**:v1 P0 + P1 + P2-a 收尾时
 - **v2 升级**:(本 session)P1-g-2 关闭时
 - **v3 升级**:(本 session)P2-b / P2-c / P2-d 全部关闭时,本 doc 升级为收尾版本,**剩余 2 个 gap**:P3 T7 (terminal) + P4 T8/T10/T11/T12/T13
-- **最终关闭**:P3 + P4 全部完成时,本 doc 升级为 v4 收尾版本
+- **v4 升级**:(本 session)P3 T7 + P4 T8 / T10 / T11 / T13 全部关闭时,累计 **10 个 commit** + **185 vitest** + **tsc clean**;P4 T12 是 doc-only acceptance checklist(Playwright 基础设施不在范围)。**M0 milestone 全部完成。**

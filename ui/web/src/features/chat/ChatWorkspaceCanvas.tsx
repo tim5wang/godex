@@ -38,6 +38,8 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
   const preset = useLayoutStore((state) => state.centerGridPreset);
   const occupancy = useLayoutStore((state) => state.centerGrid);
   const ratios = useLayoutStore((state) => state.centerGridRatios);
+  const movePanelToGrid = useLayoutStore((state) => state.movePanelToGrid);
+  const swapPanelInGrid = useLayoutStore((state) => state.swapPanelInGrid);
 
   const renderSlot: CenterGridRenderSlot = (panel) => {
     if (panel === null) {
@@ -116,6 +118,13 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
       col0Split={ratios.col0Split}
       col1Split={ratios.col1Split}
       renderSlot={renderSlot}
+      onPanelMove={(panel, _from, to, action) => {
+        if (action === "move") {
+          movePanelToGrid(panel, to);
+        } else {
+          swapPanelInGrid(panel, to);
+        }
+      }}
     />
   );
 }

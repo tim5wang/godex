@@ -55,11 +55,75 @@ async function handleAPIRoute(route: Route): Promise<void> {
       });
       return;
 
-    case path === "/sessions" || path.startsWith("/sessions/"):
+    case path === "/sessions" || path === "/sessions/":
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            session_id: "playwright-session",
+            locator: { channel: "web", key: "playwright-session" },
+          }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify([]),
+      });
+      return;
+
+    case path === "/sessions/playwright-session" || path === "/sessions/playwright-session/":
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          session_id: "playwright-session",
+          locator: { channel: "web", key: "playwright-session" },
+          messages: [],
+          display_messages: [],
+          timeline: [],
+          turns: [],
+          queued_turns: [],
+          pending_permissions: [],
+          running: false,
+          updated_at: "2026-06-13T00:00:00Z",
+        }),
+      });
+      return;
+
+    case path.startsWith("/sessions/playwright-session/timeline/page"):
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items: [], has_more: false, total: 0 }),
+      });
+      return;
+
+    case path.startsWith("/sessions/playwright-session/timeline"):
+    case path.startsWith("/sessions/playwright-session/subagents"):
+    case path.startsWith("/sessions/playwright-session/longtasks"):
+    case path.startsWith("/sessions/playwright-session/skills"):
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+      return;
+
+    case path === "/sessions/playwright-session/context-inspector":
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message_count: 0,
+          token_estimate: 0,
+          compress_threshold: 0,
+          suggest_compact: false,
+          active_skill_count: 0,
+          pending_permission_count: 0,
+        }),
       });
       return;
 

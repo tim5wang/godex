@@ -5,7 +5,7 @@ import {
   useLayoutStore,
   type GridPresetId,
 } from "../src/store/layout";
-import { presetShape } from "../src/components/workspace/CenterGrid";
+import { buildPanelMoveMenuItems, panelLabel, presetShape, slotLabel } from "../src/components/workspace/CenterGrid";
 
 function reset() {
   useLayoutStore.getState().reset();
@@ -46,6 +46,36 @@ describe("presetShape (P2 / T6b contract)", () => {
         bottomRight: null,
       }),
     ).toBe("topFull-bottomSplit");
+  });
+});
+
+describe("panel move menu contract (T13)", () => {
+  it("labels panels and 2x2 slots for titlebar menus", () => {
+    expect(panelLabel("chat")).toBe("Chat");
+    expect(panelLabel("files")).toBe("Files");
+    expect(panelLabel("terminal")).toBe("Terminal");
+    expect(slotLabel("topLeft")).toBe("Top left");
+    expect(slotLabel("bottomRight")).toBe("Bottom right");
+  });
+
+  it("builds move/swap items for 2x2 occupancy", () => {
+    const items = buildPanelMoveMenuItems(DEFAULT_GRID_OCCUPANCY.topFilesChat_bottomTerminal, "files", "topLeft");
+    expect(items.map((item) => [item.slot, item.action, item.label])).toEqual([
+      ["topRight", "swap", "Swap with Chat in Top right"],
+      ["bottomLeft", "swap", "Swap with Terminal in Bottom left"],
+      ["bottomRight", "swap", "Swap with Terminal in Bottom right"],
+    ]);
+  });
+
+  it("builds 3x3 slot labels and skips the current slot", () => {
+    const items = buildPanelMoveMenuItems(DEFAULT_GRID_OCCUPANCY.grid3x3_filesChatTerminal, "files", "r0c0");
+    expect(items[0]).toEqual({
+      slot: "r0c1",
+      action: "swap",
+      label: "Swap with Chat in Row 1 col 2",
+    });
+    expect(items.some((item) => item.slot === "r0c0")).toBe(false);
+    expect(items.at(-1)?.slot).toBe("r2c2");
   });
 });
 

@@ -1,0 +1,52 @@
+# T13 Center Grid Panel Menu Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Add a visible CenterGrid titlebar menu that lets users move or swap panels between grid slots.
+
+**Architecture:** Keep `CenterGrid` presentational and expose optional slot chrome callbacks. `ChatWorkspaceCanvas` owns store wiring and maps menu actions to `movePanelToGrid` or `swapPanelInGrid`. Drag/drop remains out of scope for this slice.
+
+**Tech Stack:** React, Ant Design `Dropdown`/`Button`, Zustand layout store, Vitest pure helper tests.
+
+---
+
+### Task 1: Slot Menu Contract
+
+**Files:**
+- Modify: `ui/web/src/components/workspace/CenterGrid.tsx`
+- Test: `ui/web/test/centerGrid.test.ts`
+
+- [x] Add pure helpers for deriving movable grid slots and action labels.
+- [x] Verify helpers handle 2x2 and 3x3 occupancy.
+
+### Task 2: CenterGrid Slot Chrome
+
+**Files:**
+- Modify: `ui/web/src/components/workspace/CenterGrid.tsx`
+
+- [x] Wrap non-empty slots with a compact titlebar.
+- [x] Render an optional menu button when callbacks are provided.
+- [x] Preserve full-row and split-cell layout behavior.
+
+### Task 3: Store Wiring
+
+**Files:**
+- Modify: `ui/web/src/features/chat/ChatWorkspaceCanvas.tsx`
+
+- [x] Pass current occupancy to the menu helpers.
+- [x] Call `movePanelToGrid` for empty targets.
+- [x] Call `swapPanelInGrid` for occupied targets.
+
+### Task 4: Verification
+
+**Commands:**
+- `pnpm --dir ui/web test -- test/centerGrid.test.ts test/layoutStore.test.ts`
+- `pnpm --dir ui/web build`
+
+**Verified:**
+- `pnpm --dir ui/web test -- test/centerGrid.test.ts test/layoutStore.test.ts`
+- `pnpm --dir ui/web typecheck`
+- `pnpm --dir ui/web test`
+- `pnpm --dir ui/web build`
+- `pnpm --dir ui/web test:e2e --project=chromium-mobile`
+- `pnpm --dir ui/web test:e2e --project=chromium-desktop`

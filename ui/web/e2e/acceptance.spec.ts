@@ -47,6 +47,13 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     await expect(content).not.toContainText(/crashed|Maximum update depth exceeded|Element type is invalid/i);
   });
 
+  test("CenterGrid panel titlebar exposes move menu", async ({ page }) => {
+    const filesMenu = page.locator('[data-testid="center-grid-panel-menu-topLeft"]');
+    await expect(filesMenu).toBeVisible({ timeout: 5000 });
+    await filesMenu.click();
+    await expect(page.getByText("Swap with Chat in Top right")).toBeVisible({ timeout: 3000 });
+  });
+
   test("Layout persists collapsed state across reload", async ({ page }) => {
     // Collapse AppNav.
     const toggleBtn = page.locator('.godex-sider-top button[aria-label*="Collapse"]');

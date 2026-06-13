@@ -535,6 +535,43 @@ samp {
   background: var(--godex-bg);
 }
 
+.center-grid-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--godex-panel);
+}
+
+.center-grid-panel-titlebar {
+  display: flex;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  border-bottom: 1px solid var(--godex-border);
+  padding: 0 8px 0 10px;
+  background: var(--godex-panel-muted);
+}
+
+.center-grid-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--godex-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.center-grid-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .chat-session-card {
   border-radius: 0;
   border-top: 0;

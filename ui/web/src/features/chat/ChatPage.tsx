@@ -1240,9 +1240,10 @@ export function ChatPage() {
             <Alert type="error" showIcon message={authError} />
           </div>
         ) : (
-          // DEBUG: temporarily bypass ChatWorkspaceCanvas to isolate React #185
-          // in production builds. The original flat layout is rendered directly.
-          <>
+          <ChatWorkspaceCanvas
+            filesCwd="."
+            renderCenter={() => (
+              <>
             <div className="chat-feed" ref={scrollerRef} style={{ minHeight: 0 }}>
               <div className="chat-feed-inner">
                 <MessageFeed
@@ -1297,7 +1298,9 @@ export function ChatPage() {
               packageCommands={packageCommandsQuery.data ?? []}
               onSubmit={onSend}
             />
-          </>
+              </>
+            )}
+          />
         )}
       </section>
       <aside className="chat-inspector">

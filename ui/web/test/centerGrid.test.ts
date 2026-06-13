@@ -5,7 +5,7 @@ import {
   useLayoutStore,
   type GridPresetId,
 } from "../src/store/layout";
-import { buildPanelMoveMenuItems, panelLabel, presetShape, slotLabel } from "../src/components/workspace/CenterGrid";
+import { buildPanelMoveMenuItems, getPanelDropAction, panelLabel, presetShape, slotLabel } from "../src/components/workspace/CenterGrid";
 
 function reset() {
   useLayoutStore.getState().reset();
@@ -76,6 +76,14 @@ describe("panel move menu contract (T13)", () => {
     });
     expect(items.some((item) => item.slot === "r0c0")).toBe(false);
     expect(items.at(-1)?.slot).toBe("r2c2");
+  });
+
+  it("derives drag/drop move or swap actions for valid targets", () => {
+    const occ = DEFAULT_GRID_OCCUPANCY.topFilesChat_bottomTerminal;
+    expect(getPanelDropAction(occ, "files", "topLeft", "topRight")).toBe("swap");
+    expect(getPanelDropAction(DEFAULT_GRID_OCCUPANCY.single, "chat", "topLeft", "bottomLeft")).toBe("move");
+    expect(getPanelDropAction(occ, "files", "topLeft", "topLeft")).toBeNull();
+    expect(getPanelDropAction(occ, "files", "topLeft", "bottomLeft")).toBe("swap");
   });
 });
 

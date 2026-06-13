@@ -4,7 +4,7 @@
 
 **Goal:** Add a visible CenterGrid titlebar menu that lets users move or swap panels between grid slots.
 
-**Architecture:** Keep `CenterGrid` presentational and expose optional slot chrome callbacks. `ChatWorkspaceCanvas` owns store wiring and maps menu actions to `movePanelToGrid` or `swapPanelInGrid`. Drag/drop remains out of scope for this slice.
+**Architecture:** Keep `CenterGrid` presentational and expose optional slot chrome callbacks. `ChatWorkspaceCanvas` owns store wiring and maps menu actions to `movePanelToGrid` or slot-level `swapGridSlots`. Drag/drop remains out of scope for this slice.
 
 **Tech Stack:** React, Ant Design `Dropdown`/`Button`, Zustand layout store, Vitest pure helper tests.
 
@@ -50,3 +50,35 @@
 - `pnpm --dir ui/web build`
 - `pnpm --dir ui/web test:e2e --project=chromium-mobile`
 - `pnpm --dir ui/web test:e2e --project=chromium-desktop`
+
+### Task 5: Phase 2 Interaction Feedback + Usability Fixes
+
+**Files:**
+- Modify: `ui/web/src/features/chat/ChatWorkspaceCanvas.tsx`
+- Modify: `ui/web/src/features/files/FilesPanel.tsx`
+- Modify: `ui/web/src/lib/terminalClient.ts`
+- Modify: `ui/web/src/store/layout.ts`
+- Test: `ui/web/test/layoutStore.test.ts`
+- Test: `ui/web/test/terminalClient.test.ts`
+- Test: `ui/web/e2e/acceptance.spec.ts`
+
+- [x] Show transient feedback after a panel move/swap menu action.
+- [x] Use slot-to-slot swap so “Swap with Chat” moves both visible panels instead of evicting/no-op.
+- [x] Render grid-hosted files panels expanded and filling the cell, independent of dock collapsed state.
+- [x] Adopt the backend terminal id returned by `/v1/terminal/create` for output/input/delete calls.
+- [x] Add Playwright coverage for menu feedback and grid files expanded state.
+
+### Task 6: Phase 3 Titlebar Drag/Drop
+
+**Files:**
+- Modify: `ui/web/src/components/workspace/CenterGrid.tsx`
+- Modify: `ui/web/src/features/chat/ChatWorkspaceCanvas.tsx`
+- Modify: `ui/web/src/styles.css`
+- Test: `ui/web/test/centerGrid.test.ts`
+- Test: `ui/web/e2e/acceptance.spec.ts`
+
+- [x] Add a draggable titlebar handle for occupied grid panels.
+- [x] Highlight valid drop targets while dragging.
+- [x] Drop on occupied slots using slot-to-slot swap and on empty slots using move.
+- [x] Keep the menu-button path working alongside drag/drop.
+- [x] Add Playwright coverage for titlebar drag swapping panels.

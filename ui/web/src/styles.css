@@ -535,6 +535,32 @@ samp {
   background: var(--godex-bg);
 }
 
+.center-grid-shell {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+}
+
+.center-grid-action-feedback {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 20;
+  max-width: min(420px, calc(100% - 32px));
+  transform: translateX(-50%);
+  border: 1px solid var(--godex-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--godex-panel);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
+  color: var(--godex-text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 .center-grid-panel {
   display: flex;
   min-width: 0;
@@ -542,7 +568,22 @@ samp {
   height: 100%;
   flex-direction: column;
   overflow: hidden;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
   background: var(--godex-panel);
+}
+
+.center-grid-panel-empty {
+  background: var(--godex-bg);
+}
+
+.center-grid-panel-dragging {
+  opacity: 0.68;
+}
+
+.center-grid-panel-drop-target {
+  outline-color: var(--godex-accent);
+  background: color-mix(in srgb, var(--godex-accent) 8%, var(--godex-panel));
 }
 
 .center-grid-panel-titlebar {
@@ -554,6 +595,12 @@ samp {
   border-bottom: 1px solid var(--godex-border);
   padding: 0 8px 0 10px;
   background: var(--godex-panel-muted);
+  cursor: grab;
+  user-select: none;
+}
+
+.center-grid-panel-titlebar:active {
+  cursor: grabbing;
 }
 
 .center-grid-panel-title {

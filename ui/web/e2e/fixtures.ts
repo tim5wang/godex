@@ -196,6 +196,19 @@ async function handleAPIRoute(route: Route): Promise<void> {
       });
       return;
 
+    case path.startsWith("/files/list"):
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            { name: "SPEC.md", path: "SPEC.md", isDir: false, size: 12000, modTime: "2026-06-13T00:00:00Z" },
+            { name: "ui", path: "ui", isDir: true, size: 0, modTime: "2026-06-13T00:00:00Z" },
+          ],
+        }),
+      });
+      return;
+
     case path === "/skills/catalog" || path.startsWith("/skills/"):
       await route.fulfill({
         status: 200,
@@ -260,6 +273,38 @@ async function handleV1Route(route: Route): Promise<void> {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ object: "list", data: [] }),
+    });
+    return;
+  }
+
+  if (path === "/terminal/create" || path === "/terminal/create/") {
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ terminalId: "term-playwright", initialCursor: 0 }),
+    });
+    return;
+  }
+
+  if (path === "/terminal/term-playwright/output") {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        terminalId: "term-playwright",
+        cursor: 18,
+        data: "GoDex terminal ready\n",
+        exited: false,
+      }),
+    });
+    return;
+  }
+
+  if (path === "/terminal/term-playwright/input" || path === "/terminal/term-playwright") {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ terminalId: "term-playwright", accepted: true }),
     });
     return;
   }

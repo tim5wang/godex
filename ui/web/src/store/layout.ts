@@ -80,6 +80,7 @@ export type LayoutActions = {
   setGridPreset: (id: GridPresetId) => void;
   movePanelToGrid: (panel: PanelKey, slot: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
   swapPanelInGrid: (panel: PanelKey, slot: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
+  swapGridSlots: (from: Exclude<GridSlot, "topFull" | "bottomFull">, to: Exclude<GridSlot, "topFull" | "bottomFull">) => void;
   setGridRatio: (key: keyof GridRatios, v: number) => void;
   setMobileActiveTab: (t: MobileTab) => void;
   openTaskCenterDrawer: () => void;
@@ -458,6 +459,21 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         if (next[k] === panel) (next as Record<string, unknown>)[k] = null;
       }
       (next as Record<string, unknown>)[slot] = panel;
+      return { centerGrid: next };
+    });
+  },
+
+  swapGridSlots: (from, to) => {
+    if (!isCellSlot(from)) return;
+    if (!isCellSlot(to)) return;
+    if (from === to) return;
+    set((state) => {
+      const next: GridOccupancy = { ...state.centerGrid };
+      const fromPanel = next[from] ?? null;
+      const toPanel = next[to] ?? null;
+      if (!fromPanel && !toPanel) return state;
+      (next as Record<string, unknown>)[from] = toPanel;
+      (next as Record<string, unknown>)[to] = fromPanel;
       return { centerGrid: next };
     });
   },

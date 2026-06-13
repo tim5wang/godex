@@ -21,6 +21,7 @@ type TerminalState = {
   exited: boolean;
   poller: ReturnType<typeof setInterval> | null;
   baseUrl: string;
+  serverTerminalId?: string;
 };
 
 const terminals = new Map<string, TerminalState>();
@@ -34,9 +35,10 @@ function getBaseUrl(): string {
 async function fetchOutput(terminalId: string): Promise<void> {
   const state = terminals.get(terminalId);
   if (!state || state.exited) return;
+  const serverTerminalId = state.serverTerminalId ?? terminalId;
   try {
     const resp = await fetch(
-      `${state.baseUrl}/v1/terminal/${encodeURIComponent(terminalId)}/output?cursor=${state.cursor}`
+      `${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}/output?cursor=${state.cursor}`
     );
     if (!resp.ok) {
       if (resp.status === 404) {
@@ -97,11 +99,20 @@ export function createTerminal(workspaceDir?: string): CreateTerminalResponse {
   // Fire-and-forget: tell the Go backend to spawn a shell.
   void (async () => {
     try {
-      await fetch(`${baseUrl}/v1/terminal/create`, {
+      const resp = await fetch(`${baseUrl}/v1/terminal/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceDir: workspaceDir ?? "." }),
       });
+      if (!resp.ok) {
+        const state = terminals.get(terminalId);
+        if (state) state.exited = true;
+        return;
+      }
+      const created = await resp.json() as Partial<CreateTerminalResponse>;
+      const state = terminals.get(terminalId);
+      if (!state) return;
+      state.serverTerminalId = created.terminalId || terminalId;
       // Start polling once the backend confirms creation.
       // If the create fails, poll will get 404 and mark exited.
       startPolling(terminalId);
@@ -162,7 +173,8 @@ export function writeTerminalInput(
     try {
       const state = terminals.get(input.terminalId);
       if (!state || state.exited) return;
-      await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(input.terminalId)}/input`, {
+      const serverTerminalId = state.serverTerminalId ?? input.terminalId;
+      await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}/input`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ data: input.data }),
@@ -187,9 +199,10 @@ export function destroyTerminal(terminalId: string): void {
   const state = terminals.get(terminalId);
   if (!state) return;
   terminals.delete(terminalId);
+  const serverTerminalId = state.serverTerminalId ?? terminalId;
   void (async () => {
     try {
-      await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(terminalId)}`, {
+      await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}`, {
         method: "DELETE",
       });
     } catch {

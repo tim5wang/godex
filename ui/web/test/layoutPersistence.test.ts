@@ -77,6 +77,7 @@ describe("serializeLayoutSnapshot (P4 / T8)", () => {
     expect(snap).not.toHaveProperty("setGridPreset");
     expect(snap).not.toHaveProperty("movePanelToGrid");
     expect(snap).not.toHaveProperty("swapPanelInGrid");
+    expect(snap).not.toHaveProperty("swapGridSlots");
     expect(snap).not.toHaveProperty("setGridRatio");
     expect(snap).not.toHaveProperty("setMobileActiveTab");
     expect(snap).not.toHaveProperty("openTaskCenterDrawer");

@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { CenterGrid, type CenterGridRenderSlot } from "../../components/workspace/CenterGrid";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { CenterGrid, panelLabel, slotLabel, type CenterGridRenderSlot } from "../../components/workspace/CenterGrid";
 import { useLayoutStore } from "../../store/layout";
 import { FilesPanel } from "../files/FilesPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
@@ -39,7 +39,28 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
   const occupancy = useLayoutStore((state) => state.centerGrid);
   const ratios = useLayoutStore((state) => state.centerGridRatios);
   const movePanelToGrid = useLayoutStore((state) => state.movePanelToGrid);
-  const swapPanelInGrid = useLayoutStore((state) => state.swapPanelInGrid);
+  const swapGridSlots = useLayoutStore((state) => state.swapGridSlots);
+  const [feedback, setFeedback] = useState("");
+  const feedbackTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current !== null) {
+        window.clearTimeout(feedbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  const announceFeedback = (message: string) => {
+    setFeedback(message);
+    if (feedbackTimerRef.current !== null) {
+      window.clearTimeout(feedbackTimerRef.current);
+    }
+    feedbackTimerRef.current = window.setTimeout(() => {
+      setFeedback("");
+      feedbackTimerRef.current = null;
+    }, 1800);
+  };
 
   const renderSlot: CenterGridRenderSlot = (panel) => {
     if (panel === null) {
@@ -55,7 +76,7 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
     if (panel === "files") {
       return (
         <div data-testid="center-grid-cell-files" className="center-grid-cell-files" style={{ height: "100%", minHeight: 0 }}>
-          <FilesPanel mode="dock" cwd={props.filesCwd ?? "."} />
+          <FilesPanel mode="dock" cwd={props.filesCwd ?? "."} fillContainer />
         </div>
       );
     }
@@ -107,24 +128,34 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
   };
 
   return (
-    <CenterGrid
-      preset={preset}
-      occupancy={occupancy}
-      outerSplit={ratios.outerSplit}
-      innerTopSplit={ratios.innerTopSplit}
-      innerBottomSplit={ratios.innerBottomSplit}
-      row0Split={ratios.row0Split}
-      row1Split={ratios.row1Split}
-      col0Split={ratios.col0Split}
-      col1Split={ratios.col1Split}
-      renderSlot={renderSlot}
-      onPanelMove={(panel, _from, to, action) => {
-        if (action === "move") {
-          movePanelToGrid(panel, to);
-        } else {
-          swapPanelInGrid(panel, to);
-        }
-      }}
-    />
+    <div className="center-grid-shell">
+      <CenterGrid
+        preset={preset}
+        occupancy={occupancy}
+        outerSplit={ratios.outerSplit}
+        innerTopSplit={ratios.innerTopSplit}
+        innerBottomSplit={ratios.innerBottomSplit}
+        row0Split={ratios.row0Split}
+        row1Split={ratios.row1Split}
+        col0Split={ratios.col0Split}
+        col1Split={ratios.col1Split}
+        renderSlot={renderSlot}
+        onPanelMove={(panel, from, to, action) => {
+          if (action === "move") {
+            movePanelToGrid(panel, to);
+            announceFeedback(`${panelLabel(panel)} moved to ${slotLabel(to)}`);
+            return;
+          }
+          const targetPanel = occupancy[to];
+          swapGridSlots(from, to);
+          announceFeedback(`${panelLabel(panel)} swapped with ${targetPanel ? panelLabel(targetPanel) : slotLabel(to)}`);
+        }}
+      />
+      {feedback ? (
+        <div className="center-grid-action-feedback" data-testid="center-grid-action-feedback" role="status" aria-live="polite">
+          {feedback}
+        </div>
+      ) : null}
+    </div>
   );
 }

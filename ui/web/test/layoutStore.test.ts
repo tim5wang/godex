@@ -207,6 +207,25 @@ describe("swapPanelInGrid (explicit user-driven swap)", () => {
   });
 });
 
+describe("swapGridSlots (T13 slot-to-slot swap)", () => {
+  it("swaps files and chat between their visible grid slots", () => {
+    useLayoutStore.getState().setGridPreset("topFilesChat_bottomTerminal");
+    useLayoutStore.getState().swapGridSlots("topLeft", "topRight");
+    const s = useLayoutStore.getState();
+    expect(s.centerGrid.topLeft).toBe("chat");
+    expect(s.centerGrid.topRight).toBe("files");
+  });
+
+  it("can move a slot occupant into an empty slot while preserving chat elsewhere", () => {
+    useLayoutStore.getState().setGridPreset("single");
+    useLayoutStore.getState().swapGridSlots("topLeft", "bottomLeft");
+    const s = useLayoutStore.getState();
+    expect(s.centerGrid.topLeft).toBeNull();
+    expect(s.centerGrid.bottomLeft).toBe("chat");
+    expect(Object.values(s.centerGrid)).toContain("chat");
+  });
+});
+
 describe("setGridRatio", () => {
   it("clamps to [0, 1] for outerSplit", () => {
     useLayoutStore.getState().setGridRatio("outerSplit", 2);

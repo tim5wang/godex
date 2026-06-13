@@ -39,6 +39,8 @@ export type FilesPanelProps = {
   selectedPath?: string;
   /** Notify parent when the user picks a different file in the tree. */
   onSelect?: (path: string) => void;
+  /** Fill the parent grid cell and ignore the dock collapsed strip state. */
+  fillContainer?: boolean;
   /** Transparent wrapper children for mode="page". */
   children?: React.ReactNode;
 };
@@ -65,11 +67,12 @@ function FilesPanelDock(props: FilesPanelProps) {
   const [search, setSearch] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | undefined>(props.selectedPath);
 
-  const columnWidth = layoutCollapsed ? 40 : layoutWidth;
+  const collapsed = !props.fillContainer && layoutCollapsed;
+  const columnWidth = props.fillContainer ? "100%" : collapsed ? 40 : layoutWidth;
   const iconOnlyWidth = 40;
 
   // The 40px collapsed strip shows the bare expand affordance.
-  if (layoutCollapsed) {
+  if (collapsed) {
     return (
       <div
         data-testid="files-panel-dock-collapsed"
@@ -106,7 +109,7 @@ function FilesPanelDock(props: FilesPanelProps) {
         flexDirection: "column",
         height: "100%",
         background: "var(--panel)",
-        borderRight: "1px solid var(--border)",
+        borderRight: props.fillContainer ? 0 : "1px solid var(--border)",
       }}
     >
       <div

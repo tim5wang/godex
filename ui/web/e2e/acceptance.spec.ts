@@ -51,7 +51,31 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     const filesMenu = page.locator('[data-testid="center-grid-panel-menu-topLeft"]');
     await expect(filesMenu).toBeVisible({ timeout: 5000 });
     await filesMenu.click();
-    await expect(page.getByText("Swap with Chat in Top right")).toBeVisible({ timeout: 3000 });
+    await page.getByText("Swap with Chat in Top right").click();
+    await expect(page.locator('[data-testid="center-grid-panel-topRight"]')).toHaveAttribute("data-panel", "files");
+    await expect(page.locator('[data-testid="center-grid-action-feedback"]')).toContainText("Files swapped with Chat");
+  });
+
+  test("CenterGrid files panel renders expanded inside the grid", async ({ page }) => {
+    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
+    await expect(page.locator('[data-testid="files-panel-dock"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="files-panel-dock-collapsed"]')).toHaveCount(0);
+  });
+
+  test("CenterGrid panel titlebar drag swaps panels", async ({ page }) => {
+    const dragHandle = page.locator('[data-testid="center-grid-panel-drag-topLeft"]');
+    const dropTarget = page.locator('[data-testid="center-grid-panel-topRight"]');
+    await expect(dragHandle).toHaveAttribute("draggable", "true");
+    const sourceBox = await dragHandle.boundingBox();
+    const targetBox = await dropTarget.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+    await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await expect(dropTarget).toHaveAttribute("data-panel", "files");
+    await expect(page.locator('[data-testid="center-grid-action-feedback"]')).toContainText("Files swapped with Chat");
   });
 
   test("Layout persists collapsed state across reload", async ({ page }) => {

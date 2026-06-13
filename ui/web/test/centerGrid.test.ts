@@ -142,6 +142,83 @@ describe("setGridPreset switches the centerGrid occupancy", () => {
   });
 });
 
+describe("3×3 grid presets (v2.0, M1+ candidate C)", () => {
+  it("grid3x3_filesChatTerminal has rows=3, cols=3 with correct cells", () => {
+    const occ = DEFAULT_GRID_OCCUPANCY.grid3x3_filesChatTerminal;
+    expect(occ.rows).toBe(3);
+    expect(occ.cols).toBe(3);
+    expect(occ.r0c0).toBe("files");
+    expect(occ.r0c1).toBe("chat");
+    expect(occ.r0c2).toBe("chat");
+    expect(occ.r1c0).toBe("files");
+    expect(occ.r1c1).toBe("chat");
+    expect(occ.r1c2).toBe("chat");
+    expect(occ.r2c0).toBe("terminal");
+    expect(occ.r2c1).toBe("terminal");
+    expect(occ.r2c2).toBe("terminal");
+    expect(presetShape(occ)).toBe("grid3x3");
+  });
+
+  it("grid3x3_tallThreeCol has notes in r2c0", () => {
+    const occ = DEFAULT_GRID_OCCUPANCY.grid3x3_tallThreeCol;
+    expect(occ.rows).toBe(3);
+    expect(occ.cols).toBe(3);
+    expect(occ.r0c0).toBe("files");
+    expect(occ.r0c1).toBe("chat");
+    expect(occ.r0c2).toBe("terminal");
+    expect(occ.r2c0).toBe("notes");
+    expect(occ.r2c1).toBe("tasks");
+    expect(occ.r2c2).toBe("drawer");
+    expect(presetShape(occ)).toBe("grid3x3");
+  });
+
+  it("grid3x3_wideThreeRow has full-width rows", () => {
+    const occ = DEFAULT_GRID_OCCUPANCY.grid3x3_wideThreeRow;
+    expect(occ.rows).toBe(3);
+    // All cells in rows 0-1 are chat, row 2 is terminal.
+    expect(occ.r0c0 === "chat" && occ.r0c1 === "chat" && occ.r0c2 === "chat").toBe(true);
+    expect(occ.r1c0 === "chat" && occ.r1c1 === "chat" && occ.r1c2 === "chat").toBe(true);
+    expect(occ.r2c0 === "terminal" && occ.r2c1 === "terminal" && occ.r2c2 === "terminal").toBe(true);
+    expect(presetShape(occ)).toBe("grid3x3");
+  });
+
+  it("setGridPreset to 3×3 preserves legacy 2×2 slots", () => {
+    useLayoutStore.getState().setGridPreset("grid3x3_filesChatTerminal");
+    const occ = useLayoutStore.getState().centerGrid;
+    // Legacy 2x2 slots are filled for backward compat
+    expect(occ.topLeft).toBe("files");
+    expect(occ.topRight).toBe("chat");
+    expect(occ.bottomLeft).toBe("terminal");
+    expect(occ.bottomRight).toBe("terminal");
+    expect(occ.rows).toBe(3);
+    expect(occ.cols).toBe(3);
+  });
+
+  it("3×3 preset ratios default to ~1/3 each", () => {
+    useLayoutStore.getState().setGridPreset("grid3x3_tallThreeCol");
+    const ratios = useLayoutStore.getState().centerGridRatios;
+    expect(ratios.row0Split).toBeCloseTo(0.33);
+    expect(ratios.row1Split).toBeCloseTo(0.34);
+    expect(ratios.col0Split).toBeCloseTo(0.33);
+    expect(ratios.col1Split).toBeCloseTo(0.34);
+  });
+
+  it("setGridRatio updates 3×3 split ratios", () => {
+    useLayoutStore.getState().setGridPreset("grid3x3_filesChatTerminal");
+    useLayoutStore.getState().setGridRatio("row0Split", 0.4);
+    useLayoutStore.getState().setGridRatio("col0Split", 0.2);
+    expect(useLayoutStore.getState().centerGridRatios.row0Split).toBe(0.4);
+    expect(useLayoutStore.getState().centerGridRatios.col0Split).toBe(0.2);
+  });
+
+  it("movePanelToGrid with 3×3 slot works", () => {
+    useLayoutStore.getState().setGridPreset("grid3x3_filesChatTerminal");
+    useLayoutStore.getState().movePanelToGrid("files", "r1c0");
+    const occ = useLayoutStore.getState().centerGrid;
+    expect(occ.r1c0).toBe("files");
+  });
+});
+
 describe("setGridRatio updates the persisted ratio envelope", () => {
   it("clamps to [0, 1]", () => {
     useLayoutStore.getState().setGridRatio("outerSplit", 0.3);

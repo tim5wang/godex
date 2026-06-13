@@ -111,6 +111,10 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
       outerSplit={ratios.outerSplit}
       innerTopSplit={ratios.innerTopSplit}
       innerBottomSplit={ratios.innerBottomSplit}
+      row0Split={ratios.row0Split}
+      row1Split={ratios.row1Split}
+      col0Split={ratios.col0Split}
+      col1Split={ratios.col1Split}
       renderSlot={renderSlot}
     />
   );

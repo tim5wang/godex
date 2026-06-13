@@ -19,6 +19,7 @@ const initialPanels: Record<PanelKey, { collapsed: boolean; width?: number; visi
   files: { collapsed: true, width: 320, visible: true },
   terminal: { collapsed: true, width: 320, visible: true },
   drawer: { collapsed: true, width: 320, visible: true },
+  notes: { collapsed: true, width: 320, visible: true },
 };
 
 function reset() {
@@ -53,6 +54,9 @@ describe("layout store defaults", () => {
     const ids = GRID_PRESETS.map((p) => p.id).sort();
     expect(ids).toEqual(
       [
+        "grid3x3_filesChatTerminal",
+        "grid3x3_tallThreeCol",
+        "grid3x3_wideThreeRow",
         "leftCol2x2",
         "single",
         "topChat_bottomFilesTerminal",

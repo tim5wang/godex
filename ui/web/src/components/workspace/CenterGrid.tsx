@@ -2,38 +2,24 @@ import type { ReactNode } from "react";
 import { Splitter } from "antd";
 import {
   DEFAULT_GRID_OCCUPANCY,
+  DEFAULT_GRID_RATIOS,
   type GridOccupancy,
   type GridPresetId,
+  type GridRatios,
   type PanelKey,
 } from "../../store/layout";
 
-// P2 / T6b (SPEC §3.2 + §4.1): the chat workspace renders a 2x2 grid of
-// cells whose contents are determined by the layout store's
-// centerGridPreset + centerGrid occupancy. The grid is purely presentational
-// — it does not own state and does not know about specific panels. Callers
-// pass a `renderSlot` function that maps a `PanelKey` (or null) to a
-// ReactNode. The 5 presets map onto the same 4 cells; the "topFull" and
-// "bottomFull" shapes are encoded by putting the same panel in both cells
-// of a row (the inner Splitter collapse-to-0 is what visually merges them).
+// P2 / T6b (SPEC §3.2 + §4.1) — v2.0 upgrade (M1+ candidate C):
+// CenterGrid now supports both 2×2 (legacy 5 presets) and 3×3
+// (3 new presets: grid3x3_*). The grid is purely presentational —
+// it does not own state and does not know about specific panels.
+// Callers pass a `renderSlot` function that maps a `PanelKey` (or
+// null) to a ReactNode.
 //
-// The grid is intentionally read-only here: actions like movePanelToGrid /
-// setGridPreset / setGridRatio are dispatched by the layout store, not by
-// this component. That keeps the renderer easy to unit-test (no
-// dispatching, no store reading required to assert shape) and easy to swap
-// for a different splitter implementation later.
-//
-// Two layers of <Splitter>:
-//   * outer  — vertical,  separates the top row from the bottom row
-//              (driven by `outerSplit`, default 0.6 = top 60 / bottom 40).
-//   * inner  — horizontal, splits the top row (topLeft / topRight) and
-//              splits the bottom row (bottomLeft / bottomRight) when the
-//              corresponding cells hold different panels.
-//
-// When the outer split is exactly 0 or 1, the corresponding row collapses
-// (SPEC §3.2 double-click collapse). The renderSlot callback still gets
-// called for both rows so the dropped cell can still receive its panel
-// when the row reopens (the Splitter keeps the cell mounted, just at 0
-// height).
+// When `occ.rows === 3`, the grid renders 3 vertical rows each
+// with 3 horizontal columns using nested Splitter components.
+// Full-row spanning is optimized: if all 3 cells in a row hold
+// the same panel, they collapse into a single full-width cell.
 
 export type CenterGridRenderSlot = (panel: PanelKey | null) => ReactNode;
 
@@ -43,130 +29,228 @@ export type CenterGridProps = {
   outerSplit?: number;
   innerTopSplit?: number;
   innerBottomSplit?: number;
+  /** 3×3 ratios (row/col splits) */
+  row0Split?: number;
+  row1Split?: number;
+  col0Split?: number;
+  col1Split?: number;
   renderSlot: CenterGridRenderSlot;
 };
 
-/** Resolve the effective occupancy for a preset. Falls back to the
- *  store-level catalogue so callers do not have to import the store. */
+function is3x3(occ: GridOccupancy): boolean {
+  return occ.rows === 3 && occ.cols === 3;
+}
+
 function resolveOccupancy(preset: GridPresetId, occupancy?: GridOccupancy): GridOccupancy {
   if (occupancy) return occupancy;
   return DEFAULT_GRID_OCCUPANCY[preset];
 }
 
+function resolveRatios(props: CenterGridProps): GridRatios {
+  return {
+    outerSplit: props.outerSplit ?? DEFAULT_GRID_RATIOS.outerSplit,
+    innerTopSplit: props.innerTopSplit ?? DEFAULT_GRID_RATIOS.innerTopSplit,
+    innerBottomSplit: props.innerBottomSplit ?? DEFAULT_GRID_RATIOS.innerBottomSplit,
+    row0Split: props.row0Split ?? DEFAULT_GRID_RATIOS.row0Split,
+    row1Split: props.row1Split ?? DEFAULT_GRID_RATIOS.row1Split,
+    col0Split: props.col0Split ?? DEFAULT_GRID_RATIOS.col0Split,
+    col1Split: props.col1Split ?? DEFAULT_GRID_RATIOS.col1Split,
+  };
+}
+
 export function CenterGrid(props: CenterGridProps) {
   const occ = resolveOccupancy(props.preset, props.occupancy);
-  const outer = clamp01(props.outerSplit ?? 0.6);
-  const innerTop = clamp01(props.innerTopSplit ?? 0.5);
-  const innerBottom = clamp01(props.innerBottomSplit ?? 0.5);
+  const ratios = resolveRatios(props);
+
+  if (is3x3(occ)) {
+    return <Grid3x3 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} />;
+  }
+  return <Grid2x2 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} />;
+}
+
+// ---- 2×2 grid (legacy) ----
+
+function Grid2x2({
+  occ, ratios, renderSlot, preset,
+}: {
+  occ: GridOccupancy;
+  ratios: GridRatios;
+  renderSlot: CenterGridRenderSlot;
+  preset: GridPresetId;
+}) {
+  const outer = clamp01(ratios.outerSplit);
+  const innerTop = clamp01(ratios.innerTopSplit ?? 0.5);
+  const innerBottom = clamp01(ratios.innerBottomSplit ?? 0.5);
 
   return (
     <div
       data-testid="center-grid"
-      data-preset={props.preset}
+      data-preset={preset}
+      data-rows="2"
       className="center-grid"
       style={{ height: "100%", minHeight: 0 }}
     >
-      <Splitter
-        layout="vertical"
-        style={{ height: "100%" }}
-        data-testid="center-grid-outer-splitter"
-      >
+      <Splitter layout="vertical" style={{ height: "100%" }}>
         <Splitter.Panel
           defaultSize={`${Math.round(outer * 100)}%`}
           min="0%"
           data-testid="center-grid-top-row"
         >
-          {renderTopRow(occ.topLeft, occ.topRight, innerTop, props.renderSlot)}
+          {render2x2Row(occ.topLeft, occ.topRight, innerTop, renderSlot, "top")}
         </Splitter.Panel>
-        <Splitter.Panel
-          min="0%"
-          data-testid="center-grid-bottom-row"
-        >
-          {renderBottomRow(occ.bottomLeft, occ.bottomRight, innerBottom, props.renderSlot)}
+        <Splitter.Panel min="0%" data-testid="center-grid-bottom-row">
+          {render2x2Row(occ.bottomLeft, occ.bottomRight, innerBottom, renderSlot, "bottom")}
         </Splitter.Panel>
       </Splitter>
     </div>
   );
 }
 
-function renderTopRow(
-  topLeft: PanelKey | null,
-  topRight: PanelKey | null,
-  innerTopSplit: number,
+function render2x2Row(
+  left: PanelKey | null,
+  right: PanelKey | null,
+  split: number,
   renderSlot: CenterGridRenderSlot,
+  row: "top" | "bottom",
 ): ReactNode {
-  // If both cells hold the same panel (e.g. "topChat_bottomTerminal" with
-  // topLeft=topRight=chat) we render a single full-width cell — the
-  // visual effect of a full-width top row.
-  if (topLeft && topLeft === topRight) {
+  if (left && left === right) {
+    const testId = row === "top" ? "center-grid-top-full" : "center-grid-bottom-full";
     return (
-      <div data-testid="center-grid-top-full" data-panel={topLeft} style={{ height: "100%" }}>
-        {renderSlot(topLeft)}
+      <div data-testid={testId} data-panel={left} style={{ height: "100%" }}>
+        {renderSlot(left)}
       </div>
     );
   }
+  const testId = row === "top" ? "center-grid-top-splitter" : "center-grid-bottom-splitter";
+  const leftTestId = row === "top" ? "center-grid-top-left" : "center-grid-bottom-left";
+  const rightTestId = row === "top" ? "center-grid-top-right" : "center-grid-bottom-right";
   return (
-    <Splitter
-      layout="horizontal"
-      style={{ height: "100%" }}
-      data-testid="center-grid-top-splitter"
-    >
+    <Splitter layout="horizontal" style={{ height: "100%" }} data-testid={testId}>
       <Splitter.Panel
-        defaultSize={`${Math.round(innerTopSplit * 100)}%`}
+        defaultSize={`${Math.round(split * 100)}%`}
         min="0%"
-        data-testid="center-grid-top-left"
-        data-panel={topLeft ?? ""}
+        data-testid={leftTestId}
+        data-panel={left ?? ""}
       >
-        {renderSlot(topLeft)}
+        {renderSlot(left)}
       </Splitter.Panel>
-      <Splitter.Panel
-        min="0%"
-        data-testid="center-grid-top-right"
-        data-panel={topRight ?? ""}
-      >
-        {renderSlot(topRight)}
+      <Splitter.Panel min="0%" data-testid={rightTestId} data-panel={right ?? ""}>
+        {renderSlot(right)}
       </Splitter.Panel>
     </Splitter>
   );
 }
 
-function renderBottomRow(
-  bottomLeft: PanelKey | null,
-  bottomRight: PanelKey | null,
-  innerBottomSplit: number,
+// ---- 3×3 grid (v2.0) ----
+
+function Grid3x3({
+  occ, ratios, renderSlot, preset,
+}: {
+  occ: GridOccupancy;
+  ratios: GridRatios;
+  renderSlot: CenterGridRenderSlot;
+  preset: GridPresetId;
+}) {
+  const row0 = clamp01(ratios.row0Split ?? 0.33);
+  const row1 = clamp01(ratios.row1Split ?? 0.34);
+  // row2 gets the remainder (1 - row0 - row1)
+  const row2Percent = Math.max(0, Math.round((1 - row0 - row1) * 100));
+  const col0 = clamp01(ratios.col0Split ?? 0.33);
+  const col1 = clamp01(ratios.col1Split ?? 0.34);
+  const col2Percent = Math.max(0, Math.round((1 - col0 - col1) * 100));
+
+  const rows: Array<[PanelKey | null, PanelKey | null, PanelKey | null]> = [
+    [occ.r0c0 ?? null, occ.r0c1 ?? null, occ.r0c2 ?? null],
+    [occ.r1c0 ?? null, occ.r1c1 ?? null, occ.r1c2 ?? null],
+    [occ.r2c0 ?? null, occ.r2c1 ?? null, occ.r2c2 ?? null],
+  ];
+
+  return (
+    <div
+      data-testid="center-grid"
+      data-preset={preset}
+      data-rows="3"
+      className="center-grid"
+      style={{ height: "100%", minHeight: 0 }}
+    >
+      <Splitter layout="vertical" style={{ height: "100%" }}>
+        <Splitter.Panel
+          defaultSize={`${Math.round(row0 * 100)}%`}
+          min="0%"
+          data-testid="center-grid-row-0"
+        >
+          {render3x3Row(rows[0], col0, col1, col2Percent, renderSlot, 0)}
+        </Splitter.Panel>
+        <Splitter.Panel
+          defaultSize={`${Math.round(row1 * 100)}%`}
+          min="0%"
+          data-testid="center-grid-row-1"
+        >
+          {render3x3Row(rows[1], col0, col1, col2Percent, renderSlot, 1)}
+        </Splitter.Panel>
+        <Splitter.Panel
+          defaultSize={`${row2Percent}%`}
+          min="0%"
+          data-testid="center-grid-row-2"
+        >
+          {render3x3Row(rows[2], col0, col1, col2Percent, renderSlot, 2)}
+        </Splitter.Panel>
+      </Splitter>
+    </div>
+  );
+}
+
+function render3x3Row(
+  cells: [PanelKey | null, PanelKey | null, PanelKey | null],
+  col0: number,
+  col1: number,
+  col2Percent: number,
   renderSlot: CenterGridRenderSlot,
+  rowIdx: number,
 ): ReactNode {
-  if (bottomLeft && bottomLeft === bottomRight) {
+  // Full-row span: all 3 cells are the same panel (non-null).
+  if (cells[0] && cells[0] === cells[1] && cells[1] === cells[2]) {
     return (
-      <div data-testid="center-grid-bottom-full" data-panel={bottomLeft} style={{ height: "100%" }}>
-        {renderSlot(bottomLeft)}
+      <div
+        data-testid={`center-grid-row-${rowIdx}-full`}
+        data-panel={cells[0]}
+        style={{ height: "100%" }}
+      >
+        {renderSlot(cells[0])}
       </div>
     );
   }
   return (
-    <Splitter
-      layout="horizontal"
-      style={{ height: "100%" }}
-      data-testid="center-grid-bottom-splitter"
-    >
+    <Splitter layout="horizontal" style={{ height: "100%" }} data-testid={`center-grid-row-${rowIdx}-splitter`}>
       <Splitter.Panel
-        defaultSize={`${Math.round(innerBottomSplit * 100)}%`}
+        defaultSize={`${Math.round(col0 * 100)}%`}
         min="0%"
-        data-testid="center-grid-bottom-left"
-        data-panel={bottomLeft ?? ""}
+        data-testid={`center-grid-r${rowIdx}c0`}
+        data-panel={cells[0] ?? ""}
       >
-        {renderSlot(bottomLeft)}
+        {renderSlot(cells[0])}
       </Splitter.Panel>
       <Splitter.Panel
+        defaultSize={`${Math.round(col1 * 100)}%`}
         min="0%"
-        data-testid="center-grid-bottom-right"
-        data-panel={bottomRight ?? ""}
+        data-testid={`center-grid-r${rowIdx}c1`}
+        data-panel={cells[1] ?? ""}
       >
-        {renderSlot(bottomRight)}
+        {renderSlot(cells[1])}
+      </Splitter.Panel>
+      <Splitter.Panel
+        defaultSize={`${col2Percent}%`}
+        min="0%"
+        data-testid={`center-grid-r${rowIdx}c2`}
+        data-panel={cells[2] ?? ""}
+      >
+        {renderSlot(cells[2])}
       </Splitter.Panel>
     </Splitter>
   );
 }
+
+// ---- helpers ----
 
 function clamp01(v: number): number {
   if (Number.isNaN(v)) return 0;
@@ -175,20 +259,16 @@ function clamp01(v: number): number {
   return v;
 }
 
-// Pure helper (exported for tests) — encodes the shape of a preset into a
-// label of which cells are merged into a "full" row. The render layer
-// uses this so test assertions can describe the rendered DOM without
-// walking the tree.
+// Pure helper (exported for tests) — encodes the shape of a preset.
 export type PresetShape =
   | "topFull-bottomFull"
   | "topSplit-bottomFull"
   | "topFull-bottomSplit"
   | "topSplit-bottomSplit"
-  | "topSplit-bottomSplit-symmetric";
+  | "grid3x3";
 
-export function presetShape(
-  occ: GridOccupancy,
-): PresetShape {
+export function presetShape(occ: GridOccupancy): PresetShape {
+  if (is3x3(occ)) return "grid3x3";
   const topFull = occ.topLeft !== null && occ.topLeft === occ.topRight;
   const bottomFull = occ.bottomLeft !== null && occ.bottomLeft === occ.bottomRight;
   if (topFull && bottomFull) return "topFull-bottomFull";

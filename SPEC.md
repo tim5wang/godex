@@ -10,6 +10,22 @@
   - 任务中心:当前是 `ChatPage` 内置的顶栏(`任务中心 / 0运行中 / 0已阻塞 / 0待审核 / 0已合并 / 0失败`)
   - 现有抽屉视图:由 `app/...` 提供的全局 Drawer 触发(用现有协议,不重写抽屉内容)
 
+## 0. 当前进展快照(2026-06-13)
+
+> 本节是实现进展索引,不替代下面的产品设计。详细接手记录见 `M0-WEB-IDE-EXPERIENCE.md`。
+
+- **M0 IDE 基础已完成**:布局 store、AppNav 折叠、SessionList 折叠、任务中心 chip + Drawer、FilesPanel 双模式、CenterGrid、移动端二级 Tab、TerminalPanel、布局持久化、i18n 与基础验收均已落地。
+- **M1+ candidate A 已完成**:Terminal 已从前端 mock/polling fallback 升级为真实 Go PTY HTTP client + 后端 terminal routes。
+- **M1+ candidate C 已部分完成**:store 与 CenterGrid 已支持 3x3 preset,但“任意拖拽布局 / 右键移动面板”的完整用户交互仍未完成。
+- **崩溃修复已完成**:修复 Chat React #185、Files React #306,并加固 Playwright 验收,避免错误边界页面被误判为通过。
+- **仍需后续推进**:把最近的 debug/isolate 提交整理成干净历史;恢复/重新评估 `ChatWorkspaceCanvas` 生产路径;补齐面板移动 UI、真实截图回归与可能的一级 AppNav 新 SPEC。
+
+状态标记:
+
+- `[x]` 已完成并有测试/构建验证。
+- `[~]` 部分完成,核心状态或底层能力已落地,但交互/集成仍缺。
+- `[ ]` 未开始或需要新 SPEC 重新定义。
+
 ---
 
 ## 1. 现状摘要(基于截图 + 代码摸排)
@@ -268,30 +284,48 @@ type LayoutState = {
 
 ## 8. 实施分阶段(与 §9 任务清单对应)
 
-| 阶段 | 内容 | 验证方式 |
-|---|---|---|
-| P0 | `WorkspaceShell` 骨架 + AppNav/Session 折叠 + CenterGrid 2×2 + 5 种预设 + 移动端二级 Tab(不改造一级 AppNav) | 截图、单元测试 |
-| P1 | 任务中心抽离 + 顶栏 chip 化 | 视觉/数据一致性 |
-| P2 | 文件 panel 内嵌(dock / 网格内) | 路由直链兼容 + dock 行为 |
-| P3 | Terminal panel(xterm + 后端协议) | 能跑通 `ls` 等命令 |
-| P4 | 布局持久化 + 快捷键 + i18n | 刷新、跨路由保留 |
+| 阶段 | 状态 | 内容 | 当前实现/验证 |
+|---|---:|---|---|
+| P0 | [x] | `WorkspaceShell` 骨架 + AppNav/Session 折叠 + CenterGrid 2×2 + 5 种预设 + 移动端二级 Tab(不改造一级 AppNav) | 未抽出独立 `WorkspaceShell.tsx`,但等价能力已分布在 `App.tsx`、`ChatWorkspaceCanvas.tsx`、`CenterGrid.tsx`、`MobileWorkspaceTabs.tsx`;有 layout / centerGrid / mobile tabs 单测 |
+| P1 | [x] | 任务中心抽离 + 顶栏 chip 化 | `features/tasks` selector/chip/context/drawer bridge 已落地;chip 打开 Drawer 显示任务中心内容 |
+| P2 | [x] | 文件 panel 内嵌(dock / 网格内) | `FilesPanel mode="dock" | "page"` 已落地;`/files` 路由兼容;移动端 files tab 使用 dock panel |
+| P3 | [x] | Terminal panel(xterm + 后端协议) | `TerminalPanel` + `terminalClient.ts` + Go HTTP terminal routes 已落地;M1+ 已替换 mock client |
+| P4 | [x] | 布局持久化 + 快捷键 + i18n | `layoutPersistence.ts`、跨 tab storage sync、`Ctrl/Cmd+\``、en/zh 文案与测试已落地 |
+| M1-B | [x] | Playwright 验收基础设施 | `ui/web/e2e` 已加入;已加固错误边界断言,desktop/mobile project 可跑 |
+| M1-C | [~] | 3×3 / 4 象限网格 | 3x3 preset 的 store/renderer/test 已落地;4 象限和任意拖拽布局未做 |
 
 ---
 
 ## 9. 任务清单(将由 TDD 流程拆分)
 
-> 这里只列验收点,具体用例与实现步骤在 spec 确认后落到 TDD plan。
+> 这里按当前代码状态标注。已完成项仍可能需要视觉 polish,但核心能力与测试已落地。
 
-- [ ] T1:WorkspaceShell 组件 + 折叠/书签条交互;CenterGrid 2×2 网格 + 5 种预设
-- [ ] T2:AppNav collapsible(`components/Sidebar.tsx` 改造)
-- [ ] T3:SessionList collapsible + 折叠态下浮层入口
-- [ ] T4:聊天 header 顶栏重排(任务 chip / 抽屉入口 / 菜单)
-- [ ] T5:`features/tasks` 模块拆分 + 顶栏 chip 实时角标
-- [ ] T6:文件 panel `mode="dock"` + 与 `FilesPage` 复用
-- [ ] T7:Terminal panel + xterm 集成 + 后端通讯(可降级);支持在 2×2 网格的任意格子里安放
-- [ ] T8:`store/layout.ts` 持久化 + 跨 tab 同步
-- [ ] T9:移动端二级 Tab 导航(Workspace 内子视图) + 断点适配;不改造一级 AppNav
-- [ ] T10:i18n 文案 + 可访问性(键盘可达、aria-label)
-- [ ] T11:Vitest 单元测试(reducer、布局、折叠、网格预设)
-- [ ] T12:Playwright/手动截图回归(PC 各预设 + Mobile 各一套)
-- [ ] T13:网格预设切换 + 拖拽分隔条 + 双击收起;面板在不同格子间移动(右键菜单或拖拽标题栏)
+- [~] T1:WorkspaceShell 组件 + 折叠/书签条交互;CenterGrid 2×2 网格 + 5 种预设
+  - 已完成:AppNav/Session/CenterGrid/MobileTabs 的等价工作区骨架、2×2 preset、基础折叠。
+  - 未完成:独立 `WorkspaceShell.tsx` 命名组件、完整书签条统一抽象。
+- [x] T2:AppNav collapsible(`components/Sidebar.tsx` / `App.tsx` 改造)
+- [x] T3:SessionList collapsible + 折叠态下浮层入口
+- [x] T4:聊天 header 顶栏重排(任务 chip / 抽屉入口 / 菜单)
+- [x] T5:`features/tasks` 模块拆分 + 顶栏 chip 实时角标
+- [x] T6:文件 panel `mode="dock"` + 与 `FilesPage` 复用
+- [x] T7:Terminal panel + xterm 集成 + 后端通讯;支持在网格和移动端 Tab 中安放
+  - M0 v1:前端 polling fallback。
+  - M1+ v2:真实 Go PTY HTTP client + backend routes。
+- [x] T8:`store/layout.ts` 持久化 + 跨 tab 同步
+- [x] T9:移动端二级 Tab 导航(Workspace 内子视图) + 断点适配;不改造一级 AppNav
+- [x] T10:i18n 文案 + 可访问性(键盘可达、aria-label)
+- [x] T11:Vitest 单元测试(reducer、布局、折叠、网格预设)
+- [x] T12:Playwright/手动截图回归(PC 各预设 + Mobile 各一套)
+  - 已完成:Playwright 验收基础设施 + desktop/mobile route smoke + 错误边界断言。
+  - 后续可选:真正截图 diff/视觉基线。
+- [~] T13:网格预设切换 + 拖拽分隔条 + 双击收起;面板在不同格子间移动(右键菜单或拖拽标题栏)
+  - 已完成:store preset 切换、ratio 持久化、双击收起 pure helper、3x3 preset、`movePanelToGrid` / `swapPanelInGrid` store actions。
+  - 未完成:标题栏右键菜单、拖拽目标高亮、用户可见的面板移动 UI。
+
+## 10. 下一步建议
+
+1. **先整理最近提交历史**:把 debug/isolate/patch 提交压成清晰的 crash fix 和 e2e hardening,避免远端历史包含排障噪声。
+2. **恢复并验证 `ChatWorkspaceCanvas` 生产路径**:最近为隔离 React #185 暂时 bypass 过,需要决定是恢复网格默认体验,还是把 flat layout 明确写成临时降级策略。
+3. **推进 T13 剩余交互**:基于现有 `movePanelToGrid` / `swapPanelInGrid` store actions,做标题栏菜单优先,拖拽高亮后置。
+4. **补视觉回归**:在现有 Playwright 基础上加固定 viewport 截图,覆盖 PC 默认布局、3x3 preset、mobile tabs、任务 Drawer 和 terminal。
+5. **如要改一级 AppNav**,另开新 SPEC:当前 SPEC 明确不改造一级 AppNav,不要混入本工作区升级尾项。

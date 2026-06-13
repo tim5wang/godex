@@ -548,7 +548,26 @@ samp {
 
 .center-grid-shell {
   position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-height: 0;
+}
+
+.center-grid-bookmarks {
+  display: flex;
+  flex: 0 0 34px;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--godex-border);
+  padding: 4px 8px;
+  background: var(--godex-panel);
+  overflow: hidden;
+}
+
+.center-grid {
+  flex: 1 1 auto;
   min-height: 0;
 }
 

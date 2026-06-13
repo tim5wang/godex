@@ -139,8 +139,16 @@
 - [x] Wire the actual ChatPage session list to the layout store collapse rail.
 - [x] Fix FilesPanel dock collapse/expand to toggle the collapsed flag, not only width.
 - [x] Add Playwright coverage for terminal input, file switching, shared inspector TaskCenter entry, CenterGrid bookmarks, and session rail collapse.
+- [x] Reduce splitter drag jank by previewing ratios locally during resize and committing persisted layout on resize end.
+- [x] Convert near-zero 2×2 splitter drags into bookmark collapse and restore the splitter to the latest recoverable ratio.
+- [x] Allow the chat panel to collapse to the CenterGrid bookmark bar and restore from it.
+- [x] Keep the CenterGrid bookmark bar mounted even when no panel is currently bookmarked.
+- [x] Add FilesPanel tree collapse inside the grid-hosted dock.
+- [x] Use a side-by-side files tree + preview layout instead of stacking them vertically in wide grid cells.
 
 **Verified:**
 - `pnpm --dir ui/web typecheck`
 - `pnpm --dir ui/web test -- layoutStore.test.ts`
 - `pnpm --dir ui/web test:e2e --project=chromium-desktop --grep "collapses to a bookmark|Session list collapses|switches preview|terminal panel sends|Task center chip|Shared inspector"`
+- `pnpm --dir ui/web typecheck && pnpm --dir ui/web test:e2e --project=chromium-desktop --grep "chat panel collapses|collapsible side-by-side|files panel collapses|files panel renders|splitter drag ratio"`
+- `pnpm --dir ui/web typecheck && pnpm --dir ui/web test:e2e --project=chromium-desktop --grep "near-zero drag collapses"`

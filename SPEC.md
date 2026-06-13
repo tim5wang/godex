@@ -16,9 +16,9 @@
 
 - **M0 IDE 基础已完成**:布局 store、AppNav 折叠、SessionList 折叠、任务中心 chip + 共享右侧 inspector 抽屉、FilesPanel 双模式、CenterGrid、移动端二级 Tab、TerminalPanel、布局持久化、i18n 与基础验收均已落地。
 - **M1+ candidate A 已完成**:Terminal 已从前端 mock/polling fallback 升级为真实 Go PTY HTTP client + 后端 terminal routes。
-- **M1+ candidate C 已进一步推进**:store 与 CenterGrid 已支持 3x3 preset;2x2/3x3 面板标题栏菜单、标题栏拖拽/目标高亮、slot-to-slot swap、面板折叠到书签并恢复已落地;2x2 splitter 拖拽比例持久化与双击收起/恢复已接入。4 象限与任意拖拽布局仍作为后续议题。
-- **崩溃与截图可用性修复已完成**:修复 Chat React #185、Files React #306;补齐 workspace header 有效信息、grid files 预览/附加到 composer/多文件切换、chat composer 贴底、terminal 状态可见且可输入执行、TaskCenter 并入右侧 inspector Tab 且复用任务中心 chip 折叠/展开;并加固 Playwright 验收,避免错误边界页面被误判为通过。
-- **仍需后续推进**:把最近的 debug/isolate/feature 提交整理成干净历史;把目前分散在 CenterGrid/Session/Files 的书签条实现收敛成统一抽象;补真实截图 diff/视觉基线;继续评估 M1-C 的 4 象限/任意布局与可能的一级 AppNav 新 SPEC。
+- **M1+ candidate C 已进一步推进**:store 与 CenterGrid 已支持 3x3 preset;2x2/3x3 面板标题栏菜单、标题栏拖拽/目标高亮、slot-to-slot swap、面板折叠到书签并恢复已落地;2x2 splitter 拖拽比例持久化与双击收起/恢复已接入;拖拽过程改为本地预览、松手后持久化,降低 resize 卡顿;拖拽到接近 0/100% 时自动折叠对应面板为书签,恢复时回到最近安全比例。4 象限与任意拖拽布局仍作为后续议题。
+- **崩溃与截图可用性修复已完成**:修复 Chat React #185、Files React #306;补齐 workspace header 有效信息、grid files 预览/附加到 composer/多文件切换、chat composer 贴底、terminal 状态可见且可输入执行、TaskCenter 并入右侧 inspector Tab 且复用任务中心 chip 折叠/展开;CenterGrid 顶部书签条保持常驻,chat/files/terminal 均可折叠成书签并恢复;FilesPanel 文件树可折叠,宽屏下文件树与预览左右并排;并加固 Playwright 验收,避免错误边界页面被误判为通过。
+- **仍需后续推进**:把最近的 debug/isolate/feature 提交整理成干净历史;把目前分散在 CenterGrid/Session/Files 的书签条实现收敛成统一抽象和统一角标策略;补真实截图 diff/视觉基线;继续评估 M1-C 的 4 象限/任意布局与可能的一级 AppNav 新 SPEC。
 
 状态标记:
 
@@ -97,6 +97,7 @@
 >   5. `single` —— 单格 chat(terminal/files 都折叠成 0,获得最大聊天空间)。
 > - 网格的 **拆分条** 由 antd `Splitter` 嵌套两次实现(一次外层、一次内层),任何一条都可以:
 >   - **拖拽** 改比例(0~1)。
+>   - 拖拽到接近 0/100% 时,不持久化不可恢复的 0 尺寸,而是把对应面板或行折叠成 CenterGrid 书签;点击书签恢复到最近一次非极端比例。
 >   - **双击** 收起成 0(等同隐藏该格);再双击恢复。
 >   - 比例持久化。
 > - **面板可在格子间移动**:右键格子标题栏 → "移动到 → 上左/上右/下左/下整行"等;或直接拖拽标题栏到目标格子的边缘,出现高亮占位后松手。
@@ -104,7 +105,7 @@
 > - 终端面板与聊天面板的"是否同源"是独立的:terminal 与 chat session 解耦,关闭 chat 不会关掉 terminal;关闭 terminal 不影响 chat。
 
 **面板占用约定**(一个面板在 Workspace 内只能出现一次):
-- `chat` 必占一格(主格,不能被隐藏成 0,但可被 resize)。
+- `chat` 默认占一格(主格),可被折叠成 CenterGrid 顶部书签并恢复,但不能从 occupancy 中删除。
 - `terminal` 默认占一格(可被收起成 0)。
 - `files / tasks / drawer / skills / memory` 抢剩下的格子;超出时,优先放 Dock 区,放不下时给出"Workspace 已满,先收起某个面板"的提示。
 
@@ -160,8 +161,9 @@
 - `mode="page"` 维持现有 `FilesPage`(移动端 + 旧菜单仍可用)。
 - `mode="dock"` 提供:
   - 顶部工具条:`新建文件夹 / 上传 / 搜索 / 路径面包屑`
-  - 左侧树(默认折叠为图标)
+  - 左侧树(可折叠为 40px 图标列)
   - 右侧预览/编辑器(支持 markdown / 代码只读预览,不重写编辑器)
+  - 在网格内宽屏展示时,文件树与预览保持左右并排,避免上下堆叠浪费横向空间。
 - 挂载位置:Workspace 网格的任一格,或 Dock 区右侧;移动端二级 Tab `📁 文件` 直接走 `mode="dock"`。
 - 文件/目录的数据接口不变(走 `features/files` 已有的 `lib/api.ts`)。
 
@@ -188,7 +190,7 @@
 `store/layout.ts`(新增,zustand):
 
 ```ts
-type PanelKey = "appNav" | "sessions" | "tasks" | "files" | "terminal" | "drawer";
+type PanelKey = "appNav" | "sessions" | "chat" | "tasks" | "files" | "terminal" | "drawer";
 type PanelState = { collapsed: boolean; width?: number; visible: boolean };
 type GridPresetId =
   | "topChat_bottomTerminal"
@@ -297,13 +299,13 @@ type LayoutState = {
 > 这里按当前代码状态标注。已完成项仍可能需要视觉 polish,但核心能力与测试已落地。
 
 - [~] T1:WorkspaceShell 组件 + 折叠/书签条交互;CenterGrid 2×2 网格 + 5 种预设
-  - 已完成:独立 `WorkspaceShell.tsx`、AppNav/Session/CenterGrid/MobileTabs 的等价工作区骨架、2×2 preset、基础折叠;CenterGrid 非 chat 面板可折叠成顶部书签并恢复;SessionList 可收起为 40px rail。
-  - 未完成:把 CenterGrid/Session/Files 当前分散实现收敛为完整书签条统一抽象。
+  - 已完成:独立 `WorkspaceShell.tsx`、AppNav/Session/CenterGrid/MobileTabs 的等价工作区骨架、2×2 preset、基础折叠;CenterGrid chat/files/terminal 可折叠成顶部书签并恢复,书签条常驻不消失;SessionList 可收起为 40px rail。
+  - 未完成:把 CenterGrid/Session/Files 当前分散实现收敛为完整书签条统一抽象和统一角标策略。
 - [x] T2:AppNav collapsible(`components/Sidebar.tsx` / `App.tsx` 改造)
 - [x] T3:SessionList collapsible + 折叠态下浮层入口
 - [x] T4:聊天 header 顶栏重排(任务 chip / 共享 inspector 入口 / 菜单)
 - [x] T5:`features/tasks` 模块拆分 + 顶栏 chip 实时角标
-- [x] T6:文件 panel `mode="dock"` + 与 `FilesPage` 复用
+- [x] T6:文件 panel `mode="dock"` + 与 `FilesPage` 复用;网格内支持文件树折叠和树/预览左右并排
 - [x] T7:Terminal panel + xterm 集成 + 后端通讯;支持在网格和移动端 Tab 中安放
   - M0 v1:前端 polling fallback。
   - M1+ v2:真实 Go PTY HTTP client + backend routes。
@@ -315,7 +317,7 @@ type LayoutState = {
   - 已完成:Playwright 验收基础设施 + desktop/mobile route smoke + 错误边界断言 + 截图反馈问题的功能验收覆盖。
   - 未完成:真正截图 diff/视觉基线。
 - [x] T13:网格预设切换 + 拖拽分隔条 + 双击收起;面板在不同格子间移动(右键菜单或拖拽标题栏)
-  - 已完成:store preset 切换、ratio 持久化、splitter 拖拽回写、双击收起/恢复、3x3 preset、`movePanelToGrid` / `swapPanelInGrid` / `swapGridSlots` store actions、标题栏菜单、标题栏拖拽、目标高亮、用户可见反馈、非 chat 面板折叠成书签并恢复。
+  - 已完成:store preset 切换、ratio 持久化、splitter 本地预览/松手持久化、接近 0/100% 的拖拽自动转书签折叠并用最近安全比例恢复、双击收起/恢复、3x3 preset、`movePanelToGrid` / `swapPanelInGrid` / `swapGridSlots` store actions、标题栏菜单、标题栏拖拽、目标高亮、用户可见反馈、chat/files/terminal 面板折叠成书签并恢复。
 
 ## 10. 下一步建议
 

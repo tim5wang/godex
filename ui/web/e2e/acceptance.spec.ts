@@ -67,6 +67,7 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
   });
 
   test("CenterGrid files panel renders expanded inside the grid", async ({ page }) => {
+    await expect(page.locator('[data-testid="center-grid-bookmarks"]')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
     await expect(page.locator('[data-testid="files-panel-dock"]')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('[data-testid="files-panel-dock-collapsed"]')).toHaveCount(0);
@@ -81,6 +82,36 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     await page.locator('[data-testid="center-grid-bookmark-files"]').click();
     await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
     await expect(page.locator('[data-testid="files-panel-dock"]')).toBeVisible({ timeout: 5000 });
+  });
+
+  test("CenterGrid chat panel collapses to a bookmark and restores", async ({ page }) => {
+    await page.locator('[data-testid="center-grid-panel-collapse-topRight"]').click();
+    await expect(page.locator('[data-testid="center-grid-panel-topRight"]')).toHaveAttribute("data-panel", "");
+    await expect(page.locator('[data-testid="center-grid-bookmarks"]')).toBeVisible();
+    await expect(page.locator('[data-testid="center-grid-bookmark-chat"]')).toBeVisible({ timeout: 3000 });
+
+    await page.locator('[data-testid="center-grid-bookmark-chat"]').click();
+    await expect(page.locator('[data-testid="center-grid-panel-topRight"]')).toHaveAttribute("data-panel", "chat");
+    await expect(page.locator(".chat-composer")).toBeVisible({ timeout: 5000 });
+  });
+
+  test("CenterGrid files panel uses a collapsible side-by-side file tree", async ({ page }) => {
+    const tree = page.locator('[data-testid="files-panel-tree"]');
+    const preview = page.locator('[data-testid="files-panel-preview-pane"]');
+    await expect(tree).toBeVisible({ timeout: 5000 });
+    await expect(preview).toBeVisible({ timeout: 5000 });
+    const treeBox = await tree.boundingBox();
+    const previewBox = await preview.boundingBox();
+    expect(treeBox).not.toBeNull();
+    expect(previewBox).not.toBeNull();
+    expect(treeBox!.x + treeBox!.width).toBeLessThanOrEqual(previewBox!.x + 4);
+    expect(Math.abs(treeBox!.y - previewBox!.y)).toBeLessThan(48);
+
+    await page.locator('[data-testid="files-panel-tree-collapse"]').click();
+    await expect(page.locator('[data-testid="files-panel-tree-collapsed"]')).toBeVisible({ timeout: 3000 });
+    await expect(tree).toHaveCount(0);
+    await page.locator('[data-testid="files-panel-tree-collapsed"] button').click();
+    await expect(tree).toBeVisible({ timeout: 3000 });
   });
 
   test("CenterGrid files panel previews and attaches selected files", async ({ page }) => {
@@ -163,6 +194,27 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
       return raw ? JSON.parse(raw).centerGridRatios.outerSplit as number : null;
     });
     expect(afterReload).toBeCloseTo(persisted!, 2);
+  });
+
+  test("CenterGrid splitter near-zero drag collapses to a restorable bookmark", async ({ page }) => {
+    const topDragger = page.locator('.center-grid-top-splitter .ant-splitter-bar .ant-splitter-bar-dragger').first();
+    await expect(topDragger).toBeVisible({ timeout: 5000 });
+    const box = await topDragger.boundingBox();
+    expect(box).not.toBeNull();
+
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(1, box!.y + box!.height / 2, { steps: 10 });
+    await page.mouse.up();
+
+    await expect(page.locator('[data-testid="center-grid-bookmark-files"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "");
+    await page.locator('[data-testid="center-grid-bookmark-files"]').click();
+    await expect(page.locator('[data-testid="center-grid-panel-topLeft"]')).toHaveAttribute("data-panel", "files");
+
+    const restoredBox = await page.locator('[data-testid="center-grid-panel-topLeft"]').boundingBox();
+    expect(restoredBox).not.toBeNull();
+    expect(restoredBox!.width).toBeGreaterThan(80);
   });
 
   test("CenterGrid panel titlebar drag swaps panels", async ({ page }) => {

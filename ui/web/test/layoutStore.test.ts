@@ -239,9 +239,15 @@ describe("center grid panel bookmarks", () => {
     expect(useLayoutStore.getState().centerGrid).toEqual(before);
   });
 
-  it("does not collapse the pinned chat panel into a bookmark", () => {
+  it("collapses and restores chat as a bookmark without changing occupancy", () => {
+    const before = { ...useLayoutStore.getState().centerGrid };
     useLayoutStore.getState().setCenterGridPanelCollapsed("chat", true);
+    expect(useLayoutStore.getState().centerGridCollapsedPanels.chat).toBe(true);
+    expect(useLayoutStore.getState().centerGrid).toEqual(before);
+
+    useLayoutStore.getState().setCenterGridPanelCollapsed("chat", false);
     expect(useLayoutStore.getState().centerGridCollapsedPanels.chat).toBeUndefined();
+    expect(useLayoutStore.getState().centerGrid).toEqual(before);
   });
 
   it("clears panel bookmarks when switching preset", () => {

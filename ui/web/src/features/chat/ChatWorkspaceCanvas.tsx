@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Space } from "antd";
+import { Button } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
 import { CenterGrid, panelLabel, slotLabel, type CenterGridRenderSlot } from "../../components/workspace/CenterGrid";
 import { useLayoutStore, type GridOccupancy, type PanelKey } from "../../store/layout";
@@ -71,7 +71,7 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
   };
 
   const visibleOccupancy = hideCollapsedPanels(occupancy, collapsedPanels);
-  const bookmarkPanels = panelsInOccupancy(occupancy).filter((panel) => panel !== "chat" && collapsedPanels[panel]);
+  const bookmarkPanels = panelsInOccupancy(occupancy).filter((panel) => collapsedPanels[panel]);
 
   const renderSlot: CenterGridRenderSlot = (panel) => {
     if (panel === null) {
@@ -140,21 +140,19 @@ export function ChatWorkspaceCanvas(props: ChatWorkspaceCanvasProps) {
 
   return (
     <div className="center-grid-shell">
-      {bookmarkPanels.length > 0 ? (
-        <Space className="center-grid-bookmarks" size={6} wrap data-testid="center-grid-bookmarks">
-          {bookmarkPanels.map((panel) => (
-            <Button
-              key={panel}
-              size="small"
-              icon={<FolderOpenOutlined />}
-              data-testid={`center-grid-bookmark-${panel}`}
-              onClick={() => setCenterGridPanelCollapsed(panel, false)}
-            >
-              {panelLabel(panel)}
-            </Button>
-          ))}
-        </Space>
-      ) : null}
+      <div className="center-grid-bookmarks" data-testid="center-grid-bookmarks">
+        {bookmarkPanels.map((panel) => (
+          <Button
+            key={panel}
+            size="small"
+            icon={<FolderOpenOutlined />}
+            data-testid={`center-grid-bookmark-${panel}`}
+            onClick={() => setCenterGridPanelCollapsed(panel, false)}
+          >
+            {panelLabel(panel)}
+          </Button>
+        ))}
+      </div>
       <CenterGrid
         preset={preset}
         occupancy={visibleOccupancy}

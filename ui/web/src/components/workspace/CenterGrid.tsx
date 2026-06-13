@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent, type MouseEvent, type MutableRefObject, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type MouseEvent, type MutableRefObject, type ReactNode } from "react";
 import { Button, Dropdown, Splitter, type MenuProps } from "antd";
 import { CompressOutlined, MoreOutlined } from "@ant-design/icons";
 import {
@@ -44,6 +44,8 @@ type CenterGridDragState = {
   overSlot: CenterGridCellSlot | null;
 };
 
+const COLLAPSE_RATIO_THRESHOLD = 0.06;
+
 export type CenterGridProps = {
   preset: GridPresetId;
   occupancy?: GridOccupancy;
@@ -85,20 +87,52 @@ function resolveRatios(props: CenterGridProps): GridRatios {
 
 export function CenterGrid(props: CenterGridProps) {
   const occ = resolveOccupancy(props.preset, props.occupancy);
-  const ratios = resolveRatios(props);
+  const persistedRatios = resolveRatios(props);
+  const [draftRatios, setDraftRatios] = useState<Partial<GridRatios> | null>(null);
+  const ratios: GridRatios = { ...persistedRatios, ...(draftRatios ?? {}) };
   const [dragState, setDragState] = useState<CenterGridDragState>({ dragging: null, overSlot: null });
   const dragRef = useRef<DraggedPanel | null>(null);
+  const recoverRatiosRef = useRef<GridRatios>({ ...DEFAULT_GRID_RATIOS, ...persistedRatios });
+  const ratioSignature = JSON.stringify(persistedRatios);
+
+  useEffect(() => {
+    setDraftRatios(null);
+    recoverRatiosRef.current = rememberRecoverableRatios(recoverRatiosRef.current, persistedRatios);
+  }, [ratioSignature, props.preset]);
+
+  const previewGridRatios = (nextRatios: Partial<GridRatios>) => {
+    setDraftRatios((current) => ({ ...(current ?? {}), ...nextRatios }));
+  };
+
+  const commitGridRatios = (nextRatios: Partial<GridRatios>) => {
+    const safeRatios = sanitizeCommittedRatios(nextRatios, recoverRatiosRef.current);
+    recoverRatiosRef.current = rememberRecoverableRatios(recoverRatiosRef.current, safeRatios);
+    setDraftRatios((current) => ({ ...(current ?? {}), ...safeRatios }));
+    props.onGridRatiosChange?.(safeRatios);
+  };
+
+  const collapsePanelsAndRecoverRatio = (panels: Array<{ panel: PanelKey | null; slot: CenterGridCellSlot }>, nextRatios: Partial<GridRatios>) => {
+    const safeRatios = recoverCommittedRatios(nextRatios, recoverRatiosRef.current);
+    const seen = new Set<PanelKey>();
+    for (const { panel, slot } of panels) {
+      if (!panel || seen.has(panel)) continue;
+      seen.add(panel);
+      props.onPanelCollapse?.(panel, slot);
+    }
+    setDraftRatios((current) => ({ ...(current ?? {}), ...safeRatios }));
+    props.onGridRatiosChange?.(safeRatios);
+  };
 
   if (is3x3(occ)) {
-    return <Grid3x3 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onPanelCollapse={props.onPanelCollapse} onGridRatiosChange={props.onGridRatiosChange} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
+    return <Grid3x3 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onPanelCollapse={props.onPanelCollapse} onGridRatiosPreview={previewGridRatios} onGridRatiosCommit={commitGridRatios} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
   }
-  return <Grid2x2 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onPanelCollapse={props.onPanelCollapse} onGridRatiosChange={props.onGridRatiosChange} onGridRowCollapseToggle={props.onGridRowCollapseToggle} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
+  return <Grid2x2 occ={occ} ratios={ratios} renderSlot={props.renderSlot} preset={props.preset} onPanelMove={props.onPanelMove} onPanelCollapse={props.onPanelCollapse} onGridRatiosPreview={previewGridRatios} onGridRatiosCommit={commitGridRatios} onGridNearZeroCollapse={collapsePanelsAndRecoverRatio} onGridRowCollapseToggle={props.onGridRowCollapseToggle} dragState={dragState} setDragState={setDragState} dragRef={dragRef} />;
 }
 
 // ---- 2×2 grid (legacy) ----
 
 function Grid2x2({
-  occ, ratios, renderSlot, preset, onPanelMove, onPanelCollapse, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef,
+  occ, ratios, renderSlot, preset, onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, onGridNearZeroCollapse, onGridRowCollapseToggle, dragState, setDragState, dragRef,
 }: {
   occ: GridOccupancy;
   ratios: GridRatios;
@@ -106,7 +140,9 @@ function Grid2x2({
   preset: GridPresetId;
   onPanelMove?: CenterGridProps["onPanelMove"];
   onPanelCollapse?: CenterGridProps["onPanelCollapse"];
-  onGridRatiosChange?: CenterGridProps["onGridRatiosChange"];
+  onGridRatiosPreview?: (ratios: Partial<GridRatios>) => void;
+  onGridRatiosCommit?: (ratios: Partial<GridRatios>) => void;
+  onGridNearZeroCollapse?: (panels: Array<{ panel: PanelKey | null; slot: CenterGridCellSlot }>, ratios: Partial<GridRatios>) => void;
   onGridRowCollapseToggle?: CenterGridProps["onGridRowCollapseToggle"];
   dragState: CenterGridDragState;
   setDragState: (state: CenterGridDragState) => void;
@@ -115,6 +151,24 @@ function Grid2x2({
   const outer = clamp01(ratios.outerSplit);
   const innerTop = clamp01(ratios.innerTopSplit ?? 0.5);
   const innerBottom = clamp01(ratios.innerBottomSplit ?? 0.5);
+  const commitOuterResize = (sizes: number[]) => {
+    const ratio = splitterSizesToRatio(sizes, 0);
+    if (ratio <= COLLAPSE_RATIO_THRESHOLD) {
+      onGridNearZeroCollapse?.([
+        { panel: occ.topLeft, slot: "topLeft" },
+        { panel: occ.topRight, slot: "topRight" },
+      ], { outerSplit: ratio });
+      return;
+    }
+    if (ratio >= 1 - COLLAPSE_RATIO_THRESHOLD) {
+      onGridNearZeroCollapse?.([
+        { panel: occ.bottomLeft, slot: "bottomLeft" },
+        { panel: occ.bottomRight, slot: "bottomRight" },
+      ], { outerSplit: ratio });
+      return;
+    }
+    onGridRatiosCommit?.({ outerSplit: ratio });
+  };
 
   return (
     <div
@@ -128,8 +182,8 @@ function Grid2x2({
         layout="vertical"
         style={{ height: "100%" }}
         className="center-grid-outer-splitter"
-        onResize={(sizes) => onGridRatiosChange?.({ outerSplit: splitterSizesToRatio(sizes, 0) })}
-        onResizeEnd={(sizes) => onGridRatiosChange?.({ outerSplit: splitterSizesToRatio(sizes, 0) })}
+        onResize={(sizes) => onGridRatiosPreview?.({ outerSplit: splitterSizesToRatio(sizes, 0) })}
+        onResizeEnd={commitOuterResize}
         onDraggerDoubleClick={() => onGridRowCollapseToggle?.("top")}
       >
         <Splitter.Panel
@@ -137,10 +191,10 @@ function Grid2x2({
           min="0%"
           data-testid="center-grid-top-row"
         >
-          {render2x2Row(occ, occ.topLeft, occ.topRight, innerTop, renderSlot, "top", onPanelMove, onPanelCollapse, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
+          {render2x2Row(occ, occ.topLeft, occ.topRight, innerTop, renderSlot, "top", onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, onGridNearZeroCollapse, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel size={ratioToPercent(1 - outer)} min="0%" data-testid="center-grid-bottom-row">
-          {render2x2Row(occ, occ.bottomLeft, occ.bottomRight, innerBottom, renderSlot, "bottom", onPanelMove, onPanelCollapse, onGridRatiosChange, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
+          {render2x2Row(occ, occ.bottomLeft, occ.bottomRight, innerBottom, renderSlot, "bottom", onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, onGridNearZeroCollapse, onGridRowCollapseToggle, dragState, setDragState, dragRef)}
         </Splitter.Panel>
       </Splitter>
     </div>
@@ -156,7 +210,9 @@ function render2x2Row(
   row: "top" | "bottom",
   onPanelMove?: CenterGridProps["onPanelMove"],
   onPanelCollapse?: CenterGridProps["onPanelCollapse"],
-  onGridRatiosChange?: CenterGridProps["onGridRatiosChange"],
+  onGridRatiosPreview?: (ratios: Partial<GridRatios>) => void,
+  onGridRatiosCommit?: (ratios: Partial<GridRatios>) => void,
+  onGridNearZeroCollapse?: (panels: Array<{ panel: PanelKey | null; slot: CenterGridCellSlot }>, ratios: Partial<GridRatios>) => void,
   onGridRowCollapseToggle?: CenterGridProps["onGridRowCollapseToggle"],
   dragState?: CenterGridDragState,
   setDragState?: (state: CenterGridDragState) => void,
@@ -176,14 +232,29 @@ function render2x2Row(
   const testId = row === "top" ? "center-grid-top-splitter" : "center-grid-bottom-splitter";
   const leftTestId = row === "top" ? "center-grid-top-left" : "center-grid-bottom-left";
   const rightTestId = row === "top" ? "center-grid-top-right" : "center-grid-bottom-right";
+  const ratioKey = row === "top" ? "innerTopSplit" : "innerBottomSplit";
+  const leftSlot = row === "top" ? "topLeft" : "bottomLeft";
+  const rightSlot = row === "top" ? "topRight" : "bottomRight";
+  const commitInnerResize = (sizes: number[]) => {
+    const ratio = splitterSizesToRatio(sizes, 0);
+    if (ratio <= COLLAPSE_RATIO_THRESHOLD) {
+      onGridNearZeroCollapse?.([{ panel: left, slot: leftSlot }], { [ratioKey]: ratio });
+      return;
+    }
+    if (ratio >= 1 - COLLAPSE_RATIO_THRESHOLD) {
+      onGridNearZeroCollapse?.([{ panel: right, slot: rightSlot }], { [ratioKey]: ratio });
+      return;
+    }
+    onGridRatiosCommit?.({ [ratioKey]: ratio });
+  };
   return (
     <Splitter
       layout="horizontal"
       style={{ height: "100%" }}
       className={`center-grid-${row}-splitter`}
       data-testid={testId}
-      onResize={(sizes) => onGridRatiosChange?.({ [row === "top" ? "innerTopSplit" : "innerBottomSplit"]: splitterSizesToRatio(sizes, 0) })}
-      onResizeEnd={(sizes) => onGridRatiosChange?.({ [row === "top" ? "innerTopSplit" : "innerBottomSplit"]: splitterSizesToRatio(sizes, 0) })}
+      onResize={(sizes) => onGridRatiosPreview?.({ [ratioKey]: splitterSizesToRatio(sizes, 0) })}
+      onResizeEnd={commitInnerResize}
       onDraggerDoubleClick={() => onGridRowCollapseToggle?.("left")}
     >
       <Splitter.Panel
@@ -192,12 +263,12 @@ function render2x2Row(
         data-testid={leftTestId}
         data-panel={left ?? ""}
       >
-        <SlotFrame panel={left} slot={row === "top" ? "topLeft" : "bottomLeft"} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={left} slot={leftSlot} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(left)}
         </SlotFrame>
       </Splitter.Panel>
       <Splitter.Panel size={ratioToPercent(1 - split)} min="0%" data-testid={rightTestId} data-panel={right ?? ""}>
-        <SlotFrame panel={right} slot={row === "top" ? "topRight" : "bottomRight"} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
+        <SlotFrame panel={right} slot={rightSlot} occ={occ} onPanelMove={onPanelMove} onPanelCollapse={onPanelCollapse} dragState={dragState} setDragState={setDragState} dragRef={dragRef}>
           {renderSlot(right)}
         </SlotFrame>
       </Splitter.Panel>
@@ -208,7 +279,7 @@ function render2x2Row(
 // ---- 3×3 grid (v2.0) ----
 
 function Grid3x3({
-  occ, ratios, renderSlot, preset, onPanelMove, onPanelCollapse, onGridRatiosChange, dragState, setDragState, dragRef,
+  occ, ratios, renderSlot, preset, onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, dragState, setDragState, dragRef,
 }: {
   occ: GridOccupancy;
   ratios: GridRatios;
@@ -216,7 +287,8 @@ function Grid3x3({
   preset: GridPresetId;
   onPanelMove?: CenterGridProps["onPanelMove"];
   onPanelCollapse?: CenterGridProps["onPanelCollapse"];
-  onGridRatiosChange?: CenterGridProps["onGridRatiosChange"];
+  onGridRatiosPreview?: (ratios: Partial<GridRatios>) => void;
+  onGridRatiosCommit?: (ratios: Partial<GridRatios>) => void;
   dragState: CenterGridDragState;
   setDragState: (state: CenterGridDragState) => void;
   dragRef: MutableRefObject<DraggedPanel | null>;
@@ -247,29 +319,29 @@ function Grid3x3({
         layout="vertical"
         style={{ height: "100%" }}
         className="center-grid-outer-splitter"
-        onResize={(sizes) => onGridRatiosChange?.(splitterSizesTo3WayRatios(sizes, "row"))}
-        onResizeEnd={(sizes) => onGridRatiosChange?.(splitterSizesTo3WayRatios(sizes, "row"))}
+        onResize={(sizes) => onGridRatiosPreview?.(splitterSizesTo3WayRatios(sizes, "row"))}
+        onResizeEnd={(sizes) => onGridRatiosCommit?.(splitterSizesTo3WayRatios(sizes, "row"))}
       >
         <Splitter.Panel
           size={ratioToPercent(row0)}
           min="0%"
           data-testid="center-grid-row-0"
         >
-          {render3x3Row(occ, rows[0], col0, col1, col2Percent, renderSlot, 0, onPanelMove, onPanelCollapse, onGridRatiosChange, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[0], col0, col1, col2Percent, renderSlot, 0, onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel
           size={ratioToPercent(row1)}
           min="0%"
           data-testid="center-grid-row-1"
         >
-          {render3x3Row(occ, rows[1], col0, col1, col2Percent, renderSlot, 1, onPanelMove, onPanelCollapse, onGridRatiosChange, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[1], col0, col1, col2Percent, renderSlot, 1, onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, dragState, setDragState, dragRef)}
         </Splitter.Panel>
         <Splitter.Panel
           size={`${row2Percent}%`}
           min="0%"
           data-testid="center-grid-row-2"
         >
-          {render3x3Row(occ, rows[2], col0, col1, col2Percent, renderSlot, 2, onPanelMove, onPanelCollapse, onGridRatiosChange, dragState, setDragState, dragRef)}
+          {render3x3Row(occ, rows[2], col0, col1, col2Percent, renderSlot, 2, onPanelMove, onPanelCollapse, onGridRatiosPreview, onGridRatiosCommit, dragState, setDragState, dragRef)}
         </Splitter.Panel>
       </Splitter>
     </div>
@@ -286,7 +358,8 @@ function render3x3Row(
   rowIdx: number,
   onPanelMove?: CenterGridProps["onPanelMove"],
   onPanelCollapse?: CenterGridProps["onPanelCollapse"],
-  onGridRatiosChange?: CenterGridProps["onGridRatiosChange"],
+  onGridRatiosPreview?: (ratios: Partial<GridRatios>) => void,
+  onGridRatiosCommit?: (ratios: Partial<GridRatios>) => void,
   dragState?: CenterGridDragState,
   setDragState?: (state: CenterGridDragState) => void,
   dragRef?: MutableRefObject<DraggedPanel | null>,
@@ -311,8 +384,8 @@ function render3x3Row(
       style={{ height: "100%" }}
       className={`center-grid-row-${rowIdx}-splitter`}
       data-testid={`center-grid-row-${rowIdx}-splitter`}
-      onResize={(sizes) => onGridRatiosChange?.(splitterSizesTo3WayRatios(sizes, "col"))}
-      onResizeEnd={(sizes) => onGridRatiosChange?.(splitterSizesTo3WayRatios(sizes, "col"))}
+      onResize={(sizes) => onGridRatiosPreview?.(splitterSizesTo3WayRatios(sizes, "col"))}
+      onResizeEnd={(sizes) => onGridRatiosCommit?.(splitterSizesTo3WayRatios(sizes, "col"))}
     >
       <Splitter.Panel
         size={ratioToPercent(col0)}
@@ -540,7 +613,7 @@ function SlotFrame({
             />
           </Dropdown>
         ) : null}
-        {onPanelCollapse && panel !== "chat" ? (
+        {onPanelCollapse ? (
           <Button
             type="text"
             size="small"
@@ -583,6 +656,42 @@ export function splitterSizesTo3WayRatios(sizes: number[], axis: "row" | "col"):
     return { row0Split: first, row1Split: second };
   }
   return { col0Split: first, col1Split: second };
+}
+
+function isRecoverableRatio(value: number | undefined): value is number {
+  return typeof value === "number" && value > COLLAPSE_RATIO_THRESHOLD && value < 1 - COLLAPSE_RATIO_THRESHOLD;
+}
+
+function rememberRecoverableRatios(previous: GridRatios, next: Partial<GridRatios>): GridRatios {
+  const merged = { ...previous };
+  for (const key of Object.keys(next) as Array<keyof GridRatios>) {
+    const value = next[key];
+    if (isRecoverableRatio(value)) {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function recoverCommittedRatios(next: Partial<GridRatios>, recoverRatios: GridRatios): Partial<GridRatios> {
+  const recovered: Partial<GridRatios> = {};
+  for (const key of Object.keys(next) as Array<keyof GridRatios>) {
+    recovered[key] = recoverRatios[key] ?? DEFAULT_GRID_RATIOS[key];
+  }
+  return recovered;
+}
+
+function sanitizeCommittedRatios(next: Partial<GridRatios>, recoverRatios: GridRatios): Partial<GridRatios> {
+  const safe: Partial<GridRatios> = {};
+  for (const key of Object.keys(next) as Array<keyof GridRatios>) {
+    const value = next[key];
+    if (isRecoverableRatio(value)) {
+      safe[key] = value;
+    } else {
+      safe[key] = recoverRatios[key] ?? DEFAULT_GRID_RATIOS[key];
+    }
+  }
+  return safe;
 }
 
 // Pure helper (exported for tests) — encodes the shape of a preset.

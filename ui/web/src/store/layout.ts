@@ -334,6 +334,7 @@ function clonePanels(panels: Record<PanelKey, PanelState>): Record<PanelKey, Pan
 const ALL_PANEL_KEYS: ReadonlyArray<PanelKey> = [
   "appNav",
   "sessions",
+  "chat",
   "tasks",
   "files",
   "terminal",
@@ -485,7 +486,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   },
 
   setCenterGridPanelCollapsed: (panel, collapsed) => {
-    if (!isPanelKey(panel) || panel === "chat") return;
+    if (!isPanelKey(panel)) return;
     set((state) => {
       const next = { ...state.centerGridCollapsedPanels };
       if (collapsed) {

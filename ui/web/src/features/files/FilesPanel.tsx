@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Button, Input, Splitter, Typography, Space, Spin, Alert } from "antd";
-import { PlusOutlined, UploadOutlined, SearchOutlined, FolderOpenOutlined } from "@ant-design/icons";
+import React, { useEffect, useState } from "react";
+import { Alert, Button, Input, Space, Spin, Typography } from "antd";
+import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, SearchOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
 import { useLayoutStore } from "../../store/layout";
@@ -75,6 +75,7 @@ function FilesPanelDock(props: FilesPanelProps) {
   const [previewContent, setPreviewContent] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
 
   const collapsed = !props.fillContainer && layoutCollapsed;
   const columnWidth = props.fillContainer ? "100%" : collapsed ? 40 : layoutWidth;
@@ -176,6 +177,15 @@ function FilesPanelDock(props: FilesPanelProps) {
           <Button
             size="small"
             type="text"
+            icon={treeCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            aria-label={treeCollapsed ? "Expand file tree" : "Collapse file tree"}
+            title={treeCollapsed ? "Expand file tree" : "Collapse file tree"}
+            onClick={() => setTreeCollapsed((value) => !value)}
+            data-testid={treeCollapsed ? "files-panel-tree-expand" : "files-panel-tree-collapse"}
+          />
+          <Button
+            size="small"
+            type="text"
             aria-label={t("files.collapse") || "Collapse files"}
             title={t("files.collapse") || "Collapse files"}
             onClick={() => togglePanel("files")}
@@ -196,10 +206,46 @@ function FilesPanelDock(props: FilesPanelProps) {
           {props.cwd ?? "."}
         </Typography.Text>
       </div>
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <Splitter layout="vertical" style={{ height: "100%" }}>
-          <Splitter.Panel defaultSize="40%" min="20%">
-            <div style={{ height: "100%", overflow: "auto" }}>
+      <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+        {treeCollapsed ? (
+          <div style={{ display: "grid", gridTemplateColumns: "40px minmax(0, 1fr)", height: "100%", minHeight: 0, minWidth: 0 }}>
+            <div
+              data-testid="files-panel-tree-collapsed"
+              style={{ borderRight: "1px solid var(--border)", padding: 6, display: "flex", justifyContent: "center" }}
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={<MenuUnfoldOutlined />}
+                aria-label="Expand file tree"
+                title="Expand file tree"
+                onClick={() => setTreeCollapsed(false)}
+              />
+            </div>
+            <FilePreview
+              selectedPath={selectedPath}
+              previewContent={previewContent}
+              previewLoading={previewLoading}
+              previewError={previewError}
+              onAttachFile={props.onAttachFile ? attachSelected : undefined}
+              t={t}
+            />
+          </div>
+        ) : (
+          <div
+            data-testid="files-panel-workbench"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(180px, 28%) minmax(0, 1fr)",
+              height: "100%",
+              minHeight: 0,
+              minWidth: 0,
+            }}
+          >
+            <div
+              data-testid="files-panel-tree"
+              style={{ height: "100%", minWidth: 0, overflow: "auto", borderRight: "1px solid var(--border)" }}
+            >
               <FileTree
                 workspaceRoot={props.cwd ?? "."}
                 selectedPath={selectedPath ?? null}
@@ -215,48 +261,66 @@ function FilesPanelDock(props: FilesPanelProps) {
                 onRename={() => {}}
               />
             </div>
-          </Splitter.Panel>
-          <Splitter.Panel>
-            <div style={{ display: "flex", height: "100%", minHeight: 0, flexDirection: "column" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  borderBottom: "1px solid var(--border)",
-                  padding: "6px 8px",
-                }}
-              >
-                <Typography.Text data-testid="files-panel-preview-path" type="secondary" ellipsis>
-                  {selectedPath ?? (t("files.noFileSelected") || "Select a file")}
-                </Typography.Text>
-                {props.onAttachFile ? (
-                  <Button
-                    size="small"
-                    icon={<UploadOutlined />}
-                    disabled={!selectedPath || previewLoading || !!previewError}
-                    onClick={attachSelected}
-                    data-testid="files-panel-attach-selected"
-                  >
-                    {t("files.attachToChat") || "Attach"}
-                  </Button>
-                ) : null}
-              </div>
-              <div data-testid="files-panel-preview" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                {previewLoading ? (
-                  <div style={{ display: "grid", height: "100%", placeItems: "center" }}>
-                    <Spin size="small" />
-                  </div>
-                ) : previewError ? (
-                  <Alert type="error" showIcon message={previewError} />
-                ) : (
-                  <CodeEditor content={previewContent} filePath={selectedPath ?? "(no file)"} readOnly />
-                )}
-              </div>
-            </div>
-          </Splitter.Panel>
-        </Splitter>
+            <FilePreview
+              selectedPath={selectedPath}
+              previewContent={previewContent}
+              previewLoading={previewLoading}
+              previewError={previewError}
+              onAttachFile={props.onAttachFile ? attachSelected : undefined}
+              t={t}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FilePreview(props: {
+  selectedPath?: string;
+  previewContent: string;
+  previewLoading: boolean;
+  previewError: string;
+  onAttachFile?: () => void;
+  t: (key: string) => string;
+}) {
+  return (
+    <div data-testid="files-panel-preview-pane" style={{ display: "flex", height: "100%", minWidth: 0, minHeight: 0, flexDirection: "column" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          borderBottom: "1px solid var(--border)",
+          padding: "6px 8px",
+        }}
+      >
+        <Typography.Text data-testid="files-panel-preview-path" type="secondary" ellipsis>
+          {props.selectedPath ?? (props.t("files.noFileSelected") || "Select a file")}
+        </Typography.Text>
+        {props.onAttachFile ? (
+          <Button
+            size="small"
+            icon={<UploadOutlined />}
+            disabled={!props.selectedPath || props.previewLoading || !!props.previewError}
+            onClick={props.onAttachFile}
+            data-testid="files-panel-attach-selected"
+          >
+            {props.t("files.attachToChat") || "Attach"}
+          </Button>
+        ) : null}
+      </div>
+      <div data-testid="files-panel-preview" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        {props.previewLoading ? (
+          <div style={{ display: "grid", height: "100%", placeItems: "center" }}>
+            <Spin size="small" />
+          </div>
+        ) : props.previewError ? (
+          <Alert type="error" showIcon message={props.previewError} />
+        ) : (
+          <CodeEditor content={props.previewContent} filePath={props.selectedPath ?? "(no file)"} readOnly />
+        )}
       </div>
     </div>
   );

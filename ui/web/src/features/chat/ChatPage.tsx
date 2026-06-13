@@ -32,6 +32,8 @@ import { ResizeHandle } from "../../components/ResizeHandle";
 import { SubagentCard } from "../../components/SubagentCard";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
 import { TaskCenterChip } from "../tasks/TaskCenterChip";
+import { TaskCenterProvider } from "../tasks/TaskCenterContext";
+import { TaskCenterPanel } from "../chat/TaskCenterPanel";
 import { LongTaskRefluxBubble, isLongTaskRefluxMessage } from "./LongTaskRefluxBubble";
 import { buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview, type ReviewMergeFilter } from "./reviewMergeCenter";
 import { buildTaskOutcomes } from "./taskCenterOutcome";
@@ -1078,11 +1080,41 @@ export function ChatPage() {
     />
   );
 
+  // P1-g-2 (SPEC §4.1.1): bridge the full <TaskCenterPanel> tree through
+  // React context so the App.tsx <Drawer> can render it without
+  // centralizing the 18 mutation hooks. The 18 props mirror
+  // TaskCenterPanelProps exactly. `collapsed` is forced false because the
+  // Drawer has its own header actions (close / resize); onCollapsedChange
+  // is intentionally a no-op — the chip toggle is the canonical control.
+  const taskCenterBridge = (
+    <TaskCenterPanel
+      outcomes={taskOutcomes}
+      collapsed={false}
+      onCollapsedChange={() => undefined}
+      reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
+      mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
+      resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
+      cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
+      runningWorkflowId={runLongTaskMutation.isPending ? runLongTaskMutation.variables : undefined}
+      cancelingLongTask={cancelLongTaskMutation.isPending ? cancelLongTaskMutation.variables : undefined}
+      finalizingLongTask={finalizeLongTaskMutation.isPending ? finalizeLongTaskMutation.variables : undefined}
+      onReviewSubagent={reviewSubagentInDrawer}
+      onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
+      onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
+      onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
+      onRunLongTask={(workflowId) => runLongTaskMutation.mutate(workflowId)}
+      onCancelLongTask={(workflowId, nodeId) => cancelLongTaskMutation.mutate({ workflowId, nodeId })}
+      onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
+      onOpenReviewMergeCenter={openReviewMergeCenter}
+    />
+  );
+
   return (
-    <div
-      className="chat-page"
-      style={{ "--chat-sessions-width": `${sessionPaneWidth}px`, "--chat-inspector-width": `${inspectorPaneWidth}px` } as CSSProperties}
-    >
+    <TaskCenterProvider value={taskCenterBridge}>
+      <div
+        className="chat-page"
+        style={{ "--chat-sessions-width": `${sessionPaneWidth}px`, "--chat-inspector-width": `${inspectorPaneWidth}px` } as CSSProperties}
+      >
       <aside className="chat-sessions">
         {sessionPanel}
         <ResizeHandle label="Resize sessions" onPointerDown={beginSessionPaneResize} />
@@ -1321,6 +1353,7 @@ export function ChatPage() {
         </>
       ) : null}
     </div>
+    </TaskCenterProvider>
   );
 }
 

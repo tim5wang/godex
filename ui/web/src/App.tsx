@@ -26,6 +26,7 @@ import { useResizableWidth } from "./hooks/useResizableWidth";
 import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
 import { selectAppNavLayoutState, selectTaskCenterDrawerState, useLayoutStore } from "./store/layout";
+import { TaskCenterDrawerContent } from "./features/tasks/TaskCenterDrawerContent";
 
 export default function App() {
   const { locale, t } = useI18n();
@@ -175,7 +176,12 @@ export default function App() {
               taskCenterWidth envelope and let antd render full-width.
               P1-f: open state is driven by useLayoutStore.taskCenterDrawerOpen
               (see chat-header <TaskCenterChip>); the close handler is
-              the same closeTaskCenterDrawer action. */}
+              the same closeTaskCenterDrawer action.
+              P1-g-2: when the chat workspace is mounted it provides a
+              <TaskCenterPanel> bridge via React context, which the
+              Drawer children surface here. Before the chat page mounts
+              (e.g. on the home route or during a route transition) the
+              bridge is null and we fall back to the AppNav <Menu>. */}
           <Drawer
             title={<Brand compact />}
             placement="left"
@@ -185,7 +191,7 @@ export default function App() {
             data-testid="task-center-drawer"
             data-mode={screens.lg ? "pc-task-center" : "mobile-appnav"}
           >
-            {menu}
+            <TaskCenterDrawerContent fallback={menu} />
             {screens.lg ? (
               <ResizeHandle label="Resize task center" onPointerDown={beginTaskCenterResize} />
             ) : null}

@@ -4,7 +4,6 @@ import { PlusOutlined, UploadOutlined, SearchOutlined, FolderOpenOutlined } from
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
 import { useLayoutStore } from "../../store/layout";
-import { selectFilesLayoutState } from "./selectFilesLayoutState";
 import { useI18n } from "../../i18n";
 
 // P2 / T6 (SPEC §4.3): the files panel is now mountable in two
@@ -54,23 +53,23 @@ export function FilesPanel(props: FilesPanelProps) {
 
 function FilesPanelPageHost({ children }: { children?: React.ReactNode }) {
   // mode="page" is a transparent container. The <FilesPage> route
-  // owns its own header / body and is mounted by the router. We render
-  // children inside a wrapper div so App.tsx can wrap the route element
-  // if it ever needs to (e.g. add a context provider).
+  // owns its own header / body and is mounted by the router.
   return <div data-testid="files-panel-page-host">{children}</div>;
 }
 
 function FilesPanelDock(props: FilesPanelProps) {
   const { t } = useI18n();
-  const layout = useLayoutStore(selectFilesLayoutState);
+  const layoutCollapsed = useLayoutStore((state) => state.panels.files.collapsed);
+  const layoutWidth = useLayoutStore((state) => state.panels.files.width ?? 320);
   const setWidth = useLayoutStore((state) => state.setWidth);
   const [search, setSearch] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | undefined>(props.selectedPath);
 
-  const columnWidth = layout.collapsed ? layout.iconOnlyWidth : layout.width;
+  const columnWidth = layoutCollapsed ? 40 : layoutWidth;
+  const iconOnlyWidth = 40;
 
   // The 40px collapsed strip shows the bare expand affordance.
-  if (layout.collapsed) {
+  if (layoutCollapsed) {
     return (
       <div
         data-testid="files-panel-dock-collapsed"
@@ -89,7 +88,7 @@ function FilesPanelDock(props: FilesPanelProps) {
           size="small"
           aria-label={t("files.expand") || "Expand files"}
           title={t("files.expand") || "Expand files"}
-          onClick={() => setWidth("files", Math.max(320, layout.width))}
+          onClick={() => setWidth("files", Math.max(320, layoutWidth))}
         >
           <FolderOpenOutlined />
         </Button>

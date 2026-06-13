@@ -43,6 +43,8 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     // The main content area should be visible.
     const content = page.locator(".godex-content");
     await expect(content).toBeVisible({ timeout: 5000 });
+    await page.waitForTimeout(1000);
+    await expect(content).not.toContainText(/crashed|Maximum update depth exceeded|Element type is invalid/i);
   });
 
   test("Layout persists collapsed state across reload", async ({ page }) => {
@@ -120,26 +122,28 @@ test.describe("M0 Acceptance Checklist — Cross-cutting", () => {
     await mockBackend(page);
   });
 
+  async function expectNoRouteCrash(page: import("@playwright/test").Page) {
+    await expect(page.locator(".godex-content")).toBeVisible();
+    await page.waitForTimeout(1000);
+    await expect(page.locator(".godex-content")).not.toContainText(/crashed|Maximum update depth exceeded|Element type is invalid/i);
+  }
+
   test("Files route renders without crashing", async ({ page }) => {
     await page.goto("/files");
     await page.waitForSelector(".godex-content", { timeout: 10000 });
-    // The files page should render something in the content area.
-    const content = page.locator(".godex-content");
-    await expect(content).toBeVisible();
+    await expectNoRouteCrash(page);
   });
 
   test("Settings route renders without crashing", async ({ page }) => {
     await page.goto("/settings");
     await page.waitForSelector(".godex-content", { timeout: 10000 });
-    const content = page.locator(".godex-content");
-    await expect(content).toBeVisible();
+    await expectNoRouteCrash(page);
   });
 
   test("Memory route renders without crashing", async ({ page }) => {
     await page.goto("/memory");
     await page.waitForSelector(".godex-content", { timeout: 10000 });
-    const content = page.locator(".godex-content");
-    await expect(content).toBeVisible();
+    await expectNoRouteCrash(page);
   });
 
   test("All builtin app routes render without crash", async ({ page }) => {
@@ -147,8 +151,7 @@ test.describe("M0 Acceptance Checklist — Cross-cutting", () => {
     for (const route of routes) {
       await page.goto(route);
       await page.waitForSelector(".godex-content", { timeout: 10000 });
-      const content = page.locator(".godex-content");
-      await expect(content).toBeVisible();
+      await expectNoRouteCrash(page);
     }
   });
 });

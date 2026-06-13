@@ -247,10 +247,14 @@ export function ChatPage() {
       return;
     }
     const next = defaultSessionKey || makeSessionKey();
-    if (!defaultSessionKey) {
-      setDefaultSessionKey(next);
-    }
-    navigate(`/chat/web/${next}`, { replace: true });
+    // DEBUG: delay setState to the next tick to avoid sync setState during render.
+    // React 19 production throws #185 if setState is called during render phase.
+    setTimeout(() => {
+      if (!defaultSessionKey) {
+        setDefaultSessionKey(next);
+      }
+      navigate(`/chat/web/${next}`, { replace: true });
+    }, 0);
   }, [defaultSessionKey, navigate, routeChannel, routeSessionKey, setDefaultSessionKey]);
 
   const openQuery = useQuery({
@@ -1236,67 +1240,64 @@ export function ChatPage() {
             <Alert type="error" showIcon message={authError} />
           </div>
         ) : (
-          <ChatWorkspaceCanvas
-            filesCwd="."
-            renderCenter={() => (
-              <>
-                <div className="chat-feed" ref={scrollerRef} style={{ minHeight: 0 }}>
-                  <div className="chat-feed-inner">
-                    <MessageFeed
-                      items={items}
-                      onToggleTool={toggleTool}
-                      onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
-                      savingToNote={saveMessageToNoteMutation.isPending}
-                      hasNoteContext={!!noteContextQuery.data}
-                    />
-                  </div>
-                </div>
-                <NoteContextBanner
-                  note={noteContextQuery.data}
-                  loading={noteContextQuery.isLoading}
-                  error={noteContextQuery.error}
-                  onClear={clearNoteContext}
+          // DEBUG: temporarily bypass ChatWorkspaceCanvas to isolate React #185
+          // in production builds. The original flat layout is rendered directly.
+          <>
+            <div className="chat-feed" ref={scrollerRef} style={{ minHeight: 0 }}>
+              <div className="chat-feed-inner">
+                <MessageFeed
+                  items={items}
+                  onToggleTool={toggleTool}
+                  onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
+                  savingToNote={saveMessageToNoteMutation.isPending}
+                  hasNoteContext={!!noteContextQuery.data}
                 />
-                <ApprovalBanner
-                  items={pendingPermissions}
-                  approving={approvePermissionMutation}
-                  denying={denyPermissionMutation}
-                />
-                <div style={{ borderTop: "1px solid var(--godex-border)", padding: "6px 16px" }}>
-                  <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-                    <Typography.Text type="secondary">
-                      {modelMutation.isPending
-                        ? t("chat.modelSwitching")
-                        : uploading
-                          ? `${t("chat.uploadingAttachments")} ${uploadProgress ?? 0}%`
-                          : queuedTurns.length
-                            ? `${status} · ${queuedTurns.length} queued`
-                            : status}
-                    </Typography.Text>
-                    <ContextStatusInline summary={contextStatus} />
-                    {running ? (
-                      <Segmented
-                        size="small"
-                        value={queueMode}
-                        onChange={(value) => setQueueMode(value as "follow_up" | "steering")}
-                        options={[
-                          { value: "follow_up", label: "Follow-up" },
-                          { value: "steering", label: "Steer" },
-                        ]}
-                      />
-                    ) : null}
-                  </Space>
-                </div>
-                <Composer
-                  disabled={!openQuery.data?.session_id || modelMutation.isPending}
-                  uploading={uploading}
-                  uploadProgress={uploadProgress}
-                  packageCommands={packageCommandsQuery.data ?? []}
-                  onSubmit={onSend}
-                />
-              </>
-            )}
-          />
+              </div>
+            </div>
+            <NoteContextBanner
+              note={noteContextQuery.data}
+              loading={noteContextQuery.isLoading}
+              error={noteContextQuery.error}
+              onClear={clearNoteContext}
+            />
+            <ApprovalBanner
+              items={pendingPermissions}
+              approving={approvePermissionMutation}
+              denying={denyPermissionMutation}
+            />
+            <div style={{ borderTop: "1px solid var(--godex-border)", padding: "6px 16px" }}>
+              <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+                <Typography.Text type="secondary">
+                  {modelMutation.isPending
+                    ? t("chat.modelSwitching")
+                    : uploading
+                      ? `${t("chat.uploadingAttachments")} ${uploadProgress ?? 0}%`
+                      : queuedTurns.length
+                        ? `${status} · ${queuedTurns.length} queued`
+                        : status}
+                </Typography.Text>
+                <ContextStatusInline summary={contextStatus} />
+                {running ? (
+                  <Segmented
+                    size="small"
+                    value={queueMode}
+                    onChange={(value) => setQueueMode(value as "follow_up" | "steering")}
+                    options={[
+                      { value: "follow_up", label: "Follow-up" },
+                      { value: "steering", label: "Steer" },
+                    ]}
+                  />
+                ) : null}
+              </Space>
+            </div>
+            <Composer
+              disabled={!openQuery.data?.session_id || modelMutation.isPending}
+              uploading={uploading}
+              uploadProgress={uploadProgress}
+              packageCommands={packageCommandsQuery.data ?? []}
+              onSubmit={onSend}
+            />
+          </>
         )}
       </section>
       <aside className="chat-inspector">

@@ -1,6 +1,6 @@
 import { useI18n } from "../i18n";
 import type { ListedSession } from "../lib/types";
-import { useLayoutStore, selectSessionListLayoutState } from "../store/layout";
+import { useLayoutStore } from "../store/layout";
 
 interface SidebarProps {
   sessions: ListedSession[];
@@ -28,9 +28,10 @@ export function Sidebar({
   onClose,
 }: SidebarProps) {
   // P0-C (SPEC §3.2): sessions column width is driven by the layout store.
-  const sessionsLayout = useLayoutStore(selectSessionListLayoutState);
-  const sessionsCollapsed = sessionsLayout.collapsed;
-  const sessionsWidth = sessionsCollapsed ? sessionsLayout.iconOnlyWidth : sessionsLayout.width;
+  const sessionsCollapsed = useLayoutStore((state) => state.panels.sessions.collapsed);
+  const sessionsWidth = useLayoutStore((state) => state.panels.sessions.width ?? 280);
+  const SESSIONS_ICON_WIDTH = 40;
+  const effectiveSessionsWidth = sessionsCollapsed ? SESSIONS_ICON_WIDTH : sessionsWidth;
   const panel = (
     <SidebarPanel
       sessions={sessions}
@@ -50,7 +51,7 @@ export function Sidebar({
     <>
       <aside
         className="hidden h-full shrink-0 border-r border-[color:var(--border)] bg-[color:var(--panel)] md:flex md:flex-col"
-        style={{ width: sessionsWidth }}
+        style={{ width: effectiveSessionsWidth }}
         data-testid="sessions-rail"
         data-collapsed={sessionsCollapsed ? "true" : "false"}
       >

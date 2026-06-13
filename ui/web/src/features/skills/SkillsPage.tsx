@@ -764,16 +764,17 @@ function AnalyticsMetric({ title, value }: { title: string; value: number }) {
 }
 
 function qualityToAnalytics(report?: PackageQualityReport): ToolAnalytics {
-  if (!report) {
+  if (!report?.tool_health) {
     return emptyToolAnalytics;
   }
+  const toolHealth = report.tool_health;
   return {
-    inspectedSessions: report.tool_health.inspected_sessions,
-    totalRuns: report.tool_health.total_runs,
-    successRuns: report.tool_health.success_runs,
-    failureRuns: report.tool_health.failure_runs,
-    successRate: report.tool_health.success_rate,
-    byTool: (report.tool_health.by_tool ?? []).map((row: ToolStat) => ({
+    inspectedSessions: toolHealth.inspected_sessions,
+    totalRuns: toolHealth.total_runs,
+    successRuns: toolHealth.success_runs,
+    failureRuns: toolHealth.failure_runs,
+    successRate: toolHealth.success_rate,
+    byTool: (toolHealth.by_tool ?? []).map((row: ToolStat) => ({
       name: row.name,
       total: row.total,
       success: row.success,

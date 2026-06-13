@@ -1,10 +1,9 @@
 import { useMemo, type ReactNode } from "react";
 import { Grid, Segmented } from "antd";
 import {
-  selectMobileWorkspaceTabs,
+  MOBILE_TABS_ORDER,
   useLayoutStore,
   type MobileTab,
-  type MobileWorkspaceTabsSnapshot,
 } from "../../store/layout";
 import { useI18n } from "../../i18n";
 import { FilesPanel } from "../../features/files/FilesPanel";
@@ -39,18 +38,28 @@ export type MobileWorkspaceTabsProps = {
 
 export function MobileWorkspaceTabs(props: MobileWorkspaceTabsProps = {}) {
   const screens = Grid.useBreakpoint();
+  const { t } = useI18n();
   // Calling these as separate selectors keeps the store granular so
   // unrelated panel changes don't re-render this component.
-  const snap = useLayoutStore(selectMobileWorkspaceTabs);
+  const mobileActiveTab = useLayoutStore((state) => state.mobileActiveTab);
   const setMobileActiveTab = useLayoutStore((state) => state.setMobileActiveTab);
-  const { t } = useI18n();
+  const tabs = useMemo(
+    () =>
+      MOBILE_TABS_ORDER.map((key) => ({
+        key,
+        i18nKey: `mobile.tabs.${key}`,
+        iconKey: key,
+        active: key === mobileActiveTab,
+      })),
+    [mobileActiveTab, t],
+  );
   const options = useMemo(
     () =>
-      snap.tabs.map((tab) => ({
+      tabs.map((tab) => ({
         label: t(tab.i18nKey),
         value: tab.key,
       })),
-    [snap.tabs, t],
+    [tabs, t],
   );
 
   if (screens.lg) {
@@ -60,30 +69,30 @@ export function MobileWorkspaceTabs(props: MobileWorkspaceTabsProps = {}) {
   return (
     <div
       data-testid="mobile-workspace"
-      data-active={snap.active}
+      data-active={mobileActiveTab}
       className="mobile-workspace"
       style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}
     >
       <div
         data-testid="mobile-workspace-tabs"
-        data-active={snap.active}
+        data-active={mobileActiveTab}
         className="border-b border-[color:var(--border)] bg-[color:var(--panel)] px-3 py-2"
       >
-        <Segmented<MobileWorkspaceTabsSnapshot["active"]>
+        <Segmented<MobileTab>
           block
           size="middle"
-          value={snap.active}
+          value={mobileActiveTab}
           onChange={(value) => setMobileActiveTab(value)}
           options={options}
         />
       </div>
       <div
         data-testid="mobile-workspace-content"
-        data-active={snap.active}
+        data-active={mobileActiveTab}
         className="mobile-workspace-content"
         style={{ flex: 1, minHeight: 0, overflow: "auto" }}
       >
-        {renderActive(snap.active, props)}
+        {renderActive(mobileActiveTab, props)}
       </div>
     </div>
   );

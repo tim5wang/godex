@@ -19,7 +19,6 @@ const initialPanels: Record<PanelKey, { collapsed: boolean; width?: number; visi
   files: { collapsed: true, width: 320, visible: true },
   terminal: { collapsed: true, width: 320, visible: true },
   drawer: { collapsed: true, width: 320, visible: true },
-  notes: { collapsed: true, width: 320, visible: true },
 };
 
 function reset() {

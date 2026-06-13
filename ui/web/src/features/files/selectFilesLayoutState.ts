@@ -17,13 +17,10 @@ export type FilesLayoutSnapshot = {
   iconOnlyWidth: 40; // SPEC §3.2 fixed narrow width
 };
 
-let _filesCache: FilesLayoutSnapshot | null = null;
 export function selectFilesLayoutState(state: LayoutState): FilesLayoutSnapshot {
-  const collapsed = state.panels.files.collapsed;
-  const width = state.panels.files.width ?? 320;
-  if (_filesCache && _filesCache.collapsed === collapsed && _filesCache.width === width) {
-    return _filesCache;
-  }
-  _filesCache = { collapsed, width, iconOnlyWidth: 40 as const };
-  return _filesCache;
+  return {
+    collapsed: state.panels.files.collapsed,
+    width: state.panels.files.width ?? 320,
+    iconOnlyWidth: 40,
+  };
 }

@@ -26,7 +26,7 @@ import { useResizableWidth } from "./hooks/useResizableWidth";
 import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
-import { selectAppNavLayoutState, useLayoutStore } from "./store/layout";
+import { useLayoutStore } from "./store/layout";
 import {
   TASK_CENTER_DRAWER_DEFAULT_WIDTH,
   TASK_CENTER_DRAWER_MIN_WIDTH,
@@ -64,7 +64,9 @@ export default function App() {
     }
   };
   // P0-B: AppNav collapsed state lives in the layout store (SPEC §3.2).
-  const appNav = useLayoutStore(selectAppNavLayoutState);
+  const appNavCollapsed = useLayoutStore((state) => state.panels.appNav.collapsed);
+  const appNavWidth = useLayoutStore((state) => state.panels.appNav.width ?? 200);
+  const APP_NAV_ICON_WIDTH = 48;
   const toggleAppNav = useLayoutStore((state) => state.toggle);
   // P1-c: Task Center Drawer width envelope (SPEC §4.1.1).
   // The Drawer doubles as the mobile AppNav drawer and the PC task
@@ -83,24 +85,26 @@ export default function App() {
   // *before* the first paint, so the user never sees the default
   // snapshot flicker into a hydrated one.
   useLayoutEffect(() => {
+    // P4 / T8 (SPEC §3.1 + §4.6): hydrate the layout store from
+    // localStorage on first mount, subscribe to subsequent changes
+    // and write them back, and listen for the cross-tab `storage`
+    // event so multiple tabs stay in sync.
     const persisted = readPersistedLayoutSnapshot();
     if (persisted) {
       useLayoutStore.setState(applyLayoutSnapshot(persisted));
     }
     const unsubscribe = useLayoutStore.subscribe((state) => {
-      writePersistedLayoutSnapshot(serializeLayoutSnapshot(state));
+      // Defer to microtask to avoid sync I/O during commit phase.
+      queueMicrotask(() => {
+        writePersistedLayoutSnapshot(serializeLayoutSnapshot(state));
+      });
     });
     const onStorage = (event: StorageEvent) => {
       if (event.key !== LAYOUT_STORAGE_KEY) return;
       if (!event.newValue) {
-        // Another tab cleared the snapshot (e.g. reset()).
-        // Apply the default snapshot locally so the two tabs
-        // converge.
         useLayoutStore.getState().reset();
         return;
       }
-      // Reuse the same hydrate path so malformed payloads are
-      // dropped on the floor instead of corrupting the store.
       const incoming = JSON.parse(event.newValue) as Parameters<typeof applyLayoutSnapshot>[0];
       useLayoutStore.setState(applyLayoutSnapshot(incoming));
     };
@@ -134,6 +138,10 @@ export default function App() {
     max: TASK_CENTER_DRAWER_MAX_WIDTH,
   });
   const activeApp = activeBuiltinApp(location.pathname);
+  // Memoize route elements so App re-renders do not recreate
+  // <PageErrorBoundary> wrappers, which could trigger React Router
+  // to unmount/remount lazy-loaded route components.
+  const memoizedRoutes = useMemo(() => renderBuiltinAppRoutes(), []);
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
   const providersQuery = useQuery({
     queryKey: ["providers", token],
@@ -155,7 +163,7 @@ export default function App() {
   const menu = (
     <Menu
       mode={screens.lg ? "inline" : "vertical"}
-      inlineCollapsed={screens.lg ? appNav.collapsed : false}
+      inlineCollapsed={screens.lg ? appNavCollapsed : false}
       selectedKeys={[selectedKey]}
       items={navItems}
       onClick={(info) => {
@@ -186,24 +194,24 @@ export default function App() {
           {screens.lg ? (
             <Layout.Sider
               className="godex-sider"
-              width={appNav.collapsed ? appNav.iconOnlyWidth : navWidth}
-              collapsed={appNav.collapsed}
-              collapsedWidth={appNav.iconOnlyWidth}
+              width={appNavCollapsed ? APP_NAV_ICON_WIDTH : navWidth}
+              collapsed={appNavCollapsed}
+              collapsedWidth={APP_NAV_ICON_WIDTH}
               trigger={null}
             >
               <div className="godex-sider-top">
-                <Brand compact={appNav.collapsed} />
+                <Brand compact={appNavCollapsed} />
                 <Button
                   type="text"
                   size="small"
-                  aria-label={appNav.collapsed ? "Expand navigation" : "Collapse navigation"}
-                  title={appNav.collapsed ? "Expand" : "Collapse"}
+                  aria-label={appNavCollapsed ? "Expand navigation" : "Collapse navigation"}
+                  title={appNavCollapsed ? "Expand" : "Collapse"}
                   onClick={() => toggleAppNav("appNav")}
-                  icon={appNav.collapsed ? <MenuOutlined /> : <MenuOutlined />}
+                  icon={appNavCollapsed ? <MenuOutlined /> : <MenuOutlined />}
                 />
               </div>
               {menu}
-              {!appNav.collapsed ? <ResizeHandle label="Resize navigation" onPointerDown={beginNavResize} /> : null}
+              {!appNavCollapsed ? <ResizeHandle label="Resize navigation" onPointerDown={beginNavResize} /> : null}
             </Layout.Sider>
           ) : null}
           <Layout>
@@ -235,7 +243,7 @@ export default function App() {
                 />
               ) : (
                 <Suspense fallback={<RouteLoadingFallback />}>
-                  <Routes>{renderBuiltinAppRoutes()}</Routes>
+                  <Routes>{memoizedRoutes}</Routes>
                 </Suspense>
               )}
             </Layout.Content>

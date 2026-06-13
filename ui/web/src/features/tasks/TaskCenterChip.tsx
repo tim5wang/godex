@@ -17,17 +17,6 @@ import { selectTaskCenterHeaderContract } from "./selectors";
 // The chip does NOT own open-state: the parent (App.tsx) decides where
 // the task center content is rendered. The chip just calls onOpen.
 
-type ChatStoreShape = {
-  overlayItems: ReadonlyArray<unknown>;
-  historyItems: ReadonlyArray<unknown>;
-  subagents?: ReadonlyArray<unknown>;
-  pendingPermissions?: ReadonlyArray<unknown>;
-  queuedTurns?: ReadonlyArray<unknown>;
-  running: boolean;
-  currentTurnId: string;
-  status: string;
-};
-
 export function TaskCenterChip({ onOpen, label }: { onOpen: () => void; label: string }) {
   // We read the live chat store. buildTaskOutcomes only needs the
   // overlayItems (kind === 'subagent' | 'command' | 'warning' | 'error'
@@ -36,11 +25,9 @@ export function TaskCenterChip({ onOpen, label }: { onOpen: () => void; label: s
   // (buildTaskOutcomes tolerates undefined) — the chip intentionally does
   // not pull them so it stays decoupled from the chat page's per-turn
   // queries. The dock panel (P1-6b) is the place that pulls them.
-  const { overlayItems, running, currentTurnId } = useChatStore((s: ChatStoreShape) => ({
-    overlayItems: s.overlayItems,
-    running: s.running,
-    currentTurnId: s.currentTurnId,
-  }));
+  const overlayItems = useChatStore((s) => s.overlayItems);
+  const running = useChatStore((s) => s.running);
+  const currentTurnId = useChatStore((s) => s.currentTurnId);
 
   const header = useMemo(() => {
     // Use buildTaskOutcomes with the minimal input. The full Task Center

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { describe, it } from "vitest";
 import { buildTaskOutcomes } from "../src/features/chat/taskCenterOutcome.ts";
 import type { FeedItem, LongTaskView } from "../src/lib/types.ts";
 
@@ -27,6 +28,8 @@ function worker(partial: Partial<FeedItem>): FeedItem {
   };
 }
 
+describe("taskCenterOutcome", () => {
+  it("correlates long tasks and subagent outcomes", () => {
 {
   const outcomes = buildTaskOutcomes({
     longTasks: [
@@ -105,4 +108,5 @@ function worker(partial: Partial<FeedItem>): FeedItem {
   assert.equal(outcomes.find((item) => item.worker?.jobId === "subagent_generic")?.status, "merged");
 }
 
-console.log("taskCenterOutcome tests passed");
+  });
+});

@@ -8,7 +8,7 @@ import { clearPersistedLayoutSnapshot } from "./layoutPersistence";
 // unit-test in isolation.
 // ---------------------------------------------------------------------------
 
-export type PanelKey = "appNav" | "sessions" | "chat" | "tasks" | "files" | "terminal" | "drawer" | "notes";
+export type PanelKey = "appNav" | "sessions" | "chat" | "tasks" | "files" | "terminal" | "drawer";
 
 export type PanelState = {
   collapsed: boolean;
@@ -115,7 +115,6 @@ const DEFAULT_PANELS: Record<PanelKey, PanelState> = {
   files: { collapsed: true, width: 320, visible: true },
   terminal: { collapsed: true, width: 320, visible: true },
   drawer: { collapsed: true, width: 320, visible: true },
-  notes: { collapsed: true, width: 320, visible: true },
 };
 
 export const DEFAULT_GRID_OCCUPANCY: Record<GridPresetId, GridOccupancy> = {
@@ -164,7 +163,7 @@ export const DEFAULT_GRID_OCCUPANCY: Record<GridPresetId, GridOccupancy> = {
     topLeft: "files", topRight: "chat", bottomLeft: "terminal", bottomRight: "terminal",
     r0c0: "files", r0c1: "chat", r0c2: "terminal",
     r1c0: "files", r1c1: "chat", r1c2: "terminal",
-    r2c0: "notes", r2c1: "tasks", r2c2: "drawer",
+    r2c0: "drawer", r2c1: "tasks", r2c2: "drawer",
   },
   grid3x3_wideThreeRow: {
     rows: 3,
@@ -250,15 +249,12 @@ export type AppNavLayoutSnapshot = {
   iconOnlyWidth: 48; // SPEC §3.2 fixed narrow width
 };
 
-let _appNavCache: AppNavLayoutSnapshot | null = null;
 export function selectAppNavLayoutState(state: LayoutState): AppNavLayoutSnapshot {
-  const collapsed = state.panels.appNav.collapsed;
-  const width = state.panels.appNav.width ?? 200;
-  if (_appNavCache && _appNavCache.collapsed === collapsed && _appNavCache.width === width) {
-    return _appNavCache;
-  }
-  _appNavCache = { collapsed, width, iconOnlyWidth: 48 as const };
-  return _appNavCache;
+  return {
+    collapsed: state.panels.appNav.collapsed,
+    width: state.panels.appNav.width ?? 200,
+    iconOnlyWidth: 48,
+  };
 }
 
 // ---------------------------------------------------------------------------

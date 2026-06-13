@@ -31,9 +31,9 @@ describe("selectFilesLayoutState (P2 / T6 contract)", () => {
 
   it("derives collapsed from panels.files.collapsed", () => {
     useLayoutStore.getState().toggle("files");
-    expect(selectFilesLayoutState(useLayoutStore.getState()).collapsed).toBe(true);
-    useLayoutStore.getState().toggle("files");
     expect(selectFilesLayoutState(useLayoutStore.getState()).collapsed).toBe(false);
+    useLayoutStore.getState().toggle("files");
+    expect(selectFilesLayoutState(useLayoutStore.getState()).collapsed).toBe(true);
   });
 
   it("derives width from panels.files.width (clamped by setWidth to >= 32)", () => {

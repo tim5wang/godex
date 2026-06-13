@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { describe, it } from "vitest";
 import {
   buildReviewMergeDiffPreview,
   buildReviewMergeMergeResult,
@@ -22,6 +23,8 @@ function worker(partial: Partial<FeedItem>): FeedItem {
   };
 }
 
+describe("reviewMergeCenter", () => {
+  it("builds review, safety, preview, outcome trail, and merge contracts", () => {
 {
   const summary = buildReviewMergeSummary([
     worker({
@@ -185,4 +188,5 @@ function worker(partial: Partial<FeedItem>): FeedItem {
   assert.equal(buildReviewMergeMergeResult(summary.items[0]!, { ...merge, job_id: "other" }), null);
 }
 
-console.log("reviewMergeCenter tests passed");
+  });
+});

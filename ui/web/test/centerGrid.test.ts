@@ -166,7 +166,7 @@ describe("3×3 grid presets (v2.0, M1+ candidate C)", () => {
     expect(occ.r0c0).toBe("files");
     expect(occ.r0c1).toBe("chat");
     expect(occ.r0c2).toBe("terminal");
-    expect(occ.r2c0).toBe("notes");
+    expect(occ.r2c0).toBe("drawer");
     expect(occ.r2c1).toBe("tasks");
     expect(occ.r2c2).toBe("drawer");
     expect(presetShape(occ)).toBe("grid3x3");

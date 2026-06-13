@@ -34,7 +34,24 @@ async function handleAPIRoute(route: Route): Promise<void> {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ providers: [] }),
+        body: JSON.stringify({
+          providers: [
+            {
+              id: "test-provider",
+              name: "Test Provider",
+              has_credential: true,
+              token_present: false,
+            },
+          ],
+        }),
+      });
+      return;
+
+    case path === "/models" || path.startsWith("/models?"):
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ default_profile_id: "", profiles: [] }),
       });
       return;
 
@@ -62,15 +79,47 @@ async function handleAPIRoute(route: Route): Promise<void> {
       });
       return;
 
-    case path === "/config" || path.startsWith("/config/"):
+    case path === "/config/meta" || path === "/config/meta/":
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ source: "test", warnings: [], errors: [] }),
+      });
+      return;
+
+    case path === "/config/schema" || path === "/config/schema/":
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+      return;
+
+    case path === "/config/doctor" || path === "/config/doctor/":
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          lead_name: "Playwright Test",
-          model: "gpt-4",
-          workspace_dir: "/tmp/godex-playwright",
-          auth_required: false,
+          generated_at: "2026-06-13T00:00:00Z",
+          errors: 0,
+          warnings: 0,
+          infos: 0,
+          checks: [],
+        }),
+      });
+      return;
+
+    case path === "/config" || path === "/config/":
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          file_path: "/tmp/godex-playwright/config.yaml",
+          env_file: "/tmp/godex-playwright/.env",
+          revision: 1,
+          stored_values: {},
+          effective_values: {},
+          fields: {},
         }),
       });
       return;
@@ -115,11 +164,16 @@ async function handleAPIRoute(route: Route): Promise<void> {
       });
       return;
 
-    case path === "/usage" || path.startsWith("/usage/"):
+    case path === "/usage/keys" || path === "/usage/keys/":
+    case path === "/usage/models" || path === "/usage/models/":
+    case path.startsWith("/usage/summary"):
+    case path.startsWith("/usage/calls"):
+    case path.startsWith("/usage/time-series"):
+    case path.startsWith("/usage/sessions"):
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({}),
+        body: JSON.stringify([]),
       });
       return;
 

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Badge, Button } from "antd";
-import { useChatStore } from "../chat/store/chat";
+import { useChatStore } from "../../store/chat";
 import { buildTaskOutcomes } from "../chat/taskCenterOutcome";
 import { selectTaskCenterHeaderContract } from "./selectors";
 

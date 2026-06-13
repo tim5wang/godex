@@ -26,7 +26,12 @@ import { useResizableWidth } from "./hooks/useResizableWidth";
 import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
-import { selectAppNavLayoutState, selectTaskCenterDrawerState, useLayoutStore } from "./store/layout";
+import { selectAppNavLayoutState, useLayoutStore } from "./store/layout";
+import {
+  TASK_CENTER_DRAWER_DEFAULT_WIDTH,
+  TASK_CENTER_DRAWER_MIN_WIDTH,
+  TASK_CENTER_DRAWER_MAX_WIDTH,
+} from "./features/tasks/selectors";
 import {
   LAYOUT_STORAGE_KEY,
   applyLayoutSnapshot,
@@ -50,7 +55,14 @@ export default function App() {
   // as the PC task-center entry point and the mobile AppNav.
   const drawerOpen = useLayoutStore((state) => state.taskCenterDrawerOpen);
   const closeTaskCenterDrawer = useLayoutStore((state) => state.closeTaskCenterDrawer);
-  const setMobileNavOpen = closeTaskCenterDrawer;
+  const openTaskCenterDrawer = useLayoutStore((state) => state.openTaskCenterDrawer);
+  const setMobileNavOpen = (open: boolean) => {
+    if (open) {
+      openTaskCenterDrawer();
+    } else {
+      closeTaskCenterDrawer();
+    }
+  };
   // P0-B: AppNav collapsed state lives in the layout store (SPEC §3.2).
   const appNav = useLayoutStore(selectAppNavLayoutState);
   const toggleAppNav = useLayoutStore((state) => state.toggle);
@@ -99,7 +111,6 @@ export default function App() {
     };
   }, []);
 
-  const taskCenterDrawer = useLayoutStore(selectTaskCenterDrawerState);
   // P3 / T7 (SPEC §4.4): Ctrl/Cmd + ` toggles the terminal panel
   // visibility (PC only — mobile surfaces the terminal via the
   // secondary tab bar, not a keyboard shortcut). The hook is
@@ -118,9 +129,9 @@ export default function App() {
   });
   const [taskCenterWidth, beginTaskCenterResize] = useResizableWidth({
     storageKey: "godex.taskCenterWidth",
-    defaultWidth: taskCenterDrawer.width,
-    min: taskCenterDrawer.min,
-    max: taskCenterDrawer.max,
+    defaultWidth: TASK_CENTER_DRAWER_DEFAULT_WIDTH,
+    min: TASK_CENTER_DRAWER_MIN_WIDTH,
+    max: TASK_CENTER_DRAWER_MAX_WIDTH,
   });
   const activeApp = activeBuiltinApp(location.pathname);
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });

@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Button, Input, Splitter, Typography, Space } from "antd";
 import { PlusOutlined, UploadOutlined, SearchOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
-import { selectFilesLayoutState, useLayoutStore } from "../../store/layout";
+import { useLayoutStore } from "../../store/layout";
+import { selectFilesLayoutState } from "./selectFilesLayoutState";
 import { useI18n } from "../../i18n";
 
 // P2 / T6 (SPEC §4.3): the files panel is now mountable in two
@@ -39,23 +40,24 @@ export type FilesPanelProps = {
   selectedPath?: string;
   /** Notify parent when the user picks a different file in the tree. */
   onSelect?: (path: string) => void;
+  /** Transparent wrapper children for mode="page". */
+  children?: React.ReactNode;
 };
 
 export function FilesPanel(props: FilesPanelProps) {
   const { mode } = props;
   if (mode === "page") {
-    return <FilesPanelPageHost />;
+    return <FilesPanelPageHost>{props.children}</FilesPanelPageHost>;
   }
   return <FilesPanelDock {...props} />;
 }
 
-function FilesPanelPageHost() {
+function FilesPanelPageHost({ children }: { children?: React.ReactNode }) {
   // mode="page" is a transparent container. The <FilesPage> route
   // owns its own header / body and is mounted by the router. We render
-  // an empty <div> here so App.tsx can wrap the route element if it
-  // ever needs to (e.g. add a context provider). A2 keeps the page
-  // untouched.
-  return <div data-testid="files-panel-page-host" />;
+  // children inside a wrapper div so App.tsx can wrap the route element
+  // if it ever needs to (e.g. add a context provider).
+  return <div data-testid="files-panel-page-host">{children}</div>;
 }
 
 function FilesPanelDock(props: FilesPanelProps) {
@@ -152,17 +154,24 @@ function FilesPanelDock(props: FilesPanelProps) {
           <Splitter.Panel defaultSize="40%" min="20%">
             <div style={{ height: "100%", overflow: "auto" }}>
               <FileTree
-                cwd={props.cwd ?? "."}
-                onSelect={(path) => {
+                workspaceRoot={props.cwd ?? "."}
+                selectedPath={selectedPath ?? null}
+                refreshKey={0}
+                onSelectFile={(path) => {
                   setSelectedPath(path);
                   props.onSelect?.(path);
                 }}
+                onUnsavedPrompt={async () => "cancel" as const}
+                onNewFile={() => {}}
+                onNewFolder={() => {}}
+                onDelete={() => {}}
+                onRename={() => {}}
               />
             </div>
           </Splitter.Panel>
           <Splitter.Panel>
             <div style={{ height: "100%", overflow: "auto" }}>
-              <CodeEditor value="" language="text" readOnly path={selectedPath ?? "(no file)"} />
+              <CodeEditor content="" filePath={selectedPath ?? "(no file)"} readOnly />
             </div>
           </Splitter.Panel>
         </Splitter>

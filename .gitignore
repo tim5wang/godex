@@ -31,3 +31,8 @@ ui/web/*.tsbuildinfo
 internal/uiassets/embedded_dist/assets
 internal/uiassets/embedded_dist/index.html
 godex-linux-amd64
+
+# Playwright e2e test artifacts
+ui/web/playwright-report/
+ui/web/test-results/
+ui/web/e2e/screenshots/

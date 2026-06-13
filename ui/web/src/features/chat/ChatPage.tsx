@@ -306,10 +306,6 @@ export function ChatPage() {
     }
   }, [openQuery.data, sessionKey, setSession]);
 
-  useEffect(() => {
-    // P1-d: removed localStorage sync for godex.taskCenterCollapsed.
-  }, [taskCenterCollapsed]);
-
   const snapshotQuery = useQuery({
     queryKey: ["snapshot", token, openQuery.data?.session_id],
     enabled: !!openQuery.data?.session_id && (!authRequired || !!token),

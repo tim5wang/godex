@@ -8,7 +8,7 @@ import { clearPersistedLayoutSnapshot } from "./layoutPersistence";
 // unit-test in isolation.
 // ---------------------------------------------------------------------------
 
-export type PanelKey = "appNav" | "sessions" | "tasks" | "files" | "terminal" | "drawer";
+export type PanelKey = "appNav" | "sessions" | "chat" | "tasks" | "files" | "terminal" | "drawer";
 
 export type PanelState = {
   collapsed: boolean;
@@ -47,6 +47,7 @@ export type LayoutSnapshot = {
   centerGrid: GridOccupancy;
   mobileActiveTab: MobileTab;
   dockSide: "right" | "bottom";
+  taskCenterDrawerOpen: boolean;
 };
 
 export type LayoutActions = {
@@ -81,6 +82,7 @@ export const DEFAULT_GRID_RATIOS: GridRatios = {
 const DEFAULT_PANELS: Record<PanelKey, PanelState> = {
   appNav: { collapsed: false, width: 200, visible: true },
   sessions: { collapsed: false, width: 280, visible: true },
+  chat: { collapsed: false, width: 0, visible: true },
   tasks: { collapsed: true, width: 560, visible: true },
   files: { collapsed: true, width: 320, visible: true },
   terminal: { collapsed: true, width: 320, visible: true },
@@ -179,12 +181,15 @@ export type AppNavLayoutSnapshot = {
   iconOnlyWidth: 48; // SPEC §3.2 fixed narrow width
 };
 
+let _appNavCache: AppNavLayoutSnapshot | null = null;
 export function selectAppNavLayoutState(state: LayoutState): AppNavLayoutSnapshot {
-  return {
-    collapsed: state.panels.appNav.collapsed,
-    width: state.panels.appNav.width ?? 200,
-    iconOnlyWidth: 48,
-  };
+  const collapsed = state.panels.appNav.collapsed;
+  const width = state.panels.appNav.width ?? 200;
+  if (_appNavCache && _appNavCache.collapsed === collapsed && _appNavCache.width === width) {
+    return _appNavCache;
+  }
+  _appNavCache = { collapsed, width, iconOnlyWidth: 48 as const };
+  return _appNavCache;
 }
 
 // ---------------------------------------------------------------------------

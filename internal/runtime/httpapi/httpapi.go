@@ -1544,6 +1544,7 @@ func NewHandlerWithRuntime(
 	})))
 	registerUsageRoutes(mux, protected, usageService, manager)
 	registerFileRoutes(mux, protected, manager)
+	registerTerminalRoutes(mux)
 	return mux
 }
 
@@ -1795,4 +1796,15 @@ func statusForSubagentActionError(err error) int {
 		return http.StatusNotFound
 	}
 	return http.StatusBadRequest
+}
+
+// registerTerminalRoutes adds v2.0 terminal endpoints to the mux.
+// These endpoints are unprotected (no web-token check) because the
+// terminal is a local development tool spawned inside the same process.
+func registerTerminalRoutes(mux *http.ServeMux) {
+	tm := globalTerminalManager
+	mux.HandleFunc("POST /v1/terminal/create", tm.handleCreateTerminal)
+	mux.HandleFunc("GET /v1/terminal/{id}/output", tm.handleTerminalOutput)
+	mux.HandleFunc("POST /v1/terminal/{id}/input", tm.handleTerminalInput)
+	mux.HandleFunc("DELETE /v1/terminal/{id}", tm.handleTerminalDelete)
 }

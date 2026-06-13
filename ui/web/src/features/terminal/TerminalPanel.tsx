@@ -3,36 +3,31 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import {
-  createMockTerminal,
-  MOCK_TERMINAL_POLL_MS,
-  pollMockTerminal,
+  createTerminal as createRealTerminal,
+  TERMINAL_POLL_MS,
+  pollTerminal as pollRealTerminal,
   shouldKeepPolling,
-  writeMockTerminalInput,
-  type CreateTerminalResponse,
-  type TerminalInputRequest,
-  type TerminalOutputChunk,
+  writeTerminalInput as writeRealTerminalInput,
+  destroyTerminal,
+} from "../../lib/terminalClient";
+import type {
+  CreateTerminalResponse,
+  TerminalInputRequest,
+  TerminalOutputChunk,
 } from "../../lib/terminalMock";
 
-// P3 / T7 (SPEC §4.4 + M0 doc §3.5): the chat workspace mounts
-// <TerminalPanel> inside one of the CenterGrid cells (PC) or as the
-// "terminal" tab of <MobileWorkspaceTabs> (mobile). The panel is
-// responsible for:
-//   1. Spinning up an xterm.js Terminal + FitAddon on mount.
-//   2. Pulling output via the polling client (v1.0 mock, v2.0 real).
-//   3. Echoing user keystrokes back through the client (v1.0 mock
-//      echoes locally; v2.0 forwards to the Go PTY).
-//   4. Cleaning up on unmount.
+// P3 / T7 (SPEC §4.4 + M0 doc §3.5) — v2.0 upgrade (M1+ candidate A):
+// Swapped from terminalMock.ts (v1.0 polling fallback) to
+// terminalClient.ts (v2.0 real Go PTY backend via HTTP).
 //
 // The component owns its own xterm instance + DOM ref. It does NOT
 // share state with the layout store (the store is grid-level only —
 // which cell holds the terminal — and the terminal itself is local
-// to this panel). v2.0 will add a `terminalId` to the layout store
-// so the same terminal survives a cell move; that is intentionally
-// not in v1.0 to keep the scope small.
+// to this panel).
 
 export type TerminalPanelProps = {
-  /** Test seam: override the polling client. Default = mock client. */
-  createTerminal?: () => CreateTerminalResponse;
+  /** Test seam: override the createTerminal client. */
+  createTerminal?: (workspaceDir?: string) => CreateTerminalResponse;
   pollTerminal?: (id: string, cursor: number, tick: number) => TerminalOutputChunk;
   writeTerminalInput?: (req: TerminalInputRequest, tick: number) => TerminalOutputChunk;
   /** Test seam: override the poll interval. */
@@ -43,10 +38,10 @@ export type TerminalPanelProps = {
 
 export function TerminalPanel(props: TerminalPanelProps) {
   const {
-    createTerminal = createMockTerminal,
-    pollTerminal = pollMockTerminal,
-    writeTerminalInput = writeMockTerminalInput,
-    pollIntervalMs = MOCK_TERMINAL_POLL_MS,
+    createTerminal = createRealTerminal,
+    pollTerminal = pollRealTerminal,
+    writeTerminalInput = writeRealTerminalInput,
+    pollIntervalMs = TERMINAL_POLL_MS,
     testId = "terminal-panel",
   } = props;
 
@@ -73,16 +68,15 @@ export function TerminalPanel(props: TerminalPanelProps) {
     termRef.current = term;
     fitRef.current = fit;
 
-    // Seed the terminal with a mock PTY.
+    // Seed the terminal with a real backend PTY (v2.0).
     const { terminalId } = createTerminal();
     idRef.current = terminalId;
     const first = pollTerminal(terminalId, 0, 0);
     cursorRef.current = first.cursor;
     tickRef.current = 1;
-    term.write(first.data);
+    if (first.data) term.write(first.data);
 
-    // Polling loop. setInterval is fine for v1.0 (mock data);
-    // v2.0 will swap to EventSource / WebSocket.
+    // Polling loop.
     const handle = window.setInterval(() => {
       if (stoppedRef.current) return;
       const next = pollTerminal(idRef.current, cursorRef.current, tickRef.current);
@@ -94,8 +88,8 @@ export function TerminalPanel(props: TerminalPanelProps) {
       }
     }, pollIntervalMs);
 
-    // User keystroke echo (mock). v2.0 will write to the Go PTY
-    // and the polling loop will read the echo back.
+    // User keystroke → Go PTY stdin. The shell echo will appear
+    // in the next poll cycle.
     const onData = term.onData((data) => {
       const req: TerminalInputRequest = { terminalId: idRef.current, data };
       const echo = writeTerminalInput(req, tickRef.current);
@@ -120,6 +114,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      if (idRef.current) destroyTerminal(idRef.current);
     };
   }, [createTerminal, pollTerminal, writeTerminalInput, pollIntervalMs]);
 

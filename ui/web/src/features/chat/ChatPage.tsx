@@ -34,6 +34,7 @@ import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
 import { TaskCenterChip } from "../tasks/TaskCenterChip";
 import { TaskCenterProvider } from "../tasks/TaskCenterContext";
 import { TaskCenterPanel } from "../chat/TaskCenterPanel";
+import { ChatWorkspaceCanvas } from "./ChatWorkspaceCanvas";
 import { LongTaskRefluxBubble, isLongTaskRefluxMessage } from "./LongTaskRefluxBubble";
 import { buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview, type ReviewMergeFilter } from "./reviewMergeCenter";
 import { buildTaskOutcomes } from "./taskCenterOutcome";
@@ -1238,62 +1239,67 @@ export function ChatPage() {
             <Alert type="error" showIcon message={authError} />
           </div>
         ) : (
-          <>
-            <div className="chat-feed" ref={scrollerRef} style={{ minHeight: 0 }}>
-              <div className="chat-feed-inner">
-                <MessageFeed
-                  items={items}
-                  onToggleTool={toggleTool}
-                  onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
-                  savingToNote={saveMessageToNoteMutation.isPending}
-                  hasNoteContext={!!noteContextQuery.data}
+          <ChatWorkspaceCanvas
+            filesCwd="."
+            renderCenter={() => (
+              <>
+                <div className="chat-feed" ref={scrollerRef} style={{ minHeight: 0 }}>
+                  <div className="chat-feed-inner">
+                    <MessageFeed
+                      items={items}
+                      onToggleTool={toggleTool}
+                      onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
+                      savingToNote={saveMessageToNoteMutation.isPending}
+                      hasNoteContext={!!noteContextQuery.data}
+                    />
+                  </div>
+                </div>
+                <NoteContextBanner
+                  note={noteContextQuery.data}
+                  loading={noteContextQuery.isLoading}
+                  error={noteContextQuery.error}
+                  onClear={clearNoteContext}
                 />
-              </div>
-            </div>
-            <NoteContextBanner
-              note={noteContextQuery.data}
-              loading={noteContextQuery.isLoading}
-              error={noteContextQuery.error}
-              onClear={clearNoteContext}
-            />
-            <ApprovalBanner
-              items={pendingPermissions}
-              approving={approvePermissionMutation}
-              denying={denyPermissionMutation}
-            />
-            <div style={{ borderTop: "1px solid var(--godex-border)", padding: "6px 16px" }}>
-              <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-                <Typography.Text type="secondary">
-                  {modelMutation.isPending
-                    ? t("chat.modelSwitching")
-                    : uploading
-                      ? `${t("chat.uploadingAttachments")} ${uploadProgress ?? 0}%`
-                      : queuedTurns.length
-                        ? `${status} · ${queuedTurns.length} queued`
-                        : status}
-                </Typography.Text>
-                <ContextStatusInline summary={contextStatus} />
-                {running ? (
-                  <Segmented
-                    size="small"
-                    value={queueMode}
-                    onChange={(value) => setQueueMode(value as "follow_up" | "steering")}
-                    options={[
-                      { value: "follow_up", label: "Follow-up" },
-                      { value: "steering", label: "Steer" },
-                    ]}
-                  />
-                ) : null}
-              </Space>
-            </div>
-            <Composer
-              disabled={!openQuery.data?.session_id || modelMutation.isPending}
-              uploading={uploading}
-              uploadProgress={uploadProgress}
-              packageCommands={packageCommandsQuery.data ?? []}
-              onSubmit={onSend}
-            />
-          </>
+                <ApprovalBanner
+                  items={pendingPermissions}
+                  approving={approvePermissionMutation}
+                  denying={denyPermissionMutation}
+                />
+                <div style={{ borderTop: "1px solid var(--godex-border)", padding: "6px 16px" }}>
+                  <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+                    <Typography.Text type="secondary">
+                      {modelMutation.isPending
+                        ? t("chat.modelSwitching")
+                        : uploading
+                          ? `${t("chat.uploadingAttachments")} ${uploadProgress ?? 0}%`
+                          : queuedTurns.length
+                            ? `${status} · ${queuedTurns.length} queued`
+                            : status}
+                    </Typography.Text>
+                    <ContextStatusInline summary={contextStatus} />
+                    {running ? (
+                      <Segmented
+                        size="small"
+                        value={queueMode}
+                        onChange={(value) => setQueueMode(value as "follow_up" | "steering")}
+                        options={[
+                          { value: "follow_up", label: "Follow-up" },
+                          { value: "steering", label: "Steer" },
+                        ]}
+                      />
+                    ) : null}
+                  </Space>
+                </div>
+                <Composer
+                  disabled={!openQuery.data?.session_id || modelMutation.isPending}
+                  uploading={uploading}
+                  uploadProgress={uploadProgress}
+                  packageCommands={packageCommandsQuery.data ?? []}
+                  onSubmit={onSend}
+                />
+              </>
+            )}
+          />
         )}
       </section>
       <aside className="chat-inspector">

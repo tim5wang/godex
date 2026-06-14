@@ -836,13 +836,17 @@ func (s *Session) handleEvent(event events.Event) {
 		s.appendAssistantText(text)
 	case events.EventAssistantMessageComplete:
 		text := extractTextField(event)
+		// When deltas were streamed, the text is already on
+		// screen via appendAssistantText.  Emitting it again
+		// here would duplicate the entire assistant response.
+		// Only render the full text when no deltas preceded it
+		// (e.g. an instant non-streaming response).
+		if !s.assistantStreaming {
+			s.appendAssistantText(text)
+		}
 		// Always close the block with a blank line so
 		// the next blockquote (user/tool/warning) has
-		// visual breathing room.  When deltas were
-		// streamed, the text is already on screen;
-		// when no deltas were emitted (small/instant
-		// response), we render the full text now.
-		s.appendAssistantText(text)
+		// visual breathing room.
 		s.tui.WriteString("\n\n")
 		s.assistantStreaming = false
 	case events.EventToolCallStarted:

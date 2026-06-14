@@ -20,17 +20,39 @@ var ErrMaxTurnsReached = errors.New("conversation runner reached max turns")
 // ErrRepeatedToolCalls indicates the model is repeating the same tool call without progress.
 var ErrRepeatedToolCalls = errors.New("conversation runner repeated identical tool calls")
 
-const defaultMaxRepeatedTools = 4
-const defaultToolTimeout = 10 * time.Minute
+const defaultMaxRepeatedTools = 8
+const defaultToolTimeout = 30 * time.Minute
 const repeatedToolCycleWindow = 12
-const defaultMaxRepeatedPollingTools = 3
-const defaultMaxStalledTaskPollingTools = 5
-const defaultMaxEmptyResponses = 2
-const defaultMaxLengthRecoveries = 2
+const defaultMaxRepeatedPollingTools = 5
+const defaultMaxStalledTaskPollingTools = 8
+const defaultMaxEmptyResponses = 3
+const defaultMaxLengthRecoveries = 4
 const defaultMaxInjectionsPerTurn = 8
 const defaultMaxInjectionCycles = 4
-const defaultMaxLoopGuardRecoveries = 2
+const defaultMaxLoopGuardRecoveries = 5
 const benignRepeatableToolCountPrefix = "benign-repeatable:"
+
+// LoopGuardMode controls the loop guard abort behavior.
+type LoopGuardMode string
+
+const (
+	LoopGuardModeStrict   LoopGuardMode = "strict"
+	LoopGuardModeBalanced LoopGuardMode = "balanced"
+	LoopGuardModeWarn     LoopGuardMode = "warn"
+)
+
+func normalizeLoopGuardMode(mode string) LoopGuardMode {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case string(LoopGuardModeStrict), "":
+		return LoopGuardModeStrict
+	case string(LoopGuardModeBalanced):
+		return LoopGuardModeBalanced
+	case string(LoopGuardModeWarn):
+		return LoopGuardModeWarn
+	default:
+		return LoopGuardModeStrict
+	}
+}
 
 const (
 	PhaseModelRequest     = "model_request"
@@ -150,6 +172,7 @@ type Runner struct {
 	MaxRepeatedPollingTools    int
 	MaxStalledTaskPollingTools int
 	MaxLoopGuardRecoveries     int
+	LoopGuardMode              LoopGuardMode
 	ToolTimeout                time.Duration
 }
 
@@ -229,11 +252,16 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 	if maxLoopGuardRecoveries <= 0 {
 		maxLoopGuardRecoveries = defaultMaxLoopGuardRecoveries
 	}
+	loopGuardMode := r.LoopGuardMode
+	if loopGuardMode == "" {
+		loopGuardMode = LoopGuardModeStrict
+	}
 	guard := newLoopGuard(loopGuardConfig{
 		MaxRepeatedTools:           maxRepeatedTools,
 		MaxRepeatedPollingTools:    maxRepeatedPollingTools,
 		MaxStalledTaskPollingTools: maxStalledTaskPollingTools,
 		MaxRecoveries:              maxLoopGuardRecoveries,
+		Mode:                       loopGuardMode,
 	})
 
 	result := &Result{}

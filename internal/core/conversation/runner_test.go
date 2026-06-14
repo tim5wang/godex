@@ -563,7 +563,7 @@ func TestRunnerStopsRepeatedPollingToolInputs(t *testing.T) {
 			"job_id": "subagent_1",
 		}),
 	}}
-	caller := &fakeCaller{responses: []protocol.Response{repeated, repeated, repeated, repeated, repeated}}
+	caller := &fakeCaller{responses: []protocol.Response{repeated, repeated, repeated, repeated, repeated, repeated, repeated}}
 	executions := 0
 
 	result, err := Runner{
@@ -578,13 +578,18 @@ func TestRunnerStopsRepeatedPollingToolInputs(t *testing.T) {
 		AppendToolResults: func(msg protocol.Message) {
 			messages = append(messages, msg)
 		},
+		AppendRuntimeFeedback: func(msg protocol.Message) {
+			messages = append(messages, msg)
+		},
 		ExecuteTool: func(ctx context.Context, name string, input map[string]interface{}) (ToolExecutionResult, error) {
 			_ = ctx
 			executions++
 			return ToolExecutionResult{Output: fmt.Sprintf(`{"status":"running","updated_at":%d}`, executions)}, nil
 		},
-		MaxTurns:         10,
-		MaxRepeatedTools: 10,
+		MaxTurns:                   10,
+		MaxRepeatedTools:           10,
+		MaxStalledTaskPollingTools: 5,
+		MaxLoopGuardRecoveries:     1,
 	}.Run(context.Background())
 	if !errors.Is(err, ErrRepeatedToolCalls) {
 		t.Fatalf("expected repeated polling tool error, got %v", err)
@@ -592,8 +597,8 @@ func TestRunnerStopsRepeatedPollingToolInputs(t *testing.T) {
 	if result == nil || !result.Stopped {
 		t.Fatalf("expected stopped result, got %+v", result)
 	}
-	if caller.calls != 5 || executions != 5 {
-		t.Fatalf("expected 5 calls/executions before guard, got calls=%d executions=%d", caller.calls, executions)
+	if caller.calls != 6 || executions != 6 {
+		t.Fatalf("expected 6 calls/executions before guard aborts after recovery, got calls=%d executions=%d", caller.calls, executions)
 	}
 }
 

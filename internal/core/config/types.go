@@ -219,6 +219,7 @@ type ToolsSection struct {
 	Lightpanda  LightpandaSection    `yaml:"lightpanda"`
 	History     HistorySearchSection `yaml:"history_search"`
 	Permissions PermissionsSection   `yaml:"permissions"`
+	LoopGuard   LoopGuardSection     `yaml:"loop_guard"`
 }
 
 type LightpandaSection struct {
@@ -296,6 +297,7 @@ type ExecutionSection struct {
 	SSHOptions         []string `yaml:"ssh_options"`
 	ShellAllowPatterns []string `yaml:"shell_allow_patterns"`
 	ShellDenyPatterns  []string `yaml:"shell_deny_patterns"`
+	ToolTimeoutSeconds int      `yaml:"tool_timeout_seconds"`
 }
 
 type BrowserSection struct {
@@ -344,6 +346,14 @@ type PermissionsSection struct {
 	PendingTTLSeconds          int      `yaml:"pending_ttl_seconds"`
 	TrustedPathPrefixes        []string `yaml:"trusted_path_prefixes"`
 	TrustedCommandPrefixes     []string `yaml:"trusted_command_prefixes"`
+}
+
+type LoopGuardSection struct {
+	Mode                       string `yaml:"mode"`
+	MaxRecoveries              int    `yaml:"max_recoveries"`
+	MaxRepeatedTools           int    `yaml:"max_repeated_tools"`
+	MaxRepeatedPollingTools    int    `yaml:"max_repeated_polling_tools"`
+	MaxStalledTaskPollingTools int    `yaml:"max_stalled_task_polling_tools"`
 }
 
 type APIKeyRefSection struct {

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
@@ -408,9 +409,17 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	maxTurns := a.maxTurns()
 	a.mu.Lock()
 	caller := a.client
+	loopGuard := a.cfg.Tools.LoopGuard
+	toolTimeout := a.toolTimeout()
 	a.mu.Unlock()
 	result, err := conversation.Runner{
-		Caller: caller,
+		Caller:                     caller,
+		MaxRepeatedTools:           loopGuard.MaxRepeatedTools,
+		MaxRepeatedPollingTools:    loopGuard.MaxRepeatedPollingTools,
+		MaxStalledTaskPollingTools: loopGuard.MaxStalledTaskPollingTools,
+		MaxLoopGuardRecoveries:     loopGuard.MaxRecoveries,
+		LoopGuardMode:              conversation.LoopGuardMode(loopGuard.Mode),
+		ToolTimeout:                toolTimeout,
 		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
 			build, err := a.buildContext(ctx)
 			if err != nil {
@@ -615,6 +624,13 @@ func (a *Agent) maxTurns() int {
 		return a.cfg.MaxTurns
 	}
 	return 1000
+}
+
+func (a *Agent) toolTimeout() time.Duration {
+	if a != nil && a.cfg != nil && a.cfg.Tools.Execution.ToolTimeoutSeconds > 0 {
+		return time.Duration(a.cfg.Tools.Execution.ToolTimeoutSeconds) * time.Second
+	}
+	return 30 * time.Minute
 }
 
 func clonePendingResumeState(input *PendingResumeState) *PendingResumeState {

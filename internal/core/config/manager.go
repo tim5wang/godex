@@ -1562,6 +1562,24 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveCSV("tools.permissions.trusted_command_prefixes", file.Tools.Permissions.TrustedCommandPrefixes, "GODEX_TOOLS_PERMISSIONS_TRUSTED_COMMAND_PREFIXES", func(v []string) {
 		current.Tools.Permissions.TrustedCommandPrefixes = append([]string{}, v...)
 	})
+	resolveString("tools.loop_guard.mode", file.Tools.LoopGuard.Mode, "GODEX_LOOP_GUARD_MODE", func(v string) {
+		current.Tools.LoopGuard.Mode = v
+	})
+	resolveInt("tools.loop_guard.max_recoveries", file.Tools.LoopGuard.MaxRecoveries, "GODEX_LOOP_GUARD_MAX_RECOVERIES", func(v int) {
+		current.Tools.LoopGuard.MaxRecoveries = v
+	})
+	resolveInt("tools.loop_guard.max_repeated_tools", file.Tools.LoopGuard.MaxRepeatedTools, "GODEX_LOOP_GUARD_MAX_REPEATED_TOOLS", func(v int) {
+		current.Tools.LoopGuard.MaxRepeatedTools = v
+	})
+	resolveInt("tools.loop_guard.max_repeated_polling_tools", file.Tools.LoopGuard.MaxRepeatedPollingTools, "GODEX_LOOP_GUARD_MAX_REPEATED_POLLING_TOOLS", func(v int) {
+		current.Tools.LoopGuard.MaxRepeatedPollingTools = v
+	})
+	resolveInt("tools.loop_guard.max_stalled_task_polling_tools", file.Tools.LoopGuard.MaxStalledTaskPollingTools, "GODEX_LOOP_GUARD_MAX_STALLED_TASK_POLLING_TOOLS", func(v int) {
+		current.Tools.LoopGuard.MaxStalledTaskPollingTools = v
+	})
+	resolveInt("tools.execution.tool_timeout_seconds", file.Tools.Execution.ToolTimeoutSeconds, "GODEX_TOOLS_EXECUTION_TOOL_TIMEOUT_SECONDS", func(v int) {
+		current.Tools.Execution.ToolTimeoutSeconds = v
+	})
 	resolveBool("media.moonshot.enabled", file.Media.Moonshot.Enabled, "GODEX_MEDIA_MOONSHOT_ENABLED", func(v bool) {
 		current.Media.Moonshot.Enabled = v
 	})
@@ -1859,6 +1877,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 				SSHOptions:         append([]string{}, file.Tools.Execution.SSHOptions...),
 				ShellAllowPatterns: append([]string{}, file.Tools.Execution.ShellAllowPatterns...),
 				ShellDenyPatterns:  append([]string{}, file.Tools.Execution.ShellDenyPatterns...),
+				ToolTimeoutSeconds: file.Tools.Execution.ToolTimeoutSeconds,
 			},
 			Browser: BrowserConfig{
 				Enabled:              file.Tools.Browser.Enabled,
@@ -1908,6 +1927,13 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 				PendingTTLSeconds:          file.Tools.Permissions.PendingTTLSeconds,
 				TrustedPathPrefixes:        append([]string{}, file.Tools.Permissions.TrustedPathPrefixes...),
 				TrustedCommandPrefixes:     append([]string{}, file.Tools.Permissions.TrustedCommandPrefixes...),
+			},
+			LoopGuard: LoopGuardConfig{
+				Mode:                       file.Tools.LoopGuard.Mode,
+				MaxRecoveries:              file.Tools.LoopGuard.MaxRecoveries,
+				MaxRepeatedTools:           file.Tools.LoopGuard.MaxRepeatedTools,
+				MaxRepeatedPollingTools:    file.Tools.LoopGuard.MaxRepeatedPollingTools,
+				MaxStalledTaskPollingTools: file.Tools.LoopGuard.MaxStalledTaskPollingTools,
 			},
 		},
 		Media: MediaConfig{
@@ -2739,6 +2765,18 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Tools.Permissions.TrustedPathPrefixes = asStringList(value)
 	case "tools.permissions.trusted_command_prefixes":
 		file.Tools.Permissions.TrustedCommandPrefixes = asStringList(value)
+	case "tools.loop_guard.mode":
+		file.Tools.LoopGuard.Mode = asString(value)
+	case "tools.loop_guard.max_recoveries":
+		file.Tools.LoopGuard.MaxRecoveries = asInt(value)
+	case "tools.loop_guard.max_repeated_tools":
+		file.Tools.LoopGuard.MaxRepeatedTools = asInt(value)
+	case "tools.loop_guard.max_repeated_polling_tools":
+		file.Tools.LoopGuard.MaxRepeatedPollingTools = asInt(value)
+	case "tools.loop_guard.max_stalled_task_polling_tools":
+		file.Tools.LoopGuard.MaxStalledTaskPollingTools = asInt(value)
+	case "tools.execution.tool_timeout_seconds":
+		file.Tools.Execution.ToolTimeoutSeconds = asInt(value)
 	case "tools.lightpanda.enabled":
 		file.Tools.Lightpanda.Enabled = asBool(value)
 	case "tools.lightpanda.binary_path":
@@ -3134,6 +3172,12 @@ func storedValues(file ConfigFile) map[string]any {
 		"tools.permissions.interactive_approval_tools":           append([]string{}, file.Tools.Permissions.InteractiveApprovalTools...),
 		"tools.permissions.trusted_path_prefixes":                append([]string{}, file.Tools.Permissions.TrustedPathPrefixes...),
 		"tools.permissions.trusted_command_prefixes":             append([]string{}, file.Tools.Permissions.TrustedCommandPrefixes...),
+		"tools.loop_guard.mode":                                  file.Tools.LoopGuard.Mode,
+		"tools.loop_guard.max_recoveries":                        file.Tools.LoopGuard.MaxRecoveries,
+		"tools.loop_guard.max_repeated_tools":                    file.Tools.LoopGuard.MaxRepeatedTools,
+		"tools.loop_guard.max_repeated_polling_tools":            file.Tools.LoopGuard.MaxRepeatedPollingTools,
+		"tools.loop_guard.max_stalled_task_polling_tools":        file.Tools.LoopGuard.MaxStalledTaskPollingTools,
+		"tools.execution.tool_timeout_seconds":                   file.Tools.Execution.ToolTimeoutSeconds,
 		"tools.lightpanda.enabled":                               file.Tools.Lightpanda.Enabled,
 		"tools.lightpanda.binary_path":                           file.Tools.Lightpanda.BinaryPath,
 		"tools.lightpanda.auto_download":                         file.Tools.Lightpanda.AutoDownload,
@@ -3316,6 +3360,12 @@ func effectiveValues(cfg *Config) map[string]any {
 		"tools.permissions.interactive_approval_tools":           append([]string{}, cfg.Tools.Permissions.InteractiveApprovalTools...),
 		"tools.permissions.trusted_path_prefixes":                append([]string{}, cfg.Tools.Permissions.TrustedPathPrefixes...),
 		"tools.permissions.trusted_command_prefixes":             append([]string{}, cfg.Tools.Permissions.TrustedCommandPrefixes...),
+		"tools.loop_guard.mode":                                  cfg.Tools.LoopGuard.Mode,
+		"tools.loop_guard.max_recoveries":                        cfg.Tools.LoopGuard.MaxRecoveries,
+		"tools.loop_guard.max_repeated_tools":                    cfg.Tools.LoopGuard.MaxRepeatedTools,
+		"tools.loop_guard.max_repeated_polling_tools":            cfg.Tools.LoopGuard.MaxRepeatedPollingTools,
+		"tools.loop_guard.max_stalled_task_polling_tools":        cfg.Tools.LoopGuard.MaxStalledTaskPollingTools,
+		"tools.execution.tool_timeout_seconds":                   cfg.Tools.Execution.ToolTimeoutSeconds,
 		"tools.lightpanda.enabled":                               cfg.Tools.Lightpanda.Enabled,
 		"tools.lightpanda.binary_path":                           cfg.Tools.Lightpanda.BinaryPath,
 		"tools.lightpanda.auto_download":                         cfg.Tools.Lightpanda.AutoDownload,

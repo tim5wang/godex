@@ -593,6 +593,8 @@ tools:
     shell_allow_patterns: {{ yamlListIndent .Tools.Execution.ShellAllowPatterns 6 }}
     # Command glob/prefix patterns denied for bash/background_run before execution. Environment override: GODEX_TOOLS_EXECUTION_SHELL_DENY_PATTERNS.
     shell_deny_patterns: {{ yamlListIndent .Tools.Execution.ShellDenyPatterns 6 }}
+    # Maximum seconds a single tool call can run before timing out. Default 1800 (30 min). Environment override: GODEX_TOOLS_EXECUTION_TOOL_TIMEOUT_SECONDS.
+    tool_timeout_seconds: {{ .Tools.Execution.ToolTimeoutSeconds }}
 
   browser:
     # Enable the built-in browser tool. Environment override: GODEX_BROWSER_ENABLED.
@@ -674,6 +676,18 @@ tools:
     trusted_path_prefixes: {{ yamlListIndent .Tools.Permissions.TrustedPathPrefixes 6 }}
     # Shell command prefixes that bypass approval when any declared paths are also trusted. Environment override: GODEX_TOOLS_PERMISSIONS_TRUSTED_COMMAND_PREFIXES.
     trusted_command_prefixes: {{ yamlListIndent .Tools.Permissions.TrustedCommandPrefixes 6 }}
+
+  loop_guard:
+    # strict may abort after recovery budget; balanced recovers infinitely; warn always recovers without state tracking. Environment override: GODEX_LOOP_GUARD_MODE.
+    mode: {{ yamlString .Tools.LoopGuard.Mode }}
+    # Total recovery attempts before abort (strict mode only). Environment override: GODEX_LOOP_GUARD_MAX_RECOVERIES.
+    max_recoveries: {{ .Tools.LoopGuard.MaxRecoveries }}
+    # Consecutive identical tool+input+output calls before loop guard recovery. Environment override: GODEX_LOOP_GUARD_MAX_REPEATED_TOOLS.
+    max_repeated_tools: {{ .Tools.LoopGuard.MaxRepeatedTools }}
+    # Consecutive identical polling tool input before loop guard recovery. Environment override: GODEX_LOOP_GUARD_MAX_REPEATED_POLLING_TOOLS.
+    max_repeated_polling_tools: {{ .Tools.LoopGuard.MaxRepeatedPollingTools }}
+    # Consecutive no-progress task polls before loop guard recovery. Environment override: GODEX_LOOP_GUARD_MAX_STALLED_TASK_POLLING_TOOLS.
+    max_stalled_task_polling_tools: {{ .Tools.LoopGuard.MaxStalledTaskPollingTools }}
 
 media:
   moonshot:

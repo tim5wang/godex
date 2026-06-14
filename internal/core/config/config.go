@@ -280,6 +280,7 @@ type ToolsConfig struct {
 	Lightpanda  LightpandaConfig
 	History     HistorySearchConfig
 	Permissions PermissionConfig
+	LoopGuard   LoopGuardConfig
 }
 
 // LightpandaConfig controls the lightpanda headless browser integration.
@@ -346,6 +347,7 @@ type ToolExecutionConfig struct {
 	SSHOptions         []string
 	ShellAllowPatterns []string
 	ShellDenyPatterns  []string
+	ToolTimeoutSeconds int
 }
 
 // GlobConfig controls the built-in glob tool.
@@ -417,6 +419,16 @@ type PermissionConfig struct {
 	PendingTTLSeconds          int
 	TrustedPathPrefixes        []string
 	TrustedCommandPrefixes     []string
+}
+
+// LoopGuardConfig controls the conversation loop guard behavior including
+// repeated-tool detection, stalled-polling detection, and recovery budget.
+type LoopGuardConfig struct {
+	Mode                       string
+	MaxRecoveries              int
+	MaxRepeatedTools           int
+	MaxRepeatedPollingTools    int
+	MaxStalledTaskPollingTools int
 }
 
 // MediaConfig controls shared attachment parsing and derived media artifacts.

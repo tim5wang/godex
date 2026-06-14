@@ -20,6 +20,10 @@ type loopGuardConfig struct {
 	MaxRepeatedPollingTools    int
 	MaxStalledTaskPollingTools int
 	MaxRecoveries              int
+	// Mode controls abort behavior: strict may abort after exhausting
+	// recoveries; balanced never aborts (infinite recoveries); warn
+	// always recovers with a stronger warning but never aborts.
+	Mode LoopGuardMode
 	// StaleTodoThreshold is the number of turns an in_progress todo item is
 	// allowed to stay unchanged while the agent keeps executing non-todo tools
 	// before the loop guard emits a stale_todo_in_progress recovery feedback.
@@ -203,6 +207,26 @@ func (g *loopGuard) decide(decision loopGuardDecision) loopGuardDecision {
 	if decision.Fingerprint == "" {
 		decision.Fingerprint = decision.Reason
 	}
+	// warn mode: always recover, never abort. The model gets feedback but the
+	// runner continues indefinitely. Useful for long-running tasks where the
+	// user prefers the agent decide when to stop.
+	if g.config.Mode == LoopGuardModeWarn {
+		g.totalRecovery++
+		decision.Action = loopGuardRecover
+		decision.Feedback = loopGuardFeedback(decision, g.totalRecovery, -1)
+		decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d (warn-only mode) asked the model to change strategy.", g.totalRecovery)
+		return decision
+	}
+	// balanced mode: recover infinitely but never abort. Differs from warn
+	// by still tracking per-fingerprint exhaustion for better diagnostics.
+	if g.config.Mode == LoopGuardModeBalanced {
+		g.recovered[decision.Fingerprint]++
+		g.totalRecovery++
+		decision.Action = loopGuardRecover
+		decision.Feedback = loopGuardFeedback(decision, g.totalRecovery, -1)
+		decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d (balanced mode) asked the model to change strategy.", g.totalRecovery)
+		return decision
+	}
 	if g.config.MaxRecoveries <= 0 {
 		decision.Action = loopGuardAbort
 		decision.AbortReason = "loop guard recovery is disabled"
@@ -273,10 +297,14 @@ func (d loopGuardDecision) AbortMessage() string {
 }
 
 func loopGuardFeedback(decision loopGuardDecision, recovery, maxRecovery int) string {
+	budget := fmt.Sprintf("Recovery budget: %d/%d.", recovery, maxRecovery)
+	if maxRecovery < 0 {
+		budget = fmt.Sprintf("Recovery #%d (unlimited).", recovery)
+	}
 	return strings.Join([]string{
 		"Runtime feedback: loop_guard_recovery.",
 		fmt.Sprintf("Reason: %s.", decision.Summary()),
-		fmt.Sprintf("Recovery budget: %d/%d.", recovery, maxRecovery),
+		budget,
 		"Do not repeat the same tool call, query, polling request, or tool sequence again.",
 		"Use the tool result/error already in context as evidence, change strategy, try a meaningfully different input/tool, or provide a concise diagnostic handoff to the user.",
 		"Last tool input: " + truncateLoopGuardText(marshalLoopGuardValue(decision.Tool.Input), 500),
@@ -295,6 +323,14 @@ func loopGuardAbortHint(decision loopGuardDecision) string {
 // item that the model refuses to mark completed is escalated to abort after
 // MaxRecoveries observations.
 func (g *loopGuard) decideStaleTodo(decision loopGuardDecision, itemID int, content, activeForm string) loopGuardDecision {
+	if g.config.Mode == LoopGuardModeWarn || g.config.Mode == LoopGuardModeBalanced {
+		g.staleRecovered[itemID]++
+		g.totalRecovery++
+		decision.Action = loopGuardRecover
+		decision.Feedback = staleTodoFeedback(itemID, content, activeForm, g.staleRecovered[itemID], -1)
+		decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d (%s mode) reminded the model to update the stale in_progress todo item.", g.totalRecovery, g.config.Mode)
+		return decision
+	}
 	if g.config.MaxRecoveries <= 0 {
 		decision.Action = loopGuardAbort
 		decision.AbortReason = "loop guard recovery is disabled"
@@ -339,8 +375,12 @@ func staleTodoFeedback(itemID int, content, activeForm string, recovery, maxReco
 	if form != "" {
 		lines = append(lines, fmt.Sprintf("Active form on file: %q.", form))
 	}
+	budget := fmt.Sprintf("Recovery budget: %d/%d.", recovery, maxRecovery)
+	if maxRecovery < 0 {
+		budget = fmt.Sprintf("Recovery #%d (unlimited).", recovery)
+	}
 	lines = append(lines,
-		fmt.Sprintf("Recovery budget: %d/%d.", recovery, maxRecovery),
+		budget,
 		"Call todo_write now to: (1) mark this item completed if the work is done, (2) flip it to the next pending item, or (3) split it into smaller steps and update the plan.",
 		"Do not advance to the next sub-step without first reflecting the current state in the todo list.",
 	)

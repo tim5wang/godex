@@ -254,6 +254,7 @@ func baseSchema() []SectionSchema {
 				{Path: "tools.execution.ssh_options", Label: "SSH Options", Description: "Extra ssh options, such as -o BatchMode=yes.", Type: "string_list", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_SSH_OPTIONS"},
 				{Path: "tools.execution.shell_allow_patterns", Label: "Shell Allow Patterns", Description: "Optional command glob/prefix patterns allowed for bash/background_run. Empty means no extra allow restriction.", Type: "string_list", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_SHELL_ALLOW_PATTERNS"},
 				{Path: "tools.execution.shell_deny_patterns", Label: "Shell Deny Patterns", Description: "Command glob/prefix patterns denied for bash/background_run before execution.", Type: "string_list", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_SHELL_DENY_PATTERNS"},
+				{Path: "tools.execution.tool_timeout_seconds", Label: "Tool Timeout Seconds", Description: "Maximum seconds a single tool call (bash, browser, etc.) may run before timing out. Default 1800 (30 min).", Type: "int", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_TOOL_TIMEOUT_SECONDS"},
 			},
 		},
 		{
@@ -317,6 +318,18 @@ func baseSchema() []SectionSchema {
 				{Path: "tools.permissions.interactive_approval_tools", Label: "Approval Tools", Description: "Comma-separated tool names that require approval when called from the configured sources.", Type: "string_list", LiveApply: true, Env: "GODEX_TOOLS_PERMISSIONS_INTERACTIVE_APPROVAL_TOOLS"},
 				{Path: "tools.permissions.trusted_path_prefixes", Label: "Trusted Path Prefixes", Description: "Comma-separated path prefixes that bypass interactive approval for write/edit/install operations in remote sessions.", Type: "string_list", LiveApply: true, Env: "GODEX_TOOLS_PERMISSIONS_TRUSTED_PATH_PREFIXES"},
 				{Path: "tools.permissions.trusted_command_prefixes", Label: "Trusted Command Prefixes", Description: "Comma-separated shell command prefixes that bypass interactive approval for bash/background_run when declared paths are also trusted.", Type: "string_list", LiveApply: true, Env: "GODEX_TOOLS_PERMISSIONS_TRUSTED_COMMAND_PREFIXES"},
+			},
+		},
+		{
+			ID:          "tools-loop-guard",
+			Label:       "Tools / Loop Guard",
+			Description: "Repeated-tool and stalled-polling detection guardrails. Controls recovery vs abort strategy for looping agent behavior.",
+			Fields: []FieldSchema{
+				{Path: "tools.loop_guard.mode", Label: "Mode", Description: "strict may abort after recovery budget; balanced recovers infinitely; warn always recovers with no state tracking.", Type: "string", LiveApply: true, Env: "GODEX_LOOP_GUARD_MODE", Options: []string{"strict", "balanced", "warn"}},
+				{Path: "tools.loop_guard.max_recoveries", Label: "Max Recoveries", Description: "Total recovery attempts before abort (strict mode only). Default 5.", Type: "int", LiveApply: true, Env: "GODEX_LOOP_GUARD_MAX_RECOVERIES"},
+				{Path: "tools.loop_guard.max_repeated_tools", Label: "Max Repeated Tools", Description: "Consecutive identical tool+result calls before loop guard triggers. Default 8.", Type: "int", LiveApply: true, Env: "GODEX_LOOP_GUARD_MAX_REPEATED_TOOLS"},
+				{Path: "tools.loop_guard.max_repeated_polling_tools", Label: "Max Repeated Polling", Description: "Consecutive identical polling input before loop guard triggers. Default 5.", Type: "int", LiveApply: true, Env: "GODEX_LOOP_GUARD_MAX_REPEATED_POLLING_TOOLS"},
+				{Path: "tools.loop_guard.max_stalled_task_polling_tools", Label: "Max Stalled Task Polling", Description: "Consecutive no-progress task polls before loop guard triggers. Default 8.", Type: "int", LiveApply: true, Env: "GODEX_LOOP_GUARD_MAX_STALLED_TASK_POLLING_TOOLS"},
 			},
 		},
 		{

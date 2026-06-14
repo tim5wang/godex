@@ -186,12 +186,13 @@ func defaultConfigFile() ConfigFile {
 				WorkspaceTTLHours:    168,
 			},
 			Execution: ExecutionSection{
-				Mode:          "local",
-				DockerImage:   "golang:1.26",
-				DockerNetwork: "",
-				SSHTarget:     "",
-				SSHWorkspace:  "",
-				SSHOptions:    []string{},
+				Mode:               "local",
+				DockerImage:        "golang:1.26",
+				DockerNetwork:      "",
+				SSHTarget:          "",
+				SSHWorkspace:       "",
+				SSHOptions:         []string{},
+				ToolTimeoutSeconds: 1800,
 			},
 			Browser: BrowserSection{
 				Enabled:              false,
@@ -231,7 +232,7 @@ func defaultConfigFile() ConfigFile {
 				BlockAutomationMutations:   true,
 				InteractiveApprovalEnabled: true,
 				InteractiveApprovalMode:    "manual",
-				PendingTTLSeconds:          300,
+				PendingTTLSeconds:          900,
 				InteractiveApprovalSources: []string{"web", "gateway", "feishu", "weixin"},
 				InteractiveApprovalTools: []string{
 					"bash",
@@ -247,6 +248,13 @@ func defaultConfigFile() ConfigFile {
 				},
 				TrustedPathPrefixes:    []string{},
 				TrustedCommandPrefixes: append([]string{}, defaultTrustedCommandPrefixes...),
+			},
+			LoopGuard: LoopGuardSection{
+				Mode:                       "strict",
+				MaxRecoveries:              5,
+				MaxRepeatedTools:           8,
+				MaxRepeatedPollingTools:    5,
+				MaxStalledTaskPollingTools: 8,
 			},
 		},
 		Media: MediaSection{

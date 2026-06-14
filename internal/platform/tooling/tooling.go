@@ -102,7 +102,7 @@ func WriteFileDefinition() Definition {
 func EditFileDefinition() Definition {
 	return Definition{
 		Name:        "edit_file",
-		Description: "Make precise text replacements in a workspace-relative file. Supports single edit (old_text/new_text) or multiple non-overlapping edits (edits[] array). Each old_text must be unique in the file. Multiple edits are applied in order.",
+		Description: "Make precise text replacements in a workspace-relative file. Supports single edit (old_text/new_text) or multiple non-overlapping edits (edits[] array). Each old_text must be unique in the file and must match the original file content before any edits are applied. Edits must not overlap with each other.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -117,7 +117,7 @@ func EditFileDefinition() Definition {
 				},
 				"edits": map[string]interface{}{
 					"type":        "array",
-					"description": "Multiple non-overlapping edits to apply in order. Each edit has old_text and new_text. Old texts must be unique and non-overlapping.",
+					"description": "Multiple non-overlapping edits. Every old_text must match the ORIGINAL file (before any edits are applied). Edits must not overlap and each old_text must appear exactly once.",
 					"items": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
@@ -1042,8 +1042,9 @@ func (e *WorkspaceExecutor) EditFileMulti(path string, edits []FileEdit) (string
 		}
 	}
 
-	// Apply edits in order. Later edits adjust their target positions by the net
-	// size change from earlier edits that appear before them.
+	// Apply edits in ascending position order. Because we always slice
+	// from the original content (not a mutable copy), we never need
+	// to adjust positions for size changes introduced by earlier edits.
 	sort.SliceStable(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
 
 	var buf strings.Builder

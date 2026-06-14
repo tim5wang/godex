@@ -379,6 +379,7 @@ export default function FilesPage() {
                 onDelete={handleDelete}
                 onRename={handleRename}
                 refreshKey={refreshKey}
+                searchQuery=""
               />
             </div>
             {/* Drag handle */}

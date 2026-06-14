@@ -291,13 +291,10 @@ function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: (
 
 function Brand({ compact = false }: { compact?: boolean }) {
   const { t } = useI18n();
-  const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
-  const version = metaQuery.data?.version?.version;
   return (
-    <div className={compact ? "" : "godex-brand"} title={version ? `GoDex ${version}` : undefined}>
+    <div className={compact ? "" : "godex-brand"}>
       <span className="godex-brand-mark">G</span>
       <span>{t("app.title")}</span>
-      {version ? <Typography.Text type="secondary">{version}</Typography.Text> : null}
     </div>
   );
 }

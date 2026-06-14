@@ -374,6 +374,7 @@ export function SettingsPage() {
                       { key: "home-env", label: "Home .env", children: configMetaQuery.data?.home_env_file ?? "-" },
                       { key: "project-env", label: "Project .env", children: configMetaQuery.data?.project_env_file ?? "-" },
                       { key: "revision", label: "Revision", children: configMetaQuery.data?.revision ?? "-" },
+                      { key: "version", label: t("settings.version"), children: metaQuery.data?.version?.version ?? "-" },
                       { key: "sync", label: "Config sync", children: configInSync ? "stored = effective" : "stored != effective" },
                     ]}
                   />

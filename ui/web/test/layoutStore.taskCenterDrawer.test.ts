@@ -10,8 +10,8 @@ beforeEach(() => reset());
 afterEach(() => reset());
 
 describe("taskCenterDrawerOpen (P1 / T5e cross-page wiring contract)", () => {
-  it("defaults to closed (a fresh layout has the drawer shut)", () => {
-    expect(useLayoutStore.getState().taskCenterDrawerOpen).toBe(false);
+  it("defaults to open (a fresh layout has the drawer visible)", () => {
+    expect(useLayoutStore.getState().taskCenterDrawerOpen).toBe(true);
   });
 
   it("openTaskCenterDrawer() flips the flag on", () => {
@@ -28,11 +28,11 @@ describe("taskCenterDrawerOpen (P1 / T5e cross-page wiring contract)", () => {
     expect(useLayoutStore.getState().taskCenterDrawerOpen).toBe(false);
   });
 
-  it("reset() restores the flag to its default (closed)", () => {
-    useLayoutStore.getState().openTaskCenterDrawer();
-    expect(useLayoutStore.getState().taskCenterDrawerOpen).toBe(true);
-    useLayoutStore.getState().reset();
+  it("reset() restores the flag to its default (open)", () => {
+    useLayoutStore.getState().closeTaskCenterDrawer();
     expect(useLayoutStore.getState().taskCenterDrawerOpen).toBe(false);
+    useLayoutStore.getState().reset();
+    expect(useLayoutStore.getState().taskCenterDrawerOpen).toBe(true);
   });
 
   it("opening the task center drawer does not perturb the center grid preset or AppNav state", () => {

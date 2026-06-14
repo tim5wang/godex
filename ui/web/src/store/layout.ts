@@ -71,6 +71,8 @@ export type LayoutSnapshot = {
   centerGridRatios: GridRatios;
   centerGrid: GridOccupancy;
   centerGridCollapsedPanels: Partial<Record<PanelKey, boolean>>;
+  /** Slot each collapsed panel was collapsed from — used to restore it even if another panel moved into that slot. */
+  centerGridCollapsedSlots: Partial<Record<PanelKey, GridSlot>>;
   mobileActiveTab: MobileTab;
   dockSide: "right" | "bottom";
   taskCenterDrawerOpen: boolean;
@@ -231,8 +233,9 @@ export const DEFAULT_LAYOUT_SNAPSHOT: LayoutSnapshot = {
   centerGridRatios: { ...DEFAULT_GRID_RATIOS },
   centerGrid: { ...DEFAULT_GRID_OCCUPANCY[DEFAULT_GRID_PRESET] },
   centerGridCollapsedPanels: {},
+  centerGridCollapsedSlots: {},
   mobileActiveTab: "chat",
-  taskCenterDrawerOpen: false,
+  taskCenterDrawerOpen: true,
   dockSide: "right",
 };
 
@@ -390,6 +393,14 @@ function gridHas(occupancy: GridOccupancy, panel: PanelKey): boolean {
   return (Object.values(occupancy) as Array<PanelKey | null>).includes(panel);
 }
 
+/** Find the first slot a panel occupies in the grid. */
+function findPanelSlot(occ: GridOccupancy, panel: PanelKey): GridSlot | undefined {
+  for (const k of cellKeysForGrid(occ)) {
+    if (occ[k] === panel) return k;
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -423,6 +434,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
       centerGridPreset: id,
       centerGrid: { ...DEFAULT_GRID_OCCUPANCY[id] },
       centerGridCollapsedPanels: {},
+      centerGridCollapsedSlots: {},
     }));
   },
 
@@ -431,7 +443,10 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     if (!isCellSlot(slot)) return;
     set((state) => {
       const occupant = state.centerGrid[slot];
-      if (occupant && occupant !== panel) return state;
+      // Block only if the target slot is occupied by a non-collapsed,
+      // different panel.  Collapsed panels are effectively empty —
+      // the visibility layer hides them and the menu shows "Move".
+      if (occupant && occupant !== panel && !state.centerGridCollapsedPanels[occupant]) return state;
       if (occupant === panel) return state;
       const next: GridOccupancy = { ...state.centerGrid };
       for (const k of cellKeysForGrid(next)) {
@@ -488,13 +503,37 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   setCenterGridPanelCollapsed: (panel, collapsed) => {
     if (!isPanelKey(panel)) return;
     set((state) => {
-      const next = { ...state.centerGridCollapsedPanels };
+      const nextCollapsed = { ...state.centerGridCollapsedPanels };
+      const nextSlots = { ...state.centerGridCollapsedSlots };
       if (collapsed) {
-        next[panel] = true;
+        nextCollapsed[panel] = true;
+        // Remember which slot this panel was collapsed from.
+        const slot = findPanelSlot(state.centerGrid, panel);
+        if (slot) nextSlots[panel] = slot;
       } else {
-        delete next[panel];
+        delete nextCollapsed[panel];
+        // If the panel has no slot anymore (another panel moved in),
+        // restore it to its original slot by swapping.
+        const existingSlot = findPanelSlot(state.centerGrid, panel);
+        const rememberedSlot = nextSlots[panel];
+        delete nextSlots[panel];
+        if (!existingSlot && rememberedSlot) {
+          const grid = state.centerGrid as unknown as Record<string, PanelKey | null | undefined>;
+          const occupant = grid[rememberedSlot];
+          if (occupant && occupant !== panel) {
+            // Swap: put this panel back, collapse the occupant.
+            const nextGrid = { ...state.centerGrid };
+            (nextGrid as Record<string, unknown>)[rememberedSlot] = panel;
+            // Move the displaced occupant to a free slot or collapse it.
+            (nextCollapsed as Record<string, boolean>)[occupant] = true;
+            (nextSlots as Record<string, GridSlot>)[occupant] = rememberedSlot;
+          }
+        }
       }
-      return { centerGridCollapsedPanels: next };
+      return {
+        centerGridCollapsedPanels: nextCollapsed,
+        centerGridCollapsedSlots: nextSlots,
+      };
     });
   },
 

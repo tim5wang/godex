@@ -174,7 +174,9 @@ export function ChatPage() {
 
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const inspectorCollapsed = !useLayoutStore((state) => state.taskCenterDrawerOpen);
+  const openInspector = useLayoutStore((state) => state.openTaskCenterDrawer);
+  const closeInspector = useLayoutStore((state) => state.closeTaskCenterDrawer);
   const [inspectorActiveKey, setInspectorActiveKey] = useState("approvals");
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -197,12 +199,12 @@ export function ChatPage() {
   const [timelineCursorStack, setTimelineCursorStack] = useState<string[]>([]);
   const openTaskCenterPanel = () => {
     if (inspectorActiveKey === "taskCenter" && !inspectorCollapsed) {
-      setInspectorCollapsed(true);
+      closeInspector();
       setInspectorOpen(false);
       return;
     }
+    openInspector();
     setInspectorActiveKey("taskCenter");
-    setInspectorCollapsed(false);
     setInspectorOpen(!screens.lg);
   };
   // T15: track longtask reflux bubbles. The chat list still
@@ -1034,7 +1036,7 @@ export function ChatPage() {
       activeKey={inspectorActiveKey}
       onActiveKeyChange={setInspectorActiveKey}
       onCollapseInspector={() => {
-        setInspectorCollapsed(true);
+        closeInspector();
         setInspectorOpen(false);
       }}
       taskCenterPanel={(
@@ -1042,7 +1044,7 @@ export function ChatPage() {
           outcomes={taskOutcomes}
           collapsed={false}
           onCollapsedChange={() => {
-            setInspectorCollapsed(true);
+            closeInspector();
             setInspectorOpen(false);
           }}
           reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}

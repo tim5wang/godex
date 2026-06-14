@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
-import { Tree, Spin, message, Button, Modal } from "antd";
-import { FolderOutlined, FolderOpenOutlined, FileOutlined, PlusOutlined } from "@ant-design/icons";
+import { Tree, Spin, message, Menu } from "antd";
+import type { MenuProps } from "antd";
+import { FolderOutlined, FolderOpenOutlined, FileOutlined, CopyOutlined, EditOutlined, DeleteOutlined, UploadOutlined } from "@ant-design/icons";
 import type { DataNode } from "antd/es/tree";
 import { useSettingsStore } from "../../store/settings";
 import { listFiles, type FileEntry } from "../../lib/api";
+import { writeClipboardText } from "../../lib/clipboard";
 
 interface FileTreeProps {
   workspaceRoot: string;
   selectedPath: string | null;
   onSelectFile: (path: string) => void;
   onUnsavedPrompt: (path: string) => Promise<"save" | "discard" | "cancel">;
-  onNewFile: (parentPath: string) => void;
-  onNewFolder: (parentPath: string) => void;
+  onNewFile: (targetDir: string) => void;
+  onNewFolder: (targetDir: string) => void;
+  onUploadTo?: (targetDir: string) => void;
   onDelete: (path: string) => void;
   onRename: (path: string) => void;
   refreshKey: number;
+  searchQuery: string;
 }
 
 function buildTreeNodes(entries: FileEntry[], parentPath: string): DataNode[] {
@@ -53,14 +57,17 @@ export default function FileTree({
   onUnsavedPrompt,
   onNewFile,
   onNewFolder,
+  onUploadTo,
   onDelete,
   onRename,
   refreshKey,
+  searchQuery,
 }: FileTreeProps) {
   const token = useSettingsStore((s) => s.token);
   const [treeData, setTreeData] = useState<DataNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadedDirs, setLoadedDirs] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<{ open: boolean; x: number; y: number; path: string; title: string; isLeaf: boolean }>({ open: false, x: 0, y: 0, path: "", title: "", isLeaf: true });
 
   const loadDir = useCallback(
     async (dir: string) => {
@@ -108,36 +115,60 @@ export default function FileTree({
   };
 
   const handleRightClick = (info: any) => {
-    const path = info.node.key as string;
-    const isLeaf = info.node.isLeaf;
-    Modal.confirm({
-      title: `Actions for ${info.node.title}`,
-      content: null,
-      footer: null,
-      children: (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <Button block onClick={() => { Modal.destroyAll(); onNewFile(isLeaf ? parentPath(path) : path); }}>
-            <PlusOutlined /> New File
-          </Button>
-          <Button block onClick={() => { Modal.destroyAll(); onNewFolder(isLeaf ? parentPath(path) : path); }}>
-            <FolderOutlined /> New Folder
-          </Button>
-          <Button block onClick={() => { Modal.destroyAll(); onRename(path); }}>
-            Rename
-          </Button>
-          <Button block danger onClick={() => { Modal.destroyAll(); onDelete(path); }}>
-            Delete
-          </Button>
-        </div>
-      ),
+    setContextMenu({
+      open: true,
+      x: info.event.clientX,
+      y: info.event.clientY,
+      path: info.node.key as string,
+      title: info.node.title as string,
+      isLeaf: info.node.isLeaf as boolean,
     });
   };
+
+  const closeContextMenu = () => setContextMenu((prev) => ({ ...prev, open: false }));
+
+  const targetDir = contextMenu.isLeaf ? (contextMenu.path.substring(0, contextMenu.path.lastIndexOf("/") || 0) || ".") : contextMenu.path;
+
+  const contextMenuItems: MenuProps["items"] = [
+    {
+      key: "new-file",
+      label: "New file",
+      icon: <FileOutlined />,
+      onClick: () => { closeContextMenu(); onNewFile(targetDir); },
+    },
+    {
+      key: "new-folder",
+      label: "New folder",
+      icon: <FolderOutlined />,
+      onClick: () => { closeContextMenu(); onNewFolder(targetDir); },
+    },
+    ...(onUploadTo ? [{
+      key: "upload",
+      label: "Upload file",
+      icon: <UploadOutlined />,
+      onClick: () => { closeContextMenu(); onUploadTo(targetDir); },
+    }] : []),
+    { type: "divider" },
+    {
+      key: "rename",
+      label: "Rename",
+      icon: <EditOutlined />,
+      onClick: () => { closeContextMenu(); onRename(contextMenu.path); },
+    },
+    {
+      key: "delete",
+      label: "Delete",
+      icon: <DeleteOutlined />,
+      danger: true,
+      onClick: () => { closeContextMenu(); onDelete(contextMenu.path); },
+    },
+  ];
 
   return (
     <div style={{ overflow: "auto", height: "100%", padding: 8 }}>
       <Spin spinning={loading}>
         <Tree.DirectoryTree
-          treeData={treeData}
+          treeData={searchQuery ? filterTree(treeData, searchQuery) : treeData}
           loadData={onLoadData}
           onSelect={handleSelect}
           onRightClick={handleRightClick}
@@ -145,6 +176,22 @@ export default function FileTree({
           style={{ fontSize: 13 }}
         />
       </Spin>
+      {contextMenu.open ? (
+        <>
+          {/* Backdrop to close menu on any click */}
+          <div
+            onClick={closeContextMenu}
+            onContextMenu={(e) => { e.preventDefault(); closeContextMenu(); }}
+            style={{ position: "fixed", inset: 0, zIndex: 999 }}
+          />
+          <div style={{ position: "fixed", left: contextMenu.x, top: contextMenu.y, zIndex: 1000 }}>
+            <Menu
+              items={contextMenuItems}
+              style={{ minWidth: 200 }}
+            />
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -152,6 +199,35 @@ export default function FileTree({
 function parentPath(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? "." : path.substring(0, idx);
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    await writeClipboardText(text);
+  } catch {
+    // Fallback: use execCommand
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+  }
+}
+
+function filterTree(nodes: DataNode[], query: string): DataNode[] {
+  if (!query) return nodes;
+  const q = query.toLowerCase();
+  return nodes.reduce<DataNode[]>((acc, node) => {
+    const title = String(node.title).toLowerCase();
+    const children = node.children ? filterTree(node.children, query) : [];
+    if (title.includes(q) || children.length > 0) {
+      acc.push({ ...node, children: children.length > 0 ? children : node.children });
+    }
+    return acc;
+  }, []);
 }
 
 function findNode(nodes: DataNode[], key: string): DataNode | null {

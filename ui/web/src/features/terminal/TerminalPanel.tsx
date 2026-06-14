@@ -32,8 +32,8 @@ export type TerminalPanelProps = {
 const SYS_INFO_BANNER = [
   "\x1b[1;36m┌──────────────────────────────────────────┐\x1b[0m\r\n",
   "\x1b[1;36m│\x1b[0m  \x1b[1;33mGoDex Terminal\x1b[0m                         \x1b[1;36m│\x1b[0m\r\n",
-  "\x1b[1;36m│\x1b[0m  Backend: Go pipe-I/O (PTY pending)       \x1b[1;36m│\x1b[0m\r\n",
-  "\x1b[1;36m│\x1b[0m  Shell:  bash / sh                         \x1b[1;36m│\x1b[0m\r\n",
+  "\x1b[1;36m│\x1b[0m  Backend: Go PTY (creack/pty)              \x1b[1;36m│\x1b[0m\r\n",
+  "\x1b[1;36m│\x1b[0m  Shell:  bash -i                           \x1b[1;36m│\x1b[0m\r\n",
   "\x1b[1;36m└──────────────────────────────────────────┘\x1b[0m\r\n",
   "\r\n",
 ].join("");
@@ -48,7 +48,6 @@ export function TerminalPanel(props: TerminalPanelProps) {
   } = props;
 
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const cursorRef = useRef(0);
@@ -58,29 +57,37 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const outputTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const roRef = useRef<ResizeObserver | null>(null);
+  const onDataRef = useRef<{ dispose(): void } | null>(null);
 
   const [status, setStatus] = useState<TerminalStatus>("idle");
   const [errorMsg, setErrorMsg] = useState("");
-  const [inputValue, setInputValue] = useState("");
   const [initKey, setInitKey] = useState(0);
 
   // ---- helpers ----
 
-  const sendInput = useCallback((text: string) => {
-    const tid = idRef.current;
-    if (!tid || !text) return;
-    const req: TerminalInputRequest = { terminalId: tid, data: text };
-    writeTerminalInput(req, tickRef.current);
-    tickRef.current += 1;
-    // Echo the input to xterm so the user sees what they typed.
-    termRef.current?.write(text.replace(/\r?\n/g, "\r\n"));
-  }, [writeTerminalInput]);
+  const focusXterm = useCallback(() => {
+    const t = termRef.current;
+    if (!t) return;
+    // Try focusing the native textarea xterm.js uses for input.
+    // This is the element that receives keyboard events.
+    if (t.textarea) {
+      t.textarea.focus();
+      return;
+    }
+    // Fallback: focus the container element.
+    const el = t.element;
+    if (el instanceof HTMLElement) {
+      if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "0");
+      el.focus();
+    }
+  }, []);
 
   const teardown = useCallback(() => {
     stoppedRef.current = true;
     if (statusTimerRef.current) { clearInterval(statusTimerRef.current); statusTimerRef.current = null; }
     if (outputTimerRef.current) { clearInterval(outputTimerRef.current); outputTimerRef.current = null; }
     if (roRef.current) { roRef.current.disconnect(); roRef.current = null; }
+    if (onDataRef.current) { onDataRef.current.dispose(); onDataRef.current = null; }
     if (termRef.current) { termRef.current.dispose(); termRef.current = null; }
     fitRef.current = null;
     if (idRef.current) { destroyTerminal(idRef.current); idRef.current = ""; }
@@ -93,14 +100,14 @@ export function TerminalPanel(props: TerminalPanelProps) {
     stoppedRef.current = false;
     setStatus("connecting");
     setErrorMsg("");
-    setInputValue("");
 
     const term = new Terminal({
       convertEol: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: 12,
       theme: { background: "#0b1020" },
-      disableStdin: true, // xterm keyboard input disabled — we use own textarea
+      // allowProposedApi needed for some addons, doesn't affect input.
+      allowProposedApi: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -110,15 +117,27 @@ export function TerminalPanel(props: TerminalPanelProps) {
     const { terminalId } = createTerminal();
     idRef.current = terminalId;
 
-    // Defer DOM init (xterm.js needs parent with dimensions).
-    requestAnimationFrame(() => {
+    // Defer DOM-dependent init to next animation frame so the
+    // browser has completed grid/flex layout (xterm.js docs require
+    // the parent to have dimensions when open() is called).
+    const raf = requestAnimationFrame(() => {
       if (!hostRef.current || stoppedRef.current) return;
-      term.open(hostRef.current);
-      try { fit.fit(); } catch { /* detached */ }
 
+      term.open(hostRef.current);
+
+      // Fit immediately and then again after a microtask — the first
+      // fit may see stale dimensions from before the open() reflow.
+      try { fit.fit(); } catch { /* detached */ }
+      queueMicrotask(() => {
+        try { fit.fit(); } catch { /* detached */ }
+      });
+
+      // Focus: try the textarea, then the container.
+      focusXterm();
+
+      // ResizeObserver for dynamic resize.
       const ro = new ResizeObserver(() => {
         try { fit.fit(); } catch { /* detached */ }
-        // Notify the backend so the PTY gets correct rows/cols.
         if (idRef.current && term) {
           resizeTerminal(idRef.current, term.cols, term.rows);
         }
@@ -126,33 +145,28 @@ export function TerminalPanel(props: TerminalPanelProps) {
       ro.observe(hostRef.current!);
       roRef.current = ro;
 
-      term.write(SYS_INFO_BANNER);
+      // Keyboard input → backend.
+      onDataRef.current = term.onData((data) => {
+        const req: TerminalInputRequest = { terminalId: idRef.current, data };
+        writeTerminalInput(req, tickRef.current);
+        tickRef.current += 1;
+        // Don't echo locally — the PTY shell will echo back.
+      });
 
+      // Banner + initial output.
+      term.write(SYS_INFO_BANNER);
       const first = pollTerminal(terminalId, 0, 0);
       cursorRef.current = first.cursor;
       tickRef.current = 1;
       if (first.data) term.write(first.data);
-
-      // Focus the input textarea.
-      inputRef.current?.focus();
     });
 
     // Status polling.
     statusTimerRef.current = setInterval(() => {
       const st = getTerminalStatus(terminalId);
-      if (st.status === "error") {
-        setStatus("error");
-        setErrorMsg(st.error);
-        if (statusTimerRef.current) { clearInterval(statusTimerRef.current); statusTimerRef.current = null; }
-        return;
-      }
-      if (st.status === "connected") {
-        setStatus((prev) => (prev === "connecting" ? "connected" : prev));
-      }
-      if (st.status === "exited") {
-        setStatus("exited");
-        if (statusTimerRef.current) { clearInterval(statusTimerRef.current); statusTimerRef.current = null; }
-      }
+      if (st.status === "error") { setStatus("error"); setErrorMsg(st.error); if (statusTimerRef.current) { clearInterval(statusTimerRef.current); statusTimerRef.current = null; } return; }
+      if (st.status === "connected") { setStatus((prev) => (prev === "connecting" ? "connected" : prev)); }
+      if (st.status === "exited") { setStatus("exited"); if (statusTimerRef.current) { clearInterval(statusTimerRef.current); statusTimerRef.current = null; } }
     }, 500);
 
     // Output polling.
@@ -168,33 +182,14 @@ export function TerminalPanel(props: TerminalPanelProps) {
       }
     }, pollIntervalMs);
 
-    return () => { teardown(); };
+    return () => { cancelAnimationFrame(raf); teardown(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initKey, createTerminal, pollTerminal, writeTerminalInput, pollIntervalMs, teardown]);
-
-  // ---- input handler ----
-
-  const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      const text = inputValue + "\n";
-      sendInput(text);
-      setInputValue("");
-    }
-  }, [inputValue, sendInput]);
+  }, [initKey, createTerminal, pollTerminal, writeTerminalInput, pollIntervalMs, teardown, focusXterm]);
 
   // ---- actions ----
 
-  const handleReconnect = useCallback(() => {
-    teardown();
-    setInitKey((k) => k + 1);
-  }, [teardown]);
-
-  const handleDisconnect = useCallback(() => {
-    teardown();
-    setStatus("exited");
-    setErrorMsg("");
-  }, [teardown]);
+  const handleReconnect = useCallback(() => { teardown(); setInitKey((k) => k + 1); }, [teardown]);
+  const handleDisconnect = useCallback(() => { teardown(); setStatus("exited"); setErrorMsg(""); }, [teardown]);
 
   const isConnected = status === "connected" || status === "connecting";
 
@@ -236,72 +231,23 @@ export function TerminalPanel(props: TerminalPanelProps) {
 
         <Space size={4}>
           {isConnected ? (
-            <Button
-              type="text" size="small" danger
-              icon={<PoweroffOutlined />}
-              onClick={handleDisconnect}
-              aria-label="Disconnect terminal"
-              data-testid="terminal-btn-disconnect"
-              style={{ color: "#f87171", fontSize: 11, height: 22 }}
-            >
-              Disconnect
-            </Button>
+            <Button type="text" size="small" danger icon={<PoweroffOutlined />} onClick={handleDisconnect}
+              aria-label="Disconnect terminal" data-testid="terminal-btn-disconnect"
+              style={{ color: "#f87171", fontSize: 11, height: 22 }}>Disconnect</Button>
           ) : null}
-          <Button
-            type="text" size="small"
-            icon={<ReloadOutlined />}
-            onClick={handleReconnect}
-            aria-label="Reconnect terminal"
-            data-testid="terminal-btn-reconnect"
-            style={{ color: "#94a3b8", fontSize: 11, height: 22 }}
-          >
-            {isConnected ? "Reconnect" : "Connect"}
-          </Button>
+          <Button type="text" size="small" icon={<ReloadOutlined />} onClick={handleReconnect}
+            aria-label="Reconnect terminal" data-testid="terminal-btn-reconnect"
+            style={{ color: "#94a3b8", fontSize: 11, height: 22 }}>{isConnected ? "Reconnect" : "Connect"}</Button>
         </Space>
       </div>
 
-      {/* xterm output surface */}
+      {/* xterm surface — click focuses keyboard input */}
       <div
         ref={hostRef}
         data-testid={`${testId}-surface`}
-        style={{ flex: "1 1 auto", minHeight: 0, padding: "0 4px" }}
+        style={{ flex: "1 1 auto", minHeight: 0, padding: "0 4px", cursor: "text" }}
+        onClick={focusXterm}
       />
-
-      {/* native textarea input bar */}
-      <div
-        style={{
-          flex: "0 0 auto",
-          display: "flex",
-          alignItems: "center",
-          borderTop: "1px solid rgba(148, 163, 184, 0.22)",
-          padding: "2px 6px",
-          background: "#0d1525",
-        }}
-      >
-        <span style={{ color: "#4ade80", fontSize: 12, marginRight: 6, flexShrink: 0 }}>$</span>
-        <textarea
-          ref={inputRef}
-          data-testid="terminal-input"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={handleInputKeyDown}
-          rows={1}
-          placeholder={isConnected ? "Type a command, Enter to send..." : "Disconnected"}
-          disabled={!isConnected}
-          style={{
-            flex: "1 1 auto",
-            background: "transparent",
-            border: "none",
-            outline: "none",
-            color: "#e2e8f0",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: 12,
-            resize: "none",
-            padding: 0,
-            lineHeight: "20px",
-          }}
-        />
-      </div>
     </div>
   );
 }

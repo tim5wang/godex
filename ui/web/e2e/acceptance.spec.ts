@@ -144,10 +144,10 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
 
   test("CenterGrid terminal panel sends typed input to the backend", async ({ page }) => {
     const inputRequest = page.waitForRequest((request) => request.url().includes("/v1/terminal/term-playwright/input") && request.method() === "POST");
-    const inputBox = page.locator('[data-testid="terminal-input"]');
-    await inputBox.click();
-    await inputBox.fill("pwd");
-    await inputBox.press("Enter");
+    // Click the xterm surface to focus the terminal's internal textarea.
+    await page.locator('[data-testid="terminal-panel-surface"]').click();
+    await page.keyboard.type("pwd");
+    await page.keyboard.press("Enter");
     await inputRequest;
   });
 

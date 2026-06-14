@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tim5wang/godex/internal/core/config"
@@ -198,6 +199,31 @@ func registerFileRoutes(mux *http.ServeMux, protected func(http.Handler) http.Ha
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"from": req.From, "to": req.To})
 	})))
+
+	// GET /files/search?q=...&mode=name|content&root=...
+	mux.Handle("GET /files/search", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fsys, err := resolveFileRoot(r, manager)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		defer fsys.Close()
+		query := strings.TrimSpace(r.URL.Query().Get("q"))
+		mode := strings.TrimSpace(r.URL.Query().Get("mode"))
+		if query == "" {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"items": []interface{}{}})
+			return
+		}
+		if mode == "" {
+			mode = "name"
+		}
+		results, err := searchFiles(fsys, query, mode)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"items": results})
+	})))
 }
 
 func resolveFileRoot(r *http.Request, manager *config.Manager) (*workspacefs.FS, error) {
@@ -227,4 +253,78 @@ func writeFileError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err)
+}
+
+type fileSearchResult struct {
+	Path   string `json:"path"`
+	IsDir  bool   `json:"isDir"`
+	Size   int64  `json:"size"`
+}
+
+var skipDirs = map[string]bool{
+	".git": true, "node_modules": true, ".godex": true,
+	"__pycache__": true, ".venv": true, "vendor": true,
+}
+
+func searchFiles(fsys *workspacefs.FS, query, mode string) ([]fileSearchResult, error) {
+	queryLower := strings.ToLower(query)
+	var results []fileSearchResult
+	const maxResults = 200
+
+	err := filepath.WalkDir(fsys.Dir(), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip inaccessible
+		}
+		rel, relErr := filepath.Rel(fsys.Dir(), p)
+		if relErr != nil {
+			return nil
+		}
+		if rel == "." {
+			return nil
+		}
+		if d.IsDir() && skipDirs[d.Name()] {
+			return filepath.SkipDir
+		}
+
+		if mode == "name" {
+			if !strings.Contains(strings.ToLower(d.Name()), queryLower) {
+				return nil
+			}
+		} else {
+			// content mode: only search files, not dirs
+			if d.IsDir() {
+				return nil
+			}
+			info, infoErr := d.Info()
+			if infoErr != nil || info.Size() > 512*1024 {
+				return nil // skip files > 512KB
+			}
+			data, readErr := fsys.ReadFile(rel)
+			if readErr != nil {
+				return nil
+			}
+			if !strings.Contains(strings.ToLower(string(data)), queryLower) {
+				return nil
+			}
+		}
+
+		info, _ := d.Info()
+		size := int64(0)
+		if info != nil {
+			size = info.Size()
+		}
+		results = append(results, fileSearchResult{
+			Path:  rel,
+			IsDir: d.IsDir(),
+			Size:  size,
+		})
+		if len(results) >= maxResults {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }

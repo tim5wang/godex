@@ -4,7 +4,7 @@ import type { MenuProps } from "antd";
 import { FolderOutlined, FolderOpenOutlined, FileOutlined, CopyOutlined, EditOutlined, DeleteOutlined, UploadOutlined } from "@ant-design/icons";
 import type { DataNode } from "antd/es/tree";
 import { useSettingsStore } from "../../store/settings";
-import { listFiles, type FileEntry } from "../../lib/api";
+import { listFiles, type FileEntry, type FileSearchResult } from "../../lib/api";
 import { writeClipboardText } from "../../lib/clipboard";
 
 interface FileTreeProps {
@@ -19,6 +19,8 @@ interface FileTreeProps {
   onRename: (path: string) => void;
   refreshKey: number;
   searchQuery: string;
+  searchResults?: FileSearchResult[] | null;
+  searchLoading?: boolean;
 }
 
 function buildTreeNodes(entries: FileEntry[], parentPath: string): DataNode[] {
@@ -62,6 +64,8 @@ export default function FileTree({
   onRename,
   refreshKey,
   searchQuery,
+  searchResults,
+  searchLoading,
 }: FileTreeProps) {
   const token = useSettingsStore((s) => s.token);
   const [treeData, setTreeData] = useState<DataNode[]>([]);
@@ -150,6 +154,19 @@ export default function FileTree({
     }] : []),
     { type: "divider" },
     {
+      key: "copy-relative",
+      label: "Copy relative path",
+      icon: <CopyOutlined />,
+      onClick: () => { closeContextMenu(); copyToClipboard(contextMenu.path); message.success("Relative path copied"); },
+    },
+    {
+      key: "copy-absolute",
+      label: "Copy absolute path",
+      icon: <CopyOutlined />,
+      onClick: () => { closeContextMenu(); copyToClipboard(workspaceRoot + "/" + contextMenu.path); message.success("Absolute path copied"); },
+    },
+    { type: "divider" },
+    {
       key: "rename",
       label: "Rename",
       icon: <EditOutlined />,
@@ -164,18 +181,31 @@ export default function FileTree({
     },
   ];
 
+  const isSearching = searchQuery.trim().length > 0;
+
   return (
     <div style={{ overflow: "auto", height: "100%", padding: 8 }}>
-      <Spin spinning={loading}>
-        <Tree.DirectoryTree
-          treeData={searchQuery ? filterTree(treeData, searchQuery) : treeData}
-          loadData={onLoadData}
-          onSelect={handleSelect}
-          onRightClick={handleRightClick}
-          selectedKeys={selectedPath ? [selectedPath] : []}
-          style={{ fontSize: 13 }}
+      {searchResults != null ? (
+        <SearchResultsView
+          results={searchResults}
+          loading={searchLoading ?? false}
+          selectedPath={selectedPath}
+          onSelect={onSelectFile}
+          workspaceRoot={workspaceRoot}
+          onContextMenu={(path, title, isLeaf, x, y) => setContextMenu({ open: true, x, y, path, title, isLeaf })}
         />
-      </Spin>
+      ) : (
+        <Spin spinning={loading}>
+          <Tree.DirectoryTree
+            treeData={searchQuery ? filterTree(treeData, searchQuery) : treeData}
+            loadData={onLoadData}
+            onSelect={handleSelect}
+            onRightClick={handleRightClick}
+            selectedKeys={selectedPath ? [selectedPath] : []}
+            style={{ fontSize: 13 }}
+          />
+        </Spin>
+      )}
       {contextMenu.open ? (
         <>
           {/* Backdrop to close menu on any click */}
@@ -228,6 +258,55 @@ function filterTree(nodes: DataNode[], query: string): DataNode[] {
     }
     return acc;
   }, []);
+}
+
+function SearchResultsView(props: {
+  results: FileSearchResult[];
+  loading: boolean;
+  selectedPath: string | null;
+  onSelect: (path: string) => void;
+  workspaceRoot: string;
+  onContextMenu: (path: string, title: string, isLeaf: boolean, x: number, y: number) => void;
+}) {
+  if (props.loading) {
+    return <div style={{ padding: 16, textAlign: "center" }}><Spin size="small" /></div>;
+  }
+  if (props.results.length === 0) {
+    return <div style={{ padding: 16, color: "var(--godex-muted)", fontSize: 13 }}>No results found.</div>;
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      {props.results.map((r) => (
+        <div
+          key={r.path}
+          onClick={() => props.onSelect(r.path)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            props.onContextMenu(r.path, r.path.split("/").pop() || r.path, !r.isDir, e.clientX, e.clientY);
+          }}
+          style={{
+            padding: "3px 8px",
+            cursor: "pointer",
+            borderRadius: 4,
+            fontSize: 13,
+            background: props.selectedPath === r.path ? "var(--godex-accent-muted)" : "transparent",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+          onMouseEnter={(e) => {
+            if (props.selectedPath !== r.path) (e.target as HTMLElement).style.background = "var(--godex-hover)";
+          }}
+          onMouseLeave={(e) => {
+            if (props.selectedPath !== r.path) (e.target as HTMLElement).style.background = "transparent";
+          }}
+        >
+          {r.isDir ? <FolderOutlined style={{ color: "#60a5fa" }} /> : <FileOutlined style={{ color: "#94a3b8" }} />}
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.path}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function findNode(nodes: DataNode[], key: string): DataNode | null {

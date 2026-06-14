@@ -1186,3 +1186,17 @@ export function renameFile(token: string | null, from: string, to: string, root?
     token,
   );
 }
+
+export interface FileSearchResult {
+  path: string;
+  isDir: boolean;
+  size: number;
+}
+
+export function searchFiles(token: string | null, query: string, mode: "name" | "content", root?: string) {
+  const params = new URLSearchParams();
+  params.set("q", query);
+  params.set("mode", mode);
+  if (root?.trim()) params.set("root", root.trim());
+  return request<{ items: FileSearchResult[] }>(`/files/search?${params.toString()}`, { method: "GET" }, token);
+}

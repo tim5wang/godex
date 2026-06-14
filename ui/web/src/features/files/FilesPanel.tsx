@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Alert, Button, Input, Space, Spin, Typography, message, Modal } from "antd";
-import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, SearchOutlined, FolderOpenOutlined, SaveOutlined } from "@ant-design/icons";
+import { Alert, Button, Input, Space, Spin, Typography, message, Modal, Select } from "antd";
+import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, FolderOpenOutlined, SaveOutlined } from "@ant-design/icons";
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
 import { useLayoutStore } from "../../store/layout";
 import { useSettingsStore } from "../../store/settings";
 import { useI18n } from "../../i18n";
-import { listFiles, mkdirFile, readFile, writeFile, deleteFile, renameFile } from "../../lib/api";
+import { mkdirFile, readFile, writeFile, deleteFile, renameFile, searchFiles, type FileSearchResult } from "../../lib/api";
 
 // P2 / T6 (SPEC §4.3): the files panel is now mountable in two
 // surfaces:
@@ -71,6 +71,10 @@ function FilesPanelDock(props: FilesPanelProps) {
   const setWidth = useLayoutStore((state) => state.setWidth);
   const togglePanel = useLayoutStore((state) => state.toggle);
   const [search, setSearch] = useState("");
+  const [searchMode, setSearchMode] = useState<"name" | "content">("name");
+  const [searchResults, setSearchResults] = useState<FileSearchResult[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | undefined>(props.selectedPath);
   const [previewContent, setPreviewContent] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -88,6 +92,28 @@ function FilesPanelDock(props: FilesPanelProps) {
   const iconOnlyWidth = 40;
 
   const hasUnsavedChanges = editedContent !== null && editedContent !== previewContent;
+
+  // Debounced backend search.
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!search.trim()) {
+      setSearchResults(null);
+      return;
+    }
+    searchTimerRef.current = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const res = await searchFiles(token || null, search, searchMode, props.cwd ?? ".");
+        if (!cancelled) setSearchResults(res.items);
+      } catch {
+        if (!cancelled) setSearchResults([]);
+      } finally {
+        if (!cancelled) setSearchLoading(false);
+      }
+    }, 300);
+    let cancelled = false;
+    return () => { cancelled = true; if (searchTimerRef.current) { clearTimeout(searchTimerRef.current); searchTimerRef.current = null; } };
+  }, [search, searchMode, token, props.cwd]);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -293,15 +319,25 @@ function FilesPanelDock(props: FilesPanelProps) {
           onClick={() => setTreeCollapsed((v) => !v)}
           data-testid={treeCollapsed ? "files-panel-tree-expand" : "files-panel-tree-collapse"}
         />
-        <Input
-          allowClear
-          size="small"
-          prefix={<SearchOutlined />}
-          placeholder={t("files.searchPlaceholder") || "Search files"}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ flex: "1 1 120px", minWidth: 0 }}
-        />
+        <Space.Compact style={{ flex: "1 1 200px", minWidth: 0 }}>
+          <Select
+            size="small"
+            value={searchMode}
+            onChange={(v) => setSearchMode(v)}
+            options={[
+              { value: "name", label: "Name" },
+              { value: "content", label: "Content" },
+            ]}
+            style={{ width: 100 }}
+          />
+          <Input
+            allowClear
+            size="small"
+            placeholder={t("files.searchPlaceholder") || "Search files"}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </Space.Compact>
       </div>
       <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
         {treeCollapsed ? (
@@ -350,10 +386,14 @@ function FilesPanelDock(props: FilesPanelProps) {
                 workspaceRoot={props.cwd ?? "."}
                 selectedPath={selectedPath ?? null}
                 searchQuery={search}
+                searchResults={searchResults}
+                searchLoading={searchLoading}
                 refreshKey={refreshKey}
                 onSelectFile={(path) => {
                   setSelectedPath(path);
                   props.onSelect?.(path);
+                  // Clear search when selecting from results.
+                  if (searchResults) { setSearch(""); setSearchResults(null); }
                 }}
                 onUnsavedPrompt={async () => "discard" as const}
                 onNewFile={handleNewFile}

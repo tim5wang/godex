@@ -57,3 +57,112 @@ func TestWorkspaceFSAllowsNormalWorkspaceFiles(t *testing.T) {
 		t.Fatalf("unexpected absolute path %q", abs)
 	}
 }
+
+func TestWorkspaceFSAllowsReadFromAllowlistDirs(t *testing.T) {
+	workspace := t.TempDir()
+	allowDir := t.TempDir()
+	secretPath := filepath.Join(allowDir, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("secret"), 0644); err != nil {
+		t.Fatalf("write allowlist file: %v", err)
+	}
+
+	root, err := New(workspace, allowDir)
+	if err != nil {
+		t.Fatalf("new workspace fs: %v", err)
+	}
+	defer root.Close()
+
+	// ReadFile via absolute path should work.
+	data, err := root.ReadFile(secretPath)
+	if err != nil {
+		t.Fatalf("read allowlist file: %v", err)
+	}
+	if string(data) != "secret" {
+		t.Fatalf("unexpected data %q", data)
+	}
+
+	// Stat should work.
+	info, err := root.Stat(secretPath)
+	if err != nil {
+		t.Fatalf("stat allowlist file: %v", err)
+	}
+	if info.Name() != "secret.txt" {
+		t.Fatalf("unexpected name %q", info.Name())
+	}
+
+	// ReadDir should work.
+	entries, err := root.ReadDir(allowDir)
+	if err != nil {
+		t.Fatalf("readdir allowlist dir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "secret.txt" {
+		t.Fatalf("unexpected entries: %v", entries)
+	}
+}
+
+func TestWorkspaceFSRejectsWriteToAllowlistDirs(t *testing.T) {
+	workspace := t.TempDir()
+	allowDir := t.TempDir()
+
+	root, err := New(workspace, allowDir)
+	if err != nil {
+		t.Fatalf("new workspace fs: %v", err)
+	}
+	defer root.Close()
+
+	// Write to allowlist dir should fail — external writes are not allowed.
+	err = root.WriteFile(filepath.Join(allowDir, "nope.txt"), []byte("nope"), 0644)
+	if err == nil {
+		t.Fatalf("expected write to allowlist dir to fail")
+	}
+}
+
+func TestDefaultReadAllowlistMerged(t *testing.T) {
+	workspace := t.TempDir()
+	allowDir := t.TempDir()
+	secretPath := filepath.Join(allowDir, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("secret"), 0644); err != nil {
+		t.Fatalf("write allowlist file: %v", err)
+	}
+
+	// Set the default and verify it's merged even when the per-call list is nil.
+	old := DefaultReadAllowlist
+	DefaultReadAllowlist = []string{allowDir}
+	defer func() { DefaultReadAllowlist = old }()
+
+	root, err := New(workspace) // no per-call allowlist
+	if err != nil {
+		t.Fatalf("new workspace fs: %v", err)
+	}
+	defer root.Close()
+
+	data, err := root.ReadFile(secretPath)
+	if err != nil {
+		t.Fatalf("read via default allowlist: %v", err)
+	}
+	if string(data) != "secret" {
+		t.Fatalf("unexpected data %q", data)
+	}
+}
+
+func TestWorkspaceFSAllowlistDoesNotAllowOutsidePaths(t *testing.T) {
+	workspace := t.TempDir()
+	allowDir := t.TempDir()
+	outsideDir := t.TempDir()
+	evilPath := filepath.Join(outsideDir, "evil.txt")
+	if err := os.WriteFile(evilPath, []byte("evil"), 0644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	root, err := New(workspace, allowDir)
+	if err != nil {
+		t.Fatalf("new workspace fs: %v", err)
+	}
+	defer root.Close()
+
+	// Paths outside both workspace and allowlist should still fail.
+	_, err = root.ReadFile(evilPath)
+	if err == nil || !strings.Contains(err.Error(), "escapes workspace") {
+		t.Fatalf("expected outside path to fail, got %v", err)
+	}
+}

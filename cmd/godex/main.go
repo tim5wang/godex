@@ -19,6 +19,7 @@ import (
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/platform/servicecontrol"
+	"github.com/tim5wang/godex/internal/platform/workspacefs"
 	rtchannels "github.com/tim5wang/godex/internal/runtime/channels"
 	"github.com/tim5wang/godex/internal/runtime/channels/feishu"
 	"github.com/tim5wang/godex/internal/runtime/channels/weixin"
@@ -87,6 +88,19 @@ func main() {
 	if err := cfg.EnsureDirs(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create directories: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Allow workspacefs read-only access to godex's own state directories
+	// (memory, state, skills, tmp) so tools like read_file can access them
+	// even though they sit outside the workspace tree.
+	if cfg != nil {
+		var dirs []string
+		for _, d := range []string{cfg.MemoryDir, cfg.StateDir, cfg.SkillsDir, cfg.TempDir} {
+			if d != "" {
+				dirs = append(dirs, d)
+			}
+		}
+		workspacefs.DefaultReadAllowlist = dirs
 	}
 
 	if cfg.DefaultModelProfile().APIKey == "" && shouldWarnMissingAPIKey(args) {

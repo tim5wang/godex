@@ -1,6 +1,7 @@
 package workspacefs
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -8,15 +9,40 @@ import (
 	"strings"
 )
 
+// errAllowedExternal is a sentinel returned by resolve when the path
+// is outside the workspace root but inside one of the configured
+// allowlisted directories (e.g. ~/.godex/memory).  Read-only
+// operations (ReadFile, Stat, ReadDir) fall back to os.* for these
+// paths; write operations reject them.
+var errAllowedExternal = errors.New("path is allowed external")
+
+// DefaultReadAllowlist is a set of absolute directory prefixes that are
+// automatically added to every FS's allowlist.  Callers should set it
+// once at startup (e.g. to include ~/.godex/memory, ~/.godex/state,
+// ~/.godex/skills, ~/.godex/tmp) so that read-only file tools can
+// access godex's own state directories even when they sit outside the
+// workspace tree.
+var DefaultReadAllowlist []string
+
 // FS is a narrow file boundary rooted at one workspace. Production uses
 // os.Root so symlink and traversal escapes are rejected by the operating
 // system path walk instead of by string cleanup alone.
+//
+// allowlist contains absolute directory prefixes to which read-only
+// access is explicitly permitted (e.g. ~/.godex/memory).  Paths under
+// these prefixes bypass the os.Root sandbox for ReadFile, Stat, and
+// ReadDir but are still rejected for writes.
 type FS struct {
-	dir  string
-	root *os.Root
+	dir       string
+	root      *os.Root
+	allowlist []string
 }
 
-func New(workspace string) (*FS, error) {
+// New opens a workspace FS. Each element of allowlist is an absolute
+// directory path (or a path under ~) to which read-only operations are
+// also permitted.  Pass nil or empty to keep the default single-root
+// boundary.
+func New(workspace string, allowlist ...string) (*FS, error) {
 	workspace = strings.TrimSpace(workspace)
 	if workspace == "" {
 		return nil, fmt.Errorf("missing workspace")
@@ -29,7 +55,39 @@ func New(workspace string) (*FS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open workspace root %s: %w", abs, err)
 	}
-	return &FS{dir: filepath.Clean(abs), root: root}, nil
+	allow := make([]string, 0, len(DefaultReadAllowlist)+len(allowlist))
+	// Merge default and per-call allowlists.
+	for _, a := range DefaultReadAllowlist {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if !filepath.IsAbs(a) {
+			var err error
+			a, err = filepath.Abs(a)
+			if err != nil {
+				root.Close()
+				return nil, fmt.Errorf("workspacefs: default allowlist path %q: %w", a, err)
+			}
+		}
+		allow = append(allow, filepath.Clean(a))
+	}
+	for _, a := range allowlist {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if !filepath.IsAbs(a) {
+			var err error
+			a, err = filepath.Abs(a)
+			if err != nil {
+				root.Close()
+				return nil, fmt.Errorf("workspacefs: resolve allowlist path %q: %w", a, err)
+			}
+		}
+		allow = append(allow, filepath.Clean(a))
+	}
+	return &FS{dir: filepath.Clean(abs), root: root, allowlist: allow}, nil
 }
 
 func (f *FS) Close() error {
@@ -70,6 +128,9 @@ func (f *FS) Abs(name string) (string, error) {
 
 func (f *FS) ReadFile(name string) ([]byte, error) {
 	rel, err := f.resolve(name)
+	if errors.Is(err, errAllowedExternal) {
+		return os.ReadFile(rel)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +177,9 @@ func (f *FS) Open(name string) (*os.File, error) {
 
 func (f *FS) Stat(name string) (os.FileInfo, error) {
 	rel, err := f.resolve(name)
+	if errors.Is(err, errAllowedExternal) {
+		return os.Stat(rel)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +192,9 @@ func (f *FS) Stat(name string) (os.FileInfo, error) {
 
 func (f *FS) ReadDir(name string) ([]fs.DirEntry, error) {
 	rel, err := f.resolve(name)
+	if errors.Is(err, errAllowedExternal) {
+		return os.ReadDir(rel)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -151,10 +218,24 @@ func (f *FS) resolve(name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("missing path")
 	}
+
+	// Compute an absolute path early so we can check it against the
+	// allowlist before the Rel→traversal check would reject it.
+	abs := name
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(f.dir, abs)
+	}
+	abs = filepath.Clean(abs)
+	for _, prefix := range f.allowlist {
+		if abs == prefix || strings.HasPrefix(abs, prefix+string(filepath.Separator)) {
+			return abs, errAllowedExternal
+		}
+	}
+
 	var rel string
 	if filepath.IsAbs(name) {
 		var err error
-		rel, err = filepath.Rel(f.dir, filepath.Clean(name))
+		rel, err = filepath.Rel(f.dir, abs)
 		if err != nil {
 			return "", err
 		}

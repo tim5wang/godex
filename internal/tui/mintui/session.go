@@ -139,6 +139,12 @@ type Session struct {
 	// the user waits for the model.
 	activityChip   string
 	activityStyle  minitui.StatusStyle
+
+	// inputHistory stores submitted inputs so the user can recall
+	// them with ↑/↓.  Most-recent-first ordering: history[0] is
+	// the newest entry.
+	inputHistory []string
+	historyPos   int // current cursor into inputHistory, -1 = not navigating
 }
 
 // New constructs a Session bound to the given backend. It does
@@ -152,6 +158,57 @@ func New(cfg *config.Config, backend Backend, stdout, stderr io.Writer) *Session
 		now:              time.Now,
 		seenModelCallIDs: make(map[string]struct{}),
 	}
+}
+
+const maxInputHistory = 1000
+
+// historyFn implements min-tui's HistoryFn callback for input history
+// navigation with ↑/↓.  inputHistory is stored most-recent-first
+// (index 0 = newest).  historyPos tracks the current position
+// (-1 = not navigating).
+//
+// When the user edits or submits, min-tui exits recall mode; we
+// detect that by comparing the current input against the text at
+// the current history position and reset historyPos accordingly.
+func (s *Session) historyFn(direction int, current string) string {
+	if len(s.inputHistory) == 0 {
+		return current
+	}
+
+	// Reset position when not mid-navigation (e.g. after edit/submit).
+	if s.historyPos >= 0 && current != s.inputHistory[s.historyPos] {
+		s.historyPos = -1
+	}
+
+	switch direction {
+	case -1: // ↑ — go to older entry
+		if s.historyPos+1 < len(s.inputHistory) {
+			s.historyPos++
+		} else {
+			return current // at boundary, signals "no more"
+		}
+	case +1: // ↓ — go to newer entry
+		if s.historyPos > 0 {
+			s.historyPos--
+		} else {
+			s.historyPos = -1
+			return current // at boundary, min-tui restores draft
+		}
+	}
+	return s.inputHistory[s.historyPos]
+}
+
+// recordInputHistory appends a non-empty input to the history list.
+// Deduplicates consecutive identical entries and caps the list at
+// maxInputHistory so the session never leaks memory.
+func (s *Session) recordInputHistory(input string) {
+	if len(s.inputHistory) > 0 && s.inputHistory[0] == input {
+		return // deduplicate consecutive identical entries
+	}
+	if len(s.inputHistory) >= maxInputHistory {
+		s.inputHistory = s.inputHistory[:maxInputHistory-1]
+	}
+	s.inputHistory = append([]string{input}, s.inputHistory...)
 }
 
 // Run starts the min-tui session. It opens a session via the
@@ -194,6 +251,7 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 		// messages, tool calls, and warnings a coloured
 		// background that visually separates them from
 		// assistant prose.
+		HistoryFn: s.historyFn,
 	})
 	if err != nil {
 		return fmt.Errorf("init min-tui: %w", err)
@@ -726,6 +784,7 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 	if strings.TrimSpace(input) == "" {
 		return nil
 	}
+	s.recordInputHistory(input)
 	if cmd, ok := commands.Parse(input); ok {
 		result, err := s.backend.ExecuteCommand(ctx, sessionID, cmd)
 		if s.tui != nil {

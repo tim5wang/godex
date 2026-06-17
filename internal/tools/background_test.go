@@ -13,12 +13,13 @@ import (
 	"github.com/tim5wang/godex/internal/platform/tooling"
 )
 
-func TestBackgroundRunToolRunsArgvCommandInWorkspace(t *testing.T) {
+func TestBackgroundToolRunActionExecutesArgvCommandInWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	manager := background.NewManager()
-	tool := NewBackgroundRunTool(manager, workspace)
+	tool := NewBackgroundTool(manager, workspace, "", tooling.ExecutionConfig{})
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "run",
 		"command": `sh -c 'pwd'`,
 		"timeout": float64(1),
 	})
@@ -46,15 +47,16 @@ func TestBackgroundRunToolRunsArgvCommandInWorkspace(t *testing.T) {
 	}
 }
 
-func TestBackgroundRunToolIgnoresCanceledRequestContext(t *testing.T) {
+func TestBackgroundToolRunActionIgnoresCanceledRequestContext(t *testing.T) {
 	workspace := t.TempDir()
 	manager := background.NewManager()
-	tool := NewBackgroundRunTool(manager, workspace)
+	tool := NewBackgroundTool(manager, workspace, "", tooling.ExecutionConfig{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	result, err := tool.Execute(ctx, map[string]interface{}{
+		"action":  "run",
 		"command": `sh -c 'printf ok'`,
 	})
 	if err != nil {
@@ -77,12 +79,13 @@ func TestBackgroundRunToolIgnoresCanceledRequestContext(t *testing.T) {
 	}
 }
 
-func TestBackgroundRunToolExpandsHomeDirectoryArguments(t *testing.T) {
+func TestBackgroundToolRunActionExpandsHomeDirectoryArguments(t *testing.T) {
 	workspace := t.TempDir()
 	manager := background.NewManager()
-	tool := NewBackgroundRunTool(manager, workspace)
+	tool := NewBackgroundTool(manager, workspace, "", tooling.ExecutionConfig{})
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "run",
 		"command": `sh -c 'printf "%s" "$1"' sh ~/.openclaw/test-script.sh`,
 	})
 	if err != nil {
@@ -115,12 +118,13 @@ func TestBackgroundRunToolExpandsHomeDirectoryArguments(t *testing.T) {
 	}
 }
 
-func TestBackgroundRunToolReturnsExecutionBackendError(t *testing.T) {
+func TestBackgroundToolRunActionReturnsExecutionBackendError(t *testing.T) {
 	workspace := t.TempDir()
 	manager := background.NewManager()
-	tool := NewBackgroundRunToolWithExecution(manager, workspace, "", tooling.ExecutionConfig{Mode: tooling.ExecutionModeSSH})
+	tool := NewBackgroundTool(manager, workspace, "", tooling.ExecutionConfig{Mode: tooling.ExecutionModeSSH})
 
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "run",
 		"command": `pwd`,
 	})
 	if err == nil || !strings.Contains(err.Error(), "ssh_target") {
@@ -128,7 +132,7 @@ func TestBackgroundRunToolReturnsExecutionBackendError(t *testing.T) {
 	}
 }
 
-func TestCheckBackgroundToolReturnsStringError(t *testing.T) {
+func TestBackgroundToolCheckActionReturnsStringError(t *testing.T) {
 	manager := background.NewManager()
 	task, err := manager.Start("task-error", exec.Command("sh", "-c", "exit 3"), 0)
 	if err != nil {
@@ -136,8 +140,8 @@ func TestCheckBackgroundToolReturnsStringError(t *testing.T) {
 	}
 	<-task.Done
 
-	tool := NewCheckBackgroundTool(manager)
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"task_id": task.ID})
+	tool := NewBackgroundTool(manager, "", "", tooling.ExecutionConfig{})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "check", "task_id": task.ID})
 	if err != nil {
 		t.Fatalf("check background: %v", err)
 	}
@@ -149,11 +153,11 @@ func TestCheckBackgroundToolReturnsStringError(t *testing.T) {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 	if parsed.Error == "" {
-		t.Fatalf("expected string error in check_background result, got %s", result)
+		t.Fatalf("expected string error in check background result, got %s", result)
 	}
 }
 
-func TestCheckBackgroundToolReturnsRerunHintForInterruptedStoredTask(t *testing.T) {
+func TestBackgroundToolCheckActionReturnsRerunHintForInterruptedStoredTask(t *testing.T) {
 	storeDir := t.TempDir()
 	manager := background.NewManagerWithStore(storeDir)
 	task, err := manager.StartWithOptions("task-interrupted", exec.Command("sh", "-c", "sleep 2"), 0, background.OutputOptions{
@@ -168,8 +172,8 @@ func TestCheckBackgroundToolReturnsRerunHintForInterruptedStoredTask(t *testing.
 	}()
 
 	restored := background.NewManagerWithStore(storeDir)
-	tool := NewCheckBackgroundTool(restored)
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"task_id": "task-interrupted"})
+	tool := NewBackgroundTool(restored, "", "", tooling.ExecutionConfig{})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "check", "task_id": "task-interrupted"})
 	if err != nil {
 		t.Fatalf("check interrupted background: %v", err)
 	}
@@ -186,13 +190,14 @@ func TestCheckBackgroundToolReturnsRerunHintForInterruptedStoredTask(t *testing.
 	}
 }
 
-func TestCheckBackgroundToolReturnsSpillMetadata(t *testing.T) {
+func TestBackgroundToolCheckActionReturnsSpillMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	tempDir := filepath.Join(workspace, ".godex", ".tmp")
 	manager := background.NewManager()
-	runTool := NewBackgroundRunTool(manager, workspace, tempDir)
+	tool := NewBackgroundTool(manager, workspace, tempDir, tooling.ExecutionConfig{})
 
-	runResult, err := runTool.Execute(context.Background(), map[string]interface{}{
+	runResult, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "run",
 		"command": `sh -c 'printf "%070000d" 0'`,
 	})
 	if err != nil {
@@ -208,8 +213,7 @@ func TestCheckBackgroundToolReturnsSpillMetadata(t *testing.T) {
 		t.Fatalf("wait task: %v", err)
 	}
 
-	checkTool := NewCheckBackgroundTool(manager)
-	checkResult, err := checkTool.Execute(context.Background(), map[string]interface{}{"task_id": runParsed.TaskID})
+	checkResult, err := tool.Execute(context.Background(), map[string]interface{}{"action": "check", "task_id": runParsed.TaskID})
 	if err != nil {
 		t.Fatalf("check background: %v", err)
 	}

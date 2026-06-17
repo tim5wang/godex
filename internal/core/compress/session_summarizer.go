@@ -75,7 +75,7 @@ var knownFileToolNames = map[string]string{
 	"ls":               "read",
 	"search":           "read",
 	"history_search":   "read",
-	"memory":           "write",
+	// memory tool has no file path; downstream code falls through to default (uncategorized).
 	// Write operations
 	"write_file":       "write",
 	"write":            "write",

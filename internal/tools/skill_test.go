@@ -187,15 +187,15 @@ func (f *fakeSkillRuntime) RemoveSkill(name string) (SkillRemoveResult, error) {
 	}, nil
 }
 
-func TestLoadSkillToolActivatesSkillsAndReportsStatus(t *testing.T) {
+func TestSkillToolLoadActionActivatesSkillsAndReportsStatus(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
-	tool := NewLoadSkillTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	if _, err := tool.Execute(context.Background(), map[string]interface{}{"name": "missing"}); err == nil {
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{"action": "load", "name": "missing"}); err == nil {
 		t.Fatal("expected missing skill to fail")
 	}
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"name": "example"})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "load", "name": "example"})
 	if err != nil {
 		t.Fatalf("load skill: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestLoadSkillToolActivatesSkillsAndReportsStatus(t *testing.T) {
 		}
 	}
 
-	result, err = tool.Execute(context.Background(), map[string]interface{}{"name": "example"})
+	result, err = tool.Execute(context.Background(), map[string]interface{}{"action": "load", "name": "example"})
 	if err != nil {
 		t.Fatalf("reload skill: %v", err)
 	}
@@ -214,11 +214,11 @@ func TestLoadSkillToolActivatesSkillsAndReportsStatus(t *testing.T) {
 	}
 }
 
-func TestListSkillsToolReturnsCatalog(t *testing.T) {
+func TestSkillToolListActionReturnsCatalog(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
-	tool := NewListSkillsTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	result, err := tool.Execute(context.Background(), nil)
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "list"})
 	if err != nil {
 		t.Fatalf("list skills: %v", err)
 	}
@@ -232,11 +232,11 @@ func TestListSkillsToolReturnsCatalog(t *testing.T) {
 	}
 }
 
-func TestListSkillsToolCatalogIncludeDetailsReturnsFullRootEntries(t *testing.T) {
+func TestSkillToolListActionIncludeDetailsReturnsFullRootEntries(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
-	tool := NewListSkillsTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"include_details": true})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "list", "include_details": true})
 	if err != nil {
 		t.Fatalf("list detailed skills: %v", err)
 	}
@@ -250,11 +250,11 @@ func TestListSkillsToolCatalogIncludeDetailsReturnsFullRootEntries(t *testing.T)
 	}
 }
 
-func TestListSkillsToolPaginatesSuiteChildren(t *testing.T) {
+func TestSkillToolListActionPaginatesSuiteChildren(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
-	tool := NewListSkillsTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"suite": "gstack", "limit": 1})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "list", "suite": "gstack", "limit": 1})
 	if err != nil {
 		t.Fatalf("list suite skills: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestListSkillsToolPaginatesSuiteChildren(t *testing.T) {
 		t.Fatalf("expected suite result to expose pagination, got %q", result)
 	}
 
-	result, err = tool.Execute(context.Background(), map[string]interface{}{"suite": "gstack", "offset": 1, "limit": 1})
+	result, err = tool.Execute(context.Background(), map[string]interface{}{"action": "list", "suite": "gstack", "offset": 1, "limit": 1})
 	if err != nil {
 		t.Fatalf("list second suite page: %v", err)
 	}
@@ -274,11 +274,11 @@ func TestListSkillsToolPaginatesSuiteChildren(t *testing.T) {
 	}
 }
 
-func TestListSkillsToolSearchesGenerically(t *testing.T) {
+func TestSkillToolListActionSearchesGenerically(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
-	tool := NewListSkillsTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"query": "engineering", "limit": 1})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "list", "query": "engineering", "limit": 1})
 	if err != nil {
 		t.Fatalf("list skills query: %v", err)
 	}
@@ -287,14 +287,15 @@ func TestListSkillsToolSearchesGenerically(t *testing.T) {
 	}
 }
 
-func TestExpandSkillToolLoadsAdditionalSections(t *testing.T) {
+func TestSkillToolExpandActionLoadsAdditionalSections(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
 	if _, err := runtime.ActivateSkill("example"); err != nil {
 		t.Fatalf("seed active skill: %v", err)
 	}
-	tool := NewExpandSkillTool(runtime)
+	tool := NewSkillTool(runtime)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":   "expand",
 		"name":     "example",
 		"sections": []interface{}{"workflow"},
 	})
@@ -308,14 +309,14 @@ func TestExpandSkillToolLoadsAdditionalSections(t *testing.T) {
 	}
 }
 
-func TestUnloadSkillToolRemovesActiveSkill(t *testing.T) {
+func TestSkillToolUnloadActionRemovesActiveSkill(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
 	if _, err := runtime.ActivateSkill("example"); err != nil {
 		t.Fatalf("seed active skill: %v", err)
 	}
-	tool := NewUnloadSkillTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"name": "example"})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "unload", "name": "example"})
 	if err != nil {
 		t.Fatalf("unload skill: %v", err)
 	}
@@ -326,15 +327,16 @@ func TestUnloadSkillToolRemovesActiveSkill(t *testing.T) {
 	}
 }
 
-func TestInstallSkillToolInstallsFromSource(t *testing.T) {
+func TestSkillToolInstallActionInstallsFromSource(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
-	tool := NewInstallSkillTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	if _, err := tool.Execute(context.Background(), map[string]interface{}{"source": "missing"}); err == nil {
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{"action": "install", "source": "missing"}); err == nil {
 		t.Fatal("expected missing source to fail")
 	}
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "install",
 		"source": "owner/repo",
 		"name":   "playwright-cli",
 	})
@@ -348,11 +350,11 @@ func TestInstallSkillToolInstallsFromSource(t *testing.T) {
 	}
 }
 
-func TestListSkillSourcesToolReturnsCuratedSources(t *testing.T) {
+func TestSkillToolSourcesActionReturnsCuratedSources(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
-	tool := NewListSkillSourcesTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	result, err := tool.Execute(context.Background(), nil)
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "sources"})
 	if err != nil {
 		t.Fatalf("list skill sources: %v", err)
 	}
@@ -363,11 +365,11 @@ func TestListSkillSourcesToolReturnsCuratedSources(t *testing.T) {
 	}
 }
 
-func TestListSkillSourcesToolSupportsSearchQuery(t *testing.T) {
+func TestSkillToolSourcesActionSupportsSearchQuery(t *testing.T) {
 	runtime := &fakeSkillRuntime{}
-	tool := NewListSkillSourcesTool(runtime)
+	tool := NewSkillTool(runtime)
 
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"query": "react"})
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"action": "sources", "query": "react"})
 	if err != nil {
 		t.Fatalf("search skill sources: %v", err)
 	}

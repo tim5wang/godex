@@ -103,72 +103,12 @@ type SkillRuntime interface {
 	RemoveSkill(name string) (SkillRemoveResult, error)
 }
 
-type skillNameArgs struct {
-	Name string `json:"name"`
-}
-
 type listSkillsArgs struct {
 	Query          string `json:"query,omitempty"`
 	Suite          string `json:"suite,omitempty"`
 	Offset         int    `json:"offset,omitempty"`
 	Limit          int    `json:"limit,omitempty"`
 	IncludeDetails bool   `json:"include_details,omitempty"`
-}
-
-type expandSkillArgs struct {
-	Name     string   `json:"name"`
-	Sections []string `json:"sections"`
-}
-
-type listSkillSourcesArgs struct {
-	Query string `json:"query,omitempty"`
-}
-
-type installSkillArgs struct {
-	Source string `json:"source"`
-	Name   string `json:"name,omitempty"`
-}
-
-// NewLoadSkillTool creates a new load skill tool.
-func NewLoadSkillTool(runtime SkillRuntime) Tool {
-	return NewTypedTool(NewToolSpec("load_skill", "Activate a skill core by name for future turns", map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"name": map[string]string{"type": "string"},
-		},
-		"required": []string{"name"},
-	}, nil), func(ctx context.Context, args skillNameArgs) (ToolResult, error) {
-		_ = ctx
-		if strings.TrimSpace(args.Name) == "" {
-			return ToolResult{}, fmt.Errorf("missing name argument")
-		}
-		result, err := runtime.ActivateSkill(args.Name)
-		if err != nil {
-			return ToolResult{}, err
-		}
-		return ToolResult{Structured: result}, nil
-	})
-}
-
-// NewListSkillsTool creates a new skill catalog tool.
-func NewListSkillsTool(runtime SkillRuntime) Tool {
-	return NewTypedTool(NewToolSpec("list_skills", "List, search, or page through available skills. Catalog entries may include child_skill_ids; use suite plus offset/limit to inspect child details on demand, then load_skill with an exact id.", map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"query":           map[string]string{"type": "string", "description": "Optional text search query matched against id, name, description, categories, sections, and usage hints."},
-			"suite":           map[string]string{"type": "string", "description": "Optional suite id from child_skill_ids, for example a root skill id. Returns nested skills in that suite."},
-			"offset":          map[string]string{"type": "integer", "description": "Zero-based result offset for pagination."},
-			"limit":           map[string]string{"type": "integer", "description": "Maximum results to return. Defaults to 20, max 100."},
-			"include_details": map[string]string{"type": "boolean", "description": "Return full catalog entries for matches instead of compact metadata."},
-		},
-	}, map[string]string{"q": "query"}), func(ctx context.Context, args listSkillsArgs) (ToolResult, error) {
-		_ = ctx
-		items, err := runtime.ListSkills()
-		if err != nil {
-			return ToolResult{}, err
-		}
-		return ToolResult{Structured: buildSkillListResult(items, args)}, nil
-	})
 }
 
 type compactSkillEntry struct {
@@ -494,103 +434,6 @@ func uniqueSkillSearchTerms(values []string) []string {
 		result = append(result, value)
 	}
 	return result
-}
-
-// NewExpandSkillTool creates a new skill expansion tool.
-func NewExpandSkillTool(runtime SkillRuntime) Tool {
-	return NewTypedTool(NewToolSpec("expand_skill", "Load additional sections for an active skill", map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"name": map[string]string{"type": "string"},
-			"sections": map[string]interface{}{
-				"type": "array",
-				"items": map[string]string{
-					"type": "string",
-				},
-			},
-		},
-		"required": []string{"name", "sections"},
-	}, nil), func(ctx context.Context, args expandSkillArgs) (ToolResult, error) {
-		_ = ctx
-		if strings.TrimSpace(args.Name) == "" {
-			return ToolResult{}, fmt.Errorf("missing name argument")
-		}
-		if len(args.Sections) == 0 {
-			return ToolResult{}, fmt.Errorf("missing sections argument")
-		}
-		result, err := runtime.ExpandSkill(args.Name, args.Sections)
-		if err != nil {
-			return ToolResult{}, err
-		}
-		return ToolResult{Structured: result}, nil
-	})
-}
-
-// NewUnloadSkillTool creates a new unload skill tool.
-func NewUnloadSkillTool(runtime SkillRuntime) Tool {
-	return NewTypedTool(NewToolSpec("unload_skill", "Remove an active skill from the current session", map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"name": map[string]string{"type": "string"},
-		},
-		"required": []string{"name"},
-	}, nil), func(ctx context.Context, args skillNameArgs) (ToolResult, error) {
-		_ = ctx
-		if strings.TrimSpace(args.Name) == "" {
-			return ToolResult{}, fmt.Errorf("missing name argument")
-		}
-		result, err := runtime.UnloadSkill(args.Name)
-		if err != nil {
-			return ToolResult{}, err
-		}
-		return ToolResult{Structured: result}, nil
-	})
-}
-
-// NewListSkillSourcesTool creates a new skill sources tool.
-func NewListSkillSourcesTool(runtime SkillRuntime) Tool {
-	return NewTypedTool(NewToolSpec("list_skill_sources", "List curated skill install sources for this workspace, or search skills.sh when query is provided", map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"query": map[string]string{"type": "string"},
-		},
-	}, map[string]string{"q": "query"}), func(ctx context.Context, args listSkillSourcesArgs) (ToolResult, error) {
-		_ = ctx
-		if strings.TrimSpace(args.Query) != "" {
-			items, err := runtime.SearchSkillSources(args.Query)
-			if err != nil {
-				return ToolResult{}, err
-			}
-			return ToolResult{Structured: map[string]interface{}{"sources": items}}, nil
-		}
-		items, err := runtime.ListSkillSources()
-		if err != nil {
-			return ToolResult{}, err
-		}
-		return ToolResult{Structured: map[string]interface{}{"sources": items}}, nil
-	})
-}
-
-// NewInstallSkillTool creates a new install skill tool.
-func NewInstallSkillTool(runtime SkillRuntime) Tool {
-	return NewTypedTool(NewToolSpec("install_skill", "Install a skill from a local path, GitHub repo URL, or owner/repo source", map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"source": map[string]string{"type": "string"},
-			"name":   map[string]string{"type": "string"},
-		},
-		"required": []string{"source"},
-	}, nil), func(ctx context.Context, args installSkillArgs) (ToolResult, error) {
-		_ = ctx
-		if strings.TrimSpace(args.Source) == "" {
-			return ToolResult{}, fmt.Errorf("missing source argument")
-		}
-		result, err := runtime.InstallSkill(args.Source, args.Name)
-		if err != nil {
-			return ToolResult{}, err
-		}
-		return ToolResult{Structured: result}, nil
-	})
 }
 
 // NewSkillTool creates a unified skill management tool (list / sources / install / load / expand / unload).

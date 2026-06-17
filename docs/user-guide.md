@@ -360,7 +360,7 @@ go run ./cmd/godex weixin logout
 当前内建工具覆盖：
 
 - 文件读写 / 文本替换
-- bash / background_run
+- bash / background
 - todo / task board
 - `web_search`
 - `web_fetch`
@@ -428,7 +428,7 @@ storage:
 
 ## 工具执行与安全
 
-Command execution 默认在 workspace 内运行。`bash`、`background_run`、package smoke、isolated subagent bash 共用执行 guard：
+Command execution 默认在 workspace 内运行。`bash`、`background`、package smoke、isolated subagent bash 共用执行 guard：
 
 - 危险命令 denylist
 - `curl|sh`、`wget|sh`、process substitution、base64 decode 执行、`python -c`、`node -e` 等风险分级
@@ -546,7 +546,7 @@ Smoke execution 绑定 backend session，并复用普通 shell permission、appr
 Package 开发辅助：
 
 - 示例 skill：`examples/skills/package-developer`
-- 本地安装源：使用 Web `Skills` 的安装入口或 Chat 中的 `install_skill` 工具安装该路径。
+- 本地安装源：使用 Web `Skills` 的安装入口或 Chat 中的 `skill` 工具（`action=install`）安装该路径。
 - GitHub package 安装源：Web `Skills -> Packages` 可填写 `owner/repo` 或 `https://github.com/owner/repo.git`。
 - 调试顺序：先看 package quality，再看 Commands/Roles/Prompts，最后显式运行 smoke。
 

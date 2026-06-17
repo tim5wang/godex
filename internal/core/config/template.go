@@ -577,7 +577,7 @@ tools:
     workspace_ttl_hours: {{ .Tools.Subagent.WorkspaceTTLHours }}
 
   execution:
-    # Command execution backend for bash/background_run. Values: local, docker, ssh. Environment override: GODEX_TOOLS_EXECUTION_MODE.
+    # Command execution backend for bash/background. Values: local, docker, ssh. Environment override: GODEX_TOOLS_EXECUTION_MODE.
     mode: {{ yamlString .Tools.Execution.Mode }}
     # Container image used when mode=docker. The workspace is mounted at /workspace. Environment override: GODEX_TOOLS_EXECUTION_DOCKER_IMAGE.
     docker_image: {{ yamlString .Tools.Execution.DockerImage }}
@@ -589,9 +589,9 @@ tools:
     ssh_workspace: {{ yamlString .Tools.Execution.SSHWorkspace }}
     # Extra ssh options, such as -o BatchMode=yes. Environment override: GODEX_TOOLS_EXECUTION_SSH_OPTIONS.
     ssh_options: {{ yamlListIndent .Tools.Execution.SSHOptions 6 }}
-    # Optional command glob/prefix patterns allowed for bash/background_run. Empty means no extra allow restriction. Environment override: GODEX_TOOLS_EXECUTION_SHELL_ALLOW_PATTERNS.
+    # Optional command glob/prefix patterns allowed for bash/background. Empty means no extra allow restriction. Environment override: GODEX_TOOLS_EXECUTION_SHELL_ALLOW_PATTERNS.
     shell_allow_patterns: {{ yamlListIndent .Tools.Execution.ShellAllowPatterns 6 }}
-    # Command glob/prefix patterns denied for bash/background_run before execution. Environment override: GODEX_TOOLS_EXECUTION_SHELL_DENY_PATTERNS.
+    # Command glob/prefix patterns denied for bash/background before execution. Environment override: GODEX_TOOLS_EXECUTION_SHELL_DENY_PATTERNS.
     shell_deny_patterns: {{ yamlListIndent .Tools.Execution.ShellDenyPatterns 6 }}
     # Maximum seconds a single tool call can run before timing out. Default 1800 (30 min). Environment override: GODEX_TOOLS_EXECUTION_TOOL_TIMEOUT_SECONDS.
     tool_timeout_seconds: {{ .Tools.Execution.ToolTimeoutSeconds }}

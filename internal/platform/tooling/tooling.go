@@ -230,21 +230,6 @@ func AttachFileDefinition() Definition {
 	}
 }
 
-func BackgroundRunDefinition() Definition {
-	return Definition{
-		Name:        "background",
-		Description: "Run an executable with argv-style arguments in a background task. Quotes are supported; shell operators are not.",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"command": map[string]string{"type": "string", "description": "Executable plus argv-style arguments, for example: go test ./..."},
-				"timeout": map[string]string{"type": "integer", "description": "Optional timeout in seconds"},
-			},
-			"required": []string{"command"},
-		},
-	}
-}
-
 func SupportedToolSchemas(names ...string) []protocol.ToolSchema {
 	result := make([]protocol.ToolSchema, 0, len(names))
 	for _, name := range names {
@@ -259,8 +244,6 @@ func SupportedToolSchemas(names ...string) []protocol.ToolSchema {
 			result = append(result, EditFileDefinition().ToolSchema())
 		case "attach_file":
 			result = append(result, AttachFileDefinition().ToolSchema())
-		case "background":
-			result = append(result, BackgroundRunDefinition().ToolSchema())
 		case "grep":
 			result = append(result, GrepDefinition().ToolSchema())
 		case "find":

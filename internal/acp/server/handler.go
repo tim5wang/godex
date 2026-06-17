@@ -653,7 +653,7 @@ func toolCallTitle(name string, input map[string]interface{}) string {
 		name = "tool"
 	}
 	switch name {
-	case "bash", "background_run":
+	case "bash", "background":
 		if command := stringFromAny(input["command"]); command != "" {
 			return name + ": " + truncateString(command, 120)
 		}
@@ -683,7 +683,7 @@ func toolKind(name string) acp.ToolKind {
 		return acp.ToolKindSearch
 	case "web_fetch", "browser":
 		return acp.ToolKindFetch
-	case "bash", "background_run":
+	case "bash", "background":
 		return acp.ToolKindExecute
 	default:
 		return acp.ToolKindOther

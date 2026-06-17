@@ -367,7 +367,7 @@ func ledgerPathsFromTool(payload events.ToolCallPayload) []string {
 }
 
 func ledgerCommandFromTool(payload events.ToolCallPayload) ProjectLedgerCommand {
-	if payload.Name != "bash" && payload.Name != "background_run" {
+	if payload.Name != "bash" && payload.Name != "background" {
 		return ProjectLedgerCommand{}
 	}
 	command := ""

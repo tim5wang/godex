@@ -75,15 +75,12 @@ var knownFileToolNames = map[string]string{
 	"ls":               "read",
 	"search":           "read",
 	"history_search":   "read",
-	"get_memory":       "read",
-	"search_memory":    "read",
-	"list_memory":      "read",
+	"memory":           "write",
 	// Write operations
 	"write_file":       "write",
 	"write":            "write",
 	"overwrite_file":   "write",
 	"append_file":      "write",
-	"remember_memory":  "write",
 	// Edit operations
 	"edit_file":        "edit",
 	"edit":             "edit",

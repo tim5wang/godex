@@ -217,7 +217,7 @@ func buildSkillListResult(items []skill.CatalogEntry, args listSkillsArgs) map[s
 			"suite":      suite,
 			"count":      len(page),
 			"pagination": pagination,
-			"hint":       "Use load_skill with an exact id. Increase offset to continue paging this suite.",
+			"hint": "Use skill with action=load and name. Increase offset to continue paging this suite.",
 		}
 		if args.IncludeDetails {
 			result["skills"] = page
@@ -234,7 +234,7 @@ func buildSkillListResult(items []skill.CatalogEntry, args listSkillsArgs) map[s
 			"query":      query,
 			"count":      len(page),
 			"pagination": pagination,
-			"hint":       "Use load_skill with an exact id. Increase offset for more matches, or use suite to page a nested skill suite.",
+			"hint": "Use skill with action=load and name. Increase offset for more matches, or use suite to page a nested skill suite.",
 		}
 		if args.IncludeDetails {
 			result["skills"] = page
@@ -256,7 +256,7 @@ func buildSkillListResult(items []skill.CatalogEntry, args listSkillsArgs) map[s
 		suiteResults = append(suiteResults, compactSkillSuite{
 			ID:       suiteID,
 			Count:    len(suites[suiteID]),
-			ListHint: fmt.Sprintf(`Call list_skills with suite=%q, offset=0, and limit=%d to inspect nested skills.`, suiteID, limit),
+			ListHint: fmt.Sprintf(`Call skill with action=list and suite=%q.`, suiteID),
 		})
 	}
 	return map[string]interface{}{
@@ -264,7 +264,7 @@ func buildSkillListResult(items []skill.CatalogEntry, args listSkillsArgs) map[s
 		"skills":     catalogSkillEntries(page, suites, args.IncludeDetails),
 		"suites":     suiteResults,
 		"pagination": pagination,
-		"hint":       "Root skills with child_skill_ids have nested skills. Use suite=<id> with offset/limit to browse child details, query for text search, then load_skill with an exact id.",
+		"hint": "Root skills with child_skill_ids have nested skills. Use skill with action=list and suite=<id> to browse child details, or query for text search, then skill with action=load and name.",
 	}
 }
 
@@ -333,7 +333,7 @@ func catalogSkillEntries(items []skill.CatalogEntry, suites map[string][]skill.C
 			if children := suites[id]; len(children) > 0 {
 				entry.ChildSkillCount = len(children)
 				entry.ChildSkillIDs = childSkillIDs(children)
-				entry.ChildSkillHint = childSkillHint(id, len(children), len(entry.ChildSkillIDs))
+				entry.ChildSkillHint = ChildSkillHint(id, len(children), len(entry.ChildSkillIDs))
 			}
 			detailed = append(detailed, entry)
 		}
@@ -346,7 +346,7 @@ func catalogSkillEntries(items []skill.CatalogEntry, suites map[string][]skill.C
 		if children := suites[id]; len(children) > 0 {
 			entry.ChildSkillCount = len(children)
 			entry.ChildSkillIDs = childSkillIDs(children)
-			entry.ChildSkillHint = childSkillHint(id, len(children), len(entry.ChildSkillIDs))
+			entry.ChildSkillHint = ChildSkillHint(id, len(children), len(entry.ChildSkillIDs))
 		}
 		compact = append(compact, entry)
 	}
@@ -383,8 +383,9 @@ func childSkillIDs(items []skill.CatalogEntry) []string {
 	return ids
 }
 
-func childSkillHint(suiteID string, total, returned int) string {
-	hint := fmt.Sprintf("Use list_skills with suite=%q and offset/limit to inspect child details, then load_skill with an exact child id.", suiteID)
+// ChildSkillHint builds a hint string for inspecting child skills within a suite.
+func ChildSkillHint(suiteID string, total, returned int) string {
+	hint := fmt.Sprintf("Use skill with action=list and suite=%q to inspect child details, then skill with action=load and name with a child id.", suiteID)
 	if total > returned {
 		hint += fmt.Sprintf(" Showing %d of %d child ids.", returned, total)
 	}
@@ -589,5 +590,112 @@ func NewInstallSkillTool(runtime SkillRuntime) Tool {
 			return ToolResult{}, err
 		}
 		return ToolResult{Structured: result}, nil
+	})
+}
+
+// NewSkillTool creates a unified skill management tool (list / sources / install / load / expand / unload).
+type skillToolArgs struct {
+	Action         string   `json:"action"`
+	Name           string   `json:"name,omitempty"`
+	Source         string   `json:"source,omitempty"`
+	Sections       []string `json:"sections,omitempty"`
+	Query          string   `json:"query,omitempty"`
+	Suite          string   `json:"suite,omitempty"`
+	Offset         int      `json:"offset,omitempty"`
+	Limit          int      `json:"limit,omitempty"`
+	IncludeDetails bool     `json:"include_details,omitempty"`
+}
+
+func NewSkillTool(runtime SkillRuntime) Tool {
+	return NewTypedTool(NewToolSpec("skill", "Manage skills. action=list: list/search available skills. action=sources: list install sources. action=install: install from source. action=load: activate skill. action=expand: load extra sections. action=unload: deactivate skill.", map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"action":          map[string]interface{}{"type": "string", "enum": []string{"list", "sources", "install", "load", "expand", "unload"}},
+			"name":            map[string]string{"type": "string"},
+			"source":          map[string]string{"type": "string"},
+			"sections":        map[string]interface{}{"type": "array", "items": map[string]string{"type": "string"}},
+			"query":           map[string]string{"type": "string"},
+			"suite":           map[string]string{"type": "string"},
+			"offset":          map[string]string{"type": "integer"},
+			"limit":           map[string]string{"type": "integer"},
+			"include_details": map[string]string{"type": "boolean"},
+		},
+		"required": []string{"action"},
+	}, nil), func(ctx context.Context, args skillToolArgs) (ToolResult, error) {
+		_ = ctx
+		switch args.Action {
+		case "list":
+			items, err := runtime.ListSkills()
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return ToolResult{Structured: buildSkillListResult(items, listSkillsArgs{
+				Query:          args.Query,
+				Suite:          args.Suite,
+				Offset:         args.Offset,
+				Limit:          args.Limit,
+				IncludeDetails: args.IncludeDetails,
+			})}, nil
+
+		case "sources":
+			if strings.TrimSpace(args.Query) != "" {
+				items, err := runtime.SearchSkillSources(args.Query)
+				if err != nil {
+					return ToolResult{}, err
+				}
+				return ToolResult{Structured: map[string]interface{}{"sources": items}}, nil
+			}
+			items, err := runtime.ListSkillSources()
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return ToolResult{Structured: map[string]interface{}{"sources": items}}, nil
+
+		case "install":
+			if strings.TrimSpace(args.Source) == "" {
+				return ToolResult{}, fmt.Errorf("missing source for install action")
+			}
+			result, err := runtime.InstallSkill(args.Source, args.Name)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return ToolResult{Structured: result}, nil
+
+		case "load":
+			if strings.TrimSpace(args.Name) == "" {
+				return ToolResult{}, fmt.Errorf("missing name for load action")
+			}
+			result, err := runtime.ActivateSkill(args.Name)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return ToolResult{Structured: result}, nil
+
+		case "expand":
+			if strings.TrimSpace(args.Name) == "" {
+				return ToolResult{}, fmt.Errorf("missing name for expand action")
+			}
+			if len(args.Sections) == 0 {
+				return ToolResult{}, fmt.Errorf("missing sections for expand action")
+			}
+			result, err := runtime.ExpandSkill(args.Name, args.Sections)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return ToolResult{Structured: result}, nil
+
+		case "unload":
+			if strings.TrimSpace(args.Name) == "" {
+				return ToolResult{}, fmt.Errorf("missing name for unload action")
+			}
+			result, err := runtime.UnloadSkill(args.Name)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return ToolResult{Structured: result}, nil
+
+		default:
+			return ToolResult{}, fmt.Errorf("unknown action: %s. Valid actions: list, sources, install, load, expand, unload", args.Action)
+		}
 	})
 }

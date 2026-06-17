@@ -612,21 +612,30 @@ func pollingToolInputFingerprint(tool ExecutedTool) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func isPollingToolCall(tool ExecutedTool) bool {
-	switch strings.ToLower(strings.TrimSpace(tool.Name)) {
-	case "tool_exchange", "check_background":
+func isPollingToolCall(tool ExecutedTool) bool {	switch name := strings.ToLower(strings.TrimSpace(tool.Name)); name {
+	case "tool_exchange":
 		return true
-	case "task":
-		return isTaskPollingToolCall(tool)
+	case "background":
+		return isBackgroundPollingToolCall(tool)
+	case "subagent":
+		return isSubagentPollingToolCall(tool)
 	}
 	return false
 }
 
-func isNoProgressPollingToolCall(tool ExecutedTool) bool {
-	if strings.EqualFold(strings.TrimSpace(tool.Name), "check_background") {
-		return true
+func isBackgroundPollingToolCall(tool ExecutedTool) bool {
+	if !strings.EqualFold(strings.TrimSpace(tool.Name), "background") {
+		return false
 	}
-	return isTaskPollingToolCall(tool)
+	action, _ := tool.Input["action"].(string)
+	return strings.EqualFold(strings.TrimSpace(action), "check")
+}
+
+func isNoProgressPollingToolCall(tool ExecutedTool) bool {
+	if strings.EqualFold(strings.TrimSpace(tool.Name), "background") {
+		return isBackgroundPollingToolCall(tool)
+	}
+	return isSubagentPollingToolCall(tool)
 }
 
 func isBenignRepeatableToolCall(tool ExecutedTool) bool {
@@ -649,8 +658,8 @@ func clearBenignRepeatableToolCounts(counts map[string]int) {
 	}
 }
 
-func isTaskPollingToolCall(tool ExecutedTool) bool {
-	if !strings.EqualFold(strings.TrimSpace(tool.Name), "task") {
+func isSubagentPollingToolCall(tool ExecutedTool) bool {
+	if !strings.EqualFold(strings.TrimSpace(tool.Name), "subagent") {
 		return false
 	}
 	action, _ := tool.Input["action"].(string)
@@ -1029,7 +1038,7 @@ func recoveryHintForToolFailure(name, code string) string {
 			return "Browser action timed out. Consider retrying with a smaller action timeout, using web_fetch/web_search for static content, taking a screenshot, or switching to code/static analysis."
 		case "web_fetch", "web_search":
 			return "Network lookup timed out. Try a narrower query, fetch a specific URL, or answer from available local context."
-		case "bash", "background_run":
+		case "bash", "background":
 			return "Shell command timed out. Try a narrower command, add command-level timeout, or run as a background task."
 		default:
 			return "Tool timed out. Try a narrower operation, a cheaper alternative tool, or continue from available context."

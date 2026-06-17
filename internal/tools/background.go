@@ -171,10 +171,149 @@ func backgroundRerunHint(task *background.Task) string {
 		return ""
 	}
 	if task.Command != "" {
-		return "Previous process was interrupted before completion; rerun with background_run command: " + task.Command
+		return "Previous process was interrupted before completion; rerun with background action=run command: " + task.Command
 	}
 	if len(task.Argv) > 0 {
-		return "Previous process was interrupted before completion; rerun with background_run argv: " + fmt.Sprint(task.Argv)
+		return "Previous process was interrupted before completion; rerun with background action=run argv: " + fmt.Sprint(task.Argv)
 	}
 	return "Previous process was interrupted before completion; start the background task again if it is still needed."
+}
+
+// NewBackgroundTool creates a unified background task tool (run / check).
+type backgroundToolArgs struct {
+	Action               string `json:"action"`
+	Command              string `json:"command,omitempty"`
+	Timeout              int    `json:"timeout,omitempty"`
+	TaskID               string `json:"task_id,omitempty"`
+	TailLines            int    `json:"tail_lines,omitempty"`
+	Offset               int64  `json:"offset,omitempty"`
+	LimitBytes           int64  `json:"limit_bytes,omitempty"`
+	Query                string `json:"query,omitempty"`
+	AllowUnlistedCommands bool  `json:"_allow_unlisted_commands,omitempty"`
+}
+
+func NewBackgroundTool(mgr *background.Manager, workspace, tempDir string, execution tooling.ExecutionConfig) Tool {
+	executor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspace, tempDir, execution)
+	return NewTypedTool(NewToolSpec("background", "Run and check long-running background tasks. action=run: start command in background. action=check: get status and output of a running or completed task.", map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"action":                     map[string]interface{}{"type": "string", "enum": []string{"run", "check"}},
+			"command":                    map[string]string{"type": "string"},
+			"timeout":                    map[string]string{"type": "integer"},
+			"task_id":                    map[string]string{"type": "string"},
+			"tail_lines":                 map[string]string{"type": "integer"},
+			"offset":                     map[string]string{"type": "integer"},
+			"limit_bytes":                map[string]string{"type": "integer"},
+			"query":                      map[string]string{"type": "string"},
+			"_allow_unlisted_commands":   map[string]string{"type": "boolean"},
+		},
+		"required": []string{"action"},
+	}, nil), func(ctx context.Context, args backgroundToolArgs) (ToolResult, error) {
+		_ = ctx
+		switch args.Action {
+		case "run":
+			if args.Command == "" {
+				return ToolResult{}, fmt.Errorf("missing command for run action")
+			}
+			taskID := fmt.Sprintf("bg_%d", time.Now().UnixNano())
+			runtimeCtx := SessionContextFromContext(ctx)
+			options := shellCommandOptionsForContext(runtimeCtx, tooling.ShellCommandOptions{
+				AllowUnlistedCommands: args.AllowUnlistedCommands,
+			})
+			cmd, argv, err := executor.BuildArgvCommandWithOptions(args.Command, options)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			var timeout time.Duration
+			if args.Timeout > 0 {
+				timeout = time.Duration(args.Timeout) * time.Second
+			}
+			task, err := mgr.StartWithOptions(taskID, cmd, timeout, background.OutputOptions{
+				SpillDir:  filepath.Join(executor.TempDir, "background"),
+				SessionID: runtimeCtx.SessionID,
+				TurnID:    runtimeCtx.Metadata["turn_id"],
+				Command:   args.Command,
+				Argv:      argv,
+			})
+			if err != nil {
+				return ToolResult{}, err
+			}
+			return ToolResult{Structured: map[string]interface{}{
+				"task_id":           taskID,
+				"argv":              argv,
+				"status":            task.Status,
+				"running":           mgr.IsRunning(taskID),
+				"start_time":        task.StartTime.Format(time.RFC3339),
+				"output_log_path":   task.OutputLogPath,
+				"execution_backend": executor.ExecutionBackend(),
+			}}, nil
+
+		case "check":
+			if args.TaskID == "" {
+				return ToolResult{}, fmt.Errorf("missing task_id for check action")
+			}
+			if mgr.IsRunning(args.TaskID) {
+				result := map[string]interface{}{
+					"task_id": args.TaskID,
+					"status":  background.StatusRunning,
+				}
+				if args.TailLines > 0 || args.Offset > 0 || args.LimitBytes > 0 || args.Query != "" {
+					read, err := mgr.ReadOutput(args.TaskID, background.OutputReadOptions{
+						Offset:     args.Offset,
+						LimitBytes: args.LimitBytes,
+						TailLines:  args.TailLines,
+						Query:      args.Query,
+					})
+					if err == nil {
+						result["output"] = read.Output
+						result["output_path"] = read.OutputPath
+						result["output_bytes"] = read.TotalBytes
+						result["offset"] = read.Offset
+						result["truncated"] = read.Truncated
+					}
+				}
+				return ToolResult{Structured: result}, nil
+			}
+			task, err := mgr.Get(args.TaskID)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			select {
+			case <-task.Done:
+			default:
+			}
+			output := task.Output
+			outputPath := task.OutputPath
+			outputBytes := task.OutputBytes
+			if args.TailLines > 0 || args.Offset > 0 || args.LimitBytes > 0 || args.Query != "" {
+				read, err := mgr.ReadOutput(args.TaskID, background.OutputReadOptions{
+					Offset:     args.Offset,
+					LimitBytes: args.LimitBytes,
+					TailLines:  args.TailLines,
+					Query:      args.Query,
+				})
+				if err != nil {
+					return ToolResult{}, err
+				}
+				output = read.Output
+				outputPath = read.OutputPath
+				outputBytes = read.TotalBytes
+			}
+			return ToolResult{Structured: map[string]interface{}{
+				"task_id":          args.TaskID,
+				"status":           task.Status,
+				"output":           output,
+				"output_path":      outputPath,
+				"output_truncated": task.OutputTruncated,
+				"output_bytes":     outputBytes,
+				"output_log_path":  task.OutputLogPath,
+				"exit_code":        task.ExitCode,
+				"error":            backgroundError(task.Error),
+				"rerun_hint":       backgroundRerunHint(task),
+			}}, nil
+
+		default:
+			return ToolResult{}, fmt.Errorf("unknown action: %s. Valid actions: run, check", args.Action)
+		}
+	})
 }

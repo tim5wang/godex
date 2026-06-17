@@ -558,7 +558,7 @@ func TestRunnerStopsConsecutiveRepeatedBrowserWaits(t *testing.T) {
 func TestRunnerStopsRepeatedPollingToolInputs(t *testing.T) {
 	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "start")}
 	repeated := protocol.Response{Content: []protocol.Block{
-		protocol.ToolUseBlock("tool-1", "task", map[string]interface{}{
+		protocol.ToolUseBlock("tool-1", "subagent", map[string]interface{}{
 			"action": "status",
 			"job_id": "subagent_1",
 		}),
@@ -605,7 +605,7 @@ func TestRunnerStopsRepeatedPollingToolInputs(t *testing.T) {
 func TestRunnerAllowsRepeatedTaskStatusWithProgress(t *testing.T) {
 	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "start")}
 	status := protocol.Response{Content: []protocol.Block{
-		protocol.ToolUseBlock("tool-1", "task", map[string]interface{}{
+		protocol.ToolUseBlock("tool-1", "subagent", map[string]interface{}{
 			"action": "status",
 			"job_id": "subagent_1",
 		}),
@@ -654,7 +654,7 @@ func TestRunnerAllowsRepeatedTaskStatusWithProgress(t *testing.T) {
 func TestRunnerDoesNotStopTerminalTaskStatus(t *testing.T) {
 	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "start")}
 	status := protocol.Response{Content: []protocol.Block{
-		protocol.ToolUseBlock("tool-1", "task", map[string]interface{}{
+		protocol.ToolUseBlock("tool-1", "subagent", map[string]interface{}{
 			"action": "status",
 			"job_id": "subagent_1",
 		}),
@@ -698,7 +698,8 @@ func TestRunnerDoesNotStopTerminalTaskStatus(t *testing.T) {
 func TestRunnerDoesNotStopTerminalCheckBackground(t *testing.T) {
 	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "start")}
 	check := protocol.Response{Content: []protocol.Block{
-		protocol.ToolUseBlock("tool-1", "check_background", map[string]interface{}{
+		protocol.ToolUseBlock("tool-1", "background", map[string]interface{}{
+			"action":  "check",
 			"task_id": "bg_1",
 		}),
 	}}
@@ -744,7 +745,8 @@ func TestRunnerDoesNotStopTerminalCheckBackground(t *testing.T) {
 func TestRunnerUsesPollingGuardForRepeatedRunningCheckBackground(t *testing.T) {
 	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "start")}
 	check := protocol.Response{Content: []protocol.Block{
-		protocol.ToolUseBlock("tool-1", "check_background", map[string]interface{}{
+		protocol.ToolUseBlock("tool-1", "background", map[string]interface{}{
+			"action":  "check",
 			"task_id": "bg_1",
 		}),
 	}}
@@ -777,7 +779,7 @@ func TestRunnerUsesPollingGuardForRepeatedRunningCheckBackground(t *testing.T) {
 		MaxStalledTaskPollingTools: 5,
 	}.Run(context.Background())
 	if err != nil {
-		t.Fatalf("expected check_background to use stalled polling guard, got %v", err)
+		t.Fatalf("expected background polling to use stalled polling guard, got %v", err)
 	}
 	if result == nil || !result.Completed {
 		t.Fatalf("expected completed result, got %+v", result)

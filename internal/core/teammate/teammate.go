@@ -124,7 +124,7 @@ func defaultLoopToolFactories() []LoopToolFactory {
 			return tools.NewEditFileTool(m.workspaceDir)
 		},
 		func(m *Manager, _ string, _ int64) tools.Tool {
-			return tools.NewClaimTaskTool(m.taskMgr)
+			return tools.NewTaskTool(m.taskMgr)
 		},
 		func(m *Manager, name string, generation int64) tools.Tool {
 			return tools.NewIdleTool(teammateIdleSignal{manager: m, name: name, generation: generation})

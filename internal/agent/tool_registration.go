@@ -100,23 +100,7 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		DefaultActive: true,
 	})
 
-	a.registerToolTo(handler, tools.NewTaskCreateTool(a.taskMgr), tools.ToolMeta{
-		Bundle:  bundleTaskBoard,
-		Summary: "persistent task board operations",
-	})
-	a.registerToolTo(handler, tools.NewTaskGetTool(a.taskMgr), tools.ToolMeta{
-		Bundle:  bundleTaskBoard,
-		Summary: "persistent task board operations",
-	})
-	a.registerToolTo(handler, tools.NewTaskListTool(a.taskMgr), tools.ToolMeta{
-		Bundle:  bundleTaskBoard,
-		Summary: "persistent task board operations",
-	})
-	a.registerToolTo(handler, tools.NewTaskUpdateTool(a.taskMgr), tools.ToolMeta{
-		Bundle:  bundleTaskBoard,
-		Summary: "persistent task board operations",
-	})
-	a.registerToolTo(handler, tools.NewClaimTaskTool(a.taskMgr), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewTaskTool(a.taskMgr), tools.ToolMeta{
 		Bundle:  bundleTaskBoard,
 		Summary: "persistent task board operations",
 	})
@@ -146,26 +130,14 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary: "teammate inbox, messaging, and approval workflows",
 	})
 
-	a.registerToolTo(handler, tools.NewListSkillsTool(a), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewListSkillSourcesTool(a), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewInstallSkillTool(a), tools.ToolMeta{AlwaysActive: true})
+	a.registerToolTo(handler, tools.NewMemoryTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
+	a.registerToolTo(handler, tools.NewSkillTool(a), tools.ToolMeta{AlwaysActive: true})
 	a.registerToolTo(handler, tools.NewListPackagesTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package and prompt ecosystem"})
 	a.registerToolTo(handler, tools.NewInstallPackageTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package and prompt ecosystem"})
 	a.registerToolTo(handler, tools.NewRemovePackageTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package and prompt ecosystem"})
 	a.registerToolTo(handler, tools.NewListPromptsTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package and prompt ecosystem"})
 	a.registerToolTo(handler, tools.NewListPackageCommandsTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package command declarations"})
 	a.registerToolTo(handler, tools.NewListPackageRolesTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package subagent role declarations"})
-	a.registerToolTo(handler, tools.NewLoadSkillTool(a), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewExpandSkillTool(a), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewUnloadSkillTool(a), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewListMemoryTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewGetMemoryTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewSearchMemoryTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewListMemoryCandidatesTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewAcceptMemoryCandidateTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewDismissMemoryCandidateTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewRememberMemoryTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
-	a.registerToolTo(handler, tools.NewForgetMemoryTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
 	a.registerToolTo(handler, tools.NewCompressTool(a), tools.ToolMeta{AlwaysActive: true})
 	if a.historySearch != nil {
 		a.registerToolTo(handler, tools.NewHistorySearchTool(a.historySearch), tools.ToolMeta{AlwaysActive: true})
@@ -206,11 +178,7 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary: "local desktop screenshots, clipboard, keyboard, mouse, and window inspection",
 	})
 
-	a.registerToolTo(handler, tools.NewBackgroundRunToolWithExecution(a.bgMgr, workspaceDir, tempDir, execution), tools.ToolMeta{
-		Bundle:  bundleBackground,
-		Summary: "long-running command execution and status checks",
-	})
-	a.registerToolTo(handler, tools.NewCheckBackgroundTool(a.bgMgr), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewBackgroundTool(a.bgMgr, workspaceDir, tempDir, execution), tools.ToolMeta{
 		Bundle:  bundleBackground,
 		Summary: "long-running command execution and status checks",
 	})

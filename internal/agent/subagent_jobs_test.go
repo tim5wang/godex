@@ -906,7 +906,7 @@ func TestSubagentToolStartStatusAndListDurableJobs(t *testing.T) {
 		{Content: []protocol.Block{protocol.TextBlock("done async")}},
 	}}
 
-	result, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	result, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "start",
 		"prompt": "run async",
 	})
@@ -925,13 +925,13 @@ func TestSubagentToolStartStatusAndListDurableJobs(t *testing.T) {
 		t.Fatalf("expected async result, got %+v", completed)
 	}
 
-	if _, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "status",
 		"job_id": jobs[0].ID,
 	}); err != nil {
 		t.Fatalf("status subagent through tool: %v", err)
 	}
-	if _, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "list",
 	}); err != nil {
 		t.Fatalf("list subagents through tool: %v", err)
@@ -954,7 +954,7 @@ func TestSubagentToolRunCreatesVisibleDurableJob(t *testing.T) {
 		}),
 	})
 
-	result, err := a.handleTool(ctx, "task", map[string]interface{}{
+	result, err := a.handleTool(ctx, "subagent", map[string]interface{}{
 		"action":     "run",
 		"agent_type": "Explore",
 		"prompt":     "run sync as visible durable job",
@@ -996,7 +996,7 @@ func TestSubagentToolStatusDoesNotExposeMessages(t *testing.T) {
 	a.toolHandler.ActivateBundles(bundleSubagent)
 	a.client = repeatedTextCaller("compact handoff")
 
-	if _, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "start",
 		"prompt": "run compact",
 	}); err != nil {
@@ -1008,7 +1008,7 @@ func TestSubagentToolStatusDoesNotExposeMessages(t *testing.T) {
 	}
 	waitForSubagentStatus(t, a.subagentJobs, jobs[0].ID, subagentStatusCompleted)
 
-	status, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	status, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "status",
 		"job_id": jobs[0].ID,
 	})
@@ -1062,7 +1062,7 @@ func TestSubagentToolLogsReturnsBoundedProgress(t *testing.T) {
 		}
 	}
 
-	logs, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	logs, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "logs",
 		"job_id": job.ID,
 		"limit":  5,
@@ -1092,7 +1092,7 @@ func TestSubagentToolBatchStartsCompactJobs(t *testing.T) {
 	a.toolHandler.ActivateBundles(bundleSubagent)
 	a.client = repeatedTextCaller("batch handoff")
 
-	out, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "batch",
 		"tasks": []interface{}{
 			map[string]interface{}{"prompt": "inspect package"},
@@ -1124,7 +1124,7 @@ func TestSubagentToolBatchUsesConfiguredLimit(t *testing.T) {
 	a.toolHandler.ActivateBundles(bundleSubagent)
 	a.client = repeatedTextCaller("batch handoff")
 
-	out, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "batch",
 		"tasks": []interface{}{
 			map[string]interface{}{"prompt": "one"},
@@ -1159,7 +1159,7 @@ func TestSubagentToolBatchQueuesAboveConfiguredConcurrency(t *testing.T) {
 	release := make(chan struct{})
 	a.client = blockingSubagentCaller{release: release}
 
-	out, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "batch",
 		"tasks": []interface{}{
 			map[string]interface{}{"prompt": "one"},
@@ -1209,7 +1209,7 @@ func TestSubagentToolWaitReturnsStructuredCompletionAndErrors(t *testing.T) {
 		t.Fatalf("finish failed subagent: %v", err)
 	}
 
-	out, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action":  "wait",
 		"job_ids": []interface{}{completed.ID, failed.ID},
 		"mode":    "all",
@@ -1251,7 +1251,7 @@ func TestSubagentToolWaitAnyAndTimeout(t *testing.T) {
 		t.Fatalf("seed running subagent: %v", err)
 	}
 
-	out, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action":  "wait",
 		"job_ids": []interface{}{done.ID, running.ID},
 		"mode":    "any",
@@ -1267,7 +1267,7 @@ func TestSubagentToolWaitAnyAndTimeout(t *testing.T) {
 		t.Fatalf("unexpected wait any summary: %+v", anyPayload)
 	}
 
-	out, err = a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err = a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action":     "wait",
 		"job_ids":    []interface{}{running.ID},
 		"timeout_ms": 1,
@@ -1298,7 +1298,7 @@ func TestSubagentToolWaitWakesOnJobUpdate(t *testing.T) {
 	}()
 
 	start := time.Now()
-	out, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action":     "wait",
 		"job_ids":    []interface{}{job.ID},
 		"timeout_ms": 5000,
@@ -1324,7 +1324,7 @@ func TestSubagentToolBatchWaitsForStartedJobs(t *testing.T) {
 	a.toolHandler.ActivateBundles(bundleSubagent)
 	a.client = repeatedTextCaller("batch waited handoff")
 
-	out, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action":     "batch",
 		"wait":       true,
 		"timeout_ms": 5000,
@@ -1358,7 +1358,7 @@ func TestSubagentToolAppliesPerJobTimeoutAndMaxTurns(t *testing.T) {
 	a.toolHandler.ActivateBundles(bundleSubagent)
 	a.client = repeatedTextCaller("configured handoff")
 
-	if _, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action":         "start",
 		"prompt":         "run configured",
 		"max_turns":      7,
@@ -1375,7 +1375,7 @@ func TestSubagentToolAppliesPerJobTimeoutAndMaxTurns(t *testing.T) {
 	}
 	waitForSubagentStatus(t, a.subagentJobs, jobs[0].ID, subagentStatusCompleted)
 
-	out, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	out, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "batch",
 		"tasks": []interface{}{
 			map[string]interface{}{
@@ -1467,7 +1467,7 @@ func TestDurableSubagentTimesOutJob(t *testing.T) {
 	a.toolHandler.ActivateBundles(bundleSubagent)
 	a.client = blockingSubagentCaller{release: make(chan struct{})}
 
-	if _, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action":         "start",
 		"prompt":         "block until timeout",
 		"job_timeout_ms": 50,
@@ -1493,7 +1493,7 @@ func TestDurableSubagentDefaultTimeoutDisabled(t *testing.T) {
 	a.toolHandler.ActivateBundles(bundleSubagent)
 	a.client = blockingSubagentCaller{release: make(chan struct{})}
 
-	if _, err := a.handleTool(context.Background(), "task", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
 		"action": "start",
 		"prompt": "keep running without timeout",
 	}); err != nil {

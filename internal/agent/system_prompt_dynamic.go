@@ -184,8 +184,8 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 		"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, consider the browser tool for dynamic pages. Do not repeat the same search query or fetch the same URL.",
 		"- If tool_exchange returns no match, do not repeat similar capability queries; switch to active tools or say the capability is unavailable.",
 		"- When the user explicitly asks you to read, inspect, review, or verify specific workspace files or code paths, use the relevant file or shell tools before giving findings.",
-		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if task reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
-		"- When using durable subagents, use task wait for any/all completion instead of repeatedly polling task status; use task logs only for bounded diagnostics.",
+		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if subagent reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
+		"- When using durable subagents, use subagent wait for any/all completion instead of repeatedly polling subagent status; use subagent logs only for bounded diagnostics.",
 		"- When a tool generates a local file such as a screenshot or export, treat it as a generated artifact. In supported runtimes the artifact may be attached automatically, so do not claim you can only provide a local path unless the user explicitly asks for the path.",
 		"- When the user wants a local file sent or attached without reading its contents, prefer attach_file instead of read_file.",
 		"- Do not use read_file for binary or large artifacts such as PDFs, images, media, or archives when the user only wants them copied, attached, or sent.",
@@ -213,7 +213,7 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 		"- For precise code intelligence (symbol definitions, references, type info), prefer the lsp tool. Use grep for full-text search across files.",
 		"- Use todo tools for multi-step coding work, but keep plans short and update them as work changes. The first action of a multi-step task must be a todo_write that lists every step in order. After finishing any sub-step, immediately call todo_write again to mark that item completed and set the next pending item to in_progress before doing the next action. The list must always contain exactly one in_progress item while work is in progress; never leave a finished item as in_progress, and never advance to the next item without first marking the previous one completed.",
 		"- If the user asks for current web information, use tool_exchange to enable the web bundle, then use web_search or web_fetch. Do not use bash with curl/wget as a substitute for the web tools.",
-		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if task reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
+		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if subagent reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
 		"- Enable browser, subagent, background, package, skill, memory, MCP, or external agent bundles only when the user explicitly asks for that capability or the active task clearly requires it.",
 		"- If tool_exchange returns no match, continue with active coding tools or state the missing capability plainly.",
 	}
@@ -340,7 +340,7 @@ func buildSkillCatalogPrompt(catalog []skill.CatalogEntry) string {
 
 	lines := []string{
 		"# Skill Availability",
-		"Installed and discoverable skills. Use list_skills or list_skill_sources for more detail, install_skill to add one, load_skill to activate it, expand_skill for extra sections, and unload_skill when it is no longer helpful. If the user says find-skills or asks to find a skill, use list_skill_sources with a query; do not use tool_exchange for skill search.",
+		"Installed and discoverable skills. Use skill with action=list/sources/install/load/expand/unload. If the user says find-skills or asks to find a skill, use skill with action=sources and query; do not use tool_exchange for skill search.",
 	}
 
 	regular, suites := splitSkillCatalogSuites(catalog)
@@ -356,7 +356,7 @@ func buildSkillCatalogPrompt(catalog []skill.CatalogEntry) string {
 			describedSuites[id] = true
 		}
 		if !appendBudgetedCatalogLine(&lines, line) {
-			lines = append(lines, "- Additional skills omitted from the system prompt. Use list_skills for the complete catalog.")
+			lines = append(lines, "- Additional skills omitted from the system prompt. Use skill with action=list for the complete catalog.")
 			return strings.Join(lines, "\n")
 		}
 	}
@@ -370,7 +370,7 @@ func buildSkillCatalogPrompt(catalog []skill.CatalogEntry) string {
 		}
 		line := formatSkillSuiteCatalogLine(suiteID, items)
 		if !appendBudgetedCatalogLine(&lines, line) {
-			lines = append(lines, "- Additional skill suites omitted from the system prompt. Use list_skills for the complete catalog.")
+			lines = append(lines, "- Additional skill suites omitted from the system prompt. Use skill with action=list for the complete catalog.")
 			return strings.Join(lines, "\n")
 		}
 	}
@@ -458,7 +458,7 @@ func formatSkillSuiteDetails(suiteID string, items []skill.CatalogEntry) string 
 			line += fmt.Sprintf(", plus %d more", len(items)-len(ids))
 		}
 	}
-	line += fmt.Sprintf(". Use list_skills with suite=%q and offset/limit to inspect child details on demand, then load_skill with an exact id.", suiteID)
+	line += fmt.Sprintf(". Use skill with action=list and suite=%q, then skill with action=load and name with an exact id.", suiteID)
 	return line
 }
 

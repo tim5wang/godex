@@ -345,7 +345,7 @@ func decorateSkillSuiteMetadata(items []skill.CatalogEntry) {
 		if len(items[i].ChildSkillIDs) > maxCatalogChildSkillIDs {
 			items[i].ChildSkillIDs = items[i].ChildSkillIDs[:maxCatalogChildSkillIDs]
 		}
-		items[i].ChildSkillHint = fmt.Sprintf("Use list_skills with suite=%q and offset/limit to inspect child details, then load_skill with an exact child id.", items[i].ID)
+		items[i].ChildSkillHint = tools.ChildSkillHint(items[i].ID, len(children), len(items[i].ChildSkillIDs))
 	}
 }
 

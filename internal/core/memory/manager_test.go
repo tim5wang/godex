@@ -120,8 +120,8 @@ func TestBuildPromptSectionMentionsForgetMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build prompt section: %v", err)
 	}
-	if !strings.Contains(section, "forget_memory") {
-		t.Fatalf("expected prompt section to mention forget_memory, got %q", section)
+	if !strings.Contains(section, "forget") {
+		t.Fatalf("expected prompt section to mention forget, got %q", section)
 	}
 }
 

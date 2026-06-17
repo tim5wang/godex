@@ -124,7 +124,7 @@ func TestOpenAICodexClientToolParametersAreObjects(t *testing.T) {
 	_, err := client.Stream(context.Background(), protocol.Request{
 		Model: "gpt-5.4-mini",
 		Tools: []protocol.ToolSchema{{
-			Name:        "list_skills",
+			Name:        "skill",
 			Description: "List available skills",
 			InputSchema: map[string]interface{}{
 				"type":       "object",

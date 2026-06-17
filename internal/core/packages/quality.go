@@ -438,7 +438,7 @@ func allResourcePaths(resources Resources) []string {
 
 func knownPermission(permission string) bool {
 	switch strings.TrimSpace(permission) {
-	case "network", "filesystem", "browser", "desktop", "shell", "memory", "packages", "read_file", "write_file", "edit_file", "bash", "background_run", "subagent", "external_agents", "mcp":
+	case "network", "filesystem", "browser", "desktop", "shell", "memory", "packages", "read_file", "write_file", "edit_file", "bash", "background", "subagent", "external_agents", "mcp":
 		return true
 	default:
 		return false
@@ -510,7 +510,7 @@ func reinstallHint(item Entry) string {
 
 func highRiskPermission(permission string) bool {
 	switch strings.TrimSpace(permission) {
-	case "shell", "desktop", "filesystem", "write_file", "edit_file", "bash", "background_run", "external_agents":
+	case "shell", "desktop", "filesystem", "write_file", "edit_file", "bash", "background", "external_agents":
 		return true
 	default:
 		return false

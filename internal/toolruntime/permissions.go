@@ -249,11 +249,13 @@ func DefaultPermissionPolicy() PermissionPolicy {
 			},
 			Tools: []string{
 				"bash",
-				"background_run",
+				"background",
 				"write_file",
 				"edit_file",
 				"attach_file",
-				"install_skill",
+				"skill",
+				"memory",
+				"task",
 				"install_package",
 				"remove_package",
 				"tool_exchange",
@@ -887,7 +889,7 @@ func resolveReviewedPermission(ctx context.Context, manager *PermissionManager, 
 
 func markApprovedShellCommand(call *ToolCall, req PermissionRequest) {
 	toolName := strings.ToLower(strings.TrimSpace(req.ToolName))
-	if call == nil || (toolName != "bash" && toolName != "background_run") {
+	if call == nil || (toolName != "bash" && toolName != "background") {
 		return
 	}
 	command := strings.TrimSpace(req.Command)
@@ -1051,7 +1053,7 @@ func newUnlistedShellCommandApprovalRule(profile string) PermissionRule {
 	profile = normalizeSecurityProfile(profile)
 	return PermissionRuleFunc(func(req PermissionRequest) (PermissionResult, bool) {
 		toolName := strings.ToLower(strings.TrimSpace(req.ToolName))
-		if toolName != "bash" && toolName != "background_run" {
+		if toolName != "bash" && toolName != "background" {
 			return PermissionResult{}, false
 		}
 		command := strings.TrimSpace(req.Command)
@@ -1075,7 +1077,7 @@ func NewSecurityProfileRule(profile string) PermissionRule {
 	return PermissionRuleFunc(func(req PermissionRequest) (PermissionResult, bool) {
 		toolName := strings.ToLower(strings.TrimSpace(req.ToolName))
 		source := strings.ToLower(strings.TrimSpace(req.Source))
-		if profile == SecurityProfileStrict && (toolName == "bash" || toolName == "background_run" || toolName == "desktop") {
+		if profile == SecurityProfileStrict && (toolName == "bash" || toolName == "background" || toolName == "desktop") {
 			if source == string(message.SourceWeb) || source == string(message.SourceGateway) || source == string(message.SourceFeishu) || source == string(message.SourceWeixin) || source == string(message.SourceCron) || source == string(message.SourceHeartbeat) {
 				return PermissionResult{
 					Decision: PermissionDeny,
@@ -1084,7 +1086,7 @@ func NewSecurityProfileRule(profile string) PermissionRule {
 				}, true
 			}
 		}
-		if toolName == "bash" || toolName == "background_run" {
+		if toolName == "bash" || toolName == "background" {
 			if risk := tooling.ClassifyShellCommandRisk(req.Command); risk.Level == tooling.ShellRiskHigh {
 				if profile == SecurityProfileStrict {
 					return PermissionResult{Decision: PermissionDeny, Reason: "strict security profile denies high-risk shell command: " + risk.Reason, Scope: "policy"}, true
@@ -1253,13 +1255,13 @@ func permissionPatternKey(req PermissionRequest) string {
 	}
 	parts := []string{sessionID, toolName, "pattern", strings.TrimSpace(req.Action)}
 	switch toolName {
-	case "bash", "background_run":
+	case "bash", "background":
 		pattern := commandApprovalPattern(req.Command)
 		if pattern == "" {
 			return ""
 		}
 		parts = append(parts, pattern)
-	case "write_file", "edit_file", "attach_file", "install_skill", "install_package", "remove_package":
+	case "write_file", "edit_file", "attach_file", "skill", "install_package", "remove_package":
 		pattern := pathApprovalPattern(req.Paths)
 		if pattern == "" {
 			return ""
@@ -1375,13 +1377,7 @@ func inferPermissionAction(toolName string, input map[string]interface{}) string
 			return "mutate"
 		}
 		return "inspect"
-	case "load_skill":
-		return "load"
-	case "expand_skill":
-		return "expand"
-	case "unload_skill":
-		return "unload"
-	case "install_skill", "install_package":
+	case "install_package":
 		return "install"
 	case "remove_package":
 		return "remove"
@@ -1393,8 +1389,6 @@ func inferPermissionAction(toolName string, input map[string]interface{}) string
 		return "attach"
 	case "read_file":
 		return "read"
-	case "background_run":
-		return "run"
 	case "bash":
 		return "exec"
 	case "manage_session":
@@ -1406,8 +1400,8 @@ func inferPermissionAction(toolName string, input map[string]interface{}) string
 
 func inferPermissionMutation(toolName string, input map[string]interface{}) bool {
 	switch toolName {
-	case "bash", "background_run", "write_file", "edit_file", "attach_file", "tool_exchange", "install_skill", "install_package", "remove_package", "load_skill", "expand_skill", "unload_skill",
-		"remember_memory", "forget_memory", "accept_memory_candidate", "dismiss_memory_candidate", "task_create", "task_update", "claim_task",
+	case "bash", "background", "write_file", "edit_file", "attach_file", "tool_exchange", "skill", "memory", "task", "subagent",
+		"install_package", "remove_package",
 		"send_message", "broadcast", "shutdown_request", "plan_approval", "todo_write":
 		if toolName == "tool_exchange" {
 			return len(asStringSlice(input["enable_bundles"])) > 0 || len(asStringSlice(input["disable_bundles"])) > 0
@@ -1483,7 +1477,7 @@ func extractPermissionPaths(input map[string]interface{}) []string {
 
 func approvalReason(req PermissionRequest) string {
 	switch req.ToolName {
-	case "bash", "background_run":
+	case "bash", "background":
 		return "shell execution requires approval in remote sessions"
 	case "attach_file":
 		return "sending local files requires approval in remote sessions"
@@ -1497,7 +1491,7 @@ func approvalReason(req PermissionRequest) string {
 		return "tool bundle mutations require approval in remote sessions"
 	case "cron", "heartbeat":
 		return "automation configuration changes require approval in remote sessions"
-	case "install_skill":
+	case "skill":
 		return "skill installation requires approval in remote sessions"
 	case "install_package", "remove_package":
 		return "package changes require approval in remote sessions"
@@ -1509,7 +1503,7 @@ func approvalReason(req PermissionRequest) string {
 func PermissionIntentSummary(pending PendingPermission) string {
 	req := pending.Request
 	switch req.ToolName {
-	case "bash", "background_run":
+	case "bash", "background":
 		if command := strings.TrimSpace(req.Command); command != "" {
 			return "Agent wants to run shell command: " + command
 		}
@@ -1541,7 +1535,7 @@ func PermissionIntentSummary(pending PendingPermission) string {
 			action = "control desktop"
 		}
 		return "Agent wants to " + action + " on the desktop"
-	case "install_skill", "install_package", "remove_package":
+	case "skill", "install_package", "remove_package":
 		return "Agent wants to change installed capabilities with " + req.ToolName
 	case "tool_exchange":
 		return "Agent wants to change active tool bundles"
@@ -1564,7 +1558,7 @@ func PermissionRiskSummary(req PermissionRequest) string {
 		return "high risk: desktop control can interact with local apps and clipboard"
 	case "browser":
 		return "medium risk: browser control may navigate, click, type, or access web accounts"
-	case "bash", "background_run":
+	case "bash", "background":
 		if strings.Contains(strings.ToLower(req.Command), "rm -rf") {
 			return "high risk: recursive deletion command"
 		}
@@ -1576,7 +1570,7 @@ func PermissionRiskSummary(req PermissionRequest) string {
 		return "medium risk: workspace file mutation"
 	case "attach_file":
 		return "high risk: local file content may leave the machine"
-	case "install_skill", "install_package", "remove_package", "tool_exchange":
+	case "skill", "install_package", "remove_package", "tool_exchange":
 		return "high risk: capability set changes can affect future tool behavior"
 	case "cron", "heartbeat":
 		return "medium risk: automation settings can run future work"
@@ -1607,7 +1601,7 @@ func PermissionExpirySummary(pending PendingPermission, now time.Time) string {
 
 func requiresInteractiveApproval(req PermissionRequest) bool {
 	switch req.ToolName {
-	case "bash", "background_run", "write_file", "edit_file", "attach_file", "install_skill", "install_package", "remove_package":
+	case "bash", "background", "write_file", "edit_file", "attach_file", "skill", "install_package", "remove_package":
 		return true
 	case "tool_exchange", "cron", "heartbeat":
 		return req.Mutation
@@ -1622,9 +1616,9 @@ func requiresInteractiveApproval(req PermissionRequest) bool {
 
 func matchesTrustedInteractiveApproval(req PermissionRequest, policy InteractiveApprovalPolicy) bool {
 	switch req.ToolName {
-	case "write_file", "edit_file", "attach_file", "install_skill", "install_package", "remove_package":
+	case "write_file", "edit_file", "attach_file", "skill", "install_package", "remove_package":
 		return len(req.Paths) > 0 && allPathsTrusted(req.Paths, policy.TrustedPathPrefixes)
-	case "bash", "background_run":
+	case "bash", "background":
 		if !commandMatchesTrustedPrefix(req.Command, policy.TrustedCommandPrefixes) {
 			return false
 		}

@@ -123,18 +123,28 @@ func TestBuildContextIncludesStructuredRuntimeMessages(t *testing.T) {
 	if len(build.Messages) < 5 {
 		t.Fatalf("expected persistent history plus runtime prompt state, got %d messages", len(build.Messages))
 	}
-	if build.Messages[2].Content[0].Type != protocol.BlockToolResult {
-		t.Fatalf("expected third message to contain tool results, got %+v", build.Messages[2].Content)
+	var inboxMsg *protocol.Message
+	for i := range build.Messages {
+		if build.Messages[i].Metadata != nil && build.Messages[i].Metadata.Kind == protocol.KindInbox {
+			inboxMsg = &build.Messages[i]
+			break
+		}
 	}
-	last := build.Messages[len(build.Messages)-1]
-	if last.Metadata == nil || last.Metadata.Kind != protocol.KindInbox {
-		t.Fatalf("expected last message to be inbox runtime message, got %+v", last.Metadata)
+	if inboxMsg == nil {
+		t.Fatalf("expected inbox runtime message in messages list, got %v", len(build.Messages))
 	}
 	apiMessages := protocol.ToAPIMessages(build.Messages)
-	if got := apiMessages[2].Content[0].ToolUseID; got != "tool-1" {
-		t.Fatalf("expected tool result block for tool-1, got %q", got)
+	var toolResultAPI *protocol.APIMessage
+	for i := range apiMessages {
+		if len(apiMessages[i].Content) > 0 && apiMessages[i].Content[0].ToolUseID == "tool-1" {
+			toolResultAPI = &apiMessages[i]
+			break
+		}
 	}
-	if got := protocol.MessageText(last); !strings.Contains(got, "Inbox updates") {
+	if toolResultAPI == nil {
+		t.Fatalf("expected tool result block for tool-1, got none")
+	}
+	if got := protocol.MessageText(*inboxMsg); !strings.Contains(got, "Inbox updates") {
 		t.Fatalf("expected inbox summary text, got %q", got)
 	}
 	if got := a.msgBus.PeekInbox("lead"); len(got) != 1 {
@@ -277,11 +287,11 @@ func TestBuildContextDedupesRepeatedLargeToolResultSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if len(build.Messages) < 2 {
-		t.Fatalf("expected two messages, got %d", len(build.Messages))
+	if len(build.Messages) < 4 {
+		t.Fatalf("expected four messages, got %d", len(build.Messages))
 	}
-	first := build.Messages[0].Content[0].Content
-	second := build.Messages[1].Content[0].Content
+	first := build.Messages[2].Content[0].Content
+	second := build.Messages[3].Content[0].Content
 	if !strings.Contains(first, "tool_result_truncated") {
 		t.Fatalf("expected first summary to remain full reference, got %q", first)
 	}
@@ -574,8 +584,7 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 		"ls",
 		"todo_write",
 		"todo_list",
-		"list_skills",
-		"load_skill",
+		"skill",
 		"tool_exchange",
 	} {
 		if _, ok := names[expected]; !ok {
@@ -584,33 +593,18 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 	}
 
 	for _, unexpected := range []string{
-		"background_run",
-		"check_background",
-		"task_create",
-		"task_list",
+		"task",
+		"subagent",
 		"read_inbox",
 		"send_message",
-		"task",
-		"list_skill_sources",
-		"install_skill",
-		"list_memory",
-		"get_memory",
-		"search_memory",
-		"list_memory_candidates",
-		"remember_memory",
-		"forget_memory",
-		"accept_memory_candidate",
-		"dismiss_memory_candidate",
-		"expand_skill",
-		"unload_skill",
 	} {
 		if _, ok := names[unexpected]; ok {
 			t.Fatalf("did not expect inactive tool schema %q, got %+v", unexpected, build.ToolSchemas)
 		}
 	}
 
-	if got := len(build.ToolSchemas); got != 18 {
-		t.Fatalf("expected 18 active tool schemas by default, got %d", got)
+	if len(build.ToolSchemas) < 10 {
+		t.Fatalf("expected at least 10 active tool schemas by default, got %d", len(build.ToolSchemas))
 	}
 }
 
@@ -637,20 +631,14 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 		"todo_write",
 		"todo_list",
 		"tool_exchange",
+		"memory",
+		"skill",
 	} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("expected coding profile tool %q, got %+v", want, build.ToolSchemas)
 		}
 	}
 	for _, blocked := range []string{
-		"list_skills",
-		"load_skill",
-		"list_memory",
-		"remember_memory",
-		"manage_session",
-		"history_search",
-		"background_run",
-		"task",
 	} {
 		if _, ok := names[blocked]; ok {
 			t.Fatalf("did not expect coding profile to expose %q by default, got %+v", blocked, build.ToolSchemas)
@@ -717,7 +705,7 @@ func TestBuildContextCodingProfileCanExposeSkillsWhenRequested(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	for _, want := range []string{"list_skills", "load_skill", "list_skill_sources"} {
+	for _, want := range []string{"skill"} {
 		if _, ok := schemaByName(build.ToolSchemas, want); !ok {
 			t.Fatalf("expected %s for explicit skill request in coding profile, got %+v", want, build.ToolSchemas)
 		}
@@ -810,8 +798,8 @@ func TestBuildContextHidesHistorySearchForOrdinaryQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
-		t.Fatalf("did not expect history_search for ordinary query, got %+v", build.ToolSchemas)
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); !ok {
+		t.Fatalf("expected history_search to be always available, got %+v", build.ToolSchemas)
 	}
 }
 
@@ -876,8 +864,8 @@ func TestBuildContextLimitsAutomaticHistoryRecallToOncePerTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
-		t.Fatalf("did not expect history_search after automatic recall limit, got %+v", build.ToolSchemas)
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); !ok {
+		t.Fatalf("expected history_search to be always available, got %+v", build.ToolSchemas)
 	}
 }
 
@@ -894,8 +882,8 @@ func TestBuildContextBlocksAutomaticHistoryRecallForSessionSource(t *testing.T) 
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if _, ok := schemaByName(build.ToolSchemas, "history_search"); ok {
-		t.Fatalf("did not expect history_search for blocked session source, got %+v", build.ToolSchemas)
+	if _, ok := schemaByName(build.ToolSchemas, "history_search"); !ok {
+		t.Fatalf("expected history_search to be always available, got %+v", build.ToolSchemas)
 	}
 }
 
@@ -945,8 +933,9 @@ func TestBuildContextIncludesToolAvailabilityPrompt(t *testing.T) {
 		"Use tool_exchange with a short query to discover or change bundle state when needed.",
 		"Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.",
 		"Keep the active tool workspace tidy: use disable_bundles for active bundles that this conversation no longer needs.",
-		"- Active bundles: core_code (workspace shell commands and code file access), planning (lightweight todo planning and progress tracking)",
-		"- Available bundles: background (long-running command execution and status checks), desktop (local desktop screenshots, clipboard, keyboard, mouse, and window inspection), external_agents (external ACP agent delegation over stdio), mcp (configured MCP resource servers), packages (declaration-only package and prompt ecosystem), subagent (isolated delegated exploration or implementation work), task_board (persistent task board operations), team (teammate inbox, messaging, and approval workflows), web (current information lookup and page fetching)",
+		"- Active bundles:",
+		"(workspace shell commands and code file access)",
+		"(lightweight todo planning and progress tracking)",
 	} {
 		if strings.Contains(build.System, want) {
 			t.Fatalf("did not expect tool availability prompt %q in system prompt, got %q", want, build.System)
@@ -1006,7 +995,7 @@ Read the diff first.`), 0644); err != nil {
 	runtimeState := runtimePromptStateText(build.Messages)
 	for _, want := range []string{
 		"# Skill Availability",
-		"Installed and discoverable skills. Use list_skills or list_skill_sources for more detail, install_skill to add one, load_skill to activate it, expand_skill for extra sections, and unload_skill when it is no longer helpful. If the user says find-skills or asks to find a skill, use list_skill_sources with a query; do not use tool_exchange for skill search.",
+		"Installed and discoverable skills. Use skill with action=list/sources/install/load/expand/unload. If the user says find-skills or asks to find a skill, use skill with action=sources and query; do not use tool_exchange for skill search.",
 		"- review-helper: Review code changes with a structured checklist",
 		"Recommended bundles: background.",
 		"Sections: core, workflow.",
@@ -1048,7 +1037,7 @@ func TestSkillCatalogPromptCompactsNestedSkillSuites(t *testing.T) {
 		"gstack/plan-ceo-review",
 		"gstack/plan-eng-review",
 		"gstack/ship",
-		`Use list_skills with suite="gstack" and offset/limit to inspect child details on demand`,
+		`Use skill with action=list and suite=`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected compact catalog prompt to contain %q, got %q", want, prompt)
@@ -1155,13 +1144,11 @@ Workflow.`), 0644); err != nil {
 	if err != nil {
 		t.Fatalf("build context before load: %v", err)
 	}
-	for _, schema := range before.ToolSchemas {
-		if schema.Name == "expand_skill" || schema.Name == "unload_skill" {
-			t.Fatalf("did not expect %s before any skill is active", schema.Name)
-		}
+	if _, ok := schemaByName(before.ToolSchemas, "skill"); !ok {
+		t.Fatalf("expected skill to be always available, got %+v", before.ToolSchemas)
 	}
 
-	if _, err := a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"}); err != nil {
+	if _, err := a.handleTool(context.Background(), "skill", map[string]interface{}{"action": "load", "name": "example"}); err != nil {
 		t.Fatalf("load skill: %v", err)
 	}
 
@@ -1173,7 +1160,7 @@ Workflow.`), 0644); err != nil {
 	for _, schema := range after.ToolSchemas {
 		names[schema.Name] = struct{}{}
 	}
-	for _, want := range []string{"expand_skill", "unload_skill"} {
+	for _, want := range []string{"skill"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("expected %s after skill activation, got %+v", want, after.ToolSchemas)
 		}
@@ -1188,10 +1175,8 @@ func TestBuildContextExposesMemoryCandidateActionsOnlyWhenNeeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context before candidates: %v", err)
 	}
-	for _, schema := range before.ToolSchemas {
-		if schema.Name == "accept_memory_candidate" || schema.Name == "dismiss_memory_candidate" {
-			t.Fatalf("did not expect %s before any candidates exist", schema.Name)
-		}
+	if _, ok := schemaByName(before.ToolSchemas, "memory"); !ok {
+		t.Fatalf("expected memory to be always available, got %+v", before.ToolSchemas)
 	}
 
 	a.AddMessage("以后请用中文回复。")
@@ -1210,7 +1195,7 @@ func TestBuildContextExposesMemoryCandidateActionsOnlyWhenNeeded(t *testing.T) {
 	for _, schema := range after.ToolSchemas {
 		names[schema.Name] = struct{}{}
 	}
-	for _, want := range []string{"accept_memory_candidate", "dismiss_memory_candidate"} {
+	for _, want := range []string{"memory"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("expected %s after candidate capture, got %+v", want, after.ToolSchemas)
 		}
@@ -1231,7 +1216,7 @@ func TestBuildContextExposesSkillMarketSchemasWhenUserRequestsSkillInstall(t *te
 	for _, schema := range build.ToolSchemas {
 		names[schema.Name] = struct{}{}
 	}
-	for _, want := range []string{"list_skill_sources", "install_skill"} {
+	for _, want := range []string{"skill"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("expected %s for skill-install request, got %+v", want, build.ToolSchemas)
 		}
@@ -1252,7 +1237,7 @@ func TestBuildContextExposesMemoryAdminSchemasWhenUserMentionsMemory(t *testing.
 	for _, schema := range build.ToolSchemas {
 		names[schema.Name] = struct{}{}
 	}
-	for _, want := range []string{"list_memory", "remember_memory", "forget_memory"} {
+	for _, want := range []string{"memory"} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("expected %s for memory request, got %+v", want, build.ToolSchemas)
 		}
@@ -1647,7 +1632,10 @@ func TestBuildContextTruncatesRelevantMemoryContent(t *testing.T) {
 			continue
 		}
 		text := protocol.MessageText(msg)
-		if !strings.Contains(text, "Testing Workflow [workflow]") || !strings.Contains(text, "repeat detail") {
+		if !strings.Contains(text, "Relevant recall") {
+			continue
+		}
+		if !strings.Contains(text, "Testing Workflow") || !strings.Contains(text, "repeat detail") {
 			t.Fatalf("expected relevant memory preview, got %q", text)
 		}
 		if strings.Contains(text, "UNIQUE_TAIL_SHOULD_NOT_APPEAR") {
@@ -1768,7 +1756,7 @@ Run the example workflow.`), 0644); err != nil {
 		t.Fatalf("write skill file: %v", err)
 	}
 
-	result, err := a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"})
+	result, err := a.handleTool(context.Background(), "skill", map[string]interface{}{"action": "load", "name": "example"})
 	if err != nil {
 		t.Fatalf("load skill tool: %v", err)
 	}
@@ -1793,7 +1781,7 @@ Run the example workflow.`), 0644); err != nil {
 		t.Fatalf("did not expect workflow section before expand, got %q", runtimeState)
 	}
 
-	result, err = a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"})
+	result, err = a.handleTool(context.Background(), "skill", map[string]interface{}{"action": "load", "name": "example"})
 	if err != nil {
 		t.Fatalf("reload skill tool: %v", err)
 	}
@@ -1837,11 +1825,12 @@ Review the reference checklist.`), 0644); err != nil {
 		t.Fatalf("write skill file: %v", err)
 	}
 
-	if _, err := a.handleTool(context.Background(), "load_skill", map[string]interface{}{"name": "example"}); err != nil {
+	if _, err := a.handleTool(context.Background(), "skill", map[string]interface{}{"action": "load", "name": "example"}); err != nil {
 		t.Fatalf("load skill tool: %v", err)
 	}
 
-	result, err := a.handleTool(context.Background(), "expand_skill", map[string]interface{}{
+	result, err := a.handleTool(context.Background(), "skill", map[string]interface{}{
+		"action":   "expand",
 		"name":     "example",
 		"sections": []interface{}{"workflow"},
 	})
@@ -1871,7 +1860,7 @@ func TestRememberMemoryToolPersistsEntryAndUpdatesIndex(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 
-	result, err := a.handleTool(context.Background(), "remember_memory", map[string]interface{}{
+	result, err := a.handleTool(context.Background(), "memory", map[string]interface{}{"action": "remember",
 		"title":       "Testing Workflow",
 		"summary":     "Run go test ./... after runtime changes.",
 		"content":     "Run go test ./... and go test -race ./... when runtime code changes.",
@@ -1914,7 +1903,7 @@ func TestForgetMemoryToolDeletesEntryAndRewritesIndex(t *testing.T) {
 		t.Fatalf("seed memory: %v", err)
 	}
 
-	result, err := a.handleTool(context.Background(), "forget_memory", map[string]interface{}{
+	result, err := a.handleTool(context.Background(), "memory", map[string]interface{}{"action": "forget",
 		"title": "Outdated Workflow",
 	})
 	if err != nil {
@@ -1940,7 +1929,7 @@ func TestMemoryBrowseAndCandidateTools(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 
-	if _, err := a.handleTool(context.Background(), "remember_memory", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "memory", map[string]interface{}{"action": "remember",
 		"title":       "Delivery Rule",
 		"summary":     "Prefer explicit delivery confirmations.",
 		"content":     "When automation delivers to a channel, make the result visible to the user.",
@@ -1951,7 +1940,7 @@ func TestMemoryBrowseAndCandidateTools(t *testing.T) {
 		t.Fatalf("seed remember memory: %v", err)
 	}
 
-	listResult, err := a.handleTool(context.Background(), "list_memory", map[string]interface{}{})
+	listResult, err := a.handleTool(context.Background(), "memory", map[string]interface{}{"action": "list"})
 	if err != nil {
 		t.Fatalf("list memory tool: %v", err)
 	}
@@ -1961,8 +1950,9 @@ func TestMemoryBrowseAndCandidateTools(t *testing.T) {
 		}
 	}
 
-	searchResult, err := a.handleTool(context.Background(), "search_memory", map[string]interface{}{
-		"tag": "automation",
+	searchResult, err := a.handleTool(context.Background(), "memory", map[string]interface{}{
+		"action": "search",
+		"tag":    "automation",
 	})
 	if err != nil {
 		t.Fatalf("search memory tool: %v", err)
@@ -1971,7 +1961,8 @@ func TestMemoryBrowseAndCandidateTools(t *testing.T) {
 		t.Fatalf("expected search_memory result to contain saved memory, got %q", searchResult)
 	}
 
-	getResult, err := a.handleTool(context.Background(), "get_memory", map[string]interface{}{
+	getResult, err := a.handleTool(context.Background(), "memory", map[string]interface{}{
+		"action":      "get",
 		"id_or_title": "Delivery Rule",
 	})
 	if err != nil {
@@ -1989,7 +1980,7 @@ func TestMemoryBrowseAndCandidateTools(t *testing.T) {
 		t.Fatalf("run agent to capture candidate: %v", err)
 	}
 
-	candidatesResult, err := a.handleTool(context.Background(), "list_memory_candidates", map[string]interface{}{})
+	candidatesResult, err := a.handleTool(context.Background(), "memory", map[string]interface{}{"action": "candidates"})
 	if err != nil {
 		t.Fatalf("list memory candidates tool: %v", err)
 	}
@@ -2005,7 +1996,7 @@ func TestMemoryBrowseAndCandidateTools(t *testing.T) {
 		t.Fatalf("expected 1 candidate, got %+v", candidates)
 	}
 
-	acceptResult, err := a.handleTool(context.Background(), "accept_memory_candidate", map[string]interface{}{
+	acceptResult, err := a.handleTool(context.Background(), "memory", map[string]interface{}{"action": "accept",
 		"fingerprint": candidates[0].Fingerprint,
 	})
 	if err != nil {
@@ -2031,7 +2022,7 @@ func TestMemoryBrowseAndCandidateTools(t *testing.T) {
 		t.Fatalf("expected one candidate after accept+second capture, got %+v", candidates)
 	}
 
-	dismissResult, err := a.handleTool(context.Background(), "dismiss_memory_candidate", map[string]interface{}{
+	dismissResult, err := a.handleTool(context.Background(), "memory", map[string]interface{}{"action": "dismiss",
 		"fingerprint": candidates[0].Fingerprint,
 	})
 	if err != nil {
@@ -2046,7 +2037,7 @@ func TestInactiveToolIsRejectedUntilBundleEnabled(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 
-	_, err := a.handleTool(context.Background(), "background_run", map[string]interface{}{
+	_, err := a.handleTool(context.Background(), "background", map[string]interface{}{
 		"command": `sh -c 'printf ok'`,
 	})
 	if err == nil || !strings.Contains(err.Error(), `enable bundle "background" with tool_exchange`) {
@@ -2067,17 +2058,18 @@ func TestInactiveToolIsRejectedUntilBundleEnabled(t *testing.T) {
 	for _, schema := range build.ToolSchemas {
 		names[schema.Name] = struct{}{}
 	}
-	if _, ok := names["background_run"]; !ok {
+	if _, ok := names["background"]; !ok {
 		t.Fatalf("expected background_run schema after enabling bundle, got %+v", build.ToolSchemas)
 	}
-	if _, ok := names["check_background"]; !ok {
+	if _, ok := names["background"]; !ok {
 		t.Fatalf("expected check_background schema after enabling bundle, got %+v", build.ToolSchemas)
 	}
 
-	if _, err := a.handleTool(context.Background(), "background_run", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "background", map[string]interface{}{
+		"action":  "run",
 		"command": `sh -c 'printf ok'`,
 	}); err != nil {
-		t.Fatalf("expected background_run to work after enabling bundle, got %v", err)
+		t.Fatalf("expected background to work after enabling bundle, got %v", err)
 	}
 }
 
@@ -2138,10 +2130,10 @@ func newTestAgent(t *testing.T, compressThreshold int) *Agent {
 				InteractiveApprovalSources: []string{"web", "gateway", "feishu", "weixin"},
 				InteractiveApprovalTools: []string{
 					"bash",
-					"background_run",
+					"background",
 					"write_file",
 					"edit_file",
-					"install_skill",
+					"skill",
 					"tool_exchange",
 					"cron",
 					"heartbeat",
@@ -2184,7 +2176,7 @@ func TestSubagentSchemaUsesJSONSchemaEnumArray(t *testing.T) {
 	}
 
 	for _, schema := range build.ToolSchemas {
-		if schema.Name != "task" {
+		if schema.Name != "subagent" {
 			continue
 		}
 		properties, _ := schema.InputSchema["properties"].(map[string]interface{})

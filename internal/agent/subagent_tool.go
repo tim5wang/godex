@@ -126,7 +126,7 @@ const (
 )
 
 func newSubagentTool(agent *Agent) tools.Tool {
-	return tools.NewTypedTool(tools.NewToolSpec("task", "Run or manage durable subagents for isolated exploration or work. Use action='run' to create a visible durable job and wait for its result, 'start' for one durable background job, 'batch' for multiple durable jobs, and 'wait' to wait for any/all durable jobs. Use 'status' for compact state, 'logs' only for bounded progress diagnostics, and 'review'/'merge' for diffs. Prefer wait over repeated status polling.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("subagent", "Run or manage durable subagents for isolated exploration or work. Use action='run' to create a visible durable job and wait for its result, 'start' for one durable background job, 'batch' for multiple durable jobs, and 'wait' to wait for any/all durable jobs. Use 'status' for compact state, 'logs' only for bounded progress diagnostics, and 'review'/'merge' for diffs. Prefer wait over repeated status polling.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{

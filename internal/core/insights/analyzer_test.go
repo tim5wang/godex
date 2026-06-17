@@ -47,7 +47,7 @@ func TestAnalyzerBuildsStructuredReport(t *testing.T) {
 	report, err := analyzer.Analyze(Input{
 		CurrentMessages: []Message{
 			{Text: "请帮我 review 这个 runtime 改动。"},
-			{Text: "Run go test ./... and go test -race ./... after runtime changes. Also watch for context deadline exceeded errors.", ToolNames: []string{"background_run"}},
+			{Text: "Run go test ./... and go test -race ./... after runtime changes. Also watch for context deadline exceeded errors.", ToolNames: []string{"background"}},
 		},
 		ActiveSkills: []string{"stock-fetcher"},
 		ToolCatalog:  catalog,

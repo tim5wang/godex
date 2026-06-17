@@ -14,8 +14,9 @@ import (
 
 func TestPermissionRequestFromCallExtractsSecurityContext(t *testing.T) {
 	call := ToolCall{
-		Name: "background_run",
+		Name: "background",
 		NormalizedInput: map[string]interface{}{
+			"action":      "run",
 			"command":     "go test ./...",
 			"path":        "notes/todo.txt",
 			"root":        ".",
@@ -32,14 +33,14 @@ func TestPermissionRequestFromCallExtractsSecurityContext(t *testing.T) {
 	if req.SessionID != "session-1" || req.Source != string(message.SourceWeb) || req.Sender != "taiwu" {
 		t.Fatalf("unexpected session context: %+v", req)
 	}
-	if req.ToolName != "background_run" || req.Action != "run" {
+	if req.ToolName != "background" || req.Action != "run" {
 		t.Fatalf("unexpected tool identity: %+v", req)
 	}
 	if req.Command != "go test ./..." {
 		t.Fatalf("unexpected command extraction: %+v", req)
 	}
 	if !req.Mutation {
-		t.Fatalf("expected background_run to be treated as mutation: %+v", req)
+		t.Fatalf("expected background to be treated as mutation: %+v", req)
 	}
 	expectedPaths := []string{"notes/todo.txt", ".", ".godex/out.txt"}
 	if !reflect.DeepEqual(req.Paths, expectedPaths) {
@@ -165,7 +166,7 @@ func TestPermissionManagerRequiresApprovalForUnlistedBackgroundCommand(t *testin
 	req := PermissionRequest{
 		SessionID: "local-session",
 		Source:    "local",
-		ToolName:  "background_run",
+		ToolName:  "background",
 		Action:    "run",
 		Command:   "cargo test",
 		Mutation:  true,
@@ -268,7 +269,7 @@ func TestPermissionInterceptorMarksApprovedUnlistedBackgroundCommand(t *testing.
 	manager := NewDefaultPermissionManager()
 	handler := NewToolHandler()
 	handler.AddBeforeInterceptors(NewPermissionInterceptor(manager))
-	handler.Register(NewTypedTool(NewToolSpec("background_run", "background", map[string]interface{}{
+	handler.Register(NewTypedTool(NewToolSpec("background", "background", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"command": map[string]string{"type": "string"},
@@ -293,7 +294,7 @@ func TestPermissionInterceptorMarksApprovedUnlistedBackgroundCommand(t *testing.
 		Source:    "local",
 		Sender:    "cli",
 	})
-	_, err := handler.Handle(ctx, "background_run", map[string]interface{}{
+	_, err := handler.Handle(ctx, "background", map[string]interface{}{
 		"command": "cargo test",
 	})
 	var pending ErrPermissionPending
@@ -303,7 +304,7 @@ func TestPermissionInterceptorMarksApprovedUnlistedBackgroundCommand(t *testing.
 	if _, err := manager.ApprovePending("local-session", pending.RequestID, PermissionGrantOnce); err != nil {
 		t.Fatalf("approve unlisted background command: %v", err)
 	}
-	result, err := handler.Handle(ctx, "background_run", map[string]interface{}{
+	result, err := handler.Handle(ctx, "background", map[string]interface{}{
 		"command": "cargo test",
 	})
 	if err != nil {
@@ -676,7 +677,7 @@ func TestPermissionManagerPolicyAllowsTrustedCommandPrefixes(t *testing.T) {
 		InteractiveApproval: InteractiveApprovalPolicy{
 			Enabled:                true,
 			Sources:                []string{string(message.SourceWeb)},
-			Tools:                  []string{"bash", "background_run"},
+			Tools:                  []string{"bash", "background"},
 			TrustedPathPrefixes:    []string{".godex/.tmp", "notes"},
 			TrustedCommandPrefixes: []string{"git status", "go test ./..."},
 		},
@@ -685,7 +686,7 @@ func TestPermissionManagerPolicyAllowsTrustedCommandPrefixes(t *testing.T) {
 	allowed := manager.Evaluate(PermissionRequest{
 		SessionID: "web-session",
 		Source:    string(message.SourceWeb),
-		ToolName:  "background_run",
+		ToolName:  "background",
 		Action:    "run",
 		Command:   "go test ./...",
 		Paths:     []string{".godex/.tmp/results.txt"},
@@ -698,7 +699,7 @@ func TestPermissionManagerPolicyAllowsTrustedCommandPrefixes(t *testing.T) {
 	pending := manager.Evaluate(PermissionRequest{
 		SessionID: "web-session",
 		Source:    string(message.SourceWeb),
-		ToolName:  "background_run",
+		ToolName:  "background",
 		Action:    "run",
 		Command:   "go test ./...",
 		Paths:     []string{"secrets/results.txt"},

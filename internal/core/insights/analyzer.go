@@ -214,16 +214,16 @@ func bundleRecommendationsFromSignals(corpus string, toolNames []string, catalog
 	}
 
 	items := make([]string, 0, 4)
-	if !active["background"] && (containsTool(usedTools, "background_run") || strings.Contains(corpus, `enable bundle "background"`)) {
+	if !active["background"] && (containsTool(usedTools, "background") || strings.Contains(corpus, `enable bundle "background"`)) {
 		items = append(items, "Background bundle is used often enough to evaluate whether it should be easier to reach in this workflow.")
 	}
-	if !active["task_board"] && anyTool(usedTools, "task_create", "task_list", "task_update", "claim_task") {
+	if !active["task_board"] && containsTool(usedTools, "task") {
 		items = append(items, "Task board bundle shows recurring use; consider surfacing it earlier for planning-heavy sessions.")
 	}
 	if !active["team"] && anyTool(usedTools, "read_inbox", "send_message", "broadcast", "plan_approval") {
 		items = append(items, "Team bundle usage suggests teammate workflows may deserve a more direct entry point.")
 	}
-	if !active["subagent"] && (containsTool(usedTools, "task") || strings.Contains(strings.ToLower(corpus), "subagent")) {
+	if !active["subagent"] && (containsTool(usedTools, "subagent") || strings.Contains(strings.ToLower(corpus), "subagent")) {
 		items = append(items, "Subagent workflows appear repeatedly; consider keeping subagent access closer to the default path.")
 	}
 	return unique(items)

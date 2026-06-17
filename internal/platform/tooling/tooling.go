@@ -232,7 +232,7 @@ func AttachFileDefinition() Definition {
 
 func BackgroundRunDefinition() Definition {
 	return Definition{
-		Name:        "background_run",
+		Name:        "background",
 		Description: "Run an executable with argv-style arguments in a background task. Quotes are supported; shell operators are not.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -259,7 +259,7 @@ func SupportedToolSchemas(names ...string) []protocol.ToolSchema {
 			result = append(result, EditFileDefinition().ToolSchema())
 		case "attach_file":
 			result = append(result, AttachFileDefinition().ToolSchema())
-		case "background_run":
+		case "background":
 			result = append(result, BackgroundRunDefinition().ToolSchema())
 		case "grep":
 			result = append(result, GrepDefinition().ToolSchema())

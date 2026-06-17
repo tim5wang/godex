@@ -185,7 +185,7 @@ func TestManagerLoopToolFactoriesAreConfigurable(t *testing.T) {
 
 	manager.SetLoopToolFactories(nil)
 	names := manager.newLoopToolHandler("worker", 1).List()
-	if !reflect.DeepEqual(names, []string{"bash", "claim_task", "edit_file", "idle", "read_file", "write_file"}) {
+	if !reflect.DeepEqual(names, []string{"bash", "edit_file", "idle", "read_file", "task", "write_file"}) {
 		t.Fatalf("expected default loop tools after reset, got %v", names)
 	}
 }

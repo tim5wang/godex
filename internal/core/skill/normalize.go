@@ -743,14 +743,14 @@ func mapAllowedToolsToBundles(toolNames []string) []string {
 		switch normalized {
 		case "bash", "read_file", "write_file", "edit_file":
 			bundles = append(bundles, "core_code")
-		case "background_run", "check_background":
+		case "background":
 			bundles = append(bundles, "background")
-		case "task_create", "task_get", "task_list", "task_update", "claim_task":
+		case "task":
 			bundles = append(bundles, "task_board")
+		case "subagent":
+			bundles = append(bundles, "subagent")
 		case "read_inbox", "send_message", "broadcast", "shutdown_request", "list_teammates", "plan_approval":
 			bundles = append(bundles, "team")
-		case "task":
-			bundles = append(bundles, "subagent")
 		case "list_mcp_resources", "read_mcp_resource":
 			bundles = append(bundles, "mcp")
 		case "desktop":

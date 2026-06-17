@@ -26,7 +26,7 @@ func TestOpenAIClientToolParametersAreObjects(t *testing.T) {
 	_, err := client.Call(context.Background(), protocol.Request{
 		Model: "deepseek-chat",
 		Tools: []protocol.ToolSchema{{
-			Name:        "list_memory_candidates",
+			Name:        "memory",
 			Description: "List pending durable-memory candidates",
 			InputSchema: nil,
 		}},
@@ -107,7 +107,7 @@ func TestOpenAIClientStrictToolParametersDisallowExtraFields(t *testing.T) {
 func TestOpenAIClientPreservesReasoningContentForToolFollowUp(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","reasoning_content":"checked the tool plan","tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_memory_candidates","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","reasoning_content":"checked the tool plan","tool_calls":[{"id":"call_1","type":"function","function":{"name":"memory","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`))
 	}))
 	defer server.Close()
 

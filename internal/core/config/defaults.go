@@ -236,10 +236,10 @@ func defaultConfigFile() ConfigFile {
 				InteractiveApprovalSources: []string{"web", "gateway", "feishu", "weixin"},
 				InteractiveApprovalTools: []string{
 					"bash",
-					"background_run",
+					"background",
 					"write_file",
 					"edit_file",
-					"install_skill",
+					"skill",
 					"tool_exchange",
 					"cron",
 					"heartbeat",

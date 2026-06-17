@@ -26,7 +26,7 @@ func TestAgentRefactorKeepsDefaultToolCatalogShape(t *testing.T) {
 	if !catalogContainsTool(catalog, bundleCoreCode, "bash") {
 		t.Fatalf("expected bash in bundle %q, got %+v", bundleCoreCode, catalog.Bundles)
 	}
-	if !catalogContainsTool(catalog, bundleSubagent, "task") {
+	if !catalogContainsTool(catalog, bundleSubagent, "subagent") {
 		t.Fatalf("expected task in bundle %q, got %+v", bundleSubagent, catalog.Bundles)
 	}
 }

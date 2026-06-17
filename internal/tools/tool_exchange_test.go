@@ -295,11 +295,11 @@ func TestToolExchangeNoMatchDoesNotReturnCatalogOrRepeatInstruction(t *testing.T
 
 func TestToolExchangeEnablesBackgroundBundle(t *testing.T) {
 	handler := NewToolHandler()
-	handler.RegisterWithMeta(fakeTool("background_run"), ToolMeta{
+	handler.RegisterWithMeta(fakeTool("background"), ToolMeta{
 		Bundle:  "background",
 		Summary: "background tools",
 	})
-	handler.RegisterWithMeta(fakeTool("check_background"), ToolMeta{
+	handler.RegisterWithMeta(fakeTool("background"), ToolMeta{
 		Bundle:  "background",
 		Summary: "background tools",
 	})
@@ -327,7 +327,7 @@ func TestToolExchangeEnablesBackgroundBundle(t *testing.T) {
 	if len(parsed.ActiveBundles) != 1 || parsed.ActiveBundles[0] != "background" {
 		t.Fatalf("expected active bundle background, got %+v", parsed.ActiveBundles)
 	}
-	if !handler.IsActive("background_run") || !handler.IsActive("check_background") {
+	if !handler.IsActive("background") || !handler.IsActive("background") {
 		t.Fatal("expected background tools to become active")
 	}
 }

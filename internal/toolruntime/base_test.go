@@ -72,7 +72,7 @@ func TestToolHandlerActivateDefaults(t *testing.T) {
 		Summary:       "core tools",
 		DefaultActive: true,
 	})
-	handler.RegisterWithMeta(fakeTool{name: "background_run"}, ToolMeta{
+	handler.RegisterWithMeta(fakeTool{name: "background"}, ToolMeta{
 		Bundle:  "background",
 		Summary: "background tools",
 	})
@@ -83,7 +83,7 @@ func TestToolHandlerActivateDefaults(t *testing.T) {
 	if !handler.IsActive("bash") {
 		t.Fatal("expected default-active tool to be active")
 	}
-	if handler.IsActive("background_run") {
+	if handler.IsActive("background") {
 		t.Fatal("expected non-default tool to remain inactive")
 	}
 	if !handler.IsActive("compress") {
@@ -98,7 +98,7 @@ func TestToolHandlerResetActiveToolsToDefaultsDropsTransientBundles(t *testing.T
 		Summary:       "core tools",
 		DefaultActive: true,
 	})
-	handler.RegisterWithMeta(fakeTool{name: "background_run"}, ToolMeta{
+	handler.RegisterWithMeta(fakeTool{name: "background"}, ToolMeta{
 		Bundle:  "background",
 		Summary: "background tools",
 	})
@@ -114,19 +114,19 @@ func TestToolHandlerResetActiveToolsToDefaultsDropsTransientBundles(t *testing.T
 	if !handler.IsActive("compress") {
 		t.Fatal("expected always-active tool to be active after reset")
 	}
-	if handler.IsActive("background_run") {
+	if handler.IsActive("background") {
 		t.Fatal("expected transient bundle tool to be inactive after reset")
 	}
 }
 
 func TestToolHandlerRejectsInactiveTool(t *testing.T) {
 	handler := NewToolHandler()
-	handler.RegisterWithMeta(fakeTool{name: "background_run"}, ToolMeta{
+	handler.RegisterWithMeta(fakeTool{name: "background"}, ToolMeta{
 		Bundle:  "background",
 		Summary: "background tools",
 	})
 
-	_, err := handler.Handle(context.Background(), "background_run", map[string]interface{}{})
+	_, err := handler.Handle(context.Background(), "background", map[string]interface{}{})
 	var inactive ErrToolInactive
 	if !errors.As(err, &inactive) {
 		t.Fatalf("expected inactive tool error, got %v", err)

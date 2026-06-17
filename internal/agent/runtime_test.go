@@ -158,7 +158,7 @@ func TestRunWithOptionsCheckpointsTranscriptAppends(t *testing.T) {
 	a.client = &sequenceCaller{responses: []protocol.Response{
 		{
 			Content: []protocol.Block{
-				protocol.ToolUseBlock("tool-1", "list_memory", map[string]interface{}{}),
+				protocol.ToolUseBlock("tool-1", "memory", map[string]interface{}{"action": "list"}),
 			},
 		},
 		{
@@ -194,7 +194,7 @@ func TestRunWithOptionsAppendsLoopGuardFeedbackAndCheckpoint(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	repeated := protocol.Response{Content: []protocol.Block{
-		protocol.ToolUseBlock("tool-1", "list_memory", map[string]interface{}{}),
+		protocol.ToolUseBlock("tool-1", "memory", map[string]interface{}{"action": "list"}),
 	}}
 	a.client = &sequenceCaller{responses: []protocol.Response{
 		repeated,
@@ -249,7 +249,7 @@ func TestRunWithOptionsUsesConfiguredMaxTurns(t *testing.T) {
 	a.cfg.MaxTurns = 2
 	a.RegisterTools()
 	caller := &repeatingCaller{response: protocol.Response{Content: []protocol.Block{
-		protocol.ToolUseBlock("tool-1", "list_memory", map[string]interface{}{}),
+		protocol.ToolUseBlock("tool-1", "memory", map[string]interface{}{"action": "list"}),
 	}}}
 	a.client = caller
 	var maxTurnPayload events.NoticePayload
@@ -358,7 +358,7 @@ func TestRunWithOptionsEmitsToolLifecycleEventsFromRunner(t *testing.T) {
 	a.client = &sequenceCaller{responses: []protocol.Response{
 		{
 			Content: []protocol.Block{
-				protocol.ToolUseBlock("tool-1", "list_memory", map[string]interface{}{}),
+				protocol.ToolUseBlock("tool-1", "memory", map[string]interface{}{"action": "list"}),
 			},
 		},
 		{
@@ -400,10 +400,10 @@ func TestRunWithOptionsEmitsToolLifecycleEventsFromRunner(t *testing.T) {
 	if !sawStarted || !sawFinished {
 		t.Fatalf("expected tool lifecycle events, started=%v finished=%v", sawStarted, sawFinished)
 	}
-	if started.ID != "tool-1" || started.Name != "list_memory" {
+	if started.ID != "tool-1" || started.Name != "memory" {
 		t.Fatalf("unexpected started payload: %+v", started)
 	}
-	if finished.ID != "tool-1" || finished.Name != "list_memory" {
+	if finished.ID != "tool-1" || finished.Name != "memory" {
 		t.Fatalf("unexpected finished payload: %+v", finished)
 	}
 	if finished.Error != "" {
@@ -855,7 +855,7 @@ func TestApplyConfigKeepsToolHandlerInstanceStable(t *testing.T) {
 	if a.toolHandler != original {
 		t.Fatal("expected ApplyConfig to rebuild tool registrations without replacing the handler instance")
 	}
-	if original.Get("list_memory") == nil {
+	if original.Get("memory") == nil {
 		t.Fatal("expected rebuilt handler to retain registered tools")
 	}
 }
@@ -901,13 +901,14 @@ func TestApplyConfigRebindsToolExchangeToStableHandler(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("enable background bundle after ApplyConfig: %v", err)
 	}
-	if !a.toolHandler.IsActive("background_run") {
-		t.Fatal("expected tool_exchange to activate background_run on the stable handler")
+	if !a.toolHandler.IsActive("background") {
+		t.Fatal("expected tool_exchange to activate background on the stable handler")
 	}
-	if _, err := a.handleTool(context.Background(), "background_run", map[string]interface{}{
+	if _, err := a.handleTool(context.Background(), "background", map[string]interface{}{
+		"action":  "run",
 		"command": `sh -c 'printf ok'`,
 	}); err != nil {
-		t.Fatalf("expected background_run to execute after tool_exchange activation: %v", err)
+		t.Fatalf("expected background to execute after tool_exchange activation: %v", err)
 	}
 }
 

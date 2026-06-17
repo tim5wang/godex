@@ -189,7 +189,7 @@ func (m *Manager) BuildPromptSection() (string, error) {
 		"# Memory",
 		"This is durable project memory shared across future sessions. Use it only for facts, preferences, workflows, or warnings that will matter beyond the current conversation.",
 		fmt.Sprintf("- Memory directory: %s", m.dir),
-		"- Use remember_memory to save durable memory, list/search/get memory when you need to inspect it, and forget_memory to delete stale memory. Use list/accept/dismiss memory candidate tools to triage the inbox. Do not use memory tools for short-lived task progress.",
+		"- Use memory tool (action=remember/list/search/get/forget/candidates/accept/dismiss) to manage durable cross-session memory. Do not use memory tools for short-lived task progress.",
 		fmt.Sprintf("Current memory index (%s):", EntrypointName),
 		indexContent,
 	}

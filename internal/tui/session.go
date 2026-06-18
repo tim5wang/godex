@@ -27,7 +27,15 @@ func New(cfg *config.Config, backend Backend, stdout io.Writer) *Session {
 	}
 }
 
-// Run starts the full-screen TUI for the selected locator.
+// Run starts the TUI for the selected locator.
+//
+// The program is launched without tea.WithAltScreen so its output is
+// streamed straight into the terminal's scrollback buffer. This matches
+// how the agent's replies are produced (append-only chunks) and lets the
+// user scroll back through earlier frames after the program exits.
+// Heavyweight surfaces that genuinely need a dedicated canvas (the
+// workspace dashboard, permission popovers, etc.) opt back into alt
+// screen by spawning their own tea.Program with tea.WithAltScreen.
 func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) error {
 	opened, err := s.backend.OpenSession(ctx, locator)
 	if err != nil {
@@ -41,7 +49,6 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 
 	m := newModelWithDeferredInit(ctx, s.cfg, s.backend, s.now, opened.SessionID, snapshot)
 	options := []tea.ProgramOption{
-		tea.WithAltScreen(),
 		tea.WithContext(ctx),
 		tea.WithOutput(s.stdout),
 	}

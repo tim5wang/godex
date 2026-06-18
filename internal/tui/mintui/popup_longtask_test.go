@@ -225,6 +225,49 @@ func TestLongTaskListFilterEscLeavesFilterText(t *testing.T) {
 	}
 }
 
+// TestLongTaskListFilterBackspaceRemovesRune verifies that
+// pressing Backspace in filter mode removes the last rune.
+func TestLongTaskListFilterBackspaceRemovesRune(t *testing.T) {
+	s, _, _ := newLongTaskSession(t)
+	s.longTasks.mu.Lock()
+	s.longTasks.filter = "abc"
+	s.longTasks.filtering = true
+	s.longTasks.mu.Unlock()
+
+	s.handleLongTaskFilterKey(minitui.KeyEvent{Special: minitui.KeyBackspace})
+	s.longTasks.mu.Lock()
+	got := s.longTasks.filter
+	s.longTasks.mu.Unlock()
+	if got != "ab" {
+		t.Fatalf("Backspace should remove last rune, got %q", got)
+	}
+}
+
+// TestLongTaskListFilterEscExitsFilterMode verifies that
+// pressing ESC exits filter mode but keeps the popup open.
+func TestLongTaskListFilterEscExitsFilterMode(t *testing.T) {
+	s, _, _ := newLongTaskSession(t)
+	s.longTasks.mu.Lock()
+	s.longTasks.filter = "abc"
+	s.longTasks.filtering = true
+	s.longTasks.mu.Unlock()
+
+	action := s.handleLongTaskFilterKey(minitui.KeyEvent{Rune: 27})
+	if action != minitui.PopupUpdate {
+		t.Fatalf("ESC should return PopupUpdate to keep popup open, got %v", action)
+	}
+	s.longTasks.mu.Lock()
+	filtering := s.longTasks.filtering
+	filter := s.longTasks.filter
+	s.longTasks.mu.Unlock()
+	if filtering {
+		t.Fatalf("filtering should be false after ESC")
+	}
+	if filter != "abc" {
+		t.Fatalf("filter text should be preserved after ESC, got %q", filter)
+	}
+}
+
 // ── navigation ────────────────────────────────────────────────
 
 // TestLongTaskListNavigationUpDown verifies the ↑/↓ keys move
@@ -283,11 +326,13 @@ func TestLongTaskListEnterPushesDetail(t *testing.T) {
 	if action != minitui.PopupUpdate {
 		t.Fatalf("Enter should produce PopupUpdate, got %v", action)
 	}
-	// pushLongTaskDetail now runs on a goroutine to avoid the
-	// PushPopup-from-OnKey deadlock.  Give it a moment.
-	// The capturingTUI.PopPopup is a no-op, so both the loading
-	// and the detail popup accumulate (before+2).
+	// pushLongTaskDetail is called synchronously; it pushes a
+	// loading popup and spawns refreshLongTaskDetail in a
+	// goroutine that pops the loading and pushes the real
+	// detail.  Wait for the goroutine to settle.
 	time.Sleep(50 * time.Millisecond)
+	// capturingTUI.PopPopup is a no-op, so both the loading and
+	// the detail popup accumulate.
 	if got := len(tui.popups); got != before+2 {
 		t.Fatalf("Enter should push loading+detail popups (2), got %d (before=%d)", got, before)
 	}

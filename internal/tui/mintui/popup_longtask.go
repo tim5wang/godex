@@ -479,12 +479,7 @@ func (s *Session) handleLongTaskListKey(k minitui.KeyEvent) minitui.PopupAction 
 		if !ok {
 			return minitui.PopupPassthrough
 		}
-		// PushPopup must NOT be called from within the OnKey
-		// callback because min-tui's ReadLine holds t.mu while
-		// dispatching popup keys.  Spawn the push on a fresh
-		// goroutine so PushPopup acquires t.mu after the
-		// current key processing cycle releases it.
-		go s.pushLongTaskDetail(s.runCtx, row.WorkflowID)
+		s.pushLongTaskDetail(s.runCtx, row.WorkflowID)
 		return minitui.PopupUpdate
 
 	case k.Rune == '/':
@@ -515,14 +510,10 @@ func (s *Session) handleLongTaskListKey(k minitui.KeyEvent) minitui.PopupAction 
 
 // handleLongTaskFilterKey handles keys while the user is
 // editing the filter.  Runes append to the filter, Backspace
-// removes the last rune, Esc leaves filter mode (the
-// min-tui library auto-closes the popup on Esc, but that
-// would lose the popup entirely — we want to keep it open
-// and just exit filter mode, so the OnKey Esc contract
-// doesn't apply here because we're matching Rune=='esc'
-// through the popup's general key handling.  In practice
-// we just look at the rune; min-tui strips the real Esc
-// before OnKey fires).
+// removes the last rune, ESC leaves filter mode while keeping
+// the popup open.  As of min-tui v0.5.5, ESC is routed to
+// OnKey first and only closes the popup when OnKey returns
+// PopupPassthrough.
 func (s *Session) handleLongTaskFilterKey(k minitui.KeyEvent) minitui.PopupAction {
 	switch {
 	case k.Rune == '/':
@@ -534,10 +525,24 @@ func (s *Session) handleLongTaskFilterKey(k minitui.KeyEvent) minitui.PopupActio
 		s.longTasks.filtering = false
 		s.longTasks.mu.Unlock()
 		return minitui.PopupUpdate
-	case k.Rune == 0:
-		// Control key with no rune (e.g. Ctrl+letter).
-		// Treat as a no-op so the user can keep typing.
-		return minitui.PopupPassthrough
+	case k.Rune == 27:
+		// ESC: exit filter mode but keep the popup open
+		// (min-tui v0.5.5 routes ESC to OnKey first;
+		// returning PopupUpdate prevents the default close).
+		s.longTasks.mu.Lock()
+		s.longTasks.filtering = false
+		s.longTasks.mu.Unlock()
+		return minitui.PopupUpdate
+	case k.Special == minitui.KeyBackspace:
+		// Backspace: remove last rune from filter.
+		s.longTasks.mu.Lock()
+		if len(s.longTasks.filter) > 0 {
+			r := []rune(s.longTasks.filter)
+			s.longTasks.filter = string(r[:len(r)-1])
+		}
+		s.longTasks.cursor = 0
+		s.longTasks.mu.Unlock()
+		return minitui.PopupUpdate
 	case k.Special == minitui.KeyUp, k.Special == minitui.KeyDown:
 		// Up/Down in filter mode exits filter mode and
 		// navigates the list — this is the most
@@ -554,6 +559,9 @@ func (s *Session) handleLongTaskFilterKey(k minitui.KeyEvent) minitui.PopupActio
 		s.longTasks.filtering = false
 		s.longTasks.mu.Unlock()
 		return s.handleLongTaskListKey(k)
+	case k.Rune == 0:
+		// Other control keys (Tab, Delete, etc.) — passthrough.
+		return minitui.PopupPassthrough
 	default:
 		s.longTasks.mu.Lock()
 		s.longTasks.filter += string(k.Rune)

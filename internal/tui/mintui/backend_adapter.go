@@ -49,3 +49,23 @@ func (a *BackendAdapter) GetLongTask(ctx context.Context, sessionID, workflowID 
 func (a *BackendAdapter) CancelLongTask(ctx context.Context, sessionID, workflowID string) error {
 	return a.Service.MintuiCancelLongTask(ctx, sessionID, workflowID)
 }
+
+// ListSubagents implements Backend.
+func (a *BackendAdapter) ListSubagents(ctx context.Context, sessionID string) ([]rtbackend.SubagentRow, error) {
+	return a.Service.MintuiListSubagents(ctx, sessionID)
+}
+
+// LookupLongTask implements Backend.
+func (a *BackendAdapter) LookupLongTask(ctx context.Context, sessionID, commit, longtaskID string) (rtbackend.LongTaskLookupResult, error) {
+	return a.Service.MintuiLookupLongTask(ctx, sessionID, commit, longtaskID)
+}
+
+// RollbackLongTaskStory implements Backend.
+func (a *BackendAdapter) RollbackLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID, reason string) (rtbackend.LongTaskRollbackResult, error) {
+	return a.Service.MintuiRollbackLongTaskStory(ctx, sessionID, workflowID, nodeID, reason)
+}
+
+// GCLongTaskArtifacts implements Backend.
+func (a *BackendAdapter) GCLongTaskArtifacts(ctx context.Context, sessionID, workflowID string, olderThanSeconds int, apply bool) (rtbackend.LongTaskGCSweepResult, error) {
+	return a.Service.MintuiGCLongTaskArtifacts(ctx, sessionID, workflowID, olderThanSeconds, apply)
+}

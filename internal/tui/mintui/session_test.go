@@ -153,6 +153,24 @@ func (f *fakeBackend) CancelLongTask(ctx context.Context, sessionID, workflowID 
 	return nil
 }
 
+// ── workbench surface (Ctrl+W) ─────────────────────────────
+
+func (f *fakeBackend) ListSubagents(ctx context.Context, sessionID string) ([]rtbackend.SubagentRow, error) {
+	return nil, nil
+}
+
+func (f *fakeBackend) LookupLongTask(ctx context.Context, sessionID, commit, longtaskID string) (rtbackend.LongTaskLookupResult, error) {
+	return rtbackend.LongTaskLookupResult{}, nil
+}
+
+func (f *fakeBackend) RollbackLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID, reason string) (rtbackend.LongTaskRollbackResult, error) {
+	return rtbackend.LongTaskRollbackResult{}, nil
+}
+
+func (f *fakeBackend) GCLongTaskArtifacts(ctx context.Context, sessionID, workflowID string, olderThanSeconds int, apply bool) (rtbackend.LongTaskGCSweepResult, error) {
+	return rtbackend.LongTaskGCSweepResult{}, nil
+}
+
 func TestSessionRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	b := newFakeBackend()
 	_ = New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})

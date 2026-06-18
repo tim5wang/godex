@@ -3459,6 +3459,98 @@ func (s *Service) MintuiCancelLongTask(ctx context.Context, sessionID, workflowI
 	return err
 }
 
+// MintuiListSubagents returns durable subagents for one session
+// in the mintui projection (SubagentRow).
+func (s *Service) MintuiListSubagents(ctx context.Context, sessionID string) ([]SubagentRow, error) {
+	_ = ctx
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	views := session.agent.ListDurableSubagents(sessionID)
+	rows := make([]SubagentRow, 0, len(views))
+	for _, v := range views {
+		rows = append(rows, projectSubagentRow(v))
+	}
+	return rows, nil
+}
+
+// MintuiLookupLongTask looks up commits or stories in a longtask
+// and returns the results in the mintui projection.
+func (s *Service) MintuiLookupLongTask(ctx context.Context, sessionID, commit, longtaskID string) (LongTaskLookupResult, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return LongTaskLookupResult{}, err
+	}
+	release, err := session.acquire(ctx)
+	if err != nil {
+		return LongTaskLookupResult{}, err
+	}
+	defer release()
+	entries, err := session.agent.LongTaskLookupByCommit(commit, longtaskID)
+	if err != nil {
+		return LongTaskLookupResult{Error: err.Error()}, nil
+	}
+	result := LongTaskLookupResult{}
+	for _, e := range entries {
+		result.Entries = append(result.Entries, LongTaskLookupEntry{
+			LongTaskID: e.LongTaskID,
+			StoryID:    e.StoryID,
+			Status:     e.CommitHash,
+			Title:      e.NodeID,
+		})
+	}
+	return result, nil
+}
+
+// MintuiRollbackLongTaskStory rolls back a longtask story and
+// returns the result in the mintui projection.
+func (s *Service) MintuiRollbackLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID, reason string) (LongTaskRollbackResult, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return LongTaskRollbackResult{}, err
+	}
+	release, err := session.acquire(ctx)
+	if err != nil {
+		return LongTaskRollbackResult{}, err
+	}
+	defer release()
+	result, err := session.agent.RollbackLongTaskStory(agent.WithSubagentEvents(ctx, session.id, "", session.events), workflowID, nodeID, reason)
+	if err != nil {
+		return LongTaskRollbackResult{}, err
+	}
+	if err := s.persistSession(session, s.now()); err != nil {
+		return LongTaskRollbackResult{}, err
+	}
+	return projectRollbackResult(result), nil
+}
+
+// MintuiGCLongTaskArtifacts sweeps old longtask artifacts and
+// returns the result in the mintui projection.
+func (s *Service) MintuiGCLongTaskArtifacts(ctx context.Context, sessionID, workflowID string, olderThanSeconds int, apply bool) (LongTaskGCSweepResult, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return LongTaskGCSweepResult{}, err
+	}
+	release, err := session.acquire(ctx)
+	if err != nil {
+		return LongTaskGCSweepResult{}, err
+	}
+	defer release()
+	olderThan := time.Time{}
+	if olderThanSeconds > 0 {
+		olderThan = s.now().Add(-time.Duration(olderThanSeconds) * time.Second)
+	}
+	result, err := session.agent.SweepLongTaskArtifacts(workflowID, olderThan, apply)
+	if err != nil {
+		return LongTaskGCSweepResult{}, err
+	}
+	if err := s.persistSession(session, s.now()); err != nil {
+		return LongTaskGCSweepResult{}, err
+	}
+	return projectGCSweepResult(result), nil
+}
+
 // CreateLongTask creates a durable LongTask and backing workflow.
 func (s *Service) CreateLongTask(ctx context.Context, sessionID string, args agent.LongTaskArgs) (agent.LongTaskView, error) {
 	session, err := s.requireSession(sessionID)

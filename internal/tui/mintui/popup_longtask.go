@@ -27,6 +27,10 @@ type longTaskUI struct {
 	// nil the popup shows a "loading…" or "no tasks" state.
 	rows []rtbackend.LongTaskRow
 
+	// detailOps holds the state for advanced operations
+	// (rollback, lookup, GC) inside the detail popup.
+	detailOps longTaskDetailOps
+
 	// lastErr is the most recent backend error.  It wins over
 	// rows when set so the user sees why a refresh failed.
 	lastErr error
@@ -298,7 +302,43 @@ func (s *Session) buildLongTaskDetailPopup(detail rtbackend.LongTaskDetail) mini
 	return minitui.Popup{
 		Title: "Task " + detail.Row.WorkflowID,
 		Render: func(w, h int) []string {
-			return renderLongTaskDetail(detail, w, h)
+			ops := &s.longTasks.detailOps
+			ops.mu.Lock()
+			rollback := struct {
+				visible  bool
+				nodeID   string
+				reason   string
+				result   string
+				loading  bool
+			}{
+				visible: ops.rollbackVisible,
+				nodeID:  ops.rollbackNodeID,
+				reason:  ops.rollbackReason,
+				result:  ops.rollbackResult,
+				loading: ops.rollbackLoading,
+			}
+			lookup := struct {
+				visible bool
+				query   string
+				result  string
+				loading bool
+			}{
+				visible: ops.lookupVisible,
+				query:   ops.lookupQuery,
+				result:  ops.lookupResult,
+				loading: ops.lookupLoading,
+			}
+			gc := struct {
+				visible bool
+				result  string
+				loading bool
+			}{
+				visible: ops.gcVisible,
+				result:  ops.gcResult,
+				loading: ops.gcLoading,
+			}
+			ops.mu.Unlock()
+			return renderLongTaskDetail(detail, rollback, lookup, gc, w, h)
 		},
 		OnKey: func(k minitui.KeyEvent) minitui.PopupAction {
 			return s.handleLongTaskDetailKey(k, detail.Row.WorkflowID)
@@ -522,23 +562,272 @@ func (s *Session) handleLongTaskFilterKey(k minitui.KeyEvent) minitui.PopupActio
 	}
 }
 
+// longTaskDetailOps holds the state for advanced operations
+// (rollback, lookup, GC) inside the detail popup.
+type longTaskDetailOps struct {
+	mu sync.Mutex
+
+	// rollback
+	rollbackVisible bool
+	rollbackNodeID  string
+	rollbackReason  string
+	rollbackResult  string
+	rollbackLoading bool
+
+	// lookup
+	lookupVisible  bool
+	lookupQuery    string
+	lookupResult   string
+	lookupLoading  bool
+
+	// gc
+	gcVisible  bool
+	gcResult   string
+	gcLoading  bool
+}
+
+func (o *longTaskDetailOps) reset() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.rollbackVisible = false
+	o.rollbackReason = ""
+	o.rollbackResult = ""
+	o.rollbackLoading = false
+	o.lookupVisible = false
+	o.lookupQuery = ""
+	o.lookupResult = ""
+	o.lookupLoading = false
+	o.gcVisible = false
+	o.gcResult = ""
+	o.gcLoading = false
+}
+
 // handleLongTaskDetailKey handles keys inside the detail
-// popup.  Today it just supports Esc (handled by min-tui)
-// and the `r` shortcut as a placeholder for "retry this
-// story" which is not implemented yet.
+// popup.  In addition to Esc (handled by min-tui), it supports:
+//
+//	R       start rollback — prompts for nodeID then reason
+//	l       lookup by commit hash — prompts for commit hash
+//	g       GC artifacts — prompts for confirm
 func (s *Session) handleLongTaskDetailKey(k minitui.KeyEvent, workflowID string) minitui.PopupAction {
+	ops := &s.longTasks.detailOps
+
+	ops.mu.Lock()
+	rollbackVisible := ops.rollbackVisible
+	lookupVisible := ops.lookupVisible
+	gcVisible := ops.gcVisible
+	ops.mu.Unlock()
+
+	// Rollback flow
+	if rollbackVisible {
+		return s.handleRollbackKey(k, workflowID)
+	}
+	// Lookup flow
+	if lookupVisible {
+		return s.handleLookupKey(k, workflowID)
+	}
+	// GC confirm flow
+	if gcVisible {
+		return s.handleGCKey(k, workflowID)
+	}
+
 	switch {
-	case k.Rune == 'r' || k.Rune == 'R':
-		// Placeholder: real retry would call a backend
-		// method that does not exist yet.  We surface
-		// a clear status message so the user knows
-		// the keybind is reserved.
-		if s.tui != nil {
-			s.tui.SetStatus("retry not implemented yet", minitui.StatusWarning)
-		}
+	case k.Rune == 'R':
+		ops.mu.Lock()
+		ops.rollbackVisible = true
+		ops.rollbackNodeID = ""
+		ops.rollbackReason = ""
+		ops.rollbackResult = ""
+		ops.rollbackLoading = false
+		ops.mu.Unlock()
+		s.tui.SetStatus("Rollback: enter story nodeID (e.g. n1)", minitui.StatusWarning)
+		return minitui.PopupUpdate
+	case k.Rune == 'l':
+		ops.mu.Lock()
+		ops.lookupVisible = true
+		ops.lookupQuery = ""
+		ops.lookupResult = ""
+		ops.lookupLoading = false
+		ops.mu.Unlock()
+		s.tui.SetStatus("Lookup: type commit hash and press Enter", minitui.StatusWarning)
+		return minitui.PopupUpdate
+	case k.Rune == 'g':
+		ops.mu.Lock()
+		ops.gcVisible = true
+		ops.gcResult = ""
+		ops.gcLoading = false
+		ops.mu.Unlock()
+		s.tui.SetStatus("GC: press y to confirm, n to cancel", minitui.StatusWarning)
 		return minitui.PopupUpdate
 	default:
 		return minitui.PopupPassthrough
+	}
+}
+
+func (s *Session) handleRollbackKey(k minitui.KeyEvent, workflowID string) minitui.PopupAction {
+	ops := &s.longTasks.detailOps
+	ops.mu.Lock()
+	defer ops.mu.Unlock()
+
+	if ops.rollbackLoading {
+		// Loading — only Esc to cancel
+		return minitui.PopupPassthrough
+	}
+
+	if ops.rollbackNodeID == "" {
+		// Step 1: entering nodeID
+		if k.Rune == 0 {
+			return minitui.PopupPassthrough
+		}
+		if k.Enter {
+			if ops.rollbackReason == "" {
+				ops.rollbackNodeID = strings.TrimSpace(ops.rollbackReason)
+				ops.rollbackReason = ""
+				if s.tui != nil {
+					s.tui.SetStatus("Rollback: enter reason (optional, Enter to submit)", minitui.StatusWarning)
+				}
+				return minitui.PopupUpdate
+			}
+			// Submit rollback
+			go s.runRollback(s.runCtx, workflowID, ops.rollbackNodeID, ops.rollbackReason)
+			ops.rollbackLoading = true
+			return minitui.PopupUpdate
+		}
+		if k.Special == minitui.KeyUp || k.Special == minitui.KeyDown {
+			return minitui.PopupPassthrough
+		}
+		// Accumulate nodeID in rollbackReason temporarily
+		ops.rollbackReason += string(k.Rune)
+		return minitui.PopupUpdate
+	}
+
+	// Step 2: entering reason
+	if k.Enter {
+		go s.runRollback(s.runCtx, workflowID, ops.rollbackNodeID, ops.rollbackReason)
+		ops.rollbackLoading = true
+		return minitui.PopupUpdate
+	}
+	if k.Rune != 0 {
+		ops.rollbackReason += string(k.Rune)
+		return minitui.PopupUpdate
+	}
+	return minitui.PopupPassthrough
+}
+
+func (s *Session) handleLookupKey(k minitui.KeyEvent, workflowID string) minitui.PopupAction {
+	ops := &s.longTasks.detailOps
+	ops.mu.Lock()
+	defer ops.mu.Unlock()
+
+	if ops.lookupLoading {
+		return minitui.PopupPassthrough
+	}
+
+	if k.Enter {
+		go s.runLookup(s.runCtx, workflowID, ops.lookupQuery)
+		ops.lookupLoading = true
+		return minitui.PopupUpdate
+	}
+	if k.Rune != 0 && k.Special != minitui.KeyUp && k.Special != minitui.KeyDown {
+		ops.lookupQuery += string(k.Rune)
+		return minitui.PopupUpdate
+	}
+	return minitui.PopupPassthrough
+}
+
+func (s *Session) handleGCKey(k minitui.KeyEvent, workflowID string) minitui.PopupAction {
+	ops := &s.longTasks.detailOps
+	ops.mu.Lock()
+	defer ops.mu.Unlock()
+
+	if ops.gcLoading {
+		return minitui.PopupPassthrough
+	}
+
+	switch {
+	case k.Rune == 'y' || k.Rune == 'Y':
+		go s.runGC(s.runCtx, workflowID)
+		ops.gcLoading = true
+		return minitui.PopupUpdate
+	case k.Rune == 'n' || k.Rune == 'N':
+		ops.gcVisible = false
+		ops.gcResult = ""
+		return minitui.PopupUpdate
+	}
+	return minitui.PopupPassthrough
+}
+
+// ── operation runners ──────────────────────────────────────
+
+func (s *Session) runRollback(ctx context.Context, workflowID, nodeID, reason string) {
+	if s.backend == nil {
+		return
+	}
+	result, err := s.backend.RollbackLongTaskStory(ctx, s.sessionID, workflowID, nodeID, reason)
+	ops := &s.longTasks.detailOps
+	ops.mu.Lock()
+	defer ops.mu.Unlock()
+	ops.rollbackLoading = false
+	if err != nil {
+		ops.rollbackResult = "Rollback failed: " + err.Error()
+	} else if result.Success {
+		ops.rollbackResult = "Rollback succeeded — story " + result.StoryID
+		ops.rollbackVisible = false
+	} else {
+		ops.rollbackResult = "Rollback conflict: " + result.Error
+	}
+	if s.tui != nil {
+		_, _ = s.tui.WriteString("")
+	}
+}
+
+func (s *Session) runLookup(ctx context.Context, workflowID, query string) {
+	if s.backend == nil {
+		return
+	}
+	result, err := s.backend.LookupLongTask(ctx, s.sessionID, query, workflowID)
+	ops := &s.longTasks.detailOps
+	ops.mu.Lock()
+	defer ops.mu.Unlock()
+	ops.lookupLoading = false
+	if err != nil {
+		ops.lookupResult = "Lookup failed: " + err.Error()
+	} else if result.Error != "" {
+		ops.lookupResult = result.Error
+	} else if len(result.Entries) == 0 {
+		ops.lookupResult = "No matches found for \"" + query + "\""
+	} else {
+		var lines []string
+		for _, e := range result.Entries {
+			lines = append(lines, fmt.Sprintf("  %s  story=%s", e.LongTaskID, e.StoryID))
+		}
+		ops.lookupResult = strings.Join(lines, "\n")
+	}
+	if s.tui != nil {
+		_, _ = s.tui.WriteString("")
+	}
+}
+
+func (s *Session) runGC(ctx context.Context, workflowID string) {
+	if s.backend == nil {
+		return
+	}
+	result, err := s.backend.GCLongTaskArtifacts(ctx, s.sessionID, workflowID, 0, true)
+	ops := &s.longTasks.detailOps
+	ops.mu.Lock()
+	defer ops.mu.Unlock()
+	ops.gcLoading = false
+	if err != nil {
+		ops.gcResult = "GC failed: " + err.Error()
+	} else if result.Error != "" {
+		ops.gcResult = "GC error: " + result.Error
+	} else if result.DryRun {
+		ops.gcResult = fmt.Sprintf("Dry run: would remove %d, keep %d", result.RemovedCount, result.KeptCount)
+	} else {
+		ops.gcResult = fmt.Sprintf("GC done: removed %d artifacts, kept %d", result.RemovedCount, result.KeptCount)
+		ops.gcVisible = false
+	}
+	if s.tui != nil {
+		_, _ = s.tui.WriteString("")
 	}
 }
 
@@ -688,9 +977,9 @@ func statusBadge(status string) string {
 }
 
 // renderLongTaskDetail produces the content lines for the
-// detail popup.  Pure function (no Session state) so tests
-// can call it directly with a fixture.
-func renderLongTaskDetail(d rtbackend.LongTaskDetail, w, h int) []string {
+// detail popup, including any active operation state
+// (rollback, lookup, GC).
+func renderLongTaskDetail(d rtbackend.LongTaskDetail, rollback struct{visible bool; nodeID string; reason string; result string; loading bool}, lookup struct{visible bool; query string; result string; loading bool}, gc struct{visible bool; result string; loading bool}, w, h int) []string {
 	row := d.Row
 	lines := []string{
 		"",
@@ -730,8 +1019,51 @@ func renderLongTaskDetail(d rtbackend.LongTaskDetail, w, h int) []string {
 		}
 	}
 
+	// Operation state
+	if rollback.visible || lookup.visible || gc.visible {
+		lines = append(lines, "")
+		lines = append(lines, "  ── operations ──")
+	}
+	if rollback.visible {
+		if rollback.loading {
+			lines = append(lines, "  Rollback: loading…")
+		} else if rollback.result != "" {
+			lines = append(lines, "  "+rollback.result)
+		} else if rollback.nodeID == "" {
+			lines = append(lines, "  Rollback: enter story nodeID")
+			if rollback.reason != "" {
+				lines = append(lines, "  nodeID: "+rollback.reason+"_")
+			}
+		} else {
+			lines = append(lines, "  Rollback: node="+rollback.nodeID)
+			lines = append(lines, "  reason: "+rollback.reason+"_")
+			lines = append(lines, "  Enter to submit")
+		}
+	}
+	if lookup.visible {
+		if lookup.loading {
+			lines = append(lines, "  Lookup: loading…")
+		} else if lookup.result != "" {
+			for _, l := range strings.Split(lookup.result, "\n") {
+				lines = append(lines, "  "+l)
+			}
+		} else {
+			lines = append(lines, "  Lookup: "+lookup.query+"_")
+			lines = append(lines, "  Enter to search")
+		}
+	}
+	if gc.visible {
+		if gc.loading {
+			lines = append(lines, "  GC: running…")
+		} else if gc.result != "" {
+			lines = append(lines, "  "+gc.result)
+		} else {
+			lines = append(lines, "  GC artifacts? [y] yes  [n] no")
+		}
+	}
+
 	lines = append(lines, "")
-	lines = append(lines, "  Esc close · [r] retry (todo)")
+	lines = append(lines, "  Esc close · [R] rollback · [l] lookup · [g] gc")
 
 	return padPopupLines(lines, w, h)
 }

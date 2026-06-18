@@ -70,6 +70,13 @@ type Backend interface {
 	ListLongTasks(ctx context.Context, sessionID string) ([]rtbackend.LongTaskRow, error)
 	GetLongTask(ctx context.Context, sessionID, workflowID string) (rtbackend.LongTaskDetail, error)
 	CancelLongTask(ctx context.Context, sessionID, workflowID string) error
+
+	// Subagent and advanced LongTask operations used by the
+	// Ctrl+W workbench and longtask detail popup.
+	ListSubagents(ctx context.Context, sessionID string) ([]rtbackend.SubagentRow, error)
+	LookupLongTask(ctx context.Context, sessionID, commit, longtaskID string) (rtbackend.LongTaskLookupResult, error)
+	RollbackLongTaskStory(ctx context.Context, sessionID, workflowID, nodeID, reason string) (rtbackend.LongTaskRollbackResult, error)
+	GCLongTaskArtifacts(ctx context.Context, sessionID, workflowID string, olderThanSeconds int, apply bool) (rtbackend.LongTaskGCSweepResult, error)
 }
 
 // tuiFrontend is the minimal min-tui surface the Session uses
@@ -182,6 +189,11 @@ type Session struct {
 	// row set, cursor, and filter survive the user closing
 	// and reopening the popup within the same session.
 	longTasks longTaskUI
+
+	// workbench backs the Ctrl+W workbench popup (tasks +
+	// workers).  Kept on the Session for the same reason:
+	// cache survives popup close/reopen.
+	workbench workbenchUI
 
 	// runCtx is the context passed to Run().  The Ctrl+B popup
 	// reuses it for the in-flight ListLongTasks / GetLongTask /
@@ -406,6 +418,7 @@ func (s *Session) registerSlashCommands() {
 //	         deliberately chosen because it does not conflict
 //	         with any built-in min-tui shortcut and is the
 //	         standard mnemonic for "background" in editors).
+//	Ctrl+W   open the workbench (tasks + workers).
 //
 // Hotkeys are evaluated on every keystroke in normal (non-popup)
 // mode; returning true consumes the key so it does not reach
@@ -417,6 +430,10 @@ func (s *Session) registerGlobalHotkeys() {
 	s.tui.SetGlobalKeyHandler(func(k minitui.KeyEvent) bool {
 		if k.Ctrl && (k.Rune == 'b' || k.Rune == 'B') {
 			s.openLongTaskList(s.runCtx)
+			return true
+		}
+		if k.Ctrl && (k.Rune == 'w' || k.Rune == 'W') {
+			s.openWorkbench(s.runCtx)
 			return true
 		}
 		return false

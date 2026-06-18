@@ -488,7 +488,11 @@ func TestLongTaskRefreshDoesNotDoubleStackList(t *testing.T) {
 // hash for completed stories.
 func TestLongTaskDetailRendersStoriesAndCommitHashes(t *testing.T) {
 	_, details := newLongTaskFixture()
-	lines := renderLongTaskDetail(details[0], 80, 30)
+	lines := renderLongTaskDetail(details[0],
+		struct{visible bool; nodeID string; reason string; result string; loading bool}{},
+		struct{visible bool; query string; result string; loading bool}{},
+		struct{visible bool; result string; loading bool}{},
+		80, 30)
 	joined := strings.Join(lines, "\n")
 	for _, want := range []string{
 		"wf-001",      // workflow id
@@ -510,7 +514,11 @@ func TestLongTaskDetailRendersStoriesAndCommitHashes(t *testing.T) {
 // below the row, prefixed with `!`.
 func TestLongTaskDetailErrorStoryShowsInlineError(t *testing.T) {
 	_, details := newLongTaskFixture()
-	lines := renderLongTaskDetail(details[0], 80, 30)
+	lines := renderLongTaskDetail(details[0],
+		struct{visible bool; nodeID string; reason string; result string; loading bool}{},
+		struct{visible bool; query string; result string; loading bool}{},
+		struct{visible bool; result string; loading bool}{},
+		80, 30)
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "! context deadline") {
 		t.Fatalf("error story should render with '! ' prefix, got: %q", joined)

@@ -1,7 +1,9 @@
 package mintui
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -547,4 +549,285 @@ func TestWriteUserTurnUsesBlockquoteSyntax(t *testing.T) {
 			t.Fatalf("expected blockquote prefix, got %q", l)
 		}
 	}
+}
+
+// capturingTUI is a minimal tuiFrontend that records every
+// WriteString call into a buffer. It is used by the live /
+// replay user-turn tests so the assertions observe real bytes
+// coming out of the Session, not a hand-rolled reconstruction.
+//
+// SetStatus and RegisterCommand are present only to satisfy
+// the tuiFrontend interface; their arguments are ignored.
+type capturingTUI struct {
+	buf bytes.Buffer
+}
+
+func (c *capturingTUI) WriteString(s string) (int, error) { return c.buf.WriteString(s) }
+func (c *capturingTUI) SetStatus(string, minitui.StatusStyle) {
+}
+func (c *capturingTUI) RegisterCommand(minitui.SlashCommand) {}
+
+// newSessionWithCapturingTUI builds a Session with a recording
+// tui stub attached. The returned cleanup detaches the stub so
+// callers can hand-roll fresh state without leaking.
+func newSessionWithCapturingTUI() (*Session, *capturingTUI) {
+	s := &Session{}
+	tui := &capturingTUI{}
+	s.tui = tui
+	return s, tui
+}
+
+// TestWriteUserTurnLiveHasLeadingBlank pins the live-rendering
+// contract: writeUserTurn must emit a leading "\n" before the
+// blockquote so the new user block has visual breathing room
+// above the previous assistant turn.
+func TestWriteUserTurnLiveHasLeadingBlank(t *testing.T) {
+	s, tui := newSessionWithCapturingTUI()
+	s.writeUserTurn("hello")
+
+	got := tui.buf.String()
+	if !strings.HasPrefix(got, "\n") {
+		t.Fatalf("live path must start with a leading blank, got %q", got)
+	}
+	if !strings.Contains(got, quoteLine("hello")) {
+		t.Fatalf("live path missing blockquote body, got %q", got)
+	}
+	if !strings.HasSuffix(got, "\n\n") {
+		t.Fatalf("live path must end with trailing blank, got %q", got)
+	}
+}
+
+// TestReplayUserTurnHasNoLeadingBlank pins the stored-history
+// contract: replayUserTurn must NOT emit a leading "\n". The
+// previous turn's trailing blank already separates this
+// message; an extra leading blank would compound with that
+// trailing blank and produce three blank lines between two
+// consecutive stored user messages.
+func TestReplayUserTurnHasNoLeadingBlank(t *testing.T) {
+	s, tui := newSessionWithCapturingTUI()
+	s.replayUserTurn("hello")
+
+	got := tui.buf.String()
+	if strings.HasPrefix(got, "\n") {
+		t.Fatalf("replay path must NOT start with a leading blank, got %q", got)
+	}
+	if !strings.Contains(got, quoteLine("hello")) {
+		t.Fatalf("replay path missing blockquote body, got %q", got)
+	}
+	if !strings.HasSuffix(got, "\n\n") {
+		t.Fatalf("replay path must end with trailing blank, got %q", got)
+	}
+}
+
+// TestLiveAndReplayUserTurnProduceDistinctBytes is the
+// regression guard for the original P1 layout bug: the live
+// and replay paths must NOT be byte-identical, otherwise the
+// new leading blank leaks into history replay.
+func TestLiveAndReplayUserTurnProduceDistinctBytes(t *testing.T) {
+	live, liveTui := newSessionWithCapturingTUI()
+	live.writeUserTurn("hello")
+	liveBytes := liveTui.buf.String()
+
+	replay, replayTui := newSessionWithCapturingTUI()
+	replay.replayUserTurn("hello")
+	replayBytes := replayTui.buf.String()
+
+	if liveBytes == replayBytes {
+		t.Fatalf("live and replay paths produced identical bytes %q; "+
+			"leading blank would leak into history replay", liveBytes)
+	}
+	// The only allowed difference is the leading "\n".
+	if liveBytes != "\n"+replayBytes {
+		t.Fatalf("live must equal \"\\n\"+replay, got live=%q replay=%q",
+			liveBytes, replayBytes)
+	}
+}
+
+// ── preview / diff helpers ────────────────────────────────────────
+
+// TestPreviewLinesFromReadOutputStripsLineNumbersAndTruncationMarker
+// guards the read_file → code-block pipeline against the two
+// known formatting hazards:
+//
+//  1. read_file prepends "     N\t" to every line — that
+//     line-number column must not leak into the preview
+//     code block (it would offset every line in the
+//     highlighted output and waste the first 8 columns).
+//  2. read_file appends a "... (truncated: ...)" status
+//     line when the file is longer than the limit — that
+//     status must be dropped so it never appears inside
+//     the fenced code block as fake code.
+func TestPreviewLinesFromReadOutputStripsLineNumbersAndTruncationMarker(t *testing.T) {
+	output := "     1\tpackage main\n" +
+		"     2\t\n" +
+		"     3\tfunc Hello() {}\n" +
+		"... (truncated: showing 3 of 200 lines, use offset/limit to read more)"
+
+	got := previewLinesFromReadOutput(output, 5)
+	want := []string{
+		"package main",
+		"func Hello() {}",
+	}
+	if !equalStrings(got, want) {
+		t.Fatalf("preview lines mismatch:\n want %q\n got  %q", want, got)
+	}
+}
+
+// TestPreviewLinesFromReadOutputCapsAtMax guards the
+// "max non-empty lines" cap. With 7 non-empty content lines
+// and max=5 we expect exactly the first 5.
+func TestPreviewLinesFromReadOutputCapsAtMax(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 7; i++ {
+		fmt.Fprintf(&b, "     %d\tline %d\n", i, i)
+	}
+	got := previewLinesFromReadOutput(b.String(), 5)
+	if len(got) != 5 {
+		t.Fatalf("expected 5 lines, got %d (%q)", len(got), got)
+	}
+	if got[0] != "line 1" || got[4] != "line 5" {
+		t.Fatalf("cap kept the wrong slice: %q", got)
+	}
+}
+
+// TestParseEditInputMintSingleEditSnakeCase verifies that the
+// canonical single-edit form ({"old_text": ..., "new_text": ...})
+// — which is what EditFileDefinition publishes and what the
+// agent runtime actually emits — is recognised. Prior to the
+// fix this returned nil because the helper only read "edits".
+func TestParseEditInputMintSingleEditSnakeCase(t *testing.T) {
+	got := parseEditInputMint(map[string]interface{}{
+		"path":     "skill/skill.go",
+		"old_text": "foo",
+		"new_text": "bar",
+	})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 edit pair, got %d (%+v)", len(got), got)
+	}
+	if got[0].oldText != "foo" || got[0].newText != "bar" {
+		t.Fatalf("edit pair mismatch: %+v", got[0])
+	}
+}
+
+// TestParseEditInputMintMultipleEditsSnakeCase verifies that
+// the canonical multi-edit form — items use "old_text"/"new_text"
+// per EditFileDefinition — is recognised end-to-end. The
+// previous camelCase-only key read silently dropped every item.
+func TestParseEditInputMintMultipleEditsSnakeCase(t *testing.T) {
+	got := parseEditInputMint(map[string]interface{}{
+		"path": "f.go",
+		"edits": []interface{}{
+			map[string]interface{}{"old_text": "a", "new_text": "b"},
+			map[string]interface{}{"old_text": "c", "new_text": ""},
+		},
+	})
+	if len(got) != 2 {
+		t.Fatalf("expected 2 edit pairs, got %d (%+v)", len(got), got)
+	}
+	if got[0] != (editPairMint{oldText: "a", newText: "b"}) {
+		t.Fatalf("pair 0 mismatch: %+v", got[0])
+	}
+	if got[1] != (editPairMint{oldText: "c", newText: ""}) {
+		t.Fatalf("pair 1 mismatch: %+v", got[1])
+	}
+}
+
+// TestParseEditInputMintEmptyInputReturnsNil guards the
+// "nothing to render" path so callers can early-out cheaply.
+func TestParseEditInputMintEmptyInputReturnsNil(t *testing.T) {
+	if got := parseEditInputMint(nil); got != nil {
+		t.Fatalf("nil input should yield nil, got %v", got)
+	}
+	if got := parseEditInputMint(map[string]interface{}{}); got != nil {
+		t.Fatalf("empty input should yield nil, got %v", got)
+	}
+}
+
+// TestParseEditInputMintEmptyEditsDoesNotFallThroughToSingle
+// pins the P1 #3 contract: when "edits" is present but empty
+// (or only contains elements that fail to parse), the parser
+// must NOT silently fall through to the single-edit shape and
+// render whatever else happens to live in `old_text` /
+// `new_text`. The presence of the "edits" key is authoritative.
+func TestParseEditInputMintEmptyEditsDoesNotFallThroughToSingle(t *testing.T) {
+	got := parseEditInputMint(map[string]interface{}{
+		"path":     "f.go",
+		"edits":    []interface{}{},
+		"old_text": "should be ignored",
+		"new_text": "should be ignored",
+	})
+	if got != nil {
+		t.Fatalf("empty edits list must yield nil, got %+v", got)
+	}
+}
+
+// TestParseEditInputMintEditsWithOnlyInvalidElementsYieldsNil
+// guards the same contract for the "edits is present but every
+// element fails to parse" case. We must still honour multi-edit
+// intent instead of dropping down to the single-edit branch.
+func TestParseEditInputMintEditsWithOnlyInvalidElementsYieldsNil(t *testing.T) {
+	got := parseEditInputMint(map[string]interface{}{
+		"edits":    []interface{}{nil, "not-a-map", 42},
+		"old_text": "should be ignored",
+		"new_text": "should be ignored",
+	})
+	if got != nil {
+		t.Fatalf("edits with only invalid elements must yield nil, got %+v", got)
+	}
+}
+
+// TestParseEditInputMintEditsNonArrayYieldsNil covers the
+// edge case where "edits" is present but has the wrong type
+// (e.g. an object instead of an array). We still treat the
+// caller's intent as multi-edit and return nil rather than
+// dropping to single-edit.
+func TestParseEditInputMintEditsNonArrayYieldsNil(t *testing.T) {
+	got := parseEditInputMint(map[string]interface{}{
+		"edits":    map[string]interface{}{"foo": "bar"},
+		"old_text": "should be ignored",
+		"new_text": "should be ignored",
+	})
+	if got != nil {
+		t.Fatalf("non-array edits must yield nil, got %+v", got)
+	}
+}
+
+// TestGenerateUnifiedDiffMarkdownBasicShape verifies the
+// output uses the expected `+/-/space` line prefixes and
+// that equal text is prefixed with two spaces. A regression
+// in the diff pipeline would surface here as missing or
+// swapped prefixes.
+func TestGenerateUnifiedDiffMarkdownBasicShape(t *testing.T) {
+	diff := generateUnifiedDiffMarkdown("foo\nbar\n", "foo\nbaz\n")
+	if !strings.Contains(diff, "  foo") {
+		t.Fatalf("equal line 'foo' should be prefixed with two spaces, got:\n%s", diff)
+	}
+	if !strings.Contains(diff, "- bar") {
+		t.Fatalf("removed line 'bar' should be prefixed with '- ', got:\n%s", diff)
+	}
+	if !strings.Contains(diff, "+ baz") {
+		t.Fatalf("added line 'baz' should be prefixed with '+ ', got:\n%s", diff)
+	}
+}
+
+// TestGenerateUnifiedDiffMarkdownIdenticalText guards the
+// "no change" case. We must not emit a misleading + / -
+// block when old and new match exactly.
+func TestGenerateUnifiedDiffMarkdownIdenticalText(t *testing.T) {
+	diff := generateUnifiedDiffMarkdown("unchanged\n", "unchanged\n")
+	if strings.Contains(diff, "\n+ ") || strings.Contains(diff, "\n- ") {
+		t.Fatalf("identical text should not contain +/- lines, got:\n%s", diff)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

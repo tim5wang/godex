@@ -64,6 +64,17 @@ type Backend interface {
 	CreateNewSession(context.Context) (rtbackend.SessionLocator, error)
 }
 
+// tuiFrontend is the minimal min-tui surface the Session uses
+// directly. *minitui.TUI satisfies it via its built-in method
+// set. Defining the boundary here lets tests inject a capturing
+// stub that records WriteString calls without depending on a
+// real terminal.
+type tuiFrontend interface {
+	WriteString(s string) (int, error)
+	SetStatus(text string, style minitui.StatusStyle)
+	RegisterCommand(cmd minitui.SlashCommand)
+}
+
 // Session drives a min-tui frontend against a shared runtime backend.
 type Session struct {
 	cfg     *config.Config
@@ -75,7 +86,12 @@ type Session struct {
 	// tui is the min-tui frontend. Lazily created in Run so that
 	// callers (and tests) can construct a Session without
 	// immediately touching the terminal.
-	tui *minitui.TUI
+	//
+	// The field is typed as a local interface so tests can swap
+	// in a capturing stub that records WriteString calls. The
+	// concrete *minitui.TUI satisfies this interface through its
+	// built-in method set; production code does not change.
+	tui tuiFrontend
 
 	// statusMu serializes status-bar updates so a SetStatus call
 	// never interleaves with a streaming write.
@@ -965,15 +981,21 @@ func (s *Session) renderToolCallStarted(event events.Event) {
 
 // renderToolCallFinished appends a status line (✓ / ✗) to
 // the same blockquote block opened by renderToolCallStarted.
-// We do NOT add a trailing blank here — that responsibility
-// belongs to the next caller, so consecutive tool calls don't
-// accumulate excessive whitespace.
+// A trailing blank line closes the block and provides visual
+// separation from the next tool call or user input.
+//
+// For read tools (read_file, attach_file) we additionally
+// show a short preview of the file content.
+// For edit tools (edit_file) we render a unified diff inside
+// a markdown code fence so min-tui can display it as a
+// formatted code block.
 func (s *Session) renderToolCallFinished(event events.Event) {
 	if s.tui == nil {
 		return
 	}
 	name := extractToolName(event)
 	output, errText := extractToolOutputError(event)
+	input := extractToolInput(event)
 
 	switch {
 	case errText != "":
@@ -989,10 +1011,421 @@ func (s *Session) renderToolCallFinished(event events.Event) {
 			s.tui.WriteString(">   ✓ " + name + "\n")
 		}
 	}
+
 	// Trailing blank closes the block.  Even when no
 	// start event was received, the cost of one empty
 	// row is small and the readability win is large.
 	s.tui.WriteString("\n")
+
+	// Enhanced rendering for read and edit tools. Only
+	// these add an extra blank line above the preview /
+	// diff block so it has breathing room from the ✓ row.
+	switch {
+	case isReadTool(name) && output != "":
+		s.tui.WriteString("\n")
+		s.renderReadPreview(input, output)
+	case isEditTool(name) && input != nil:
+		s.tui.WriteString("\n")
+		s.renderEditDiffBlock(input)
+	}
+}
+
+// isReadTool reports whether name is a file-reading tool.
+func isReadTool(name string) bool {
+	switch name {
+	case "read_file", "attach_file":
+		return true
+	}
+	return false
+}
+
+// isEditTool reports whether name is a file-editing tool.
+func isEditTool(name string) bool {
+	return name == "edit_file"
+}
+
+// readPreviewMaxLines caps how many lines of file content
+// are echoed back after a successful read_file/attach_file.
+const readPreviewMaxLines = 5
+
+// readFileTruncationMarker matches the " ... (truncated: ...)"
+// suffix that read_file appends when it returns a slice of
+// a larger file. We strip it before re-emitting the content
+// in a preview code block so the marker never appears inside
+// a fenced block.
+const readFileTruncationMarker = "... (truncated:"
+
+// renderReadPreview emits a short preview of file content
+// inside a code fence so the user can see what was read
+// without having to inspect the tool output separately.
+//
+// read_file's Output is line-numbered ("     1\tline") and
+// may end with a "... (truncated: ...)" status line. We
+// strip both before placing the content in the code block.
+func (s *Session) renderReadPreview(input map[string]interface{}, output string) {
+	path, _ := input["path"].(string)
+	if path == "" {
+		return
+	}
+
+	lines := previewLinesFromReadOutput(output, readPreviewMaxLines)
+	if len(lines) == 0 {
+		return
+	}
+
+	// Determine a file-extension-based language hint for the
+	// code fence so min-tui can apply syntax highlighting.
+	lang := langFromPath(path)
+	preview := strings.Join(lines, "\n")
+
+	var b strings.Builder
+	b.WriteString("```")
+	b.WriteString(lang)
+	b.WriteString("\n")
+	b.WriteString(preview)
+	if !strings.HasSuffix(preview, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("```\n")
+	s.tui.WriteString(b.String())
+}
+
+// previewLinesFromReadOutput returns up to max non-empty
+// content lines extracted from a read_file Output, with the
+// leading "     N\t" line number stripped and any trailing
+// "... (truncated: ...)" status line removed.
+func previewLinesFromReadOutput(output string, max int) []string {
+	var lines []string
+	for _, raw := range strings.Split(output, "\n") {
+		l := strings.TrimRight(raw, "\r")
+		// Drop read_file's truncation status line; it would
+		// otherwise appear inside the code block as a
+		// syntactically-valid but semantically wrong entry.
+		if strings.Contains(l, readFileTruncationMarker) {
+			continue
+		}
+		// Strip the "     N\t" line-number prefix added by
+		// read_file. If the line is not prefixed, return it
+		// unchanged so the preview still works for content
+		// that didn't go through read_file (e.g. attach_file).
+		l = stripReadLineNumber(l)
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		lines = append(lines, l)
+		if len(lines) >= max {
+			break
+		}
+	}
+	return lines
+}
+
+// stripReadLineNumber removes a leading read_file-style
+// "<spaces>N\t" line-number prefix. Anything else is returned
+// unchanged.
+//
+// read_file formats numbers with %6d (right-aligned, 6 wide),
+// producing 1-to-5 leading spaces before the digits. We match
+// that shape: zero or more leading spaces, then a run of
+// digits, then a literal tab. The tab is mandatory — it
+// disambiguates from genuine content lines that happen to
+// start with digits (e.g. a markdown ordered list item).
+func stripReadLineNumber(line string) string {
+	i := 0
+	for i < len(line) && line[i] == ' ' {
+		i++
+	}
+	if i == len(line) {
+		return line
+	}
+	j := i
+	for j < len(line) && line[j] >= '0' && line[j] <= '9' {
+		j++
+	}
+	if j == i || j == len(line) || line[j] != '\t' {
+		return line
+	}
+	return line[j+1:]
+}
+
+// langFromPath returns a short language tag for common file
+// extensions so min-tui's syntax highlighter can colour the
+// read-preview code block.
+func langFromPath(p string) string {
+	ext := strings.ToLower(filepath.Ext(p))
+	switch ext {
+	case ".go":
+		return "go"
+	case ".py":
+		return "python"
+	case ".js", ".mjs", ".cjs":
+		return "javascript"
+	case ".ts", ".tsx", ".mts", ".cts":
+		return "typescript"
+	case ".rs":
+		return "rust"
+	case ".sh", ".bash", ".zsh":
+		return "bash"
+	case ".sql":
+		return "sql"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".json":
+		return "json"
+	case ".md", ".markdown":
+		return "markdown"
+	case ".html", ".htm":
+		return "html"
+	case ".css":
+		return "css"
+	case ".toml":
+		return "toml"
+	case ".xml":
+		return "xml"
+	case ".c", ".h":
+		return "c"
+	case ".cpp", ".cc", ".cxx", ".hpp":
+		return "cpp"
+	case ".java":
+		return "java"
+	case ".proto":
+		return "protobuf"
+	case ".tf":
+		return "hcl"
+	case ".dockerfile", "Dockerfile":
+		return "dockerfile"
+	case ".makefile", "Makefile":
+		return "makefile"
+	}
+	return ""
+}
+
+// diffFenceLang is the language tag we attach to the fence
+// around an edit-file unified diff.  We lock the tag to the
+// canonical "diff" value (rather than deriving it from the file
+// extension) so the fence is unambiguous: a `.go` file edit and
+// a `.py` file edit both render the same way inside the diff
+// block.
+//
+// Note: as of min-tui v0.5.2 the highlighter's langTable does
+// not yet include "diff", so the +/-/space prefixes are not
+// coloured.  The block is still rendered as a fenced code block
+// (the highlighter falls through to a plain renderLine for
+// unknown langs), which is the correct shape — once min-tui
+// gains a "diff" entry, the same constant picks up the new
+// colouring with zero code changes here.
+const diffFenceLang = "diff"
+
+// renderEditDiffBlock generates a unified diff of old/new text
+// and emits it as a ```diff code block that min-tui renders as
+// a formatted code block.
+//
+// Header layout: the path / "N edits" line is emitted exactly
+// once at the top, even when the input carries multiple edits.
+// We deliberately do NOT prepend an "edit i/N" sub-header per
+// edit — repeating the same path three times is noisy and the
+// diff content is self-describing.
+func (s *Session) renderEditDiffBlock(input map[string]interface{}) {
+	edits := parseEditInputMint(input)
+	if len(edits) == 0 {
+		return
+	}
+
+	filePath, _ := input["path"].(string)
+	if filePath != "" {
+		header := fmt.Sprintf("── %s ──", filePath)
+		if len(edits) > 1 {
+			header = fmt.Sprintf("── %s (%d edits) ──", filePath, len(edits))
+		}
+		s.tui.WriteString(header + "\n")
+	}
+
+	for i, edit := range edits {
+		diffText := generateUnifiedDiffMarkdown(edit.oldText, edit.newText)
+		if diffText != "" {
+			var b strings.Builder
+			b.WriteString("```")
+			b.WriteString(diffFenceLang)
+			b.WriteString("\n")
+			b.WriteString(diffText)
+			if !strings.HasSuffix(diffText, "\n") {
+				b.WriteString("\n")
+			}
+			b.WriteString("```\n")
+			s.tui.WriteString(b.String())
+		}
+
+		if i < len(edits)-1 {
+			s.tui.WriteString("\n")
+		}
+	}
+}
+
+// editPairMint mirrors the edit pair parsed from tool input.
+type editPairMint struct {
+	oldText string
+	newText string
+}
+
+// parseEditInputMint extracts edit pairs from the tool input map.
+// edit_file's schema (see EditFileDefinition) supports two shapes:
+//
+//   - Single edit:    { "old_text": "...", "new_text": "..." }
+//   - Multiple edits: { "edits": [ { "old_text": "...", "new_text": "..." }, ... ] }
+//
+// Keys are read in both snake_case (canonical) and camelCase
+// form to stay robust against any wrapping layer that renames
+// fields mid-flight.
+//
+// Shape-selection rule: the presence of the "edits" key — at
+// any type or length — is treated as authoritative. If the key
+// exists we never silently fall through to the single-edit
+// branch, even if the list is empty or every element fails to
+// parse. That fall-through used to mask mis-wired callers
+// (e.g. a tool that emits `edits: []` for "no-op edit" would
+// suddenly start rendering whatever the input happened to also
+// contain in `old_text` / `new_text`). The single-edit branch
+// is consulted only when "edits" is absent.
+func parseEditInputMint(input map[string]interface{}) []editPairMint {
+	if input == nil {
+		return nil
+	}
+
+	// Multiple-edits form: if "edits" is present, it is
+	// authoritative regardless of length or element shape.
+	if _, hasEdits := input["edits"]; hasEdits {
+		rawEdits := input["edits"]
+		editsList, ok := rawEdits.([]interface{})
+		if !ok {
+			// "edits" is present but not a JSON array.
+			// Honour the caller's intent (multi-edit) by
+			// returning nil rather than falling through to
+			// the single-edit shape, which would render
+			// unrelated fields.
+			return nil
+		}
+		var result []editPairMint
+		for _, raw := range editsList {
+			editMap, ok := raw.(map[string]interface{})
+			if !ok {
+				// Skip non-map entries (e.g. nil) rather
+				// than bailing out — the surrounding list
+				// may still contain valid edits.
+				continue
+			}
+			oldText := pickString(editMap, "old_text", "oldText")
+			newText := pickString(editMap, "new_text", "newText")
+			if oldText == "" && newText == "" {
+				continue
+			}
+			result = append(result, editPairMint{oldText: oldText, newText: newText})
+		}
+		return result
+	}
+
+	// Single-edit form (only consulted when "edits" is absent).
+	oldText := pickString(input, "old_text", "oldText")
+	newText := pickString(input, "new_text", "newText")
+	if oldText == "" && newText == "" {
+		return nil
+	}
+	return []editPairMint{{oldText: oldText, newText: newText}}
+}
+
+// pickString returns the first non-empty string value found
+// under any of the given keys. Used to tolerate both
+// snake_case (canonical schema) and camelCase variants.
+func pickString(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// generateUnifiedDiffMarkdown returns a plain-text unified diff
+// that can be placed inside a ```diff code block.
+//
+// The diff is line-granular: each row is either an unchanged
+// context line ("  …") or a - / + row pair for removed / added
+// content.  A changed line is rendered as one - row followed
+// by one + row, matching the shape of any other replacement
+// so the output is a real unified diff the viewer can read.
+func generateUnifiedDiffMarkdown(oldText, newText string) string {
+	if oldText == newText {
+		return ""
+	}
+
+	oldLines := splitLinesPreserve(oldText)
+	newLines := splitLinesPreserve(newText)
+
+	oldIdx, newIdx := 0, 0
+	var out strings.Builder
+
+	for oldIdx < len(oldLines) || newIdx < len(newLines) {
+		switch {
+		case oldIdx < len(oldLines) && newIdx < len(newLines) &&
+			oldLines[oldIdx] == newLines[newIdx]:
+			fmt.Fprintf(&out, "  %s", oldLines[oldIdx])
+			oldIdx++
+			newIdx++
+		case oldIdx < len(oldLines) && newIdx < len(newLines):
+			// Changed line: render as a - / + pair, same
+			// shape as the offset insert/delete arms below.
+			fmt.Fprintf(&out, "- %s", oldLines[oldIdx])
+			fmt.Fprintf(&out, "+ %s", newLines[newIdx])
+			oldIdx++
+			newIdx++
+		case oldIdx < len(oldLines):
+			fmt.Fprintf(&out, "- %s", oldLines[oldIdx])
+			oldIdx++
+		default:
+			fmt.Fprintf(&out, "+ %s", newLines[newIdx])
+			newIdx++
+		}
+	}
+	return out.String()
+}
+
+// splitLinesPreserve returns the lines of s, including their
+// trailing \n. An input that does not end with \n keeps its
+// last line without a trailing newline. The empty string
+// yields a single empty (newline-less) line, matching
+// common diff-tool conventions for a one-line file.
+func splitLinesPreserve(s string) []string {
+	if s == "" {
+		return []string{""}
+	}
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\n' {
+			continue
+		}
+		lines = append(lines, s[start:i+1])
+		start = i + 1
+	}
+	if start < len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
+}
+
+// extractToolInput extracts the input map from a tool call event.
+func extractToolInput(event events.Event) map[string]interface{} {
+	if event.Payload == nil {
+		return nil
+	}
+	if tp, ok := event.Payload.(events.ToolCallPayload); ok {
+		return tp.Input
+	}
+	if m, ok := event.Payload.(map[string]interface{}); ok {
+		if v, ok := m["input"].(map[string]interface{}); ok {
+			return v
+		}
+	}
+	return nil
 }
 
 // ── turn rendering helpers ─────────────────────────────────────
@@ -1054,7 +1487,31 @@ func (s *Session) writeQuoteBlock(text string) {
 // every line of the user's message sits on a coloured
 // backdrop that visually distinguishes it from the assistant's
 // plain-background prose.
+//
+// The leading blank gives the block visual breathing room
+// above; this is the live-rendering entry point.  Replay
+// from stored history must use replayUserTurn instead, since
+// the previous turn's trailing blank already supplies the
+// separator and an extra "\n" would compound into three
+// consecutive blank lines between two stored user messages.
 func (s *Session) writeUserTurn(text string) {
+	if s.tui == nil || text == "" {
+		return
+	}
+	s.tui.WriteString("\n")
+	s.writeQuoteBlock(text)
+}
+
+// replayUserTurn re-emits a stored user message during
+// history reload.  It is the stored-history counterpart to
+// writeUserTurn and intentionally omits the leading blank:
+// the previous stored turn (or the canvas top) already
+// provides separation, and writeQuoteBlock's own trailing
+// "\n\n" closes the block.
+func (s *Session) replayUserTurn(text string) {
+	if s.tui == nil || text == "" {
+		return
+	}
 	s.writeQuoteBlock(text)
 }
 
@@ -1158,7 +1615,11 @@ func (s *Session) writeStoredMessage(msg protocol.Message) {
 	switch role {
 	case "user":
 		if text != "" {
-			s.writeUserTurn(text)
+			// Replay path: no leading blank (the prior turn
+			// already separated this message). See
+			// writeUserTurn vs replayUserTurn for why these
+			// two paths must stay distinct.
+			s.replayUserTurn(text)
 		}
 	case "assistant":
 		if text != "" {

@@ -1034,7 +1034,7 @@ func (s *Session) renderToolCallStarted(event events.Event) {
 	if inputSummary != "" {
 		lines = append(lines, ">   "+inputSummary)
 	}
-	s.tui.WriteString(strings.Join(lines, "\n") + "\n\n")
+	s.tui.WriteString(strings.Join(lines, "\n") + "\n")
 }
 
 // renderToolCallFinished appends a status line (✓ / ✗) to

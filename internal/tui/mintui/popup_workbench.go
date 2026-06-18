@@ -486,13 +486,12 @@ func (s *Session) handleWorkbenchKey(k minitui.KeyEvent) minitui.PopupAction {
 		return minitui.PopupUpdate
 	case k.Rune == 'r' || k.Rune == 'R':
 		s.workbench.setLoading()
-		if s.tui != nil {
-			_, _ = s.tui.WriteString("")
-		}
 		go s.refreshWorkbench(s.runCtx)
 		return minitui.PopupUpdate
 	case k.Enter:
-		// Open longtask detail for selected outcome
+		// Open longtask detail for selected outcome — must use
+		// goroutine to avoid PushPopup-from-OnKey deadlock
+		// (same as the longtask list Enter handler).
 		s.workbench.mu.Lock()
 		tab := s.workbench.tab
 		cursor := s.workbench.cursor
@@ -503,7 +502,7 @@ func (s *Session) handleWorkbenchKey(k minitui.KeyEvent) minitui.PopupAction {
 				o := s.workbench.outcomes[cursor]
 				if o.HasLongTask && o.LongTaskID != "" {
 					s.workbench.mu.Unlock()
-					s.pushLongTaskDetail(s.runCtx, o.LongTaskID)
+					go s.pushLongTaskDetail(s.runCtx, o.LongTaskID)
 					return minitui.PopupUpdate
 				}
 			}

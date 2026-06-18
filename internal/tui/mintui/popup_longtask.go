@@ -479,9 +479,12 @@ func (s *Session) handleLongTaskListKey(k minitui.KeyEvent) minitui.PopupAction 
 		if !ok {
 			return minitui.PopupPassthrough
 		}
-		// Open the detail popup.  We pass the sessionID
-		// through the Session receiver, so this works.
-		s.pushLongTaskDetail(s.runCtx, row.WorkflowID)
+		// PushPopup must NOT be called from within the OnKey
+		// callback because min-tui's ReadLine holds t.mu while
+		// dispatching popup keys.  Spawn the push on a fresh
+		// goroutine so PushPopup acquires t.mu after the
+		// current key processing cycle releases it.
+		go s.pushLongTaskDetail(s.runCtx, row.WorkflowID)
 		return minitui.PopupUpdate
 
 	case k.Rune == '/':

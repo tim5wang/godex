@@ -283,8 +283,13 @@ func TestLongTaskListEnterPushesDetail(t *testing.T) {
 	if action != minitui.PopupUpdate {
 		t.Fatalf("Enter should produce PopupUpdate, got %v", action)
 	}
-	if got := len(tui.popups); got != before+1 {
-		t.Fatalf("Enter should push 1 popup, got %d (before=%d)", got, before)
+	// pushLongTaskDetail now runs on a goroutine to avoid the
+	// PushPopup-from-OnKey deadlock.  Give it a moment.
+	// The capturingTUI.PopPopup is a no-op, so both the loading
+	// and the detail popup accumulate (before+2).
+	time.Sleep(50 * time.Millisecond)
+	if got := len(tui.popups); got != before+2 {
+		t.Fatalf("Enter should push loading+detail popups (2), got %d (before=%d)", got, before)
 	}
 	// The pushed popup's title should mention the workflow id
 	// of the highlighted row (wf-001, cursor 0).

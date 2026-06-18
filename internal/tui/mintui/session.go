@@ -62,6 +62,14 @@ type Backend interface {
 	SetSessionModelProfile(context.Context, string, string) (rtbackend.ModelsView, error)
 	ListSessions(context.Context, rtbackend.SessionListFilter) ([]rtbackend.ListedSession, error)
 	CreateNewSession(context.Context) (rtbackend.SessionLocator, error)
+
+	// LongTask surface used by the Ctrl+B background-task popup.
+	// Implementations are expected to project agent.LongTaskView
+	// into the rtbackend.LongTaskRow / LongTaskDetail shapes so
+	// this package does not need to import internal/agent.
+	ListLongTasks(ctx context.Context, sessionID string) ([]rtbackend.LongTaskRow, error)
+	GetLongTask(ctx context.Context, sessionID, workflowID string) (rtbackend.LongTaskDetail, error)
+	CancelLongTask(ctx context.Context, sessionID, workflowID string) error
 }
 
 // tuiFrontend is the minimal min-tui surface the Session uses
@@ -73,6 +81,13 @@ type tuiFrontend interface {
 	WriteString(s string) (int, error)
 	SetStatus(text string, style minitui.StatusStyle)
 	RegisterCommand(cmd minitui.SlashCommand)
+	// PushPopup / SetGlobalKeyHandler back the Ctrl+B background
+	// task popup.  They are safe to call from any goroutine
+	// according to min-tui's contract; the OnKey callback is the
+	// one place we must NOT call back into the frontend.
+	PushPopup(p minitui.Popup)
+	PopPopup()
+	SetGlobalKeyHandler(fn func(minitui.KeyEvent) bool)
 }
 
 // Session drives a min-tui frontend against a shared runtime backend.
@@ -161,6 +176,18 @@ type Session struct {
 	// the newest entry.
 	inputHistory []string
 	historyPos   int // current cursor into inputHistory, -1 = not navigating
+
+	// longTasks backs the Ctrl+B background-task popup.  Kept
+	// on the Session (not on the Popup itself) so the cached
+	// row set, cursor, and filter survive the user closing
+	// and reopening the popup within the same session.
+	longTasks longTaskUI
+
+	// runCtx is the context passed to Run().  The Ctrl+B popup
+	// reuses it for the in-flight ListLongTasks / GetLongTask /
+	// CancelLongTask calls so a Ctrl+C from the main loop
+	// also cancels the popup's network I/O.
+	runCtx context.Context
 }
 
 // New constructs a Session bound to the given backend. It does
@@ -234,6 +261,7 @@ func (s *Session) recordInputHistory(input string) {
 // a loop. Each turn is submitted asynchronously so the user can
 // keep typing (or cancel) while the agent is responding.
 func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) error {
+	s.runCtx = ctx
 	opened, err := s.backend.OpenSession(ctx, locator)
 	if err != nil {
 		return fmt.Errorf("open min-tui session: %w", err)
@@ -280,6 +308,12 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 	// handler writes its output to the TUI through the
 	// CommandContext min-tui provides.
 	s.registerSlashCommands()
+
+	// Register the Ctrl+B global hotkey for the background-
+	// task popup.  This must happen AFTER slash commands so
+	// any later code paths that unregister a command don't
+	// accidentally clear the hotkey.
+	s.registerGlobalHotkeys()
 
 	// Banner + history go to the TUI output area (NOT raw
 	// stdout) so min-tui's fullDraw can render them on the
@@ -363,6 +397,30 @@ func (s *Session) registerSlashCommands() {
 			},
 		})
 	}
+}
+
+// registerGlobalHotkeys installs the Session's permanent
+// keybindings on the min-tui frontend.  The current set is:
+//
+//	Ctrl+B   open the background-task popup (Ctrl+B is
+//	         deliberately chosen because it does not conflict
+//	         with any built-in min-tui shortcut and is the
+//	         standard mnemonic for "background" in editors).
+//
+// Hotkeys are evaluated on every keystroke in normal (non-popup)
+// mode; returning true consumes the key so it does not reach
+// the input editor.  When a popup is open, min-tui routes keys
+// to the popup's own OnKey and the global handler is bypassed
+// — so pressing Ctrl+B while a popup is open does not open a
+// second one.
+func (s *Session) registerGlobalHotkeys() {
+	s.tui.SetGlobalKeyHandler(func(k minitui.KeyEvent) bool {
+		if k.Ctrl && (k.Rune == 'b' || k.Rune == 'B') {
+			s.openLongTaskList(s.runCtx)
+			return true
+		}
+		return false
+	})
 }
 
 // handleSlashCommand dispatches one slash command.  Most commands

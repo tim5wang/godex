@@ -207,7 +207,11 @@ func main() {
 		Stderr:             os.Stderr,
 		DefaultSessionSpec: configOptions.SessionSpec,
 		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
-			return mintui.New(cfg, service, os.Stdout, os.Stderr).Run(ctx, locator)
+			// mintui.BackendAdapter projects the agent-shaped
+			// longtask surface on *service into the mintui-local
+			// LongTaskRow / LongTaskDetail shapes so mintui does
+			// not have to import internal/agent.
+			return mintui.New(cfg, mintui.NewBackendAdapter(service), os.Stdout, os.Stderr).Run(ctx, locator)
 		},
 		// godex tui always starts the full bubbletea TUI,
 		// regardless of the --tui-mode global flag.

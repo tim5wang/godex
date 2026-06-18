@@ -3403,6 +3403,62 @@ func (s *Service) GetLongTask(ctx context.Context, sessionID, workflowID string)
 	return session.agent.GetLongTask(workflowID)
 }
 
+// MintuiListLongTasks returns durable LongTasks in the mintui
+// projection (LongTaskRow) used by the Ctrl+B background-task
+// popup.  The mintui package deliberately does not import
+// internal/agent, so we translate agent.LongTaskView → LongTaskRow
+// at this boundary.
+func (s *Service) MintuiListLongTasks(ctx context.Context, sessionID string) ([]LongTaskRow, error) {
+	_ = ctx
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	views, err := session.agent.ListLongTasks(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]LongTaskRow, 0, len(views))
+	for _, v := range views {
+		rows = append(rows, projectLongTaskView(v))
+	}
+	return rows, nil
+}
+
+// MintuiGetLongTask returns the detailed snapshot for one
+// durable LongTask in the mintui projection.
+func (s *Service) MintuiGetLongTask(ctx context.Context, sessionID, workflowID string) (LongTaskDetail, error) {
+	_ = ctx
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return LongTaskDetail{}, err
+	}
+	view, err := session.agent.GetLongTask(workflowID)
+	if err != nil {
+		return LongTaskDetail{}, err
+	}
+	return projectLongTaskDetail(view), nil
+}
+
+// MintuiCancelLongTask cancels a running LongTask.  The agent
+// CancelLongTask signature requires a non-empty nodeID; the
+// mintui popup only knows about workflow-level cancellation
+// today, so we delegate to CancelLongTaskAll which cancels
+// every in-flight node under the workflow.
+func (s *Service) MintuiCancelLongTask(ctx context.Context, sessionID, workflowID string) error {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return err
+	}
+	release, err := session.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = session.agent.CancelLongTaskAll(agent.WithSubagentEvents(ctx, session.id, "", session.events), workflowID)
+	return err
+}
+
 // CreateLongTask creates a durable LongTask and backing workflow.
 func (s *Service) CreateLongTask(ctx context.Context, sessionID string, args agent.LongTaskArgs) (agent.LongTaskView, error) {
 	session, err := s.requireSession(sessionID)

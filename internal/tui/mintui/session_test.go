@@ -24,12 +24,23 @@ type fakeBackend struct {
 	snap rtbackend.Snapshot
 	ctx  tools.ContextInspection
 
-	submitCalls    int
-	asyncCalls     int
-	executeCalls   int
-	cancelCalls    int
-	lastSubmitted  string
-	lastCancelled  string
+	submitCalls   int
+	asyncCalls    int
+	executeCalls  int
+	cancelCalls   int
+	lastSubmitted string
+	lastCancelled string
+
+	// longtask surface — tests populate these to drive the
+	// Ctrl+B popup scenarios.  Errors are checked first so a
+	// test can simulate backend failures without overriding
+	// the rows.
+	longTaskRows        []rtbackend.LongTaskRow
+	longTaskDetails     []rtbackend.LongTaskDetail
+	longTaskListErr     error
+	longTaskDetailErr   error
+	longTaskCancelErr   error
+	longTaskCancelCalls []string
 }
 
 func newFakeBackend() *fakeBackend {
@@ -109,6 +120,37 @@ func (f *fakeBackend) ListSessions(ctx context.Context, filter rtbackend.Session
 }
 func (f *fakeBackend) CreateNewSession(ctx context.Context) (rtbackend.SessionLocator, error) {
 	return rtbackend.SessionLocator{Channel: "local", Key: "new-test"}, nil
+}
+
+// ── longtask surface (Ctrl+B popup) ──────────────────────────
+
+func (f *fakeBackend) ListLongTasks(ctx context.Context, sessionID string) ([]rtbackend.LongTaskRow, error) {
+	if f.longTaskListErr != nil {
+		return nil, f.longTaskListErr
+	}
+	rows := make([]rtbackend.LongTaskRow, len(f.longTaskRows))
+	copy(rows, f.longTaskRows)
+	return rows, nil
+}
+
+func (f *fakeBackend) GetLongTask(ctx context.Context, sessionID, workflowID string) (rtbackend.LongTaskDetail, error) {
+	if f.longTaskDetailErr != nil {
+		return rtbackend.LongTaskDetail{}, f.longTaskDetailErr
+	}
+	for _, d := range f.longTaskDetails {
+		if d.Row.WorkflowID == workflowID {
+			return d, nil
+		}
+	}
+	return rtbackend.LongTaskDetail{}, fmt.Errorf("longtask %q not found in fake backend", workflowID)
+}
+
+func (f *fakeBackend) CancelLongTask(ctx context.Context, sessionID, workflowID string) error {
+	if f.longTaskCancelErr != nil {
+		return f.longTaskCancelErr
+	}
+	f.longTaskCancelCalls = append(f.longTaskCancelCalls, workflowID)
+	return nil
 }
 
 func TestSessionRoutesSlashCommandToExecuteCommand(t *testing.T) {
@@ -558,14 +600,29 @@ func TestWriteUserTurnUsesBlockquoteSyntax(t *testing.T) {
 //
 // SetStatus and RegisterCommand are present only to satisfy
 // the tuiFrontend interface; their arguments are ignored.
+//
+// PushPopup / PopPopup / SetGlobalKeyHandler record the calls
+// so popup-related tests can assert which popups the session
+// pushed and which global hotkey it registered.  The Render and
+// OnKey closures of each PushPopup are also stashed so tests
+// can drive the popup's own state machine in-process.
 type capturingTUI struct {
 	buf bytes.Buffer
+
+	popups      []minitui.Popup
+	globalKeyFn func(minitui.KeyEvent) bool
 }
 
 func (c *capturingTUI) WriteString(s string) (int, error) { return c.buf.WriteString(s) }
 func (c *capturingTUI) SetStatus(string, minitui.StatusStyle) {
 }
 func (c *capturingTUI) RegisterCommand(minitui.SlashCommand) {}
+
+func (c *capturingTUI) PushPopup(p minitui.Popup) { c.popups = append(c.popups, p) }
+func (c *capturingTUI) PopPopup()                 { /* no-op; tests do not model a real stack */ }
+func (c *capturingTUI) SetGlobalKeyHandler(fn func(minitui.KeyEvent) bool) {
+	c.globalKeyFn = fn
+}
 
 // newSessionWithCapturingTUI builds a Session with a recording
 // tui stub attached. The returned cleanup detaches the stub so

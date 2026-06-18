@@ -33,6 +33,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
+	"github.com/tim5wang/godex/internal/services/localbash"
 	minitui "github.com/tim5wang/min-tui"
 	rtbackend "github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
@@ -194,6 +195,14 @@ type Session struct {
 	// workers).  Kept on the Session for the same reason:
 	// cache survives popup close/reopen.
 	workbench workbenchUI
+
+	// permUI backs the Ctrl+P permission approval popup.
+	permUI permUI
+
+	// bashCancel is set while a local ! command is running.
+	// The main loop checks it on Ctrl+C to cancel the bash
+	// process without quitting the TUI.
+	bashCancel context.CancelFunc
 
 	// runCtx is the context passed to Run().  The Ctrl+B popup
 	// reuses it for the in-flight ListLongTasks / GetLongTask /
@@ -360,9 +369,16 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 		input, err := tui.ReadLine()
 		if err != nil {
 			if isInterruptErr(err) {
-				// Ctrl+C: if a turn is running, cancel it
-				// and continue the loop. Otherwise exit.
-				if s.cancelActiveTurn() {
+			// Ctrl+C: if a local bash command is running,
+			// cancel it first.  Otherwise, if a turn is
+			// running, cancel the turn.  Otherwise exit.
+			if s.bashCancel != nil {
+				s.bashCancel()
+				s.bashCancel = nil
+				s.tui.SetStatus("Bash cancelled", minitui.StatusWarning)
+				continue
+			}
+			if s.cancelActiveTurn() {
 					// Preserve the heartbeat: surface
 					// cancellation as an activity
 					// chip instead of overwriting the
@@ -414,11 +430,9 @@ func (s *Session) registerSlashCommands() {
 // registerGlobalHotkeys installs the Session's permanent
 // keybindings on the min-tui frontend.  The current set is:
 //
-//	Ctrl+B   open the background-task popup (Ctrl+B is
-//	         deliberately chosen because it does not conflict
-//	         with any built-in min-tui shortcut and is the
-//	         standard mnemonic for "background" in editors).
-//	Ctrl+W   open the workbench (tasks + workers).
+//	Ctrl+B   open the background-task popup
+//	Ctrl+W   open the workbench (tasks + workers)
+//	Ctrl+P   open the permission approval popup (when blocked)
 //
 // Hotkeys are evaluated on every keystroke in normal (non-popup)
 // mode; returning true consumes the key so it does not reach
@@ -434,6 +448,10 @@ func (s *Session) registerGlobalHotkeys() {
 		}
 		if k.Ctrl && (k.Rune == 'w' || k.Rune == 'W') {
 			s.openWorkbench(s.runCtx)
+			return true
+		}
+		if k.Ctrl && (k.Rune == 'p' || k.Rune == 'P') {
+			s.openPermissionPopup(s.runCtx)
 			return true
 		}
 		return false
@@ -876,6 +894,14 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 		return nil
 	}
 	s.recordInputHistory(input)
+
+	// ── local bash: ! prefix ────────────────────────────
+	if strings.HasPrefix(input, "!") {
+		s.runLocalBash(ctx, strings.TrimPrefix(input, "!"))
+		return nil
+	}
+
+	// ── slash commands ──────────────────────────────────
 	if cmd, ok := commands.Parse(input); ok {
 		result, err := s.backend.ExecuteCommand(ctx, sessionID, cmd)
 		if s.tui != nil {
@@ -1862,6 +1888,7 @@ func (s *Session) renderStatusWith(summary tools.ContextInspection, label string
 		if action := strings.TrimSpace(blocker.ToolName + " " + blocker.Action); strings.TrimSpace(action) != "" {
 			blockerParts = append(blockerParts, action)
 		}
+		blockerParts = append(blockerParts, "Ctrl+P approve/deny")
 		parts = append(parts, strings.Join(blockerParts, " "))
 	}
 	// Context usage: "128k/512k 25%" — denominator is the
@@ -2052,6 +2079,55 @@ func extractRunnerPhase(event events.Event) (phase, tool string) {
 		tool, _ = m["tool_name"].(string)
 	}
 	return
+}
+
+// runLocalBash executes a shell command via localbash and
+// streams the output back to the TUI.  It is triggered by
+// typing !command in the input box.
+//
+// The output is wrapped in a code fence so min-tui applies
+// syntax highlighting.  The status bar is updated with the
+// command being run.
+func (s *Session) runLocalBash(parentCtx context.Context, shellCmd string) {
+	shellCmd = strings.TrimSpace(shellCmd)
+	if shellCmd == "" {
+		return
+	}
+	if s.tui == nil {
+		return
+	}
+
+	// Echo the command.
+	s.tui.WriteString("\n> !" + shellCmd + "\n\n")
+	s.tui.SetStatus("Running: "+shellCmd, minitui.StatusWarning)
+
+	// Create a cancellable context so the user can interrupt.
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+
+	// Store cancel so the main loop can trigger it on Ctrl+C.
+	s.bashCancel = cancel
+	defer func() { s.bashCancel = nil }()
+
+	// Stream output.
+	ch := localbash.RunWithTimeout(ctx, s.cfg.WorkspaceDir, shellCmd)
+	for chunk := range ch {
+		if chunk.Output != "" {
+			s.tui.WriteString(chunk.Output)
+		}
+		if chunk.Err != nil {
+			if errors.Is(chunk.Err, context.Canceled) ||
+				errors.Is(chunk.Err, context.DeadlineExceeded) {
+				s.tui.WriteString("\n✗ Cancelled\n")
+			} else {
+				s.tui.WriteString("\n✗ " + chunk.Err.Error() + "\n")
+			}
+			s.tui.SetStatus("Bash error", minitui.StatusError)
+			return
+		}
+	}
+
+	s.tui.SetStatus("Bash completed", minitui.StatusSuccess)
 }
 
 func isInterruptErr(err error) bool {

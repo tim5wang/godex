@@ -1258,25 +1258,9 @@ func langFromPath(p string) string {
 	return ""
 }
 
-// diffFenceLang is the language tag we attach to the fence
-// around an edit-file unified diff.  We lock the tag to the
-// canonical "diff" value (rather than deriving it from the file
-// extension) so the fence is unambiguous: a `.go` file edit and
-// a `.py` file edit both render the same way inside the diff
-// block.
-//
-// Note: as of min-tui v0.5.2 the highlighter's langTable does
-// not yet include "diff", so the +/-/space prefixes are not
-// coloured.  The block is still rendered as a fenced code block
-// (the highlighter falls through to a plain renderLine for
-// unknown langs), which is the correct shape — once min-tui
-// gains a "diff" entry, the same constant picks up the new
-// colouring with zero code changes here.
-const diffFenceLang = "diff"
-
 // renderEditDiffBlock generates a unified diff of old/new text
-// and emits it as a ```diff code block that min-tui renders as
-// a formatted code block.
+// and renders it using min-tui's built-in RenderDiff which
+// applies ANSI colouring, line numbers, and syntax highlighting.
 //
 // Header layout: the path / "N edits" line is emitted exactly
 // once at the top, even when the input carries multiple edits.
@@ -1299,18 +1283,10 @@ func (s *Session) renderEditDiffBlock(input map[string]interface{}) {
 	}
 
 	for i, edit := range edits {
-		diffText := generateUnifiedDiffMarkdown(edit.oldText, edit.newText)
+		diffText := toUnifiedDiff(filePath, edit.oldText, edit.newText)
 		if diffText != "" {
-			var b strings.Builder
-			b.WriteString("```")
-			b.WriteString(diffFenceLang)
-			b.WriteString("\n")
-			b.WriteString(diffText)
-			if !strings.HasSuffix(diffText, "\n") {
-				b.WriteString("\n")
-			}
-			b.WriteString("```\n")
-			s.tui.WriteString(b.String())
+			s.tui.WriteString(minitui.RenderDiff(diffText, true))
+			s.tui.WriteString("\n")
 		}
 
 		if i < len(edits)-1 {
@@ -1402,15 +1378,14 @@ func pickString(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-// generateUnifiedDiffMarkdown returns a plain-text unified diff
-// that can be placed inside a ```diff code block.
+// toUnifiedDiff returns a standard unified diff string suitable
+// for minitui.RenderDiff.  It includes --- / +++ / @@ headers
+// so that RenderDiff can colour hunk headers, file paths, and
+// +/- lines, and apply per-line syntax highlighting.
 //
-// The diff is line-granular: each row is either an unchanged
-// context line ("  …") or a - / + row pair for removed / added
-// content.  A changed line is rendered as one - row followed
-// by one + row, matching the shape of any other replacement
-// so the output is a real unified diff the viewer can read.
-func generateUnifiedDiffMarkdown(oldText, newText string) string {
+// When the old and new text are identical it returns "" so
+// callers can skip rendering a no-op diff block.
+func toUnifiedDiff(path, oldText, newText string) string {
 	if oldText == newText {
 		return ""
 	}
@@ -1418,32 +1393,41 @@ func generateUnifiedDiffMarkdown(oldText, newText string) string {
 	oldLines := splitLinesPreserve(oldText)
 	newLines := splitLinesPreserve(newText)
 
-	oldIdx, newIdx := 0, 0
-	var out strings.Builder
+	var b strings.Builder
 
+	// Use a simple path so the diff header is compact;
+	// RenderDiff extracts the language from +++/--- paths.
+	file := path
+	if file == "" {
+		file = "file"
+	}
+	b.WriteString("--- a/" + file + "\n")
+	b.WriteString("+++ b/" + file + "\n")
+	b.WriteString(fmt.Sprintf("@@ -1,%d +1,%d @@\n", len(oldLines), len(newLines)))
+
+	oldIdx, newIdx := 0, 0
 	for oldIdx < len(oldLines) || newIdx < len(newLines) {
 		switch {
 		case oldIdx < len(oldLines) && newIdx < len(newLines) &&
 			oldLines[oldIdx] == newLines[newIdx]:
-			fmt.Fprintf(&out, "  %s", oldLines[oldIdx])
+			fmt.Fprintf(&b, " %s", oldLines[oldIdx])
 			oldIdx++
 			newIdx++
 		case oldIdx < len(oldLines) && newIdx < len(newLines):
-			// Changed line: render as a - / + pair, same
-			// shape as the offset insert/delete arms below.
-			fmt.Fprintf(&out, "- %s", oldLines[oldIdx])
-			fmt.Fprintf(&out, "+ %s", newLines[newIdx])
+			// Changed line: - old / + new pair.
+			fmt.Fprintf(&b, "-%s", oldLines[oldIdx])
+			fmt.Fprintf(&b, "+%s", newLines[newIdx])
 			oldIdx++
 			newIdx++
 		case oldIdx < len(oldLines):
-			fmt.Fprintf(&out, "- %s", oldLines[oldIdx])
+			fmt.Fprintf(&b, "-%s", oldLines[oldIdx])
 			oldIdx++
 		default:
-			fmt.Fprintf(&out, "+ %s", newLines[newIdx])
+			fmt.Fprintf(&b, "+%s", newLines[newIdx])
 			newIdx++
 		}
 	}
-	return out.String()
+	return b.String()
 }
 
 // splitLinesPreserve returns the lines of s, including their

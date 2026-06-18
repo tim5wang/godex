@@ -849,31 +849,40 @@ func TestParseEditInputMintEditsNonArrayYieldsNil(t *testing.T) {
 	}
 }
 
-// TestGenerateUnifiedDiffMarkdownBasicShape verifies the
-// output uses the expected `+/-/space` line prefixes and
-// that equal text is prefixed with two spaces. A regression
-// in the diff pipeline would surface here as missing or
-// swapped prefixes.
-func TestGenerateUnifiedDiffMarkdownBasicShape(t *testing.T) {
-	diff := generateUnifiedDiffMarkdown("foo\nbar\n", "foo\nbaz\n")
-	if !strings.Contains(diff, "  foo") {
-		t.Fatalf("equal line 'foo' should be prefixed with two spaces, got:\n%s", diff)
+// TestToUnifiedDiffBasicShape verifies the output uses the
+// expected unified diff format with --- / +++ / @@ headers and
+// single-space/plus/minus line prefixes.  Identical lines get
+// a " " prefix, removed lines "-", and added lines "+".
+func TestToUnifiedDiffBasicShape(t *testing.T) {
+	diff := toUnifiedDiff("test.go", "foo\nbar\n", "foo\nbaz\n")
+	if !strings.Contains(diff, "--- a/test.go") {
+		t.Fatalf("missing --- header, got:\n%s", diff)
 	}
-	if !strings.Contains(diff, "- bar") {
-		t.Fatalf("removed line 'bar' should be prefixed with '- ', got:\n%s", diff)
+	if !strings.Contains(diff, "+++ b/test.go") {
+		t.Fatalf("missing +++ header, got:\n%s", diff)
 	}
-	if !strings.Contains(diff, "+ baz") {
-		t.Fatalf("added line 'baz' should be prefixed with '+ ', got:\n%s", diff)
+	if !strings.Contains(diff, "@@") {
+		t.Fatalf("missing @@ hunk header, got:\n%s", diff)
+	}
+	// Context line: single space prefix.
+	if !strings.Contains(diff, " foo") {
+		t.Fatalf("equal line 'foo' should have single-space prefix, got:\n%s", diff)
+	}
+	if !strings.Contains(diff, "-bar") {
+		t.Fatalf("removed line 'bar' should be prefixed with '-', got:\n%s", diff)
+	}
+	if !strings.Contains(diff, "+baz") {
+		t.Fatalf("added line 'baz' should be prefixed with '+', got:\n%s", diff)
 	}
 }
 
-// TestGenerateUnifiedDiffMarkdownIdenticalText guards the
-// "no change" case. We must not emit a misleading + / -
-// block when old and new match exactly.
-func TestGenerateUnifiedDiffMarkdownIdenticalText(t *testing.T) {
-	diff := generateUnifiedDiffMarkdown("unchanged\n", "unchanged\n")
-	if strings.Contains(diff, "\n+ ") || strings.Contains(diff, "\n- ") {
-		t.Fatalf("identical text should not contain +/- lines, got:\n%s", diff)
+// TestToUnifiedDiffIdenticalText guards the "no change" case.
+// We must not emit a misleading + / - block when old and new
+// match exactly.
+func TestToUnifiedDiffIdenticalText(t *testing.T) {
+	diff := toUnifiedDiff("f", "unchanged\n", "unchanged\n")
+	if diff != "" {
+		t.Fatalf("identical text should return empty string, got:\n%s", diff)
 	}
 }
 

@@ -907,7 +907,7 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 
 	// ── local bash: ! prefix ────────────────────────────
 	if strings.HasPrefix(input, "!") {
-		s.runLocalBash(ctx, strings.TrimPrefix(input, "!"))
+		go s.runLocalBash(ctx, strings.TrimPrefix(input, "!"))
 		return nil
 	}
 

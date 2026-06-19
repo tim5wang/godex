@@ -316,6 +316,9 @@ func (s *Session) refreshLongTaskDetail(ctx context.Context, workflowID string) 
 // buildLongTaskDetailPopup constructs the detail popup for an
 // already-loaded LongTaskDetail snapshot.
 func (s *Session) buildLongTaskDetailPopup(detail rtbackend.LongTaskDetail) minitui.Popup {
+	// Reset any stale rollback/lookup/GC state from a previous
+	// detail view so the new popup starts clean.
+	s.longTasks.detailOps.reset()
 	return minitui.Popup{
 		Title: "Task " + detail.Row.WorkflowID,
 		Render: func(w, h int) []string {

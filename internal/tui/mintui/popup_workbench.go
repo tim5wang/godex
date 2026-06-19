@@ -279,18 +279,17 @@ func (s *Session) openWorkbench(ctx context.Context) {
 }
 
 func (s *Session) refreshWorkbench(ctx context.Context) {
-	ltRows, err := s.backend.ListLongTasks(ctx, s.sessionID)
-	if err != nil {
-		ltRows = nil
-	}
-	saRows, err := s.backend.ListSubagents(ctx, s.sessionID)
-	if err != nil {
-		saRows = nil
-	}
+	ltRows, ltErr := s.backend.ListLongTasks(ctx, s.sessionID)
+	saRows, saErr := s.backend.ListSubagents(ctx, s.sessionID)
 
-	if s.backend != nil && ltRows != nil && saRows != nil {
-		s.workbench.setData(ltRows, saRows)
-	} else if err != nil {
+	// Collect errors from both calls; only set data if both succeed.
+	// Otherwise surface the first error (ListLongTasks takes priority
+	// because the Task tab is the default view).
+	if ltErr != nil || saErr != nil {
+		err := ltErr
+		if err == nil {
+			err = saErr
+		}
 		s.workbench.setErr(err)
 	} else {
 		s.workbench.setData(ltRows, saRows)

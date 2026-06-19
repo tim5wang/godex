@@ -69,7 +69,6 @@ type Runner struct {
 
 	Now                func() time.Time
 	RunTUI             func(context.Context, backend.SessionLocator) error
-	RunFullTUI         func(context.Context, backend.SessionLocator) error
 	Serve              func(context.Context, string) error
 	Doctor             func(context.Context) (string, error)
 	WeixinSetup        func(context.Context) error
@@ -344,13 +343,7 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 	if len(fs.Args()) > 0 {
 		return fmt.Errorf("unexpected tui arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	// godex tui always uses the full bubbletea TUI. Fall back
-	// to RunTUI if RunFullTUI is not wired (test compat).
-	fn := r.RunFullTUI
-	if fn == nil {
-		fn = r.RunTUI
-	}
-	if fn == nil {
+	if r.RunTUI == nil {
 		return fmt.Errorf("tui mode unavailable")
 	}
 
@@ -359,7 +352,7 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 		profile = r.Cfg.DefaultAgentProfileForChannel("tui")
 	}
 	applyLocatorAgentProfile(&locator, profile)
-	return fn(ctx, locator)
+	return r.RunTUI(ctx, locator)
 }
 
 func (r *Runner) runDoctor(ctx context.Context, args []string) error {

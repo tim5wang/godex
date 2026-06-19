@@ -33,7 +33,6 @@ import (
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/services/usage"
-	"github.com/tim5wang/godex/internal/tui"
 	"github.com/tim5wang/godex/internal/tui/mintui"
 	"github.com/tim5wang/godex/internal/version"
 )
@@ -207,16 +206,7 @@ func main() {
 		Stderr:             os.Stderr,
 		DefaultSessionSpec: configOptions.SessionSpec,
 		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
-			// mintui.BackendAdapter projects the agent-shaped
-			// longtask surface on *service into the mintui-local
-			// LongTaskRow / LongTaskDetail shapes so mintui does
-			// not have to import internal/agent.
 			return mintui.New(cfg, mintui.NewBackendAdapter(service), os.Stdout, os.Stderr).Run(ctx, locator)
-		},
-		// godex tui always starts the full bubbletea TUI,
-		// regardless of the --tui-mode global flag.
-		RunFullTUI: func(ctx context.Context, locator backend.SessionLocator) error {
-			return tui.New(cfg, service, os.Stdout).Run(ctx, locator)
 		},
 		Doctor: func(ctx context.Context) (string, error) {
 			_ = ctx

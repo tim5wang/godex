@@ -747,7 +747,7 @@ func TestRunnerReplSubcommandIsRemoved(t *testing.T) {
 
 func TestRunnerTUISubcommandCallsRunTUI(t *testing.T) {
 	var got backend.SessionLocator
-	var fullCalled, tuiCalled bool
+	var tuiCalled bool
 	runner := &Runner{
 		Cfg:    &config.Config{},
 		Stdout: &bytes.Buffer{},
@@ -755,11 +755,6 @@ func TestRunnerTUISubcommandCallsRunTUI(t *testing.T) {
 		Now:    time.Now,
 		RunTUI: func(ctx context.Context, locator backend.SessionLocator) error {
 			tuiCalled = true
-			got = locator
-			return nil
-		},
-		RunFullTUI: func(ctx context.Context, locator backend.SessionLocator) error {
-			fullCalled = true
 			got = locator
 			return nil
 		},
@@ -771,11 +766,8 @@ func TestRunnerTUISubcommandCallsRunTUI(t *testing.T) {
 	if got.Channel != "local" || got.Key != "default" {
 		t.Fatalf("expected locator local:default, got %s:%s", got.Channel, got.Key)
 	}
-	if !fullCalled {
-		t.Fatalf("expected godex tui to call RunFullTUI")
-	}
-	if tuiCalled {
-		t.Fatalf("expected godex tui to prefer RunFullTUI over RunTUI")
+	if !tuiCalled {
+		t.Fatalf("expected godex tui to call RunTUI")
 	}
 }
 

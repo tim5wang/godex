@@ -248,10 +248,16 @@ func (s *Session) buildLongTaskListPopup() minitui.Popup {
 // The detail data is fetched on a goroutine; first we show a
 // "loading detail" popup and replace it with the real one
 // when GetLongTask returns.
+//
+// If the user dismisses the loading popup with ESC before the
+// backend responds, the goroutine detects the cancellation and
+// does NOT push the detail popup — preventing the "closed
+// window reappears during streaming" bug.
 func (s *Session) pushLongTaskDetail(ctx context.Context, workflowID string) {
 	if s.tui == nil {
 		return
 	}
+	detailCtx, detailCancel := context.WithCancel(ctx)
 	s.tui.PushPopup(minitui.Popup{
 		Title: "Task " + workflowID,
 		Render: func(w, h int) []string {
@@ -259,9 +265,12 @@ func (s *Session) pushLongTaskDetail(ctx context.Context, workflowID string) {
 			return padPopupLines(lines, w, h)
 		},
 		OnKey: noopPopupKey,
+		OnClose: func() {
+			detailCancel()
+		},
 	})
 
-	go s.refreshLongTaskDetail(ctx, workflowID)
+	go s.refreshLongTaskDetail(detailCtx, workflowID)
 }
 
 func (s *Session) refreshLongTaskDetail(ctx context.Context, workflowID string) {
@@ -269,10 +278,20 @@ func (s *Session) refreshLongTaskDetail(ctx context.Context, workflowID string) 
 		return
 	}
 	detail, err := s.backend.GetLongTask(ctx, s.sessionID, workflowID)
+
+	// If the loading popup was dismissed, don't push anything.
+	if ctx.Err() != nil {
+		return
+	}
+
+	if s.tui == nil {
+		return
+	}
+
 	if err != nil {
-		// Replace the loading popup with an error popup.
-		if s.tui != nil {
-			s.tui.PopPopup()
+		s.tui.PopPopup()
+		// Only push error if still relevant (context not cancelled).
+		if ctx.Err() == nil {
 			s.tui.PushPopup(minitui.Popup{
 				Title: "Task " + workflowID,
 				Render: func(w, h int) []string {
@@ -290,10 +309,8 @@ func (s *Session) refreshLongTaskDetail(ctx context.Context, workflowID string) 
 		}
 		return
 	}
-	if s.tui != nil {
-		s.tui.PopPopup()
-		s.tui.PushPopup(s.buildLongTaskDetailPopup(detail))
-	}
+	s.tui.PopPopup()
+	s.tui.PushPopup(s.buildLongTaskDetailPopup(detail))
 }
 
 // buildLongTaskDetailPopup constructs the detail popup for an

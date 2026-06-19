@@ -246,6 +246,9 @@ func DefaultPermissionPolicy() PermissionPolicy {
 				string(message.SourceGateway),
 				string(message.SourceFeishu),
 				string(message.SourceWeixin),
+				string(message.SourceCLI),
+				string(message.SourceTUI),
+				string(message.SourceACP),
 			},
 			Tools: []string{
 				"bash",
@@ -281,10 +284,17 @@ func PermissionPolicyForSecurityProfile(profile, approvalMode string) Permission
 			string(message.SourceGateway),
 			string(message.SourceFeishu),
 			string(message.SourceWeixin),
+			string(message.SourceCLI),
+			string(message.SourceTUI),
+			string(message.SourceACP),
 		}
 	case SecurityProfileGuardedLocal:
-		// Default posture: local CLI/TUI can work normally; remote sources still
-		// require approval for protected tools.
+		// Default posture: local CLI/TUI/ACP and remote sources all flow
+		// through the same interactive approval rule so the configured
+		// mode (manual / review / yolo) is honored uniformly across
+		// channels. trusted-local and other profiles inherit the same
+		// expanded source list above; only the sandboxed / strict /
+		// dev-repair overrides below change it.
 	case SecurityProfileSandboxed:
 		policy.InteractiveApproval.Mode = InteractiveApprovalModeManual
 		policy.InteractiveApproval.TrustedCommandPrefixes = nil
@@ -421,6 +431,34 @@ func (m *PermissionManager) AllowOnce(req PermissionRequest) {
 		return
 	}
 	m.setSessionDecision(req, PermissionResult{Decision: PermissionAllow, Scope: string(PermissionGrantOnce)}, PermissionGrantOnce)
+}
+
+// AllowPattern records a pattern-scoped allow decision so that any future
+// request that resolves to the same command/path pattern within the
+// same session is admitted without re-running the permission rules.
+// This is the cached fast path used by the review-mode interceptor when
+// the configured reviewer returns ALLOW, so that repeated invocations of
+// the same command do not have to call the reviewer subagent every
+// time. It is a no-op (well, a one-time fallback) when the request does
+// not produce a stable pattern (for example bash commands that
+// ClassifyShellCommandRisk cannot fingerprint, or tool calls with no
+// paths).
+func (m *PermissionManager) AllowPattern(req PermissionRequest, reason string) {
+	if m == nil {
+		return
+	}
+	if permissionPatternKey(req) == "" {
+		// No stable pattern for this request — fall back to one-time so the
+		// call still goes through and we do not accidentally widen the
+		// grant beyond a single fingerprint.
+		m.AllowOnce(req)
+		return
+	}
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		trimmed = "auto-approved by permission review"
+	}
+	m.setSessionDecision(req, PermissionResult{Decision: PermissionAllow, Reason: trimmed, Scope: string(PermissionGrantPattern)}, PermissionGrantPattern)
 }
 
 // DenySession records a session-scoped deny decision for the exact request fingerprint.
@@ -823,6 +861,13 @@ func NewPermissionInterceptorWithReview(manager *PermissionManager, reviewer Per
 				result = resolveReviewedPermission(ctx, manager, reviewer, req, result)
 				switch result.Decision {
 				case PermissionAllow:
+					// Cache the reviewer's allow decision so subsequent
+					// invocations of the same command pattern do not have
+					// to spin up the reviewer subagent again. We prefer
+					// pattern-scoped grants so high-frequency commands
+					// (e.g. repeated `git status` calls) only pay the
+					// LLM cost once per session.
+					manager.AllowPattern(req, result.Reason)
 					markApprovedShellCommand(call, req)
 					return nil, nil
 				case PermissionDeny:
@@ -1046,11 +1091,13 @@ func newInteractiveApprovalRule(policy InteractiveApprovalPolicy) PermissionRule
 }
 
 func NewUnlistedShellCommandApprovalRule() PermissionRule {
-	return newUnlistedShellCommandApprovalRule(SecurityProfileGuardedLocal)
+	return newUnlistedShellCommandApprovalRule(SecurityProfileGuardedLocal, InteractiveApprovalModeManual)
 }
 
-func newUnlistedShellCommandApprovalRule(profile string) PermissionRule {
+func newUnlistedShellCommandApprovalRule(profile, approvalMode string) PermissionRule {
 	profile = normalizeSecurityProfile(profile)
+	approvalMode = normalizeInteractiveApprovalMode(approvalMode)
+	scope := pendingScopeForApprovalMode(approvalMode)
 	return PermissionRuleFunc(func(req PermissionRequest) (PermissionResult, bool) {
 		toolName := strings.ToLower(strings.TrimSpace(req.ToolName))
 		if toolName != "bash" && toolName != "background" {
@@ -1067,13 +1114,38 @@ func newUnlistedShellCommandApprovalRule(profile string) PermissionRule {
 		return PermissionResult{
 			Decision: PermissionPending,
 			Reason:   fmt.Sprintf("shell command uses command(s) outside the allowlist: %s", strings.Join(names, ", ")),
-			Scope:    "approval",
+			Scope:    scope,
 		}, true
 	})
 }
 
+// pendingScopeForApprovalMode picks the PermissionResult scope a rule should
+// emit when it needs approval. In review mode we tag the result as
+// "review" so the NewPermissionInterceptorWithReview layer routes the
+// request through the configured reviewer before falling back to manual
+// approval. In manual mode (or any other mode) we keep the legacy
+// "approval" scope so existing manual-only behavior is preserved.
+func pendingScopeForApprovalMode(approvalMode string) string {
+	if normalizeInteractiveApprovalMode(approvalMode) == InteractiveApprovalModeReview {
+		return "review"
+	}
+	return "approval"
+}
+
 func NewSecurityProfileRule(profile string) PermissionRule {
+	return NewSecurityProfileRuleWithApprovalMode(profile, InteractiveApprovalModeManual)
+}
+
+// NewSecurityProfileRuleWithApprovalMode builds the security-profile rule
+// while honoring the configured interactive approval mode. When mode is
+// "review", pending results are tagged with scope "review" so the
+// NewPermissionInterceptorWithReview layer invokes the configured
+// reviewer subagent before escalating to manual approval. Strict profile
+// denials and dev/repair approvals retain their original scope semantics.
+func NewSecurityProfileRuleWithApprovalMode(profile, approvalMode string) PermissionRule {
 	profile = normalizeSecurityProfile(profile)
+	approvalMode = normalizeInteractiveApprovalMode(approvalMode)
+	scope := pendingScopeForApprovalMode(approvalMode)
 	return PermissionRuleFunc(func(req PermissionRequest) (PermissionResult, bool) {
 		toolName := strings.ToLower(strings.TrimSpace(req.ToolName))
 		source := strings.ToLower(strings.TrimSpace(req.Source))
@@ -1092,9 +1164,9 @@ func NewSecurityProfileRule(profile string) PermissionRule {
 					return PermissionResult{Decision: PermissionDeny, Reason: "strict security profile denies high-risk shell command: " + risk.Reason, Scope: "policy"}, true
 				}
 				if profile == SecurityProfileDevRepair {
-					return PermissionResult{Decision: PermissionPending, Reason: "dev/repair profile requires approval for high-risk repair shell command: " + risk.Reason, Scope: "approval"}, true
+					return PermissionResult{Decision: PermissionPending, Reason: "dev/repair profile requires approval for high-risk repair shell command: " + risk.Reason, Scope: scope}, true
 				}
-				return PermissionResult{Decision: PermissionPending, Reason: "high-risk shell command requires approval: " + risk.Reason, Scope: "approval"}, true
+				return PermissionResult{Decision: PermissionPending, Reason: "high-risk shell command requires approval: " + risk.Reason, Scope: scope}, true
 			}
 		}
 		return PermissionResult{}, false
@@ -1107,9 +1179,9 @@ func permissionRulesForPolicy(policy PermissionPolicy) []PermissionRule {
 	if policy.BlockAutomationMutations {
 		rules = append(rules, newAutomationMutationRule(true))
 	}
-	rules = append(rules, NewSecurityProfileRule(policy.SecurityProfile))
+	rules = append(rules, NewSecurityProfileRuleWithApprovalMode(policy.SecurityProfile, policy.InteractiveApproval.Mode))
 	if policy.InteractiveApproval.Enabled {
-		rules = append(rules, newUnlistedShellCommandApprovalRule(policy.SecurityProfile))
+		rules = append(rules, newUnlistedShellCommandApprovalRule(policy.SecurityProfile, policy.InteractiveApproval.Mode))
 	}
 	if rule := newInteractiveApprovalRule(policy.InteractiveApproval); rule != nil {
 		rules = append(rules, rule)

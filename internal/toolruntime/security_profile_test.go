@@ -53,8 +53,16 @@ func TestSecurityProfileDevRepairAllowsDiagnosticShellCommands(t *testing.T) {
 		Command:   "command -v godex",
 		Mutation:  false,
 	})
-	if result.Decision != PermissionAbstain {
-		t.Fatalf("expected dev/repair diagnostic command to avoid shell allowlist approval, got %+v", result)
+	// dev-repair extends the shell allowlist with diagnostic commands so
+	// `newUnlistedShellCommandApprovalRule` lets the request through. The
+	// shell command still has to clear `newInteractiveApprovalRule`, which
+	// uses the configured mode (manual here) to require user approval.
+	// In review mode, the same path would first call the reviewer.
+	if result.Decision != PermissionPending {
+		t.Fatalf("expected dev/repair diagnostic command to require interactive approval, got %+v", result)
+	}
+	if result.Scope != "approval" {
+		t.Fatalf("expected manual approval scope, got %+v", result)
 	}
 	if policy.SecurityProfile != SecurityProfileDevRepair {
 		t.Fatalf("expected dev-repair alias to normalize to %q, got %q", SecurityProfileDevRepair, policy.SecurityProfile)

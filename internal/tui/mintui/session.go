@@ -433,6 +433,7 @@ func (s *Session) registerSlashCommands() {
 //	Ctrl+B   open the background-task popup
 //	Ctrl+W   open the workbench (tasks + workers)
 //	Ctrl+P   open the permission approval popup (when blocked)
+//	Ctrl+H   open the help popup (keyboard shortcuts)
 //
 // Hotkeys are evaluated on every keystroke in normal (non-popup)
 // mode; returning true consumes the key so it does not reach
@@ -454,6 +455,10 @@ func (s *Session) registerGlobalHotkeys() {
 			s.openPermissionPopup(s.runCtx)
 			return true
 		}
+		if k.Ctrl && (k.Rune == 'h' || k.Rune == 'H') {
+			s.openHelp()
+			return true
+		}
 		return false
 	})
 }
@@ -462,6 +467,11 @@ func (s *Session) registerGlobalHotkeys() {
 // are forwarded to ExecuteCommand exactly as before.  /model and
 // /resume with no arguments open an interactive dropdown selector.
 func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.CommandMetadata) {
+	// /help opens the interactive help popup instead of text output.
+	if cmd.Name == "help" {
+		s.openHelp()
+		return
+	}
 	if cmd.Name == "model" && strings.TrimSpace(ctx.Args) == "" {
 		s.handleModelSelect(ctx)
 		return

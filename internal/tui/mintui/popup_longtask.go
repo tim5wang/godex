@@ -369,10 +369,16 @@ func (s *Session) buildLongTaskDetailPopup(detail rtbackend.LongTaskDetail) mini
 // pushLongTaskCancelConfirm opens a yes/no confirmation popup
 // on top of the list.  Confirming fires off a cancel goroutine
 // that replaces the popup with a result popup.
+//
+// A cancellable context is wired through OnClose so that if the
+// user dismisses the confirm popup with ESC before the backend
+// responds, the result popup is NOT pushed — preventing the
+// "closed window reappears during streaming" bug.
 func (s *Session) pushLongTaskCancelConfirm(ctx context.Context, row rtbackend.LongTaskRow) {
 	if s.tui == nil {
 		return
 	}
+	cancelCtx, cancelCancel := context.WithCancel(ctx)
 	s.tui.PushPopup(minitui.Popup{
 		Title: "Cancel task?",
 		Render: func(w, h int) []string {
@@ -388,33 +394,35 @@ func (s *Session) pushLongTaskCancelConfirm(ctx context.Context, row rtbackend.L
 		OnKey: func(k minitui.KeyEvent) minitui.PopupAction {
 			switch {
 			case k.Rune == 'y' || k.Rune == 'Y':
-				// Returning PopupClose is enough — min-tui
-				// will pop the confirm popup and reveal
-				// the list popup underneath.  We kick off
-				// the cancel goroutine AFTER the close so
-				// its PushPopup lands on a stable stack.
-				go s.runLongTaskCancel(s.runCtx, row)
+				go s.runLongTaskCancel(cancelCtx, row)
 				return minitui.PopupClose
 			case k.Rune == 'n' || k.Rune == 'N':
+				cancelCancel()
 				return minitui.PopupClose
 			default:
-				// Tab / ↑↓ etc. are not actionable here.
 				return minitui.PopupPassthrough
 			}
+		},
+		OnClose: func() {
+			cancelCancel()
 		},
 	})
 }
 
 // runLongTaskCancel calls CancelLongTask on the backend and
-// shows a transient result popup.  The list popup is
-// refreshed afterwards so cancelled tasks disappear or
-// change status without the user having to reopen Ctrl+B.
+// shows a transient result popup.  The ctx is cancellable —
+// if the confirm popup was dismissed before the backend
+// responds, the result popup is skipped.
 func (s *Session) runLongTaskCancel(ctx context.Context, row rtbackend.LongTaskRow) {
 	if s.backend == nil {
 		return
 	}
 	err := s.backend.CancelLongTask(ctx, s.sessionID, row.WorkflowID)
 	if s.tui == nil {
+		return
+	}
+	// If the confirm popup was dismissed, don't push anything.
+	if ctx.Err() != nil {
 		return
 	}
 	if err != nil {

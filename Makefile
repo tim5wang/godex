@@ -5,7 +5,7 @@ COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -s -w -X github.com/tim5wang/godex/internal/version.Version=$(VERSION) -X github.com/tim5wang/godex/internal/version.Commit=$(COMMIT) -X github.com/tim5wang/godex/internal/version.Date=$(BUILD_DATE)
 
-.PHONY: dev dev-fast dev-frontend web web-dev web-typecheck web-clean build-linux release release-clean deploy-linux
+.PHONY: dev dev-fast dev-frontend web web-dev web-typecheck web-clean build-linux build-minimal release release-clean deploy-linux
 
 # ── Web UI build targets ───────────────────────────────────────────
 
@@ -48,6 +48,22 @@ dev: web
 ## build-linux: Full build for Linux amd64
 build-linux: web
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP)-linux-amd64 ./cmd/godex
+
+## build-minimal: Build the smallest possible binary (Linux: UPX --best --lzma; macOS: UPX incompatible, stripped only)
+build-minimal:
+	@echo "[minimal] building stripped binary..."
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/godex
+	@echo "[minimal] binary size before compression: $$(wc -c < $(APP) | tr -d ' ') bytes"
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		echo "[minimal] UPX is incompatible with macOS code-signing (binary would be killed by kernel)"; \
+		echo "[minimal] skipping compression — cross-compile on Linux for best results"; \
+	elif command -v upx >/dev/null 2>&1; then \
+		echo "[minimal] UPX compressing with --best --lzma..."; \
+		upx --best --lzma $(APP); \
+	else \
+		echo "[minimal] UPX not installed — skipping compression (apt install upx-ucl)"; \
+	fi
+	@echo "[minimal] final binary: $$(ls -lh $(APP) | awk '{print $$5}')"
 
 release: release-clean web
 	mkdir -p "$(DIST_DIR)"

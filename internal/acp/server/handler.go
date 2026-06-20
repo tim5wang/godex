@@ -657,7 +657,9 @@ func toolCallTitle(name string, input map[string]interface{}) string {
 		if command := stringFromAny(input["command"]); command != "" {
 			return name + ": " + truncateString(command, 120)
 		}
-	case "read_file", "write_file", "edit_file", "attach_file":
+	case "read_file":
+		return readFileCallTitle(name, input)
+	case "write_file", "edit_file", "attach_file":
 		if path := stringFromAny(input["path"]); path != "" {
 			return name + ": " + truncateString(path, 120)
 		}
@@ -671,6 +673,44 @@ func toolCallTitle(name string, input map[string]interface{}) string {
 		}
 	}
 	return name
+}
+
+// readFileCallTitle builds a richer title for read_file tool calls,
+// showing path plus line range in IDE style (path:start-end).
+func readFileCallTitle(name string, input map[string]interface{}) string {
+	path := stringFromAny(input["path"])
+	if path == "" {
+		return name
+	}
+	off, hasOff := numFromAny(input["offset"])
+	lim, hasLim := numFromAny(input["limit"])
+	if hasOff && hasLim && lim > 0 {
+		end := off + lim - 1
+		return fmt.Sprintf("%s: %s:%d-%d", name, truncateString(path, 80), off, end)
+	}
+	if hasOff && off > 1 {
+		return fmt.Sprintf("%s: %s (from line %d)", name, truncateString(path, 80), off)
+	}
+	return name + ": " + truncateString(path, 80)
+}
+
+// numFromAny extracts an integer from an interface{} value that may
+// be int, int64, float64 (JSON), or fmt.Stringer.
+func numFromAny(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case fmt.Stringer:
+		var i int
+		if _, err := fmt.Sscanf(n.String(), "%d", &i); err == nil {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func toolKind(name string) acp.ToolKind {

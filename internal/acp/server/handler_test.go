@@ -613,3 +613,58 @@ func TestBackendPromptHandlerFallsBackWhenNativeApprovalFails(t *testing.T) {
 		t.Fatalf("expected text fallback, got %q", result.FinalText)
 	}
 }
+
+// ── toolCallTitle read_file enrichment ──────────────────────────────
+
+func TestToolCallTitleReadFile(t *testing.T) {
+	// path only (same as before).
+	title := toolCallTitle("read_file", map[string]interface{}{
+		"path": "/foo/bar.go",
+	})
+	if !strings.Contains(title, "read_file:") || !strings.Contains(title, "/foo/bar.go") {
+		t.Fatalf("expected read_file with path, got %q", title)
+	}
+
+	// With offset only.
+	title = toolCallTitle("read_file", map[string]interface{}{
+		"path":   "/foo/bar.go",
+		"offset": float64(100),
+	})
+	if !strings.Contains(title, "from line 100") {
+		t.Fatalf("expected offset note, got %q", title)
+	}
+
+	// offset=1 hidden.
+	title = toolCallTitle("read_file", map[string]interface{}{
+		"path":   "/foo/bar.go",
+		"offset": float64(1),
+	})
+	if strings.Contains(title, "from line") {
+		t.Fatalf("offset=1 should be hidden, got %q", title)
+	}
+
+	// offset + limit → IDE-style range.
+	title = toolCallTitle("read_file", map[string]interface{}{
+		"path":   "/foo/bar.go",
+		"offset": float64(2030),
+		"limit":  float64(120),
+	})
+	if !strings.Contains(title, "2030-2149") {
+		t.Fatalf("expected IDE range, got %q", title)
+	}
+
+	// Other tools unchanged.
+	title = toolCallTitle("bash", map[string]interface{}{
+		"command": "ls -la",
+	})
+	if !strings.Contains(title, "bash: ls -la") {
+		t.Fatalf("bash should still show command, got %q", title)
+	}
+
+	title = toolCallTitle("write_file", map[string]interface{}{
+		"path": "/foo.txt",
+	})
+	if !strings.Contains(title, "write_file: /foo.txt") {
+		t.Fatalf("write_file should still show path only, got %q", title)
+	}
+}

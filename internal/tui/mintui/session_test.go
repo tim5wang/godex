@@ -915,3 +915,162 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// ── read_file logging helpers ──────────────────────────────────────
+
+// TestCountReadOutputLines verifies the line-counting helper used
+// by renderToolCallFinished to show "✓ N lines" for read_file.
+func TestCountReadOutputLines(t *testing.T) {
+	// Standard read_file output with line numbers.
+	output := "     1\tpackage main\n     2\t\n     3\tfunc Hello() {}\n"
+	if n := countReadOutputLines(output); n != 3 {
+		t.Fatalf("expected 3 lines, got %d", n)
+	}
+
+	// With truncation marker.
+	output += "... (truncated: showing 3 of 200 lines)"
+	if n := countReadOutputLines(output); n != 3 {
+		t.Fatalf("truncation marker should not count, got %d", n)
+	}
+
+	// Empty output.
+	if n := countReadOutputLines(""); n != 0 {
+		t.Fatalf("empty should be 0, got %d", n)
+	}
+
+	// Only truncation marker.
+	if n := countReadOutputLines("... (truncated: 0 of 100 lines)"); n != 0 {
+		t.Fatalf("only truncation marker should be 0, got %d", n)
+	}
+}
+
+// TestNumFromAny verifies integer extraction from various JSON/Go types.
+func TestNumFromAny(t *testing.T) {
+	tests := []struct {
+		v    interface{}
+		want int
+		ok   bool
+	}{
+		{int(42), 42, true},
+		{int64(99), 99, true},
+		{float64(2014), 2014, true},
+		{float64(3.7), 3, true}, // truncated
+		{float64(0), 0, true},
+		{"not a number", 0, false},
+		{nil, 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := numFromAny(tt.v)
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("numFromAny(%v) = (%d, %v), want (%d, %v)", tt.v, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+// TestReadFileInputSummary verifies the IDE-style path:line-range
+// summary format for read_file tool input.
+func TestReadFileInputSummary(t *testing.T) {
+	// Path only (no offset/limit).
+	s := readFileInputSummary(map[string]interface{}{
+		"path": "/foo/bar.go",
+	})
+	if s != "/foo/bar.go" {
+		t.Fatalf("expected plain path, got %q", s)
+	}
+
+	// With offset > 1 only.
+	s = readFileInputSummary(map[string]interface{}{
+		"path":   "/foo/bar.go",
+		"offset": float64(100),
+	})
+	if !strings.Contains(s, "/foo/bar.go") || !strings.Contains(s, "from line 100") {
+		t.Fatalf("expected path and offset note, got %q", s)
+	}
+
+	// offset=1 should be hidden (default).
+	s = readFileInputSummary(map[string]interface{}{
+		"path":   "/foo/bar.go",
+		"offset": float64(1),
+	})
+	if strings.Contains(s, "from line") {
+		t.Fatalf("offset=1 should be hidden, got %q", s)
+	}
+
+	// limit=0 (no range computed).
+	s = readFileInputSummary(map[string]interface{}{
+		"path":  "/foo/bar.go",
+		"limit": float64(0),
+	})
+	if strings.Contains(s, ":") {
+		t.Fatalf("limit=0 should not produce a range, got %q", s)
+	}
+
+	// offset + limit → IDE-style range.
+	s = readFileInputSummary(map[string]interface{}{
+		"path":   "/foo/bar.go",
+		"offset": float64(2030),
+		"limit":  float64(120),
+	})
+	if s != "/foo/bar.go:2030-2149" {
+		t.Fatalf("expected IDE range, got %q", s)
+	}
+}
+
+// TestRenderToolCallFinishedReadFileLineCount verifies that
+// renderToolCallFinished emits "✓ N lines" for read_file based
+// on the actual line-numbered output, and still shows the
+// preview code block. Other tools still show the first output line.
+func TestRenderToolCallFinishedReadFileLineCount(t *testing.T) {
+	b := newFakeBackend()
+	tui := &capturingTUI{}
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"}, b, &strings.Builder{}, &strings.Builder{})
+	s.tui = tui
+
+	// read_file: should show "✓ 3 lines" plus the preview code block.
+	readOutput := "     1\tpackage main\n     2\t\n     3\tfunc Hello() {}\n"
+	s.renderToolCallFinished(events.Event{
+		Type: events.EventToolCallFinished,
+		Payload: events.ToolCallPayload{
+			Name:   "read_file",
+			Output: readOutput,
+			Input:  map[string]interface{}{"path": "/foo.go"},
+		},
+	})
+	out := tui.buf.String()
+	if !strings.Contains(out, "✓ 3 lines") {
+		t.Fatalf("read_file should emit \"✓ 3 lines\", got:\n%s", out)
+	}
+	if !strings.Contains(out, "```") {
+		t.Fatalf("read_file should still emit preview code block, got:\n%s", out)
+	}
+
+	// read_file with a truncation marker: line count should exclude the marker.
+	tui.buf.Reset()
+	s.renderToolCallFinished(events.Event{
+		Type: events.EventToolCallFinished,
+		Payload: events.ToolCallPayload{
+			Name:   "read_file",
+			Output: "     1\ta\n     2\tb\n... (truncated: 2 of 100 lines)\n",
+			Input:  map[string]interface{}{"path": "/bar.go"},
+		},
+	})
+	out = tui.buf.String()
+	if !strings.Contains(out, "✓ 2 lines") {
+		t.Fatalf("read_file with truncation marker should emit \"✓ 2 lines\", got:\n%s", out)
+	}
+
+	// bash: should still show first line of output
+	tui.buf.Reset()
+	s.renderToolCallFinished(events.Event{
+		Type: events.EventToolCallFinished,
+		Payload: events.ToolCallPayload{
+			Name:   "bash",
+			Output: "hello\nworld\n",
+			Input:  map[string]interface{}{"command": "echo hello"},
+		},
+	})
+	out = tui.buf.String()
+	if !strings.Contains(out, "✓ hello") {
+		t.Fatalf("bash should show first output line, got:\n%s", out)
+	}
+}

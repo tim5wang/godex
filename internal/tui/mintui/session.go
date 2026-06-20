@@ -1083,11 +1083,11 @@ func (s *Session) renderToolCallStarted(event events.Event) {
 		return
 	}
 	inputSummary := extractToolInputSummary(event)
-	lines := []string{"> ▶ " + name}
+	line := "> ▶ " + name
 	if inputSummary != "" {
-		lines = append(lines, ">   "+inputSummary)
+		line += " " + inputSummary
 	}
-	s.tui.WriteString(strings.Join(lines, "\n") + "\n")
+	s.tui.WriteString(line + "\n")
 }
 
 // renderToolCallFinished appends a status line (✓ / ✗) to
@@ -1112,9 +1112,16 @@ func (s *Session) renderToolCallFinished(event events.Event) {
 	case errText != "":
 		s.tui.WriteString(">   ✗ " + errText + "\n")
 	case output != "":
-		// Show a condensed output (first line, capped).
-		summary := firstLine(output, 200)
-		s.tui.WriteString(">   ✓ " + summary + "\n")
+		if isReadTool(name) {
+			// read_file already shows path:range in the start line;
+			// emit "✓ N lines" so the user sees the actual read
+			// amount next to the preview code block.
+			s.tui.WriteString(fmt.Sprintf(">   ✓ %d lines\n", countReadOutputLines(output)))
+		} else {
+			// Show a condensed output (first line, capped).
+			summary := firstLine(output, 200)
+			s.tui.WriteString(">   ✓ " + summary + "\n")
+		}
 	default:
 		if name == "" {
 			s.tui.WriteString(">   ✓ done\n")
@@ -2026,6 +2033,10 @@ func extractToolInputSummary(event events.Event) string {
 	if len(input) == 0 {
 		return ""
 	}
+	// read_file gets a richer summary: path + offset + limit.
+	if extractToolName(event) == "read_file" {
+		return readFileInputSummary(input)
+	}
 	// Pick the first meaningful string value as a preview.
 	for _, key := range []string{"command", "path", "pattern", "url", "content", "query"} {
 		if v, ok := input[key]; ok {
@@ -2036,6 +2047,60 @@ func extractToolInputSummary(event events.Event) string {
 		}
 	}
 	return ""
+}
+
+// readFileInputSummary formats the read_file input as an IDE-style
+// path:line-range. When offset > 1 or limit > 0 the range is appended;
+// otherwise only the path is shown.
+func readFileInputSummary(input map[string]interface{}) string {
+	path, _ := input["path"].(string)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	off, hasOff := numFromAny(input["offset"])
+	lim, hasLim := numFromAny(input["limit"])
+	if hasOff && hasLim && lim > 0 {
+		end := off + lim - 1
+		return fmt.Sprintf("%s:%d-%d", ellipsizeMint(path, 80), off, end)
+	}
+	if hasOff && off > 1 {
+		return fmt.Sprintf("%s (from line %d)", ellipsizeMint(path, 80), off)
+	}
+	return ellipsizeMint(path, 80)
+}
+
+// numFromAny extracts an integer from an interface{} value that may
+// be int, int64, float64 (JSON), or json.Number.
+func numFromAny(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case fmt.Stringer:
+		var i int
+		if _, err := fmt.Sscanf(n.String(), "%d", &i); err == nil {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// countReadOutputLines returns the number of content lines in a
+// read_file Output, excluding the truncation marker line.
+func countReadOutputLines(output string) int {
+	n := 0
+	for _, line := range strings.Split(output, "\n") {
+		l := strings.TrimRight(line, "\r")
+		if l == "" || strings.Contains(l, readFileTruncationMarker) {
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // extractToolOutputError returns the output and error fields from a

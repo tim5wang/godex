@@ -2153,3 +2153,145 @@ func TestLongTaskSweepStaleRunsMarksInterrupted(t *testing.T) {
 		t.Fatalf("expected status=interrupted, got %+v", records)
 	}
 }
+
+// TestLongTaskArgsJSONRoundTripFromEvals pins the JSON contract that
+// examples/evals/build_swebench_frozen.py + run_bench.sh emit and
+// godex longtask create --file consumes. If this test breaks, either
+// the Python script's field names drifted from the Go struct tags, or
+// the LongTaskArgs schema changed in a way that breaks the frozen
+// sweep's ability to feed godex.
+func TestLongTaskArgsJSONRoundTripFromEvals(t *testing.T) {
+	// The literal JSON below mirrors what build_swebench_frozen.py +
+	// run_bench.sh concatenate into a spec file. Keep the field names
+	// in sync with agent.LongTaskArgs / longTaskStoryInput tags.
+	raw := []byte(`{
+		"longtask_id": "swebench-frozen-v1",
+		"workflow_id": "swebench-frozen-v1",
+		"project":     "swebench-frozen",
+		"branch_name": "swebench/eval-frozen-v1",
+		"description": "Regression sweep over the frozen SWE-bench subset (3 instances).",
+		"quality_checks": [],
+		"validation_timeout_ms": 60000,
+		"merge_policy":  "review_only",
+		"commit_policy": "none",
+		"stories": [
+			{
+				"id": "django__django-1",
+				"title": "django__django-1 (django/django)",
+				"description": "Fix ORM.\nRepo: django/django\nBase commit: abc123\n\nTests: tests/test_orm.py::test_filter",
+				"acceptance_criteria": ["tests/test_orm.py::test_filter"],
+				"priority": 1,
+				"agent_type": "general-purpose"
+			},
+			{
+				"id": "requests__x-1",
+				"title": "requests__x-1 (psf/requests)",
+				"description": "Add HTTP/3.\nRepo: psf/requests\nBase commit: def456",
+				"acceptance_criteria": [],
+				"priority": 2,
+				"agent_type": "general-purpose"
+			}
+		]
+	}`)
+	var args LongTaskArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		t.Fatalf("unmarshal evals spec: %v", err)
+	}
+	if args.LongTaskID != "swebench-frozen-v1" || args.WorkflowID != "swebench-frozen-v1" {
+		t.Fatalf("id fields lost: %+v", args)
+	}
+	if args.MergePolicy != "review_only" || args.CommitPolicy != "none" {
+		t.Fatalf("policies lost: %+v", args)
+	}
+	if args.ValidationTimeoutMS != 60000 {
+		t.Fatalf("validation timeout lost: %+v", args)
+	}
+	if len(args.Stories) != 2 {
+		t.Fatalf("expected 2 stories, got %d", len(args.Stories))
+	}
+	if args.Stories[0].ID != "django__django-1" {
+		t.Fatalf("first story id lost: %+v", args.Stories[0])
+	}
+	if args.Stories[0].Priority != 1 || args.Stories[1].Priority != 2 {
+		t.Fatalf("priority lost: %+v", args.Stories)
+	}
+	if len(args.Stories[0].AcceptanceCriteria) != 1 ||
+		args.Stories[0].AcceptanceCriteria[0] != "tests/test_orm.py::test_filter" {
+		t.Fatalf("acceptance criteria lost: %+v", args.Stories[0].AcceptanceCriteria)
+	}
+	// Re-marshal and confirm the wire format stays stable.
+	out, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var roundtripped LongTaskArgs
+	if err := json.Unmarshal(out, &roundtripped); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if roundtripped.LongTaskID != args.LongTaskID ||
+		len(roundtripped.Stories) != len(args.Stories) {
+		t.Fatalf("roundtrip diverged: %+v vs %+v", roundtripped, args)
+	}
+}
+
+// TestLongTaskViewJSONShapeForEvalsScore pins the JSON contract that
+// examples/evals/score.py and diff_pi_godex.py read. The script's
+// logic keys off the `id`, `verdict`, `passes` fields per story, plus
+// the `total` count at the top level. If this test breaks, either
+// LongTaskView's field tags drift, or the eval scripts need a follow-up.
+func TestLongTaskViewJSONShapeForEvalsScore(t *testing.T) {
+	// Literal JSON shaped exactly like what run_pi_bench.sh writes
+	// (per-story record) and what run_bench.sh produces from
+	// `godex longtask run <id>`. The two paths must stay shape-
+	// compatible so diff_pi_godex.py can compare them.
+	raw := []byte(`{
+		"longtask_id": "pi-v1.0",
+		"workflow_id": "pi-v1.0",
+		"total": 3,
+		"pending": 0,
+		"running": 0,
+		"completed": 3,
+		"failed": 0,
+		"stories": [
+			{"id":"django__django-1","status":"completed","verdict":"pass","passes":true,"result_preview":"...","error":""},
+			{"id":"requests__x-1","status":"completed","verdict":"pass","passes":true,"result_preview":"...","error":""},
+			{"id":"pytest__x-1","status":"completed","verdict":"fail","passes":false,"result_preview":"...","error":"verdict=fail rc=0"}
+		]
+	}`)
+	var view LongTaskView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		t.Fatalf("unmarshal LongTaskView from evals result.json: %v", err)
+	}
+	if view.Total != 3 {
+		t.Fatalf("total lost: %+v", view)
+	}
+	if len(view.Stories) != 3 {
+		t.Fatalf("expected 3 stories, got %d", len(view.Stories))
+	}
+	wantIDs := []string{"django__django-1", "requests__x-1", "pytest__x-1"}
+	for i, want := range wantIDs {
+		if view.Stories[i].ID != want {
+			t.Fatalf("story[%d] id mismatch: got %q want %q", i, view.Stories[i].ID, want)
+		}
+	}
+	if !view.Stories[0].Passes {
+		t.Fatalf("first story should pass: %+v", view.Stories[0])
+	}
+	if view.Stories[2].Passes {
+		t.Fatalf("third story should fail: %+v", view.Stories[2])
+	}
+	// Round-trip: the output of run_pi_bench.sh is read by score.py,
+	// which only reads id/verdict/passes; re-marshal and confirm the
+	// shape survives.
+	out, err := json.Marshal(view)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var roundtripped LongTaskView
+	if err := json.Unmarshal(out, &roundtripped); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if roundtripped.Total != view.Total || len(roundtripped.Stories) != len(view.Stories) {
+		t.Fatalf("roundtrip diverged: %+v vs %+v", roundtripped, view)
+	}
+}

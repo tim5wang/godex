@@ -15,7 +15,7 @@ require (
 	github.com/openai/openai-go/v3 v3.31.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/tim5wang/min-tui v0.5.6
+	github.com/tim5wang/min-tui v0.5.10
 	github.com/xuri/excelize/v2 v2.10.0
 	github.com/ysmood/gson v0.7.3
 	golang.org/x/net v0.46.0

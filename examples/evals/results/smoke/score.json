@@ -1,0 +1,17 @@
+{
+  "total": 1,
+  "passed": 0,
+  "missing": 0,
+  "resolve_rate": 0.0,
+  "verdicts": {
+    "fail": 1
+  },
+  "per_instance": [
+    {
+      "id": "django__django-10087",
+      "status": "error",
+      "verdict": "fail",
+      "passes": false
+    }
+  ]
+}

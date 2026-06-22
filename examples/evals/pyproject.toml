@@ -1,0 +1,43 @@
+[project]
+name = "godex-evals"
+version = "0.1.0"
+description = "SWE-bench frozen-subset regression sweep for godex, with optional pi baseline comparison."
+readme = "README_swebench.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "GoDex Maintainers" },
+]
+# Default deps are stdlib-only on purpose. The heavy `datasets`
+# dependency only matters for `build_swebench_frozen.py`, which runs
+# once per frozen-set refresh, not on every iteration. Install it
+# only when you need to (re)generate swebench-frozen.jsonl.
+dependencies = []
+
+[project.optional-dependencies]
+# Pulls in the Hugging Face `datasets` library (~hundreds of MB) for
+# `build_swebench_frozen.py`. Install with:
+#   uv sync --extra frozen
+#   uv run --with datasets python build_swebench_frozen.py --out swebench-frozen.jsonl
+frozen = [
+    "datasets>=2.14,<4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# The .py files are run as scripts; we don't ship a package.
+packages = []
+
+[tool.uv]
+# Don't create a virtualenv automatically in this directory — the
+# scripts are designed to be invoked via `uv run` from the existing
+# repo-level environment when one exists. Set to "always" if you want
+# a dedicated venv for evals.
+managed = false
+
+[tool.uv.sources]
+# Intentionally empty; nothing here yet. Add git/path sources here
+# if the evals ever depend on a local godex checkout as a library.

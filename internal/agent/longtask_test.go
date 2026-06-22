@@ -2295,3 +2295,68 @@ func TestLongTaskViewJSONShapeForEvalsScore(t *testing.T) {
 		t.Fatalf("roundtrip diverged: %+v vs %+v", roundtripped, view)
 	}
 }
+
+// TestLongTaskStoryWriteScopeRoundTripFromEvals pins the Option A
+// pre-clone contract: the JSON that build_swebench_frozen.py emits
+// carries `working_directory` and `write_scope` on every story, and
+// these fields are not silently dropped when the spec is parsed by
+// `godex longtask create --file`.
+//
+// Why this matters: godex's narrowSubagentWriteTools strips
+// bash/write_file/edit_file from any subagent whose WriteScope is
+// empty. If the field is dropped during JSON parsing, the subagent
+// will report "I have no shell access" and every story returns
+// Verdict: blocked, making the frozen sweep useless. The test below
+// guarantees the two new fields survive the round-trip.
+func TestLongTaskStoryWriteScopeRoundTripFromEvals(t *testing.T) {
+	raw := []byte(`{
+		"longtask_id": "swebench-frozen-v1",
+		"workflow_id": "swebench-frozen-v1",
+		"project":     "swebench-frozen",
+		"branch_name": "swebench/eval-frozen-v1",
+		"description": "Pre-clone enabled sweep.",
+		"quality_checks": [],
+		"validation_timeout_ms": 60000,
+		"merge_policy":  "review_only",
+		"commit_policy": "none",
+		"stories": [
+			{
+				"id": "django__django-10087",
+				"title": "django__django-10087",
+				"description": "Working directory: /tmp/ws/repos/django__django-10087",
+				"acceptance_criteria": ["tests/foo.py::test_x"],
+				"priority": 1,
+				"agent_type": "general-purpose",
+				"working_directory": "repos/django__django-10087",
+				"write_scope": ["repos/django__django-10087"]
+			}
+		]
+	}`)
+	var args LongTaskArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(args.Stories) != 1 {
+		t.Fatalf("expected 1 story, got %d", len(args.Stories))
+	}
+	story := args.Stories[0]
+	if len(story.WriteScope) != 1 || story.WriteScope[0] != "repos/django__django-10087" {
+		t.Fatalf("write_scope lost: got %#v", story.WriteScope)
+	}
+	// working_directory is also present in the JSON (run_bench.sh
+	// reads it during pre-clone), but godex itself does not need to
+	// parse it — the value is only consumed by the runner. We assert
+	// via the raw JSON to lock the run-script contract.
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	storyRaw := []byte(rawMap["stories"])
+	var storiesRaw []map[string]json.RawMessage
+	if err := json.Unmarshal(storyRaw, &storiesRaw); err != nil {
+		t.Fatalf("re-parse stories: %v", err)
+	}
+	if _, ok := storiesRaw[0]["working_directory"]; !ok {
+		t.Fatalf("working_directory missing from raw JSON: %s", storyRaw)
+	}
+}

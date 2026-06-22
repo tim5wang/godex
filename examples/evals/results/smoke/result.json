@@ -1,0 +1,89 @@
+{
+  "longtask_id": "swebench-smoke",
+  "workflow_id": "swebench-smoke",
+  "project": "swebench-frozen",
+  "branch_name": "swebench/eval-smoke",
+  "description": "Regression sweep over the frozen SWE-bench subset (1 instances).",
+  "status": "error",
+  "total": 1,
+  "pending": 0,
+  "running": 0,
+  "completed": 0,
+  "failed": 1,
+  "stories": [
+    {
+      "id": "django__django-10087",
+      "node_id": "django__django-10087",
+      "title": "django__django-10087 (django/django)",
+      "description": "Misleading sqlmigrate \"App 'apps.somethings' does not have migrations.\" error message\nDescription\n\t\nThis ticket is very similar to https://code.djangoproject.com/ticket/29506\nAs shown above, validation should be added sqlmigrate.\n\nWorking directory: /Users/taiwu.wang/Documents/leader_agent/godex/examples/evals/.swebench-ws/repos/django__django-10087\nRepo: django/django\nBase commit: 02cd16a7a04529c726e5bb5a13d5979119f25c7d\nVersion: 2.2\nEnvironment setup commit: 4fc35a9c3efdc9154efce28cb23cb84f8834517e\n\nTests that must pass after your fix:\n  - --squashed-name specifies the new migration's name.",
+      "acceptance_criteria": [
+        "--squashed-name specifies the new migration's name."
+      ],
+      "priority": 1,
+      "status": "error",
+      "passes": false,
+      "verdict": "fail",
+      "job_id": "subagent_1782031258993549000",
+      "handoff_ref": "handoffs/django__django-10087/1.json",
+      "error": "API error: 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)\"},\"request_id\":\"0686d69e86a415d3541a2bad05ed732c\"}",
+      "validation_ref": "validations/django__django-10087/1.json",
+      "updated_at": "2026-06-21T08:41:02.128158Z"
+    }
+  ],
+  "workflow": {
+    "workflow_id": "swebench-smoke",
+    "status": "error",
+    "total": 1,
+    "pending": 0,
+    "running": 0,
+    "completed": 0,
+    "failed": 1,
+    "nodes": [
+      {
+        "id": "django__django-10087",
+        "identity_id": "subagent_local-5b3ac961fa42dbf3_18bb0bfd",
+        "agent_identity": {
+          "id": "subagent_local-5b3ac961fa42dbf3_18bb0bfd",
+          "name": "general-purpose",
+          "kind": "subagent",
+          "role": "general-purpose",
+          "session_id": "local-5b3ac961fa42dbf3",
+          "source": "durable_subagent",
+          "created_at": "2026-06-21T08:40:58.993549Z",
+          "updated_at": "2026-06-21T08:40:58.993549Z",
+          "budget_hint": "max_turns:45"
+        },
+        "kind": "story",
+        "title": "django__django-10087 (django/django)",
+        "handoff_policy": "summary",
+        "handoff_max_bytes": 8000,
+        "preview_merge": true,
+        "status": "error",
+        "agent_type": "general-purpose",
+        "write_scope": [
+          "repos/django__django-10087"
+        ],
+        "job_id": "subagent_1782031258993549000",
+        "attempt": 1,
+        "handoff_ref": "handoffs/django__django-10087/1.json",
+        "handoff_digest": "aa72dbb84f759754e201118dc80d2ec8ee437a21536ce894e92b913f77501efa",
+        "verdict": "fail",
+        "error": "API error: 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)\"},\"request_id\":\"0686d69e86a415d3541a2bad05ed732c\"}",
+        "created_at": "2026-06-21T08:40:57.951972Z",
+        "updated_at": "2026-06-21T08:41:02.128158Z",
+        "finished_at": "2026-06-21T08:41:02.128158Z"
+      }
+    ]
+  },
+  "run": {
+    "status": "blocked",
+    "iterations": 2,
+    "max_iterations": 10,
+    "started": [
+      "django__django-10087"
+    ],
+    "blocked_by": "django__django-10087",
+    "message": "API error: 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)\"},\"request_id\":\"0686d69e86a415d3541a2bad05ed732c\"}",
+    "updated_at": "2026-06-21T08:41:02.130556Z"
+  }
+}

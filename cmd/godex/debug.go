@@ -6,13 +6,11 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -95,23 +93,6 @@ func writeGoroutineDump(dir string, pid int) (string, error) {
 	return path, nil
 }
 
-// installSignalDumpHandlers registers handlers that, on SIGQUIT, write
-// a clean goroutine dump to a file in the configured directory. On
-// SIGUSR1 the heap is dumped the same way (using debug.WriteHeapDump).
-//
-// The default dump directory is os.TempDir()/godex-dumps when
-// f.DumpDir is empty; we resolve it once here so the handler closure
-// does not re-stat on every signal.
-func installSignalDumpHandlers(f debugFlags) {
-	dir := f.DumpDir
-	if strings.TrimSpace(dir) == "" {
-		dir = defaultDumpDir(os.TempDir(), os.Getpid())
-	}
-	pid := os.Getpid()
-	signalDumpOnce(func() (string, error) { return writeGoroutineDump(dir, pid) })
-	signalHeapOnce(f.HeapDumpPath)
-}
-
 // startPprofServer binds the net/http/pprof handler tree to addr. The
 // pprof import registers handlers on http.DefaultServeMux, so we
 // simply start a server. An empty addr is a no-op so the main routine
@@ -141,50 +122,6 @@ func startPprofServer(addr string) error {
 
 // pidString is a tiny helper for log lines.
 func pidString() string { return strconv.Itoa(os.Getpid()) }
-
-// signalDumpOnce registers a SIGQUIT handler that, on every receipt,
-// invokes fn and prints the resulting file path to stderr. We use a
-// channel handler so the same handler can be installed from main() and
-// safely uninstalled if the program shuts down.
-func signalDumpOnce(fn func() (string, error)) {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGQUIT)
-	go func() {
-		for range ch {
-			path, err := fn()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "godex: dump failed: %v\n", err)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "godex: goroutine dump written to %s\n", path)
-		}
-	}()
-}
-
-// signalHeapOnce installs a SIGUSR1 handler that calls debug.WriteHeapDump.
-// A pre-set path triggers a one-shot dump at startup instead.
-func signalHeapOnce(preSetPath string) {
-	if strings.TrimSpace(preSetPath) != "" {
-		if err := writeHeapDumpTo(preSetPath); err != nil {
-			fmt.Fprintf(os.Stderr, "godex: heap dump failed: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "godex: heap dump written to %s\n", preSetPath)
-		}
-		return
-	}
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGUSR1)
-	go func() {
-		for range ch {
-			path := filepath.Join(os.TempDir(), fmt.Sprintf("godex-heap-%d-%d.out", os.Getpid(), time.Now().Unix()))
-			if err := writeHeapDumpTo(path); err != nil {
-				fmt.Fprintf(os.Stderr, "godex: heap dump failed: %v\n", err)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "godex: heap dump written to %s\n", path)
-		}
-	}()
-}
 
 // writeHeapDumpTo triggers a heap dump at the given path. It is split
 // out so tests can drive a deterministic path and so signal handlers

@@ -27,19 +27,21 @@ GoDex 面向需要把 AI Agent 真正接入日常工程工作流的团队和个�
 ## 核心特性
 
 - **共享 Session Runtime**：CLI、TUI、Web、HTTP API、IM channel 共用 session、timeline、attachment、permission 和 memory。
-- **Web 工作台**：Chat、Automation、Nodes、Notes、Skills、Memory、Settings、Context & Recall、审批面板和 subagent 管理。
+- **Web 工作台**：可拖拽多面板网格布局（2×2 / 3×3），Chat、Terminal、Files、Automation、Nodes、Notes、Skills、Memory、Settings、审批面板和 subagent 管理，支持移动端自适应。
 - **多 Provider 管理**：支持 Anthropic-compatible、OpenAI-compatible、OpenAI Codex provider、模型策略和 Web Settings 动态配置。
 - **长任务韧性**：Ralph-style LongTask story loop、auto-repair、validation artifact、auto merge/commit、runner phase checkpoint、运行中 follow-up/steer。
 - **Context 与 Memory**：带 pinned continuation snapshot 的模型辅助压缩、rule-based fallback、transcript archive、history_search、durable memory、candidate inbox、audit/restore、紧凑 memory 注入和 token 估算。
 - **Agent Profile**：CLI/TUI/ACP 默认走精简 `coding` profile，Web/IM 默认保留 `general` profile；可按入口或命令覆盖工具曝光策略。
-- **工具与安全**：WorkspaceFS 文件边界、shell guard、manual/review/yolo approval、安全 profile、security audit。
+- **工具与安全**：merge、grep（ripgrep 双后端）、edit_file 多编辑、WorkspaceFS 文件边界、shell guard、manual/review/yolo approval、安全 profile、security audit。
 - **Subagent / Workflow**：durable subagent job、review/merge/cancel/resume、LongTask Web/CLI/API surface、能力边界、隔离 workspace 策略和 compact handoff。
 - **Package / Skill 生态**：package manifest、role/command contract、tool policy、quality diagnostics、smoke run、reinstall tracking、Claude Code import。
 - **Automation 与 Channel**：Cron、Heartbeat、Feishu、Weixin、OpenAI-compatible chat completions API；IM 审批消息会展示 tool 和关键参数摘要。
 - **Control Plane 基础**：轻量 Node Registry 和只读 Nodes Dashboard，用于观测多个 GoDex runtime。
 - **Notes 工作台**：本地 Markdown 笔记、搜索/标签、Chat 中保存 Agent 输出到笔记。
 - **空间治理**：storage doctor、browser cache/session checkpoint/artifact/subagent GC。
-- **单二进制 Web UI**：Web dist 可嵌入 Go binary，部署时无需单独托管前端资源。
+- **终端**：Go PTY 原生后端 + xterm.js 前端，提供真实 Shell 体验。
+- **性能**：Anthropic 风格 cache_control 断点、prompt 缓存、compaction 优化。
+- **单二进制 Web UI**：Web dist 嵌入 Go binary，全平台（Linux/macOS/Windows）单文件部署。
 
 ## 快速开始
 
@@ -180,7 +182,7 @@ GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的
 - [项目结构](docs/project-structure.md)：目录职责和重构边界。
 - [Memory 设计原则](docs/memory-design-principles.md)：长期记忆、候选、召回和审计设计。
 - [Workflow Runtime](docs/workflow-runtime.md)：workflow/subagent runtime 设计。
-- [TUI Bubble Tea 设计](docs/tui-bubbletea-design.md)：统一多入口交互与 TUI 设计方案。
+- [TUI 设计](docs/tui-bubbletea-design.md)：MintUI 全屏前端与多入口交互设计。
 - [自部署指南](docs/self-deploy.md)：部署到服务器和自管理运行。
 - [能力增强 v2](docs/capability-enhancement-v2.md)：App Shell、Node Registry、Notes、Claude import 等阶段性方案和进展。
 - [P0-P6 端到端验证](docs/p0-p6-e2e-validation.md)：手工验收清单。

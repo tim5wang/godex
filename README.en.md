@@ -27,19 +27,21 @@ Good fits include:
 ## Core Features
 
 - **Shared Session Runtime**: CLI, TUI, Web, HTTP API, and IM channels share sessions, timelines, attachments, permissions, and memory.
-- **Web Workspace**: Chat, Automation, Nodes, Notes, Skills, Memory, Settings, Context & Recall, approval panels, and subagent management.
+- **Web Workspace**: Draggable multi-panel grid layout (2×2 / 3×3), Chat, Terminal, Files, Automation, Nodes, Notes, Skills, Memory, Settings, approval panels, and subagent management — fully mobile-adaptive.
 - **Multi-provider Management**: Anthropic-compatible providers, OpenAI-compatible providers, the OpenAI Codex provider, model policies, and dynamic Web Settings configuration.
 - **Resilient Long Tasks**: Ralph-style LongTask story loop, auto-repair, validation artifacts, auto merge/commit, runner phase checkpoints, and in-flight follow-up/steering.
 - **Context and Memory**: Model-assisted compression with pinned continuation snapshots, rule-based fallback, transcript archive, `history_search`, durable memory, candidate inbox, audit/restore, compact memory injection, and token estimation.
 - **Agent Profile**: CLI/TUI/ACP default to the focused `coding` profile, while Web/IM default to the broader `general` profile; tool exposure can be overridden per entry point or command.
-- **Tools and Safety**: WorkspaceFS file boundaries, shell guard, manual/review/yolo approval modes, security profiles, and security audit.
+- **Tools and Safety**: merge, grep (ripgrep dual-backend), edit_file multi-edit, WorkspaceFS file boundaries, shell guard, manual/review/yolo approval modes, security profiles, and security audit.
 - **Subagent and Workflow**: Durable subagent jobs, review/merge/cancel/resume, LongTask surfaces for Web/CLI/API, capability boundaries, isolated workspace strategies, and compact handoff.
 - **Package and Skill Ecosystem**: Package manifests, role/command contracts, tool policies, quality diagnostics, smoke runs, reinstall tracking, and Claude Code import.
 - **Automation and Channels**: Cron, Heartbeat, Feishu, Weixin, and OpenAI-compatible chat completions API; IM approval messages show the tool and key parameter summary.
 - **Control Plane Foundation**: Lightweight Node Registry and read-only Nodes Dashboard for observing multiple GoDex runtimes.
 - **Notes Workspace**: Local Markdown notes, search/tags, and saving agent output from Chat into notes.
 - **Storage Governance**: Storage doctor plus browser cache, session checkpoint, artifact, and subagent garbage collection.
-- **Single-binary Web UI**: The Web dist can be embedded into the Go binary, so deployment does not require separately hosted frontend assets.
+- **Terminal**: Real Go PTY backend + xterm.js frontend for a native shell experience.
+- **Performance**: Anthropic-style cache_control breakpoints, prompt caching, and compaction optimizations.
+- **Single-binary Web UI**: Web dist embedded in Go binary, cross-platform (Linux/macOS/Windows) single-file deployment.
 
 ## Quick Start
 

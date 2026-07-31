@@ -125,6 +125,7 @@ export interface ContextInspection {
   history_token_estimate?: number;
   total_token_estimate?: number;
   token_breakdown?: ContextTokenBreakdown;
+  prefix_cache?: PrefixCacheInspection;
   compress_threshold: number;
   suggest_compact: boolean;
   compression_reasons?: string[];
@@ -142,6 +143,15 @@ export interface ContextInspection {
 export interface ContextSourcePressure {
   source: string;
   tokens: number;
+}
+
+export interface PrefixCacheInspection {
+  system_hash?: string;
+  tool_schemas_hash?: string;
+  stable_prefix_hash?: string;
+  stable_system_tokens: number;
+  dynamic_runtime_tokens: number;
+  dynamic_section_tokens?: Record<string, number>;
 }
 
 export interface ContextTokenBreakdown {
@@ -1189,6 +1199,18 @@ export interface ProtocolMessage {
 
 export type FeedItemKind = "user" | "assistant" | "background" | "tool" | "todo" | "subagent" | "command" | "warning" | "error";
 
+export type FeedSegmentType = "text" | "tool" | "todo" | "subagent";
+
+/**
+ * A single ordered piece inside a grouped assistant turn. `text` segments carry
+ * markdown in `text`; other kinds reference the original FeedItem via `item`.
+ */
+export interface FeedSegment {
+  type: FeedSegmentType;
+  text?: string;
+  item?: FeedItem;
+}
+
 export interface SubagentProgressItem {
   timestamp?: string;
   phase?: string;
@@ -1256,6 +1278,16 @@ export interface FeedItem {
   lastIteration?: number;
   lastRecoveryHint?: string;
   progress?: SubagentProgressItem[];
+  /**
+   * V2 grouped rendering: ordered segments for a merged assistant turn.
+   * Only present on items produced by groupFeedItemsIntoTurns().
+   */
+  segments?: FeedSegment[];
+  /**
+   * V2 grouped rendering: the FINAL assistant text of the turn (the result),
+   * used by copy/save-to-note so only the answer is captured, not the process.
+   */
+  finalBody?: string;
 }
 
 export interface TodoFeedItem {

@@ -91,6 +91,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (current) {
             current.body += payload.text || "";
             current.summary = firstSummaryLine(current.body);
+            current.turnId = current.turnId ?? (event.turn_id || undefined);
           } else {
             overlayItems.push({
               id,
@@ -99,6 +100,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               body: payload.text || "",
               timestamp: event.timestamp,
               summary: firstSummaryLine(payload.text || ""),
+              turnId: event.turn_id || undefined,
             });
           }
           status = background ? "Background update received" : "Writing response…";
@@ -119,6 +121,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             input: payload.input,
             status: "running",
             expanded: false,
+            turnId: event.turn_id || undefined,
           });
           status = `Running tool ${payload.name || "tool"}`;
           break;
@@ -140,6 +143,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             error: payload.error,
             status: payload.error ? "failed" : "finished",
             expanded: false,
+            turnId: event.turn_id || undefined,
           });
           status = payload.error ? `Tool failed: ${payload.name || "tool"}` : `Finished tool ${payload.name || "tool"}`;
           break;
@@ -165,6 +169,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             status: "updated",
             todoItems,
             todoStats,
+            turnId: event.turn_id || undefined,
           });
           status = `Todo list ${todoStats.completed}/${todoStats.total} completed`;
           break;
@@ -351,6 +356,10 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
   messages.forEach((msg, messageIndex) => {
     const text = msg.metadata?.text ?? msg.content.filter((block) => block.type === "text").map((block) => block.text || "").join("");
     const attachments = msg.metadata?.attachments ?? [];
+    // Synthesize a turnId for assistant messages so their text + tool blocks
+    // group together in the V2 feed layout. History snapshots don't carry
+    // backend turn ids, so the message index is the grouping boundary.
+    const syntheticTurnId = msg.role === "assistant" ? `msg-${messageIndex}` : undefined;
     if (text.trim() || attachments.length > 0) {
       const kind = msg.role === "assistant" ? (msg.metadata?.kind === "background" ? "background" : "assistant") : "user";
       items.push({
@@ -361,6 +370,7 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
         timestamp: msg.metadata?.timestamp,
         attachments,
         summary: text.trim() ? firstSummaryLine(text) : attachmentSummary(attachments),
+        turnId: syntheticTurnId,
       });
     }
 
@@ -376,6 +386,7 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
           input: block.input,
           status: "running",
           expanded: expanded[toolSnapshotId(messageIndex, blockIndex, block)] ?? false,
+          turnId: syntheticTurnId,
         };
         items.push(item);
         if (block.id) {
@@ -404,6 +415,7 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
             output: block.content,
             status: "finished",
             expanded: expanded[`tool-result:${messageIndex}:${blockIndex}`] ?? false,
+            turnId: syntheticTurnId,
           });
         }
       }
@@ -460,6 +472,81 @@ function toolSnapshotId(messageIndex: number, blockIndex: number, block: Protoco
 
 function toolItemId(turnId: string, id: string | undefined, name: string) {
   return id ? `tool:${id}` : `tool:${turnId}:${name}`;
+}
+
+/**
+ * Group a flat chronological feed into per-turn items for the Chat V2 layout.
+ *
+ * Rules:
+ * - CONSECUTIVE assistant/background, tool and todo items merge into a single
+ *   assistant "turn" message whose `segments` preserve chronological order
+ *   (thinking text, tool calls, todo updates interleaved). The merge is based
+ *   on adjacency, not turnId, because a single logical turn can span several
+ *   assistant messages in history snapshots (thinking / tool-result / answer).
+ * - user, subagent, command, warning and error items always stay standalone
+ *   and close any open turn.
+ * - the group's `finalBody` holds the LAST assistant text (the result); copy
+ *   and save-to-note act only on it, not on the process.
+ *
+ * Pure: does not mutate its input items.
+ */
+export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
+  const result: FeedItem[] = [];
+  let openGroup: FeedItem | null = null;
+
+  const closeGroup = () => {
+    if (openGroup) {
+      result.push(openGroup);
+      openGroup = null;
+    }
+  };
+
+  for (const item of items) {
+    const mergeable = item.kind === "assistant" || item.kind === "background" || item.kind === "tool" || item.kind === "todo";
+
+    if (!mergeable) {
+      closeGroup();
+      result.push(item);
+      continue;
+    }
+
+    if (!openGroup) {
+      openGroup = {
+        id: item.turnId ? `turn:${item.turnId}` : `turn:group:${item.id}`,
+        sessionId: item.sessionId,
+        kind: "assistant",
+        title: "GoDex",
+        body: "",
+        timestamp: item.timestamp,
+        turnId: item.turnId,
+        segments: [],
+        finalBody: "",
+      };
+    }
+
+    const group = openGroup;
+    group.segments = group.segments ?? [];
+    if (item.kind === "assistant" || item.kind === "background") {
+      if (item.body.trim()) {
+        group.segments.push({ type: "text", text: item.body });
+        // Track the final result text (used for copy / save-to-note).
+        group.finalBody = item.body;
+        group.summary = firstSummaryLine(item.body);
+      }
+      group.timestamp = item.timestamp ?? group.timestamp;
+      if (item.attachments?.length) {
+        group.attachments = [...(group.attachments ?? []), ...item.attachments];
+      }
+    } else if (item.kind === "tool") {
+      group.segments.push({ type: "tool", item });
+      group.timestamp = item.timestamp ?? group.timestamp;
+    } else if (item.kind === "todo") {
+      group.segments.push({ type: "todo", item });
+      group.timestamp = item.timestamp ?? group.timestamp;
+    }
+  }
+  closeGroup();
+  return result;
 }
 
 function shortID(id: string) {

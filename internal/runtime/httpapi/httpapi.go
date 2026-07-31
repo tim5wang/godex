@@ -15,6 +15,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/llm"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
 	coreproviders "github.com/tim5wang/godex/internal/core/providers"
@@ -221,6 +222,49 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, status, result)
 	})))
+
+	mux.Handle("GET /providers/import/codex", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		imported, err := config.ImportCodexProviders("", "")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, imported)
+	})))
+	mux.Handle("POST /providers/import/codex", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		imported, err := config.ImportCodexProviders("", "")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		cfg := manager.Current()
+		merged := make(map[string]llm.ProviderConfig, len(cfg.LLMProviders)+len(imported))
+		for id, p := range cfg.LLMProviders {
+			merged[id] = p
+		}
+		added := 0
+		for _, p := range imported {
+			targetID := "codex-" + p.ProviderID
+			if _, exists := merged[targetID]; exists {
+				continue
+			}
+			merged[targetID] = p.ProviderConfig
+			added++
+		}
+		if added == 0 {
+			writeError(w, http.StatusConflict, fmt.Errorf("all providers already exist"))
+			return
+		}
+		if err := manager.UpdateProviders(merged); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"imported": added,
+			"providers": coreproviders.List(manager.Current()),
+		})
+	})))
+
 	mux.Handle("GET /channels", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if channels == nil {
 			writeJSON(w, http.StatusOK, rtchannels.StatusReport{GeneratedAt: time.Now(), Channels: nil})

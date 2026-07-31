@@ -4031,8 +4031,8 @@ func (m *Manager) writeConfigFile(file ConfigFile) error {
 }
 
 // UpdateProviders atomically replaces the full provider set in the stored
-// config and writes it to disk. It does not trigger live apply — callers
-// should invoke ReloadFromDisk or the applier separately if needed.
+// config, writes it to disk, and re-resolves the live runtime config so
+// that callers see the updated provider list immediately.
 func (m *Manager) UpdateProviders(providers map[string]llm.ProviderConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -4042,7 +4042,21 @@ func (m *Manager) UpdateProviders(providers map[string]llm.ProviderConfig) error
 	}
 	m.stored.API.Providers = cloned
 	m.revision++
-	return m.writeConfigFile(m.stored)
+	if err := m.writeConfigFile(m.stored); err != nil {
+		return err
+	}
+	// Re-resolve the live config so callers see the new providers immediately.
+	effective, err := m.effectiveConfigFile(m.stored)
+	if err != nil {
+		return err
+	}
+	nextCfg, nextOrigins, err := m.resolve(effective)
+	if err != nil {
+		return err
+	}
+	m.current = nextCfg
+	m.origins = nextOrigins
+	return nil
 }
 
 // ConfigFilePath returns the path of the configuration file managed by this config manager.

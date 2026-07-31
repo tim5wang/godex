@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useLayoutStore } from "../../store/layout";
@@ -9,12 +9,14 @@ import {
   Button,
   Card,
   Descriptions,
+  Divider,
   Drawer,
   Empty,
   Grid,
   Input,
   List,
   Popconfirm,
+  Popover,
   Progress,
   Segmented,
   Select,
@@ -24,10 +26,11 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { ApartmentOutlined, CheckOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EyeOutlined, FileTextOutlined, HistoryOutlined, MenuOutlined, PlayCircleOutlined, PlusOutlined, RedoOutlined, SafetyCertificateOutlined, StopOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EyeOutlined, FileTextOutlined, HistoryOutlined, MenuOutlined, PlayCircleOutlined, PlusOutlined, RedoOutlined, SafetyCertificateOutlined, StopOutlined, VerticalLeftOutlined, VerticalRightOutlined } from "@ant-design/icons";
 import { Conversations } from "@ant-design/x";
 import { Composer, type ComposerSubmission } from "../../components/Composer";
 import { MessageFeed } from "../../components/MessageFeed";
+import { MessageFeedV2 } from "../../components/MessageFeedV2";
 import { ResizeHandle } from "../../components/ResizeHandle";
 import { SubagentCard } from "../../components/SubagentCard";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
@@ -97,9 +100,14 @@ import type {
   SubagentProgressItem,
   TurnRecord,
 } from "../../lib/types";
-import { useChatStore } from "../../store/chat";
+import { groupFeedItemsIntoTurns, useChatStore } from "../../store/chat";
 import { useSettingsStore } from "../../store/settings";
 import { useResizableWidth } from "../../hooks/useResizableWidth";
+import { FilesPanel } from "../files/FilesPanel";
+import { TerminalPanel } from "../terminal/TerminalPanel";
+import { DOCK_TABS, type DockTab, useChatV2Store } from "../chat-v2/chatV2Store";
+import { DOCK_TAB_META } from "../chat-v2/DockRail";
+import { SessionsRail } from "../chat-v2/SessionsRail";
 
 function makeSessionKey() {
   return crypto.randomUUID();
@@ -123,6 +131,8 @@ const reasoningEffortOptions = [
   { value: "xhigh", label: "X High" },
 ];
 
+export type ChatPageView = "legacy" | "v2";
+
 const defaultTimelineTypes = [
   "user_message_accepted",
   "runner_phase_changed",
@@ -144,7 +154,9 @@ function defaultTimelineFilters(): TimelineFilterState {
   };
 }
 
-export function ChatPage() {
+export function ChatPage(props: { view?: ChatPageView } = {}) {
+  const chatView: ChatPageView = props.view ?? "legacy";
+  const isV2 = chatView === "v2";
   const { message } = AntApp.useApp();
   const { channel: routeChannel, sessionKey: routeSessionKey } = useParams<{ channel: string; sessionKey: string }>();
   const [searchParams] = useSearchParams();
@@ -230,6 +242,69 @@ export function ChatPage() {
     direction: "left",
   });
 
+  // V2 layout state: left sessions rail + right dock rail (independent
+  // persistence, does not touch the legacy layout store keys).
+  const v2LeftCollapsed = useChatV2Store((s) => s.leftCollapsed);
+  const v2RightCollapsed = useChatV2Store((s) => s.rightCollapsed);
+  const v2ActiveDockTab = useChatV2Store((s) => s.activeDockTab);
+  const v2LeftWidth = useChatV2Store((s) => s.leftWidth);
+  const v2RightWidth = useChatV2Store((s) => s.rightWidth);
+  const v2ToggleLeft = useChatV2Store((s) => s.toggleLeft);
+  const v2ToggleRight = useChatV2Store((s) => s.toggleRight);
+  const v2SetActiveDockTab = useChatV2Store((s) => s.setActiveDockTab);
+  const v2SetLeftWidth = useChatV2Store((s) => s.setLeftWidth);
+  const v2SetRightWidth = useChatV2Store((s) => s.setRightWidth);
+
+  const [v2SessionSearch, setV2SessionSearch] = useState("");
+
+  const beginV2LeftResize = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = useChatV2Store.getState().leftWidth;
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const delta = moveEvent.clientX - startX;
+        v2SetLeftWidth(startWidth + delta);
+      };
+      const stopResize = () => {
+        document.body.classList.remove("is-resizing-column");
+        document.removeEventListener("pointermove", onPointerMove);
+        document.removeEventListener("pointerup", stopResize);
+        document.removeEventListener("pointercancel", stopResize);
+      };
+      document.body.classList.add("is-resizing-column");
+      document.addEventListener("pointermove", onPointerMove);
+      document.addEventListener("pointerup", stopResize);
+      document.addEventListener("pointercancel", stopResize);
+    },
+    [v2SetLeftWidth],
+  );
+
+  const beginV2RightResize = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = useChatV2Store.getState().rightWidth;
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const delta = moveEvent.clientX - startX;
+        v2SetRightWidth(startWidth - delta);
+      };
+      const stopResize = () => {
+        document.body.classList.remove("is-resizing-column");
+        document.removeEventListener("pointermove", onPointerMove);
+        document.removeEventListener("pointerup", stopResize);
+        document.removeEventListener("pointercancel", stopResize);
+      };
+      document.body.classList.add("is-resizing-column");
+      document.addEventListener("pointermove", onPointerMove);
+      document.addEventListener("pointerup", stopResize);
+      document.addEventListener("pointercancel", stopResize);
+    },
+    [v2SetRightWidth],
+  );
+
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
   const authRequired = metaQuery.data?.auth_required ?? false;
   const routeUserId = searchParams.get("user_id");
@@ -251,13 +326,14 @@ export function ChatPage() {
     const next = defaultSessionKey || makeSessionKey();
     // DEBUG: delay setState to the next tick to avoid sync setState during render.
     // React 19 production throws #185 if setState is called during render phase.
+    const basePath = isV2 ? "/chat-v2" : "/chat";
     setTimeout(() => {
       if (!defaultSessionKey) {
         setDefaultSessionKey(next);
       }
-      navigate(`/chat/web/${next}`, { replace: true });
+      navigate(`${basePath}/web/${next}`, { replace: true });
     }, 0);
-  }, [defaultSessionKey, navigate, routeChannel, routeSessionKey, setDefaultSessionKey]);
+  }, [defaultSessionKey, isV2, navigate, routeChannel, routeSessionKey, setDefaultSessionKey]);
 
   const openQuery = useQuery({
     queryKey: ["session-open", token, sessionLocator.channel, sessionLocator.key, sessionLocator.user_id],
@@ -272,7 +348,8 @@ export function ChatPage() {
   });
   const saveMessageToNoteMutation = useMutation({
     mutationFn: async (item: FeedItem) => {
-      const body = item.body.trim();
+      // Grouped V2 turns store the answer in finalBody; copy/save use only that.
+      const body = (item.finalBody ?? item.body).trim();
       if (!body) {
         throw new Error("No message text to save.");
       }
@@ -475,6 +552,8 @@ export function ChatPage() {
   }, [authRequired, handleEvent, queryClient, sessionId, setStreamConnected, token]);
 
   const items = useMemo(() => mergeChronologicalFeedItems(historyItems, overlayItems), [historyItems, overlayItems]);
+  // V2 groups the flat feed into per-turn items (text + tool + todo segments).
+  const v2Items = useMemo(() => (isV2 ? groupFeedItemsIntoTurns(items) : items), [isV2, items]);
   // T15: derive the list of longtask reflux bubbles from the
   // chat feed. We pick the last 5 reflux items (newest first) and
   // hide the ones the user has dismissed. The strict authority is
@@ -637,7 +716,7 @@ export function ChatPage() {
       );
       if (nextSession) {
         reset();
-        navigate(buildChatRouteForSession(nextSession), { replace: true });
+        navigate(isV2 ? `/chat-v2/web/${nextSession.locator.key}` : buildChatRouteForSession(nextSession), { replace: true });
         setSessionsOpen(false);
       } else if (deletedActiveSession) {
         createSession(true);
@@ -746,7 +825,7 @@ export function ChatPage() {
     onSuccess: async (opened) => {
       reset();
       setDefaultSessionKey(opened.locator.key || makeSessionKey());
-      navigate(buildChatRoute(opened.locator));
+      navigate(isV2 ? `/chat-v2/web/${opened.locator.key}` : buildChatRoute(opened.locator));
       await queryClient.invalidateQueries({ queryKey: ["sessions", token] });
       message.success("Session forked.");
     },
@@ -974,7 +1053,7 @@ export function ChatPage() {
     const next = makeSessionKey();
     setDefaultSessionKey(next);
     reset();
-    navigate(`/chat/web/${next}`, { replace });
+    navigate(isV2 ? `/chat-v2/web/${next}` : `/chat/web/${next}`, { replace });
     setSessionsOpen(false);
   };
 
@@ -1001,11 +1080,11 @@ export function ChatPage() {
       onCreate={() => createSession()}
       onDelete={(session) => deleteSessionMutation.mutate(session)}
       onSelect={(session) => {
-        navigate(buildChatRouteForSession(session));
+        navigate(isV2 ? `/chat-v2/web/${session.locator.key}` : buildChatRouteForSession(session));
         setSessionsOpen(false);
       }}
-      collapsed={sessionsCollapsed}
-      onCollapsedChange={() => toggleSessionsPanel("sessions")}
+      collapsed={isV2 ? v2LeftCollapsed : sessionsCollapsed}
+      onCollapsedChange={isV2 ? () => v2ToggleLeft() : () => toggleSessionsPanel("sessions")}
     />
   );
   const updateTimelineFilters = (next: TimelineFilterState) => {
@@ -1118,10 +1197,232 @@ export function ChatPage() {
   );
 
   return (
-      <div
-        className="chat-page"
-        style={{ "--chat-sessions-width": `${sessionsCollapsed ? 40 : sessionPaneWidth}px`, "--chat-inspector-width": `${inspectorCollapsed ? 0 : inspectorPaneWidth}px` } as CSSProperties}
-      >
+    <>
+      {isV2 ? (
+        <div className="chat-v2-layout" style={{ "--chat-v2-left-width": v2LeftCollapsed ? "48px" : `${v2LeftWidth}px`, "--chat-v2-right-width": v2RightCollapsed ? "48px" : `${v2RightWidth}px` } as CSSProperties}>
+          {/* Left rail */}
+          <div className="chat-v2-left" data-collapsed={v2LeftCollapsed ? "true" : "false"}>
+            {!v2LeftCollapsed ? (
+              <div className="chat-v2-left-resize" onPointerDown={beginV2LeftResize} role="separator" aria-label="Resize left panel" />
+            ) : null}
+            <SessionsRail
+              collapsed={v2LeftCollapsed}
+              sessions={filteredSessions}
+              activeSessionId={openQuery.data?.session_id ?? ""}
+              searchQuery={v2SessionSearch ?? ""}
+              deletingSessionId={deleteSessionMutation.variables?.session_id ?? ""}
+              onSearchChange={setV2SessionSearch}
+              onCreate={() => createSession()}
+              onSelect={(session) => {
+                navigate(`/chat-v2/web/${session.locator.key}`);
+              }}
+              onDelete={(session) => deleteSessionMutation.mutate(session)}
+              onToggleCollapsed={() => v2ToggleLeft()}
+            />
+          </div>
+          {/* Center: topbar + feed + composer */}
+          <div className="chat-v2-center-wrap">
+            <div className="chat-v2-topbar">
+              <Space size={4}>
+                <Tooltip title={v2LeftCollapsed ? "Expand sidebar" : "Collapse sidebar"}>
+                  <Button type="text" size="small" icon={v2LeftCollapsed ? <VerticalRightOutlined /> : <VerticalLeftOutlined />} aria-label="Toggle sidebar" onClick={() => v2ToggleLeft()} />
+                </Tooltip>
+                <Divider type="vertical" />
+                <Tooltip title={t("chat.copySessionInfo")}>
+                  <Typography.Text className="chat-v2-topbar-title" strong ellipsis={{ tooltip: sessionTitle }} onClick={() => void copySessionInfo()} style={{ cursor: "pointer", maxWidth: 200 }}>
+                    {sessionTitle}
+                  </Typography.Text>
+                </Tooltip>
+              </Space>
+              <Space size={4}>
+                <div className="chat-v2-topbar-tabs">
+                  {DOCK_TABS.filter((t: DockTab) => t !== "preview").map((tab: DockTab) => {
+                    const meta = DOCK_TAB_META[tab];
+                    const active = tab === v2ActiveDockTab && !v2RightCollapsed;
+                    const badge = tab === "tasks" ? (pendingPermissions.length || 0) : 0;
+                    return (
+                      <Tooltip key={tab} title={meta.label}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={meta.icon}
+                          aria-label={meta.label}
+                          className={`chat-v2-topbar-tab${active ? " chat-v2-topbar-tab-active" : ""}`}
+                          onClick={() => v2SetActiveDockTab(tab)}
+                        >
+                          {badge > 0 ? <span className="chat-v2-topbar-badge">{badge}</span> : null}
+                        </Button>
+                      </Tooltip>
+                    );
+                  })}
+                </div>
+                <Tooltip title={v2RightCollapsed ? "Expand panel" : "Collapse panel"}>
+                  <Button type="text" size="small" icon={v2RightCollapsed ? <VerticalLeftOutlined /> : <VerticalRightOutlined />} aria-label="Toggle right panel" onClick={() => v2ToggleRight()} />
+                </Tooltip>
+              </Space>
+            </div>
+            {authRequired && !token ? (
+              <div style={{ padding: 16 }}>
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={
+                    <>
+                      {t("chat.authRequiredPrefix")} <Link to="/settings">{t("app.nav.settings")}</Link> {t("chat.authRequiredSuffix")}
+                    </>
+                  }
+                />
+              </div>
+            ) : authError ? (
+              <div style={{ padding: 16 }}>
+                <Alert type="error" showIcon message={authError} />
+              </div>
+            ) : (
+              <div className="chat-v2-center-body">
+                <div className="chat-feed chat-feed-v2-scroll" ref={scrollerRef} style={{ minHeight: 0 }}>
+                  <div className="chat-feed-inner chat-feed-v2-inner">
+                    <MessageFeedV2
+                      items={v2Items}
+                      onToggleTool={toggleTool}
+                      onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
+                      savingToNote={saveMessageToNoteMutation.isPending}
+                      hasNoteContext={!!noteContextQuery.data}
+                    />
+                  </div>
+                </div>
+                <NoteContextBanner
+                  note={noteContextQuery.data}
+                  loading={noteContextQuery.isLoading}
+                  error={noteContextQuery.error}
+                  onClear={clearNoteContext}
+                />
+                <ApprovalBanner
+                  items={pendingPermissions}
+                  approving={approvePermissionMutation}
+                  denying={denyPermissionMutation}
+                />
+                <div style={{ borderTop: "1px solid var(--godex-border)", padding: "6px 12px" }}>
+                  <Space style={{ width: "100%", justifyContent: "space-between" }} size={4} wrap>
+                    <Space size={4}>
+                      {modelsQuery.data?.profiles.length ? (
+                        <Select
+                          size="small"
+                          value={selectedProfile?.id}
+                          style={{ minWidth: 100, maxWidth: 140 }}
+                          loading={modelsQuery.isLoading || modelMutation.isPending}
+                          disabled={modelMutation.isPending}
+                          onChange={(value) => modelMutation.mutate({ profileId: value, reasoningEffort: sessionReasoningEffort || undefined })}
+                          options={modelsQuery.data.profiles.map((profile) => ({
+                            value: profile.id,
+                            label: `${profile.name || profile.id}`,
+                          }))}
+                        />
+                      ) : null}
+                      {modelsQuery.data?.profiles.length && selectedProfile?.id ? (
+                        <Select
+                          allowClear
+                          size="small"
+                          placeholder="Think"
+                          value={selectedReasoningEffort || undefined}
+                          style={{ minWidth: 72, maxWidth: 96 }}
+                          loading={modelsQuery.isLoading || modelMutation.isPending}
+                          disabled={modelMutation.isPending}
+                          onChange={(value) => modelMutation.mutate({ profileId: selectedProfile!.id, reasoningEffort: value || "" })}
+                          options={reasoningEffortOptions}
+                        />
+                      ) : null}
+                      <Tooltip title={streamConnected ? t("chat.streamConnected") : t("chat.streamReconnecting")}>
+                        <Badge status={streamConnected ? "success" : "processing"} />
+                      </Tooltip>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {modelMutation.isPending
+                          ? t("chat.modelSwitching")
+                          : uploading
+                            ? `${t("chat.uploadingAttachments")} ${uploadProgress ?? 0}%`
+                            : queuedTurns.length
+                              ? `${status} · ${queuedTurns.length} queued`
+                              : status}
+                      </Typography.Text>
+                    </Space>
+                    <Space size={4}>
+                      <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
+                      {running ? (
+                        <Segmented
+                          size="small"
+                          value={queueMode}
+                          onChange={(value) => setQueueMode(value as "follow_up" | "steering")}
+                          options={[
+                            { value: "follow_up", label: "Follow-up" },
+                            { value: "steering", label: "Steer" },
+                          ]}
+                        />
+                      ) : null}
+                    </Space>
+                  </Space>
+                </div>
+                <Composer
+                  disabled={!openQuery.data?.session_id || modelMutation.isPending}
+                  uploading={uploading}
+                  uploadProgress={uploadProgress}
+                  packageCommands={packageCommandsQuery.data ?? []}
+                  queuedFiles={queuedComposerFiles}
+                  onQueuedFilesConsumed={() => setQueuedComposerFiles([])}
+                  onSubmit={onSend}
+                />
+              </div>
+            )}
+          </div>
+          {/* Right dock: content pane only (tabs are in topbar) */}
+          <div className="chat-v2-right" data-collapsed={v2RightCollapsed ? "true" : "false"}>
+            {!v2RightCollapsed ? (
+              <>
+                <div className="chat-v2-right-resize" onPointerDown={beginV2RightResize} role="separator" aria-label="Resize right panel" />
+                <button className="chat-v2-right-close" onClick={() => v2ToggleRight()} aria-label="Close panel">
+                  <CloseOutlined />
+                </button>
+                <div className="chat-v2-dock-pane">
+                  <div className="chat-v2-dock-pane-body">
+                    {v2ActiveDockTab === "files" ? (
+                      <FilesPanel mode="dock" cwd="." fillContainer onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
+                    ) : v2ActiveDockTab === "terminal" ? (
+                      <TerminalPanel />
+                    ) : v2ActiveDockTab === "tasks" ? (
+                      <TaskCenterPanel
+                        outcomes={taskOutcomes}
+                        collapsed={false}
+                        onCollapsedChange={() => v2SetActiveDockTab(v2ActiveDockTab)}
+                        reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
+                        mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
+                        resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
+                        cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
+                        runningWorkflowId={runLongTaskMutation.isPending ? runLongTaskMutation.variables : undefined}
+                        cancelingLongTask={cancelLongTaskMutation.isPending ? cancelLongTaskMutation.variables : undefined}
+                        finalizingLongTask={finalizeLongTaskMutation.isPending ? finalizeLongTaskMutation.variables : undefined}
+                        onReviewSubagent={reviewSubagentInDrawer}
+                        onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
+                        onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
+                        onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
+                        onRunLongTask={(workflowId) => runLongTaskMutation.mutate(workflowId)}
+                        onCancelLongTask={(workflowId, nodeId) => cancelLongTaskMutation.mutate({ workflowId, nodeId })}
+                        onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
+                        onOpenReviewMergeCenter={openReviewMergeCenter}
+                      />
+                    ) : v2ActiveDockTab === "preview" ? (
+                      <Empty description="Preview panel coming soon" style={{ padding: 24 }} />
+                    ) : v2ActiveDockTab === "status" ? (
+                      inspectorPanel
+                    ) : null}
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <div
+          className="chat-page"
+          style={{ "--chat-sessions-width": `${sessionsCollapsed ? 40 : sessionPaneWidth}px`, "--chat-inspector-width": `${inspectorCollapsed ? 0 : inspectorPaneWidth}px` } as CSSProperties}
+        >
       <aside className="chat-sessions" data-testid="sessions-rail" data-collapsed={sessionsCollapsed ? "true" : "false"}>
         {sessionPanel}
         {!sessionsCollapsed ? <ResizeHandle label="Resize sessions" onPointerDown={beginSessionPaneResize} /> : null}
@@ -1279,7 +1580,7 @@ export function ChatPage() {
                         ? `${status} · ${queuedTurns.length} queued`
                         : status}
                 </Typography.Text>
-                <ContextStatusInline summary={contextStatus} />
+                <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
                 {running ? (
                   <Segmented
                     size="small"
@@ -1364,6 +1665,8 @@ export function ChatPage() {
         </>
       ) : null}
     </div>
+      )}
+    </>
   );
 }
 
@@ -1824,14 +2127,105 @@ type ContextStatusSummary = {
   suggestCompact: boolean;
 };
 
-function ContextStatusInline({ summary }: { summary: ContextStatusSummary }) {
+function ContextStatusInline({ summary, inspector }: { summary: ContextStatusSummary; inspector?: SessionContextInspector | null }) {
+  const { t } = useI18n();
   const color = summary.suggestCompact || summary.budgetPercent >= 85 ? "gold" : summary.budgetPercent >= 65 ? "blue" : "default";
+  const ctx = inspector?.context;
+  const breakdown = ctx?.token_breakdown;
+  const cache = ctx?.prefix_cache;
+  const hasCache = (cache?.stable_system_tokens ?? 0) > 0 || (cache?.dynamic_runtime_tokens ?? 0) > 0;
+  const cacheTotal = (cache?.stable_system_tokens ?? 0) + (cache?.dynamic_runtime_tokens ?? 0);
+  const cacheStable = cache?.stable_system_tokens ?? 0;
+  const cacheRatio = cacheTotal > 0 ? ((cacheStable / cacheTotal) * 100) : 0;
+
+  const content = (
+    <div className="ctx-popover">
+      <div className="ctx-popover-group">
+        <div className="ctx-popover-group-title">Context</div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Tokens</span>
+          <span className="ctx-popover-value">
+            {ctx ? `${formatCompactNumber(ctx.total_token_estimate ?? ctx.token_estimate ?? 0)} / ${formatCompactNumber(ctx.compress_threshold ?? 0)}` : "—"}
+          </span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Occupancy</span>
+          <span className="ctx-popover-value">{summary.budgetPercent}%</span>
+        </div>
+      </div>
+      <div className="ctx-popover-group">
+        <div className="ctx-popover-group-title">Breakdown</div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">System</span>
+          <span className="ctx-popover-value">{formatCompactNumber(breakdown?.system ?? 0)}</span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">History</span>
+          <span className="ctx-popover-value">{formatCompactNumber(breakdown?.history ?? 0)}</span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Memory</span>
+          <span className="ctx-popover-value">{formatCompactNumber(breakdown?.memory ?? 0)}</span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Runtime</span>
+          <span className="ctx-popover-value">{formatCompactNumber(breakdown?.runtime ?? 0)}</span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Tool schemas</span>
+          <span className="ctx-popover-value">{formatCompactNumber(breakdown?.tool_schemas ?? 0)}</span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Tool results</span>
+          <span className="ctx-popover-value">{formatCompactNumber(breakdown?.tool_results ?? 0)}</span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Attachments</span>
+          <span className="ctx-popover-value">{formatCompactNumber(breakdown?.attachments ?? 0)}</span>
+        </div>
+        {breakdown ? (
+          <div className="ctx-popover-row ctx-popover-row-total">
+            <span className="ctx-popover-label">Total</span>
+            <span className="ctx-popover-value">{formatCompactNumber(breakdown.total)}</span>
+          </div>
+        ) : null}
+      </div>
+      <div className="ctx-popover-group">
+        <div className="ctx-popover-group-title">Session</div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Messages</span>
+          <span className="ctx-popover-value">{ctx?.message_count ?? "—"}</span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Skills</span>
+          <span className="ctx-popover-value">{ctx?.active_skill_count ?? "—"}</span>
+        </div>
+        <div className="ctx-popover-row">
+          <span className="ctx-popover-label">Approvals</span>
+          <span className="ctx-popover-value">{ctx?.pending_permission_count ?? "—"}</span>
+        </div>
+        {hasCache ? (
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">Cache stable</span>
+            <span className="ctx-popover-value">{formatCompactNumber(cacheStable)} ({Math.round(cacheRatio)}%)</span>
+          </div>
+        ) : null}
+        {ctx?.suggest_compact ? (
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">Compaction</span>
+            <span className="ctx-popover-value"><Tag color="gold" style={{ margin: 0 }}>Suggested</Tag></span>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+
   return (
-    <Tooltip title={summary.tooltip}>
-      <Tag color={color} className="chat-context-status">
+    <Popover content={content} trigger="hover" placement="top" overlayStyle={{ maxWidth: 360 }}>
+      <Tag color={color} className="chat-context-status" style={{ cursor: "pointer" }}>
         {summary.text}
       </Tag>
-    </Tooltip>
+    </Popover>
   );
 }
 

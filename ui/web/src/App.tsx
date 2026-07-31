@@ -142,11 +142,14 @@ export default function App() {
     !providersQuery.data.providers.some((provider) => provider.has_credential || provider.token_present);
   const shellClassName = buildWorkspaceShellClassName(activeApp.shellClassName);
   const headerTitleKey = activeApp.headerTitleKey ?? activeApp.labelKey;
+  const headerTitle = headerTitleKey ? t(headerTitleKey) : "";
   const headerSubtitleKey = activeApp.headerSubtitleKey ?? "";
   const workspaceSubtitle = activeApp.id === "chat" && metaQuery.data?.workspace_dir
     ? [metaQuery.data.workspace_dir, metaQuery.data.model, metaQuery.data.version?.version].filter(Boolean).join(" · ")
     : "";
   const headerSubtitle = workspaceSubtitle || (headerSubtitleKey ? t(headerSubtitleKey) : "");
+  const hideHeader = !headerTitle && !headerSubtitle && screens.lg;
+  const shellClass = `${shellClassName}${hideHeader ? " godex-shell-no-header" : ""}`;
   const navItems = useMemo(
     () => builtinApps.map((app) => ({ key: app.navPath, icon: app.icon, label: t(app.labelKey), onMouseEnter: app.preload })),
     [t],
@@ -183,7 +186,7 @@ export default function App() {
     >
       <AntApp>
         <WorkspaceShell
-          shellClassName={shellClassName}
+          shellClassName={shellClass}
           appNav={screens.lg ? (
             <Layout.Sider
               className="godex-sider"
@@ -207,7 +210,7 @@ export default function App() {
               {!appNavCollapsed ? <ResizeHandle label="Resize navigation" onPointerDown={beginNavResize} /> : null}
             </Layout.Sider>
           ) : null}
-          header={(
+          header={hideHeader ? null : (
             <Layout.Header className="godex-header">
               <Space size={12}>
                 {!screens.lg ? (
@@ -219,7 +222,9 @@ export default function App() {
                   />
                 ) : null}
                 <Space direction="vertical" size={0} className="godex-header-title">
-                  <Typography.Text strong>{t(headerTitleKey)}</Typography.Text>
+                  {headerTitle ? (
+                    <Typography.Text strong>{headerTitle}</Typography.Text>
+                  ) : null}
                   {headerSubtitle ? (
                     <Typography.Text className="muted" ellipsis>
                       {headerSubtitle}

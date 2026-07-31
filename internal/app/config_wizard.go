@@ -68,6 +68,7 @@ func RunConfigWizard(ctx context.Context, args []string, stdin io.Reader, stdout
 
 		fmt.Fprintln(stdout, "What would you like to do?")
 		fmt.Fprintln(stdout, "  [a] Add a provider")
+			fmt.Fprintln(stdout, "  [i] Import from other coding agents (Codex/Claude Code/etc.)")
 		if len(providers) > 0 {
 			fmt.Fprintln(stdout, "  [r] Remove a provider")
 		}
@@ -85,7 +86,13 @@ func RunConfigWizard(ctx context.Context, args []string, stdin io.Reader, stdout
 			if err := interactiveAddProvider(reader, stdout, stderr, manager); err != nil {
 				fmt.Fprintf(stderr, "Error: %v\n", err)
 			}
-		case "r", "remove":
+		case "i", "import":
+				if err := interactiveImportCodex(reader, stdout, stderr, manager); err != nil {
+					fmt.Fprintf(stderr, "Error: %v\n", err)
+				}
+				// Refresh config after import.
+				cfg = manager.Current()
+			case "r", "remove":
 			if len(providers) == 0 {
 				fmt.Fprintln(stdout, "No providers to remove.")
 				continue
@@ -98,7 +105,7 @@ func RunConfigWizard(ctx context.Context, args []string, stdin io.Reader, stdout
 			fmt.Fprintln(stdout, "Configuration saved. Run 'godex doctor' to verify.")
 			return nil
 		default:
-			fmt.Fprintln(stdout, "Invalid choice. Please enter a, r, or q.")
+			fmt.Fprintln(stdout, "Invalid choice. Please enter a, i, r, or q.")
 		}
 		fmt.Fprintln(stdout)
 	}
@@ -388,4 +395,92 @@ func promptRequired(reader *bufio.Reader, stdout io.Writer, label string) (strin
 		}
 		fmt.Fprintf(stdout, "  %s is required. Please enter a value.\n", label)
 	}
+}
+
+func interactiveImportCodex(reader *bufio.Reader, stdout, stderr io.Writer, manager *config.Manager) error {
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "── Import providers from Codex ──")
+	fmt.Fprintln(stdout)
+
+	codexConfigPath := config.DefaultCodexConfigPath()
+	if codexConfigPath == "" {
+		return fmt.Errorf("cannot determine Codex config path (HOME not set)")
+	}
+
+	fmt.Fprintf(stdout, "Codex config: %s\n", codexConfigPath)
+	if _, err := os.Stat(codexConfigPath); os.IsNotExist(err) {
+		return fmt.Errorf("Codex config not found at %s", codexConfigPath)
+	}
+
+	imported, err := config.ImportCodexProviders(codexConfigPath, "")
+	if err != nil {
+		return fmt.Errorf("failed to read Codex config: %w", err)
+	}
+
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Discovered provider(s) from Codex:")
+	for i, p := range imported {
+		fmt.Fprintf(stdout, "  %d. [%s] %s | type=%s | base_url=%s [%d model(s)]\n",
+			i+1, p.ProviderID, p.ProviderConfig.Name,
+			p.ProviderConfig.Type, p.ProviderConfig.BaseURL,
+			len(p.ProviderConfig.Models))
+		for _, m := range p.Models {
+			fmt.Fprintf(stdout, "       • %s → %s\n", m.ID, m.Model)
+		}
+	}
+
+	// Check for conflicts with existing providers.
+	cfg := manager.Current()
+	existing := cfg.LLMProviders
+	for _, p := range imported {
+		// Prefix codex providers to avoid name collisions.
+		targetID := "codex-" + p.ProviderID
+		if _, exists := existing[targetID]; exists {
+			fmt.Fprintf(stdout, "\n⚠ Provider '%s' already exists and will be skipped.\n", targetID)
+		}
+	}
+
+	fmt.Fprintln(stdout)
+	fmt.Fprint(stdout, "Import these provider(s)? This will merge into existing config. (y/n) [y]: ")
+	confirm, _ := reader.ReadString('\n')
+	confirm = strings.TrimSpace(strings.ToLower(confirm))
+	if confirm == "n" || confirm == "no" {
+		fmt.Fprintln(stdout, "Cancelled.")
+		return nil
+	}
+
+	// Merge: keep existing providers, add/overwrite imported ones.
+	merged := make(map[string]llm.ProviderConfig, len(existing)+len(imported))
+	for id, p := range existing {
+		merged[id] = p
+	}
+	added := 0
+	skipped := 0
+	for _, p := range imported {
+		targetID := "codex-" + p.ProviderID
+		if _, exists := existing[targetID]; exists {
+			skipped++
+			continue
+		}
+		merged[targetID] = p.ProviderConfig
+		added++
+	}
+
+	if added == 0 {
+		if skipped > 0 {
+			return fmt.Errorf("all providers already exist — nothing to import")
+		}
+		return fmt.Errorf("no providers to import")
+	}
+
+	if err := manager.UpdateProviders(merged); err != nil {
+		return fmt.Errorf("failed to save providers: %w", err)
+	}
+
+	fmt.Fprintf(stdout, "\n✓ Imported %d provider(s) from Codex.", added)
+	if skipped > 0 {
+		fmt.Fprintf(stdout, " (%d skipped as duplicates)", skipped)
+	}
+	fmt.Fprintln(stdout)
+	return nil
 }

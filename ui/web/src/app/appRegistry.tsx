@@ -32,6 +32,7 @@ export interface BuiltinAppEntry {
 }
 
 const loadChatPage = () => import("../pages/ChatPage");
+const loadChatV2Page = () => import("../pages/ChatPage");
 const loadFilesPage = () => import("../pages/FilesPage");
 const loadAutomationPage = () => import("../pages/AutomationPage");
 const loadNodesPage = () => import("../pages/NodesPage");
@@ -61,10 +62,22 @@ export const builtinApps: BuiltinAppEntry[] = [
     labelKey: "app.nav.chat",
     load: loadChatPage,
     component: pageComponent(loadChatPage, "ChatPage"),
-    isActive: (pathname) => pathname === "/" || pathname.startsWith("/chat"),
+    isActive: (pathname) => (pathname === "/" || pathname.startsWith("/chat")) && !pathname.startsWith("/chat-v2"),
     shellClassName: "chat-shell",
     headerTitleKey: "app.chatWorkspace",
     headerSubtitleKey: "app.subtitle",
+  }),
+  entry({
+    id: "chat-v2",
+    navPath: "/chat-v2",
+    routePaths: ["/chat-v2", "/chat-v2/:channel/:sessionKey"],
+    icon: <CommentOutlined />,
+    labelKey: "app.nav.chatV2",
+    load: loadChatV2Page,
+    component: pageComponent(loadChatV2Page, "ChatV2Page"),
+    isActive: (pathname) => pathname.startsWith("/chat-v2"),
+    shellClassName: "chat-shell",
+    headerTitleKey: "",
   }),
   entry({
     id: "files",

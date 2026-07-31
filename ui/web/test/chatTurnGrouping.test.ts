@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { FeedItem } from "../src/lib/types";
+import type { FeedItem, FeedSegment } from "../src/lib/types";
 import { groupFeedItemsIntoTurns } from "../src/store/chat";
+import { shouldShowTurnDivider } from "../src/components/MessageFeedV2";
 
 function makeItem(partial: Partial<FeedItem> & Pick<FeedItem, "id" | "kind">): FeedItem {
   return {
@@ -92,5 +93,43 @@ describe("groupFeedItemsIntoTurns", () => {
 
   it("returns empty array for empty input", () => {
     expect(groupFeedItemsIntoTurns([])).toEqual([]);
+  });
+});
+
+describe("shouldShowTurnDivider", () => {
+  const text = (t: string): FeedSegment => ({ type: "text", text: t });
+  const tool = (id: string): FeedSegment => ({ type: "tool", item: makeItem({ id, kind: "tool" }) });
+  const todo = (id: string): FeedSegment => ({ type: "todo", item: makeItem({ id, kind: "todo" }) });
+
+  it("shows no divider before the first segment", () => {
+    const segs = [tool("a"), text("done")];
+    expect(shouldShowTurnDivider(segs, 0)).toBe(false);
+  });
+
+  it("shows no divider between process segments (tool/thinking)", () => {
+    const segs = [text("thinking"), tool("a"), tool("b"), todo("c"), text("done")];
+    // thinking -> tool, tool -> tool, tool -> todo: all process, no divider
+    expect(shouldShowTurnDivider(segs, 1)).toBe(false);
+    expect(shouldShowTurnDivider(segs, 2)).toBe(false);
+    expect(shouldShowTurnDivider(segs, 3)).toBe(false);
+  });
+
+  it("shows a divider only between the process and the final answer", () => {
+    const segs = [text("thinking"), tool("a"), tool("b"), text("done")];
+    // Only the boundary into the LAST text (final answer) gets a divider.
+    expect(shouldShowTurnDivider(segs, 3)).toBe(true);
+  });
+
+  it("shows no divider when the turn has only one text segment", () => {
+    const segs = [text("hello")];
+    expect(shouldShowTurnDivider(segs, 0)).toBe(false);
+  });
+
+  it("shows a divider before a non-final intermediate text only if it is the final answer", () => {
+    // multiple text segments: only the last is the "final answer"
+    const segs = [text("first"), tool("a"), text("second")];
+    expect(shouldShowTurnDivider(segs, 0)).toBe(false); // first text: no leading divider
+    expect(shouldShowTurnDivider(segs, 1)).toBe(false); // tool: process
+    expect(shouldShowTurnDivider(segs, 2)).toBe(true); // second (last) text: final answer
   });
 });

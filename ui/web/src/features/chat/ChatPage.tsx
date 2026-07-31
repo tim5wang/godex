@@ -29,15 +29,11 @@ import {
 import { ApartmentOutlined, CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EyeOutlined, FileTextOutlined, HistoryOutlined, MenuOutlined, PlayCircleOutlined, PlusOutlined, RedoOutlined, SafetyCertificateOutlined, StopOutlined, VerticalLeftOutlined, VerticalRightOutlined } from "@ant-design/icons";
 import { Conversations } from "@ant-design/x";
 import { Composer, type ComposerSubmission } from "../../components/Composer";
-import { MessageFeed } from "../../components/MessageFeed";
 import { MessageFeedV2 } from "../../components/MessageFeedV2";
-import { ResizeHandle } from "../../components/ResizeHandle";
 import { SubagentCard } from "../../components/SubagentCard";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
 import { TaskCenterChip } from "../tasks/TaskCenterChip";
 import { TaskCenterPanel } from "../chat/TaskCenterPanel";
-import { ChatWorkspaceCanvas } from "./ChatWorkspaceCanvas";
-import { MobileWorkspaceTabs } from "../../components/workspace/MobileWorkspaceTabs";
 import { LongTaskRefluxBubble, isLongTaskRefluxMessage } from "./LongTaskRefluxBubble";
 import { buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview, type ReviewMergeFilter } from "./reviewMergeCenter";
 import { buildTaskOutcomes } from "./taskCenterOutcome";
@@ -79,7 +75,7 @@ import {
   unloadSessionSkill,
   uploadAttachments,
 } from "../../lib/api";
-import { buildChatRoute, buildChatRouteForSession, locatorMatchesRoute } from "../../lib/chatRoutes";
+import { locatorMatchesRoute } from "../../lib/chatRoutes";
 import { writeClipboardText } from "../../lib/clipboard";
 import { streamEvents } from "../../lib/sse";
 import type {
@@ -131,8 +127,6 @@ const reasoningEffortOptions = [
   { value: "xhigh", label: "X High" },
 ];
 
-export type ChatPageView = "legacy" | "v2";
-
 const defaultTimelineTypes = [
   "user_message_accepted",
   "runner_phase_changed",
@@ -154,9 +148,7 @@ function defaultTimelineFilters(): TimelineFilterState {
   };
 }
 
-export function ChatPage(props: { view?: ChatPageView } = {}) {
-  const chatView: ChatPageView = props.view ?? "legacy";
-  const isV2 = chatView === "v2";
+export function ChatPage() {
   const { message } = AntApp.useApp();
   const { channel: routeChannel, sessionKey: routeSessionKey } = useParams<{ channel: string; sessionKey: string }>();
   const [searchParams] = useSearchParams();
@@ -226,21 +218,6 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
   // the front) and let the user dismiss them.
   const [refluxDismissed, setRefluxDismissed] = useState<Record<string, boolean>>({});
   const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const [sessionPaneWidth, beginSessionPaneResize] = useResizableWidth({
-    storageKey: "godex.chatSessionsWidth",
-    defaultWidth: 320,
-    min: 240,
-    max: 560,
-  });
-  const sessionsCollapsed = useLayoutStore((state) => state.panels.sessions.collapsed);
-  const toggleSessionsPanel = useLayoutStore((state) => state.toggle);
-  const [inspectorPaneWidth, beginInspectorPaneResize] = useResizableWidth({
-    storageKey: "godex.chatInspectorWidth",
-    defaultWidth: 380,
-    min: 320,
-    max: 720,
-    direction: "left",
-  });
 
   // V2 layout state: left sessions rail + right dock rail (independent
   // persistence, does not touch the legacy layout store keys).
@@ -328,14 +305,14 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
     const next = defaultSessionKey || makeSessionKey();
     // DEBUG: delay setState to the next tick to avoid sync setState during render.
     // React 19 production throws #185 if setState is called during render phase.
-    const basePath = isV2 ? "/chat-v2" : "/chat";
+    const basePath = "/chat";
     setTimeout(() => {
       if (!defaultSessionKey) {
         setDefaultSessionKey(next);
       }
       navigate(`${basePath}/web/${next}`, { replace: true });
     }, 0);
-  }, [defaultSessionKey, isV2, navigate, routeChannel, routeSessionKey, setDefaultSessionKey]);
+  }, [defaultSessionKey, navigate, routeChannel, routeSessionKey, setDefaultSessionKey]);
 
   const openQuery = useQuery({
     queryKey: ["session-open", token, sessionLocator.channel, sessionLocator.key, sessionLocator.user_id],
@@ -555,7 +532,7 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
 
   const items = useMemo(() => mergeChronologicalFeedItems(historyItems, overlayItems), [historyItems, overlayItems]);
   // V2 groups the flat feed into per-turn items (text + tool + todo segments).
-  const v2Items = useMemo(() => (isV2 ? groupFeedItemsIntoTurns(items) : items), [isV2, items]);
+  const v2Items = useMemo(() => groupFeedItemsIntoTurns(items), [items]);
   // T15: derive the list of longtask reflux bubbles from the
   // chat feed. We pick the last 5 reflux items (newest first) and
   // hide the ones the user has dismissed. The strict authority is
@@ -718,7 +695,7 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
       );
       if (nextSession) {
         reset();
-        navigate(isV2 ? `/chat-v2/web/${nextSession.locator.key}` : buildChatRouteForSession(nextSession), { replace: true });
+        navigate(`/chat/web/${nextSession.locator.key}`, { replace: true });
         setSessionsOpen(false);
       } else if (deletedActiveSession) {
         createSession(true);
@@ -827,7 +804,7 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
     onSuccess: async (opened) => {
       reset();
       setDefaultSessionKey(opened.locator.key || makeSessionKey());
-      navigate(isV2 ? `/chat-v2/web/${opened.locator.key}` : buildChatRoute(opened.locator));
+      navigate(`/chat/web/${opened.locator.key}`);
       await queryClient.invalidateQueries({ queryKey: ["sessions", token] });
       message.success("Session forked.");
     },
@@ -1055,7 +1032,7 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
     const next = makeSessionKey();
     setDefaultSessionKey(next);
     reset();
-    const base = isV2 ? `/chat-v2/web/${next}` : `/chat/web/${next}`;
+    const base = `/chat/web/${next}`;
     const query = workspaceDir?.trim() ? `?workspace_dir=${encodeURIComponent(workspaceDir.trim())}` : "";
     navigate(`${base}${query}`, { replace });
     setSessionsOpen(false);
@@ -1073,24 +1050,6 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
       ? "Missing or invalid bearer token. Open Settings to configure it."
       : null;
 
-  const sessionPanel = (
-    <SessionPanel
-      sessions={filteredSessions}
-      allChannels={channels}
-      channelFilter={channelFilter}
-      activeSessionId={openQuery.data?.session_id ?? ""}
-      deletingSessionId={deleteSessionMutation.variables?.session_id ?? ""}
-      onChannelChange={setChannelFilter}
-      onCreate={() => createSession()}
-      onDelete={(session) => deleteSessionMutation.mutate(session)}
-      onSelect={(session) => {
-        navigate(isV2 ? `/chat-v2/web/${session.locator.key}` : buildChatRouteForSession(session));
-        setSessionsOpen(false);
-      }}
-      collapsed={isV2 ? v2LeftCollapsed : sessionsCollapsed}
-      onCollapsedChange={isV2 ? () => v2ToggleLeft() : () => toggleSessionsPanel("sessions")}
-    />
-  );
   const updateTimelineFilters = (next: TimelineFilterState) => {
     setTimelineFilters(next);
     setTimelineCursor("");
@@ -1202,7 +1161,6 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
 
   return (
     <>
-      {isV2 ? (
         <div className="chat-v2-layout" style={{ "--chat-v2-left-width": v2LeftCollapsed ? "48px" : `${v2LeftWidth}px`, "--chat-v2-right-width": v2RightCollapsed ? "48px" : `${v2RightWidth}px` } as CSSProperties}>
           {/* Left rail */}
           <div className="chat-v2-left" data-collapsed={v2LeftCollapsed ? "true" : "false"}>
@@ -1218,7 +1176,7 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
               onSearchChange={setV2SessionSearch}
               onCreate={(workspaceDir) => createSession(false, workspaceDir)}
               onSelect={(session) => {
-                navigate(`/chat-v2/web/${session.locator.key}`);
+                navigate(`/chat/web/${session.locator.key}`);
               }}
               onDelete={(session) => deleteSessionMutation.mutate(session)}
               onToggleCollapsed={() => v2ToggleLeft()}
@@ -1434,218 +1392,6 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
             ) : null}
           </div>
         </div>
-      ) : (
-        <div
-          className="chat-page"
-          style={{ "--chat-sessions-width": `${sessionsCollapsed ? 40 : sessionPaneWidth}px`, "--chat-inspector-width": `${inspectorCollapsed ? 0 : inspectorPaneWidth}px` } as CSSProperties}
-        >
-      <aside className="chat-sessions" data-testid="sessions-rail" data-collapsed={sessionsCollapsed ? "true" : "false"}>
-        {sessionPanel}
-        {!sessionsCollapsed ? <ResizeHandle label="Resize sessions" onPointerDown={beginSessionPaneResize} /> : null}
-      </aside>
-      <section className="chat-main">
-        <Card className="chat-session-card" size="small" styles={{ body: { padding: "10px 16px" } }}>
-          <div className="chat-session-header">
-            <Tooltip title={t("chat.copySessionInfo")}>
-              <button type="button" className="chat-session-summary" onClick={() => void copySessionInfo()}>
-                <Typography.Text className="chat-session-title" strong ellipsis={{ tooltip: sessionTitle }}>
-                  {sessionTitle}
-                </Typography.Text>
-                <Typography.Text className="chat-session-subtitle" type="secondary" ellipsis={{ tooltip: headerSubtitle }}>
-                  {headerSubtitle}
-                </Typography.Text>
-              </button>
-            </Tooltip>
-            <Space className="chat-session-actions" size={compactHeader ? 8 : 12}>
-              {modelsQuery.data?.profiles.length ? (
-                <Select
-                  size={compactHeader ? "small" : "middle"}
-                  value={selectedProfile?.id}
-                  style={{ minWidth: compactHeader ? 118 : 180 }}
-                  loading={modelsQuery.isLoading || modelMutation.isPending}
-                  disabled={modelMutation.isPending}
-                  onChange={(value) => modelMutation.mutate({ profileId: value, reasoningEffort: sessionReasoningEffort || undefined })}
-                  options={modelsQuery.data.profiles.map((profile) => ({
-                    value: profile.id,
-                    label: `${profile.name || profile.id}`,
-                    title: `${profile.name || profile.id} · ${profile.model}`,
-                  }))}
-                />
-              ) : null}
-              {modelsQuery.data?.profiles.length ? (
-                <Select
-                  allowClear
-                  size={compactHeader ? "small" : "middle"}
-                  placeholder="Reasoning"
-                  value={selectedReasoningEffort || undefined}
-                  style={{ minWidth: compactHeader ? 96 : 128 }}
-                  loading={modelsQuery.isLoading || modelMutation.isPending}
-                  disabled={modelMutation.isPending || !selectedProfile?.id}
-                  onChange={(value) => modelMutation.mutate({ profileId: selectedProfile!.id, reasoningEffort: value || "" })}
-                  options={reasoningEffortOptions}
-                />
-              ) : null}
-              {modelsQuery.data?.profiles.length ? <Tag color={modelScopeColor}>{modelScopeLabel}</Tag> : null}
-              <Tooltip title={streamConnected ? t("chat.streamConnected") : t("chat.streamReconnecting")}>
-                <Badge
-                  status={streamConnected ? "success" : "processing"}
-                  text={compactHeader ? undefined : streamConnected ? t("chat.streamConnected") : t("chat.streamReconnecting")}
-                />
-              </Tooltip>
-              <Tag color={running ? "processing" : "default"}>{running ? t("chat.running") : t("chat.idle")}</Tag>
-              {running && currentTurnId ? (
-                <Tooltip title={t("chat.cancelTurn")}>
-                  <Button
-                    danger
-                    size={compactHeader ? "small" : "middle"}
-                    icon={<StopOutlined />}
-                    aria-label={t("chat.cancelTurn")}
-                    loading={cancelTurnMutation.isPending}
-                    onClick={() => cancelTurnMutation.mutate({ sessionId, turnId: currentTurnId })}
-                  />
-                </Tooltip>
-              ) : null}
-              <Tooltip title={t("chat.copySessionInfo")}>
-                <Button
-                  size={compactHeader ? "small" : "middle"}
-                  icon={<CopyOutlined />}
-                  aria-label={t("chat.copySessionInfo")}
-                  onClick={() => void copySessionInfo()}
-                />
-              </Tooltip>
-              <TaskCenterChip onOpen={openTaskCenterPanel} label={t("chat.taskCenter") || "Task Center"} />
-              <Tooltip title="Fork session">
-                <Button
-                  size={compactHeader ? "small" : "middle"}
-                  icon={<ApartmentOutlined />}
-                  aria-label="Fork session"
-                  loading={forkMutation.isPending}
-                  onClick={() => forkMutation.mutate()}
-                />
-              </Tooltip>
-              <Button
-                icon={<MenuOutlined />}
-                aria-label="Open sessions"
-                onClick={() => setSessionsOpen(true)}
-                className="chat-mobile-action"
-              />
-              <Badge count={pendingPermissions.length} size="small">
-                <Button
-                  icon={<HistoryOutlined />}
-                  aria-label="Open inspector"
-                  onClick={() => setInspectorOpen(true)}
-                  className="chat-mobile-action"
-                />
-              </Badge>
-            </Space>
-          </div>
-        </Card>
-
-        {authRequired && !token ? (
-          <div style={{ padding: 16 }}>
-            <Alert
-              type="warning"
-              showIcon
-              message={
-                <>
-                  {t("chat.authRequiredPrefix")} <Link to="/settings">{t("app.nav.settings")}</Link> {t("chat.authRequiredSuffix")}
-                </>
-              }
-            />
-          </div>
-        ) : authError ? (
-          <div style={{ padding: 16 }}>
-            <Alert type="error" showIcon message={authError} />
-          </div>
-        ) : (
-          <ChatWorkspaceCanvas
-            filesCwd="."
-            onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])}
-            renderCenter={() => (
-              <>
-            <div className="chat-feed" ref={scrollerRef} style={{ minHeight: 0 }}>
-              <div className="chat-feed-inner">
-                <MessageFeed
-                  items={items}
-                  onToggleTool={toggleTool}
-                  onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
-                  savingToNote={saveMessageToNoteMutation.isPending}
-                  hasNoteContext={!!noteContextQuery.data}
-                />
-              </div>
-            </div>
-            <NoteContextBanner
-              note={noteContextQuery.data}
-              loading={noteContextQuery.isLoading}
-              error={noteContextQuery.error}
-              onClear={clearNoteContext}
-            />
-            <ApprovalBanner
-              items={pendingPermissions}
-              approving={approvePermissionMutation}
-              denying={denyPermissionMutation}
-            />
-            <div style={{ borderTop: "1px solid var(--godex-border)", padding: "6px 16px" }}>
-              <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-                <Typography.Text type="secondary">
-                  {modelMutation.isPending
-                    ? t("chat.modelSwitching")
-                    : uploading
-                      ? `${t("chat.uploadingAttachments")} ${uploadProgress ?? 0}%`
-                      : queuedTurns.length
-                        ? `${status} · ${queuedTurns.length} queued`
-                        : status}
-                </Typography.Text>
-                <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
-                {running ? (
-                  <Segmented
-                    size="small"
-                    value={queueMode}
-                    onChange={(value) => setQueueMode(value as "follow_up" | "steering")}
-                    options={[
-                      { value: "follow_up", label: "Follow-up" },
-                      { value: "steering", label: "Steer" },
-                    ]}
-                  />
-                ) : null}
-                {running && currentTurnId ? (
-                  <Tooltip title={t("chat.cancelTurn")}>
-                    <Button
-                      danger
-                      size="small"
-                      icon={<StopOutlined />}
-                      aria-label={t("chat.cancelTurn")}
-                      loading={cancelTurnMutation.isPending}
-                      onClick={() => cancelTurnMutation.mutate({ sessionId, turnId: currentTurnId })}
-                    />
-                  </Tooltip>
-                ) : null}
-              </Space>
-            </div>
-            <Composer
-              disabled={!openQuery.data?.session_id || modelMutation.isPending}
-              uploading={uploading}
-              uploadProgress={uploadProgress}
-              packageCommands={packageCommandsQuery.data ?? []}
-              queuedFiles={queuedComposerFiles}
-              onQueuedFilesConsumed={() => setQueuedComposerFiles([])}
-              onSubmit={onSend}
-            />
-              </>
-            )}
-          />
-        )}
-      </section>
-      <aside className="chat-inspector" data-testid="chat-inspector" data-collapsed={inspectorCollapsed ? "true" : "false"}>
-        {!inspectorCollapsed ? <ResizeHandle label="Resize inspector" placement="left" onPointerDown={beginInspectorPaneResize} /> : null}
-        {inspectorPanel}
-      </aside>
-      <Drawer title={t("sessions.title")} placement="left" width={320} open={sessionsOpen} onClose={() => setSessionsOpen(false)}>
-        {sessionPanel}
-      </Drawer>
-      <Drawer title={t("chat.contextRecallTitle")} placement="right" width={380} open={inspectorOpen} onClose={() => setInspectorOpen(false)}>
-        {inspectorPanel}
-      </Drawer>
       <Drawer
         title={`Subagent review${subagentReview?.job_id ? ` · ${shortTurnId(subagentReview.job_id)}` : ""}`}
         placement="right"
@@ -1692,118 +1438,7 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
           ))}
         </>
       ) : null}
-    </div>
-      )}
     </>
-  );
-}
-
-function SessionPanel(props: {
-  sessions: ListedSession[];
-  allChannels: string[];
-  channelFilter: string;
-  activeSessionId: string;
-  deletingSessionId: string;
-  onChannelChange: (value: string) => void;
-  onCreate: () => void;
-  onSelect: (session: ListedSession) => void;
-  onDelete: (session: ListedSession) => void;
-  collapsed?: boolean;
-  onCollapsedChange?: () => void;
-}) {
-  const { t } = useI18n();
-  const active = props.sessions.find((session) => session.session_id === props.activeSessionId);
-  if (props.collapsed) {
-    return (
-      <div className="panel-scroll" data-testid="sessions-rail-strip" style={{ padding: 6 }}>
-        <Space direction="vertical" size={8} style={{ width: "100%", alignItems: "stretch" }}>
-          <Button
-            size="small"
-            aria-label={t("sessions.expand") || "Expand sessions"}
-            title={t("sessions.expand") || "Expand sessions"}
-            onClick={props.onCollapsedChange}
-            data-testid="sessions-expand"
-          >
-            »
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            aria-label={t("sessions.new")}
-            title={t("sessions.new")}
-            onClick={props.onCreate}
-          >
-            +
-          </Button>
-          <Typography.Text type="secondary" style={{ textAlign: "center", fontSize: 11 }}>
-            {props.sessions.length}
-          </Typography.Text>
-        </Space>
-      </div>
-    );
-  }
-  return (
-    <div className="panel-scroll">
-      <Space direction="vertical" size={14} style={{ width: "100%" }}>
-        <Space size={8} style={{ width: "100%", justifyContent: "space-between" }}>
-          <Button block type="primary" icon={<PlusOutlined />} aria-label={t("sessions.new")} onClick={props.onCreate}>
-            {t("sessions.new")}
-          </Button>
-          <Button
-            aria-label={t("sessions.collapse") || "Collapse sessions"}
-            title={t("sessions.collapse") || "Collapse sessions"}
-            onClick={props.onCollapsedChange}
-            data-testid="sessions-collapse"
-          >
-            «
-          </Button>
-        </Space>
-        <Tabs
-          size="small"
-          activeKey={props.channelFilter}
-          onChange={props.onChannelChange}
-          items={props.allChannels.map((channel) => ({
-            key: channel,
-            label: channel === "all" ? t("sessions.channelAll") : channel,
-          }))}
-        />
-        <Conversations
-          activeKey={props.activeSessionId}
-          items={props.sessions.map((session) => ({
-            key: session.session_id,
-            label: (
-              <Space direction="vertical" size={2} style={{ width: "100%" }}>
-                <Space wrap>
-                  <Typography.Text strong ellipsis={{ tooltip: session.title || session.locator.key || session.session_id }} style={{ maxWidth: 180 }}>
-                    {session.title || session.locator.key || session.session_id}
-                  </Typography.Text>
-                  {session.running ? <Badge status="processing" /> : null}
-                  {session.parent_session_id ? <Tag color="blue">branch</Tag> : null}
-                </Space>
-                <Typography.Text type="secondary">
-                  {session.branch_title || session.locator.channel || "web"} · {new Date(session.updated_at).toLocaleString()}
-                </Typography.Text>
-              </Space>
-            ),
-            group: session.locator.channel || "web",
-          }))}
-          groupable
-          onActiveChange={(key) => {
-            const session = props.sessions.find((item) => item.session_id === key);
-            if (session) {
-              props.onSelect(session);
-            }
-          }}
-        />
-        {active ? (
-          <Popconfirm title={t("sessions.deleteConfirm")} onConfirm={() => props.onDelete(active)}>
-            <Button block danger icon={<DeleteOutlined />} aria-label={t("sessions.delete")} loading={props.deletingSessionId === active.session_id}>
-              {t("sessions.delete")}
-            </Button>
-          </Popconfirm>
-        ) : null}
-      </Space>
-    </div>
   );
 }
 
@@ -2062,7 +1697,20 @@ function ApprovalBanner({
 }) {
   const { t } = useI18n();
   const item = items[0];
-  if (!item) {
+  // Allow the user to fold the banner away (e.g. after handling it, or to
+  // review approvals later in the Tasks dock). It reappears automatically
+  // when a NEW pending request (different id set) arrives.
+  const [dismissedIds, setDismissedIds] = useState<string>("");
+  const currentIds = useMemo(() => items.map((p) => p.id).join(","), [items]);
+  const dismissed = dismissedIds === currentIds && currentIds !== "";
+  useEffect(() => {
+    // Reset dismissal whenever the pending set changes (new request arrived,
+    // or queue advanced to the next item after an approve/deny).
+    if (dismissedIds && dismissedIds !== currentIds) {
+      setDismissedIds("");
+    }
+  }, [currentIds, dismissedIds]);
+  if (!item || dismissed) {
     return null;
   }
   const busy = approving.isPending || denying.isPending;
@@ -2072,6 +1720,8 @@ function ApprovalBanner({
       <Alert
         type="warning"
         showIcon
+        closable
+        onClose={() => setDismissedIds(currentIds)}
         message={
           <Space size={8} wrap>
             <Typography.Text strong>{title}</Typography.Text>

@@ -1067,7 +1067,14 @@ samp {
 /* ---- Chat V2 grouped feed ---- */
 
 .chat-feed-v2-scroll {
-  padding: 16px 20px;
+  padding: 12px 12px;
+}
+
+/* V2 reuses .chat-feed as the scroll container; zero out its V1 padding so
+   the .chat-feed-v2-scroll rules above (incl. the mobile media query) are the
+   single source of truth for horizontal padding. */
+.chat-feed.chat-feed-v2-scroll {
+  padding: 0;
 }
 
 .chat-feed-v2-inner {
@@ -1089,6 +1096,7 @@ samp {
 
 .chat-feed-v2-bubble-user .ant-bubble-content {
   max-width: min(680px, 100%);
+  padding: 8px 12px !important;
 }
 
 .chat-feed-v2-turn {

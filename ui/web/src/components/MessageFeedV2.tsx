@@ -117,7 +117,7 @@ function FeedItemBody({
       <div className="chat-feed-v2-turn">
         {visible.map((segment, index) => (
           <Fragment key={segmentKey(segment, index)}>
-            {index > 0 ? <hr className="chat-feed-v2-divider" /> : null}
+            {shouldShowTurnDivider(visible, index) ? <hr className="chat-feed-v2-divider" /> : null}
             <TurnSegment segment={segment} onToggleTool={onToggleTool} />
           </Fragment>
         ))}
@@ -210,6 +210,30 @@ function TurnSegment({ segment, onToggleTool }: { segment: FeedSegment; onToggle
 
 function segmentKey(segment: FeedSegment, index: number) {
   return segment.item?.id ?? `text-${index}`;
+}
+
+/**
+ * Decide whether a divider belongs BEFORE the segment at `index` within an
+ * assistant turn. Only one divider is wanted: between the leading "process"
+ * (thinking + tool calls + todos) and the final answer. The final answer is
+ * the last text segment; every other boundary stays un-divided so consecutive
+ * tool rows don't each carry a horizontal rule.
+ */
+export function shouldShowTurnDivider(segments: FeedSegment[], index: number): boolean {
+  if (index <= 0 || index >= segments.length) {
+    return false;
+  }
+  const segment = segments[index];
+  if (segment.type !== "text" || !segment.text?.trim()) {
+    return false;
+  }
+  // Only the LAST text segment is the final answer.
+  const isFinalText = !segments.slice(index + 1).some((s) => s.type === "text" && Boolean(s.text?.trim()));
+  if (!isFinalText) {
+    return false;
+  }
+  // Need some preceding process/content to separate from.
+  return segments.slice(0, index).some((s) => (s.type === "text" ? Boolean(s.text?.trim()) : true));
 }
 
 /** Compact single-line tool call row that expands in place (URL-link style). */

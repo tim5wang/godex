@@ -32,7 +32,6 @@ export interface BuiltinAppEntry {
 }
 
 const loadChatPage = () => import("../pages/ChatPage");
-const loadChatV2Page = () => import("../pages/ChatPage");
 const loadFilesPage = () => import("../pages/FilesPage");
 const loadAutomationPage = () => import("../pages/AutomationPage");
 const loadNodesPage = () => import("../pages/NodesPage");
@@ -62,20 +61,7 @@ export const builtinApps: BuiltinAppEntry[] = [
     labelKey: "app.nav.chat",
     load: loadChatPage,
     component: pageComponent(loadChatPage, "ChatPage"),
-    isActive: (pathname) => (pathname === "/" || pathname.startsWith("/chat")) && !pathname.startsWith("/chat-v2"),
-    shellClassName: "chat-shell",
-    headerTitleKey: "app.chatWorkspace",
-    headerSubtitleKey: "app.subtitle",
-  }),
-  entry({
-    id: "chat-v2",
-    navPath: "/chat-v2",
-    routePaths: ["/chat-v2", "/chat-v2/:channel/:sessionKey"],
-    icon: <CommentOutlined />,
-    labelKey: "app.nav.chatV2",
-    load: loadChatV2Page,
-    component: pageComponent(loadChatV2Page, "ChatV2Page"),
-    isActive: (pathname) => pathname.startsWith("/chat-v2"),
+    isActive: (pathname) => pathname === "/" || pathname.startsWith("/chat"),
     shellClassName: "chat-shell",
     headerTitleKey: "",
   }),
@@ -197,12 +183,24 @@ export function LegacyChatRedirect() {
   return <Navigate to={`/chat/web/${encodeURIComponent(sessionKey)}${search}`} replace />;
 }
 
+/** Redirect legacy /chat/:channel/:sessionKey deep links to the V2 layout. */
+export function LegacyChatSessionRedirect() {
+  const location = useLocation();
+  const segments = location.pathname.split("/").filter(Boolean);
+  const channel = segments[1] ?? "web";
+  const sessionKey = segments[2] ?? "";
+  const search = location.search || "";
+  return <Navigate to={`/chat/${encodeURIComponent(channel)}/${encodeURIComponent(sessionKey)}${search}`} replace />;
+}
+
 export function renderBuiltinAppRoutes() {
   return (
     <>
       {builtinAppRoutes().map((route) => (
         <Route key={route.path} path={route.path} element={route.element} />
       ))}
+      <Route path="/chat-v2" element={<Navigate to="/chat" replace />} />
+      <Route path="/chat-v2/:channel/:sessionKey" element={<LegacyChatSessionRedirect />} />
       <Route path="/chat/:sessionKey" element={<LegacyChatRedirect />} />
     </>
   );

@@ -910,6 +910,17 @@ func NewHandlerWithRuntime(
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		// Fold the optional workspace_dir into the locator's project_dir
+		// metadata so the backend sees a single source of truth.  An
+		// explicit locator metadata entry wins when both are set.
+		if dir := strings.TrimSpace(req.WorkspaceDir); dir != "" {
+			if req.Locator.Metadata == nil {
+				req.Locator.Metadata = map[string]string{}
+			}
+			if strings.TrimSpace(req.Locator.Metadata["project_dir"]) == "" {
+				req.Locator.Metadata["project_dir"] = dir
+			}
+		}
 		opened, err := service.OpenSession(r.Context(), req.Locator)
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -1827,6 +1838,9 @@ func statusForSessionError(err error) int {
 		return http.StatusNotFound
 	}
 	if errors.Is(err, skill.ErrSkillInvalidRequest) {
+		return http.StatusBadRequest
+	}
+	if errors.Is(err, backend.ErrInvalidWorkspaceDir) {
 		return http.StatusBadRequest
 	}
 	if errors.Is(err, skill.ErrSkillConflict) {

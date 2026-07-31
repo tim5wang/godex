@@ -237,8 +237,11 @@ func (a *Agent) maybeStartBackgroundCompaction(ctx context.Context) {
 		}
 		promptStateMessages := runtimePromptMessages(promptStateSections)
 		runtimeMessages, _ := a.collectRuntimeMessages()
-		allRuntimeMessages := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
-		estimate := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), a.compactionTriggerTokens())
+		memoryIndexTokens := 0
+		if _, tokens, memErr := a.buildMemoryIndexPromptMessage(); memErr == nil {
+			memoryIndexTokens = tokens
+		}
+		estimate := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), a.compactionTriggerTokens())
 		if !a.backgroundCompactionPressure(estimate) {
 			return
 		}

@@ -24,17 +24,21 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 		return tools.ContextInspection{}, err
 	}
 	agentProfile := agentProfileFromContext(ctx)
+	memoryIndexTokens := 0
+	if _, tokens, err := a.buildMemoryIndexPromptMessage(); err == nil {
+		memoryIndexTokens = tokens
+	}
 	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
 	if err != nil {
 		return tools.ContextInspection{}, err
 	}
 	promptStateMessages := runtimePromptMessages(promptStateSections)
 	runtimeMessages, _ := a.collectRuntimeMessages()
-	allRuntimeMessages := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
+	volatileMessages := append(protocol.CloneMessages(memoryMessages), protocol.CloneMessages(runtimeMessages)...)
 
 	toolSchemas := a.toolHandler.ActiveSchemas()
 	triggerTokens := a.compactionTriggerTokens()
-	estimate := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, toolSchemas, triggerTokens)
+	estimate := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, toolSchemas, triggerTokens)
 	pendingCount := 0
 	if a.permissions != nil && strings.TrimSpace(sessionID) != "" {
 		pendingCount = len(a.permissions.ListPending(sessionID))
@@ -46,7 +50,8 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 		HistoryTokenEstimate:          estimate.Breakdown.History,
 		TotalTokenEstimate:            estimate.Breakdown.Total,
 		TokenBreakdown:                estimate.Breakdown,
-		PrefixCache:                   prefixCacheInspection(system, toolSchemas, history, promptStateSections, promptStateMessages),
+		PrefixCache:                   prefixCacheInspection(system, toolSchemas, history, promptStateSections, memoryIndexTokens, volatileMessages),
+		CacheUsage:                    a.cacheUsageSnapshot(),
 		CompressThreshold:             triggerTokens,
 		SuggestCompact:                len(estimate.Reasons) > 0,
 		CompressionReasons:            append([]string{}, estimate.Reasons...),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -140,11 +141,100 @@ func NewWithSharedDependencies(cfg *config.Config, shared *SharedDependencies, s
 // <sessionsDir>/<sessionID>/todos.json so that todos cannot cross
 // session boundaries.  All other dependencies are still sourced
 // from the shared workspace services.
+//
+// When cfg carries a WorkspaceDir different from the one the shared
+// dependencies were built with, the returned agent owns a per-session
+// sandbox rooted at cfg.WorkspaceDir so tool execution lands in the
+// session's working directory instead of the service directory.
 func NewForSession(cfg *config.Config, shared *SharedDependencies, sessionID string) *Agent {
-	return NewWithSharedDependencies(cfg, shared, sessionID)
+	agent := NewWithSharedDependencies(cfg, shared, sessionID)
+	agent.ensureWorkspaceSandbox(cfg, shared)
+	return agent
+}
+
+// ensureWorkspaceSandbox detects a per-session workspace override and
+// rebuilds the agent's sandbox against cfg.WorkspaceDir when the shared
+// sandbox is still bound to a different directory.  The workspaceOverride
+// field records the override so ApplyConfig can re-apply it after global
+// config reloads.
+func (a *Agent) ensureWorkspaceSandbox(cfg *config.Config, shared *SharedDependencies) {
+	if a == nil || cfg == nil || shared == nil {
+		return
+	}
+	dir := strings.TrimSpace(cfg.WorkspaceDir)
+	if dir == "" {
+		return
+	}
+	sharedDir := ""
+	if sandbox := shared.snapshot().sandbox; sandbox != nil {
+		sharedDir = strings.TrimSpace(sandbox.ToolBinding().WorkspaceDir)
+	}
+	if sharedDir == "" || sameWorkspaceDir(dir, sharedDir) {
+		return
+	}
+	a.mu.Lock()
+	a.workspaceOverride = dir
+	a.sandbox = localSandboxFromConfig(cfg)
+	a.mu.Unlock()
+}
+
+func sameWorkspaceDir(a, b string) bool {
+	if a == b {
+		return true
+	}
+	// Resolve symlinks (macOS /var → /private/var) so the default
+	// session never allocates a redundant sandbox.
+	resolve := func(p string) string {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return resolved
+		}
+		return p
+	}
+	return resolve(a) == resolve(b)
+}
+
+// CloneConfigForWorkspace returns a copy of cfg whose WorkspaceDir is
+// pinned to workspaceDir, with TempDir re-derived when it lived inside
+// the original workspace.  The backend uses it when loading a session
+// opened against an explicit working directory, and ApplyConfig uses
+// it to re-pin refreshed global configs onto the same override.
+func CloneConfigForWorkspace(cfg *config.Config, workspaceDir string) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+	cloned := cfg.Clone()
+	cloned.WorkspaceDir = workspaceDir
+	cloned.TempDir = workspaceDerivedTempDir(workspaceDir, cfg.WorkspaceDir, cfg.TempDir)
+	return cloned
+}
+
+// workspaceDerivedTempDir picks the temp dir for a session whose
+// workspace was overridden: when the base temp dir lives inside the
+// base workspace (the default `<workspace>/.godex/.tmp`), the derived
+// temp dir mirrors that layout inside the overridden workspace so
+// spilled tool results stay next to the files they describe.  A
+// temp dir configured outside the workspace is user intent and is
+// kept as-is.
+func workspaceDerivedTempDir(workspaceDir, baseWorkspaceDir, baseTempDir string) string {
+	baseTempDir = strings.TrimSpace(baseTempDir)
+	if baseTempDir == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(baseWorkspaceDir, baseTempDir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return baseTempDir
+	}
+	return filepath.Join(workspaceDir, rel)
 }
 
 // ApplyConfig swaps the agent runtime dependencies to a fresh config snapshot.
+//
+// Sessions opened against an explicit per-session working directory
+// (workspaceOverride set by NewForSession) keep their override: the
+// refreshed global config is cloned and WorkspaceDir is pinned back to
+// the session directory, and the sandbox is rebuilt against it, so a
+// global config reload can never silently move tool execution back to
+// the service directory.
 func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	if cfg == nil {
 		return
@@ -157,6 +247,12 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	handler := a.toolHandler
 	activeBundles := append([]string{}, handler.Catalog().ActiveBundles...)
 	a.mu.Lock()
+	if override := strings.TrimSpace(a.workspaceOverride); override != "" && !sameWorkspaceDir(override, strings.TrimSpace(cfg.WorkspaceDir)) {
+		cfg = CloneConfigForWorkspace(cfg, override)
+		a.sandbox = localSandboxFromConfig(cfg)
+	} else {
+		a.sandbox = deps.sandbox
+	}
 	a.cfg = cfg
 	a.taskMgr = deps.taskMgr
 	a.msgBus = deps.msgBus
@@ -192,10 +288,6 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 		a.subagentJobs = newSubagentJobStore(subagentJobsDir(cfg))
 	}
 	a.todoMgr = deps.todoMgr
-	a.sandbox = deps.sandbox
-	if a.sandbox == nil {
-		a.sandbox = localSandboxFromConfig(cfg)
-	}
 	a.mu.Unlock()
 
 	nextHandler := tools.NewToolHandler()
@@ -379,6 +471,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	ctx = tools.WithSessionContext(ctx, opts.RuntimeContext)
 	ctx = conversation.WithUsageContext(ctx, a.usageContext(opts.RuntimeContext, opts.SessionID, opts.TurnID, ""))
 	ctx = withHistoryRecallTurnState(ctx)
+	a.registerUsageHook(opts.SessionID)
 	a.resetIdle()
 	var ackRuntime func()
 	sink := opts.Sink

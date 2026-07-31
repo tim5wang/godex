@@ -52,6 +52,10 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	memoryIndexMessage, memoryIndexTokens, err := a.buildMemoryIndexPromptMessage()
+	if err != nil {
+		return nil, err
+	}
 	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
 	if err != nil {
 		return nil, err
@@ -61,24 +65,36 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	if ledger := strings.TrimSpace(tools.SessionContextFromContext(ctx).ProjectLedger); ledger != "" {
 		runtimeMessages = append([]protocol.Message{protocol.NewEphemeralTextMessage(protocol.KindBackground, formatProjectLedgerRuntimeMessage(ledger))}, runtimeMessages...)
 	}
-	allRuntimeMessages := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
+
+	// Split runtime content by stability for KV prefix caching:
+	//   quasiStableMessages = memory index + runtime prompt sections. They
+	//     change only on memory writes, bundle/skill activation, or daily
+	//     rollover, so they sit BEFORE history and let the history prefix
+	//     cache survive per-turn churn.
+	//   volatileMessages    = memory recall, project ledger, background
+	//     notifications, inbox previews, todo status. They can change every
+	//     turn, so they sit AFTER history where their churn is uncached but
+	//     tiny, and the final cache_control breakpoint lands on real
+	//     conversation history.
+	quasiStableMessages := make([]protocol.Message, 0, len(promptStateMessages)+1)
+	if memoryIndexMessage.Metadata != nil {
+		quasiStableMessages = append(quasiStableMessages, memoryIndexMessage)
+	}
+	quasiStableMessages = append(quasiStableMessages, promptStateMessages...)
+	volatileMessages := append(protocol.CloneMessages(memoryMessages), protocol.CloneMessages(runtimeMessages)...)
 
 	triggerTokens := a.compactionTriggerTokens()
-	preliminary := estimateContextBudget(system, history, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), triggerTokens)
+	preliminary := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), triggerTokens)
 	compactedHistory, compacted, compactionDiag, err := a.maybeAutoCompact(ctx, history, version, system, preliminary)
 	if err != nil {
 		return nil, err
 	}
-	// Place runtime and memory messages BEFORE history so the cache_control
-	// breakpoint (which falls on the last message) lands on actual conversation
-	// history instead of ephemeral per-turn runtime content.
-	combined := append(protocol.CloneMessages(promptStateMessages), runtimeMessages...)
-	combined = append(combined, memoryMessages...)
-	combined = append(combined, protocol.CloneMessages(compactedHistory)...)
-	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, a.toolHandler.ActiveSchemas(), triggerTokens)
+	combined := append(protocol.CloneMessages(quasiStableMessages), protocol.CloneMessages(compactedHistory)...)
+	combined = append(combined, volatileMessages...)
+	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), triggerTokens)
 	historyRecall := a.evaluateHistoryRecall(ctx, query, compactedHistory, memoryLayers, compacted)
 	toolSchemas := a.activeToolSchemas(agentProfile)
-	estimate := estimateContextBudget(system, compactedHistory, memoryMessages, allRuntimeMessages, toolSchemas, triggerTokens)
+	estimate := estimateContextBudget(system, compactedHistory, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, toolSchemas, triggerTokens)
 	reasons := estimate.Reasons
 	compactionBefore := 0
 	compactionAfter := 0
@@ -412,19 +428,20 @@ type contextBudgetEstimate struct {
 
 const maxContextToolResultReferences = 8
 
-func estimateContextBudget(system string, history, memoryMessages, runtimeMessages []protocol.Message, toolSchemas []protocol.ToolSchema, threshold int) contextBudgetEstimate {
+func estimateContextBudget(system string, history, memoryRecallMessages, promptStateMessages, volatileRuntimeMessages []protocol.Message, memoryIndexTokens int, toolSchemas []protocol.ToolSchema, threshold int) contextBudgetEstimate {
 	var estimate contextBudgetEstimate
 	estimate.Breakdown.System = compress.CountTokens(system)
 
 	historyBase, historyToolResults, historyAttachments, historyRefs, historyRefCount := estimateMessageSet(history)
-	memoryBase, memoryToolResults, memoryAttachments, memoryRefs, memoryRefCount := estimateMessageSet(memoryMessages)
-	runtimeBase, runtimeToolResults, runtimeAttachments, runtimeRefs, runtimeRefCount := estimateMessageSet(runtimeMessages)
+	memoryBase, memoryToolResults, memoryAttachments, memoryRefs, memoryRefCount := estimateMessageSet(memoryRecallMessages)
+	runtimeBase, runtimeToolResults, runtimeAttachments, runtimeRefs, runtimeRefCount := estimateMessageSet(promptStateMessages)
+	volatileBase, volatileToolResults, volatileAttachments, volatileRefs, volatileRefCount := estimateMessageSet(volatileRuntimeMessages)
 
 	estimate.Breakdown.History = historyBase
-	estimate.Breakdown.Memory = memoryBase
-	estimate.Breakdown.Runtime = runtimeBase
-	estimate.Breakdown.ToolResults = historyToolResults + memoryToolResults + runtimeToolResults
-	estimate.Breakdown.Attachments = historyAttachments + memoryAttachments + runtimeAttachments
+	estimate.Breakdown.Memory = memoryBase + memoryIndexTokens
+	estimate.Breakdown.Runtime = runtimeBase + volatileBase
+	estimate.Breakdown.ToolResults = historyToolResults + memoryToolResults + runtimeToolResults + volatileToolResults
+	estimate.Breakdown.Attachments = historyAttachments + memoryAttachments + runtimeAttachments + volatileAttachments
 	estimate.Breakdown.ToolSchemas = estimateToolSchemas(toolSchemas)
 	estimate.Breakdown.Total = estimate.Breakdown.System +
 		estimate.Breakdown.History +
@@ -437,19 +454,29 @@ func estimateContextBudget(system string, history, memoryMessages, runtimeMessag
 	estimate.ToolResultReferences = appendLimitedToolResultRefs(estimate.ToolResultReferences, historyRefs...)
 	estimate.ToolResultReferences = appendLimitedToolResultRefs(estimate.ToolResultReferences, memoryRefs...)
 	estimate.ToolResultReferences = appendLimitedToolResultRefs(estimate.ToolResultReferences, runtimeRefs...)
-	estimate.LargeToolResultReferenceCount = historyRefCount + memoryRefCount + runtimeRefCount
+	estimate.ToolResultReferences = appendLimitedToolResultRefs(estimate.ToolResultReferences, volatileRefs...)
+	estimate.LargeToolResultReferenceCount = historyRefCount + memoryRefCount + runtimeRefCount + volatileRefCount
 	estimate.Reasons = compressionReasons(estimate.Breakdown, threshold)
 	return estimate
 }
 
-func prefixCacheInspection(system string, toolSchemas []protocol.ToolSchema, history []protocol.Message, dynamicSections []runtimePromptSection, dynamicMessages []protocol.Message) tools.PrefixCacheInspection {
+// prefixCacheInspection reports prompt-cache stability signals. Stable tokens
+// cover the system prompt, tool schemas, and the quasi-stable runtime sections
+// (memory index, skill catalog/repo map, active skills, environment, tool
+// availability) that sit before history. Dynamic tokens cover the volatile
+// tail (memory recall, ledger, notifications, inbox, todos) appended after
+// history; history itself is excluded because it grows monotonically and its
+// cacheability is handled by the trailing cache_control breakpoint.
+func prefixCacheInspection(system string, toolSchemas []protocol.ToolSchema, history []protocol.Message, quasiStableSections []runtimePromptSection, memoryIndexTokens int, volatileMessages []protocol.Message) tools.PrefixCacheInspection {
 	return tools.PrefixCacheInspection{
-		SystemHash:           sha256Hex([]byte(system)),
-		ToolSchemasHash:      sha256Canonical(toolSchemas),
-		StablePrefixHash:     sha256Canonical(stablePrefixCacheInput{System: system, ToolSchemas: toolSchemas, History: history}),
-		StableSystemTokens:   compress.CountTokens(system),
-		DynamicRuntimeTokens: estimateMessages(dynamicMessages),
-		DynamicSectionTokens: runtimePromptSectionTokenMap(dynamicSections),
+		SystemHash:              sha256Hex([]byte(system)),
+		ToolSchemasHash:         sha256Canonical(toolSchemas),
+		StablePrefixHash:        sha256Canonical(stablePrefixCacheInput{System: system, ToolSchemas: toolSchemas, History: history}),
+		StableSystemTokens:      compress.CountTokens(system),
+		StableToolSchemaTokens:  estimateToolSchemas(toolSchemas),
+		StableMemoryIndexTokens: memoryIndexTokens,
+		DynamicRuntimeTokens:    estimateMessages(volatileMessages),
+		DynamicSectionTokens:    runtimePromptSectionTokenMap(quasiStableSections),
 	}
 }
 

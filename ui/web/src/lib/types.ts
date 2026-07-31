@@ -126,6 +126,7 @@ export interface ContextInspection {
   total_token_estimate?: number;
   token_breakdown?: ContextTokenBreakdown;
   prefix_cache?: PrefixCacheInspection;
+  cache_usage?: CacheUsageInspection;
   compress_threshold: number;
   suggest_compact: boolean;
   compression_reasons?: string[];
@@ -150,8 +151,18 @@ export interface PrefixCacheInspection {
   tool_schemas_hash?: string;
   stable_prefix_hash?: string;
   stable_system_tokens: number;
+  stable_tool_schema_tokens?: number;
+  stable_memory_index_tokens?: number;
   dynamic_runtime_tokens: number;
   dynamic_section_tokens?: Record<string, number>;
+}
+
+export interface CacheUsageInspection {
+  calls: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  hit_rate_percent: number;
 }
 
 export interface ContextTokenBreakdown {

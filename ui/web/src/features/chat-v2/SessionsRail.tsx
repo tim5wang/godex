@@ -10,7 +10,6 @@ import {
   QuestionCircleOutlined,
   SearchOutlined,
   SwapOutlined,
-  VerticalLeftOutlined,
   VerticalRightOutlined,
 } from "@ant-design/icons";
 import { useMemo, useState } from "react";
@@ -26,7 +25,8 @@ interface SessionsRailProps {
   searchQuery: string;
   deletingSessionId?: string;
   onSearchChange: (query: string) => void;
-  onCreate: () => void;
+  /** workspaceDir 为空/undefined 时使用服务默认运行目录。 */
+  onCreate: (workspaceDir?: string) => void;
   onSelect: (session: ListedSession) => void;
   onDelete: (session: ListedSession) => void;
   onToggleCollapsed: () => void;
@@ -116,6 +116,47 @@ function SessionPopover({ s, onDelete, isDeleting, t }: { s: ListedSession; onDe
   );
 }
 
+/** Popover form letting the user optionally pin a new chat to an explicit
+ *  working directory.  Empty input keeps the service default directory. */
+function NewChatWorkspacePopover(props: { onCreate: (workspaceDir?: string) => void; children: React.ReactNode }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [dir, setDir] = useState("");
+  const submit = () => {
+    props.onCreate(dir.trim() || undefined);
+    setDir("");
+    setOpen(false);
+  };
+  return (
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      trigger="click"
+      placement="bottomLeft"
+      content={
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, width: 280 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t("chat.chatV2Rail.workspaceDirHint")}
+          </Typography.Text>
+          <Input
+            autoFocus
+            allowClear
+            placeholder={t("chat.chatV2Rail.workspaceDirPlaceholder")}
+            value={dir}
+            onChange={(event) => setDir(event.target.value)}
+            onPressEnter={submit}
+          />
+          <Button type="primary" size="small" onClick={submit}>
+            {t("chat.chatV2Rail.newChat")}
+          </Button>
+        </div>
+      }
+    >
+      {props.children}
+    </Popover>
+  );
+}
+
 /** Chat V2 left rail: brand-adjacent session list with New chat, search and
  *  workspace-grouped conversations. Collapses to a 48px icon strip. */
 export function SessionsRail(props: SessionsRailProps) {
@@ -127,9 +168,9 @@ export function SessionsRail(props: SessionsRailProps) {
         <Popover content={t("chat.chatV2Rail.expandSidebar")} trigger="hover" placement="right">
           <Button type="text" icon={<VerticalRightOutlined />} aria-label={t("chat.chatV2Rail.expandSidebar")} onClick={props.onToggleCollapsed} />
         </Popover>
-        <Popover content={t("chat.chatV2Rail.newChat")} trigger="hover" placement="right">
-          <Button type="text" icon={<PlusOutlined />} aria-label={t("chat.chatV2Rail.newChat")} onClick={props.onCreate} />
-        </Popover>
+        <NewChatWorkspacePopover onCreate={props.onCreate}>
+          <Button type="text" icon={<PlusOutlined />} aria-label={t("chat.chatV2Rail.newChat")} />
+        </NewChatWorkspacePopover>
       </div>
     );
   }
@@ -140,18 +181,11 @@ export function SessionsRail(props: SessionsRailProps) {
   return (
     <div className="chat-v2-rail" data-testid="chat-v2-sessions">
       <div className="chat-v2-rail-top">
-        <Button block type="primary" icon={<PlusOutlined />} className="chat-v2-new-chat" onClick={props.onCreate}>
-          {t("chat.chatV2Rail.newChat")}
-        </Button>
-        <Popover content={t("chat.chatV2Rail.collapseSidebar")} trigger="hover">
-          <Button
-            type="text"
-            icon={<VerticalLeftOutlined />}
-            aria-label={t("chat.chatV2Rail.collapseSidebar")}
-            className="chat-v2-rail-collapse"
-            onClick={props.onToggleCollapsed}
-          />
-        </Popover>
+        <NewChatWorkspacePopover onCreate={props.onCreate}>
+          <Button block type="primary" icon={<PlusOutlined />} className="chat-v2-new-chat">
+            {t("chat.chatV2Rail.newChat")}
+          </Button>
+        </NewChatWorkspacePopover>
       </div>
       <Input
         className="chat-v2-search"

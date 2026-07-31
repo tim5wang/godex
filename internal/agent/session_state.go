@@ -67,6 +67,7 @@ func (a *Agent) ClearMessages() {
 	a.toolHandler.ResetActiveToolsToDefaults()
 	a.historyVersion++
 	a.lastCompactedVersion = 0
+	a.resetCacheStats()
 }
 
 // TruncateMessages resets the transcript to the first count messages.

@@ -20,6 +20,7 @@ type ContextInspection struct {
 	TotalTokenEstimate            int                     `json:"total_token_estimate,omitempty"`
 	TokenBreakdown                ContextTokenBreakdown   `json:"token_breakdown,omitempty"`
 	PrefixCache                   PrefixCacheInspection   `json:"prefix_cache,omitempty"`
+	CacheUsage                    CacheUsageInspection    `json:"cache_usage,omitempty"`
 	CompressThreshold             int                     `json:"compress_threshold"`
 	SuggestCompact                bool                    `json:"suggest_compact"`
 	CompressionReasons            []string                `json:"compression_reasons,omitempty"`
@@ -53,15 +54,28 @@ type ContextTokenBreakdown struct {
 	Total       int `json:"total"`
 }
 
+// CacheUsageInspection reports provider-measured prompt cache usage for the
+// current session. Unlike PrefixCacheInspection (a static estimate of what
+// could be cached), this is aggregated from real API responses.
+type CacheUsageInspection struct {
+	Calls            int     `json:"calls"`
+	InputTokens      int64   `json:"input_tokens"`
+	CacheReadTokens  int64   `json:"cache_read_tokens"`
+	CacheWriteTokens int64   `json:"cache_write_tokens"`
+	HitRatePercent   float64 `json:"hit_rate_percent"`
+}
+
 // PrefixCacheInspection describes prompt stability signals for providers that
 // cache repeated request prefixes.
 type PrefixCacheInspection struct {
-	SystemHash           string         `json:"system_hash,omitempty"`
-	ToolSchemasHash      string         `json:"tool_schemas_hash,omitempty"`
-	StablePrefixHash     string         `json:"stable_prefix_hash,omitempty"`
-	StableSystemTokens   int            `json:"stable_system_tokens,omitempty"`
-	DynamicRuntimeTokens int            `json:"dynamic_runtime_tokens,omitempty"`
-	DynamicSectionTokens map[string]int `json:"dynamic_section_tokens,omitempty"`
+	SystemHash               string         `json:"system_hash,omitempty"`
+	ToolSchemasHash          string         `json:"tool_schemas_hash,omitempty"`
+	StablePrefixHash         string         `json:"stable_prefix_hash,omitempty"`
+	StableSystemTokens       int            `json:"stable_system_tokens,omitempty"`
+	StableToolSchemaTokens   int            `json:"stable_tool_schema_tokens,omitempty"`
+	StableMemoryIndexTokens  int            `json:"stable_memory_index_tokens,omitempty"`
+	DynamicRuntimeTokens     int            `json:"dynamic_runtime_tokens,omitempty"`
+	DynamicSectionTokens     map[string]int `json:"dynamic_section_tokens,omitempty"`
 }
 
 // ToolResultReference summarizes a model-visible placeholder for a large tool

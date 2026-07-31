@@ -3610,3 +3610,172 @@ func reloadSessionForTest(service *Service, sessionID string) error {
 	service.mu.Unlock()
 	return nil
 }
+
+// setTitleIfEmpty must allow a real title to replace the "New chat" placeholder
+// that deriveSessionTitle persists before the first user message generates one.
+// Otherwise sessions whose first turn needs a permission (or whose async LLM
+// title fails) stay stuck on the placeholder forever.
+func TestSetTitleIfEmptyReplacesNewChatPlaceholder(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}})
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "placeholder-title"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	service.mu.Lock()
+	session := service.sessions[opened.SessionID]
+	service.mu.Unlock()
+	if session == nil {
+		t.Fatalf("session not loaded")
+	}
+
+	// Simulate the placeholder persisted before the first message's title.
+	session.setTitleIfEmpty("New chat")
+	// Now the real title from the first user message must replace it.
+	session.setTitleIfEmpty("如图，图1是godex的 web ui")
+	if got := session.title; got != "如图，图1是godex的 web ui" {
+		t.Fatalf("expected placeholder replaced by real title, got %#v", got)
+	}
+
+	// A subsequent placeholder attempt must not clobber a real title.
+	session.setTitleIfEmpty("New chat")
+	if got := session.title; got != "如图，图1是godex的 web ui" {
+		t.Fatalf("expected real title preserved over later placeholder, got %#v", got)
+	}
+}
+
+// TestValidateSessionProjectDir covers the API-boundary validation for
+// caller-supplied per-session working directories: empty means "no
+// override", valid directories resolve to absolute cleaned paths, and
+// missing / non-directory paths are rejected with ErrInvalidWorkspaceDir.
+func TestValidateSessionProjectDir(t *testing.T) {
+	dir := t.TempDir()
+
+	if got, err := validateSessionProjectDir(""); err != nil || got != "" {
+		t.Fatalf("empty input: got %q, %v", got, err)
+	}
+	if got, err := validateSessionProjectDir(dir + string(filepath.Separator) + "." + string(filepath.Separator)); err != nil || got != filepath.Clean(dir) {
+		t.Fatalf("dot variant: got %q, %v; want %q", got, err, filepath.Clean(dir))
+	}
+	if _, err := validateSessionProjectDir(filepath.Join(dir, "missing")); !errors.Is(err, ErrInvalidWorkspaceDir) {
+		t.Fatalf("missing dir should fail with ErrInvalidWorkspaceDir, got %v", err)
+	}
+	file := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateSessionProjectDir(file); !errors.Is(err, ErrInvalidWorkspaceDir) {
+		t.Fatalf("regular file should fail with ErrInvalidWorkspaceDir, got %v", err)
+	}
+}
+
+// TestOpenSessionWithWorkspaceDirPinsAgentWorkspace asserts that a session
+// opened with an explicit project_dir gets an agent whose sandbox is
+// rooted at that directory, while a default session keeps the service
+// workspace.  It also guards the identity rule: same key + different
+// directory = different session.
+func TestOpenSessionWithWorkspaceDirPinsAgentWorkspace(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	otherDir := t.TempDir()
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{
+		Channel: "web",
+		Key:     "scoped",
+		Metadata: map[string]string{
+			sessionProjectDirMetadataKey: otherDir,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open scoped session: %v", err)
+	}
+	service.mu.Lock()
+	session := service.sessions[opened.SessionID]
+	service.mu.Unlock()
+	if session == nil {
+		t.Fatal("scoped session not loaded")
+	}
+	if got := session.agent.SandboxBinding().WorkspaceDir; got != filepath.Clean(otherDir) {
+		t.Fatalf("scoped session workspace = %q, want %q", got, otherDir)
+	}
+
+	// Same key, different directory → different session id.
+	def, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "scoped"})
+	if err != nil {
+		t.Fatalf("open default session: %v", err)
+	}
+	if def.SessionID == opened.SessionID {
+		t.Fatal("expected distinct session ids for different workspaces")
+	}
+	service.mu.Lock()
+	defSession := service.sessions[def.SessionID]
+	service.mu.Unlock()
+	if got := defSession.agent.SandboxBinding().WorkspaceDir; got != filepath.Clean(cfg.WorkspaceDir) {
+		t.Fatalf("default session workspace = %q, want %q", got, cfg.WorkspaceDir)
+	}
+
+	// Reopening with the same directory resumes the same session.
+	again, err := service.OpenSession(context.Background(), SessionLocator{
+		Channel: "web",
+		Key:     "scoped",
+		Metadata: map[string]string{
+			sessionProjectDirMetadataKey: otherDir + string(filepath.Separator),
+		},
+	})
+	if err != nil {
+		t.Fatalf("reopen scoped session: %v", err)
+	}
+	if again.SessionID != opened.SessionID {
+		t.Fatalf("reopen with same dir hashed to %q, want %q", again.SessionID, opened.SessionID)
+	}
+}
+
+// TestOpenSessionRejectsInvalidWorkspaceDir ensures a bad project_dir is
+// rejected at the boundary instead of silently falling back to the
+// service workspace.
+func TestOpenSessionRejectsInvalidWorkspaceDir(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+
+	_, err := service.OpenSession(context.Background(), SessionLocator{
+		Channel: "web",
+		Key:     "bad-dir",
+		Metadata: map[string]string{
+			sessionProjectDirMetadataKey: filepath.Join(cfg.WorkspaceDir, "does-not-exist"),
+		},
+	})
+	if !errors.Is(err, ErrInvalidWorkspaceDir) {
+		t.Fatalf("expected ErrInvalidWorkspaceDir, got %v", err)
+	}
+}
+
+// TestApplyConfigKeepsSessionWorkspaceOverride asserts that a global
+// config reload does not move a workspace-scoped session's tools back
+// to the service directory.
+func TestApplyConfigKeepsSessionWorkspaceOverride(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	otherDir := t.TempDir()
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{
+		Channel: "web",
+		Key:     "scoped-reload",
+		Metadata: map[string]string{
+			sessionProjectDirMetadataKey: otherDir,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open scoped session: %v", err)
+	}
+
+	if err := service.ApplyConfig(cfg); err != nil {
+		t.Fatalf("apply config: %v", err)
+	}
+	service.mu.Lock()
+	session := service.sessions[opened.SessionID]
+	service.mu.Unlock()
+	if got := session.agent.SandboxBinding().WorkspaceDir; got != filepath.Clean(otherDir) {
+		t.Fatalf("workspace after ApplyConfig = %q, want %q", got, otherDir)
+	}
+}

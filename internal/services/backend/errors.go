@@ -14,6 +14,10 @@ var (
 	ErrTurnNotRetryable   = errors.New("turn is not retryable")
 	ErrTurnNotResumable   = errors.New("turn is not resumable")
 	ErrTurnCanceled       = errors.New("turn canceled")
+	// ErrInvalidWorkspaceDir marks a caller-supplied per-session working
+	// directory that failed boundary validation (missing, not a
+	// directory, unresolvable).  The HTTP layer maps it to 400.
+	ErrInvalidWorkspaceDir = errors.New("invalid workspace_dir")
 )
 
 func newSessionNotFoundError(sessionID string) error {

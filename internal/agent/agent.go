@@ -57,6 +57,12 @@ type Agent struct {
 	client        conversation.Caller
 	sandbox       *sandbox.Sandbox
 	workerRuntime workerruntime.Runtime
+	// workspaceOverride is set when this session was opened against an
+	// explicit working directory different from the service-level
+	// cfg.WorkspaceDir. ApplyConfig must re-apply the override on top of
+	// any refreshed global config so a global config reload never moves
+	// the session's tool execution back to the service directory.
+	workspaceOverride string
 
 	prompts              conversation.PromptLayers
 	messages             []protocol.Message
@@ -71,6 +77,13 @@ type Agent struct {
 	compactionRunning    bool
 	now                  func() time.Time
 	mu                   sync.Mutex
+	// cacheStatsMu guards cacheStats, the in-memory per-session aggregation
+	// of provider-reported prompt cache usage. It is fed by a conversation
+	// usage hook and surfaced through InspectContext so the UI can show the
+	// real cache hit rate instead of only the static prefix estimate.
+	cacheStatsMu sync.Mutex
+	cacheStats   sessionCacheStats
+	unsubUsage   func()
 	// currentLongTaskArgs is a transient pointer set by runLongTaskSync
 	// for the duration of a single run so helpers like
 	// appendLongTaskReflux can see args such as NoReflux without

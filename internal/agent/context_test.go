@@ -245,7 +245,7 @@ func TestBuildContextUsesMatchingBackgroundCompactionCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("system prompt: %v", err)
 	}
-	estimate := estimateContextBudget(system, history, nil, nil, nil, a.compactionTriggerTokens())
+	estimate := estimateContextBudget(system, history, nil, nil, nil, 0, nil, a.compactionTriggerTokens())
 	result, err := a.runCompaction(context.Background(), "fast", compress.SessionSummaryRequest{
 		System:         system,
 		History:        history,
@@ -405,12 +405,18 @@ func TestInspectContextReportsTokenBreakdownAndToolResultReferences(t *testing.T
 	if inspection.PrefixCache.StableSystemTokens == 0 {
 		t.Fatalf("expected stable system token estimate, got %+v", inspection.PrefixCache)
 	}
+	if inspection.PrefixCache.StableToolSchemaTokens == 0 {
+		t.Fatalf("expected stable tool schema token estimate, got %+v", inspection.PrefixCache)
+	}
+	if inspection.PrefixCache.StableMemoryIndexTokens == 0 {
+		t.Fatalf("expected stable memory index token estimate, got %+v", inspection.PrefixCache)
+	}
 	if inspection.PrefixCache.DynamicRuntimeTokens == 0 {
 		t.Fatalf("expected dynamic runtime token estimate, got %+v", inspection.PrefixCache)
 	}
-	for _, want := range []string{"memory_index", "environment", "tool_availability"} {
+	for _, want := range []string{"environment", "tool_availability"} {
 		if inspection.PrefixCache.DynamicSectionTokens[want] == 0 {
-			t.Fatalf("expected dynamic section token estimate for %q, got %+v", want, inspection.PrefixCache.DynamicSectionTokens)
+			t.Fatalf("expected quasi-stable section token estimate for %q, got %+v", want, inspection.PrefixCache.DynamicSectionTokens)
 		}
 	}
 }
@@ -474,6 +480,74 @@ func TestBuildContextIncludesEnvironmentPrompt(t *testing.T) {
 	}
 	if !foundEnvironment {
 		t.Fatalf("expected environment prompt in runtime messages, got %+v", build.Messages)
+	}
+}
+
+func TestBuildContextOrdersQuasiStableBeforeHistoryAndVolatileAfter(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Runtime context",
+		Summary: "Memory previews for ordering test.",
+		Content: "remembered for cache ordering test",
+		Type:    memory.TypeProject,
+		Source:  "test",
+	}); err != nil {
+		t.Fatalf("remember memory: %v", err)
+	}
+	if err := a.msgBus.Send(message.Message{
+		Type:    message.MsgTypeMessage,
+		From:    "teammate",
+		To:      "lead",
+		Content: "volatile inbox note",
+	}); err != nil {
+		t.Fatalf("send inbox message: %v", err)
+	}
+	a.AddMessage("first persistent user message")
+
+	build, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	historyIdx := -1
+	promptStateIdx := -1
+	memoryIndexIdx := -1
+	inboxIdx := -1
+	for i := range build.Messages {
+		msg := build.Messages[i]
+		text := protocol.MessageText(msg)
+		switch {
+		case (msg.Metadata == nil || !msg.Metadata.Ephemeral) && strings.Contains(text, "first persistent user message"):
+			historyIdx = i
+		case msg.Metadata != nil && msg.Metadata.Kind == protocol.KindBackground && strings.Contains(text, "# Runtime Prompt State"):
+			promptStateIdx = i
+		case msg.Metadata != nil && msg.Metadata.Kind == protocol.KindMemory && strings.Contains(text, "# Memory"):
+			memoryIndexIdx = i
+		case msg.Metadata != nil && msg.Metadata.Kind == protocol.KindInbox:
+			inboxIdx = i
+		}
+	}
+	if historyIdx < 0 {
+		t.Fatalf("expected persistent history message, got %+v", build.Messages)
+	}
+	if promptStateIdx < 0 {
+		t.Fatalf("expected quasi-stable runtime prompt state message, got %+v", build.Messages)
+	}
+	if memoryIndexIdx < 0 {
+		t.Fatalf("expected quasi-stable memory index message, got %+v", build.Messages)
+	}
+	if inboxIdx < 0 {
+		t.Fatalf("expected volatile inbox message, got %+v", build.Messages)
+	}
+	if promptStateIdx > historyIdx {
+		t.Fatalf("expected quasi-stable prompt state (%d) before history (%d)", promptStateIdx, historyIdx)
+	}
+	if memoryIndexIdx > historyIdx {
+		t.Fatalf("expected quasi-stable memory index (%d) before history (%d)", memoryIndexIdx, historyIdx)
+	}
+	if inboxIdx < historyIdx {
+		t.Fatalf("expected volatile inbox message (%d) after history (%d)", inboxIdx, historyIdx)
 	}
 }
 

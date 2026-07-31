@@ -656,6 +656,16 @@ func (s *Service) ApplyConfig(cfg *config.Config) error {
 func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*OpenedSession, error) {
 	_ = ctx
 	locator = s.withDefaultLocatorMetadata(locator)
+	// A caller-supplied project_dir is validated at the boundary: resolve
+	// to an absolute, cleaned path and require it to exist as a directory
+	// before it becomes part of the session identity hash.
+	if _, ok := locator.Metadata[sessionProjectDirMetadataKey]; ok {
+		dir, err := validateSessionProjectDir(locator.Metadata[sessionProjectDirMetadataKey])
+		if err != nil {
+			return nil, err
+		}
+		locator.Metadata[sessionProjectDirMetadataKey] = dir
+	}
 	// Resolve "default" key to the latest session when a pointer exists.
 	if strings.TrimSpace(locator.Key) == "default" {
 		if latestKey := s.readLatestSessionKey(); latestKey != "" {
@@ -782,6 +792,44 @@ func cleanProjectDir(value string) string {
 		return ""
 	}
 	return filepath.Clean(value)
+}
+
+// validateSessionProjectDir validates a caller-supplied per-session
+// working directory at the API boundary.  The returned path is cleaned
+// and made absolute so the same physical directory always hashes to
+// the same session id.  An empty input means "no override" and is
+// returned unchanged.
+func validateSessionProjectDir(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(value, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("%w %q: expand home: %v", ErrInvalidWorkspaceDir, value, err)
+		}
+		if value == "~" {
+			value = home
+		} else if strings.HasPrefix(value, "~/") {
+			value = filepath.Join(home, value[2:])
+		} else {
+			return "", fmt.Errorf("%w %q: unsupported ~user form", ErrInvalidWorkspaceDir, value)
+		}
+	}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return "", fmt.Errorf("%w %q: %v", ErrInvalidWorkspaceDir, value, err)
+	}
+	abs = filepath.Clean(abs)
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("%w %q: %v", ErrInvalidWorkspaceDir, abs, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%w %q: not a directory", ErrInvalidWorkspaceDir, abs)
+	}
+	return abs, nil
 }
 
 func (s *Service) withDefaultLocatorMetadata(locator SessionLocator) SessionLocator {
@@ -4438,12 +4486,15 @@ func (s *Service) ListSessions(ctx context.Context, filter SessionListFilter) ([
 		}
 
 		title := strings.TrimSpace(manifest.Title)
-		if title == "" {
+		if title == "" || title == "New chat" {
+			// Treat the placeholder as missing so sessions that got stuck on it
+			// (e.g. first turn needed a permission) are re-derived from state.
 			if state == nil {
 				return nil, newSessionCorruptError(sessionID, "missing %s while backfilling title", stateFileName)
 			}
-			title = deriveSessionTitle(*state)
-			if title != "" {
+			derived := deriveSessionTitle(*state)
+			if derived != "" && derived != "New chat" {
+				title = derived
 				manifest.Title = title
 				stateData, err := json.Marshal(state)
 				if err != nil {
@@ -4732,7 +4783,23 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	}
 	session.identity = agent.NormalizeAgentIdentity(session.identity, now, sessionID, "main", "GoDex", s.mainCapabilitySummary())
 
-	a := agent.NewForSession(s.cfg, s.shared, sessionID)
+	// Sessions opened against an explicit per-session working directory
+	// (locator metadata project_dir different from the service workspace)
+	// get a cloned config pinned to that directory so their tools execute
+	// there instead of in the service directory.  The default path keeps
+	// using the shared global config untouched.
+	sessionCfg := s.cfg
+	if s.cfg != nil {
+		baseDir := strings.TrimSpace(s.cfg.ProjectDir)
+		if baseDir == "" {
+			baseDir = strings.TrimSpace(s.cfg.WorkspaceDir)
+		}
+		if dir := cleanProjectDir(session.locator.Metadata[sessionProjectDirMetadataKey]); dir != "" && baseDir != "" && dir != cleanProjectDir(baseDir) {
+			sessionCfg = agent.CloneConfigForWorkspace(s.cfg, dir)
+		}
+	}
+
+	a := agent.NewForSession(sessionCfg, s.shared, sessionID)
 	a.RegisterTools()
 	if session.modelProfileID != "" {
 		if profile, ok := s.cfg.ModelProfileByID(session.modelProfileID); ok {
@@ -4757,9 +4824,11 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	session.agent = a
 
 	persistSession := false
-	if strings.TrimSpace(session.title) == "" && state != nil {
-		session.title = deriveSessionTitle(*state)
-		persistSession = true
+	if (strings.TrimSpace(session.title) == "" || strings.TrimSpace(session.title) == "New chat") && state != nil {
+		if derived := deriveSessionTitle(*state); derived != "" {
+			session.title = derived
+			persistSession = true
+		}
 	}
 	if manifest != nil && strings.TrimSpace(manifest.Title) != strings.TrimSpace(session.title) {
 		persistSession = true
@@ -5874,12 +5943,13 @@ func (s *Service) describeSession(session *sessionState) *OpenedSession {
 
 func (s *sessionState) setTitleIfEmpty(title string) {
 	title = strings.TrimSpace(title)
-	if title == "" {
+	if title == "" || title == "New chat" {
+		// Never overwrite with the placeholder; it carries no information.
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if strings.TrimSpace(s.title) != "" {
+	if strings.TrimSpace(s.title) != "" && strings.TrimSpace(s.title) != "New chat" {
 		return
 	}
 	s.title = title

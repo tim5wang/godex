@@ -2014,6 +2014,16 @@ samp {
   padding-top: 4px;
 }
 
+.ctx-popover-row-sub .ctx-popover-label {
+  padding-left: 10px;
+  opacity: 0.85;
+}
+
+.ctx-popover-hint {
+  color: var(--godex-text-secondary, #888);
+  font-size: 11px;
+}
+
 .ctx-popover-label {
   color: var(--godex-text-secondary, #888);
   flex-shrink: 0;
@@ -2120,10 +2130,6 @@ samp {
 
 .chat-v2-new-chat {
   flex: 1;
-}
-
-.chat-v2-rail-collapse {
-  flex-shrink: 0;
 }
 
 .chat-v2-search {

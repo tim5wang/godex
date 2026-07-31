@@ -44,6 +44,19 @@ type runtimePromptSection struct {
 	Tokens int
 }
 
+// quasiStableSectionKeys change infrequently (daily rollover, bundle/skill
+// activation, memory writes) and are placed BEFORE conversation history so
+// the history prefix cache survives per-turn runtime churn. Volatile sections
+// (todos, notifications, inbox, ledger) are appended AFTER history instead.
+func quasiStableSectionKey(key string) bool {
+	switch key {
+	case "skill_catalog", "repo_map", "active_skills", "environment", "tool_availability":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *Agent) buildDynamicSystemPrompt(agentProfile string) (string, error) {
 	instructionPrompt, err := a.buildInstructionPrompt()
 	if err != nil {
@@ -61,12 +74,6 @@ func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtim
 	profile := config.NormalizeAgentProfile(agentProfile)
 	sections := make([]runtimePromptSection, 0, 5)
 
-	memoryPrompt, err := a.memoryMgr.BuildPromptSection()
-	if err != nil {
-		return nil, err
-	}
-	sections = appendRuntimePromptSection(sections, "memory_index", protocol.KindMemory, memoryPrompt)
-
 	if profile != config.AgentProfileCoding {
 		skillCatalogPrompt, err := a.buildSkillCatalogPrompt()
 		if err != nil {
@@ -81,6 +88,22 @@ func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtim
 	sections = appendRuntimePromptSection(sections, "tool_availability", protocol.KindBackground, buildToolAvailabilityPromptForProfile(a.toolHandler.Catalog(), profile))
 
 	return sections, nil
+}
+
+// buildMemoryIndexPromptMessage returns the durable memory index as a
+// standalone quasi-stable message. It changes only on memory writes, so it
+// travels ahead of conversation history alongside the other quasi-stable
+// runtime sections instead of being rebuilt per-turn as dynamic content.
+func (a *Agent) buildMemoryIndexPromptMessage() (protocol.Message, int, error) {
+	memoryPrompt, err := a.memoryMgr.BuildPromptSection()
+	if err != nil {
+		return protocol.Message{}, 0, err
+	}
+	memoryPrompt = strings.TrimSpace(memoryPrompt)
+	if memoryPrompt == "" {
+		return protocol.Message{}, 0, nil
+	}
+	return protocol.NewEphemeralTextMessage(protocol.KindMemory, memoryPrompt), compress.CountTokens(memoryPrompt), nil
 }
 
 func appendRuntimePromptSection(sections []runtimePromptSection, key string, kind protocol.MessageKind, text string) []runtimePromptSection {

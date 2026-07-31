@@ -309,14 +309,16 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
   const authRequired = metaQuery.data?.auth_required ?? false;
   const routeUserId = searchParams.get("user_id");
   const noteContextId = searchParams.get("note_id")?.trim() || "";
+  const workspaceDirParam = searchParams.get("workspace_dir")?.trim() || "";
   const sessionKey = routeSessionKey || defaultSessionKey || "";
   const sessionLocator = useMemo(
     () => ({
       channel: routeChannel || "web",
       key: sessionKey,
       ...(routeUserId ? { user_id: routeUserId } : {}),
+      ...(workspaceDirParam ? { metadata: { project_dir: workspaceDirParam } } : {}),
     }),
-    [routeChannel, routeUserId, sessionKey],
+    [routeChannel, routeUserId, sessionKey, workspaceDirParam],
   );
 
   useEffect(() => {
@@ -1049,11 +1051,13 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
     ]);
   };
 
-  const createSession = (replace = false) => {
+  const createSession = (replace = false, workspaceDir?: string) => {
     const next = makeSessionKey();
     setDefaultSessionKey(next);
     reset();
-    navigate(isV2 ? `/chat-v2/web/${next}` : `/chat/web/${next}`, { replace });
+    const base = isV2 ? `/chat-v2/web/${next}` : `/chat/web/${next}`;
+    const query = workspaceDir?.trim() ? `?workspace_dir=${encodeURIComponent(workspaceDir.trim())}` : "";
+    navigate(`${base}${query}`, { replace });
     setSessionsOpen(false);
   };
 
@@ -1212,7 +1216,7 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
               searchQuery={v2SessionSearch ?? ""}
               deletingSessionId={deleteSessionMutation.variables?.session_id ?? ""}
               onSearchChange={setV2SessionSearch}
-              onCreate={() => createSession()}
+              onCreate={(workspaceDir) => createSession(false, workspaceDir)}
               onSelect={(session) => {
                 navigate(`/chat-v2/web/${session.locator.key}`);
               }}
@@ -1356,6 +1360,18 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
                             { value: "steering", label: "Steer" },
                           ]}
                         />
+                      ) : null}
+                      {running && currentTurnId ? (
+                        <Tooltip title={t("chat.cancelTurn")}>
+                          <Button
+                            danger
+                            size="small"
+                            icon={<StopOutlined />}
+                            aria-label={t("chat.cancelTurn")}
+                            loading={cancelTurnMutation.isPending}
+                            onClick={() => cancelTurnMutation.mutate({ sessionId, turnId: currentTurnId })}
+                          />
+                        </Tooltip>
                       ) : null}
                     </Space>
                   </Space>
@@ -1591,6 +1607,18 @@ export function ChatPage(props: { view?: ChatPageView } = {}) {
                       { value: "steering", label: "Steer" },
                     ]}
                   />
+                ) : null}
+                {running && currentTurnId ? (
+                  <Tooltip title={t("chat.cancelTurn")}>
+                    <Button
+                      danger
+                      size="small"
+                      icon={<StopOutlined />}
+                      aria-label={t("chat.cancelTurn")}
+                      loading={cancelTurnMutation.isPending}
+                      onClick={() => cancelTurnMutation.mutate({ sessionId, turnId: currentTurnId })}
+                    />
+                  </Tooltip>
                 ) : null}
               </Space>
             </div>
@@ -2133,90 +2161,153 @@ function ContextStatusInline({ summary, inspector }: { summary: ContextStatusSum
   const ctx = inspector?.context;
   const breakdown = ctx?.token_breakdown;
   const cache = ctx?.prefix_cache;
-  const hasCache = (cache?.stable_system_tokens ?? 0) > 0 || (cache?.dynamic_runtime_tokens ?? 0) > 0;
-  const cacheTotal = (cache?.stable_system_tokens ?? 0) + (cache?.dynamic_runtime_tokens ?? 0);
-  const cacheStable = cache?.stable_system_tokens ?? 0;
+  const cacheStableSystem = cache?.stable_system_tokens ?? 0;
+  const cacheStableTools = cache?.stable_tool_schema_tokens ?? 0;
+  const cacheStableMemory = cache?.stable_memory_index_tokens ?? 0;
+  const cacheStable = cacheStableSystem + cacheStableTools + cacheStableMemory;
+  const cacheDynamic = cache?.dynamic_runtime_tokens ?? 0;
+  const hasCache = cacheStable > 0 || cacheDynamic > 0;
+  const cacheTotal = cacheStable + cacheDynamic;
   const cacheRatio = cacheTotal > 0 ? ((cacheStable / cacheTotal) * 100) : 0;
+  const dynamicSections = Object.entries(cache?.dynamic_section_tokens ?? {}).sort((a, b) => b[1] - a[1]);
+  const realUsage = ctx?.cache_usage;
+  const hasRealUsage = (realUsage?.calls ?? 0) > 0;
+  const sectionLabel = (key: string) => {
+    const i18nKey = "chat.ctxPopoverSection" + key.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
+    const translated = t(i18nKey);
+    return translated === i18nKey ? key.replace(/_/g, " ") : translated;
+  };
 
   const content = (
     <div className="ctx-popover">
       <div className="ctx-popover-group">
-        <div className="ctx-popover-group-title">Context</div>
+        <div className="ctx-popover-group-title">{t("chat.ctxPopoverContext")}</div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Tokens</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverTokens")}</span>
           <span className="ctx-popover-value">
             {ctx ? `${formatCompactNumber(ctx.total_token_estimate ?? ctx.token_estimate ?? 0)} / ${formatCompactNumber(ctx.compress_threshold ?? 0)}` : "—"}
           </span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Occupancy</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverOccupancy")}</span>
           <span className="ctx-popover-value">{summary.budgetPercent}%</span>
         </div>
       </div>
       <div className="ctx-popover-group">
-        <div className="ctx-popover-group-title">Breakdown</div>
+        <div className="ctx-popover-group-title">{t("chat.ctxPopoverBreakdown")}</div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">System</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverSystem")}</span>
           <span className="ctx-popover-value">{formatCompactNumber(breakdown?.system ?? 0)}</span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">History</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverHistory")}</span>
           <span className="ctx-popover-value">{formatCompactNumber(breakdown?.history ?? 0)}</span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Memory</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverMemory")}</span>
           <span className="ctx-popover-value">{formatCompactNumber(breakdown?.memory ?? 0)}</span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Runtime</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverRuntime")}</span>
           <span className="ctx-popover-value">{formatCompactNumber(breakdown?.runtime ?? 0)}</span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Tool schemas</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverToolSchemas")}</span>
           <span className="ctx-popover-value">{formatCompactNumber(breakdown?.tool_schemas ?? 0)}</span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Tool results</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverToolResults")}</span>
           <span className="ctx-popover-value">{formatCompactNumber(breakdown?.tool_results ?? 0)}</span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Attachments</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverAttachments")}</span>
           <span className="ctx-popover-value">{formatCompactNumber(breakdown?.attachments ?? 0)}</span>
         </div>
         {breakdown ? (
           <div className="ctx-popover-row ctx-popover-row-total">
-            <span className="ctx-popover-label">Total</span>
+            <span className="ctx-popover-label">{t("chat.ctxPopoverTotal")}</span>
             <span className="ctx-popover-value">{formatCompactNumber(breakdown.total)}</span>
           </div>
         ) : null}
       </div>
       <div className="ctx-popover-group">
-        <div className="ctx-popover-group-title">Session</div>
+        <div className="ctx-popover-group-title">{t("chat.ctxPopoverSession")}</div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Messages</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverMessages")}</span>
           <span className="ctx-popover-value">{ctx?.message_count ?? "—"}</span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Skills</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverSkills")}</span>
           <span className="ctx-popover-value">{ctx?.active_skill_count ?? "—"}</span>
         </div>
         <div className="ctx-popover-row">
-          <span className="ctx-popover-label">Approvals</span>
+          <span className="ctx-popover-label">{t("chat.ctxPopoverApprovals")}</span>
           <span className="ctx-popover-value">{ctx?.pending_permission_count ?? "—"}</span>
         </div>
-        {hasCache ? (
-          <div className="ctx-popover-row">
-            <span className="ctx-popover-label">Cache stable</span>
-            <span className="ctx-popover-value">{formatCompactNumber(cacheStable)} ({Math.round(cacheRatio)}%)</span>
-          </div>
-        ) : null}
         {ctx?.suggest_compact ? (
           <div className="ctx-popover-row">
-            <span className="ctx-popover-label">Compaction</span>
-            <span className="ctx-popover-value"><Tag color="gold" style={{ margin: 0 }}>Suggested</Tag></span>
+            <span className="ctx-popover-label">{t("chat.ctxPopoverCompaction")}</span>
+            <span className="ctx-popover-value"><Tag color="gold" style={{ margin: 0 }}>{t("chat.ctxPopoverCompactionSuggested")}</Tag></span>
           </div>
         ) : null}
       </div>
+      {hasCache ? (
+        <div className="ctx-popover-group">
+          <div className="ctx-popover-group-title">{t("chat.ctxPopoverPrefixCache")}</div>
+          {hasRealUsage ? (
+            <>
+              <div className="ctx-popover-row">
+                <span className="ctx-popover-label">{t("chat.ctxPopoverRealHitRate")}</span>
+                <span className="ctx-popover-value">
+                  {realUsage!.hit_rate_percent.toFixed(1)}%
+                  <span className="ctx-popover-hint"> · {t("chat.ctxPopoverRealHitRateNote")}</span>
+                </span>
+              </div>
+              <div className="ctx-popover-row ctx-popover-row-sub">
+                <span className="ctx-popover-label">{t("chat.ctxPopoverCacheRead")}</span>
+                <span className="ctx-popover-value">{formatCompactNumber(realUsage!.cache_read_tokens)}</span>
+              </div>
+              <div className="ctx-popover-row ctx-popover-row-sub">
+                <span className="ctx-popover-label">{t("chat.ctxPopoverCacheWrite")}</span>
+                <span className="ctx-popover-value">{formatCompactNumber(realUsage!.cache_write_tokens)}</span>
+              </div>
+              <div className="ctx-popover-row ctx-popover-row-sub">
+                <span className="ctx-popover-label">{t("chat.ctxPopoverCacheCalls")}</span>
+                <span className="ctx-popover-value">{realUsage!.calls}</span>
+              </div>
+            </>
+          ) : null}
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">{t("chat.ctxPopoverStablePrefix")}</span>
+            <span className="ctx-popover-value">
+              {formatCompactNumber(cacheStable)} ({Math.round(cacheRatio)}%)
+              <span className="ctx-popover-hint"> · {t("chat.ctxPopoverStablePrefixNote")}</span>
+            </span>
+          </div>
+          <div className="ctx-popover-row ctx-popover-row-sub">
+            <span className="ctx-popover-label">{t("chat.ctxPopoverCacheSystem")}</span>
+            <span className="ctx-popover-value">{formatCompactNumber(cacheStableSystem)}</span>
+          </div>
+          <div className="ctx-popover-row ctx-popover-row-sub">
+            <span className="ctx-popover-label">{t("chat.ctxPopoverCacheToolSchemas")}</span>
+            <span className="ctx-popover-value">{formatCompactNumber(cacheStableTools)}</span>
+          </div>
+          <div className="ctx-popover-row ctx-popover-row-sub">
+            <span className="ctx-popover-label">{t("chat.ctxPopoverCacheMemoryIndex")}</span>
+            <span className="ctx-popover-value">{formatCompactNumber(cacheStableMemory)}</span>
+          </div>
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">{t("chat.ctxPopoverDynamicRuntime")}</span>
+            <span className="ctx-popover-value">{formatCompactNumber(cacheDynamic)}</span>
+          </div>
+          {dynamicSections.map(([key, tokens]) => (
+            <div className="ctx-popover-row ctx-popover-row-sub" key={key}>
+              <span className="ctx-popover-label">{sectionLabel(key)}</span>
+              <span className="ctx-popover-value">{formatCompactNumber(tokens)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 

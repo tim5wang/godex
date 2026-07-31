@@ -295,7 +295,7 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 		}
 
 		assistantMsg := protocol.MessageFromResponse(*resp)
-		if (resp.StopReason != "" || len(resp.Content) > 0) && !protocol.HasToolUse(resp.Content) && strings.TrimSpace(protocol.MessageText(assistantMsg)) == "" {
+		if !protocol.HasToolUse(resp.Content) && strings.TrimSpace(protocol.MessageText(assistantMsg)) == "" {
 			if emptyResponses < maxEmptyResponses {
 				emptyResponses++
 				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: "empty model response; retrying", RecoveryHint: "Retrying the model request because the provider returned an empty response."})

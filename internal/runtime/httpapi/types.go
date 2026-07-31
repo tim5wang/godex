@@ -14,6 +14,10 @@ import (
 
 type openSessionRequest struct {
 	Locator backend.SessionLocator `json:"locator"`
+	// WorkspaceDir optionally pins this session's tool execution to an
+	// explicit working directory.  It is folded into the locator's
+	// project_dir metadata before the backend validates and hashes it.
+	WorkspaceDir string `json:"workspace_dir,omitempty"`
 }
 
 type submitMessageRequest struct {

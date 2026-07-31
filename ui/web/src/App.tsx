@@ -296,8 +296,11 @@ function FirstRunProviderGuide(props: { onOpenSettings: () => void; onRefresh: (
 
 function Brand({ compact = false }: { compact?: boolean }) {
   const { t } = useI18n();
+  if (compact) {
+    return null;
+  }
   return (
-    <div className={compact ? "" : "godex-brand"}>
+    <div className="godex-brand">
       <span className="godex-brand-mark">G</span>
       <span>{t("app.title")}</span>
     </div>

@@ -2167,8 +2167,15 @@ function ContextStatusInline({ summary, inspector }: { summary: ContextStatusSum
   const cacheStable = cacheStableSystem + cacheStableTools + cacheStableMemory;
   const cacheDynamic = cache?.dynamic_runtime_tokens ?? 0;
   const hasCache = cacheStable > 0 || cacheDynamic > 0;
-  const cacheTotal = cacheStable + cacheDynamic;
-  const cacheRatio = cacheTotal > 0 ? ((cacheStable / cacheTotal) * 100) : 0;
+  // Cacheable estimate = stable prefix + conversation history. History is
+  // append-only, so it stays prefix-cacheable between turns; only the small
+  // volatile tail (todos/inbox/notifications, appended after history) is
+  // uncacheable. Ratio is measured against the whole prompt so the number
+  // tracks the real hit rate instead of only the non-history slice.
+  const historyTokens = breakdown?.history ?? 0;
+  const promptTotal = breakdown?.total ?? 0;
+  const cacheable = cacheStable + historyTokens;
+  const cacheRatio = promptTotal > 0 ? ((cacheable / promptTotal) * 100) : 0;
   const dynamicSections = Object.entries(cache?.dynamic_section_tokens ?? {}).sort((a, b) => b[1] - a[1]);
   const realUsage = ctx?.cache_usage;
   const hasRealUsage = (realUsage?.calls ?? 0) > 0;
@@ -2280,7 +2287,7 @@ function ContextStatusInline({ summary, inspector }: { summary: ContextStatusSum
           <div className="ctx-popover-row">
             <span className="ctx-popover-label">{t("chat.ctxPopoverStablePrefix")}</span>
             <span className="ctx-popover-value">
-              {formatCompactNumber(cacheStable)} ({Math.round(cacheRatio)}%)
+              {formatCompactNumber(cacheable)} ({Math.round(cacheRatio)}%)
               <span className="ctx-popover-hint"> · {t("chat.ctxPopoverStablePrefixNote")}</span>
             </span>
           </div>
@@ -2295,6 +2302,10 @@ function ContextStatusInline({ summary, inspector }: { summary: ContextStatusSum
           <div className="ctx-popover-row ctx-popover-row-sub">
             <span className="ctx-popover-label">{t("chat.ctxPopoverCacheMemoryIndex")}</span>
             <span className="ctx-popover-value">{formatCompactNumber(cacheStableMemory)}</span>
+          </div>
+          <div className="ctx-popover-row ctx-popover-row-sub">
+            <span className="ctx-popover-label">{t("chat.ctxPopoverHistory")}</span>
+            <span className="ctx-popover-value">{formatCompactNumber(historyTokens)}</span>
           </div>
           <div className="ctx-popover-row">
             <span className="ctx-popover-label">{t("chat.ctxPopoverDynamicRuntime")}</span>

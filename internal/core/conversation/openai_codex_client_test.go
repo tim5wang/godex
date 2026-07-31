@@ -75,6 +75,73 @@ func TestOpenAICodexClientUsesStreamingResponsesEndpoint(t *testing.T) {
 	}
 }
 
+func TestOpenAICodexClientForwardsPromptCacheKey(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICodexClient(server.URL, "test-token", 5*time.Second)
+	_, err := client.Call(context.Background(), protocol.Request{
+		Model:                "gpt-5.5",
+		MaxTokens:            4096,
+		System:               "be brief",
+		PromptCacheKey:       "session-abc",
+		PromptCacheRetention: "24h",
+		Messages: []protocol.APIMessage{{
+			Role:    protocol.RoleUser,
+			Content: []protocol.Block{protocol.TextBlock("hi")},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("codex call: %v", err)
+	}
+	if got := body["prompt_cache_key"]; got != "session-abc" {
+		t.Fatalf("expected prompt_cache_key forwarded, got %#v", got)
+	}
+	if got := body["prompt_cache_retention"]; got != "24h" {
+		t.Fatalf("expected prompt_cache_retention=24h, got %#v", got)
+	}
+}
+
+func TestOpenAICodexClientOmitsPromptCacheFieldsWhenUnset(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICodexClient(server.URL, "test-token", 5*time.Second)
+	_, err := client.Call(context.Background(), protocol.Request{
+		Model:     "gpt-5.5",
+		MaxTokens: 4096,
+		Messages: []protocol.APIMessage{{
+			Role:    protocol.RoleUser,
+			Content: []protocol.Block{protocol.TextBlock("hi")},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("codex call: %v", err)
+	}
+	if _, ok := body["prompt_cache_key"]; ok {
+		t.Fatalf("did not expect prompt_cache_key when unset, got %#v", body)
+	}
+	if _, ok := body["prompt_cache_retention"]; ok {
+		t.Fatalf("did not expect prompt_cache_retention when unset, got %#v", body)
+	}
+}
+
 func TestOpenAICodexClientStreamParsesResponsesEvents(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -113,6 +113,18 @@ func codexResponsesParams(req protocol.Request) responses.ResponseNewParams {
 			Effort: shared.ReasoningEffort(effort),
 		}
 	}
+	// Prompt cache affinity: without a stable cache key the provider can only
+	// fall back to implicit longest-prefix matching, which measured ~45% cache
+	// hit rate on long sessions (vs ~98% with session-affinity routing). The
+	// Responses API accepts prompt_cache_key / prompt_cache_retention; forward
+	// the session-derived key the agent already attaches to every request.
+	if key := strings.TrimSpace(req.PromptCacheKey); key != "" {
+		params.PromptCacheKey = param.NewOpt(key)
+	}
+	switch strings.ToLower(strings.TrimSpace(req.PromptCacheRetention)) {
+	case "24h", "long":
+		params.PromptCacheRetention = responses.ResponseNewParamsPromptCacheRetention24h
+	}
 	return params
 }
 

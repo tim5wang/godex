@@ -371,7 +371,10 @@ func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, u
 			FinishReason: firstNonEmptyString(respStopReason(resp), "stop"),
 		}},
 		Usage: map[string]interface{}{
-			"prompt_tokens":     call.InputTokens,
+			// call.InputTokens is the canonical UNCACHED input (see
+			// openAIUsageToProtocol); OpenAI wire format expects
+			// prompt_tokens to include the cached portion.
+			"prompt_tokens":     call.InputTokens + call.CacheReadTokens,
 			"completion_tokens": call.OutputTokens,
 			"total_tokens":      call.InputTokens + call.OutputTokens + call.CacheReadTokens + call.CacheWriteTokens,
 			"estimated":         call.Estimated,
@@ -830,10 +833,14 @@ func streamUsageGatewayChatCompletions(
 	// see all-zero token counts and display 0% context usage forever.
 	var usagePayload map[string]interface{}
 	if resp != nil && resp.Usage != nil {
+		// resp.Usage.InputTokens counts only UNCACHED input tokens (see
+		// openAIUsageToProtocol); OpenAI clients expect prompt_tokens to
+		// include the cached portion, so add it back on the wire.
+		promptTokens := resp.Usage.InputTokens + resp.Usage.CacheReadTokens
 		usagePayload = map[string]interface{}{
-			"prompt_tokens":     resp.Usage.InputTokens,
+			"prompt_tokens":     promptTokens,
 			"completion_tokens": resp.Usage.OutputTokens,
-			"total_tokens":      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+			"total_tokens":      promptTokens + resp.Usage.OutputTokens,
 		}
 		if resp.Usage.CacheReadTokens > 0 {
 			usagePayload["prompt_tokens_details"] = map[string]interface{}{

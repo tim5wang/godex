@@ -81,7 +81,12 @@ export function OverviewTab({ token }: OverviewTabProps) {
       totalCacheRead += p.cache_read_tokens;
     }
 
-    const totalTokensForHitRate = totalInput + totalOutput + totalCacheRead;
+    // Hit rate uses the supplier convention: cache_read / (uncached
+    // input + cache_read). input_tokens is already the uncached portion
+    // (see protocol.Usage normalization), and output tokens do not
+    // participate in prompt caching at all, so they stay out of the
+    // denominator.
+    const totalTokensForHitRate = totalInput + totalCacheRead;
 
     return {
       totalCalls,

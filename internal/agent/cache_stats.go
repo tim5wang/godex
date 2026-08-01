@@ -43,6 +43,10 @@ func (s sessionCacheStats) snapshot() tools.CacheUsageInspection {
 	if s.Calls == 0 {
 		return tools.CacheUsageInspection{}
 	}
+	// InputTokens is the uncached input (see protocol.Usage), so the
+	// provider-visible total input is InputTokens + CacheReadTokens and the
+	// hit rate matches the supplier dashboard:
+	// cache_read / (uncached input + cache_read).
 	denom := s.InputTokens + s.CacheReadTokens
 	hitRate := 0.0
 	if denom > 0 {

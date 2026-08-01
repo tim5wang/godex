@@ -161,6 +161,11 @@ type Response struct {
 }
 
 type Usage struct {
+	// InputTokens counts only the UNCACHED prompt/input tokens (the
+	// Anthropic convention). OpenAI-style provider adapters subtract the
+	// cached portion from the reported total, so downstream code can
+	// always compute the cache hit rate as
+	// CacheReadTokens / (InputTokens + CacheReadTokens).
 	InputTokens      int  `json:"input_tokens,omitempty"`
 	OutputTokens     int  `json:"output_tokens,omitempty"`
 	// CacheReadTokens is the canonical cache-read field used by OpenAI-style

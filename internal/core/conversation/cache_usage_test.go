@@ -151,8 +151,10 @@ func TestOpenAICodexStreamFillsCacheUsageFromCompletedEvent(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("expected response usage from response.completed")
 	}
-	if resp.Usage.InputTokens != 500 {
-		t.Fatalf("expected input tokens 500, got %d", resp.Usage.InputTokens)
+	// input_tokens (500) includes cached_tokens (400); the protocol layer
+	// normalizes InputTokens to the uncached portion (500-400=100).
+	if resp.Usage.InputTokens != 100 {
+		t.Fatalf("expected input tokens 100, got %d", resp.Usage.InputTokens)
 	}
 	if resp.Usage.OutputTokens != 200 {
 		t.Fatalf("expected output tokens 200, got %d", resp.Usage.OutputTokens)

@@ -171,7 +171,51 @@ func TestOpenAIClientParsesTokenUsage(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("expected token usage")
 	}
-	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 || resp.Usage.CacheReadTokens != 3 || resp.Usage.Estimated {
+	// prompt_tokens (12) includes cached_tokens (3); the protocol layer
+	// normalizes InputTokens to the uncached portion (12-3=9).
+	if resp.Usage.InputTokens != 9 || resp.Usage.OutputTokens != 5 || resp.Usage.CacheReadTokens != 3 || resp.Usage.Estimated {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+}
+
+// TestOpenAIClientParsesDeepSeekCacheUsage covers DeepSeek-style usage
+// payloads that report cache hit/miss as top-level
+// prompt_cache_hit_tokens / prompt_cache_miss_tokens instead of the
+// OpenAI *_details sub-object. The protocol layer maps hit →
+// CacheReadTokens and miss → InputTokens (the uncached input), so the
+// session cache hit rate matches the supplier dashboard.
+func TestOpenAIClientParsesDeepSeekCacheUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{
+				"prompt_tokens":213756,
+				"completion_tokens":120,
+				"prompt_cache_hit_tokens":172872,
+				"prompt_cache_miss_tokens":40884
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Call(context.Background(), protocol.Request{Model: "deepseek-test"})
+	if err != nil {
+		t.Fatalf("deepseek-style call: %v", err)
+	}
+	if resp.Usage == nil {
+		t.Fatal("expected token usage")
+	}
+	if resp.Usage.CacheReadTokens != 172872 {
+		t.Fatalf("expected cache read 172872, got %d", resp.Usage.CacheReadTokens)
+	}
+	if resp.Usage.InputTokens != 40884 {
+		t.Fatalf("expected uncached input 40884, got %d", resp.Usage.InputTokens)
+	}
+	// Hit rate must match the supplier dashboard: 172872/(172872+40884).
+	hitRate := float64(resp.Usage.CacheReadTokens) / float64(resp.Usage.InputTokens+resp.Usage.CacheReadTokens) * 100
+	if hitRate < 80.8 || hitRate > 81.0 {
+		t.Fatalf("expected hit rate ~80.9%%, got %.2f", hitRate)
 	}
 }

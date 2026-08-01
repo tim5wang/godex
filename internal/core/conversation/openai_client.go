@@ -295,6 +295,10 @@ type openAIUsage struct {
 	OutputTokens            int                     `json:"output_tokens,omitempty"`
 	InputTokensDetails      openAITokenUsageDetails `json:"input_tokens_details,omitempty"`
 	OutputTokensDetails     openAITokenUsageDetails `json:"output_tokens_details,omitempty"`
+	// DeepSeek-style providers report cache hit/miss as top-level fields
+	// instead of the OpenAI *_details sub-object.
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"`
 }
 
 type openAITokenUsageDetails struct {
@@ -551,6 +555,21 @@ func openAIUsageToProtocol(usage openAIUsage) *protocol.Usage {
 	}
 	cacheRead := usage.PromptTokensDetails.CachedTokens + usage.PromptTokensDetails.CacheReadTokens + usage.InputTokensDetails.CachedTokens + usage.InputTokensDetails.CacheReadTokens
 	cacheWrite := usage.PromptTokensDetails.CacheWriteTokens + usage.InputTokensDetails.CacheWriteTokens
+	if usage.PromptCacheHitTokens > 0 {
+		// DeepSeek reports cache hits only via the top-level field.
+		cacheRead += usage.PromptCacheHitTokens
+	}
+	// Normalize InputTokens to the Anthropic convention: it counts only the
+	// UNCACHED prompt tokens. OpenAI-style prompt_tokens / input_tokens
+	// include the cached portion, so subtract it to keep the canonical
+	// protocol.Usage comparable across providers (cache hit rate =
+	// cache_read / (input + cache_read)). DeepSeek goes further and reports
+	// the miss count directly, which is exactly the uncached input.
+	if usage.PromptCacheMissTokens > 0 {
+		input = usage.PromptCacheMissTokens
+	} else if cacheRead > 0 && input >= cacheRead {
+		input -= cacheRead
+	}
 	if input == 0 && output == 0 && cacheRead == 0 && cacheWrite == 0 {
 		return nil
 	}

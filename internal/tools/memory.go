@@ -130,17 +130,21 @@ func NewMemoryTool(writer MemoryWriter) Tool {
 			}}, nil
 
 		case "remember":
+			missing := make([]string, 0, 4)
 			if args.Title == "" {
-				return ToolResult{}, fmt.Errorf("missing title for remember action")
+				missing = append(missing, "title")
 			}
 			if args.Summary == "" {
-				return ToolResult{}, fmt.Errorf("missing summary for remember action")
+				missing = append(missing, "summary")
 			}
 			if args.Content == "" {
-				return ToolResult{}, fmt.Errorf("missing content for remember action")
+				missing = append(missing, "content")
 			}
 			if args.MemoryType == "" {
-				return ToolResult{}, fmt.Errorf("missing memory_type for remember action")
+				missing = append(missing, "memory_type")
+			}
+			if len(missing) > 0 {
+				return ToolResult{}, fmt.Errorf("missing required argument(s) for remember action: %s", strings.Join(missing, ", "))
 			}
 			entry, err := writer.Remember(memory.SaveInput{
 				Title:   args.Title,

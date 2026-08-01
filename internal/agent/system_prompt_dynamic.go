@@ -215,6 +215,10 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 		"- Use extracted attachment content directly when available; if parsing is unavailable for an attached file type, say so plainly.",
 		"- When the user asks what was said earlier, previously, or before, and the current context no longer holds the detail, use history_search to retrieve short snippets from current_session or session_archive.",
 		"- Do not use history_search as general knowledge lookup, and do not turn history_search hits into durable memory automatically.",
+		"- When making multiple independent edits, batch them: use one edit_file call with edits[] for several changes to the same file, or files[] for coordinated changes across multiple files (all-or-nothing validation); also batch read_file/grep/ls calls that have no dependencies into one message.",
+		"- For large structural deletions in big files, first locate boundaries with one dry-run grep/bash that prints candidate anchors with line numbers, confirm them, then cut once; do not cut by trial and error.",
+		"- After deleting or renaming a symbol, check for leftover references (lsp references or grep) and fix them in the same batch before moving on.",
+		"- Run verification that mirrors the project's real build/test command (check Makefile/package.json scripts); incremental or partial checkers can miss errors that the real build catches.",
 		"- Skip canned self-introductions and stay focused on the request.",
 	}
 	if catalogHasTool(catalog, "cron") || catalogHasTool(catalog, "heartbeat") {

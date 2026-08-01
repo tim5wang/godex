@@ -47,7 +47,7 @@ func (d Definition) ToolSchema() protocol.ToolSchema {
 func BashDefinition() Definition {
 	return Definition{
 		Name:        "bash",
-		Description: "Run a shell command from the workspace root",
+		Description: "Run a shell command from the workspace root. Sandbox limits: no command substitution $() or backticks (precompute values instead); heredocs are supported but avoid embedding unbalanced quotes inside them; file writes are restricted to the workspace (use .godex/tmp for scratch scripts). Prefer one compound command (cmd1 && cmd2) over several sequential calls when the steps are dependent.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -102,11 +102,11 @@ func WriteFileDefinition() Definition {
 func EditFileDefinition() Definition {
 	return Definition{
 		Name:        "edit_file",
-		Description: "Make precise text replacements in a workspace-relative file. Supports single edit (old_text/new_text) or multiple non-overlapping edits (edits[] array). Each old_text must be unique in the file and must match the original file content before any edits are applied. Edits must not overlap with each other.",
+		Description: "Make precise text replacements in workspace-relative files. Three modes, tried in order: (1) files[] — batch edits across MULTIPLE files in ONE call (up to 20 files); all files are validated first and if any old_text fails to match, NOTHING is written to ANY file, making it the safest way to do coordinated cross-file changes in a single round-trip. (2) path + edits[] — multiple independent changes to the same file in one call (up to 50 edits), applied atomically. (3) path + old_text/new_text — single replacement. Prefer batching: many sequential edit_file calls waste round-trips. Every old_text must appear exactly once in its file and must match the ORIGINAL file content verbatim (whitespace included) — re-read the region first if you have not read it in this session. On a failed multi-line old_text, the error pinpoints the first diverging line.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path": map[string]interface{}{"type": "string", "description": "Workspace-relative path such as skill/skill.go"},
+				"path": map[string]interface{}{"type": "string", "description": "Workspace-relative path such as skill/skill.go. Required for edits[] and old_text/new_text modes; omit when using files[]."},
 				"old_text": map[string]interface{}{
 					"type":        "string",
 					"description": "Exact text to find and replace. Must be unique in the file. Use with new_text for single edit.",
@@ -117,7 +117,7 @@ func EditFileDefinition() Definition {
 				},
 				"edits": map[string]interface{}{
 					"type":        "array",
-					"description": "Multiple non-overlapping edits. Every old_text must match the ORIGINAL file (before any edits are applied). Edits must not overlap and each old_text must appear exactly once.",
+					"description": "Multiple non-overlapping edits to the file at path. Every old_text must match the ORIGINAL file (before any edits are applied). Edits must not overlap and each old_text must appear exactly once.",
 					"items": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
@@ -127,8 +127,29 @@ func EditFileDefinition() Definition {
 						"required": []string{"old_text", "new_text"},
 					},
 				},
+				"files": map[string]interface{}{
+					"type":        "array",
+					"description": "Batch edits across multiple files in one call. Each entry has a path and its own edits[] (same rules as above). All files are validated before any write; one bad old_text aborts the whole batch with no file modified.",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"path": map[string]string{"type": "string"},
+							"edits": map[string]interface{}{
+								"type": "array",
+								"items": map[string]interface{}{
+									"type": "object",
+									"properties": map[string]interface{}{
+										"old_text": map[string]string{"type": "string"},
+										"new_text": map[string]string{"type": "string"},
+									},
+									"required": []string{"old_text", "new_text"},
+								},
+							},
+						},
+						"required": []string{"path", "edits"},
+					},
+				},
 			},
-			"required": []string{"path"},
 		},
 	}
 }
@@ -973,45 +994,49 @@ func (e *WorkspaceExecutor) EditFile(path, oldText, newText string) (string, err
 	return "OK", nil
 }
 
-// EditFileMulti applies multiple non-overlapping edits to a file.
-// All edits are validated for uniqueness and non-overlap before any writes occur.
-func (e *WorkspaceExecutor) EditFileMulti(path string, edits []FileEdit) (string, error) {
-	if len(edits) == 0 {
-		return "", fmt.Errorf("edits must not be empty")
-	}
-	if len(edits) > 50 {
-		return "", fmt.Errorf("too many edits (%d); maximum is 50 per call", len(edits))
-	}
-	root, err := workspacefs.New(e.WorkspaceDir)
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-	data, err := root.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	content := string(data)
 
-	// Validate each edit: must exist, must be unique in file, and must differ from new_text.
+type editRange struct {
+	start int
+	end   int
+	index int
+}
+
+// FileEditBatch groups the edits for one file in a multi-file EditFilesMulti call.
+type FileEditBatch struct {
+	Path  string
+	Edits []FileEdit
+}
+
+const (
+	maxEditsPerFile  = 50
+	maxFilesPerBatch = 20
+)
+
+// validateEdits checks every edit against content: non-empty old_text,
+// old_text != new_text, exactly one occurrence. Error messages are prefixed
+// with label (e.g. "edits[2]" or "files[1] (b.txt) edits[0]").
+func validateEdits(content string, edits []FileEdit, label func(i int) string) error {
 	for i, edit := range edits {
 		if edit.OldText == "" {
-			return "", fmt.Errorf("edits[%d]: old_text must not be empty", i)
+			return fmt.Errorf("%s: old_text must not be empty", label(i))
 		}
 		if edit.OldText == edit.NewText {
-			return "", fmt.Errorf("edits[%d]: old_text and new_text must be different", i)
+			return fmt.Errorf("%s: old_text and new_text must be different", label(i))
 		}
 		count := strings.Count(content, edit.OldText)
 		if count == 0 {
-			return "", fmt.Errorf("edits[%d]: old_text not found in file: %s", i, preview(edit.OldText))
+			return fmt.Errorf("%s: %w", label(i), buildEditNotFoundError(edit.OldText, content))
 		}
 		if count > 1 {
 			locations := findEditLocations(content, edit.OldText)
-			return "", fmt.Errorf("edits[%d]: old_text found %d times in file. Provide more context to make it unique.\nLocations: %s", i, count, strings.Join(locations, ", "))
+			return fmt.Errorf("%s: old_text found %d times in file. Provide more context to make it unique.\nLocations: %s", label(i), count, strings.Join(locations, ", "))
 		}
 	}
+	return nil
+}
 
-	// Check for overlapping edit ranges.
+// applyEdits renders the post-edit content. Caller must have run validateEdits.
+func applyEdits(content string, edits []FileEdit) (string, error) {
 	ranges := make([]editRange, len(edits))
 	for i, edit := range edits {
 		idx := strings.Index(content, edit.OldText)
@@ -1024,7 +1049,6 @@ func (e *WorkspaceExecutor) EditFileMulti(path string, edits []FileEdit) (string
 			}
 		}
 	}
-
 	// Apply edits in ascending position order. Because we always slice
 	// from the original content (not a mutable copy), we never need
 	// to adjust positions for size changes introduced by earlier edits.
@@ -1034,26 +1058,113 @@ func (e *WorkspaceExecutor) EditFileMulti(path string, edits []FileEdit) (string
 	pos := 0
 	for _, r := range ranges {
 		edit := edits[r.index]
-		// Write content from current position to the edit start.
 		buf.WriteString(content[pos:r.start])
-		// Write the replacement.
 		buf.WriteString(edit.NewText)
-		// Advance past the old text.
 		pos = r.start + len(edit.OldText)
 	}
-	// Write remaining content.
 	buf.WriteString(content[pos:])
+	return buf.String(), nil
+}
 
-	if err := root.WriteFile(path, []byte(buf.String()), 0644); err != nil {
+// EditFileMulti applies multiple non-overlapping edits to a file.
+// All edits are validated for uniqueness and non-overlap before any writes occur.
+func (e *WorkspaceExecutor) EditFileMulti(path string, edits []FileEdit) (string, error) {
+	if len(edits) == 0 {
+		return "", fmt.Errorf("edits must not be empty")
+	}
+	if len(edits) > maxEditsPerFile {
+		return "", fmt.Errorf("too many edits (%d); maximum is %d per call", len(edits), maxEditsPerFile)
+	}
+	root, err := workspacefs.New(e.WorkspaceDir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	data, err := root.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	content := string(data)
+
+	if err := validateEdits(content, edits, func(i int) string { return fmt.Sprintf("edits[%d]", i) }); err != nil {
+		return "", err
+	}
+	newContent, err := applyEdits(content, edits)
+	if err != nil {
+		return "", err
+	}
+	if err := root.WriteFile(path, []byte(newContent), 0644); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Applied %d edit(s) to %s", len(edits), path), nil
 }
 
-type editRange struct {
-	start int
-	end   int
-	index int
+// EditFilesMulti applies edits across MULTIPLE files in one call. Every file
+// is read and validated first; if ANY file fails validation, nothing is
+// written to ANY file. Writes then proceed per file (an I/O error mid-write
+// can still leave earlier files written — validation errors cannot).
+func (e *WorkspaceExecutor) EditFilesMulti(batches []FileEditBatch) (string, error) {
+	if len(batches) == 0 {
+		return "", fmt.Errorf("files must not be empty")
+	}
+	if len(batches) > maxFilesPerBatch {
+		return "", fmt.Errorf("too many files (%d); maximum is %d per call", len(batches), maxFilesPerBatch)
+	}
+	seen := make(map[string]bool, len(batches))
+	for i, batch := range batches {
+		if strings.TrimSpace(batch.Path) == "" {
+			return "", fmt.Errorf("files[%d]: path must not be empty", i)
+		}
+		if seen[batch.Path] {
+			return "", fmt.Errorf("files[%d]: duplicate path %q; merge its edits into a single files[] entry", i, batch.Path)
+		}
+		seen[batch.Path] = true
+		if len(batch.Edits) == 0 {
+			return "", fmt.Errorf("files[%d] (%s): edits must not be empty", i, batch.Path)
+		}
+		if len(batch.Edits) > maxEditsPerFile {
+			return "", fmt.Errorf("files[%d] (%s): too many edits (%d); maximum is %d per file", i, batch.Path, len(batch.Edits), maxEditsPerFile)
+		}
+	}
+
+	root, err := workspacefs.New(e.WorkspaceDir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+
+	// Phase 1: read + validate + render all files. Nothing is written here.
+	type renderedFile struct {
+		path       string
+		newContent string
+	}
+	rendered := make([]renderedFile, len(batches))
+	totalEdits := 0
+	for i, batch := range batches {
+		data, err := root.ReadFile(batch.Path)
+		if err != nil {
+			return "", fmt.Errorf("files[%d] (%s): %w", i, batch.Path, err)
+		}
+		content := string(data)
+		label := func(j int) string { return fmt.Sprintf("files[%d] (%s) edits[%d]", i, batch.Path, j) }
+		if err := validateEdits(content, batch.Edits, label); err != nil {
+			return "", err
+		}
+		newContent, err := applyEdits(content, batch.Edits)
+		if err != nil {
+			return "", fmt.Errorf("files[%d] (%s): %w", i, batch.Path, err)
+		}
+		rendered[i] = renderedFile{path: batch.Path, newContent: newContent}
+		totalEdits += len(batch.Edits)
+	}
+
+	// Phase 2: write all files.
+	for _, f := range rendered {
+		if err := root.WriteFile(f.path, []byte(f.newContent), 0644); err != nil {
+			return "", fmt.Errorf("writing %s: %w", f.path, err)
+		}
+	}
+	return fmt.Sprintf("Applied %d edit(s) across %d file(s)", totalEdits, len(rendered)), nil
 }
 
 func rangesOverlap(a, b editRange) bool {
@@ -1062,6 +1173,33 @@ func rangesOverlap(a, b editRange) bool {
 
 func buildEditNotFoundError(oldText, content string) error {
 	lines := strings.Split(content, "\n")
+	// Multi-line old_text: locate the file position where the longest line-wise
+	// prefix of old_text matches exactly, then report the FIRST diverging line
+	// with expected vs actual content. This is far more actionable than the
+	// generic fallback (which only previews the first line of the file).
+	if oldLines := strings.Split(oldText, "\n"); len(oldLines) > 1 {
+		bestStart, bestMatched := -1, 0
+		for start := 0; start < len(lines); start++ {
+			matched := 0
+			for matched < len(oldLines) && start+matched < len(lines) && lines[start+matched] == oldLines[matched] {
+				matched++
+			}
+			if matched > bestMatched {
+				bestMatched, bestStart = matched, start
+			}
+		}
+		// bestMatched == len(oldLines) is impossible here (exact match would
+		// have been found by the caller), so the diverging line always exists.
+		if bestMatched > 0 && bestStart >= 0 {
+			mismatchLine := bestStart + bestMatched + 1 // 1-based file line
+			expected := oldLines[bestMatched]
+			actual := ""
+			if bestStart+bestMatched < len(lines) {
+				actual = lines[bestStart+bestMatched]
+			}
+			return fmt.Errorf("old_text not found in file\n\nClosest match starts at line %d (%d of %d lines matched).\nfirst mismatch at line %d:\n  expected: %q\n  actual:   %q\n\n- Re-read the region around line %d (read_file offset=%d) and copy old_text verbatim", bestStart+1, bestMatched, len(oldLines), mismatchLine, expected, actual, mismatchLine, mismatchLine)
+		}
+	}
 	var preview string
 	if len(lines) > 0 {
 		preview = truncateLine(lines[0], 500)

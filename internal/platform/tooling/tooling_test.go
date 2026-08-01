@@ -421,3 +421,134 @@ func TestReadFileRangeSupportsOffsetAndStartLine(t *testing.T) {
 		t.Fatalf("expected mutually exclusive range error, got %v", err)
 	}
 }
+
+func TestBuildEditNotFoundErrorShowsFirstMismatchLineForMultiline(t *testing.T) {
+	content := strings.Join([]string{
+		"package main",
+		"",
+		"func alpha() {",
+		"\tprintln(\"a\")",
+		"}",
+		"",
+		"func beta() {",
+		"\tprintln(\"b\")",
+		"}",
+	}, "\n")
+	// old_text matches the first two lines but diverges on the third.
+	oldText := "func alpha() {\n\tprintln(\"WRONG\")\n}"
+	err := buildEditNotFoundError(oldText, content)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	// New behavior: point at the first differing line with file context,
+	// instead of dumping only the first line of the file.
+	if !strings.Contains(msg, "first mismatch") {
+		t.Fatalf("expected first-mismatch hint, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "line 4") {
+		t.Fatalf("expected line number of diverging line, got:\n%s", msg)
+	}
+}
+
+func TestBuildEditNotFoundErrorFallsBackForSingleLine(t *testing.T) {
+	content := "hello world\nfoo bar\n"
+	err := buildEditNotFoundError("missing text", content)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "old_text not found in file") {
+		t.Fatalf("expected not-found message, got:\n%s", msg)
+	}
+}
+
+func writeWorkspaceFile(t *testing.T, workspace, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(workspace, name), []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+func readWorkspaceFile(t *testing.T, workspace, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(workspace, name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return string(data)
+}
+
+func TestEditFilesMultiAppliesAcrossFiles(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "a.txt", "alpha=1\nshared\n")
+	writeWorkspaceFile(t, workspace, "b.txt", "beta=2\nshared\n")
+	executor := NewWorkspaceExecutor(workspace)
+	out, err := executor.EditFilesMulti([]FileEditBatch{
+		{Path: "a.txt", Edits: []FileEdit{{OldText: "alpha=1", NewText: "alpha=100"}}},
+		{Path: "b.txt", Edits: []FileEdit{{OldText: "beta=2", NewText: "beta=200"}}},
+	})
+	if err != nil {
+		t.Fatalf("EditFilesMulti: %v", err)
+	}
+	if !strings.Contains(out, "2 file(s)") || !strings.Contains(out, "2 edit(s)") {
+		t.Fatalf("unexpected output: %q", out)
+	}
+	if got := readWorkspaceFile(t, workspace, "a.txt"); got != "alpha=100\nshared\n" {
+		t.Fatalf("a.txt = %q", got)
+	}
+	if got := readWorkspaceFile(t, workspace, "b.txt"); got != "beta=200\nshared\n" {
+		t.Fatalf("b.txt = %q", got)
+	}
+}
+
+func TestEditFilesMultiValidationFailureWritesNothing(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "a.txt", "alpha=1\n")
+	writeWorkspaceFile(t, workspace, "b.txt", "beta=2\n")
+	executor := NewWorkspaceExecutor(workspace)
+	_, err := executor.EditFilesMulti([]FileEditBatch{
+		{Path: "a.txt", Edits: []FileEdit{{OldText: "alpha=1", NewText: "alpha=100"}}},
+		{Path: "b.txt", Edits: []FileEdit{{OldText: "missing-anchor", NewText: "x"}}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "files[1]") || !strings.Contains(err.Error(), "b.txt") {
+		t.Fatalf("error should reference files[1] and b.txt, got: %v", err)
+	}
+	if got := readWorkspaceFile(t, workspace, "a.txt"); got != "alpha=1\n" {
+		t.Fatalf("a.txt must remain unmodified on validation failure, got %q", got)
+	}
+	if got := readWorkspaceFile(t, workspace, "b.txt"); got != "beta=2\n" {
+		t.Fatalf("b.txt must remain unmodified, got %q", got)
+	}
+}
+
+func TestEditFilesMultiRejectsDuplicatePaths(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "a.txt", "alpha=1\n")
+	executor := NewWorkspaceExecutor(workspace)
+	_, err := executor.EditFilesMulti([]FileEditBatch{
+		{Path: "a.txt", Edits: []FileEdit{{OldText: "alpha=1", NewText: "alpha=2"}}},
+		{Path: "a.txt", Edits: []FileEdit{{OldText: "alpha=2", NewText: "alpha=3"}}},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate-path error")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("expected duplicate hint, got: %v", err)
+	}
+}
+
+func TestEditFilesMultiRejectsEmptyAndOversize(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, "a.txt", "alpha=1\n")
+	executor := NewWorkspaceExecutor(workspace)
+	if _, err := executor.EditFilesMulti(nil); err == nil {
+		t.Fatal("expected error for empty batch list")
+	}
+	if _, err := executor.EditFilesMulti([]FileEditBatch{{Path: "a.txt"}}); err == nil {
+		t.Fatal("expected error for empty edits")
+	}
+}

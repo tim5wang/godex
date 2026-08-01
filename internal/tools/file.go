@@ -44,15 +44,21 @@ type writeFileArgs struct {
 }
 
 type editFileArgs struct {
-	Path    string     `json:"path"`
-	OldText string     `json:"old_text,omitempty"`
-	NewText string     `json:"new_text,omitempty"`
-	Edits   []fileEdit `json:"edits,omitempty"`
+	Path    string          `json:"path"`
+	OldText string          `json:"old_text,omitempty"`
+	NewText string          `json:"new_text,omitempty"`
+	Edits   []fileEdit      `json:"edits,omitempty"`
+	Files   []fileEditBatch `json:"files,omitempty"`
 }
 
 type fileEdit struct {
 	OldText string `json:"old_text"`
 	NewText string `json:"new_text"`
+}
+
+type fileEditBatch struct {
+	Path  string     `json:"path"`
+	Edits []fileEdit `json:"edits"`
 }
 
 type attachFileArgs struct {
@@ -132,8 +138,13 @@ func NewEditFileTool(workspace string) Tool {
 	executor := tooling.NewWorkspaceExecutor(workspace)
 	return NewTypedTool(SpecFromDefinition(tooling.EditFileDefinition(), nil), func(ctx context.Context, args editFileArgs) (ToolResult, error) {
 		_ = ctx
+		// Multi-file mode takes highest precedence (path not required).
+		if len(args.Files) > 0 {
+			output, err := executor.EditFilesMulti(args.FilesToToolingBatches())
+			return ToolResult{Text: output}, err
+		}
 		if strings.TrimSpace(args.Path) == "" {
-			return ToolResult{}, fmt.Errorf("missing path argument")
+			return ToolResult{}, fmt.Errorf("missing path argument: provide path (with old_text/new_text or edits[]) or files[] array")
 		}
 		// Multi-edit mode takes precedence
 		if len(args.Edits) > 0 {
@@ -142,7 +153,7 @@ func NewEditFileTool(workspace string) Tool {
 		}
 		// Legacy single-edit mode
 		if args.OldText == "" {
-			return ToolResult{}, fmt.Errorf("missing old_text argument: provide old_text (with optional new_text) or edits[] array")
+			return ToolResult{}, fmt.Errorf("missing old_text argument: provide old_text (with optional new_text), edits[] array, or files[] array")
 		}
 		output, err := executor.EditFile(args.Path, args.OldText, args.NewText)
 		return ToolResult{Text: output}, err
@@ -155,6 +166,18 @@ func (a editFileArgs) EditsToToolingEdits() []tooling.FileEdit {
 		edits[i] = tooling.FileEdit{OldText: e.OldText, NewText: e.NewText}
 	}
 	return edits
+}
+
+func (a editFileArgs) FilesToToolingBatches() []tooling.FileEditBatch {
+	batches := make([]tooling.FileEditBatch, len(a.Files))
+	for i, f := range a.Files {
+		edits := make([]tooling.FileEdit, len(f.Edits))
+		for j, e := range f.Edits {
+			edits[j] = tooling.FileEdit{OldText: e.OldText, NewText: e.NewText}
+		}
+		batches[i] = tooling.FileEditBatch{Path: f.Path, Edits: edits}
+	}
+	return batches
 }
 
 // NewAttachFileTool creates a tool that explicitly promotes one local file into

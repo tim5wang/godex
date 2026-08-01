@@ -341,3 +341,67 @@ func TestGrepToolRegexError(t *testing.T) {
 		t.Fatalf("expected regex error, got: %v", err)
 	}
 }
+
+func TestEditFileFilesModeAppliesAcrossFiles(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("alpha=1\n"), 0644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "b.txt"), []byte("beta=2\n"), 0644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+	tool := NewEditFileTool(workspace)
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"files": []interface{}{
+			map[string]interface{}{
+				"path":  "a.txt",
+				"edits": []interface{}{map[string]interface{}{"old_text": "alpha=1", "new_text": "alpha=100"}},
+			},
+			map[string]interface{}{
+				"path":  "b.txt",
+				"edits": []interface{}{map[string]interface{}{"old_text": "beta=2", "new_text": "beta=200"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("files mode failed: %v", err)
+	}
+	if !strings.Contains(result, "2 file(s)") {
+		t.Fatalf("unexpected result: %s", result)
+	}
+	a, _ := os.ReadFile(filepath.Join(workspace, "a.txt"))
+	b, _ := os.ReadFile(filepath.Join(workspace, "b.txt"))
+	if string(a) != "alpha=100\n" || string(b) != "beta=200\n" {
+		t.Fatalf("files not updated: a=%q b=%q", a, b)
+	}
+}
+
+func TestEditFileFilesModeValidationFailureWritesNothing(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("alpha=1\n"), 0644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "b.txt"), []byte("beta=2\n"), 0644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+	tool := NewEditFileTool(workspace)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"files": []interface{}{
+			map[string]interface{}{
+				"path":  "a.txt",
+				"edits": []interface{}{map[string]interface{}{"old_text": "alpha=1", "new_text": "alpha=100"}},
+			},
+			map[string]interface{}{
+				"path":  "b.txt",
+				"edits": []interface{}{map[string]interface{}{"old_text": "missing", "new_text": "x"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	a, _ := os.ReadFile(filepath.Join(workspace, "a.txt"))
+	if string(a) != "alpha=1\n" {
+		t.Fatalf("a.txt must be unmodified, got %q", a)
+	}
+}

@@ -75,7 +75,7 @@ import {
   unloadSessionSkill,
   uploadAttachments,
 } from "../../lib/api";
-import { locatorMatchesRoute } from "../../lib/chatRoutes";
+import { buildChatRouteForSession, locatorMatchesRoute } from "../../lib/chatRoutes";
 import { writeClipboardText } from "../../lib/clipboard";
 import { streamEvents } from "../../lib/sse";
 import type {
@@ -695,7 +695,7 @@ export function ChatPage() {
       );
       if (nextSession) {
         reset();
-        navigate(`/chat/web/${nextSession.locator.key}`, { replace: true });
+        navigate(buildChatRouteForSession(nextSession), { replace: true });
         setSessionsOpen(false);
       } else if (deletedActiveSession) {
         createSession(true);
@@ -804,7 +804,7 @@ export function ChatPage() {
     onSuccess: async (opened) => {
       reset();
       setDefaultSessionKey(opened.locator.key || makeSessionKey());
-      navigate(`/chat/web/${opened.locator.key}`);
+      navigate(buildChatRouteForSession({ locator: opened.locator }));
       await queryClient.invalidateQueries({ queryKey: ["sessions", token] });
       message.success("Session forked.");
     },
@@ -1176,7 +1176,7 @@ export function ChatPage() {
               onSearchChange={setV2SessionSearch}
               onCreate={(workspaceDir) => createSession(false, workspaceDir)}
               onSelect={(session) => {
-                navigate(`/chat/web/${session.locator.key}`);
+                navigate(buildChatRouteForSession(session));
               }}
               onDelete={(session) => deleteSessionMutation.mutate(session)}
               onToggleCollapsed={() => v2ToggleLeft()}
@@ -3150,14 +3150,22 @@ function buildContextStatusSummary(
     return stringFromPayload(payload.phase) === "model_request" && stringFromPayload(payload.actor_kind) !== "subagent";
   }).length;
   const subagentCalls = subagentJobs.reduce((sum, item) => sum + (item.modelRequestCount ?? 0), 0);
-  const calls = mainCalls + subagentCalls;
+  // The timeline is capped at 80 events, so the event-based count
+  // under-reports long sessions. The session cache stats counter is an
+  // exact per-session total of model calls (subagents share the parent
+  // session id, so their calls are already included); prefer it whenever
+  // the provider reported any usage.
+  const sessionCalls = context?.cache_usage?.calls ?? 0;
+  const calls = sessionCalls > 0 ? sessionCalls : mainCalls + subagentCalls;
   const messages = context?.message_count ?? 0;
   const tokenLabel = threshold > 0 ? `${formatCompactNumber(tokens)}/${formatCompactNumber(threshold)} ${percent}%` : formatCompactNumber(tokens);
   return {
     text: `ctx ${tokenLabel} · calls ${calls} · msgs ${messages}`,
     tooltip: [
       `Context tokens: ${tokens}${threshold > 0 ? ` / ${threshold} (${percent}%)` : ""}`,
-      `Model requests seen in current timeline window: ${calls}`,
+      sessionCalls > 0
+        ? `Model requests in this session (from provider usage): ${calls}`
+        : `Model requests seen in current timeline window: ${calls}`,
       `Messages in context: ${messages}`,
       context?.suggest_compact ? "Compaction is suggested." : "Compaction is not currently suggested.",
     ].join("\n"),

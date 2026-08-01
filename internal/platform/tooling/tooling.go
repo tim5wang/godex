@@ -1281,7 +1281,15 @@ func looksLikeBinaryFile(path string, sample []byte) bool {
 	if isKnownBinaryContentType(contentType) {
 		return true
 	}
-	if !utf8.Valid(sample) {
+	// The sample window can end in the middle of a multi-byte UTF-8
+	// sequence; trim up to utf8.UTFMax-1 trailing bytes so a truncated
+	// tail rune doesn't mark an otherwise valid text file as binary.
+	// Invalid sequences in the middle of the sample still count as binary.
+	utf8Sample := sample
+	for i := 0; i < utf8.UTFMax-1 && len(utf8Sample) > 0 && !utf8.Valid(utf8Sample); i++ {
+		utf8Sample = utf8Sample[:len(utf8Sample)-1]
+	}
+	if !utf8.Valid(utf8Sample) {
 		return true
 	}
 

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSplitCommandLineSupportsQuotesAndEscapes(t *testing.T) {
@@ -367,6 +368,34 @@ func TestReadFileRejectsBinaryFiles(t *testing.T) {
 	_, err := executor.ReadFile("book.pdf", 0)
 	if err == nil || !strings.Contains(err.Error(), "binary or unsupported") {
 		t.Fatalf("expected binary file rejection, got %v", err)
+	}
+}
+
+// Regression: the binary-detection sample (readFileBinarySampleBytes) can
+// cut a multi-byte UTF-8 sequence in half, making utf8.Valid(sample) fail
+// on a perfectly valid text file (common for CJK content). The validator
+// must tolerate a truncated trailing rune instead of rejecting the file.
+func TestReadFileAcceptsUTF8TextWhenSampleCutsMultiByteRune(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "笔记.md")
+	// "界" is 3 bytes in UTF-8 (e7 95 8c). Pad ASCII so the sample window
+	// ends exactly one byte into that rune at readFileBinarySampleBytes-1.
+	padLen := readFileBinarySampleBytes - 4 // 3 bytes of 界 occupy the last 3; we want a cut
+	content := strings.Repeat("a", padLen) + "界" + strings.Repeat("中文内容，正常工作。\n", 200)
+	if err := os.WriteFile(target, []byte(content), 0644); err != nil {
+		t.Fatalf("write utf8 text: %v", err)
+	}
+	// Sanity: the byte at the sample boundary must be a UTF-8 continuation
+	// byte (i.e. the rune is cut mid-sequence).
+	raw, _ := os.ReadFile(target)
+	sample := raw[:readFileBinarySampleBytes]
+	if utf8.Valid(sample) {
+		t.Skipf("sample boundary did not cut a rune in this build; adjust padLen")
+	}
+
+	executor := NewWorkspaceExecutor(workspace)
+	if _, err := executor.ReadFile("笔记.md", 5); err != nil {
+		t.Fatalf("expected utf8 text file to be readable, got %v", err)
 	}
 }
 

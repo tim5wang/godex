@@ -144,10 +144,7 @@ export default function App() {
   const headerTitleKey = activeApp.headerTitleKey ?? activeApp.labelKey;
   const headerTitle = headerTitleKey ? t(headerTitleKey) : "";
   const headerSubtitleKey = activeApp.headerSubtitleKey ?? "";
-  const workspaceSubtitle = activeApp.id === "chat" && metaQuery.data?.workspace_dir
-    ? [metaQuery.data.workspace_dir, metaQuery.data.model, metaQuery.data.version?.version].filter(Boolean).join(" · ")
-    : "";
-  const headerSubtitle = workspaceSubtitle || (headerSubtitleKey ? t(headerSubtitleKey) : "");
+  const headerSubtitle = headerSubtitleKey ? t(headerSubtitleKey) : "";
   const hideHeader = !headerTitle && !headerSubtitle && screens.lg;
   const shellClass = `${shellClassName}${hideHeader ? " godex-shell-no-header" : ""}`;
   const navItems = useMemo(

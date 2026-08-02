@@ -4,7 +4,7 @@ import { PaperClipOutlined } from "@ant-design/icons";
 import { Attachments, Sender } from "@ant-design/x";
 import type { AttachmentsRef } from "@ant-design/x/es/attachments";
 import { useI18n } from "../i18n";
-import type { PackageCommandEntry } from "../lib/types";
+import type { CommandMetadata, PackageCommandEntry } from "../lib/types";
 
 export interface ComposerSubmission {
   text: string;
@@ -15,16 +15,31 @@ interface ComposerProps {
   disabled?: boolean;
   uploading?: boolean;
   uploadProgress?: number | null;
+  builtinCommands?: CommandMetadata[];
   packageCommands?: PackageCommandEntry[];
   queuedFiles?: File[];
   onQueuedFilesConsumed?: () => void;
   onSubmit: (submission: ComposerSubmission) => Promise<void>;
 }
 
-export function Composer({ disabled, uploading = false, uploadProgress = null, packageCommands = [], queuedFiles = [], onQueuedFilesConsumed, onSubmit }: ComposerProps) {
+/** A slash-palette entry: either a built-in command (/clear, /model …)
+ *  or a package command (/namespace name …) — unified so keyboard
+ *  navigation and filtering work across both sources. */
+interface PaletteEntry {
+  key: string;
+  invocation: string;
+  description?: string;
+  inputHint?: string;
+  mode?: string;
+  roles?: string[];
+  bundles?: string[];
+}
+
+export function Composer({ disabled, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], queuedFiles = [], onQueuedFilesConsumed, onSubmit }: ComposerProps) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
   const attachmentsRef = useRef<AttachmentsRef>(null);
   const submitting = Boolean(disabled || uploading);
   const uploadItems = useMemo<UploadFile[]>(
@@ -39,8 +54,12 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, p
     })),
     [files],
   );
-  const commandMatches = useMemo(() => matchPackageCommands(value, packageCommands), [packageCommands, value]);
-  const showCommandPalette = value.trimStart().startsWith("/") && !value.endsWith(" ") && files.length === 0 && commandMatches.length > 0;
+  const paletteEntries = useMemo(() => matchSlashCommands(value, builtinCommands, packageCommands), [builtinCommands, packageCommands, value]);
+  const showCommandPalette = value.trimStart().startsWith("/") && !value.endsWith(" ") && files.length === 0 && paletteEntries.length > 0;
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [value]);
 
   useEffect(() => {
     if (queuedFiles.length === 0) return;
@@ -58,6 +77,11 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, p
     setFiles([]);
   };
 
+  const pickCommand = (entry: PaletteEntry) => {
+    setValue(`${entry.invocation} `);
+    setActiveIndex(0);
+  };
+
   return (
     <div className="chat-composer">
       <Space direction="vertical" size={8} style={{ width: "100%" }}>
@@ -70,32 +94,33 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, p
           </Space>
         ) : null}
         {showCommandPalette ? (
-          <div className="command-palette">
-            {commandMatches.map((command) => {
-              const invocation = packageCommandInvocation(command);
-              return (
-                <button
-                  type="button"
-                  className="command-palette-item"
-                  key={`${command.package_name}:${command.namespace || ""}:${command.name}:${command.path}`}
-                  onClick={() => setValue(`${invocation} `)}
-                >
-                  <Space direction="vertical" size={2} style={{ width: "100%" }}>
-                    <Space size={6} wrap>
-                      <Typography.Text strong>{invocation}</Typography.Text>
-                      {command.mode ? <Tag>{command.mode}</Tag> : null}
-                      {command.roles?.slice(0, 2).map((role) => <Tag key={role}>{role}</Tag>)}
-                    </Space>
-                    {command.description ? <Typography.Text type="secondary">{command.description}</Typography.Text> : null}
-                    {command.recommended_bundles?.length ? (
-                      <Space size={4} wrap>
-                        {command.recommended_bundles.slice(0, 4).map((bundle) => <Tag key={bundle}>{bundle}</Tag>)}
-                      </Space>
-                    ) : null}
+          <div className="command-palette" role="listbox">
+            {paletteEntries.map((entry, index) => (
+              <button
+                type="button"
+                className={index === activeIndex ? "command-palette-item command-palette-item-active" : "command-palette-item"}
+                key={entry.key}
+                role="option"
+                aria-selected={index === activeIndex}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => pickCommand(entry)}
+              >
+                <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                  <Space size={6} wrap>
+                    <Typography.Text strong>{entry.invocation}</Typography.Text>
+                    {entry.inputHint ? <Typography.Text type="secondary">{entry.inputHint}</Typography.Text> : null}
+                    {entry.mode ? <Tag>{entry.mode}</Tag> : null}
+                    {entry.roles?.slice(0, 2).map((role) => <Tag key={role}>{role}</Tag>)}
                   </Space>
-                </button>
-              );
-            })}
+                  {entry.description ? <Typography.Text type="secondary">{entry.description}</Typography.Text> : null}
+                  {entry.bundles?.length ? (
+                    <Space size={4} wrap>
+                      {entry.bundles.slice(0, 4).map((bundle) => <Tag key={bundle}>{bundle}</Tag>)}
+                    </Space>
+                  ) : null}
+                </Space>
+              </button>
+            ))}
           </div>
         ) : null}
         <Sender
@@ -106,18 +131,37 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, p
           submitType="enter"
           autoSize={{ minRows: 2, maxRows: 8 }}
           onChange={(next) => setValue(next)}
-          onSubmit={(message) => void submit(message)}
+          onSubmit={(message) => {
+            if (showCommandPalette && paletteEntries[activeIndex]) {
+              pickCommand(paletteEntries[activeIndex]);
+              return;
+            }
+            void submit(message);
+          }}
+          onKeyDown={(event) => {
+            if (!showCommandPalette) return;
+            if (event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey)) {
+              event.preventDefault();
+              setActiveIndex((current) => (current + 1) % paletteEntries.length);
+            } else if (event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey)) {
+              event.preventDefault();
+              setActiveIndex((current) => (current - 1 + paletteEntries.length) % paletteEntries.length);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              setValue("");
+            }
+          }}
           onPasteFile={(pastedFiles) => setFiles((current) => [...current, ...Array.from(pastedFiles)])}
           prefix={
             <Button
               type="text"
+              size="small"
               icon={<PaperClipOutlined />}
               aria-label={t("chat.addFiles")}
+              title={t("chat.addFiles")}
               disabled={submitting}
               onClick={() => attachmentsRef.current?.select({ multiple: true })}
-            >
-              {t("chat.addFiles")}
-            </Button>
+            />
           }
           header={
             <Attachments
@@ -145,36 +189,37 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, p
   );
 }
 
-function matchPackageCommands(value: string, commands: PackageCommandEntry[]) {
+function matchSlashCommands(value: string, builtinCommands: CommandMetadata[], packageCommands: PackageCommandEntry[]): PaletteEntry[] {
   const trimmed = value.trimStart();
   if (!trimmed.startsWith("/")) {
     return [];
   }
   const query = normalizeCommandQuery(trimmed.slice(1));
+  const builtins: PaletteEntry[] = builtinCommands.map((command) => ({
+    key: `builtin:${command.name}`,
+    invocation: `/${command.name}`,
+    description: command.description,
+    inputHint: command.input_hint,
+  }));
+  const packages: PaletteEntry[] = packageCommands.map((command) => ({
+    key: `pkg:${command.package_name}:${command.namespace || ""}:${command.name}:${command.path}`,
+    invocation: `/${command.namespace || command.package_name} ${command.name}`,
+    description: command.description,
+    mode: command.mode,
+    roles: command.roles,
+    bundles: command.recommended_bundles,
+  }));
+  const all = [...builtins, ...packages];
   if (!query) {
-    return commands.slice(0, 8);
+    return all.slice(0, 8);
   }
-  return commands
-    .filter((command) => packageCommandHaystack(command).includes(query))
+  return all
+    .filter((entry) =>
+      normalizeCommandQuery(
+        [entry.invocation, entry.description, ...(entry.roles ?? []), ...(entry.bundles ?? [])].filter(Boolean).join(" "),
+      ).includes(query),
+    )
     .slice(0, 8);
-}
-
-function packageCommandInvocation(command: PackageCommandEntry) {
-  return `/${command.namespace || command.package_name} ${command.name}`;
-}
-
-function packageCommandHaystack(command: PackageCommandEntry) {
-  return normalizeCommandQuery(
-    [
-      command.namespace,
-      command.package_name,
-      command.name,
-      command.description,
-      ...(command.aliases ?? []),
-      ...(command.roles ?? []),
-      ...(command.recommended_bundles ?? []),
-    ].filter(Boolean).join(" "),
-  );
 }
 
 function normalizeCommandQuery(value: string) {

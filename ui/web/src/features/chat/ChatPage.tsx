@@ -57,6 +57,7 @@ import {
   getSessionTimelinePage,
   getSnapshot,
   getActiveSessionSkills,
+  listCommands,
   listPackageCommands,
   listPackageRoles,
   listSessionLongTasks,
@@ -418,6 +419,13 @@ export function ChatPage() {
     queryKey: ["package-commands", token],
     enabled: !authRequired || !!token,
     queryFn: async () => listPackageCommands(token || null, false),
+  });
+
+  const builtinCommandsQuery = useQuery({
+    queryKey: ["builtin-commands", token],
+    enabled: !authRequired || !!token,
+    queryFn: async () => listCommands(token || null),
+    staleTime: 5 * 60 * 1000,
   });
 
   const packageRolesQuery = useQuery({
@@ -1339,6 +1347,7 @@ export function ChatPage() {
                   uploading={uploading}
                   uploadProgress={uploadProgress}
                   packageCommands={packageCommandsQuery.data ?? []}
+                  builtinCommands={builtinCommandsQuery.data ?? []}
                   queuedFiles={queuedComposerFiles}
                   onQueuedFilesConsumed={() => setQueuedComposerFiles([])}
                   onSubmit={onSend}

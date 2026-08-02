@@ -1,6 +1,7 @@
 import type {
   AttachmentRef,
   ChannelStatusReport,
+  CommandMetadata,
   CommandResult,
   ConfigMetaResponse,
   ConfigSectionSchema,
@@ -433,6 +434,10 @@ export function listPrompts(token: string | null, includeContent = false) {
     { method: "GET" },
     token,
   );
+}
+
+export function listCommands(token: string | null) {
+  return request<CommandMetadata[]>("/commands", { method: "GET" }, token);
 }
 
 export function listPackageCommands(token: string | null, includeContent = false) {

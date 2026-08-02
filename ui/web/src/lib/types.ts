@@ -993,6 +993,15 @@ export interface PackageCommandDispatch {
   tool_policy?: string[];
 }
 
+// CommandMetadata mirrors commands.CommandMetadata on the backend
+// (GET /commands) — the built-in slash-command list shared by TUI,
+// ACP, and the web composer palette.
+export interface CommandMetadata {
+  name: string;
+  description: string;
+  input_hint?: string;
+}
+
 export interface CommandResult {
   name: string;
   output?: string;

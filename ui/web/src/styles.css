@@ -1425,7 +1425,8 @@ samp {
 }
 
 .command-palette-item:hover,
-.command-palette-item:focus-visible {
+.command-palette-item:focus-visible,
+.command-palette-item-active {
   outline: none;
   background: rgba(22, 119, 255, 0.08);
 }

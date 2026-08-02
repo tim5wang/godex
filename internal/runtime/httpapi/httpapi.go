@@ -467,6 +467,12 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
+	mux.Handle("GET /commands", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Expose the built-in slash-command metadata so the web composer
+		// can offer the same "/" completion palette as the TUI and ACP
+		// clients without hardcoding its own copy of the command list.
+		writeJSON(w, http.StatusOK, commands.AvailableMetadata())
+	})))
 	mux.Handle("GET /packages/commands", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		includeContent := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_content")), "true")
 		items, err := service.ListPackageCommands(r.Context(), includeContent)

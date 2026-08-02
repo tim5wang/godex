@@ -739,6 +739,49 @@ func TestEventsEndpointReplaysActiveTurn(t *testing.T) {
 	})
 }
 
+func TestListCommandsReturnsBuiltinSlashCommandMetadata(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}}), commands.NewService(cfg))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/commands")
+	if err != nil {
+		t.Fatalf("get commands: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected commands status 200, got %d", resp.StatusCode)
+	}
+
+	var items []commands.CommandMetadata
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatalf("decode commands response: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatal("expected non-empty builtin command list")
+	}
+	byName := make(map[string]commands.CommandMetadata, len(items))
+	for _, item := range items {
+		if item.Name == "" || item.Description == "" {
+			t.Fatalf("expected name and description on every entry, got %+v", item)
+		}
+		byName[item.Name] = item
+	}
+	// The web composer slash palette depends on these core commands being
+	// discoverable; pin a representative subset so a refactor of
+	// AvailableMetadata cannot silently drop them.
+	for _, name := range []string{"bash", "clear", "compact", "skills", "model", "help"} {
+		if _, ok := byName[name]; !ok {
+			t.Fatalf("expected builtin command %q in /commands response", name)
+		}
+	}
+	if byName["bash"].InputHint == "" {
+		t.Fatalf("expected input hint for /bash, got %+v", byName["bash"])
+	}
+}
+
 func TestMetaEndpointIsPublic(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.WebToken = "secret"

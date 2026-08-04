@@ -947,6 +947,8 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 		return err
 	}
 	if res != nil {
+		s.setActiveTurn(res.TurnID)
+		
 		// A new turn is starting — drop any stale activity
 		// chip left over from a previous turn (e.g. a
 		// "Running bash" that never emitted a terminal
@@ -955,7 +957,6 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 		// its first phase.
 		s.clearActivityChip()
 		s.refreshStatusBar()
-		s.setActiveTurn(res.TurnID)
 	}
 	return nil
 }
@@ -1659,7 +1660,7 @@ func (s *Session) refreshSnapshot() {
 	if summary, sumErr := s.backend.ContextSummary(context.Background(), s.sessionID); sumErr == nil {
 		s.ctxSummary = summary
 	}
-	s.setStatus(s.renderStatusWith(s.ctxSummary, "Ready"), minitui.StatusDefault)
+	s.setStatus(s.renderStatusWith(s.ctxSummary, s.statusLabel()), minitui.StatusDefault)
 }
 
 // ── output rendering ─────────────────────────────────────────────
@@ -1847,13 +1848,27 @@ func (s *Session) clearActivityChip() {
 	s.setActivityChip("", minitui.StatusDefault)
 }
 
+// statusLabel returns the status-bar label: "Ready" when
+// idle, "Working" when a turn is active.  This lets the user
+// distinguish "waiting for the model" from "agent crashed
+// silently" even when no streaming text deltas are flowing.
+func (s *Session) statusLabel() string {
+	s.activeTurnMu.Lock()
+	turnID := s.activeTurnID
+	s.activeTurnMu.Unlock()
+	if turnID != "" {
+		return "Working"
+	}
+	return "Ready"
+}
+
 // refreshStatusBar re-renders the heartbeat status line using
 // the currently cached ctx summary, message count, model
 // call count, and activity chip, and pushes it to the
 // min-tui frontend.  Cheap to call: it does no I/O against
 // the backend.
 func (s *Session) refreshStatusBar() {
-	s.setStatus(s.renderStatus("Ready"), minitui.StatusDefault)
+	s.setStatus(s.renderStatus(s.statusLabel()), minitui.StatusDefault)
 }
 
 func (s *Session) renderStatus(label string) string {

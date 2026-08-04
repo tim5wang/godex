@@ -433,11 +433,17 @@ func (s *Service) executeLocalBash(ctx context.Context, cmd Command) (Result, er
 	if !ok {
 		return Result{}, fmt.Errorf("usage: /%s <shell command>", cmd.Name)
 	}
+	workspaceDir := s.cfg.WorkspaceDir
+	if sessionCtx, ok := CurrentSessionContext(ctx); ok {
+		if dir := strings.TrimSpace(sessionCtx.Metadata["project_dir"]); dir != "" {
+			workspaceDir = dir
+		}
+	}
 	var result localbash.Result
 	if cmd.Name == "bash" {
-		result = localbash.CollectBashWithTimeout(ctx, s.cfg.WorkspaceDir, shellCommand)
+		result = localbash.CollectBashWithTimeout(ctx, workspaceDir, shellCommand)
 	} else {
-		result = localbash.CollectWithTimeout(ctx, s.cfg.WorkspaceDir, shellCommand)
+		result = localbash.CollectWithTimeout(ctx, workspaceDir, shellCommand)
 	}
 	// Always return output (incl. stderr). Non-zero exit codes are
 	// not fatal — the caller sees the same messages a terminal user would.

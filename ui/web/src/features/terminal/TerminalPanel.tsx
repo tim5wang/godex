@@ -27,6 +27,8 @@ export type TerminalPanelProps = {
   writeTerminalInput?: (req: TerminalInputRequest, tick: number) => TerminalOutputChunk;
   pollIntervalMs?: number;
   testId?: string;
+  /** Session working directory for the PTY shell. */
+  workspaceDir?: string;
 };
 
 const SYS_INFO_BANNER = [
@@ -45,6 +47,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
     writeTerminalInput = writeRealTerminalInput,
     pollIntervalMs = TERMINAL_POLL_MS,
     testId = "terminal-panel",
+    workspaceDir,
   } = props;
 
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -114,7 +117,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
     termRef.current = term;
     fitRef.current = fit;
 
-    const { terminalId } = createTerminal();
+    const { terminalId } = createTerminal(workspaceDir);
     idRef.current = terminalId;
 
     // Defer DOM-dependent init to next animation frame so the

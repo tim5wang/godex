@@ -321,6 +321,14 @@ export function ChatPage() {
     queryFn: async () => openSession(token || null, sessionLocator),
   });
 
+  // Resolve the session's working directory from locator metadata,
+  // falling back to the service-level workspace_dir from /meta.
+  const sessionWorkspaceDir = useMemo(() => {
+    const locatorDir = openQuery.data?.locator?.metadata?.project_dir?.trim();
+    if (locatorDir) return locatorDir;
+    return metaQuery.data?.workspace_dir?.trim() || ".";
+  }, [openQuery.data, metaQuery.data]);
+
   const noteContextQuery = useQuery({
     queryKey: ["note-context", token, noteContextId],
     enabled: !!noteContextId && (!authRequired || !!token),
@@ -1366,9 +1374,9 @@ export function ChatPage() {
                 <div className="chat-v2-dock-pane">
                   <div className="chat-v2-dock-pane-body">
                     {v2ActiveDockTab === "files" ? (
-                      <FilesPanel mode="dock" cwd="." fillContainer onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
+                      <FilesPanel mode="dock" cwd={sessionWorkspaceDir} fillContainer onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
                     ) : v2ActiveDockTab === "terminal" ? (
-                      <TerminalPanel />
+                      <TerminalPanel workspaceDir={sessionWorkspaceDir} />
                     ) : v2ActiveDockTab === "tasks" ? (
                       <TaskCenterPanel
                         outcomes={taskOutcomes}

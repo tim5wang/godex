@@ -102,6 +102,7 @@ import { useSettingsStore } from "../../store/settings";
 import { useResizableWidth } from "../../hooks/useResizableWidth";
 import { FilesPanel } from "../files/FilesPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
+import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { DOCK_TABS, type DockTab, useChatV2Store } from "../chat-v2/chatV2Store";
 import { DOCK_TAB_META } from "../chat-v2/DockRail";
 import { SessionsRail } from "../chat-v2/SessionsRail";
@@ -328,6 +329,21 @@ export function ChatPage() {
     if (locatorDir) return locatorDir;
     return metaQuery.data?.workspace_dir?.trim() || ".";
   }, [openQuery.data, metaQuery.data]);
+
+  // Build execution config for terminal — derives from /meta which now
+  // carries tools.execution.* settings. Falls back to local mode.
+  const terminalExecution = useMemo<TerminalExecutionConfig>(() => {
+    const mode = metaQuery.data?.execution_mode;
+    if (!mode || mode === "local") return {};
+    return {
+      mode,
+      sshTarget: metaQuery.data?.ssh_target ?? undefined,
+      sshWorkspace: metaQuery.data?.ssh_workspace ?? undefined,
+      sshOptions: metaQuery.data?.ssh_options?.length ? metaQuery.data.ssh_options : undefined,
+      dockerImage: metaQuery.data?.docker_image ?? undefined,
+      dockerNetwork: metaQuery.data?.docker_network ?? undefined,
+    };
+  }, [metaQuery.data]);
 
   const noteContextQuery = useQuery({
     queryKey: ["note-context", token, noteContextId],
@@ -1376,7 +1392,7 @@ export function ChatPage() {
                     {v2ActiveDockTab === "files" ? (
                       <FilesPanel mode="dock" cwd={sessionWorkspaceDir} fillContainer onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
                     ) : v2ActiveDockTab === "terminal" ? (
-                      <TerminalPanel workspaceDir={sessionWorkspaceDir} />
+                      <TerminalPanel workspaceDir={sessionWorkspaceDir} execution={terminalExecution} />
                     ) : v2ActiveDockTab === "tasks" ? (
                       <TaskCenterPanel
                         outcomes={taskOutcomes}

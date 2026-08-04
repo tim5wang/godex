@@ -125,6 +125,7 @@ func (c *grepRegexCache) put(key string, re *regexp.Regexp) {
 // GoGrepBackend is a pure Go grep implementation using regexp.
 type GoGrepBackend struct {
 	workspace string
+	fs        workspacefs.FS // optional pre-created FS; takes precedence over workspace
 }
 
 // NewGoGrepBackend creates a new pure Go grep backend.
@@ -132,9 +133,21 @@ func NewGoGrepBackend(workspace string) *GoGrepBackend {
 	return &GoGrepBackend{workspace: workspace}
 }
 
+// NewGoGrepBackendWithFS creates a Go grep backend that reads files through fs.
+func NewGoGrepBackendWithFS(fs workspacefs.FS) *GoGrepBackend {
+	return &GoGrepBackend{fs: fs, workspace: fs.Dir()}
+}
+
+func (b *GoGrepBackend) fsForSearch() workspacefs.FS {
+	if b.fs != nil {
+		return b.fs
+	}
+	root, _ := workspacefs.New(b.workspace)
+	return root
+}
+
 func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResult, error) {
 	_ = ctx
-	// Cache key includes case-insensitive flag.
 	cacheKey := opts.Pattern
 	if opts.CaseInsensitive {
 		cacheKey = "(?i)" + cacheKey
@@ -159,11 +172,10 @@ func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResul
 		searchPath = strings.TrimSpace(opts.Path)
 	}
 
-	root, err := workspacefs.New(b.workspace)
-	if err != nil {
-		return GrepResult{}, err
+	root := b.fsForSearch()
+	if root == nil {
+		return GrepResult{}, fmt.Errorf("workspace fs unavailable")
 	}
-	defer root.Close()
 
 	info, err := root.Stat(searchPath)
 	if err != nil {
@@ -194,7 +206,7 @@ func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResul
 
 // searchDir walks a directory tree collecting up to maxResults regex matches.
 // Returns (collected matches, total matches found, error).
-func (b *GoGrepBackend) searchDir(root *workspacefs.FS, relDir string, re *regexp.Regexp, glob string, maxResults int) ([]grepMatch, int, error) {
+func (b *GoGrepBackend) searchDir(root workspacefs.FS, relDir string, re *regexp.Regexp, glob string, maxResults int) ([]grepMatch, int, error) {
 	entries, err := root.ReadDir(relDir)
 	if err != nil {
 		return nil, 0, nil // skip unreadable directories
@@ -237,7 +249,7 @@ func shouldSkipGrepEntry(name string) bool {
 
 // grepFile searches a single file for regex matches.
 // collectLimit caps how many matches are returned; total still counts all matches.
-func grepFile(root *workspacefs.FS, re *regexp.Regexp, path string, collectLimit int) ([]grepMatch, int) {
+func grepFile(root workspacefs.FS, re *regexp.Regexp, path string, collectLimit int) ([]grepMatch, int) {
 	f, err := root.Open(path)
 	if err != nil {
 		return nil, 0
@@ -281,7 +293,18 @@ func newGrepBackend(workspace string) GrepBackend {
 
 // NewGrepTool creates a new grep tool with automatic backend selection.
 func NewGrepTool(workspace string) Tool {
-	backend := newGrepBackend(workspace)
+	return NewGrepToolWithFS(nil, workspace)
+}
+
+// NewGrepToolWithFS creates a grep tool that reads files through fs.
+// If fs is nil, a local FS is created from workspace.
+func NewGrepToolWithFS(fs workspacefs.FS, workspace string) Tool {
+	var backend GrepBackend
+	if fs != nil {
+		backend = NewGoGrepBackendWithFS(fs)
+	} else {
+		backend = newGrepBackend(workspace)
+	}
 	return NewGrepToolWithBackend(backend)
 }
 

@@ -8,6 +8,7 @@ import {
   createTerminal as createRealTerminal,
   TERMINAL_POLL_MS,
   getTerminalStatus,
+  type TerminalExecutionConfig,
   type TerminalStatus,
   pollTerminal as pollRealTerminal,
   resizeTerminal,
@@ -22,13 +23,15 @@ import type {
 } from "../../lib/terminalMock";
 
 export type TerminalPanelProps = {
-  createTerminal?: (workspaceDir?: string) => CreateTerminalResponse;
+  createTerminal?: (workspaceDir?: string, execution?: TerminalExecutionConfig) => CreateTerminalResponse;
   pollTerminal?: (id: string, cursor: number, tick: number) => TerminalOutputChunk;
   writeTerminalInput?: (req: TerminalInputRequest, tick: number) => TerminalOutputChunk;
   pollIntervalMs?: number;
   testId?: string;
   /** Session working directory for the PTY shell. */
   workspaceDir?: string;
+  /** Execution backend config (local/ssh/docker). */
+  execution?: TerminalExecutionConfig;
 };
 
 const SYS_INFO_BANNER = [
@@ -48,6 +51,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
     pollIntervalMs = TERMINAL_POLL_MS,
     testId = "terminal-panel",
     workspaceDir,
+    execution,
   } = props;
 
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -117,7 +121,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
     termRef.current = term;
     fitRef.current = fit;
 
-    const { terminalId } = createTerminal(workspaceDir);
+    const { terminalId } = createTerminal(workspaceDir, execution);
     idRef.current = terminalId;
 
     // Defer DOM-dependent init to next animation frame so the

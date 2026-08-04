@@ -62,12 +62,19 @@ func NewHandlerWithRuntime(
 	}
 	mux.Handle("GET /meta", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := manager.Current()
+		exec := cfg.Tools.Execution
 		writeJSON(w, http.StatusOK, metaResponse{
-			LeadName:     cfg.LeadName,
-			Model:        cfg.Model,
-			WorkspaceDir: cfg.WorkspaceDir,
-			AuthRequired: strings.TrimSpace(cfg.WebToken) != "",
-			Version:      version.Current(),
+			LeadName:       cfg.LeadName,
+			Model:          cfg.Model,
+			WorkspaceDir:   cfg.WorkspaceDir,
+			AuthRequired:   strings.TrimSpace(cfg.WebToken) != "",
+			Version:        version.Current(),
+			ExecutionMode:  exec.Mode,
+			SSHTarget:      exec.SSHTarget,
+			SSHWorkspace:   exec.SSHWorkspace,
+			SSHOptions:     exec.SSHOptions,
+			DockerImage:    exec.DockerImage,
+			DockerNetwork:  exec.DockerNetwork,
 		})
 	}))
 	protected := withBearerAuthProvider(func() string {

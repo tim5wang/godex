@@ -340,6 +340,12 @@ type metaResponse struct {
 	WorkspaceDir string       `json:"workspace_dir"`
 	AuthRequired bool         `json:"auth_required"`
 	Version      version.Info `json:"version"`
+	ExecutionMode  string   `json:"execution_mode,omitempty"`
+	SSHTarget      string   `json:"ssh_target,omitempty"`
+	SSHWorkspace   string   `json:"ssh_workspace,omitempty"`
+	SSHOptions     []string `json:"ssh_options,omitempty"`
+	DockerImage    string   `json:"docker_image,omitempty"`
+	DockerNetwork  string   `json:"docker_network,omitempty"`
 }
 
 type updateConfigRequest struct {

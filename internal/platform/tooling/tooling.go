@@ -280,6 +280,7 @@ type WorkspaceExecutor struct {
 	WorkspaceDir string
 	TempDir      string
 	Execution    ExecutionConfig
+	fs           workspacefs.FS // optional pre-created FS; lazily created when nil
 }
 
 type ShellCommandOptions struct {
@@ -405,11 +406,10 @@ func (e *WorkspaceExecutor) ReadFileLines(opts ReadFileLinesOptions) (ReadFileLi
 		offset = 1
 	}
 
-	root, err := workspacefs.New(e.WorkspaceDir)
-	if err != nil {
-		return ReadFileLinesResult{}, err
+	root := e.getFS()
+	if root == nil {
+		return ReadFileLinesResult{}, fmt.Errorf("workspace fs unavailable")
 	}
-	defer root.Close()
 
 	absPath, err := root.Abs(path)
 	if err != nil {
@@ -586,6 +586,31 @@ func NewWorkspaceExecutorWithTempDirAndExecution(workspaceDir, tempDir string, e
 		TempDir:      tempDir,
 		Execution:    normalizeExecutionConfig(execution),
 	}
+}
+
+// SetFS attaches a pre-created workspacefs.FS. When set, all file I/O
+// methods (ReadFileLines, WriteFile, EditFile, etc.) use this FS instead
+// of creating a local one from WorkspaceDir. Pass nil to revert to local.
+func (e *WorkspaceExecutor) SetFS(fs workspacefs.FS) {
+	if e != nil {
+		e.fs = fs
+	}
+}
+
+func (e *WorkspaceExecutor) getFS() workspacefs.FS {
+	if e == nil {
+		return nil
+	}
+	if e.fs != nil {
+		return e.fs
+	}
+	// Lazy-create a local FS for backward compatibility.
+	fs, err := workspacefs.New(e.WorkspaceDir)
+	if err != nil {
+		return nil
+	}
+	e.fs = fs // cache for reuse
+	return fs
 }
 
 func normalizeExecutionConfig(cfg ExecutionConfig) ExecutionConfig {
@@ -845,11 +870,10 @@ func (e *WorkspaceExecutor) ReadFileRange(path string, limit, offset, startLine,
 		return "", fmt.Errorf("use either offset or start_line, not both")
 	}
 
-	root, err := workspacefs.New(e.WorkspaceDir)
-	if err != nil {
-		return "", err
+	root := e.getFS()
+	if root == nil {
+		return "", fmt.Errorf("workspace fs unavailable")
 	}
-	defer root.Close()
 	absPath, err := root.Abs(path)
 	if err != nil {
 		return "", err
@@ -951,11 +975,10 @@ func (e *WorkspaceExecutor) ReadFileRange(path string, limit, offset, startLine,
 }
 
 func (e *WorkspaceExecutor) WriteFile(path, content string) (string, error) {
-	root, err := workspacefs.New(e.WorkspaceDir)
-	if err != nil {
-		return "", err
+	root := e.getFS()
+	if root == nil {
+		return "", fmt.Errorf("workspace fs unavailable")
 	}
-	defer root.Close()
 	if err := root.WriteFile(path, []byte(content), 0644); err != nil {
 		return "", err
 	}
@@ -963,11 +986,10 @@ func (e *WorkspaceExecutor) WriteFile(path, content string) (string, error) {
 }
 
 func (e *WorkspaceExecutor) EditFile(path, oldText, newText string) (string, error) {
-	root, err := workspacefs.New(e.WorkspaceDir)
-	if err != nil {
-		return "", err
+	root := e.getFS()
+	if root == nil {
+		return "", fmt.Errorf("workspace fs unavailable")
 	}
-	defer root.Close()
 	if oldText == "" {
 		return "", fmt.Errorf("missing old_text argument")
 	}
@@ -1075,11 +1097,10 @@ func (e *WorkspaceExecutor) EditFileMulti(path string, edits []FileEdit) (string
 	if len(edits) > maxEditsPerFile {
 		return "", fmt.Errorf("too many edits (%d); maximum is %d per call", len(edits), maxEditsPerFile)
 	}
-	root, err := workspacefs.New(e.WorkspaceDir)
-	if err != nil {
-		return "", err
+	root := e.getFS()
+	if root == nil {
+		return "", fmt.Errorf("workspace fs unavailable")
 	}
-	defer root.Close()
 	data, err := root.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -1127,11 +1148,10 @@ func (e *WorkspaceExecutor) EditFilesMulti(batches []FileEditBatch) (string, err
 		}
 	}
 
-	root, err := workspacefs.New(e.WorkspaceDir)
-	if err != nil {
-		return "", err
+	root := e.getFS()
+	if root == nil {
+		return "", fmt.Errorf("workspace fs unavailable")
 	}
-	defer root.Close()
 
 	// Phase 1: read + validate + render all files. Nothing is written here.
 	type renderedFile struct {

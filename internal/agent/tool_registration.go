@@ -54,47 +54,56 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 	workspaceDir := binding.WorkspaceDir
 	tempDir := binding.TempDir
 	execution := binding.Execution
+
+	// Create a unified workspacefs.FS backed by the sandbox.  For local
+	// mode this is an os.Root-backed FS; for SSH/Docker mode afero-backed.
+	fileToolFS := newWorkspaceFSForExecution(workspaceDir, execution)
+	// Attach the FS to the file executor so ReadFileLines/WriteFile/EditFile
+	// use the correct backend.
+	fileExecutor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspaceDir, tempDir, execution)
+	fileExecutor.SetFS(fileToolFS)
+
 	a.registerToolTo(handler, tools.NewBashToolWithExecution(workspaceDir, tempDir, execution), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewGlobTool(workspaceDir, a.cfg.Tools.Glob.DefaultMaxResults), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewGlobToolWithFS(fileToolFS, workspaceDir, a.cfg.Tools.Glob.DefaultMaxResults), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewReadFileTool(workspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewReadFileToolWithExecutor(fileExecutor), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewWriteFileTool(workspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewWriteFileToolWithExecutor(fileExecutor), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewEditFileTool(workspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewEditFileToolWithExecutor(fileExecutor), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewAttachFileTool(workspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewAttachFileToolWithFS(fileToolFS, workspaceDir), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewGrepTool(workspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewGrepToolWithFS(fileToolFS, workspaceDir), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewFindTool(workspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewFindToolWithFS(fileToolFS, workspaceDir), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,
 	})
-	a.registerToolTo(handler, tools.NewLsTool(workspaceDir), tools.ToolMeta{
+	a.registerToolTo(handler, tools.NewLsToolWithFS(fileToolFS, workspaceDir), tools.ToolMeta{
 		Bundle:        bundleCoreCode,
 		Summary:       "workspace shell commands and code file access",
 		DefaultActive: true,

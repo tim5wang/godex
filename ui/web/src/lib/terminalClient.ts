@@ -118,7 +118,16 @@ function flushPendingInput(terminalId: string): void {
  * background polling loop. Returns immediately with a client-side
  * terminalId so the renderer does not block.
  */
-export function createTerminal(workspaceDir?: string): CreateTerminalResponse {
+export type TerminalExecutionConfig = {
+  mode?: string;
+  sshTarget?: string;
+  sshWorkspace?: string;
+  sshOptions?: string[];
+  dockerImage?: string;
+  dockerNetwork?: string;
+};
+
+export function createTerminal(workspaceDir?: string, execution?: TerminalExecutionConfig): CreateTerminalResponse {
   const terminalId = `term-${Math.random().toString(36).slice(2, 10)}`;
   const baseUrl = getBaseUrl();
   terminals.set(terminalId, {
@@ -139,7 +148,15 @@ export function createTerminal(workspaceDir?: string): CreateTerminalResponse {
       const resp = await fetch(`${baseUrl}/v1/terminal/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceDir: workspaceDir ?? "." }),
+        body: JSON.stringify({
+          workspaceDir: workspaceDir ?? ".",
+          ...(execution?.mode ? { executionMode: execution.mode } : {}),
+          ...(execution?.sshTarget ? { sshTarget: execution.sshTarget } : {}),
+          ...(execution?.sshWorkspace ? { sshWorkspace: execution.sshWorkspace } : {}),
+          ...(execution?.sshOptions?.length ? { sshOptions: execution.sshOptions } : {}),
+          ...(execution?.dockerImage ? { dockerImage: execution.dockerImage } : {}),
+          ...(execution?.dockerNetwork ? { dockerNetwork: execution.dockerNetwork } : {}),
+        }),
       });
       if (!resp.ok) {
         const state = terminals.get(terminalId);

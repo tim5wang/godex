@@ -283,7 +283,7 @@ func TestTerminalManager_Lifecycle(t *testing.T) {
 	ctx := t.Context()
 
 	t.Run("create → output → input → delete", func(t *testing.T) {
-		session, err := mgr.create(ctx, "")
+		session, err := mgr.create(ctx, createTerminalRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -331,7 +331,7 @@ func TestTerminalManager_Lifecycle(t *testing.T) {
 	})
 
 	t.Run("output for killed terminal returns 404", func(t *testing.T) {
-		session, err := mgr.create(ctx, "")
+		session, err := mgr.create(ctx, createTerminalRequest{})
 		if err != nil {
 			t.Fatal(err)
 		}

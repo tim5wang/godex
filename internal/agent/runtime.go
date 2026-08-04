@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/protocol"
@@ -321,6 +322,15 @@ func (a *Agent) ApplyModelProfile(profile config.ModelProfileConfig) {
 	a.client = client
 	a.skillLoader = newSkillLoader(cfg, client)
 	a.teamMgr = newTeamManager(cfg, a.taskMgr, a.msgBus, client)
+	// Keep the compaction summarizer bound to the session's active model so
+	// model/hybrid compaction uses the LLM the session is currently on instead
+	// of the startup default (which is rule-based when cfg.APIKey was empty).
+	ruleSummarizer := compress.NewRuleBasedSessionSummarizer(a.compressor)
+	if client != nil && strings.TrimSpace(profile.Model) != "" {
+		a.summarizer = compress.NewLLMSessionSummarizer(client, profile.Model, min(profile.MaxTokens, 2048), a.compressor, ruleSummarizer)
+	} else {
+		a.summarizer = ruleSummarizer
+	}
 	a.mu.Unlock()
 }
 

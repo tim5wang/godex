@@ -74,10 +74,53 @@ func normalizeAgentCompactionMode(mode string) string {
 
 func (a *Agent) compactionSummarizer(mode string) (compress.SessionSummarizer, string) {
 	normalized := normalizeAgentCompactionMode(mode)
-	if normalized == "model" || normalized == "hybrid" {
-		return a.summarizer, "model"
+	if normalized != "model" && normalized != "hybrid" {
+		return compress.NewRuleBasedSessionSummarizer(a.compressor), "fast"
+	}
+	// model/hybrid compaction must use an LLM-backed summarizer bound to the
+	// session's currently active client/model. An explicitly configured
+	// summarizer (e.g. tests) is honored first; otherwise build one lazily so
+	// web UI sessions whose credentials arrive via ApplyModelProfile (not the
+	// startup cfg.APIKey) still get real model compression instead of silently
+	// degrading to the rule-based default wired at startup.
+	if s := a.summarizer; s != nil {
+		if _, ruleBased := s.(*compress.RuleBasedSessionSummarizer); !ruleBased {
+			return s, "model"
+		}
+	}
+	if llm := a.buildLLMSummarizerFromSession(); llm != nil {
+		return llm, "model"
 	}
 	return compress.NewRuleBasedSessionSummarizer(a.compressor), "fast"
+}
+
+// buildLLMSummarizerFromSession constructs an LLM-backed session summarizer
+// from the agent's current client/model. It returns nil when no usable model
+// caller is configured so callers fall back to rule-based compaction.
+func (a *Agent) buildLLMSummarizerFromSession() compress.SessionSummarizer {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	client := a.client
+	model := ""
+	maxTokens := 0
+	if a.cfg != nil {
+		model = strings.TrimSpace(a.cfg.Model)
+		maxTokens = a.cfg.MaxTokens
+	}
+	if client == nil || model == "" {
+		return nil
+	}
+	rule := compress.NewRuleBasedSessionSummarizer(a.compressor)
+	return compress.NewLLMSessionSummarizer(client, model, min(maxTokens, 2048), a.compressor, rule)
+}
+
+// DefaultCompactionMode returns the configured default compaction mode
+// (fast/model/hybrid) for manual /compact invocations.
+func (a *Agent) DefaultCompactionMode() string {
+	if a == nil || a.cfg == nil {
+		return "fast"
+	}
+	return normalizeAgentCompactionMode(a.cfg.Compaction.Mode)
 }
 
 // extractPreviousSummary scans history for the last KindSummary and returns its text.

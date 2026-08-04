@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,56 @@ func TestCompactEmitsStructuredSummaryAndTranscript(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, compact[0].Metadata.Transcript)); err != nil {
 		t.Fatalf("expected transcript file to exist: %v", err)
+	}
+}
+
+func TestCompactPreservesRecentAssistantOutputs(t *testing.T) {
+	dir := t.TempDir()
+	compressor := NewCompressor(dir)
+	messages := []protocol.Message{
+		protocol.NewTextMessage(protocol.RoleUser, "实现一个分页组件"),
+		protocol.NewTextMessage(protocol.RoleAssistant, "已完成分页组件：支持上一页/下一页/页码跳转，代码在 ui/web/src/components/Pager.tsx，并补充了单测。"),
+		protocol.NewTextMessage(protocol.RoleUser, "再补充键盘左右键翻页"),
+		protocol.NewTextMessage(protocol.RoleAssistant, "已为 Pager 接入键盘左右键翻页：监听 keydown，ArrowLeft/ArrowRight 触发页码切换，同时阻止默认滚动行为。"),
+	}
+
+	compact, err := compressor.Compact(messages, "system prompt")
+	if err != nil {
+		t.Fatalf("compact messages: %v", err)
+	}
+	text := protocol.MessageText(compact[0])
+	if !strings.Contains(text, "### Recent Assistant Messages") {
+		t.Fatalf("expected dedicated recent-assistant section, got:\n%s", text)
+	}
+	if !strings.Contains(text, "Pager.tsx") || !strings.Contains(text, "ArrowLeft/ArrowRight") {
+		t.Fatalf("expected recent assistant output preserved verbatim, got:\n%s", text)
+	}
+}
+
+func TestCompressorSetKeepRecentControlsRetainedRawMessages(t *testing.T) {
+	dir := t.TempDir()
+	messages := make([]protocol.Message, 0, 26)
+	for i := 0; i < 26; i++ {
+		messages = append(messages, protocol.NewTextMessage(protocol.RoleUser, "msg-"+fmt.Sprint(i)))
+	}
+
+	compressor := NewCompressor(dir)
+	compact, err := compressor.Compact(messages, "system prompt")
+	if err != nil {
+		t.Fatalf("compact messages: %v", err)
+	}
+	if len(compact) != 1+defaultKeepRecent {
+		t.Fatalf("expected summary + %d recent raw messages, got %d", defaultKeepRecent, len(compact))
+	}
+
+	compressor2 := NewCompressor(dir)
+	compressor2.SetKeepRecent(5)
+	compact2, err := compressor2.Compact(messages, "system prompt")
+	if err != nil {
+		t.Fatalf("compact messages: %v", err)
+	}
+	if len(compact2) != 6 {
+		t.Fatalf("expected summary + 5 recent raw messages after SetKeepRecent(5), got %d", len(compact2))
 	}
 }
 

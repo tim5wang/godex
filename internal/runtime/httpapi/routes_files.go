@@ -119,13 +119,7 @@ func registerFileRoutes(mux *http.ServeMux, protected func(http.Handler) http.Ha
 			writeError(w, http.StatusBadRequest, fmt.Errorf("path is required"))
 			return
 		}
-		abs, err := fsys.Abs(path)
-		if err != nil {
-			writeFileError(w, err)
-			return
-		}
-		// Use os.RemoveAll which handles both files and directories
-		if err := os.RemoveAll(abs); err != nil {
+		if err := fsys.RemoveAll(path); err != nil {
 			writeFileError(w, err)
 			return
 		}
@@ -151,12 +145,7 @@ func registerFileRoutes(mux *http.ServeMux, protected func(http.Handler) http.Ha
 			return
 		}
 		defer fsys.Close()
-		abs, err := fsys.Abs(req.Path)
-		if err != nil {
-			writeFileError(w, err)
-			return
-		}
-		if err := os.MkdirAll(abs, 0755); err != nil {
+		if err := fsys.MkdirAll(req.Path, 0755); err != nil {
 			writeFileError(w, err)
 			return
 		}
@@ -183,17 +172,7 @@ func registerFileRoutes(mux *http.ServeMux, protected func(http.Handler) http.Ha
 			return
 		}
 		defer fsys.Close()
-		absFrom, err := fsys.Abs(req.From)
-		if err != nil {
-			writeFileError(w, err)
-			return
-		}
-		absTo, err := fsys.Abs(req.To)
-		if err != nil {
-			writeFileError(w, err)
-			return
-		}
-		if err := os.Rename(absFrom, absTo); err != nil {
+		if err := fsys.Rename(req.From, req.To); err != nil {
 			writeFileError(w, err)
 			return
 		}
@@ -226,14 +205,32 @@ func registerFileRoutes(mux *http.ServeMux, protected func(http.Handler) http.Ha
 	})))
 }
 
-func resolveFileRoot(r *http.Request, manager *config.Manager) (*workspacefs.FS, error) {
+func resolveFileRoot(r *http.Request, manager *config.Manager) (workspacefs.FS, error) {
 	root := r.URL.Query().Get("root")
 	return resolveFileRootFromParam(r, manager, root)
 }
 
-func resolveFileRootFromParam(r *http.Request, manager *config.Manager, root string) (*workspacefs.FS, error) {
+func resolveFileRootFromParam(r *http.Request, manager *config.Manager, root string) (workspacefs.FS, error) {
+	cfg := manager.Current()
+	exec := cfg.Tools.Execution
+	mode := strings.ToLower(strings.TrimSpace(exec.Mode))
+
+	// SSH mode: create SFTP-backed FS
+	if mode == "ssh" && strings.TrimSpace(exec.SSHTarget) != "" {
+		workspace := strings.TrimSpace(exec.SSHWorkspace)
+		if workspace == "" {
+			workspace = "/tmp/godex-workspace"
+		}
+		return workspacefs.NewSSHFS(workspacefs.SSHConfig{
+			Target:     exec.SSHTarget,
+			Workspace:  workspace,
+			SSHOptions: exec.SSHOptions,
+		})
+	}
+
+	// Local/Docker mode: local OS filesystem
 	if strings.TrimSpace(root) == "" {
-		root = manager.Current().WorkspaceDir
+		root = cfg.WorkspaceDir
 	}
 	return workspacefs.New(root)
 }
@@ -266,64 +263,92 @@ var skipDirs = map[string]bool{
 	"__pycache__": true, ".venv": true, "vendor": true,
 }
 
-func searchFiles(fsys *workspacefs.FS, query, mode string) ([]fileSearchResult, error) {
+func searchFiles(fsys workspacefs.FS, query, mode string) ([]fileSearchResult, error) {
 	queryLower := strings.ToLower(query)
 	var results []fileSearchResult
 	const maxResults = 200
 
-	err := filepath.WalkDir(fsys.Dir(), func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip inaccessible
-		}
-		rel, relErr := filepath.Rel(fsys.Dir(), p)
-		if relErr != nil {
-			return nil
-		}
-		if rel == "." {
-			return nil
-		}
-		if d.IsDir() && skipDirs[d.Name()] {
-			return filepath.SkipDir
-		}
-
-		if mode == "name" {
-			if !strings.Contains(strings.ToLower(d.Name()), queryLower) {
-				return nil
-			}
-		} else {
-			// content mode: only search files, not dirs
-			if d.IsDir() {
-				return nil
-			}
-			info, infoErr := d.Info()
-			if infoErr != nil || info.Size() > 512*1024 {
-				return nil // skip files > 512KB
-			}
-			data, readErr := fsys.ReadFile(rel)
-			if readErr != nil {
-				return nil
-			}
-			if !strings.Contains(strings.ToLower(string(data)), queryLower) {
-				return nil
-			}
-		}
-
-		info, _ := d.Info()
-		size := int64(0)
-		if info != nil {
-			size = info.Size()
-		}
-		results = append(results, fileSearchResult{
-			Path:  rel,
-			IsDir: d.IsDir(),
-			Size:  size,
-		})
+	// walkDir recursively traverses the workspace via the FS interface,
+	// so it works for both local (os.Root) and remote (SFTP) backends.
+	var walkDir func(relDir string) error
+	walkDir = func(relDir string) error {
 		if len(results) >= maxResults {
 			return filepath.SkipAll
 		}
+		entries, err := fsys.ReadDir(relDir)
+		if err != nil {
+			return nil // skip inaccessible
+		}
+		for _, entry := range entries {
+			if len(results) >= maxResults {
+				return filepath.SkipAll
+			}
+			name := entry.Name()
+			rel := filepath.Join(relDir, name)
+			if relDir == "." {
+				rel = name
+			}
+
+			if entry.IsDir() {
+				if skipDirs[name] {
+					continue
+				}
+				// Recurse into subdirectory
+				if err := walkDir(rel); err != nil {
+					return err
+				}
+				// Directory name match
+				if mode == "name" && strings.Contains(strings.ToLower(name), queryLower) {
+					info, _ := entry.Info()
+					size := int64(0)
+					if info != nil {
+						size = info.Size()
+					}
+					results = append(results, fileSearchResult{
+						Path:  rel,
+						IsDir: true,
+						Size:  size,
+					})
+				}
+				continue
+			}
+
+			// File matching
+			if mode == "name" {
+				if !strings.Contains(strings.ToLower(name), queryLower) {
+					continue
+				}
+			} else {
+				// content mode: skip large files
+				info, infoErr := entry.Info()
+				if infoErr != nil || info.Size() > 512*1024 {
+					continue
+				}
+				data, readErr := fsys.ReadFile(rel)
+				if readErr != nil {
+					continue
+				}
+				if !strings.Contains(strings.ToLower(string(data)), queryLower) {
+					continue
+				}
+			}
+
+			info, _ := entry.Info()
+			size := int64(0)
+			if info != nil {
+				size = info.Size()
+			}
+			results = append(results, fileSearchResult{
+				Path:  rel,
+				IsDir: false,
+				Size:  size,
+			})
+		}
 		return nil
-	})
-	if err != nil {
+	}
+
+	err := walkDir(".")
+	if err != nil && err != filepath.SkipAll {
 		return nil, err
 	}
 	return results, nil

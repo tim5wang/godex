@@ -24,6 +24,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
 	"github.com/tim5wang/godex/internal/platform/stringutil"
+	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/services/localbash"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -334,13 +335,15 @@ func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Res
 	case "bash", "sh":
 		return s.executeLocalBash(ctx, cmd)
 	case "compact":
-		mode := "fast"
+		mode := a.DefaultCompactionMode()
 		for _, arg := range cmd.Args {
 			switch strings.TrimSpace(arg) {
 			case "--model", "--deep":
 				mode = "model"
+			case "--hybrid":
+				mode = "hybrid"
 			default:
-				return Result{}, fmt.Errorf("usage: /compact [--model|--deep]")
+				return Result{}, fmt.Errorf("usage: /compact [--model|--deep|--hybrid]")
 			}
 		}
 		output, err := a.CompactConversationWithMode(mode)
@@ -427,7 +430,8 @@ func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Res
 	}
 }
 
-// executeLocalBash executes /bash and /sh commands locally via shell.
+// executeLocalBash executes /bash and /sh commands via the configured
+// WorkspaceExecutor (local, SSH, or Docker).
 func (s *Service) executeLocalBash(ctx context.Context, cmd Command) (Result, error) {
 	shellCommand, ok := localbash.ParseCommand(cmd.Raw)
 	if !ok {
@@ -439,12 +443,20 @@ func (s *Service) executeLocalBash(ctx context.Context, cmd Command) (Result, er
 			workspaceDir = dir
 		}
 	}
-	var result localbash.Result
-	if cmd.Name == "bash" {
-		result = localbash.CollectBashWithTimeout(ctx, workspaceDir, shellCommand)
-	} else {
-		result = localbash.CollectWithTimeout(ctx, workspaceDir, shellCommand)
+	// Build execution config from the global tool execution settings so
+	// /sh and /bash respect mode=ssh / mode=docker just like the agent.
+	execution := tooling.ExecutionConfig{
+		Mode:               s.cfg.Tools.Execution.Mode,
+		DockerImage:        s.cfg.Tools.Execution.DockerImage,
+		DockerNetwork:      s.cfg.Tools.Execution.DockerNetwork,
+		SSHTarget:          s.cfg.Tools.Execution.SSHTarget,
+		SSHWorkspace:       s.cfg.Tools.Execution.SSHWorkspace,
+		SSHOptions:         append([]string{}, s.cfg.Tools.Execution.SSHOptions...),
+		ShellAllowPatterns: append([]string{}, s.cfg.Tools.Execution.ShellAllowPatterns...),
+		ShellDenyPatterns:  append([]string{}, s.cfg.Tools.Execution.ShellDenyPatterns...),
 	}
+	executor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspaceDir, "", execution)
+	result := localbash.CollectWithExecutor(ctx, executor, shellCommand)
 	// Always return output (incl. stderr). Non-zero exit codes are
 	// not fatal — the caller sees the same messages a terminal user would.
 	if result.Err != nil && result.Output == "" {

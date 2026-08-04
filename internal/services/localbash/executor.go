@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tim5wang/godex/internal/platform/tooling"
 )
 
 // DefaultTimeout is the default maximum execution duration.
@@ -261,6 +263,26 @@ func copyTo(dst *strings.Builder, mu *sync.Mutex, src io.Reader) {
 			// is not noticeably chunkier when pipes are mostly idle.
 			time.Sleep(emptyReadBackoff)
 		}
+	}
+}
+
+// CollectWithExecutor runs shellCommand via a WorkspaceExecutor (local, SSH, or
+// Docker) and returns the aggregated result.
+func CollectWithExecutor(ctx context.Context, executor *tooling.WorkspaceExecutor, shellCommand string) Result {
+	output, err := executor.RunShell(ctx, shellCommand)
+	code := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		} else {
+			code = -1
+		}
+	}
+	return Result{
+		Command:  shellCommand,
+		Output:   output,
+		ExitCode: code,
+		Err:      err,
 	}
 }
 

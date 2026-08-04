@@ -30,6 +30,12 @@ type lsResult struct {
 
 // NewLsTool creates a new ls tool for listing directory contents.
 func NewLsTool(workspace string) Tool {
+	return NewLsToolWithFS(nil, workspace)
+}
+
+// NewLsToolWithFS creates an ls tool that reads through the given FS.
+// If fs is nil, a local FS is created from workspace.
+func NewLsToolWithFS(fs workspacefs.FS, workspace string) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.LsDefinition(), nil), func(ctx context.Context, args lsArgs) (ToolResult, error) {
 		_ = ctx
 		dir := "."
@@ -37,11 +43,15 @@ func NewLsTool(workspace string) Tool {
 			dir = strings.TrimSpace(args.Path)
 		}
 
-		root, err := workspacefs.New(workspace)
-		if err != nil {
-			return ToolResult{}, err
+		root := fs
+		if root == nil {
+			var err error
+			root, err = workspacefs.New(workspace)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			defer root.Close()
 		}
-		defer root.Close()
 
 		info, err := root.Stat(dir)
 		if err != nil {

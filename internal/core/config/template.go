@@ -352,6 +352,7 @@ agent:
     mode: {{ yamlString .Agent.Compaction.Mode }}
     model_profile_id: {{ yamlString .Agent.Compaction.ModelProfileID }}
     max_latency_ms: {{ .Agent.Compaction.MaxLatencyMS }}
+    keep_recent_messages: {{ .Agent.Compaction.KeepRecentMessages }}
   # Maximum model/tool loop iterations for one main-agent turn. Environment override: GODEX_AGENT_MAX_TURNS.
   max_turns: {{ .Agent.MaxTurns }}
   # general | coding. Environment override: GODEX_AGENT_PROFILE.

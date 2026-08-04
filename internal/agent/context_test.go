@@ -90,6 +90,43 @@ func TestCompactConversationModelModeUsesConfiguredSummarizer(t *testing.T) {
 	}
 }
 
+func TestCompactConversationModelModeUsesSessionLLMWhenDefaultIsRuleBased(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.AddMessage("use session model compact")
+	// Simulate a web UI session: startup wiring left a rule-based default
+	// summarizer (cfg.APIKey empty), but the session has an active client/model.
+	a.summarizer = compress.NewRuleBasedSessionSummarizer(a.compressor)
+	a.client = fakeCaller{resp: protocol.Response{Content: []protocol.Block{
+		protocol.TextBlock("model summary from session llm"),
+	}}}
+
+	output, err := a.CompactConversationWithMode("model")
+	if err != nil {
+		t.Fatalf("model compact with session llm: %v", err)
+	}
+	if !strings.Contains(output, "model summary from session llm") {
+		t.Fatalf("expected session LLM summary output, got %q", output)
+	}
+}
+
+func TestApplyModelProfileRebuildsSummarizerForSessionModel(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	profile := config.ModelProfileConfig{
+		ID:        "kimi",
+		Model:     "kimi-k3",
+		BaseURL:   "http://127.0.0.1:8765",
+		APIKey:    "test-key",
+		MaxTokens: 4096,
+	}
+	a.ApplyModelProfile(profile)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.summarizer.(*compress.LLMSessionSummarizer); !ok {
+		t.Fatalf("expected LLM summarizer after ApplyModelProfile, got %T", a.summarizer)
+	}
+}
+
 func TestBuildContextIncludesStructuredRuntimeMessages(t *testing.T) {
 	a := newTestAgent(t, 100000)
 	a.RegisterTools()

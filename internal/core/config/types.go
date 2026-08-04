@@ -91,6 +91,7 @@ type AgentCompactionSection struct {
 	Mode                string `yaml:"mode"`
 	ModelProfileID      string `yaml:"model_profile_id"`
 	MaxLatencyMS        int    `yaml:"max_latency_ms"`
+	KeepRecentMessages  int    `yaml:"keep_recent_messages"`
 }
 
 type AgentDefaultProfilesSection struct {

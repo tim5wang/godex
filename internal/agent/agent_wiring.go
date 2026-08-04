@@ -34,6 +34,7 @@ func buildDependencies(cfg *config.Config) dependencies {
 	skillLoader := newSkillLoader(cfg, client)
 	memoryMgr := memory.NewManager(cfg.MemoryDir)
 	compressor := compress.NewCompressor(cfg.TranscriptsDir)
+	compressor.SetKeepRecent(cfg.Compaction.KeepRecentMessages)
 	ruleSummarizer := compress.NewRuleBasedSessionSummarizer(compressor)
 	sessionSummarizer := compress.SessionSummarizer(ruleSummarizer)
 	if strings.TrimSpace(cfg.APIKey) != "" {

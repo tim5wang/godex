@@ -68,7 +68,12 @@ type attachFileArgs struct {
 // NewReadFileTool creates a new read file tool with line numbers, smart defaults,
 // and image detection support.
 func NewReadFileTool(workspace string) Tool {
-	executor := tooling.NewWorkspaceExecutor(workspace)
+	return NewReadFileToolWithExecutor(tooling.NewWorkspaceExecutor(workspace))
+}
+
+// NewReadFileToolWithExecutor creates a read file tool that delegates to the
+// given executor. The executor's FS (local or remote) is used for all file I/O.
+func NewReadFileToolWithExecutor(executor *tooling.WorkspaceExecutor) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.ReadFileDefinition(), map[string]string{}), func(ctx context.Context, args readFileArgs) (ToolResult, error) {
 		_ = ctx
 		if strings.TrimSpace(args.Path) == "" {
@@ -121,7 +126,12 @@ func NewReadFileTool(workspace string) Tool {
 
 // NewWriteFileTool creates a new write file tool.
 func NewWriteFileTool(workspace string) Tool {
-	executor := tooling.NewWorkspaceExecutor(workspace)
+	return NewWriteFileToolWithExecutor(tooling.NewWorkspaceExecutor(workspace))
+}
+
+// NewWriteFileToolWithExecutor creates a write tool that delegates to the
+// given executor. The executor's FS (local or remote) is used for all file I/O.
+func NewWriteFileToolWithExecutor(executor *tooling.WorkspaceExecutor) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.WriteFileDefinition(), nil), func(ctx context.Context, args writeFileArgs) (ToolResult, error) {
 		_ = ctx
 		if strings.TrimSpace(args.Path) == "" {
@@ -135,7 +145,12 @@ func NewWriteFileTool(workspace string) Tool {
 // NewEditFileTool creates a new edit file tool with multi-edit support.
 // Supports both single edit (old_text/new_text) and multi-edit (edits[]) for backward compatibility.
 func NewEditFileTool(workspace string) Tool {
-	executor := tooling.NewWorkspaceExecutor(workspace)
+	return NewEditFileToolWithExecutor(tooling.NewWorkspaceExecutor(workspace))
+}
+
+// NewEditFileToolWithExecutor creates an edit tool that delegates to the
+// given executor. The executor's FS (local or remote) is used for all file I/O.
+func NewEditFileToolWithExecutor(executor *tooling.WorkspaceExecutor) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.EditFileDefinition(), nil), func(ctx context.Context, args editFileArgs) (ToolResult, error) {
 		_ = ctx
 		// Multi-file mode takes highest precedence (path not required).
@@ -183,16 +198,26 @@ func (a editFileArgs) FilesToToolingBatches() []tooling.FileEditBatch {
 // NewAttachFileTool creates a tool that explicitly promotes one local file into
 // the current session reply as an attachment.
 func NewAttachFileTool(workspace string) Tool {
+	return NewAttachFileToolWithFS(nil, workspace)
+}
+
+// NewAttachFileToolWithFS creates an attach tool that reads through the given FS.
+// If fs is nil, a local FS is created from workspace.
+func NewAttachFileToolWithFS(fs workspacefs.FS, workspace string) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.AttachFileDefinition(), nil), func(ctx context.Context, args attachFileArgs) (ToolResult, error) {
 		_ = ctx
 		if strings.TrimSpace(args.Path) == "" {
 			return ToolResult{}, fmt.Errorf("missing path argument")
 		}
-		root, err := workspacefs.New(workspace)
-		if err != nil {
-			return ToolResult{}, err
+		root := fs
+		if root == nil {
+			var err error
+			root, err = workspacefs.New(workspace)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			defer root.Close()
 		}
-		defer root.Close()
 		absPath, err := root.Abs(args.Path)
 		if err != nil {
 			return ToolResult{}, err

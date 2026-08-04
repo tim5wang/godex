@@ -218,6 +218,12 @@ export interface MetaResponse {
   workspace_dir: string;
   auth_required: boolean;
   version: VersionInfo;
+  execution_mode?: string;
+  ssh_target?: string;
+  ssh_workspace?: string;
+  ssh_options?: string[];
+  docker_image?: string;
+  docker_network?: string;
 }
 
 export interface ConfigMetaResponse {

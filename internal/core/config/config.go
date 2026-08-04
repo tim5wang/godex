@@ -99,6 +99,7 @@ type AgentCompactionConfig struct {
 	Mode                string
 	ModelProfileID      string
 	MaxLatencyMS        int
+	KeepRecentMessages  int
 }
 
 const (

@@ -51,6 +51,7 @@ func defaultConfigFile() ConfigFile {
 				Mode:                "fast",
 				ModelProfileID:      "",
 				MaxLatencyMS:        3000,
+				KeepRecentMessages:  20,
 			},
 			MaxTurns: 1000,
 			Profile:  AgentProfileGeneral,

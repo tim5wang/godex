@@ -1251,6 +1251,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveInt("agent.compaction.max_latency_ms", file.Agent.Compaction.MaxLatencyMS, "GODEX_AGENT_COMPACTION_MAX_LATENCY_MS", func(v int) {
 		current.Compaction.MaxLatencyMS = positiveOrDefault(v, 3000)
 	})
+	resolveInt("agent.compaction.keep_recent_messages", file.Agent.Compaction.KeepRecentMessages, "GODEX_AGENT_COMPACTION_KEEP_RECENT_MESSAGES", func(v int) {
+		current.Compaction.KeepRecentMessages = positiveOrDefault(v, 20)
+	})
 	resolveInt("agent.max_turns", file.Agent.MaxTurns, "GODEX_AGENT_MAX_TURNS", func(v int) { current.MaxTurns = v })
 	resolveString("agent.profile", file.Agent.Profile, "GODEX_AGENT_PROFILE", func(v string) {
 		current.AgentProfile = NormalizeAgentProfile(v)
@@ -1801,6 +1804,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			Mode:                NormalizeCompactionMode(file.Agent.Compaction.Mode),
 			ModelProfileID:      strings.TrimSpace(file.Agent.Compaction.ModelProfileID),
 			MaxLatencyMS:        positiveOrDefault(file.Agent.Compaction.MaxLatencyMS, 3000),
+			KeepRecentMessages:  positiveOrDefault(file.Agent.Compaction.KeepRecentMessages, 20),
 		},
 		MaxTurns:     file.Agent.MaxTurns,
 		AgentProfile: NormalizeAgentProfile(file.Agent.Profile),
@@ -2523,6 +2527,8 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Agent.Compaction.ModelProfileID = strings.TrimSpace(asString(value))
 	case "agent.compaction.max_latency_ms":
 		file.Agent.Compaction.MaxLatencyMS = asInt(value)
+	case "agent.compaction.keep_recent_messages":
+		file.Agent.Compaction.KeepRecentMessages = asInt(value)
 	case "agent.max_turns":
 		file.Agent.MaxTurns = asInt(value)
 	case "agent.profile":
@@ -3051,6 +3057,7 @@ func storedValues(file ConfigFile) map[string]any {
 		"agent.compaction.mode":                                  NormalizeCompactionMode(file.Agent.Compaction.Mode),
 		"agent.compaction.model_profile_id":                      strings.TrimSpace(file.Agent.Compaction.ModelProfileID),
 		"agent.compaction.max_latency_ms":                        file.Agent.Compaction.MaxLatencyMS,
+		"agent.compaction.keep_recent_messages":                  file.Agent.Compaction.KeepRecentMessages,
 		"agent.max_turns":                                        file.Agent.MaxTurns,
 		"agent.profile":                                          NormalizeAgentProfile(file.Agent.Profile),
 		"agent.default_profiles.acp":                             NormalizeAgentProfile(file.Agent.DefaultProfiles.ACP),
@@ -3239,6 +3246,7 @@ func effectiveValues(cfg *Config) map[string]any {
 		"agent.compaction.mode":                                  cfg.Compaction.Mode,
 		"agent.compaction.model_profile_id":                      cfg.Compaction.ModelProfileID,
 		"agent.compaction.max_latency_ms":                        cfg.Compaction.MaxLatencyMS,
+		"agent.compaction.keep_recent_messages":                  cfg.Compaction.KeepRecentMessages,
 		"agent.max_turns":                                        cfg.MaxTurns,
 		"agent.profile":                                          cfg.AgentProfile,
 		"agent.default_profiles.acp":                             cfg.AgentDefaultProfiles.ACP,

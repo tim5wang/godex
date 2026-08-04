@@ -54,9 +54,24 @@ func newTerminalManager() *terminalManager {
 
 var globalTerminalManager = newTerminalManager()
 
-// create spawns a bash (or sh) shell with PTY-based I/O. Falls back to
-// pipes when the platform doesn't support PTY.
-func (m *terminalManager) create(ctx context.Context, workspaceDir string) (*terminalSession, error) {
+// create spawns a shell for the requested execution backend.
+//   - "local" (default): bash/sh with PTY, falling back to pipes.
+//   - "ssh":  ssh -t <target> (the remote side allocates the PTY).
+//   - "docker": docker exec -it <container> sh (requires running container).
+func (m *terminalManager) create(ctx context.Context, req createTerminalRequest) (*terminalSession, error) {
+	mode := strings.ToLower(strings.TrimSpace(req.ExecutionMode))
+	switch mode {
+	case "ssh":
+		return m.createSSH(ctx, req)
+	case "docker":
+		return m.createDocker(ctx, req)
+	default:
+		return m.createLocal(ctx, req.WorkspaceDir)
+	}
+}
+
+// createLocal spawns a local bash (or sh) shell with PTY-based I/O.
+func (m *terminalManager) createLocal(ctx context.Context, workspaceDir string) (*terminalSession, error) {
 	shell, shellArgs := resolveShell()
 
 	cmd := exec.Command(shell, shellArgs...)
@@ -87,6 +102,77 @@ func (m *terminalManager) create(ctx context.Context, workspaceDir string) (*ter
 		return m.createWithPipes(cmd, workspaceDir)
 	}
 
+	session := m.registerSession(cmd, ptyFile, cancel)
+	logger.Infof("terminal %s started (PTY) pid=%d shell=%s", session.id, cmd.Process.Pid, shell)
+	return session, nil
+}
+
+// createSSH spawns an SSH interactive terminal via `ssh -t target`.
+// The remote sshd allocates a PTY on its side, so we pipe stdin/stdout.
+func (m *terminalManager) createSSH(ctx context.Context, req createTerminalRequest) (*terminalSession, error) {
+	target := strings.TrimSpace(req.SSHTarget)
+	if target == "" {
+		return nil, fmt.Errorf("ssh terminal requires sshTarget")
+	}
+	args := append([]string{}, req.SSHOptions...)
+	// -t forces pseudo-terminal allocation on the remote side.
+	// Use -tt if already requested via options; otherwise plain -t.
+	hasT := false
+	for _, opt := range args {
+		if opt == "-t" || opt == "-tt" {
+			hasT = true
+			break
+		}
+	}
+	if !hasT {
+		args = append(args, "-t")
+	}
+	args = append(args, target)
+	// If a remote workspace is set, cd into it before starting the shell.
+	if ws := strings.TrimSpace(req.SSHWorkspace); ws != "" {
+		args = append(args, fmt.Sprintf("cd %s && exec $SHELL -l", shellQuoteArg(ws)))
+	}
+
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	cmd.Env = append(os.Environ(),
+		"TERM=xterm-256color",
+		"LANG=en_US.UTF-8",
+		"LC_ALL=en_US.UTF-8",
+	)
+
+	_, cancel := context.WithCancel(ctx)
+	return m.startPiped(cmd, cancel)
+}
+
+// createDocker spawns a shell inside a running Docker container.
+func (m *terminalManager) createDocker(ctx context.Context, req createTerminalRequest) (*terminalSession, error) {
+	image := strings.TrimSpace(req.DockerImage)
+	if image == "" {
+		return nil, fmt.Errorf("docker terminal requires dockerImage (container name or running image)")
+	}
+	args := []string{"exec", "-it"}
+	if net := strings.TrimSpace(req.DockerNetwork); net != "" {
+		args = append(args, "--network", net)
+	}
+	if ws := strings.TrimSpace(req.WorkspaceDir); ws != "" {
+		args = append(args, "-w", ws)
+	}
+	args = append(args, image, "sh", "-i")
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = append(os.Environ(),
+		"TERM=xterm-256color",
+		"LANG=en_US.UTF-8",
+		"LC_ALL=en_US.UTF-8",
+	)
+
+	_, cancel := context.WithCancel(ctx)
+	return m.startPiped(cmd, cancel)
+}
+
+// registerSession wires a started cmd+pty into the manager and starts
+// the read/wait goroutines. Shared by all backend modes.
+func (m *terminalManager) registerSession(cmd *exec.Cmd, ptyFile io.ReadWriteCloser, cancel context.CancelFunc) *terminalSession {
 	session := &terminalSession{
 		id:        randomTerminalID(),
 		cmd:       cmd,
@@ -111,55 +197,45 @@ func (m *terminalManager) create(ctx context.Context, workspaceDir string) (*ter
 		close(session.done)
 	}()
 
-	logger.Infof("terminal %s started (PTY) pid=%d shell=%s", session.id, cmd.Process.Pid, shell)
-	return session, nil
+	return session
 }
 
-// createWithPipes is the fallback when PTY is unavailable.
-func (m *terminalManager) createWithPipes(cmd *exec.Cmd, _ string) (*terminalSession, error) {
+// startPiped starts cmd with piped stdin/stdout (no local PTY) and
+// registers the session. Used by SSH and Docker backends where the
+// remote side (sshd / docker exec -t) already handles PTY allocation.
+func (m *terminalManager) startPiped(cmd *exec.Cmd, cancel context.CancelFunc) (*terminalSession, error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	cmd.Stderr = cmd.Stdout
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start shell: %w", err)
+		cancel()
+		return nil, fmt.Errorf("start: %w", err)
 	}
 
 	pw := &pipeWrapper{stdin: stdin, stdout: stdout}
-	_, cancel := context.WithCancel(context.Background())
-
-	session := &terminalSession{
-		id:        randomTerminalID(),
-		cmd:       cmd,
-		ptyFile:   pw,
-		cancel:    cancel,
-		buffer:    make([]byte, 0, defaultTerminalBufferSize),
-		createdAt: time.Now(),
-		done:      make(chan struct{}),
-	}
-	session.cursor.Store(0)
-	session.exited.Store(false)
-
-	m.mu.Lock()
-	m.terminals[session.id] = session
-	m.mu.Unlock()
-
-	go session.readLoop(pw)
-
-	go func() {
-		_ = cmd.Wait()
-		session.exited.Store(true)
-		close(session.done)
-	}()
-
-	logger.Infof("terminal %s started (pipe fallback) pid=%d", session.id, cmd.Process.Pid)
+	session := m.registerSession(cmd, pw, cancel)
+	logger.Infof("terminal %s started (piped) pid=%d cmd=%s", session.id, cmd.Process.Pid, cmd.String())
 	return session, nil
+}
+
+// shellQuoteArg quotes a string for safe use as a shell argument.
+func shellQuoteArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// createWithPipes is the fallback when PTY is unavailable.
+func (m *terminalManager) createWithPipes(cmd *exec.Cmd, _ string) (*terminalSession, error) {
+	_, cancel := context.WithCancel(context.Background())
+	return m.startPiped(cmd, cancel)
 }
 
 // resolveShell picks bash, falling back to sh with -i for PTY.
@@ -307,7 +383,13 @@ func (pw *pipeWrapper) Close() error {
 // --- API types ---
 
 type createTerminalRequest struct {
-	WorkspaceDir string `json:"workspaceDir"`
+	WorkspaceDir   string   `json:"workspaceDir"`
+	ExecutionMode  string   `json:"executionMode,omitempty"`
+	SSHTarget      string   `json:"sshTarget,omitempty"`
+	SSHWorkspace   string   `json:"sshWorkspace,omitempty"`
+	SSHOptions     []string `json:"sshOptions,omitempty"`
+	DockerImage    string   `json:"dockerImage,omitempty"`
+	DockerNetwork  string   `json:"dockerNetwork,omitempty"`
 }
 
 type createTerminalResponse struct {
@@ -341,7 +423,7 @@ func (m *terminalManager) handleCreateTerminal(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	session, err := m.create(r.Context(), req.WorkspaceDir)
+	session, err := m.create(r.Context(), req)
 	if err != nil {
 		logger.Warnf("terminal create: %v", err)
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to create terminal: %w", err))

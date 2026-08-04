@@ -27,10 +27,21 @@ const (
 	maxSummaryOpenItems   = 8
 	maxSummaryItemRunes   = 220
 	maxSummaryTotalRunes  = 6500
-	maxRecentUserMessages = 6
-	maxRecentUserRunes    = 1200
-	maxRecentUserTotal    = 5000
+	// Verbatim retention budgets for the summary. Recent user instructions and
+	// assistant outputs are preserved nearly verbatim so compaction keeps the
+	// original input/output that matters for the next turn.
+	maxRecentUserMessages      = 8
+	maxRecentUserRunes         = 1600
+	maxRecentUserTotal         = 8000
+	maxRecentAssistantMessages = 6
+	maxRecentAssistantRunes    = 1600
+	maxRecentAssistantTotal    = 6000
 )
+
+// defaultKeepRecent is how many raw recent messages are appended verbatim
+// after the summary message. It is configurable via
+// agent.compaction.keep_recent_messages.
+const defaultKeepRecent = 20
 
 var (
 	pathTokenPattern      = regexp.MustCompile(`[A-Za-z0-9_.@+\-]*\.{0,2}/[A-Za-z0-9_./@+\-]+|/[A-Za-z0-9_./@+\-]+`)
@@ -40,6 +51,7 @@ var (
 // Compressor handles message compression.
 type Compressor struct {
 	transcriptsDir string
+	keepRecent     int
 	mu             sync.Mutex
 	lastHash       [32]byte
 	lastResult     []protocol.Message
@@ -48,7 +60,15 @@ type Compressor struct {
 
 // NewCompressor creates a new compressor.
 func NewCompressor(transcriptsDir string) *Compressor {
-	return &Compressor{transcriptsDir: transcriptsDir}
+	return &Compressor{transcriptsDir: transcriptsDir, keepRecent: defaultKeepRecent}
+}
+
+// SetKeepRecent overrides how many raw recent messages are retained verbatim
+// after the summary during compaction. Non-positive values keep the default.
+func (c *Compressor) SetKeepRecent(n int) {
+	if n > 0 {
+		c.keepRecent = n
+	}
 }
 
 // CountTokens estimates token count using character-class ratios.
@@ -126,7 +146,10 @@ func (c *Compressor) CompactWithSnapshot(messages []protocol.Message, _ string, 
 	summaryText := buildSemanticSummary(messages, filename, time.Now(), continuationSnapshot)
 	compact := []protocol.Message{protocol.NewSummaryMessage(summaryText, filename)}
 
-	const keepLast = 10
+	keepLast := c.keepRecent
+	if keepLast <= 0 {
+		keepLast = defaultKeepRecent
+	}
 	recent := messages
 	if len(messages) > keepLast {
 		recent = messages[len(messages)-keepLast:]
@@ -216,11 +239,12 @@ type semanticSummary struct {
 	validation      []string
 	openItems       []string
 	previous        []string
-	recentUser      string
-	recentAssistant string
-	recentUsers     []string
-	toolNames       map[string]struct{}
-	fileOps         FileOperations
+	recentUser       string
+	recentAssistant  string
+	recentUsers      []string
+	recentAssistants []string
+	toolNames        map[string]struct{}
+	fileOps          FileOperations
 }
 
 func buildSemanticSummary(messages []protocol.Message, transcript string, at time.Time, continuationSnapshot string) string {
@@ -297,6 +321,7 @@ func buildSemanticSummary(messages []protocol.Message, transcript string, at tim
 			}
 			normalized := normalizeWhitespace(humanText)
 			state.recentAssistant = normalized
+			addRecentAssistantVerbatim(&state.recentAssistants, humanText)
 			for _, fragment := range splitFragments(humanText) {
 				if isDecisionFragment(fragment) {
 					addUniqueLimited(&state.decisions, fragment, maxSummaryDecisions)
@@ -432,6 +457,14 @@ func buildSemanticSummary(messages []protocol.Message, transcript string, at tim
 	if len(state.recentUsers) > 0 {
 		builder.WriteString("\n### Recent User Messages\n")
 		for i, m := range state.recentUsers {
+			builder.WriteString(fmt.Sprintf("%d. ```text\n%s\n```\n", i+1, m))
+		}
+	}
+
+	// Recent assistant outputs verbatim
+	if len(state.recentAssistants) > 0 {
+		builder.WriteString("\n### Recent Assistant Messages\n")
+		for i, m := range state.recentAssistants {
 			builder.WriteString(fmt.Sprintf("%d. ```text\n%s\n```\n", i+1, m))
 		}
 	}
@@ -676,6 +709,37 @@ func addRecentUserVerbatim(items *[]string, value string) {
 	for i := len(*items) - 1; i >= 0; i-- {
 		total += utf8.RuneCountInString((*items)[i])
 		if total > maxRecentUserTotal {
+			start = i + 1
+			break
+		}
+	}
+	if start > 0 {
+		*items = (*items)[start:]
+	}
+}
+
+// addRecentAssistantVerbatim keeps the most recent assistant text outputs
+// verbatim (deduplicated, rune-budgeted) so agent output survives compaction.
+func addRecentAssistantVerbatim(items *[]string, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	value = limitRunes(value, maxRecentAssistantRunes)
+	for _, existing := range *items {
+		if existing == value {
+			return
+		}
+	}
+	*items = append(*items, value)
+	if len(*items) > maxRecentAssistantMessages {
+		*items = (*items)[len(*items)-maxRecentAssistantMessages:]
+	}
+	total := 0
+	start := 0
+	for i := len(*items) - 1; i >= 0; i-- {
+		total += utf8.RuneCountInString((*items)[i])
+		if total > maxRecentAssistantTotal {
 			start = i + 1
 			break
 		}

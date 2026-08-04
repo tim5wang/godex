@@ -139,7 +139,7 @@ func (s *Sandbox) Info() Info {
 	}
 }
 
-func (s *Sandbox) FileSystem() (*workspacefs.FS, error) {
+func (s *Sandbox) FileSystem() (workspacefs.FS, error) {
 	if s == nil {
 		return workspacefs.New("")
 	}

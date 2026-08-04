@@ -32,6 +32,12 @@ type findResult struct {
 
 // NewFindTool creates a new find tool for locating files by glob pattern.
 func NewFindTool(workspace string) Tool {
+	return NewFindToolWithFS(nil, workspace)
+}
+
+// NewFindToolWithFS creates a find tool that reads through the given FS.
+// If fs is nil, a local FS is created from workspace.
+func NewFindToolWithFS(fs workspacefs.FS, workspace string) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.FindDefinition(), nil), func(ctx context.Context, args findArgs) (ToolResult, error) {
 		_ = ctx
 		pattern := strings.TrimSpace(args.Pattern)
@@ -52,11 +58,15 @@ func NewFindTool(workspace string) Tool {
 			searchPath = strings.TrimSpace(args.Path)
 		}
 
-		root, err := workspacefs.New(workspace)
-		if err != nil {
-			return ToolResult{}, err
+		root := fs
+		if root == nil {
+			var err error
+			root, err = workspacefs.New(workspace)
+			if err != nil {
+				return ToolResult{}, err
+			}
+			defer root.Close()
 		}
-		defer root.Close()
 
 		info, err := root.Stat(searchPath)
 		if err != nil {
@@ -92,7 +102,7 @@ func NewFindTool(workspace string) Tool {
 	})
 }
 
-func walkFindDir(root *workspacefs.FS, relDir string, entries []fs.DirEntry, originalPattern, filePattern string, files *[]string, total *int, maxResults int) {
+func walkFindDir(root workspacefs.FS, relDir string, entries []fs.DirEntry, originalPattern, filePattern string, files *[]string, total *int, maxResults int) {
 	for _, entry := range entries {
 		if len(*files) >= maxResults {
 			return

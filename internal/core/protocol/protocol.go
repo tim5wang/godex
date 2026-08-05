@@ -28,6 +28,16 @@ const (
 	BlockThinking BlockType = "thinking"
 )
 
+// Reserved keys injected into a tool_use input map when the raw arguments
+// JSON could not be fully recovered (truncated stream, invalid escapes, or
+// control characters). The tool runtime checks for these before schema
+// validation so it can surface an accurate diagnostic to the model instead of
+// a misleading "missing required argument" error.
+const (
+	ToolInputErrorKey   = "__error__"
+	ToolInputPartialKey = "__partial__"
+)
+
 const (
 	KindSummary      MessageKind = "summary"
 	KindInbox        MessageKind = "inbox"

@@ -557,8 +557,8 @@ func recoverPartialToolInput(raw string) (map[string]interface{}, bool) {
 		return input, false
 	}
 	return map[string]interface{}{
-		"__error__":   "streamed_tool_input_truncated",
-		"__partial__": raw,
+		protocol.ToolInputErrorKey:   "streamed_tool_input_truncated",
+		protocol.ToolInputPartialKey: raw,
 	}, true
 }
 

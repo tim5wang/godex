@@ -582,10 +582,7 @@ func openAIUsageToProtocol(usage openAIUsage) *protocol.Usage {
 }
 
 func openAIToolCallToBlock(call openAIToolCall) protocol.Block {
-	input := map[string]interface{}{}
-	if strings.TrimSpace(call.Function.Arguments) != "" {
-		_ = json.Unmarshal([]byte(call.Function.Arguments), &input)
-	}
+	input := parseToolArguments(call.Function.Arguments)
 	block := protocol.ToolUseBlock(call.ID, call.Function.Name, input)
 	// Forward the OpenAI tool_calls[].index so the gateway can emit
 	// the same index on the wire and the OpenAI SDK's per-chunk

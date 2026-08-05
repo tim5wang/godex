@@ -348,10 +348,7 @@ func codexStreamStateToProtocol(state *codexResponsesStreamState) *protocol.Resp
 		if call.id == "" && call.name == "" {
 			continue
 		}
-		input := map[string]interface{}{}
-		if strings.TrimSpace(call.arguments) != "" {
-			_ = json.Unmarshal([]byte(call.arguments), &input)
-		}
+		input := parseToolArguments(call.arguments)
 		blocks = append(blocks, protocol.ToolUseBlock(call.id, call.name, input))
 	}
 	if state.usage != nil {

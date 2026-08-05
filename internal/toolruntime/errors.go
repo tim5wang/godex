@@ -36,6 +36,39 @@ func (e ErrToolInvalidInput) Error() string {
 	return fmt.Sprintf("tool %q missing required argument(s): %s", e.Tool, strings.Join(e.Missing, ", "))
 }
 
+// maxMalformedPartialChars bounds how much of the raw (unrecoverable)
+// arguments fragment is echoed back to the model in the error message, so a
+// huge truncated payload does not flood the conversation.
+const maxMalformedPartialChars = 400
+
+// ErrToolMalformedInput is returned when a tool call's arguments JSON could
+// not be parsed even after best-effort repair (see conversation.parseToolArguments).
+// Unlike ErrToolInvalidInput (which means the model sent a structurally valid
+// object missing required fields), this signals the raw arguments were damaged
+// in transit — truncated stream, invalid escapes, or control characters — so the
+// model should retry with complete, well-formed JSON rather than "fix" a field.
+type ErrToolMalformedInput struct {
+	Tool    string
+	Reason  string // e.g. "streamed_tool_input_truncated"
+	Partial string // raw arguments fragment (bounded in Error())
+}
+
+func (e ErrToolMalformedInput) Error() string {
+	msg := fmt.Sprintf("tool %q received malformed JSON arguments", e.Tool)
+	if e.Reason != "" {
+		msg += fmt.Sprintf(" (%s)", e.Reason)
+	}
+	if e.Partial != "" {
+		p := e.Partial
+		if len(p) > maxMalformedPartialChars {
+			p = p[:maxMalformedPartialChars] + "…"
+		}
+		msg += fmt.Sprintf("; raw arguments: %s", p)
+	}
+	msg += "; retry with complete, well-formed JSON arguments"
+	return msg
+}
+
 // ErrToolInactive is returned when a registered tool is not currently active.
 type ErrToolInactive struct {
 	Name   string

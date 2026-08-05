@@ -292,16 +292,39 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 - [ ] 安全：trust 级别生效（`guarded-remote` 节点默认审批）
 - 验证：在内网节点 workspace 里，通过中心 Web 起一个 chat turn → agent 编辑文件 → 终端跑 `go test`，全程在中心浏览器完成。
 
-### Phase 4：远程编程工作台 + 本地跳板（远期）
+### Phase 3：远程控制（chat / terminal / files）（✅ 已完成 2026-08-06）
+
+**目标**：远程编程的第一版——在中心 Web 上对节点完成「聊天 + 终端 + 文件」操作。
+
+- [x] relay 真流式：agent 侧 `streamWriter`（`http.Flusher` → `FrameStream` 帧，非流式仍单帧 `FrameResponse`）——`internal/services/relay/stream.go`；hub `ForwardStream` 实时回调 + `Forward` 聚合兼容——`internal/services/relay/hub.go`
+- [x] 中心 nodeProxy 流式透传：`ProxyHandler` 改用 `ForwardStream`（SSE/chat 事件实时回浏览器，`http.Flusher` flush；Timeout 默认跟随客户端，不掐断长连接）——`internal/services/relay/proxy.go`
+- [x] 节点侧 terminal：节点本地已有 HTTP 轮询式 PTY 端点（`/v1/terminal/create|output|input|resize`），经中心代理即可远程使用，无需新增 WS 适配
+- [x] 前端节点上下文：`useNodeContextStore`（活动节点）+ `apiURL` 对节点业务路径加 `/control/nodes/{id}/proxy` 前缀（sse.ts 自动生效）+ terminalClient `getBaseUrl` 读取节点上下文——`ui/web/src/store/nodeContext.ts`、`ui/web/src/lib/api.ts`、`ui/web/src/lib/terminalClient.ts`
+- [x] Nodes UI：节点详情页 Open Chat / Terminal / Files 入口 + App 层远程节点 banner（可退出远程模式）——`ui/web/src/features/nodes/NodeDetailPage.tsx`、`ui/web/src/App.tsx`
+- [x] 审批聚合：节点写操作审批（Phase 2 快照 approvals）可在中心处理——`approveNodePermission` / `denyNodePermission` 经中心代理转发到节点，NodeDetailPage 待审批表加 Approve/Deny 操作
+- [x] 安全：trust 级别生效——`guarded-remote` 节点写操作默认 403（`X-Godex-Trust-Approved` 头显式放行），`ProxyHandler.TrustLevel` 从 registry 解析——`internal/services/relay/proxy.go` + `cmd/godex/main.go`
+- [x] 端到端验证：`scripts/smoke_remote.sh` PASS（中心经代理操作节点：meta / files.list / terminal.create / sessions + guarded-remote 403/200）
+
+验证（2026-08-06 实测）：`curl http://127.0.0.1:3921/api/control/nodes/{id}/proxy/v1/terminal/create` 返回 `terminalId`；`TestProxyHandlerStreamsSSEInRealTime` 证明 SSE 事件 400ms 内实时到达（非缓冲）。
+
+### Phase 4：远程编程工作台 + 本地跳板（✅ 已完成 TCP 端口转发，2026-08-06）
 
 **目标**：完整远程开发闭环，并支持本地 CLI/TUI 以服务器为跳板。
 
+- [x] **TCP 端口转发**：relay `tcp_open/data/close` 帧 + 中心 `godex node forward` 命令 + 节点 `control.forward_allow` 白名单（跳板访问内网服务）
+  - 协议：`internal/services/relay/protocol.go` 新增 `FrameTCPOpen/FrameTCPData/FrameTCPClose`；`AllowForward` 白名单校验（host:port 精确 + `*` 通配，空列表默认全拒）——`internal/services/relay/tcp.go`
+  - hub TCP 流原语：`Hub.OpenTCPStream(ctx, nodeID, connID, target)` 返回实现 `io.ReadWriteCloser` 的 `tcpStream`（cli 侧可 io.Copy 桥接）——`internal/services/relay/tcp_stream.go`
+  - 中心 forward 会话端点：`ForwardHandler`（`/api/control/nodes/{id}/forward` WS，web token 鉴权）+ CLI 侧 `ForwardClient`（`Open(target)` 返回流）——`internal/services/relay/forward.go`
+  - CLI 命令：`godex node forward --node X --local 3306 --target 10.0.0.5:3306 [--center URL] [--token]`，本地监听 → 每连接开一条节点侧 TCP 流双向搬运（等价 ssh -L）——`internal/app/node.go`
+  - 节点侧拨号服务：agent 收 `tcp_open` → `AllowForward` 校验（未命中拒绝并回 tcp_close）→ `net.DialTimeout` → 双向泵（conn→hub 发 tcp_data；hub→conn 写数据）——`internal/services/relay/agent.go`
+  - 配置：`control.forward_allow`（yaml + `GODEX_CONTROL_FORWARD_ALLOW` env，逗号分隔）——`internal/core/config/{types,config,resolve,schema}.go`
+  - 装配：serve 注册 forward 端点 + agent 透传白名单——`cmd/godex/main.go`
+  - 端到端验证：`scripts/smoke_forward.sh` PASS（中心跳板命令 → 节点内网 echo 服务往返 + 未列入白名单 target 拒绝）
 - [ ] 节点工作台体验打磨（文件树 + diff + 终端多开 + 长任务面板）
-- [ ] 中心侧 `godex node exec --node <id> <cmd>` 类 CLI 跳板命令；本地 TUI 通过中心连节点
-- [ ] **TCP 端口转发**：relay `tcp_open/data/close` 帧 + 中心 `godex node forward` 命令 + 节点 `forward_allow` 白名单（跳板访问内网服务）
+- [ ] 中心侧 `godex node exec --node <id> <cmd>` 类 CLI 跳板命令（node forward 已落地，exec 后续）；本地 TUI 通过中心连节点
 - [ ] 跨节点任务编排（可选）：从中心把同一 prompt 派到多节点（借鉴 Orca parallel worktrees，非必须）
 - [ ] 审计报表、存储/健康聚合（doctor per node）
-- 验证：本地只开一个终端，`godex node exec --node 内网A 'cd ~/proj && godex ask "review this PR"'`，返回结果并可在中心 Web 追 session；`godex node forward --node 内网A --local 3306 --target 10.0.0.5:3306` 可连内网数据库。
+- 验证：`godex node forward --node 内网A --local 3306 --target 10.0.0.5:3306` 可连内网数据库（✅ smoke_forward.sh 已证：本地端口数据经中心 relay → 节点拨号 → 内网服务往返）
 
 ### Phase 5：移动端（已确认：不做原生 App）
 

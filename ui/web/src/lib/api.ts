@@ -63,6 +63,7 @@ import type {
   CacheStats,
   WeixinAuthStatus,
 } from "./types";
+import { useNodeContextStore } from "../store/nodeContext";
 
 export class APIError extends Error {
   status: number;
@@ -80,10 +81,37 @@ export function apiURL(path: string) {
   if (path.startsWith("/api/") || path === "/api") {
     return path;
   }
+  const proxied = nodeProxyPath(path);
+  if (proxied) {
+    return `/api${proxied}`;
+  }
   if (path.startsWith("/")) {
     return `/api${path}`;
   }
   return `/api/${path}`;
+}
+
+// nodeProxyPath returns the center-proxy URL for a node-scoped path when a
+// remote node is active, or null when the request should hit the local center.
+// Node-scoped paths are the ones the Chat/Terminal/Files pages use against a
+// remote node; center management paths (/meta, /config, /control/...) stay
+// local so the shell itself keeps working.
+function nodeProxyPath(path: string): string | null {
+  const nodeID = useNodeContextStore.getState().nodeID;
+  if (!nodeID) {
+    return null;
+  }
+  const p = path.startsWith("/") ? path : `/${path}`;
+  if (
+    p.startsWith("/sessions") ||
+    p.startsWith("/v1/terminal") ||
+    p.startsWith("/files") ||
+    p.startsWith("/commands") ||
+    p.startsWith("/providers")
+  ) {
+    return `/control/nodes/${encodeURIComponent(nodeID)}/proxy${p}`;
+  }
+  return null;
 }
 
 function authHeaders(token: string | null): HeadersInit {
@@ -729,6 +757,44 @@ export function approveSessionPermission(
 export function denySessionPermission(token: string | null, sessionId: string, requestId: string, reason?: string) {
   return request<PermissionResolution>(
     `/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}/deny`,
+    {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    },
+    token,
+  );
+}
+
+// Node-scoped approval endpoints: these go through the center proxy
+// (/control/nodes/{id}/proxy/...) so the center web can approve or deny a
+// pending permission that lives on a remote node.
+
+export function approveNodePermission(
+  nodeID: string,
+  token: string | null,
+  sessionId: string,
+  requestId: string,
+  scope: "once" | "session",
+) {
+  return request<PermissionResolution>(
+    `/control/nodes/${encodeURIComponent(nodeID)}/proxy/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({ scope }),
+    },
+    token,
+  );
+}
+
+export function denyNodePermission(
+  nodeID: string,
+  token: string | null,
+  sessionId: string,
+  requestId: string,
+  reason?: string,
+) {
+  return request<PermissionResolution>(
+    `/control/nodes/${encodeURIComponent(nodeID)}/proxy/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}/deny`,
     {
       method: "POST",
       body: JSON.stringify(reason ? { reason } : {}),

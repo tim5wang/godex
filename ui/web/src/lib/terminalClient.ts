@@ -12,6 +12,7 @@
 // v1.0 (terminalMock.ts) → v2.0 (this file) is a drop-in replacement.
 
 import type { CreateTerminalResponse, TerminalInputRequest, TerminalOutputChunk } from "./terminalMock";
+import { useNodeContextStore } from "../store/nodeContext";
 
 // ---- internal buffer per terminal ----
 
@@ -35,6 +36,12 @@ const terminals = new Map<string, TerminalState>();
 function getBaseUrl(): string {
   // In dev the Vite proxy forwards /v1 to the Go backend.
   // In production the Go backend serves the API at the same origin.
+  // When a remote node is active, terminal traffic goes through the center
+  // proxy so the browser talks to the node's local PTY.
+  const nodeID = useNodeContextStore.getState().nodeID;
+  if (nodeID) {
+    return `/api/control/nodes/${encodeURIComponent(nodeID)}/proxy`;
+  }
   return "";
 }
 

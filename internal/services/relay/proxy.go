@@ -11,12 +11,30 @@ import (
 
 // ProxyHandler forwards incoming center-side requests to a target node over
 // the relay channel, translating the user-facing control-plane URL
-// (/control/nodes/{id}/proxy/{path...}) into a relay request.
+// (/control/nodes/{id}/proxy/{path...}) into a relay request. Streaming
+// responses (SSE/chat events) are relayed in real time.
 type ProxyHandler struct {
-	hub     *Hub
+	hub      *Hub
 	authorize func(*http.Request) bool
-	// Timeout bounds a single forwarded request; zero uses a 30s default.
+	// Timeout bounds a single forwarded request; zero (default) follows the
+	// client context so SSE-style long-lived streams are not cut short.
 	Timeout time.Duration
+	// TrustLevel reports the target node's trust level (from the node
+	// registry). guarded-remote nodes require an explicit approval header on
+	// mutating requests; nil TrustLevel skips the check entirely.
+	TrustLevel func(nodeID string) string
+}
+
+const trustApprovedHeader = "X-Godex-Trust-Approved"
+
+// isMutatingMethod reports whether an HTTP method changes server state.
+func isMutatingMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 // NewProxyHandler creates the center-side proxy endpoint. authorize must
@@ -36,6 +54,15 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	nodeID, after, ok := strings.Cut(rest, "/proxy/")
 	if !ok || nodeID == "" {
 		http.Error(w, `{"error":"invalid proxy path"}`, http.StatusBadRequest)
+		return
+	}
+
+	// guarded-remote nodes are not trusted for mutating operations unless the
+	// caller explicitly approves this request (the trust-approved header).
+	if p.TrustLevel != nil && isMutatingMethod(r.Method) &&
+		strings.EqualFold(strings.TrimSpace(p.TrustLevel(nodeID)), "guarded-remote") &&
+		strings.TrimSpace(r.Header.Get(trustApprovedHeader)) == "" {
+		http.Error(w, `{"error":"node requires approval for write operations"}`, http.StatusForbidden)
 		return
 	}
 
@@ -60,13 +87,36 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeout := p.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
+	ctx := r.Context()
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
 
-	resp, err := p.hub.Forward(ctx, nodeID, req)
+	// Stream the node's response through chunk by chunk. The first callback
+	// carries the status and headers; later callbacks carry body chunks. For
+	// SSE responses this keeps chat events flowing to the browser in real
+	// time instead of buffering until the node finishes.
+	wroteHeader := false
+	err = p.hub.ForwardStream(ctx, nodeID, req, func(status int, headers map[string]string, chunk []byte, final bool) error {
+		if !wroteHeader {
+			for key, value := range headers {
+				w.Header().Set(key, value)
+			}
+			w.WriteHeader(status)
+			wroteHeader = true
+		}
+		if len(chunk) > 0 {
+			if _, werr := w.Write(chunk); werr != nil {
+				return werr
+			}
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNodeOffline):
@@ -78,10 +128,4 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
-	for key, value := range resp.Headers {
-		w.Header().Set(key, value)
-	}
-	w.WriteHeader(resp.Status)
-	_, _ = w.Write(resp.Body)
 }

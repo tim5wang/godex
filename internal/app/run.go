@@ -131,6 +131,12 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 			return nil
 		}
 		return r.runLongTaskCommand(ctx, args[1:])
+	case "node":
+		if containsHelpArg(args[1:]) {
+			fmt.Fprintln(r.Stdout, nodeHelpText())
+			return nil
+		}
+		return r.runNodeCommand(ctx, args[1:])
 	case "setup":
 		return RunSetupCommand(ctx, args[1:], r.Stdout, r.Stderr)
 	case "init":
@@ -1142,6 +1148,7 @@ func rootHelpText() string {
 		"    ask        Run a one-shot prompt",
 		"    command    Run a slash command",
 		"    longtask   Create, run, and inspect durable story-loop tasks",
+		"    node       Jump-host commands: forward a local port to a node's network",
 		"",
 		"  Web & service",
 		"    serve      Start Web UI and HTTP API",
@@ -1180,6 +1187,7 @@ func rootHelpText() string {
 		"  godex providers list",
 		"  godex import claude --source .claude --dry-run",
 		"  godex longtask list --session local:default",
+		"  godex node forward --node node_x --local 3306 --target 10.0.0.5:3306",
 		"  godex repair sessions --dry-run",
 		"  godex version",
 		"  godex doctor",
@@ -1191,6 +1199,7 @@ func rootHelpText() string {
 		"  godex repair --help",
 		"  godex eval --help",
 		"  godex weixin --help",
+		"  godex node --help",
 	}, "\n")
 }
 

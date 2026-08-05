@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -28,6 +28,9 @@ type AgentConfig struct {
 	Caps      []string
 	// Handler is the node's local HTTP API surface (httpapi handler).
 	Handler http.Handler
+	// ForwardAllow is the node's forward_allow allowlist (host:port entries,
+	// "*" wildcards allowed). Empty/nil denies all TCP forwarding.
+	ForwardAllow []string
 
 	ReconnectMin time.Duration
 	ReconnectMax time.Duration
@@ -38,10 +41,14 @@ type AgentConfig struct {
 type Agent struct {
 	cfg AgentConfig
 
-	mu     sync.Mutex
-	conn   *websocket.Conn
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	mu      sync.Mutex
+	writeMu sync.Mutex // serializes WebSocket writes (requests + events)
+	conn    *websocket.Conn
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+
+	dialsMu sync.Mutex
+	dials   map[string]net.Conn // connID → dialed TCP connection (TCP forwarding)
 }
 
 // NewAgent creates an agent. CenterURL, NodeID, Credential, and Handler are
@@ -53,7 +60,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 	if cfg.ReconnectMax <= 0 {
 		cfg.ReconnectMax = 30 * time.Second
 	}
-	return &Agent{cfg: cfg}
+	return &Agent{cfg: cfg, dials: make(map[string]net.Conn)}
 }
 
 // Start launches the outbound connection loop. It returns immediately; the
@@ -180,6 +187,12 @@ func (a *Agent) connectOnce(ctx context.Context) error {
 			if err := a.serveRequest(ctx, conn, frame); err != nil {
 				return err
 			}
+		case FrameTCPOpen:
+			a.handleTCPOpen(conn, frame)
+		case FrameTCPData:
+			a.handleTCPData(frame)
+		case FrameTCPClose:
+			a.handleTCPClose(frame)
 		case FrameClose:
 			return nil
 		}
@@ -196,23 +209,11 @@ func (a *Agent) serveRequest(ctx context.Context, conn *websocket.Conn, frame Fr
 		req.Header.Set(key, value)
 	}
 
-	rec := httptest.NewRecorder()
-	a.cfg.Handler.ServeHTTP(rec, req)
-
-	headers := make(map[string]string, len(rec.Header()))
-	for key, values := range rec.Header() {
-		if len(values) > 0 {
-			headers[key] = values[0]
-		}
-	}
-	resp := Frame{
-		Type:    FrameResponse,
-		ReqID:   frame.ReqID,
-		Status:  rec.Code,
-		Headers: headers,
-		BodyB64: base64.StdEncoding.EncodeToString(rec.Body.Bytes()),
-	}
-	return writeFrame(conn, resp)
+	// The streamWriter sends SSE-style output as relay stream frames in real
+	// time; plain handlers still produce a single buffered response.
+	writer := newStreamWriter(a, conn, frame.ReqID)
+	a.cfg.Handler.ServeHTTP(writer, req)
+	return writer.Close()
 }
 
 func (a *Agent) sendError(conn *websocket.Conn, reqID string, err error) error {
@@ -243,6 +244,95 @@ func (a *Agent) SendEvent(kind string, payload any) error {
 		Kind:    kind,
 		Payload: data,
 	})
+}
+
+// handleTCPOpen serves the TCP-forwarding side of the agent: it validates the
+// target against the forward_allow allowlist, dials the target, and pumps bytes
+// in both directions until either side closes.
+func (a *Agent) handleTCPOpen(conn *websocket.Conn, frame Frame) {
+	var payload TCPOpenPayload
+	if err := json.Unmarshal(frame.Payload, &payload); err != nil || payload.ConnID == "" || payload.Target == "" {
+		a.sendTCPClose(conn, tcpConnID(frame), "invalid tcp_open payload")
+		return
+	}
+	if !AllowForward(a.cfg.ForwardAllow, payload.Target) {
+		a.sendTCPClose(conn, payload.ConnID, "forward target not allowed")
+		return
+	}
+	dialed, err := net.DialTimeout("tcp", payload.Target, 10*time.Second)
+	if err != nil {
+		a.sendTCPClose(conn, payload.ConnID, "dial failed: "+err.Error())
+		return
+	}
+	a.dialsMu.Lock()
+	a.dials[payload.ConnID] = dialed
+	a.dialsMu.Unlock()
+
+	// Pump local dialed-connection bytes back to the hub as tcp_data frames.
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := dialed.Read(buf)
+			if n > 0 {
+				if writeErr := a.sendTCPData(conn, payload.ConnID, buf[:n]); writeErr != nil {
+					a.closeDial(payload.ConnID)
+					return
+				}
+			}
+			if err != nil {
+				a.sendTCPClose(conn, payload.ConnID, "")
+				a.closeDial(payload.ConnID)
+				return
+			}
+		}
+	}()
+}
+
+// handleTCPData writes hub-arriving bytes into the dialed TCP connection.
+func (a *Agent) handleTCPData(frame Frame) {
+	connID := tcpConnID(frame)
+	a.dialsMu.Lock()
+	dialed, ok := a.dials[connID]
+	a.dialsMu.Unlock()
+	if !ok {
+		return
+	}
+	chunk, err := decodedTCPChunk(frame)
+	if err != nil || len(chunk) == 0 {
+		return
+	}
+	if _, err := dialed.Write(chunk); err != nil {
+		a.closeDial(connID)
+	}
+}
+
+// handleTCPClose tears down the dialed connection when the hub closes the stream.
+func (a *Agent) handleTCPClose(frame Frame) {
+	a.closeDial(tcpConnID(frame))
+}
+
+func (a *Agent) closeDial(connID string) {
+	a.dialsMu.Lock()
+	dialed, ok := a.dials[connID]
+	if ok {
+		delete(a.dials, connID)
+	}
+	a.dialsMu.Unlock()
+	if ok {
+		_ = dialed.Close()
+	}
+}
+
+func (a *Agent) sendTCPData(conn *websocket.Conn, connID string, chunk []byte) error {
+	return writeFrame(conn, Frame{
+		Type:    FrameTCPData,
+		Payload: tcpDataPayloadJSON(connID),
+		BodyB64: base64.StdEncoding.EncodeToString(chunk),
+	})
+}
+
+func (a *Agent) sendTCPClose(conn *websocket.Conn, connID, reason string) error {
+	return writeFrame(conn, Frame{Type: FrameTCPClose, Payload: mustTCPClosePayload(connID, reason)})
 }
 
 func (a *Agent) wsURL() string {

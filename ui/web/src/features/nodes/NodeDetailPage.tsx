@@ -1,17 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Card, Descriptions, Empty, Progress, Space, Table, Tag, Typography } from "antd";
-import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Card, Descriptions, Empty, Progress, Space, Table, Tag, Typography } from "antd";
+import { ArrowLeftOutlined, CheckOutlined, CodeOutlined, FileTextOutlined, ReloadOutlined, CommentOutlined, StopOutlined } from "@ant-design/icons";
 import { useNavigate, useParams } from "react-router-dom";
 import { useI18n } from "../../i18n";
-import { getNodeOverview } from "../../lib/api";
+import { approveNodePermission, denyNodePermission, getNodeOverview } from "../../lib/api";
 import type { NodeApprovalInfo, NodeJobInfo, NodeSessionInfo, NodeStoredEvent } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
+import { useNodeContextStore } from "../../store/nodeContext";
 
 export function NodeDetailPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const { id = "" } = useParams();
   const token = useSettingsStore((state) => state.token);
+  const setNode = useNodeContextStore((state) => state.setNode);
+  const { message } = App.useApp();
   const query = useQuery({
     queryKey: ["node-overview", id, token],
     queryFn: () => getNodeOverview(id, token || null),
@@ -20,6 +23,34 @@ export function NodeDetailPage() {
   const data = query.data;
   const node = data?.node;
   const overview = data?.overview;
+
+  const resolveApproval = async (approval: NodeApprovalInfo, approve: boolean) => {
+    if (!approval.session_id) {
+      void message.warning(t("nodes.approvalMissingSession"));
+      return;
+    }
+    try {
+      if (approve) {
+        await approveNodePermission(id, token || null, approval.session_id, approval.id, "once");
+        void message.success(t("nodes.approvalApproved"));
+      } else {
+        await denyNodePermission(id, token || null, approval.session_id, approval.id);
+        void message.success(t("nodes.approvalDenied"));
+      }
+      void query.refetch();
+    } catch (err) {
+      void message.error(t("nodes.approvalFailed"));
+    }
+  };
+
+  const openRemote = (page: "chat" | "terminal" | "files") => {
+    setNode(id, node?.name);
+    if (page === "files") {
+      navigate("/files");
+      return;
+    }
+    navigate("/chat");
+  };
 
   return (
     <main className="page-shell">
@@ -30,6 +61,15 @@ export function NodeDetailPage() {
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => void query.refetch()}>
             {t("nodes.refresh")}
+          </Button>
+          <Button icon={<CommentOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("chat")}>
+            {t("nodes.openChat")}
+          </Button>
+          <Button icon={<CodeOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("terminal")}>
+            {t("nodes.openTerminal")}
+          </Button>
+          <Button icon={<FileTextOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("files")}>
+            {t("nodes.openFiles")}
           </Button>
         </Space>
 
@@ -163,6 +203,32 @@ export function NodeDetailPage() {
                 title: t("nodes.status"),
                 dataIndex: "status",
                 render: (v?: string) => <Tag color={v === "pending" ? "orange" : "default"}>{v || "pending"}</Tag>,
+              },
+              {
+                title: t("nodes.actions"),
+                width: 160,
+                render: (_: unknown, approval) => (
+                  <Space>
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<CheckOutlined />}
+                      disabled={approval.status !== "pending"}
+                      onClick={() => void resolveApproval(approval, true)}
+                    >
+                      {t("nodes.approve")}
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      icon={<StopOutlined />}
+                      disabled={approval.status !== "pending"}
+                      onClick={() => void resolveApproval(approval, false)}
+                    >
+                      {t("nodes.deny")}
+                    </Button>
+                  </Space>
+                ),
               },
             ]}
           />

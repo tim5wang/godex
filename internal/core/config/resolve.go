@@ -281,6 +281,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("control.node_name", file.Control.NodeName, "GODEX_CONTROL_NODE_NAME", func(v string) { current.Control.NodeName = v })
 	resolveString("control.center_url", file.Control.CenterURL, "GODEX_CONTROL_CENTER_URL", func(v string) { current.Control.CenterURL = v })
 	resolveString("control.credential", file.Control.Credential, "GODEX_CONTROL_CREDENTIAL", func(v string) { current.Control.Credential = v })
+	resolveCSV("control.forward_allow", file.Control.ForwardAllow, "GODEX_CONTROL_FORWARD_ALLOW", func(v []string) {
+		current.Control.ForwardAllow = append([]string{}, v...)
+	})
 	resolveInt("control.heartbeat_seconds", file.Control.HeartbeatSeconds, "GODEX_CONTROL_HEARTBEAT_SECONDS", func(v int) {
 		current.Control.HeartbeatSeconds = positiveOrDefault(v, 15)
 	})
@@ -745,6 +748,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			Credential:          file.Control.Credential,
 			HeartbeatSeconds:    file.Control.HeartbeatSeconds,
 			OfflineAfterSeconds: file.Control.OfflineAfterSeconds,
+			ForwardAllow:        file.Control.ForwardAllow,
 			Nodes:               controlNodesFromConfigFile(file),
 		},
 		Runtime: RuntimeConfig{

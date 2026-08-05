@@ -135,6 +135,7 @@ type ControlSection struct {
 	Credential          string               `yaml:"credential"`
 	HeartbeatSeconds    int                  `yaml:"heartbeat_seconds"`
 	OfflineAfterSeconds int                  `yaml:"offline_after_seconds"`
+	ForwardAllow        []string             `yaml:"forward_allow"`
 	Nodes               []ControlNodeSection `yaml:"nodes"`
 }
 

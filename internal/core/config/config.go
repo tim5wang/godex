@@ -246,6 +246,7 @@ type ControlConfig struct {
 	Credential          string
 	HeartbeatSeconds    int
 	OfflineAfterSeconds int
+	ForwardAllow        []string
 	Nodes               []ControlNodeConfig
 }
 

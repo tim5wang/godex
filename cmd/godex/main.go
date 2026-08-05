@@ -278,7 +278,18 @@ func main() {
 			//   external /api/control/nodes/{id}/proxy/.. → /control/nodes/{id}/proxy/..
 			root := http.NewServeMux()
 			root.Handle("/relay", relayHub)
-			root.Handle("/control/nodes/{id}/proxy/", relay.NewProxyHandler(relayHub, relayAuthorize(cfg)))
+			proxy := relay.NewProxyHandler(relayHub, relayAuthorize(cfg))
+			// guarded-remote nodes require an explicit approval header on
+			// mutating requests; resolve trust level from the registry.
+			proxy.TrustLevel = func(nodeID string) string {
+				node, err := controlRegistry.Get(context.Background(), nodeID)
+				if err != nil {
+					return ""
+				}
+				return node.TrustLevel
+			}
+			root.Handle("/control/nodes/{id}/proxy/", proxy)
+			root.Handle("/control/nodes/{id}/forward", relay.NewForwardHandler(relayHub, relayAuthorize(cfg)))
 			root.Handle("/", apiHandler)
 			handler, err := webui.NewHandler(root, filepath.Join(cfg.WorkspaceDir, "internal", "uiassets", "embedded_dist"))
 			if err != nil {
@@ -535,12 +546,13 @@ func remoteRelayAgent(cfg *config.Config, selfNode noderegistry.NodeInput, local
 		return nil
 	}
 	return relay.NewAgent(relay.AgentConfig{
-		CenterURL:  centerURL,
-		NodeID:     selfNode.ID,
-		Credential: credential,
-		Version:    selfNode.Version,
-		Caps:       selfNode.Capabilities,
-		Handler:    localHandler,
+		CenterURL:    centerURL,
+		NodeID:       selfNode.ID,
+		Credential:   credential,
+		Version:      selfNode.Version,
+		Caps:         selfNode.Capabilities,
+		Handler:      localHandler,
+		ForwardAllow: cfg.Control.ForwardAllow,
 	})
 }
 
@@ -600,7 +612,7 @@ func shouldWarnMissingAPIKey(args []string) bool {
 		return true
 	}
 	switch args[0] {
-	case "doctor", "help", "-h", "--help", "login", "logout", "migrate", "providers", "repair", "service", "tui", "version", "--version":
+	case "doctor", "help", "-h", "--help", "login", "logout", "migrate", "node", "providers", "repair", "service", "tui", "version", "--version":
 		return false
 	default:
 		return true

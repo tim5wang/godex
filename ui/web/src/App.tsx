@@ -27,6 +27,7 @@ import { useResizableWidth } from "./hooks/useResizableWidth";
 import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
+import { useNodeContextStore } from "./store/nodeContext";
 import { useLayoutStore } from "./store/layout";
 import {
   LAYOUT_STORAGE_KEY,
@@ -60,6 +61,9 @@ export default function App() {
   // P0-B: AppNav collapsed state lives in the layout store (SPEC §3.2).
   const appNavCollapsed = useLayoutStore((state) => state.panels.appNav.collapsed);
   const appNavWidth = useLayoutStore((state) => state.panels.appNav.width ?? 200);
+  const remoteNodeID = useNodeContextStore((state) => state.nodeID);
+  const remoteNodeName = useNodeContextStore((state) => state.nodeName);
+  const clearRemoteNode = useNodeContextStore((state) => state.clearNode);
   const APP_NAV_ICON_WIDTH = 48;
   const toggleAppNav = useLayoutStore((state) => state.toggle);
   // P1-c: Task Center Drawer width envelope (SPEC §4.1.1).
@@ -233,6 +237,23 @@ export default function App() {
           )}
           content={(
             <Layout.Content className="godex-content">
+              {remoteNodeID ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ margin: 8, marginBottom: 0 }}
+                  message={
+                    <Space>
+                      <span>
+                        {t("nodes.remoteBanner")}: {remoteNodeName || remoteNodeID}
+                      </span>
+                      <Button size="small" onClick={clearRemoteNode}>
+                        {t("nodes.remoteExit")}
+                      </Button>
+                    </Space>
+                  }
+                />
+              ) : null}
               {needsProviderSetup ? (
                 <FirstRunProviderGuide
                   onOpenSettings={() => navigate("/settings")}

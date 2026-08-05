@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -51,8 +52,9 @@ type hubConn struct {
 	writeMu sync.Mutex
 	mu      sync.Mutex
 	pending map[string]chan Frame
+	tcpStreams map[string]chan Frame
 	lastPong time.Time
-	closed  bool
+	closed   bool
 }
 
 // Hub accepts outbound WebSocket connections from nodes, maintains the
@@ -174,7 +176,75 @@ func (h *Hub) LastPong(nodeID string) time.Time {
 }
 
 // Forward sends a request to the target node and waits for its response.
+// Streaming responses (FrameStream chunks) are aggregated into one body so
+// callers that do not need real-time delivery keep working unchanged.
 func (h *Hub) Forward(ctx context.Context, nodeID string, req ForwardRequest) (*ForwardResponse, error) {
+	ch, err := h.startRequest(ctx, nodeID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	var body []byte
+	status := 0
+	headers := map[string]string{}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case frame := <-ch:
+			chunk, decodeErr := base64.StdEncoding.DecodeString(frame.BodyB64)
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
+			body = append(body, chunk...)
+			if frame.Status != 0 {
+				status = frame.Status
+			}
+			if len(frame.Headers) > 0 {
+				headers = frame.Headers
+			}
+			if frame.Type == FrameResponse || frame.Type == FrameStreamEnd {
+				return &ForwardResponse{Status: status, Headers: headers, Body: body}, nil
+			}
+		}
+	}
+}
+
+// StreamChunkHandler receives one chunk of a streaming relay response. final
+// is true on the last call (FrameResponse or FrameStreamEnd).
+type StreamChunkHandler func(status int, headers map[string]string, chunk []byte, final bool) error
+
+// ForwardStream sends a request to the target node and invokes onChunk in
+// real time for every FrameStream chunk, ending with final=true. This is the
+// transport used for SSE-style remote endpoints (chat events, terminal output).
+func (h *Hub) ForwardStream(ctx context.Context, nodeID string, req ForwardRequest, onChunk StreamChunkHandler) error {
+	ch, err := h.startRequest(ctx, nodeID, req)
+	if err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case frame := <-ch:
+			chunk, decodeErr := base64.StdEncoding.DecodeString(frame.BodyB64)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if frame.Type == FrameResponse || frame.Type == FrameStreamEnd {
+				return onChunk(frame.Status, frame.Headers, chunk, true)
+			}
+			if err := onChunk(frame.Status, frame.Headers, chunk, false); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// startRequest registers a pending response channel and transmits the request
+// frame. Both Forward and ForwardStream share this preamble.
+func (h *Hub) startRequest(ctx context.Context, nodeID string, req ForwardRequest) (<-chan Frame, error) {
 	h.mu.Lock()
 	conn, ok := h.conns[nodeID]
 	if !ok {
@@ -182,7 +252,7 @@ func (h *Hub) Forward(ctx context.Context, nodeID string, req ForwardRequest) (*
 		return nil, ErrNodeOffline
 	}
 	reqID := "r_" + strconv.FormatInt(h.nextReq.Add(1), 10)
-	ch := make(chan Frame, 1)
+	ch := make(chan Frame, 64)
 	conn.mu.Lock()
 	if conn.closed {
 		conn.mu.Unlock()
@@ -206,18 +276,7 @@ func (h *Hub) Forward(ctx context.Context, nodeID string, req ForwardRequest) (*
 		h.dropPending(nodeID, reqID)
 		return nil, err
 	}
-
-	select {
-	case <-ctx.Done():
-		h.dropPending(nodeID, reqID)
-		return nil, ctx.Err()
-	case resp := <-ch:
-		body, err := base64.StdEncoding.DecodeString(resp.BodyB64)
-		if err != nil {
-			return nil, err
-		}
-		return &ForwardResponse{Status: resp.Status, Headers: resp.Headers, Body: body}, nil
-	}
+	return ch, nil
 }
 
 func (h *Hub) dropPending(nodeID, reqID string) {
@@ -265,11 +324,12 @@ func (h *Hub) handleConn(ws *websocket.Conn) {
 	}
 
 	conn := &hubConn{
-		hub:     h,
-		nodeID:  nodeID,
-		ws:      ws,
-		pending: make(map[string]chan Frame),
-		lastPong: time.Now(),
+		hub:        h,
+		nodeID:     nodeID,
+		ws:         ws,
+		pending:    make(map[string]chan Frame),
+		tcpStreams: make(map[string]chan Frame),
+		lastPong:   time.Now(),
 	}
 
 	h.mu.Lock()
@@ -314,6 +374,8 @@ func (h *Hub) handleConn(ws *websocket.Conn) {
 			conn.deliver(frame)
 		case FrameStream:
 			conn.deliver(frame)
+		case FrameTCPData, FrameTCPClose:
+			conn.deliverTCP(frame)
 		case FrameClose:
 			h.removeConn(nodeID, conn)
 			return
@@ -325,13 +387,42 @@ func (h *Hub) handleConn(ws *websocket.Conn) {
 func (c *hubConn) deliver(frame Frame) {
 	c.mu.Lock()
 	ch, ok := c.pending[frame.ReqID]
-	if ok {
+	// Keep the pending slot alive across FrameStream chunks; only terminal
+	// frames (response / stream_end) remove it.
+	if ok && (frame.Type == FrameResponse || frame.Type == FrameStreamEnd || frame.Type == FrameError) {
 		delete(c.pending, frame.ReqID)
 	}
 	c.mu.Unlock()
 	if ok {
 		ch <- frame
 	}
+}
+
+// deliverTCP routes a tcp_data / tcp_close frame to the pending stream bound
+// to the frame's conn_id. tcp_close releases the stream slot.
+func (c *hubConn) deliverTCP(frame Frame) {
+	connID := tcpConnID(frame)
+	if connID == "" {
+		return
+	}
+	c.mu.Lock()
+	ch, ok := c.tcpStreams[connID]
+	if ok && frame.Type == FrameTCPClose {
+		delete(c.tcpStreams, connID)
+	}
+	c.mu.Unlock()
+	if ok {
+		ch <- frame
+	}
+}
+
+// tcpConnID extracts the conn_id from a tcp frame payload.
+func tcpConnID(frame Frame) string {
+	var payload struct {
+		ConnID string `json:"conn_id"`
+	}
+	_ = json.Unmarshal(frame.Payload, &payload)
+	return payload.ConnID
 }
 
 func (c *hubConn) write(frame Frame) error {
@@ -355,6 +446,10 @@ func (h *Hub) removeConn(nodeID string, conn *hubConn) {
 	h.mu.Unlock()
 	conn.mu.Lock()
 	conn.closed = true
+	for connID, ch := range conn.tcpStreams {
+		delete(conn.tcpStreams, connID)
+		close(ch)
+	}
 	conn.mu.Unlock()
 	if h.statusHook != nil {
 		h.statusHook(nodeID, false)

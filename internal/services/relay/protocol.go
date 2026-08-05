@@ -33,6 +33,12 @@ const (
 	FramePong FrameType = "pong"
 	// FrameEvent carries an unsolicited node→hub state update (session/job/approval).
 	FrameEvent FrameType = "event"
+	// FrameTCPOpen asks the node to dial a TCP target (conn_id + target in payload).
+	FrameTCPOpen FrameType = "tcp_open"
+	// FrameTCPData carries one direction of a forwarded TCP byte stream.
+	FrameTCPData FrameType = "tcp_data"
+	// FrameTCPClose closes a forwarded TCP connection (either side).
+	FrameTCPClose FrameType = "tcp_close"
 	// FrameError carries a per-request error reply.
 	FrameError FrameType = "error"
 	// FrameClose is a graceful shutdown notice from either side.
@@ -51,6 +57,9 @@ var validFrameTypes = map[FrameType]bool{
 	FramePing:        true,
 	FramePong:        true,
 	FrameEvent:       true,
+	FrameTCPOpen:     true,
+	FrameTCPData:     true,
+	FrameTCPClose:    true,
 	FrameError:       true,
 	FrameClose:       true,
 }

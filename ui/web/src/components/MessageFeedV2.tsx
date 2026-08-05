@@ -110,6 +110,7 @@ function FeedItemBody({
   onSaveToNote?: (item: FeedItem) => void;
   savingToNote: boolean;
 }) {
+  const { t } = useI18n();
   // Grouped assistant turn: render ordered segments, each block separated by a divider.
   if (item.segments?.length) {
     const visible = item.segments.filter((segment) => segment.type !== "text" || Boolean(segment.text?.trim()));
@@ -139,11 +140,20 @@ function FeedItemBody({
 
   const copyable = Boolean(copyTextForItem(item));
   const canSaveToNote = Boolean(onSaveToNote && item.kind === "assistant" && item.body.trim());
+  const inFlight = item.status === "sending" || item.status === "running";
   return (
     <div className="message-copy-frame chat-feed-v2-plain">
       <Space direction="vertical" size={10} style={{ width: "100%" }}>
         {item.body ? <MarkdownContent content={item.body} forceMarkdown={item.kind === "user"} /> : null}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
+        {inFlight ? (
+          <Space size={6}>
+            <LoadingOutlined spin />
+            <Typography.Text type="secondary">
+              {item.kind === "user" ? t("chat.sendingMessage") : t("chat.runningCommand", { name: item.title })}
+            </Typography.Text>
+          </Space>
+        ) : null}
       </Space>
       {copyable || canSaveToNote ? (
         <Space className="message-action-buttons" size={2}>

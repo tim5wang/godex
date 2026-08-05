@@ -97,7 +97,7 @@ import type {
   SubagentProgressItem,
   TurnRecord,
 } from "../../lib/types";
-import { groupFeedItemsIntoTurns, useChatStore } from "../../store/chat";
+import { groupFeedItemsIntoTurns, useChatStore, type PendingSend } from "../../store/chat";
 import { useSettingsStore } from "../../store/settings";
 import { useResizableWidth } from "../../hooks/useResizableWidth";
 import { FilesPanel } from "../files/FilesPanel";
@@ -166,6 +166,9 @@ export function ChatPage() {
   const sessionId = useChatStore((state) => state.sessionId);
   const historyItems = useChatStore((state) => state.historyItems);
   const overlayItems = useChatStore((state) => state.overlayItems);
+  const pendingSends = useChatStore((state) => state.pendingSends);
+  const addPendingSend = useChatStore((state) => state.addPendingSend);
+  const removePendingSend = useChatStore((state) => state.removePendingSend);
   const status = useChatStore((state) => state.status);
   const running = useChatStore((state) => state.running);
   const currentTurnId = useChatStore((state) => state.currentTurnId);
@@ -565,6 +568,14 @@ export function ChatPage() {
   const items = useMemo(() => mergeChronologicalFeedItems(historyItems, overlayItems), [historyItems, overlayItems]);
   // V2 groups the flat feed into per-turn items (text + tool + todo segments).
   const v2Items = useMemo(() => groupFeedItemsIntoTurns(items), [items]);
+  // Append optimistic placeholders (sending message / running command) at
+  // the end of the feed so in-flight sends stay visible.
+  const v2ItemsWithPending = useMemo(() => {
+    if (pendingSends.length === 0) {
+      return v2Items;
+    }
+    return [...v2Items, ...pendingSends.map(pendingSendToFeedItem)];
+  }, [pendingSends, v2Items]);
   // T15: derive the list of longtask reflux bubbles from the
   // chat feed. We pick the last 5 reflux items (newest first) and
   // hide the ones the user has dismissed. The strict authority is
@@ -1008,15 +1019,24 @@ export function ChatPage() {
       return;
     }
     if (text.startsWith("/") && files.length === 0) {
-      const commandResult = await executeCommand(token || null, activeSessionId, text, noteContextMetadata(noteContextQuery.data, noteContextId));
-      if (commandResult.dispatched_turn_id) {
-        setRunningTurn(commandResult.dispatched_turn_id);
-      }
-      // Show output for commands like /bash that don't dispatch a turn
-      if (commandResult.output && !commandResult.dispatched_turn_id) {
-        const maxLen = 2000;
-        const displayOutput = commandResult.output.length > maxLen ? commandResult.output.slice(0, maxLen) + `\n\n... (${commandResult.output.length - maxLen} more bytes)` : commandResult.output;
-        message.info(displayOutput, 6);
+      // Optimistic: surface the running command immediately so slow
+      // commands like /compact show feedback while they execute.
+      const commandName = text.trim().split(/\s+/)[0].slice(1) || "command";
+      const pendingId = `cmd:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      addPendingSend({ id: pendingId, kind: "command", commandName });
+      try {
+        const commandResult = await executeCommand(token || null, activeSessionId, text, noteContextMetadata(noteContextQuery.data, noteContextId));
+        if (commandResult.dispatched_turn_id) {
+          setRunningTurn(commandResult.dispatched_turn_id);
+        }
+        // Show output for commands like /bash that don't dispatch a turn
+        if (commandResult.output && !commandResult.dispatched_turn_id) {
+          const maxLen = 2000;
+          const displayOutput = commandResult.output.length > maxLen ? commandResult.output.slice(0, maxLen) + `\n\n... (${commandResult.output.length - maxLen} more bytes)` : commandResult.output;
+          message.info(displayOutput, 6);
+        }
+      } finally {
+        removePendingSend(pendingId);
       }
     } else {
       try {
@@ -1028,21 +1048,32 @@ export function ChatPage() {
                 return uploadAttachments(token || null, activeSessionId, files, setUploadProgress);
               })()
             : [];
-        const submitResult = await submitMessage(
-          token || null,
-          activeSessionId,
-          {
-            source: "web",
-            sender: metaQuery.data?.lead_name || "web",
-            text,
-            content: text,
-            attachments,
-            metadata: noteContextMetadata(noteContextQuery.data, noteContextId),
-          },
-          running ? { queueMode } : {},
-        );
-        if (submitResult.turn_id) {
-          setRunningTurn(submitResult.turn_id);
+        // Optimistic: show the user message as "sending" immediately; it
+        // is replaced by the real item when user_message_accepted arrives
+        // (or by the next snapshot as a backstop).
+        const pendingId = `user:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+        addPendingSend({ id: pendingId, kind: "user", text, attachments, sender: metaQuery.data?.lead_name || "web" });
+        try {
+          const submitResult = await submitMessage(
+            token || null,
+            activeSessionId,
+            {
+              source: "web",
+              sender: metaQuery.data?.lead_name || "web",
+              text,
+              content: text,
+              attachments,
+              metadata: noteContextMetadata(noteContextQuery.data, noteContextId),
+            },
+            running ? { queueMode } : {},
+          );
+          if (submitResult.turn_id) {
+            setRunningTurn(submitResult.turn_id);
+          }
+        } catch (error) {
+          removePendingSend(pendingId);
+          message.error(error instanceof Error ? error.message : String(error));
+          throw error;
         }
       } finally {
         setUploading(false);
@@ -1276,7 +1307,7 @@ export function ChatPage() {
                 <div className="chat-feed chat-feed-v2-scroll" ref={scrollerRef} style={{ minHeight: 0 }}>
                   <div className="chat-feed-inner chat-feed-v2-inner">
                     <MessageFeedV2
-                      items={v2Items}
+                      items={v2ItemsWithPending}
                       onToggleTool={toggleTool}
                       onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
                       savingToNote={saveMessageToNoteMutation.isPending}
@@ -3350,6 +3381,37 @@ function subagentJobToFeedItem(job: DurableSubagentJob): FeedItem {
     mergeStatus: job.merge_status,
     progress,
     expanded: true,
+  };
+}
+
+/**
+ * Convert an in-flight pending send (optimistic user message or running
+ * slash command) into a FeedItem placeholder rendered at the end of the
+ * feed with a loading indicator, until the matching SSE event or the next
+ * snapshot replaces it with the real item.
+ */
+function pendingSendToFeedItem(send: PendingSend): FeedItem {
+  if (send.kind === "command") {
+    const name = send.commandName || "command";
+    return {
+      id: send.id,
+      kind: "command",
+      title: `/${name}`,
+      body: "",
+      timestamp: new Date().toISOString(),
+      summary: `Running /${name}…`,
+      status: "running",
+    };
+  }
+  return {
+    id: send.id,
+    kind: "user",
+    title: send.sender || "You",
+    body: send.text || "",
+    timestamp: new Date().toISOString(),
+    summary: (send.text || "").trim().split("\n").find(Boolean) ?? "",
+    attachments: send.attachments,
+    status: "sending",
   };
 }
 

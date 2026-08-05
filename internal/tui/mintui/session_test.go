@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/protocol"
@@ -17,6 +19,41 @@ import (
 	"github.com/tim5wang/godex/internal/tools"
 )
 
+// waitForExecute polls until the fake backend has observed the given
+// number of ExecuteCommand calls (dispatchInput now runs slash commands
+// asynchronously).
+func waitForExecute(t *testing.T, b *fakeBackend, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.executeCount() >= want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d execute call(s), got %d", want, b.executeCount())
+}
+
+// waitForStatus polls until the session's status bar shows the exact
+// expected text (used after async command completion clears the chip).
+func waitForStatus(t *testing.T, s *Session, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.statusMu.Lock()
+		got := s.lastStatusText
+		s.statusMu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s.statusMu.Lock()
+	got := s.lastStatusText
+	s.statusMu.Unlock()
+	t.Fatalf("timed out waiting for status %q, got %q", want, got)
+}
+
 // fakeBackend is a minimal in-memory Backend implementation
 // sufficient for the unit tests in this package.
 type fakeBackend struct {
@@ -24,10 +61,11 @@ type fakeBackend struct {
 	snap rtbackend.Snapshot
 	ctx  tools.ContextInspection
 
-	submitCalls   int
-	asyncCalls    int
-	executeCalls  int
-	cancelCalls   int
+	executeMu    sync.Mutex
+	submitCalls  int
+	asyncCalls   int
+	executeCalls int
+	cancelCalls  int
 	lastSubmitted string
 	lastCancelled string
 
@@ -80,8 +118,18 @@ func (f *fakeBackend) CancelTurn(ctx context.Context, id, turnID string) (*rtbac
 	return &rtbackend.CancelTurnResult{TurnID: turnID, Status: "canceling"}, nil
 }
 func (f *fakeBackend) ExecuteCommand(ctx context.Context, id string, cmd commands.Command) (commands.Result, error) {
+	f.executeMu.Lock()
 	f.executeCalls++
+	f.executeMu.Unlock()
 	return commands.Result{Name: cmd.Name, Output: "ok"}, nil
+}
+
+// executeCount returns the number of ExecuteCommand calls under lock
+// (dispatchInput now runs slash commands asynchronously).
+func (f *fakeBackend) executeCount() int {
+	f.executeMu.Lock()
+	defer f.executeMu.Unlock()
+	return f.executeCalls
 }
 func (f *fakeBackend) PendingPermissions(ctx context.Context, id string) ([]tools.PendingPermission, error) {
 	return nil, nil
@@ -183,8 +231,8 @@ func TestSessionRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if b.executeCalls != 1 {
-		t.Fatalf("expected 1 execute call, got %d", b.executeCalls)
+	if b.executeCount() != 1 {
+		t.Fatalf("expected 1 execute call, got %d", b.executeCount())
 	}
 }
 
@@ -222,9 +270,9 @@ func TestDispatchRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	if err := s.dispatchInput(context.Background(), b.sess.SessionID, "/help"); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if b.executeCalls != 1 {
-		t.Fatalf("expected 1 execute call, got %d", b.executeCalls)
-	}
+	// dispatchInput runs slash commands asynchronously; wait for the
+	// goroutine to invoke ExecuteCommand before asserting.
+	waitForExecute(t, b, 1)
 	if b.asyncCalls != 0 {
 		t.Fatalf("SubmitAsync should not have been called for slash commands")
 	}
@@ -250,6 +298,11 @@ func TestSlashCommandDoesNotOverwriteStatusBar(t *testing.T) {
 	if err := s.dispatchInput(context.Background(), b.sess.SessionID, "/help"); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
+
+	// The command runs asynchronously; once it finishes the chip is
+	// cleared and the heartbeat must be back on the bar.
+	waitForExecute(t, b, 1)
+	waitForStatus(t, s, heartbeat)
 
 	// The status bar must still show the heartbeat, NOT
 	// "/help completed".

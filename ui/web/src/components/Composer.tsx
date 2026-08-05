@@ -72,9 +72,19 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
     if ((!trimmed && files.length === 0) || submitting) {
       return;
     }
-    await onSubmit({ text: trimmed, files });
+    const payload = { text: trimmed, files };
+    // Optimistic clear: empty the input immediately so the message does
+    // not appear stuck while the network request is in flight.  OnSubmit
+    // (ChatPage) shows the optimistic placeholder right away; on failure
+    // we restore the text so the user can retry.
     setValue("");
     setFiles([]);
+    try {
+      await onSubmit(payload);
+    } catch {
+      setValue(trimmed);
+      setFiles(payload.files);
+    }
   };
 
   const pickCommand = (entry: PaletteEntry) => {

@@ -501,6 +501,11 @@ func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.C
 		ctx.Write(fmt.Sprintf("Error: failed to parse /%s arguments\n", cmd.Name))
 		return
 	}
+	// Surface a transient "Running /name…" chip while the command
+	// executes (mirrors dispatchInput) so slow commands like
+	// /compact show feedback; cleared when it completes.
+	s.setActivityChip("Running /"+parsed.Name+"…", minitui.StatusInfo)
+	s.refreshStatusBar()
 	result, err := s.backend.ExecuteCommand(context.Background(), s.sessionID, parsed)
 	if result.Output != "" {
 		ctx.Write(result.Output)
@@ -515,6 +520,8 @@ func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.C
 		ctx.Write("Error: " + err.Error() + "\n")
 	}
 	ctx.Write("✓ /" + cmd.Name + " completed\n")
+	s.clearActivityChip()
+	s.refreshStatusBar()
 }
 
 // handleModelSelect shows a secondary dropdown to pick a model
@@ -912,21 +919,33 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 	}
 
 	// ── slash commands ──────────────────────────────────
+	// Run the command asynchronously so slow commands (e.g.
+	// /compact) don't block the input loop, and surface a
+	// "Running /name…" activity chip while it executes.
 	if cmd, ok := commands.Parse(input); ok {
-		result, err := s.backend.ExecuteCommand(ctx, sessionID, cmd)
-		if s.tui != nil {
-			if result.Output != "" {
-				s.tui.WriteString(result.Output + "\n")
+		s.setActivityChip("Running /"+cmd.Name+"…", minitui.StatusInfo)
+		s.refreshStatusBar()
+		go func() {
+			result, err := s.backend.ExecuteCommand(context.Background(), sessionID, cmd)
+			if s.tui != nil {
+				if result.Output != "" {
+					s.tui.WriteString(result.Output + "\n")
+				}
+				if result.DispatchError != "" {
+					s.tui.WriteString("Error: " + result.DispatchError + "\n")
+				}
+				if err != nil {
+					s.tui.WriteString("Error: " + err.Error() + "\n")
+				}
+				// Short confirmation in the output area; do not
+				// touch the status bar so the godex heartbeat
+				// stays visible.
+				s.tui.WriteString("✓ /" + cmd.Name + " completed\n")
 			}
-			if result.DispatchError != "" {
-				s.tui.WriteString("Error: " + result.DispatchError + "\n")
-			}
-			// Short confirmation in the output area; do not
-			// touch the status bar so the godex heartbeat
-			// stays visible.
-			s.tui.WriteString("✓ /" + cmd.Name + " completed\n")
-		}
-		return err
+			s.clearActivityChip()
+			s.refreshStatusBar()
+		}()
+		return nil
 	}
 
 	// Echo the user's message to the output area immediately
@@ -948,14 +967,13 @@ func (s *Session) dispatchInput(ctx context.Context, sessionID, input string) er
 	}
 	if res != nil {
 		s.setActiveTurn(res.TurnID)
-		
-		// A new turn is starting — drop any stale activity
-		// chip left over from a previous turn (e.g. a
-		// "Running bash" that never emitted a terminal
-		// phase event) so the heartbeat returns to its
-		// clean form while we wait for the runner to emit
-		// its first phase.
-		s.clearActivityChip()
+
+		// A new turn is starting.  Surface a brief "Sending…"
+		// chip so the user sees the message was accepted while
+		// waiting for the runner's first phase/delta event; the
+		// first assistant delta (or a real phase chip) replaces
+		// it.
+		s.setActivityChip("Sending…", minitui.StatusInfo)
 		s.refreshStatusBar()
 	}
 	return nil
@@ -1018,6 +1036,10 @@ func (s *Session) handleEvent(event events.Event) {
 		if !s.assistantStreaming {
 			s.tui.WriteString("\n")
 		}
+		// The agent is now visibly producing output:
+		// drop the transient "Sending…" chip so the
+		// heartbeat returns to its clean form.
+		s.clearActivityChip()
 		s.assistantStreaming = true
 		text := extractTextField(event)
 		s.appendAssistantText(text)
@@ -1042,6 +1064,15 @@ func (s *Session) handleEvent(event events.Event) {
 		s.renderToolCallFinished(event)
 	case events.EventRunnerPhaseChanged:
 		phase, tool := extractRunnerPhase(event)
+		// The model_request phase is deliberately silent (keeps
+		// the heartbeat intact) — but if we are still showing the
+		// transient "Sending…" chip from a just-submitted
+		// message, leave it in place until real output (a delta
+		// or a tool call) replaces it.
+		if phase == "model_request" && strings.TrimSpace(s.activityChip) == "Sending…" {
+			s.refreshStatusBar()
+			break
+		}
 		s.applyRunnerPhase(phase, tool)
 	case events.EventTurnCompleted:
 		s.clearActiveTurn(event.TurnID)

@@ -1,11 +1,28 @@
 import { create } from "zustand";
 import type { AttachmentRef, FeedItem, ProtocolBlock, ProtocolMessage, RuntimeEvent, TodoFeedItem, TodoFeedStats } from "../lib/types";
 
+/**
+ * A send that is in flight but not yet reflected in the server
+ * snapshot: an optimistic user message or a running slash command
+ * (e.g. /compact). Rendered as a loading placeholder until the
+ * matching SSE event (user_message_accepted / command_completed)
+ * or the next snapshot replaces it with the real item.
+ */
+export interface PendingSend {
+  id: string;
+  kind: "user" | "command";
+  text?: string;
+  commandName?: string;
+  attachments?: AttachmentRef[];
+  sender?: string;
+}
+
 interface ChatState {
   sessionId: string;
   sessionKey: string;
   historyItems: FeedItem[];
   overlayItems: FeedItem[];
+  pendingSends: PendingSend[];
   status: string;
   running: boolean;
   currentTurnId: string;
@@ -14,6 +31,8 @@ interface ChatState {
   syncSnapshot: (messages: ProtocolMessage[], running: boolean, activeTurnId?: string) => void;
   handleEvent: (event: RuntimeEvent) => void;
   setRunningTurn: (turnId: string) => void;
+  addPendingSend: (send: PendingSend) => void;
+  removePendingSend: (id: string) => void;
   toggleTool: (id: string) => void;
   setStreamConnected: (connected: boolean) => void;
   reset: () => void;
@@ -24,6 +43,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionKey: "",
   historyItems: [],
   overlayItems: [],
+  pendingSends: [],
   status: "Idle",
   running: false,
   currentTurnId: "",
@@ -38,23 +58,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionKey,
         historyItems: [],
         overlayItems: [],
+        pendingSends: [],
         status: "Connected",
         running: false,
         currentTurnId: "",
       };
     }),
   syncSnapshot: (messages, running, activeTurnId) =>
-    set((state) => ({
-      historyItems: snapshotToItems(messages, expansionMap([...state.historyItems, ...state.overlayItems])),
-      overlayItems: state.overlayItems.filter(
-        (item) =>
-          (!item.sessionId || item.sessionId === state.sessionId) &&
-          (item.kind === "subagent" || item.kind === "command" || item.kind === "warning" || item.kind === "error"),
-      ),
-      running,
-      currentTurnId: running ? activeTurnId || state.currentTurnId : "",
-      status: running ? "Running…" : state.status,
-    })),
+    set((state) => {
+      const historyItems = snapshotToItems(messages, expansionMap([...state.historyItems, ...state.overlayItems]));
+      // Drop optimistic user placeholders whose text already appears in
+      // the server snapshot (backstop for a missed user_message_accepted
+      // event, e.g. while the SSE stream is reconnecting). Command
+      // placeholders are resolved by command_completed instead.
+      const userTexts = new Set(historyItems.filter((item) => item.kind === "user").map((item) => item.body));
+      const pendingSends = state.pendingSends.filter((send) => !(send.kind === "user" && send.text && userTexts.has(send.text)));
+      return {
+        historyItems,
+        overlayItems: state.overlayItems.filter(
+          (item) =>
+            (!item.sessionId || item.sessionId === state.sessionId) &&
+            (item.kind === "subagent" || item.kind === "command" || item.kind === "warning" || item.kind === "error"),
+        ),
+        pendingSends,
+        running,
+        currentTurnId: running ? activeTurnId || state.currentTurnId : "",
+        status: running ? "Running…" : state.status,
+      };
+    }),
   handleEvent: (event) =>
     set((state) => {
       if (event.session_id && state.sessionId && event.session_id !== state.sessionId) {
@@ -62,6 +93,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       const eventSessionId = event.session_id || state.sessionId;
       const overlayItems = [...state.overlayItems];
+      const pendingSends = [...state.pendingSends];
       let status = state.status;
       let running = state.running;
       let currentTurnId = state.currentTurnId;
@@ -78,6 +110,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
             attachments: payload.attachments,
             summary,
           });
+          // The server accepted the message: drop the matching
+          // optimistic placeholder (first pending user send) so it
+          // is replaced by the real item instead of duplicated.
+          const pendingUserIndex = pendingSends.findIndex((send) => send.kind === "user");
+          if (pendingUserIndex >= 0) {
+            pendingSends.splice(pendingUserIndex, 1);
+          }
           status = "Accepted message";
           running = true;
           currentTurnId = event.turn_id || currentTurnId;
@@ -186,6 +225,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
             dispatched_turn_id?: string;
             dispatched_job_id?: string;
           };
+          // Drop the running placeholder for this command; the
+          // completed item below replaces it.
+          const commandName = payload.name;
+          if (commandName) {
+            const pendingCommandIndex = pendingSends.findIndex((send) => send.kind === "command" && send.commandName === commandName);
+            if (pendingCommandIndex >= 0) {
+              pendingSends.splice(pendingCommandIndex, 1);
+            }
+          }
           const details = [
             payload.output,
             payload.dispatch_mode ? `Dispatch: ${payload.dispatch_mode}${payload.dispatch_invocation ? ` (${payload.dispatch_invocation})` : ""}` : "",
@@ -308,6 +356,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           status = "Error received";
           running = false;
           currentTurnId = "";
+          // The turn failed: clear any optimistic placeholders that
+          // were waiting for user_message_accepted / command_completed.
+          pendingSends.length = 0;
           break;
         }
         case "turn_completed": {
@@ -324,12 +375,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       return {
         overlayItems: overlayItems.map((item) => (item.sessionId ? item : { ...item, sessionId: eventSessionId })),
+        pendingSends,
         status,
         running,
         currentTurnId,
       };
     }),
   setRunningTurn: (currentTurnId) => set({ currentTurnId, running: true, status: "Running…" }),
+  addPendingSend: (send) => set((state) => ({ pendingSends: [...state.pendingSends, send] })),
+  removePendingSend: (id) => set((state) => ({ pendingSends: state.pendingSends.filter((send) => send.id !== id) })),
   toggleTool: (id) =>
     set((state) => ({
       historyItems: state.historyItems.map((item) => (item.id === id ? { ...item, expanded: !item.expanded } : item)),
@@ -342,6 +396,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessionKey: "",
       historyItems: [],
       overlayItems: [],
+      pendingSends: [],
       status: "Idle",
       running: false,
       currentTurnId: "",

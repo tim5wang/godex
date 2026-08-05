@@ -101,6 +101,7 @@ import { groupFeedItemsIntoTurns, useChatStore, type PendingSend } from "../../s
 import { useSettingsStore } from "../../store/settings";
 import { useResizableWidth } from "../../hooks/useResizableWidth";
 import { FilesPanel } from "../files/FilesPanel";
+import { PreviewPanel } from "../preview/PreviewPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { DOCK_TABS, type DockTab, useChatV2Store } from "../chat-v2/chatV2Store";
@@ -238,6 +239,20 @@ export function ChatPage() {
   const v2SetRightWidth = useChatV2Store((s) => s.setRightWidth);
 
   const [v2SessionSearch, setV2SessionSearch] = useState("");
+
+  // Dock panels are lazily mounted on first activation and then kept
+  // mounted (hidden via CSS) so switching tabs preserves panel state
+  // (xterm session, selected file, preview address).
+  const [mountedDockTabs, setMountedDockTabs] = useState<Set<DockTab>>(() => new Set([v2ActiveDockTab]));
+
+  useEffect(() => {
+    setMountedDockTabs((prev) => {
+      if (prev.has(v2ActiveDockTab)) return prev;
+      const next = new Set(prev);
+      next.add(v2ActiveDockTab);
+      return next;
+    });
+  }, [v2ActiveDockTab]);
 
   const beginV2LeftResize = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -1261,7 +1276,7 @@ export function ChatPage() {
               </Space>
               <Space size={4}>
                 <div className="chat-v2-topbar-tabs">
-                  {DOCK_TABS.filter((t: DockTab) => t !== "preview").map((tab: DockTab) => {
+                  {DOCK_TABS.map((tab: DockTab) => {
                     const meta = DOCK_TAB_META[tab];
                     const active = tab === v2ActiveDockTab && !v2RightCollapsed;
                     const badge = tab === "tasks" ? (pendingPermissions.length || 0) : 0;
@@ -1412,48 +1427,58 @@ export function ChatPage() {
           </div>
           {/* Right dock: content pane only (tabs are in topbar) */}
           <div className="chat-v2-right" data-collapsed={v2RightCollapsed ? "true" : "false"}>
-            {!v2RightCollapsed ? (
-              <>
-                <div className="chat-v2-right-resize" onPointerDown={beginV2RightResize} role="separator" aria-label="Resize right panel" />
-                <button className="chat-v2-right-close" onClick={() => v2ToggleRight()} aria-label="Close panel">
-                  <CloseOutlined />
-                </button>
-                <div className="chat-v2-dock-pane">
-                  <div className="chat-v2-dock-pane-body">
-                    {v2ActiveDockTab === "files" ? (
-                      <FilesPanel mode="dock" cwd={sessionWorkspaceDir} fillContainer onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
-                    ) : v2ActiveDockTab === "terminal" ? (
-                      <TerminalPanel workspaceDir={sessionWorkspaceDir} execution={terminalExecution} />
-                    ) : v2ActiveDockTab === "tasks" ? (
-                      <TaskCenterPanel
-                        outcomes={taskOutcomes}
-                        collapsed={false}
-                        onCollapsedChange={() => v2SetActiveDockTab(v2ActiveDockTab)}
-                        reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
-                        mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
-                        resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
-                        cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
-                        runningWorkflowId={runLongTaskMutation.isPending ? runLongTaskMutation.variables : undefined}
-                        cancelingLongTask={cancelLongTaskMutation.isPending ? cancelLongTaskMutation.variables : undefined}
-                        finalizingLongTask={finalizeLongTaskMutation.isPending ? finalizeLongTaskMutation.variables : undefined}
-                        onReviewSubagent={reviewSubagentInDrawer}
-                        onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
-                        onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
-                        onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
-                        onRunLongTask={(workflowId) => runLongTaskMutation.mutate(workflowId)}
-                        onCancelLongTask={(workflowId, nodeId) => cancelLongTaskMutation.mutate({ workflowId, nodeId })}
-                        onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
-                        onOpenReviewMergeCenter={openReviewMergeCenter}
-                      />
-                    ) : v2ActiveDockTab === "preview" ? (
-                      <Empty description="Preview panel coming soon" style={{ padding: 24 }} />
-                    ) : v2ActiveDockTab === "status" ? (
-                      inspectorPanel
-                    ) : null}
+            <div className="chat-v2-right-resize" onPointerDown={beginV2RightResize} role="separator" aria-label="Resize right panel" />
+            <button className="chat-v2-right-close" onClick={() => v2ToggleRight()} aria-label="Close panel">
+              <CloseOutlined />
+            </button>
+            <div className="chat-v2-dock-pane">
+              <div className="chat-v2-dock-pane-body" data-active-tab={v2ActiveDockTab}>
+                {mountedDockTabs.has("files") ? (
+                  <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "files" ? "true" : "false"}>
+                    <FilesPanel mode="dock" cwd={sessionWorkspaceDir} fillContainer onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
                   </div>
-                </div>
-              </>
-            ) : null}
+                ) : null}
+                {mountedDockTabs.has("terminal") ? (
+                  <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "terminal" ? "true" : "false"}>
+                    <TerminalPanel workspaceDir={sessionWorkspaceDir} execution={terminalExecution} />
+                  </div>
+                ) : null}
+                {mountedDockTabs.has("tasks") ? (
+                  <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "tasks" ? "true" : "false"}>
+                    <TaskCenterPanel
+                      outcomes={taskOutcomes}
+                      collapsed={false}
+                      onCollapsedChange={() => v2SetActiveDockTab(v2ActiveDockTab)}
+                      reviewingJobId={reviewSubagentMutation.isPending ? reviewSubagentMutation.variables : undefined}
+                      mergingJobId={mergeSubagentMutation.isPending ? mergeSubagentMutation.variables : undefined}
+                      resumingJobId={resumeSubagentMutation.isPending ? resumeSubagentMutation.variables : undefined}
+                      cancelingJobId={cancelSubagentMutation.isPending ? cancelSubagentMutation.variables : undefined}
+                      runningWorkflowId={runLongTaskMutation.isPending ? runLongTaskMutation.variables : undefined}
+                      cancelingLongTask={cancelLongTaskMutation.isPending ? cancelLongTaskMutation.variables : undefined}
+                      finalizingLongTask={finalizeLongTaskMutation.isPending ? finalizeLongTaskMutation.variables : undefined}
+                      onReviewSubagent={reviewSubagentInDrawer}
+                      onMergeSubagent={(jobId) => mergeSubagentMutation.mutate(jobId)}
+                      onResumeSubagent={(jobId) => resumeSubagentMutation.mutate(jobId)}
+                      onCancelSubagent={(jobId) => cancelSubagentMutation.mutate(jobId)}
+                      onRunLongTask={(workflowId) => runLongTaskMutation.mutate(workflowId)}
+                      onCancelLongTask={(workflowId, nodeId) => cancelLongTaskMutation.mutate({ workflowId, nodeId })}
+                      onFinalizeLongTask={(workflowId, nodeId) => finalizeLongTaskMutation.mutate({ workflowId, nodeId })}
+                      onOpenReviewMergeCenter={openReviewMergeCenter}
+                    />
+                  </div>
+                ) : null}
+                {mountedDockTabs.has("preview") ? (
+                  <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "preview" ? "true" : "false"}>
+                    <PreviewPanel workspaceDir={sessionWorkspaceDir} token={token} />
+                  </div>
+                ) : null}
+                {mountedDockTabs.has("status") ? (
+                  <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "status" ? "true" : "false"}>
+                    {inspectorPanel}
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>
       <Drawer

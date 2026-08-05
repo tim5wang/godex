@@ -1966,9 +1966,23 @@ samp {
   overflow: auto;
 }
 
+/* Dock tab panes stay mounted (keep-alive); only the active one is visible.
+   The wrapper provides the height chain for height:100% panels (xterm,
+   Files, Preview). */
+.chat-v2-dock-tab-pane {
+  display: none;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-v2-dock-tab-pane[data-active="true"] {
+  display: block;
+}
+
 /* Terminal needs explicit height chain; override overflow since xterm.js
-   handles its own scrollback. */
-.chat-v2-dock-pane-body:has(.terminal-panel) {
+   handles its own scrollback. Keyed off the active tab (not presence of
+   .terminal-panel) because keep-alive keeps every visited panel mounted. */
+.chat-v2-dock-pane-body[data-active-tab="terminal"] {
   overflow: hidden;
 }
 

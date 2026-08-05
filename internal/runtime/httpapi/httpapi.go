@@ -1613,6 +1613,7 @@ func NewHandlerWithRuntime(
 	registerUsageRoutes(mux, protected, usageService, manager)
 	registerFileRoutes(mux, protected, manager)
 	registerTerminalRoutes(mux)
+	registerPreviewRoutes(mux, manager)
 	return mux
 }
 

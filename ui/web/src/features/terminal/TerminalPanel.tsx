@@ -100,6 +100,25 @@ export function TerminalPanel(props: TerminalPanelProps) {
     if (idRef.current) { destroyTerminal(idRef.current); idRef.current = ""; }
   }, []);
 
+  // ---- keep-alive session follow ----
+  // Dock tabs stay mounted across switches (ChatPage keep-alive), so a
+  // session workspace or execution-backend change must recreate the PTY
+  // session explicitly — previously unmount/remount handled this for us.
+  const lastWorkspaceRef = useRef<string | undefined>(workspaceDir);
+  const lastExecutionRef = useRef<TerminalExecutionConfig | undefined>(execution);
+  useEffect(() => {
+    const wsChanged = lastWorkspaceRef.current !== workspaceDir;
+    const execChanged =
+      JSON.stringify(lastExecutionRef.current ?? null) !== JSON.stringify(execution ?? null);
+    lastWorkspaceRef.current = workspaceDir;
+    lastExecutionRef.current = execution;
+    if (wsChanged || execChanged) {
+      teardown();
+      setInitKey((k) => k + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceDir, execution]);
+
   // ---- init ----
 
   useEffect(() => {

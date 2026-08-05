@@ -15,9 +15,11 @@ import {
 } from "@ant-design/icons";
 import { Bubble, type BubbleItemType } from "@ant-design/x";
 import { AttachmentList } from "./AttachmentList";
+import { ChangesCard } from "./ChangesCard";
 import { MarkdownContent } from "./MarkdownContent";
 import { SubagentCard } from "./SubagentCard";
 import { TodoCard } from "./TodoCard";
+import { ToolDetails } from "./ToolDetails";
 import { useI18n } from "../i18n";
 import { writeClipboardText } from "../lib/clipboard";
 import type { FeedItem, FeedSegment } from "../lib/types";
@@ -28,6 +30,12 @@ interface MessageFeedV2Props {
   onSaveToNote?: (item: FeedItem) => void;
   savingToNote?: boolean;
   hasNoteContext?: boolean;
+  /** Session workspace root — enables the “Changed files” card + git diff. */
+  workspaceDir?: string;
+  /** Web token for authenticated git/file requests. */
+  token?: string | null;
+  /** Opens a changed file in the Files dock panel. */
+  onOpenInFiles?: (path: string) => void;
 }
 
 /**
@@ -36,7 +44,7 @@ interface MessageFeedV2Props {
  * rows and todo cards in chronological order. Tool calls render as single-line
  * rows that expand in place, keeping the conversation scannable.
  */
-export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false }: MessageFeedV2Props) {
+export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles }: MessageFeedV2Props) {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
 
@@ -69,6 +77,9 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
         saveLabel={hasNoteContext ? t("chat.saveToCurrentNote") : t("chat.saveAsNote")}
         onSaveToNote={onSaveToNote}
         savingToNote={savingToNote}
+        workspaceDir={workspaceDir}
+        token={token}
+        onOpenInFiles={onOpenInFiles}
       />
     ),
     header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item),
@@ -101,6 +112,9 @@ function FeedItemBody({
   saveLabel,
   onSaveToNote,
   savingToNote,
+  workspaceDir,
+  token,
+  onOpenInFiles,
 }: {
   item: FeedItem;
   onToggleTool: (id: string) => void;
@@ -109,6 +123,9 @@ function FeedItemBody({
   saveLabel: string;
   onSaveToNote?: (item: FeedItem) => void;
   savingToNote: boolean;
+  workspaceDir?: string;
+  token?: string | null;
+  onOpenInFiles?: (path: string) => void;
 }) {
   const { t } = useI18n();
   // Grouped assistant turn: render ordered segments, each block separated by a divider.
@@ -123,6 +140,7 @@ function FeedItemBody({
           </Fragment>
         ))}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
+        <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
         <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} />
       </div>
     );
@@ -259,36 +277,7 @@ export function ToolCallRow({ item, onToggle }: { item: FeedItem; onToggle: () =
         {hasDetails ? <span className="tool-call-row-chevron">{open ? <DownOutlined /> : <RightOutlined />}</span> : null}
       </button>
       {open && hasDetails ? (
-        <div className="tool-call-row-details">
-          {item.input ? (
-            <section className="tool-card-detail-block">
-              <Typography.Text className="tool-card-detail-label" type="secondary">
-                Input
-              </Typography.Text>
-              <pre className="tool-card-pre">{JSON.stringify(item.input, null, 2)}</pre>
-            </section>
-          ) : null}
-          {item.output ? (
-            <section className="tool-card-detail-block">
-              <Typography.Text className="tool-card-detail-label" type="secondary">
-                Output
-              </Typography.Text>
-              {looksLikeJSON(item.output) ? (
-                <pre className="tool-card-pre">{formatJSONText(item.output)}</pre>
-              ) : (
-                <MarkdownContent className="tool-card-output" content={item.output} />
-              )}
-            </section>
-          ) : null}
-          {item.error ? (
-            <section className="tool-card-detail-block">
-              <Typography.Text className="tool-card-detail-label" type="secondary">
-                Error
-              </Typography.Text>
-              <Typography.Text type="danger">{item.error}</Typography.Text>
-            </section>
-          ) : null}
-        </div>
+        <ToolDetails item={item} />
       ) : null}
     </div>
   );
@@ -418,17 +407,4 @@ function renderAvatar(item: FeedItem) {
     return <Avatar icon={<WarningOutlined />} style={{ background: item.kind === "error" ? "#b42318" : "#b45309" }} />;
   }
   return <Avatar icon={<RobotOutlined />} />;
-}
-
-function looksLikeJSON(value: string) {
-  const text = value.trim();
-  return (text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"));
-}
-
-function formatJSONText(value: string) {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
 }

@@ -47,6 +47,8 @@ export type FilesPanelProps = {
   fillContainer?: boolean;
   /** Transparent wrapper children for mode="page". */
   children?: React.ReactNode;
+  /** When set (changed), select + preview this file and auto-expand the tree chain. */
+  focusPath?: string | null;
 };
 
 export function FilesPanel(props: FilesPanelProps) {
@@ -92,6 +94,15 @@ function FilesPanelDock(props: FilesPanelProps) {
   const iconOnlyWidth = 40;
 
   const hasUnsavedChanges = editedContent !== null && editedContent !== previewContent;
+
+  // Half-controlled selection: external focusPath (e.g. “open in Files” from a
+  // Changes card) drives the internal selectedPath when it changes.
+  useEffect(() => {
+    if (props.focusPath && props.focusPath !== selectedPath) {
+      setSelectedPath(props.focusPath);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.focusPath]);
 
   // Debounced backend search.
   useEffect(() => {
@@ -389,6 +400,7 @@ function FilesPanelDock(props: FilesPanelProps) {
                 searchResults={searchResults}
                 searchLoading={searchLoading}
                 refreshKey={refreshKey}
+                focusPath={props.focusPath ?? null}
                 onSelectFile={(path) => {
                   setSelectedPath(path);
                   props.onSelect?.(path);

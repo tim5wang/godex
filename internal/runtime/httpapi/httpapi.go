@@ -1614,6 +1614,7 @@ func NewHandlerWithRuntime(
 	registerFileRoutes(mux, protected, manager)
 	registerTerminalRoutes(mux)
 	registerPreviewRoutes(mux, manager)
+	registerGitRoutes(mux, protected, manager)
 	return mux
 }
 

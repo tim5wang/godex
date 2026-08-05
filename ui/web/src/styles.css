@@ -1042,6 +1042,47 @@ samp {
   letter-spacing: 0;
 }
 
+/* ToolDetails: label row with action buttons on the right */
+.tool-card-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-card-code {
+  min-width: 0;
+}
+
+.tool-card-pre-plain {
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.tool-card-pre-error {
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--godex-error, #b42318) 40%, var(--godex-border));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--godex-error, #b42318) 8%, var(--godex-panel-muted));
+  color: var(--godex-error, #b42318);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
 .tool-card-pre,
 .tool-card-output {
   max-height: 340px;
@@ -1148,6 +1189,113 @@ samp {
 
 .chat-feed-v2-turn-actions .ant-btn:hover {
   color: var(--godex-accent) !important;
+}
+
+/* Changed-files card (turn tail) + inline diff view */
+.changes-card {
+  margin: 4px 0 2px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.changes-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.changes-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.changes-card-file {
+  min-width: 0;
+}
+
+.changes-card-file-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.changes-card-file-toggle {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  min-width: 0;
+}
+
+.changes-card-file-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.changes-card-file-op {
+  flex: 0 0 auto;
+}
+
+.changes-card-file-diff {
+  margin: 4px 0 4px 22px;
+  min-width: 0;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--godex-border);
+  border-radius: 6px;
+  background: var(--godex-panel);
+  padding: 4px 6px;
+}
+
+.diff-view {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-view-truncated {
+  padding: 2px 6px;
+  color: var(--godex-muted);
+  font-size: 11px;
+}
+
+.diff-view-pre {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+}
+
+.diff-line {
+  padding: 0 6px;
+}
+
+.diff-line-meta {
+  color: var(--godex-muted);
+}
+
+.diff-line-hunk {
+  color: var(--godex-accent);
+  background: color-mix(in oklab, var(--godex-accent) 8%, transparent);
+}
+
+.diff-line-add {
+  background: color-mix(in oklab, #16a34a 14%, transparent);
+  color: #15803d;
+}
+
+.diff-line-del {
+  background: color-mix(in oklab, #dc2626 12%, transparent);
+  color: #b91c1c;
+}
+
+.diff-line-context {
+  color: var(--godex-text);
 }
 
 /* Compact tool call row: single line, link-like, expands in place. */
@@ -1591,6 +1739,63 @@ samp {
 .markdown-body pre code {
   background: transparent;
   padding: 0;
+}
+
+/* Diagram blocks (mermaid / plantuml) inside markdown */
+.diagram-block {
+  margin: 0 0 1rem;
+  max-width: 100%;
+}
+
+.diagram-block svg,
+.diagram-block img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.diagram-block-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  color: var(--godex-muted);
+  font-size: 0.86rem;
+}
+
+.diagram-block-error {
+  display: grid;
+  gap: 10px;
+}
+
+.diagram-block-code {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.diagram-block-actions {
+  margin-top: 6px;
+  text-align: right;
+}
+
+.diagram-block-actions a {
+  color: var(--godex-accent);
+  font-size: 0.82rem;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
 }
 
 .markdown-body blockquote {

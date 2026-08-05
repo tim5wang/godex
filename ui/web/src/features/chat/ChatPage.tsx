@@ -240,6 +240,9 @@ export function ChatPage() {
 
   const [v2SessionSearch, setV2SessionSearch] = useState("");
 
+  // File the user asked to open in the Files dock (from a Changes card).
+  const [filesFocusPath, setFilesFocusPath] = useState<string | null>(null);
+
   // Dock panels are lazily mounted on first activation and then kept
   // mounted (hidden via CSS) so switching tabs preserves panel state
   // (xterm session, selected file, preview address).
@@ -1327,6 +1330,12 @@ export function ChatPage() {
                       onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
                       savingToNote={saveMessageToNoteMutation.isPending}
                       hasNoteContext={!!noteContextQuery.data}
+                      workspaceDir={sessionWorkspaceDir}
+                      token={token}
+                      onOpenInFiles={(path) => {
+                        setFilesFocusPath(path);
+                        v2SetActiveDockTab("files");
+                      }}
                     />
                   </div>
                 </div>
@@ -1435,7 +1444,7 @@ export function ChatPage() {
               <div className="chat-v2-dock-pane-body" data-active-tab={v2ActiveDockTab}>
                 {mountedDockTabs.has("files") ? (
                   <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "files" ? "true" : "false"}>
-                    <FilesPanel mode="dock" cwd={sessionWorkspaceDir} fillContainer onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
+                    <FilesPanel mode="dock" cwd={sessionWorkspaceDir} fillContainer focusPath={filesFocusPath} onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
                   </div>
                 ) : null}
                 {mountedDockTabs.has("terminal") ? (

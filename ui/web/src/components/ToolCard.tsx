@@ -1,6 +1,6 @@
 import { Button, Space, Tag, Tooltip, Typography } from "antd";
 import { DownOutlined, RightOutlined } from "@ant-design/icons";
-import { MarkdownContent } from "./MarkdownContent";
+import { ToolDetails } from "./ToolDetails";
 import type { FeedItem } from "../lib/types";
 
 interface ToolCardProps {
@@ -44,51 +44,7 @@ export function ToolCard({ item, onToggle }: ToolCardProps) {
         </Tooltip>
       ) : null}
 
-      {open ? (
-        <div className="tool-card-details">
-          {item.input ? (
-            <section className="tool-card-detail-block">
-              <Typography.Text className="tool-card-detail-label" type="secondary">
-                Input
-              </Typography.Text>
-              <pre className="tool-card-pre">{JSON.stringify(item.input, null, 2)}</pre>
-            </section>
-          ) : null}
-          {item.output ? (
-            <section className="tool-card-detail-block">
-              <Typography.Text className="tool-card-detail-label" type="secondary">
-                Output
-              </Typography.Text>
-              {looksLikeJSON(item.output) ? (
-                <pre className="tool-card-pre">{formatJSONText(item.output)}</pre>
-              ) : (
-                <MarkdownContent className="tool-card-output" content={item.output} />
-              )}
-            </section>
-          ) : null}
-          {item.error ? (
-            <section className="tool-card-detail-block">
-              <Typography.Text className="tool-card-detail-label" type="secondary">
-                Error
-              </Typography.Text>
-              <Typography.Text type="danger">{item.error}</Typography.Text>
-            </section>
-          ) : null}
-        </div>
-      ) : null}
+      {open && hasDetails ? <ToolDetails item={item} /> : null}
     </div>
   );
-}
-
-function looksLikeJSON(value: string) {
-  const text = value.trim();
-  return (text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"));
-}
-
-function formatJSONText(value: string) {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
 }

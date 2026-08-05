@@ -21,6 +21,8 @@ interface FileTreeProps {
   searchQuery: string;
   searchResults?: FileSearchResult[] | null;
   searchLoading?: boolean;
+  /** When set, the tree auto-expands the ancestor chain and highlights the file. */
+  focusPath?: string | null;
 }
 
 function buildTreeNodes(entries: FileEntry[], parentPath: string): DataNode[] {
@@ -66,11 +68,13 @@ export default function FileTree({
   searchQuery,
   searchResults,
   searchLoading,
+  focusPath,
 }: FileTreeProps) {
   const token = useSettingsStore((s) => s.token);
   const [treeData, setTreeData] = useState<DataNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadedDirs, setLoadedDirs] = useState<Set<string>>(new Set());
+  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [contextMenu, setContextMenu] = useState<{ open: boolean; x: number; y: number; path: string; title: string; isLeaf: boolean }>({ open: false, x: 0, y: 0, path: "", title: "", isLeaf: true });
 
   const loadDir = useCallback(
@@ -96,8 +100,32 @@ export default function FileTree({
   useEffect(() => {
     setLoadedDirs(new Set());
     setTreeData([]);
+    setExpandedKeys([]);
     loadDir(".");
   }, [workspaceRoot, refreshKey, loadDir]);
+
+  // Auto-expand the ancestor chain when the parent asks us to focus a file.
+  useEffect(() => {
+    if (!focusPath) return;
+    const ancestors = ancestorDirs(focusPath);
+    if (ancestors.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      // Ensure each ancestor dir is loaded (lazy tree), then expand them.
+      for (const dir of ancestors) {
+        if (cancelled) return;
+        if (!loadedDirs.has(dir)) {
+          await loadDir(dir);
+        }
+      }
+      if (cancelled) return;
+      setExpandedKeys((prev) => [...new Set([...prev, ...ancestors])]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusPath]);
 
   const onLoadData = async (node: DataNode) => {
     const key = node.key as string;
@@ -202,6 +230,8 @@ export default function FileTree({
             onSelect={handleSelect}
             onRightClick={handleRightClick}
             selectedKeys={selectedPath ? [selectedPath] : []}
+            expandedKeys={expandedKeys}
+            onExpand={(keys) => setExpandedKeys(keys)}
             style={{ fontSize: 13 }}
           />
         </Spin>
@@ -229,6 +259,19 @@ export default function FileTree({
 function parentPath(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? "." : path.substring(0, idx);
+}
+
+/** Ancestor directories of a file path, nearest-to-root order (e.g. "a/b/c.go" → ["a", "a/b"]). */
+function ancestorDirs(path: string): string[] {
+  const dirs: string[] = [];
+  let cur = parentPath(path);
+  while (cur && cur !== ".") {
+    dirs.unshift(cur);
+    const next = parentPath(cur);
+    if (next === cur) break;
+    cur = next;
+  }
+  return dirs;
 }
 
 async function copyToClipboard(text: string) {

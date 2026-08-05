@@ -1150,6 +1150,25 @@ export function readFile(token: string | null, path: string, root?: string) {
   return request<FileReadResponse>(`/files/read?${search.toString()}`, { method: "GET" }, token);
 }
 
+export interface GitDiffResponse {
+  repo: boolean;
+  diff?: string;
+  truncated?: boolean;
+  error?: string;
+}
+
+/** Working-tree diff for a local git repository (one file or whole tree). */
+export function gitDiff(token: string | null, path: string, root?: string) {
+  const search = new URLSearchParams();
+  if (path) {
+    search.set("path", path);
+  }
+  if (root?.trim()) {
+    search.set("root", root.trim());
+  }
+  return request<GitDiffResponse>(`/git/diff?${search.toString()}`, { method: "GET" }, token);
+}
+
 export function writeFile(token: string | null, path: string, content: string, root?: string) {
   return request<{ path: string; size: number }>(
     "/files/write",

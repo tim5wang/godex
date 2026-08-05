@@ -2553,6 +2553,90 @@ func TestControlNodeCredentialIssuanceUnknownNode(t *testing.T) {
 	}
 }
 
+// registryWithOverview combines a node registry with an event store so the
+// handler can serve both node CRUD and observation overviews from one object.
+type registryWithOverview struct {
+	*noderegistry.Registry
+	*relay.EventStore
+}
+
+func TestControlNodeOverviewEndpoint(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	service := backend.NewService(cfg, agent.NewSharedDependencies(cfg), commands.NewService(cfg))
+	registry, err := noderegistry.New(filepath.Join(t.TempDir(), "nodes.json"), time.Minute)
+	if err != nil {
+		t.Fatalf("new node registry: %v", err)
+	}
+	store := relay.NewEventStore()
+	combined := &registryWithOverview{Registry: registry, EventStore: store}
+	server := httptest.NewServer(NewHandlerWithRuntime(manager, service, nil, nil, nil, nil, nil, nil, combined))
+	defer server.Close()
+
+	if _, err := registry.Register(context.Background(), noderegistry.NodeInput{
+		ID:           "node-a",
+		Name:         "Local A",
+		Version:      "v1.2.0",
+		Capabilities: []string{"chat", "terminal"},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store.RecordSnapshot("node-a", relay.NodeSnapshot{
+		Version:      "v1.2.0",
+		Capabilities: []string{"chat", "terminal"},
+		Sessions:     []relay.SessionInfo{{ID: "s1", Title: "fix bug", Running: true}},
+		Jobs:         []relay.JobInfo{{ID: "j1", Name: "deploy", Status: "running", Phase: "executing", Turn: 3, Total: 5}},
+		Approvals:    []relay.ApprovalInfo{{ID: "ap1", SessionID: "s1", Intent: "bash go test", Status: "pending"}},
+	})
+
+	resp := doJSONWithToken(t, http.MethodGet, server.URL+"/control/nodes/node-a/overview", nil, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("overview status = %d body=%s", resp.StatusCode, body)
+	}
+	var got struct {
+		Node     noderegistry.NodeView `json:"node"`
+		Overview relay.NodeOverview    `json:"overview"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode overview: %v", err)
+	}
+	if got.Node.ID != "node-a" || got.Node.Version != "v1.2.0" {
+		t.Fatalf("unexpected node view: %#v", got.Node)
+	}
+	if len(got.Overview.Sessions) != 1 || got.Overview.Sessions[0].ID != "s1" {
+		t.Fatalf("unexpected sessions: %#v", got.Overview.Sessions)
+	}
+	if len(got.Overview.Jobs) != 1 || got.Overview.Jobs[0].Phase != "executing" || got.Overview.Jobs[0].Turn != 3 {
+		t.Fatalf("unexpected jobs: %#v", got.Overview.Jobs)
+	}
+	if len(got.Overview.Approvals) != 1 || got.Overview.Approvals[0].Status != "pending" {
+		t.Fatalf("unexpected approvals: %#v", got.Overview.Approvals)
+	}
+	if len(got.Overview.RecentEvents) == 0 {
+		t.Fatal("expected recent events from snapshot diff")
+	}
+}
+
+func TestControlNodeOverviewEndpointUnknownNode(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	service := backend.NewService(cfg, agent.NewSharedDependencies(cfg), commands.NewService(cfg))
+	registry, err := noderegistry.New(filepath.Join(t.TempDir(), "nodes.json"), time.Minute)
+	if err != nil {
+		t.Fatalf("new node registry: %v", err)
+	}
+	server := httptest.NewServer(NewHandlerWithRuntime(manager, service, nil, nil, nil, nil, nil, nil, registry))
+	defer server.Close()
+
+	resp := doJSONWithToken(t, http.MethodGet, server.URL+"/control/nodes/ghost/overview", nil, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown node, got %d", resp.StatusCode)
+	}
+}
+
 func TestAutomationCronEndpoints(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.WebToken = "secret-token"

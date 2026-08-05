@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -119,6 +120,58 @@ func TestHubRejectsBadCredential(t *testing.T) {
 	}
 	if hub.IsOnline("node-a") {
 		t.Fatal("expected node-a to stay offline after rejected hello")
+	}
+}
+
+func TestHubDeliversEventFramesToSink(t *testing.T) {
+	hub, server := newTestHub(func(nodeID, credential string) bool {
+		return nodeID == "node-a" && credential == "ck_secret"
+	})
+	defer server.Close()
+	defer hub.Shutdown(context.Background())
+
+	var (
+		sinkMu sync.Mutex
+		got    []Frame
+	)
+	hub.SetEventSink(func(nodeID string, frame Frame) {
+		sinkMu.Lock()
+		defer sinkMu.Unlock()
+		if nodeID == "node-a" {
+			got = append(got, frame)
+		}
+	})
+
+	client := dialTestNode(t, "ws"+strings.TrimPrefix(server.URL, "http"))
+	defer client.close()
+	client.send(t, Frame{Type: FrameHello, NodeID: "node-a", Credential: "ck_secret", Version: "v1.2.0"})
+	if got := client.recv(t); got.Type != FrameHelloOK {
+		t.Fatalf("expected hello_ok, got %#v", got)
+	}
+
+	client.send(t, Frame{Type: FrameEvent, Kind: "snapshot", Payload: json.RawMessage(`{"version":"v1.2.0"}`)})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		sinkMu.Lock()
+		n := len(got)
+		sinkMu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	sinkMu.Lock()
+	defer sinkMu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 event frame in sink, got %d", len(got))
+	}
+	if got[0].Type != FrameEvent || got[0].Kind != "snapshot" {
+		t.Fatalf("unexpected event frame: %#v", got[0])
+	}
+	if string(got[0].Payload) != `{"version":"v1.2.0"}` {
+		t.Fatalf("payload = %s", got[0].Payload)
 	}
 }
 

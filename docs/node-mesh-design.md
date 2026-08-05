@@ -268,6 +268,19 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 - [ ] Nodes UI：详情页（健康、能力、运行中 session/job、待审批、最近事件）
 - 验证：内网节点跑一个 longtask，中心 Web 能看到其 phase/turn 进度。
 
+### Phase 2：远程观测聚合（✅ 已完成 2026-08-06）
+
+**目标**：中心能看到每个节点的运行中 session/job/审批，Nodes UI 有详情页。
+
+- [x] 节点侧：`relay.Observer` 周期收集本地状态（sessions/longtasks/approvals）→ 经 agent 以 `event` 帧推送 `NodeSnapshot` 快照——`internal/services/relay/observer.go` + `internal/services/nodeobs/provider.go`（backend adapter，映射 `ListedSession`/`LongTaskView`/`PendingPermission`）
+- [x] 中心：`relay.EventStore` 内存聚合（最新快照 + 50 条最近事件，按节点），hub `SetEventSink` + `StoreEvents` 桥接写入——`internal/services/relay/eventstore.go`
+- [x] `GET /control/nodes/{id}/overview`：合并 registry `NodeView`（健康/能力/trust）+ EventStore `NodeOverview`（session/job/审批/最近事件）——`internal/runtime/httpapi`
+- [x] Nodes UI 详情页 `/nodes/:id`：健康/中继状态/能力/运行中 session/job（含 phase/turn 进度条）/待审批/最近事件——`ui/web/src/features/nodes/NodeDetailPage.tsx`
+- [x] serve 装配：中心建 EventStore + hub sink + overview 端点；节点建 Observer（agent 推快照）——`cmd/godex/main.go`
+- [x] 端到端验证：`scripts/smoke_obs.sh` PASS（节点连中心 → 快照事件到达中心 overview）；协议级 `TestSnapshotPushEndToEnd` 验证 job phase/turn 变化在中心可见
+
+验证（2026-08-06 实测）：`curl http://127.0.0.1:3911/api/control/nodes/{id}/overview` 返回 `overview.recent_events` 含 `kind=snapshot` 事件；修复了 Observer 首轮 poll 早于 agent 连线的丢快照 bug（`TestObserverRetriesWhenAgentNotConnected` 回归测试）。
+
 ### Phase 3：远程控制（chat / terminal / files）
 
 **目标**：远程编程的第一版——在中心 Web 上对节点完成「聊天 + 终端 + 文件」操作。

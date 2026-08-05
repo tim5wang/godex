@@ -39,6 +39,11 @@ type CredentialValidator func(nodeID, credential string) bool
 // online=false after disconnect).
 type StatusHook func(nodeID string, online bool)
 
+// EventSink receives unsolicited node→hub event frames (session/job/approval
+// observation updates). The sink is called with the authenticated node ID and
+// the decoded frame.
+type EventSink func(nodeID string, frame Frame)
+
 type hubConn struct {
 	hub     *Hub
 	nodeID  string
@@ -60,6 +65,7 @@ type Hub struct {
 	conns    map[string]*hubConn
 	nextReq  atomic.Int64
 	statusHook StatusHook
+	eventSink  EventSink
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -94,6 +100,14 @@ func (h *Hub) SetStatusHook(hook StatusHook) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.statusHook = hook
+}
+
+// SetEventSink registers a callback invoked for every event frame a connected
+// node pushes (session/job/approval observation updates).
+func (h *Hub) SetEventSink(sink EventSink) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.eventSink = sink
 }
 
 // Start implements the lifecycle contract; the hub's background loops are
@@ -289,6 +303,13 @@ func (h *Hub) handleConn(ws *websocket.Conn) {
 			conn.mu.Lock()
 			conn.lastPong = time.Now()
 			conn.mu.Unlock()
+		case FrameEvent:
+			h.mu.Lock()
+			sink := h.eventSink
+			h.mu.Unlock()
+			if sink != nil {
+				sink(nodeID, frame)
+			}
 		case FrameResponse, FrameStreamEnd:
 			conn.deliver(frame)
 		case FrameStream:

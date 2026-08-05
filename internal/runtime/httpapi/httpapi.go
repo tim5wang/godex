@@ -61,6 +61,14 @@ func NewHandlerWithRuntime(
 	if len(controlRegistries) > 0 {
 		controlRegistry = controlRegistries[0]
 	}
+	// The registry object may also carry an observation store (relay.EventStore)
+	// that serves aggregated node overviews; detect it by type assertion.
+	var overviewProvider nodeOverviewProvider
+	if len(controlRegistries) > 0 {
+		if provider, ok := controlRegistries[0].(nodeOverviewProvider); ok {
+			overviewProvider = provider
+		}
+	}
 	mux.Handle("GET /meta", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := manager.Current()
 		exec := cfg.Tools.Execution
@@ -233,6 +241,28 @@ func NewHandlerWithRuntime(
 		writeJSON(w, http.StatusOK, map[string]string{
 			"node_id":    id,
 			"credential": credential,
+		})
+	})))
+	mux.Handle("GET /control/nodes/{id}/overview", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if controlRegistry == nil {
+			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
+			return
+		}
+		id := r.PathValue("id")
+		node, err := controlRegistry.Get(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		var overview relay.NodeOverview
+		if overviewProvider != nil {
+			if ov, ok := overviewProvider.Overview(id); ok {
+				overview = ov
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"node":     node,
+			"overview": overview,
 		})
 	})))
 	mux.Handle("GET /providers", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

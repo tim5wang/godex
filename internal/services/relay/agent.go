@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -218,6 +221,27 @@ func (a *Agent) sendError(conn *websocket.Conn, reqID string, err error) error {
 		ReqID:  reqID,
 		Reason: err.Error(),
 		Status: http.StatusBadGateway,
+	})
+}
+
+// SendEvent pushes an observation event frame (e.g. a NodeSnapshot) to the
+// hub over the current connection. It returns an error when the agent is not
+// currently connected.
+func (a *Agent) SendEvent(kind string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal event payload: %w", err)
+	}
+	a.mu.Lock()
+	conn := a.conn
+	a.mu.Unlock()
+	if conn == nil {
+		return errors.New("relay agent not connected")
+	}
+	return writeFrame(conn, Frame{
+		Type:    FrameEvent,
+		Kind:    kind,
+		Payload: data,
 	})
 }
 

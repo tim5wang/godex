@@ -9,6 +9,7 @@ import (
 	"github.com/tim5wang/godex/internal/runtime/channels/weixin"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/version"
 )
 
@@ -483,4 +484,11 @@ type controlNodeRegistry interface {
 	List(context.Context) ([]noderegistry.NodeView, error)
 	Get(context.Context, string) (noderegistry.NodeView, error)
 	SetCredentialHash(context.Context, string, string) error
+}
+
+// nodeOverviewProvider supplies the aggregated observation view for one node.
+// The relay.EventStore satisfies it; handlers detect it via type assertion on
+// the control registry object so the handler signature stays stable.
+type nodeOverviewProvider interface {
+	Overview(string) (relay.NodeOverview, bool)
 }

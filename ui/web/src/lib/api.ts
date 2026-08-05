@@ -25,6 +25,7 @@ import type {
   MemorySuppression,
   MemoryType,
   MetaResponse,
+  NodeOverviewResponse,
   Note,
   ModelsView,
   PackageCommandEntry,
@@ -333,6 +334,10 @@ export function getRuntimeServiceStatus(token: string | null) {
 
 export function listControlNodes(token: string | null) {
   return request<ControlNode[]>("/control/nodes", { method: "GET" }, token);
+}
+
+export function getNodeOverview(nodeID: string, token: string | null) {
+  return request<NodeOverviewResponse>(`/control/nodes/${encodeURIComponent(nodeID)}/overview`, { method: "GET" }, token);
 }
 
 export function restartRuntimeService(token: string | null) {

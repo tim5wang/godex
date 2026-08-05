@@ -90,7 +90,7 @@ export const builtinApps: BuiltinAppEntry[] = [
   entry({
     id: "nodes",
     navPath: "/nodes",
-    routePaths: ["/nodes"],
+    routePaths: ["/nodes", "/nodes/:id"],
     icon: <ApartmentOutlined />,
     labelKey: "app.nav.nodes",
     load: loadNodesPage,

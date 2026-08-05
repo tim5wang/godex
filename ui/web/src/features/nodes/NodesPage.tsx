@@ -1,14 +1,25 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Empty, Space, Table, Tag, Typography } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
+import { useNavigate, useParams } from "react-router-dom";
 import { useI18n } from "../../i18n";
 import { getMeta, listControlNodes } from "../../lib/api";
 import type { ControlNode } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
+import { NodeDetailPage } from "./NodeDetailPage";
 
 export function NodesPage() {
+  const { id } = useParams();
+  if (id) {
+    return <NodeDetailPage />;
+  }
+  return <NodesListPage />;
+}
+
+function NodesListPage() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const token = useSettingsStore((state) => state.token);
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
   const authRequired = metaQuery.data?.auth_required ?? false;
@@ -47,6 +58,10 @@ export function NodesPage() {
           dataSource={nodesQuery.data ?? []}
           locale={{ emptyText: <Empty description={t("nodes.empty")} /> }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
+          onRow={(node) => ({
+            onClick: () => navigate(`/nodes/${encodeURIComponent(node.id)}`),
+            style: { cursor: "pointer" },
+          })}
           columns={[
             {
               title: t("nodes.name"),

@@ -319,6 +319,55 @@ export interface ControlNode {
   registered_at?: string;
   updated_at?: string;
   source?: string;
+  relay_status?: string;
+  last_health?: string;
+  trust_level?: string;
+}
+
+export interface NodeSessionInfo {
+  id: string;
+  title?: string;
+  running?: boolean;
+  updated_at?: string;
+}
+
+export interface NodeJobInfo {
+  id: string;
+  name?: string;
+  status?: string;
+  phase?: string;
+  turn?: number;
+  total_turns?: number;
+}
+
+export interface NodeApprovalInfo {
+  id: string;
+  session_id?: string;
+  intent?: string;
+  status?: string;
+}
+
+export interface NodeStoredEvent {
+  kind: string;
+  time: string;
+  detail?: string;
+}
+
+export interface NodeOverview {
+  node_id: string;
+  version?: string;
+  capabilities?: string[];
+  sessions?: NodeSessionInfo[];
+  jobs?: NodeJobInfo[];
+  approvals?: NodeApprovalInfo[];
+  recent_events?: NodeStoredEvent[];
+  last_health?: string;
+  updated_at?: string;
+}
+
+export interface NodeOverviewResponse {
+  node: ControlNode;
+  overview: NodeOverview;
 }
 
 export interface DoctorCheck {

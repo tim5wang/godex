@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -321,6 +323,76 @@ func TestAgentRespondsToPing(t *testing.T) {
 	}
 	if hub.LastPong("node-a").IsZero() {
 		t.Fatal("expected hub to record pong from agent")
+	}
+}
+
+// TestAgentSendsEventFrames verifies the agent can push an observation
+// snapshot event to the hub over the established relay connection.
+func TestAgentSendsEventFrames(t *testing.T) {
+	hub, wsURL := serveRelayHub(t, func(nodeID, credential string) bool { return credential == "ck_secret" })
+
+	var (
+		sinkMu sync.Mutex
+		got    []Frame
+	)
+	hub.SetEventSink(func(nodeID string, frame Frame) {
+		sinkMu.Lock()
+		defer sinkMu.Unlock()
+		got = append(got, frame)
+	})
+
+	agent := NewAgent(AgentConfig{
+		CenterURL:  wsURL,
+		NodeID:     "node-a",
+		Credential: "ck_secret",
+		Version:    "v1.2.0",
+		Handler:    fakeLocalHandler(t),
+	})
+	if err := agent.Start(context.Background()); err != nil {
+		t.Fatalf("agent start: %v", err)
+	}
+	defer agent.Stop(context.Background())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hub.IsOnline("node-a") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !hub.IsOnline("node-a") {
+		t.Fatal("expected agent node to register with hub")
+	}
+
+	if err := agent.SendEvent(EventKindSnapshot, NodeSnapshot{
+		Version:      "v1.2.0",
+		Capabilities: []string{"chat"},
+		Jobs:         []JobInfo{{ID: "j1", Name: "deploy", Phase: "executing", Turn: 3, Total: 5}},
+	}); err != nil {
+		t.Fatalf("send event: %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		sinkMu.Lock()
+		n := len(got)
+		sinkMu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	sinkMu.Lock()
+	defer sinkMu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 event frame, got %d", len(got))
+	}
+	if got[0].Type != FrameEvent || got[0].Kind != EventKindSnapshot {
+		t.Fatalf("unexpected frame: %#v", got[0])
+	}
+	if !bytes.Contains(got[0].Payload, []byte(`"j1"`)) {
+		t.Fatalf("payload missing job info: %s", got[0].Payload)
 	}
 }
 

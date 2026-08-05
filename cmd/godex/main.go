@@ -31,6 +31,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/evalharness"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/nodeobs"
 	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/services/usage"
@@ -259,10 +260,17 @@ func main() {
 				_ = controlRegistry.SetRelayStatus(context.Background(), nodeID, status)
 			})
 
+			// Observation store: aggregates node-pushed snapshot events so the
+			// center can render per-node overviews. The center only keeps the
+			// latest snapshot + bounded recent events in memory; session history
+			// itself stays on each node.
+			eventStore := relay.NewEventStore()
+			relayHub.SetEventSink(relay.StoreEvents(eventStore))
+
 			apiHandler := httpapi.NewHandlerWithRuntime(manager, service, channelManager, weixinAuth, cronToolAdapter, heartbeatToolAdapter, serviceRuntimeControl{
 				controller: servicecontrol.NewController(),
 				options:    serviceRuntimeOptions(manager),
-			}, usageService, controlRegistry)
+			}, usageService, &registryWithOverview{Registry: controlRegistry, EventStore: eventStore})
 
 			// Combine the API handler with relay endpoints. The webui strips the
 			// leading /api before delegating here, so relay paths are prefix-free:
@@ -290,6 +298,11 @@ func main() {
 			}
 			if agent := remoteRelayAgent(cfg, selfNode, apiHandler); agent != nil {
 				lifecycle = append(lifecycle, agent)
+				// Node-side observer: periodically pushes the local observation
+				// snapshot (sessions, longtasks, approvals) to the center so the
+				// center web can show live progress.
+				provider := nodeobs.NewProvider(service, selfNode.Version, selfNode.Capabilities)
+				lifecycle = append(lifecycle, relay.NewObserver(agent, provider, 0))
 			}
 			lifecycle = append(lifecycle, servicecontrol.NewNotifyServiceFromEnv())
 			return app.ServeRuntime{
@@ -485,6 +498,14 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// registryWithOverview combines the node registry with the relay observation
+// store so the httpapi handler can serve both node CRUD endpoints and the
+// aggregated per-node overview from a single argument.
+type registryWithOverview struct {
+	*noderegistry.Registry
+	*relay.EventStore
+}
+
 func remoteControlHeartbeat(cfg *config.Config, selfNode noderegistry.NodeInput, selfEndpoint string) app.LifecycleService {
 	centerURL := strings.TrimRight(strings.TrimSpace(cfg.Control.CenterURL), "/")
 	if centerURL == "" {
@@ -501,7 +522,7 @@ func remoteControlHeartbeat(cfg *config.Config, selfNode noderegistry.NodeInput,
 // configured to join a center (control.center_url + control.credential) that is
 // not itself. The agent dials the center outbound and serves forwarded requests
 // against this node's local httpapi handler.
-func remoteRelayAgent(cfg *config.Config, selfNode noderegistry.NodeInput, localHandler http.Handler) app.LifecycleService {
+func remoteRelayAgent(cfg *config.Config, selfNode noderegistry.NodeInput, localHandler http.Handler) *relay.Agent {
 	centerURL := strings.TrimRight(strings.TrimSpace(cfg.Control.CenterURL), "/")
 	if centerURL == "" {
 		return nil

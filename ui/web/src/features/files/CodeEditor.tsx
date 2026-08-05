@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Spin, Alert } from "antd";
+import { usePrefersDark } from "../../hooks/usePrefersDark";
 
 interface CodeEditorProps {
   content: string;
@@ -54,6 +55,7 @@ export default function CodeEditor({
   const suppressOnChange = useRef(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const prefersDark = usePrefersDark();
 
   // Always keep the latest content in a ref so the async editor creation
   // can pick it up even if it finishes after the content has changed.
@@ -87,7 +89,6 @@ export default function CodeEditor({
         foldGutter(),
         indentOnInput(),
         syntaxHighlighting(defaultHighlightStyle),
-        oneDark,
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...closeBracketsKeymap]),
         history(),
         autocompletion(),
@@ -100,6 +101,12 @@ export default function CodeEditor({
           }
         }),
       ];
+
+      // Follow the OS color scheme: oneDark for dark mode, the default
+      // light theme otherwise (matches the surrounding godex panel colors).
+      if (prefersDark) {
+        extensions.push(oneDark);
+      }
 
       if (langLoader) {
         const langModule = await langLoader();
@@ -161,7 +168,7 @@ export default function CodeEditor({
     } finally {
       setLoading(false);
     }
-  }, [filePath, readOnly]); // Only recreate editor when file or readOnly changes
+  }, [filePath, readOnly, prefersDark]); // Only recreate editor when file, readOnly or theme changes
 
   useEffect(() => {
     setupEditor();

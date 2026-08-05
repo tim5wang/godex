@@ -1298,6 +1298,18 @@ samp {
   color: var(--godex-text);
 }
 
+/* Files panel: rendered markdown preview */
+.files-markdown-render {
+  padding: 12px 16px;
+  min-height: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.files-markdown-render .markdown-body {
+  color: var(--godex-text);
+}
+
 /* Compact tool call row: single line, link-like, expands in place. */
 .tool-call-row {
   min-width: 0;

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Spin } from "antd";
+import { usePrefersDark } from "../hooks/usePrefersDark";
 
 interface CodeViewerProps {
   value: string;
@@ -18,6 +19,7 @@ export function CodeViewer({ value, language = "text", className, maxHeight = 34
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<{ destroy(): void } | null>(null);
   const [loading, setLoading] = useState(false);
+  const prefersDark = usePrefersDark();
 
   useEffect(() => {
     let cancelled = false;
@@ -39,11 +41,15 @@ export function CodeViewer({ value, language = "text", className, maxHeight = 34
         const extensions: any[] = [
           lineNumbers(),
           syntaxHighlighting(defaultHighlightStyle),
-          oneDark,
           EditorView.lineWrapping,
           EditorView.editable.of(false),
           EditorView.contentAttributes.of({ "aria-readonly": "true" }),
         ];
+
+        // Follow the OS color scheme like CodeEditor does.
+        if (prefersDark) {
+          extensions.push(oneDark);
+        }
 
         if (language === "json") {
           const { json } = await import("@codemirror/lang-json");

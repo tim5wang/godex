@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Alert, Button, Input, Space, Spin, Typography, message, Modal, Select } from "antd";
+import { Alert, Button, Input, Segmented, Space, Spin, Typography, message, Modal, Select } from "antd";
 import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, FolderOpenOutlined, SaveOutlined } from "@ant-design/icons";
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
+import { MarkdownContent } from "../../components/MarkdownContent";
 import { useLayoutStore } from "../../store/layout";
 import { useSettingsStore } from "../../store/settings";
 import { useI18n } from "../../i18n";
@@ -486,6 +487,9 @@ function FilePreview(props: {
   onContentChange?: (content: string) => void;
   t: (key: string) => string;
 }) {
+  const isMarkdown = isMarkdownPath(props.selectedPath);
+  const [viewMode, setViewMode] = useState<"source" | "render">("source");
+
   return (
     <div data-testid="files-panel-preview-pane" style={{ display: "flex", height: "100%", minWidth: 0, minHeight: 0, flexDirection: "column" }}>
       <div
@@ -502,6 +506,18 @@ function FilePreview(props: {
           {props.selectedPath ?? (props.t("files.noFileSelected") || "Select a file")}
         </Typography.Text>
         <Space size={4}>
+          {isMarkdown ? (
+            <Segmented
+              size="small"
+              value={viewMode}
+              onChange={(value) => setViewMode(value as "source" | "render")}
+              options={[
+                { value: "source", label: props.t("files.viewSource") || "Source" },
+                { value: "render", label: props.t("files.viewRender") || "Render" },
+              ]}
+              data-testid="files-panel-preview-mode"
+            />
+          ) : null}
           {props.hasUnsavedChanges ? (
             <Button
               size="small" type="primary"
@@ -533,6 +549,10 @@ function FilePreview(props: {
           </div>
         ) : props.previewError ? (
           <Alert type="error" showIcon message={props.previewError} />
+        ) : isMarkdown && viewMode === "render" ? (
+          <div className="files-markdown-render">
+            <MarkdownContent content={props.previewContent} forceMarkdown />
+          </div>
         ) : (
           <CodeEditor
             content={props.previewContent}
@@ -544,4 +564,10 @@ function FilePreview(props: {
       </div>
     </div>
   );
+}
+
+function isMarkdownPath(path?: string): boolean {
+  if (!path) return false;
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return ext === "md" || ext === "mdx" || ext === "markdown";
 }

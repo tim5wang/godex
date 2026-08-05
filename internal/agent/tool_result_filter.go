@@ -24,6 +24,13 @@ type storedModelToolResult struct {
 }
 
 func (a *Agent) filterModelToolResult(ctx context.Context, tool conversation.ExecutedTool) conversation.ExecutedTool {
+	// rtk-style token-saving compression runs first: it may shrink a large
+	// result below the artifact threshold entirely, or at least reduce the
+	// preview payload. It never grows the output (fail-safe) and only
+	// applies above the minimum size threshold.
+	if compressed := modelcontext.CompressToolOutput(tool.Name, commandFromToolInput(tool.Input), tool.Output); compressed != tool.Output {
+		tool.Output = compressed
+	}
 	if !modelcontext.TooLargeForModel(tool.Output) {
 		return tool
 	}
@@ -50,6 +57,22 @@ func (a *Agent) filterModelToolResult(ctx context.Context, tool conversation.Exe
 		Note:         note,
 	})
 	return tool
+}
+
+// commandFromToolInput extracts the command string from a bash tool input
+// map (the only tool whose output benefits from command-aware compression).
+// Returns "" for non-bash tools so CompressToolOutput falls back to generic
+// compression only for read_file.
+func commandFromToolInput(input map[string]interface{}) string {
+	if input == nil {
+		return ""
+	}
+	if v, ok := input["command"]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 func (a *Agent) storeModelToolResult(ctx context.Context, tool conversation.ExecutedTool, bytes int, sha string) (string, error) {

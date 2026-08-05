@@ -280,6 +280,7 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("heartbeat.default_timezone", file.Heartbeat.DefaultTimezone, "GODEX_HEARTBEAT_DEFAULT_TIMEZONE", func(v string) { current.Heartbeat.DefaultTimezone = v })
 	resolveString("control.node_name", file.Control.NodeName, "GODEX_CONTROL_NODE_NAME", func(v string) { current.Control.NodeName = v })
 	resolveString("control.center_url", file.Control.CenterURL, "GODEX_CONTROL_CENTER_URL", func(v string) { current.Control.CenterURL = v })
+	resolveString("control.credential", file.Control.Credential, "GODEX_CONTROL_CREDENTIAL", func(v string) { current.Control.Credential = v })
 	resolveInt("control.heartbeat_seconds", file.Control.HeartbeatSeconds, "GODEX_CONTROL_HEARTBEAT_SECONDS", func(v int) {
 		current.Control.HeartbeatSeconds = positiveOrDefault(v, 15)
 	})
@@ -741,6 +742,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 		Control: ControlConfig{
 			NodeName:            file.Control.NodeName,
 			CenterURL:           file.Control.CenterURL,
+			Credential:          file.Control.Credential,
 			HeartbeatSeconds:    file.Control.HeartbeatSeconds,
 			OfflineAfterSeconds: file.Control.OfflineAfterSeconds,
 			Nodes:               controlNodesFromConfigFile(file),

@@ -132,6 +132,7 @@ type HeartbeatSection struct {
 type ControlSection struct {
 	NodeName            string               `yaml:"node_name"`
 	CenterURL           string               `yaml:"center_url"`
+	Credential          string               `yaml:"credential"`
 	HeartbeatSeconds    int                  `yaml:"heartbeat_seconds"`
 	OfflineAfterSeconds int                  `yaml:"offline_after_seconds"`
 	Nodes               []ControlNodeSection `yaml:"nodes"`

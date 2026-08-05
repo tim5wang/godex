@@ -243,6 +243,7 @@ type HeartbeatConfig struct {
 type ControlConfig struct {
 	NodeName            string
 	CenterURL           string
+	Credential          string
 	HeartbeatSeconds    int
 	OfflineAfterSeconds int
 	Nodes               []ControlNodeConfig

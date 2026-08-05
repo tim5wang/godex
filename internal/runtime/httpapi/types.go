@@ -482,4 +482,5 @@ type controlNodeRegistry interface {
 	Heartbeat(context.Context, string, noderegistry.NodeInput) (noderegistry.NodeView, error)
 	List(context.Context) ([]noderegistry.NodeView, error)
 	Get(context.Context, string) (noderegistry.NodeView, error)
+	SetCredentialHash(context.Context, string, string) error
 }

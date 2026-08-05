@@ -94,7 +94,8 @@ func baseSchema() []SectionSchema {
 			Description: "Runtime node identity, central registration, and heartbeat settings.",
 			Fields: []FieldSchema{
 				{Path: "control.node_name", Label: "Node Name", Description: "Human-readable name for this Godex runtime in the control plane.", Type: "string", Env: "GODEX_CONTROL_NODE_NAME"},
-				{Path: "control.center_url", Label: "Center URL", Description: "Optional central Godex service URL for auto-registration and heartbeat.", Type: "string", Env: "GODEX_CONTROL_CENTER_URL"},
+				{Path: "control.center_url", Label: "Center URL", Description: "Optional central Godex service URL for auto-registration, relay connection, and heartbeat.", Type: "string", Env: "GODEX_CONTROL_CENTER_URL"},
+				{Path: "control.credential", Label: "Node Credential", Description: "Per-node credential (ck_...) issued by the center for relay authentication.", Type: "string", Secret: true, Env: "GODEX_CONTROL_CREDENTIAL"},
 				{Path: "control.heartbeat_seconds", Label: "Heartbeat Seconds", Description: "Node heartbeat interval when registering to a center service.", Type: "int", Env: "GODEX_CONTROL_HEARTBEAT_SECONDS"},
 				{Path: "control.offline_after_seconds", Label: "Offline After Seconds", Description: "Mark a node offline after this many seconds without heartbeat.", Type: "int", Env: "GODEX_CONTROL_OFFLINE_AFTER_SECONDS"},
 				{Path: "control.nodes", Label: "Manual Nodes", Description: "Optional JSON/YAML list of manually known nodes with id/name/endpoint/workspace_dir/godex_home/version/capabilities.", Type: "json"},

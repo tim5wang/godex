@@ -27,6 +27,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/usage"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/version"
@@ -209,6 +210,30 @@ func NewHandlerWithRuntime(
 			return
 		}
 		writeJSON(w, http.StatusOK, node)
+	})))
+	mux.Handle("POST /control/nodes/{id}/credential", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if controlRegistry == nil {
+			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
+			return
+		}
+		id := r.PathValue("id")
+		if _, err := controlRegistry.Get(r.Context(), id); err != nil {
+			writeError(w, http.StatusNotFound, fmt.Errorf("node not found: %s", id))
+			return
+		}
+		credential, err := relay.GenerateCredential()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := controlRegistry.SetCredentialHash(r.Context(), id, relay.HashCredential(credential)); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"node_id":    id,
+			"credential": credential,
+		})
 	})))
 	mux.Handle("GET /providers", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, coreproviders.List(manager.Current()))

@@ -212,6 +212,8 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Control.NodeName = asString(value)
 	case "control.center_url":
 		file.Control.CenterURL = asString(value)
+	case "control.credential":
+		file.Control.Credential = asString(value)
 	case "control.heartbeat_seconds":
 		file.Control.HeartbeatSeconds = asInt(value)
 	case "control.offline_after_seconds":

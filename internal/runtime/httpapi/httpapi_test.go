@@ -33,6 +33,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/usage"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -2483,6 +2484,72 @@ func TestControlNodeRegistryEndpoints(t *testing.T) {
 	}
 	if node.Version != "dev" {
 		t.Fatalf("expected heartbeat version, got %#v", node)
+	}
+}
+
+func TestControlNodeCredentialIssuance(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	service := backend.NewService(cfg, agent.NewSharedDependencies(cfg), commands.NewService(cfg))
+	registry, err := noderegistry.New(filepath.Join(t.TempDir(), "nodes.json"), time.Minute)
+	if err != nil {
+		t.Fatalf("new node registry: %v", err)
+	}
+	server := httptest.NewServer(NewHandlerWithRuntime(manager, service, nil, nil, nil, nil, nil, nil, registry))
+	defer server.Close()
+
+	if _, err := registry.Register(context.Background(), noderegistry.NodeInput{ID: "node-a", Name: "Local A"}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	resp := doJSONWithToken(t, http.MethodPost, server.URL+"/control/nodes/node-a/credential", nil, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("issue credential status = %d body=%s", resp.StatusCode, body)
+	}
+	var issued struct {
+		NodeID     string `json:"node_id"`
+		Credential string `json:"credential"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&issued); err != nil {
+		t.Fatalf("decode issue response: %v", err)
+	}
+	if issued.NodeID != "node-a" || !strings.HasPrefix(issued.Credential, "ck_") {
+		t.Fatalf("unexpected issue response: %#v", issued)
+	}
+
+	// The registry must store the hash, and the plaintext must validate.
+	node, err := registry.Get(context.Background(), "node-a")
+	if err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if node.CredentialHash == "" {
+		t.Fatal("expected stored credential hash")
+	}
+	if !relay.ValidateCredential(issued.Credential, node.CredentialHash) {
+		t.Fatal("issued credential must validate against stored hash")
+	}
+	if relay.HashCredential(issued.Credential) != node.CredentialHash {
+		t.Fatal("stored hash mismatch")
+	}
+}
+
+func TestControlNodeCredentialIssuanceUnknownNode(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	service := backend.NewService(cfg, agent.NewSharedDependencies(cfg), commands.NewService(cfg))
+	registry, err := noderegistry.New(filepath.Join(t.TempDir(), "nodes.json"), time.Minute)
+	if err != nil {
+		t.Fatalf("new node registry: %v", err)
+	}
+	server := httptest.NewServer(NewHandlerWithRuntime(manager, service, nil, nil, nil, nil, nil, nil, registry))
+	defer server.Close()
+
+	resp := doJSONWithToken(t, http.MethodPost, server.URL+"/control/nodes/ghost/credential", nil, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown node, got %d", resp.StatusCode)
 	}
 }
 

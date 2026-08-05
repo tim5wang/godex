@@ -31,6 +31,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/evalharness"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/services/usage"
 	"github.com/tim5wang/godex/internal/tui/mintui"
@@ -241,11 +242,37 @@ func main() {
 			if _, err := controlRegistry.Register(ctx, selfNode); err != nil {
 				return err
 			}
+			// Relay hub: accepts outbound WSS connections from nodes and validates
+			// each node's per-node credential against the registry's stored hash.
+			relayHub := relay.NewHub(func(nodeID, credential string) bool {
+				node, err := controlRegistry.Get(context.Background(), nodeID)
+				if err != nil {
+					return false
+				}
+				return relay.ValidateCredential(credential, node.CredentialHash)
+			})
+			relayHub.SetStatusHook(func(nodeID string, online bool) {
+				status := "disconnected"
+				if online {
+					status = "connected"
+				}
+				_ = controlRegistry.SetRelayStatus(context.Background(), nodeID, status)
+			})
+
 			apiHandler := httpapi.NewHandlerWithRuntime(manager, service, channelManager, weixinAuth, cronToolAdapter, heartbeatToolAdapter, serviceRuntimeControl{
 				controller: servicecontrol.NewController(),
 				options:    serviceRuntimeOptions(manager),
 			}, usageService, controlRegistry)
-			handler, err := webui.NewHandler(apiHandler, filepath.Join(cfg.WorkspaceDir, "internal", "uiassets", "embedded_dist"))
+
+			// Combine the API handler with relay endpoints. The webui strips the
+			// leading /api before delegating here, so relay paths are prefix-free:
+			//   external /api/relay                       → /relay (WSS upgrade)
+			//   external /api/control/nodes/{id}/proxy/.. → /control/nodes/{id}/proxy/..
+			root := http.NewServeMux()
+			root.Handle("/relay", relayHub)
+			root.Handle("/control/nodes/{id}/proxy/", relay.NewProxyHandler(relayHub, relayAuthorize(cfg)))
+			root.Handle("/", apiHandler)
+			handler, err := webui.NewHandler(root, filepath.Join(cfg.WorkspaceDir, "internal", "uiassets", "embedded_dist"))
 			if err != nil {
 				return err
 			}
@@ -253,12 +280,16 @@ func main() {
 			lifecycle := []app.LifecycleService{
 				app.NewConfigReloadWatcher(manager),
 				noderegistry.NewLocalHeartbeat(controlRegistry, selfNode, time.Duration(cfg.Control.HeartbeatSeconds)*time.Second),
+				relayHub,
 				channelManager,
 				cronService,
 				heartbeatService,
 			}
 			if remote := remoteControlHeartbeat(cfg, selfNode, selfEndpoint); remote != nil {
 				lifecycle = append(lifecycle, remote)
+			}
+			if agent := remoteRelayAgent(cfg, selfNode, apiHandler); agent != nil {
+				lifecycle = append(lifecycle, agent)
 			}
 			lifecycle = append(lifecycle, servicecontrol.NewNotifyServiceFromEnv())
 			return app.ServeRuntime{
@@ -464,6 +495,49 @@ func remoteControlHeartbeat(cfg *config.Config, selfNode noderegistry.NodeInput,
 	}
 	interval := time.Duration(cfg.Control.HeartbeatSeconds) * time.Second
 	return noderegistry.NewRemoteHeartbeat(centerURL, cfg.WebToken, selfNode, interval)
+}
+
+// remoteRelayAgent starts the node-side relay agent when this instance is
+// configured to join a center (control.center_url + control.credential) that is
+// not itself. The agent dials the center outbound and serves forwarded requests
+// against this node's local httpapi handler.
+func remoteRelayAgent(cfg *config.Config, selfNode noderegistry.NodeInput, localHandler http.Handler) app.LifecycleService {
+	centerURL := strings.TrimRight(strings.TrimSpace(cfg.Control.CenterURL), "/")
+	if centerURL == "" {
+		return nil
+	}
+	if selfNode.Endpoint != "" && strings.EqualFold(centerURL, strings.TrimRight(selfNode.Endpoint, "/")) {
+		return nil
+	}
+	credential := strings.TrimSpace(cfg.Control.Credential)
+	if credential == "" {
+		return nil
+	}
+	return relay.NewAgent(relay.AgentConfig{
+		CenterURL:  centerURL,
+		NodeID:     selfNode.ID,
+		Credential: credential,
+		Version:    selfNode.Version,
+		Caps:       selfNode.Capabilities,
+		Handler:    localHandler,
+	})
+}
+
+// relayAuthorize protects the center-side proxy endpoint with the same web
+// token policy as the rest of the API: when no web token is configured all
+// requests pass; otherwise the request must carry a matching Bearer token.
+func relayAuthorize(cfg *config.Config) func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		token := strings.TrimSpace(cfg.WebToken)
+		if token == "" {
+			return true
+		}
+		header := strings.TrimSpace(r.Header.Get("Authorization"))
+		if !strings.HasPrefix(strings.ToLower(header), "bearer ") {
+			return false
+		}
+		return strings.TrimSpace(header[len("Bearer "):]) == token
+	}
 }
 
 func augmentPackageAppDoctor(report config.DoctorReport, cfg *config.Config) config.DoctorReport {

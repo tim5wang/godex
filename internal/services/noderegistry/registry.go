@@ -32,22 +32,27 @@ type NodeInput struct {
 	Version      string            `json:"version,omitempty"`
 	Capabilities []string          `json:"capabilities,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
+	TrustLevel   string            `json:"trust_level,omitempty"`
 }
 
 type NodeView struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Endpoint     string            `json:"endpoint,omitempty"`
-	WorkspaceDir string            `json:"workspace_dir,omitempty"`
-	GodexHome    string            `json:"godex_home,omitempty"`
-	Status       string            `json:"status"`
-	Version      string            `json:"version,omitempty"`
-	Capabilities []string          `json:"capabilities,omitempty"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
-	LastSeen     time.Time         `json:"last_seen,omitempty"`
-	RegisteredAt time.Time         `json:"registered_at,omitempty"`
-	UpdatedAt    time.Time         `json:"updated_at,omitempty"`
-	Source       string            `json:"source,omitempty"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Endpoint      string            `json:"endpoint,omitempty"`
+	WorkspaceDir  string            `json:"workspace_dir,omitempty"`
+	GodexHome     string            `json:"godex_home,omitempty"`
+	Status        string            `json:"status"`
+	Version       string            `json:"version,omitempty"`
+	Capabilities  []string          `json:"capabilities,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	LastSeen      time.Time         `json:"last_seen,omitempty"`
+	RegisteredAt  time.Time         `json:"registered_at,omitempty"`
+	UpdatedAt     time.Time         `json:"updated_at,omitempty"`
+	Source        string            `json:"source,omitempty"`
+	CredentialHash string           `json:"credential_hash,omitempty"`
+	RelayStatus   string            `json:"relay_status,omitempty"`
+	LastHealth    time.Time         `json:"last_health,omitempty"`
+	TrustLevel    string            `json:"trust_level,omitempty"`
 }
 
 type Registry struct {
@@ -141,6 +146,54 @@ func (r *Registry) SeedConfigured(ctx context.Context, inputs []NodeInput) error
 	return r.saveLocked()
 }
 
+// SetCredentialHash stores the hash of a per-node credential. The plaintext
+// credential is never persisted; only the digest is kept for hello validation.
+func (r *Registry) SetCredentialHash(ctx context.Context, id, hash string) error {
+	_ = ctx
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("missing node id")
+	}
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return fmt.Errorf("missing credential hash")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return os.ErrNotExist
+	}
+	node.CredentialHash = hash
+	node.UpdatedAt = r.now()
+	r.nodes[id] = node
+	return r.saveLocked()
+}
+
+// SetRelayStatus updates the relay channel state and health timestamp for a node.
+func (r *Registry) SetRelayStatus(ctx context.Context, id, status string) error {
+	_ = ctx
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("missing node id")
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return fmt.Errorf("missing relay status")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return os.ErrNotExist
+	}
+	node.RelayStatus = status
+	node.LastHealth = r.now()
+	node.UpdatedAt = r.now()
+	r.nodes[id] = node
+	return r.saveLocked()
+}
+
 func (r *Registry) List(ctx context.Context) ([]NodeView, error) {
 	_ = ctx
 	r.mu.Lock()
@@ -200,6 +253,9 @@ func (r *Registry) mergeLocked(input NodeInput, now time.Time) NodeView {
 	}
 	if len(input.Metadata) > 0 {
 		node.Metadata = cleanMap(input.Metadata)
+	}
+	if v := strings.TrimSpace(input.TrustLevel); v != "" {
+		node.TrustLevel = v
 	}
 	return node
 }

@@ -279,6 +279,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveInt("heartbeat.default_interval_seconds", file.Heartbeat.DefaultIntervalSeconds, "GODEX_HEARTBEAT_DEFAULT_INTERVAL_SECONDS", func(v int) { current.Heartbeat.DefaultIntervalSeconds = v })
 	resolveString("heartbeat.default_timezone", file.Heartbeat.DefaultTimezone, "GODEX_HEARTBEAT_DEFAULT_TIMEZONE", func(v string) { current.Heartbeat.DefaultTimezone = v })
 	resolveString("control.node_name", file.Control.NodeName, "GODEX_CONTROL_NODE_NAME", func(v string) { current.Control.NodeName = v })
+	resolveString("control.node_id", file.Control.NodeID, "GODEX_CONTROL_NODE_ID", func(v string) { current.Control.NodeID = v })
+	resolveString("control.default_node", file.Control.DefaultNode, "GODEX_CONTROL_DEFAULT_NODE", func(v string) { current.Control.DefaultNode = v })
+	resolveString("control.trust_level", file.Control.TrustLevel, "GODEX_CONTROL_TRUST_LEVEL", func(v string) { current.Control.TrustLevel = v })
 	resolveString("control.center_url", file.Control.CenterURL, "GODEX_CONTROL_CENTER_URL", func(v string) { current.Control.CenterURL = v })
 	resolveString("control.credential", file.Control.Credential, "GODEX_CONTROL_CREDENTIAL", func(v string) { current.Control.Credential = v })
 	resolveCSV("control.forward_allow", file.Control.ForwardAllow, "GODEX_CONTROL_FORWARD_ALLOW", func(v []string) {
@@ -744,6 +747,9 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 		},
 		Control: ControlConfig{
 			NodeName:            file.Control.NodeName,
+			NodeID:              file.Control.NodeID,
+			DefaultNode:         file.Control.DefaultNode,
+			TrustLevel:          file.Control.TrustLevel,
 			CenterURL:           file.Control.CenterURL,
 			Credential:          file.Control.Credential,
 			HeartbeatSeconds:    file.Control.HeartbeatSeconds,

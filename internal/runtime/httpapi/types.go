@@ -29,10 +29,10 @@ type submitMessageRequest struct {
 }
 
 type openAIChatCompletionRequest struct {
-	Model     string                 `json:"model,omitempty"`
-	Messages  []openAIChatMessage    `json:"messages"`
-	Stream    bool                   `json:"stream,omitempty"`
-	MaxTokens int                    `json:"max_tokens,omitempty"`
+	Model     string              `json:"model,omitempty"`
+	Messages  []openAIChatMessage `json:"messages"`
+	Stream    bool                `json:"stream,omitempty"`
+	MaxTokens int                 `json:"max_tokens,omitempty"`
 	// Tools is the OpenAI Chat Completions `tools` array. The
 	// upstream LLM client (internal/core/conversation/openai_client.go)
 	// converts each entry to the wire shape {type:"function",
@@ -81,32 +81,32 @@ type openAIToolFunction struct {
 // ExtraFields so future upstreams can pick them up without us
 // having to widen this struct every time Anthropic adds one).
 type anthropicMessageRequest struct {
-	Model            string                  `json:"model"`
-	Messages         []anthropicMessage      `json:"messages"`
-	System           interface{}             `json:"system,omitempty"`
-	Tools            []anthropicTool         `json:"tools,omitempty"`
-	MaxTokens        int                     `json:"max_tokens"`
-	Stream           bool                    `json:"stream,omitempty"`
-	Thinking         *anthropicThinkingConfig `json:"thinking,omitempty"`
-	ExtraHeaders     map[string]string       `json:"extra_headers,omitempty"`
+	Model        string                   `json:"model"`
+	Messages     []anthropicMessage       `json:"messages"`
+	System       interface{}              `json:"system,omitempty"`
+	Tools        []anthropicTool          `json:"tools,omitempty"`
+	MaxTokens    int                      `json:"max_tokens"`
+	Stream       bool                     `json:"stream,omitempty"`
+	Thinking     *anthropicThinkingConfig `json:"thinking,omitempty"`
+	ExtraHeaders map[string]string        `json:"extra_headers,omitempty"`
 	// Optional request knobs forwarded verbatim. Pi sets most of
 	// these when the user picks a reasoning level / max_tokens
 	// override. We forward the fields the upstream understands
 	// (temperature, top_p, top_k, stop_sequences, metadata,
 	// service_tier, tool_choice) and ignore the rest.
-	Temperature      *float64                 `json:"temperature,omitempty"`
-	TopP             *float64                 `json:"top_p,omitempty"`
-	TopK             *int                     `json:"top_k,omitempty"`
-	StopSequences    []string                 `json:"stop_sequences,omitempty"`
-	Metadata         *anthropicMetadata       `json:"metadata,omitempty"`
-	ServiceTier      string                   `json:"service_tier,omitempty"`
-	ToolChoice       *anthropicToolChoice     `json:"tool_choice,omitempty"`
+	Temperature   *float64             `json:"temperature,omitempty"`
+	TopP          *float64             `json:"top_p,omitempty"`
+	TopK          *int                 `json:"top_k,omitempty"`
+	StopSequences []string             `json:"stop_sequences,omitempty"`
+	Metadata      *anthropicMetadata   `json:"metadata,omitempty"`
+	ServiceTier   string               `json:"service_tier,omitempty"`
+	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
 	// ExtraFields is a passthrough for any other top-level field
 	// the Anthropic SDK might add (mcp_servers, context_management,
 	// container, etc.). The conversion logic merges this map into
 	// the wire payload so the upstream sees them verbatim, but the
 	// gateway never crashes on unknown keys.
-	ExtraFields      map[string]interface{}   `json:"-"`
+	ExtraFields map[string]interface{} `json:"-"`
 }
 
 // anthropicMetadata mirrors Anthropic's `metadata.user_id` shape.
@@ -129,8 +129,8 @@ type anthropicThinkingConfig struct {
 }
 
 type anthropicMessage struct {
-	Role    string                    `json:"role"`
-	Content []anthropicContentBlock   `json:"content"`
+	Role    string                  `json:"role"`
+	Content []anthropicContentBlock `json:"content"`
 }
 
 type anthropicContentBlock struct {
@@ -156,15 +156,15 @@ type anthropicContentBlock struct {
 	// text plus an opaque `signature` the client must echo back on
 	// the next turn. We forward both fields so multi-turn Pi sessions
 	// keep their thinking context intact.
-	Thinking        string `json:"thinking,omitempty"`
-	Signature       string `json:"signature,omitempty"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 	// Cache control breakpoint. Pi attaches this to the last user
 	// message and the system prompt to mark them as ephemeral-cache
 	// breakpoints. We propagate it to the upstream so Anthropic-style
 	// cache routing (when the upstream is `anthropic_native`) honours
 	// it; compatible providers that don't understand the field see
 	// it dropped at the wire-shaping layer.
-	CacheControl    *anthropicCacheControl `json:"cache_control,omitempty"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicCacheControl struct {
@@ -173,9 +173,9 @@ type anthropicCacheControl struct {
 }
 
 type anthropicImageSource struct {
-	Type       string `json:"type"`
-	MediaType  string `json:"media_type,omitempty"`
-	Data       string `json:"data,omitempty"`
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
 }
 
 type anthropicTool struct {
@@ -185,21 +185,21 @@ type anthropicTool struct {
 }
 
 type anthropicResponse struct {
-	ID        string                  `json:"id"`
-	Type      string                  `json:"type"`
-	Role      string                  `json:"role"`
-	Content   []anthropicResponseBlock `json:"content"`
-	Model     string                  `json:"model"`
-	StopReason string                 `json:"stop_reason,omitempty"`
-	StopSequence *string              `json:"stop_sequence,omitempty"`
-	Usage     *anthropicUsage         `json:"usage,omitempty"`
+	ID           string                   `json:"id"`
+	Type         string                   `json:"type"`
+	Role         string                   `json:"role"`
+	Content      []anthropicResponseBlock `json:"content"`
+	Model        string                   `json:"model"`
+	StopReason   string                   `json:"stop_reason,omitempty"`
+	StopSequence *string                  `json:"stop_sequence,omitempty"`
+	Usage        *anthropicUsage          `json:"usage,omitempty"`
 }
 
 type anthropicResponseBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	Type  string                 `json:"type"`
+	Text  string                 `json:"text,omitempty"`
+	ID    string                 `json:"id,omitempty"`
+	Name  string                 `json:"name,omitempty"`
 	Input map[string]interface{} `json:"input,omitempty"`
 	// Thinking block fields. Anthropic's extended thinking returns
 	// blocks of type "thinking" carrying the model's chain-of-thought
@@ -219,13 +219,13 @@ type anthropicResponseBlock struct {
 
 type anthropicUsage struct {
 	InputTokens              int `json:"input_tokens"`
-	OutputTokens            int `json:"output_tokens"`
+	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens    int `json:"cache_read_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 type openAIChatMessage struct {
-	Role    string `json:"role"`
+	Role string `json:"role"`
 	// Content is the assistant's text delta for this chunk. We use
 	// interface{} + omitempty so the JSON encoder can emit either a
 	// string (text deltas) or omit the field entirely (role
@@ -336,17 +336,17 @@ type updateProjectLedgerRequest struct {
 }
 
 type metaResponse struct {
-	LeadName     string       `json:"lead_name"`
-	Model        string       `json:"model"`
-	WorkspaceDir string       `json:"workspace_dir"`
-	AuthRequired bool         `json:"auth_required"`
-	Version      version.Info `json:"version"`
-	ExecutionMode  string   `json:"execution_mode,omitempty"`
-	SSHTarget      string   `json:"ssh_target,omitempty"`
-	SSHWorkspace   string   `json:"ssh_workspace,omitempty"`
-	SSHOptions     []string `json:"ssh_options,omitempty"`
-	DockerImage    string   `json:"docker_image,omitempty"`
-	DockerNetwork  string   `json:"docker_network,omitempty"`
+	LeadName      string       `json:"lead_name"`
+	Model         string       `json:"model"`
+	WorkspaceDir  string       `json:"workspace_dir"`
+	AuthRequired  bool         `json:"auth_required"`
+	Version       version.Info `json:"version"`
+	ExecutionMode string       `json:"execution_mode,omitempty"`
+	SSHTarget     string       `json:"ssh_target,omitempty"`
+	SSHWorkspace  string       `json:"ssh_workspace,omitempty"`
+	SSHOptions    []string     `json:"ssh_options,omitempty"`
+	DockerImage   string       `json:"docker_image,omitempty"`
+	DockerNetwork string       `json:"docker_network,omitempty"`
 }
 
 type updateConfigRequest struct {
@@ -484,6 +484,15 @@ type controlNodeRegistry interface {
 	List(context.Context) ([]noderegistry.NodeView, error)
 	Get(context.Context, string) (noderegistry.NodeView, error)
 	SetCredentialHash(context.Context, string, string) error
+	Delete(context.Context, string) (noderegistry.NodeView, error)
+}
+
+// nodeDisconnector is an optional capability on the control registry: when the
+// registry is wired to the relay hub (center server), deleting a node also
+// forcibly drops its live relay connection. Handlers detect it via type
+// assertion so the handler signature stays stable.
+type nodeDisconnector interface {
+	DisconnectNode(nodeID string)
 }
 
 // nodeOverviewProvider supplies the aggregated observation view for one node.

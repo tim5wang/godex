@@ -761,31 +761,66 @@ func (s *Service) recoverInterruptedTurn(session *sessionState, now time.Time) e
 		return err
 	}
 	if s.cfg != nil && s.cfg.Runtime.Recovery.AutoResumeInterruptedTurns && !session.hasQueuedRecoveryFor(turnID) {
-		recoveryID := session.nextTurnID(now)
-		envelope := message.NewRuntimeEnvelope(
-			message.SourceCommand,
-			session.id,
-			"runtime",
-			fmt.Sprintf("Resume interrupted turn %s from the persisted checkpoint and continue the previous task.", turnID),
-			now,
-			map[string]string{"recovery_of_turn_id": turnID, "kind": "interrupted_turn_recovery"},
-		)
-		session.enqueue(QueuedTurn{
-			ID:        recoveryID,
-			Mode:      QueueModeFollowUp,
-			Status:    "queued",
-			Source:    string(envelope.Source),
-			Sender:    strings.TrimSpace(envelope.Sender),
-			Summary:   turnSummary(envelope.BodyText()),
-			CreatedAt: now,
-			UpdatedAt: now,
-			Envelope:  envelope.Normalized(),
-		})
-		if err := s.writeSessionQueue(session); err != nil {
-			return err
+		// Never auto-recover a turn that is itself an auto-generated recovery
+		// turn. Once a resume has run and was interrupted again (for example
+		// the task is stuck on a bash call that cannot finish), queuing yet
+		// another "Resume interrupted turn …" produces an unbounded chain:
+		// R1 -> resume R1 -> R2 -> resume R2 -> … on every process restart.
+		// Each original turn therefore gets at most one automatic resume
+		// attempt; afterwards the user decides whether to resume manually.
+		if record, ok := session.turnRecordByID(turnID); ok && isRecoveryTurnRecord(record) {
+			session.events.Emit(events.Event{
+				SessionID: session.id,
+				TurnID:    turnID,
+				Type:      events.EventWarningRaised,
+				Timestamp: now,
+				Payload: events.NoticePayload{
+					Message: "A previous automatic resume of this turn was interrupted as well; automatic recovery is disabled to avoid an endless resume loop. Resume manually if you still want to continue this task.",
+				},
+			})
+		} else {
+			recoveryID := session.nextTurnID(now)
+			envelope := message.NewRuntimeEnvelope(
+				message.SourceCommand,
+				session.id,
+				"runtime",
+				fmt.Sprintf("Resume interrupted turn %s from the persisted checkpoint and continue the previous task.", turnID),
+				now,
+				map[string]string{"recovery_of_turn_id": turnID, "kind": "interrupted_turn_recovery"},
+			)
+			session.enqueue(QueuedTurn{
+				ID:        recoveryID,
+				Mode:      QueueModeFollowUp,
+				Status:    "queued",
+				Source:    string(envelope.Source),
+				Sender:    strings.TrimSpace(envelope.Sender),
+				Summary:   turnSummary(envelope.BodyText()),
+				CreatedAt: now,
+				UpdatedAt: now,
+				Envelope:  envelope.Normalized(),
+			})
+			if err := s.writeSessionQueue(session); err != nil {
+				return err
+			}
 		}
 	}
 	return s.persistSession(session, now)
+}
+
+// isRecoveryTurnRecord reports whether a turn record is an auto-generated
+// "Resume interrupted turn …" recovery. The authoritative marker is the
+// envelope metadata written when the recovery was queued; the summary prefix
+// is a defensive fallback for records whose envelope was not persisted.
+func isRecoveryTurnRecord(record TurnRecord) bool {
+	if record.Envelope != nil && record.Envelope.Metadata != nil {
+		if strings.EqualFold(strings.TrimSpace(record.Envelope.Metadata["kind"]), "interrupted_turn_recovery") {
+			return true
+		}
+		if strings.TrimSpace(record.Envelope.Metadata["recovery_of_turn_id"]) != "" {
+			return true
+		}
+	}
+	return strings.HasPrefix(strings.TrimSpace(record.Summary), "Resume interrupted turn")
 }
 
 func interruptedTurnID(items []events.Event) string {

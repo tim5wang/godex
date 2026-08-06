@@ -405,6 +405,12 @@ heartbeat:
 control:
   # Human-readable runtime name in the control plane. Environment override: GODEX_CONTROL_NODE_NAME.
   node_name: {{ yamlString .Control.NodeName }}
+  # Stable node id in the control plane, used by 'godex node exec --node <id>'. Environment override: GODEX_CONTROL_NODE_ID.
+  node_id: {{ yamlString .Control.NodeID }}
+  # Default node id used by 'godex node exec' when --node is omitted. Environment override: GODEX_CONTROL_DEFAULT_NODE.
+  default_node: {{ yamlString .Control.DefaultNode }}
+  # Trust level reported when registering to a center. Environment override: GODEX_CONTROL_TRUST_LEVEL.
+  trust_level: {{ yamlString .Control.TrustLevel }}
   # Optional central Godex service URL for auto-registration. Environment override: GODEX_CONTROL_CENTER_URL.
   center_url: {{ yamlString .Control.CenterURL }}
   # Heartbeat interval in seconds. Environment override: GODEX_CONTROL_HEARTBEAT_SECONDS.

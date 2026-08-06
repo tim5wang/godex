@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Descriptions, Empty, Progress, Space, Table, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Descriptions, Empty, Progress, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { ArrowLeftOutlined, CheckOutlined, CodeOutlined, FileTextOutlined, ReloadOutlined, CommentOutlined, StopOutlined } from "@ant-design/icons";
 import { useNavigate, useParams } from "react-router-dom";
 import { useI18n } from "../../i18n";
@@ -55,22 +55,28 @@ export function NodeDetailPage() {
   return (
     <main className="page-shell">
       <Space direction="vertical" size={16} style={{ width: "100%" }}>
-        <Space>
+        <Space wrap>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate("/nodes")}>
             {t("nodes.back")}
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => void query.refetch()}>
             {t("nodes.refresh")}
           </Button>
-          <Button icon={<CommentOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("chat")}>
-            {t("nodes.openChat")}
-          </Button>
-          <Button icon={<CodeOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("terminal")}>
-            {t("nodes.openTerminal")}
-          </Button>
-          <Button icon={<FileTextOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("files")}>
-            {t("nodes.openFiles")}
-          </Button>
+          <Tooltip title={node?.relay_status !== "connected" ? t("nodes.remoteDisabledHint") : undefined}>
+            <Button icon={<CommentOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("chat")}>
+              {t("nodes.openChat")}
+            </Button>
+          </Tooltip>
+          <Tooltip title={node?.relay_status !== "connected" ? t("nodes.remoteDisabledHint") : undefined}>
+            <Button icon={<CodeOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("terminal")}>
+              {t("nodes.openTerminal")}
+            </Button>
+          </Tooltip>
+          <Tooltip title={node?.relay_status !== "connected" ? t("nodes.remoteDisabledHint") : undefined}>
+            <Button icon={<FileTextOutlined />} disabled={node?.relay_status !== "connected"} onClick={() => openRemote("files")}>
+              {t("nodes.openFiles")}
+            </Button>
+          </Tooltip>
         </Space>
 
         {query.isError ? <Alert type="error" showIcon message={t("nodes.detailLoadError")} /> : null}
@@ -140,6 +146,7 @@ export function NodeDetailPage() {
             rowKey="id"
             dataSource={overview?.sessions ?? []}
             pagination={false}
+            scroll={{ x: 560 }}
             locale={{ emptyText: <Empty description={t("nodes.noSessions")} /> }}
             columns={[
               { title: "ID", dataIndex: "id" },
@@ -166,6 +173,7 @@ export function NodeDetailPage() {
             rowKey="id"
             dataSource={overview?.jobs ?? []}
             pagination={false}
+            scroll={{ x: 640 }}
             locale={{ emptyText: <Empty description={t("nodes.noJobs")} /> }}
             columns={[
               { title: "ID", dataIndex: "id" },
@@ -194,6 +202,7 @@ export function NodeDetailPage() {
             rowKey="id"
             dataSource={overview?.approvals ?? []}
             pagination={false}
+            scroll={{ x: 700 }}
             locale={{ emptyText: <Empty description={t("nodes.noApprovals")} /> }}
             columns={[
               { title: "ID", dataIndex: "id" },
@@ -242,6 +251,7 @@ export function NodeDetailPage() {
               rowKey={(row, index) => `${row.time}-${index}`}
               dataSource={[...(overview.recent_events ?? [])].reverse()}
               pagination={{ pageSize: 10, size: "small" }}
+              scroll={{ x: 620 }}
               columns={[
                 {
                   title: t("nodes.eventTime"),

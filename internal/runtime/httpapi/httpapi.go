@@ -26,6 +26,7 @@ import (
 	rtchannels "github.com/tim5wang/godex/internal/runtime/channels"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
+	"github.com/tim5wang/godex/internal/services/localbash"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/usage"
@@ -73,22 +74,22 @@ func NewHandlerWithRuntime(
 		cfg := manager.Current()
 		exec := cfg.Tools.Execution
 		writeJSON(w, http.StatusOK, metaResponse{
-			LeadName:       cfg.LeadName,
-			Model:          cfg.Model,
-			WorkspaceDir:   cfg.WorkspaceDir,
-			AuthRequired:   strings.TrimSpace(cfg.WebToken) != "",
-			Version:        version.Current(),
-			ExecutionMode:  exec.Mode,
-			SSHTarget:      exec.SSHTarget,
-			SSHWorkspace:   exec.SSHWorkspace,
-			SSHOptions:     exec.SSHOptions,
-			DockerImage:    exec.DockerImage,
-			DockerNetwork:  exec.DockerNetwork,
+			LeadName:      cfg.LeadName,
+			Model:         cfg.Model,
+			WorkspaceDir:  cfg.WorkspaceDir,
+			AuthRequired:  strings.TrimSpace(cfg.WebToken) != "",
+			Version:       version.Current(),
+			ExecutionMode: exec.Mode,
+			SSHTarget:     exec.SSHTarget,
+			SSHWorkspace:  exec.SSHWorkspace,
+			SSHOptions:    exec.SSHOptions,
+			DockerImage:   exec.DockerImage,
+			DockerNetwork: exec.DockerNetwork,
 		})
 	}))
 	protected := withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	})
+	}, relayTrustChecker(manager))
 	mux.Handle("GET /config/meta", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, manager.Meta())
 	})))
@@ -182,6 +183,25 @@ func NewHandlerWithRuntime(
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return
+		}
+		writeJSON(w, http.StatusOK, node)
+	})))
+	mux.Handle("DELETE /control/nodes/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if controlRegistry == nil {
+			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
+			return
+		}
+		id := r.PathValue("id")
+		node, err := controlRegistry.Delete(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		// Drop the node's live relay connection if the registry is wired to
+		// the relay hub (center server); otherwise the node would keep its
+		// tunnel open after deletion.
+		if disconnector, ok := controlRegistry.(nodeDisconnector); ok {
+			disconnector.DisconnectNode(id)
 		}
 		writeJSON(w, http.StatusOK, node)
 	})))
@@ -322,7 +342,7 @@ func NewHandlerWithRuntime(
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"imported": added,
+			"imported":  added,
 			"providers": coreproviders.List(manager.Current()),
 		})
 	})))
@@ -348,7 +368,7 @@ func NewHandlerWithRuntime(
 		// Otherwise use existing web-token-protected handler
 		protected := withBearerAuthProvider(func() string {
 			return manager.Current().WebToken
-		})
+		}, relayTrustChecker(manager))
 		protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleOpenAIChatCompletions(w, r, service)
 		})).ServeHTTP(w, r)
@@ -388,6 +408,49 @@ func NewHandlerWithRuntime(
 		writeError(w, http.StatusUnauthorized, fmt.Errorf("Invalid API Key. Please provide a valid proxy key with gdx_ prefix or use the configured web token."))
 	}))
 
+	// POST /v1/exec - Run a shell command on this node and stream its output
+	// as SSE events ({output, final, exit_code}). Used by the center-side
+	// "godex node exec" jump-host command through the relay proxy.
+	mux.Handle("POST /v1/exec", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Command      string `json:"command"`
+			WorkspaceDir string `json:"workspace_dir"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if strings.TrimSpace(req.Command) == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("missing command"))
+			return
+		}
+		workspaceDir := strings.TrimSpace(req.WorkspaceDir)
+		if workspaceDir == "" {
+			workspaceDir = manager.Current().WorkspaceDir
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming unsupported"))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		chunks := localbash.RunBash(r.Context(), workspaceDir, req.Command)
+		for chunk := range chunks {
+			data, _ := json.Marshal(map[string]any{
+				"output":    chunk.Output,
+				"final":     chunk.Final,
+				"exit_code": chunk.ExitCode,
+			})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	})))
+
 	// GET /v1/models - List available models (OpenAI-compatible format)
 	// Requires gdx_ API key authentication
 	mux.Handle("GET /v1/models", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -405,9 +468,9 @@ func NewHandlerWithRuntime(
 		var openAIModels []map[string]interface{}
 		for _, m := range models {
 			openAIModels = append(openAIModels, map[string]interface{}{
-				"id":      m.PublicModel,
-				"object":  "model",
-				"created": time.Now().Unix(),
+				"id":       m.PublicModel,
+				"object":   "model",
+				"created":  time.Now().Unix(),
 				"owned_by": "godex",
 			})
 		}
@@ -1765,9 +1828,20 @@ func collectAnthropicResponse(ctx context.Context, service *backend.Service, ses
 }
 
 // ---- Usage Gateway Chat Completions ----
-func withBearerAuthProvider(token func() string) func(http.Handler) http.Handler {
+// withBearerAuthProvider wraps a handler with web-token auth. When relayTrust
+// checkers are supplied, a request carrying a valid relay-channel trust header
+// (signed with this instance's own node credential) is allowed without the
+// web token — this is what lets the center proxy forward remote operations
+// (chat/terminal/files) to a node that has its own web token configured.
+func withBearerAuthProvider(token func() string, relayTrust ...func(*http.Request) bool) func(http.Handler) http.Handler {
 	return func(handler http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			for _, trust := range relayTrust {
+				if trust != nil && trust(r) {
+					handler.ServeHTTP(w, r)
+					return
+				}
+			}
 			if strings.TrimSpace(token()) == "" {
 				handler.ServeHTTP(w, r)
 				return
@@ -1778,6 +1852,37 @@ func withBearerAuthProvider(token func() string) func(http.Handler) http.Handler
 			}
 			handler.ServeHTTP(w, r)
 		})
+	}
+}
+
+// relayTrustChecker returns a request checker that accepts requests carrying a
+// valid X-Godex-Relay-Trusted header signed with this instance's own node
+// credential (control.credential + node id). Only the node-side relay agent,
+// which holds the credential, can produce a matching signature, so a forged
+// header from an unauthorized client is rejected. Instances without a control
+// credential configured (pure centers) never trust the header.
+func relayTrustChecker(manager *config.Manager) func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		value := strings.TrimSpace(r.Header.Get(relay.RelayTrustHeader))
+		if value == "" {
+			return false
+		}
+		cfg := manager.Current()
+		credential := strings.TrimSpace(cfg.Control.Credential)
+		if credential == "" {
+			return false
+		}
+		nodeID := strings.TrimSpace(cfg.Control.NodeID)
+		if nodeID == "" {
+			// Fall back to the persisted auto-generated id.
+			if id, err := noderegistry.EnsureNodeID(cfg.StateDir, ""); err == nil {
+				nodeID = id
+			}
+		}
+		if nodeID == "" {
+			return false
+		}
+		return relay.ValidateRelayTrust(value, nodeID, credential)
 	}
 }
 

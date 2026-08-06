@@ -30,11 +30,12 @@ import (
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/evalharness"
-	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/nodeobs"
+	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/services/usage"
+	"github.com/tim5wang/godex/internal/services/webpush"
 	"github.com/tim5wang/godex/internal/tui/mintui"
 	"github.com/tim5wang/godex/internal/version"
 )
@@ -243,6 +244,10 @@ func main() {
 			if _, err := controlRegistry.Register(ctx, selfNode); err != nil {
 				return err
 			}
+			// The center itself is a node: it is always reachable locally, so mark
+			// its relay status as connected (the web UI enables Chat/Terminal/Files
+			// for connected nodes and serves them via the local-direct proxy path).
+			_ = controlRegistry.SetRelayStatus(ctx, selfNode.ID, "connected")
 			// Relay hub: accepts outbound WSS connections from nodes and validates
 			// each node's per-node credential against the registry's stored hash.
 			relayHub := relay.NewHub(func(nodeID, credential string) bool {
@@ -270,7 +275,7 @@ func main() {
 			apiHandler := httpapi.NewHandlerWithRuntime(manager, service, channelManager, weixinAuth, cronToolAdapter, heartbeatToolAdapter, serviceRuntimeControl{
 				controller: servicecontrol.NewController(),
 				options:    serviceRuntimeOptions(manager),
-			}, usageService, &registryWithOverview{Registry: controlRegistry, EventStore: eventStore})
+			}, usageService, &registryWithOverview{Registry: controlRegistry, EventStore: eventStore, Hub: relayHub})
 
 			// Combine the API handler with relay endpoints. The webui strips the
 			// leading /api before delegating here, so relay paths are prefix-free:
@@ -279,6 +284,10 @@ func main() {
 			root := http.NewServeMux()
 			root.Handle("/relay", relayHub)
 			proxy := relay.NewProxyHandler(relayHub, relayAuthorize(cfg))
+			// The center also runs as its own node: requests targeting the self
+			// node are served locally (no relay round-trip), so the server can be
+			// operated from its own web UI.
+			proxy.SetLocalHandler(selfNode.ID, apiHandler)
 			// guarded-remote nodes require an explicit approval header on
 			// mutating requests; resolve trust level from the registry.
 			proxy.TrustLevel = func(nodeID string) string {
@@ -290,6 +299,14 @@ func main() {
 			}
 			root.Handle("/control/nodes/{id}/proxy/", proxy)
 			root.Handle("/control/nodes/{id}/forward", relay.NewForwardHandler(relayHub, relayAuthorize(cfg)))
+			// Web Push: in-memory subscriptions, VAPID keys persisted across
+			// restarts so browser subscriptions keep working. The center only
+			// relays live events — no durable push history.
+			pushService, err := webpush.LoadOrCreate(cfg.StateDir)
+			if err != nil {
+				return err
+			}
+			root.Handle("/push/", httpapi.NewPushHandler(pushService, relayAuthorize(cfg)))
 			root.Handle("/", apiHandler)
 			handler, err := webui.NewHandler(root, filepath.Join(cfg.WorkspaceDir, "internal", "uiassets", "embedded_dist"))
 			if err != nil {
@@ -511,10 +528,20 @@ func firstNonEmpty(values ...string) string {
 
 // registryWithOverview combines the node registry with the relay observation
 // store so the httpapi handler can serve both node CRUD endpoints and the
-// aggregated per-node overview from a single argument.
+// aggregated per-node overview from a single argument. It also carries the
+// relay hub so deleting a node can drop its live relay connection.
 type registryWithOverview struct {
 	*noderegistry.Registry
 	*relay.EventStore
+	Hub *relay.Hub
+}
+
+// DisconnectNode forcibly closes the node's relay connection (httpapi delete
+// endpoint calls this after removing the node from the registry).
+func (r *registryWithOverview) DisconnectNode(nodeID string) {
+	if r.Hub != nil {
+		r.Hub.Disconnect(nodeID)
+	}
 }
 
 func remoteControlHeartbeat(cfg *config.Config, selfNode noderegistry.NodeInput, selfEndpoint string) app.LifecycleService {

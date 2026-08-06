@@ -508,6 +508,21 @@ func (s *sessionState) interruptedTurnIDFromRecords() string {
 	return ""
 }
 
+// turnRecordByID returns a clone of the turn record with the given id.
+func (s *sessionState) turnRecordByID(turnID string) (TurnRecord, bool) {
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return TurnRecord{}, false
+	}
+	s.turnsMu.RLock()
+	defer s.turnsMu.RUnlock()
+	idx := turnRecordIndex(s.turns, turnID)
+	if idx < 0 {
+		return TurnRecord{}, false
+	}
+	return cloneTurnRecord(s.turns[idx]), true
+}
+
 func (s *sessionState) replayEvents(opts EventReplayOptions) []events.Event {
 	if s == nil || s.timeline == nil {
 		return nil

@@ -31,3 +31,19 @@
 - [x] godex的默认(repl)命令行对话里，似乎不能支持权限审批，入口可以改一下， godex命令默认是tui实现，去掉godex tui命令，增加godex repl命令
 
 - [x] godex用read_file 用着用着就改用bash了，是因为read_file 的 start_line 和 limit并不生效，无法完成代码阅读任务，在这里添乱呢
+
+- godex steer 似乎无效
+
+- godex web ui chat界面的流式输出和工具调用日志前后顺序和时序不一致了，只有一轮交互结束后agent输出结果了才顺序一致
+
+- godex web ui底部的 文件变动汇总，最好有一个每个文件的增减行数、总工增减行数信息
+
+- godex 这个 session 一直卡在 bash 调用，无法通过“停止当前任务”按钮结束任务： web-57f1193df4f3c290，点了stop,再发送消息卡在了发送中
+
+- godex web ui chat界面，输出过程中不能保证文本和工具日志的顺序，只在输出最终结果时能保证，能优化优化吗？
+
+- godex web ui chat界面上，滚动条会被模型输出强行拽到最新位置，我希望在拖动滚动条看历史消息时，不会被强制滚动打断, 并且工具日志展开后，json 背景是黑色，json key也是黑色，字符不可见
+
+- godex /compact 效果不好，压缩信息丢失太严重了，我270k上下文，一下压成了16k, 压缩结果丢弃了 agent每轮输出，我能想到的相对比较好的做法是保留目标、中间用户输入和agent输出，如果压缩主要集中在对工具结果的裁剪上，比如截掉 70%的工具调用记录
+
+- Resume interrupted turn turn-1786035120490268000-2 from the persisted checkpoint and continue the previous task. 这个很鬼扯

@@ -1,12 +1,17 @@
 package tooling
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -579,5 +584,40 @@ func TestEditFilesMultiRejectsEmptyAndOversize(t *testing.T) {
 	}
 	if _, err := executor.EditFilesMulti([]FileEditBatch{{Path: "a.txt"}}); err == nil {
 		t.Fatal("expected error for empty edits")
+	}
+}
+
+func TestRunCommandContextKillsProcessTreeOnCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX process groups required")
+	}
+
+	// sh spawns a sleep child that inherits the stdout/stderr pipe write end
+	// (the semicolon forces a real fork; `sh -c "sleep 300"` would exec in
+	// place and defeat the test). Killing only the direct child
+	// (exec.CommandContext behaviour) leaves sleep alive, the pipe open, and
+	// cmd.Wait() blocked until sleep exits (here 30s). runCommandContext must
+	// kill the whole process group so the call returns promptly on
+	// cancellation.
+	var stdout bytes.Buffer
+	cmd := exec.Command("sh", "-c", "sleep 30; echo done")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stdout
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+
+	start := time.Now()
+	err := runCommandContext(ctx, cmd)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected context cancellation error, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("expected prompt return after cancellation, took %v", elapsed)
 	}
 }

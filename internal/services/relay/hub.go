@@ -46,15 +46,15 @@ type StatusHook func(nodeID string, online bool)
 type EventSink func(nodeID string, frame Frame)
 
 type hubConn struct {
-	hub     *Hub
-	nodeID  string
-	ws      *websocket.Conn
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	pending map[string]chan Frame
+	hub        *Hub
+	nodeID     string
+	ws         *websocket.Conn
+	writeMu    sync.Mutex
+	mu         sync.Mutex
+	pending    map[string]chan Frame
 	tcpStreams map[string]chan Frame
-	lastPong time.Time
-	closed   bool
+	lastPong   time.Time
+	closed     bool
 }
 
 // Hub accepts outbound WebSocket connections from nodes, maintains the
@@ -63,9 +63,9 @@ type Hub struct {
 	validate     CredentialValidator
 	pingInterval time.Duration
 
-	mu       sync.Mutex
-	conns    map[string]*hubConn
-	nextReq  atomic.Int64
+	mu         sync.Mutex
+	conns      map[string]*hubConn
+	nextReq    atomic.Int64
 	statusHook StatusHook
 	eventSink  EventSink
 
@@ -152,6 +152,18 @@ func (h *Hub) pingLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// Disconnect forcibly closes the relay connection for a node. Used when the
+// node is deleted from the registry; safe to call for offline/unknown nodes.
+func (h *Hub) Disconnect(nodeID string) {
+	h.mu.Lock()
+	conn, ok := h.conns[nodeID]
+	h.mu.Unlock()
+	if !ok {
+		return
+	}
+	_ = conn.ws.Close()
 }
 
 // IsOnline reports whether a node currently holds a live relay connection.

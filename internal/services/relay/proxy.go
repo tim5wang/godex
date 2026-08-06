@@ -13,9 +13,18 @@ import (
 // the relay channel, translating the user-facing control-plane URL
 // (/control/nodes/{id}/proxy/{path...}) into a relay request. Streaming
 // responses (SSE/chat events) are relayed in real time.
+//
+// When the center also runs as its own node (self node), requests targeting
+// that node are served locally via localHandler instead of going over the
+// relay channel, so the server can be operated from its own web UI without a
+// loopback relay connection.
 type ProxyHandler struct {
-	hub      *Hub
+	hub       *Hub
 	authorize func(*http.Request) bool
+	// localNodeID + localHandler: when the target node id equals localNodeID
+	// and a local handler is wired, the request is served in-process.
+	localNodeID  string
+	localHandler http.Handler
 	// Timeout bounds a single forwarded request; zero (default) follows the
 	// client context so SSE-style long-lived streams are not cut short.
 	Timeout time.Duration
@@ -43,6 +52,14 @@ func NewProxyHandler(hub *Hub, authorize func(*http.Request) bool) *ProxyHandler
 	return &ProxyHandler{hub: hub, authorize: authorize}
 }
 
+// SetLocalHandler wires an in-process handler for the given node id (normally
+// the center's own self node). Requests targeting that id are served locally
+// instead of being forwarded over the relay channel.
+func (p *ProxyHandler) SetLocalHandler(nodeID string, handler http.Handler) {
+	p.localNodeID = nodeID
+	p.localHandler = handler
+}
+
 func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.authorize != nil && !p.authorize(r) {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
@@ -54,6 +71,17 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	nodeID, after, ok := strings.Cut(rest, "/proxy/")
 	if !ok || nodeID == "" {
 		http.Error(w, `{"error":"invalid proxy path"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Local direct: the center also runs as its own node. Serve the request
+	// in-process with the path the local httpapi expects (relay prefix
+	// stripped), keeping body/query/headers untouched.
+	if p.localHandler != nil && nodeID == p.localNodeID {
+		clone := r.Clone(r.Context())
+		clone.URL.Path = "/" + after
+		clone.RequestURI = ""
+		p.localHandler.ServeHTTP(w, clone)
 		return
 	}
 

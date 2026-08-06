@@ -1253,13 +1253,13 @@ func TestManagerUpdateLightpandaConfig(t *testing.T) {
 	// Step 1: Update lightpanda config via the UI save path.
 	view, err := manager.Update(t.Context(), UpdateRequest{
 		Values: map[string]any{
-			"tools.lightpanda.enabled":       true,
-			"tools.lightpanda.binary_path":   "/usr/local/bin/lightpanda",
-			"tools.lightpanda.auto_download": true,
-			"tools.lightpanda.search_engine": "duckduckgo",
+			"tools.lightpanda.enabled":         true,
+			"tools.lightpanda.binary_path":     "/usr/local/bin/lightpanda",
+			"tools.lightpanda.auto_download":   true,
+			"tools.lightpanda.search_engine":   "duckduckgo",
 			"tools.lightpanda.wait_network_ms": 3000,
-			"tools.lightpanda.obey_robots":   true,
-			"tools.lightpanda.log_level":     "info",
+			"tools.lightpanda.obey_robots":     true,
+			"tools.lightpanda.log_level":       "info",
 		},
 	})
 	if err != nil {

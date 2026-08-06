@@ -21,11 +21,11 @@ import (
 type AgentConfig struct {
 	// CenterURL is the hub endpoint. It may be ws:// / wss:// (used verbatim)
 	// or an https:// center origin, in which case the agent appends /api/relay.
-	CenterURL string
-	NodeID    string
+	CenterURL  string
+	NodeID     string
 	Credential string
-	Version   string
-	Caps      []string
+	Version    string
+	Caps       []string
 	// Handler is the node's local HTTP API surface (httpapi handler).
 	Handler http.Handler
 	// ForwardAllow is the node's forward_allow allowlist (host:port entries,
@@ -182,11 +182,16 @@ func (a *Agent) connectOnce(ctx context.Context) error {
 		}
 		switch frame.Type {
 		case FramePing:
+			a.writeMu.Lock()
 			_ = writeFrame(conn, Frame{Type: FramePong, Seq: frame.Seq})
+			a.writeMu.Unlock()
 		case FrameRequest:
-			if err := a.serveRequest(ctx, conn, frame); err != nil {
-				return err
-			}
+			// Serve forwarded requests concurrently so a long-lived handler (e.g.
+			// an SSE event stream) never blocks this read loop: the loop must
+			// keep answering hub pings, otherwise the hub's 30s read deadline
+			// drops the relay connection and every later proxy request fails
+			// with 503 node offline.
+			go a.serveRequest(ctx, conn, frame)
 		case FrameTCPOpen:
 			a.handleTCPOpen(conn, frame)
 		case FrameTCPData:
@@ -208,6 +213,12 @@ func (a *Agent) serveRequest(ctx context.Context, conn *websocket.Conn, frame Fr
 	for key, value := range frame.Headers {
 		req.Header.Set(key, value)
 	}
+	// Prove to the local httpapi that this request arrived over the
+	// authenticated relay channel: only this node holds its credential, so
+	// only the relay agent can produce a matching trust signature. The
+	// center-side proxy never forwards this header from the outside, so its
+	// presence means the caller already passed the center's own auth.
+	req.Header.Set(RelayTrustHeader, SignRelayTrust(a.cfg.NodeID, a.cfg.Credential))
 
 	// The streamWriter sends SSE-style output as relay stream frames in real
 	// time; plain handlers still produce a single buffered response.
@@ -217,6 +228,8 @@ func (a *Agent) serveRequest(ctx context.Context, conn *websocket.Conn, frame Fr
 }
 
 func (a *Agent) sendError(conn *websocket.Conn, reqID string, err error) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	return writeFrame(conn, Frame{
 		Type:   FrameError,
 		ReqID:  reqID,
@@ -239,6 +252,8 @@ func (a *Agent) SendEvent(kind string, payload any) error {
 	if conn == nil {
 		return errors.New("relay agent not connected")
 	}
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	return writeFrame(conn, Frame{
 		Type:    FrameEvent,
 		Kind:    kind,
@@ -324,6 +339,8 @@ func (a *Agent) closeDial(connID string) {
 }
 
 func (a *Agent) sendTCPData(conn *websocket.Conn, connID string, chunk []byte) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	return writeFrame(conn, Frame{
 		Type:    FrameTCPData,
 		Payload: tcpDataPayloadJSON(connID),
@@ -332,6 +349,8 @@ func (a *Agent) sendTCPData(conn *websocket.Conn, connID string, chunk []byte) e
 }
 
 func (a *Agent) sendTCPClose(conn *websocket.Conn, connID, reason string) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	return writeFrame(conn, Frame{Type: FrameTCPClose, Payload: mustTCPClosePayload(connID, reason)})
 }
 

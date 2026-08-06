@@ -92,6 +92,10 @@ deploy-linux: build-linux
 	@echo "[deploy] compressing godex-linux-amd64 (gzip)..."
 	@gzip -c godex-linux-amd64 > godex-linux-amd64.gz
 	@echo "[deploy] binary: $$(ls -lh godex-linux-amd64 | awk '{print $$5}') -> gz: $$(ls -lh godex-linux-amd64.gz | awk '{print $$5}')"
+	# Only the systemd unit (system scope, Caddy -> :3801) must run. Installing the
+	# user-scope service too would start a second instance that shares
+	# /root/.godex/control/nodes.json and overwrites the relay status written by
+	# the system instance, causing intermittent 503 "node offline" errors.
 	scp godex-linux-amd64.gz mycloud:/tmp/godex-linux-amd64.gz \
-	&& ssh mycloud "gunzip -f /tmp/godex-linux-amd64.gz && mv /tmp/godex-linux-amd64 /opt/godex/godex && chmod +x /opt/godex/godex && cd /opt/godex && ./godex service uninstall && ./godex service install --addr 127.0.0.1:3800 && ./godex service start" \
-	&& ssh mycloud "systemctl stop godex.service && systemctl start godex.service" && rm -f godex-linux-amd64.gz godex-linux-amd64
+	&& ssh mycloud "gunzip -f /tmp/godex-linux-amd64.gz && mv /tmp/godex-linux-amd64 /opt/godex/godex && chmod +x /opt/godex/godex && cd /opt/godex && ./godex service uninstall && systemctl stop godex.service && systemctl start godex.service" \
+	&& rm -f godex-linux-amd64.gz godex-linux-amd64

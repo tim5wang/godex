@@ -13,10 +13,23 @@
 
 import type { CreateTerminalResponse, TerminalInputRequest, TerminalOutputChunk } from "./terminalMock";
 import { useNodeContextStore } from "../store/nodeContext";
+import { useSettingsStore } from "../store/settings";
 
 // ---- internal buffer per terminal ----
 
 export type TerminalStatus = "idle" | "connecting" | "connected" | "error" | "exited";
+
+// Bearer token for center API auth. Terminal endpoints are unprotected when
+// called directly (/v1/terminal/*), but in remote mode requests go through the
+// center proxy (/api/control/nodes/{id}/proxy/...) which enforces the web
+// token via relayAuthorize — without this header the proxy returns 401.
+function authHeaders(): HeadersInit {
+  const token = useSettingsStore.getState().token;
+  if (!token) {
+    return {};
+  }
+  return { Authorization: `Bearer ${token}` };
+}
 
 type TerminalState = {
   cursor: number;
@@ -25,6 +38,7 @@ type TerminalState = {
   status: TerminalStatus;
   error: string;
   poller: ReturnType<typeof setInterval> | null;
+  flushTimer: ReturnType<typeof setTimeout> | null;
   baseUrl: string;
   serverTerminalId?: string;
   pendingInput: string[];
@@ -51,7 +65,8 @@ async function fetchOutput(terminalId: string): Promise<void> {
   const serverTerminalId = state.serverTerminalId ?? terminalId;
   try {
     const resp = await fetch(
-      `${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}/output?cursor=${state.cursor}`
+      `${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}/output?cursor=${state.cursor}`,
+      { headers: authHeaders() },
     );
     if (!resp.ok) {
       if (resp.status === 404) {
@@ -94,9 +109,26 @@ async function postTerminalInput(state: TerminalState, terminalId: string, data:
   const serverTerminalId = state.serverTerminalId ?? terminalId;
   await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}/input`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ data }),
   });
+}
+
+// Input coalescing window: key presses arriving within this window are batched
+// into one POST. Fast typing produces many onData events; without coalescing
+// every keystroke becomes a separate HTTP request, which over the center relay
+// proxy makes the terminal feel laggy. 40ms keeps echo latency imperceptible
+// while cutting request count by an order of magnitude.
+const INPUT_FLUSH_MS = 40;
+
+function scheduleFlush(terminalId: string): void {
+  const state = terminals.get(terminalId);
+  if (!state || state.exited) return;
+  if (state.flushTimer) return;
+  state.flushTimer = setTimeout(() => {
+    if (state.flushTimer) state.flushTimer = null;
+    flushPendingInput(terminalId);
+  }, INPUT_FLUSH_MS);
 }
 
 function flushPendingInput(terminalId: string): void {
@@ -104,15 +136,16 @@ function flushPendingInput(terminalId: string): void {
   if (!state || state.exited || !state.serverTerminalId || state.pendingInput.length === 0) return;
   const pending = [...state.pendingInput];
   state.pendingInput = [];
+  // Batch all pending input into a single request; PTY writes are ordered so
+  // concatenation preserves keystroke order.
+  const combined = pending.join("");
   void (async () => {
-    for (let index = 0; index < pending.length; index += 1) {
-      const data = pending[index]!;
-      try {
-        await postTerminalInput(state, terminalId, data);
-      } catch {
-        state.pendingInput = [...pending.slice(index), ...state.pendingInput];
-        return;
-      }
+    try {
+      await postTerminalInput(state, terminalId, combined);
+    } catch {
+      // Re-queue the batch so nothing typed is lost; a later flush retries it.
+      state.pendingInput = [combined, ...state.pendingInput];
+      scheduleFlush(terminalId);
     }
   })();
 }
@@ -144,6 +177,7 @@ export function createTerminal(workspaceDir?: string, execution?: TerminalExecut
     status: "connecting",
     error: "",
     poller: null,
+    flushTimer: null,
     baseUrl,
     pendingInput: [],
     createdAt: Date.now(),
@@ -154,7 +188,7 @@ export function createTerminal(workspaceDir?: string, execution?: TerminalExecut
     try {
       const resp = await fetch(`${baseUrl}/v1/terminal/create`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           workspaceDir: workspaceDir ?? ".",
           ...(execution?.mode ? { executionMode: execution.mode } : {}),
@@ -232,27 +266,20 @@ export function pollTerminal(
 }
 
 /**
- * Write user input to the terminal. Fires an async POST and
- * returns an empty chunk immediately — the shell echo will appear
- * in the next polling cycle.
+ * Write user input to the terminal. Input is coalesced into a short window
+ * and flushed as one POST, so fast typing does not produce one HTTP request
+ * per keystroke (noticeable over the center relay proxy). The shell echo
+ * appears in the next polling cycle.
  */
 export function writeTerminalInput(
   input: TerminalInputRequest,
   _tick: number,
 ): TerminalOutputChunk {
-  void (async () => {
-    try {
-      const state = terminals.get(input.terminalId);
-      if (!state || state.exited) return;
-      if (!state.serverTerminalId) {
-        state.pendingInput.push(input.data);
-        return;
-      }
-      await postTerminalInput(state, input.terminalId, input.data);
-    } catch {
-      // Best-effort.
-    }
-  })();
+  const state = terminals.get(input.terminalId);
+  if (state && !state.exited) {
+    state.pendingInput.push(input.data);
+    scheduleFlush(input.terminalId);
+  }
   return {
     terminalId: input.terminalId,
     cursor: 0,
@@ -268,12 +295,17 @@ export function destroyTerminal(terminalId: string): void {
   stopPolling(terminalId);
   const state = terminals.get(terminalId);
   if (!state) return;
+  if (state.flushTimer) {
+    clearTimeout(state.flushTimer);
+    state.flushTimer = null;
+  }
   terminals.delete(terminalId);
   const serverTerminalId = state.serverTerminalId ?? terminalId;
   void (async () => {
     try {
       await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(serverTerminalId)}`, {
         method: "DELETE",
+        headers: authHeaders(),
       });
     } catch {
       // Best-effort.
@@ -292,7 +324,7 @@ export function resizeTerminal(terminalId: string, cols: number, rows: number): 
     try {
       await fetch(`${state.baseUrl}/v1/terminal/${encodeURIComponent(state.serverTerminalId!)}/resize`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ cols, rows }),
       });
     } catch {
@@ -325,7 +357,7 @@ export function getTerminalStatus(terminalId: string): { status: TerminalStatus;
 }
 
 /** Polling interval in ms. Matches mock v1.0 cadence. */
-export const TERMINAL_POLL_MS = 500;
+export const TERMINAL_POLL_MS = 150;
 
 /** Max time to wait for backend to respond after create (ms). */
 export const TERMINAL_CONNECT_TIMEOUT_MS = 8000;

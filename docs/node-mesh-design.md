@@ -321,7 +321,7 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
   - 装配：serve 注册 forward 端点 + agent 透传白名单——`cmd/godex/main.go`
   - 端到端验证：`scripts/smoke_forward.sh` PASS（中心跳板命令 → 节点内网 echo 服务往返 + 未列入白名单 target 拒绝）
 - [ ] 节点工作台体验打磨（文件树 + diff + 终端多开 + 长任务面板）
-- [ ] 中心侧 `godex node exec --node <id> <cmd>` 类 CLI 跳板命令（node forward 已落地，exec 后续）；本地 TUI 通过中心连节点
+- [x] 中心侧 `godex node exec --node <id> <cmd>` 类 CLI 跳板命令（✅ 已落地：节点侧新增 `POST /v1/exec` SSE 流式端点，复用 `localbash.RunBash`；CLI `godex node exec --node X 'cmd' [--dir] [--center] [--token]` 经中心 proxy 转发、增量打印流式输出、非零退出码透传——`internal/runtime/httpapi/httpapi.go` + `internal/app/node.go`；`scripts/smoke_exec.sh` PASS）；本地 TUI 通过中心连节点
 - [ ] 跨节点任务编排（可选）：从中心把同一 prompt 派到多节点（借鉴 Orca parallel worktrees，非必须）
 - [ ] 审计报表、存储/健康聚合（doctor per node）
 - 验证：`godex node forward --node 内网A --local 3306 --target 10.0.0.5:3306` 可连内网数据库（✅ smoke_forward.sh 已证：本地端口数据经中心 relay → 节点拨号 → 内网服务往返）
@@ -330,8 +330,8 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 
 **结论**：Web UI 已自带移动端适配（viewport + 720/900/1180px media query + 移动导航抽屉），手机浏览器直接打开中心地址即可，**不需要 React Native**。手机访问流程与桌面完全一致：手机浏览器 → 中心 Web UI → 中心 `nodeProxy` 代理 → 目标内网节点（复用 Phase 3 同一套控制面 API）。
 
-- [ ] 移动端体验补强（可选）：PWA manifest + service worker（主屏图标/离线缓存）、终端触屏键盘、审批按钮触屏优化
-- [ ] 推送（✅ 已纳入）：Web Push（中心不持久化历史，只推实时事件）
+- [ ] 移动端体验补强（✅ 已纳入 Web Push，PWA 待做）：PWA manifest + service worker（主屏图标/离线缓存）、终端触屏键盘、审批按钮触屏优化
+- [x] 推送（✅ 已完成 2026-08-06）：Web Push（中心不持久化历史，只推实时事件）——`internal/services/webpush`（VAPID 密钥生成/持久化到 state/push_keys.json + 内存订阅注册表 + `Notify` 发送，失败端点自动剔除）；中心端点 `/api/push/{public-key,subscribe,unsubscribe,test}`（`internal/runtime/httpapi/push.go`，web token 鉴权）；前端 `ui/web/public/sw.js`（service worker）+ `lib/push.ts`（订阅/测试）+ Settings「通知」区块；`scripts/smoke_push.sh` PASS
 - [ ] 实验性「手机即节点」（✅ 已立项）：godex 编译到 Android（`GOOS=android GOARCH=arm64`，依赖基本纯 Go：modernc sqlite / gorilla websocket / creack-pty 的 linux tag 匹配 android），在 Termux 类环境跑本地 agent，作为节点注册到中心——手机本身成为节点，对应「保留移动端本地 agent 能力」的诉求。iOS 因沙箱限制（无 shell/任意进程/PTY）不作为本地 agent 目标，仅用浏览器。
 - 说明：手机只是另一类客户端 + 可选节点；内网节点无需任何改动。
 

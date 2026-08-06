@@ -242,6 +242,9 @@ type HeartbeatConfig struct {
 // ControlConfig controls multi-runtime registration and observability.
 type ControlConfig struct {
 	NodeName            string
+	NodeID              string
+	DefaultNode         string
+	TrustLevel          string
 	CenterURL           string
 	Credential          string
 	HeartbeatSeconds    int

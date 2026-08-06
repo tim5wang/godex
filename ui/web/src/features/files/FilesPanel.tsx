@@ -3,6 +3,8 @@ import { Alert, Button, Input, Segmented, Space, Spin, Typography, message, Moda
 import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, FolderOpenOutlined, SaveOutlined } from "@ant-design/icons";
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
+import { DiffView } from "../../components/DiffView";
+import { computeLineDiff } from "./diffLines";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { useLayoutStore } from "../../store/layout";
 import { useSettingsStore } from "../../store/settings";
@@ -370,6 +372,7 @@ function FilesPanelDock(props: FilesPanelProps) {
             <FilePreview
               selectedPath={selectedPath}
               previewContent={previewContent}
+              editedContent={editedContent}
               previewLoading={previewLoading}
               previewError={previewError}
               onAttachFile={props.onAttachFile ? attachSelected : undefined}
@@ -453,6 +456,7 @@ function FilesPanelDock(props: FilesPanelProps) {
             <FilePreview
               selectedPath={selectedPath}
               previewContent={previewContent}
+              editedContent={editedContent}
               previewLoading={previewLoading}
               previewError={previewError}
               onAttachFile={props.onAttachFile ? attachSelected : undefined}
@@ -478,6 +482,7 @@ function parentDir(path: string): string {
 function FilePreview(props: {
   selectedPath?: string;
   previewContent: string;
+  editedContent?: string | null;
   previewLoading: boolean;
   previewError: string;
   onAttachFile?: () => void;
@@ -488,7 +493,11 @@ function FilePreview(props: {
   t: (key: string) => string;
 }) {
   const isMarkdown = isMarkdownPath(props.selectedPath);
-  const [viewMode, setViewMode] = useState<"source" | "render">("source");
+  const [viewMode, setViewMode] = useState<"source" | "render" | "diff">("source");
+  const diffText =
+    props.editedContent != null && props.editedContent !== props.previewContent
+      ? computeLineDiff(props.previewContent, props.editedContent)
+      : "";
 
   return (
     <div data-testid="files-panel-preview-pane" style={{ display: "flex", height: "100%", minWidth: 0, minHeight: 0, flexDirection: "column" }}>
@@ -510,10 +519,24 @@ function FilePreview(props: {
             <Segmented
               size="small"
               value={viewMode}
-              onChange={(value) => setViewMode(value as "source" | "render")}
+              onChange={(value) => setViewMode(value as "source" | "render" | "diff")}
               options={[
                 { value: "source", label: props.t("files.viewSource") || "Source" },
                 { value: "render", label: props.t("files.viewRender") || "Render" },
+                ...(props.hasUnsavedChanges
+                  ? [{ value: "diff", label: props.t("files.viewDiff") || "Diff" }]
+                  : []),
+              ]}
+              data-testid="files-panel-preview-mode"
+            />
+          ) : props.hasUnsavedChanges ? (
+            <Segmented
+              size="small"
+              value={viewMode}
+              onChange={(value) => setViewMode(value as "source" | "render" | "diff")}
+              options={[
+                { value: "source", label: props.t("files.viewSource") || "Source" },
+                { value: "diff", label: props.t("files.viewDiff") || "Diff" },
               ]}
               data-testid="files-panel-preview-mode"
             />
@@ -549,6 +572,8 @@ function FilePreview(props: {
           </div>
         ) : props.previewError ? (
           <Alert type="error" showIcon message={props.previewError} />
+        ) : viewMode === "diff" ? (
+          <DiffView diff={diffText} />
         ) : isMarkdown && viewMode === "render" ? (
           <div className="files-markdown-render">
             <MarkdownContent content={props.previewContent} forceMarkdown />

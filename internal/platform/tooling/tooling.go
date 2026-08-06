@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 
@@ -666,7 +667,7 @@ func (e *WorkspaceExecutor) RunShellBudgetedWithOptions(ctx context.Context, com
 	})
 	cmd.Stdout = output
 	cmd.Stderr = output
-	err = cmd.Run()
+	err = runCommandContext(ctx, cmd)
 	closeErr := output.Close()
 	if err == nil {
 		err = closeErr
@@ -734,6 +735,72 @@ func (e *WorkspaceExecutor) shellCommand(ctx context.Context, command string) (*
 		return e.sshShellCommand(ctx, cfg, command)
 	default:
 		return nil, fmt.Errorf("unsupported execution backend %q", cfg.Mode)
+	}
+}
+
+// runCommandContext runs an *exec.Cmd and guarantees that on context
+// cancellation the whole process tree is killed, not just the direct child.
+// exec.CommandContext alone only SIGKILLs the immediate child; descendants
+// that inherited the stdout/stderr pipe keep it open, so cmd.Wait() blocks
+// forever and a "stuck bash call" can never be stopped by cancel or timeout.
+// Starting the child in its own process group and killing the group closes
+// every inherited pipe, so Wait() always returns promptly.
+func runCommandContext(ctx context.Context, cmd *exec.Cmd) error {
+	if cmd == nil {
+		return fmt.Errorf("nil command")
+	}
+	if err := configureCommandProcessGroup(cmd); err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	select {
+	case err := <-waitDone:
+		return err
+	case <-ctx.Done():
+		killCommandProcessGroup(cmd)
+		<-waitDone
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf("command interrupted")
+	}
+}
+
+// configureCommandProcessGroup places the child in its own process group so
+// the whole tree can be killed together. Windows has no POSIX process groups;
+// there we fall back to killing the direct child only.
+func configureCommandProcessGroup(cmd *exec.Cmd) error {
+	if cmd == nil {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	return nil
+}
+
+// killCommandProcessGroup terminates the child and every descendant. On Unix
+// the negative pid addresses the process group created by Setpgid; Windows
+// gets a plain process kill.
+func killCommandProcessGroup(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = cmd.Process.Kill()
+		return
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		// Fall back to the direct child so cancellation still makes progress.
+		_ = cmd.Process.Kill()
 	}
 }
 
@@ -1015,7 +1082,6 @@ func (e *WorkspaceExecutor) EditFile(path, oldText, newText string) (string, err
 	}
 	return "OK", nil
 }
-
 
 type editRange struct {
 	start int

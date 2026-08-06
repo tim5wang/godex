@@ -94,6 +94,9 @@ func baseSchema() []SectionSchema {
 			Description: "Runtime node identity, central registration, and heartbeat settings.",
 			Fields: []FieldSchema{
 				{Path: "control.node_name", Label: "Node Name", Description: "Human-readable name for this Godex runtime in the control plane.", Type: "string", Env: "GODEX_CONTROL_NODE_NAME"},
+				{Path: "control.node_id", Label: "Node ID", Description: "Stable node id in the control plane, used by 'godex node exec --node <id>'.", Type: "string", Env: "GODEX_CONTROL_NODE_ID"},
+				{Path: "control.default_node", Label: "Default Node", Description: "Default node id used by 'godex node exec' when --node is omitted.", Type: "string", Env: "GODEX_CONTROL_DEFAULT_NODE"},
+				{Path: "control.trust_level", Label: "Trust Level", Description: "Trust level reported when registering to a center: trusted or guarded-remote.", Type: "string", Env: "GODEX_CONTROL_TRUST_LEVEL"},
 				{Path: "control.center_url", Label: "Center URL", Description: "Optional central Godex service URL for auto-registration, relay connection, and heartbeat.", Type: "string", Env: "GODEX_CONTROL_CENTER_URL"},
 				{Path: "control.credential", Label: "Node Credential", Description: "Per-node credential (ck_...) issued by the center for relay authentication.", Type: "string", Secret: true, Env: "GODEX_CONTROL_CREDENTIAL"},
 				{Path: "control.heartbeat_seconds", Label: "Heartbeat Seconds", Description: "Node heartbeat interval when registering to a center service.", Type: "int", Env: "GODEX_CONTROL_HEARTBEAT_SECONDS"},

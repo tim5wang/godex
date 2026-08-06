@@ -36,23 +36,23 @@ type NodeInput struct {
 }
 
 type NodeView struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Endpoint      string            `json:"endpoint,omitempty"`
-	WorkspaceDir  string            `json:"workspace_dir,omitempty"`
-	GodexHome     string            `json:"godex_home,omitempty"`
-	Status        string            `json:"status"`
-	Version       string            `json:"version,omitempty"`
-	Capabilities  []string          `json:"capabilities,omitempty"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	LastSeen      time.Time         `json:"last_seen,omitempty"`
-	RegisteredAt  time.Time         `json:"registered_at,omitempty"`
-	UpdatedAt     time.Time         `json:"updated_at,omitempty"`
-	Source        string            `json:"source,omitempty"`
-	CredentialHash string           `json:"credential_hash,omitempty"`
-	RelayStatus   string            `json:"relay_status,omitempty"`
-	LastHealth    time.Time         `json:"last_health,omitempty"`
-	TrustLevel    string            `json:"trust_level,omitempty"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Endpoint       string            `json:"endpoint,omitempty"`
+	WorkspaceDir   string            `json:"workspace_dir,omitempty"`
+	GodexHome      string            `json:"godex_home,omitempty"`
+	Status         string            `json:"status"`
+	Version        string            `json:"version,omitempty"`
+	Capabilities   []string          `json:"capabilities,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	LastSeen       time.Time         `json:"last_seen,omitempty"`
+	RegisteredAt   time.Time         `json:"registered_at,omitempty"`
+	UpdatedAt      time.Time         `json:"updated_at,omitempty"`
+	Source         string            `json:"source,omitempty"`
+	CredentialHash string            `json:"credential_hash,omitempty"`
+	RelayStatus    string            `json:"relay_status,omitempty"`
+	LastHealth     time.Time         `json:"last_health,omitempty"`
+	TrustLevel     string            `json:"trust_level,omitempty"`
 }
 
 type Registry struct {
@@ -61,6 +61,7 @@ type Registry struct {
 	offlineAfter time.Duration
 	now          func() time.Time
 	nodes        map[string]NodeView
+	deleted      map[string]time.Time
 }
 
 func New(path string, offlineAfter time.Duration) (*Registry, error) {
@@ -72,6 +73,7 @@ func New(path string, offlineAfter time.Duration) (*Registry, error) {
 		offlineAfter: offlineAfter,
 		now:          time.Now,
 		nodes:        map[string]NodeView{},
+		deleted:      map[string]time.Time{},
 	}
 	if err := r.load(); err != nil {
 		return nil, err
@@ -97,6 +99,9 @@ func (r *Registry) Register(ctx context.Context, input NodeInput) (NodeView, err
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
+	// Re-registering the same id clears its delete tombstone: a genuinely
+	// re-onboarded node (fresh credential) may join again.
+	delete(r.deleted, input.ID)
 	node := r.mergeLocked(input, now)
 	node.Status = StatusOnline
 	node.LastSeen = now
@@ -114,6 +119,11 @@ func (r *Registry) Heartbeat(ctx context.Context, id string, input NodeInput) (N
 	input.ID = id
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// A deleted node must not resurrect itself through heartbeat; only an
+	// explicit re-register (new onboarding) clears the tombstone.
+	if _, gone := r.deleted[id]; gone {
+		return NodeView{}, fmt.Errorf("node %s was deleted; re-register it to rejoin", id)
+	}
 	now := r.now()
 	node := r.mergeLocked(input, now)
 	node.Status = StatusOnline
@@ -148,6 +158,27 @@ func (r *Registry) SeedConfigured(ctx context.Context, inputs []NodeInput) error
 
 // SetCredentialHash stores the hash of a per-node credential. The plaintext
 // credential is never persisted; only the digest is kept for hello validation.
+// Delete removes a node from the registry and records a tombstone so the node
+// cannot resurrect itself via heartbeat. The node's credential hash is dropped
+// with it, so any live relay connection is invalidated on its next hello.
+func (r *Registry) Delete(ctx context.Context, id string) (NodeView, error) {
+	_ = ctx
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return NodeView{}, fmt.Errorf("missing node id")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return NodeView{}, os.ErrNotExist
+	}
+	delete(r.nodes, id)
+	r.deleted[id] = r.now()
+	node.Status = StatusOffline
+	return node, r.saveLocked()
+}
+
 func (r *Registry) SetCredentialHash(ctx context.Context, id, hash string) error {
 	_ = ctx
 	id = strings.TrimSpace(id)
@@ -284,7 +315,11 @@ func (r *Registry) load() error {
 		return err
 	}
 	var stored struct {
-		Nodes []NodeView `json:"nodes"`
+		Nodes   []NodeView `json:"nodes"`
+		Deleted []struct {
+			ID        string    `json:"id"`
+			DeletedAt time.Time `json:"deleted_at"`
+		} `json:"deleted,omitempty"`
 	}
 	if err := json.Unmarshal(data, &stored); err != nil {
 		return fmt.Errorf("parse node registry: %w", err)
@@ -298,6 +333,11 @@ func (r *Registry) load() error {
 			node.Name = node.ID
 		}
 		r.nodes[node.ID] = node
+	}
+	for _, del := range stored.Deleted {
+		if id := strings.TrimSpace(del.ID); id != "" {
+			r.deleted[id] = del.DeletedAt
+		}
 	}
 	return nil
 }
@@ -314,9 +354,24 @@ func (r *Registry) saveLocked() error {
 		nodes = append(nodes, node)
 	}
 	sort.SliceStable(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	deleted := make([]struct {
+		ID        string    `json:"id"`
+		DeletedAt time.Time `json:"deleted_at"`
+	}, 0, len(r.deleted))
+	for id, at := range r.deleted {
+		deleted = append(deleted, struct {
+			ID        string    `json:"id"`
+			DeletedAt time.Time `json:"deleted_at"`
+		}{ID: id, DeletedAt: at})
+	}
+	sort.SliceStable(deleted, func(i, j int) bool { return deleted[i].ID < deleted[j].ID })
 	payload, err := json.MarshalIndent(struct {
-		Nodes []NodeView `json:"nodes"`
-	}{Nodes: nodes}, "", "  ")
+		Nodes   []NodeView `json:"nodes"`
+		Deleted []struct {
+			ID        string    `json:"id"`
+			DeletedAt time.Time `json:"deleted_at"`
+		} `json:"deleted,omitempty"`
+	}{Nodes: nodes, Deleted: deleted}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -327,8 +382,23 @@ func (r *Registry) saveLocked() error {
 	return os.Rename(tmp, r.path)
 }
 
-func EnsureNodeID(stateDir string) (string, error) {
+func EnsureNodeID(stateDir, preferred string) (string, error) {
 	path := filepath.Join(stateDir, "node.json")
+	preferred = strings.TrimSpace(preferred)
+	if preferred != "" {
+		// An explicitly configured node_id (control.node_id / node join --id)
+		// is the source of truth: it wins over any earlier auto-generated or
+		// stale id in node.json, and node.json is updated to match so the id
+		// stays consistent across restarts.
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return "", err
+		}
+		payload, _ := json.MarshalIndent(map[string]string{"id": preferred}, "", "  ")
+		if err := os.WriteFile(path, append(payload, '\n'), 0600); err != nil {
+			return "", err
+		}
+		return preferred, nil
+	}
 	data, err := os.ReadFile(path)
 	if err == nil {
 		var stored struct {
@@ -359,7 +429,7 @@ func SelfNode(cfg *config.Config, endpoint string) (NodeInput, error) {
 }
 
 func SelfNodeWithVersion(cfg *config.Config, endpoint, godexVersion string) (NodeInput, error) {
-	id, err := EnsureNodeID(cfg.StateDir)
+	id, err := EnsureNodeID(cfg.StateDir, cfg.Control.NodeID)
 	if err != nil {
 		return NodeInput{}, err
 	}
@@ -379,6 +449,7 @@ func SelfNodeWithVersion(cfg *config.Config, endpoint, godexVersion string) (Nod
 		WorkspaceDir: cfg.WorkspaceDir,
 		GodexHome:    cfg.HomeDir,
 		Version:      firstNonEmpty(godexVersion, "dev"),
+		TrustLevel:   strings.TrimSpace(cfg.Control.TrustLevel),
 		Capabilities: RuntimeCapabilities(cfg),
 	}, nil
 }

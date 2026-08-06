@@ -13,24 +13,24 @@ import (
 
 // ImportedProvider holds a single provider discovered from another coding agent.
 type ImportedProvider struct {
-	Source         string                       `json:"source"`
-	ProviderID     string                       `json:"provider_id"`
-	ProviderConfig llm.ProviderConfig           `json:"provider_config"`
-	Models         []llm.ModelConfig            `json:"models"`
+	Source         string             `json:"source"`
+	ProviderID     string             `json:"provider_id"`
+	ProviderConfig llm.ProviderConfig `json:"provider_config"`
+	Models         []llm.ModelConfig  `json:"models"`
 }
 
 // CodexTOMLConfig parses the top-level keys we care about in ~/.codex/config.toml.
 type codexTOMLConfig struct {
-	ModelProvider   string                       `toml:"model_provider"`
-	ModelCatalogJSON string                     `toml:"model_catalog_json"`
-	ModelProviders  map[string]codexProviderDef `toml:"model_providers"`
+	ModelProvider    string                      `toml:"model_provider"`
+	ModelCatalogJSON string                      `toml:"model_catalog_json"`
+	ModelProviders   map[string]codexProviderDef `toml:"model_providers"`
 }
 
 type codexProviderDef struct {
-	Name                   string `toml:"name"`
-	WireAPI                string `toml:"wire_api"`
-	BaseURL                string `toml:"base_url"`
-	RequiresOpenAIAuth     bool   `toml:"requires_openai_auth"`
+	Name                    string `toml:"name"`
+	WireAPI                 string `toml:"wire_api"`
+	BaseURL                 string `toml:"base_url"`
+	RequiresOpenAIAuth      bool   `toml:"requires_openai_auth"`
 	ExperimentalBearerToken string `toml:"experimental_bearer_token"`
 }
 
@@ -157,10 +157,10 @@ func codexToGodexProvider(id string, def codexProviderDef, aisModels []llm.Model
 	}
 
 	return llm.ProviderConfig{
-		Name: name,
-		Type: providerType,
+		Name:    name,
+		Type:    providerType,
 		BaseURL: baseURL,
-		Models: models,
+		Models:  models,
 		// Do NOT copy Codex's bearer token or OAuth tokens; the user must
 		// configure credentials again through godex.
 		APIKeyEnv: credentialsEnvForProvider(id, providerType),

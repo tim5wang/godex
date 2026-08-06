@@ -1148,7 +1148,7 @@ func rootHelpText() string {
 		"    ask        Run a one-shot prompt",
 		"    command    Run a slash command",
 		"    longtask   Create, run, and inspect durable story-loop tasks",
-		"    node       Jump-host commands: forward a local port to a node's network",
+		"    node       Jump-host commands: forward ports or exec commands on a node's network",
 		"",
 		"  Web & service",
 		"    serve      Start Web UI and HTTP API",

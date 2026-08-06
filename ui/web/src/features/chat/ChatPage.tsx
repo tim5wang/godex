@@ -19,7 +19,7 @@ import { writeClipboardText } from "../../lib/clipboard";
 import { type ComposerSubmission, Composer } from "../../components/Composer";
 import { TaskCenterPanel } from "./TaskCenterPanel";
 import { SessionsRail } from "../chat-v2/SessionsRail";
-import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined } from "@ant-design/icons";
+import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined } from "@ant-design/icons";
 import { DOCK_TAB_META } from "../chat-v2/DockRail";
 import { MessageFeedV2 } from "../../components/MessageFeedV2";
 import { FilesPanel } from "../files/FilesPanel";
@@ -151,6 +151,26 @@ export function ChatPage() {
       return next;
     });
   }, [v2ActiveDockTab]);
+
+  // Terminal dock supports multiple live instances (multi-open tabs). Each
+  // tab keeps its own xterm/PTY session mounted; switching tabs only toggles
+  // visibility via CSS data-active, so sessions survive tab switches.
+  const [terminalTabs, setTerminalTabs] = useState<number[]>([0]);
+  const [activeTerminal, setActiveTerminal] = useState(0);
+  const addTerminalTab = () => {
+    const next = terminalTabs.length ? Math.max(...terminalTabs) + 1 : 0;
+    setTerminalTabs((prev) => [...prev, next]);
+    setActiveTerminal(next);
+  };
+  const closeTerminalTab = (id: number) => {
+    setTerminalTabs((prev) => {
+      const next = prev.filter((t) => t !== id);
+      if (activeTerminal === id) {
+        setActiveTerminal(next.length ? next[next.length - 1] : 0);
+      }
+      return next;
+    });
+  };
 
   const beginV2LeftResize = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -1344,7 +1364,42 @@ export function ChatPage() {
                 ) : null}
                 {mountedDockTabs.has("terminal") ? (
                   <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "terminal" ? "true" : "false"}>
-                    <TerminalPanel workspaceDir={sessionWorkspaceDir} execution={terminalExecution} />
+                    <div className="chat-v2-terminal-tabs" data-testid="chat-v2-terminal-tabs">
+                      {terminalTabs.map((id) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={`chat-v2-terminal-tab${activeTerminal === id ? " chat-v2-terminal-tab-active" : ""}`}
+                          onClick={() => setActiveTerminal(id)}
+                        >
+                          <span className="chat-v2-terminal-tab-label">Terminal {id + 1}</span>
+                          {terminalTabs.length > 1 ? (
+                            <CloseOutlined
+                              className="chat-v2-terminal-tab-close"
+                              aria-label={`Close terminal ${id + 1}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                closeTerminalTab(id);
+                              }}
+                            />
+                          ) : null}
+                        </button>
+                      ))}
+                      <button type="button" className="chat-v2-terminal-tab-add" aria-label="New terminal" onClick={addTerminalTab}>
+                        <PlusOutlined />
+                      </button>
+                    </div>
+                    <div className="chat-v2-terminal-panes">
+                      {terminalTabs.map((id) => (
+                        <div
+                          key={id}
+                          className="chat-v2-terminal-pane"
+                          data-active={activeTerminal === id ? "true" : "false"}
+                        >
+                          <TerminalPanel workspaceDir={sessionWorkspaceDir} execution={terminalExecution} />
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
                 {mountedDockTabs.has("tasks") ? (

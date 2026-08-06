@@ -210,6 +210,12 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Heartbeat.DefaultTimezone = asString(value)
 	case "control.node_name":
 		file.Control.NodeName = asString(value)
+	case "control.node_id":
+		file.Control.NodeID = asString(value)
+	case "control.default_node":
+		file.Control.DefaultNode = asString(value)
+	case "control.trust_level":
+		file.Control.TrustLevel = asString(value)
 	case "control.center_url":
 		file.Control.CenterURL = asString(value)
 	case "control.credential":
@@ -540,6 +546,9 @@ func storedValues(file ConfigFile) map[string]any {
 		"heartbeat.default_interval_seconds":                     file.Heartbeat.DefaultIntervalSeconds,
 		"heartbeat.default_timezone":                             file.Heartbeat.DefaultTimezone,
 		"control.node_name":                                      file.Control.NodeName,
+		"control.node_id":                                        file.Control.NodeID,
+		"control.default_node":                                   file.Control.DefaultNode,
+		"control.trust_level":                                    file.Control.TrustLevel,
 		"control.center_url":                                     file.Control.CenterURL,
 		"control.heartbeat_seconds":                              file.Control.HeartbeatSeconds,
 		"control.offline_after_seconds":                          file.Control.OfflineAfterSeconds,
@@ -729,6 +738,9 @@ func effectiveValues(cfg *Config) map[string]any {
 		"heartbeat.default_interval_seconds":                     cfg.Heartbeat.DefaultIntervalSeconds,
 		"heartbeat.default_timezone":                             cfg.Heartbeat.DefaultTimezone,
 		"control.node_name":                                      cfg.Control.NodeName,
+		"control.node_id":                                        cfg.Control.NodeID,
+		"control.default_node":                                   cfg.Control.DefaultNode,
+		"control.trust_level":                                    cfg.Control.TrustLevel,
 		"control.center_url":                                     cfg.Control.CenterURL,
 		"control.heartbeat_seconds":                              cfg.Control.HeartbeatSeconds,
 		"control.offline_after_seconds":                          cfg.Control.OfflineAfterSeconds,

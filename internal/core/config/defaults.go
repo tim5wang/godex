@@ -88,6 +88,9 @@ func defaultConfigFile() ConfigFile {
 		},
 		Control: ControlSection{
 			NodeName:            "",
+			NodeID:              "",
+			DefaultNode:         "",
+			TrustLevel:          "",
 			CenterURL:           "",
 			HeartbeatSeconds:    15,
 			OfflineAfterSeconds: 60,

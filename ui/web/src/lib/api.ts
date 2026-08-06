@@ -364,6 +364,35 @@ export function listControlNodes(token: string | null) {
   return request<ControlNode[]>("/control/nodes", { method: "GET" }, token);
 }
 
+export interface RegisterNodeInput {
+  id: string;
+  name?: string;
+  trust_level?: string;
+}
+
+/** Register a new node on the center so it can later be issued a credential. */
+export function registerControlNode(token: string | null, input: RegisterNodeInput) {
+  return request<ControlNode>("/control/nodes/register", { method: "POST", body: JSON.stringify(input) }, token);
+}
+
+/** Issue (or rotate) a per-node credential for an already-registered node. */
+export function issueNodeCredential(token: string | null, nodeID: string) {
+  return request<{ node_id: string; credential: string }>(
+    `/control/nodes/${encodeURIComponent(nodeID)}/credential`,
+    { method: "POST", body: JSON.stringify({}) },
+    token,
+  );
+}
+
+/** Delete a node: removes it from the registry and drops its relay connection. */
+export function deleteControlNode(token: string | null, nodeID: string) {
+  return request<ControlNode>(
+    `/control/nodes/${encodeURIComponent(nodeID)}`,
+    { method: "DELETE", body: JSON.stringify({}) },
+    token,
+  );
+}
+
 export function getNodeOverview(nodeID: string, token: string | null) {
   return request<NodeOverviewResponse>(`/control/nodes/${encodeURIComponent(nodeID)}/overview`, { method: "GET" }, token);
 }

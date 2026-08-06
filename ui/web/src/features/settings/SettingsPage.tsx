@@ -20,7 +20,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, DeleteOutlined, EyeOutlined, LogoutOutlined, PlusOutlined, QrcodeOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, BellOutlined, CopyOutlined, DeleteOutlined, EyeOutlined, LogoutOutlined, PlusOutlined, QrcodeOutlined, ReloadOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
 import { writeClipboardText } from "../../lib/clipboard";
@@ -49,6 +49,7 @@ import {
 } from "../../lib/api";
 import type { ApplyReport, ChannelStatus, CIKSummary, ConfigFieldSchema, ConfigFieldState, ConfigSectionSchema, DoctorCheck, PackageQualityReport, ProviderModelInfo, ProviderStatus, RuntimeServiceStatus, SecurityEvent, WeixinAuthStatus } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
+import { ensurePushSubscription, pushSupported, sendTestPush } from "../../lib/push";
 
 type LocalFormValues = {
   locale: "en" | "zh";
@@ -317,9 +318,10 @@ export function SettingsPage() {
             key: "client",
             label: t("settings.webClientTitle"),
             children: (
-              <Card>
-                <Form
-                  form={localForm}
+              <>
+                <Card>
+                  <Form
+                    form={localForm}
                   layout="vertical"
                   onFinish={(values) => {
                     setLocale(values.locale);
@@ -350,10 +352,14 @@ export function SettingsPage() {
                   </Space>
                 </Form>
               </Card>
-            ),
-          },
-          {
-            key: "backend",
+                  <Card title={t("settings.pushTitle")} style={{ marginTop: 16 }}>
+                    <NotificationsCard token={token} t={t} />
+                  </Card>
+                </>
+              ),
+            },
+            {
+              key: "backend",
             label: t("settings.backendConfigTitle"),
             children: authRequired && !token ? (
               <Alert type="warning" showIcon message="This server requires `GODEX_WEB_TOKEN`. Save the shared token first to unlock the backend config center." />
@@ -496,6 +502,61 @@ export function SettingsPage() {
         ]}
       />
     </div>
+  );
+}
+
+function NotificationsCard({ token, t }: { token: string; t: (key: string) => string }) {
+  const { message } = AntApp.useApp();
+  const [pushState, setPushState] = useState<{ supported: boolean; permission: string; subscribed: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const supported = pushSupported();
+
+  const enable = async () => {
+    if (!supported) {
+      void message.warning(t("settings.pushUnsupported"));
+      return;
+    }
+    setBusy(true);
+    try {
+      const state = await ensurePushSubscription(token || null);
+      setPushState(state);
+      void message.success(state.subscribed ? t("settings.pushEnabled") : t("settings.pushDenied"));
+    } catch (e: any) {
+      void message.error(e?.message || t("settings.pushFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setBusy(true);
+    try {
+      const notified = await sendTestPush(token || null);
+      void message.success(notified > 0 ? t("settings.pushTestSent") : t("settings.pushNoSubscribers"));
+    } catch (e: any) {
+      void message.error(e?.message || t("settings.pushFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Typography.Text type="secondary">{t("settings.pushSubtitle")}</Typography.Text>
+      {pushState ? (
+        <Tag color={pushState.subscribed ? "green" : "default"}>
+          {pushState.subscribed ? t("settings.pushEnabled") : t("settings.pushDenied")}
+        </Tag>
+      ) : null}
+      <Space wrap>
+        <Button type="primary" icon={<BellOutlined />} loading={busy} disabled={!supported} onClick={() => void enable()}>
+          {t("settings.pushEnable")}
+        </Button>
+        <Button icon={<SendOutlined />} loading={busy} disabled={!supported} onClick={() => void test()}>
+          {t("settings.pushTest")}
+        </Button>
+      </Space>
+    </Space>
   );
 }
 

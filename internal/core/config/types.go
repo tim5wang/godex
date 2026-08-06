@@ -131,6 +131,9 @@ type HeartbeatSection struct {
 
 type ControlSection struct {
 	NodeName            string               `yaml:"node_name"`
+	NodeID              string               `yaml:"node_id"`
+	DefaultNode         string               `yaml:"default_node"`
+	TrustLevel          string               `yaml:"trust_level"`
 	CenterURL           string               `yaml:"center_url"`
 	Credential          string               `yaml:"credential"`
 	HeartbeatSeconds    int                  `yaml:"heartbeat_seconds"`

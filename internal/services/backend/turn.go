@@ -180,6 +180,25 @@ func (s *Service) injectActiveTurn(session *sessionState, envelope message.Envel
 	if err := s.writeSessionTurns(session); err != nil {
 		return nil, true, err
 	}
+	injectedText := normalized.BodyText()
+	if strings.EqualFold(normalized.Metadata["queue_mode"], string(QueueModeSteering)) {
+		// Match the framed text the model receives (see DrainInjections) so
+		// the UI shows exactly what was injected.
+		injectedText = steeringFrame(injectedText)
+	}
+	session.events.Emit(events.Event{
+		SessionID: session.id,
+		TurnID:    activeTurnID,
+		Type:      events.EventUserMessageAccepted,
+		Timestamp: now,
+		Payload: events.MessagePayload{
+			Source:      string(normalized.Source),
+			Sender:      strings.TrimSpace(normalized.Sender),
+			Text:        injectedText,
+			Attachments: normalized.ProtocolAttachments(),
+			Metadata:    map[string]string{"queue_mode": string(normalizeQueueMode(mode))},
+		},
+	})
 	session.events.Emit(events.Event{
 		SessionID: session.id,
 		TurnID:    activeTurnID,
@@ -252,6 +271,12 @@ func (s *Service) startQueuedTurns(session *sessionState) {
 		runCtx := withSessionLock(finishCtx, session.id)
 		_, _ = s.finishAgentTurnLocked(runCtx, session, turn.TurnID, turn.Envelope, turn.RuntimeContext, turn.PriorMessageCount)
 	}()
+}
+
+// steeringFrame wraps a mid-turn steering message so the model treats it as
+// an interruption of the running task instead of a deferred follow-up.
+func steeringFrame(body string) string {
+	return "【用户打断 · Steer】请暂停当前进行中的工作，优先处理这条新指令，并简要说明对原任务的影响：\n\n" + body
 }
 
 func normalizeQueueMode(mode QueueMode) QueueMode {
@@ -584,7 +609,24 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 			summaries := make([]string, 0, len(injected))
 			mode := ""
 			for _, envelope := range injected {
-				messages = append(messages, envelope.ToProtocolMessage(protocol.RoleUser, "", false))
+				injectedMsg := envelope.ToProtocolMessage(protocol.RoleUser, "", false)
+				if envelope.Metadata != nil && strings.EqualFold(envelope.Metadata["queue_mode"], string(QueueModeSteering)) {
+					// Steering is an interruption, not a follow-up: frame the
+					// injected instruction explicitly so the model pauses the
+					// current sub-task instead of treating it as one more
+					// queued user message that can be deferred. The metadata
+					// text/parts must carry the frame too: BuildAPIMessages
+					// rebuilds upgraded user messages from metadata, ignoring
+					// msg.Content.
+					framed := steeringFrame(envelope.BodyText())
+					injectedMsg.Content = []protocol.Block{protocol.TextBlock(framed)}
+					if injectedMsg.Metadata == nil {
+						injectedMsg.Metadata = &protocol.Metadata{}
+					}
+					injectedMsg.Metadata.Text = framed
+					injectedMsg.Metadata.Parts = nil
+				}
+				messages = append(messages, injectedMsg)
 				if summary := turnSummary(envelope.BodyText()); summary != "" {
 					summaries = append(summaries, summary)
 				}

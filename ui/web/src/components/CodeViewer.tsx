@@ -46,7 +46,9 @@ export function CodeViewer({ value, language = "text", className, maxHeight = 34
           EditorView.contentAttributes.of({ "aria-readonly": "true" }),
         ];
 
-        // Follow the OS color scheme like CodeEditor does.
+        // Follow the OS color scheme like CodeEditor does. The host
+        // background must match: the previous hardcoded dark background made
+        // light-mode JSON keys (dark text) invisible.
         if (prefersDark) {
           extensions.push(oneDark);
         }
@@ -75,7 +77,7 @@ export function CodeViewer({ value, language = "text", className, maxHeight = 34
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language]);
+  }, [language, prefersDark]);
 
   // Push external content updates into the existing editor without recreating it.
   useEffect(() => {
@@ -97,7 +99,7 @@ export function CodeViewer({ value, language = "text", className, maxHeight = 34
         style={{
           maxHeight,
           overflow: "auto",
-          background: "#0b1020",
+          background: prefersDark ? "#0b1020" : "var(--godex-panel-muted, #f6f8fa)",
           borderRadius: 8,
           fontSize: 12,
         }}

@@ -1124,6 +1124,30 @@ samp {
   max-width: 860px;
 }
 
+/* Floating "jump to latest" affordance shown when the user scrolled up to
+   read history (auto-scroll only sticks while near the bottom). Sticky keeps
+   it pinned to the bottom of the scrollport without disturbing layout. */
+.chat-feed-jump-latest {
+  position: sticky;
+  bottom: 12px;
+  display: block;
+  margin: 0 auto;
+  border: 1px solid var(--godex-border);
+  border-radius: 999px;
+  background: var(--godex-panel, rgba(255, 255, 255, 0.92));
+  color: var(--godex-text-primary);
+  font-size: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  z-index: 5;
+  transition: opacity 0.15s;
+}
+
+.chat-feed-jump-latest:hover {
+  border-color: var(--godex-accent);
+}
+
 /* Grouped turn bubble: no card chrome, content flows like a document. */
 .chat-feed-v2-bubble-turn .ant-bubble-content,
 .chat-feed-v2-bubble-assistant .ant-bubble-content {
@@ -1242,6 +1266,23 @@ samp {
 
 .changes-card-file-op {
   flex: 0 0 auto;
+}
+
+.changes-card-file-stats {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.changes-card-file-stats .changes-stat-added {
+  color: var(--godex-diff-add-fg, #3fb950);
+}
+
+.changes-card-file-stats .changes-stat-deleted {
+  color: var(--godex-diff-del-fg, #f85149);
+}
+
+.changes-card-total-stats {
+  font-variant-numeric: tabular-nums;
 }
 
 .changes-card-file-diff {

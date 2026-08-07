@@ -50,3 +50,40 @@ describe("computeLineDiff", () => {
     expect(lines).toContain("+new1");
   });
 });
+
+import { countUnifiedDiffStats } from "../../components/ChangesCard";
+
+describe("countUnifiedDiffStats", () => {
+  it("counts added and deleted lines from a unified diff", () => {
+    const diff = [
+      "diff --git a/a.ts b/a.ts",
+      "index 1234567..89abcde 100644",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1,3 +1,4 @@",
+      " context line",
+      "-removed line",
+      "+added line",
+      "+another added",
+      " context",
+    ].join("\n");
+    expect(countUnifiedDiffStats(diff)).toEqual({ added: 2, deleted: 1 });
+  });
+
+  it("ignores meta lines and file headers", () => {
+    const diff = [
+      "diff --git a/x b/x",
+      "index 111..222 100644",
+      "--- a/x",
+      "+++ b/x",
+      "@@ -0,0 +1,2 @@",
+      "+new file line 1",
+      "+new file line 2",
+    ].join("\n");
+    expect(countUnifiedDiffStats(diff)).toEqual({ added: 2, deleted: 0 });
+  });
+
+  it("handles empty diffs", () => {
+    expect(countUnifiedDiffStats("")).toEqual({ added: 0, deleted: 0 });
+  });
+});

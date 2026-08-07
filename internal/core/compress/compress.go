@@ -26,16 +26,29 @@ const (
 	maxSummaryValidation  = 8
 	maxSummaryOpenItems   = 8
 	maxSummaryItemRunes   = 220
-	maxSummaryTotalRunes  = 6500
+	// maxSummaryMetadataRunes bounds the structured metadata sections (goal,
+	// constraints, progress, decisions, files, next steps) so the verbatim
+	// recent user/assistant sections below are not starved.
+	maxSummaryMetadataRunes = 9000
+	// maxSummaryTotalRunes bounds the whole summary message. Recent user
+	// instructions and assistant outputs are appended after the metadata and
+	// are never truncated by the metadata budget, so agent output survives
+	// compaction.
+	maxSummaryTotalRunes = 30000
 	// Verbatim retention budgets for the summary. Recent user instructions and
 	// assistant outputs are preserved nearly verbatim so compaction keeps the
 	// original input/output that matters for the next turn.
 	maxRecentUserMessages      = 8
 	maxRecentUserRunes         = 1600
 	maxRecentUserTotal         = 8000
-	maxRecentAssistantMessages = 6
-	maxRecentAssistantRunes    = 1600
-	maxRecentAssistantTotal    = 6000
+	maxRecentAssistantMessages = 10
+	maxRecentAssistantRunes    = 2000
+	maxRecentAssistantTotal    = 12000
+	// maxRecentToolResultRunes caps medium-size tool results kept in the raw
+	// recent messages after compaction. Trimming tool output (which is usually
+	// the bulk of a long session) keeps agent text outputs and instructions
+	// intact while dropping most of the tool noise.
+	maxRecentToolResultRunes = 4000
 )
 
 // defaultKeepRecent is how many raw recent messages are appended verbatim
@@ -171,17 +184,30 @@ func (c *Compressor) CompactWithSnapshot(messages []protocol.Message, _ string, 
 func sanitizeRecentMessageForContext(msg protocol.Message, transcript string) protocol.Message {
 	cloned := msg.Clone()
 	for i, block := range cloned.Content {
-		if block.Type != protocol.BlockToolResult || !modelcontext.TooLargeForModel(block.Content) {
+		if block.Type != protocol.BlockToolResult {
 			continue
 		}
-		cloned.Content[i].Content = modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
-			ToolUseID:  block.ToolUseID,
-			Bytes:      len([]byte(block.Content)),
-			SHA256:     modelcontext.SHA256Hex(block.Content),
-			Transcript: transcript,
-			Preview:    modelcontext.TruncatedPreview(block.Content),
-			Note:       "Large tool result was removed from compacted model-visible context; the full output is in the saved transcript.",
-		})
+		if modelcontext.TooLargeForModel(block.Content) {
+			cloned.Content[i].Content = modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
+				ToolUseID:  block.ToolUseID,
+				Bytes:      len([]byte(block.Content)),
+				SHA256:     modelcontext.SHA256Hex(block.Content),
+				Transcript: transcript,
+				Preview:    modelcontext.TruncatedPreview(block.Content),
+				Note:       "Large tool result was removed from compacted model-visible context; the full output is in the saved transcript.",
+			})
+			continue
+		}
+		if runes := utf8.RuneCountInString(block.Content); runes > maxRecentToolResultRunes {
+			// Medium-size tool results (the bulk of a long tool loop) are the
+			// main context hog; keep a short head/tail preview instead of the
+			// whole output so agent text outputs and user instructions stay
+			// visible in the compacted history.
+			cloned.Content[i].Content = fmt.Sprintf(
+				"[tool_result_truncated: kept %d of %d runes; full output in transcript %s]\n\n%s",
+				maxRecentToolResultRunes, runes, transcript, truncateRunes(block.Content, maxRecentToolResultRunes),
+			)
+		}
 	}
 	return cloned
 }
@@ -232,13 +258,13 @@ func (c *Compressor) hashMessagesWithSnapshot(messages []protocol.Message, conti
 }
 
 type semanticSummary struct {
-	goals           []string
-	constraints     []string
-	decisions       []string
-	files           map[string]struct{}
-	validation      []string
-	openItems       []string
-	previous        []string
+	goals            []string
+	constraints      []string
+	decisions        []string
+	files            map[string]struct{}
+	validation       []string
+	openItems        []string
+	previous         []string
 	recentUser       string
 	recentAssistant  string
 	recentUsers      []string
@@ -452,6 +478,16 @@ func buildSemanticSummary(messages []protocol.Message, transcript string, at tim
 		builder.WriteString(strings.Join(sortedKeys(state.toolNames, 12), ", "))
 		builder.WriteString("\n")
 	}
+
+	// Snapshot the structured metadata (goal / constraints / progress /
+	// decisions / files / next steps / critical context) before appending the
+	// verbatim sections. The metadata is bounded by its own budget so a long
+	// goals list cannot starve the raw user instructions and assistant
+	// outputs, which are the parts that must survive compaction.
+	metaText := truncateRunes(strings.TrimRight(builder.String(), "\n"), maxSummaryMetadataRunes)
+
+	builder.Reset()
+	builder.WriteString(metaText)
 
 	// Recent user messages verbatim
 	if len(state.recentUsers) > 0 {

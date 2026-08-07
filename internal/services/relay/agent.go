@@ -190,8 +190,19 @@ func (a *Agent) connectOnce(ctx context.Context) error {
 			// an SSE event stream) never blocks this read loop: the loop must
 			// keep answering hub pings, otherwise the hub's 30s read deadline
 			// drops the relay connection and every later proxy request fails
-			// with 503 node offline.
-			go a.serveRequest(ctx, conn, frame)
+			// with 503 node offline. Errors from the goroutine are reported back
+			// as FrameError so the center-side proxy never hangs waiting for a
+			// response that will never arrive.
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						_ = a.sendError(conn, frame.ReqID, fmt.Errorf("handler panic: %v", r))
+					}
+				}()
+				if err := a.serveRequest(ctx, conn, frame); err != nil {
+					_ = a.sendError(conn, frame.ReqID, err)
+				}
+			}()
 		case FrameTCPOpen:
 			a.handleTCPOpen(conn, frame)
 		case FrameTCPData:

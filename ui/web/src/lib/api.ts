@@ -104,6 +104,7 @@ function nodeProxyPath(path: string): string | null {
   const p = path.startsWith("/") ? path : `/${path}`;
   if (
     p.startsWith("/sessions") ||
+    p.startsWith("/models") ||
     p.startsWith("/v1/terminal") ||
     p.startsWith("/files") ||
     p.startsWith("/commands") ||

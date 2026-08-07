@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/tim5wang/godex/internal/core/protocol"
 )
@@ -410,4 +411,96 @@ func TestCountTokensTreatsUnicodeMoreConservatively(t *testing.T) {
 			t.Fatalf("%s: expected %d tokens, got %d", tc.name, tc.want, got)
 		}
 	}
+}
+
+// TestCompactKeepsAgentOutputsBeyondMetadataBudget guards against the old
+// behaviour where the whole summary (metadata + verbatim user/assistant
+// sections) was truncated to 6500 runes, silently dropping the tail — which is
+// where recent assistant outputs lived.
+func TestCompactKeepsAgentOutputsBeyondMetadataBudget(t *testing.T) {
+	dir := t.TempDir()
+	compressor := NewCompressor(dir)
+
+	var messages []protocol.Message
+	for i := 0; i < 12; i++ {
+		// Each round's assistant output is large enough that the old 6500-rune
+		// summary cap would have truncated the whole verbatim section away.
+		userText := fmt.Sprintf("user instruction round %d with some detail to retain %s", i, strings.Repeat("user detail text. ", 12))
+		assistantText := fmt.Sprintf("assistant output round %d summarizing what was done and why %s", i, strings.Repeat("assistant detail text. ", 62))
+		messages = append(messages, protocol.NewTextMessage(protocol.RoleUser, userText))
+		messages = append(messages, protocol.NewTextMessage(protocol.RoleAssistant, assistantText))
+	}
+
+	compact, err := compressor.Compact(messages, "system prompt")
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if len(compact) == 0 {
+		t.Fatalf("expected compacted messages")
+	}
+	summary := protocol.MessageText(compact[0])
+	// The newest assistant output must survive verbatim (not truncated to the
+	// tiny per-item summary cap, not cut by a total summary cap).
+	if !strings.Contains(summary, "assistant output round 11") {
+		t.Fatalf("expected newest assistant output to survive compaction, summary head: %q", truncateForTest(summary, 400))
+	}
+	if !strings.Contains(summary, "user instruction round 11") {
+		t.Fatalf("expected newest user instruction to survive compaction, summary head: %q", truncateForTest(summary, 400))
+	}
+	// Several older rounds' outputs should be preserved too (the old code kept
+	// at most 6 assistant outputs and then truncated the tail away entirely).
+	olderRounds := 0
+	for i := 9; i >= 6; i-- {
+		if strings.Contains(summary, fmt.Sprintf("assistant output round %d", i)) {
+			olderRounds++
+		}
+	}
+	if olderRounds < 2 {
+		t.Fatalf("expected at least 2 of rounds 6-9 to survive, got %d", olderRounds)
+	}
+	if utf8.RuneCountInString(summary) < 10000 {
+		t.Fatalf("expected a substantially larger summary that preserves round-by-round input/output, got %d runes", utf8.RuneCountInString(summary))
+	}
+}
+
+// TestCompactTrimsMediumRecentToolResults verifies that tool results below the
+// 32KB hard limit are still trimmed to a bounded preview so long tool loops do
+// not dominate the compacted history.
+func TestCompactTrimsMediumRecentToolResults(t *testing.T) {
+	dir := t.TempDir()
+	compressor := NewCompressor(dir)
+	medium := strings.Repeat("grep output line with file content\n", 400) // ~15KB, below the 32KB stub threshold
+	messages := []protocol.Message{
+		protocol.NewTextMessage(protocol.RoleUser, "search for x"),
+		protocol.NewMessage(protocol.RoleAssistant, protocol.ToolUseBlock("tool-1", "grep", map[string]interface{}{"pattern": "x"})),
+		protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("tool-1", medium)),
+		protocol.NewTextMessage(protocol.RoleAssistant, "found 400 lines"),
+	}
+
+	compact, err := compressor.Compact(messages, "system prompt")
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	foundTrimmed := false
+	for _, msg := range compact {
+		for _, block := range msg.Content {
+			if block.Type == protocol.BlockToolResult && strings.Contains(block.Content, "tool_result_truncated") {
+				foundTrimmed = true
+				if utf8.RuneCountInString(block.Content) > maxRecentToolResultRunes+512 {
+					t.Fatalf("expected trimmed tool result to stay near budget, got %d runes", utf8.RuneCountInString(block.Content))
+				}
+			}
+		}
+	}
+	if !foundTrimmed {
+		t.Fatalf("expected medium tool result to be trimmed")
+	}
+}
+
+func truncateForTest(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit])
 }

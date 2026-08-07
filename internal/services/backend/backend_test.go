@@ -3779,3 +3779,141 @@ func TestApplyConfigKeepsSessionWorkspaceOverride(t *testing.T) {
 		t.Fatalf("workspace after ApplyConfig = %q, want %q", got, otherDir)
 	}
 }
+
+func TestSteeringMessageInjectedIntoRunningTurn(t *testing.T) {
+	cfg := newTestConfig(t)
+	caller := &stubCaller{
+		responses: []protocol.Response{
+			{Content: []protocol.Block{protocol.TextBlock("first response")}},
+			{Content: []protocol.Block{protocol.TextBlock("steered response")}},
+		},
+		started: make(chan struct{}, 2),
+		block:   make(chan struct{}),
+	}
+	service := newTestService(cfg, caller)
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "steer"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	sessionID := opened.SessionID
+	if _, err := service.SubmitAsync(context.Background(), sessionID, message.NewTextEnvelope(message.SourceWeb, sessionID, cfg.LeadName, "do task A", time.Now())); err != nil {
+		t.Fatalf("submit async: %v", err)
+	}
+	select {
+	case <-caller.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for async turn to start")
+	}
+
+	// While the first model call is in-flight, submit a steering message.
+	steer, err := service.SubmitAsync(context.Background(), sessionID,
+		message.NewTextEnvelope(message.SourceWeb, sessionID, cfg.LeadName, "now switch to task B", time.Now()),
+		SubmitOptions{QueueMode: QueueModeSteering})
+	if err != nil {
+		t.Fatalf("submit steering: %v", err)
+	}
+	if steer.Status != "injected" {
+		t.Fatalf("expected steering message to be injected into running turn, got status %q", steer.Status)
+	}
+
+	// Let the first response through; the runner should drain the injection
+	// and issue a second model request that includes the steering message.
+	close(caller.block)
+	select {
+	case <-caller.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for second model call after injection")
+	}
+
+	var secondReq protocol.Request
+	func() {
+		caller.mu.Lock()
+		defer caller.mu.Unlock()
+		if len(caller.requests) < 2 {
+			return
+		}
+		secondReq = caller.requests[1]
+	}()
+	if len(secondReq.Messages) == 0 {
+		t.Fatalf("expected second model request, got %d requests", len(caller.requests))
+	}
+	found := false
+	for _, m := range secondReq.Messages {
+		if m.Role != protocol.RoleUser {
+			continue
+		}
+		var text string
+		for _, b := range m.Content {
+			if b.Type == protocol.BlockText {
+				text += b.Text + " "
+			}
+		}
+		if strings.Contains(text, "task B") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("steering message missing from second model request: %+v", secondReq.Messages)
+	}
+	// The steering message must be framed as an interruption directive so the
+	// model pauses the running task instead of deferring it like a follow-up.
+	framed := false
+	for _, m := range secondReq.Messages {
+		if m.Role != protocol.RoleUser {
+			continue
+		}
+		var text string
+		for _, b := range m.Content {
+			if b.Type == protocol.BlockText {
+				text += b.Text + " "
+			}
+		}
+		if strings.Contains(text, "Steer") && strings.Contains(text, "task B") {
+			framed = true
+		}
+	}
+	if !framed {
+		var lines []string
+		for _, m := range secondReq.Messages {
+			var text string
+			for _, b := range m.Content {
+				if b.Type == protocol.BlockText {
+					text += b.Text + " | "
+				}
+			}
+			lines = append(lines, m.Role+": "+text)
+		}
+		caller.mu.Lock()
+		reqCount := len(caller.requests)
+		caller.mu.Unlock()
+		t.Fatalf("steering message not framed as interruption in model request (calls=%d):\n%s", reqCount, strings.Join(lines, "\n"))
+	}
+
+	snapshot := waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		return !snapshot.Running
+	})
+	seenSteer := false
+	for _, msg := range snapshot.Messages {
+		if strings.Contains(protocol.MessageText(msg), "task B") {
+			seenSteer = true
+		}
+	}
+	if !seenSteer {
+		t.Fatalf("steering message missing from session messages: %+v", snapshot.Messages)
+	}
+	// Injecting must emit user_message_accepted so the web UI shows the
+	// message immediately instead of leaving a "sending..." placeholder.
+	sawAccepted := false
+	for _, item := range snapshot.Timeline {
+		if item.Type != events.EventUserMessageAccepted {
+			continue
+		}
+		if payload, ok := item.Payload.(events.MessagePayload); ok && strings.Contains(payload.Text, "task B") {
+			sawAccepted = true
+		}
+	}
+	if !sawAccepted {
+		t.Fatalf("expected user_message_accepted for injected steering message, timeline: %+v", snapshot.Timeline)
+	}
+}

@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import type { AttachmentRef, FeedItem, ProtocolBlock, ProtocolMessage, RuntimeEvent, TodoFeedItem, TodoFeedStats } from "../lib/types";
 
+// Monotonic counter for live assistant text segments (store instance scope).
+// Streaming text gets a fresh segment id whenever the model emits text after
+// running tools, keeping the live feed interleaved with tool logs.
+let assistantSegmentCounter = 0;
+
 /**
  * A send that is in flight but not yet reflected in the server
  * snapshot: an optimistic user message or a running slash command
@@ -124,22 +129,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         case "assistant_text_delta": {
           const payload = event.payload as { text?: string };
-          const id = `assistant:${event.turn_id}`;
+          const turnId = event.turn_id || "";
           const background = !state.running;
-          const current = overlayItems.find((item) => item.id === id);
-          if (current) {
-            current.body += payload.text || "";
-            current.summary = firstSummaryLine(current.body);
-            current.turnId = current.turnId ?? (event.turn_id || undefined);
+          // Live interleaving: start a new assistant segment whenever the
+          // previous feed item is a tool/todo (or the message is a background
+          // update), so streaming text that arrives after tool executions is
+          // shown after those tools instead of being absorbed into the first
+          // assistant bubble. Without this the whole turn's text sits at the
+          // position of the first delta and the feed looks out of order until
+          // the final snapshot rebuilds it.
+          const lastItem = overlayItems[overlayItems.length - 1];
+          const sameStream =
+            !!lastItem &&
+            ((background && lastItem.kind === "background") || (!background && lastItem.kind === "assistant")) &&
+            (!lastItem.turnId || !turnId || lastItem.turnId === turnId);
+          if (sameStream) {
+            lastItem.body += payload.text || "";
+            lastItem.summary = firstSummaryLine(lastItem.body);
+            lastItem.turnId = lastItem.turnId ?? turnId;
           } else {
             overlayItems.push({
-              id,
+              id: `assistant:${turnId || "current"}:${++assistantSegmentCounter}`,
               kind: background ? "background" : "assistant",
               title: background ? "Background update" : "GoDex",
               body: payload.text || "",
               timestamp: event.timestamp,
               summary: firstSummaryLine(payload.text || ""),
-              turnId: event.turn_id || undefined,
+              turnId: turnId || undefined,
             });
           }
           status = background ? "Background update received" : "Writing response…";

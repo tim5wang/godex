@@ -119,6 +119,19 @@ export function ChatPage() {
   // the front) and let the user dismiss them.
   const [refluxDismissed, setRefluxDismissed] = useState<Record<string, boolean>>({});
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  // Whether the feed should keep scrolling to the newest content. When the
+  // user scrolls up to read history, stickToBottom turns off and new model
+  // output no longer drags the scrollbar down.
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const stickToBottomRef = useRef(true);
+
+  const handleFeedScroll = () => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+    stickToBottomRef.current = nearBottom;
+    setStickToBottom(nearBottom);
+  };
 
   // V2 layout state: left sessions rail + right dock rail (independent
   // persistence, does not touch the legacy layout store keys).
@@ -936,6 +949,9 @@ export function ChatPage() {
   }, [reviewMergeOpen, reviewMergeSelectedJobId, reviewMergeSummary.items, reviewSubagentMutation, subagentReview?.job_id]);
 
   useEffect(() => {
+    if (!stickToBottomRef.current) {
+      return;
+    }
     const scroller = scrollerRef.current;
     if (scroller) {
       scroller.scrollTop = scroller.scrollHeight;
@@ -1237,7 +1253,7 @@ export function ChatPage() {
               </div>
             ) : (
               <div className="chat-v2-center-body">
-                <div className="chat-feed chat-feed-v2-scroll" ref={scrollerRef} style={{ minHeight: 0 }}>
+                <div className="chat-feed chat-feed-v2-scroll" ref={scrollerRef} onScroll={handleFeedScroll} style={{ minHeight: 0 }}>
                   <div className="chat-feed-inner chat-feed-v2-inner">
                     <MessageFeedV2
                       items={v2ItemsWithPending}
@@ -1253,6 +1269,22 @@ export function ChatPage() {
                       }}
                     />
                   </div>
+                  {!stickToBottom ? (
+                    <button
+                      type="button"
+                      className="chat-feed-jump-latest"
+                      onClick={() => {
+                        const scroller = scrollerRef.current;
+                        if (scroller) {
+                          scroller.scrollTop = scroller.scrollHeight;
+                        }
+                        stickToBottomRef.current = true;
+                        setStickToBottom(true);
+                      }}
+                    >
+                      Jump to latest
+                    </button>
+                  ) : null}
                 </div>
                 <NoteContextBanner
                   note={noteContextQuery.data}

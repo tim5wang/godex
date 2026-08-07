@@ -35,12 +35,14 @@ dev-frontend:
 
 ## dev-fast: Quick rebuild + service restart (skip tsc type-check, uses web-dev)
 dev-fast: web-dev
-	go build -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/godex \
+	go build -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
+		&& cp $(APP).new $(APP) && rm -f $(APP).new \
 		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
 
 ## dev: Full rebuild + service restart (with tsc type-check, legacy)
 dev: web
-	go build -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/godex \
+	go build -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
+		&& cp $(APP).new $(APP) && rm -f $(APP).new \
 		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
 
 # ── Release targets ────────────────────────────────────────────────

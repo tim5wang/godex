@@ -194,13 +194,14 @@ func (s *Service) snapshotFromSession(session *sessionState) Snapshot {
 	session.mu.RUnlock()
 
 	modelMessages := session.agent.GetMessages()
+	displayMessages := snapshotDisplayMessages(modelMessages)
 	pendingPermissions := session.agent.PendingPermissions(session.id)
 	turns := session.snapshotTurnRecords(snapshotTurnLimit)
 	return Snapshot{
 		SessionID:               session.id,
 		Locator:                 locator,
-		Messages:                modelMessages,
-		DisplayMessages:         s.displayMessages(modelMessages),
+		Messages:                displayMessages,
+		DisplayMessages:         displayMessages,
 		Tasks:                   session.agent.TaskMgr().List(),
 		Todos:                   session.agent.TodoMgr().List(),
 		Team:                    session.agent.TeamMgr().List(),

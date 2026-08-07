@@ -71,7 +71,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }),
   syncSnapshot: (messages, running, activeTurnId) =>
     set((state) => {
-      const historyItems = snapshotToItems(messages, expansionMap([...state.historyItems, ...state.overlayItems]));
+      // The backend omits display_messages for empty sessions and emits
+      // messages: null; remote/relay proxies may also return null arrays.
+      // Normalize so the feed never iterates a null message list.
+      const feedMessages = Array.isArray(messages) ? messages : [];
+      const historyItems = snapshotToItems(feedMessages, expansionMap([...state.historyItems, ...state.overlayItems]));
       // Drop optimistic user placeholders whose text already appears in
       // the server snapshot (backstop for a missed user_message_accepted
       // event, e.g. while the SSE stream is reconnecting). Command
@@ -424,8 +428,9 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
   const items: FeedItem[] = [];
   const toolIndices = new Map<string, number>();
 
-  messages.forEach((msg, messageIndex) => {
-    const text = msg.metadata?.text ?? msg.content.filter((block) => block.type === "text").map((block) => block.text || "").join("");
+  (messages ?? []).forEach((msg, messageIndex) => {
+    const blocks = msg.content ?? [];
+    const text = msg.metadata?.text ?? blocks.filter((block) => block.type === "text").map((block) => block.text || "").join("");
     const attachments = msg.metadata?.attachments ?? [];
     // Synthesize a turnId for assistant messages so their text + tool blocks
     // group together in the V2 feed layout. History snapshots don't carry
@@ -445,7 +450,7 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
       });
     }
 
-    msg.content.forEach((block, blockIndex) => {
+    blocks.forEach((block, blockIndex) => {
       if (block.type === "tool_use") {
         const item: FeedItem = {
           id: toolSnapshotId(messageIndex, blockIndex, block),

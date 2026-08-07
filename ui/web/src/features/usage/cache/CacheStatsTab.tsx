@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, Select, Space, Table, Tag, Button } from "antd";
+import { Card, Select, Space, Tag, Button } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import {
   BarChart,
@@ -15,6 +15,7 @@ import {
 import { getCacheStats } from "../../../lib/api";
 import type { CacheStats } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
+import { ResponsiveTable } from "../../../components/ResponsiveTable";
 
 interface CacheStatsTabProps {
   token: string | null;
@@ -111,7 +112,7 @@ export function CacheStatsTab({ token, keyOptions, selectedKeyId, onKeyIdChange 
     <Card
       title={t("usage.cachePanel.title")}
       extra={
-        <Space>
+        <Space wrap>
           {keyOptions && onKeyIdChange && (
             <Select
               value={selectedKeyId}
@@ -178,13 +179,14 @@ export function CacheStatsTab({ token, keyOptions, selectedKeyId, onKeyIdChange 
         </div>
       )}
 
-      <Table
+      <ResponsiveTable
         dataSource={chartData}
         columns={columns}
         rowKey="model"
         loading={statsQuery.isLoading}
         size="small"
         pagination={false}
+        cardTitle={(r) => r.model}
       />
     </Card>
   );

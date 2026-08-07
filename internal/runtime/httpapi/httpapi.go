@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1733,7 +1734,68 @@ func NewHandlerWithRuntime(
 	registerTerminalRoutes(mux)
 	registerPreviewRoutes(mux, manager)
 	registerGitRoutes(mux, protected, manager)
-	return mux
+	return withGzip(mux)
+}
+
+// gzipResponseWriter compresses responses when the client accepts gzip.
+// SSE streams are passed through uncompressed (they need streaming flushes),
+// as are range requests (compressing would break byte serving).
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz       *gzip.Writer
+	compress bool
+	written  bool
+}
+
+func (g *gzipResponseWriter) WriteHeader(status int) {
+	if g.written {
+		return
+	}
+	g.written = true
+	ct := g.Header().Get("Content-Type")
+	if g.Header().Get("Content-Encoding") == "" && !strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+		g.Header().Del("Content-Length")
+		g.Header().Set("Content-Encoding", "gzip")
+		g.Header().Add("Vary", "Accept-Encoding")
+		g.compress = true
+	}
+	g.ResponseWriter.WriteHeader(status)
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !g.written {
+		g.WriteHeader(http.StatusOK)
+	}
+	if g.compress {
+		return g.gz.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
+}
+
+func (g *gzipResponseWriter) Flush() {
+	if g.written && g.compress {
+		_ = g.gz.Flush()
+	}
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (g *gzipResponseWriter) Unwrap() http.ResponseWriter { return g.ResponseWriter }
+
+// withGzip wraps a handler with on-the-fly gzip compression for clients that
+// advertise Accept-Encoding: gzip.
+func withGzip(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "" ||
+			!strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
+	})
 }
 
 // handleAnthropicWebTokenMessages handles POST /v1/messages requests with web token auth.

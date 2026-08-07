@@ -7,7 +7,6 @@ import {
   Input,
   Select,
   Space,
-  Table,
   Tag,
   Typography,
   Descriptions,
@@ -22,6 +21,7 @@ import dayjs from "dayjs";
 import { listUsageSessions, getUsageSessionDetail, listUsageKeys } from "../../../lib/api";
 import type { SessionUsageSummary } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
+import { ResponsiveTable } from "../../../components/ResponsiveTable";
 
 const { Text } = Typography;
 
@@ -172,7 +172,7 @@ export function SessionTab({ token }: SessionTabProps) {
     <Card
       title={t("usage.sessionPanel.title")}
       extra={
-        <Space>
+        <Space wrap>
           {selectedKeyId && (
             <Select
               value={selectedKeyId}
@@ -214,7 +214,7 @@ export function SessionTab({ token }: SessionTabProps) {
         />
       </Space>
 
-      <Table
+      <ResponsiveTable
         dataSource={filteredSessions}
         columns={columns}
         rowKey="session_id"
@@ -231,6 +231,7 @@ export function SessionTab({ token }: SessionTabProps) {
           pageSizeOptions: ["10", "20", "50"],
           total: filteredSessions.length,
         }}
+        cardTitle={(r) => <Text code style={{ fontSize: 12 }}>{r.session_id.length > 24 ? `${r.session_id.slice(0, 24)}...` : r.session_id}</Text>}
       />
 
       <Drawer
@@ -281,7 +282,7 @@ export function SessionTab({ token }: SessionTabProps) {
             <Typography.Title level={5} style={{ marginTop: 24 }}>
               {t("usage.sessionPanel.modelBreakdown")}
             </Typography.Title>
-            <Table
+            <ResponsiveTable
               dataSource={detailQuery.data.model_usage}
               columns={[
                 { title: t("usage.sessionPanel.model"), dataIndex: "model", key: "model" },
@@ -304,6 +305,7 @@ export function SessionTab({ token }: SessionTabProps) {
               rowKey="model"
               size="small"
               pagination={false}
+              cardTitle={(r) => r.model}
             />
           </>
         )}

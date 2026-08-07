@@ -350,7 +350,7 @@ export function ChatPage() {
 
   useEffect(() => {
     if (snapshotQuery.data) {
-      syncSnapshot(snapshotQuery.data.display_messages ?? snapshotQuery.data.messages, snapshotQuery.data.running, snapshotQuery.data.active_turn_id);
+      syncSnapshot(snapshotQuery.data.display_messages ?? snapshotQuery.data.messages ?? [], snapshotQuery.data.running, snapshotQuery.data.active_turn_id);
     }
   }, [snapshotQuery.data, syncSnapshot]);
 
@@ -978,12 +978,6 @@ export function ChatPage() {
         if (commandResult.dispatched_turn_id) {
           setRunningTurn(commandResult.dispatched_turn_id);
         }
-        // Show output for commands like /bash that don't dispatch a turn
-        if (commandResult.output && !commandResult.dispatched_turn_id) {
-          const maxLen = 2000;
-          const displayOutput = commandResult.output.length > maxLen ? commandResult.output.slice(0, maxLen) + `\n\n... (${commandResult.output.length - maxLen} more bytes)` : commandResult.output;
-          message.info(displayOutput, 6);
-        }
       } finally {
         removePendingSend(pendingId);
       }
@@ -1173,7 +1167,7 @@ export function ChatPage() {
 
   return (
     <>
-        <div className="chat-v2-layout" style={{ "--chat-v2-left-width": v2LeftCollapsed ? "48px" : `${v2LeftWidth}px`, "--chat-v2-right-width": v2RightCollapsed ? "48px" : `${v2RightWidth}px` } as CSSProperties}>
+        <div className="chat-v2-layout" style={{ "--chat-v2-left-width": v2LeftCollapsed ? "0px" : `${v2LeftWidth}px`, "--chat-v2-right-width": v2RightCollapsed ? "48px" : `${v2RightWidth}px` } as CSSProperties}>
           {/* Left rail */}
           <div className="chat-v2-left" data-collapsed={v2LeftCollapsed ? "true" : "false"}>
             {!v2LeftCollapsed ? (

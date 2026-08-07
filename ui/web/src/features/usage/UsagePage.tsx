@@ -14,7 +14,6 @@ import {
   Select,
   Space,
   Switch,
-  Table,
   Tabs,
   Tag,
   Typography,
@@ -49,6 +48,7 @@ import { useSettingsStore } from "../../store/settings";
 import { OverviewTab } from "./overview/OverviewTab";
 import { SessionTab } from "./sessions/SessionTab";
 import { CacheStatsTab } from "./cache/CacheStatsTab";
+import { ResponsiveTable } from "../../components/ResponsiveTable";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -486,12 +486,13 @@ export function UsagePage() {
                   </Button>
                 }
               >
-                <Table
+                <ResponsiveTable
                   dataSource={proxyKeys}
                   columns={keyColumns}
                   rowKey="id"
                   loading={keysQuery.isLoading}
                   size="small"
+                  cardTitle={(r) => r.name}
                 />
               </Card>
             </>
@@ -513,12 +514,13 @@ export function UsagePage() {
                 </Button>
               }
             >
-              <Table
+              <ResponsiveTable
                 dataSource={modelsQuery.data ?? []}
                 columns={modelColumns}
                 rowKey="id"
                 loading={modelsQuery.isLoading}
                 size="small"
+                cardTitle={(r) => r.public_model}
               />
             </Card>
           ),
@@ -530,7 +532,7 @@ export function UsagePage() {
             <Card
               title="Token & Credit Summary"
               extra={
-                <Space>
+                <Space wrap>
                   <Select
                     value={summaryRange}
                     onChange={setSummaryRange}
@@ -552,12 +554,13 @@ export function UsagePage() {
                 </Space>
               }
             >
-              <Table
+              <ResponsiveTable
                 dataSource={summaryQuery.data ?? []}
                 columns={summaryColumns}
                 rowKey={(r) => `${r.period ?? "all"}:${r.api_key_id ?? "all"}`}
                 loading={summaryQuery.isLoading}
                 size="small"
+                cardTitle={(r) => `${r.period ?? "all"} · ${r.api_key_id ? r.api_key_id.slice(0, 12) : "all"}`}
               />
             </Card>
           ),
@@ -574,7 +577,7 @@ export function UsagePage() {
             <Card
               title="Usage Calls"
               extra={
-                <Space>
+                <Space wrap>
                   <DatePicker
                     value={dayjs(callsDate)}
                     onChange={(d) => setCallsDate(d?.format("YYYY-MM-DD") ?? dayjs().format("YYYY-MM-DD"))}
@@ -591,12 +594,13 @@ export function UsagePage() {
                 </Space>
               }
             >
-              <Table
+              <ResponsiveTable
                 dataSource={callsQuery.data ?? []}
                 columns={callsColumns}
                 rowKey="id"
                 loading={callsQuery.isLoading}
                 size="small"
+                cardTitle={(r) => `${dayjs(r.timestamp).format("MM-DD HH:mm")} · ${r.public_model}`}
               />
             </Card>
           ),

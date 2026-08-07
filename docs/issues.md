@@ -43,3 +43,11 @@
 - [x] godex web ui chat界面上，滚动条会被模型输出强行拽到最新位置，我希望在拖动滚动条看历史消息时，不会被强制滚动打断, 并且工具日志展开后，json 背景是黑色，json key也是黑色，字符不可见（修复：自动滚动只在贴近底部时生效，上滑看历史不再被打断并提供 Jump to latest；CodeViewer 背景跟随明暗主题）
 
 - [x] godex /compact 效果不好，压缩信息丢失太严重了，我270k上下文，一下压成了16k, 压缩结果丢弃了 agent每轮输出（修复：summary 的 verbatim 用户输入/agent 输出段不再被 6500-rune 总预算截尾（元数据段独立预算，保留最近 10 轮 assistant 输出），工具结果按 4000 runes 裁剪，大结果保留 transcript 引用）
+
+- [x] godex web ui 加载消息慢，尤其是在远程模式下，优化一下消息加载速度（修复：快照不再内联展开 transcript（压缩后的存档可能上万条消息、10+MB），display_messages 改为与原始消息一致并剥离 reasoning_content；HTTP API 增加 gzip 压缩。实测该会话快照 16MB → 982KB（gzip 后 176KB，约 1/90））
+
+- [x] godex web ui chat 的某个session 在移动端设备加载完网页，打开的默认界面是 文件，而不是对话（修复：窄屏（≤900px）下布局默认收起左侧会话栏与右侧文件栏，直接进入对话视图）
+
+- [x] godex web 的这个session web-57f1193df4f3c290，多次回复“收到”，怀疑用户消息被重复注入（排查结论：用户消息在上下文中只出现一次，无重复注入路径；早期“收到”洪流是自动恢复循环每次重启重跑任务所致（已修复：循环护栏 + 进程组 kill）；近期单轮内多次“收到”是模型迭代时的句式习惯，非代码问题。该会话已积累 91 turns / 270k 上下文，建议 /compact 清理后提速）
+
+- [x] usage 界面除了概览，其它几个栏目没适配移动端，尤其是表格，列数比较多在移动端多有不便，在移动端更适合变成双列卡片（修复：新增 ResponsiveTable 组件，≤900px 窄屏下所有 usage 表格自动渲染为自适应卡片网格（适中宽度双列、极窄单列），字段以 label+value 展示并复用列 render；keys/models/summary/calls/sessions/cache 6 个表格全部接入；过滤栏加 wrap 避免溢出；宽屏行为不变）

@@ -25,13 +25,24 @@ function installLocalStorageShim() {
   (globalThis as unknown as { window: { localStorage: typeof shim } }).window = { localStorage: shim };
 }
 
+function setViewportWidth(width: number | null) {
+  const win = globalThis as unknown as { window: { innerWidth?: number } };
+  if (width === null) {
+    delete win.window.innerWidth;
+    return;
+  }
+  Object.defineProperty(win.window, "innerWidth", { value: width, configurable: true, writable: true });
+}
+
 describe("chatV2Store", () => {
   beforeEach(() => {
     installLocalStorageShim();
+    setViewportWidth(null);
     useChatV2Store.getState().reset();
   });
 
   afterEach(() => {
+    setViewportWidth(null);
     useChatV2Store.getState().reset();
   });
 
@@ -42,6 +53,16 @@ describe("chatV2Store", () => {
     expect(state.activeDockTab).toBe("files");
     expect(state.leftWidth).toBe(DEFAULT_CHAT_V2_SNAPSHOT.leftWidth);
     expect(state.rightWidth).toBe(DEFAULT_CHAT_V2_SNAPSHOT.rightWidth);
+  });
+
+  it("starts collapsed on narrow viewports so the conversation is immediately visible", () => {
+    setViewportWidth(390);
+    useChatV2Store.getState().reset();
+    const state = useChatV2Store.getState();
+    expect(state.leftCollapsed).toBe(true);
+    expect(state.rightCollapsed).toBe(true);
+    expect(state.activeDockTab).toBe("files");
+    expect(readPersistedSnapshot()).toMatchObject({ leftCollapsed: true, rightCollapsed: true });
   });
 
   it("toggles the left rail collapsed state", () => {
@@ -81,7 +102,7 @@ describe("chatV2Store", () => {
     useChatV2Store.getState().setLeftWidth(10);
     expect(useChatV2Store.getState().leftWidth).toBe(200);
     useChatV2Store.getState().setLeftWidth(5000);
-    expect(useChatV2Store.getState().leftWidth).toBe(480);
+    expect(useChatV2Store.getState().leftWidth).toBe(600);
     useChatV2Store.getState().setRightWidth(Number.NaN);
     expect(useChatV2Store.getState().rightWidth).toBe(DEFAULT_CHAT_V2_SNAPSHOT.rightWidth);
   });

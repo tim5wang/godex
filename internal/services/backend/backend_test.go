@@ -923,14 +923,35 @@ func TestSnapshotDisplayMessagesExpandCompactedTranscript(t *testing.T) {
 	if len(snapshot.Messages) == 0 || snapshot.Messages[0].Metadata == nil || snapshot.Messages[0].Metadata.Kind != protocol.KindSummary {
 		t.Fatalf("expected model-visible messages to stay compacted, got %+v", snapshot.Messages)
 	}
-	if len(snapshot.DisplayMessages) != 2 {
-		t.Fatalf("expected display messages to expand archived transcript without duplicates, got %+v", snapshot.DisplayMessages)
+	// Snapshot display messages mirror the (reasoning-trimmed) raw conversation.
+	// Transcripts are no longer expanded inline: a compacted session's archive
+	// can hold thousands of messages (10+ MB of JSON), which made every snapshot
+	// — and every refresh during a running turn — slow on remote connections.
+	if len(snapshot.DisplayMessages) != len(snapshot.Messages) {
+		t.Fatalf("expected display messages to mirror the raw conversation, got %d vs %d", len(snapshot.DisplayMessages), len(snapshot.Messages))
 	}
-	if got := protocol.MessageText(snapshot.DisplayMessages[0]); got != "first line\n- keep bullet" {
-		t.Fatalf("expected display transcript to preserve user formatting, got %q", got)
+	if snapshot.DisplayMessages[0].Metadata == nil || snapshot.DisplayMessages[0].Metadata.Kind != protocol.KindSummary {
+		t.Fatalf("expected display messages to stay compacted, got %+v", snapshot.DisplayMessages[0])
 	}
-	if got := protocol.MessageText(snapshot.DisplayMessages[1]); got != "assistant reply" {
-		t.Fatalf("expected assistant reply in display transcript, got %q", got)
+}
+
+func TestSnapshotTrimsReasoningContent(t *testing.T) {
+	withReasoning := protocol.NewTextMessage(protocol.RoleAssistant, "reply")
+	withReasoning.Metadata = &protocol.Metadata{ReasoningContent: "secret reasoning transcript"}
+	messages := []protocol.Message{
+		protocol.NewTextMessage(protocol.RoleUser, "hello"),
+		withReasoning,
+	}
+	out := snapshotDisplayMessages(messages)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(out))
+	}
+	if out[1].Metadata == nil || out[1].Metadata.ReasoningContent != "" {
+		t.Fatalf("expected reasoning_content trimmed from snapshot messages, got %+v", out[1].Metadata)
+	}
+	// The original agent-owned messages must be left untouched.
+	if messages[1].Metadata == nil || messages[1].Metadata.ReasoningContent != "secret reasoning transcript" {
+		t.Fatalf("snapshot trimming must not mutate the source messages")
 	}
 }
 

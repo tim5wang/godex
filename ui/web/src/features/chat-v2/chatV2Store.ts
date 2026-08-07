@@ -41,6 +41,28 @@ export const DEFAULT_CHAT_V2_SNAPSHOT: ChatV2Snapshot = {
   rightWidth: RIGHT_DOCK.defaultWidth,
 };
 
+// Matches the responsive CSS breakpoint in styles.css (max-width: 900px).
+const NARROW_VIEWPORT_QUERY = "(max-width: 900px)";
+
+export function isNarrowViewport(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.matchMedia(NARROW_VIEWPORT_QUERY).matches;
+  } catch {
+    return typeof window.innerWidth === "number" && window.innerWidth <= 900;
+  }
+}
+
+// On phones the sessions rail and the files dock should stay out of the way:
+// opening the app straight into the files panel (the desktop default) forces
+// the user to close the dock and collapse the rail before they can chat.
+export function defaultChatV2Snapshot(): ChatV2Snapshot {
+  if (!isNarrowViewport()) {
+    return { ...DEFAULT_CHAT_V2_SNAPSHOT };
+  }
+  return { ...DEFAULT_CHAT_V2_SNAPSHOT, leftCollapsed: true, rightCollapsed: true };
+}
+
 function isDockTab(value: unknown): value is DockTab {
   return typeof value === "string" && (DOCK_TABS as ReadonlyArray<string>).includes(value);
 }
@@ -51,7 +73,7 @@ function clamp(value: number, min: number, max: number, fallback: number): numbe
 }
 
 export const useChatV2Store = create<ChatV2State>((set) => ({
-  ...DEFAULT_CHAT_V2_SNAPSHOT,
+  ...defaultChatV2Snapshot(),
 
   toggleLeft: () => set((state) => ({ leftCollapsed: !state.leftCollapsed })),
   toggleRight: () => set((state) => ({ rightCollapsed: !state.rightCollapsed })),
@@ -74,7 +96,7 @@ export const useChatV2Store = create<ChatV2State>((set) => ({
   setRightWidth: (width) =>
     set(() => ({ rightWidth: clamp(width, RIGHT_DOCK.min, RIGHT_DOCK.max, DEFAULT_CHAT_V2_SNAPSHOT.rightWidth) })),
 
-  reset: () => set(() => ({ ...DEFAULT_CHAT_V2_SNAPSHOT })),
+  reset: () => set(() => ({ ...defaultChatV2Snapshot() })),
 }));
 
 // ---------------------------------------------------------------------------
@@ -112,6 +134,12 @@ export function hydrateSnapshot(raw: string | null): ChatV2Snapshot | null {
 
 export function readPersistedSnapshot(): ChatV2Snapshot | null {
   if (typeof window === "undefined") return null;
+  // Mobile always starts from the conversation view; a layout persisted on a
+  // desktop viewport (files dock open, rails wide) would otherwise cover the
+  // whole screen with the files panel on a narrow device.
+  if (isNarrowViewport()) {
+    return defaultChatV2Snapshot();
+  }
   try {
     return hydrateSnapshot(window.localStorage.getItem(CHAT_V2_STORAGE_KEY));
   } catch {

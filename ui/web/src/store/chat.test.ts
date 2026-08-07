@@ -61,3 +61,33 @@ describe("chat store live interleaving", () => {
     expect(assistantItems[0].body).toBe("abc");
   });
 });
+
+describe("chat store null snapshot safety", () => {
+  beforeEach(() => {
+    useChatStore.getState().reset();
+  });
+
+  it("syncSnapshot tolerates a null message list (empty/new session)", () => {
+    const store = useChatStore.getState();
+    store.setSession("s-null", "k1");
+    // Backend emits messages: null for a fresh session; the relay may too.
+    store.syncSnapshot(null as never, false, "");
+    expect(useChatStore.getState().historyItems).toEqual([]);
+    expect(useChatStore.getState().status).not.toContain("crashed");
+  });
+
+  it("snapshotToItems skips messages with null content blocks", () => {
+    const store = useChatStore.getState();
+    store.setSession("s-nullcontent", "k1");
+    store.syncSnapshot(
+      [
+        { role: "user", content: null, metadata: { text: "hello" } },
+        { role: "assistant", content: null, metadata: { text: "reply" } },
+      ] as never,
+      false,
+      "",
+    );
+    const items = useChatStore.getState().historyItems;
+    expect(items.filter((item) => item.kind === "user" || item.kind === "assistant").length).toBe(2);
+  });
+});

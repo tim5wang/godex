@@ -1443,7 +1443,7 @@ samp {
 /* Mobile: avatar takes its own row, content uses full width. */
 @media (max-width: 720px) {
   .chat-feed-v2-scroll {
-    padding: 10px 12px;
+    padding: 8px 8px;
   }
 
   .chat-feed-v2-bubble {
@@ -1466,6 +1466,16 @@ samp {
   .chat-feed-v2-bubble .ant-bubble-content {
     width: 100% !important;
     max-width: 100% !important;
+  }
+
+  /* ant-bubble-list 默认给 start/end 列表项加 15% 的内联 padding（桌面对称留白）。
+     移动端宽度紧张，去掉以免 Agent 消息右侧（start）残留大块空白。 */
+  .chat-feed-v2-bubble.ant-bubble-start {
+    padding-inline-end: 0 !important;
+  }
+
+  .chat-feed-v2-bubble.ant-bubble-end {
+    padding-inline-start: 0 !important;
   }
 
   .chat-feed-v2-turn-actions {
@@ -1983,7 +1993,7 @@ samp {
   }
 
   .message-copy-frame {
-    padding-right: 58px;
+    padding-right: 0;
   }
 
   .message-action-buttons {

@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"bytes"
 	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
@@ -25,11 +24,35 @@ import (
 )
 
 func (s *Service) displayMessages(messages []protocol.Message) []protocol.Message {
-	expanded := s.expandSummaryMessages(messages, map[string]struct{}{})
-	if len(expanded) == 0 {
+	return snapshotDisplayMessages(messages)
+}
+
+// snapshotDisplayMessages returns the message view shipped in session
+// snapshots. Two concerns drove this design:
+//
+//  1. reasoning_content is model-internal (the UIs render neither the
+//     metadata field nor thinking blocks) and can dominate the payload —
+//     a long session holds a full reasoning transcript per assistant
+//     message. Stripping it here cuts the snapshot dramatically.
+//  2. transcripts are no longer expanded inline. A compacted session's
+//     transcript can hold thousands of messages (10+ MB of JSON), which
+//     made every snapshot — and every snapshot refresh during a running
+//     turn — expensive on remote/relayed connections. The compacted
+//     summary message still renders its summary text; the full archive
+//     stays available on disk for history search and on-demand recall.
+func snapshotDisplayMessages(messages []protocol.Message) []protocol.Message {
+	if len(messages) == 0 {
 		return nil
 	}
-	return expanded
+	out := make([]protocol.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Metadata != nil && strings.TrimSpace(msg.Metadata.ReasoningContent) != "" {
+			msg = msg.Clone()
+			msg.Metadata.ReasoningContent = ""
+		}
+		out = append(out, msg)
+	}
+	return out
 }
 
 func activePermissionBlocker(pending []tools.PendingPermission, turns []TurnRecord, now time.Time) *PermissionBlocker {
@@ -76,92 +99,6 @@ func activePermissionBlocker(pending []tools.PendingPermission, turns []TurnReco
 		CreatedAt: item.CreatedAt,
 		ExpiresAt: item.ExpiresAt,
 	}
-}
-
-func (s *Service) expandSummaryMessages(messages []protocol.Message, seen map[string]struct{}) []protocol.Message {
-	if len(messages) == 0 {
-		return nil
-	}
-	out := make([]protocol.Message, 0, len(messages))
-	for index, msg := range messages {
-		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary && strings.TrimSpace(msg.Metadata.Transcript) != "" {
-			transcriptMessages, ok := s.readTranscriptMessages(msg.Metadata.Transcript, seen)
-			if ok {
-				out = appendMergedMessages(out, s.expandSummaryMessages(transcriptMessages, seen)...)
-				return appendMergedMessages(out, s.expandSummaryMessages(messages[index+1:], seen)...)
-			}
-		}
-		out = appendMergedMessages(out, msg)
-	}
-	return out
-}
-
-func (s *Service) readTranscriptMessages(ref string, seen map[string]struct{}) ([]protocol.Message, bool) {
-	name := filepath.Base(strings.TrimSpace(ref))
-	if name == "." || name == "" || name != strings.TrimSpace(ref) || strings.TrimSpace(s.cfg.TranscriptsDir) == "" {
-		return nil, false
-	}
-	if _, ok := seen[name]; ok {
-		return nil, false
-	}
-	seen[name] = struct{}{}
-	data, err := os.ReadFile(filepath.Join(s.cfg.TranscriptsDir, name))
-	if err != nil {
-		return nil, false
-	}
-	var messages []protocol.Message
-	if err := json.Unmarshal(data, &messages); err != nil {
-		return nil, false
-	}
-	return messages, true
-}
-
-func appendMergedMessages(existing []protocol.Message, incoming ...protocol.Message) []protocol.Message {
-	if len(incoming) == 0 {
-		return existing
-	}
-	overlap := messageOverlap(existing, incoming)
-	return append(existing, protocol.CloneMessages(incoming[overlap:])...)
-}
-
-func messageOverlap(left, right []protocol.Message) int {
-	maxOverlap := len(left)
-	if len(right) < maxOverlap {
-		maxOverlap = len(right)
-	}
-	for n := maxOverlap; n > 0; n-- {
-		matched := true
-		for i := 0; i < n; i++ {
-			if !sameProtocolMessage(left[len(left)-n+i], right[i]) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return n
-		}
-	}
-	return 0
-}
-
-func sameProtocolMessage(left, right protocol.Message) bool {
-	if left.Role != right.Role || protocol.MessageText(left) != protocol.MessageText(right) {
-		return false
-	}
-	leftMeta, rightMeta := left.Metadata, right.Metadata
-	if leftMeta == nil || rightMeta == nil {
-		return leftMeta == nil && rightMeta == nil
-	}
-	if leftMeta.Kind != rightMeta.Kind ||
-		leftMeta.Source != rightMeta.Source ||
-		leftMeta.Sender != rightMeta.Sender ||
-		leftMeta.Timestamp != rightMeta.Timestamp ||
-		leftMeta.Transcript != rightMeta.Transcript {
-		return false
-	}
-	leftAttachments, leftErr := json.Marshal(leftMeta.Attachments)
-	rightAttachments, rightErr := json.Marshal(rightMeta.Attachments)
-	return leftErr == nil && rightErr == nil && bytes.Equal(leftAttachments, rightAttachments)
 }
 
 func (s *Service) mainCapabilitySummary() []string {

@@ -88,6 +88,7 @@ const (
 	longTaskActionFinalizeStory
 	longTaskActionWaitRunning
 	longTaskActionStartOne
+	longTaskActionStartReady
 	longTaskActionRepair
 	longTaskActionCompleted
 	longTaskActionBlocked
@@ -195,9 +196,62 @@ func (a *Agent) startAsyncLongTask(ctx context.Context, workflowID string, args 
 // matching workflow. The function is best-effort: a failure to
 // read the run record is logged and skipped.
 func (a *Agent) longTaskResumeAsyncAfterRestart() {
-	// T6: this is wired from a small init hook. For the unit test
-	// surface we just need the helper to exist and to handle the
-	// common cases (no records, all completed, one interrupted).
+	if a == nil || a.workflows == nil {
+		return
+	}
+	// 1. Sweep stale runs: any record still marked "running" after the
+	// previous process died is flipped to "interrupted". This mirrors the
+	// subagent lease reaping done for durable subagents and is what lets a
+	// restarted process distinguish crashed runs from resumable ones.
+	if _, err := a.workflows.sweepStaleLongTaskRuns(); err != nil {
+		_ = a.workflows.appendEvent("sweep", map[string]interface{}{
+			"event": "longtask_startup_sweep_error",
+			"err":   err.Error(),
+			"at":    time.Now().UTC(),
+		})
+	}
+	// 2. Rebuild the in-memory async-run index for records that were left
+	// in "interrupted" state so longTaskRunStatus can report them and a
+	// later `--resume-run-id` can pick them up. We do NOT auto-resume:
+	// the workflow may need a human decision (e.g. review_only merge), and
+	// the existing async goroutine can only be driven by the caller that
+	// started it. Marking them interrupted and exposing them for explicit
+	// resume is the safe default.
+	//
+	// The in-memory map is only an accelerator; the durable source of
+	// truth is the run record on disk, so a resume works even if this
+	// rebuild never happened.
+	a.rebuildInterruptedAsyncRuns()
+}
+
+// rebuildInterruptedAsyncRuns walks every workflow's runs/ directory and
+// registers any interrupted async runs in the in-memory longTaskAsyncRuns
+// index. Runs that are already finished (completed/blocked/error) are left
+// alone — they are queryable via longTaskStatus directly.
+func (a *Agent) rebuildInterruptedAsyncRuns() {
+	if a == nil || a.workflows == nil {
+		return
+	}
+	type pending struct {
+		workflowID string
+		rec        longTaskRunRecord
+	}
+	var found []pending
+	_ = a.workflows.walkLongTaskRuns(func(workflowID string, rec longTaskRunRecord) error {
+		if rec.Status != "interrupted" {
+			return nil
+		}
+		found = append(found, pending{workflowID: workflowID, rec: rec})
+		return nil
+	})
+	for _, p := range found {
+		state := &longTaskAsyncRunState{running: false, done: make(chan struct{}), runID: p.rec.RunID}
+		state.view, _ = a.longTaskStatus(p.workflowID)
+		if _, loaded := longTaskAsyncRuns.LoadOrStore(p.workflowID, state); loaded {
+			// A live run already owns this workflow in-process; leave it.
+			continue
+		}
+	}
 }
 
 func (a *Agent) longTaskRunStatus(workflowID string) (longTaskView, error) {
@@ -256,8 +310,10 @@ func pickNextAction(view longTaskView, args longTaskArgs) (longTaskRunAction, st
 	if view.Running > 0 {
 		return longTaskActionWaitRunning, "", ""
 	}
-	// Find a pending story whose deps are all completed and start exactly
-	// one. Longtask is a serial story chain, never fan-out.
+	// Find any pending story whose deps are all completed and start it.
+	// Under dynamic parallel DAG semantics the run loop batches every
+	// ready-to-run pending story into one start (fan-out) rather than starting
+	// a single serial story per iteration.
 	for _, story := range sortedStoriesByPriority(view.Stories) {
 		if story.Status != workflowStatusPending {
 			continue
@@ -265,7 +321,7 @@ func pickNextAction(view longTaskView, args longTaskArgs) (longTaskRunAction, st
 		if !storyNodeIDPresent(view, story.ID) {
 			continue
 		}
-		return longTaskActionStartOne, story.ID, story.NodeID
+		return longTaskActionStartReady, story.ID, story.NodeID
 	}
 	return longTaskActionStalled, "", ""
 }
@@ -376,7 +432,9 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 	summary.Started = append([]string{}, rec.Started...)
 	summary.Finalized = append([]string{}, rec.Finalized...)
 	summary.Repaired = append([]longTaskRepairSummary{}, rec.Repaired...)
-	rec.LastRefluxKey = rec.LastRefluxKey // preserve across resume
+	// rec is the loaded on-disk record, so LastRefluxKey (and every other
+	// field) is already preserved across resume; the run loop below only
+	// writes it back on finalize.
 
 	finalize := func(view longTaskView, status, message, blockedBy string) (longTaskView, error) {
 		now := timeNow()
@@ -462,6 +520,21 @@ func (a *Agent) runLongTaskSync(ctx context.Context, workflowID string, args lon
 				return longTaskView{}, err
 			}
 			view = waited
+			continue
+		case longTaskActionStartReady:
+			started, err := a.startLongTaskParallel(ctx, workflowID, summary)
+			if err != nil {
+				return longTaskView{}, err
+			}
+			if len(started.Started) > 0 {
+				waited, err := a.waitLongTask(ctx, workflowID, "all", waitTimeoutMS)
+				if err != nil {
+					return longTaskView{}, err
+				}
+				view = waited
+			} else {
+				view = started
+			}
 			continue
 		case longTaskActionStartOne:
 			nodeID := firstNonEmpty(arg, storyID)
@@ -568,6 +641,62 @@ func (a *Agent) startLongTaskOneNode(ctx context.Context, workflowID, storyID st
 	if target.Status == workflowStatusRunning {
 		view.Started = []string{storyID}
 	}
+	return view, nil
+}
+
+// startLongTaskParallel starts every dependency-free (ready) pending story
+// node under dynamic parallel DAG semantics, then records the newly-started
+// node ids in the run summary. It reuses the workflow runtime's fan-out
+// (startWorkflowReadyNodes) so that multiple stories whose dependencies are
+// all completed run concurrently, bounded by the subagent concurrency limit.
+// On resume it skips stories that were already started in a previous run.
+func (a *Agent) startLongTaskParallel(ctx context.Context, workflowID string, summary *LongTaskRunSummary) (longTaskView, error) {
+	state, err := a.workflowState(workflowID)
+	if err != nil {
+		return longTaskView{}, err
+	}
+	// Snapshot the set of already-started stories so we never re-start a story
+	// that was started by an earlier (possibly interrupted) run.
+	alreadyStarted := make(map[string]struct{}, len(summary.Started))
+	for _, id := range summary.Started {
+		alreadyStarted[id] = struct{}{}
+	}
+	started := make([]string, 0)
+	for i := range state.Nodes {
+		node := &state.Nodes[i]
+		if node.Status != workflowStatusPending || !workflowDepsCompleted(state.Nodes, node.DependsOn) {
+			continue
+		}
+		if _, ok := alreadyStarted[node.ID]; ok {
+			continue
+		}
+		if _, ok := a.startWorkflowNode(ctx, &state, node); ok {
+			started = append(started, node.ID)
+			summary.Started = append(summary.Started, node.ID)
+		}
+	}
+	now := timeNow()
+	state.Summary.UpdatedAt = now
+	a.refreshWorkflowStatus(&state)
+	if _, err := a.processWorkflowEdges(&state); err != nil {
+		return longTaskView{}, err
+	}
+	if err := a.workflows.save(state); err != nil {
+		return longTaskView{}, err
+	}
+	if len(started) > 0 {
+		_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{
+			"event":    "start",
+			"started":  started,
+			"longtask": true,
+			"at":       now,
+		})
+	}
+	view, err := a.longTaskViewForState(state)
+	if err != nil {
+		return longTaskView{}, err
+	}
+	view.Started = started
 	return view, nil
 }
 

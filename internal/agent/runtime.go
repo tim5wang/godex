@@ -28,6 +28,11 @@ import (
 type SharedDependencies struct {
 	mu   sync.RWMutex
 	deps dependencies
+	// longTaskResumeOnce guards the one-time sweep of stale longtask run
+	// records at process startup. After a crash the previous process may
+	// leave runs marked "running"; this flips them to "interrupted" so they
+	// can be resumed via --resume-run-id by a later turn.
+	longTaskResumeOnce sync.Once
 }
 
 // NewSharedDependencies creates a reusable dependency set for one workspace.
@@ -111,6 +116,25 @@ func (s *SharedDependencies) SetSessionAdminService(admin *sessionadmin.Service)
 	s.mu.Lock()
 	s.deps.sessionAdmin = admin
 	s.mu.Unlock()
+}
+
+// ResumeLongTasksAfterRestart runs the one-time startup sweep that marks
+// stale longtask run records (left "running" by a process that crashed)
+// as "interrupted" so they can be resumed via --resume-run-id. It is safe
+// to call more than once; only the first call performs the sweep.
+func (s *SharedDependencies) ResumeLongTasksAfterRestart() {
+	if s == nil {
+		return
+	}
+	s.longTaskResumeOnce.Do(func() {
+		s.mu.RLock()
+		store := s.deps.workflows
+		s.mu.RUnlock()
+		if store == nil {
+			return
+		}
+		_, _ = store.sweepStaleLongTaskRuns()
+	})
 }
 
 // NewWithSharedDependencies creates a session-scoped agent on top of shared workspace services.

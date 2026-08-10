@@ -127,6 +127,42 @@ func (s *workflowStore) listLongTaskRuns(workflowID string) ([]longTaskRunRecord
 	return out, nil
 }
 
+// walkLongTaskRuns visits every on-disk run record across all workflows.
+// The callback returning a non-nil error stops the walk. Read-only helpers
+// that want to rebuild an in-memory index (e.g. longtask resume at startup)
+// use this instead of coupling to a single workflow's runs/ directory.
+func (s *workflowStore) walkLongTaskRuns(fn func(workflowID string, rec longTaskRunRecord) error) error {
+	if s == nil || strings.TrimSpace(s.dir) == "" {
+		return nil
+	}
+	topEntries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, top := range topEntries {
+		if !top.IsDir() {
+			continue
+		}
+		workflowID := top.Name()
+		if err := validateWorkflowID(workflowID); err != nil {
+			continue
+		}
+		records, err := s.listLongTaskRuns(workflowID)
+		if err != nil {
+			continue
+		}
+		for _, rec := range records {
+			if err := fn(workflowID, rec); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // sweepStaleLongTaskRuns marks any runs whose status is "running" as
 // "interrupted" so callers can detect that the godex process died mid-run.
 // Returns the list of run ids that were updated. Safe to call at godex

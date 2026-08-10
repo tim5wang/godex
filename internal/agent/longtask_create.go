@@ -21,11 +21,12 @@ type longTaskDefaultStoryCompiler struct{}
 
 func (c *longTaskDefaultStoryCompiler) CompileStories(args longTaskArgs, stories []longTaskStoryInput) ([]workflowNodeInput, error) {
 	nodes := make([]workflowNodeInput, 0, len(stories))
-	for i, story := range stories {
-		deps := []string{}
-		if i > 0 {
-			deps = []string{stories[i-1].ID}
-		}
+	for _, story := range stories {
+		// Dynamic parallel DAG semantics: a story starts as soon as its
+		// explicitly declared dependencies are complete. A story with no
+		// depends_on has no dependencies and is ready to run in parallel with
+		// every other dependency-free story. There is no implicit serial chain.
+		deps := normalizeWorkflowStrings(story.DependsOn)
 		handoffPolicy := workflowHandoffPolicySummary
 		handoffMaxBytes := workflowDefaultHandoffMaxBytes
 		if strings.TrimSpace(story.HandoffPolicy) != "" {
@@ -101,16 +102,20 @@ func (a *Agent) createLongTask(sessionID string, args longTaskArgs) (longTaskVie
 func normalizeLongTaskStories(input []longTaskStoryInput) []longTaskStoryInput {
 	stories := make([]longTaskStoryInput, 0, len(input))
 	for i, story := range input {
-		story.ID = strings.TrimSpace(story.ID)
-		if story.ID == "" {
-			story.ID = fmt.Sprintf("US-%03d", i+1)
+		rawID := strings.TrimSpace(story.ID)
+		if rawID == "" {
+			rawID = fmt.Sprintf("US-%03d", i+1)
 		}
+		story.ID = rawID
 		story.Title = strings.TrimSpace(story.Title)
 		story.Description = strings.TrimSpace(story.Description)
 		story.AcceptanceCriteria = normalizeWorkflowStrings(story.AcceptanceCriteria)
 		story.AgentType = strings.TrimSpace(story.AgentType)
 		story.WriteScope = normalizeWorkflowStrings(story.WriteScope)
 		story.HandoffPolicy = strings.TrimSpace(story.HandoffPolicy)
+		// DependsOn is normalized and never allowed to reference the story
+		// itself (a self-dependency would make the story permanently blocked).
+		story.DependsOn = normalizeLongTaskStoryDeps(story.DependsOn, rawID)
 		if story.AgentType == "" && len(story.WriteScope) > 0 {
 			story.AgentType = "general-purpose"
 		}
@@ -127,6 +132,25 @@ func normalizeLongTaskStories(input []longTaskStoryInput) []longTaskStoryInput {
 		return pi < pj
 	})
 	return stories
+}
+
+// normalizeLongTaskStoryDeps de-duplicates, trims, drops empty entries, and
+// removes a dependency on the story's own id.
+func normalizeLongTaskStoryDeps(deps []string, selfID string) []string {
+	out := make([]string, 0, len(deps))
+	seen := make(map[string]struct{}, len(deps))
+	for _, dep := range deps {
+		dep = strings.TrimSpace(dep)
+		if dep == "" || dep == selfID {
+			continue
+		}
+		if _, ok := seen[dep]; ok {
+			continue
+		}
+		seen[dep] = struct{}{}
+		out = append(out, dep)
+	}
+	return out
 }
 
 func normalizeLongTaskMergePolicy(value string) string {

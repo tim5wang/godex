@@ -195,6 +195,10 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Bundle:  bundleSubagent,
 		Summary: "isolated delegated exploration or implementation work",
 	})
+	a.registerToolTo(handler, newAgentGraphTool(a), tools.ToolMeta{
+		Bundle:  bundleSubagent,
+		Summary: "dynamic agent graph DAG abstraction over durable workflow nodes",
+	})
 	a.registerToolTo(handler, newLongTaskTool(a), tools.ToolMeta{
 		Bundle:  bundleSubagent,
 		Summary: "Ralph-style prioritized long task orchestration over durable workflow nodes",

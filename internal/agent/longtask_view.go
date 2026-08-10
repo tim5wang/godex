@@ -49,6 +49,7 @@ func (a *Agent) longTaskViewFromSpec(spec longTaskSpec, workflow workflowView) l
 			Description:        story.Description,
 			AcceptanceCriteria: append([]string{}, story.AcceptanceCriteria...),
 			Priority:           story.Priority,
+			DependsOn:          append([]string{}, story.DependsOn...),
 			Status:             node.Status,
 			Passes:             passes,
 			Verdict:            node.Verdict,

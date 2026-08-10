@@ -21,6 +21,10 @@
 | **Skill/Package** | native skill、第三方 normalizer、compatibility analyzer、package command dispatcher、role registry |
 | **Tool runtime** | typed tools、参数 coercion、before/after interceptors、审批模式、bundle 管理 |
 | **Subagent/Workflow** | durable subagent、batch/wait、分层 job storage、per-job timeout、workflow handoff artifact、dependency injection、preview merge、dynamic append node |
+| **Longtask 动态 DAG** | ✅ 动态并行 DAG 语义（depends_on 显式依赖、无依赖并行 fan-out，2026-08-10） |
+| **Longtask 重启恢复** | ✅ run 记录持久化 + 启动 sweep/重建 + `--resume-run-id` 续跑（2026-08-11） |
+| **上下文预算管理** | ✅ 子任务自动摘要化（token 预算截断）、依赖 handoff 共享截断路径、历史子任务不驻留活跃上下文（2026-08-11） |
+| **AgentGraph 抽象** | ✅ `agent_graph` 工具 + `AgentGraph` 接口（Create/Get/AddNode/AddEdge/RemoveNode/Cancel/Run/Wait）、5 种节点类型、3 种边类型、动态增删、merge_point/user_input 语义（2026-08-11） |
 | **Runner 韧性** | 统一 phase checkpoint、active turn follow-up injection、空回复恢复、length/provider error 恢复 |
 | **安全边界** | 安全 profile、host privilege policy、WorkspaceFS 文件边界、shell 风险分级和审计 |
 | **Browser/Desktop/ACP** | browser handoff/resume、desktop bundle、OCR、external ACP stdio bridge |
@@ -182,44 +186,55 @@ orchestrator (完整工具集)
 
 ### 🟡 Phase 2：动态 Agent 图（P1，longtask 重构核心）
 
-#### 2.1 明确 longtask 语义：动态并行 DAG
+#### 2.1 明确 longtask 语义：动态并行 DAG ✅（2026-08-10）
 
 **决策**：不用串行 chain，用动态并行 DAG。效率和速度优先。
 
 **当前问题**：
 - longtask 的串行故事语义与 workflow 的并行 DAG 语义在 5 个关键点错位
-- 重启后 `sync.Map` 清空 → 全部中断
-- 上下文预算与长任务时长冲突
+- 重启后 `sync.Map` 清空 → 全部中断（见 2.2）
+- 上下文预算与长任务时长冲突（见 2.3）
+
+**方案（已落地）**：
+- ✅ 保留 `workflow.go` 的 DAG 基础设施（nodes + edges + dependencies）
+- ✅ 删除 longtask 预编译串行 chain：`CompileStories` 不再强制 `deps=stories[i-1]`，只用显式依赖
+- ✅ `longTaskStoryInput` / `LongTaskStoryView` 新增 `depends_on` 字段
+- ✅ 无依赖子任务自动并行：`startLongTaskParallel` fan-out 所有 deps-complete 的 pending story（受 subagent 并发上限约束）
+- ✅ `pickNextAction` 由 start-one 改为 start-ready；race/finalize 语义保留
+- ✅ 测试：并行 DAG（无依赖并行 + 有依赖顺序 + depends_on 视图暴露）
+
+**参考**：Graph Engineering、Codex collaboration-mode、QM orchestrator
+
+#### 2.2 重启后恢复运行中 longtask ✅（2026-08-11）
 
 **方案**：
-- 保留 `workflow.go` 的 DAG 基础设施（nodes + edges + dependencies）
-- 删除 longtask 的"预编译串行 chain"模式
-- 改为：agent 在运行时动态创建和管理子任务图
-- 子任务之间用 `data_dependency` 和 `control_flow` 边表达依赖
-- 无依赖的子任务自动并行执行
+- ✅ `longTaskAsyncRuns` 的持久化底座：`longTaskRunRecord` 每次迭代落盘（`writeLongTaskRun`），内存 `sync.Map` 仅作加速索引，磁盘是唯一事实源
+- ✅ `workflowStore.walkLongTaskRuns`：跨全部 workflow 扫描 run 记录，供启动时重建索引
+- ✅ 启动恢复：`SharedDependencies.ResumeLongTasksAfterRestart()`（`sync.Once` 幂等）+ `backend.NewService` 接线；`sweepStaleLongTaskRuns` 把崩溃遗留的 `running` 记录翻转为 `interrupted`，可被 `--resume-run-id` 续跑
+- ✅ `rebuildInterruptedAsyncRuns`：重启后把 interrupted run 重新注册进内存索引（不自动重跑，安全默认）
+- ✅ 子 agent lease 复用 1.4（TTL/3 心跳，崩溃自动标记 interrupted）
+- ✅ 测试：`longtask_test.go` 重启恢复（sweep/重建/resume）覆盖
 
-#### 2.2 重启后恢复运行中 longtask
-
-**方案**：
-- `longTaskAsyncRuns` 从 `sync.Map` 改为持久化存储
-- 启动时恢复 interrupted 状态，提供 resume 入口
-- 子 agent 的 lease 机制（复用 1.4）
-
-#### 2.3 上下文预算管理
+#### 2.3 上下文预算管理 ✅（2026-08-11）
 
 **方案**：
-- 完成的子任务自动摘要化
-- handoff 结果按 token 预算截断
-- 历史子任务不保留在活跃上下文中
+- ✅ `internal/agent/context_budget.go`：token 预算工具（`truncateTextToTokenBudget` 头优先截断，`assembleTruncatedHandoffs` 共享组装，`compressCountTokensForText` 复用 `compress.CountTokens` 字符分类估算，CJK 2 字符/token）
+- ✅ 完成的子任务自动摘要化：`workflowHandoffSummary` 改为 token 预算截断（2000 token 上限，不再只按字符数），merge_point 自动合成依赖 handoff 摘要
+- ✅ handoff 结果按预算截断：依赖 handoff 注入与 merge_point 合成共用同一截断路径（字节上限 + token 预算）
+- ✅ 历史子任务不保留在活跃上下文：子任务 prompt 只注入依赖 handoff 摘要，全量结果留在磁盘 handoff artifact
+- ✅ 测试：`context_budget_test.go`（预算内截断/头尾保留/标记/CJK 上限/字节上限）
 
-#### 2.4 AgentGraph 运行时抽象
+#### 2.4 AgentGraph 运行时抽象 ✅（2026-08-11）
 
-**方案**：
-- 定义 `AgentGraph` 接口（借鉴 Codex 的 spawn/send_input/wait 模型）
-- 节点类型：`llm_task`、`subagent_task`、`tool_call`、`user_input`、`merge_point`
-- 边类型：`data_dependency`、`control_flow`、`handoff`
-- 运行时动态添加/删除节点、重连边
-- 图可观测：每个节点 input/output/status/耗时可查
+**方案（已落地 `internal/agent/agentgraph.go` + `agentgraph_test.go`）**：
+- ✅ `AgentGraph` 接口：`Create/GetGraph/AddNode/AddEdge/RemoveNode/CancelNode/Run/Wait`（由 `agentGraph` 包装器实现，避免与 `Agent.Run` turn 循环重名）
+- ✅ 节点类型：`llm_task`、`subagent_task`、`tool_call`、`user_input`、`merge_point`（存于 node Kind，视图暴露 `node_type`）；`merge_point` 自动完成并合成摘要，`user_input` 保持 pending 等待 `complete_node`
+- ✅ 边类型：`data_dependency`（静态调度）、`control_flow`（动态 append，when=status/verdict）、`handoff`（摘要传递，隐含依赖）；视图暴露 `edge_type`
+- ✅ 动态增删：`add_node`/`add_edge`（静态边编译进 DependsOn/HandoffFrom，动态边存为 durable workflow edge）、`remove_node`（依赖保护 + 取消运行中 job）、`cancel_node`
+- ✅ 全部适配现有 `a.workflows *workflowStore`：复用 `create/load/appendWorkflowNodes/startWorkflowReadyNodes/cancelWorkflowNode/completeWorkflowNode/processWorkflowEdges`，图跨重启可恢复
+- ✅ 工具注册：`agent_graph`（bundle `subagent`，`tool_registration.go`）
+- ✅ 可观测：`agentGraphViewFromState` 复用 `workflowViewFromState` + 派生 typed edges
+- ✅ 测试：图创建/node_type/edge_type 暴露、依赖调度（并行 fan-out）、merge_point 自动完成、user_input 阻塞、动态增删、control_flow append-on-outcome
 
 **参考**：
 - Codex `spawn_agent`/`send_input`/`wait_agent`（`temp/codex/codex-rs/tools/src/agent_tool.rs`）
@@ -388,10 +403,10 @@ orchestrator (完整工具集)
 | ✅ | 1.2 | Durable event journal | 高 | 高 | 1.1 | 已完（2026-08-10） |
 | ✅ | 1.3 | 幂等性存储 | 低 | 中 | 无 | 已完（2026-08-10） |
 | ✅ | 1.4 | Worker Lease + Heartbeat | 中 | 高 | 1.3 | 已完（2026-08-10） |
-| 🟡 | 2.1 | 动态并行 DAG 语义明确 | 中 | 高 | 无 | 1w |
-| 🟡 | 2.2 | 重启后恢复 longtask | 中 | 高 | 1.4 | 1w |
-| 🟡 | 2.3 | 上下文预算管理 | 低 | 中 | 无 | 3d |
-| 🟡 | 2.4 | AgentGraph 运行时抽象 | 高 | 高 | 2.1 | 2w |
+| ✅ | 2.1 | 动态并行 DAG 语义明确 | 中 | 高 | 无 | 已完（2026-08-10） |
+| ✅ | 2.2 | 重启后恢复 longtask | 中 | 高 | 1.4 | 已完（2026-08-11） |
+| ✅ | 2.3 | 上下文预算管理 | 低 | 中 | 无 | 已完（2026-08-11） |
+| ✅ | 2.4 | AgentGraph 运行时抽象 | 高 | 高 | 2.1 | 已完（2026-08-11） |
 | 🟠 | 3.1 | 记忆策略模式 | 中 | 高 | 无 | 1w |
 | 🟠 | 3.2 | 记忆 notebook 去重 | 低 | 中 | 无 | 2d |
 | 🟠 | 3.3 | Agent Identity 解耦 | 高 | 高 | 无 | 2w |
@@ -420,12 +435,12 @@ orchestrator (完整工具集)
   ✅ 1.2 Durable event journal → 已完成（2026-08-10）
   ✅ 1.3 幂等性存储          → 已完成（2026-08-10）
   ✅ 1.4 Worker Lease        → 已完成（2026-08-10）
-  2.1 动态并行 DAG 语义   → 1w
-  2.2 重启后恢复          → 1w
-  2.3 上下文预算管理       → 3d
+  ✅ 2.1 动态并行 DAG 语义   → 已完成（2026-08-10）
+  ✅ 2.2 重启后恢复          → 已完成（2026-08-11）
+  ✅ 2.3 上下文预算管理       → 已完成（2026-08-11）
 
 🟡 Phase 2（下一个，longtask 重构核心）：
-  2.4 AgentGraph 抽象     → 2w
+  ✅ 2.4 AgentGraph 抽象     → 已完成（2026-08-11）
   3.1 记忆策略模式         → 1w
   3.2 记忆 notebook 去重   → 2d
   3.3 Agent Identity 解耦  → 2w

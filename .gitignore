@@ -39,3 +39,6 @@ ui/web/playwright-report/
 ui/web/test-results/
 ui/web/e2e/screenshots/
 godex_bak
+
+# eval smoke/bench transient output
+examples/evals/results/

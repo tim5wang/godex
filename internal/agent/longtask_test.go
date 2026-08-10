@@ -26,7 +26,7 @@ func TestLongTaskToolCompilesStoriesToWorkflow(t *testing.T) {
 		"description":    "Improve checkout",
 		"quality_checks": []string{"go test ./...", "git diff --check"},
 		"stories": []map[string]interface{}{
-			{"id": "US-002", "title": "Second", "description": "do second", "priority": 2, "acceptance_criteria": []string{"second passes"}},
+			{"id": "US-002", "title": "Second", "description": "do second", "priority": 2, "acceptance_criteria": []string{"second passes"}, "depends_on": []string{"US-001"}},
 			{"id": "US-001", "title": "First", "description": "do first", "priority": 1, "acceptance_criteria": []string{"first passes"}},
 		},
 	})
@@ -80,7 +80,7 @@ func TestLongTaskToolStartWaitAndCompleteStory(t *testing.T) {
 		"longtask_id": "lt_run",
 		"stories": []map[string]interface{}{
 			{"id": "US-001", "title": "First", "priority": 1},
-			{"id": "US-002", "title": "Second", "priority": 2},
+			{"id": "US-002", "title": "Second", "priority": 2, "depends_on": []string{"US-001"}},
 		},
 	})
 	started := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
@@ -232,7 +232,7 @@ func TestLongTaskRunStopsWhenValidationFails(t *testing.T) {
 		"quality_checks": []string{"cat missing-file-for-longtask-run"},
 		"stories": []map[string]interface{}{
 			{"id": "US-001", "title": "First", "priority": 1},
-			{"id": "US-002", "title": "Second", "priority": 2},
+			{"id": "US-002", "title": "Second", "priority": 2, "depends_on": []string{"US-001"}},
 		},
 	})
 	run := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
@@ -378,7 +378,7 @@ func TestLongTaskRunRespectsMaxIterations(t *testing.T) {
 		"quality_checks": []string{"printf ok"},
 		"stories": []map[string]interface{}{
 			{"id": "US-001", "title": "First", "priority": 1},
-			{"id": "US-002", "title": "Second", "priority": 2},
+			{"id": "US-002", "title": "Second", "priority": 2, "depends_on": []string{"US-001"}},
 		},
 	})
 	run := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
@@ -518,10 +518,11 @@ func TestPickNextActionContinuesOnBlockedWhenOptOut(t *testing.T) {
 	}
 	args := longTaskArgs{StopOnFailure: &f}
 	action, _, _ := pickNextAction(view, args)
-	// Without stop-on-failure, the loop should pick the next actionable
-	// story (US-002 start).
-	if action != longTaskActionStartOne {
-		t.Fatalf("expected longTaskActionStartOne when stop_on_failure=false, got %d", action)
+	// Without stop-on-failure, the loop should start the next actionable
+	// (dependency-free) story. Under dynamic parallel DAG semantics this is the
+	// fan-out StartReady action.
+	if action != longTaskActionStartReady {
+		t.Fatalf("expected longTaskActionStartReady when stop_on_failure=false, got %d", action)
 	}
 }
 
@@ -1003,7 +1004,7 @@ func TestLongTaskRunStopOnFailureDefaultTrue(t *testing.T) {
 		"quality_checks": []string{"cat missing-file-for-stop-on-failure-default"},
 		"stories": []map[string]interface{}{
 			{"id": "US-001", "title": "First", "priority": 1},
-			{"id": "US-002", "title": "Second", "priority": 2},
+			{"id": "US-002", "title": "Second", "priority": 2, "depends_on": []string{"US-001"}},
 		},
 	})
 	// StopOnFailure intentionally left unset.
@@ -2360,3 +2361,231 @@ func TestLongTaskStoryWriteScopeRoundTripFromEvals(t *testing.T) {
 		t.Fatalf("working_directory missing from raw JSON: %s", storyRaw)
 	}
 }
+
+// TestLongTaskParallelDAGStartsDependencyFreeStories verifies dynamic parallel
+// DAG semantics: stories with no depends_on start together (fan-out), while a
+// story that declares depends_on only starts after its dependency completes.
+func TestLongTaskParallelDAGStartsDependencyFreeStories(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":         "create",
+		"longtask_id":    "lt_parallel",
+		"quality_checks": []string{"printf ok"},
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+			{"id": "US-002", "title": "Second", "priority": 2},
+			{"id": "US-003", "title": "Third", "priority": 3, "depends_on": []string{"US-001", "US-002"}},
+		},
+	})
+
+	// Start fans out across every dependency-free story (US-001 and US-002),
+	// leaving the dependent story (US-003) pending.
+	started := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "start",
+		"longtask_id": "lt_parallel",
+	})
+	if len(started.Started) != 2 {
+		t.Fatalf("expected both dependency-free stories to start in parallel, got %+v", started.Started)
+	}
+	got := map[string]bool{}
+	for _, id := range started.Started {
+		got[id] = true
+	}
+	if !got["US-001"] || !got["US-002"] {
+		t.Fatalf("expected US-001 and US-002 to start in parallel, got %v", started.Started)
+	}
+	status := map[string]string{}
+	for _, story := range started.Stories {
+		status[story.ID] = story.Status
+	}
+	if status["US-001"] != workflowStatusRunning || status["US-002"] != workflowStatusRunning {
+		t.Fatalf("expected US-001 and US-002 running, got %+v", status)
+	}
+	if status["US-003"] != workflowStatusPending {
+		t.Fatalf("expected US-003 to stay pending until deps complete, got %+v", status)
+	}
+
+	// Wait for US-001 and US-002 to finish; US-003 must remain pending because
+	// its deps are not all completed until both first stories pass.
+	waited := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "wait",
+		"longtask_id": "lt_parallel",
+		"mode":        "all",
+		"timeout_ms":  2000,
+	})
+	status = map[string]string{}
+	for _, story := range waited.Stories {
+		status[story.ID] = story.Status
+	}
+	if status["US-003"] != workflowStatusPending {
+		t.Fatalf("expected US-003 pending after first wave (deps include US-002's completion), got %+v", waited.Stories)
+	}
+}
+
+// TestLongTaskParallelDAGRewiresAfterRepair preserves the dynamic DAG invariant
+// that a repair produces a new node and downstream pending nodes remain blocked
+// until every declared dependency (including the repair) is satisfied.
+func TestLongTaskParallelDAGDependsOnVisibleInView(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	created := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_dep_view",
+		"stories": []map[string]interface{}{
+			{"id": "A", "title": "A", "priority": 1},
+			{"id": "B", "title": "B", "priority": 2, "depends_on": []string{"A"}},
+			{"id": "C", "title": "C", "priority": 3},
+		},
+	})
+
+	byID := map[string]LongTaskStoryView{}
+	for _, story := range created.Stories {
+		byID[story.ID] = story
+	}
+	if len(byID["A"].DependsOn) != 0 {
+		t.Fatalf("expected A to be dependency-free, got %+v", byID["A"].DependsOn)
+	}
+	if len(byID["B"].DependsOn) != 1 || byID["B"].DependsOn[0] != "A" {
+		t.Fatalf("expected B to depend on A, got %+v", byID["B"].DependsOn)
+	}
+	if len(byID["C"].DependsOn) != 0 {
+		t.Fatalf("expected C to be dependency-free, got %+v", byID["C"].DependsOn)
+	}
+}
+
+// TestLongTaskWalkRunsVisitsAllWorkflows verifies walkLongTaskRuns
+// streams every on-disk run record across multiple workflows, which is
+// the primitive the startup resume sweep relies on.
+func TestLongTaskWalkRunsVisitsAllWorkflows(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	specs := []struct {
+		workflow string
+		runID    string
+		status   string
+	}{
+		{"wf_a", "run_a1", "running"},
+		{"wf_a", "run_a2", "interrupted"},
+		{"wf_b", "run_b1", "completed"},
+	}
+	for _, s := range specs {
+		rec := longTaskRunRecord{
+			RunID:      s.runID,
+			WorkflowID: s.workflow,
+			StartedAt:  time.Now().UTC(),
+			UpdatedAt:  time.Now().UTC(),
+			Status:     s.status,
+		}
+		if err := a.workflows.writeLongTaskRun(rec); err != nil {
+			t.Fatalf("write run %s: %v", s.runID, err)
+		}
+	}
+
+	seen := map[string]string{} // runID -> status
+	err := a.workflows.walkLongTaskRuns(func(workflowID string, rec longTaskRunRecord) error {
+		seen[rec.RunID] = rec.Status
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(seen) != 3 {
+		t.Fatalf("expected 3 records visited, got %d (%v)", len(seen), seen)
+	}
+	if seen["run_a1"] != "running" || seen["run_a2"] != "interrupted" || seen["run_b1"] != "completed" {
+		t.Fatalf("unexpected walk results: %v", seen)
+	}
+}
+
+// TestLongTaskResumeAfterRestartSweepsAndRebuilds verifies the startup
+// resume helper: stale "running" records are flipped to "interrupted",
+// and the in-memory async index is rebuilt so longTaskRunStatus returns
+// a view sourced from durable state instead of erroring.
+func TestLongTaskResumeAfterRestartSweepsAndRebuilds(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_resume_startup",
+		"stories": []map[string]interface{}{
+			{"id": "US-001", "title": "First", "priority": 1},
+		},
+	})
+
+	// Pre-seed a stale "running" record, as if the process crashed mid-run.
+	now := time.Now().UTC()
+	stale := longTaskRunRecord{
+		RunID:      "run_crashed",
+		WorkflowID: "lt_resume_startup",
+		StartedAt:  now,
+		UpdatedAt:  now,
+		Status:     "running",
+	}
+	if err := a.workflows.writeLongTaskRun(stale); err != nil {
+		t.Fatalf("write stale run: %v", err)
+	}
+
+	a.longTaskResumeAsyncAfterRestart()
+
+	// The stale record must now be interrupted.
+	records, err := a.workflows.listLongTaskRuns("lt_resume_startup")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 1 || records[0].Status != "interrupted" {
+		t.Fatalf("expected stale run marked interrupted, got %+v", records)
+	}
+
+	// The workflow itself is still pending (no story started), so a status
+	// read must succeed from durable state.
+	view, err := a.longTaskRunStatus("lt_resume_startup")
+	if err != nil {
+		t.Fatalf("longTaskRunStatus after resume: %v", err)
+	}
+	if view.LongTaskID != "lt_resume_startup" {
+		t.Fatalf("expected view from durable state, got %+v", view)
+	}
+}
+
+// TestSharedResumeLongTasksAfterRestartIsIdempotent verifies the
+// SharedDependencies startup hook only sweeps once even when called
+// multiple times (defending against per-session re-invocation).
+func TestSharedResumeLongTasksAfterRestartIsIdempotent(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	shared := NewSharedDependencies(a.cfg)
+	// Reuse the same workflows store backing the agent so we can seed and
+	// observe records through one path.
+	shared.deps.workflows = a.workflows
+
+	now := time.Now().UTC()
+	rec := longTaskRunRecord{
+		RunID:      "run_idem",
+		WorkflowID: "lt_idem",
+		StartedAt:  now,
+		UpdatedAt:  now,
+		Status:     "running",
+	}
+	if err := a.workflows.writeLongTaskRun(rec); err != nil {
+		t.Fatalf("write run: %v", err)
+	}
+
+	shared.ResumeLongTasksAfterRestart()
+	shared.ResumeLongTasksAfterRestart()
+	shared.ResumeLongTasksAfterRestart()
+
+	records, err := a.workflows.listLongTaskRuns("lt_idem")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 1 || records[0].Status != "interrupted" {
+		t.Fatalf("expected exactly one interrupted record after repeated calls, got %+v", records)
+	}
+}
+

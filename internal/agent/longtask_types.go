@@ -57,6 +57,10 @@ type longTaskStoryInput struct {
 	WriteScope         []string `json:"write_scope,omitempty"`
 	HandoffPolicy      string   `json:"handoff_policy,omitempty"`
 	HandoffMaxBytes    int      `json:"handoff_max_bytes,omitempty"`
+	// DependsOn lists the story IDs that must complete before this one starts.
+	// Empty means the story is ready immediately and may run in parallel with
+	// every other dependency-free story (dynamic parallel DAG semantics).
+	DependsOn []string `json:"depends_on,omitempty"`
 }
 
 type longTaskArgs struct {
@@ -135,7 +139,10 @@ type LongTaskStoryView struct {
 	Description        string    `json:"description,omitempty"`
 	AcceptanceCriteria []string  `json:"acceptance_criteria,omitempty"`
 	Priority           int       `json:"priority,omitempty"`
-	Status             string    `json:"status"`
+	// DependsOn exposes the story IDs this story depends on. Empty means the
+	// story is dependency-free and runs in parallel with other free stories.
+	DependsOn []string `json:"depends_on,omitempty"`
+	Status    string    `json:"status"`
 	Passes             bool      `json:"passes"`
 	Verdict            string    `json:"verdict,omitempty"`
 	JobID              string    `json:"job_id,omitempty"`

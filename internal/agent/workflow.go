@@ -151,6 +151,7 @@ type workflowNodeView struct {
 	IdentityID      string        `json:"identity_id,omitempty"`
 	AgentIdentity   AgentIdentity `json:"agent_identity,omitempty"`
 	Kind            string        `json:"kind,omitempty"`
+	NodeType        string        `json:"node_type,omitempty"`
 	Title           string        `json:"title,omitempty"`
 	DependsOn       []string      `json:"depends_on,omitempty"`
 	HandoffPolicy   string        `json:"handoff_policy,omitempty"`
@@ -401,7 +402,11 @@ func workflowNodesFromInputs(inputs []workflowNodeInput, existing map[string]str
 			Prompt:          prompt,
 			DependsOn:       normalizeWorkflowStrings(input.DependsOn),
 			HandoffPolicy:   normalizeWorkflowHandoffPolicy(input.HandoffPolicy, len(input.DependsOn) > 0),
-			HandoffFrom:     normalizeWorkflowHandoffFrom(input.HandoffFrom, input.DependsOn),
+			// HandoffFrom stays explicit (not defaulted from DependsOn):
+			// consumers fall back to DependsOn at use time, and keeping the
+			// field empty lets the agent_graph view distinguish declared
+			// handoff edges from plain data_dependency edges.
+			HandoffFrom:     normalizeWorkflowStrings(input.HandoffFrom),
 			HandoffMaxBytes: normalizeWorkflowHandoffMaxBytes(input.HandoffMaxBytes),
 			PreviewMerge:    normalizeWorkflowPreviewMerge(input.PreviewMerge),
 			Status:          workflowStatusPending,
@@ -480,7 +485,7 @@ func (s *workflowStore) load(id string) (workflowState, error) {
 	for i := range nodes {
 		nodes[i].Kind = normalizeWorkflowNodeKind(nodes[i].Kind, nodes[i].ID)
 		nodes[i].HandoffPolicy = normalizeWorkflowHandoffPolicy(nodes[i].HandoffPolicy, len(nodes[i].DependsOn) > 0)
-		nodes[i].HandoffFrom = normalizeWorkflowHandoffFrom(nodes[i].HandoffFrom, nodes[i].DependsOn)
+		nodes[i].HandoffFrom = normalizeWorkflowStrings(nodes[i].HandoffFrom)
 		nodes[i].HandoffMaxBytes = normalizeWorkflowHandoffMaxBytes(nodes[i].HandoffMaxBytes)
 		if len(nodes[i].DependsOn) > 0 && nodes[i].HandoffPolicy != workflowHandoffPolicyNone && !nodes[i].PreviewMerge {
 			nodes[i].PreviewMerge = true
@@ -987,6 +992,7 @@ func workflowNodeViews(nodes []workflowNode) []workflowNodeView {
 			IdentityID:      firstNonEmpty(node.IdentityID, node.AgentIdentity.ID),
 			AgentIdentity:   node.AgentIdentity,
 			Kind:            normalizeWorkflowNodeKind(node.Kind, node.ID),
+			NodeType:        normalizeAgentGraphNodeType(node.Kind),
 			Title:           node.Title,
 			DependsOn:       append([]string{}, node.DependsOn...),
 			HandoffPolicy:   node.HandoffPolicy,
@@ -1338,8 +1344,7 @@ func (a *Agent) workflowDependencyHandoffText(state workflowState, node workflow
 	for _, item := range state.Nodes {
 		byID[item.ID] = item
 	}
-	var builder strings.Builder
-	limit := normalizeWorkflowHandoffMaxBytes(node.HandoffMaxBytes)
+	chunks := make([]string, 0, len(depIDs))
 	for _, depID := range depIDs {
 		dep, ok := byID[depID]
 		if !ok {
@@ -1350,20 +1355,13 @@ func (a *Agent) workflowDependencyHandoffText(state workflowState, node workflow
 			return "", err
 		}
 		chunk := formatWorkflowDependencyHandoff(dep, handoff, policy)
-		if chunk == "" {
-			continue
+		if chunk != "" {
+			chunks = append(chunks, chunk)
 		}
-		if builder.Len()+len(chunk) > limit {
-			remaining := limit - builder.Len()
-			if remaining > 0 {
-				builder.WriteString(chunk[:remaining])
-			}
-			builder.WriteString("\n[dependency handoffs truncated]\n")
-			break
-		}
-		builder.WriteString(chunk)
 	}
-	return builder.String(), nil
+	// Phase 2.3: assemble under the byte ceiling with the shared truncation
+	// path (same behavior as merge-point synthesis).
+	return assembleTruncatedHandoffs(chunks, normalizeWorkflowHandoffMaxBytes(node.HandoffMaxBytes)), nil
 }
 
 func (s *workflowStore) loadHandoff(workflowID string, node workflowNode) (workflowNodeHandoff, error) {
@@ -1540,7 +1538,10 @@ func workflowHandoffSummary(resultText, errorText string) string {
 	if text == "" {
 		text = strings.TrimSpace(errorText)
 	}
-	return previewSubagentResultForModel(text)
+	preview := previewSubagentResultForModel(text)
+	// Phase 2.3: cap the stored summary at a token budget, not just a char
+	// limit, so CJK-heavy results do not blow the child's context.
+	return truncateTextToTokenBudget(preview, workflowHandoffSummaryTokenBudget)
 }
 
 func normalizeWorkflowNodeKind(kind, fallback string) string {

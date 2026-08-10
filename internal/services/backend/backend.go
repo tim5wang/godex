@@ -428,5 +428,9 @@ func NewService(cfg *config.Config, shared *agent.SharedDependencies, commandSer
 	service.autoRepairSessions()
 	service.recoverQueuedSessions()
 	service.wireSlashCommandHandlers()
+	// One-time startup sweep: flip any longtask run records left "running"
+	// by a crashed process to "interrupted" so they can be resumed via
+	// --resume-run-id. Idempotent (guarded by sync.Once inside shared).
+	shared.ResumeLongTasksAfterRestart()
 	return service
 }

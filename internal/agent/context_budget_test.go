@@ -1,8 +1,13 @@
 package agent
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/tim5wang/godex/internal/core/protocol"
 )
 
 // Phase 2.3 — 上下文预算管理 tests: completed-subtask summaries and
@@ -85,5 +90,155 @@ func TestAssembleTruncatedHandoffsRespectsByteCeiling(t *testing.T) {
 func TestAssembleTruncatedHandoffsEmptyInput(t *testing.T) {
 	if out := assembleTruncatedHandoffs(nil, 8000); out != "" {
 		t.Fatalf("expected empty output, got %q", out)
+	}
+}
+
+func TestAssembleTruncatedHandoffsCJKRuneSafe(t *testing.T) {
+	// A chunk of multi-byte CJK runes cut at a byte ceiling must never
+	// split a rune in half (which would produce invalid UTF-8).
+	cjk := strings.Repeat("这是一个非常长的中文子任务结果摘要内容", 400) // ~2000 runes, 3 bytes each
+	out := assembleTruncatedHandoffs([]string{cjk}, 8000)
+	if len(out) > 8000 {
+		t.Fatalf("assembled handoffs exceeded byte ceiling: %d", len(out))
+	}
+	if !utf8.ValidString(out) {
+		t.Fatal("assembled handoffs produced invalid UTF-8 (rune split)")
+	}
+	if !strings.Contains(out, "truncated") {
+		t.Fatal("expected truncation marker when byte ceiling hit")
+	}
+}
+
+func TestRoleContextBudgetTokens(t *testing.T) {
+	cases := []struct {
+		roleID, agentType string
+		want              int
+	}{
+		{"orchestrator", "", roleContextBudgetOrchestrator},
+		{"worker", "", roleContextBudgetWorker},
+		{"reviewer", "", roleContextBudgetReviewer},
+		{"researcher", "", roleContextBudgetResearcher},
+		{"", "research-agent", roleContextBudgetResearcher},
+		{"", "general-purpose", defaultRoleContextBudget},
+		{"", "", defaultRoleContextBudget},
+	}
+	for _, tc := range cases {
+		if got := roleContextBudgetTokens(tc.roleID, tc.agentType); got != tc.want {
+			t.Fatalf("roleContextBudgetTokens(%q, %q) = %d, want %d", tc.roleID, tc.agentType, got, tc.want)
+		}
+	}
+}
+
+func TestSubagentStartWithOptionsResolvesContextBudget(t *testing.T) {
+	store := newSubagentJobStore(filepath.Join(t.TempDir(), "subagents"))
+	job, err := store.StartWithOptions(subagentStartOptions{
+		AgentType:   "general-purpose",
+		RoleID:      "researcher",
+		RoleName:    "researcher",
+		Prompt:      "research the topic",
+		ToolNames:   []string{"web_search"},
+		MaxTurns:    1,
+		WorkerID:    localGoDexWorkerID,
+		SandboxID:   "sandbox:local:test",
+		BasePrompt:  "base",
+		ParentID:    "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("start subagent: %v", err)
+	}
+	if job.ContextBudget != roleContextBudgetResearcher {
+		t.Fatalf("expected researcher context budget %d, got %d", roleContextBudgetResearcher, job.ContextBudget)
+	}
+}
+
+func TestSubagentStartWithOptionsHonorsExplicitContextBudget(t *testing.T) {
+	store := newSubagentJobStore(filepath.Join(t.TempDir(), "subagents"))
+	job, err := store.StartWithOptions(subagentStartOptions{
+		AgentType:     "general-purpose",
+		Prompt:        "do the work",
+		ToolNames:     []string{"todo_read"},
+		MaxTurns:      1,
+		WorkerID:      localGoDexWorkerID,
+		SandboxID:     "sandbox:local:test",
+		BasePrompt:    "base",
+		ParentID:      "turn-1",
+		ContextBudget: 42,
+	})
+	if err != nil {
+		t.Fatalf("start subagent: %v", err)
+	}
+	if job.ContextBudget != 42 {
+		t.Fatalf("expected explicit context budget 42, got %d", job.ContextBudget)
+	}
+}
+
+func TestMaybeCompactSubagentMessagesOverBudget(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	store := newSubagentJobStore(filepath.Join(t.TempDir(), "subagents"))
+	job, err := store.StartWithOptions(subagentStartOptions{
+		AgentType:     "general-purpose",
+		Prompt:        "work",
+		ToolNames:     []string{"todo_read"},
+		MaxTurns:      1,
+		WorkerID:      localGoDexWorkerID,
+		SandboxID:     "sandbox:local:test",
+		BasePrompt:    "base",
+		ParentID:      "turn-1",
+		ContextBudget: 1000,
+	})
+	if err != nil {
+		t.Fatalf("start subagent: %v", err)
+	}
+	// Build a message history well over the budget.
+	big := strings.Repeat("tool output line\n", 3000) // ~45k chars
+	messages := []protocol.Message{
+		protocol.NewTextMessage(protocol.RoleUser, "start"),
+		protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("tool-1", big)),
+		protocol.NewTextMessage(protocol.RoleUser, "continue"),
+	}
+	if estimateMessages(messages) <= 1000 {
+		t.Fatalf("test messages too small: %d tokens", estimateMessages(messages))
+	}
+	out := a.maybeCompactSubagentMessages(context.Background(), job, messages, subagentEventTarget{})
+	if len(out) == 0 {
+		t.Fatal("expected non-empty compacted messages")
+	}
+	if estimateMessages(out) >= estimateMessages(messages) {
+		t.Fatalf("expected compaction to reduce tokens: before=%d after=%d", estimateMessages(messages), estimateMessages(out))
+	}
+	// The compacted history is checkpointed and progress recorded.
+	persisted, err := store.Get(job.ID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if estimateMessages(persisted.Messages) >= estimateMessages(messages) {
+		t.Fatalf("expected persisted messages compacted, got %d tokens", estimateMessages(persisted.Messages))
+	}
+}
+
+func TestMaybeCompactSubagentMessagesUnderBudgetUnchanged(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	store := newSubagentJobStore(filepath.Join(t.TempDir(), "subagents"))
+	job, err := store.StartWithOptions(subagentStartOptions{
+		AgentType:     "general-purpose",
+		Prompt:        "work",
+		ToolNames:     []string{"todo_read"},
+		MaxTurns:      1,
+		WorkerID:      localGoDexWorkerID,
+		SandboxID:     "sandbox:local:test",
+		BasePrompt:    "base",
+		ParentID:      "turn-1",
+		ContextBudget: 100000,
+	})
+	if err != nil {
+		t.Fatalf("start subagent: %v", err)
+	}
+	messages := []protocol.Message{
+		protocol.NewTextMessage(protocol.RoleUser, "short prompt"),
+	}
+	out := a.maybeCompactSubagentMessages(context.Background(), job, messages, subagentEventTarget{})
+	if len(out) != len(messages) || protocol.MessageText(out[0]) != "short prompt" {
+		t.Fatalf("expected messages unchanged under budget, got %+v", out)
 	}
 }

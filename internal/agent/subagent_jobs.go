@@ -113,6 +113,7 @@ type subagentJob struct {
 	Messages        []protocol.Message        `json:"messages,omitempty"`
 	Progress        []subagentProgressEvent   `json:"progress,omitempty"`
 	MaxTurns        int                       `json:"max_turns"`
+	ContextBudget   int                       `json:"context_budget,omitempty"`
 	JobTimeoutMS    int                       `json:"job_timeout_ms,omitempty"`
 	CreatedAt       time.Time                 `json:"created_at"`
 	UpdatedAt       time.Time                 `json:"updated_at"`
@@ -317,6 +318,7 @@ type subagentStartOptions struct {
 	SandboxID       string
 	ModelHint       string
 	BudgetHint      string
+	ContextBudget   int
 	Display         map[string]string
 	RuntimeContext  automation.SessionContext
 	MaxTurns        int

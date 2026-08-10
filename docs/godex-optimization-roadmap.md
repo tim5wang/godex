@@ -24,6 +24,7 @@
 | **Longtask 动态 DAG** | ✅ 动态并行 DAG 语义（depends_on 显式依赖、无依赖并行 fan-out，2026-08-10） |
 | **Longtask 重启恢复** | ✅ run 记录持久化 + 启动 sweep/重建 + `--resume-run-id` 续跑（2026-08-11） |
 | **上下文预算管理** | ✅ 子任务自动摘要化（token 预算截断）、依赖 handoff 共享截断路径、历史子任务不驻留活跃上下文（2026-08-11） |
+| **上下文预算按角色分配** | ✅ 角色预算解析（orchestrator 200K / worker 100K / reviewer 100K / researcher 50K）、`ContextBudget` 持久化到 subagent job、subagent 运行循环超预算自动 rule-based 压缩（2026-08-11） |
 | **AgentGraph 抽象** | ✅ `agent_graph` 工具 + `AgentGraph` 接口（Create/Get/AddNode/AddEdge/RemoveNode/Cancel/Run/Wait）、5 种节点类型、3 种边类型、动态增删、merge_point/user_input 语义（2026-08-11） |
 | **Runner 韧性** | 统一 phase checkpoint、active turn follow-up injection、空回复恢复、length/provider error 恢复 |
 | **安全边界** | 安全 profile、host privilege policy、WorkspaceFS 文件边界、shell 风险分级和审计 |
@@ -323,12 +324,12 @@ orchestrator (完整工具集)
 - 角色切换时写 scope 自动更新
 - 写 scope 在 bundle 层面做统一管理，不依赖单个工具
 
-#### 4.6 上下文预算按角色分配
+#### 4.6 上下文预算按角色分配 ✅（2026-08-11）
 
-**方案**：
-- 不同角色有不同最大 token 预算
-- orchestrator 200K，worker 100K，reviewer 100K，researcher 50K
-- 超出预算时自动触发 compaction
+**方案（已落地）**：
+- ✅ 不同角色有不同最大 token 预算：orchestrator 200K，worker 100K，reviewer 100K，researcher 50K
+- ✅ `roleContextBudgetTokens()` 解析 + `subagentStartOptions`/`subagentJob` 新增 `ContextBudget`（持久化，显式值优先）
+- ✅ 超出预算时自动触发 compaction：`runSubagentJob` 的 BuildRequest 前用 `estimateMessages` 估算，超预算则 rule-based summarizer 压缩并 checkpoint
 
 ---
 

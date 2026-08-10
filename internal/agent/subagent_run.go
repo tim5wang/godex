@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -81,6 +82,7 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		start.Capabilities = roleCapabilitySummary(role, start.ToolNames, req.WriteScope)
 		start.ModelHint = role.ModelHint
 		start.BudgetHint = role.BudgetHint
+		start.ContextBudget = roleContextBudgetTokens(role.ID, req.AgentType)
 		start.Display = roleDisplayMap(role.Display)
 	}
 	start.ToolNames = appendRequiredSubagentTools(start.ToolNames, requiredBundles, req.RequiredTools)
@@ -350,6 +352,42 @@ func (a *Agent) subagentLeaseBeatLoop(runCtx context.Context, id, token string, 
 	}
 }
 
+// maybeCompactSubagentMessages compacts a subagent's accumulated messages when
+// their token estimate exceeds the job's role context budget (roadmap 4.6).
+// It runs the rule-based summarizer (no model round-trip) and persists the
+// compacted history so a crash mid-run keeps the compressed view. Returns the
+// message slice to use for the next request (compacted when over budget).
+func (a *Agent) maybeCompactSubagentMessages(ctx context.Context, job *subagentJob, messages []protocol.Message, target subagentEventTarget) []protocol.Message {
+	if job == nil || job.ContextBudget <= 0 || len(messages) == 0 {
+		return messages
+	}
+	if estimateMessages(messages) <= job.ContextBudget {
+		return messages
+	}
+	if a == nil || a.compressor == nil {
+		return messages
+	}
+	summarizer := compress.NewRuleBasedSessionSummarizer(a.compressor)
+	result, err := summarizer.SummarizeSession(ctx, compress.SessionSummaryRequest{
+		History: messages,
+	})
+	if err != nil || len(result.Messages) == 0 {
+		return messages
+	}
+	// Rule-based summarization may keep the same message count (large tool
+	// results become transcript references); require a real token reduction
+	// before checkpointing the compacted history.
+	if estimateMessages(result.Messages) >= estimateMessages(messages) {
+		return messages
+	}
+	_ = a.subagentJobs.UpdateMessages(job.ID, result.Messages)
+	a.recordSubagentProgress(job.ID, target, subagentProgressEvent{
+		Phase:   "context_budget_compact",
+		Message: "Subagent context compacted to fit role budget.",
+	})
+	return result.Messages
+}
+
 func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEventTarget) {
 	job, err := a.subagentJobs.Get(id)
 	if err != nil {
@@ -380,6 +418,7 @@ func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEv
 		Caller: a.client,
 		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
 			_ = ctx
+			messages = a.maybeCompactSubagentMessages(ctx, job, messages, target)
 			req := conversation.NewRequest(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, prompts.Build(), messages, a.toolHandler.ActiveSchemas(job.ToolNames...))
 			if sid := strings.TrimSpace(job.SessionID); sid != "" {
 				req.PromptCacheKey = clampCacheKey(sid + ":" + job.ID)

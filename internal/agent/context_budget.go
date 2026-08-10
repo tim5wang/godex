@@ -2,6 +2,7 @@ package agent
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tim5wang/godex/internal/core/compress"
 )
@@ -80,6 +81,27 @@ func runesWithinTokenBudget(runes []rune, budget int) int {
 	return end
 }
 
+// truncateChunkToByteLimit returns the longest valid-UTF-8 prefix of chunk
+// whose byte length does not exceed maxBytes. It never splits a multi-byte
+// rune, so CJK-heavy handoff content stays well-formed when a chunk is cut
+// at the byte ceiling.
+func truncateChunkToByteLimit(chunk string, maxBytes int) string {
+	if maxBytes <= 0 || len(chunk) <= maxBytes {
+		return chunk
+	}
+	used := 0
+	end := 0
+	for end < len(chunk) {
+		_, size := utf8.DecodeRuneInString(chunk[end:])
+		if used+size > maxBytes {
+			break
+		}
+		used += size
+		end += size
+	}
+	return chunk[:end]
+}
+
 // assembleTruncatedHandoffs joins dependency handoff chunks under a byte
 // ceiling (the durable handoff_max_bytes limit). It is the shared assembly
 // used by dependency handoff injection and merge-point synthesis so the
@@ -99,7 +121,7 @@ func assembleTruncatedHandoffs(chunks []string, byteLimit int) string {
 			remaining := byteLimit - builder.Len()
 			const marker = "\n[dependency handoffs truncated]\n"
 			if remaining-len(marker) > 0 {
-				builder.WriteString(chunk[:remaining-len(marker)])
+				builder.WriteString(truncateChunkToByteLimit(chunk, remaining-len(marker)))
 			}
 			builder.WriteString(marker)
 			break
@@ -107,4 +129,37 @@ func assembleTruncatedHandoffs(chunks []string, byteLimit int) string {
 		builder.WriteString(chunk)
 	}
 	return builder.String()
+}
+
+// Phase 4.6 — 上下文预算按角色分配.
+//
+// Different roles get different max context token budgets (roadmap 4.6): the
+// orchestrator gets the largest window, workers and reviewers a mid budget,
+// and researchers the smallest. When a subagent's accumulated history exceeds
+// its role budget the run loop compacts it (auto-compaction) instead of
+// letting the request grow unbounded.
+const (
+	roleContextBudgetOrchestrator = 200_000
+	roleContextBudgetWorker       = 100_000
+	roleContextBudgetReviewer     = 100_000
+	roleContextBudgetResearcher   = 50_000
+	defaultRoleContextBudget      = 100_000
+)
+
+// roleContextBudgetTokens resolves the max context tokens for a subagent
+// role. Unknown / empty roles fall back to the default worker budget.
+func roleContextBudgetTokens(roleID, agentType string) int {
+	id := strings.ToLower(strings.TrimSpace(firstNonEmpty(roleID, agentType)))
+	switch {
+	case strings.Contains(id, "orchestrator"):
+		return roleContextBudgetOrchestrator
+	case strings.Contains(id, "reviewer"):
+		return roleContextBudgetReviewer
+	case strings.Contains(id, "researcher"), strings.Contains(id, "research"):
+		return roleContextBudgetResearcher
+	case strings.Contains(id, "worker"):
+		return roleContextBudgetWorker
+	default:
+		return defaultRoleContextBudget
+	}
 }

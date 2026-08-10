@@ -371,6 +371,7 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 		Status:          subagentStatusRunning,
 		Messages:        []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, strings.TrimSpace(opts.Prompt))},
 		MaxTurns:        opts.MaxTurns,
+		ContextBudget:   opts.ContextBudget,
 		JobTimeoutMS:    opts.JobTimeoutMS,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -397,6 +398,9 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 	}
 	if strings.TrimSpace(job.Identity.BudgetHint) == "" && job.MaxTurns > 0 {
 		job.Identity.BudgetHint = fmt.Sprintf("max_turns:%d", job.MaxTurns)
+	}
+	if job.ContextBudget <= 0 {
+		job.ContextBudget = roleContextBudgetTokens(job.RoleID, job.AgentType)
 	}
 
 	s.mu.Lock()

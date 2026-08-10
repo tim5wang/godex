@@ -62,6 +62,7 @@ func subagentStartOptionsFromWorkerRequest(req workerruntime.JobRequest, maxConc
 		WorkerID:        firstNonEmpty(req.WorkerID, localGoDexWorkerID),
 		ModelHint:       req.ModelHint,
 		BudgetHint:      req.BudgetHint,
+		ContextBudget:   roleContextBudgetTokens(req.RoleID, req.AgentType),
 		Display:         cloneStringMap(req.Display),
 		RuntimeContext:  req.RuntimeContext.Clone(),
 		MaxTurns:        req.MaxTurns,

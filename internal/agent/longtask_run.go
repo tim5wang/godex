@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -204,11 +205,7 @@ func (a *Agent) longTaskResumeAsyncAfterRestart() {
 	// subagent lease reaping done for durable subagents and is what lets a
 	// restarted process distinguish crashed runs from resumable ones.
 	if _, err := a.workflows.sweepStaleLongTaskRuns(); err != nil {
-		_ = a.workflows.appendEvent("sweep", map[string]interface{}{
-			"event": "longtask_startup_sweep_error",
-			"err":   err.Error(),
-			"at":    time.Now().UTC(),
-		})
+		fmt.Fprintf(os.Stderr, "Warning: longtask startup sweep failed: %v\n", err)
 	}
 	// 2. Rebuild the in-memory async-run index for records that were left
 	// in "interrupted" state so longTaskRunStatus can report them and a

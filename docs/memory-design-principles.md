@@ -143,6 +143,8 @@ Identity 和 Core 都有独立预算，不应该无限增长。
 - `workflow`
 - `project`
 - `warning`
+- `work_method`（工作方法：如何做一件事，如 recipe/tutorial/cookbook）
+- `work_fact`（事实：如 faq/reference/cheatsheet，结构化的参考信息）
 
 ### 分层注入
 
@@ -188,6 +190,30 @@ Identity 和 Core 都有独立预算，不应该无限增长。
 - suppression
 - Always include / core
 - Web 管理页
+
+### 笔记 ↔ 记忆联动
+
+笔记（Notes）与记忆（Memory）是独立的子系统，但在以下两个方向已打通：
+
+**笔记 → 记忆（笔记打开时检索相关记忆）**
+- `GET /notes/{id}/related-memories` 端点暴露
+- NotesPage 详情页底部展示相关记忆列表（最多 6 条，含 type 标签）
+- 笔记的 tags 优先作为搜索关键词，tags 不足时退化为 title + summary
+
+**记忆 → 笔记（记忆注入时追加相关笔记引用）**
+- Agent 的 `collectMemoryMessages` 在注入记忆分层后，用召回查询关键词搜索笔记
+- 最多追加 3 条相关笔记引用（含摘要），更多提示可通过 `note list` 或笔记 app 查看
+- 笔记引用的篇幅远小于笔记全文，不会影响上下文预算
+
+**envelopeWithNoteContext（笔记语境注入）**
+- 在 Chat 中打开笔记时，参数 `?note_id=` 触发笔记内容注入
+- 注入内容包括笔记标题、标签、摘要、全文，以及相关记忆的摘要链接
+- 相关记忆部分只展示 type 标签 + 标题 + 摘要（最多 4 条），末尾提示工具可搜索更多
+
+打通后，记忆和笔记在语义上形成了互补关系：
+- 记忆 = 结构化、短小、自动抽取、常驻上下文
+- 笔记 = 人工整理、长篇、按需加载
+- 一张笔记的 tags 天然构成一个"场景（scene）"索引，无需额外构建 L2 场景聚类
 
 ## Project Miner 原则
 
@@ -239,9 +265,16 @@ Identity 和 Core 都有独立预算，不应该无限增长。
 
 2. 增强 scope 模型
 - 从轻量规则走向更稳定的项目域召回
+- 复用笔记 tags 建立更丰富的场景索引
 
 3. 提升 project miner
 - 保持 inbox 审核前提下，扩展更丰富的高信号来源
+- 已支持按文件名推断 `work_method` / `work_fact` 类型（recipe/howto → work_method，faq/reference → work_fact）
 
 4. 提升 explainability
 - 更明确地告诉用户：这条记忆为什么被注入、为什么被召回
+
+5. 加深笔记 ↔ 记忆联动
+- 从"相关记忆摘要 + 笔记引用"走向双向自动沉淀
+- 笔记保存时可选自动提炼全新记忆候选
+- 记忆命中 `work_*` 时反向列出可参考的笔记

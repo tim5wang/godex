@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"github.com/tim5wang/godex/internal/core/lease"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"sync"
@@ -118,6 +119,8 @@ type subagentJob struct {
 	StartedAt       time.Time                 `json:"started_at,omitempty"`
 	FinishedAt      time.Time                 `json:"finished_at,omitempty"`
 	MergedAt        time.Time                 `json:"merged_at,omitempty"`
+	LeaseToken      string                    `json:"lease_token,omitempty"`
+	LeaseExpiresAt  time.Time                 `json:"lease_expires_at,omitempty"`
 }
 
 // IDString returns the durable job id without exposing the internal job type.
@@ -288,6 +291,8 @@ type subagentJobStore struct {
 	targets     map[string]subagentEventTarget
 	watchers    map[uint64]chan struct{}
 	nextWatcher uint64
+	leaseStore  lease.Store
+	leaseTTL    time.Duration
 }
 
 type subagentStartOptions struct {

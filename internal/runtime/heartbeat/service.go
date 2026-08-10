@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/idempotency"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -32,6 +33,15 @@ type Deliverer interface {
 
 type BusyChecker func() bool
 
+// ServiceOption configures a Service after construction.
+type ServiceOption func(*Service)
+
+// WithIdempotencyStore wires an idempotency store into the Service so that
+// duplicate dispatches of the same run are suppressed.
+func WithIdempotencyStore(st idempotency.Store) ServiceOption {
+	return func(s *Service) { s.idempotency = st }
+}
+
 type Service struct {
 	cfg     Config
 	store   Store
@@ -40,23 +50,29 @@ type Service struct {
 	now     func() time.Time
 	busy    BusyChecker
 
+	idempotency idempotency.Store
+
 	mu       sync.Mutex
 	cancel   context.CancelFunc
 	done     chan struct{}
 	inFlight bool
 }
 
-func NewService(cfg Config, store Store, backend Backend, deliver Deliverer) *Service {
+func NewService(cfg Config, store Store, backend Backend, deliver Deliverer, opts ...ServiceOption) *Service {
 	if store == nil {
 		panic("heartbeat store is required")
 	}
-	return &Service{
+	s := &Service{
 		cfg:     normalizeConfig(cfg),
 		store:   store,
 		backend: backend,
 		deliver: deliver,
 		now:     time.Now,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *Service) SetBusyChecker(check BusyChecker) {
@@ -289,6 +305,19 @@ func (s *Service) dispatchDue(ctx context.Context) error {
 
 func (s *Service) runRule(ctx context.Context, rule Rule, startedAt time.Time, manual bool) (RunLog, error) {
 	rule = rule.normalize(s.cfg)
+
+	// Idempotency guard: skip if this run has already been committed.
+	if s.idempotency != nil {
+		idempKey := fmt.Sprintf("heartbeat:run:%s:%d", rule.ID, startedAt.Unix())
+		committed, err := s.idempotency.Committed(idempKey)
+		if err != nil {
+			return RunLog{}, fmt.Errorf("idempotency check failed: %w", err)
+		}
+		if committed {
+			return RunLog{}, nil
+		}
+	}
+
 	run := RunLog{
 		ID:             newID("hb-run"),
 		RuleID:         rule.ID,
@@ -403,11 +432,20 @@ func (s *Service) runRule(ctx context.Context, rule Rule, startedAt time.Time, m
 	}
 
 	if appendErr := s.store.AppendRunLog(run); appendErr != nil && err == nil {
-		err = appendErr
+			err = appendErr
 	}
 	if saveErr := s.store.SaveRule(rule); saveErr != nil && err == nil {
 		err = saveErr
 	}
+
+	// Commit the idempotency key after a clean successful run.
+	if s.idempotency != nil && err == nil && run.Status == RuleStatusCompleted {
+		idempKey := fmt.Sprintf("heartbeat:run:%s:%d", rule.ID, startedAt.Unix())
+		if _, onceErr := s.idempotency.Once(idempKey, func() error { return nil }); onceErr != nil && err == nil {
+			err = fmt.Errorf("idempotency commit failed: %w", onceErr)
+		}
+	}
+
 	return run, err
 }
 

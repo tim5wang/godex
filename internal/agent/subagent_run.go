@@ -288,13 +288,66 @@ func (a *Agent) ResumeDurableSubagentViewWithContext(ctx context.Context, sessio
 func (a *Agent) runSubagentJobAsync(id string, target subagentEventTarget) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.subagentJobs.SetActive(id, cancel)
+
+	// Acquire a lease for this run. When the lease store is not wired
+	// (leased=false), keep the legacy behaviour (no leasing).
+	leaseHolder, leased, _ := a.subagentJobs.AcquireLease(id)
+	runCtx := ctx
+	leaseRelease := func() {}
+	if leased {
+		var runCancel context.CancelFunc
+		runCtx, runCancel = context.WithCancel(ctx)
+		go a.subagentLeaseBeatLoop(runCtx, id, leaseHolder.Token, runCancel)
+		leaseRelease = func() {
+			runCancel()
+			a.subagentJobs.ReleaseLease(id, leaseHolder.Token)
+		}
+	}
+
 	go func() {
 		defer func() {
+			leaseRelease()
 			a.subagentJobs.ClearActive(id)
 			a.startPendingSubagents(target.sink)
 		}()
-		a.runSubagentJob(ctx, id, target)
+		a.runSubagentJob(runCtx, id, target)
 	}()
+}
+
+// subagentLeaseLostLimit is the number of consecutive missed heartbeats
+// before an in-process subagent run is cancelled.
+const subagentLeaseLostLimit = 3
+
+// subagentLeaseBeatLoop renews the job lease every ttl/3 and cancels the run
+// once the lease is lost on subagentLeaseLostLimit consecutive beats. The loop
+// exits as soon as runCtx is done (job finished/released) so no heartbeat
+// goroutine outlives the run it serves.
+func (a *Agent) subagentLeaseBeatLoop(runCtx context.Context, id, token string, cancel context.CancelFunc) {
+	ttl := a.subagentJobs.LeaseTTL()
+	interval := ttl / 3
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	consecutiveLost := 0
+	for {
+		select {
+		case <-runCtx.Done():
+			return
+		case <-ticker.C:
+			alive, _ := a.subagentJobs.HeartbeatLease(token)
+			if alive {
+				consecutiveLost = 0
+				continue
+			}
+			consecutiveLost++
+			if consecutiveLost >= subagentLeaseLostLimit {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEventTarget) {

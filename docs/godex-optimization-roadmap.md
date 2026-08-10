@@ -126,48 +126,55 @@ orchestrator (完整工具集)
 
 ### 🔴 Phase 1：长任务运行时韧性（P0，基础底座）
 
-#### 1.1 异步 turn/job runtime
+#### 1.1 异步 turn/job runtime ✅（2026-08-10）
 
 **问题**：Web 消息提交绑定 HTTP 请求生命周期，长任务断开后丢失状态。
 
 **方案**：
-- `POST /sessions/{id}/messages` 返回 `202 + turn_id`
-- 服务端用独立 context 运行 turn
-- SSE 按 `turn_id` 推送状态
-- 增加 cancel endpoint
+- ✅ `POST /sessions/{id}/messages` 返回 `202 + turn_id`（已有 `SubmitAsync`，本次核验确认）
+- ✅ 服务端用独立 context 运行 turn（已有，`context.WithCancelCause(context.Background())`）
+- ✅ SSE 按 `turn_id` 推送状态（新增 `?turn_id=` 过滤，`EventReplayOptions.TurnID` 优先于 ActiveOnly）
+- ✅ 增加 cancel/retry/resume endpoint（已有）+ 新增 `GET /sessions/{id}/turns/{turnID}` 单 turn 状态查询
+- ✅ 测试覆盖：GetTurn 返回状态 + 未知 turn 404、replayEvents 按 turn_id 过滤及优先级
 
 **参考**：QM `core/orchestrator.ts`（单一入口编排）
 
-#### 1.2 Durable event journal + checkpoint
+#### 1.2 Durable event journal + checkpoint ✅（2026-08-10）
 
 **问题**：session 主要在 turn 完成后持久化，中途 crash 丢数小时工作。
 
 **方案**：
-- 每个 session/turn 写 append-only journal
-- 在 user append、assistant append、tool start/finish、permission pending、compaction、turn completion 后落盘
-- 启动时 replay journal，恢复 running/pending/error 状态
+- ✅ append-only journal（已有 `events.jsonl`，逐条追加 recordable 事件，本轮核验确认）
+- ✅ 落盘点：user append、assistant append、tool 事件、turn completion（已有 checkpoint 回调，核验确认）
+- ✅ **A. journal 轮转**（新增）：turn 达 terminal 后截断 `events.jsonl` + 同步 SQLite `EventJournal`，journal 只保留崩溃恢复增量，解决无界增长
+- ✅ **B. compaction 落盘**（新增）：compaction 完成后立即触发 checkpoint，压缩上下文不丢
+- ✅ 启动时恢复 running/pending/error 状态（已有 `recoverInterruptedTurn`，自动 resume + 防死循环，核验确认）
+- ✅ 测试覆盖：turn 完成轮转 journal、best-effort 轮转、相关回放测试通过
 
 **参考**：QM `runs/worker.ts`（lease + heartbeat）、Codex `rollout/`（事件流持久化）
 
-#### 1.3 幂等性存储
+#### 1.3 幂等性存储 ✅（2026-08-10）
 
 **问题**：cron/heartbeat/subagent 无幂等性保证，可能重复执行。
 
 **方案**：
-- 实现 `IdempotencyStore` 接口（`once(key, fn)` + `committed(key)`）
-- SQLite backing store，14 天 retention
-- 集成到 cron、heartbeat、subagent dispatch
+- ✅ 实现 `IdempotencyStore` 接口（`once(key, fn)` + `committed(key)`）
+- ✅ SQLite backing store，14 天 retention
+- ✅ 集成到 cron、heartbeat（subagent 天然有 job ID 唯一性，暂不集成）
+- ✅ 测试覆盖：首次执行、重复跳过、错误传播、并发防重、retention prune
 
 **参考**：`temp/qm/src/idempotency/idempotency-store.ts`（78 行）
 
-#### 1.4 Worker Lease + Heartbeat
+#### 1.4 Worker Lease + Heartbeat ✅（2026-08-10）
 
 **问题**：subagent/workflow 没有 lease 机制，进程重启后 running 状态丢失。
 
 **方案**：
-- 实现 `LeaseStore` 接口（SQLite 实现）
-- 连续 N 次心跳丢失自动取消
-- 进程重启时通过 lease 恢复 running 状态
+- ✅ 实现 `LeaseStore` 接口（`Acquire/Heartbeat/Release/ReapExpired/IsLeased`）+ SQLite 实现（`stateDir/leases.db`）
+- ✅ subagent 运行循环接入 lease：TTL/3 间隔心跳，连续 3 次丢失自动取消运行
+- ✅ 方案 A 恢复语义：优雅释放 → job 保持终端状态；lease 过期（崩溃）→ 标记 `interrupted` 保留现场，不自动重跑
+- ✅ 接线：`newSubagentJobStoreWithLease`（buildDependencies 默认启用）、`SetLeaseStore` 启动时 reap 孤儿 lease
+- ✅ 测试覆盖：Acquire/冲突/Heartbeat 续租过期/Release/ReapExpired 等 13 项
 
 **参考**：`temp/qm/src/runs/worker.ts`（188 行完整 worker 循环）
 
@@ -377,10 +384,10 @@ orchestrator (完整工具集)
 | ✅ | P0-3 | 记忆注入笔记引用 | 低 | 中 | P0-2 | 已完 |
 | ✅ | P0-4 | API + UI 联动 | 低 | 中 | P0-2 | 已完 |
 | ✅ | P0-5 | 设计文档更新 | 低 | 低 | 全部 | 已完 |
-| 🔴 | 1.1 | 异步 turn/job runtime | 高 | 高 | 无 | 2w |
-| 🔴 | 1.2 | Durable event journal | 高 | 高 | 1.1 | 2w |
-| 🔴 | 1.3 | 幂等性存储 | 低 | 中 | 无 | 3d |
-| 🔴 | 1.4 | Worker Lease + Heartbeat | 中 | 高 | 1.3 | 1w |
+| ✅ | 1.1 | 异步 turn/job runtime | 高 | 高 | 无 | 已完（2026-08-10） |
+| ✅ | 1.2 | Durable event journal | 高 | 高 | 1.1 | 已完（2026-08-10） |
+| ✅ | 1.3 | 幂等性存储 | 低 | 中 | 无 | 已完（2026-08-10） |
+| ✅ | 1.4 | Worker Lease + Heartbeat | 中 | 高 | 1.3 | 已完（2026-08-10） |
 | 🟡 | 2.1 | 动态并行 DAG 语义明确 | 中 | 高 | 无 | 1w |
 | 🟡 | 2.2 | 重启后恢复 longtask | 中 | 高 | 1.4 | 1w |
 | 🟡 | 2.3 | 上下文预算管理 | 低 | 中 | 无 | 3d |
@@ -409,8 +416,10 @@ orchestrator (完整工具集)
 
 ```
 🔴 Phase 1（当前聚焦，长任务基底）：
-  1.3 幂等性存储          → 3d
-  1.4 Worker Lease        → 1w
+  ✅ 1.1 异步 turn runtime    → 已完成（2026-08-10）
+  ✅ 1.2 Durable event journal → 已完成（2026-08-10）
+  ✅ 1.3 幂等性存储          → 已完成（2026-08-10）
+  ✅ 1.4 Worker Lease        → 已完成（2026-08-10）
   2.1 动态并行 DAG 语义   → 1w
   2.2 重启后恢复          → 1w
   2.3 上下文预算管理       → 3d

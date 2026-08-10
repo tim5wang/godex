@@ -84,7 +84,7 @@ func buildDependencies(cfg *config.Config) dependencies {
 		history:      historysearch.NewService(cfg),
 		media:        media.NewProcessor(cfg.Media, cfg.WorkspaceDir, cfg.SessionsDir, cfg.TempDir),
 		teamMgr:      newTeamManager(cfg, taskMgr, msgBus, client),
-		subagentJobs: newSubagentJobStore(subagentJobsDir(cfg)),
+		subagentJobs: newSubagentJobStoreWithLease(subagentJobsDir(cfg), cfg.StateDir),
 		workflows:    newWorkflowStore(filepath.Join(cfg.StateDir, "workflows")),
 		todoMgr:      todo.NewManager(cfg.TodosDir),
 		sandbox:      localSandboxFromConfig(cfg),

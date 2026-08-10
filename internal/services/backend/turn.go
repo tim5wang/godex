@@ -288,6 +288,22 @@ func normalizeQueueMode(mode QueueMode) QueueMode {
 	}
 }
 
+// GetTurn returns the persisted lifecycle state for one turn. It lets a
+// reconnecting client recover a turn's status directly instead of pulling the
+// whole session snapshot.
+func (s *Service) GetTurn(ctx context.Context, sessionID, turnID string) (*TurnRecord, error) {
+	_ = ctx
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	record, err := session.getTurnRecord(turnID)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
 // CancelTurn requests cancellation of the active asynchronous turn.
 func (s *Service) CancelTurn(ctx context.Context, sessionID, turnID string) (*CancelTurnResult, error) {
 	_ = ctx
@@ -750,6 +766,18 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 	})
 	s.captureSessionSignalCandidates(session, updatedAt, turnID)
 	_ = s.writeSessionTimeline(session)
+
+	// The turn reached a terminal status and the last persist above captured
+	// the full timeline into a durable checkpoint. Rotate the append-only
+	// event journal so it only carries crash-recovery deltas since the last
+	// completed turn instead of growing unboundedly. Rotation is best-effort:
+	// a stale journal is harmless (events deduplicate on replay), so a failure
+	// here never fails the turn itself.
+	if isTerminalTurnStatus(status) && persistErr == nil {
+		if rotateErr := s.rotateSessionEventJournal(session); rotateErr != nil {
+			// best-effort: ignore
+		}
+	}
 
 	return &SubmitResult{
 		SessionID:        sessionID,

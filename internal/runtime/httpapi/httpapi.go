@@ -1575,6 +1575,14 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	})))
+	mux.Handle("GET /sessions/{id}/turns/{turnID}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		record, err := service.GetTurn(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, record)
+	})))
 	mux.Handle("POST /sessions/{id}/turns/{turnID}/cancel", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.CancelTurn(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
 		if err != nil {
@@ -1703,6 +1711,9 @@ func NewHandlerWithRuntime(
 			replay := backend.EventReplayOptions{}
 			if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("replay")), "active") {
 				replay.ActiveOnly = true
+			}
+			if turnID := strings.TrimSpace(r.URL.Query().Get("turn_id")); turnID != "" {
+				replay.TurnID = turnID
 			}
 			err := service.SubscribeReplay(ctx, r.PathValue("id"), events.SinkFunc(func(event events.Event) {
 				select {

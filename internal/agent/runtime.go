@@ -547,6 +547,12 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 					TokenEstimateBefore: build.CompactionBefore,
 					TokenEstimateAfter:  build.CompactionAfter,
 				})
+				// Compaction rewrote the in-memory message history at this
+				// request boundary. Persist the compacted context now so a
+				// crash mid-turn does not lose the compression: the next
+				// AppendAssistant/AppendToolResults checkpoint would otherwise
+				// be the first durable snapshot past the compaction.
+				checkpoint()
 			}
 			ackRuntime = build.AckRuntime
 			apiMessages, err := conversation.BuildAPIMessages(ctx, build.Messages, conversation.BuildInputOptions{

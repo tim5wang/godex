@@ -16,6 +16,7 @@ import (
 	"github.com/tim5wang/godex/internal/app"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
+	"github.com/tim5wang/godex/internal/core/idempotency"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/platform/servicecontrol"
@@ -134,7 +135,8 @@ func main() {
 		TickSeconds:       cfg.Cron.TickSeconds,
 		DefaultTimezone:   cfg.Cron.DefaultTimezone,
 		MaxConcurrentRuns: cfg.Cron.MaxConcurrentRuns,
-	}, rtcron.NewFileStore(cfg.StateDir), rtcron.NewBackendAdapter(service), channelManager)
+	}, rtcron.NewFileStore(cfg.StateDir), rtcron.NewBackendAdapter(service), channelManager,
+		rtcron.WithIdempotencyStore(idempotency.NewSQLiteStore(cfg.StateDir, 0)))
 	cronToolAdapter := rtcron.NewToolAdapter(cronService)
 	shared.SetCronService(cronToolAdapter)
 	heartbeatService := rtheartbeat.NewService(rtheartbeat.Config{
@@ -146,7 +148,8 @@ func main() {
 		OKToken:                cfg.Heartbeat.OKToken,
 		DefaultIntervalSeconds: cfg.Heartbeat.DefaultIntervalSeconds,
 		DefaultTimezone:        cfg.Heartbeat.DefaultTimezone,
-	}, rtheartbeat.NewFileStore(cfg.StateDir), service, channelManager)
+	}, rtheartbeat.NewFileStore(cfg.StateDir), service, channelManager,
+		rtheartbeat.WithIdempotencyStore(idempotency.NewSQLiteStore(cfg.StateDir, 0)))
 	heartbeatToolAdapter := rtheartbeat.NewToolAdapter(heartbeatService)
 	shared.SetHeartbeatService(heartbeatToolAdapter)
 	commandService.SetCron(app.NewCronCommandHandler(cronToolAdapter))

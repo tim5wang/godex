@@ -689,6 +689,33 @@ func (s *Service) appendSessionEventJournal(session *sessionState, event events.
 	return s.syncSessionStoreFromJSON(context.Background(), session.id)
 }
 
+// rotateSessionEventJournal truncates the append-only event journal after a
+// turn has reached a terminal state and all its events have been captured by a
+// durable checkpoint. The journal therefore only ever carries the crash-
+// recovery delta since the last completed turn, instead of growing unboundedly
+// for the life of the session. Rotation (truncate file + refresh the SQLite
+// EventJournal copy) is best-effort: a failure never fails the caller, and a
+// stale journal is harmless because events are deduplicated on replay.
+//
+// The truncation runs under timelineMu so it never races an in-flight append,
+// and it is only safe to call once the session has no active turn.
+func (s *Service) rotateSessionEventJournal(session *sessionState) error {
+	if session == nil {
+		return nil
+	}
+	session.timelineMu.Lock()
+	defer session.timelineMu.Unlock()
+	if err := os.Truncate(filepath.Join(s.sessionDir(session.id), eventJournalFileName), 0); err != nil {
+		// A missing journal is a valid pre-rotate state (nothing to rotate yet);
+		// treat it as a no-op rather than an error.
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return s.syncSessionStoreFromJSON(context.Background(), session.id)
+}
+
 func (s *Service) writeSessionTimeline(session *sessionState) error {
 	if session == nil || session.timeline == nil {
 		return nil

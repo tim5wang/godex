@@ -357,8 +357,12 @@ type activeTurn struct {
 // EventReplayOptions controls which recorded events are replayed when a client
 // reconnects to a session event stream.
 type EventReplayOptions struct {
+	// ActiveOnly replays only the current active turn's events.
 	ActiveOnly bool
-	Limit      int
+	// TurnID, when non-empty, replays only events belonging to that turn.
+	// It takes precedence over ActiveOnly.
+	TurnID string
+	Limit  int
 }
 
 type persistentTimelineSink struct {

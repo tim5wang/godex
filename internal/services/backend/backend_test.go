@@ -3938,3 +3938,160 @@ func TestSteeringMessageInjectedIntoRunningTurn(t *testing.T) {
 		t.Fatalf("expected user_message_accepted for injected steering message, timeline: %+v", snapshot.Timeline)
 	}
 }
+
+func TestGetTurnReturnsPersistedTurnStatus(t *testing.T) {
+	cfg := newTestConfig(t)
+	caller := &stubCaller{
+		responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("get turn ok")}}},
+		started:   make(chan struct{}, 1),
+		block:     make(chan struct{}),
+	}
+	service := newTestService(cfg, caller)
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "get-turn"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	result, err := service.SubmitAsync(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "query turn", time.Now()))
+	if err != nil {
+		t.Fatalf("submit async: %v", err)
+	}
+	select {
+	case <-caller.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for async turn to start")
+	}
+
+	record, err := service.GetTurn(context.Background(), opened.SessionID, result.TurnID)
+	if err != nil {
+		t.Fatalf("get turn: %v", err)
+	}
+	if record == nil || record.ID != result.TurnID {
+		t.Fatalf("expected turn record %q, got %+v", result.TurnID, record)
+	}
+	if record.Status != "running" {
+		t.Fatalf("expected running turn status, got %q", record.Status)
+	}
+
+	// Unknown turn -> ErrTurnNotFound.
+	if _, err := service.GetTurn(context.Background(), opened.SessionID, "turn-does-not-exist"); !errors.Is(err, ErrTurnNotFound) {
+		t.Fatalf("expected ErrTurnNotFound, got %v", err)
+	}
+
+	close(caller.block)
+	waitForBackendSnapshot(t, service, opened.SessionID, func(snapshot Snapshot) bool { return !snapshot.Running })
+}
+
+func TestReplayEventsTurnIDFilter(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "replay-turn-filter"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	// Seed the session timeline directly with events belonging to two turns and
+	// one turn-less event.
+	now := time.Now()
+	session, err := service.requireSession(opened.SessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+	session.timeline.Seed([]events.Event{
+		{SessionID: opened.SessionID, TurnID: "turn-a", Type: events.EventUserMessageAccepted, Timestamp: now},
+		{SessionID: opened.SessionID, TurnID: "turn-a", Type: events.EventTurnCompleted, Timestamp: now},
+		{SessionID: opened.SessionID, TurnID: "turn-b", Type: events.EventUserMessageAccepted, Timestamp: now},
+		{SessionID: opened.SessionID, TurnID: "", Type: events.EventSnapshotReady, Timestamp: now},
+	})
+
+	onlyA := session.replayEvents(EventReplayOptions{TurnID: "turn-a"})
+	if len(onlyA) != 2 {
+		t.Fatalf("expected 2 events for turn-a, got %d: %+v", len(onlyA), onlyA)
+	}
+	for _, event := range onlyA {
+		if event.TurnID != "turn-a" {
+			t.Fatalf("expected only turn-a events, got %+v", event)
+		}
+	}
+
+	onlyB := session.replayEvents(EventReplayOptions{TurnID: "turn-b"})
+	if len(onlyB) != 1 || onlyB[0].TurnID != "turn-b" {
+		t.Fatalf("expected single turn-b event, got %+v", onlyB)
+	}
+
+	// TurnID takes precedence over ActiveOnly.
+	active := session.replayEvents(EventReplayOptions{TurnID: "turn-a", ActiveOnly: true})
+	if len(active) != 2 {
+		t.Fatalf("expected TurnID to take precedence over ActiveOnly, got %d", len(active))
+	}
+}
+
+func TestTurnCompletionRotatesEventJournal(t *testing.T) {
+	cfg := newTestConfig(t)
+	caller := &stubCaller{
+		responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}},
+		started:   make(chan struct{}, 1),
+		block:     make(chan struct{}),
+	}
+	service := newTestService(cfg, caller)
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "journal-rotate"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	result, err := service.SubmitAsync(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "rotate me", time.Now()))
+	if err != nil {
+		t.Fatalf("submit async: %v", err)
+	}
+	select {
+	case <-caller.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for async turn to start")
+	}
+
+	// While the turn is running, the journal must keep the accepted event so a
+	// crash mid-turn can reconstruct the timeline.
+	journal := readPersistedEventJournal(t, service, opened.SessionID)
+	foundRunning := false
+	for _, item := range journal {
+		if item.TurnID == result.TurnID && item.Type == events.EventUserMessageAccepted {
+			foundRunning = true
+			break
+		}
+	}
+	if !foundRunning {
+		t.Fatalf("expected journal to carry the running turn's events, got %+v", journal)
+	}
+
+	// Finish the turn; the terminal persist snapshots the timeline into a
+	// checkpoint, so the journal should be rotated (truncated) afterwards.
+	close(caller.block)
+	waitForBackendSnapshot(t, service, opened.SessionID, func(snapshot Snapshot) bool { return !snapshot.Running })
+
+	after := readPersistedEventJournal(t, service, opened.SessionID)
+	if len(after) != 0 {
+		t.Fatalf("expected journal rotated after terminal turn, still has %d events: %+v", len(after), after)
+	}
+}
+
+func TestRotateSessionEventJournalIsBestEffort(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "journal-rotate-sqlite"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	session, err := service.requireSession(opened.SessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+	// A journal file that does not exist must not error the rotation.
+	if err := service.rotateSessionEventJournal(session); err != nil {
+		t.Fatalf("expected best-effort rotate on missing journal, got %v", err)
+	}
+	if _, err := os.ReadFile(filepath.Join(service.sessionDir(opened.SessionID), eventJournalFileName)); !os.IsNotExist(err) {
+		t.Fatalf("expected no journal file after rotate of missing journal, err=%v", err)
+	}
+}

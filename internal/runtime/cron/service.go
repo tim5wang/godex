@@ -13,6 +13,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/idempotency"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -40,12 +41,22 @@ type Deliverer interface {
 	Deliver(context.Context, automation.DeliveryTarget, channels.ReplyPlan) error
 }
 
+// ServiceOption configures a Service after construction.
+type ServiceOption func(*Service)
+
+// WithIdempotencyStore wires an idempotency store into the Service so that
+// duplicate dispatches of the same run are suppressed.
+func WithIdempotencyStore(st idempotency.Store) ServiceOption {
+	return func(s *Service) { s.idempotency = st }
+}
+
 type Service struct {
 	cfg     Config
 	store   Store
 	backend Backend
-	deliver Deliverer
-	now     func() time.Time
+	deliver     Deliverer
+	now         func() time.Time
+	idempotency idempotency.Store
 
 	mu        sync.Mutex
 	cancel    context.CancelFunc
@@ -55,7 +66,7 @@ type Service struct {
 	wg        sync.WaitGroup
 }
 
-func NewService(cfg Config, store Store, backend Backend, deliver Deliverer) *Service {
+func NewService(cfg Config, store Store, backend Backend, deliver Deliverer, opts ...ServiceOption) *Service {
 	if store == nil {
 		panic("cron store is required")
 	}
@@ -63,7 +74,7 @@ func NewService(cfg Config, store Store, backend Backend, deliver Deliverer) *Se
 	if maxConcurrent <= 0 {
 		maxConcurrent = 2
 	}
-	return &Service{
+	s := &Service{
 		cfg:       normalizeConfig(cfg),
 		store:     store,
 		backend:   backend,
@@ -72,6 +83,10 @@ func NewService(cfg Config, store Store, backend Backend, deliver Deliverer) *Se
 		inFlight:  make(map[string]struct{}),
 		semaphore: make(chan struct{}, maxConcurrent),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func normalizeConfig(cfg Config) Config {
@@ -361,6 +376,20 @@ func (s *Service) finishRun(jobID string) {
 
 func (s *Service) runJob(ctx context.Context, job Job, startedAt time.Time) (RunLog, error) {
 	job = job.normalize(s.cfg.DefaultTimezone)
+
+	// Idempotency guard: a committed run (same job + started timestamp) is
+	// skipped so restarts or overlapping schedulers cannot double-fire.
+	if s.idempotency != nil {
+		idempKey := idempotencyKey(job.ID, startedAt)
+		committed, err := s.idempotency.Committed(idempKey)
+		if err != nil {
+			return RunLog{}, fmt.Errorf("idempotency check failed: %w", err)
+		}
+		if committed {
+			return RunLog{}, nil
+		}
+	}
+
 	run := RunLog{
 		ID:             newID("cronrun"),
 		JobID:          job.ID,
@@ -480,7 +509,20 @@ func (s *Service) runJob(ctx context.Context, job Job, startedAt time.Time) (Run
 	if saveErr := s.store.SaveJob(job); saveErr != nil && err == nil {
 		err = saveErr
 	}
+
+	// Commit the idempotency key only after a clean successful run.
+	if s.idempotency != nil && err == nil && run.Status == JobStatusCompleted {
+		idempKey := idempotencyKey(job.ID, startedAt)
+		if _, onceErr := s.idempotency.Once(idempKey, func() error { return nil }); onceErr != nil && err == nil {
+			err = fmt.Errorf("idempotency commit failed: %w", onceErr)
+		}
+	}
+
 	return run, err
+}
+
+func idempotencyKey(jobID string, startedAt time.Time) string {
+	return fmt.Sprintf("cron:run:%s:%d", jobID, startedAt.Unix())
 }
 
 func (s *Service) validateJob(job Job) error {

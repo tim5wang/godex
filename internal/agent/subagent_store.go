@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/lease"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/platform/fsutil"
 	"os"
@@ -39,6 +40,138 @@ func newSubagentJobStore(dir string) *subagentJobStore {
 	}
 	store.loadAll()
 	return store
+}
+
+// newSubagentJobStoreWithLease constructs a subagent job store wired to a
+// SQLite-backed lease store rooted at stateDir. It is the default wiring for
+// production agents so subagent runs are crash-recoverable via leases.
+func newSubagentJobStoreWithLease(dir, stateDir string) *subagentJobStore {
+	store := newSubagentJobStore(dir)
+	if strings.TrimSpace(stateDir) == "" {
+		return store
+	}
+	store.SetLeaseStore(lease.NewSQLiteStore(stateDir))
+	return store
+}
+
+// SetLeaseStore wires an optional lease store into the subagent job store.
+// When set, running jobs acquire a lease and heartbeat it; on startup,
+// orphaned leases from a previous process are reaped (their jobs were
+// already marked interrupted by normalizeLoadedJob).
+func (s *subagentJobStore) SetLeaseStore(store lease.Store) {
+	s.mu.Lock()
+	s.leaseStore = store
+	if s.leaseTTL <= 0 {
+		s.leaseTTL = lease.DefaultLeaseTTL
+	}
+	s.mu.Unlock()
+	if store != nil {
+		if _, err := store.ReapExpired(); err != nil {
+			// Best-effort cleanup: leases will naturally expire and be reaped
+			// on the next startup; a failure here must not block wiring.
+		}
+	}
+}
+
+// SetLeaseTTL overrides the default lease TTL used for acquired leases.
+func (s *subagentJobStore) SetLeaseTTL(ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ttl > 0 {
+		s.leaseTTL = ttl
+	}
+}
+
+// newSubagentLeaseToken returns a unique lease token for one job run.
+func newSubagentLeaseToken() string {
+	return fmt.Sprintf("lease_%d_%s", time.Now().UnixNano(), randomID())
+}
+
+// AcquireLease acquires a lease for the given job. The job must already be
+// marked running. Returns (Lease, true, nil) on success; (Lease, false, nil)
+// when the lease store is not wired (lease disabled).
+func (s *subagentJobStore) AcquireLease(jobID string) (lease.Lease, bool, error) {
+	s.mu.Lock()
+	store := s.leaseStore
+	ttl := s.leaseTTL
+	s.mu.Unlock()
+	if store == nil {
+		return lease.Lease{}, false, nil
+	}
+	if ttl <= 0 {
+		ttl = lease.DefaultLeaseTTL
+	}
+	token := newSubagentLeaseToken()
+	if err := store.Acquire(jobID, localGoDexWorkerID, token, ttl); err != nil {
+		return lease.Lease{}, false, err
+	}
+	// Persist the token/expiry on the job so crash recovery can distinguish
+	// a gracefully released run from a crashed one.
+	now := time.Now().UTC()
+	s.mu.Lock()
+	if job := s.jobs[strings.TrimSpace(jobID)]; job != nil {
+		job.LeaseToken = token
+		job.LeaseExpiresAt = now.Add(ttl)
+		job.UpdatedAt = now
+		_ = s.saveSummaryLocked(job)
+	}
+	s.mu.Unlock()
+	return lease.Lease{JobID: jobID, WorkerID: localGoDexWorkerID, Token: token, CreatedAt: now, ExpiresAt: now.Add(ttl)}, true, nil
+}
+
+// HeartbeatLease renews the lease for the given job token. Returns false when
+// the lease was lost (expired or released elsewhere).
+func (s *subagentJobStore) HeartbeatLease(token string) (bool, error) {
+	s.mu.Lock()
+	store := s.leaseStore
+	ttl := s.leaseTTL
+	s.mu.Unlock()
+	if store == nil || token == "" {
+		return true, nil
+	}
+	if ttl <= 0 {
+		ttl = lease.DefaultLeaseTTL
+	}
+	alive, err := store.Heartbeat(token, ttl)
+	if err != nil {
+		return false, nil // transient store error: treat as not lost
+	}
+	return alive, nil
+}
+
+// LeaseTTL returns the configured lease TTL (or the default when unset).
+func (s *subagentJobStore) LeaseTTL() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.leaseTTL <= 0 {
+		return lease.DefaultLeaseTTL
+	}
+	return s.leaseTTL
+}
+
+// ReleaseLease releases the lease for the given job. It frees the lease row in
+// the store and clears the in-memory token. No summary file write is done here:
+// a terminal job is never re-run, so its persisted token is irrelevant, and a
+// crashed job's recovery is handled by SetLeaseStore (reap) + normalizeLoadedJob
+// (token clear). Skipping the write avoids a late disk write that would race a
+// caller tearing down the workspace right after the job is seen terminal.
+func (s *subagentJobStore) ReleaseLease(jobID, token string) {
+	if token == "" {
+		return
+	}
+	s.mu.Lock()
+	store := s.leaseStore
+	s.mu.Unlock()
+	if store != nil {
+		_, _ = store.Release(token)
+	}
+	s.mu.Lock()
+	if job := s.jobs[strings.TrimSpace(jobID)]; job != nil && job.LeaseToken == token {
+		job.LeaseToken = ""
+		job.LeaseExpiresAt = time.Time{}
+		job.UpdatedAt = time.Now().UTC()
+	}
+	s.mu.Unlock()
 }
 
 func (s *subagentJobStore) loadAll() {
@@ -130,6 +263,11 @@ func (s *subagentJobStore) normalizeLoadedJob(job *subagentJob) {
 		job.Status = subagentStatusInterrupted
 		job.Error = "subagent was active when the runtime stopped"
 		job.UpdatedAt = now
+		// A gracefully released job never keeps a persisted lease token, so a
+		// token here is a leftover from a crashed process: clear it to keep
+		// the interrupted record consistent (方案 A: no auto-requeue).
+		job.LeaseToken = ""
+		job.LeaseExpiresAt = time.Time{}
 		job.Progress = appendBoundedSubagentProgress(job.Progress, subagentProgressEvent{
 			Time:    now,
 			Phase:   string(subagentStatusInterrupted),

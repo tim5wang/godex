@@ -444,6 +444,22 @@ func (s *sessionState) turnRecords(limit int) []TurnRecord {
 	return records[len(records)-limit:]
 }
 
+// getTurnRecord returns a clone of one turn record by ID, or an
+// ErrTurnNotFound when the turn is unknown.
+func (s *sessionState) getTurnRecord(turnID string) (TurnRecord, error) {
+	turnID = strings.TrimSpace(turnID)
+	if s == nil || turnID == "" {
+		return TurnRecord{}, newTurnNotFoundError(turnID)
+	}
+	s.turnsMu.RLock()
+	defer s.turnsMu.RUnlock()
+	idx := turnRecordIndex(s.turns, turnID)
+	if idx < 0 {
+		return TurnRecord{}, newTurnNotFoundError(turnID)
+	}
+	return cloneTurnRecord(s.turns[idx]), nil
+}
+
 func (s *sessionState) queuedTurns(limit int) []QueuedTurn {
 	if s == nil {
 		return nil
@@ -532,6 +548,17 @@ func (s *sessionState) replayEvents(opts EventReplayOptions) []events.Event {
 		limit = snapshotTimelineLimit
 	}
 	entries := s.timeline.Entries(limit)
+
+	// Explicit turn_id filter takes precedence over ActiveOnly.
+	if turnID := strings.TrimSpace(opts.TurnID); turnID != "" {
+		filtered := make([]events.Event, 0, len(entries))
+		for _, event := range entries {
+			if event.TurnID == turnID {
+				filtered = append(filtered, event)
+			}
+		}
+		return filtered
+	}
 	if !opts.ActiveOnly {
 		return entries
 	}

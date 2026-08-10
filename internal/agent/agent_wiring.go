@@ -17,6 +17,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/media"
 	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/notes"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
@@ -71,6 +72,7 @@ func buildDependencies(cfg *config.Config) dependencies {
 		instrLoader:  instructions.NewLoader(),
 		memoryMgr:    memoryMgr,
 		memoryExt:    memory.NewExtractor(memoryMgr, cfg.TempDir),
+		notesMgr:     notes.NewManager(notesDirForConfig(cfg)),
 		mcpMgr:       mcp.NewManager(cfg.MCPConfigPath, cfg.WorkspaceDir, cfg.TempDir),
 		compressor:   compressor,
 		summarizer:   sessionSummarizer,
@@ -143,6 +145,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		instrLoader:    deps.instrLoader,
 		memoryMgr:      deps.memoryMgr,
 		memoryExt:      deps.memoryExt,
+		notesMgr:      deps.notesMgr,
 		mcpMgr:         deps.mcpMgr,
 		compressor:     deps.compressor,
 		summarizer:     deps.summarizer,
@@ -208,4 +211,11 @@ func newTeamManager(cfg *config.Config, taskMgr *task.Manager, msgBus *message.B
 		IdleTimeout:      cfg.TeammateIdleFor,
 	})
 	return teamMgr
+}
+
+func notesDirForConfig(cfg *config.Config) string {
+	if strings.TrimSpace(cfg.HomeDir) != "" {
+		return filepath.Join(cfg.HomeDir, "notes")
+	}
+	return filepath.Join(cfg.StateDir, "notes")
 }

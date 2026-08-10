@@ -237,6 +237,17 @@ func projectMinerTypeForPath(relPath string) Type {
 		strings.Contains(base, "playbook"),
 		strings.Contains(base, "checklist"):
 		return TypeWorkflow
+	case strings.Contains(base, "faq"),
+		strings.Contains(base, "reference"),
+		strings.Contains(base, "cheatsheet"),
+		strings.Contains(base, "syntax"):
+		return TypeWorkFact
+	case strings.Contains(base, "recipe"),
+		strings.Contains(base, "howto"),
+		strings.Contains(base, "how-to"),
+		strings.Contains(base, "tutorial"),
+		strings.Contains(base, "cookbook"):
+		return TypeWorkMethod
 	default:
 		return TypeProject
 	}

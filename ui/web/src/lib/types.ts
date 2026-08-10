@@ -43,7 +43,7 @@ export interface AttachmentRef {
   size_bytes?: number;
 }
 
-export type MemoryType = "identity" | "user" | "workflow" | "project" | "warning";
+export type MemoryType = "identity" | "user" | "workflow" | "project" | "warning" | "work_method" | "work_fact";
 
 export interface MemoryRecord {
   id: string;

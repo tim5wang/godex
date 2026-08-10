@@ -14,6 +14,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/media"
 	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/notes"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
@@ -36,6 +37,7 @@ type Agent struct {
 	instrLoader   *instructions.Loader
 	memoryMgr     *memory.Manager
 	memoryExt     *memory.Extractor
+	notesMgr      *notes.Manager
 	mcpMgr        *mcp.Manager
 	compressor    *compress.Compressor
 	summarizer    compress.SessionSummarizer
@@ -99,6 +101,7 @@ type dependencies struct {
 	instrLoader  *instructions.Loader
 	memoryMgr    *memory.Manager
 	memoryExt    *memory.Extractor
+	notesMgr     *notes.Manager
 	mcpMgr       *mcp.Manager
 	compressor   *compress.Compressor
 	summarizer   compress.SessionSummarizer

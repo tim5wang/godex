@@ -228,10 +228,12 @@ func corePriority(entry Entry) int {
 		return 0
 	}
 	switch entry.Type {
-	case TypeUser:
+	case TypeUser, TypeWorkMethod:
 		return 1
 	case TypeProject:
 		return 2
+	case TypeWorkFact:
+		return 3
 	default:
 		return -1
 	}

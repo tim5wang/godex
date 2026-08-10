@@ -399,6 +399,8 @@ export const messages = {
         workflow: "Workflow",
         project: "Project",
         warning: "Warning",
+        work_method: "Work Method",
+        work_fact: "Work Fact",
       },
       notice: {
         saved: "Saved durable memory: {title}",

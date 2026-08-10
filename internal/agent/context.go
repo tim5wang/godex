@@ -13,6 +13,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/modelcontext"
+	"github.com/tim5wang/godex/internal/core/notes"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/tools"
@@ -406,8 +407,33 @@ func (a *Agent) collectMemoryMessages(history []protocol.Message) ([]protocol.Me
 		return nil, layers, nil
 	}
 
+	formatted := formatMemoryLayers(layers)
+
+	// Append relevant note references if notes manager is available.
+	if a.notesMgr != nil && strings.TrimSpace(query) != "" {
+		notes, listErr := a.notesMgr.List(notes.SearchOptions{Query: query})
+		if listErr == nil && len(notes) > 0 {
+			var noteRefs strings.Builder
+			noteRefs.WriteString("\n\nRelated notes:\n")
+			seen := 0
+			for _, n := range notes {
+				if seen >= 3 {
+					noteRefs.WriteString(fmt.Sprintf("- … and %d more (use `note list` or open the notes app)\n", len(notes)-seen))
+					break
+				}
+				summary := strings.TrimSpace(n.Summary)
+				if summary == "" {
+					summary = n.Title
+				}
+				noteRefs.WriteString(fmt.Sprintf("- %s: %s\n", n.Title, summary))
+				seen++
+			}
+			formatted += noteRefs.String()
+		}
+	}
+
 	return []protocol.Message{
-		protocol.NewEphemeralTextMessage(protocol.KindMemory, formatMemoryLayers(layers)),
+		protocol.NewEphemeralTextMessage(protocol.KindMemory, formatted),
 	}, layers, nil
 }
 

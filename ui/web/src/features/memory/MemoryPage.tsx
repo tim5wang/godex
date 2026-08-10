@@ -68,7 +68,7 @@ type MemoryFormValues = {
   matchTitle?: string;
 };
 
-const memoryTypes: MemoryType[] = ["identity", "user", "workflow", "project", "warning"];
+const memoryTypes: MemoryType[] = ["identity", "user", "workflow", "project", "warning", "work_method", "work_fact"];
 
 export function MemoryPage() {
   const { message } = AntApp.useApp();
@@ -774,6 +774,10 @@ function memoryTypeColor(type: MemoryType) {
       return "green";
     case "warning":
       return "gold";
+    case "work_method":
+      return "orange";
+    case "work_fact":
+      return "lime";
     default:
       return "default";
   }

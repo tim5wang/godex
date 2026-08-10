@@ -238,6 +238,10 @@ export function deleteNote(token: string | null, id: string) {
   return request<Note>(`/notes/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
 }
 
+export function getNoteRelatedMemories(token: string | null, noteID: string) {
+  return request<MemoryRecord[]>(`/notes/${encodeURIComponent(noteID)}/related-memories`, { method: "GET" }, token);
+}
+
 export function rememberMemory(
   token: string | null,
   body: { title: string; summary: string; content: string; memory_type: MemoryType; source?: string; tags?: string[] },

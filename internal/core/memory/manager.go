@@ -30,11 +30,13 @@ const (
 type Type string
 
 const (
-	TypeIdentity Type = "identity"
-	TypeUser     Type = "user"
-	TypeWorkflow Type = "workflow"
-	TypeProject  Type = "project"
-	TypeWarning  Type = "warning"
+	TypeIdentity   Type = "identity"
+	TypeUser       Type = "user"
+	TypeWorkflow   Type = "workflow"
+	TypeProject    Type = "project"
+	TypeWarning    Type = "warning"
+	TypeWorkMethod Type = "work_method"
+	TypeWorkFact   Type = "work_fact"
 )
 
 // Entry is one durable memory entry.
@@ -1087,6 +1089,14 @@ func scoreRelevantMemory(queryLower string, terms []string, entry Entry, content
 				score += 2
 			}
 		}
+	}
+	// Type bonus: work_method and work_fact are process/contextual knowledge
+	// that should rank higher when they match the query.
+	switch entry.Type {
+	case TypeWorkMethod:
+		score += 3
+	case TypeWorkFact:
+		score += 2
 	}
 	return score
 }

@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Alert, App as AntApp, Button, Card, Empty, Form, Input, Popconfirm, Select, Space, Tabs, Tag, Typography } from "antd";
-import { DeleteOutlined, FileTextOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { DatabaseOutlined, DeleteOutlined, FileTextOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { useI18n } from "../../i18n";
-import { deleteNote, getMeta, listNotes, saveNote } from "../../lib/api";
+import { deleteNote, getMeta, getNoteRelatedMemories, listNotes, saveNote } from "../../lib/api";
 import { buildChatRoute } from "../../lib/chatRoutes";
 import { showError } from "../../lib/notifications";
-import type { Note } from "../../lib/types";
+import type { MemoryRecord, Note } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
 
 type NoteFormValues = {
@@ -105,6 +105,12 @@ export function NotesPage() {
       await queryClient.invalidateQueries({ queryKey: ["notes", token] });
     },
     onError: (error) => showError(message, error, "Failed to delete note."),
+  });
+
+  const relatedQuery = useQuery({
+    queryKey: ["notes", token, selected?.id, "related-memories"],
+    enabled: canReachNotes && !!selected,
+    queryFn: () => getNoteRelatedMemories(token || null, selected!.id),
   });
 
   const createNew = () => {
@@ -248,6 +254,17 @@ export function NotesPage() {
               {t("notes.save")}
             </Button>
           </Form>
+          {selected && relatedQuery.data && relatedQuery.data.length > 0 ? (
+            <Card size="small" title={<><DatabaseOutlined /> Related memories</>} style={{ marginTop: 16 }}>
+              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                {relatedQuery.data.slice(0, 6).map((mem) => (
+                  <Typography.Text key={mem.id} ellipsis style={{ maxWidth: "100%" }}>
+                    <Tag>{mem.type}</Tag> {mem.title}
+                  </Typography.Text>
+                ))}
+              </Space>
+            </Card>
+          ) : null}
         </Card>
       </div>
     </main>

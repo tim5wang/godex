@@ -1009,6 +1009,14 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, item)
 	})))
+	mux.Handle("GET /notes/{id}/related-memories", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items, err := service.GetRelatedMemories(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})))
 	mux.Handle("POST /notes", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req saveNoteRequest
 		if err := decodeJSON(r, &req); err != nil {

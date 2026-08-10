@@ -45,7 +45,7 @@ func NewMemoryTool(writer MemoryWriter) Tool {
 			"title":       map[string]string{"type": "string"},
 			"summary":     map[string]string{"type": "string"},
 			"content":     map[string]string{"type": "string"},
-			"memory_type": map[string]interface{}{"type": "string", "enum": []string{"user", "workflow", "project", "warning"}},
+			"memory_type": map[string]interface{}{"type": "string", "enum": []string{"user", "workflow", "project", "warning", "work_method", "work_fact"}},
 			"source":      map[string]string{"type": "string"},
 			"tags":        map[string]interface{}{"type": "array", "items": map[string]string{"type": "string"}},
 			"file":        map[string]string{"type": "string"},

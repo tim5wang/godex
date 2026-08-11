@@ -53,6 +53,10 @@ type loopGuard struct {
 	totalRecovery int
 	// noMutationRounds counts consecutive tool batches that mutated no file.
 	noMutationRounds int
+	// noMutationRecovered counts how many no-mutation nudges were issued so a
+	// single research-heavy (but legitimate) turn is reminded repeatedly
+	// instead of aborted after the first nudge.
+	noMutationRecovered int
 	// staleRecovered tracks how many times the loop guard has already issued
 	// a stale_todo_in_progress recovery for a given todo itemID. It is a
 	// separate counter from `recovered` because the fingerprint space is
@@ -123,8 +127,12 @@ func (g *loopGuard) Observe(executed []ExecutedTool, staleProvider todoStaleness
 		}
 	}
 	// No-mutation spiral: many consecutive tool rounds without touching a file
-	// means the model is researching/looping instead of implementing. Count
-	// rounds (one Observe call = one tool batch), reset on any mutation.
+	// can mean either a research loop OR legitimate deep research. Never abort
+	// on this signal alone before an extremely generous window: nudge every
+	// MaxNoMutationRounds rounds (the feedback explicitly blesses writing
+	// research notes as a checkpoint), and only escalate to abort after
+	// MaxRecoveries nudges (e.g. 5 x 12 = 60 read-only rounds with zero file
+	// writes and no final answer — genuinely pathological even for research).
 	if g.config.MaxNoMutationRounds > 0 {
 		if executedContainsMutation(executed) {
 			g.noMutationRounds = 0
@@ -133,7 +141,7 @@ func (g *loopGuard) Observe(executed []ExecutedTool, staleProvider todoStaleness
 			if g.noMutationRounds >= g.config.MaxNoMutationRounds {
 				g.noMutationRounds = 0
 				last := executed[len(executed)-1]
-				return g.decide(loopGuardDecision{
+				return g.decideNoMutation(loopGuardDecision{
 					Reason:      "no_mutation_spiral",
 					Fingerprint: "no_mutation",
 					Tool:        last,
@@ -333,6 +341,64 @@ func loopGuardFeedback(decision loopGuardDecision, recovery, maxRecovery int) st
 		budget,
 		"Do not repeat the same tool call, query, polling request, or tool sequence again.",
 		"Use the tool result/error already in context as evidence, change strategy, try a meaningfully different input/tool, or provide a concise diagnostic handoff to the user.",
+		"Last tool input: " + truncateLoopGuardText(marshalLoopGuardValue(decision.Tool.Input), 500),
+		"Last tool output/error: " + truncateLoopGuardText(strings.TrimSpace(decision.Tool.Output+"\n"+decision.Tool.Error), 700),
+	}, "\n")
+}
+
+// decideNoMutation is the no-mutation counterpart to decideStaleTodo: it
+// re-prompt the model with escalating feedback instead of aborting on the
+// first repeat, because zero file writes alone is ALSO the normal shape of
+// legitimate deep research. Only after MaxRecoveries nudges (each after a
+// fresh MaxNoMutationRounds window) with still no file write and no final
+// answer does it abort.
+func (g *loopGuard) decideNoMutation(decision loopGuardDecision) loopGuardDecision {
+	if g.config.Mode == LoopGuardModeWarn || g.config.Mode == LoopGuardModeBalanced {
+		g.noMutationRecovered++
+		g.totalRecovery++
+		decision.Action = loopGuardRecover
+		decision.Feedback = noMutationFeedback(decision, g.noMutationRecovered, -1)
+		decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d (%s mode) reminded the model about zero file writes.", g.totalRecovery, g.config.Mode)
+		return decision
+	}
+	if g.config.MaxRecoveries <= 0 {
+		// Recoveries disabled: never abort on this signal alone.
+		g.noMutationRecovered++
+		decision.Action = loopGuardRecover
+		decision.Feedback = noMutationFeedback(decision, g.noMutationRecovered, -1)
+		decision.RecoveryHint = "Loop guard recovery (disabled-abort mode) reminded the model about zero file writes."
+		return decision
+	}
+	if g.noMutationRecovered >= g.config.MaxRecoveries {
+		decision.Action = loopGuardAbort
+		decision.AbortReason = "no-mutation spiral persisted after repeated runtime feedback"
+		decision.RecoveryHint = loopGuardAbortHint(decision)
+		return decision
+	}
+	g.noMutationRecovered++
+	g.totalRecovery++
+	decision.Action = loopGuardRecover
+	decision.Feedback = noMutationFeedback(decision, g.noMutationRecovered, g.config.MaxRecoveries)
+	decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d/%d reminded the model about zero file writes.", g.noMutationRecovered, g.config.MaxRecoveries)
+	return decision
+}
+
+// noMutationFeedback explains the nudge and blesses the research-notes escape
+// hatch: writing findings to a file both checkpoints the research and resets
+// the detector, so legitimate deep research is never forced to stop.
+func noMutationFeedback(decision loopGuardDecision, recovery, maxRecovery int) string {
+	budget := fmt.Sprintf("Recovery budget: %d/%d.", recovery, maxRecovery)
+	if maxRecovery < 0 {
+		budget = fmt.Sprintf("Recovery #%d (unlimited).", recovery)
+	}
+	return strings.Join([]string{
+		"Runtime feedback: loop_guard_recovery.",
+		fmt.Sprintf("Reason: %s.", decision.Summary()),
+		budget,
+		fmt.Sprintf("You have executed tools for %d rounds without modifying any file or producing a final answer.", decision.Count),
+		"If you are doing DEEP RESEARCH, that is fine: write your findings so far to a notes file (write_file) to checkpoint progress, then continue researching.",
+		"If you have enough information, produce your final answer now without further tool calls.",
+		"If you need to implement changes, start writing them now (edit_file/write_file).",
 		"Last tool input: " + truncateLoopGuardText(marshalLoopGuardValue(decision.Tool.Input), 500),
 		"Last tool output/error: " + truncateLoopGuardText(strings.TrimSpace(decision.Tool.Output+"\n"+decision.Tool.Error), 700),
 	}, "\n")

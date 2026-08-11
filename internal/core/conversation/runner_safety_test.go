@@ -189,9 +189,71 @@ func TestLoopGuardNoMutationSpiralRecoversThenAborts(t *testing.T) {
 	if len(feedbacks) == 0 || !strings.Contains(feedbacks[0], "no_mutation_spiral") {
 		t.Fatalf("expected no_mutation_spiral recovery, got %+v", feedbacks)
 	}
-	// The model kept looping with the same pattern -> strict mode aborts.
+	// The nudge text blesses the research-notes escape hatch.
+	if !strings.Contains(feedbacks[0], "DEEP RESEARCH") || !strings.Contains(feedbacks[0], "write your findings") {
+		t.Fatalf("expected research-notes escape hatch in nudge, got %q", feedbacks[0])
+	}
+	// The model kept looping with the same pattern past the generous nudge
+	// budget (5 x MaxNoMutationRounds windows) -> strict mode aborts.
 	if err == nil {
 		t.Fatal("expected loop guard abort after the no-mutation spiral persisted")
 	}
+	if len(feedbacks) < 3 {
+		t.Fatalf("expected repeated nudges (research-safe), got %d", len(feedbacks))
+	}
 	_ = result
+}
+
+// Deep research that periodically checkpoints findings to a file must NOT be
+// interrupted: the file write resets the detector, so no nudge fires at all.
+func TestLoopGuardNoMutationResetsOnResearchNotesWrite(t *testing.T) {
+	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "research the architecture")}
+	var responses []protocol.Response
+	// 2 read rounds, then a notes write, then 2 reads, then a write, then 1 read:
+	// never 3 consecutive read rounds, so no nudge fires.
+	rounds := []string{"read", "read", "write", "read", "read", "write", "read"}
+	for i, kind := range rounds {
+		var block protocol.Block
+		if kind == "write" {
+			block = protocol.ToolUseBlock("tool-1", "write_file", map[string]interface{}{"path": "notes.md"})
+		} else {
+			block = protocol.ToolUseBlock("tool-1", "read_file", map[string]interface{}{"path": "file-" + itoa(i) + ".go"})
+		}
+		responses = append(responses, protocol.Response{Content: []protocol.Block{protocol.TextBlock("checking"), block}})
+	}
+	responses = append(responses, protocol.Response{Content: []protocol.Block{protocol.TextBlock("research report complete")}})
+	caller := &fakeCaller{responses: responses}
+
+	var feedbacks []string
+	_, err := Runner{
+		Caller: caller,
+		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
+			_ = ctx
+			return NewRequest("model", 1024, "", "system", messages, nil), nil
+		},
+		AppendAssistant: func(msg protocol.Message) {
+			messages = append(messages, msg)
+		},
+		AppendToolResults: func(msg protocol.Message) {
+			messages = append(messages, msg)
+		},
+		ExecuteTool: func(ctx context.Context, name string, input map[string]interface{}) (ToolExecutionResult, error) {
+			_ = ctx
+			return ToolExecutionResult{Output: "ok"}, nil
+		},
+		AppendRuntimeFeedback: func(msg protocol.Message) {
+			feedbacks = append(feedbacks, protocol.MessageText(msg))
+			messages = append(messages, msg)
+		},
+		MaxRepeatedTools:    0,
+		MaxNoMutationRounds: 3,
+		MaxTurns:            20,
+	}.Run(context.Background())
+
+	if err != nil {
+		t.Fatalf("deep research with note checkpoints must not be aborted: %v", err)
+	}
+	if len(feedbacks) != 0 {
+		t.Fatalf("expected no no-mutation nudge when research writes notes, got %+v", feedbacks)
+	}
 }

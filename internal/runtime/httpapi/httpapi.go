@@ -1131,6 +1131,21 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, inspector)
 	})))
+	mux.Handle("GET /sessions/{id}/transcript/{ref}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		messages, err := service.ReadTranscript(r.PathValue("id"), r.PathValue("ref"))
+		if err != nil {
+			if errors.Is(err, backend.ErrSessionNotFound) || errors.Is(err, backend.ErrTranscriptNotFound) {
+				writeError(w, http.StatusNotFound, err)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ref":      r.PathValue("ref"),
+			"messages": messages,
+		})
+	})))
 	mux.Handle("GET /sessions/{id}/ledger", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ledger, err := service.ProjectLedger(r.PathValue("id"))
 		if err != nil {

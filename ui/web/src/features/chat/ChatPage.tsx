@@ -3,6 +3,7 @@ import { useParams, useSearchParams, useLocation, useNavigate, Link } from "reac
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
 import { useSettingsStore } from "../../store/settings";
+import { useNodeContextStore } from "../../store/nodeContext";
 import { useChatStore, groupFeedItemsIntoTurns } from "../../store/chat";
 import { useState, useRef, useEffect, useCallback, type PointerEvent as ReactPointerEvent, useMemo, type CSSProperties } from "react";
 import { useLayoutStore } from "../../store/layout";
@@ -56,6 +57,7 @@ export function ChatPage() {
   const screens = Grid.useBreakpoint();
   const { t } = useI18n();
   const token = useSettingsStore((state) => state.token);
+  const remoteNodeID = useNodeContextStore((state) => state.nodeID);
   const defaultSessionKey = useSettingsStore((state) => state.defaultSessionKey);
   const setDefaultSessionKey = useSettingsStore((state) => state.setDefaultSessionKey);
 
@@ -435,7 +437,7 @@ export function ChatPage() {
   }, [snapshotQuery.data?.timeline, timelineQuery.data]);
 
   const sessionsQuery = useQuery({
-    queryKey: ["sessions", token],
+    queryKey: ["sessions", token, remoteNodeID],
     enabled: !authRequired || !!token,
     queryFn: async () => listSessions(token || null),
   });
@@ -445,6 +447,14 @@ export function ChatPage() {
       void queryClient.invalidateQueries({ queryKey: ["sessions", token] });
     }
   }, [openQuery.data?.session_id, queryClient, token]);
+
+  // Remote node switch: the node-scoped proxy (nodeProxyPath in api.ts) routes
+  // /sessions to the newly active node, so any cached list from the previous
+  // node (or the local center) must be refetched under the new node key.
+  useEffect(() => {
+    void queryClient.invalidateQueries({ queryKey: ["sessions", token] });
+    void queryClient.invalidateQueries({ queryKey: ["models", token] });
+  }, [queryClient, remoteNodeID, token]);
 
   useEffect(() => {
     setPendingModelProfileID(null);
@@ -489,7 +499,18 @@ export function ChatPage() {
               void queryClient.invalidateQueries({ queryKey: ["timeline-page", token, sessionId] });
             }
           },
-          () => setStreamConnected(true),
+          () => {
+            setStreamConnected(true);
+            // Service restart / network recovery: the SSE stream is back but
+            // the cached snapshot/timeline/sessions may be stale (global
+            // refetchOnMount/refetchOnWindowFocus are disabled). Invalidate
+            // the node-scoped queries so the UI resyncs without a page reload.
+            void queryClient.invalidateQueries({ queryKey: ["snapshot", token, sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["timeline", token, sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["timeline-page", token, sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["context-inspector", token, sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["sessions", token] });
+          },
         );
       } catch {
         if (!controller.signal.aborted) {
@@ -1014,6 +1035,15 @@ export function ChatPage() {
             setRunningTurn(submitResult.turn_id);
           }
         } catch (error) {
+          // Network-level failure (service restart / dropped connection):
+          // keep the optimistic placeholder. Once the SSE stream reconnects,
+          // the snapshot sync confirms the message (and drops the placeholder)
+          // or the user can retry — no page reload needed. Business errors
+          // (4xx/5xx from the backend) still surface immediately.
+          if (error instanceof TypeError) {
+            message.warning(t("chat.submitNetworkError"));
+            return;
+          }
           removePendingSend(pendingId);
           message.error(error instanceof Error ? error.message : String(error));
           throw error;
@@ -1130,6 +1160,7 @@ export function ChatPage() {
       onPreviousTimelinePage={goToPreviousTimelinePage}
       contextInspector={contextInspector}
       contextLoading={contextInspectorQuery.isLoading}
+      sessionId={openQuery.data?.session_id ?? ""}
       activeSkills={activeSkillsQuery.data ?? []}
       activeSkillsLoading={activeSkillsQuery.isLoading}
       unloadingSkill={unloadSkillMutation}
@@ -1176,6 +1207,7 @@ export function ChatPage() {
             <SessionsRail
               collapsed={v2LeftCollapsed}
               sessions={filteredSessions}
+              loading={sessionsQuery.isLoading || sessionsQuery.isFetching}
               activeSessionId={openQuery.data?.session_id ?? ""}
               searchQuery={v2SessionSearch ?? ""}
               deletingSessionId={deleteSessionMutation.variables?.session_id ?? ""}

@@ -40,6 +40,7 @@ import type {
   ProviderTestResponse,
   PromptEntry,
   CIKSummary,
+  ProtocolMessage,
   SecurityEvent,
   SkillActivation,
   SkillCatalogEntry,
@@ -759,6 +760,19 @@ export function finalizeSessionLongTaskStory(token: string | null, sessionId: st
 export function getSessionContextInspector(token: string | null, sessionId: string) {
   return request<SessionContextInspector>(
     `/sessions/${encodeURIComponent(sessionId)}/context-inspector`,
+    { method: "GET" },
+    token,
+  );
+}
+
+export interface SessionTranscript {
+  ref: string;
+  messages: ProtocolMessage[];
+}
+
+export function getSessionTranscript(token: string | null, sessionId: string, ref: string) {
+  return request<SessionTranscript>(
+    `/sessions/${encodeURIComponent(sessionId)}/transcript/${encodeURIComponent(ref)}`,
     { method: "GET" },
     token,
   );

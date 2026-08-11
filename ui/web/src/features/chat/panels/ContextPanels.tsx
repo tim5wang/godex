@@ -1,8 +1,11 @@
-import type { SessionContextInspector, SkillActivation } from "../../../lib/types";
+import { useState } from "react";
+import type { SessionContextInspector, SkillActivation, ProtocolMessage } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
-import { Tag, Popover, Alert, Space, Descriptions, Card, Typography, List, Popconfirm, Button, Progress, Empty } from "antd";
-import { useMutation } from "@tanstack/react-query";
-import { DeleteOutlined } from "@ant-design/icons";
+import { Tag, Popover, Alert, Space, Descriptions, Card, Typography, List, Popconfirm, Button, Progress, Empty, Modal } from "antd";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { DeleteOutlined, HistoryOutlined } from "@ant-design/icons";
+import { getSessionTranscript } from "../../../lib/api";
+import { useSettingsStore } from "../../../store/settings";
 import { type ContextStatusSummary, formatCompactNumber } from "../../../lib/timelineUtils";
 
 export function ContextStatusInline({ summary, inspector }: { summary: ContextStatusSummary; inspector?: SessionContextInspector | null }) {
@@ -188,6 +191,7 @@ export function ContextRecallPanel({
   activeSkillsLoading,
   unloadingSkill,
   onUnloadSkill,
+  sessionId,
 }: {
   inspector: SessionContextInspector | null;
   loading: boolean;
@@ -195,8 +199,11 @@ export function ContextRecallPanel({
   activeSkillsLoading: boolean;
   unloadingSkill: ReturnType<typeof useMutation<SkillActivation, Error, string>>;
   onUnloadSkill: (skillId: string) => void;
+  sessionId: string;
 }) {
   const { t } = useI18n();
+  const token = useSettingsStore((state) => state.token);
+  const [archiveRef, setArchiveRef] = useState<string | null>(null);
   if (loading && !inspector) {
     return <Alert type="info" showIcon message={t("chat.contextInspectorLoading")} />;
   }
@@ -384,7 +391,102 @@ export function ContextRecallPanel({
       <MemoryPreviewSection title={t("chat.contextInspectorMemoryIdentity")} items={memoryPreview.identity} />
       <MemoryPreviewSection title={t("chat.contextInspectorMemoryCore")} items={memoryPreview.core} />
       <MemoryPreviewSection title={t("chat.contextInspectorMemoryRelevant")} items={memoryPreview.relevant} />
+      <Card size="small" title={t("chat.contextArchiveTitle")}>
+        {inspector?.transcript_refs?.length ? (
+          <List
+            size="small"
+            dataSource={inspector.transcript_refs}
+            renderItem={(ref) => (
+              <List.Item
+                actions={[
+                  <Button key="view" size="small" icon={<HistoryOutlined />} onClick={() => setArchiveRef(ref)}>
+                    {t("chat.contextArchiveView")}
+                  </Button>,
+                ]}
+              >
+                <Typography.Text code ellipsis style={{ maxWidth: 320 }}>
+                  {ref}
+                </Typography.Text>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Typography.Text type="secondary">{t("chat.contextInspectorNoArchive")}</Typography.Text>
+        )}
+      </Card>
+      <TranscriptArchiveModal ref={archiveRef} sessionId={sessionId} token={token} onClose={() => setArchiveRef(null)} />
     </Space>
+  );
+}
+
+function TranscriptArchiveModal({
+  ref: archiveRef,
+  sessionId,
+  token,
+  onClose,
+}: {
+  ref: string | null;
+  sessionId: string;
+  token: string | null;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const archiveQuery = useQuery({
+    queryKey: ["session-transcript", token, sessionId, archiveRef],
+    enabled: !!archiveRef && !!sessionId,
+    queryFn: async () => getSessionTranscript(token || null, sessionId, archiveRef!),
+  });
+  const messages = archiveQuery.data?.messages ?? [];
+  return (
+    <Modal
+      open={!!archiveRef}
+      onCancel={onClose}
+      footer={null}
+      width={760}
+      title={
+        <Space size={8}>
+          <HistoryOutlined />
+          {t("chat.contextArchiveModalTitle")}
+          {archiveRef ? <Typography.Text code>{archiveRef}</Typography.Text> : null}
+        </Space>
+      }
+    >
+      {archiveQuery.isLoading ? (
+        <Alert type="info" showIcon message={t("chat.contextArchiveLoading")} />
+      ) : archiveQuery.isError ? (
+        <Alert type="error" showIcon message={t("chat.contextArchiveError")} />
+      ) : messages.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("chat.contextArchiveEmpty")} />
+      ) : (
+        <List
+          size="small"
+          dataSource={messages}
+          renderItem={(msg) => <ArchiveMessageRow msg={msg} />}
+          style={{ maxHeight: "60vh", overflowY: "auto" }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function ArchiveMessageRow({ msg }: { msg: ProtocolMessage }) {
+  const text = msg.metadata?.text ?? msg.content?.filter((block) => block.type === "text").map((block) => block.text || "").join("") ?? "";
+  const toolNames = msg.content?.filter((block) => block.type === "tool_use").map((block) => block.name || "tool") ?? [];
+  const roleLabel = msg.role === "user" ? "You" : msg.role === "assistant" ? "GoDex" : msg.role || "message";
+  return (
+    <List.Item style={{ alignItems: "flex-start" }}>
+      <Space direction="vertical" size={2} style={{ width: "100%" }}>
+        <Space size={8}>
+          <Tag color={msg.role === "user" ? "blue" : "green"}>{roleLabel}</Tag>
+          {toolNames.length > 0 ? <Tag>tool: {toolNames.join(", ")}</Tag> : null}
+        </Space>
+        {text.trim() ? (
+          <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>{text}</Typography.Paragraph>
+        ) : toolNames.length === 0 ? (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ) : null}
+      </Space>
+    </List.Item>
   );
 }
 

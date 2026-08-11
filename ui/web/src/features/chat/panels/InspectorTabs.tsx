@@ -33,6 +33,7 @@ export function InspectorTabs(props: {
   onPreviousTimelinePage: () => void;
   contextInspector: SessionContextInspector | null;
   contextLoading: boolean;
+  sessionId: string;
   activeSkills: SkillActivation[];
   activeSkillsLoading: boolean;
   unloadingSkill: ReturnType<typeof useMutation<SkillActivation, Error, string>>;
@@ -104,6 +105,7 @@ export function InspectorTabs(props: {
               <ContextRecallPanel
                 inspector={props.contextInspector}
                 loading={props.contextLoading}
+                sessionId={props.sessionId}
                 activeSkills={props.activeSkills}
                 activeSkillsLoading={props.activeSkillsLoading}
                 unloadingSkill={props.unloadingSkill}

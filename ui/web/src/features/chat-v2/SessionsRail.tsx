@@ -1,4 +1,4 @@
-import { Badge, Button, Empty, Input, Popconfirm, Popover, Typography } from "antd";
+import { Badge, Button, Empty, Input, Popconfirm, Popover, Skeleton, Typography } from "antd";
 import {
   ApiOutlined,
   ClockCircleOutlined,
@@ -21,6 +21,7 @@ import type { WorkspaceGroup, WorkspaceGroupType } from "./sessionGroups";
 interface SessionsRailProps {
   collapsed: boolean;
   sessions: ListedSession[];
+  loading?: boolean;
   activeSessionId: string;
   searchQuery: string;
   deletingSessionId?: string;
@@ -197,7 +198,11 @@ export function SessionsRail(props: SessionsRailProps) {
         onChange={(event) => props.onSearchChange(event.target.value)}
       />
       <div className="chat-v2-session-scroll">
-        {workspaceGroups.length === 0 ? (
+        {props.loading ? (
+          <div className="chat-v2-rail-loading" data-testid="chat-v2-sessions-loading">
+            <Skeleton active paragraph={{ rows: 5 }} title={false} />
+          </div>
+        ) : workspaceGroups.length === 0 ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={props.searchQuery ? t("chat.chatV2Rail.searchNoMatch") : t("chat.chatV2Rail.empty")}

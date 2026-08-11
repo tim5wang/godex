@@ -1206,6 +1206,43 @@ export interface LongTaskRunSummary {
   message?: string;
 }
 
+export interface AgentGraphNode {
+  id: string;
+  node_type?: string;
+  title?: string;
+  status: string;
+  agent_type?: string;
+  write_scope?: string[];
+  job_id?: string;
+  attempt?: number;
+  verdict?: string;
+  handoff_ref?: string;
+  error?: string;
+}
+
+export interface AgentGraphEdge {
+  id: string;
+  edge_type?: string;
+  from: string;
+  to: string;
+  status?: string;
+  verdict?: string;
+}
+
+export interface AgentGraphView {
+  workflow_id: string;
+  status: string;
+  total: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+  nodes: AgentGraphNode[];
+  edges: AgentGraphEdge[];
+  started?: string[];
+  appended?: string[];
+}
+
 export interface LongTaskView {
   longtask_id: string;
   workflow_id: string;
@@ -1220,6 +1257,7 @@ export interface LongTaskView {
   completed: number;
   failed: number;
   stories: LongTaskStory[];
+  graph?: AgentGraphView;
   started?: string[];
   run?: LongTaskRunSummary;
 }

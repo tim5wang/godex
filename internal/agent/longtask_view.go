@@ -6,7 +6,13 @@ import (
 )
 
 func (a *Agent) longTaskViewForState(state workflowState) (longTaskView, error) {
-	return a.longTaskViewForWorkflow(workflowViewFromState(state))
+	view, err := a.longTaskViewForWorkflow(workflowViewFromState(state))
+	if err != nil {
+		return longTaskView{}, err
+	}
+	graph := agentGraphViewFromState(state)
+	view.Graph = &graph
+	return view, nil
 }
 
 func (a *Agent) longTaskViewForWorkflow(workflow workflowView) (longTaskView, error) {

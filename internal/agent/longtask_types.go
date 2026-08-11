@@ -205,6 +205,7 @@ type longTaskView struct {
 	Failed        int                 `json:"failed"`
 	Stories       []LongTaskStoryView `json:"stories"`
 	Workflow      workflowView        `json:"workflow"`
+	Graph         *agentGraphView     `json:"graph,omitempty"`
 	Started       []string            `json:"started,omitempty"`
 	Wait          *subagentWaitView   `json:"wait,omitempty"`
 	Run           *LongTaskRunSummary `json:"run,omitempty"`

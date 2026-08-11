@@ -184,6 +184,59 @@ export function ContextStatusInline({ summary, inspector }: { summary: ContextSt
   );
 }
 
+const TOKEN_LAYER_COLORS: Record<string, string> = {
+  system: "#1677ff",
+  history: "#52c41a",
+  memory: "#722ed1",
+  runtime: "#fa8c16",
+  tool_schemas: "#13c2c2",
+  tool_results: "#eb2f96",
+  attachments: "#8c8c8c",
+};
+
+// TokenBreakdownBar renders the per-layer token usage as a horizontal stacked
+// bar with a compact legend. Layers with zero tokens are hidden. Falls back to
+// nothing when there is no total (no breakdown data).
+function TokenBreakdownBar({ items, total }: { items: Array<{ key: string; label: string; value: number }>; total: number }) {
+  const visible = items.filter((item) => item.value > 0);
+  if (total <= 0 || visible.length === 0) {
+    return null;
+  }
+  return (
+    <Space direction="vertical" size={4} style={{ width: "100%", marginBottom: 10 }}>
+      <div
+        data-testid="token-breakdown-bar"
+        style={{ display: "flex", height: 12, borderRadius: 4, overflow: "hidden", width: "100%", background: "#f0f0f0" }}
+      >
+        {visible.map((item) => (
+          <div
+            key={item.key}
+            title={`${item.label}: ${item.value.toLocaleString()}`}
+            style={{ width: `${(item.value / total) * 100}%`, background: TOKEN_LAYER_COLORS[item.key] ?? "#999" }}
+          />
+        ))}
+      </div>
+      <Space wrap size={[6, 4]}>
+        {visible.map((item) => (
+          <Typography.Text key={item.key} type="secondary" style={{ fontSize: 11 }}>
+            <span
+              style={{
+                display: "inline-block",
+                width: 8,
+                height: 8,
+                borderRadius: 2,
+                marginRight: 4,
+                background: TOKEN_LAYER_COLORS[item.key] ?? "#999",
+              }}
+            />
+            {item.label} {Math.round((item.value / total) * 100)}%
+          </Typography.Text>
+        ))}
+      </Space>
+    </Space>
+  );
+}
+
 export function ContextRecallPanel({
   inspector,
   loading,
@@ -323,7 +376,20 @@ export function ContextRecallPanel({
           ) : null}
         </Space>
       </Card>
-      <Card size="small" title={t("chat.contextInspectorBreakdownTitle")}>
+      <Card
+        size="small"
+        title={
+          <Space size={6}>
+            <span>{t("chat.contextInspectorBreakdownTitle")}</span>
+            {budgetPercent >= 85 ? (
+              <Tag color={budgetPercent >= 100 ? "red" : "orange"} style={{ margin: 0 }}>
+                budget {budgetPercent}%
+              </Tag>
+            ) : null}
+          </Space>
+        }
+      >
+        <TokenBreakdownBar items={breakdownItems} total={totalTokens} />
         <Descriptions
           size="small"
           column={1}

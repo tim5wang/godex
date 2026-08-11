@@ -91,7 +91,7 @@ graph?: {
 
 ### 3.3 实施分期
 
-- **A1（P0）**：后端附加 graph 字段 + 前端 `AgentGraphDiagram` 静态渲染（节点/边/状态着色）
+- **A1（P0）✅**：后端 `longTaskView` 附加 `Graph *agentGraphView`（复用 `agentGraphViewFromState`，含 nodes + 运行时 edges with to/status/verdict）+ 前端 `AgentGraphDiagram` 组件（mermaid 渲染、节点状态着色、失败降级表格），已接入 `LongTaskList` Collapse
 - **A2（P1）**：轮询/事件刷新（运行时节点状态变化实时更新）+ 点击节点详情抽屉
 - **A3（P2）**：失败路径过滤、handoff 内容预览、导出 mermaid 源码
 
@@ -114,7 +114,7 @@ graph?: {
 
 ### 4.3 实施分期
 
-- **B1（P0）**：token 分层堆叠条 + 阈值警戒色（纯前端，现有数据）
+- **B1（P0）✅**：ContextPanels 新增 `TokenBreakdownBar` 分层堆叠条（各层占比 + 颜色图例，零 token 层隐藏）+ 阈值警戒色 Tag（budget ≥85% 橙 / ≥100% 红）
 - **B2（P1）**：Compaction 历史页签 + 按角色预算对比
 
 ---
@@ -142,11 +142,11 @@ graph?: {
 
 ## 6. 总分期与验收
 
-| 阶段 | 内容 | 验收标准 |
-|------|------|----------|
-| P0 | A1 + B1 | longtask 详情页出现 DAG 图（节点/边/状态着色正确）；ContextPanels 出现分层堆叠条与警戒色 |
-| P1 | A2 + B2 + C1 | DAG 实时刷新+节点详情；Compaction 历史页签；子 agent 泳道图可读 |
-| P2 | A3 + C2 | 失败路径过滤、mermaid 导出；驳回/重试筛选 |
+| 阶段 | 内容 | 验收标准 | 状态 |
+|------|------|----------|------|
+| P0 | A1 + B1 | longtask 详情页出现 DAG 图（节点/边/状态着色正确）；ContextPanels 出现分层堆叠条与警戒色 | ✅ 完成（2026-08-11）|
+| P1 | A2 + B2 + C1 | DAG 实时刷新+节点详情；Compaction 历史页签；子 agent 泳道图可读 | ⏳ |
+| P2 | A3 + C2 | 失败路径过滤、mermaid 导出；驳回/重试筛选 | ⏳ |
 
 **通用验收**：
 1. 全部新组件过 `tsc -b`（真实构建命令，非 `--noEmit`）

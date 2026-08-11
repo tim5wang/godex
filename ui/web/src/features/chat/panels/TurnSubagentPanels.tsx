@@ -1,10 +1,11 @@
 import type { TurnRecord, FeedItem, LongTaskView, DurableSubagentReview, PackageRoleEntry } from "../../../lib/types";
 import { useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../../i18n";
-import { Empty, List, Tooltip, Button, Space, Typography, Tag, Card, Progress, Popconfirm, Alert, Descriptions } from "antd";
-import { PlayCircleOutlined, RedoOutlined, CheckOutlined, StopOutlined, EyeOutlined } from "@ant-design/icons";
+import { Empty, List, Tooltip, Button, Space, Typography, Tag, Card, Progress, Popconfirm, Alert, Descriptions, Collapse } from "antd";
+import { PlayCircleOutlined, RedoOutlined, CheckOutlined, StopOutlined, EyeOutlined, ApartmentOutlined } from "@ant-design/icons";
 import { SubagentCard } from "../../../components/SubagentCard";
 import { turnStatusColor, shortTurnId, formatTimelineTime, formatTurnError, previewText } from "../../../lib/timelineUtils";
+import { AgentGraphDiagram } from "./AgentGraphDiagram";
 
 export function TurnList({
   items,
@@ -205,6 +206,26 @@ export function LongTaskList({
                     </div>
                   ))}
                 </Space>
+                {item.graph && item.graph.nodes.length > 0 ? (
+                  <Collapse
+                    size="small"
+                    items={[
+                      {
+                        key: "graph",
+                        label: (
+                          <Space size={6}>
+                            <ApartmentOutlined />
+                            <span>Graph</span>
+                            <Tag>{item.graph.nodes.length} nodes</Tag>
+                            <Tag>{item.graph.edges.length} edges</Tag>
+                            {item.graph.failed > 0 ? <Tag color="red">{item.graph.failed} failed</Tag> : null}
+                          </Space>
+                        ),
+                        children: <AgentGraphDiagram graph={item.graph} />,
+                      },
+                    ]}
+                  />
+                ) : null}
                 <Space wrap>
                   <Button
                     size="small"

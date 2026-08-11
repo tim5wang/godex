@@ -2459,6 +2459,47 @@ func TestLongTaskParallelDAGDependsOnVisibleInView(t *testing.T) {
 	}
 }
 
+// TestLongTaskViewGraphFieldExposesNodesAndEdges verifies the longtask view
+// carries the agent graph (nodes + typed edges) so the Web UI can render the
+// DAG without a second API call.
+func TestLongTaskViewGraphFieldExposesNodesAndEdges(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	created := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"longtask_id": "lt_graph_field",
+		"stories": []map[string]interface{}{
+			{"id": "A", "title": "A", "priority": 1},
+			{"id": "B", "title": "B", "priority": 2, "depends_on": []string{"A"}},
+			{"id": "C", "title": "C", "priority": 3},
+		},
+	})
+	if created.Graph == nil {
+		t.Fatalf("expected graph field to be populated, got nil")
+	}
+	if created.Graph.Total != 3 || len(created.Graph.Nodes) != 3 {
+		t.Fatalf("expected 3 graph nodes, got total=%d nodes=%d", created.Graph.Total, len(created.Graph.Nodes))
+	}
+	// Node types default to subagent_task for longtask stories.
+	for _, n := range created.Graph.Nodes {
+		if n.NodeType != "subagent_task" {
+			t.Fatalf("expected node_type subagent_task for %s, got %q", n.ID, n.NodeType)
+		}
+	}
+	// B depends on A -> expect a data_dependency edge A -> B.
+	foundDep := false
+	for _, e := range created.Graph.Edges {
+		if e.From == "A" && e.To == "B" && e.Type == agentGraphEdgeDataDependency {
+			foundDep = true
+		}
+	}
+	if !foundDep {
+		t.Fatalf("expected data_dependency edge A->B in graph, got %+v", created.Graph.Edges)
+	}
+}
+
 // TestLongTaskWalkRunsVisitsAllWorkflows verifies walkLongTaskRuns
 // streams every on-disk run record across multiple workflows, which is
 // the primitive the startup resume sweep relies on.

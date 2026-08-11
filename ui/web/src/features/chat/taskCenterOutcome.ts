@@ -64,14 +64,19 @@ export function buildTaskOutcomes(input: BuildTaskOutcomesInput): TaskOutcome[] 
   }
 
   if (input.running && input.activeTurnId && !outcomes.some((item) => item.activeTurnId === input.activeTurnId)) {
-    outcomes.unshift({
-      id: `turn:${input.activeTurnId}`,
-      status: "running",
-      title: input.activeTurnId,
-      detail: input.activePhase || "running",
-      activeTurnId: input.activeTurnId,
-      signals: [{ kind: "turn", id: input.activeTurnId, status: "running", detail: input.activePhase }],
-    });
+    const phase = (input.activePhase || "").trim();
+    // Only surface a turn row when the phase carries information; a bare turn
+    // id row is pure noise (the running count in the summary covers it).
+    if (phase) {
+      outcomes.unshift({
+        id: `turn:${input.activeTurnId}`,
+        status: "running",
+        title: phase,
+        detail: input.activeTurnId,
+        activeTurnId: input.activeTurnId,
+        signals: [{ kind: "turn", id: input.activeTurnId, status: "running", detail: phase }],
+      });
+    }
   }
 
   return outcomes.length ? outcomes : [idleOutcome()];
@@ -346,7 +351,28 @@ function pathsShareSpecificPrefix(left: string, right: string) {
 }
 
 function longTaskDetail(longTask: LongTaskView) {
-  return `${longTask.status || "unknown"} ${longTask.running}/${longTask.total} · pending ${longTask.pending} · failed ${longTask.failed}`;
+  const running = longTask.stories.find((story) => story.status === "running");
+  const failed = longTask.stories.find((story) => story.status === "error" || story.status === "failed");
+  const parts = [`${longTask.status || "unknown"}`, `${longTask.completed}/${longTask.total} done`];
+  if (longTask.pending > 0) {
+    parts.push(`pending ${longTask.pending}`);
+  }
+  if (longTask.failed > 0) {
+    parts.push(`failed ${longTask.failed}`);
+  }
+  if (running?.title && running.title !== failed?.title) {
+    parts.push(`running: ${running.title}`);
+  }
+  if (failed?.title) {
+    parts.push(`failed: ${failed.title}`);
+  }
+  if (longTask.run?.blocked_by) {
+    parts.push(`blocked: ${longTask.run.blocked_by}`);
+  }
+  if (longTask.run && longTask.run.iterations > 0) {
+    parts.push(`${longTask.run.iterations} iterations`);
+  }
+  return parts.join(" · ");
 }
 
 function firstStoryTitle(longTask: LongTaskView) {

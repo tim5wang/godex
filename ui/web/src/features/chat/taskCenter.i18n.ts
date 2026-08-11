@@ -28,6 +28,8 @@ interface TaskCenterStrings {
   dismissed: string;
   showDismissed: string;
   hideDismissed: string;
+  actionableOnly: string;
+  showAll: string;
   // T15: rollback / lookup / gc / reflux bubble keys.
   rollbackLongTask: string;
   rollbackReason: string;
@@ -73,6 +75,8 @@ const taskCenterText: Record<"en" | "zh", TaskCenterStrings> = {
     dismissed: "Dismissed",
     showDismissed: "Show dismissed",
     hideDismissed: "Hide dismissed",
+    actionableOnly: "Actionable only",
+    showAll: "Show all",
     rollbackLongTask: "Rollback LongTask story",
     rollbackReason: "Rollback reason (optional, max 1024 bytes)",
     rollbackReasonTooLong: "Reason exceeds 1024 bytes",
@@ -115,6 +119,8 @@ const taskCenterText: Record<"en" | "zh", TaskCenterStrings> = {
     dismissed: "已忽略",
     showDismissed: "显示已忽略",
     hideDismissed: "隐藏已忽略",
+    actionableOnly: "仅待办",
+    showAll: "全部",
     rollbackLongTask: "回滚 LongTask story",
     rollbackReason: "回滚原因（可选，最多 1024 字节）",
     rollbackReasonTooLong: "回滚原因超过 1024 字节",

@@ -1,5 +1,5 @@
 import { useCallback, useState, type ReactNode } from "react";
-import { Badge, Button, Card, Empty, Popconfirm, Progress, Space, Tag, Tooltip, Typography } from "antd";
+import { Badge, Button, Card, Descriptions, Empty, List, Popconfirm, Progress, Space, Tag, Tooltip, Typography } from "antd";
 import {
   CheckOutlined,
   CloseOutlined,
@@ -14,6 +14,7 @@ import {
 import type { TaskOutcome } from "./taskCenterOutcome";
 import { outcomeIsActive, outcomeNeedsReview, taskOutcomeColor, taskOutcomeLabel } from "./taskCenterOutcome";
 import { useTaskCenterText, type TaskCenterText } from "./taskCenter.i18n";
+import { AgentGraphDiagram } from "./panels/AgentGraphDiagram";
 
 interface TaskCenterPanelProps {
   outcomes: TaskOutcome[];
@@ -40,11 +41,18 @@ export function TaskCenterPanel(props: TaskCenterPanelProps) {
   const t = useTaskCenterText();
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const [showDismissed, setShowDismissed] = useState(false);
+  const [actionableOnly, setActionableOnly] = useState(false);
 
   const dismiss = useCallback((id: string) => setDismissed((prev) => new Set(prev).add(id)), []);
 
+  // Actionable = needs the user: review / blocked / failed / pending approval.
+  // Pure running items are collapsed behind the toggle so the band focuses on
+  // what actually requires attention.
+  const isActionable = (o: TaskOutcome) =>
+    o.status === "ready_for_review" || o.status === "blocked" || o.status === "failed" || Boolean(o.permission);
+
   const visibleOutcomes = props.outcomes.filter(
-    (o) => o.status !== "idle" && (showDismissed || !dismissed.has(o.id)),
+    (o) => o.status !== "idle" && (showDismissed || !dismissed.has(o.id)) && (!actionableOnly || isActionable(o)),
   );
   const active = visibleOutcomes.filter(outcomeIsActive);
   const review = visibleOutcomes.filter(outcomeNeedsReview);
@@ -68,6 +76,14 @@ export function TaskCenterPanel(props: TaskCenterPanelProps) {
           <Space size={4}>
             <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => props.onOpenReviewMergeCenter()}>
               {t.review}
+            </Button>
+            <Button
+              type={actionableOnly ? "primary" : "text"}
+              size="small"
+              icon={actionableOnly ? <UpOutlined /> : <DownOutlined />}
+              onClick={() => setActionableOnly((v) => !v)}
+            >
+              {actionableOnly ? t.showAll : t.actionableOnly}
             </Button>
             {dismissed.size > 0 ? (
               <Button type="text" size="small" icon={showDismissed ? <UpOutlined /> : <DownOutlined />} onClick={() => setShowDismissed((v) => !v)}>
@@ -126,9 +142,14 @@ function TaskCenterSection({ title, empty, children, defaultCollapsed = false }:
 
 function OutcomeRow({ outcome, compact = false, actions, t, onDismiss }: { outcome: TaskOutcome; compact?: boolean; actions?: ReactNode; t: TaskCenterText; onDismiss?: (id: string) => void }) {
   const isTerminal = outcome.status === "merged" || outcome.status === "failed";
+  const [expanded, setExpanded] = useState(false);
+  const hasDetail = Boolean(outcome.longTask || outcome.worker);
+  const toggleExpand = () => {
+    if (hasDetail) setExpanded((v) => !v);
+  };
   return (
     <div className={`task-outcome-row ${compact ? "task-outcome-row-compact" : ""}`}>
-      <div className="task-outcome-main">
+      <div className="task-outcome-main" style={{ cursor: hasDetail ? "pointer" : undefined }} onClick={toggleExpand}>
         <Space size={6} wrap>
           <Tag color={taskOutcomeColor(outcome.status)}>{taskOutcomeLabel(outcome.status, t)}</Tag>
           {outcome.recovered ? <Tag color="green">{t.recovered}</Tag> : null}
@@ -142,6 +163,9 @@ function OutcomeRow({ outcome, compact = false, actions, t, onDismiss }: { outco
               <Tag color="cyan">{shortId(outcome.worker.jobId)}</Tag>
             </Tooltip>
           ) : null}
+          {hasDetail ? (
+            <Button type="text" size="small" icon={expanded ? <UpOutlined /> : <DownOutlined />} onClick={(e) => { e.stopPropagation(); toggleExpand(); }} />
+          ) : null}
         </Space>
         <Tooltip title={outcome.title}>
           <Typography.Text strong ellipsis>
@@ -153,7 +177,12 @@ function OutcomeRow({ outcome, compact = false, actions, t, onDismiss }: { outco
             {outcome.recovered && outcome.longTask ? `${t.recovered} — ${outcome.longTask.longtask_id}. ${outcome.detail}` : outcome.detail}
           </Typography.Text>
         ) : null}
-        <Progress percent={outcomeProgress(outcome)} size="small" status={progressStatus(outcome.status)} showInfo={false} />
+        <Space size={8} align="center" style={{ width: "100%" }}>
+          <Progress percent={outcomeProgress(outcome)} size="small" status={progressStatus(outcome.status)} showInfo={false} style={{ flex: 1 }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {outcomeProgressLabel(outcome)}
+          </Typography.Text>
+        </Space>
       </div>
       <div className="task-outcome-actions">
         {actions}
@@ -163,7 +192,82 @@ function OutcomeRow({ outcome, compact = false, actions, t, onDismiss }: { outco
           </Tooltip>
         ) : null}
       </div>
+      {expanded && hasDetail ? <OutcomeDetail outcome={outcome} t={t} /> : null}
     </div>
+  );
+}
+
+function OutcomeDetail({ outcome, t }: { outcome: TaskOutcome; t: TaskCenterText }) {
+  const longTask = outcome.longTask;
+  const worker = outcome.worker;
+  if (!longTask && !worker) {
+    return null;
+  }
+  return (
+    <div className="task-outcome-detail" style={{ marginTop: 8, padding: "8px 12px", background: "rgba(0,0,0,0.03)", borderRadius: 6 }}>
+      <Space direction="vertical" size={10} style={{ width: "100%" }}>
+        {longTask ? <LongTaskDetail longTask={longTask} /> : null}
+        {worker ? <WorkerDetail worker={outcome.worker!} /> : null}
+      </Space>
+    </div>
+  );
+}
+
+function LongTaskDetail({ longTask }: { longTask: NonNullable<TaskOutcome["longTask"]> }) {
+  const { graph, stories, run } = longTask;
+  const runningStory = stories.find((story) => story.status === "running");
+  const failedStory = stories.find((story) => story.status === "error" || story.status === "failed");
+  return (
+    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      {graph && graph.nodes.length > 0 ? <AgentGraphDiagram graph={graph} /> : null}
+      <Descriptions size="small" column={1} bordered
+        items={[
+          { key: "status", label: "Status", children: longTask.status },
+          { key: "progress", label: "Progress", children: `${longTask.completed}/${longTask.total} completed` },
+          { key: "pending", label: "Pending", children: longTask.pending },
+          { key: "running", label: "Running", children: longTask.running },
+          { key: "failed", label: "Failed", children: longTask.failed },
+          ...(run?.blocked_by ? [{ key: "blocked_by", label: "Blocked by", children: run.blocked_by }] : []),
+          ...(run && run.iterations > 0 ? [{ key: "iterations", label: "Iterations", children: run.iterations }] : []),
+        ]}
+      />
+      {stories.length > 0 ? (
+        <List
+          size="small"
+          header={<Typography.Text strong>Stories</Typography.Text>}
+          dataSource={stories}
+          renderItem={(story) => (
+            <List.Item>
+              <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                <Space wrap size={4}>
+                  <Tag color={story.passes ? "green" : story.status === "error" ? "red" : story.status === "running" ? "processing" : "default"}>{story.id}</Tag>
+                  {story.status ? <Tag>{story.status}</Tag> : null}
+                  {story.verdict ? <Tag>{story.verdict}</Tag> : null}
+                  {story.commit_hash ? <Tag color="blue">commit {story.commit_hash.slice(0, 8)}</Tag> : null}
+                  {story.repair_attempts ? <Tag color="orange">repair x{story.repair_attempts}</Tag> : null}
+                </Space>
+                {story.title ? <Typography.Text>{story.title}</Typography.Text> : null}
+                {story.error ? <Typography.Text type="danger" ellipsis={{ tooltip: story.error }}>{story.error}</Typography.Text> : null}
+              </Space>
+            </List.Item>
+          )}
+        />
+      ) : null}
+    </Space>
+  );
+}
+
+function WorkerDetail({ worker }: { worker: NonNullable<TaskOutcome["worker"]> }) {
+  return (
+    <Descriptions size="small" column={1} bordered
+      items={[
+        { key: "objective", label: "Objective", children: worker.objective || "—" },
+        { key: "status", label: "Status", children: worker.status || "—" },
+        { key: "message", label: "Last message", children: worker.lastMessage || worker.lastRunnerPhase || worker.phase || "—" },
+        { key: "error", label: "Error", children: worker.error || "—" },
+        ...(worker.writeScope?.length ? [{ key: "write_scope", label: "Write scope", children: worker.writeScope.join(", ") }] : []),
+      ]}
+    />
   );
 }
 
@@ -311,6 +415,30 @@ function outcomeProgress(outcome: TaskOutcome) {
     default:
       return 0;
   }
+}
+
+// outcomeProgressLabel turns the raw progress number into a human-readable
+// line: "3/5 done · running: story-B" for longtasks, and the worker's last
+// message/phase otherwise.
+function outcomeProgressLabel(outcome: TaskOutcome) {
+  if (outcome.longTask && outcome.longTask.total > 0) {
+    const passed = outcome.longTask.stories.filter((story) => story.passes).length;
+    const running = outcome.longTask.stories.find((story) => story.status === "running");
+    const failed = outcome.longTask.stories.find((story) => story.status === "error" || story.status === "failed");
+    const parts = [`${passed}/${outcome.longTask.total} done`];
+    if (running?.title && running.title !== failed?.title) {
+      parts.push(`running: ${running.title}`);
+    }
+    if (failed?.title) {
+      parts.push(`failed: ${failed.title}`);
+    }
+    return parts.join(" · ");
+  }
+  if (outcome.worker) {
+    const last = outcome.worker.lastMessage || outcome.worker.lastRunnerPhase || outcome.worker.phase || outcome.worker.summary || "";
+    return last ? String(last).slice(0, 80) : outcome.status;
+  }
+  return outcome.status;
 }
 
 function progressStatus(status: TaskOutcome["status"]) {

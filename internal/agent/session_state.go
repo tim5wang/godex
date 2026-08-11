@@ -177,6 +177,13 @@ func (a *Agent) CurrentModel() string {
 	return strings.TrimSpace(a.cfg.Model)
 }
 
+// Harness returns the default godex engine as a Harness, giving callers a
+// stable seam for engine switching (roadmap 5.1) without changing the
+// existing RunWithOptions path.
+func (a *Agent) Harness() Harness {
+	return NewGodexHarness(a)
+}
+
 func (a *Agent) appendMessage(msg protocol.Message) {
 	if len(msg.Content) == 0 {
 		return

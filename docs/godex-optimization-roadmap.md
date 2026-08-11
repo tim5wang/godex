@@ -29,6 +29,7 @@
 | **AgentGraph 抽象** | ✅ `agent_graph` 工具 + `AgentGraph` 接口（Create/Get/AddNode/AddEdge/RemoveNode/Cancel/Run/Wait）、5 种节点类型、3 种边类型、动态增删、merge_point/user_input 语义（2026-08-11） |
 | **Runner 韧性** | 统一 phase checkpoint、active turn follow-up injection、空回复恢复、length/provider error 恢复 |
 | **Turn Error 分层** | ✅ `TurnError` 接口（Retryable/Transient/NonRetryable）+ `ClassifyTurnError` + Runner 内层有限重试路由 + `TurnFailureMessage`（2026-08-11） |
+| **Harness 多引擎抽象** | ✅ `Harness` 接口（Profile/Models/Tools/RunTurn/ResetSession/Close）+ godexHarness 默认实现 + harnessRouter 按会话切换并重置引擎（2026-08-11） |
 | **安全边界** | 安全 profile、host privilege policy、WorkspaceFS 文件边界、shell 风险分级和审计 |
 | **Browser/Desktop/ACP** | browser handoff/resume、desktop bundle、OCR、external ACP stdio bridge |
 | **执行后端** | 本地和 Docker bind-mount workspace 模式 |
@@ -350,14 +351,16 @@ orchestrator (完整工具集)
 
 ### 🔵 Phase 5：架构基础设施（P4）
 
-#### 5.1 Harness 多引擎抽象
+#### 5.1 Harness 多引擎抽象 ✅（2026-08-11）
 
 **问题**：只支持一个 LLM 后端，没有抽象层切换不同 agent 引擎。
 
-**方案**：
-- 定义 `Harness` 接口：`runTurn`、`resetSession`、`close`、`profile`、`models`、`tools`
-- 当前 agent loop 提取为默认 harness 实现
-- 新增 `harnessRouter` 根据配置路由
+**方案（已落地）**：
+- ✅ `harness.go`：`Harness` 接口（`Profile`/`Models`/`Tools`/`RunTurn`/`ResetSession`/`Close`，对应 roadmap 的 runTurn/resetSession/close/profile/models/tools）+ `HarnessProfile`/`HarnessTurnInput`/`HarnessTurnResult` 类型
+- ✅ `godexHarness` 默认实现：包装现有 `Agent.RunWithOptions`（`NewGodexHarness`），引擎行为不变，抽象层先行
+- ✅ `harnessRouter`：`adapters` map + `HarnessResolver` 按 turn 选择引擎；会话切换引擎时自动 `ResetSession` 旧+新（对齐 harness-router.ts 的 lastHarness 语义）；`NewDefaultHarnessResolver` 默认路由 godex
+- ✅ `Agent.Harness()` 访问器：backend 统一入口，现有 `RunWithOptions` 路径不受影响
+- ✅ 测试：接口契约（godex 满足 Harness）、路由选择、切换时旧/新引擎各 reset 一次、同引擎不重复 reset、Close 去重、unavailable adapter 报错（6 个新测试）
 
 **参考**：`temp/qm/src/harness/harness.ts`（202 行接口）+ `harness-router.ts`
 
@@ -434,7 +437,7 @@ orchestrator (完整工具集)
 | ✅ | 4.4 | 子 agent bundle 继承 | 中 | 高 | 4.3 | 已完（2026-08-11） |
 | ✅ | 4.5 | 写 scope 与 bundle 联动 | 中 | 中 | 4.3 | 已完（2026-08-11） |
 | ✅ | 4.6 | 上下文预算按角色分配 | 中 | 中 | 2.3 | 已完（2026-08-11） |
-| 🔵 | 5.1 | Harness 多引擎抽象 | 高 | 高 | 3.3 | 2w |
+| ✅ | 5.1 | Harness 多引擎抽象 | 高 | 高 | 3.3 | 已完（2026-08-11） |
 | ✅ | 5.2 | Turn Error 分层 | 低 | 中 | 无 | 已完（2026-08-11） |
 | 🔵 | 5.3 | 持久化 Map 抽象 | 中 | 中 | 无 | 1w |
 | ⚪ | 6.1 | 安全筛查器 | 中 | 中 | 无 | 1w |
@@ -472,8 +475,8 @@ orchestrator (完整工具集)
   ✅ 4.6 上下文预算按角色分配   → 已完成（2026-08-11）
 
 🔵 Phase 4（架构基础设施）：
+  ✅ 5.1 Harness 多引擎抽象    → 已完成（2026-08-11）
   ✅ 5.2 Turn Error 分层       → 已完成（2026-08-11）
-  5.1 Harness 多引擎抽象    → 2w
   5.3 持久化 Map 抽象       → 1w
 ```
 

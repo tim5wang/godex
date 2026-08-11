@@ -166,6 +166,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		workflows:      deps.workflows,
 		client:         deps.client,
 		sandbox:        deps.sandbox,
+		roleBundles:    newRoleBundleRegistry(),
 		messages:       []protocol.Message{},
 		activeSkills:   make(map[string]*activeSkillState),
 		transcriptRefs: nil,

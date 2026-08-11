@@ -373,6 +373,8 @@ func cloneSubagentJob(job *subagentJob) *subagentJob {
 	cloned.WriteScope = append([]string{}, job.WriteScope...)
 	cloned.PreviewJobIDs = append([]string{}, job.PreviewJobIDs...)
 	cloned.DefaultBundles = append([]string{}, job.DefaultBundles...)
+	cloned.BundleOverrides = append([]string{}, job.BundleOverrides...)
+	cloned.DeactivateBundles = append([]string{}, job.DeactivateBundles...)
 	cloned.Messages = protocol.CloneMessages(job.Messages)
 	cloned.Progress = cloneSubagentProgress(job.Progress)
 	return &cloned

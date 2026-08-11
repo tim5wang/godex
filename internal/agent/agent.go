@@ -59,6 +59,7 @@ type Agent struct {
 	client        conversation.Caller
 	sandbox       *sandbox.Sandbox
 	workerRuntime workerruntime.Runtime
+	roleBundles   *roleBundleRegistry
 	// workspaceOverride is set when this session was opened against an
 	// explicit working directory different from the service-level
 	// cfg.WorkspaceDir. ApplyConfig must re-apply the override on top of

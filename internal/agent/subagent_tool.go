@@ -30,6 +30,8 @@ type subagentArgs struct {
 	WriteScope      []string            `json:"write_scope,omitempty"`
 	RequiredBundles []string            `json:"required_bundles,omitempty"`
 	RequiredTools   []string            `json:"required_tools,omitempty"`
+	BundleOverrides []string            `json:"bundle_overrides,omitempty"`
+	DeactivateBundles []string          `json:"deactivate_bundles,omitempty"`
 	Limit           int                 `json:"limit,omitempty"`
 	TimeoutMS       int                 `json:"timeout_ms,omitempty"`
 	JobTimeoutMS    int                 `json:"job_timeout_ms,omitempty"`
@@ -45,6 +47,8 @@ type subagentBatchItem struct {
 	WriteScope      []string `json:"write_scope,omitempty"`
 	RequiredBundles []string `json:"required_bundles,omitempty"`
 	RequiredTools   []string `json:"required_tools,omitempty"`
+	BundleOverrides []string `json:"bundle_overrides,omitempty"`
+	DeactivateBundles []string `json:"deactivate_bundles,omitempty"`
 	JobTimeoutMS    int      `json:"job_timeout_ms,omitempty"`
 	MaxTurns        int      `json:"max_turns,omitempty"`
 }
@@ -171,6 +175,16 @@ func newSubagentTool(agent *Agent) tools.Tool {
 				"type":        "array",
 				"items":       map[string]string{"type": "string"},
 				"description": "Specific tools this subagent needs. Tools are inherited only when active in the parent agent.",
+			},
+			"bundle_overrides": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]string{"type": "string"},
+				"description": "Replace the inherited parent-agent bundles with this explicit bundle set. Overrides bundle inheritance (roadmap 4.4).",
+			},
+			"deactivate_bundles": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]string{"type": "string"},
+				"description": "Remove these bundles from the subagent's inherited bundle set (roadmap 4.4).",
 			},
 			"input": map[string]string{
 				"type":        "string",
@@ -318,13 +332,15 @@ func newSubagentTool(agent *Agent) tools.Tool {
 				return tools.ToolResult{}, fmt.Errorf("missing prompt argument")
 			}
 			job, err := agent.startDurableSubagentWithContext(ctx, durableSubagentStartRequest{
-				Prompt:          prompt,
-				AgentType:       args.AgentType,
-				WriteScope:      args.WriteScope,
-				RequiredBundles: args.RequiredBundles,
-				RequiredTools:   args.RequiredTools,
-				MaxTurns:        args.MaxTurns,
-				JobTimeoutMS:    args.JobTimeoutMS,
+				Prompt:            prompt,
+				AgentType:         args.AgentType,
+				WriteScope:        args.WriteScope,
+				RequiredBundles:   args.RequiredBundles,
+				RequiredTools:     args.RequiredTools,
+				BundleOverrides:   args.BundleOverrides,
+				DeactivateBundles: args.DeactivateBundles,
+				MaxTurns:          args.MaxTurns,
+				JobTimeoutMS:      args.JobTimeoutMS,
 			})
 			if err != nil {
 				return tools.ToolResult{}, err
@@ -346,13 +362,15 @@ func newSubagentTool(agent *Agent) tools.Tool {
 			agentType = "Explore"
 		}
 		result, err := agent.runDurableSubagentSync(ctx, durableSubagentStartRequest{
-			Prompt:          prompt,
-			AgentType:       agentType,
-			WriteScope:      args.WriteScope,
-			RequiredBundles: args.RequiredBundles,
-			RequiredTools:   args.RequiredTools,
-			MaxTurns:        args.MaxTurns,
-			JobTimeoutMS:    args.JobTimeoutMS,
+			Prompt:            prompt,
+			AgentType:         agentType,
+			WriteScope:        args.WriteScope,
+			RequiredBundles:   args.RequiredBundles,
+			RequiredTools:     args.RequiredTools,
+			BundleOverrides:   args.BundleOverrides,
+			DeactivateBundles: args.DeactivateBundles,
+			MaxTurns:          args.MaxTurns,
+			JobTimeoutMS:      args.JobTimeoutMS,
 		}, args.TimeoutMS)
 		if err != nil {
 			return tools.ToolResult{}, err
@@ -466,13 +484,15 @@ func startSubagentBatch(ctx context.Context, agent *Agent, tasks []subagentBatch
 			continue
 		}
 		job, err := agent.startDurableSubagentWithContext(ctx, durableSubagentStartRequest{
-			Prompt:          prompt,
-			AgentType:       item.AgentType,
-			WriteScope:      item.WriteScope,
-			RequiredBundles: item.RequiredBundles,
-			RequiredTools:   item.RequiredTools,
-			MaxTurns:        item.MaxTurns,
-			JobTimeoutMS:    item.JobTimeoutMS,
+			Prompt:            prompt,
+			AgentType:         item.AgentType,
+			WriteScope:        item.WriteScope,
+			RequiredBundles:   item.RequiredBundles,
+			RequiredTools:     item.RequiredTools,
+			BundleOverrides:   item.BundleOverrides,
+			DeactivateBundles: item.DeactivateBundles,
+			MaxTurns:          item.MaxTurns,
+			JobTimeoutMS:      item.JobTimeoutMS,
 		})
 		if err != nil {
 			view.Errors = append(view.Errors, subagentBatchErrorView{Index: i, Error: err.Error()})
@@ -723,6 +743,8 @@ func formatSubagentJob(job *subagentJob, includeMessages bool) map[string]interf
 		"finished_at":      job.FinishedAt,
 		"write_scope":      append([]string{}, job.WriteScope...),
 		"default_bundles":  append([]string{}, job.DefaultBundles...),
+		"bundle_overrides": append([]string{}, job.BundleOverrides...),
+		"deactivate_bundles": append([]string{}, job.DeactivateBundles...),
 		"tool_names":       append([]string{}, job.ToolNames...),
 		"worker_id":        firstNonEmpty(job.WorkerID, localGoDexWorkerID),
 		"sandbox_id":       job.SandboxID,

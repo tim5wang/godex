@@ -359,6 +359,8 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 		WriteScope:      normalizedScope,
 		PreviewJobIDs:   normalizeWorkflowStrings(opts.PreviewJobIDs),
 		DefaultBundles:  append([]string{}, opts.DefaultBundles...),
+		BundleOverrides:  append([]string{}, opts.BundleOverrides...),
+		DeactivateBundles: append([]string{}, opts.DeactivateBundles...),
 		ToolPolicy:      normalizeWorkflowStrings(opts.ToolPolicy),
 		WorkerID:        firstNonEmpty(strings.TrimSpace(opts.WorkerID), localGoDexWorkerID),
 		SandboxID:       strings.TrimSpace(opts.SandboxID),

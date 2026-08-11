@@ -67,6 +67,8 @@ func subagentToolsForRequiredBundle(bundle string) []string {
 	switch strings.ToLower(strings.TrimSpace(bundle)) {
 	case bundleWeb:
 		return []string{"web_search", "web_fetch"}
+	case bundleCoreCode:
+		return []string{"bash", "read_file", "write_file", "edit_file"}
 	default:
 		return nil
 	}

@@ -301,23 +301,27 @@ orchestrator (完整工具集)
 
 **参考**：Codex `multi_agents_v2.rs`（spawn/followup_task/send_message/wait 工具面）
 
-#### 4.3 角色→bundle 运行时映射
+#### 4.3 角色→bundle 运行时映射 ✅（2026-08-11）
 
 **问题**：`Role` 结构体定义了 `DefaultBundles`，但运行时"激活角色→自动激活对应 bundle"的机制缺失。
 
-**方案**：
-- 实现 `RoleBundleRegistry`：集中管理角色和 bundle 的映射关系
-- subagent 创建时根据角色自动激活对应 bundle
-- 角色切换时自动更新 bundle 激活状态
+**方案（已落地）**：
+- ✅ `RoleBundleRegistry`（`internal/agent/role_bundles.go`）：集中管理「角色 → 默认 bundle」映射，`RegisterRole` 可覆盖内置或注册 package role，空集合删除条目
+- ✅ 内置角色映射对齐路线图分工表：orchestrator `[core_code lsp planning subagent web]`，worker/reviewer `[core_code lsp]`，researcher `[web]`，planner `[core_code lsp planning]`
+- ✅ `BundlesForRole`：显式 roleID 命中优先（package role `DefaultBundles` 或内置），否则按 agentType 关键词推断内置角色
+- ✅ subagent 创建时自动解析：`startDurableSubagentWithContext` 合并 required_bundles + 角色 bundles + 4.4 继承 bundles，写入 `DefaultBundles` 并展开为可用工具（`appendRequiredSubagentTools`）
+- ✅ 测试：内置映射/注册覆盖/未知角色空/优先 role.DefaultBundles/创建时解析（5 个新测试）
 
-**参考**：`internal/core/packages/packages.go` 的 `Role` 结构体
+**参考**：`internal/core/packages/packages.go` 的 `Role` 结构体、`internal/agent/role_bundles.go`
 
-#### 4.4 子 agent bundle 继承
+#### 4.4 子 agent bundle 继承 ✅（2026-08-11）
 
-**方案**：
-- 子 agent 默认继承父 agent 的 bundle 集合
-- 允许通过 `bundle_overrides` 覆盖继承的 bundle
-- 允许通过 `deactivate_bundles` 移除不需要的 bundle
+**方案（已落地）**：
+- ✅ 子 agent 默认继承父 agent 活跃 bundle 集合：`inheritedSubagentBundles` 读取 `toolHandler.Catalog().ActiveBundles`
+- ✅ `bundle_overrides` 覆盖继承：非空时以 overrides 替换继承集合（`subagent` 工具新参数，持久化到 `subagentJob.BundleOverrides`）
+- ✅ `deactivate_bundles` 移除不需要的 bundle：从继承集合过滤（`subagentJob.DeactivateBundles` 持久化）；general-purpose 默认工具面不受影响，仅收窄 bundle 继承层
+- ✅ 贯穿全链路：`subagent` 工具 args/schema → `durableSubagentStartRequest` → `subagentStartOptions` → `subagentJob` 持久化 → `DurableSubagentJobView`/worker contract `CapabilitySet`
+- ✅ 测试：默认继承父活跃/overrides 替换/deactivate 移除/创建时生效（4 个新测试）
 
 #### 4.5 写 scope 与 bundle 联动
 
@@ -413,12 +417,12 @@ orchestrator (完整工具集)
 | 🟠 | 3.1 | 记忆策略模式 | 中 | 高 | 无 | 1w |
 | 🟠 | 3.2 | 记忆 notebook 去重 | 低 | 中 | 无 | 2d |
 | 🟠 | 3.3 | Agent Identity 解耦 | 高 | 高 | 无 | 2w |
-| 🟢 | 4.1 | spawn/send_input/wait | 中 | 高 | 2.4 | 1w |
-| 🟢 | 4.2 | 子 agent 双向通信 | 中 | 高 | 4.1 | 1w |
-| 🟢 | 4.3 | 角色→bundle 运行时映射 | 中 | 高 | 2.4 | 1w |
-| 🟢 | 4.4 | 子 agent bundle 继承 | 中 | 高 | 4.3 | 3d |
+| ✅ | 4.1 | spawn/send_input/wait | 中 | 高 | 2.4 | 已完（2026-08-11） |
+| ✅ | 4.2 | 子 agent 双向通信 | 中 | 高 | 4.1 | 已完（2026-08-11） |
+| ✅ | 4.3 | 角色→bundle 运行时映射 | 中 | 高 | 2.4 | 已完（2026-08-11） |
+| ✅ | 4.4 | 子 agent bundle 继承 | 中 | 高 | 4.3 | 已完（2026-08-11） |
 | 🟢 | 4.5 | 写 scope 与 bundle 联动 | 中 | 中 | 4.3 | 3d |
-| 🟢 | 4.6 | 上下文预算按角色分配 | 中 | 中 | 2.3 | 3d |
+| ✅ | 4.6 | 上下文预算按角色分配 | 中 | 中 | 2.3 | 已完（2026-08-11） |
 | 🔵 | 5.1 | Harness 多引擎抽象 | 高 | 高 | 3.3 | 2w |
 | 🔵 | 5.2 | Turn Error 分层 | 低 | 中 | 无 | 2d |
 | 🔵 | 5.3 | 持久化 Map 抽象 | 中 | 中 | 无 | 1w |
@@ -448,13 +452,13 @@ orchestrator (完整工具集)
   3.2 记忆 notebook 去重   → 2d
   3.3 Agent Identity 解耦  → 2w
 
-🟢 Phase 3（多 agent 通信 + 角色 bundle 集成）：
-  4.1 spawn/send_input/wait → 1w
-  4.2 子 agent 双向通信     → 1w
-  4.3 角色→bundle 运行时映射 → 1w
-  4.4 子 agent bundle 继承   → 3d
+🟢 Phase 4（多 agent 通信 + 角色 bundle 集成）：
+  ✅ 4.1 spawn/send_input/wait → 已完成（2026-08-11）
+  ✅ 4.2 子 agent 双向通信     → 已完成（2026-08-11）
+  ✅ 4.3 角色→bundle 运行时映射 → 已完成（2026-08-11）
+  ✅ 4.4 子 agent bundle 继承   → 已完成（2026-08-11）
   4.5 写 scope 与 bundle 联动 → 3d
-  4.6 上下文预算按角色分配   → 3d
+  ✅ 4.6 上下文预算按角色分配   → 已完成（2026-08-11）
 
 🔵 Phase 4（架构基础设施）：
   5.1 Harness 多引擎抽象    → 2w

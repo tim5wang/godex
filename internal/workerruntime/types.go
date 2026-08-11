@@ -31,24 +31,28 @@ func (s Status) Terminal() bool {
 }
 
 type CapabilitySet struct {
-	ToolNames       []string `json:"tool_names,omitempty"`
-	RequiredBundles []string `json:"required_bundles,omitempty"`
-	RequiredTools   []string `json:"required_tools,omitempty"`
-	DefaultBundles  []string `json:"default_bundles,omitempty"`
-	ToolPolicy      []string `json:"tool_policy,omitempty"`
-	WriteScope      []string `json:"write_scope,omitempty"`
-	SandboxID       string   `json:"sandbox_id,omitempty"`
+	ToolNames          []string `json:"tool_names,omitempty"`
+	RequiredBundles    []string `json:"required_bundles,omitempty"`
+	RequiredTools      []string `json:"required_tools,omitempty"`
+	DefaultBundles     []string `json:"default_bundles,omitempty"`
+	BundleOverrides    []string `json:"bundle_overrides,omitempty"`
+	DeactivateBundles  []string `json:"deactivate_bundles,omitempty"`
+	ToolPolicy         []string `json:"tool_policy,omitempty"`
+	WriteScope         []string `json:"write_scope,omitempty"`
+	SandboxID          string   `json:"sandbox_id,omitempty"`
 }
 
 func (c CapabilitySet) Clone() CapabilitySet {
 	return CapabilitySet{
-		ToolNames:       cloneStrings(c.ToolNames),
-		RequiredBundles: cloneStrings(c.RequiredBundles),
-		RequiredTools:   cloneStrings(c.RequiredTools),
-		DefaultBundles:  cloneStrings(c.DefaultBundles),
-		ToolPolicy:      cloneStrings(c.ToolPolicy),
-		WriteScope:      cloneStrings(c.WriteScope),
-		SandboxID:       strings.TrimSpace(c.SandboxID),
+		ToolNames:         cloneStrings(c.ToolNames),
+		RequiredBundles:   cloneStrings(c.RequiredBundles),
+		RequiredTools:     cloneStrings(c.RequiredTools),
+		DefaultBundles:    cloneStrings(c.DefaultBundles),
+		BundleOverrides:   cloneStrings(c.BundleOverrides),
+		DeactivateBundles: cloneStrings(c.DeactivateBundles),
+		ToolPolicy:        cloneStrings(c.ToolPolicy),
+		WriteScope:        cloneStrings(c.WriteScope),
+		SandboxID:         strings.TrimSpace(c.SandboxID),
 	}
 }
 

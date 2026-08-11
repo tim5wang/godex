@@ -93,6 +93,8 @@ type subagentJob struct {
 	ToolNames       []string                  `json:"tool_names"`
 	WriteScope      []string                  `json:"write_scope,omitempty"`
 	DefaultBundles  []string                  `json:"default_bundles,omitempty"`
+	BundleOverrides  []string                 `json:"bundle_overrides,omitempty"`
+	DeactivateBundles []string                `json:"deactivate_bundles,omitempty"`
 	ToolPolicy      []string                  `json:"tool_policy,omitempty"`
 	WorkerID        string                    `json:"worker_id,omitempty"`
 	SandboxID       string                    `json:"sandbox_id,omitempty"`
@@ -237,8 +239,10 @@ type DurableSubagentJobView struct {
 	FinishedAt        time.Time                     `json:"finished_at,omitempty"`
 	MergedAt          time.Time                     `json:"merged_at,omitempty"`
 	WriteScope        []string                      `json:"write_scope,omitempty"`
-	DefaultBundles    []string                      `json:"default_bundles,omitempty"`
-	ToolPolicy        []string                      `json:"tool_policy,omitempty"`
+	DefaultBundles     []string                      `json:"default_bundles,omitempty"`
+	BundleOverrides    []string                      `json:"bundle_overrides,omitempty"`
+	DeactivateBundles  []string                      `json:"deactivate_bundles,omitempty"`
+	ToolPolicy         []string                      `json:"tool_policy,omitempty"`
 	ToolNames         []string                      `json:"tool_names,omitempty"`
 	WorkerID          string                        `json:"worker_id,omitempty"`
 	SandboxID         string                        `json:"sandbox_id,omitempty"`
@@ -313,6 +317,8 @@ type subagentStartOptions struct {
 	RequiredBundles []string
 	RequiredTools   []string
 	DefaultBundles  []string
+	BundleOverrides  []string
+	DeactivateBundles []string
 	ToolPolicy      []string
 	Capabilities    []string
 	WorkerID        string

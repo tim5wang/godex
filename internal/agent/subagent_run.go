@@ -19,14 +19,16 @@ import (
 )
 
 type durableSubagentStartRequest struct {
-	Prompt          string
-	AgentType       string
-	WriteScope      []string
-	RequiredBundles []string
-	RequiredTools   []string
-	PreviewJobIDs   []string
-	MaxTurns        int
-	JobTimeoutMS    int
+	Prompt           string
+	AgentType        string
+	WriteScope       []string
+	RequiredBundles  []string
+	RequiredTools    []string
+	PreviewJobIDs    []string
+	BundleOverrides  []string
+	DeactivateBundles []string
+	MaxTurns         int
+	JobTimeoutMS     int
 }
 
 func (a *Agent) StartDurableSubagent(prompt, agentType string, writeScope []string) (*subagentJob, error) {
@@ -53,22 +55,30 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		runtimeCtx.Source = string(message.SourceWeb)
 	}
 	requiredBundles := subagentRequiredBundles(prompt, req.RequiredBundles)
+	// 4.3: 角色默认 bundles（package role DefaultBundles 或内置角色映射）
+	roleBundles := a.roleBundlesFor(req.AgentType, role, hasRole)
+	// 4.4: 继承父 agent 活跃 bundle（可被 bundle_overrides 覆盖 / deactivate_bundles 停用）
+	inheritedBundles := a.inheritedSubagentBundles(req.BundleOverrides, req.DeactivateBundles)
+	allBundles := uniqueStrings(append(append(append([]string{}, requiredBundles...), roleBundles...), inheritedBundles...))
 	start := subagentStartOptions{
-		SessionID:       target.sessionID,
-		ParentTurnID:    target.turnID,
-		ParentID:        target.turnID,
-		AgentType:       req.AgentType,
-		Prompt:          prompt,
-		ToolNames:       subagentToolNamesForRole(req.AgentType, nil),
-		WriteScope:      req.WriteScope,
-		PreviewJobIDs:   req.PreviewJobIDs,
-		RequiredBundles: req.RequiredBundles,
-		RequiredTools:   req.RequiredTools,
-		RuntimeContext:  runtimeCtx,
-		SandboxID:       a.SandboxID(),
-		MaxTurns:        a.normalizeSubagentMaxTurns(req.MaxTurns),
-		MaxConcurrent:   a.subagentMaxConcurrentJobs(),
-		JobTimeoutMS:    a.normalizeSubagentJobTimeoutMS(req.JobTimeoutMS),
+		SessionID:         target.sessionID,
+		ParentTurnID:      target.turnID,
+		ParentID:          target.turnID,
+		AgentType:         req.AgentType,
+		Prompt:            prompt,
+		ToolNames:         subagentToolNamesForRole(req.AgentType, nil),
+		WriteScope:        req.WriteScope,
+		PreviewJobIDs:     req.PreviewJobIDs,
+		RequiredBundles:   append([]string{}, allBundles...),
+		RequiredTools:     req.RequiredTools,
+		DefaultBundles:    append([]string{}, allBundles...),
+		BundleOverrides:   append([]string{}, req.BundleOverrides...),
+		DeactivateBundles: append([]string{}, req.DeactivateBundles...),
+		RuntimeContext:    runtimeCtx,
+		SandboxID:         a.SandboxID(),
+		MaxTurns:          a.normalizeSubagentMaxTurns(req.MaxTurns),
+		MaxConcurrent:     a.subagentMaxConcurrentJobs(),
+		JobTimeoutMS:      a.normalizeSubagentJobTimeoutMS(req.JobTimeoutMS),
 	}
 	if hasRole {
 		start.AgentType = role.ID
@@ -77,7 +87,6 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		start.PackageName = role.PackageName
 		start.BasePrompt = subagentBasePromptForRole(role, req.WriteScope)
 		start.ToolNames = subagentToolNamesForRole(role.ID, &role)
-		start.DefaultBundles = append([]string{}, role.DefaultBundles...)
 		start.ToolPolicy = append([]string{}, role.ToolPolicy...)
 		start.Capabilities = roleCapabilitySummary(role, start.ToolNames, req.WriteScope)
 		start.ModelHint = role.ModelHint
@@ -85,7 +94,7 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		start.ContextBudget = roleContextBudgetTokens(role.ID, req.AgentType)
 		start.Display = roleDisplayMap(role.Display)
 	}
-	start.ToolNames = appendRequiredSubagentTools(start.ToolNames, requiredBundles, req.RequiredTools)
+	start.ToolNames = appendRequiredSubagentTools(start.ToolNames, allBundles, req.RequiredTools)
 	start.ToolNames = narrowSubagentWriteTools(start.ToolNames, req.WriteScope)
 	if hasRole {
 		start.Capabilities = roleCapabilitySummary(role, start.ToolNames, req.WriteScope)

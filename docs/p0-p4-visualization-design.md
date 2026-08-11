@@ -92,7 +92,7 @@ graph?: {
 ### 3.3 实施分期
 
 - **A1（P0）✅**：后端 `longTaskView` 附加 `Graph *agentGraphView`（复用 `agentGraphViewFromState`，含 nodes + 运行时 edges with to/status/verdict）+ 前端 `AgentGraphDiagram` 组件（mermaid 渲染、节点状态着色、失败降级表格），已接入 `LongTaskList` Collapse
-- **A2（P1）**：轮询/事件刷新（运行时节点状态变化实时更新）+ 点击节点详情抽屉
+- **A2（P1）✅**：运行中轮询（`longTasksQuery` 有 running/pending 时每 3s `refetchInterval`）+ 点击节点详情抽屉（SVG 事件委托解析 mermaid g 节点 id + 兜底节点标签列表，Drawer 展示 write_scope/attempt/verdict/handoff_ref/job_id）
 - **A3（P2）**：失败路径过滤、handoff 内容预览、导出 mermaid 源码
 
 ---
@@ -115,7 +115,8 @@ graph?: {
 ### 4.3 实施分期
 
 - **B1（P0）✅**：ContextPanels 新增 `TokenBreakdownBar` 分层堆叠条（各层占比 + 颜色图例，零 token 层隐藏）+ 阈值警戒色 Tag（budget ≥85% 橙 / ≥100% 红）
-- **B2（P1）**：Compaction 历史页签 + 按角色预算对比
+- **B2（P1）✅**：InspectorTabs 新增「Compaction 历史」页签（`CompactionHistoryPanel` 从 timeline `snapshot_ready` compacted 事件过滤，零新 API）；按角色预算对比——后端 `DurableSubagentJobView` 透出 `ContextBudget`，前端 `FeedItem`/`DurableSubagentJob` 加 `context_budget`，SubagentQuickMeta 显示 budget Tag
+- **B3（P2，可选）**：按角色预算使用率对比条（需后端记录各角色实际 token 用量）
 
 ---
 
@@ -135,7 +136,8 @@ graph?: {
 
 ### 5.3 实施分期
 
-- **C1（P1）**：泳道时序图初版（spawn/send_input/review/iterate 事件渲染）
+- **C1（P1）✅**：`SubagentTimelinePanel` 泳道时序图（每条 lane 一个角色，x 轴时间，事件点 spawn/send_input/review/iterate 分类着色，点击 Popover 详情，issues/retries 筛选），接入 InspectorTabs「Subagent timeline」页签
+- **C2（P2）**：驳回/重试筛选强化 + 事件详情展开
 - **C2（P2）**：事件详情展开 + 驳回/重试筛选
 
 ---
@@ -145,7 +147,7 @@ graph?: {
 | 阶段 | 内容 | 验收标准 | 状态 |
 |------|------|----------|------|
 | P0 | A1 + B1 | longtask 详情页出现 DAG 图（节点/边/状态着色正确）；ContextPanels 出现分层堆叠条与警戒色 | ✅ 完成（2026-08-11）|
-| P1 | A2 + B2 + C1 | DAG 实时刷新+节点详情；Compaction 历史页签；子 agent 泳道图可读 | ⏳ |
+| P1 | A2 + B2 + C1 | DAG 实时刷新+节点详情；Compaction 历史页签；子 agent 泳道图可读 | ✅ 完成（2026-08-11）|
 | P2 | A3 + C2 | 失败路径过滤、mermaid 导出；驳回/重试筛选 | ⏳ |
 
 **通用验收**：

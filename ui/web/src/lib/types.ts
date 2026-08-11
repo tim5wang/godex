@@ -1147,6 +1147,7 @@ export interface DurableSubagentJob {
   last_runner_phase?: string;
   last_iteration?: number;
   last_recovery_hint?: string;
+  context_budget?: number;
   last_message?: string;
   last_tool_id?: string;
   last_tool_name?: string;
@@ -1365,6 +1366,7 @@ export interface FeedItem {
   capabilitySummary?: string[];
   modelHint?: string;
   budgetHint?: string;
+  contextBudget?: number;
   packageName?: string;
   sequence?: number;
   objective?: string;

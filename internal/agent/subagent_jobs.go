@@ -266,6 +266,7 @@ type DurableSubagentJobView struct {
 	LastRunnerPhase   string                        `json:"last_runner_phase,omitempty"`
 	LastIteration     int                           `json:"last_iteration,omitempty"`
 	LastRecoveryHint  string                        `json:"last_recovery_hint,omitempty"`
+	ContextBudget     int                           `json:"context_budget,omitempty"`
 	Progress          []DurableSubagentProgressView `json:"progress,omitempty"`
 }
 

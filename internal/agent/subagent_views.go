@@ -118,6 +118,7 @@ func durableSubagentJobView(job *subagentJob) DurableSubagentJobView {
 		LastRunnerPhase:   diagnostics.LastRunnerPhase,
 		LastIteration:     diagnostics.LastIteration,
 		LastRecoveryHint:  diagnostics.LastRecoveryHint,
+		ContextBudget:     job.ContextBudget,
 		Progress:          progress,
 	}
 	if len(progress) > 0 {

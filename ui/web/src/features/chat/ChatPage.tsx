@@ -388,6 +388,13 @@ export function ChatPage() {
     queryKey: ["longtasks", token, openQuery.data?.session_id],
     enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
     queryFn: async () => listSessionLongTasks(token || null, openQuery.data!.session_id),
+    // A2: while any longtask is still running/pending, poll every 3s so the
+    // DAG diagram (node status/verdict) stays live without a page refresh.
+    refetchInterval: (query) => {
+      const items = query.state.data ?? [];
+      const active = items.some((lt) => lt.running > 0 || lt.pending > 0 || lt.status === "running");
+      return active ? 3000 : false;
+    },
   });
 
   const packageCommandsQuery = useQuery({

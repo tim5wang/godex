@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Empty, Spin, Table, Typography } from "antd";
+import { Alert, Empty, Spin, Space, Table, Tag, Typography } from "antd";
 import type { AgentGraphView, AgentGraphNode, AgentGraphEdge } from "../../../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -93,10 +93,39 @@ function nextDiagramId() {
   return `godex-agentgraph-${diagramCounter}`;
 }
 
-export function AgentGraphDiagram({ graph }: { graph: AgentGraphView }) {
+export function AgentGraphDiagram({ graph, onSelectNode }: { graph: AgentGraphView; onSelectNode?: (node: AgentGraphNode) => void }) {
   const code = useMemo(() => toMermaidSource(graph), [graph]);
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // A2: map mermaid g-element ids back to backend node ids so clicks on the
+  // rendered SVG can open the node detail drawer. mermaid ids look like
+  // "<diagramId>-<safeNodeId>"; we only need the trailing n_<slug> part.
+  const idToNode = useMemo(() => {
+    const map = new Map<string, AgentGraphNode>();
+    graph.nodes.forEach((node, i) => {
+      map.set(safeId(node.id, i), node);
+    });
+    return map;
+  }, [graph]);
+
+  const handleSvgClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!onSelectNode) return;
+    const target = event.target as Element | null;
+    const g = target?.closest?.("g");
+    if (!g) return;
+    const raw = g.getAttribute("id") ?? "";
+    // Trailing segment that starts with our safe prefix (n_...).
+    const segments = raw.split("-");
+    for (let i = segments.length - 1; i >= 0; i--) {
+      if (!segments[i].startsWith("n_")) continue;
+      const node = idToNode.get(segments[i]);
+      if (node) {
+        onSelectNode(node);
+        return;
+      }
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -145,11 +174,28 @@ export function AgentGraphDiagram({ graph }: { graph: AgentGraphView }) {
     );
   }
   return (
-    <div
-      data-testid="agentgraph-diagram"
-      style={{ overflowX: "auto", maxWidth: "100%" }}
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    <div>
+      <div
+        data-testid="agentgraph-diagram"
+        style={{ overflowX: "auto", maxWidth: "100%", cursor: onSelectNode ? "pointer" : undefined }}
+        onClick={handleSvgClick}
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+      {onSelectNode ? (
+        <Space wrap size={[4, 4]} style={{ marginTop: 8 }}>
+          {graph.nodes.map((node, i) => (
+            <Tag
+              key={node.id}
+              color={node.status === "failed" ? "red" : node.status === "running" ? "processing" : node.status === "completed" ? "green" : "default"}
+              style={{ cursor: "pointer" }}
+              onClick={() => onSelectNode(node)}
+            >
+              {node.title || node.id} · {node.status}
+            </Tag>
+          ))}
+        </Space>
+      ) : null}
+    </div>
   );
 }
 

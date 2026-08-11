@@ -9,6 +9,8 @@ import { ApprovalList } from "./ApprovalPanels";
 import { ContextRecallPanel } from "./ContextPanels";
 import { TurnList, AvailableSubagentRoles, SubagentList, LongTaskList } from "./TurnSubagentPanels";
 import { TimelineList } from "./TimelinePanels";
+import { CompactionHistoryPanel } from "./CompactionHistory";
+import { SubagentTimelinePanel } from "./SubagentTimeline";
 
 export function InspectorTabs(props: {
   activeKey: string;
@@ -169,6 +171,16 @@ export function InspectorTabs(props: {
                 onFinalize={props.onFinalizeLongTask}
               />
             ),
+          },
+          {
+            key: "compactions",
+            label: t("chat.compactionHistoryTitle"),
+            children: <CompactionHistoryPanel items={props.timelineItems} />,
+          },
+          {
+            key: "subagentTimeline",
+            label: t("chat.subagentTimelineTitle"),
+            children: <SubagentTimelinePanel items={props.timelineItems} />,
           },
           {
             key: "timeline",

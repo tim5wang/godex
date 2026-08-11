@@ -1,10 +1,11 @@
-import type { TurnRecord, FeedItem, LongTaskView, DurableSubagentReview, PackageRoleEntry } from "../../../lib/types";
+import { useState } from "react";
+import type { TurnRecord, FeedItem, LongTaskView, DurableSubagentReview, PackageRoleEntry, AgentGraphNode } from "../../../lib/types";
 import { useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../../i18n";
-import { Empty, List, Tooltip, Button, Space, Typography, Tag, Card, Progress, Popconfirm, Alert, Descriptions, Collapse } from "antd";
+import { Empty, List, Tooltip, Button, Space, Typography, Tag, Card, Progress, Popconfirm, Alert, Descriptions, Collapse, Drawer } from "antd";
 import { PlayCircleOutlined, RedoOutlined, CheckOutlined, StopOutlined, EyeOutlined, ApartmentOutlined } from "@ant-design/icons";
 import { SubagentCard } from "../../../components/SubagentCard";
-import { turnStatusColor, shortTurnId, formatTimelineTime, formatTurnError, previewText } from "../../../lib/timelineUtils";
+import { turnStatusColor, shortTurnId, formatTimelineTime, formatTurnError, previewText, formatCompactNumber } from "../../../lib/timelineUtils";
 import { AgentGraphDiagram } from "./AgentGraphDiagram";
 
 export function TurnList({
@@ -148,10 +149,12 @@ export function LongTaskList({
   onCancel: (workflowId: string, nodeId: string) => void;
   onFinalize: (workflowId: string, nodeId: string) => void;
 }) {
+  const [selectedNode, setSelectedNode] = useState<AgentGraphNode | null>(null);
   if (!loading && items.length === 0) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No LongTasks" />;
   }
   return (
+    <>
     <List
       loading={loading}
       dataSource={items}
@@ -221,7 +224,7 @@ export function LongTaskList({
                             {item.graph.failed > 0 ? <Tag color="red">{item.graph.failed} failed</Tag> : null}
                           </Space>
                         ),
-                        children: <AgentGraphDiagram graph={item.graph} />,
+                        children: <AgentGraphDiagram graph={item.graph} onSelectNode={setSelectedNode} />,
                       },
                     ]}
                   />
@@ -272,6 +275,48 @@ export function LongTaskList({
         );
       }}
     />
+    <Drawer
+      title={selectedNode ? selectedNode.title || selectedNode.id : "Node"}
+      open={!!selectedNode}
+      onClose={() => setSelectedNode(null)}
+      width={380}
+    >
+      {selectedNode ? <AgentGraphNodeDetail node={selectedNode} /> : null}
+    </Drawer>
+    </>
+  );
+}
+
+function AgentGraphNodeDetail({ node }: { node: AgentGraphNode }) {
+  const items = [
+    { key: "id", label: "Node", children: node.id },
+    { key: "type", label: "Type", children: node.node_type || "—" },
+    { key: "status", label: "Status", children: node.status },
+    { key: "verdict", label: "Verdict", children: node.verdict || "—" },
+    { key: "agent_type", label: "Agent", children: node.agent_type || "—" },
+    { key: "attempt", label: "Attempt", children: node.attempt ?? 1 },
+    { key: "job_id", label: "Job", children: node.job_id || "—" },
+    { key: "handoff_ref", label: "Handoff", children: node.handoff_ref || "—" },
+    { key: "error", label: "Error", children: node.error || "—" },
+  ];
+  return (
+    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <Descriptions size="small" column={1} bordered items={items} />
+      {node.write_scope?.length ? (
+        <div>
+          <Typography.Text strong>Write scope</Typography.Text>
+          <div style={{ marginTop: 6 }}>
+            <Space wrap size={4}>
+              {node.write_scope.map((path) => (
+                <Tag key={path} style={{ fontFamily: "monospace" }}>
+                  {path}
+                </Tag>
+              ))}
+            </Space>
+          </div>
+        </div>
+      ) : null}
+    </Space>
   );
 }
 
@@ -317,6 +362,7 @@ function SubagentQuickMeta({ item }: { item: FeedItem }) {
           ) : null}
           {item.modelRequestCount ? <Tag>{item.modelRequestCount} calls</Tag> : null}
           {item.toolCallCount ? <Tag>{item.toolCallCount} tools</Tag> : null}
+          {item.contextBudget ? <Tag color="cyan">budget {formatCompactNumber(item.contextBudget)}</Tag> : null}
         </Space>
         <Typography.Text type="secondary" ellipsis={{ tooltip: item.objective || lastActivity }}>
           {item.objective ? `Objective: ${item.objective}` : "Objective not recorded"}

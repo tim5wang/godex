@@ -412,6 +412,7 @@ export function subagentJobToFeedItem(job: DurableSubagentJob): FeedItem {
     capabilitySummary: job.identity?.capability_summary,
     modelHint: job.identity?.model_hint,
     budgetHint: job.identity?.budget_hint,
+    contextBudget: job.context_budget,
     maxTurns: job.max_turns,
     modelRequestCount: job.model_request_count,
     toolCallCount: job.tool_call_count,

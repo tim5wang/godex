@@ -215,6 +215,34 @@ func (a *Agent) ResumeDurableSubagent(id string) (*subagentJob, error) {
 	return a.ResumeDurableSubagentWithContext(context.Background(), id)
 }
 
+// IterateDurableSubagentWithContext reopens a finished (completed/error)
+// subagent job for a review→fix→re-review cycle (roadmap 4.2): the given
+// review feedback is queued as a pending input, the job is set back to
+// running, and the subagent runs again with the feedback injected on the next
+// turn. Returns the job after the re-run finishes so the caller can review
+// again.
+func (a *Agent) IterateDurableSubagentWithContext(ctx context.Context, id, feedback string) (*subagentJob, error) {
+	job, err := a.subagentJobs.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	switch job.Status {
+	case subagentStatusCompleted, subagentStatusError:
+	default:
+		return nil, fmt.Errorf("subagent job %s is %s; only completed or error jobs can be iterated", id, job.Status)
+	}
+	var inputs []protocol.Message
+	if text := strings.TrimSpace(feedback); text != "" {
+		inputs = append(inputs, protocol.NewTextMessage(protocol.RoleUser, text))
+	}
+	if _, err := a.subagentJobs.ReopenForIteration(id, inputs); err != nil {
+		return nil, err
+	}
+	target := subagentEventTargetFromContext(ctx)
+	a.runSubagentJob(ctx, id, target)
+	return a.subagentJobs.Get(id)
+}
+
 func (a *Agent) ResumeDurableSubagentWithContext(ctx context.Context, id string) (*subagentJob, error) {
 	handle, err := a.WorkerRuntime().Resume(ctx, workerruntime.JobRef{JobID: id, WorkerID: localGoDexWorkerID})
 	if err != nil {
@@ -498,6 +526,30 @@ func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEv
 				}
 			}
 			target.emitRunnerPhase(job, event)
+		},
+		DrainInjections: func(ctx context.Context, limit int) (conversation.InjectionDrain, error) {
+			_ = ctx
+			drained, err := a.subagentJobs.DrainPendingInputs(id, limit)
+			if err != nil {
+				return conversation.InjectionDrain{}, err
+			}
+			if len(drained) == 0 {
+				return conversation.InjectionDrain{}, nil
+			}
+			return conversation.InjectionDrain{
+				Messages:  drained,
+				Count:     len(drained),
+				Mode:      "send_input",
+				Summary:   "Subagent received queued input via send_input/followup_task.",
+			}, nil
+		},
+		AppendInjectedMessages: func(msgs []protocol.Message) {
+			messages = append(messages, msgs...)
+			_ = a.subagentJobs.UpdateMessages(id, messages)
+			a.recordSubagentProgress(id, target, subagentProgressEvent{
+				Phase:   "injected_input",
+				Message: "Subagent received queued input via send_input/followup_task.",
+			})
 		},
 		MaxTurns: job.MaxTurns,
 	}.Run(runCtx)

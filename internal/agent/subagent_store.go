@@ -691,6 +691,54 @@ func (s *subagentJobStore) ResumeWithLimit(id string, maxConcurrent int) (*subag
 	return cloneSubagentJob(job), nil
 }
 
+// ReopenForIteration reopens a finished (completed or error) subagent job for
+// a review→fix→re-review cycle (roadmap 4.2). The previous result/error are
+// cleared, the job returns to running/pending, and the given feedback is
+// queued as pending inputs so the runner injects it on the next turn.
+func (s *subagentJobStore) ReopenForIteration(id string, feedback []protocol.Message) (*subagentJob, error) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job := s.jobs[strings.TrimSpace(id)]
+	if job == nil {
+		return nil, fmt.Errorf("subagent job not found: %s", id)
+	}
+	switch job.Status {
+	case subagentStatusCompleted, subagentStatusError:
+	default:
+		return nil, fmt.Errorf("subagent job %s is %s; only completed or error jobs can be iterated", id, job.Status)
+	}
+	job.Status = subagentStatusRunning
+	job.Result = ""
+	job.Error = ""
+	job.UpdatedAt = now
+	job.StartedAt = now
+	job.FinishedAt = time.Time{}
+	if len(feedback) > 0 {
+		job.PendingInputs = append(job.PendingInputs, protocol.CloneMessages(feedback)...)
+	}
+	progress := subagentProgressEvent{
+		Time:    now,
+		Phase:   string(subagentStatusRunning),
+		Message: "Subagent reopened for review-fix iteration.",
+	}
+	job.Progress = appendBoundedSubagentProgress(job.Progress, progress)
+	if len(job.Messages) == 0 {
+		job.Messages = []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, job.Prompt)}
+	}
+	if err := s.appendProgressLocked(job, progress); err != nil {
+		return nil, err
+	}
+	if err := s.saveMessagesLocked(job); err != nil {
+		return nil, err
+	}
+	if err := s.saveSummaryLocked(job); err != nil {
+		return nil, err
+	}
+	s.notifyWatchersLocked()
+	return cloneSubagentJob(job), nil
+}
+
 func (s *subagentJobStore) Get(id string) (*subagentJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -782,6 +830,55 @@ func (s *subagentJobStore) UpdateMessages(id string, messages []protocol.Message
 	}
 	s.notifyWatchersLocked()
 	return nil
+}
+
+// AppendPendingInputs queues user input messages for a subagent job (roadmap
+// 4.1 send_input / followup_task). The queued inputs are drained by the
+// runner's injection channel while the job is running; inputs queued for a
+// completed job are rejected.
+func (s *subagentJobStore) AppendPendingInputs(id string, inputs []protocol.Message) (*subagentJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job := s.jobs[strings.TrimSpace(id)]
+	if job == nil {
+		return nil, fmt.Errorf("subagent job not found: %s", id)
+	}
+	if subagentStatusTerminal(job.Status) {
+		return nil, fmt.Errorf("subagent job %s already finished (%s)", id, job.Status)
+	}
+	job.PendingInputs = append(job.PendingInputs, protocol.CloneMessages(inputs)...)
+	job.UpdatedAt = time.Now().UTC()
+	if err := s.saveSummaryLocked(job); err != nil {
+		return nil, err
+	}
+	s.notifyWatchersLocked()
+	return cloneSubagentJob(job), nil
+}
+
+// DrainPendingInputs removes up to limit queued inputs from a job and returns
+// them (roadmap 4.1 injection channel). A limit <= 0 drains everything.
+func (s *subagentJobStore) DrainPendingInputs(id string, limit int) ([]protocol.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job := s.jobs[strings.TrimSpace(id)]
+	if job == nil {
+		return nil, fmt.Errorf("subagent job not found: %s", id)
+	}
+	if len(job.PendingInputs) == 0 {
+		return nil, nil
+	}
+	n := len(job.PendingInputs)
+	if limit > 0 && limit < n {
+		n = limit
+	}
+	drained := protocol.CloneMessages(job.PendingInputs[:n])
+	job.PendingInputs = protocol.CloneMessages(job.PendingInputs[n:])
+	job.UpdatedAt = time.Now().UTC()
+	if err := s.saveSummaryLocked(job); err != nil {
+		return nil, err
+	}
+	s.notifyWatchersLocked()
+	return drained, nil
 }
 
 func (s *subagentJobStore) AppendProgress(id string, progress subagentProgressEvent) (*subagentJob, error) {

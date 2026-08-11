@@ -35,6 +35,7 @@ type subagentArgs struct {
 	JobTimeoutMS    int                 `json:"job_timeout_ms,omitempty"`
 	MaxTurns        int                 `json:"max_turns,omitempty"`
 	Wait            bool                `json:"wait,omitempty"`
+	Input           string              `json:"input,omitempty"`
 	Tasks           []subagentBatchItem `json:"tasks,omitempty"`
 }
 
@@ -131,7 +132,7 @@ func newSubagentTool(agent *Agent) tools.Tool {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"run", "start", "batch", "wait", "status", "logs", "list", "cancel", "resume", "review", "merge"},
+				"enum":        []string{"run", "start", "batch", "wait", "status", "logs", "list", "cancel", "resume", "review", "merge", "send_input", "followup_task", "iterate"},
 				"description": "Subagent action to perform",
 			},
 			"job_id": map[string]string{
@@ -170,6 +171,10 @@ func newSubagentTool(agent *Agent) tools.Tool {
 				"type":        "array",
 				"items":       map[string]string{"type": "string"},
 				"description": "Specific tools this subagent needs. Tools are inherited only when active in the parent agent.",
+			},
+			"input": map[string]string{
+				"type":        "string",
+				"description": "Message to send to a running subagent (send_input), follow-up task prompt (followup_task), or review feedback for a fix iteration (iterate).",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
@@ -287,6 +292,26 @@ func newSubagentTool(agent *Agent) tools.Tool {
 				return tools.ToolResult{}, err
 			}
 			return tools.ToolResult{Structured: result}, nil
+		case "send_input", "followup_task":
+			input := strings.TrimSpace(args.Input)
+			if input == "" {
+				return tools.ToolResult{}, fmt.Errorf("missing input argument")
+			}
+			job, err := agent.subagentJobs.AppendPendingInputs(args.JobID, []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, input)})
+			if err != nil {
+				return tools.ToolResult{}, err
+			}
+			return tools.ToolResult{Structured: formatSubagentModelJob(job)}, nil
+		case "iterate":
+			feedback := strings.TrimSpace(args.Input)
+			if feedback == "" {
+				return tools.ToolResult{}, fmt.Errorf("missing input (review feedback) argument")
+			}
+			job, err := agent.IterateDurableSubagentWithContext(ctx, args.JobID, feedback)
+			if err != nil {
+				return tools.ToolResult{}, err
+			}
+			return tools.ToolResult{Structured: formatSubagentModelJob(job)}, nil
 		case "start":
 			prompt := strings.TrimSpace(args.Prompt)
 			if prompt == "" {

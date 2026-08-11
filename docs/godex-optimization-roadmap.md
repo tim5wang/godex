@@ -283,21 +283,23 @@ orchestrator (完整工具集)
 
 ### 🟢 Phase 4：多 Agent 通信 + 角色 Bundle 集成（P3）
 
-#### 4.1 spawn/send_input/wait 工具
+#### 4.1 spawn/send_input/wait 工具 ✅（2026-08-11）
 
-**方案**：
-- 实现 `spawn_agent` 工具：创建子 agent，可选 fork 上下文
-- 实现 `send_input` 工具：发送消息到子 agent（可 interrupt 或 queue）
-- 实现 `wait_agent` 工具：等待子 agent 完成
-- 实现 `followup_task` 工具：给子 agent 分配新任务
+**方案（已落地）**：
+- ✅ `send_input` / `followup_task`：subagent 工具新增两个 action，消息入 `subagentJob.PendingInputs` 持久化队列
+- ✅ Runner 注入通道：`runSubagentJob` 接线 `DrainInjections`/`AppendInjectedMessages`，运行中的子 agent 在 turn 边界自动吸收排队输入
+- ✅ spawn/wait 已有：`subagent` 工具的 `start`（≈spawn_agent）与 `wait`（≈wait_agent）
+- ✅ 测试：队列/弹出/终态拒绝/工具接线/Runner 注入端到端（5 个新测试）
 
-#### 4.2 子 agent 双向通信
+#### 4.2 子 agent 双向通信 ✅（2026-08-11）
 
-**方案**：
-- 支持 review → fix → re-review 循环
-- 不仅仅是单向 handoff
+**方案（已落地）**：
+- ✅ `ReopenForIteration`：store 新增方法，允许从 completed/error 状态重新打开 job（清 result/error，置 running，可携带反馈）
+- ✅ `IterateDurableSubagentWithContext` + subagent 工具 `iterate` action：review→fix→re-review 循环——注入 review 反馈（复用 4.1 PendingInputs 通道）→ 重跑 → 完成后可再次 review
+- ✅ 不是单向 handoff：父 agent 可对同一 job 多轮 iterate，直到 review 通过
+- ✅ 测试：重开/拒绝 running/非终态拒绝/带反馈重跑注入（4 个新测试）
 
-**参考**：Codex `multi_agents_v2.rs`、`multi_agents/spawn.rs`
+**参考**：Codex `multi_agents_v2.rs`（spawn/followup_task/send_message/wait 工具面）
 
 #### 4.3 角色→bundle 运行时映射
 

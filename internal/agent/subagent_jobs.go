@@ -111,6 +111,7 @@ type subagentJob struct {
 	Result          string                    `json:"result,omitempty"`
 	Error           string                    `json:"error,omitempty"`
 	Messages        []protocol.Message        `json:"messages,omitempty"`
+	PendingInputs   []protocol.Message        `json:"pending_inputs,omitempty"`
 	Progress        []subagentProgressEvent   `json:"progress,omitempty"`
 	MaxTurns        int                       `json:"max_turns"`
 	ContextBudget   int                       `json:"context_budget,omitempty"`

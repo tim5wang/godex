@@ -135,3 +135,100 @@ func TestGodexHarnessRunTurnDelegatesToAgentLoop(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+func TestRequestedHarnessResolverHonorsInput(t *testing.T) {
+	resolve := NewRequestedHarnessResolver("godex")
+	got, err := resolve(context.Background(), HarnessTurnInput{Harness: "codex"})
+	if err != nil || got != "codex" {
+		t.Fatalf("resolver with request = %q, %v, want codex", got, err)
+	}
+	got, err = resolve(context.Background(), HarnessTurnInput{})
+	if err != nil || got != "godex" {
+		t.Fatalf("resolver without request = %q, %v, want godex", got, err)
+	}
+}
+
+// TestRunWithOptionsRoutesToRegisteredHarness verifies a per-turn engine
+// request (RunOptions.Harness) routes through the registered harness instead
+// of the default godex loop.
+func TestRunWithOptionsRoutesToRegisteredHarness(t *testing.T) {
+	agent := &Agent{}
+	other := &fakeHarness{id: "codex"}
+	agent.RegisterHarness("codex", other)
+
+	err := agent.RunWithOptions(context.Background(), RunOptions{
+		SessionID: "s1",
+		TurnID:    "t1",
+		Harness:   "codex",
+	})
+	if err != nil {
+		t.Fatalf("RunWithOptions routed turn: %v", err)
+	}
+	if other.runTurns != 1 {
+		t.Fatalf("expected codex harness to run 1 turn, got %d", other.runTurns)
+	}
+}
+
+// TestRunWithOptionsUnavailableHarnessErrors verifies a request for an engine
+// that was never registered surfaces a clear error.
+func TestRunWithOptionsUnavailableHarnessErrors(t *testing.T) {
+	agent := &Agent{}
+	err := agent.RunWithOptions(context.Background(), RunOptions{SessionID: "s1", Harness: "missing"})
+	if err == nil {
+		t.Fatalf("expected error for unavailable harness")
+	}
+	if !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("expected error to name harness, got %v", err)
+	}
+}
+
+// TestRunWithOptionsSwitchingHarnessResetsSession verifies that moving a
+// session from one engine to another resets both engines' session state.
+func TestRunWithOptionsSwitchingHarnessResetsSession(t *testing.T) {
+	agent := &Agent{}
+	first := &fakeHarness{id: "codex"}
+	second := &fakeHarness{id: "opencode"}
+	agent.RegisterHarness("codex", first)
+	agent.RegisterHarness("opencode", second)
+
+	if err := agent.RunWithOptions(context.Background(), RunOptions{SessionID: "s1", Harness: "codex"}); err != nil {
+		t.Fatalf("first engine turn: %v", err)
+	}
+	if err := agent.RunWithOptions(context.Background(), RunOptions{SessionID: "s1", Harness: "opencode"}); err != nil {
+		t.Fatalf("second engine turn: %v", err)
+	}
+	if len(first.resetSessions) != 1 || first.resetSessions[0] != "s1" {
+		t.Fatalf("expected old engine reset once, got %v", first.resetSessions)
+	}
+	if len(second.resetSessions) != 1 || second.resetSessions[0] != "s1" {
+		t.Fatalf("expected new engine reset once, got %v", second.resetSessions)
+	}
+
+	// Same engine again: no reset.
+	if err := agent.RunWithOptions(context.Background(), RunOptions{SessionID: "s1", Harness: "opencode"}); err != nil {
+		t.Fatalf("same engine turn: %v", err)
+	}
+	if len(second.resetSessions) != 1 {
+		t.Fatalf("expected no reset on same engine, got %v", second.resetSessions)
+	}
+}
+
+// TestRunWithOptionsDefaultHarnessStaysOnGodex verifies that an empty or
+// explicit godex request keeps the built-in engine (which here fails with the
+// missing-caller error instead of touching any registered engine).
+func TestRunWithOptionsDefaultHarnessStaysOnGodex(t *testing.T) {
+	agent := newTestAgent(t, 4096)
+	agent.client = nil // force the default loop to fail on missing caller
+	other := &fakeHarness{id: "codex"}
+	agent.RegisterHarness("codex", other)
+
+	// A nil caller means the godex default loop fails with a missing-caller
+	// error rather than routing to the registered engine.
+	err := agent.RunWithOptions(context.Background(), RunOptions{SessionID: "s1", TurnID: "t1"})
+	if err == nil || !strings.Contains(err.Error(), "missing caller") {
+		t.Fatalf("expected missing-caller error from default loop, got %v", err)
+	}
+	if other.runTurns != 0 {
+		t.Fatalf("expected default loop not to touch registered engine, got %d runs", other.runTurns)
+	}
+}

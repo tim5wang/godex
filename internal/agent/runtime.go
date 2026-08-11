@@ -371,6 +371,11 @@ type RunOptions struct {
 	Checkpoint         func()
 	DrainInjections    func(context.Context, int) (conversation.InjectionDrain, error)
 	OnInjectionDrained func(conversation.InjectionDrain)
+	// Harness selects a non-default engine for this turn (roadmap 6.4). When
+	// empty or "godex", the default engine loop runs as before. A different
+	// id routes the turn through the harness router, which resets engine
+	// state when the session switches engines.
+	Harness string
 }
 
 // SessionSkillState stores one activated skill's fully loaded prompt state.
@@ -502,6 +507,25 @@ func restorePermissionState(manager *tools.PermissionManager, sessionID string, 
 
 // RunWithOptions runs the agent loop without assuming any specific frontend.
 func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
+	// Roadmap 6.4: a per-turn engine request routes through the harness
+	// router (which resets engine state when the session switches engines).
+	// Empty or "godex" keeps the default loop below.
+	if strings.TrimSpace(opts.Harness) != "" && opts.Harness != "godex" {
+		_, err := a.harnessRouter().RunTurn(ctx, HarnessTurnInput{
+			SessionID:          opts.SessionID,
+			TurnID:             opts.TurnID,
+			ActorID:            opts.ActorID,
+			ActorKind:          opts.ActorKind,
+			EmitRunnerPhases:   opts.EmitRunnerPhases,
+			Sink:               opts.Sink,
+			RuntimeContext:     opts.RuntimeContext,
+			Checkpoint:         opts.Checkpoint,
+			DrainInjections:    opts.DrainInjections,
+			OnInjectionDrained: opts.OnInjectionDrained,
+			Harness:            opts.Harness,
+		})
+		return err
+	}
 	ctx = tools.WithSessionID(ctx, opts.SessionID)
 	ctx = tools.WithSessionContext(ctx, opts.RuntimeContext)
 	ctx = conversation.WithUsageContext(ctx, a.usageContext(opts.RuntimeContext, opts.SessionID, opts.TurnID, ""))

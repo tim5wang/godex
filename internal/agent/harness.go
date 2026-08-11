@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/domain/automation"
@@ -36,6 +37,9 @@ type HarnessTurnInput struct {
 	DrainInjections    func(context.Context, int) (conversation.InjectionDrain, error)
 	OnInjectionDrained func(conversation.InjectionDrain)
 	Model              string // optional per-turn model override
+	// Harness is the engine requested for this turn (roadmap 6.4). Empty
+	// means the default godex engine.
+	Harness string
 }
 
 // HarnessTurnResult reports the outcome of one turn.
@@ -151,6 +155,18 @@ type HarnessResolver func(ctx context.Context, input HarnessTurnInput) (string, 
 // no engine-switching configuration exists).
 func NewDefaultHarnessResolver(id string) HarnessResolver {
 	return func(context.Context, HarnessTurnInput) (string, error) { return id, nil }
+}
+
+// NewRequestedHarnessResolver routes to the harness named by input.Harness,
+// falling back to the given default id when the request does not name one.
+// It is the resolver behind per-turn engine switching (roadmap 6.4).
+func NewRequestedHarnessResolver(defaultID string) HarnessResolver {
+	return func(_ context.Context, input HarnessTurnInput) (string, error) {
+		if strings.TrimSpace(input.Harness) == "" {
+			return defaultID, nil
+		}
+		return strings.TrimSpace(input.Harness), nil
+	}
 }
 
 // harnessRouter routes turns to registered harnesses and resets engine state

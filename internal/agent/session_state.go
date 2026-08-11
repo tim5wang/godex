@@ -184,6 +184,35 @@ func (a *Agent) Harness() Harness {
 	return NewGodexHarness(a)
 }
 
+// RegisterHarness registers an additional engine for per-turn switching
+// (roadmap 6.4). The built-in godex engine is always available; registering
+// the same id replaces the previous entry.
+func (a *Agent) RegisterHarness(id string, harness Harness) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.extraHarnesses == nil {
+		a.extraHarnesses = map[string]Harness{}
+	}
+	a.extraHarnesses[id] = harness
+}
+
+// harnessRouter lazily builds the engine router used when a turn requests a
+// non-default harness (RunOptions.Harness). Adapters are the godex engine
+// plus every engine registered via RegisterHarness; the resolver honors the
+// per-turn request and defaults to godex.
+func (a *Agent) harnessRouter() Harness {
+	a.harnessOnce.Do(func() {
+		adapters := map[string]Harness{"godex": NewGodexHarness(a)}
+		a.mu.Lock()
+		for id, harness := range a.extraHarnesses {
+			adapters[id] = harness
+		}
+		a.mu.Unlock()
+		a.harnessRouterVal = NewHarnessRouter(adapters, NewRequestedHarnessResolver("godex"))
+	})
+	return a.harnessRouterVal
+}
+
 func (a *Agent) appendMessage(msg protocol.Message) {
 	if len(msg.Content) == 0 {
 		return

@@ -93,6 +93,13 @@ type Agent struct {
 	// appendLongTaskReflux can see args such as NoReflux without
 	// having to thread the value through every call site.
 	currentLongTaskArgs *longTaskArgs
+
+	// harnessOnce guards lazy initialization of harnessRouterVal.
+	harnessOnce sync.Once
+	harnessRouterVal Harness
+	// extraHarnesses holds engines registered via RegisterHarness beyond
+	// the built-in godex engine (roadmap 6.4 multi-engine switching).
+	extraHarnesses map[string]Harness
 }
 
 type dependencies struct {

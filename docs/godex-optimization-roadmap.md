@@ -31,6 +31,7 @@
 | **Turn Error 分层** | ✅ `TurnError` 接口（Retryable/Transient/NonRetryable）+ `ClassifyTurnError` + Runner 内层有限重试路由 + `TurnFailureMessage`（2026-08-11） |
 | **Harness 多引擎抽象** | ✅ `Harness` 接口（Profile/Models/Tools/RunTurn/ResetSession/Close）+ godexHarness 默认实现 + harnessRouter 按会话切换并重置引擎（2026-08-11） |
 | **持久化 Map 抽象** | ✅ `DurableMap[V]` 接口 + MemoryMap + SQLiteMap（dir/<table>.db）；替换试点发现有序数组（candidates.json）不适用 key-value map，保留文件读写（2026-08-11） |
+| **多引擎热切换** | ✅ `RunOptions.Harness` 每轮选引擎 + `RegisterHarness` + 惰性 harnessRouter + backend envelope metadata 透传；切换引擎自动 reset session（2026-08-12） |
 | **安全边界** | 安全 profile、host privilege policy、WorkspaceFS 文件边界、shell 风险分级和审计 |
 | **Browser/Desktop/ACP** | browser handoff/resume、desktop bundle、OCR、external ACP stdio bridge |
 | **执行后端** | 本地和 Docker bind-mount workspace 模式 |
@@ -402,9 +403,17 @@ orchestrator (完整工具集)
 
 **方案**：来自 2.0 SPEC，session 从线性 history 变为可分支的树。
 
-#### 6.4 多引擎热切换
+#### 6.4 多引擎热切换 ✅（2026-08-12）
 
-**方案**：每轮对话可切换引擎，切换时自动 reset session。
+**方案（已落地）**：
+- ✅ `RunOptions.Harness` 字段：每轮 turn 可请求非默认引擎（空或 `godex` 保持默认循环）
+- ✅ `Agent.RegisterHarness(id, harness)`：注册额外引擎；`Agent.harnessRouter()` 惰性构建 router（godex + 已注册引擎），resolver 用 `NewRequestedHarnessResolver`（按 input.Harness 路由，空则 godex）
+- ✅ `RunWithOptions` 开头路由：`opts.Harness` 非空且非 godex 时经 `harnessRouter.RunTurn` 执行——会话切换引擎时自动 `ResetSession` 旧+新引擎（复用 5.1 语义），同引擎不重复 reset
+- ✅ backend 透传：`turn.go` 从 `envelope.Metadata["harness"]` 读取引擎请求传给 `RunOptions.Harness`
+- ✅ `HarnessTurnInput.Harness` 字段：携带 per-turn 引擎请求
+- ✅ 测试：resolver 按请求/默认路由、注册引擎路由执行、unavailable 报错、切换时旧/新引擎各 reset 一次、同引擎不重复 reset、默认路径不触达注册引擎（6 个新测试），全绿
+
+**参考**：`temp/qm/src/harness/harness-router.ts`（resolveRuntimeChoice + createHarnessRouter）
 
 #### 6.5 自然语言创建 longtask
 
@@ -444,7 +453,7 @@ orchestrator (完整工具集)
 | ⚪ | 6.1 | 安全筛查器 | 中 | 中 | 无 | 1w |
 | ⚪ | 6.2 | Scope 隔离模型 | 中 | 中 | 3.3 | 1w |
 | ⚪ | 6.3 | Session 树 | 高 | 高 | 3.3+5.3 | 3w |
-| ⚪ | 6.4 | 多引擎热切换 | 高 | 中 | 5.1 | 2w |
+| ✅ | 6.4 | 多引擎热切换 | 高 | 中 | 5.1 | 已完（2026-08-12） |
 | ⚪ | 6.5 | 自然语言创建 longtask | 中 | 中 | 2.4+4.1 | 1w |
 
 ---

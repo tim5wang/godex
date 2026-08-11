@@ -603,6 +603,10 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		session.events.Emit(event)
 	})
 
+	// Roadmap 6.4: a per-turn engine request rides on envelope metadata
+	// ("harness" key). Empty means the default godex engine.
+	requestedHarness := strings.TrimSpace(envelope.Metadata["harness"])
+
 	runErr := session.agent.RunWithOptions(ctx, agent.RunOptions{
 		SessionID:        sessionID,
 		TurnID:           turnID,
@@ -611,6 +615,7 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		EmitRunnerPhases: true,
 		Sink:             runSink,
 		RuntimeContext:   runtimeCtx,
+		Harness:          requestedHarness,
 		Checkpoint: func() {
 			s.checkpointRunningTurn(session, turnID)
 		},

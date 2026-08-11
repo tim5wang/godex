@@ -707,7 +707,15 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 	}
 	errorText := ""
 	if status == "error" && runErr != nil {
-		errorText = runErr.Error()
+		// 5.2 Turn Error layering: a NonRetryableTurnError carries a precise
+		// user-facing message (e.g. an invalid request shape) that should
+		// surface verbatim; every other failure keeps the raw error so
+		// provider internals stay debuggable without leaking via the UI.
+		if conversation.ClassifyTurnError(runErr) == conversation.TurnErrorNonRetryable {
+			errorText = conversation.TurnFailureMessage(runErr)
+		} else {
+			errorText = runErr.Error()
+		}
 	}
 	session.updateTurnStatus(turnID, status, pendingRequestID, errorText, updatedAt)
 	if status == "error" {

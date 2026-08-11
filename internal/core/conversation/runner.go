@@ -27,6 +27,7 @@ const defaultMaxRepeatedPollingTools = 5
 const defaultMaxStalledTaskPollingTools = 8
 const defaultMaxEmptyResponses = 3
 const defaultMaxLengthRecoveries = 4
+const defaultMaxModelRetries = 2
 // defaultMaxNoMutationRounds caps consecutive tool rounds with no file
 // mutation (edit_file/write_file) before the loop guard nudges the model.
 // Research spirals ("I found the root cause, one more confirmation...") look
@@ -184,6 +185,7 @@ type Runner struct {
 	MaxRepeatedPollingTools    int
 	MaxStalledTaskPollingTools int
 	MaxLoopGuardRecoveries     int
+	MaxModelRetries            int
 	LoopGuardMode              LoopGuardMode
 	ToolTimeout                time.Duration
 }
@@ -252,6 +254,10 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 	if maxLengthRecoveries <= 0 {
 		maxLengthRecoveries = defaultMaxLengthRecoveries
 	}
+	maxModelRetries := r.MaxModelRetries
+	if maxModelRetries <= 0 {
+		maxModelRetries = defaultMaxModelRetries
+	}
 	maxInjectionsPerTurn := r.MaxInjectionsPerTurn
 	if maxInjectionsPerTurn <= 0 {
 		maxInjectionsPerTurn = defaultMaxInjectionsPerTurn
@@ -298,18 +304,34 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 		r.emitPhase(PhaseEvent{Phase: PhaseContextSanitized, Iteration: turn + 1, Model: req.Model})
 		r.emitPhase(PhaseEvent{Phase: PhaseModelRequest, Iteration: turn + 1, Model: req.Model})
 
-		resp, streamed, err := r.callModel(ctx, req)
-		if err != nil {
-			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+		var resp *protocol.Response
+		var streamed bool
+		for attempt := 0; ; attempt++ {
+			var callErr error
+			resp, streamed, callErr = r.callModel(ctx, req)
+			if callErr == nil {
+				break
+			}
+			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(callErr, context.Canceled) {
 				result.Stopped = true
 				result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
-				r.emitPhase(PhaseEvent{Phase: PhaseInterrupted, Iteration: turn + 1, Model: req.Model, Message: err.Error(), RecoveryHint: result.RecoveryHint})
-				return result, err
+				r.emitPhase(PhaseEvent{Phase: PhaseInterrupted, Iteration: turn + 1, Model: req.Model, Message: callErr.Error(), RecoveryHint: result.RecoveryHint})
+				return result, callErr
+			}
+			// 5.2 Turn Error routing: retryable/transient model errors get a
+			// bounded in-turn retry budget instead of failing the turn on the
+			// first provider hiccup. Non-retryable errors surface immediately.
+			// The retry loop stays inside the current turn, so retries do not
+			// consume the outer maxTurns budget.
+			class := ClassifyTurnError(callErr)
+			if (class == TurnErrorRetryable || class == TurnErrorTransient) && attempt < maxModelRetries {
+				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: fmt.Sprintf("model error classified as %s; retrying (%d/%d): %v", class, attempt+1, maxModelRetries, callErr), RecoveryHint: diagnosticRecoveryHint(turn+1, nil)})
+				continue
 			}
 			result.Stopped = true
 			result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
-			r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Model: req.Model, Message: err.Error(), RecoveryHint: result.RecoveryHint})
-			return result, err
+			r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Model: req.Model, Message: callErr.Error(), RecoveryHint: result.RecoveryHint})
+			return result, callErr
 		}
 
 		assistantMsg := protocol.MessageFromResponse(*resp)

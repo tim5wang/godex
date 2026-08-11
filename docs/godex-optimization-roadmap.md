@@ -28,6 +28,7 @@
 | **上下文预算按角色分配** | ✅ 角色预算解析（orchestrator 200K / worker 100K / reviewer 100K / researcher 50K）、`ContextBudget` 持久化到 subagent job、subagent 运行循环超预算自动 rule-based 压缩（2026-08-11） |
 | **AgentGraph 抽象** | ✅ `agent_graph` 工具 + `AgentGraph` 接口（Create/Get/AddNode/AddEdge/RemoveNode/Cancel/Run/Wait）、5 种节点类型、3 种边类型、动态增删、merge_point/user_input 语义（2026-08-11） |
 | **Runner 韧性** | 统一 phase checkpoint、active turn follow-up injection、空回复恢复、length/provider error 恢复 |
+| **Turn Error 分层** | ✅ `TurnError` 接口（Retryable/Transient/NonRetryable）+ `ClassifyTurnError` + Runner 内层有限重试路由 + `TurnFailureMessage`（2026-08-11） |
 | **安全边界** | 安全 profile、host privilege policy、WorkspaceFS 文件边界、shell 风险分级和审计 |
 | **Browser/Desktop/ACP** | browser handoff/resume、desktop bundle、OCR、external ACP stdio bridge |
 | **执行后端** | 本地和 Docker bind-mount workspace 模式 |
@@ -360,11 +361,13 @@ orchestrator (完整工具集)
 
 **参考**：`temp/qm/src/harness/harness.ts`（202 行接口）+ `harness-router.ts`
 
-#### 5.2 Turn Error 分层
+#### 5.2 Turn Error 分层 ✅（2026-08-11）
 
-**方案**：
-- 定义 `TurnError` 接口，区分 Retryable / NonRetryable / Transient
-- 在 `context.go` 的 `Run` 循环中集成错误路由
+**方案（已落地）**：
+- ✅ `turn_error.go`：`TurnError` 接口（`Class() TurnErrorClass`）+ 三类错误（`RetryableTurnError`/`TransientTurnError`/`NonRetryableTurnError`）+ `ClassifyTurnError`（显式分类优先，其次 context/网络/HTTP 状态推断，复用 shouldRetryError 信号）+ `TurnFailureMessage`（NonRetryable 透出 message，其余通用文案，对齐 turn-error.ts）
+- ✅ Runner 集成：`callModel` 错误按分类路由——Retryable/Transient 在**同一 turn 内**有限重试（`MaxModelRetries` 默认 2，不消耗外层 maxTurns 预算），NonRetryable 立即失败；新增 `PhaseRecoveryAttempt` 阶段事件
+- ✅ backend 消费：`turn.go` 的 errorText 对 NonRetryable 错误用 `TurnFailureMessage` 透出明确 message，其余保留原始错误可调试
+- ✅ 测试：分类（显式/HTTP 状态码/传输错误/包装错误）、TurnFailureMessage、Runner 重试路由（transient 重试后成功/预算耗尽返回原错/non-retryable 不重试）共 13 项，conversation 全绿
 
 **参考**：`temp/qm/src/core/turn-error.ts`
 
@@ -432,7 +435,7 @@ orchestrator (完整工具集)
 | ✅ | 4.5 | 写 scope 与 bundle 联动 | 中 | 中 | 4.3 | 已完（2026-08-11） |
 | ✅ | 4.6 | 上下文预算按角色分配 | 中 | 中 | 2.3 | 已完（2026-08-11） |
 | 🔵 | 5.1 | Harness 多引擎抽象 | 高 | 高 | 3.3 | 2w |
-| 🔵 | 5.2 | Turn Error 分层 | 低 | 中 | 无 | 2d |
+| ✅ | 5.2 | Turn Error 分层 | 低 | 中 | 无 | 已完（2026-08-11） |
 | 🔵 | 5.3 | 持久化 Map 抽象 | 中 | 中 | 无 | 1w |
 | ⚪ | 6.1 | 安全筛查器 | 中 | 中 | 无 | 1w |
 | ⚪ | 6.2 | Scope 隔离模型 | 中 | 中 | 3.3 | 1w |
@@ -469,8 +472,8 @@ orchestrator (完整工具集)
   ✅ 4.6 上下文预算按角色分配   → 已完成（2026-08-11）
 
 🔵 Phase 4（架构基础设施）：
+  ✅ 5.2 Turn Error 分层       → 已完成（2026-08-11）
   5.1 Harness 多引擎抽象    → 2w
-  5.2 Turn Error 分层       → 2d
   5.3 持久化 Map 抽象       → 1w
 ```
 

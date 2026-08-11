@@ -254,8 +254,18 @@ func (m *Manager) Remember(input SaveInput) (*Entry, error) {
 		entry.CreatedAt = now
 	}
 
+	content := strings.TrimSpace(input.Content)
+	if existingIndex >= 0 && before != nil {
+		// Same-title updates fold new facts into prior content with
+		// normalize-based dedup (foldCapture): repeated lines are skipped,
+		// genuinely new lines are appended, so repeated remembers of the
+		// same facts never accumulate duplicates.
+		merged, _ := foldCapture(before.Content, content)
+		content = merged
+	}
+
 	path := filepath.Join(m.dir, entry.File)
-	rendered := renderMemoryFile(entry, strings.TrimSpace(input.Content))
+	rendered := renderMemoryFile(entry, content)
 	if err := fsutil.WriteFileAtomic(path, []byte(rendered), 0644); err != nil {
 		return nil, err
 	}
@@ -270,7 +280,7 @@ func (m *Manager) Remember(input SaveInput) (*Entry, error) {
 		return nil, err
 	}
 	m.syncSidecarEntry(entry)
-	after := StoredMemory{Entry: entry, Content: strings.TrimSpace(input.Content)}
+	after := StoredMemory{Entry: entry, Content: content}
 	if err := m.appendAudit(AuditLogEntry{
 		Action: AuditRemember,
 		Before: before,

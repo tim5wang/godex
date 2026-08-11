@@ -811,6 +811,64 @@ func TestSearchCreatesSQLiteSidecar(t *testing.T) {
 	}
 }
 
+func TestRememberFoldsDuplicateFactsOnSameTitleUpdate(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	first, err := manager.Remember(SaveInput{
+		Title:   "Go Validation Workflow",
+		Summary: "Run go test after code changes.",
+		Content: "Run go test ./... after touching runtime code.",
+		Type:    TypeWorkflow,
+	})
+	if err != nil {
+		t.Fatalf("remember first memory: %v", err)
+	}
+
+	// Same title, overlapping fact: the duplicated line must be folded away
+	// and only the new line appended (foldCapture dedup).
+	second, err := manager.Remember(SaveInput{
+		Title:   "Go Validation Workflow",
+		Summary: "Run go test after code changes.",
+		Content: "Run go test ./... after touching runtime code.\nUse go test -race for channel changes.",
+		Type:    TypeWorkflow,
+	})
+	if err != nil {
+		t.Fatalf("remember same-title update: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected same-title update to preserve id, got %q vs %q", second.ID, first.ID)
+	}
+
+	record, err := manager.Get(second.ID)
+	if err != nil {
+		t.Fatalf("get updated memory: %v", err)
+	}
+	if strings.Count(record.Content, "Run go test ./... after touching runtime code") != 1 {
+		t.Errorf("expected duplicate fact folded to one occurrence, content=%q", record.Content)
+	}
+	if !strings.Contains(record.Content, "go test -race for channel changes") {
+		t.Errorf("expected new fact appended, content=%q", record.Content)
+	}
+
+	// Fully duplicated update adds nothing.
+	third, err := manager.Remember(SaveInput{
+		Title:   "Go Validation Workflow",
+		Summary: "Run go test after code changes.",
+		Content: "Run go test ./... after touching runtime code.\nUse go test -race for channel changes.",
+		Type:    TypeWorkflow,
+	})
+	if err != nil {
+		t.Fatalf("remember fully-duplicated update: %v", err)
+	}
+	recordAfter, err := manager.Get(third.ID)
+	if err != nil {
+		t.Fatalf("get memory after duplicate update: %v", err)
+	}
+	if recordAfter.Content != record.Content {
+		t.Errorf("expected fully-duplicated update to keep content unchanged, got %q vs %q", recordAfter.Content, record.Content)
+	}
+}
+
 func TestRememberIncrementallyUpdatesSQLiteSidecar(t *testing.T) {
 	manager := NewManager(t.TempDir())
 

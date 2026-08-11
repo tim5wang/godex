@@ -17,6 +17,7 @@
 | **Memory 2.x** | 显式记忆、候选 inbox、suppression、SQLite + FTS5 sidecar、scope-aware recall、project miner、history_search |
 | **Memory 类型扩展** | ✅ 新增 `work_method` / `work_fact` 类型（2026-08-10） |
 | **笔记↔记忆联动** | ✅ 双向打通：笔记展示相关记忆、记忆注入追加笔记引用、HTTP API + UI（2026-08-10） |
+| **记忆去重（foldCapture）** | ✅ 同 title Remember 增量去重（normalize 对比，重复跳过）+ 上下文截断 capTail 保留尾部最新（2026-08-11） |
 | **指令系统** | `AGENT.md`、本地规则、动态上下文、skills/package prompt 可组合注入 |
 | **Skill/Package** | native skill、第三方 normalizer、compatibility analyzer、package command dispatcher、role registry |
 | **Tool runtime** | typed tools、参数 coercion、before/after interceptors、审批模式、bundle 管理 |
@@ -258,13 +259,15 @@ orchestrator (完整工具集)
 
 **参考**：`temp/qm/src/memory/strategy.ts` + `consolidation.ts`
 
-#### 3.2 记忆 notebook 去重（foldCapture）
+#### 3.2 记忆 notebook 去重（foldCapture） ✅（2026-08-11）
 
 **问题**：`Remember` 直接追加，无去重。
 
-**方案**：
-- 实现 `foldCapture` 去重逻辑（normalize 后对比）
-- 在 `layers.go` 的 `trimMemoriesToTokenBudget` 中改用 `capTail` 策略（保留尾部最新内容）
+**方案（已落地）**：
+- ✅ `fold.go`：`normalizeMemoryLine`（去 bullet/日期前缀、压空白、小写）+ `foldCapture`（normalize 后对比，重复行跳过、新行追加，返回合并 body 与新增行数）+ `truncateTextTailToTokenBudget`（capTail：token 预算下保留尾部最新内容）
+- ✅ `Remember` 同 title 更新路径接入 foldCapture：重复 facts 不再累积，新 facts 追加；显式 `Update` 仍整体替换
+- ✅ `layers.go` `fitMemoryToBudget` 的 content 截断改用 capTail（保留尾部最新），summary 保持头部截断
+- ✅ 测试：normalize 单测、foldCapture 追加/全重复/空输入/空已有、capTail 保留尾部、Remember 同 title 去重集成（7 个新测试）
 
 **参考**：`temp/qm/src/memory/notebook.ts` + `memory-service.ts` 的 `foldCapture`
 
@@ -419,7 +422,7 @@ orchestrator (完整工具集)
 | ✅ | 2.3 | 上下文预算管理 | 低 | 中 | 无 | 已完（2026-08-11） |
 | ✅ | 2.4 | AgentGraph 运行时抽象 | 高 | 高 | 2.1 | 已完（2026-08-11） |
 | 🟠 | 3.1 | 记忆策略模式 | 中 | 高 | 无 | 1w |
-| 🟠 | 3.2 | 记忆 notebook 去重 | 低 | 中 | 无 | 2d |
+| ✅ | 3.2 | 记忆 notebook 去重 | 低 | 中 | 无 | 已完（2026-08-11） |
 | 🟠 | 3.3 | Agent Identity 解耦 | 高 | 高 | 无 | 2w |
 | ✅ | 4.1 | spawn/send_input/wait | 中 | 高 | 2.4 | 已完（2026-08-11） |
 | ✅ | 4.2 | 子 agent 双向通信 | 中 | 高 | 4.1 | 已完（2026-08-11） |
@@ -453,7 +456,7 @@ orchestrator (完整工具集)
 🟡 Phase 2（下一个，longtask 重构核心）：
   ✅ 2.4 AgentGraph 抽象     → 已完成（2026-08-11）
   3.1 记忆策略模式         → 1w
-  3.2 记忆 notebook 去重   → 2d
+  ✅ 3.2 记忆 notebook 去重   → 已完成（2026-08-11）
   3.3 Agent Identity 解耦  → 2w
 
 🟢 Phase 4（多 agent 通信 + 角色 bundle 集成）：

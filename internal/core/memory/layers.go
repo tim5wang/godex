@@ -413,7 +413,7 @@ func trimMemoriesToTokenBudget(memories []RelevantMemory, budget int) []Relevant
 func fitMemoryToBudget(mem RelevantMemory, remaining int, force bool) (RelevantMemory, bool) {
 	trimmed := mem
 	trimmed.Summary = truncateTextToTokenBudget(trimmed.Summary, summaryBudgetForType(trimmed.Type))
-	trimmed.Content = truncateTextToTokenBudget(trimmed.Content, contentBudgetForType(trimmed.Type))
+	trimmed.Content = truncateTextTailToTokenBudget(trimmed.Content, contentBudgetForType(trimmed.Type))
 
 	if estimateRelevantMemoryTokens(trimmed) <= remaining {
 		return trimmed, true
@@ -436,7 +436,7 @@ func fitMemoryToBudget(mem RelevantMemory, remaining int, force bool) (RelevantM
 	if contentBudget <= 0 {
 		return base, true
 	}
-	trimmed.Content = truncateTextToTokenBudget(trimmed.Content, contentBudget)
+	trimmed.Content = truncateTextTailToTokenBudget(trimmed.Content, contentBudget)
 	if estimateRelevantMemoryTokens(trimmed) > remaining {
 		return base, true
 	}

@@ -1,6 +1,9 @@
 package automation
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	DeliveryKindSession = "session"
@@ -78,7 +81,12 @@ type SessionContext struct {
 	SecurityProfile string            `json:"security_profile,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	ProjectLedger   string            `json:"project_ledger,omitempty"`
-	DefaultDelivery DeliveryTarget    `json:"default_delivery,omitempty"`
+	// ProjectLedgerUpdatedAt is when the ledger was last written. The agent
+	// uses it to skip injecting stale ledgers (safety valve: a ledger that has
+	// not been refreshed by a completed turn in a while is from an older task
+	// phase and distracts the model instead of helping).
+	ProjectLedgerUpdatedAt time.Time     `json:"project_ledger_updated_at,omitempty"`
+	DefaultDelivery        DeliveryTarget `json:"default_delivery,omitempty"`
 }
 
 // Clone returns a detached copy of the runtime session context.

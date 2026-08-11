@@ -418,7 +418,7 @@ func (s *Service) ResumeTurnAsync(ctx context.Context, sessionID, turnID string)
 	}
 	envelope := record.Envelope.Normalized()
 	runtimeCtx := s.buildRuntimeContext(sessionID, session.locator, envelope)
-	runtimeCtx.ProjectLedger = s.compactProjectLedgerForSession(sessionID)
+	runtimeCtx.ProjectLedger, runtimeCtx.ProjectLedgerUpdatedAt = s.projectLedgerForRuntimeContext(sessionID)
 	now := s.now()
 	session.agent.ClearPendingResume()
 	session.updateTurnStatus(record.ID, "running", "", "", now)
@@ -500,7 +500,7 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	}
 	runtimeCtx.Metadata["turn_id"] = turnID
 	attachSessionGraphContext(session, &runtimeCtx)
-	runtimeCtx.ProjectLedger = s.compactProjectLedgerForSession(sessionID)
+	runtimeCtx.ProjectLedger, runtimeCtx.ProjectLedgerUpdatedAt = s.projectLedgerForRuntimeContext(sessionID)
 	priorMessageCount := len(session.agent.GetMessages())
 	if envelope.Timestamp.IsZero() {
 		envelope.Timestamp = now

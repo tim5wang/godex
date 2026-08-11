@@ -107,12 +107,16 @@ func (s *Service) UpdateProjectLedger(sessionID string, patch ProjectLedgerPatch
 	return ledger, nil
 }
 
-func (s *Service) compactProjectLedgerForSession(sessionID string) string {
+// projectLedgerForRuntimeContext returns the compact ledger text plus its
+// last-updated timestamp for injection into a session runtime context. The
+// agent uses the timestamp to skip stale ledgers (safety valve against
+// cross-task residue being injected into unrelated turns).
+func (s *Service) projectLedgerForRuntimeContext(sessionID string) (string, time.Time) {
 	ledger, err := s.ProjectLedger(sessionID)
 	if err != nil {
-		return ""
+		return "", time.Time{}
 	}
-	return ledger.Compact
+	return ledger.Compact, ledger.UpdatedAt
 }
 
 func (s *Service) updateProjectLedgerFromTurn(session *sessionState, turnID string, envelope message.Envelope, status string, runErr error, priorMessageCount int, at time.Time) error {

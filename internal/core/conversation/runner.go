@@ -301,23 +301,21 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: "empty model response; retrying", RecoveryHint: "Retrying the model request because the provider returned an empty response."})
 				continue
 			}
-			finalResp, finalStreamed, finalErr := r.callModel(ctx, finalizationRequest(req, "The previous provider responses were empty. Return a concise diagnostic handoff for the user. Do not call tools."))
-			if finalErr == nil {
-				resp = finalResp
-				streamed = finalStreamed
-				assistantMsg = protocol.MessageFromResponse(*resp)
+			// Safety valve: an exhausted empty-response streak means the
+			// provider is failing (e.g. it rejects tool-result messages or is
+			// overloaded). Surface the failure as a hard error instead of
+			// fabricating a "diagnostic handoff" — a fake completion that ends
+			// the turn without doing work and invites the user to restart the
+			// same stalled loop by saying "continue".
+			result.Stopped = true
+			result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
+			err := fmt.Errorf("LLM provider returned empty responses %d times in a row; aborting instead of producing a fake handoff (provider/gateway may reject the request shape or be overloaded)", emptyResponses)
+			r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Model: req.Model, Message: err.Error(), RecoveryHint: result.RecoveryHint})
+			if drained := r.tryDrainInjections(ctx, maxInjectionsPerTurn, maxInjectionCycles, &injectionCycles); drained.Count > 0 {
+				result.HadInjections = true
+				continue
 			}
-			if finalErr != nil || strings.TrimSpace(protocol.MessageText(assistantMsg)) == "" {
-				result.Stopped = true
-				result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
-				err := fmt.Errorf("conversation runner received empty model response after %d retries", emptyResponses)
-				r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Model: req.Model, Message: err.Error(), RecoveryHint: result.RecoveryHint})
-				if drained := r.tryDrainInjections(ctx, maxInjectionsPerTurn, maxInjectionCycles, &injectionCycles); drained.Count > 0 {
-					result.HadInjections = true
-					continue
-				}
-				return result, err
-			}
+			return result, err
 		}
 		if len(assistantMsg.Content) > 0 {
 			if r.AppendAssistant != nil {
@@ -445,16 +443,6 @@ func (r Runner) tryDrainInjections(ctx context.Context, limit, maxCycles int, cy
 	r.AppendInjectedMessages(drained.Messages)
 	r.emitPhase(PhaseEvent{Phase: PhaseInjectionDrained, Iteration: *cycles, Message: drained.Summary})
 	return drained
-}
-
-func finalizationRequest(req protocol.Request, instruction string) protocol.Request {
-	next := req
-	next.Tools = nil
-	next.Messages = append(append([]protocol.APIMessage{}, req.Messages...), protocol.APIMessage{
-		Role:    protocol.RoleUser,
-		Content: []protocol.Block{protocol.TextBlock(instruction)},
-	})
-	return next
 }
 
 func diagnosticRecoveryHint(iteration int, executed []ExecutedTool) string {

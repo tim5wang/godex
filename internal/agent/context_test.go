@@ -1015,8 +1015,9 @@ func TestBuildContextIncludesProjectLedger(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{
-		SessionID:     "session-ledger",
-		ProjectLedger: "Goal: ship the long task\nCurrent phase: validation",
+		SessionID:             "session-ledger",
+		ProjectLedger:         "Goal: ship the long task\nCurrent phase: validation",
+		ProjectLedgerUpdatedAt: time.Now(),
 	})
 
 	build, err := a.buildContext(ctx)

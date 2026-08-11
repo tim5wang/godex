@@ -15,6 +15,13 @@ const (
 	defaultCompactionTriggerTokens       = 60000
 	defaultCompactionTargetHistoryTokens = 12000
 	defaultCompactionMaxLatencyMS        = 3000
+	// maxCompactionTriggerTokens caps the auto-compaction trigger so a
+	// misconfigured value (e.g. 800000) cannot silently disable compaction.
+	// With a trigger above the model's context window the check never fires,
+	// context grows unbounded, and long turns degrade into loops / provider
+	// overflow. 150k still fits current model windows (128k-200k) while firing
+	// before overflow.
+	maxCompactionTriggerTokens = 150000
 )
 
 type compactionRunResult struct {
@@ -29,16 +36,20 @@ type compactionCandidate struct {
 }
 
 func (a *Agent) compactionTriggerTokens() int {
+	trigger := 0
 	if a == nil || a.cfg == nil {
-		return defaultCompactionTriggerTokens
+		trigger = defaultCompactionTriggerTokens
+	} else if a.cfg.Compaction.TriggerTokens > 0 {
+		trigger = a.cfg.Compaction.TriggerTokens
+	} else if a.cfg.CompressThreshold > 0 {
+		trigger = a.cfg.CompressThreshold
+	} else {
+		trigger = defaultCompactionTriggerTokens
 	}
-	if a.cfg.Compaction.TriggerTokens > 0 {
-		return a.cfg.Compaction.TriggerTokens
+	if trigger > maxCompactionTriggerTokens {
+		return maxCompactionTriggerTokens
 	}
-	if a.cfg.CompressThreshold > 0 {
-		return a.cfg.CompressThreshold
-	}
-	return defaultCompactionTriggerTokens
+	return trigger
 }
 
 func (a *Agent) compactionTargetHistoryTokens() int {

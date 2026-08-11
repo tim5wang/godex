@@ -15,6 +15,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/modelcontext"
 	"github.com/tim5wang/godex/internal/core/notes"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -63,8 +64,8 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	}
 	promptStateMessages := runtimePromptMessages(promptStateSections)
 	runtimeMessages, ackRuntime := a.collectRuntimeMessages()
-	if ledger := strings.TrimSpace(tools.SessionContextFromContext(ctx).ProjectLedger); ledger != "" {
-		runtimeMessages = append([]protocol.Message{protocol.NewEphemeralTextMessage(protocol.KindBackground, formatProjectLedgerRuntimeMessage(ledger))}, runtimeMessages...)
+	if sc := tools.SessionContextFromContext(ctx); projectLedgerInjectionAllowed(sc) {
+		runtimeMessages = append([]protocol.Message{protocol.NewEphemeralTextMessage(protocol.KindBackground, formatProjectLedgerRuntimeMessage(sc.ProjectLedger))}, runtimeMessages...)
 	}
 
 	// Split runtime content by stability for KV prefix caching:
@@ -391,6 +392,25 @@ func (a *Agent) collectTodoStatus() string {
 		return ""
 	}
 	return "Current todos:\n" + rendered
+}
+
+// projectLedgerInjectionWindow bounds how long a project ledger stays injected
+// after its last update. A ledger that has not been refreshed by a completed
+// turn within the window is from an older task phase (or a stalled marathon
+// turn) and distracts the model instead of helping (safety valve against
+// cross-task residue).
+const projectLedgerInjectionWindow = time.Hour
+
+// projectLedgerInjectionAllowed reports whether the session's project ledger
+// should be injected into the active context: it must be non-empty and fresh.
+func projectLedgerInjectionAllowed(sc automation.SessionContext) bool {
+	if strings.TrimSpace(sc.ProjectLedger) == "" {
+		return false
+	}
+	if sc.ProjectLedgerUpdatedAt.IsZero() {
+		return false
+	}
+	return time.Since(sc.ProjectLedgerUpdatedAt) <= projectLedgerInjectionWindow
 }
 
 func formatProjectLedgerRuntimeMessage(ledger string) string {

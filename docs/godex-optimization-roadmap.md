@@ -399,9 +399,16 @@ orchestrator (完整工具集)
 
 **方案**：定义 `ScopeId` 类型，在 memory/files/sandbox 中引入 scope 参数。
 
-#### 6.3 Session 树（可分支）
+#### 6.3 Session 树（可分支） ✅（2026-08-12）
 
-**方案**：来自 2.0 SPEC，session 从线性 history 变为可分支的树。
+**方案（已落地）**：
+- ✅ backend `SessionTree(ctx, sessionID)`：按 `parent_session_id` 从磁盘发现全部 fork 关联（无需打开 session），返回树节点（session/title/parent/branch_title/forked_from_turn_id + graph 摘要），children 按 updated_at 降序
+- ✅ backend `RollbackSession(ctx, sessionID, nodeID)`：`RollbackBranch(main, nodeID)` 回滚主分支 head 到早期 graph node + 持久化 + security event
+- ✅ backend `MergeSessionBranch(ctx, sessionID, branchID, summary)`：`MergeBranch(main, branchID, nodeID, record)` 把 worker 分支合并回主分支（merge record 记录 source branch/summary）+ 持久化 + security event
+- ✅ 复用既有基础：`ForkSession`（分支创建）+ `sessiongraph.SessionGraph`（EnsureMainBranch/CloneBranch/RollbackBranch/MergeBranch + JSON 持久化）+ `appendSessionGraphCheckpoint`（checkpoint 节点）
+- ✅ 测试：fork 层级树查询、未知根报错、回滚移动 main head（持久化校验）、未知节点报错、合并记录 source branch、空 branch 报错（6 个新测试），全绿
+
+**参考**：`docs/architecture-v2-spec.md` §3（Session Memory 必须成为可分支的树）
 
 #### 6.4 多引擎热切换 ✅（2026-08-12）
 
@@ -415,9 +422,15 @@ orchestrator (完整工具集)
 
 **参考**：`temp/qm/src/harness/harness-router.ts`（resolveRuntimeChoice + createHarnessRouter）
 
-#### 6.5 自然语言创建 longtask
+#### 6.5 自然语言创建 longtask ✅（2026-08-12）
 
-**方案**：用户在对话中描述任务，agent 自动拆解成 AgentGraph。
+**方案（已落地）**：
+- ✅ `longtask` 工具新增 `plan` action：入参 `description`（自然语言任务描述），Agent 内部调用 LLM（`a.client.Call`，复用 `GenerateTitle` 的调用模式）把描述拆解成 stories JSON
+- ✅ `parseLongTaskPlanStories`：容忍 markdown code fence 与 prose 包裹，提取 stories JSON 数组（字段对齐 `longTaskStoryInput`：id/title/description/acceptance_criteria/priority/agent_type/write_scope/depends_on）
+- ✅ 拆解结果走既有 `createLongTask` 流程：`longTaskDefaultStoryCompiler` 编译 + `workflows.create` + `writeLongTaskSpec`，零重复逻辑
+- ✅ 测试：描述→2 story 创建（依赖关系 US-002→US-001）、fence 容错、缺 description 报错、空 stories 报错（4 个新测试），全绿
+
+**参考**：`internal/agent/longtask_plan.go`（roadmap 6.5 入口）
 
 ---
 

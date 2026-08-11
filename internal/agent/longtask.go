@@ -18,7 +18,7 @@ func newLongTaskTool(agent *Agent) tools.Tool {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type": "string",
-				"enum": []string{"create", "status", "start", "wait", "cancel", "complete_story", "finalize_story", "run", "run_status"},
+				"enum": []string{"create", "plan", "status", "start", "wait", "cancel", "complete_story", "finalize_story", "run", "run_status"},
 			},
 			"longtask_id":           map[string]string{"type": "string"},
 			"workflow_id":           map[string]string{"type": "string"},
@@ -65,6 +65,12 @@ func newLongTaskTool(agent *Agent) tools.Tool {
 		switch action {
 		case "create":
 			view, err := agent.createLongTask(tools.SessionContextFromContext(ctx).SessionID, args)
+			if err != nil {
+				return tools.ToolResult{}, err
+			}
+			return tools.ToolResult{Structured: view}, nil
+		case "plan":
+			view, err := agent.planLongTask(ctx, args)
 			if err != nil {
 				return tools.ToolResult{}, err
 			}

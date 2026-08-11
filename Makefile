@@ -34,15 +34,19 @@ dev-frontend:
 	cd ui/web && pnpm dev
 
 ## dev-fast: Quick rebuild + service restart (skip tsc type-check, uses web-dev)
+# NOTE: use `mv` (atomic rename) to publish the binary, never `cp`/in-place
+# write. On macOS a concurrent exec while the destination file is being
+# written is killed by the kernel (OS_REASON_CODESIGNING / SIGKILL, exit
+# 137), which surfaces as a mysteriously failing `service restart`.
 dev-fast: web-dev
 	go build -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
-		&& cp $(APP).new $(APP) && rm -f $(APP).new \
+		&& mv $(APP).new $(APP) \
 		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
 
 ## dev: Full rebuild + service restart (with tsc type-check, legacy)
 dev: web
 	go build -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
-		&& cp $(APP).new $(APP) && rm -f $(APP).new \
+		&& mv $(APP).new $(APP) \
 		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
 
 # ── Release targets ────────────────────────────────────────────────
@@ -54,7 +58,8 @@ build-linux: web
 ## build-minimal: Build the smallest possible binary (Linux: UPX --best --lzma; macOS: UPX incompatible, stripped only)
 build-minimal:
 	@echo "[minimal] building stripped binary..."
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/godex
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex
+	mv $(APP).new $(APP)
 	@echo "[minimal] binary size before compression: $$(wc -c < $(APP) | tr -d ' ') bytes"
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		echo "[minimal] UPX is incompatible with macOS code-signing (binary would be killed by kernel)"; \

@@ -17,6 +17,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/notes"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
+	"github.com/tim5wang/godex/internal/core/security"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
@@ -60,6 +61,10 @@ type Agent struct {
 	client        conversation.Caller
 	sandbox       sandbox.Sandbox
 	workerRuntime workerruntime.Runtime
+	// screener classifies untrusted content before it reaches the model
+	// (roadmap 6.1 content-level security screener).
+	screener    security.Screener
+	screenAudit screenAuditFn
 	roleBundles   *roleBundleRegistry
 	// workspaceOverride is set when this session was opened against an
 	// explicit working directory different from the service-level

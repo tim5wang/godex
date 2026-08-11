@@ -330,6 +330,21 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("security.profile", file.Security.Profile, "GODEX_SECURITY_PROFILE", func(v string) {
 		current.Security.Profile = normalizeSecurityProfileName(v)
 	})
+	resolveBool("security.screener.enabled", file.Security.Screener.Enabled, "GODEX_SECURITY_SCREENER_ENABLED", func(v bool) {
+		current.Security.Screener.Enabled = v
+	})
+	resolveBool("security.screener.shadow", file.Security.Screener.Shadow, "GODEX_SECURITY_SCREENER_SHADOW", func(v bool) {
+		current.Security.Screener.Shadow = v
+	})
+	resolveString("security.screener.provider", file.Security.Screener.Provider, "GODEX_SECURITY_SCREENER_PROVIDER", func(v string) {
+		current.Security.Screener.Provider = strings.TrimSpace(v)
+	})
+	resolveInt("security.screener.timeout_ms", file.Security.Screener.TimeoutMS, "GODEX_SECURITY_SCREENER_TIMEOUT_MS", func(v int) {
+		current.Security.Screener.TimeoutMS = v
+	})
+	resolveInt("security.screener.max_tokens", file.Security.Screener.MaxTokens, "GODEX_SECURITY_SCREENER_MAX_TOKENS", func(v int) {
+		current.Security.Screener.MaxTokens = v
+	})
 	resolveString("team.lead_name", file.Team.LeadName, "LEAD_NAME", func(v string) { current.LeadName = v })
 	resolveString("team.team_name", file.Team.TeamName, "TEAM_NAME", func(v string) { current.TeamName = v })
 	resolveCSV("team.default_skills", file.Team.DefaultSkills, "DEFAULT_SKILLS", func(v []string) { current.DefaultSkills = append([]string{}, v...) })
@@ -776,6 +791,13 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 		},
 		Security: SecurityConfig{
 			Profile: normalizeSecurityProfileName(file.Security.Profile),
+			Screener: ScreenerConfig{
+				Enabled:   file.Security.Screener.Enabled,
+				Shadow:    file.Security.Screener.Shadow,
+				Provider:  strings.TrimSpace(file.Security.Screener.Provider),
+				TimeoutMS: file.Security.Screener.TimeoutMS,
+				MaxTokens: file.Security.Screener.MaxTokens,
+			},
 		},
 		Memory: MemoryConfig{
 			Strategy:         normalizeMemoryStrategyKind(file.Memory.Strategy),

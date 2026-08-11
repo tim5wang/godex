@@ -42,6 +42,18 @@ type ConfigFile struct {
 
 type SecuritySection struct {
 	Profile string `yaml:"profile"`
+	// Screener is the content-level security screener configuration (roadmap 6.1).
+	Screener ScreenerSection `yaml:"screener"`
+}
+
+type ScreenerSection struct {
+	Enabled  bool   `yaml:"enabled"`
+	Shadow   bool   `yaml:"shadow"`
+	Provider string `yaml:"provider"`
+	// TimeoutMS bounds one classification call.
+	TimeoutMS int `yaml:"timeout_ms"`
+	// MaxTokens bounds the classifier response.
+	MaxTokens int `yaml:"max_tokens"`
 }
 
 type StorageSection struct {

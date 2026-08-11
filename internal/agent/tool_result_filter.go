@@ -24,6 +24,10 @@ type storedModelToolResult struct {
 }
 
 func (a *Agent) filterModelToolResult(ctx context.Context, tool conversation.ExecutedTool) conversation.ExecutedTool {
+	// Roadmap 6.1: content security screener hook (tool_response). Shadow
+	// mode records the verdict for audit without gating the pipeline; the
+	// screener degrades to auto when disabled or unavailable.
+	a.screenToolResult(ctx, tool)
 	// rtk-style token-saving compression runs first: it may shrink a large
 	// result below the artifact threshold entirely, or at least reduce the
 	// preview payload. It never grows the output (fail-safe) and only

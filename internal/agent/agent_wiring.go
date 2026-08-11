@@ -199,6 +199,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		client:         deps.client,
 		sandbox:        deps.sandbox,
 		roleBundles:    newRoleBundleRegistry(),
+		screener:       buildScreener(cfg, deps.client),
 		messages:       []protocol.Message{},
 		activeSkills:   make(map[string]*activeSkillState),
 		transcriptRefs: nil,

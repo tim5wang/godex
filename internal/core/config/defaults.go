@@ -115,6 +115,11 @@ func defaultConfigFile() ConfigFile {
 		},
 		Security: SecuritySection{
 			Profile: "guarded-local",
+			Screener: ScreenerSection{
+				Enabled:  false,
+				Shadow:   true,
+				Provider: "llm",
+			},
 		},
 		Memory: MemorySection{
 			Strategy:         "per-turn",

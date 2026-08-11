@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tim5wang/godex/internal/agent"
+	coresec "github.com/tim5wang/godex/internal/core/security"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
+	"github.com/tim5wang/godex/internal/domain/security"
 	"github.com/tim5wang/godex/internal/platform/fsutil"
 	"github.com/tim5wang/godex/internal/sessiongraph"
 	"github.com/tim5wang/godex/internal/sessionstore"
@@ -105,6 +107,9 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		a.LoadDefaultSkills()
 	}
 	session.agent = a
+
+	// Roadmap 6.1: route screener verdicts into the security audit trail.
+	s.wireScreenAudit(a, sessionID)
 
 	persistSession := false
 	if (strings.TrimSpace(session.title) == "" || strings.TrimSpace(session.title) == "New chat") && state != nil {
@@ -254,6 +259,40 @@ func (s *Service) writeSessionGraph(session *sessionState) error {
 		return err
 	}
 	return s.syncSessionStoreFromJSON(context.Background(), sessionID)
+}
+
+// wireScreenAudit routes screener verdicts into the security audit trail
+// (roadmap 6.1). Shadow-mode verdicts arrive fire-and-forget; the callback
+// only records, it never gates the pipeline.
+func (s *Service) wireScreenAudit(a *agent.Agent, sessionID string) {
+	if a == nil {
+		return
+	}
+	a.SetScreenAudit(func(hook coresec.ScreenHook, verdict coresec.ScreenVerdict) {
+		severity := "info"
+		summary := fmt.Sprintf("security screen %s: %s", hook, firstNonEmpty(verdict.Outcome, string(verdict.Decision)))
+		if verdict.Unscreened {
+			summary = fmt.Sprintf("security screen %s unavailable; content treated as untrusted data", hook)
+		} else if verdict.Malicious() {
+			severity = "warning"
+			summary = fmt.Sprintf("security screen %s flagged %s (score %.2f >= threshold %.2f)", hook, verdict.Outcome, verdict.Score, verdict.Threshold)
+		}
+		s.appendSecurityEvent(security.SecurityEvent{
+			Category:  "security",
+			Action:    "screen_" + string(hook),
+			Severity:  severity,
+			SessionID: sessionID,
+			Summary:   summary,
+			Metadata: map[string]string{
+				"hook":       string(hook),
+				"decision":   string(verdict.Decision),
+				"score":      fmt.Sprintf("%.3f", verdict.Score),
+				"threshold":  fmt.Sprintf("%.3f", verdict.Threshold),
+				"outcome":    verdict.Outcome,
+				"unscreened": fmt.Sprintf("%t", verdict.Unscreened),
+			},
+		})
+	})
 }
 
 func sessionGraphNodeID(prefix, id string) sessiongraph.NodeID {

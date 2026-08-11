@@ -431,6 +431,18 @@ runtime:
 security:
   # trusted-local | guarded-local | sandboxed | strict | host-privileged | dev/repair. Environment override: GODEX_SECURITY_PROFILE.
   profile: {{ yamlString .Security.Profile }}
+  # Content-level security screener (roadmap 6.1). Shadow mode records verdicts for audit without gating the pipeline.
+  screener:
+    # Enable the content screener. Environment override: GODEX_SECURITY_SCREENER_ENABLED.
+    enabled: {{ .Security.Screener.Enabled }}
+    # Record verdicts without blocking. Recommended rollout state. Environment override: GODEX_SECURITY_SCREENER_SHADOW.
+    shadow: {{ .Security.Screener.Shadow }}
+    # Classifier provider label for audit trails. Environment override: GODEX_SECURITY_SCREENER_PROVIDER.
+    provider: {{ yamlString .Security.Screener.Provider }}
+    # Per-classification timeout in ms. Environment override: GODEX_SECURITY_SCREENER_TIMEOUT_MS.
+    timeout_ms: {{ .Security.Screener.TimeoutMS }}
+    # Classifier response token cap. Environment override: GODEX_SECURITY_SCREENER_MAX_TOKENS.
+    max_tokens: {{ .Security.Screener.MaxTokens }}
 
 storage:
   # Retention hint for temporary runtime files. Environment override: GODEX_STORAGE_TMP_TTL_HOURS.

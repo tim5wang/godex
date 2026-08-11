@@ -82,6 +82,25 @@ type Config struct {
 
 type SecurityConfig struct {
 	Profile string
+
+	// Screener controls the content-level security screener (roadmap 6.1).
+	Screener ScreenerConfig
+}
+
+// ScreenerConfig configures the content security screener.
+type ScreenerConfig struct {
+	// Enabled turns on the screener. When false (default) a no-op screener is
+	// used and no content is classified.
+	Enabled bool
+	// Shadow records verdicts for audit without ever gating the pipeline.
+	// Shadow mode is the recommended rollout state for 6.1.
+	Shadow bool
+	// Provider names the classifier provider for audit trails.
+	Provider string
+	// TimeoutMS bounds one classification call (default 10000).
+	TimeoutMS int
+	// MaxTokens bounds the classifier response (default 256).
+	MaxTokens int
 }
 
 // MemoryConfig is the resolved durable-memory strategy configuration.

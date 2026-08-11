@@ -511,6 +511,12 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 		return preparedUserTurn{}, nil, err
 	}
 	modelEnvelope.SessionID = sessionID
+	// Roadmap 6.1: content security screener hook (user_input). Shadow mode
+	// classifies fire-and-forget for audit without gating the pipeline.
+	session.agent.ScreenUserInput(context.Background(), envelope.BodyText(), map[string]string{
+		"source": string(envelope.Source),
+		"sender": envelope.Sender,
+	})
 	session.agent.AddEnvelope(modelEnvelope)
 	session.setTitleIfEmpty(sessionTitleFromEnvelope(envelope))
 	session.events.Emit(events.Event{

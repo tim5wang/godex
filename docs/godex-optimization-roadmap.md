@@ -389,11 +389,19 @@ orchestrator (完整工具集)
 
 ### ⚪ Phase 6：长期愿景（可规划暂不启动）
 
-#### 6.1 安全筛查器（Security Screener）
+#### 6.1 安全筛查器（Security Screener） ✅（2026-08-12）
 
-**方案**：内容级安全筛查，分块 + 多模型投票 + shadow mode。
+**方案（已落地，最小 shadow 版）**：
+- ✅ `internal/core/security/screener.go`：核心类型（`ScreenHook` user_input/tool_response、`ScreenVerdict` auto/strict、`Screener` 接口）、分块（≤1600 字符/块 + 256 重叠 + CJK 安全截断、总上限 16000）、多模型投票聚合（strict 优先、同 decision 取高分、任一 unscreened 则整体 unscreened）、降级（`[NOT security-screened ...]` 语义）、`NoopScreener`
+- ✅ `llm_screener.go`：LLM 分类器（复用 `conversation.Caller`），系统提示词声明内容是未信任数据，解析 `{score, threshold, primary_outcome}` JSON（容错 markdown fence），任何失败降级为 unscreened 不阻断
+- ✅ shadow 语义：`Shadow()` 为 true 时分类 fire-and-forget（后台 goroutine + 10s 超时），hook 立即返回 auto，**永不 gate 或延迟主链路**；非 shadow（未来权威模式）同步返回真实 verdict
+- ✅ config：`security.screener.{enabled,shadow,provider,timeout_ms,max_tokens}`（含 env 覆盖 `GODEX_SECURITY_SCREENER_*`），默认 disabled + shadow=true
+- ✅ Agent 挂载：`buildScreener`（disabled/无 client → noop）、`SetScreener`/`SetScreenAudit` 注入、`ScreenUserInput`/`screenToolResult` 两个 hook
+- ✅ hook 接入：user_input → backend `startUserTurnLocked` 中 AddEnvelope 前（shadow 不阻塞 turn）；tool_response → `filterModelToolResult` 开头（压缩前）
+- ✅ 审计：backend `wireScreenAudit` 把 verdict 写入 security audit（`screen_<hook>` action、malicious → warning 严重级、metadata 带 score/threshold/outcome/unscreened）
+- ✅ 测试：核心 13 个（分块/投票/降级/LLM 解析容错）+ agent 8 个（shadow 不阻塞、非 shadow 同步+审计、noop 默认）+ backend 3 个（审计落盘、hook 不阻塞 turn、shadow fire-and-forget），全绿
 
-**参考**：`temp/qm/src/security/security-screener.ts`（269 行）
+**参考**：`temp/qm/src/security/security-screener.ts`（269 行）+ `security-posture.ts`
 
 #### 6.2 Scope 隔离模型
 

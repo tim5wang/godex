@@ -39,7 +39,26 @@ type Info struct {
 	ArtifactDir  string    `json:"artifact_dir,omitempty"`
 }
 
-type Sandbox struct {
+// Sandbox abstracts the execution environment an agent runs in, mirroring the
+// reference Sandbox interface (temp/qm/src/sandbox/sandbox.ts) trimmed to the
+// capabilities the Go agent consumes. Concrete implementations (see
+// LocalSandbox) provide identity, workspace/temp/artifact layout, tool binding,
+// a file-system view and rebuild semantics.
+type Sandbox interface {
+	ID() string
+	Lifecycle() Lifecycle
+	WorkspaceDir() string
+	TempDir() string
+	ArtifactDir() string
+	ToolBinding() ToolBinding
+	Info() Info
+	FileSystem() (workspacefs.FS, error)
+	// Rebuild returns a fresh sandbox preserving identity and configuration.
+	Rebuild() Sandbox
+}
+
+// LocalSandbox is the default local-filesystem Sandbox implementation.
+type LocalSandbox struct {
 	id           string
 	lifecycle    Lifecycle
 	workspaceDir string
@@ -48,13 +67,15 @@ type Sandbox struct {
 	execution    tooling.ExecutionConfig
 }
 
+var _ Sandbox = (*LocalSandbox)(nil)
+
 func StableLocalID(workspaceDir string) string {
 	workspaceDir = filepath.Clean(strings.TrimSpace(workspaceDir))
 	sum := sha256.Sum256([]byte(workspaceDir))
 	return "sandbox:local:" + hex.EncodeToString(sum[:])[:12]
 }
 
-func NewLocal(opts LocalOptions) *Sandbox {
+func NewLocal(opts LocalOptions) *LocalSandbox {
 	workspaceDir := cleanPath(opts.WorkspaceDir)
 	tempDir := cleanPath(opts.TempDir)
 	if tempDir == "" && workspaceDir != "" {
@@ -68,7 +89,7 @@ func NewLocal(opts LocalOptions) *Sandbox {
 	if id == "" {
 		id = StableLocalID(workspaceDir)
 	}
-	return &Sandbox{
+	return &LocalSandbox{
 		id:           id,
 		lifecycle:    lifecycle,
 		workspaceDir: workspaceDir,
@@ -78,42 +99,42 @@ func NewLocal(opts LocalOptions) *Sandbox {
 	}
 }
 
-func (s *Sandbox) ID() string {
+func (s *LocalSandbox) ID() string {
 	if s == nil {
 		return ""
 	}
 	return s.id
 }
 
-func (s *Sandbox) Lifecycle() Lifecycle {
+func (s *LocalSandbox) Lifecycle() Lifecycle {
 	if s == nil {
 		return ""
 	}
 	return s.lifecycle
 }
 
-func (s *Sandbox) WorkspaceDir() string {
+func (s *LocalSandbox) WorkspaceDir() string {
 	if s == nil {
 		return ""
 	}
 	return s.workspaceDir
 }
 
-func (s *Sandbox) TempDir() string {
+func (s *LocalSandbox) TempDir() string {
 	if s == nil {
 		return ""
 	}
 	return s.tempDir
 }
 
-func (s *Sandbox) ArtifactDir() string {
+func (s *LocalSandbox) ArtifactDir() string {
 	if s == nil {
 		return ""
 	}
 	return s.artifactDir
 }
 
-func (s *Sandbox) ToolBinding() ToolBinding {
+func (s *LocalSandbox) ToolBinding() ToolBinding {
 	if s == nil {
 		return ToolBinding{}
 	}
@@ -126,7 +147,7 @@ func (s *Sandbox) ToolBinding() ToolBinding {
 	}
 }
 
-func (s *Sandbox) Info() Info {
+func (s *LocalSandbox) Info() Info {
 	if s == nil {
 		return Info{}
 	}
@@ -139,14 +160,14 @@ func (s *Sandbox) Info() Info {
 	}
 }
 
-func (s *Sandbox) FileSystem() (workspacefs.FS, error) {
+func (s *LocalSandbox) FileSystem() (workspacefs.FS, error) {
 	if s == nil {
 		return workspacefs.New("")
 	}
 	return workspacefs.New(s.workspaceDir)
 }
 
-func (s *Sandbox) Rebuild() *Sandbox {
+func (s *LocalSandbox) Rebuild() Sandbox {
 	if s == nil {
 		return nil
 	}

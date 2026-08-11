@@ -7,7 +7,7 @@ import (
 	"github.com/tim5wang/godex/internal/sandbox"
 )
 
-func localSandboxFromConfig(cfg *config.Config) *sandbox.Sandbox {
+func localSandboxFromConfig(cfg *config.Config) sandbox.Sandbox {
 	if cfg == nil {
 		return sandbox.NewLocal(sandbox.LocalOptions{})
 	}
@@ -18,7 +18,7 @@ func localSandboxFromConfig(cfg *config.Config) *sandbox.Sandbox {
 	})
 }
 
-func (a *Agent) ensureSandbox() *sandbox.Sandbox {
+func (a *Agent) ensureSandbox() sandbox.Sandbox {
 	if a == nil {
 		return sandbox.NewLocal(sandbox.LocalOptions{})
 	}

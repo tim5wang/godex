@@ -271,14 +271,15 @@ orchestrator (完整工具集)
 
 **参考**：`temp/qm/src/memory/notebook.ts` + `memory-service.ts` 的 `foldCapture`
 
-#### 3.3 Agent Identity 解耦
+#### 3.3 Agent Identity 解耦 ✅（2026-08-11）
 
 **问题**：`internal/agent/agent.go` 同时承担 composition root、session state holder、tool registry、sandbox facade。
 
-**方案**：
-- 定义 `Sandbox` 接口
-- 当前 `localSandboxFromConfig` 改为 `Sandbox` 接口实现
-- `Agent` 通过接口使用 sandbox，不直接操作文件系统
+**方案（已落地）**：
+- ✅ `internal/sandbox/sandbox.go`：定义 `Sandbox` 接口（ID/Lifecycle/WorkspaceDir/TempDir/ArtifactDir/ToolBinding/Info/FileSystem/Rebuild，Rebuild 返回接口），对齐参考实现接口面；具体结构体改名 `LocalSandbox` 并实现接口（`var _ Sandbox = (*LocalSandbox)(nil)` 编译期断言）
+- ✅ `localSandboxFromConfig` / `ensureSandbox` 返回 `sandbox.Sandbox` 接口；`Agent.sandbox` 字段（Agent + dependencies）类型改为接口
+- ✅ Agent 通过接口使用 sandbox（SandboxID/SandboxBinding/SandboxInfo/RebuildSandbox），不依赖具体本地实现
+- ✅ 测试：接口契约测试（LocalSandbox 通过接口满足全部能力）+ fake Sandbox 注入验证 Agent 依赖接口而非具体类型（3 个新测试），全量回归无新增失败
 
 **参考**：`temp/qm/src/sandbox/sandbox.ts`（接口定义）
 
@@ -423,7 +424,7 @@ orchestrator (完整工具集)
 | ✅ | 2.4 | AgentGraph 运行时抽象 | 高 | 高 | 2.1 | 已完（2026-08-11） |
 | ✅ | 3.1 | 记忆策略模式 | 中 | 高 | 无 | 已完（2026-08-11） |
 | ✅ | 3.2 | 记忆 notebook 去重 | 低 | 中 | 无 | 已完（2026-08-11） |
-| 🟠 | 3.3 | Agent Identity 解耦 | 高 | 高 | 无 | 2w |
+| ✅ | 3.3 | Agent Identity 解耦 | 高 | 高 | 无 | 已完（2026-08-11） |
 | ✅ | 4.1 | spawn/send_input/wait | 中 | 高 | 2.4 | 已完（2026-08-11） |
 | ✅ | 4.2 | 子 agent 双向通信 | 中 | 高 | 4.1 | 已完（2026-08-11） |
 | ✅ | 4.3 | 角色→bundle 运行时映射 | 中 | 高 | 2.4 | 已完（2026-08-11） |
@@ -457,7 +458,7 @@ orchestrator (完整工具集)
   ✅ 2.4 AgentGraph 抽象     → 已完成（2026-08-11）
   ✅ 3.1 记忆策略模式         → 已完成（2026-08-11）
   ✅ 3.2 记忆 notebook 去重   → 已完成（2026-08-11）
-  3.3 Agent Identity 解耦  → 2w
+  ✅ 3.3 Agent Identity 解耦  → 已完成（2026-08-11）
 
 🟢 Phase 4（多 agent 通信 + 角色 bundle 集成）：
   ✅ 4.1 spawn/send_input/wait → 已完成（2026-08-11）

@@ -58,7 +58,7 @@ type Agent struct {
 	subagentJobs  *subagentJobStore
 	workflows     *workflowStore
 	client        conversation.Caller
-	sandbox       *sandbox.Sandbox
+	sandbox       sandbox.Sandbox
 	workerRuntime workerruntime.Runtime
 	roleBundles   *roleBundleRegistry
 	// workspaceOverride is set when this session was opened against an
@@ -122,7 +122,7 @@ type dependencies struct {
 	subagentJobs *subagentJobStore
 	workflows    *workflowStore
 	todoMgr      *todo.Manager
-	sandbox      *sandbox.Sandbox
+	sandbox      sandbox.Sandbox
 }
 
 // New creates a new agent.

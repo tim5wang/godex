@@ -9,6 +9,26 @@ import (
 	"github.com/tim5wang/godex/internal/platform/tooling"
 )
 
+// TestLocalSandboxSatisfiesSandboxInterface pins the contract that callers
+// depend on: LocalSandbox must implement the abstract Sandbox interface so the
+// agent can consume sandboxes through the abstraction.
+func TestLocalSandboxSatisfiesSandboxInterface(t *testing.T) {
+	var sb Sandbox = NewLocal(LocalOptions{WorkspaceDir: t.TempDir()})
+	if sb.ID() == "" {
+		t.Fatal("expected non-empty sandbox id through interface")
+	}
+	if sb.Lifecycle() != LifecycleLocal {
+		t.Fatalf("expected local lifecycle through interface, got %q", sb.Lifecycle())
+	}
+	if sb.ToolBinding().SandboxID != sb.ID() {
+		t.Fatalf("tool binding id mismatch through interface")
+	}
+	rebuilt := sb.Rebuild()
+	if rebuilt == nil || rebuilt.ID() != sb.ID() {
+		t.Fatalf("expected rebuild through interface to preserve id")
+	}
+}
+
 func TestStableLocalIDIsStableOpaqueAndCleansPath(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	withNoise := "  " + filepath.Join(workspace, "nested", "..") + "  "

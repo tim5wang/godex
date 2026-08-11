@@ -20,6 +20,10 @@ type loopGuardConfig struct {
 	MaxRepeatedPollingTools    int
 	MaxStalledTaskPollingTools int
 	MaxRecoveries              int
+	// MaxNoMutationRounds caps consecutive tool rounds that mutate no file
+	// (no edit_file/write_file). Research spirals trip it; real implementation
+	// writes files within a few rounds. <= 0 disables the detector.
+	MaxNoMutationRounds int
 	// Mode controls abort behavior: strict may abort after exhausting
 	// recoveries; balanced never aborts (infinite recoveries); warn
 	// always recovers with a stronger warning but never aborts.
@@ -47,6 +51,8 @@ type loopGuard struct {
 	recent        []string
 	recovered     map[string]int
 	totalRecovery int
+	// noMutationRounds counts consecutive tool batches that mutated no file.
+	noMutationRounds int
 	// staleRecovered tracks how many times the loop guard has already issued
 	// a stale_todo_in_progress recovery for a given todo itemID. It is a
 	// separate counter from `recovered` because the fingerprint space is
@@ -114,6 +120,26 @@ func (g *loopGuard) Observe(executed []ExecutedTool, staleProvider todoStaleness
 				Fingerprint: "stale_todo:" + itoa(itemID),
 				Count:       g.config.StaleTodoThreshold,
 			}, itemID, content, activeForm)
+		}
+	}
+	// No-mutation spiral: many consecutive tool rounds without touching a file
+	// means the model is researching/looping instead of implementing. Count
+	// rounds (one Observe call = one tool batch), reset on any mutation.
+	if g.config.MaxNoMutationRounds > 0 {
+		if executedContainsMutation(executed) {
+			g.noMutationRounds = 0
+		} else {
+			g.noMutationRounds++
+			if g.noMutationRounds >= g.config.MaxNoMutationRounds {
+				g.noMutationRounds = 0
+				last := executed[len(executed)-1]
+				return g.decide(loopGuardDecision{
+					Reason:      "no_mutation_spiral",
+					Fingerprint: "no_mutation",
+					Tool:        last,
+					Count:       g.config.MaxNoMutationRounds,
+				})
+			}
 		}
 	}
 	g.recent = appendRecentToolFingerprints(g.recent, executed)
@@ -392,6 +418,21 @@ func staleTodoFeedback(itemID int, content, activeForm string, recovery, maxReco
 // fire when the model is busy with non-todo work; if the model is actively
 // calling todo_write, the in_progress state may be transitioning and we
 // should not surface a stale feedback.
+// executedContainsNonTodoWrite reports whether any executed tool is a
+// file-mutating tool (edit_file/write_file). bash is deliberately excluded:
+// research spirals run read-only bash commands, and counting bash as a
+// mutation would mask the spiral. Real implementation work in godex goes
+// through edit_file/write_file.
+func executedContainsMutation(executed []ExecutedTool) bool {
+	for _, tool := range executed {
+		switch tool.Name {
+		case "edit_file", "write_file":
+			return true
+		}
+	}
+	return false
+}
+
 func executedContainsNonTodoWrite(executed []ExecutedTool) bool {
 	for _, tool := range executed {
 		if strings.TrimSpace(tool.Name) != "todo_write" {

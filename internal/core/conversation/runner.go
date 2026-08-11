@@ -27,6 +27,12 @@ const defaultMaxRepeatedPollingTools = 5
 const defaultMaxStalledTaskPollingTools = 8
 const defaultMaxEmptyResponses = 3
 const defaultMaxLengthRecoveries = 4
+// defaultMaxNoMutationRounds caps consecutive tool rounds with no file
+// mutation (edit_file/write_file) before the loop guard nudges the model.
+// Research spirals ("I found the root cause, one more confirmation...") look
+// exactly like this; real implementation work writes files within a few
+// rounds.
+const defaultMaxNoMutationRounds = 12
 // maxReasoningLengthRecoveries bounds how many times the runner re-requests
 // after a reasoning-budget overflow (finish_reason=length + empty answer +
 // reasoning_content present). Two attempts are enough: if the brevity nudge
@@ -171,6 +177,7 @@ type Runner struct {
 	MaxTurns                   int
 	MaxEmptyResponses          int
 	MaxLengthRecoveries        int
+	MaxNoMutationRounds        int
 	MaxInjectionsPerTurn       int
 	MaxInjectionCycles         int
 	MaxRepeatedTools           int
@@ -257,6 +264,10 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 	if maxLoopGuardRecoveries <= 0 {
 		maxLoopGuardRecoveries = defaultMaxLoopGuardRecoveries
 	}
+	maxNoMutationRounds := r.MaxNoMutationRounds
+	if maxNoMutationRounds <= 0 {
+		maxNoMutationRounds = defaultMaxNoMutationRounds
+	}
 	loopGuardMode := r.LoopGuardMode
 	if loopGuardMode == "" {
 		loopGuardMode = LoopGuardModeStrict
@@ -266,6 +277,7 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 		MaxRepeatedPollingTools:    maxRepeatedPollingTools,
 		MaxStalledTaskPollingTools: maxStalledTaskPollingTools,
 		MaxRecoveries:              maxLoopGuardRecoveries,
+		MaxNoMutationRounds:        maxNoMutationRounds,
 		Mode:                       loopGuardMode,
 	})
 

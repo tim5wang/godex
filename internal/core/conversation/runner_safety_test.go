@@ -141,3 +141,57 @@ func TestRunnerReasoningOverflowRequestsDirectAnswer(t *testing.T) {
 		t.Fatalf("expected 2 model calls, got %d", caller.calls)
 	}
 }
+
+// No-mutation spiral: many consecutive tool rounds without touching a file
+// (research spiral) must trip the loop guard even when the tools vary, and
+// the run must abort if the model keeps looping after the nudge.
+func TestLoopGuardNoMutationSpiralRecoversThenAborts(t *testing.T) {
+	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "investigate")}
+	toolRound := protocol.Response{Content: []protocol.Block{
+		protocol.TextBlock("checking"),
+		protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "grep something"}),
+	}}
+	// Many rounds; vary the command so identical-tool detection stays silent.
+	var responses []protocol.Response
+	for i := 0; i < 30; i++ {
+		resp := toolRound
+		resp.Content[1] = protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "grep check-" + itoa(i)})
+		responses = append(responses, resp)
+	}
+	caller := &fakeCaller{responses: responses}
+
+	var feedbacks []string
+	result, err := Runner{
+		Caller: caller,
+		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
+			_ = ctx
+			return NewRequest("model", 1024, "", "system", messages, nil), nil
+		},
+		AppendAssistant: func(msg protocol.Message) {
+			messages = append(messages, msg)
+		},
+		AppendToolResults: func(msg protocol.Message) {
+			messages = append(messages, msg)
+		},
+		ExecuteTool: func(ctx context.Context, name string, input map[string]interface{}) (ToolExecutionResult, error) {
+			_ = ctx
+			return ToolExecutionResult{Output: "match"}, nil
+		},
+		AppendRuntimeFeedback: func(msg protocol.Message) {
+			feedbacks = append(feedbacks, protocol.MessageText(msg))
+			messages = append(messages, msg)
+		},
+		MaxRepeatedTools:    0, // isolate the no-mutation detector
+		MaxNoMutationRounds: 3,
+		MaxTurns:            40,
+	}.Run(context.Background())
+
+	if len(feedbacks) == 0 || !strings.Contains(feedbacks[0], "no_mutation_spiral") {
+		t.Fatalf("expected no_mutation_spiral recovery, got %+v", feedbacks)
+	}
+	// The model kept looping with the same pattern -> strict mode aborts.
+	if err == nil {
+		t.Fatal("expected loop guard abort after the no-mutation spiral persisted")
+	}
+	_ = result
+}

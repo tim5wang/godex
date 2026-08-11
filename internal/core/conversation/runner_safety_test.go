@@ -91,3 +91,53 @@ func TestRunnerEmptyResponseRecoversBeforeExhaustion(t *testing.T) {
 		t.Fatalf("expected completed run with real answer, got %+v", result)
 	}
 }
+
+// Reasoning-budget overflow (finish_reason=length + empty answer + reasoning
+// content) must trigger a brevity-nudge recovery instead of a blind retry,
+// and must not be counted as an "empty response" retry.
+func TestRunnerReasoningOverflowRequestsDirectAnswer(t *testing.T) {
+	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "do the work")}
+	caller := &fakeCaller{responses: []protocol.Response{
+		{
+			StopReason:       "length",
+			ReasoningContent: "thinking very deeply about the entire codebase...",
+			Content:          []protocol.Block{}, // no answer: budget eaten by reasoning
+		},
+		{Content: []protocol.Block{protocol.TextBlock("the answer")}},
+	}}
+
+	var injected []protocol.Message
+	result, err := Runner{
+		Caller: caller,
+		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
+			_ = ctx
+			return NewRequest("model", 1024, "", "system", messages, nil), nil
+		},
+		AppendAssistant: func(msg protocol.Message) {
+			messages = append(messages, msg)
+		},
+		AppendInjectedMessages: func(msgs []protocol.Message) {
+			injected = append(injected, msgs...)
+			messages = append(messages, msgs...)
+		},
+		ExecuteTool: func(ctx context.Context, name string, input map[string]interface{}) (ToolExecutionResult, error) {
+			_ = ctx
+			return ToolExecutionResult{}, nil
+		},
+		MaxTurns: 10,
+	}.Run(context.Background())
+
+	if err != nil {
+		t.Fatalf("expected recovery from reasoning overflow, got error: %v", err)
+	}
+	if !result.Completed || result.LastAssistantText != "the answer" {
+		t.Fatalf("expected completed run, got %+v", result)
+	}
+	if len(injected) != 1 || !strings.Contains(protocol.MessageText(injected[0]), "Answer directly") {
+		t.Fatalf("expected one brevity nudge, got %+v", injected)
+	}
+	// Two model calls: the overflow + the direct answer (NOT 3 blind retries).
+	if caller.calls != 2 {
+		t.Fatalf("expected 2 model calls, got %d", caller.calls)
+	}
+}

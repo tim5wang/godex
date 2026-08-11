@@ -27,6 +27,11 @@ const defaultMaxRepeatedPollingTools = 5
 const defaultMaxStalledTaskPollingTools = 8
 const defaultMaxEmptyResponses = 3
 const defaultMaxLengthRecoveries = 4
+// maxReasoningLengthRecoveries bounds how many times the runner re-requests
+// after a reasoning-budget overflow (finish_reason=length + empty answer +
+// reasoning_content present). Two attempts are enough: if the brevity nudge
+// does not produce an answer, the empty-response error path takes over.
+const maxReasoningLengthRecoveries = 2
 const defaultMaxInjectionsPerTurn = 8
 const defaultMaxInjectionCycles = 4
 const defaultMaxLoopGuardRecoveries = 5
@@ -267,6 +272,7 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 	result := &Result{}
 	emptyResponses := 0
 	lengthRecoveries := 0
+	reasoningLengthRecoveries := 0
 	injectionCycles := 0
 	for turn := 0; turn < maxTurns; turn++ {
 		result.Turns = turn + 1
@@ -296,6 +302,19 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 
 		assistantMsg := protocol.MessageFromResponse(*resp)
 		if !protocol.HasToolUse(resp.Content) && strings.TrimSpace(protocol.MessageText(assistantMsg)) == "" {
+			// Reasoning-budget overflow: the model (e.g. deepseek v4) spends its
+			// entire output budget on reasoning_content and stops with
+			// finish_reason=length and NO answer. Blindly retrying the same
+			// request reproduces the same overflow, so re-request with a
+			// brevity instruction instead.
+			if resp.StopReason == "length" && strings.TrimSpace(resp.ReasoningContent) != "" && reasoningLengthRecoveries < maxReasoningLengthRecoveries {
+				reasoningLengthRecoveries++
+				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: "model exhausted output budget on reasoning; requesting direct answer", RecoveryHint: "The provider's reasoning consumed the output token budget; the runner requested a direct, concise answer."})
+				if r.AppendInjectedMessages != nil {
+					r.AppendInjectedMessages([]protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "Your previous response consumed its output token budget on reasoning and produced no answer. Answer directly and concisely now; keep reasoning minimal.")})
+				}
+				continue
+			}
 			if emptyResponses < maxEmptyResponses {
 				emptyResponses++
 				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: "empty model response; retrying", RecoveryHint: "Retrying the model request because the provider returned an empty response."})
@@ -309,7 +328,7 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 			// same stalled loop by saying "continue".
 			result.Stopped = true
 			result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
-			err := fmt.Errorf("LLM provider returned empty responses %d times in a row; aborting instead of producing a fake handoff (provider/gateway may reject the request shape or be overloaded)", emptyResponses)
+			err := fmt.Errorf("LLM provider returned empty responses %d times in a row; aborting instead of producing a fake handoff (provider/gateway may reject the request shape, the model may have exhausted its output budget on reasoning, or the provider is overloaded)", emptyResponses)
 			r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Model: req.Model, Message: err.Error(), RecoveryHint: result.RecoveryHint})
 			if drained := r.tryDrainInjections(ctx, maxInjectionsPerTurn, maxInjectionCycles, &injectionCycles); drained.Count > 0 {
 				result.HadInjections = true

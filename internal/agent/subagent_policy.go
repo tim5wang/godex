@@ -54,24 +54,69 @@ func looksLikeWebResearchPrompt(prompt string) bool {
 	return containsAny(query, "网页", "网站", "网上", "联网", "搜索", "检索", "链接", "来源", "source", "search", "web", "online", "internet", "url", "link")
 }
 
-func appendRequiredSubagentTools(base, bundles, explicitTools []string) []string {
+func appendRequiredSubagentTools(base, bundles, explicitTools, writeScope []string) []string {
 	out := append([]string{}, base...)
 	for _, bundle := range bundles {
-		out = append(out, subagentToolsForRequiredBundle(bundle)...)
+		out = append(out, subagentToolsForRequiredBundle(bundle, writeScope)...)
 	}
 	out = append(out, explicitTools...)
 	return uniqueStrings(out)
 }
 
-func subagentToolsForRequiredBundle(bundle string) []string {
+func subagentToolsForRequiredBundle(bundle string, writeScope []string) []string {
 	switch strings.ToLower(strings.TrimSpace(bundle)) {
 	case bundleWeb:
 		return []string{"web_search", "web_fetch"}
 	case bundleCoreCode:
 		return []string{"bash", "read_file", "write_file", "edit_file"}
+	case bundleWriting:
+		// 4.5: writing 是虚拟能力 bundle——仅当存在有效写 scope 时才展开写工具；
+		// 无 scope 则只读降级（不展开写工具）。
+		if len(normalizeWriteScope(writeScope)) > 0 {
+			return []string{"bash", "write_file", "edit_file"}
+		}
+		return nil
 	default:
 		return nil
 	}
+}
+
+// subagentWriteCapable 判断 bundle 集合是否具备写能力：writing（显式能力声明）
+// 或 core_code（隐式 writing，兼容 4.5 之前的调用）。
+func subagentWriteCapable(bundles []string) bool {
+	for _, bundle := range bundles {
+		switch strings.ToLower(strings.TrimSpace(bundle)) {
+		case bundleWriting, bundleCoreCode:
+			return true
+		}
+	}
+	return false
+}
+
+// subagentDefaultToolSurfaceWriteCapable 判断角色默认工具面是否含写工具：
+// general-purpose 默认工具面 [bash read_file write_file edit_file] 硬编码含写工具，
+// 不依赖 bundle（4.5 之前行为，需保持：显式 scope 对 general-purpose 始终生效）。
+func subagentDefaultToolSurfaceWriteCapable(agentType string) bool {
+	return normalizeSubagentType(agentType) == "general-purpose"
+}
+
+// resolveSubagentWriteScope 统一解析子 agent 写 scope（roadmap 4.5）：
+// 优先级为 显式 write_scope > role.WriteScope（package role 声明）> nil。
+// 写 scope 在 bundle 层面统一管理：bundle 集合不含 writing/core_code、且角色默认
+// 工具面不含写工具时，即使显式传了 scope 也忽略（返回 nil，写工具不展开，天然只读）。
+func resolveSubagentWriteScope(agentType string, explicit []string, role pkgregistry.Role, hasRole bool, bundles []string) []string {
+	if !subagentWriteCapable(bundles) && !subagentDefaultToolSurfaceWriteCapable(agentType) {
+		return nil
+	}
+	if s := normalizeWriteScope(explicit); len(s) > 0 {
+		return s
+	}
+	if hasRole {
+		if s := normalizeWriteScope(role.WriteScope); len(s) > 0 {
+			return s
+		}
+	}
+	return nil
 }
 
 func (a *Agent) resolveSubagentRole(agentType string) (pkgregistry.Role, bool) {
@@ -192,14 +237,14 @@ func (a *Agent) validateSubagentToolInheritance(toolNames []string) error {
 	return nil
 }
 
-func (a *Agent) validateSubagentRequiredCapabilities(requiredBundles, requiredTools []string) error {
+func (a *Agent) validateSubagentRequiredCapabilities(requiredBundles, requiredTools, writeScope []string) error {
 	missingBundles := make([]string, 0)
 	for _, bundle := range uniqueStrings(requiredBundles) {
 		bundle = strings.TrimSpace(bundle)
 		if bundle == "" {
 			continue
 		}
-		for _, toolName := range subagentToolsForRequiredBundle(bundle) {
+		for _, toolName := range subagentToolsForRequiredBundle(bundle, writeScope) {
 			if !a.subagentParentToolActive(toolName) {
 				missingBundles = append(missingBundles, bundle)
 				break

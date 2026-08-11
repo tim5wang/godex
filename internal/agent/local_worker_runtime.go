@@ -22,10 +22,13 @@ func (r localGoDexWorkerRuntime) Dispatch(ctx context.Context, req workerruntime
 		return workerruntime.JobHandle{}, err
 	}
 	start := subagentStartOptionsFromWorkerRequest(req, a.subagentMaxConcurrentJobs())
-	if err := a.validateSubagentRequiredCapabilities(start.RequiredBundles, start.RequiredTools); err != nil {
+	if err := a.validateSubagentRequiredCapabilities(start.RequiredBundles, start.RequiredTools, start.WriteScope); err != nil {
 		return workerruntime.JobHandle{}, err
 	}
-	start.ToolNames = appendRequiredSubagentTools(start.ToolNames, start.RequiredBundles, start.RequiredTools)
+	start.ToolNames = appendRequiredSubagentTools(start.ToolNames, start.RequiredBundles, start.RequiredTools, start.WriteScope)
+	// 与创建路径一致：无写 scope 时收窄写工具，避免 Dispatch 重建时把
+	// core_code 等 bundle 的写工具重新加回（4.5 写 scope 在 bundle 层统一管理）。
+	start.ToolNames = narrowSubagentWriteTools(start.ToolNames, start.WriteScope)
 	if err := a.validateSubagentToolInheritance(start.ToolNames); err != nil {
 		return workerruntime.JobHandle{}, err
 	}

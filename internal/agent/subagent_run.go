@@ -60,6 +60,9 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 	// 4.4: 继承父 agent 活跃 bundle（可被 bundle_overrides 覆盖 / deactivate_bundles 停用）
 	inheritedBundles := a.inheritedSubagentBundles(req.BundleOverrides, req.DeactivateBundles)
 	allBundles := uniqueStrings(append(append(append([]string{}, requiredBundles...), roleBundles...), inheritedBundles...))
+	// 4.5: 写 scope 在 bundle 层面统一管理——显式 > role.WriteScope > nil；
+	// bundle 集合不含 writing/core_code 时显式 scope 也被忽略（天然只读）。
+	writeScope := resolveSubagentWriteScope(req.AgentType, req.WriteScope, role, hasRole, allBundles)
 	start := subagentStartOptions{
 		SessionID:         target.sessionID,
 		ParentTurnID:      target.turnID,
@@ -67,7 +70,7 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		AgentType:         req.AgentType,
 		Prompt:            prompt,
 		ToolNames:         subagentToolNamesForRole(req.AgentType, nil),
-		WriteScope:        req.WriteScope,
+		WriteScope:        append([]string{}, writeScope...),
 		PreviewJobIDs:     req.PreviewJobIDs,
 		RequiredBundles:   append([]string{}, allBundles...),
 		RequiredTools:     req.RequiredTools,
@@ -85,28 +88,28 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		start.RoleID = role.ID
 		start.RoleName = role.Name
 		start.PackageName = role.PackageName
-		start.BasePrompt = subagentBasePromptForRole(role, req.WriteScope)
+		start.BasePrompt = subagentBasePromptForRole(role, writeScope)
 		start.ToolNames = subagentToolNamesForRole(role.ID, &role)
 		start.ToolPolicy = append([]string{}, role.ToolPolicy...)
-		start.Capabilities = roleCapabilitySummary(role, start.ToolNames, req.WriteScope)
+		start.Capabilities = roleCapabilitySummary(role, start.ToolNames, writeScope)
 		start.ModelHint = role.ModelHint
 		start.BudgetHint = role.BudgetHint
 		start.ContextBudget = roleContextBudgetTokens(role.ID, req.AgentType)
 		start.Display = roleDisplayMap(role.Display)
 	}
-	start.ToolNames = appendRequiredSubagentTools(start.ToolNames, allBundles, req.RequiredTools)
-	start.ToolNames = narrowSubagentWriteTools(start.ToolNames, req.WriteScope)
+	start.ToolNames = appendRequiredSubagentTools(start.ToolNames, allBundles, req.RequiredTools, writeScope)
+	start.ToolNames = narrowSubagentWriteTools(start.ToolNames, writeScope)
 	if hasRole {
-		start.Capabilities = roleCapabilitySummary(role, start.ToolNames, req.WriteScope)
+		start.Capabilities = roleCapabilitySummary(role, start.ToolNames, writeScope)
 	}
-	if err := a.validateSubagentRequiredCapabilities(requiredBundles, req.RequiredTools); err != nil {
+	if err := a.validateSubagentRequiredCapabilities(requiredBundles, req.RequiredTools, writeScope); err != nil {
 		return nil, err
 	}
 	if err := a.validateSubagentToolInheritance(start.ToolNames); err != nil {
 		return nil, err
 	}
 	if len(start.Capabilities) == 0 {
-		start.Capabilities = capabilitySummaryForTools(start.ToolNames, req.WriteScope)
+		start.Capabilities = capabilitySummaryForTools(start.ToolNames, writeScope)
 	}
 	start.WorkerID = localGoDexWorkerID
 	handle, err := a.WorkerRuntime().Dispatch(ctx, workerRequestFromSubagentStartOptions(start))
@@ -231,6 +234,14 @@ func (a *Agent) ResumeDurableSubagent(id string) (*subagentJob, error) {
 // turn. Returns the job after the re-run finishes so the caller can review
 // again.
 func (a *Agent) IterateDurableSubagentWithContext(ctx context.Context, id, feedback string) (*subagentJob, error) {
+	return a.IterateDurableSubagentWithUpdate(ctx, id, feedback, subagentReopenUpdate{})
+}
+
+// IterateDurableSubagentWithUpdate 在 review→fix 迭代重开时支持可选配置更新
+// （roadmap 4.5：角色切换时写 scope / bundle 自动更新）。update 提供
+// AgentType/WriteScope/BundleOverrides/DeactivateBundles 时，重开前重新解析
+// 角色 bundles 与写 scope，并同步更新 job 的 ToolNames/DefaultBundles 等。
+func (a *Agent) IterateDurableSubagentWithUpdate(ctx context.Context, id, feedback string, update subagentReopenUpdate) (*subagentJob, error) {
 	job, err := a.subagentJobs.Get(id)
 	if err != nil {
 		return nil, err
@@ -244,12 +255,68 @@ func (a *Agent) IterateDurableSubagentWithContext(ctx context.Context, id, feedb
 	if text := strings.TrimSpace(feedback); text != "" {
 		inputs = append(inputs, protocol.NewTextMessage(protocol.RoleUser, text))
 	}
-	if _, err := a.subagentJobs.ReopenForIteration(id, inputs); err != nil {
-		return nil, err
+	if updateNeedsReopenReconfig(update) {
+		reconfigured := a.reconfigureSubagentForReopen(job, update)
+		if _, err := a.subagentJobs.ReopenForIterationWithUpdate(id, inputs, reconfigured); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := a.subagentJobs.ReopenForIteration(id, inputs); err != nil {
+			return nil, err
+		}
 	}
 	target := subagentEventTargetFromContext(ctx)
 	a.runSubagentJob(ctx, id, target)
 	return a.subagentJobs.Get(id)
+}
+
+func updateNeedsReopenReconfig(update subagentReopenUpdate) bool {
+	return strings.TrimSpace(update.AgentType) != "" ||
+		update.WriteScope != nil ||
+		update.BundleOverrides != nil ||
+		update.DeactivateBundles != nil
+}
+
+// reconfigureSubagentForReopen 基于 job 现有配置与 update 重新解析角色 bundles
+// 与写 scope（roadmap 4.5），返回重开时应用的新配置。
+func (a *Agent) reconfigureSubagentForReopen(job *subagentJob, update subagentReopenUpdate) subagentReopenUpdate {
+	agentType := firstNonEmpty(update.AgentType, job.AgentType)
+	role, hasRole := a.resolveSubagentRole(agentType)
+	requiredBundles := subagentRequiredBundles(job.Prompt, nil)
+	roleBundles := a.roleBundlesFor(agentType, role, hasRole)
+	overrides := update.BundleOverrides
+	deactivate := update.DeactivateBundles
+	if overrides == nil && deactivate == nil {
+		overrides = job.BundleOverrides
+		deactivate = job.DeactivateBundles
+	}
+	inheritedBundles := a.inheritedSubagentBundles(overrides, deactivate)
+	allBundles := uniqueStrings(append(append(append([]string{}, requiredBundles...), roleBundles...), inheritedBundles...))
+	writeScope := update.WriteScope
+	if writeScope == nil {
+		writeScope = resolveSubagentWriteScope(agentType, job.WriteScope, role, hasRole, allBundles)
+	}
+	toolNames := subagentToolNamesForRole(agentType, nil)
+	if hasRole {
+		toolNames = subagentToolNamesForRole(role.ID, &role)
+	}
+	toolNames = appendRequiredSubagentTools(toolNames, allBundles, nil, writeScope)
+	toolNames = narrowSubagentWriteTools(toolNames, writeScope)
+	out := subagentReopenUpdate{
+		AgentType:        agentType,
+		WriteScope:       append([]string{}, writeScope...),
+		DefaultBundles:   append([]string{}, allBundles...),
+		BundleOverrides:  append([]string{}, overrides...),
+		DeactivateBundles: append([]string{}, deactivate...),
+		ToolNames:        append([]string{}, toolNames...),
+	}
+	if hasRole {
+		out.RoleID = role.ID
+		out.RoleName = role.Name
+		out.PackageName = role.PackageName
+		out.BasePrompt = subagentBasePromptForRole(role, writeScope)
+	}
+	return out
 }
 
 func (a *Agent) ResumeDurableSubagentWithContext(ctx context.Context, id string) (*subagentJob, error) {

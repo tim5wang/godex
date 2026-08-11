@@ -24,11 +24,11 @@ type roleBundleRegistry struct {
 // 仅收录子 agent 运行时能落地的 bundle；diff/grep 等工具粒度能力由
 // subagentToolNamesForRole / capabilitySummaryForTools 表达。
 var builtinRoleBundles = map[string][]string{
-	"orchestrator": {bundleCoreCode, bundleLSP, bundlePlanning, bundleSubagent, bundleWeb},
-	"worker":       {bundleCoreCode, bundleLSP},
-	"reviewer":     {bundleCoreCode, bundleLSP},
+	"orchestrator": {bundleCoreCode, bundleLSP, bundlePlanning, bundleSubagent, bundleWeb, bundleWriting},
+	"worker":       {bundleCoreCode, bundleLSP, bundleWriting},
+	"reviewer":     {bundleCoreCode, bundleLSP, bundleWriting},
 	"researcher":   {bundleWeb},
-	"planner":      {bundleCoreCode, bundleLSP, bundlePlanning},
+	"planner":      {bundleCoreCode, bundleLSP, bundlePlanning, bundleWriting},
 }
 
 func newRoleBundleRegistry() *roleBundleRegistry {

@@ -1657,6 +1657,7 @@ func TestDurableSubagentRequiresWebBundleBeforeResearchPrompt(t *testing.T) {
 
 func TestDurableSubagentResolvesPackageRole(t *testing.T) {
 	a := newTestAgent(t, 4096)
+	a.RegisterTools() // 父 agent 需激活默认工具，role.DefaultBundles=[core_code] 才能继承（4.3）
 	a.client = &sequenceCaller{responses: []protocol.Response{
 		{Content: []protocol.Block{protocol.TextBlock("role handoff")}},
 	}}

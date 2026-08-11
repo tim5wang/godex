@@ -143,6 +143,7 @@ type Role struct {
 	DefaultBundles []string `json:"default_bundles,omitempty" yaml:"default_bundles,omitempty"`
 	Tools          []string `json:"tools,omitempty" yaml:"tools,omitempty"`
 	WriteEnabled   bool     `json:"write_enabled,omitempty" yaml:"write_enabled,omitempty"`
+	WriteScope     []string `json:"write_scope,omitempty" yaml:"write_scope,omitempty"`
 	Capabilities   []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
 	ToolPolicy     []string `json:"tool_policy,omitempty" yaml:"tool_policy,omitempty"`
 	ModelHint      string   `json:"model_hint,omitempty" yaml:"model_hint,omitempty"`
@@ -652,6 +653,7 @@ func readRoleResource(item Entry, rel string, includeContent bool) (Role, error)
 	}
 	role.DefaultBundles = cleanStringList(role.DefaultBundles)
 	role.Tools = cleanStringList(role.Tools)
+	role.WriteScope = cleanStringList(role.WriteScope)
 	role.Capabilities = cleanStringList(role.Capabilities)
 	role.ToolPolicy = cleanStringList(role.ToolPolicy)
 	role.ModelHint = strings.TrimSpace(role.ModelHint)

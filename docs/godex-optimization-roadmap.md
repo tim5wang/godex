@@ -323,12 +323,16 @@ orchestrator (完整工具集)
 - ✅ 贯穿全链路：`subagent` 工具 args/schema → `durableSubagentStartRequest` → `subagentStartOptions` → `subagentJob` 持久化 → `DurableSubagentJobView`/worker contract `CapabilitySet`
 - ✅ 测试：默认继承父活跃/overrides 替换/deactivate 移除/创建时生效（4 个新测试）
 
-#### 4.5 写 scope 与 bundle 联动
+#### 4.5 写 scope 与 bundle 联动 ✅（2026-08-11）
 
-**方案**：
-- 激活 `writing` bundle 时自动应用写 scope 限制
-- 角色切换时写 scope 自动更新
-- 写 scope 在 bundle 层面做统一管理，不依赖单个工具
+**方案（已落地）**：
+- ✅ 新增虚拟能力 bundle `writing`（`internal/agent/tool_registration.go`）：不挂具体工具，仅声明"该子 agent 可写"；内置角色映射（orchestrator/worker/reviewer/planner）默认含 writing，researcher 天然只读
+- ✅ `resolveSubagentWriteScope`（`subagent_policy.go`）统一解析链：显式 write_scope > role.WriteScope（package role 声明，`Role` 新增 `WriteScope` 字段）> nil；bundle 集合不含 writing/core_code 且角色默认工具面不含写工具时显式 scope 也被忽略（天然只读）
+- ✅ `appendRequiredSubagentTools` writing 分支：仅当存在有效 scope 才展开 bash/write_file/edit_file，无 scope 则只读降级；core_code 视为隐式 writing（兼容旧调用）；general-purpose 默认工具面（硬编码含写工具）不受 bundle 影响
+- ✅ 创建/恢复路径统一：`startDurableSubagentWithContext` 与 `localGoDexWorkerRuntime.Dispatch` 均走解析链 + `narrowSubagentWriteTools` 收窄，避免 Dispatch 重建时把 bundle 写工具重新加回
+- ✅ 角色切换时写 scope 自动更新：`ReopenForIterationWithUpdate` + `IterateDurableSubagentWithUpdate`（`subagent` 工具 iterate action 透传 agent_type/write_scope/bundle_overrides/deactivate_bundles），重开时重新解析角色 bundles 与 scope 并更新 job 配置
+- ✅ 测试：解析链优先级/可写判定/writing 分支/worker 有 scope 展开/worker 无 scope 只读/无 writing 忽略 scope/重开更新配置/iterate 切换角色（8 个新测试）
+- ✅ 顺带修复 4.3/4.4 引入的 2 个回归（Dispatch 重建未收窄写工具、package role 测试未注册父工具）与 2 个 4.5 新回归（general-purpose 默认工具面写能力未计入、worktree 审批路径）
 
 #### 4.6 上下文预算按角色分配 ✅（2026-08-11）
 
@@ -421,7 +425,7 @@ orchestrator (完整工具集)
 | ✅ | 4.2 | 子 agent 双向通信 | 中 | 高 | 4.1 | 已完（2026-08-11） |
 | ✅ | 4.3 | 角色→bundle 运行时映射 | 中 | 高 | 2.4 | 已完（2026-08-11） |
 | ✅ | 4.4 | 子 agent bundle 继承 | 中 | 高 | 4.3 | 已完（2026-08-11） |
-| 🟢 | 4.5 | 写 scope 与 bundle 联动 | 中 | 中 | 4.3 | 3d |
+| ✅ | 4.5 | 写 scope 与 bundle 联动 | 中 | 中 | 4.3 | 已完（2026-08-11） |
 | ✅ | 4.6 | 上下文预算按角色分配 | 中 | 中 | 2.3 | 已完（2026-08-11） |
 | 🔵 | 5.1 | Harness 多引擎抽象 | 高 | 高 | 3.3 | 2w |
 | 🔵 | 5.2 | Turn Error 分层 | 低 | 中 | 无 | 2d |
@@ -457,7 +461,7 @@ orchestrator (完整工具集)
   ✅ 4.2 子 agent 双向通信     → 已完成（2026-08-11）
   ✅ 4.3 角色→bundle 运行时映射 → 已完成（2026-08-11）
   ✅ 4.4 子 agent bundle 继承   → 已完成（2026-08-11）
-  4.5 写 scope 与 bundle 联动 → 3d
+  ✅ 4.5 写 scope 与 bundle 联动 → 已完成（2026-08-11）
   ✅ 4.6 上下文预算按角色分配   → 已完成（2026-08-11）
 
 🔵 Phase 4（架构基础设施）：

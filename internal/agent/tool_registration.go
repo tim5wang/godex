@@ -9,6 +9,7 @@ import (
 
 const (
 	bundleCoreCode   = "core_code"
+	bundleWriting    = "writing"
 	bundlePlanning   = "planning"
 	bundleBackground = "background"
 	bundleTaskBoard  = "task_board"

@@ -154,7 +154,7 @@ func newSubagentTool(agent *Agent) tools.Tool {
 			},
 			"agent_type": map[string]interface{}{
 				"type":        "string",
-				"description": "Type or named role of subagent to spawn. Explore is read-only; general-purpose can write within write_scope; package role ids are preserved for visualization and prompt guidance.",
+				"description": "Type or named role of subagent to spawn (start), or new role for an iterate re-open (roadmap 4.5). Explore is read-only; general-purpose can write within write_scope; package role ids are preserved for visualization and prompt guidance.",
 			},
 			"mode": map[string]interface{}{
 				"type":        "string",
@@ -164,7 +164,7 @@ func newSubagentTool(agent *Agent) tools.Tool {
 			"write_scope": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]string{"type": "string"},
-				"description": "Workspace-relative paths a write-capable durable subagent may edit",
+				"description": "Workspace-relative paths a write-capable durable subagent may edit (start), or updated scope for an iterate re-open (roadmap 4.5).",
 			},
 			"required_bundles": map[string]interface{}{
 				"type":        "array",
@@ -179,12 +179,12 @@ func newSubagentTool(agent *Agent) tools.Tool {
 			"bundle_overrides": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]string{"type": "string"},
-				"description": "Replace the inherited parent-agent bundles with this explicit bundle set. Overrides bundle inheritance (roadmap 4.4).",
+				"description": "Replace the inherited parent-agent bundles with this explicit bundle set (start) or for an iterate re-open (roadmap 4.5). Overrides bundle inheritance (roadmap 4.4).",
 			},
 			"deactivate_bundles": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]string{"type": "string"},
-				"description": "Remove these bundles from the subagent's inherited bundle set (roadmap 4.4).",
+				"description": "Remove these bundles from the subagent's inherited bundle set (start) or for an iterate re-open (roadmap 4.5).",
 			},
 			"input": map[string]string{
 				"type":        "string",
@@ -321,7 +321,14 @@ func newSubagentTool(agent *Agent) tools.Tool {
 			if feedback == "" {
 				return tools.ToolResult{}, fmt.Errorf("missing input (review feedback) argument")
 			}
-			job, err := agent.IterateDurableSubagentWithContext(ctx, args.JobID, feedback)
+			// roadmap 4.5: iterate 可携带可选配置更新（角色/写 scope/bundle），
+			// 重开时自动重新解析并更新 job 的 ToolNames/DefaultBundles 等。
+			job, err := agent.IterateDurableSubagentWithUpdate(ctx, args.JobID, feedback, subagentReopenUpdate{
+				AgentType:         args.AgentType,
+				WriteScope:        args.WriteScope,
+				BundleOverrides:   args.BundleOverrides,
+				DeactivateBundles: args.DeactivateBundles,
+			})
 			if err != nil {
 				return tools.ToolResult{}, err
 			}

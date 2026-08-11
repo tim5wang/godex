@@ -693,11 +693,33 @@ func (s *subagentJobStore) ResumeWithLimit(id string, maxConcurrent int) (*subag
 	return cloneSubagentJob(job), nil
 }
 
+// subagentReopenUpdate 携带重开（review→fix 迭代）时可选的配置更新
+// （roadmap 4.5：角色切换时写 scope / bundle 自动更新）。空值字段保持原 job 配置。
+type subagentReopenUpdate struct {
+	AgentType        string
+	RoleID           string
+	RoleName         string
+	PackageName      string
+	WriteScope       []string
+	DefaultBundles   []string
+	BundleOverrides  []string
+	DeactivateBundles []string
+	ToolNames        []string
+	BasePrompt       string
+}
+
 // ReopenForIteration reopens a finished (completed or error) subagent job for
 // a review→fix→re-review cycle (roadmap 4.2). The previous result/error are
 // cleared, the job returns to running/pending, and the given feedback is
 // queued as pending inputs so the runner injects it on the next turn.
 func (s *subagentJobStore) ReopenForIteration(id string, feedback []protocol.Message) (*subagentJob, error) {
+	return s.ReopenForIterationWithUpdate(id, feedback, subagentReopenUpdate{})
+}
+
+// ReopenForIterationWithUpdate 与 ReopenForIteration 相同，但允许在重开时
+// 更新角色/写 scope/bundle 配置（roadmap 4.5）：非空的更新字段会覆盖 job
+// 的对应配置，空字段保持原值。
+func (s *subagentJobStore) ReopenForIterationWithUpdate(id string, feedback []protocol.Message, update subagentReopenUpdate) (*subagentJob, error) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -709,6 +731,36 @@ func (s *subagentJobStore) ReopenForIteration(id string, feedback []protocol.Mes
 	case subagentStatusCompleted, subagentStatusError:
 	default:
 		return nil, fmt.Errorf("subagent job %s is %s; only completed or error jobs can be iterated", id, job.Status)
+	}
+	if strings.TrimSpace(update.AgentType) != "" {
+		job.AgentType = strings.TrimSpace(update.AgentType)
+	}
+	if strings.TrimSpace(update.RoleID) != "" {
+		job.RoleID = strings.TrimSpace(update.RoleID)
+	}
+	if strings.TrimSpace(update.RoleName) != "" {
+		job.RoleName = strings.TrimSpace(update.RoleName)
+	}
+	if strings.TrimSpace(update.PackageName) != "" {
+		job.PackageName = strings.TrimSpace(update.PackageName)
+	}
+	if strings.TrimSpace(update.BasePrompt) != "" {
+		job.BasePrompt = strings.TrimSpace(update.BasePrompt)
+	}
+	if update.WriteScope != nil {
+		job.WriteScope = append([]string{}, update.WriteScope...)
+	}
+	if update.DefaultBundles != nil {
+		job.DefaultBundles = append([]string{}, update.DefaultBundles...)
+	}
+	if update.BundleOverrides != nil {
+		job.BundleOverrides = append([]string{}, update.BundleOverrides...)
+	}
+	if update.DeactivateBundles != nil {
+		job.DeactivateBundles = append([]string{}, update.DeactivateBundles...)
+	}
+	if update.ToolNames != nil {
+		job.ToolNames = append([]string{}, update.ToolNames...)
 	}
 	job.Status = subagentStatusRunning
 	job.Result = ""

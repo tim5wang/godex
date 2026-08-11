@@ -30,6 +30,7 @@
 | **Runner 韧性** | 统一 phase checkpoint、active turn follow-up injection、空回复恢复、length/provider error 恢复 |
 | **Turn Error 分层** | ✅ `TurnError` 接口（Retryable/Transient/NonRetryable）+ `ClassifyTurnError` + Runner 内层有限重试路由 + `TurnFailureMessage`（2026-08-11） |
 | **Harness 多引擎抽象** | ✅ `Harness` 接口（Profile/Models/Tools/RunTurn/ResetSession/Close）+ godexHarness 默认实现 + harnessRouter 按会话切换并重置引擎（2026-08-11） |
+| **持久化 Map 抽象** | ✅ `DurableMap[V]` 接口 + MemoryMap + SQLiteMap（dir/<table>.db）；替换试点发现有序数组（candidates.json）不适用 key-value map，保留文件读写（2026-08-11） |
 | **安全边界** | 安全 profile、host privilege policy、WorkspaceFS 文件边界、shell 风险分级和审计 |
 | **Browser/Desktop/ACP** | browser handoff/resume、desktop bundle、OCR、external ACP stdio bridge |
 | **执行后端** | 本地和 Docker bind-mount workspace 模式 |
@@ -374,12 +375,12 @@ orchestrator (完整工具集)
 
 **参考**：`temp/qm/src/core/turn-error.ts`
 
-#### 5.3 持久化 Map 抽象
+#### 5.3 持久化 Map 抽象 ✅（2026-08-11，接口 + SQLite 实现）
 
-**方案**：
-- 定义 `DurableMap[K, V]` 接口
-- SQLite 实现
-- 逐步替换 `index.json`、`candidates.json` 等文件读写
+**方案（已落地）**：
+- ✅ `internal/core/persistence/durable_map.go`：`DurableMap[V]` 接口（All/Entries/Get/Put/PutIfAbsent/InsertIfAbsent/Update/DeleteIf/Delete/Take，对齐 durable-map.ts）+ `MemoryMap[V]` 内存实现 + `SQLiteMap[V]` SQLite 实现（`dir/<table>.db`，表名白名单校验，JSON 序列化，`ON CONFLICT` upsert）
+- ✅ 测试：MemoryMap/SQLiteMap 全接口契约、SQLite 重开持久化、非法表名拒绝、db 文件位置（5 个新测试），全绿
+- ⚠️ **替换文件读写试点结论**：尝试用 SQLiteMap 替换 `candidates.json` 时发现顺序语义冲突——candidates 是**有序数组**，consolidation 用 `UPDATE <n>/DELETE <n>` 位置索引操作列表，而 DurableMap 按 key 排序，替换后 ListCandidates 顺序改变导致 consolidation 删错对象。**结论：有序数组文件（candidates.json/index.json 等）不适合直接用 key-value DurableMap 替换**，已回退该试点；DurableMap 适用于真正的 key-value 语义存储（如按 fingerprint/id 索引的映射），后续替换需保持数组顺序语义或改用带顺序键的存储。
 
 **参考**：`temp/qm/src/persistence/durable-map.ts`
 
@@ -439,7 +440,7 @@ orchestrator (完整工具集)
 | ✅ | 4.6 | 上下文预算按角色分配 | 中 | 中 | 2.3 | 已完（2026-08-11） |
 | ✅ | 5.1 | Harness 多引擎抽象 | 高 | 高 | 3.3 | 已完（2026-08-11） |
 | ✅ | 5.2 | Turn Error 分层 | 低 | 中 | 无 | 已完（2026-08-11） |
-| 🔵 | 5.3 | 持久化 Map 抽象 | 中 | 中 | 无 | 1w |
+| ✅ | 5.3 | 持久化 Map 抽象 | 中 | 中 | 无 | 已完（2026-08-11，接口+SQLite；替换试点发现有序数组语义冲突） |
 | ⚪ | 6.1 | 安全筛查器 | 中 | 中 | 无 | 1w |
 | ⚪ | 6.2 | Scope 隔离模型 | 中 | 中 | 3.3 | 1w |
 | ⚪ | 6.3 | Session 树 | 高 | 高 | 3.3+5.3 | 3w |
@@ -477,7 +478,7 @@ orchestrator (完整工具集)
 🔵 Phase 4（架构基础设施）：
   ✅ 5.1 Harness 多引擎抽象    → 已完成（2026-08-11）
   ✅ 5.2 Turn Error 分层       → 已完成（2026-08-11）
-  5.3 持久化 Map 抽象       → 1w
+  ✅ 5.3 持久化 Map 抽象       → 已完成（2026-08-11，接口+SQLite；有序数组文件不适用，见 5.3 结论）
 ```
 
 ## 文档维护规则

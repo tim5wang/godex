@@ -777,6 +777,10 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 		Security: SecurityConfig{
 			Profile: normalizeSecurityProfileName(file.Security.Profile),
 		},
+		Memory: MemoryConfig{
+			Strategy:         normalizeMemoryStrategyKind(file.Memory.Strategy),
+			ConsolidateAfter: file.Memory.ConsolidateAfter,
+		},
 		MaxTokens:         defaultProfile.MaxTokens,
 		HomeDir:           homeDir,
 		WorkspaceDir:      workspace,

@@ -37,6 +37,7 @@ type Agent struct {
 	instrLoader   *instructions.Loader
 	memoryMgr     *memory.Manager
 	memoryExt     *memory.Extractor
+	memoryStrategy memory.Strategy
 	notesMgr      *notes.Manager
 	mcpMgr        *mcp.Manager
 	compressor    *compress.Compressor
@@ -102,6 +103,7 @@ type dependencies struct {
 	instrLoader  *instructions.Loader
 	memoryMgr    *memory.Manager
 	memoryExt    *memory.Extractor
+	memoryStrategy memory.Strategy
 	notesMgr     *notes.Manager
 	mcpMgr       *mcp.Manager
 	compressor   *compress.Compressor

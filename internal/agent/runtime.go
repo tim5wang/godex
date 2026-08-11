@@ -286,6 +286,7 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	a.instrLoader = deps.instrLoader
 	a.memoryMgr = deps.memoryMgr
 	a.memoryExt = deps.memoryExt
+	a.memoryStrategy = deps.memoryStrategy
 	a.mcpMgr = deps.mcpMgr
 	a.compressor = deps.compressor
 	a.summarizer = deps.summarizer

@@ -37,6 +37,7 @@ type ConfigFile struct {
 	Tools     ToolsSection     `yaml:"tools"`
 	Media     MediaSection     `yaml:"media"`
 	Channels  ChannelsSection  `yaml:"channels"`
+	Memory    MemorySection    `yaml:"memory"`
 }
 
 type SecuritySection struct {
@@ -187,6 +188,16 @@ type PathsSection struct {
 type ChannelsSection struct {
 	Feishu FeishuSection `yaml:"feishu"`
 	Weixin WeixinSection `yaml:"weixin"`
+}
+
+// MemorySection configures the durable-memory strategy.
+type MemorySection struct {
+	// Strategy selects the memory behavior: per-turn (default), agent-only,
+	// or consolidated (per-turn capture + LLM merge/dedup/delete of candidates).
+	Strategy string `yaml:"strategy"`
+	// ConsolidateAfter is the pending-candidate count that triggers an LLM
+	// consolidation pass when Strategy is consolidated.
+	ConsolidateAfter int `yaml:"consolidate_after"`
 }
 
 type MediaSection struct {

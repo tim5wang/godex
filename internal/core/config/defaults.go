@@ -116,6 +116,10 @@ func defaultConfigFile() ConfigFile {
 		Security: SecuritySection{
 			Profile: "guarded-local",
 		},
+		Memory: MemorySection{
+			Strategy:         "per-turn",
+			ConsolidateAfter: 10,
+		},
 		Team: TeamSection{
 			LeadName:                "lead",
 			TeamName:                "default",

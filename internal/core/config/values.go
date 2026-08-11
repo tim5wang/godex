@@ -284,6 +284,10 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Storage.SessionBackend = normalizeSessionStorageBackend(asString(value))
 	case "storage.sqlite_path":
 		file.Storage.SQLitePath = asString(value)
+	case "memory.strategy":
+		file.Memory.Strategy = normalizeMemoryStrategyKind(asString(value))
+	case "memory.consolidate_after":
+		file.Memory.ConsolidateAfter = asInt(value)
 	case "tools.web_search.enabled":
 		file.Tools.WebSearch.Enabled = asBool(value)
 	case "tools.web_search.provider_order":
@@ -582,6 +586,8 @@ func storedValues(file ConfigFile) map[string]any {
 		"storage.session_checkpoint_auto_prune":                  file.Storage.SessionCheckpointAutoPrune,
 		"storage.session_backend":                                normalizeSessionStorageBackend(file.Storage.SessionBackend),
 		"storage.sqlite_path":                                    file.Storage.SQLitePath,
+		"memory.strategy":                                        normalizeMemoryStrategyKind(file.Memory.Strategy),
+		"memory.consolidate_after":                               file.Memory.ConsolidateAfter,
 		"tools.web_search.enabled":                               file.Tools.WebSearch.Enabled,
 		"tools.web_search.provider_order":                        append([]string{}, file.Tools.WebSearch.ProviderOrder...),
 		"tools.web_search.cache_ttl_seconds":                     file.Tools.WebSearch.CacheTTLSeconds,
@@ -774,6 +780,8 @@ func effectiveValues(cfg *Config) map[string]any {
 		"storage.session_checkpoint_auto_prune":                  cfg.Storage.SessionCheckpointAutoPrune,
 		"storage.session_backend":                                normalizeSessionStorageBackend(cfg.Storage.SessionBackend),
 		"storage.sqlite_path":                                    cfg.Storage.SQLitePath,
+		"memory.strategy":                                        normalizeMemoryStrategyKind(cfg.Memory.Strategy),
+		"memory.consolidate_after":                               cfg.Memory.ConsolidateAfter,
 		"tools.web_search.enabled":                               cfg.Tools.WebSearch.Enabled,
 		"tools.web_search.provider_order":                        append([]string{}, cfg.Tools.WebSearch.ProviderOrder...),
 		"tools.web_search.cache_ttl_seconds":                     cfg.Tools.WebSearch.CacheTTLSeconds,

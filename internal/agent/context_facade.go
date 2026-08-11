@@ -105,6 +105,11 @@ func (a *Agent) CompactConversationWithMode(mode string) (string, error) {
 }
 
 func (a *Agent) captureMemoryCandidates() error {
+	if a.memoryStrategy != nil {
+		messages, _ := a.messageState()
+		_, err := a.memoryStrategy.Capture(messages)
+		return err
+	}
 	if a.memoryExt == nil {
 		return nil
 	}

@@ -77,10 +77,20 @@ type Config struct {
 	ACP                  ACPConfig
 	Feishu               FeishuConfig
 	Weixin               WeixinConfig
+	Memory               MemoryConfig
 }
 
 type SecurityConfig struct {
 	Profile string
+}
+
+// MemoryConfig is the resolved durable-memory strategy configuration.
+type MemoryConfig struct {
+	// Strategy is the normalized memory strategy kind (per-turn/agent-only/consolidated).
+	Strategy string
+	// ConsolidateAfter is the pending-candidate count that triggers LLM
+	// consolidation when Strategy is consolidated. <=0 means default.
+	ConsolidateAfter int
 }
 
 type AgentDefaultProfilesConfig struct {

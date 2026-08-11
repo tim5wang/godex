@@ -34,6 +34,16 @@ func buildDependencies(cfg *config.Config) dependencies {
 	client := callerForConfigProfile(cfg, cfg.DefaultModelProfile())
 	skillLoader := newSkillLoader(cfg, client)
 	memoryMgr := memory.NewManager(cfg.MemoryDir)
+	memoryExt := memory.NewExtractor(memoryMgr, cfg.TempDir)
+	memoryStrategy := memory.NewStrategy(memory.StrategyOptions{
+		Kind:    memory.ParseStrategyKind(cfg.Memory.Strategy),
+		Extract: memoryExt,
+		Consolidator: memory.NewConsolidator(memory.ConsolidatorOptions{
+			Manager: memoryMgr,
+			OneShot: memoryConsolidationOneShot(client, cfg),
+			AfterN:  cfg.Memory.ConsolidateAfter,
+		}),
+	})
 	compressor := compress.NewCompressor(cfg.TranscriptsDir)
 	compressor.SetKeepRecent(cfg.Compaction.KeepRecentMessages)
 	ruleSummarizer := compress.NewRuleBasedSessionSummarizer(compressor)
@@ -71,7 +81,8 @@ func buildDependencies(cfg *config.Config) dependencies {
 		skillLoader:  skillLoader,
 		instrLoader:  instructions.NewLoader(),
 		memoryMgr:    memoryMgr,
-		memoryExt:    memory.NewExtractor(memoryMgr, cfg.TempDir),
+		memoryExt:    memoryExt,
+		memoryStrategy: memoryStrategy,
 		notesMgr:     notes.NewManager(notesDirForConfig(cfg)),
 		mcpMgr:       mcp.NewManager(cfg.MCPConfigPath, cfg.WorkspaceDir, cfg.TempDir),
 		compressor:   compressor,
@@ -96,6 +107,26 @@ func apiRequestTimeout(cfg *config.Config) time.Duration {
 		return 600 * time.Second
 	}
 	return time.Duration(cfg.APITimeoutSeconds) * time.Second
+}
+
+// memoryConsolidationOneShot adapts the wired conversation caller into the
+// one-shot LLM callback required by the consolidation strategy. It returns nil
+// when the caller or model is unavailable so consolidation degrades gracefully.
+func memoryConsolidationOneShot(client conversation.Caller, cfg *config.Config) func(ctx context.Context, prompt, input string) (string, error) {
+	if client == nil || cfg == nil || strings.TrimSpace(cfg.Model) == "" {
+		return nil
+	}
+	return func(ctx context.Context, prompt, input string) (string, error) {
+		messages := []protocol.Message{
+			protocol.NewTextMessage(protocol.RoleUser, prompt+"\n\n"+input),
+		}
+		req := conversation.NewRequest(cfg.Model, min(cfg.MaxTokens, 2048), "", "", messages, nil)
+		resp, err := client.Call(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return protocol.BlocksText(resp.Content), nil
+	}
 }
 
 func callerForConfigProfile(cfg *config.Config, primary config.ModelProfileConfig) conversation.Caller {
@@ -145,6 +176,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		instrLoader:    deps.instrLoader,
 		memoryMgr:      deps.memoryMgr,
 		memoryExt:      deps.memoryExt,
+		memoryStrategy: deps.memoryStrategy,
 		notesMgr:      deps.notesMgr,
 		mcpMgr:         deps.mcpMgr,
 		compressor:     deps.compressor,

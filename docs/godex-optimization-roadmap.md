@@ -247,15 +247,15 @@ orchestrator (完整工具集)
 
 ### 🟠 Phase 3：Agent 身份与记忆系统增强（P2）
 
-#### 3.1 记忆策略模式（Memory Strategy）
+#### 3.1 记忆策略模式（Memory Strategy） ✅（2026-08-11）
 
 **问题**：记忆行为固定，不可配置、不可组合。
 
-**方案**：
-- 定义 `MemoryStrategy` 接口
-- 默认策略 = 当前行为
-- 新增 `consolidation` 策略：LLM 自动合并/去重/删除候选记忆
-- 配置化：`godex.json` 允许选择策略组合
+**方案（已落地）**：
+- ✅ `strategy.go`：`Strategy` 接口（Kind/Capture/Maintain）+ 三种策略：`per-turn`（默认，= 当前行为）、`agent-only`（关闭自动提取）、`consolidated`（per-turn 捕获 + LLM 合并/去重/删除候选）；`ParseStrategyKind` 归一化变体
+- ✅ `consolidation.go`：`Consolidator`（LLM 一次性 prompt → `UPDATE/DELETE/ADD` actions 解析 → 应用到候选 inbox）；阈值触发（`consolidate_after`，默认 10）、模型失败自动降级 capture-only、`MaybeMaintain`/`Maintain`
+- ✅ 配置化：`godex.json` `memory.strategy` / `memory.consolidate_after`（types/config/resolve/defaults/values/schema 全链路 + `normalizeMemoryStrategyKind`）；agent 接线按配置构建 strategy，`agent-only` 关闭捕获、`consolidated` 注入 LLM one-shot
+- ✅ 测试：strategy 单测（kind 归一化/默认/降级/agent-only 跳过/consolidated 捕获+维护）、consolidation 单测（parse/apply/阈值/落盘/降级/nil 安全）+ config 解析测试（11 个新测试），全量回归无新增失败
 
 **参考**：`temp/qm/src/memory/strategy.ts` + `consolidation.ts`
 
@@ -421,7 +421,7 @@ orchestrator (完整工具集)
 | ✅ | 2.2 | 重启后恢复 longtask | 中 | 高 | 1.4 | 已完（2026-08-11） |
 | ✅ | 2.3 | 上下文预算管理 | 低 | 中 | 无 | 已完（2026-08-11） |
 | ✅ | 2.4 | AgentGraph 运行时抽象 | 高 | 高 | 2.1 | 已完（2026-08-11） |
-| 🟠 | 3.1 | 记忆策略模式 | 中 | 高 | 无 | 1w |
+| ✅ | 3.1 | 记忆策略模式 | 中 | 高 | 无 | 已完（2026-08-11） |
 | ✅ | 3.2 | 记忆 notebook 去重 | 低 | 中 | 无 | 已完（2026-08-11） |
 | 🟠 | 3.3 | Agent Identity 解耦 | 高 | 高 | 无 | 2w |
 | ✅ | 4.1 | spawn/send_input/wait | 中 | 高 | 2.4 | 已完（2026-08-11） |
@@ -455,7 +455,7 @@ orchestrator (完整工具集)
 
 🟡 Phase 2（下一个，longtask 重构核心）：
   ✅ 2.4 AgentGraph 抽象     → 已完成（2026-08-11）
-  3.1 记忆策略模式         → 1w
+  ✅ 3.1 记忆策略模式         → 已完成（2026-08-11）
   ✅ 3.2 记忆 notebook 去重   → 已完成（2026-08-11）
   3.3 Agent Identity 解耦  → 2w
 

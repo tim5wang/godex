@@ -131,6 +131,24 @@ func normalizeSecurityProfileName(profile string) string {
 	}
 }
 
+// normalizeMemoryStrategyKind maps a configured memory strategy name to the
+// canonical kind used by internal/core/memory. Unknown or empty values fall
+// back to "per-turn" (the default behavior).
+func normalizeMemoryStrategyKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "per-turn", "per_turn", "perturn":
+		return "per-turn"
+	case "agent-only", "agent_only", "agentonly":
+		return "agent-only"
+	case "consolidated", "consolidation":
+		return "consolidated"
+	case "":
+		return "per-turn"
+	default:
+		return "per-turn"
+	}
+}
+
 func normalizeSessionStorageBackend(backend string) string {
 	switch strings.ToLower(strings.TrimSpace(backend)) {
 	case "sqlite":

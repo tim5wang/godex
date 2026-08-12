@@ -265,6 +265,13 @@ function classifyWorker(worker: FeedItem): ReviewMergeStatus {
     return "running";
   }
   if (status === "completed") {
+    // Read-only subagent (no write_scope) that finished has nothing in its
+    // worktree to merge or review; normalize stale pending/empty merge
+    // status to no_changes so it never surfaces as an un-actionable
+    // "待审核" item (SSE/timeline payloads may still carry pending).
+    if ((merge === "" || merge === "pending") && !(worker.writeScope?.length)) {
+      return "no_changes";
+    }
     return "ready";
   }
   if (["failed", "error", "cancelled", "canceled", "interrupted", "timeout"].includes(status)) {

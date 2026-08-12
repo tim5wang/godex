@@ -40,9 +40,10 @@ export function LongTaskCard(props: LongTaskCardProps): ReactNode {
   const [expanded, setExpanded] = useState(false);
   const [rollbackNode, setRollbackNode] = useState<string | null>(null);
   const [lookupOpen, setLookupOpen] = useState(false);
-  const completed = props.stories.filter((s) => s.status === "completed").length;
-  const total = props.stories.length;
-  const revertedCount = props.stories.filter((s) => s.reverted).length;
+  const stories = props.stories ?? [];
+  const completed = stories.filter((s) => s.status === "completed").length;
+  const total = stories.length;
+  const revertedCount = stories.filter((s) => s.reverted).length;
 
   return (
     <div
@@ -86,7 +87,7 @@ export function LongTaskCard(props: LongTaskCardProps): ReactNode {
           </div>
           {props.stories.length > 0 ? (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-              {props.stories.map((s) => (
+              {stories.map((s) => (
                 <div key={s.id} style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 12 }}>
                   <code>{s.id}</code>
                   {props.onFinalize ? <button type="button" onClick={() => props.onFinalize?.(s.id)} style={buttonStyle}>{text.finalizeLongTask}</button> : null}

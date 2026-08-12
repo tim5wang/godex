@@ -280,8 +280,9 @@ function OutcomeActions(props: TaskCenterPanelProps & { outcome: TaskOutcome; t:
   const canReviewWorker = jobId && outcome.worker?.writeScope?.length && workerStatus !== "running";
   const canMergeWorker = canReviewWorker && outcome.worker?.mergeStatus !== "merged" && outcome.worker?.mergeStatus !== "no_changes";
   const longTask = outcome.longTask;
-  const activeStory = longTask?.stories.find((story) => story.status === "running") ?? longTask?.stories.find((story) => story.status === "error");
-  const finalizable = longTask?.stories.find((story) => story.status === "completed" && story.verdict === "pass" && story.validation_status === "pending" && story.node_id);
+  const stories = longTask?.stories ?? [];
+  const activeStory = stories.find((story) => story.status === "running") ?? stories.find((story) => story.status === "error");
+  const finalizable = stories.find((story) => story.status === "completed" && story.verdict === "pass" && story.validation_status === "pending" && story.node_id);
 
   return (
     <Space size={4} wrap>
@@ -395,7 +396,7 @@ function CollapsedSummary({ outcomes, t }: { outcomes: TaskOutcome[]; t: TaskCen
 
 function outcomeProgress(outcome: TaskOutcome) {
   if (outcome.longTask && outcome.longTask.total > 0) {
-    const passed = outcome.longTask.stories.filter((story) => story.passes).length;
+    const passed = (outcome.longTask.stories ?? []).filter((story) => story.passes).length;
     if (outcome.status === "merged") {
       return 100;
     }
@@ -422,9 +423,9 @@ function outcomeProgress(outcome: TaskOutcome) {
 // message/phase otherwise.
 function outcomeProgressLabel(outcome: TaskOutcome) {
   if (outcome.longTask && outcome.longTask.total > 0) {
-    const passed = outcome.longTask.stories.filter((story) => story.passes).length;
-    const running = outcome.longTask.stories.find((story) => story.status === "running");
-    const failed = outcome.longTask.stories.find((story) => story.status === "error" || story.status === "failed");
+    const passed = (outcome.longTask.stories ?? []).filter((story) => story.passes).length;
+    const running = (outcome.longTask.stories ?? []).find((story) => story.status === "running");
+    const failed = (outcome.longTask.stories ?? []).find((story) => story.status === "error" || story.status === "failed");
     const parts = [`${passed}/${outcome.longTask.total} done`];
     if (running?.title && running.title !== failed?.title) {
       parts.push(`running: ${running.title}`);

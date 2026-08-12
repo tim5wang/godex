@@ -1711,6 +1711,40 @@ default_bundles:
 	}
 }
 
+// TestDurableSubagentFinishPersistsNoChangesForReadOnly pins the durability
+// contract behind the path-A normalizer: when a read-only subagent (no
+// write_scope) completes, Finish must persist MergeStatus = "no_changes" on
+// disk (not only normalize it in the API view). This keeps SSE/timeline event
+// payloads consistent with API views, so the Web UI never surfaces an
+// un-actionable "待审核" item for a job that has nothing to merge or review.
+func TestDurableSubagentFinishPersistsNoChangesForReadOnly(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.client = repeatedTextCaller("read-only handoff")
+
+	job, err := a.StartDurableSubagentWithContext(context.Background(), "read-only inspect", "Explore", nil)
+	if err != nil {
+		t.Fatalf("start read-only durable subagent: %v", err)
+	}
+	completed := waitForSubagentStatus(t, a.subagentJobs, job.ID, subagentStatusCompleted)
+	if len(completed.WriteScope) != 0 {
+		t.Fatalf("expected read-only job to have no write_scope, got %v", completed.WriteScope)
+	}
+	if completed.MergeStatus != subagentMergeNoChanges {
+		t.Fatalf("expected persisted mergeStatus=%q after Finish, got %q (job=%+v)", subagentMergeNoChanges, completed.MergeStatus, completed)
+	}
+
+	// Reload from disk: the persisted value must survive a store reopen so
+	// event emission and API views agree even after a process restart.
+	reloaded := newSubagentJobStore(a.subagentJobs.dir)
+	diskJob, err := reloaded.Get(job.ID)
+	if err != nil {
+		t.Fatalf("reload job from disk: %v", err)
+	}
+	if diskJob.MergeStatus != subagentMergeNoChanges {
+		t.Fatalf("expected persisted mergeStatus=%q after store reload, got %q", subagentMergeNoChanges, diskJob.MergeStatus)
+	}
+}
+
 // TestDurableSubagentViewNoWriteScopeMarksReadOnlyJobAsNoChanges pins the
 // path-A contract for read-only subagents (e.g. Explore with no write_scope):
 // a completed read-only job has no files in its worktree to merge or review,

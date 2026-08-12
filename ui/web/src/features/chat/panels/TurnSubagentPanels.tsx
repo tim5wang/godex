@@ -160,10 +160,11 @@ export function LongTaskList({
       dataSource={items}
       rowKey={(item) => item.workflow_id}
       renderItem={(item) => {
-        const done = item.stories.filter((story) => story.passes).length;
+        const stories = item.stories ?? [];
+        const done = stories.filter((story) => story.passes).length;
         const percent = item.total > 0 ? Math.round((done / item.total) * 100) : 0;
-        const activeStory = item.stories.find((story) => story.status === "running") ?? item.stories.find((story) => story.status === "error");
-        const finalizable = item.stories.find(
+        const activeStory = stories.find((story) => story.status === "running") ?? stories.find((story) => story.status === "error");
+        const finalizable = stories.find(
           (story) => story.status === "completed" && story.verdict === "pass" && story.validation_status === "pending" && story.node_id,
         );
         return (
@@ -192,7 +193,7 @@ export function LongTaskList({
                   {item.run?.blocked_by ? <Tag color="red">blocked: {item.run.blocked_by}</Tag> : null}
                 </Space>
                 <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                  {item.stories.map((story) => (
+                  {stories.map((story) => (
                     <div key={story.id} className="longtask-story-row">
                       <Space wrap size={[6, 4]}>
                         <Tag color={story.passes ? "green" : story.status === "error" ? "red" : story.status === "running" ? "processing" : "default"}>
@@ -209,7 +210,7 @@ export function LongTaskList({
                     </div>
                   ))}
                 </Space>
-                {item.graph && item.graph.nodes.length > 0 ? (
+                {item.graph && (item.graph.nodes ?? []).length > 0 ? (
                   <Collapse
                     size="small"
                     items={[
@@ -219,8 +220,8 @@ export function LongTaskList({
                           <Space size={6}>
                             <ApartmentOutlined />
                             <span>Graph</span>
-                            <Tag>{item.graph.nodes.length} nodes</Tag>
-                            <Tag>{item.graph.edges.length} edges</Tag>
+                            <Tag>{(item.graph.nodes ?? []).length} nodes</Tag>
+                            <Tag>{(item.graph.edges ?? []).length} edges</Tag>
                             {item.graph.failed > 0 ? <Tag color="red">{item.graph.failed} failed</Tag> : null}
                           </Space>
                         ),

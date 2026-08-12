@@ -269,6 +269,17 @@ export function ContextRecallPanel({
   const toolRefs = context?.tool_result_references ?? [];
   const budgetPercent =
     context && context.compress_threshold > 0 ? Math.min(100, Math.round((totalTokens / context.compress_threshold) * 100)) : 0;
+  const cache = context?.prefix_cache;
+  const cacheStableSystem = cache?.stable_system_tokens ?? 0;
+  const cacheStableTools = cache?.stable_tool_schema_tokens ?? 0;
+  const cacheStableMemory = cache?.stable_memory_index_tokens ?? 0;
+  const cacheStable = cacheStableSystem + cacheStableTools + cacheStableMemory;
+  const cacheDynamic = cache?.dynamic_runtime_tokens ?? 0;
+  const hasCache = cacheStable > 0 || cacheDynamic > 0;
+  const cacheable = cacheStable + (breakdown?.history ?? 0);
+  const cacheRatio = totalTokens > 0 ? Math.round((cacheable / totalTokens) * 100) : 0;
+  const realUsage = context?.cache_usage;
+  const hasRealUsage = (realUsage?.calls ?? 0) > 0;
   const memoryPreview = {
     identity: inspector?.memory_preview?.identity ?? [],
     core: inspector?.memory_preview?.core ?? [],
@@ -294,6 +305,8 @@ export function ContextRecallPanel({
           { key: "tokens", label: t("chat.contextInspectorTokenEstimate"), children: totalTokens },
           { key: "history_tokens", label: t("chat.contextInspectorHistoryTokens"), children: historyTokens },
           { key: "threshold", label: t("chat.contextInspectorThreshold"), children: context?.compress_threshold ?? 0 },
+          { key: "prefix_cache", label: t("chat.contextInspectorPrefixCache"), children: hasCache ? `${formatCompactNumber(cacheable)} (${cacheRatio}%)` : "—" },
+          { key: "cache_hit", label: t("chat.contextInspectorCacheHitRate"), children: hasRealUsage && realUsage ? `${realUsage.hit_rate_percent.toFixed(1)}% · ${realUsage.calls} calls` : "—" },
           { key: "skills", label: t("chat.contextInspectorActiveSkills"), children: context?.active_skill_count ?? 0 },
           { key: "approvals", label: t("chat.contextInspectorPendingPermissions"), children: context?.pending_permission_count ?? 0 },
         ]}

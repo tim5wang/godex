@@ -60,13 +60,13 @@ export function toMermaidSource(graph: AgentGraphView): string {
   lines.push("  classDef gx-blocked fill:#fff7e6,stroke:#fa8c16,color:#ad4e00");
 
   const alias = new Map<string, string>();
-  graph.nodes.forEach((node, i) => {
+  (graph.nodes ?? []).forEach((node, i) => {
     const id = safeId(node.id, i);
     alias.set(node.id, id);
     lines.push(`  ${id}["${escapeLabel(nodeLabel(node))}"]`);
   });
 
-  graph.edges.forEach((edge) => {
+  (graph.edges ?? []).forEach((edge) => {
     const from = alias.get(edge.from);
     const to = alias.get(edge.to);
     if (!from || !to) return;
@@ -74,7 +74,7 @@ export function toMermaidSource(graph: AgentGraphView): string {
     lines.push(`  ${from} ${edgeLink(edge)}${label} ${to}`);
   });
 
-  graph.nodes.forEach((node, i) => {
+  (graph.nodes ?? []).forEach((node, i) => {
     const cls = STATUS_CLASS[node.status];
     if (cls) {
       lines.push(`  class ${alias.get(node.id) ?? safeId(node.id, i)} ${cls}`);
@@ -103,7 +103,7 @@ export function AgentGraphDiagram({ graph, onSelectNode }: { graph: AgentGraphVi
   // "<diagramId>-<safeNodeId>"; we only need the trailing n_<slug> part.
   const idToNode = useMemo(() => {
     const map = new Map<string, AgentGraphNode>();
-    graph.nodes.forEach((node, i) => {
+    (graph.nodes ?? []).forEach((node, i) => {
       map.set(safeId(node.id, i), node);
     });
     return map;
@@ -152,7 +152,7 @@ export function AgentGraphDiagram({ graph, onSelectNode }: { graph: AgentGraphVi
     };
   }, [code]);
 
-  if (graph.nodes.length === 0) {
+  if ((graph.nodes ?? []).length === 0) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No graph nodes" />;
   }
   if (error) {
@@ -183,7 +183,7 @@ export function AgentGraphDiagram({ graph, onSelectNode }: { graph: AgentGraphVi
       />
       {onSelectNode ? (
         <Space wrap size={[4, 4]} style={{ marginTop: 8 }}>
-          {graph.nodes.map((node, i) => (
+          {(graph.nodes ?? []).map((node, i) => (
             <Tag
               key={node.id}
               color={node.status === "failed" ? "red" : node.status === "running" ? "processing" : node.status === "completed" ? "green" : "default"}
@@ -215,9 +215,9 @@ function AgentGraphTable({ graph }: { graph: AgentGraphView }) {
   return (
     <div>
       <Typography.Text strong>Nodes</Typography.Text>
-      <Table size="small" rowKey="id" pagination={false} dataSource={graph.nodes} columns={nodeColumns} />
+      <Table size="small" rowKey="id" pagination={false} dataSource={graph.nodes ?? []} columns={nodeColumns} />
       <Typography.Text strong>Edges</Typography.Text>
-      <Table size="small" rowKey="id" pagination={false} dataSource={graph.edges} columns={edgeColumns} />
+      <Table size="small" rowKey="id" pagination={false} dataSource={graph.edges ?? []} columns={edgeColumns} />
     </div>
   );
 }

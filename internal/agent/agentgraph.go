@@ -837,7 +837,9 @@ func agentGraphViewFromWorkflowView(base workflowView) agentGraphView {
 //   - handoff: target.HandoffFrom entries not already in DependsOn
 //   - control_flow: stored workflow edges (dynamic append on condition)
 func agentGraphEdgesFromState(state workflowState) []agentGraphEdgeView {
-	var out []agentGraphEdgeView
+	// Return a non-nil empty slice: a nil slice serializes to JSON null and
+	// crashes frontends that iterate graph.edges unconditionally.
+	out := make([]agentGraphEdgeView, 0)
 	seen := make(map[string]struct{})
 	add := func(id, edgeType, from, to, status, verdict string) {
 		if from == "" || to == "" {

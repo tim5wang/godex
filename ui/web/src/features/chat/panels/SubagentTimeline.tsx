@@ -28,6 +28,8 @@ interface LaneEvent {
   rejected?: boolean;
   /** Vertical stagger (px) within a same-time cluster to avoid icon overlap. */
   offsetY?: number;
+  /** Horizontal position (0-100) after rank-based layout. */
+  xPct?: number;
 }
 
 const KIND_META: Record<TimelineEventKind, { color: string; icon: React.ReactNode }> = {
@@ -145,7 +147,17 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
     const times = events.map((e) => e.time);
     const min = Math.min(...times);
     const max = Math.max(...times);
-    return { lanes: laneSet, laneLabels, laneHeights, events, min, max };
+
+    // Rank-based horizontal layout: distribute events evenly in time order
+    // instead of mapping linearly to the global time span. A session whose
+    // events cluster in the first minutes but spans hours (e.g. 11:07-19:46)
+    // would otherwise collapse every dot into the leftmost 1-3% and overlap.
+    const sorted = [...events].sort((a, b) => a.time - b.time);
+    const total = sorted.length;
+    sorted.forEach((e, i) => {
+      e.xPct = total > 1 ? (i / (total - 1)) * 100 : 50;
+    });
+    return { lanes: laneSet, laneLabels, laneHeights, events: sorted, min, max };
   }, [items, showIssuesOnly]);
 
   if (lanes.events.length === 0) {
@@ -157,13 +169,22 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
     );
   }
 
-  const span = Math.max(1, lanes.max - lanes.min);
-  const timeWidth = (time: number) => `${Math.max(2, ((time - lanes.min) / span) * 100)}%`;
-
   return (
     <Space direction="vertical" size={8} style={{ width: "100%" }}>
       <IssuesToggle showIssuesOnly={showIssuesOnly} onChange={setShowIssuesOnly} />
       <div style={{ position: "relative", minHeight: lanes.lanes.reduce((sum, lane) => sum + (lanes.laneHeights[lane] ?? 40), 0), marginLeft: 8 }}>
+        <div
+          style={{
+            position: "absolute",
+            right: 0,
+            top: -2,
+            fontSize: 11,
+            color: "rgba(0,0,0,0.45)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {formatTimelineTime(new Date(lanes.min).toISOString())} → {formatTimelineTime(new Date(lanes.max).toISOString())}
+        </div>
         {lanes.lanes.map((lane) => {
           const laneEvents = lanes.events.filter((e) => e.lane === lane);
           const laneHeight = lanes.laneHeights[lane] ?? 40;
@@ -172,8 +193,12 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
               <span style={{ position: "absolute", left: -8, transform: "translateX(-100%)", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
                 <Typography.Text type="secondary">{lanes.laneLabels[lane] ?? lane}</Typography.Text>
               </span>
+              {/* Swim-lane baseline: a horizontal line every event sits on. */}
+              <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "rgba(128,128,128,0.22)" }} />
               {laneEvents.map((event, i) => {
                 const meta = KIND_META[event.kind];
+                const offsetY = event.offsetY ?? 0;
+                const xPct = event.xPct ?? 50;
                 return (
                   <Popover
                     key={`${event.time}-${i}`}
@@ -193,12 +218,25 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
                     trigger="click"
                   >
                     <Tooltip title={event.label}>
+                      {offsetY !== 0 ? (
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: `${xPct}%`,
+                            top: offsetY > 0 ? "calc(50% + 11px)" : "auto",
+                            bottom: offsetY < 0 ? "calc(50% + 11px)" : "auto",
+                            width: 1,
+                            height: Math.max(2, Math.abs(offsetY) - 11),
+                            background: "rgba(128,128,128,0.35)",
+                          }}
+                        />
+                      ) : null}
                       <span
                         style={{
                           position: "absolute",
-                          left: timeWidth(event.time),
+                          left: `${xPct}%`,
                           top: "50%",
-                          transform: `translate(-50%, calc(-50% + ${event.offsetY ?? 0}px))`,
+                          transform: `translate(-50%, calc(-50% + ${offsetY}px))`,
                           cursor: "pointer",
                           display: "inline-flex",
                           alignItems: "center",

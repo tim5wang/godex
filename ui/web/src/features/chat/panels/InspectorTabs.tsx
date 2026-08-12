@@ -32,6 +32,7 @@ export function InspectorTabs(props: {
   timelineFilters: TimelineFilterState;
   currentTurnId: string;
   canPreviousTimelinePage: boolean;
+  timelinePageIndex?: number;
   onTimelineFiltersChange: (filters: TimelineFilterState) => void;
   onNextTimelinePage: () => void;
   onPreviousTimelinePage: () => void;
@@ -201,6 +202,7 @@ export function InspectorTabs(props: {
                 filters={props.timelineFilters}
                 currentTurnId={props.currentTurnId}
                 canPrevious={props.canPreviousTimelinePage}
+                pageIndex={props.timelinePageIndex}
                 onFiltersChange={props.onTimelineFiltersChange}
                 onNextPage={props.onNextTimelinePage}
                 onPreviousPage={props.onPreviousTimelinePage}

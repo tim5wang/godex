@@ -273,6 +273,12 @@ function classifyWorkerStatus(worker: FeedItem): TaskOutcomeStatus {
     return "running";
   }
   if (status === "completed") {
+    // Read-only subagent (no write_scope) that finished has no diff to
+    // review; normalize stale pending/empty merge status to no_changes so
+    // it never surfaces as a ready_for_review outcome.
+    if ((merge === "" || merge === "pending") && !(worker.writeScope?.length)) {
+      return "merged";
+    }
     return "ready_for_review";
   }
   if (["failed", "error", "cancelled", "canceled", "interrupted", "timeout"].includes(status)) {
@@ -353,8 +359,9 @@ function pathsShareSpecificPrefix(left: string, right: string) {
 }
 
 function longTaskDetail(longTask: LongTaskView) {
-  const running = longTask.stories.find((story) => story.status === "running");
-  const failed = longTask.stories.find((story) => story.status === "error" || story.status === "failed");
+  const stories = longTask.stories ?? [];
+  const running = stories.find((story) => story.status === "running");
+  const failed = stories.find((story) => story.status === "error" || story.status === "failed");
   const parts = [`${longTask.status || "unknown"}`, `${longTask.completed}/${longTask.total} done`];
   if (longTask.pending > 0) {
     parts.push(`pending ${longTask.pending}`);
@@ -378,7 +385,7 @@ function longTaskDetail(longTask: LongTaskView) {
 }
 
 function firstStoryTitle(longTask: LongTaskView) {
-  return longTask.stories.find((story) => story.title?.trim())?.title || "";
+  return (longTask.stories ?? []).find((story) => story.title?.trim())?.title || "";
 }
 
 function firstNonBlank(...values: Array<string | undefined>) {

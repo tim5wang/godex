@@ -981,6 +981,15 @@ func (s *subagentJobStore) Finish(id string, status subagentJobStatus, result, e
 	job.Error = strings.TrimSpace(errorText)
 	job.UpdatedAt = now
 	job.FinishedAt = now
+	// A read-only subagent (no write_scope) that finished has nothing in
+	// its worktree to merge or review. Persist no_changes so SSE/timeline
+	// events and API views agree, instead of surfacing an un-actionable
+	// "待审核" item in the Web UI. Already-recorded terminal statuses
+	// (merged/failed/conflicted) are preserved; this fills the pending slot.
+	if status == subagentStatusCompleted && len(job.WriteScope) == 0 &&
+		(job.MergeStatus == "" || job.MergeStatus == subagentMergePending) {
+		job.MergeStatus = subagentMergeNoChanges
+	}
 	progress := subagentProgressEvent{
 		Time:    now,
 		Phase:   string(status),

@@ -11,6 +11,7 @@ export function TimelineList({
   filters,
   currentTurnId,
   canPrevious,
+  pageIndex,
   onFiltersChange,
   onNextPage,
   onPreviousPage,
@@ -21,6 +22,7 @@ export function TimelineList({
   filters: TimelineFilterState;
   currentTurnId: string;
   canPrevious: boolean;
+  pageIndex?: number;
   onFiltersChange: (filters: TimelineFilterState) => void;
   onNextPage: () => void;
   onPreviousPage: () => void;
@@ -29,11 +31,27 @@ export function TimelineList({
   const items = page?.items ?? fallbackItems.slice().reverse();
   const total = page?.total ?? fallbackItems.length;
   const hasMore = page?.has_more ?? false;
+  const filterActive =
+    !(
+      filters.types.length === defaultTimelineTypes.length &&
+      defaultTimelineTypes.every((type) => filters.types.includes(type)) &&
+      !filters.q &&
+      !filters.jobId &&
+      !filters.turnId &&
+      !filters.currentTurnOnly &&
+      filters.limit === 50
+    );
   if (items.length === 0) {
     return (
       <Space direction="vertical" size={12} style={{ width: "100%" }}>
         <TimelineFilters filters={filters} loading={loading} currentTurnId={currentTurnId} onChange={onFiltersChange} />
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("chat.noTimelineEvents")} />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={filterActive ? t("chat.noTimelineEventsMatch") : t("chat.noTimelineEvents")}>
+          {filterActive ? (
+            <Button size="small" onClick={() => onFiltersChange(defaultTimelineFilters())}>
+              {t("chat.timelineResetFilters")}
+            </Button>
+          ) : null}
+        </Empty>
       </Space>
     );
   }
@@ -41,7 +59,7 @@ export function TimelineList({
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
       <TimelineFilters filters={filters} loading={loading} currentTurnId={currentTurnId} onChange={onFiltersChange} />
       <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-        <Typography.Text type="secondary">{total} events</Typography.Text>
+        <Typography.Text type="secondary">{total} events{pageIndex !== undefined ? ` · ${t("chat.timelinePage", { page: pageIndex + 1 })}` : ""}</Typography.Text>
         <Space>
           <Button size="small" disabled={!canPrevious || loading} onClick={onPreviousPage}>
             Previous
@@ -69,13 +87,17 @@ export function TimelineList({
                     <Typography.Text strong>{timelineEventLabel(event)}</Typography.Text>
                     <Tag>{event.type}</Tag>
                     {event.turn_id ? (
-                      <Tooltip title={event.turn_id}>
-                        <Tag color="blue">{shortTurnId(event.turn_id)}</Tag>
+                      <Tooltip title={`${t("chat.timelineFilterByTurn")}: ${event.turn_id}`}>
+                        <Tag color="blue" style={{ cursor: "pointer" }} onClick={() => onFiltersChange({ ...filters, turnId: event.turn_id ?? "", currentTurnOnly: false })}>
+                          {shortTurnId(event.turn_id)}
+                        </Tag>
                       </Tooltip>
                     ) : null}
                     {jobID ? (
-                      <Tooltip title={jobID}>
-                        <Tag color="purple">{shortTurnId(jobID)}</Tag>
+                      <Tooltip title={`${t("chat.timelineFilterByJob")}: ${jobID}`}>
+                        <Tag color="purple" style={{ cursor: "pointer" }} onClick={() => onFiltersChange({ ...filters, jobId: jobID })}>
+                          {shortTurnId(jobID)}
+                        </Tag>
                       </Tooltip>
                     ) : null}
                     <Typography.Text type="secondary">{formatTimelineTime(event.timestamp)}</Typography.Text>

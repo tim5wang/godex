@@ -14,6 +14,7 @@ import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimelin
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
 import { isLongTaskRefluxMessage, LongTaskRefluxBubble } from "./LongTaskRefluxBubble";
+import { readPersistedRefluxDismissed, writePersistedRefluxDismissed } from "./refluxDismissPersistence";
 import { buildTaskOutcomes } from "./taskCenterOutcome";
 import { locatorMatchesRoute, buildChatRouteForSession } from "../../lib/chatRoutes";
 import { writeClipboardText } from "../../lib/clipboard";
@@ -118,8 +119,11 @@ export function ChatPage() {
   // renders the message itself; the bubble is a floating
   // notification that the user can act on without scrolling to
   // the reflux message. We keep the last 5 refluxes (newest at
-  // the front) and let the user dismiss them.
-  const [refluxDismissed, setRefluxDismissed] = useState<Record<string, boolean>>({});
+  // the front) and let the user dismiss them. The dismissed set is
+  // persisted to localStorage (keyed by longtaskId:status) so a
+  // dismissed popup does not reappear after a refresh or session
+  // re-entry.
+  const [refluxDismissed, setRefluxDismissed] = useState<Set<string>>(() => readPersistedRefluxDismissed());
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   // Whether the feed should keep scrolling to the newest content. When the
   // user scrolls up to read history, stickToBottom turns off and new model
@@ -563,13 +567,15 @@ export function ChatPage() {
   // chat feed. We pick the last 5 reflux items (newest first) and
   // hide the ones the user has dismissed. The strict authority is
   // the metadata.kind marker the agent sets; the body sniff is a
-  // fallback for messages that lost the metadata.
+  // fallback for messages that lost the metadata. Dismissal is
+  // checked against the stable "longtaskId:status" key (item ids are
+  // index/counter-based and change across reloads, so they cannot be
+  // used to remember a dismissal).
   const refluxBubbles = useMemo(() => {
-    const out: Array<{ id: string; longtaskId: string; status: string; content: string }> = [];
+    const out: Array<{ id: string; longtaskId: string; status: string; content: string; dismissKey: string }> = [];
     for (let i = items.length - 1; i >= 0 && out.length < 5; i--) {
       const it = items[i];
       if (it.kind !== "assistant") continue;
-      if (refluxDismissed[it.id]) continue;
       // Look for a metadata marker. The chat feed exposes
       // metadata via the protocol envelope upstream of
       // mergeChronologicalFeedItems; we use the body sniff as
@@ -578,7 +584,12 @@ export function ChatPage() {
       const m = it.body.match(/LongTask\s+(\S+):\s+(\S+)/);
       const longtaskId = m ? m[1] : "";
       const status = m ? m[2] : "";
-      out.push({ id: it.id, longtaskId, status, content: it.body });
+      // Dismissal key: prefer the stable longtask id + status; fall
+      // back to the feed item id (in-memory only) for malformed
+      // reflux bodies that could not be parsed.
+      const dismissKey = longtaskId ? `${longtaskId}:${status}` : it.id;
+      if (refluxDismissed.has(dismissKey)) continue;
+      out.push({ id: it.id, longtaskId, status, content: it.body, dismissKey });
     }
     return out;
   }, [items, refluxDismissed]);
@@ -1173,6 +1184,7 @@ export function ChatPage() {
       timelineFilters={timelineFilters}
       currentTurnId={currentTimelineTurnId}
       canPreviousTimelinePage={timelineCursorStack.length > 0}
+      timelinePageIndex={timelineCursorStack.length}
       onTimelineFiltersChange={updateTimelineFilters}
       onNextTimelinePage={goToNextTimelinePage}
       onPreviousTimelinePage={goToPreviousTimelinePage}
@@ -1557,7 +1569,13 @@ export function ChatPage() {
               status={b.status}
               content={b.content}
               stackIndex={i}
-              onDismiss={() => setRefluxDismissed((prev) => ({ ...prev, [b.id]: true }))}
+              onDismiss={() => {
+                if (refluxDismissed.has(b.dismissKey)) return;
+                const next = new Set(refluxDismissed);
+                next.add(b.dismissKey);
+                setRefluxDismissed(next);
+                writePersistedRefluxDismissed(next);
+              }}
             />
           ))}
         </>

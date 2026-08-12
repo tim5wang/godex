@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { SessionTimelineEntry } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
-import { Empty, Space, Typography, Tag, Tooltip, Button, Popover, Alert } from "antd";
+import { Empty, Space, Typography, Tag, Tooltip, Button, Popover } from "antd";
 import { PlusCircleOutlined, SendOutlined, SyncOutlined, AuditOutlined, FlagOutlined, CaretRightOutlined } from "@ant-design/icons";
 import { formatTimelineTime } from "../../../lib/timelineUtils";
 
@@ -26,6 +26,8 @@ interface LaneEvent {
   label: string;
   detail: string;
   rejected?: boolean;
+  /** Vertical stagger (px) within a same-time cluster to avoid icon overlap. */
+  offsetY?: number;
 }
 
 const KIND_META: Record<TimelineEventKind, { color: string; icon: React.ReactNode }> = {
@@ -70,6 +72,13 @@ function classifyEvent(event: SessionTimelineEntry): LaneEvent | null {
       return { kind, lane, laneLabel, time, label, detail, rejected };
     }
     case "runner_phase_changed": {
+      // This panel is the subagent swim-lane timeline. Main-agent runner
+      // phases (actor_kind defaults to "main" in the backend) are emitted
+      // several times per turn and would all collapse into one "main" lane
+      // with overlapping icons, so only subagent phase transitions qualify.
+      if (actorKind !== "subagent") {
+        return null;
+      }
       const lower = phase.toLowerCase();
       let kind: TimelineEventKind = "phase";
       if (lower.includes("review")) kind = "review";
@@ -92,17 +101,51 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
       .filter((e): e is LaneEvent => e !== null)
       .filter((e) => !showIssuesOnly || e.rejected || e.kind === "iterate");
     if (events.length === 0) {
-      return { lanes: [] as string[], laneLabels: {} as Record<string, string>, events: [] as LaneEvent[], min: 0, max: 0 };
+      return {
+        lanes: [] as string[],
+        laneLabels: {} as Record<string, string>,
+        laneHeights: {} as Record<string, number>,
+        events: [] as LaneEvent[],
+        min: 0,
+        max: 0,
+      };
     }
     const laneSet = Array.from(new Set(events.map((e) => e.lane))).sort();
     const laneLabels: Record<string, string> = {};
     for (const event of events) {
       laneLabels[event.lane] = event.laneLabel;
     }
+
+    // Stagger events that land in the same time cluster (events within one
+    // cluster share a near-identical x position, e.g. a burst of job updates
+    // within the same second). Each cluster member gets an alternating vertical
+    // offset and the lane height grows to fit the widest cluster, so icons no
+    // longer pile on top of each other in a single row.
+    const CLUSTER_MS = 900;
+    const STAGGER_PX = 11;
+    const laneHeights: Record<string, number> = {};
+    for (const lane of laneSet) {
+      const laneEvents = events.filter((e) => e.lane === lane).sort((a, b) => a.time - b.time);
+      let clusterStart = -Infinity;
+      let clusterIndex = 0;
+      let maxAbsOffset = 0;
+      for (const event of laneEvents) {
+        if (event.time - clusterStart >= CLUSTER_MS) {
+          clusterStart = event.time;
+          clusterIndex = 0;
+        }
+        const direction = clusterIndex % 2 === 0 ? 1 : -1;
+        event.offsetY = direction * (1 + Math.floor(clusterIndex / 2)) * STAGGER_PX;
+        maxAbsOffset = Math.max(maxAbsOffset, Math.abs(event.offsetY));
+        clusterIndex++;
+      }
+      laneHeights[lane] = 40 + maxAbsOffset * 2 + 8;
+    }
+
     const times = events.map((e) => e.time);
     const min = Math.min(...times);
     const max = Math.max(...times);
-    return { lanes: laneSet, laneLabels, events, min, max };
+    return { lanes: laneSet, laneLabels, laneHeights, events, min, max };
   }, [items, showIssuesOnly]);
 
   if (lanes.events.length === 0) {
@@ -120,11 +163,12 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
   return (
     <Space direction="vertical" size={8} style={{ width: "100%" }}>
       <IssuesToggle showIssuesOnly={showIssuesOnly} onChange={setShowIssuesOnly} />
-      <div style={{ position: "relative", minHeight: lanes.lanes.length * 40 + 8, marginLeft: 8 }}>
-        {lanes.lanes.map((lane, laneIndex) => {
+      <div style={{ position: "relative", minHeight: lanes.lanes.reduce((sum, lane) => sum + (lanes.laneHeights[lane] ?? 40), 0), marginLeft: 8 }}>
+        {lanes.lanes.map((lane) => {
           const laneEvents = lanes.events.filter((e) => e.lane === lane);
+          const laneHeight = lanes.laneHeights[lane] ?? 40;
           return (
-            <div key={lane} style={{ position: "relative", height: 40, borderBottom: "1px solid rgba(128,128,128,0.15)", display: "flex", alignItems: "center" }}>
+            <div key={lane} style={{ position: "relative", height: laneHeight, borderBottom: "1px solid rgba(128,128,128,0.15)", display: "flex", alignItems: "center" }}>
               <span style={{ position: "absolute", left: -8, transform: "translateX(-100%)", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
                 <Typography.Text type="secondary">{lanes.laneLabels[lane] ?? lane}</Typography.Text>
               </span>
@@ -154,7 +198,7 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
                           position: "absolute",
                           left: timeWidth(event.time),
                           top: "50%",
-                          transform: "translate(-50%, -50%)",
+                          transform: `translate(-50%, calc(-50% + ${event.offsetY ?? 0}px))`,
                           cursor: "pointer",
                           display: "inline-flex",
                           alignItems: "center",

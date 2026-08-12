@@ -344,7 +344,9 @@ function SubagentOverview({ items }: { items: FeedItem[] }) {
 
 function SubagentQuickMeta({ item }: { item: FeedItem }) {
   const role = item.roleName || item.roleId || item.agentType || "subagent";
-  const lastActivity = item.lastRecoveryHint || item.lastRunnerPhase || item.phase || item.lastToolName || item.lastMessage || item.summary || item.status || "";
+  const phase = item.lastRunnerPhase || item.phase || "";
+  const lastTool = item.lastToolName || "";
+  const lastActivity = item.lastRecoveryHint || item.lastMessage || item.summary || item.status || "";
   return (
     <div className="subagent-quick-meta">
       <Space direction="vertical" size={4} style={{ width: "100%" }}>
@@ -356,6 +358,7 @@ function SubagentQuickMeta({ item }: { item: FeedItem }) {
           </Tooltip>
           {item.sequence ? <Tag>#{item.sequence}</Tag> : null}
           <Tag color="purple">{role}</Tag>
+          {phase ? <Tag color="blue">{phase}</Tag> : null}
           {item.parentTurnId ? (
             <Tooltip title={item.parentTurnId}>
               <Tag color="blue">parent {shortTurnId(item.parentTurnId)}</Tag>
@@ -364,10 +367,20 @@ function SubagentQuickMeta({ item }: { item: FeedItem }) {
           {item.modelRequestCount ? <Tag>{item.modelRequestCount} calls</Tag> : null}
           {item.toolCallCount ? <Tag>{item.toolCallCount} tools</Tag> : null}
           {item.contextBudget ? <Tag color="cyan">budget {formatCompactNumber(item.contextBudget)}</Tag> : null}
+          {item.capabilitySummary?.length ? (
+            <Tooltip title={item.capabilitySummary.join(", ")}>
+              <Tag color="geekblue">{item.capabilitySummary.length} capabilities</Tag>
+            </Tooltip>
+          ) : null}
         </Space>
         <Typography.Text type="secondary" ellipsis={{ tooltip: item.objective || lastActivity }}>
           {item.objective ? `Objective: ${item.objective}` : "Objective not recorded"}
         </Typography.Text>
+        {lastTool ? (
+          <Typography.Text type="secondary" ellipsis={{ tooltip: lastTool }}>
+            Last tool: {lastTool}
+          </Typography.Text>
+        ) : null}
         <Typography.Text type="secondary" ellipsis={{ tooltip: lastActivity }}>
           Last activity: {lastActivity || "none"}
         </Typography.Text>

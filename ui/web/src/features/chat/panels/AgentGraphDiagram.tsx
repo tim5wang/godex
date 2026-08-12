@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Empty, Spin, Space, Table, Tag, Typography } from "antd";
 import type { AgentGraphView, AgentGraphNode, AgentGraphEdge } from "../../../lib/types";
 
@@ -18,6 +18,7 @@ const STATUS_CLASS: Record<string, string> = {
   failed: "gx-failed",
   blocked: "gx-blocked",
 };
+const STATUS_CLASS_FALLBACK = "gx-unknown";
 
 // edge_type -> mermaid link shape
 function edgeLink(edge: AgentGraphEdge): string {
@@ -58,6 +59,7 @@ export function toMermaidSource(graph: AgentGraphView): string {
   lines.push("  classDef gx-completed fill:#f6ffed,stroke:#52c41a,color:#237804");
   lines.push("  classDef gx-failed fill:#fff2f0,stroke:#ff4d4f,color:#cf1322");
   lines.push("  classDef gx-blocked fill:#fff7e6,stroke:#fa8c16,color:#ad4e00");
+  lines.push("  classDef gx-unknown fill:#fafafa,stroke:#8c8c8c,color:#595959");
 
   const alias = new Map<string, string>();
   (graph.nodes ?? []).forEach((node, i) => {
@@ -75,10 +77,8 @@ export function toMermaidSource(graph: AgentGraphView): string {
   });
 
   (graph.nodes ?? []).forEach((node, i) => {
-    const cls = STATUS_CLASS[node.status];
-    if (cls) {
-      lines.push(`  class ${alias.get(node.id) ?? safeId(node.id, i)} ${cls}`);
-    }
+    const cls = STATUS_CLASS[node.status] ?? STATUS_CLASS_FALLBACK;
+    lines.push(`  class ${alias.get(node.id) ?? safeId(node.id, i)} ${cls}`);
   });
   return lines.join("\n");
 }
@@ -97,6 +97,9 @@ export function AgentGraphDiagram({ graph, onSelectNode }: { graph: AgentGraphVi
   const code = useMemo(() => toMermaidSource(graph), [graph]);
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // P1-1: keep the last successfully rendered frame so running refreshes don't
+  // blank the diagram while the new mermaid render is in flight.
+  const renderedCodeRef = useRef<string | null>(null);
 
   // A2: map mermaid g-element ids back to backend node ids so clicks on the
   // rendered SVG can open the node detail drawer. mermaid ids look like
@@ -129,7 +132,6 @@ export function AgentGraphDiagram({ graph, onSelectNode }: { graph: AgentGraphVi
 
   useEffect(() => {
     let cancelled = false;
-    setSvg(null);
     setError(null);
     (async () => {
       try {
@@ -142,9 +144,16 @@ export function AgentGraphDiagram({ graph, onSelectNode }: { graph: AgentGraphVi
         });
         const id = nextDiagramId();
         const { svg: rendered } = await mermaid.render(id, code);
-        if (!cancelled) setSvg(rendered);
+        if (!cancelled) {
+          setSvg(rendered);
+          renderedCodeRef.current = code;
+        }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        // Only surface a hard failure when nothing has rendered yet; otherwise
+        // keep the last good frame (it still matches the data it was built from).
+        if (!cancelled && renderedCodeRef.current === null) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
       }
     })();
     return () => {

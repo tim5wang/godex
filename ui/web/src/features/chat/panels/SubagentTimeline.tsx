@@ -40,7 +40,7 @@ const KIND_META: Record<TimelineEventKind, { color: string; icon: React.ReactNod
   phase: { color: "default", icon: <CaretRightOutlined /> },
 };
 
-function classifyEvent(event: SessionTimelineEntry): LaneEvent | null {
+function classifyEvent(event: SessionTimelineEntry, actorJobMap?: ReadonlyMap<string, string>): LaneEvent | null {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const time = new Date(event.timestamp).getTime();
   if (Number.isNaN(time)) return null;
@@ -58,7 +58,7 @@ function classifyEvent(event: SessionTimelineEntry): LaneEvent | null {
   const actorKind = String(payload.actor_kind ?? "");
   const jobID = String(payload.job_id ?? "");
   const runnerID = String(payload.runner_id ?? "");
-  const subagentKey = jobID || runnerID || String(payload.actor_id ?? "");
+  const subagentKey = jobID || runnerID || actorJobMap?.get(String(payload.actor_id ?? "")) || String(payload.actor_id ?? "");
   const isSubagentEvent = actorKind === "subagent" || event.type === "subagent_job_updated";
   const lane = isSubagentEvent
     ? subagentKey || "subagent"
@@ -98,10 +98,21 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
   const [showIssuesOnly, setShowIssuesOnly] = useState(onlyIssues);
 
   const lanes = useMemo(() => {
-    const events = items
-      .map(classifyEvent)
-      .filter((e): e is LaneEvent => e !== null)
-      .filter((e) => !showIssuesOnly || e.rejected || e.kind === "iterate");
+    // P1-3: normalize subagent lanes by actor_id -> job_id. A job whose early
+    // events only carry actor_id (before the backend assigns job_id) would
+    // otherwise split into two lanes; look up the job_id seen elsewhere for
+    // the same actor to keep the whole job on one lane.
+    const actorJobMap = new Map<string, string>();
+    for (const item of items) {
+      const payload = (item.payload ?? {}) as Record<string, unknown>;
+      const actorID = String(payload.actor_id ?? "");
+      const jobID = String(payload.job_id ?? "");
+      if (actorID && jobID && !actorJobMap.has(actorID)) actorJobMap.set(actorID, jobID);
+    }
+    const rawEvents = items
+      .map((e) => classifyEvent(e, actorJobMap))
+      .filter((e): e is LaneEvent => e !== null);
+    const events = rawEvents.filter((e) => !showIssuesOnly || e.rejected || e.kind === "iterate");
     if (events.length === 0) {
       return {
         lanes: [] as string[],
@@ -110,6 +121,7 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
         events: [] as LaneEvent[],
         min: 0,
         max: 0,
+        rawCount: rawEvents.length,
       };
     }
     const laneSet = Array.from(new Set(events.map((e) => e.lane))).sort();
@@ -154,17 +166,31 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
     // would otherwise collapse every dot into the leftmost 1-3% and overlap.
     const sorted = [...events].sort((a, b) => a.time - b.time);
     const total = sorted.length;
+    // P2-4: keep a small margin at both ends so a 2-event timeline (0%/100%)
+    // doesn't pin dots flush against the panel edges.
+    const X_MIN = 2;
+    const X_MAX = 98;
     sorted.forEach((e, i) => {
-      e.xPct = total > 1 ? (i / (total - 1)) * 100 : 50;
+      e.xPct = total > 1 ? X_MIN + (i / (total - 1)) * (X_MAX - X_MIN) : 50;
     });
-    return { lanes: laneSet, laneLabels, laneHeights, events: sorted, min, max };
+    return { lanes: laneSet, laneLabels, laneHeights, events: sorted, min, max, rawCount: rawEvents.length };
   }, [items, showIssuesOnly]);
 
   if (lanes.events.length === 0) {
+    const filteredOut = showIssuesOnly && lanes.rawCount > 0;
     return (
       <Space direction="vertical" size={8} style={{ width: "100%" }}>
         <IssuesToggle showIssuesOnly={showIssuesOnly} onChange={setShowIssuesOnly} />
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("chat.noSubagentTimeline")} />
+        {filteredOut ? (
+          <>
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("chat.noSubagentTimelineFiltered")} />
+            <Button size="small" onClick={() => setShowIssuesOnly(false)}>
+              {t("chat.timelineShowAllEvents")}
+            </Button>
+          </>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("chat.noSubagentTimeline")} />
+        )}
       </Space>
     );
   }
@@ -223,6 +249,7 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
                           style={{
                             position: "absolute",
                             left: `${xPct}%`,
+                            transform: "translateX(-50%)",
                             top: offsetY > 0 ? "calc(50% + 11px)" : "auto",
                             bottom: offsetY < 0 ? "calc(50% + 11px)" : "auto",
                             width: 1,

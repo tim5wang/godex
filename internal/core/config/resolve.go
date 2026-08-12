@@ -802,6 +802,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 		Memory: MemoryConfig{
 			Strategy:         normalizeMemoryStrategyKind(file.Memory.Strategy),
 			ConsolidateAfter: file.Memory.ConsolidateAfter,
+			SessionScope:     file.Memory.SessionScope,
 		},
 		MaxTokens:         defaultProfile.MaxTokens,
 		HomeDir:           homeDir,
@@ -908,6 +909,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 				ShellAllowPatterns: append([]string{}, file.Tools.Execution.ShellAllowPatterns...),
 				ShellDenyPatterns:  append([]string{}, file.Tools.Execution.ShellDenyPatterns...),
 				ToolTimeoutSeconds: file.Tools.Execution.ToolTimeoutSeconds,
+				ScopeWrite:         file.Tools.Execution.ScopeWrite,
 			},
 			Browser: BrowserConfig{
 				Enabled:              file.Tools.Browser.Enabled,

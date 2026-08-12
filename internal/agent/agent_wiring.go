@@ -34,16 +34,7 @@ func buildDependencies(cfg *config.Config) dependencies {
 	client := callerForConfigProfile(cfg, cfg.DefaultModelProfile())
 	skillLoader := newSkillLoader(cfg, client)
 	memoryMgr := memory.NewManager(cfg.MemoryDir)
-	memoryExt := memory.NewExtractor(memoryMgr, cfg.TempDir)
-	memoryStrategy := memory.NewStrategy(memory.StrategyOptions{
-		Kind:    memory.ParseStrategyKind(cfg.Memory.Strategy),
-		Extract: memoryExt,
-		Consolidator: memory.NewConsolidator(memory.ConsolidatorOptions{
-			Manager: memoryMgr,
-			OneShot: memoryConsolidationOneShot(client, cfg),
-			AfterN:  cfg.Memory.ConsolidateAfter,
-		}),
-	})
+	memoryExt, memoryStrategy := buildMemoryStack(cfg, client, memoryMgr)
 	compressor := compress.NewCompressor(cfg.TranscriptsDir)
 	compressor.SetKeepRecent(cfg.Compaction.KeepRecentMessages)
 	ruleSummarizer := compress.NewRuleBasedSessionSummarizer(compressor)
@@ -107,6 +98,23 @@ func apiRequestTimeout(cfg *config.Config) time.Duration {
 		return 600 * time.Second
 	}
 	return time.Duration(cfg.APITimeoutSeconds) * time.Second
+}
+
+// buildMemoryStack wires the extractor + strategy on top of a memory manager.
+// It is shared by the default workspace-wide wiring and the per-session scoped
+// wiring (roadmap 6.2) so both paths get identical extraction/consolidation.
+func buildMemoryStack(cfg *config.Config, client conversation.Caller, memoryMgr *memory.Manager) (*memory.Extractor, memory.Strategy) {
+	memoryExt := memory.NewExtractor(memoryMgr, cfg.TempDir)
+	memoryStrategy := memory.NewStrategy(memory.StrategyOptions{
+		Kind:    memory.ParseStrategyKind(cfg.Memory.Strategy),
+		Extract: memoryExt,
+		Consolidator: memory.NewConsolidator(memory.ConsolidatorOptions{
+			Manager: memoryMgr,
+			OneShot: memoryConsolidationOneShot(client, cfg),
+			AfterN:  cfg.Memory.ConsolidateAfter,
+		}),
+	})
+	return memoryExt, memoryStrategy
 }
 
 // memoryConsolidationOneShot adapts the wired conversation caller into the

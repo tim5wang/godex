@@ -206,6 +206,7 @@ func defaultConfigFile() ConfigFile {
 				SSHWorkspace:       "",
 				SSHOptions:         []string{},
 				ToolTimeoutSeconds: 1800,
+				ScopeWrite:         true,
 			},
 			Browser: BrowserSection{
 				Enabled:              false,

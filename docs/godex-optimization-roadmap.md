@@ -403,9 +403,17 @@ orchestrator (完整工具集)
 
 **参考**：`temp/qm/src/security/security-screener.ts`（269 行）+ `security-posture.ts`
 
-#### 6.2 Scope 隔离模型
+#### 6.2 Scope 隔离模型 ✅（2026-08-12）
 
-**方案**：定义 `ScopeId` 类型，在 memory/files/sandbox 中引入 scope 参数。
+**方案（已落地）**：
+- ✅ `internal/core/scope`：`ScopeId`（`<kind>:<ref>`，kind ∈ session/personal/org）+ `New`/`Parse`/`Session`/`Personal`/`Org`/`IsShared` + `StorageKey` 防穿越（清洗 `..`/`/` + hash 后缀）
+- ✅ memory 按 scope 分区：`NewScopedManager(memoryDir, scopeKey)` 每 session 一套目录（`dir/<scope-key>/`），backend `OpenSession` 接线，org/legacy 根目录兼容层；隔离测试（session 间互相不可见、org 合并查询可见）
+- ✅ sandbox：`Sandbox.ScopeID()` + `LocalOptions.Scope`，per-scope workspace/tmp/artifact 目录推导，`Rebuild` 保留 scope
+- ✅ 写工具路径限定：`ResolveWritePath`（`..` 逃逸/绝对路径越界拒绝）+ `NewScopeWriteInterceptor`（write_file/edit_file/attach_file 拦截）+ 宽松开关 `tools.execution.scope_write`（默认 true）
+- ✅ 审计/timeline：`SubagentJobPayload`/`RunnerPhasePayload` 新增 `scope_label`（可选字段向后兼容），subagent 事件与 runner phase 事件填充
+- ✅ 测试：scope 单测（构造/解析/非法/存储键防穿越）+ memory 隔离 + sandbox per-scope + 写路径拦截（12+ 新测试）全绿；全量回归无新增失败（agent 2 个 + backend 1 个均为基线既有）
+
+**参考**：`temp/qm/src/`（types.ts scopeId / scope-storage-key / memory-service / scoped-event-sink）+ `docs/scope-isolation-design.md`
 
 #### 6.3 Session 树（可分支） ✅（2026-08-12）
 
@@ -472,7 +480,7 @@ orchestrator (完整工具集)
 | ✅ | 5.2 | Turn Error 分层 | 低 | 中 | 无 | 已完（2026-08-11） |
 | ✅ | 5.3 | 持久化 Map 抽象 | 中 | 中 | 无 | 已完（2026-08-11，接口+SQLite；替换试点发现有序数组语义冲突） |
 | ⚪ | 6.1 | 安全筛查器 | 中 | 中 | 无 | 1w |
-| ⚪ | 6.2 | Scope 隔离模型 | 中 | 中 | 3.3 | 1w |
+| ✅ | 6.2 | Scope 隔离模型 | 中 | 中 | 3.3 | 已完（2026-08-12） |
 | ⚪ | 6.3 | Session 树 | 高 | 高 | 3.3+5.3 | 3w |
 | ✅ | 6.4 | 多引擎热切换 | 高 | 中 | 5.1 | 已完（2026-08-12） |
 | ⚪ | 6.5 | 自然语言创建 longtask | 中 | 中 | 2.4+4.1 | 1w |

@@ -110,6 +110,8 @@ type MemoryConfig struct {
 	// ConsolidateAfter is the pending-candidate count that triggers LLM
 	// consolidation when Strategy is consolidated. <=0 means default.
 	ConsolidateAfter int
+	// SessionScope isolates durable memory per session (roadmap 6.2).
+	SessionScope bool
 }
 
 type AgentDefaultProfilesConfig struct {
@@ -383,6 +385,8 @@ type ToolExecutionConfig struct {
 	ShellAllowPatterns []string
 	ShellDenyPatterns  []string
 	ToolTimeoutSeconds int
+	// ScopeWrite rejects write-tool paths escaping the scope root (6.2 M4).
+	ScopeWrite bool
 }
 
 // GlobConfig controls the built-in glob tool.

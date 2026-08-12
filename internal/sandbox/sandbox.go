@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/platform/workspacefs"
 )
@@ -16,6 +17,7 @@ const LifecycleLocal Lifecycle = "local"
 
 type LocalOptions struct {
 	ID           string
+	Scope        scope.Id
 	WorkspaceDir string
 	TempDir      string
 	ArtifactDir  string
@@ -50,6 +52,9 @@ type Sandbox interface {
 	WorkspaceDir() string
 	TempDir() string
 	ArtifactDir() string
+	// ScopeID returns the scope this sandbox is bound to (roadmap 6.2), or
+	// "" when unspecified (org/shared layer).
+	ScopeID() scope.Id
 	ToolBinding() ToolBinding
 	Info() Info
 	FileSystem() (workspacefs.FS, error)
@@ -60,6 +65,7 @@ type Sandbox interface {
 // LocalSandbox is the default local-filesystem Sandbox implementation.
 type LocalSandbox struct {
 	id           string
+	scope        scope.Id
 	lifecycle    Lifecycle
 	workspaceDir string
 	tempDir      string
@@ -78,8 +84,23 @@ func StableLocalID(workspaceDir string) string {
 func NewLocal(opts LocalOptions) *LocalSandbox {
 	workspaceDir := cleanPath(opts.WorkspaceDir)
 	tempDir := cleanPath(opts.TempDir)
+	artifactDir := cleanPath(opts.ArtifactDir)
+	// Roadmap 6.2: when a session/personal scope is set, temp and artifact
+	// dirs default into a per-scope subdirectory so concurrent sessions never
+	// share scratch state. Org/unspecified scopes keep the shared defaults.
+	scopeKey := ""
+	if kind, _, ok := scope.Parse(opts.Scope); ok && kind != scope.KindOrg {
+		scopeKey = scope.StorageKey(opts.Scope)
+	}
 	if tempDir == "" && workspaceDir != "" {
-		tempDir = tooling.DefaultCommandOutputDir(workspaceDir)
+		if scopeKey != "" {
+			tempDir = filepath.Join(workspaceDir, ".godex", "tmp", scopeKey)
+		} else {
+			tempDir = tooling.DefaultCommandOutputDir(workspaceDir)
+		}
+	}
+	if artifactDir == "" && workspaceDir != "" && scopeKey != "" {
+		artifactDir = filepath.Join(workspaceDir, ".godex", "artifacts", scopeKey)
 	}
 	lifecycle := opts.Lifecycle
 	if lifecycle == "" {
@@ -91,10 +112,11 @@ func NewLocal(opts LocalOptions) *LocalSandbox {
 	}
 	return &LocalSandbox{
 		id:           id,
+		scope:        opts.Scope,
 		lifecycle:    lifecycle,
 		workspaceDir: workspaceDir,
 		tempDir:      tempDir,
-		artifactDir:  cleanPath(opts.ArtifactDir),
+		artifactDir:  artifactDir,
 		execution:    cloneExecution(opts.Execution),
 	}
 }
@@ -132,6 +154,14 @@ func (s *LocalSandbox) ArtifactDir() string {
 		return ""
 	}
 	return s.artifactDir
+}
+
+// ScopeID returns the scope this sandbox is bound to, or "" when unspecified.
+func (s *LocalSandbox) ScopeID() scope.Id {
+	if s == nil {
+		return ""
+	}
+	return s.scope
 }
 
 func (s *LocalSandbox) ToolBinding() ToolBinding {
@@ -173,6 +203,7 @@ func (s *LocalSandbox) Rebuild() Sandbox {
 	}
 	return NewLocal(LocalOptions{
 		ID:           s.id,
+		Scope:        s.scope,
 		WorkspaceDir: s.workspaceDir,
 		TempDir:      s.tempDir,
 		ArtifactDir:  s.artifactDir,

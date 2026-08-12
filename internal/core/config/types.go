@@ -210,6 +210,10 @@ type MemorySection struct {
 	// ConsolidateAfter is the pending-candidate count that triggers an LLM
 	// consolidation pass when Strategy is consolidated.
 	ConsolidateAfter int `yaml:"consolidate_after"`
+	// SessionScope, when true, isolates durable memory per session (roadmap
+	// 6.2): each session gets its own memory directory under paths.memory_dir.
+	// When false (default), all sessions share the org/workspace memory layer.
+	SessionScope bool `yaml:"session_scope"`
 }
 
 type MediaSection struct {
@@ -327,6 +331,10 @@ type ExecutionSection struct {
 	ShellAllowPatterns []string `yaml:"shell_allow_patterns"`
 	ShellDenyPatterns  []string `yaml:"shell_deny_patterns"`
 	ToolTimeoutSeconds int      `yaml:"tool_timeout_seconds"`
+	// ScopeWrite, when true (default), rejects write-tool paths that escape
+	// the scope workspace root (roadmap 6.2 M4). Set false for legacy
+	// permissive behavior.
+	ScopeWrite bool `yaml:"scope_write"`
 }
 
 type BrowserSection struct {

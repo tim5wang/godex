@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/platform/workspacefs"
 	"github.com/tim5wang/godex/internal/sandbox"
@@ -38,6 +39,12 @@ func (a *Agent) SandboxBinding() sandbox.ToolBinding {
 
 func (a *Agent) SandboxInfo() sandbox.Info {
 	return a.ensureSandbox().Info()
+}
+
+// SandboxScope returns the scope the agent's sandbox is bound to (roadmap
+// 6.2), or "" when unspecified (shared org layer).
+func (a *Agent) SandboxScope() scope.Id {
+	return a.ensureSandbox().ScopeID()
 }
 
 func (a *Agent) RebuildSandbox() sandbox.Info {

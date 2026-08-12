@@ -13,9 +13,10 @@ import (
 )
 
 type subagentEventTarget struct {
-	sessionID string
-	turnID    string
-	sink      events.Sink
+	sessionID  string
+	turnID     string
+	sink       events.Sink
+	scopeLabel string
 }
 
 type subagentEventContextKey struct{}
@@ -129,6 +130,7 @@ func (t subagentEventTarget) emit(job *subagentJob, phase, message, toolID, tool
 			GitBranch:         job.GitBranch,
 			CleanupState:      job.CleanupState,
 			MergeStatus:       job.MergeStatus,
+			ScopeLabel:        t.scopeLabel,
 			UpdatedAt:         updatedAt,
 		},
 	})
@@ -203,6 +205,7 @@ func (t subagentEventTarget) emitRunnerPhase(job *subagentJob, phase conversatio
 			ToolID:       phase.ToolID,
 			ToolName:     phase.ToolName,
 			RecoveryHint: phase.RecoveryHint,
+			ScopeLabel:   t.scopeLabel,
 		},
 	})
 }

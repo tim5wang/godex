@@ -206,9 +206,10 @@ func (a *Agent) startPendingSubagents(sink events.Sink) {
 		}
 		if target.sink == nil {
 			target = subagentEventTarget{
-				sessionID: job.SessionID,
-				turnID:    job.ParentTurnID,
-				sink:      sink,
+				sessionID:  job.SessionID,
+				turnID:     job.ParentTurnID,
+				sink:       sink,
+				scopeLabel: string(a.SandboxScope()),
 			}
 		}
 		target.emit(job, "started", "Subagent job started.", "", "", "", "")

@@ -232,5 +232,11 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary:       "lightweight todo planning and progress tracking",
 		DefaultActive: true,
 	})
+	if a.cfg.Tools.Execution.ScopeWrite {
+		handler.AddBeforeInterceptorsForTools(
+			[]string{"write_file", "edit_file", "attach_file"},
+			NewScopeWriteInterceptor(workspaceDir),
+		)
+	}
 	handler.ActivateDefaults()
 }

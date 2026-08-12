@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/platform/fsutil"
 )
 
@@ -103,8 +104,10 @@ type StoredMemory struct {
 }
 
 type Manager struct {
-	dir          string
-	mu           sync.RWMutex
+	dir   string
+	scope scope.Id
+	mu    sync.RWMutex
+
 	contentCache map[string]memoryFileCacheEntry
 	readFile     func(string) ([]byte, error)
 	statFile     func(string) (os.FileInfo, error)
@@ -125,7 +128,7 @@ type indexEnvelope struct {
 	Entries []Entry `json:"entries"`
 }
 
-// NewManager creates a new memory manager.
+// NewManager creates a new memory manager rooted at dir (unspecified scope).
 func NewManager(dir string) *Manager {
 	return &Manager{
 		dir:                 dir,
@@ -134,6 +137,36 @@ func NewManager(dir string) *Manager {
 		statFile:            os.Stat,
 		candidateCountCache: -1,
 	}
+}
+
+// NewScopedManager creates a memory manager for one scope (roadmap 6.2).
+// The scope is recorded on the manager and its storage root is derived from
+// baseDir: an empty scope or an org scope stays at baseDir (the shared
+// org/legacy layer), while a session or personal scope is isolated under
+// baseDir/<scope storage key> so different sessions never read each other's
+// memory. All existing Manager methods operate on this root, so callers only
+// need to construct the right manager per scope.
+func NewScopedManager(baseDir string, s scope.Id) *Manager {
+	dir := baseDir
+	if kind, _, ok := scope.Parse(s); ok && kind != scope.KindOrg {
+		dir = filepath.Join(baseDir, scope.StorageKey(s))
+	}
+	return &Manager{
+		dir:                 dir,
+		scope:               s,
+		contentCache:        make(map[string]memoryFileCacheEntry),
+		readFile:            os.ReadFile,
+		statFile:            os.Stat,
+		candidateCountCache: -1,
+	}
+}
+
+// Scope returns the scope this manager is bound to, or "" when unspecified.
+func (m *Manager) Scope() scope.Id {
+	if m == nil {
+		return ""
+	}
+	return m.scope
 }
 
 // Dir returns the memory directory path.

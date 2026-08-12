@@ -614,6 +614,8 @@ tools:
     shell_deny_patterns: {{ yamlListIndent .Tools.Execution.ShellDenyPatterns 6 }}
     # Maximum seconds a single tool call can run before timing out. Default 1800 (30 min). Environment override: GODEX_TOOLS_EXECUTION_TOOL_TIMEOUT_SECONDS.
     tool_timeout_seconds: {{ .Tools.Execution.ToolTimeoutSeconds }}
+    # When true (default), write tools reject paths escaping the scope workspace root (6.2 M4). Environment override: GODEX_TOOLS_EXECUTION_SCOPE_WRITE.
+    scope_write: {{ .Tools.Execution.ScopeWrite }}
 
   browser:
     # Enable the built-in browser tool. Environment override: GODEX_BROWSER_ENABLED.

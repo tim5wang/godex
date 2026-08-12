@@ -13,7 +13,9 @@ import (
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -157,6 +159,15 @@ func NewWithSharedDependencies(cfg *config.Config, shared *SharedDependencies, s
 		// this guard the shared deps' global todo
 		// manager would carry over across sessions.
 		deps.todoMgr = todo.NewManagerForSession(cfg.SessionsDir, sessionID)
+		// Roadmap 6.2: when memory.session_scope is enabled, each session
+		// also gets its own memory manager rooted under cfg.MemoryDir so
+		// durable memory cannot leak across sessions. The default (disabled)
+		// keeps the shared org-level memory layer.
+		if cfg != nil && cfg.Memory.SessionScope {
+			scopedMgr := memory.NewScopedManager(cfg.MemoryDir, scope.Session(sessionID))
+			deps.memoryMgr = scopedMgr
+			deps.memoryExt, deps.memoryStrategy = buildMemoryStack(cfg, deps.client, scopedMgr)
+		}
 	}
 	return newAgentWithDependencies(cfg, deps)
 }
@@ -539,9 +550,10 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 		sink = events.NopSink
 	}
 	ctx = withSubagentEventTarget(ctx, subagentEventTarget{
-		sessionID: opts.SessionID,
-		turnID:    opts.TurnID,
-		sink:      sink,
+		sessionID:  opts.SessionID,
+		turnID:     opts.TurnID,
+		sink:       sink,
+		scopeLabel: string(a.SandboxScope()),
 	})
 
 	emit := func(eventType events.EventType, payload any) {
@@ -702,6 +714,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 				ToolID:       phase.ToolID,
 				ToolName:     phase.ToolName,
 				RecoveryHint: phase.RecoveryHint,
+				ScopeLabel:   string(a.SandboxScope()),
 			})
 		},
 		DrainInjections: opts.DrainInjections,

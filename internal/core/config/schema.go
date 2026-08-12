@@ -261,6 +261,7 @@ func baseSchema() []SectionSchema {
 				{Path: "tools.execution.shell_allow_patterns", Label: "Shell Allow Patterns", Description: "Optional command glob/prefix patterns allowed for bash/background. Empty means no extra allow restriction.", Type: "string_list", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_SHELL_ALLOW_PATTERNS"},
 				{Path: "tools.execution.shell_deny_patterns", Label: "Shell Deny Patterns", Description: "Command glob/prefix patterns denied for bash/background before execution.", Type: "string_list", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_SHELL_DENY_PATTERNS"},
 				{Path: "tools.execution.tool_timeout_seconds", Label: "Tool Timeout Seconds", Description: "Maximum seconds a single tool call (bash, browser, etc.) may run before timing out. Default 1800 (30 min).", Type: "int", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_TOOL_TIMEOUT_SECONDS"},
+				{Path: "tools.execution.scope_write", Label: "Scope Write Guard", Description: "When true (default), write tools (write_file/edit_file/attach_file) reject paths that escape the scope workspace root (6.2 M4). Set false to allow legacy permissive paths.", Type: "bool", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_SCOPE_WRITE"},
 			},
 		},
 		{

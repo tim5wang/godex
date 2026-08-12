@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/platform/tooling"
 )
 
@@ -141,6 +142,64 @@ func TestRebuildPreservesIDAndCopiesState(t *testing.T) {
 	binding.Execution.ShellAllowPatterns[0] = "mutated"
 	if rebuilt.ToolBinding().Execution.ShellAllowPatterns[0] != "go test" {
 		t.Fatalf("expected rebuilt execution to be cloned")
+	}
+}
+
+func TestScopeIDRoundTripsThroughLocalSandbox(t *testing.T) {
+	workspace := t.TempDir()
+	const sid = "session:web-test-1"
+	sb := NewLocal(LocalOptions{
+		ID:           "sandbox:local:scoped",
+		Scope:        scope.Session("web-test-1"),
+		WorkspaceDir: workspace,
+	})
+
+	if got := sb.ScopeID(); got.String() != sid {
+		t.Fatalf("ScopeID() = %q, want %q", got, sid)
+	}
+
+	// Per-scope temp/artifact dirs land under the scope subdirectory so
+	// concurrent sessions never share scratch state (roadmap 6.2 M3).
+	scopeKey := scope.StorageKey(scope.Session("web-test-1"))
+	wantTemp := filepath.Join(workspace, ".godex", "tmp", scopeKey)
+	if sb.TempDir() != wantTemp {
+		t.Fatalf("TempDir() = %q, want %q", sb.TempDir(), wantTemp)
+	}
+	wantArtifact := filepath.Join(workspace, ".godex", "artifacts", scopeKey)
+	if sb.ArtifactDir() != wantArtifact {
+		t.Fatalf("ArtifactDir() = %q, want %q", sb.ArtifactDir(), wantArtifact)
+	}
+
+	// Rebuild must preserve the scope (roadmap 6.2 M3).
+	rebuilt := sb.Rebuild()
+	if rebuilt.ScopeID() != sb.ScopeID() {
+		t.Fatalf("rebuild lost scope: %q vs %q", rebuilt.ScopeID(), sb.ScopeID())
+	}
+	if rebuilt.TempDir() != sb.TempDir() {
+		t.Fatalf("rebuild lost per-scope temp dir: %q vs %q", rebuilt.TempDir(), sb.TempDir())
+	}
+}
+
+func TestLocalSandboxUnspecifiedScopeIsEmpty(t *testing.T) {
+	sb := NewLocal(LocalOptions{WorkspaceDir: t.TempDir()})
+	if got := sb.ScopeID(); got != "" {
+		t.Fatalf("ScopeID() = %q, want empty", got)
+	}
+}
+
+func TestLocalSandboxOrgScopeKeepsSharedDefaults(t *testing.T) {
+	workspace := t.TempDir()
+	sb := NewLocal(LocalOptions{
+		Scope:        scope.Org("godex"),
+		WorkspaceDir: workspace,
+	})
+	// Org scope stays on the shared layer: default temp dir, no per-scope
+	// artifact subdirectory (backward compatible).
+	if got := sb.TempDir(); got != tooling.DefaultCommandOutputDir(workspace) {
+		t.Fatalf("org TempDir() = %q, want shared default %q", got, tooling.DefaultCommandOutputDir(workspace))
+	}
+	if got := sb.ArtifactDir(); got != "" {
+		t.Fatalf("org ArtifactDir() = %q, want empty", got)
 	}
 }
 

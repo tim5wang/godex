@@ -207,6 +207,7 @@ type SubagentJobPayload struct {
 	GitBranch         string    `json:"git_branch,omitempty"`
 	CleanupState      string    `json:"cleanup_state,omitempty"`
 	MergeStatus       string    `json:"merge_status,omitempty"`
+	ScopeLabel        string    `json:"scope_label,omitempty"`
 	UpdatedAt         time.Time `json:"updated_at,omitempty"`
 }
 
@@ -226,6 +227,7 @@ type RunnerPhasePayload struct {
 	ToolID       string `json:"tool_id,omitempty"`
 	ToolName     string `json:"tool_name,omitempty"`
 	RecoveryHint string `json:"recovery_hint,omitempty"`
+	ScopeLabel   string `json:"scope_label,omitempty"`
 }
 
 // MessageInjectedPayload records user follow-up messages that were folded into

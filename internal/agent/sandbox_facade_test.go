@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/platform/workspacefs"
 	"github.com/tim5wang/godex/internal/sandbox"
@@ -86,6 +87,7 @@ func TestSandboxInfoReturnsCopy(t *testing.T) {
 type fakeSandbox struct {
 	id    string
 	wsDir string
+	scope scope.Id
 }
 
 func (f fakeSandbox) ID() string                       { return f.id }
@@ -93,6 +95,7 @@ func (f fakeSandbox) Lifecycle() sandbox.Lifecycle    { return "fake" }
 func (f fakeSandbox) WorkspaceDir() string            { return f.wsDir }
 func (f fakeSandbox) TempDir() string                 { return "" }
 func (f fakeSandbox) ArtifactDir() string             { return "" }
+func (f fakeSandbox) ScopeID() scope.Id               { return f.scope }
 func (f fakeSandbox) ToolBinding() sandbox.ToolBinding {
 	return sandbox.ToolBinding{SandboxID: f.id, WorkspaceDir: f.wsDir}
 }

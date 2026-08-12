@@ -95,6 +95,24 @@ func (a *Agent) CompactConversationWithMode(mode string) (string, error) {
 
 	a.storeCompactedMessages(compacted)
 
+	// Emit the same snapshot_ready + compacted=true event the automatic path
+	// emits in the runner (runtime.go) so manual compactions are recorded in
+	// the session timeline and shown in the compaction history panel.
+	if sink := a.emitSink; sink != nil {
+		sink.Emit(events.Event{
+			Type:      events.EventSnapshotReady,
+			Timestamp: a.now(),
+			Payload: events.SnapshotPayload{
+				UpdatedAt:           a.now(),
+				Running:             true,
+				Compacted:           true,
+				CompressionReasons:  []string{"manual"},
+				TokenEstimateBefore: estimateMessages(history),
+				TokenEstimateAfter:  estimateMessages(compacted),
+			},
+		})
+	}
+
 	summary := "Conversation compressed."
 	if len(compacted) > 0 {
 		if text := protocol.MessageText(compacted[0]); text != "" {

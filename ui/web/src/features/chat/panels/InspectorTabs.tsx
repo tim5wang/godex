@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { PendingPermission, LongTaskView, FeedItem, PackageRoleEntry, TurnRecord, SessionTimelineEntry, TimelinePage, SessionContextInspector, SkillActivation } from "../../../lib/types";
+import type { PendingPermission, LongTaskView, FeedItem, PackageRoleEntry, TurnRecord, SessionTimelineEntry, TimelinePage, SessionContextInspector, SkillActivation, CompactionRecord } from "../../../lib/types";
 import { useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../../i18n";
 import { Tabs, Button, Badge, Space } from "antd";
@@ -25,6 +25,8 @@ export function InspectorTabs(props: {
   packageRolesLoading: boolean;
   turnRecords: TurnRecord[];
   timelineItems: SessionTimelineEntry[];
+  compactions?: CompactionRecord[];
+  compactionsLoading?: boolean;
   timelinePage?: TimelinePage;
   timelinePageLoading: boolean;
   timelineFilters: TimelineFilterState;
@@ -175,7 +177,13 @@ export function InspectorTabs(props: {
           {
             key: "compactions",
             label: t("chat.compactionHistoryTitle"),
-            children: <CompactionHistoryPanel items={props.timelineItems} />,
+            children: (
+              <CompactionHistoryPanel
+                records={props.compactions}
+                items={props.timelineItems}
+                loading={props.compactionsLoading}
+              />
+            ),
           },
           {
             key: "subagentTimeline",

@@ -4,12 +4,141 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/tim5wang/godex/internal/domain/events"
-	"github.com/tim5wang/godex/internal/tools"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/domain/events"
+	"github.com/tim5wang/godex/internal/tools"
 )
+
+// CompactionRecord describes one context compaction in a session. Events come
+// from the session timeline (snapshot_ready + compacted=true) and historical
+// records are recovered from summary messages persisted in session state so
+// early compactions survive the recorder's rolling window.
+type CompactionRecord struct {
+	Timestamp     time.Time `json:"timestamp"`
+	BeforeTokens  int       `json:"before_tokens,omitempty"`
+	AfterTokens   int       `json:"after_tokens,omitempty"`
+	Reasons       []string  `json:"reasons,omitempty"`
+	Source        string    `json:"source,omitempty"`
+	TranscriptRef string    `json:"transcript_ref,omitempty"`
+}
+
+var compactionTimestampPattern = regexp.MustCompile(`(?i)compressed\s+at\s*[:：]?\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2})`)
+
+// Compactions returns the full compaction history for one session. It merges
+// durable snapshot_ready+compacted=true events from the session timeline with
+// historical summary messages persisted in the session state, so early
+// compactions that fell out of the recorder window are still reported.
+func (s *Service) Compactions(ctx context.Context, sessionID string) ([]CompactionRecord, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([]CompactionRecord, 0)
+
+	// 1) Durable timeline events (snapshot_ready + compacted=true).
+	for _, event := range s.readSessionTimeline(sessionID) {
+		if event.Type != events.EventSnapshotReady {
+			continue
+		}
+		payload, ok := event.Payload.(map[string]any)
+		if !ok {
+			continue
+		}
+		if compacted, _ := payload["compacted"].(bool); !compacted {
+			continue
+		}
+		records = append(records, CompactionRecord{
+			Timestamp:    event.Timestamp,
+			BeforeTokens: intValue(payload["token_estimate_before"]),
+			AfterTokens:  intValue(payload["token_estimate_after"]),
+			Reasons:      stringSliceValue(payload["compression_reasons"]),
+			Source:       "snapshot_ready",
+		})
+	}
+
+	// 2) Historical summary messages persisted in session state. These were
+	// written by every compaction (auto and manual) and survive the recorder
+	// window, so they recover compactions the timeline no longer holds.
+	for _, msg := range session.agent.GetMessages() {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindSummary {
+			continue
+		}
+		records = append(records, CompactionRecord{
+			Timestamp:     parseCompactionTimestamp(protocol.MessageText(msg)),
+			Reasons:       []string{"summary"},
+			Source:        "summary",
+			TranscriptRef: strings.TrimSpace(msg.Metadata.Transcript),
+		})
+	}
+
+	// Newest first, deduplicated by rounded timestamp + source.
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].Timestamp.After(records[j].Timestamp)
+	})
+	return dedupeCompactionRecords(records), nil
+}
+
+func parseCompactionTimestamp(text string) time.Time {
+	if m := compactionTimestampPattern.FindStringSubmatch(text); len(m) > 1 {
+		for _, layout := range []string{"2006-01-02 15:04", "2006-01-02T15:04"} {
+			if ts, err := time.ParseInLocation(layout, m[1], time.Local); err == nil {
+				return ts
+			}
+		}
+	}
+	return time.Time{}
+}
+
+func dedupeCompactionRecords(records []CompactionRecord) []CompactionRecord {
+	seen := make(map[string]bool, len(records))
+	out := make([]CompactionRecord, 0, len(records))
+	for _, r := range records {
+		key := r.Source + "|" + r.Timestamp.Truncate(time.Minute).Format(time.RFC3339)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, r)
+	}
+	return out
+}
+
+func intValue(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	default:
+		return 0
+	}
+}
+
+func stringSliceValue(v any) []string {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
 
 func (s *Service) ContextSummary(ctx context.Context, sessionID string) (tools.ContextInspection, error) {
 	session, err := s.requireSession(sessionID)

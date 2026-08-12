@@ -51,6 +51,7 @@ import type {
   RuntimeServiceStatus,
   SessionTimelineEntry,
   TimelinePage,
+  CompactionRecord,
   SessionContextInspector,
   SessionLocator,
   Snapshot,
@@ -683,6 +684,10 @@ export function getSessionTimelinePage(
     search.set("turn_id", params.turnId.trim());
   }
   return request<TimelinePage>(`/sessions/${encodeURIComponent(sessionId)}/timeline/page?${search.toString()}`, { method: "GET" }, token);
+}
+
+export function getSessionCompactions(token: string | null, sessionId: string) {
+  return request<CompactionRecord[]>(`/sessions/${encodeURIComponent(sessionId)}/compactions`, { method: "GET" }, token);
 }
 
 export function listSessionSubagents(token: string | null, sessionId: string) {

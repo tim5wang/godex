@@ -19,6 +19,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/security"
 	"github.com/tim5wang/godex/internal/core/teammate"
+	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
@@ -66,6 +67,11 @@ type Agent struct {
 	screener    security.Screener
 	screenAudit screenAuditFn
 	roleBundles   *roleBundleRegistry
+	// emitSink is the event sink of the currently running turn, set by
+	// RunWithOptions. Manual compaction (compress tool) emits snapshot_ready
+	// through it so compaction history records manual compactions too; nil
+	// falls back to NopSink (e.g. /compact outside a turn).
+	emitSink events.Sink
 	// workspaceOverride is set when this session was opened against an
 	// explicit working directory different from the service-level
 	// cfg.WorkspaceDir. ApplyConfig must re-apply the override on top of

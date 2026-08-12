@@ -1231,6 +1231,14 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, page)
 	})))
+	mux.Handle("GET /sessions/{id}/compactions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items, err := service.Compactions(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})))
 	mux.Handle("GET /sessions/{id}/subagents", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ListSubagents(r.Context(), r.PathValue("id"))
 		if err != nil {

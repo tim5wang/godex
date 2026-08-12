@@ -10,7 +10,7 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useChatV2Store, type DockTab, DOCK_TABS } from "../chat-v2/chatV2Store";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, APIError, cancelSessionTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, APIError, cancelSessionTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage } from "../../lib/api";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
 import { isLongTaskRefluxMessage, LongTaskRefluxBubble } from "./LongTaskRefluxBubble";
@@ -360,6 +360,15 @@ export function ChatPage() {
     queryKey: ["timeline", token, openQuery.data?.session_id],
     enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
     queryFn: async () => getSessionTimeline(token || null, openQuery.data!.session_id, 80),
+  });
+
+  // Compaction history is fetched from a dedicated endpoint (not the 80-item
+  // timeline window) so early compactions that fell out of the recorder
+  // rolling window are still visible.
+  const compactionsQuery = useQuery({
+    queryKey: ["compactions", token, openQuery.data?.session_id],
+    enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
+    queryFn: async () => getSessionCompactions(token || null, openQuery.data!.session_id),
   });
 
   const currentTimelineTurnId = currentTurnId || snapshotQuery.data?.active_turn_id || "";
@@ -1157,6 +1166,8 @@ export function ChatPage() {
       packageRolesLoading={packageRolesQuery.isLoading}
       turnRecords={turnRecords}
       timelineItems={timelineItems}
+      compactions={compactionsQuery.data}
+      compactionsLoading={compactionsQuery.isLoading || compactionsQuery.isFetching}
       timelinePage={timelinePageQuery.data}
       timelinePageLoading={timelinePageQuery.isLoading || timelinePageQuery.isFetching}
       timelineFilters={timelineFilters}

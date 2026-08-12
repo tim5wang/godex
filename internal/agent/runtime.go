@@ -549,6 +549,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	if sink == nil {
 		sink = events.NopSink
 	}
+	a.emitSink = sink
 	ctx = withSubagentEventTarget(ctx, subagentEventTarget{
 		sessionID:  opts.SessionID,
 		turnID:     opts.TurnID,

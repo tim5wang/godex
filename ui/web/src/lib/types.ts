@@ -27,6 +27,15 @@ export interface RuntimeEvent {
 
 export type SessionTimelineEntry = RuntimeEvent;
 
+export interface CompactionRecord {
+  timestamp: string;
+  before_tokens?: number;
+  after_tokens?: number;
+  reasons?: string[];
+  source?: string;
+  transcript_ref?: string;
+}
+
 export interface TimelinePage {
   items: SessionTimelineEntry[];
   next_cursor?: string;

@@ -145,7 +145,9 @@ export function outcomeIsActive(outcome: TaskOutcome) {
 function outcomeFromLongTask(longTask: LongTaskView): TaskOutcome {
   const id = longTask.longtask_id || longTask.workflow_id;
   const status = classifyLongTaskStatus(longTask);
-  const title = firstNonBlank(longTask.project, firstStoryTitle(longTask), longTask.description, longTask.workflow_id, longTask.longtask_id, "LongTask");
+  // Title priority: story title / description carry the task's meaning;
+  // project (e.g. "godex") and raw IDs are last-resort fallbacks.
+  const title = firstNonBlank(firstStoryTitle(longTask), longTask.description, longTask.project, longTask.workflow_id, longTask.longtask_id, "LongTask");
   return {
     id: `longtask:${id}`,
     status,

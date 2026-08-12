@@ -18,7 +18,10 @@ type TimelineEventKind = "spawn" | "send_input" | "review" | "iterate" | "phase"
 
 interface LaneEvent {
   kind: TimelineEventKind;
+  /** Stable grouping key (unique per subagent job where possible). */
   lane: string;
+  /** Human-readable lane name shown in the left gutter. */
+  laneLabel: string;
   time: number; // epoch ms
   label: string;
   detail: string;
@@ -37,9 +40,6 @@ function classifyEvent(event: SessionTimelineEntry): LaneEvent | null {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const time = new Date(event.timestamp).getTime();
   if (Number.isNaN(time)) return null;
-  const lane = String(
-    payload.role_name || payload.role_id || payload.actor_kind || payload.agent_type || payload.actor_id || payload.job_id || "orchestrator",
-  );
   const phase = String(payload.phase ?? "");
   const label = String(payload.display_title || payload.job_id || payload.actor_id || phase || "event");
   const detail = [phase, payload.status, payload.message, payload.error, payload.result, payload.recovery_hint]
@@ -47,13 +47,27 @@ function classifyEvent(event: SessionTimelineEntry): LaneEvent | null {
     .map(String)
     .join(" · ");
 
+  // Lane grouping: subagent events (job updates and runner phase changes)
+  // are keyed by the subagent job id so every subagent gets its own lane;
+  // main-agent events fall back to the actor kind, and anything else to
+  // role / actor id. The gutter label prefers a readable role name.
+  const actorKind = String(payload.actor_kind ?? "");
+  const jobID = String(payload.job_id ?? "");
+  const runnerID = String(payload.runner_id ?? "");
+  const subagentKey = jobID || runnerID || String(payload.actor_id ?? "");
+  const isSubagentEvent = actorKind === "subagent" || event.type === "subagent_job_updated";
+  const lane = isSubagentEvent
+    ? subagentKey || "subagent"
+    : String(payload.role_name || payload.role_id || actorKind || payload.agent_type || payload.actor_id || jobID || "orchestrator");
+  const laneLabel = String(payload.role_name || payload.display_title || payload.job_id || payload.actor_id || actorKind || "orchestrator");
+
   switch (event.type) {
     case "message_injected":
-      return { kind: "send_input", lane, time, label, detail };
+      return { kind: "send_input", lane, laneLabel, time, label, detail };
     case "subagent_job_updated": {
       const kind: TimelineEventKind = phase.includes("spawn") || phase === "created" || phase === "started" ? "spawn" : "phase";
       const rejected = String(payload.verdict ?? "") === "reject" || String(payload.status ?? "").includes("reject");
-      return { kind, lane, time, label, detail, rejected };
+      return { kind, lane, laneLabel, time, label, detail, rejected };
     }
     case "runner_phase_changed": {
       const lower = phase.toLowerCase();
@@ -61,7 +75,7 @@ function classifyEvent(event: SessionTimelineEntry): LaneEvent | null {
       if (lower.includes("review")) kind = "review";
       else if (lower.includes("iterate") || lower.includes("retry") || (payload.iteration && Number(payload.iteration) > 1)) kind = "iterate";
       const rejected = lower.includes("reject");
-      return { kind, lane, time, label, detail, rejected };
+      return { kind, lane, laneLabel, time, label, detail, rejected };
     }
     default:
       return null;
@@ -78,13 +92,17 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
       .filter((e): e is LaneEvent => e !== null)
       .filter((e) => !showIssuesOnly || e.rejected || e.kind === "iterate");
     if (events.length === 0) {
-      return { lanes: [] as string[], events: [] as LaneEvent[], min: 0, max: 0 };
+      return { lanes: [] as string[], laneLabels: {} as Record<string, string>, events: [] as LaneEvent[], min: 0, max: 0 };
     }
     const laneSet = Array.from(new Set(events.map((e) => e.lane))).sort();
+    const laneLabels: Record<string, string> = {};
+    for (const event of events) {
+      laneLabels[event.lane] = event.laneLabel;
+    }
     const times = events.map((e) => e.time);
     const min = Math.min(...times);
     const max = Math.max(...times);
-    return { lanes: laneSet, events, min, max };
+    return { lanes: laneSet, laneLabels, events, min, max };
   }, [items, showIssuesOnly]);
 
   if (lanes.events.length === 0) {
@@ -108,7 +126,7 @@ export function SubagentTimelinePanel({ items, onlyIssues = false }: { items: Se
           return (
             <div key={lane} style={{ position: "relative", height: 40, borderBottom: "1px solid rgba(128,128,128,0.15)", display: "flex", alignItems: "center" }}>
               <span style={{ position: "absolute", left: -8, transform: "translateX(-100%)", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
-                <Typography.Text type="secondary">{lane}</Typography.Text>
+                <Typography.Text type="secondary">{lanes.laneLabels[lane] ?? lane}</Typography.Text>
               </span>
               {laneEvents.map((event, i) => {
                 const meta = KIND_META[event.kind];

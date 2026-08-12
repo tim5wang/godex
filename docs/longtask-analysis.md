@@ -1,5 +1,7 @@
 # GoDex LongTask 全面分析
 
+> 状态：Superseded（分析结论已合并入 `docs/godex-optimization-roadmap.md` Phase 1-2，保留仅作追溯）
+
 ## 第一部分：现状分析
 
 ### 代码规模

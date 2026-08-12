@@ -1,5 +1,7 @@
 # GoDex 统一多入口交互与 Bubble Tea TUI 设计方案
 
+> 状态：Plan（设计方案）
+
 ## 目标
 
 GoDex 接下来不只是要把当前 `readline` REPL 升级成更好的 TUI，而是要一次性铺好这几类入口共用同一个后端：

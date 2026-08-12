@@ -1,5 +1,7 @@
 # GoDex P0-P6 端到端验证
 
+> 状态：Historical（**旧迭代遗留文档**，其 P0-P6 为运行时能力验证，非当前分期；P0-P6 定义以 `docs/godex-optimization-roadmap.md` 为准）
+
 本文档用于手工验证当前 P0-P6 运行时基线，覆盖 Web UI、HTTP API、CLI、配置迁移、Provider、Workspace 文件边界和安全策略。默认从仓库根目录启动本地开发服务。
 
 ## 准备工作

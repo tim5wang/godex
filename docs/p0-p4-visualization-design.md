@@ -1,8 +1,11 @@
 # P0-P4 可视化设计文档（UI Visualization Design）
 
+> 状态：Active（P0/P1 已落地，P2 待办）
+> 日期：2026-08-11
+> 修订日志：2026-08-11 P0（A1+B1）完成、P1（A2+B2+C1）完成；P2（A3+C2）待办
+
 > 目标：把 Phase 0-4 已落地的运行时能力（longtask 动态 DAG、上下文预算、子 agent 通信/迭代、记忆策略）在 Web UI 中变成「看得见、可诊断」的视图。
 > 原则：优先复用已有后端 view 结构与前端基建（DiagramBlock/mermaid、ContextPanels、TimelineList），新增 API 尽量小。
-> 状态：设计草案（2026-08-11），挑 2-3 个高价值视图，分期实施。
 
 ---
 

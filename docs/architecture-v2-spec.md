@@ -2,6 +2,8 @@
 
 # GoDex 2.0 架构 SPEC
 
+> 状态：Active（架构设计参考，roadmap 合并其要点）
+
 ## 摘要
 
 GoDex 1.0 已经从本地优先的 Agent 工作台，成长为一套可以服务 CLI、TUI、Web、HTTP API、Feishu、Weixin、工具、记忆、子 agent、自动化和审批流程的共享运行时。GoDex 2.0 的下一步，是从单个大型进程内 Agent，演进为一个明确解耦身份、编排、Worker 执行、沙盒环境、Session 记忆和存储的 Agent Runtime 平台。

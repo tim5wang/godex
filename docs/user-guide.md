@@ -1,5 +1,7 @@
 # GoDex 用户指南
 
+> 状态：Active（用户手册）
+
 本文档承接 README 中不适合放在产品总览里的细节，覆盖安装运行、配置、Web UI、工具、Memory、命令、HTTP API 和发布检查。
 
 ## 环境要求

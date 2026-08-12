@@ -2,6 +2,8 @@
 
 # GoDex 2.0 Architecture SPEC
 
+> Status: Active (architecture reference; key points merged into the roadmap)
+
 ## Summary
 
 GoDex 1.0 has grown from a local-first agent workbench into a shared runtime that can serve CLI, TUI, Web, HTTP API, Feishu, Weixin, tools, memory, subagents, automation, and approval flows. The next architecture step is GoDex 2.0: move from a single large in-process agent toward an agent runtime platform that separates identity, orchestration, worker execution, sandbox environments, session memory, and storage.

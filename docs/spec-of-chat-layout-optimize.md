@@ -1,5 +1,8 @@
 # GoDex Web UI 聊天工作区升级 SPEC
 
+> 状态：Active（M0/M1 已落地，后续候选待实施）
+> 修订日志：2026-08-05 创建；M0 IDE 基础、M1+ candidate A（真实 PTY terminal）、candidate C（多面板拖拽）已落地
+
 > 目标:把当前 GoDex Web 的聊天工作区,从一个"带任务中心顶栏 + 独立文件页"的中等密度工作台,升级为接近 IDE 体验的多面板工作区(PC),同时保留移动端现有的全屏独占切换体验(本 SPEC **不改造一级 AppNav**,只在 Workspace 内增加二级 Tab 导航)。
 
 - 范围:仅 `ui/web/`(以及嵌入式 dist 的构建产物)。

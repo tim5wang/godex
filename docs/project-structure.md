@@ -1,5 +1,7 @@
 # Project Structure
 
+> 状态：Active（项目结构规范）
+
 GoDex uses a `cmd/` + `internal/` layout. New code should land in the narrowest layer that owns the behavior.
 
 ## Top Level

@@ -1,5 +1,7 @@
 # GoDex 能力增强与 Agent 基座产品化规划
 
+> 状态：Superseded（已被 `docs/capability-enhancement-v2.md` 修订取代，保留仅作追溯）
+
 ## 背景
 
 GoDex 当前已经具备可用的单实例 Agent 能力：Web Chat、TUI、package / skill / command / role 生态、subagent、timeline、approval、安全 profile、服务化运行、workspace 隔离、存储治理等。但后续目标不只是把 GoDex 做成一个聊天 Agent，而是做成一个可扩展的 **Agent 基座**。

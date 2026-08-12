@@ -1,5 +1,8 @@
 # Memory Design Principles
 
+> 状态：Active（当前 memory 模块权威设计）
+> 修订日志：2026-08-10 新增 work_method/work_fact 类型、笔记↔记忆联动；2026-08-11 foldCapture 去重 + capTail 截断（roadmap 3.2）
+
 这份文档描述 GoDex 当前 `memory` 模块的目标、边界、组成和约束。它不是“把所有历史都记住”的系统，而是一套 `可治理的长期项目记忆系统`。
 
 ## 目标

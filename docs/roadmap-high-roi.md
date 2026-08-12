@@ -1,5 +1,7 @@
 # GoDex High-ROI Roadmap
 
+> 状态：Superseded（已被 `docs/godex-optimization-roadmap.md` 合并，保留仅作追溯）
+
 这份文档用于记录 GoDex 当前最值得继续投入的基础能力。它不是历史设计稿，也不是“大而全”的产品路线图；它只保留会明显提升长任务稳定性、跨入口一致性、agent 可治理性和生态扩展性的工作。
 
 旧版 Milestone A/B/C/D 中的大部分 v1 能力已经落地，本文从当前实现状态重新整理后续方向。

@@ -1,5 +1,8 @@
 # GoDex Workflow Runtime
 
+> 状态：Active（durable workflow runtime 权威说明）
+> 修订日志：2026-08-11 动态并行 DAG（2.1）+ 重启恢复（2.2）+ 上下文预算（2.3）落地
+
 This document tracks the durable workflow runtime used for long-running,
 multi-agent work.
 

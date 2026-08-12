@@ -1,5 +1,7 @@
 # VS Code ACP Client 集成指南
 
+> 状态：Active（集成手册）
+
 本指南说明如何在 VS Code 的 ACP（Agent Client Protocol）client 中使用 GoDex。
 
 ## 快速开始

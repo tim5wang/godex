@@ -1,5 +1,7 @@
 # GoDex 能力增强与 Agent 基座产品化规划（修订版 v2）
 
+> 状态：Historical（产品化规划线，**非 P0-P6 分期定义来源**；P0-P6 以 `docs/godex-optimization-roadmap.md` 为准）
+
 > 本计划基于 v1 版本（`capability-enhancement-v1.md`）的用户反馈和代码审核修订。
 > 核心调整：砍掉过度设计的 Orchestrator、替换 RO I 低迷的 Study Assistant、补入 UX 打磨工作。
 

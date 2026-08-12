@@ -1,5 +1,8 @@
 # Cache & Tool 优化计划
 
+> 状态：Plan（实施计划，未全部落地）
+> 日期：2026-08-05 前后
+
 ## 背景
 
 默认 coding session 下 godex 每次请求暴露约 34 个 tools，配合 per-turn dynamic runtime messages 和 tool schema 变化，LLM 缓存命中率仅 ~90%。pi/goclaw 通过 stable/dynamic 分拆和精简 tool 集达到 ~99%。

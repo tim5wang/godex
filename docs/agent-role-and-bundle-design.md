@@ -1,5 +1,7 @@
 # Agent 角色能力边界与工具组织设计
 
+> 状态：Superseded（角色/bundle 设计已纳入 `docs/godex-optimization-roadmap.md` 与 Phase 4，保留仅作追溯）
+
 > 核心问题：服务于长任务、多 Agent 协同的工具如何组织？不同角色 Agent 的能力边界是什么？
 
 ---

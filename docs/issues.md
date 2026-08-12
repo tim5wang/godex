@@ -1,4 +1,7 @@
 # Issues to fix
+
+> 状态：Historical（issue 清单，多数已解决，保留仅作追溯）
+
 - [x] tui 界面输入q 直接退出了，太容易触发，有 ctr + c退出就好了，不需要 vim的退出风格
 
 - [x] tui 界面的回复，似乎在 web ui 看不到结果

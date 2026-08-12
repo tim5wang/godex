@@ -1,5 +1,7 @@
 # GoDex Self-Deployment Guide
 
+> 状态：Active（部署手册）
+
 GoDex 部署到 `mycloud` 服务器的简化流程。服务安装、启动、重启和日志查看统一使用 `godex service` 命令，不再手写 systemd unit。
 
 ## 服务器信息

@@ -1,5 +1,7 @@
 # GoDex Agent Runtime Hardening Roadmap
 
+> 状态：Superseded（已被 `docs/godex-optimization-roadmap.md` 合并，保留仅作追溯）
+
 这份文档沉淀一次面向“通用、强大、快速、能持续数小时完成复杂任务”的深度 review。它不是功能愿望清单，而是接下来逐个修复的执行路线。
 
 ## 目标画像

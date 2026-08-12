@@ -1,7 +1,11 @@
 # GoDex 优化路线图（统一版）
 
-> 合并自：`docs/qm-roadmap.md`、`docs/longtask-analysis.md`、`docs/roadmap-high-roi.md`、`docs/roadmap-runtime-hardening.md`、`docs/architecture-v2-spec.md`、`docs/agent-role-and-bundle-design.md`
+> 状态：**Active（当前唯一权威路线图，P0-P6 分期定义来源）**
 > 创建日期：2026-08-10
+> 修订日志：
+> - 2026-08-10 创建，合并 6 份旧规划文档（qm-roadmap / longtask-analysis / roadmap-high-roi / roadmap-runtime-hardening / architecture-v2-spec / agent-role-and-bundle-design）
+> - 2026-08-10~08-11 Phase 1-5（P0-P4）全部落地
+> - 2026-08-12 Phase 6 的 6.1-6.5 落地（安全筛查器 / Scope 隔离 / Session 树 / 多引擎热切换 / 自然语言创建 longtask）
 > 已完成的记忆改造（work_method/work_fact 类型、笔记↔记忆联动）已纳入基线
 
 ---

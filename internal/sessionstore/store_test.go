@@ -64,6 +64,23 @@ func TestJSONStoreLoadsExistingSessionLayoutAndOmitsMissingOptionalFiles(t *test
 	}
 }
 
+func TestJSONStoreLoadManifestDoesNotRequireState(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	sessionID := "manifest-only"
+	dir := filepath.Join(root, sessionID)
+	mustMkdir(t, dir)
+	writeFile(t, filepath.Join(dir, "manifest.json"), `{"session_id":"manifest-only","title":"Fast list"}`)
+	// A corrupt state proves the metadata path did not read or decode it.
+	writeFile(t, filepath.Join(dir, "state.json"), `{not-json`)
+
+	manifest, ok, err := NewJSONStore(root).LoadManifest(ctx, sessionID)
+	if err != nil || !ok {
+		t.Fatalf("load manifest ok=%v err=%v", ok, err)
+	}
+	assertRawEqual(t, manifest, `{"session_id":"manifest-only","title":"Fast list"}`)
+}
+
 func TestJSONStoreSaveListDeleteAndDiagnostics(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -128,6 +145,11 @@ func TestSQLiteStoreRestoresAfterRestartAndDiagnostics(t *testing.T) {
 		t.Fatalf("load after restart ok=%v err=%v", ok, err)
 	}
 	assertSessionDataEqual(t, loaded, data)
+	manifest, ok, err := reopened.LoadManifest(ctx, "sqlite-session")
+	if err != nil || !ok {
+		t.Fatalf("load sqlite manifest ok=%v err=%v", ok, err)
+	}
+	assertRawEqual(t, manifest, string(data.Manifest))
 
 	diag := reopened.Diagnostics(ctx)
 	if diag.Backend != string(BackendSQLite) || diag.SQLitePath != path || diag.SchemaVersion != 1 || !diag.Healthy || diag.Error != "" {

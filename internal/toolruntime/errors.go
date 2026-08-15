@@ -15,11 +15,7 @@ func (e ErrToolNotFound) Error() string {
 	if len(e.Available) == 0 {
 		return fmt.Sprintf("tool not found: %s", e.Name)
 	}
-	message := fmt.Sprintf("tool not found: %s. Active tools: %s.", e.Name, strings.Join(e.Available, ", "))
-	if e.Name == "grep" {
-		message += ` grep is not a separate tool; use bash with a command such as "rg <pattern> <path>".`
-	}
-	return message
+	return fmt.Sprintf("tool not found: %s. Active tools: %s.", e.Name, strings.Join(e.Available, ", "))
 }
 
 // ErrToolInvalidInput is returned before execution when arguments cannot match

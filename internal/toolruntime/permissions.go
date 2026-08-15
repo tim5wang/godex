@@ -1111,9 +1111,13 @@ func newUnlistedShellCommandApprovalRule(profile, approvalMode string) Permissio
 		if err != nil || len(names) == 0 {
 			return PermissionResult{}, false
 		}
+		reason := fmt.Sprintf("shell command uses command(s) outside the allowlist: %s", strings.Join(names, ", "))
+		if approvalMode == InteractiveApprovalModeYOLO {
+			return PermissionResult{Decision: PermissionAllow, Reason: "request auto-approved by yolo mode: " + reason, Scope: "policy"}, true
+		}
 		return PermissionResult{
 			Decision: PermissionPending,
-			Reason:   fmt.Sprintf("shell command uses command(s) outside the allowlist: %s", strings.Join(names, ", ")),
+			Reason:   reason,
 			Scope:    scope,
 		}, true
 	})
@@ -1165,6 +1169,9 @@ func NewSecurityProfileRuleWithApprovalMode(profile, approvalMode string) Permis
 				}
 				if profile == SecurityProfileDevRepair {
 					return PermissionResult{Decision: PermissionPending, Reason: "dev/repair profile requires approval for high-risk repair shell command: " + risk.Reason, Scope: scope}, true
+				}
+				if approvalMode == InteractiveApprovalModeYOLO {
+					return PermissionResult{Decision: PermissionAllow, Reason: "high-risk shell command auto-approved by yolo mode: " + risk.Reason, Scope: "policy"}, true
 				}
 				return PermissionResult{Decision: PermissionPending, Reason: "high-risk shell command requires approval: " + risk.Reason, Scope: scope}, true
 			}

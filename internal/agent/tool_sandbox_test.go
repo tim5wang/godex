@@ -43,6 +43,41 @@ func TestRegisteredWorkspaceToolsUseAgentSandboxBinding(t *testing.T) {
 	}
 }
 
+func TestRegisteredFileToolsCanReadOnlyAccessCurrentSessionAttachments(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.sessionID = "web-current"
+	a.cfg.SessionsDir = filepath.Join(t.TempDir(), "sessions")
+	attachmentDir := filepath.Join(a.cfg.SessionsDir, a.sessionID, "attachments")
+	if err := os.MkdirAll(attachmentDir, 0755); err != nil {
+		t.Fatalf("mkdir attachment dir: %v", err)
+	}
+	attachmentPath := filepath.Join(attachmentDir, "upload.tsv")
+	if err := os.WriteFile(attachmentPath, []byte("url\tsegments\nexample.aac\t[]\n"), 0644); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+	otherDir := filepath.Join(a.cfg.SessionsDir, "web-other", "attachments")
+	if err := os.MkdirAll(otherDir, 0755); err != nil {
+		t.Fatalf("mkdir other attachment dir: %v", err)
+	}
+	otherPath := filepath.Join(otherDir, "secret.txt")
+	if err := os.WriteFile(otherPath, []byte("secret"), 0644); err != nil {
+		t.Fatalf("write other attachment: %v", err)
+	}
+
+	a.toolHandler = tools.NewToolHandler()
+	a.RegisterTools()
+	output, err := a.handleTool(context.Background(), "read_file", map[string]interface{}{"path": attachmentPath})
+	if err != nil || !strings.Contains(output, "example.aac") {
+		t.Fatalf("read current session attachment: output=%q err=%v", output, err)
+	}
+	if _, err := a.handleTool(context.Background(), "attach_file", map[string]interface{}{"path": attachmentPath}); err != nil {
+		t.Fatalf("attach current session attachment: %v", err)
+	}
+	if _, err := a.handleTool(context.Background(), "read_file", map[string]interface{}{"path": otherPath}); err == nil {
+		t.Fatal("expected another session's attachment to remain outside the read allowlist")
+	}
+}
+
 func TestToolExecutionContextIncludesSandboxID(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	var captured string

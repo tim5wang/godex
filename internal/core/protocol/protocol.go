@@ -98,6 +98,10 @@ type Block struct {
 	Input     map[string]interface{} `json:"input,omitempty"`
 	ToolUseID string                 `json:"tool_use_id,omitempty"`
 	Content   string                 `json:"content,omitempty"`
+	// IsError records that a tool_result came from a failed invocation. It is
+	// persisted with the conversation so frontends can restore the correct
+	// failed state after a snapshot reload, and maps to Anthropic's is_error.
+	IsError   bool                   `json:"is_error,omitempty"`
 	// Signature is the opaque Anthropic thinking signature the
 	// client must echo back on the next turn to keep multi-turn
 	// reasoning context. The gateway only sets it on BlockThinking
@@ -235,6 +239,12 @@ func ToolUseBlock(id, name string, input map[string]interface{}) Block {
 
 func ToolResultBlock(toolUseID, content string) Block {
 	return Block{Type: BlockToolResult, ToolUseID: toolUseID, Content: content}
+}
+
+// ToolErrorResultBlock builds a failed tool result while keeping the same
+// model-visible content as a normal result.
+func ToolErrorResultBlock(toolUseID, content string) Block {
+	return Block{Type: BlockToolResult, ToolUseID: toolUseID, Content: content, IsError: true}
 }
 
 func NewMessage(role string, blocks ...Block) Message {
@@ -393,6 +403,7 @@ func cloneBlocks(blocks []Block) []Block {
 			Input:     cloneMap(block.Input),
 			ToolUseID: block.ToolUseID,
 			Content:   block.Content,
+			IsError:   block.IsError,
 			Signature: block.Signature,
 			Redacted:  block.Redacted,
 		})
@@ -417,7 +428,9 @@ func apiBlocks(blocks []Block) []Block {
 			}
 			result = append(result, ToolUseBlock(block.ID, block.Name, input))
 		case BlockToolResult:
-			result = append(result, ToolResultBlock(block.ToolUseID, block.Content))
+			resultBlock := ToolResultBlock(block.ToolUseID, block.Content)
+			resultBlock.IsError = block.IsError
+			result = append(result, resultBlock)
 		case BlockThinking:
 			// Thinking blocks travel separately from text; the wire
 			// serializer drops them when shaping the upstream payload
@@ -502,6 +515,9 @@ func (b Block) MarshalJSON() ([]byte, error) {
 	case BlockToolResult:
 		payload["tool_use_id"] = b.ToolUseID
 		payload["content"] = b.Content
+		if b.IsError {
+			payload["is_error"] = true
+		}
 	case BlockThinking:
 		// Thinking blocks use a separate shape on the wire:
 		// `{type: "thinking", thinking: "...", signature: "..."}`.

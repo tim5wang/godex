@@ -413,10 +413,16 @@ control:
   trust_level: {{ yamlString .Control.TrustLevel }}
   # Optional central Godex service URL for auto-registration. Environment override: GODEX_CONTROL_CENTER_URL.
   center_url: {{ yamlString .Control.CenterURL }}
+  # Node credential issued by the center (ck_...). Prefer GODEX_CONTROL_CREDENTIAL in .env;
+  # kept here so a config rewrite does not drop a value placed in YAML. Environment override: GODEX_CONTROL_CREDENTIAL.
+  credential: {{ yamlString .Control.Credential }}
   # Heartbeat interval in seconds. Environment override: GODEX_CONTROL_HEARTBEAT_SECONDS.
   heartbeat_seconds: {{ .Control.HeartbeatSeconds }}
   # Mark nodes offline after this many seconds without heartbeat. Environment override: GODEX_CONTROL_OFFLINE_AFTER_SECONDS.
   offline_after_seconds: {{ .Control.OfflineAfterSeconds }}
+  # TCP forward allowlist for 'godex node forward' (host:port with * wildcards). Empty denies all forwarding. Environment override: GODEX_CONTROL_FORWARD_ALLOW.
+  forward_allow:
+{{ yamlValue .Control.ForwardAllow 4 }}
   # Manually known nodes for the control plane dashboard.
   nodes:
 {{ yamlValue .Control.Nodes 4 }}
@@ -556,6 +562,9 @@ tools:
     tavily:
       # Optional Tavily API key. Environment override: GODEX_WEB_SEARCH_TAVILY_API_KEY.
       api_key: {{ yamlString .Tools.WebSearch.Tavily.APIKey }}
+    serpapi:
+      # Optional SerpAPI key. Environment override: GODEX_WEB_SEARCH_SERPAPI_API_KEY.
+      api_key: {{ yamlString .Tools.WebSearch.SerpAPI.APIKey }}
 
   web_fetch:
     # Enable the built-in web_fetch tool. Environment override: GODEX_WEB_FETCH_ENABLED.
@@ -783,4 +792,12 @@ channels:
     long_poll_timeout_ms: {{ .Channels.Weixin.LongPollTimeoutMs }}
     # Optional HTTP(S) proxy URL for iLink requests. Environment override: WEIXIN_PROXY.
     proxy: {{ yamlString .Channels.Weixin.Proxy }}
+
+memory:
+  # Durable-memory behavior: per-turn (default) | agent-only (no auto extraction) | consolidated (capture + LLM merge/dedup).
+  strategy: {{ yamlString .Memory.Strategy }}
+  # Pending-candidate count that triggers an LLM consolidation pass when strategy=consolidated.
+  consolidate_after: {{ .Memory.ConsolidateAfter }}
+  # When true, isolates durable memory per session (roadmap 6.2): each session gets its own memory dir.
+  session_scope: {{ .Memory.SessionScope }}
 `

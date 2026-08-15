@@ -21,7 +21,7 @@ import { writeClipboardText } from "../../lib/clipboard";
 import { type ComposerSubmission, Composer } from "../../components/Composer";
 import { TaskCenterPanel } from "./TaskCenterPanel";
 import { SessionsRail } from "../chat-v2/SessionsRail";
-import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined } from "@ant-design/icons";
+import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, LogoutOutlined } from "@ant-design/icons";
 import { DOCK_TAB_META } from "../chat-v2/DockRail";
 import { MessageFeedV2 } from "../../components/MessageFeedV2";
 import { FilesPanel } from "../files/FilesPanel";
@@ -59,6 +59,8 @@ export function ChatPage() {
   const { t } = useI18n();
   const token = useSettingsStore((state) => state.token);
   const remoteNodeID = useNodeContextStore((state) => state.nodeID);
+  const remoteNodeName = useNodeContextStore((state) => state.nodeName);
+  const clearRemoteNode = useNodeContextStore((state) => state.clearNode);
   const defaultSessionKey = useSettingsStore((state) => state.defaultSessionKey);
   const setDefaultSessionKey = useSettingsStore((state) => state.setDefaultSessionKey);
 
@@ -460,19 +462,50 @@ export function ChatPage() {
     queryKey: ["sessions", token, remoteNodeID],
     enabled: !authRequired || !!token,
     queryFn: async () => listSessions(token || null),
+    // Retry twice on failure — especially important for remote nodes that
+    // may be slow to become ready after a node switch or page load.
+    retry: 2,
+    // Session metadata changes far less often than chat snapshots. Keep the
+    // assembled list warm across route/session switches; explicit mutations
+    // and turn completion invalidate it when metadata can actually change.
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
   });
 
   useEffect(() => {
-    if (openQuery.data?.session_id) {
-      void queryClient.invalidateQueries({ queryKey: ["sessions", token] });
+    const opened = openQuery.data;
+    if (!opened?.session_id) {
+      return;
     }
-  }, [openQuery.data?.session_id, queryClient, token]);
+    // Opening/switching a session must not refetch the whole rail. Upsert a
+    // newly-created session locally; existing sessions keep their cached title
+    // and timestamps until the next meaningful refresh.
+    queryClient.setQueryData<ListedSession[]>(["sessions", token, remoteNodeID], (current) => {
+      if (current?.some((item) => item.session_id === opened.session_id)) {
+        return current;
+      }
+      const now = opened.updated_at || opened.created_at || new Date().toISOString();
+      return [
+        {
+          session_id: opened.session_id,
+          locator: opened.locator,
+          title: "New chat",
+          created_at: opened.created_at || now,
+          updated_at: now,
+          last_activity_at: now,
+        },
+        ...(current ?? []),
+      ];
+    });
+  }, [openQuery.data, queryClient, remoteNodeID, token]);
 
-  // Remote node switch: the node-scoped proxy (nodeProxyPath in api.ts) routes
-  // /sessions to the newly active node, so any cached list from the previous
-  // node (or the local center) must be refetched under the new node key.
+  // Remote node switch: sessions are naturally isolated by remoteNodeID in
+  // their query key. Models still need explicit invalidation because their
+  // existing query keys are session-scoped rather than node-scoped.
   useEffect(() => {
-    void queryClient.invalidateQueries({ queryKey: ["sessions", token] });
+    // The sessions query already includes remoteNodeID, so switching nodes
+    // naturally selects/fetches the correct cache entry without invalidating
+    // and rebuilding every previously cached session list.
     void queryClient.invalidateQueries({ queryKey: ["models", token] });
   }, [queryClient, remoteNodeID, token]);
 
@@ -491,6 +524,7 @@ export function ChatPage() {
     }
     const controller = new AbortController();
     let reconnectTimer: number | undefined;
+    let connectedOnce = false;
     const connect = async () => {
       try {
         setStreamConnected(false);
@@ -499,11 +533,25 @@ export function ChatPage() {
           token || null,
           controller.signal,
           (event) => {
-            if (event.session_id && event.session_id !== sessionId) {
+            // Guard against stale events from a previous session's stream:
+            // the closure `sessionId` can lag behind the store during a
+            // session switch (cleanup is async), so read the authoritative
+            // session id from the store instead.
+            const currentSessionId = useChatStore.getState().sessionId;
+            if (event.session_id && currentSessionId && event.session_id !== currentSessionId) {
               return;
             }
             handleEvent(event);
             setTimelineItems((current) => appendTimelineEvent(current, event));
+            if (event.type === "user_message_accepted") {
+              queryClient.setQueryData<ListedSession[]>(["sessions", token, remoteNodeID], (current) =>
+                current?.map((item) =>
+                  item.session_id === sessionId
+                    ? { ...item, running: true, updated_at: event.timestamp, last_activity_at: event.timestamp }
+                    : item,
+                ) ?? current,
+              );
+            }
             if (event.type === "snapshot_ready") {
               void queryClient.invalidateQueries({ queryKey: ["snapshot", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["timeline", token, sessionId] });
@@ -511,7 +559,14 @@ export function ChatPage() {
               void queryClient.invalidateQueries({ queryKey: ["subagents", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["context-inspector", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["skills-active", token, sessionId] });
-              void queryClient.invalidateQueries({ queryKey: ["sessions", token] });
+            }
+            // Refresh list metadata once per completed turn (title, activity,
+            // running badge), not on every snapshot/tool checkpoint.
+            if (event.type === "turn_completed") {
+              queryClient.setQueryData<ListedSession[]>(["sessions", token, remoteNodeID], (current) =>
+                current?.map((item) => (item.session_id === sessionId ? { ...item, running: false } : item)) ?? current,
+              );
+              void queryClient.invalidateQueries({ queryKey: ["sessions", token, remoteNodeID] });
             }
             if (event.type === "subagent_job_updated") {
               void queryClient.invalidateQueries({ queryKey: ["subagents", token, sessionId] });
@@ -521,15 +576,21 @@ export function ChatPage() {
           },
           () => {
             setStreamConnected(true);
-            // Service restart / network recovery: the SSE stream is back but
-            // the cached snapshot/timeline/sessions may be stale (global
-            // refetchOnMount/refetchOnWindowFocus are disabled). Invalidate
-            // the node-scoped queries so the UI resyncs without a page reload.
+            const recoveredConnection = connectedOnce;
+            connectedOnce = true;
+            if (!recoveredConnection) {
+              // Initial connection (including a normal session switch): the
+              // session-scoped queries are already loading and the warm rail
+              // must not be invalidated.
+              return;
+            }
+            // Actual service/network recovery: resync caches without a page
+            // reload. This path runs only when this same stream reconnects.
             void queryClient.invalidateQueries({ queryKey: ["snapshot", token, sessionId] });
             void queryClient.invalidateQueries({ queryKey: ["timeline", token, sessionId] });
             void queryClient.invalidateQueries({ queryKey: ["timeline-page", token, sessionId] });
             void queryClient.invalidateQueries({ queryKey: ["context-inspector", token, sessionId] });
-            void queryClient.invalidateQueries({ queryKey: ["sessions", token] });
+            void queryClient.invalidateQueries({ queryKey: ["sessions", token, remoteNodeID] });
           },
         );
       } catch {
@@ -550,7 +611,7 @@ export function ChatPage() {
       }
       setStreamConnected(false);
     };
-  }, [authRequired, handleEvent, queryClient, sessionId, setStreamConnected, token]);
+  }, [authRequired, handleEvent, queryClient, remoteNodeID, sessionId, setStreamConnected, token]);
 
   const items = useMemo(() => mergeChronologicalFeedItems(historyItems, overlayItems), [historyItems, overlayItems]);
   // V2 groups the flat feed into per-turn items (text + tool + todo segments).
@@ -727,7 +788,7 @@ export function ChatPage() {
         deletedSession.locator.user_id,
       ];
       await queryClient.cancelQueries({ queryKey: deletedOpenQueryKey });
-      queryClient.setQueryData<ListedSession[]>(["sessions", token], (current) =>
+      queryClient.setQueryData<ListedSession[]>(["sessions", token, remoteNodeID], (current) =>
         current?.filter((session) => session.session_id !== deletedSession.session_id) ?? current,
       );
       if (nextSession) {
@@ -1081,7 +1142,6 @@ export function ChatPage() {
       }
     }
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["sessions", token] }),
       queryClient.invalidateQueries({ queryKey: ["snapshot", token, activeSessionId] }),
       queryClient.invalidateQueries({ queryKey: ["timeline", token, activeSessionId] }),
       queryClient.invalidateQueries({ queryKey: ["timeline-page", token, activeSessionId] }),
@@ -1237,7 +1297,9 @@ export function ChatPage() {
             <SessionsRail
               collapsed={v2LeftCollapsed}
               sessions={filteredSessions}
-              loading={sessionsQuery.isLoading || sessionsQuery.isFetching}
+              loading={sessionsQuery.isLoading}
+              error={sessionsQuery.isError}
+              onRetry={() => void queryClient.invalidateQueries({ queryKey: ["sessions", token, remoteNodeID] })}
               activeSessionId={openQuery.data?.session_id ?? ""}
               searchQuery={v2SessionSearch ?? ""}
               deletingSessionId={deleteSessionMutation.variables?.session_id ?? ""}
@@ -1265,6 +1327,12 @@ export function ChatPage() {
                 </Tooltip>
               </Space>
               <Space size={4}>
+                {remoteNodeID ? (
+                  <span className="chat-v2-topbar-remote">
+                    <span className="chat-v2-topbar-remote-label">{remoteNodeName || remoteNodeID}</span>
+                    <Button type="text" size="small" icon={<LogoutOutlined />} onClick={clearRemoteNode} aria-label={t("nodes.remoteExit")} title={t("nodes.remoteExit")} />
+                  </span>
+                ) : null}
                 <div className="chat-v2-topbar-tabs">
                   {DOCK_TABS.map((tab: DockTab) => {
                     const meta = DOCK_TAB_META[tab];

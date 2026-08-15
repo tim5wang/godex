@@ -827,7 +827,8 @@ func sortEntries(entries []Entry) {
 
 func validateSaveInput(input SaveInput) error {
 	switch input.Type {
-	case TypeIdentity, TypeUser, TypeWorkflow, TypeProject, TypeWarning:
+	case TypeIdentity, TypeUser, TypeWorkflow, TypeProject, TypeWarning,
+		TypeWorkMethod, TypeWorkFact:
 	default:
 		return fmt.Errorf("unsupported memory type %q", input.Type)
 	}

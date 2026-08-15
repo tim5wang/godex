@@ -105,8 +105,8 @@ func TestOpenAICodexClientForwardsPromptCacheKey(t *testing.T) {
 	if got := body["prompt_cache_key"]; got != "session-abc" {
 		t.Fatalf("expected prompt_cache_key forwarded, got %#v", got)
 	}
-	if got := body["prompt_cache_retention"]; got != "24h" {
-		t.Fatalf("expected prompt_cache_retention=24h, got %#v", got)
+	if _, ok := body["prompt_cache_retention"]; ok {
+		t.Fatalf("did not expect prompt_cache_retention (unsupported by codex endpoint), got %#v", body)
 	}
 }
 

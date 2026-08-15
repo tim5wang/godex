@@ -143,21 +143,25 @@ func TestRunnerReasoningOverflowRequestsDirectAnswer(t *testing.T) {
 }
 
 // No-mutation spiral: many consecutive tool rounds without touching a file
-// (research spiral) must trip the loop guard even when the tools vary, and
-// the run must abort if the model keeps looping after the nudge.
-func TestLoopGuardNoMutationSpiralRecoversThenAborts(t *testing.T) {
+// (research spiral) must trip the loop guard even when the tools vary, but
+// the no-mutation signal alone never aborts in strict mode: the model is
+// nudged repeatedly and may always escape by writing a checkpoint or giving
+// a final answer. Abort remains reserved for the identical-tool/polling/
+// cycle detectors where repetition is unambiguous.
+func TestLoopGuardNoMutationSpiralNeverAborts(t *testing.T) {
 	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "investigate")}
-	toolRound := protocol.Response{Content: []protocol.Block{
-		protocol.TextBlock("checking"),
-		protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "grep something"}),
-	}}
 	// Many rounds; vary the command so identical-tool detection stays silent.
+	// Each response gets its own Content slice (no shared backing array).
 	var responses []protocol.Response
 	for i := 0; i < 30; i++ {
-		resp := toolRound
-		resp.Content[1] = protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "grep check-" + itoa(i)})
-		responses = append(responses, resp)
+		responses = append(responses, protocol.Response{Content: []protocol.Block{
+			protocol.TextBlock("checking"),
+			protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "grep check-" + itoa(i)}),
+		}})
 	}
+	// The model eventually answers; the loop must never be aborted by the
+	// no-mutation detector alone, no matter how many nudges it received.
+	responses = append(responses, protocol.Response{Content: []protocol.Block{protocol.TextBlock("findings summarized")}})
 	caller := &fakeCaller{responses: responses}
 
 	var feedbacks []string
@@ -181,7 +185,7 @@ func TestLoopGuardNoMutationSpiralRecoversThenAborts(t *testing.T) {
 			feedbacks = append(feedbacks, protocol.MessageText(msg))
 			messages = append(messages, msg)
 		},
-		MaxRepeatedTools:    0, // isolate the no-mutation detector
+		MaxRepeatedTools:    1000, // isolate the no-mutation detector (0 maps to the default 8 in Runner)
 		MaxNoMutationRounds: 3,
 		MaxTurns:            40,
 	}.Run(context.Background())
@@ -193,15 +197,17 @@ func TestLoopGuardNoMutationSpiralRecoversThenAborts(t *testing.T) {
 	if !strings.Contains(feedbacks[0], "DEEP RESEARCH") || !strings.Contains(feedbacks[0], "write your findings") {
 		t.Fatalf("expected research-notes escape hatch in nudge, got %q", feedbacks[0])
 	}
-	// The model kept looping with the same pattern past the generous nudge
-	// budget (5 x MaxNoMutationRounds windows) -> strict mode aborts.
-	if err == nil {
-		t.Fatal("expected loop guard abort after the no-mutation spiral persisted")
+	// Repeated nudges are fine (research-safe), but the run must complete:
+	// the no-mutation signal never escalates to abort in strict mode.
+	if err != nil {
+		t.Fatalf("expected no-mutation spiral to recover until completion, got %v", err)
+	}
+	if result == nil || !result.Completed || result.LastAssistantText != "findings summarized" {
+		t.Fatalf("expected completed result, got %+v", result)
 	}
 	if len(feedbacks) < 3 {
 		t.Fatalf("expected repeated nudges (research-safe), got %d", len(feedbacks))
 	}
-	_ = result
 }
 
 // Deep research that periodically checkpoints findings to a file must NOT be

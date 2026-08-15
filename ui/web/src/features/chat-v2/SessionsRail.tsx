@@ -1,4 +1,4 @@
-import { Badge, Button, Empty, Input, Popconfirm, Popover, Skeleton, Typography } from "antd";
+import { Badge, Button, Empty, Input, Popconfirm, Popover, Skeleton, Tooltip, Typography } from "antd";
 import {
   ApiOutlined,
   ClockCircleOutlined,
@@ -8,6 +8,7 @@ import {
   MessageOutlined,
   PlusOutlined,
   QuestionCircleOutlined,
+  ReloadOutlined,
   SearchOutlined,
   SwapOutlined,
   VerticalRightOutlined,
@@ -22,6 +23,8 @@ interface SessionsRailProps {
   collapsed: boolean;
   sessions: ListedSession[];
   loading?: boolean;
+  error?: boolean;
+  onRetry?: () => void;
   activeSessionId: string;
   searchQuery: string;
   deletingSessionId?: string;
@@ -162,22 +165,34 @@ function NewChatWorkspacePopover(props: { onCreate: (workspaceDir?: string) => v
  *  workspace-grouped conversations. Collapses to a 48px icon strip. */
 export function SessionsRail(props: SessionsRailProps) {
   const { t } = useI18n();
+  // ChatPage rerenders for every stream delta. Assemble the expensive
+  // workspace/date hierarchy only when the list or search changes, and do it
+  // while the mobile rail is collapsed so opening the drawer is immediate.
+  const workspaceGroups = useMemo(
+    () => groupSessionsByWorkspace(filterSessions(props.sessions, props.searchQuery)),
+    [props.searchQuery, props.sessions],
+  );
 
   if (props.collapsed) {
     return (
       <div className="chat-v2-rail chat-v2-rail-collapsed" data-testid="chat-v2-sessions-collapsed">
-        <Popover content={t("chat.chatV2Rail.expandSidebar")} trigger="hover" placement="right">
-          <Button type="text" icon={<VerticalRightOutlined />} aria-label={t("chat.chatV2Rail.expandSidebar")} onClick={props.onToggleCollapsed} />
-        </Popover>
-        <NewChatWorkspacePopover onCreate={props.onCreate}>
-          <Button type="text" icon={<PlusOutlined />} aria-label={t("chat.chatV2Rail.newChat")} />
-        </NewChatWorkspacePopover>
+        {props.error ? (
+          <Tooltip title="Retry loading sessions">
+            <Button type="text" icon={<ReloadOutlined />} aria-label="Reload sessions" onClick={props.onRetry} danger />
+          </Tooltip>
+        ) : (
+          <>
+            <Popover content={t("chat.chatV2Rail.expandSidebar")} trigger="hover" placement="right">
+              <Button type="text" icon={<VerticalRightOutlined />} aria-label={t("chat.chatV2Rail.expandSidebar")} onClick={props.onToggleCollapsed} />
+            </Popover>
+            <NewChatWorkspacePopover onCreate={props.onCreate}>
+              <Button type="text" icon={<PlusOutlined />} aria-label={t("chat.chatV2Rail.newChat")} />
+            </NewChatWorkspacePopover>
+          </>
+        )}
       </div>
     );
   }
-
-  const filtered = filterSessions(props.sessions, props.searchQuery);
-  const workspaceGroups = groupSessionsByWorkspace(filtered);
 
   return (
     <div className="chat-v2-rail" data-testid="chat-v2-sessions">
@@ -198,7 +213,14 @@ export function SessionsRail(props: SessionsRailProps) {
         onChange={(event) => props.onSearchChange(event.target.value)}
       />
       <div className="chat-v2-session-scroll">
-        {props.loading ? (
+        {props.error ? (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: 24 }}>
+            <Typography.Text type="danger">{t("chat.chatV2Rail.loadError")}</Typography.Text>
+            <Button icon={<ReloadOutlined />} onClick={props.onRetry} size="small">
+              {t("chat.chatV2Rail.retry")}
+            </Button>
+          </div>
+        ) : props.loading ? (
           <div className="chat-v2-rail-loading" data-testid="chat-v2-sessions-loading">
             <Skeleton active paragraph={{ rows: 5 }} title={false} />
           </div>

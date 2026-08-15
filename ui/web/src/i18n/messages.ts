@@ -646,6 +646,8 @@ export const messages = {
         deleteConfirm: "Delete this session?",
         workspaceDirPlaceholder: "Working directory (optional)",
         workspaceDirHint: "Leave empty to use the service directory. Set a path to run this chat's tools in that directory.",
+        loadError: "Failed to load sessions",
+        retry: "Retry",
       },
     },
     usage: {
@@ -1405,6 +1407,8 @@ export const messages = {
         deleteConfirm: "确定删除此会话？",
         workspaceDirPlaceholder: "工作目录（可选）",
         workspaceDirHint: "留空则使用服务运行目录；填写路径后，本会话的工具将在该目录下执行。",
+        loadError: "加载会话列表失败",
+        retry: "重试",
       },
     },
     usage: {

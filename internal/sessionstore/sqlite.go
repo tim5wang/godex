@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +41,20 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
+}
+
+// LoadManifest selects only the small manifest blob so session-list requests
+// do not copy the potentially multi-megabyte state and timeline columns.
+func (s *SQLiteStore) LoadManifest(ctx context.Context, id string) (json.RawMessage, bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT manifest FROM sessions WHERE session_id = ?`, id)
+	var manifest []byte
+	if err := row.Scan(&manifest); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return raw(manifest), true, nil
 }
 
 func (s *SQLiteStore) Load(ctx context.Context, id string) (SessionData, bool, error) {

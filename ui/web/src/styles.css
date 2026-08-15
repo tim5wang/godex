@@ -508,7 +508,7 @@ samp {
 .chat-page {
   display: grid;
   grid-template-columns: var(--chat-sessions-width, 320px) minmax(0, 1fr) var(--chat-inspector-width, 380px);
-  height: calc(100dvh - 56px);
+  height: calc(100dvh - 56px); /* desktop header height; mobile overrides below */
   min-height: 0;
   overflow: hidden;
 }
@@ -1934,7 +1934,8 @@ samp {
 
 @media (max-width: 720px) {
   .godex-header {
-    padding: 0 12px;
+    min-height: 40px;
+    padding: 0 10px;
   }
 
   .godex-header .muted {
@@ -2120,14 +2121,18 @@ samp {
 }
 
 /* Close button inside the right panel — visible only on mobile (overlay mode) */
+/* 36×36 visual with transparent padding to 44×44 touch target */
 .chat-v2-right-close {
   display: none;
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: 6px;
+  left: 4px;
   z-index: 11;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 4px;
   border: none;
   border-radius: 6px;
   background: var(--godex-panel-strong, rgba(0, 0, 0, 0.06));
@@ -2429,6 +2434,31 @@ samp {
   white-space: nowrap;
 }
 
+/* Remote mode indicator + exit in topbar (mobile-optimised:
+ * label hidden below 900px, only the exit icon remains). */
+.chat-v2-topbar-remote {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-right: 1px solid var(--godex-border);
+}
+
+.chat-v2-topbar-remote-label {
+  font-size: 11px;
+  color: var(--godex-accent, #0f766e);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .chat-v2-topbar-remote-label {
+    display: none;
+  }
+}
+
 .chat-v2-topbar-tabs {
   display: flex;
   align-items: center;
@@ -2477,9 +2507,14 @@ samp {
   background: var(--godex-panel);
 }
 
+/* 36×36 visual, transparent padding extends touch area to 48×48 */
 .chat-v2-rail-collapsed .ant-btn {
+  position: relative;
   width: 36px;
   height: 36px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 6px;
 }
 
 /* Sessions rail */
@@ -2622,6 +2657,7 @@ samp {
 }
 
 /* Responsive: collapse v2 grid on narrow screens; right panel overlays */
+/* Narrow viewport: single-col + right overlay */
 @media (max-width: 900px) {
   .chat-v2-layout {
     grid-template-columns: var(--chat-v2-left-width, 264px) minmax(0, 1fr);
@@ -2629,7 +2665,7 @@ samp {
 
   .chat-v2-right {
     position: fixed;
-    inset: 56px 0 0 0;
+    inset: 0 0 0 0;
     z-index: 100;
     display: none;
     border-left: none;
@@ -2637,5 +2673,11 @@ samp {
 
   .chat-v2-right[data-collapsed="false"] {
     display: flex;
+  }
+
+  /* Narrow topbar tabs: ensure touch target ≥ 40px */
+  .chat-v2-topbar-tab.ant-btn {
+    min-width: 40px;
+    min-height: 40px;
   }
 }

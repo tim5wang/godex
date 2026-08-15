@@ -62,11 +62,11 @@ func BashDefinition() Definition {
 func ReadFileDefinition() Definition {
 	return Definition{
 		Name:        "read_file",
-		Description: "Read UTF-8 text file contents from a workspace-relative path. Returns content with line numbers. Source code files are returned in full; other files default to 2000 lines. Do not use for binary files such as PDFs, images, media, or archives — use attach_file instead.",
+		Description: "Read UTF-8 text file contents from a workspace-relative path, or from an exact read-only attachment path supplied in the current conversation. Returns content with line numbers. Source code files are returned in full; other files default to 2000 lines. Do not use for binary files such as PDFs, images, media, or archives — use attach_file instead.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path": map[string]interface{}{"type": "string", "description": "Workspace-relative path such as agent/agent.go"},
+				"path": map[string]interface{}{"type": "string", "description": "Workspace-relative path such as agent/agent.go, or the exact read-only path shown for a current-session attachment"},
 				"offset": map[string]interface{}{
 					"type":        "integer",
 					"description": "1-based line number to start reading from. Default: 1.",
@@ -238,13 +238,13 @@ func LsDefinition() Definition {
 func AttachFileDefinition() Definition {
 	return Definition{
 		Name:        "attach_file",
-		Description: "Attach a local workspace file to the current session reply without reading its contents. Use for screenshots, PDFs, downloads, and other files that should be sent as attachments.",
+		Description: "Attach a local workspace file, or a file at an exact read-only attachment path supplied in the current conversation, to the session reply without reading its contents. Use for screenshots, PDFs, downloads, and other files that should be sent as attachments.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path": map[string]interface{}{
 					"type":        "string",
-					"description": "Workspace-relative path such as .godex/.tmp/report.pdf",
+					"description": "Workspace-relative path such as .godex/.tmp/report.pdf, or the exact read-only path shown for a current-session attachment",
 				},
 			},
 			"required": []string{"path"},

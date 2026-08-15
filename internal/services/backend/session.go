@@ -656,7 +656,7 @@ func (s *Service) ListSessions(ctx context.Context, filter SessionListFilter) ([
 	sort.Strings(sessionIDs)
 	listed := make([]ListedSession, 0, len(sessionIDs))
 	for _, sessionID := range sessionIDs {
-		manifest, state, err := s.readSessionListFiles(sessionID)
+		manifest, err := s.readSessionListManifest(ctx, sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -670,8 +670,17 @@ func (s *Service) ListSessions(ctx context.Context, filter SessionListFilter) ([
 
 		title := strings.TrimSpace(manifest.Title)
 		if title == "" || title == "New chat" {
-			// Treat the placeholder as missing so sessions that got stuck on it
-			// (e.g. first turn needed a permission) are re-derived from state.
+			// Old sessions without a real title are the exceptional slow path:
+			// load state once, derive the title, and persist it. Normal list calls
+			// read manifests only and never deserialize full conversation state.
+			fullManifest, state, err := s.readSessionListFiles(sessionID)
+			if err != nil {
+				return nil, err
+			}
+			if fullManifest != nil {
+				manifest = fullManifest
+				manifest.Locator = normalizeLocator(manifest.Locator)
+			}
 			if state == nil {
 				return nil, newSessionCorruptError(sessionID, "missing %s while backfilling title", stateFileName)
 			}
@@ -716,6 +725,29 @@ func (s *Service) ListSessions(ctx context.Context, filter SessionListFilter) ([
 		return listed[i].UpdatedAt.After(listed[j].UpdatedAt)
 	})
 	return listed, nil
+}
+
+// readSessionListManifest uses a store's metadata-only path when available.
+// Falling back to the full repair-aware loader preserves compatibility with
+// custom stores and damaged legacy sessions.
+func (s *Service) readSessionListManifest(ctx context.Context, sessionID string) (*SessionManifest, error) {
+	if s.storeErr != nil {
+		return nil, s.storeErr
+	}
+	if loader, ok := s.store.(sessionstore.ManifestLoader); ok {
+		data, exists, err := loader.LoadManifest(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if exists && len(data) > 0 {
+			var manifest SessionManifest
+			if err := json.Unmarshal(data, &manifest); err == nil {
+				return &manifest, nil
+			}
+		}
+	}
+	manifest, _, err := s.readSessionListFiles(sessionID)
+	return manifest, err
 }
 
 func (s *Service) readSessionListFiles(sessionID string) (*SessionManifest, *agent.SessionState, error) {

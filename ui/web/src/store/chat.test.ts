@@ -90,4 +90,24 @@ describe("chat store null snapshot safety", () => {
     const items = useChatStore.getState().historyItems;
     expect(items.filter((item) => item.kind === "user" || item.kind === "assistant").length).toBe(2);
   });
+
+  it.each([
+    { content: "exit status 1", is_error: true },
+    { content: JSON.stringify({ status: "error", error: "legacy exit status 1", code: "tool_error" }) },
+  ])("restores failed tool styling from persisted tool results ($is_error)", (result) => {
+    const store = useChatStore.getState();
+    store.setSession("s-failed-tool", "k1");
+    store.syncSnapshot(
+      [
+        { role: "assistant", content: [{ type: "tool_use", id: "call-1", name: "bash", input: { command: "false" } }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "call-1", ...result }] },
+      ],
+      false,
+      "",
+    );
+
+    const tool = useChatStore.getState().historyItems.find((item) => item.kind === "tool");
+    expect(tool?.status).toBe("failed");
+    expect(tool?.error).toContain("exit status 1");
+  });
 });

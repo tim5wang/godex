@@ -133,6 +133,11 @@ func baseSchema() []SectionSchema {
 			Description: "Safety profile applied to execution, approval, network, and host-privilege defaults.",
 			Fields: []FieldSchema{
 				{Path: "security.profile", Label: "Safety Profile", Description: "trusted-local, guarded-local, sandboxed, strict, host-privileged, or dev/repair.", Type: "string", LiveApply: true, Env: "GODEX_SECURITY_PROFILE", Options: []string{"trusted-local", "guarded-local", "sandboxed", "strict", "host-privileged", "dev/repair"}},
+				{Path: "security.screener.enabled", Label: "Screener Enabled", Description: "Enable the content security screener (roadmap 6.1).", Type: "bool", LiveApply: true, Env: "GODEX_SECURITY_SCREENER_ENABLED"},
+				{Path: "security.screener.shadow", Label: "Screener Shadow", Description: "Record verdicts without blocking the pipeline. Recommended rollout state.", Type: "bool", LiveApply: true, Env: "GODEX_SECURITY_SCREENER_SHADOW"},
+				{Path: "security.screener.provider", Label: "Screener Provider", Description: "Classifier provider label used for audit trails.", Type: "string", LiveApply: true, Env: "GODEX_SECURITY_SCREENER_PROVIDER"},
+				{Path: "security.screener.timeout_ms", Label: "Screener Timeout MS", Description: "Per-classification timeout in milliseconds.", Type: "int", LiveApply: true, Env: "GODEX_SECURITY_SCREENER_TIMEOUT_MS"},
+				{Path: "security.screener.max_tokens", Label: "Screener Max Tokens", Description: "Classifier response token cap.", Type: "int", LiveApply: true, Env: "GODEX_SECURITY_SCREENER_MAX_TOKENS"},
 			},
 		},
 		{
@@ -167,6 +172,16 @@ func baseSchema() []SectionSchema {
 				{Path: "paths.temp_dir", Label: "Temp Dir", Description: "Temporary runtime file directory.", Type: "string", LiveApply: true},
 				{Path: "paths.transcripts_dir", Label: "Transcripts Dir", Description: "Conversation compaction archive directory.", Type: "string", LiveApply: true},
 				{Path: "paths.sessions_dir", Label: "Sessions Dir", Description: "Unified session backend persistence directory.", Type: "string", LiveApply: true},
+			},
+		},
+		{
+			ID:          "memory",
+			Label:       "Memory",
+			Description: "Durable-memory capture strategy and per-session isolation.",
+			Fields: []FieldSchema{
+				{Path: "memory.strategy", Label: "Strategy", Description: "per-turn (default) | agent-only (no auto extraction) | consolidated (capture + LLM merge/dedup).", Type: "string", LiveApply: true, Options: []string{"per-turn", "agent-only", "consolidated"}},
+				{Path: "memory.consolidate_after", Label: "Consolidate After", Description: "Pending-candidate count that triggers an LLM consolidation pass when strategy=consolidated.", Type: "int", LiveApply: true},
+				{Path: "memory.session_scope", Label: "Session Scope", Description: "When true, isolate durable memory per session (roadmap 6.2): each session gets its own memory dir.", Type: "bool", LiveApply: true},
 			},
 		},
 		{

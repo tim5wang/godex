@@ -249,6 +249,7 @@ func (g *loopGuard) decide(decision loopGuardDecision) loopGuardDecision {
 		decision.Action = loopGuardRecover
 		decision.Feedback = loopGuardFeedback(decision, g.totalRecovery, -1)
 		decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d (warn-only mode) asked the model to change strategy.", g.totalRecovery)
+		g.resetCountsAfterRecovery(decision)
 		return decision
 	}
 	// balanced mode: recover infinitely but never abort. Differs from warn
@@ -259,6 +260,7 @@ func (g *loopGuard) decide(decision loopGuardDecision) loopGuardDecision {
 		decision.Action = loopGuardRecover
 		decision.Feedback = loopGuardFeedback(decision, g.totalRecovery, -1)
 		decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d (balanced mode) asked the model to change strategy.", g.totalRecovery)
+		g.resetCountsAfterRecovery(decision)
 		return decision
 	}
 	if g.config.MaxRecoveries <= 0 {
@@ -284,7 +286,32 @@ func (g *loopGuard) decide(decision loopGuardDecision) loopGuardDecision {
 	decision.Action = loopGuardRecover
 	decision.Feedback = loopGuardFeedback(decision, g.totalRecovery, g.config.MaxRecoveries)
 	decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d/%d asked the model to change strategy before aborting.", g.totalRecovery, g.config.MaxRecoveries)
+	g.resetCountsAfterRecovery(decision)
 	return decision
+}
+
+// resetCountsAfterRecovery clears the detector counters for the fingerprint
+// that just received a recovery nudge, so the model must re-accumulate to the
+// detection limit before the same pattern can abort again. Without this, a
+// single stray identical call right after a recovery would immediately hit
+// the "recovered before" abort path (one-strike veto).
+func (g *loopGuard) resetCountsAfterRecovery(decision loopGuardDecision) {
+	fp := decision.Fingerprint
+	switch {
+	case strings.HasPrefix(fp, "identical:"):
+		delete(g.repeated, strings.TrimPrefix(fp, "identical:"))
+	case strings.HasPrefix(fp, "polling:"):
+		key := strings.TrimPrefix(fp, "polling:")
+		// stalled-polling fingerprints carry a ":semantic" suffix; the map key
+		// is the bare input fingerprint (a hex sha256, so the first colon is
+		// the delimiter).
+		if i := strings.IndexByte(key, ':'); i >= 0 {
+			key = key[:i]
+		}
+		delete(g.polling, key)
+	case strings.HasPrefix(fp, "cycle:"):
+		g.recent = nil
+	}
 }
 
 func (d loopGuardDecision) Summary() string {
@@ -295,6 +322,12 @@ func (d loopGuardDecision) Summary() string {
 			tool = "unknown_tool"
 		}
 		return fmt.Sprintf("%s detected involving %s; cycle length %d repeated", d.Reason, tool, d.CycleLength)
+	case "no_mutation_spiral":
+		tool := strings.TrimSpace(d.Tool.Name)
+		if tool == "" {
+			tool = "unknown_tool"
+		}
+		return fmt.Sprintf("%s: %d consecutive tool rounds without any file mutation (last tool: %s)", d.Reason, d.Count, tool)
 	case "stale_todo_in_progress":
 		// Stale-todo decisions are keyed by todo itemID rather than by a tool
 		// name, so the summary omits `Tool.Name` and the in_progress item
@@ -347,39 +380,17 @@ func loopGuardFeedback(decision loopGuardDecision, recovery, maxRecovery int) st
 }
 
 // decideNoMutation is the no-mutation counterpart to decideStaleTodo: it
-// re-prompt the model with escalating feedback instead of aborting on the
-// first repeat, because zero file writes alone is ALSO the normal shape of
-// legitimate deep research. Only after MaxRecoveries nudges (each after a
-// fresh MaxNoMutationRounds window) with still no file write and no final
-// answer does it abort.
+// re-prompts the model with feedback instead of aborting, because zero file
+// writes alone is ALSO the normal shape of legitimate deep research. Unlike
+// the identical-tool/polling/cycle detectors, this signal NEVER aborts in any
+// mode (strict included) and does not consume the global recovery budget: a
+// research session may be reminded any number of times and can always escape
+// by writing a checkpoint file or producing a final answer.
 func (g *loopGuard) decideNoMutation(decision loopGuardDecision) loopGuardDecision {
-	if g.config.Mode == LoopGuardModeWarn || g.config.Mode == LoopGuardModeBalanced {
-		g.noMutationRecovered++
-		g.totalRecovery++
-		decision.Action = loopGuardRecover
-		decision.Feedback = noMutationFeedback(decision, g.noMutationRecovered, -1)
-		decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d (%s mode) reminded the model about zero file writes.", g.totalRecovery, g.config.Mode)
-		return decision
-	}
-	if g.config.MaxRecoveries <= 0 {
-		// Recoveries disabled: never abort on this signal alone.
-		g.noMutationRecovered++
-		decision.Action = loopGuardRecover
-		decision.Feedback = noMutationFeedback(decision, g.noMutationRecovered, -1)
-		decision.RecoveryHint = "Loop guard recovery (disabled-abort mode) reminded the model about zero file writes."
-		return decision
-	}
-	if g.noMutationRecovered >= g.config.MaxRecoveries {
-		decision.Action = loopGuardAbort
-		decision.AbortReason = "no-mutation spiral persisted after repeated runtime feedback"
-		decision.RecoveryHint = loopGuardAbortHint(decision)
-		return decision
-	}
 	g.noMutationRecovered++
-	g.totalRecovery++
 	decision.Action = loopGuardRecover
-	decision.Feedback = noMutationFeedback(decision, g.noMutationRecovered, g.config.MaxRecoveries)
-	decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d/%d reminded the model about zero file writes.", g.noMutationRecovered, g.config.MaxRecoveries)
+	decision.Feedback = noMutationFeedback(decision, g.noMutationRecovered, -1)
+	decision.RecoveryHint = fmt.Sprintf("Loop guard recovery %d (no-mutation spiral never aborts; write a file or answer to reset).", g.noMutationRecovered)
 	return decision
 }
 
@@ -484,19 +495,52 @@ func staleTodoFeedback(itemID int, content, activeForm string, recovery, maxReco
 // fire when the model is busy with non-todo work; if the model is actively
 // calling todo_write, the in_progress state may be transitioning and we
 // should not surface a stale feedback.
-// executedContainsNonTodoWrite reports whether any executed tool is a
-// file-mutating tool (edit_file/write_file). bash is deliberately excluded:
-// research spirals run read-only bash commands, and counting bash as a
-// mutation would mask the spiral. Real implementation work in godex goes
-// through edit_file/write_file.
+// executedContainsMutation reports whether any executed tool is a progress
+// signal: a file-mutating tool (edit_file/write_file), a todo list update, a
+// durable memory write, or a bash command that writes to a file. Read-only
+// research (read_file, grep, ...) is deliberately NOT counted: counting bash
+// as a mutation would mask research spirals, and real implementation work in
+// godex goes through edit_file/write_file. But a research session that
+// checkpoints via todo_write/memory remember or a file-writing bash command
+// IS making progress and should reset the no-mutation detector.
 func executedContainsMutation(executed []ExecutedTool) bool {
 	for _, tool := range executed {
-		switch tool.Name {
-		case "edit_file", "write_file":
+		if toolMakesProgress(tool) {
 			return true
 		}
 	}
 	return false
+}
+
+// toolMakesProgress reports whether a single executed tool counts as forward
+// progress for the no-mutation detector.
+func toolMakesProgress(tool ExecutedTool) bool {
+	switch tool.Name {
+	case "edit_file", "write_file", "todo_write":
+		return true
+	case "memory":
+		action, _ := tool.Input["action"].(string)
+		return strings.EqualFold(strings.TrimSpace(action), "remember")
+	case "bash":
+		command, _ := tool.Input["command"].(string)
+		return bashCommandWritesFile(command)
+	default:
+		return false
+	}
+}
+
+// bashCommandWritesFile reports whether a bash command appears to write to a
+// file: an output redirect (>, >>) or a file-writing utility (tee, touch,
+// mkdir). Stderr-only redirects (2>&1) are excluded so "cmd 2>&1" is not
+// mistaken for a file write.
+func bashCommandWritesFile(command string) bool {
+	cmd := strings.ToLower(strings.TrimSpace(command))
+	cmd = strings.ReplaceAll(cmd, "2>&1", "")
+	return strings.Contains(cmd, ">>") ||
+		strings.Contains(cmd, ">") ||
+		strings.Contains(cmd, "tee") ||
+		strings.Contains(cmd, "touch") ||
+		strings.Contains(cmd, "mkdir")
 }
 
 func executedContainsNonTodoWrite(executed []ExecutedTool) bool {

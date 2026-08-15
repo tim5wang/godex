@@ -29,9 +29,10 @@ func TestMessageFromResponsePreservesTextAndToolUseBlocks(t *testing.T) {
 }
 
 func TestToAPIMessagesPreservesToolResults(t *testing.T) {
+	failed := ToolErrorResultBlock("tool-1", "exit status 1")
 	messages := []Message{
 		NewTextMessage(RoleUser, "start"),
-		NewMessage(RoleUser, TextBlock("result:"), ToolResultBlock("tool-1", "done")),
+		NewMessage(RoleUser, TextBlock("result:"), failed),
 	}
 
 	apiMessages := ToAPIMessages(messages)
@@ -41,8 +42,12 @@ func TestToAPIMessagesPreservesToolResults(t *testing.T) {
 	if apiMessages[1].Content[1].Type != BlockToolResult {
 		t.Fatalf("expected second api message to keep tool_result block, got %+v", apiMessages[1].Content)
 	}
-	if apiMessages[1].Content[1].ToolUseID != "tool-1" || apiMessages[1].Content[1].Content != "done" {
+	if apiMessages[1].Content[1].ToolUseID != "tool-1" || apiMessages[1].Content[1].Content != "exit status 1" || !apiMessages[1].Content[1].IsError {
 		t.Fatalf("unexpected tool_result payload: %+v", apiMessages[1].Content[1])
+	}
+	data, err := json.Marshal(apiMessages[1].Content[1])
+	if err != nil || !strings.Contains(string(data), `"is_error":true`) {
+		t.Fatalf("expected persisted tool result to marshal is_error: json=%s err=%v", data, err)
 	}
 }
 

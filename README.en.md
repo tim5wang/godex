@@ -27,19 +27,23 @@ Good fits include:
 ## Core Features
 
 - **Shared Session Runtime**: CLI, TUI, Web, HTTP API, and IM channels share sessions, timelines, attachments, permissions, and memory.
-- **Web Workspace**: Draggable multi-panel grid layout (2×2 / 3×3), Chat, Terminal, Files, Automation, Nodes, Notes, Skills, Memory, Settings, approval panels, and subagent management — fully mobile-adaptive.
-- **Multi-provider Management**: Anthropic-compatible providers, OpenAI-compatible providers, the OpenAI Codex provider, model policies, and dynamic Web Settings configuration.
-- **Resilient Long Tasks**: Ralph-style LongTask story loop, auto-repair, validation artifacts, auto merge/commit, runner phase checkpoints, and in-flight follow-up/steering.
-- **Context and Memory**: Model-assisted compression with pinned continuation snapshots, rule-based fallback, transcript archive, `history_search`, durable memory, candidate inbox, audit/restore, compact memory injection, and token estimation.
-- **Agent Profile**: CLI/TUI/ACP default to the focused `coding` profile, while Web/IM default to the broader `general` profile; tool exposure can be overridden per entry point or command.
-- **Tools and Safety**: merge, grep (ripgrep dual-backend), edit_file multi-edit, WorkspaceFS file boundaries, shell guard, manual/review/yolo approval modes, security profiles, and security audit.
-- **Subagent and Workflow**: Durable subagent jobs, review/merge/cancel/resume, LongTask surfaces for Web/CLI/API, capability boundaries, isolated workspace strategies, and compact handoff.
-- **Package and Skill Ecosystem**: Package manifests, role/command contracts, tool policies, quality diagnostics, smoke runs, reinstall tracking, and Claude Code import.
-- **Automation and Channels**: Cron, Heartbeat, Feishu, Weixin, and OpenAI-compatible chat completions API; IM approval messages show the tool and key parameter summary.
-- **Control Plane Foundation**: Lightweight Node Registry and read-only Nodes Dashboard for observing multiple GoDex runtimes.
-- **Notes Workspace**: Local Markdown notes, search/tags, and saving agent output from Chat into notes.
+- **Web Workspace**: Draggable multi-panel grid layout (2×2 / 3×3), Chat, Terminal, Files, Automation, Nodes, Notes, Skills, Memory, Usage, Settings, approval panels, and subagent management — fully mobile-adaptive.
+- **Multi-provider Management**: Anthropic-compatible providers, OpenAI-compatible providers, the OpenAI Codex provider, model policies (primary/fallback/round_robin), dynamic Web Settings configuration, and an OpenAI-compatible `/v1/*` API.
+- **Resilient Long Tasks**: Ralph-style LongTask story loop (dynamic parallel DAG), auto-repair, validation artifacts, auto merge/commit, runner phase checkpoints, restart recovery (`--resume-run-id`), in-flight follow-up/steering, and per-role context budgets.
+- **Agent Graph and Multi-Engine**: `agent_graph` dynamic DAG abstraction, durable `workflow` runtime, Harness engine abstraction with per-turn hot engine switching.
+- **Agent Identity / Sandbox Decoupling**: `Sandbox` interface + `LocalSandbox`, scope isolation (session/personal/org) with write-path restriction.
+- **Context and Memory**: Model-assisted compression with pinned continuation snapshots, rule-based fallback, transcript archive, `history_search`, durable memory, candidate inbox, suppression, audit/restore, memory strategies (per-turn/agent-only/consolidated), compact memory injection, and token estimation.
+- **Agent Profile**: CLI/TUI/ACP default to the focused `coding` prompt policy, while Web/IM default to the broader `general` policy; tool exposure is identical and can be overridden per entry point or command.
+- **Tools and Safety**: merge, grep (ripgrep dual-backend), edit_file multi-edit, LSP code intelligence, WorkspaceFS file boundaries, shell guard, manual/review/yolo approval modes, security profiles, content security screener, loop guard, and security audit.
+- **Subagent and Workflow**: Durable subagent jobs, role→bundle mapping with write-scope linkage, review/merge/cancel/resume/iterate, LongTask surfaces for Web/CLI/API, capability boundaries, isolated workspace strategies, and compact handoff.
+- **Package and Skill Ecosystem**: Package manifests (resources/app/tool_policy/smoke_tests/recommended_bundles), role/command contracts, tool policies, quality diagnostics, smoke runs, reinstall tracking, and Claude Code import.
+- **Automation and Channels**: Cron (at/every/cron schedules), Heartbeat (HEARTBEAT.md checklist + OK token), Feishu, Weixin, and OpenAI-compatible chat completions API; IM approval messages show the tool and key parameter summary.
+- **Control Plane Foundation**: Lightweight Node Registry and read-only Nodes Dashboard for observing multiple GoDex runtimes; Relay hub (outbound WSS join), `node exec/forward` jump-host, and `guarded-remote` approval headers.
+- **Notes Workspace**: Local Markdown notes, search/tags, saving agent output from Chat into notes, and bidirectional notes↔memory linkage.
+- **Session Tree**: branchable sessions (fork/rollback/merge) with a persisted session graph.
 - **Storage Governance**: Storage doctor plus browser cache, session checkpoint, artifact, and subagent garbage collection.
 - **Terminal**: Real Go PTY backend + xterm.js frontend for a native shell experience.
+- **Usage Tracking**: LLM token usage records (SQLite), Web Usage panel, and `/usage/*` API.
 - **Performance**: Anthropic-style cache_control breakpoints, prompt caching, and compaction optimizations.
 - **Single-binary Web UI**: Web dist embedded in Go binary, cross-platform (Linux/macOS/Windows) single-file deployment.
 
@@ -120,13 +124,15 @@ For more commands, slash commands, and HTTP API details, see [docs/user-guide.md
 
 The Web UI is currently the most complete product entry point:
 
-- **Chat**: Multi-entry sessions, attachments, approvals, model switching, Context & Recall, timeline, subagent progress, and saving agent output into Notes.
-- **Settings**: Global/project configuration paths, providers/models, doctor, channel status, and security policies.
-- **Nodes**: Read-only observation of local and manually/automatically registered GoDex runtimes.
+- **Chat**: Multi-entry sessions, attachments, approvals, model switching, Context & Recall, timeline, subagent progress, saving agent output into Notes, and session forking.
+- **Files**: File tree, code editor, diff, and search (within the workspace boundary).
+- **Settings**: Global/project configuration paths, providers/models, doctor, channel status, security policies, and service runtime status.
+- **Nodes**: Read-only observation of local and manually/automatically registered GoDex runtimes, with remote Chat/Terminal/Files.
 - **Notes**: Local Markdown notes, tags, search, editing, and Chat integration.
 - **Memory**: Durable memory, candidate inbox, suppression, audit diff, and restore/reapply.
 - **Skills**: Package/skill management, quality diagnostics, smoke runs, and reinstall.
 - **Automation**: Cron, Heartbeat, and run logs.
+- **Usage**: LLM usage, model/key management, and cache hit statistics.
 
 Build the frontend (outputs directly to Go embed directory):
 
@@ -144,35 +150,44 @@ After installing this local skill from the Web `Skills` installer or Chat, load 
 
 ## Agent Profile
 
-`agent.profile` controls default agent behavior and does not replace `security.profile`. The default entry-point policy is:
+`agent.profile` is an entry-point/task prompt policy that controls the default response style and capability-usage guidance; it does not replace `security.profile`. The default entry-point policy is:
 
-- `acp`, `cli`, `tui`: `coding`, exposing only core coding, todo, `tool_exchange`, and essential session/compression/history tools by default.
-- `web`, `weixin`, `feishu`: `general`, keeping the full workspace experience.
+- `acp`, `cli`, `tui`: `coding` — the prompt directs the agent to follow a lean coding workflow (concise replies, read code before editing, prefer the `lsp` tool) and to enable heavier bundles (web/browser/subagent/etc.) via `tool_exchange` only when the user explicitly asks.
+- `web`, `weixin`, `feishu`: `general` — the full workspace experience (including skill catalog injection).
 
-When the coding profile needs networking, browser, subagent, skill, memory, package, or related capabilities, the agent can use `tool_exchange` to enable the corresponding bundle on demand. CLI/TUI/ACP can temporarily override with `--profile general|coding`; Web `Settings` can also modify `agent.default_profiles.*`.
+Note: the tool catalog is identical for both profiles (same always-active / default-active tool set); the difference is the system prompt and injected runtime sections (coding replaces the skill catalog with a repo map). CLI/TUI/ACP can temporarily override with `--profile general|coding`; `GODEX_AGENT_PROFILE` or Web `Settings` → `agent.default_profiles.*` also work.
 
 ## Documentation
 
-- [GoDex 2.0 Architecture SPEC](docs/SPEC.en.md): Agent/Sandbox, Orchestrator/Worker, Session Graph, and storage decoupling roadmap.
+- [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md): Agent/Sandbox, Orchestrator/Worker, Session Graph, and storage decoupling roadmap.
 - [User Guide](docs/user-guide.md): Installation, configuration, providers, Web UI, tools, Memory, API, and release checks.
 - [Project Structure](docs/project-structure.md): Directory responsibilities and refactoring boundaries.
 - [Memory Design Principles](docs/memory-design-principles.md): Long-term memory, candidates, recall, and audit design.
 - [Workflow Runtime](docs/workflow-runtime.md): Workflow/subagent runtime design.
 - [Self-deployment Guide](docs/self-deploy.md): Deploying to a server and self-managed operations.
-- [Capability Enhancement v2](docs/capability-enhencement-v2.md): App Shell, Node Registry, Notes, Claude import, and related phase plans and progress.
+- [Capability Enhancement v2](docs/capability-enhancement-v2.md): App Shell, Node Registry, Notes, Claude import, and related phase plans and progress.
 - [P0-P6 End-to-end Validation](docs/p0-p6-e2e-validation.md): Manual acceptance checklist.
-- [High-ROI Roadmap](docs/high-roi-roadmap.md): Current capability baseline and future direction.
+- [High-ROI Roadmap](docs/roadmap-high-roi.md): Current capability baseline and future direction.
 
 ## Directory Structure
 
 ```text
 cmd/godex/        CLI binary entry point
 internal/app/     CLI, serve, and slash command assembly
-internal/agent/   agent loop, context, turn runtime, subagents
-internal/runtime/ HTTP/Web UI, IM channels, Cron, Heartbeat, REPL
-internal/services/backend, commands, historysearch, noderegistry, sessionadmin
-internal/tools/   bash/file/browser/web/memory/skill and other tools
-internal/core/    config, conversation, compression, memory, notes, skill, media
+internal/agent/   agent loop, context, turn runtime, subagents, harness engines, agent graph
+internal/runtime/ HTTP/Web UI, IM channels, Cron, Heartbeat
+internal/services/ backend, commands, historysearch, noderegistry, relay, sessionadmin, usage, eval
+internal/tools/   bash/file/browser/web/memory/skill/package/subagent/teamtools and other tools
+internal/toolruntime/  typed tool framework, permissions, interceptors, execution context
+internal/sandbox/ Sandbox interface and LocalSandbox (Agent Identity decoupling)
+internal/core/    config, conversation, compression, memory, notes, skill, package, media, mcp, security, scope
+internal/domain/  shared cross-layer domain types (events, message, security, eval, ...)
+internal/sessiongraph/  branchable session graph
+internal/sessionstore/  session storage backends (json / sqlite)
+internal/platform/  fs, logger, workspace paths, tooling, storagegc infrastructure
+internal/tui/     min-tui fullscreen frontend
+internal/uiassets/ embedded Web dist
+internal/acp/     ACP stdio server
 ui/web/           React + Vite Web frontend
 docs/             Product, architecture, validation, and deployment docs
 ```

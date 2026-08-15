@@ -52,6 +52,13 @@ type Store interface {
 	Diagnostics(ctx context.Context) Diagnostics
 }
 
+// ManifestLoader is the optional lightweight read path used by session lists.
+// Loading a list item must not pull large state, timeline, graph, and checkpoint
+// blobs for every session.
+type ManifestLoader interface {
+	LoadManifest(ctx context.Context, id string) (json.RawMessage, bool, error)
+}
+
 func CopySession(ctx context.Context, dst Store, src Store, sessionID string) error {
 	data, ok, err := src.Load(ctx, sessionID)
 	if err != nil {

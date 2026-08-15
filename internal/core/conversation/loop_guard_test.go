@@ -180,3 +180,131 @@ func TestLoopGuardStaleTodoSkipsWhenNoNonTodoExecution(t *testing.T) {
 		t.Fatalf("expected allow when only todo_write executed, got %s (reason=%s)", decision.Action, decision.Reason)
 	}
 }
+
+func TestLoopGuardNoMutationSummaryWording(t *testing.T) {
+	// The old default Summary wording said "detected for read_file after 12
+	// repeat(s)", which misreads as read_file having been repeated 12 times.
+	// It is actually 12 rounds without any file mutation; the wording must
+	// say so.
+	d := loopGuardDecision{
+		Reason: "no_mutation_spiral",
+		Tool:   readFileExecuted("t1"),
+		Count:  12,
+	}
+	s := d.Summary()
+	if strings.Contains(s, "repeat(s)") {
+		t.Fatalf("misleading no-mutation wording still present: %q", s)
+	}
+	if !strings.Contains(s, "rounds") || !strings.Contains(s, "without any file mutation") {
+		t.Fatalf("expected rounds-without-mutation wording, got %q", s)
+	}
+}
+
+func TestLoopGuardRepeatedCounterResetsAfterRecovery(t *testing.T) {
+	guard := newLoopGuard(loopGuardConfig{
+		MaxRepeatedTools: 3,
+		MaxRecoveries:    5,
+	})
+	tool := readFileExecuted("t1")
+
+	// First 3 identical calls: recover (not abort) because the fingerprint has
+	// never been recovered before.
+	var decision loopGuardDecision
+	for i := 0; i < 3; i++ {
+		decision = guard.Observe([]ExecutedTool{tool}, nil)
+	}
+	if decision.Action != loopGuardRecover {
+		t.Fatalf("expected recover on first detection, got %s (reason=%s)", decision.Action, decision.Reason)
+	}
+
+	// A single stray identical call right after recovery must NOT abort: the
+	// recovery resets the counter, so the model needs to re-accumulate to the
+	// limit again before the same fingerprint is treated as a repeat.
+	decision = guard.Observe([]ExecutedTool{tool}, nil)
+	if decision.Action == loopGuardAbort {
+		t.Fatalf("expected no abort on the first post-recovery repeat, got abort (reason=%s)", decision.Reason)
+	}
+
+	// Re-accumulating to the limit again aborts: same loop pattern repeated
+	// after runtime feedback.
+	for i := 0; i < 2; i++ {
+		decision = guard.Observe([]ExecutedTool{tool}, nil)
+	}
+	if decision.Action != loopGuardAbort {
+		t.Fatalf("expected abort after re-accumulating to limit, got %s (reason=%s)", decision.Action, decision.Reason)
+	}
+}
+
+func TestLoopGuardPollingCounterResetsAfterRecovery(t *testing.T) {
+	guard := newLoopGuard(loopGuardConfig{
+		MaxRepeatedTools:           10,
+		MaxRepeatedPollingTools:    4,
+		MaxStalledTaskPollingTools: 10,
+		MaxRecoveries:              5,
+	})
+	poll := ExecutedTool{
+		ID:   "p1",
+		Name: "tool_exchange",
+		Input: map[string]interface{}{
+			"query": "deploy status",
+		},
+	}
+	var decision loopGuardDecision
+	for i := 0; i < 4; i++ {
+		decision = guard.Observe([]ExecutedTool{poll}, nil)
+	}
+	if decision.Action != loopGuardRecover {
+		t.Fatalf("expected recover on first polling detection, got %s (reason=%s)", decision.Action, decision.Reason)
+	}
+	decision = guard.Observe([]ExecutedTool{poll}, nil)
+	if decision.Action == loopGuardAbort {
+		t.Fatalf("expected no abort on the first post-recovery polling repeat, got abort")
+	}
+	for i := 0; i < 3; i++ {
+		decision = guard.Observe([]ExecutedTool{poll}, nil)
+	}
+	if decision.Action != loopGuardAbort {
+		t.Fatalf("expected abort after re-accumulating polling limit, got %s", decision.Action)
+	}
+}
+
+func TestLoopGuardMutationSetIncludesProgressTools(t *testing.T) {
+	cases := []struct {
+		name string
+		tool ExecutedTool
+		want bool
+	}{
+		{"read_file", ExecutedTool{Name: "read_file", Input: map[string]interface{}{"path": "a.go"}}, false},
+		{"write_file", ExecutedTool{Name: "write_file", Input: map[string]interface{}{"path": "a.go"}}, true},
+		{"edit_file", ExecutedTool{Name: "edit_file", Input: map[string]interface{}{"path": "a.go"}}, true},
+		{"todo_write", todoWriteExecuted("tw"), true},
+		{"memory remember", ExecutedTool{Name: "memory", Input: map[string]interface{}{"action": "remember"}}, true},
+		{"memory list", ExecutedTool{Name: "memory", Input: map[string]interface{}{"action": "list"}}, false},
+		{"bash redirect write", ExecutedTool{Name: "bash", Input: map[string]interface{}{"command": "echo x > out.txt"}}, true},
+		{"bash tee", ExecutedTool{Name: "bash", Input: map[string]interface{}{"command": "ls | tee out.txt"}}, true},
+		{"bash read-only", ExecutedTool{Name: "bash", Input: map[string]interface{}{"command": "grep -r foo ."}}, false},
+	}
+	for _, tc := range cases {
+		if got := executedContainsMutation([]ExecutedTool{tc.tool}); got != tc.want {
+			t.Fatalf("executedContainsMutation(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestLoopGuardNoMutationNeverAbortsInStrictMode(t *testing.T) {
+	guard := newLoopGuard(loopGuardConfig{
+		MaxRepeatedTools:    0, // isolate the no-mutation detector
+		MaxRecoveries:       2,
+		MaxNoMutationRounds: 2,
+		Mode:                LoopGuardModeStrict,
+	})
+	tool := readFileExecuted("t1")
+	// Exceed the recovery budget (2) many times over: the no-mutation signal
+	// must keep recovering, never aborting, even in strict mode.
+	for i := 0; i < 10; i++ {
+		decision := guard.Observe([]ExecutedTool{tool}, nil)
+		if decision.Action == loopGuardAbort {
+			t.Fatalf("no-mutation spiral aborted in strict mode at round %d (reason=%s)", i+1, decision.Reason)
+		}
+	}
+}

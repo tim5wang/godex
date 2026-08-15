@@ -162,10 +162,13 @@ func TestToolHandlerUnknownToolErrorSuggestsActiveAlternatives(t *testing.T) {
 		t.Fatalf("expected tool not found error, got %v", err)
 	}
 	message := err.Error()
-	for _, want := range []string{"tool not found: grep", "Active tools:", "bash", "read_file", "grep is not a separate tool"} {
+	for _, want := range []string{"tool not found: grep", "Active tools:", "bash", "read_file"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("expected error to contain %q, got %q", want, message)
 		}
+	}
+	if strings.Contains(message, "not a separate tool") {
+		t.Fatalf("expected no stale grep hint, got %q", message)
 	}
 }
 

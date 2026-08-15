@@ -32,6 +32,15 @@ func NewJSONStore(root string) *JSONStore {
 	return &JSONStore{root: root}
 }
 
+// LoadManifest reads only the small list metadata file. It intentionally
+// avoids state/timeline/checkpoint I/O used by the full Load path.
+func (s *JSONStore) LoadManifest(ctx context.Context, id string) (json.RawMessage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return readOptional(filepath.Join(s.root, id, manifestFile))
+}
+
 func (s *JSONStore) Load(ctx context.Context, id string) (SessionData, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return SessionData{}, false, err

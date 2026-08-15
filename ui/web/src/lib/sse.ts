@@ -26,8 +26,26 @@ export async function streamEvents(
   const reader = response.body.getReader();
   let buffer = "";
 
+  // If the underlying connection drops silently (no FIN/RST), reader.read()
+  // can hang forever. A read timeout forces the loop to throw so the caller's
+  // reconnect path runs instead of leaving the UI stuck on stale output.
+  const READ_TIMEOUT_MS = 90_000;
+  const readWithTimeout = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("SSE read timed out")), READ_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   while (!signal.aborted) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readWithTimeout();
     if (done) {
       break;
     }

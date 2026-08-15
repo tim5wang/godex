@@ -615,7 +615,7 @@ func TestPermissionManagerPolicyYOLOAutoApprovesRemoteProtectedTools(t *testing.
 			Mode:    InteractiveApprovalModeYOLO,
 			Enabled: true,
 			Sources: []string{string(message.SourceWeb)},
-			Tools:   []string{"write_file"},
+			Tools:   []string{"write_file", "bash"},
 		},
 	})
 
@@ -629,6 +629,21 @@ func TestPermissionManagerPolicyYOLOAutoApprovesRemoteProtectedTools(t *testing.
 	})
 	if result.Decision != PermissionAllow {
 		t.Fatalf("expected yolo mode to auto-approve, got %+v", result)
+	}
+	for _, command := range []string{
+		`python3 -c "print('inspect')"`,
+		`grep value input.txt | sort | uniq -c`,
+	} {
+		shellResult := manager.Evaluate(PermissionRequest{
+			SessionID: "web-session",
+			Source:    string(message.SourceWeb),
+			ToolName:  "bash",
+			Action:    "exec",
+			Command:   command,
+		})
+		if shellResult.Decision != PermissionAllow {
+			t.Fatalf("expected yolo mode to auto-approve shell command %q, got %+v", command, shellResult)
+		}
 	}
 	if len(manager.ListPending("web-session")) != 0 {
 		t.Fatalf("expected yolo mode to avoid pending approvals, got %+v", manager.ListPending("web-session"))

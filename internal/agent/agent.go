@@ -72,6 +72,9 @@ type Agent struct {
 	// through it so compaction history records manual compactions too; nil
 	// falls back to NopSink (e.g. /compact outside a turn).
 	emitSink events.Sink
+	// sessionID scopes read-only access to this conversation's attachment
+	// directory without exposing attachment files from other sessions.
+	sessionID string
 	// workspaceOverride is set when this session was opened against an
 	// explicit working directory different from the service-level
 	// cfg.WorkspaceDir. ApplyConfig must re-apply the override on top of

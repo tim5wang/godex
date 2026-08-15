@@ -122,6 +122,9 @@ func (p *Processor) textAttachmentBlocks(_ context.Context, buildCtx BuildContex
 	if attachment.MIMEType != "" {
 		body += fmt.Sprintf(" (%s)", attachment.MIMEType)
 	}
+	if path, pathErr := p.attachmentPath(attachment); pathErr == nil {
+		body += fmt.Sprintf(" [read-only attachment path: %s]", filepath.ToSlash(path))
+	}
 	body += ":\n" + extracted
 	if extractedPath != "" {
 		body += fmt.Sprintf("\n\n[Truncated. Full extracted text saved to %s]", extractedPath)

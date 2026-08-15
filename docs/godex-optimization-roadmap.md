@@ -413,7 +413,7 @@ orchestrator (完整工具集)
 - ✅ `internal/core/scope`：`ScopeId`（`<kind>:<ref>`，kind ∈ session/personal/org）+ `New`/`Parse`/`Session`/`Personal`/`Org`/`IsShared` + `StorageKey` 防穿越（清洗 `..`/`/` + hash 后缀）
 - ✅ memory 按 scope 分区：`NewScopedManager(memoryDir, scopeKey)` 每 session 一套目录（`dir/<scope-key>/`），backend `OpenSession` 接线，org/legacy 根目录兼容层；隔离测试（session 间互相不可见、org 合并查询可见）
 - ✅ sandbox：`Sandbox.ScopeID()` + `LocalOptions.Scope`，per-scope workspace/tmp/artifact 目录推导，`Rebuild` 保留 scope
-- ✅ 写工具路径限定：`ResolveWritePath`（`..` 逃逸/绝对路径越界拒绝）+ `NewScopeWriteInterceptor`（write_file/edit_file/attach_file 拦截）+ 宽松开关 `tools.execution.scope_write`（默认 true）
+- ✅ 写工具路径限定：`ResolveWritePath`（`..` 逃逸/绝对路径越界拒绝）+ `NewScopeWriteInterceptor`（write_file/edit_file 拦截；attach_file 不拦截——其读取路径已由 workspacefs 边界 + 只读 allowlist 约束，写入目标是 session attachments 而非 workspace，见 `scope_path.go` 注释）+ 宽松开关 `tools.execution.scope_write`（默认 true）
 - ✅ 审计/timeline：`SubagentJobPayload`/`RunnerPhasePayload` 新增 `scope_label`（可选字段向后兼容），subagent 事件与 runner phase 事件填充
 - ✅ 测试：scope 单测（构造/解析/非法/存储键防穿越）+ memory 隔离 + sandbox per-scope + 写路径拦截（12+ 新测试）全绿；全量回归无新增失败（agent 2 个 + backend 1 个均为基线既有）
 

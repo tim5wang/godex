@@ -54,6 +54,9 @@ func (f *osFS) Dir() string {
 
 func (f *osFS) Abs(name string) (string, error) {
 	rel, err := f.resolve(name)
+	if errors.Is(err, errAllowedExternal) {
+		return rel, nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -113,6 +116,9 @@ func (f *osFS) WriteFile(name string, data []byte, perm os.FileMode) error {
 
 func (f *osFS) Open(name string) (io.ReadSeekCloser, error) {
 	rel, err := f.resolve(name)
+	if errors.Is(err, errAllowedExternal) {
+		return os.Open(rel)
+	}
 	if err != nil {
 		return nil, err
 	}

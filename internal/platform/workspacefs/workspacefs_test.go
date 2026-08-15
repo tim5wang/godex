@@ -1,6 +1,7 @@
 package workspacefs
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +80,21 @@ func TestWorkspaceFSAllowsReadFromAllowlistDirs(t *testing.T) {
 	}
 	if string(data) != "secret" {
 		t.Fatalf("unexpected data %q", data)
+	}
+
+	// Abs and Open are used together by the line-oriented read_file tool.
+	abs, err := root.Abs(secretPath)
+	if err != nil || abs != secretPath {
+		t.Fatalf("abs allowlist file: path=%q err=%v", abs, err)
+	}
+	file, err := root.Open(secretPath)
+	if err != nil {
+		t.Fatalf("open allowlist file: %v", err)
+	}
+	opened, readErr := io.ReadAll(file)
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil || string(opened) != "secret" {
+		t.Fatalf("read opened allowlist file: data=%q readErr=%v closeErr=%v", opened, readErr, closeErr)
 	}
 
 	// Stat should work.

@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"path/filepath"
+	"strings"
+
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/tools"
@@ -56,9 +59,16 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 	tempDir := binding.TempDir
 	execution := binding.Execution
 
-	// Create a unified workspacefs.FS backed by the sandbox.  For local
-	// mode this is an os.Root-backed FS; for SSH/Docker mode afero-backed.
-	fileToolFS := newWorkspaceFSForExecution(workspaceDir, execution)
+	// Create a unified workspacefs.FS backed by the sandbox. For local
+	// sessions, read_file and attach_file additionally get read-only access
+	// to this session's own uploaded attachments. Writes through the same FS
+	// remain workspace-bound, and other sessions' attachment dirs are not
+	// exposed.
+	var readAllowlist []string
+	if sessionID := strings.TrimSpace(a.sessionID); sessionID != "" && a.cfg != nil && strings.TrimSpace(a.cfg.SessionsDir) != "" {
+		readAllowlist = append(readAllowlist, filepath.Join(a.cfg.SessionsDir, sessionID, "attachments"))
+	}
+	fileToolFS := newWorkspaceFSForExecution(workspaceDir, execution, readAllowlist...)
 	// Attach the FS to the file executor so ReadFileLines/WriteFile/EditFile
 	// use the correct backend.
 	fileExecutor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspaceDir, tempDir, execution)
@@ -234,7 +244,7 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 	})
 	if a.cfg.Tools.Execution.ScopeWrite {
 		handler.AddBeforeInterceptorsForTools(
-			[]string{"write_file", "edit_file", "attach_file"},
+			[]string{"write_file", "edit_file"},
 			NewScopeWriteInterceptor(workspaceDir),
 		)
 	}

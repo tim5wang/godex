@@ -107,6 +107,9 @@ func TestBuildAPIMessagesExtractsTextAttachmentAndPersistsOverflow(t *testing.T)
 	if !strings.Contains(text, `Extracted text from attachment "notes.md"`) {
 		t.Fatalf("expected extracted attachment text, got %q", text)
 	}
+	if !strings.Contains(text, "[read-only attachment path: "+filepath.ToSlash(attachmentPath)+"]") {
+		t.Fatalf("expected model-visible attachment path, got %q", text)
+	}
 	if !strings.Contains(text, "[Truncated. Full extracted text saved to") {
 		t.Fatalf("expected persisted overflow notice, got %q", text)
 	}

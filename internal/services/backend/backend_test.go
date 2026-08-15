@@ -2632,6 +2632,41 @@ func TestListSessionsFiltersByChannelAndSortsByUpdatedAt(t *testing.T) {
 	}
 }
 
+func TestListSessionsWithPersistedTitleDoesNotLoadConversationState(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{})
+	sessionID := "web-fast-list"
+	dir := filepath.Join(cfg.SessionsDir, sessionID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	manifestData, err := json.Marshal(SessionManifest{
+		SessionID:      sessionID,
+		Locator:        SessionLocator{Channel: "web", Key: "fast-list"},
+		Title:          "Already titled",
+		CreatedAt:      time.Now().Add(-time.Hour),
+		UpdatedAt:      time.Now(),
+		LastActivityAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifestFileName), manifestData, 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), []byte(`{not-json`), 0644); err != nil {
+		t.Fatalf("write corrupt state: %v", err)
+	}
+
+	listed, err := service.ListSessions(context.Background(), SessionListFilter{Channel: "web"})
+	if err != nil {
+		t.Fatalf("list should only read valid manifest metadata: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Title != "Already titled" {
+		t.Fatalf("unexpected listed sessions: %+v", listed)
+	}
+}
+
 func TestSubmitPersistsDerivedSessionTitle(t *testing.T) {
 	cfg := newTestConfig(t)
 	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}})

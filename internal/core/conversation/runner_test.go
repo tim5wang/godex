@@ -320,7 +320,10 @@ func TestRunnerAbortsWhenSameLoopRepeatsAfterRecovery(t *testing.T) {
 	repeated := protocol.Response{Content: []protocol.Block{
 		protocol.ToolUseBlock("tool-1", "tool_exchange", map[string]interface{}{"query": "ssh deploy"}),
 	}}
-	caller := &fakeCaller{responses: []protocol.Response{repeated, repeated, repeated, repeated}}
+	// 6 identical calls: the first 3 trip the guard (recover + feedback), the
+	// repeated counter is reset after recovery, then re-accumulating 3 more
+	// identical calls trips the guard again, and the second detection aborts.
+	caller := &fakeCaller{responses: []protocol.Response{repeated, repeated, repeated, repeated, repeated, repeated}}
 	feedbacks := 0
 
 	result, err := Runner{
@@ -355,8 +358,8 @@ func TestRunnerAbortsWhenSameLoopRepeatsAfterRecovery(t *testing.T) {
 	if feedbacks != 1 {
 		t.Fatalf("expected one feedback before abort, got %d", feedbacks)
 	}
-	if caller.calls != 4 {
-		t.Fatalf("expected abort on first repeat after feedback, got %d calls", caller.calls)
+	if caller.calls != 6 {
+		t.Fatalf("expected abort after re-accumulating to the limit post-recovery, got %d calls", caller.calls)
 	}
 }
 
@@ -563,7 +566,10 @@ func TestRunnerStopsRepeatedPollingToolInputs(t *testing.T) {
 			"job_id": "subagent_1",
 		}),
 	}}
-	caller := &fakeCaller{responses: []protocol.Response{repeated, repeated, repeated, repeated, repeated, repeated, repeated}}
+	// 10 identical status calls: the first 5 trip the stalled-polling guard
+	// (recover + feedback), the counter is reset after recovery, then
+	// re-accumulating 5 more identical calls trips it again and aborts.
+	caller := &fakeCaller{responses: []protocol.Response{repeated, repeated, repeated, repeated, repeated, repeated, repeated, repeated, repeated, repeated}}
 	executions := 0
 
 	result, err := Runner{
@@ -597,8 +603,8 @@ func TestRunnerStopsRepeatedPollingToolInputs(t *testing.T) {
 	if result == nil || !result.Stopped {
 		t.Fatalf("expected stopped result, got %+v", result)
 	}
-	if caller.calls != 6 || executions != 6 {
-		t.Fatalf("expected 6 calls/executions before guard aborts after recovery, got calls=%d executions=%d", caller.calls, executions)
+	if caller.calls != 10 || executions != 10 {
+		t.Fatalf("expected 10 calls/executions before guard aborts after recovery, got calls=%d executions=%d", caller.calls, executions)
 	}
 }
 
@@ -1105,5 +1111,8 @@ func TestExecuteToolUsesKeepsOutputWhenToolReturnsError(t *testing.T) {
 	}
 	if len(msg.Content) != 1 || !strings.Contains(msg.Content[0].Content, "expected 5") {
 		t.Fatalf("expected tool_result to keep diagnostics, got %+v", msg.Content)
+	}
+	if !msg.Content[0].IsError {
+		t.Fatalf("expected failed tool_result to persist is_error, got %+v", msg.Content[0])
 	}
 }

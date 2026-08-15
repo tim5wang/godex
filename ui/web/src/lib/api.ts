@@ -628,7 +628,7 @@ export function deleteSession(token: string | null, sessionId: string) {
 }
 
 export function openSession(token: string | null, locator: SessionLocator) {
-  return request<{ session_id: string; locator: SessionLocator }>(
+  return request<{ session_id: string; locator: SessionLocator; created_at?: string; updated_at?: string }>(
     "/sessions",
     {
       method: "POST",

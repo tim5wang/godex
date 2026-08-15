@@ -20,7 +20,8 @@
 |------|------|------|
 | [godex-optimization-roadmap.md](./godex-optimization-roadmap.md) | **优化路线图（统一版）**，含 P0-P6 分期定义、Phase 0-6 任务与完成状态 | **P0-P6 分期以本文档为准**；合并自 qm-roadmap / longtask-analysis / roadmap-high-roi / roadmap-runtime-hardening / architecture-v2-spec / agent-role-and-bundle-design |
 | [architecture-v2-spec.md](./architecture-v2-spec.md) | GoDex 2.0 架构 SPEC（中文） | 含英文版 [architecture-v2-spec.en.md](./architecture-v2-spec.en.md) |
-| [user-guide.md](./user-guide.md) | 用户指南：安装运行、配置、Web UI、工具、Memory、命令、HTTP API | README 的补充细节 |
+| [user-guide.md](./user-guide.md) | 用户指南：安装运行、配置、Provider、CLI、Web UI、工具、Memory、命令、HTTP API、自动化、安全、故障排查 | README 的补充细节；2026-08-15 全量重写对齐实现 |
+| [code-review-2026-08-15.md](./code-review-2026-08-15.md) | 代码与设计 Review 记录：文档↔实现不一致、代码侧发现、设计观察 | 2026-08-15 |
 | [project-structure.md](./project-structure.md) | 项目目录结构与分层规范 | |
 | [memory-design-principles.md](./memory-design-principles.md) | Memory 模块目标、边界、组成与约束 | |
 | [workflow-runtime.md](./workflow-runtime.md) | durable workflow runtime（长任务/多 agent） | |

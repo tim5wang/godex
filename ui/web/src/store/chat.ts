@@ -471,13 +471,17 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
       }
       if (block.type === "tool_result") {
         const idx = block.tool_use_id ? toolIndices.get(block.tool_use_id) : undefined;
+        // is_error is persisted by current runtimes. The structured-content
+        // fallback repairs older sessions created before that field existed.
+        const resultError = persistedToolResultError(block);
         if (idx !== undefined) {
           const current = items[idx];
           items[idx] = {
             ...current,
-            summary: summarizeTool(current.input, block.content || "", "", false),
+            summary: summarizeTool(current.input, block.content || "", resultError, false),
             output: block.content,
-            status: "finished",
+            error: resultError || undefined,
+            status: resultError ? "failed" : "finished",
             expanded: expanded[current.id] ?? false,
           };
         } else {
@@ -489,7 +493,8 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
             timestamp: msg.metadata?.timestamp,
             summary: firstSummaryLine(block.content || ""),
             output: block.content,
-            status: "finished",
+            error: resultError || undefined,
+            status: resultError ? "failed" : "finished",
             expanded: expanded[`tool-result:${messageIndex}:${blockIndex}`] ?? false,
             turnId: syntheticTurnId,
           });
@@ -548,6 +553,22 @@ function toolSnapshotId(messageIndex: number, blockIndex: number, block: Protoco
 
 function toolItemId(turnId: string, id: string | undefined, name: string) {
   return id ? `tool:${id}` : `tool:${turnId}:${name}`;
+}
+
+function persistedToolResultError(block: ProtocolBlock) {
+  const content = block.content || "";
+  if (block.is_error) {
+    return content || "Tool failed";
+  }
+  const parsed = parseJSON(content);
+  if (!isRecord(parsed)) {
+    return "";
+  }
+  const status = stringValue(parsed.status)?.toLowerCase();
+  if (status === "error" || status === "failed" || status === "failure" || status === "permission_pending") {
+    return stringValue(parsed.error) || content || "Tool failed";
+  }
+  return "";
 }
 
 /**

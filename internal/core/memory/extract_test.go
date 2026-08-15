@@ -457,3 +457,49 @@ It centralizes session management and shared tooling.
 		t.Fatalf("expected dismissed mined candidate to stay suppressed, got %+v", again)
 	}
 }
+
+// TestAcceptWorkMethodAndWorkFactCandidates is a regression test for the
+// work_method/work_fact save gap: project-docs mining produces candidates of
+// these types, so accepting them must succeed (validateSaveInput must not
+// reject the types the rest of the system advertises).
+func TestAcceptWorkMethodAndWorkFactCandidates(t *testing.T) {
+	for _, typ := range []Type{TypeWorkMethod, TypeWorkFact} {
+		manager := NewManager(filepath.Join(t.TempDir(), "memory"))
+		extractor := NewExtractor(manager, t.TempDir())
+
+		added, err := extractor.captureCandidates([]Candidate{
+			newCandidate(
+				"Deploy Recipe "+string(typ),
+				"How to deploy the service.",
+				"1. build 2. upload 3. restart",
+				typ,
+				"project-docs",
+			),
+		})
+		if err != nil {
+			t.Fatalf("capture %s candidate: %v", typ, err)
+		}
+		if len(added) != 1 {
+			t.Fatalf("expected one %s candidate, got %+v", typ, added)
+		}
+
+		entry, err := manager.AcceptCandidate(added[0].Fingerprint)
+		if err != nil {
+			t.Fatalf("accept %s candidate: %v", typ, err)
+		}
+		if entry.Type != typ {
+			t.Fatalf("expected accepted type %s, got %q", typ, entry.Type)
+		}
+
+		// Update must also accept the type.
+		if _, err := manager.Update(UpdateInput{
+			Match:   ForgetInput{Title: entry.Title},
+			Title:   entry.Title,
+			Summary: "Updated summary",
+			Content: "Updated content",
+			Type:    typ,
+		}); err != nil {
+			t.Fatalf("update %s memory: %v", typ, err)
+		}
+	}
+}

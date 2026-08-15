@@ -60,3 +60,13 @@
 - [x] 远程模式下，对话列表有时加载出来，有时还是服务端的会话而不是远程的，对话列表加载缺乏动画、对话历史加载也缺乏动画（修复：会话列表统一按远程/本地模式加载并保持一致，SessionsRail 增加加载动画，对话历史加载增加动画反馈）
 
 - [x] godex web ui在 godex service重启或者网络中断后，得刷新才能发送消息，可以优化一下（修复：SSE 断线自动重连，重连成功后自动 invalidate 相关查询；发送消息在断线失败时保留 pendingSend 待重连后自动恢复）
+
+- [x] godex web chat 对话里的工具调用日志，在运行过程中有些工具调用失败，会展示成红色的失败日志，这是合理的，但是现在基本上都是成成功，红色的失败日志，在刷新界面或者重新打开这个对话时，也变成了成功，属于是样式显示有问题（修复：tool_result 持久化 `is_error`；快照重建失败状态，并兼容从旧会话的结构化错误结果回推失败样式）
+
+- [x] godex web chat 支持 attatch 附件，目前似乎失效了，agent不认attatch的文件，在系统里漫无目的搜附件, 怀疑和最近做的变更有关，以前是能支持的，例如这个session: web-7805a09e8021d2fa，我怀疑原因是因为 工具有全局的workspace作用域，这个作用域和附件目录是不一样的，或许可以给对话增加对附件访问权限白名单： attach_file/read_file（修复：每个 agent 只对白名单开放当前 session 的附件目录，`read_file`/`attach_file` 可只读访问且不能跨 session；模型输入显式携带附件只读路径）
+
+- [x] godex的审批在最近迭代里似乎被改坏了，配置了 yolo，但是会让我一步一审批，例如这个session: web-08f0adb0087a6f42（修复：安全 profile 的高风险命令规则和未列入 shell allowlist 规则现在统一尊重 yolo，不再抢先产生 pending approval；strict/dev-repair 等强制策略保持原有保护）
+
+- [x] godex web ui chat 界面右侧的状态面板里有一个 「子 agent 时序」子面板，这里面的可视化时序图目前表现糟糕，几乎完全没办法看（修复：移除在窄面板中重叠严重的绝对定位散点图，改为按子 agent 分组的纵向生命周期卡片，展示状态、时间、错误和可点击详情，并保留问题/重试过滤）
+
+- [x] godex web ui chat 界面的 session 列表，再切换session时也会重新加载，而且这个加载有些慢，在PC上使用还好，但是在 手机端，这个过程会卡很久，导致点击展开session列表的那个按钮毫无反应，我的诉求是优化session列表加载速度，减少session列表重新组装的频率，从而可以让session列表能够快速加载完成（修复：后端列表接口改为只读取轻量 manifest，避免为每个 session 加载 state/timeline/graph/checkpoint 大对象；前端 session 列表缓存 5 分钟，切换 session 和高频 snapshot 不再触发重载，只在 turn 完成或显式变更时刷新；后台刷新保留旧列表而非显示骨架屏；workspace/date 分组用 useMemo 缓存并在移动端侧栏折叠时预组装，展开立即响应）

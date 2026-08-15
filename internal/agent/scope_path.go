@@ -55,8 +55,13 @@ func ResolveWritePath(scopeID scope.Id, root, requested string) (string, error) 
 }
 
 // NewScopeWriteInterceptor returns a before-interceptor that rejects write
-// tools (write_file/edit_file/attach_file) whose path argument escapes the
-// scope workspace root (roadmap 6.2 M4). When the guard is disabled
+// tools (write_file/edit_file) whose path argument escapes the scope workspace
+// root (roadmap 6.2 M4). attach_file is intentionally NOT intercepted: it does
+// not write into the workspace — it reads a file through the already
+// boundary-enforced workspacefs (workspace root + read allowlist, which covers
+// GoDex state dirs and session attachments) and promotes it to a session
+// attachment, so an additional write-guard would wrongly block attaching
+// allowlisted external files. When the guard is disabled
 // (tools.execution.scope_write=false) callers should not install it at all;
 // this constructor assumes enforcement is wanted.
 func NewScopeWriteInterceptor(workspaceDir string) tools.BeforeInterceptor {

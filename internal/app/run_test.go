@@ -347,7 +347,7 @@ func TestRunnerRootHelpIsGroupedAndExampleDriven(t *testing.T) {
 		"Quick start:",
 		"Commands:",
 		"  Chat",
-		"    tui        Start the full bubbletea TUI",
+		"    tui        Start the fullscreen min-tui",
 		"  Web & service",
 		"acp-server",
 		"  Config",

@@ -488,6 +488,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveCSV("tools.execution.ssh_options", file.Tools.Execution.SSHOptions, "GODEX_TOOLS_EXECUTION_SSH_OPTIONS", func(v []string) {
 		current.Tools.Execution.SSHOptions = append([]string{}, v...)
 	})
+	resolveBool("tools.execution.scope_write", file.Tools.Execution.ScopeWrite, "GODEX_TOOLS_EXECUTION_SCOPE_WRITE", func(v bool) {
+		current.Tools.Execution.ScopeWrite = v
+	})
 	resolveCSV("tools.execution.shell_allow_patterns", file.Tools.Execution.ShellAllowPatterns, "GODEX_TOOLS_EXECUTION_SHELL_ALLOW_PATTERNS", func(v []string) {
 		current.Tools.Execution.ShellAllowPatterns = append([]string{}, v...)
 	})
@@ -517,6 +520,30 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	})
 	resolveBool("tools.browser.allow_private_hosts", file.Tools.Browser.AllowPrivateHosts, "GODEX_BROWSER_ALLOW_PRIVATE_HOSTS", func(v bool) {
 		current.Tools.Browser.AllowPrivateHosts = v
+	})
+	resolveBool("tools.lightpanda.enabled", file.Tools.Lightpanda.Enabled, "GODEX_LIGHTPANDA_ENABLED", func(v bool) {
+		current.Tools.Lightpanda.Enabled = v
+	})
+	resolveString("tools.lightpanda.binary_path", file.Tools.Lightpanda.BinaryPath, "GODEX_LIGHTPANDA_BINARY_PATH", func(v string) {
+		current.Tools.Lightpanda.BinaryPath = v
+	})
+	resolveBool("tools.lightpanda.auto_download", file.Tools.Lightpanda.AutoDownload, "GODEX_LIGHTPANDA_AUTO_DOWNLOAD", func(v bool) {
+		current.Tools.Lightpanda.AutoDownload = v
+	})
+	resolveString("tools.lightpanda.search_engine", file.Tools.Lightpanda.SearchEngine, "GODEX_LIGHTPANDA_SEARCH_ENGINE", func(v string) {
+		current.Tools.Lightpanda.SearchEngine = v
+	})
+	resolveString("tools.lightpanda.search_template", file.Tools.Lightpanda.SearchTemplate, "GODEX_LIGHTPANDA_SEARCH_TEMPLATE", func(v string) {
+		current.Tools.Lightpanda.SearchTemplate = v
+	})
+	resolveInt("tools.lightpanda.wait_network_ms", file.Tools.Lightpanda.WaitNetworkMS, "GODEX_LIGHTPANDA_WAIT_NETWORK_MS", func(v int) {
+		current.Tools.Lightpanda.WaitNetworkMS = v
+	})
+	resolveBool("tools.lightpanda.obey_robots", file.Tools.Lightpanda.ObeyRobots, "GODEX_LIGHTPANDA_OBEY_ROBOTS", func(v bool) {
+		current.Tools.Lightpanda.ObeyRobots = v
+	})
+	resolveString("tools.lightpanda.log_level", file.Tools.Lightpanda.LogLevel, "GODEX_LIGHTPANDA_LOG_LEVEL", func(v string) {
+		current.Tools.Lightpanda.LogLevel = v
 	})
 	resolveBool("tools.history_search.enabled", file.Tools.History.Enabled, "GODEX_TOOLS_HISTORY_SEARCH_ENABLED", func(v bool) {
 		current.Tools.History.Enabled = v

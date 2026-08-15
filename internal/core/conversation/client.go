@@ -1140,11 +1140,15 @@ func anthropicContentBlocks(msg protocol.APIMessage, trackLastText bool) ([]inte
 				"input": input,
 			})
 		case protocol.BlockToolResult:
-			blocks = append(blocks, map[string]interface{}{
+			toolResult := map[string]interface{}{
 				"type":        "tool_result",
 				"tool_use_id": block.ToolUseID,
 				"content":     block.Content,
-			})
+			}
+			if block.IsError {
+				toolResult["is_error"] = true
+			}
+			blocks = append(blocks, toolResult)
 		}
 	}
 	return blocks, lastTextIdx

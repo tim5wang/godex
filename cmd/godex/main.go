@@ -403,7 +403,13 @@ func extractGlobalConfigArgs(args []string) (config.Options, []string, error) {
 				return options, nil, fmt.Errorf("missing value for --session")
 			}
 		default:
-			remaining = append(remaining, arg)
+			// Global flags are only recognized before the subcommand.
+			// From the first non-global token onward, everything belongs
+			// to the subcommand, whose own flag set parses per-command
+			// flags such as ask/command/tui --session. Scanning the whole
+			// argv here would silently shadow those per-command flags.
+			remaining = append(remaining, args[idx:]...)
+			return options, remaining, nil
 		}
 	}
 	return options, remaining, nil

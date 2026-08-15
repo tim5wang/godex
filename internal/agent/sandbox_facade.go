@@ -59,7 +59,7 @@ func (a *Agent) RebuildSandbox() sandbox.Info {
 // mode.  For local mode the OS-backed FS is returned; for SSH mode an afero
 // SFTP-backed FS is returned.  The caller receives a nil FS when the workspace
 // directory is empty or SSH client creation fails (tools gracefully degrade).
-func newWorkspaceFSForExecution(workspaceDir string, execution tooling.ExecutionConfig) workspacefs.FS {
+func newWorkspaceFSForExecution(workspaceDir string, execution tooling.ExecutionConfig, readAllowlist ...string) workspacefs.FS {
 	if execution.Mode == tooling.ExecutionModeSSH {
 		fs, err := workspacefs.NewSSHFS(workspacefs.SSHConfig{
 			Target:     execution.SSHTarget,
@@ -71,6 +71,6 @@ func newWorkspaceFSForExecution(workspaceDir string, execution tooling.Execution
 		}
 		return fs
 	}
-	fs, _ := workspacefs.New(workspaceDir)
+	fs, _ := workspacefs.New(workspaceDir, readAllowlist...)
 	return fs
 }

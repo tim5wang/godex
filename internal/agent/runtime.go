@@ -184,6 +184,7 @@ func NewWithSharedDependencies(cfg *config.Config, shared *SharedDependencies, s
 // session's working directory instead of the service directory.
 func NewForSession(cfg *config.Config, shared *SharedDependencies, sessionID string) *Agent {
 	agent := NewWithSharedDependencies(cfg, shared, sessionID)
+	agent.sessionID = strings.TrimSpace(sessionID)
 	agent.ensureWorkspaceSandbox(cfg, shared)
 	return agent
 }

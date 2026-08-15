@@ -237,7 +237,7 @@ export default function App() {
           )}
           content={(
             <Layout.Content className="godex-content">
-              {remoteNodeID ? (
+              {remoteNodeID && activeApp.id !== "chat" ? (
                 <Alert
                   type="info"
                   showIcon

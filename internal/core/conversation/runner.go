@@ -905,7 +905,9 @@ func ExecuteToolUsesWithOptions(
 			executedTool = filtered
 			output = executedTool.Output
 		}
-		resultBlocks = append(resultBlocks, protocol.ToolResultBlock(block.ID, output))
+		resultBlock := protocol.ToolResultBlock(block.ID, output)
+		resultBlock.IsError = strings.TrimSpace(executedTool.Error) != ""
+		resultBlocks = append(resultBlocks, resultBlock)
 		executed = append(executed, executedTool)
 		if onFinished != nil {
 			onFinished(executedTool)

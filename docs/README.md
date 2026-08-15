@@ -37,6 +37,7 @@
 
 | 文档 | 内容 | 备注 |
 |------|------|------|
+| [reseach_of_dsh_for_godex_optimize.md](./reseach_of_dsh_for_godex_optimize.md) | DSH/Cordis 插件设计 → GoDex 改进方案（插件内核 P0-P4、WASM 边界、wazero 兼容路径、路线图） | Draft（2026-08-15，含阶段 0 起步点） |
 | [node-mesh-design.md](./node-mesh-design.md) | 节点互联与远程开发设计（Node Mesh v2） | Draft（待确认后启动） |
 | [big-file-split-plan.md](./big-file-split-plan.md) | 大文件拆分改造方案（技术债） | 2026-08-05 |
 | [cache-optimization-plan.md](./cache-optimization-plan.md) | Cache & Tool 优化计划 | |

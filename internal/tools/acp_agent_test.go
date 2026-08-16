@@ -83,3 +83,40 @@ func TestRunACPAgentExportedWrapper(t *testing.T) {
 		t.Fatalf("unexpected result metadata: %+v", result)
 	}
 }
+
+func TestStreamACPAgentInvokesOnUpdate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("executable: %v", err)
+	}
+	agent := config.ACPAgentConfig{
+		ID:      "fake",
+		Command: exe,
+		Args:    []string{"-test.run", "TestACPToolFakeServer"},
+		Env:     map[string]string{"GODEX_ACP_TOOL_HELPER": "1"},
+	}
+	var streamed []ACPUpdate
+	result, err := StreamACPAgent(context.Background(), agent, t.TempDir(), "hello", 30, func(update ACPUpdate) {
+		streamed = append(streamed, update)
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	// The fake server streams one text chunk; it must be delivered live.
+	foundChunk := false
+	for _, update := range streamed {
+		if update.Kind == "message_chunk" && strings.Contains(update.Text, "tool reply") {
+			foundChunk = true
+		}
+	}
+	if !foundChunk {
+		t.Fatalf("expected streamed message chunk, got %+v", streamed)
+	}
+	// The aggregated result still contains the full reply.
+	if !strings.Contains(result.Text, "tool reply") {
+		t.Fatalf("expected reply text, got %q", result.Text)
+	}
+}

@@ -69,7 +69,7 @@ func NewACPAgentTool(agents map[string]config.ACPAgentConfig, workspace string) 
 		if prompt == "" {
 			return ToolResult{}, fmt.Errorf("missing prompt argument")
 		}
-		result, err := runACPAgent(ctx, agent, workspace, prompt, args.TimeoutSeconds)
+		result, err := runACPAgent(ctx, agent, workspace, prompt, args.TimeoutSeconds, nil)
 		if err != nil {
 			return ToolResult{}, err
 		}
@@ -121,6 +121,22 @@ func (r ACPRunResult) UpdateEvents() []ACPUpdate {
 	return out
 }
 
+// parseACPSessionUpdate extracts the inner `update` object from a raw
+// session/update params payload and parses it into a structured ACPUpdate.
+func parseACPSessionUpdate(raw json.RawMessage) (ACPUpdate, bool) {
+	var payload struct {
+		Update map[string]interface{} `json:"update"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ACPUpdate{}, false
+	}
+	data, err := json.Marshal(payload.Update)
+	if err != nil {
+		return ACPUpdate{}, false
+	}
+	return parseACPUpdate(string(data))
+}
+
 // parseACPUpdate turns one raw session/update payload into a structured event.
 func parseACPUpdate(raw string) (ACPUpdate, bool) {
 	var payload struct {
@@ -165,7 +181,15 @@ func parseACPUpdate(raw string) (ACPUpdate, bool) {
 // returns the collected reply text plus session metadata. It is the exported
 // form of the acp_agent tool's internal runner so engines can delegate turns.
 func RunACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, prompt string, timeoutSeconds int) (ACPRunResult, error) {
-	return runACPAgent(ctx, agent, workspace, prompt, timeoutSeconds)
+	return runACPAgent(ctx, agent, workspace, prompt, timeoutSeconds, nil)
+}
+
+// StreamACPAgent runs one prompt against a configured ACP agent, invoking
+// onUpdate for every session/update event as it streams in (阶段 C streaming
+// handle). The returned result still carries the full reply text and the
+// structured update list.
+func StreamACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, prompt string, timeoutSeconds int, onUpdate func(ACPUpdate)) (ACPRunResult, error) {
+	return runACPAgent(ctx, agent, workspace, prompt, timeoutSeconds, onUpdate)
 }
 
 type acpRPCMessage struct {
@@ -182,7 +206,7 @@ type acpRPCError struct {
 	Message string `json:"message"`
 }
 
-func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, prompt string, timeoutSeconds int) (acpRunResult, error) {
+func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, prompt string, timeoutSeconds int, onUpdate func(ACPUpdate)) (acpRunResult, error) {
 	if strings.TrimSpace(agent.Command) == "" {
 		return acpRunResult{}, fmt.Errorf("ACP agent %q has no command", agent.ID)
 	}
@@ -273,7 +297,7 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 	}); err != nil {
 		return acpRunResult{}, err
 	}
-	promptResp, err := client.readResponse(2)
+	promptResp, err := client.readResponseWithCallback(2, onUpdate)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		return acpRunResult{}, err
@@ -314,6 +338,13 @@ func (c *acpClient) send(id int, method string, params any) error {
 }
 
 func (c *acpClient) readResponse(id int) (acpRPCMessage, error) {
+	return c.readResponseWithCallback(id, nil)
+}
+
+// readResponseWithCallback reads the response for id, invoking onUpdate with
+// each parsed session/update payload as it arrives (streaming handle, 阶段 C).
+// The callback must not block the read loop for long.
+func (c *acpClient) readResponseWithCallback(id int, onUpdate func(ACPUpdate)) (acpRPCMessage, error) {
 	for c.scanner.Scan() {
 		var msg acpRPCMessage
 		line := c.scanner.Bytes()
@@ -323,6 +354,11 @@ func (c *acpClient) readResponse(id int) (acpRPCMessage, error) {
 		}
 		if msg.Method == "session/update" {
 			c.captureUpdate(msg.Params)
+			if onUpdate != nil {
+				if update, ok := parseACPSessionUpdate(msg.Params); ok {
+					onUpdate(update)
+				}
+			}
 			continue
 		}
 		if msg.Method != "" && msg.ID != nil {

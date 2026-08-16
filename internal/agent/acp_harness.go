@@ -81,14 +81,27 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 	if workspace == "" {
 		workspace = "."
 	}
-	result, err := tools.RunACPAgent(ctx, h.cfg, workspace, prompt, 0)
+	result, err := tools.StreamACPAgent(ctx, h.cfg, workspace, prompt, 0, func(update tools.ACPUpdate) {
+		// 阶段 C streaming handle + P2 #4: emit text deltas as they arrive so
+		// downstream sinks stream instead of waiting for the full turn.
+		if update.Kind == "message_chunk" {
+			h.emitUpdateEvents(input, []tools.ACPUpdate{update})
+		}
+	})
 	if err != nil {
 		return HarnessTurnResult{}, err
 	}
 	// P2 #4 unified event mapping: replay the external engine's session/update
 	// events as GoDex events (text deltas, tool calls) so downstream sinks see
-	// the same shape as the default engine.
-	h.emitUpdateEvents(input, result.UpdateEvents())
+	// the same shape as the default engine. Text chunks were already streamed;
+	// tool_call/plan events are replayed here.
+	var remaining []tools.ACPUpdate
+	for _, update := range result.UpdateEvents() {
+		if update.Kind != "message_chunk" {
+			remaining = append(remaining, update)
+		}
+	}
+	h.emitUpdateEvents(input, remaining)
 	return HarnessTurnResult{
 		Reply:     strings.TrimSpace(result.Text),
 		Completed: true,

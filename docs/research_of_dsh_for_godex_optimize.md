@@ -285,10 +285,10 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 - Rust/TinyGo 示例 SDK —— ✅ `examples/wasm-plugin-rust`：零依赖 Rust `cdylib` 实现 mailbox ABI（tools/prompts/policy/abi 四面），`wasm32-wasip1` 交叉编译，`internal/wasmrt` 与 `internal/pluginrt` 均有端到端集成测试（Rust 编译产物直接跑通工具/prompt/policy）；`rebuild-testdata.sh` 一键刷新 Go 测试夹具；TinyGo 示例留待后续（ABI 与 Rust 示例等价）
 - pluginrt 接线 —— ✅ `internal/pluginrt/wasm.go` `WasmToolPlugin`：Start 时 wazero 加载 → tools_list 发现 → 按 owner 注册 `toolruntime.Tool`；Stop/卸载时逆序撤销并关闭 runtime（集成测试含真实 wasm guest 调用）
 
-### 阶段 C：Provider 与外部 Engine（4～8 人周）🔄 KV broker + ACP Harness adapter 已落地
+### 阶段 C：Provider 与外部 Engine（4～8 人周）🔄 KV/HTTP broker + streaming handle + ACP Harness adapter 已落地（credential broker 待做）
 
 - HTTP/credential/KV broker —— ✅ KV + HTTP 部分：`internal/pluginrt/kv_broker.go` `PluginKVBroker`（namespaced、scope-scoped、durable SQLite 或 memory 后端，key 含 plugin id 隔离，禁止 `|` 防别名）；`WasmToolPlugin.KV` 接线到 wasmrt `godex_kv_get/set` host 调用；wasmrt 新增 `godex_http_get` host 调用（受宿主 web fetch 策略控制：allow/deny 域、超时、max chars，`Agent.pluginHTTPGet` 走 `WebFetchService.Fetch`）；Rust 示例新增 `rust_counter`（KV 持久计数）与 `rust_http`（受控 HTTP fetch）工具，均端到端测试。credential broker 待做；
-- streaming handle —— ⏳ 待做；
+- streaming handle —— ✅ `tools.StreamACPAgent`：ACP client 的 `readResponseWithCallback` 在每个 session/update 到达时即时回调（text chunk 实时推送），`ACPHarness` 用它在流式过程中发 `assistant_text_delta`，tool_call/plan 事件仍聚合重放；返回结果保留完整回复文本与结构化更新列表（真实 wire 协议集成测试）；
 - Pi/其他 ACP agent 的 Harness adapter —— ✅ `internal/agent/acp_harness.go` `ACPHarness`：包装一个配置的 ACP agent 为 `Harness`（id `acp:<agent-id>`），`RunTurn` 从稳定输入面取最后 user 文本、经 stdio ACP（initialize/session-new/session-prompt）委托整轮，回复经 `HarnessTurnResult.Reply` 由宿主写入 transcript + checkpoint；`RegisterConfiguredACPHarnesses` 在 agent 装配时注册所有配置的 ACP agent（真实 wire 协议集成测试）；
 - 动态 Harness registry 和统一事件映射 —— ✅ 动态 registry（P2 #3）；事件映射部分落地（host 消费 Reply 发 `assistant_message_completed`），统一 text/tool/usage/error 映射待做。
 

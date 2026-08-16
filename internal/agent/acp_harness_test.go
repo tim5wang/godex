@@ -317,3 +317,32 @@ func TestACPHarnessScopeBinding(t *testing.T) {
 		t.Fatalf("run after reset in new scope: %v", err)
 	}
 }
+
+// TestACPHarnessMapsErrorToEvent verifies P2 #4: a failed external turn emits
+// the unified error_raised event before returning the error.
+func TestACPHarnessMapsErrorToEvent(t *testing.T) {
+	sink := &capturingSink{}
+	// An ACP agent with no command fails fast at RunTurn.
+	h := NewACPHarness("missing-agent", config.ACPAgentConfig{ID: "missing-agent"})
+	_, err := h.RunTurn(context.Background(), HarnessTurnInput{
+		SessionID: "s1",
+		TurnID:    "t1",
+		Sink:      sink,
+		Messages: func() []protocol.Message {
+			return []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "run")}
+		},
+	})
+	if err == nil {
+		t.Fatal("expected run to fail for missing command")
+	}
+	emitted := sink.Snapshot()
+	found := false
+	for _, event := range emitted {
+		if event.Type == events.EventErrorRaised {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected error_raised event mapped from harness failure")
+	}
+}

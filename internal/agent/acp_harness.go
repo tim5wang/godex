@@ -89,6 +89,9 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 		}
 	})
 	if err != nil {
+		// P2 #4: map the external engine failure onto the unified error event
+		// so downstream sinks see the same shape as the default engine.
+		h.emitErrorEvent(input, err)
 		return HarnessTurnResult{}, err
 	}
 	// P2 #4 unified event mapping: replay the external engine's session/update
@@ -135,6 +138,25 @@ func (h *ACPHarness) ResetSession(ctx context.Context, sessionID string) error {
 
 // Close releases engine resources (none held between runs).
 func (h *ACPHarness) Close() error { return nil }
+
+// emitErrorEvent maps an external-engine turn failure onto the unified
+// error_raised event (P2 #4).
+func (h *ACPHarness) emitErrorEvent(input HarnessTurnInput, err error) {
+	if sink := input.Sink; sink != nil && err != nil {
+		sink.Emit(events.Event{
+			SessionID: input.SessionID,
+			TurnID:    input.TurnID,
+			Type:      events.EventErrorRaised,
+			Timestamp: time.Now(),
+			Payload: events.NoticePayload{
+				Message:   err.Error(),
+				Code:      "acp_harness_error",
+				ActorKind: "agent",
+				ActorID:   h.agentID,
+			},
+		})
+	}
+}
 
 // emitUpdateEvents maps captured ACP updates onto GoDex events.
 func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.ACPUpdate) {

@@ -232,3 +232,35 @@ func TestRunWithOptionsDefaultHarnessStaysOnGodex(t *testing.T) {
 		t.Fatalf("expected default loop not to touch registered engine, got %d runs", other.runTurns)
 	}
 }
+
+// TestRegisterHarnessAfterRouterBuiltIsDynamic verifies engines registered
+// after the router is first built (e.g. after the first routed turn) remain
+// available — the research-doc P2 fix that removes the sync.Once snapshot.
+func TestRegisterHarnessAfterRouterBuiltIsDynamic(t *testing.T) {
+	agent := newTestAgent(t, 4096)
+	agent.client = nil // force the default loop to fail fast, not run a real turn
+
+	// Force the router to be built before registering a new engine.
+	if err := agent.RunWithOptions(context.Background(), RunOptions{SessionID: "s1", TurnID: "t1"}); err == nil {
+		t.Fatal("expected missing-caller error from default loop")
+	}
+
+	late := &fakeHarness{id: "late"}
+	agent.RegisterHarness("late", late)
+	if err := agent.RunWithOptions(context.Background(), RunOptions{SessionID: "s2", TurnID: "t2", Harness: "late"}); err != nil {
+		t.Fatalf("late-registered harness should route, got %v", err)
+	}
+	if late.runTurns != 1 {
+		t.Fatalf("expected late harness to run 1 turn, got %d", late.runTurns)
+	}
+
+	// Replacing a late engine at runtime also works.
+	replacement := &fakeHarness{id: "late"}
+	agent.RegisterHarness("late", replacement)
+	if err := agent.RunWithOptions(context.Background(), RunOptions{SessionID: "s3", TurnID: "t3", Harness: "late"}); err != nil {
+		t.Fatalf("replaced harness should route, got %v", err)
+	}
+	if replacement.runTurns != 1 {
+		t.Fatalf("expected replacement to run 1 turn, got %d", replacement.runTurns)
+	}
+}

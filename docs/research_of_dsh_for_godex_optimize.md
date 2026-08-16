@@ -153,13 +153,13 @@ type Effect func(context.Context) error
 
 这是后续 WASM、动态 MCP provider、Package 执行能力的共同基础。
 
-### P2：完善 Agent Engine 接入
+### P2：完善 Agent Engine 接入 🔄 第 3 项已落地
 
 `agent.Harness` 抽象已经存在，但生产环境只有内建 GoDex engine。建议补齐：
 
 1. `HarnessTurnInput` 提供稳定的消息/会话访问面，而不是依赖 `*Agent` 内部状态；
 2. 由宿主统一消费 `HarnessTurnResult.Reply`、写 transcript 并 checkpoint；
-3. 将 Harness registry 改为动态、generation-aware，移除 `sync.Once` 快照限制；
+3. 将 Harness registry 改为动态、generation-aware，移除 `sync.Once` 快照限制 —— ✅ `harnessRouter` 增加并发安全的 `Register`（`sync.RWMutex`），`Agent.RegisterHarness` 在 router 已构建后仍生效（见 `internal/agent/{harness,session_state}.go`）；
 4. 统一 text delta、tool、usage、error、permission 等事件映射；
 5. 明确外部 engine 的 workspace、scope 和工具权限。
 

@@ -186,14 +186,22 @@ func (a *Agent) Harness() Harness {
 
 // RegisterHarness registers an additional engine for per-turn switching
 // (roadmap 6.4). The built-in godex engine is always available; registering
-// the same id replaces the previous entry.
+// the same id replaces the previous entry. Registration is dynamic: engines
+// registered after the router is first built remain available (research doc
+// P2 item 3 removes the sync.Once snapshot limitation).
 func (a *Agent) RegisterHarness(id string, harness Harness) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.extraHarnesses == nil {
 		a.extraHarnesses = map[string]Harness{}
 	}
 	a.extraHarnesses[id] = harness
+	router := a.harnessRouterVal
+	a.mu.Unlock()
+	if router != nil {
+		if dynamic, ok := router.(interface{ Register(id string, harness Harness) }); ok {
+			dynamic.Register(id, harness)
+		}
+	}
 }
 
 // harnessRouter lazily builds the engine router used when a turn requests a
@@ -207,8 +215,9 @@ func (a *Agent) harnessRouter() Harness {
 		for id, harness := range a.extraHarnesses {
 			adapters[id] = harness
 		}
+		router := NewHarnessRouter(adapters, NewRequestedHarnessResolver("godex"))
+		a.harnessRouterVal = router
 		a.mu.Unlock()
-		a.harnessRouterVal = NewHarnessRouter(adapters, NewRequestedHarnessResolver("godex"))
 	})
 	return a.harnessRouterVal
 }

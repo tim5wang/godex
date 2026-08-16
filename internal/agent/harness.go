@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/domain/automation"
@@ -172,7 +173,12 @@ func NewRequestedHarnessResolver(defaultID string) HarnessResolver {
 // harnessRouter routes turns to registered harnesses and resets engine state
 // when a session switches engines. Mirrors `createHarnessRouter` in the QM
 // reference (`temp/qm/src/harness/harness-router.ts`).
+//
+// Unlike the QM reference and the original GoDex lazy build (which snapshotted
+// adapters once via sync.Once), the registry is dynamic: engines can be
+// registered after first use (research doc P2 item 3).
 type harnessRouter struct {
+	mu       sync.RWMutex
 	adapters map[string]Harness
 	resolve  HarnessResolver
 	last     map[string]string // sessionID -> harnessID
@@ -183,21 +189,49 @@ func NewHarnessRouter(adapters map[string]Harness, resolve HarnessResolver) Harn
 	if resolve == nil {
 		resolve = NewDefaultHarnessResolver("godex")
 	}
-	return &harnessRouter{adapters: adapters, resolve: resolve, last: map[string]string{}}
+	clone := make(map[string]Harness, len(adapters))
+	for id, adapter := range adapters {
+		clone[id] = adapter
+	}
+	return &harnessRouter{adapters: clone, resolve: resolve, last: map[string]string{}}
+}
+
+// Register adds or replaces an engine at runtime. It is safe to call after
+// the router is already serving turns; a new engine becomes available to the
+// next RunTurn without rebuilding the router.
+func (r *harnessRouter) Register(id string, harness Harness) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.adapters == nil {
+		r.adapters = map[string]Harness{}
+	}
+	r.adapters[id] = harness
 }
 
 func (r *harnessRouter) adapter(id string) Harness {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.adapters == nil {
 		return nil
 	}
 	return r.adapters[id]
 }
 
+func (r *harnessRouter) adaptersSnapshot() map[string]Harness {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]Harness, len(r.adapters))
+	for id, adapter := range r.adapters {
+		out[id] = adapter
+	}
+	return out
+}
+
 func (r *harnessRouter) Profile() HarnessProfile {
 	if adapter := r.adapter("godex"); adapter != nil {
 		return adapter.Profile()
 	}
-	for _, adapter := range r.adapters {
+	for _, adapter := range r.adaptersSnapshot() {
 		return adapter.Profile()
 	}
 	return HarnessProfile{ID: "godex", Name: "godex"}
@@ -207,7 +241,7 @@ func (r *harnessRouter) Models() []string {
 	if adapter := r.adapter("godex"); adapter != nil {
 		return adapter.Models()
 	}
-	for _, adapter := range r.adapters {
+	for _, adapter := range r.adaptersSnapshot() {
 		return adapter.Models()
 	}
 	return nil
@@ -217,7 +251,7 @@ func (r *harnessRouter) Tools() []string {
 	if adapter := r.adapter("godex"); adapter != nil {
 		return adapter.Tools()
 	}
-	for _, adapter := range r.adapters {
+	for _, adapter := range r.adaptersSnapshot() {
 		return adapter.Tools()
 	}
 	return nil
@@ -245,7 +279,7 @@ func (r *harnessRouter) RunTurn(ctx context.Context, input HarnessTurnInput) (Ha
 
 func (r *harnessRouter) ResetSession(ctx context.Context, sessionID string) error {
 	delete(r.last, sessionID)
-	for _, adapter := range r.adapters {
+	for _, adapter := range r.adaptersSnapshot() {
 		if adapter != nil {
 			_ = adapter.ResetSession(ctx, sessionID)
 		}
@@ -255,7 +289,7 @@ func (r *harnessRouter) ResetSession(ctx context.Context, sessionID string) erro
 
 func (r *harnessRouter) Close() error {
 	seen := map[Harness]struct{}{}
-	for _, adapter := range r.adapters {
+	for _, adapter := range r.adaptersSnapshot() {
 		if adapter == nil {
 			continue
 		}

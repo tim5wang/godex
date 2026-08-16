@@ -543,6 +543,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 				return a.GetMessages()
 			},
 			WorkspaceDir: a.SandboxBinding().WorkspaceDir,
+			Scope:        a.SandboxScope(),
 			UsageContext: a.usageContext,
 		})
 		if err != nil {

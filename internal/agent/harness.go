@@ -7,6 +7,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 )
@@ -51,6 +52,10 @@ type HarnessTurnInput struct {
 	Messages func() []protocol.Message
 	// WorkspaceDir is the session workspace an engine may operate in.
 	WorkspaceDir string
+	// Scope is the sandbox scope the session is bound to (roadmap 6.2; empty
+	// means the shared org layer). External engines may use it to scope their
+	// own state or gate permissions (P2 #5).
+	Scope scope.Id
 	// UsageContext is the per-session usage ledger (optional; engines that do
 	// not consume tokens may ignore it).
 	UsageContext func(runtimeCtx automation.SessionContext, sessionID, turnID, jobID string) conversation.UsageContext

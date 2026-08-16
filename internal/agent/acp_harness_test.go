@@ -12,6 +12,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/domain/events"
 )
 
@@ -275,5 +276,44 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 	}
 	if !sawDelta {
 		t.Fatal("expected assistant_text_delta event mapped from ACP chunk")
+	}
+}
+
+// TestACPHarnessScopeBinding verifies P2 #5: the harness binds to the first
+// scope it serves and rejects cross-scope reuse until ResetSession.
+func TestACPHarnessScopeBinding(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	h := NewACPHarness("fake-acp", acpHarnessConfig(t))
+	input := func(scopeID string) HarnessTurnInput {
+		return HarnessTurnInput{
+			SessionID: "s1",
+			TurnID:    "t1",
+			Scope:     scope.Id(scopeID),
+			Messages: func() []protocol.Message {
+				return []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "run")}
+			},
+		}
+	}
+	if _, err := h.RunTurn(context.Background(), input("session:web-1")); err != nil {
+		t.Fatalf("first run in scope: %v", err)
+	}
+	// Same scope is fine.
+	if _, err := h.RunTurn(context.Background(), input("session:web-1")); err != nil {
+		t.Fatalf("same scope rerun: %v", err)
+	}
+	// Cross-scope reuse is rejected.
+	if _, err := h.RunTurn(context.Background(), input("session:web-2")); err == nil {
+		t.Fatal("expected cross-scope reuse to be rejected")
+	} else if !strings.Contains(err.Error(), "bound to scope") {
+		t.Fatalf("unexpected scope error: %v", err)
+	}
+	// ResetSession unbinds so a new scope may bind.
+	if err := h.ResetSession(context.Background(), "s1"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if _, err := h.RunTurn(context.Background(), input("session:web-2")); err != nil {
+		t.Fatalf("run after reset in new scope: %v", err)
 	}
 }

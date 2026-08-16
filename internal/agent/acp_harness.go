@@ -2,12 +2,15 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -23,12 +26,15 @@ import (
 //	再封装为 PiHarness 接管完整 Turn
 //
 // ACPHarness implements the first step: it consumes the stable
-// HarnessTurnInput surface (Messages/WorkspaceDir) and returns the external
-// agent's reply through HarnessTurnResult.Reply, which the host appends to the
-// transcript and checkpoints.
+// HarnessTurnInput surface (Messages/WorkspaceDir/Scope) and returns the
+// external agent's reply through HarnessTurnResult.Reply, which the host appends
+// to the transcript and checkpoints.
 type ACPHarness struct {
 	agentID string
 	cfg     config.ACPAgentConfig
+
+	mu    sync.Mutex
+	scope scope.Id // scope bound at first use; cross-scope reuse is rejected
 }
 
 // NewACPHarness wraps one configured ACP agent as a Harness.
@@ -60,8 +66,13 @@ func (h *ACPHarness) Tools() []string { return nil }
 
 // RunTurn delegates one turn to the external ACP agent. The prompt is built
 // from the stable message surface (the last user turn), so the engine never
-// reaches into the host Agent's internals (P2 #1).
+// reaches into the host Agent's internals (P2 #1). The session scope is bound
+// at first use and enforced across turns (P2 #5): reusing one harness instance
+// for a different scope is rejected instead of silently leaking state.
 func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (HarnessTurnResult, error) {
+	if err := h.bindScope(input.Scope); err != nil {
+		return HarnessTurnResult{}, err
+	}
 	prompt := lastUserPrompt(input.Messages)
 	if strings.TrimSpace(prompt) == "" {
 		return HarnessTurnResult{}, conversation.NewNonRetryableTurnError("acp harness " + h.agentID + ": no user prompt in turn input")
@@ -83,6 +94,34 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 		Completed: true,
 	}, nil
 }
+
+// bindScope binds the harness to a scope on first use and rejects later
+// cross-scope reuse (P2 #5: explicit external-engine scope).
+func (h *ACPHarness) bindScope(inputScope scope.Id) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.scope == "" {
+		h.scope = inputScope
+		return nil
+	}
+	if h.scope != inputScope {
+		return conversation.NewNonRetryableTurnError(
+			fmt.Sprintf("acp harness %s is bound to scope %q but the turn is in scope %q", h.agentID, h.scope, inputScope))
+	}
+	return nil
+}
+
+// ResetSession unbinds the harness scope so a fresh session can rebind it
+// (called by the router when a session switches engines).
+func (h *ACPHarness) ResetSession(ctx context.Context, sessionID string) error {
+	h.mu.Lock()
+	h.scope = ""
+	h.mu.Unlock()
+	return nil
+}
+
+// Close releases engine resources (none held between runs).
+func (h *ACPHarness) Close() error { return nil }
 
 // emitUpdateEvents maps captured ACP updates onto GoDex events.
 func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.ACPUpdate) {
@@ -121,15 +160,6 @@ func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.AC
 		}
 	}
 }
-
-// ResetSession is a no-op: each ACP run starts a fresh process with its own
-// session (session/new per run), so there is no engine-side state to drop.
-func (h *ACPHarness) ResetSession(ctx context.Context, sessionID string) error {
-	return nil
-}
-
-// Close releases engine resources (none held between runs).
-func (h *ACPHarness) Close() error { return nil }
 
 // lastUserPrompt extracts the most recent user text from the message snapshot
 // for building the external-agent prompt.

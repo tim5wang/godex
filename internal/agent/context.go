@@ -85,11 +85,31 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	quasiStableMessages = append(quasiStableMessages, promptStateMessages...)
 	volatileMessages := append(protocol.CloneMessages(memoryMessages), protocol.CloneMessages(runtimeMessages)...)
 
+	// Repo map freshness: the stable snapshot before history never changes
+	// mid-session, so per-turn file edits are reported here as a bounded change
+	// note, plus a small query-relevance hint — both AFTER history in the
+	// volatile tail, where their churn is uncached but tiny.
+	_, snapshotEntries := a.repoMapSnapshot(false)
+	currentEntries := collectRepoMapEntries(repoMapWorkspaceDir(a))
+	if changeNote := renderRepoMapChangeNote(snapshotEntries, currentEntries); changeNote != "" {
+		volatileMessages = append(volatileMessages, protocol.NewEphemeralTextMessage(protocol.KindBackground, changeNote))
+	}
+	if focus := renderRepoMapQueryFocus(currentEntries, query); focus != "" {
+		volatileMessages = append(volatileMessages, protocol.NewEphemeralTextMessage(protocol.KindBackground, focus))
+	}
+
 	triggerTokens := a.compactionTriggerTokens()
 	preliminary := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), triggerTokens)
 	compactedHistory, compacted, compactionDiag, err := a.maybeAutoCompact(ctx, history, version, system, preliminary)
 	if err != nil {
 		return nil, err
+	}
+	// Compaction rewrites history, so the provider prefix cache breaks at this
+	// boundary anyway: refresh the repo map snapshot for free and reset the
+	// accumulated change note. The request built this turn still carries the
+	// pre-compaction snapshot (consistent with the note computed against it).
+	if compacted {
+		a.repoMapInvalidate()
 	}
 	combined := append(protocol.CloneMessages(quasiStableMessages), protocol.CloneMessages(compactedHistory)...)
 	combined = append(combined, volatileMessages...)

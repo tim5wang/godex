@@ -275,6 +275,7 @@ func normalizeCodexJSONSchemaValue(value interface{}) interface{} {
 
 type codexResponsesStreamState struct {
 	text         strings.Builder
+	reasoning    strings.Builder
 	finishReason string
 	toolCalls    map[int64]codexToolCallAcc
 	usage        *protocol.Usage
@@ -295,6 +296,17 @@ func applyCodexResponsesSDKEvent(state *codexResponsesStreamState, event respons
 		state.text.WriteString(event.Delta)
 		if handler.OnTextDelta != nil && event.Delta != "" {
 			handler.OnTextDelta(event.Delta)
+		}
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		// Chain-of-thought deltas: accumulate them into the final response and
+		// forward them live so frontends can render the reasoning stream (the
+		// Codex backend emits reasoning summaries as plaintext even though the
+		// full reasoning content is encrypted).
+		if event.Delta != "" {
+			state.reasoning.WriteString(event.Delta)
+			if handler.OnThinkingDelta != nil {
+				handler.OnThinkingDelta(event.Delta, "")
+			}
 		}
 	case "response.completed":
 		state.finishReason = string(event.Response.Status)
@@ -332,7 +344,10 @@ func updateCodexResponsesToolCall(state *codexResponsesStreamState, idx int64, i
 }
 
 func codexStreamStateToProtocol(state *codexResponsesStreamState) *protocol.Response {
-	blocks := make([]protocol.Block, 0, 1+len(state.toolCalls))
+	blocks := make([]protocol.Block, 0, 2+len(state.toolCalls))
+	if reasoning := strings.TrimSpace(state.reasoning.String()); reasoning != "" {
+		blocks = append(blocks, protocol.ThinkingBlock(reasoning, "", false))
+	}
 	if text := strings.TrimSpace(state.text.String()); text != "" {
 		blocks = append(blocks, protocol.TextBlock(text))
 	}
@@ -352,7 +367,7 @@ func codexStreamStateToProtocol(state *codexResponsesStreamState) *protocol.Resp
 	if state.usage != nil {
 		state.usage.Normalize()
 	}
-	return &protocol.Response{Content: blocks, StopReason: state.finishReason, Usage: state.usage}
+	return &protocol.Response{Content: blocks, StopReason: state.finishReason, ReasoningContent: state.reasoning.String(), Usage: state.usage}
 }
 
 // codexUsageToProtocol converts the Codex Responses API usage payload into

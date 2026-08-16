@@ -1,6 +1,7 @@
 export type EventType =
   | "user_message_accepted"
   | "assistant_text_delta"
+  | "assistant_thinking_delta"
   | "assistant_message_completed"
   | "tool_call_started"
   | "tool_call_finished"

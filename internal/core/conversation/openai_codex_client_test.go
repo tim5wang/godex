@@ -222,6 +222,45 @@ func TestOpenAICodexClientToolParametersAreObjects(t *testing.T) {
 	}
 }
 
+func TestOpenAICodexClientStreamSurfacesReasoningDeltas(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"plan\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"- inspect\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"ning\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"do\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ne\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICodexClient(server.URL, "test-token", 5*time.Second)
+	var thinking []string
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "gpt-5.4"}, StreamHandler{
+		OnThinkingDelta: func(delta, signature string) {
+			if signature != "" {
+				t.Fatalf("unexpected signature on reasoning delta: %q", signature)
+			}
+			thinking = append(thinking, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("codex stream: %v", err)
+	}
+	if got := strings.Join(thinking, ""); got != "plan- inspectning" {
+		t.Fatalf("expected live thinking deltas in arrival order, got %q", got)
+	}
+	if got := resp.ReasoningContent; got != "plan- inspectning" {
+		t.Fatalf("expected accumulated reasoning content, got %q", got)
+	}
+	if len(resp.Content) != 2 || resp.Content[0].Type != protocol.BlockThinking {
+		t.Fatalf("expected thinking block first, got %#v", resp.Content)
+	}
+	if got := protocol.BlocksText(resp.Content); got != "done" {
+		t.Fatalf("expected answer text intact, got %q", got)
+	}
+}
+
 func TestOpenAICodexClientStreamParsesToolCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

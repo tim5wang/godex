@@ -694,6 +694,13 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
 			emit(events.EventAssistantTextDelta, payload)
 		},
+		OnAssistantThinkingDelta: func(text string) {
+			if text == "" {
+				return
+			}
+			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
+			emit(events.EventAssistantThinkingDelta, payload)
+		},
 		OnAssistantText: func(text string) {
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
 			emit(events.EventAssistantMessageComplete, payload)

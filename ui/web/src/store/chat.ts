@@ -165,6 +165,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
           status = background ? "Background update received" : "Writing response…";
           break;
         }
+        case "assistant_thinking_delta": {
+          // Live reasoning stream (Codex reasoning_summary_text / reasoning_text,
+          // Anthropic extended thinking). Rendered as a transient "Thinking…"
+          // background item so the user sees intermediate progress instead of a
+          // silent wait; the final snapshot carries the consolidated thinking
+          // block inside the assistant message.
+          const payload = event.payload as { text?: string };
+          const turnId = event.turn_id || "";
+          const lastItem = overlayItems[overlayItems.length - 1];
+          const sameStream =
+            !!lastItem &&
+            lastItem.kind === "background" &&
+            lastItem.title === "Thinking…" &&
+            (!lastItem.turnId || !turnId || lastItem.turnId === turnId);
+          if (sameStream) {
+            lastItem.body += payload.text || "";
+            lastItem.summary = firstSummaryLine(lastItem.body);
+            lastItem.turnId = lastItem.turnId ?? turnId;
+          } else {
+            overlayItems.push({
+              id: `thinking:${turnId || "current"}:${++assistantSegmentCounter}`,
+              kind: "background",
+              title: "Thinking…",
+              body: payload.text || "",
+              timestamp: event.timestamp,
+              summary: firstSummaryLine(payload.text || ""),
+              turnId: turnId || undefined,
+            });
+          }
+          status = "Thinking…";
+          break;
+        }
         case "tool_call_started": {
           const payload = event.payload as { id?: string; name?: string; input?: Record<string, unknown> };
           if (payload.name === "todo_write") {

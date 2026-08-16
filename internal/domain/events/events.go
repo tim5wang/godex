@@ -15,6 +15,7 @@ type EventType string
 const (
 	EventUserMessageAccepted      EventType = "user_message_accepted"
 	EventAssistantTextDelta       EventType = "assistant_text_delta"
+	EventAssistantThinkingDelta   EventType = "assistant_thinking_delta"
 	EventAssistantMessageComplete EventType = "assistant_message_completed"
 	EventToolCallStarted          EventType = "tool_call_started"
 	EventToolCallFinished         EventType = "tool_call_finished"

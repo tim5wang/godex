@@ -80,7 +80,7 @@ func (r *Recorder) Entries(limit int) []Event {
 
 func recordableEvent(event Event) bool {
 	switch event.Type {
-	case EventAssistantTextDelta:
+	case EventAssistantTextDelta, EventAssistantThinkingDelta:
 		return false
 	default:
 		return true

@@ -28,12 +28,14 @@ const defaultMaxStalledTaskPollingTools = 8
 const defaultMaxEmptyResponses = 3
 const defaultMaxLengthRecoveries = 4
 const defaultMaxModelRetries = 2
+
 // defaultMaxNoMutationRounds caps consecutive tool rounds with no file
 // mutation (edit_file/write_file) before the loop guard nudges the model.
 // Research spirals ("I found the root cause, one more confirmation...") look
 // exactly like this; real implementation work writes files within a few
 // rounds.
 const defaultMaxNoMutationRounds = 12
+
 // maxReasoningLengthRecoveries bounds how many times the runner re-requests
 // after a reasoning-budget overflow (finish_reason=length + empty answer +
 // reasoning_content present). Two attempts are enough: if the brevity nudge
@@ -157,14 +159,20 @@ type permissionPendingToolError interface {
 
 // Runner executes the shared assistant/tool loop.
 type Runner struct {
-	Caller                     Caller
-	BuildRequest               func(context.Context) (protocol.Request, error)
-	AppendAssistant            func(protocol.Message)
-	AppendToolResults          func(protocol.Message)
-	AppendRuntimeFeedback      func(protocol.Message)
-	ExecuteTool                func(context.Context, string, map[string]interface{}) (ToolExecutionResult, error)
-	OnAssistantText            func(string)
-	OnAssistantTextDelta       func(string)
+	Caller                Caller
+	BuildRequest          func(context.Context) (protocol.Request, error)
+	AppendAssistant       func(protocol.Message)
+	AppendToolResults     func(protocol.Message)
+	AppendRuntimeFeedback func(protocol.Message)
+	ExecuteTool           func(context.Context, string, map[string]interface{}) (ToolExecutionResult, error)
+	OnAssistantText       func(string)
+	OnAssistantTextDelta  func(string)
+	// OnAssistantThinkingDelta receives model reasoning deltas as they stream
+	// (OpenAI Responses reasoning_summary_text / reasoning_text, Anthropic
+	// extended thinking). It mirrors OnAssistantTextDelta but for chain-of-
+	// thought: frontends surface it as a live "thinking" stream, and the
+	// deltas are also accumulated into the final response's ReasoningContent.
+	OnAssistantThinkingDelta   func(string)
 	OnExecutedTools            func([]ExecutedTool)
 	OnToolStarted              func(protocol.Block)
 	OnToolFinished             func(ExecutedTool)
@@ -653,7 +661,8 @@ func pollingToolInputFingerprint(tool ExecutedTool) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func isPollingToolCall(tool ExecutedTool) bool {	switch name := strings.ToLower(strings.TrimSpace(tool.Name)); name {
+func isPollingToolCall(tool ExecutedTool) bool {
+	switch name := strings.ToLower(strings.TrimSpace(tool.Name)); name {
 	case "tool_exchange":
 		return true
 	case "background":
@@ -821,7 +830,14 @@ func hashString(value string) string {
 
 func (r Runner) callModel(ctx context.Context, req protocol.Request) (*protocol.Response, bool, error) {
 	if streamer, ok := r.Caller.(StreamCaller); ok {
-		resp, err := streamer.Stream(ctx, req, StreamHandler{OnTextDelta: r.OnAssistantTextDelta})
+		resp, err := streamer.Stream(ctx, req, StreamHandler{
+			OnTextDelta: r.OnAssistantTextDelta,
+			OnThinkingDelta: func(thinking, signature string) {
+				if thinking != "" && r.OnAssistantThinkingDelta != nil {
+					r.OnAssistantThinkingDelta(thinking)
+				}
+			},
+		})
 		return resp, true, err
 	}
 	resp, err := r.Caller.Call(ctx, req)

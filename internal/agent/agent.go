@@ -124,6 +124,12 @@ type Agent struct {
 	pluginRuntimeMu   sync.Mutex
 	packageRuntimeIDs map[string]struct{}
 	pluginKV          *pluginrt.PluginKVBroker
+	// repoMapMu guards the repo map snapshot: a deterministic, query-free
+	// workspace index rendered BEFORE history so the provider prefix cache
+	// survives per-turn churn; file edits are reported via a change note after
+	// history instead of regenerating the snapshot (repo_map.go).
+	repoMapMu sync.Mutex
+	repoMap   repoMapCache
 }
 
 type dependencies struct {

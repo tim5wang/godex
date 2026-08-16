@@ -194,7 +194,7 @@ permissions:
 
 Package 层负责安装、摘要、来源和授权；Plugin Kernel 负责实例生命周期，二者职责不要混合。
 
-### P4：WASM Tool MVP
+### P4：WASM Tool MVP 🔄 工具面已落地（`internal/wasmrt`），prompt/policy 面待做
 
 首版建议：
 
@@ -204,10 +204,10 @@ wazero + Core Wasm + 版本化 JSON ABI
 
 原因是 GoDex 当前保持 `CGO_ENABLED=0` 的单二进制发布方式，wazero 更匹配。首期仅支持：
 
-- 工具声明和执行；
-- prompt/context contributor；
-- tool before/after policy；
-- 显式 KV、日志和受控 workspace read host calls。
+- 工具声明和执行 —— ✅ `godex_tools_list` / `godex_invoke`（mailbox JSON ABI）
+- prompt/context contributor —— ⏳ 待做
+- tool before/after policy —— ⏳ 待做（可复用 toolruntime interceptor，作为 pluginrt effect 注册）
+- 显式 KV、日志和受控 workspace read host calls —— ✅ `godex_host`：`godex_log` / `godex_kv_get` / `godex_kv_set` / `godex_workspace_read`
 
 默认不开放完整 WASI、socket、环境变量、shell、进程或明文凭据。有效权限应为：
 

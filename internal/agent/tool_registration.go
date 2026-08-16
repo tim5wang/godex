@@ -27,6 +27,13 @@ const (
 	bundleLSP        = "lsp"
 )
 
+// builtinPluginOwner* identify the owning dynamic component of builtin tools
+// that are registered through the pluginrt ownership model. UnregisterOwner
+// with one of these ids cleanly removes the whole builtin group.
+const (
+	builtinPluginOwnerMCP = "godex:builtin:mcp"
+)
+
 // registerToolTo registers a tool and returns its reversible registration
 // handle. Dynamic components (plugins, packages, MCP bridges) can keep the
 // handle and call Dispose to unload the tool cleanly.
@@ -229,11 +236,11 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Bundle:  bundleExternal,
 		Summary: "external ACP agent delegation over stdio",
 	})
-	a.registerToolTo(handler, tools.NewListMCPResourcesTool(a.mcpMgr), tools.ToolMeta{
+	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewListMCPResourcesTool(a.mcpMgr), tools.ToolMeta{
 		Bundle:  bundleMCP,
 		Summary: "configured MCP resource servers",
 	})
-	a.registerToolTo(handler, tools.NewReadMCPResourceTool(a.mcpMgr), tools.ToolMeta{
+	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewReadMCPResourceTool(a.mcpMgr), tools.ToolMeta{
 		Bundle:  bundleMCP,
 		Summary: "configured MCP resource servers",
 	})

@@ -42,6 +42,16 @@ type ToolHandler struct {
 	bundleSummary map[string]string
 	before        []BeforeInterceptor
 	after         []AfterInterceptor
+	// owners tracks the owning registration for each tool name. A non-empty
+	// owner enables reversible unregister (dynamic plugin/package uninstall).
+	owners map[string]string
+	// generations tracks the registration generation per tool name; each
+	// registration bumps the generation so stale handles can be detected.
+	generations map[string]uint64
+	// draining marks tool names that are being torn down: calls to a draining
+	// tool are rejected while the teardown completes.
+	draining map[string]struct{}
+	nextGen  uint64
 }
 
 // NewToolHandler creates a new tool handler
@@ -52,7 +62,190 @@ func NewToolHandler() *ToolHandler {
 		activeTools:   make(map[string]struct{}),
 		bundleTools:   make(map[string][]string),
 		bundleSummary: make(map[string]string),
+		owners:        make(map[string]string),
+		generations:   make(map[string]uint64),
+		draining:      make(map[string]struct{}),
 	}
+}
+
+// Registration is a reversible tool registration handle. Dispose unregisters
+// the tool (and its bundle/active bookkeeping) if this handle is still the
+// current registration for the tool name.
+type Registration struct {
+	handler    *ToolHandler
+	name       string
+	owner      string
+	generation uint64
+	done       bool
+}
+
+// Dispose reverses the registration. It is safe to call multiple times; later
+// calls are no-ops. Only the current registration generation is removed, so a
+// stale handle cannot unregister a newer replacement.
+func (r *Registration) Dispose() {
+	if r == nil || r.handler == nil {
+		return
+	}
+	r.handler.mu.Lock()
+	defer r.handler.mu.Unlock()
+	if r.done {
+		return
+	}
+	if r.handler.generations[r.name] != r.generation {
+		// A newer registration replaced this one; nothing to remove.
+		r.done = true
+		return
+	}
+	r.handler.removeToolLocked(r.name)
+	r.done = true
+}
+
+// Generation returns the registration generation, which can be compared with
+// the handler's current generation for the name to detect staleness.
+func (r *Registration) Generation() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.generation
+}
+
+// Owner returns the owner id recorded at registration time ("" if anonymous).
+func (r *Registration) Owner() string {
+	if r == nil {
+		return ""
+	}
+	return r.owner
+}
+
+// CurrentGeneration returns the current registration generation for a tool
+// name (0 when the tool is not registered).
+func (h *ToolHandler) CurrentGeneration(name string) uint64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.generations[name]
+}
+
+// OwnerFor returns the owner id recorded for a tool name ("" if anonymous or
+// not registered).
+func (h *ToolHandler) OwnerFor(name string) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.owners[name]
+}
+
+// Register adds a tool to the handler and returns a reversible registration
+// handle.
+func (h *ToolHandler) Register(tool Tool) *Registration {
+	return h.RegisterWithMeta(tool, ToolMeta{AlwaysActive: true})
+}
+
+// RegisterWithMeta adds a tool with loading metadata to the handler and
+// returns a reversible registration handle. Re-registering the same name
+// replaces the previous registration (bumping the generation) without removing
+// the prior handle's bookkeeping beyond what the replacement needs.
+func (h *ToolHandler) RegisterWithMeta(tool Tool, meta ToolMeta) *Registration {
+	// Anonymous registration never conflicts: RegisterOwned only rejects when
+	// both the prior and new owner are non-empty and differ.
+	registration, _ := h.RegisterOwned("", tool, meta)
+	return registration
+}
+
+// RegisterOwned adds a tool owned by the named owner (e.g. a plugin or package
+// id) and returns a reversible registration handle. Same-name registration by
+// a different non-empty owner is rejected so dynamic components cannot
+// silently clobber each other; re-registration by the same owner (or the
+// anonymous owner) replaces the previous registration.
+func (h *ToolHandler) RegisterOwned(owner string, tool Tool, meta ToolMeta) (*Registration, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	name := tool.Name()
+	if prior := h.owners[name]; prior != "" && owner != "" && prior != owner {
+		return nil, ErrToolConflict{Name: name, Owner: prior}
+	}
+	h.nextGen++
+	generation := h.nextGen
+	h.registerWithMetaLocked(tool, meta)
+	h.owners[name] = owner
+	h.generations[name] = generation
+	delete(h.draining, name)
+	return &Registration{handler: h, name: name, owner: owner, generation: generation}, nil
+}
+
+func (h *ToolHandler) registerWithMetaLocked(tool Tool, meta ToolMeta) {
+	name := tool.Name()
+	if existing, ok := h.meta[name]; ok && existing.Bundle != "" && existing.Bundle != meta.Bundle {
+		h.bundleTools[existing.Bundle] = stringutil.Remove(h.bundleTools[existing.Bundle], name)
+	}
+
+	h.tools[name] = tool
+	h.meta[name] = meta
+
+	if meta.Bundle != "" {
+		h.bundleTools[meta.Bundle] = stringutil.AppendUnique(h.bundleTools[meta.Bundle], name)
+		if meta.Summary != "" && h.bundleSummary[meta.Bundle] == "" {
+			h.bundleSummary[meta.Bundle] = meta.Summary
+		}
+	}
+
+	if meta.AlwaysActive {
+		h.activeTools[name] = struct{}{}
+	}
+}
+
+// removeToolLocked removes a tool and all of its bookkeeping. Callers must
+// hold h.mu.
+func (h *ToolHandler) removeToolLocked(name string) {
+	if _, ok := h.tools[name]; !ok {
+		return
+	}
+	delete(h.tools, name)
+	meta := h.meta[name]
+	if meta.Bundle != "" {
+		h.bundleTools[meta.Bundle] = stringutil.Remove(h.bundleTools[meta.Bundle], name)
+		if len(h.bundleTools[meta.Bundle]) == 0 {
+			delete(h.bundleTools, meta.Bundle)
+			delete(h.bundleSummary, meta.Bundle)
+		}
+	}
+	delete(h.meta, name)
+	delete(h.activeTools, name)
+	delete(h.owners, name)
+	delete(h.generations, name)
+	delete(h.draining, name)
+}
+
+// MarkDraining flags a tool as tearing down: subsequent Handle/HandleResult
+// calls are rejected until the tool is re-registered or removed.
+func (h *ToolHandler) MarkDraining(name string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.tools[name]; ok {
+		h.draining[name] = struct{}{}
+		delete(h.activeTools, name)
+	}
+}
+
+// UnregisterOwner disposes every current registration owned by the given
+// owner (e.g. all tools contributed by one plugin or package). Returns the
+// names that were removed.
+func (h *ToolHandler) UnregisterOwner(owner string) []string {
+	if owner == "" {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var removed []string
+	for name, recorded := range h.owners {
+		if recorded != owner {
+			continue
+		}
+		removed = append(removed, name)
+	}
+	sort.Strings(removed)
+	for _, name := range removed {
+		h.removeToolLocked(name)
+	}
+	return removed
 }
 
 // ReplaceWith atomically swaps the handler registry contents while preserving
@@ -82,6 +275,22 @@ func (h *ToolHandler) ReplaceWith(next *ToolHandler) {
 	for bundle, summary := range next.bundleSummary {
 		bundleSummary[bundle] = summary
 	}
+	owners := make(map[string]string, len(next.owners))
+	for name, owner := range next.owners {
+		owners[name] = owner
+	}
+	// Remap generations to continue from this handler's counter so stale
+	// registration handles from either handler can never collide with the
+	// swapped-in registrations.
+	generations := make(map[string]uint64, len(next.generations))
+	for name := range next.generations {
+		h.nextGen++
+		generations[name] = h.nextGen
+	}
+	draining := make(map[string]struct{}, len(next.draining))
+	for name := range next.draining {
+		draining[name] = struct{}{}
+	}
 	before := append([]BeforeInterceptor{}, next.before...)
 	after := append([]AfterInterceptor{}, next.after...)
 	next.mu.RUnlock()
@@ -92,42 +301,12 @@ func (h *ToolHandler) ReplaceWith(next *ToolHandler) {
 	h.activeTools = activeTools
 	h.bundleTools = bundleTools
 	h.bundleSummary = bundleSummary
+	h.owners = owners
+	h.generations = generations
+	h.draining = draining
 	h.before = before
 	h.after = after
 	h.mu.Unlock()
-}
-
-// Register adds a tool to the handler
-func (h *ToolHandler) Register(tool Tool) {
-	h.RegisterWithMeta(tool, ToolMeta{AlwaysActive: true})
-}
-
-// RegisterWithMeta adds a tool with loading metadata to the handler.
-func (h *ToolHandler) RegisterWithMeta(tool Tool, meta ToolMeta) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.registerWithMetaLocked(tool, meta)
-}
-
-func (h *ToolHandler) registerWithMetaLocked(tool Tool, meta ToolMeta) {
-	name := tool.Name()
-	if existing, ok := h.meta[name]; ok && existing.Bundle != "" && existing.Bundle != meta.Bundle {
-		h.bundleTools[existing.Bundle] = stringutil.Remove(h.bundleTools[existing.Bundle], name)
-	}
-
-	h.tools[name] = tool
-	h.meta[name] = meta
-
-	if meta.Bundle != "" {
-		h.bundleTools[meta.Bundle] = stringutil.AppendUnique(h.bundleTools[meta.Bundle], name)
-		if meta.Summary != "" && h.bundleSummary[meta.Bundle] == "" {
-			h.bundleSummary[meta.Bundle] = meta.Summary
-		}
-	}
-
-	if meta.AlwaysActive {
-		h.activeTools[name] = struct{}{}
-	}
 }
 
 // ActivateDefaults enables default and always-active tools.
@@ -192,6 +371,10 @@ func (h *ToolHandler) HandleResult(ctx context.Context, name string, args map[st
 		active := h.activeNamesLocked()
 		h.mu.RUnlock()
 		return ToolResult{}, ErrToolNotFound{Name: name, Available: active}
+	}
+	if _, draining := h.draining[name]; draining {
+		h.mu.RUnlock()
+		return ToolResult{}, ErrToolDraining{Name: name}
 	}
 	if _, ok := h.activeTools[name]; !ok {
 		bundle := h.meta[name].Bundle

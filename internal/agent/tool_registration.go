@@ -27,12 +27,22 @@ const (
 	bundleLSP        = "lsp"
 )
 
-func (a *Agent) registerToolTo(handler *tools.ToolHandler, tool tools.Tool, meta tools.ToolMeta) {
-	handler.RegisterWithMeta(tool, meta)
+// registerToolTo registers a tool and returns its reversible registration
+// handle. Dynamic components (plugins, packages, MCP bridges) can keep the
+// handle and call Dispose to unload the tool cleanly.
+func (a *Agent) registerToolTo(handler *tools.ToolHandler, tool tools.Tool, meta tools.ToolMeta) *tools.Registration {
+	return handler.RegisterWithMeta(tool, meta)
 }
 
-func (a *Agent) registerTool(tool tools.Tool, meta tools.ToolMeta) {
-	a.registerToolTo(a.toolHandler, tool, meta)
+// registerOwnedTool registers a tool owned by the named dynamic component
+// (e.g. a plugin or package id). The returned handle is reversible, and
+// UnregisterOwner on the handler removes every tool of that owner.
+func (a *Agent) registerOwnedTool(handler *tools.ToolHandler, owner string, tool tools.Tool, meta tools.ToolMeta) (*tools.Registration, error) {
+	return handler.RegisterOwned(owner, tool, meta)
+}
+
+func (a *Agent) registerTool(tool tools.Tool, meta tools.ToolMeta) *tools.Registration {
+	return a.registerToolTo(a.toolHandler, tool, meta)
 }
 
 func executionConfigFromRuntime(cfg config.ToolExecutionConfig) tooling.ExecutionConfig {

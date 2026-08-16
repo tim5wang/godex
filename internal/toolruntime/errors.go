@@ -78,6 +78,27 @@ func (e ErrToolInactive) Error() string {
 	return fmt.Sprintf("tool %q is not active; enable bundle %q with tool_exchange", e.Name, e.Bundle)
 }
 
+// ErrToolDraining is returned when a tool registration is being torn down
+// (dynamic uninstall or reload) and must not accept new calls.
+type ErrToolDraining struct {
+	Name string
+}
+
+func (e ErrToolDraining) Error() string {
+	return fmt.Sprintf("tool %q is being unloaded and cannot accept new calls", e.Name)
+}
+
+// ErrToolConflict is returned when a tool name is registered by a different
+// non-empty owner (e.g. two plugins claim the same tool name).
+type ErrToolConflict struct {
+	Name  string
+	Owner string
+}
+
+func (e ErrToolConflict) Error() string {
+	return fmt.Sprintf("tool %q is already owned by %q", e.Name, e.Owner)
+}
+
 // ErrPermissionDenied is returned when a tool call is blocked by permission policy.
 type ErrPermissionDenied struct {
 	Tool   string

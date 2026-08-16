@@ -13,6 +13,7 @@ type ToolMeta = toolruntime.ToolMeta
 type BundleCatalogItem = toolruntime.BundleCatalogItem
 type ToolCatalog = toolruntime.ToolCatalog
 type ToolHandler = toolruntime.ToolHandler
+type Registration = toolruntime.Registration
 
 type ToolSpec = toolruntime.ToolSpec
 type ToolCall = toolruntime.ToolCall
@@ -39,6 +40,8 @@ type PermissionManager = toolruntime.PermissionManager
 
 type ErrToolNotFound = toolruntime.ErrToolNotFound
 type ErrToolInactive = toolruntime.ErrToolInactive
+type ErrToolDraining = toolruntime.ErrToolDraining
+type ErrToolConflict = toolruntime.ErrToolConflict
 type ErrPermissionDenied = toolruntime.ErrPermissionDenied
 type ErrPermissionPending = toolruntime.ErrPermissionPending
 

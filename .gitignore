@@ -42,3 +42,4 @@ godex_bak
 
 # eval smoke/bench transient output
 examples/evals/results/
+.godex-build-cache/

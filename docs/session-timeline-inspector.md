@@ -1,7 +1,7 @@
-# Session Timeline Inspector（会话时间线详情面板）— 阶段 1
+# Session Timeline Inspector（会话时间线详情面板）
 
 > 中文为主，English summary at the end。
-> 对标 DSH 的「轨迹视图」（ui-trajectory）"下探查看细节"能力。阶段 1 交付"每行可展开看详情"；阶段 2 再做分组折叠与概览时间线（见文末）。
+> 对标 DSH 的「轨迹视图」（ui-trajectory）"下探查看细节"能力。阶段 1：每行可展开看详情；阶段 2：turn/step 分组折叠 + 三 lane 概览时间线 + 窗口化虚拟化（均已实现）。
 
 ## 数据（后端已实现）
 
@@ -56,23 +56,24 @@
 - `TimelinePanels.tsx`：行可点击（hover 高亮），turn/job tag 点击仍过滤（stopPropagation 隔离）。
 - 时间线默认过滤新增 `model_request_completed`（每轮显示每次模型调用，含耗时与 token）。
 
-## 阶段 2（未做，规划）
+## 阶段 2（已实现）
 
-- 按 turn/step 分组 + 折叠（对应 DSH `TrajectoryTurnModel{groups{cells}}`）。
-- 简化三 lane 概览时间线（sequence 模式，选中区间联动表格）。
-- 虚拟化（>100 行启用 `@tanstack/react-virtual`）。
-- system prompt / 上下文变更 diff（`structuredPatch` from `diff`）。
+- **turn/step 分组 + 折叠**（`TimelineGroupedList.tsx`）：事件按 turn 分组（新 turn 在上），turn 内按 `Message` / `Step N` 分段（每个 `model_request_completed` 开启新 Step）；turn 头显示事件数/工具直方图/时间范围，step 头显示耗时与工具列表；turn 与 step 均可折叠（折叠后显示汇总行）。
+- **三 lane 概览时间线**（`TimelineOverview.tsx`）：Chrome Network 式 sequence 概览条 —— 每个事件一个等宽色块（input=蓝 / model=绿 / tool=橙 / other=灰），turn 边界用间隙分隔；点击色块跳转并选中对应行（自动展开所在 turn/step），tooltip 显示事件名与摘要。
+- **窗口化虚拟化**（`useWindowedRows`，TimelineGroupedList 内）：行数 >150 时启用，滚动容器 + 前缀和二分定位 + overscan（依赖受限无法安装 @tanstack/react-virtual，手写实现；分页本身已限制每页规模）。
+- **选中联动**：概览点击 / 事件行点击 → 高亮 + 滚动到行 + 打开详情 Drawer。
+- **单测**：`ui/web/src/lib/timelineUtils.test.ts`（`groupTimelineTurns` / `flattenTimelineEvents` / `timelineEventLane`，7 个用例，全部通过）。
 
-估算：阶段 1 前端约 1–1.5 人周（已实现），阶段 2 约 1 人周。DSH 的事件状态机层（绑定其类型化事件窗口）与 pan/zoom 交互整体跳过。
+估算：阶段 1 前端约 1–1.5 人周（已实现），阶段 2 约 1 人周（已实现）。DSH 的事件状态机层（绑定其类型化事件窗口）、pan/zoom 全交互时间线、增量搜索索引未做（跳过项见上文）。
 
 ---
 
 ## English Summary
 
-Stage 1 of a DSH-trajectory-style "drill into details" timeline:
+DSH-trajectory-style session timeline, both stages implemented:
 
-**Backend**: new `model_request_completed` event (per-request usage + TTFT/duration, from `runner.OnModelRequest`), `assistant_message_completed` now carries full `thinking` text, no persistence changes needed.
+**Stage 1 — drill into details**: new `model_request_completed` event (per-request usage + TTFT/duration from `runner.OnModelRequest`); `assistant_message_completed` carries full `thinking` text; `EventDetailPanel.tsx` opens on row click with Summary tabs (tool args/output/error/duration, assistant answer + thinking, model usage/token/cache-hit-rate/TTFT) and Raw payload; `model_request_completed` added to the default filter.
 
-**Frontend**: `EventDetailPanel.tsx` — clicking any timeline row opens a Drawer with Summary tabs (tool args/output/error/duration, assistant answer + thinking, model usage/token/cache-hit-rate/TTFT) and a Raw payload tab. `model_request_completed` added to default timeline filter.
+**Stage 2 — grouped timeline**: `groupTimelineTurns` (pure, unit-tested) groups events into turns → `Message` / `Step N`; `TimelineGroupedList.tsx` renders collapsible turn/step headers (event count, tool histogram, duration) with windowed virtualization (>150 rows, hand-rolled since @tanstack/react-virtual was not installable offline); `TimelineOverview.tsx` is a Chrome-Network-style 3-lane sequence strip (input/model/tool colors, turn gaps, click-to-jump with auto-expand); selection highlights + scrolls the row and opens the detail drawer.
 
-**Stage 2 (planned, not done)**: turn/step grouping + collapse, simplified 3-lane overview timeline, virtualization, prompt diffs.
+Not ported (DSH-specific): typed event state machines, pan/zoom interactions, incremental search index, prompt diffs.

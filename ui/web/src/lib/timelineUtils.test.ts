@@ -1,0 +1,113 @@
+import { describe, expect, it } from "vitest";
+import type { SessionTimelineEntry } from "./types";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane } from "./timelineUtils";
+
+/**
+ * NOTE: groupTimelineTurns consumes a NEWEST-FIRST list (as served by the
+ * timeline API / recorder fallback) and reverses it internally, so all test
+ * inputs below are ordered newest-first.
+ */
+function ev(type: SessionTimelineEntry["type"], turnId: string | undefined, ts: string, payload: Record<string, unknown> = {}): SessionTimelineEntry {
+  return { type, turn_id: turnId, timestamp: ts, payload };
+}
+
+describe("groupTimelineTurns", () => {
+  it("returns [] for empty input", () => {
+    expect(groupTimelineTurns([])).toEqual([]);
+  });
+
+  it("groups one turn into Message + Step N, preserving event order", () => {
+    // newest-first input of one turn: turn_completed ... user_message
+    const items = [
+      ev("turn_completed", "turn-1", "2026-01-01T00:00:06Z", { status: "completed" }),
+      ev("assistant_message_completed", "turn-1", "2026-01-01T00:00:05Z", { text: "done" }),
+      ev("tool_call_finished", "turn-1", "2026-01-01T00:00:04Z", { name: "bash", duration_ms: 900 }),
+      ev("tool_call_started", "turn-1", "2026-01-01T00:00:03Z", { name: "bash" }),
+      ev("model_request_completed", "turn-1", "2026-01-01T00:00:02Z", { model: "gpt-x", input_tokens: 10 }),
+      ev("user_message_accepted", "turn-1", "2026-01-01T00:00:00Z", { text: "hi" }),
+    ];
+    const groups = groupTimelineTurns(items);
+    expect(groups).toHaveLength(1);
+    const turn = groups[0];
+    expect(turn.turnId).toBe("turn-1");
+    expect(turn.eventCount).toBe(6);
+    expect(turn.tools).toEqual([{ name: "bash", count: 1 }]);
+    expect(turn.steps.map((s) => s.label)).toEqual(["Message", "Step 1"]);
+    expect(turn.steps[0].events.map((e) => e.type)).toEqual(["user_message_accepted"]);
+    expect(turn.steps[1].events.map((e) => e.type)).toEqual([
+      "model_request_completed",
+      "tool_call_started",
+      "tool_call_finished",
+      "assistant_message_completed",
+      "turn_completed",
+    ]);
+    // chronological flatten is oldest-first
+    expect(flattenTimelineEvents(groups).map((e) => e.type)).toEqual([...items].reverse().map((e) => e.type));
+  });
+
+  it("opens a new Step N per model request", () => {
+    // newest-first: second model request + its tool first
+    const items = [
+      ev("tool_call_finished", "turn-9", "2026-01-01T00:00:04Z", { name: "ls" }),
+      ev("model_request_completed", "turn-9", "2026-01-01T00:00:03Z", { model: "b" }),
+      ev("tool_call_finished", "turn-9", "2026-01-01T00:00:02Z", { name: "sh" }),
+      ev("model_request_completed", "turn-9", "2026-01-01T00:00:01Z", { model: "a" }),
+    ];
+    const groups = groupTimelineTurns(items);
+    expect(groups[0].steps.map((s) => s.label)).toEqual(["Step 1", "Step 2"]);
+    expect(groups[0].tools).toEqual([
+      { name: "sh", count: 1 },
+      { name: "ls", count: 1 },
+    ]);
+  });
+
+  it("emits turns newest-first (input is newest-first) with chronological inner order", () => {
+    const items = [
+      ev("turn_completed", "turn-2", "2026-01-01T00:10:02Z", {}),
+      ev("model_request_completed", "turn-2", "2026-01-01T00:10:01Z", {}),
+      ev("user_message_accepted", "turn-2", "2026-01-01T00:10:00Z", { text: "second" }),
+      ev("turn_completed", "turn-1", "2026-01-01T00:00:02Z", {}),
+      ev("model_request_completed", "turn-1", "2026-01-01T00:00:01Z", {}),
+      ev("user_message_accepted", "turn-1", "2026-01-01T00:00:00Z", { text: "first" }),
+    ];
+    const groups = groupTimelineTurns(items);
+    expect(groups.map((g) => g.turnId)).toEqual(["turn-2", "turn-1"]);
+    expect(flattenTimelineEvents(groups).map((e) => e.turn_id)).toEqual(["turn-1", "turn-1", "turn-1", "turn-2", "turn-2", "turn-2"]);
+  });
+
+  it("buckets events without a turn under 'No turn'", () => {
+    const items = [
+      ev("turn_completed", "turn-1", "2026-01-01T00:00:01Z", {}),
+      ev("warning_raised", undefined, "2026-01-01T00:00:00Z", { message: "boom" }),
+    ];
+    const groups = groupTimelineTurns(items);
+    expect(groups).toHaveLength(2);
+    // newest-first: the newer turn-1 group first, the older "No turn" group last
+    expect(groups[0].turnId).toBe("turn-1");
+    expect(groups[1].turnId).toBeNull();
+    expect(groups[1].label).toBe("No turn");
+    expect(groups[1].steps[0].events.map((e) => e.type)).toEqual(["warning_raised"]);
+  });
+
+  it("routes tool events without a preceding model request into a Message step", () => {
+    const items = [
+      ev("model_request_completed", "turn-5", "2026-01-01T00:00:02Z", {}),
+      ev("tool_call_finished", "turn-5", "2026-01-01T00:00:01Z", { name: "glob" }),
+      ev("tool_call_started", "turn-5", "2026-01-01T00:00:00Z", { name: "glob" }),
+    ];
+    const groups = groupTimelineTurns(items);
+    expect(groups[0].steps.map((s) => s.label)).toEqual(["Message", "Step 1"]);
+  });
+});
+
+describe("timelineEventLane", () => {
+  it("classifies lanes", () => {
+    expect(timelineEventLane(ev("user_message_accepted", undefined, "t"))).toBe("input");
+    expect(timelineEventLane(ev("message_injected", undefined, "t"))).toBe("input");
+    expect(timelineEventLane(ev("model_request_completed", undefined, "t"))).toBe("model");
+    expect(timelineEventLane(ev("assistant_message_completed", undefined, "t"))).toBe("model");
+    expect(timelineEventLane(ev("tool_call_started", undefined, "t"))).toBe("tool");
+    expect(timelineEventLane(ev("tool_call_finished", undefined, "t"))).toBe("tool");
+    expect(timelineEventLane(ev("error_raised", undefined, "t"))).toBe("other");
+  });
+});

@@ -221,6 +221,201 @@ function formatMs(ms: number): string {
   return `${Math.round(ms)} ms`;
 }
 
+export function formatDurationMs(ms: number | undefined | null): string {
+  if (!ms || !Number.isFinite(ms) || ms <= 0) {
+    return "";
+  }
+  return formatMs(ms);
+}
+
+/** One "step" inside a turn: a user Message or one model request (Step N). */
+export interface TimelineStepGroup {
+  key: string;
+  label: string;
+  events: SessionTimelineEntry[];
+  startedAt: string;
+  endedAt: string;
+}
+
+/** One turn: ordered steps plus a tool histogram for the group header. */
+export interface TimelineTurnGroup {
+  turnId: string | null;
+  label: string;
+  steps: TimelineStepGroup[];
+  startedAt: string;
+  endedAt: string;
+  eventCount: number;
+  tools: Array<{ name: string; count: number }>;
+}
+
+/**
+ * Group a newest-first timeline event list into turns → steps (Message / Step N).
+ * Turns are emitted newest-first (matching the flat list order); within a turn,
+ * steps and events stay chronological (oldest → newest, top → bottom).
+ *
+ * Boundary events:
+ *   - model_request_completed opens a new "Step N" (N = per-turn model call index);
+ *   - user_message_accepted / message_injected open a new "Message" step;
+ *   - turn_completed closes the open step;
+ *   - everything else appends to the currently open step (creating a "Message"
+ *     step when none is open, e.g. subagent activity without a model request).
+ */
+export function groupTimelineTurns(items: SessionTimelineEntry[]): TimelineTurnGroup[] {
+  const chrono = [...items].reverse();
+  const turns = new Map<string, TimelineTurnGroup>();
+  const order: string[] = [];
+  const openSteps = new Map<string, TimelineStepGroup>();
+  const stepCounts = new Map<string, number>();
+  const toolCounts = new Map<string, Map<string, number>>();
+
+  const keyOf = (event: SessionTimelineEntry): string => event.turn_id || "";
+
+  const turnFor = (event: SessionTimelineEntry): string => {
+    const id = keyOf(event);
+    if (!turns.has(id)) {
+      turns.set(id, {
+        turnId: id || null,
+        label: id ? shortTurnId(id) : "No turn",
+        steps: [],
+        startedAt: event.timestamp,
+        endedAt: event.timestamp,
+        eventCount: 0,
+        tools: [],
+      });
+      order.push(id);
+    }
+    return id;
+  };
+
+  const closeStep = (turnId: string) => {
+    const step = openSteps.get(turnId);
+    if (step) {
+      turns.get(turnId)!.steps.push(step);
+      openSteps.delete(turnId);
+    }
+  };
+
+  const openStepOf = (turnId: string, label: string, event: SessionTimelineEntry) => {
+    closeStep(turnId);
+    openSteps.set(turnId, {
+      key: `${turnId}|${label}|${turns.get(turnId)!.steps.length + 1}`,
+      label,
+      events: [event],
+      startedAt: event.timestamp,
+      endedAt: event.timestamp,
+    });
+  };
+
+  const appendToOpen = (turnId: string, event: SessionTimelineEntry) => {
+    let step = openSteps.get(turnId);
+    if (!step) {
+      step = {
+        key: `${turnId}|Message|${turns.get(turnId)!.steps.length + 1}`,
+        label: "Message",
+        events: [],
+        startedAt: event.timestamp,
+        endedAt: event.timestamp,
+      };
+      openSteps.set(turnId, step);
+    }
+    step.events.push(event);
+    step.endedAt = event.timestamp;
+  };
+
+  for (const event of chrono) {
+    const turnId = turnFor(event);
+    const turn = turns.get(turnId)!;
+    turn.eventCount += 1;
+    turn.endedAt = event.timestamp;
+
+    switch (event.type) {
+      case "model_request_completed": {
+        const n = (stepCounts.get(turnId) ?? 0) + 1;
+        stepCounts.set(turnId, n);
+        openStepOf(turnId, `Step ${n}`, event);
+        break;
+      }
+      case "user_message_accepted":
+      case "message_injected": {
+        const current = openSteps.get(turnId);
+        const hasModelRequest = current?.label.startsWith("Step");
+        if (!current || hasModelRequest) {
+          openStepOf(turnId, "Message", event);
+        } else {
+          appendToOpen(turnId, event);
+        }
+        break;
+      }
+      case "turn_completed":
+        // Boundary marker: append as the turn's last row, then close the step.
+        appendToOpen(turnId, event);
+        closeStep(turnId);
+        break;
+      case "tool_call_finished": {
+        appendToOpen(turnId, event);
+        const payload = (event.payload ?? {}) as Record<string, unknown>;
+        const name = String(payload.name ?? "tool");
+        if (!toolCounts.has(turnId)) {
+          toolCounts.set(turnId, new Map());
+        }
+        const counts = toolCounts.get(turnId)!;
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+        break;
+      }
+      default:
+        appendToOpen(turnId, event);
+    }
+  }
+
+  for (const id of order) {
+    closeStep(id);
+  }
+
+  const grouped: TimelineTurnGroup[] = [];
+  for (let i = order.length - 1; i >= 0; i--) {
+    const id = order[i];
+    const turn = turns.get(id)!;
+    const counts = toolCounts.get(id);
+    turn.tools = counts
+      ? Array.from(counts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .map(([name, count]) => ({ name, count }))
+      : [];
+    grouped.push(turn);
+  }
+  return grouped;
+}
+
+/** 3-lane classification for the overview strip. */
+export type TimelineLane = "input" | "model" | "tool" | "other";
+
+export function timelineEventLane(event: SessionTimelineEntry): TimelineLane {
+  switch (event.type) {
+    case "user_message_accepted":
+    case "message_injected":
+      return "input";
+    case "assistant_message_completed":
+    case "model_request_completed":
+      return "model";
+    case "tool_call_started":
+    case "tool_call_finished":
+      return "tool";
+    default:
+      return "other";
+  }
+}
+
+/** Flatten turns → steps → events in chronological order (oldest first). */
+export function flattenTimelineEvents(groups: TimelineTurnGroup[]): SessionTimelineEntry[] {
+  const out: SessionTimelineEntry[] = [];
+  for (let i = groups.length - 1; i >= 0; i--) {
+    for (const step of groups[i].steps) {
+      out.push(...step.events);
+    }
+  }
+  return out;
+}
+
 export function timelineEventFullText(event: SessionTimelineEntry, summary: string) {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const focused = [

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
+	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 )
@@ -26,6 +27,10 @@ type HarnessProfile struct {
 //
 // It is the Go analogue of `HarnessTurnInput` in the QM reference, trimmed to
 // the fields the current agent loop actually consumes (see RunOptions).
+//
+// P2 item 1: instead of reaching into the host Agent's internals, an engine
+// receives a stable access surface via Messages (a snapshot provider) and
+// WorkspaceDir. External engines must build their turn from these inputs.
 type HarnessTurnInput struct {
 	SessionID          string
 	TurnID             string
@@ -41,6 +46,14 @@ type HarnessTurnInput struct {
 	// Harness is the engine requested for this turn (roadmap 6.4). Empty
 	// means the default godex engine.
 	Harness string
+	// Messages returns a snapshot of the session transcript. The host sets it
+	// so engines do not depend on the host's internal message store.
+	Messages func() []protocol.Message
+	// WorkspaceDir is the session workspace an engine may operate in.
+	WorkspaceDir string
+	// UsageContext is the per-session usage ledger (optional; engines that do
+	// not consume tokens may ignore it).
+	UsageContext func(runtimeCtx automation.SessionContext, sessionID, turnID, jobID string) conversation.UsageContext
 }
 
 // HarnessTurnResult reports the outcome of one turn.

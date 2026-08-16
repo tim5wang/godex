@@ -224,6 +224,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 	}
 	agent.toolHandler.AddBeforeInterceptors(tools.NewPermissionInterceptorWithReview(deps.permissions, agent.reviewPermissionRequest))
 	agent.workerRuntime = localGoDexWorkerRuntime{agent: agent}
+	agent.RegisterConfiguredACPHarnesses()
 	return agent
 }
 

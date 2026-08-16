@@ -92,6 +92,17 @@ type acpRunResult struct {
 	Updates    []string `json:"updates,omitempty"`
 }
 
+// ACPRunResult is the exported result of one external ACP agent run, reused by
+// the ACP harness (阶段 C: Pi/其他 ACP agent 的 Harness adapter).
+type ACPRunResult = acpRunResult
+
+// RunACPAgent runs one prompt against a configured ACP agent over stdio and
+// returns the collected reply text plus session metadata. It is the exported
+// form of the acp_agent tool's internal runner so engines can delegate turns.
+func RunACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, prompt string, timeoutSeconds int) (ACPRunResult, error) {
+	return runACPAgent(ctx, agent, workspace, prompt, timeoutSeconds)
+}
+
 type acpRPCMessage struct {
 	JSONRPC string          `json:"jsonrpc,omitempty"`
 	ID      any             `json:"id,omitempty"`

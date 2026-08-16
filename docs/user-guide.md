@@ -226,7 +226,8 @@ agent:
 
 ### Agent 运行时
 
-- **多引擎抽象（Harness）**：`agent` 通过 `Harness` 接口（Profile/Models/Tools/RunTurn/ResetSession/Close）运行 turn；默认 `godex` 引擎。可通过 envelope metadata `harness` 按轮切换引擎（如 `POST /sessions/{id}/messages` 携带 `metadata.harness`），切换时自动 reset 旧/新引擎 session。注册额外引擎使用 `Agent.RegisterHarness`。
+- **多引擎抽象（Harness）**：`agent` 通过 `Harness` 接口（Profile/Models/Tools/RunTurn/ResetSession/Close）运行 turn；默认 `godex` 引擎。可通过 envelope metadata `harness` 按轮切换引擎（如 `POST /sessions/{id}/messages` 携带 `metadata.harness`），切换时自动 reset 旧/新引擎 session。注册额外引擎使用 `Agent.RegisterHarness`（动态，router 构建后仍生效）。
+- **外部 ACP engine（`acp:<id>`）**：每个配置的 ACP agent（`acp.agents`）自动注册为 `acp:<agent-id>` 引擎；`metadata.harness: "acp:codex"` 可把整轮委托给外部 Agent Client Protocol agent（stdio）。外部 engine 只消费宿主注入的稳定输入面（消息快照、工作区目录），回复由宿主统一写入 transcript 并 checkpoint；不转发 GoDex 工具注册（外部引擎在自己的进程内使用自己的工具面）。
 - **Turn 错误分层**：模型调用错误分类为 Retryable / Transient / NonRetryable；Retryable/Transient 在同一 turn 内有限重试（`agent.max_turns` 之外的独立预算），NonRetryable 立即失败并透出明确 message。
 - **Runner 韧性**：统一 phase checkpoint、active turn follow-up 注入、空回复/`finish_reason=length` 恢复、`runtime.recovery.auto_resume_interrupted_turns`（默认 false）与 `auto_repair_sessions`（默认 true）。
 - **Loop guard**：见「安全模型 → Loop Guard」。

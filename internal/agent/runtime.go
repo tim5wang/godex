@@ -524,7 +524,10 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	// router (which resets engine state when the session switches engines).
 	// Empty or "godex" keeps the default loop below.
 	if strings.TrimSpace(opts.Harness) != "" && opts.Harness != "godex" {
-		_, err := a.harnessRouter().RunTurn(ctx, HarnessTurnInput{
+		// P2 #1: give the engine a stable access surface instead of the host's
+		// internals. The godex engine is the only one that may reach into the
+		// Agent; external engines build their turn from these inputs.
+		result, err := a.harnessRouter().RunTurn(ctx, HarnessTurnInput{
 			SessionID:          opts.SessionID,
 			TurnID:             opts.TurnID,
 			ActorID:            opts.ActorID,
@@ -536,8 +539,33 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			DrainInjections:    opts.DrainInjections,
 			OnInjectionDrained: opts.OnInjectionDrained,
 			Harness:            opts.Harness,
+			Messages: func() []protocol.Message {
+				return a.GetMessages()
+			},
+			WorkspaceDir: a.SandboxBinding().WorkspaceDir,
+			UsageContext: a.usageContext,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		// P2 #2: the host consumes the engine's reply — append it to the
+		// transcript and checkpoint, exactly like the default loop does.
+		if reply := strings.TrimSpace(result.Reply); reply != "" {
+			a.AppendAssistantText(reply, "")
+			if opts.Checkpoint != nil {
+				opts.Checkpoint()
+			}
+			if sink := opts.Sink; sink != nil {
+				sink.Emit(events.Event{
+					SessionID: opts.SessionID,
+					TurnID:    opts.TurnID,
+					Type:      events.EventAssistantMessageComplete,
+					Timestamp: a.now(),
+					Payload:   events.TextPayload{Role: protocol.RoleAssistant, Text: reply},
+				})
+			}
+		}
+		return nil
 	}
 	ctx = tools.WithSessionID(ctx, opts.SessionID)
 	ctx = tools.WithSessionContext(ctx, opts.RuntimeContext)

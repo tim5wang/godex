@@ -204,6 +204,22 @@ func (a *Agent) RegisterHarness(id string, harness Harness) {
 	}
 }
 
+// RegisterConfiguredACPHarnesses registers one external-agent Harness for each
+// configured ACP agent (阶段 C: Pi/其他 ACP agent 的 Harness adapter). Ids are
+// "acp:<agent-id>", so a turn may request e.g. RunOptions.Harness =
+// "acp:codex" to delegate the whole turn to that external engine.
+func (a *Agent) RegisterConfiguredACPHarnesses() {
+	if a == nil || a.cfg == nil || len(a.cfg.ACP.Agents) == 0 {
+		return
+	}
+	for id, cfg := range a.cfg.ACP.Agents {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		a.RegisterHarness("acp:"+id, NewACPHarness(id, cfg))
+	}
+}
+
 // harnessRouter lazily builds the engine router used when a turn requests a
 // non-default harness (RunOptions.Harness). Adapters are the godex engine
 // plus every engine registered via RegisterHarness; the resolver honors the
@@ -230,12 +246,21 @@ func (a *Agent) appendMessage(msg protocol.Message) {
 		msg.Metadata = &protocol.Metadata{}
 	}
 	if strings.TrimSpace(msg.Metadata.Timestamp) == "" {
-		msg.Metadata.Timestamp = a.now().UTC().Format(time.RFC3339Nano)
+		msg.Metadata.Timestamp = a.safeNow().UTC().Format(time.RFC3339Nano)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = append(a.messages, msg.Clone())
 	a.historyVersion++
+}
+
+// safeNow returns the agent clock or the zero time when unset (bare agents in
+// tests and minimal harness setups do not configure a clock).
+func (a *Agent) safeNow() time.Time {
+	if a == nil || a.now == nil {
+		return time.Time{}
+	}
+	return a.now()
 }
 
 // AppendAssistantText appends one assistant-visible text reply into the session transcript.
@@ -245,8 +270,9 @@ func (a *Agent) AppendAssistantText(text string, kind protocol.MessageKind) {
 		return
 	}
 	msg := protocol.NewTextMessage(protocol.RoleAssistant, text)
-	if kind != "" || !a.now().IsZero() {
-		msg.Metadata = &protocol.Metadata{Kind: kind, Timestamp: a.now().UTC().Format(time.RFC3339Nano)}
+	now := a.safeNow()
+	if kind != "" || !now.IsZero() {
+		msg.Metadata = &protocol.Metadata{Kind: kind, Timestamp: now.UTC().Format(time.RFC3339Nano)}
 	}
 	a.appendMessage(msg)
 }

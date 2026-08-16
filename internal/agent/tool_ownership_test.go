@@ -14,6 +14,8 @@ func TestMCPToolsRegisteredWithBuiltinOwner(t *testing.T) {
 		"read_mcp_resource",
 		"list_mcp_tools",
 		"call_mcp_tool",
+		"list_mcp_prompts",
+		"get_mcp_prompt",
 	}
 	for _, name := range names {
 		if a.toolHandler.Get(name) == nil {

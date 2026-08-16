@@ -124,3 +124,60 @@ func TestCallMCPToolTool(t *testing.T) {
 		t.Fatal("expected error for isError result")
 	}
 }
+
+type fakeMCPPromptRunner struct {
+	prompts []mcp.Prompt
+	got     *mcp.GetPromptResult
+}
+
+func (f *fakeMCPPromptRunner) ListPrompts(ctx context.Context) ([]mcp.Prompt, error) {
+	return f.prompts, nil
+}
+
+func (f *fakeMCPPromptRunner) GetPrompt(ctx context.Context, serverName, promptName string, arguments map[string]any) (*mcp.GetPromptResult, error) {
+	return f.got, nil
+}
+
+func TestListMCPPromptsTool(t *testing.T) {
+	runner := &fakeMCPPromptRunner{prompts: []mcp.Prompt{{
+		Server: "fake",
+		Name:   "review",
+	}}}
+	tool := NewListMCPPromptsTool(runner)
+	result, err := tool.Execute(context.Background(), map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(result, "review") {
+		t.Fatalf("unexpected output: %q", result)
+	}
+}
+
+func TestGetMCPPromptTool(t *testing.T) {
+	runner := &fakeMCPPromptRunner{got: &mcp.GetPromptResult{
+		Server: "fake",
+		Prompt: "review",
+		Messages: []mcp.PromptMessage{
+			{Role: "user", Content: "Please review the code."},
+			{Role: "assistant", Content: "Here is my review."},
+		},
+	}}
+	tool := NewGetMCPPromptTool(runner)
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"server": "fake",
+		"prompt": "review",
+		"arguments": map[string]interface{}{
+			"file": "main.go",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(result, "Please review the code.") || !strings.Contains(result, "Here is my review.") {
+		t.Fatalf("unexpected output: %q", result)
+	}
+	// Missing required args.
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{}); err == nil {
+		t.Fatal("expected error for missing server/prompt")
+	}
+}

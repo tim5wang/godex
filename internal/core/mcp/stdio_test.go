@@ -75,6 +75,24 @@ func TestFakeMCPHelperServer(t *testing.T) {
 					},
 				},
 			}
+		case "prompts/list":
+			result = map[string]any{
+				"prompts": []map[string]any{
+					{
+						"name":        "review",
+						"description": "review the code",
+						"arguments":   []map[string]any{{"name": "file", "required": true}},
+					},
+				},
+			}
+		case "prompts/get":
+			result = map[string]any{
+				"description": "review the code",
+				"messages": []map[string]any{
+					{"role": "user", "content": map[string]any{"type": "text", "text": "Please review the code."}},
+					{"role": "assistant", "content": map[string]any{"type": "text", "text": "Here is my review."}},
+				},
+			}
 		case "tools/call":
 			var params struct {
 				Name      string         `json:"name"`
@@ -203,5 +221,36 @@ func TestStdioClientFailsOnUnknownServer(t *testing.T) {
 	}
 	if _, err := exec.LookPath("definitely-not-a-real-mcp-server-binary"); err == nil {
 		t.Skip("unexpectedly found sentinel binary")
+	}
+}
+
+func TestManagerListsAndGetsPrompts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping stdio MCP integration in short mode")
+	}
+	workspace := t.TempDir()
+	configPath := writeStdioConfig(t, workspace)
+	manager := NewManager(configPath, workspace, filepath.Join(workspace, ".godex", ".tmp"))
+
+	prompts, err := manager.ListPrompts(context.Background())
+	if err != nil {
+		t.Fatalf("list prompts: %v", err)
+	}
+	if len(prompts) != 1 || prompts[0].Name != "review" || prompts[0].Server != "fake" {
+		t.Fatalf("unexpected prompts: %+v", prompts)
+	}
+	if len(prompts[0].Arguments) == 0 {
+		t.Fatal("expected prompt arguments preserved")
+	}
+
+	got, err := manager.GetPrompt(context.Background(), "fake", "review", map[string]any{"file": "main.go"})
+	if err != nil {
+		t.Fatalf("get prompt: %v", err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("expected 2 rendered messages, got %+v", got)
+	}
+	if got.Messages[0].Role != "user" || !strings.Contains(got.Messages[0].Content, "review the code") {
+		t.Fatalf("unexpected first message: %+v", got.Messages[0])
 	}
 }

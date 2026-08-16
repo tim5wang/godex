@@ -203,7 +203,7 @@ GoDex 1.x 已经是一个本地优先、可部署、可审计的 Agent 工作台
 - 笔记 ↔ 记忆双向联动、context inspector、token 估算。
 
 **工具与安全**
-- 58 个工具 / 14 个 bundle：shell/file/grep(ripgrep)/LSP/browser/desktop/web/memory/skill/package/subagent/workflow/MCP/teamtools 等，`tool_exchange` 按需启用。
+- 60 个工具 / 14 个 bundle：shell/file/grep(ripgrep)/LSP/browser/desktop/web/memory/skill/package/subagent/workflow/MCP/teamtools 等，`tool_exchange` 按需启用。
 - WorkspaceFS 文件边界、shell guard、manual/review/yolo 审批、安全 profile（trusted-local … dev/repair）、内容安全筛查器、loop guard、security audit。
 - Scope 隔离（session / personal / org）与写路径限定。
 

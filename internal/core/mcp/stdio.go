@@ -143,6 +143,50 @@ func (c *stdioClient) listTools(ctx context.Context) ([]mcpTool, error) {
 	return list.Tools, nil
 }
 
+// mcpPrompt is the prompts/list prompt descriptor.
+type mcpPrompt struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Arguments   json.RawMessage `json:"arguments,omitempty"`
+}
+
+// mcpPromptMessage is one message in a prompts/get result.
+type mcpPromptMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+func (c *stdioClient) listPrompts(ctx context.Context) ([]mcpPrompt, error) {
+	result, err := c.request(ctx, "prompts/list", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var list struct {
+		Prompts []mcpPrompt `json:"prompts"`
+	}
+	if err := json.Unmarshal(result, &list); err != nil {
+		return nil, fmt.Errorf("mcp prompts/list: %w", err)
+	}
+	return list.Prompts, nil
+}
+
+func (c *stdioClient) getPrompt(ctx context.Context, name string, arguments map[string]any) ([]mcpPromptMessage, error) {
+	result, err := c.request(ctx, "prompts/get", map[string]any{
+		"name":      name,
+		"arguments": arguments,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var got struct {
+		Messages []mcpPromptMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(result, &got); err != nil {
+		return nil, fmt.Errorf("mcp prompts/get: %w", err)
+	}
+	return got.Messages, nil
+}
+
 func (c *stdioClient) callTool(ctx context.Context, name string, args map[string]any) (mcpCallResult, error) {
 	result, err := c.request(ctx, "tools/call", map[string]any{
 		"name":      name,

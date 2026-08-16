@@ -501,7 +501,7 @@ Skill 的 `SKILL.md` frontmatter 支持：`name`、`description`、`summary`、`
 | `background` | `background`（长命令执行与状态查询） | bundle |
 | `subagent` | `subagent`（run/start/batch/wait/status/logs/list/cancel/resume/review/merge/send_input/followup_task/iterate）、`workflow`（create/status/start/wait/cancel/complete_node/append_node）、`agent_graph`（动态 DAG）、`longtask`（含 plan） | bundle |
 | `external_agents` | `acp_agent`（调用配置的 ACP agent） | bundle |
-| `mcp` | `list_mcp_resources`、`read_mcp_resource`（只读文件系统资源）；`list_mcp_tools`、`call_mcp_tool`（stdio JSON-RPC MCP client，tools 面） | bundle（默认关闭） |
+| `mcp` | `list_mcp_resources`、`read_mcp_resource`（只读文件系统资源）；`list_mcp_tools`、`call_mcp_tool`、`list_mcp_prompts`、`get_mcp_prompt`（stdio JSON-RPC MCP client，tools/prompts 面） | bundle（默认关闭） |
 | `packages` | `list_packages`、`install_package`、`remove_package`、`list_prompts`、`list_package_commands`、`list_package_roles` | bundle |
 | — | `memory`、`skill`、`compress`、`history_search`、`manage_session`、`tool_exchange`、`cron`、`heartbeat` | always active |
 
@@ -943,7 +943,7 @@ godex import claude --source ~/.claude --package claude-user
 ```
 
 - `type: filesystem`：只读文件系统资源，通过 `list_mcp_resources` / `read_mcp_resource` 使用。
-- `type: stdio`：进程外 MCP server（JSON-RPC 2.0 over stdio），**任何语言实现都成为 GoDex 插件**——通过 `list_mcp_tools` 发现、`call_mcp_tool` 调用；这是不引入 wazero 的「运行时拓展」桥接路径（进程外插件，与进程内 WASM 内核正交）。stdio 调用默认 30s 超时，受会话 context 取消约束。
+- `type: stdio`：进程外 MCP server（JSON-RPC 2.0 over stdio），**任何语言实现都成为 GoDex 插件**——通过 `list_mcp_tools` / `call_mcp_tool` 调用工具、`list_mcp_prompts` / `get_mcp_prompt` 渲染 prompt；这是不引入 wazero 的「运行时拓展」桥接路径（进程外插件，与进程内 WASM 内核正交）。stdio 调用默认 30s 超时，受会话 context 取消约束。
 
 ## Slash Commands
 

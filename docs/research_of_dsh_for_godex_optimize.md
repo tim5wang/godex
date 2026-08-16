@@ -1,6 +1,6 @@
 # DeepSeek Harness 对 GoDex 的改进启示
 
-> 状态：Draft / Plan（设计分析与改进方案；**阶段 0、P1、阶段 A 内核、MCP 桥接（tools 面）、阶段 B MVP（wazero WASM Tool）、P2 #1/#2/#3、阶段 C 的 ACP Harness adapter 均已落地**，其余阶段 C 项待实施）
+> 状态：Draft / Plan（设计分析与改进方案；**阶段 0、P1、阶段 A 内核、MCP 桥接（tools/prompts 面）、阶段 B MVP（wazero WASM Tool）、P2 #1/#2/#3、阶段 C 的 ACP Harness adapter 均已落地**，其余阶段 C 项待实施）
 > 目标：提炼 `temp/deepseek-harness` 中值得 GoDex 吸收的架构能力，聚焦近期可落地优化；不追求复制 Cordis，也不把 WASM 等同于插件系统。
 > 修订日志：2026-08-15 整合插件对照表、wazero 兼容性结论（协议层/桥接层）、MCP 跨运行时能力协议视角与更低起步点（阶段 0：package requires 依赖解析）。2026-08-16 阶段 0 落地：`godex.package.yaml` 支持 `requires`/`provides`、安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装与旧 digest 目录 GC（见 `internal/core/packages/{requires,deps}.go`）。同日 P1 与阶段 A 内核骨架落地：`internal/toolruntime` 注册返回可逆 `Registration`（owner/generation/draining，`RegisterOwned`/`UnregisterOwner`），新增 `internal/pluginrt` 轻量插件内核（manifest/graph/instance/effects/registry/manager，含事务式 prepare/commit/rollback 与 `NativeToolPlugin` 内建 Go 适配器）；MCP 桥接落地：`internal/core/mcp` 新增 stdio JSON-RPC client（`list_mcp_tools`/`call_mcp_tool`，任意语言 MCP server 即 GoDex 插件）。
 
@@ -255,7 +255,7 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 1. **协议/清单层兼容（推荐，长期）**：把 DSH 的插件清单与能力协议抽象成**跨语言规范**（plugin manifest + capability contract），GoDex 实现同一规范。未来的插件可以「同一份 manifest，DSH 和 GoDex 都能装」——类似 LSP/MCP 的协议级兼容，而不是二进制兼容。这与 GoDex 已有的 package manifest、ACP 桥接、MCP 方向天然一致。
 2. **桥接层兼容（立即可做）✅ 已落地**：GoDex 已有 `acp_agent` 工具（调用外部 ACP agent）与 ACP server，也有 MCP 只读资源支持——把 DSH 插件作为**外部 ACP agent 或 MCP server** 接入，不需要 wazero 就能获得「运行时拓展」。wazero 内核则是为 GoDex 原生、沙箱化、强安全的插件准备的，两者可以并存。
 
-**MCP 作为跨运行时能力协议 ✅ 已落地（tools 面）**：MCP 已从「只读文件系统资源」升级为完整 stdio client（`internal/core/mcp/stdio.go`，JSON-RPC 2.0 over stdio：initialize/tools-list/tools-call），配置 `type: stdio` + `command/args/env` 即可接入任意语言的 MCP server；其工具通过 `list_mcp_tools` / `call_mcp_tool` 暴露，注册在 `godex:builtin:mcp` owner 下随 group 卸载。任何语言实现的 MCP server 都成为 GoDex 插件——这本身就是 DSH 插件生态的通用等价物，且与 wazero 内核正交（WASM 插件跑在进程内，MCP 插件跑在进程外，共享同一能力注册表与权限/scope/审计体系）。prompts 面与动态按 server 注册工具留待后续。
+**MCP 作为跨运行时能力协议 ✅ 已落地（tools/prompts 面）**：MCP 已从「只读文件系统资源」升级为完整 stdio client（`internal/core/mcp/stdio.go`，JSON-RPC 2.0 over stdio：initialize/tools-list/tools-call/prompts-list/prompts-get），配置 `type: stdio` + `command/args/env` 即可接入任意语言的 MCP server；其工具通过 `list_mcp_tools` / `call_mcp_tool`、prompt 通过 `list_mcp_prompts` / `get_mcp_prompt` 暴露，注册在 `godex:builtin:mcp` owner 下随 group 卸载。任何语言实现的 MCP server 都成为 GoDex 插件——这本身就是 DSH 插件生态的通用等价物，且与 wazero 内核正交（WASM 插件跑在进程内，MCP 插件跑在进程外，共享同一能力注册表与权限/scope/审计体系）。动态按 server 注册工具留待后续。
 
 ## 6. 建议路线图
 

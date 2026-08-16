@@ -51,6 +51,28 @@ type CallResult struct {
 	Raw     string `json:"raw,omitempty"`
 }
 
+// Prompt is one prompt template exposed by a stdio MCP server.
+type Prompt struct {
+	Server      string          `json:"server"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Arguments   json.RawMessage `json:"arguments,omitempty"`
+}
+
+// PromptMessage is one message in a rendered prompt.
+type PromptMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content,omitempty"`
+}
+
+// GetPromptResult is the outcome of rendering one MCP prompt.
+type GetPromptResult struct {
+	Server   string          `json:"server"`
+	Prompt   string          `json:"prompt"`
+	Messages []PromptMessage `json:"messages"`
+	Raw      string          `json:"raw,omitempty"`
+}
+
 // Manager is the read-only MCP resource entrypoint.
 type Manager struct {
 	configPath   string
@@ -213,6 +235,101 @@ func (m *Manager) listServerTools(ctx context.Context, server ServerConfig) ([]T
 			Name:        item.Name,
 			Description: item.Description,
 			InputSchema: item.InputSchema,
+		})
+	}
+	return out, nil
+}
+
+// ListPrompts lists prompts exposed by all configured stdio MCP servers via
+// the MCP prompts/list protocol.
+func (m *Manager) ListPrompts(ctx context.Context) ([]Prompt, error) {
+	cfg, err := LoadConfig(m.configPath)
+	if err != nil {
+		return nil, err
+	}
+	var prompts []Prompt
+	for _, server := range cfg.Servers {
+		if server.Type != ServerTypeStdio {
+			continue
+		}
+		items, err := m.listServerPrompts(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		prompts = append(prompts, items...)
+	}
+	sort.Slice(prompts, func(i, j int) bool {
+		if prompts[i].Server == prompts[j].Server {
+			return prompts[i].Name < prompts[j].Name
+		}
+		return prompts[i].Server < prompts[j].Server
+	})
+	return prompts, nil
+}
+
+// GetPrompt renders one prompt on a stdio MCP server via the MCP prompts/get
+// protocol. Text content is concatenated per message; raw output preserved.
+func (m *Manager) GetPrompt(ctx context.Context, serverName, promptName string, arguments map[string]any) (*GetPromptResult, error) {
+	cfg, err := LoadConfig(m.configPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, server := range cfg.Servers {
+		if server.Name != serverName {
+			continue
+		}
+		if server.Type != ServerTypeStdio {
+			return nil, fmt.Errorf("mcp server %s is not a stdio server", serverName)
+		}
+		client, err := startStdioClient(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		defer client.close()
+		messages, err := client.getPrompt(ctx, promptName, arguments)
+		if err != nil {
+			return nil, err
+		}
+		rendered := make([]PromptMessage, 0, len(messages))
+		for _, msg := range messages {
+			content := ""
+			var text struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(msg.Content, &text); err == nil {
+				content = text.Text
+			}
+			rendered = append(rendered, PromptMessage{Role: msg.Role, Content: content})
+		}
+		raw, _ := json.Marshal(messages)
+		return &GetPromptResult{
+			Server:   serverName,
+			Prompt:   promptName,
+			Messages: rendered,
+			Raw:      string(raw),
+		}, nil
+	}
+	return nil, fmt.Errorf("mcp server not found: %s", serverName)
+}
+
+// listServerPrompts lists the prompts of one stdio server.
+func (m *Manager) listServerPrompts(ctx context.Context, server ServerConfig) ([]Prompt, error) {
+	client, err := startStdioClient(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	defer client.close()
+	items, err := client.listPrompts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Prompt, 0, len(items))
+	for _, item := range items {
+		out = append(out, Prompt{
+			Server:      server.Name,
+			Name:        item.Name,
+			Description: item.Description,
+			Arguments:   item.Arguments,
 		})
 	}
 	return out, nil

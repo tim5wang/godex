@@ -21,6 +21,12 @@ type MCPToolRunner interface {
 	CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallResult, error)
 }
 
+// MCPPromptRunner provides access to prompts exposed by stdio MCP servers.
+type MCPPromptRunner interface {
+	ListPrompts(ctx context.Context) ([]mcp.Prompt, error)
+	GetPrompt(ctx context.Context, serverName, promptName string, arguments map[string]any) (*mcp.GetPromptResult, error)
+}
+
 type listMCPResourcesArgs struct{}
 
 type readMCPResourceArgs struct {
@@ -116,5 +122,63 @@ func NewCallMCPToolTool(runner MCPToolRunner) Tool {
 			return ToolResult{}, fmt.Errorf("mcp tool %s/%s failed: %s", args.Server, args.Tool, result.Text)
 		}
 		return ToolResult{Text: result.Text, Structured: result}, nil
+	})
+}
+
+type listMCPPromptsArgs struct{}
+
+// NewListMCPPromptsTool lists prompts exposed by configured stdio MCP servers.
+func NewListMCPPromptsTool(runner MCPPromptRunner) Tool {
+	return NewTypedTool(NewToolSpec("list_mcp_prompts", "List prompts exposed by configured stdio MCP servers", map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}, nil), func(ctx context.Context, args listMCPPromptsArgs) (ToolResult, error) {
+		_ = args
+		prompts, err := runner.ListPrompts(ctx)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{Structured: map[string]interface{}{"prompts": prompts}}, nil
+	})
+}
+
+type getMCPPromptArgs struct {
+	Server    string         `json:"server"`
+	Prompt    string         `json:"prompt"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+// NewGetMCPPromptTool renders one prompt on a configured stdio MCP server.
+func NewGetMCPPromptTool(runner MCPPromptRunner) Tool {
+	return NewTypedTool(NewToolSpec("get_mcp_prompt", "Render one prompt on a configured stdio MCP server", map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"server":    map[string]string{"type": "string"},
+			"prompt":    map[string]string{"type": "string"},
+			"arguments": map[string]interface{}{"type": "object"},
+		},
+		"required": []string{"server", "prompt"},
+	}, nil), func(ctx context.Context, args getMCPPromptArgs) (ToolResult, error) {
+		if strings.TrimSpace(args.Server) == "" {
+			return ToolResult{}, fmt.Errorf("missing server argument")
+		}
+		if strings.TrimSpace(args.Prompt) == "" {
+			return ToolResult{}, fmt.Errorf("missing prompt argument")
+		}
+		result, err := runner.GetPrompt(ctx, args.Server, args.Prompt, args.Arguments)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		var b strings.Builder
+		for _, msg := range result.Messages {
+			if msg.Content == "" {
+				continue
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(msg.Content)
+		}
+		return ToolResult{Text: b.String(), Structured: result}, nil
 	})
 }

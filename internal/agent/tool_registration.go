@@ -252,6 +252,14 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Bundle:  bundleMCP,
 		Summary: "configured stdio MCP tool servers",
 	})
+	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewListMCPPromptsTool(a.mcpMgr), tools.ToolMeta{
+		Bundle:  bundleMCP,
+		Summary: "configured stdio MCP prompt servers",
+	})
+	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewGetMCPPromptTool(a.mcpMgr), tools.ToolMeta{
+		Bundle:  bundleMCP,
+		Summary: "configured stdio MCP prompt servers",
+	})
 	a.registerToolTo(handler, tools.NewLSPTool(workspaceDir), tools.ToolMeta{
 		Bundle:        bundleLSP,
 		Summary:       "LSP code intelligence (definitions, references, hover, diagnostics, completions)",

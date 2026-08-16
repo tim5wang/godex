@@ -192,6 +192,17 @@ func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.AC
 				Name:  update.Name,
 				Input: update.Input,
 			})
+		case "plan", "permission_request", "permission_denied":
+			// P2 #4: advisory/plan/permission updates from the external engine
+			// surface as warnings so nothing the engine reports is silently
+			// dropped.
+			emit(events.EventWarningRaised, events.NoticePayload{
+				Message:   fmt.Sprintf("external engine %s reported %s", h.agentID, update.Kind),
+				Code:      "acp_external_update",
+				ActorKind: "agent",
+				ActorID:   h.agentID,
+				RecoveryHint: "The external engine continues; inspect the raw update for details.",
+			})
 		}
 	}
 }

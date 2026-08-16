@@ -43,7 +43,20 @@ func TestACPFakeServer(t *testing.T) {
 			result = map[string]any{"sessionId": "acp-fake-1"}
 		case "session/prompt":
 			result = map[string]any{"stopReason": "end_turn"}
-			// Send a tool_call update then a streaming text chunk.
+			// Send a plan update, a tool_call update, then a streaming chunk.
+			plan := map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "session/update",
+				"params": map[string]any{
+					"sessionId": "acp-fake-1",
+					"update": map[string]any{
+						"sessionUpdate": "plan",
+						"plan":          map[string]any{"steps": []string{"analyze", "report"}},
+					},
+				},
+			}
+			planLine, _ := json.Marshal(plan)
+			fmt.Fprintln(os.Stdout, string(planLine))
 			toolCall := map[string]any{
 				"jsonrpc": "2.0",
 				"method":  "session/update",
@@ -255,10 +268,10 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 		t.Fatalf("run turn: %v", err)
 	}
 	emitted := sink.Snapshot()
-	if len(emitted) < 2 {
-		t.Fatalf("expected at least 2 mapped events, got %d", len(emitted))
+	if len(emitted) < 3 {
+		t.Fatalf("expected at least 3 mapped events, got %d", len(emitted))
 	}
-	var sawTool, sawDelta bool
+	var sawTool, sawDelta, sawPlan bool
 	for _, event := range emitted {
 		switch event.Type {
 		case events.EventToolCallStarted:
@@ -269,6 +282,10 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 			if payload, ok := event.Payload.(events.TextPayload); ok && strings.Contains(payload.Text, "hello from acp") {
 				sawDelta = true
 			}
+		case events.EventWarningRaised:
+			if payload, ok := event.Payload.(events.NoticePayload); ok && payload.Code == "acp_external_update" {
+				sawPlan = true
+			}
 		}
 	}
 	if !sawTool {
@@ -276,6 +293,9 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 	}
 	if !sawDelta {
 		t.Fatal("expected assistant_text_delta event mapped from ACP chunk")
+	}
+	if !sawPlan {
+		t.Fatal("expected plan update surfaced as warning event")
 	}
 }
 

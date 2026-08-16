@@ -159,6 +159,8 @@ func parseACPUpdate(raw string) (ACPUpdate, bool) {
 		return ACPUpdate{Kind: "message_chunk", Text: text, Raw: raw}, true
 	case "plan":
 		return ACPUpdate{Kind: "plan", Raw: raw}, true
+	case "permission_request", "permission_denied":
+		return ACPUpdate{Kind: payload.SessionUpdate, Raw: raw}, true
 	case "tool_call", "tool_call_update":
 		name := payload.Name
 		if name == "" {

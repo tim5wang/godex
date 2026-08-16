@@ -256,7 +256,11 @@ func TestOpenAICodexClientToolParametersAreObjects(t *testing.T) {
 }
 
 func TestOpenAICodexClientStreamSurfacesReasoningDeltas(t *testing.T) {
+	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"plan\"}\n\n"))
 		_, _ = w.Write([]byte("data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"- inspect\"}\n\n"))
@@ -269,7 +273,7 @@ func TestOpenAICodexClientStreamSurfacesReasoningDeltas(t *testing.T) {
 
 	client := NewOpenAICodexClient(server.URL, "test-token", 5*time.Second)
 	var thinking []string
-	resp, err := client.Stream(context.Background(), protocol.Request{Model: "gpt-5.4"}, StreamHandler{
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "gpt-5.4", ReasoningEffort: "medium"}, StreamHandler{
 		OnThinkingDelta: func(delta, signature string) {
 			if signature != "" {
 				t.Fatalf("unexpected signature on reasoning delta: %q", signature)
@@ -279,6 +283,12 @@ func TestOpenAICodexClientStreamSurfacesReasoningDeltas(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("codex stream: %v", err)
+	}
+	// reasoning.summary:"auto" is what makes the backend emit the reasoning
+	// summary deltas in the first place (pi's codex client sends the same).
+	reasoning, _ := body["reasoning"].(map[string]any)
+	if reasoning == nil || reasoning["effort"] != "medium" || reasoning["summary"] != "auto" {
+		t.Fatalf("expected reasoning {effort,summary:auto} in request, got %#v", body["reasoning"])
 	}
 	if got := strings.Join(thinking, ""); got != "plan- inspectning" {
 		t.Fatalf("expected live thinking deltas in arrival order, got %q", got)

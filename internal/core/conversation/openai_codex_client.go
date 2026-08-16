@@ -129,6 +129,12 @@ func codexResponsesParams(req protocol.Request) responses.ResponseNewParams {
 	if effort := normalizeCodexReasoningEffort(req.ReasoningEffort); effort != "" {
 		params.Reasoning = shared.ReasoningParam{
 			Effort: shared.ReasoningEffort(effort),
+			// summary:"auto" is required for the backend to emit
+			// response.reasoning_summary_text.delta events (the live "thinking"
+			// stream). pi's codex client sends the same; without it the backend
+			// delivers reasoning only as encrypted content and the frontend
+			// gets no intermediate output.
+			Summary: shared.ReasoningSummaryAuto,
 		}
 	}
 	// Prompt cache affinity: without a stable cache key the provider can only

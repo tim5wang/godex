@@ -86,8 +86,30 @@ func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtim
 	sections = appendRuntimePromptSection(sections, "active_skills", protocol.KindBackground, buildActiveSkillsPrompt(a.activeSkillStates()))
 	sections = appendRuntimePromptSection(sections, "environment", protocol.KindBackground, buildEnvironmentPrompt(a.environmentPromptInput()))
 	sections = appendRuntimePromptSection(sections, "tool_availability", protocol.KindBackground, buildToolAvailabilityPromptForProfile(a.toolHandler.Catalog(), profile))
+	// P4 prompt/context contributor: append sections contributed by active
+	// plugins (e.g. WASM plugins via pluginrt Manager.PromptSections). The
+	// default host contributes nothing; wiring sets the provider.
+	sections = append(sections, a.pluginPromptSections()...)
 
 	return sections, nil
+}
+
+// pluginPromptSections returns prompt/context contributions from active
+// plugins. The host (agent wiring) installs the provider; the default is empty
+// so the section list is unchanged when no plugin manager is configured.
+func (a *Agent) pluginPromptSections() []runtimePromptSection {
+	if a == nil || a.pluginPromptProvider == nil {
+		return nil
+	}
+	return a.pluginPromptProvider()
+}
+
+// SetPluginPromptProvider installs the hook that feeds plugin-contributed
+// prompt sections (P4 prompt/context contributor) into the runtime prompt.
+func (a *Agent) SetPluginPromptProvider(provider func() []runtimePromptSection) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pluginPromptProvider = provider
 }
 
 // buildMemoryIndexPromptMessage returns the durable memory index as a

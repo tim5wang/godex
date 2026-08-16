@@ -180,3 +180,21 @@ func TestWriteStringBounded(t *testing.T) {
 	// without a module; the host write path is exercised by integration tests.
 	_ = strings.TrimSpace("")
 }
+
+func TestPluginPromptSections(t *testing.T) {
+	plugin := loadTestPlugin(t, HostCallbacks{})
+	sections, err := plugin.PromptSections(context.Background())
+	if err != nil {
+		t.Fatalf("prompt sections: %v", err)
+	}
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 prompt section, got %+v", sections)
+	}
+	section := sections[0]
+	if section.Key != "wasm_plugin_note" || section.Kind != "background" {
+		t.Fatalf("unexpected section: %+v", section)
+	}
+	if !strings.Contains(section.Text, "wasm_echo") {
+		t.Fatalf("unexpected section text: %q", section.Text)
+	}
+}

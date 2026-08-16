@@ -30,14 +30,16 @@ type WasmToolPlugin struct {
 	// callbacks). Callbacks are wired per activation.
 	WasmConfig wasmrt.Config
 
-	runtime *wasmrt.Plugin
+	runtime     *wasmrt.Plugin
+	promptSects []wasmrt.PromptSection
 }
 
 // Manifest returns the declared manifest.
 func (p *WasmToolPlugin) Manifest() Manifest { return p.ManifestValue }
 
 // Start loads the module, discovers tools, and registers each with owner =
-// plugin id through reversible effects.
+// plugin id through reversible effects. Prompt/context contributions from the
+// module are cached for the host to inject (P4 prompt contributor).
 func (p *WasmToolPlugin) Start(ctx context.Context, host Host) error {
 	if p.Handler == nil || len(p.Binary) == 0 {
 		return nil
@@ -55,6 +57,9 @@ func (p *WasmToolPlugin) Start(ctx context.Context, host Host) error {
 		_ = loaded.Close(ctx)
 		p.runtime = nil
 		return err
+	}
+	if sections, sectionsErr := loaded.PromptSections(ctx); sectionsErr == nil {
+		p.promptSects = sections
 	}
 
 	owner := p.ManifestValue.ID
@@ -89,11 +94,26 @@ func (p *WasmToolPlugin) Start(ctx context.Context, host Host) error {
 	return nil
 }
 
+// PromptSections returns the cached context contributions of this plugin
+// (P4 prompt/context contributor). Empty when the module has none.
+func (p *WasmToolPlugin) PromptSections() []PromptSection {
+	out := make([]PromptSection, 0, len(p.promptSects))
+	for _, section := range p.promptSects {
+		out = append(out, PromptSection{
+			Key:  section.Key,
+			Kind: section.Kind,
+			Text: section.Text,
+		})
+	}
+	return out
+}
+
 // Stop closes the loaded module (registration reversal happens in the ledger).
 func (p *WasmToolPlugin) Stop(ctx context.Context) error {
 	if p.runtime != nil {
 		err := p.runtime.Close(ctx)
 		p.runtime = nil
+		p.promptSects = nil
 		return err
 	}
 	return nil

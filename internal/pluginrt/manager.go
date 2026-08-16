@@ -120,6 +120,32 @@ func (m *Manager) Deactivate(ctx context.Context, id string) error {
 // Registry exposes the scope-aware capability table for querying.
 func (m *Manager) Registry() *Registry { return m.registry }
 
+// PromptSections aggregates context/prompt contributions from every active
+// plugin that provides them (P4 prompt/context contributor). Sections are
+// returned in plugin registration order, prefixed by the plugin id for stable
+// de-duplication.
+func (m *Manager) PromptSections() []PromptSection {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]string, 0, len(m.instances))
+	for id := range m.instances {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []PromptSection
+	for _, id := range ids {
+		provider, ok := m.instances[id].plugin.(interface{ PromptSections() []PromptSection })
+		if !ok {
+			continue
+		}
+		for _, section := range provider.PromptSections() {
+			section.PluginID = id
+			out = append(out, section)
+		}
+	}
+	return out
+}
+
 // Prepare begins a transactional reload of one plugin: it validates the
 // candidate graph (shadow validation) without touching the live state. The
 // returned transaction commits or rolls back atomically.

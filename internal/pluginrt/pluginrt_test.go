@@ -378,3 +378,39 @@ func TestWasmToolPluginRegistersAndUnregisters(t *testing.T) {
 		t.Fatal("expected wasm tool unregistered")
 	}
 }
+
+func TestManagerPromptSectionsAggregatesWasmPlugins(t *testing.T) {
+	binary, err := os.ReadFile(filepath.Join("..", "wasmrt", "testdata", "plugin.wasm"))
+	if err != nil {
+		t.Fatalf("read wasm plugin: %v", err)
+	}
+	handler := toolruntime.NewToolHandler()
+	manager := NewManager(nil)
+	if _, err := manager.Activate(context.Background(), &WasmToolPlugin{
+		ManifestValue: Manifest{ID: "prompt-demo", Scope: scope.Org("godex"), Provides: []string{"godex:prompt-demo@1"}},
+		Binary:        binary,
+		Handler:       handler,
+		Meta:          toolruntime.ToolMeta{Bundle: "wasm", AlwaysActive: true},
+	}); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+
+	sections := manager.PromptSections()
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 prompt section, got %+v", sections)
+	}
+	if sections[0].PluginID != "prompt-demo" || sections[0].Key != "wasm_plugin_note" {
+		t.Fatalf("unexpected section: %+v", sections[0])
+	}
+	if sections[0].Kind != "background" {
+		t.Fatalf("expected background kind, got %q", sections[0].Kind)
+	}
+
+	// Deactivation clears the contributions.
+	if err := manager.Deactivate(context.Background(), "prompt-demo"); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if got := manager.PromptSections(); len(got) != 0 {
+		t.Fatalf("expected no sections after deactivate, got %+v", got)
+	}
+}

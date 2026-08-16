@@ -89,6 +89,16 @@ type capability struct {
 	Any   bool // no @major suffix: any version satisfies
 }
 
+// PromptSection is a context/prompt contribution from an active plugin (P4
+// prompt/context contributor). PluginID is stamped by the manager; Kind is
+// "background" (system-prompt section) or "memory" (ephemeral message).
+type PromptSection struct {
+	PluginID string `json:"plugin_id"`
+	Key      string `json:"key"`
+	Kind     string `json:"kind,omitempty"`
+	Text     string `json:"text"`
+}
+
 func parseCapability(raw string) (capability, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

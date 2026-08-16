@@ -18,6 +18,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/media"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
+	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
@@ -225,7 +226,35 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 	agent.toolHandler.AddBeforeInterceptors(tools.NewPermissionInterceptorWithReview(deps.permissions, agent.reviewPermissionRequest))
 	agent.workerRuntime = localGoDexWorkerRuntime{agent: agent}
 	agent.RegisterConfiguredACPHarnesses()
+	// Wire the optional plugin kernel into the prompt pipeline: active plugins'
+	// prompt contributions (e.g. WASM plugins) become runtime prompt sections.
+	agent.pluginMgr = deps.pluginMgr
+	if deps.pluginMgr != nil {
+		agent.SetPluginPromptProvider(func() []runtimePromptSection {
+			return pluginPromptSectionsFromManager(deps.pluginMgr)
+		})
+	}
 	return agent
+}
+
+// pluginPromptSectionsFromManager maps pluginrt prompt sections onto runtime
+// prompt sections (P4 prompt/context contributor).
+func pluginPromptSectionsFromManager(manager *pluginrt.Manager) []runtimePromptSection {
+	sections := manager.PromptSections()
+	out := make([]runtimePromptSection, 0, len(sections))
+	for _, section := range sections {
+		kind := protocol.KindBackground
+		if section.Kind == "memory" {
+			kind = protocol.KindMemory
+		}
+		out = append(out, runtimePromptSection{
+			Key:    "plugin:" + section.PluginID + ":" + section.Key,
+			Kind:   kind,
+			Text:   section.Text,
+			Tokens: compress.CountTokens(section.Text),
+		})
+	}
+	return out
 }
 
 func loadMessageBus(teamDir string) *message.Bus {

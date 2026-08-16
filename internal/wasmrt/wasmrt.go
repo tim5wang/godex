@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,6 +51,16 @@ type ToolDecl struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// PromptSection is one context/prompt contribution a plugin declares
+// (P4 prompt/context contributor). Key is a stable identifier; Kind is one of
+// "background" (system-prompt section) or "memory" (ephemeral message); Text
+// is the contribution itself.
+type PromptSection struct {
+	Key  string `json:"key"`
+	Kind string `json:"kind,omitempty"`
+	Text string `json:"text"`
 }
 
 // HostCallbacks are the controlled host functions exposed to plugins.
@@ -87,6 +98,7 @@ type Plugin struct {
 	exportInvoke    api.Function
 	exportToolsList api.Function
 	exportABI       api.Function
+	exportPrompts   api.Function
 	mailboxPtr      uint32
 	mailboxOnce     sync.Once
 	// sem bounds the number of callers queued on this plugin. The guest call
@@ -157,6 +169,7 @@ func NewPlugin(ctx context.Context, config Config) (*Plugin, error) {
 	plugin.exportInvoke = module.ExportedFunction("godex_invoke")
 	plugin.exportToolsList = module.ExportedFunction("godex_tools_list")
 	plugin.exportABI = module.ExportedFunction("godex_abi_version")
+	plugin.exportPrompts = module.ExportedFunction("godex_prompts_list")
 	if plugin.exportInvoke == nil || module.ExportedFunction("godex_request_buffer") == nil {
 		_ = plugin.Close(ctx)
 		return nil, fmt.Errorf("wasm plugin: missing godex_invoke/godex_request_buffer exports (ABI %s)", ABIVersion)
@@ -289,6 +302,44 @@ func (p *Plugin) ABI(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return p.readString(uint32(results[0])), nil
+}
+
+// PromptSections returns the context/prompt contributions from the plugin via
+// the godex_prompts_list export (P4 prompt/context contributor). A plugin that
+// does not export godex_prompts_list contributes nothing.
+func (p *Plugin) PromptSections(ctx context.Context) ([]PromptSection, error) {
+	p.callMu.Lock()
+	defer p.callMu.Unlock()
+	if p.exportPrompts == nil {
+		return nil, nil
+	}
+	results, err := p.exportPrompts.Call(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("wasm plugin: prompts_list: %w", err)
+	}
+	raw := p.readString(uint32(results[0]))
+	if raw == "" {
+		return nil, nil
+	}
+	var list struct {
+		Sections []PromptSection `json:"sections"`
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil, fmt.Errorf("wasm plugin: prompts_list: %w", err)
+	}
+	out := make([]PromptSection, 0, len(list.Sections))
+	for _, section := range list.Sections {
+		section.Key = strings.TrimSpace(section.Key)
+		section.Text = strings.TrimSpace(section.Text)
+		if section.Key == "" || section.Text == "" {
+			continue
+		}
+		if section.Kind != "memory" {
+			section.Kind = "background"
+		}
+		out = append(out, section)
+	}
+	return out, nil
 }
 
 // CallTool runs one tool call through the plugin.

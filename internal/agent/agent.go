@@ -15,6 +15,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/media"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
+	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/security"
@@ -114,6 +115,12 @@ type Agent struct {
 	// extraHarnesses holds engines registered via RegisterHarness beyond
 	// the built-in godex engine (roadmap 6.4 multi-engine switching).
 	extraHarnesses map[string]Harness
+	// pluginPromptProvider feeds plugin-contributed prompt sections into the
+	// runtime prompt (P4 prompt/context contributor); nil disables it.
+	pluginPromptProvider func() []runtimePromptSection
+	// pluginMgr is the optional plugin kernel instance (阶段 A). When set, its
+	// active plugins' prompt contributions flow into the runtime prompt.
+	pluginMgr *pluginrt.Manager
 }
 
 type dependencies struct {
@@ -144,6 +151,10 @@ type dependencies struct {
 	workflows    *workflowStore
 	todoMgr      *todo.Manager
 	sandbox      sandbox.Sandbox
+	// pluginMgr, when non-nil, feeds plugin-contributed prompt sections into
+	// the runtime prompt (P4 prompt/context contributor). Optional: nil keeps
+	// the default prompt unchanged.
+	pluginMgr *pluginrt.Manager
 }
 
 // New creates a new agent.

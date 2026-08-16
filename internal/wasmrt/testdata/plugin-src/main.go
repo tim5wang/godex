@@ -16,6 +16,7 @@ var mailbox = make([]byte, 128*1024)
 var abiBuf = make([]byte, 64)
 var listBuf = make([]byte, 4096)
 var respBuf = make([]byte, 4096)
+var promptsBuf = make([]byte, 4096)
 
 func ptr(buf []byte) uint32 { return uint32(uintptr(unsafe.Pointer(&buf[0]))) }
 
@@ -54,6 +55,18 @@ func godexToolsList() uint32 {
 	data, _ := json.Marshal(map[string]any{"tools": tools})
 	copy(listBuf, data)
 	return ptr(listBuf)
+}
+
+//go:wasmexport godex_prompts_list
+func godexPromptsList() uint32 {
+	sections := []map[string]any{{
+		"key":  "wasm_plugin_note",
+		"kind": "background",
+		"text": "A WASM plugin is active and can echo messages via the wasm_echo tool.",
+	}}
+	data, _ := json.Marshal(map[string]any{"sections": sections})
+	copy(promptsBuf, data)
+	return ptr(promptsBuf)
 }
 
 //go:wasmexport godex_invoke

@@ -15,15 +15,15 @@ import (
 	"github.com/tim5wang/godex/internal/core/media"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
-	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/core/protocol"
-	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/security"
+	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/sandbox"
 	"github.com/tim5wang/godex/internal/services/historysearch"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
@@ -33,41 +33,41 @@ import (
 
 // Agent is the main agent orchestrator.
 type Agent struct {
-	cfg           *config.Config
-	toolHandler   *tools.ToolHandler
-	todoMgr       *todo.Manager
-	skillLoader   *skill.Loader
-	instrLoader   *instructions.Loader
-	memoryMgr     *memory.Manager
-	memoryExt     *memory.Extractor
+	cfg            *config.Config
+	toolHandler    *tools.ToolHandler
+	todoMgr        *todo.Manager
+	skillLoader    *skill.Loader
+	instrLoader    *instructions.Loader
+	memoryMgr      *memory.Manager
+	memoryExt      *memory.Extractor
 	memoryStrategy memory.Strategy
-	notesMgr      *notes.Manager
-	mcpMgr        *mcp.Manager
-	compressor    *compress.Compressor
-	summarizer    compress.SessionSummarizer
-	taskMgr       *task.Manager
-	bgMgr         *background.Manager
-	webSearch     *tools.WebSearchService
-	webFetch      *tools.WebFetchService
-	browser       *tools.BrowserService
-	permissions   *tools.PermissionManager
-	historySearch tools.HistorySearchRuntime
-	sessionAdmin  tools.SessionAdminRuntime
-	cron          tools.CronManager
-	heartbeat     tools.HeartbeatManager
-	media         *media.Processor
-	msgBus        *message.Bus
-	teamMgr       *teammate.Manager
-	subagentJobs  *subagentJobStore
-	workflows     *workflowStore
-	client        conversation.Caller
-	sandbox       sandbox.Sandbox
-	workerRuntime workerruntime.Runtime
+	notesMgr       *notes.Manager
+	mcpMgr         *mcp.Manager
+	compressor     *compress.Compressor
+	summarizer     compress.SessionSummarizer
+	taskMgr        *task.Manager
+	bgMgr          *background.Manager
+	webSearch      *tools.WebSearchService
+	webFetch       *tools.WebFetchService
+	browser        *tools.BrowserService
+	permissions    *tools.PermissionManager
+	historySearch  tools.HistorySearchRuntime
+	sessionAdmin   tools.SessionAdminRuntime
+	cron           tools.CronManager
+	heartbeat      tools.HeartbeatManager
+	media          *media.Processor
+	msgBus         *message.Bus
+	teamMgr        *teammate.Manager
+	subagentJobs   *subagentJobStore
+	workflows      *workflowStore
+	client         conversation.Caller
+	sandbox        sandbox.Sandbox
+	workerRuntime  workerruntime.Runtime
 	// screener classifies untrusted content before it reaches the model
 	// (roadmap 6.1 content-level security screener).
 	screener    security.Screener
 	screenAudit screenAuditFn
-	roleBundles   *roleBundleRegistry
+	roleBundles *roleBundleRegistry
 	// emitSink is the event sink of the currently running turn, set by
 	// RunWithOptions. Manual compaction (compress tool) emits snapshot_ready
 	// through it so compaction history records manual compactions too; nil
@@ -110,7 +110,7 @@ type Agent struct {
 	currentLongTaskArgs *longTaskArgs
 
 	// harnessOnce guards lazy initialization of harnessRouterVal.
-	harnessOnce sync.Once
+	harnessOnce      sync.Once
 	harnessRouterVal Harness
 	// extraHarnesses holds engines registered via RegisterHarness beyond
 	// the built-in godex engine (roadmap 6.4 multi-engine switching).
@@ -118,39 +118,42 @@ type Agent struct {
 	// pluginPromptProvider feeds plugin-contributed prompt sections into the
 	// runtime prompt (P4 prompt/context contributor); nil disables it.
 	pluginPromptProvider func() []runtimePromptSection
-	// pluginMgr is the optional plugin kernel instance (阶段 A). When set, its
-	// active plugins' prompt contributions flow into the runtime prompt.
-	pluginMgr *pluginrt.Manager
+	// pluginMgr owns this agent's active package runtimes and their reversible
+	// tool/prompt registrations.
+	pluginMgr         *pluginrt.Manager
+	pluginRuntimeMu   sync.Mutex
+	packageRuntimeIDs map[string]struct{}
+	pluginKV          *pluginrt.PluginKVBroker
 }
 
 type dependencies struct {
-	taskMgr      *task.Manager
-	msgBus       *message.Bus
-	client       conversation.Caller
-	skillLoader  *skill.Loader
-	instrLoader  *instructions.Loader
-	memoryMgr    *memory.Manager
-	memoryExt    *memory.Extractor
+	taskMgr        *task.Manager
+	msgBus         *message.Bus
+	client         conversation.Caller
+	skillLoader    *skill.Loader
+	instrLoader    *instructions.Loader
+	memoryMgr      *memory.Manager
+	memoryExt      *memory.Extractor
 	memoryStrategy memory.Strategy
-	notesMgr     *notes.Manager
-	mcpMgr       *mcp.Manager
-	compressor   *compress.Compressor
-	summarizer   compress.SessionSummarizer
-	bgMgr        *background.Manager
-	webSearch    *tools.WebSearchService
-	webFetch     *tools.WebFetchService
-	browser      *tools.BrowserService
-	permissions  *tools.PermissionManager
-	history      *historysearch.Service
-	sessionAdmin *sessionadmin.Service
-	cron         tools.CronManager
-	heartbeat    tools.HeartbeatManager
-	media        *media.Processor
-	teamMgr      *teammate.Manager
-	subagentJobs *subagentJobStore
-	workflows    *workflowStore
-	todoMgr      *todo.Manager
-	sandbox      sandbox.Sandbox
+	notesMgr       *notes.Manager
+	mcpMgr         *mcp.Manager
+	compressor     *compress.Compressor
+	summarizer     compress.SessionSummarizer
+	bgMgr          *background.Manager
+	webSearch      *tools.WebSearchService
+	webFetch       *tools.WebFetchService
+	browser        *tools.BrowserService
+	permissions    *tools.PermissionManager
+	history        *historysearch.Service
+	sessionAdmin   *sessionadmin.Service
+	cron           tools.CronManager
+	heartbeat      tools.HeartbeatManager
+	media          *media.Processor
+	teamMgr        *teammate.Manager
+	subagentJobs   *subagentJobStore
+	workflows      *workflowStore
+	todoMgr        *todo.Manager
+	sandbox        sandbox.Sandbox
 	// pluginMgr, when non-nil, feeds plugin-contributed prompt sections into
 	// the runtime prompt (P4 prompt/context contributor). Optional: nil keeps
 	// the default prompt unchanged.

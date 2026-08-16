@@ -1,6 +1,6 @@
 # DeepSeek Harness 对 GoDex 的改进启示
 
-> 状态：Draft / Plan（设计分析与改进方案；**阶段 0、阶段 A、阶段 B、阶段 C、P1–P4 全部落地**；暂缓项按设计不实施）
+> 状态：Draft / Plan（阶段 0/A/B/C 与 P1–P4 的底层切片和集成测试已落地；**Package→WASM 自动激活、路径/符号链接边界、生命周期并发事务和依赖图完整性已加固**）
 > 目标：提炼 `temp/deepseek-harness` 中值得 GoDex 吸收的架构能力，聚焦近期可落地优化；不追求复制 Cordis，也不把 WASM 等同于插件系统。
 > 修订日志：2026-08-15 整合插件对照表、wazero 兼容性结论（协议层/桥接层）、MCP 跨运行时能力协议视角与更低起步点（阶段 0：package requires 依赖解析）。2026-08-16 阶段 0 落地：`godex.package.yaml` 支持 `requires`/`provides`、安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装与旧 digest 目录 GC（见 `internal/core/packages/{requires,deps}.go`）。同日 P1 与阶段 A 内核骨架落地：`internal/toolruntime` 注册返回可逆 `Registration`（owner/generation/draining，`RegisterOwned`/`UnregisterOwner`），新增 `internal/pluginrt` 轻量插件内核（manifest/graph/instance/effects/registry/manager，含事务式 prepare/commit/rollback 与 `NativeToolPlugin` 内建 Go 适配器）；MCP 桥接落地：`internal/core/mcp` 新增 stdio JSON-RPC client（`list_mcp_tools`/`call_mcp_tool`，任意语言 MCP server 即 GoDex 插件）。
 
@@ -277,15 +277,15 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 - 事务式整树切换 —— ✅ `internal/pluginrt/manager.go`（`Activate`/`Deactivate`/`Prepare`/`Commit`/`Rollback`，坏配置不替换当前 registry）
 - 迁移少量内建组件验证 —— ✅ MCP bundle 工具已迁移到 `godex:builtin:mcp` owner；`NativeToolPlugin`/`WasmToolPlugin` 均有集成测试验证注册-卸载闭环。
 
-### 阶段 B：WASM Tool（3～4 人周）✅ 已落地（`internal/wasmrt`），含 Rust/TinyGo 示例 SDK
+### 阶段 B：WASM Tool（3～4 人周）✅ Runtime、Package 生产接线与安全边界已落地
 
 - wazero runtime 和 module cache —— ✅ `internal/wasmrt`（纯 Go、无 CGO，匹配 `CGO_ENABLED=0` 单二进制发布；`wasmrt.Config` 支持 host callbacks / 超时 / 内存页上限 / 并发上限）
 - JSON ABI、超时、取消、内存及并发限制 —— ✅ 版本化 JSON ABI `godex:plugin@0.1`（mailbox 请求缓冲 + `godex_tools_list`/`godex_invoke`/`godex_abi_version`），单次调用默认 30s 超时与 context 取消，guest 内存默认上限 32 MiB，Go-wasm 单线程 guest 以 callMu 串行化执行；受控 host 调用仅 `godex_log`/`godex_kv_get`/`godex_kv_set`/`godex_workspace_read`，不开放完整 WASI/socket/env/shell
-- Package runtime/digest/trust —— ✅ `godex.package.yaml` 新增 `runtime{kind,module,abi}`（仅 `wasm`），安装时校验 module 存在且为包内相对路径、ABI 匹配；digest/trust 复用 package 现有机制；`RuntimeModulePath` 暴露模块路径
+- Package runtime/digest/trust —— ✅ `godex.package.yaml` 新增 `runtime{kind,module,abi}`（仅 `wasm`）；安装校验 module/ABI，并拒绝 Package 根逃逸、绝对路径和符号链接；digest/trust 复用 package 机制；Agent 启动及安装/重装/删除自动 reconcile runtime，digest 变化即热重载
 - Rust/TinyGo 示例 SDK —— ✅ `examples/wasm-plugin-rust`：零依赖 Rust `cdylib` 实现 mailbox ABI（tools/prompts/policy/abi 四面），`wasm32-wasip1` 交叉编译，`internal/wasmrt` 与 `internal/pluginrt` 均有端到端集成测试（Rust 编译产物直接跑通工具/prompt/policy）；`rebuild-testdata.sh` 一键刷新 Go 测试夹具；TinyGo 示例 `examples/wasm-plugin-tinygo`（ABI 与 Rust 示例等价，零依赖，~128 KiB vs Go 工具链 ~3 MB，`wasmrt` 自动识别 `_initialize`/`_start` 两种 runtime 启动函数）
-- pluginrt 接线 —— ✅ `internal/pluginrt/wasm.go` `WasmToolPlugin`：Start 时 wazero 加载 → tools_list 发现 → 按 owner 注册 `toolruntime.Tool`；Stop/卸载时逆序撤销并关闭 runtime（集成测试含真实 wasm guest 调用）
+- pluginrt Adapter / 生产装配 —— ✅ `WasmToolPlugin` 负责 wazero 加载、工具发现、owner 注册与逆序撤销；`internal/agent/package_runtime.go` 枚举已安装 Package，在 Session 启动、安装、重装、删除和配置 reload 时激活/重载/停用实例；Backend 将变更同步到全部打开 Session；权限映射覆盖 network、workspace read、KV 和逐项 credential
 
-### 阶段 C：Provider 与外部 Engine（4～8 人周）✅ 已落地
+### 阶段 C：Provider 与外部 Engine（4～8 人周）🟡 MVP 切片已落地，生产语义待加固
 
 - HTTP/credential/KV broker —— ✅ 全部：`internal/pluginrt/kv_broker.go` `PluginKVBroker`（namespaced、scope-scoped、durable SQLite 或 memory 后端，key 含 plugin id 隔离，禁止 `|` 防别名）；`WasmToolPlugin.KV` 接线到 wasmrt `godex_kv_get/set` host 调用；wasmrt 新增 `godex_http_get` host 调用（受宿主 web fetch 策略控制：allow/deny 域、超时、max chars，`Agent.pluginHTTPGet` 走 `WebFetchService.Fetch`）；`internal/pluginrt/credential_broker.go` `CredentialBroker`（按插件 allowlist 授权读取命名 secret，`godex_credential_get` host 调用，未授权/未设置返回不同错误码）；Rust 示例新增 `rust_counter`（KV）、`rust_http`（HTTP）、`rust_credential`（credential）工具，均端到端测试；
 - streaming handle —— ✅ `tools.StreamACPAgent`：ACP client 的 `readResponseWithCallback` 在每个 session/update 到达时即时回调（text chunk 实时推送），`ACPHarness` 用它在流式过程中发 `assistant_text_delta`，tool_call/plan 事件仍聚合重放；返回结果保留完整回复文本与结构化更新列表（真实 wire 协议集成测试）；

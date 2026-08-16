@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -329,6 +330,12 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	a.todoMgr = deps.todoMgr
 	a.mu.Unlock()
 
+	// Package-owned registrations live in the current ToolHandler. Tear them
+	// down before replacing that registry, then recreate them on the stable
+	// handler after the builtin registry swap.
+	if err := a.DeactivateInstalledPackageRuntimes(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to deactivate package runtimes before config reload: %v\n", err)
+	}
 	nextHandler := tools.NewToolHandler()
 	nextHandler.AddBeforeInterceptors(tools.NewPermissionInterceptorWithReview(a.permissions, a.reviewPermissionRequest))
 	a.registerToolsWith(nextHandler)
@@ -338,6 +345,9 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	// the stable session handler after registry replacement, not the temporary
 	// rebuild handler.
 	a.registerToolTo(handler, tools.NewToolExchangeTool(handler), tools.ToolMeta{AlwaysActive: true})
+	if err := a.ActivateInstalledPackageRuntimes(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to activate package runtimes after config reload: %v\n", err)
+	}
 }
 
 // ApplyModelProfile swaps only the model caller/config for this session.

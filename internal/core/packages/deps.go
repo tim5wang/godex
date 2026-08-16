@@ -98,6 +98,38 @@ func ValidateCandidateDependencies(candidate Entry, installed []Entry) Dependenc
 	return report
 }
 
+// ValidateDependencyGraph validates every package in a proposed final registry.
+// Install, upgrade, and removal use it so an operation cannot break an existing
+// consumer's package or capability requirement.
+func ValidateDependencyGraph(installed []Entry) DependencyReport {
+	var report DependencyReport
+	seenMissing := map[string]struct{}{}
+	seenConflicts := map[string]struct{}{}
+	for _, item := range installed {
+		itemReport := ValidateCandidateDependencies(item, installed)
+		for _, value := range itemReport.Missing {
+			if _, ok := seenMissing[value]; !ok {
+				seenMissing[value] = struct{}{}
+				report.Missing = append(report.Missing, value)
+			}
+		}
+		for _, value := range itemReport.Conflicts {
+			if _, ok := seenConflicts[value]; !ok {
+				seenConflicts[value] = struct{}{}
+				report.Conflicts = append(report.Conflicts, value)
+			}
+		}
+	}
+	byName := make(map[string]Entry, len(installed))
+	for _, item := range installed {
+		byName[item.Name] = item
+	}
+	report.Cycles = findDependencyCycles(byName)
+	sort.Strings(report.Missing)
+	sort.Strings(report.Conflicts)
+	return report
+}
+
 // findDependencyCycles detects cycles in the package dependency graph using
 // package-kind requires only. Each reported cycle is a path from a node back to
 // itself, e.g. ["a", "b", "a"].

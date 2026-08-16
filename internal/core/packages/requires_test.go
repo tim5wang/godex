@@ -514,6 +514,88 @@ runtime:
 	}
 }
 
+func TestInstallRejectsRuntimeTraversalAndSymlinks(t *testing.T) {
+	manager := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "skills"))
+	parent := t.TempDir()
+	outside := filepath.Join(parent, "outside.wasm")
+	if err := os.WriteFile(outside, []byte("\x00asm"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(parent, "pkg")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writePackageManifest(t, source, "name: escape\nversion: 0.1.0\nruntime:\n  kind: wasm\n  module: ../outside.wasm\n")
+	if _, err := manager.Install(source); err == nil || !strings.Contains(err.Error(), "escapes package") {
+		t.Fatalf("expected traversal rejection, got %v", err)
+	}
+
+	linked := t.TempDir()
+	writePackageManifest(t, linked, "name: linked\nversion: 0.1.0\nruntime:\n  kind: wasm\n  module: plugin.wasm\n")
+	if err := os.Symlink(outside, filepath.Join(linked, "plugin.wasm")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := manager.Install(linked); err == nil || !strings.Contains(strings.ToLower(err.Error()), "symbolic link") {
+		t.Fatalf("expected symlink rejection, got %v", err)
+	}
+}
+
+func TestInstallRejectsPromptTraversal(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.WriteFile(filepath.Join(parent, "secret.md"), []byte("secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(parent, "pkg")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writePackageManifest(t, source, "name: prompts\nversion: 0.1.0\nresources:\n  prompts:\n    - ../secret.md\n")
+	manager := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "skills"))
+	if _, err := manager.Install(source); err == nil || !strings.Contains(err.Error(), "escapes package") {
+		t.Fatalf("expected prompt traversal rejection, got %v", err)
+	}
+}
+
+func TestInstallUpgradeValidatesAllInstalledDependents(t *testing.T) {
+	manager := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "skills"))
+	providerV1 := t.TempDir()
+	writePackageManifest(t, providerV1, "name: base\nversion: 1.0.0\nprovides:\n  - acme:base@1\n")
+	if _, err := manager.Install(providerV1); err != nil {
+		t.Fatal(err)
+	}
+	consumer := t.TempDir()
+	writePackageManifest(t, consumer, "name: app\nversion: 1.0.0\nrequires:\n  - base@1\n  - acme:base@1\n")
+	if _, err := manager.Install(consumer); err != nil {
+		t.Fatal(err)
+	}
+	providerV2 := t.TempDir()
+	writePackageManifest(t, providerV2, "name: base\nversion: 2.0.0\nprovides:\n  - acme:base@2\n")
+	if _, err := manager.Install(providerV2); err == nil || !strings.Contains(err.Error(), "app") {
+		t.Fatalf("expected dependent graph rejection, got %v", err)
+	}
+	got, err := manager.Get("base")
+	if err != nil || got.Version != "1.0.0" {
+		t.Fatalf("expected v1 preserved, got %+v, %v", got, err)
+	}
+}
+
+func TestRemoveRejectsCapabilityProviderStillRequired(t *testing.T) {
+	manager := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "skills"))
+	provider := t.TempDir()
+	writePackageManifest(t, provider, "name: provider\nversion: 1.0.0\nprovides:\n  - acme:store@1\n")
+	if _, err := manager.Install(provider); err != nil {
+		t.Fatal(err)
+	}
+	consumer := t.TempDir()
+	writePackageManifest(t, consumer, "name: app\nversion: 1.0.0\nrequires:\n  - acme:store@1\n")
+	if _, err := manager.Install(consumer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Remove("provider"); err == nil || !strings.Contains(err.Error(), "app") {
+		t.Fatalf("expected capability dependent rejection, got %v", err)
+	}
+}
+
 func TestInstallRejectsBadRuntimeDecl(t *testing.T) {
 	cases := []struct {
 		name     string

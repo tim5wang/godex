@@ -52,6 +52,29 @@ func TestManagerListsFilesystemResources(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsFilesystemResourceEscape(t *testing.T) {
+	workspace := t.TempDir()
+	root := filepath.Join(workspace, "docs")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(workspace, "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{workspaceDir: workspace}
+	server := ServerConfig{Name: "docs", Type: ServerTypeFilesystem, Root: "docs"}
+	if _, err := manager.readFilesystemResource(server, "../secret.txt"); err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("expected traversal rejection, got %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "linked.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := manager.readFilesystemResource(server, "linked.txt"); err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("expected symlink escape rejection, got %v", err)
+	}
+}
+
 func TestManagerReadsTextAndBinaryResources(t *testing.T) {
 	workspace := t.TempDir()
 	tempDir := filepath.Join(workspace, ".godex", ".tmp")

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -98,6 +100,9 @@ func executionConfigFromRuntime(cfg config.ToolExecutionConfig) tooling.Executio
 // RegisterTools registers available tools.
 func (a *Agent) RegisterTools() {
 	a.registerToolsWith(a.toolHandler)
+	if err := a.ActivateInstalledPackageRuntimes(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to activate one or more package runtimes: %v\n", err)
+	}
 }
 
 func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {

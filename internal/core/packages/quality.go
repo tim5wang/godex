@@ -456,12 +456,22 @@ func allResourcePaths(resources Resources) []string {
 }
 
 func knownPermission(permission string) bool {
-	switch strings.TrimSpace(permission) {
+	permission = strings.TrimSpace(permission)
+	if name, ok := strings.CutPrefix(permission, "credential:"); ok {
+		return strings.TrimSpace(name) != ""
+	}
+	switch permission {
 	case "network", "filesystem", "browser", "desktop", "shell", "memory", "packages", "read_file", "write_file", "edit_file", "bash", "background", "subagent", "external_agents", "mcp":
 		return true
 	default:
 		return false
 	}
+}
+
+// IsPlatformCapability reports whether a capability is supplied by the GoDex
+// platform rather than by an installed package runtime.
+func IsPlatformCapability(capability string) bool {
+	return knownCapability(capability)
 }
 
 func knownCapability(capability string) bool {

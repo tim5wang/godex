@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -17,20 +19,26 @@ func (a *Agent) ListPackages() ([]tools.PackageEntry, error) {
 	return packageEntriesFromRegistry(items), nil
 }
 
-// InstallPackage installs one declaration-only Godex package.
+// InstallPackage installs one Godex package and activates its optional runtime.
 func (a *Agent) InstallPackage(source string) (tools.PackageEntry, error) {
 	item, err := pkgregistry.NewManager(a.cfg.StateDir, a.cfg.SkillsDir).Install(source)
 	if err != nil {
 		return tools.PackageEntry{}, err
 	}
+	if err := a.ActivateInstalledPackageRuntimes(context.Background()); err != nil {
+		return tools.PackageEntry{}, fmt.Errorf("package %s installed but runtime activation failed: %w", item.Name, err)
+	}
 	return packageEntryFromRegistry(item), nil
 }
 
-// RemovePackage removes one installed Godex package.
+// RemovePackage removes one installed Godex package and deactivates its runtime.
 func (a *Agent) RemovePackage(name string) (tools.PackageEntry, error) {
 	item, err := pkgregistry.NewManager(a.cfg.StateDir, a.cfg.SkillsDir).Remove(name)
 	if err != nil {
 		return tools.PackageEntry{}, err
+	}
+	if err := a.ActivateInstalledPackageRuntimes(context.Background()); err != nil {
+		return tools.PackageEntry{}, fmt.Errorf("package %s removed but runtime deactivation failed: %w", item.Name, err)
 	}
 	return packageEntryFromRegistry(item), nil
 }

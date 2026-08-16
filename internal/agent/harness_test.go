@@ -3,17 +3,19 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
 // fakeHarness records calls for router behavior verification.
 type fakeHarness struct {
-	id           string
-	models       []string
-	tools        []string
-	runTurns     int
+	id            string
+	models        []string
+	tools         []string
+	runTurns      int
 	resetSessions []string
-	closed       bool
+	closed        bool
 }
 
 func (f *fakeHarness) Profile() HarnessProfile {
@@ -91,6 +93,48 @@ func TestHarnessRouterResetsSessionOnSwitch(t *testing.T) {
 	if len(primary.resetSessions) != 1 {
 		t.Fatalf("expected no reset on same harness, got %v", primary.resetSessions)
 	}
+}
+
+type concurrentHarness struct {
+	id     string
+	runs   atomic.Int64
+	resets atomic.Int64
+}
+
+func (h *concurrentHarness) Profile() HarnessProfile { return HarnessProfile{ID: h.id} }
+func (h *concurrentHarness) Models() []string        { return nil }
+func (h *concurrentHarness) Tools() []string         { return nil }
+func (h *concurrentHarness) RunTurn(context.Context, HarnessTurnInput) (HarnessTurnResult, error) {
+	h.runs.Add(1)
+	return HarnessTurnResult{Completed: true}, nil
+}
+func (h *concurrentHarness) ResetSession(context.Context, string) error {
+	h.resets.Add(1)
+	return nil
+}
+func (h *concurrentHarness) Close() error { return nil }
+
+func TestHarnessRouterSessionStateConcurrent(t *testing.T) {
+	a := &concurrentHarness{id: "a"}
+	b := &concurrentHarness{id: "b"}
+	router := NewHarnessRouter(map[string]Harness{"a": a, "b": b}, NewRequestedHarnessResolver("a"))
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = router.RunTurn(context.Background(), HarnessTurnInput{SessionID: "shared", Harness: "a"})
+		}()
+		go func(i int) {
+			defer wg.Done()
+			if i%3 == 0 {
+				_ = router.ResetSession(context.Background(), "shared")
+				return
+			}
+			_, _ = router.RunTurn(context.Background(), HarnessTurnInput{SessionID: "shared", Harness: "b"})
+		}(i)
+	}
+	wg.Wait()
 }
 
 func TestHarnessRouterCloseClosesEachAdapterOnce(t *testing.T) {

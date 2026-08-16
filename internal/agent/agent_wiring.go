@@ -18,13 +18,14 @@ import (
 	"github.com/tim5wang/godex/internal/core/media"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
-	"github.com/tim5wang/godex/internal/pluginrt"
+	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/services/historysearch"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -67,30 +68,30 @@ func buildDependencies(cfg *config.Config) dependencies {
 	}
 
 	return dependencies{
-		taskMgr:      taskMgr,
-		msgBus:       msgBus,
-		client:       client,
-		skillLoader:  skillLoader,
-		instrLoader:  instructions.NewLoader(),
-		memoryMgr:    memoryMgr,
-		memoryExt:    memoryExt,
+		taskMgr:        taskMgr,
+		msgBus:         msgBus,
+		client:         client,
+		skillLoader:    skillLoader,
+		instrLoader:    instructions.NewLoader(),
+		memoryMgr:      memoryMgr,
+		memoryExt:      memoryExt,
 		memoryStrategy: memoryStrategy,
-		notesMgr:     notes.NewManager(notesDirForConfig(cfg)),
-		mcpMgr:       mcp.NewManager(cfg.MCPConfigPath, cfg.WorkspaceDir, cfg.TempDir),
-		compressor:   compressor,
-		summarizer:   sessionSummarizer,
-		bgMgr:        background.NewManagerWithStore(filepath.Join(cfg.StateDir, "background")),
-		webSearch:    webSearch,
-		webFetch:     webFetch,
-		browser:      browser,
-		permissions:  tools.NewPermissionManagerForPolicy(permissionPolicyFromConfig(cfg)),
-		history:      historysearch.NewService(cfg),
-		media:        media.NewProcessor(cfg.Media, cfg.WorkspaceDir, cfg.SessionsDir, cfg.TempDir),
-		teamMgr:      newTeamManager(cfg, taskMgr, msgBus, client),
-		subagentJobs: newSubagentJobStoreWithLease(subagentJobsDir(cfg), cfg.StateDir),
-		workflows:    newWorkflowStore(filepath.Join(cfg.StateDir, "workflows")),
-		todoMgr:      todo.NewManager(cfg.TodosDir),
-		sandbox:      localSandboxFromConfig(cfg),
+		notesMgr:       notes.NewManager(notesDirForConfig(cfg)),
+		mcpMgr:         mcp.NewManager(cfg.MCPConfigPath, cfg.WorkspaceDir, cfg.TempDir),
+		compressor:     compressor,
+		summarizer:     sessionSummarizer,
+		bgMgr:          background.NewManagerWithStore(filepath.Join(cfg.StateDir, "background")),
+		webSearch:      webSearch,
+		webFetch:       webFetch,
+		browser:        browser,
+		permissions:    tools.NewPermissionManagerForPolicy(permissionPolicyFromConfig(cfg)),
+		history:        historysearch.NewService(cfg),
+		media:          media.NewProcessor(cfg.Media, cfg.WorkspaceDir, cfg.SessionsDir, cfg.TempDir),
+		teamMgr:        newTeamManager(cfg, taskMgr, msgBus, client),
+		subagentJobs:   newSubagentJobStoreWithLease(subagentJobsDir(cfg), cfg.StateDir),
+		workflows:      newWorkflowStore(filepath.Join(cfg.StateDir, "workflows")),
+		todoMgr:        todo.NewManager(cfg.TodosDir),
+		sandbox:        localSandboxFromConfig(cfg),
 	}
 }
 
@@ -165,6 +166,19 @@ func callerForConfigProfile(cfg *config.Config, primary config.ModelProfileConfi
 
 func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 	handler := tools.NewToolHandler()
+	if deps.pluginMgr == nil {
+		deps.pluginMgr = pluginrt.NewManager(pkgregistry.IsPlatformCapability)
+	}
+	var pluginKV *pluginrt.PluginKVBroker
+	if cfg != nil {
+		var err error
+		pluginKV, err = pluginrt.NewPluginKVBrokerDurable(filepath.Join(cfg.StateDir, "plugins"), "plugin_kv")
+		if err != nil {
+			// KV is an optional capability: packages declaring `memory` would
+			// silently lose it, so surface the failure instead of dropping it.
+			fmt.Fprintf(os.Stderr, "Warning: plugin KV store unavailable: %v\n", err)
+		}
+	}
 	if deps.subagentJobs == nil {
 		deps.subagentJobs = newSubagentJobStore(subagentJobsDir(cfg))
 	}
@@ -178,41 +192,44 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		deps.sandbox = localSandboxFromConfig(cfg)
 	}
 	agent := &Agent{
-		cfg:            cfg,
-		toolHandler:    handler,
-		todoMgr:        deps.todoMgr,
-		skillLoader:    deps.skillLoader,
-		instrLoader:    deps.instrLoader,
-		memoryMgr:      deps.memoryMgr,
-		memoryExt:      deps.memoryExt,
-		memoryStrategy: deps.memoryStrategy,
-		notesMgr:      deps.notesMgr,
-		mcpMgr:         deps.mcpMgr,
-		compressor:     deps.compressor,
-		summarizer:     deps.summarizer,
-		taskMgr:        deps.taskMgr,
-		bgMgr:          deps.bgMgr,
-		webSearch:      deps.webSearch,
-		webFetch:       deps.webFetch,
-		browser:        deps.browser,
-		permissions:    deps.permissions,
-		historySearch:  nil,
-		sessionAdmin:   nil,
-		cron:           deps.cron,
-		heartbeat:      deps.heartbeat,
-		media:          deps.media,
-		msgBus:         deps.msgBus,
-		teamMgr:        deps.teamMgr,
-		subagentJobs:   deps.subagentJobs,
-		workflows:      deps.workflows,
-		client:         deps.client,
-		sandbox:        deps.sandbox,
-		roleBundles:    newRoleBundleRegistry(),
-		screener:       buildScreener(cfg, deps.client),
-		messages:       []protocol.Message{},
-		activeSkills:   make(map[string]*activeSkillState),
-		transcriptRefs: nil,
-		now:            time.Now,
+		cfg:               cfg,
+		toolHandler:       handler,
+		todoMgr:           deps.todoMgr,
+		skillLoader:       deps.skillLoader,
+		instrLoader:       deps.instrLoader,
+		memoryMgr:         deps.memoryMgr,
+		memoryExt:         deps.memoryExt,
+		memoryStrategy:    deps.memoryStrategy,
+		notesMgr:          deps.notesMgr,
+		mcpMgr:            deps.mcpMgr,
+		compressor:        deps.compressor,
+		summarizer:        deps.summarizer,
+		taskMgr:           deps.taskMgr,
+		bgMgr:             deps.bgMgr,
+		webSearch:         deps.webSearch,
+		webFetch:          deps.webFetch,
+		browser:           deps.browser,
+		permissions:       deps.permissions,
+		historySearch:     nil,
+		sessionAdmin:      nil,
+		cron:              deps.cron,
+		heartbeat:         deps.heartbeat,
+		media:             deps.media,
+		msgBus:            deps.msgBus,
+		teamMgr:           deps.teamMgr,
+		subagentJobs:      deps.subagentJobs,
+		workflows:         deps.workflows,
+		client:            deps.client,
+		pluginMgr:         deps.pluginMgr,
+		packageRuntimeIDs: make(map[string]struct{}),
+		pluginKV:          pluginKV,
+		sandbox:           deps.sandbox,
+		roleBundles:       newRoleBundleRegistry(),
+		screener:          buildScreener(cfg, deps.client),
+		messages:          []protocol.Message{},
+		activeSkills:      make(map[string]*activeSkillState),
+		transcriptRefs:    nil,
+		now:               time.Now,
 		prompts: conversation.PromptLayers{
 			Base: "You are a helpful AI agent working inside this workspace. Use available tools and skills to solve tasks.",
 		},
@@ -226,10 +243,9 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 	agent.toolHandler.AddBeforeInterceptors(tools.NewPermissionInterceptorWithReview(deps.permissions, agent.reviewPermissionRequest))
 	agent.workerRuntime = localGoDexWorkerRuntime{agent: agent}
 	agent.RegisterConfiguredACPHarnesses()
-	// Wire the optional plugin kernel into the prompt pipeline: active plugins'
-	// prompt contributions (e.g. WASM plugins) become runtime prompt sections.
-	agent.pluginMgr = deps.pluginMgr
-	if deps.pluginMgr != nil {
+	// Wire the plugin kernel into the prompt pipeline: active plugins' prompt
+	// contributions (e.g. WASM plugins) become runtime prompt sections.
+	if agent.pluginMgr != nil {
 		agent.SetPluginPromptProvider(func() []runtimePromptSection {
 			return pluginPromptSectionsFromManager(deps.pluginMgr)
 		})

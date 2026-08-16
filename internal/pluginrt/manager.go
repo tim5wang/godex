@@ -91,7 +91,10 @@ func (m *Manager) Activate(ctx context.Context, plugin NativePlugin) (*Instance,
 	// registry records) then register the new instance's provides.
 	if prior := m.instances[manifest.ID]; prior != nil {
 		_ = prior.Stop(ctx)
-		m.registry.RevokeAll(string(manifest.Scope), manifest.ID)
+		// Revoke under the prior instance's scope: records were registered with
+		// that scope, and revoking with the candidate's scope would leak stale
+		// records when a plugin changes scope between versions.
+		m.registry.RevokeAll(string(prior.Manifest().Scope), manifest.ID)
 	}
 	m.instances[manifest.ID] = instance
 	for _, provided := range manifest.Provides {
@@ -171,6 +174,7 @@ func (m *Manager) Prepare(ctx context.Context, plugin NativePlugin) (*Transactio
 // Transaction is a prepared plugin activation that commits or rolls back
 // atomically. A bad candidate never replaces the current active registry.
 type Transaction struct {
+	mu        sync.Mutex
 	manager   *Manager
 	candidate NativePlugin
 	manifest  Manifest
@@ -181,12 +185,18 @@ type Transaction struct {
 // Commit applies the transaction: stop the prior instance, activate the
 // candidate, and swap registry records. It is a no-op after Rollback.
 func (tx *Transaction) Commit(ctx context.Context) (*Instance, error) {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
 	if tx.done {
 		return tx.manager.Get(tx.manifest.ID), nil
 	}
-	tx.done = true
 	tx.manager.mu.Lock()
 	defer tx.manager.mu.Unlock()
+	if tx.manager.instances[tx.manifest.ID] != tx.prior {
+		tx.done = true
+		return nil, fmt.Errorf("plugin %s transaction is stale", tx.manifest.ID)
+	}
+	tx.done = true
 
 	tx.manager.nextGen++
 	instance := &Instance{
@@ -200,7 +210,7 @@ func (tx *Transaction) Commit(ctx context.Context) (*Instance, error) {
 	}
 	if tx.prior != nil {
 		_ = tx.prior.Stop(ctx)
-		tx.manager.registry.RevokeAll(string(tx.manifest.Scope), tx.manifest.ID)
+		tx.manager.registry.RevokeAll(string(tx.prior.Manifest().Scope), tx.manifest.ID)
 	}
 	tx.manager.instances[tx.manifest.ID] = instance
 	for _, provided := range tx.manifest.Provides {
@@ -212,5 +222,7 @@ func (tx *Transaction) Commit(ctx context.Context) (*Instance, error) {
 // Rollback aborts the transaction: the live registry and instances are never
 // touched (Prepare is non-mutating), and a later Commit becomes a no-op.
 func (tx *Transaction) Rollback() {
+	tx.mu.Lock()
 	tx.done = true
+	tx.mu.Unlock()
 }

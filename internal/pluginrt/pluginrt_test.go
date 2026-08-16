@@ -28,9 +28,9 @@ func (p *simplePlugin) Stop(ctx context.Context) error { p.stopped.Add(1); retur
 
 func TestManifestValidation(t *testing.T) {
 	tests := []struct {
-		name    string
+		name     string
 		manifest Manifest
-		wantErr bool
+		wantErr  bool
 	}{
 		{name: "ok", manifest: Manifest{ID: "a", Scope: scope.Org("godex"), Requires: []string{"godex:log@1"}, Provides: []string{"godex:tool@1"}}},
 		{name: "missing id", manifest: Manifest{Scope: scope.Org("godex")}, wantErr: true},
@@ -206,6 +206,27 @@ func TestManagerReloadReplacesSameID(t *testing.T) {
 	}
 }
 
+func TestActivateSameIDScopeChangeRevokesOldScopeRecords(t *testing.T) {
+	manager := NewManager(nil)
+	first := &simplePlugin{manifest: Manifest{ID: "shift", Scope: scope.Org("godex"), Provides: []string{"acme:cap@1"}}}
+	if _, err := manager.Activate(context.Background(), first); err != nil {
+		t.Fatalf("activate first: %v", err)
+	}
+	if !manager.Registry().Provided("org:godex", "acme:cap@1") {
+		t.Fatal("expected capability recorded under original scope")
+	}
+	second := &simplePlugin{manifest: Manifest{ID: "shift", Scope: scope.Personal("alice"), Provides: []string{"acme:cap@2"}}}
+	if _, err := manager.Activate(context.Background(), second); err != nil {
+		t.Fatalf("activate second: %v", err)
+	}
+	if manager.Registry().Provided("org:godex", "acme:cap@1") {
+		t.Fatal("expected old-scope records revoked on same-id replacement")
+	}
+	if !manager.Registry().Provided("personal:alice", "acme:cap@2") {
+		t.Fatal("expected capability recorded under new scope")
+	}
+}
+
 func TestTransactionalPrepareRollback(t *testing.T) {
 	manager := NewManager(nil)
 	stable := &simplePlugin{manifest: Manifest{ID: "stable", Scope: scope.Org("godex"), Provides: []string{"godex:stable@1"}}}
@@ -239,6 +260,32 @@ func TestTransactionalPrepareRollback(t *testing.T) {
 		if manager.Registry().MatchCapability("org:godex", "godex:stable@1") == "" {
 			t.Fatal("original capability should still match after rollback")
 		}
+	}
+}
+
+func TestTransactionRejectsStaleCommit(t *testing.T) {
+	manager := NewManager(nil)
+	first := &simplePlugin{manifest: Manifest{ID: "stable", Scope: scope.Org("godex"), Provides: []string{"godex:stable@1"}}}
+	if _, err := manager.Activate(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	candidate := &simplePlugin{manifest: Manifest{ID: "stable", Scope: scope.Org("godex"), Provides: []string{"godex:stable@2"}}}
+	tx, err := manager.Prepare(context.Background(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := &simplePlugin{manifest: Manifest{ID: "stable", Scope: scope.Org("godex"), Provides: []string{"godex:stable@3"}}}
+	if _, err := manager.Activate(context.Background(), latest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Commit(context.Background()); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("expected stale transaction error, got %v", err)
+	}
+	if candidate.started.Load() != 0 || latest.stopped.Load() != 0 {
+		t.Fatalf("stale commit changed lifecycle: candidate starts=%d latest stops=%d", candidate.started.Load(), latest.stopped.Load())
+	}
+	if got := manager.Get("stable").Manifest().Provides[0]; got != "godex:stable@3" {
+		t.Fatalf("latest instance was replaced: %s", got)
 	}
 }
 

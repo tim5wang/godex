@@ -246,6 +246,12 @@ func (m *Manager) InstallPrepared(sourceRoot, sourceLabel string) (Entry, error)
 	if _, err := parseRequires(manifest.Requires); err != nil {
 		return Entry{}, fmt.Errorf("package %s: %v", manifest.Name, err)
 	}
+	if err := rejectSymlinks(sourceRoot); err != nil {
+		return Entry{}, fmt.Errorf("package %s: %v", manifest.Name, err)
+	}
+	if err := validateResourcePaths(manifest.Resources, sourceRoot); err != nil {
+		return Entry{}, fmt.Errorf("package %s: %v", manifest.Name, err)
+	}
 	if err := validateRuntimeDecl(manifest.Runtime, sourceRoot); err != nil {
 		return Entry{}, fmt.Errorf("package %s: %v", manifest.Name, err)
 	}
@@ -281,12 +287,25 @@ func (m *Manager) InstallPrepared(sourceRoot, sourceLabel string) (Entry, error)
 		Trust:              trustForSource(sourceLabel),
 	}
 
-	// Validate dependencies against the installed set before staging.
+	// Validate the complete proposed registry before staging. This catches not
+	// only the candidate's requirements but consumers broken by an upgrade.
 	registry, err := m.readRegistry()
 	if err != nil {
 		return Entry{}, err
 	}
-	if report := ValidateCandidateDependencies(candidate, registry.Packages); !report.Empty() {
+	proposed := append([]Entry{}, registry.Packages...)
+	replacedCandidate := false
+	for i := range proposed {
+		if proposed[i].Name == candidate.Name {
+			proposed[i] = candidate
+			replacedCandidate = true
+			break
+		}
+	}
+	if !replacedCandidate {
+		proposed = append(proposed, candidate)
+	}
+	if report := ValidateDependencyGraph(proposed); !report.Empty() {
 		return Entry{}, fmt.Errorf("package %s dependency check failed: %s", manifest.Name, report.Error())
 	}
 
@@ -454,10 +473,10 @@ func validateRuntimeDecl(decl RuntimeDecl, sourceRoot string) error {
 	if module == "" {
 		return fmt.Errorf("runtime kind %q requires a module path", kind)
 	}
-	if filepath.IsAbs(module) {
-		return fmt.Errorf("runtime module must be package-relative: %s", module)
+	path, err := resolvePackagePath(sourceRoot, module)
+	if err != nil {
+		return fmt.Errorf("runtime module %q: %w", module, err)
 	}
-	path := filepath.Join(sourceRoot, filepath.Clean(module))
 	if info, err := os.Stat(path); err != nil {
 		return fmt.Errorf("runtime module missing: %s", module)
 	} else if info.IsDir() {
@@ -492,11 +511,11 @@ func (m *Manager) RuntimeModulePath(item Entry) string {
 	if strings.ToLower(strings.TrimSpace(item.Runtime.Kind)) != "wasm" {
 		return ""
 	}
-	module := strings.TrimSpace(item.Runtime.Module)
-	if module == "" {
+	path, err := resolvePackagePath(item.Path, item.Runtime.Module)
+	if err != nil {
 		return ""
 	}
-	return filepath.Join(item.Path, filepath.Clean(module))
+	return path
 }
 
 func NormalizeAppManifest(app AppManifest) AppManifest {
@@ -571,11 +590,9 @@ func (m *Manager) Remove(name string) (Entry, error) {
 	if removed.Name == "" {
 		return Entry{}, fmt.Errorf("package not installed: %s", name)
 	}
-	// Dependency guard: refuse to remove a package that another installed
-	// package still requires, so uninstalling never breaks the dependency
-	// graph of the remaining packages.
-	if dependents := Dependents(name, registry.Packages, name); len(dependents) > 0 {
-		return Entry{}, fmt.Errorf("cannot remove package %s: still required by %s", name, strings.Join(dependents, ", "))
+	// Validate the complete remaining graph, including capability requirements.
+	if report := ValidateDependencyGraph(next); !report.Empty() {
+		return Entry{}, fmt.Errorf("cannot remove package %s: %s", name, report.Error())
 	}
 	// Unlink skills in reverse registration order so uninstall cleanly
 	// reverses the effects recorded at install time.
@@ -695,7 +712,10 @@ func (m *Manager) ListPrompts(includeContent bool) ([]Prompt, error) {
 	var prompts []Prompt
 	for _, item := range items {
 		for _, rel := range item.Resources.Prompts {
-			path := filepath.Join(item.Path, filepath.Clean(rel))
+			path, err := resolvePackagePath(item.Path, rel)
+			if err != nil {
+				return nil, fmt.Errorf("package %s prompt %q: %w", item.Name, rel, err)
+			}
 			prompt := Prompt{PackageName: item.Name, Name: strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel)), Path: path}
 			if includeContent {
 				data, err := os.ReadFile(path)
@@ -1109,6 +1129,66 @@ func trustForSource(source string) string {
 	return "local"
 }
 
+func resolvePackagePath(root, relative string) (string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	relative = strings.TrimSpace(relative)
+	if relative == "" || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("path must be package-relative")
+	}
+	candidate := filepath.Join(rootAbs, filepath.Clean(filepath.FromSlash(relative)))
+	rel, err := filepath.Rel(rootAbs, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes package root")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		// Declarations may intentionally reference a resource that is reported as
+		// missing by the quality checker. Lexical containment is already proven;
+		// existing package trees are separately rejected if they contain symlinks.
+		if os.IsNotExist(err) {
+			return candidate, nil
+		}
+		return "", err
+	}
+	resolvedRel, err := filepath.Rel(resolvedRoot, resolved)
+	if err != nil || resolvedRel == ".." || strings.HasPrefix(resolvedRel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes package root through symbolic link")
+	}
+	return candidate, nil
+}
+
+func validateResourcePaths(resources Resources, root string) error {
+	groups := [][]string{resources.Skills, resources.Prompts, resources.Commands, resources.Roles, resources.Docs, resources.Assets}
+	for _, items := range groups {
+		for _, item := range items {
+			if _, err := resolvePackagePath(root, item); err != nil {
+				return fmt.Errorf("resource %q: %w", item, err)
+			}
+		}
+	}
+	return nil
+}
+
+func rejectSymlinks(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			rel, _ := filepath.Rel(root, path)
+			return fmt.Errorf("symbolic links are not allowed in packages: %s", filepath.ToSlash(rel))
+		}
+		return nil
+	})
+}
+
 func digestDir(root string) (string, error) {
 	hash := sha256.New()
 	var files []string
@@ -1157,6 +1237,9 @@ func copyDir(src, dst string) error {
 			return err
 		}
 		target := filepath.Join(dst, rel)
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symbolic links are not allowed in packages: %s", filepath.ToSlash(rel))
+		}
 		if entry.IsDir() {
 			if entry.Name() == ".git" {
 				return filepath.SkipDir

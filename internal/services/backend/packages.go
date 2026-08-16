@@ -4,15 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/tim5wang/godex/internal/agent"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/security"
 	"github.com/tim5wang/godex/internal/tools"
-	"path/filepath"
-	"strings"
-	"time"
 )
 
 func (s *Service) ListPackages(ctx context.Context) ([]pkgregistry.Entry, error) {
@@ -20,12 +22,15 @@ func (s *Service) ListPackages(ctx context.Context) ([]pkgregistry.Entry, error)
 	return pkgregistry.NewManager(s.cfg.StateDir, s.cfg.SkillsDir).List()
 }
 
-// InstallPackage installs one declaration-only Godex package.
+// InstallPackage installs one Godex package and activates its optional runtime
+// in every currently open session. Future sessions activate it at startup.
 func (s *Service) InstallPackage(ctx context.Context, source string) (pkgregistry.Entry, error) {
-	_ = ctx
 	entry, err := pkgregistry.NewManager(s.cfg.StateDir, s.cfg.SkillsDir).Install(source)
 	if err != nil {
 		return pkgregistry.Entry{}, err
+	}
+	if err := s.reconcilePackageRuntimes(ctx); err != nil {
+		return pkgregistry.Entry{}, fmt.Errorf("package %s installed but runtime activation failed: %w", entry.Name, err)
 	}
 	s.appendSecurityEvent(security.SecurityEvent{
 		At:       s.now(),
@@ -46,10 +51,12 @@ func (s *Service) InstallPackage(ctx context.Context, source string) (pkgregistr
 // ReinstallPackage reinstalls one package from its recorded source without
 // removing the currently installed copy unless the reinstall succeeds.
 func (s *Service) ReinstallPackage(ctx context.Context, name string) (pkgregistry.Entry, error) {
-	_ = ctx
 	entry, err := pkgregistry.NewManager(s.cfg.StateDir, s.cfg.SkillsDir).Reinstall(name)
 	if err != nil {
 		return pkgregistry.Entry{}, err
+	}
+	if err := s.reconcilePackageRuntimes(ctx); err != nil {
+		return pkgregistry.Entry{}, fmt.Errorf("package %s reinstalled but runtime reload failed: %w", entry.Name, err)
 	}
 	s.appendSecurityEvent(security.SecurityEvent{
 		At:       s.now(),
@@ -69,10 +76,12 @@ func (s *Service) ReinstallPackage(ctx context.Context, name string) (pkgregistr
 
 // RemovePackage removes one installed Godex package.
 func (s *Service) RemovePackage(ctx context.Context, name string) (pkgregistry.Entry, error) {
-	_ = ctx
 	entry, err := pkgregistry.NewManager(s.cfg.StateDir, s.cfg.SkillsDir).Remove(name)
 	if err != nil {
 		return pkgregistry.Entry{}, err
+	}
+	if err := s.reconcilePackageRuntimes(ctx); err != nil {
+		return pkgregistry.Entry{}, fmt.Errorf("package %s removed but runtime deactivation failed: %w", entry.Name, err)
 	}
 	s.appendSecurityEvent(security.SecurityEvent{
 		At:       s.now(),
@@ -86,6 +95,23 @@ func (s *Service) RemovePackage(ctx context.Context, name string) (pkgregistry.E
 		},
 	})
 	return entry, nil
+}
+
+func (s *Service) reconcilePackageRuntimes(ctx context.Context) error {
+	s.mu.Lock()
+	agents := make([]*agent.Agent, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		if session != nil && session.agent != nil {
+			agents = append(agents, session.agent)
+		}
+	}
+	s.mu.Unlock()
+	for _, runtimeAgent := range agents {
+		if err := runtimeAgent.ActivateInstalledPackageRuntimes(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListPrompts returns prompt templates installed by packages.

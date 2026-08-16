@@ -196,10 +196,11 @@ func NewRequestedHarnessResolver(defaultID string) HarnessResolver {
 // adapters once via sync.Once), the registry is dynamic: engines can be
 // registered after first use (research doc P2 item 3).
 type harnessRouter struct {
-	mu       sync.RWMutex
-	adapters map[string]Harness
-	resolve  HarnessResolver
-	last     map[string]string // sessionID -> harnessID
+	mu        sync.RWMutex
+	adapters  map[string]Harness
+	resolve   HarnessResolver
+	sessionMu sync.Mutex
+	last      map[string]string // sessionID -> harnessID
 }
 
 // NewHarnessRouter builds a router over the given adapters.
@@ -284,19 +285,23 @@ func (r *harnessRouter) RunTurn(ctx context.Context, input HarnessTurnInput) (Ha
 	if adapter == nil {
 		return HarnessTurnResult{}, conversation.NewNonRetryableTurnError("harness " + choice + " is unavailable")
 	}
+	r.sessionMu.Lock()
 	prior := r.last[input.SessionID]
+	r.last[input.SessionID] = choice
+	r.sessionMu.Unlock()
 	if prior != "" && prior != choice {
 		if old := r.adapter(prior); old != nil {
 			_ = old.ResetSession(ctx, input.SessionID)
 		}
 		_ = adapter.ResetSession(ctx, input.SessionID)
 	}
-	r.last[input.SessionID] = choice
 	return adapter.RunTurn(ctx, input)
 }
 
 func (r *harnessRouter) ResetSession(ctx context.Context, sessionID string) error {
+	r.sessionMu.Lock()
 	delete(r.last, sessionID)
+	r.sessionMu.Unlock()
 	for _, adapter := range r.adaptersSnapshot() {
 		if adapter != nil {
 			_ = adapter.ResetSession(ctx, sessionID)

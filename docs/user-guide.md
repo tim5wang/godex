@@ -4,7 +4,7 @@
 > 修订日志：
 > - 2026-08-15 全量 review 后重写：修正 CLI 命令面（移除不存在的 `repl`）、补充完整命令行参考、配置参考、工具清单、Slash Command 清单、HTTP API 路由表、自动化（cron/heartbeat）、安全模型与故障排查；对齐 Agent Profile 真实语义（提示词策略而非工具过滤）。
 
-本文档承接 README 中不适合放在产品总览里的细节，覆盖安装运行、配置、Provider、CLI、Web UI、工具、Channel、自动化、安全、Memory、Subagent/Workflow/Package、Slash Commands、HTTP API、Eval 和发布检查。
+本文档承接 README 中不适合放在产品总览里的细节，覆盖安装运行、配置、Provider、CLI、Web UI、工具、Channel、自动化、安全、Memory、Subagent/Workflow/Package、Slash Commands、HTTP API、Eval 和发布检查。Package 依赖、MCP、ACP 与 WASM 的可运行示例和成熟度边界另见 [`extension-runtime-user-guide.md`](extension-runtime-user-guide.md)。
 
 ## 环境要求
 
@@ -869,11 +869,13 @@ recommended_bundles: [core_code, lsp]
 - `requires` 支持两种形式：
   - 包依赖 `name@constraint`（如 `base-kit@>=0.2.0`、`toolkit@1`），约束支持精确版本、主/次版本前缀（`1`、`1.2`）、`>=`/`>`/`<=`/`<`、`^`（同主版本内）、`~`（同次版本内）、`*`（任意）；
   - 能力依赖 `namespace:name[@major]`（如 `godex:log@1`、`tool:read_file`），由平台内建能力或已安装包的 `provides` 提供。
-- 安装 / 重装时解析依赖图：缺失依赖、版本冲突、依赖环都会阻止安装并给出报告；`/packages` quality 报告同样展示依赖问题。
-- 卸载保护：仍被其他已安装包 `requires` 引用的包无法被直接移除，需先移除引用方。
+- 安装 / 重装会验证候选最终 registry 的完整依赖图：除了候选自身，还会拒绝破坏既有 Consumer 的版本或 capability Provider 升级；缺失依赖、版本冲突、依赖环都会阻止操作并给出报告；`/packages` quality 报告同样展示依赖问题。
+- 卸载保护同样验证删除后的完整依赖图：无论 Consumer 通过 Package 名还是 `provides` capability 引用 Provider，都必须先移除引用方。
 - 重装是事务式的：新内容先落盘并校验，成功后原子切换 registry 并清理旧 digest 目录；失败时旧版本及其目录保持不变。
 
 **可执行运行时（`runtime`，阶段 B MVP）**：
+
+> **当前状态：可用。** Package 安装器会校验并记录 `runtime`；Agent 启动、Package 安装/重装/删除都会把 registry 与 `pluginrt.Manager` 自动 reconcile。WASM 工具和 Prompt 随实例激活，删除或重载时通过 owner/effect ledger 自动撤销。详见 `docs/extension-runtime-user-guide.md`。
 
 ```yaml
 runtime:
@@ -882,14 +884,14 @@ runtime:
   abi: godex:plugin@0.1  # 版本化 JSON ABI（默认值）
 ```
 
-- 安装时校验：`kind` 仅允许 `wasm`，module 必须存在且为包内相对路径，ABI 只接受 `godex:plugin@0.1`。
+- 安装时校验：`kind` 仅允许 `wasm`，module 必须存在，ABI 只接受 `godex:plugin@0.1`；runtime 和资源必须位于 Package 根内，拒绝绝对路径、`..` 逃逸和 Package 树中的符号链接。
 - 运行时由 `internal/wasmrt`（wazero，纯 Go、无 CGO）加载：JSON ABI（tools_list / invoke + mailbox 请求缓冲）、单次调用超时与并发上限、guest 内存上限（默认 32 MiB）。
-- 受控 host 调用：`godex_log`、`godex_kv_get/set`、`godex_workspace_read`（仅工作区内相对路径）。**不开放** 完整 WASI 文件系统、socket、环境变量、shell 或进程。
+- 受控 host 调用：`godex_log` 始终可用；`memory` 授权 namespaced KV，`filesystem`/`read_file` 授权 workspace read，`network` 授权受 WebFetch policy 控制的 HTTP，`credential:NAME` 逐项授权环境变量。**不开放** 完整 WASI 文件系统、原始 socket、环境变量枚举、shell 或进程。
 - Prompt/context 贡献：插件可导出 `godex_prompts_list` 声明 prompt sections（key/kind/text）；活跃插件的贡献经 pluginrt 聚合后注入 runtime prompt（key `plugin:<id>:<key>`）。
 - Tool policy：插件可导出 `godex_policy` 返回显式决策 `{"action":"continue"|"deny"|"replace","error":{code,message},"result":...}`；决策作为 owner-aware before-interceptor 注册，卸载时随 instance 逆序撤销（`toolruntime.UnregisterOwnerInterceptors` 可一键撤销某 owner 全部 interceptor）。
-- 插件 KV：`godex_kv_get/set` 由 pluginrt KV broker 提供——**按插件命名空间隔离**、SQLite 持久化（重启保留）；`WasmToolPlugin.KV` 接线后插件即可读写自己的持久状态（Rust 示例 `rust_counter` 演示跨重载计数）。
-- 插件 HTTP：`godex_http_get` 由宿主 web fetch 策略控制（allow/deny 域、超时、max chars；未启用时返回错误），插件无法绕过策略（Rust 示例 `rust_http`）。
-- 插件凭据：`godex_credential_get` 由 pluginrt credential broker 提供——**按插件 allowlist 授权**读取命名 secret（未授权/未设置返回不同错误码），插件无法枚举其他凭据（Rust 示例 `rust_credential`）。
+- 插件 KV：`godex_kv_get/set` 由 pluginrt KV broker 提供——声明 `memory` permission 后启用，按插件命名空间隔离、SQLite 持久化（重启保留）。
+- 插件 HTTP：声明 `network` permission 后，`godex_http_get` 经宿主 WebFetch allow/deny 域、超时和 max chars 策略执行；未授权时 host call 返回错误。
+- 插件凭据：使用 `credential:NAME` permission 逐项授权 `godex_credential_get` 读取指定环境变量；插件无法枚举或读取其他凭据。
 - 工具注册走 pluginrt 所有权模型（owner = 插件 id），卸载时随 instance 逆序撤销。
 - **Rust 示例 SDK**：`examples/wasm-plugin-rust` 是零依赖 Rust `cdylib` 实现（`wasm32-wasip1`），覆盖 tools/prompts/policy/abi 四面；`rebuild-testdata.sh` 可刷新 Go 端测试夹具。另有 `examples/wasm-plugin-tinygo`（TinyGo 等价实现，体积更小）；`wasmrt` 自动识别 `_initialize`/`_start` 两种 runtime 启动函数。
 

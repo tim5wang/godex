@@ -417,7 +417,10 @@ func (m *Manager) readFilesystemResource(server ServerConfig, uri string) (*Read
 	if err != nil {
 		return nil, err
 	}
-	fullPath := filepath.Join(root, filepath.FromSlash(uri))
+	fullPath, err := resolveFilesystemResourcePath(root, uri)
+	if err != nil {
+		return nil, err
+	}
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		return nil, err
@@ -472,6 +475,34 @@ func resolveServerRoot(root, workspaceDir string) (string, error) {
 		return "", fmt.Errorf("relative MCP server root requires workspace dir")
 	}
 	return filepath.Join(workspaceDir, filepath.FromSlash(root)), nil
+}
+
+func resolveFilesystemResourcePath(root, uri string) (string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(filepath.FromSlash(uri)) {
+		return "", fmt.Errorf("resource %q escapes MCP filesystem root", uri)
+	}
+	candidate := filepath.Join(rootAbs, filepath.Clean(filepath.FromSlash(uri)))
+	rel, err := filepath.Rel(rootAbs, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("resource %q escapes MCP filesystem root", uri)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", err
+	}
+	resolvedRel, err := filepath.Rel(resolvedRoot, resolved)
+	if err != nil || resolvedRel == ".." || strings.HasPrefix(resolvedRel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("resource %q escapes MCP filesystem root through symbolic link", uri)
+	}
+	return candidate, nil
 }
 
 func detectMIMEType(filePath string) string {

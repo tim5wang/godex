@@ -248,7 +248,7 @@ func TestRustCompiledPluginEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tools list: %v", err)
 	}
-	if len(tools) != 2 || tools[0].Name != "rust_echo" || tools[1].Name != "rust_ping" {
+	if len(tools) != 3 || tools[0].Name != "rust_echo" || tools[1].Name != "rust_ping" || tools[2].Name != "rust_counter" {
 		t.Fatalf("unexpected rust tools: %+v", tools)
 	}
 	result, err := plugin.CallTool(context.Background(), "rust_echo", map[string]any{"message": "from rust"})

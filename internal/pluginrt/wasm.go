@@ -32,6 +32,10 @@ type WasmToolPlugin struct {
 	// WasmConfig optionally overrides wasmrt defaults (timeout, memory, host
 	// callbacks). Callbacks are wired per activation.
 	WasmConfig wasmrt.Config
+	// KV is the optional plugin KV broker (阶段 C). When set, the module's
+	// godex_kv_get/godex_kv_set host calls are wired to this plugin's own
+	// namespace within the broker.
+	KV *PluginKVBroker
 
 	runtime     *wasmrt.Plugin
 	promptSects []wasmrt.PromptSection
@@ -49,6 +53,18 @@ func (p *WasmToolPlugin) Start(ctx context.Context, host Host) error {
 	}
 	config := p.WasmConfig
 	config.Binary = p.Binary
+	// 阶段 C KV broker: when a broker is configured, wire its namespaced
+	// host calls into the module's godex_kv_get/godex_kv_set. Each plugin
+	// reads/writes only its own namespace.
+	if p.KV != nil {
+		get, set := p.KV.adapterFuncs(p.ManifestValue.ID)
+		if config.Host.KVGet == nil {
+			config.Host.KVGet = get
+		}
+		if config.Host.KVSet == nil {
+			config.Host.KVSet = set
+		}
+	}
 	loaded, err := wasmrt.NewPlugin(ctx, config)
 	if err != nil {
 		return err

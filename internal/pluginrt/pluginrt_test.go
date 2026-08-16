@@ -493,3 +493,67 @@ func TestWasmToolPluginWithRustModule(t *testing.T) {
 		t.Fatalf("deactivate: %v", err)
 	}
 }
+
+func TestWasmToolPluginKVBrokerEndToEnd(t *testing.T) {
+	binary, err := os.ReadFile(filepath.Join("..", "wasmrt", "testdata", "rust_plugin.wasm"))
+	if err != nil {
+		t.Skipf("rust test plugin not built: %v", err)
+	}
+	stateDir := t.TempDir()
+	broker, err := NewPluginKVBrokerDurable(stateDir, "plugin_kv")
+	if err != nil {
+		t.Fatalf("broker: %v", err)
+	}
+	handler := toolruntime.NewToolHandler()
+	makePlugin := func() *WasmToolPlugin {
+		return &WasmToolPlugin{
+			ManifestValue: Manifest{ID: "rust-kv", Scope: scope.Org("godex"), Provides: []string{"godex:rust-kv@1"}},
+			Binary:        binary,
+			Handler:       handler,
+			Meta:          toolruntime.ToolMeta{Bundle: "wasm", AlwaysActive: true},
+			KV:            broker,
+		}
+	}
+
+	manager := NewManager(nil)
+	if _, err := manager.Activate(context.Background(), makePlugin()); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	// First call: counter 1.
+	result, err := handler.HandleResult(context.Background(), "rust_counter", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("counter call 1: %v", err)
+	}
+	if !strings.Contains(result.Text, "counter: 1") {
+		t.Fatalf("expected counter: 1, got %q", result.Text)
+	}
+	// Second call: counter 2 (broker persisted).
+	result, err = handler.HandleResult(context.Background(), "rust_counter", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("counter call 2: %v", err)
+	}
+	if !strings.Contains(result.Text, "counter: 2") {
+		t.Fatalf("expected counter: 2, got %q", result.Text)
+	}
+
+	// Deactivate + reactivate with a fresh broker over the same store: the
+	// counter must continue from 3 (durable, namespace-isolated).
+	if err := manager.Deactivate(context.Background(), "rust-kv"); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	reopened, err := NewPluginKVBrokerDurable(stateDir, "plugin_kv")
+	if err != nil {
+		t.Fatalf("reopen broker: %v", err)
+	}
+	makePlugin().KV = reopened
+	if _, err := manager.Activate(context.Background(), makePlugin()); err != nil {
+		t.Fatalf("reactivate: %v", err)
+	}
+	result, err = handler.HandleResult(context.Background(), "rust_counter", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("counter call 3: %v", err)
+	}
+	if !strings.Contains(result.Text, "counter: 3") {
+		t.Fatalf("expected counter: 3 after reload, got %q", result.Text)
+	}
+}

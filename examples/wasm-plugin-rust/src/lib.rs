@@ -30,6 +30,7 @@ static mut RESPONSE: [u8; 4096] = [0; 4096];
 static mut TOOLS: [u8; 4096] = [0; 4096];
 static mut PROMPTS: [u8; 4096] = [0; 4096];
 static mut ABI: [u8; 64] = [0; 64];
+static mut KV_SCRATCH: [u8; 1024] = [0; 1024];
 
 unsafe fn put(buf: &'static mut [u8], value: &str) -> u32 {
     let bytes = value.as_bytes();
@@ -60,7 +61,9 @@ pub extern "C" fn godex_tools_list() -> u32 {
         r#"{"tools":["#,
         r#"{"name":"rust_echo","description":"echo the message back (Rust plugin)","#,
         r#""inputSchema":{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}},"#,
-        r#"{"name":"rust_ping","description":"returns pong","inputSchema":{"type":"object"}}]"#,
+        r#"{"name":"rust_ping","description":"returns pong","inputSchema":{"type":"object"}},"#,
+        r#"{"name":"rust_counter","description":"increment a persisted counter via the plugin KV host call","#,
+        r#""inputSchema":{"type":"object"}}]"#,
         r#"}"#,
     );
     unsafe { put(&mut TOOLS, tools) }
@@ -68,7 +71,7 @@ pub extern "C" fn godex_tools_list() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn godex_prompts_list() -> u32 {
-    let prompts = r#"{"sections":[{"key":"rust_plugin_note","kind":"background","text":"A Rust WASM plugin is active; rust_echo and rust_ping are available."}]}"#;
+    let prompts = r#"{"sections":[{"key":"rust_plugin_note","kind":"background","text":"A Rust WASM plugin is active; rust_echo, rust_ping and rust_counter are available."}]}"#;
     unsafe { put(&mut PROMPTS, prompts) }
 }
 
@@ -90,17 +93,57 @@ pub extern "C" fn godex_invoke() -> u32 {
     unsafe { put(&mut RESPONSE, &response) }
 }
 
+// ---------------------------------------------------------------------------
+// Host imports (阶段 C KV broker: godex_kv_get / godex_kv_set are wired by the
+// host to this plugin's own namespaced store)
+// ---------------------------------------------------------------------------
+
 #[link(wasm_import_module = "godex:host")]
 extern "C" {
     #[allow(dead_code)]
     fn godex_log(ptr: u32, len: u32);
-    #[allow(dead_code)]
     fn godex_kv_get(key_ptr: u32, key_len: u32, out_ptr: u32, out_len: u32) -> u32;
-    #[allow(dead_code)]
     fn godex_kv_set(key_ptr: u32, key_len: u32, val_ptr: u32, val_len: u32);
     #[allow(dead_code)]
     fn godex_workspace_read(rel_ptr: u32, rel_len: u32, out_ptr: u32, out_len: u32) -> u32;
 }
+
+/// Read the KV value for `key` via the host call. Returns "" when absent.
+fn kv_get(key: &str) -> String {
+    let key_bytes = key.as_bytes();
+    let mut out = [0u8; 1024];
+    let written = unsafe {
+        godex_kv_get(
+            key_bytes.as_ptr() as u32,
+            key_bytes.len() as u32,
+            out.as_mut_ptr() as u32,
+            out.len() as u32,
+        )
+    };
+    if written == 0 {
+        return String::new();
+    }
+    let n = written as usize;
+    String::from_utf8_lossy(&out[..n.min(out.len())]).to_string()
+}
+
+/// Store `value` for `key` via the host call.
+fn kv_set(key: &str, value: &str) {
+    let key_bytes = key.as_bytes();
+    let val_bytes = value.as_bytes();
+    unsafe {
+        godex_kv_set(
+            key_bytes.as_ptr() as u32,
+            key_bytes.len() as u32,
+            val_bytes.as_ptr() as u32,
+            val_bytes.len() as u32,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Minimal JSON helpers (no external crates)
+// ---------------------------------------------------------------------------
 
 fn json_string_field<'a>(input: &'a str, field: &str) -> Option<&'a str> {
     let needle = format!("\"{}\"", field);
@@ -130,6 +173,10 @@ fn contains(haystack: &str, needle: &str) -> bool {
     haystack.contains(needle)
 }
 
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
 fn dispatch(req: &str) -> String {
     let action = json_string_field(req, "action").unwrap_or("");
     match action {
@@ -139,6 +186,13 @@ fn dispatch(req: &str) -> String {
                 format!(r#"{{"ok":true,"result":"rust echo: {}"}}"#, message)
             }
             "rust_ping" => r#"{"ok":true,"result":"pong"}"#.to_string(),
+            "rust_counter" => {
+                // Read-modify-write through the host KV broker.
+                let current: i64 = kv_get("counter").trim().parse().unwrap_or(0);
+                let next = current + 1;
+                kv_set("counter", &next.to_string());
+                format!(r#"{{"ok":true,"result":"counter: {}"}}"#, next)
+            }
             other => format!(r#"{{"ok":false,"error":"unknown tool: {}"}}"#, other),
         },
         "ping" => r#"{"ok":true,"result":"pong"}"#.to_string(),

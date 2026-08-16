@@ -1,6 +1,7 @@
 package toolruntime
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -143,5 +144,89 @@ func TestReplaceWithPreservesOwnershipAndGeneration(t *testing.T) {
 	removed := handler.UnregisterOwner("plugin-a")
 	if len(removed) != 1 || removed[0] != "owned" {
 		t.Fatalf("expected [owned] removed after ReplaceWith, got %v", removed)
+	}
+}
+
+func TestOwnedInterceptorsRegisteredAndReversed(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool{name: "bash"}, ToolMeta{AlwaysActive: true})
+
+	beforeDispose := handler.AddBeforeInterceptorsOwned("plugin-x", func(ctx context.Context, call *ToolCall) (*ToolResult, error) {
+		return nil, nil
+	})
+	afterDispose := handler.AddAfterInterceptorsOwned("plugin-x", func(ctx context.Context, call *ToolCall, result ToolResult, err error) (ToolResult, error) {
+		return result, err
+	})
+	// Effective slices include the owned interceptors.
+	handler.mu.RLock()
+	beforeCount := len(handler.before)
+	afterCount := len(handler.after)
+	handler.mu.RUnlock()
+	if beforeCount != 1 || afterCount != 1 {
+		t.Fatalf("expected 1 owned before + 1 owned after, got %d/%d", beforeCount, afterCount)
+	}
+
+	beforeDispose()
+	afterDispose()
+	handler.mu.RLock()
+	beforeCount = len(handler.before)
+	afterCount = len(handler.after)
+	handler.mu.RUnlock()
+	if beforeCount != 0 || afterCount != 0 {
+		t.Fatalf("expected owned interceptors reversed, got %d/%d", beforeCount, afterCount)
+	}
+	// Idempotent.
+	beforeDispose()
+}
+
+func TestUnregisterOwnerInterceptors(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool{name: "bash"}, ToolMeta{AlwaysActive: true})
+	handler.AddBeforeInterceptorsOwned("plugin-a", func(ctx context.Context, call *ToolCall) (*ToolResult, error) {
+		return nil, nil
+	})
+	handler.AddAfterInterceptorsOwned("plugin-a", func(ctx context.Context, call *ToolCall, result ToolResult, err error) (ToolResult, error) {
+		return result, err
+	})
+	handler.AddBeforeInterceptorsOwned("plugin-b", func(ctx context.Context, call *ToolCall) (*ToolResult, error) {
+		return nil, nil
+	})
+	handler.AddBeforeInterceptors(func(ctx context.Context, call *ToolCall) (*ToolResult, error) {
+		return nil, nil
+	})
+
+	handler.UnregisterOwnerInterceptors("plugin-a")
+	handler.mu.RLock()
+	beforeCount := len(handler.before)
+	handler.mu.RUnlock()
+	// base interceptor + plugin-b owned = 2.
+	if beforeCount != 2 {
+		t.Fatalf("expected 2 before interceptors after unregistering plugin-a, got %d", beforeCount)
+	}
+	handler.UnregisterOwnerInterceptors("plugin-b")
+	handler.mu.RLock()
+	beforeCount = len(handler.before)
+	afterCount := len(handler.after)
+	handler.mu.RUnlock()
+	if beforeCount != 1 || afterCount != 0 {
+		t.Fatalf("expected base before only, got %d/%d", beforeCount, afterCount)
+	}
+}
+
+func TestOwnedInterceptorBeforeShortCircuit(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool{name: "bash"}, ToolMeta{AlwaysActive: true})
+	handler.AddBeforeInterceptorsOwned("policy", func(ctx context.Context, call *ToolCall) (*ToolResult, error) {
+		if call.Name == "bash" {
+			return &ToolResult{Text: "blocked by policy"}, nil
+		}
+		return nil, nil
+	})
+	result, err := handler.HandleResult(t.Context(), "bash", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if result.Text != "blocked by policy" {
+		t.Fatalf("expected policy short-circuit, got %q", result.Text)
 	}
 }

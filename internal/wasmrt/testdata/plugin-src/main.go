@@ -17,6 +17,7 @@ var abiBuf = make([]byte, 64)
 var listBuf = make([]byte, 4096)
 var respBuf = make([]byte, 4096)
 var promptsBuf = make([]byte, 4096)
+var policyBuf = make([]byte, 4096)
 
 func ptr(buf []byte) uint32 { return uint32(uintptr(unsafe.Pointer(&buf[0]))) }
 
@@ -47,11 +48,18 @@ func godexRequestBuffer() uint32 { return ptr(mailbox) }
 
 //go:wasmexport godex_tools_list
 func godexToolsList() uint32 {
-	tools := []toolDecl{{
-		Name:        "wasm_echo",
-		Description: "echo the message back from wasm",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}`),
-	}}
+	tools := []toolDecl{
+		{
+			Name:        "wasm_echo",
+			Description: "echo the message back from wasm",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}`),
+		},
+		{
+			Name:        "wasm_secret",
+			Description: "returns a secret",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		},
+	}
 	data, _ := json.Marshal(map[string]any{"tools": tools})
 	copy(listBuf, data)
 	return ptr(listBuf)
@@ -69,6 +77,27 @@ func godexPromptsList() uint32 {
 	return ptr(promptsBuf)
 }
 
+//go:wasmexport godex_policy
+func godexPolicy() uint32 {
+	req := goString(ptr(mailbox))
+	var r struct {
+		Action string `json:"action"`
+		Tool   string `json:"tool"`
+	}
+	_ = json.Unmarshal([]byte(req), &r)
+	var out []byte
+	if r.Tool == "wasm_secret" {
+		out, _ = json.Marshal(map[string]any{
+			"action": "deny",
+			"error":  map[string]any{"code": "policy_denied", "message": "wasm_secret is denied by plugin policy"},
+		})
+	} else {
+		out, _ = json.Marshal(map[string]any{"action": "continue"})
+	}
+	copy(policyBuf, out)
+	return ptr(policyBuf)
+}
+
 //go:wasmexport godex_invoke
 func godexInvoke() uint32 {
 	req := goString(ptr(mailbox))
@@ -81,10 +110,13 @@ func godexInvoke() uint32 {
 	var out []byte
 	switch r.Action {
 	case "tool_call":
-		if r.Tool == "wasm_echo" {
+		switch r.Tool {
+		case "wasm_echo":
 			msg, _ := r.Arguments["message"].(string)
 			out, _ = json.Marshal(map[string]any{"ok": true, "result": "wasm echo: " + msg})
-		} else {
+		case "wasm_secret":
+			out, _ = json.Marshal(map[string]any{"ok": true, "result": "the secret is 42"})
+		default:
 			out, _ = json.Marshal(map[string]any{"ok": false, "error": "unknown tool: " + r.Tool})
 		}
 	case "ping":

@@ -886,6 +886,7 @@ runtime:
 - 运行时由 `internal/wasmrt`（wazero，纯 Go、无 CGO）加载：JSON ABI（tools_list / invoke + mailbox 请求缓冲）、单次调用超时与并发上限、guest 内存上限（默认 32 MiB）。
 - 受控 host 调用：`godex_log`、`godex_kv_get/set`、`godex_workspace_read`（仅工作区内相对路径）。**不开放** 完整 WASI 文件系统、socket、环境变量、shell 或进程。
 - Prompt/context 贡献：插件可导出 `godex_prompts_list` 声明 prompt sections（key/kind/text）；活跃插件的贡献经 pluginrt 聚合后注入 runtime prompt（key `plugin:<id>:<key>`）。
+- Tool policy：插件可导出 `godex_policy` 返回显式决策 `{"action":"continue"|"deny"|"replace","error":{code,message},"result":...}`；决策作为 owner-aware before-interceptor 注册，卸载时随 instance 逆序撤销（`toolruntime.UnregisterOwnerInterceptors` 可一键撤销某 owner 全部 interceptor）。
 - 工具注册走 pluginrt 所有权模型（owner = 插件 id），卸载时随 instance 逆序撤销。
 
 Package command declaration 支持：

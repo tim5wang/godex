@@ -2,6 +2,9 @@ package pluginrt
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/toolruntime"
@@ -69,6 +72,40 @@ func (p *WasmToolPlugin) Start(ctx context.Context, host Host) error {
 	}
 	meta := p.Meta
 	closed := false
+
+	// P4 tool before/after policy: when the module exports godex_policy, wire a
+	// before-interceptor that consults the plugin's explicit decision
+	// (continue/deny/replace). The interceptor is registered through the
+	// handler's owner-aware API so unload reverses it.
+	if loaded.HasPolicy() {
+		disposePolicy := p.Handler.AddBeforeInterceptorsOwned(owner, func(ctx context.Context, call *toolruntime.ToolCall) (*toolruntime.ToolResult, error) {
+			decision, err := loaded.PolicyCheck(ctx, wasmrt.PolicyRequest{
+				Action: "before",
+				Tool:   call.Name,
+				Input:  call.NormalizedInput,
+			})
+			if err != nil {
+				return nil, err
+			}
+			switch decision.Action {
+			case wasmrt.PolicyDeny:
+				message := "denied by wasm plugin policy"
+				if decision.Error != nil && strings.TrimSpace(decision.Error.Message) != "" {
+					message = decision.Error.Message
+				}
+				return nil, fmt.Errorf("%s: %s", call.Name, message)
+			case wasmrt.PolicyReplace:
+				return &toolruntime.ToolResult{Text: stringifyPolicyResult(decision.Result)}, nil
+			default:
+				return nil, nil
+			}
+		})
+		host.RegisterEffect(func(ctx context.Context) (func() error, error) {
+			dispose := disposePolicy
+			return func() error { dispose(); return nil }, nil
+		})
+	}
+
 	for _, decl := range decls {
 		decl := decl
 		host.RegisterEffect(func(ctx context.Context) (func() error, error) {
@@ -92,6 +129,21 @@ func (p *WasmToolPlugin) Start(ctx context.Context, host Host) error {
 		})
 	}
 	return nil
+}
+
+// stringifyPolicyResult renders a policy replace result as text.
+func stringifyPolicyResult(result any) string {
+	switch typed := result.(type) {
+	case string:
+		return typed
+	case nil:
+		return ""
+	default:
+		if data, err := json.Marshal(typed); err == nil {
+			return string(data)
+		}
+		return fmt.Sprintf("%v", typed)
+	}
 }
 
 // PromptSections returns the cached context contributions of this plugin

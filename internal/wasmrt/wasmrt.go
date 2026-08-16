@@ -63,6 +63,39 @@ type PromptSection struct {
 	Text string `json:"text"`
 }
 
+// PolicyRequest is the JSON sent to godex_policy for one tool call.
+type PolicyRequest struct {
+	Action string         `json:"action"` // "before" | "after"
+	Tool   string         `json:"tool"`
+	Input  map[string]any `json:"input,omitempty"`
+	Result any            `json:"result,omitempty"`
+	Error  string         `json:"error,omitempty"`
+}
+
+// PolicyDecision is the explicit decision a plugin returns (research doc §4:
+// explicit decisions instead of a waterfall next() chain).
+type PolicyDecision struct {
+	// Action is one of "continue", "deny", or "replace".
+	Action string `json:"action"`
+	// Error carries the deny reason (code/message).
+	Error *PolicyError `json:"error,omitempty"`
+	// Result replaces the tool result for action "replace".
+	Result any `json:"result,omitempty"`
+}
+
+// PolicyError is a structured deny reason.
+type PolicyError struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
+// PolicyDecision constants.
+const (
+	PolicyContinue = "continue"
+	PolicyDeny     = "deny"
+	PolicyReplace  = "replace"
+)
+
 // HostCallbacks are the controlled host functions exposed to plugins.
 type HostCallbacks struct {
 	// Log receives plugin log lines (best-effort).
@@ -99,6 +132,7 @@ type Plugin struct {
 	exportToolsList api.Function
 	exportABI       api.Function
 	exportPrompts   api.Function
+	exportPolicy    api.Function
 	mailboxPtr      uint32
 	mailboxOnce     sync.Once
 	// sem bounds the number of callers queued on this plugin. The guest call
@@ -170,6 +204,7 @@ func NewPlugin(ctx context.Context, config Config) (*Plugin, error) {
 	plugin.exportToolsList = module.ExportedFunction("godex_tools_list")
 	plugin.exportABI = module.ExportedFunction("godex_abi_version")
 	plugin.exportPrompts = module.ExportedFunction("godex_prompts_list")
+	plugin.exportPolicy = module.ExportedFunction("godex_policy")
 	if plugin.exportInvoke == nil || module.ExportedFunction("godex_request_buffer") == nil {
 		_ = plugin.Close(ctx)
 		return nil, fmt.Errorf("wasm plugin: missing godex_invoke/godex_request_buffer exports (ABI %s)", ABIVersion)
@@ -342,9 +377,52 @@ func (p *Plugin) PromptSections(ctx context.Context) ([]PromptSection, error) {
 	return out, nil
 }
 
+// HasPolicy reports whether the plugin exports godex_policy.
+func (p *Plugin) HasPolicy() bool { return p.exportPolicy != nil }
+
+// PolicyCheck sends one before/after decision request to the plugin's
+// godex_policy export. A plugin without the export always continues.
+func (p *Plugin) PolicyCheck(ctx context.Context, req PolicyRequest) (PolicyDecision, error) {
+	if p.exportPolicy == nil {
+		return PolicyDecision{Action: PolicyContinue}, nil
+	}
+	p.callMu.Lock()
+	defer p.callMu.Unlock()
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	mailbox, err := p.mailbox(ctx)
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	if uint32(len(payload))+1 > MailboxSize {
+		return PolicyDecision{}, fmt.Errorf("wasm plugin: policy request too large")
+	}
+	if !p.module.Memory().Write(mailbox, append(payload, 0)) {
+		return PolicyDecision{}, fmt.Errorf("wasm plugin: write policy mailbox")
+	}
+	results, err := p.exportPolicy.Call(ctx)
+	if err != nil {
+		return PolicyDecision{}, fmt.Errorf("wasm plugin: policy: %w", err)
+	}
+	raw := p.readString(uint32(results[0]))
+	var decision PolicyDecision
+	if err := json.Unmarshal([]byte(raw), &decision); err != nil {
+		return PolicyDecision{}, fmt.Errorf("wasm plugin: malformed policy response: %w", err)
+	}
+	switch decision.Action {
+	case "", PolicyContinue:
+		decision.Action = PolicyContinue
+	case PolicyDeny, PolicyReplace:
+	default:
+		return PolicyDecision{}, fmt.Errorf("wasm plugin: unknown policy action %q", decision.Action)
+	}
+	return decision, nil
+}
+
 // CallTool runs one tool call through the plugin.
-func (p *Plugin) CallTool(ctx context.Context, name string, arguments map[string]any) (any, error) {
-	ctx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
+func (p *Plugin) CallTool(ctx context.Context, name string, arguments map[string]any) (any, error) {	ctx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
 	defer cancel()
 	select {
 	case p.sem <- struct{}{}:

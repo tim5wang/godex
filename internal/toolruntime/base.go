@@ -2,6 +2,7 @@ package toolruntime
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -42,6 +43,13 @@ type ToolHandler struct {
 	bundleSummary map[string]string
 	before        []BeforeInterceptor
 	after         []AfterInterceptor
+	// baseBefore/baseAfter are the host-registered interceptors (never removed
+	// by owner unregister); ownedBefore/ownedAfter carry plugin/package-owned
+	// interceptors with reversible registration.
+	baseBefore   []BeforeInterceptor
+	baseAfter    []AfterInterceptor
+	ownedBefore  []ownedBeforeInterceptor
+	ownedAfter   []ownedAfterInterceptor
 	// owners tracks the owning registration for each tool name. A non-empty
 	// owner enables reversible unregister (dynamic plugin/package uninstall).
 	owners map[string]string
@@ -293,6 +301,10 @@ func (h *ToolHandler) ReplaceWith(next *ToolHandler) {
 	}
 	before := append([]BeforeInterceptor{}, next.before...)
 	after := append([]AfterInterceptor{}, next.after...)
+	baseBefore := append([]BeforeInterceptor{}, next.baseBefore...)
+	baseAfter := append([]AfterInterceptor{}, next.baseAfter...)
+	ownedBefore := append([]ownedBeforeInterceptor{}, next.ownedBefore...)
+	ownedAfter := append([]ownedAfterInterceptor{}, next.ownedAfter...)
 	next.mu.RUnlock()
 
 	h.mu.Lock()
@@ -306,6 +318,10 @@ func (h *ToolHandler) ReplaceWith(next *ToolHandler) {
 	h.draining = draining
 	h.before = before
 	h.after = after
+	h.baseBefore = baseBefore
+	h.baseAfter = baseAfter
+	h.ownedBefore = ownedBefore
+	h.ownedAfter = ownedAfter
 	h.mu.Unlock()
 }
 
@@ -552,7 +568,13 @@ func (h *ToolHandler) SetActiveBundles(names ...string) {
 func (h *ToolHandler) AddBeforeInterceptors(interceptors ...BeforeInterceptor) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.before = append(h.before, interceptors...)
+	for _, interceptor := range interceptors {
+		if interceptor == nil {
+			continue
+		}
+		h.baseBefore = append(h.baseBefore, interceptor)
+		h.before = append(h.before, interceptor)
+	}
 }
 
 // AddBeforeInterceptorsForTools appends ordered before-interceptors scoped to the named tools.
@@ -563,7 +585,9 @@ func (h *ToolHandler) AddBeforeInterceptorsForTools(toolNames []string, intercep
 		if interceptor == nil {
 			continue
 		}
-		h.before = append(h.before, scopedBeforeInterceptor(toolNames, interceptor))
+		scoped := scopedBeforeInterceptor(toolNames, interceptor)
+		h.baseBefore = append(h.baseBefore, scoped)
+		h.before = append(h.before, scoped)
 	}
 }
 
@@ -571,7 +595,13 @@ func (h *ToolHandler) AddBeforeInterceptorsForTools(toolNames []string, intercep
 func (h *ToolHandler) AddAfterInterceptors(interceptors ...AfterInterceptor) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.after = append(h.after, interceptors...)
+	for _, interceptor := range interceptors {
+		if interceptor == nil {
+			continue
+		}
+		h.baseAfter = append(h.baseAfter, interceptor)
+		h.after = append(h.after, interceptor)
+	}
 }
 
 // AddAfterInterceptorsForTools appends ordered after-interceptors scoped to the named tools.
@@ -582,8 +612,147 @@ func (h *ToolHandler) AddAfterInterceptorsForTools(toolNames []string, intercept
 		if interceptor == nil {
 			continue
 		}
-		h.after = append(h.after, scopedAfterInterceptor(toolNames, interceptor))
+		scoped := scopedAfterInterceptor(toolNames, interceptor)
+		h.baseAfter = append(h.baseAfter, scoped)
+		h.after = append(h.after, scoped)
 	}
+}
+
+// AddBeforeInterceptorsOwned appends a before-interceptor owned by the named
+// component (plugin/package id) and returns a disposer that reverses it. The
+// disposer is idempotent and safe to call after the handler was replaced.
+func (h *ToolHandler) AddBeforeInterceptorsOwned(owner string, interceptor BeforeInterceptor) func() {
+	if interceptor == nil {
+		return func() {}
+	}
+	h.mu.Lock()
+	h.ownedBefore = append(h.ownedBefore, ownedBeforeInterceptor{owner: owner, fn: interceptor})
+	h.before = append(h.before, interceptor)
+	h.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			h.removeOwnedBefore(owner, interceptor)
+		})
+	}
+}
+
+// AddAfterInterceptorsOwned appends an after-interceptor owned by the named
+// component and returns a disposer that reverses it.
+func (h *ToolHandler) AddAfterInterceptorsOwned(owner string, interceptor AfterInterceptor) func() {
+	if interceptor == nil {
+		return func() {}
+	}
+	h.mu.Lock()
+	h.ownedAfter = append(h.ownedAfter, ownedAfterInterceptor{owner: owner, fn: interceptor})
+	h.after = append(h.after, interceptor)
+	h.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			h.removeOwnedAfter(owner, interceptor)
+		})
+	}
+}
+
+func (h *ToolHandler) removeOwnedBefore(owner string, target BeforeInterceptor) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	kept := h.ownedBefore[:0]
+	for _, item := range h.ownedBefore {
+		if item.owner == owner && sameBefore(item.fn, target) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	h.ownedBefore = kept
+	h.rebuildOwnedBeforeLocked()
+}
+
+func (h *ToolHandler) removeOwnedAfter(owner string, target AfterInterceptor) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	kept := h.ownedAfter[:0]
+	for _, item := range h.ownedAfter {
+		if item.owner == owner && sameAfter(item.fn, target) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	h.ownedAfter = kept
+	h.rebuildOwnedAfterLocked()
+}
+
+// UnregisterOwnerInterceptors reverses every owned before/after interceptor
+// registered by the given owner (used on plugin/package unload).
+func (h *ToolHandler) UnregisterOwnerInterceptors(owner string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	keptBefore := h.ownedBefore[:0]
+	for _, item := range h.ownedBefore {
+		if item.owner == owner {
+			continue
+		}
+		keptBefore = append(keptBefore, item)
+	}
+	h.ownedBefore = keptBefore
+	h.rebuildOwnedBeforeLocked()
+
+	keptAfter := h.ownedAfter[:0]
+	for _, item := range h.ownedAfter {
+		if item.owner == owner {
+			continue
+		}
+		keptAfter = append(keptAfter, item)
+	}
+	h.ownedAfter = keptAfter
+	h.rebuildOwnedAfterLocked()
+}
+
+// rebuildOwnedBeforeLocked recomputes the effective before slice from the base
+// interceptors plus owned interceptors. Callers must hold h.mu.
+func (h *ToolHandler) rebuildOwnedBeforeLocked() {
+	h.before = append(append([]BeforeInterceptor{}, h.baseBefore...), ownedBeforeFns(h.ownedBefore)...)
+}
+
+// rebuildOwnedAfterLocked recomputes the effective after slice. Callers must
+// hold h.mu.
+func (h *ToolHandler) rebuildOwnedAfterLocked() {
+	h.after = append(append([]AfterInterceptor{}, h.baseAfter...), ownedAfterFns(h.ownedAfter)...)
+}
+
+type ownedBeforeInterceptor struct {
+	owner string
+	fn    BeforeInterceptor
+}
+
+type ownedAfterInterceptor struct {
+	owner string
+	fn    AfterInterceptor
+}
+
+func ownedBeforeFns(items []ownedBeforeInterceptor) []BeforeInterceptor {
+	out := make([]BeforeInterceptor, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.fn)
+	}
+	return out
+}
+
+func ownedAfterFns(items []ownedAfterInterceptor) []AfterInterceptor {
+	out := make([]AfterInterceptor, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.fn)
+	}
+	return out
+}
+
+func sameBefore(a, b BeforeInterceptor) bool {
+	return fmt.Sprintf("%p", a) == fmt.Sprintf("%p", b)
+}
+
+func sameAfter(a, b AfterInterceptor) bool {
+	return fmt.Sprintf("%p", a) == fmt.Sprintf("%p", b)
 }
 
 // BundleForTool returns the bundle name for a tool, if any.

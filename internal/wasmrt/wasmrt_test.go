@@ -38,7 +38,11 @@ func TestPluginABIVersionAndToolsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tools list: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Name != "wasm_echo" {
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools, got %+v", tools)
+	}
+	// Sorted by name: wasm_echo, wasm_secret.
+	if tools[0].Name != "wasm_echo" || tools[1].Name != "wasm_secret" {
 		t.Fatalf("unexpected tools: %+v", tools)
 	}
 	if len(tools[0].InputSchema) == 0 {
@@ -196,5 +200,28 @@ func TestPluginPromptSections(t *testing.T) {
 	}
 	if !strings.Contains(section.Text, "wasm_echo") {
 		t.Fatalf("unexpected section text: %q", section.Text)
+	}
+}
+
+func TestPluginPolicyCheck(t *testing.T) {
+	plugin := loadTestPlugin(t, HostCallbacks{})
+	if !plugin.HasPolicy() {
+		t.Fatal("expected godex_policy export")
+	}
+	// Allowed tool continues.
+	allowed, err := plugin.PolicyCheck(context.Background(), PolicyRequest{Action: "before", Tool: "wasm_echo", Input: map[string]any{"message": "hi"}})
+	if err != nil {
+		t.Fatalf("policy check: %v", err)
+	}
+	if allowed.Action != PolicyContinue {
+		t.Fatalf("expected continue, got %+v", allowed)
+	}
+	// Denied tool is denied with a structured reason.
+	denied, err := plugin.PolicyCheck(context.Background(), PolicyRequest{Action: "before", Tool: "wasm_secret"})
+	if err != nil {
+		t.Fatalf("policy check: %v", err)
+	}
+	if denied.Action != PolicyDeny || denied.Error == nil || denied.Error.Code != "policy_denied" {
+		t.Fatalf("expected deny with code, got %+v", denied)
 	}
 }

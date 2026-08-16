@@ -414,3 +414,45 @@ func TestManagerPromptSectionsAggregatesWasmPlugins(t *testing.T) {
 		t.Fatalf("expected no sections after deactivate, got %+v", got)
 	}
 }
+
+func TestWasmToolPluginPolicyInterceptor(t *testing.T) {
+	binary, err := os.ReadFile(filepath.Join("..", "wasmrt", "testdata", "plugin.wasm"))
+	if err != nil {
+		t.Fatalf("read wasm plugin: %v", err)
+	}
+	handler := toolruntime.NewToolHandler()
+	plugin := &WasmToolPlugin{
+		ManifestValue: Manifest{ID: "policy-demo", Scope: scope.Org("godex"), Provides: []string{"godex:policy-demo@1"}},
+		Binary:        binary,
+		Handler:       handler,
+		Meta:          toolruntime.ToolMeta{Bundle: "wasm", AlwaysActive: true},
+	}
+	manager := NewManager(nil)
+	if _, err := manager.Activate(context.Background(), plugin); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+
+	// Allowed tool executes normally.
+	result, err := handler.HandleResult(context.Background(), "wasm_echo", map[string]interface{}{"message": "hello"})
+	if err != nil {
+		t.Fatalf("handle wasm_echo: %v", err)
+	}
+	if !strings.Contains(result.Text, "wasm echo: hello") {
+		t.Fatalf("unexpected echo result: %q", result.Text)
+	}
+
+	// Denied tool is blocked by the plugin policy before execution.
+	if _, err := handler.HandleResult(context.Background(), "wasm_secret", map[string]interface{}{}); err == nil {
+		t.Fatal("expected wasm_secret to be denied by policy")
+	} else if !strings.Contains(err.Error(), "wasm_secret is denied by plugin policy") {
+		t.Fatalf("unexpected deny error: %v", err)
+	}
+
+	// Deactivation reverses the policy interceptor.
+	if err := manager.Deactivate(context.Background(), "policy-demo"); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if handler.Get("wasm_secret") != nil {
+		t.Fatal("expected tools unregistered")
+	}
+}

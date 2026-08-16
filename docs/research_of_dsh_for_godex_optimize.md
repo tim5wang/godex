@@ -145,7 +145,7 @@ type Effect func(context.Context) error
 
 为工具和 interceptor 增加 owner/generation-aware 注册：
 
-- 注册返回 disposer —— ✅ `Register`/`RegisterWithMeta` 返回 `*Registration`，`Dispose()` 逆序撤销
+- 注册返回 disposer —— ✅ `Register`/`RegisterWithMeta` 返回 `*Registration`，`Dispose()` 逆序撤销；interceptor 侧 `AddBeforeInterceptorsOwned`/`AddAfterInterceptorsOwned` 返回 disposer
 - 同名冲突明确报错或按优先级替换 —— ✅ `RegisterOwned(owner, ...)` 对不同非空 owner 报 `ErrToolConflict`
 - 实例进入 draining 后拒绝新调用 —— ✅ `MarkDraining` + `ErrToolDraining`
 - 迟到结果若 generation 已过期则丢弃 —— ✅ generation 计数 + `CurrentGeneration`；`ReplaceWith` 重映射 generation
@@ -194,7 +194,7 @@ permissions:
 
 Package 层负责安装、摘要、来源和授权；Plugin Kernel 负责实例生命周期，二者职责不要混合。
 
-### P4：WASM Tool MVP ✅ 工具面 + prompt 贡献面已落地（`internal/wasmrt`），policy 面待做
+### P4：WASM Tool MVP ✅ 工具面 + prompt 贡献面 + policy 面已落地（`internal/wasmrt`）
 
 首版建议：
 
@@ -206,7 +206,7 @@ wazero + Core Wasm + 版本化 JSON ABI
 
 - 工具声明和执行 —— ✅ `godex_tools_list` / `godex_invoke`（mailbox JSON ABI）
 - prompt/context contributor —— ✅ `godex_prompts_list`：插件声明 prompt sections（key/kind/text），`pluginrt.Manager.PromptSections` 聚合活跃插件贡献，`Agent.SetPluginPromptProvider`/`pluginPromptSectionsFromManager` 注入 runtime prompt（key `plugin:<id>:<key>`）；无插件时 prompt 不变
-- tool before/after policy —— ⏳ 待做（可复用 toolruntime interceptor，作为 pluginrt effect 注册）
+- tool before/after policy —— ✅ `godex_policy`：插件返回显式决策 `{"action":"continue"|"deny"|"replace","error":{code,message},"result":...}`（研究文档 §4 的显式决策而非 waterfall next()）；`WasmToolPlugin` 把策略注册为 owner-aware before-interceptor（`AddBeforeInterceptorsOwned`，卸载时随 instance 逆序撤销），`toolruntime` 同时新增 `UnregisterOwnerInterceptors` 一键撤销某 owner 全部 interceptor
 - 显式 KV、日志和受控 workspace read host calls —— ✅ `godex_host`：`godex_log` / `godex_kv_get` / `godex_kv_set` / `godex_workspace_read`
 
 默认不开放完整 WASI、socket、环境变量、shell、进程或明文凭据。有效权限应为：

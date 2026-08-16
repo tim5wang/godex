@@ -726,7 +726,7 @@ func (e *WorkspaceExecutor) shellCommand(ctx context.Context, command string) (*
 		shell, shellArg := shellCommand()
 		cmd := exec.CommandContext(ctx, shell, shellArg, command)
 		cmd.Dir = e.WorkspaceDir
-		cmd.Env = minimalCommandEnv(e.WorkspaceDir)
+		cmd.Env = InheritedCommandEnv(e.WorkspaceDir)
 		return cmd, nil
 	case ExecutionModeDocker:
 		return e.dockerShellCommand(ctx, cfg, command)
@@ -775,7 +775,7 @@ func (e *WorkspaceExecutor) argvCommand(argv []string) (*exec.Cmd, error) {
 	case ExecutionModeLocal:
 		cmd := exec.Command(argv[0], argv[1:]...)
 		cmd.Dir = e.WorkspaceDir
-		cmd.Env = minimalCommandEnv(e.WorkspaceDir)
+		cmd.Env = InheritedCommandEnv(e.WorkspaceDir)
 		return cmd, nil
 	case ExecutionModeDocker:
 		return e.dockerArgvCommand(cfg, argv)
@@ -2229,6 +2229,52 @@ func appendDockerEnvArgs(args []string) []string {
 	return args
 }
 
+// InheritedCommandEnv returns the complete GoDex process environment for a
+// local child process, with working-directory variables and explicit overrides
+// applied without duplicate keys. Local shell entry points use this so exported
+// toolchain, proxy, credential, and application variables remain available.
+func InheritedCommandEnv(workingDir string, overrides ...string) []string {
+	env := append([]string{}, os.Environ()...)
+	if strings.TrimSpace(workingDir) != "" {
+		if runtime.GOOS == "windows" {
+			overrides = append([]string{"CD=" + workingDir}, overrides...)
+		} else {
+			overrides = append([]string{"PWD=" + workingDir}, overrides...)
+		}
+	}
+
+	indexes := make(map[string]int, len(env)+len(overrides))
+	for i, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && key != "" {
+			indexes[commandEnvKey(key)] = i
+		}
+	}
+	for _, item := range overrides {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok || key == "" {
+			continue
+		}
+		normalized := commandEnvKey(key)
+		if i, exists := indexes[normalized]; exists {
+			env[i] = item
+			continue
+		}
+		indexes[normalized] = len(env)
+		env = append(env, item)
+	}
+	return env
+}
+
+func commandEnvKey(key string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToUpper(key)
+	}
+	return key
+}
+
+// minimalCommandEnv is intentionally restricted to isolation boundaries such
+// as Docker, where forwarding every host variable could leak secrets.
 func minimalCommandEnv(workingDir string) []string {
 	keepExact := map[string]bool{
 		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true,

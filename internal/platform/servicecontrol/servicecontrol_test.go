@@ -2,10 +2,57 @@ package servicecontrol
 
 import (
 	"bytes"
+	"context"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestParseNullEnvironmentIgnoresShellStartupNoise(t *testing.T) {
+	output := []byte("startup banner\nPATH=/bad\x00" + shellEnvironmentMarker + "PATH=/usr/local/bin:/usr/bin\x00GOPATH=/home/me/go\x00MULTILINE=one\ntwo\x00")
+	env := parseNullEnvironment(output)
+	if env["PATH"] != "/usr/local/bin:/usr/bin" {
+		t.Fatalf("unexpected PATH: %q", env["PATH"])
+	}
+	if env["GOPATH"] != "/home/me/go" || env["MULTILINE"] != "one\ntwo" {
+		t.Fatalf("unexpected parsed environment: %#v", env)
+	}
+}
+
+func TestImportUserShellEnvironmentLoadsLoginInteractiveExports(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell script")
+	}
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "test-shell")
+	script := "#!/bin/sh\nexport GODEX_LOGIN_SHELL_TEST=loaded\nexport PATH=/custom/go/bin:/usr/bin:/bin\nexec /bin/sh -c \"$2\"\n"
+	if err := os.WriteFile(shell, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GODEX_SERVICE_SCOPE", "user")
+	t.Setenv("SHELL", shell)
+	t.Setenv("GODEX_LOGIN_SHELL_TEST", "")
+
+	if err := ImportUserShellEnvironment(context.Background()); err != nil {
+		t.Fatalf("import user shell environment: %v", err)
+	}
+	if got := os.Getenv("GODEX_LOGIN_SHELL_TEST"); got != "loaded" {
+		t.Fatalf("expected login shell export, got %q", got)
+	}
+	if got := os.Getenv("PATH"); got != "/custom/go/bin:/usr/bin:/bin" {
+		t.Fatalf("expected login shell PATH, got %q", got)
+	}
+}
+
+func TestImportUserShellEnvironmentSkipsNonUserService(t *testing.T) {
+	t.Setenv("GODEX_SERVICE_SCOPE", "system")
+	t.Setenv("SHELL", "/does/not/exist")
+	if err := ImportUserShellEnvironment(context.Background()); err != nil {
+		t.Fatalf("system service should not load a user shell: %v", err)
+	}
+}
 
 func TestNormalizeOptionsDefaultsToUserService(t *testing.T) {
 	opts, err := NormalizeOptions(InstallOptions{

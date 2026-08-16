@@ -42,6 +42,16 @@ import (
 )
 
 func main() {
+	// User service managers start GoDex with a deliberately sparse environment
+	// (on macOS launchd usually supplies only /usr/bin:/bin:/usr/sbin:/sbin).
+	// Refresh it before constructing any tools so /sh, /bash, background jobs,
+	// and Web Terminal see the same PATH and exports as the user's shell.
+	envCtx, envCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := servicecontrol.ImportUserShellEnvironment(envCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+	envCancel()
+
 	configOptions, args, err := extractGlobalConfigArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

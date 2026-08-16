@@ -10,6 +10,34 @@ import (
 	"time"
 )
 
+func TestLocalTerminalEnvironmentPreservesHomeAndUsesWorkspacePWD(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GODEX_CUSTOM_TERMINAL_ENV", "available")
+
+	cmd, _, err := localTerminalCommand(workspace)
+	if err != nil {
+		t.Fatalf("build local terminal command: %v", err)
+	}
+	env := make(map[string]string, len(cmd.Env))
+	for _, item := range cmd.Env {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+	if env["HOME"] != home {
+		t.Fatalf("expected HOME to remain %q, got %q", home, env["HOME"])
+	}
+	if env["PWD"] != workspace {
+		t.Fatalf("expected PWD %q, got %q", workspace, env["PWD"])
+	}
+	if env["GODEX_CUSTOM_TERMINAL_ENV"] != "available" {
+		t.Fatalf("expected custom process environment to be inherited")
+	}
+}
+
 func TestTerminalCreate(t *testing.T) {
 	mgr := newTerminalManager()
 	mux := http.NewServeMux()

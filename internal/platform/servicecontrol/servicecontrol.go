@@ -88,6 +88,53 @@ func CurrentOptions() InstallOptions {
 	}
 }
 
+const shellEnvironmentMarker = "__GODEX_SHELL_ENVIRONMENT_V1__\x00"
+
+// ImportUserShellEnvironment refreshes a user-scoped service process from the
+// user's login shell. Service managers such as launchd and systemd commonly
+// start with a minimal PATH, so merely inheriting the GoDex process environment
+// is insufficient for tools installed by Homebrew, asdf, mise, nvm, Go, etc.
+//
+// The shell is both login and interactive so the same profile/rc files as a
+// terminal session are loaded. NUL-delimited output tolerates multiline values
+// and incidental text printed by shell startup files.
+func ImportUserShellEnvironment(ctx context.Context) error {
+	if Scope(strings.TrimSpace(os.Getenv("GODEX_SERVICE_SCOPE"))) != ScopeUser {
+		return nil
+	}
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	if shell == "" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, shell, "-lic", "printf '__GODEX_SHELL_ENVIRONMENT_V1__\\0'; env -0")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("load user shell environment via %s: %w", shell, err)
+	}
+	for key, value := range parseNullEnvironment(output) {
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("set shell environment %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func parseNullEnvironment(output []byte) map[string]string {
+	env := make(map[string]string)
+	marker := []byte(shellEnvironmentMarker)
+	if markerAt := bytes.Index(output, marker); markerAt >= 0 {
+		output = output[markerAt+len(marker):]
+	}
+	for _, item := range bytes.Split(output, []byte{0}) {
+		key, value, ok := strings.Cut(string(item), "=")
+		if !ok || key == "" || strings.ContainsAny(key, "\r\n") {
+			continue
+		}
+		env[key] = value
+	}
+	return env
+}
+
 func (c *Controller) Install(ctx context.Context, opts InstallOptions) (Status, error) {
 	opts, err := NormalizeOptions(opts)
 	if err != nil {

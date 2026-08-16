@@ -305,16 +305,21 @@ func TestBuildDockerCommandIncludesMinimalEnvAndShellPolicy(t *testing.T) {
 	}
 }
 
-func TestRunShellUsesMinimalEnvironment(t *testing.T) {
-	t.Setenv("GODEX_SHOULD_NOT_LEAK", "secret")
-	executor := NewWorkspaceExecutor(t.TempDir())
+func TestRunShellInheritsProcessEnvironment(t *testing.T) {
+	t.Setenv("GODEX_CUSTOM_TOOLCHAIN_HOME", "/opt/custom-toolchain")
+	workspace := t.TempDir()
+	executor := NewWorkspaceExecutor(workspace)
 
-	output, err := executor.RunShell(context.Background(), `sh -c 'printf "%s" "${GODEX_SHOULD_NOT_LEAK:-}"'`)
+	output, err := executor.RunShell(context.Background(), `printf '%s\n%s' "$GODEX_CUSTOM_TOOLCHAIN_HOME" "$PWD"`)
 	if err != nil {
-		t.Fatalf("run shell with minimal env: %v", err)
+		t.Fatalf("run shell with inherited env: %v", err)
 	}
-	if strings.TrimSpace(output) != "" {
-		t.Fatalf("expected custom environment variable to be stripped, got %q", output)
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 2 || lines[0] != "/opt/custom-toolchain" {
+		t.Fatalf("expected custom environment variable to be inherited, got %q", output)
+	}
+	if lines[1] != workspace {
+		t.Fatalf("expected PWD %q, got %q", workspace, lines[1])
 	}
 }
 

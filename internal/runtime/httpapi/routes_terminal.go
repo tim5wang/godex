@@ -18,6 +18,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/tim5wang/godex/internal/platform/logger"
+	"github.com/tim5wang/godex/internal/platform/tooling"
 )
 
 // terminalManager owns the in-memory set of active terminal sessions.
@@ -72,24 +73,9 @@ func (m *terminalManager) create(ctx context.Context, req createTerminalRequest)
 
 // createLocal spawns a local bash (or sh) shell with PTY-based I/O.
 func (m *terminalManager) createLocal(ctx context.Context, workspaceDir string) (*terminalSession, error) {
-	shell, shellArgs := resolveShell()
-
-	cmd := exec.Command(shell, shellArgs...)
-	cmd.Env = append(os.Environ(),
-		"TERM=xterm-256color",
-		"LANG=en_US.UTF-8",
-		"LC_ALL=en_US.UTF-8",
-		"FORCE_COLOR=1",
-		"CLICOLOR=1",
-		"CLICOLOR_FORCE=1",
-	)
-	workspaceDir = strings.TrimSpace(workspaceDir)
-	if workspaceDir != "" {
-		if abs, err := filepath.Abs(workspaceDir); err == nil {
-			workspaceDir = abs
-		}
-		cmd.Dir = workspaceDir
-		cmd.Env = append(cmd.Env, "HOME="+workspaceDir)
+	cmd, shell, err := localTerminalCommand(workspaceDir)
+	if err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -105,6 +91,28 @@ func (m *terminalManager) createLocal(ctx context.Context, workspaceDir string) 
 	session := m.registerSession(cmd, ptyFile, cancel)
 	logger.Infof("terminal %s started (PTY) pid=%d shell=%s", session.id, cmd.Process.Pid, shell)
 	return session, nil
+}
+
+func localTerminalCommand(workspaceDir string) (*exec.Cmd, string, error) {
+	shell, shellArgs := resolveShell()
+	workspaceDir = strings.TrimSpace(workspaceDir)
+	if workspaceDir != "" {
+		abs, err := filepath.Abs(workspaceDir)
+		if err != nil {
+			return nil, "", fmt.Errorf("resolve terminal workspace: %w", err)
+		}
+		workspaceDir = abs
+	}
+
+	cmd := exec.Command(shell, shellArgs...)
+	cmd.Dir = workspaceDir
+	cmd.Env = tooling.InheritedCommandEnv(workspaceDir,
+		"TERM=xterm-256color",
+		"FORCE_COLOR=1",
+		"CLICOLOR=1",
+		"CLICOLOR_FORCE=1",
+	)
+	return cmd, shell, nil
 }
 
 // createSSH spawns an SSH interactive terminal via `ssh -t target`.
@@ -383,13 +391,13 @@ func (pw *pipeWrapper) Close() error {
 // --- API types ---
 
 type createTerminalRequest struct {
-	WorkspaceDir   string   `json:"workspaceDir"`
-	ExecutionMode  string   `json:"executionMode,omitempty"`
-	SSHTarget      string   `json:"sshTarget,omitempty"`
-	SSHWorkspace   string   `json:"sshWorkspace,omitempty"`
-	SSHOptions     []string `json:"sshOptions,omitempty"`
-	DockerImage    string   `json:"dockerImage,omitempty"`
-	DockerNetwork  string   `json:"dockerNetwork,omitempty"`
+	WorkspaceDir  string   `json:"workspaceDir"`
+	ExecutionMode string   `json:"executionMode,omitempty"`
+	SSHTarget     string   `json:"sshTarget,omitempty"`
+	SSHWorkspace  string   `json:"sshWorkspace,omitempty"`
+	SSHOptions    []string `json:"sshOptions,omitempty"`
+	DockerImage   string   `json:"dockerImage,omitempty"`
+	DockerNetwork string   `json:"dockerNetwork,omitempty"`
 }
 
 type createTerminalResponse struct {

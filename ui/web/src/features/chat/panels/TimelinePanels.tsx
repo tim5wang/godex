@@ -1,8 +1,10 @@
+import { useState } from "react";
 import type { TimelinePage, SessionTimelineEntry } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
 import { Space, Empty, Typography, Button, List, Tag, Tooltip, Select, Input } from "antd";
 import { SafetyCertificateOutlined } from "@ant-design/icons";
 import { type TimelineFilterState, timelineEventSummary, timelineEventFullText, stringFromPayload, timelineEventLabel, shortTurnId, formatTimelineTime, defaultTimelineFilters, defaultTimelineTypes, timelineEventTypeOptions, timelineEventTypeLabel } from "../../../lib/timelineUtils";
+import { EventDetailPanel } from "./EventDetailPanel";
 
 export function TimelineList({
   page,
@@ -28,6 +30,7 @@ export function TimelineList({
   onPreviousPage: () => void;
 }) {
   const { t } = useI18n();
+  const [selected, setSelected] = useState<SessionTimelineEntry | null>(null);
   const items = page?.items ?? fallbackItems.slice().reverse();
   const total = page?.total ?? fallbackItems.length;
   const hasMore = page?.has_more ?? false;
@@ -79,7 +82,16 @@ export function TimelineList({
           const fullText = timelineEventFullText(event, summary);
           const jobID = stringFromPayload(payload.job_id);
           return (
-            <List.Item>
+            <List.Item
+              onClick={() => setSelected(event)}
+              style={{ cursor: "pointer", borderRadius: 6 }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(0,0,0,0.03)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
               <List.Item.Meta
                 avatar={<SafetyCertificateOutlined />}
                 title={
@@ -88,14 +100,20 @@ export function TimelineList({
                     <Tag>{event.type}</Tag>
                     {event.turn_id ? (
                       <Tooltip title={`${t("chat.timelineFilterByTurn")}: ${event.turn_id}`}>
-                        <Tag color="blue" style={{ cursor: "pointer" }} onClick={() => onFiltersChange({ ...filters, turnId: event.turn_id ?? "", currentTurnOnly: false })}>
+                        <Tag color="blue" style={{ cursor: "pointer" }} onClick={(e) => {
+                          e.stopPropagation();
+                          onFiltersChange({ ...filters, turnId: event.turn_id ?? "", currentTurnOnly: false });
+                        }}>
                           {shortTurnId(event.turn_id)}
                         </Tag>
                       </Tooltip>
                     ) : null}
                     {jobID ? (
                       <Tooltip title={`${t("chat.timelineFilterByJob")}: ${jobID}`}>
-                        <Tag color="purple" style={{ cursor: "pointer" }} onClick={() => onFiltersChange({ ...filters, jobId: jobID })}>
+                        <Tag color="purple" style={{ cursor: "pointer" }} onClick={(e) => {
+                          e.stopPropagation();
+                          onFiltersChange({ ...filters, jobId: jobID });
+                        }}>
                           {shortTurnId(jobID)}
                         </Tag>
                       </Tooltip>
@@ -115,6 +133,7 @@ export function TimelineList({
           );
         }}
       />
+      <EventDetailPanel event={selected} onClose={() => setSelected(null)} />
       <Space style={{ width: "100%", justifyContent: "flex-end" }}>
         <Button size="small" disabled={!canPrevious || loading} onClick={onPreviousPage}>
           Previous

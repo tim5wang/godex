@@ -175,6 +175,79 @@ func TestOpenAICodexClientOmitsPromptCacheFieldsWhenUnset(t *testing.T) {
 	}
 }
 
+// The official api.openai.com endpoint must NOT receive the codex-specific
+// headers, must NOT receive prompt_cache_key (automatic prefix caching
+// instead of deterministic all-or-nothing caching), and must receive
+// prompt_cache_retention (the official API supports it for the codex family).
+func TestOpenAICodexClientOfficialEndpointDropsCodexHeadersAndUsesAutomaticCache(t *testing.T) {
+	var path string
+	var beta string
+	var originator string
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		beta = r.Header.Get("OpenAI-Beta")
+		originator = r.Header.Get("originator")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":80}}}}\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICodexClientForEndpoint(server.URL, "sk-test", 5*time.Second, true)
+	resp, err := client.Call(context.Background(), protocol.Request{
+		Model:                "gpt-5.1-codex",
+		MaxTokens:            4096,
+		PromptCacheKey:       "session-abc",
+		PromptCacheRetention: "24h",
+		Messages: []protocol.APIMessage{{
+			Role:    protocol.RoleUser,
+			Content: []protocol.Block{protocol.TextBlock("hi")},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("official codex call: %v", err)
+	}
+	if path != "/responses" {
+		t.Fatalf("expected /responses endpoint, got %q", path)
+	}
+	if beta != "" {
+		t.Fatalf("did not expect OpenAI-Beta header on official endpoint, got %q", beta)
+	}
+	if originator != "" {
+		t.Fatalf("did not expect originator header on official endpoint, got %q", originator)
+	}
+	if _, ok := body["prompt_cache_key"]; ok {
+		t.Fatalf("did not expect prompt_cache_key on official endpoint (automatic prefix caching), got %#v", body)
+	}
+	if got := body["prompt_cache_retention"]; got != "24h" {
+		t.Fatalf("expected prompt_cache_retention=24h forwarded on official endpoint, got %#v", body["prompt_cache_retention"])
+	}
+	if got := body["store"]; got != false {
+		t.Fatalf("expected store=false, got %#v", got)
+	}
+	if resp.Usage == nil || resp.Usage.CacheReadTokens != 80 || resp.Usage.InputTokens != 20 {
+		t.Fatalf("expected usage {input:20, cache_read:80}, got %#v", resp.Usage)
+	}
+}
+
+// A plain OpenAI API key must not produce a chatgpt-account-id header, and an
+// api.openai.com base URL is detected as official automatically.
+func TestOpenAICodexClientDetectsOfficialEndpointFromBaseURL(t *testing.T) {
+	if !isOfficialResponsesBaseURL("https://api.openai.com/v1") {
+		t.Fatal("expected api.openai.com base URL to be detected as official")
+	}
+	if isOfficialResponsesBaseURL("https://chatgpt.com/backend-api/codex") {
+		t.Fatal("expected chatgpt.com base URL to NOT be detected as official")
+	}
+	if isOfficialResponsesBaseURL("") {
+		t.Fatal("expected empty base URL to NOT be detected as official")
+	}
+}
+
 func TestOpenAICodexClientStreamParsesResponsesEvents(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ export type EventType =
   | "assistant_text_delta"
   | "assistant_thinking_delta"
   | "assistant_message_completed"
+  | "model_request_completed"
   | "tool_call_started"
   | "tool_call_finished"
   | "todo_list_updated"
@@ -27,6 +28,30 @@ export interface RuntimeEvent {
 }
 
 export type SessionTimelineEntry = RuntimeEvent;
+
+/** Payload of `assistant_message_completed` (also used by text deltas). */
+export interface TextEventPayload {
+  role?: string;
+  text?: string;
+  /** Full accumulated reasoning text of the completed assistant message. */
+  thinking?: string;
+}
+
+/** Payload of `model_request_completed`: per-request usage + timing facts. */
+export interface ModelRequestPayload {
+  model?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  started_at?: string;
+  first_token_at?: string;
+  completed_at?: string;
+  duration_ms?: number;
+  ttft_ms?: number;
+  stop_reason?: string;
+  error?: string;
+}
 
 export interface CompactionRecord {
   timestamp: string;

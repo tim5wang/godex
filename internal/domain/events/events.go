@@ -17,6 +17,7 @@ const (
 	EventAssistantTextDelta       EventType = "assistant_text_delta"
 	EventAssistantThinkingDelta   EventType = "assistant_thinking_delta"
 	EventAssistantMessageComplete EventType = "assistant_message_completed"
+	EventModelRequestCompleted   EventType = "model_request_completed"
 	EventToolCallStarted          EventType = "tool_call_started"
 	EventToolCallFinished         EventType = "tool_call_finished"
 	EventTodoListUpdated          EventType = "todo_list_updated"
@@ -76,6 +77,27 @@ var NopSink Sink = SinkFunc(func(Event) {})
 type TextPayload struct {
 	Role string `json:"role,omitempty"`
 	Text string `json:"text"`
+	// Thinking carries the full accumulated reasoning text for the completed
+	// assistant message (populated on assistant_message_completed so timeline
+	// detail panels can show the model's reasoning alongside the answer).
+	Thinking string `json:"thinking,omitempty"`
+}
+
+// ModelRequestPayload records one completed model request with usage and
+// timing facts for timeline detail inspection (TTFT / duration / tokens).
+type ModelRequestPayload struct {
+	Model           string    `json:"model,omitempty"`
+	InputTokens     int       `json:"input_tokens,omitempty"`
+	OutputTokens    int       `json:"output_tokens,omitempty"`
+	CacheReadTokens int       `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int      `json:"cache_write_tokens,omitempty"`
+	StartedAt       time.Time `json:"started_at,omitempty"`
+	FirstTokenAt    time.Time `json:"first_token_at,omitempty"`
+	CompletedAt     time.Time `json:"completed_at,omitempty"`
+	DurationMS      int64     `json:"duration_ms,omitempty"`
+	TTFTMS          int64     `json:"ttft_ms,omitempty"`
+	StopReason      string    `json:"stop_reason,omitempty"`
+	Error           string    `json:"error,omitempty"`
 }
 
 // ToolCallPayload carries one tool invocation lifecycle event.

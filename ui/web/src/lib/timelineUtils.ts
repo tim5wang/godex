@@ -18,6 +18,7 @@ export const defaultTimelineTypes = [
   "tool_call_finished",
   "error_raised",
   "turn_completed",
+  "model_request_completed",
 ];
 
 export function defaultTimelineFilters(): TimelineFilterState {
@@ -41,6 +42,7 @@ export type ContextStatusSummary = {
 export const timelineEventTypeOptions = [
   "user_message_accepted",
   "assistant_message_completed",
+  "model_request_completed",
   "tool_call_started",
   "tool_call_finished",
   "warning_raised",
@@ -104,6 +106,8 @@ export function timelineEventLabel(event: SessionTimelineEntry) {
       return "User message";
     case "assistant_message_completed":
       return "Assistant reply";
+    case "model_request_completed":
+      return "Model request";
     case "tool_call_started":
       return "Tool started";
     case "tool_call_finished":
@@ -142,6 +146,8 @@ export function timelineEventSummary(event: SessionTimelineEntry) {
       return withAppObjectSummary(payload, previewText(String(payload.text ?? "")) || attachmentTimelineSummary(payload.attachments));
     case "assistant_message_completed":
       return previewText(String(payload.text ?? "")) || "Assistant message completed.";
+    case "model_request_completed":
+      return modelRequestTimelineSummary(payload);
     case "tool_call_started":
       return String(payload.name ?? "tool");
     case "tool_call_finished":
@@ -185,6 +191,36 @@ export function timelineEventSummary(event: SessionTimelineEntry) {
   }
 }
 
+export function modelRequestTimelineSummary(payload: Record<string, unknown>) {
+  const model = stringFromPayload(payload.model);
+  const input = numberFromPayload(payload.input_tokens);
+  const output = numberFromPayload(payload.output_tokens);
+  const cacheRead = numberFromPayload(payload.cache_read_tokens);
+  const cacheWrite = numberFromPayload(payload.cache_write_tokens);
+  const durationMs = numberFromPayload(payload.duration_ms);
+  const ttftMs = numberFromPayload(payload.ttft_ms);
+  const error = stringFromPayload(payload.error);
+  const parts: string[] = [];
+  if (model) parts.push(model);
+  if (input || cacheRead) {
+    const total = input + cacheRead;
+    parts.push(`${formatCompactNumber(total)} in${cacheRead > 0 ? ` (${Math.round((cacheRead / total) * 100)}% cached)` : ""}`);
+  }
+  if (output) parts.push(`${formatCompactNumber(output)} out`);
+  if (cacheWrite) parts.push(`${formatCompactNumber(cacheWrite)} cached`);
+  if (ttftMs) parts.push(`TTFT ${formatMs(ttftMs)}`);
+  if (durationMs) parts.push(formatMs(durationMs));
+  if (error) parts.push(`error: ${previewText(error)}`);
+  return parts.join(" · ") || "Model request completed.";
+}
+
+function formatMs(ms: number): string {
+  if (ms >= 1000) {
+    return `${(ms / 1000).toFixed(1)} s`;
+  }
+  return `${Math.round(ms)} ms`;
+}
+
 export function timelineEventFullText(event: SessionTimelineEntry, summary: string) {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const focused = [
@@ -193,6 +229,7 @@ export function timelineEventFullText(event: SessionTimelineEntry, summary: stri
     stringFromPayload(payload.error),
     stringFromPayload(payload.result),
     stringFromPayload(payload.text),
+    stringFromPayload(payload.thinking),
     stringFromPayload(payload.summary),
   ].filter(Boolean);
   if (focused.length > 0) {

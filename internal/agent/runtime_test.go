@@ -130,6 +130,7 @@ func TestRunWithOptionsEmitsLifecycleEvents(t *testing.T) {
 	}
 
 	want := []events.EventType{
+		events.EventModelRequestCompleted,
 		events.EventAssistantTextDelta,
 		events.EventAssistantMessageComplete,
 	}

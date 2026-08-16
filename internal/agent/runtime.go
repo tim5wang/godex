@@ -585,6 +585,10 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 	a.registerUsageHook(opts.SessionID)
 	a.resetIdle()
 	var ackRuntime func()
+	// thinkingBuf accumulates the reasoning deltas of the in-flight model call
+	// so the completed assistant message (and its timeline detail) can carry
+	// the full thinking text alongside the answer.
+	var thinkingBuf strings.Builder
 	sink := opts.Sink
 	if sink == nil {
 		sink = events.NopSink
@@ -698,10 +702,12 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			if text == "" {
 				return
 			}
+			thinkingBuf.WriteString(text)
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
 			emit(events.EventAssistantThinkingDelta, payload)
 		},
 		OnStreamStarted: func() {
+			thinkingBuf.Reset()
 			// The ChatGPT codex backend streams reasoning only as encrypted
 			// content, so there are no plaintext thinking deltas to forward.
 			// Emit a one-shot placeholder so the frontend shows "Thinking…"
@@ -713,8 +719,31 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			return a.compactForOverflow(ctx)
 		},
 		MaxContextOverflowRecoveries: 1,
+		OnModelRequest: func(req protocol.Request, resp *protocol.Response, startedAt, firstTokenAt, completedAt time.Time) {
+			payload := events.ModelRequestPayload{
+				Model:        req.Model,
+				StartedAt:    startedAt,
+				FirstTokenAt: firstTokenAt,
+				CompletedAt:  completedAt,
+				DurationMS:   completedAt.Sub(startedAt).Milliseconds(),
+			}
+			if !firstTokenAt.IsZero() && firstTokenAt.After(startedAt) {
+				payload.TTFTMS = firstTokenAt.Sub(startedAt).Milliseconds()
+			}
+			if resp != nil {
+				payload.StopReason = resp.StopReason
+				if resp.Usage != nil {
+					payload.InputTokens = resp.Usage.InputTokens
+					payload.OutputTokens = resp.Usage.OutputTokens
+					payload.CacheReadTokens = resp.Usage.CacheReadTokens
+					payload.CacheWriteTokens = resp.Usage.CacheWriteTokens
+				}
+			}
+			emit(events.EventModelRequestCompleted, payload)
+		},
 		OnAssistantText: func(text string) {
-			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
+			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text, Thinking: thinkingBuf.String()}
+			thinkingBuf.Reset()
 			emit(events.EventAssistantMessageComplete, payload)
 		},
 		OnToolStarted: func(block protocol.Block) {

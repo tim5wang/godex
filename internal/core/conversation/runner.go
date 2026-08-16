@@ -182,6 +182,12 @@ type Runner struct {
 	// event arrives; frontends show a "thinking…" placeholder for providers
 	// that stream no plaintext reasoning (e.g. the ChatGPT codex backend).
 	OnStreamStarted func()
+	// OnModelRequest is invoked once per model call after it completes, with
+	// the request, the (possibly nil on error) response, and wall-clock timing
+	// facts: startedAt, firstTokenAt (zero when the provider did not signal a
+	// first event), and completedAt. Timeline detail panels use it to show
+	// per-request usage (tokens / cache reads) and TTFT / duration.
+	OnModelRequest func(req protocol.Request, resp *protocol.Response, startedAt, firstTokenAt, completedAt time.Time)
 	// OnContextOverflow is invoked when the provider rejects the request for
 	// exceeding its context window (Phase 4.2). It should compact the history;
 	// returning true makes the runner rebuild the request and retry from the
@@ -866,6 +872,8 @@ func hashString(value string) string {
 }
 
 func (r Runner) callModel(ctx context.Context, req protocol.Request) (*protocol.Response, bool, error) {
+	startedAt := time.Now()
+	var firstTokenAt time.Time
 	if streamer, ok := r.Caller.(StreamCaller); ok {
 		resp, err := streamer.Stream(ctx, req, StreamHandler{
 			OnTextDelta: r.OnAssistantTextDelta,
@@ -875,14 +883,24 @@ func (r Runner) callModel(ctx context.Context, req protocol.Request) (*protocol.
 				}
 			},
 			OnStreamStarted: func() {
+				if firstTokenAt.IsZero() {
+					firstTokenAt = time.Now()
+				}
 				if r.OnStreamStarted != nil {
 					r.OnStreamStarted()
 				}
 			},
 		})
+		completedAt := time.Now()
+		if r.OnModelRequest != nil {
+			r.OnModelRequest(req, resp, startedAt, firstTokenAt, completedAt)
+		}
 		return resp, true, err
 	}
 	resp, err := r.Caller.Call(ctx, req)
+	if r.OnModelRequest != nil {
+		r.OnModelRequest(req, resp, startedAt, firstTokenAt, time.Now())
+	}
 	return resp, false, err
 }
 

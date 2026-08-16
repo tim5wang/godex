@@ -19,14 +19,42 @@ import (
 	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
-// OpenAICodexClient talks to the ChatGPT Codex OAuth backend. This mirrors
-// temp/pi-go's Codex path: openai-go Responses streaming against
+// OpenAICodexClient talks to the ChatGPT Codex OAuth backend, or to the
+// official OpenAI Responses API when baseURL points at api.openai.com. This
+// mirrors temp/pi-go's Codex path: openai-go Responses streaming against
 // https://chatgpt.com/backend-api/codex with Codex-specific headers.
 type OpenAICodexClient struct {
-	client openai.Client
+	client   openai.Client
+	official bool // true when speaking the official api.openai.com Responses API
 }
 
+// isOfficialResponsesBaseURL reports whether the base URL is the official
+// OpenAI platform Responses API rather than the ChatGPT Codex OAuth endpoint.
+func isOfficialResponsesBaseURL(baseURL string) bool {
+	return strings.Contains(baseURL, "api.openai.com")
+}
+
+// NewOpenAICodexClient derives the endpoint flavor from baseURL and delegates
+// to NewOpenAICodexClientForEndpoint.
 func NewOpenAICodexClient(baseURL, token string, timeout time.Duration) *OpenAICodexClient {
+	return NewOpenAICodexClientForEndpoint(baseURL, token, timeout, isOfficialResponsesBaseURL(baseURL))
+}
+
+// NewOpenAICodexClientForEndpoint is NewOpenAICodexClient with an explicit
+// official-endpoint flag (test hook; production callers use the detection in
+// NewOpenAICodexClient).
+//
+// Differences on the official endpoint (base_url https://api.openai.com/v1):
+//   - codex-specific headers (originator, OpenAI-Beta responses=experimental,
+//     chatgpt-account-id) are omitted — they belong to the chatgpt.com OAuth
+//     backend only;
+//   - prompt_cache_retention IS forwarded (the official API supports it for
+//     the gpt-5.x-codex family; the OAuth endpoint rejects it with HTTP 400);
+//   - prompt_cache_key is NOT forwarded, so the request uses the official
+//     automatic prefix caching (longest-byte-prefix match, cached input billed
+//     at 0.1×) instead of deterministic prompt_cache_key caching, whose
+//     all-or-nothing semantics are unsafe for a growing agent prefix.
+func NewOpenAICodexClientForEndpoint(baseURL, token string, timeout time.Duration, official bool) *OpenAICodexClient {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"
@@ -38,14 +66,18 @@ func NewOpenAICodexClient(baseURL, token string, timeout time.Duration) *OpenAIC
 	opts := []option.RequestOption{
 		option.WithAPIKey(token),
 		option.WithBaseURL(baseURL),
-		option.WithHeader("originator", "godex"),
-		option.WithHeader("OpenAI-Beta", "responses=experimental"),
 		option.WithHTTPClient(httpClient),
 	}
-	if accountID := codexAccountIDFromToken(token); accountID != "" {
-		opts = append(opts, option.WithHeader("chatgpt-account-id", accountID))
+	if !official {
+		opts = append(opts,
+			option.WithHeader("originator", "godex"),
+			option.WithHeader("OpenAI-Beta", "responses=experimental"),
+		)
+		if accountID := codexAccountIDFromToken(token); accountID != "" {
+			opts = append(opts, option.WithHeader("chatgpt-account-id", accountID))
+		}
 	}
-	return &OpenAICodexClient{client: openai.NewClient(opts...)}
+	return &OpenAICodexClient{client: openai.NewClient(opts...), official: official}
 }
 
 func (c *OpenAICodexClient) Call(ctx context.Context, req protocol.Request) (*protocol.Response, error) {
@@ -59,7 +91,7 @@ func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, ha
 	defer func() {
 		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start), Stream: true})
 	}()
-	params := codexResponsesParams(req)
+	params := c.codexResponsesParams(req)
 	logParams, _ := json.Marshal(params)
 	logger.Debugf("OpenAI Codex Responses Stream Call: %s", string(logParams))
 
@@ -102,19 +134,16 @@ func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, ha
 	return response, nil
 }
 
-func codexResponsesParams(req protocol.Request) responses.ResponseNewParams {
+func (c *OpenAICodexClient) codexResponsesParams(req protocol.Request) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: req.Model,
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: codexInputFromProtocol(req),
 		},
-		// store must stay false: the ChatGPT codex OAuth endpoint
-		// (chatgpt.com/backend-api/codex) rejects store=true with HTTP 400
-		// (same as prompt_cache_retention). Measured with store=false the
-		// backend reports a fixed ~2560 cached tokens regardless of a
-		// byte-stable growing prefix, so conversation prefix caching is not
-		// available on this endpoint; input size is the only cache lever
-		// (handled by compaction retention).
+		// store stays false on both endpoints: the ChatGPT codex OAuth
+		// endpoint rejects store=true with HTTP 400 (measured live), and the
+		// official API allows it but we keep responses out of server-side
+		// storage. Cache behavior is independent of store.
 		Store: param.NewOpt(false),
 		Include: []responses.ResponseIncludable{
 			responses.ResponseIncludableReasoningEncryptedContent,
@@ -137,13 +166,27 @@ func codexResponsesParams(req protocol.Request) responses.ResponseNewParams {
 			Summary: shared.ReasoningSummaryAuto,
 		}
 	}
-	// Prompt cache affinity: without a stable cache key the provider can only
-	// fall back to implicit longest-prefix matching, which measured ~45% cache
-	// hit rate on long sessions (vs ~98% with session-affinity routing). The
-	// Codex OAuth endpoint at chatgpt.com/backend-api/codex does NOT accept
-	// prompt_cache_retention (returns 400). We forward only the cache key;
-	// prompt_cache_retention is consumed independently by Anthropic and
-	// OpenAI-compatible clients where it controls cache_control TTL.
+	// Prompt cache affinity. On the chatgpt.com OAuth endpoint we forward the
+	// stable session cache key and nothing else: the backend rejects
+	// prompt_cache_retention with HTTP 400, and its caching is capped server
+	// side anyway. On the official api.openai.com endpoint we forward
+	// prompt_cache_retention (supported for the gpt-5.x-codex family, extends
+	// the prefix cache TTL to 24h) and deliberately do NOT forward
+	// prompt_cache_key: deterministic prompt_cache_key caching is
+	// all-or-nothing on the whole prompt and would never hit for a growing
+	// agent prefix, while the official automatic prefix caching does
+	// longest-byte-prefix matching and bills cached input at 0.1×.
+	if c.official {
+		if retention := strings.TrimSpace(req.PromptCacheRetention); retention != "" {
+			switch retention {
+			case "24h":
+				params.PromptCacheRetention = responses.ResponseNewParamsPromptCacheRetention24h
+			default:
+				params.PromptCacheRetention = responses.ResponseNewParamsPromptCacheRetentionInMemory
+			}
+		}
+		return params
+	}
 	if key := strings.TrimSpace(req.PromptCacheKey); key != "" {
 		params.PromptCacheKey = param.NewOpt(key)
 	}

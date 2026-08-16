@@ -8,6 +8,18 @@
 
 GoDex is a local-first AI agent workspace. It connects CLI, TUI, Web, HTTP API, Feishu, Weixin, and other entry points to the same backend so chat, tool execution, file attachments, long-term memory, subagents, approvals, and run audits share one session runtime.
 
+## Screenshots
+
+### tui
+![](./docs/_images/tui.png)
+
+### web ui
+![](./docs/_images/web_ui_chat_1.png)
+
+### web ui in mobile
+![](./docs/_images/web_ui_mobile_remote.jpg)
+Running a telemetry session
+
 ## Product Positioning
 
 GoDex is built for teams and individuals who need AI agents to work inside real engineering workflows:
@@ -148,6 +160,15 @@ examples/skills/package-developer
 
 After installing this local skill from the Web `Skills` installer or Chat, load `package-developer` to get guidance for creating `godex.package.yaml`, running smoke tests, installing GitHub packages, reinstalling, and uninstalling.
 
+## Telemetry
+
+GoDex is local-first: **no data is reported to any external service by default**. Telemetry has two layers, and both only work when you explicitly enable them:
+
+- **Control Plane node telemetry**: when a node configures `control.center_url` + `control.credential` and joins a center, the node periodically pushes a local runtime snapshot to the center over the relay — running sessions (id/title/running/updated_at), longtask progress (status/phase/turn/total), pending approval requests (tool/action/paths), plus the node version and capabilities. The center's **Nodes** page and `GET /control/nodes/{id}/overview` render this live progress (as shown in the mobile telemetry screenshot above). **Without joining a center (the default) no push happens at all**; snapshots contain summary-level state only, full session history always stays on the node, and the center only observes read-only without storing session content.
+- **LLM usage tracking**: token usage and cache hits for every model call are recorded into a local SQLite store (the `usage` service) and surfaced through the Web **Usage** panel and the `/usage/*` API — for cost/usage statistics only, never uploaded.
+
+Privacy boundary: all telemetry data lives under `~/.godex` locally; only an explicitly configured center join pushes the summary state above, and the center never persists full session history.
+
 ## Agent Profile
 
 `agent.profile` is an entry-point/task prompt policy that controls the default response style and capability-usage guidance; it does not replace `security.profile`. The default entry-point policy is:
@@ -157,10 +178,60 @@ After installing this local skill from the Web `Skills` installer or Chat, load 
 
 Note: the tool catalog is identical for both profiles (same always-active / default-active tool set); the difference is the system prompt and injected runtime sections (coding replaces the skill catalog with a repo map). CLI/TUI/ACP can temporarily override with `--profile general|coding`; `GODEX_AGENT_PROFILE` or Web `Settings` → `agent.default_profiles.*` also work.
 
+## Milestones
+
+### Current Baseline (implemented as of 2026-08)
+
+GoDex 1.x is already a local-first, deployable, auditable agent workspace:
+
+**Runtime and Resilience**
+- One shared session runtime across CLI, TUI, Web, HTTP API, Feishu, Weixin, Cron, and Heartbeat.
+- Async turn runtime with a durable event journal and checkpoints; idempotent storage (cron/heartbeat); worker leases (crashes are marked `interrupted`, never auto-rerun); restart recovery.
+- Turn error layering (Retryable/Transient/NonRetryable), loop guard (no-mutation spiral detection), runner phase checkpoints, and empty-reply/`finish_reason=length` recovery.
+- Harness multi-engine abstraction with per-turn engine hot-switching.
+
+**Multi-Agent Orchestration**
+- Durable subagent jobs: review/merge/cancel/resume/iterate, role→bundle mapping with write-scope linkage, per-role context budgets, and compact handoff.
+- `workflow` and `agent_graph`: dynamic parallel DAGs (data_dependency / control_flow / handoff edges), recoverable across restarts.
+- LongTask story loop: compile PRD/user stories into dynamic parallel DAGs, auto-repair, validation artifacts, auto merge/commit, and `--resume-run-id` continuation.
+- Branchable sessions (fork/rollback/merge) with a persisted session graph.
+
+**Context and Memory**
+- Model-assisted compression with pinned continuation snapshots, rule-based fallback, transcript archive, and `history_search`.
+- Durable memory: candidate inbox, suppression, audit/restore, SQLite + FTS5 sidecar, scope-aware recall, project miner, memory strategies (per-turn/agent-only/consolidated), and foldCapture dedup.
+- Bidirectional notes↔memory linkage, context inspector, and token estimation.
+
+**Tools and Safety**
+- 56 tools across 14 bundles: shell/file/grep(ripgrep)/LSP/browser/desktop/web/memory/skill/package/subagent/workflow/MCP/teamtools, with on-demand activation via `tool_exchange`.
+- WorkspaceFS file boundaries, shell guard, manual/review/yolo approval, security profiles (trusted-local … dev/repair), content security screener, loop guard, and security audit.
+- Scope isolation (session/personal/org) with write-path restriction.
+
+**Ecosystem and Governance**
+- Package/Skill ecosystem: manifests (resources/app/tool_policy/smoke_tests/recommended_bundles), quality diagnostics, smoke runs, reinstall, and Claude Code import.
+- Automation and channels: Cron (at/every/cron), Heartbeat (HEARTBEAT.md checklist + OK token), Feishu, Weixin, and the OpenAI-compatible `/v1/*` API.
+- Control Plane: Node Registry + Relay hub (outbound WSS join), `node exec/forward` jump-host, and `guarded-remote` approval headers.
+- Storage doctor/GC, LLM usage tracking, single-binary Web UI, and self-managed `service install`.
+
+### GoDex 2.0 Planning (in progress)
+
+GoDex 2.0 aims to evolve from a single large agent workspace into an agent runtime platform that can carry heavy workloads. Current progress:
+
+| Direction | Status | Notes |
+|----------|--------|-------|
+| **Agent / Sandbox Decoupling** | ✅ interface landed | `Sandbox` interface + `LocalSandbox` + scope isolation (roadmap 3.3/6.2); future work is more backends (WASM, remote) |
+| **Orchestrator / Worker Decoupling** | 🚧 in progress | Durable subagent/workflow/longtask runtime exists; target is a cleaner worker runtime protocol and capability boundaries |
+| **Session Memory Tree** | 🚧 partially landed | fork/rollback/merge implemented (`sessiongraph`); target is fuller versioned context (clone, rebuild, cross-storage) |
+| **Session / Storage Decoupling** | ✅ dual backend | JSON + SQLite mirror (`sessionstore`); future: databases and cloud storage |
+| **Unified Plugin Kernel** | 📋 planned | Plugin Kernel + optional WASM executor + full MCP client; see the [DSH research notes](docs/research_of_dsh_for_godex_optimize.md) |
+
+See the [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md) for the detailed direction.
+
 ## Documentation
 
 - [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md): Agent/Sandbox, Orchestrator/Worker, Session Graph, and storage decoupling roadmap.
 - [User Guide](docs/user-guide.md): Installation, configuration, providers, Web UI, tools, Memory, API, and release checks.
+- [Code & Design Review](docs/code-review-2026-08-15.md): Doc-vs-implementation consistency audit and code-side findings.
+- [DSH Research Notes](docs/research_of_dsh_for_godex_optimize.md): What GoDex can learn from DeepSeek Harness's plugin design (plugin kernel, WASM boundaries, roadmap).
 - [Project Structure](docs/project-structure.md): Directory responsibilities and refactoring boundaries.
 - [Memory Design Principles](docs/memory-design-principles.md): Long-term memory, candidates, recall, and audit design.
 - [Workflow Runtime](docs/workflow-runtime.md): Workflow/subagent runtime design.

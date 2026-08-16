@@ -8,6 +8,18 @@
 
 GoDex 是一个本地优先的 AI Agent 工作台。它把 CLI、TUI、Web、HTTP API、Feishu/Weixin 等入口接到同一套后端，让聊天、工具执行、文件附件、长期记忆、子 agent、审批和运行审计共享同一个 session runtime。
 
+## 界面速览
+
+### tui
+![](./docs/_images/tui.png)
+
+### web ui
+![](./docs/_images/web_ui_chat_1.png)
+
+### web ui in mobile
+![](./docs/_images/web_ui_mobile_remote.jpg)
+图中是在执行遥测
+
 ## 产品定位
 
 GoDex 面向需要把 AI Agent 真正接入日常工程工作流的团队和个人：
@@ -149,6 +161,15 @@ examples/skills/package-developer
 
 在 Web `Skills` 的安装入口或 Chat 中安装这个本地 skill 后加载 `package-developer`，它会指导创建 `godex.package.yaml`、测试 smoke、安装 GitHub package、重装和卸载。
 
+## 遥测（Telemetry）
+
+GoDex 本地优先：**默认不向任何外部服务上报数据**。遥测能力分两层，都只在你显式启用时工作：
+
+- **Control Plane 节点遥测**：当节点配置了 `control.center_url` + `control.credential` 并接入中心时，节点会通过 relay 周期性把本地运行快照推送给中心——包括运行中的 session（id/title/running/updated_at）、longtask 进度（status/phase/turn/total）与待审批请求（tool/action/paths），以及节点版本与能力列表。中心「Nodes」页与 `GET /control/nodes/{id}/overview` 据此展示实时进度（如图中手机端所见的遥测面板）。**不接入中心（默认）则不会产生任何推送**；快照只含摘要级状态，完整会话历史始终保留在节点本地，中心只读观测、不存会话内容。
+- **LLM 用量追踪**：每次模型调用的 token 用量与缓存命中会记录到本地 SQLite（`usage` 服务），通过 Web `Usage` 面板与 `/usage/*` API 查看，仅用于成本与用量统计，不上传。
+
+隐私边界：所有遥测数据默认落在 `~/.godex` 本地；只有显式配置中心接入时，才向该中心推送上述摘要状态，且中心不持久化完整会话历史。
+
 ## Agent Profile
 
 `agent.profile` 是入口/任务提示词策略（控制默认回复风格与能力使用引导），不替代 `security.profile`。默认入口策略是：
@@ -160,25 +181,49 @@ examples/skills/package-developer
 
 ## 里程碑
 
-### 1.0 已实现
+### 当前基线（2026-08 已实现）
 
-GoDex 1.0 的目标是成为本地优先、可部署、可审计的 Agent 工作台：
+GoDex 1.x 已经是一个本地优先、可部署、可审计的 Agent 工作台：
 
-- 多入口共享同一个 session runtime：CLI、TUI、Web、HTTP API、Feishu、Weixin。
-- Web 工作台覆盖 Chat、Settings、Nodes、Notes、Skills、Memory、Automation、Context & Recall 和审批。
-- 工具体系支持 shell/file/browser/web/memory/skill/package/MCP/automation，并接入 approval/security policy。
-- 支持 durable memory、history recall、context compaction、transcript archive 和 context inspection。
-- 支持 durable subagent job、workflow、longtask、review/merge/cancel/resume 和运行进度追踪。
-- 支持单二进制 Web UI、自部署 service install、storage doctor 和 GC。
+**运行时与韧性**
+- 多入口共享同一个 session runtime：CLI、TUI、Web、HTTP API、Feishu、Weixin、Cron、Heartbeat。
+- 异步 turn runtime + durable event journal + checkpoint；幂等存储（cron/heartbeat）；worker lease（崩溃标记 interrupted 不自动重跑）；重启恢复。
+- Turn Error 分层（Retryable/Transient/NonRetryable）、loop guard（no-mutation 螺旋检测）、runner phase checkpoint、空回复/`finish_reason=length` 恢复。
+- Harness 多引擎抽象与 per-turn 引擎热切换。
 
-### 2.0 规划
+**多 Agent 编排**
+- durable subagent job：review / merge / cancel / resume / iterate、角色→bundle 映射、写 scope 联动、按角色上下文预算、compact handoff。
+- `workflow` 与 `agent_graph`：动态并行 DAG（data_dependency / control_flow / handoff 边）、重启可恢复。
+- LongTask story loop：按 PRD/user stories 编译动态并行 DAG、auto-repair、validation artifact、auto merge/commit、`--resume-run-id` 续跑。
+- 会话分支（fork / rollback / merge）与 session 图持久化。
 
-GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的 Agent Runtime 平台：
+**Context 与 Memory**
+- 带 pinned continuation snapshot 的模型辅助压缩、rule-based fallback、transcript archive、`history_search`。
+- durable memory：candidate inbox、suppression、audit/restore、SQLite + FTS5 sidecar、scope-aware recall、project miner、记忆策略（per-turn / agent-only / consolidated）、foldCapture 去重。
+- 笔记 ↔ 记忆双向联动、context inspector、token 估算。
 
-- **Agent 与 Sandbox 解耦**：Agent 表达“我是谁、我能干什么、我会怎么干”，Sandbox 表达“在哪里干活、能动哪些手、坏了如何重建”。
-- **Orchestrator 与 Worker 解耦**：主 Agent 保持上下文干净，负责规划、指挥、验收和合并；Worker Agent 在独立 sandbox 中执行脏活累活。
-- **Session 记忆树**：支持 branch、clone、rollback、merge、rebuild，让主线和 worker 探索可以像版本化上下文一样管理。
-- **Session 与存储介质解耦**：通过 store/repository 接口支持 JSON、SQLite、数据库和云存储等后端。
+**工具与安全**
+- 56 个工具 / 14 个 bundle：shell/file/grep(ripgrep)/LSP/browser/desktop/web/memory/skill/package/subagent/workflow/MCP/teamtools 等，`tool_exchange` 按需启用。
+- WorkspaceFS 文件边界、shell guard、manual/review/yolo 审批、安全 profile（trusted-local … dev/repair）、内容安全筛查器、loop guard、security audit。
+- Scope 隔离（session / personal / org）与写路径限定。
+
+**生态与治理**
+- Package / Skill 生态：manifest（resources/app/tool_policy/smoke_tests/recommended_bundles）、quality 诊断、smoke run、reinstall、Claude Code import。
+- Automation 与 Channel：Cron（at/every/cron）、Heartbeat（HEARTBEAT.md checklist + OK token）、Feishu、Weixin、OpenAI-compatible `/v1/*` API。
+- Control Plane：Node Registry + Relay 中继（WSS 出站接入）、`node exec/forward` 跳板、`guarded-remote` 审批头。
+- Storage doctor / GC、LLM 用量追踪、单二进制 Web UI、自部署 `service install`。
+
+### 2.0 规划（进行中）
+
+GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的 Agent Runtime 平台。当前进展：
+
+| 方向 | 状态 | 说明 |
+|------|------|------|
+| **Agent 与 Sandbox 解耦** | ✅ 接口已落地 | `Sandbox` 接口 + `LocalSandbox` + scope 隔离已实现（roadmap 3.3/6.2）；后续方向是更多后端（WASM、远程） |
+| **Orchestrator 与 Worker 解耦** | 🚧 进行中 | 已有 durable subagent / workflow / longtask runtime；目标是更清晰的 worker runtime 协议与能力边界 |
+| **Session 记忆树** | 🚧 部分落地 | fork / rollback / merge 已实现（`sessiongraph`）；目标是更完整的版本化上下文（clone、rebuild、跨存储） |
+| **Session 与存储介质解耦** | ✅ 双后端已实现 | JSON + SQLite 镜像（`sessionstore`）；后续支持数据库、云存储等后端 |
+| **统一插件内核** | 📋 规划中 | Plugin Kernel + 可选 WASM 执行器 + MCP 完整 client；设计见 [DSH 研究笔记](docs/research_of_dsh_for_godex_optimize.md) |
 
 详细架构方向见 [GoDex 2.0 架构 SPEC](docs/architecture-v2-spec.md)。
 
@@ -187,6 +232,7 @@ GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的
 - [GoDex 2.0 架构 SPEC](docs/architecture-v2-spec.md)：Agent/Sandbox、Orchestrator/Worker、Session Graph 和存储解耦路线。
 - [用户指南](docs/user-guide.md)：安装、配置、Provider、CLI、Web UI、工具、Memory、命令、HTTP API、自动化、安全、故障排查。
 - [代码与设计 Review](docs/code-review-2026-08-15.md)：文档↔实现一致性审查与代码侧发现。
+- [DSH 研究笔记](docs/research_of_dsh_for_godex_optimize.md)：DeepSeek Harness 插件设计对 GoDex 的改进启示（插件内核、WASM 边界、路线图）。
 - [项目结构](docs/project-structure.md)：目录职责和重构边界。
 - [Memory 设计原则](docs/memory-design-principles.md)：长期记忆、候选、召回和审计设计。
 - [Workflow Runtime](docs/workflow-runtime.md)：workflow/subagent runtime 设计。

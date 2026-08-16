@@ -96,6 +96,71 @@ type acpRunResult struct {
 // the ACP harness (阶段 C: Pi/其他 ACP agent 的 Harness adapter).
 type ACPRunResult = acpRunResult
 
+// ACPUpdate is one structured session/update event captured from the external
+// engine, mapped onto GoDex events by the harness (P2 #4 unified event
+// mapping). Kind is one of "plan", "tool_call", "tool_call_update", or
+// "message_chunk".
+type ACPUpdate struct {
+	Kind      string         `json:"kind"`
+	Name      string         `json:"name,omitempty"`
+	Text      string         `json:"text,omitempty"`
+	Input     map[string]any `json:"input,omitempty"`
+	Raw       string         `json:"raw,omitempty"`
+}
+
+// UpdateEvents returns the structured session/update events captured during
+// the run (empty when the engine sent none).
+func (r ACPRunResult) UpdateEvents() []ACPUpdate {
+	var out []ACPUpdate
+	for _, raw := range r.Updates {
+		update, ok := parseACPUpdate(raw)
+		if ok {
+			out = append(out, update)
+		}
+	}
+	return out
+}
+
+// parseACPUpdate turns one raw session/update payload into a structured event.
+func parseACPUpdate(raw string) (ACPUpdate, bool) {
+	var payload struct {
+		SessionUpdate string                 `json:"sessionUpdate"`
+		Name          string                 `json:"name"`
+		Content       map[string]interface{} `json:"content"`
+		Input         map[string]any         `json:"input"`
+		ToolCallID    string                 `json:"toolCallId"`
+		ID            string                 `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ACPUpdate{}, false
+	}
+	switch payload.SessionUpdate {
+	case "agent_message_chunk":
+		text := ""
+		if content, ok := payload.Content["text"].(string); ok {
+			text = content
+		}
+		return ACPUpdate{Kind: "message_chunk", Text: text, Raw: raw}, true
+	case "plan":
+		return ACPUpdate{Kind: "plan", Raw: raw}, true
+	case "tool_call", "tool_call_update":
+		name := payload.Name
+		if name == "" {
+			name = payload.ToolCallID
+		}
+		if name == "" {
+			name = payload.ID
+		}
+		kind := "tool_call"
+		if payload.SessionUpdate == "tool_call_update" {
+			kind = "tool_call_update"
+		}
+		return ACPUpdate{Kind: kind, Name: name, Input: payload.Input, Raw: raw}, true
+	default:
+		return ACPUpdate{}, false
+	}
+}
+
 // RunACPAgent runs one prompt against a configured ACP agent over stdio and
 // returns the collected reply text plus session metadata. It is the exported
 // form of the acp_agent tool's internal runner so engines can delegate turns.
@@ -297,6 +362,10 @@ func (c *acpClient) captureUpdate(raw json.RawMessage) {
 		if content, ok := payload.Update["content"].(map[string]interface{}); ok {
 			if text, ok := content["text"].(string); ok {
 				c.text.WriteString(text)
+				data, _ := json.Marshal(payload.Update)
+				if len(data) > 0 {
+					c.updates = append(c.updates, string(data))
+				}
 			}
 		}
 	case "plan", "tool_call", "tool_call_update":

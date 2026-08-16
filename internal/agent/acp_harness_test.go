@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tim5wang/godex/internal/core/config"
@@ -41,7 +42,22 @@ func TestACPFakeServer(t *testing.T) {
 			result = map[string]any{"sessionId": "acp-fake-1"}
 		case "session/prompt":
 			result = map[string]any{"stopReason": "end_turn"}
-			// Send a streaming update the client collects into text.
+			// Send a tool_call update then a streaming text chunk.
+			toolCall := map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "session/update",
+				"params": map[string]any{
+					"sessionId": "acp-fake-1",
+					"update": map[string]any{
+						"sessionUpdate": "tool_call",
+						"name":          "acp_builtin_tool",
+						"input":         map[string]any{"query": "x"},
+					},
+				},
+			}
+			line, _ := json.Marshal(toolCall)
+			fmt.Fprintln(os.Stdout, string(line))
+			// Streaming text chunk.
 			update := map[string]any{
 				"jsonrpc": "2.0",
 				"method":  "session/update",
@@ -53,7 +69,7 @@ func TestACPFakeServer(t *testing.T) {
 					},
 				},
 			}
-			line, _ := json.Marshal(update)
+			line, _ = json.Marshal(update)
 			fmt.Fprintln(os.Stdout, string(line))
 		default:
 			result = map[string]any{}
@@ -198,3 +214,66 @@ func TestRunWithOptionsRoutesToACPHarnessAndConsumesReply(t *testing.T) {
 type recordingSink struct{}
 
 func (s *recordingSink) Emit(events.Event) {}
+
+// capturingSink records emitted events for assertion.
+type capturingSink struct {
+	mu     sync.Mutex
+	events []events.Event
+}
+
+func (s *capturingSink) Emit(event events.Event) {
+	s.mu.Lock()
+	s.events = append(s.events, event)
+	s.mu.Unlock()
+}
+
+func (s *capturingSink) Snapshot() []events.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]events.Event{}, s.events...)
+}
+
+// TestACPHarnessMapsUpdatesToEvents verifies P2 #4: the external engine's
+// session/update events (tool_call + message chunk) are replayed as GoDex
+// events through the sink.
+func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	sink := &capturingSink{}
+	h := NewACPHarness("fake-acp", acpHarnessConfig(t))
+	_, err := h.RunTurn(context.Background(), HarnessTurnInput{
+		SessionID: "s1",
+		TurnID:    "t1",
+		Sink:      sink,
+		Messages: func() []protocol.Message {
+			return []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "run the analysis")}
+		},
+	})
+	if err != nil {
+		t.Fatalf("run turn: %v", err)
+	}
+	emitted := sink.Snapshot()
+	if len(emitted) < 2 {
+		t.Fatalf("expected at least 2 mapped events, got %d", len(emitted))
+	}
+	var sawTool, sawDelta bool
+	for _, event := range emitted {
+		switch event.Type {
+		case events.EventToolCallStarted:
+			if payload, ok := event.Payload.(events.ToolCallPayload); ok && payload.Name == "acp_builtin_tool" {
+				sawTool = true
+			}
+		case events.EventAssistantTextDelta:
+			if payload, ok := event.Payload.(events.TextPayload); ok && strings.Contains(payload.Text, "hello from acp") {
+				sawDelta = true
+			}
+		}
+	}
+	if !sawTool {
+		t.Fatal("expected tool_call event mapped from ACP update")
+	}
+	if !sawDelta {
+		t.Fatal("expected assistant_text_delta event mapped from ACP chunk")
+	}
+}

@@ -153,14 +153,14 @@ type Effect func(context.Context) error
 
 这是后续 WASM、动态 MCP provider、Package 执行能力的共同基础。
 
-### P2：完善 Agent Engine 接入 ✅ 第 1、2、3 项已落地，第 4、5 项待做
+### P2：完善 Agent Engine 接入 ✅ 第 1、2、3、4 项已落地，第 5 项部分落地
 
 `agent.Harness` 抽象已经存在，但生产环境只有内建 GoDex engine。建议补齐：
 
 1. `HarnessTurnInput` 提供稳定的消息/会话访问面，而不是依赖 `*Agent` 内部状态 —— ✅ `HarnessTurnInput` 新增 `Messages func() []protocol.Message`（快照提供者）、`WorkspaceDir`、`UsageContext`；宿主在 `RunWithOptions` 填充，外部 engine 只消费这些输入（见 `internal/agent/{harness,runtime}.go`）；
 2. 由宿主统一消费 `HarnessTurnResult.Reply`、写 transcript 并 checkpoint —— ✅ harness 分支在 `RunTurn` 后把 `Reply` 追加进 transcript、触发 checkpoint 并发出 `assistant_message_completed` 事件（`internal/agent/runtime.go`）；
 3. 将 Harness registry 改为动态、generation-aware，移除 `sync.Once` 快照限制 —— ✅ `harnessRouter` 增加并发安全的 `Register`（`sync.RWMutex`），`Agent.RegisterHarness` 在 router 已构建后仍生效（见 `internal/agent/{harness,session_state}.go`）；
-4. 统一 text delta、tool、usage、error、permission 等事件映射 —— ⏳ 待做；
+4. 统一 text delta、tool、usage、error、permission 等事件映射 —— ✅ 部分：ACP 外部 engine 的 session/update 事件（message chunk → `assistant_text_delta`、tool_call → `tool_call_started/finished`）由 `ACPHarness.emitUpdateEvents` 重放为 GoDex 事件（`tools.ACPUpdate`/`ACPRunResult.UpdateEvents` 结构化解析）；usage/error/permission 映射待补；
 5. 明确外部 engine 的 workspace、scope 和工具权限 —— ✅ 部分：`WorkspaceDir` 由宿主注入；ACP 外部 engine 不声称 GoDex 工具（`Tools()` 为空），权限边界以「不转发工具注册」为默认；scope 联动待做。
 
 Pi 等外部 agent 的近期接入顺序建议是：
@@ -168,7 +168,7 @@ Pi 等外部 agent 的近期接入顺序建议是：
 ```text
 先通过 ACP 作为任务委派 Agent ✅
           ↓
-验证 session、事件和权限语义 ✅（宿主统一消费 Reply + checkpoint + 事件）
+验证 session、事件和权限语义 ✅（宿主统一消费 Reply + checkpoint + 事件映射）
           ↓
 再封装为 PiHarness 接管完整 Turn ⏳
 ```

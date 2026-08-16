@@ -3,10 +3,12 @@ package agent
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -72,10 +74,52 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 	if err != nil {
 		return HarnessTurnResult{}, err
 	}
+	// P2 #4 unified event mapping: replay the external engine's session/update
+	// events as GoDex events (text deltas, tool calls) so downstream sinks see
+	// the same shape as the default engine.
+	h.emitUpdateEvents(input, result.UpdateEvents())
 	return HarnessTurnResult{
 		Reply:     strings.TrimSpace(result.Text),
 		Completed: true,
 	}, nil
+}
+
+// emitUpdateEvents maps captured ACP updates onto GoDex events.
+func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.ACPUpdate) {
+	sink := input.Sink
+	if sink == nil {
+		return
+	}
+	emit := func(eventType events.EventType, payload any) {
+		sink.Emit(events.Event{
+			SessionID: input.SessionID,
+			TurnID:    input.TurnID,
+			Type:      eventType,
+			Timestamp: time.Now(),
+			Payload:   payload,
+		})
+	}
+	for _, update := range updates {
+		switch update.Kind {
+		case "message_chunk":
+			if strings.TrimSpace(update.Text) == "" {
+				continue
+			}
+			emit(events.EventAssistantTextDelta, events.TextPayload{Role: protocol.RoleAssistant, Text: update.Text})
+		case "tool_call":
+			emit(events.EventToolCallStarted, events.ToolCallPayload{
+				ID:    update.Name,
+				Name:  update.Name,
+				Input: update.Input,
+			})
+		case "tool_call_update":
+			emit(events.EventToolCallFinished, events.ToolCallPayload{
+				ID:    update.Name,
+				Name:  update.Name,
+				Input: update.Input,
+			})
+		}
+	}
 }
 
 // ResetSession is a no-op: each ACP run starts a fresh process with its own

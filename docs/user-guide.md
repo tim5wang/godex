@@ -891,7 +891,7 @@ runtime:
 - 插件 HTTP：`godex_http_get` 由宿主 web fetch 策略控制（allow/deny 域、超时、max chars；未启用时返回错误），插件无法绕过策略（Rust 示例 `rust_http`）。
 - 插件凭据：`godex_credential_get` 由 pluginrt credential broker 提供——**按插件 allowlist 授权**读取命名 secret（未授权/未设置返回不同错误码），插件无法枚举其他凭据（Rust 示例 `rust_credential`）。
 - 工具注册走 pluginrt 所有权模型（owner = 插件 id），卸载时随 instance 逆序撤销。
-- **Rust 示例 SDK**：`examples/wasm-plugin-rust` 是零依赖 Rust `cdylib` 实现（`wasm32-wasip1`），覆盖 tools/prompts/policy/abi 四面；`rebuild-testdata.sh` 可刷新 Go 端测试夹具。
+- **Rust 示例 SDK**：`examples/wasm-plugin-rust` 是零依赖 Rust `cdylib` 实现（`wasm32-wasip1`），覆盖 tools/prompts/policy/abi 四面；`rebuild-testdata.sh` 可刷新 Go 端测试夹具。另有 `examples/wasm-plugin-tinygo`（TinyGo 等价实现，体积更小）；`wasmrt` 自动识别 `_initialize`/`_start` 两种 runtime 启动函数。
 
 Package command declaration 支持：
 

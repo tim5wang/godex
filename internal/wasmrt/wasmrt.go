@@ -170,6 +170,19 @@ type response struct {
 	Result any    `json:"result,omitempty"`
 }
 
+// hasExportedFunction reports whether the wasm binary exports the named
+// function (used to pick the toolchain-specific runtime start function).
+func hasExportedFunction(ctx context.Context, binary []byte, name string) bool {
+	runtime := wazero.NewRuntime(ctx)
+	defer runtime.Close(ctx)
+	compiled, err := runtime.CompileModule(ctx, binary)
+	if err != nil {
+		return false
+	}
+	_, ok := compiled.ExportedFunctions()[name]
+	return ok
+}
+
 // NewPlugin compiles and instantiates the WASM module.
 func NewPlugin(ctx context.Context, config Config) (*Plugin, error) {
 	if len(config.Binary) == 0 {
@@ -203,8 +216,15 @@ func NewPlugin(ctx context.Context, config Config) (*Plugin, error) {
 		return nil, err
 	}
 
+	// Run the toolchain-specific runtime start function before calling
+	// exports: the Go toolchain exports `_initialize`, TinyGo exports `_start`.
+	// Both initialize the guest runtime so exported functions can run.
+	startFn := "_initialize"
+	if hasExportedFunction(ctx, config.Binary, "_start") && !hasExportedFunction(ctx, config.Binary, "_initialize") {
+		startFn = "_start"
+	}
 	moduleConfig := wazero.NewModuleConfig().
-		WithStartFunctions("_initialize").
+		WithStartFunctions(startFn).
 		WithSysWalltime().
 		WithSysNanosleep()
 	module, err := runtime.InstantiateWithConfig(ctx, config.Binary, moduleConfig)

@@ -367,3 +367,57 @@ func TestRustPluginCredentialHostCallEndToEnd(t *testing.T) {
 		t.Fatalf("expected denied credential error, got %v", denied)
 	}
 }
+
+func TestTinyGoCompiledPluginEndToEnd(t *testing.T) {
+	binary, err := os.ReadFile(filepath.Join("testdata", "tinygo_plugin.wasm"))
+	if err != nil {
+		t.Skipf("tinygo test plugin not built: %v", err)
+	}
+	plugin, err := NewPlugin(context.Background(), Config{Binary: binary})
+	if err != nil {
+		t.Fatalf("new tinygo plugin: %v", err)
+	}
+	defer plugin.Close(context.Background())
+	abi, err := plugin.ABI(context.Background())
+	if err != nil {
+		t.Fatalf("abi: %v", err)
+	}
+	if abi != ABIVersion {
+		t.Fatalf("expected ABI %q, got %q", ABIVersion, abi)
+	}
+	tools, err := plugin.ToolsList(context.Background())
+	if err != nil {
+		t.Fatalf("tools list: %v", err)
+	}
+	if len(tools) != 2 || tools[0].Name != "tiny_echo" || tools[1].Name != "tiny_ping" {
+		t.Fatalf("unexpected tinygo tools: %+v", tools)
+	}
+	result, err := plugin.CallTool(context.Background(), "tiny_echo", map[string]any{"message": "hi"})
+	if err != nil {
+		t.Fatalf("call tiny_echo: %v", err)
+	}
+	if result != "tiny echo: hi" {
+		t.Fatalf("unexpected result: %v", result)
+	}
+	pong, err := plugin.CallTool(context.Background(), "tiny_ping", nil)
+	if err != nil {
+		t.Fatalf("call tiny_ping: %v", err)
+	}
+	if pong != "pong" {
+		t.Fatalf("unexpected ping result: %v", pong)
+	}
+	sections, err := plugin.PromptSections(context.Background())
+	if err != nil {
+		t.Fatalf("prompt sections: %v", err)
+	}
+	if len(sections) != 1 || sections[0].Key != "tinygo_plugin_note" {
+		t.Fatalf("unexpected tinygo prompt sections: %+v", sections)
+	}
+	denied, err := plugin.PolicyCheck(context.Background(), PolicyRequest{Action: "before", Tool: "tiny_secret"})
+	if err != nil {
+		t.Fatalf("policy check: %v", err)
+	}
+	if denied.Action != PolicyDeny {
+		t.Fatalf("expected tinygo policy deny, got %+v", denied)
+	}
+}

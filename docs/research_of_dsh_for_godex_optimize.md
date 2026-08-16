@@ -287,7 +287,7 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 
 ### 阶段 C：Provider 与外部 Engine（4～8 人周）🔄 KV broker + ACP Harness adapter 已落地
 
-- HTTP/credential/KV broker —— ✅ KV 部分：`internal/pluginrt/kv_broker.go` `PluginKVBroker`（namespaced、scope-scoped、durable SQLite 或 memory 后端，key 含 plugin id 隔离，禁止 `|` 防别名）；`WasmToolPlugin.KV` 接线到 wasmrt `godex_kv_get/set` host 调用；Rust 示例新增 `rust_counter` 工具经 host KV 读写持久计数器（跨插件重载保持、命名空间隔离，端到端测试）。HTTP/credential broker 待做；
+- HTTP/credential/KV broker —— ✅ KV + HTTP 部分：`internal/pluginrt/kv_broker.go` `PluginKVBroker`（namespaced、scope-scoped、durable SQLite 或 memory 后端，key 含 plugin id 隔离，禁止 `|` 防别名）；`WasmToolPlugin.KV` 接线到 wasmrt `godex_kv_get/set` host 调用；wasmrt 新增 `godex_http_get` host 调用（受宿主 web fetch 策略控制：allow/deny 域、超时、max chars，`Agent.pluginHTTPGet` 走 `WebFetchService.Fetch`）；Rust 示例新增 `rust_counter`（KV 持久计数）与 `rust_http`（受控 HTTP fetch）工具，均端到端测试。credential broker 待做；
 - streaming handle —— ⏳ 待做；
 - Pi/其他 ACP agent 的 Harness adapter —— ✅ `internal/agent/acp_harness.go` `ACPHarness`：包装一个配置的 ACP agent 为 `Harness`（id `acp:<agent-id>`），`RunTurn` 从稳定输入面取最后 user 文本、经 stdio ACP（initialize/session-new/session-prompt）委托整轮，回复经 `HarnessTurnResult.Reply` 由宿主写入 transcript + checkpoint；`RegisterConfiguredACPHarnesses` 在 agent 装配时注册所有配置的 ACP agent（真实 wire 协议集成测试）；
 - 动态 Harness registry 和统一事件映射 —— ✅ 动态 registry（P2 #3）；事件映射部分落地（host 消费 Reply 发 `assistant_message_completed`），统一 text/tool/usage/error 映射待做。

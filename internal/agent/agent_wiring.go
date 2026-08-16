@@ -237,6 +237,23 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 	return agent
 }
 
+// pluginHTTPGet returns a controlled HTTP host callback for WASM plugins that
+// routes through the configured web fetch policy (allow/deny domains, timeout,
+// max chars). It returns an error when web fetch is unavailable so plugins
+// cannot silently bypass policy.
+func (a *Agent) pluginHTTPGet() func(context.Context, string) (string, error) {
+	return func(ctx context.Context, rawURL string) (string, error) {
+		if a == nil || a.webFetch == nil {
+			return "", fmt.Errorf("web fetch is not available to plugins")
+		}
+		result, err := a.webFetch.Fetch(ctx, rawURL, "auto", 0)
+		if err != nil {
+			return "", err
+		}
+		return result.Content, nil
+	}
+}
+
 // pluginPromptSectionsFromManager maps pluginrt prompt sections onto runtime
 // prompt sections (P4 prompt/context contributor).
 func pluginPromptSectionsFromManager(manager *pluginrt.Manager) []runtimePromptSection {

@@ -63,6 +63,8 @@ pub extern "C" fn godex_tools_list() -> u32 {
         r#""inputSchema":{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}},"#,
         r#"{"name":"rust_ping","description":"returns pong","inputSchema":{"type":"object"}},"#,
         r#"{"name":"rust_counter","description":"increment a persisted counter via the plugin KV host call","#,
+        r#""inputSchema":{"type":"object"}},"#,
+        r#"{"name":"rust_http","description":"fetch a URL via the controlled host HTTP call","#,
         r#""inputSchema":{"type":"object"}}]"#,
         r#"}"#,
     );
@@ -106,6 +108,7 @@ extern "C" {
     fn godex_kv_set(key_ptr: u32, key_len: u32, val_ptr: u32, val_len: u32);
     #[allow(dead_code)]
     fn godex_workspace_read(rel_ptr: u32, rel_len: u32, out_ptr: u32, out_len: u32) -> u32;
+    fn godex_http_get(url_ptr: u32, url_len: u32, out_ptr: u32, out_len: u32) -> u32;
 }
 
 /// Read the KV value for `key` via the host call. Returns "" when absent.
@@ -186,6 +189,25 @@ fn dispatch(req: &str) -> String {
                 format!(r#"{{"ok":true,"result":"rust echo: {}"}}"#, message)
             }
             "rust_ping" => r#"{"ok":true,"result":"pong"}"#.to_string(),
+            "rust_http" => {
+                let url = json_argument_string(req, "url").unwrap_or("");
+                let mut out = [0u8; 2048];
+                let status = unsafe {
+                    godex_http_get(
+                        url.as_ptr() as u32,
+                        url.len() as u32,
+                        out.as_mut_ptr() as u32,
+                        out.len() as u32,
+                    )
+                };
+                if status != 0 {
+                    format!(r#"{{"ok":false,"error":"http fetch failed with status {}"}}"#, status)
+                } else {
+                    let n = out.iter().position(|&b| b == 0).unwrap_or(out.len());
+                    let body = String::from_utf8_lossy(&out[..n]).to_string();
+                    format!(r#"{{"ok":true,"result":"{}"}}"#, body)
+                }
+            }
             "rust_counter" => {
                 // Read-modify-write through the host KV broker.
                 let current: i64 = kv_get("counter").trim().parse().unwrap_or(0);

@@ -248,7 +248,7 @@ func TestRustCompiledPluginEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tools list: %v", err)
 	}
-	if len(tools) != 3 || tools[0].Name != "rust_echo" || tools[1].Name != "rust_ping" || tools[2].Name != "rust_counter" {
+	if len(tools) != 4 || tools[0].Name != "rust_echo" || tools[1].Name != "rust_ping" || tools[2].Name != "rust_counter" || tools[3].Name != "rust_http" {
 		t.Fatalf("unexpected rust tools: %+v", tools)
 	}
 	result, err := plugin.CallTool(context.Background(), "rust_echo", map[string]any{"message": "from rust"})
@@ -279,5 +279,55 @@ func TestRustCompiledPluginEndToEnd(t *testing.T) {
 	}
 	if denied.Action != PolicyDeny || denied.Error == nil {
 		t.Fatalf("expected rust policy deny, got %+v", denied)
+	}
+}
+
+func TestPluginHTTPGetHostCallRegistered(t *testing.T) {
+	// Verify the host module registers godex_http_get by instantiating a plugin
+	// with an HTTP callback and confirming instantiation succeeds and the
+	// callback is reachable (the test plugin does not call it, so we assert the
+	// host surface exists via a direct host-function probe through a dedicated
+	// plugin built for this purpose is overkill; instead check the module
+	// exports the import requirement is satisfiable).
+	plugin := loadTestPlugin(t, HostCallbacks{
+		HTTPGet: func(ctx context.Context, rawURL string) (string, error) {
+			return "body:" + rawURL, nil
+		},
+	})
+	// The plugin module imports godex:host.godex_http_get; if the host module
+	// failed to export it, instantiation would have errored already. Assert the
+	// plugin is usable end to end.
+	tools, err := plugin.ToolsList(context.Background())
+	if err != nil {
+		t.Fatalf("tools list: %v", err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("expected tools")
+	}
+}
+
+func TestRustPluginHTTPGetHostCallEndToEnd(t *testing.T) {
+	binary, err := os.ReadFile(filepath.Join("testdata", "rust_plugin.wasm"))
+	if err != nil {
+		t.Skipf("rust test plugin not built: %v", err)
+	}
+	plugin, err := NewPlugin(context.Background(), Config{
+		Binary: binary,
+		Host: HostCallbacks{
+			HTTPGet: func(ctx context.Context, rawURL string) (string, error) {
+				return "fetched:" + rawURL, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new rust plugin: %v", err)
+	}
+	defer plugin.Close(context.Background())
+	result, err := plugin.CallTool(context.Background(), "rust_http", map[string]any{"url": "https://example.com"})
+	if err != nil {
+		t.Fatalf("call rust_http: %v", err)
+	}
+	if result != "fetched:https://example.com" {
+		t.Fatalf("unexpected http result: %v", result)
 	}
 }

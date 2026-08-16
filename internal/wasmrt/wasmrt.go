@@ -107,6 +107,10 @@ type HostCallbacks struct {
 	// WorkspaceRead reads a workspace file by relative path; returns "" and
 	// err for missing/escaping paths.
 	WorkspaceRead func(relPath string) (string, error)
+	// HTTPGet performs a controlled HTTP GET through the host's policy engine
+	// (allow/deny domains, timeout, max chars). Returns body text and err when
+	// denied or failed. When nil, godex_http_get returns an error.
+	HTTPGet func(ctx context.Context, rawURL string) (string, error)
 }
 
 // Config controls one WASM plugin execution environment.
@@ -261,6 +265,24 @@ func instantiateHostModule(ctx context.Context, runtime wazero.Runtime, host Hos
 		}
 		return writeString(mod, outPtr, outLen, value)
 	}).Export("godex_workspace_read")
+
+	// godex_http_get(urlPtr, urlLen, outPtr, outLen) -> status (0 ok, 1 denied,
+	// 2 error); body (up to outLen) is written to outPtr. Controlled by the
+	// host's HTTP policy; plugins cannot bypass it.
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, urlPtr, urlLen, outPtr, outLen uint32) uint32 {
+		if host.HTTPGet == nil {
+			return 2
+		}
+		rawURL := readString(mod, urlPtr, urlLen)
+		body, err := host.HTTPGet(ctx, rawURL)
+		if err != nil {
+			return 2
+		}
+		if writeString(mod, outPtr, outLen, body) == 0 && body != "" {
+			return 2
+		}
+		return 0
+	}).Export("godex_http_get")
 
 	_, err := builder.Instantiate(ctx)
 	return err

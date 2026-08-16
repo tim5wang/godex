@@ -173,6 +173,42 @@ func (m *Manager) ListTools(ctx context.Context) ([]Tool, error) {
 	return tools, nil
 }
 
+// ListStdioServers returns the configured stdio MCP server names (used for
+// per-server dynamic tool registration).
+func (m *Manager) ListStdioServers() []string {
+	cfg, err := LoadConfig(m.configPath)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, server := range cfg.Servers {
+		if server.Type != ServerTypeStdio {
+			continue
+		}
+		names = append(names, server.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ListServerTools lists the tools of one stdio server by name.
+func (m *Manager) ListServerTools(ctx context.Context, serverName string) ([]Tool, error) {
+	cfg, err := LoadConfig(m.configPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, server := range cfg.Servers {
+		if server.Name != serverName {
+			continue
+		}
+		if server.Type != ServerTypeStdio {
+			return nil, fmt.Errorf("mcp server %s is not a stdio server", serverName)
+		}
+		return m.listServerTools(ctx, server)
+	}
+	return nil, fmt.Errorf("mcp server not found: %s", serverName)
+}
+
 // CallTool calls one tool on a stdio MCP server via the MCP tools/call
 // protocol. Text content is concatenated; structured content is preserved raw.
 func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*CallResult, error) {

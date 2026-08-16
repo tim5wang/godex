@@ -255,7 +255,7 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 1. **协议/清单层兼容（推荐，长期）**：把 DSH 的插件清单与能力协议抽象成**跨语言规范**（plugin manifest + capability contract），GoDex 实现同一规范。未来的插件可以「同一份 manifest，DSH 和 GoDex 都能装」——类似 LSP/MCP 的协议级兼容，而不是二进制兼容。这与 GoDex 已有的 package manifest、ACP 桥接、MCP 方向天然一致。
 2. **桥接层兼容（立即可做）✅ 已落地**：GoDex 已有 `acp_agent` 工具（调用外部 ACP agent）与 ACP server，也有 MCP 只读资源支持——把 DSH 插件作为**外部 ACP agent 或 MCP server** 接入，不需要 wazero 就能获得「运行时拓展」。wazero 内核则是为 GoDex 原生、沙箱化、强安全的插件准备的，两者可以并存。
 
-**MCP 作为跨运行时能力协议 ✅ 已落地（tools/prompts 面）**：MCP 已从「只读文件系统资源」升级为完整 stdio client（`internal/core/mcp/stdio.go`，JSON-RPC 2.0 over stdio：initialize/tools-list/tools-call/prompts-list/prompts-get），配置 `type: stdio` + `command/args/env` 即可接入任意语言的 MCP server；其工具通过 `list_mcp_tools` / `call_mcp_tool`、prompt 通过 `list_mcp_prompts` / `get_mcp_prompt` 暴露，注册在 `godex:builtin:mcp` owner 下随 group 卸载。任何语言实现的 MCP server 都成为 GoDex 插件——这本身就是 DSH 插件生态的通用等价物，且与 wazero 内核正交（WASM 插件跑在进程内，MCP 插件跑在进程外，共享同一能力注册表与权限/scope/审计体系）。动态按 server 注册工具留待后续。
+**MCP 作为跨运行时能力协议 ✅ 已落地（tools/prompts 面 + 动态按 server 注册）**：MCP 已从「只读文件系统资源」升级为完整 stdio client（`internal/core/mcp/stdio.go`，JSON-RPC 2.0 over stdio：initialize/tools-list/tools-call/prompts-list/prompts-get），配置 `type: stdio` + `command/args/env` 即可接入任意语言的 MCP server；其工具通过 `list_mcp_tools` / `call_mcp_tool`、prompt 通过 `list_mcp_prompts` / `get_mcp_prompt` 暴露。除通用桥接外，**每个 stdio server 的工具还会按 server 动态注册为一等工具**（命名 `<server>__<tool>`，owner `mcp:<server>`），直接进入工具目录并可独立卸载，`tools.NewMCPServerTool`/`Agent.registerMCPServerTools` 实现；bridge 与 per-server 注册均挂在 `godex:builtin:mcp` owner 体系下。任何语言实现的 MCP server 都成为 GoDex 插件——这本身就是 DSH 插件生态的通用等价物，且与 wazero 内核正交（WASM 插件跑在进程内，MCP 插件跑在进程外，共享同一能力注册表与权限/scope/审计体系）。
 
 ## 6. 建议路线图
 

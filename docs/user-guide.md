@@ -945,7 +945,7 @@ godex import claude --source ~/.claude --package claude-user
 ```
 
 - `type: filesystem`：只读文件系统资源，通过 `list_mcp_resources` / `read_mcp_resource` 使用。
-- `type: stdio`：进程外 MCP server（JSON-RPC 2.0 over stdio），**任何语言实现都成为 GoDex 插件**——通过 `list_mcp_tools` / `call_mcp_tool` 调用工具、`list_mcp_prompts` / `get_mcp_prompt` 渲染 prompt；这是不引入 wazero 的「运行时拓展」桥接路径（进程外插件，与进程内 WASM 内核正交）。stdio 调用默认 30s 超时，受会话 context 取消约束。
+- `type: stdio`：进程外 MCP server（JSON-RPC 2.0 over stdio），**任何语言实现都成为 GoDex 插件**——通过 `list_mcp_tools` / `call_mcp_tool` 调用工具、`list_mcp_prompts` / `get_mcp_prompt` 渲染 prompt；此外每个 stdio server 的工具会按 server 动态注册为一等工具（命名 `<server>__<tool>`，owner `mcp:<server>`，可独立卸载）。这是不引入 wazero 的「运行时拓展」桥接路径（进程外插件，与进程内 WASM 内核正交）。stdio 调用默认 30s 超时，受会话 context 取消约束。
 
 ## Slash Commands
 

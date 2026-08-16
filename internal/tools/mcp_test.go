@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -179,5 +180,53 @@ func TestGetMCPPromptTool(t *testing.T) {
 	// Missing required args.
 	if _, err := tool.Execute(context.Background(), map[string]interface{}{}); err == nil {
 		t.Fatal("expected error for missing server/prompt")
+	}
+}
+
+type fakeMCPServerCaller struct {
+	result *mcp.CallResult
+}
+
+func (f *fakeMCPServerCaller) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallResult, error) {
+	return &mcp.CallResult{Server: serverName, Tool: toolName, Text: "server reply"}, nil
+}
+
+func TestMCPServerToolNamespacingAndCall(t *testing.T) {
+	caller := &fakeMCPServerCaller{}
+	tool, err := NewMCPServerTool(caller, "my-server", mcp.Tool{
+		Name:        "echo",
+		Description: "echo",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string"}}}`),
+	})
+	if err != nil {
+		t.Fatalf("new mcp server tool: %v", err)
+	}
+	if tool.Name() != "my_server__echo" {
+		t.Fatalf("expected namespaced name, got %q", tool.Name())
+	}
+	result, err := tool.Execute(context.Background(), map[string]interface{}{"message": "hi"})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(result, "server reply") {
+		t.Fatalf("unexpected output: %q", result)
+	}
+	// nil caller rejected.
+	if _, err := NewMCPServerTool(nil, "s", mcp.Tool{Name: "t"}); err == nil {
+		t.Fatal("expected error for nil caller")
+	}
+}
+
+func TestMCPToolName(t *testing.T) {
+	tests := map[[2]string]string{
+		{"my-server", "echo"}:     "my_server__echo",
+		{"server", "My Tool"}:     "server__mytool",
+		{"", "bare"}:              "bare",
+		{"srv", "!!!"}:            "srv",
+	}
+	for in, want := range tests {
+		if got := mcpToolName(in[0], in[1]); got != want {
+			t.Errorf("mcpToolName(%q,%q) = %q, want %q", in[0], in[1], got, want)
+		}
 	}
 }

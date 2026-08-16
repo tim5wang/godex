@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 
@@ -46,6 +47,35 @@ func (a *Agent) registerToolTo(handler *tools.ToolHandler, tool tools.Tool, meta
 // UnregisterOwner on the handler removes every tool of that owner.
 func (a *Agent) registerOwnedTool(handler *tools.ToolHandler, owner string, tool tools.Tool, meta tools.ToolMeta) (*tools.Registration, error) {
 	return handler.RegisterOwned(owner, tool, meta)
+}
+
+// registerMCPServerTools discovers and registers one first-class tool per
+// declared tool of every configured stdio MCP server. Each server owns its
+// tools (owner "mcp:<server>"), so unregistering one server's tools never
+// affects another. Server-tool discovery failures are non-fatal: the generic
+// list_mcp_tools/call_mcp_tool bridge remains available as a fallback.
+func (a *Agent) registerMCPServerTools(handler *tools.ToolHandler) {
+	if a.mcpMgr == nil {
+		return
+	}
+	for _, serverName := range a.mcpMgr.ListStdioServers() {
+		owner := "mcp:" + serverName
+		decls, err := a.mcpMgr.ListServerTools(context.Background(), serverName)
+		if err != nil {
+			// Keep going; other servers may still register.
+			continue
+		}
+		for _, decl := range decls {
+			tool, toolErr := tools.NewMCPServerTool(a.mcpMgr, serverName, decl)
+			if toolErr != nil {
+				continue
+			}
+			_, _ = a.registerOwnedTool(handler, owner, tool, tools.ToolMeta{
+				Bundle:  bundleMCP,
+				Summary: "first-class tool from stdio MCP server " + serverName,
+			})
+		}
+	}
 }
 
 func (a *Agent) registerTool(tool tools.Tool, meta tools.ToolMeta) *tools.Registration {
@@ -260,6 +290,10 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Bundle:  bundleMCP,
 		Summary: "configured stdio MCP prompt servers",
 	})
+	// §5.2 dynamic per-server registration: each configured stdio MCP server's
+	// tools appear directly in the catalog (namespaced <server>__<tool>) with
+	// owner mcp:<server>, so unload/reload of one server never touches others.
+	a.registerMCPServerTools(handler)
 	a.registerToolTo(handler, tools.NewLSPTool(workspaceDir), tools.ToolMeta{
 		Bundle:        bundleLSP,
 		Summary:       "LSP code intelligence (definitions, references, hover, diagnostics, completions)",

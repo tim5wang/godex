@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -181,4 +182,67 @@ func NewGetMCPPromptTool(runner MCPPromptRunner) Tool {
 		}
 		return ToolResult{Text: b.String(), Structured: result}, nil
 	})
+}
+
+// MCPServerCaller calls tools on one specific stdio MCP server.
+type MCPServerCaller interface {
+	CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallResult, error)
+}
+
+// NewMCPServerTool creates a first-class tool bound to one stdio MCP server:
+// the declared tool name (namespaced as <server>__<tool>) calls through the
+// manager to that server. This is the §5.2 'dynamic per-server tool
+// registration' path — MCP tools appear directly in the catalog with the
+// server as owner instead of only via the generic list/call bridge.
+func NewMCPServerTool(caller MCPServerCaller, serverName string, decl mcp.Tool) (Tool, error) {
+	if caller == nil {
+		return nil, fmt.Errorf("mcp tool %s/%s: nil caller", serverName, decl.Name)
+	}
+	if strings.TrimSpace(serverName) == "" || strings.TrimSpace(decl.Name) == "" {
+		return nil, fmt.Errorf("mcp tool: missing server or tool name")
+	}
+	name := mcpToolName(serverName, decl.Name)
+	schema := map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}
+	if len(decl.InputSchema) > 0 {
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(decl.InputSchema, &parsed); err == nil {
+			if props, ok := parsed["properties"].(map[string]interface{}); ok {
+				schema["properties"] = props
+			}
+			if req, ok := parsed["required"]; ok {
+				schema["required"] = req
+			}
+		}
+	}
+	description := decl.Description
+	if description == "" {
+		description = fmt.Sprintf("MCP tool %s from server %s", decl.Name, serverName)
+	}
+	return NewTypedTool(NewToolSpec(name, description, schema, nil), func(ctx context.Context, args map[string]any) (ToolResult, error) {
+		result, err := caller.CallTool(ctx, serverName, decl.Name, args)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		if result.IsError {
+			return ToolResult{}, fmt.Errorf("mcp tool %s/%s failed: %s", serverName, decl.Name, result.Text)
+		}
+		return ToolResult{Text: result.Text, Structured: result}, nil
+	}), nil
+}
+
+// mcpToolName namespaces an MCP tool as <server>__<tool> so distinct servers
+// cannot collide in the shared tool catalog.
+func mcpToolName(serverName, toolName string) string {
+	safeServer := sanitizeWasmToolName(serverName)
+	safeTool := sanitizeWasmToolName(toolName)
+	if safeServer == "" {
+		return safeTool
+	}
+	if safeTool == "" {
+		return safeServer
+	}
+	return safeServer + "__" + safeTool
 }

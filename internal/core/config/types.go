@@ -105,6 +105,14 @@ type AgentCompactionSection struct {
 	ModelProfileID      string `yaml:"model_profile_id"`
 	MaxLatencyMS        int    `yaml:"max_latency_ms"`
 	KeepRecentMessages  int    `yaml:"keep_recent_messages"`
+	// ContextWindowTokens is the model context window used to scale the
+	// auto-compaction trigger and the verbatim retention tail (DSH-style
+	// thresholdRatio / retainRatio). Explicit trigger_tokens wins over the
+	// window-scaled trigger; explicit retain_tokens wins over the ratio.
+	ContextWindowTokens int     `yaml:"context_window_tokens"`
+	TriggerRatio        float64 `yaml:"trigger_ratio"`
+	RetainRatio         float64 `yaml:"retain_ratio"`
+	RetainTokens        int     `yaml:"retain_tokens"`
 }
 
 type AgentDefaultProfilesSection struct {

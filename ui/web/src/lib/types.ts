@@ -138,6 +138,8 @@ export interface ContextInspection {
   prefix_cache?: PrefixCacheInspection;
   cache_usage?: CacheUsageInspection;
   compress_threshold: number;
+  context_window_tokens?: number;
+  retain_tokens?: number;
   suggest_compact: boolean;
   compression_reasons?: string[];
   pre_compaction_total?: number;

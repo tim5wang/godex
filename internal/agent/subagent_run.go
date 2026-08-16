@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tim5wang/godex/internal/core/compress"
+
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -19,16 +19,16 @@ import (
 )
 
 type durableSubagentStartRequest struct {
-	Prompt           string
-	AgentType        string
-	WriteScope       []string
-	RequiredBundles  []string
-	RequiredTools    []string
-	PreviewJobIDs    []string
-	BundleOverrides  []string
+	Prompt            string
+	AgentType         string
+	WriteScope        []string
+	RequiredBundles   []string
+	RequiredTools     []string
+	PreviewJobIDs     []string
+	BundleOverrides   []string
 	DeactivateBundles []string
-	MaxTurns         int
-	JobTimeoutMS     int
+	MaxTurns          int
+	JobTimeoutMS      int
 }
 
 func (a *Agent) StartDurableSubagent(prompt, agentType string, writeScope []string) (*subagentJob, error) {
@@ -304,12 +304,12 @@ func (a *Agent) reconfigureSubagentForReopen(job *subagentJob, update subagentRe
 	toolNames = appendRequiredSubagentTools(toolNames, allBundles, nil, writeScope)
 	toolNames = narrowSubagentWriteTools(toolNames, writeScope)
 	out := subagentReopenUpdate{
-		AgentType:        agentType,
-		WriteScope:       append([]string{}, writeScope...),
-		DefaultBundles:   append([]string{}, allBundles...),
-		BundleOverrides:  append([]string{}, overrides...),
+		AgentType:         agentType,
+		WriteScope:        append([]string{}, writeScope...),
+		DefaultBundles:    append([]string{}, allBundles...),
+		BundleOverrides:   append([]string{}, overrides...),
 		DeactivateBundles: append([]string{}, deactivate...),
-		ToolNames:        append([]string{}, toolNames...),
+		ToolNames:         append([]string{}, toolNames...),
 	}
 	if hasRole {
 		out.RoleID = role.ID
@@ -472,25 +472,25 @@ func (a *Agent) maybeCompactSubagentMessages(ctx context.Context, job *subagentJ
 	if a == nil || a.compressor == nil {
 		return messages
 	}
-	summarizer := compress.NewRuleBasedSessionSummarizer(a.compressor)
-	result, err := summarizer.SummarizeSession(ctx, compress.SessionSummaryRequest{
-		History: messages,
-	})
-	if err != nil || len(result.Messages) == 0 {
+	// Subagent context budgets are small and short-lived: budget-constrained
+	// compaction stubs oversized tool results into transcript references so
+	// tool-loop bulk cannot blow the budget (the main-session verbatim
+	// retention tail would keep everything).
+	compacted, err := a.compressor.CompactForBudget(messages, job.ContextBudget)
+	if err != nil || len(compacted) == 0 {
 		return messages
 	}
-	// Rule-based summarization may keep the same message count (large tool
-	// results become transcript references); require a real token reduction
-	// before checkpointing the compacted history.
-	if estimateMessages(result.Messages) >= estimateMessages(messages) {
+	// Budget compaction may keep the same token count when nothing oversized
+	// was present; require a real reduction before checkpointing.
+	if estimateMessages(compacted) >= estimateMessages(messages) {
 		return messages
 	}
-	_ = a.subagentJobs.UpdateMessages(job.ID, result.Messages)
+	_ = a.subagentJobs.UpdateMessages(job.ID, compacted)
 	a.recordSubagentProgress(job.ID, target, subagentProgressEvent{
 		Phase:   "context_budget_compact",
 		Message: "Subagent context compacted to fit role budget.",
 	})
-	return result.Messages
+	return compacted
 }
 
 func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEventTarget) {
@@ -614,10 +614,10 @@ func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEv
 				return conversation.InjectionDrain{}, nil
 			}
 			return conversation.InjectionDrain{
-				Messages:  drained,
-				Count:     len(drained),
-				Mode:      "send_input",
-				Summary:   "Subagent received queued input via send_input/followup_task.",
+				Messages: drained,
+				Count:    len(drained),
+				Mode:     "send_input",
+				Summary:  "Subagent received queued input via send_input/followup_task.",
 			}, nil
 		},
 		AppendInjectedMessages: func(msgs []protocol.Message) {

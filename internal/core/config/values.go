@@ -164,6 +164,14 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Agent.Compaction.MaxLatencyMS = asInt(value)
 	case "agent.compaction.keep_recent_messages":
 		file.Agent.Compaction.KeepRecentMessages = asInt(value)
+	case "agent.compaction.context_window_tokens":
+		file.Agent.Compaction.ContextWindowTokens = asInt(value)
+	case "agent.compaction.trigger_ratio":
+		file.Agent.Compaction.TriggerRatio = asFloat(value)
+	case "agent.compaction.retain_ratio":
+		file.Agent.Compaction.RetainRatio = asFloat(value)
+	case "agent.compaction.retain_tokens":
+		file.Agent.Compaction.RetainTokens = asInt(value)
 	case "agent.max_turns":
 		file.Agent.MaxTurns = asInt(value)
 	case "agent.profile":
@@ -531,6 +539,10 @@ func storedValues(file ConfigFile) map[string]any {
 		"agent.compaction.model_profile_id":                      strings.TrimSpace(file.Agent.Compaction.ModelProfileID),
 		"agent.compaction.max_latency_ms":                        file.Agent.Compaction.MaxLatencyMS,
 		"agent.compaction.keep_recent_messages":                  file.Agent.Compaction.KeepRecentMessages,
+		"agent.compaction.context_window_tokens":                 file.Agent.Compaction.ContextWindowTokens,
+		"agent.compaction.trigger_ratio":                         file.Agent.Compaction.TriggerRatio,
+		"agent.compaction.retain_ratio":                          file.Agent.Compaction.RetainRatio,
+		"agent.compaction.retain_tokens":                         file.Agent.Compaction.RetainTokens,
 		"agent.max_turns":                                        file.Agent.MaxTurns,
 		"agent.profile":                                          NormalizeAgentProfile(file.Agent.Profile),
 		"agent.default_profiles.acp":                             NormalizeAgentProfile(file.Agent.DefaultProfiles.ACP),
@@ -727,6 +739,10 @@ func effectiveValues(cfg *Config) map[string]any {
 		"agent.compaction.model_profile_id":                      cfg.Compaction.ModelProfileID,
 		"agent.compaction.max_latency_ms":                        cfg.Compaction.MaxLatencyMS,
 		"agent.compaction.keep_recent_messages":                  cfg.Compaction.KeepRecentMessages,
+		"agent.compaction.context_window_tokens":                 cfg.Compaction.ContextWindowTokens,
+		"agent.compaction.trigger_ratio":                         cfg.Compaction.TriggerRatio,
+		"agent.compaction.retain_ratio":                          cfg.Compaction.RetainRatio,
+		"agent.compaction.retain_tokens":                         cfg.Compaction.RetainTokens,
 		"agent.max_turns":                                        cfg.MaxTurns,
 		"agent.profile":                                          cfg.AgentProfile,
 		"agent.default_profiles.acp":                             cfg.AgentDefaultProfiles.ACP,

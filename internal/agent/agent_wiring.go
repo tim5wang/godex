@@ -39,6 +39,9 @@ func buildDependencies(cfg *config.Config) dependencies {
 	memoryExt, memoryStrategy := buildMemoryStack(cfg, client, memoryMgr)
 	compressor := compress.NewCompressor(cfg.TranscriptsDir)
 	compressor.SetKeepRecent(cfg.Compaction.KeepRecentMessages)
+	// DSH-style verbatim retention tail budget (contextWindow × retainRatio);
+	// keep_recent_messages remains the fallback when retain tokens are unset.
+	compressor.SetRetainTokens(compactionRetainTokensFromConfig(cfg))
 	ruleSummarizer := compress.NewRuleBasedSessionSummarizer(compressor)
 	sessionSummarizer := compress.SessionSummarizer(ruleSummarizer)
 	if strings.TrimSpace(cfg.APIKey) != "" {

@@ -40,8 +40,8 @@ func TestStaleProjectLedgerNotInjected(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{
-		SessionID:             "session-stale-ledger",
-		ProjectLedger:         "Goal: old task from six hours ago\nCurrent phase: blocked",
+		SessionID:              "session-stale-ledger",
+		ProjectLedger:          "Goal: old task from six hours ago\nCurrent phase: blocked",
 		ProjectLedgerUpdatedAt: time.Now().Add(-projectLedgerInjectionWindow - time.Minute),
 	})
 
@@ -64,8 +64,8 @@ func TestFreshProjectLedgerInjected(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{
-		SessionID:             "session-fresh-ledger",
-		ProjectLedger:         "Goal: current task\nCurrent phase: active",
+		SessionID:              "session-fresh-ledger",
+		ProjectLedger:          "Goal: current task\nCurrent phase: active",
 		ProjectLedgerUpdatedAt: time.Now(),
 	})
 
@@ -85,5 +85,31 @@ func TestFreshProjectLedgerInjected(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected fresh project ledger to be injected")
+	}
+}
+
+// Window-scaled policy (DSH-style): with no explicit trigger/retain tokens,
+// the threshold and the verbatim retention tail derive from the model context
+// window × ratio, and retain is clamped below the trigger.
+func TestCompactionWindowScaledPolicy(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.cfg.Compaction.TriggerTokens = 0
+	a.cfg.CompressThreshold = 0
+	a.cfg.Compaction.ContextWindowTokens = 128000
+	a.cfg.Compaction.TriggerRatio = 0.8
+	a.cfg.Compaction.RetainRatio = 0.16
+	a.cfg.Compaction.RetainTokens = 0
+
+	if got := a.compactionTriggerTokens(); got != 102400 {
+		t.Fatalf("expected 0.8×128k trigger, got %d", got)
+	}
+	if got := a.compactionRetainTokens(); got != 20480 {
+		t.Fatalf("expected 0.16×128k retain, got %d", got)
+	}
+
+	// Explicit retain_tokens wins over the ratio, clamped below the trigger.
+	a.cfg.Compaction.RetainTokens = 200000
+	if got := a.compactionRetainTokens(); got != 102399 {
+		t.Fatalf("expected retain clamped below trigger, got %d", got)
 	}
 }

@@ -174,6 +174,30 @@ func lookupProcessInt(name string) (int, bool, string) {
 	return parsed, true, match.Name
 }
 
+func lookupFloat(values map[string]string, name string) (float64, bool, string) {
+	match := lookupEnvValue(values, name)
+	if !match.Set {
+		return 0, false, ""
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(match.Value), 64)
+	if err != nil {
+		return 0, false, ""
+	}
+	return parsed, true, match.Name
+}
+
+func lookupProcessFloat(name string) (float64, bool, string) {
+	match := lookupProcessValue(name)
+	if !match.Set {
+		return 0, false, ""
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(match.Value), 64)
+	if err != nil {
+		return 0, false, ""
+	}
+	return parsed, true, match.Name
+}
+
 func lookupCSV(values map[string]string, name string) ([]string, bool) {
 	value, ok := values[name]
 	if !ok {

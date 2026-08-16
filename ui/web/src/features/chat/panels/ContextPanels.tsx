@@ -52,6 +52,12 @@ export function ContextStatusInline({ summary, inspector }: { summary: ContextSt
           <span className="ctx-popover-label">{t("chat.ctxPopoverOccupancy")}</span>
           <span className="ctx-popover-value">{summary.budgetPercent}%</span>
         </div>
+        {ctx && ctx.retain_tokens ? (
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">{t("chat.ctxPopoverRetention")}</span>
+            <span className="ctx-popover-value">{formatCompactNumber(ctx.retain_tokens)}</span>
+          </div>
+        ) : null}
       </div>
       <div className="ctx-popover-group">
         <div className="ctx-popover-group-title">{t("chat.ctxPopoverBreakdown")}</div>

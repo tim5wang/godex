@@ -48,10 +48,20 @@ func defaultConfigFile() ConfigFile {
 				AutoEnabled:         true,
 				TriggerTokens:       60000,
 				TargetHistoryTokens: 12000,
-				Mode:                "fast",
-				ModelProfileID:      "",
-				MaxLatencyMS:        3000,
-				KeepRecentMessages:  20,
+				// Hybrid by default: LLM-backed compaction with rule-based
+				// fallback gives far better continuity than the old fast-only
+				// rule extraction (which lost too much information).
+				Mode:               "hybrid",
+				ModelProfileID:     "",
+				MaxLatencyMS:       3000,
+				KeepRecentMessages: 20,
+				// DSH-style window-scaled policy: trigger ≈ 0.8×128k, verbatim
+				// retention tail ≈ 0.16×128k. Explicit trigger_tokens /
+				// retain_tokens override the scaled values.
+				ContextWindowTokens: 128000,
+				TriggerRatio:        0.8,
+				RetainRatio:         0.16,
+				RetainTokens:        0,
 			},
 			MaxTurns: 1000,
 			Profile:  AgentProfileGeneral,

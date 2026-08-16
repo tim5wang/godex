@@ -65,36 +65,36 @@ func ExtractFileOperationsFromMessages(messages []protocol.Message) FileOperatio
 // The keys are tool names used by the godex agent tool catalog.
 var knownFileToolNames = map[string]string{
 	// Read operations
-	"read_file":        "read",
-	"read":             "read",
-	"read_multiple":    "read",
-	"read_files":       "read",
-	"grep":             "read",
-	"glob":             "read",
-	"find":             "read",
-	"ls":               "read",
-	"search":           "read",
-	"history_search":   "read",
+	"read_file":      "read",
+	"read":           "read",
+	"read_multiple":  "read",
+	"read_files":     "read",
+	"grep":           "read",
+	"glob":           "read",
+	"find":           "read",
+	"ls":             "read",
+	"search":         "read",
+	"history_search": "read",
 	// memory tool has no file path; downstream code falls through to default (uncategorized).
 	// Write operations
-	"write_file":       "write",
-	"write":            "write",
-	"overwrite_file":   "write",
-	"append_file":      "write",
+	"write_file":     "write",
+	"write":          "write",
+	"overwrite_file": "write",
+	"append_file":    "write",
 	// Edit operations
-	"edit_file":        "edit",
-	"edit":             "edit",
-	"edit_files":       "edit",
-	"apply_diff":       "edit",
-	"patch":            "edit",
-	"replace":          "edit",
-	"rename":           "edit",
-	"move":             "edit",
-	"copy":             "write",
-	"delete_file":      "edit",
-	"delete":           "edit",
-	"remove":           "edit",
-	"attach_file":      "write",
+	"edit_file":   "edit",
+	"edit":        "edit",
+	"edit_files":  "edit",
+	"apply_diff":  "edit",
+	"patch":       "edit",
+	"replace":     "edit",
+	"rename":      "edit",
+	"move":        "edit",
+	"copy":        "write",
+	"delete_file": "edit",
+	"delete":      "edit",
+	"remove":      "edit",
+	"attach_file": "write",
 }
 
 // filePathParamKeys lists common parameter names that hold file paths.
@@ -135,8 +135,14 @@ func sortedKeysSet(set map[string]struct{}) []string {
 // The default implementation is rule-based, but the shape is intentionally
 // suitable for a future model-backed summarizer.
 type SessionSummaryRequest struct {
-	System               string
-	History              []protocol.Message
+	System  string
+	History []protocol.Message
+	// Prefix carries the conversation's own quasi-stable messages (memory
+	// index, runtime prompt sections) that precede history in the model
+	// request. The LLM summarizer prepends them verbatim so its call is a
+	// prefix of the conversation's request and reuses the provider's warm
+	// prefix cache (DSH-style alignment).
+	Prefix               []protocol.Message
 	TokenBreakdown       map[string]int
 	TranscriptPath       string
 	RecentUserMessages   []string

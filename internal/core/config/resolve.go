@@ -147,6 +147,34 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 		apply(value)
 	}
 
+	resolveFloat := func(path string, yamlValue float64, canonicalEnv string, apply func(float64)) {
+		origin := fieldOrigin{
+			Source:       SourceYAML,
+			CanonicalEnv: canonicalEnv,
+			YAMLValue:    yamlValue,
+			Effective:    yamlValue,
+		}
+		value := yamlValue
+		if dot, ok, name := lookupFloat(dotenvMap, canonicalEnv); ok {
+			value = dot
+			origin.Source = SourceDotEnv
+			origin.OverriddenBy = SourceDotEnv
+			origin.DotEnvValue = dot
+			origin.UsedEnv = name
+			origin.Effective = dot
+		}
+		if env, ok, name := lookupProcessFloat(canonicalEnv); ok {
+			value = env
+			origin.Source = SourceEnv
+			origin.OverriddenBy = SourceEnv
+			origin.EnvValue = env
+			origin.UsedEnv = name
+			origin.Effective = env
+		}
+		origins[path] = origin
+		apply(value)
+	}
+
 	resolveCSV := func(path string, yamlValue []string, canonicalEnv string, apply func([]string)) {
 		origin := fieldOrigin{
 			Source:       SourceYAML,
@@ -241,6 +269,18 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	})
 	resolveInt("agent.compaction.keep_recent_messages", file.Agent.Compaction.KeepRecentMessages, "GODEX_AGENT_COMPACTION_KEEP_RECENT_MESSAGES", func(v int) {
 		current.Compaction.KeepRecentMessages = positiveOrDefault(v, 20)
+	})
+	resolveInt("agent.compaction.context_window_tokens", file.Agent.Compaction.ContextWindowTokens, "GODEX_AGENT_COMPACTION_CONTEXT_WINDOW_TOKENS", func(v int) {
+		current.Compaction.ContextWindowTokens = positiveOrDefault(v, 128000)
+	})
+	resolveFloat("agent.compaction.trigger_ratio", file.Agent.Compaction.TriggerRatio, "GODEX_AGENT_COMPACTION_TRIGGER_RATIO", func(v float64) {
+		current.Compaction.TriggerRatio = ratioOrDefault(v, 0.8)
+	})
+	resolveFloat("agent.compaction.retain_ratio", file.Agent.Compaction.RetainRatio, "GODEX_AGENT_COMPACTION_RETAIN_RATIO", func(v float64) {
+		current.Compaction.RetainRatio = ratioOrDefault(v, 0.16)
+	})
+	resolveInt("agent.compaction.retain_tokens", file.Agent.Compaction.RetainTokens, "GODEX_AGENT_COMPACTION_RETAIN_TOKENS", func(v int) {
+		current.Compaction.RetainTokens = nonNegativeOrDefault(v, 0)
 	})
 	resolveInt("agent.max_turns", file.Agent.MaxTurns, "GODEX_AGENT_MAX_TURNS", func(v int) { current.MaxTurns = v })
 	resolveString("agent.profile", file.Agent.Profile, "GODEX_AGENT_PROFILE", func(v string) {
@@ -859,6 +899,10 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			ModelProfileID:      strings.TrimSpace(file.Agent.Compaction.ModelProfileID),
 			MaxLatencyMS:        positiveOrDefault(file.Agent.Compaction.MaxLatencyMS, 3000),
 			KeepRecentMessages:  positiveOrDefault(file.Agent.Compaction.KeepRecentMessages, 20),
+			ContextWindowTokens: positiveOrDefault(file.Agent.Compaction.ContextWindowTokens, 128000),
+			TriggerRatio:        ratioOrDefault(file.Agent.Compaction.TriggerRatio, 0.8),
+			RetainRatio:         ratioOrDefault(file.Agent.Compaction.RetainRatio, 0.16),
+			RetainTokens:        nonNegativeOrDefault(file.Agent.Compaction.RetainTokens, 0),
 		},
 		MaxTurns:     file.Agent.MaxTurns,
 		AgentProfile: NormalizeAgentProfile(file.Agent.Profile),

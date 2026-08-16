@@ -13,15 +13,20 @@ import (
 // ContextInspection describes the current session prompt budget and history shape
 // without mutating the conversation state.
 type ContextInspection struct {
-	SessionID                     string                  `json:"session_id,omitempty"`
-	MessageCount                  int                     `json:"message_count"`
-	TokenEstimate                 int                     `json:"token_estimate"`
-	HistoryTokenEstimate          int                     `json:"history_token_estimate,omitempty"`
-	TotalTokenEstimate            int                     `json:"total_token_estimate,omitempty"`
-	TokenBreakdown                ContextTokenBreakdown   `json:"token_breakdown,omitempty"`
-	PrefixCache                   PrefixCacheInspection   `json:"prefix_cache,omitempty"`
-	CacheUsage                    CacheUsageInspection    `json:"cache_usage,omitempty"`
-	CompressThreshold             int                     `json:"compress_threshold"`
+	SessionID            string                `json:"session_id,omitempty"`
+	MessageCount         int                   `json:"message_count"`
+	TokenEstimate        int                   `json:"token_estimate"`
+	HistoryTokenEstimate int                   `json:"history_token_estimate,omitempty"`
+	TotalTokenEstimate   int                   `json:"total_token_estimate,omitempty"`
+	TokenBreakdown       ContextTokenBreakdown `json:"token_breakdown,omitempty"`
+	PrefixCache          PrefixCacheInspection `json:"prefix_cache,omitempty"`
+	CacheUsage           CacheUsageInspection  `json:"cache_usage,omitempty"`
+	CompressThreshold    int                   `json:"compress_threshold"`
+	// ContextWindowTokens and RetainTokens expose the DSH-style window-scaled
+	// compaction policy: trigger ≈ contextWindow × triggerRatio, and the
+	// verbatim retention tail kept byte-identical after compaction.
+	ContextWindowTokens           int                     `json:"context_window_tokens,omitempty"`
+	RetainTokens                  int                     `json:"retain_tokens,omitempty"`
 	SuggestCompact                bool                    `json:"suggest_compact"`
 	CompressionReasons            []string                `json:"compression_reasons,omitempty"`
 	PreCompactionTotal            int                     `json:"pre_compaction_total,omitempty"`
@@ -68,14 +73,14 @@ type CacheUsageInspection struct {
 // PrefixCacheInspection describes prompt stability signals for providers that
 // cache repeated request prefixes.
 type PrefixCacheInspection struct {
-	SystemHash               string         `json:"system_hash,omitempty"`
-	ToolSchemasHash          string         `json:"tool_schemas_hash,omitempty"`
-	StablePrefixHash         string         `json:"stable_prefix_hash,omitempty"`
-	StableSystemTokens       int            `json:"stable_system_tokens,omitempty"`
-	StableToolSchemaTokens   int            `json:"stable_tool_schema_tokens,omitempty"`
-	StableMemoryIndexTokens  int            `json:"stable_memory_index_tokens,omitempty"`
-	DynamicRuntimeTokens     int            `json:"dynamic_runtime_tokens,omitempty"`
-	DynamicSectionTokens     map[string]int `json:"dynamic_section_tokens,omitempty"`
+	SystemHash              string         `json:"system_hash,omitempty"`
+	ToolSchemasHash         string         `json:"tool_schemas_hash,omitempty"`
+	StablePrefixHash        string         `json:"stable_prefix_hash,omitempty"`
+	StableSystemTokens      int            `json:"stable_system_tokens,omitempty"`
+	StableToolSchemaTokens  int            `json:"stable_tool_schema_tokens,omitempty"`
+	StableMemoryIndexTokens int            `json:"stable_memory_index_tokens,omitempty"`
+	DynamicRuntimeTokens    int            `json:"dynamic_runtime_tokens,omitempty"`
+	DynamicSectionTokens    map[string]int `json:"dynamic_section_tokens,omitempty"`
 }
 
 // ToolResultReference summarizes a model-visible placeholder for a large tool

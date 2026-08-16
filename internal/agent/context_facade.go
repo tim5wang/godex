@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/insights"
@@ -53,6 +54,8 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 		PrefixCache:                   prefixCacheInspection(system, toolSchemas, history, promptStateSections, memoryIndexTokens, volatileMessages),
 		CacheUsage:                    a.cacheUsageSnapshot(),
 		CompressThreshold:             triggerTokens,
+		ContextWindowTokens:           compactionContextWindowTokensFromConfig(a.cfg),
+		RetainTokens:                  a.compactionRetainTokens(),
 		SuggestCompact:                len(estimate.Reasons) > 0,
 		CompressionReasons:            append([]string{}, estimate.Reasons...),
 		PreCompactionTotal:            estimate.Breakdown.Total,
@@ -163,7 +166,7 @@ func (a *Agent) storeCompactedMessages(messages []protocol.Message) {
 	a.lastCompactedVersion = a.historyVersion
 }
 
-func (a *Agent) maybeAutoCompact(ctx context.Context, history []protocol.Message, version int64, system string, estimate contextBudgetEstimate) ([]protocol.Message, bool, compactionRunResult, error) {
+func (a *Agent) maybeAutoCompact(ctx context.Context, history []protocol.Message, version int64, system string, prefix []protocol.Message, estimate contextBudgetEstimate) ([]protocol.Message, bool, compactionRunResult, error) {
 	if !a.shouldAutoCompact(estimate) {
 		return history, false, compactionRunResult{}, nil
 	}
@@ -190,8 +193,22 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, history []protocol.Message
 		return protocol.CloneMessages(a.messages), true, candidate.Result, nil
 	}
 
-	result, err := a.runCompaction(ctx, "fast", compress.SessionSummaryRequest{
+	mode := a.autoCompactionMode()
+	// The synchronous path runs inside the request that crossed the threshold;
+	// bound LLM-backed compaction so a slow summary cannot block the turn.
+	// The hybrid fallback in runCompaction converts a timeout into the
+	// rule-based summarizer.
+	runCtx := ctx
+	if mode == "model" || mode == "hybrid" {
+		if ms := a.compactionMaxLatencyMS(); ms > 0 {
+			var cancel context.CancelFunc
+			runCtx, cancel = context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
+			defer cancel()
+		}
+	}
+	result, err := a.runCompaction(runCtx, mode, compress.SessionSummaryRequest{
 		System:               system,
+		Prefix:               protocol.CloneMessages(prefix),
 		History:              protocol.CloneMessages(history),
 		TokenBreakdown:       tokenBreakdownMap(estimate.Breakdown),
 		RecentUserMessages:   recentPersistentUserMessages(history, 6),

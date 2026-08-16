@@ -104,7 +104,7 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 
 	triggerTokens := a.compactionTriggerTokens()
 	preliminary := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), triggerTokens)
-	compactedHistory, compacted, compactionDiag, err := a.maybeAutoCompact(ctx, history, version, system, preliminary)
+	compactedHistory, compacted, compactionDiag, err := a.maybeAutoCompact(ctx, history, version, system, quasiStableMessages, preliminary)
 	if err != nil {
 		return nil, err
 	}

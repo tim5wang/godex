@@ -205,20 +205,25 @@ func TestLLMSessionSummarizerUsesModelSummary(t *testing.T) {
 	if len(req.Tools) != 0 {
 		t.Fatalf("expected no tools for summary request, got %+v", req.Tools)
 	}
-	promptMessage := protocol.Message{Role: req.Messages[0].Role, Content: req.Messages[0].Content}
-	if prompt := protocol.MessageText(promptMessage); !strings.Contains(prompt, "<continuation-state>") || !strings.Contains(prompt, "go test ./internal/core/compress") {
-		t.Fatalf("expected continuation state in LLM prompt, got:\n%s", prompt)
+	// Prefix-aligned request shape: the conversation's own system prompt, the
+	// history verbatim, and ONE trailing summary-instruction user message.
+	if req.System != "system prompt" {
+		t.Fatalf("expected the conversation's own system prompt, got %q", req.System)
 	}
-	if text := protocol.MessageText(result.Messages[0]); !strings.Contains(text, "Pinned continuation state") || !strings.Contains(text, "go test ./internal/core/compress") {
-		t.Fatalf("expected pinned continuation state in model summary message, got:\n%s", text)
+	if len(req.Messages) != len(history)+1 {
+		t.Fatalf("expected history + instruction messages, got %d", len(req.Messages))
 	}
-	if !strings.Contains(req.System, "session compaction engine") {
-		t.Fatalf("expected summary system prompt, got %q", req.System)
-	}
-	prompt := req.Messages[0].Content[0].Text
-	if !strings.Contains(prompt, "<recent-user-messages>") ||
-		!strings.Contains(prompt, "Implement P2.1 with model summarization.") {
-		t.Fatalf("expected dedicated recent user prompt budget, got:\n%s", prompt)
+	instruction := protocol.MessageText(protocol.Message{Role: req.Messages[len(req.Messages)-1].Role, Content: req.Messages[len(req.Messages)-1].Content})
+	for _, want := range []string{
+		"session compaction engine",
+		"<continuation-state>",
+		"go test ./internal/core/compress",
+		"<recent-user-messages>",
+		"Implement P2.1 with model summarization.",
+	} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("expected summary instruction to contain %q, got:\n%s", want, instruction)
+		}
 	}
 	if len(result.Messages) == 0 || result.Messages[0].Metadata == nil || result.Messages[0].Metadata.Kind != protocol.KindSummary {
 		t.Fatalf("expected summary message first, got %+v", result.Messages)
@@ -226,6 +231,9 @@ func TestLLMSessionSummarizerUsesModelSummary(t *testing.T) {
 	text := protocol.MessageText(result.Messages[0])
 	if !strings.Contains(text, "Model-assisted compaction summary") || !strings.Contains(text, "finish P2.1 model-backed compaction") {
 		t.Fatalf("expected model summary text, got:\n%s", text)
+	}
+	if !strings.Contains(text, "Pinned continuation state") || !strings.Contains(text, "go test ./internal/core/compress") {
+		t.Fatalf("expected pinned continuation state in model summary message, got:\n%s", text)
 	}
 	if len(result.TranscriptRefs) != 1 {
 		t.Fatalf("expected transcript refs, got %+v", result.TranscriptRefs)
@@ -354,7 +362,11 @@ func TestCompactSemanticSummaryPreservesLongTaskState(t *testing.T) {
 	}
 }
 
-func TestCompactSanitizesLargeRecentToolResults(t *testing.T) {
+// TestCompactKeepsLargeRecentToolResultsVerbatim verifies the retained tail is
+// byte-identical after compaction: large tool results in the recent span are no
+// longer stubbed into a transcript reference (the DSH-aligned retention
+// design), and the full raw history is still available in the transcript.
+func TestCompactKeepsLargeRecentToolResultsVerbatim(t *testing.T) {
 	dir := t.TempDir()
 	compressor := NewCompressor(dir)
 	large := strings.Repeat("status payload with transcript noise\n", 2000)
@@ -378,11 +390,8 @@ func TestCompactSanitizesLargeRecentToolResults(t *testing.T) {
 	if len(last.Content) != 1 || last.Content[0].Type != protocol.BlockToolResult {
 		t.Fatalf("expected recent tool result block, got %+v", last.Content)
 	}
-	if strings.Contains(last.Content[0].Content, strings.Repeat("status payload", 100)) {
-		t.Fatalf("expected compacted recent tool result to be stubbed")
-	}
-	if !strings.Contains(last.Content[0].Content, "tool_result_truncated") || !strings.Contains(last.Content[0].Content, compact[0].Metadata.Transcript) {
-		t.Fatalf("expected truncation stub with transcript reference, got %q", last.Content[0].Content)
+	if last.Content[0].Content != large {
+		t.Fatalf("expected retained tool result verbatim (no truncation stub)")
 	}
 	data, err := os.ReadFile(filepath.Join(dir, compact[0].Metadata.Transcript))
 	if err != nil {
@@ -463,13 +472,14 @@ func TestCompactKeepsAgentOutputsBeyondMetadataBudget(t *testing.T) {
 	}
 }
 
-// TestCompactTrimsMediumRecentToolResults verifies that tool results below the
-// 32KB hard limit are still trimmed to a bounded preview so long tool loops do
-// not dominate the compacted history.
-func TestCompactTrimsMediumRecentToolResults(t *testing.T) {
+// TestCompactKeepsMediumRecentToolResultsVerbatim verifies tool results in the
+// retained span survive compaction byte-for-byte: the DSH-aligned retention
+// design no longer trims them to previews, so the model keeps the real tool
+// output instead of having to re-run the tool.
+func TestCompactKeepsMediumRecentToolResultsVerbatim(t *testing.T) {
 	dir := t.TempDir()
 	compressor := NewCompressor(dir)
-	medium := strings.Repeat("grep output line with file content\n", 400) // ~15KB, below the 32KB stub threshold
+	medium := strings.Repeat("grep output line with file content\n", 400) // ~15KB
 	messages := []protocol.Message{
 		protocol.NewTextMessage(protocol.RoleUser, "search for x"),
 		protocol.NewMessage(protocol.RoleAssistant, protocol.ToolUseBlock("tool-1", "grep", map[string]interface{}{"pattern": "x"})),
@@ -481,19 +491,17 @@ func TestCompactTrimsMediumRecentToolResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compact: %v", err)
 	}
-	foundTrimmed := false
 	for _, msg := range compact {
 		for _, block := range msg.Content {
-			if block.Type == protocol.BlockToolResult && strings.Contains(block.Content, "tool_result_truncated") {
-				foundTrimmed = true
-				if utf8.RuneCountInString(block.Content) > maxRecentToolResultRunes+512 {
-					t.Fatalf("expected trimmed tool result to stay near budget, got %d runes", utf8.RuneCountInString(block.Content))
+			if block.Type == protocol.BlockToolResult {
+				if strings.Contains(block.Content, "tool_result_truncated") {
+					t.Fatalf("expected tool result retained verbatim, found truncation stub")
+				}
+				if block.Content != medium {
+					t.Fatalf("expected tool result bytes intact")
 				}
 			}
 		}
-	}
-	if !foundTrimmed {
-		t.Fatalf("expected medium tool result to be trimmed")
 	}
 }
 
@@ -503,4 +511,132 @@ func truncateForTest(text string, limit int) string {
 		return text
 	}
 	return string(runes[:limit])
+}
+
+func TestRetentionBoundaryRespectsTokenBudget(t *testing.T) {
+	messages := make([]protocol.Message, 0, 8)
+	for i := 0; i < 8; i++ {
+		// Each message is ~10 tokens of ASCII text.
+		messages = append(messages, protocol.NewTextMessage(protocol.RoleUser, strings.Repeat("payload ", 10)))
+	}
+	// Budget 30 tokens: accumulate from the end (~18 tokens/message) → the
+	// boundary lands at the first message that crosses the budget.
+	cutoff := retentionBoundary(messages, 30, 20)
+	if cutoff != 6 {
+		t.Fatalf("expected boundary at 6 (tail ≈ 36 tokens ≥ 30), got %d", cutoff)
+	}
+	// A budget beyond the whole history still compacts at least one message.
+	if got := retentionBoundary(messages, 1<<30, 20); got != 1 {
+		t.Fatalf("expected minimal boundary 1 for oversized budget, got %d", got)
+	}
+	// Message-count fallback when retain tokens are unset.
+	if got := retentionBoundary(messages, 0, 4); got != len(messages)-4 {
+		t.Fatalf("expected fallback boundary len-4, got %d", got)
+	}
+}
+
+func TestRetentionBoundaryNeverSplitsToolPair(t *testing.T) {
+	messages := []protocol.Message{
+		protocol.NewTextMessage(protocol.RoleUser, strings.Repeat("old context ", 60)), // ~180 tokens
+		protocol.NewMessage(protocol.RoleAssistant, protocol.ToolUseBlock("tool-1", "bash", map[string]interface{}{"command": "x"})),
+		protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("tool-1", strings.Repeat("result payload ", 40))),
+		protocol.NewTextMessage(protocol.RoleUser, "final"),
+	}
+	// Small budget would naturally cut after message 2 (tool_use) — the pair
+	// must be pulled into the verbatim tail instead.
+	cutoff := retentionBoundary(messages, 20, 20)
+	if cutoff > 1 {
+		t.Fatalf("expected boundary pulled before the tool_use message, got %d", cutoff)
+	}
+	tail := messages[cutoff:]
+	if len(tail) != 3 {
+		t.Fatalf("expected tail to hold tool_use+result+final, got %d messages", len(tail))
+	}
+}
+
+func TestCompactRetentionTailVerbatim(t *testing.T) {
+	dir := t.TempDir()
+	compressor := NewCompressor(dir)
+	compressor.SetRetainTokens(1000)
+	var messages []protocol.Message
+	for i := 0; i < 10; i++ {
+		messages = append(messages, protocol.NewTextMessage(protocol.RoleUser, fmt.Sprintf("user message %d", i)))
+		messages = append(messages, protocol.NewTextMessage(protocol.RoleAssistant, fmt.Sprintf("assistant reply %d", i)))
+	}
+
+	compact, err := compressor.Compact(messages, "system prompt")
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if len(compact) < 2 {
+		t.Fatalf("expected summary + retained tail, got %d", len(compact))
+	}
+	// Every retained message must be byte-identical to its source message.
+	recent := messages[len(messages)-(len(compact)-1):]
+	for i, msg := range compact[1:] {
+		original := recent[i]
+		if msg.Role != original.Role || protocol.MessageText(msg) != protocol.MessageText(original) {
+			t.Fatalf("retained message %d changed: got %q want %q", i, protocol.MessageText(msg), protocol.MessageText(original))
+		}
+	}
+}
+
+func TestCompactSummaryHasNoTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	compressor := NewCompressor(dir)
+	messages := []protocol.Message{
+		protocol.NewTextMessage(protocol.RoleUser, "first"),
+		protocol.NewTextMessage(protocol.RoleAssistant, "second"),
+	}
+	compact, err := compressor.Compact(messages, "system prompt")
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	text := protocol.MessageText(compact[0])
+	if strings.Contains(text, "Compressed at") {
+		t.Fatalf("expected deterministic summary without timestamp, got %q", text)
+	}
+}
+
+func TestLLMSessionSummarizerPrefixAlignedWithQuasiStablePrefix(t *testing.T) {
+	dir := t.TempDir()
+	compressor := NewCompressor(dir)
+	caller := &summaryCaller{
+		resp: &protocol.Response{Content: []protocol.Block{
+			protocol.TextBlock("Goal: keep working."),
+		}},
+	}
+	summarizer := NewLLMSessionSummarizer(caller, "summary-model", 1024, compressor, NewRuleBasedSessionSummarizer(compressor))
+	history := []protocol.Message{
+		protocol.NewTextMessage(protocol.RoleUser, "first"),
+		protocol.NewTextMessage(protocol.RoleAssistant, "second"),
+	}
+	prefix := []protocol.Message{
+		protocol.NewEphemeralTextMessage(protocol.KindMemory, "memory index"),
+	}
+
+	if _, err := summarizer.SummarizeSession(context.Background(), SessionSummaryRequest{
+		System:  "system prompt",
+		Prefix:  prefix,
+		History: history,
+	}); err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+	if len(caller.requests) != 1 {
+		t.Fatalf("expected one request, got %d", len(caller.requests))
+	}
+	req := caller.requests[0]
+	// [prefix..., history..., instruction] — the prefix must sit verbatim at
+	// the head so the call reuses the conversation's warm prefix cache.
+	if len(req.Messages) != len(prefix)+len(history)+1 {
+		t.Fatalf("expected prefix+history+instruction messages, got %d", len(req.Messages))
+	}
+	head := protocol.MessageText(protocol.Message{Role: req.Messages[0].Role, Content: req.Messages[0].Content})
+	if !strings.Contains(head, "memory index") {
+		t.Fatalf("expected quasi-stable prefix first, got %q", head)
+	}
+	second := protocol.MessageText(protocol.Message{Role: req.Messages[1].Role, Content: req.Messages[1].Content})
+	if !strings.Contains(second, "first") {
+		t.Fatalf("expected history to follow the prefix verbatim, got %q", second)
+	}
 }

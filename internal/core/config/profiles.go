@@ -198,6 +198,23 @@ func positiveOrDefault(value, fallback int) int {
 	return fallback
 }
 
+// nonNegativeOrDefault keeps an explicit 0 (meaning "derive from ratio") while
+// clamping negative misconfigurations to the fallback.
+func nonNegativeOrDefault(value, fallback int) int {
+	if value >= 0 {
+		return value
+	}
+	return fallback
+}
+
+// ratioOrDefault validates a 0..1 ratio; out-of-range values fall back.
+func ratioOrDefault(value, fallback float64) float64 {
+	if value > 0 && value < 1 {
+		return value
+	}
+	return fallback
+}
+
 func controlNodesFromConfigFile(file ConfigFile) []ControlNodeConfig {
 	nodes := make([]ControlNodeConfig, 0, len(file.Control.Nodes))
 	for _, item := range file.Control.Nodes {

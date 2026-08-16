@@ -208,6 +208,8 @@ godex config                                  # 交互式配置向导
 
 > `repo_map` 是 coding profile 下的**确定性仓库快照**（文件路径 + Go 导出符号索引，按路径排序，最多 160 条/2500 token），放在对话历史之前：会话内不随提问或文件编辑变化，保证 provider 前缀缓存（OpenAI/DeepSeek 的自动 prompt caching）跨轮命中。文件创建/编辑/删除会以一条有界（≤12 条）的 `# Repo Map Changes` 变更说明追加在历史之后，另附 ≤8 条的 `# Repo Map (query focus)` 查询相关文件提示；快照只在**会话开始**和**上下文压缩（compaction）**时重建。同理，`# Environment` 段只保留会话内静态信息（版本/目录/时区等），**日期/星期**作为易变内容单独追加在历史之后——每天零点不再使整段历史前缀缓存失效。
 
+> **上下文压缩策略（对齐 DSH）**：自动压缩默认 **hybrid**（LLM 摘要 + 规则兜底），阈值与保留尾按模型窗口缩放——`agent.compaction.context_window_tokens`（默认 128000）× `trigger_ratio`（默认 0.8）为压缩阈值；压缩时**只把旧区浓缩成一个 summary 节点，最近的 `retain_ratio`（默认 0.16）即约 20K token 的保留尾逐字节原样保留**（工具输出不再被截断，压缩后无需重新扫描代码）；`retain_tokens`/`trigger_tokens` 可显式覆盖。LLM 摘要调用复用会话自己的 system + 前缀消息（前缀对齐，命中 provider 缓存）。同步压缩受 `max_latency_ms`（默认 3000）约束，超时自动回退规则摘要；后台压缩不受限。配置详见 `docs/compaction-optimization-plan.md`。
+
 默认策略：
 
 ```yaml

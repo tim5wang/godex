@@ -131,6 +131,10 @@ type AgentCompactionConfig struct {
 	ModelProfileID      string
 	MaxLatencyMS        int
 	KeepRecentMessages  int
+	ContextWindowTokens int
+	TriggerRatio        float64
+	RetainRatio         float64
+	RetainTokens        int
 }
 
 const (

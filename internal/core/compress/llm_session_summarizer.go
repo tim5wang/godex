@@ -2,12 +2,9 @@ package compress
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/modelcontext"
@@ -17,11 +14,6 @@ import (
 const (
 	defaultSummaryMaxTokens     = 2048
 	llmSummaryAttempts          = 2
-	llmSummaryMaxRenderedRunes  = 90000
-	llmSummaryMaxBlockRunes     = 8000
-	llmSummaryMaxJSONRunes      = 6000
-	llmSummaryRecentKeep        = 10
-	llmSummaryPromptSystem      = "You are GoDex's session compaction engine. Produce a dense continuation summary for the next assistant turn. Do not call tools."
 	llmSummaryFailureRecovery   = "model_summary_failed_fallback_rule_based"
 	llmSummaryEmptyResponseHint = "model_summary_empty_fallback_rule_based"
 	llmSummaryReserveTokens     = 16384
@@ -114,9 +106,7 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 	}
 
 	messagesForSummary := sanitizeMessagesForSummaryModel(historyForLLM, transcript)
-	prompt := buildLLMSummaryPrompt(req, transcript, messagesForSummary)
-	messages := []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, prompt)}
-	providerReq := conversation.NewRequest(s.model, s.maxTokens, "", llmSummaryPromptSystem, messages, nil)
+	providerReq := s.buildPrefixAlignedRequest(req, transcript, messagesForSummary)
 
 	diagnostics := make([]string, 0, llmSummaryAttempts)
 	var lastErr error
@@ -196,22 +186,17 @@ func (s *LLMSessionSummarizer) fallbackSummary(ctx context.Context, req SessionS
 func (s *LLMSessionSummarizer) compactWithModelSummary(history []protocol.Message, summaryText, transcript, continuationSnapshot string) []protocol.Message {
 	summary := buildModelSummaryMessage(summaryText, transcript, continuationSnapshot)
 	compact := []protocol.Message{summary}
-	recent := history
-	if len(history) > llmSummaryRecentKeep {
-		recent = history[len(history)-llmSummaryRecentKeep:]
-	}
-	for _, msg := range recent {
-		compact = append(compact, sanitizeRecentMessageForContext(msg, transcript))
-	}
+	// Verbatim retention tail shared with the rule-based path: no truncation,
+	// no rewriting, tool-pair aligned — post-compaction cache and working set
+	// survive.
+	compact = append(compact, s.compressor.RetentionTail(history)...)
 	return compact
 }
 
 func buildModelSummaryMessage(summaryText, transcript, continuationSnapshot string) protocol.Message {
 	var builder strings.Builder
 	builder.WriteString("Model-assisted compaction summary\n")
-	builder.WriteString("Compressed at: ")
-	builder.WriteString(time.Now().Format("2006-01-02 15:04"))
-	builder.WriteString("\nTranscript: ")
+	builder.WriteString("Transcript: ")
 	builder.WriteString(transcript)
 	builder.WriteString("\n\n")
 	builder.WriteString("Use history_search with this transcript when exact older details are needed.\n\n")
@@ -220,15 +205,30 @@ func buildModelSummaryMessage(summaryText, transcript, continuationSnapshot stri
 	return protocol.NewSummaryMessage(builder.String(), transcript)
 }
 
-func buildLLMSummaryPrompt(req SessionSummaryRequest, transcript string, messages []protocol.Message) string {
-	var builder strings.Builder
+// buildPrefixAlignedRequest assembles the summarization request as a prefix of
+// the conversation's own model request: [conversation system][quasi-stable
+// prefix][region verbatim] + one trailing summary-instruction user message.
+// Reusing the conversation's system and message bytes lets the provider serve
+// most of the call from its warm prefix cache (DSH-style, summarizer.ts), and
+// the model reads the real conversation instead of a flattened blob.
+func (s *LLMSessionSummarizer) buildPrefixAlignedRequest(req SessionSummaryRequest, transcript string, region []protocol.Message) protocol.Request {
+	messages := make([]protocol.Message, 0, len(req.Prefix)+len(region)+1)
+	messages = append(messages, protocol.CloneMessages(req.Prefix)...)
+	messages = append(messages, protocol.CloneMessages(region)...)
+	messages = append(messages, protocol.NewTextMessage(protocol.RoleUser, buildSummaryInstruction(req, transcript)))
+	return conversation.NewRequest(s.model, s.maxTokens, "", req.System, messages, nil)
+}
 
-	// Check if this is an incremental update (previous summary exists)
+// buildSummaryInstruction renders the trailing user instruction for the
+// prefix-aligned summarization call. The conversation's own system prompt is
+// already in place, so the instruction is self-contained about the role.
+func buildSummaryInstruction(req SessionSummaryRequest, transcript string) string {
+	var builder strings.Builder
+	builder.WriteString("You are GoDex's session compaction engine. Produce a dense continuation summary for the next assistant turn. Do not call tools.\n")
 	previousSummary := strings.TrimSpace(req.PreviousSummary)
 	isIncremental := previousSummary != ""
-
 	if isIncremental {
-		builder.WriteString("Update the existing session summary with new conversation messages.\n")
+		builder.WriteString("Update the existing session summary with the new conversation messages above.\n")
 		builder.WriteString("RULES:\n")
 		builder.WriteString("- PRESERVE all existing information from the previous summary\n")
 		builder.WriteString("- ADD new progress, decisions, and context from the new messages\n")
@@ -237,7 +237,7 @@ func buildLLMSummaryPrompt(req SessionSummaryRequest, transcript string, message
 		builder.WriteString("- PRESERVE exact file paths, function names, and error messages\n")
 		builder.WriteString("- If something is no longer relevant, remove it\n\n")
 	} else {
-		builder.WriteString("Write a compact continuation summary for this GoDex session.\n")
+		builder.WriteString("Write a compact continuation summary of the conversation above.\n")
 		builder.WriteString("The full transcript has been saved as: ")
 		builder.WriteString(transcript)
 		builder.WriteString("\n\n")
@@ -273,24 +273,10 @@ func buildLLMSummaryPrompt(req SessionSummaryRequest, transcript string, message
 		builder.WriteString(limitRunes(previousSummary, 5000))
 		builder.WriteString("\n</previous-summary>\n\n")
 	}
-
 	if snapshot := strings.TrimSpace(req.ContinuationSnapshot); snapshot != "" {
 		builder.WriteString("<continuation-state>\n")
 		builder.WriteString(limitRunes(snapshot, 5000))
 		builder.WriteString("\n</continuation-state>\n")
-	}
-
-	if strings.TrimSpace(req.System) != "" && !isIncremental {
-		builder.WriteString("\n<system-context>\n")
-		builder.WriteString(limitRunes(req.System, llmSummaryMaxBlockRunes))
-		builder.WriteString("\n</system-context>\n")
-	}
-	if len(req.TokenBreakdown) > 0 && !isIncremental {
-		builder.WriteString("\n<token-pressure>\n")
-		for _, key := range sortedMapKeys(req.TokenBreakdown) {
-			builder.WriteString(fmt.Sprintf("- %s: %d\n", key, req.TokenBreakdown[key]))
-		}
-		builder.WriteString("</token-pressure>\n")
 	}
 	if len(req.RecentUserMessages) > 0 {
 		builder.WriteString("\n<recent-user-messages>\n")
@@ -302,18 +288,7 @@ func buildLLMSummaryPrompt(req SessionSummaryRequest, transcript string, message
 		}
 		builder.WriteString("</recent-user-messages>\n")
 	}
-
-	if isIncremental {
-		builder.WriteString("\n<new-conversation>\n")
-		builder.WriteString(renderMessagesForSummaryPrompt(messages, llmSummaryMaxRenderedRunes))
-		builder.WriteString("\n</new-conversation>\n")
-	} else {
-		builder.WriteString("\n<conversation>\n")
-		builder.WriteString(renderMessagesForSummaryPrompt(messages, llmSummaryMaxRenderedRunes))
-		builder.WriteString("\n</conversation>\n")
-	}
-
-	return builder.String()
+	return strings.TrimSpace(builder.String())
 }
 
 func limitRecentUserMessages(messages []string) []string {
@@ -346,44 +321,29 @@ func limitRecentUserMessages(messages []string) []string {
 	return out
 }
 
+// sanitizeMessagesForSummaryModel prepares the region for the prefix-aligned
+// summarization call. It keeps message bytes verbatim (matching the
+// conversation's own request so the provider prefix cache stays warm) and only
+// stubs tool results too large for the model — with the same summary shape the
+// provider-facing sanitizer uses.
 func sanitizeMessagesForSummaryModel(messages []protocol.Message, transcript string) []protocol.Message {
 	cloned := protocol.CloneMessages(messages)
 	for msgIdx := range cloned {
 		for blockIdx, block := range cloned[msgIdx].Content {
-			switch block.Type {
-			case protocol.BlockText:
-				cloned[msgIdx].Content[blockIdx].Text = limitRunes(block.Text, llmSummaryMaxBlockRunes)
-			case protocol.BlockToolResult:
-				if modelcontext.TooLargeForModel(block.Content) {
-					cloned[msgIdx].Content[blockIdx].Content = modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
-						ToolUseID:  block.ToolUseID,
-						Bytes:      len([]byte(block.Content)),
-						SHA256:     modelcontext.SHA256Hex(block.Content),
-						Transcript: transcript,
-						Note:       "Large tool result omitted from model summary input; use the saved transcript for full output.",
-					})
-					continue
-				}
-				cloned[msgIdx].Content[blockIdx].Content = limitRunes(block.Content, llmSummaryMaxBlockRunes)
-			case protocol.BlockToolUse:
-				cloned[msgIdx].Content[blockIdx].Input = limitMapForSummary(block.Input)
+			if block.Type != protocol.BlockToolResult || !modelcontext.TooLargeForModel(block.Content) {
+				continue
 			}
+			cloned[msgIdx].Content[blockIdx].Content = modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
+				ToolUseID:  block.ToolUseID,
+				Bytes:      len([]byte(block.Content)),
+				SHA256:     modelcontext.SHA256Hex(block.Content),
+				Transcript: transcript,
+				Preview:    modelcontext.TruncatedPreview(block.Content),
+				Note:       "Large tool result was removed from compacted model-visible context; the full output is in the saved transcript.",
+			})
 		}
 	}
 	return cloned
-}
-
-func limitMapForSummary(input map[string]interface{}) map[string]interface{} {
-	if input == nil {
-		return nil
-	}
-	data, err := json.Marshal(input)
-	if err != nil || len([]rune(string(data))) <= llmSummaryMaxJSONRunes {
-		return cloneStringMap(input)
-	}
-	return map[string]interface{}{
-		"summary": limitRunes(string(data), llmSummaryMaxJSONRunes),
-	}
 }
 
 func responseText(resp *protocol.Response) string {
@@ -406,88 +366,10 @@ func responseText(resp *protocol.Response) string {
 	return builder.String()
 }
 
-func renderMessagesForSummaryPrompt(messages []protocol.Message, maxRunes int) string {
-	var builder strings.Builder
-	for idx, msg := range messages {
-		if maxRunes > 0 && len([]rune(builder.String())) >= maxRunes {
-			builder.WriteString("\n...[transcript excerpt truncated]...\n")
-			break
-		}
-		builder.WriteString("\nMessage ")
-		builder.WriteString(fmt.Sprintf("%d", idx+1))
-		builder.WriteString(" role=")
-		builder.WriteString(msg.Role)
-		if msg.Metadata != nil && msg.Metadata.Kind != "" {
-			builder.WriteString(" kind=")
-			builder.WriteString(string(msg.Metadata.Kind))
-		}
-		builder.WriteString("\n")
-		for _, block := range msg.Content {
-			switch block.Type {
-			case protocol.BlockText:
-				builder.WriteString("text: ")
-				builder.WriteString(limitRunes(block.Text, llmSummaryMaxBlockRunes))
-				builder.WriteString("\n")
-			case protocol.BlockToolUse:
-				builder.WriteString("tool_use ")
-				builder.WriteString(block.Name)
-				if block.ID != "" {
-					builder.WriteString(" id=")
-					builder.WriteString(block.ID)
-				}
-				if block.Input != nil {
-					data, err := json.Marshal(block.Input)
-					if err == nil {
-						builder.WriteString(" input=")
-						builder.WriteString(limitRunes(string(data), llmSummaryMaxJSONRunes))
-					}
-				}
-				builder.WriteString("\n")
-			case protocol.BlockToolResult:
-				builder.WriteString("tool_result")
-				if block.ToolUseID != "" {
-					builder.WriteString(" for=")
-					builder.WriteString(block.ToolUseID)
-				}
-				builder.WriteString(": ")
-				builder.WriteString(limitRunes(block.Content, llmSummaryMaxBlockRunes))
-				builder.WriteString("\n")
-			case protocol.BlockImage:
-				builder.WriteString("image: omitted; metadata only\n")
-			}
-		}
-	}
-	return limitRunes(builder.String(), maxRunes)
-}
-
-func sortedMapKeys(values map[string]int) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 func limitRunes(text string, maxRunes int) string {
 	if maxRunes <= 0 || len([]rune(text)) <= maxRunes {
 		return text
 	}
 	runes := []rune(text)
 	return string(runes[:maxRunes]) + "\n...[truncated]..."
-}
-
-func cloneStringMap(input map[string]interface{}) map[string]interface{} {
-	if input == nil {
-		return nil
-	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		return map[string]interface{}{"summary": fmt.Sprintf("%v", input)}
-	}
-	var cloned map[string]interface{}
-	if err := json.Unmarshal(data, &cloned); err != nil {
-		return map[string]interface{}{"summary": string(data)}
-	}
-	return cloned
 }

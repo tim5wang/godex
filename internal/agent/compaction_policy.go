@@ -15,6 +15,12 @@ const (
 	defaultCompactionTriggerTokens       = 60000
 	defaultCompactionTargetHistoryTokens = 12000
 	defaultCompactionMaxLatencyMS        = 3000
+	// DSH-style window-scaled policy defaults: trigger ≈ 0.8×128k, verbatim
+	// retention tail ≈ 0.16×128k.
+	defaultCompactionContextWindowTokens = 128000
+	defaultCompactionTriggerRatio        = 0.8
+	defaultCompactionRetainRatio         = 0.16
+	defaultCompactionRetainTokens        = 20480
 	// maxCompactionTriggerTokens caps the auto-compaction trigger so a
 	// misconfigured value (e.g. 800000) cannot silently disable compaction.
 	// With a trigger above the model's context window the check never fires,
@@ -36,20 +42,88 @@ type compactionCandidate struct {
 }
 
 func (a *Agent) compactionTriggerTokens() int {
-	trigger := 0
 	if a == nil || a.cfg == nil {
-		trigger = defaultCompactionTriggerTokens
-	} else if a.cfg.Compaction.TriggerTokens > 0 {
-		trigger = a.cfg.Compaction.TriggerTokens
-	} else if a.cfg.CompressThreshold > 0 {
-		trigger = a.cfg.CompressThreshold
-	} else {
-		trigger = defaultCompactionTriggerTokens
+		return defaultCompactionTriggerTokens
+	}
+	return compactionTriggerTokensFromConfig(a.cfg)
+}
+
+// compactionTriggerTokensFromConfig computes the auto-compaction trigger:
+// explicit trigger_tokens / compress_threshold wins, otherwise the DSH-style
+// window-scaled value contextWindow × triggerRatio.
+func compactionTriggerTokensFromConfig(cfg *config.Config) int {
+	if cfg == nil {
+		return defaultCompactionTriggerTokens
+	}
+	trigger := 0
+	switch {
+	case cfg.Compaction.TriggerTokens > 0:
+		trigger = cfg.Compaction.TriggerTokens
+	case cfg.CompressThreshold > 0:
+		trigger = cfg.CompressThreshold
+	default:
+		trigger = int(float64(compactionContextWindowTokensFromConfig(cfg)) * compactionTriggerRatioFromConfig(cfg))
 	}
 	if trigger > maxCompactionTriggerTokens {
 		return maxCompactionTriggerTokens
 	}
+	if trigger <= 0 {
+		return defaultCompactionTriggerTokens
+	}
 	return trigger
+}
+
+func compactionContextWindowTokensFromConfig(cfg *config.Config) int {
+	if cfg == nil || cfg.Compaction.ContextWindowTokens <= 0 {
+		return defaultCompactionContextWindowTokens
+	}
+	return cfg.Compaction.ContextWindowTokens
+}
+
+func compactionTriggerRatioFromConfig(cfg *config.Config) float64 {
+	if cfg == nil || cfg.Compaction.TriggerRatio <= 0 {
+		return defaultCompactionTriggerRatio
+	}
+	return cfg.Compaction.TriggerRatio
+}
+
+func compactionRetainRatioFromConfig(cfg *config.Config) float64 {
+	if cfg == nil || cfg.Compaction.RetainRatio <= 0 {
+		return defaultCompactionRetainRatio
+	}
+	return cfg.Compaction.RetainRatio
+}
+
+// compactionRetainTokens returns the verbatim retention tail budget: explicit
+// retain_tokens wins; otherwise contextWindow × retainRatio. It is clamped
+// below the trigger so a misconfiguration cannot ask for a tail larger than
+// the compaction threshold.
+func (a *Agent) compactionRetainTokens() int {
+	if a == nil || a.cfg == nil {
+		return defaultCompactionRetainTokens
+	}
+	return compactionRetainTokensFromConfig(a.cfg)
+}
+
+// compactionRetainTokensFromConfig computes the verbatim retention tail budget
+// shared by the agent and the compressor wiring.
+func compactionRetainTokensFromConfig(cfg *config.Config) int {
+	if cfg == nil {
+		return defaultCompactionRetainTokens
+	}
+	window := compactionContextWindowTokensFromConfig(cfg)
+	retain := cfg.Compaction.RetainTokens
+	if retain <= 0 {
+		retain = int(float64(window) * compactionRetainRatioFromConfig(cfg))
+	}
+	trigger := compactionTriggerTokensFromConfig(cfg)
+	if trigger > 0 && retain >= trigger {
+		return trigger - 1
+	}
+	if retain <= 0 {
+		return defaultCompactionRetainTokens
+	}
+	return retain
 }
 
 func (a *Agent) compactionTargetHistoryTokens() int {
@@ -77,6 +151,16 @@ func (a *Agent) autoCompactionEnabled() bool {
 		return true
 	}
 	return a.cfg.Compaction.AutoEnabled
+}
+
+// autoCompactionMode returns the compaction mode used by automatic compaction
+// (sync + background), honoring the configured mode with the "fast" default so
+// an empty config never surprises.
+func (a *Agent) autoCompactionMode() string {
+	if a == nil || a.cfg == nil {
+		return "fast"
+	}
+	return normalizeAgentCompactionMode(a.cfg.Compaction.Mode)
 }
 
 func normalizeAgentCompactionMode(mode string) string {
@@ -169,45 +253,13 @@ func (a *Agent) runCompaction(ctx context.Context, mode string, req compress.Ses
 	if err != nil {
 		return compactionRunResult{}, err
 	}
-	messages := a.enforceTargetHistoryBudget(result.Messages)
+	// Retention (verbatim tail + summary) is handled inside the compressor;
+	// target_history_tokens no longer crunches the retained tail down.
 	return compactionRunResult{
-		Messages:  messages,
+		Messages:  result.Messages,
 		Mode:      effectiveMode,
 		LatencyMS: latency,
 	}, nil
-}
-
-func (a *Agent) enforceTargetHistoryBudget(messages []protocol.Message) []protocol.Message {
-	target := a.compactionTargetHistoryTokens()
-	if target <= 0 || estimateMessages(messages) <= target {
-		return protocol.CloneMessages(messages)
-	}
-	if len(messages) <= 2 {
-		return protocol.CloneMessages(messages)
-	}
-
-	out := make([]protocol.Message, 0, len(messages))
-	if messages[0].Metadata != nil && messages[0].Metadata.Kind == protocol.KindSummary {
-		out = append(out, messages[0].Clone())
-	}
-	for i := len(messages) - 1; i >= 0 && len(out) < len(messages); i-- {
-		msg := messages[i]
-		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
-			continue
-		}
-		next := append([]protocol.Message{msg.Clone()}, out...)
-		if estimateMessages(next) > target && len(out) > 0 {
-			break
-		}
-		out = next
-		if estimateMessages(out) >= target {
-			break
-		}
-	}
-	if len(out) == 0 {
-		return protocol.CloneMessages(messages[len(messages)-1:])
-	}
-	return out
 }
 
 func (a *Agent) shouldAutoCompact(estimate contextBudgetEstimate) bool {
@@ -299,8 +351,9 @@ func (a *Agent) maybeStartBackgroundCompaction(ctx context.Context) {
 		if !a.backgroundCompactionPressure(estimate) {
 			return
 		}
-		result, err := a.runCompaction(context.Background(), "fast", compress.SessionSummaryRequest{
+		result, err := a.runCompaction(context.Background(), a.autoCompactionMode(), compress.SessionSummaryRequest{
 			System:               system,
+			Prefix:               protocol.CloneMessages(promptStateMessages),
 			History:              protocol.CloneMessages(history),
 			TokenBreakdown:       tokenBreakdownMap(estimate.Breakdown),
 			RecentUserMessages:   recentPersistentUserMessages(history, 6),

@@ -107,6 +107,22 @@ func asInt(value any) int {
 	}
 }
 
+func asFloat(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case string:
+		parsed, _ := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
 func asBool(value any) bool {
 	switch typed := value.(type) {
 	case bool:

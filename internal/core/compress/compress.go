@@ -44,11 +44,6 @@ const (
 	maxRecentAssistantMessages = 10
 	maxRecentAssistantRunes    = 2000
 	maxRecentAssistantTotal    = 12000
-	// maxRecentToolResultRunes caps medium-size tool results kept in the raw
-	// recent messages after compaction. Trimming tool output (which is usually
-	// the bulk of a long session) keeps agent text outputs and instructions
-	// intact while dropping most of the tool noise.
-	maxRecentToolResultRunes = 4000
 )
 
 // defaultKeepRecent is how many raw recent messages are appended verbatim
@@ -65,10 +60,14 @@ var (
 type Compressor struct {
 	transcriptsDir string
 	keepRecent     int
-	mu             sync.Mutex
-	lastHash       [32]byte
-	lastResult     []protocol.Message
-	hasCached      bool
+	// retainTokens is the verbatim retention tail budget in tokens (DSH-style
+	// retainRatio × context window). Non-positive values fall back to the
+	// keepRecent message count so the compressor keeps working standalone.
+	retainTokens int
+	mu           sync.Mutex
+	lastHash     [32]byte
+	lastResult   []protocol.Message
+	hasCached    bool
 }
 
 // NewCompressor creates a new compressor.
@@ -78,10 +77,80 @@ func NewCompressor(transcriptsDir string) *Compressor {
 
 // SetKeepRecent overrides how many raw recent messages are retained verbatim
 // after the summary during compaction. Non-positive values keep the default.
+// It is the fallback retention when SetRetainTokens is not configured.
 func (c *Compressor) SetKeepRecent(n int) {
 	if n > 0 {
 		c.keepRecent = n
 	}
+}
+
+// SetRetainTokens sets the verbatim retention tail budget in tokens. When set,
+// the retained tail is the recent span whose estimated tokens reach this
+// budget (DSH-style); keepRecent is used only as the fallback.
+func (c *Compressor) SetRetainTokens(n int) {
+	if n > 0 {
+		c.retainTokens = n
+	}
+}
+
+// RetentionTail returns the verbatim tail to keep after compaction: the recent
+// span reaching the token budget (or keepRecent messages as fallback),
+// tool-pair aligned. Shared by the rule-based and LLM-backed compactors so
+// both keep the retained history byte-identical.
+func (c *Compressor) RetentionTail(messages []protocol.Message) []protocol.Message {
+	cutoff := retentionBoundary(messages, c.retainTokens, c.keepRecent)
+	tail := make([]protocol.Message, 0, len(messages)-cutoff)
+	for _, msg := range messages[cutoff:] {
+		tail = append(tail, msg.Clone())
+	}
+	return tail
+}
+
+// CompactForBudget compacts messages to fit a small token budget (subagent
+// context budgets). Unlike normal compaction — which retains the recent tail
+// verbatim to preserve information and the provider cache — budget-constrained
+// compaction keeps only a small recent tail and stubs tool results above the
+// model-size threshold into transcript references, so a tool loop's bulk
+// cannot blow the budget. The full raw history is always saved to the
+// transcript.
+func (c *Compressor) CompactForBudget(messages []protocol.Message, budgetTokens int) ([]protocol.Message, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	filename, err := c.saveTranscript(messages)
+	if err != nil {
+		return nil, err
+	}
+	summaryText := buildSemanticSummary(messages, filename, "")
+	compact := []protocol.Message{protocol.NewSummaryMessage(summaryText, filename)}
+	retain := budgetTokens / 2
+	if retain < 1 {
+		retain = 1
+	}
+	for _, msg := range messages[retentionBoundary(messages, retain, c.keepRecent):] {
+		compact = append(compact, stubOversizedToolResults(msg, filename))
+	}
+	return compact, nil
+}
+
+// stubOversizedToolResults replaces tool results too large for the model with
+// a compact transcript reference (used by budget-constrained compaction).
+func stubOversizedToolResults(msg protocol.Message, transcript string) protocol.Message {
+	cloned := msg.Clone()
+	for i, block := range cloned.Content {
+		if block.Type != protocol.BlockToolResult || !modelcontext.TooLargeForModel(block.Content) {
+			continue
+		}
+		cloned.Content[i].Content = modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
+			ToolUseID:  block.ToolUseID,
+			Bytes:      len([]byte(block.Content)),
+			SHA256:     modelcontext.SHA256Hex(block.Content),
+			Transcript: transcript,
+			Preview:    modelcontext.TruncatedPreview(block.Content),
+			Note:       "Large tool result was removed from compacted model-visible context; the full output is in the saved transcript.",
+		})
+	}
+	return cloned
 }
 
 // CountTokens estimates token count using character-class ratios.
@@ -156,20 +225,14 @@ func (c *Compressor) CompactWithSnapshot(messages []protocol.Message, _ string, 
 		return nil, err
 	}
 
-	summaryText := buildSemanticSummary(messages, filename, time.Now(), continuationSnapshot)
+	summaryText := buildSemanticSummary(messages, filename, continuationSnapshot)
 	compact := []protocol.Message{protocol.NewSummaryMessage(summaryText, filename)}
-
-	keepLast := c.keepRecent
-	if keepLast <= 0 {
-		keepLast = defaultKeepRecent
-	}
-	recent := messages
-	if len(messages) > keepLast {
-		recent = messages[len(messages)-keepLast:]
-	}
-
-	for _, msg := range recent {
-		compact = append(compact, sanitizeRecentMessageForContext(msg, filename))
+	// Verbatim retention tail: the recent span reaching the token budget is
+	// kept byte-for-byte (no truncation, no rewriting) so post-compaction the
+	// provider prefix cache and the model's working set survive. Only the
+	// older span is condensed into the summary above.
+	for _, msg := range messages[retentionBoundary(messages, c.retainTokens, c.keepRecent):] {
+		compact = append(compact, msg.Clone())
 	}
 
 	c.mu.Lock()
@@ -181,35 +244,94 @@ func (c *Compressor) CompactWithSnapshot(messages []protocol.Message, _ string, 
 	return compact, nil
 }
 
-func sanitizeRecentMessageForContext(msg protocol.Message, transcript string) protocol.Message {
-	cloned := msg.Clone()
-	for i, block := range cloned.Content {
-		if block.Type != protocol.BlockToolResult {
-			continue
+// retentionBoundary returns the index where the verbatim retention tail begins:
+// the recent span whose estimated tokens reach retainTokens (DSH-style), or the
+// last fallbackKeep messages when retainTokens is unset. The boundary is
+// tool-pair aligned so an assistant tool_use and its tool_result are never
+// split across the compaction edge, and it always compacts at least the oldest
+// message so callers always get a fresh summary node.
+func retentionBoundary(messages []protocol.Message, retainTokens, fallbackKeep int) int {
+	if len(messages) == 0 {
+		return 0
+	}
+	cutoff := len(messages)
+	if retainTokens <= 0 {
+		keep := fallbackKeep
+		if keep <= 0 {
+			keep = 1
 		}
-		if modelcontext.TooLargeForModel(block.Content) {
-			cloned.Content[i].Content = modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
-				ToolUseID:  block.ToolUseID,
-				Bytes:      len([]byte(block.Content)),
-				SHA256:     modelcontext.SHA256Hex(block.Content),
-				Transcript: transcript,
-				Preview:    modelcontext.TruncatedPreview(block.Content),
-				Note:       "Large tool result was removed from compacted model-visible context; the full output is in the saved transcript.",
-			})
-			continue
-		}
-		if runes := utf8.RuneCountInString(block.Content); runes > maxRecentToolResultRunes {
-			// Medium-size tool results (the bulk of a long tool loop) are the
-			// main context hog; keep a short head/tail preview instead of the
-			// whole output so agent text outputs and user instructions stay
-			// visible in the compacted history.
-			cloned.Content[i].Content = fmt.Sprintf(
-				"[tool_result_truncated: kept %d of %d runes; full output in transcript %s]\n\n%s",
-				maxRecentToolResultRunes, runes, transcript, truncateRunes(block.Content, maxRecentToolResultRunes),
-			)
+		cutoff = len(messages) - keep
+	} else {
+		accumulated := 0
+		for i := len(messages) - 1; i >= 0; i-- {
+			accumulated += estimateMessageTokens(messages[i])
+			cutoff = i
+			if accumulated >= retainTokens {
+				break
+			}
 		}
 	}
-	return cloned
+	if cutoff <= 0 {
+		cutoff = 1
+	}
+	// Tool-pair alignment: while the first tail message is a tool_result whose
+	// tool_use sits in the compacted region, pull the boundary back so the
+	// whole pair lands in the verbatim tail.
+	for cutoff < len(messages) && toolResultNeedsEarlierUse(messages[cutoff], messages[:cutoff]) {
+		cutoff--
+	}
+	if cutoff < 1 {
+		cutoff = 1
+	}
+	return cutoff
+}
+
+// toolResultNeedsEarlierUse reports whether msg is a pure tool-result message
+// whose tool_use blocks appear in earlier (i.e. the pair is split across the
+// compaction boundary and should be pulled into the verbatim tail).
+func toolResultNeedsEarlierUse(msg protocol.Message, earlier []protocol.Message) bool {
+	uses := map[string]struct{}{}
+	for _, m := range earlier {
+		for _, block := range m.Content {
+			if block.Type == protocol.BlockToolUse && strings.TrimSpace(block.ID) != "" {
+				uses[block.ID] = struct{}{}
+			}
+		}
+	}
+	for _, block := range msg.Content {
+		if block.Type != protocol.BlockToolResult {
+			return false
+		}
+		if _, ok := uses[block.ToolUseID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// estimateMessageTokens approximates one message's token cost, mirroring the
+// agent's context estimator so retention decisions are consistent with the
+// threshold math.
+func estimateMessageTokens(msg protocol.Message) int {
+	total := 0
+	for _, block := range msg.Content {
+		switch block.Type {
+		case protocol.BlockText:
+			total += CountTokens(block.Text)
+		case protocol.BlockToolUse:
+			total += CountTokens(block.ID)
+			total += CountTokens(block.Name)
+			total += CountTokens(fmt.Sprintf("%v", block.Input))
+		case protocol.BlockToolResult:
+			total += CountTokens(block.ToolUseID)
+			total += CountTokens(block.Content)
+		}
+	}
+	if msg.Metadata != nil {
+		total += CountTokens(string(msg.Metadata.Kind))
+		total += CountTokens(msg.Metadata.Transcript)
+	}
+	return total
 }
 
 func (c *Compressor) getTranscriptFilename() string {
@@ -273,7 +395,7 @@ type semanticSummary struct {
 	fileOps          FileOperations
 }
 
-func buildSemanticSummary(messages []protocol.Message, transcript string, at time.Time, continuationSnapshot string) string {
+func buildSemanticSummary(messages []protocol.Message, transcript, continuationSnapshot string) string {
 	state := semanticSummary{
 		files:     make(map[string]struct{}),
 		toolNames: make(map[string]struct{}),
@@ -364,9 +486,7 @@ func buildSemanticSummary(messages []protocol.Message, transcript string, at tim
 
 	var builder strings.Builder
 	builder.WriteString("## Session Compaction Summary\n")
-	builder.WriteString("Compressed at: ")
-	builder.WriteString(at.Format("2006-01-02 15:04"))
-	builder.WriteString("\nTranscript: ")
+	builder.WriteString("Transcript: ")
 	builder.WriteString(transcript)
 	builder.WriteString("\n\n")
 	builder.WriteString("Use `history_search` with this transcript when exact older details are needed.\n")

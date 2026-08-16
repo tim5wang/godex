@@ -202,7 +202,7 @@ GoDex 1.x is already a local-first, deployable, auditable agent workspace:
 - Bidirectional notes↔memory linkage, context inspector, and token estimation.
 
 **Tools and Safety**
-- 56 tools across 14 bundles: shell/file/grep(ripgrep)/LSP/browser/desktop/web/memory/skill/package/subagent/workflow/MCP/teamtools, with on-demand activation via `tool_exchange`.
+- 58 tools across 14 bundles: shell/file/grep(ripgrep)/LSP/browser/desktop/web/memory/skill/package/subagent/workflow/MCP/teamtools, with on-demand activation via `tool_exchange`.
 - WorkspaceFS file boundaries, shell guard, manual/review/yolo approval, security profiles (trusted-local … dev/repair), content security screener, loop guard, and security audit.
 - Scope isolation (session/personal/org) with write-path restriction.
 

@@ -202,3 +202,96 @@ func (fakeTimeoutErr) Temporary() bool { return true }
 func wrapErr(err error) error {
 	return &url.Error{Op: "Get", URL: "http://x", Err: err}
 }
+
+func TestIsContextLengthError(t *testing.T) {
+	if !IsContextLengthError(&apiStatusError{StatusCode: 400, Message: "maximum context length is 128000 tokens"}) {
+		t.Fatal("expected 400 context-length error detected")
+	}
+	if !IsContextLengthError(&apiStatusError{StatusCode: 422, Message: "context_length_exceeded"}) {
+		t.Fatal("expected 422 context_length_exceeded detected")
+	}
+	if IsContextLengthError(&apiStatusError{StatusCode: 400, Message: "rate limited"}) {
+		t.Fatal("expected unrelated 400 not classified as context-length")
+	}
+	if IsContextLengthError(&apiStatusError{StatusCode: 500, Message: "maximum context length"}) {
+		t.Fatal("expected 500 not classified as context-length")
+	}
+	if IsContextLengthError(errors.New("maximum context length")) {
+		t.Fatal("expected non-status error not classified as context-length")
+	}
+}
+
+// overflowCaller fails with a context-length error once, then succeeds.
+type overflowCaller struct {
+	failures int
+	calls    int
+}
+
+func (c *overflowCaller) Call(context.Context, protocol.Request) (*protocol.Response, error) {
+	c.calls++
+	if c.calls <= c.failures {
+		return nil, &apiStatusError{StatusCode: 400, Message: "maximum context length exceeded"}
+	}
+	return &protocol.Response{Content: []protocol.Block{protocol.TextBlock("recovered")}}, nil
+}
+
+func TestRunnerContextOverflowCompactsAndRetries(t *testing.T) {
+	caller := &overflowCaller{failures: 1}
+	builds := 0
+	overflowCalls := 0
+	runner := Runner{
+		Caller: caller,
+		BuildRequest: func(context.Context) (protocol.Request, error) {
+			builds++
+			return NewRequest("m", 100, "", "sys", []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "hi")}, nil), nil
+		},
+		ExecuteTool: func(context.Context, string, map[string]interface{}) (ToolExecutionResult, error) {
+			return ToolExecutionResult{}, errors.New("no tools expected")
+		},
+		OnContextOverflow: func(context.Context) bool {
+			overflowCalls++
+			return true
+		},
+		MaxContextOverflowRecoveries: 1,
+	}
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+	if overflowCalls != 1 {
+		t.Fatalf("expected overflow recovery invoked once, got %d", overflowCalls)
+	}
+	if builds != 2 {
+		t.Fatalf("expected request rebuilt after compaction, got %d builds", builds)
+	}
+	if result.LastAssistantText != "recovered" {
+		t.Fatalf("expected recovered text, got %q", result.LastAssistantText)
+	}
+}
+
+func TestRunnerContextOverflowBounded(t *testing.T) {
+	// The provider keeps rejecting after compaction: recovery must stop after
+	// the bounded budget instead of looping forever.
+	caller := &overflowCaller{failures: 100}
+	overflowCalls := 0
+	runner := Runner{
+		Caller: caller,
+		BuildRequest: func(context.Context) (protocol.Request, error) {
+			return NewRequest("m", 100, "", "sys", []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "hi")}, nil), nil
+		},
+		ExecuteTool: func(context.Context, string, map[string]interface{}) (ToolExecutionResult, error) {
+			return ToolExecutionResult{}, errors.New("no tools expected")
+		},
+		OnContextOverflow: func(context.Context) bool {
+			overflowCalls++
+			return true
+		},
+		MaxContextOverflowRecoveries: 2,
+	}
+	if _, err := runner.Run(context.Background()); err == nil {
+		t.Fatal("expected the overflow error to surface after bounded recovery")
+	}
+	if overflowCalls != 2 {
+		t.Fatalf("expected exactly 2 overflow recoveries, got %d", overflowCalls)
+	}
+}

@@ -172,6 +172,12 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Agent.Compaction.RetainRatio = asFloat(value)
 	case "agent.compaction.retain_tokens":
 		file.Agent.Compaction.RetainTokens = asInt(value)
+	case "agent.compaction.prune_threshold_chars":
+		file.Agent.Compaction.PruneThresholdChars = asInt(value)
+	case "agent.compaction.prune_head_chars":
+		file.Agent.Compaction.PruneHeadChars = asInt(value)
+	case "agent.compaction.prune_tail_chars":
+		file.Agent.Compaction.PruneTailChars = asInt(value)
 	case "agent.max_turns":
 		file.Agent.MaxTurns = asInt(value)
 	case "agent.profile":
@@ -543,6 +549,9 @@ func storedValues(file ConfigFile) map[string]any {
 		"agent.compaction.trigger_ratio":                         file.Agent.Compaction.TriggerRatio,
 		"agent.compaction.retain_ratio":                          file.Agent.Compaction.RetainRatio,
 		"agent.compaction.retain_tokens":                         file.Agent.Compaction.RetainTokens,
+		"agent.compaction.prune_threshold_chars":                 file.Agent.Compaction.PruneThresholdChars,
+		"agent.compaction.prune_head_chars":                      file.Agent.Compaction.PruneHeadChars,
+		"agent.compaction.prune_tail_chars":                      file.Agent.Compaction.PruneTailChars,
 		"agent.max_turns":                                        file.Agent.MaxTurns,
 		"agent.profile":                                          NormalizeAgentProfile(file.Agent.Profile),
 		"agent.default_profiles.acp":                             NormalizeAgentProfile(file.Agent.DefaultProfiles.ACP),
@@ -743,6 +752,9 @@ func effectiveValues(cfg *Config) map[string]any {
 		"agent.compaction.trigger_ratio":                         cfg.Compaction.TriggerRatio,
 		"agent.compaction.retain_ratio":                          cfg.Compaction.RetainRatio,
 		"agent.compaction.retain_tokens":                         cfg.Compaction.RetainTokens,
+		"agent.compaction.prune_threshold_chars":                 cfg.Compaction.PruneThresholdChars,
+		"agent.compaction.prune_head_chars":                      cfg.Compaction.PruneHeadChars,
+		"agent.compaction.prune_tail_chars":                      cfg.Compaction.PruneTailChars,
 		"agent.max_turns":                                        cfg.MaxTurns,
 		"agent.profile":                                          cfg.AgentProfile,
 		"agent.default_profiles.acp":                             cfg.AgentDefaultProfiles.ACP,

@@ -28,6 +28,12 @@ const defaultMaxEmptyResponses = 3
 const defaultMaxLengthRecoveries = 4
 const defaultMaxModelRetries = 2
 
+// defaultMaxContextOverflowRecoveries bounds how many times one turn compacts
+// and retries after a provider context-overflow error (Phase 4.2). One retry
+// is enough: if a single oversized unit still overflows after compaction, the
+// error path takes over.
+const defaultMaxContextOverflowRecoveries = 1
+
 // defaultMaxNoMutationRounds caps consecutive tool rounds with no file
 // mutation (edit_file/write_file) before the loop guard nudges the model.
 // Research spirals ("I found the root cause, one more confirmation...") look
@@ -171,7 +177,12 @@ type Runner struct {
 	// extended thinking). It mirrors OnAssistantTextDelta but for chain-of-
 	// thought: frontends surface it as a live "thinking" stream, and the
 	// deltas are also accumulated into the final response's ReasoningContent.
-	OnAssistantThinkingDelta   func(string)
+	OnAssistantThinkingDelta func(string)
+	// OnContextOverflow is invoked when the provider rejects the request for
+	// exceeding its context window (Phase 4.2). It should compact the history;
+	// returning true makes the runner rebuild the request and retry from the
+	// smaller prefix. Nil disables overflow recovery.
+	OnContextOverflow          func(context.Context) bool
 	OnExecutedTools            func([]ExecutedTool)
 	OnToolStarted              func(protocol.Block)
 	OnToolFinished             func(ExecutedTool)
@@ -193,8 +204,11 @@ type Runner struct {
 	MaxStalledTaskPollingTools int
 	MaxLoopGuardRecoveries     int
 	MaxModelRetries            int
-	LoopGuardMode              LoopGuardMode
-	ToolTimeout                time.Duration
+	// MaxContextOverflowRecoveries bounds how many times one turn may compact
+	// and retry after a provider context-overflow error.
+	MaxContextOverflowRecoveries int
+	LoopGuardMode                LoopGuardMode
+	ToolTimeout                  time.Duration
 }
 
 // NewRequest builds a provider request from structured messages.
@@ -313,6 +327,11 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 
 		var resp *protocol.Response
 		var streamed bool
+		maxOverflowRecoveries := r.MaxContextOverflowRecoveries
+		if maxOverflowRecoveries < 0 {
+			maxOverflowRecoveries = 0
+		}
+		overflowRecoveries := 0
 		for attempt := 0; ; attempt++ {
 			var callErr error
 			resp, streamed, callErr = r.callModel(ctx, req)
@@ -324,6 +343,21 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 				result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
 				r.emitPhase(PhaseEvent{Phase: PhaseInterrupted, Iteration: turn + 1, Model: req.Model, Message: callErr.Error(), RecoveryHint: result.RecoveryHint})
 				return result, callErr
+			}
+			// Phase 4.2 overflow recovery: the provider rejected the request
+			// for exceeding its context window. Compacting the history and
+			// retrying from the smaller prefix turns a dead end into a rescue;
+			// the request is rebuilt so the retry carries the compacted state.
+			if IsContextLengthError(callErr) && r.OnContextOverflow != nil && overflowRecoveries < maxOverflowRecoveries {
+				overflowRecoveries++
+				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: fmt.Sprintf("provider context overflow; compacting and retrying (%d/%d): %v", overflowRecoveries, maxOverflowRecoveries, callErr), RecoveryHint: "The provider rejected the request for exceeding its context window; the runner compacted history and retried."})
+				if r.OnContextOverflow(ctx) {
+					if rebuilt, rebuildErr := r.BuildRequest(ctx); rebuildErr == nil {
+						rebuilt.Messages = SanitizeMessagesForProvider(rebuilt.Messages)
+						req = rebuilt
+						continue
+					}
+				}
 			}
 			// 5.2 Turn Error routing: retryable/transient model errors get a
 			// bounded in-turn retry budget instead of failing the turn on the

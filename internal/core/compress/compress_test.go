@@ -284,6 +284,7 @@ func TestLLMSessionSummarizerOmitsLargeToolResultFromModelInput(t *testing.T) {
 		}},
 	}
 	summarizer := NewLLMSessionSummarizer(caller, "summary-model", 1024, compressor, NewRuleBasedSessionSummarizer(compressor))
+	summarizer.SetPruneConfig(8192, 4096, 1024)
 	secretMarker := "SECRET_RAW_TOOL_RESULT_SHOULD_NOT_REACH_SUMMARY_MODEL"
 	large := strings.Repeat("head data\n", 5000) + secretMarker + strings.Repeat("\ntail data", 5000)
 	history := []protocol.Message{

@@ -135,6 +135,21 @@ type AgentCompactionConfig struct {
 	TriggerRatio        float64
 	RetainRatio         float64
 	RetainTokens        int
+	PruneThresholdChars int
+	PruneHeadChars      int
+	PruneTailChars      int
+	ModelPolicies       []CompactionModelPolicy
+}
+
+// CompactionModelPolicy is one resolved per-model compaction policy override.
+type CompactionModelPolicy struct {
+	Provider            string
+	Model               string
+	ContextWindowTokens int
+	TriggerTokens       int
+	RetainTokens        int
+	TriggerRatio        float64
+	RetainRatio         float64
 }
 
 const (

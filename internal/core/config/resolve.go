@@ -282,6 +282,15 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveInt("agent.compaction.retain_tokens", file.Agent.Compaction.RetainTokens, "GODEX_AGENT_COMPACTION_RETAIN_TOKENS", func(v int) {
 		current.Compaction.RetainTokens = nonNegativeOrDefault(v, 0)
 	})
+	resolveInt("agent.compaction.prune_threshold_chars", file.Agent.Compaction.PruneThresholdChars, "GODEX_AGENT_COMPACTION_PRUNE_THRESHOLD_CHARS", func(v int) {
+		current.Compaction.PruneThresholdChars = positiveOrDefault(v, 8192)
+	})
+	resolveInt("agent.compaction.prune_head_chars", file.Agent.Compaction.PruneHeadChars, "GODEX_AGENT_COMPACTION_PRUNE_HEAD_CHARS", func(v int) {
+		current.Compaction.PruneHeadChars = nonNegativeOrDefault(v, 4096)
+	})
+	resolveInt("agent.compaction.prune_tail_chars", file.Agent.Compaction.PruneTailChars, "GODEX_AGENT_COMPACTION_PRUNE_TAIL_CHARS", func(v int) {
+		current.Compaction.PruneTailChars = nonNegativeOrDefault(v, 1024)
+	})
 	resolveInt("agent.max_turns", file.Agent.MaxTurns, "GODEX_AGENT_MAX_TURNS", func(v int) { current.MaxTurns = v })
 	resolveString("agent.profile", file.Agent.Profile, "GODEX_AGENT_PROFILE", func(v string) {
 		current.AgentProfile = NormalizeAgentProfile(v)
@@ -903,6 +912,10 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			TriggerRatio:        ratioOrDefault(file.Agent.Compaction.TriggerRatio, 0.8),
 			RetainRatio:         ratioOrDefault(file.Agent.Compaction.RetainRatio, 0.16),
 			RetainTokens:        nonNegativeOrDefault(file.Agent.Compaction.RetainTokens, 0),
+			PruneThresholdChars: positiveOrDefault(file.Agent.Compaction.PruneThresholdChars, 8192),
+			PruneHeadChars:      nonNegativeOrDefault(file.Agent.Compaction.PruneHeadChars, 4096),
+			PruneTailChars:      nonNegativeOrDefault(file.Agent.Compaction.PruneTailChars, 1024),
+			ModelPolicies:       resolveCompactionModelPolicies(file.Agent.Compaction.ModelPolicies),
 		},
 		MaxTurns:     file.Agent.MaxTurns,
 		AgentProfile: NormalizeAgentProfile(file.Agent.Profile),

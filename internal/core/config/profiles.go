@@ -215,6 +215,25 @@ func ratioOrDefault(value, fallback float64) float64 {
 	return fallback
 }
 
+// resolveCompactionModelPolicies normalizes per-model compaction policies,
+// trimming identifiers and applying ratio defaults per entry.
+func resolveCompactionModelPolicies(items []CompactionModelPolicySection) []CompactionModelPolicy {
+	out := make([]CompactionModelPolicy, 0, len(items))
+	for _, item := range items {
+		policy := CompactionModelPolicy{
+			Provider:            strings.TrimSpace(item.Provider),
+			Model:               strings.TrimSpace(item.Model),
+			ContextWindowTokens: positiveOrDefault(item.ContextWindowTokens, 128000),
+			TriggerTokens:       positiveOrDefault(item.TriggerTokens, 0),
+			RetainTokens:        nonNegativeOrDefault(item.RetainTokens, 0),
+			TriggerRatio:        ratioOrDefault(item.TriggerRatio, 0.8),
+			RetainRatio:         ratioOrDefault(item.RetainRatio, 0.16),
+		}
+		out = append(out, policy)
+	}
+	return out
+}
+
 func controlNodesFromConfigFile(file ConfigFile) []ControlNodeConfig {
 	nodes := make([]ControlNodeConfig, 0, len(file.Control.Nodes))
 	for _, item := range file.Control.Nodes {

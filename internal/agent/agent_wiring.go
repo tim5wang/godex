@@ -45,7 +45,9 @@ func buildDependencies(cfg *config.Config) dependencies {
 	ruleSummarizer := compress.NewRuleBasedSessionSummarizer(compressor)
 	sessionSummarizer := compress.SessionSummarizer(ruleSummarizer)
 	if strings.TrimSpace(cfg.APIKey) != "" {
-		sessionSummarizer = compress.NewLLMSessionSummarizer(client, cfg.Model, min(cfg.MaxTokens, 2048), compressor, ruleSummarizer)
+		llmSummarizer := compress.NewLLMSessionSummarizer(client, cfg.Model, min(cfg.MaxTokens, 2048), compressor, ruleSummarizer)
+		applyCompactionPruneConfig(llmSummarizer, cfg)
+		sessionSummarizer = llmSummarizer
 	}
 	webFetch := tools.NewWebFetchService(cfg.Tools.WebFetch, cfg.TempDir)
 	webSearch := tools.NewWebSearchService(cfg.Tools.WebSearch)

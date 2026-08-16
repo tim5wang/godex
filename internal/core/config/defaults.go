@@ -62,6 +62,12 @@ func defaultConfigFile() ConfigFile {
 				TriggerRatio:        0.8,
 				RetainRatio:         0.16,
 				RetainTokens:        0,
+				// DSH tool-result-pruner defaults: prune tool results above 8192
+				// characters to head (4096) + marker + tail (1024) in the LLM
+				// summary input.
+				PruneThresholdChars: 8192,
+				PruneHeadChars:      4096,
+				PruneTailChars:      1024,
 			},
 			MaxTurns: 1000,
 			Profile:  AgentProfileGeneral,

@@ -1,7 +1,7 @@
 # GoDex 压缩优化实施计划（对齐 DeepSeek Harness）
 
-> 状态：已落地（Phase 1/2/3 与 UI 同步全部完成并测试；见各阶段 ✅ 与验收标准）
-> 修订日志：2026-08-16 制定本计划并实施：对照 DSH `packages/compaction/compaction-basic/{index,region,config,summarizer}.ts` 与 `packages/core/session/surface.ts`，映射到 GoDex `internal/agent/{compaction_policy,context_facade}.go`、`internal/core/compress/{compress,llm_session_summarizer}.go` 与 `internal/core/config`；目标 = 修复"压缩过狠丢信息"与"压缩破坏前缀缓存"。
+> 状态：已落地（Phase 1/2/3/4 与 UI 同步全部完成并测试；见各阶段 ✅ 与验收标准）
+> 修订日志：2026-08-16 制定本计划并实施 Phase 1-3 + UI 同步；2026-08-16 追加实施 Phase 4（模型无关 pruner、provider context-overflow 恢复、per-model 策略表）。对照 DSH `packages/compaction/compaction-basic/{index,region,config,summarizer}.ts`、`packages/compaction/compaction-tool-result-pruner/src/index.ts` 与 `packages/core/session/surface.ts`，映射到 GoDex `internal/agent/{compaction_policy,context_facade}.go`、`internal/core/compress/{compress,llm_session_summarizer,pruner}.go`、`internal/core/conversation/{runner,turn_error}.go` 与 `internal/core/config`；目标 = 修复"压缩过狠丢信息"与"压缩破坏前缀缓存"。
 
 ## 背景与目标
 
@@ -66,6 +66,28 @@ DSH 的四条对应设计（`region.ts:98 selectCompactableRange`、`index.ts:25
 - `ui/web/src/features/chat/panels/ContextPanels.tsx`：Context 弹层新增「保留尾（原样保留）」行（`retain_tokens`）；阈值/占用率继续由 `compress_threshold` 驱动（值随窗口比例变化）；compaction 诊断行显示 mode（现在会是 hybrid）。
 - `ui/web/src/i18n/messages.ts` 补充 `ctxPopoverRetention`（中/英）；`lib/types.ts` `ContextInspection` 补字段。
 
+## Phase 4：三个可选加固项 ✅
+
+### 4.1 模型无关 pruner ✅
+
+- `internal/core/compress/pruner.go`：`PruneToolResultText`（超阈值裁成 head + marker + tail，按 Unicode code point 切片不拆代理对）+ `PruneOversizedToolResults`（逐消息克隆裁剪）。
+- 应用于 LLM 摘要输入（`LLMSessionSummarizer.pruneRegionForSummary`，替代原先整块 stub 成转录引用——保留头尾信息量更大的部分）；保留尾不受影响（Phase 2 verbatim 优先）。
+- 配置：`agent.compaction.prune_threshold_chars`（默认 8192）/`prune_head_chars`（4096）/`prune_tail_chars`（1024，DSH `compaction-tool-result-pruner` 默认）。
+- 测试：阈值内不变、头尾+marker 保留、代理对不拆、只裁剪 tool result、禁用阈值保持原样。
+
+### 4.2 provider context-overflow 恢复 ✅
+
+- `turn_error.go` `IsContextLengthError`：HTTP 400/422 + context-length 标记（`context_length_exceeded`/`maximum context length`/…）。
+- `runner.go`：新增 `OnContextOverflow` 回调 + `MaxContextOverflowRecoveries`（默认 1，有界）；context-length 错误时先压缩、重建请求（重新 `BuildRequest` + sanitize）、再重试——把 400 死路变成自动救回。
+- `agent.compactForOverflow`：绕过阈值、用 `CompactForBudget`（预算 = 当前压缩阈值）——**同时 stub 超大 tool result 并保留小保留尾**，保证紧急路径真正缩小请求（纯保留语义在小历史下不缩，重试会再次溢出）。
+- 测试：`TestIsContextLengthError`、runner 级压缩重试（`TestRunnerContextOverflowCompactsAndRetries`）、有界（`TestRunnerContextOverflowBounded`）、agent 级 `TestCompactForOverflowRewritesHistory`。
+
+### 4.3 per-model 策略表 ✅
+
+- 配置：`agent.compaction.model_policies: [{provider, model, context_window_tokens, trigger_tokens, retain_tokens, trigger_ratio, retain_ratio}]`；`compactionPolicyForTarget` 按 provider 精确 + model 前缀/通配（`gpt-5*`）最长匹配。
+- `compactionTriggerTokensForTarget`/`compactionRetainTokensForTarget`：命中的策略按字段覆盖全局窗口/比例/保留；显式值仍优先。
+- 测试：`TestCompactionModelPolicyOverride`（精确/前缀匹配、策略字段覆盖、未命中回退全局）。
+
 ## 迁移与兼容
 
 - 旧会话已有的 `KindSummary` + transcript 引用：`extractPreviousSummary` 不变，新语义可再压缩旧压缩历史。
@@ -78,4 +100,5 @@ DSH 的四条对应设计（`region.ts:98 selectCompactableRange`、`index.ts:25
 2. 压缩频率随窗口比例缩放（默认 128K → 阈值 ≈ 102K）✅（`TestCompactionWindowScaledPolicy`）；
 3. 自动压缩默认走 LLM（hybrid），摘要调用为前缀对齐（`TestLLMSessionSummarizerPrefixAlignedWithQuasiStablePrefix`）✅；
 4. 同输入两次压缩输出一致（无时间戳）✅（`TestCompactSummaryHasNoTimestamp`）；
-5. agent 全量测试与 clean HEAD 基线一致（无新失败）✅。
+5. agent 全量测试与 clean HEAD 基线一致（无新失败）✅；
+6. Phase 4：pruner 只裁剪超大 tool result 且确定性 ✅；context-overflow 自动压缩重试且重试次数有界 ✅；per-model 策略命中/回退正确 ✅。

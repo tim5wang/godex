@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/tools"
@@ -111,5 +113,84 @@ func TestCompactionWindowScaledPolicy(t *testing.T) {
 	a.cfg.Compaction.RetainTokens = 200000
 	if got := a.compactionRetainTokens(); got != 102399 {
 		t.Fatalf("expected retain clamped below trigger, got %d", got)
+	}
+}
+
+// Per-model policy table (Phase 4.3): exact provider + longest model prefix
+// match wins; explicit policy fields override the global window/ratio.
+func TestCompactionModelPolicyOverride(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.cfg.Compaction.TriggerTokens = 0
+	a.cfg.CompressThreshold = 0
+	a.cfg.Compaction.ContextWindowTokens = 128000
+	a.cfg.Compaction.TriggerRatio = 0.8
+	a.cfg.Compaction.RetainRatio = 0.16
+	a.cfg.Compaction.ModelPolicies = []config.CompactionModelPolicy{
+		{Provider: "deepseek", Model: "deepseek-chat", ContextWindowTokens: 64000, TriggerRatio: 0.5, RetainRatio: 0.25},
+		{Provider: "deepseek", Model: "gpt", RetainTokens: 9000},
+	}
+	// A real profile makes the routed provider/model resolvable for matching.
+	a.cfg.DefaultProfileID = "main"
+	a.cfg.ModelProfiles = map[string]config.ModelProfileConfig{
+		"main": {ID: "main", Provider: "deepseek", Model: "deepseek-chat"},
+	}
+
+	// The most specific policy (deepseek-chat, window 64k) wins: trigger
+	// 64k×0.5, retain 64k×0.25.
+	if got := a.compactionTriggerTokens(); got != 32000 {
+		t.Fatalf("expected 64k×0.5 trigger from policy, got %d", got)
+	}
+	if got := a.compactionRetainTokens(); got != 16000 {
+		t.Fatalf("expected 64k×0.25 retain from policy, got %d", got)
+	}
+
+	// Model prefix match: "gpt" matches "gpt-5" by prefix; its explicit
+	// retain_tokens applies while trigger falls back to the global window.
+	a.cfg.DefaultProfileID = "gpt"
+	a.cfg.ModelProfiles = map[string]config.ModelProfileConfig{
+		"main": {ID: "main", Provider: "deepseek", Model: "deepseek-chat"},
+		"gpt":  {ID: "gpt", Provider: "deepseek", Model: "gpt-5"},
+	}
+	if got := a.compactionRetainTokens(); got != 9000 {
+		t.Fatalf("expected prefix-policy retain 9000, got %d", got)
+	}
+	if got := a.compactionTriggerTokens(); got != 102400 {
+		t.Fatalf("expected global 128k×0.8 trigger, got %d", got)
+	}
+
+	// No matching policy: global window/ratio apply.
+	a.cfg.DefaultProfileID = "none"
+	a.cfg.ModelProfiles = map[string]config.ModelProfileConfig{
+		"main": {ID: "main", Provider: "deepseek", Model: "deepseek-chat"},
+		"gpt":  {ID: "gpt", Provider: "deepseek", Model: "gpt-5"},
+		"none": {ID: "none", Provider: "openai", Model: "claude-x"},
+	}
+	if got := a.compactionTriggerTokens(); got != 102400 {
+		t.Fatalf("expected global 128k×0.8 trigger, got %d", got)
+	}
+}
+
+// compactForOverflow (Phase 4.2) force-compacts history regardless of pressure
+// and reports whether the history was rewritten.
+func TestCompactForOverflowRewritesHistory(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.cfg.Compaction.Mode = "fast"
+	big := strings.Repeat("tool output line\n", 3000)
+	for i := 0; i < 8; i++ {
+		a.AddMessage("user step " + fmt.Sprint(i))
+		a.AddMessage("assistant step " + fmt.Sprint(i))
+	}
+	a.appendMessage(protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("tool-1", big)))
+
+	before, beforeVersion := a.messageState()
+	if !a.compactForOverflow(context.Background()) {
+		t.Fatal("expected overflow compaction to rewrite history")
+	}
+	after, _ := a.messageState()
+	if estimateMessages(after) >= estimateMessages(before) {
+		t.Fatalf("expected smaller history after overflow compaction: before=%d after=%d", estimateMessages(before), estimateMessages(after))
+	}
+	if a.historyVersion <= beforeVersion {
+		t.Fatal("expected history version to advance")
 	}
 }

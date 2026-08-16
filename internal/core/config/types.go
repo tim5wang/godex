@@ -113,6 +113,27 @@ type AgentCompactionSection struct {
 	TriggerRatio        float64 `yaml:"trigger_ratio"`
 	RetainRatio         float64 `yaml:"retain_ratio"`
 	RetainTokens        int     `yaml:"retain_tokens"`
+	// PruneThresholdChars/PruneHeadChars/PruneTailChars configure the
+	// model-free tool-result pruner (Phase 4.1): oversized tool results in the
+	// LLM summary input are trimmed to head + marker + tail.
+	PruneThresholdChars int `yaml:"prune_threshold_chars"`
+	PruneHeadChars      int `yaml:"prune_head_chars"`
+	PruneTailChars      int `yaml:"prune_tail_chars"`
+	// ModelPolicies overrides the window/ratio/retention per provider/model
+	// (Phase 4.3, DSH modelPolicies): exact provider + longest model prefix
+	// match wins.
+	ModelPolicies []CompactionModelPolicySection `yaml:"model_policies"`
+}
+
+// CompactionModelPolicySection is one per-model compaction policy override.
+type CompactionModelPolicySection struct {
+	Provider            string  `yaml:"provider"`
+	Model               string  `yaml:"model"`
+	ContextWindowTokens int     `yaml:"context_window_tokens"`
+	TriggerTokens       int     `yaml:"trigger_tokens"`
+	RetainTokens        int     `yaml:"retain_tokens"`
+	TriggerRatio        float64 `yaml:"trigger_ratio"`
+	RetainRatio         float64 `yaml:"retain_ratio"`
 }
 
 type AgentDefaultProfilesSection struct {

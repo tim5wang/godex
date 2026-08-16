@@ -56,7 +56,7 @@ type RetryableTurnError struct {
 	msg string
 }
 
-func (e *RetryableTurnError) Error() string  { return e.msg }
+func (e *RetryableTurnError) Error() string { return e.msg }
 func (e *RetryableTurnError) Class() TurnErrorClass {
 	return TurnErrorRetryable
 }
@@ -66,7 +66,7 @@ type TransientTurnError struct {
 	msg string
 }
 
-func (e *TransientTurnError) Error() string  { return e.msg }
+func (e *TransientTurnError) Error() string { return e.msg }
 func (e *TransientTurnError) Class() TurnErrorClass {
 	return TurnErrorTransient
 }
@@ -76,7 +76,7 @@ type NonRetryableTurnError struct {
 	msg string
 }
 
-func (e *NonRetryableTurnError) Error() string  { return e.msg }
+func (e *NonRetryableTurnError) Error() string { return e.msg }
 func (e *NonRetryableTurnError) Class() TurnErrorClass {
 	return TurnErrorNonRetryable
 }
@@ -140,6 +140,39 @@ func ClassifyTurnError(err error) TurnErrorClass {
 }
 
 const genericTurnFailureMessage = "That turn failed and couldn't be completed. The details are in the operator error log."
+
+// IsContextLengthError reports whether the provider rejected the request
+// because the context is too long (HTTP 400/422 with a context-length marker).
+// Such failures are recoverable by compacting the history and retrying the
+// request (Phase 4.2 overflow recovery); the runner routes them to
+// OnContextOverflow instead of treating them as terminal.
+func IsContextLengthError(err error) bool {
+	var statusErr *apiStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	if statusErr.StatusCode != http.StatusBadRequest && statusErr.StatusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	msg := strings.ToLower(statusErr.Message)
+	for _, marker := range []string{
+		"context_length_exceeded",
+		"maximum context length",
+		"context length exceeded",
+		"context window",
+		"too many tokens",
+		"token limit",
+		"prompt is too long",
+		"input is too long",
+		"reduce the length",
+		"max context",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
 
 // TurnFailureMessage returns the user-facing message for a failed turn.
 //

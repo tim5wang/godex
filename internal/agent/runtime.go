@@ -701,6 +701,10 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
 			emit(events.EventAssistantThinkingDelta, payload)
 		},
+		OnContextOverflow: func(ctx context.Context) bool {
+			return a.compactForOverflow(ctx)
+		},
+		MaxContextOverflowRecoveries: 1,
 		OnAssistantText: func(text string) {
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
 			emit(events.EventAssistantMessageComplete, payload)

@@ -48,22 +48,45 @@ func (a *Agent) compactionTriggerTokens() int {
 	return compactionTriggerTokensFromConfig(a.cfg)
 }
 
-// compactionTriggerTokensFromConfig computes the auto-compaction trigger:
-// explicit trigger_tokens / compress_threshold wins, otherwise the DSH-style
-// window-scaled value contextWindow × triggerRatio.
+// compactionTriggerTokensFromConfig computes the auto-compaction trigger for
+// the config's routed model: explicit trigger_tokens / compress_threshold
+// wins, otherwise the DSH-style window-scaled value contextWindow ×
+// triggerRatio, with per-model policy overrides (Phase 4.3).
 func compactionTriggerTokensFromConfig(cfg *config.Config) int {
+	provider, model := routedCompactionTarget(cfg)
+	return compactionTriggerTokensForTarget(cfg, provider, model)
+}
+
+func compactionTriggerTokensForTarget(cfg *config.Config, provider, model string) int {
 	if cfg == nil {
 		return defaultCompactionTriggerTokens
 	}
 	trigger := 0
-	switch {
-	case cfg.Compaction.TriggerTokens > 0:
+	if cfg.Compaction.TriggerTokens > 0 {
 		trigger = cfg.Compaction.TriggerTokens
-	case cfg.CompressThreshold > 0:
+	} else if cfg.CompressThreshold > 0 {
 		trigger = cfg.CompressThreshold
-	default:
-		trigger = int(float64(compactionContextWindowTokensFromConfig(cfg)) * compactionTriggerRatioFromConfig(cfg))
 	}
+	window := compactionContextWindowTokensFromConfig(cfg)
+	ratio := compactionTriggerRatioFromConfig(cfg)
+	if policy := compactionPolicyForTarget(cfg, provider, model); policy != nil {
+		if policy.TriggerTokens > 0 {
+			return clampCompactionTrigger(policy.TriggerTokens)
+		}
+		if policy.ContextWindowTokens > 0 {
+			window = policy.ContextWindowTokens
+		}
+		if policy.TriggerRatio > 0 {
+			ratio = policy.TriggerRatio
+		}
+	}
+	if trigger <= 0 {
+		trigger = int(float64(window) * ratio)
+	}
+	return clampCompactionTrigger(trigger)
+}
+
+func clampCompactionTrigger(trigger int) int {
 	if trigger > maxCompactionTriggerTokens {
 		return maxCompactionTriggerTokens
 	}
@@ -94,6 +117,64 @@ func compactionRetainRatioFromConfig(cfg *config.Config) float64 {
 	return cfg.Compaction.RetainRatio
 }
 
+// routedCompactionTarget resolves the provider/model used for per-model policy
+// matching: the effective default model profile. When no real profile is
+// configured (synthetic fallback), the provider is left empty so policies with
+// an empty provider match any upstream.
+func routedCompactionTarget(cfg *config.Config) (string, string) {
+	if cfg == nil {
+		return "", ""
+	}
+	profile := cfg.DefaultModelProfile()
+	model := strings.TrimSpace(profile.Model)
+	if model == "" {
+		model = strings.TrimSpace(cfg.Model)
+	}
+	provider := strings.TrimSpace(profile.Provider)
+	if _, ok := cfg.ModelProfileByID(profile.ID); !ok && len(cfg.ModelProfiles) == 0 {
+		provider = ""
+	}
+	return provider, model
+}
+
+// compactionPolicyForTarget finds the best per-model policy override (Phase
+// 4.3): the provider must match exactly (when specified) and the model pattern
+// must match by exact/prefix/wildcard; the longest matching model pattern wins.
+func compactionPolicyForTarget(cfg *config.Config, provider, model string) *config.CompactionModelPolicy {
+	if cfg == nil {
+		return nil
+	}
+	var best *config.CompactionModelPolicy
+	bestLen := -1
+	for i := range cfg.Compaction.ModelPolicies {
+		policy := &cfg.Compaction.ModelPolicies[i]
+		if strings.TrimSpace(policy.Provider) != "" && !strings.EqualFold(strings.TrimSpace(policy.Provider), strings.TrimSpace(provider)) {
+			continue
+		}
+		pattern := strings.TrimSpace(policy.Model)
+		if pattern != "" && !compactionModelMatches(pattern, model) {
+			continue
+		}
+		if len(pattern) > bestLen {
+			best = policy
+			bestLen = len(pattern)
+		}
+	}
+	return best
+}
+
+// compactionModelMatches matches a policy model pattern: exact, bare prefix
+// ("gpt-5" matches "gpt-5-codex"), or wildcard prefix ("gpt-5*").
+func compactionModelMatches(pattern, model string) bool {
+	if pattern == "" || model == "" {
+		return false
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(model, strings.TrimSuffix(pattern, "*"))
+	}
+	return pattern == model || strings.HasPrefix(model, pattern)
+}
+
 // compactionRetainTokens returns the verbatim retention tail budget: explicit
 // retain_tokens wins; otherwise contextWindow × retainRatio. It is clamped
 // below the trigger so a misconfiguration cannot ask for a tail larger than
@@ -108,15 +189,32 @@ func (a *Agent) compactionRetainTokens() int {
 // compactionRetainTokensFromConfig computes the verbatim retention tail budget
 // shared by the agent and the compressor wiring.
 func compactionRetainTokensFromConfig(cfg *config.Config) int {
+	provider, model := routedCompactionTarget(cfg)
+	return compactionRetainTokensForTarget(cfg, provider, model)
+}
+
+func compactionRetainTokensForTarget(cfg *config.Config, provider, model string) int {
 	if cfg == nil {
 		return defaultCompactionRetainTokens
 	}
 	window := compactionContextWindowTokensFromConfig(cfg)
+	ratio := compactionRetainRatioFromConfig(cfg)
 	retain := cfg.Compaction.RetainTokens
-	if retain <= 0 {
-		retain = int(float64(window) * compactionRetainRatioFromConfig(cfg))
+	if policy := compactionPolicyForTarget(cfg, provider, model); policy != nil {
+		if policy.RetainTokens > 0 {
+			retain = policy.RetainTokens
+		}
+		if policy.ContextWindowTokens > 0 {
+			window = policy.ContextWindowTokens
+		}
+		if policy.RetainRatio > 0 {
+			ratio = policy.RetainRatio
+		}
 	}
-	trigger := compactionTriggerTokensFromConfig(cfg)
+	if retain <= 0 {
+		retain = int(float64(window) * ratio)
+	}
+	trigger := compactionTriggerTokensForTarget(cfg, provider, model)
 	if trigger > 0 && retain >= trigger {
 		return trigger - 1
 	}
@@ -138,6 +236,55 @@ func (a *Agent) compactionMaxLatencyMS() int {
 		return defaultCompactionMaxLatencyMS
 	}
 	return a.cfg.Compaction.MaxLatencyMS
+}
+
+// applyCompactionPruneConfig wires the model-free tool-result pruner config
+// (Phase 4.1) onto an LLM-backed summarizer.
+func applyCompactionPruneConfig(summarizer *compress.LLMSessionSummarizer, cfg *config.Config) {
+	if summarizer == nil || cfg == nil {
+		return
+	}
+	summarizer.SetPruneConfig(
+		cfg.Compaction.PruneThresholdChars,
+		cfg.Compaction.PruneHeadChars,
+		cfg.Compaction.PruneTailChars,
+	)
+}
+
+// compactForOverflow force-compacts the session history so a provider
+// context-overflow retry starts from a smaller prefix (Phase 4.2). Unlike
+// maybeAutoCompact it bypasses the pressure threshold entirely and uses
+// budget-constrained compaction: oversized tool results are stubbed to
+// transcript references and only a small recent tail stays verbatim, so the
+// emergency actually shrinks the request (the normal verbatim tail would keep
+// small histories unchanged and the retry would overflow again). Returns true
+// when the history was actually rewritten.
+func (a *Agent) compactForOverflow(ctx context.Context) bool {
+	if a == nil || a.compressor == nil {
+		return false
+	}
+	history, version := a.messageState()
+	if len(history) == 0 {
+		return false
+	}
+	budget := a.compactionTriggerTokens()
+	if budget <= 0 {
+		budget = defaultCompactionTriggerTokens
+	}
+	compacted, err := a.compressor.CompactForBudget(history, budget)
+	if err != nil || len(compacted) == 0 {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.historyVersion != version {
+		return false
+	}
+	a.messages = protocol.CloneMessages(compacted)
+	a.transcriptRefs = mergeTranscriptRefs(a.transcriptRefs, extractTranscriptRefs(compacted))
+	a.historyVersion++
+	a.lastCompactedVersion = a.historyVersion
+	return true
 }
 
 func (a *Agent) autoCompactionEnabled() bool {
@@ -168,9 +315,16 @@ func normalizeAgentCompactionMode(mode string) string {
 }
 
 func (a *Agent) compactionSummarizer(mode string) (compress.SessionSummarizer, string) {
+	return a.compactionSummarizerFor(mode, a.compressor)
+}
+
+// compactionSummarizerFor builds the summarizer for the mode bound to the given
+// compressor (an emergency path may pass a scoped compressor with a smaller
+// retention tail).
+func (a *Agent) compactionSummarizerFor(mode string, compressor *compress.Compressor) (compress.SessionSummarizer, string) {
 	normalized := normalizeAgentCompactionMode(mode)
 	if normalized != "model" && normalized != "hybrid" {
-		return compress.NewRuleBasedSessionSummarizer(a.compressor), "fast"
+		return compress.NewRuleBasedSessionSummarizer(compressor), "fast"
 	}
 	// model/hybrid compaction must use an LLM-backed summarizer bound to the
 	// session's currently active client/model. An explicitly configured
@@ -178,21 +332,27 @@ func (a *Agent) compactionSummarizer(mode string) (compress.SessionSummarizer, s
 	// web UI sessions whose credentials arrive via ApplyModelProfile (not the
 	// startup cfg.APIKey) still get real model compression instead of silently
 	// degrading to the rule-based default wired at startup.
-	if s := a.summarizer; s != nil {
-		if _, ruleBased := s.(*compress.RuleBasedSessionSummarizer); !ruleBased {
-			return s, "model"
+	if compressor == a.compressor {
+		if s := a.summarizer; s != nil {
+			if _, ruleBased := s.(*compress.RuleBasedSessionSummarizer); !ruleBased {
+				return s, "model"
+			}
 		}
 	}
-	if llm := a.buildLLMSummarizerFromSession(); llm != nil {
+	if llm := a.buildLLMSummarizerFor(compressor); llm != nil {
 		return llm, "model"
 	}
-	return compress.NewRuleBasedSessionSummarizer(a.compressor), "fast"
+	return compress.NewRuleBasedSessionSummarizer(compressor), "fast"
 }
 
 // buildLLMSummarizerFromSession constructs an LLM-backed session summarizer
 // from the agent's current client/model. It returns nil when no usable model
 // caller is configured so callers fall back to rule-based compaction.
 func (a *Agent) buildLLMSummarizerFromSession() compress.SessionSummarizer {
+	return a.buildLLMSummarizerFor(a.compressor)
+}
+
+func (a *Agent) buildLLMSummarizerFor(compressor *compress.Compressor) compress.SessionSummarizer {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	client := a.client
@@ -205,8 +365,10 @@ func (a *Agent) buildLLMSummarizerFromSession() compress.SessionSummarizer {
 	if client == nil || model == "" {
 		return nil
 	}
-	rule := compress.NewRuleBasedSessionSummarizer(a.compressor)
-	return compress.NewLLMSessionSummarizer(client, model, min(maxTokens, 2048), a.compressor, rule)
+	rule := compress.NewRuleBasedSessionSummarizer(compressor)
+	llmSummarizer := compress.NewLLMSessionSummarizer(client, model, min(maxTokens, 2048), compressor, rule)
+	applyCompactionPruneConfig(llmSummarizer, a.cfg)
+	return llmSummarizer
 }
 
 // DefaultCompactionMode returns the configured default compaction mode

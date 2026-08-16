@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
-	"github.com/tim5wang/godex/internal/core/modelcontext"
 	"github.com/tim5wang/godex/internal/core/protocol"
 )
 
@@ -28,6 +27,11 @@ type LLMSessionSummarizer struct {
 	maxTokens  int
 	compressor *Compressor
 	fallback   SessionSummarizer
+	// pruneThresholdChars/PruneHeadChars/PruneTailChars configure the
+	// model-free tool-result pruner applied to the summary region (Phase 4.1).
+	pruneThresholdChars int
+	pruneHeadChars      int
+	pruneTailChars      int
 }
 
 func NewLLMSessionSummarizer(caller conversation.Caller, model string, maxTokens int, compressor *Compressor, fallback SessionSummarizer) *LLMSessionSummarizer {
@@ -48,6 +52,14 @@ func NewLLMSessionSummarizer(caller conversation.Caller, model string, maxTokens
 		compressor: compressor,
 		fallback:   fallback,
 	}
+}
+
+// SetPruneConfig configures the model-free tool-result pruner applied to the
+// summary region (Phase 4.1). Non-positive thresholds disable pruning.
+func (s *LLMSessionSummarizer) SetPruneConfig(thresholdChars, headChars, tailChars int) {
+	s.pruneThresholdChars = thresholdChars
+	s.pruneHeadChars = headChars
+	s.pruneTailChars = tailChars
 }
 
 // reserveTokensFromContextWindow estimates a reasonable token budget for the
@@ -105,7 +117,7 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 		return s.fallbackSummary(ctx, req, []string{"llm_summary_transcript_failed: " + err.Error()}, llmSummaryFailureRecovery)
 	}
 
-	messagesForSummary := sanitizeMessagesForSummaryModel(historyForLLM, transcript)
+	messagesForSummary := s.pruneRegionForSummary(historyForLLM, transcript)
 	providerReq := s.buildPrefixAlignedRequest(req, transcript, messagesForSummary)
 
 	diagnostics := make([]string, 0, llmSummaryAttempts)
@@ -321,29 +333,13 @@ func limitRecentUserMessages(messages []string) []string {
 	return out
 }
 
-// sanitizeMessagesForSummaryModel prepares the region for the prefix-aligned
-// summarization call. It keeps message bytes verbatim (matching the
-// conversation's own request so the provider prefix cache stays warm) and only
-// stubs tool results too large for the model — with the same summary shape the
-// provider-facing sanitizer uses.
-func sanitizeMessagesForSummaryModel(messages []protocol.Message, transcript string) []protocol.Message {
-	cloned := protocol.CloneMessages(messages)
-	for msgIdx := range cloned {
-		for blockIdx, block := range cloned[msgIdx].Content {
-			if block.Type != protocol.BlockToolResult || !modelcontext.TooLargeForModel(block.Content) {
-				continue
-			}
-			cloned[msgIdx].Content[blockIdx].Content = modelcontext.SummaryJSON(modelcontext.LargeToolResultSummary{
-				ToolUseID:  block.ToolUseID,
-				Bytes:      len([]byte(block.Content)),
-				SHA256:     modelcontext.SHA256Hex(block.Content),
-				Transcript: transcript,
-				Preview:    modelcontext.TruncatedPreview(block.Content),
-				Note:       "Large tool result was removed from compacted model-visible context; the full output is in the saved transcript.",
-			})
-		}
-	}
-	return cloned
+// pruneRegionForSummary prepares the region for the prefix-aligned
+// summarization call: message bytes stay verbatim (matching the conversation's
+// own request so the provider prefix cache stays warm), and oversized tool
+// results are pruned to head + marker + tail by the model-free pruner instead
+// of being fully stubbed away.
+func (s *LLMSessionSummarizer) pruneRegionForSummary(messages []protocol.Message, transcript string) []protocol.Message {
+	return PruneOversizedToolResults(messages, s.pruneThresholdChars, s.pruneHeadChars, s.pruneTailChars, transcript)
 }
 
 func responseText(resp *protocol.Response) string {

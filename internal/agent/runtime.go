@@ -701,6 +701,14 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: text}
 			emit(events.EventAssistantThinkingDelta, payload)
 		},
+		OnStreamStarted: func() {
+			// The ChatGPT codex backend streams reasoning only as encrypted
+			// content, so there are no plaintext thinking deltas to forward.
+			// Emit a one-shot placeholder so the frontend shows "Thinking…"
+			// instead of a blank wait while the model reasons.
+			payload := events.TextPayload{Role: protocol.RoleAssistant, Text: "…"}
+			emit(events.EventAssistantThinkingDelta, payload)
+		},
 		OnContextOverflow: func(ctx context.Context) bool {
 			return a.compactForOverflow(ctx)
 		},

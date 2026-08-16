@@ -67,11 +67,45 @@ func TestOpenAICodexClientUsesStreamingResponsesEndpoint(t *testing.T) {
 	if got := body["stream"]; got != true {
 		t.Fatalf("expected stream=true, got %#v", got)
 	}
+	// store=true is required for the ChatGPT backend's conversation prompt
+	// cache to report hits (measured a fixed 0-2560 cached tokens with
+	// store=false despite a byte-stable growing prefix).
+	if got := body["store"]; got != true {
+		t.Fatalf("expected store=true for conversation prompt cache, got %#v", got)
+	}
 	if _, ok := body["max_output_tokens"]; ok {
 		t.Fatalf("codex backend rejects max_output_tokens, got body %#v", body)
 	}
 	if got := protocol.BlocksText(resp.Content); got != "hello" {
 		t.Fatalf("expected response text hello, got %q", got)
+	}
+}
+
+// The ChatGPT codex backend streams reasoning only as encrypted content, so
+// the client signals OnStreamStarted once and frontends show a "thinking…"
+// placeholder instead of a blank wait.
+func TestOpenAICodexClientSignalsStreamStarted(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning.encrypted_content\",\"encrypted_content\":\"...\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICodexClient(server.URL, "test-token", 5*time.Second)
+	started := 0
+	if _, err := client.Stream(context.Background(), protocol.Request{Model: "gpt-5.6-sol"}, StreamHandler{
+		OnStreamStarted: func() { started++ },
+	}); err != nil {
+		t.Fatalf("codex stream: %v", err)
+	}
+	if started != 1 {
+		t.Fatalf("expected OnStreamStarted exactly once, got %d", started)
 	}
 }
 

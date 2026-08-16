@@ -33,6 +33,11 @@ type StreamCaller interface {
 // StreamHandler receives model-provider deltas during one streamed call.
 type StreamHandler struct {
 	OnTextDelta func(string)
+	// OnStreamStarted is invoked once when the first stream event arrives. It
+	// lets callers show a "thinking…" placeholder for providers (e.g. the
+	// ChatGPT codex backend) that deliver reasoning only as encrypted content
+	// with no plaintext reasoning deltas.
+	OnStreamStarted func()
 	// OnToolUse is invoked for every Anthropic tool_use block. It is
 	// called three times per block:
 	//   1. on content_block_start  (the block's id, name, type are set,
@@ -389,12 +394,12 @@ func maxDuration(a, b time.Duration) time.Duration {
 }
 
 type streamWireEvent struct {
-	Type         string             `json:"type"`
-	Index        int                `json:"index,omitempty"`
-	Message      *protocol.Response   `json:"message,omitempty"`
-	ContentBlock *streamContentBlock  `json:"content_block,omitempty"`
-	Delta        streamWireDelta      `json:"delta,omitempty"`
-	Error        *streamWireError     `json:"error,omitempty"`
+	Type         string              `json:"type"`
+	Index        int                 `json:"index,omitempty"`
+	Message      *protocol.Response  `json:"message,omitempty"`
+	ContentBlock *streamContentBlock `json:"content_block,omitempty"`
+	Delta        streamWireDelta     `json:"delta,omitempty"`
+	Error        *streamWireError    `json:"error,omitempty"`
 	// Usage is the Anthropic streaming `message_delta.usage` field, which
 	// the spec places at the TOP level of the frame alongside `type` and
 	// `delta` (not nested inside `delta`). We keep Delta.Usage for legacy
@@ -414,14 +419,14 @@ type streamWireEvent struct {
 }
 
 type openAIWireChoice struct {
-	Index        int               `json:"index"`
-	Delta        openAIWireDelta   `json:"delta"`
-	FinishReason string            `json:"finish_reason"`
+	Index        int             `json:"index"`
+	Delta        openAIWireDelta `json:"delta"`
+	FinishReason string          `json:"finish_reason"`
 }
 
 type openAIWireDelta struct {
-	Role      string             `json:"role,omitempty"`
-	Content   string             `json:"content,omitempty"`
+	Role      string               `json:"role,omitempty"`
+	Content   string               `json:"content,omitempty"`
 	ToolCalls []openAIWireToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -438,9 +443,9 @@ type openAIWireFunction struct {
 }
 
 type streamWireDelta struct {
-	Type        string         `json:"type"`
-	Text        string         `json:"text,omitempty"`
-	PartialJSON string         `json:"partial_json,omitempty"`
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
 	// Thinking is the partial chain-of-thought text from an
 	// extended-thinking content_block_delta. The wire shape is
 	// `{type:"thinking_delta", thinking:"..."}` per the Anthropic
@@ -452,9 +457,9 @@ type streamWireDelta struct {
 	// minted it is resumed on the same upstream; the gateway
 	// forwards it verbatim so Pi can keep multi-turn reasoning
 	// context intact.
-	Signature string `json:"signature,omitempty"`
-	StopReason  string         `json:"stop_reason,omitempty"`
-	Usage       *protocol.Usage `json:"usage,omitempty"`
+	Signature  string          `json:"signature,omitempty"`
+	StopReason string          `json:"stop_reason,omitempty"`
+	Usage      *protocol.Usage `json:"usage,omitempty"`
 }
 
 type streamWireError struct {
@@ -471,14 +476,14 @@ type streamWireError struct {
 // We surface both shapes into the parser so the final response
 // can round-trip them.
 type streamContentBlock struct {
-	Type      string `json:"type,omitempty"`
-	Text      string `json:"text,omitempty"`
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
+	Type      string                 `json:"type,omitempty"`
+	Text      string                 `json:"text,omitempty"`
+	ID        string                 `json:"id,omitempty"`
+	Name      string                 `json:"name,omitempty"`
 	Input     map[string]interface{} `json:"input,omitempty"`
-	Thinking  string `json:"thinking,omitempty"`
-	Signature string `json:"signature,omitempty"`
-	Data      string `json:"data,omitempty"`
+	Thinking  string                 `json:"thinking,omitempty"`
+	Signature string                 `json:"signature,omitempty"`
+	Data      string                 `json:"data,omitempty"`
 }
 
 type streamBlockState struct {
@@ -489,7 +494,7 @@ type streamBlockState struct {
 	// frames. The final text is what we keep on the response's
 	// BlockThinking entry (along with the signature we accumulated
 	// in partialSignature).
-	partialThinking strings.Builder
+	partialThinking  strings.Builder
 	partialSignature strings.Builder
 }
 
@@ -1036,8 +1041,8 @@ func marshalAnthropicBody(req protocol.Request) ([]byte, error) {
 		if req.AnthropicNative && cacheCtrl != nil {
 			payload["system"] = []map[string]interface{}{
 				{
-					"type":         "text",
-					"text":         req.System,
+					"type":          "text",
+					"text":          req.System,
 					"cache_control": cacheCtrl,
 				},
 			}

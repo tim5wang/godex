@@ -69,8 +69,19 @@ func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, ha
 	state := &codexResponsesStreamState{
 		toolCalls: make(map[int64]codexToolCallAcc),
 	}
+	started := false
 	for stream.Next() {
 		evt := stream.Current()
+		if !started {
+			started = true
+			// Reasoning-started signal: the ChatGPT codex backend delivers
+			// reasoning only as encrypted content (no plaintext
+			// reasoning_summary_text deltas), so frontends get a "thinking…"
+			// placeholder instead of a blank wait.
+			if handler.OnStreamStarted != nil {
+				handler.OnStreamStarted()
+			}
+		}
 		if err := applyCodexResponsesSDKEvent(state, evt, handler); err != nil {
 			finalErr = err
 			return nil, err
@@ -97,7 +108,10 @@ func codexResponsesParams(req protocol.Request) responses.ResponseNewParams {
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: codexInputFromProtocol(req),
 		},
-		Store: param.NewOpt(false),
+		// store=true: the ChatGPT codex backend's conversation prompt cache
+		// only reports hits for stored responses (measured 0-2560 fixed cached
+		// tokens with store=false despite a byte-stable growing prefix).
+		Store: param.NewOpt(true),
 		Include: []responses.ResponseIncludable{
 			responses.ResponseIncludableReasoningEncryptedContent,
 		},

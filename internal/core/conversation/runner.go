@@ -178,6 +178,10 @@ type Runner struct {
 	// thought: frontends surface it as a live "thinking" stream, and the
 	// deltas are also accumulated into the final response's ReasoningContent.
 	OnAssistantThinkingDelta func(string)
+	// OnStreamStarted is invoked once per streamed model call when the first
+	// event arrives; frontends show a "thinking…" placeholder for providers
+	// that stream no plaintext reasoning (e.g. the ChatGPT codex backend).
+	OnStreamStarted func()
 	// OnContextOverflow is invoked when the provider rejects the request for
 	// exceeding its context window (Phase 4.2). It should compact the history;
 	// returning true makes the runner rebuild the request and retry from the
@@ -868,6 +872,11 @@ func (r Runner) callModel(ctx context.Context, req protocol.Request) (*protocol.
 			OnThinkingDelta: func(thinking, signature string) {
 				if thinking != "" && r.OnAssistantThinkingDelta != nil {
 					r.OnAssistantThinkingDelta(thinking)
+				}
+			},
+			OnStreamStarted: func() {
+				if r.OnStreamStarted != nil {
+					r.OnStreamStarted()
 				}
 			},
 		})

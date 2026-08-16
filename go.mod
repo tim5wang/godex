@@ -21,6 +21,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/afero v1.15.0
 	github.com/spf13/afero/sftpfs v1.15.0
+	github.com/tetratelabs/wazero v1.12.0
 	github.com/tim5wang/min-tui v0.5.11
 	github.com/xuri/excelize/v2 v2.10.0
 	github.com/ysmood/gson v0.7.3

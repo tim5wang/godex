@@ -1,0 +1,384 @@
+// Package wasmrt is the wazero-based WASM tool executor (research doc 阶段 B /
+// P4 MVP). It runs Go/Rust/TinyGo-compiled WASM plugins inside the GoDex
+// process with a versioned JSON ABI and a small set of explicit, controlled
+// host calls (log, KV, workspace read). Full WASI filesystem/network/shell and
+// env access are intentionally NOT exposed in the MVP.
+//
+// ABI (godex:plugin@0.1), all functions use i32 linear-memory pointers and
+// NUL-terminated JSON strings:
+//
+//	godex_abi_version() -> ptr            ABI version string
+//	godex_tools_list() -> ptr             JSON: {"tools":[ToolDecl...]}
+//	godex_request_buffer() -> ptr         stable request mailbox (>=64KiB)
+//	godex_invoke() -> ptr                 JSON response to the mailbox request
+//
+// The host writes the JSON request into the mailbox, then calls godex_invoke;
+// the plugin replies with a pointer to a NUL-terminated JSON response. No
+// per-call guest allocation is needed, so repeated calls do not leak memory.
+package wasmrt
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+)
+
+// ABI version implemented by this host and expected from plugins.
+const (
+	// ABIVersion is the versioned JSON ABI contract.
+	ABIVersion = "godex:plugin@0.1"
+	// MaxMemoryPages caps guest linear memory (default 32 MiB). Go-compiled
+	// plugins need ~2 MiB minimum plus heap headroom, so the default is
+	// generous; TinyGo plugins are much smaller.
+	MaxMemoryPages = 512
+	// DefaultCallTimeout bounds a single tool call.
+	DefaultCallTimeout = 30 * time.Second
+	// MailboxSize is the guest request buffer the host writes into.
+	MailboxSize = 64 * 1024
+	// MaxResponseSize bounds the JSON response read from the guest.
+	MaxResponseSize = 4 * 1024 * 1024
+)
+
+// ToolDecl is the tools_list entry a plugin declares.
+type ToolDecl struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// HostCallbacks are the controlled host functions exposed to plugins.
+type HostCallbacks struct {
+	// Log receives plugin log lines (best-effort).
+	Log func(message string)
+	// KVGet reads one plugin KV entry ("" when missing).
+	KVGet func(key string) string
+	// KVSet stores one plugin KV entry.
+	KVSet func(key, value string)
+	// WorkspaceRead reads a workspace file by relative path; returns "" and
+	// err for missing/escaping paths.
+	WorkspaceRead func(relPath string) (string, error)
+}
+
+// Config controls one WASM plugin execution environment.
+type Config struct {
+	// Binary is the compiled .wasm module contents.
+	Binary []byte
+	// Host are the controlled host callbacks (may be nil for no-op).
+	Host HostCallbacks
+	// CallTimeout bounds each tool call; zero uses DefaultCallTimeout.
+	CallTimeout time.Duration
+	// MaxMemoryPages caps guest memory; zero uses MaxMemoryPages.
+	MaxMemoryPages uint32
+	// MaxConcurrent bounds concurrent guest calls per runtime (default 4).
+	MaxConcurrent int
+}
+
+// Plugin is one loaded WASM plugin runtime.
+type Plugin struct {
+	config          Config
+	runtime         wazero.Runtime
+	module          api.Module
+	exportInvoke    api.Function
+	exportToolsList api.Function
+	exportABI       api.Function
+	mailboxPtr      uint32
+	mailboxOnce     sync.Once
+	// sem bounds the number of callers queued on this plugin. The guest call
+	// itself is serialized by callMu: Go wasm guests are single-threaded, so
+	// concurrent guest execution would corrupt the guest runtime.
+	sem       chan struct{}
+	callMu    sync.Mutex
+	closeOnce sync.Once
+}
+
+// request is the JSON envelope sent to godex_invoke.
+type request struct {
+	Action    string         `json:"action"`
+	Tool      string         `json:"tool,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+// response is the JSON envelope returned from godex_invoke.
+type response struct {
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+	Result any    `json:"result,omitempty"`
+}
+
+// NewPlugin compiles and instantiates the WASM module.
+func NewPlugin(ctx context.Context, config Config) (*Plugin, error) {
+	if len(config.Binary) == 0 {
+		return nil, fmt.Errorf("wasm plugin: empty binary")
+	}
+	if config.CallTimeout <= 0 {
+		config.CallTimeout = DefaultCallTimeout
+	}
+	pages := config.MaxMemoryPages
+	if pages == 0 {
+		pages = MaxMemoryPages
+	}
+	concurrency := config.MaxConcurrent
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+
+	plugin := &Plugin{
+		config: config,
+		sem:    make(chan struct{}, concurrency),
+	}
+
+	runtime := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithMemoryLimitPages(pages))
+	plugin.runtime = runtime
+	if _, err := wasi_snapshot_preview1.Instantiate(ctx, runtime); err != nil {
+		_ = runtime.Close(ctx)
+		return nil, fmt.Errorf("wasm plugin: instantiate wasi: %w", err)
+	}
+	if err := instantiateHostModule(ctx, runtime, config.Host); err != nil {
+		_ = runtime.Close(ctx)
+		return nil, err
+	}
+
+	moduleConfig := wazero.NewModuleConfig().
+		WithStartFunctions("_initialize").
+		WithSysWalltime().
+		WithSysNanosleep()
+	module, err := runtime.InstantiateWithConfig(ctx, config.Binary, moduleConfig)
+	if err != nil {
+		_ = runtime.Close(ctx)
+		return nil, fmt.Errorf("wasm plugin: instantiate module: %w", err)
+	}
+	plugin.module = module
+	plugin.exportInvoke = module.ExportedFunction("godex_invoke")
+	plugin.exportToolsList = module.ExportedFunction("godex_tools_list")
+	plugin.exportABI = module.ExportedFunction("godex_abi_version")
+	if plugin.exportInvoke == nil || module.ExportedFunction("godex_request_buffer") == nil {
+		_ = plugin.Close(ctx)
+		return nil, fmt.Errorf("wasm plugin: missing godex_invoke/godex_request_buffer exports (ABI %s)", ABIVersion)
+	}
+	return plugin, nil
+}
+
+// instantiateHostModule wires the controlled host module "godex:host". Host
+// functions receive the calling module via api.Module, so the guest module may
+// be instantiated after the host module.
+func instantiateHostModule(ctx context.Context, runtime wazero.Runtime, host HostCallbacks) error {
+	builder := runtime.NewHostModuleBuilder("godex:host")
+
+	readString := func(mod api.Module, ptr, length uint32) string {
+		data, ok := mod.Memory().Read(ptr, length)
+		if !ok {
+			return ""
+		}
+		return string(data)
+	}
+
+	// godex_log(ptr, len)
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, ptr, length uint32) {
+		if host.Log != nil {
+			host.Log(readString(mod, ptr, length))
+		}
+	}).Export("godex_log")
+
+	// godex_kv_get(keyPtr, keyLen, outPtr, outLen) -> written bytes
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen, outPtr, outLen uint32) uint32 {
+		key := readString(mod, keyPtr, keyLen)
+		value := ""
+		if host.KVGet != nil {
+			value = host.KVGet(key)
+		}
+		return writeString(mod, outPtr, outLen, value)
+	}).Export("godex_kv_get")
+
+	// godex_kv_set(keyPtr, keyLen, valPtr, valLen)
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen, valPtr, valLen uint32) {
+		if host.KVSet != nil {
+			host.KVSet(readString(mod, keyPtr, keyLen), readString(mod, valPtr, valLen))
+		}
+	}).Export("godex_kv_set")
+
+	// godex_workspace_read(relPtr, relLen, outPtr, outLen) -> written bytes
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, relPtr, relLen, outPtr, outLen uint32) uint32 {
+		rel := readString(mod, relPtr, relLen)
+		value := ""
+		if host.WorkspaceRead != nil {
+			if data, err := host.WorkspaceRead(rel); err == nil {
+				value = data
+			}
+		}
+		return writeString(mod, outPtr, outLen, value)
+	}).Export("godex_workspace_read")
+
+	_, err := builder.Instantiate(ctx)
+	return err
+}
+
+// writeString copies value into guest memory bounded by outLen, returning the
+// number of bytes written (0 when the buffer is too small).
+func writeString(mod api.Module, outPtr, outLen uint32, value string) uint32 {
+	if outLen == 0 {
+		return 0
+	}
+	n := uint32(len(value))
+	if n > outLen {
+		n = outLen
+	}
+	if !mod.Memory().Write(outPtr, []byte(value[:n])) {
+		return 0
+	}
+	return n
+}
+
+// mailbox returns the guest request buffer pointer (cached).
+func (p *Plugin) mailbox(ctx context.Context) (uint32, error) {
+	var err error
+	p.mailboxOnce.Do(func() {
+		fn := p.module.ExportedFunction("godex_request_buffer")
+		if fn == nil {
+			err = fmt.Errorf("wasm plugin: missing godex_request_buffer export")
+			return
+		}
+		results, callErr := fn.Call(ctx)
+		if callErr != nil {
+			err = callErr
+			return
+		}
+		p.mailboxPtr = uint32(results[0])
+	})
+	return p.mailboxPtr, err
+}
+
+// ToolsList returns the tool declarations from the plugin.
+func (p *Plugin) ToolsList(ctx context.Context) ([]ToolDecl, error) {
+	p.callMu.Lock()
+	defer p.callMu.Unlock()
+	if p.exportToolsList == nil {
+		return nil, fmt.Errorf("wasm plugin: missing godex_tools_list export")
+	}
+	results, err := p.exportToolsList.Call(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("wasm plugin: tools_list: %w", err)
+	}
+	raw := p.readString(uint32(results[0]))
+	if raw == "" {
+		return nil, fmt.Errorf("wasm plugin: empty tools_list")
+	}
+	var list struct {
+		Tools []ToolDecl `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil, fmt.Errorf("wasm plugin: tools_list: %w", err)
+	}
+	return list.Tools, nil
+}
+
+// ABI returns the plugin's declared ABI version.
+func (p *Plugin) ABI(ctx context.Context) (string, error) {
+	p.callMu.Lock()
+	defer p.callMu.Unlock()
+	if p.exportABI == nil {
+		return "", nil
+	}
+	results, err := p.exportABI.Call(ctx)
+	if err != nil {
+		return "", err
+	}
+	return p.readString(uint32(results[0])), nil
+}
+
+// CallTool runs one tool call through the plugin.
+func (p *Plugin) CallTool(ctx context.Context, name string, arguments map[string]any) (any, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
+	defer cancel()
+	select {
+	case p.sem <- struct{}{}:
+		defer func() { <-p.sem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	p.callMu.Lock()
+	defer p.callMu.Unlock()
+
+	req := request{Action: "tool_call", Tool: name, Arguments: arguments}
+	resp, err := p.invoke(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("wasm tool %s: %s", name, resp.Error)
+	}
+	return resp.Result, nil
+}
+
+// invoke writes the JSON request to the mailbox and reads the response.
+func (p *Plugin) invoke(ctx context.Context, req request) (response, error) {
+	mailbox, err := p.mailbox(ctx)
+	if err != nil {
+		return response{}, err
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return response{}, err
+	}
+	if uint32(len(payload))+1 > MailboxSize {
+		return response{}, fmt.Errorf("wasm plugin: request too large (%d bytes)", len(payload))
+	}
+	if !p.module.Memory().Write(mailbox, append(payload, 0)) {
+		return response{}, fmt.Errorf("wasm plugin: write request mailbox")
+	}
+	results, err := p.exportInvoke.Call(ctx)
+	if err != nil {
+		return response{}, fmt.Errorf("wasm plugin: invoke: %w", err)
+	}
+	raw := p.readString(uint32(results[0]))
+	var resp response
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		return response{}, fmt.Errorf("wasm plugin: malformed invoke response: %w", err)
+	}
+	return resp, nil
+}
+
+// Close tears down the runtime.
+func (p *Plugin) Close(ctx context.Context) error {
+	var err error
+	p.closeOnce.Do(func() {
+		if p.module != nil {
+			_ = p.module.Close(ctx)
+		}
+		err = p.runtime.Close(ctx)
+	})
+	return err
+}
+
+// readString reads a NUL-terminated string from guest memory (bounded by the
+// remaining linear memory and MaxResponseSize).
+func (p *Plugin) readString(ptr uint32) string {
+	mem := p.module.Memory()
+	if mem == nil {
+		return ""
+	}
+	size := mem.Size()
+	if uint64(ptr) >= uint64(size) {
+		return ""
+	}
+	remaining := uint32(size) - ptr
+	if remaining > MaxResponseSize {
+		remaining = MaxResponseSize
+	}
+	data, ok := mem.Read(ptr, remaining)
+	if !ok {
+		return ""
+	}
+	for i, b := range data {
+		if b == 0 {
+			return string(data[:i])
+		}
+	}
+	return string(data)
+}

@@ -36,9 +36,20 @@ type Manifest struct {
 	Capabilities       []string    `yaml:"capabilities" json:"capabilities,omitempty"`
 	Provides           []string    `yaml:"provides" json:"provides,omitempty"`
 	Requires           []string    `yaml:"requires" json:"requires,omitempty"`
+	Runtime            RuntimeDecl `yaml:"runtime" json:"runtime,omitempty"`
 	ToolPolicy         []string    `yaml:"tool_policy" json:"tool_policy,omitempty"`
 	SmokeTests         []SmokeTest `yaml:"smoke_tests" json:"smoke_tests,omitempty"`
 	RecommendedBundles []string    `yaml:"recommended_bundles" json:"recommended_bundles,omitempty"`
+}
+
+// RuntimeDecl declares an executable plugin payload (阶段 B / P3): the package
+// stays a declarative resource bundle, but may optionally ship a WASM module
+// executed by the pluginrt wasm adapter. Install records digest/trust; the
+// kernel owns the instance lifecycle.
+type RuntimeDecl struct {
+	Kind   string `yaml:"kind" json:"kind,omitempty"`
+	Module string `yaml:"module" json:"module,omitempty"`
+	ABI    string `yaml:"abi" json:"abi,omitempty"`
 }
 
 type SmokeTest struct {
@@ -84,6 +95,7 @@ type Entry struct {
 	Capabilities       []string    `json:"capabilities,omitempty"`
 	Provides           []string    `json:"provides,omitempty"`
 	Requires           []string    `json:"requires,omitempty"`
+	Runtime            RuntimeDecl `json:"runtime,omitempty"`
 	ToolPolicy         []string    `json:"tool_policy,omitempty"`
 	SmokeTests         []SmokeTest `json:"smoke_tests,omitempty"`
 	RecommendedBundles []string    `json:"recommended_bundles,omitempty"`
@@ -234,6 +246,9 @@ func (m *Manager) InstallPrepared(sourceRoot, sourceLabel string) (Entry, error)
 	if _, err := parseRequires(manifest.Requires); err != nil {
 		return Entry{}, fmt.Errorf("package %s: %v", manifest.Name, err)
 	}
+	if err := validateRuntimeDecl(manifest.Runtime, sourceRoot); err != nil {
+		return Entry{}, fmt.Errorf("package %s: %v", manifest.Name, err)
+	}
 	digest, err := digestDir(sourceRoot)
 	if err != nil {
 		return Entry{}, err
@@ -259,6 +274,7 @@ func (m *Manager) InstallPrepared(sourceRoot, sourceLabel string) (Entry, error)
 		Capabilities:       cleanStringList(manifest.Capabilities),
 		Provides:           cleanStringList(manifest.Provides),
 		Requires:           cleanStringList(manifest.Requires),
+		Runtime:            normalizeRuntimeDecl(manifest.Runtime, sourceRoot),
 		ToolPolicy:         cleanStringList(manifest.ToolPolicy),
 		SmokeTests:         normalizeSmokeTests(manifest.SmokeTests),
 		RecommendedBundles: append([]string{}, manifest.RecommendedBundles...),
@@ -421,6 +437,66 @@ func parseRequires(items []string) ([]Requirement, error) {
 		out = append(out, req)
 	}
 	return out, nil
+}
+
+// validateRuntimeDecl checks an optional runtime declaration against the
+// source directory. Only kind "wasm" is supported in the MVP; the module path
+// must be package-relative and must exist.
+func validateRuntimeDecl(decl RuntimeDecl, sourceRoot string) error {
+	kind := strings.ToLower(strings.TrimSpace(decl.Kind))
+	if kind == "" {
+		return nil
+	}
+	if kind != "wasm" {
+		return fmt.Errorf("unsupported runtime kind %q (only \"wasm\" is supported)", decl.Kind)
+	}
+	module := strings.TrimSpace(decl.Module)
+	if module == "" {
+		return fmt.Errorf("runtime kind %q requires a module path", kind)
+	}
+	if filepath.IsAbs(module) {
+		return fmt.Errorf("runtime module must be package-relative: %s", module)
+	}
+	path := filepath.Join(sourceRoot, filepath.Clean(module))
+	if info, err := os.Stat(path); err != nil {
+		return fmt.Errorf("runtime module missing: %s", module)
+	} else if info.IsDir() {
+		return fmt.Errorf("runtime module is a directory: %s", module)
+	}
+	if abi := strings.TrimSpace(decl.ABI); abi != "" && abi != wasmABI {
+		return fmt.Errorf("unsupported wasm ABI %q (expected %s)", abi, wasmABI)
+	}
+	return nil
+}
+
+// wasmABI is the ABI the wasm runtime implements.
+const wasmABI = "godex:plugin@0.1"
+
+// normalizeRuntimeDecl fills defaults for a validated runtime declaration.
+func normalizeRuntimeDecl(decl RuntimeDecl, sourceRoot string) RuntimeDecl {
+	if strings.ToLower(strings.TrimSpace(decl.Kind)) != "wasm" {
+		return RuntimeDecl{}
+	}
+	decl.Kind = "wasm"
+	decl.Module = filepath.ToSlash(filepath.Clean(strings.TrimSpace(decl.Module)))
+	if strings.TrimSpace(decl.ABI) == "" {
+		decl.ABI = wasmABI
+	}
+	_ = sourceRoot
+	return decl
+}
+
+// RuntimeModulePath returns the absolute path of the package's WASM module
+// ("" when the package has no runtime declaration).
+func (m *Manager) RuntimeModulePath(item Entry) string {
+	if strings.ToLower(strings.TrimSpace(item.Runtime.Kind)) != "wasm" {
+		return ""
+	}
+	module := strings.TrimSpace(item.Runtime.Module)
+	if module == "" {
+		return ""
+	}
+	return filepath.Join(item.Path, filepath.Clean(module))
 }
 
 func NormalizeAppManifest(app AppManifest) AppManifest {

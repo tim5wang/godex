@@ -483,3 +483,59 @@ func TestReinstallRollsBackOnSkillLinkFailure(t *testing.T) {
 		t.Fatalf("unexpected skill content after rollback: %q", string(data))
 	}
 }
+
+func TestInstallWithWasmRuntimeDeclaration(t *testing.T) {
+	source := t.TempDir()
+	module := filepath.Join(source, "plugin.wasm")
+	if err := os.WriteFile(module, []byte("\x00asm\x01\x00\x00\x00"), 0644); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+	writePackageManifest(t, source, `name: wasm-kit
+version: 0.1.0
+runtime:
+  kind: wasm
+  module: plugin.wasm
+  abi: godex:plugin@0.1
+`)
+	manager := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "skills"))
+	entry, err := manager.Install(source)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if entry.Runtime.Kind != "wasm" || entry.Runtime.Module != "plugin.wasm" || entry.Runtime.ABI != "godex:plugin@0.1" {
+		t.Fatalf("unexpected runtime decl: %+v", entry.Runtime)
+	}
+	modulePath := manager.RuntimeModulePath(entry)
+	if modulePath == "" {
+		t.Fatal("expected runtime module path")
+	}
+	if data, err := os.ReadFile(modulePath); err != nil || len(data) == 0 {
+		t.Fatalf("runtime module should be readable at %s: %v", modulePath, err)
+	}
+}
+
+func TestInstallRejectsBadRuntimeDecl(t *testing.T) {
+	cases := []struct {
+		name     string
+		manifest string
+	}{
+		{"unsupported kind", "name: k\nversion: 0.1.0\nruntime:\n  kind: native\n  module: x.so\n"},
+		{"missing module", "name: k\nversion: 0.1.0\nruntime:\n  kind: wasm\n"},
+		{"module missing file", "name: k\nversion: 0.1.0\nruntime:\n  kind: wasm\n  module: nope.wasm\n"},
+		{"absolute module", "name: k\nversion: 0.1.0\nruntime:\n  kind: wasm\n  module: /etc/passwd\n"},
+		{"bad abi", "name: k\nversion: 0.1.0\nruntime:\n  kind: wasm\n  module: plugin.wasm\n  abi: other@9\n"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			source := t.TempDir()
+			if err := os.WriteFile(filepath.Join(source, "plugin.wasm"), []byte("\x00asm"), 0644); err != nil {
+				t.Fatalf("write module: %v", err)
+			}
+			writePackageManifest(t, source, tt.manifest)
+			manager := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "skills"))
+			if _, err := manager.Install(source); err == nil {
+				t.Fatalf("expected install to fail for %s", tt.name)
+			}
+		})
+	}
+}

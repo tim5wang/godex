@@ -2,6 +2,8 @@ package pluginrt
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -336,4 +338,43 @@ func newFakeTool(name string) toolruntime.Tool {
 	}, nil), func(ctx context.Context, args map[string]interface{}) (toolruntime.ToolResult, error) {
 		return toolruntime.ToolResult{Text: name + " ok"}, nil
 	})
+}
+
+func TestWasmToolPluginRegistersAndUnregisters(t *testing.T) {
+	binary, err := os.ReadFile(filepath.Join("..", "wasmrt", "testdata", "plugin.wasm"))
+	if err != nil {
+		t.Fatalf("read wasm plugin: %v", err)
+	}
+	handler := toolruntime.NewToolHandler()
+	plugin := &WasmToolPlugin{
+		ManifestValue: Manifest{ID: "wasm-demo", Scope: scope.Org("godex"), Provides: []string{"godex:wasm-demo@1"}},
+		Binary:        binary,
+		Handler:       handler,
+		Meta:          toolruntime.ToolMeta{Bundle: "wasm", AlwaysActive: true},
+	}
+	manager := NewManager(nil)
+	if _, err := manager.Activate(context.Background(), plugin); err != nil {
+		t.Fatalf("activate wasm plugin: %v", err)
+	}
+	if handler.Get("wasm_echo") == nil {
+		t.Fatal("expected wasm tool registered")
+	}
+	if handler.OwnerFor("wasm_echo") != "wasm-demo" {
+		t.Fatalf("expected wasm owner, got %q", handler.OwnerFor("wasm_echo"))
+	}
+	// The registered tool actually executes the wasm guest.
+	result, err := handler.HandleResult(context.Background(), "wasm_echo", map[string]interface{}{"message": "via handler"})
+	if err != nil {
+		t.Fatalf("handle wasm tool: %v", err)
+	}
+	if !strings.Contains(result.Text, "wasm echo: via handler") {
+		t.Fatalf("unexpected result: %q", result.Text)
+	}
+
+	if err := manager.Deactivate(context.Background(), "wasm-demo"); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if handler.Get("wasm_echo") != nil {
+		t.Fatal("expected wasm tool unregistered")
+	}
 }

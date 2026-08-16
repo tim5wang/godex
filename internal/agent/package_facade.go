@@ -150,6 +150,7 @@ func packageEntryFromRegistry(item pkgregistry.Entry) tools.PackageEntry {
 		Capabilities:       append([]string{}, item.Capabilities...),
 		Provides:           append([]string{}, item.Provides...),
 		Requires:           append([]string{}, item.Requires...),
+		Runtime:            tools.PackageRuntimeDecl{Kind: item.Runtime.Kind, Module: item.Runtime.Module, ABI: item.Runtime.ABI},
 		ToolPolicy:         append([]string{}, item.ToolPolicy...),
 		SmokeTests:         packageSmokeTests(item.SmokeTests),
 		RecommendedBundles: append([]string{}, item.RecommendedBundles...),

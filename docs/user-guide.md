@@ -861,7 +861,7 @@ smoke_tests:
 recommended_bundles: [core_code, lsp]
 ```
 
-字段：`name`、`version`、`description`、`resources{skills,prompts,commands,roles,docs,assets}`、`app{kind,id,label,config}`、`permissions`、`capabilities`、`provides`、`requires`、`tool_policy`、`smoke_tests[]`（name/command/working_dir/timeout_seconds/required_permissions/expected_exit_code）、`recommended_bundles`。
+字段：`name`、`version`、`description`、`resources{skills,prompts,commands,roles,docs,assets}`、`app{kind,id,label,config}`、`permissions`、`capabilities`、`provides`、`requires`、`runtime`、`tool_policy`、`smoke_tests[]`（name/command/working_dir/timeout_seconds/required_permissions/expected_exit_code）、`recommended_bundles`。
 
 **依赖声明（`requires` / `provides`）**：
 
@@ -871,6 +871,20 @@ recommended_bundles: [core_code, lsp]
 - 安装 / 重装时解析依赖图：缺失依赖、版本冲突、依赖环都会阻止安装并给出报告；`/packages` quality 报告同样展示依赖问题。
 - 卸载保护：仍被其他已安装包 `requires` 引用的包无法被直接移除，需先移除引用方。
 - 重装是事务式的：新内容先落盘并校验，成功后原子切换 registry 并清理旧 digest 目录；失败时旧版本及其目录保持不变。
+
+**可执行运行时（`runtime`，阶段 B MVP）**：
+
+```yaml
+runtime:
+  kind: wasm          # 目前仅支持 wasm
+  module: plugin.wasm # 包内相对路径，安装时校验存在
+  abi: godex:plugin@0.1  # 版本化 JSON ABI（默认值）
+```
+
+- 安装时校验：`kind` 仅允许 `wasm`，module 必须存在且为包内相对路径，ABI 只接受 `godex:plugin@0.1`。
+- 运行时由 `internal/wasmrt`（wazero，纯 Go、无 CGO）加载：JSON ABI（tools_list / invoke + mailbox 请求缓冲）、单次调用超时与并发上限、guest 内存上限（默认 32 MiB）。
+- 受控 host 调用：`godex_log`、`godex_kv_get/set`、`godex_workspace_read`（仅工作区内相对路径）。**不开放** 完整 WASI 文件系统、socket、环境变量、shell 或进程。
+- 工具注册走 pluginrt 所有权模型（owner = 插件 id），卸载时随 instance 逆序撤销。
 
 Package command declaration 支持：
 

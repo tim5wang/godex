@@ -25,10 +25,18 @@ type PackageEntry struct {
 	Capabilities       []string            `json:"capabilities,omitempty"`
 	Provides           []string            `json:"provides,omitempty"`
 	Requires           []string            `json:"requires,omitempty"`
+	Runtime            PackageRuntimeDecl  `json:"runtime,omitempty"`
 	ToolPolicy         []string            `json:"tool_policy,omitempty"`
 	RecommendedBundles []string            `json:"recommended_bundles,omitempty"`
 	SmokeTests         []PackageSmokeTest  `json:"smoke_tests,omitempty"`
 	Trust              string              `json:"trust"`
+}
+
+// PackageRuntimeDecl mirrors pkgregistry.RuntimeDecl for the tools DTO.
+type PackageRuntimeDecl struct {
+	Kind   string `json:"kind,omitempty"`
+	Module string `json:"module,omitempty"`
+	ABI    string `json:"abi,omitempty"`
 }
 
 type PackageAppEntry struct {

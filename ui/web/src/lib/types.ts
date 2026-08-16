@@ -898,9 +898,16 @@ export interface PackageEntry {
   capabilities?: string[];
   provides?: string[];
   requires?: string[];
+  runtime?: PackageRuntimeDecl;
   tool_policy?: string[];
   smoke_tests?: PackageSmokeTest[];
   trust: string;
+}
+
+export interface PackageRuntimeDecl {
+  kind?: string;
+  module?: string;
+  abi?: string;
 }
 
 export interface PackageAppManifest {

@@ -58,3 +58,69 @@ func TestReadMCPResourceToolReturnsContent(t *testing.T) {
 		}
 	}
 }
+
+type fakeMCPToolRunner struct {
+	tools []mcp.Tool
+	call  *mcp.CallResult
+}
+
+func (f *fakeMCPToolRunner) ListTools(ctx context.Context) ([]mcp.Tool, error) {
+	return f.tools, nil
+}
+
+func (f *fakeMCPToolRunner) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*mcp.CallResult, error) {
+	return f.call, nil
+}
+
+func TestListMCPToolsTool(t *testing.T) {
+	runner := &fakeMCPToolRunner{tools: []mcp.Tool{{
+		Server:      "fake",
+		Name:        "echo",
+		Description: "echo back",
+	}}}
+	tool := NewListMCPToolsTool(runner)
+	result, err := tool.Execute(context.Background(), map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(result, "fake") || !strings.Contains(result, "echo") {
+		t.Fatalf("unexpected output: %q", result)
+	}
+}
+
+func TestCallMCPToolTool(t *testing.T) {
+	runner := &fakeMCPToolRunner{call: &mcp.CallResult{
+		Server: "fake",
+		Tool:   "echo",
+		Text:   "echo: hi",
+	}}
+	tool := NewCallMCPToolTool(runner)
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
+		"server": "fake",
+		"tool":   "echo",
+		"arguments": map[string]interface{}{
+			"message": "hi",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(result, "echo: hi") {
+		t.Fatalf("unexpected output: %q", result)
+	}
+
+	// Missing required args.
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{}); err == nil {
+		t.Fatal("expected error for missing server/tool")
+	}
+
+	// isError result surfaces as an error.
+	runner.call.IsError = true
+	runner.call.Text = "boom failed"
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{
+		"server": "fake",
+		"tool":   "boom",
+	}); err == nil {
+		t.Fatal("expected error for isError result")
+	}
+}

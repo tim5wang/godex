@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -31,6 +32,23 @@ type ReadResult struct {
 	Text     string `json:"text,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Summary  string `json:"summary,omitempty"`
+}
+
+// Tool is one tool exposed by a stdio MCP server.
+type Tool struct {
+	Server      string          `json:"server"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// CallResult is the outcome of calling one stdio MCP tool.
+type CallResult struct {
+	Server  string `json:"server"`
+	Tool    string `json:"tool"`
+	Text    string `json:"text,omitempty"`
+	IsError bool   `json:"is_error,omitempty"`
+	Raw     string `json:"raw,omitempty"`
 }
 
 // Manager is the read-only MCP resource entrypoint.
@@ -104,6 +122,100 @@ func (m *Manager) ReadResource(serverName, uri string) (*ReadResult, error) {
 		}
 	}
 	return nil, fmt.Errorf("mcp server not found: %s", serverName)
+}
+
+// ListTools lists tools exposed by all configured stdio MCP servers. Tools are
+// discovered once per call via the MCP tools/list protocol.
+func (m *Manager) ListTools(ctx context.Context) ([]Tool, error) {
+	cfg, err := LoadConfig(m.configPath)
+	if err != nil {
+		return nil, err
+	}
+	var tools []Tool
+	for _, server := range cfg.Servers {
+		if server.Type != ServerTypeStdio {
+			continue
+		}
+		items, err := m.listServerTools(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, items...)
+	}
+	sort.Slice(tools, func(i, j int) bool {
+		if tools[i].Server == tools[j].Server {
+			return tools[i].Name < tools[j].Name
+		}
+		return tools[i].Server < tools[j].Server
+	})
+	return tools, nil
+}
+
+// CallTool calls one tool on a stdio MCP server via the MCP tools/call
+// protocol. Text content is concatenated; structured content is preserved raw.
+func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*CallResult, error) {
+	cfg, err := LoadConfig(m.configPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, server := range cfg.Servers {
+		if server.Name != serverName {
+			continue
+		}
+		if server.Type != ServerTypeStdio {
+			return nil, fmt.Errorf("mcp server %s is not a stdio server", serverName)
+		}
+		client, err := startStdioClient(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		defer client.close()
+		result, err := client.callTool(ctx, toolName, args)
+		if err != nil {
+			return nil, err
+		}
+		text := ""
+		for _, content := range result.Content {
+			if content.Type == "text" {
+				if text != "" {
+					text += "\n"
+				}
+				text += content.Text
+			}
+		}
+		raw, _ := json.Marshal(result)
+		return &CallResult{
+			Server:  serverName,
+			Tool:    toolName,
+			Text:    text,
+			IsError: result.IsError,
+			Raw:     string(raw),
+		}, nil
+	}
+	return nil, fmt.Errorf("mcp server not found: %s", serverName)
+}
+
+// listServerTools lists the tools of one stdio server.
+func (m *Manager) listServerTools(ctx context.Context, server ServerConfig) ([]Tool, error) {
+	client, err := startStdioClient(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	defer client.close()
+	items, err := client.listTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Tool, 0, len(items))
+	for _, item := range items {
+		out = append(out, Tool{
+			Server:      server.Name,
+			Name:        item.Name,
+			Description: item.Description,
+			InputSchema: item.InputSchema,
+		})
+	}
+	return out, nil
 }
 
 func (m *Manager) listFilesystemResources(server ServerConfig) ([]Resource, error) {

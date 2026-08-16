@@ -244,6 +244,14 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Bundle:  bundleMCP,
 		Summary: "configured MCP resource servers",
 	})
+	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewListMCPToolsTool(a.mcpMgr), tools.ToolMeta{
+		Bundle:  bundleMCP,
+		Summary: "configured stdio MCP tool servers",
+	})
+	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewCallMCPToolTool(a.mcpMgr), tools.ToolMeta{
+		Bundle:  bundleMCP,
+		Summary: "configured stdio MCP tool servers",
+	})
 	a.registerToolTo(handler, tools.NewLSPTool(workspaceDir), tools.ToolMeta{
 		Bundle:        bundleLSP,
 		Summary:       "LSP code intelligence (definitions, references, hover, diagnostics, completions)",

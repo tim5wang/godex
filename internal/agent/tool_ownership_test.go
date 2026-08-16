@@ -9,7 +9,13 @@ func TestMCPToolsRegisteredWithBuiltinOwner(t *testing.T) {
 	a.RegisterTools()
 	a.toolHandler.ActivateBundles(bundleMCP)
 
-	for _, name := range []string{"list_mcp_resources", "read_mcp_resource"} {
+	names := []string{
+		"list_mcp_resources",
+		"read_mcp_resource",
+		"list_mcp_tools",
+		"call_mcp_tool",
+	}
+	for _, name := range names {
 		if a.toolHandler.Get(name) == nil {
 			t.Fatalf("expected %s registered", name)
 		}
@@ -20,10 +26,10 @@ func TestMCPToolsRegisteredWithBuiltinOwner(t *testing.T) {
 
 	// UnregisterOwner removes the whole builtin MCP group cleanly.
 	removed := a.toolHandler.UnregisterOwner(builtinPluginOwnerMCP)
-	if len(removed) != 2 {
-		t.Fatalf("expected 2 MCP tools removed, got %v", removed)
+	if len(removed) != len(names) {
+		t.Fatalf("expected %d MCP tools removed, got %v", len(names), removed)
 	}
-	for _, name := range []string{"list_mcp_resources", "read_mcp_resource"} {
+	for _, name := range names {
 		if a.toolHandler.Get(name) != nil {
 			t.Fatalf("expected %s removed after UnregisterOwner", name)
 		}

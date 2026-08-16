@@ -1,8 +1,8 @@
 # DeepSeek Harness 对 GoDex 的改进启示
 
-> 状态：Draft / Plan（设计分析与改进方案，尚未立项实施）
+> 状态：Draft / Plan（设计分析与改进方案；**阶段 0 已落地**，阶段 A/B/C 尚未立项实施）
 > 目标：提炼 `temp/deepseek-harness` 中值得 GoDex 吸收的架构能力，聚焦近期可落地优化；不追求复制 Cordis，也不把 WASM 等同于插件系统。
-> 修订日志：2026-08-15 整合插件对照表、wazero 兼容性结论（协议层/桥接层）、MCP 跨运行时能力协议视角与更低起步点（阶段 0：package requires 依赖解析）。
+> 修订日志：2026-08-15 整合插件对照表、wazero 兼容性结论（协议层/桥接层）、MCP 跨运行时能力协议视角与更低起步点（阶段 0：package requires 依赖解析）。2026-08-16 阶段 0 落地：`godex.package.yaml` 支持 `requires`/`provides`、安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装与旧 digest 目录 GC（见 `internal/core/packages/{requires,deps}.go`）。
 
 ## 1. 核心结论
 
@@ -259,13 +259,13 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 
 ## 6. 建议路线图
 
-### 阶段 0：Package 依赖与可逆卸载（低成本，先行）
+### 阶段 0：Package 依赖与可逆卸载（低成本，先行）✅ 已落地
 
 不需要 `internal/pluginrt` 即可获得 DSH 依赖图与可逆注册的第一档收益：
 
-- `godex.package.yaml` 增加可选 `requires`（`name@version` 或 `capability`），安装时解析依赖图 + 环检测 + 缺失/冲突报告；
-- 给 command/role/skill 的注册点返回 `Dispose func`，package 卸载时逆序撤销全部注册；
-- 把现有 `reinstall` 升级为事务式：unload 旧 → 装新 → 激活 → 失败回滚旧。
+- `godex.package.yaml` 增加可选 `requires`（`name@version` 或 `capability`），安装时解析依赖图 + 环检测 + 缺失/冲突报告；同时支持 `provides` 声明能力供给；
+- 给 command/role/skill 的注册点返回 `Dispose func`，package 卸载时逆序撤销全部注册（卸载保护：仍被引用的包拒绝移除）；
+- 把现有 `reinstall` 升级为事务式：unload 旧 → 装新 → 激活 → 失败回滚旧，并 GC 旧 digest 目录。
 
 这同时解决「重装不干净」的存量问题，并为阶段 A 提供依赖与 effect 的语义基础。
 

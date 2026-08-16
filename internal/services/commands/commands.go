@@ -1379,6 +1379,12 @@ func renderPackageList(items []pkgregistry.Entry) string {
 		if resources != "" {
 			line += " resources=" + resources
 		}
+		if len(item.Requires) > 0 {
+			line += " requires=" + strings.Join(item.Requires, ",")
+		}
+		if len(item.Provides) > 0 {
+			line += " provides=" + strings.Join(item.Provides, ",")
+		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")

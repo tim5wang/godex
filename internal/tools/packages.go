@@ -23,6 +23,8 @@ type PackageEntry struct {
 	App                PackageAppEntry     `json:"app,omitempty"`
 	Permissions        []string            `json:"permissions,omitempty"`
 	Capabilities       []string            `json:"capabilities,omitempty"`
+	Provides           []string            `json:"provides,omitempty"`
+	Requires           []string            `json:"requires,omitempty"`
 	ToolPolicy         []string            `json:"tool_policy,omitempty"`
 	RecommendedBundles []string            `json:"recommended_bundles,omitempty"`
 	SmokeTests         []PackageSmokeTest  `json:"smoke_tests,omitempty"`

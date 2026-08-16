@@ -896,6 +896,8 @@ export interface PackageEntry {
   permissions?: string[];
   recommended_bundles?: string[];
   capabilities?: string[];
+  provides?: string[];
+  requires?: string[];
   tool_policy?: string[];
   smoke_tests?: PackageSmokeTest[];
   trust: string;
@@ -957,9 +959,12 @@ export interface PackageQuality {
   permissions?: string[];
   recommended_bundles?: string[];
   capabilities?: string[];
+  provides?: string[];
+  requires?: string[];
   tool_policy?: string[];
   capability_issues?: string[];
   tool_policy_issues?: string[];
+  dependency_issues?: string[];
   command_diagnostics?: PackageContractDiagnostic[];
   role_diagnostics?: PackageContractDiagnostic[];
   smoke_checks?: PackageSmokeCheck[];

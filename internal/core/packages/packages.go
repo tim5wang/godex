@@ -34,6 +34,8 @@ type Manifest struct {
 	App                AppManifest `yaml:"app" json:"app,omitempty"`
 	Permissions        []string    `yaml:"permissions" json:"permissions,omitempty"`
 	Capabilities       []string    `yaml:"capabilities" json:"capabilities,omitempty"`
+	Provides           []string    `yaml:"provides" json:"provides,omitempty"`
+	Requires           []string    `yaml:"requires" json:"requires,omitempty"`
 	ToolPolicy         []string    `yaml:"tool_policy" json:"tool_policy,omitempty"`
 	SmokeTests         []SmokeTest `yaml:"smoke_tests" json:"smoke_tests,omitempty"`
 	RecommendedBundles []string    `yaml:"recommended_bundles" json:"recommended_bundles,omitempty"`
@@ -80,6 +82,8 @@ type Entry struct {
 	App                AppManifest `json:"app,omitempty"`
 	Permissions        []string    `json:"permissions,omitempty"`
 	Capabilities       []string    `json:"capabilities,omitempty"`
+	Provides           []string    `json:"provides,omitempty"`
+	Requires           []string    `json:"requires,omitempty"`
 	ToolPolicy         []string    `json:"tool_policy,omitempty"`
 	SmokeTests         []SmokeTest `json:"smoke_tests,omitempty"`
 	RecommendedBundles []string    `json:"recommended_bundles,omitempty"`
@@ -204,6 +208,13 @@ func (m *Manager) Install(source string) (Entry, error) {
 // InstallPrepared installs a package from an already materialized package
 // directory while recording sourceLabel as the package source. It is intended
 // for deterministic importers that generate a GoDex package before install.
+//
+// The install is transactional: the new content is staged under its own
+// digest-addressed directory, dependency requirements are validated against the
+// installed set (with this candidate replacing any same-name entry), and only
+// after the registry is atomically swapped are stale directories for the same
+// package name garbage-collected. A failure before the registry swap leaves the
+// previously installed copy and its directory intact.
 func (m *Manager) InstallPrepared(sourceRoot, sourceLabel string) (Entry, error) {
 	sourceRoot = strings.TrimSpace(sourceRoot)
 	if sourceRoot == "" {
@@ -220,6 +231,9 @@ func (m *Manager) InstallPrepared(sourceRoot, sourceLabel string) (Entry, error)
 	if strings.TrimSpace(manifest.Name) == "" {
 		return Entry{}, fmt.Errorf("package manifest missing name")
 	}
+	if _, err := parseRequires(manifest.Requires); err != nil {
+		return Entry{}, fmt.Errorf("package %s: %v", manifest.Name, err)
+	}
 	digest, err := digestDir(sourceRoot)
 	if err != nil {
 		return Entry{}, err
@@ -229,13 +243,9 @@ func (m *Manager) InstallPrepared(sourceRoot, sourceLabel string) (Entry, error)
 		short = short[:12]
 	}
 	target := filepath.Join(m.packagesDir, fmt.Sprintf("%s@%s", safeName(manifest.Name), short))
-	if err := os.RemoveAll(target); err != nil {
-		return Entry{}, err
-	}
-	if err := copyDir(sourceRoot, target); err != nil {
-		return Entry{}, err
-	}
-	entry := Entry{
+
+	// Build the candidate entry before touching anything on disk.
+	candidate := Entry{
 		Name:               manifest.Name,
 		Version:            manifest.Version,
 		Description:        manifest.Description,
@@ -247,33 +257,170 @@ func (m *Manager) InstallPrepared(sourceRoot, sourceLabel string) (Entry, error)
 		App:                NormalizeAppManifest(manifest.App),
 		Permissions:        append([]string{}, manifest.Permissions...),
 		Capabilities:       cleanStringList(manifest.Capabilities),
+		Provides:           cleanStringList(manifest.Provides),
+		Requires:           cleanStringList(manifest.Requires),
 		ToolPolicy:         cleanStringList(manifest.ToolPolicy),
 		SmokeTests:         normalizeSmokeTests(manifest.SmokeTests),
 		RecommendedBundles: append([]string{}, manifest.RecommendedBundles...),
 		Trust:              trustForSource(sourceLabel),
 	}
-	if err := m.linkSkills(target, manifest); err != nil {
-		return Entry{}, err
-	}
+
+	// Validate dependencies against the installed set before staging.
 	registry, err := m.readRegistry()
 	if err != nil {
 		return Entry{}, err
 	}
+	if report := ValidateCandidateDependencies(candidate, registry.Packages); !report.Empty() {
+		return Entry{}, fmt.Errorf("package %s dependency check failed: %s", manifest.Name, report.Error())
+	}
+
+	// Stage the new content into its digest-addressed directory. When the
+	// digest is unchanged (reinstall of identical content) the target already
+	// exists and is the live directory; remember that so a failed activation
+	// can restore it instead of leaving the registry pointing at a gap.
+	preExisting := false
+	if _, statErr := os.Stat(target); statErr == nil {
+		preExisting = true
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return Entry{}, err
+	}
+	if err := copyDir(sourceRoot, target); err != nil {
+		_ = os.RemoveAll(target)
+		return Entry{}, err
+	}
+	rollback := true
+	defer func() {
+		if !rollback {
+			return
+		}
+		if preExisting {
+			// Restore the previous live directory from the identical source
+			// content (same digest) so the old registry entry stays valid.
+			_ = os.RemoveAll(target)
+			_ = copyDir(sourceRoot, target)
+			return
+		}
+		_ = os.RemoveAll(target)
+	}()
+
+	// Snapshot the previous same-name entry for activation rollback.
+	var oldEntry Entry
+	hadOld := false
+	for _, item := range registry.Packages {
+		if item.Name == candidate.Name {
+			oldEntry = item
+			hadOld = true
+			break
+		}
+	}
+
+	// Atomic registry swap: replace or append the candidate entry. This is the
+	// commit point: from here on the registry describes the new content.
 	replaced := false
 	for i, item := range registry.Packages {
-		if item.Name == entry.Name {
-			registry.Packages[i] = entry
+		if item.Name == candidate.Name {
+			registry.Packages[i] = candidate
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
-		registry.Packages = append(registry.Packages, entry)
+		registry.Packages = append(registry.Packages, candidate)
 	}
 	if err := m.writeRegistry(registry); err != nil {
 		return Entry{}, err
 	}
-	return entry, nil
+
+	// Activate the new content: link skills from the staged directory. On
+	// failure, roll back the registry swap and restore the previous skill
+	// links from the still-intact old directory.
+	if err := m.linkSkills(target, manifest); err != nil {
+		_ = m.restoreRegistryEntry(oldEntry, hadOld, candidate.Name)
+		if hadOld {
+			_ = m.linkSkills(oldEntry.Path, manifestFromEntry(oldEntry))
+		}
+		return Entry{}, err
+	}
+	rollback = false
+
+	// Garbage-collect stale directories for the same package name (e.g. the
+	// digest-addressed directory of a previously installed version).
+	_ = m.collectStaleDirs(candidate.Name, target)
+	return candidate, nil
+}
+
+// restoreRegistryEntry rewrites the registry to point back at the previous
+// same-name entry (used to roll back a failed activation).
+func (m *Manager) restoreRegistryEntry(oldEntry Entry, hadOld bool, name string) error {
+	registry, err := m.readRegistry()
+	if err != nil {
+		return err
+	}
+	replaced := false
+	next := make([]Entry, 0, len(registry.Packages))
+	for _, item := range registry.Packages {
+		if item.Name != name {
+			next = append(next, item)
+			continue
+		}
+		if hadOld {
+			next = append(next, oldEntry)
+			replaced = true
+		}
+	}
+	if hadOld && !replaced {
+		next = append(next, oldEntry)
+	}
+	registry.Packages = next
+	return m.writeRegistry(registry)
+}
+
+// manifestFromEntry reconstructs a Manifest from a registry entry so that
+// skill links can be re-established from an installed directory.
+func manifestFromEntry(entry Entry) Manifest {
+	return Manifest{
+		Name:      entry.Name,
+		Version:   entry.Version,
+		Resources: entry.Resources,
+	}
+}
+
+// collectStaleDirs removes digest-addressed package directories for name other
+// than keep (best effort, used after a successful registry swap).
+func (m *Manager) collectStaleDirs(name, keep string) error {
+	prefix := safeName(name) + "@"
+	entries, err := os.ReadDir(m.packagesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		path := filepath.Join(m.packagesDir, entry.Name())
+		if filepath.Clean(path) == filepath.Clean(keep) {
+			continue
+		}
+		_ = os.RemoveAll(path)
+	}
+	return nil
+}
+
+// parseRequires validates every entry of a requires list.
+func parseRequires(items []string) ([]Requirement, error) {
+	out := make([]Requirement, 0, len(items))
+	for _, raw := range items {
+		req, err := ParseRequirement(raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, req)
+	}
+	return out, nil
 }
 
 func NormalizeAppManifest(app AppManifest) AppManifest {
@@ -348,8 +495,17 @@ func (m *Manager) Remove(name string) (Entry, error) {
 	if removed.Name == "" {
 		return Entry{}, fmt.Errorf("package not installed: %s", name)
 	}
-	for _, skillPath := range removed.Resources.Skills {
-		_ = os.RemoveAll(filepath.Join(m.skillsDir, filepath.Base(filepath.Dir(skillPath))))
+	// Dependency guard: refuse to remove a package that another installed
+	// package still requires, so uninstalling never breaks the dependency
+	// graph of the remaining packages.
+	if dependents := Dependents(name, registry.Packages, name); len(dependents) > 0 {
+		return Entry{}, fmt.Errorf("cannot remove package %s: still required by %s", name, strings.Join(dependents, ", "))
+	}
+	// Unlink skills in reverse registration order so uninstall cleanly
+	// reverses the effects recorded at install time.
+	skillPaths := append([]string{}, removed.Resources.Skills...)
+	for i := len(skillPaths) - 1; i >= 0; i-- {
+		_ = os.RemoveAll(filepath.Join(m.skillsDir, filepath.Base(filepath.Dir(skillPaths[i]))))
 	}
 	_ = os.RemoveAll(removed.Path)
 	registry.Packages = next

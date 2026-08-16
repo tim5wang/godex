@@ -36,6 +36,9 @@ type PackageQuality struct {
 	AppIssues              []string             `json:"app_issues,omitempty"`
 	Permissions            []string             `json:"permissions,omitempty"`
 	Capabilities           []string             `json:"capabilities,omitempty"`
+	Provides               []string             `json:"provides,omitempty"`
+	Requires               []string             `json:"requires,omitempty"`
+	DependencyIssues       []string             `json:"dependency_issues,omitempty"`
 	ToolPolicy             []string             `json:"tool_policy,omitempty"`
 	RecommendedBundles     []string             `json:"recommended_bundles,omitempty"`
 	UnknownBundles         []string             `json:"unknown_bundles,omitempty"`
@@ -116,7 +119,7 @@ func (m *Manager) BuildQualityReport(generatedAt string, toolHealth ToolHealthSu
 		Packages:       make([]PackageQuality, 0, len(items)),
 	}
 	for _, item := range items {
-		quality := m.packageQuality(item, known)
+		quality := m.packageQuality(item, known, items)
 		report.Packages = append(report.Packages, quality)
 		report.SkillCount += len(item.Resources.Skills)
 		report.PromptCount += len(item.Resources.Prompts)
@@ -129,7 +132,7 @@ func (m *Manager) BuildQualityReport(generatedAt string, toolHealth ToolHealthSu
 	return report, nil
 }
 
-func (m *Manager) packageQuality(item Entry, knownBundles map[string]struct{}) PackageQuality {
+func (m *Manager) packageQuality(item Entry, knownBundles map[string]struct{}, installed []Entry) PackageQuality {
 	quality := PackageQuality{
 		Name:                   item.Name,
 		Version:                item.Version,
@@ -140,6 +143,8 @@ func (m *Manager) packageQuality(item Entry, knownBundles map[string]struct{}) P
 		App:                    NormalizeAppManifest(item.App),
 		Permissions:            append([]string{}, item.Permissions...),
 		Capabilities:           append([]string{}, item.Capabilities...),
+		Provides:               append([]string{}, item.Provides...),
+		Requires:               append([]string{}, item.Requires...),
 		ToolPolicy:             append([]string{}, item.ToolPolicy...),
 		RecommendedBundles:     append([]string{}, item.RecommendedBundles...),
 		InstallHealth:          "installed",
@@ -177,6 +182,20 @@ func (m *Manager) packageQuality(item Entry, knownBundles map[string]struct{}) P
 	}
 	quality.CapabilityIssues = append(quality.CapabilityIssues, capabilityIssues(item.Capabilities)...)
 	quality.ToolPolicyIssues = append(quality.ToolPolicyIssues, toolPolicyIssues(item.ToolPolicy)...)
+	if len(item.Requires) > 0 {
+		report := ValidateCandidateDependencies(item, installed)
+		if !report.Empty() {
+			for _, missing := range report.Missing {
+				quality.DependencyIssues = append(quality.DependencyIssues, "missing "+missing)
+			}
+			for _, conflict := range report.Conflicts {
+				quality.DependencyIssues = append(quality.DependencyIssues, "conflict "+conflict)
+			}
+			for _, cycle := range report.Cycles {
+				quality.DependencyIssues = append(quality.DependencyIssues, "cycle "+joinPath(cycle))
+			}
+		}
+	}
 	quality.ResourceIssues = append(quality.ResourceIssues, m.missingResources(item)...)
 	quality.ResourceIssues = append(quality.ResourceIssues, m.skillResourceIssues(item)...)
 	commandIssues, commandDiagnostics := m.commandResourceDiagnostics(item)
@@ -194,7 +213,7 @@ func (m *Manager) packageQuality(item Entry, knownBundles map[string]struct{}) P
 			quality.SmokeRuns = append(quality.SmokeRuns, *check.LastRun)
 		}
 	}
-	issueCount := len(quality.ManifestIssues) + len(quality.ResourceIssues) + len(quality.PermissionIssues) + len(quality.CapabilityIssues) + len(quality.ToolPolicyIssues) + len(quality.UnknownBundles) + len(quality.AppIssues)
+	issueCount := len(quality.ManifestIssues) + len(quality.ResourceIssues) + len(quality.PermissionIssues) + len(quality.CapabilityIssues) + len(quality.ToolPolicyIssues) + len(quality.UnknownBundles) + len(quality.AppIssues) + len(quality.DependencyIssues)
 	quality.Score -= issueCount * 15
 	if quality.Trust != "local" {
 		quality.Score -= 10
@@ -202,7 +221,7 @@ func (m *Manager) packageQuality(item Entry, knownBundles map[string]struct{}) P
 	if quality.Score < 0 {
 		quality.Score = 0
 	}
-	if len(quality.PermissionIssues) > 0 || len(quality.ResourceIssues) > 0 || quality.Score < 60 {
+	if len(quality.PermissionIssues) > 0 || len(quality.ResourceIssues) > 0 || len(quality.DependencyIssues) > 0 || quality.Score < 60 {
 		quality.RiskLevel = "high"
 	} else if len(quality.ManifestIssues) > 0 || len(quality.AppIssues) > 0 || len(quality.UnknownBundles) > 0 || quality.Trust != "local" || quality.Score < 85 {
 		quality.RiskLevel = "medium"
@@ -506,6 +525,10 @@ func reinstallHint(item Entry) string {
 		return "no recorded source"
 	}
 	return "reinstall from recorded source"
+}
+
+func joinPath(parts []string) string {
+	return strings.Join(parts, " -> ")
 }
 
 func highRiskPermission(permission string) bool {

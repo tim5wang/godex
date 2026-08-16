@@ -48,7 +48,7 @@ GoDex 面向需要把 AI Agent 真正接入日常工程工作流的团队和个�
 - **Agent Profile**：CLI/TUI/ACP 默认走精简 `coding` profile，Web/IM 默认保留 `general` profile；可按入口或命令覆盖工具曝光策略。
 - **工具与安全**：merge、grep（ripgrep 双后端）、edit_file 多编辑、LSP 代码智能、WorkspaceFS 文件边界、shell guard、manual/review/yolo approval、安全 profile、内容安全筛查器、loop guard、security audit。
 - **Subagent / Workflow**：durable subagent job、角色→bundle 映射与写 scope 联动、review/merge/cancel/resume/iterate、LongTask Web/CLI/API surface、能力边界、隔离 workspace 策略和 compact handoff。
-- **Package / Skill 生态**：package manifest（resources/app/tool_policy/smoke_tests/recommended_bundles）、role/command contract、tool policy、quality diagnostics、smoke run、reinstall tracking、Claude Code import。
+- **Package / Skill 生态**：package manifest（resources/app/tool_policy/smoke_tests/recommended_bundles）、`requires`/`provides` 依赖声明与安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装、role/command contract、tool policy、quality diagnostics、smoke run、reinstall tracking、Claude Code import。
 - **Automation 与 Channel**：Cron（at/every/cron 调度）、Heartbeat（HEARTBEAT.md checklist + OK token）、Feishu、Weixin、OpenAI-compatible chat completions API；IM 审批消息会展示 tool 和关键参数摘要。
 - **Control Plane 基础**：轻量 Node Registry 和只读 Nodes Dashboard，用于观测多个 GoDex runtime；Relay 中继（WSS 出站接入）、`node exec/forward` 跳板、`guarded-remote` 审批头。
 - **Notes 工作台**：本地 Markdown 笔记、搜索/标签、Chat 中保存 Agent 输出到笔记、笔记↔记忆双向联动。

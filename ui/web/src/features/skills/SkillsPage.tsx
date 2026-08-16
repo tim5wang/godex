@@ -832,6 +832,8 @@ function PackageQualityPanel({ report, loading }: { report?: PackageQualityRepor
             render: (_value, item) => (
               <Space direction="vertical" size={4}>
                 {item.capabilities?.length ? <Space wrap>{item.capabilities.map((capability) => <Tag key={capability}>{capability}</Tag>)}</Space> : null}
+                {item.requires?.length ? <Space wrap>{item.requires.map((req) => <Tag color="orange" key={req}>requires {req}</Tag>)}</Space> : null}
+                {item.provides?.length ? <Space wrap>{item.provides.map((provided) => <Tag color="cyan" key={provided}>provides {provided}</Tag>)}</Space> : null}
                 {item.tool_policy?.length ? <Space wrap>{item.tool_policy.map((policy) => <Tag color="blue" key={policy}>{policy}</Tag>)}</Space> : null}
                 <Space wrap>
                   {item.command_diagnostics?.length ? <Tag>commands: {item.command_diagnostics.length}</Tag> : null}
@@ -849,6 +851,7 @@ function PackageQualityPanel({ report, loading }: { report?: PackageQualityRepor
                 ...(item.permission_issues ?? []),
                 ...(item.capability_issues ?? []),
                 ...(item.tool_policy_issues ?? []),
+                ...(item.dependency_issues ?? []),
                 ...(item.app_issues ?? []),
                 ...(item.command_diagnostics ?? []).flatMap((diag) => diag.issues ?? []),
                 ...(item.role_diagnostics ?? []).flatMap((diag) => diag.issues ?? []),
@@ -1116,6 +1119,8 @@ function PackageTable({
             render: (_value, item) => (
               <Space direction="vertical" size={4}>
                 {item.capabilities?.length ? <Space wrap>{item.capabilities.map((capability) => <Tag key={capability}>{capability}</Tag>)}</Space> : null}
+                {item.requires?.length ? <Space wrap>{item.requires.map((req) => <Tag color="orange" key={req}>requires {req}</Tag>)}</Space> : null}
+                {item.provides?.length ? <Space wrap>{item.provides.map((provided) => <Tag color="cyan" key={provided}>provides {provided}</Tag>)}</Space> : null}
                 {item.tool_policy?.length ? <Space wrap>{item.tool_policy.map((policy) => <Tag color="blue" key={policy}>{policy}</Tag>)}</Space> : null}
                 {item.smoke_tests?.length ? (
                   <Space wrap>

@@ -844,6 +844,11 @@ app:
   id: notes
 permissions: []
 capabilities: []
+provides:
+  - "godex:my-capability@1"
+requires:
+  - "base-kit@>=0.2.0"
+  - "godex:log@1"
 tool_policy:
   - "shell:allow:go test*"
   - "shell:deny:curl *"
@@ -856,7 +861,16 @@ smoke_tests:
 recommended_bundles: [core_code, lsp]
 ```
 
-字段：`name`、`version`、`description`、`resources{skills,prompts,commands,roles,docs,assets}`、`app{kind,id,label,config}`、`permissions`、`capabilities`、`tool_policy`、`smoke_tests[]`（name/command/working_dir/timeout_seconds/required_permissions/expected_exit_code）、`recommended_bundles`。
+字段：`name`、`version`、`description`、`resources{skills,prompts,commands,roles,docs,assets}`、`app{kind,id,label,config}`、`permissions`、`capabilities`、`provides`、`requires`、`tool_policy`、`smoke_tests[]`（name/command/working_dir/timeout_seconds/required_permissions/expected_exit_code）、`recommended_bundles`。
+
+**依赖声明（`requires` / `provides`）**：
+
+- `requires` 支持两种形式：
+  - 包依赖 `name@constraint`（如 `base-kit@>=0.2.0`、`toolkit@1`），约束支持精确版本、主/次版本前缀（`1`、`1.2`）、`>=`/`>`/`<=`/`<`、`^`（同主版本内）、`~`（同次版本内）、`*`（任意）；
+  - 能力依赖 `namespace:name[@major]`（如 `godex:log@1`、`tool:read_file`），由平台内建能力或已安装包的 `provides` 提供。
+- 安装 / 重装时解析依赖图：缺失依赖、版本冲突、依赖环都会阻止安装并给出报告；`/packages` quality 报告同样展示依赖问题。
+- 卸载保护：仍被其他已安装包 `requires` 引用的包无法被直接移除，需先移除引用方。
+- 重装是事务式的：新内容先落盘并校验，成功后原子切换 registry 并清理旧 digest 目录；失败时旧版本及其目录保持不变。
 
 Package command declaration 支持：
 

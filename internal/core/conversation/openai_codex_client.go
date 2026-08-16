@@ -108,10 +108,14 @@ func codexResponsesParams(req protocol.Request) responses.ResponseNewParams {
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: codexInputFromProtocol(req),
 		},
-		// store=true: the ChatGPT codex backend's conversation prompt cache
-		// only reports hits for stored responses (measured 0-2560 fixed cached
-		// tokens with store=false despite a byte-stable growing prefix).
-		Store: param.NewOpt(true),
+		// store must stay false: the ChatGPT codex OAuth endpoint
+		// (chatgpt.com/backend-api/codex) rejects store=true with HTTP 400
+		// (same as prompt_cache_retention). Measured with store=false the
+		// backend reports a fixed ~2560 cached tokens regardless of a
+		// byte-stable growing prefix, so conversation prefix caching is not
+		// available on this endpoint; input size is the only cache lever
+		// (handled by compaction retention).
+		Store: param.NewOpt(false),
 		Include: []responses.ResponseIncludable{
 			responses.ResponseIncludableReasoningEncryptedContent,
 		},

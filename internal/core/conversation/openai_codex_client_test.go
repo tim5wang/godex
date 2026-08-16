@@ -67,11 +67,10 @@ func TestOpenAICodexClientUsesStreamingResponsesEndpoint(t *testing.T) {
 	if got := body["stream"]; got != true {
 		t.Fatalf("expected stream=true, got %#v", got)
 	}
-	// store=true is required for the ChatGPT backend's conversation prompt
-	// cache to report hits (measured a fixed 0-2560 cached tokens with
-	// store=false despite a byte-stable growing prefix).
-	if got := body["store"]; got != true {
-		t.Fatalf("expected store=true for conversation prompt cache, got %#v", got)
+	// store must stay false: the ChatGPT codex backend rejects store=true with
+	// HTTP 400 (measured live), like prompt_cache_retention.
+	if got := body["store"]; got != false {
+		t.Fatalf("expected store=false (backend rejects true), got %#v", got)
 	}
 	if _, ok := body["max_output_tokens"]; ok {
 		t.Fatalf("codex backend rejects max_output_tokens, got body %#v", body)

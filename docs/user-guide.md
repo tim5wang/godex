@@ -888,6 +888,7 @@ runtime:
 - Prompt/context 贡献：插件可导出 `godex_prompts_list` 声明 prompt sections（key/kind/text）；活跃插件的贡献经 pluginrt 聚合后注入 runtime prompt（key `plugin:<id>:<key>`）。
 - Tool policy：插件可导出 `godex_policy` 返回显式决策 `{"action":"continue"|"deny"|"replace","error":{code,message},"result":...}`；决策作为 owner-aware before-interceptor 注册，卸载时随 instance 逆序撤销（`toolruntime.UnregisterOwnerInterceptors` 可一键撤销某 owner 全部 interceptor）。
 - 工具注册走 pluginrt 所有权模型（owner = 插件 id），卸载时随 instance 逆序撤销。
+- **Rust 示例 SDK**：`examples/wasm-plugin-rust` 是零依赖 Rust `cdylib` 实现（`wasm32-wasip1`），覆盖 tools/prompts/policy/abi 四面；`rebuild-testdata.sh` 可刷新 Go 端测试夹具。
 
 Package command declaration 支持：
 

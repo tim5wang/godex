@@ -456,3 +456,40 @@ func TestWasmToolPluginPolicyInterceptor(t *testing.T) {
 		t.Fatal("expected tools unregistered")
 	}
 }
+
+func TestWasmToolPluginWithRustModule(t *testing.T) {
+	binary, err := os.ReadFile(filepath.Join("..", "wasmrt", "testdata", "rust_plugin.wasm"))
+	if err != nil {
+		t.Skipf("rust test plugin not built: %v", err)
+	}
+	handler := toolruntime.NewToolHandler()
+	plugin := &WasmToolPlugin{
+		ManifestValue: Manifest{ID: "rust-demo", Scope: scope.Org("godex"), Provides: []string{"godex:rust-demo@1"}},
+		Binary:        binary,
+		Handler:       handler,
+		Meta:          toolruntime.ToolMeta{Bundle: "wasm", AlwaysActive: true},
+	}
+	manager := NewManager(nil)
+	if _, err := manager.Activate(context.Background(), plugin); err != nil {
+		t.Fatalf("activate rust plugin: %v", err)
+	}
+	result, err := handler.HandleResult(context.Background(), "rust_echo", map[string]interface{}{"message": "via rust"})
+	if err != nil {
+		t.Fatalf("handle rust_echo: %v", err)
+	}
+	if !strings.Contains(result.Text, "rust echo: via rust") {
+		t.Fatalf("unexpected result: %q", result.Text)
+	}
+	// Rust prompt contribution flows through the manager.
+	sections := manager.PromptSections()
+	if len(sections) != 1 || sections[0].PluginID != "rust-demo" || sections[0].Key != "rust_plugin_note" {
+		t.Fatalf("unexpected rust prompt sections: %+v", sections)
+	}
+	// Rust policy denies rust_secret through the handler.
+	if _, err := handler.HandleResult(context.Background(), "rust_secret", map[string]interface{}{}); err == nil {
+		t.Fatal("expected rust policy deny for rust_secret")
+	}
+	if err := manager.Deactivate(context.Background(), "rust-demo"); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+}

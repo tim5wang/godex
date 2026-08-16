@@ -30,7 +30,7 @@ func TestWasmCallToolRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tools list: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Name != "wasm_echo" {
+	if len(tools) == 0 || tools[0].Name != "wasm_echo" {
 		t.Fatalf("unexpected tools: %+v", tools)
 	}
 

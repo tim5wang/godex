@@ -1,0 +1,14 @@
+[package]
+name = "godex-hello-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "GoDex WASM plugin example (mailbox JSON ABI godex:plugin@0.1) written in Rust, zero dependencies"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

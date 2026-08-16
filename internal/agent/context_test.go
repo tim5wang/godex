@@ -492,11 +492,20 @@ func TestBuildContextIncludesEnvironmentPrompt(t *testing.T) {
 		}
 	}
 	foundEnvironment := false
+	foundDate := false
 	for _, msg := range build.Messages {
 		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
 			continue
 		}
 		text := protocol.MessageText(msg)
+		if strings.Contains(text, "Local date: 2026-04-17") {
+			// The volatile date/weekday line lives in its own tail message,
+			// never inside the stable # Environment section.
+			foundDate = true
+			if strings.Contains(text, "# Environment") {
+				t.Fatalf("expected date to stay out of the stable environment section, got %q", text)
+			}
+		}
 		if !strings.Contains(text, "# Runtime Prompt State") || !strings.Contains(text, "# Environment") {
 			continue
 		}
@@ -506,17 +515,21 @@ func TestBuildContextIncludesEnvironmentPrompt(t *testing.T) {
 			"This is optional runtime context.",
 			"Skills directory: " + a.cfg.SkillsDir,
 			"Temporary files directory: " + a.cfg.TempDir,
-			"Local date: 2026-04-17",
-			"Weekday: Friday",
 			"Timezone: Asia/Shanghai",
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("expected environment runtime message to contain %q, got %q", want, text)
 			}
 		}
+		if strings.Contains(text, "Local date") || strings.Contains(text, "Weekday") {
+			t.Fatalf("expected date/weekday OUT of the stable environment section, got %q", text)
+		}
 	}
 	if !foundEnvironment {
 		t.Fatalf("expected environment prompt in runtime messages, got %+v", build.Messages)
+	}
+	if !foundDate {
+		t.Fatalf("expected volatile date message in the tail, got %+v", build.Messages)
 	}
 }
 
@@ -631,11 +644,13 @@ func TestBuildContextKeepsDynamicPromptStateOutOfStableSystem(t *testing.T) {
 
 	firstRuntime := runtimePromptStateText(first.Messages)
 	secondRuntime := runtimePromptStateText(second.Messages)
-	if !strings.Contains(firstRuntime, "Local date: 2026-04-17") || !strings.Contains(secondRuntime, "Local date: 2026-04-18") {
-		t.Fatalf("expected environment date to move through runtime messages, first=%q second=%q", firstRuntime, secondRuntime)
+	if firstRuntime != secondRuntime {
+		t.Fatalf("expected runtime prompt state stable across date change (date moved to tail)\nfirst: %q\nsecond: %q", firstRuntime, secondRuntime)
 	}
-	if firstRuntime == secondRuntime {
-		t.Fatalf("expected runtime prompt state to change after date change")
+	firstDate := volatileBackgroundText(first.Messages, "Local date: 2026-04-17")
+	secondDate := volatileBackgroundText(second.Messages, "Local date: 2026-04-18")
+	if !firstDate || !secondDate {
+		t.Fatalf("expected volatile date message to track the date, first=%v second=%v", firstDate, secondDate)
 	}
 
 	for _, msg := range a.GetMessages() {
@@ -762,8 +777,7 @@ func TestBuildContextCodingProfileUsesLeanToolSurface(t *testing.T) {
 			t.Fatalf("expected coding profile tool %q, got %+v", want, build.ToolSchemas)
 		}
 	}
-	for _, blocked := range []string{
-	} {
+	for _, blocked := range []string{} {
 		if _, ok := names[blocked]; ok {
 			t.Fatalf("did not expect coding profile to expose %q by default, got %+v", blocked, build.ToolSchemas)
 		}
@@ -1015,8 +1029,8 @@ func TestBuildContextIncludesProjectLedger(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	ctx := tools.WithSessionContext(context.Background(), automation.SessionContext{
-		SessionID:             "session-ledger",
-		ProjectLedger:         "Goal: ship the long task\nCurrent phase: validation",
+		SessionID:              "session-ledger",
+		ProjectLedger:          "Goal: ship the long task\nCurrent phase: validation",
 		ProjectLedgerUpdatedAt: time.Now(),
 	})
 
@@ -1083,6 +1097,21 @@ func runtimePromptStateText(messages []protocol.Message) string {
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// volatileBackgroundText reports whether any background runtime message contains
+// the given substring. Unlike runtimePromptStateText, it scans every background
+// message, including the volatile date/weekday tail message.
+func volatileBackgroundText(messages []protocol.Message, want string) bool {
+	for _, msg := range messages {
+		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
+			continue
+		}
+		if strings.Contains(protocol.MessageText(msg), want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildContextIncludesSkillCatalogPrompt(t *testing.T) {

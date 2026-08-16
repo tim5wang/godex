@@ -206,7 +206,7 @@ godex config                                  # 交互式配置向导
 
 > 修正说明：coding/general 两个 profile 的**工具目录是相同的**（always-active / default-active 工具集合一致）。差异在于系统提示词内容：coding profile 注入精简的 coding 提示词（简洁回复、先读代码再改、优先 `lsp`、todo 用法），并在提示词中要求“仅在用户明确要求或任务确实需要时，通过 `tool_exchange` 启用 web/browser/subagent/background/package/skill/memory/MCP/external 等重能力”；同时用 `repo_map` 替代 `skill_catalog` 注入。general profile 保留完整工作台体验（含 skill catalog 注入）。
 
-> `repo_map` 是 coding profile 下的**确定性仓库快照**（文件路径 + Go 导出符号索引，按路径排序，最多 160 条/2500 token），放在对话历史之前：会话内不随提问或文件编辑变化，保证 provider 前缀缓存（OpenAI/DeepSeek 的自动 prompt caching）跨轮命中。文件创建/编辑/删除会以一条有界（≤12 条）的 `# Repo Map Changes` 变更说明追加在历史之后，另附 ≤8 条的 `# Repo Map (query focus)` 查询相关文件提示；快照只在**会话开始**和**上下文压缩（compaction）**时重建。
+> `repo_map` 是 coding profile 下的**确定性仓库快照**（文件路径 + Go 导出符号索引，按路径排序，最多 160 条/2500 token），放在对话历史之前：会话内不随提问或文件编辑变化，保证 provider 前缀缓存（OpenAI/DeepSeek 的自动 prompt caching）跨轮命中。文件创建/编辑/删除会以一条有界（≤12 条）的 `# Repo Map Changes` 变更说明追加在历史之后，另附 ≤8 条的 `# Repo Map (query focus)` 查询相关文件提示；快照只在**会话开始**和**上下文压缩（compaction）**时重建。同理，`# Environment` 段只保留会话内静态信息（版本/目录/时区等），**日期/星期**作为易变内容单独追加在历史之后——每天零点不再使整段历史前缀缓存失效。
 
 默认策略：
 

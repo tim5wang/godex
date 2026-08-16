@@ -208,14 +208,21 @@ func buildEnvironmentPrompt(input EnvironmentPromptInput) string {
 		fmt.Sprintf("- Temporary files directory: %s", input.TempDir),
 		fmt.Sprintf("- Shell: %s", input.Shell),
 		fmt.Sprintf("- Platform: %s", input.Platform),
-		fmt.Sprintf("- Local date: %s", input.Now.Format("2006-01-02")),
-		fmt.Sprintf("- Weekday: %s", input.Now.Weekday()),
 		fmt.Sprintf("- Timezone: %s", input.Timezone),
 		"- File tools use workspace-relative paths.",
 		"- Inbox and background updates are ephemeral runtime context and are not persisted automatically.",
 		"- Conversation history may be compacted automatically when it grows large.",
 	}
 	return strings.Join(lines, "\n")
+}
+
+// buildEnvironmentDatePrompt renders the volatile date/weekday line. It is kept
+// OUT of the stable # Environment section (which sits before conversation
+// history): the daily rollover would invalidate the provider prefix cache for
+// the whole history. It is appended in the volatile tail instead, where its
+// churn is uncached but tiny.
+func buildEnvironmentDatePrompt(now time.Time) string {
+	return fmt.Sprintf("- Local date: %s\n- Weekday: %s", now.Format("2006-01-02"), now.Weekday())
 }
 
 func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {

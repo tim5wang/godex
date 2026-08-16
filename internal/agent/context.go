@@ -84,6 +84,10 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	}
 	quasiStableMessages = append(quasiStableMessages, promptStateMessages...)
 	volatileMessages := append(protocol.CloneMessages(memoryMessages), protocol.CloneMessages(runtimeMessages)...)
+	// The date/weekday are volatile: they live in the tail (not the stable
+	// # Environment section before history) so the daily rollover cannot
+	// invalidate the provider prefix cache for the whole history.
+	volatileMessages = append(volatileMessages, protocol.NewEphemeralTextMessage(protocol.KindBackground, buildEnvironmentDatePrompt(a.now())))
 
 	// Repo map freshness: the stable snapshot before history never changes
 	// mid-session, so per-turn file edits are reported here as a bounded change

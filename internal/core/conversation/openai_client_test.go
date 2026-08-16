@@ -124,9 +124,10 @@ func TestOpenAIClientPreservesReasoningContentForToolFollowUp(t *testing.T) {
 		t.Fatalf("expected reasoning content on assistant history message, got %+v", assistant.Metadata)
 	}
 
+	resultMsg := protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("call_1", `{"ok":true}`))
 	body, err := client.buildRequest(protocol.Request{
 		Model:    "deepseek-reasoner",
-		Messages: SanitizeMessagesForProvider(protocol.ToAPIMessages([]protocol.Message{assistant})),
+		Messages: SanitizeMessagesForProvider(protocol.ToAPIMessages([]protocol.Message{assistant, resultMsg})),
 	}, false)
 	if err != nil {
 		t.Fatalf("build follow-up request: %v", err)

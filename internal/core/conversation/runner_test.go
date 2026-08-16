@@ -1019,7 +1019,7 @@ func TestRunnerBackfillsSiblingToolResultsWhenApprovalStopsBatch(t *testing.T) {
 	}
 }
 
-func TestSanitizeMessagesForProviderBackfillsMissingToolResultBeforeNextMessage(t *testing.T) {
+func TestSanitizeMessagesForProviderDropsUnresolvedToolUseInsteadOfBackfilling(t *testing.T) {
 	messages := []protocol.APIMessage{
 		{
 			Role: protocol.RoleAssistant,
@@ -1037,17 +1037,35 @@ func TestSanitizeMessagesForProviderBackfillsMissingToolResultBeforeNextMessage(
 	}
 
 	sanitized := SanitizeMessagesForProvider(messages)
-	if len(sanitized) != 4 {
-		t.Fatalf("expected assistant, actual result, backfill, user text; got %+v", sanitized)
+	// tool-2 has no matching tool_result: it is DROPPED from the assistant
+	// message instead of inserting a synthetic backfill (which would shift the
+	// shared prefix and break provider prefix caching).
+	if len(sanitized) != 3 {
+		t.Fatalf("expected assistant(resolved only), tool result, user text; got %+v", sanitized)
 	}
-	if sanitized[2].Role != protocol.RoleUser || len(sanitized[2].Content) != 1 || sanitized[2].Content[0].ToolUseID != "tool-2" {
-		t.Fatalf("expected missing tool result backfilled before user text, got %+v", sanitized)
+	if len(sanitized[0].Content) != 1 || sanitized[0].Content[0].Type != protocol.BlockToolUse || sanitized[0].Content[0].ID != "tool-1" {
+		t.Fatalf("expected only resolved tool-1 kept in assistant message, got %+v", sanitized[0].Content)
 	}
-	if !strings.Contains(sanitized[2].Content[0].Content, "missing_tool_result_backfilled") {
-		t.Fatalf("expected missing result marker, got %q", sanitized[2].Content[0].Content)
+	if sanitized[2].Content[0].Text != "继续" {
+		t.Fatalf("expected user text last, got %+v", sanitized[2])
 	}
-	if sanitized[3].Content[0].Text != "继续" {
-		t.Fatalf("expected user text after backfill, got %+v", sanitized[3])
+}
+
+func TestSanitizeMessagesForProviderDropsTrailingUnresolvedToolUse(t *testing.T) {
+	messages := []protocol.APIMessage{
+		{
+			Role: protocol.RoleAssistant,
+			Content: []protocol.Block{
+				protocol.ToolUseBlock("tool-9", "bash", map[string]interface{}{"command": "ls"}),
+			},
+		},
+	}
+
+	sanitized := SanitizeMessagesForProvider(messages)
+	// The dangling trailing tool_use is dropped rather than backfilled, so the
+	// list stays append-only and provider-valid.
+	if len(sanitized) != 0 {
+		t.Fatalf("expected orphaned trailing tool_use dropped, got %+v", sanitized)
 	}
 }
 

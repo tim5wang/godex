@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -517,23 +516,24 @@ func diagnosticRecoveryHint(iteration int, executed []ExecutedTool) string {
 }
 
 // SanitizeMessagesForProvider repairs provider-facing history without mutating
-// persisted conversation state.
+// persisted conversation state. Tool_use blocks that were never resolved by a
+// later tool_result are DROPPED from the outgoing list instead of being
+// backfilled with a synthetic result: inserting a backfill into the middle of
+// history shifts the shared prefix between consecutive requests and defeats
+// provider prefix caching, while dropping keeps history append-only and
+// provider-valid (no dangling tool_use without a result).
 func SanitizeMessagesForProvider(messages []protocol.APIMessage) []protocol.APIMessage {
+	resolved := resolvedToolUses(messages)
 	out := make([]protocol.APIMessage, 0, len(messages))
 	openTools := map[string]struct{}{}
 	for _, msg := range messages {
-		hadOpenTools := len(openTools) > 0
-		blocks := sanitizeBlocks(msg.Content, openTools, msg.Role == protocol.RoleAssistant)
+		blocks := sanitizeBlocks(msg.Content, openTools, msg.Role == protocol.RoleAssistant, resolved)
 		if len(blocks) == 0 {
 			continue
 		}
 		role := strings.TrimSpace(msg.Role)
 		if role == "" {
 			role = protocol.RoleUser
-		}
-		if hadOpenTools && len(openTools) > 0 && !onlyToolResults(blocks) {
-			out = append(out, protocol.APIMessage{Role: protocol.RoleUser, Content: missingToolResultBlocks(openTools, "missing_tool_result_backfilled")})
-			clear(openTools)
 		}
 		if len(out) > 0 && role == protocol.RoleUser && out[len(out)-1].Role == protocol.RoleUser &&
 			onlyUserMergeable(out[len(out)-1].Content) && onlyUserMergeable(blocks) {
@@ -547,13 +547,34 @@ func SanitizeMessagesForProvider(messages []protocol.APIMessage) []protocol.APIM
 		}
 		out = append(out, apiMessage)
 	}
-	if len(openTools) > 0 {
-		out = append(out, protocol.APIMessage{Role: protocol.RoleUser, Content: missingToolResultBlocks(openTools, "missing_tool_result_backfilled")})
-	}
 	return out
 }
 
-func sanitizeBlocks(blocks []protocol.Block, openTools map[string]struct{}, assistant bool) []protocol.Block {
+// resolvedToolUses returns the set of tool_use ids that have a matching
+// tool_result later in the message list. Anything else is an orphaned tool_use
+// (interrupted turn, compaction drop, checkpoint resume) and is dropped by
+// sanitizeBlocks rather than backfilled.
+func resolvedToolUses(messages []protocol.APIMessage) map[string]struct{} {
+	seen := map[string]struct{}{}
+	resolved := map[string]struct{}{}
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch block.Type {
+			case protocol.BlockToolUse:
+				if strings.TrimSpace(block.ID) != "" {
+					seen[block.ID] = struct{}{}
+				}
+			case protocol.BlockToolResult:
+				if _, ok := seen[block.ToolUseID]; ok {
+					resolved[block.ToolUseID] = struct{}{}
+				}
+			}
+		}
+	}
+	return resolved
+}
+
+func sanitizeBlocks(blocks []protocol.Block, openTools map[string]struct{}, assistant bool, resolved map[string]struct{}) []protocol.Block {
 	out := make([]protocol.Block, 0, len(blocks))
 	for _, block := range blocks {
 		switch block.Type {
@@ -567,6 +588,12 @@ func sanitizeBlocks(blocks []protocol.Block, openTools map[string]struct{}, assi
 			}
 		case protocol.BlockToolUse:
 			if assistant && strings.TrimSpace(block.ID) != "" && strings.TrimSpace(block.Name) != "" {
+				// Drop unresolved tool_use blocks: keeping them without a
+				// matching tool_result breaks provider adjacency, and inserting
+				// a synthetic result would mutate the shared prefix.
+				if _, ok := resolved[block.ID]; !ok {
+					continue
+				}
 				openTools[block.ID] = struct{}{}
 				out = append(out, protocol.ToolUseBlock(block.ID, block.Name, block.Input))
 			}
@@ -600,34 +627,6 @@ func onlyUserMergeable(blocks []protocol.Block) bool {
 		}
 	}
 	return true
-}
-
-func onlyToolResults(blocks []protocol.Block) bool {
-	if len(blocks) == 0 {
-		return false
-	}
-	for _, block := range blocks {
-		if block.Type != protocol.BlockToolResult {
-			return false
-		}
-	}
-	return true
-}
-
-func missingToolResultBlocks(openTools map[string]struct{}, status string) []protocol.Block {
-	if len(openTools) == 0 {
-		return nil
-	}
-	ids := make([]string, 0, len(openTools))
-	for id := range openTools {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	blocks := make([]protocol.Block, 0, len(ids))
-	for _, id := range ids {
-		blocks = append(blocks, protocol.ToolResultBlock(id, fmt.Sprintf(`{"status":%q,"note":"The original tool result was missing from provider context."}`, status)))
-	}
-	return blocks
 }
 
 type pollingToolRepeatState struct {

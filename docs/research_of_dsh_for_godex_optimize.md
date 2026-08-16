@@ -1,8 +1,8 @@
 # DeepSeek Harness 对 GoDex 的改进启示
 
-> 状态：Draft / Plan（设计分析与改进方案；**阶段 0 已落地**，阶段 A/B/C 尚未立项实施）
+> 状态：Draft / Plan（设计分析与改进方案；**阶段 0 已落地、阶段 A 内核骨架已落地**，阶段 B/C 尚未立项实施）
 > 目标：提炼 `temp/deepseek-harness` 中值得 GoDex 吸收的架构能力，聚焦近期可落地优化；不追求复制 Cordis，也不把 WASM 等同于插件系统。
-> 修订日志：2026-08-15 整合插件对照表、wazero 兼容性结论（协议层/桥接层）、MCP 跨运行时能力协议视角与更低起步点（阶段 0：package requires 依赖解析）。2026-08-16 阶段 0 落地：`godex.package.yaml` 支持 `requires`/`provides`、安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装与旧 digest 目录 GC（见 `internal/core/packages/{requires,deps}.go`）。
+> 修订日志：2026-08-15 整合插件对照表、wazero 兼容性结论（协议层/桥接层）、MCP 跨运行时能力协议视角与更低起步点（阶段 0：package requires 依赖解析）。2026-08-16 阶段 0 落地：`godex.package.yaml` 支持 `requires`/`provides`、安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装与旧 digest 目录 GC（见 `internal/core/packages/{requires,deps}.go`）。同日 P1 与阶段 A 内核骨架落地：`internal/toolruntime` 注册返回可逆 `Registration`（owner/generation/draining，`RegisterOwned`/`UnregisterOwner`），新增 `internal/pluginrt` 轻量插件内核（manifest/graph/instance/effects/registry/manager，含事务式 prepare/commit/rollback 与 `NativeToolPlugin` 内建 Go 适配器）。
 
 ## 1. 核心结论
 
@@ -141,15 +141,15 @@ type Effect func(context.Context) error
 - 坏配置不替换当前可用 registry；
 - 不改变现有 Tool Bundle 行为。
 
-### P1：改造 ToolHandler 注册所有权
+### P1：改造 ToolHandler 注册所有权 ✅ 已落地（`internal/toolruntime`）
 
 为工具和 interceptor 增加 owner/generation-aware 注册：
 
-- 注册返回 disposer；
-- 同名冲突明确报错或按优先级替换；
-- 实例进入 draining 后拒绝新调用；
-- 迟到结果若 generation 已过期则丢弃；
-- reload 采用 shadow registry + atomic swap。
+- 注册返回 disposer —— ✅ `Register`/`RegisterWithMeta` 返回 `*Registration`，`Dispose()` 逆序撤销
+- 同名冲突明确报错或按优先级替换 —— ✅ `RegisterOwned(owner, ...)` 对不同非空 owner 报 `ErrToolConflict`
+- 实例进入 draining 后拒绝新调用 —— ✅ `MarkDraining` + `ErrToolDraining`
+- 迟到结果若 generation 已过期则丢弃 —— ✅ generation 计数 + `CurrentGeneration`；`ReplaceWith` 重映射 generation
+- reload 采用 shadow registry + atomic swap —— ✅ 原有 `ReplaceWith` 保留
 
 这是后续 WASM、动态 MCP provider、Package 执行能力的共同基础。
 
@@ -269,13 +269,13 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 
 这同时解决「重装不干净」的存量问题，并为阶段 A 提供依赖与 effect 的语义基础。
 
-### 阶段 A：插件内核（3～5 人周）
+### 阶段 A：插件内核（3～5 人周）🔄 内核骨架已落地
 
-- Plugin manifest/instance/graph/effects；
-- scope-aware registry；
-- ToolHandler disposer 和 generation；
-- 事务式整树切换；
-- 迁移少量内建组件验证。
+- Plugin manifest/instance/graph/effects —— ✅ `internal/pluginrt/{manifest,graph,instance,effects}.go`
+- scope-aware registry —— ✅ `internal/pluginrt/registry.go`（scope → capability → providers）
+- ToolHandler disposer 和 generation —— ✅ `internal/toolruntime`（`RegisterOwned`/`Registration.Dispose`/`MarkDraining`/`UnregisterOwner`）
+- 事务式整树切换 —— ✅ `internal/pluginrt/manager.go`（`Activate`/`Deactivate`/`Prepare`/`Commit`/`Rollback`，坏配置不替换当前 registry）
+- 迁移少量内建组件验证 —— ⏳ 待做：用 `NativeToolPlugin` 迁移 2～3 个内建工具/hook 到 pluginrt 生命周期。
 
 ### 阶段 B：WASM Tool（3～4 人周）
 

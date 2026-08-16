@@ -111,12 +111,21 @@ type HostCallbacks struct {
 	// (allow/deny domains, timeout, max chars). Returns body text and err when
 	// denied or failed. When nil, godex_http_get returns an error.
 	HTTPGet func(ctx context.Context, rawURL string) (string, error)
+	// CredentialGet returns a named secret for the current plugin, or an error
+	// when the plugin is not authorized or the secret is unset (阶段 C
+	// credential broker). The plugin id comes from Config.PluginID, so this
+	// callback is already bound to the plugin. When nil, godex_credential_get
+	// returns an error.
+	CredentialGet func(name string) (string, error)
 }
 
 // Config controls one WASM plugin execution environment.
 type Config struct {
 	// Binary is the compiled .wasm module contents.
 	Binary []byte
+	// PluginID is the owning plugin id (used for namespaced host calls like
+	// credential access; empty when unknown).
+	PluginID string
 	// Host are the controlled host callbacks (may be nil for no-op).
 	Host HostCallbacks
 	// CallTimeout bounds each tool call; zero uses DefaultCallTimeout.
@@ -283,6 +292,29 @@ func instantiateHostModule(ctx context.Context, runtime wazero.Runtime, host Hos
 		}
 		return 0
 	}).Export("godex_http_get")
+
+	// godex_credential_get(namePtr, nameLen, outPtr, outLen) -> status
+	// (0 ok, 1 not allowed, 2 not set/error). The credential broker resolves
+	// the plugin id (from Config.PluginID); plugins can only read secrets their
+	// manifest authorized.
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr, nameLen, outPtr, outLen uint32) uint32 {
+		if host.CredentialGet == nil {
+			return 2
+		}
+		name := readString(mod, namePtr, nameLen)
+		value, err := host.CredentialGet(name)
+		if err != nil {
+			msg := err.Error()
+			if strings.Contains(msg, "not allowed") {
+				return 1
+			}
+			return 2
+		}
+		if writeString(mod, outPtr, outLen, value) == 0 && value != "" {
+			return 2
+		}
+		return 0
+	}).Export("godex_credential_get")
 
 	_, err := builder.Instantiate(ctx)
 	return err

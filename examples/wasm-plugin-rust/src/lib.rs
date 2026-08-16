@@ -65,7 +65,10 @@ pub extern "C" fn godex_tools_list() -> u32 {
         r#"{"name":"rust_counter","description":"increment a persisted counter via the plugin KV host call","#,
         r#""inputSchema":{"type":"object"}},"#,
         r#"{"name":"rust_http","description":"fetch a URL via the controlled host HTTP call","#,
-        r#""inputSchema":{"type":"object"}}]"#,
+        r#""inputSchema":{"type":"object"}},"#,
+        r#"{"name":"rust_credential","description":"read an allowlisted secret via the credential broker","#,
+        r#""inputSchema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}"#,
+        r#"]"#,
         r#"}"#,
     );
     unsafe { put(&mut TOOLS, tools) }
@@ -109,6 +112,7 @@ extern "C" {
     #[allow(dead_code)]
     fn godex_workspace_read(rel_ptr: u32, rel_len: u32, out_ptr: u32, out_len: u32) -> u32;
     fn godex_http_get(url_ptr: u32, url_len: u32, out_ptr: u32, out_len: u32) -> u32;
+    fn godex_credential_get(name_ptr: u32, name_len: u32, out_ptr: u32, out_len: u32) -> u32;
 }
 
 /// Read the KV value for `key` via the host call. Returns "" when absent.
@@ -206,6 +210,27 @@ fn dispatch(req: &str) -> String {
                     let n = out.iter().position(|&b| b == 0).unwrap_or(out.len());
                     let body = String::from_utf8_lossy(&out[..n]).to_string();
                     format!(r#"{{"ok":true,"result":"{}"}}"#, body)
+                }
+            }
+            "rust_credential" => {
+                let name = json_argument_string(req, "name").unwrap_or("");
+                let mut out = [0u8; 512];
+                let status = unsafe {
+                    godex_credential_get(
+                        name.as_ptr() as u32,
+                        name.len() as u32,
+                        out.as_mut_ptr() as u32,
+                        out.len() as u32,
+                    )
+                };
+                match status {
+                    0 => {
+                        let n = out.iter().position(|&b| b == 0).unwrap_or(out.len());
+                        let secret = String::from_utf8_lossy(&out[..n]).to_string();
+                        format!(r#"{{"ok":true,"result":"secret: {}"}}"#, secret)
+                    }
+                    1 => r#"{"ok":false,"error":"credential not allowed"}"#.to_string(),
+                    _ => r#"{"ok":false,"error":"credential not set"}"#.to_string(),
                 }
             }
             "rust_counter" => {

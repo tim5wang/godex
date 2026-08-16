@@ -889,6 +889,7 @@ runtime:
 - Tool policy：插件可导出 `godex_policy` 返回显式决策 `{"action":"continue"|"deny"|"replace","error":{code,message},"result":...}`；决策作为 owner-aware before-interceptor 注册，卸载时随 instance 逆序撤销（`toolruntime.UnregisterOwnerInterceptors` 可一键撤销某 owner 全部 interceptor）。
 - 插件 KV：`godex_kv_get/set` 由 pluginrt KV broker 提供——**按插件命名空间隔离**、SQLite 持久化（重启保留）；`WasmToolPlugin.KV` 接线后插件即可读写自己的持久状态（Rust 示例 `rust_counter` 演示跨重载计数）。
 - 插件 HTTP：`godex_http_get` 由宿主 web fetch 策略控制（allow/deny 域、超时、max chars；未启用时返回错误），插件无法绕过策略（Rust 示例 `rust_http`）。
+- 插件凭据：`godex_credential_get` 由 pluginrt credential broker 提供——**按插件 allowlist 授权**读取命名 secret（未授权/未设置返回不同错误码），插件无法枚举其他凭据（Rust 示例 `rust_credential`）。
 - 工具注册走 pluginrt 所有权模型（owner = 插件 id），卸载时随 instance 逆序撤销。
 - **Rust 示例 SDK**：`examples/wasm-plugin-rust` 是零依赖 Rust `cdylib` 实现（`wasm32-wasip1`），覆盖 tools/prompts/policy/abi 四面；`rebuild-testdata.sh` 可刷新 Go 端测试夹具。
 

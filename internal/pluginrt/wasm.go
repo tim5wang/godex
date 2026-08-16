@@ -36,6 +36,9 @@ type WasmToolPlugin struct {
 	// godex_kv_get/godex_kv_set host calls are wired to this plugin's own
 	// namespace within the broker.
 	KV *PluginKVBroker
+	// Credentials is the optional plugin credential broker (阶段 C). When set,
+	// godex_credential_get resolves secrets this plugin's manifest authorized.
+	Credentials *CredentialBroker
 
 	runtime     *wasmrt.Plugin
 	promptSects []wasmrt.PromptSection
@@ -53,6 +56,7 @@ func (p *WasmToolPlugin) Start(ctx context.Context, host Host) error {
 	}
 	config := p.WasmConfig
 	config.Binary = p.Binary
+	config.PluginID = p.ManifestValue.ID
 	// 阶段 C KV broker: when a broker is configured, wire its namespaced
 	// host calls into the module's godex_kv_get/godex_kv_set. Each plugin
 	// reads/writes only its own namespace.
@@ -63,6 +67,13 @@ func (p *WasmToolPlugin) Start(ctx context.Context, host Host) error {
 		}
 		if config.Host.KVSet == nil {
 			config.Host.KVSet = set
+		}
+	}
+	// 阶段 C credential broker: when configured, wire godex_credential_get to
+	// the plugin's allowlisted secrets.
+	if p.Credentials != nil {
+		if config.Host.CredentialGet == nil {
+			config.Host.CredentialGet = p.Credentials.adapterFunc(p.ManifestValue.ID)
 		}
 	}
 	loaded, err := wasmrt.NewPlugin(ctx, config)

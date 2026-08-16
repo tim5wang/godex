@@ -3,6 +3,7 @@ package wasmrt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,7 +249,7 @@ func TestRustCompiledPluginEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tools list: %v", err)
 	}
-	if len(tools) != 4 || tools[0].Name != "rust_echo" || tools[1].Name != "rust_ping" || tools[2].Name != "rust_counter" || tools[3].Name != "rust_http" {
+	if len(tools) != 5 || tools[0].Name != "rust_echo" || tools[1].Name != "rust_ping" || tools[2].Name != "rust_counter" || tools[3].Name != "rust_http" || tools[4].Name != "rust_credential" {
 		t.Fatalf("unexpected rust tools: %+v", tools)
 	}
 	result, err := plugin.CallTool(context.Background(), "rust_echo", map[string]any{"message": "from rust"})
@@ -329,5 +330,40 @@ func TestRustPluginHTTPGetHostCallEndToEnd(t *testing.T) {
 	}
 	if result != "fetched:https://example.com" {
 		t.Fatalf("unexpected http result: %v", result)
+	}
+}
+
+func TestRustPluginCredentialHostCallEndToEnd(t *testing.T) {
+	binary, err := os.ReadFile(filepath.Join("testdata", "rust_plugin.wasm"))
+	if err != nil {
+		t.Skipf("rust test plugin not built: %v", err)
+	}
+	plugin, err := NewPlugin(context.Background(), Config{
+		Binary: binary,
+		Host: HostCallbacks{
+			CredentialGet: func(name string) (string, error) {
+				if name == "ALLOWED_KEY" {
+					return "sk-allowed", nil
+				}
+				return "", fmt.Errorf("credential broker: plugin not allowed to read %q", name)
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new rust plugin: %v", err)
+	}
+	defer plugin.Close(context.Background())
+	// Allowed secret.
+	result, err := plugin.CallTool(context.Background(), "rust_credential", map[string]any{"name": "ALLOWED_KEY"})
+	if err != nil {
+		t.Fatalf("call rust_credential allowed: %v", err)
+	}
+	if result != "secret: sk-allowed" {
+		t.Fatalf("unexpected credential result: %v", result)
+	}
+	// Denied secret surfaces as a plugin error.
+	denied, err := plugin.CallTool(context.Background(), "rust_credential", map[string]any{"name": "DENIED_KEY"})
+	if err == nil {
+		t.Fatalf("expected denied credential error, got %v", denied)
 	}
 }

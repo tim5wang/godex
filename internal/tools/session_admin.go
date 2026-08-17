@@ -38,6 +38,13 @@ type ContextInspection struct {
 	PendingPermissionCount        int                     `json:"pending_permission_count"`
 	LargeToolResultReferenceCount int                     `json:"large_tool_result_reference_count,omitempty"`
 	ToolResultReferences          []ToolResultReference   `json:"tool_result_references,omitempty"`
+	// CumulativeTokens / CumulativeInputTokens / CumulativeOutputTokens report
+	// the provider-reported token totals consumed across all model calls in
+	// this session. They survive compactions and conversation clears so the
+	// status bar can show true cumulative consumption.
+	CumulativeTokens       int `json:"cumulative_tokens,omitempty"`
+	CumulativeInputTokens  int `json:"cumulative_input_tokens,omitempty"`
+	CumulativeOutputTokens int `json:"cumulative_output_tokens,omitempty"`
 }
 
 // ContextSourcePressure identifies the largest contributors to prompt size.

@@ -103,6 +103,12 @@ type Agent struct {
 	cacheStatsMu sync.Mutex
 	cacheStats   sessionCacheStats
 	unsubUsage   func()
+	// usageMu guards usage, the per-session cumulative model-token totals fed
+	// by the same provider usage hook as cacheStats. Unlike cacheStats it is
+	// not reset when the conversation is cleared, so the status bar can show
+	// true cumulative consumption for the whole session.
+	usageMu sync.Mutex
+	usage   sessionUsage
 	// currentLongTaskArgs is a transient pointer set by runLongTaskSync
 	// for the duration of a single run so helpers like
 	// appendLongTaskReflux can see args such as NoReflux without

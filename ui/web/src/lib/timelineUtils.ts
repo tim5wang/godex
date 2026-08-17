@@ -510,17 +510,22 @@ export function buildContextStatusSummary(
   const sessionCalls = context?.cache_usage?.calls ?? 0;
   const calls = sessionCalls > 0 ? sessionCalls : mainCalls + subagentCalls;
   const messages = context?.message_count ?? 0;
+  const cumulative = context?.cumulative_tokens ?? 0;
+  const cumulativeLabel = cumulative > 0 ? ` · tok ${formatCompactNumber(cumulative)}` : "";
   const tokenLabel = threshold > 0 ? `${formatCompactNumber(tokens)}/${formatCompactNumber(threshold)} ${percent}%` : formatCompactNumber(tokens);
   return {
-    text: `ctx ${tokenLabel} · calls ${calls} · msgs ${messages}`,
+    text: `ctx ${tokenLabel} · calls ${calls} · msgs ${messages}${cumulativeLabel}`,
     tooltip: [
       `Context tokens: ${tokens}${threshold > 0 ? ` / ${threshold} (${percent}%)` : ""}`,
       sessionCalls > 0
         ? `Model requests in this session (from provider usage): ${calls}`
         : `Model requests seen in current timeline window: ${calls}`,
       `Messages in context: ${messages}`,
+      cumulative > 0
+        ? `Cumulative tokens used in this session: ${cumulative} (input ${context?.cumulative_input_tokens ?? 0} / output ${context?.cumulative_output_tokens ?? 0})`
+        : "",
       context?.suggest_compact ? "Compaction is suggested." : "Compaction is not currently suggested.",
-    ].join("\n"),
+    ].filter(Boolean).join("\n"),
     budgetPercent: percent,
     suggestCompact: Boolean(context?.suggest_compact),
   };

@@ -110,6 +110,22 @@ export function ContextStatusInline({ summary, inspector }: { summary: ContextSt
           <span className="ctx-popover-label">{t("chat.ctxPopoverApprovals")}</span>
           <span className="ctx-popover-value">{ctx?.pending_permission_count ?? "—"}</span>
         </div>
+        {ctx && (ctx.cumulative_tokens ?? 0) > 0 ? (
+          <>
+            <div className="ctx-popover-row">
+              <span className="ctx-popover-label">{t("chat.ctxPopoverCumulative")}</span>
+              <span className="ctx-popover-value">{formatCompactNumber(ctx.cumulative_tokens ?? 0)}</span>
+            </div>
+            <div className="ctx-popover-row ctx-popover-row-sub">
+              <span className="ctx-popover-label">{t("chat.ctxPopoverCumulativeIn")}</span>
+              <span className="ctx-popover-value">{formatCompactNumber(ctx.cumulative_input_tokens ?? 0)}</span>
+            </div>
+            <div className="ctx-popover-row ctx-popover-row-sub">
+              <span className="ctx-popover-label">{t("chat.ctxPopoverCumulativeOut")}</span>
+              <span className="ctx-popover-value">{formatCompactNumber(ctx.cumulative_output_tokens ?? 0)}</span>
+            </div>
+          </>
+        ) : null}
         {ctx?.suggest_compact ? (
           <div className="ctx-popover-row">
             <span className="ctx-popover-label">{t("chat.ctxPopoverCompaction")}</span>

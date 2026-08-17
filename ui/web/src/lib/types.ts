@@ -176,6 +176,9 @@ export interface ContextInspection {
   pending_permission_count: number;
   large_tool_result_reference_count?: number;
   tool_result_references?: ToolResultReference[];
+  cumulative_tokens?: number;
+  cumulative_input_tokens?: number;
+  cumulative_output_tokens?: number;
 }
 
 export interface ContextSourcePressure {

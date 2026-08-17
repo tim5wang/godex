@@ -81,6 +81,55 @@ func TestAgentUsageHookFiltersBySession(t *testing.T) {
 	}
 }
 
+func TestCumulativeUsageSurvivesCacheReset(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.registerUsageHook("session-a")
+	defer func() {
+		a.cacheStatsMu.Lock()
+		if a.unsubUsage != nil {
+			a.unsubUsage()
+			a.unsubUsage = nil
+		}
+		a.cacheStatsMu.Unlock()
+	}()
+
+	event := conversation.UsageEvent{
+		Context: conversation.UsageContext{SessionID: "session-a"},
+		Response: &protocol.Response{Usage: &protocol.Usage{
+			InputTokens:      1000,
+			OutputTokens:     200,
+			CacheReadTokens:  9000,
+			CacheWriteTokens: 100,
+		}},
+	}
+	conversation.NotifyUsageHooksForTest(context.Background(), event)
+	conversation.NotifyUsageHooksForTest(context.Background(), event)
+
+	// Total input = uncached input + cache read + cache write per call.
+	input, output := a.cumulativeTokenUsage()
+	if input != 2*(1000+9000+100) || output != 2*200 {
+		t.Fatalf("unexpected cumulative usage: input=%d output=%d", input, output)
+	}
+
+	// Clearing the conversation resets cache stats (hit-rate scope) but must
+	// keep the session cumulative total intact.
+	a.resetCacheStats()
+	input, output = a.cumulativeTokenUsage()
+	if input != 2*(1000+9000+100) || output != 2*200 {
+		t.Fatalf("cumulative usage should survive reset: input=%d output=%d", input, output)
+	}
+
+	inspection, err := a.InspectContext(context.Background(), "session-a")
+	if err != nil {
+		t.Fatalf("inspect context: %v", err)
+	}
+	if inspection.CumulativeTokens != int(input+output) ||
+		inspection.CumulativeInputTokens != int(input) ||
+		inspection.CumulativeOutputTokens != int(output) {
+		t.Fatalf("expected cumulative usage surfaced in inspection, got %+v", inspection)
+	}
+}
+
 func TestInspectContextIncludesCacheUsage(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.cacheStatsMu.Lock()

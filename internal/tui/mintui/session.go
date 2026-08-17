@@ -1960,6 +1960,11 @@ func (s *Session) renderStatusWith(summary tools.ContextInspection, label string
 	if pct := ctxPctWithThreshold(summary, s.cfg.CompressThreshold); pct != "" {
 		parts = append(parts, pct)
 	}
+	// Cumulative session token consumption ("tok 1.2M"): provider-reported
+	// totals that survive compactions and conversation clears.
+	if total := summary.CumulativeTokens; total > 0 {
+		parts = append(parts, fmt.Sprintf("tok %s", compactTokenCount(total)))
+	}
 	// Largest context source (top 1).
 	if len(summary.LargestContextSources) > 0 {
 		parts = append(parts, fmt.Sprintf("top %s %dk",
@@ -2024,6 +2029,19 @@ func ctxPct(summary tools.ContextInspection) string {
 	usedK := (summary.TokenEstimate + 500) / 1000
 	totalK := (summary.TotalTokenEstimate + 500) / 1000
 	return fmt.Sprintf("%dk/%dk %d%%", usedK, totalK, pct)
+}
+
+// compactTokenCount formats a token count in the same compact style as the
+// rest of the status bar ("128k", "1.2M", "845").
+func compactTokenCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // ── event payload helpers ────────────────────────────────────────

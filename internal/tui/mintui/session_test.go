@@ -405,6 +405,22 @@ func TestRefreshSnapshotRefreshesContextSummary(t *testing.T) {
 	}
 }
 
+func TestRenderStatusShowsCumulativeTokens(t *testing.T) {
+	b := newFakeBackend()
+	s := New(&config.Config{LeadName: "lead", Model: "MiniMax-M3"}, b, &strings.Builder{}, &strings.Builder{})
+
+	s.ctxSummary.CumulativeTokens = 1_234_000
+	got := s.renderStatus("Ready")
+	if !strings.Contains(got, "tok 1.2M") {
+		t.Fatalf("status bar should include cumulative tokens chip, got %q", got)
+	}
+
+	s.ctxSummary.CumulativeTokens = 0
+	if got := s.renderStatus("Ready"); strings.Contains(got, "tok ") {
+		t.Fatalf("status bar should omit tok chip when cumulative is 0, got %q", got)
+	}
+}
+
 func TestCancelActiveTurnCancelsAndReturnsTrue(t *testing.T) {
 	b := newFakeBackend()
 	s := New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})

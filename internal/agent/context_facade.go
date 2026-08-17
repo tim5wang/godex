@@ -44,6 +44,7 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 	if a.permissions != nil && strings.TrimSpace(sessionID) != "" {
 		pendingCount = len(a.permissions.ListPending(sessionID))
 	}
+	cumInput, cumOutput := a.cumulativeTokenUsage()
 	return tools.ContextInspection{
 		SessionID:                     strings.TrimSpace(sessionID),
 		MessageCount:                  len(history),
@@ -66,6 +67,9 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 		PendingPermissionCount:        pendingCount,
 		LargeToolResultReferenceCount: estimate.LargeToolResultReferenceCount,
 		ToolResultReferences:          append([]tools.ToolResultReference{}, estimate.ToolResultReferences...),
+		CumulativeTokens:              int(cumInput + cumOutput),
+		CumulativeInputTokens:         int(cumInput),
+		CumulativeOutputTokens:        int(cumOutput),
 	}, nil
 }
 

@@ -18,6 +18,33 @@ type sessionCacheStats struct {
 	CacheWriteTokens int64
 }
 
+// sessionUsage accumulates provider-reported token totals for the whole
+// session lifetime. Unlike sessionCacheStats it deliberately survives
+// conversation clears and compactions so the status bar can show true
+// cumulative consumption for the session.
+type sessionUsage struct {
+	InputTokens  int64 // uncached input + cache read + cache write
+	OutputTokens int64
+}
+
+// record folds one provider usage event into the session running total.
+func (s *sessionUsage) record(event conversation.UsageEvent) {
+	if event.Response == nil || event.Response.Usage == nil {
+		return
+	}
+	usage := event.Response.Usage
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
+		return
+	}
+	s.InputTokens += int64(usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens)
+	s.OutputTokens += int64(usage.OutputTokens)
+}
+
+// snapshot returns the accumulated totals.
+func (s sessionUsage) snapshot() (input, output int64) {
+	return s.InputTokens, s.OutputTokens
+}
+
 // recordUsage folds one provider usage event into the per-session cache
 // aggregation. Events without usage data or without a real input are ignored
 // so failed/estimated calls don't distort the hit rate.
@@ -80,6 +107,9 @@ func (a *Agent) registerUsageHook(sessionID string) {
 		a.cacheStatsMu.Lock()
 		a.cacheStats.recordUsage(event)
 		a.cacheStatsMu.Unlock()
+		a.usageMu.Lock()
+		a.usage.record(event)
+		a.usageMu.Unlock()
 	})
 	a.cacheStatsMu.Lock()
 	a.unsubUsage = unsub
@@ -91,6 +121,14 @@ func (a *Agent) cacheUsageSnapshot() tools.CacheUsageInspection {
 	a.cacheStatsMu.Lock()
 	defer a.cacheStatsMu.Unlock()
 	return a.cacheStats.snapshot()
+}
+
+// cumulativeTokenUsage returns the provider-reported cumulative input and
+// output tokens consumed by all model calls in this session.
+func (a *Agent) cumulativeTokenUsage() (input, output int64) {
+	a.usageMu.Lock()
+	defer a.usageMu.Unlock()
+	return a.usage.snapshot()
 }
 
 // resetCacheStats clears the aggregation when the conversation is cleared so

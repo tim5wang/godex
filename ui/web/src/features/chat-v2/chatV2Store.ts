@@ -25,6 +25,7 @@ export interface ChatV2Snapshot {
 export interface ChatV2Actions {
   toggleLeft: () => void;
   toggleRight: () => void;
+  closeRight: () => void;
   setActiveDockTab: (tab: DockTab) => void;
   setLeftWidth: (width: number) => void;
   setRightWidth: (width: number) => void;
@@ -77,6 +78,7 @@ export const useChatV2Store = create<ChatV2State>((set) => ({
 
   toggleLeft: () => set((state) => ({ leftCollapsed: !state.leftCollapsed })),
   toggleRight: () => set((state) => ({ rightCollapsed: !state.rightCollapsed })),
+  closeRight: () => set({ rightCollapsed: true }),
 
   // Clicking a tab activates it and expands a collapsed dock; clicking the
   // already-active tab on an expanded dock collapses the rail instead

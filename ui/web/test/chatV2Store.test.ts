@@ -127,6 +127,18 @@ describe("chatV2Store", () => {
     expect(readPersistedSnapshot()).toBeNull();
   });
 
+  it("provides an idempotent close action for returning to chat", () => {
+    useChatV2Store.getState().setActiveDockTab("status");
+    expect(useChatV2Store.getState().rightCollapsed).toBe(false);
+
+    useChatV2Store.getState().closeRight();
+    expect(useChatV2Store.getState().rightCollapsed).toBe(true);
+    expect(useChatV2Store.getState().activeDockTab).toBe("status");
+
+    useChatV2Store.getState().closeRight();
+    expect(useChatV2Store.getState().rightCollapsed).toBe(true);
+  });
+
   it("exposes all five dock tabs in order", () => {
     expect(DOCK_TABS).toEqual(["files", "terminal", "tasks", "preview", "status"]);
   });

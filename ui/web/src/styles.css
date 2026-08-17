@@ -126,6 +126,10 @@ samp {
   font-size: 12px;
 }
 
+.godex-header-back-to-chat {
+  display: none;
+}
+
 .godex-content {
   min-width: 0;
   min-height: 0;
@@ -1942,6 +1946,23 @@ samp {
     display: none;
   }
 
+  .godex-header-back-to-chat.ant-btn {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    margin-left: auto;
+    padding-inline: 10px;
+  }
+
+  .godex-header-dock-name {
+    max-width: 72px;
+    overflow: hidden;
+    color: var(--godex-text-secondary, #666);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .page-pad {
     padding: 14px;
   }
@@ -2120,7 +2141,8 @@ samp {
   display: none;
 }
 
-/* Close button inside the right panel — visible only on mobile (overlay mode) */
+/* Close button inside the right panel. Status always exposes it as a direct
+   route back to conversation; narrow overlay mode exposes it for every dock. */
 /* 36×36 visual with transparent padding to 44×44 touch target */
 .chat-v2-right-close {
   display: none;
@@ -2144,15 +2166,18 @@ samp {
   transition: background 0.15s;
 }
 
+.chat-v2-right[data-active-tab="status"] .chat-v2-right-close {
+  display: inline-flex;
+}
+
 .chat-v2-right-close:hover {
   background: var(--godex-border, rgba(0, 0, 0, 0.1));
   color: var(--godex-text, #333);
 }
 
-@media (max-width: 900px) {
-  .chat-v2-right-close {
-    display: inline-flex;
-  }
+.chat-v2-right-close:focus-visible {
+  outline: 2px solid var(--godex-accent, #0f766e);
+  outline-offset: 2px;
 }
 
 .chat-v2-right-resize {
@@ -2262,6 +2287,10 @@ samp {
 .chat-v2-dock-tab-pane[data-active="true"] > :only-child {
   flex: 1;
   min-height: 0;
+}
+
+.chat-v2-dock-pane-body[data-active-tab="status"] {
+  padding-top: 48px;
 }
 
 /* Terminal needs explicit height chain; override overflow since xterm.js
@@ -2659,6 +2688,68 @@ samp {
 /* Responsive: collapse v2 grid on narrow screens; right panel overlays */
 /* Narrow viewport: single-col + right overlay */
 @media (max-width: 900px) {
+  .chat-v2-topbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 80px;
+    padding: 0;
+  }
+
+  .chat-v2-topbar-session,
+  .chat-v2-topbar-actions {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    padding: 0 8px;
+  }
+
+  .chat-v2-topbar-session {
+    min-height: 40px;
+  }
+
+  .chat-v2-topbar-actions {
+    min-height: 40px;
+    justify-content: flex-end;
+    border-top: 1px solid var(--godex-border);
+  }
+
+  .chat-v2-topbar-title {
+    max-width: calc(100vw - 88px) !important;
+  }
+
+  .chat-v2-topbar-tabs {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(40px, 1fr));
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* Keep every dock action, including the rightmost Status button, fully
+     visible instead of clipping the action row on narrow screens. */
+  .chat-v2-topbar-tab.ant-btn {
+    width: 100%;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .chat-v2-topbar-actions > .ant-space-item:has(.chat-v2-topbar-tabs) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .chat-v2-topbar-actions > .ant-space-item:last-child {
+    flex: 0 0 40px;
+  }
+
+  .chat-v2-topbar-remote {
+    flex: 0 0 auto;
+  }
+
+  .chat-v2-topbar-remote-label {
+    display: none;
+  }
+
   .chat-v2-layout {
     grid-template-columns: var(--chat-v2-left-width, 264px) minmax(0, 1fr);
   }
@@ -2675,9 +2766,11 @@ samp {
     display: flex;
   }
 
-  /* Narrow topbar tabs: ensure touch target ≥ 40px */
-  .chat-v2-topbar-tab.ant-btn {
-    min-width: 40px;
-    min-height: 40px;
+  .chat-v2-right-close {
+    display: none !important;
+  }
+
+  .chat-v2-dock-pane-body[data-active-tab="status"] {
+    padding-top: 0;
   }
 }

@@ -18,7 +18,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import enUS from "antd/locale/en_US";
 import zhCN from "antd/locale/zh_CN";
-import { MenuOutlined } from "@ant-design/icons";
+import { MenuOutlined, VerticalLeftOutlined } from "@ant-design/icons";
 import { activeBuiltinApp, builtinApps, renderBuiltinAppRoutes } from "./app/appRegistry";
 import { useI18n } from "./i18n";
 import { ResizeHandle } from "./components/ResizeHandle";
@@ -29,6 +29,8 @@ import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
 import { useNodeContextStore } from "./store/nodeContext";
 import { useLayoutStore } from "./store/layout";
+import { DOCK_TAB_META } from "./features/chat-v2/DockRail";
+import { useChatV2Store } from "./features/chat-v2/chatV2Store";
 import {
   LAYOUT_STORAGE_KEY,
   applyLayoutSnapshot,
@@ -130,6 +132,10 @@ export default function App() {
     max: 360,
   });
   const activeApp = activeBuiltinApp(location.pathname);
+  const chatDockCollapsed = useChatV2Store((state) => state.rightCollapsed);
+  const activeChatDock = useChatV2Store((state) => state.activeDockTab);
+  const closeChatDock = useChatV2Store((state) => state.closeRight);
+  const showMobileChatBack = !screens.lg && activeApp.id === "chat" && !chatDockCollapsed;
   // Memoize route elements so App re-renders do not recreate
   // <PageErrorBoundary> wrappers, which could trigger React Router
   // to unmount/remount lazy-loaded route components.
@@ -233,6 +239,18 @@ export default function App() {
                   ) : null}
                 </Space>
               </Space>
+              {showMobileChatBack ? (
+                <Button
+                  type="text"
+                  className="godex-header-back-to-chat"
+                  icon={<VerticalLeftOutlined />}
+                  aria-label="Back to chat"
+                  onClick={closeChatDock}
+                >
+                  <span>Chat</span>
+                  <span className="godex-header-dock-name">{DOCK_TAB_META[activeChatDock].label}</span>
+                </Button>
+              ) : null}
             </Layout.Header>
           )}
           content={(

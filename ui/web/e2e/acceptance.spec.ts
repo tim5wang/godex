@@ -317,6 +317,26 @@ test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {
     await expect(headerTitle).toBeVisible({ timeout: 5000 });
   });
 
+  test("Every mobile dock provides a reachable Back to chat action", async ({ page }) => {
+    for (const dock of ["Files", "Terminal", "Tasks", "Preview", "Status"]) {
+      const dockTab = page.getByRole("button", { name: dock, exact: true });
+      await expect(dockTab, `${dock} button should not be clipped`).toBeVisible({ timeout: 5000 });
+      await expect(dockTab).toBeInViewport();
+      await dockTab.click();
+
+      const overlay = page.locator(`.chat-v2-right[data-active-tab="${dock.toLowerCase()}"]`);
+      await expect(overlay).toHaveAttribute("data-collapsed", "false");
+      const back = page.locator(".godex-header").getByRole("button", { name: "Back to chat" });
+      await expect(back).toBeVisible();
+      await expect(back).toBeInViewport();
+      await expect(back.locator(".godex-header-dock-name")).toHaveText(dock);
+      await back.click();
+
+      await expect(overlay).toHaveAttribute("data-collapsed", "true");
+      await expect(page.locator(".chat-v2-center-wrap")).toBeVisible();
+    }
+  });
+
   test("Mobile hamburger opens Drawer with navigation menu", async ({ page }) => {
     const hamburger = page.locator('.godex-header button[aria-label*="Open navigation"]');
     await hamburger.click();

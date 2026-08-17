@@ -150,6 +150,7 @@ export function ChatPage() {
   const v2RightWidth = useChatV2Store((s) => s.rightWidth);
   const v2ToggleLeft = useChatV2Store((s) => s.toggleLeft);
   const v2ToggleRight = useChatV2Store((s) => s.toggleRight);
+  const v2CloseRight = useChatV2Store((s) => s.closeRight);
   const v2SetActiveDockTab = useChatV2Store((s) => s.setActiveDockTab);
   const v2SetLeftWidth = useChatV2Store((s) => s.setLeftWidth);
   const v2SetRightWidth = useChatV2Store((s) => s.setRightWidth);
@@ -1200,10 +1201,7 @@ export function ChatPage() {
     <InspectorTabs
       activeKey={inspectorActiveKey}
       onActiveKeyChange={setInspectorActiveKey}
-      onCollapseInspector={() => {
-        closeInspector();
-        setInspectorOpen(false);
-      }}
+      onCollapseInspector={v2CloseRight}
       taskCenterPanel={(
         <TaskCenterPanel
           outcomes={taskOutcomes}
@@ -1315,7 +1313,7 @@ export function ChatPage() {
           {/* Center: topbar + feed + composer */}
           <div className="chat-v2-center-wrap">
             <div className="chat-v2-topbar">
-              <Space size={4}>
+              <Space size={4} className="chat-v2-topbar-session">
                 <Tooltip title={v2LeftCollapsed ? "Expand sidebar" : "Collapse sidebar"}>
                   <Button type="text" size="small" icon={v2LeftCollapsed ? <VerticalRightOutlined /> : <VerticalLeftOutlined />} aria-label="Toggle sidebar" onClick={() => v2ToggleLeft()} />
                 </Tooltip>
@@ -1326,7 +1324,7 @@ export function ChatPage() {
                   </Typography.Text>
                 </Tooltip>
               </Space>
-              <Space size={4}>
+              <Space size={4} className="chat-v2-topbar-actions">
                 {remoteNodeID ? (
                   <span className="chat-v2-topbar-remote">
                     <span className="chat-v2-topbar-remote-label">{remoteNodeName || remoteNodeID}</span>
@@ -1506,9 +1504,9 @@ export function ChatPage() {
             )}
           </div>
           {/* Right dock: content pane only (tabs are in topbar) */}
-          <div className="chat-v2-right" data-collapsed={v2RightCollapsed ? "true" : "false"}>
+          <div className="chat-v2-right" data-collapsed={v2RightCollapsed ? "true" : "false"} data-active-tab={v2ActiveDockTab}>
             <div className="chat-v2-right-resize" onPointerDown={beginV2RightResize} role="separator" aria-label="Resize right panel" />
-            <button className="chat-v2-right-close" onClick={() => v2ToggleRight()} aria-label="Close panel">
+            <button type="button" className="chat-v2-right-close" onClick={v2CloseRight} aria-label="Close status panel" title="Back to chat">
               <CloseOutlined />
             </button>
             <div className="chat-v2-dock-pane">

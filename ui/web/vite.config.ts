@@ -21,7 +21,7 @@ export default defineConfig({
           if (id.includes("@tanstack/react-query")) {
             return "vendor-query";
           }
-          if (id.includes("react-markdown") || id.includes("remark-gfm") || id.includes("remark-breaks") || id.includes("unified") || id.includes("mdast") || id.includes("micromark")) {
+          if (id.includes("react-markdown") || id.includes("remark-gfm") || id.includes("remark-breaks") || id.includes("remark-math") || id.includes("rehype-katex") || id.includes("katex") || id.includes("unified") || id.includes("mdast") || id.includes("micromark")) {
             return "vendor-markdown";
           }
           if (id.includes("@ant-design/x")) {

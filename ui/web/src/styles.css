@@ -60,6 +60,7 @@ samp {
 }
 
 .godex-shell {
+  --godex-header-height: 56px;
   min-height: 100dvh;
   background: var(--godex-bg);
 }
@@ -102,9 +103,13 @@ samp {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 0 0 var(--godex-header-height);
   gap: 16px;
-  min-height: 56px;
+  box-sizing: border-box;
+  height: var(--godex-header-height);
+  min-height: var(--godex-header-height);
   padding: 6px 20px;
+  line-height: normal;
   border-bottom: 1px solid var(--godex-border);
   background: color-mix(in oklab, var(--godex-panel) 94%, transparent);
   backdrop-filter: blur(14px);
@@ -1937,30 +1942,16 @@ samp {
 }
 
 @media (max-width: 720px) {
+  .godex-shell {
+    --godex-header-height: 40px;
+  }
+
   .godex-header {
-    min-height: 40px;
     padding: 0 10px;
   }
 
   .godex-header .muted {
     display: none;
-  }
-
-  .godex-header-back-to-chat.ant-btn {
-    display: inline-flex;
-    align-items: center;
-    min-height: 40px;
-    margin-left: auto;
-    padding-inline: 10px;
-  }
-
-  .godex-header-dock-name {
-    max-width: 72px;
-    overflow: hidden;
-    color: var(--godex-text-secondary, #666);
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .page-pad {
@@ -2141,45 +2132,6 @@ samp {
   display: none;
 }
 
-/* Close button inside the right panel. Status always exposes it as a direct
-   route back to conversation; narrow overlay mode exposes it for every dock. */
-/* 36×36 visual with transparent padding to 44×44 touch target */
-.chat-v2-right-close {
-  display: none;
-  position: absolute;
-  top: 6px;
-  left: 4px;
-  z-index: 11;
-  width: 36px;
-  height: 36px;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 4px;
-  border: none;
-  border-radius: 6px;
-  background: var(--godex-panel-strong, rgba(0, 0, 0, 0.06));
-  color: var(--godex-text-secondary, #888);
-  font-size: 14px;
-  cursor: pointer;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s;
-}
-
-.chat-v2-right[data-active-tab="status"] .chat-v2-right-close {
-  display: inline-flex;
-}
-
-.chat-v2-right-close:hover {
-  background: var(--godex-border, rgba(0, 0, 0, 0.1));
-  color: var(--godex-text, #333);
-}
-
-.chat-v2-right-close:focus-visible {
-  outline: 2px solid var(--godex-accent, #0f766e);
-  outline-offset: 2px;
-}
-
 .chat-v2-right-resize {
   position: absolute;
   top: 0;
@@ -2287,10 +2239,6 @@ samp {
 .chat-v2-dock-tab-pane[data-active="true"] > :only-child {
   flex: 1;
   min-height: 0;
-}
-
-.chat-v2-dock-pane-body[data-active-tab="status"] {
-  padding-top: 48px;
 }
 
 /* Terminal needs explicit height chain; override overflow since xterm.js
@@ -2754,9 +2702,26 @@ samp {
     grid-template-columns: var(--chat-v2-left-width, 264px) minmax(0, 1fr);
   }
 
+  .godex-header-back-to-chat.ant-btn {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    margin-left: auto;
+    padding-inline: 10px;
+  }
+
+  .godex-header-dock-name {
+    max-width: 72px;
+    overflow: hidden;
+    color: var(--godex-text-secondary, #666);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .chat-v2-right {
     position: fixed;
-    inset: 0 0 0 0;
+    inset: var(--godex-header-height) 0 0;
     z-index: 100;
     display: none;
     border-left: none;
@@ -2764,13 +2729,5 @@ samp {
 
   .chat-v2-right[data-collapsed="false"] {
     display: flex;
-  }
-
-  .chat-v2-right-close {
-    display: none !important;
-  }
-
-  .chat-v2-dock-pane-body[data-active-tab="status"] {
-    padding-top: 0;
   }
 }

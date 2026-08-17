@@ -23,6 +23,13 @@ test.describe("M0 Acceptance Checklist — PC (Desktop Chrome 1440×900)", () =>
     await page.waitForSelector(".godex-sider", { timeout: 10000 });
   });
 
+  test("Desktop Status panel does not add a redundant close button", async ({ page }) => {
+    await page.getByRole("button", { name: "Status", exact: true }).click();
+    const panel = page.locator('.chat-v2-right[data-active-tab="status"]');
+    await expect(panel).toHaveAttribute("data-collapsed", "false");
+    await expect(panel.getByRole("button", { name: "Close status panel" })).toHaveCount(0);
+  });
+
   test("AppNav is visible and shows navigation menu items", async ({ page }) => {
     // Verify the app navigation sidebar exists.
     const sider = page.locator(".godex-sider");
@@ -326,6 +333,29 @@ test.describe("M0 Acceptance Checklist — Mobile (Pixel 7 375×812)", () => {
 
       const overlay = page.locator(`.chat-v2-right[data-active-tab="${dock.toLowerCase()}"]`);
       await expect(overlay).toHaveAttribute("data-collapsed", "false");
+      const headerBox = await page.locator(".godex-header").boundingBox();
+      const overlayBox = await overlay.boundingBox();
+      expect(headerBox).not.toBeNull();
+      expect(overlayBox).not.toBeNull();
+      expect(overlayBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height - 1);
+      const activePane = overlay.locator('.chat-v2-dock-tab-pane[data-active="true"]');
+      const activePaneBox = await activePane.boundingBox();
+      expect(activePaneBox).not.toBeNull();
+      expect(activePaneBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height - 1);
+
+      const topControl = dock === "Files"
+        ? activePane.locator('input[placeholder]').first()
+        : dock === "Preview"
+          ? activePane.getByRole("textbox", { name: "Preview address" })
+          : null;
+      if (topControl) {
+        await expect(topControl, `${dock} top control should be fully visible`).toBeVisible();
+        await expect(topControl).toBeInViewport();
+        const controlBox = await topControl.boundingBox();
+        expect(controlBox).not.toBeNull();
+        expect(controlBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height - 1);
+      }
+
       const back = page.locator(".godex-header").getByRole("button", { name: "Back to chat" });
       await expect(back).toBeVisible();
       await expect(back).toBeInViewport();

@@ -34,6 +34,13 @@ export default defineConfig({
         viewport: { width: 375, height: 812 },
       },
     },
+    {
+      name: "chromium-tablet",
+      use: {
+        ...devices["iPad Mini"],
+        viewport: { width: 768, height: 1024 },
+      },
+    },
   ],
   webServer: {
     command: "pnpm dev",

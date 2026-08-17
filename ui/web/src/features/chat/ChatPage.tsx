@@ -1506,9 +1506,6 @@ export function ChatPage() {
           {/* Right dock: content pane only (tabs are in topbar) */}
           <div className="chat-v2-right" data-collapsed={v2RightCollapsed ? "true" : "false"} data-active-tab={v2ActiveDockTab}>
             <div className="chat-v2-right-resize" onPointerDown={beginV2RightResize} role="separator" aria-label="Resize right panel" />
-            <button type="button" className="chat-v2-right-close" onClick={v2CloseRight} aria-label="Close status panel" title="Back to chat">
-              <CloseOutlined />
-            </button>
             <div className="chat-v2-dock-pane">
               <div className="chat-v2-dock-pane-body" data-active-tab={v2ActiveDockTab}>
                 {mountedDockTabs.has("files") ? (

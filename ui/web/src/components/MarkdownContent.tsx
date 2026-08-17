@@ -60,10 +60,14 @@ export function needsMarkdownRendering(content: string): boolean {
   if (/\[[^\]]+\]\([^)]+\)/.test(text)) strong += 1;
   // Bold **text**
   if (/\*\*[^*]+\*\*/.test(text)) strong += 1;
+  // Display math $$...$$ (block formula)
+  if (/\$\$[\s\S]+?\$\$/.test(text)) strong += 1;
 
   let weak = 0;
   // Inline code `code`
   if (/`[^`\n]+`/.test(text)) weak += 0.5;
+  // Inline math $...$ (requires a closing $ so $5 / $HOME / $PATH don't match)
+  if (/(^|[^$])\$[^$\n]+?\$(?![\w$])/.test(text)) weak += 0.5;
   // Italic *text* or _text_ (the most common false positive in tool output)
   if (/(^|\s)\*[^*\n]+\*(?=\s|$)|(^|\s)_[^_\n]+_(?=\s|$)/.test(text)) weak += 0.5;
 

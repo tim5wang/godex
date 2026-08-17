@@ -135,7 +135,7 @@ export default function App() {
   const chatDockCollapsed = useChatV2Store((state) => state.rightCollapsed);
   const activeChatDock = useChatV2Store((state) => state.activeDockTab);
   const closeChatDock = useChatV2Store((state) => state.closeRight);
-  const showMobileChatBack = !screens.lg && activeApp.id === "chat" && !chatDockCollapsed;
+  const showChatDockBack = activeApp.id === "chat" && !chatDockCollapsed;
   // Memoize route elements so App re-renders do not recreate
   // <PageErrorBoundary> wrappers, which could trigger React Router
   // to unmount/remount lazy-loaded route components.
@@ -239,7 +239,7 @@ export default function App() {
                   ) : null}
                 </Space>
               </Space>
-              {showMobileChatBack ? (
+              {showChatDockBack ? (
                 <Button
                   type="text"
                   className="godex-header-back-to-chat"

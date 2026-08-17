@@ -1,8 +1,12 @@
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeKatex from "rehype-katex";
+import rehypeSanitize from "rehype-sanitize";
+import "katex/dist/katex.min.css";
+import { buildMarkdownSanitizeSchema } from "../lib/markdownSanitize";
 import { DiagramBlock, type DiagramLanguage } from "./DiagramBlock";
 
 interface MarkdownRendererProps {
@@ -18,13 +22,14 @@ const DIAGRAM_LANG: Record<string, DiagramLanguage> = {
 /**
  * Markdown renderer with:
  *   - safe raw-HTML support (rehype-raw + rehype-sanitize GitHub schema)
+ *   - math formulas via KaTeX ($...$ inline, $$...$$ display; remark-math + rehype-katex)
  *   - fenced code blocks rendered as diagrams for ```mermaid / ```plantuml
  */
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkBreaks]}
-      rehypePlugins={[rehypeRaw, [rehypeSanitize, defaultSchema]]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
+      rehypePlugins={[rehypeRaw, rehypeKatex, [rehypeSanitize, buildMarkdownSanitizeSchema()]]}
       components={{
         a: ({ node: _node, ...props }) => (
           <a

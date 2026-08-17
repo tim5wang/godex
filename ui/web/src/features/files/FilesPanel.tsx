@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Input, Segmented, Space, Spin, Typography, message, Modal, Select } from "antd";
 import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, FolderOpenOutlined, SaveOutlined } from "@ant-design/icons";
 import FileTree from "./FileTree";
@@ -380,6 +380,8 @@ function FilesPanelDock(props: FilesPanelProps) {
               onSave={handleSave}
               saving={saving}
               onContentChange={setEditedContent}
+              token={token}
+              cwd={props.cwd ?? "."}
               t={t}
             />
           </div>
@@ -464,6 +466,8 @@ function FilesPanelDock(props: FilesPanelProps) {
               onSave={handleSave}
               saving={saving}
               onContentChange={setEditedContent}
+              token={token}
+              cwd={props.cwd ?? "."}
               t={t}
             />
             </div>
@@ -490,10 +494,27 @@ function FilePreview(props: {
   onSave?: () => void;
   saving?: boolean;
   onContentChange?: (content: string) => void;
+  token?: string | null;
+  cwd?: string;
   t: (key: string) => string;
 }) {
   const isMarkdown = isMarkdownPath(props.selectedPath);
   const [viewMode, setViewMode] = useState<"source" | "render" | "diff">("source");
+  // Rewrite relative image srcs in markdown to the preview static route so
+  // workspace images render with auth (img tags cannot attach an Authorization
+  // header, so the token is passed as a query param).
+  const resolveImageUrl = useMemo(() => {
+    if (!props.token || !props.selectedPath) return undefined;
+    const dir = parentDir(props.selectedPath);
+    const root = props.cwd || ".";
+    return (src: string) => {
+      if (/^(https?:|data:|mailto:|#|\/\/)/i.test(src)) return src;
+      const rel = src.startsWith("/") ? src.slice(1) : dir === "." ? src : `${dir}/${src}`;
+      const params = new URLSearchParams({ token: props.token ?? "", root });
+      const encoded = rel.split("/").map(encodeURIComponent).join("/");
+      return `/api/preview/static/${encoded}${params.toString() ? `?${params.toString()}` : ""}`;
+    };
+  }, [props.token, props.selectedPath, props.cwd]);
   const diffText =
     props.editedContent != null && props.editedContent !== props.previewContent
       ? computeLineDiff(props.previewContent, props.editedContent)
@@ -576,7 +597,7 @@ function FilePreview(props: {
           <DiffView diff={diffText} />
         ) : isMarkdown && viewMode === "render" ? (
           <div className="files-markdown-render">
-            <MarkdownContent content={props.previewContent} forceMarkdown />
+            <MarkdownContent content={props.previewContent} forceMarkdown resolveImageUrl={resolveImageUrl} />
           </div>
         ) : (
           <CodeEditor

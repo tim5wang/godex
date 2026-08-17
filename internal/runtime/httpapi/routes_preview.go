@@ -47,21 +47,32 @@ func registerPreviewRoutes(mux *http.ServeMux, manager *config.Manager) {
 	mux.Handle("GET /preview/proxy/{port}/{path...}", previewAuth(http.HandlerFunc(proxyHandler)))
 }
 
-// withPreviewAuthProvider is like withBearerAuthProvider but also accepts the
-// token via a ?token= query parameter, which is required for iframe-based
-// consumers (a preview iframe cannot attach an Authorization header).
+// previewTokenCookie lets iframe subresources (images, css, js, nested
+// iframes) authenticate without repeating the token in every URL: once the
+// top-level preview URL passes with ?token=, the cookie is set on the
+// response and the browser sends it for same-origin subresource requests.
+const previewTokenCookie = "godex_preview_token"
+
 func withPreviewAuthProvider(token func() string) func(http.Handler) http.Handler {
 	return func(handler http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.TrimSpace(token()) == "" {
+			tok := strings.TrimSpace(token())
+			if tok == "" {
 				handler.ServeHTTP(w, r)
 				return
 			}
-			if bearerAuthorized(r, token()) {
+			if bearerAuthorized(r, tok) || previewCookieAuthorized(r, tok) {
 				handler.ServeHTTP(w, r)
 				return
 			}
-			if strings.TrimSpace(r.URL.Query().Get("token")) == token() {
+			if strings.TrimSpace(r.URL.Query().Get("token")) == tok {
+				http.SetCookie(w, &http.Cookie{
+					Name:     previewTokenCookie,
+					Value:    tok,
+					Path:     "/api/preview",
+					SameSite: http.SameSiteLaxMode,
+					Secure:   r.TLS != nil,
+				})
 				handler.ServeHTTP(w, r)
 				return
 			}
@@ -69,6 +80,19 @@ func withPreviewAuthProvider(token func() string) func(http.Handler) http.Handle
 		})
 	}
 }
+
+func previewCookieAuthorized(r *http.Request, token string) bool {
+	c, err := r.Cookie(previewTokenCookie)
+	if err != nil {
+		return false
+	}
+	return c.Value != "" && c.Value == token
+}
+
+// withPreviewAuthProvider is like withBearerAuthProvider but also accepts the
+// token via a ?token= query parameter, which is required for iframe-based
+// consumers (a preview iframe cannot attach an Authorization header).
+
 
 // servePreviewStatic serves files from the resolved workspace FS. If the
 // requested path does not exist, it falls back to index.html (SPA support).

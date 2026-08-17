@@ -83,6 +83,13 @@ type Agent struct {
 	// the session's tool execution back to the service directory.
 	workspaceOverride string
 
+	// sessionMode pins the session creation mode ("default" or "minimal",
+	// empty = default). Set once at session load from the locator metadata;
+	// it shapes the initial active tool set and which dynamic context
+	// sections are built, and stays fixed for the session so the stable
+	// prompt prefix (and provider prefix-cache hits) is not invalidated.
+	sessionMode string
+
 	prompts              conversation.PromptLayers
 	messages             []protocol.Message
 	pendingResume        *PendingResumeState

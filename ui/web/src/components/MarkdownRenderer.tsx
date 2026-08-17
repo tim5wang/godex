@@ -11,6 +11,8 @@ import { DiagramBlock, type DiagramLanguage } from "./DiagramBlock";
 
 interface MarkdownRendererProps {
   content: string;
+  /** Optional resolver for image `src` URLs (e.g. workspace-relative paths in the Files panel). */
+  resolveImageUrl?: (url: string) => string;
 }
 
 const DIAGRAM_LANG: Record<string, DiagramLanguage> = {
@@ -25,11 +27,16 @@ const DIAGRAM_LANG: Record<string, DiagramLanguage> = {
  *   - math formulas via KaTeX ($...$ inline, $$...$$ display; remark-math + rehype-katex)
  *   - fenced code blocks rendered as diagrams for ```mermaid / ```plantuml
  */
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, resolveImageUrl }: MarkdownRendererProps) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
       rehypePlugins={[rehypeRaw, rehypeKatex, [rehypeSanitize, buildMarkdownSanitizeSchema()]]}
+      urlTransform={
+        resolveImageUrl
+          ? (url, key) => (key === "src" ? resolveImageUrl(url) : url)
+          : undefined
+      }
       components={{
         a: ({ node: _node, ...props }) => (
           <a

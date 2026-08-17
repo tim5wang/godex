@@ -86,6 +86,13 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 
 	a := agent.NewForSession(sessionCfg, s.shared, sessionID)
 	a.RegisterTools()
+	// New-chat mode (locator metadata "mode", e.g. "minimal") pins the
+	// initial active tool set and prompt complexity at creation time. It is
+	// applied before RestoreStateForSession so a resumed session's persisted
+	// bundle state wins over the creation preset.
+	if mode := strings.TrimSpace(session.locator.Metadata["mode"]); mode != "" {
+		a.ApplySessionMode(mode)
+	}
 	if session.modelProfileID != "" {
 		if profile, ok := s.cfg.ModelProfileByID(session.modelProfileID); ok {
 			if effort := normalizeSessionReasoningEffort(session.reasoningEffort); effort != "" {

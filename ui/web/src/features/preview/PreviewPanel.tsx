@@ -25,7 +25,8 @@ export type PreviewPanelProps = {
 
 type AddressTarget =
   | { kind: "static"; path: string }
-  | { kind: "dev"; port: string };
+  | { kind: "dev"; port: string }
+  | { kind: "url"; url: string };
 
 type DeviceWidth = "desktop" | "tablet" | "mobile";
 
@@ -45,6 +46,7 @@ export function parsePreviewAddress(input: string): AddressTarget {
   const trimmed = input.trim();
   const urlMatch = trimmed.match(/^https?:\/\/(?:localhost|127\.0\.0\.1):(\d+)(?:\/.*)?$/i);
   if (urlMatch) return { kind: "dev", port: urlMatch[1] };
+  if (/^https?:\/\//i.test(trimmed)) return { kind: "url", url: trimmed };
   const colonPort = trimmed.match(/^:(\d+)$/);
   if (colonPort) return { kind: "dev", port: colonPort[1] };
   if (/^\d+$/.test(trimmed)) return { kind: "dev", port: trimmed };
@@ -66,6 +68,11 @@ export function buildPreviewSrc(
     const path = target.path === "/" ? "" : target.path.replace(/^\//, "");
     const query = params.toString();
     return `/api/preview/static/${path}${query ? `?${query}` : ""}`;
+  }
+  if (target.kind === "url") {
+    // External URL: embed directly (server-side /preview/http proxy not
+    // needed; most sites without X-Frame-Options restrictions render fine).
+    return target.url;
   }
   return `/api/preview/proxy/${target.port}/${qs ? `?${qs}` : ""}`;
 }
@@ -114,7 +121,7 @@ export function PreviewPanel({ workspaceDir, token }: PreviewPanelProps) {
           options={DEVICE_OPTIONS}
         />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {isDev ? `Dev server :${target.port}` : "Static workspace"}
+          {isDev ? `Dev server :${target.port}` : target.kind === "url" ? "External URL" : "Static workspace"}
         </Typography.Text>
       </Space>
       <div

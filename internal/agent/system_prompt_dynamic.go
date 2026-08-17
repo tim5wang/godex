@@ -74,16 +74,22 @@ func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtim
 	profile := config.NormalizeAgentProfile(agentProfile)
 	sections := make([]runtimePromptSection, 0, 5)
 
-	if profile != config.AgentProfileCoding {
-		skillCatalogPrompt, err := a.buildSkillCatalogPrompt()
-		if err != nil {
-			return nil, err
+	// Minimal mode (roadmap new-chat mode): omit the heavyweight background
+	// sections (repo map / skill catalog, active skills) so the prompt stays
+	// small and focused on file/shell work. Environment and tool availability
+	// are always kept because tools must know where they run.
+	if !a.sessionModeIsMinimal() {
+		if profile != config.AgentProfileCoding {
+			skillCatalogPrompt, err := a.buildSkillCatalogPrompt()
+			if err != nil {
+				return nil, err
+			}
+			sections = appendRuntimePromptSection(sections, "skill_catalog", protocol.KindBackground, skillCatalogPrompt)
+		} else {
+			sections = appendRuntimePromptSection(sections, "repo_map", protocol.KindBackground, a.repoMapSnapshotText())
 		}
-		sections = appendRuntimePromptSection(sections, "skill_catalog", protocol.KindBackground, skillCatalogPrompt)
-	} else {
-		sections = appendRuntimePromptSection(sections, "repo_map", protocol.KindBackground, a.repoMapSnapshotText())
+		sections = appendRuntimePromptSection(sections, "active_skills", protocol.KindBackground, buildActiveSkillsPrompt(a.activeSkillStates()))
 	}
-	sections = appendRuntimePromptSection(sections, "active_skills", protocol.KindBackground, buildActiveSkillsPrompt(a.activeSkillStates()))
 	sections = appendRuntimePromptSection(sections, "environment", protocol.KindBackground, buildEnvironmentPrompt(a.environmentPromptInput()))
 	sections = appendRuntimePromptSection(sections, "tool_availability", protocol.KindBackground, buildToolAvailabilityPromptForProfile(a.toolHandler.Catalog(), profile))
 	// P4 prompt/context contributor: append sections contributed by active

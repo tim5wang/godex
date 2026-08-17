@@ -247,16 +247,23 @@ export function ChatPage() {
   const routeUserId = searchParams.get("user_id");
   const noteContextId = searchParams.get("note_id")?.trim() || "";
   const workspaceDirParam = searchParams.get("workspace_dir")?.trim() || "";
+  const modeParam = searchParams.get("mode")?.trim() || "";
   const sessionKey = routeSessionKey || defaultSessionKey || "";
-  const sessionLocator = useMemo(
-    () => ({
+  const sessionLocator = useMemo(() => {
+    const metadata: Record<string, string> = {};
+    if (workspaceDirParam) {
+      metadata.project_dir = workspaceDirParam;
+    }
+    if (modeParam) {
+      metadata.mode = modeParam;
+    }
+    return {
       channel: routeChannel || "web",
       key: sessionKey,
       ...(routeUserId ? { user_id: routeUserId } : {}),
-      ...(workspaceDirParam ? { metadata: { project_dir: workspaceDirParam } } : {}),
-    }),
-    [routeChannel, routeUserId, sessionKey, workspaceDirParam],
-  );
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    };
+  }, [routeChannel, routeUserId, sessionKey, workspaceDirParam, modeParam]);
 
   useEffect(() => {
     if (routeSessionKey && routeChannel) {
@@ -1152,13 +1159,19 @@ export function ChatPage() {
     ]);
   };
 
-  const createSession = (replace = false, workspaceDir?: string) => {
+  const createSession = (replace = false, workspaceDir?: string, mode?: string) => {
     const next = makeSessionKey();
     setDefaultSessionKey(next);
     reset();
     const base = `/chat/web/${next}`;
-    const query = workspaceDir?.trim() ? `?workspace_dir=${encodeURIComponent(workspaceDir.trim())}` : "";
-    navigate(`${base}${query}`, { replace });
+    const query: string[] = [];
+    if (workspaceDir?.trim()) {
+      query.push(`workspace_dir=${encodeURIComponent(workspaceDir.trim())}`);
+    }
+    if (mode?.trim() && mode.trim() !== "default") {
+      query.push(`mode=${encodeURIComponent(mode.trim())}`);
+    }
+    navigate(`${base}${query.length > 0 ? `?${query.join("&")}` : ""}`, { replace });
     setSessionsOpen(false);
   };
 
@@ -1302,7 +1315,7 @@ export function ChatPage() {
               searchQuery={v2SessionSearch ?? ""}
               deletingSessionId={deleteSessionMutation.variables?.session_id ?? ""}
               onSearchChange={setV2SessionSearch}
-              onCreate={(workspaceDir) => createSession(false, workspaceDir)}
+              onCreate={(workspaceDir, mode) => createSession(false, workspaceDir, mode)}
               onSelect={(session) => {
                 navigate(buildChatRouteForSession(session));
               }}

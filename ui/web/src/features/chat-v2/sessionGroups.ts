@@ -52,7 +52,7 @@ const TEMP_DIR_PATTERNS = [
   "/dev/shm/",
 ];
 
-function isTempDir(path: string): boolean {
+export function isTempDir(path: string): boolean {
   return TEMP_DIR_PATTERNS.some((p) => path.startsWith(p));
 }
 

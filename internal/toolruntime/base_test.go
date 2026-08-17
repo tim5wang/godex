@@ -193,6 +193,38 @@ func TestToolHandlerCannotDeactivateAlwaysActiveBundles(t *testing.T) {
 	}
 }
 
+func TestToolHandlerSetActiveToolsReplacesSetPreservingAlwaysActive(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool{name: "bash"}, ToolMeta{
+		Bundle:        "core_code",
+		Summary:       "core tools",
+		DefaultActive: true,
+	})
+	handler.RegisterWithMeta(fakeTool{name: "read_file"}, ToolMeta{
+		Bundle:        "core_code",
+		Summary:       "core tools",
+		DefaultActive: true,
+	})
+	handler.RegisterWithMeta(fakeTool{name: "grep"}, ToolMeta{
+		Bundle:        "core_code",
+		Summary:       "core tools",
+		DefaultActive: true,
+	})
+	handler.RegisterWithMeta(fakeTool{name: "compress"}, ToolMeta{AlwaysActive: true})
+	handler.ActivateDefaults()
+
+	handler.SetActiveTools("read_file", "bash")
+
+	for _, want := range []string{"read_file", "bash", "compress"} {
+		if !handler.IsActive(want) {
+			t.Fatalf("expected %q active after SetActiveTools, got inactive", want)
+		}
+	}
+	if handler.IsActive("grep") {
+		t.Fatal("expected default-active but unlisted tool to be deactivated by SetActiveTools")
+	}
+}
+
 func TestRemoveStringDoesNotMutateInputSlice(t *testing.T) {
 	items := []string{"core", "background", "team"}
 	alias := append([]string{}, items...)

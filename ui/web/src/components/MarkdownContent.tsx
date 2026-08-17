@@ -8,9 +8,11 @@ interface MarkdownContentProps {
   forceMarkdown?: boolean;
   /** Render as plain text even if the content looks like markdown. */
   forcePlain?: boolean;
+  /** Optional resolver for image `src` URLs (forwarded to MarkdownRenderer). */
+  resolveImageUrl?: (url: string) => string;
 }
 
-export function MarkdownContent({ content, className, forceMarkdown = false, forcePlain = false }: MarkdownContentProps) {
+export function MarkdownContent({ content, className, forceMarkdown = false, forcePlain = false, resolveImageUrl }: MarkdownContentProps) {
   const shouldRender = !forcePlain && (forceMarkdown || needsMarkdownRendering(content));
   if (!shouldRender) {
     return (
@@ -23,7 +25,7 @@ export function MarkdownContent({ content, className, forceMarkdown = false, for
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>
       <Suspense fallback={<div className="whitespace-pre-wrap break-words">{content}</div>}>
-        <MarkdownRenderer content={content} />
+        <MarkdownRenderer content={content} resolveImageUrl={resolveImageUrl} />
       </Suspense>
     </div>
   );

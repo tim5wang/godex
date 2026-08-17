@@ -564,6 +564,31 @@ func (h *ToolHandler) SetActiveBundles(names ...string) {
 	}
 }
 
+// SetActiveTools replaces the active tool set with the named tools while
+// preserving always-active tools. Unlike SetActiveBundles it addresses tools
+// by name, which lets session creation modes (e.g. the minimal mode) pin the
+// initial tool set to a small list such as read/write/edit/bash.
+func (h *ToolHandler) SetActiveTools(names ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	desired := make(map[string]struct{}, len(names))
+	for _, name := range stringutil.UniqueNonEmpty(names) {
+		desired[name] = struct{}{}
+	}
+
+	for name, meta := range h.meta {
+		if meta.AlwaysActive {
+			h.activeTools[name] = struct{}{}
+			continue
+		}
+		if _, ok := desired[name]; ok {
+			h.activeTools[name] = struct{}{}
+		} else {
+			delete(h.activeTools, name)
+		}
+	}
+}
+
 // AddBeforeInterceptors appends ordered before-interceptors to the handler runtime.
 func (h *ToolHandler) AddBeforeInterceptors(interceptors ...BeforeInterceptor) {
 	h.mu.Lock()

@@ -2566,6 +2566,16 @@ samp {
   min-width: 0;
 }
 
+/* New-chat workspace picker: paths are shortened in JS (keep trailing
+   segments, cut the head); this class only provides a safety ellipsis for
+   very narrow rows.  The full path is available via the option title. */
+.chat-v2-dir-option {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-v2-workspace-count {
   flex-shrink: 0;
   font-size: 10px;

@@ -96,8 +96,10 @@ export function apiURL(path: string) {
 // nodeProxyPath returns the center-proxy URL for a node-scoped path when a
 // remote node is active, or null when the request should hit the local center.
 // Node-scoped paths are the ones the Chat/Terminal/Files pages use against a
-// remote node; center management paths (/meta, /config, /control/...) stay
-// local so the shell itself keeps working.
+// remote node, plus node-local data pages (Usage/Notes/Settings/Memory/Skills/
+// Automation) so remote mode also reflects the node's own state. Center shell
+// paths (/meta, /control/..., /push/...) stay local so the shell itself keeps
+// working.
 function nodeProxyPath(path: string): string | null {
   const nodeID = useNodeContextStore.getState().nodeID;
   if (!nodeID) {
@@ -110,7 +112,13 @@ function nodeProxyPath(path: string): string | null {
     p.startsWith("/v1/terminal") ||
     p.startsWith("/files") ||
     p.startsWith("/commands") ||
-    p.startsWith("/providers")
+    p.startsWith("/providers") ||
+    p.startsWith("/usage") ||
+    p.startsWith("/notes") ||
+    p.startsWith("/config") ||
+    p.startsWith("/memory") ||
+    p.startsWith("/packages") ||
+    p.startsWith("/automation")
   ) {
     return `/control/nodes/${encodeURIComponent(nodeID)}/proxy${p}`;
   }

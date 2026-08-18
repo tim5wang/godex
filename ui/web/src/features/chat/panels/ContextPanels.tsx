@@ -327,6 +327,7 @@ export function ContextRecallPanel({
           { key: "tokens", label: t("chat.contextInspectorTokenEstimate"), children: totalTokens },
           { key: "history_tokens", label: t("chat.contextInspectorHistoryTokens"), children: historyTokens },
           { key: "threshold", label: t("chat.contextInspectorThreshold"), children: context?.compress_threshold ?? 0 },
+          { key: "window", label: t("chat.contextInspectorWindow"), children: context?.context_window_tokens ? formatCompactNumber(context.context_window_tokens) : "—" },
           { key: "prefix_cache", label: t("chat.contextInspectorPrefixCache"), children: hasCache ? `${formatCompactNumber(cacheable)} (${cacheRatio}%)` : "—" },
           { key: "cache_hit", label: t("chat.contextInspectorCacheHitRate"), children: hasRealUsage && realUsage ? `${realUsage.hit_rate_percent.toFixed(1)}% · ${realUsage.calls} calls` : "—" },
           { key: "skills", label: t("chat.contextInspectorActiveSkills"), children: context?.active_skill_count ?? 0 },

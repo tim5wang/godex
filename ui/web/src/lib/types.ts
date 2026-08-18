@@ -292,7 +292,7 @@ export interface ConfigFieldSchema {
   path: string;
   label: string;
   description: string;
-  type: "string" | "int" | "bool" | "string_list" | "json";
+  type: "string" | "int" | "float" | "bool" | "string_list" | "json";
   secret?: boolean;
   live_apply?: boolean;
   env?: string;

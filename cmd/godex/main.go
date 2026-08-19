@@ -277,6 +277,13 @@ func main() {
 				}
 				_ = controlRegistry.SetRelayStatus(context.Background(), nodeID, status)
 			})
+			// Refresh the node's last-seen time on every relay pong so the
+			// nodes page shows a live heartbeat for join-onboarded nodes too
+			// (their HTTP heartbeat may not authenticate against the center's
+			// web token, but a healthy relay connection is authoritative).
+			relayHub.SetActivityHook(func(nodeID string) {
+				_ = controlRegistry.Touch(context.Background(), nodeID)
+			})
 
 			// Observation store: aggregates node-pushed snapshot events so the
 			// center can render per-node overviews. The center only keeps the

@@ -133,6 +133,32 @@ func (r *Registry) Heartbeat(ctx context.Context, id string, input NodeInput) (N
 	return node, r.saveLocked()
 }
 
+// Touch refreshes a node's liveness timestamps without changing its
+// registration data. It is used by the relay activity hook: a node that
+// answers relay pings is alive right now, so its last-seen time must advance
+// even when the node never sends an HTTP heartbeat (e.g. a join-onboarded
+// node whose web token differs from the center's).
+func (r *Registry) Touch(ctx context.Context, id string) error {
+	_ = ctx
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("missing node id")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return os.ErrNotExist
+	}
+	now := r.now()
+	node.Status = StatusOnline
+	node.LastSeen = now
+	node.LastHealth = now
+	node.UpdatedAt = now
+	r.nodes[id] = node
+	return r.saveLocked()
+}
+
 func (r *Registry) SeedConfigured(ctx context.Context, inputs []NodeInput) error {
 	_ = ctx
 	if len(inputs) == 0 {

@@ -70,6 +70,12 @@ type Hub struct {
 	statusHook StatusHook
 	eventSink  EventSink
 
+	// activityHook fires on every frame pong from a connected node. The ping
+	// loop runs every pingInterval, so this is a steady liveness signal the
+	// center can use to refresh a node's last-seen time without depending on
+	// a separate HTTP heartbeat.
+	activityHook func(nodeID string)
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -103,6 +109,16 @@ func (h *Hub) SetStatusHook(hook StatusHook) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.statusHook = hook
+}
+
+// SetActivityHook registers a callback invoked whenever a connected node
+// answers a liveness ping. The callback runs at the ping cadence for every
+// healthy connection and is the authoritative "node is alive right now"
+// signal.
+func (h *Hub) SetActivityHook(hook func(nodeID string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.activityHook = hook
 }
 
 // SetEventSink registers a callback invoked for every event frame a connected
@@ -392,6 +408,9 @@ func (h *Hub) handleConn(ws *websocket.Conn) {
 			conn.mu.Lock()
 			conn.lastPong = time.Now()
 			conn.mu.Unlock()
+			if h.activityHook != nil {
+				h.activityHook(nodeID)
+			}
 		case FrameEvent:
 			h.mu.Lock()
 			sink := h.eventSink

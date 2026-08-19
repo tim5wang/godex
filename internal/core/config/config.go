@@ -215,17 +215,18 @@ type StorageConfig struct {
 
 // ModelProfileConfig describes one selectable model provider profile.
 type ModelProfileConfig struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Provider          string `json:"provider"`
-	Model             string `json:"model"`
-	BaseURL           string `json:"base_url"`
-	APIKey            string `json:"api_key,omitempty"`
-	MaxTokens         int    `json:"max_tokens"`
-	TimeoutSeconds    int    `json:"timeout_seconds"`
-	SupportsStreaming bool   `json:"supports_streaming"`
-	SupportsVision    bool   `json:"supports_vision"`
-	ReasoningEffort   string `json:"reasoning_effort,omitempty"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Provider            string `json:"provider"`
+	Model               string `json:"model"`
+	BaseURL             string `json:"base_url"`
+	APIKey              string `json:"api_key,omitempty"`
+	MaxTokens           int    `json:"max_tokens"`
+	TimeoutSeconds      int    `json:"timeout_seconds"`
+	SupportsStreaming   bool   `json:"supports_streaming"`
+	SupportsVision      bool   `json:"supports_vision"`
+	ReasoningEffort     string `json:"reasoning_effort,omitempty"`
+	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
 }
 
 // ACPConfig describes external ACP-speaking agents available to tools.
@@ -801,17 +802,18 @@ func modelProfileFromLLMCandidate(candidate llm.Candidate) ModelProfileConfig {
 		name = candidate.ProviderName + " / " + name
 	}
 	return ModelProfileConfig{
-		ID:                candidate.ProfileID,
-		Name:              name,
-		Provider:          candidate.ProviderType,
-		Model:             candidate.Model,
-		BaseURL:           candidate.BaseURL,
-		APIKey:            candidate.APIKey,
-		MaxTokens:         candidate.MaxTokens,
-		TimeoutSeconds:    candidate.TimeoutSeconds,
-		SupportsStreaming: candidate.SupportsStreaming,
-		SupportsVision:    candidate.SupportsVision,
-		ReasoningEffort:   candidate.ReasoningEffort,
+		ID:                  candidate.ProfileID,
+		Name:                name,
+		Provider:            candidate.ProviderType,
+		Model:               candidate.Model,
+		BaseURL:             candidate.BaseURL,
+		APIKey:              candidate.APIKey,
+		MaxTokens:           candidate.MaxTokens,
+		TimeoutSeconds:      candidate.TimeoutSeconds,
+		SupportsStreaming:   candidate.SupportsStreaming,
+		SupportsVision:      candidate.SupportsVision,
+		ReasoningEffort:     candidate.ReasoningEffort,
+		ContextWindowTokens: candidate.ContextWindowTokens,
 	}
 }
 

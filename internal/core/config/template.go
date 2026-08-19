@@ -353,6 +353,14 @@ agent:
     model_profile_id: {{ yamlString .Agent.Compaction.ModelProfileID }}
     max_latency_ms: {{ .Agent.Compaction.MaxLatencyMS }}
     keep_recent_messages: {{ .Agent.Compaction.KeepRecentMessages }}
+    context_window_tokens: {{ .Agent.Compaction.ContextWindowTokens }}
+    trigger_ratio: {{ .Agent.Compaction.TriggerRatio }}
+    retain_ratio: {{ .Agent.Compaction.RetainRatio }}
+    retain_tokens: {{ .Agent.Compaction.RetainTokens }}
+    prune_threshold_chars: {{ .Agent.Compaction.PruneThresholdChars }}
+    prune_head_chars: {{ .Agent.Compaction.PruneHeadChars }}
+    prune_tail_chars: {{ .Agent.Compaction.PruneTailChars }}
+    model_policies:{{ yamlValue .Agent.Compaction.ModelPolicies 6 }}
   # Maximum model/tool loop iterations for one main-agent turn. Environment override: GODEX_AGENT_MAX_TURNS.
   max_turns: {{ .Agent.MaxTurns }}
   # general | coding. Environment override: GODEX_AGENT_PROFILE.

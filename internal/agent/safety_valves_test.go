@@ -13,14 +13,18 @@ import (
 	"github.com/tim5wang/godex/internal/tools"
 )
 
-// Safety valve: compaction trigger is clamped so a misconfigured value
-// (e.g. 800000, above any model window) cannot silently disable auto-compaction
-// and let a long turn's context grow unbounded into a loop / overflow.
+// Safety valve: compaction trigger is clamped to the model context window so a
+// misconfigured value (e.g. 800000, above any model window) cannot silently
+// disable auto-compaction and let a long turn's context grow unbounded into a
+// loop / overflow.  The ceiling follows the model window: a per-model or
+// global context_window_tokens raises it, so a user-configured 230k trigger
+// is respected when the model actually supports a 230k window.
 func TestCompactionTriggerTokensClamped(t *testing.T) {
 	a := newTestAgent(t, 4096)
+	// Absurd triggers clamp to the default window (128k).
 	a.cfg.Compaction.TriggerTokens = 800000
-	if got := a.compactionTriggerTokens(); got != maxCompactionTriggerTokens {
-		t.Fatalf("expected absurd trigger clamped to %d, got %d", maxCompactionTriggerTokens, got)
+	if got := a.compactionTriggerTokens(); got != defaultCompactionContextWindowTokens {
+		t.Fatalf("expected absurd trigger clamped to default window %d, got %d", defaultCompactionContextWindowTokens, got)
 	}
 	// Sane values below the ceiling pass through untouched.
 	a.cfg.Compaction.TriggerTokens = 80
@@ -30,8 +34,20 @@ func TestCompactionTriggerTokensClamped(t *testing.T) {
 	// Default path also clamps.
 	a.cfg.Compaction.TriggerTokens = 0
 	a.cfg.CompressThreshold = 900000
-	if got := a.compactionTriggerTokens(); got != maxCompactionTriggerTokens {
-		t.Fatalf("expected compress_threshold clamped too, got %d", got)
+	if got := a.compactionTriggerTokens(); got != defaultCompactionContextWindowTokens {
+		t.Fatalf("expected compress_threshold clamped to default window too, got %d", got)
+	}
+	// A 230k global window raises the ceiling: a 230k trigger is honored
+	// instead of being pinned to the historical 150k cap.
+	a.cfg.Compaction.TriggerTokens = 230000
+	a.cfg.Compaction.ContextWindowTokens = 230000
+	if got := a.compactionTriggerTokens(); got != 230000 {
+		t.Fatalf("expected 230k trigger honored with 230k window, got %d", got)
+	}
+	// Trigger above the configured window is still clamped to the window.
+	a.cfg.Compaction.TriggerTokens = 400000
+	if got := a.compactionTriggerTokens(); got != 230000 {
+		t.Fatalf("expected 400k trigger clamped to 230k window, got %d", got)
 	}
 }
 

@@ -38,14 +38,15 @@ type OAuthConfig struct {
 
 // ModelConfig describes one model exposed by a provider.
 type ModelConfig struct {
-	ID                string   `yaml:"-" json:"id,omitempty"`
-	Name              string   `yaml:"name" json:"name,omitempty"`
-	Model             string   `yaml:"model" json:"model"`
-	MaxTokens         int      `yaml:"max_tokens" json:"max_tokens,omitempty"`
-	SupportsStreaming bool     `yaml:"supports_streaming" json:"supports_streaming,omitempty"`
-	SupportsVision    bool     `yaml:"supports_vision" json:"supports_vision,omitempty"`
-	ReasoningEffort   string   `yaml:"reasoning_effort" json:"reasoning_effort,omitempty"`
-	Tags              []string `yaml:"tags" json:"tags,omitempty"`
+	ID                  string   `yaml:"-" json:"id,omitempty"`
+	Name                string   `yaml:"name" json:"name,omitempty"`
+	Model               string   `yaml:"model" json:"model"`
+	MaxTokens           int      `yaml:"max_tokens" json:"max_tokens,omitempty"`
+	ContextWindowTokens int      `yaml:"context_window_tokens" json:"context_window_tokens,omitempty"`
+	SupportsStreaming   bool     `yaml:"supports_streaming" json:"supports_streaming,omitempty"`
+	SupportsVision      bool     `yaml:"supports_vision" json:"supports_vision,omitempty"`
+	ReasoningEffort     string   `yaml:"reasoning_effort" json:"reasoning_effort,omitempty"`
+	Tags                []string `yaml:"tags" json:"tags,omitempty"`
 }
 
 // ModelRef points at a provider model by stable ids.
@@ -62,21 +63,22 @@ type StrategyConfig struct {
 
 // Candidate is a fully resolved provider+model invocation target.
 type Candidate struct {
-	ProfileID         string
-	ProviderID        string
-	ProviderName      string
-	ProviderType      string
-	ModelID           string
-	ModelName         string
-	Model             string
-	BaseURL           string
-	APIKey            string
-	MaxTokens         int
-	TimeoutSeconds    int
-	SupportsStreaming bool
-	SupportsVision    bool
-	ReasoningEffort   string
-	Tags              []string
+	ProfileID           string
+	ProviderID          string
+	ProviderName        string
+	ProviderType        string
+	ModelID             string
+	ModelName           string
+	Model               string
+	BaseURL             string
+	APIKey              string
+	MaxTokens           int
+	ContextWindowTokens int
+	TimeoutSeconds      int
+	SupportsStreaming   bool
+	SupportsVision      bool
+	ReasoningEffort     string
+	Tags                []string
 }
 
 // Registry resolves configured providers and model references.
@@ -238,21 +240,22 @@ func (r Registry) Candidate(ref ModelRef) (Candidate, bool) {
 		return Candidate{}, false
 	}
 	return Candidate{
-		ProfileID:         ProfileID(provider.ID, model.ID),
-		ProviderID:        provider.ID,
-		ProviderName:      provider.Name,
-		ProviderType:      provider.Type,
-		ModelID:           model.ID,
-		ModelName:         model.Name,
-		Model:             model.Model,
-		BaseURL:           provider.BaseURL,
-		APIKey:            provider.APIKey,
-		MaxTokens:         model.MaxTokens,
-		TimeoutSeconds:    provider.TimeoutSeconds,
-		SupportsStreaming: model.SupportsStreaming,
-		SupportsVision:    model.SupportsVision,
-		ReasoningEffort:   model.ReasoningEffort,
-		Tags:              append([]string{}, model.Tags...),
+		ProfileID:           ProfileID(provider.ID, model.ID),
+		ProviderID:          provider.ID,
+		ProviderName:        provider.Name,
+		ProviderType:        provider.Type,
+		ModelID:             model.ID,
+		ModelName:           model.Name,
+		Model:               model.Model,
+		BaseURL:             provider.BaseURL,
+		APIKey:              provider.APIKey,
+		MaxTokens:           model.MaxTokens,
+		ContextWindowTokens: model.ContextWindowTokens,
+		TimeoutSeconds:      provider.TimeoutSeconds,
+		SupportsStreaming:   model.SupportsStreaming,
+		SupportsVision:      model.SupportsVision,
+		ReasoningEffort:     model.ReasoningEffort,
+		Tags:                append([]string{}, model.Tags...),
 	}, true
 }
 

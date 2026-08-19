@@ -71,7 +71,7 @@ func compactionTriggerTokensForTarget(cfg *config.Config, provider, model string
 	ratio := compactionTriggerRatioFromConfig(cfg)
 	if policy := compactionPolicyForTarget(cfg, provider, model); policy != nil {
 		if policy.TriggerTokens > 0 {
-			return clampCompactionTrigger(policy.TriggerTokens)
+			return clampCompactionTrigger(policy.TriggerTokens, window)
 		}
 		if policy.ContextWindowTokens > 0 {
 			window = policy.ContextWindowTokens
@@ -83,24 +83,46 @@ func compactionTriggerTokensForTarget(cfg *config.Config, provider, model string
 	if trigger <= 0 {
 		trigger = int(float64(window) * ratio)
 	}
-	return clampCompactionTrigger(trigger)
+	return clampCompactionTrigger(trigger, window)
 }
 
-func clampCompactionTrigger(trigger int) int {
-	if trigger > maxCompactionTriggerTokens {
-		return maxCompactionTriggerTokens
-	}
+// clampCompactionTrigger caps the auto-compaction trigger at the model's
+// context window so a misconfigured value cannot silently disable compaction
+// (a trigger above the window never fires and context grows unbounded into
+// loops / provider overflow). When no window is known (<= 0), the historical
+// conservative ceiling (maxCompactionTriggerTokens) applies as a fallback.
+func clampCompactionTrigger(trigger, window int) int {
 	if trigger <= 0 {
 		return defaultCompactionTriggerTokens
+	}
+	if window > 0 {
+		if trigger > window {
+			return window
+		}
+		return trigger
+	}
+	if trigger > maxCompactionTriggerTokens {
+		return maxCompactionTriggerTokens
 	}
 	return trigger
 }
 
+// compactionContextWindowTokensFromConfig resolves the model context window
+// used to scale the auto-compaction trigger and the verbatim retention tail.
+// Priority: the routed model profile's own context_window_tokens (per-model
+// provider config), then the global agent.compaction.context_window_tokens,
+// then the DSH-style default (128k).
 func compactionContextWindowTokensFromConfig(cfg *config.Config) int {
-	if cfg == nil || cfg.Compaction.ContextWindowTokens <= 0 {
+	if cfg == nil {
 		return defaultCompactionContextWindowTokens
 	}
-	return cfg.Compaction.ContextWindowTokens
+	if profile := cfg.DefaultModelProfile(); profile.ContextWindowTokens > 0 {
+		return profile.ContextWindowTokens
+	}
+	if cfg.Compaction.ContextWindowTokens > 0 {
+		return cfg.Compaction.ContextWindowTokens
+	}
+	return defaultCompactionContextWindowTokens
 }
 
 func compactionTriggerRatioFromConfig(cfg *config.Config) float64 {

@@ -87,6 +87,7 @@ type LLMModelFormItem = {
   name?: string;
   model?: string;
   max_tokens?: number;
+  context_window_tokens?: number;
   supports_streaming?: boolean;
   supports_vision?: boolean;
   reasoning_effort?: string;
@@ -1074,6 +1075,9 @@ function ConfigFieldInput(props: {
   if (field.type === "int") {
     return <InputNumber value={value as number | undefined} onChange={onChange} style={{ width: "100%" }} />;
   }
+  if (field.type === "float") {
+    return <InputNumber step={0.05} value={value as number | undefined} onChange={onChange} style={{ width: "100%" }} />;
+  }
   if (field.type === "string_list") {
     const values = Array.isArray(value) ? value.map(String) : String(value ?? "").split(",").map((part) => part.trim()).filter(Boolean);
     return <Select mode="tags" value={values} onChange={onChange} tokenSeparators={[","]} open={compact ? false : undefined} placeholder="comma,separated,values" />;
@@ -1250,6 +1254,15 @@ function LLMProvidersEditor({
                     </LabelledControl>
                     <LabelledControl label="Max tokens">
                       <InputNumber min={1} style={{ width: "100%" }} value={model.max_tokens} onChange={(tokens) => updateModel(providerIndex, modelIndex, { max_tokens: numberOrUndefined(tokens) })} />
+                    </LabelledControl>
+                    <LabelledControl label="Context window (tokens)">
+                      <InputNumber
+                        min={1}
+                        style={{ width: "100%" }}
+                        placeholder="default (global config)"
+                        value={model.context_window_tokens}
+                        onChange={(tokens) => updateModel(providerIndex, modelIndex, { context_window_tokens: numberOrUndefined(tokens) })}
+                      />
                     </LabelledControl>
                     <LabelledControl label="Streaming">
                       <Switch checked={model.supports_streaming !== false} onChange={(supports_streaming) => updateModel(providerIndex, modelIndex, { supports_streaming })} />
@@ -1691,6 +1704,7 @@ function providersConfigToForm(value: unknown): LLMProvidersFormValue {
         name: asOptionalString(model.name),
         model: asOptionalString(model.model),
         max_tokens: asOptionalNumber(model.max_tokens),
+        context_window_tokens: asOptionalNumber(model.context_window_tokens),
         supports_streaming: asOptionalBool(model.supports_streaming, true),
         supports_vision: asOptionalBool(model.supports_vision, false),
         reasoning_effort: asOptionalString(model.reasoning_effort),
@@ -1708,6 +1722,7 @@ function providersFormToConfig(value: unknown) {
       name: model.name ?? "",
       model: model.model ?? "",
       max_tokens: model.max_tokens ?? 0,
+      context_window_tokens: model.context_window_tokens ?? 0,
       supports_streaming: model.supports_streaming !== false,
       supports_vision: !!model.supports_vision,
       reasoning_effort: model.reasoning_effort || "",

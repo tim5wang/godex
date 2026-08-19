@@ -8,14 +8,38 @@ export async function streamEvents(
   onEvent: (event: RuntimeEvent) => void,
   onOpen?: () => void,
 ) {
-  const response = await fetch(apiURL(`/sessions/${encodeURIComponent(sessionId)}/events?replay=active`), {
-    method: "GET",
-    headers: {
-      Accept: "text/event-stream",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    signal,
-  });
+  // Bound the connection phase: if the server accepts the TCP connection but
+  // never answers the request (wedged handler, half-open proxy), a bare
+  // fetch() would hang forever and the caller's reconnect loop would stall.
+  // The read phase below has its own timeout, so this only covers the period
+  // until response headers arrive.
+  const CONNECT_TIMEOUT_MS = 15_000;
+  const controller = new AbortController();
+  const connectTimer = setTimeout(
+    () => controller.abort(new DOMException("SSE connect timed out", "TimeoutError")),
+    CONNECT_TIMEOUT_MS,
+  );
+  const onOuterAbort = () => controller.abort(signal.reason);
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+  } else {
+    signal.addEventListener("abort", onOuterAbort, { once: true });
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(apiURL(`/sessions/${encodeURIComponent(sessionId)}/events?replay=active`), {
+      method: "GET",
+      headers: {
+        Accept: "text/event-stream",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(connectTimer);
+    signal.removeEventListener("abort", onOuterAbort);
+  }
 
   if (!response.ok || !response.body) {
     throw new Error(`SSE request failed with status ${response.status}`);

@@ -36,6 +36,19 @@ type ProxyHandler struct {
 
 const trustApprovedHeader = "X-Godex-Trust-Approved"
 
+// defaultForwardTimeout bounds non-streaming forwarded requests when the
+// handler has no explicit Timeout. Without it a node that silently stops
+// answering (half-open relay, wedged process) would hang the proxy forever;
+// SSE-style long-lived streams are exempt and keep following the client
+// context.
+const defaultForwardTimeout = 60 * time.Second
+
+// isSSEStream reports whether the client expects a long-lived server-sent
+// event stream, which must never be cut by the default forward timeout.
+func isSSEStream(r *http.Request) bool {
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream")
+}
+
 // isMutatingMethod reports whether an HTTP method changes server state.
 func isMutatingMethod(method string) bool {
 	switch strings.ToUpper(method) {
@@ -115,6 +128,9 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timeout := p.Timeout
+	if timeout <= 0 && !isSSEStream(r) {
+		timeout = defaultForwardTimeout
+	}
 	ctx := r.Context()
 	var cancel context.CancelFunc
 	if timeout > 0 {

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -149,6 +150,16 @@ func (h *Hub) pingLoop(ctx context.Context) {
 			for _, conn := range conns {
 				seq := h.nextReq.Add(1)
 				_ = conn.write(Frame{Type: FramePing, Seq: seq})
+				// Reap half-open connections: if the node has not answered a ping
+				// within 3 ping intervals, the TCP path is dead even though the
+				// socket has not closed. Drop it so in-flight requests fail and the
+				// UI can reconnect instead of hanging on a zombie connection.
+				conn.mu.Lock()
+				stale := time.Since(conn.lastPong) > 3*h.pingInterval
+				conn.mu.Unlock()
+				if stale {
+					_ = conn.ws.Close()
+				}
 			}
 		}
 	}
@@ -208,6 +219,9 @@ func (h *Hub) Forward(ctx context.Context, nodeID string, req ForwardRequest) (*
 			if decodeErr != nil {
 				return nil, decodeErr
 			}
+			if frame.Type == FrameError {
+				return nil, fmt.Errorf("relay request to node %s failed: %s", nodeID, frame.Reason)
+			}
 			body = append(body, chunk...)
 			if frame.Status != 0 {
 				status = frame.Status
@@ -243,6 +257,9 @@ func (h *Hub) ForwardStream(ctx context.Context, nodeID string, req ForwardReque
 			chunk, decodeErr := base64.StdEncoding.DecodeString(frame.BodyB64)
 			if decodeErr != nil {
 				return decodeErr
+			}
+			if frame.Type == FrameError {
+				return fmt.Errorf("relay stream to node %s failed: %s", nodeID, frame.Reason)
 			}
 			if frame.Type == FrameResponse || frame.Type == FrameStreamEnd {
 				return onChunk(frame.Status, frame.Headers, chunk, true)
@@ -458,6 +475,17 @@ func (h *Hub) removeConn(nodeID string, conn *hubConn) {
 	h.mu.Unlock()
 	conn.mu.Lock()
 	conn.closed = true
+	// Fail every in-flight request: the pending slot is only removed by a
+	// terminal frame, which a dead connection never sends. Deliver a terminal
+	// FrameError so Forward/ForwardStream return promptly instead of hanging
+	// the SSE/proxy path forever after the node's relay connection drops.
+	for reqID, ch := range conn.pending {
+		delete(conn.pending, reqID)
+		select {
+		case ch <- Frame{Type: FrameError, ReqID: reqID, Reason: "relay node disconnected", Status: http.StatusBadGateway}:
+		default:
+		}
+	}
 	for connID, ch := range conn.tcpStreams {
 		delete(conn.tcpStreams, connID)
 		close(ch)

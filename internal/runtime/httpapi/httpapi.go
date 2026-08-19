@@ -1754,10 +1754,22 @@ func NewHandlerWithRuntime(
 			}
 		}()
 
+		// Keep the SSE stream alive during idle periods. Without a heartbeat,
+		// a healthy connection with no events is torn down by client/proxy
+		// read timeouts (the web UI enforces a 90s read timeout), which
+		// surfaces as a dropped stream, a "reconnecting" state, and a UI that
+		// never recovers until a manual page reload.
+		heartbeat := time.NewTicker(20 * time.Second)
+		defer heartbeat.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-heartbeat.C:
+				// SSE comment lines carry no payload but reset read timeouts.
+				_, _ = fmt.Fprint(w, ": keepalive\n\n")
+				flusher.Flush()
 			case event, ok := <-eventCh:
 				if !ok {
 					return

@@ -134,10 +134,18 @@ function authHeaders(token: string | null): HeadersInit {
   };
 }
 
+/** Bound on regular API requests so a silent relay/node failure surfaces as an
+ *  error instead of hanging the UI (stuck spinner, refresh never completing). */
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
 async function request<T>(path: string, init: RequestInit = {}, token: string | null = null): Promise<T> {
   const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+  // Use the caller's signal when provided (e.g. long uploads); otherwise bound
+  // the request so it cannot hang forever.
+  const signal = init.signal ?? AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
   const response = await fetch(apiURL(path), {
     ...init,
+    signal,
     headers: {
       ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...authHeaders(token),

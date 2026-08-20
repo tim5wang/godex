@@ -1,4 +1,4 @@
-import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Segmented, Drawer } from "antd";
+import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Segmented, Drawer, Spin } from "antd";
 import { useParams, useSearchParams, useLocation, useNavigate, Link } from "react-router-dom";
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
@@ -369,6 +369,17 @@ export function ChatPage() {
       syncSnapshot(snapshotQuery.data.display_messages ?? snapshotQuery.data.messages ?? [], snapshotQuery.data.running, snapshotQuery.data.active_turn_id);
     }
   }, [snapshotQuery.data, syncSnapshot]);
+
+  // Session switch in progress: the route key changed and the target session's
+  // snapshot has not rendered yet. `openQuery.isPending` covers the slow
+  // openSession POST (the multi-second wait), the guarded second clause covers
+  // the first snapshot fetch for a session not in the query cache. The guard
+  // `!!openQuery.data?.session_id` keeps the veil from sticking when
+  // openSession itself failed (a disabled snapshot query reports pending but
+  // must not hold the overlay). While true, the chat feed is veiled with a
+  // spinner so switching sessions never looks frozen.
+  const switchingSession =
+    openQuery.isPending || (!!openQuery.data?.session_id && snapshotQuery.isPending);
 
   const timelineQuery = useQuery({
     queryKey: ["timeline", token, openQuery.data?.session_id],
@@ -1388,37 +1399,45 @@ export function ChatPage() {
               </div>
             ) : (
               <div className="chat-v2-center-body">
-                <div className="chat-feed chat-feed-v2-scroll" ref={scrollerRef} onScroll={handleFeedScroll} style={{ minHeight: 0 }}>
-                  <div className="chat-feed-inner chat-feed-v2-inner">
-                    <MessageFeedV2
-                      items={v2ItemsWithPending}
-                      onToggleTool={toggleTool}
-                      onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
-                      savingToNote={saveMessageToNoteMutation.isPending}
-                      hasNoteContext={!!noteContextQuery.data}
-                      workspaceDir={sessionWorkspaceDir}
-                      token={token}
-                      onOpenInFiles={(path) => {
-                        setFilesFocusPath(path);
-                        v2SetActiveDockTab("files");
-                      }}
-                    />
+                <div className="chat-feed-v2-scrollport">
+                  <div className="chat-feed chat-feed-v2-scroll" ref={scrollerRef} onScroll={handleFeedScroll} style={{ minHeight: 0 }}>
+                    <div className="chat-feed-inner chat-feed-v2-inner">
+                      <MessageFeedV2
+                        items={v2ItemsWithPending}
+                        onToggleTool={toggleTool}
+                        onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
+                        savingToNote={saveMessageToNoteMutation.isPending}
+                        hasNoteContext={!!noteContextQuery.data}
+                        workspaceDir={sessionWorkspaceDir}
+                        token={token}
+                        onOpenInFiles={(path) => {
+                          setFilesFocusPath(path);
+                          v2SetActiveDockTab("files");
+                        }}
+                      />
+                    </div>
+                    {!stickToBottom ? (
+                      <button
+                        type="button"
+                        className="chat-feed-jump-latest"
+                        onClick={() => {
+                          const scroller = scrollerRef.current;
+                          if (scroller) {
+                            scroller.scrollTop = scroller.scrollHeight;
+                          }
+                          stickToBottomRef.current = true;
+                          setStickToBottom(true);
+                        }}
+                      >
+                        Jump to latest
+                      </button>
+                    ) : null}
                   </div>
-                  {!stickToBottom ? (
-                    <button
-                      type="button"
-                      className="chat-feed-jump-latest"
-                      onClick={() => {
-                        const scroller = scrollerRef.current;
-                        if (scroller) {
-                          scroller.scrollTop = scroller.scrollHeight;
-                        }
-                        stickToBottomRef.current = true;
-                        setStickToBottom(true);
-                      }}
-                    >
-                      Jump to latest
-                    </button>
+                  {switchingSession ? (
+                    <div className="chat-feed-switching-overlay" role="status" aria-live="polite">
+                      <Spin size="small" />
+                      <span>{t("chat.switchingSession")}</span>
+                    </div>
                   ) : null}
                 </div>
                 <NoteContextBanner

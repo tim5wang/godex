@@ -1133,6 +1133,44 @@ samp {
   max-width: 860px;
 }
 
+/* Session-switch loading veil. Wraps the feed scrollport so the overlay can
+   sit absolutely over the whole viewport (positioning inside the scroller
+   would make it scroll with the content). The old feed stays visible and
+   dimmed underneath while the next session's snapshot loads, and the fade-in
+   keeps a fast switch from flashing. */
+.chat-feed-v2-scrollport {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-feed-switching-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(246, 248, 250, 0.55);
+  background: color-mix(in srgb, var(--godex-bg) 55%, transparent);
+  color: var(--godex-text);
+  font-size: 13px;
+  animation: chat-feed-switching-fade 0.18s ease-out;
+}
+
+@keyframes chat-feed-switching-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* Floating "jump to latest" affordance shown when the user scrolled up to
    read history (auto-scroll only sticks while near the bottom). Sticky keeps
    it pinned to the bottom of the scrollport without disturbing layout. */

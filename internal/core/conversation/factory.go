@@ -15,10 +15,14 @@ func NewCallerForProfile(profile config.ModelProfileConfig) Caller {
 	}
 	switch strings.ToLower(strings.TrimSpace(profile.Provider)) {
 	case config.ProviderOpenAICompatible:
-		return NewOpenAIClient(profile.BaseURL, profile.APIKey, timeout)
+		client := NewOpenAIClient(profile.BaseURL, profile.APIKey, timeout)
+		client.SetRequestGzip(profile.RequestGzip)
+		return client
 	case config.ProviderOpenAICodex:
 		return NewOpenAICodexClient(profile.BaseURL, profile.APIKey, timeout)
 	default:
-		return NewClient(profile.BaseURL, profile.APIKey, timeout)
+		client := NewClient(profile.BaseURL, profile.APIKey, timeout)
+		client.SetRequestGzip(profile.RequestGzip)
+		return client
 	}
 }

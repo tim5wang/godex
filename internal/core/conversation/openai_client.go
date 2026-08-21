@@ -3,6 +3,7 @@ package conversation
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -19,6 +20,11 @@ type OpenAIClient struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
+	// requestGzip gzip-compresses the request body (Content-Encoding: gzip).
+	// Enable it for providers known to accept gzip request bodies (such as a
+	// godex usage gateway) to slash cross-network traffic; plain third-party
+	// endpoints must stay off.
+	requestGzip bool
 }
 
 // NewOpenAIClient creates an OpenAI-compatible conversation client.
@@ -32,6 +38,11 @@ func NewOpenAIClient(baseURL, apiKey string, timeout time.Duration) *OpenAIClien
 		apiKey:     apiKey,
 		httpClient: httpClient,
 	}
+}
+
+// SetRequestGzip toggles request-body gzip compression.
+func (c *OpenAIClient) SetRequestGzip(enabled bool) {
+	c.requestGzip = enabled
 }
 
 func (c *OpenAIClient) Call(ctx context.Context, req protocol.Request) (*protocol.Response, error) {
@@ -210,11 +221,26 @@ func (c *OpenAIClient) do(ctx context.Context, body []byte, stream bool) (*http.
 	if !strings.HasSuffix(endpoint, "/chat/completions") {
 		endpoint += "/v1/chat/completions"
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	var reader io.Reader = bytes.NewReader(body)
+	if c.requestGzip {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write(body); err != nil {
+			return nil, err
+		}
+		if err := zw.Close(); err != nil {
+			return nil, err
+		}
+		reader = &buf
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.requestGzip {
+		httpReq.Header.Set("Content-Encoding", "gzip")
+	}
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}

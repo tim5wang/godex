@@ -227,6 +227,7 @@ type ModelProfileConfig struct {
 	SupportsVision      bool   `json:"supports_vision"`
 	ReasoningEffort     string `json:"reasoning_effort,omitempty"`
 	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
+	RequestGzip         bool   `json:"request_gzip,omitempty"`
 }
 
 // ACPConfig describes external ACP-speaking agents available to tools.
@@ -824,6 +825,7 @@ func modelProfileFromLLMCandidate(candidate llm.Candidate) ModelProfileConfig {
 		SupportsVision:      candidate.SupportsVision,
 		ReasoningEffort:     candidate.ReasoningEffort,
 		ContextWindowTokens: candidate.ContextWindowTokens,
+		RequestGzip:         candidate.RequestGzip,
 	}
 }
 

@@ -34,6 +34,7 @@ type ProviderConfig struct {
 	CredentialKind string                 `yaml:"credential_kind" json:"credential_kind,omitempty"`
 	OAuth          OAuthConfig            `yaml:"oauth" json:"oauth,omitempty"`
 	TimeoutSeconds int                    `yaml:"timeout_seconds" json:"timeout_seconds,omitempty"`
+	RequestGzip    bool                   `yaml:"request_gzip" json:"request_gzip,omitempty"`
 	Models         map[string]ModelConfig `yaml:"models" json:"models,omitempty"`
 }
 
@@ -86,6 +87,7 @@ type Candidate struct {
 	SupportsVision      bool
 	ReasoningEffort     string
 	Tags                []string
+	RequestGzip         bool
 }
 
 // Registry resolves configured providers and model references.
@@ -263,6 +265,7 @@ func (r Registry) Candidate(ref ModelRef) (Candidate, bool) {
 		SupportsVision:      model.SupportsVision,
 		ReasoningEffort:     model.ReasoningEffort,
 		Tags:                append([]string{}, model.Tags...),
+		RequestGzip:         provider.RequestGzip,
 	}, true
 }
 

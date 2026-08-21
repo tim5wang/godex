@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -260,9 +262,9 @@ func TestUsageGatewayChatCompletionStreamsSSE(t *testing.T) {
 		t.Fatalf("marshal providers: %v", err)
 	}
 	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
-		"api.providers":             string(providersValue),
-		"api.default_profile":       "stub.stub-model",
-		"api.default_model":         "stub.stub-model",
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
 	}}); err != nil {
 		t.Fatalf("update config: %v", err)
 	}
@@ -1861,9 +1863,9 @@ func TestAnthropicToProtocolRequestThinkingConfig(t *testing.T) {
 	// client library decides the effort level from the model
 	// config.
 	req2 := anthropicMessageRequest{
-		Model:    "M3",
+		Model:     "M3",
 		MaxTokens: 16,
-		Thinking: &anthropicThinkingConfig{Type: "adaptive"},
+		Thinking:  &anthropicThinkingConfig{Type: "adaptive"},
 		Messages: []anthropicMessage{{
 			Role:    "user",
 			Content: []anthropicContentBlock{{Type: "text", Text: "explain"}},
@@ -2490,11 +2492,11 @@ func TestUsageGatewayChatCompletionAcceptsStreamTrue(t *testing.T) {
 // upstream to emit TWO tool_use blocks with different content_block
 // indices and asserts the wire-side stream carries both:
 //
-//   data: {"type":"content_block_start","index":1, ...}
-//   data: {"type":"content_block_start","index":2, ...}
-//   ...
-//   data: {"type":"content_block_stop","index":1}
-//   data: {"type":"content_block_stop","index":2}
+//	data: {"type":"content_block_start","index":1, ...}
+//	data: {"type":"content_block_start","index":2, ...}
+//	...
+//	data: {"type":"content_block_stop","index":1}
+//	data: {"type":"content_block_stop","index":2}
 //
 // plus a final text block at index 3 (or whatever the gateway
 // assigns) so the assistant can chain the tool results into a reply.
@@ -3698,5 +3700,101 @@ func TestAnthropicOutputStopReasonMapping(t *testing.T) {
 	}
 	if got := anthropicOutputStopReason(nil); got != "end_turn" {
 		t.Errorf("anthropicOutputStopReason(nil) = %q, want end_turn", got)
+	}
+}
+
+// TestUsageGatewayChatCompletionAcceptsGzipBody verifies the gateway
+// transparently decompresses a gzip Content-Encoding request body (as sent by
+// a godex client with request_gzip enabled) before parsing the JSON.
+func TestUsageGatewayChatCompletionAcceptsGzipBody(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Content-Encoding"); strings.EqualFold(got, "gzip") {
+			t.Errorf("gateway must strip Content-Encoding before forwarding, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer stubProvider.Close()
+
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	providersValue, err := yaml.Marshal(map[string]llm.ProviderConfig{
+		"stub": {
+			ID:      "stub",
+			Name:    "Stub",
+			Type:    "openai_compatible",
+			BaseURL: stubProvider.URL,
+			APIKey:  "sk-test",
+			Models: map[string]llm.ModelConfig{
+				"stub-model": {Model: "stub-model"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal providers: %v", err)
+	}
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"api.providers":       string(providersValue),
+		"api.default_profile": "stub.stub-model",
+		"api.default_model":   "stub.stub-model",
+	}}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store, err := usage.NewSQLiteStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new usage store: %v", err)
+	}
+	usageService := usage.NewService(store)
+	if _, err := usageService.CreateModel(usage.ModelCreateRequest{
+		PublicModel:     "M-GZIP",
+		TargetProfileID: manager.Current().DefaultProfileID,
+		TargetModel:     "stub-model",
+		CreditWeight:    1,
+	}); err != nil {
+		t.Fatalf("create model mapping: %v", err)
+	}
+	created, err := usageService.CreateKey(usage.KeyCreateRequest{
+		Name:          "gzip-body",
+		BudgetCredits: 100000,
+		AllowedModels: []string{"M-GZIP"},
+	})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, &dummyCaller{}), commands.NewService(cfg))
+	handler := NewHandler(manager, service, nil, nil, nil, nil, usageService)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	raw := `{"model":"M-GZIP","messages":[{"role":"user","content":"` + strings.Repeat("hello ", 500) + `"}]}`
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(raw)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", &buf)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+created.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for gzip body, got %d: %s", resp.StatusCode, string(respBody))
+	}
+	if !strings.Contains(string(respBody), `"content":"ok"`) {
+		t.Fatalf("expected gateway to decode gzip body and return content, got %s", string(respBody))
 	}
 }

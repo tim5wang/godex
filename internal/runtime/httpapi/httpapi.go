@@ -355,7 +355,7 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, channels.StatusReport())
 	})))
-	mux.Handle("POST /v1/chat/completions", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/chat/completions", gunzipBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if this is a usage gateway request (proxy key auth)
 		auth := strings.TrimSpace(r.Header.Get("Authorization"))
 		if strings.HasPrefix(strings.ToLower(auth), "bearer gdx_") {
@@ -373,7 +373,7 @@ func NewHandlerWithRuntime(
 		protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleOpenAIChatCompletions(w, r, service)
 		})).ServeHTTP(w, r)
-	}))
+	})))
 
 	// Anthropic Messages API endpoint
 	// Supports two auth modes:
@@ -382,7 +382,7 @@ func NewHandlerWithRuntime(
 	//    such as Pi send the proxy key in the x-api-key header instead of
 	//    Authorization: Bearer, so we must accept it here).
 	// 3. Web token: Authorization: Bearer <web_token> (for clients using ANTHROPIC_BASE_URL)
-	mux.Handle("POST /v1/messages", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/messages", gunzipBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if secret := extractProxyKeySecret(r); secret != "" && strings.HasPrefix(secret, "gdx_") {
 			// Usage gateway auth
 			if usageService != nil {
@@ -407,7 +407,7 @@ func NewHandlerWithRuntime(
 		}
 		// Require Bearer auth
 		writeError(w, http.StatusUnauthorized, fmt.Errorf("Invalid API Key. Please provide a valid proxy key with gdx_ prefix or use the configured web token."))
-	}))
+	})))
 
 	// POST /v1/exec - Run a shell command on this node and stream its output
 	// as SSE events ({output, final, exit_code}). Used by the center-side
@@ -2052,6 +2052,36 @@ func decodeJSON(r *http.Request, dest interface{}) error {
 		return nil
 	}
 	return json.NewDecoder(r.Body).Decode(dest)
+}
+
+// gunzipReadCloser wraps a gzip.Reader over the original request body and
+// closes both when done (closed body streams must not leak).
+type gunzipReadCloser struct {
+	*gzip.Reader
+	closer io.Closer
+}
+
+func (g *gunzipReadCloser) Close() error {
+	_ = g.Reader.Close()
+	return g.closer.Close()
+}
+
+// gunzipBody transparently decompresses a gzip Content-Encoding request body
+// (as sent by a godex client with request_gzip enabled) so downstream handlers
+// read plain JSON. The Content-Encoding header is stripped so handlers never
+// double-decode; the body is treated as chunked (ContentLength unknown) since
+// the compressed length differs from the uncompressed one.
+func gunzipBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip") {
+			if zr, err := gzip.NewReader(r.Body); err == nil {
+				r.Body = &gunzipReadCloser{Reader: zr, closer: r.Body}
+				r.Header.Del("Content-Encoding")
+				r.ContentLength = -1
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func decodeJSONAllowEmpty(r *http.Request, dest interface{}) error {

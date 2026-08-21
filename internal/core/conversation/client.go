@@ -3,6 +3,7 @@ package conversation
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -82,6 +83,9 @@ type Client struct {
 	retryBaseDelay time.Duration
 	maxRetryDelay  time.Duration
 	sleep          func(context.Context, time.Duration) error
+	// requestGzip gzip-compresses the request body (Content-Encoding: gzip)
+	// for providers known to accept it (such as a godex usage gateway).
+	requestGzip bool
 }
 
 // NewClient creates a shared conversation client.
@@ -99,6 +103,23 @@ func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
 		maxRetryDelay:  2 * time.Second,
 		sleep:          sleepContext,
 	}
+}
+
+// SetRequestGzip toggles request-body gzip compression.
+func (c *Client) SetRequestGzip(enabled bool) {
+	c.requestGzip = enabled
+}
+
+// requestReader returns the request body reader, gzip-compressed when enabled.
+func (c *Client) requestReader(body []byte) io.Reader {
+	if !c.requestGzip {
+		return bytes.NewReader(body)
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, _ = zw.Write(body)
+	_ = zw.Close()
+	return &buf
 }
 
 // Call executes the provider request.
@@ -212,7 +233,7 @@ func (c *Client) Stream(ctx context.Context, req protocol.Request, handler Strea
 }
 
 func (c *Client) callOnce(ctx context.Context, reqBody []byte) (*protocol.Response, string, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/v1/messages", c.baseURL), bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/v1/messages", c.baseURL), c.requestReader(reqBody))
 	if err != nil {
 		return nil, "", err
 	}
@@ -220,6 +241,9 @@ func (c *Client) callOnce(ctx context.Context, reqBody []byte) (*protocol.Respon
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", c.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	if c.requestGzip {
+		httpReq.Header.Set("Content-Encoding", "gzip")
+	}
 	// Session affinity for cache-aware routing.
 	if usage, ok := UsageContextFromContext(ctx); ok && strings.TrimSpace(usage.SessionID) != "" {
 		sid := strings.TrimSpace(usage.SessionID)
@@ -248,7 +272,7 @@ func (c *Client) callOnce(ctx context.Context, reqBody []byte) (*protocol.Respon
 }
 
 func (c *Client) streamOnce(ctx context.Context, reqBody []byte, handler StreamHandler) (*protocol.Response, string, bool, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/v1/messages", c.baseURL), bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/v1/messages", c.baseURL), c.requestReader(reqBody))
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -257,6 +281,9 @@ func (c *Client) streamOnce(ctx context.Context, reqBody []byte, handler StreamH
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("x-api-key", c.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	if c.requestGzip {
+		httpReq.Header.Set("Content-Encoding", "gzip")
+	}
 	// Session affinity for cache-aware routing.
 	if usage, ok := UsageContextFromContext(ctx); ok && strings.TrimSpace(usage.SessionID) != "" {
 		sid := strings.TrimSpace(usage.SessionID)

@@ -1806,7 +1806,7 @@ func writeAnthropicError(w http.ResponseWriter, status int, errType, message str
 	w.WriteHeader(status)
 	// Anthropic uses a specific error format
 	errorResp := map[string]interface{}{
-		"type":    "error",
+		"type": "error",
 		"error": map[string]interface{}{
 			"type":    errType,
 			"message": message,

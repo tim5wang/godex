@@ -2,8 +2,10 @@ package conversation
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -389,5 +391,58 @@ func TestOpenAIClientForwardsReasoningEffort(t *testing.T) {
 	}
 	if _, ok := decoded2["reasoning_effort"]; ok {
 		t.Fatalf("expected unknown reasoning_effort dropped, got %v (body: %s)", decoded2["reasoning_effort"], string(body))
+	}
+}
+
+func TestOpenAIClientRequestGzip(t *testing.T) {
+	var gotEncoding string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEncoding = r.Header.Get("Content-Encoding")
+		// Server-side gunzip, exactly what a godex usage gateway does.
+		var reader io.Reader = r.Body
+		if strings.EqualFold(strings.TrimSpace(gotEncoding), "gzip") {
+			zr, err := gzip.NewReader(r.Body)
+			if err != nil {
+				t.Fatalf("gunzip request: %v", err)
+			}
+			defer zr.Close()
+			reader = zr
+		}
+		if err := json.NewDecoder(reader).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	req := protocol.Request{
+		Model: "deepseek-chat",
+		Messages: protocol.ToAPIMessages([]protocol.Message{
+			protocol.NewTextMessage(protocol.RoleUser, strings.Repeat("large-context-", 200)),
+		}),
+	}
+
+	// Default: plain body, no Content-Encoding.
+	plain := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	if _, err := plain.Call(context.Background(), req); err != nil {
+		t.Fatalf("plain call: %v", err)
+	}
+	if gotEncoding != "" {
+		t.Fatalf("expected no content-encoding by default, got %q", gotEncoding)
+	}
+
+	// With request_gzip enabled: body must be gzipped and still decode.
+	gzipped := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	gzipped.SetRequestGzip(true)
+	if _, err := gzipped.Call(context.Background(), req); err != nil {
+		t.Fatalf("gzip call: %v", err)
+	}
+	if !strings.EqualFold(gotEncoding, "gzip") {
+		t.Fatalf("expected gzip content-encoding, got %q", gotEncoding)
+	}
+	if msg := gotBody["messages"]; msg == nil {
+		t.Fatalf("expected decoded messages after gunzip, got %#v", gotBody)
 	}
 }

@@ -315,6 +315,23 @@ api:
   #         name: Custom Model
   #         model: your-model-name
   #         max_tokens: 4096
+  #
+  # ── Through a godex usage gateway (request gzip) ──
+  # Point a provider at another godex instance's usage gateway and enable
+  # request_gzip to gzip the LLM request body (Content-Encoding: gzip) and
+  # slash cross-network traffic. The gateway decompresses it transparently.
+  # Only enable this for endpoints that accept gzip request bodies (godex
+  # gateways do); plain third-party endpoints must leave it off (default).
+  #   center-llm:
+  #     name: Center LLM Proxy
+  #     type: openai_compatible
+  #     base_url: https://center.example.com/api/v1
+  #     api_key_env: GODEX_CENTER_LLM_KEY
+  #     request_gzip: true
+  #     models:
+  #       deepseek-v4-flash:
+  #         model: deepseek-v4-flash
+  #         max_tokens: 8192
   # ===========================================================================
   providers:{{ yamlValue .API.Providers 4 }}
 

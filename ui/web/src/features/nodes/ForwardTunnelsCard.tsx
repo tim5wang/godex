@@ -137,7 +137,7 @@ export function ForwardTunnelsCard({ nodeID, token }: Props) {
             title: t("nodes.forwardName"),
             dataIndex: "name",
             ellipsis: true,
-            render: (v?: string, row) => v || row.id,
+            render: (v: string | undefined, row) => v || row.id,
           },
           {
             title: t("nodes.forwardState"),

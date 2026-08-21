@@ -94,6 +94,23 @@ func (c *OpenAIClient) Stream(ctx context.Context, req protocol.Request, handler
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(httpResp.Body)
+		// Some OpenAI-compatible providers reject stream_options with HTTP
+		// 400. Retry once without it so they keep working; the only loss is
+		// usage observability (the previous behavior) for such providers.
+		if httpResp.StatusCode == http.StatusBadRequest && bodyHasStreamOptions(body) {
+			httpResp.Body.Close()
+			if plainBody, buildErr := c.buildRequestBody(req, true, false); buildErr == nil {
+				if retried, doErr := c.do(ctx, plainBody, true); doErr == nil {
+					if retried.StatusCode == http.StatusOK {
+						defer retried.Body.Close()
+						finalResp, finalErr = parseOpenAIStream(retried.Body, handler)
+						return finalResp, finalErr
+					}
+					data, _ = io.ReadAll(retried.Body)
+					retried.Body.Close()
+				}
+			}
+		}
 		finalErr = formatAPIError(httpResp.StatusCode, data)
 		return nil, finalErr
 	}
@@ -102,6 +119,14 @@ func (c *OpenAIClient) Stream(ctx context.Context, req protocol.Request, handler
 }
 
 func (c *OpenAIClient) buildRequest(req protocol.Request, stream bool) ([]byte, error) {
+	return c.buildRequestBody(req, stream, true)
+}
+
+// buildRequestBody builds the wire payload. includeUsage controls whether a
+// streaming request asks the provider to emit a final usage chunk via
+// stream_options; the 400-fallback in Stream passes false to retry without it
+// for providers that reject the field.
+func (c *OpenAIClient) buildRequestBody(req protocol.Request, stream, includeUsage bool) ([]byte, error) {
 	msgs := openAIMessagesFromProtocol(req)
 	tools := openAIToolsFromProtocol(req.Tools)
 
@@ -143,6 +168,8 @@ func (c *OpenAIClient) buildRequest(req protocol.Request, stream bool) ([]byte, 
 		Stream:               stream,
 		Messages:             msgs,
 		Tools:                tools,
+		StreamOptions:        streamOptionsFor(stream, includeUsage),
+		ReasoningEffort:      normalizeOpenAIReasoningEffort(req.ReasoningEffort),
 		PromptCacheKey:       req.PromptCacheKey,
 		PromptCacheRetention: req.PromptCacheRetention,
 	}
@@ -205,13 +232,41 @@ func (c *OpenAIClient) do(ctx context.Context, body []byte, stream bool) (*http.
 }
 
 type openAIRequest struct {
-	Model                string          `json:"model"`
-	Messages             []openAIMessage `json:"messages"`
-	MaxTokens            int             `json:"max_tokens,omitempty"`
-	Tools                []openAITool    `json:"tools,omitempty"`
-	Stream               bool            `json:"stream,omitempty"`
-	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
-	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"`
+	Model                string               `json:"model"`
+	Messages             []openAIMessage      `json:"messages"`
+	MaxTokens            int                  `json:"max_tokens,omitempty"`
+	Tools                []openAITool         `json:"tools,omitempty"`
+	Stream               bool                 `json:"stream,omitempty"`
+	StreamOptions        *openAIStreamOptions `json:"stream_options,omitempty"`
+	ReasoningEffort      string               `json:"reasoning_effort,omitempty"`
+	PromptCacheKey       string               `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string               `json:"prompt_cache_retention,omitempty"`
+}
+
+// openAIStreamOptions is the OpenAI-standard stream_options payload. Setting
+// include_usage asks the provider to emit a final usage chunk (input/output
+// and cached_tokens) at the end of the stream. Without it, endpoints like
+// Volcengine ARK / GLM coding APIs omit usage from streaming responses
+// entirely, so godex cannot observe cache hits and reports a 0% hit rate even
+// though the server caches well.
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// streamOptionsFor returns the stream_options payload for streaming requests
+// that ask for usage. Non-streaming requests already carry usage in the
+// response body, and the 400-fallback in Stream requests without it, so no
+// stream_options is set in either case.
+func streamOptionsFor(stream, includeUsage bool) *openAIStreamOptions {
+	if !stream || !includeUsage {
+		return nil
+	}
+	return &openAIStreamOptions{IncludeUsage: true}
+}
+
+// bodyHasStreamOptions reports whether a request body asked for stream usage.
+func bodyHasStreamOptions(body []byte) bool {
+	return bytes.Contains(body, []byte(`"stream_options"`))
 }
 
 type openAIContentPart struct {
@@ -235,14 +290,17 @@ type openAIMessage struct {
 }
 
 // MarshalJSON supports both string content and array content with cache_control.
+// The content field is ALWAYS emitted, even when empty: strict OpenAI-compatible
+// gateways (Volcengine ARK, AIS/company gateways) reject messages whose content
+// key is missing entirely with a 400 ("missing field `content`"). Pure tool-call
+// assistant turns and empty tool results would otherwise omit it.
 func (m openAIMessage) MarshalJSON() ([]byte, error) {
 	payload := map[string]interface{}{
-		"role": m.Role,
+		"role":    m.Role,
+		"content": m.Content,
 	}
 	if len(m.ContentParts) > 0 {
 		payload["content"] = m.ContentParts
-	} else if m.Content != "" {
-		payload["content"] = m.Content
 	}
 	if m.ReasoningContent != "" {
 		payload["reasoning_content"] = m.ReasoningContent
@@ -337,7 +395,7 @@ func openAIUserMessages(msg protocol.APIMessage) []openAIMessage {
 				out = append(out, openAIMessage{Role: "user", Content: strings.TrimSpace(text.String())})
 				text.Reset()
 			}
-			out = append(out, openAIMessage{Role: "tool", ToolCallID: block.ToolUseID, Content: block.Content})
+			out = append(out, openAIMessage{Role: "tool", ToolCallID: block.ToolUseID, Content: toolResultWireContent(block.Content)})
 		case protocol.BlockText:
 			if block.Text != "" {
 				if text.Len() > 0 {
@@ -365,6 +423,32 @@ func openAIUserMessages(msg protocol.APIMessage) []openAIMessage {
 		out = append(out, openAIMessage{Role: "user", Content: strings.TrimSpace(text.String())})
 	}
 	return out
+}
+
+// toolResultWireContent returns the tool-result content to place on the wire.
+// Empty tool output still needs non-empty content on the wire for strict
+// OpenAI-compatible gateways (same guard DSH applies): a tool message whose
+// content is an empty string can be rejected by serde that treats "" as
+// "not provided".
+func toolResultWireContent(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return "(no output)"
+	}
+	return content
+}
+
+// normalizeOpenAIReasoningEffort validates a reasoning_effort hint before it
+// goes on the openai_compatible wire. The OpenAI-compatible reasoning field
+// is a plain string in the standard vocabulary (none|minimal|low|medium|high|
+// xhigh); unknown values are dropped so a typo cannot be forwarded to the
+// provider and rejected.
+func normalizeOpenAIReasoningEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "minimal", "low", "medium", "high", "xhigh":
+		return strings.ToLower(strings.TrimSpace(effort))
+	default:
+		return ""
+	}
 }
 
 func openAIAssistantMessage(msg protocol.APIMessage) openAIMessage {

@@ -80,6 +80,21 @@ api:
 
 ---
 
+## OpenAI-compatible 供应商的"假低命中"：流式响应不带 usage（已修复）
+
+> 另一类"缓存命中率低"其实是**观测盲区**，不是服务端缓存差。以 Seed-Coding（火山方舟 `ark.cn-beijing.volces.com/api/coding/v3`）为例：
+
+- godex 对 `openai_compatible` 供应商**始终走流式**（`runner.callModel` → `Stream`）。
+- 该类端点**流式 chunk 一律返回 `usage: null`**（实测确认），只有非流式响应才带 usage。
+- godex 的 `parseOpenAIStream` 只从流 chunk 里抓 usage → `resp.Usage` 恒为 `nil` → `model_request_completed` 时间线事件、session 缓存统计、状态栏全部没有 input/output/cache_read → 界面上命中率显示 0%/未知，看起来像"命中率低"。
+- 但服务端 KV 前缀缓存本身是好的：实测同一大请求第 2 次 `cached_tokens` = 12160/12208（99.6%）；模拟 agent 增长前缀（A→A+4 条消息）仍 99.4%；尾部变化不影响前缀命中；`prompt_cache_key`/`prompt_cache_retention` 参数不影响前缀缓存。
+
+**修复**（`internal/core/conversation/openai_client.go`）：OpenAI-compatible 流式请求体加 `stream_options: {"include_usage": true}`（OpenAI 标准字段），供应商就会在流尾部下发带 `cached_tokens` 的 usage chunk；godex 现有 `parseOpenAIStream` 已能解析 usage-only chunk，无需改解析器。对拒绝该字段的供应商（HTTP 400），`Stream` 会自动去掉 `stream_options` 重试一次，行为回退到旧版（仅失去观测，不报错）。
+
+> 注意：这与上文 chatgpt.com OAuth 端点的"服务端真封顶（~4%）"是**两个不同问题**。前者是观测盲区（本修复解决），后者是服务端行为（需切换官方 Responses API，见上文）。
+
+---
+
 ## English Summary
 
 The `openai_codex` provider pointed at `chatgpt.com/backend-api/codex` (ChatGPT subscription OAuth) is **server-side cache-capped**: `cache_read_tokens` stays ~2560 regardless of a byte-stable growing prefix, giving ~4% hit rate. This is backend behavior, not a client bug.

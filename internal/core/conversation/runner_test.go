@@ -23,11 +23,12 @@ func (pendingStopError) PendingPermissionRequestID() string { return "perm-1" }
 type fakeCaller struct {
 	responses []protocol.Response
 	calls     int
+	requests  []protocol.Request
 }
 
 func (f *fakeCaller) Call(ctx context.Context, req protocol.Request) (*protocol.Response, error) {
 	_ = ctx
-	_ = req
+	f.requests = append(f.requests, req)
 	resp := f.responses[f.calls]
 	f.calls++
 	return &resp, nil

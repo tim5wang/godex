@@ -323,6 +323,12 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 	lengthRecoveries := 0
 	reasoningLengthRecoveries := 0
 	injectionCycles := 0
+	// reasoningMaxTokens, once set by the reasoning-budget recovery, caps the
+	// output budget of every subsequent request in this turn. The first
+	// overflow consumed the full max_tokens on reasoning_content; keeping the
+	// ceiling at the original value would let the model re-exhaust it the same
+	// way, so after the nudge we shrink the budget and force an answer.
+	reasoningMaxTokens := 0
 	for turn := 0; turn < maxTurns; turn++ {
 		result.Turns = turn + 1
 
@@ -330,6 +336,9 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 		if err != nil {
 			r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Message: err.Error()})
 			return nil, err
+		}
+		if reasoningMaxTokens > 0 && (req.MaxTokens <= 0 || req.MaxTokens > reasoningMaxTokens) {
+			req.MaxTokens = reasoningMaxTokens
 		}
 		req.Messages = SanitizeMessagesForProvider(req.Messages)
 		r.emitPhase(PhaseEvent{Phase: PhaseContextSanitized, Iteration: turn + 1, Model: req.Model})
@@ -394,9 +403,18 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 			// brevity instruction instead.
 			if resp.StopReason == "length" && strings.TrimSpace(resp.ReasoningContent) != "" && reasoningLengthRecoveries < maxReasoningLengthRecoveries {
 				reasoningLengthRecoveries++
-				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: "model exhausted output budget on reasoning; requesting direct answer", RecoveryHint: "The provider's reasoning consumed the output token budget; the runner requested a direct, concise answer."})
+				// Shrink the output budget so the model cannot re-burn the
+				// full ceiling on reasoning again; it must answer within the
+				// reduced budget. Halving each recovery gives it room to
+				// think a little but forces a stop with visible text.
+				budget := req.MaxTokens
+				if budget <= 0 {
+					budget = 4096
+				}
+				reasoningMaxTokens = budget / 2
+				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: fmt.Sprintf("model exhausted output budget on reasoning; requesting direct answer with reduced output budget (%d)", reasoningMaxTokens), RecoveryHint: "The provider's reasoning consumed the output token budget; the runner capped the budget and requested a direct, concise answer."})
 				if r.AppendInjectedMessages != nil {
-					r.AppendInjectedMessages([]protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "Your previous response consumed its output token budget on reasoning and produced no answer. Answer directly and concisely now; keep reasoning minimal.")})
+					r.AppendInjectedMessages([]protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "Your previous response consumed its entire output token budget on reasoning and produced no answer. The output budget has been reduced. Do NOT use it for reasoning: answer directly with the final result now, in plain text, as concisely as possible.")})
 				}
 				continue
 			}

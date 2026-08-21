@@ -147,7 +147,7 @@ api:
   # Each model block:
   #   name:              human-readable model name
   #   model:             API model string sent to the provider
-  #   max_tokens:        max output tokens, default 4096
+  #   max_tokens:        max output tokens, default 8192
   #   supports_streaming: SSE streaming, default true
   #   supports_vision:   image input support, auto-detected from model name
   #   reasoning_effort:  optional hint: none|minimal|low|medium|high|xhigh

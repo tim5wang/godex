@@ -133,8 +133,14 @@ func TestRunnerReasoningOverflowRequestsDirectAnswer(t *testing.T) {
 	if !result.Completed || result.LastAssistantText != "the answer" {
 		t.Fatalf("expected completed run, got %+v", result)
 	}
-	if len(injected) != 1 || !strings.Contains(protocol.MessageText(injected[0]), "Answer directly") {
+	if len(injected) != 1 || !strings.Contains(protocol.MessageText(injected[0]), "answer directly") {
 		t.Fatalf("expected one brevity nudge, got %+v", injected)
+	}
+	// The recovery must shrink the output budget on the follow-up request so
+	// the model cannot re-exhaust the full ceiling on reasoning again.
+	lastReq := caller.requests[len(caller.requests)-1]
+	if lastReq.MaxTokens != 512 {
+		t.Fatalf("expected reduced max_tokens (1024/2=512) on recovery request, got %d", lastReq.MaxTokens)
 	}
 	// Two model calls: the overflow + the direct answer (NOT 3 blind retries).
 	if caller.calls != 2 {

@@ -1,10 +1,12 @@
 package conversation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,5 +220,174 @@ func TestOpenAIClientParsesDeepSeekCacheUsage(t *testing.T) {
 	hitRate := float64(resp.Usage.CacheReadTokens) / float64(resp.Usage.InputTokens+resp.Usage.CacheReadTokens) * 100
 	if hitRate < 80.8 || hitRate > 81.0 {
 		t.Fatalf("expected hit rate ~80.9%%, got %.2f", hitRate)
+	}
+}
+
+// TestOpenAIClientStreamIncludesUsageCovers the Volcengine ARK / GLM-style
+// endpoints that omit usage from streaming chunks by default: godex must send
+// stream_options.include_usage=true so the provider emits a final usage chunk
+// (with cached_tokens) that the stream parser can surface. Without it godex
+// would report a 0% cache hit rate even though the server caches well.
+func TestOpenAIClientStreamIncludesUsage(t *testing.T) {
+	var requestBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := new(bytes.Buffer)
+		_, _ = buf.ReadFrom(r.Body)
+		requestBody = buf.String()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"Hello!\",\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"usage\":null}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":null}\n\n" +
+				"data: {\"usage\":{\"prompt_tokens\":6956,\"completion_tokens\":16,\"total_tokens\":6972,\"prompt_tokens_details\":{\"cached_tokens\":6912},\"completion_tokens_details\":{\"reasoning_tokens\":0}}}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "glm-5.3"}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("openai-compatible stream: %v", err)
+	}
+	// The request must ask the provider to include usage in the stream tail.
+	if !strings.Contains(requestBody, `"stream_options":{"include_usage":true}`) {
+		t.Fatalf("expected stream_options.include_usage in request body, got: %s", requestBody)
+	}
+	if resp.Usage == nil {
+		t.Fatal("expected usage captured from the stream usage chunk")
+	}
+	// prompt_tokens (6956) includes cached_tokens (6912); protocol usage
+	// normalizes InputTokens to the uncached portion.
+	if resp.Usage.CacheReadTokens != 6912 || resp.Usage.InputTokens != 44 || resp.Usage.OutputTokens != 16 {
+		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "Hello!" {
+		t.Fatalf("unexpected content: %+v", resp.Content)
+	}
+}
+
+// TestOpenAIClientStreamFallbackWithoutStreamOptions covers providers that
+// reject stream_options with HTTP 400: the client must retry once without it
+// so requests keep working (only usage observability is lost).
+func TestOpenAIClientStreamFallbackWithoutStreamOptions(t *testing.T) {
+	var attempts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := new(bytes.Buffer)
+		_, _ = buf.ReadFrom(r.Body)
+		body := buf.String()
+		attempts = append(attempts, body)
+		if strings.Contains(body, `"stream_options"`) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"unknown field stream_options","type":"invalid_request_error"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"ok\",\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"usage\":null}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":null}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "strict-provider"}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("openai-compatible stream with fallback: %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("expected 2 attempts (with + without stream_options), got %d", len(attempts))
+	}
+	if !strings.Contains(attempts[0], `"stream_options"`) {
+		t.Fatalf("first attempt should include stream_options")
+	}
+	if strings.Contains(attempts[1], `"stream_options"`) {
+		t.Fatalf("retry attempt should drop stream_options, got: %s", attempts[1])
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
+		t.Fatalf("unexpected content after fallback: %+v", resp.Content)
+	}
+}
+
+// TestOpenAIClientAlwaysEmitsContentField guards against a 400 class seen on
+// strict OpenAI-compatible gateways (Volcengine ARK, AIS gateway): messages
+// whose content is omitted entirely (pure tool-call assistant turns, empty
+// tool results) fail deserialization with "missing field `content`". The wire
+// format must always carry content, even when empty (DSH does the same).
+func TestOpenAIClientAlwaysEmitsContentField(t *testing.T) {
+	assistantToolOnly := protocol.NewMessage(protocol.RoleAssistant,
+		protocol.ToolUseBlock("call_1", "read_file", map[string]interface{}{"path": "x"}),
+	)
+	toolEmptyResult := protocol.NewMessage(protocol.RoleUser,
+		protocol.ToolResultBlock("call_1", ""),
+	)
+	client := NewOpenAIClient("http://127.0.0.1:9", "test-key", 5*time.Second)
+	body, err := client.buildRequest(protocol.Request{
+		Model:    "deepseek-chat",
+		Messages: SanitizeMessagesForProvider(protocol.ToAPIMessages([]protocol.Message{assistantToolOnly, toolEmptyResult})),
+	}, false)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var decoded struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if len(decoded.Messages) != 2 {
+		t.Fatalf("expected 2 wire messages, got %d: %s", len(decoded.Messages), string(body))
+	}
+	for i, msg := range decoded.Messages {
+		if _, ok := msg["content"]; !ok {
+			t.Fatalf("wire message %d missing content field: %s", i, string(body))
+		}
+	}
+	// Empty tool results get a non-empty placeholder (gateways reject empty
+	// tool content on the wire).
+	toolMsg := decoded.Messages[1]
+	if got := toolMsg["content"]; got != "(no output)" {
+		t.Fatalf("expected empty tool result placeholder, got %q (body: %s)", got, string(body))
+	}
+}
+
+// TestOpenAIClientForwardsReasoningEffort guards that the openai_compatible
+// wire carries the configured reasoning_effort hint (mirroring the codex
+// client), so providers like the AIS gateway can tune the model's thinking
+// budget instead of defaulting to max reasoning on every turn.
+func TestOpenAIClientForwardsReasoningEffort(t *testing.T) {
+	client := NewOpenAIClient("http://127.0.0.1:9", "test-key", 5*time.Second)
+	body, err := client.buildRequest(protocol.Request{
+		Model:           "deepseek-chat",
+		ReasoningEffort: "high",
+		Messages:        protocol.ToAPIMessages([]protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "hi")}),
+	}, false)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if got := decoded["reasoning_effort"]; got != "high" {
+		t.Fatalf("expected reasoning_effort=high on wire, got %v (body: %s)", got, string(body))
+	}
+
+	// Unknown efforts are dropped rather than forwarded and rejected.
+	body, err = client.buildRequest(protocol.Request{
+		Model:           "deepseek-chat",
+		ReasoningEffort: "turbo-max",
+		Messages:        protocol.ToAPIMessages([]protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "hi")}),
+	}, false)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var decoded2 map[string]any
+	if err := json.Unmarshal(body, &decoded2); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if _, ok := decoded2["reasoning_effort"]; ok {
+		t.Fatalf("expected unknown reasoning_effort dropped, got %v (body: %s)", decoded2["reasoning_effort"], string(body))
 	}
 }

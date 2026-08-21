@@ -14,6 +14,13 @@ const (
 	StrategyPrimary    = "primary"
 	StrategyFallback   = "fallback"
 	StrategyRoundRobin = "round_robin"
+
+	// defaultModelMaxTokens is the output-token ceiling applied when a model
+	// does not declare max_tokens. 8192 gives reasoning-capable models room
+	// to think without exhausting the budget on a single turn (the old 4096
+	// ceiling was fully consumed by reasoning_content on long tool loops,
+	// producing finish_reason=length + empty answers).
+	defaultModelMaxTokens = 8192
 )
 
 // ProviderConfig describes one LLM supplier account/endpoint.
@@ -142,7 +149,7 @@ func NormalizeModel(id string, model ModelConfig) ModelConfig {
 		model.Model = model.ID
 	}
 	if model.MaxTokens <= 0 {
-		model.MaxTokens = 4096
+		model.MaxTokens = defaultModelMaxTokens
 	}
 	if !model.SupportsStreaming {
 		model.SupportsStreaming = true

@@ -68,7 +68,7 @@ func RunConfigWizard(ctx context.Context, args []string, stdin io.Reader, stdout
 
 		fmt.Fprintln(stdout, "What would you like to do?")
 		fmt.Fprintln(stdout, "  [a] Add a provider")
-			fmt.Fprintln(stdout, "  [i] Import from other coding agents (Codex/Claude Code/etc.)")
+		fmt.Fprintln(stdout, "  [i] Import from other coding agents (Codex/Claude Code/etc.)")
 		if len(providers) > 0 {
 			fmt.Fprintln(stdout, "  [r] Remove a provider")
 		}
@@ -87,12 +87,12 @@ func RunConfigWizard(ctx context.Context, args []string, stdin io.Reader, stdout
 				fmt.Fprintf(stderr, "Error: %v\n", err)
 			}
 		case "i", "import":
-				if err := interactiveImportCodex(reader, stdout, stderr, manager); err != nil {
-					fmt.Fprintf(stderr, "Error: %v\n", err)
-				}
-				// Refresh config after import.
-				cfg = manager.Current()
-			case "r", "remove":
+			if err := interactiveImportCodex(reader, stdout, stderr, manager); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+			}
+			// Refresh config after import.
+			cfg = manager.Current()
+		case "r", "remove":
 			if len(providers) == 0 {
 				fmt.Fprintln(stdout, "No providers to remove.")
 				continue
@@ -288,10 +288,10 @@ func interactiveAddProvider(reader *bufio.Reader, stdout, stderr io.Writer, mana
 			modelStr = defaultModelStr
 		}
 
-		fmt.Fprint(stdout, "Max tokens [4096]: ")
+		fmt.Fprint(stdout, "Max tokens [8192]: ")
 		maxTokensStr, _ := reader.ReadString('\n')
 		maxTokensStr = strings.TrimSpace(maxTokensStr)
-		maxTokens := 4096
+		maxTokens := 8192
 		if maxTokensStr != "" {
 			fmt.Sscanf(maxTokensStr, "%d", &maxTokens)
 		}

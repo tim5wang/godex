@@ -3,7 +3,6 @@ package relay
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -49,6 +49,13 @@ type Agent struct {
 
 	dialsMu sync.Mutex
 	dials   map[string]net.Conn // connID → dialed TCP connection (TCP forwarding)
+
+	// hubGzip records whether the connected hub advertised the gzip
+	// capability in its hello_ok. The agent compresses large frame bodies sent
+	// to the hub only when set; connecting to an old hub keeps sending plain
+	// bodies. Atomic because it is written by the connection loop and read by
+	// concurrent request/stream goroutines.
+	hubGzip atomic.Bool
 }
 
 // NewAgent creates an agent. CenterURL, NodeID, Credential, and Handler are
@@ -155,6 +162,9 @@ func (a *Agent) connectOnce(ctx context.Context) error {
 	if ack.Type != FrameHelloOK {
 		return errHelloRejected(ack.Reason)
 	}
+	// Advertise our own gzip support to the hub and learn whether the hub
+	// supports it back (a hub that never sends caps is treated as non-gzip).
+	a.hubGzip.Store(hasCap(ack.Caps, CapGzip))
 
 	a.mu.Lock()
 	a.conn = conn
@@ -216,7 +226,7 @@ func (a *Agent) connectOnce(ctx context.Context) error {
 }
 
 func (a *Agent) serveRequest(ctx context.Context, conn *websocket.Conn, frame Frame) error {
-	req, err := http.NewRequestWithContext(ctx, frame.Method, frame.Path, bytes.NewReader(decodedBody(frame.BodyB64)))
+	req, err := http.NewRequestWithContext(ctx, frame.Method, frame.Path, bytes.NewReader(decodeBodyB64(frame.BodyB64, frame.Compressed)))
 	if err != nil {
 		return a.sendError(conn, frame.ReqID, err)
 	}
@@ -330,8 +340,8 @@ func (a *Agent) handleTCPData(frame Frame) {
 	if !ok {
 		return
 	}
-	chunk, err := decodedTCPChunk(frame)
-	if err != nil || len(chunk) == 0 {
+	chunk := decodeBodyB64(frame.BodyB64, frame.Compressed)
+	if len(chunk) == 0 {
 		return
 	}
 	if _, err := dialed.Write(chunk); err != nil {
@@ -357,12 +367,14 @@ func (a *Agent) closeDial(connID string) {
 }
 
 func (a *Agent) sendTCPData(conn *websocket.Conn, connID string, chunk []byte) error {
+	bodyB64, compressed := encodeBodyB64(chunk, a.hubGzip.Load())
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
 	return writeFrame(conn, Frame{
-		Type:    FrameTCPData,
-		Payload: tcpDataPayloadJSON(connID),
-		BodyB64: base64.StdEncoding.EncodeToString(chunk),
+		Type:       FrameTCPData,
+		Payload:    tcpDataPayloadJSON(connID),
+		BodyB64:    bodyB64,
+		Compressed: compressed,
 	})
 }
 
@@ -396,17 +408,6 @@ func (a *Agent) wsURL() string {
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/api/relay"
 	return u.String()
-}
-
-func decodedBody(b64 string) []byte {
-	if b64 == "" {
-		return nil
-	}
-	data, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return nil
-	}
-	return data
 }
 
 type helloRejectedError struct{ reason string }

@@ -2,7 +2,6 @@ package relay
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +55,10 @@ type hubConn struct {
 	tcpStreams map[string]chan Frame
 	lastPong   time.Time
 	closed     bool
+	// gzip records whether this node advertised the gzip capability in its
+	// hello. The hub compresses large frame bodies sent to this node only when
+	// set; old nodes that do not advertise it keep receiving plain bodies.
+	gzip bool
 }
 
 // Hub accepts outbound WebSocket connections from nodes, maintains the
@@ -234,10 +237,7 @@ func (h *Hub) Forward(ctx context.Context, nodeID string, req ForwardRequest) (*
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case frame := <-ch:
-			chunk, decodeErr := base64.StdEncoding.DecodeString(frame.BodyB64)
-			if decodeErr != nil {
-				return nil, decodeErr
-			}
+			chunk := decodeBodyB64(frame.BodyB64, frame.Compressed)
 			if frame.Type == FrameError {
 				return nil, fmt.Errorf("relay request to node %s failed: %s", nodeID, frame.Reason)
 			}
@@ -273,10 +273,7 @@ func (h *Hub) ForwardStream(ctx context.Context, nodeID string, req ForwardReque
 		case <-ctx.Done():
 			return ctx.Err()
 		case frame := <-ch:
-			chunk, decodeErr := base64.StdEncoding.DecodeString(frame.BodyB64)
-			if decodeErr != nil {
-				return decodeErr
-			}
+			chunk := decodeBodyB64(frame.BodyB64, frame.Compressed)
 			if frame.Type == FrameError {
 				return fmt.Errorf("relay stream to node %s failed: %s", nodeID, frame.Reason)
 			}
@@ -308,17 +305,20 @@ func (h *Hub) startRequest(ctx context.Context, nodeID string, req ForwardReques
 		return nil, ErrNodeOffline
 	}
 	conn.pending[reqID] = ch
+	gzip := conn.gzip
 	conn.mu.Unlock()
 	h.mu.Unlock()
 
+	bodyB64, compressed := encodeBodyB64(req.Body, gzip)
 	frame := Frame{
-		Type:    FrameRequest,
-		ReqID:   reqID,
-		Method:  req.Method,
-		Path:    req.Path,
-		Query:   req.Query,
-		Headers: req.Headers,
-		BodyB64: base64.StdEncoding.EncodeToString(req.Body),
+		Type:       FrameRequest,
+		ReqID:      reqID,
+		Method:     req.Method,
+		Path:       req.Path,
+		Query:      req.Query,
+		Headers:    req.Headers,
+		BodyB64:    bodyB64,
+		Compressed: compressed,
 	}
 	if err := conn.write(frame); err != nil {
 		h.dropPending(nodeID, reqID)
@@ -378,6 +378,7 @@ func (h *Hub) handleConn(ws *websocket.Conn) {
 		pending:    make(map[string]chan Frame),
 		tcpStreams: make(map[string]chan Frame),
 		lastPong:   time.Now(),
+		gzip:       hasCap(hello.Caps, CapGzip),
 	}
 
 	h.mu.Lock()
@@ -391,7 +392,10 @@ func (h *Hub) handleConn(ws *websocket.Conn) {
 		h.statusHook(nodeID, true)
 	}
 
-	if err := conn.write(Frame{Type: FrameHelloOK, Version: hello.Version}); err != nil {
+	// Advertise the hub's own capabilities (gzip support) so the node can
+	// compress frames it sends back. Old hubs that never send a caps list are
+	// treated as non-gzip by the node.
+	if err := conn.write(Frame{Type: FrameHelloOK, Version: hello.Version, Caps: []string{CapGzip}}); err != nil {
 		h.removeConn(nodeID, conn)
 		return
 	}

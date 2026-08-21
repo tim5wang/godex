@@ -2,7 +2,6 @@ package relay
 
 import (
 	"bytes"
-	"encoding/base64"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -13,9 +12,9 @@ import (
 // single FrameResponse for backward compatibility; handlers that call Flush
 // (SSE-style) switch to FrameStream chunks terminated by FrameStreamEnd.
 type streamWriter struct {
-	agent  *Agent
-	conn   *websocket.Conn
-	reqID  string
+	agent *Agent
+	conn  *websocket.Conn
+	reqID string
 
 	header      http.Header
 	status      int
@@ -98,22 +97,26 @@ func (w *streamWriter) Close() error {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
+	bodyB64, compressed := encodeBodyB64(w.buffer.Bytes(), w.agent.hubGzip.Load())
 	return w.send(Frame{
-		Type:    FrameResponse,
-		ReqID:   w.reqID,
-		Status:  w.status,
-		Headers: headers,
-		BodyB64: base64.StdEncoding.EncodeToString(w.buffer.Bytes()),
+		Type:       FrameResponse,
+		ReqID:      w.reqID,
+		Status:     w.status,
+		Headers:    headers,
+		BodyB64:    bodyB64,
+		Compressed: compressed,
 	})
 }
 
 func (w *streamWriter) sendStream(chunk []byte) {
+	bodyB64, compressed := encodeBodyB64(chunk, w.agent.hubGzip.Load())
 	_ = w.send(Frame{
-		Type:    FrameStream,
-		ReqID:   w.reqID,
-		Status:  w.status,
-		Headers: headersMap(w.header),
-		BodyB64: base64.StdEncoding.EncodeToString(chunk),
+		Type:       FrameStream,
+		ReqID:      w.reqID,
+		Status:     w.status,
+		Headers:    headersMap(w.header),
+		BodyB64:    bodyB64,
+		Compressed: compressed,
 	})
 }
 

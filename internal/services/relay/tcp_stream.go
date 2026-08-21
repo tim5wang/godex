@@ -3,7 +3,6 @@ package relay
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -110,9 +109,9 @@ func (s *tcpStream) Read(p []byte) (int, error) {
 		}
 		switch frame.Type {
 		case FrameTCPData:
-			chunk, err := decodedTCPChunk(frame)
-			if err != nil {
-				return 0, err
+			chunk := decodeBodyB64(frame.BodyB64, frame.Compressed)
+			if len(chunk) == 0 {
+				continue
 			}
 			s.buf.Write(chunk)
 		case FrameTCPClose:
@@ -124,7 +123,8 @@ func (s *tcpStream) Read(p []byte) (int, error) {
 	return s.buf.Read(p)
 }
 
-// Write forwards p to the node's dialed connection as a tcp_data frame.
+// Write forwards p to the node's dialed connection as a tcp_data frame,
+// compressed when the target node advertised gzip support.
 func (s *tcpStream) Write(p []byte) (int, error) {
 	s.hub.mu.Lock()
 	conn, ok := s.hub.conns[s.nodeID]
@@ -132,10 +132,12 @@ func (s *tcpStream) Write(p []byte) (int, error) {
 	if !ok {
 		return 0, ErrNodeOffline
 	}
+	bodyB64, compressed := encodeBodyB64(p, conn.gzip)
 	if err := conn.write(Frame{
-		Type:    FrameTCPData,
-		Payload: tcpDataPayloadJSON(s.connID),
-		BodyB64: base64.StdEncoding.EncodeToString(p),
+		Type:       FrameTCPData,
+		Payload:    tcpDataPayloadJSON(s.connID),
+		BodyB64:    bodyB64,
+		Compressed: compressed,
 	}); err != nil {
 		return 0, err
 	}

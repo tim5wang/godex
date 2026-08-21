@@ -87,10 +87,20 @@ type Frame struct {
 	Headers    map[string]string `json:"headers,omitempty"`
 	Status     int               `json:"status,omitempty"`
 	BodyB64    string            `json:"body_b64,omitempty"`
+	Compressed bool              `json:"compressed,omitempty"`
 	Final      bool              `json:"final,omitempty"`
 	Kind       string            `json:"kind,omitempty"`
 	Payload    json.RawMessage   `json:"payload,omitempty"`
 }
+
+// CapGzip is a relay capability negotiated in the hello handshake. When both
+// the node and the hub advertise it, large frame bodies are gzip-compressed
+// before base64 encoding to slash cross-network traffic (LLM contexts are
+// highly compressible JSON). Frames whose body is below the compression
+// threshold stay plain so small control frames pay no CPU cost. The flag lives
+// per frame (Compressed), so a peer that does not advertise gzip simply never
+// sees compressed bodies — old nodes keep working unchanged.
+const CapGzip = "gzip"
 
 // EncodeFrame serializes a frame to its wire representation.
 func EncodeFrame(f Frame) ([]byte, error) {

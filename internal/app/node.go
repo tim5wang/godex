@@ -15,8 +15,10 @@ import (
 	"sync"
 
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/llm"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
+	"github.com/tim5wang/godex/internal/services/usage"
 )
 
 func nodeHelpText() string {
@@ -45,6 +47,14 @@ func nodeHelpText() string {
 		"  --credential <ck>  Center-issued node credential, ck_... (required)",
 		"  --trust <level>    trusted | guarded-remote (default trusted)",
 		"  --name <name>      Human-readable node name",
+		"  --llm-proxy [key]  Also write a local provider that routes LLM calls",
+		"                     through this center's usage gateway. Pass an existing",
+		"                     gdx_ key to use it, or omit the value (or pass 'auto')",
+		"                     to create one via the center's usage API; the latter",
+		"                     needs --token (center web token).",
+		"  --llm-models <ids> Comma-separated model ids for the LLM proxy provider",
+		"                     (default: fetch the center's /v1/models list)",
+		"  --token <token>    Center web token (needed for --llm-proxy auto)",
 		"",
 		"Flags (forward):",
 		"  --node <id>        Target node id (default: control.default_node)",
@@ -319,13 +329,20 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 	// The center URL is the first positional argument; Go's flag package stops
 	// parsing at the first non-flag argument, so extract it before flag.Parse.
 	centerURL := strings.TrimSpace(args[0])
+	// --llm-proxy takes an optional value (a gdx_ key). A bare --llm-proxy
+	// (followed by another flag or nothing) means "auto-create the key", so
+	// normalize it to --llm-proxy=auto before flag.Parse.
+	args = normalizeLLMProxyFlag(args)
 	fs := flag.NewFlagSet("node join", flag.ContinueOnError)
 	fs.SetOutput(r.Stderr)
-	var nodeID, credential, trustLevel, name string
+	var nodeID, credential, trustLevel, name, llmProxy, llmModels, token string
 	fs.StringVar(&nodeID, "id", "", "node id to register under (required)")
 	fs.StringVar(&credential, "credential", "", "center-issued node credential, ck_... (required)")
 	fs.StringVar(&trustLevel, "trust", "trusted", "trust level: trusted | guarded-remote")
 	fs.StringVar(&name, "name", "", "human-readable node name")
+	fs.StringVar(&llmProxy, "llm-proxy", "", "gdx_ key to use for the LLM proxy provider, or 'auto' to create one via the center (requires --token)")
+	fs.StringVar(&llmModels, "llm-models", "", "comma-separated model ids for the LLM proxy provider (default: fetch the center's /v1/models)")
+	fs.StringVar(&token, "token", "", "center web token (needed for --llm-proxy auto)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -336,6 +353,9 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 	credential = strings.TrimSpace(credential)
 	trustLevel = strings.TrimSpace(trustLevel)
 	name = strings.TrimSpace(name)
+	llmProxy = strings.TrimSpace(llmProxy)
+	llmModels = strings.TrimSpace(llmModels)
+	token = strings.TrimSpace(token)
 
 	if err := validateJoinArgs(centerURL, nodeID, credential, trustLevel); err != nil {
 		return err
@@ -367,9 +387,251 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 			return fmt.Errorf("sync node id file: %w", err)
 		}
 	}
+	if llmProxy != "" {
+		if err := r.configureLLMProxy(ctx, centerURL, nodeID, llmProxy, llmModels, token); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintf(r.Stdout, "node %q configured to join %s (trust=%s)\n", nodeID, centerURL, trustLevel)
+	if llmProxy != "" {
+		baseURL, _ := usageGatewayBaseURL(centerURL)
+		fmt.Fprintf(r.Stdout, "llm proxy provider %q written (base_url %s, key in %s)\n", llmProxyProviderID, baseURL, llmProxyKeyEnv)
+	}
 	fmt.Fprintln(r.Stdout, "restart 'godex serve' to complete the join")
 	return nil
+}
+
+// normalizeLLMProxyFlag rewrites a bare --llm-proxy (whose next token is
+// another flag or absent) into --llm-proxy=auto so the flag package accepts
+// the optional-value form.
+func normalizeLLMProxyFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--llm-proxy" {
+			next := ""
+			if i+1 < len(args) {
+				next = args[i+1]
+			}
+			if next == "" || strings.HasPrefix(next, "-") {
+				a = "--llm-proxy=auto"
+			}
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+const (
+	// llmProxyProviderID is the provider id written by node join --llm-proxy.
+	llmProxyProviderID = "center-llm"
+	// llmProxyKeyEnv is the home .env variable holding the gdx_ key. The key
+	// itself never lands in godex.yaml (mirroring GODEX_CONTROL_CREDENTIAL).
+	llmProxyKeyEnv = "GODEX_CENTER_LLM_KEY"
+)
+
+// configureLLMProxy writes a local openai_compatible provider that routes LLM
+// calls through the center's usage gateway. keyOrAuto is either an existing
+// gdx_ key or "auto", in which case a new key is created via the center's
+// usage API using the web token.
+func (r *Runner) configureLLMProxy(ctx context.Context, centerURL, nodeID, keyOrAuto, llmModels, token string) error {
+	var gdxKey string
+	if keyOrAuto == "auto" {
+		if token == "" {
+			return fmt.Errorf("--llm-proxy auto requires --token (center web token) to create a usage key")
+		}
+		var models []string
+		for _, m := range splitCSV(llmModels) {
+			models = append(models, strings.TrimSpace(m))
+		}
+		created, err := createCenterUsageKey(ctx, centerURL, token, "node-"+nodeID, models)
+		if err != nil {
+			return fmt.Errorf("create center usage key: %w", err)
+		}
+		gdxKey = created
+		fmt.Fprintf(r.Stdout, "created usage key %s for node %q\n", maskSecret(gdxKey), nodeID)
+	} else {
+		if !strings.HasPrefix(keyOrAuto, usage.KeyPrefix) {
+			return fmt.Errorf("invalid --llm-proxy value %q: expected a gdx_ key or 'auto'", keyOrAuto)
+		}
+		gdxKey = keyOrAuto
+	}
+	models := splitCSV(llmModels)
+	if len(models) == 0 {
+		fetched, err := fetchCenterModels(ctx, centerURL, gdxKey)
+		if err != nil {
+			return fmt.Errorf("fetch center models: %w (pass --llm-models to list them explicitly)", err)
+		}
+		models = fetched
+	}
+	if len(models) == 0 {
+		return fmt.Errorf("no models available for the LLM proxy provider (pass --llm-models m1,m2)")
+	}
+	baseURL, err := usageGatewayBaseURL(centerURL)
+	if err != nil {
+		return err
+	}
+	modelMap := make(map[string]llm.ModelConfig, len(models))
+	for _, m := range models {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		modelMap[m] = llm.ModelConfig{ID: m, Model: m, Name: m, SupportsStreaming: true}
+	}
+	providers, err := r.existingProviders()
+	if err != nil {
+		return err
+	}
+	providers[llmProxyProviderID] = llm.ProviderConfig{
+		Name:      "Center LLM Proxy",
+		Type:      llm.ProviderOpenAICompatible,
+		BaseURL:   baseURL,
+		APIKeyEnv: llmProxyKeyEnv,
+		Models:    modelMap,
+	}
+	if err := r.ConfigManager.UpdateProviders(providers); err != nil {
+		return fmt.Errorf("write llm proxy provider: %w", err)
+	}
+	if err := r.ConfigManager.WriteHomeEnvVar(llmProxyKeyEnv, gdxKey); err != nil {
+		return fmt.Errorf("write llm proxy key env: %w", err)
+	}
+	return nil
+}
+
+// existingProviders returns the current stored provider set (plaintext keys
+// included) so the LLM proxy provider can be merged without clobbering the
+// node's existing providers.
+func (r *Runner) existingProviders() (map[string]llm.ProviderConfig, error) {
+	raw, err := r.ConfigManager.Reveal("api.providers")
+	if err != nil {
+		return nil, fmt.Errorf("read existing providers: %w", err)
+	}
+	providers := map[string]llm.ProviderConfig{}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return providers, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &providers); err != nil {
+		return nil, fmt.Errorf("parse existing providers: %w", err)
+	}
+	if providers == nil {
+		providers = map[string]llm.ProviderConfig{}
+	}
+	return providers, nil
+}
+
+// splitCSV splits a comma-separated list, dropping empties.
+func splitCSV(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// usageGatewayBaseURL builds the center-side OpenAI-compatible base URL. The
+// webui serves the API under /api (and strips the prefix), so the external
+// path is <center>/api/v1.
+func usageGatewayBaseURL(centerURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerURL))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return "", fmt.Errorf("invalid center URL %q", centerURL)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), nil
+}
+
+// createCenterUsageKey creates a usage gateway key on the center via
+// POST /api/usage/keys and returns the plaintext secret.
+func createCenterUsageKey(ctx context.Context, centerURL, token, name string, models []string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerURL))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return "", fmt.Errorf("invalid center URL %q", centerURL)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/usage/keys"
+	u.RawQuery = ""
+	u.Fragment = ""
+	body, err := json.Marshal(usage.KeyCreateRequest{Name: name, AllowedModels: models})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("center returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var created usage.KeyCreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return "", fmt.Errorf("decode center response: %w", err)
+	}
+	if !strings.HasPrefix(created.Secret, usage.KeyPrefix) {
+		return "", fmt.Errorf("center returned an invalid key (missing %s prefix)", usage.KeyPrefix)
+	}
+	return created.Secret, nil
+}
+
+// fetchCenterModels lists the center's available public models via
+// GET /api/v1/models (authenticated with the gdx_ key).
+func fetchCenterModels(ctx context.Context, centerURL, gdxKey string) ([]string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerURL))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return nil, fmt.Errorf("invalid center URL %q", centerURL)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/models"
+	u.RawQuery = ""
+	u.Fragment = ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+gdxKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("center returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, fmt.Errorf("decode center models: %w", err)
+	}
+	var ids []string
+	for _, m := range list.Data {
+		if m.ID = strings.TrimSpace(m.ID); m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
+}
+
+// maskSecret shows only the first few characters of a secret.
+func maskSecret(secret string) string {
+	if len(secret) <= 4 {
+		return "****"
+	}
+	return secret[:4] + "..." + secret[len(secret)-4:]
 }
 
 func validateJoinArgs(centerURL, nodeID, credential, trustLevel string) error {

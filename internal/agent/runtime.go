@@ -930,11 +930,17 @@ type DefaultSkillLoadResult struct {
 }
 
 func loadDefaultSkills(agent *Agent) DefaultSkillLoadResult {
-	result := DefaultSkillLoadResult{}
 	if agent == nil || agent.cfg == nil {
-		return result
+		return DefaultSkillLoadResult{}
 	}
-	for _, skillName := range agent.cfg.DefaultSkills {
+	return loadSkillNames(agent, agent.cfg.DefaultSkills)
+}
+
+// loadSkillNames activates an explicit list of skill names into the agent,
+// tolerating missing skills as diagnostics rather than hard failures.
+func loadSkillNames(agent *Agent, names []string) DefaultSkillLoadResult {
+	result := DefaultSkillLoadResult{}
+	for _, skillName := range names {
 		skillName = strings.TrimSpace(skillName)
 		if skillName == "" {
 			continue
@@ -953,6 +959,13 @@ func loadDefaultSkills(agent *Agent) DefaultSkillLoadResult {
 		result.Loaded = append(result.Loaded, skillName)
 	}
 	return result
+}
+
+// LoadNamedSkills activates an explicit list of skill names for a fresh
+// session, e.g. skills requested at session creation. Missing skills are
+// reported in the result rather than failing the session.
+func (a *Agent) LoadNamedSkills(names []string) DefaultSkillLoadResult {
+	return loadSkillNames(a, names)
 }
 
 func todoListPayload(items []todo.Item, sourceToolCallID, sourceToolName string) events.TodoListPayload {

@@ -189,9 +189,11 @@ func (r *Runner) runAsk(ctx context.Context, args []string) error {
 	var sessionSpec string
 	var useStdin bool
 	var profile string
+	var skillsCSV string
 	fs.StringVar(&sessionSpec, "session", "", "existing session key or channel:key")
 	fs.BoolVar(&useStdin, "stdin", false, "read the prompt from stdin")
 	fs.StringVar(&profile, "profile", "", "agent profile for this prompt: general or coding")
+	fs.StringVar(&skillsCSV, "skills", "", "comma-separated installed skills to load for this new session")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -216,6 +218,7 @@ func (r *Runner) runAsk(ctx context.Context, args []string) error {
 
 	locator := parseSessionSpecifier(sessionSpec, "cli", oneShotKey(r.Now()))
 	applyLocatorAgentProfile(&locator, profile)
+	applyLocatorRequestedSkills(&locator, skillsCSV)
 	opened, err := r.Backend.OpenSession(ctx, locator)
 	if err != nil {
 		return err
@@ -1243,6 +1246,20 @@ func applyLocatorAgentProfile(locator *backend.SessionLocator, profile string) {
 		locator.Metadata = map[string]string{}
 	}
 	locator.Metadata["agent_profile"] = profile
+}
+
+// applyLocatorRequestedSkills folds a comma-separated --skills value into the
+// session locator metadata so a fresh session starts with exactly those
+// installed skills instead of the global default set.
+func applyLocatorRequestedSkills(locator *backend.SessionLocator, skillsCSV string) {
+	skillsCSV = strings.TrimSpace(skillsCSV)
+	if skillsCSV == "" {
+		return
+	}
+	if locator.Metadata == nil {
+		locator.Metadata = map[string]string{}
+	}
+	locator.Metadata["requested_skills"] = skillsCSV
 }
 
 func applyEnvelopeAgentProfile(envelope *message.Envelope, profile string) {

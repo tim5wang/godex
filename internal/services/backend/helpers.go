@@ -654,6 +654,28 @@ func (s *Service) acquireSessionIfNeeded(ctx context.Context, sessionID string, 
 	return release, true, nil
 }
 
+// requestedSessionSkills extracts the per-session skill preset from locator
+// metadata. The value is a comma/space separated list of installed skill names
+// chosen at session creation; it is deliberately NOT part of the session
+// identity hash (stableSessionID), so resuming a session never re-derives a
+// different id from a different skill selection.
+func requestedSessionSkills(locator SessionLocator) []string {
+	raw := strings.TrimSpace(locator.Metadata[sessionRequestedSkillsMetadataKey])
+	if raw == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t'
+	})
+	out := make([]string, 0, len(fields))
+	for _, name := range fields {
+		if name = strings.TrimSpace(name); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func normalizeLocator(locator SessionLocator) SessionLocator {
 	normalized := SessionLocator{
 		Channel: strings.ToLower(strings.TrimSpace(locator.Channel)),

@@ -21,24 +21,25 @@ import (
 )
 
 const (
-	manifestFileName              = "manifest.json"
-	stateFileName                 = "state.json"
-	timelineFileName              = "timeline.json"
-	eventJournalFileName          = "events.jsonl"
-	turnsFileName                 = "turns.json"
-	turnQueueFileName             = "turn_queue.json"
-	sessionGraphFileName          = "graph.json"
-	checkpointPointerName         = "checkpoint.json"
-	checkpointsDirName            = "checkpoints"
-	securityAuditFileName         = "security/audit.jsonl"
-	attachmentsDir                = "attachments"
-	snapshotTimelineLimit         = 80
-	snapshotTurnLimit             = 20
-	persistedTurnLimit            = 200
-	sessionProjectDirMetadataKey  = "project_dir"
-	sessionGraphBranchMetadataKey = "session_graph_branch_id"
-	sessionGraphNodeMetadataKey   = "session_graph_node_id"
-	latestSessionFileName         = "latest-session"
+	manifestFileName                  = "manifest.json"
+	stateFileName                     = "state.json"
+	timelineFileName                  = "timeline.json"
+	eventJournalFileName              = "events.jsonl"
+	turnsFileName                     = "turns.json"
+	turnQueueFileName                 = "turn_queue.json"
+	sessionGraphFileName              = "graph.json"
+	checkpointPointerName             = "checkpoint.json"
+	checkpointsDirName                = "checkpoints"
+	securityAuditFileName             = "security/audit.jsonl"
+	attachmentsDir                    = "attachments"
+	snapshotTimelineLimit             = 80
+	snapshotTurnLimit                 = 20
+	persistedTurnLimit                = 200
+	sessionProjectDirMetadataKey      = "project_dir"
+	sessionRequestedSkillsMetadataKey = "requested_skills"
+	sessionGraphBranchMetadataKey     = "session_graph_branch_id"
+	sessionGraphNodeMetadataKey       = "session_graph_node_id"
+	latestSessionFileName             = "latest-session"
 )
 
 var maxAttachmentBytes int64 = 128 << 20

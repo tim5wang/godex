@@ -16,6 +16,23 @@ func (s *Service) ListSessionSkills(ctx context.Context, sessionID string) ([]sk
 	return session.agent.ListSkills()
 }
 
+// ListGlobalSkillCatalog returns installed/discoverable skill metadata
+// independent of any session. Skills install globally, so the same catalog
+// backs every session; this is used by session-creation UI to let the user
+// pick which installed skills a new session should start with.
+func (s *Service) ListGlobalSkillCatalog(ctx context.Context) ([]skill.CatalogEntry, error) {
+	_ = ctx
+	if s.cfg == nil {
+		return nil, nil
+	}
+	loader := skill.NewLoader(s.cfg.SkillsDir)
+	items, err := loader.Catalog(s.cfg.WorkspaceDir)
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // ListSessionSkillSources returns curated install sources for the session workspace.
 func (s *Service) ListSessionSkillSources(ctx context.Context, sessionID string) ([]tools.SkillSourceEntry, error) {
 	_ = ctx

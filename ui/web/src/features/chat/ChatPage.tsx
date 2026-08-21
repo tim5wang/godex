@@ -10,7 +10,8 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useChatV2Store, type DockTab, DOCK_TABS } from "../chat-v2/chatV2Store";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, APIError, cancelSessionTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, APIError, cancelSessionTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog } from "../../lib/api";
+import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
 import { isLongTaskRefluxMessage, LongTaskRefluxBubble } from "./LongTaskRefluxBubble";
@@ -248,6 +249,7 @@ export function ChatPage() {
   const noteContextId = searchParams.get("note_id")?.trim() || "";
   const workspaceDirParam = searchParams.get("workspace_dir")?.trim() || "";
   const modeParam = searchParams.get("mode")?.trim() || "";
+  const skillsParam = searchParams.get("skills")?.trim() || "";
   const sessionKey = routeSessionKey || defaultSessionKey || "";
   const sessionLocator = useMemo(() => {
     const metadata: Record<string, string> = {};
@@ -257,13 +259,16 @@ export function ChatPage() {
     if (modeParam) {
       metadata.mode = modeParam;
     }
+    if (skillsParam) {
+      metadata.requested_skills = skillsParam;
+    }
     return {
       channel: routeChannel || "web",
       key: sessionKey,
       ...(routeUserId ? { user_id: routeUserId } : {}),
       ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
     };
-  }, [routeChannel, routeUserId, sessionKey, workspaceDirParam, modeParam]);
+  }, [routeChannel, routeUserId, sessionKey, workspaceDirParam, modeParam, skillsParam]);
 
   useEffect(() => {
     if (routeSessionKey && routeChannel) {
@@ -285,6 +290,14 @@ export function ChatPage() {
     queryKey: ["session-open", token, sessionLocator.channel, sessionLocator.key, sessionLocator.user_id],
     enabled: !!sessionKey && (!authRequired || !!token),
     queryFn: async () => openSession(token || null, sessionLocator),
+  });
+
+  // Installed-skill catalog for the new-chat skill picker (skills install
+  // globally, so this is independent of any session).
+  const skillsCatalogQuery = useQuery({
+    queryKey: ["skills-catalog", token],
+    enabled: !authRequired || !!token,
+    queryFn: () => listSkillsCatalog(token || null),
   });
 
   // Resolve the session's working directory from locator metadata,
@@ -1170,7 +1183,7 @@ export function ChatPage() {
     ]);
   };
 
-  const createSession = (replace = false, workspaceDir?: string, mode?: string) => {
+  const createSession = (replace = false, workspaceDir?: string, mode?: string, skills?: string[]) => {
     const next = makeSessionKey();
     setDefaultSessionKey(next);
     reset();
@@ -1181,6 +1194,10 @@ export function ChatPage() {
     }
     if (mode?.trim() && mode.trim() !== "default") {
       query.push(`mode=${encodeURIComponent(mode.trim())}`);
+    }
+    const pickedSkills = (skills ?? []).map((s) => s.trim()).filter(Boolean);
+    if (pickedSkills.length > 0) {
+      query.push(`skills=${encodeURIComponent(pickedSkills.join(","))}`);
     }
     navigate(`${base}${query.length > 0 ? `?${query.join("&")}` : ""}`, { replace });
     setSessionsOpen(false);
@@ -1326,7 +1343,9 @@ export function ChatPage() {
               searchQuery={v2SessionSearch ?? ""}
               deletingSessionId={deleteSessionMutation.variables?.session_id ?? ""}
               onSearchChange={setV2SessionSearch}
-              onCreate={(workspaceDir, mode) => createSession(false, workspaceDir, mode)}
+              skillsCatalog={skillsCatalogQuery.data ?? []}
+              skillsLoading={skillsCatalogQuery.isLoading}
+              onCreate={(workspaceDir, mode, skills) => createSession(false, workspaceDir, mode, skills)}
               onSelect={(session) => {
                 navigate(buildChatRouteForSession(session));
               }}

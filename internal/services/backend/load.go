@@ -111,7 +111,14 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		a.RestoreStateForSession(sessionID, *state)
 		_ = s.writeSessionGraph(session)
 	} else {
-		a.LoadDefaultSkills()
+		// Per-session skill preset (requested at creation) wins over the
+		// global team.default_skills. Skills are a creation-time concern:
+		// resumed sessions keep their persisted active-skill state.
+		if requested := requestedSessionSkills(session.locator); len(requested) > 0 {
+			a.LoadNamedSkills(requested)
+		} else {
+			a.LoadDefaultSkills()
+		}
 	}
 	session.agent = a
 

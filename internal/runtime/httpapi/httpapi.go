@@ -1449,6 +1449,16 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, resolution)
 	})))
+	// Global skill catalog (independent of any session), used by the new-session
+	// flow to pick which installed skills a fresh session should start with.
+	mux.Handle("GET /skills/catalog", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items, err := service.ListGlobalSkillCatalog(r.Context())
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	})))
 	mux.Handle("GET /sessions/{id}/skills/catalog", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ListSessionSkills(r.Context(), r.PathValue("id"))
 		if err != nil {

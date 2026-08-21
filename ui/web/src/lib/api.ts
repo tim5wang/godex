@@ -876,6 +876,12 @@ export function listSessionSkills(token: string | null, sessionId: string) {
   return request<SkillCatalogEntry[]>(`/sessions/${encodeURIComponent(sessionId)}/skills/catalog`, { method: "GET" }, token);
 }
 
+/** Installed-skill catalog independent of any session, used by the new-session
+ *  flow to pick which skills a fresh session starts with. */
+export function listSkillsCatalog(token: string | null) {
+  return request<SkillCatalogEntry[]>("/skills/catalog", { method: "GET" }, token);
+}
+
 export function listSessionSkillSources(
   token: string | null,
   sessionId: string,

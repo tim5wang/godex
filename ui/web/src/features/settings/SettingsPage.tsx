@@ -125,6 +125,7 @@ export function SettingsPage() {
   const [localForm] = Form.useForm<LocalFormValues>();
   const [configForm] = Form.useForm<ConfigFormValues>();
   const [clearSecrets, setClearSecrets] = useState<Record<string, boolean>>({});
+  const [backendDirty, setBackendDirty] = useState(false);
 
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
   const authRequired = metaQuery.data?.auth_required ?? false;
@@ -214,28 +215,29 @@ export function SettingsPage() {
         setToken(rotatedToken);
       }
       setClearSecrets({});
-      void message.success("Backend config saved.");
+      setBackendDirty(false);
+      void message.success(t("settings.msgConfigSaved"));
       await refreshAll(queryClient, token);
     },
-    onError: (error) => showError(message, error, "Failed to save backend config."),
+    onError: (error) => showError(message, error, t("settings.msgConfigSaveFailed")),
   });
 
   const reloadConfigMutation = useMutation({
     mutationFn: async () => reloadConfigFromDisk(token || null),
     onSuccess: async () => {
-      void message.success("Config reloaded from disk.");
+      void message.success(t("settings.msgConfigReloaded"));
       await refreshAll(queryClient, token);
     },
-    onError: (error) => showError(message, error, "Failed to reload config from disk."),
+    onError: (error) => showError(message, error, t("settings.msgConfigReloadFailed")),
   });
 
   const restartServiceMutation = useMutation({
     mutationFn: async () => restartRuntimeService(token || null),
     onSuccess: async () => {
-      void message.success("Service restart requested.");
+      void message.success(t("settings.msgRestartRequested"));
       await queryClient.invalidateQueries({ queryKey: ["runtime-service", token] });
     },
-    onError: (error) => showError(message, error, "Failed to restart service."),
+    onError: (error) => showError(message, error, t("settings.msgRestartFailed")),
   });
 
   const revealMutation = useMutation({
@@ -244,7 +246,7 @@ export function SettingsPage() {
       configForm.setFieldValue(path, path === "api.providers" ? providersConfigToForm(parseJSONValue(value)) : value);
       setClearSecrets((current) => ({ ...current, [path]: false }));
     },
-    onError: (error) => showError(message, error, "Failed to reveal secret."),
+    onError: (error) => showError(message, error, t("settings.msgRevealFailed")),
   });
 
   const testProviderMutation = useMutation({
@@ -252,7 +254,7 @@ export function SettingsPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["providers", token] });
     },
-    onError: (error) => showError(message, error, "Provider test failed."),
+    onError: (error) => showError(message, error, t("settings.msgProviderTestFailed")),
   });
 
   const discoverModelsMutation = useMutation({
@@ -262,7 +264,7 @@ export function SettingsPage() {
       const current = providersConfigToForm(configForm.getFieldValue("api.providers"));
       const providerIndex = current.items.findIndex((provider) => provider.id === providerID);
       if (providerIndex < 0) {
-        message.warning("Provider was not found in the current form. Refresh or save the provider first.");
+        message.warning(t("settings.msgProviderNotFound"));
         return;
       }
       const nextItems = current.items.map((provider, index) => index === providerIndex ? {
@@ -270,9 +272,9 @@ export function SettingsPage() {
         models: mergeDiscoveredModels(provider.models, result.models ?? []),
       } : provider);
       configForm.setFieldValue("api.providers", { items: nextItems });
-      message.success(`Fetched ${(result.models ?? []).length} models into the form. Save backend config to apply.`);
+      message.success(t("settings.msgModelsFetched", { count: (result.models ?? []).length }));
     },
-    onError: (error) => showError(message, error, "Model discovery failed. Save the provider and verify its credential first."),
+    onError: (error) => showError(message, error, t("settings.msgModelDiscoverFailed")),
   });
 
   const startWeixinMutation = useMutation({
@@ -283,7 +285,7 @@ export function SettingsPage() {
         queryClient.invalidateQueries({ queryKey: ["channels-status", token] }),
       ]);
     },
-    onError: (error) => showError(message, error, "Failed to start Weixin login."),
+    onError: (error) => showError(message, error, t("settings.msgWeixinStartFailed")),
   });
 
   const logoutWeixinMutation = useMutation({
@@ -294,7 +296,7 @@ export function SettingsPage() {
         queryClient.invalidateQueries({ queryKey: ["channels-status", token] }),
       ]);
     },
-    onError: (error) => showError(message, error, "Failed to logout Weixin."),
+    onError: (error) => showError(message, error, t("settings.msgWeixinLogoutFailed")),
   });
 
   const sections = configSchemaQuery.data ?? [];
@@ -310,7 +312,7 @@ export function SettingsPage() {
   return (
     <div className="page-pad">
       <div className="page-action-row">
-        <Button icon={<ReloadOutlined />} onClick={() => void refreshAll(queryClient, token)}>Refresh</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => void refreshAll(queryClient, token)}>{t("settings.refresh")}</Button>
       </div>
 
       <Tabs
@@ -328,7 +330,7 @@ export function SettingsPage() {
                     setLocale(values.locale);
                     setToken(values.token.trim());
                     setDefaultSessionKey(values.defaultSessionKey.trim());
-                    void message.success("Local web settings saved.");
+                    void message.success(t("settings.msgLocalSaved"));
                   }}
                 >
                   <Form.Item name="locale" label={t("locale.label")}>
@@ -363,7 +365,7 @@ export function SettingsPage() {
               key: "backend",
             label: t("settings.backendConfigTitle"),
             children: authRequired && !token ? (
-              <Alert type="warning" showIcon message="This server requires `GODEX_WEB_TOKEN`. Save the shared token first to unlock the backend config center." />
+              <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.authAreaBackend") })} />
             ) : (
               <Space direction="vertical" size={16} style={{ width: "100%" }}>
                 <Card>
@@ -372,17 +374,17 @@ export function SettingsPage() {
                     size="small"
                     column={{ xs: 1, md: 2 }}
                     items={[
-                      { key: "file", label: "Config file", children: configMetaQuery.data?.file_path ?? "Loading..." },
-                      { key: "env", label: ".env file", children: configMetaQuery.data?.env_file ?? "Loading..." },
-                      { key: "home", label: "Home", children: configMetaQuery.data?.home_dir ?? "-" },
-                      { key: "project", label: "Project", children: configMetaQuery.data?.project_dir ?? "-" },
-                      { key: "home-config", label: "Home config", children: configMetaQuery.data?.home_config_file ?? "-" },
-                      { key: "project-config", label: "Project config", children: configMetaQuery.data?.project_config_file ?? "-" },
-                      { key: "home-env", label: "Home .env", children: configMetaQuery.data?.home_env_file ?? "-" },
-                      { key: "project-env", label: "Project .env", children: configMetaQuery.data?.project_env_file ?? "-" },
-                      { key: "revision", label: "Revision", children: configMetaQuery.data?.revision ?? "-" },
+                      { key: "file", label: t("settings.configFile"), children: configMetaQuery.data?.file_path ?? "Loading..." },
+                      { key: "env", label: t("settings.envFile"), children: configMetaQuery.data?.env_file ?? "Loading..." },
+                      { key: "home", label: t("settings.home"), children: configMetaQuery.data?.home_dir ?? "-" },
+                      { key: "project", label: t("settings.project"), children: configMetaQuery.data?.project_dir ?? "-" },
+                      { key: "home-config", label: t("settings.homeConfig"), children: configMetaQuery.data?.home_config_file ?? "-" },
+                      { key: "project-config", label: t("settings.projectConfig"), children: configMetaQuery.data?.project_config_file ?? "-" },
+                      { key: "home-env", label: t("settings.homeEnv"), children: configMetaQuery.data?.home_env_file ?? "-" },
+                      { key: "project-env", label: t("settings.projectEnv"), children: configMetaQuery.data?.project_env_file ?? "-" },
+                      { key: "revision", label: t("settings.revision"), children: configMetaQuery.data?.revision ?? "-" },
                       { key: "version", label: t("settings.version"), children: metaQuery.data?.version?.version ?? "-" },
-                      { key: "sync", label: "Config sync", children: configInSync ? "stored = effective" : "stored != effective" },
+                      { key: "sync", label: t("settings.configSync"), children: configInSync ? t("settings.storedEqualsEffective") : t("settings.storedDiffersEffective") },
                     ]}
                   />
                   <ApplyReportView report={configMetaQuery.data?.last_apply} configInSync={configInSync} />
@@ -402,7 +404,10 @@ export function SettingsPage() {
                   testing={testProviderMutation.isPending}
                   onTest={(id) => testProviderMutation.mutate(id)}
                 />
-                <Form form={configForm} layout="vertical" onFinish={(values) => saveConfigMutation.mutate(values)}>
+                <Form form={configForm} layout="vertical" onValuesChange={() => setBackendDirty(true)} onFinish={(values) => saveConfigMutation.mutate(values)}>
+                  {backendDirty ? (
+                    <Alert type="warning" showIcon style={{ marginBottom: 16 }} message={t("settings.unsavedBackendConfig")} />
+                  ) : null}
                   <Collapse
                     defaultActiveKey={sections.slice(0, 2).map((section) => section.id)}
                     items={sections.map((section) => ({
@@ -431,7 +436,7 @@ export function SettingsPage() {
                     }))}
                   />
                   <Card style={{ marginTop: 16 }}>
-                    <Button type="primary" htmlType="submit" loading={saveConfigMutation.isPending} icon={<SaveOutlined />}>Save backend config</Button>
+                    <Button type="primary" htmlType="submit" loading={saveConfigMutation.isPending} icon={<SaveOutlined />}>{t("settings.saveBackendConfig")}</Button>
                   </Card>
                 </Form>
               </Space>
@@ -439,9 +444,9 @@ export function SettingsPage() {
           },
           {
             key: "config-yaml",
-            label: "Config YAML",
+            label: t("settings.configYamlTitle"),
             children: authRequired && !token ? (
-              <Alert type="warning" showIcon message="This server requires `GODEX_WEB_TOKEN`. Save the shared token first to unlock the config YAML view." />
+              <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.authAreaYaml") })} />
             ) : (
               <ConfigYamlCard
                 storedValues={configViewQuery.data?.stored_values ?? {}}
@@ -452,9 +457,9 @@ export function SettingsPage() {
           },
           {
             key: "security",
-            label: "Security",
+            label: t("settings.securityTitle"),
             children: authRequired && !token ? (
-              <Alert type="warning" showIcon message="This server requires `GODEX_WEB_TOKEN`. Save the shared token first to unlock security state." />
+              <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.authAreaSecurity") })} />
             ) : (
               <SecurityPanel
                 summary={securityQuery.data}
@@ -466,7 +471,7 @@ export function SettingsPage() {
           },
           {
             key: "runtime",
-            label: "Runtime",
+            label: t("settings.runtimeTitle"),
             children: (
               <Space direction="vertical" size={16} style={{ width: "100%" }}>
                 <WeixinPanel
@@ -478,21 +483,21 @@ export function SettingsPage() {
                   onStart={() => startWeixinMutation.mutate()}
                   onLogout={() => logoutWeixinMutation.mutate()}
                 />
-                <Card title="Runtime channels">
+                <Card title={t("settings.runtimeChannelsTitle")}>
                   <Table<ChannelStatus>
                     rowKey="name"
                     size="small"
                     dataSource={channelsQuery.data?.channels ?? []}
                     loading={channelsQuery.isLoading}
                     columns={[
-                      { title: "Channel", dataIndex: "name" },
-                      { title: "State", render: (_value, channel) => <Tag color={channel.enabled ? (channel.running ? "green" : "gold") : "default"}>{channel.enabled ? channel.state || (channel.running ? "running" : "idle") : "disabled"}</Tag> },
-                      { title: "Capabilities", render: (_value, channel) => renderChannelCapabilities(channel.capabilities) },
-                      { title: "Delivery", render: (_value, channel) => renderDeliveryStatus(channel.last_delivery) },
-                      { title: "Access", render: (_value, channel) => renderAccessDecision(channel.last_access) },
-                      { title: "Detail", dataIndex: "detail", render: (value) => value || "-" },
-                      { title: "Updated", dataIndex: "updated_at", render: formatTimestamp },
-                      { title: "Last error", dataIndex: "last_error", render: (value) => value ? <Typography.Text type="danger">{value}</Typography.Text> : "-" },
+                      { title: t("settings.channelCol"), dataIndex: "name" },
+                      { title: t("settings.stateCol"), render: (_value, channel) => <Tag color={channel.enabled ? (channel.running ? "green" : "gold") : "default"}>{channel.enabled ? channel.state || (channel.running ? t("settings.channelRunning") : t("settings.channelIdle")) : t("settings.channelDisabled")}</Tag> },
+                      { title: t("settings.capabilitiesCol"), render: (_value, channel) => renderChannelCapabilities(channel.capabilities) },
+                      { title: t("settings.deliveryCol"), render: (_value, channel) => renderDeliveryStatus(channel.last_delivery) },
+                      { title: t("settings.accessCol"), render: (_value, channel) => renderAccessDecision(channel.last_access) },
+                      { title: t("settings.detailCol"), dataIndex: "detail", render: (value) => value || "-" },
+                      { title: t("settings.updatedCol"), dataIndex: "updated_at", render: formatTimestamp },
+                      { title: t("settings.lastErrorCol"), dataIndex: "last_error", render: (value) => value ? <Typography.Text type="danger">{value}</Typography.Text> : "-" },
                     ]}
                   />
                 </Card>
@@ -676,6 +681,7 @@ function SubagentConfigFields(props: {
     "tools.subagent.workspace_ttl_hours",
   ].includes(field.path));
   const other = props.section.fields.filter((field) => !runtime.includes(field) && !workspace.includes(field));
+  const { t } = useI18n();
   const editorProps = {
     fieldStates: props.fields,
     effectiveValues: props.effectiveValues,
@@ -690,17 +696,17 @@ function SubagentConfigFields(props: {
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
       <CompactConfigGroup
-        title="Runtime budgets"
+        title={t("settings.groupRuntimeBudgets")}
         items={runtime}
         {...editorProps}
       />
       <CompactConfigGroup
-        title="Workspace isolation"
+        title={t("settings.groupWorkspaceIsolation")}
         items={workspace}
         {...editorProps}
       />
       <CompactConfigGroup
-        title="Other"
+        title={t("settings.groupOther")}
         items={other}
         {...editorProps}
       />
@@ -737,6 +743,7 @@ function WebSearchConfigFields(props: {
   }));
   const browser = section.fields.filter((field) => field.path.startsWith("tools.web_search.browser."));
   const api = section.fields.filter((field) => !core.includes(field) && !browser.includes(field));
+  const { t } = useI18n();
   const editorProps = {
     fieldStates: props.fields,
     effectiveValues: props.effectiveValues,
@@ -751,20 +758,20 @@ function WebSearchConfigFields(props: {
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
       <CompactConfigGroup
-        title="Core search"
+        title={t("settings.groupCoreSearch")}
         items={core}
         {...editorProps}
       />
       <CompactConfigGroup
-        title="Browser provider runtime"
+        title={t("settings.groupBrowserRuntime")}
         items={browserRuntime}
         {...editorProps}
       />
       <div className="config-compact-panel">
         <Space direction="vertical" size={2}>
-          <Typography.Text strong>Browser engine selectors</Typography.Text>
+          <Typography.Text strong>{t("settings.groupBrowserSelectors")}</Typography.Text>
           <Typography.Text type="secondary" className="config-compact-description">
-            Each browser engine owns its search URL, filtered hosts, and optional CSS selectors. Leave selectors empty to scan visible links automatically.
+            {t("settings.groupBrowserSelectorsHint")}
           </Typography.Text>
         </Space>
         <div className="browser-engine-grid">
@@ -779,7 +786,7 @@ function WebSearchConfigFields(props: {
         </div>
       </div>
       <CompactConfigGroup
-        title="API providers"
+        title={t("settings.groupApiProviders")}
         items={api}
         {...editorProps}
       />
@@ -801,6 +808,7 @@ function BrowserEngineConfigPanel(props: {
   onClearSecret: (path: string) => void;
 }) {
   const { engine, fields, fieldStates, effectiveValues, clearSecrets, revealMutation, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, onClearSecret } = props;
+  const { t } = useI18n();
   const demo = browserEngineDemo(engine);
   if (fields.length === 0) {
     return null;
@@ -830,7 +838,7 @@ function BrowserEngineConfigPanel(props: {
         ))}
       </div>
       <div className="browser-selector-demo">
-        <Typography.Text strong>Selector demo</Typography.Text>
+        <Typography.Text strong>{t("settings.selectorDemo")}</Typography.Text>
         <Typography.Text type="secondary">{demo.selectorSummary}</Typography.Text>
         <pre>{demo.markup}</pre>
       </div>
@@ -939,6 +947,7 @@ function FieldEditor(props: {
   onClearSecret: () => void;
 }) {
   const { field, fieldState, effectiveValue, clearSecret, revealPending, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, onReveal, onClearSecret } = props;
+  const { t } = useI18n();
   const isProvidersField = field.path === "api.providers";
   return (
     <Card size="small" title={field.label} extra={<FieldTags field={field} state={fieldState} />}>
@@ -958,12 +967,12 @@ function FieldEditor(props: {
       <Space direction="vertical" size={8} style={{ width: "100%" }}>
         {field.secret ? (
           <Space wrap>
-            <Button size="small" icon={<EyeOutlined />} loading={revealPending} onClick={onReveal}>Reveal</Button>
-            {!isProvidersField ? <Button size="small" danger onClick={onClearSecret}>Clear</Button> : null}
-            {clearSecret && !isProvidersField ? <Tag color="red">will clear on save</Tag> : null}
+            <Button size="small" icon={<EyeOutlined />} loading={revealPending} onClick={onReveal}>{t("settings.reveal")}</Button>
+            {!isProvidersField ? <Button size="small" danger onClick={onClearSecret}>{t("settings.clear")}</Button> : null}
+            {clearSecret && !isProvidersField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
           </Space>
         ) : null}
-        <Typography.Text type="secondary">effective: {formatValue(effectiveValue)}</Typography.Text>
+        <Typography.Text type="secondary">{t("settings.effectivePrefix")}{formatValue(effectiveValue)}</Typography.Text>
       </Space>
     </Card>
   );
@@ -983,6 +992,7 @@ function CompactFieldEditor(props: {
   onClearSecret: () => void;
 }) {
   const { field, fieldState, effectiveValue, clearSecret, revealPending, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, onReveal, onClearSecret } = props;
+  const { t } = useI18n();
   const isProvidersField = field.path === "api.providers";
   const wide = field.type === "json" || field.path.endsWith("search_url_template") || field.path.includes("selector");
   return (
@@ -1007,12 +1017,12 @@ function CompactFieldEditor(props: {
       </Form.Item>
       {field.secret ? (
         <Space wrap size={6}>
-          <Button size="small" icon={<EyeOutlined />} loading={revealPending} onClick={onReveal}>Reveal</Button>
-          {!isProvidersField ? <Button size="small" danger onClick={onClearSecret}>Clear</Button> : null}
-          {clearSecret && !isProvidersField ? <Tag color="red">will clear on save</Tag> : null}
+          <Button size="small" icon={<EyeOutlined />} loading={revealPending} onClick={onReveal}>{t("settings.reveal")}</Button>
+          {!isProvidersField ? <Button size="small" danger onClick={onClearSecret}>{t("settings.clear")}</Button> : null}
+          {clearSecret && !isProvidersField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
         </Space>
       ) : null}
-      <Typography.Text type="secondary" className="config-compact-effective">effective: {formatValue(effectiveValue)}</Typography.Text>
+      <Typography.Text type="secondary" className="config-compact-effective">{t("settings.effectivePrefix")}{formatValue(effectiveValue)}</Typography.Text>
     </div>
   );
 }
@@ -1032,6 +1042,7 @@ function ConfigFieldInput(props: {
   onDiscoverModels: (id: string) => void;
 }) {
   const { field, fieldState, effectiveValue, clearSecret, compact, value, checked, onChange, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels } = props;
+  const { t } = useI18n();
   const isProvidersField = field.path === "api.providers";
   if (isProvidersField) {
     return <LLMProvidersEditor value={value} onChange={onChange as (value: LLMProvidersFormValue) => void} discoveringProviderID={discoveringProviderID} discoveringModels={discoveringModels} onDiscoverModels={onDiscoverModels} />;
@@ -1043,7 +1054,7 @@ function ConfigFieldInput(props: {
         allowClear
         value={value as string | undefined}
         onChange={onChange}
-        placeholder="provider.model"
+        placeholder={t("settings.placeholderProviderModel")}
         options={modelOptionsWithCurrent(modelOptions, [asOptionalString(effectiveValue) ?? ""])}
         optionFilterProp="label"
       />
@@ -1064,7 +1075,7 @@ function ConfigFieldInput(props: {
     );
   }
   if (field.secret) {
-    return <Input.Password value={value as string | undefined} onChange={onChange} placeholder={fieldState?.configured ? "configured (replace to update)" : "not configured"} disabled={clearSecret} />;
+    return <Input.Password value={value as string | undefined} onChange={onChange} placeholder={fieldState?.configured ? t("settings.configuredReplace") : t("settings.notConfigured")} disabled={clearSecret} />;
   }
   if (field.type === "bool") {
     return <Switch checked={!!checked} onChange={onChange} />;
@@ -1080,18 +1091,19 @@ function ConfigFieldInput(props: {
   }
   if (field.type === "string_list") {
     const values = Array.isArray(value) ? value.map(String) : String(value ?? "").split(",").map((part) => part.trim()).filter(Boolean);
-    return <Select mode="tags" value={values} onChange={onChange} tokenSeparators={[","]} open={compact ? false : undefined} placeholder="comma,separated,values" />;
+    return <Select mode="tags" value={values} onChange={onChange} tokenSeparators={[","]} open={compact ? false : undefined} placeholder={t("settings.placeholderCommaValues")} />;
   }
   return <Input value={value as string | undefined} onChange={onChange} />;
 }
 
 function FieldTags({ field, state }: { field: ConfigFieldSchema; state?: ConfigFieldState }) {
+  const { t } = useI18n();
   return (
     <Space wrap size={4}>
-      <Tag>{state?.source || "unknown"}</Tag>
-      {state?.overridden_by ? <Tag color="gold">overridden by {state.overridden_by}</Tag> : null}
-      {field.live_apply ? <Tag color="green">live apply</Tag> : <Tag>save only</Tag>}
-      {field.secret ? <Tag color={state?.configured ? "green" : "default"}>{state?.configured ? "configured" : "not set"}</Tag> : null}
+      <Tag>{state?.source || t("settings.sourceUnknown")}</Tag>
+      {state?.overridden_by ? <Tag color="gold">{t("settings.overriddenBy", { name: state.overridden_by })}</Tag> : null}
+      {field.live_apply ? <Tag color="green">{t("settings.liveApply")}</Tag> : <Tag>{t("settings.saveOnly")}</Tag>}
+      {field.secret ? <Tag color={state?.configured ? "green" : "default"}>{state?.configured ? t("settings.configuredTag") : t("settings.notSetTag")}</Tag> : null}
     </Space>
   );
 }
@@ -1110,6 +1122,7 @@ function LLMProvidersEditor({
   onDiscoverModels: (id: string) => void;
 }) {
   const providers = providersConfigToForm(value);
+  const { t } = useI18n();
   const emit = (items: LLMProviderFormItem[]) => onChange?.({ items });
   const updateProvider = (index: number, patch: Partial<LLMProviderFormItem>) => {
     emit(providers.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
@@ -1162,141 +1175,167 @@ function LLMProvidersEditor({
 
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      {providers.items.length === 0 ? <Alert type="info" showIcon message="No LLM providers configured." /> : null}
-      {providers.items.map((provider, providerIndex) => {
-        const apiKeyConfigured = stringsPresent(provider.api_key) || provider.api_key === SECRET_MASK;
-        return (
-          <div className="llm-provider-panel" key={`provider-${providerIndex}`}>
-            <div className="llm-panel-header">
-              <Space direction="vertical" size={0}>
-                <Typography.Text strong>{provider.id || "unnamed provider"}</Typography.Text>
+      {providers.items.length === 0 ? <Alert type="info" showIcon message={t("settings.noProviders")} /> : null}
+      <Collapse
+        className="llm-provider-collapse"
+        defaultActiveKey={[]}
+        items={providers.items.map((provider, providerIndex) => {
+          const apiKeyConfigured = stringsPresent(provider.api_key) || provider.api_key === SECRET_MASK;
+          return {
+            key: String(providerIndex),
+            label: (
+              <span className="llm-provider-collapse-label">
+                <Typography.Text strong>{provider.id || t("settings.unnamedProvider")}</Typography.Text>
                 <Typography.Text type="secondary">{provider.type || "anthropic_compatible"}</Typography.Text>
-              </Space>
-              <Button danger size="small" icon={<DeleteOutlined />} onClick={() => removeProvider(providerIndex)}>Remove</Button>
-            </div>
-            <div className="llm-form-grid">
-              <LabelledControl label="Provider id">
-                <Input value={provider.id} placeholder="anthropic" onChange={(event) => updateProvider(providerIndex, { id: event.target.value })} />
-              </LabelledControl>
-              <LabelledControl label="Name">
-                <Input value={provider.name} placeholder="Anthropic" onChange={(event) => updateProvider(providerIndex, { name: event.target.value })} />
-              </LabelledControl>
-              <LabelledControl label="Protocol type">
-                <Select
-                  value={provider.type || "anthropic_compatible"}
-                  options={[
-                    { value: "anthropic_compatible", label: "Anthropic compatible" },
-                    { value: "openai_compatible", label: "OpenAI compatible" },
-                    { value: "openai_codex", label: "OpenAI Codex OAuth" },
-                  ]}
-                  onChange={(type) => updateProvider(providerIndex, { type })}
-                />
-              </LabelledControl>
-              <LabelledControl label="Timeout seconds">
-                <InputNumber min={1} style={{ width: "100%" }} value={provider.timeout_seconds} onChange={(timeout) => updateProvider(providerIndex, { timeout_seconds: numberOrUndefined(timeout) })} />
-              </LabelledControl>
-              <LabelledControl label="Base URL" wide>
-                <Input value={provider.base_url} placeholder="https://api.example.com" onChange={(event) => updateProvider(providerIndex, { base_url: event.target.value })} />
-              </LabelledControl>
-              <LabelledControl label="API key env">
-                <Input value={provider.api_key_env} placeholder="OPENAI_API_KEY" onChange={(event) => updateProvider(providerIndex, { api_key_env: event.target.value })} />
-              </LabelledControl>
-              <LabelledControl label="Credential kind">
-                <Select
-                  value={provider.credential_kind || "api-key"}
-                  options={[
-                    { value: "api-key", label: "API key" },
-                    { value: "codex-oauth", label: "Codex OAuth" },
-                    { value: "oauth-token", label: "OAuth token" },
-                  ]}
-                  onChange={(credential_kind) => updateProvider(providerIndex, { credential_kind })}
-                />
-              </LabelledControl>
-              <LabelledControl label="API key" wide>
-                <Space.Compact style={{ width: "100%" }}>
-                  <Input.Password
-                    value={provider.api_key === SECRET_MASK ? "" : provider.api_key}
-                    placeholder={apiKeyConfigured ? "configured (replace to update)" : "not configured"}
-                    onChange={(event) => updateProvider(providerIndex, { api_key: event.target.value })}
-                  />
-                  <Button danger onClick={() => updateProvider(providerIndex, { api_key: "" })}>Clear key</Button>
-                </Space.Compact>
-              </LabelledControl>
-            </div>
-            <div className="llm-models-block">
-              <div className="llm-panel-header">
-                <Typography.Text strong>Models</Typography.Text>
-                <Space size={8}>
-                  <Button
-                    size="small"
-                    icon={<ReloadOutlined />}
-                    disabled={!stringsPresent(provider.id)}
-                    loading={discoveringModels && discoveringProviderID === provider.id}
-                    onClick={() => onDiscoverModels(provider.id)}
-                  >
-                    Fetch models
-                  </Button>
-                  <Button size="small" icon={<PlusOutlined />} onClick={() => addModel(providerIndex)}>Add model</Button>
-                </Space>
-              </div>
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                {provider.models.length === 0 ? <Typography.Text type="secondary">No models declared for this provider.</Typography.Text> : null}
-                {provider.models.map((model, modelIndex) => (
-                  <div className="llm-model-row" key={`provider-${providerIndex}-model-${modelIndex}`}>
-                    <LabelledControl label="Model id">
-                      <Input value={model.id} placeholder="sonnet" onChange={(event) => updateModel(providerIndex, modelIndex, { id: event.target.value })} />
-                    </LabelledControl>
-                    <LabelledControl label="Name">
-                      <Input value={model.name} placeholder="Claude Sonnet" onChange={(event) => updateModel(providerIndex, modelIndex, { name: event.target.value })} />
-                    </LabelledControl>
-                    <LabelledControl label="Actual model">
-                      <Input value={model.model} placeholder="claude-sonnet-4-20250514" onChange={(event) => updateModel(providerIndex, modelIndex, { model: event.target.value })} />
-                    </LabelledControl>
-                    <LabelledControl label="Max tokens">
-                      <InputNumber min={1} style={{ width: "100%" }} value={model.max_tokens} onChange={(tokens) => updateModel(providerIndex, modelIndex, { max_tokens: numberOrUndefined(tokens) })} />
-                    </LabelledControl>
-                    <LabelledControl label="Context window (tokens)">
-                      <InputNumber
-                        min={1}
-                        style={{ width: "100%" }}
-                        placeholder="default (global config)"
-                        value={model.context_window_tokens}
-                        onChange={(tokens) => updateModel(providerIndex, modelIndex, { context_window_tokens: numberOrUndefined(tokens) })}
+                <Tag color={apiKeyConfigured ? "green" : "default"}>
+                  {t("settings.modelsLabel")} {provider.models.length}
+                </Tag>
+                <Tag color={apiKeyConfigured ? "green" : "gold"}>
+                  {apiKeyConfigured ? t("settings.credentialPresent") : t("settings.credentialMissing")}
+                </Tag>
+              </span>
+            ),
+            extra: (
+              <Button
+                danger
+                size="small"
+                icon={<DeleteOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  removeProvider(providerIndex);
+                }}
+              >
+                {t("settings.remove")}
+              </Button>
+            ),
+            children: (
+              <div className="llm-provider-panel">
+                <div className="llm-form-grid">
+                  <LabelledControl label={t("settings.providerIDLabel")}>
+                    <Input value={provider.id} placeholder="anthropic" onChange={(event) => updateProvider(providerIndex, { id: event.target.value })} />
+                  </LabelledControl>
+                  <LabelledControl label={t("settings.name")}>
+                    <Input value={provider.name} placeholder="Anthropic" onChange={(event) => updateProvider(providerIndex, { name: event.target.value })} />
+                  </LabelledControl>
+                  <LabelledControl label={t("settings.protocolType")}>
+                    <Select
+                      value={provider.type || "anthropic_compatible"}
+                      options={[
+                        { value: "anthropic_compatible", label: "Anthropic compatible" },
+                        { value: "openai_compatible", label: "OpenAI compatible" },
+                        { value: "openai_codex", label: "OpenAI Codex OAuth" },
+                      ]}
+                      onChange={(type) => updateProvider(providerIndex, { type })}
+                    />
+                  </LabelledControl>
+                  <LabelledControl label={t("settings.timeoutSeconds")}>
+                    <InputNumber min={1} style={{ width: "100%" }} value={provider.timeout_seconds} onChange={(timeout) => updateProvider(providerIndex, { timeout_seconds: numberOrUndefined(timeout) })} />
+                  </LabelledControl>
+                  <LabelledControl label={t("settings.baseURL")} wide>
+                    <Input value={provider.base_url} placeholder="https://api.example.com" onChange={(event) => updateProvider(providerIndex, { base_url: event.target.value })} />
+                  </LabelledControl>
+                  <LabelledControl label={t("settings.apiKeyEnv")}>
+                    <Input value={provider.api_key_env} placeholder="OPENAI_API_KEY" onChange={(event) => updateProvider(providerIndex, { api_key_env: event.target.value })} />
+                  </LabelledControl>
+                  <LabelledControl label={t("settings.credentialKind")}>
+                    <Select
+                      value={provider.credential_kind || "api-key"}
+                      options={[
+                        { value: "api-key", label: "API key" },
+                        { value: "codex-oauth", label: "Codex OAuth" },
+                        { value: "oauth-token", label: "OAuth token" },
+                      ]}
+                      onChange={(credential_kind) => updateProvider(providerIndex, { credential_kind })}
+                    />
+                  </LabelledControl>
+                  <LabelledControl label={t("settings.apiKey")} wide>
+                    <Space.Compact style={{ width: "100%" }}>
+                      <Input.Password
+                        value={provider.api_key === SECRET_MASK ? "" : provider.api_key}
+                        placeholder={apiKeyConfigured ? t("settings.configuredReplace") : t("settings.notConfigured")}
+                        onChange={(event) => updateProvider(providerIndex, { api_key: event.target.value })}
                       />
-                    </LabelledControl>
-                    <LabelledControl label="Streaming">
-                      <Switch checked={model.supports_streaming !== false} onChange={(supports_streaming) => updateModel(providerIndex, modelIndex, { supports_streaming })} />
-                    </LabelledControl>
-                    <LabelledControl label="Vision">
-                      <Switch checked={!!model.supports_vision} onChange={(supports_vision) => updateModel(providerIndex, modelIndex, { supports_vision })} />
-                    </LabelledControl>
-                    <LabelledControl label="Reasoning effort">
-                      <Select
-                        allowClear
-                        placeholder="default"
-                        value={model.reasoning_effort || undefined}
-                        onChange={(reasoning_effort) => updateModel(providerIndex, modelIndex, { reasoning_effort })}
-                        options={reasoningEffortOptions}
-                      />
-                    </LabelledControl>
-                    <LabelledControl label="Tags" wide>
-                      <Input value={model.tags} placeholder="coding,fast" onChange={(event) => updateModel(providerIndex, modelIndex, { tags: event.target.value })} />
-                    </LabelledControl>
-                    <Button danger icon={<DeleteOutlined />} onClick={() => removeModel(providerIndex, modelIndex)}>Remove model</Button>
+                      <Button danger onClick={() => updateProvider(providerIndex, { api_key: "" })}>{t("settings.clearKey")}</Button>
+                    </Space.Compact>
+                  </LabelledControl>
+                </div>
+                <div className="llm-models-block">
+                  <div className="llm-panel-header">
+                    <Typography.Text strong>{t("settings.modelsLabel")}</Typography.Text>
+                    <Space size={8}>
+                      <Button
+                        size="small"
+                        icon={<ReloadOutlined />}
+                        disabled={!stringsPresent(provider.id)}
+                        loading={discoveringModels && discoveringProviderID === provider.id}
+                        onClick={() => onDiscoverModels(provider.id)}
+                      >
+                        {t("settings.fetchModels")}
+                      </Button>
+                      <Button size="small" icon={<PlusOutlined />} onClick={() => addModel(providerIndex)}>{t("settings.addModel")}</Button>
+                    </Space>
                   </div>
-                ))}
-              </Space>
-            </div>
-          </div>
-        );
-      })}
-      <Button icon={<PlusOutlined />} onClick={addProvider}>Add provider</Button>
+                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                    {provider.models.length === 0 ? <Typography.Text type="secondary">{t("settings.noModels")}</Typography.Text> : null}
+                    {provider.models.map((model, modelIndex) => (
+                      <div className="llm-model-row" key={`provider-${providerIndex}-model-${modelIndex}`}>
+                        <LabelledControl label={t("settings.modelIDLabel")}>
+                          <Input value={model.id} placeholder="sonnet" onChange={(event) => updateModel(providerIndex, modelIndex, { id: event.target.value })} />
+                        </LabelledControl>
+                        <LabelledControl label={t("settings.name")}>
+                          <Input value={model.name} placeholder="Claude Sonnet" onChange={(event) => updateModel(providerIndex, modelIndex, { name: event.target.value })} />
+                        </LabelledControl>
+                        <LabelledControl label={t("settings.actualModelLabel")}>
+                          <Input value={model.model} placeholder="claude-sonnet-4-20250514" onChange={(event) => updateModel(providerIndex, modelIndex, { model: event.target.value })} />
+                        </LabelledControl>
+                        <LabelledControl label={t("settings.maxTokensLabel")}>
+                          <InputNumber min={1} style={{ width: "100%" }} value={model.max_tokens} onChange={(tokens) => updateModel(providerIndex, modelIndex, { max_tokens: numberOrUndefined(tokens) })} />
+                        </LabelledControl>
+                        <LabelledControl label={t("settings.contextWindowLabel")}>
+                          <InputNumber
+                            min={1}
+                            style={{ width: "100%" }}
+                            placeholder={t("settings.defaultContextPlaceholder")}
+                            value={model.context_window_tokens}
+                            onChange={(tokens) => updateModel(providerIndex, modelIndex, { context_window_tokens: numberOrUndefined(tokens) })}
+                          />
+                        </LabelledControl>
+                        <LabelledControl label={t("settings.streamingLabel")}>
+                          <Switch checked={model.supports_streaming !== false} onChange={(supports_streaming) => updateModel(providerIndex, modelIndex, { supports_streaming })} />
+                        </LabelledControl>
+                        <LabelledControl label={t("settings.visionLabel")}>
+                          <Switch checked={!!model.supports_vision} onChange={(supports_vision) => updateModel(providerIndex, modelIndex, { supports_vision })} />
+                        </LabelledControl>
+                        <LabelledControl label={t("settings.reasoningEffortLabel")}>
+                          <Select
+                            allowClear
+                            placeholder="default"
+                            value={model.reasoning_effort || undefined}
+                            onChange={(reasoning_effort) => updateModel(providerIndex, modelIndex, { reasoning_effort })}
+                            options={reasoningEffortOptions}
+                          />
+                        </LabelledControl>
+                        <Button danger icon={<DeleteOutlined />} onClick={() => removeModel(providerIndex, modelIndex)}>{t("settings.removeModel")}</Button>
+                        <LabelledControl label={t("settings.tagsLabel")} wide>
+                          <Input value={model.tags} placeholder="coding,fast" onChange={(event) => updateModel(providerIndex, modelIndex, { tags: event.target.value })} />
+                        </LabelledControl>
+                      </div>
+                    ))}
+                  </Space>
+                </div>
+              </div>
+            ),
+          };
+        })}
+      />
+      <Button icon={<PlusOutlined />} onClick={addProvider}>{t("settings.addProvider")}</Button>
     </Space>
   );
 }
 
 function LLMStrategyEditor({ value, onChange, modelOptions }: { value?: unknown; onChange?: (value: LLMStrategyFormValue) => void; modelOptions: ModelOption[] }) {
   const strategy = strategyConfigToForm(value);
+  const { t } = useI18n();
   const options = modelOptionsWithCurrent(modelOptions, strategy.candidates);
   const emit = (next: LLMStrategyFormValue) => onChange?.(next);
   const updateCandidate = (index: number, candidate: string) => {
@@ -1321,42 +1360,42 @@ function LLMStrategyEditor({ value, onChange, modelOptions }: { value?: unknown;
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
       <div className="llm-form-grid">
-        <LabelledControl label="Strategy type">
+        <LabelledControl label={t("settings.strategyType")}>
           <Select
             value={strategy.type}
             options={[
-              { value: "primary", label: "Primary only" },
-              { value: "fallback", label: "Fallback in order" },
-              { value: "round_robin", label: "Round robin" },
+              { value: "primary", label: t("settings.primaryOnly") },
+              { value: "fallback", label: t("settings.fallbackInOrder") },
+              { value: "round_robin", label: t("settings.roundRobin") },
             ]}
             onChange={(type) => emit({ ...strategy, type })}
           />
         </LabelledControl>
       </div>
       <Space direction="vertical" size={8} style={{ width: "100%" }}>
-        {strategy.candidates.length === 0 ? <Typography.Text type="secondary">No strategy candidates. Add at least one provider model.</Typography.Text> : null}
+        {strategy.candidates.length === 0 ? <Typography.Text type="secondary">{t("settings.noCandidates")}</Typography.Text> : null}
         {strategy.candidates.map((candidate, index) => (
           <div className="llm-strategy-row" key={`${candidate || "candidate"}-${index}`}>
             <Select
               showSearch
               value={candidate || undefined}
-              placeholder="provider.model"
+              placeholder={t("settings.placeholderProviderModel")}
               options={options}
               optionFilterProp="label"
               onChange={(next) => updateCandidate(index, next)}
             />
-            <Button aria-label="Move candidate up" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => moveCandidate(index, -1)} />
+            <Button aria-label={t("settings.moveUp")} icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => moveCandidate(index, -1)} />
             <Button
-              aria-label="Move candidate down"
+              aria-label={t("settings.moveDown")}
               icon={<ArrowDownOutlined />}
               disabled={index === strategy.candidates.length - 1}
               onClick={() => moveCandidate(index, 1)}
             />
-            <Button danger aria-label="Remove candidate" icon={<DeleteOutlined />} onClick={() => removeCandidate(index)} />
+            <Button danger aria-label={t("settings.removeCandidate")} icon={<DeleteOutlined />} onClick={() => removeCandidate(index)} />
           </div>
         ))}
       </Space>
-      <Button icon={<PlusOutlined />} onClick={addCandidate}>Add candidate</Button>
+      <Button icon={<PlusOutlined />} onClick={addCandidate}>{t("settings.addCandidate")}</Button>
     </Space>
   );
 }
@@ -1383,21 +1422,22 @@ function ProvidersPanel({
   testingID?: string;
   onTest: (id: string) => void;
 }) {
+  const { t } = useI18n();
   return (
-    <Card title="Providers">
+    <Card title={t("settings.providersTitle")}>
       <Table<ProviderStatus>
         rowKey="id"
         size="small"
         loading={loading}
         dataSource={providers}
         columns={[
-          { title: "Provider", dataIndex: "id", render: (_value, row) => <Space><Typography.Text strong>{row.id}</Typography.Text>{row.name ? <Typography.Text type="secondary">{row.name}</Typography.Text> : null}</Space> },
-          { title: "Type", dataIndex: "type", render: (value) => <Tag>{value}</Tag> },
-          { title: "Credential", render: (_value, row) => <Space><Tag color={row.has_credential ? "green" : "default"}>{row.has_credential ? "present" : "missing"}</Tag><Typography.Text type="secondary">{row.credential_kind || "-"}</Typography.Text></Space> },
-          { title: "Env", dataIndex: "api_key_env", render: (value) => value || "-" },
-          { title: "Account", dataIndex: "account_id", render: (value) => value || "-" },
-          { title: "Last error", dataIndex: "last_test_error", render: (value) => value ? <Typography.Text type="danger">{value}</Typography.Text> : "-" },
-          { title: "Action", render: (_value, row) => <Button size="small" loading={testing && testingID === row.id} onClick={() => onTest(row.id)}>Test</Button> },
+          { title: t("settings.providerCol"), dataIndex: "id", render: (_value, row) => <Space><Typography.Text strong>{row.id}</Typography.Text>{row.name ? <Typography.Text type="secondary">{row.name}</Typography.Text> : null}</Space> },
+          { title: t("settings.typeCol"), dataIndex: "type", render: (value) => <Tag>{value}</Tag> },
+          { title: t("settings.credentialCol"), render: (_value, row) => <Space><Tag color={row.has_credential ? "green" : "default"}>{row.has_credential ? t("settings.credentialPresent") : t("settings.credentialMissing")}</Tag><Typography.Text type="secondary">{row.credential_kind || "-"}</Typography.Text></Space> },
+          { title: t("settings.envCol"), dataIndex: "api_key_env", render: (value) => value || "-" },
+          { title: t("settings.accountCol"), dataIndex: "account_id", render: (value) => value || "-" },
+          { title: t("settings.lastErrorCol"), dataIndex: "last_test_error", render: (value) => value ? <Typography.Text type="danger">{value}</Typography.Text> : "-" },
+          { title: t("settings.actionCol"), render: (_value, row) => <Button size="small" loading={testing && testingID === row.id} onClick={() => onTest(row.id)}>{t("settings.testAction")}</Button> },
         ]}
       />
     </Card>
@@ -1422,32 +1462,33 @@ function WeixinPanel({
   onLogout: () => void;
 }) {
   const login = auth?.login;
+  const { t } = useI18n();
   const qrInput = resolveWeixinQRInput(login?.qr_code_img_url, login?.qr_code_img_value, login?.qr_code);
   return (
     <Card
-      title="Weixin login"
+      title={t("settings.weixinTitle")}
       extra={
         <Space wrap>
-          <Button icon={<QrcodeOutlined />} loading={starting} onClick={onStart}>Start login</Button>
-          <Button icon={<LogoutOutlined />} loading={loggingOut} onClick={onLogout}>Logout</Button>
+          <Button icon={<QrcodeOutlined />} loading={starting} onClick={onStart}>{t("settings.startLogin")}</Button>
+          <Button icon={<LogoutOutlined />} loading={loggingOut} onClick={onLogout}>{t("settings.logout")}</Button>
         </Space>
       }
     >
       <Space direction="vertical" size={16} style={{ width: "100%" }}>
         <Descriptions bordered size="small" column={{ xs: 1, md: 2 }} items={[
-          { key: "account", label: "Account", children: auth?.account_id ?? "default" },
-          { key: "enabled", label: "Enabled", children: String(auth?.enabled ?? false) },
-          { key: "configured", label: "Configured", children: auth?.configured ? "yes" : "no" },
-          { key: "runtime", label: "Runtime", children: runtime ? `${runtime.running ? "running" : "idle"} / ${runtime.state ?? "unknown"}` : pending ? "loading" : "unknown" },
-          { key: "bot", label: "Bot ID", children: auth?.account?.ilink_bot_id ?? "-" },
-          { key: "user", label: "User ID", children: auth?.account?.ilink_user_id ?? "-" },
+          { key: "account", label: t("settings.account"), children: auth?.account_id ?? "default" },
+          { key: "enabled", label: t("settings.enabled"), children: auth?.enabled ? t("settings.yes") : t("settings.no") },
+          { key: "configured", label: t("settings.configured"), children: auth?.configured ? t("settings.yes") : t("settings.no") },
+          { key: "runtime", label: t("settings.runtimeState"), children: runtime ? `${runtime.running ? t("settings.channelRunning") : t("settings.channelIdle")} / ${runtime.state ?? "unknown"}` : pending ? "loading" : "unknown" },
+          { key: "bot", label: t("settings.botID"), children: auth?.account?.ilink_bot_id ?? "-" },
+          { key: "user", label: t("settings.userID"), children: auth?.account?.ilink_user_id ?? "-" },
         ]} />
         {login?.message || runtime?.detail ? <Alert type="info" showIcon message={login?.message || runtime?.detail} /> : null}
         {runtime?.last_error ? <Alert type="error" showIcon message={runtime.last_error} /> : null}
         {login?.active || qrInput ? (
-          <Card size="small" title="Scan in Weixin">
+          <Card size="small" title={t("settings.scanInWeixin")}>
             <div style={{ display: "grid", placeItems: "center", minHeight: 260 }}>
-              {qrInput ? renderQRCode(qrInput) : <Typography.Text type="secondary">QR image not available yet</Typography.Text>}
+              {qrInput ? renderQRCode(qrInput, t) : <Typography.Text type="secondary">{t("settings.qrNotReady")}</Typography.Text>}
             </div>
           </Card>
         ) : null}
@@ -1457,19 +1498,20 @@ function WeixinPanel({
 }
 
 function DoctorPanel({ checks, loading }: { checks: DoctorCheck[]; loading: boolean }) {
+  const { t } = useI18n();
   return (
-    <Card title="Doctor">
+    <Card title={t("settings.doctorTitle")}>
       <Table<DoctorCheck>
         rowKey={(record) => `${record.code}:${record.path ?? ""}:${record.message}`}
         size="small"
         loading={loading}
         dataSource={checks}
         columns={[
-          { title: "Severity", dataIndex: "severity", render: (value) => <Tag color={value === "error" ? "red" : value === "warning" ? "gold" : "blue"}>{value}</Tag> },
-          { title: "Code", dataIndex: "code" },
-          { title: "Path", dataIndex: "path", render: (value) => value || "-" },
-          { title: "Message", dataIndex: "message" },
-          { title: "Suggestion", dataIndex: "suggestion", render: (value) => value || "-" },
+          { title: t("settings.severityCol"), dataIndex: "severity", render: (value) => <Tag color={value === "error" ? "red" : value === "warning" ? "gold" : "blue"}>{value}</Tag> },
+          { title: t("settings.codeCol"), dataIndex: "code" },
+          { title: t("settings.pathCol"), dataIndex: "path", render: (value) => value || "-" },
+          { title: t("settings.messageCol"), dataIndex: "message" },
+          { title: t("settings.suggestionCol"), dataIndex: "suggestion", render: (value) => value || "-" },
         ]}
       />
     </Card>
@@ -1487,6 +1529,7 @@ function SecurityPanel({
   packageQuality?: PackageQualityReport;
   loading: boolean;
 }) {
+  const { t } = useI18n();
   const riskItems = summary ? [summary.capability, summary.identity, summary.knowledge] : [];
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -1504,7 +1547,7 @@ function SecurityPanel({
           </Card>
         ))}
       </div>
-      <Card title="Effective policy" loading={loading}>
+      <Card title={t("settings.effectivePolicy")} loading={loading}>
         <Descriptions
           bordered
           size="small"
@@ -1516,20 +1559,20 @@ function SecurityPanel({
           }))}
         />
       </Card>
-      <Card title="Package risk" loading={loading}>
+      <Card title={t("settings.packageRisk")} loading={loading}>
         <Descriptions
           bordered
           size="small"
           column={{ xs: 1, md: 4 }}
           items={[
-            { key: "packages", label: "Packages", children: packageQuality?.package_count ?? 0 },
-            { key: "high", label: "High risk", children: <Tag color={(packageQuality?.high_risk_packages ?? 0) > 0 ? "red" : "green"}>{packageQuality?.high_risk_packages ?? 0}</Tag> },
-            { key: "runs", label: "Tool runs", children: packageQuality?.tool_health.total_runs ?? 0 },
-            { key: "rate", label: "Success rate", children: `${Math.round(packageQuality?.tool_health.success_rate ?? 0)}%` },
+            { key: "packages", label: t("settings.packages"), children: packageQuality?.package_count ?? 0 },
+            { key: "high", label: t("settings.highRisk"), children: <Tag color={(packageQuality?.high_risk_packages ?? 0) > 0 ? "red" : "green"}>{packageQuality?.high_risk_packages ?? 0}</Tag> },
+            { key: "runs", label: t("settings.toolRuns"), children: packageQuality?.tool_health.total_runs ?? 0 },
+            { key: "rate", label: t("settings.successRate"), children: `${Math.round(packageQuality?.tool_health.success_rate ?? 0)}%` },
           ]}
         />
       </Card>
-      <Card title="Recent security audit">
+      <Card title={t("settings.recentAudit")}>
         <Table<SecurityEvent>
           rowKey="id"
           size="small"
@@ -1537,11 +1580,11 @@ function SecurityPanel({
           dataSource={audit}
           pagination={{ pageSize: 8 }}
           columns={[
-            { title: "Time", dataIndex: "at", render: formatTimestamp },
-            { title: "Axis", dataIndex: "category", render: (value) => <Tag>{value}</Tag> },
-            { title: "Action", dataIndex: "action" },
-            { title: "Severity", dataIndex: "severity", render: (value) => <Tag color={value === "warning" ? "gold" : value === "error" ? "red" : "blue"}>{value || "info"}</Tag> },
-            { title: "Summary", dataIndex: "summary", render: (value) => value || "-" },
+            { title: t("settings.timeCol"), dataIndex: "at", render: formatTimestamp },
+            { title: t("settings.axisCol"), dataIndex: "category", render: (value) => <Tag>{value}</Tag> },
+            { title: t("settings.actionCol"), dataIndex: "action" },
+            { title: t("settings.severityCol"), dataIndex: "severity", render: (value) => <Tag color={value === "warning" ? "gold" : value === "error" ? "red" : "blue"}>{value || "info"}</Tag> },
+            { title: t("settings.summaryCol"), dataIndex: "summary", render: (value) => value || "-" },
           ]}
         />
       </Card>
@@ -1564,17 +1607,18 @@ function RuntimeServiceCard({
   onReload: () => void;
   onRestart: () => void;
 }) {
+  const { t } = useI18n();
   const managed = status?.managed === true;
   return (
     <Card
-      title="Runtime"
+      title={t("settings.runtimeServiceTitle")}
       extra={
         <Space>
-          <Button icon={<ReloadOutlined />} aria-label="Reload config from disk" loading={reloading} onClick={onReload}>
-            Reload config from disk
+          <Button icon={<ReloadOutlined />} aria-label={t("settings.reloadFromDisk")} loading={reloading} onClick={onReload}>
+            {t("settings.reloadFromDisk")}
           </Button>
-          <Button danger icon={<ReloadOutlined />} aria-label="Restart service" loading={restarting} disabled={!managed} onClick={onRestart}>
-            Restart service
+          <Button danger icon={<ReloadOutlined />} aria-label={t("settings.restartService")} loading={restarting} disabled={!managed} onClick={onRestart}>
+            {t("settings.restartService")}
           </Button>
         </Space>
       }
@@ -1584,12 +1628,12 @@ function RuntimeServiceCard({
         size="small"
         column={{ xs: 1, md: 2 }}
         items={[
-          { key: "managed", label: "Managed service", children: loading ? "Loading..." : managed ? <Tag color="green">yes</Tag> : <Tag>no</Tag> },
-          { key: "running", label: "Running", children: status?.running ? <Tag color="green">yes</Tag> : <Tag>unknown</Tag> },
-          { key: "scope", label: "Scope", children: status?.scope ?? "-" },
-          { key: "name", label: "Name", children: status?.name ?? "-" },
-          { key: "service-file", label: "Service file", children: status?.service_file ?? "-" },
-          { key: "log-file", label: "Log file", children: status?.log_file ?? "-" },
+          { key: "managed", label: t("settings.managedService"), children: loading ? "Loading..." : managed ? <Tag color="green">{t("settings.yes")}</Tag> : <Tag>{t("settings.no")}</Tag> },
+          { key: "running", label: t("settings.running"), children: status?.running ? <Tag color="green">{t("settings.yes")}</Tag> : <Tag>{t("settings.unknown")}</Tag> },
+          { key: "scope", label: t("settings.scope"), children: status?.scope ?? "-" },
+          { key: "name", label: t("settings.name"), children: status?.name ?? "-" },
+          { key: "service-file", label: t("settings.serviceFile"), children: status?.service_file ?? "-" },
+          { key: "log-file", label: t("settings.logFile"), children: status?.log_file ?? "-" },
         ]}
       />
       {managed ? null : (
@@ -1597,7 +1641,7 @@ function RuntimeServiceCard({
           style={{ marginTop: 12 }}
           type="info"
           showIcon
-          message={status?.detail || "Restart is available after launching Godex through `godex service`."}
+          message={status?.detail || t("settings.restartViaService")}
         />
       )}
     </Card>
@@ -1605,17 +1649,18 @@ function RuntimeServiceCard({
 }
 
 function ApplyReportView({ report, configInSync }: { report?: ApplyReport; configInSync?: boolean }) {
+  const { t } = useI18n();
   if (!report && configInSync !== false) {
     return null;
   }
   return (
     <Space direction="vertical" size={8} style={{ width: "100%", marginTop: 12 }}>
-      {configInSync === false ? <Alert type="warning" showIcon message="Stored config and effective runtime are currently different." /> : null}
+      {configInSync === false ? <Alert type="warning" showIcon message={t("settings.configDrift")} /> : null}
       {report ? (
         <Alert
           type={report.runtime_status === "failed" || report.storage_status === "save_failed" ? "error" : "info"}
           showIcon
-          message={report.message || "Last apply report"}
+          message={report.message || t("settings.lastApplyReport")}
           description={[...(report.warnings ?? []), ...(report.errors ?? [])].join(" ")}
         />
       ) : null}
@@ -1927,9 +1972,9 @@ function stringsPresent(value?: string) {
   return String(value ?? "").trim() !== "";
 }
 
-function renderQRCode(value: string) {
+function renderQRCode(value: string, t: ReturnType<typeof useI18n>["t"]) {
   if (value.startsWith("data:image/") || value.startsWith("http://") || value.startsWith("https://")) {
-    return <Image src={value} alt="Weixin login QR code" style={{ maxHeight: 280, objectFit: "contain" }} />;
+    return <Image src={value} alt={t("settings.weixinQrAlt")} style={{ maxHeight: 280, objectFit: "contain" }} />;
   }
   return <QRCode value={value} size={260} />;
 }
@@ -2032,6 +2077,7 @@ function ConfigYamlCard(props: {
   loading: boolean;
 }) {
   const { message } = AntApp.useApp();
+  const { t } = useI18n();
   const { storedValues, effectiveValues, loading } = props;
   const [copied, setCopied] = useState(false);
 
@@ -2044,16 +2090,16 @@ function ConfigYamlCard(props: {
     try {
       await writeClipboardText(yamlText);
       setCopied(true);
-      void message.success("Config YAML copied to clipboard.");
+      void message.success(t("settings.yamlCopied"));
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      void message.error("Failed to copy to clipboard.");
+      void message.error(t("settings.yamlCopyFailed"));
     }
   };
 
   return (
     <Card
-      title="Config YAML View"
+      title={t("settings.yamlViewTitle")}
       loading={loading}
       extra={
         <Button
@@ -2061,7 +2107,7 @@ function ConfigYamlCard(props: {
           icon={<CopyOutlined />}
           onClick={() => void handleCopy()}
         >
-          {copied ? "Copied!" : "Copy YAML"}
+          {copied ? t("settings.copied") : t("settings.copyYaml")}
         </Button>
       }
     >
@@ -2069,7 +2115,8 @@ function ConfigYamlCard(props: {
         style={{
           margin: 0,
           padding: 12,
-          background: "#f5f5f5",
+          background: "var(--godex-panel-muted)",
+          color: "var(--godex-text)",
           borderRadius: 6,
           fontSize: 13,
           lineHeight: 1.5,
@@ -2079,7 +2126,7 @@ function ConfigYamlCard(props: {
           wordBreak: "break-word",
         }}
       >
-        {yamlText || "No config data available."}
+        {yamlText || t("settings.noConfigData")}
       </pre>
     </Card>
   );

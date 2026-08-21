@@ -45,3 +45,4 @@ examples/evals/results/
 .godex-build-cache/
 .rust-home/
 .cargo-home/
+examples/wasm-plugin-todo/plugin.wasm

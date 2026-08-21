@@ -31,6 +31,36 @@ func decodeTCPOpen(t *testing.T, frame Frame) TCPOpenPayload {
 	return payload
 }
 
+// expectOpenAndAck consumes the tcp_open frame OpenTCPStream sends to the
+// mocked node and replies with tcp_open_ack so the caller's OpenTCPStream
+// returns. OpenTCPStream now blocks until the ack arrives, so this must run
+// (typically in a goroutine) before OpenTCPStream. connID and wantTarget are
+// validated when non-empty; the node-side conn_id is returned.
+func expectOpenAndAck(t *testing.T, client *testNodeClient, connID, wantTarget string) string {
+	t.Helper()
+	frame, err := client.recvErr()
+	if err != nil {
+		t.Errorf("read tcp_open: %v", err)
+		return ""
+	}
+	if frame.Type != FrameTCPOpen {
+		t.Errorf("expected tcp_open, got %#v", frame)
+		return ""
+	}
+	op := decodeTCPOpen(t, frame)
+	if connID != "" && op.ConnID != connID {
+		t.Errorf("tcp_open conn_id: got %q want %q", op.ConnID, connID)
+	}
+	if wantTarget != "" && op.Target != wantTarget {
+		t.Errorf("tcp_open target: got %q want %q", op.Target, wantTarget)
+	}
+	payload, _ := json.Marshal(TCPOpenPayload{ConnID: op.ConnID})
+	if err := client.sendErr(Frame{Type: FrameTCPOpenAck, Payload: payload}); err != nil {
+		t.Errorf("send tcp_open_ack: %v", err)
+	}
+	return op.ConnID
+}
+
 func TestHubOpenTCPStreamSendsOpenToNode(t *testing.T) {
 	hub, server := newTestHub(func(nodeID, credential string) bool {
 		return nodeID == "node-a" && credential == "ck_secret"
@@ -45,17 +75,10 @@ func TestHubOpenTCPStreamSendsOpenToNode(t *testing.T) {
 		t.Fatalf("expected hello_ok, got %#v", ok)
 	}
 
+	go expectOpenAndAck(t, client, "c_1", "10.0.0.5:3306")
 	stream := openTestStream(t, hub, "node-a", "c_1", "10.0.0.5:3306")
 	defer stream.Close()
-
-	open := client.recv(t)
-	if open.Type != FrameTCPOpen {
-		t.Fatalf("expected tcp_open, got %#v", open)
-	}
-	payload := decodeTCPOpen(t, open)
-	if payload.ConnID != "c_1" || payload.Target != "10.0.0.5:3306" {
-		t.Fatalf("tcp_open payload mismatch: %#v", payload)
-	}
+	// expectOpenAndAck consumed and validated the tcp_open frame.
 }
 
 func TestHubOpenTCPStreamOfflineNode(t *testing.T) {
@@ -82,11 +105,9 @@ func TestHubTCPStreamWriteForwardsDataToNode(t *testing.T) {
 		t.Fatalf("expected hello_ok, got %#v", ok)
 	}
 
+	go expectOpenAndAck(t, client, "c_2", "127.0.0.1:3306")
 	stream := openTestStream(t, hub, "node-a", "c_2", "127.0.0.1:3306")
 	defer stream.Close()
-	if open := client.recv(t); open.Type != FrameTCPOpen {
-		t.Fatalf("expected tcp_open, got %#v", open)
-	}
 
 	if _, err := stream.Write([]byte("hello-node")); err != nil {
 		t.Fatalf("write: %v", err)
@@ -123,11 +144,9 @@ func TestHubTCPStreamReadReceivesNodeData(t *testing.T) {
 		t.Fatalf("expected hello_ok, got %#v", ok)
 	}
 
+	go expectOpenAndAck(t, client, "c_3", "127.0.0.1:3306")
 	stream := openTestStream(t, hub, "node-a", "c_3", "127.0.0.1:3306")
 	defer stream.Close()
-	if open := client.recv(t); open.Type != FrameTCPOpen {
-		t.Fatalf("expected tcp_open, got %#v", open)
-	}
 
 	client.send(t, Frame{Type: FrameTCPData, Payload: tcpDataPayloadJSON("c_3"), BodyB64: base64.StdEncoding.EncodeToString([]byte("from-node"))})
 
@@ -153,10 +172,8 @@ func TestHubTCPStreamCloseSendsCloseToNode(t *testing.T) {
 		t.Fatalf("expected hello_ok, got %#v", ok)
 	}
 
+	go expectOpenAndAck(t, client, "c_4", "127.0.0.1:3306")
 	stream := openTestStream(t, hub, "node-a", "c_4", "127.0.0.1:3306")
-	if open := client.recv(t); open.Type != FrameTCPOpen {
-		t.Fatalf("expected tcp_open, got %#v", open)
-	}
 
 	if err := stream.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -186,11 +203,9 @@ func TestHubTCPStreamReadEOFOnNodeClose(t *testing.T) {
 		t.Fatalf("expected hello_ok, got %#v", ok)
 	}
 
+	go expectOpenAndAck(t, client, "c_5", "127.0.0.1:3306")
 	stream := openTestStream(t, hub, "node-a", "c_5", "127.0.0.1:3306")
 	defer stream.Close()
-	if open := client.recv(t); open.Type != FrameTCPOpen {
-		t.Fatalf("expected tcp_open, got %#v", open)
-	}
 
 	client.send(t, Frame{Type: FrameTCPClose, Payload: tcpClosePayloadJSON("c_5", "node done")})
 

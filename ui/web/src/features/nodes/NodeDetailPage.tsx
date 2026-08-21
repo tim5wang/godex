@@ -7,6 +7,7 @@ import { approveNodePermission, denyNodePermission, getNodeOverview } from "../.
 import type { NodeApprovalInfo, NodeJobInfo, NodeSessionInfo, NodeStoredEvent } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
+import { ForwardTunnelsCard } from "./ForwardTunnelsCard";
 
 export function NodeDetailPage() {
   const { t } = useI18n();
@@ -140,6 +141,8 @@ export function NodeDetailPage() {
             </Space>
           </div>
         </Card>
+
+        <ForwardTunnelsCard nodeID={id} token={token} />
 
         <Card title={t("nodes.runningSessions")} loading={query.isLoading}>
           <Table<NodeSessionInfo>

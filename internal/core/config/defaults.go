@@ -111,6 +111,7 @@ func defaultConfigFile() ConfigFile {
 			HeartbeatSeconds:    15,
 			OfflineAfterSeconds: 60,
 			Nodes:               []ControlNodeSection{},
+			Forwards:            []ForwardSection{},
 		},
 		Runtime: RuntimeSection{
 			Recovery: RuntimeRecoverySection{

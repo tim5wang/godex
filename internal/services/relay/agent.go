@@ -293,6 +293,13 @@ func (a *Agent) handleTCPOpen(conn *websocket.Conn, frame Frame) {
 	a.dialsMu.Lock()
 	a.dials[payload.ConnID] = dialed
 	a.dialsMu.Unlock()
+	// Confirm the dial synchronously: OpenTCPStream blocks until this ack (or
+	// a tcp_close) arrives, so the center learns the dial result before
+	// treating the stream as usable and forwarding bytes.
+	if err := a.sendTCPOpenAck(conn, payload.ConnID); err != nil {
+		a.closeDial(payload.ConnID)
+		return
+	}
 
 	// Pump local dialed-connection bytes back to the hub as tcp_data frames.
 	go func() {
@@ -357,6 +364,13 @@ func (a *Agent) sendTCPData(conn *websocket.Conn, connID string, chunk []byte) e
 		Payload: tcpDataPayloadJSON(connID),
 		BodyB64: base64.StdEncoding.EncodeToString(chunk),
 	})
+}
+
+func (a *Agent) sendTCPOpenAck(conn *websocket.Conn, connID string) error {
+	payload, _ := json.Marshal(TCPOpenPayload{ConnID: connID})
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	return writeFrame(conn, Frame{Type: FrameTCPOpenAck, Payload: payload})
 }
 
 func (a *Agent) sendTCPClose(conn *websocket.Conn, connID, reason string) error {

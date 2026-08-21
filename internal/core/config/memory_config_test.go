@@ -102,8 +102,8 @@ func TestApplyStoredValuesMemoryAndForwardAllow(t *testing.T) {
 	file := defaultConfigFile()
 	req := UpdateRequest{
 		Values: map[string]any{
-			"memory.strategy":      "consolidated",
-			"memory.session_scope": true,
+			"memory.strategy":       "consolidated",
+			"memory.session_scope":  true,
 			"control.forward_allow": []string{"10.0.0.5:3306", "127.0.0.1:*"},
 		},
 	}
@@ -127,5 +127,49 @@ func TestApplyStoredValuesMemoryAndForwardAllow(t *testing.T) {
 	}
 	if got := view["control.forward_allow"]; got == nil {
 		t.Errorf("expected stored view forward_allow present")
+	}
+}
+
+// TestControlForwardsRoundTrip verifies control.forwards survives the stored →
+// view → resolved config → rendered template pipeline end to end.
+func TestControlForwardsRoundTrip(t *testing.T) {
+	file := defaultConfigFile()
+	req := UpdateRequest{
+		Values: map[string]any{
+			"control.forwards": []map[string]any{
+				{"id": "fw-1", "name": "node-b gateway", "node_id": "node-b", "local_port": 3921, "target": "127.0.0.1:3921"},
+			},
+		},
+	}
+	if err := applyStoredValues(&file, req); err != nil {
+		t.Fatalf("apply stored values: %v", err)
+	}
+	if len(file.Control.Forwards) != 1 {
+		t.Fatalf("expected 1 forward, got %d: %+v", len(file.Control.Forwards), file.Control.Forwards)
+	}
+	f := file.Control.Forwards[0]
+	if f.ID != "fw-1" || f.NodeID != "node-b" || f.LocalPort != 3921 || f.Target != "127.0.0.1:3921" {
+		t.Fatalf("forward mismatch: %+v", f)
+	}
+
+	view := storedValues(file)
+	if got := view["control.forwards"]; got == nil {
+		t.Errorf("expected stored view control.forwards present")
+	}
+
+	resolved := resolveConfigFile(file, "home", "proj", "", "", "", "", "", "")
+	if len(resolved.Control.Forwards) != 1 {
+		t.Fatalf("expected 1 resolved forward, got %d", len(resolved.Control.Forwards))
+	}
+	if resolved.Control.Forwards[0].LocalPort != 3921 || resolved.Control.Forwards[0].NodeID != "node-b" {
+		t.Fatalf("resolved forward mismatch: %+v", resolved.Control.Forwards[0])
+	}
+
+	rendered, err := renderConfigTemplate(file)
+	if err != nil {
+		t.Fatalf("render config template: %v", err)
+	}
+	if !strings.Contains(string(rendered), "forwards:") {
+		t.Errorf("expected template to contain forwards section")
 	}
 }

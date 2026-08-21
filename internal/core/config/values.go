@@ -240,6 +240,8 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Control.OfflineAfterSeconds = asInt(value)
 	case "control.nodes":
 		file.Control.Nodes = asControlNodeSections(value)
+	case "control.forwards":
+		file.Control.Forwards = asForwardSections(value)
 	case "control.forward_allow":
 		file.Control.ForwardAllow = asStringList(value)
 	case "runtime.recovery.auto_resume_interrupted_turns":
@@ -583,6 +585,7 @@ func storedValues(file ConfigFile) map[string]any {
 		"control.offline_after_seconds":                          file.Control.OfflineAfterSeconds,
 		"control.forward_allow":                                  append([]string{}, file.Control.ForwardAllow...),
 		"control.nodes":                                          append([]ControlNodeSection{}, file.Control.Nodes...),
+		"control.forwards":                                       append([]ForwardSection{}, file.Control.Forwards...),
 		"runtime.recovery.auto_resume_interrupted_turns":         file.Runtime.Recovery.AutoResumeInterruptedTurns,
 		"runtime.recovery.auto_repair_sessions":                  file.Runtime.Recovery.AutoRepairSessions,
 		"security.profile":                                       normalizeSecurityProfileName(file.Security.Profile),
@@ -786,6 +789,7 @@ func effectiveValues(cfg *Config) map[string]any {
 		"control.offline_after_seconds":                          cfg.Control.OfflineAfterSeconds,
 		"control.forward_allow":                                  append([]string{}, cfg.Control.ForwardAllow...),
 		"control.nodes":                                          append([]ControlNodeConfig{}, cfg.Control.Nodes...),
+		"control.forwards":                                       append([]ForwardConfig{}, cfg.Control.Forwards...),
 		"runtime.recovery.auto_resume_interrupted_turns":         cfg.Runtime.Recovery.AutoResumeInterruptedTurns,
 		"runtime.recovery.auto_repair_sessions":                  cfg.Runtime.Recovery.AutoRepairSessions,
 		"security.profile":                                       cfg.Security.Profile,

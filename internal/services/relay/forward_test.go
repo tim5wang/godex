@@ -44,24 +44,21 @@ func TestForwardClientOpensNodeStreamBidirectionally(t *testing.T) {
 	}
 	defer client.Close()
 
+	var connID string
+	ackDone := make(chan struct{})
+	go func() {
+		connID = expectOpenAndAck(t, node, "", "127.0.0.1:3306")
+		close(ackDone)
+	}()
 	stream, err := client.Open("127.0.0.1:3306")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer stream.Close()
-
-	// Node sees the tcp_open with the requested target.
-	open := node.recv(t)
-	if open.Type != FrameTCPOpen {
-		t.Fatalf("expected tcp_open, got %#v", open)
-	}
-	var op TCPOpenPayload
-	if err := json.Unmarshal(open.Payload, &op); err != nil {
-		t.Fatalf("payload unmarshal: %v", err)
-	}
-	if op.Target != "127.0.0.1:3306" || op.ConnID == "" {
-		t.Fatalf("tcp_open payload mismatch: %#v", op)
-	}
+	// Wait until the mock node consumed tcp_open + sent ack before reading
+	// further frames, so the ack goroutine and the assertions never read the
+	// WebSocket concurrently.
+	<-ackDone
 
 	// CLI → node: stream.Write reaches the node as tcp_data.
 	if _, err := stream.Write([]byte("ping")); err != nil {
@@ -80,7 +77,7 @@ func TestForwardClientOpensNodeStreamBidirectionally(t *testing.T) {
 	}
 
 	// Node → CLI: node tcp_data reaches stream.Read.
-	node.send(t, Frame{Type: FrameTCPData, Payload: tcpDataPayloadJSON(op.ConnID), BodyB64: base64.StdEncoding.EncodeToString([]byte("pong"))})
+	node.send(t, Frame{Type: FrameTCPData, Payload: tcpDataPayloadJSON(connID), BodyB64: base64.StdEncoding.EncodeToString([]byte("pong"))})
 	buf := make([]byte, 64)
 	n, err := stream.Read(buf)
 	if err != nil {
@@ -102,20 +99,21 @@ func TestForwardClientReadEOFOnNodeClose(t *testing.T) {
 	}
 	defer client.Close()
 
+	var connID string
+	ackDone := make(chan struct{})
+	go func() {
+		connID = expectOpenAndAck(t, node, "", "127.0.0.1:3306")
+		close(ackDone)
+	}()
 	stream, err := client.Open("127.0.0.1:3306")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer stream.Close()
-
-	open := node.recv(t)
-	var op TCPOpenPayload
-	if err := json.Unmarshal(open.Payload, &op); err != nil {
-		t.Fatalf("payload unmarshal: %v", err)
-	}
+	<-ackDone
 
 	// Node closes the stream; the CLI side must observe io.EOF.
-	node.send(t, Frame{Type: FrameTCPClose, Payload: tcpClosePayloadJSON(op.ConnID, "node done")})
+	node.send(t, Frame{Type: FrameTCPClose, Payload: tcpClosePayloadJSON(connID, "node done")})
 	buf := make([]byte, 64)
 	if _, err := stream.Read(buf); err != io.EOF {
 		t.Fatalf("expected io.EOF, got %v", err)
@@ -133,16 +131,16 @@ func TestForwardClientCloseSendsCloseToNode(t *testing.T) {
 	}
 	defer client.Close()
 
+	ackDone := make(chan struct{})
+	go func() {
+		expectOpenAndAck(t, node, "", "127.0.0.1:3306")
+		close(ackDone)
+	}()
 	stream, err := client.Open("127.0.0.1:3306")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-
-	open := node.recv(t)
-	var op TCPOpenPayload
-	if err := json.Unmarshal(open.Payload, &op); err != nil {
-		t.Fatalf("payload unmarshal: %v", err)
-	}
+	<-ackDone
 
 	if err := stream.Close(); err != nil {
 		t.Fatalf("close: %v", err)

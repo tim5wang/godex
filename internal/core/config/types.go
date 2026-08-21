@@ -182,6 +182,7 @@ type ControlSection struct {
 	OfflineAfterSeconds int                  `yaml:"offline_after_seconds"`
 	ForwardAllow        []string             `yaml:"forward_allow"`
 	Nodes               []ControlNodeSection `yaml:"nodes"`
+	Forwards            []ForwardSection     `yaml:"forwards"`
 }
 
 type ControlNodeSection struct {
@@ -192,6 +193,17 @@ type ControlNodeSection struct {
 	GodexHome    string   `yaml:"godex_home" json:"godex_home,omitempty"`
 	Version      string   `yaml:"version" json:"version,omitempty"`
 	Capabilities []string `yaml:"capabilities" json:"capabilities,omitempty"`
+}
+
+// ForwardSection is one persistent TCP forward tunnel managed by the center
+// process: the center listens on 127.0.0.1:LocalPort and relays connections
+// over the node's relay channel to Target on the node's network (ssh -L style).
+type ForwardSection struct {
+	ID        string `yaml:"id" json:"id"`
+	Name      string `yaml:"name" json:"name,omitempty"`
+	NodeID    string `yaml:"node_id" json:"node_id"`
+	LocalPort int    `yaml:"local_port" json:"local_port"`
+	Target    string `yaml:"target" json:"target"`
 }
 
 type RuntimeSection struct {

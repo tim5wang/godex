@@ -302,6 +302,7 @@ type ControlConfig struct {
 	OfflineAfterSeconds int
 	ForwardAllow        []string
 	Nodes               []ControlNodeConfig
+	Forwards            []ForwardConfig
 }
 
 // ControlNodeConfig describes a manually configured runtime node.
@@ -313,6 +314,15 @@ type ControlNodeConfig struct {
 	GodexHome    string   `json:"godex_home" yaml:"godex_home"`
 	Version      string   `json:"version" yaml:"version"`
 	Capabilities []string `json:"capabilities" yaml:"capabilities"`
+}
+
+// ForwardConfig is the resolved form of a persistent forward tunnel.
+type ForwardConfig struct {
+	ID        string `json:"id" yaml:"id"`
+	Name      string `json:"name" yaml:"name"`
+	NodeID    string `json:"node_id" yaml:"node_id"`
+	LocalPort int    `json:"local_port" yaml:"local_port"`
+	Target    string `json:"target" yaml:"target"`
 }
 
 // RuntimeConfig controls backend runtime behavior that is not model/tool-specific.

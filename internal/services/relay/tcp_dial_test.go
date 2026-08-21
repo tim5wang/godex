@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,15 +95,12 @@ func TestAgentRejectsForwardNotInAllowlist(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream, err := hub.OpenTCPStream(ctx, "node-a", "c_deny", echoAddr)
-	if err != nil {
-		t.Fatalf("OpenTCPStream: %v", err)
+	_, err := hub.OpenTCPStream(ctx, "node-a", "c_deny", echoAddr)
+	if err == nil {
+		t.Fatal("expected OpenTCPStream to fail for a denied target")
 	}
-	defer stream.Close()
-
-	buf := make([]byte, 128)
-	if _, err := stream.Read(buf); err != io.EOF {
-		t.Fatalf("expected io.EOF (denied), got %v", err)
+	if !strings.Contains(strings.ToLower(err.Error()), "not allowed") {
+		t.Fatalf("expected 'not allowed' error, got %v", err)
 	}
 }
 
@@ -114,15 +112,12 @@ func TestAgentRejectsForwardHostNotAllowed(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream, err := hub.OpenTCPStream(ctx, "node-a", "c_host", echoAddr)
-	if err != nil {
-		t.Fatalf("OpenTCPStream: %v", err)
+	_, err := hub.OpenTCPStream(ctx, "node-a", "c_host", echoAddr)
+	if err == nil {
+		t.Fatal("expected OpenTCPStream to fail for a denied host")
 	}
-	defer stream.Close()
-
-	buf := make([]byte, 128)
-	if _, err := stream.Read(buf); err != io.EOF {
-		t.Fatalf("expected io.EOF (host denied), got %v", err)
+	if !strings.Contains(strings.ToLower(err.Error()), "not allowed") {
+		t.Fatalf("expected 'not allowed' error, got %v", err)
 	}
 }
 

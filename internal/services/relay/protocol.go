@@ -35,6 +35,10 @@ const (
 	FrameEvent FrameType = "event"
 	// FrameTCPOpen asks the node to dial a TCP target (conn_id + target in payload).
 	FrameTCPOpen FrameType = "tcp_open"
+	// FrameTCPOpenAck confirms the node successfully dialed the target for a
+	// tcp_open request; OpenTCPStream blocks until it (or tcp_close) arrives so
+	// callers learn the dial result synchronously.
+	FrameTCPOpenAck FrameType = "tcp_open_ack"
 	// FrameTCPData carries one direction of a forwarded TCP byte stream.
 	FrameTCPData FrameType = "tcp_data"
 	// FrameTCPClose closes a forwarded TCP connection (either side).
@@ -58,6 +62,7 @@ var validFrameTypes = map[FrameType]bool{
 	FramePong:        true,
 	FrameEvent:       true,
 	FrameTCPOpen:     true,
+	FrameTCPOpenAck:  true,
 	FrameTCPData:     true,
 	FrameTCPClose:    true,
 	FrameError:       true,

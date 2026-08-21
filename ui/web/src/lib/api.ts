@@ -26,6 +26,8 @@ import type {
   MemoryType,
   MetaResponse,
   NodeOverviewResponse,
+  ForwardStatus,
+  ForwardCheckResult,
   Note,
   ModelsView,
   PackageCommandEntry,
@@ -418,6 +420,33 @@ export function deleteControlNode(token: string | null, nodeID: string) {
 
 export function getNodeOverview(nodeID: string, token: string | null) {
   return request<NodeOverviewResponse>(`/control/nodes/${encodeURIComponent(nodeID)}/overview`, { method: "GET" }, token);
+}
+
+export interface CreateForwardInput {
+  name?: string;
+  node_id: string;
+  local_port: number;
+  target: string;
+}
+
+/** List managed forward tunnels (with runtime status). */
+export function listForwards(token: string | null) {
+  return request<ForwardStatus[]>("/control/forwards", { method: "GET" }, token);
+}
+
+/** Create a managed forward tunnel on the center. */
+export function createForward(token: string | null, input: CreateForwardInput) {
+  return request<ForwardStatus>("/control/forwards", { method: "POST", body: JSON.stringify(input) }, token);
+}
+
+/** Remove a managed forward tunnel. */
+export function deleteForward(token: string | null, id: string) {
+  return request<{ removed: boolean }>(`/control/forwards/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({}) }, token);
+}
+
+/** Probe a forward tunnel end to end (listener → node relay → target). */
+export function checkForward(token: string | null, id: string) {
+  return request<ForwardCheckResult>(`/control/forwards/${encodeURIComponent(id)}/check`, { method: "POST", body: JSON.stringify({}) }, token);
 }
 
 export function restartRuntimeService(token: string | null) {

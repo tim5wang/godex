@@ -254,6 +254,25 @@ func controlNodesFromConfigFile(file ConfigFile) []ControlNodeConfig {
 	return nodes
 }
 
+func forwardsFromConfigFile(file ConfigFile) []ForwardConfig {
+	forwards := make([]ForwardConfig, 0, len(file.Control.Forwards))
+	for _, item := range file.Control.Forwards {
+		id := strings.TrimSpace(item.ID)
+		nodeID := strings.TrimSpace(item.NodeID)
+		if id == "" || nodeID == "" {
+			continue
+		}
+		forwards = append(forwards, ForwardConfig{
+			ID:        id,
+			Name:      strings.TrimSpace(item.Name),
+			NodeID:    nodeID,
+			LocalPort: item.LocalPort,
+			Target:    strings.TrimSpace(item.Target),
+		})
+	}
+	return forwards
+}
+
 func acpAgentsFromConfigFile(file ConfigFile) map[string]ACPAgentConfig {
 	agents := make(map[string]ACPAgentConfig, len(file.ACP.Agents))
 	for id, item := range file.ACP.Agents {
@@ -476,6 +495,43 @@ func asControlNodeSections(value any) []ControlNodeSection {
 		node.Version = strings.TrimSpace(node.Version)
 		node.Capabilities = uniqueNonEmptyStrings(node.Capabilities)
 		out = append(out, node)
+	}
+	return out
+}
+
+func asForwardSections(value any) []ForwardSection {
+	if value == nil {
+		return nil
+	}
+	var data []byte
+	switch typed := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		data = []byte(trimmed)
+	default:
+		var err error
+		data, err = yaml.Marshal(typed)
+		if err != nil {
+			return nil
+		}
+	}
+	var forwards []ForwardSection
+	if err := yaml.Unmarshal(data, &forwards); err != nil {
+		return nil
+	}
+	out := make([]ForwardSection, 0, len(forwards))
+	for _, item := range forwards {
+		item.ID = strings.TrimSpace(item.ID)
+		item.NodeID = strings.TrimSpace(item.NodeID)
+		if item.ID == "" || item.NodeID == "" {
+			continue
+		}
+		item.Name = strings.TrimSpace(item.Name)
+		item.Target = strings.TrimSpace(item.Target)
+		out = append(out, item)
 	}
 	return out
 }

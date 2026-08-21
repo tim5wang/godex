@@ -410,6 +410,36 @@ export interface NodeOverviewResponse {
   overview: NodeOverview;
 }
 
+/** A managed TCP forward tunnel running inside the center process. */
+export interface ForwardSpec {
+  id: string;
+  name?: string;
+  node_id: string;
+  local_port: number;
+  target: string;
+}
+
+export interface ForwardStatus extends ForwardSpec {
+  state: "running" | "error" | "stopped" | string;
+  error?: string;
+  active_conns: number;
+  last_checked_at?: string;
+  last_latency_ms?: number;
+}
+
+/** One leg of the end-to-end forward connectivity check. */
+export interface ForwardCheckStep {
+  name: string;
+  ok: boolean;
+  detail: string;
+  latency_ms?: number;
+}
+
+export interface ForwardCheckResult {
+  ok: boolean;
+  steps: ForwardCheckStep[];
+}
+
 export interface DoctorCheck {
   severity: "error" | "warning" | "info";
   code: string;

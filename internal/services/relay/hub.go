@@ -150,7 +150,10 @@ func (h *Hub) Shutdown(ctx context.Context) error {
 
 func (h *Hub) pingLoop(ctx context.Context) {
 	defer h.wg.Done()
-	ticker := time.NewTicker(h.pingInterval)
+	h.mu.Lock()
+	interval := h.pingInterval
+	h.mu.Unlock()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -422,7 +425,7 @@ func (h *Hub) handleConn(ws *websocket.Conn) {
 			conn.deliver(frame)
 		case FrameStream:
 			conn.deliver(frame)
-		case FrameTCPData, FrameTCPClose:
+		case FrameTCPData, FrameTCPOpenAck, FrameTCPClose:
 			conn.deliverTCP(frame)
 		case FrameClose:
 			h.removeConn(nodeID, conn)

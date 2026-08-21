@@ -847,6 +847,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			OfflineAfterSeconds: file.Control.OfflineAfterSeconds,
 			ForwardAllow:        file.Control.ForwardAllow,
 			Nodes:               controlNodesFromConfigFile(file),
+			Forwards:            forwardsFromConfigFile(file),
 		},
 		Runtime: RuntimeConfig{
 			Recovery: RuntimeRecoveryConfig{

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -303,6 +305,24 @@ func main() {
 			//   external /api/control/nodes/{id}/proxy/.. → /control/nodes/{id}/proxy/..
 			root := http.NewServeMux()
 			root.Handle("/relay", relayHub)
+
+			// Managed TCP forward tunnels: the center process listens on
+			// 127.0.0.1:<local_port> and relays each connection over a node's
+			// relay channel to its target (ssh -L style), so an LLM gateway on
+			// an internal node can be reached from the center as localhost.
+			forwardServer := relay.NewForwardServer(relayHub)
+			for _, fwd := range cfg.Control.Forwards {
+				if _, err := forwardServer.Add(relay.ForwardSpec{
+					ID:        fwd.ID,
+					Name:      fwd.Name,
+					NodeID:    fwd.NodeID,
+					LocalPort: fwd.LocalPort,
+					Target:    fwd.Target,
+				}); err != nil {
+					logger.Errorf("load forward %q: %v", fwd.ID, err)
+				}
+			}
+			registerForwardRoutes(root, forwardServer, manager, relayAuthorize(cfg))
 			proxy := relay.NewProxyHandler(relayHub, relayAuthorize(cfg))
 			// The center also runs as its own node: requests targeting the self
 			// node are served locally (no relay round-trip), so the server can be
@@ -337,6 +357,7 @@ func main() {
 				app.NewConfigReloadWatcher(manager),
 				noderegistry.NewLocalHeartbeat(controlRegistry, selfNode, time.Duration(cfg.Control.HeartbeatSeconds)*time.Second),
 				relayHub,
+				forwardServer,
 				channelManager,
 				cronService,
 				heartbeatService,
@@ -624,6 +645,123 @@ func relayAuthorize(cfg *config.Config) func(*http.Request) bool {
 		}
 		return strings.TrimSpace(header[len("Bearer "):]) == token
 	}
+}
+
+// registerForwardRoutes wires the managed-forward REST surface onto the root
+// mux (external paths carry the /api prefix the webui strips):
+//
+//	GET    /control/forwards           list tunnels (with runtime status)
+//	POST   /control/forwards           create a tunnel (persisted to config)
+//	DELETE /control/forwards/{id}      remove a tunnel (persisted)
+//	POST   /control/forwards/{id}/check  probe the tunnel end to end
+func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, manager *config.Manager, authorize func(*http.Request) bool) {
+	guard := func(next http.HandlerFunc) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if authorize != nil && !authorize(r) {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		})
+	}
+
+	mux.Handle("GET /control/forwards", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeForwardJSON(w, http.StatusOK, server.List())
+	})))
+
+	mux.Handle("POST /control/forwards", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name      string `json:"name"`
+			NodeID    string `json:"node_id"`
+			LocalPort int    `json:"local_port"`
+			Target    string `json:"target"`
+		}
+		if err := decodeForwardBody(r, &req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		spec, err := server.Add(relay.ForwardSpec{
+			Name:      strings.TrimSpace(req.Name),
+			NodeID:    strings.TrimSpace(req.NodeID),
+			LocalPort: req.LocalPort,
+			Target:    strings.TrimSpace(req.Target),
+		})
+		if err != nil {
+			http.Error(w, `{"error":"`+jsonEscape(err.Error())+`"}`, http.StatusBadRequest)
+			return
+		}
+		if err := persistForwards(r.Context(), manager, server); err != nil {
+			http.Error(w, `{"error":"persist failed"}`, http.StatusInternalServerError)
+			return
+		}
+		writeForwardJSON(w, http.StatusCreated, spec)
+	})))
+
+	mux.Handle("DELETE /control/forwards/{id}", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !server.Remove(id) {
+			http.Error(w, `{"error":"forward not found"}`, http.StatusNotFound)
+			return
+		}
+		if err := persistForwards(r.Context(), manager, server); err != nil {
+			http.Error(w, `{"error":"persist failed"}`, http.StatusInternalServerError)
+			return
+		}
+		writeForwardJSON(w, http.StatusOK, map[string]bool{"removed": true})
+	})))
+
+	mux.Handle("POST /control/forwards/{id}/check", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := server.Check(r.PathValue("id"))
+		if err != nil {
+			http.Error(w, `{"error":"forward not found"}`, http.StatusNotFound)
+			return
+		}
+		writeForwardJSON(w, http.StatusOK, result)
+	})))
+}
+
+// persistForwards writes the currently running tunnel set back into the
+// config (control.forwards) so tunnels survive a center restart. The runtime
+// server remains the source of truth for state; the config is only the
+// persistence layer.
+func persistForwards(ctx context.Context, manager *config.Manager, server *relay.ForwardServer) error {
+	statuses := server.List()
+	sections := make([]config.ForwardSection, 0, len(statuses))
+	for _, st := range statuses {
+		sections = append(sections, config.ForwardSection{
+			ID:        st.ID,
+			Name:      st.Name,
+			NodeID:    st.NodeID,
+			LocalPort: st.LocalPort,
+			Target:    st.Target,
+		})
+	}
+	_, err := manager.Update(ctx, config.UpdateRequest{Values: map[string]any{
+		"control.forwards": sections,
+	}})
+	return err
+}
+
+func decodeForwardBody(r *http.Request, into any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, into)
+}
+
+func writeForwardJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func jsonEscape(s string) string {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return s
+	}
+	return strings.Trim(string(data), `"`)
 }
 
 func augmentPackageAppDoctor(report config.DoctorReport, cfg *config.Config) config.DoctorReport {

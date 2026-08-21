@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -50,7 +52,52 @@ func (h *Hub) OpenTCPStream(ctx context.Context, nodeID, connID, target string) 
 		h.dropTCPStream(nodeID, connID)
 		return nil, err
 	}
+
+	// Block until the node confirms the dial (tcp_open_ack), reports failure
+	// (tcp_close / error), or the caller's context is cancelled, so callers
+	// learn the dial result before sending any bytes. Without this ack the
+	// node drops tcp_data frames for conn ids it has not dialed yet, losing
+	// the first bytes of a forwarded connection.
+	select {
+	case frame, ok := <-ch:
+		if !ok {
+			h.dropTCPStream(nodeID, connID)
+			return nil, ErrNodeOffline
+		}
+		switch frame.Type {
+		case FrameTCPOpenAck:
+			// Dial succeeded; the stream is ready.
+		case FrameTCPClose:
+			h.dropTCPStream(nodeID, connID)
+			return nil, tcpDialFailedError(frame)
+		case FrameError:
+			h.dropTCPStream(nodeID, connID)
+			return nil, fmt.Errorf("relay tcp open: %s", strings.TrimSpace(frame.Reason))
+		default:
+			// Unexpected early frame (e.g. a banner before the ack). Buffer it
+			// for tcpStream.Read instead of dropping the bytes.
+			select {
+			case ch <- frame:
+			default:
+			}
+		}
+	case <-ctx.Done():
+		h.dropTCPStream(nodeID, connID)
+		return nil, ctx.Err()
+	}
 	return &tcpStream{hub: h, nodeID: nodeID, connID: connID, ch: ch}, nil
+}
+
+// tcpDialFailedError converts a tcp_close frame (the node-side dial failed)
+// into a readable error carrying the node's reason when present.
+func tcpDialFailedError(frame Frame) error {
+	var payload TCPClosePayload
+	_ = json.Unmarshal(frame.Payload, &payload)
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "dial failed on node"
+	}
+	return fmt.Errorf("%s", reason)
 }
 
 // Read returns the next bytes received from the node's dialed connection,
@@ -70,6 +117,8 @@ func (s *tcpStream) Read(p []byte) (int, error) {
 			s.buf.Write(chunk)
 		case FrameTCPClose:
 			return 0, io.EOF
+		case FrameTCPOpenAck:
+			// Defensive: OpenTCPStream consumes the ack; ignore any stragglers.
 		}
 	}
 	return s.buf.Read(p)

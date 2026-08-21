@@ -434,6 +434,12 @@ control:
   # Manually known nodes for the control plane dashboard.
   nodes:
 {{ yamlValue .Control.Nodes 4 }}
+  # Persistent TCP forward tunnels managed by this center process. Each entry
+  # listens on 127.0.0.1:local_port and relays connections over the node's
+  # relay channel to target on the node's network (ssh -L style). Managed from
+  # the web Nodes page; entries are {id, name, node_id, local_port, target}.
+  forwards:
+{{ yamlValue .Control.Forwards 4 }}
 
 runtime:
   recovery:

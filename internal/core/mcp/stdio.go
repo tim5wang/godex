@@ -111,7 +111,7 @@ func (c *stdioClient) initialize(ctx context.Context) (string, error) {
 		"capabilities":    map[string]any{},
 		"clientInfo": map[string]any{
 			"name":    "godex",
-			"version": "1.3.0",
+			"version": "1.4.0",
 		},
 	}
 	result, err := c.request(ctx, "initialize", params)

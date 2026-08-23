@@ -1,5 +1,5 @@
 APP := godex
-VERSION ?= v1.3.0
+VERSION ?= v1.4.0
 DIST_DIR ?= dist
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")

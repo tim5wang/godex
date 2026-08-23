@@ -225,6 +225,7 @@ export function SettingsPage() {
   const reloadConfigMutation = useMutation({
     mutationFn: async () => reloadConfigFromDisk(token || null),
     onSuccess: async () => {
+      setBackendDirty(false);
       void message.success(t("settings.msgConfigReloaded"));
       await refreshAll(queryClient, token);
     },
@@ -312,7 +313,7 @@ export function SettingsPage() {
   return (
     <div className="page-pad">
       <div className="page-action-row">
-        <Button icon={<ReloadOutlined />} onClick={() => void refreshAll(queryClient, token)}>{t("settings.refresh")}</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => { setBackendDirty(false); void refreshAll(queryClient, token); }}>{t("settings.refresh")}</Button>
       </div>
 
       <Tabs
@@ -489,6 +490,7 @@ export function SettingsPage() {
                     size="small"
                     dataSource={channelsQuery.data?.channels ?? []}
                     loading={channelsQuery.isLoading}
+                    scroll={{ x: 900 }}
                     columns={[
                       { title: t("settings.channelCol"), dataIndex: "name" },
                       { title: t("settings.stateCol"), render: (_value, channel) => <Tag color={channel.enabled ? (channel.running ? "green" : "gold") : "default"}>{channel.enabled ? channel.state || (channel.running ? t("settings.channelRunning") : t("settings.channelIdle")) : t("settings.channelDisabled")}</Tag> },
@@ -1182,12 +1184,12 @@ function LLMProvidersEditor({
         items={providers.items.map((provider, providerIndex) => {
           const apiKeyConfigured = stringsPresent(provider.api_key) || provider.api_key === SECRET_MASK;
           return {
-            key: String(providerIndex),
+            key: provider.id || String(providerIndex),
             label: (
               <span className="llm-provider-collapse-label">
                 <Typography.Text strong>{provider.id || t("settings.unnamedProvider")}</Typography.Text>
                 <Typography.Text type="secondary">{provider.type || "anthropic_compatible"}</Typography.Text>
-                <Tag color={apiKeyConfigured ? "green" : "default"}>
+                <Tag color={provider.models.length > 0 ? "blue" : "default"}>
                   {t("settings.modelsLabel")} {provider.models.length}
                 </Tag>
                 <Tag color={apiKeyConfigured ? "green" : "gold"}>
@@ -1430,6 +1432,7 @@ function ProvidersPanel({
         size="small"
         loading={loading}
         dataSource={providers}
+        scroll={{ x: 820 }}
         columns={[
           { title: t("settings.providerCol"), dataIndex: "id", render: (_value, row) => <Space><Typography.Text strong>{row.id}</Typography.Text>{row.name ? <Typography.Text type="secondary">{row.name}</Typography.Text> : null}</Space> },
           { title: t("settings.typeCol"), dataIndex: "type", render: (value) => <Tag>{value}</Tag> },
@@ -1506,6 +1509,7 @@ function DoctorPanel({ checks, loading }: { checks: DoctorCheck[]; loading: bool
         size="small"
         loading={loading}
         dataSource={checks}
+        scroll={{ x: 720 }}
         columns={[
           { title: t("settings.severityCol"), dataIndex: "severity", render: (value) => <Tag color={value === "error" ? "red" : value === "warning" ? "gold" : "blue"}>{value}</Tag> },
           { title: t("settings.codeCol"), dataIndex: "code" },
@@ -1579,6 +1583,7 @@ function SecurityPanel({
           loading={loading}
           dataSource={audit}
           pagination={{ pageSize: 8 }}
+          scroll={{ x: 760 }}
           columns={[
             { title: t("settings.timeCol"), dataIndex: "at", render: formatTimestamp },
             { title: t("settings.axisCol"), dataIndex: "category", render: (value) => <Tag>{value}</Tag> },

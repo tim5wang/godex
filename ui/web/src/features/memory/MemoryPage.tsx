@@ -14,7 +14,6 @@ import {
   Select,
   Space,
   Switch,
-  Table,
   Tabs,
   Tag,
   Typography,
@@ -35,6 +34,7 @@ import {
   StopOutlined,
 } from "@ant-design/icons";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { ResponsiveTable } from "../../components/ResponsiveTable";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
 import {
@@ -297,7 +297,7 @@ export function MemoryPage() {
                   </Space>
                   <Typography.Text type="secondary">{t("memory.showing", { visible: memories.length, total: memories.length })}</Typography.Text>
                 </div>
-                <Table<MemoryRecord>
+                <ResponsiveTable<MemoryRecord>
                   rowKey="id"
                   loading={memoriesQuery.isLoading}
                   dataSource={memories}
@@ -320,6 +320,7 @@ export function MemoryPage() {
                     { title: t("memory.fields.source"), dataIndex: "source", render: (value) => value || "-" },
                     { title: t("memory.fields.updated"), dataIndex: "updated_at", render: formatDate },
                     {
+                      key: "actions",
                       title: "Actions",
                       render: (_value, record) => (
                         <Space wrap>
@@ -350,7 +351,7 @@ export function MemoryPage() {
                   </Space>
                   <Typography.Text type="secondary">{selectedCandidates.length} selected</Typography.Text>
                 </div>
-                <Table<MemoryCandidate>
+                <ResponsiveTable<MemoryCandidate>
                   rowKey="fingerprint"
                   loading={candidatesQuery.isLoading}
                   dataSource={candidates}
@@ -362,6 +363,7 @@ export function MemoryPage() {
                     { title: t("memory.fields.source"), dataIndex: "source", render: (value) => value || "-" },
                     { title: t("memory.fields.created"), dataIndex: "created_at", render: formatDate },
                     {
+                      key: "actions",
                       title: "Actions",
                       render: (_value, record) => (
                         <Space wrap>
@@ -382,7 +384,7 @@ export function MemoryPage() {
             label: t("memory.suppressionsTitle"),
             children: (
               <Card>
-                <Table<MemorySuppression>
+                <ResponsiveTable<MemorySuppression>
                   rowKey={(record) => record.fingerprint || record.key || `${record.source}:${record.created_at}`}
                   loading={suppressionsQuery.isLoading}
                   dataSource={suppressions}
@@ -406,7 +408,7 @@ export function MemoryPage() {
             ),
             children: (
               <Card>
-                <Table<MemoryAuditLogEntry>
+                <ResponsiveTable<MemoryAuditLogEntry>
                   rowKey="id"
                   loading={auditQuery.isLoading}
                   dataSource={auditEntries}
@@ -418,6 +420,7 @@ export function MemoryPage() {
                     { title: t("memory.fields.source"), dataIndex: "source", render: (value) => value || "-" },
                     { title: t("memory.fields.created"), dataIndex: "created_at", render: formatDate },
                     {
+                      key: "actions",
                       title: "Actions",
                       render: (_value, record) => (
                         <Space wrap>

@@ -17,7 +17,6 @@ import {
   Segmented,
   Select,
   Space,
-  Table,
   Tabs,
   Tag,
   Tooltip,
@@ -25,6 +24,7 @@ import {
 } from "antd";
 import { DeleteOutlined, DownloadOutlined, EyeOutlined, ReloadOutlined } from "@ant-design/icons";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { ResponsiveTable } from "../../components/ResponsiveTable";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
 import {
@@ -430,7 +430,7 @@ export function SkillsPage() {
                       { value: "popularity", label: t("skills.sortPopularity") },
                     ]} />
                   </div>
-                  <Table<SkillSourceEntry>
+                  <ResponsiveTable<SkillSourceEntry>
                     rowKey="id"
                     loading={sourcesQuery.isLoading || trendingQuery.isLoading}
                     dataSource={filteredSources}
@@ -440,6 +440,7 @@ export function SkillsPage() {
                       { title: "Trust", dataIndex: "trust", render: (value) => value ? <Tag>{value}</Tag> : "-" },
                       { title: "Installs", dataIndex: "installs", render: (value) => typeof value === "number" ? value.toLocaleString() : "-" },
                       {
+                        key: "actions",
                         title: "Action",
                         render: (_value, item) => {
                           const installedName = installedSkillName(item);
@@ -497,7 +498,7 @@ export function SkillsPage() {
                     { value: "needs_attention", label: "Needs attention" },
                   ]} />
                 </div>
-                <Table<SkillCatalogEntry>
+                <ResponsiveTable<SkillCatalogEntry>
                   rowKey="id"
                   loading={catalogQuery.isLoading}
                   dataSource={filteredCatalog}
@@ -506,6 +507,7 @@ export function SkillsPage() {
                     { title: "Skill", render: (_value, item) => <SkillSummary item={item} active={activeMap.get(item.id)} /> },
                     { title: "Compatibility", render: (_value, item) => <Tag color={compatibilityColor(item.compatibility?.status)}>{item.compatibility?.status || "unknown"}</Tag> },
                     {
+                      key: "actions",
                       title: "Actions",
                       render: (_value, item) => {
                         const activeItem = activeMap.get(item.id);
@@ -552,7 +554,7 @@ export function SkillsPage() {
             children: active.length === 0 ? (
               <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No active skills yet." /></Card>
             ) : (
-              <Table<SkillActivation>
+              <ResponsiveTable<SkillActivation>
                 rowKey="id"
                 dataSource={active}
                 pagination={false}
@@ -561,6 +563,7 @@ export function SkillsPage() {
                   { title: "Loaded sections", render: (_value, item) => <Space wrap>{(item.loaded_sections ?? []).map((section) => <Tag key={section}>{section}</Tag>)}</Space> },
                   { title: "Status", dataIndex: "status", render: (value) => <Tag>{value}</Tag> },
                   {
+                    key: "actions",
                     title: "Action",
                     render: (_value, item) => (
                       <Space wrap>
@@ -731,7 +734,7 @@ function SkillAnalyticsPanel({
           )}
         </div>
       </div>
-      <Table<ToolStatRow>
+      <ResponsiveTable<ToolStatRow>
         className="skill-tool-table"
         size="small"
         rowKey="name"
@@ -799,7 +802,7 @@ function PackageQualityPanel({ report, loading }: { report?: PackageQualityRepor
         <Metric title="Prompts" value={report?.prompt_count ?? 0} />
         <Metric title="Commands" value={report?.command_count ?? 0} />
       </div>
-      <Table<PackageQuality>
+      <ResponsiveTable<PackageQuality>
         rowKey="name"
         size="small"
         dataSource={items}
@@ -1073,7 +1076,7 @@ function PackageTable({
 }) {
   return (
     <Card title="Installed packages">
-      <Table<PackageEntry>
+      <ResponsiveTable<PackageEntry>
         rowKey="name"
         loading={loading}
         dataSource={items}
@@ -1148,6 +1151,7 @@ function PackageTable({
             render: (value) => formatTime(value),
           },
           {
+            key: "actions",
             title: "Action",
             width: 220,
             render: (_value, item) => (
@@ -1180,7 +1184,7 @@ function PackageTable({
 function PromptTable({ items, loading }: { items: PromptEntry[]; loading: boolean }) {
   return (
     <Card title="Prompt templates">
-      <Table<PromptEntry>
+      <ResponsiveTable<PromptEntry>
         rowKey={(item) => `${item.package_name}:${item.name}:${item.path}`}
         loading={loading}
         dataSource={items}
@@ -1198,7 +1202,7 @@ function PromptTable({ items, loading }: { items: PromptEntry[]; loading: boolea
 function PackageCommandTable({ items, loading }: { items: PackageCommandEntry[]; loading: boolean }) {
   return (
     <Card title="Package commands">
-      <Table<PackageCommandEntry>
+      <ResponsiveTable<PackageCommandEntry>
         rowKey={(item) => `${item.package_name}:${item.namespace}:${item.name}:${item.path}`}
         loading={loading}
         dataSource={items}
@@ -1246,7 +1250,7 @@ function PackageCommandTable({ items, loading }: { items: PackageCommandEntry[];
 function PackageRoleTable({ items, loading }: { items: PackageRoleEntry[]; loading: boolean }) {
   return (
     <Card title="Named subagent roles">
-      <Table<PackageRoleEntry>
+      <ResponsiveTable<PackageRoleEntry>
         rowKey={(item) => `${item.package_name}:${item.id}:${item.path}`}
         loading={loading}
         dataSource={items}

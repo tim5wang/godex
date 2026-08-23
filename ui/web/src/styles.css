@@ -2052,6 +2052,10 @@ samp {
     grid-template-columns: minmax(0, 1fr) auto auto auto;
   }
 
+  .llm-model-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .skill-analytics-metrics {
     grid-template-columns: minmax(0, 1fr);
   }

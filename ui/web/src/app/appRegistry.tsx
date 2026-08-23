@@ -9,6 +9,7 @@ import {
   FolderViewOutlined,
   SettingOutlined,
   DashboardOutlined,
+  BookOutlined,
 } from "@ant-design/icons";
 import { Navigate, Route, type RouteObject, useLocation } from "react-router-dom";
 import { PageErrorBoundary } from "../components/PageErrorBoundary";
@@ -38,6 +39,7 @@ const loadNodesPage = () => import("../pages/NodesPage");
 const loadNotesPage = () => import("../pages/NotesPage");
 const loadSkillsPage = () => import("../pages/SkillsPage");
 const loadMemoryPage = () => import("../pages/MemoryPage");
+const loadWorkflowsPage = () => import("../pages/WorkflowsPage");
 const loadSettingsPage = () => import("../pages/SettingsPage");
 const loadUsagePage = () => import("../pages/UsagePage");
 
@@ -142,6 +144,17 @@ export const builtinApps: BuiltinAppEntry[] = [
     component: pageComponent(loadSettingsPage, "SettingsPage"),
     isActive: (pathname) => pathname.startsWith("/settings"),
     headerSubtitleKey: "settings.pageSubtitle",
+  }),
+  entry({
+    id: "workflows",
+    navPath: "/workflows",
+    routePaths: ["/workflows"],
+    icon: <BookOutlined />,
+    labelKey: "app.nav.workflows",
+    load: loadWorkflowsPage,
+    component: pageComponent(loadWorkflowsPage, "WorkflowsPage"),
+    isActive: (pathname) => pathname.startsWith("/workflows"),
+    headerSubtitleKey: "workflows.pageSubtitle",
   }),
   entry({
     id: "usage",

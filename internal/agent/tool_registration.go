@@ -304,6 +304,11 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary:       "LSP code intelligence (definitions, references, hover, diagnostics, completions)",
 		DefaultActive: true,
 	})
+	a.registerToolTo(handler, tools.NewUICardTool(), tools.ToolMeta{
+		Bundle:        bundleCoreCode,
+		Summary:       "structured interactive cards (form / button group / markdown) for rich chat UI",
+		DefaultActive: true,
+	})
 	a.registerToolTo(handler, tools.NewTodoWriteTool(a.todoMgr), tools.ToolMeta{
 		Bundle:        bundlePlanning,
 		Summary:       "lightweight todo planning and progress tracking",

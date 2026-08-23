@@ -18,10 +18,10 @@ setlocal EnableDelayedExpansion
 set "APP=godex"
 if not defined VERSION set "VERSION=v1.4.0"
 
-rem ── Locate repo root (this file lives in scripts/) ────────────────
+rem -- Locate repo root (this file lives in scripts/) --
 cd /d "%~dp0.."
 
-rem ── Capture commit + build date for ldflags ───────────────────────
+rem -- Capture commit + build date for ldflags --
 for /f "delims=" %%i in ('git rev-parse --short=12 HEAD 2^>nul') do set "COMMIT=%%i"
 if not defined COMMIT set "COMMIT=unknown"
 for /f "delims=" %%i in ('powershell -NoProfile -Command "Get-Date -Date ([DateTime]::UtcNow) -Format o"') do set "BUILD_DATE=%%i"
@@ -30,7 +30,7 @@ set "LDFLAGS=-s -w -X github.com/tim5wang/godex/internal/version.Version=%VERSIO
 
 echo [dev] version=%VERSION% commit=%COMMIT% built=%BUILD_DATE%
 
-rem ── 1. Web UI production build (tsc + vite) ───────────────────────
+rem -- 1. Web UI production build (tsc + vite) --
 if /i "%~1"=="--skip-web" (
   echo [dev] skipping web build
 ) else (
@@ -42,7 +42,7 @@ if /i "%~1"=="--skip-web" (
   )
 )
 
-rem ── 2. Go build → godex.exe.new ───────────────────────────────────
+rem -- 2. Go build -- godex.exe.new --
 echo [dev] building %APP%.exe.new...
 go build -ldflags "%LDFLAGS%" -o "%APP%.exe.new" .\cmd\godex
 if errorlevel 1 (
@@ -50,7 +50,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem ── 3. Stop service, publish binary, restart ──────────────────────
+rem -- 3. Stop service, publish binary, restart --
 echo [dev] stopping service (unlock running binary)...
 call "%APP%.exe" service stop >nul 2>&1
 

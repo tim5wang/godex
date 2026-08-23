@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1090,5 +1091,49 @@ func TestExportAndRestoreStateForSessionPersistsPermissions(t *testing.T) {
 	result := restored.permissions.Evaluate(req)
 	if result.Decision != tools.PermissionAllow {
 		t.Fatalf("expected restored session approval to allow request, got %+v", result)
+	}
+}
+
+func TestExportRestoreStatePersistsCacheAndUsage(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.cacheStatsMu.Lock()
+	a.cacheStats = sessionCacheStats{Calls: 3, InputTokens: 1000, CacheReadTokens: 9000, CacheWriteTokens: 100}
+	a.cacheStatsMu.Unlock()
+	a.usageMu.Lock()
+	a.usage = sessionUsage{InputTokens: 10100, OutputTokens: 130}
+	a.usageMu.Unlock()
+
+	state := a.ExportStateForSession("session-cache-persist")
+	if state.CacheUsage == nil || state.CacheUsage.Calls != 3 {
+		t.Fatalf("expected cache usage in exported state, got %+v", state.CacheUsage)
+	}
+	if state.UsageTotals == nil || state.UsageTotals.InputTokens != 10100 || state.UsageTotals.OutputTokens != 130 {
+		t.Fatalf("expected usage totals in exported state, got %+v", state.UsageTotals)
+	}
+
+	// Round-trip through JSON to mirror the persisted session file, then
+	// restore into a fresh agent (as loadSession does on reopen).
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	var decoded SessionState
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+
+	restored := newTestAgent(t, 4096)
+	restored.RestoreStateForSession("session-cache-persist", decoded)
+
+	snap := restored.cacheUsageSnapshot()
+	if snap.Calls != 3 || snap.CacheReadTokens != 9000 {
+		t.Fatalf("expected restored cache stats, got %+v", snap)
+	}
+	if snap.HitRatePercent < 89.9 || snap.HitRatePercent > 90.1 {
+		t.Fatalf("expected restored hit rate ~90%%, got %.2f", snap.HitRatePercent)
+	}
+	in, out := restored.cumulativeTokenUsage()
+	if in != 10100 || out != 130 {
+		t.Fatalf("expected restored usage totals (%d/%d), got (%d/%d)", 10100, 130, in, out)
 	}
 }

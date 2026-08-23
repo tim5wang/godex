@@ -419,6 +419,14 @@ type PendingResumeState struct {
 	RuntimeContext    automation.SessionContext `json:"runtime_context,omitempty"`
 }
 
+// SessionUsageTotals persists the session-lifetime cumulative model-token
+// totals (input + output) reported by the provider, so the status-bar
+// cumulative counters survive service restarts and agent rebuilds.
+type SessionUsageTotals struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+}
+
 // SessionState is the persisted session-scoped portion of an agent.
 type SessionState struct {
 	Messages             []protocol.Message           `json:"messages"`
@@ -429,6 +437,12 @@ type SessionState struct {
 	PendingResume        *PendingResumeState          `json:"pending_resume,omitempty"`
 	HistoryVersion       int64                        `json:"history_version"`
 	LastCompactedVersion int64                        `json:"last_compacted_version"`
+	// CacheUsage persists the provider-reported prompt-cache aggregation so
+	// the real cache hit rate survives restarts and agent rebuilds. Nil when
+	// no provider usage has been observed yet.
+	CacheUsage *tools.CacheUsageInspection `json:"cache_usage,omitempty"`
+	// UsageTotals persists the session-lifetime cumulative token totals.
+	UsageTotals *SessionUsageTotals `json:"usage_totals,omitempty"`
 }
 
 // ExportState snapshots the session-scoped agent state for persistence.
@@ -462,6 +476,18 @@ func (a *Agent) ExportStateForSession(sessionID string) SessionState {
 		})
 	}
 
+	cacheUsage := a.cacheUsageSnapshot()
+	cumInput, cumOutput := a.cumulativeTokenUsage()
+	var cachePtr *tools.CacheUsageInspection
+	if cacheUsage.Calls > 0 {
+		c := cacheUsage
+		cachePtr = &c
+	}
+	var usagePtr *SessionUsageTotals
+	if cumInput > 0 || cumOutput > 0 {
+		usagePtr = &SessionUsageTotals{InputTokens: cumInput, OutputTokens: cumOutput}
+	}
+
 	return SessionState{
 		Messages:             protocol.CloneMessages(a.messages),
 		TranscriptRefs:       append([]string{}, a.transcriptRefs...),
@@ -471,6 +497,8 @@ func (a *Agent) ExportStateForSession(sessionID string) SessionState {
 		PendingResume:        clonePendingResumeState(a.pendingResume),
 		HistoryVersion:       a.historyVersion,
 		LastCompactedVersion: a.lastCompactedVersion,
+		CacheUsage:           cachePtr,
+		UsageTotals:          usagePtr,
 	}
 }
 
@@ -509,6 +537,25 @@ func (a *Agent) RestoreStateForSession(sessionID string, state SessionState) {
 	a.historyVersion = state.HistoryVersion
 	a.lastCompactedVersion = state.LastCompactedVersion
 	a.mu.Unlock()
+
+	// Restore provider-reported cache/usage aggregates so the real cache hit
+	// rate and cumulative token counters survive restarts. The agent is freshly
+	// built at this point, so no usage hook is racing these writes.
+	a.cacheStatsMu.Lock()
+	if state.CacheUsage != nil && state.CacheUsage.Calls > 0 {
+		a.cacheStats = sessionCacheStats{
+			Calls:            state.CacheUsage.Calls,
+			InputTokens:      state.CacheUsage.InputTokens,
+			CacheReadTokens:  state.CacheUsage.CacheReadTokens,
+			CacheWriteTokens: state.CacheUsage.CacheWriteTokens,
+		}
+	}
+	a.cacheStatsMu.Unlock()
+	a.usageMu.Lock()
+	if state.UsageTotals != nil {
+		a.usage = sessionUsage{InputTokens: state.UsageTotals.InputTokens, OutputTokens: state.UsageTotals.OutputTokens}
+	}
+	a.usageMu.Unlock()
 
 	a.toolHandler.SetActiveBundles(state.ActiveBundles...)
 	restorePermissionState(a.permissions, sessionID, state.PermissionState)

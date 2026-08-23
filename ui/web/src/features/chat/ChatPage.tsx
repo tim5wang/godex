@@ -467,6 +467,11 @@ export function ChatPage() {
     queryKey: ["context-inspector", token, openQuery.data?.session_id],
     enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
     queryFn: async () => getSessionContextInspector(token || null, openQuery.data!.session_id),
+    // While a turn is running, poll so the real cache hit rate and cumulative
+    // token counters update live instead of only after snapshot_ready.
+    // snapshotQuery.data?.running keeps the interval in sync with the backend
+    // even when the local `running` flag lags.
+    refetchInterval: running || snapshotQuery.data?.running ? 5000 : false,
   });
   const activeSkillsQuery = useQuery({
     queryKey: ["skills-active", token, openQuery.data?.session_id],

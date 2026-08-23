@@ -612,3 +612,164 @@ func TestDesktopStatusReportsOCRLanguages(t *testing.T) {
 		}
 	}
 }
+
+// fakeOCRBackend is a deterministic OCRBackend for tests.
+type fakeOCRBackend struct{ name string }
+
+func (f *fakeOCRBackend) Name() string        { return f.name }
+func (f *fakeOCRBackend) Languages() []string { return []string{"eng", "chi_sim"} }
+func (f *fakeOCRBackend) Available() bool     { return true }
+func (f *fakeOCRBackend) OCR(ctx context.Context, path, lang string) ([]DesktopOCRWord, error) {
+	return []DesktopOCRWord{{Text: "你好", Left: 10, Top: 20, Width: 40, Height: 12, Confidence: 0.9}}, nil
+}
+
+func TestDesktopOCRBackendAbstractionUsesConfiguredBackend(t *testing.T) {
+	service := NewDesktopService(t.TempDir())
+	service.SetOCRBackend(&fakeOCRBackend{name: "rapidocr"})
+	// Screenshot must still be produced for the fake backend to consume.
+	service.osName = "darwin"
+	service.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		if name == "screencapture" && len(args) == 2 {
+			if err := os.WriteFile(args[1], []byte("png"), 0644); err != nil {
+				t.Fatalf("write screenshot: %v", err)
+			}
+		}
+		return nil, nil
+	}
+	ocr, err := service.OCR(context.Background())
+	if err != nil {
+		t.Fatalf("ocr: %v", err)
+	}
+	if ocr.Engine != "rapidocr-tsv" {
+		t.Fatalf("expected engine rapidocr-tsv, got %q", ocr.Engine)
+	}
+	if len(ocr.Words) != 1 || ocr.Words[0].Text != "你好" {
+		t.Fatalf("unexpected words: %+v", ocr.Words)
+	}
+	if service.OCRBackendName() != "rapidocr" {
+		t.Fatalf("expected backend name rapidocr, got %q", service.OCRBackendName())
+	}
+}
+
+func TestDefaultOCRBackendPrefersRapidOCR(t *testing.T) {
+	look := func(name string) (string, error) {
+		switch name {
+		case "rapidocr":
+			return "/usr/local/bin/rapidocr", nil
+		default:
+			return "", os.ErrNotExist
+		}
+	}
+	backend := newDefaultOCRBackend(nil, look)
+	if backend.Name() != "rapidocr" {
+		t.Fatalf("expected rapidocr preferred when present, got %q", backend.Name())
+	}
+
+	look2 := func(name string) (string, error) {
+		switch name {
+		case "tesseract":
+			return "/usr/bin/tesseract", nil
+		default:
+			return "", os.ErrNotExist
+		}
+	}
+	backend2 := newDefaultOCRBackend(nil, look2)
+	if backend2.Name() != "tesseract" {
+		t.Fatalf("expected tesseract fallback, got %q", backend2.Name())
+	}
+}
+
+func TestRapidOCRBackendParsesJSON(t *testing.T) {
+	out := []byte(`{"result":[{"text":"确定","box":[[10,20],[50,20],[50,32],[10,32]],"score":0.95}]}`)
+	words := parseRapidOCRJSON(out)
+	if len(words) != 1 {
+		t.Fatalf("expected 1 word, got %d: %+v", len(words), words)
+	}
+	word := words[0]
+	if word.Text != "确定" || word.Left != 10 || word.Top != 20 || word.Width != 40 || word.Height != 12 {
+		t.Fatalf("unexpected rapid word: %+v", word)
+	}
+	if word.Confidence != 0.95 {
+		t.Fatalf("expected confidence 0.95, got %v", word.Confidence)
+	}
+
+	// Bare array output shape.
+	out2 := []byte(`[{"text":"OK","box":[[0,0],[10,0],[10,8],[0,8]],"score":0.9}]`)
+	if words := parseRapidOCRJSON(out2); len(words) != 1 || words[0].Text != "OK" {
+		t.Fatalf("expected bare array parse, got %+v", words)
+	}
+}
+
+func TestDesktopMacAccessibilityDumpParsesLines(t *testing.T) {
+	service := NewDesktopService(t.TempDir())
+	service.osName = "darwin"
+	service.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		if name != "osascript" {
+			t.Fatalf("expected osascript, got %q", name)
+		}
+		return []byte("Safari\nbutton\t确定\t\t100\t200\t60\t24\ttrue\nbutton\tOpen File\t\t50\t60\t80\t20\tfalse\n"), nil
+	}
+	result, err := service.DumpAccessibility(context.Background())
+	if err != nil {
+		t.Fatalf("dump accessibility: %v", err)
+	}
+	if result.App != "Safari" {
+		t.Fatalf("expected app Safari, got %q", result.App)
+	}
+	if len(result.Elements) != 2 {
+		t.Fatalf("expected 2 elements, got %+v", result.Elements)
+	}
+	first := result.Elements[0]
+	if first.Role != "button" || first.Title != "确定" || first.Left != 100 || first.Top != 200 || !first.Enabled {
+		t.Fatalf("unexpected first element: %+v", first)
+	}
+	if result.Elements[1].Enabled {
+		t.Fatalf("expected second element disabled, got %+v", result.Elements[1])
+	}
+}
+
+func TestDesktopDumpAccessibilityUnsupportedOnLinux(t *testing.T) {
+	service := NewDesktopService(t.TempDir())
+	service.osName = "linux"
+	if _, err := service.DumpAccessibility(context.Background()); err == nil {
+		t.Fatal("expected dump_accessibility to fail on linux")
+	}
+}
+
+func TestDesktopAccessibilityToWords(t *testing.T) {
+	elements := []DesktopAccessibilityElement{
+		{Role: "button", Title: "确定", Left: 100, Top: 200, Width: 60, Height: 24},
+		{Role: "menu", Title: "", Children: []DesktopAccessibilityElement{
+			{Role: "menu item", Title: "保存", Left: 10, Top: 10, Width: 30, Height: 14},
+		}},
+	}
+	words := accessibilityToWords(elements)
+	if len(words) != 2 {
+		t.Fatalf("expected 2 words, got %d: %+v", len(words), words)
+	}
+	if words[0].Text != "确定" || words[0].Left != 100 || words[0].Top != 200 {
+		t.Fatalf("unexpected word: %+v", words[0])
+	}
+	if words[1].Text != "保存" {
+		t.Fatalf("expected nested child text, got %+v", words[1])
+	}
+}
+
+func TestDesktopToolSchemaIncludesAccessibilityActions(t *testing.T) {
+	tool := NewDesktopTool(NewDesktopService(t.TempDir()))
+	spec := tool.Spec()
+	props, _ := spec.InputSchema["properties"].(map[string]interface{})
+	actionSchema, _ := props["action"].(map[string]interface{})
+	raw, _ := actionSchema["enum"].([]interface{})
+	enums := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if value, ok := item.(string); ok {
+			enums = append(enums, value)
+		}
+	}
+	for _, want := range []string{"dump_accessibility", "ocr_backend"} {
+		if !containsString(enums, want) {
+			t.Fatalf("expected desktop action %q in schema, got %v", want, enums)
+		}
+	}
+}

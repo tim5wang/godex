@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -118,6 +119,9 @@ type DesktopService struct {
 	now      func() time.Time
 	run      desktopRunner
 	lookPath desktopLookPath
+
+	mu         sync.Mutex
+	ocrBackend OCRBackend
 }
 
 func NewDesktopService(tempDir string) *DesktopService {
@@ -137,8 +141,8 @@ func NewDesktopTool(service *DesktopService) Tool {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"description": "status | screenshot | list_windows | click | type_text | key | scroll | activate_window | clipboard_get | clipboard_set | ocr | find_text | click_text",
-				"enum":        []string{"status", "screenshot", "list_windows", "click", "type_text", "key", "scroll", "activate_window", "clipboard_get", "clipboard_set", "ocr", "find_text", "click_text"},
+				"description": "status | screenshot | list_windows | click | type_text | key | scroll | activate_window | clipboard_get | clipboard_set | ocr | find_text | click_text | dump_accessibility | ocr_backend",
+				"enum":        []string{"status", "screenshot", "list_windows", "click", "type_text", "key", "scroll", "activate_window", "clipboard_get", "clipboard_set", "ocr", "find_text", "click_text", "dump_accessibility", "ocr_backend"},
 			},
 			"x": map[string]interface{}{
 				"type":        "integer",
@@ -210,6 +214,10 @@ func NewDesktopTool(service *DesktopService) Tool {
 			payload, err = service.FindTextWithLang(ctx, args.Text, args.MaxResults, args.Lang)
 		case "click_text":
 			payload, err = service.ClickTextWithLang(ctx, args.Text, args.Lang)
+		case "dump_accessibility":
+			payload, err = service.DumpAccessibility(ctx)
+		case "ocr_backend":
+			payload = map[string]string{"backend": service.OCRBackendName()}
 		default:
 			return ToolResult{}, fmt.Errorf("unknown desktop action %q", action)
 		}
@@ -250,7 +258,7 @@ func (s *DesktopService) Status() DesktopStatus {
 		OS:        osName,
 		Actions:   []string{"screenshot", "list_windows", "click", "type_text", "key", "clipboard_get", "clipboard_set", "ocr", "find_text", "click_text", "scroll", "activate_window"},
 	}
-	status.OCRLanguages = s.tesseractLanguages()
+	status.OCRLanguages = s.ensureOCRBackend().Languages()
 	switch osName {
 	case "darwin":
 		status.Backend = "macos-system-commands+tesseract"
@@ -273,25 +281,10 @@ func (s *DesktopService) Status() DesktopStatus {
 	return status
 }
 
-// tesseractLanguages returns the OCR language packs tesseract reports as
-// installed (e.g. eng, chi_sim), so the model can pass a matching lang.
-func (s *DesktopService) tesseractLanguages() []string {
-	if !s.hasCommand("tesseract") {
-		return nil
-	}
-	out, err := s.run(context.Background(), "tesseract", []string{"--list-langs"}, "")
-	if err != nil {
-		return nil
-	}
-	languages := make([]string, 0, 4)
-	for _, line := range strings.Split(string(out), "\n") {
-		lang := strings.TrimSpace(line)
-		if lang == "" || strings.HasPrefix(lang, "List of available languages") || strings.HasPrefix(lang, "(") {
-			continue
-		}
-		languages = append(languages, lang)
-	}
-	return languages
+// OCRBackendName returns the active OCR backend name (tesseract | rapidocr),
+// for the status report.
+func (s *DesktopService) OCRBackendName() string {
+	return s.ensureOCRBackend().Name()
 }
 
 func (s *DesktopService) Screenshot(ctx context.Context) (DesktopScreenshotResult, error) {
@@ -556,13 +549,14 @@ func (s *DesktopService) OCRWithLang(ctx context.Context, lang string) (DesktopO
 	if err != nil {
 		return DesktopOCRResult{}, err
 	}
-	words, err := s.ocrImageWithLang(ctx, screenshot.ArtifactPath, lang)
+	backend := s.ensureOCRBackend()
+	words, err := backend.OCR(ctx, screenshot.ArtifactPath, lang)
 	if err != nil {
 		return DesktopOCRResult{}, err
 	}
 	return DesktopOCRResult{
 		Screenshot: screenshot,
-		Engine:     "tesseract-tsv" + tesseractLangSuffix(lang),
+		Engine:     backend.Name() + "-tsv" + tesseractLangSuffix(lang),
 		Words:      words,
 		Lines:      buildOCRLines(words),
 	}, nil
@@ -607,24 +601,24 @@ func (s *DesktopService) ClickTextWithLang(ctx context.Context, query, lang stri
 	return DesktopActionResult{Status: "ok", Action: "click_text", X: match.CenterX, Y: match.CenterY, Target: match.Text}, nil
 }
 
+// DumpAccessibility reads the focused app's UI element tree (role, title,
+// coordinates) on macOS - a non-vision, non-OCR observation channel. The
+// structured elements let the model locate controls precisely; click/type can
+// then target the element's coordinates. On non-macOS platforms it returns an
+// explicit unsupported error so callers fall back to OCR.
+func (s *DesktopService) DumpAccessibility(ctx context.Context) (DesktopAccessibilityResult, error) {
+	if s.currentOS() != "darwin" {
+		return DesktopAccessibilityResult{Engine: "macos-accessibility"}, fmt.Errorf("dump_accessibility is only supported on macOS (System Events accessibility tree)")
+	}
+	return s.dumpMacAccessibility(ctx)
+}
+
 func (s *DesktopService) ocrImage(ctx context.Context, path string) ([]DesktopOCRWord, error) {
-	return s.ocrImageWithLang(ctx, path, "")
+	return s.ensureOCRBackend().OCR(ctx, path, "")
 }
 
 func (s *DesktopService) ocrImageWithLang(ctx context.Context, path, lang string) ([]DesktopOCRWord, error) {
-	if !s.hasCommand("tesseract") {
-		return nil, fmt.Errorf("desktop OCR requires tesseract CLI")
-	}
-	args := []string{path, "stdout", "--psm", "11"}
-	if lang = strings.TrimSpace(lang); lang != "" {
-		args = append(args, "-l", lang)
-	}
-	args = append(args, "tsv")
-	out, err := s.run(ctx, "tesseract", args, "")
-	if err != nil {
-		return nil, fmt.Errorf("desktop OCR failed: %w", err)
-	}
-	return parseTesseractTSV(string(out)), nil
+	return s.ensureOCRBackend().OCR(ctx, path, lang)
 }
 
 func tesseractLangSuffix(lang string) string {

@@ -146,6 +146,62 @@ func TestRenderLaunchdPlistCarriesRuntimeEnvironment(t *testing.T) {
 	}
 }
 
+func TestWindowsServeScriptWritesShortLauncherPath(t *testing.T) {
+	opts, err := NormalizeOptions(testInstallOptions(t))
+	if err != nil {
+		t.Fatalf("normalize options: %v", err)
+	}
+	scriptPath, err := writeWindowsServeScript(opts)
+	if err != nil {
+		t.Fatalf("write windows serve script: %v", err)
+	}
+	// The /TR value passed to schtasks must be <= 261 characters (the script
+	// path alone, quoted) — the long inline command would blow past it.
+	if tr := len(windowsQuote(scriptPath)); tr > 261 {
+		t.Fatalf("/TR value is %d chars, exceeds schtasks 261-char limit: %q", tr, scriptPath)
+	}
+	raw, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"@echo off",
+		"cd /d " + windowsQuote(opts.WorkingDir),
+		`set "GODEX_HOME=` + opts.HomeDir + `"`,
+		`set "GODEX_PROJECT_DIR=` + opts.ProjectDir + `"`,
+		`set "GODEX_SERVICE_NAME=` + opts.Name + `"`,
+		`set "GODEX_SERVICE_SCOPE=user"`,
+		`set "GOMEMLIMIT=220MiB"`,
+		`set "GOGC=50"`,
+		`set "GOMAXPROCS=1"`,
+		`set "GODEBUG=madvdontneed=1"`,
+		windowsQuote(opts.BinaryPath) + " serve --addr " + opts.Addr,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected script to contain %q:\n%s", want, text)
+		}
+	}
+	if !strings.HasSuffix(text, "\r\n") {
+		t.Fatalf("expected CRLF line endings, got %q", text)
+	}
+}
+
+func TestWindowsServeCommandExceeds261ButScriptPathDoesNot(t *testing.T) {
+	opts, err := NormalizeOptions(testInstallOptions(t))
+	if err != nil {
+		t.Fatalf("normalize options: %v", err)
+	}
+	// Guard the premise of the fix: the old inline command is genuinely too
+	// long for schtasks /TR, and the script path is not.
+	if got := len(windowsServeCommand(opts)); got <= 261 {
+		t.Fatalf("expected inline serve command to exceed 261 chars for the regression test, got %d", got)
+	}
+	if got := len(windowsQuote(windowsServeScriptPath(opts))); got > 261 {
+		t.Fatalf("expected script /TR value to fit in 261 chars, got %d", got)
+	}
+}
+
 func testInstallOptions(t *testing.T) InstallOptions {
 	t.Helper()
 	root := t.TempDir()

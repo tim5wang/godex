@@ -186,7 +186,13 @@ func (c *Controller) Install(ctx context.Context, opts InstallOptions) (Status, 
 				return Status{}, err
 			}
 		} else {
-			if _, err := c.runner.Run(ctx, "schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", windowsTaskName(opts), "/TR", windowsServeCommand(opts)); err != nil {
+			scriptPath, err := writeWindowsServeScript(opts)
+			if err != nil {
+				return Status{}, err
+			}
+			// /TR has a hard 261-character limit; point it at the short launcher
+			// script instead of the long inline command.
+			if _, err := c.runner.Run(ctx, "schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", windowsTaskName(opts), "/TR", windowsQuote(scriptPath)); err != nil {
 				return Status{}, err
 			}
 		}
@@ -230,6 +236,11 @@ func (c *Controller) Uninstall(ctx context.Context, opts InstallOptions) (Status
 			_, err = c.runner.Run(ctx, "sc.exe", "delete", opts.Name)
 		} else {
 			_, err = c.runner.Run(ctx, "schtasks", "/Delete", "/F", "/TN", windowsTaskName(opts))
+			if scriptErr := os.Remove(windowsServeScriptPath(opts)); scriptErr != nil && !os.IsNotExist(scriptErr) {
+				if err == nil {
+					err = scriptErr
+				}
+			}
 		}
 		if err != nil {
 			return Status{}, err
@@ -682,8 +693,8 @@ func windowsTaskName(opts InstallOptions) string {
 	return `GoDex\` + opts.Name
 }
 
-func windowsServeCommand(opts InstallOptions) string {
-	parts := []string{
+func windowsServeCommandParts(opts InstallOptions) []string {
+	return []string{
 		"cd /d " + windowsQuote(opts.WorkingDir),
 		`set "GODEX_HOME=` + opts.HomeDir + `"`,
 		`set "GODEX_PROJECT_DIR=` + opts.ProjectDir + `"`,
@@ -695,7 +706,37 @@ func windowsServeCommand(opts InstallOptions) string {
 		`set "GODEBUG=` + opts.GODEBUG + `"`,
 		windowsQuote(opts.BinaryPath) + " serve --addr " + opts.Addr,
 	}
-	return `cmd /c "` + strings.Join(parts, " && ") + `"`
+}
+
+func windowsServeCommand(opts InstallOptions) string {
+	return `cmd /c "` + strings.Join(windowsServeCommandParts(opts), " && ") + `"`
+}
+
+// windowsServeScriptPath returns where the user-scope launcher .cmd lives.
+func windowsServeScriptPath(opts InstallOptions) string {
+	return filepath.Join(opts.HomeDir, opts.Name+".cmd")
+}
+
+// writeWindowsServeScript writes the launcher script that user-scope Windows
+// tasks point at via schtasks /TR. The /TR value is limited to 261 characters,
+// which the full inline serve command easily exceeds, so the long command body
+// lives in this file and /TR only carries the short script path.
+func writeWindowsServeScript(opts InstallOptions) (string, error) {
+	if err := os.MkdirAll(opts.HomeDir, 0755); err != nil {
+		return "", err
+	}
+	path := windowsServeScriptPath(opts)
+	if err := os.WriteFile(path, []byte(windowsServeScript(opts)), 0644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// windowsServeScript renders the batch script body used by user-scope Windows
+// tasks (a .cmd run through cmd.exe when the task fires).
+func windowsServeScript(opts InstallOptions) string {
+	lines := append([]string{"@echo off"}, windowsServeCommandParts(opts)...)
+	return strings.Join(lines, "\r\n") + "\r\n"
 }
 
 func mustServiceFile(opts InstallOptions) string {

@@ -39,8 +39,8 @@ func NewBrowserTool(service *BrowserService, workspace string) Tool {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"description": "status | open | navigate | snapshot | click | type | press | wait | screenshot | close | list_pages | find | fill_form | upload_file | wait_network_idle | network_snapshot | download | capture_page | search_and_open | handoff | resume",
-				"enum":        []string{"status", "open", "navigate", "snapshot", "click", "type", "press", "wait", "screenshot", "close", "list_pages", "find", "fill_form", "upload_file", "wait_network_idle", "network_snapshot", "download", "capture_page", "search_and_open", "handoff", "resume"},
+				"description": "status | open | open_tab | navigate | snapshot | click | type | press | wait | screenshot | close | close_tab | switch_tab | list_pages | find | fill_form | upload_file | wait_network_idle | network_snapshot | download | capture_page | search_and_open | handoff | resume",
+				"enum":        []string{"status", "open", "open_tab", "navigate", "snapshot", "click", "type", "press", "wait", "screenshot", "close", "close_tab", "switch_tab", "list_pages", "find", "fill_form", "upload_file", "wait_network_idle", "network_snapshot", "download", "capture_page", "search_and_open", "handoff", "resume"},
 			},
 			"page_id":       map[string]interface{}{"type": "string"},
 			"url":           map[string]interface{}{"type": "string"},
@@ -117,6 +117,22 @@ func NewBrowserTool(service *BrowserService, workspace string) Tool {
 			payload = service.ListPages(sessionID)
 		case "open":
 			payload, err = service.Open(ctx, sessionID, args.URL)
+		case "open_tab":
+			// Explicit tab semantics: open a new tab in the shared browser
+			// window (same as open, kept as a distinct action for models).
+			payload, err = service.Open(ctx, sessionID, args.URL)
+		case "switch_tab":
+			if strings.TrimSpace(args.PageID) == "" {
+				return ToolResult{}, fmt.Errorf("switch_tab requires page_id")
+			}
+			payload, err = service.ActivatePage(ctx, sessionID, args.PageID)
+		case "close_tab":
+			if strings.TrimSpace(args.PageID) == "" {
+				return ToolResult{}, fmt.Errorf("close_tab requires page_id")
+			}
+			if err = service.Close(sessionID, args.PageID); err == nil {
+				payload = service.ListPages(sessionID)
+			}
 		case "navigate":
 			payload, err = service.Navigate(ctx, sessionID, args.PageID, args.URL)
 		case "snapshot":

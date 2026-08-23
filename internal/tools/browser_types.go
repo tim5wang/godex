@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,20 +27,25 @@ type BrowserPage struct {
 }
 
 type BrowserElement struct {
-	Ref      string `json:"ref"`
-	Selector string `json:"selector,omitempty"`
-	Tag      string `json:"tag,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Href     string `json:"href,omitempty"`
+	Ref         string `json:"ref"`
+	Selector    string `json:"selector,omitempty"`
+	Tag         string `json:"tag,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Href        string `json:"href,omitempty"`
+	Role        string `json:"role,omitempty"`
+	AriaLabel   string `json:"aria_label,omitempty"`
+	AriaChecked string `json:"aria_checked,omitempty"`
 }
 
 type BrowserSnapshot struct {
-	PageID   string           `json:"page_id"`
-	Title    string           `json:"title,omitempty"`
-	URL      string           `json:"url,omitempty"`
-	Text     string           `json:"text,omitempty"`
-	Elements []BrowserElement `json:"elements,omitempty"`
+	PageID          string           `json:"page_id"`
+	Title           string           `json:"title,omitempty"`
+	URL             string           `json:"url,omitempty"`
+	Text            string           `json:"text,omitempty"`
+	Elements        []BrowserElement `json:"elements,omitempty"`
+	HasCanvas       bool             `json:"has_canvas,omitempty"`
+	NeedsScreenshot bool             `json:"needs_screenshot,omitempty"`
 }
 
 type BrowserLocator struct {
@@ -157,6 +163,7 @@ type BrowserService struct {
 	cfg                config.BrowserConfig
 	storage            config.StorageConfig
 	tempDir            string
+	stateDir           string
 	browser            *rod.Browser
 	launcher           *launcher.Launcher
 	pages              map[string]map[string]*browserPageState
@@ -164,6 +171,15 @@ type BrowserService struct {
 	counter            uint64
 	resolveBrowserPath func(string) string
 	downloadBrowser    func(context.Context, string) (string, error)
+}
+
+// SetStateDir installs the durable state directory. When the browser is
+// configured with persistent_profile, the profile (cookies, sessions, logins)
+// is kept here instead of the throwaway temp dir so it survives restarts.
+func (s *BrowserService) SetStateDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stateDir = strings.TrimSpace(dir)
 }
 
 const browserLaunchTimeout = 10 * time.Minute

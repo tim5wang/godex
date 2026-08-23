@@ -234,6 +234,7 @@ func defaultConfigFile() ConfigFile {
 				IdleTimeoutSeconds:   600,
 				MaxPagesPerSession:   3,
 				AllowPrivateHosts:    false,
+				PersistentProfile:    false,
 			},
 			History: HistorySearchSection{
 				Enabled: true,

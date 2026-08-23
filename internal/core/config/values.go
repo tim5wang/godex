@@ -400,6 +400,8 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Tools.Browser.MaxPagesPerSession = asInt(value)
 	case "tools.browser.allow_private_hosts":
 		file.Tools.Browser.AllowPrivateHosts = asBool(value)
+	case "tools.browser.persistent_profile":
+		file.Tools.Browser.PersistentProfile = asBool(value)
 	case "tools.history_search.enabled":
 		file.Tools.History.Enabled = asBool(value)
 	case "tools.history_search.auto.enabled":
@@ -664,6 +666,7 @@ func storedValues(file ConfigFile) map[string]any {
 		"tools.browser.idle_timeout_seconds":                     file.Tools.Browser.IdleTimeoutSeconds,
 		"tools.browser.max_pages_per_session":                    file.Tools.Browser.MaxPagesPerSession,
 		"tools.browser.allow_private_hosts":                      file.Tools.Browser.AllowPrivateHosts,
+		"tools.browser.persistent_profile":                       file.Tools.Browser.PersistentProfile,
 		"tools.history_search.enabled":                           file.Tools.History.Enabled,
 		"tools.history_search.auto.enabled":                      file.Tools.History.Auto.Enabled,
 		"tools.history_search.auto.max_per_turn":                 file.Tools.History.Auto.MaxPerTurn,
@@ -868,6 +871,7 @@ func effectiveValues(cfg *Config) map[string]any {
 		"tools.browser.idle_timeout_seconds":                     cfg.Tools.Browser.IdleTimeoutSeconds,
 		"tools.browser.max_pages_per_session":                    cfg.Tools.Browser.MaxPagesPerSession,
 		"tools.browser.allow_private_hosts":                      cfg.Tools.Browser.AllowPrivateHosts,
+		"tools.browser.persistent_profile":                       cfg.Tools.Browser.PersistentProfile,
 		"tools.history_search.enabled":                           cfg.Tools.History.Enabled,
 		"tools.history_search.auto.enabled":                      cfg.Tools.History.Auto.Enabled,
 		"tools.history_search.auto.max_per_turn":                 cfg.Tools.History.Auto.MaxPerTurn,

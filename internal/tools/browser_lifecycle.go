@@ -216,10 +216,21 @@ func (s *BrowserService) resolveLaunchBinaryLocked(ctx context.Context) (string,
 }
 
 func (s *BrowserService) ensureBrowserDir(name string) (string, error) {
-	if strings.TrimSpace(s.tempDir) == "" {
+	s.mu.Lock()
+	root := s.tempDir
+	persistent := s.cfg.PersistentProfile
+	stateDir := s.stateDir
+	s.mu.Unlock()
+	// Persistent profile: keep the browser profile (cookies, sessions,
+	// logins) in the durable state dir so it survives restarts instead of a
+	// throwaway temp dir. Other caches (work, screenshot) stay in temp.
+	if name == "user-data" && persistent && strings.TrimSpace(stateDir) != "" {
+		root = stateDir
+	}
+	if strings.TrimSpace(root) == "" {
 		return "", nil
 	}
-	dir := filepath.Join(s.tempDir, "browser", name)
+	dir := filepath.Join(root, "browser", name)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}

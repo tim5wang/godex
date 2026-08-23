@@ -52,6 +52,7 @@ func buildDependencies(cfg *config.Config) dependencies {
 	webFetch := tools.NewWebFetchService(cfg.Tools.WebFetch, cfg.TempDir)
 	webSearch := tools.NewWebSearchService(cfg.Tools.WebSearch)
 	browser := tools.NewBrowserService(cfg.Tools.Browser, cfg.TempDir, cfg.Storage)
+	browser.SetStateDir(cfg.StateDir)
 	webSearch.SetPreviewFetcher(webFetch)
 	webSearch.SetBrowserSearcher(tools.NewBrowserSearchProvider(browser, cfg.Tools.WebSearch.Browser))
 

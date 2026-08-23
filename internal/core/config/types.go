@@ -387,6 +387,7 @@ type BrowserSection struct {
 	IdleTimeoutSeconds   int    `yaml:"idle_timeout_seconds"`
 	MaxPagesPerSession   int    `yaml:"max_pages_per_session"`
 	AllowPrivateHosts    bool   `yaml:"allow_private_hosts"`
+	PersistentProfile    bool   `yaml:"persistent_profile"`
 }
 
 type HistorySearchSection struct {

@@ -125,7 +125,7 @@ func snapshotScript(maxChars int) string {
     if (el.id) return "#" + CSS.escape(el.id);
     const path = [];
     let current = el;
-    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body) {
+    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body && current.parentNode !== document) {
       let selector = current.nodeName.toLowerCase();
       if (current.classList && current.classList.length > 0) {
         selector += "." + Array.from(current.classList).slice(0, 2).map((c) => CSS.escape(c)).join(".");
@@ -144,21 +144,77 @@ func snapshotScript(maxChars int) string {
     const style = window.getComputedStyle(el);
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
   }
-  const nodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,summary,[role="button"],[role="link"],[role="textbox"],[tabindex]'))
-    .filter((el) => visible(el))
-    .slice(0, 40);
-  const elements = nodes.map((el, idx) => ({
+  function nodeText(el) {
+    return (el.innerText || el.textContent || "").trim().slice(0, 160);
+  }
+  function a11yOf(el) {
+    const role = el.getAttribute("role") || "";
+    const ariaLabel = el.getAttribute("aria-label") || "";
+    let ariaChecked = el.getAttribute("aria-checked") || "";
+    if (!ariaChecked) {
+      if (el.getAttribute("checked") !== null) ariaChecked = "true";
+      else if (el.getAttribute("aria-selected") !== null) ariaChecked = el.getAttribute("aria-selected");
+    }
+    if (!ariaLabel && !role && el.id) {
+      const lab = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      if (lab) ariaLabel = (lab.innerText || lab.textContent || "").trim();
+    }
+    return { role, ariaLabel, ariaChecked };
+  }
+  const INTERACTIVE = 'a,button,input,textarea,select,summary,[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="radio"],[role="tab"],[role="menuitem"],[role="switch"],[tabindex],[contenteditable="true"],option';
+  function collectIn(root) {
+    if (!root) return [];
+    const out = [];
+    let nodes = [];
+    try { nodes = Array.from(root.querySelectorAll(INTERACTIVE)).filter((el) => visible(el)); } catch (e) {}
+    for (const el of nodes) {
+      const a = a11yOf(el);
+      out.push({ el, a });
+    }
+    // Pierce open shadow roots recursively.
+    let all = [];
+    try { all = Array.from(root.querySelectorAll("*")); } catch (e) {}
+    for (const node of all) {
+      if (node.shadowRoot) out.push(...collectIn(node.shadowRoot));
+    }
+    return out;
+  }
+  function collectIframes(doc) {
+    let frames = [];
+    try { frames = Array.from(doc.querySelectorAll("iframe")); } catch (e) {}
+    const out = [];
+    for (const frame of frames) {
+      try {
+        if (frame.contentDocument) out.push(...collectIn(frame.contentDocument));
+      } catch (e) { /* cross-origin frame */ }
+    }
+    return out;
+  }
+  const collected = collectIn(document).concat(collectIframes(document));
+  const elements = collected.slice(0, 50).map((item, idx) => ({
     ref: "e" + (idx + 1),
-    selector: cssPath(el),
-    tag: el.tagName.toLowerCase(),
-    text: (el.innerText || el.textContent || "").trim().slice(0, 160),
-    type: el.getAttribute("type") || "",
-    href: el.getAttribute("href") || ""
+    selector: cssPath(item.el),
+    tag: item.el.tagName.toLowerCase(),
+    text: nodeText(item.el),
+    type: item.el.getAttribute("type") || "",
+    href: item.el.getAttribute("href") || "",
+    role: item.a.role,
+    aria_label: item.a.ariaLabel,
+    aria_checked: item.a.ariaChecked
   }));
+  let hasCanvas = false;
+  try {
+    hasCanvas = !!document.querySelector("canvas");
+    for (const item of collected) {
+      if (item.el.tagName.toLowerCase() === "canvas") { hasCanvas = true; break; }
+    }
+  } catch (e) {}
   return JSON.stringify({
     title: document.title || "",
     url: location.href,
     text: (document.body ? (document.body.innerText || "") : "").trim().slice(0, %d),
+    has_canvas: hasCanvas,
+    needs_screenshot: hasCanvas,
     elements
   });
 }`, maxChars)
@@ -176,11 +232,8 @@ func findElementsScript(locator BrowserLocator, limit int) string {
     if (el.id) return "#" + CSS.escape(el.id);
     const path = [];
     let current = el;
-    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body) {
+    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body && current.parentNode !== document) {
       let selector = current.nodeName.toLowerCase();
-      if (current.classList && current.classList.length > 0) {
-        selector += "." + Array.from(current.classList).slice(0, 2).map((c) => CSS.escape(c)).join(".");
-      }
       const siblings = current.parentNode ? Array.from(current.parentNode.children).filter((node) => node.nodeName === current.nodeName) : [];
       if (siblings.length > 1) {
         selector += ":nth-of-type(" + (siblings.indexOf(current) + 1) + ")";
@@ -213,25 +266,39 @@ func findElementsScript(locator BrowserLocator, limit int) string {
   const needleHref = (locator.href_contains || "").toLowerCase();
   const tagName = (locator.tag || "").toLowerCase();
   const inputType = (locator.input_type || "").toLowerCase();
-  let nodes = [];
-  try {
-    if (locator.selector) {
-      nodes = Array.from(document.querySelectorAll(locator.selector));
-    } else {
-      let selector = 'a,button,input,textarea,select,summary,[role="button"],[role="link"],[role="textbox"],[tabindex],[contenteditable="true"],label';
-      if (tagName) {
-        selector = tagName;
-      } else if (needleLabel || needlePlaceholder || inputType) {
-        selector = 'input,textarea,select,[contenteditable="true"]';
-      } else if (needleHref) {
-        selector = 'a[href]';
-      }
-      nodes = Array.from(document.querySelectorAll(selector));
+  const INTERACTIVE = 'a,button,input,textarea,select,summary,[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="radio"],[role="tab"],[role="menuitem"],[role="switch"],[tabindex],[contenteditable="true"],label,option';
+  function collectIn(root) {
+    if (!root) return [];
+    const out = [];
+    let nodes = [];
+    try {
+      nodes = locator.selector
+        ? Array.from(root.querySelectorAll(locator.selector))
+        : Array.from(root.querySelectorAll(INTERACTIVE));
+    } catch (err) {
+      return [{ error: err instanceof Error ? err.message : String(err) }];
     }
-  } catch (err) {
-    return JSON.stringify({ error: err instanceof Error ? err.message : String(err) });
+    out.push(...nodes);
+    let all = [];
+    try { all = Array.from(root.querySelectorAll("*")); } catch (e) {}
+    for (const node of all) {
+      if (node.shadowRoot) out.push(...collectIn(node.shadowRoot));
+    }
+    return out;
   }
-  const matches = nodes.filter((el) => {
+  function collectAll() {
+    let out = [];
+    try { out = collectIn(document); } catch (e) {}
+    let frames = [];
+    try { frames = Array.from(document.querySelectorAll("iframe")); } catch (e) {}
+    for (const frame of frames) {
+      try {
+        if (frame.contentDocument) out = out.concat(collectIn(frame.contentDocument));
+      } catch (e) { /* cross-origin */ }
+    }
+    return out;
+  }
+  const matches = collectAll().filter((el) => {
     if (!(el instanceof Element) || !visible(el)) return false;
     const tag = (el.tagName || "").toLowerCase();
     const elType = (el.getAttribute("type") || "").toLowerCase();
@@ -255,10 +322,104 @@ func findElementsScript(locator BrowserLocator, limit int) string {
       tag: (el.tagName || "").toLowerCase(),
       text: textOf(el),
       type: el.getAttribute("type") || "",
-      href: el.getAttribute("href") || ""
+      href: el.getAttribute("href") || "",
+      role: el.getAttribute("role") || "",
+      aria_label: el.getAttribute("aria-label") || "",
+      aria_checked: el.getAttribute("aria-checked") || ""
     }))
   });
 }`, mustJSON(locator), limit)
+}
+
+// pierceFindScript returns JS that locates an element by CSS selector across
+// the main document, open shadow roots, and same-origin iframes. It is used as
+// the fallback for click/type when the plain document.querySelector path
+// misses elements that live inside shadow DOM or frames (which the snapshot
+// collector now surfaces).
+func pierceFindScript(selector string) string {
+	return fmt.Sprintf(`() => {
+  const selector = %q;
+  function findIn(root) {
+    if (!root) return null;
+    let el = null;
+    try { el = root.querySelector(selector); } catch (e) { return null; }
+    if (el) return el;
+    let all = [];
+    try { all = Array.from(root.querySelectorAll("*")); } catch (e) {}
+    for (const node of all) {
+      if (node.shadowRoot) {
+        const hit = findIn(node.shadowRoot);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+  let frames = [];
+  try { frames = Array.from(document.querySelectorAll("iframe")); } catch (e) {}
+  for (const frame of frames) {
+    try {
+      if (frame.contentDocument) {
+        const hit = findIn(frame.contentDocument);
+        if (hit) return true;
+      }
+    } catch (e) {}
+  }
+  const el = findIn(document);
+  if (!el) return false;
+  try { el.scrollIntoView({ block: "center", behavior: "instant" }); } catch (e) {}
+  el.click();
+  return true;
+}`, selector)
+}
+
+// pierceTypeScript returns JS that focuses and fills an element found across
+// the main document, shadow roots, and same-origin iframes.
+func pierceTypeScript(selector, text string) string {
+	return fmt.Sprintf(`() => {
+  const selector = %q;
+  const text = %q;
+  function findIn(root) {
+    if (!root) return null;
+    let el = null;
+    try { el = root.querySelector(selector); } catch (e) { return null; }
+    if (el) return el;
+    let all = [];
+    try { all = Array.from(root.querySelectorAll("*")); } catch (e) {}
+    for (const node of all) {
+      if (node.shadowRoot) {
+        const hit = findIn(node.shadowRoot);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+  let frames = [];
+  try { frames = Array.from(document.querySelectorAll("iframe")); } catch (e) {}
+  for (const frame of frames) {
+    try {
+      if (frame.contentDocument) {
+        const hit = findIn(frame.contentDocument);
+        if (hit) return true;
+      }
+    } catch (e) {}
+  }
+  const el = findIn(document);
+  if (!el) return false;
+  try { el.scrollIntoView({ block: "center", behavior: "instant" }); } catch (e) {}
+  el.focus();
+  if ("value" in el) {
+    el.value = text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+  if (el.isContentEditable) {
+    el.textContent = text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+  return false;
+}`, selector, text)
 }
 
 func searchInputScript() string {

@@ -395,15 +395,29 @@ func (s *BrowserService) ClickTarget(ctx context.Context, sessionID, pageID stri
 	if err != nil {
 		return err
 	}
-	el, err := page.Element(selector)
-	if err != nil {
-		return err
-	}
-	if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+	if err := s.clickElementOnPageLocked(page, selector); err != nil {
 		return err
 	}
 	s.touchPageLocked(state)
 	s.refreshPageInfoLocked(state)
+	return nil
+}
+
+// clickElementOnPageLocked clicks the element matching selector. It first uses
+// the fast document.querySelector path; when that misses (elements inside open
+// shadow roots or same-origin iframes surfaced by the snapshot collector), it
+// falls back to a piercing JS click.
+func (s *BrowserService) clickElementOnPageLocked(page *rod.Page, selector string) error {
+	if el, err := page.Element(selector); err == nil {
+		return el.Click(proto.InputMouseButtonLeft, 1)
+	}
+	ok, err := page.Eval(pierceFindScript(selector))
+	if err != nil {
+		return err
+	}
+	if !ok.Value.Bool() {
+		return fmt.Errorf("element not found: %s", selector)
+	}
 	return nil
 }
 
@@ -421,18 +435,25 @@ func (s *BrowserService) TypeTarget(ctx context.Context, sessionID, pageID strin
 	if err != nil {
 		return err
 	}
-	el, err := page.Element(selector)
-	if err != nil {
+	if err := s.typeElementOnPageLocked(page, selector, text); err != nil {
 		return err
 	}
-	if err := el.SelectAllText(); err == nil {
-		if err := el.Input(text); err == nil {
-			s.touchPageLocked(state)
-			s.refreshPageInfoLocked(state)
-			return nil
+	s.touchPageLocked(state)
+	s.refreshPageInfoLocked(state)
+	return nil
+}
+
+// typeElementOnPageLocked fills text into the element matching selector. The
+// fast path uses real keyboard input; the fallback pierces shadow roots and
+// same-origin iframes with a JS value assignment.
+func (s *BrowserService) typeElementOnPageLocked(page *rod.Page, selector, text string) error {
+	if el, err := page.Element(selector); err == nil {
+		if err := el.SelectAllText(); err == nil {
+			if err := el.Input(text); err == nil {
+				return nil
+			}
 		}
-	}
-	if _, err := el.Eval(`(v) => {
+		if _, err := el.Eval(`(v) => {
 if (this && this.isContentEditable) {
   this.textContent = v;
   this.dispatchEvent(new Event("input", { bubbles: true }));
@@ -440,11 +461,40 @@ if (this && this.isContentEditable) {
 }
 throw new Error("element does not accept text input");
 }`, text); err != nil {
+			return err
+		}
+		return nil
+	}
+	ok, err := page.Eval(pierceTypeScript(selector, text))
+	if err != nil {
 		return err
+	}
+	if !ok.Value.Bool() {
+		return fmt.Errorf("element not found: %s", selector)
+	}
+	return nil
+}
+
+// ActivatePage brings the given tab to the foreground (rod pages share one
+// browser window, so this is the tab-switch operation) and returns the
+// session's current tab list.
+func (s *BrowserService) ActivatePage(ctx context.Context, sessionID, pageID string) ([]BrowserPage, error) {
+	state, cfg, err := s.pageState(sessionID, pageID)
+	if err != nil {
+		return nil, err
+	}
+	state.mu.Lock()
+	actionCtx, cancel := context.WithTimeout(ctx, cfgTimeout(cfg.ActionTimeoutSeconds))
+	defer cancel()
+	page := state.page.Context(actionCtx)
+	if _, err := page.Activate(); err != nil {
+		state.mu.Unlock()
+		return nil, err
 	}
 	s.touchPageLocked(state)
 	s.refreshPageInfoLocked(state)
-	return nil
+	state.mu.Unlock()
+	return s.ListPages(sessionID), nil
 }
 
 func (s *BrowserService) FillForm(ctx context.Context, sessionID, pageID string, fields []BrowserFormField) (BrowserFillFormResult, error) {

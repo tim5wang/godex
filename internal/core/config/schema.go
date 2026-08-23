@@ -294,6 +294,7 @@ func baseSchema() []SectionSchema {
 				{Path: "tools.browser.idle_timeout_seconds", Label: "Idle Timeout Seconds", Description: "Close idle browser pages after this many seconds.", Type: "int", LiveApply: true, Env: "GODEX_BROWSER_IDLE_TIMEOUT_SECONDS"},
 				{Path: "tools.browser.max_pages_per_session", Label: "Max Pages Per Session", Description: "Maximum open browser pages tracked per Godex session.", Type: "int", LiveApply: true, Env: "GODEX_BROWSER_MAX_PAGES_PER_SESSION"},
 				{Path: "tools.browser.allow_private_hosts", Label: "Allow Private Hosts", Description: "Permit localhost and private-network browser navigation.", Type: "bool", LiveApply: true, Env: "GODEX_BROWSER_ALLOW_PRIVATE_HOSTS"},
+				{Path: "tools.browser.persistent_profile", Label: "Persistent Profile", Description: "Keep the browser profile (cookies, sessions, logins) in the state dir so it survives restarts instead of a throwaway temp dir.", Type: "bool", LiveApply: true, Env: "GODEX_BROWSER_PERSISTENT_PROFILE"},
 			},
 		},
 		{

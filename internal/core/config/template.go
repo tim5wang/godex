@@ -675,6 +675,8 @@ tools:
     max_pages_per_session: {{ .Tools.Browser.MaxPagesPerSession }}
     # Allow localhost/private-network navigation. Environment override: GODEX_BROWSER_ALLOW_PRIVATE_HOSTS.
     allow_private_hosts: {{ .Tools.Browser.AllowPrivateHosts }}
+    # Keep the browser profile (cookies, logins) in the state dir across restarts. Environment override: GODEX_BROWSER_PERSISTENT_PROFILE.
+    persistent_profile: {{ .Tools.Browser.PersistentProfile }}
 
   lightpanda:
     # Enable Lightpanda as an alternative search and fetch backend. Environment override: GODEX_LIGHTPANDA_ENABLED.

@@ -570,6 +570,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveBool("tools.browser.allow_private_hosts", file.Tools.Browser.AllowPrivateHosts, "GODEX_BROWSER_ALLOW_PRIVATE_HOSTS", func(v bool) {
 		current.Tools.Browser.AllowPrivateHosts = v
 	})
+	resolveBool("tools.browser.persistent_profile", file.Tools.Browser.PersistentProfile, "GODEX_BROWSER_PERSISTENT_PROFILE", func(v bool) {
+		current.Tools.Browser.PersistentProfile = v
+	})
 	resolveBool("tools.lightpanda.enabled", file.Tools.Lightpanda.Enabled, "GODEX_LIGHTPANDA_ENABLED", func(v bool) {
 		current.Tools.Lightpanda.Enabled = v
 	})
@@ -1005,6 +1008,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 				IdleTimeoutSeconds:   file.Tools.Browser.IdleTimeoutSeconds,
 				MaxPagesPerSession:   file.Tools.Browser.MaxPagesPerSession,
 				AllowPrivateHosts:    file.Tools.Browser.AllowPrivateHosts,
+				PersistentProfile:    file.Tools.Browser.PersistentProfile,
 			},
 			Lightpanda: LightpandaConfig{
 				Enabled:        file.Tools.Lightpanda.Enabled,

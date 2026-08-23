@@ -448,6 +448,7 @@ type BrowserConfig struct {
 	IdleTimeoutSeconds   int
 	MaxPagesPerSession   int
 	AllowPrivateHosts    bool
+	PersistentProfile    bool
 }
 
 // HistorySearchConfig controls policy-driven history recall.

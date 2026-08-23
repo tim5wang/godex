@@ -14,12 +14,15 @@ import (
 )
 
 type desktopArgs struct {
-	Action     string `json:"action"`
-	X          int    `json:"x,omitempty"`
-	Y          int    `json:"y,omitempty"`
-	Text       string `json:"text,omitempty"`
-	Key        string `json:"key,omitempty"`
-	MaxResults int    `json:"max_results,omitempty"`
+	Action          string `json:"action"`
+	X               int    `json:"x,omitempty"`
+	Y               int    `json:"y,omitempty"`
+	Text            string `json:"text,omitempty"`
+	Key             string `json:"key,omitempty"`
+	MaxResults      int    `json:"max_results,omitempty"`
+	Amount          int    `json:"amount,omitempty"`
+	ScreenshotAfter bool   `json:"screenshot_after,omitempty"`
+	Lang            string `json:"lang,omitempty"`
 }
 
 type DesktopStatus struct {
@@ -28,6 +31,7 @@ type DesktopStatus struct {
 	Backend             string   `json:"backend,omitempty"`
 	Actions             []string `json:"actions,omitempty"`
 	MissingDependencies []string `json:"missing_dependencies,omitempty"`
+	OCRLanguages        []string `json:"ocr_languages,omitempty"`
 	Message             string   `json:"message,omitempty"`
 }
 
@@ -39,11 +43,13 @@ type DesktopScreenshotResult struct {
 }
 
 type DesktopActionResult struct {
-	Status string `json:"status"`
-	Action string `json:"action"`
-	X      int    `json:"x,omitempty"`
-	Y      int    `json:"y,omitempty"`
-	Target string `json:"target,omitempty"`
+	Status     string                   `json:"status"`
+	Action     string                   `json:"action"`
+	X          int                      `json:"x,omitempty"`
+	Y          int                      `json:"y,omitempty"`
+	Target     string                   `json:"target,omitempty"`
+	Amount     int                      `json:"amount,omitempty"`
+	Screenshot *DesktopScreenshotResult `json:"screenshot,omitempty"`
 }
 
 type DesktopClipboardResult struct {
@@ -126,13 +132,13 @@ func NewDesktopService(tempDir string) *DesktopService {
 }
 
 func NewDesktopTool(service *DesktopService) Tool {
-	return NewTypedTool(NewToolSpec("desktop", "Use the local desktop UI for controlled automation: status, screenshot, list_windows, click, type_text, key, clipboard_get, clipboard_set, ocr, find_text, and click_text. Prefer browser automation for web pages; use desktop only for OS dialogs, native apps, file pickers, and cross-window workflows.", map[string]interface{}{
+	return NewTypedTool(NewToolSpec("desktop", "Use the local desktop UI for controlled automation: status, screenshot, list_windows, click, type_text, key, scroll, activate_window, clipboard_get, clipboard_set, ocr, find_text, and click_text. Prefer browser automation for web pages; use desktop only for OS dialogs, native apps, file pickers, and cross-window workflows.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"description": "status | screenshot | list_windows | click | type_text | key | clipboard_get | clipboard_set | ocr | find_text | click_text",
-				"enum":        []string{"status", "screenshot", "list_windows", "click", "type_text", "key", "clipboard_get", "clipboard_set", "ocr", "find_text", "click_text"},
+				"description": "status | screenshot | list_windows | click | type_text | key | scroll | activate_window | clipboard_get | clipboard_set | ocr | find_text | click_text",
+				"enum":        []string{"status", "screenshot", "list_windows", "click", "type_text", "key", "scroll", "activate_window", "clipboard_get", "clipboard_set", "ocr", "find_text", "click_text"},
 			},
 			"x": map[string]interface{}{
 				"type":        "integer",
@@ -144,11 +150,23 @@ func NewDesktopTool(service *DesktopService) Tool {
 			},
 			"text": map[string]interface{}{
 				"type":        "string",
-				"description": "Text to type, set on the clipboard, find on screen, or click by OCR text",
+				"description": "Text to type, set on the clipboard, find on screen, click by OCR text, or the app/window name for activate_window",
 			},
 			"key": map[string]interface{}{
 				"type":        "string",
 				"description": "Named key to press. Supported names include enter, tab, escape, space, delete, left, right, up, down, home, end.",
+			},
+			"amount": map[string]interface{}{
+				"type":        "integer",
+				"description": "Scroll amount in wheel ticks: positive scrolls up, negative scrolls down (default 1).",
+			},
+			"screenshot_after": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Take a screenshot after the action and attach it, so you can verify the action took effect. Default false.",
+			},
+			"lang": map[string]interface{}{
+				"type":        "string",
+				"description": "OCR language pack for tesseract (e.g. eng, chi_sim, chi_tra). Check the status action's ocr_languages for what is installed.",
 			},
 			"max_results": map[string]interface{}{
 				"type":        "integer",
@@ -178,21 +196,35 @@ func NewDesktopTool(service *DesktopService) Tool {
 			payload, err = service.TypeText(ctx, args.Text)
 		case "key":
 			payload, err = service.Key(ctx, args.Key)
+		case "scroll":
+			payload, err = service.Scroll(ctx, args.Amount)
+		case "activate_window":
+			payload, err = service.ActivateWindow(ctx, args.Text)
 		case "clipboard_get":
 			payload, err = service.GetClipboard(ctx)
 		case "clipboard_set":
 			payload, err = service.SetClipboard(ctx, args.Text)
 		case "ocr":
-			payload, err = service.OCR(ctx)
+			payload, err = service.OCRWithLang(ctx, args.Lang)
 		case "find_text":
-			payload, err = service.FindText(ctx, args.Text, args.MaxResults)
+			payload, err = service.FindTextWithLang(ctx, args.Text, args.MaxResults, args.Lang)
 		case "click_text":
-			payload, err = service.ClickText(ctx, args.Text)
+			payload, err = service.ClickTextWithLang(ctx, args.Text, args.Lang)
 		default:
 			return ToolResult{}, fmt.Errorf("unknown desktop action %q", action)
 		}
 		if err != nil {
 			return ToolResult{}, err
+		}
+		// Optional screenshot-after: capture the screen post-action so the
+		// model can verify the action took effect.
+		if args.ScreenshotAfter {
+			if actionResult, ok := payload.(DesktopActionResult); ok && actionResult.Screenshot == nil {
+				if shot, shotErr := service.Screenshot(ctx); shotErr == nil {
+					actionResult.Screenshot = &shot
+					payload = actionResult
+				}
+			}
 		}
 		result := ToolResult{Structured: payload}
 		if screenshot, ok := payload.(DesktopScreenshotResult); ok && strings.TrimSpace(screenshot.ArtifactPath) != "" {
@@ -204,6 +236,9 @@ func NewDesktopTool(service *DesktopService) Tool {
 		if found, ok := payload.(DesktopFindTextResult); ok && strings.TrimSpace(found.Screenshot.ArtifactPath) != "" {
 			result.ArtifactPaths = []string{strings.TrimSpace(found.Screenshot.ArtifactPath)}
 		}
+		if actionResult, ok := payload.(DesktopActionResult); ok && actionResult.Screenshot != nil && strings.TrimSpace(actionResult.Screenshot.ArtifactPath) != "" {
+			result.ArtifactPaths = append(result.ArtifactPaths, strings.TrimSpace(actionResult.Screenshot.ArtifactPath))
+		}
 		return result, nil
 	})
 }
@@ -213,8 +248,9 @@ func (s *DesktopService) Status() DesktopStatus {
 	status := DesktopStatus{
 		Supported: true,
 		OS:        osName,
-		Actions:   []string{"screenshot", "list_windows", "click", "type_text", "key", "clipboard_get", "clipboard_set", "ocr", "find_text", "click_text"},
+		Actions:   []string{"screenshot", "list_windows", "click", "type_text", "key", "clipboard_get", "clipboard_set", "ocr", "find_text", "click_text", "scroll", "activate_window"},
 	}
+	status.OCRLanguages = s.tesseractLanguages()
 	switch osName {
 	case "darwin":
 		status.Backend = "macos-system-commands+tesseract"
@@ -235,6 +271,27 @@ func (s *DesktopService) Status() DesktopStatus {
 		status.Message = "desktop automation v1 supports macOS, Linux, and Windows"
 	}
 	return status
+}
+
+// tesseractLanguages returns the OCR language packs tesseract reports as
+// installed (e.g. eng, chi_sim), so the model can pass a matching lang.
+func (s *DesktopService) tesseractLanguages() []string {
+	if !s.hasCommand("tesseract") {
+		return nil
+	}
+	out, err := s.run(context.Background(), "tesseract", []string{"--list-langs"}, "")
+	if err != nil {
+		return nil
+	}
+	languages := make([]string, 0, 4)
+	for _, line := range strings.Split(string(out), "\n") {
+		lang := strings.TrimSpace(line)
+		if lang == "" || strings.HasPrefix(lang, "List of available languages") || strings.HasPrefix(lang, "(") {
+			continue
+		}
+		languages = append(languages, lang)
+	}
+	return languages
 }
 
 func (s *DesktopService) Screenshot(ctx context.Context) (DesktopScreenshotResult, error) {
@@ -350,6 +407,71 @@ func (s *DesktopService) Key(ctx context.Context, key string) (DesktopActionResu
 	return DesktopActionResult{Status: "ok", Action: "key"}, nil
 }
 
+// Scroll rotates the mouse wheel. amount > 0 scrolls up (content moves down),
+// amount < 0 scrolls down; each unit is one wheel tick.
+func (s *DesktopService) Scroll(ctx context.Context, amount int) (DesktopActionResult, error) {
+	if amount == 0 {
+		return DesktopActionResult{}, fmt.Errorf("desktop scroll requires a non-zero amount")
+	}
+	switch s.currentOS() {
+	case "darwin":
+		script := macScrollJXA(amount)
+		if _, err := s.run(ctx, "osascript", []string{"-l", "JavaScript", "-e", script}, ""); err != nil {
+			return DesktopActionResult{}, fmt.Errorf("macOS desktop scroll failed: %w", err)
+		}
+	case "linux":
+		// xdotool click 4 = wheel up, click 5 = wheel down.
+		button := "4"
+		repeat := amount
+		if amount < 0 {
+			button = "5"
+			repeat = -amount
+		}
+		if repeat > 100 {
+			repeat = 100
+		}
+		if _, err := s.run(ctx, "xdotool", []string{"click", "--repeat", fmt.Sprint(repeat), button}, ""); err != nil {
+			return DesktopActionResult{}, fmt.Errorf("Linux desktop scroll failed; install xdotool and ensure an X11 session is available: %w", err)
+		}
+	case "windows":
+		if err := s.windowsPowerShell(ctx, windowsScrollScript(amount), ""); err != nil {
+			return DesktopActionResult{}, fmt.Errorf("Windows desktop scroll failed: %w", err)
+		}
+	default:
+		return DesktopActionResult{}, s.unsupported()
+	}
+	return DesktopActionResult{Status: "ok", Action: "scroll", Amount: amount}, nil
+}
+
+// ActivateWindow brings a window to the foreground. name is matched against
+// the app/process name on macOS and Windows, and the window title on Linux.
+func (s *DesktopService) ActivateWindow(ctx context.Context, name string) (DesktopActionResult, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return DesktopActionResult{}, fmt.Errorf("desktop activate_window requires a window or app name")
+	}
+	switch s.currentOS() {
+	case "darwin":
+		script := fmt.Sprintf(`tell application "System Events"
+	set frontmost of first process whose name contains %s to true
+end tell`, appleScriptString(name))
+		if _, err := s.run(ctx, "osascript", []string{"-e", script}, ""); err != nil {
+			return DesktopActionResult{}, fmt.Errorf("macOS desktop activate_window failed: %w", err)
+		}
+	case "linux":
+		if _, err := s.run(ctx, "wmctrl", []string{"-a", name}, ""); err != nil {
+			return DesktopActionResult{}, fmt.Errorf("Linux desktop activate_window failed; install wmctrl and ensure an EWMH-compatible window manager: %w", err)
+		}
+	case "windows":
+		if err := s.windowsPowerShell(ctx, windowsActivateWindowScript(name), ""); err != nil {
+			return DesktopActionResult{}, fmt.Errorf("Windows desktop activate_window failed: %w", err)
+		}
+	default:
+		return DesktopActionResult{}, s.unsupported()
+	}
+	return DesktopActionResult{Status: "ok", Action: "activate_window", Target: name}, nil
+}
+
 func (s *DesktopService) GetClipboard(ctx context.Context) (DesktopClipboardResult, error) {
 	var (
 		out []byte
@@ -426,28 +548,36 @@ end tell`
 }
 
 func (s *DesktopService) OCR(ctx context.Context) (DesktopOCRResult, error) {
+	return s.OCRWithLang(ctx, "")
+}
+
+func (s *DesktopService) OCRWithLang(ctx context.Context, lang string) (DesktopOCRResult, error) {
 	screenshot, err := s.Screenshot(ctx)
 	if err != nil {
 		return DesktopOCRResult{}, err
 	}
-	words, err := s.ocrImage(ctx, screenshot.ArtifactPath)
+	words, err := s.ocrImageWithLang(ctx, screenshot.ArtifactPath, lang)
 	if err != nil {
 		return DesktopOCRResult{}, err
 	}
 	return DesktopOCRResult{
 		Screenshot: screenshot,
-		Engine:     "tesseract-tsv",
+		Engine:     "tesseract-tsv" + tesseractLangSuffix(lang),
 		Words:      words,
 		Lines:      buildOCRLines(words),
 	}, nil
 }
 
 func (s *DesktopService) FindText(ctx context.Context, query string, maxResults int) (DesktopFindTextResult, error) {
+	return s.FindTextWithLang(ctx, query, maxResults, "")
+}
+
+func (s *DesktopService) FindTextWithLang(ctx context.Context, query string, maxResults int, lang string) (DesktopFindTextResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return DesktopFindTextResult{}, fmt.Errorf("desktop find_text requires text")
 	}
-	ocr, err := s.OCR(ctx)
+	ocr, err := s.OCRWithLang(ctx, lang)
 	if err != nil {
 		return DesktopFindTextResult{}, err
 	}
@@ -459,7 +589,11 @@ func (s *DesktopService) FindText(ctx context.Context, query string, maxResults 
 }
 
 func (s *DesktopService) ClickText(ctx context.Context, query string) (DesktopActionResult, error) {
-	found, err := s.FindText(ctx, query, 1)
+	return s.ClickTextWithLang(ctx, query, "")
+}
+
+func (s *DesktopService) ClickTextWithLang(ctx context.Context, query, lang string) (DesktopActionResult, error) {
+	found, err := s.FindTextWithLang(ctx, query, 1, lang)
 	if err != nil {
 		return DesktopActionResult{}, err
 	}
@@ -474,14 +608,30 @@ func (s *DesktopService) ClickText(ctx context.Context, query string) (DesktopAc
 }
 
 func (s *DesktopService) ocrImage(ctx context.Context, path string) ([]DesktopOCRWord, error) {
+	return s.ocrImageWithLang(ctx, path, "")
+}
+
+func (s *DesktopService) ocrImageWithLang(ctx context.Context, path, lang string) ([]DesktopOCRWord, error) {
 	if !s.hasCommand("tesseract") {
 		return nil, fmt.Errorf("desktop OCR requires tesseract CLI")
 	}
-	out, err := s.run(ctx, "tesseract", []string{path, "stdout", "--psm", "11", "tsv"}, "")
+	args := []string{path, "stdout", "--psm", "11"}
+	if lang = strings.TrimSpace(lang); lang != "" {
+		args = append(args, "-l", lang)
+	}
+	args = append(args, "tsv")
+	out, err := s.run(ctx, "tesseract", args, "")
 	if err != nil {
 		return nil, fmt.Errorf("desktop OCR failed: %w", err)
 	}
 	return parseTesseractTSV(string(out)), nil
+}
+
+func tesseractLangSuffix(lang string) string {
+	if lang = strings.TrimSpace(lang); lang != "" {
+		return "-" + lang
+	}
+	return ""
 }
 
 func (s *DesktopService) linuxScreenshot(ctx context.Context, path string) error {
@@ -845,6 +995,52 @@ public class GodexMouse {
 func windowsSendKeysScript(keys string) string {
 	return `Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.SendKeys]::SendWait(` + powerShellSingleQuoted(keys) + `)`
+}
+
+// macScrollJXA emits a JavaScript-for-Automation snippet that posts a
+// CoreGraphics scroll-wheel event. amount > 0 scrolls up, amount < 0 down;
+// each unit is one line. Requires accessibility permission for the host app.
+func macScrollJXA(amount int) string {
+	return fmt.Sprintf(`ObjC.import('CoreGraphics');
+const ev = $.CGEventCreateScrollWheelEvent(null, $.kCGScrollEventUnitLine, 1, %d, 0, 0);
+$.CGEventPost($.kCGHIDEventTap, ev);`, amount)
+}
+
+// windowsScrollScript emits a PowerShell snippet that posts a mouse-wheel
+// event via user32 mouse_event (WHEEL = 0x0800). delta > 0 scrolls up, delta
+// < 0 down; each unit is one wheel tick (120 per notch).
+func windowsScrollScript(amount int) string {
+	delta := amount * 120
+	return fmt.Sprintf(`
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class GodexScroll {
+	[DllImport("user32.dll")]
+	public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);
+}
+"@
+[GodexScroll]::mouse_event(0x0800, 0, 0, %d, [UIntPtr]::Zero)`, delta)
+}
+
+// windowsActivateWindowScript emits a PowerShell snippet that brings the first
+// window whose process name matches name to the foreground. name is embedded
+// with PowerShell single-quote escaping to prevent injection.
+func windowsActivateWindowScript(name string) string {
+	escaped := powerShellSingleQuoted(name) // "'name'"
+	pattern := "'*" + strings.ReplaceAll(name, "'", "''") + "*'"
+	return fmt.Sprintf(`
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class GodexFocus {
+	[DllImport("user32.dll")]
+	public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+$proc = Get-Process | Where-Object { $_.MainWindowTitle -and $_.ProcessName -like %s } | Select-Object -First 1
+if ($proc) { [GodexFocus]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null }
+if (-not $proc) { throw "no window found for process matching %s" }`, pattern, escaped)
 }
 
 func powerShellSingleQuoted(value string) string {

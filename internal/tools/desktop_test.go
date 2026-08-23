@@ -371,3 +371,244 @@ func TestDesktopWindowsBackendUsesPowerShell(t *testing.T) {
 		}
 	}
 }
+
+func TestDesktopScrollUsesPlatformBackends(t *testing.T) {
+	// darwin: JXA CoreGraphics scroll event via osascript -l JavaScript.
+	darwin := NewDesktopService(t.TempDir())
+	darwin.osName = "darwin"
+	var darwinCall string
+	darwin.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		darwinCall = name + " " + strings.Join(args, " ")
+		return nil, nil
+	}
+	if _, err := darwin.Scroll(context.Background(), 3); err != nil {
+		t.Fatalf("darwin scroll: %v", err)
+	}
+	if !strings.Contains(darwinCall, `osascript -l JavaScript -e ObjC.import('CoreGraphics')`) ||
+		!strings.Contains(darwinCall, "CGEventCreateScrollWheelEvent(null, $.kCGScrollEventUnitLine, 1, 3, 0, 0)") {
+		t.Fatalf("unexpected darwin scroll call %q", darwinCall)
+	}
+
+	// linux: xdotool click --repeat N 4/5.
+	linux := NewDesktopService(t.TempDir())
+	linux.osName = "linux"
+	var linuxCalls []string
+	linux.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		linuxCalls = append(linuxCalls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	if _, err := linux.Scroll(context.Background(), -5); err != nil {
+		t.Fatalf("linux scroll: %v", err)
+	}
+	if !strings.Contains(strings.Join(linuxCalls, "\n"), "xdotool click --repeat 5 5") {
+		t.Fatalf("expected xdotool wheel-down, got %v", linuxCalls)
+	}
+
+	// windows: PowerShell mouse_event with delta = amount * 120.
+	windows := NewDesktopService(t.TempDir())
+	windows.osName = "windows"
+	windows.lookPath = func(name string) (string, error) { return "powershell.exe", nil }
+	var windowsCall string
+	windows.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		windowsCall = strings.Join(args, " ")
+		return nil, nil
+	}
+	if _, err := windows.Scroll(context.Background(), -2); err != nil {
+		t.Fatalf("windows scroll: %v", err)
+	}
+	if !strings.Contains(windowsCall, "mouse_event(0x0800, 0, 0, -240, [UIntPtr]::Zero)") {
+		t.Fatalf("expected windows wheel delta -240, got %q", windowsCall)
+	}
+
+	// amount 0 is rejected.
+	if _, err := darwin.Scroll(context.Background(), 0); err == nil {
+		t.Fatal("expected scroll amount 0 to fail")
+	}
+}
+
+func TestDesktopActivateWindowUsesPlatformBackends(t *testing.T) {
+	darwin := NewDesktopService(t.TempDir())
+	darwin.osName = "darwin"
+	var darwinCall string
+	darwin.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		darwinCall = name + " " + strings.Join(args, " ")
+		return nil, nil
+	}
+	if _, err := darwin.ActivateWindow(context.Background(), "Safari"); err != nil {
+		t.Fatalf("darwin activate: %v", err)
+	}
+	if !strings.Contains(darwinCall, `whose name contains "Safari"`) {
+		t.Fatalf("unexpected darwin activate call %q", darwinCall)
+	}
+
+	linux := NewDesktopService(t.TempDir())
+	linux.osName = "linux"
+	var linuxCalls []string
+	linux.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		linuxCalls = append(linuxCalls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	if _, err := linux.ActivateWindow(context.Background(), "My Window"); err != nil {
+		t.Fatalf("linux activate: %v", err)
+	}
+	if !strings.Contains(strings.Join(linuxCalls, "\n"), `wmctrl -a My Window`) {
+		t.Fatalf("expected wmctrl activate, got %v", linuxCalls)
+	}
+
+	windows := NewDesktopService(t.TempDir())
+	windows.osName = "windows"
+	windows.lookPath = func(name string) (string, error) { return "powershell.exe", nil }
+	var windowsCall string
+	windows.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		windowsCall = strings.Join(args, " ")
+		return nil, nil
+	}
+	if _, err := windows.ActivateWindow(context.Background(), "chrome"); err != nil {
+		t.Fatalf("windows activate: %v", err)
+	}
+	if !strings.Contains(windowsCall, "SetForegroundWindow") || !strings.Contains(windowsCall, "chrome") {
+		t.Fatalf("expected windows activate script, got %q", windowsCall)
+	}
+
+	if _, err := darwin.ActivateWindow(context.Background(), ""); err == nil {
+		t.Fatal("expected empty activate_window name to fail")
+	}
+}
+
+func TestDesktopToolSchemaIncludesNewActionsAndParams(t *testing.T) {
+	tool := NewDesktopTool(NewDesktopService(t.TempDir()))
+	spec := tool.Spec()
+	props, _ := spec.InputSchema["properties"].(map[string]interface{})
+	actionSchema, _ := props["action"].(map[string]interface{})
+	raw, _ := actionSchema["enum"].([]interface{})
+	enums := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if value, ok := item.(string); ok {
+			enums = append(enums, value)
+		}
+	}
+	for _, want := range []string{"scroll", "activate_window"} {
+		if !containsString(enums, want) {
+			t.Fatalf("expected desktop action %q in schema, got %v", want, enums)
+		}
+	}
+	for _, param := range []string{"amount", "screenshot_after", "lang"} {
+		if _, ok := props[param]; !ok {
+			t.Fatalf("expected desktop param %q in schema, got %v", param, props)
+		}
+	}
+}
+
+func TestDesktopScreenshotAfterAttachesArtifact(t *testing.T) {
+	tempDir := t.TempDir()
+	service := NewDesktopService(tempDir)
+	service.osName = "darwin"
+	service.now = func() time.Time { return time.Date(2026, 4, 25, 10, 11, 12, 13, time.UTC) }
+	var calls []string
+	service.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		calls = append(calls, name)
+		if name == "screencapture" {
+			if err := os.WriteFile(args[1], []byte("png"), 0644); err != nil {
+				t.Fatalf("write screenshot: %v", err)
+			}
+		}
+		return nil, nil
+	}
+	tool := NewDesktopTool(service)
+	handler := NewToolHandler()
+	handler.Register(tool)
+	ctx := WithSessionID(t.Context(), "desktop-session")
+
+	result, err := handler.HandleResult(ctx, "desktop", map[string]interface{}{
+		"action":           "click",
+		"x":                10,
+		"y":                20,
+		"screenshot_after": true,
+	})
+	if err != nil {
+		t.Fatalf("click with screenshot_after: %v", err)
+	}
+	// click (osascript) + screenshot (screencapture).
+	if len(result.ArtifactPaths) != 1 {
+		t.Fatalf("expected one artifact path, got %v", result.ArtifactPaths)
+	}
+	if _, err := os.Stat(filepath.FromSlash(result.ArtifactPaths[0])); err != nil {
+		t.Fatalf("expected after screenshot artifact: %v", err)
+	}
+	joined := strings.Join(calls, ",")
+	if !strings.Contains(joined, "screencapture") {
+		t.Fatalf("expected screencapture after click, got %v", calls)
+	}
+}
+
+func TestDesktopOCRWithLangPassesTesseractFlag(t *testing.T) {
+	tempDir := t.TempDir()
+	service := NewDesktopService(tempDir)
+	service.osName = "darwin"
+	service.lookPath = func(name string) (string, error) {
+		if name == "screencapture" || name == "tesseract" {
+			return "/usr/bin/" + name, nil
+		}
+		return "", os.ErrNotExist
+	}
+	var tesseractArgs []string
+	service.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		switch name {
+		case "screencapture":
+			if len(args) == 2 {
+				if err := os.WriteFile(args[1], []byte("png"), 0644); err != nil {
+					t.Fatalf("write screenshot: %v", err)
+				}
+			}
+		case "tesseract":
+			tesseractArgs = append([]string{}, args...)
+			return []byte("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n5\t1\t1\t1\t1\t1\t10\t20\t40\t12\t95\t确定\n"), nil
+		}
+		return nil, nil
+	}
+	ocr, err := service.OCRWithLang(context.Background(), "chi_sim")
+	if err != nil {
+		t.Fatalf("ocr with lang: %v", err)
+	}
+	if ocr.Engine != "tesseract-tsv-chi_sim" {
+		t.Fatalf("expected engine suffix with lang, got %q", ocr.Engine)
+	}
+	if len(ocr.Words) != 1 || ocr.Words[0].Text != "确定" {
+		t.Fatalf("unexpected OCR words: %+v", ocr.Words)
+	}
+	foundLang := false
+	for i, arg := range tesseractArgs {
+		if arg == "-l" && i+1 < len(tesseractArgs) && tesseractArgs[i+1] == "chi_sim" {
+			foundLang = true
+		}
+	}
+	if !foundLang {
+		t.Fatalf("expected -l chi_sim in tesseract args, got %v", tesseractArgs)
+	}
+}
+
+func TestDesktopStatusReportsOCRLanguages(t *testing.T) {
+	service := NewDesktopService(t.TempDir())
+	service.osName = "darwin"
+	service.lookPath = func(name string) (string, error) {
+		if name == "tesseract" || name == "screencapture" || name == "osascript" || name == "pbpaste" || name == "pbcopy" {
+			return "/usr/bin/" + name, nil
+		}
+		return "", os.ErrNotExist
+	}
+	service.run = func(ctx context.Context, name string, args []string, stdin string) ([]byte, error) {
+		if name == "tesseract" && len(args) > 0 && args[0] == "--list-langs" {
+			return []byte("List of available languages (3):\neng\nchi_sim\nchi_tra\n"), nil
+		}
+		return nil, nil
+	}
+	status := service.Status()
+	if len(status.OCRLanguages) != 3 {
+		t.Fatalf("expected 3 OCR languages, got %v", status.OCRLanguages)
+	}
+	for _, want := range []string{"eng", "chi_sim", "chi_tra"} {
+		if !containsString(status.OCRLanguages, want) {
+			t.Fatalf("expected OCR language %q in %v", want, status.OCRLanguages)
+		}
+	}
+}

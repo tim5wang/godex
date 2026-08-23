@@ -131,11 +131,12 @@ api:
   # Provider type determines the HTTP protocol GoDex will speak:
   #   anthropic_compatible — Anthropic Messages API   (POST /v1/messages)
   #   openai_compatible    — OpenAI Chat Completions   (POST /v1/chat/completions)
+  #   openai_responses     — OpenAI Responses API      (POST /v1/responses)
   #   openai_codex         — OpenAI Codex OAuth flow   (device-code + token exchange)
   #
   # Each provider block:
   #   name:             display name shown in UI and logs
-  #   type:             one of the three provider types above
+  #   type:             one of the four provider types above
   #   base_url:         API endpoint origin (e.g. https://api.anthropic.com)
   #                     Do NOT add trailing /v1 — GoDex appends protocol paths.
   #   api_key:          plaintext API key (⚠️ avoid committing to VCS)

@@ -33,11 +33,11 @@ import (
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
-	"github.com/tim5wang/godex/internal/services/localbash"
-	minitui "github.com/tim5wang/min-tui"
 	rtbackend "github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
+	"github.com/tim5wang/godex/internal/services/localbash"
 	"github.com/tim5wang/godex/internal/tools"
+	minitui "github.com/tim5wang/min-tui"
 )
 
 // Backend is the surface area of the runtime backend that the
@@ -176,8 +176,8 @@ type Session struct {
 	// MiniMax-M3 · 132k/256k 51% · top tool_results 104k ·
 	// calls 10 · msgs 138") stays continuously visible while
 	// the user waits for the model.
-	activityChip   string
-	activityStyle  minitui.StatusStyle
+	activityChip  string
+	activityStyle minitui.StatusStyle
 
 	// inputHistory stores submitted inputs so the user can recall
 	// them with ↑/↓.  Most-recent-first ordering: history[0] is
@@ -369,16 +369,16 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 		input, err := tui.ReadLine()
 		if err != nil {
 			if isInterruptErr(err) {
-			// Ctrl+C: if a local bash command is running,
-			// cancel it first.  Otherwise, if a turn is
-			// running, cancel the turn.  Otherwise exit.
-			if s.bashCancel != nil {
-				s.bashCancel()
-				s.bashCancel = nil
-				s.tui.SetStatus("Bash cancelled", minitui.StatusWarning)
-				continue
-			}
-			if s.cancelActiveTurn() {
+				// Ctrl+C: if a local bash command is running,
+				// cancel it first.  Otherwise, if a turn is
+				// running, cancel the turn.  Otherwise exit.
+				if s.bashCancel != nil {
+					s.bashCancel()
+					s.bashCancel = nil
+					s.tui.SetStatus("Bash cancelled", minitui.StatusWarning)
+					continue
+				}
+				if s.cancelActiveTurn() {
 					// Preserve the heartbeat: surface
 					// cancellation as an activity
 					// chip instead of overwriting the
@@ -555,16 +555,25 @@ func (s *Session) handleModelSelect(ctx *minitui.CommandContext) {
 	options := make([]minitui.SelectOption, 0, len(mv.Profiles))
 	selectedIdx := 0
 	for i, profile := range mv.Profiles {
-		desc := profile.Model
-		if profile.Provider != "" {
-			desc += " · " + profile.Provider
+		// Prefix every option with the provider display name so the user can
+		// always tell which provider a model belongs to even with many
+		// profiles across several providers. Profiles are already ordered by
+		// ID ("<provider>.<model>"), so models of one provider are adjacent.
+		providerLabel := strings.TrimSpace(profile.ProviderName)
+		if providerLabel == "" {
+			providerLabel = strings.TrimSpace(profile.Provider)
 		}
+		label := strings.TrimSpace(profile.Name)
+		if providerLabel != "" {
+			label = providerLabel + " / " + label
+		}
+		desc := profile.Model
 		if profile.Selected || profile.ID == currentProfileID {
 			selectedIdx = i
 			desc += " [active]"
 		}
 		options = append(options, minitui.SelectOption{
-			Label:       profile.Name,
+			Label:       label,
 			Description: desc,
 		})
 	}

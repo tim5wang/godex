@@ -754,6 +754,28 @@ export function ChatPage() {
     modelsQuery.data?.profiles.find((profile) => profile.default);
   const sessionReasoningEffort = modelsQuery.data?.reasoning_effort ?? "";
   const selectedReasoningEffort = pendingReasoningEffort ?? (sessionReasoningEffort || selectedProfile?.reasoning_effort || "");
+  // Group model profiles by provider so the dropdown is navigable even with
+  // many profiles across several providers. The group label resolves to the
+  // provider display name (provider_name) with a fallback to the provider
+  // protocol type, then the profile id. The selected profile's group is
+  // placed first so the current choice is never buried mid-list.
+  const modelGroupOptions = useMemo(() => {
+    const profiles = modelsQuery.data?.profiles ?? [];
+    const groups = new Map<string, { value: string; label: string }[]>();
+    for (const profile of profiles) {
+      const groupKey = profile.provider_name || profile.provider || profile.id;
+      if (!groups.has(groupKey)) groups.set(groupKey, []);
+      groups.get(groupKey)!.push({ value: profile.id, label: profile.name || profile.id });
+    }
+    const entries = Array.from(groups.entries());
+    entries.sort((a, b) => {
+      const aSelected = selectedProfileID === a[1][0]?.value;
+      const bSelected = selectedProfileID === b[1][0]?.value;
+      if (aSelected !== bSelected) return aSelected ? -1 : 1;
+      return a[0].localeCompare(b[0]);
+    });
+    return entries.map(([groupKey, options]) => ({ label: groupKey, options }));
+  }, [modelsQuery.data?.profiles, selectedProfileID]);
   const activeModelLabel = selectedProfile ? `${selectedProfile.name || selectedProfile.id} · ${selectedProfile.model}` : modelName;
   const modelScopeLabel = pendingModelProfileID
     ? t("chat.modelSwitching")
@@ -1486,10 +1508,7 @@ export function ChatPage() {
                           loading={modelsQuery.isLoading || modelMutation.isPending}
                           disabled={modelMutation.isPending}
                           onChange={(value) => modelMutation.mutate({ profileId: value, reasoningEffort: sessionReasoningEffort || undefined })}
-                          options={modelsQuery.data.profiles.map((profile) => ({
-                            value: profile.id,
-                            label: `${profile.name || profile.id}`,
-                          }))}
+                          options={modelGroupOptions}
                         />
                       ) : null}
                       {modelsQuery.data?.profiles.length && selectedProfile?.id ? (

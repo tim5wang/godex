@@ -1225,6 +1225,7 @@ function LLMProvidersEditor({
                       options={[
                         { value: "anthropic_compatible", label: "Anthropic compatible" },
                         { value: "openai_compatible", label: "OpenAI compatible" },
+                        { value: "openai_responses", label: "OpenAI Responses" },
                         { value: "openai_codex", label: "OpenAI Codex OAuth" },
                       ]}
                       onChange={(type) => updateProvider(providerIndex, { type })}

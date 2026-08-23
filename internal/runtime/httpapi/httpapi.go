@@ -375,6 +375,27 @@ func NewHandlerWithRuntime(
 		})).ServeHTTP(w, r)
 	})))
 
+	mux.Handle("POST /v1/responses", gunzipBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is a usage gateway request (proxy key auth)
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(auth), "bearer gdx_") {
+			if usageService != nil {
+				handleUsageGatewayResponses(w, r, usageService, manager)
+			} else {
+				writeError(w, http.StatusServiceUnavailable, fmt.Errorf("usage gateway not configured"))
+			}
+			return
+		}
+		// Web-token auth: dispatch through the same LLM gateway so Responses
+		// SDK clients see the full streaming + tools experience.
+		webToken := manager.Current().WebToken
+		if webToken != "" && bearerAuthorized(r, webToken) {
+			handleResponsesWebToken(w, r, usageService, manager)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, fmt.Errorf("unauthorized"))
+	})))
+
 	// Anthropic Messages API endpoint
 	// Supports two auth modes:
 	// 1. Usage gateway: Authorization: Bearer gdx_xxx (proxy key auth)

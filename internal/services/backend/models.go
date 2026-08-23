@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"fmt"
+	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/llm"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/security"
 	"sort"
@@ -100,6 +102,7 @@ func (s *Service) modelsView(sessionProfileID, reasoningEffort string) ModelsVie
 			ID:                profile.ID,
 			Name:              profile.Name,
 			Provider:          profile.Provider,
+			ProviderName:      providerDisplayName(cfg, profile.ID, profile.Provider),
 			Model:             profile.Model,
 			BaseURL:           profile.BaseURL,
 			MaxTokens:         profile.MaxTokens,
@@ -132,6 +135,27 @@ func normalizeSessionReasoningEffort(effort string) string {
 	default:
 		return ""
 	}
+}
+
+// providerDisplayName resolves the human-readable provider label for a model
+// profile so UI model pickers can group profiles by provider. The profile ID
+// is "<provider>.<model>"; we resolve the provider part against the configured
+// LLM providers (which carry a display Name) and fall back to the provider ID
+// and then the protocol type.
+func providerDisplayName(cfg *config.Config, profileID, providerType string) string {
+	if ref, ok := llm.ParseProfileID(profileID); ok && cfg != nil {
+		if provider, found := cfg.LLMProviders[ref.Provider]; found {
+			if name := strings.TrimSpace(provider.Name); name != "" {
+				return name
+			}
+			return strings.TrimSpace(ref.Provider)
+		}
+		return strings.TrimSpace(ref.Provider)
+	}
+	if strings.TrimSpace(providerType) != "" {
+		return strings.TrimSpace(providerType)
+	}
+	return strings.TrimSpace(profileID)
 }
 
 // SecuritySummary returns a lightweight Capability/Identity/Knowledge risk view.

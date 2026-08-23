@@ -147,9 +147,13 @@ type OpenedSession struct {
 
 // ModelProfile describes one selectable model profile for HTTP/UI callers.
 type ModelProfile struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Provider          string `json:"provider"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	// ProviderName is the human-readable provider display name resolved from the
+	// configured LLM provider (fallback: provider ID, then protocol type). UI
+	// model pickers group profiles by this value.
+	ProviderName      string `json:"provider_name,omitempty"`
 	Model             string `json:"model"`
 	BaseURL           string `json:"base_url"`
 	MaxTokens         int    `json:"max_tokens"`

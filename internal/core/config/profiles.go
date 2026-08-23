@@ -65,7 +65,7 @@ func applyProviderCredentialEnv(providers map[string]llm.ProviderConfig, dotenvM
 			switch provider.Type {
 			case ProviderOpenAICodex:
 				envName = "GODEX_OPENAI_CODEX_OAUTH_TOKEN"
-			case ProviderOpenAICompatible:
+			case ProviderOpenAICompatible, ProviderOpenAIResponses:
 				envName = "OPENAI_API_KEY"
 			}
 		}

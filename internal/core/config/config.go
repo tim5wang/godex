@@ -15,6 +15,7 @@ const (
 	ProviderAnthropicCompatible = llm.ProviderAnthropicCompatible
 	ProviderOpenAICompatible    = llm.ProviderOpenAICompatible
 	ProviderOpenAICodex         = llm.ProviderOpenAICodex
+	ProviderOpenAIResponses     = llm.ProviderOpenAIResponses
 )
 
 // Config holds the fully resolved runtime configuration.
@@ -773,6 +774,8 @@ func normalizeModelProfile(id string, profile ModelProfileConfig, cfg *Config) M
 		provider = ProviderOpenAICompatible
 	case ProviderOpenAICodex:
 		provider = ProviderOpenAICodex
+	case ProviderOpenAIResponses:
+		provider = ProviderOpenAIResponses
 	}
 	profile.Provider = provider
 	if strings.TrimSpace(profile.Model) == "" && cfg != nil {

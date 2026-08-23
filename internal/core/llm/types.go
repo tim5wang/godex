@@ -10,6 +10,7 @@ const (
 	ProviderAnthropicCompatible = "anthropic_compatible"
 	ProviderOpenAICompatible    = "openai_compatible"
 	ProviderOpenAICodex         = "openai_codex"
+	ProviderOpenAIResponses     = "openai_responses"
 
 	StrategyPrimary    = "primary"
 	StrategyFallback   = "fallback"
@@ -208,6 +209,8 @@ func NormalizeProviderType(providerType string) string {
 		return ProviderOpenAICompatible
 	case ProviderOpenAICodex:
 		return ProviderOpenAICodex
+	case ProviderOpenAIResponses:
+		return ProviderOpenAIResponses
 	default:
 		return strings.ToLower(strings.TrimSpace(providerType))
 	}

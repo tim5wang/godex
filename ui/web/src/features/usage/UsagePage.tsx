@@ -458,6 +458,14 @@ export function UsagePage() {
                     </div>
                   </div>
                   <div>
+                    <Text strong>OpenAI Responses</Text>
+                    <div style={{ marginTop: 4 }}>
+                      <Text code copyable={{ text: `${baseUrl}/v1/responses` }}>
+                        {baseUrl}/v1/responses
+                      </Text>
+                    </div>
+                  </div>
+                  <div>
                     <Text strong>Anthropic Compatible</Text>
                     <div style={{ marginTop: 4 }}>
                       <Text code copyable={{ text: `${baseUrl}/v1/messages` }}>

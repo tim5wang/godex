@@ -897,6 +897,7 @@ export interface ModelProfile {
   id: string;
   name: string;
   provider: string;
+  provider_name?: string;
   model: string;
   base_url: string;
   max_tokens: number;

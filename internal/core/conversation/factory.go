@@ -20,6 +20,8 @@ func NewCallerForProfile(profile config.ModelProfileConfig) Caller {
 		return client
 	case config.ProviderOpenAICodex:
 		return NewOpenAICodexClient(profile.BaseURL, profile.APIKey, timeout)
+	case config.ProviderOpenAIResponses:
+		return NewOpenAIResponsesClient(profile.BaseURL, profile.APIKey, timeout)
 	default:
 		client := NewClient(profile.BaseURL, profile.APIKey, timeout)
 		client.SetRequestGzip(profile.RequestGzip)

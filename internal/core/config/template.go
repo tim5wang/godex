@@ -677,6 +677,14 @@ tools:
     allow_private_hosts: {{ .Tools.Browser.AllowPrivateHosts }}
     # Keep the browser profile (cookies, logins) in the state dir across restarts. Environment override: GODEX_BROWSER_PERSISTENT_PROFILE.
     persistent_profile: {{ .Tools.Browser.PersistentProfile }}
+    # Expose this browser's CDP on a fixed host:port so other godex instances can
+    # drive it over the relay channel (distributed browser runtime). Environment override: GODEX_BROWSER_CDP_LISTEN.
+    cdp_listen: {{ yamlString .Tools.Browser.CDPListen }}
+    # Connect to the Chromium CDP endpoint on this registered node over the relay
+    # channel instead of launching a local browser. Environment override: GODEX_BROWSER_CDP_RELAY_NODE.
+    cdp_relay_node: {{ yamlString .Tools.Browser.CDPRelayNode }}
+    # Target host:port on the relay node for cdp_relay_node (default 127.0.0.1:9222). Environment override: GODEX_BROWSER_CDP_RELAY_TARGET.
+    cdp_relay_target: {{ yamlString .Tools.Browser.CDPRelayTarget }}
 
   lightpanda:
     # Enable Lightpanda as an alternative search and fetch backend. Environment override: GODEX_LIGHTPANDA_ENABLED.

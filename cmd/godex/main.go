@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -293,6 +296,19 @@ func main() {
 			// itself stays on each node.
 			eventStore := relay.NewEventStore()
 			relayHub.SetEventSink(relay.StoreEvents(eventStore))
+
+			// Distributed browser runtime: when the center's browser tool is
+			// configured with cdp_relay_node, drive the Chromium CDP endpoint
+			// exposed on that node over the relay channel.
+			if strings.TrimSpace(cfg.Tools.Browser.CDPRelayNode) != "" {
+				shared.SetBrowserCDPDialer(func(ctx context.Context, nodeID, target string) (net.Conn, error) {
+					stream, err := relayHub.OpenTCPStream(ctx, nodeID, "cdp-"+relayCDPConnID(), target)
+					if err != nil {
+						return nil, err
+					}
+					return &relayNetConnAdapter{ReadWriteCloser: stream}, nil
+				})
+			}
 
 			apiHandler := httpapi.NewHandlerWithRuntime(manager, service, channelManager, weixinAuth, cronToolAdapter, heartbeatToolAdapter, serviceRuntimeControl{
 				controller: servicecontrol.NewController(),
@@ -880,4 +896,29 @@ func heartbeatConfigFrom(cfg *config.Config) rtheartbeat.Config {
 		DefaultIntervalSeconds: cfg.Heartbeat.DefaultIntervalSeconds,
 		DefaultTimezone:        cfg.Heartbeat.DefaultTimezone,
 	}
+}
+
+// relayNetConnAdapter adapts a relay TCP stream (io.ReadWriteCloser) into a
+// net.Conn so the CDP WebSocket dialer can run over the relay channel.
+// Deadlines are no-ops: the relay channel is governed by the hub's own
+// liveness handling.
+type relayNetConnAdapter struct {
+	io.ReadWriteCloser
+}
+
+func (c *relayNetConnAdapter) LocalAddr() net.Addr              { return c }
+func (c *relayNetConnAdapter) RemoteAddr() net.Addr             { return c }
+func (c *relayNetConnAdapter) Network() string                  { return "relay" }
+func (c *relayNetConnAdapter) String() string                   { return "relay-cdp" }
+func (c *relayNetConnAdapter) SetDeadline(time.Time) error      { return nil }
+func (c *relayNetConnAdapter) SetReadDeadline(time.Time) error  { return nil }
+func (c *relayNetConnAdapter) SetWriteDeadline(time.Time) error { return nil }
+
+// relayCDPConnID returns a unique conn id for a relay TCP stream.
+func relayCDPConnID() string {
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("cdp-%d", time.Now().UnixNano())
+	}
+	return "cdp-" + hex.EncodeToString(buf)
 }

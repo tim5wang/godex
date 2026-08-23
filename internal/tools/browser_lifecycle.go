@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,30 @@ func (s *BrowserService) start(ctx context.Context) error {
 	s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// Distributed browser runtime: connect to a remote node's Chromium CDP
+	// over the relay channel instead of launching a local browser.
+	if strings.TrimSpace(cfg.CDPRelayNode) != "" {
+		relayBrowser, err := s.startRelayCDP(ctx)
+		if err != nil {
+			return fmt.Errorf("connect relay CDP browser: %w", err)
+		}
+		browser, err := connectRodBrowser(
+			relayBrowser,
+			cfgTimeout(cfg.ActionTimeoutSeconds),
+			func(browser *rod.Browser) error { return browser.Connect() },
+		)
+		if err != nil {
+			return fmt.Errorf("connect relay CDP browser: %w", err)
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.browser != nil {
+			_ = browser.Close()
+			return nil
+		}
+		s.browser = browser
+		return nil
 	}
 	if cfg.CDPURL != "" {
 		browser, err := connectRodBrowser(
@@ -107,6 +132,22 @@ func (s *BrowserService) startLocked(ctx context.Context) error {
 		return err
 	}
 	cfg := s.cfg
+	if strings.TrimSpace(cfg.CDPRelayNode) != "" {
+		relayBrowser, err := s.startRelayCDP(ctx)
+		if err != nil {
+			return fmt.Errorf("connect relay CDP browser: %w", err)
+		}
+		browser, err := connectRodBrowser(
+			relayBrowser,
+			cfgTimeout(cfg.ActionTimeoutSeconds),
+			func(browser *rod.Browser) error { return browser.Connect() },
+		)
+		if err != nil {
+			return fmt.Errorf("connect relay CDP browser: %w", err)
+		}
+		s.browser = browser
+		return nil
+	}
 	if cfg.CDPURL != "" {
 		browser, err := connectRodBrowser(
 			rod.New().ControlURL(cfg.CDPURL),
@@ -153,7 +194,7 @@ func (s *BrowserService) launchLocalBrowser(ctx context.Context, cfg config.Brow
 		if err := s.cleanBrowserCacheIfConfigured(); err != nil {
 			return nil, "", err
 		}
-		launch := newLocalLauncher(ctx, cfg.Headless, binPath, userDataDir, workingDir)
+		launch := newLocalLauncher(ctx, cfg.Headless, binPath, userDataDir, workingDir, cfg.CDPListen)
 		controlURL, err := launch.Launch()
 		if err != nil {
 			return nil, "", err
@@ -162,7 +203,7 @@ func (s *BrowserService) launchLocalBrowser(ctx context.Context, cfg config.Brow
 	}
 }
 
-func newLocalLauncher(ctx context.Context, headless bool, binPath, userDataDir, workingDir string) *launcher.Launcher {
+func newLocalLauncher(ctx context.Context, headless bool, binPath, userDataDir, workingDir, cdpListen string) *launcher.Launcher {
 	launch := launcher.New().
 		Context(ctx).
 		Leakless(true).
@@ -175,6 +216,19 @@ func newLocalLauncher(ctx context.Context, headless bool, binPath, userDataDir, 
 	}
 	if strings.TrimSpace(workingDir) != "" {
 		launch = launch.WorkingDir(workingDir)
+	}
+	// Fixed CDP listen address: expose this browser to other godex instances
+	// over the relay channel (distributed browser runtime). The rod launcher
+	// normally picks a random remote-debugging port; overriding it makes the
+	// CDP endpoint reachable at a stable host:port.
+	if addr := strings.TrimSpace(cdpListen); addr != "" {
+		host, port, err := net.SplitHostPort(addr)
+		if err == nil && port != "" {
+			if host == "" || host == "0.0.0.0" || host == "::" {
+				host = "127.0.0.1"
+			}
+			launch = launch.Set("remote-debugging-address", host).Set("remote-debugging-port", port)
+		}
 	}
 	launch = launch.Set("disable-component-update").Set("disable-background-networking").Set("disable-features", "OptimizationHints,OptimizationGuideModelDownloading,Translate")
 	return launch

@@ -235,6 +235,9 @@ func defaultConfigFile() ConfigFile {
 				MaxPagesPerSession:   3,
 				AllowPrivateHosts:    false,
 				PersistentProfile:    false,
+				CDPListen:            "",
+				CDPRelayNode:         "",
+				CDPRelayTarget:       "",
 			},
 			History: HistorySearchSection{
 				Enabled: true,

@@ -402,6 +402,12 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Tools.Browser.AllowPrivateHosts = asBool(value)
 	case "tools.browser.persistent_profile":
 		file.Tools.Browser.PersistentProfile = asBool(value)
+	case "tools.browser.cdp_listen":
+		file.Tools.Browser.CDPListen = asString(value)
+	case "tools.browser.cdp_relay_node":
+		file.Tools.Browser.CDPRelayNode = asString(value)
+	case "tools.browser.cdp_relay_target":
+		file.Tools.Browser.CDPRelayTarget = asString(value)
 	case "tools.history_search.enabled":
 		file.Tools.History.Enabled = asBool(value)
 	case "tools.history_search.auto.enabled":
@@ -667,6 +673,9 @@ func storedValues(file ConfigFile) map[string]any {
 		"tools.browser.max_pages_per_session":                    file.Tools.Browser.MaxPagesPerSession,
 		"tools.browser.allow_private_hosts":                      file.Tools.Browser.AllowPrivateHosts,
 		"tools.browser.persistent_profile":                       file.Tools.Browser.PersistentProfile,
+		"tools.browser.cdp_listen":                               file.Tools.Browser.CDPListen,
+		"tools.browser.cdp_relay_node":                           file.Tools.Browser.CDPRelayNode,
+		"tools.browser.cdp_relay_target":                         file.Tools.Browser.CDPRelayTarget,
 		"tools.history_search.enabled":                           file.Tools.History.Enabled,
 		"tools.history_search.auto.enabled":                      file.Tools.History.Auto.Enabled,
 		"tools.history_search.auto.max_per_turn":                 file.Tools.History.Auto.MaxPerTurn,
@@ -872,6 +881,9 @@ func effectiveValues(cfg *Config) map[string]any {
 		"tools.browser.max_pages_per_session":                    cfg.Tools.Browser.MaxPagesPerSession,
 		"tools.browser.allow_private_hosts":                      cfg.Tools.Browser.AllowPrivateHosts,
 		"tools.browser.persistent_profile":                       cfg.Tools.Browser.PersistentProfile,
+		"tools.browser.cdp_listen":                               cfg.Tools.Browser.CDPListen,
+		"tools.browser.cdp_relay_node":                           cfg.Tools.Browser.CDPRelayNode,
+		"tools.browser.cdp_relay_target":                         cfg.Tools.Browser.CDPRelayTarget,
 		"tools.history_search.enabled":                           cfg.Tools.History.Enabled,
 		"tools.history_search.auto.enabled":                      cfg.Tools.History.Auto.Enabled,
 		"tools.history_search.auto.max_per_turn":                 cfg.Tools.History.Auto.MaxPerTurn,

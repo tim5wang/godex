@@ -630,6 +630,7 @@ func TestNewLocalLauncherDoesNotPanicWithUserDataDir(t *testing.T) {
 		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 		t.TempDir(),
 		t.TempDir(),
+		"",
 	)
 	if launch == nil {
 		t.Fatal("expected launcher instance")

@@ -388,6 +388,9 @@ type BrowserSection struct {
 	MaxPagesPerSession   int    `yaml:"max_pages_per_session"`
 	AllowPrivateHosts    bool   `yaml:"allow_private_hosts"`
 	PersistentProfile    bool   `yaml:"persistent_profile"`
+	CDPListen            string `yaml:"cdp_listen"`
+	CDPRelayNode         string `yaml:"cdp_relay_node"`
+	CDPRelayTarget       string `yaml:"cdp_relay_target"`
 }
 
 type HistorySearchSection struct {

@@ -573,6 +573,15 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveBool("tools.browser.persistent_profile", file.Tools.Browser.PersistentProfile, "GODEX_BROWSER_PERSISTENT_PROFILE", func(v bool) {
 		current.Tools.Browser.PersistentProfile = v
 	})
+	resolveString("tools.browser.cdp_listen", file.Tools.Browser.CDPListen, "GODEX_BROWSER_CDP_LISTEN", func(v string) {
+		current.Tools.Browser.CDPListen = v
+	})
+	resolveString("tools.browser.cdp_relay_node", file.Tools.Browser.CDPRelayNode, "GODEX_BROWSER_CDP_RELAY_NODE", func(v string) {
+		current.Tools.Browser.CDPRelayNode = v
+	})
+	resolveString("tools.browser.cdp_relay_target", file.Tools.Browser.CDPRelayTarget, "GODEX_BROWSER_CDP_RELAY_TARGET", func(v string) {
+		current.Tools.Browser.CDPRelayTarget = v
+	})
 	resolveBool("tools.lightpanda.enabled", file.Tools.Lightpanda.Enabled, "GODEX_LIGHTPANDA_ENABLED", func(v bool) {
 		current.Tools.Lightpanda.Enabled = v
 	})
@@ -1009,6 +1018,9 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 				MaxPagesPerSession:   file.Tools.Browser.MaxPagesPerSession,
 				AllowPrivateHosts:    file.Tools.Browser.AllowPrivateHosts,
 				PersistentProfile:    file.Tools.Browser.PersistentProfile,
+				CDPListen:            file.Tools.Browser.CDPListen,
+				CDPRelayNode:         file.Tools.Browser.CDPRelayNode,
+				CDPRelayTarget:       file.Tools.Browser.CDPRelayTarget,
 			},
 			Lightpanda: LightpandaConfig{
 				Enabled:        file.Tools.Lightpanda.Enabled,

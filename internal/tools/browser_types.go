@@ -171,6 +171,10 @@ type BrowserService struct {
 	counter            uint64
 	resolveBrowserPath func(string) string
 	downloadBrowser    func(context.Context, string) (string, error)
+	// cdpDialer, when installed by the center, lets this browser connect to a
+	// remote node's Chromium CDP endpoint over the relay channel
+	// (distributed browser runtime, tools.browser.cdp_relay_node).
+	cdpDialer CDPDialer
 }
 
 // SetStateDir installs the durable state directory. When the browser is
@@ -180,6 +184,15 @@ func (s *BrowserService) SetStateDir(dir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stateDir = strings.TrimSpace(dir)
+}
+
+// SetCDPDialer installs the relay-based CDP dialer used when the browser is
+// configured with tools.browser.cdp_relay_node (distributed browser runtime).
+// The center wires this to the relay hub.
+func (s *BrowserService) SetCDPDialer(dialer CDPDialer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cdpDialer = dialer
 }
 
 const browserLaunchTimeout = 10 * time.Minute

@@ -31,6 +31,10 @@ import (
 type SharedDependencies struct {
 	mu   sync.RWMutex
 	deps dependencies
+	// browserCDPDialer is the relay-backed CDP dialer installed by the center
+	// (distributed browser runtime). It is re-applied after ApplyConfig
+	// rebuilds the dependency set.
+	browserCDPDialer tools.CDPDialer
 	// longTaskResumeOnce guards the one-time sweep of stale longtask run
 	// records at process startup. After a crash the previous process may
 	// leave runs marked "running"; this flips them to "interrupted" so they
@@ -74,6 +78,7 @@ func (s *SharedDependencies) ApplyConfig(cfg *config.Config) {
 	permissionManager := s.deps.permissions
 	sessionAdminService := s.deps.sessionAdmin
 	subagentJobs := s.deps.subagentJobs
+	cdpDialer := s.browserCDPDialer
 	s.mu.RUnlock()
 	deps := buildDependencies(cfg)
 	deps.cron = cronService
@@ -85,6 +90,9 @@ func (s *SharedDependencies) ApplyConfig(cfg *config.Config) {
 	if permissionManager != nil {
 		permissionManager.ApplyPolicy(permissionPolicyFromConfig(cfg))
 		deps.permissions = permissionManager
+	}
+	if cdpDialer != nil {
+		deps.browser.SetCDPDialer(cdpDialer)
 	}
 	s.mu.Lock()
 	s.deps = deps
@@ -118,6 +126,21 @@ func (s *SharedDependencies) SetSessionAdminService(admin *sessionadmin.Service)
 	}
 	s.mu.Lock()
 	s.deps.sessionAdmin = admin
+	s.mu.Unlock()
+}
+
+// SetBrowserCDPDialer installs the relay-backed CDP dialer (distributed
+// browser runtime). It is applied to the current browser service and
+// re-applied after every ApplyConfig rebuild.
+func (s *SharedDependencies) SetBrowserCDPDialer(dialer tools.CDPDialer) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.browserCDPDialer = dialer
+	if s.deps.browser != nil {
+		s.deps.browser.SetCDPDialer(dialer)
+	}
 	s.mu.Unlock()
 }
 

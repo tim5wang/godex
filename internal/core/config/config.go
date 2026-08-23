@@ -449,6 +449,16 @@ type BrowserConfig struct {
 	MaxPagesPerSession   int
 	AllowPrivateHosts    bool
 	PersistentProfile    bool
+	// CDPListen, when set (host:port), launches the local browser with a
+	// fixed remote-debugging port so other godex instances can reach this
+	// browser's CDP over the relay channel (distributed browser runtime).
+	CDPListen string
+	// CDPRelayNode, when set to a registered node id, connects this browser to
+	// the Chromium CDP endpoint exposed on that node over the relay channel
+	// instead of launching a local browser. CDPRelayTarget defaults to
+	// 127.0.0.1:9222 when empty.
+	CDPRelayNode   string
+	CDPRelayTarget string
 }
 
 // HistorySearchConfig controls policy-driven history recall.

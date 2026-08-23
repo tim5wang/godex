@@ -295,6 +295,9 @@ func baseSchema() []SectionSchema {
 				{Path: "tools.browser.max_pages_per_session", Label: "Max Pages Per Session", Description: "Maximum open browser pages tracked per Godex session.", Type: "int", LiveApply: true, Env: "GODEX_BROWSER_MAX_PAGES_PER_SESSION"},
 				{Path: "tools.browser.allow_private_hosts", Label: "Allow Private Hosts", Description: "Permit localhost and private-network browser navigation.", Type: "bool", LiveApply: true, Env: "GODEX_BROWSER_ALLOW_PRIVATE_HOSTS"},
 				{Path: "tools.browser.persistent_profile", Label: "Persistent Profile", Description: "Keep the browser profile (cookies, sessions, logins) in the state dir so it survives restarts instead of a throwaway temp dir.", Type: "bool", LiveApply: true, Env: "GODEX_BROWSER_PERSISTENT_PROFILE"},
+				{Path: "tools.browser.cdp_listen", Label: "CDP Listen", Description: "Expose this browser's CDP endpoint on a fixed host:port (e.g. 127.0.0.1:9222) so other godex instances can drive it over the relay channel.", Type: "string", LiveApply: true, Env: "GODEX_BROWSER_CDP_LISTEN"},
+				{Path: "tools.browser.cdp_relay_node", Label: "CDP Relay Node", Description: "Connect to the Chromium CDP endpoint on this registered node over the relay channel instead of launching a local browser (distributed browser runtime).", Type: "string", LiveApply: true, Env: "GODEX_BROWSER_CDP_RELAY_NODE"},
+				{Path: "tools.browser.cdp_relay_target", Label: "CDP Relay Target", Description: "Target host:port on the relay node for cdp_relay_node (default 127.0.0.1:9222).", Type: "string", LiveApply: true, Env: "GODEX_BROWSER_CDP_RELAY_TARGET"},
 			},
 		},
 		{

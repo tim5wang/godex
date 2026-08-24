@@ -3141,3 +3141,29 @@ samp {
     display: flex;
   }
 }
+
+/* Business Agents console: two-pane (list + detail) on wide screens, stacked
+   on narrow screens so the create button and detail pane don't crowd together. */
+.business-agents-layout {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  align-items: flex-start;
+}
+.business-agents-layout > .business-agents-list {
+  flex-shrink: 0;
+}
+.business-agents-layout > div {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .business-agents-layout {
+    flex-direction: column;
+    padding: 8px;
+  }
+  .business-agents-layout > .business-agents-list {
+    width: 100% !important;
+  }
+}
+

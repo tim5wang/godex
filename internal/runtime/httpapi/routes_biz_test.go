@@ -81,6 +81,34 @@ func TestBizKeyCreateListEndpoint(t *testing.T) {
 	}
 }
 
+func TestBizKeyResetRotatesSecret(t *testing.T) {
+	_, usageService := mustBizHandler(t)
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales"})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	// Reset returns a fresh secret and the old one stops authenticating.
+	reset, err := usageService.ResetBizKey(created.Key.ID)
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if !strings.HasPrefix(reset.Secret, usage.BizKeyPrefix) {
+		t.Fatalf("expected biz_ prefix, got %q", reset.Secret[:8])
+	}
+	if reset.Secret == created.Secret {
+		t.Fatal("reset must return a different secret")
+	}
+	if _, err := usageService.AuthenticateBizKey(created.Secret); err == nil {
+		t.Fatal("old secret must no longer authenticate after reset")
+	}
+	if _, err := usageService.AuthenticateBizKey(reset.Secret); err != nil {
+		t.Fatalf("new secret should authenticate: %v", err)
+	}
+}
+
+// TestBizKeyAuthMiddlewareAcceptsValidKey verifies a valid key reaches the
+// handler context.
 func TestBizKeyAuthMiddlewareAcceptsValidKey(t *testing.T) {
 	_, usageService := mustBizHandler(t)
 	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "crm"})

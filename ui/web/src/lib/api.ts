@@ -1509,6 +1509,14 @@ export function updateBizKey(
   );
 }
 
+export function resetBizKey(token: string | null, id: string) {
+  return request<BizKeyCreateResponse>(
+    `/v1/biz/keys/${encodeURIComponent(id)}/reset`,
+    { method: "POST" },
+    token,
+  );
+}
+
 export function deleteBizKey(token: string | null, id: string) {
   return request<void>(`/v1/biz/keys/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
 }

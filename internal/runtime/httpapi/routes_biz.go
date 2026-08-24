@@ -97,4 +97,14 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})))
+	mux.Handle("POST /v1/biz/keys/{id}/reset", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Reset rotates the secret and returns the new plaintext exactly once
+		// (mirrors /usage/keys/{id}/reset).
+		resp, err := usageService.ResetBizKey(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})))
 }

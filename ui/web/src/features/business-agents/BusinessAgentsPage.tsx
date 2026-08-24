@@ -39,11 +39,16 @@ import {
   listBizKeys,
   listPackages,
   listSkillsCatalog,
+  resetBizKey,
   updateBizKey,
 } from "../../lib/api";
 import type { BizKey, ModelsView, ProviderRef } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
-import { GodexStepElement } from "../../lib/agent-step/godex-step";
+// Side-effect import: registers the <godex-step> custom element via
+// customElements.define. The class is never referenced directly, so a named
+// import would be tree-shaken away and the element would stay unregistered
+// (blank embed preview).
+import "../../lib/agent-step/godex-step";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -249,9 +254,10 @@ const result = await step.createStep({
   };
 
   return (
-    <div style={{ display: "flex", gap: 16, padding: 16 }}>
+    <div className="business-agents-layout">
       {/* ---- 左：列表 ---- */}
       <Card
+        className="business-agents-list"
         style={{ width: 320, flexShrink: 0 }}
         title={<Text strong>{t("businessAgents.listTitle")}</Text>}
         extra={
@@ -427,12 +433,23 @@ function OverviewTab({ biz, onEdit }: { biz: BizKey; onEdit: () => void }) {
   const queryClient = useQueryClient();
   const { message: antMessage } = AntApp.useApp();
   const token = useSettingsStore((state) => state.token);
+  const [resetSecret, setResetSecret] = useState("");
 
   const toggleMutation = useMutation({
     mutationFn: (enabled: boolean) => updateBizKey(token, biz.id, { enabled }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["biz-keys", token] });
       antMessage.success(t("businessAgents.saved"));
+    },
+    onError: (error: Error) => showError(antMessage, error, t("businessAgents.saveFailed")),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: () => resetBizKey(token, biz.id),
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ["biz-keys", token] });
+      setResetSecret(res.secret);
+      antMessage.success(t("businessAgents.secretResetDone"));
     },
     onError: (error: Error) => showError(antMessage, error, t("businessAgents.saveFailed")),
   });
@@ -460,6 +477,34 @@ function OverviewTab({ biz, onEdit }: { biz: BizKey; onEdit: () => void }) {
         <Text strong>{t("businessAgents.keyPrefix")}: </Text>
         <Text code>{biz.key_prefix}</Text>
       </Paragraph>
+      <Paragraph>
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          loading={resetMutation.isPending}
+          onClick={() => resetMutation.mutate()}
+        >
+          {t("businessAgents.resetKey")}
+        </Button>
+      </Paragraph>
+      {resetSecret ? (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t("businessAgents.secretOnce")}
+          description={
+            <Space direction="vertical" style={{ width: "100%" }}>
+              <Text code copyable={{ text: resetSecret }}>
+                {resetSecret}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {t("businessAgents.secretOnceHint")}
+              </Text>
+            </Space>
+          }
+        />
+      ) : null}
       <Paragraph>
         <Text strong>{t("businessAgents.budgetCredits")}: </Text>
         <Text>{biz.budget_credits}</Text>

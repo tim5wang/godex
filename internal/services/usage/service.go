@@ -354,6 +354,31 @@ func (s *Service) DeleteBizKey(id string) error {
 	return s.store.DeleteBizKey(id)
 }
 
+// ResetBizKey rotates the business key secret and returns the new plaintext
+// exactly once (mirrors ResetKey). The previous secret stops authenticating
+// immediately; the new secret is not stored on the key, so callers must copy
+// it now or rotate again.
+func (s *Service) ResetBizKey(id string) (*BizKeyCreateResponse, error) {
+	key, err := s.store.GetBizKey(id)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := generateBizKey()
+	if err != nil {
+		return nil, err
+	}
+	key.KeyHash = sha256Hex(secret)
+	key.KeyPrefix = maskKey(secret)
+	key.UpdatedAt = time.Now()
+	if err := s.store.UpdateBizKey(key); err != nil {
+		return nil, err
+	}
+	return &BizKeyCreateResponse{
+		Key:    *key,
+		Secret: secret,
+	}, nil
+}
+
 // AuthenticateBizKey verifies a presented business key and returns its record.
 func (s *Service) AuthenticateBizKey(secret string) (*BizAPIKey, error) {
 	if !strings.HasPrefix(secret, BizKeyPrefix) {

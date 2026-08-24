@@ -80,6 +80,7 @@ export class GodexStepElement extends HTMLElement {
   private cards: HTMLDivElement;
   private meta: HTMLDivElement;
   private controller: AbortController | null = null;
+  private currentStepId = "";
 
   constructor() {
     super();
@@ -168,6 +169,46 @@ export class GodexStepElement extends HTMLElement {
 
     try {
       const result = await client.createStep(req, this.controller.signal);
+      this.currentStepId = result.step_id;
+      this.status.textContent = "完成";
+      this.status.className = "status done";
+      this.result.textContent = result.text || "";
+      this.meta.textContent = `step ${result.step_id} · session ${result.session_id}`;
+      if (result.output !== undefined) {
+        this.renderStructured(result.output);
+      }
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        this.status.textContent = "已中止";
+        return;
+      }
+      this.renderError((err as Error).message);
+    } finally {
+      this.runBtn.disabled = false;
+    }
+  }
+
+  // ui_card interaction loop: the value the user submitted through a card is
+  // injected back into the SAME step session (replyStep), then we poll the
+  // terminal state so the agent's continuation renders in place.
+  private async submitCardValue(value: unknown) {
+    const client = this.resolveClient();
+    if (!client || !this.currentStepId) {
+      return;
+    }
+    this.controller?.abort();
+    this.controller = new AbortController();
+    this.runBtn.disabled = true;
+    this.status.textContent = "处理中…";
+    this.status.className = "status running";
+    this.result.textContent = "";
+    this.cards.replaceChildren();
+
+    try {
+      await client.replyStep(this.currentStepId, value, { signal: this.controller.signal });
+      // The reply is async: poll until the step leaves the running state.
+      const result = await client.getStep(this.currentStepId, this.controller.signal);
+      this.currentStepId = result.step_id;
       this.status.textContent = "完成";
       this.status.className = "status done";
       this.result.textContent = result.text || "";
@@ -267,21 +308,13 @@ export class GodexStepElement extends HTMLElement {
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         const data = Object.fromEntries(new FormData(form).entries());
-        this.submitCardValue(JSON.stringify(data));
+        this.submitCardValue(data);
       });
       host.append(form);
     } else {
       // plain card: content already rendered above
     }
     this.cards.append(host);
-  }
-
-  private submitCardValue(value: string) {
-    // MVP: send the value back as a follow-up message on the current session
-    // and re-run. In the SDK, this maps to a follow-up createStep; a fuller
-    // integration would push into the live session.
-    this.input.value = value;
-    void this.run();
   }
 
   private parseInputs(raw: string | null): Record<string, unknown> | undefined {

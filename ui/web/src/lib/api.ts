@@ -66,6 +66,9 @@ import type {
   SessionUsageSummary,
   CacheStats,
   WeixinAuthStatus,
+  BizKey,
+  BizKeyCreateResponse,
+  ProviderRef,
 } from "./types";
 import { useNodeContextStore } from "../store/nodeContext";
 
@@ -1442,4 +1445,70 @@ export function searchFiles(token: string | null, query: string, mode: "name" | 
   params.set("mode", mode);
   if (root?.trim()) params.set("root", root.trim());
   return request<{ items: FileSearchResult[] }>(`/files/search?${params.toString()}`, { method: "GET" }, token);
+}
+
+// ---- Agent Step Platform: Business Agents (biz keys) API ----
+
+export function listBizKeys(token: string | null) {
+  return request<BizKey[]>("/v1/biz/keys", { method: "GET" }, token);
+}
+
+export function createBizKey(
+  token: string | null,
+  body: {
+    name: string;
+    description?: string;
+    default_prompt?: string;
+    mcp_servers?: string[];
+    providers?: ProviderRef[];
+    sandbox_tools?: string[];
+    skills?: string[];
+    packages?: string[];
+    models?: string[];
+    project_dir?: string;
+    budget_credits?: number;
+    warning_threshold?: number;
+  },
+) {
+  return request<BizKeyCreateResponse>(
+    "/v1/biz/keys",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export function updateBizKey(
+  token: string | null,
+  id: string,
+  body: {
+    name?: string;
+    description?: string;
+    default_prompt?: string;
+    enabled?: boolean;
+    mcp_servers?: string[];
+    providers?: ProviderRef[];
+    sandbox_tools?: string[];
+    skills?: string[];
+    packages?: string[];
+    models?: string[];
+    project_dir?: string;
+    budget_credits?: number;
+    warning_threshold?: number;
+  },
+) {
+  return request<BizKey>(
+    `/v1/biz/keys/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export function deleteBizKey(token: string | null, id: string) {
+  return request<void>(`/v1/biz/keys/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
 }

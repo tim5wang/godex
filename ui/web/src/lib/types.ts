@@ -1618,3 +1618,37 @@ export interface CacheStats {
   hit_rate: number;
   tokens_saved: number;
 }
+
+// ---- Agent Step Platform: Business Agents (BizKey) Types ----
+
+export interface ProviderRef {
+  name: string;
+  url?: string;
+  token_ref?: string;
+}
+
+export interface BizKey {
+  id: string;
+  name: string;
+  description?: string;
+  default_prompt?: string;
+  key_hash?: string;
+  key_prefix: string;
+  enabled: boolean;
+  mcp_servers: string[];
+  providers: ProviderRef[];
+  sandbox_tools: string[];
+  skills?: string[];
+  packages?: string[];
+  models: string[];
+  project_dir?: string;
+  budget_credits: number;
+  warning_threshold: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BizKeyCreateResponse {
+  key: BizKey;
+  secret: string;
+}

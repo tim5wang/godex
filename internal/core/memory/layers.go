@@ -41,6 +41,7 @@ func (m *Manager) BuildContextLayers(query string) (ContextLayers, error) {
 	if err != nil {
 		return ContextLayers{}, err
 	}
+	entries = activeEntries(entries)
 	if len(entries) == 0 {
 		return ContextLayers{}, nil
 	}
@@ -98,7 +99,22 @@ func (m *Manager) BuildContextLayers(query string) (ContextLayers, error) {
 	if len(identity) == 0 && len(core) == 0 && len(relevant) == 0 {
 		return ContextLayers{}, nil
 	}
+	// Best-effort: record which memories actually reached the prompt so the
+	// UI can surface stale, never-referenced entries. Never blocks the turn.
+	m.markReferenced(referencedIDs(identity, core, relevant))
 	return ContextLayers{Identity: identity, Core: core, Relevant: relevant}, nil
+}
+
+// referencedIDs collects the IDs of memories that were selected into any
+// context layer, for LastReferencedAt tracking.
+func referencedIDs(layers ...[]RelevantMemory) map[string]struct{} {
+	ids := make(map[string]struct{})
+	for _, layer := range layers {
+		for _, mem := range layer {
+			ids[mem.ID] = struct{}{}
+		}
+	}
+	return ids
 }
 
 func (m *Manager) selectRelevantMemories(query string, limit int) ([]RelevantMemory, error) {
@@ -386,6 +402,22 @@ func hasTag(tags []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// activeEntries filters out archived memories so they never reach prompt
+// injection or default recall.
+func activeEntries(entries []Entry) []Entry {
+	if len(entries) == 0 {
+		return nil
+	}
+	kept := entries[:0]
+	for _, entry := range entries {
+		if normalizeStatus(entry.Status) == StatusArchived {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 func trimMemoriesToTokenBudget(memories []RelevantMemory, budget int) []RelevantMemory {

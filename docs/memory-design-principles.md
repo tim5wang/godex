@@ -190,9 +190,16 @@ Identity 和 Core 都有独立预算，不应该无限增长。
 当前治理能力包括：
 - candidate inbox
 - accept / dismiss
-- suppression
+- suppression（含解除抑制，`RemoveSuppression`）
 - Always include / core
-- Web 管理页
+- 生命周期状态 `status`（`active` / `archived`）：
+  - `archived` 记忆排除默认召回与上下文注入，但保留可恢复
+  - 归档/恢复走 audit 链（`archive` / `restore_status`），可在 Web 上一键批量归档
+  - 里程碑识别：标题含「完成/落地/收官/phase/阶段」的 `project`/`workflow` 记忆可一键归档（`/memory/milestones`、`/memory/milestones/archive`）
+- 时效信号 `last_referenced_at`：
+  - `BuildContextLayers` 注入时（节流、best-effort）回写最近一次被引用时间
+  - Web UI 据此展示「从未使用 / 使用于 X / 已陈旧」标记，辅助清理
+- Web 管理页（三栏看板：候选收件箱 / 长期记忆 / 屏蔽与归档，多选批量流转）
 
 ### 笔记 ↔ 记忆联动
 
@@ -251,7 +258,7 @@ Identity 和 Core 都有独立预算，不应该无限增长。
 当前还没有：
 - embedding-native semantic search
 - KG / diary / richer long-term graph
-- 事实失效时间模型
+- 完整的事实失效时间模型（已有 `status` 归档 + `last_referenced_at` 时效信号 + 里程碑一键归档，但尚无按类型的自动过期策略）
 - 自动把历史回查结果沉淀成长期记忆
 - 大规模项目代码级 mining
 

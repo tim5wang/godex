@@ -25,6 +25,9 @@ const (
 	AuditAcceptCandidate  AuditAction = "accept_candidate"
 	AuditDismissCandidate AuditAction = "dismiss_candidate"
 	AuditRestore          AuditAction = "restore"
+	AuditArchive          AuditAction = "archive"
+	AuditRestoreStatus    AuditAction = "restore_status"
+	AuditUnsuppress       AuditAction = "unsuppress"
 )
 
 // AuditLogEntry is one append-only durable memory change record.

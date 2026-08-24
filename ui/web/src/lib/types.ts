@@ -91,6 +91,8 @@ export interface MemoryRecord {
   updated_at: string;
   tags?: string[];
   fingerprint?: string;
+  status?: "active" | "archived" | string;
+  last_referenced_at?: string;
   content: string;
 }
 

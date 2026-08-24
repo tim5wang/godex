@@ -841,6 +841,7 @@ func NewHandlerWithRuntime(
 			Type:   memory.Type(strings.TrimSpace(r.URL.Query().Get("memory_type"))),
 			Tag:    strings.TrimSpace(r.URL.Query().Get("tag")),
 			Source: strings.TrimSpace(r.URL.Query().Get("source")),
+			Status: memory.Status(strings.TrimSpace(r.URL.Query().Get("status"))),
 		}
 		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 			parsed, err := strconv.Atoi(raw)
@@ -973,6 +974,66 @@ func NewHandlerWithRuntime(
 			return
 		}
 		writeJSON(w, http.StatusOK, entry)
+	})))
+	mux.Handle("POST /memory/archive", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req forgetMemoryRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		entry, err := service.ArchiveMemory(r.Context(), memory.ForgetInput{
+			Title: strings.TrimSpace(req.Title),
+			File:  strings.TrimSpace(req.File),
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+	})))
+	mux.Handle("POST /memory/restore", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req forgetMemoryRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		entry, err := service.RestoreMemory(r.Context(), memory.ForgetInput{
+			Title: strings.TrimSpace(req.Title),
+			File:  strings.TrimSpace(req.File),
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+	})))
+	mux.Handle("POST /memory/milestones/archive", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entries, err := service.ArchiveMilestones(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"archived": entries})
+	})))
+	mux.Handle("GET /memory/milestones", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entries, err := service.ListMilestoneMemories(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, entries)
+	})))
+	mux.Handle("POST /memory/suppressions/remove", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req removeMemorySuppressionRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := service.RemoveMemorySuppression(r.Context(), req.Key); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"removed": true})
 	})))
 	mux.Handle("POST /memory/candidates/{fingerprint}/accept", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req acceptMemoryCandidateRequest

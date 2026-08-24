@@ -176,7 +176,7 @@ export function getMeta() {
 
 export function listMemory(
   token: string | null,
-  params: { query?: string; memoryType?: MemoryType | ""; tag?: string; source?: string; limit?: number } = {},
+  params: { query?: string; memoryType?: MemoryType | ""; tag?: string; source?: string; status?: string; limit?: number } = {},
 ) {
   const search = new URLSearchParams();
   if (params.query?.trim()) {
@@ -190,6 +190,9 @@ export function listMemory(
   }
   if (params.source?.trim()) {
     search.set("source", params.source.trim());
+  }
+  if (params.status?.trim()) {
+    search.set("status", params.status.trim());
   }
   if (typeof params.limit === "number" && params.limit >= 0) {
     search.set("limit", String(params.limit));
@@ -331,6 +334,47 @@ export function dismissMemoryCandidate(token: string | null, fingerprint: string
     {
       method: "POST",
       body: JSON.stringify({}),
+    },
+    token,
+  );
+}
+
+export function archiveMemory(token: string | null, body: { title?: string; file?: string }) {
+  return request<MemoryRecord>(
+    "/memory/archive",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export function restoreMemoryStatus(token: string | null, body: { title?: string; file?: string }) {
+  return request<MemoryRecord>(
+    "/memory/restore",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export function listMilestoneMemories(token: string | null) {
+  return request<MemoryRecord[]>("/memory/milestones", { method: "GET" }, token);
+}
+
+export function archiveMilestoneMemories(token: string | null) {
+  return request<{ archived: MemoryRecord[] }>("/memory/milestones/archive", { method: "POST" }, token);
+}
+
+export function removeMemorySuppression(token: string | null, key: string) {
+  return request<{ removed: boolean }>(
+    "/memory/suppressions/remove",
+    {
+      method: "POST",
+      body: JSON.stringify({ key }),
     },
     token,
   );

@@ -562,6 +562,215 @@ samp {
   gap: 12px;
 }
 
+/* ── Memory board (3-column lifecycle kanban) ─────────────────── */
+
+.memory-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.memory-column {
+  min-width: 0;
+}
+
+.memory-column .ant-card-body {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  min-height: 420px;
+}
+
+.memory-column-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.memory-column-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  color: var(--godex-accent);
+  font-size: 15px;
+}
+
+.memory-column-candidate .memory-column-icon {
+  color: #2563eb;
+}
+
+.memory-column-durable .memory-column-icon {
+  color: var(--godex-accent);
+}
+
+.memory-column-suppressed .memory-column-icon {
+  color: var(--godex-warning);
+}
+
+.memory-column-subtitle {
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memory-column-count {
+  margin-left: auto;
+}
+
+.memory-column-batch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--godex-border);
+  padding-bottom: 8px;
+}
+
+.memory-column-select-bar {
+  display: flex;
+  align-items: center;
+}
+
+.memory-column-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 640px;
+  padding-right: 2px;
+}
+
+.memory-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  padding: 10px;
+}
+
+.memory-card-checked {
+  border-color: var(--godex-accent);
+  background: color-mix(in oklab, var(--godex-accent) 8%, var(--godex-panel-muted));
+}
+
+.memory-card-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.memory-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.memory-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.memory-card-summary {
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memory-card-meta {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+}
+
+.memory-card-date {
+  font-size: 11px;
+}
+
+.memory-card-core-badge {
+  margin: 0;
+}
+
+.memory-card-stale-badge {
+  margin: 0;
+}
+
+.memory-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-left: 28px;
+}
+
+.memory-source-badge {
+  font-size: 11px;
+  margin: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-reference-badge {
+  font-size: 11px;
+  margin: 0;
+}
+
+.memory-secondary-panel {
+  margin-bottom: 16px;
+}
+
+.memory-secondary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.memory-audit-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.memory-audit-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Responsive: board stacks on narrow screens */
+@media (max-width: 1280px) {
+  .memory-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .memory-secondary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
 .chat-page {
   display: grid;
   grid-template-columns: var(--chat-sessions-width, 320px) minmax(0, 1fr) var(--chat-inspector-width, 380px);

@@ -40,6 +40,21 @@ const (
 	TypeWorkFact   Type = "work_fact"
 )
 
+// Status represents the lifecycle state of one durable memory entry.
+type Status string
+
+const (
+	// StatusActive is the default: the memory participates in recall and
+	// context injection.
+	StatusActive Status = "active"
+	// StatusArchived hides the memory from default recall and injection while
+	// keeping it recoverable through the management UI / API.
+	StatusArchived Status = "archived"
+)
+
+// StatusAll is a search-only sentinel meaning "do not filter by status".
+const StatusAll Status = "all"
+
 // Entry is one durable memory entry.
 type Entry struct {
 	ID          string    `json:"id"`
@@ -52,6 +67,11 @@ type Entry struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Tags        []string  `json:"tags,omitempty"`
 	Fingerprint string    `json:"fingerprint,omitempty"`
+	// Status is the lifecycle state ("active" default, "archived").
+	Status Status `json:"status,omitempty"`
+	// LastReferencedAt records the last time this memory was selected into
+	// prompt context (recall or injection). Zero means it has never been used.
+	LastReferencedAt time.Time `json:"last_referenced_at,omitempty"`
 }
 
 // SaveInput describes one memory to save.
@@ -87,6 +107,10 @@ type SearchOptions struct {
 	Type   Type
 	Tag    string
 	Source string
+	// Status filters by lifecycle state. Empty means active-only (the default
+	// recall behavior); StatusArchived lists only archived; StatusAll includes
+	// both. Archived memories are excluded from default recall.
+	Status Status
 	Limit  int
 }
 
@@ -542,6 +566,9 @@ func (m *Manager) searchLinear(opts SearchOptions) ([]StoredMemory, error) {
 		if opts.Type != "" && entry.Type != opts.Type {
 			continue
 		}
+		if !entryStatusMatches(entry, opts.Status) {
+			continue
+		}
 		if tagFilter != "" && !entryHasTag(entry, tagFilter) {
 			continue
 		}
@@ -664,6 +691,12 @@ func mergeEntryMetadata(indexEntry Entry, fileEntry Entry) Entry {
 	}
 	if merged.Fingerprint == "" {
 		merged.Fingerprint = fileEntry.Fingerprint
+	}
+	if merged.Status == "" {
+		merged.Status = fileEntry.Status
+	}
+	if merged.LastReferencedAt.IsZero() {
+		merged.LastReferencedAt = fileEntry.LastReferencedAt
 	}
 	return merged
 }
@@ -871,9 +904,12 @@ func renderMemoryFile(entry Entry, content string) string {
 		"Source: " + entry.Source,
 		"Tags: " + strings.Join(entry.Tags, ", "),
 		"Fingerprint: " + entry.Fingerprint,
-		"",
-		strings.TrimSpace(content),
+		"Status: " + string(normalizeStatus(entry.Status)),
 	}
+	if !entry.LastReferencedAt.IsZero() {
+		lines = append(lines, "LastReferenced: "+entry.LastReferencedAt.Format(time.RFC3339))
+	}
+	lines = append(lines, "", strings.TrimSpace(content))
 	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
 }
 
@@ -933,6 +969,12 @@ func parseMemoryRecord(filename string, data []byte, fallbackModTime time.Time) 
 			record.Tags = normalizeTags(strings.Split(value, ","))
 		case "fingerprint":
 			record.Fingerprint = value
+		case "status":
+			record.Status = normalizeStatus(Status(strings.ToLower(value)))
+		case "lastreferenced", "last_referenced":
+			if ts, err := time.Parse(time.RFC3339, value); err == nil {
+				record.LastReferencedAt = ts
+			}
 		default:
 			goto content
 		}
@@ -1010,8 +1052,33 @@ func computeMemoryFingerprint(memoryType Type, title, summary, content string) s
 	return hex.EncodeToString(sum[:])
 }
 
-func normalizeTags(tags []string) []string {
-	if len(tags) == 0 {
+// normalizeStatus coerces a raw status string to a valid lifecycle state.
+// Unknown or empty values fall back to active so archived must be explicitly
+// written, never accidentally preserved from a typo.
+func normalizeStatus(value Status) Status {
+	switch value {
+	case StatusArchived:
+		return StatusArchived
+	default:
+		return StatusActive
+	}
+}
+
+// entryStatusMatches reports whether an entry satisfies a search status filter.
+// Empty status means active-only (the default recall behavior); StatusArchived
+// matches only archived; StatusAll matches both.
+func entryStatusMatches(entry Entry, filter Status) bool {
+	switch filter {
+	case StatusAll:
+		return true
+	case StatusArchived:
+		return normalizeStatus(entry.Status) == StatusArchived
+	default: // "" or StatusActive
+		return normalizeStatus(entry.Status) != StatusArchived
+	}
+}
+
+func normalizeTags(tags []string) []string {	if len(tags) == 0 {
 		return nil
 	}
 	result := make([]string, 0, len(tags))

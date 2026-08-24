@@ -71,6 +71,32 @@ func (s *Service) ForgetMemory(_ context.Context, input memory.ForgetInput) (*me
 	return s.memoryManager().Forget(input)
 }
 
+// ArchiveMemory soft-hides one durable memory entry from recall/injection.
+func (s *Service) ArchiveMemory(_ context.Context, input memory.ForgetInput) (*memory.Entry, error) {
+	return s.memoryManager().Archive(input)
+}
+
+// RestoreMemory un-archives one durable memory entry.
+func (s *Service) RestoreMemory(_ context.Context, input memory.ForgetInput) (*memory.Entry, error) {
+	return s.memoryManager().Restore(input)
+}
+
+// ListMilestoneMemories returns active project memories whose titles read as
+// completed implementation milestones.
+func (s *Service) ListMilestoneMemories(_ context.Context) ([]memory.Entry, error) {
+	return s.memoryManager().ListMilestoneMemories()
+}
+
+// ArchiveMilestones archives all completed-milestone memories in one shot.
+func (s *Service) ArchiveMilestones(_ context.Context) ([]memory.Entry, error) {
+	return s.memoryManager().ArchiveMilestones()
+}
+
+// RemoveMemorySuppression deletes one dismissed-candidate suppression.
+func (s *Service) RemoveMemorySuppression(_ context.Context, keyOrFingerprint string) error {
+	return s.memoryManager().RemoveSuppression(keyOrFingerprint)
+}
+
 // AcceptMemoryCandidate promotes one pending candidate into durable memory.
 func (s *Service) AcceptMemoryCandidate(_ context.Context, input memory.AcceptCandidateInput) (*memory.Entry, error) {
 	input.Fingerprint = strings.TrimSpace(input.Fingerprint)

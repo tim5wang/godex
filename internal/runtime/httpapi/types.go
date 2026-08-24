@@ -436,6 +436,10 @@ type restoreMemoryAuditRequest struct {
 	Target string `json:"target,omitempty"`
 }
 
+type removeMemorySuppressionRequest struct {
+	Key string `json:"key"`
+}
+
 type saveNoteRequest struct {
 	ID      string   `json:"id,omitempty"`
 	Title   string   `json:"title"`

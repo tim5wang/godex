@@ -1,6 +1,6 @@
 # Workflows 板块设计文档（产品化）
 
-> 日期：2026-08-24 ｜ 状态：Step 1 已实施（板块骨架落地）
+> 日期：2026-08-24 ｜ 状态：Step 1-4 已实施（板块骨架 + 产品化增强 + 集成契约 + ui_card 卡片）｜ Step 5+ 规划中（对齐 Codex Harness 方向）
 > 目标：在 godex Web UI 里新增一个与 Usage 并列的 **Workflows** 板块，产品化地承载「知识库召回 + 特定环境问题解决定制化 + 表单/按钮式对话」——让第三方 UI / 普通用户无需写代码就能以 godex 为 agent 基建跑定制流程。
 
 ## 1. 板块定位
@@ -90,3 +90,51 @@
 - **Step 4 用工具而非协议层新事件**：ui_card 通过 `tool_call_finished` 事件的 `output` 字段传递结构化 JSON（工具输出本身就在事件里），避免改 `protocol.Block` 和事件枚举——**侵入面最小**，且 TUI/CLI 能看到同一 JSON 不丢信息。
 - **提交走 follow_up 文本**：卡片表单值/按钮动作作为 follow-up 消息发回会话（文本即协议），agent 端零改动即可理解；后续若要「按钮回执」等富语义可再加结构化 envelope。
 - **与 Automation 板块的区别**：Automation 是定时/事件触发的 cron 任务编排；Workflows 是**手动引导式的按需问题解决**（人点选剧本 → 填参 → 跑 agent → 卡片/审批交互）。
+
+## 7. 与 Codex Harness 开源的对比（2026-08-24 参考）
+
+> 参考文章：《震撼！OpenAI 全面开源 Codex Harness，这场「反套壳」的革命正式打响》（微信公众平台）
+> 核心主张：OpenAI 把驱动 Codex 的底层 Agent 执行层（Harness）完整开源——线程/上下文/工具执行/MCP/权限审批一整套机制，让开发者把 AI 从「聊天框」里解放出来，嵌入自己的业务软件、看板、工作台（界面/数据/审批都在业务系统，AI 只在底层干活）。
+
+### 7.1 理念同源（我们已对齐的部分）
+
+| 文章主张 | Workflows 对应实现 |
+|---|---|
+| Harness =「大模型想，Harness 让它持续工作」：线程/上下文/工具/审批整套机制 | godex 的 sessions/messages/events/permissions 即这套 Harness，Workflows 建立其上 |
+| 双向事件流驱动线程、接收过程更新（App Server） | Launch 的 `streamEvents`（SSE `?replay=active`）+ `assistant_text_delta` 流式渲染 |
+| 高风险动作主动停下、人工审批 | Launch 的 `pending_permissions` + 允许/拒绝按钮（`/permissions/{id}/approve\|deny`） |
+| 找一条重复、输入输出清楚的流程写下来 | 剧本（notes tag=workflow），Markdown 流程即启动提示词 |
+| 知识库准确与否是真正难的部分 | Knowledge 页签的 `/memory/context` 召回预览（L0/Core/Relevant 三层） |
+| Agent 要知道能调什么、不能随便访问系统 | godex 的 bundle/scope 工具权限 + 写路径拦截器 |
+| 把执行过程实时告诉人 | 工具活动 chips（running/finished/failed）+ 流式文本 |
+
+### 7.2 差异与缺口（后续 Step 5+ 方向）
+
+1. **方向相反**：文章是让 Harness **嵌入第三方业务系统**（ERP/看板/CRM），Workflows 目前是 godex 内部板块（内向）；Step 3 集成指南是"外向"契约但只是文档 + 参考实现，未到"嵌入任意第三方系统"的产品形态。
+2. **我们做了文章没讲的**：agent 主动产出表单/按钮（`ui_card` 工具）——文章只讲了审批暂停，交互停在"确认/拒绝"；`ui_card` 的 form/button_group/card + follow_up 回传是增量（正好对应「更易用的表单/按钮对话」诉求）。
+3. **文章五件事里 godex 有但 Workflows 板块没暴露**：任务进度记忆（session/turn/compaction 持久化）、失败后继续/暂停/复盘（retry/resume/fork/timeline）godex 后端都有，但 Workflows 板块只提供「在聊天中打开」跳转，未内嵌展示。
+4. **文章的「AI 工号卡」六问，剧本模板没覆盖**：服务谁 / 可读什么 / 可调什么 / 不能做什么 / 交付什么 / 谁验收——当前模板只有「目标/步骤/输出」，缺权限边界、不可做项、验收人显式字段。
+
+## 8. 后续实施方向（Step 5+，待实施）
+
+> 目标：把 Workflows 从「godex 内部板块」演进为「可嵌入业务工作台的 agent 交互层」，并补齐与 Codex Harness 对齐的产品能力。
+
+### Step 5：剧本 schema 补「AI 工号卡」六问
+- 剧本（note）增加结构化元数据：`service_whom`（服务谁）/ `can_read`（可读什么）/ `can_call`（可调什么）/ `cannot_do`（不能做什么）/ `deliverable`（交付什么）/ `reviewer`（谁验收）。
+- 编辑器 Modal 增加对应字段；启动时把这些字段注入 prompt，并据此约束工具权限（bundle/scope 联动）。
+- 模板库补齐六问示例。
+
+### Step 6：Workflows 内嵌过程复盘
+- Launch 页签对失败 run 提供 retry / resume 按钮（复用 `retrySessionTurn` / `resumeSessionTurn`）。
+- 运行历史卡片展示完成状态 + 耗时 + 关键工具摘要，无需跳转聊天。
+- 可选：展示 compaction / 上下文预算状态（复用 Context Inspector 数据）。
+
+### Step 7：「嵌入第三方」产品化
+- 把 Workflows 板块组件化：提供可复用的 React 组件（PlaybookGrid / KnowledgeRecall / LaunchPanel / UiCardView），第三方 UI 可整体嵌入。
+- 强化 Step 3 集成指南为可运行模板：最小嵌入式 UI（如一个给销售/运营用的业务卡片页）demo。
+- 可选：提供 App Server 风格的双向事件流 + 审批回执的结构化 envelope（替代当前"文本即协议"的 follow_up），支持按钮回执等富语义。
+
+### 定位叙事
+- 文章：ToB 商业叙事（"AI 员工"），强调"模型不值钱、业务上下文和交付标准值钱"。
+- godex：开源 dev tool，Workflows 是工程化落地——不推"员工"概念，而是给开发者一套可复用的板块 + 集成契约；Step 5-7 对齐的是文章的技术主张，而非商业叙事。
+

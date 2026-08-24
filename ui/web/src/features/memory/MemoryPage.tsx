@@ -5,6 +5,7 @@ import {
   App as AntApp,
   Button,
   Card,
+  Checkbox,
   Descriptions,
   Drawer,
   Empty,
@@ -14,43 +15,44 @@ import {
   Select,
   Space,
   Switch,
-  Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import {
-  ApartmentOutlined,
-  ArrowRightOutlined,
   DatabaseOutlined,
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
   FileSearchOutlined,
-  HistoryOutlined,
+  FolderOpenOutlined,
   InboxOutlined,
   PlusOutlined,
   ReloadOutlined,
-  RollbackOutlined,
   StopOutlined,
+  UndoOutlined,
 } from "@ant-design/icons";
 import { MarkdownContent } from "../../components/MarkdownContent";
-import { ResponsiveTable } from "../../components/ResponsiveTable";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
 import {
   acceptMemoryCandidate,
+  archiveMemory,
+  archiveMilestoneMemories,
   dismissMemoryCandidate,
   digestMemory,
   forgetMemory,
   getMeta,
-  listMemoryAudit,
   listMemory,
+  listMemoryAudit,
   listMemoryCandidates,
   listMemorySuppressions,
   mineProjectMemory,
   previewMemoryContext,
   rememberMemory,
+  removeMemorySuppression,
   restoreMemoryAudit,
+  restoreMemoryStatus,
   updateMemory,
 } from "../../lib/api";
 import type { MemoryAuditLogEntry, MemoryCandidate, MemoryContextLayers, MemoryDigestResult, MemoryRecord, MemorySuppression, MemoryType } from "../../lib/types";
@@ -85,6 +87,8 @@ export function MemoryPage() {
   const [digestResult, setDigestResult] = useState<MemoryDigestResult | null>(null);
   const [editing, setEditing] = useState<MemoryRecord | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Key[]>([]);
+  const [selectedDurable, setSelectedDurable] = useState<Key[]>([]);
+  const [selectedBlocked, setSelectedBlocked] = useState<Key[]>([]);
   const [form] = Form.useForm<MemoryFormValues>();
 
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
@@ -94,7 +98,12 @@ export function MemoryPage() {
   const memoriesQuery = useQuery({
     queryKey: ["memory", token, search, memoryType, sourceFilter],
     enabled: canReachMemory,
-    queryFn: async () => listMemory(token || null, { query: search, memoryType, source: sourceFilter, limit: 300 }),
+    queryFn: async () => listMemory(token || null, { query: search, memoryType, source: sourceFilter, limit: 500 }),
+  });
+  const archivedQuery = useQuery({
+    queryKey: ["memory-archived", token],
+    enabled: canReachMemory,
+    queryFn: async () => listMemory(token || null, { status: "archived", limit: 500 }),
   });
   const candidatesQuery = useQuery({
     queryKey: ["memory-candidates", token],
@@ -118,6 +127,7 @@ export function MemoryPage() {
   });
 
   const memories = Array.isArray(memoriesQuery.data) ? memoriesQuery.data : [];
+  const archived = Array.isArray(archivedQuery.data) ? archivedQuery.data : [];
   const candidates = Array.isArray(candidatesQuery.data) ? candidatesQuery.data : [];
   const suppressions = Array.isArray(suppressionsQuery.data) ? suppressionsQuery.data : [];
   const auditEntries = Array.isArray(auditQuery.data) ? auditQuery.data : [];
@@ -134,6 +144,7 @@ export function MemoryPage() {
   const refreshAll = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["memory"] }),
+      queryClient.invalidateQueries({ queryKey: ["memory-archived", token] }),
       queryClient.invalidateQueries({ queryKey: ["memory-candidates", token] }),
       queryClient.invalidateQueries({ queryKey: ["memory-suppressions", token] }),
       queryClient.invalidateQueries({ queryKey: ["memory-audit", token] }),
@@ -165,6 +176,24 @@ export function MemoryPage() {
     onError: (error) => showError(message, error, "Failed to forget memory."),
   });
 
+  const archiveMutation = useMutation({
+    mutationFn: async (record: MemoryRecord) => archiveMemory(token || null, { file: record.file }),
+    onSuccess: async () => {
+      void message.success(t("memory.notice.archived", { title: "memory" }));
+      await refreshAll();
+    },
+    onError: (error) => showError(message, error, "Failed to archive memory."),
+  });
+
+  const restoreStatusMutation = useMutation({
+    mutationFn: async (record: MemoryRecord) => restoreMemoryStatus(token || null, { file: record.file }),
+    onSuccess: async () => {
+      void message.success("Memory restored.");
+      await refreshAll();
+    },
+    onError: (error) => showError(message, error, "Failed to restore memory."),
+  });
+
   const acceptMutation = useMutation({
     mutationFn: async ({ fingerprint, alwaysInclude }: { fingerprint: string; alwaysInclude?: boolean }) =>
       acceptMemoryCandidate(token || null, fingerprint, { always_include: alwaysInclude }),
@@ -178,7 +207,7 @@ export function MemoryPage() {
     onError: (error) => showError(message, error, "Failed to dismiss candidate."),
   });
 
-  const batchMutation = useMutation({
+  const batchCandidateMutation = useMutation({
     mutationFn: async ({ action, alwaysInclude }: { action: "accept" | "dismiss"; alwaysInclude?: boolean }) => {
       const selected = candidates.filter((item) => selectedCandidates.includes(item.fingerprint));
       for (const item of selected) {
@@ -198,6 +227,53 @@ export function MemoryPage() {
     onError: (error) => showError(message, error, "Failed to process candidates."),
   });
 
+  const batchDurableMutation = useMutation({
+    mutationFn: async (action: "archive" | "forget") => {
+      const selected = memories.filter((item) => selectedDurable.includes(item.id));
+      for (const item of selected) {
+        if (action === "archive") {
+          await archiveMemory(token || null, { file: item.file });
+        } else {
+          await forgetMemory(token || null, { file: item.file });
+        }
+      }
+      return selected.length;
+    },
+    onSuccess: async (count) => {
+      void message.success(`Processed ${count} memory${count === 1 ? "" : "ies"}.`);
+      setSelectedDurable([]);
+      await refreshAll();
+    },
+    onError: (error) => showError(message, error, "Failed to process memories."),
+  });
+
+  const batchBlockedMutation = useMutation({
+    mutationFn: async (action: "restore" | "delete" | "unsuppress") => {
+      const selectedMemories = archived.filter((item) => selectedBlocked.includes(item.id));
+      const selectedSuppressions = suppressions.filter((item) => selectedBlocked.includes(suppressionKey(item)));
+      if (action === "restore") {
+        for (const item of selectedMemories) {
+          await restoreMemoryStatus(token || null, { file: item.file });
+        }
+      } else if (action === "delete") {
+        for (const item of selectedMemories) {
+          await forgetMemory(token || null, { file: item.file });
+        }
+      } else {
+        for (const item of selectedSuppressions) {
+          await removeMemorySuppression(token || null, suppressionKey(item));
+        }
+      }
+      return selectedMemories.length + selectedSuppressions.length;
+    },
+    onSuccess: async (count) => {
+      void message.success(`Processed ${count} item${count === 1 ? "" : "s"}.`);
+      setSelectedBlocked([]);
+      await refreshAll();
+    },
+    onError: (error) => showError(message, error, "Failed to process blocked items."),
+  });
+
   const mineMutation = useMutation({
     mutationFn: async () => mineProjectMemory(token || null),
     onSuccess: async (items) => {
@@ -215,6 +291,24 @@ export function MemoryPage() {
       await refreshAll();
     },
     onError: (error) => showError(message, error, "Failed to digest memory."),
+  });
+
+  const milestonesMutation = useMutation({
+    mutationFn: async () => archiveMilestoneMemories(token || null),
+    onSuccess: async (result) => {
+      void message.success(`Archived ${result.archived.length} milestone memories.`);
+      await refreshAll();
+    },
+    onError: (error) => showError(message, error, "Failed to archive milestones."),
+  });
+
+  const removeSuppressionMutation = useMutation({
+    mutationFn: async (key: string) => removeMemorySuppression(token || null, key),
+    onSuccess: async () => {
+      void message.success("Suppression removed.");
+      await refreshAll();
+    },
+    onError: (error) => showError(message, error, "Failed to remove suppression."),
   });
 
   const restoreAuditMutation = useMutation({
@@ -255,6 +349,11 @@ export function MemoryPage() {
     );
   }
 
+  const blockedItems: BlockedItem[] = [
+    ...archived.map((item) => ({ id: item.id, kind: "archived" as const, record: item })),
+    ...suppressions.map((item) => ({ id: suppressionKey(item), kind: "suppression" as const, suppression: item })),
+  ];
+
   return (
     <div className="page-pad">
       <div className="page-action-row">
@@ -262,210 +361,170 @@ export function MemoryPage() {
           <Button icon={<ReloadOutlined />} onClick={() => void refreshAll()}>Refresh</Button>
           <Button icon={<FileSearchOutlined />} loading={digestMutation.isPending} onClick={() => digestMutation.mutate()}>Digest</Button>
           <Button loading={mineMutation.isPending} onClick={() => mineMutation.mutate()}>{t("memory.actions.mineProjectDocs")}</Button>
+          <Button loading={milestonesMutation.isPending} onClick={() => milestonesMutation.mutate()}>{t("memory.board.archiveMilestones")}</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openNew}>{t("memory.actions.saveDurable")}</Button>
         </Space>
       </div>
 
       <div className="stat-grid" style={{ marginBottom: 16 }}>
-        <Metric title={t("memory.stats.durable")} value={memories.length} />
-        <Metric title={t("memory.stats.candidates")} value={candidates.length} />
-        <Metric title={t("memory.stats.suppressed")} value={suppressions.length} />
+        <Metric title={t("memory.board.candidatesTitle")} value={candidates.length} />
+        <Metric title={t("memory.board.durableTitle")} value={memories.length} />
+        <Metric title={t("memory.board.blockedTitle")} value={blockedItems.length} />
         <Metric title="Audit" value={auditEntries.length} />
         <Metric title={t("memory.stats.preview")} value={`${contextLayers.identity.length}/${contextLayers.core.length}/${contextLayers.relevant.length}`} />
       </div>
 
-      <MemoryFlowPanel
-        memories={memories}
-        candidates={candidates}
-        suppressions={suppressions}
-        contextLayers={contextLayers}
-        t={t}
-      />
+      <div className="memory-board">
+        <MemoryColumn
+          title={t("memory.board.candidatesTitle")}
+          subtitle="自动捕获的建议，等待你采纳或忽略"
+          count={candidates.length}
+          selectedKeys={selectedCandidates}
+          onSelect={setSelectedCandidates}
+          selectAll={() => setSelectedCandidates(candidates.map((item) => item.fingerprint))}
+          clearSelection={() => setSelectedCandidates([])}
+          tone="candidate"
+          icon={<InboxOutlined />}
+          batchActions={[
+            { label: t("memory.board.batchAccept", { count: selectedCandidates.length }), disabled: selectedCandidates.length === 0, loading: batchCandidateMutation.isPending, onClick: () => batchCandidateMutation.mutate({ action: "accept" }) },
+            { label: t("memory.board.batchAcceptCore", { count: selectedCandidates.length }), disabled: selectedCandidates.length === 0, loading: batchCandidateMutation.isPending, onClick: () => batchCandidateMutation.mutate({ action: "accept", alwaysInclude: true }) },
+            { label: t("memory.board.batchDismiss", { count: selectedCandidates.length }), disabled: selectedCandidates.length === 0, danger: true, loading: batchCandidateMutation.isPending, onClick: () => batchCandidateMutation.mutate({ action: "dismiss" }) },
+          ]}
+          footer={
+            <div className="memory-board-tools">
+              <Input.Search size="small" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("memory.board.searchPlaceholder")} allowClear />
+              <Select size="small" value={memoryType} onChange={(v) => setMemoryType(v)} options={[{ value: "", label: t("memory.filters.typeAll") }, ...memoryTypes.map((value) => ({ value, label: t(`memory.types.${value}`) }))]} />
+            </div>
+          }
+        >
+          {candidates.map((item) => (
+            <CandidateCard
+              key={item.fingerprint}
+              item={item}
+              checked={selectedCandidates.includes(item.fingerprint)}
+              onCheck={(checked) => toggleKey(selectedCandidates, item.fingerprint, checked, setSelectedCandidates)}
+              onView={() => setViewing(item)}
+              onAccept={(core) => acceptMutation.mutate({ fingerprint: item.fingerprint, alwaysInclude: core })}
+              onDismiss={() => dismissMutation.mutate(item.fingerprint)}
+              t={t}
+            />
+          ))}
+        </MemoryColumn>
 
-      <Tabs
-        items={[
-          {
-            key: "durable",
-            label: t("memory.durableTitle"),
-            children: (
-              <Card>
-                <div className="list-toolbar">
-                  <Space wrap>
-                    <Input.Search value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("memory.placeholders.search")} style={{ width: 280 }} allowClear />
-                    <Select value={memoryType} onChange={(value) => setMemoryType(value)} style={{ width: 160 }} options={[{ value: "", label: t("memory.filters.typeAll") }, ...memoryTypes.map((value) => ({ value, label: value }))]} />
-                    <Select value={sourceFilter} onChange={(value) => setSourceFilter(value)} style={{ width: 220 }} options={[{ value: "", label: t("memory.filters.source") }, ...sourceOptions.map((value) => ({ value, label: value }))]} />
-                  </Space>
-                  <Typography.Text type="secondary">{t("memory.showing", { visible: memories.length, total: memories.length })}</Typography.Text>
-                </div>
-                <ResponsiveTable<MemoryRecord>
-                  rowKey="id"
-                  loading={memoriesQuery.isLoading}
-                  dataSource={memories}
-                  pagination={{ pageSize: 8 }}
-                  locale={{
-                    emptyText: (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No durable memory yet.">
-                        <Space direction="vertical" size={8} align="center">
-                          <Typography.Text type="secondary">Chat with GoDex or save a memory manually to start building context.</Typography.Text>
-                          <Button type="primary" icon={<PlusOutlined />} aria-label="Save first memory" onClick={openNew}>
-                            Save first memory
-                          </Button>
-                        </Space>
-                      </Empty>
-                    ),
-                  }}
-                  columns={[
-                    { title: t("memory.fields.title"), dataIndex: "title", render: (value, record) => <Space direction="vertical" size={0}><Typography.Text strong>{value}</Typography.Text><Typography.Text type="secondary">{record.summary}</Typography.Text></Space> },
-                    { title: t("memory.fields.type"), dataIndex: "type", render: (value) => <Tag>{value}</Tag> },
-                    { title: t("memory.fields.source"), dataIndex: "source", render: (value) => value || "-" },
-                    { title: t("memory.fields.updated"), dataIndex: "updated_at", render: formatDate },
-                    {
-                      key: "actions",
-                      title: "Actions",
-                      render: (_value, record) => (
-                        <Space wrap>
-                          <Button size="small" aria-label="View memory" icon={<EyeOutlined />} onClick={() => setViewing(record)} />
-                          <Button size="small" aria-label="Edit memory" icon={<EditOutlined />} onClick={() => openEdit(record)} />
-                          <Button size="small" onClick={() => toggleCore(record, rememberMutation)}>Core</Button>
-                          <Popconfirm title={t("memory.actions.forget")} onConfirm={() => forgetMutation.mutate(record)}>
-                            <Button size="small" danger aria-label="Forget memory" icon={<DeleteOutlined />} />
-                          </Popconfirm>
-                        </Space>
-                      ),
-                    },
-                  ]}
-                />
-              </Card>
+        <MemoryColumn
+          title={t("memory.board.durableTitle")}
+          subtitle="已采纳的长期记忆，可切换到核心或归档"
+          count={memories.length}
+          selectedKeys={selectedDurable}
+          onSelect={setSelectedDurable}
+          selectAll={() => setSelectedDurable(memories.map((item) => item.id))}
+          clearSelection={() => setSelectedDurable([])}
+          tone="durable"
+          icon={<DatabaseOutlined />}
+          batchActions={[
+            { label: t("memory.board.batchArchive", { count: selectedDurable.length }), disabled: selectedDurable.length === 0, loading: batchDurableMutation.isPending, onClick: () => batchDurableMutation.mutate("archive") },
+            {
+              label: t("memory.board.batchDelete", { count: selectedDurable.length }),
+              disabled: selectedDurable.length === 0,
+              danger: true,
+              loading: batchDurableMutation.isPending,
+              confirmTitle: "删除选中的长期记忆？",
+              onClick: () => batchDurableMutation.mutate("forget"),
+            },
+          ]}
+        >
+          {memories.map((item) => (
+            <DurableCard
+              key={item.id}
+              item={item}
+              checked={selectedDurable.includes(item.id)}
+              onCheck={(checked) => toggleKey(selectedDurable, item.id, checked, setSelectedDurable)}
+              onView={() => setViewing(item)}
+              onEdit={() => openEdit(item)}
+              onArchive={() => archiveMutation.mutate(item)}
+              onForget={() => forgetMutation.mutate(item)}
+              onToggleCore={() => toggleCore(item, rememberMutation)}
+              t={t}
+            />
+          ))}
+        </MemoryColumn>
+
+        <MemoryColumn
+          title={t("memory.board.blockedTitle")}
+          subtitle={t("memory.board.blockedSubtitle")}
+          count={blockedItems.length}
+          selectedKeys={selectedBlocked}
+          onSelect={setSelectedBlocked}
+          selectAll={() => setSelectedBlocked(blockedItems.map((item) => item.id))}
+          clearSelection={() => setSelectedBlocked([])}
+          tone="suppressed"
+          icon={<StopOutlined />}
+          batchActions={[
+            { label: t("memory.board.batchRestore", { count: selectedBlocked.length }), disabled: selectedBlocked.length === 0, loading: batchBlockedMutation.isPending, onClick: () => batchBlockedMutation.mutate("restore") },
+            { label: t("memory.board.batchUnsuppress", { count: selectedBlocked.length }), disabled: selectedBlocked.length === 0, loading: batchBlockedMutation.isPending, onClick: () => batchBlockedMutation.mutate("unsuppress") },
+            {
+              label: t("memory.board.batchDelete", { count: selectedBlocked.length }),
+              disabled: selectedBlocked.length === 0,
+              danger: true,
+              loading: batchBlockedMutation.isPending,
+              confirmTitle: "永久删除选中的已归档记忆？",
+              onClick: () => batchBlockedMutation.mutate("delete"),
+            },
+          ]}
+        >
+          {blockedItems.map((item) =>
+            item.kind === "archived" ? (
+              <BlockedMemoryCard
+                key={item.id}
+                item={item.record}
+                checked={selectedBlocked.includes(item.id)}
+                onCheck={(checked) => toggleKey(selectedBlocked, item.id, checked, setSelectedBlocked)}
+                onView={() => setViewing(item.record)}
+                onRestore={() => restoreStatusMutation.mutate(item.record)}
+                onDelete={() => forgetMutation.mutate(item.record)}
+                t={t}
+              />
+            ) : (
+              <SuppressionCard
+                key={item.id}
+                item={item.suppression!}
+                checked={selectedBlocked.includes(item.id)}
+                onCheck={(checked) => toggleKey(selectedBlocked, item.id, checked, setSelectedBlocked)}
+                onUnsuppress={() => removeSuppressionMutation.mutate(suppressionKey(item.suppression!))}
+                t={t}
+              />
             ),
-          },
-          {
-            key: "candidates",
-            label: t("memory.candidatesTitle"),
-            children: (
-              <Card>
-                <div className="list-toolbar">
-                  <Space wrap>
-                    <Button disabled={selectedCandidates.length === 0} loading={batchMutation.isPending} onClick={() => batchMutation.mutate({ action: "accept" })}>{t("memory.actions.acceptSelected", { count: selectedCandidates.length })}</Button>
-                    <Button disabled={selectedCandidates.length === 0} loading={batchMutation.isPending} onClick={() => batchMutation.mutate({ action: "accept", alwaysInclude: true })}>{t("memory.actions.acceptCoreSelected", { count: selectedCandidates.length })}</Button>
-                    <Button disabled={selectedCandidates.length === 0} danger loading={batchMutation.isPending} onClick={() => batchMutation.mutate({ action: "dismiss" })}>{t("memory.actions.dismissSelected", { count: selectedCandidates.length })}</Button>
-                  </Space>
-                  <Typography.Text type="secondary">{selectedCandidates.length} selected</Typography.Text>
-                </div>
-                <ResponsiveTable<MemoryCandidate>
-                  rowKey="fingerprint"
-                  loading={candidatesQuery.isLoading}
-                  dataSource={candidates}
-                  rowSelection={{ selectedRowKeys: selectedCandidates, onChange: setSelectedCandidates }}
-                  pagination={{ pageSize: 8 }}
-                  columns={[
-                    { title: t("memory.fields.title"), dataIndex: "title", render: (value, record) => <Space direction="vertical" size={0}><Typography.Text strong>{value}</Typography.Text><Typography.Text type="secondary">{record.summary}</Typography.Text></Space> },
-                    { title: t("memory.fields.type"), dataIndex: "memory_type", render: (value) => <Tag>{value}</Tag> },
-                    { title: t("memory.fields.source"), dataIndex: "source", render: (value) => value || "-" },
-                    { title: t("memory.fields.created"), dataIndex: "created_at", render: formatDate },
-                    {
-                      key: "actions",
-                      title: "Actions",
-                      render: (_value, record) => (
-                        <Space wrap>
-                          <Button size="small" aria-label="View memory candidate" icon={<EyeOutlined />} onClick={() => setViewing(record)} />
-                          <Button size="small" onClick={() => acceptMutation.mutate({ fingerprint: record.fingerprint })}>{t("memory.actions.accept")}</Button>
-                          <Button size="small" onClick={() => acceptMutation.mutate({ fingerprint: record.fingerprint, alwaysInclude: true })}>{t("memory.actions.acceptCore")}</Button>
-                          <Button size="small" danger onClick={() => dismissMutation.mutate(record.fingerprint)}>{t("memory.actions.dismiss")}</Button>
-                        </Space>
-                      ),
-                    },
-                  ]}
-                />
-              </Card>
-            ),
-          },
-          {
-            key: "suppressions",
-            label: t("memory.suppressionsTitle"),
-            children: (
-              <Card>
-                <ResponsiveTable<MemorySuppression>
-                  rowKey={(record) => record.fingerprint || record.key || `${record.source}:${record.created_at}`}
-                  loading={suppressionsQuery.isLoading}
-                  dataSource={suppressions}
-                  columns={[
-                    { title: "Key", render: (_value, record) => record.fingerprint || record.key || "-" },
-                    { title: t("memory.fields.source"), dataIndex: "source", render: (value) => value || "-" },
-                    { title: t("memory.fields.created"), dataIndex: "created_at", render: formatDate },
-                    { title: "Expires", dataIndex: "expires_at", render: formatDate },
-                  ]}
-                />
-              </Card>
-            ),
-          },
-          {
-            key: "audit",
-            label: (
-              <Space size={6}>
-                <HistoryOutlined />
-                <span>Audit</span>
-              </Space>
-            ),
-            children: (
-              <Card>
-                <ResponsiveTable<MemoryAuditLogEntry>
-                  rowKey="id"
-                  loading={auditQuery.isLoading}
-                  dataSource={auditEntries}
-                  pagination={{ pageSize: 8 }}
-                  columns={[
-                    { title: "Action", dataIndex: "action", render: (value) => <Tag>{value}</Tag> },
-                    { title: t("memory.fields.title"), render: (_value, record) => record.title || record.after?.title || record.before?.title || "-" },
-                    { title: t("memory.fields.type"), render: (_value, record) => record.memory_type || record.after?.type || record.before?.type || "-" },
-                    { title: t("memory.fields.source"), dataIndex: "source", render: (value) => value || "-" },
-                    { title: t("memory.fields.created"), dataIndex: "created_at", render: formatDate },
-                    {
-                      key: "actions",
-                      title: "Actions",
-                      render: (_value, record) => (
-                        <Space wrap>
-                          <Button size="small" aria-label="View memory audit diff" icon={<EyeOutlined />} onClick={() => setViewingAudit(record)}>Diff</Button>
-                          <Button
-                            size="small"
-                            icon={<RollbackOutlined />}
-                            disabled={!record.before}
-                            loading={restoreAuditMutation.isPending}
-                            onClick={() => restoreAuditMutation.mutate({ id: record.id, target: "before" })}
-                          >
-                            Restore before
-                          </Button>
-                          <Button
-                            size="small"
-                            disabled={!record.after}
-                            loading={restoreAuditMutation.isPending}
-                            onClick={() => restoreAuditMutation.mutate({ id: record.id, target: "after" })}
-                          >
-                            Reapply after
-                          </Button>
-                        </Space>
-                      ),
-                    },
-                  ]}
-                />
-              </Card>
-            ),
-          },
-          {
-            key: "preview",
-            label: t("memory.previewTitle"),
-            children: (
-              <Card>
-                <Space direction="vertical" size={16} style={{ width: "100%" }}>
-                  <Input.Search value={previewQuery} onChange={(event) => setPreviewQuery(event.target.value)} placeholder={t("memory.placeholders.previewQuery")} allowClear />
-                  <ContextGroup title={t("memory.previewIdentityTitle")} items={contextLayers.identity} />
-                  <ContextGroup title={t("memory.previewCoreTitle")} items={contextLayers.core} />
-                  <ContextGroup title={t("memory.previewRelevantTitle")} items={contextLayers.relevant} />
-                </Space>
-              </Card>
-            ),
-          },
-        ]}
-      />
+          )}
+          {blockedItems.length === 0 && <MemoryBoardEmpty text={t("memory.empty.suppressionsTitle")} />}
+        </MemoryColumn>
+      </div>
+
+      <div className="memory-secondary-panel">
+        <Card size="small" title="Audit 与上下文预览">
+          <div className="memory-secondary-grid">
+            <div>
+              <Typography.Text strong>Audit</Typography.Text>
+              <div className="memory-audit-mini">
+                {auditEntries.slice(0, 10).map((entry) => (
+                  <div key={entry.id} className="memory-audit-mini-row">
+                    <Tag>{entry.action}</Tag>
+                    <Typography.Text ellipsis style={{ maxWidth: 200 }}>{entry.title || entry.after?.title || entry.before?.title || "-"}</Typography.Text>
+                    <Typography.Text type="secondary">{formatDate(entry.created_at)}</Typography.Text>
+                    <Button size="small" icon={<EyeOutlined />} onClick={() => setViewingAudit(entry)} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Typography.Text strong>{t("memory.previewTitle")}</Typography.Text>
+              <Input.Search size="small" value={previewQuery} onChange={(e) => setPreviewQuery(e.target.value)} placeholder={t("memory.placeholders.previewQuery")} allowClear />
+              <ContextGroup title={t("memory.previewIdentityTitle")} items={contextLayers.identity} />
+              <ContextGroup title={t("memory.previewCoreTitle")} items={contextLayers.core} />
+              <ContextGroup title={t("memory.previewRelevantTitle")} items={contextLayers.relevant} />
+            </div>
+          </div>
+        </Card>
+      </div>
 
       <Drawer title={editing ? t("memory.actions.saveChanges") : t("memory.actions.saveDurable")} width={640} open={drawerOpen} onClose={() => setDrawerOpen(false)} destroyOnHidden>
         <MemoryForm form={form} saving={rememberMutation.isPending} onFinish={(values) => rememberMutation.mutate(values)} />
@@ -485,109 +544,336 @@ export function MemoryPage() {
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
-function MemoryFlowPanel({
-  candidates,
-  contextLayers,
-  memories,
-  suppressions,
-  t,
-}: {
-  candidates: MemoryCandidate[];
-  contextLayers: MemoryContextLayers;
-  memories: MemoryRecord[];
-  suppressions: MemorySuppression[];
-  t: Translate;
-}) {
-  const coreCount = memories.filter((item) => isCoreTagged(item.tags)).length;
-  const maxPriorityCount = Math.max(1, contextLayers.identity.length, contextLayers.core.length, contextLayers.relevant.length);
-  const typeCounts = memoryTypes.map((type) => ({
-    type,
-    count: memories.filter((item) => item.type === type).length,
-  }));
+type BatchAction = {
+  label: string;
+  disabled: boolean;
+  danger?: boolean;
+  loading?: boolean;
+  confirmTitle?: string;
+  onClick: () => void;
+};
 
+function MemoryColumn({
+  title,
+  subtitle,
+  count,
+  selectedKeys,
+  onSelect,
+  selectAll,
+  clearSelection,
+  tone,
+  icon,
+  batchActions,
+  footer,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  count: number;
+  selectedKeys: Key[];
+  onSelect: (keys: Key[]) => void;
+  selectAll: () => void;
+  clearSelection: () => void;
+  tone: "candidate" | "durable" | "suppressed";
+  icon: ReactNode;
+  batchActions: BatchAction[];
+  footer?: ReactNode;
+  children: ReactNode;
+}) {
+  const allChecked = selectedKeys.length > 0;
   return (
-    <Card className="memory-flow-card" style={{ marginBottom: 16 }}>
-      <div className="memory-flow-header">
-        <Space direction="vertical" size={0}>
-          <Typography.Text strong>{t("memory.flowTitle")}</Typography.Text>
-          <Typography.Text type="secondary">{t("memory.flowSubtitle")}</Typography.Text>
+    <Card className={`memory-column memory-column-${tone}`} size="small">
+      <div className="memory-column-header">
+        <span className="memory-column-icon">{icon}</span>
+        <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+          <Typography.Text strong>{title}</Typography.Text>
+          {subtitle ? <Typography.Text type="secondary" className="memory-column-subtitle">{subtitle}</Typography.Text> : null}
         </Space>
+        <Tag className="memory-column-count">{count}</Tag>
       </div>
-      <div className="memory-flow-steps">
-        <MemoryFlowNode icon={<InboxOutlined />} title={t("memory.flowCandidates")} value={candidates.length} tone="candidate" />
-        <ArrowRightOutlined className="memory-flow-arrow" />
-        <MemoryFlowNode icon={<DatabaseOutlined />} title={t("memory.flowDurable")} value={memories.length} meta={`${coreCount} core`} tone="durable" />
-        <ArrowRightOutlined className="memory-flow-arrow" />
-        <MemoryFlowNode
-          icon={<ApartmentOutlined />}
-          title={t("memory.flowContext")}
-          value={contextLayers.identity.length + contextLayers.core.length + contextLayers.relevant.length}
-          meta={`${contextLayers.identity.length}/${contextLayers.core.length}/${contextLayers.relevant.length}`}
-          tone="context"
-        />
-        <ArrowRightOutlined className="memory-flow-arrow memory-flow-arrow-muted" />
-        <MemoryFlowNode icon={<StopOutlined />} title={t("memory.flowSuppressed")} value={suppressions.length} tone="suppressed" />
-      </div>
-      <div className="memory-priority-grid">
-        <div className="memory-priority-panel">
-          <Typography.Text strong>{t("memory.previewTitle")}</Typography.Text>
-          <MemoryPriorityLane title={t("memory.flowIdentity")} value={contextLayers.identity.length} max={maxPriorityCount} tone="identity" />
-          <MemoryPriorityLane title={t("memory.flowCore")} value={contextLayers.core.length} max={maxPriorityCount} tone="core" />
-          <MemoryPriorityLane title={t("memory.flowRelevant")} value={contextLayers.relevant.length} max={maxPriorityCount} tone="relevant" />
+      {footer ? <div className="memory-column-footer">{footer}</div> : null}
+      {batchActions.length > 0 && (
+        <div className="memory-column-batch">
+          <Space wrap size={4}>
+            {batchActions.map((action, index) =>
+              action.confirmTitle ? (
+                <Popconfirm key={index} title={action.confirmTitle} onConfirm={action.onClick}>
+                  <Button size="small" disabled={action.disabled} danger={action.danger} loading={action.loading}>{action.label}</Button>
+                </Popconfirm>
+              ) : (
+                <Button key={index} size="small" disabled={action.disabled} danger={action.danger} loading={action.loading} onClick={action.onClick}>{action.label}</Button>
+              ),
+            )}
+          </Space>
+          <Space size={4}>
+            <Button size="small" type="text" disabled={allChecked} onClick={selectAll}>全选</Button>
+            {allChecked ? <Button size="small" type="text" onClick={clearSelection}>清空</Button> : null}
+          </Space>
         </div>
-        <div className="memory-type-panel">
-          <Typography.Text strong>{t("memory.flowMemoryTypes")}</Typography.Text>
-          <div className="memory-type-tags">
-            {typeCounts.map((item) => (
-              <Tag key={item.type} color={memoryTypeColor(item.type)}>
-                {t(`memory.types.${item.type}`)} {item.count}
-              </Tag>
-            ))}
-          </div>
+      )}
+      <div className="memory-column-list">
+        <div className="memory-column-select-bar">
+          <Checkbox
+            indeterminate={selectedKeys.length > 0}
+            checked={selectedKeys.length === count && count > 0}
+            onChange={(e) => (e.target.checked ? selectAll() : clearSelection())}
+          >
+            <Typography.Text type="secondary">{selectedKeys.length} 已选</Typography.Text>
+          </Checkbox>
         </div>
+        {children}
       </div>
     </Card>
   );
 }
 
-function MemoryFlowNode({
-  icon,
-  meta,
-  title,
-  tone,
-  value,
+function MemoryCardCheckbox({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) {
+  return <Checkbox checked={checked} onChange={(e) => onChange(e.target.checked)} />;
+}
+
+function CandidateCard({
+  item,
+  checked,
+  onCheck,
+  onView,
+  onAccept,
+  onDismiss,
+  t,
 }: {
-  icon: ReactNode;
-  meta?: string;
-  title: string;
-  tone: "candidate" | "durable" | "context" | "suppressed";
-  value: number;
+  item: MemoryCandidate;
+  checked: boolean;
+  onCheck: (checked: boolean) => void;
+  onView: () => void;
+  onAccept: (core: boolean) => void;
+  onDismiss: () => void;
+  t: Translate;
 }) {
   return (
-    <div className={`memory-flow-node memory-flow-node-${tone}`}>
-      <span className="memory-flow-icon">{icon}</span>
-      <span className="memory-flow-node-text">
-        <Typography.Text type="secondary">{title}</Typography.Text>
-        <Typography.Title level={3} style={{ margin: 0 }}>{value}</Typography.Title>
-        {meta ? <Typography.Text type="secondary">{meta}</Typography.Text> : null}
-      </span>
+    <div className={`memory-card memory-card-candidate ${checked ? "memory-card-checked" : ""}`}>
+      <div className="memory-card-main">
+        <MemoryCardCheckbox checked={checked} onChange={onCheck} />
+        <div className="memory-card-body">
+          <div className="memory-card-title-row">
+            <Typography.Text strong ellipsis style={{ maxWidth: "100%" }}>{item.title}</Typography.Text>
+          </div>
+          <Typography.Text type="secondary" className="memory-card-summary">{item.summary}</Typography.Text>
+          <Space size={4} wrap className="memory-card-meta">
+            <Tag color={memoryTypeColor(item.memory_type)}>{t(`memory.types.${item.memory_type}`)}</Tag>
+            <SourceBadge source={item.source} t={t} />
+            <Typography.Text type="secondary" className="memory-card-date">{formatDate(item.created_at)}</Typography.Text>
+          </Space>
+        </div>
+      </div>
+      <div className="memory-card-actions">
+        <Button size="small" aria-label="View candidate" icon={<EyeOutlined />} onClick={onView} />
+        <Button size="small" onClick={() => onAccept(false)}>{t("memory.actions.accept")}</Button>
+        <Button size="small" onClick={() => onAccept(true)}>{t("memory.actions.acceptCore")}</Button>
+        <Button size="small" danger onClick={onDismiss}>{t("memory.actions.dismiss")}</Button>
+      </div>
     </div>
   );
 }
 
-function MemoryPriorityLane({ max, title, tone, value }: { max: number; title: string; tone: "identity" | "core" | "relevant"; value: number }) {
-  const width = value > 0 ? `${Math.max(8, Math.round((value / max) * 100))}%` : "0%";
+function DurableCard({
+  item,
+  checked,
+  onCheck,
+  onView,
+  onEdit,
+  onArchive,
+  onForget,
+  onToggleCore,
+  t,
+}: {
+  item: MemoryRecord;
+  checked: boolean;
+  onCheck: (checked: boolean) => void;
+  onView: () => void;
+  onEdit: () => void;
+  onArchive: () => void;
+  onForget: () => void;
+  onToggleCore: () => void;
+  t: Translate;
+}) {
+  const core = isCoreTagged(item.tags);
+  const stale = isStaleMemory(item);
   return (
-    <div className="memory-priority-lane">
-      <div className="memory-priority-label">
-        <Typography.Text>{title}</Typography.Text>
-        <Tag>{value}</Tag>
+    <div className={`memory-card memory-card-durable ${checked ? "memory-card-checked" : ""}`}>
+      <div className="memory-card-main">
+        <MemoryCardCheckbox checked={checked} onChange={onCheck} />
+        <div className="memory-card-body">
+          <div className="memory-card-title-row">
+            <Typography.Text strong ellipsis style={{ maxWidth: "100%" }}>{item.title}</Typography.Text>
+            {core ? <Tag color="blue" className="memory-card-core-badge">{t("memory.board.core")}</Tag> : null}
+            {stale ? <Tag color="gold" className="memory-card-stale-badge">{t("memory.board.stale")}</Tag> : null}
+          </div>
+          <Typography.Text type="secondary" className="memory-card-summary">{item.summary}</Typography.Text>
+          <Space size={4} wrap className="memory-card-meta">
+            <Tag color={memoryTypeColor(item.type)}>{t(`memory.types.${item.type}`)}</Tag>
+            <SourceBadge source={item.source} t={t} />
+            <Typography.Text type="secondary" className="memory-card-date">{formatDate(item.updated_at)}</Typography.Text>
+            <ReferenceBadge item={item} t={t} />
+          </Space>
+        </div>
       </div>
-      <div className="memory-priority-track">
-        <div className={`memory-priority-bar memory-priority-bar-${tone}`} style={{ width }} />
+      <div className="memory-card-actions">
+        <Button size="small" aria-label="View memory" icon={<EyeOutlined />} onClick={onView} />
+        <Button size="small" aria-label="Edit memory" icon={<EditOutlined />} onClick={onEdit} />
+        <Button size="small" onClick={onToggleCore}>{core ? "退核心" : t("memory.board.core")}</Button>
+        <Button size="small" icon={<FolderOpenOutlined />} onClick={onArchive}>{t("memory.board.archive")}</Button>
+        <Popconfirm title={t("memory.actions.forget")} onConfirm={onForget}>
+          <Button size="small" danger aria-label="Forget memory" icon={<DeleteOutlined />} />
+        </Popconfirm>
       </div>
     </div>
   );
+}
+
+function BlockedMemoryCard({
+  item,
+  checked,
+  onCheck,
+  onView,
+  onRestore,
+  onDelete,
+  t,
+}: {
+  item: MemoryRecord;
+  checked: boolean;
+  onCheck: (checked: boolean) => void;
+  onView: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+  t: Translate;
+}) {
+  return (
+    <div className={`memory-card memory-card-blocked ${checked ? "memory-card-checked" : ""}`}>
+      <div className="memory-card-main">
+        <MemoryCardCheckbox checked={checked} onChange={onCheck} />
+        <div className="memory-card-body">
+          <div className="memory-card-title-row">
+            <Typography.Text strong ellipsis style={{ maxWidth: "100%" }}>{item.title}</Typography.Text>
+            <Tag color="default">{t("memory.board.archived")}</Tag>
+          </div>
+          <Typography.Text type="secondary" className="memory-card-summary">{item.summary}</Typography.Text>
+          <Space size={4} wrap className="memory-card-meta">
+            <Tag color={memoryTypeColor(item.type)}>{t(`memory.types.${item.type}`)}</Tag>
+            <SourceBadge source={item.source} t={t} />
+            <Typography.Text type="secondary" className="memory-card-date">{formatDate(item.updated_at)}</Typography.Text>
+          </Space>
+        </div>
+      </div>
+      <div className="memory-card-actions">
+        <Button size="small" aria-label="View memory" icon={<EyeOutlined />} onClick={onView} />
+        <Button size="small" icon={<UndoOutlined />} onClick={onRestore}>恢复</Button>
+        <Popconfirm title="永久删除这条已归档记忆？" onConfirm={onDelete}>
+          <Button size="small" danger aria-label="Delete memory" icon={<DeleteOutlined />} />
+        </Popconfirm>
+      </div>
+    </div>
+  );
+}
+
+function SuppressionCard({
+  item,
+  checked,
+  onCheck,
+  onUnsuppress,
+  t,
+}: {
+  item: MemorySuppression;
+  checked: boolean;
+  onCheck: (checked: boolean) => void;
+  onUnsuppress: () => void;
+  t: Translate;
+}) {
+  return (
+    <div className={`memory-card memory-card-suppression ${checked ? "memory-card-checked" : ""}`}>
+      <div className="memory-card-main">
+        <MemoryCardCheckbox checked={checked} onChange={onCheck} />
+        <div className="memory-card-body">
+          <div className="memory-card-title-row">
+            <Typography.Text strong ellipsis style={{ maxWidth: "100%" }}>{item.fingerprint || item.key || "-"}</Typography.Text>
+            <Tag>{t("memory.suppressionsTitle")}</Tag>
+          </div>
+          <Space size={4} wrap className="memory-card-meta">
+            <SourceBadge source={item.source} t={t} />
+            <Typography.Text type="secondary" className="memory-card-date">{formatDate(item.created_at)}</Typography.Text>
+            {item.expires_at ? <Typography.Text type="secondary" className="memory-card-date">过期 {formatDate(item.expires_at)}</Typography.Text> : null}
+          </Space>
+        </div>
+      </div>
+      <div className="memory-card-actions">
+        <Button size="small" icon={<UndoOutlined />} onClick={onUnsuppress}>解除屏蔽</Button>
+      </div>
+    </div>
+  );
+}
+
+function SourceBadge({ source, t }: { source?: string; t: Translate }) {
+  if (!source) {
+    return null;
+  }
+  const auto = isAutoSource(source);
+  return (
+    <Tooltip title={t(`memory.sources.${sourceKey(source)}`)}>
+      <Tag color={auto ? "purple" : "green"} className="memory-source-badge">
+        {auto ? t("memory.board.sourceAuto") : t("memory.board.sourceManual")} · {source}
+      </Tag>
+    </Tooltip>
+  );
+}
+
+function sourceKey(source: string): string {
+  if (source.includes("turn-end")) return "turnEndExtractor";
+  if (source.includes("insights")) return "insightsBridge";
+  if (source.includes("timeline")) return "timelineBridge";
+  if (source.includes("project-miner:readme")) return "projectMinerReadme";
+  if (source.includes("project-miner:agents")) return "projectMinerAgents";
+  if (source.includes("project-miner:docs")) return "projectMinerDocs";
+  if (source.includes("manual")) return "manual";
+  if (source.includes("manual-web")) return "manualWeb";
+  if (source.includes("session")) return "system";
+  return "default";
+}
+
+function isAutoSource(source: string): boolean {
+  return /turn-end|insights|timeline|project-miner/i.test(source);
+}
+
+function isStaleMemory(item: MemoryRecord): boolean {
+  const updated = new Date(item.updated_at).getTime();
+  if (Number.isNaN(updated)) return false;
+  const days = (Date.now() - updated) / 86_400_000;
+  if (days < 30) return false;
+  // Not stale if recently referenced.
+  if (hasRealReference(item)) {
+    const referenced = new Date(item.last_referenced_at!).getTime();
+    if (!Number.isNaN(referenced) && (Date.now() - referenced) / 86_400_000 < 30) return false;
+  }
+  return true;
+}
+
+// hasRealReference distinguishes a real LastReferencedAt timestamp from the
+// Go zero time ("0001-01-01T00:00:00Z" or 0001-01-01T00:00:00) that the
+// backend serializes for never-referenced memories.
+function hasRealReference(item: MemoryRecord): boolean {
+  const raw = item.last_referenced_at;
+  if (!raw) return false;
+  const ts = new Date(raw).getTime();
+  if (Number.isNaN(ts)) return false;
+  return ts > 0;
+}
+
+function ReferenceBadge({ item, t }: { item: MemoryRecord; t: Translate }) {
+  if (!hasRealReference(item)) {
+    return <Tag color="default" className="memory-reference-badge">{t("memory.board.neverReferenced")}</Tag>;
+  }
+  return <Tag color="cyan" className="memory-reference-badge">{t("memory.board.lastReferenced", { time: formatDate(item.last_referenced_at) })}</Tag>;
+}
+
+function MemoryBoardEmpty({ text }: { text: string }) {
+  return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={text} />;
 }
 
 function MemoryForm({ form, saving, onFinish }: { form: ReturnType<typeof Form.useForm<MemoryFormValues>>[0]; saving: boolean; onFinish: (values: MemoryFormValues) => void }) {
@@ -713,6 +999,14 @@ function Metric({ title, value }: { title: string; value: string | number }) {
   );
 }
 
+function suppressionKey(item: MemorySuppression): string {
+  return item.fingerprint || item.key || `${item.source}:${item.created_at}`;
+}
+
+function toggleKey(keys: Key[], key: string, checked: boolean, setter: (keys: Key[]) => void) {
+  setter(checked ? [...keys, key] : keys.filter((k) => k !== key));
+}
+
 function buildRememberPayload(values: MemoryFormValues) {
   return {
     title: values.title.trim(),
@@ -793,3 +1087,7 @@ function formatDate(value?: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
+
+type BlockedItem =
+  | { id: string; kind: "archived"; record: MemoryRecord; suppression?: never }
+  | { id: string; kind: "suppression"; record?: never; suppression: MemorySuppression };

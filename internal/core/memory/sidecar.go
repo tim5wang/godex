@@ -37,7 +37,7 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 	}
 
 	rows, err := db.Query(`
-		SELECT id, title, file, summary, type, source, tags, created_at, updated_at, fingerprint, content
+		SELECT id, title, file, summary, type, source, tags, created_at, updated_at, fingerprint, content, status, last_referenced_at
 		FROM memories
 		ORDER BY updated_at DESC, title ASC
 	`)
@@ -70,6 +70,9 @@ func (m *Manager) searchWithSidecar(opts SearchOptions) ([]StoredMemory, error) 
 			return nil, err
 		}
 		if opts.Type != "" && record.Type != opts.Type {
+			continue
+		}
+		if !entryStatusMatches(record.Entry, opts.Status) {
 			continue
 		}
 		if tagFilter != "" && !entryHasTag(record.Entry, tagFilter) {
@@ -165,11 +168,14 @@ func (m *Manager) ensureSidecarSchema(db *sql.DB) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			fingerprint TEXT NOT NULL,
-			content TEXT NOT NULL
+			content TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'active',
+			last_referenced_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)`,
 		`CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source)`,
+		`CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
 			id UNINDEXED,
 			title,
@@ -185,7 +191,43 @@ func (m *Manager) ensureSidecarSchema(db *sql.DB) error {
 			return err
 		}
 	}
+	// Migrate existing databases that predate the status/last_referenced columns.
+	for _, column := range []struct{ name, definition string }{
+		{"status", "TEXT NOT NULL DEFAULT 'active'"},
+		{"last_referenced_at", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureSidecarColumn(db, "memories", column.name, column.definition); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// ensureSidecarColumn adds a column to a sidecar table if it is missing, so
+// databases created by older versions keep working without a full rebuild.
+func ensureSidecarColumn(db *sql.DB, table, name, definition string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var cname, ctype string
+		var notnull, pk int
+		var dflt interface{}
+		if err := rows.Scan(&cid, &cname, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if cname == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + definition)
+	return err
 }
 
 type sidecarEntryState struct {
@@ -195,6 +237,7 @@ type sidecarEntryState struct {
 	Source      string
 	Tags        string
 	Fingerprint string
+	Status      string
 }
 
 func (m *Manager) reconcileSidecar(db *sql.DB, entries []Entry) error {
@@ -251,6 +294,7 @@ func (m *Manager) sidecarEntryNeedsRefresh(entry Entry, current sidecarEntryStat
 		current.Fingerprint != entry.Fingerprint ||
 		!current.UpdatedAt.Equal(entry.UpdatedAt.UTC()) ||
 		!strings.EqualFold(current.Source, entry.Source) ||
+		current.Status != string(normalizeStatus(entry.Status)) ||
 		current.Tags != strings.Join(normalizeTags(entry.Tags), ",") {
 		return true, nil
 	}
@@ -308,7 +352,7 @@ func buildFTSQuery(query string) string {
 }
 
 func loadSidecarState(db *sql.DB) (map[string]sidecarEntryState, error) {
-	rows, err := db.Query(`SELECT id, file, updated_at, source, tags, fingerprint FROM memories`)
+	rows, err := db.Query(`SELECT id, file, updated_at, source, tags, fingerprint, status FROM memories`)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +362,7 @@ func loadSidecarState(db *sql.DB) (map[string]sidecarEntryState, error) {
 	for rows.Next() {
 		var state sidecarEntryState
 		var updatedAt string
-		if err := rows.Scan(&state.ID, &state.File, &updatedAt, &state.Source, &state.Tags, &state.Fingerprint); err != nil {
+		if err := rows.Scan(&state.ID, &state.File, &updatedAt, &state.Source, &state.Tags, &state.Fingerprint, &state.Status); err != nil {
 			return nil, err
 		}
 		if ts, err := parseSidecarTime(updatedAt); err == nil {
@@ -365,8 +409,8 @@ func upsertSidecarRecordTx(tx *sql.Tx, record StoredMemory) error {
 		return err
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO memories(id, title, file, summary, type, source, tags, created_at, updated_at, fingerprint, content)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO memories(id, title, file, summary, type, source, tags, created_at, updated_at, fingerprint, content, status, last_referenced_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.ID,
 		record.Title,
@@ -379,6 +423,8 @@ func upsertSidecarRecordTx(tx *sql.Tx, record StoredMemory) error {
 		record.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		record.Fingerprint,
 		record.Content,
+		string(normalizeStatus(record.Status)),
+		formatOptionalTime(record.LastReferencedAt),
 	); err != nil {
 		return err
 	}
@@ -416,6 +462,8 @@ func scanStoredMemory(scanner interface {
 	var tags string
 	var createdAt string
 	var updatedAt string
+	var status string
+	var lastReferenced string
 	if err := scanner.Scan(
 		&record.ID,
 		&record.Title,
@@ -428,20 +476,37 @@ func scanStoredMemory(scanner interface {
 		&updatedAt,
 		&record.Fingerprint,
 		&record.Content,
+		&status,
+		&lastReferenced,
 	); err != nil {
 		return StoredMemory{}, err
 	}
 	record.Type = Type(memoryType)
 	record.Tags = normalizeTags(strings.Split(tags, ","))
+	record.Status = normalizeStatus(Status(strings.ToLower(strings.TrimSpace(status))))
 	if ts, err := parseSidecarTime(createdAt); err == nil {
 		record.CreatedAt = ts
 	}
 	if ts, err := parseSidecarTime(updatedAt); err == nil {
 		record.UpdatedAt = ts
 	}
+	if ts, err := parseSidecarTime(lastReferenced); err == nil {
+		record.LastReferencedAt = ts
+	}
 	return record, nil
 }
 
 func parseSidecarTime(value string) (time.Time, error) {
-	return time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, fmt.Errorf("empty time")
+	}
+	return time.Parse(time.RFC3339Nano, value)
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }

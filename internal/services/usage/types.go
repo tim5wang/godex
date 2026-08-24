@@ -94,6 +94,64 @@ type KeyUpdateRequest struct {
 	AllowedModels    *[]string `json:"allowed_models,omitempty"`
 }
 
+// BizKeyPrefix is the prefix for all business-system API keys. Each biz key
+// is bound to a set of MCP servers, recall providers, sandbox tools and
+// models, so a business system only sees the tools and context it owns.
+const BizKeyPrefix = "biz_"
+
+// ProviderRef references a recall context provider owned by a business system.
+type ProviderRef struct {
+	Name     string `json:"name"`
+	URL      string `json:"url,omitempty"`
+	TokenRef string `json:"token_ref,omitempty"` // references stored credential, never the plaintext
+}
+
+// BizAPIKey represents a business-system API key (Agent Step Platform).
+type BizAPIKey struct {
+	ID               string        `json:"id"`
+	Name             string        `json:"name"`
+	KeyHash          string        `json:"key_hash,omitempty"`
+	KeyPrefix        string        `json:"key_prefix"`
+	Enabled          bool          `json:"enabled"`
+	MCPServers       []string      `json:"mcp_servers"`
+	Providers        []ProviderRef `json:"providers"`
+	SandboxTools     []string      `json:"sandbox_tools"`
+	Models           []string      `json:"models"`
+	BudgetCredits    float64       `json:"budget_credits"`
+	WarningThreshold float64       `json:"warning_threshold"`
+	CreatedAt        time.Time     `json:"created_at"`
+	UpdatedAt        time.Time     `json:"updated_at"`
+}
+
+// BizKeyCreateRequest is the input for creating a business API key.
+type BizKeyCreateRequest struct {
+	Name             string        `json:"name"`
+	MCPServers       []string      `json:"mcp_servers"`
+	Providers        []ProviderRef `json:"providers"`
+	SandboxTools     []string      `json:"sandbox_tools"`
+	Models           []string      `json:"models"`
+	BudgetCredits    float64       `json:"budget_credits"`
+	WarningThreshold float64       `json:"warning_threshold"`
+}
+
+// BizKeyCreateResponse is returned when a business API key is created.
+type BizKeyCreateResponse struct {
+	Key    BizAPIKey `json:"key"`
+	Secret string    `json:"secret"`
+}
+
+// BizKeyUpdateRequest contains the fields that may be updated on a biz key.
+type BizKeyUpdateRequest struct {
+	Name             *string        `json:"name,omitempty"`
+	Enabled          *bool          `json:"enabled,omitempty"`
+	MCPServers       *[]string      `json:"mcp_servers,omitempty"`
+	Providers        *[]ProviderRef `json:"providers,omitempty"`
+	SandboxTools     *[]string      `json:"sandbox_tools,omitempty"`
+	Models           *[]string      `json:"models,omitempty"`
+	BudgetCredits    *float64       `json:"budget_credits,omitempty"`
+	WarningThreshold *float64       `json:"warning_threshold,omitempty"`
+}
+
 // ModelCreateRequest is the input for creating a new model mapping.
 type ModelCreateRequest struct {
 	PublicModel     string  `json:"public_model"`
@@ -251,6 +309,13 @@ type Store interface {
 	GetModelByPublicName(name string) (*ProxyModel, error)
 	CreateModel(model *ProxyModel) error
 	UpdateModel(model *ProxyModel) error
+
+	ListBizKeys() ([]BizAPIKey, error)
+	GetBizKey(id string) (*BizAPIKey, error)
+	GetBizKeyByHash(hash string) (*BizAPIKey, error)
+	CreateBizKey(key *BizAPIKey) error
+	UpdateBizKey(key *BizAPIKey) error
+	DeleteBizKey(id string) error
 
 	RecordCall(call *UsageCall) error
 	GetCalls(date string, apiKeyID string) ([]UsageCall, error)

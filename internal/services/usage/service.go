@@ -32,6 +32,15 @@ func generateKey() (string, error) {
 	return KeyPrefix + hex.EncodeToString(b), nil
 }
 
+// generateBizKey returns a new random secret with the biz_ prefix.
+func generateBizKey() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate biz key: %w", err)
+	}
+	return BizKeyPrefix + hex.EncodeToString(b), nil
+}
+
 // maskKey returns a masked version like "gdx_ab12****" from a full key.
 func maskKey(full string) string {
 	if len(full) <= 8 {
@@ -201,6 +210,137 @@ func (s *Service) CheckBudget(keyID string, estimatedCredits float64) (bool, err
 		used += s.Credits
 	}
 	return (used + estimatedCredits) <= key.BudgetCredits, nil
+}
+
+// ---- biz keys (Agent Step Platform) ----
+
+// CreateBizKey generates a new business-system API key bound to an MCP server
+// allowlist, recall providers, sandbox tools and models. The plaintext secret
+// is returned exactly once; only its hash is stored.
+func (s *Service) CreateBizKey(req BizKeyCreateRequest) (*BizKeyCreateResponse, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, fmt.Errorf("biz key name is required")
+	}
+	if req.BudgetCredits < 0 {
+		return nil, fmt.Errorf("budget_credits must be non-negative")
+	}
+	if req.WarningThreshold < 0 {
+		return nil, fmt.Errorf("warning_threshold must be non-negative")
+	}
+	secret, err := generateBizKey()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	key := &BizAPIKey{
+		ID:               NewID("biz"),
+		Name:             strings.TrimSpace(req.Name),
+		KeyHash:          sha256Hex(secret),
+		KeyPrefix:        maskKey(secret),
+		Enabled:          true,
+		MCPServers:       req.MCPServers,
+		Providers:        req.Providers,
+		SandboxTools:     req.SandboxTools,
+		Models:           req.Models,
+		BudgetCredits:    req.BudgetCredits,
+		WarningThreshold: req.WarningThreshold,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if key.MCPServers == nil {
+		key.MCPServers = []string{}
+	}
+	if key.Providers == nil {
+		key.Providers = []ProviderRef{}
+	}
+	if key.SandboxTools == nil {
+		key.SandboxTools = []string{}
+	}
+	if key.Models == nil {
+		key.Models = []string{}
+	}
+
+	if err := s.store.CreateBizKey(key); err != nil {
+		return nil, err
+	}
+	return &BizKeyCreateResponse{Key: *key, Secret: secret}, nil
+}
+
+// ListBizKeys returns all business keys (safe view, no hash/secret).
+func (s *Service) ListBizKeys() ([]BizAPIKey, error) {
+	return s.store.ListBizKeys()
+}
+
+// GetBizKey returns one business key by id (safe view, no hash).
+func (s *Service) GetBizKey(id string) (*BizAPIKey, error) {
+	return s.store.GetBizKey(id)
+}
+
+// UpdateBizKey updates fields of an existing business key.
+func (s *Service) UpdateBizKey(id string, req BizKeyUpdateRequest) (*BizAPIKey, error) {
+	key, err := s.store.GetBizKey(id)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name != nil {
+		if strings.TrimSpace(*req.Name) == "" {
+			return nil, fmt.Errorf("biz key name is required")
+		}
+		key.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.Enabled != nil {
+		key.Enabled = *req.Enabled
+	}
+	if req.MCPServers != nil {
+		key.MCPServers = *req.MCPServers
+	}
+	if req.Providers != nil {
+		key.Providers = *req.Providers
+	}
+	if req.SandboxTools != nil {
+		key.SandboxTools = *req.SandboxTools
+	}
+	if req.Models != nil {
+		key.Models = *req.Models
+	}
+	if req.BudgetCredits != nil {
+		if *req.BudgetCredits < 0 {
+			return nil, fmt.Errorf("budget_credits must be non-negative")
+		}
+		key.BudgetCredits = *req.BudgetCredits
+	}
+	if req.WarningThreshold != nil {
+		if *req.WarningThreshold < 0 {
+			return nil, fmt.Errorf("warning_threshold must be non-negative")
+		}
+		key.WarningThreshold = *req.WarningThreshold
+	}
+	key.UpdatedAt = time.Now()
+	if err := s.store.UpdateBizKey(key); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// DeleteBizKey removes a business key.
+func (s *Service) DeleteBizKey(id string) error {
+	return s.store.DeleteBizKey(id)
+}
+
+// AuthenticateBizKey verifies a presented business key and returns its record.
+func (s *Service) AuthenticateBizKey(secret string) (*BizAPIKey, error) {
+	if !strings.HasPrefix(secret, BizKeyPrefix) {
+		return nil, fmt.Errorf("invalid biz key format")
+	}
+	key, err := s.store.GetBizKeyByHash(sha256Hex(secret))
+	if err != nil {
+		return nil, fmt.Errorf("invalid biz key")
+	}
+	if !key.Enabled {
+		return nil, fmt.Errorf("biz key is disabled")
+	}
+	return key, nil
 }
 
 // CreateModel creates a new model mapping.

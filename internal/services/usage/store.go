@@ -62,6 +62,22 @@ func (s *SQLiteStore) init() error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_keys_hash ON usage_keys(key_hash)`,
+		`CREATE TABLE IF NOT EXISTS biz_keys (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			key_hash TEXT NOT NULL,
+			key_prefix TEXT NOT NULL,
+			enabled INTEGER NOT NULL,
+			mcp_servers TEXT NOT NULL,
+			providers TEXT NOT NULL,
+			sandbox_tools TEXT NOT NULL,
+			models TEXT NOT NULL,
+			budget_credits REAL NOT NULL,
+			warning_threshold REAL NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_biz_keys_hash ON biz_keys(key_hash)`,
 		`CREATE TABLE IF NOT EXISTS usage_models (
 			id TEXT PRIMARY KEY,
 			public_model TEXT NOT NULL UNIQUE,
@@ -225,6 +241,97 @@ func (s *SQLiteStore) UpdateModel(model *ProxyModel) error {
 	return resultError(result, err, "model not found: "+model.ID)
 }
 
+// ---- biz keys ----
+
+func (s *SQLiteStore) ListBizKeys() ([]BizAPIKey, error) {
+	rows, err := s.db.Query(`SELECT id, name, key_prefix, enabled, mcp_servers, providers, sandbox_tools, models, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BizAPIKey
+	for rows.Next() {
+		var key BizAPIKey
+		var enabled int
+		var mcpServers, providers, sandboxTools, models, created, updated string
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &enabled,
+			&mcpServers, &providers, &sandboxTools, &models,
+			&key.BudgetCredits, &key.WarningThreshold, &created, &updated); err != nil {
+			return nil, err
+		}
+		key.Enabled = enabled != 0
+		key.MCPServers = decodeStringSlice(mcpServers)
+		key.Providers = decodeProviderRefs(providers)
+		key.SandboxTools = decodeStringSlice(sandboxTools)
+		key.Models = decodeStringSlice(models)
+		key.CreatedAt = parseTime(created)
+		key.UpdatedAt = parseTime(updated)
+		out = append(out, key)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) GetBizKey(id string) (*BizAPIKey, error) {
+	return s.getBizKey(`id = ?`, id)
+}
+
+func (s *SQLiteStore) GetBizKeyByHash(hash string) (*BizAPIKey, error) {
+	return s.getBizKey(`key_hash = ?`, hash)
+}
+
+func (s *SQLiteStore) getBizKey(where string, arg string) (*BizAPIKey, error) {
+	row := s.db.QueryRow(`SELECT id, name, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, models, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys WHERE `+where, arg)
+	return scanBizKeyRow(row)
+}
+
+func (s *SQLiteStore) CreateBizKey(key *BizAPIKey) error {
+	_, err := s.db.Exec(`INSERT INTO biz_keys (id, name, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, models, budget_credits, warning_threshold, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key.ID, key.Name, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
+		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Models),
+		key.BudgetCredits, key.WarningThreshold, formatTime(key.CreatedAt), formatTime(key.UpdatedAt))
+	return err
+}
+
+func (s *SQLiteStore) UpdateBizKey(key *BizAPIKey) error {
+	result, err := s.db.Exec(`UPDATE biz_keys SET name = ?, key_hash = ?, key_prefix = ?, enabled = ?, mcp_servers = ?, providers = ?, sandbox_tools = ?, models = ?, budget_credits = ?, warning_threshold = ?, updated_at = ? WHERE id = ?`,
+		key.Name, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
+		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Models),
+		key.BudgetCredits, key.WarningThreshold, formatTime(key.UpdatedAt), key.ID)
+	return resultError(result, err, "biz key not found: "+key.ID)
+}
+
+func (s *SQLiteStore) DeleteBizKey(id string) error {
+	result, err := s.db.Exec(`DELETE FROM biz_keys WHERE id = ?`, id)
+	return resultError(result, err, "biz key not found: "+id)
+}
+
+// scanBizKeyRow scans one biz_keys row. Columns must match the SELECT used by
+// every biz key query (id, name, [key_hash], key_prefix, enabled, mcp_servers,
+// providers, sandbox_tools, models, budget_credits, warning_threshold,
+// created_at, updated_at).
+func scanBizKeyRow(scanner interface{ Scan(dest ...any) error }) (*BizAPIKey, error) {
+	var key BizAPIKey
+	var enabled int
+	var mcpServers, providers, sandboxTools, models, created, updated string
+	err := scanner.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &enabled,
+		&mcpServers, &providers, &sandboxTools, &models,
+		&key.BudgetCredits, &key.WarningThreshold, &created, &updated)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("biz key not found")
+		}
+		return nil, err
+	}
+	key.Enabled = enabled != 0
+	key.MCPServers = decodeStringSlice(mcpServers)
+	key.Providers = decodeProviderRefs(providers)
+	key.SandboxTools = decodeStringSlice(sandboxTools)
+	key.Models = decodeStringSlice(models)
+	key.CreatedAt = parseTime(created)
+	key.UpdatedAt = parseTime(updated)
+	return &key, nil
+}
+
 func (s *SQLiteStore) RecordCall(call *UsageCall) error {
 	_, err := s.db.Exec(`INSERT INTO usage_calls (id, timestamp, api_key_id, public_model, target_profile_id, target_model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, billable_tokens, credit_weight, credits, estimated, status, error, latency_ms, source_channel, session_id, turn_id, job_id, error_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		call.ID, formatTime(call.Timestamp), call.APIKeyID, call.PublicModel, call.TargetProfileID, call.TargetModel, call.InputTokens, call.OutputTokens, call.CacheReadTokens, call.CacheWriteTokens, call.BillableTokens, call.CreditWeight, call.Credits, boolInt(call.Estimated), call.Status, call.Error, call.LatencyMs, call.SourceChannel, call.SessionID, call.TurnID, call.JobID, call.ErrorCode)
@@ -382,6 +489,23 @@ func decodeStringSlice(raw string) []string {
 	_ = json.Unmarshal([]byte(raw), &values)
 	if values == nil {
 		return []string{}
+	}
+	return values
+}
+
+func encodeProviderRefs(values []ProviderRef) string {
+	if values == nil {
+		values = []ProviderRef{}
+	}
+	raw, _ := json.Marshal(values)
+	return string(raw)
+}
+
+func decodeProviderRefs(raw string) []ProviderRef {
+	var values []ProviderRef
+	_ = json.Unmarshal([]byte(raw), &values)
+	if values == nil {
+		return []ProviderRef{}
 	}
 	return values
 }

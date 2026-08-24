@@ -1876,6 +1876,7 @@ func NewHandlerWithRuntime(
 		}
 	})))
 	registerUsageRoutes(mux, protected, usageService, manager)
+	registerBizRoutes(mux, protected, usageService)
 	registerFileRoutes(mux, protected, manager)
 	registerTerminalRoutes(mux)
 	registerPreviewRoutes(mux, manager)

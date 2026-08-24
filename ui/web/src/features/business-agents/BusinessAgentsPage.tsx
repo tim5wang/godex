@@ -35,12 +35,13 @@ import { writeClipboardText } from "../../lib/clipboard";
 import {
   createBizKey,
   deleteBizKey,
+  getModels,
   listBizKeys,
   listPackages,
   listSkillsCatalog,
   updateBizKey,
 } from "../../lib/api";
-import type { BizKey, ProviderRef } from "../../lib/types";
+import type { BizKey, ModelsView, ProviderRef } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
 import { GodexStepElement } from "../../lib/agent-step/godex-step";
 
@@ -112,6 +113,20 @@ export function BusinessAgentsPage() {
   const packageNames = useMemo(
     () => (packagesQuery.data ?? []).map((p) => ({ label: p.name, value: p.name })),
     [packagesQuery.data],
+  );
+
+  const modelsQuery = useQuery<ModelsView>({
+    queryKey: ["models", token],
+    enabled: canReach,
+    queryFn: () => getModels(token),
+  });
+  // Profile IDs are what the key stores; labels show provider/model for clarity.
+  const modelOptions = useMemo(
+    () => (modelsQuery.data?.profiles ?? []).map((p) => ({
+      label: `${p.name || p.id} · ${p.provider}/${p.model}`,
+      value: p.id,
+    })),
+    [modelsQuery.data],
   );
 
   // ---- Selection / modal state ----
@@ -324,9 +339,20 @@ const result = await step.createStep({
         onClose={() => setEditorOpen(false)}
         destroyOnClose
         extra={
-          <Button type="primary" icon={<SaveOutlined />} loading={saveMutation.isPending} onClick={() => form.submit()}>
-            {t("businessAgents.save")}
-          </Button>
+          <Space>
+            <Button onClick={() => setEditorOpen(false)}>{t("businessAgents.cancel")}</Button>
+            <Button type="primary" icon={<SaveOutlined />} loading={saveMutation.isPending} onClick={() => form.submit()}>
+              {t("businessAgents.save")}
+            </Button>
+          </Space>
+        }
+        footer={
+          <Space style={{ width: "100%", justifyContent: "flex-end" }}>
+            <Button onClick={() => setEditorOpen(false)}>{t("businessAgents.cancel")}</Button>
+            <Button type="primary" icon={<SaveOutlined />} loading={saveMutation.isPending} onClick={() => form.submit()}>
+              {t("businessAgents.save")}
+            </Button>
+          </Space>
         }
       >
         <Form form={form} layout="vertical" onFinish={(v) => saveMutation.mutate(v)}>
@@ -339,7 +365,7 @@ const result = await step.createStep({
           <Form.Item name="default_prompt" label={t("businessAgents.defaultPrompt")}>
             <Input.TextArea rows={3} placeholder={t("businessAgents.defaultPromptPlaceholder")} />
           </Form.Item>
-          <Form.Item name="mcp_servers" label={t("businessAgents.mcpServers")}>
+          <Form.Item name="mcp_servers" label={t("businessAgents.mcpServers")} extra={t("businessAgents.mcpExtra")}>
             <Select mode="tags" placeholder={t("businessAgents.mcpPlaceholder")} />
           </Form.Item>
           <Form.Item name="sandbox_tools" label={t("businessAgents.sandboxTools")}>
@@ -351,18 +377,25 @@ const result = await step.createStep({
           <Form.Item name="packages" label={t("businessAgents.packages")}>
             <Select mode="multiple" options={packageNames} allowClear />
           </Form.Item>
-          <Form.Item name="models" label={t("businessAgents.models")}>
-            <Select mode="tags" placeholder={t("businessAgents.modelsPlaceholder")} />
+          <Form.Item name="models" label={t("businessAgents.models")} extra={t("businessAgents.modelsExtra")}>
+            <Select
+              mode="multiple"
+              options={modelOptions}
+              placeholder={t("businessAgents.modelsPlaceholder")}
+              loading={modelsQuery.isLoading}
+              allowClear
+              filterOption={(input, option) => String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item name="project_dir" label={t("businessAgents.projectDir")}>
             <Input placeholder="~/work/sales-crm" />
           </Form.Item>
-          <Space size="large">
-            <Form.Item name="budget_credits" label={t("businessAgents.budgetCredits")}>
-              <InputNumber min={0} step={1} />
+          <Space size="large" align="start">
+            <Form.Item name="budget_credits" label={t("businessAgents.budgetCredits")} extra={t("businessAgents.budgetExtra")}>
+              <InputNumber min={0} step={1} placeholder="0" addonAfter={t("businessAgents.creditsUnit")} />
             </Form.Item>
-            <Form.Item name="warning_threshold" label={t("businessAgents.warningThreshold")}>
-              <InputNumber min={0} step={1} />
+            <Form.Item name="warning_threshold" label={t("businessAgents.warningThreshold")} extra={t("businessAgents.warningExtra")}>
+              <InputNumber min={0} step={1} placeholder="0" addonAfter={t("businessAgents.creditsUnit")} />
             </Form.Item>
           </Space>
         </Form>

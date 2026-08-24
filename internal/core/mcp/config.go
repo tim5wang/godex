@@ -11,10 +11,15 @@ const (
 	// ServerTypeStdio is an external MCP server speaking JSON-RPC 2.0 over
 	// stdio (the cross-runtime plugin bridge: any language can implement one).
 	ServerTypeStdio = "stdio"
+	// ServerTypeHTTP is a remote MCP server speaking JSON-RPC 2.0 over the
+	// Streamable HTTP transport (a single POST endpoint). This is how business
+	// systems register tools with the Agent Step Platform (Phase A).
+	ServerTypeHTTP = "streamable-http"
 )
 
 // Config stores the MCP server registry for the local agent. Servers may be
-// read-only filesystem resource providers or full stdio MCP servers (tools).
+// read-only filesystem resource providers, full stdio MCP servers (tools), or
+// remote Streamable HTTP MCP servers (tools).
 type Config struct {
 	Servers []ServerConfig `json:"servers"`
 }
@@ -29,6 +34,13 @@ type ServerConfig struct {
 	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	// URL/Headers/SessionRequired configure a remote Streamable HTTP server.
+	// URL is required for type "streamable-http"; Headers are merged into
+	// every POST (e.g. Authorization). SessionRequired opts into maintaining
+	// the Mcp-Session-Id returned by the server.
+	URL             string            `json:"url,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	SessionRequired bool              `json:"session_required,omitempty"`
 }
 
 // LoadConfig reads the MCP config file. Missing config is treated as empty.

@@ -146,8 +146,9 @@ func (m *Manager) ReadResource(serverName, uri string) (*ReadResult, error) {
 	return nil, fmt.Errorf("mcp server not found: %s", serverName)
 }
 
-// ListTools lists tools exposed by all configured stdio MCP servers. Tools are
-// discovered once per call via the MCP tools/list protocol.
+// ListTools lists tools exposed by all configured MCP servers (stdio or
+// streamable-http). Tools are discovered once per call via the MCP tools/list
+// protocol.
 func (m *Manager) ListTools(ctx context.Context) ([]Tool, error) {
 	cfg, err := LoadConfig(m.configPath)
 	if err != nil {
@@ -155,7 +156,7 @@ func (m *Manager) ListTools(ctx context.Context) ([]Tool, error) {
 	}
 	var tools []Tool
 	for _, server := range cfg.Servers {
-		if server.Type != ServerTypeStdio {
+		if server.Type != ServerTypeStdio && server.Type != ServerTypeHTTP {
 			continue
 		}
 		items, err := m.listServerTools(ctx, server)
@@ -171,6 +172,24 @@ func (m *Manager) ListTools(ctx context.Context) ([]Tool, error) {
 		return tools[i].Server < tools[j].Server
 	})
 	return tools, nil
+}
+
+// ListToolServers returns the configured MCP server names that expose tools
+// (stdio or streamable-http), used for per-server dynamic tool registration.
+func (m *Manager) ListToolServers() []string {
+	cfg, err := LoadConfig(m.configPath)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, server := range cfg.Servers {
+		if server.Type != ServerTypeStdio && server.Type != ServerTypeHTTP {
+			continue
+		}
+		names = append(names, server.Name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ListStdioServers returns the configured stdio MCP server names (used for
@@ -191,7 +210,30 @@ func (m *Manager) ListStdioServers() []string {
 	return names
 }
 
-// ListServerTools lists the tools of one stdio server by name.
+// rpcClient is the common JSON-RPC surface shared by both MCP transports
+// (stdio process and remote Streamable HTTP). Manager dispatches to the right
+// transport via clientFor.
+type rpcClient interface {
+	initialize(ctx context.Context) (string, error)
+	listTools(ctx context.Context) ([]mcpTool, error)
+	callTool(ctx context.Context, name string, args map[string]any) (mcpCallResult, error)
+	close() error
+}
+
+// clientFor returns the rpcClient for the given server config.
+func clientFor(ctx context.Context, server ServerConfig) (rpcClient, error) {
+	switch server.Type {
+	case ServerTypeStdio:
+		return startStdioClient(ctx, server)
+	case ServerTypeHTTP:
+		return startHTTPClient(server)
+	default:
+		return nil, fmt.Errorf("unsupported MCP server type %q", server.Type)
+	}
+}
+
+// ListServerTools lists the tools of one MCP server by name (stdio or
+// streamable-http).
 func (m *Manager) ListServerTools(ctx context.Context, serverName string) ([]Tool, error) {
 	cfg, err := LoadConfig(m.configPath)
 	if err != nil {
@@ -201,16 +243,14 @@ func (m *Manager) ListServerTools(ctx context.Context, serverName string) ([]Too
 		if server.Name != serverName {
 			continue
 		}
-		if server.Type != ServerTypeStdio {
-			return nil, fmt.Errorf("mcp server %s is not a stdio server", serverName)
-		}
 		return m.listServerTools(ctx, server)
 	}
 	return nil, fmt.Errorf("mcp server not found: %s", serverName)
 }
 
-// CallTool calls one tool on a stdio MCP server via the MCP tools/call
-// protocol. Text content is concatenated; structured content is preserved raw.
+// CallTool calls one tool on an MCP server (stdio or streamable-http) via the
+// MCP tools/call protocol. Text content is concatenated; structured content is
+// preserved raw.
 func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*CallResult, error) {
 	cfg, err := LoadConfig(m.configPath)
 	if err != nil {
@@ -220,10 +260,7 @@ func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, arg
 		if server.Name != serverName {
 			continue
 		}
-		if server.Type != ServerTypeStdio {
-			return nil, fmt.Errorf("mcp server %s is not a stdio server", serverName)
-		}
-		client, err := startStdioClient(ctx, server)
+		client, err := clientFor(ctx, server)
 		if err != nil {
 			return nil, err
 		}
@@ -253,9 +290,9 @@ func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, arg
 	return nil, fmt.Errorf("mcp server not found: %s", serverName)
 }
 
-// listServerTools lists the tools of one stdio server.
+// listServerTools lists the tools of one server (stdio or streamable-http).
 func (m *Manager) listServerTools(ctx context.Context, server ServerConfig) ([]Tool, error) {
-	client, err := startStdioClient(ctx, server)
+	client, err := clientFor(ctx, server)
 	if err != nil {
 		return nil, err
 	}

@@ -52,15 +52,16 @@ func (a *Agent) registerOwnedTool(handler *tools.ToolHandler, owner string, tool
 }
 
 // registerMCPServerTools discovers and registers one first-class tool per
-// declared tool of every configured stdio MCP server. Each server owns its
-// tools (owner "mcp:<server>"), so unregistering one server's tools never
-// affects another. Server-tool discovery failures are non-fatal: the generic
-// list_mcp_tools/call_mcp_tool bridge remains available as a fallback.
+// declared tool of every configured MCP server (stdio or streamable-http).
+// Each server owns its tools (owner "mcp:<server>"), so unregistering one
+// server's tools never affects another. Server-tool discovery failures are
+// non-fatal: the generic list_mcp_tools/call_mcp_tool bridge remains available
+// as a fallback.
 func (a *Agent) registerMCPServerTools(handler *tools.ToolHandler) {
 	if a.mcpMgr == nil {
 		return
 	}
-	for _, serverName := range a.mcpMgr.ListStdioServers() {
+	for _, serverName := range a.mcpMgr.ListToolServers() {
 		owner := "mcp:" + serverName
 		decls, err := a.mcpMgr.ListServerTools(context.Background(), serverName)
 		if err != nil {
@@ -74,7 +75,7 @@ func (a *Agent) registerMCPServerTools(handler *tools.ToolHandler) {
 			}
 			_, _ = a.registerOwnedTool(handler, owner, tool, tools.ToolMeta{
 				Bundle:  bundleMCP,
-				Summary: "first-class tool from stdio MCP server " + serverName,
+				Summary: "first-class tool from MCP server " + serverName,
 			})
 		}
 	}

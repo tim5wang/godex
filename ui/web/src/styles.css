@@ -2014,17 +2014,45 @@ samp {
   display: grid;
   grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
   gap: 16px;
+  align-items: start;
+}
+
+.notes-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.notes-summary-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.notes-summary-toggle-label {
+  font-size: 12px;
+}
+
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .notes-list-item {
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--godex-border);
   border-radius: 8px;
   background: var(--godex-panel);
   color: inherit;
   text-align: left;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .notes-list-item:hover,
@@ -2032,6 +2060,79 @@ samp {
 .notes-list-item-active {
   border-color: var(--godex-accent);
   outline: none;
+}
+
+.notes-list-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.notes-list-item-icon {
+  flex: none;
+  color: var(--godex-muted);
+}
+
+.notes-list-item-time {
+  flex: none;
+  font-size: 12px;
+}
+
+.notes-list-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.notes-list-item-tags .ant-tag {
+  margin-inline-end: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.notes-list-item-summary {
+  font-size: 12px;
+}
+
+.notes-meta {
+  display: flex;
+  align-items: flex-start;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+}
+
+.notes-meta-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.notes-meta-fields {
+  flex: 1;
+  min-width: 0;
+}
+
+.notes-meta-fields .ant-form-item {
+  margin-bottom: 8px;
+}
+
+.notes-meta-time {
+  font-size: 12px;
+}
+
+.notes-content-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.notes-content-toolbar .ant-segmented {
+  font-size: 12px;
 }
 
 .notes-preview {

@@ -33,10 +33,11 @@ import {
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
-  SendOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
+import { parse, stringify as toYaml } from "yaml";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { UiCardView, type UiCardData } from "./components/UiCardView";
 import { useI18n } from "../../i18n";
 import {
   approveSessionPermission,
@@ -48,6 +49,8 @@ import {
   listNotes,
   openSession,
   previewMemoryContext,
+  resumeSessionTurn,
+  retrySessionTurn,
   saveNote,
   submitMessage,
 } from "../../lib/api";
@@ -68,6 +71,12 @@ type WorkflowRunRecord = {
   sessionKey: string;
   status: "completed" | "error";
   timestamp: string;
+  /** Turn id of the launch turn — enables retry / resume from history. */
+  turnId?: string;
+  /** Wall-clock duration of the run in ms. */
+  durationMs?: number;
+  /** Tool activity summary at completion (name → status), for quick review. */
+  tools?: Array<{ name: string; status: string }>;
 };
 
 const RUN_HISTORY_KEY = "godex:workflows:run-history";
@@ -95,12 +104,26 @@ function persistRunHistory(records: WorkflowRunRecord[]) {
 }
 
 /** Built-in playbook templates offered via the “From template” dropdown. */
-type PlaybookTemplate = { title: string; summary: string; content: string };
+type PlaybookTemplate = {
+  title: string;
+  summary: string;
+  content: string;
+  /** “AI 工号卡”六问示例（保存时写入 front-matter）。 */
+  six?: Partial<Record<CardQuestionKey, string>>;
+};
 
 const PLAYBOOK_TEMPLATES: PlaybookTemplate[] = [
   {
     title: "测试失败排查",
     summary: "按步骤定位测试失败根因并给出修复建议",
+    six: {
+      serviceWhom: "开发团队",
+      canRead: "工作区源码、测试文件、CI 日志",
+      canCall: "bash（测试命令）、read_file、grep",
+      cannotDo: "修改生产配置、推送代码",
+      deliverable: "根因分析 + 最小修复 diff + 验证结果",
+      reviewer: "提交人 / 模块负责人",
+    },
     content: `# 目标
 定位当前工作区测试失败（或指定范围）的根因，并给出最小修复建议。
 
@@ -117,6 +140,14 @@ const PLAYBOOK_TEMPLATES: PlaybookTemplate[] = [
   {
     title: "发布前检查清单",
     summary: "发布前的版本、构建、测试、文档全量检查",
+    six: {
+      serviceWhom: "发布负责人",
+      canRead: "工作区代码、Makefile/package.json、release notes、git 状态",
+      canCall: "bash（构建/测试命令）、read_file、git",
+      cannotDo: "实际执行发布/推送、修改版本号",
+      deliverable: "逐项 ✅/❌ 清单 + 阻塞项 + 建议动作",
+      reviewer: "发布负责人",
+    },
     content: `# 目标
 对当前工作区执行发布前检查，输出一份可执行清单。
 
@@ -133,6 +164,14 @@ const PLAYBOOK_TEMPLATES: PlaybookTemplate[] = [
   {
     title: "新环境接入",
     summary: "把当前仓库/服务接入新环境（部署、配置、验证）",
+    six: {
+      serviceWhom: "部署工程师",
+      canRead: "部署文档、配置模板、环境变量说明",
+      canCall: "bash（只读检查）、read_file",
+      cannotDo: "修改生产配置、重启生产服务",
+      deliverable: "接入步骤摘要 + 配置变更 + 验证结果 + 遗留问题",
+      reviewer: "部署负责人",
+    },
     content: `# 目标
 把当前项目接入新环境（新机器 / 新服务 / 新节点），完成配置与验证。
 
@@ -148,6 +187,14 @@ const PLAYBOOK_TEMPLATES: PlaybookTemplate[] = [
   {
     title: "问题复盘报告",
     summary: "对一次故障/问题做结构化复盘",
+    six: {
+      serviceWhom: "值班团队",
+      canRead: "故障相关日志/事件、记忆、历史会话",
+      canCall: "read_file、grep、memory",
+      cannotDo: "回滚/恢复操作、向外部发通知",
+      deliverable: "问题概述 / 时间线 / 根因 / 改进项 / 沉淀动作",
+      reviewer: "值班负责人",
+    },
     content: `# 目标
 对指定问题做一次结构化复盘，输出可复用的结论。
 
@@ -167,36 +214,79 @@ type PlaybookFormValues = {
   title: string;
   summary?: string;
   content: string;
+  /** “AI 工号卡”六问（Step 5）：服务谁 / 可读什么 / 可调什么 / 不能做什么 / 交付什么 / 谁验收 */
+  serviceWhom?: string;
+  canRead?: string;
+  canCall?: string;
+  cannotDo?: string;
+  deliverable?: string;
+  reviewer?: string;
 };
+
+/** 六问字段清单，用于 front-matter 序列化/解析与编辑器渲染。 */
+const CARD_SIX_QUESTIONS = [
+  { key: "serviceWhom", frontMatter: "service_whom", label: "serviceWhom" },
+  { key: "canRead", frontMatter: "can_read", label: "canRead" },
+  { key: "canCall", frontMatter: "can_call", label: "canCall" },
+  { key: "cannotDo", frontMatter: "cannot_do", label: "cannotDo" },
+  { key: "deliverable", frontMatter: "deliverable", label: "deliverable" },
+  { key: "reviewer", frontMatter: "reviewer", label: "reviewer" },
+] as const;
+
+type CardQuestionKey = (typeof CARD_SIX_QUESTIONS)[number]["key"];
+
+/** 把六问序列化为 YAML front-matter 拼到 content 前（无六问则原样返回）。 */
+function withCardFrontMatter(values: Pick<PlaybookFormValues, CardQuestionKey> & { content: string }): string {
+  const meta: Record<string, string> = {};
+  for (const q of CARD_SIX_QUESTIONS) {
+    const value = values[q.key]?.trim();
+    if (value) {
+      meta[q.frontMatter] = value;
+    }
+  }
+  if (Object.keys(meta).length === 0) {
+    return values.content;
+  }
+  const fm = `---\n${toYaml(meta).trimEnd()}\n---\n`;
+  return `${fm}${values.content}`;
+}
+
+/** 从 content 解析 front-matter，返回 { six, body }（无 front-matter 时 six 为空、body 为原 content）。 */
+function parseCardFrontMatter(content: string): { six: Partial<Record<CardQuestionKey, string>>; body: string } {
+  const six: Partial<Record<CardQuestionKey, string>> = {};
+  const match = /^---\n([\s\S]*?)\n---\n?/.exec(content);
+  if (!match) {
+    return { six, body: content };
+  }
+  try {
+    const parsed = parse(match[1]) as Record<string, unknown>;
+    for (const q of CARD_SIX_QUESTIONS) {
+      const value = parsed[q.frontMatter];
+      if (typeof value === "string" && value.trim()) {
+        six[q.key] = value;
+      }
+    }
+  } catch {
+    return { six, body: content };
+  }
+  return { six, body: content.slice(match[0].length) };
+}
+
+/** 从剧本 front-matter 生成「AI 工号卡」六问段落，注入启动 prompt。 */
+function buildCardSixSection(playbook: Note): string {
+  const { six } = parseCardFrontMatter(playbook.content);
+  const rows = CARD_SIX_QUESTIONS.filter((q) => six[q.key]?.trim())
+    .map((q) => `- ${q.frontMatter}: ${six[q.key]?.trim()}`)
+    .join("\n");
+  if (!rows) {
+    return "";
+  }
+  return `**AI 工号卡（边界与验收）：**\n${rows}`;
+}
 
 type LaunchFormValues = {
   playbookId: string;
   instructions?: string;
-};
-
-/** Structured interactive card emitted by the ui_card tool (Step 4). */
-type UiCardField = {
-  name: string;
-  label?: string;
-  type?: "text" | "textarea" | "select" | "number";
-  required?: boolean;
-  placeholder?: string;
-  options?: Array<{ label: string; value: string }>;
-};
-
-type UiCardAction = {
-  id?: string;
-  label: string;
-  kind?: "message" | "command" | "approve" | "url";
-  value?: string;
-};
-
-type UiCardData = {
-  kind: "form" | "button_group" | "card";
-  title?: string;
-  content?: string;
-  fields?: UiCardField[];
-  actions?: UiCardAction[];
 };
 
 /** One tool invocation observed during a launch run. */
@@ -228,6 +318,20 @@ function splitTags(value?: string | string[]): string[] {
     .filter(Boolean);
 }
 
+/** Format a wall-clock duration (ms) as a compact human string. */
+function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
+
 export function WorkflowsPage() {
   const { t } = useI18n();
   const { message: antMessage } = AntApp.useApp();
@@ -250,6 +354,7 @@ export function WorkflowsPage() {
   const [streamStatus, setStreamStatus] = useState<"idle" | "running" | "completed" | "error">("idle");
   const [launchSessionKey, setLaunchSessionKey] = useState("");
   const [toolActivity, setToolActivity] = useState<ToolActivity[]>([]);
+  const toolActivityRef = useRef<ToolActivity[]>([]);
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([]);
   const [uiCards, setUiCards] = useState<UiCardEmission[]>([]);
   const streamBufferRef = useRef("");
@@ -286,7 +391,7 @@ export function WorkflowsPage() {
         title: values.title,
         summary: values.summary,
         tags: [PLAYBOOK_TAG],
-        content: values.content,
+        content: withCardFrontMatter(values),
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["notes", token, "workflows"] });
@@ -310,7 +415,17 @@ export function WorkflowsPage() {
   const handleNewPlaybook = (template?: PlaybookTemplate) => {
     setEditingPlaybook(null);
     if (template) {
-      playbookForm.setFieldsValue({ title: template.title, summary: template.summary, content: template.content });
+      playbookForm.setFieldsValue({
+        title: template.title,
+        summary: template.summary,
+        content: template.content,
+        serviceWhom: template.six?.serviceWhom ?? "",
+        canRead: template.six?.canRead ?? "",
+        canCall: template.six?.canCall ?? "",
+        cannotDo: template.six?.cannotDo ?? "",
+        deliverable: template.six?.deliverable ?? "",
+        reviewer: template.six?.reviewer ?? "",
+      });
     } else {
       playbookForm.resetFields();
     }
@@ -319,11 +434,18 @@ export function WorkflowsPage() {
 
   const handleEditPlaybook = (playbook: Note) => {
     setEditingPlaybook(playbook);
+    const { six, body } = parseCardFrontMatter(playbook.content);
     playbookForm.setFieldsValue({
       id: playbook.id,
       title: playbook.title,
       summary: playbook.summary ?? "",
-      content: playbook.content,
+      content: body,
+      serviceWhom: six.serviceWhom ?? "",
+      canRead: six.canRead ?? "",
+      canCall: six.canCall ?? "",
+      cannotDo: six.cannotDo ?? "",
+      deliverable: six.deliverable ?? "",
+      reviewer: six.reviewer ?? "",
     });
     setPlaybookEditorOpen(true);
   };
@@ -364,17 +486,20 @@ export function WorkflowsPage() {
     setStreamStatus("running");
     setLaunching(true);
     setToolActivity([]);
+    toolActivityRef.current = [];
     setPendingPermissions([]);
     setUiCards([]);
     activeSessionIdRef.current = "";
 
     const sessionKey = launchSessionKey || makeSessionKey();
     setLaunchSessionKey(sessionKey);
+    const startedAt = Date.now();
 
     const prompt = [
       `## ${playbook.title}`,
       playbook.content,
       "",
+      buildCardSixSection(playbook),
       values.instructions?.trim() ? `**附加指令：**\n${values.instructions.trim()}` : "",
     ]
       .filter(Boolean)
@@ -407,18 +532,18 @@ export function WorkflowsPage() {
           if (event.type === "tool_call_started") {
             const payload = (event.payload ?? {}) as Record<string, unknown>;
             const name = String(payload.name ?? "tool");
-            setToolActivity((current) => [...current, { name, status: "running" }]);
+            toolActivityRef.current = [...toolActivityRef.current, { name, status: "running" }];
+            setToolActivity(toolActivityRef.current);
           }
           if (event.type === "tool_call_finished") {
             const payload = (event.payload ?? {}) as Record<string, unknown>;
             const name = String(payload.name ?? "tool");
-            setToolActivity((current) =>
-              current.map((item) =>
-                item.name === name && item.status === "running"
-                  ? { ...item, status: payload.error ? "failed" : "finished" }
-                  : item,
-              ),
+            toolActivityRef.current = toolActivityRef.current.map((item) =>
+              item.name === name && item.status === "running"
+                ? { ...item, status: payload.error ? "failed" : "finished" }
+                : item,
             );
+            setToolActivity(toolActivityRef.current);
             if (name === "ui_card") {
               const output = String(payload.output ?? "").trim();
               if (output) {
@@ -438,7 +563,11 @@ export function WorkflowsPage() {
           }
           if (event.type === "turn_completed") {
             setStreamStatus("completed");
-            recordRun(playbook, sessionKey, "completed");
+            recordRun(playbook, sessionKey, "completed", {
+              turnId: submitted.turn_id,
+              durationMs: Date.now() - startedAt,
+              tools: toolActivityRef.current,
+            });
           }
         },
       );
@@ -449,7 +578,11 @@ export function WorkflowsPage() {
       if (!controller.signal.aborted) {
         setStreamStatus("error");
         setLaunching(false);
-        recordRun(playbook, sessionKey, "error");
+        recordRun(playbook, sessionKey, "error", {
+          turnId: launchSessionRef.current?.turnId,
+          durationMs: Date.now() - startedAt,
+          tools: toolActivityRef.current,
+        });
         showError(antMessage, error, t("workflows.launchRunFailed"));
       }
     } finally {
@@ -504,6 +637,32 @@ export function WorkflowsPage() {
     onError: (error: Error) => showError(antMessage, error, t("workflows.permissionFailed")),
   });
 
+  /** Retry the launch turn in the same session (Step 6). */
+  const retryRunMutation = useMutation({
+    mutationFn: async ({ sessionId, turnId }: { sessionId: string; turnId: string }) =>
+      retrySessionTurn(token || null, sessionId, turnId),
+    onSuccess: () => {
+      antMessage.success(t("workflows.retryQueued"));
+      if (activeSessionIdRef.current) {
+        void refreshPermissions(activeSessionIdRef.current);
+      }
+    },
+    onError: (error: Error) => showError(antMessage, error, t("workflows.retryFailed")),
+  });
+
+  /** Resume the launch turn (recover from a paused/interrupted state) (Step 6). */
+  const resumeRunMutation = useMutation({
+    mutationFn: async ({ sessionId, turnId }: { sessionId: string; turnId: string }) =>
+      resumeSessionTurn(token || null, sessionId, turnId),
+    onSuccess: () => {
+      antMessage.success(t("workflows.resumeQueued"));
+      if (activeSessionIdRef.current) {
+        void refreshPermissions(activeSessionIdRef.current);
+      }
+    },
+    onError: (error: Error) => showError(antMessage, error, t("workflows.resumeFailed")),
+  });
+
   useEffect(() => {
     return () => {
       streamAbortRef.current?.abort();
@@ -514,7 +673,12 @@ export function WorkflowsPage() {
     persistRunHistory(runHistory);
   }, [runHistory]);
 
-  const recordRun = (playbook: Note, sessionKey: string, status: "completed" | "error") => {
+  const recordRun = (
+    playbook: Note,
+    sessionKey: string,
+    status: "completed" | "error",
+    extra?: { turnId?: string; durationMs?: number; tools?: ToolActivity[] },
+  ) => {
     setRunHistory((current) =>
       [
         {
@@ -523,6 +687,9 @@ export function WorkflowsPage() {
           sessionKey,
           status,
           timestamp: new Date().toISOString(),
+          turnId: extra?.turnId,
+          durationMs: extra?.durationMs,
+          tools: extra?.tools?.length ? extra.tools : undefined,
         },
         ...current,
       ].slice(0, RUN_HISTORY_MAX),
@@ -614,14 +781,35 @@ export function WorkflowsPage() {
                   >
                     <List.Item.Meta
                       title={
-                        <Space size={6}>
+                        <Space size={6} wrap>
                           <span>{run.playbookTitle}</span>
                           <Tag color={run.status === "completed" ? "green" : "red"}>
                             {run.status === "completed" ? t("workflows.runCompleted") : t("workflows.runFailed")}
                           </Tag>
+                          {run.durationMs ? <Text type="secondary" style={{ fontSize: 12 }}>{formatDuration(run.durationMs)}</Text> : null}
                         </Space>
                       }
-                      description={new Date(run.timestamp).toLocaleString()}
+                      description={
+                        <Space direction="vertical" size={2}>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            {new Date(run.timestamp).toLocaleString()}
+                          </Text>
+                          {run.tools?.length ? (
+                            <Space size={[4, 4]} wrap>
+                              {run.tools.slice(0, 8).map((tool, index) => (
+                                <Tag
+                                  key={`${tool.name}-${index}`}
+                                  color={tool.status === "running" ? "processing" : tool.status === "failed" ? "red" : "green"}
+                                  style={{ fontSize: 11 }}
+                                >
+                                  {tool.name}
+                                </Tag>
+                              ))}
+                              {run.tools.length > 8 ? <Text type="secondary" style={{ fontSize: 11 }}>+{run.tools.length - 8}</Text> : null}
+                            </Space>
+                          ) : null}
+                        </Space>
+                      }
                     />
                   </List.Item>
                 )}
@@ -807,6 +995,36 @@ export function WorkflowsPage() {
               {streamStatus === "running" && !streamOutput ? <Spin size="small" /> : null}
               {streamOutput ? <MarkdownContent content={streamOutput} /> : null}
               {streamStatus === "error" ? <Alert type="error" message={t("workflows.launchError")} showIcon /> : null}
+              {streamStatus === "error" && launchSessionRef.current ? (
+                <Space style={{ marginTop: 12 }}>
+                  <Button
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    loading={retryRunMutation.isPending}
+                    onClick={() =>
+                      retryRunMutation.mutate({
+                        sessionId: launchSessionRef.current!.sessionId,
+                        turnId: launchSessionRef.current!.turnId,
+                      })
+                    }
+                  >
+                    {t("workflows.retryRun")}
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<PlayCircleOutlined />}
+                    loading={resumeRunMutation.isPending}
+                    onClick={() =>
+                      resumeRunMutation.mutate({
+                        sessionId: launchSessionRef.current!.sessionId,
+                        turnId: launchSessionRef.current!.turnId,
+                      })
+                    }
+                  >
+                    {t("workflows.resumeRun")}
+                  </Button>
+                </Space>
+              ) : null}
             </Card>
           ) : null}
           {uiCards.length > 0 ? (
@@ -815,8 +1033,6 @@ export function WorkflowsPage() {
                 <UiCardView
                   key={emission.id}
                   card={emission.card}
-                  sessionId={activeSessionIdRef.current}
-                  submitting={false}
                   onSubmitCard={(action) => {
                     if (!activeSessionIdRef.current) {
                       return;
@@ -828,7 +1044,11 @@ export function WorkflowsPage() {
                       { queueMode: "follow_up" },
                     );
                   }}
-                  t={t}
+                  labels={{
+                    cardTitle: t("workflows.cardTitle"),
+                    cardSubmit: t("workflows.cardSubmit"),
+                    cardFieldRequired: t("workflows.cardFieldRequired"),
+                  }}
                 />
               ))}
             </Space>
@@ -942,6 +1162,26 @@ export function WorkflowsPage() {
           >
             <Input.TextArea rows={12} placeholder={t("workflows.playbookContentPlaceholder")} />
           </Form.Item>
+          <Divider plain>{t("workflows.cardSixTitle")}</Divider>
+          <Paragraph type="secondary">{t("workflows.cardSixHint")}</Paragraph>
+          <Form.Item name="serviceWhom" label={t("workflows.cardServiceWhom")}>
+            <Input placeholder={t("workflows.cardServiceWhomPlaceholder")} />
+          </Form.Item>
+          <Form.Item name="canRead" label={t("workflows.cardCanRead")}>
+            <Input placeholder={t("workflows.cardCanReadPlaceholder")} />
+          </Form.Item>
+          <Form.Item name="canCall" label={t("workflows.cardCanCall")}>
+            <Input placeholder={t("workflows.cardCanCallPlaceholder")} />
+          </Form.Item>
+          <Form.Item name="cannotDo" label={t("workflows.cardCannotDo")}>
+            <Input placeholder={t("workflows.cardCannotDoPlaceholder")} />
+          </Form.Item>
+          <Form.Item name="deliverable" label={t("workflows.cardDeliverable")}>
+            <Input placeholder={t("workflows.cardDeliverablePlaceholder")} />
+          </Form.Item>
+          <Form.Item name="reviewer" label={t("workflows.cardReviewer")}>
+            <Input placeholder={t("workflows.cardReviewerPlaceholder")} />
+          </Form.Item>
           <Space>
             <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saveMutation.isPending}>
               {t("workflows.savePlaybook")}
@@ -1011,86 +1251,3 @@ function RenderContextLayers({
   );
 }
 
-/**
- * UiCardView renders a structured interactive card emitted by the ui_card
- * tool (Step 4): a JSON-Schema-like form, a button group, or a markdown card.
- * Submissions are forwarded to the running session as follow-up messages so
- * the agent sees the user's structured input as text.
- */
-function UiCardView({
-  card,
-  sessionId,
-  submitting,
-  onSubmitCard,
-  t,
-}: {
-  card: UiCardData;
-  sessionId: string;
-  submitting: boolean;
-  onSubmitCard: (action: string) => void;
-  t: (key: string) => string;
-}) {
-  const [form] = Form.useForm<Record<string, string>>();
-
-  if (card.kind === "card" || (!card.fields?.length && !card.actions?.length)) {
-    return (
-      <Card size="small" title={card.title || t("workflows.cardTitle")}>
-        {card.content ? <MarkdownContent content={card.content} /> : null}
-      </Card>
-    );
-  }
-
-  if (card.kind === "button_group" || (card.actions?.length && !card.fields?.length)) {
-    return (
-      <Card size="small" title={card.title || t("workflows.cardTitle")}>
-        {card.content ? <Paragraph type="secondary">{card.content}</Paragraph> : null}
-        <Space wrap>
-          {(card.actions ?? []).map((action) => (
-            <Button
-              key={action.id ?? action.label}
-              type="primary"
-              ghost
-              loading={submitting}
-              onClick={() => onSubmitCard(action.value ?? action.label)}
-            >
-              {action.label}
-            </Button>
-          ))}
-        </Space>
-      </Card>
-    );
-  }
-
-  // Form kind: render fields from the schema.
-  return (
-    <Card size="small" title={card.title || t("workflows.cardTitle")}>
-      {card.content ? <Paragraph type="secondary">{card.content}</Paragraph> : null}
-      <Form form={form} layout="vertical" onFinish={(values) => onSubmitCard(JSON.stringify(values))}>
-        {(card.fields ?? []).map((field) => (
-          <Form.Item
-            key={field.name}
-            name={field.name}
-            label={field.label || field.name}
-            rules={field.required ? [{ required: true, message: t("workflows.cardFieldRequired") }] : []}
-          >
-            {field.type === "textarea" ? (
-              <Input.TextArea rows={3} placeholder={field.placeholder} />
-            ) : field.type === "select" ? (
-              <Select
-                placeholder={field.placeholder}
-                options={(field.options ?? []).map((option) => ({ label: option.label, value: option.value }))}
-              />
-            ) : field.type === "number" ? (
-              <Input type="number" placeholder={field.placeholder} />
-            ) : (
-              <Input placeholder={field.placeholder} />
-            )}
-          </Form.Item>
-        ))}
-        <Button type="primary" htmlType="submit" icon={<SendOutlined />} loading={submitting}>
-          {t("workflows.cardSubmit")}
-        </Button>
-      </Form>
-    </Card>
-  );
-}

@@ -119,20 +119,23 @@
 
 > 目标：把 Workflows 从「godex 内部板块」演进为「可嵌入业务工作台的 agent 交互层」，并补齐与 Codex Harness 对齐的产品能力。
 
-### Step 5：剧本 schema 补「AI 工号卡」六问
+### Step 5（✅ 已完成）：剧本 schema 补「AI 工号卡」六问
 - 剧本（note）增加结构化元数据：`service_whom`（服务谁）/ `can_read`（可读什么）/ `can_call`（可调什么）/ `cannot_do`（不能做什么）/ `deliverable`（交付什么）/ `reviewer`（谁验收）。
-- 编辑器 Modal 增加对应字段；启动时把这些字段注入 prompt，并据此约束工具权限（bundle/scope 联动）。
-- 模板库补齐六问示例。
+- **存储**：六问序列化为 content 的 YAML front-matter（`---\n...\n---`），零后端改动；`yaml` 库（已在依赖中）负责序列化/解析。
+- 编辑器 Modal 增加六个字段；「从模板新建」回填；保存时写入 front-matter，编辑时解析回填（`parseCardFrontMatter` 剥离 front-matter 只留正文）。
+- 启动时把这些字段注入 prompt（`buildCardSixSection` → 「AI 工号卡（边界与验收）」段落）。
+- 模板库 4 个模板均补六问示例。
+- 工具权限联动（bundle/scope）留作后续：六问的 can_read/can_call/cannot_do 目前以 prompt 约束为主，未做硬权限映射。
 
-### Step 6：Workflows 内嵌过程复盘
-- Launch 页签对失败 run 提供 retry / resume 按钮（复用 `retrySessionTurn` / `resumeSessionTurn`）。
-- 运行历史卡片展示完成状态 + 耗时 + 关键工具摘要，无需跳转聊天。
-- 可选：展示 compaction / 上下文预算状态（复用 Context Inspector 数据）。
+### Step 6（✅ 已完成）：Workflows 内嵌过程复盘
+- Launch 失败结果卡片提供 **retry / resume** 按钮（复用 `retrySessionTurn` / `resumeSessionTurn`）。
+- 运行历史记录增加 `turnId` / `durationMs` / `tools`（工具活动快照）；卡片展示耗时（`formatDuration`）+ 工具摘要 chips（最多 8 个 + 计数）。
+- 运行历史仍存 localStorage（`godex:workflows:run-history`，上限 20 条）。
 
-### Step 7：「嵌入第三方」产品化
-- 把 Workflows 板块组件化：提供可复用的 React 组件（PlaybookGrid / KnowledgeRecall / LaunchPanel / UiCardView），第三方 UI 可整体嵌入。
-- 强化 Step 3 集成指南为可运行模板：最小嵌入式 UI（如一个给销售/运营用的业务卡片页）demo。
-- 可选：提供 App Server 风格的双向事件流 + 审批回执的结构化 envelope（替代当前"文本即协议"的 follow_up），支持按钮回执等富语义。
+### Step 7（✅ 已完成）：「嵌入第三方」产品化
+- **组件化**：抽出 `UiCardView` 到 `ui/web/src/features/workflows/components/UiCardView.tsx`（纯展示组件，`onSubmitCard` 回调 + 可选 `labels` 默认英文，不绑定 godex i18n）；barrel export `index.ts` 导出 `UiCardData`/`UiCardField`/`UiCardAction`。
+- **可运行嵌入模板**：`examples/embed-ui/README.md` —— 最小嵌入式 UI 骨架（建会话/发消息/SSE/卡片/审批接线），第三方 UI 可 drop 进自己的业务页面。
+- **可选（未做）**：App Server 风格的结构化 envelope（替代"文本即协议"的 follow_up）。当前 ui_card 提交走 follow_up 文本已可用，富语义回执留作后续。
 
 ### 定位叙事
 - 文章：ToB 商业叙事（"AI 员工"），强调"模型不值钱、业务上下文和交付标准值钱"。

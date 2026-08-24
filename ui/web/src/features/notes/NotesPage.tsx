@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Alert, App as AntApp, Button, Card, Empty, Form, Input, Popconfirm, Select, Space, Tabs, Tag, Typography } from "antd";
-import { DatabaseOutlined, DeleteOutlined, FileTextOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { Alert, App as AntApp, Button, Card, Empty, Form, Input, Popconfirm, Select, Segmented, Space, Switch, Tag, Typography } from "antd";
+import { CheckOutlined, DatabaseOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import dayjs from "dayjs";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { useI18n } from "../../i18n";
 import { deleteNote, getMeta, getNoteRelatedMemories, listNotes, saveNote } from "../../lib/api";
@@ -19,6 +20,8 @@ type NoteFormValues = {
   content: string;
 };
 
+type ContentView = "edit" | "preview";
+
 export function NotesPage() {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
@@ -30,7 +33,14 @@ export function NotesPage() {
   const [query, setQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState<string | undefined>();
   const [selectedID, setSelectedID] = useState<string | null>(null);
+  const [showSummary, setShowSummary] = useState(false);
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [contentView, setContentView] = useState<ContentView>("edit");
   const [form] = Form.useForm<NoteFormValues>();
+  const titleValue = Form.useWatch("title", form) as string | undefined;
+  const summaryValue = Form.useWatch("summary", form) as string | undefined;
+  const tagsValue = Form.useWatch("tags", form) as string[] | undefined;
+  const contentValue = Form.useWatch("content", form) as string | undefined;
 
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
   const authRequired = metaQuery.data?.auth_required ?? false;
@@ -67,7 +77,7 @@ export function NotesPage() {
 
   useEffect(() => {
     if (!selected) {
-      form.setFieldsValue({ id: "", title: "", summary: "", tags: "", content: "" });
+      form.setFieldsValue({ id: "", title: "", summary: "", tags: [], content: "" });
       return;
     }
     form.setFieldsValue({
@@ -90,6 +100,7 @@ export function NotesPage() {
       }),
     onSuccess: async (note) => {
       setSelectedID(note.id);
+      setEditingMeta(false);
       void message.success(`Saved ${note.title}.`);
       await queryClient.invalidateQueries({ queryKey: ["notes", token] });
     },
@@ -115,13 +126,24 @@ export function NotesPage() {
 
   const createNew = () => {
     setSelectedID(null);
+    setEditingMeta(true);
+    setContentView("edit");
     form.setFieldsValue({
       id: "",
-      title: "Untitled note",
+      title: t("notes.untitled"),
       summary: "",
-      tags: "",
-      content: "# Untitled note\n\n",
+      tags: [],
+      content: "",
     });
+  };
+
+  const finishEditingMeta = async () => {
+    try {
+      await form.validateFields(["title", "summary", "tags"]);
+      setEditingMeta(false);
+    } catch {
+      // validation errors shown inline; stay in edit mode
+    }
   };
 
   const askAboutNote = (note: Note) => {
@@ -140,6 +162,8 @@ export function NotesPage() {
     );
   }
 
+  const updatedTime = selected ? formatNoteTime(selected.updated_at) : "";
+
   return (
     <main className="page-shell notes-page">
       <div className="notes-layout">
@@ -151,16 +175,22 @@ export function NotesPage() {
             </Button>
           }
         >
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
-            <Input.Search value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("notes.searchPlaceholder")} allowClear />
-            <Select
-              value={selectedTag}
-              options={tagOptions}
-              onChange={(value) => setSelectedTag(value)}
-              placeholder={t("notes.filterTag")}
-              allowClear
-              style={{ width: "100%" }}
-            />
+          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Input.Search value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("notes.searchPlaceholder")} allowClear style={{ width: "100%" }} />
+            <div className="notes-toolbar-row">
+              <Select
+                value={selectedTag}
+                options={tagOptions}
+                onChange={(value) => setSelectedTag(value)}
+                placeholder={t("notes.filterTag")}
+                allowClear
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <div className="notes-summary-toggle">
+                <Typography.Text type="secondary" className="notes-summary-toggle-label">{t("notes.showSummary")}</Typography.Text>
+                <Switch size="small" checked={showSummary} onChange={setShowSummary} aria-label={t("notes.showSummary")} />
+              </div>
+            </div>
             {notesQuery.isLoading ? <Typography.Text type="secondary">{t("app.loading")}</Typography.Text> : null}
             {notes.length === 0 && !notesQuery.isLoading ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("notes.empty")}>
@@ -169,36 +199,52 @@ export function NotesPage() {
                 </Button>
               </Empty>
             ) : (
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <div className="notes-list">
                 {notes.map((note) => (
                   <button
                     key={note.id}
                     type="button"
                     className={`notes-list-item${note.id === selected?.id ? " notes-list-item-active" : ""}`}
-                    onClick={() => setSelectedID(note.id)}
+                    onClick={() => {
+                      setSelectedID(note.id);
+                      setEditingMeta(false);
+                    }}
                   >
-                    <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                      <Space size={6} wrap>
-                        <FileTextOutlined />
-                        <Typography.Text strong ellipsis={{ tooltip: note.title }}>
-                          {note.title}
-                        </Typography.Text>
-                      </Space>
-                      {note.summary ? <Typography.Text type="secondary">{note.summary}</Typography.Text> : null}
-                      <Space size={4} wrap>
-                        {(note.tags ?? []).slice(0, 4).map((tag) => <Tag key={tag}>{tag}</Tag>)}
-                      </Space>
-                    </Space>
+                    <div className="notes-list-item-title">
+                      <FileTextOutlined className="notes-list-item-icon" />
+                      <Typography.Text strong ellipsis={{ tooltip: note.title }} style={{ flex: 1, minWidth: 0 }}>
+                        {note.title}
+                      </Typography.Text>
+                      <Typography.Text type="secondary" className="notes-list-item-time">
+                        {formatNoteTime(note.updated_at)}
+                      </Typography.Text>
+                    </div>
+                    {(note.tags ?? []).length > 0 ? (
+                      <div className="notes-list-item-tags">
+                        {(note.tags ?? []).slice(0, 4).map((tag) => (
+                          <Tag key={tag}>{tag}</Tag>
+                        ))}
+                      </div>
+                    ) : null}
+                    {showSummary && note.summary ? (
+                      <Typography.Text type="secondary" className="notes-list-item-summary" ellipsis={{ tooltip: note.summary }}>
+                        {note.summary}
+                      </Typography.Text>
+                    ) : null}
                   </button>
                 ))}
-              </Space>
+              </div>
             )}
           </Space>
         </Card>
+
         <Card
-          title={selected ? selected.title : t("notes.newNote")}
+          title={selected ? titleValue || t("notes.newNote") : t("notes.newNote")}
           extra={
-            <Space>
+            <Space wrap>
+              <Button type="primary" icon={<SaveOutlined />} htmlType="submit" form="note-form" aria-label={t("notes.save")} loading={saveMutation.isPending}>
+                {t("notes.save")}
+              </Button>
               <Button icon={<PlusOutlined />} aria-label={t("notes.newNote")} onClick={createNew}>
                 {t("notes.newNote")}
               </Button>
@@ -217,43 +263,72 @@ export function NotesPage() {
             </Space>
           }
         >
-          <Form form={form} layout="vertical" onFinish={(values) => saveMutation.mutate(values)}>
+          <Form form={form} id="note-form" layout="vertical" onFinish={(values) => saveMutation.mutate(values)}>
             <Form.Item name="id" hidden><Input /></Form.Item>
-            <Form.Item name="title" label={t("notes.title")} rules={[{ required: true }]}>
-              <Input />
+
+            {editingMeta ? (
+              <div className="notes-meta">
+                <div className="notes-meta-fields">
+                  <Form.Item name="title" label={t("notes.title")} rules={[{ required: true }]}>
+                    <Input />
+                  </Form.Item>
+                  <Form.Item name="summary" label={t("notes.summary")}>
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                  <Form.Item name="tags" label={t("notes.tags")}>
+                    <Select mode="tags" open={false} tokenSeparators={[","]} placeholder={t("notes.tagsPlaceholder")} />
+                  </Form.Item>
+                </div>
+                <Button type="text" icon={<CheckOutlined />} aria-label={t("notes.doneEditMeta")} onClick={() => void finishEditingMeta()} />
+              </div>
+            ) : (
+              <div className="notes-meta">
+                <div className="notes-meta-preview">
+                  <Space direction="vertical" size={6} style={{ flex: 1, minWidth: 0 }}>
+                    {summaryValue ? (
+                      <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                        {summaryValue}
+                      </Typography.Paragraph>
+                    ) : (
+                      <Typography.Text type="secondary">{t("notes.noSummary")}</Typography.Text>
+                    )}
+                    <Space size={6} wrap>
+                      {(tagsValue ?? []).map((tag) => (
+                        <Tag key={tag}>{tag}</Tag>
+                      ))}
+                      {updatedTime ? (
+                        <Typography.Text type="secondary" className="notes-meta-time">
+                          {t("notes.updatedAt", { time: updatedTime })}
+                        </Typography.Text>
+                      ) : null}
+                    </Space>
+                  </Space>
+                  <Button type="text" icon={<EditOutlined />} aria-label={t("notes.editMeta")} onClick={() => setEditingMeta(true)} />
+                </div>
+              </div>
+            )}
+
+            <div className="notes-content-toolbar">
+              <Segmented
+                size="small"
+                value={contentView}
+                onChange={(value) => setContentView(value as ContentView)}
+                options={[
+                  { label: t("notes.edit"), value: "edit" },
+                  { label: t("notes.preview"), value: "preview" },
+                ]}
+              />
+            </div>
+            <Form.Item name="content" rules={[{ required: true }]} hidden={contentView !== "edit"} style={{ marginBottom: 0 }}>
+              <Input.TextArea autoSize={{ minRows: 18, maxRows: 44 }} placeholder={t("notes.contentPlaceholder")} />
             </Form.Item>
-            <Form.Item name="summary" label={t("notes.summary")}>
-              <Input />
-            </Form.Item>
-            <Form.Item name="tags" label={t("notes.tags")}>
-              <Select mode="tags" open={false} tokenSeparators={[","]} placeholder={t("notes.tagsPlaceholder")} />
-            </Form.Item>
-            <Tabs
-              items={[
-                {
-                  key: "edit",
-                  label: t("notes.edit"),
-                  children: (
-                    <Form.Item name="content" label={t("notes.content")} rules={[{ required: true }]}>
-                      <Input.TextArea rows={16} />
-                    </Form.Item>
-                  ),
-                },
-                {
-                  key: "preview",
-                  label: t("notes.preview"),
-                  children: (
-                    <div className="notes-preview">
-                      <MarkdownContent content={Form.useWatch("content", form) || ""} forceMarkdown />
-                    </div>
-                  ),
-                },
-              ]}
-            />
-            <Button type="primary" htmlType="submit" icon={<SaveOutlined />} aria-label={t("notes.save")} loading={saveMutation.isPending}>
-              {t("notes.save")}
-            </Button>
+            {contentView === "preview" ? (
+              <div className="notes-preview">
+                <MarkdownContent content={contentValue || ""} forceMarkdown />
+              </div>
+            ) : null}
           </Form>
+
           {selected && relatedQuery.data && relatedQuery.data.length > 0 ? (
             <Card size="small" title={<><DatabaseOutlined /> Related memories</>} style={{ marginTop: 16 }}>
               <Space direction="vertical" size={4} style={{ width: "100%" }}>
@@ -269,6 +344,17 @@ export function NotesPage() {
       </div>
     </main>
   );
+}
+
+function formatNoteTime(value?: string): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return dayjs(date).format("MM-DD HH:mm");
 }
 
 function splitTags(value?: string | string[]): string[] {

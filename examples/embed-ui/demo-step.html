@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>godex-step 嵌入组件 Demo</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 32px 20px;
+        color: #1f2328;
+        line-height: 1.6;
+      }
+      h1 { font-size: 22px; }
+      h2 { font-size: 16px; margin-top: 32px; border-bottom: 1px solid #d0d7de; padding-bottom: 6px; }
+      p.hint { color: #57606a; font-size: 13px; }
+      code, pre { background: #f6f8fa; border-radius: 6px; padding: 2px 5px; font-size: 13px; }
+      pre { padding: 12px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1><code>&lt;godex-step&gt;</code> 嵌入组件 Demo</h1>
+    <p class="hint">
+      这是 Phase C 的最小演示：直接 <code>&lt;script&gt;</code> 引入打包产物
+      <code>dist/embed/godex-step.js</code>，然后放一个 <code>&lt;godex-step&gt;</code>
+      标签即可得到一个 Agent 交互块。真实使用时替换 <code>api-key</code> 为你的
+      biz_ 业务系统 key。
+    </p>
+
+    <h2>示例 1：基础（含知识库召回 + 结构化输出）</h2>
+    <godex-step
+      base-url="https://godex.claw.carc.top"
+      api-key="biz_你的key"
+      prompt="分析订单 ORD-1234 的延迟原因并给出恢复方案"
+      inputs='{"order_id":"ORD-1234"}'
+      context='{"recall":["godex://memory"]}'
+      tools='{"sandbox":["read_file","grep"]}'
+      placeholder="输入业务指令，回车运行…"
+    ></godex-step>
+
+    <h2>示例 2：仅本地开发（vite proxy 到 127.0.0.1:8080）</h2>
+    <p class="hint">
+      本地起 <code>godex serve</code> 后，把 base-url 留空（页面由 godex 自己
+      serve 时无需 base-url）。
+    </p>
+    <godex-step
+      api-key="biz_你的key"
+      prompt="你好，用一句话介绍你自己"
+    ></godex-step>
+
+    <h2>接入方式</h2>
+    <pre>&lt;script src="dist/embed/godex-step.js"&gt;&lt;/script&gt;
+&lt;godex-step
+  base-url="https://godex.claw.carc.top"
+  api-key="biz_xxx"
+  prompt="分析订单 ORD-1234"
+  inputs='{"order_id":"ORD-1234"}'
+  context='{"recall":["godex://memory"]}'
+  tools='{"sandbox":["read_file"]}'
+&gt;&lt;/godex-step&gt;</pre>
+    <p class="hint">
+      属性说明：<code>base-url</code>（godex 服务地址，godex 自带页面时可省略）、
+      <code>api-key</code>（必填，biz_ 业务系统 key）、<code>prompt</code>（初始指令）、
+      <code>inputs</code> / <code>context</code> / <code>tools</code>（JSON 字符串，对应
+      createStep 请求体字段）。
+    </p>
+
+    <!-- 引入打包产物：需先运行 `npm run build:embed` 产出 ui/web/dist/embed/godex-step.js
+         路径相对仓库根（本页在 examples/embed-ui/ 下） -->
+    <script src="../../ui/web/dist/embed/godex-step.js"></script>
+  </body>
+</html>

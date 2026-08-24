@@ -126,6 +126,17 @@ func handleAgentStep(w http.ResponseWriter, r *http.Request, service *backend.Se
 	}
 	sessionID := opened.SessionID
 
+	// Activate the per-step tool set: the business key's binding (MCP server
+	// allowlist + sandbox tools) intersected with the request's tool filters.
+	// Minimal permission: the key scope wins, the request can only narrow it.
+	if key := BizKeyFromContext(ctx); key != nil {
+		allowedServers, allowedSandbox := resolveStepTools(key, req.Tools)
+		if err := service.SetActiveSessionTools(sessionID, allowedServers, allowedSandbox); err != nil {
+			writeStepError(w, statusForSessionError(err), "session_error", err, stepID, sessionID)
+			return
+		}
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
@@ -279,4 +290,65 @@ func writeStepError(w http.ResponseWriter, status int, code string, err error, s
 		StepID:    stepID,
 		SessionID: sessionID,
 	}})
+}
+
+// resolveStepTools computes the final MCP server allowlist and sandbox tool
+// allowlist for a step: the business key's binding is the ceiling, and the
+// request's tools field can only narrow it (minimal permission). A "*" entry
+// means "all within the key's scope". Request entries support "crm/*" (whole
+// server), "crm" (server) and "!crm" / "!crm/*" / "!read_file" (exclude).
+func resolveStepTools(key *usage.BizAPIKey, req *stepTools) (allowedServers, allowedSandbox []string) {
+	servers := append([]string{}, key.MCPServers...)
+	sandbox := append([]string{}, key.SandboxTools...)
+	if req == nil {
+		return servers, sandbox
+	}
+	if len(req.MCP) > 0 {
+		servers = intersectStepTools(servers, req.MCP)
+	}
+	if len(req.Sandbox) > 0 {
+		sandbox = intersectStepTools(sandbox, req.Sandbox)
+	}
+	return servers, sandbox
+}
+
+// intersectStepTools keeps base items that the requested list allows.
+func intersectStepTools(base, requested []string) []string {
+	var out []string
+	for _, item := range base {
+		if stepListAllows(requested, item) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// stepListAllows reports whether a requested list (with "*" / "!x" / "x/*"
+// entries) permits the given item. Exclusions win over inclusions.
+func stepListAllows(list []string, item string) bool {
+	allowAll := false
+	for _, entry := range list {
+		if entry == "*" {
+			allowAll = true
+		}
+	}
+	for _, entry := range list {
+		if !strings.HasPrefix(entry, "!") {
+			continue
+		}
+		exclude := strings.TrimPrefix(entry, "!")
+		exclude = strings.TrimSuffix(exclude, "/*")
+		if exclude == item || exclude == "*" {
+			return false
+		}
+	}
+	if allowAll {
+		return true
+	}
+	for _, entry := range list {
+		if entry == item || entry == item+"/*" {
+			return true
+		}
+	}
+	return false
 }

@@ -88,3 +88,39 @@ func TestStepToolKindClassifiesMCPVsSandbox(t *testing.T) {
 		t.Fatalf("expected sandbox, got %q", got)
 	}
 }
+
+// TestResolveStepToolsIntersectsKeyAndRequest verifies the final tool scope is
+// the key binding intersected with the request filters (minimal permission).
+func TestResolveStepToolsIntersectsKeyAndRequest(t *testing.T) {
+	key := &usage.BizAPIKey{
+		MCPServers:   []string{"crm", "kb"},
+		SandboxTools: []string{"read_file", "bash", "grep"},
+	}
+	req := &stepTools{
+		MCP:     []string{"crm", "!kb"},
+		Sandbox: []string{"read_file", "!bash"},
+	}
+	servers, sandbox := resolveStepTools(key, req)
+	if len(servers) != 1 || servers[0] != "crm" {
+		t.Fatalf("expected servers=[crm], got %+v", servers)
+	}
+	if len(sandbox) != 1 || sandbox[0] != "read_file" {
+		t.Fatalf("expected sandbox=[read_file], got %+v", sandbox)
+	}
+}
+
+// TestResolveStepToolsKeyScopeIsCeiling verifies with no request filters the
+// key's binding is used as-is.
+func TestResolveStepToolsKeyScopeIsCeiling(t *testing.T) {
+	key := &usage.BizAPIKey{
+		MCPServers:   []string{"crm"},
+		SandboxTools: []string{"read_file"},
+	}
+	servers, sandbox := resolveStepTools(key, nil)
+	if len(servers) != 1 || servers[0] != "crm" {
+		t.Fatalf("expected servers=[crm], got %+v", servers)
+	}
+	if len(sandbox) != 1 || sandbox[0] != "read_file" {
+		t.Fatalf("expected sandbox=[read_file], got %+v", sandbox)
+	}
+}

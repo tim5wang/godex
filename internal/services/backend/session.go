@@ -940,6 +940,25 @@ func (s *Service) requireSession(sessionID string) (*sessionState, error) {
 	return session, nil
 }
 
+// SetActiveSessionTools narrows a session's active tool set to the tools
+// permitted by a business key (Agent Step Platform): only MCP tools from
+// allowed servers plus sandbox tools in the allowlist. Always-active tools
+// are preserved. The session must already be open (OpenSession first).
+func (s *Service) SetActiveSessionTools(sessionID string, allowedServers []string, allowedSandbox []string) error {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return err
+	}
+	session.mu.RLock()
+	agentRef := session.agent
+	session.mu.RUnlock()
+	if agentRef == nil {
+		return fmt.Errorf("session %s has no agent", sessionID)
+	}
+	agentRef.ApplyToolAllowlist(allowedServers, allowedSandbox)
+	return nil
+}
+
 func (s *Service) runningState(sessionID string) bool {
 	s.mu.Lock()
 	session := s.sessions[sessionID]

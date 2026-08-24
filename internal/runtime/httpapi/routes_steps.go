@@ -21,13 +21,18 @@ import (
 
 // stepRequest is the body of POST /v1/agent-steps.
 type stepRequest struct {
-	StepID      string `json:"step_id,omitempty"`
-	Prompt      string `json:"prompt"`
-	Inputs      map[string]any `json:"inputs,omitempty"`
-	Tools       *stepTools     `json:"tools,omitempty"`
-	Model       string         `json:"model,omitempty"`
-	TimeoutSec  int            `json:"timeout_seconds,omitempty"`
+	StepID           string               `json:"step_id,omitempty"`
+	Prompt           string               `json:"prompt"`
+	Inputs           map[string]any       `json:"inputs,omitempty"`
+	Context          *stepContext         `json:"context,omitempty"`
+	Tools            *stepTools           `json:"tools,omitempty"`
+	Model            string               `json:"model,omitempty"`
+	TimeoutSec       int                  `json:"timeout_seconds,omitempty"`
 	StructuredOutput *stepStructuredOutput `json:"structured_output,omitempty"`
+}
+
+type stepContext struct {
+	Recall []string `json:"recall,omitempty"` // recall provider names (e.g. ["sales_crm", "godex://memory"])
 }
 
 type stepTools struct {
@@ -111,6 +116,13 @@ func handleAgentStep(w http.ResponseWriter, r *http.Request, service *backend.Se
 	// Build the prompt: business inputs are injected as a marked data block,
 	// isolated from instructions (prompt-injection defense, details §4).
 	prompt := buildStepPrompt(req.Prompt, req.Inputs)
+
+	// Recall: append marked knowledge-reference blocks from the requested
+	// providers (graceful degradation — a failing provider never fails the
+	// step).
+	if req.Context != nil && len(req.Context.Recall) > 0 {
+		prompt += recallStep(ctx, service, BizKeyFromContext(ctx), req.Context.Recall, req.Prompt)
+	}
 
 	locator := backend.SessionLocator{
 		Channel: "step",

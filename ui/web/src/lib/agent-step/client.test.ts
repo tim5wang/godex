@@ -100,6 +100,34 @@ describe("StepClient.cancelStep", () => {
   });
 });
 
+describe("StepClient.replyStep", () => {
+  it("POSTs the reply value back to the step session", async () => {
+    const fetchFn = mockFetch((url, init) => {
+      expect(url).toBe("https://godex.example.com/v1/agent-steps/stp_9/reply");
+      expect(init.method).toBe("POST");
+      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer biz_123");
+      const body = JSON.parse(String(init.body));
+      expect(body.value).toEqual({ priority: "high" });
+      expect(body.text).toBe("用户提交的表单");
+      return jsonResponse(200, { step_id: "stp_9", session_id: "ses_9", turn_id: "turn_1", status: "queued" });
+    });
+    const step = new StepClient({ baseUrl: "https://godex.example.com", apiKey: "biz_123", fetch: fetchFn });
+    const result = await step.replyStep("stp_9", { priority: "high" }, { text: "用户提交的表单" });
+    expect(result.status).toBe("queued");
+    expect(result.turn_id).toBe("turn_1");
+  });
+
+  it("propagates non-2xx envelope", async () => {
+    const fetchFn = mockFetch(() => jsonResponse(422, { error: { code: "invalid_reply", message: "bad value" } }));
+    const step = new StepClient({ baseUrl: "https://godex.example.com", apiKey: "biz_123", fetch: fetchFn });
+    await expect(step.replyStep("stp_9", "x")).rejects.toMatchObject({
+      name: "StepAPIError",
+      status: 422,
+      code: "invalid_reply",
+    });
+  });
+});
+
 describe("createStepClient factory", () => {
   it("returns a configured StepClient and normalizes trailing slashes", async () => {
     const fetchFn = mockFetch((url) => {

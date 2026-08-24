@@ -236,13 +236,18 @@ func (s *Service) CreateBizKey(req BizKeyCreateRequest) (*BizKeyCreateResponse, 
 	key := &BizAPIKey{
 		ID:               NewID("biz"),
 		Name:             strings.TrimSpace(req.Name),
+		Description:      req.Description,
+		DefaultPrompt:    req.DefaultPrompt,
 		KeyHash:          sha256Hex(secret),
 		KeyPrefix:        maskKey(secret),
 		Enabled:          true,
 		MCPServers:       req.MCPServers,
 		Providers:        req.Providers,
 		SandboxTools:     req.SandboxTools,
+		Skills:           req.Skills,
+		Packages:         req.Packages,
 		Models:           req.Models,
+		ProjectDir:       req.ProjectDir,
 		BudgetCredits:    req.BudgetCredits,
 		WarningThreshold: req.WarningThreshold,
 		CreatedAt:        now,
@@ -256,6 +261,12 @@ func (s *Service) CreateBizKey(req BizKeyCreateRequest) (*BizKeyCreateResponse, 
 	}
 	if key.SandboxTools == nil {
 		key.SandboxTools = []string{}
+	}
+	if key.Skills == nil {
+		key.Skills = []string{}
+	}
+	if key.Packages == nil {
+		key.Packages = []string{}
 	}
 	if key.Models == nil {
 		key.Models = []string{}
@@ -289,6 +300,12 @@ func (s *Service) UpdateBizKey(id string, req BizKeyUpdateRequest) (*BizAPIKey, 
 		}
 		key.Name = strings.TrimSpace(*req.Name)
 	}
+	if req.Description != nil {
+		key.Description = *req.Description
+	}
+	if req.DefaultPrompt != nil {
+		key.DefaultPrompt = *req.DefaultPrompt
+	}
 	if req.Enabled != nil {
 		key.Enabled = *req.Enabled
 	}
@@ -301,8 +318,17 @@ func (s *Service) UpdateBizKey(id string, req BizKeyUpdateRequest) (*BizAPIKey, 
 	if req.SandboxTools != nil {
 		key.SandboxTools = *req.SandboxTools
 	}
+	if req.Skills != nil {
+		key.Skills = *req.Skills
+	}
+	if req.Packages != nil {
+		key.Packages = *req.Packages
+	}
 	if req.Models != nil {
 		key.Models = *req.Models
+	}
+	if req.ProjectDir != nil {
+		key.ProjectDir = *req.ProjectDir
 	}
 	if req.BudgetCredits != nil {
 		if *req.BudgetCredits < 0 {

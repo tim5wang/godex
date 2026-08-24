@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/usage"
 )
@@ -17,8 +19,9 @@ import (
 // events (existing GET /sessions/{id}/events). step_id doubles as the session
 // locator key, so the session is deterministically re-resolvable.
 
-// registerStepTrackRoutes registers GET /v1/agent-steps/{id} and
-// POST /v1/agent-steps/{id}/cancel behind biz-key auth.
+// registerStepTrackRoutes registers GET /v1/agent-steps/{id},
+// POST /v1/agent-steps/{id}/cancel and POST /v1/agent-steps/{id}/reply behind
+// biz-key auth.
 func registerStepTrackRoutes(mux *http.ServeMux, usageService *usage.Service, service *backend.Service) {
 	if service == nil {
 		return
@@ -28,6 +31,9 @@ func registerStepTrackRoutes(mux *http.ServeMux, usageService *usage.Service, se
 	})))
 	mux.Handle("POST /v1/agent-steps/{id}/cancel", withBizKeyAuth(usageService, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleCancelStep(w, r, service)
+	})))
+	mux.Handle("POST /v1/agent-steps/{id}/reply", withBizKeyAuth(usageService, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleReplyStep(w, r, service)
 	})))
 }
 
@@ -41,7 +47,7 @@ func handleGetStep(w http.ResponseWriter, r *http.Request, service *backend.Serv
 		writeStepError(w, http.StatusBadRequest, "invalid_request", fmt.Errorf("step_id is required"), "", "")
 		return
 	}
-	opened, err := service.OpenSession(r.Context(), stepLocator(stepID))
+	opened, err := service.OpenSession(r.Context(), stepLocator(stepID, bizProjectDir(r)))
 	if err != nil {
 		writeStepError(w, statusForSessionError(err), "step_failed", err, stepID, "")
 		return
@@ -76,7 +82,7 @@ func handleCancelStep(w http.ResponseWriter, r *http.Request, service *backend.S
 		writeStepError(w, http.StatusBadRequest, "invalid_request", fmt.Errorf("step_id is required"), "", "")
 		return
 	}
-	opened, err := service.OpenSession(r.Context(), stepLocator(stepID))
+	opened, err := service.OpenSession(r.Context(), stepLocator(stepID, bizProjectDir(r)))
 	if err != nil {
 		writeStepError(w, statusForSessionError(err), "step_failed", err, stepID, "")
 		return
@@ -101,16 +107,87 @@ func handleCancelStep(w http.ResponseWriter, r *http.Request, service *backend.S
 	})
 }
 
-// stepLocator returns the deterministic session locator for a step id,
-// matching the one used by POST /v1/agent-steps.
-func stepLocator(stepID string) backend.SessionLocator {
-	return backend.SessionLocator{
-		Channel: "step",
-		Key:     stepID,
-		Metadata: map[string]string{
-			"system_key": "step",
-		},
+// stepReplyRequest is the body of POST /v1/agent-steps/{id}/reply: the value a
+// user submitted through a ui_card form / button, injected back into the step
+// session so the agent can continue on the same conversation.
+type stepReplyRequest struct {
+	Value any `json:"value"`
+	Text  string `json:"text,omitempty"`
+}
+
+// handleReplyStep injects a ui_card interaction result back into the step
+// session and continues the agent turn (async; the caller polls the terminal
+// state via GET as usual).
+func handleReplyStep(w http.ResponseWriter, r *http.Request, service *backend.Service) {
+	stepID := strings.TrimSpace(r.PathValue("id"))
+	if stepID == "" {
+		writeStepError(w, http.StatusBadRequest, "invalid_request", fmt.Errorf("step_id is required"), "", "")
+		return
 	}
+	var req stepReplyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeStepError(w, http.StatusBadRequest, "invalid_request", err, stepID, "")
+		return
+	}
+	if req.Value == nil && strings.TrimSpace(req.Text) == "" {
+		writeStepError(w, http.StatusBadRequest, "invalid_request", fmt.Errorf("value or text is required"), stepID, "")
+		return
+	}
+
+	opened, err := service.OpenSession(r.Context(), stepLocator(stepID, bizProjectDir(r)))
+	if err != nil {
+		writeStepError(w, statusForSessionError(err), "step_failed", err, stepID, "")
+		return
+	}
+
+	// Render the interaction result as a marked user message so the agent sees
+	// what the user submitted through the card.
+	payload, _ := json.Marshal(req.Value)
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		text = string(payload)
+	} else {
+		text += "\n```json\n" + string(payload) + "\n```"
+	}
+	envelope := message.NewTextEnvelope(message.SourceStep, opened.SessionID, "step", text, time.Now())
+	result, err := service.SubmitAsync(r.Context(), opened.SessionID, envelope)
+	if err != nil {
+		writeStepError(w, statusForSessionError(err), "step_failed", err, stepID, opened.SessionID)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"step_id":    stepID,
+		"session_id": opened.SessionID,
+		"turn_id":    result.TurnID,
+		"status":     "queued",
+	})
+}
+
+// stepLocator returns the deterministic session locator for a step id,
+// matching the one used by POST /v1/agent-steps. projectDir (the business
+// key's configured working directory) is part of the identity hash, so every
+// route that resolves a step session must pass the same value.
+func stepLocator(stepID, projectDir string) backend.SessionLocator {
+	meta := map[string]string{"system_key": "step"}
+	if projectDir != "" {
+		meta["project_dir"] = projectDir
+	}
+	return backend.SessionLocator{
+		Channel:  "step",
+		Key:      stepID,
+		Metadata: meta,
+	}
+}
+
+// bizProjectDir returns the authenticated business key's configured working
+// directory (empty when absent). All step routes derive it from the same
+// context so the session identity stays consistent.
+func bizProjectDir(r *http.Request) string {
+	key := BizKeyFromContext(r.Context())
+	if key == nil {
+		return ""
+	}
+	return key.ProjectDir
 }
 
 // extractStepSnapshot pulls the last assistant text and tool names from a

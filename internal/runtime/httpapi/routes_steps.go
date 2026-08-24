@@ -124,13 +124,7 @@ func handleAgentStep(w http.ResponseWriter, r *http.Request, service *backend.Se
 		prompt += recallStep(ctx, service, BizKeyFromContext(ctx), req.Context.Recall, req.Prompt)
 	}
 
-	locator := backend.SessionLocator{
-		Channel: "step",
-		Key:     stepID,
-		Metadata: map[string]string{
-			"system_key": "step",
-		},
-	}
+	locator := stepLocator(stepID, bizProjectDir(r))
 	opened, err := service.OpenSession(ctx, locator)
 	if err != nil {
 		writeStepError(w, statusForSessionError(err), "session_error", err, stepID, "")

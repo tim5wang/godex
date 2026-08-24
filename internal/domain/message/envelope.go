@@ -24,6 +24,7 @@ const (
 	SourceCron       EnvelopeSource = "cron"
 	SourceHeartbeat  EnvelopeSource = "heartbeat"
 	SourceCommand    EnvelopeSource = "command"
+	SourceStep       EnvelopeSource = "step"
 )
 
 // ContentPartType describes one inbound content part.

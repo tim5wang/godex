@@ -110,13 +110,18 @@ type ProviderRef struct {
 type BizAPIKey struct {
 	ID               string        `json:"id"`
 	Name             string        `json:"name"`
+	Description      string        `json:"description,omitempty"`
+	DefaultPrompt    string        `json:"default_prompt,omitempty"`
 	KeyHash          string        `json:"key_hash,omitempty"`
 	KeyPrefix        string        `json:"key_prefix"`
 	Enabled          bool          `json:"enabled"`
 	MCPServers       []string      `json:"mcp_servers"`
 	Providers        []ProviderRef `json:"providers"`
 	SandboxTools     []string      `json:"sandbox_tools"`
+	Skills           []string      `json:"skills,omitempty"`
+	Packages         []string      `json:"packages,omitempty"`
 	Models           []string      `json:"models"`
+	ProjectDir       string        `json:"project_dir,omitempty"`
 	BudgetCredits    float64       `json:"budget_credits"`
 	WarningThreshold float64       `json:"warning_threshold"`
 	CreatedAt        time.Time     `json:"created_at"`
@@ -126,10 +131,15 @@ type BizAPIKey struct {
 // BizKeyCreateRequest is the input for creating a business API key.
 type BizKeyCreateRequest struct {
 	Name             string        `json:"name"`
+	Description      string        `json:"description,omitempty"`
+	DefaultPrompt    string        `json:"default_prompt,omitempty"`
 	MCPServers       []string      `json:"mcp_servers"`
 	Providers        []ProviderRef `json:"providers"`
 	SandboxTools     []string      `json:"sandbox_tools"`
+	Skills           []string      `json:"skills,omitempty"`
+	Packages         []string      `json:"packages,omitempty"`
 	Models           []string      `json:"models"`
+	ProjectDir       string        `json:"project_dir,omitempty"`
 	BudgetCredits    float64       `json:"budget_credits"`
 	WarningThreshold float64       `json:"warning_threshold"`
 }
@@ -143,11 +153,16 @@ type BizKeyCreateResponse struct {
 // BizKeyUpdateRequest contains the fields that may be updated on a biz key.
 type BizKeyUpdateRequest struct {
 	Name             *string        `json:"name,omitempty"`
+	Description      *string        `json:"description,omitempty"`
+	DefaultPrompt    *string        `json:"default_prompt,omitempty"`
 	Enabled          *bool          `json:"enabled,omitempty"`
 	MCPServers       *[]string      `json:"mcp_servers,omitempty"`
 	Providers        *[]ProviderRef `json:"providers,omitempty"`
 	SandboxTools     *[]string      `json:"sandbox_tools,omitempty"`
+	Skills           *[]string      `json:"skills,omitempty"`
+	Packages         *[]string      `json:"packages,omitempty"`
 	Models           *[]string      `json:"models,omitempty"`
+	ProjectDir       *string        `json:"project_dir,omitempty"`
 	BudgetCredits    *float64       `json:"budget_credits,omitempty"`
 	WarningThreshold *float64       `json:"warning_threshold,omitempty"`
 }

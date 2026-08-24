@@ -65,13 +65,18 @@ func (s *SQLiteStore) init() error {
 		`CREATE TABLE IF NOT EXISTS biz_keys (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			default_prompt TEXT NOT NULL DEFAULT '',
 			key_hash TEXT NOT NULL,
 			key_prefix TEXT NOT NULL,
 			enabled INTEGER NOT NULL,
 			mcp_servers TEXT NOT NULL,
 			providers TEXT NOT NULL,
 			sandbox_tools TEXT NOT NULL,
+			skills TEXT NOT NULL DEFAULT '',
+			packages TEXT NOT NULL DEFAULT '',
 			models TEXT NOT NULL,
+			project_dir TEXT NOT NULL DEFAULT '',
 			budget_credits REAL NOT NULL,
 			warning_threshold REAL NOT NULL,
 			created_at TEXT NOT NULL,
@@ -117,6 +122,52 @@ func (s *SQLiteStore) init() error {
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("initialize usage sqlite store: %w", err)
+		}
+	}
+	if err := s.migrateBizKeyColumns(); err != nil {
+		return fmt.Errorf("migrate biz keys columns: %w", err)
+	}
+	return nil
+}
+
+// migrateBizKeyColumns adds columns added after the original biz_keys table was
+// first created. CREATE TABLE IF NOT EXISTS above covers fresh databases; this
+// covers upgrades of existing ones (SQLite ALTER TABLE fails if the column
+// already exists, so we only add missing columns).
+func (s *SQLiteStore) migrateBizKeyColumns() error {
+	rows, err := s.db.Query(`PRAGMA table_info(biz_keys)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	adds := []string{
+		"description TEXT NOT NULL DEFAULT ''",
+		"default_prompt TEXT NOT NULL DEFAULT ''",
+		"skills TEXT NOT NULL DEFAULT ''",
+		"packages TEXT NOT NULL DEFAULT ''",
+		"project_dir TEXT NOT NULL DEFAULT ''",
+	}
+	for _, add := range adds {
+		col := strings.Fields(add)[0]
+		if have[col] {
+			continue
+		}
+		if _, err := s.db.Exec(`ALTER TABLE biz_keys ADD COLUMN ` + add); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -244,7 +295,7 @@ func (s *SQLiteStore) UpdateModel(model *ProxyModel) error {
 // ---- biz keys ----
 
 func (s *SQLiteStore) ListBizKeys() ([]BizAPIKey, error) {
-	rows, err := s.db.Query(`SELECT id, name, key_prefix, enabled, mcp_servers, providers, sandbox_tools, models, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys ORDER BY created_at`)
+	rows, err := s.db.Query(`SELECT id, name, description, default_prompt, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -253,16 +304,18 @@ func (s *SQLiteStore) ListBizKeys() ([]BizAPIKey, error) {
 	for rows.Next() {
 		var key BizAPIKey
 		var enabled int
-		var mcpServers, providers, sandboxTools, models, created, updated string
-		if err := rows.Scan(&key.ID, &key.Name, &key.KeyPrefix, &enabled,
-			&mcpServers, &providers, &sandboxTools, &models,
-			&key.BudgetCredits, &key.WarningThreshold, &created, &updated); err != nil {
+		var mcpServers, providers, sandboxTools, skills, packages, models, created, updated string
+		if err := rows.Scan(&key.ID, &key.Name, &key.Description, &key.DefaultPrompt, &key.KeyPrefix, &enabled,
+			&mcpServers, &providers, &sandboxTools, &skills, &packages, &models,
+			&key.ProjectDir, &key.BudgetCredits, &key.WarningThreshold, &created, &updated); err != nil {
 			return nil, err
 		}
 		key.Enabled = enabled != 0
 		key.MCPServers = decodeStringSlice(mcpServers)
 		key.Providers = decodeProviderRefs(providers)
 		key.SandboxTools = decodeStringSlice(sandboxTools)
+		key.Skills = decodeStringSlice(skills)
+		key.Packages = decodeStringSlice(packages)
 		key.Models = decodeStringSlice(models)
 		key.CreatedAt = parseTime(created)
 		key.UpdatedAt = parseTime(updated)
@@ -280,23 +333,23 @@ func (s *SQLiteStore) GetBizKeyByHash(hash string) (*BizAPIKey, error) {
 }
 
 func (s *SQLiteStore) getBizKey(where string, arg string) (*BizAPIKey, error) {
-	row := s.db.QueryRow(`SELECT id, name, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, models, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys WHERE `+where, arg)
+	row := s.db.QueryRow(`SELECT id, name, description, default_prompt, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys WHERE `+where, arg)
 	return scanBizKeyRow(row)
 }
 
 func (s *SQLiteStore) CreateBizKey(key *BizAPIKey) error {
-	_, err := s.db.Exec(`INSERT INTO biz_keys (id, name, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, models, budget_credits, warning_threshold, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		key.ID, key.Name, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
-		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Models),
-		key.BudgetCredits, key.WarningThreshold, formatTime(key.CreatedAt), formatTime(key.UpdatedAt))
+	_, err := s.db.Exec(`INSERT INTO biz_keys (id, name, description, default_prompt, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, budget_credits, warning_threshold, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key.ID, key.Name, key.Description, key.DefaultPrompt, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
+		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Skills), encodeStringSlice(key.Packages), encodeStringSlice(key.Models),
+		key.ProjectDir, key.BudgetCredits, key.WarningThreshold, formatTime(key.CreatedAt), formatTime(key.UpdatedAt))
 	return err
 }
 
 func (s *SQLiteStore) UpdateBizKey(key *BizAPIKey) error {
-	result, err := s.db.Exec(`UPDATE biz_keys SET name = ?, key_hash = ?, key_prefix = ?, enabled = ?, mcp_servers = ?, providers = ?, sandbox_tools = ?, models = ?, budget_credits = ?, warning_threshold = ?, updated_at = ? WHERE id = ?`,
-		key.Name, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
-		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Models),
-		key.BudgetCredits, key.WarningThreshold, formatTime(key.UpdatedAt), key.ID)
+	result, err := s.db.Exec(`UPDATE biz_keys SET name = ?, description = ?, default_prompt = ?, key_hash = ?, key_prefix = ?, enabled = ?, mcp_servers = ?, providers = ?, sandbox_tools = ?, skills = ?, packages = ?, models = ?, project_dir = ?, budget_credits = ?, warning_threshold = ?, updated_at = ? WHERE id = ?`,
+		key.Name, key.Description, key.DefaultPrompt, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
+		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Skills), encodeStringSlice(key.Packages), encodeStringSlice(key.Models),
+		key.ProjectDir, key.BudgetCredits, key.WarningThreshold, formatTime(key.UpdatedAt), key.ID)
 	return resultError(result, err, "biz key not found: "+key.ID)
 }
 
@@ -306,16 +359,16 @@ func (s *SQLiteStore) DeleteBizKey(id string) error {
 }
 
 // scanBizKeyRow scans one biz_keys row. Columns must match the SELECT used by
-// every biz key query (id, name, [key_hash], key_prefix, enabled, mcp_servers,
-// providers, sandbox_tools, models, budget_credits, warning_threshold,
-// created_at, updated_at).
+// every biz key query (id, name, description, default_prompt, [key_hash],
+// key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages,
+// models, project_dir, budget_credits, warning_threshold, created_at, updated_at).
 func scanBizKeyRow(scanner interface{ Scan(dest ...any) error }) (*BizAPIKey, error) {
 	var key BizAPIKey
 	var enabled int
-	var mcpServers, providers, sandboxTools, models, created, updated string
-	err := scanner.Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &enabled,
-		&mcpServers, &providers, &sandboxTools, &models,
-		&key.BudgetCredits, &key.WarningThreshold, &created, &updated)
+	var mcpServers, providers, sandboxTools, skills, packages, models, created, updated string
+	err := scanner.Scan(&key.ID, &key.Name, &key.Description, &key.DefaultPrompt, &key.KeyHash, &key.KeyPrefix, &enabled,
+		&mcpServers, &providers, &sandboxTools, &skills, &packages, &models,
+		&key.ProjectDir, &key.BudgetCredits, &key.WarningThreshold, &created, &updated)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("biz key not found")
@@ -326,6 +379,8 @@ func scanBizKeyRow(scanner interface{ Scan(dest ...any) error }) (*BizAPIKey, er
 	key.MCPServers = decodeStringSlice(mcpServers)
 	key.Providers = decodeProviderRefs(providers)
 	key.SandboxTools = decodeStringSlice(sandboxTools)
+	key.Skills = decodeStringSlice(skills)
+	key.Packages = decodeStringSlice(packages)
 	key.Models = decodeStringSlice(models)
 	key.CreatedAt = parseTime(created)
 	key.UpdatedAt = parseTime(updated)

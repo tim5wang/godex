@@ -23,6 +23,7 @@ export {
   type StepClientOptions,
   type StepRequest,
   type StepResult,
+  type StepReply,
   type StepError,
   type StepTools,
   type StepContext,

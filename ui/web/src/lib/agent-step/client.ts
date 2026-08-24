@@ -83,6 +83,13 @@ export type StepResult = {
   created_at: string;
 };
 
+export type StepReply = {
+  step_id: string;
+  session_id: string;
+  turn_id?: string;
+  status: string;
+};
+
 export type StepError = {
   code: string;
   message: string;
@@ -184,6 +191,33 @@ export class StepClient {
       const body = await this.parseJson(response);
       throw this.toAPIError(response.status, body);
     }
+  }
+
+  /**
+   * Reply to an interactive step: inject a ui_card form/button value back into
+   * the step session and continue the agent turn (async). Poll `getStep` for
+   * the terminal state afterwards.
+   */
+  async replyStep(stepId: string, value: unknown, opts?: { text?: string; signal?: AbortSignal }): Promise<StepReply> {
+    const response = await this.fetchFn(
+      this.url(`/v1/agent-steps/${encodeURIComponent(stepId)}/reply`),
+      this.withSignal(
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify({ value, text: opts?.text }),
+        },
+        opts?.signal,
+      ),
+    );
+    const body = await this.parseJson(response);
+    if (!response.ok) {
+      throw this.toAPIError(response.status, body);
+    }
+    return body as StepReply;
   }
 
   /**

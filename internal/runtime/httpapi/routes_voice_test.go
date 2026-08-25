@@ -112,6 +112,34 @@ func TestVoiceStatusEndpoint(t *testing.T) {
 	}
 }
 
+// TestWithGzipAllowsWebSocketUpgrade 回归：浏览器 WebSocket 握手带
+// Accept-Encoding: gzip，withGzip 包装的 writer 不支持 Hijack 会导致升级失败
+// （500）。withGzip 必须对 Upgrade 请求原样透传。
+func TestWithGzipAllowsWebSocketUpgrade(t *testing.T) {
+	srv := httptest.NewServer(withGzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+	})))
+	defer srv.Close()
+
+	// 模拟真实浏览器：握手请求带 Accept-Encoding: gzip。
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	dialer := websocket.Dialer{}
+	conn, resp, err := dialer.Dial(url, http.Header{"Accept-Encoding": []string{"gzip"}})
+	if err != nil {
+		t.Fatalf("dial with gzip accept-encoding: %v", err)
+	}
+	defer conn.Close()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+}
+
 // TestVoiceConnConcurrentWrite 验证写路径线程安全（并发写不 panic、不挂起）。
 func TestVoiceConnConcurrentWrite(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

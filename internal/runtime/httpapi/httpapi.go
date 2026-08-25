@@ -1882,9 +1882,12 @@ func (g *gzipResponseWriter) Unwrap() http.ResponseWriter { return g.ResponseWri
 
 // withGzip wraps a handler with on-the-fly gzip compression for clients that
 // advertise Accept-Encoding: gzip.
+// WebSocket Upgrade 请求必须原样透传：gzipResponseWriter 不支持 http.Hijacker，
+// 包装后 gorilla/websocket 升级必然失败（浏览器握手带 Accept-Encoding: gzip → 500）。
 func withGzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Range") != "" ||
+		if isWebSocketUpgrade(r) ||
+			r.Header.Get("Range") != "" ||
 			!strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip") {
 			next.ServeHTTP(w, r)
 			return
@@ -1893,6 +1896,12 @@ func withGzip(next http.Handler) http.Handler {
 		defer gz.Close()
 		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
 	})
+}
+
+// isWebSocketUpgrade 判断是否为 WebSocket 升级请求（Connection: Upgrade + Upgrade: websocket）。
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") &&
+		strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
 // handleAnthropicWebTokenMessages handles POST /v1/messages requests with web token auth.

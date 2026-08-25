@@ -3,12 +3,13 @@ import { Button, Tooltip } from "antd";
 import { AudioOutlined, AudioMutedOutlined } from "@ant-design/icons";
 
 /**
- * VoiceBar —— push-to-talk 语音输入（M5）。
+ * VoiceBar —— 点击式语音输入（M5）。
  *
  * 链路：麦克风 PCM(16k s16) → WS /v1/voice → godex 编排桥 → voice-engine
  *       （VAD+ASR → agent → TTS）→ 下行 PCM(24k) → 浏览器播放。
  *
- * 交互：按住按钮说话，松开发送（audio_end）；服务端 VAD 负责切分与去静音。
+ * 交互：单击开始录音（脉冲动效 + 分段识别回显），再单击停止并发送。
+ * 服务端 VAD 负责切分，每个分段完成即回显 asr_partial 文本（准流式反馈）。
  *
  * 状态：未启用（media.audio.voice_enabled=false）时禁用并提示；
  * 连接失败时通过 /v1/voice/status 诊断区分「未启用 / 引擎不可达 / 鉴权失败」。
@@ -41,6 +42,8 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false }:
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 录音期间累计的识别文本（每个 asr_partial 分段追加）。
+  const [partial, setPartial] = useState<string>("");
 
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -85,6 +88,9 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false }:
       }
       if (msg.type === "error") {
         setError(msg.text || msg.code || "voice error");
+      } else if (msg.type === "asr_partial" && msg.text) {
+        // 分段识别回显：追加到累计文本。
+        setPartial((prev) => (prev ? `${prev}${msg.text}` : (msg.text ?? "")));
       }
     };
     ws.onclose = () => {
@@ -154,7 +160,7 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false }:
     }
   }, []);
 
-  // 结束录音
+  // 结束录音：停止采集并通知服务端 flush VAD（发送本次语音）。
   const stopListening = useCallback(() => {
     try {
       processorRef.current?.disconnect();
@@ -177,34 +183,42 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false }:
 
   useEffect(() => () => stopListening(), [stopListening]);
 
+  // 点击 toggle：录音中 → 停止并发送；否则 → 开始录音（清空上次回显）。
+  const toggle = useCallback(() => {
+    if (listening) {
+      stopListening();
+    } else {
+      setPartial("");
+      void startListening();
+    }
+  }, [listening, startListening, stopListening]);
+
   const notEnabled = !enabled;
   const tip = notEnabled
     ? "语音未启用（设置 → Media / Audio → Voice Chat Enabled）"
-    : error ?? (connected ? "按住说话" : "语音未连接");
+    : error ?? (listening ? "录音中…点击停止并发送" : connected ? "点击开始说话" : "语音未连接");
 
   return (
-    <Tooltip title={tip}>
-      <Button
-        size="small"
-        shape="circle"
-        type={listening ? "primary" : "default"}
-        danger={listening}
-        icon={listening ? <AudioOutlined /> : <AudioMutedOutlined />}
-        disabled={disabled || !connected || notEnabled}
-        onPointerDown={(e) => {
-          e.preventDefault();
-          void startListening();
-        }}
-        onPointerUp={(e) => {
-          e.preventDefault();
-          stopListening();
-        }}
-        onPointerLeave={() => {
-          if (listening) stopListening();
-        }}
-        aria-label="语音输入（按住说话）"
-      />
-    </Tooltip>
+    <>
+      {partial && (
+        <Tooltip title="已识别内容（分段实时回显）">
+          <span className="voice-partial">🎙 {partial}</span>
+        </Tooltip>
+      )}
+      <Tooltip title={tip}>
+        <Button
+          size="small"
+          shape="circle"
+          type={listening ? "primary" : "default"}
+          danger={listening}
+          className={listening ? "voice-btn-recording" : undefined}
+          icon={listening ? <AudioOutlined /> : <AudioMutedOutlined />}
+          disabled={disabled || !connected || notEnabled}
+          onClick={toggle}
+          aria-label={listening ? "停止录音并发送" : "开始语音输入"}
+        />
+      </Tooltip>
+    </>
   );
 }
 

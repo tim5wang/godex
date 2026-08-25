@@ -181,6 +181,16 @@ func (b *voiceBridge) handleVoice(w http.ResponseWriter, r *http.Request) {
 
 // pumpEngine 把 voice-engine 事件转发给 Web UI，并在 asr_final 时编排 agent。
 func (b *voiceBridge) pumpEngine(vc *voiceConn) {
+	// 串行编排队列：asr_final 文本入队，由单 worker 顺序编排，
+	// 避免并发编排竞态写 vc.sessionID 与 SubmitAsync 交错。
+	orchestrateCh := make(chan string, 16)
+	go func() {
+		for text := range orchestrateCh {
+			b.orchestrate(vc, text)
+		}
+	}()
+	defer close(orchestrateCh)
+
 	for ev := range vc.ve.Events() {
 		select {
 		case <-vc.closeCh:
@@ -189,7 +199,16 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 		}
 		switch ev.Kind {
 		case voiceclient.EventASRFinal:
-			b.orchestrate(vc, ev.Text)
+			// 先回显识别文本给 Web UI（分段中间反馈），再异步编排 agent，
+			// 避免同步阻塞后续 asr_final 事件（连续说话变慢/丢结果的根因）。
+			if strings.TrimSpace(ev.Text) != "" {
+				vc.writeText(voiceMsg{Type: "asr_partial", Text: ev.Text})
+			}
+			select {
+			case orchestrateCh <- ev.Text:
+			case <-vc.closeCh:
+				return
+			}
 		case voiceclient.EventPCM:
 			vc.writeBinary(ev.PCM)
 		case voiceclient.EventTTSStart, voiceclient.EventTTSDone:

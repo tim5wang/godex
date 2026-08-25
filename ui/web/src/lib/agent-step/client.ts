@@ -138,7 +138,10 @@ export class StepClient {
   constructor(options: StepClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.apiKey = options.apiKey;
-    this.fetchFn = options.fetch ?? globalThis.fetch;
+    // Bind fetch to globalThis: fetch must be invoked with the Window as its
+    // `this`, otherwise the browser throws "Illegal invocation" (we call it as
+    // `this.fetchFn(...)` below, which would rebind `this` to the client).
+    this.fetchFn = (options.fetch ?? globalThis.fetch).bind(globalThis);
     this.pollIntervalMs = options.pollIntervalMs ?? 1_000;
   }
 

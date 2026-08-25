@@ -11,6 +11,7 @@ import {
   Input,
   InputNumber,
   List,
+  Modal,
   Popconfirm,
   Select,
   Space,
@@ -140,7 +141,6 @@ export function BusinessAgentsPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<BizKey | null>(null);
   const [secret, setSecret] = useState<string>("");
-  const [previewOpen, setPreviewOpen] = useState(false);
 
   const [form] = Form.useForm<BizFormValues>();
 
@@ -330,7 +330,7 @@ const result = await step.createStep({
               {
                 key: "preview",
                 label: t("businessAgents.tabPreview"),
-                children: <PreviewTab key={selected.id} biz={selected} onOpen={() => setPreviewOpen(true)} />,
+                children: <PreviewTab key={selected.id} biz={selected} />,
               },
             ]}
           />
@@ -596,15 +596,17 @@ function AccessTab({ snippets }: { snippets: Record<string, string> }) {
 }
 
 // ---- 嵌入预览 Tab ----
-function PreviewTab({ biz, onOpen }: { biz: BizKey; onOpen: () => void }) {
+function PreviewTab({ biz }: { biz: BizKey }) {
   const { t } = useI18n();
   // key_prefix is masked (e.g. biz_ab12****), so the live preview needs the
   // full secret pasted here — the prefix is just a placeholder.
   const [apiKey, setApiKey] = useState(biz.key_prefix);
+  const [fullOpen, setFullOpen] = useState(false);
+  const renderStep = () => <godex-step base-url={window.location.origin} api-key={apiKey} prompt="" />;
   return (
     <Card
       extra={
-        <Button icon={<EyeOutlined />} onClick={onOpen}>
+        <Button icon={<EyeOutlined />} onClick={() => setFullOpen(true)}>
           {t("businessAgents.previewFull")}
         </Button>
       }
@@ -618,8 +620,18 @@ function PreviewTab({ biz, onOpen }: { biz: BizKey; onOpen: () => void }) {
           placeholder={t("businessAgents.previewKeyPlaceholder")}
           allowClear
         />
-        <godex-step base-url={window.location.origin} api-key={apiKey} prompt="" />
+        {renderStep()}
       </Space>
+      <Modal
+        title={t("businessAgents.previewFull")}
+        open={fullOpen}
+        onCancel={() => setFullOpen(false)}
+        footer={null}
+        width={760}
+        destroyOnClose
+      >
+        {renderStep()}
+      </Modal>
     </Card>
   );
 }

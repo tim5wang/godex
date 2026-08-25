@@ -10,7 +10,7 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useChatV2Store, type DockTab, DOCK_TABS } from "../chat-v2/chatV2Store";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, APIError, cancelSessionTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -865,6 +865,23 @@ export function ChatPage() {
     },
   });
 
+  const renameSessionMutation = useMutation({
+    mutationFn: async ({ sessionId, title }: { sessionId: string; title: string }) => renameSession(token || null, sessionId, title),
+    onError: (error) => {
+      const text = error instanceof APIError ? error.message : error instanceof Error ? error.message : "Failed to rename session.";
+      void message.error(text);
+    },
+    onSuccess: async (renamed) => {
+      message.success(t("chat.chatV2Rail.renameSaved"));
+      // Update the rail cache immediately; the topbar title derives from the
+      // same sessions list (currentSession), so it reflects the change too.
+      queryClient.setQueryData<ListedSession[]>(["sessions", token, remoteNodeID], (current) =>
+        current?.map((session) => (session.session_id === renamed.session_id ? { ...session, title: renamed.title } : session)) ?? current,
+      );
+      await queryClient.invalidateQueries({ queryKey: ["sessions", token] });
+    },
+  });
+
   const cancelTurnMutation = useMutation({
     mutationFn: async ({ sessionId, turnId }: { sessionId: string; turnId: string }) => cancelSessionTurn(token || null, sessionId, turnId),
     onSuccess: async () => {
@@ -1377,6 +1394,8 @@ export function ChatPage() {
                 navigate(buildChatRouteForSession(session));
               }}
               onDelete={(session) => deleteSessionMutation.mutate(session)}
+              renamingSessionId={renameSessionMutation.variables?.sessionId ?? ""}
+              onRename={(session, title) => renameSessionMutation.mutate({ sessionId: session.session_id, title })}
               onToggleCollapsed={() => v2ToggleLeft()}
             />
           </div>
@@ -1573,6 +1592,7 @@ export function ChatPage() {
                   builtinCommands={builtinCommandsQuery.data ?? []}
                   queuedFiles={queuedComposerFiles}
                   onQueuedFilesConsumed={() => setQueuedComposerFiles([])}
+                  draftScope={openQuery.data?.session_id ? `session:${openQuery.data.session_id}` : ""}
                   onSubmit={onSend}
                 />
               </div>

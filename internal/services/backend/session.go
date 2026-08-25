@@ -778,6 +778,68 @@ func (s *Service) readSessionListFiles(sessionID string) (*SessionManifest, *age
 }
 
 // DeleteSession permanently removes one persisted session and its attachments.
+// RenameSession updates a session's display title and persists it to both
+// the JSON manifest (for the file-backed store) and the SQLite store so the
+// session list reflects the new name across restarts. An empty title restores
+// the auto-derived behavior (the list derives a title from state on next read).
+func (s *Service) RenameSession(ctx context.Context, sessionID, title string) (*ListedSession, error) {
+	title = strings.TrimSpace(title)
+
+	// Prefer the in-memory session (it may be running) so the change is
+	// immediately visible without a reload; otherwise patch the stored manifest.
+	s.mu.Lock()
+	current := s.sessions[sessionID]
+	s.mu.Unlock()
+	if current != nil {
+		current.mu.Lock()
+		current.title = title
+		current.updatedAt = s.now()
+		current.mu.Unlock()
+		s.writeManifestForSession(current)
+		return listedSessionFromState(current), nil
+	}
+
+	// Not loaded: update the persisted manifest only.
+	manifest, err := s.readSessionListManifest(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if manifest == nil {
+		return nil, newSessionNotFoundError(sessionID)
+	}
+	manifest.Title = title
+	manifest.UpdatedAt = s.now()
+	if err := s.writeManifest(*manifest); err != nil {
+		return nil, err
+	}
+	// Keep the SQLite store's manifest blob in sync when it is active.
+	if store := s.sqliteSessionStore(); store != nil && s.storeErr == nil {
+		data, ok, err := store.Load(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			manifestData, err := json.Marshal(manifest)
+			if err != nil {
+				return nil, err
+			}
+			data.Manifest = manifestData
+			if err := store.Save(ctx, data); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return &ListedSession{
+		SessionID:       manifest.SessionID,
+		Locator:         manifest.Locator,
+		Title:           manifest.Title,
+		BranchTitle:     strings.TrimSpace(manifest.BranchTitle),
+		CreatedAt:       manifest.CreatedAt,
+		UpdatedAt:       manifest.UpdatedAt,
+		LastActivityAt:  manifest.LastActivityAt,
+	}, nil
+}
+
 func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
 	_ = ctx
 	dir := s.sessionDir(sessionID)

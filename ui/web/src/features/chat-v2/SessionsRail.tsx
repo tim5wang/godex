@@ -3,6 +3,7 @@ import {
   ApiOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
+  EditOutlined,
   FolderOpenOutlined,
   FolderOutlined,
   MessageOutlined,
@@ -28,6 +29,7 @@ interface SessionsRailProps {
   activeSessionId: string;
   searchQuery: string;
   deletingSessionId?: string;
+  renamingSessionId?: string;
   onSearchChange: (query: string) => void;
   /** Installed-skill catalog for the new-chat skill picker (global, session-independent). */
   skillsCatalog?: SkillCatalogEntry[];
@@ -36,6 +38,7 @@ interface SessionsRailProps {
   onCreate: (workspaceDir?: string, mode?: string, skills?: string[]) => void;
   onSelect: (session: ListedSession) => void;
   onDelete: (session: ListedSession) => void;
+  onRename: (session: ListedSession, title: string) => void;
   onToggleCollapsed: () => void;
 }
 
@@ -94,17 +97,53 @@ function WorkspacePopover({ w, t }: { w: WorkspaceGroup; t: ReturnType<typeof us
   );
 }
 
-function SessionPopover({ s, onDelete, isDeleting, t }: { s: ListedSession; onDelete: (s: ListedSession) => void; isDeleting?: boolean; t: ReturnType<typeof useI18n>["t"] }) {
+function SessionPopover({ s, onDelete, isDeleting, onRename, renaming, t }: { s: ListedSession; onDelete: (s: ListedSession) => void; isDeleting?: boolean; onRename: (s: ListedSession, title: string) => void; renaming?: boolean; t: ReturnType<typeof useI18n>["t"] }) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(s.title || s.locator?.key || s.session_id);
+  const commit = () => {
+    const next = title.trim();
+    if (next && next !== s.title) {
+      onRename(s, next);
+    }
+    setEditing(false);
+  };
   return (
-    <div className="ctx-popover" style={{ minWidth: 220 }}>
+    <div className="ctx-popover" style={{ minWidth: 240 }}>
       <div className="ctx-popover-group">
         <div className="ctx-popover-group-title">{t("chat.chatV2Rail.popoverSession")}</div>
-        {s.title ? (
+        {editing ? (
           <div className="ctx-popover-row">
             <span className="ctx-popover-label">{t("chat.chatV2Rail.popoverTitle")}</span>
-            <span className="ctx-popover-value">{s.title}</span>
+            <Input
+              size="small"
+              value={title}
+              autoFocus
+              placeholder={t("chat.chatV2Rail.renamePlaceholder")}
+              onChange={(event) => setTitle(event.target.value)}
+              onPressEnter={commit}
+              onBlur={commit}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setTitle(s.title || s.locator?.key || s.session_id);
+                  setEditing(false);
+                }
+              }}
+            />
           </div>
-        ) : null}
+        ) : (
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">{t("chat.chatV2Rail.popoverTitle")}</span>
+            <span className="ctx-popover-value" style={{ flex: 1 }}>{s.title || s.locator?.key || s.session_id}</span>
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              aria-label={t("chat.chatV2Rail.renameSession")}
+              loading={renaming}
+              onClick={() => setEditing(true)}
+            />
+          </div>
+        )}
         <div className="ctx-popover-row">
           <span className="ctx-popover-label">{t("chat.chatV2Rail.popoverId")}</span>
           <span className="ctx-popover-value" style={{ fontSize: 10 }}>{s.session_id.slice(0, 12)}…</span>
@@ -387,7 +426,7 @@ function WorkspaceSection(props: { workspace: WorkspaceGroup; t: ReturnType<type
                 return (
                   <Popover
                     key={session.session_id}
-                    content={<SessionPopover s={session} onDelete={props.onDelete} isDeleting={isDeleting} t={t} />}
+                    content={<SessionPopover s={session} onDelete={props.onDelete} onRename={props.onRename} isDeleting={isDeleting} renaming={props.renamingSessionId === session.session_id} t={t} />}
                     trigger="hover"
                     placement="right"
                     mouseEnterDelay={0.5}

@@ -160,6 +160,28 @@ func (s *Service) describeSession(session *sessionState) *OpenedSession {
 	}
 }
 
+// listedSessionFromState builds the lightweight list item for a loaded session.
+func listedSessionFromState(session *sessionState) *ListedSession {
+	session.mu.RLock()
+	defer session.mu.RUnlock()
+
+	return &ListedSession{
+		SessionID:              session.id,
+		Locator:                session.locator,
+		Title:                  session.title,
+		ModelProfileID:         strings.TrimSpace(session.modelProfileID),
+		ReasoningEffort:        normalizeSessionReasoningEffort(session.reasoningEffort),
+		ParentSessionID:        strings.TrimSpace(session.parentSessionID),
+		ForkedFromTurnID:       strings.TrimSpace(session.forkedFromTurnID),
+		ForkedFromMessageIndex: cloneIntPtr(session.forkedFromMessageIndex),
+		BranchTitle:            strings.TrimSpace(session.branchTitle),
+		CreatedAt:              session.createdAt,
+		UpdatedAt:              session.updatedAt,
+		LastActivityAt:         session.lastActive,
+		Running:                session.running,
+	}
+}
+
 func (s *sessionState) setTitleIfEmpty(title string) {
 	title = strings.TrimSpace(title)
 	if title == "" || title == "New chat" {

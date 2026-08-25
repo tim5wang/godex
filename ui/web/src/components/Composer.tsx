@@ -4,6 +4,7 @@ import { PaperClipOutlined } from "@ant-design/icons";
 import { Attachments, Sender } from "@ant-design/x";
 import type { AttachmentsRef } from "@ant-design/x/es/attachments";
 import { useI18n } from "../i18n";
+import { clearDraft, draftSignature, loadDraft, loadDraftFiles, saveDraft } from "../lib/composerDraft";
 import type { CommandMetadata, PackageCommandEntry } from "../lib/types";
 
 export interface ComposerSubmission {
@@ -19,6 +20,9 @@ interface ComposerProps {
   packageCommands?: PackageCommandEntry[];
   queuedFiles?: File[];
   onQueuedFilesConsumed?: () => void;
+  /** Stable per-session key used to persist the unsent draft (text + files).
+   *  Empty disables draft persistence. */
+  draftScope?: string;
   onSubmit: (submission: ComposerSubmission) => Promise<void>;
 }
 
@@ -35,13 +39,21 @@ interface PaletteEntry {
   bundles?: string[];
 }
 
-export function Composer({ disabled, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], queuedFiles = [], onQueuedFilesConsumed, onSubmit }: ComposerProps) {
+export function Composer({ disabled, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], queuedFiles = [], onQueuedFilesConsumed, draftScope = "", onSubmit }: ComposerProps) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const attachmentsRef = useRef<AttachmentsRef>(null);
   const submitting = Boolean(disabled || uploading);
+  const draftLoadedRef = useRef<string>("");
+  const lastSavedRef = useRef<string>("");
+  // True while an async draft restore is in flight. While restoring, the save
+  // effect is suppressed so the intermediate empty state is never persisted.
+  const [restoring, setRestoring] = useState(false);
+  // Guards the async draft restore: once the user starts typing or attaching
+  // files, a late-arriving restored draft must not clobber their input.
+  const inputDirtyRef = useRef(false);
   const uploadItems = useMemo<UploadFile[]>(
     () =>
       files.map((file, index) => ({
@@ -61,6 +73,84 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
     setActiveIndex(0);
   }, [value]);
 
+  // Load the persisted draft whenever the session scope changes. The ref guard
+  // skips re-loading when the component re-renders for the same scope. After
+  // restoring we set lastSavedRef to the restored content so the save effect
+  // does not immediately rewrite the same draft.
+  useEffect(() => {
+    if (!draftScope) {
+      setValue("");
+      setFiles([]);
+      draftLoadedRef.current = "";
+      lastSavedRef.current = "";
+      setRestoring(false);
+      return;
+    }
+    if (draftLoadedRef.current === draftScope) {
+      return;
+    }
+    draftLoadedRef.current = draftScope;
+    inputDirtyRef.current = false;
+    setRestoring(true);
+    setValue("");
+    setFiles([]);
+    void loadDraft(draftScope)
+      .then(async (draft) => {
+        if (draftLoadedRef.current !== draftScope || inputDirtyRef.current) return;
+        const text = draft?.text ?? "";
+        setValue(text);
+        let restored: File[] = [];
+        if (draft && draft.files.length > 0) {
+          try {
+            restored = await loadDraftFiles(draft.files);
+          } catch {
+            restored = [];
+          }
+          if (draftLoadedRef.current !== draftScope || inputDirtyRef.current) return;
+        }
+        setFiles(restored);
+        lastSavedRef.current = draftSignature(text, restored);
+      })
+      .catch(() => {
+        // Ignore restore failures: fall back to an empty composer.
+      })
+      .finally(() => {
+        if (draftLoadedRef.current === draftScope) {
+          setRestoring(false);
+        }
+      });
+  }, [draftScope]);
+
+  // Debounced persistence: write the draft ~400ms after the user stops typing,
+  // and on visibility loss (tab switch) so the very last keystroke survives.
+  // Skipped while a restore is in flight and when nothing changed.
+  useEffect(() => {
+    if (!draftScope || draftLoadedRef.current !== draftScope || restoring) return;
+    if (draftSignature(value, files) === lastSavedRef.current) return;
+    if (!value && files.length === 0) {
+      void clearDraft(draftScope);
+      lastSavedRef.current = "";
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void saveDraft(draftScope, value, files).then(() => {
+        lastSavedRef.current = draftSignature(value, files);
+      });
+    }, 400);
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden" && draftLoadedRef.current === draftScope && !restoring) {
+        void saveDraft(draftScope, value, files).then(() => {
+          lastSavedRef.current = draftSignature(value, files);
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearTimeout(handle);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [draftScope, files, restoring, value]);
+
   useEffect(() => {
     if (queuedFiles.length === 0) return;
     setFiles((current) => [...current, ...queuedFiles]);
@@ -79,6 +169,10 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
     // we restore the text so the user can retry.
     setValue("");
     setFiles([]);
+    inputDirtyRef.current = true;
+    if (draftScope) {
+      void clearDraft(draftScope);
+    }
     try {
       await onSubmit(payload);
     } catch {
@@ -88,6 +182,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
   };
 
   const pickCommand = (entry: PaletteEntry) => {
+    inputDirtyRef.current = true;
     setValue(`${entry.invocation} `);
     setActiveIndex(0);
   };
@@ -140,7 +235,10 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
           placeholder={t("chat.composerPlaceholder")}
           submitType="enter"
           autoSize={{ minRows: 2, maxRows: 8 }}
-          onChange={(next) => setValue(next)}
+          onChange={(next) => {
+            inputDirtyRef.current = true;
+            setValue(next);
+          }}
           onSubmit={(message) => {
             if (showCommandPalette && paletteEntries[activeIndex]) {
               pickCommand(paletteEntries[activeIndex]);
@@ -161,7 +259,10 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
               setValue("");
             }
           }}
-          onPasteFile={(pastedFiles) => setFiles((current) => [...current, ...Array.from(pastedFiles)])}
+          onPasteFile={(pastedFiles) => {
+            inputDirtyRef.current = true;
+            setFiles((current) => [...current, ...Array.from(pastedFiles)]);
+          }}
           prefix={
             <Button
               type="text"
@@ -179,6 +280,7 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
               items={uploadItems}
               overflow="wrap"
               beforeUpload={(file) => {
+                inputDirtyRef.current = true;
                 setFiles((current) => [...current, file]);
                 return false;
               }}

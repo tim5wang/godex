@@ -1167,6 +1167,19 @@ func NewHandlerWithRuntime(
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})))
+	mux.Handle("PATCH /sessions/{id}/title", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req renameSessionRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		item, err := service.RenameSession(r.Context(), r.PathValue("id"), req.Title)
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})))
 	mux.Handle("POST /sessions/{id}/fork", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req forkSessionRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {

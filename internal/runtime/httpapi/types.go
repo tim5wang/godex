@@ -301,6 +301,10 @@ type forkSessionRequest struct {
 	Title        string `json:"title,omitempty"`
 }
 
+type renameSessionRequest struct {
+	Title string `json:"title"`
+}
+
 type installPackageRequest struct {
 	Source string `json:"source"`
 }

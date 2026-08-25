@@ -64,6 +64,38 @@ func TestStepEndpointRejectsBadRequest(t *testing.T) {
 	}
 }
 
+// TestStepEndpointRejectsMismatchedSession verifies the multi-turn guard: a
+// caller passing a session_id that does not belong to the step's deterministic
+// session gets 400 before any agent turn is submitted (anti-splicing).
+func TestStepEndpointRejectsMismatchedSession(t *testing.T) {
+	handler, usageService := mustBizHandler(t)
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales", Pin: "123456"})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Send a session_id that is valid-shaped but belongs to another step, so
+	// the deterministic locator resolves a different session and the guard
+	// rejects before SubmitAsync runs (no LLM needed).
+	body := bytes.NewBufferString(`{"prompt":"hi","step_id":"stp_test_1","session_id":"stp_wrong_session_1234567890"}`)
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/agent-steps", body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+created.Secret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for mismatched session_id, got %d: %s", resp.StatusCode, readAll(t, resp))
+	}
+}
+
 // TestStepBuildPromptIsolatesInputs verifies the business-input block is
 // wrapped in explicit markers (prompt-injection defense).
 func TestStepBuildPromptIsolatesInputs(t *testing.T) {

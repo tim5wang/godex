@@ -57,6 +57,13 @@ export type StructuredOutput = {
 export type StepRequest = {
   /** Client-supplied idempotency key; the server generates one when omitted. */
   step_id?: string;
+  /**
+   * Continue an existing conversation: pass the session_id from a previous
+   * StepResult to keep the same session (multi-turn). When omitted a new
+   * session is opened for step_id. The server rejects a session_id that does
+   * not belong to step_id's session (anti-splicing).
+   */
+  session_id?: string;
   prompt: string;
   /** Business context, injected as an isolated (non-instruction) block. */
   inputs?: Record<string, unknown>;
@@ -224,8 +231,25 @@ export class StepClient {
   }
 
   /**
-   * Open an SSE stream of the underlying step session (same event shape as
-   * GET /sessions/{id}/events). The returned controller aborts the stream.
+   * Open an SSE stream of the step session's live runtime events.
+   *
+   * The stream emits the same event shapes as GET /sessions/{id}/events:
+   * `assistant_text_delta` events carry `{ text }` in `payload` (incremental
+   * text chunks — append them to render streaming output), `assistant_message_completed`
+   * fires when a turn finishes, and `error_raised` carries `{ message }`.
+   *
+   * Events are emitted from the moment of subscription (replay=active replays
+   * the current active turn, so subscribe before POSTing to capture the run).
+   * The returned controller aborts the stream.
+   *
+   * @example
+   * ```ts
+   * const controller = await client.streamEvents(stepId, (event) => {
+   *   if (event.type === "assistant_text_delta") {
+   *     text += String(event.payload?.text ?? "");
+   *   }
+   * });
+   * ```
    */
   async streamEvents(
     stepId: string,

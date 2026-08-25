@@ -81,6 +81,7 @@ export class GodexStepElement extends HTMLElement {
   private meta: HTMLDivElement;
   private controller: AbortController | null = null;
   private currentStepId = "";
+  private currentSessionId = "";
 
   constructor() {
     super();
@@ -144,6 +145,35 @@ export class GodexStepElement extends HTMLElement {
     return this.client;
   }
 
+  private makeStepId(): string {
+    return `stp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  /**
+   * Subscribe to the step session's live events and append assistant text
+   * deltas to the result box as they stream in. Subscribe before POSTing so no
+   * delta is missed (replay=active only replays the current active turn, which
+   * is empty before the run starts). Returns the stream controller to abort.
+   */
+  private async openStream(stepId: string): Promise<AbortController> {
+    const client = this.resolveClient();
+    if (!client) {
+      return new AbortController();
+    }
+    return client.streamEvents(
+      stepId,
+      (event) => {
+        if (event.type === "assistant_text_delta") {
+          const text = (event.payload as { text?: unknown } | undefined)?.text;
+          if (typeof text === "string") {
+            this.result.textContent += text;
+          }
+        }
+      },
+      this.controller?.signal,
+    );
+  }
+
   private async run() {
     const client = this.resolveClient();
     const prompt = this.input.value.trim();
@@ -160,7 +190,16 @@ export class GodexStepElement extends HTMLElement {
     this.meta.textContent = "";
     this.setAttribute("prompt", prompt);
 
+    // Multi-turn: keep the same step_id across runs so the server's
+    // deterministic session is reused (same conversation), and pass the
+    // session_id back so the next turn continues it.
+    if (!this.currentStepId) {
+      this.currentStepId = this.makeStepId();
+    }
+
     const req: StepRequest = {
+      step_id: this.currentStepId,
+      session_id: this.currentSessionId || undefined,
       prompt,
       inputs: this.parseInputs(this.getAttribute("inputs")),
       context: this.parseContext(this.getAttribute("context")),
@@ -168,14 +207,21 @@ export class GodexStepElement extends HTMLElement {
     };
 
     try {
-      const result = await client.createStep(req, this.controller.signal);
-      this.currentStepId = result.step_id;
-      this.status.textContent = "完成";
-      this.status.className = "status done";
-      this.result.textContent = result.text || "";
-      this.meta.textContent = `step ${result.step_id} · session ${result.session_id}`;
-      if (result.output !== undefined) {
-        this.renderStructured(result.output);
+      // Subscribe before POST so assistant deltas stream in live.
+      const stream = await this.openStream(this.currentStepId);
+      try {
+        const result = await client.createStep(req, this.controller.signal);
+        this.currentStepId = result.step_id;
+        this.currentSessionId = result.session_id;
+        this.status.textContent = "完成";
+        this.status.className = "status done";
+        this.result.textContent = result.text || this.result.textContent;
+        this.meta.textContent = `step ${result.step_id} · session ${result.session_id}`;
+        if (result.output !== undefined) {
+          this.renderStructured(result.output);
+        }
+      } finally {
+        stream.abort();
       }
     } catch (err) {
       if ((err as Error).name === "AbortError") {
@@ -205,16 +251,22 @@ export class GodexStepElement extends HTMLElement {
     this.cards.replaceChildren();
 
     try {
-      await client.replyStep(this.currentStepId, value, { signal: this.controller.signal });
-      // The reply is async: poll until the step leaves the running state.
-      const result = await client.getStep(this.currentStepId, this.controller.signal);
-      this.currentStepId = result.step_id;
-      this.status.textContent = "完成";
-      this.status.className = "status done";
-      this.result.textContent = result.text || "";
-      this.meta.textContent = `step ${result.step_id} · session ${result.session_id}`;
-      if (result.output !== undefined) {
-        this.renderStructured(result.output);
+      const stream = await this.openStream(this.currentStepId);
+      try {
+        await client.replyStep(this.currentStepId, value, { signal: this.controller.signal });
+        // The reply is async: poll until the step leaves the running state.
+        const result = await client.getStep(this.currentStepId, this.controller.signal);
+        this.currentStepId = result.step_id;
+        this.currentSessionId = result.session_id || this.currentSessionId;
+        this.status.textContent = "完成";
+        this.status.className = "status done";
+        this.result.textContent = result.text || this.result.textContent;
+        this.meta.textContent = `step ${result.step_id} · session ${result.session_id}`;
+        if (result.output !== undefined) {
+          this.renderStructured(result.output);
+        }
+      } finally {
+        stream.abort();
       }
     } catch (err) {
       if ((err as Error).name === "AbortError") {

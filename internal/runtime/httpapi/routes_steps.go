@@ -22,6 +22,9 @@ import (
 // stepRequest is the body of POST /v1/agent-steps.
 type stepRequest struct {
 	StepID           string               `json:"step_id,omitempty"`
+	// SessionID, when present, continues the conversation of the given step
+	// session (multi-turn). When empty a new session is opened for step_id.
+	SessionID        string               `json:"session_id,omitempty"`
 	Prompt           string               `json:"prompt"`
 	Inputs           map[string]any       `json:"inputs,omitempty"`
 	Context          *stepContext         `json:"context,omitempty"`
@@ -131,6 +134,15 @@ func handleAgentStep(w http.ResponseWriter, r *http.Request, service *backend.Se
 		return
 	}
 	sessionID := opened.SessionID
+
+	// Multi-turn continuation: when the caller passes session_id, verify it
+	// matches the deterministic session derived from step_id so a caller can't
+	// splice into another agent's conversation.
+	if req.SessionID != "" && req.SessionID != sessionID {
+		writeStepError(w, http.StatusBadRequest, "invalid_request",
+			fmt.Errorf("session_id does not match step_id session"), stepID, sessionID)
+		return
+	}
 
 	// Activate the per-step tool set: the business key's binding (MCP server
 	// allowlist + sandbox tools) intersected with the request's tool filters.

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
@@ -1820,73 +1819,7 @@ func NewHandlerWithRuntime(
 		writeJSON(w, http.StatusOK, result)
 	})))
 	mux.Handle("GET /sessions/{id}/events", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming unsupported"))
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		_, _ = fmt.Fprint(w, ": connected\n\n")
-		flusher.Flush()
-
-		ctx := r.Context()
-		eventCh := make(chan events.Event, 16)
-		var subscribeOnce sync.Once
-		go func() {
-			replay := backend.EventReplayOptions{}
-			if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("replay")), "active") {
-				replay.ActiveOnly = true
-			}
-			if turnID := strings.TrimSpace(r.URL.Query().Get("turn_id")); turnID != "" {
-				replay.TurnID = turnID
-			}
-			err := service.SubscribeReplay(ctx, r.PathValue("id"), events.SinkFunc(func(event events.Event) {
-				select {
-				case <-ctx.Done():
-				case eventCh <- event:
-				}
-			}), replay)
-			subscribeOnce.Do(func() {
-				close(eventCh)
-			})
-			if err != nil && !errors.Is(err, context.Canceled) {
-				subscribeOnce.Do(func() {
-					close(eventCh)
-				})
-			}
-		}()
-
-		// Keep the SSE stream alive during idle periods. Without a heartbeat,
-		// a healthy connection with no events is torn down by client/proxy
-		// read timeouts (the web UI enforces a 90s read timeout), which
-		// surfaces as a dropped stream, a "reconnecting" state, and a UI that
-		// never recovers until a manual page reload.
-		heartbeat := time.NewTicker(20 * time.Second)
-		defer heartbeat.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-heartbeat.C:
-				// SSE comment lines carry no payload but reset read timeouts.
-				_, _ = fmt.Fprint(w, ": keepalive\n\n")
-				flusher.Flush()
-			case event, ok := <-eventCh:
-				if !ok {
-					return
-				}
-				data, marshalErr := json.Marshal(event)
-				if marshalErr != nil {
-					continue
-				}
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-				flusher.Flush()
-			}
-		}
+		serveSessionEventStream(w, r, service, r.PathValue("id"))
 	})))
 	registerUsageRoutes(mux, protected, usageService, manager)
 	registerBizRoutes(mux, protected, usageService)

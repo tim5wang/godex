@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/message"
 
 	"github.com/tim5wang/voice-engine/protocol"
@@ -176,5 +180,90 @@ func TestVoiceConnConcurrentWrite(t *testing.T) {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			break
 		}
+	}
+}
+
+// TestHandleTTSDisabled 验证语音未启用（manager=nil）时 /v1/tts 返回 404。
+func TestHandleTTSDisabled(t *testing.T) {
+	b := &voiceBridge{service: nil}
+	srv := httptest.NewServer(http.HandlerFunc(b.handleTTS))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(`{"text":"你好"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestHandleTTSMockEngine 验证语音启用后经 mock voice-engine 返回 WAV 音频。
+// mock 引擎：hello→ready 握手，tts 请求 → tts_start(24k)→PCM→tts_done。
+func TestHandleTTSMockEngine(t *testing.T) {
+	ve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// 握手：等 hello → 回 ready
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var hello protocol.Message
+		if err := json.Unmarshal(data, &hello); err != nil || hello.T != protocol.KindHello {
+			return
+		}
+		ready, _ := json.Marshal(protocol.Message{T: protocol.KindReady, ProtocolVersion: protocol.ProtocolVersion})
+		_ = conn.WriteMessage(websocket.TextMessage, ready)
+		// 等 tts 请求
+		_, data, err = conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(data, &msg); err != nil || msg.T != protocol.KindTTS {
+			return
+		}
+		start, _ := json.Marshal(protocol.Message{T: protocol.KindTTSStart, ID: msg.ID, SampleRate: 24000})
+		_ = conn.WriteMessage(websocket.TextMessage, start)
+		_ = conn.WriteMessage(websocket.BinaryMessage, make([]byte, 240))
+		done, _ := json.Marshal(protocol.Message{T: protocol.KindTTSDone, ID: msg.ID})
+		_ = conn.WriteMessage(websocket.TextMessage, done)
+	}))
+	defer ve.Close()
+	t.Setenv("GODEX_VOICE_ENGINE_ADDR", strings.TrimPrefix(ve.URL, "http://"))
+
+	// manager：voice_enabled=true
+	workspace := t.TempDir()
+	mgr := newTestManager(t, &config.Config{WorkspaceDir: workspace, HomeDir: filepath.Join(workspace, "home")})
+	if _, err := mgr.Update(context.Background(), config.UpdateRequest{
+		Values: map[string]any{"media.audio.voice_enabled": true},
+	}); err != nil {
+		t.Fatalf("enable voice: %v", err)
+	}
+	b := &voiceBridge{manager: mgr}
+	srv := httptest.NewServer(http.HandlerFunc(b.handleTTS))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(`{"text":"你好"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(body) < 44 || string(body[0:4]) != "RIFF" || string(body[8:12]) != "WAVE" {
+		t.Fatalf("not wav, got %d bytes: %q", len(body), body[:min(len(body), 16)])
 	}
 }

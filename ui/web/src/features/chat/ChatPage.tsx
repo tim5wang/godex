@@ -1478,6 +1478,7 @@ export function ChatPage() {
                         hasNoteContext={!!noteContextQuery.data}
                         workspaceDir={sessionWorkspaceDir}
                         token={token}
+                        voiceEnabled={metaQuery.data?.voice_enabled ?? false}
                         onOpenInFiles={(path) => {
                           setFilesFocusPath(path);
                           v2SetActiveDockTab("files");

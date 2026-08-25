@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +84,48 @@ func registerVoiceRoutes(mux *http.ServeMux, service *backend.Service, manager *
 	})))
 	// /v1/voice/status 诊断端点：返回启用状态与引擎可达性（不升级 WebSocket）。
 	mux.Handle("GET /v1/voice/status", auth(http.HandlerFunc(b.handleVoiceStatus)))
+	// /v1/tts 文本合成端点：POST {"text":"..."} → WAV 音频（供消息旁播放按钮）。
+	mux.Handle("POST /v1/tts", auth(http.HandlerFunc(b.handleTTS)))
+}
+
+// ttsRequest 是 POST /v1/tts 的请求体。
+type ttsRequest struct {
+	Text string `json:"text"`
+}
+
+// handleTTS 处理 POST /v1/tts：文本 → voice-engine 合成 → WAV 音频返回。
+func (b *voiceBridge) handleTTS(w http.ResponseWriter, r *http.Request) {
+	if !b.voiceEnabled() {
+		writeError(w, http.StatusNotFound, fmt.Errorf("voice chat disabled (media.audio.voice_enabled)"))
+		return
+	}
+	var req ttsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("bad tts request: %w", err))
+		return
+	}
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("empty text"))
+		return
+	}
+	b.refreshEngineAddr()
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	ve, err := voiceclient.Dial(ctx, b.engineAddr)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("engine unreachable: %w", err))
+		return
+	}
+	defer ve.Close()
+	wav, err := ve.SynthesizeWAV(ctx, "http-tts", text)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("tts synthesize: %w", err))
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", strconv.Itoa(len(wav)))
+	_, _ = w.Write(wav)
 }
 
 // handleVoiceStatus 处理 GET /v1/voice/status（可独立测试）。

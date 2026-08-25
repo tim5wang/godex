@@ -1177,6 +1177,22 @@ export async function fetchAttachmentBlob(token: string | null, url: string) {
   return response.blob();
 }
 
+/** 文本 → voice-engine TTS 合成 → WAV 音频 Blob（消息旁播放按钮用）。 */
+export async function synthesizeSpeech(token: string | null, text: string): Promise<Blob> {
+  const response = await fetch(apiURL("/v1/tts"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(token),
+    },
+    body: JSON.stringify({ text }),
+  });
+  if (!response.ok) {
+    throw await parseAPIError(response);
+  }
+  return response.blob();
+}
+
 export function executeCommand(token: string | null, sessionId: string, command: string, metadata?: Record<string, string>) {
   return request<CommandResult>(
     `/sessions/${encodeURIComponent(sessionId)}/commands`,

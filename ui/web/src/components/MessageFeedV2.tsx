@@ -1,5 +1,5 @@
 import { App as AntApp, Avatar, Button, Empty, Space, Tag, Tooltip, Typography } from "antd";
-import { Fragment } from "react";
+import { Fragment, useRef, useState } from "react";
 import {
   CheckCircleFilled,
   CheckSquareOutlined,
@@ -10,6 +10,7 @@ import {
   RightOutlined,
   RobotOutlined,
   SaveOutlined,
+  SoundOutlined,
   UserOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
@@ -22,6 +23,7 @@ import { TodoCard } from "./TodoCard";
 import { ToolDetails } from "./ToolDetails";
 import { UiCardView, type UiCardData } from "../features/workflows/components/UiCardView";
 import { useI18n } from "../i18n";
+import { synthesizeSpeech } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboard";
 import type { FeedItem, FeedSegment } from "../lib/types";
 
@@ -39,6 +41,8 @@ interface MessageFeedV2Props {
   onOpenInFiles?: (path: string) => void;
   /** Submit a ui_card interaction value back to the running session. */
   onSubmitCard?: (value: string) => void;
+  /** 语音已启用（meta.voice_enabled），控制消息 TTS 播放按钮显隐。 */
+  voiceEnabled?: boolean;
 }
 
 /**
@@ -47,7 +51,7 @@ interface MessageFeedV2Props {
  * rows and todo cards in chronological order. Tool calls render as single-line
  * rows that expand in place, keeping the conversation scannable.
  */
-export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard }: MessageFeedV2Props) {
+export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false }: MessageFeedV2Props) {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
 
@@ -84,6 +88,7 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
         token={token}
         onOpenInFiles={onOpenInFiles}
         onSubmitCard={onSubmitCard}
+        voiceEnabled={voiceEnabled}
       />
     ),
     header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item),
@@ -120,6 +125,7 @@ function FeedItemBody({
   token,
   onOpenInFiles,
   onSubmitCard,
+  voiceEnabled,
 }: {
   item: FeedItem;
   onToggleTool: (id: string) => void;
@@ -132,6 +138,7 @@ function FeedItemBody({
   token?: string | null;
   onOpenInFiles?: (path: string) => void;
   onSubmitCard?: (value: string) => void;
+  voiceEnabled?: boolean;
 }) {
   const { t } = useI18n();
   // Grouped assistant turn: render ordered segments, each block separated by a divider.
@@ -147,7 +154,7 @@ function FeedItemBody({
         ))}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
         <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
-        <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} />
+        <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} />
       </div>
     );
   }
@@ -189,6 +196,7 @@ function FeedItemBody({
       </Space>
       {copyable || canSaveToNote ? (
         <Space className="message-action-buttons" size={2}>
+          {voiceEnabled && item.kind === "assistant" ? <TTSPlayButton text={item.body} token={token} /> : null}
           {canSaveToNote ? (
             <Tooltip title={saveLabel}>
               <Button
@@ -342,6 +350,8 @@ function TurnActions({
   saveLabel,
   onSaveToNote,
   savingToNote,
+  token,
+  voiceEnabled,
 }: {
   item: FeedItem;
   onCopy: () => void;
@@ -349,6 +359,8 @@ function TurnActions({
   saveLabel: string;
   onSaveToNote?: (item: FeedItem) => void;
   savingToNote: boolean;
+  token?: string | null;
+  voiceEnabled?: boolean;
 }) {
   // Copy / save act only on the final result text, not the process.
   const hasResult = Boolean(item.finalBody?.trim());
@@ -358,6 +370,7 @@ function TurnActions({
   const canSaveToNote = Boolean(onSaveToNote);
   return (
     <div className="chat-feed-v2-turn-actions">
+      {voiceEnabled && hasResult ? <TTSPlayButton text={item.finalBody ?? ""} token={token} /> : null}
       {canSaveToNote ? (
         <Tooltip title={saveLabel}>
           <Button
@@ -388,6 +401,58 @@ function TurnActions({
         />
       </Tooltip>
     </div>
+  );
+}
+
+function TTSPlayButton({ text, token, voiceEnabled = true }: { text: string; token?: string | null; voiceEnabled?: boolean }) {
+  const { message } = AntApp.useApp();
+  const { t } = useI18n();
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const play = async () => {
+    const trimmed = text.trim();
+    if (playing || !trimmed || !voiceEnabled) return;
+    try {
+      setPlaying(true);
+      const blob = await synthesizeSpeech(token ?? null, trimmed);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setPlaying(false);
+        URL.revokeObjectURL(url);
+      };
+      audio.onerror = () => {
+        setPlaying(false);
+        URL.revokeObjectURL(url);
+        void message.error(t("chat.playSpeechFailed"));
+      };
+      await audio.play();
+    } catch {
+      setPlaying(false);
+      void message.error(t("chat.playSpeechFailed"));
+    }
+  };
+
+  return (
+    <Tooltip title={t("chat.speakMessage")}>
+      <Button
+        aria-label={t("chat.speakMessage")}
+        icon={playing ? <LoadingOutlined /> : <SoundOutlined />}
+        onClick={(event) => {
+          event.stopPropagation();
+          void play();
+        }}
+        shape="circle"
+        size="small"
+        type="text"
+      />
+    </Tooltip>
   );
 }
 

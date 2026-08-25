@@ -43,7 +43,7 @@ func TestSourceVoiceEnvelope(t *testing.T) {
 // TestNewVoiceBridgeDefaultAddr 验证默认引擎地址为协议默认值。
 func TestNewVoiceBridgeDefaultAddr(t *testing.T) {
 	t.Setenv("GODEX_VOICE_ENGINE_ADDR", "")
-	b := newVoiceBridge(nil)
+	b := newVoiceBridge(nil, nil)
 	if b.engineAddr != protocol.DefaultAddr {
 		t.Errorf("engine addr = %q, want %q", b.engineAddr, protocol.DefaultAddr)
 	}
@@ -75,6 +75,40 @@ func TestVoiceBridgeEngineUnreachable(t *testing.T) {
 	}
 	if msg.Type != "error" || msg.Code != "engine_unreachable" {
 		t.Errorf("expected engine_unreachable, got %+v", msg)
+	}
+}
+
+// TestVoiceStatusEndpoint 验证 /v1/voice/status 返回启用状态与引擎可达性。
+func TestVoiceStatusEndpoint(t *testing.T) {
+	// 用环境变量指定不可达端口：handleVoiceStatus 内部会 refreshEngineAddr，
+	// 从 manager(nil)→env→默认 依次回退，这里走 env 分支。
+	t.Setenv("GODEX_VOICE_ENGINE_ADDR", "127.0.0.1:1")
+	b := &voiceBridge{service: nil}
+	srv := httptest.NewServer(http.HandlerFunc(b.handleVoiceStatus))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("get status: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var st voiceStatus
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if st.EngineAddr != "127.0.0.1:1" {
+		t.Errorf("engine_addr = %q, want 127.0.0.1:1", st.EngineAddr)
+	}
+	// 默认 manager=nil → voiceEnabled=false
+	if st.Enabled {
+		t.Error("expected enabled=false with nil manager")
+	}
+	// 引擎地址不可达 → reachable=false
+	if st.Reachable {
+		t.Error("expected reachable=false for dead port")
 	}
 }
 

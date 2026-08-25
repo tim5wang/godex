@@ -85,6 +85,7 @@ func NewHandlerWithRuntime(
 			SSHOptions:    exec.SSHOptions,
 			DockerImage:   exec.DockerImage,
 			DockerNetwork: exec.DockerNetwork,
+			VoiceEnabled:  cfg.Media.Audio.VoiceEnabled,
 		})
 	}))
 	protected := withBearerAuthProvider(func() string {
@@ -1827,7 +1828,7 @@ func NewHandlerWithRuntime(
 	registerStepTrackRoutes(mux, usageService, service)
 	registerFileRoutes(mux, protected, manager)
 	registerTerminalRoutes(mux)
-	registerVoiceRoutes(mux, service, protected, func() string { return manager.Current().WebToken })
+	registerVoiceRoutes(mux, service, manager, protected, func() string { return manager.Current().WebToken })
 	registerPreviewRoutes(mux, manager)
 	registerGitRoutes(mux, protected, manager)
 	return withGzip(mux)

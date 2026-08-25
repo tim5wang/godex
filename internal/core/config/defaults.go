@@ -314,6 +314,8 @@ func defaultConfigFile() ConfigFile {
 				WhisperCPPPath:   "whisper-cli",
 				WhisperModelPath: "",
 				MaxChars:         60000,
+				VoiceEnabled:     false,
+				VoiceEngineAddr:  "",
 			},
 			Video: MediaVideoSection{
 				Enabled:                 false,

@@ -466,6 +466,11 @@ type MediaAudioSection struct {
 	WhisperCPPPath   string `yaml:"whisper_cpp_path"`
 	WhisperModelPath string `yaml:"whisper_model_path"`
 	MaxChars         int    `yaml:"max_chars"`
+	// VoiceEnabled 启用实时语音对话（voice-engine 集成，M4/M5）。
+	VoiceEnabled bool `yaml:"voice_enabled"`
+	// VoiceEngineAddr 是 voice-engine WebSocket 地址（如 127.0.0.1:17021）。
+	// 空值时使用 voice-engine protocol 默认地址。
+	VoiceEngineAddr string `yaml:"voice_engine_addr"`
 }
 
 type MediaVideoSection struct {

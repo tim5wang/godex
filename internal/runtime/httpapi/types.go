@@ -351,6 +351,8 @@ type metaResponse struct {
 	SSHOptions    []string     `json:"ssh_options,omitempty"`
 	DockerImage   string       `json:"docker_image,omitempty"`
 	DockerNetwork string       `json:"docker_network,omitempty"`
+	// VoiceEnabled 指示实时语音对话是否启用（media.audio.voice_enabled）。
+	VoiceEnabled bool `json:"voice_enabled"`
 }
 
 type updateConfigRequest struct {

@@ -723,6 +723,12 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveInt("media.audio.max_chars", file.Media.Audio.MaxChars, "GODEX_MEDIA_AUDIO_MAX_CHARS", func(v int) {
 		current.Media.Audio.MaxChars = v
 	})
+	resolveBool("media.audio.voice_enabled", file.Media.Audio.VoiceEnabled, "GODEX_MEDIA_AUDIO_VOICE_ENABLED", func(v bool) {
+		current.Media.Audio.VoiceEnabled = v
+	})
+	resolveString("media.audio.voice_engine_addr", file.Media.Audio.VoiceEngineAddr, "GODEX_MEDIA_AUDIO_VOICE_ENGINE_ADDR", func(v string) {
+		current.Media.Audio.VoiceEngineAddr = v
+	})
 	resolveBool("media.video.enabled", file.Media.Video.Enabled, "GODEX_MEDIA_VIDEO_ENABLED", func(v bool) {
 		current.Media.Video.Enabled = v
 	})

@@ -266,6 +266,7 @@ export interface MetaResponse {
   ssh_options?: string[];
   docker_image?: string;
   docker_network?: string;
+  voice_enabled?: boolean;
 }
 
 export interface ConfigMetaResponse {

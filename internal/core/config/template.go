@@ -797,6 +797,10 @@ media:
     whisper_model_path: {{ yamlString .Media.Audio.WhisperModelPath }}
     # Maximum transcript characters injected into one turn. Environment override: GODEX_MEDIA_AUDIO_MAX_CHARS.
     max_chars: {{ .Media.Audio.MaxChars }}
+    # Enable real-time voice chat (push-to-talk) via the voice-engine bridge. Environment override: GODEX_MEDIA_AUDIO_VOICE_ENABLED.
+    voice_enabled: {{ .Media.Audio.VoiceEnabled }}
+    # voice-engine WebSocket address. Empty uses the default. Environment override: GODEX_MEDIA_AUDIO_VOICE_ENGINE_ADDR.
+    voice_engine_addr: {{ yamlString .Media.Audio.VoiceEngineAddr }}
 
   video:
     # Enable local video transcript + keyframe preprocessing. Environment override: GODEX_MEDIA_VIDEO_ENABLED.

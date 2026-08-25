@@ -9,10 +9,15 @@ import { AudioOutlined, AudioMutedOutlined } from "@ant-design/icons";
  *       （VAD+ASR → agent → TTS）→ 下行 PCM(24k) → 浏览器播放。
  *
  * 交互：按住按钮说话，松开发送（audio_end）；服务端 VAD 负责切分与去静音。
+ *
+ * 状态：未启用（media.audio.voice_enabled=false）时禁用并提示；
+ * 连接失败时通过 /v1/voice/status 诊断区分「未启用 / 引擎不可达 / 鉴权失败」。
  */
 interface VoiceBarProps {
   token: string | null;
   sessionId: string | null;
+  /** 后端是否启用了语音（meta.voice_enabled）。false 时禁用按钮。 */
+  enabled?: boolean;
   disabled?: boolean;
 }
 
@@ -23,10 +28,16 @@ interface VoiceMsg {
   id?: string;
 }
 
+interface VoiceStatus {
+  enabled: boolean;
+  engine_addr: string;
+  reachable: boolean;
+}
+
 const TARGET_RATE = 16000;
 const TTS_RATE = 24000; // Kokoro 输出采样率
 
-export function VoiceBar({ token, sessionId, disabled = false }: VoiceBarProps) {
+export function VoiceBar({ token, sessionId, enabled = true, disabled = false }: VoiceBarProps) {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +60,7 @@ export function VoiceBar({ token, sessionId, disabled = false }: VoiceBarProps) 
 
   // 连接 /v1/voice
   useEffect(() => {
-    if (disabled || !sessionId) return;
+    if (disabled || !sessionId || !enabled) return;
     let closed = false;
     const ws = new WebSocket(wsUrl());
     wsRef.current = ws;
@@ -63,7 +74,7 @@ export function VoiceBar({ token, sessionId, disabled = false }: VoiceBarProps) 
     ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") {
         // 下行 TTS PCM（binary）→ 排队播放
-        void ev.data.arrayBuffer().then((buf) => playPCM(ttsCtxRef, playCursorRef, new Uint8Array(buf)));
+        void ev.data.arrayBuffer().then((buf: ArrayBuffer) => playPCM(ttsCtxRef, playCursorRef, new Uint8Array(buf)));
         return;
       }
       let msg: VoiceMsg;
@@ -80,7 +91,7 @@ export function VoiceBar({ token, sessionId, disabled = false }: VoiceBarProps) 
       if (!closed) setConnected(false);
     };
     ws.onerror = () => {
-      if (!closed) setError("voice connection failed");
+      if (!closed) void diagnose(token, setError);
     };
 
     return () => {
@@ -89,7 +100,7 @@ export function VoiceBar({ token, sessionId, disabled = false }: VoiceBarProps) 
       wsRef.current = null;
       setConnected(false);
     };
-  }, [wsUrl, disabled, sessionId]);
+  }, [wsUrl, disabled, sessionId, enabled]);
 
   // 开始录音：采集 16k s16 PCM 上行
   const startListening = useCallback(async () => {
@@ -166,15 +177,20 @@ export function VoiceBar({ token, sessionId, disabled = false }: VoiceBarProps) 
 
   useEffect(() => () => stopListening(), [stopListening]);
 
+  const notEnabled = !enabled;
+  const tip = notEnabled
+    ? "语音未启用（设置 → Media / Audio → Voice Chat Enabled）"
+    : error ?? (connected ? "按住说话" : "语音未连接");
+
   return (
-    <Tooltip title={error ?? (connected ? "按住说话" : "语音未连接")}>
+    <Tooltip title={tip}>
       <Button
         size="small"
         shape="circle"
         type={listening ? "primary" : "default"}
         danger={listening}
         icon={listening ? <AudioOutlined /> : <AudioMutedOutlined />}
-        disabled={disabled || !connected}
+        disabled={disabled || !connected || notEnabled}
         onPointerDown={(e) => {
           e.preventDefault();
           void startListening();
@@ -190,6 +206,40 @@ export function VoiceBar({ token, sessionId, disabled = false }: VoiceBarProps) 
       />
     </Tooltip>
   );
+}
+
+/** 连接失败时调用 /v1/voice/status 诊断，给出明确错误文案。
+ *  status 端点与 /v1/voice 一样受 web-token 保护，需带 Bearer header。 */
+async function diagnose(token: string | null, setError: (msg: string) => void) {
+  try {
+    const resp = await fetch("/v1/voice/status", {
+      headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (resp.status === 401) {
+      setError("语音鉴权失败：web token 无效，请在设置中更新");
+      return;
+    }
+    if (resp.status === 404) {
+      setError("语音未启用（设置 → Media / Audio → Voice Chat Enabled）");
+      return;
+    }
+    if (!resp.ok) {
+      setError(`语音服务错误 (HTTP ${resp.status})`);
+      return;
+    }
+    const st = (await resp.json()) as VoiceStatus;
+    if (!st.enabled) {
+      setError("语音未启用（设置 → Media / Audio → Voice Chat Enabled）");
+      return;
+    }
+    if (!st.reachable) {
+      setError(`语音引擎不可达（${st.engine_addr}），请启动 voice-engine`);
+      return;
+    }
+    setError("语音连接失败，请刷新页面重试");
+  } catch {
+    setError("语音连接失败（无法访问诊断端点）");
+  }
 }
 
 /** 播放一段 TTS PCM（24k s16）。按到达顺序排到已有播放之后，保证不乱序。 */

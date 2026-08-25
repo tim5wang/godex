@@ -502,6 +502,10 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Media.Audio.WhisperModelPath = asString(value)
 	case "media.audio.max_chars":
 		file.Media.Audio.MaxChars = asInt(value)
+	case "media.audio.voice_enabled":
+		file.Media.Audio.VoiceEnabled = asBool(value)
+	case "media.audio.voice_engine_addr":
+		file.Media.Audio.VoiceEngineAddr = asString(value)
 	case "media.video.enabled":
 		file.Media.Video.Enabled = asBool(value)
 	case "media.video.keyframe_interval_seconds":

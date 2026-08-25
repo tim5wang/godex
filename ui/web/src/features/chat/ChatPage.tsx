@@ -1560,7 +1560,7 @@ export function ChatPage() {
                     </Space>
                     <Space size={4}>
                       <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
-                      <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} disabled={!openQuery.data?.session_id || modelMutation.isPending} />
+                      <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} enabled={metaQuery.data?.voice_enabled ?? false} disabled={!openQuery.data?.session_id || modelMutation.isPending} />
                       {running ? (
                         <Segmented
                           size="small"

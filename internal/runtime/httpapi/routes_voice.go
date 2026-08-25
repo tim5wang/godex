@@ -3,7 +3,9 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/services/backend"
@@ -28,28 +31,89 @@ import (
 //	         agent 回复 → voice-engine TTS → 下行 PCM → Web UI
 type voiceBridge struct {
 	service    *backend.Service
+	manager    *config.Manager
 	engineAddr string
 }
 
-func newVoiceBridge(service *backend.Service) *voiceBridge {
-	addr := strings.TrimSpace(os.Getenv("GODEX_VOICE_ENGINE_ADDR"))
+func newVoiceBridge(service *backend.Service, manager *config.Manager) *voiceBridge {
+	b := &voiceBridge{service: service, manager: manager}
+	b.refreshEngineAddr()
+	return b
+}
+
+// refreshEngineAddr 从配置读取引擎地址（media.audio.voice_engine_addr），
+// 空值时回退到环境变量 GODEX_VOICE_ENGINE_ADDR，再回退到协议默认地址。
+func (b *voiceBridge) refreshEngineAddr() {
+	addr := ""
+	if b.manager != nil {
+		addr = strings.TrimSpace(b.manager.Current().Media.Audio.VoiceEngineAddr)
+	}
+	if addr == "" {
+		addr = strings.TrimSpace(os.Getenv("GODEX_VOICE_ENGINE_ADDR"))
+	}
 	if addr == "" {
 		addr = protocol.DefaultAddr
 	}
-	return &voiceBridge{service: service, engineAddr: addr}
+	b.engineAddr = addr
+}
+
+// voiceEnabled 返回是否启用了实时语音对话。
+func (b *voiceBridge) voiceEnabled() bool {
+	if b.manager == nil {
+		return false
+	}
+	return b.manager.Current().Media.Audio.VoiceEnabled
 }
 
 // registerVoiceRoutes 注册语音桥接端点。
 // 鉴权同时接受 Bearer header 与 ?token= query：浏览器 WebSocket 无法设置
 // Authorization header，必须用 query token（见 withPreviewAuthProvider 先例）。
 // tokenProvider 返回当前 web token（如 manager.Current().WebToken）。
-func registerVoiceRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler, tokenProvider func() string) {
+// 未启用 media.audio.voice_enabled 时 /v1/voice 返回 404（前端据此隐藏/禁用）。
+func registerVoiceRoutes(mux *http.ServeMux, service *backend.Service, manager *config.Manager, protected func(http.Handler) http.Handler, tokenProvider func() string) {
 	if service == nil {
 		return
 	}
-	b := newVoiceBridge(service)
+	b := newVoiceBridge(service, manager)
 	auth := voiceQueryTokenAuth(protected, tokenProvider)
-	mux.Handle("GET /v1/voice", auth(http.HandlerFunc(b.handleVoice)))
+	mux.Handle("GET /v1/voice", auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !b.voiceEnabled() {
+			writeError(w, http.StatusNotFound, fmt.Errorf("voice chat disabled (media.audio.voice_enabled)"))
+			return
+		}
+		b.refreshEngineAddr()
+		b.handleVoice(w, r)
+	})))
+	// /v1/voice/status 诊断端点：返回启用状态与引擎可达性（不升级 WebSocket）。
+	mux.Handle("GET /v1/voice/status", auth(http.HandlerFunc(b.handleVoiceStatus)))
+}
+
+// handleVoiceStatus 处理 GET /v1/voice/status（可独立测试）。
+func (b *voiceBridge) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
+	b.refreshEngineAddr()
+	writeJSON(w, http.StatusOK, voiceStatus{
+		Enabled:    b.voiceEnabled(),
+		EngineAddr: b.engineAddr,
+		Reachable:  b.engineReachable(r.Context()),
+	})
+}
+
+// voiceStatus 是 /v1/voice/status 的响应体。
+type voiceStatus struct {
+	Enabled    bool   `json:"enabled"`
+	EngineAddr string `json:"engine_addr"`
+	Reachable  bool   `json:"reachable"`
+}
+
+// engineReachable 探测 voice-engine 是否可达（TCP 拨号即断）。
+func (b *voiceBridge) engineReachable(ctx context.Context) bool {
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", b.engineAddr)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // voiceQueryTokenAuth 包装 protected 鉴权，额外允许 ?token= query 通过。

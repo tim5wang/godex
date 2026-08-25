@@ -550,6 +550,10 @@ type AudioMediaConfig struct {
 	WhisperCPPPath   string
 	WhisperModelPath string
 	MaxChars         int
+	// VoiceEnabled 启用实时语音对话（voice-engine 集成）。
+	VoiceEnabled bool
+	// VoiceEngineAddr 是 voice-engine WebSocket 地址（默认 127.0.0.1:17021）。
+	VoiceEngineAddr string
 }
 
 // VideoMediaConfig controls local video summarization support.

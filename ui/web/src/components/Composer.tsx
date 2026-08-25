@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { Button, Progress, Space, Tag, Typography, type UploadFile } from "antd";
 import { PaperClipOutlined } from "@ant-design/icons";
 import { Attachments, Sender } from "@ant-design/x";
@@ -10,6 +10,11 @@ import type { CommandMetadata, PackageCommandEntry } from "../lib/types";
 export interface ComposerSubmission {
   text: string;
   files: File[];
+}
+
+/** Composer 外部控制句柄：供语音识别等场景把文本注入输入框，由用户编辑后发送。 */
+export interface ComposerHandle {
+  setText: (text: string) => void;
 }
 
 interface ComposerProps {
@@ -24,6 +29,8 @@ interface ComposerProps {
    *  Empty disables draft persistence. */
   draftScope?: string;
   onSubmit: (submission: ComposerSubmission) => Promise<void>;
+  /** React 19：ref 作为普通 prop 传入，暴露 ComposerHandle。 */
+  ref?: Ref<ComposerHandle>;
 }
 
 /** A slash-palette entry: either a built-in command (/clear, /model …)
@@ -39,7 +46,7 @@ interface PaletteEntry {
   bundles?: string[];
 }
 
-export function Composer({ disabled, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], queuedFiles = [], onQueuedFilesConsumed, draftScope = "", onSubmit }: ComposerProps) {
+export function Composer({ disabled, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], queuedFiles = [], onQueuedFilesConsumed, draftScope = "", onSubmit, ref }: ComposerProps) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -54,6 +61,18 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
   // Guards the async draft restore: once the user starts typing or attaching
   // files, a late-arriving restored draft must not clobber their input.
   const inputDirtyRef = useRef(false);
+
+  // 外部注入文本（语音识别结果）：标记 dirty 防止晚到的草稿恢复覆盖用户输入。
+  useImperativeHandle(
+    ref,
+    () => ({
+      setText: (text: string) => {
+        inputDirtyRef.current = true;
+        setValue(text);
+      },
+    }),
+    [],
+  );
   const uploadItems = useMemo<UploadFile[]>(
     () =>
       files.map((file, index) => ({

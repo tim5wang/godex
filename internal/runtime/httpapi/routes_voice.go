@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -15,8 +14,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/tim5wang/godex/internal/core/config"
-	"github.com/tim5wang/godex/internal/domain/events"
-	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/services/backend"
 
 	voiceclient "github.com/tim5wang/voice-engine/client"
@@ -179,18 +176,10 @@ func (b *voiceBridge) handleVoice(w http.ResponseWriter, r *http.Request) {
 	vc.serve(r.Context())
 }
 
-// pumpEngine 把 voice-engine 事件转发给 Web UI，并在 asr_final 时编排 agent。
+// pumpEngine 把 voice-engine 事件转发给 Web UI，并在 asr_final 时回显识别文本。
+// 语音只负责输入：识别文本回显给前端（asr_partial），由用户在输入框编辑后手动发送，
+// 不再自动提交 agent。
 func (b *voiceBridge) pumpEngine(vc *voiceConn) {
-	// 串行编排队列：asr_final 文本入队，由单 worker 顺序编排，
-	// 避免并发编排竞态写 vc.sessionID 与 SubmitAsync 交错。
-	orchestrateCh := make(chan string, 16)
-	go func() {
-		for text := range orchestrateCh {
-			b.orchestrate(vc, text)
-		}
-	}()
-	defer close(orchestrateCh)
-
 	for ev := range vc.ve.Events() {
 		select {
 		case <-vc.closeCh:
@@ -199,15 +188,9 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 		}
 		switch ev.Kind {
 		case voiceclient.EventASRFinal:
-			// 先回显识别文本给 Web UI（分段中间反馈），再异步编排 agent，
-			// 避免同步阻塞后续 asr_final 事件（连续说话变慢/丢结果的根因）。
+			// 回显识别文本给 Web UI（分段识别反馈）。
 			if strings.TrimSpace(ev.Text) != "" {
 				vc.writeText(voiceMsg{Type: "asr_partial", Text: ev.Text})
-			}
-			select {
-			case orchestrateCh <- ev.Text:
-			case <-vc.closeCh:
-				return
 			}
 		case voiceclient.EventPCM:
 			vc.writeBinary(ev.PCM)
@@ -215,89 +198,6 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 			vc.writeText(voiceMsg{Type: string(ev.Kind), ID: ev.ID})
 		case voiceclient.EventError:
 			vc.writeText(voiceMsg{Type: "error", Code: ev.Code, Text: ev.Text})
-		}
-	}
-}
-
-// orchestrate 把 ASR 文本提交给 agent，收集回复并请求 TTS。
-func (b *voiceBridge) orchestrate(vc *voiceConn, text string) {
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	sessionID := vc.sessionID
-	if sessionID == "" {
-		// 未指定会话时复用默认 web 会话（key=voice）。
-		opened, err := b.service.OpenSession(context.Background(), backend.SessionLocator{
-			Channel: "web",
-			Key:     "voice",
-		})
-		if err != nil {
-			vc.writeText(voiceMsg{Type: "error", Code: "session_error", Text: err.Error()})
-			return
-		}
-		sessionID = opened.SessionID
-		vc.sessionID = sessionID
-	}
-
-	envelope := message.NewRuntimeEnvelope(message.SourceVoice, sessionID, "voice", text, time.Now(), nil)
-	result, err := b.service.SubmitAsync(context.Background(), sessionID, envelope)
-	if err != nil {
-		vc.writeText(voiceMsg{Type: "error", Code: "submit_error", Text: err.Error()})
-		return
-	}
-
-	// 收集 assistant 回复（同 TurnID 的 delta，直到 turn 完成）。
-	reply := b.collectReply(context.Background(), sessionID, result.TurnID)
-	if strings.TrimSpace(reply) == "" {
-		return
-	}
-	vc.writeText(voiceMsg{Type: "assistant_text", Text: reply})
-	if err := vc.ve.Synthesize("reply-"+result.TurnID, reply); err != nil {
-		vc.writeText(voiceMsg{Type: "error", Code: "tts_error", Text: err.Error()})
-	}
-}
-
-// collectReply 收集 agent 一个 turn 的完整回复文本。
-func (b *voiceBridge) collectReply(ctx context.Context, sessionID, turnID string) string {
-	eventCh := make(chan events.Event, 128)
-	unsubscribe, err := b.service.AttachSink(sessionID, events.SinkFunc(func(event events.Event) {
-		select {
-		case <-ctx.Done():
-		case eventCh <- event:
-		default:
-		}
-	}))
-	if err != nil {
-		return ""
-	}
-	defer unsubscribe()
-
-	var builder strings.Builder
-	timer := time.NewTimer(60 * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return builder.String()
-		case <-timer.C:
-			return builder.String()
-		case event := <-eventCh:
-			if event.TurnID != turnID {
-				continue
-			}
-			switch event.Type {
-			case events.EventAssistantTextDelta:
-				if payload, ok := event.Payload.(events.TextPayload); ok {
-					builder.WriteString(payload.Text)
-				}
-			case events.EventTurnCompleted:
-				return builder.String()
-			case events.EventErrorRaised:
-				if payload, ok := event.Payload.(events.NoticePayload); ok {
-					log.Printf("[voice] turn error: %s", payload.Message)
-				}
-				return builder.String()
-			}
 		}
 	}
 }

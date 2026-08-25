@@ -20,6 +20,8 @@ interface VoiceBarProps {
   /** 后端是否启用了语音（meta.voice_enabled）。false 时禁用按钮。 */
   enabled?: boolean;
   disabled?: boolean;
+  /** 录音停止时回调识别文本（由调用方填入输入框，用户编辑后发送）。 */
+  onResult?: (text: string) => void;
 }
 
 interface VoiceMsg {
@@ -38,12 +40,16 @@ interface VoiceStatus {
 const TARGET_RATE = 16000;
 const TTS_RATE = 24000; // Kokoro 输出采样率
 
-export function VoiceBar({ token, sessionId, enabled = true, disabled = false }: VoiceBarProps) {
+export function VoiceBar({ token, sessionId, enabled = true, disabled = false, onResult }: VoiceBarProps) {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 录音期间累计的识别文本（每个 asr_partial 分段追加）。
   const [partial, setPartial] = useState<string>("");
+  // 同步 ref：stopListening（空依赖 useCallback）需要读到最新累计文本。
+  const partialRef = useRef<string>("");
+  const onResultRef = useRef(onResult);
+  onResultRef.current = onResult;
 
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -90,7 +96,11 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false }:
         setError(msg.text || msg.code || "voice error");
       } else if (msg.type === "asr_partial" && msg.text) {
         // 分段识别回显：追加到累计文本。
-        setPartial((prev) => (prev ? `${prev}${msg.text}` : (msg.text ?? "")));
+        setPartial((prev) => {
+          const next = prev ? `${prev}${msg.text}` : (msg.text ?? "");
+          partialRef.current = next;
+          return next;
+        });
       }
     };
     ws.onclose = () => {
@@ -179,6 +189,13 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false }:
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "audio_end" } satisfies VoiceMsg));
     }
+    // 把累计识别文本交给调用方（填入输入框，用户编辑后发送）。
+    const text = partialRef.current.trim();
+    partialRef.current = "";
+    setPartial("");
+    if (text) {
+      onResultRef.current?.(text);
+    }
   }, []);
 
   useEffect(() => () => stopListening(), [stopListening]);
@@ -196,7 +213,7 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false }:
   const notEnabled = !enabled;
   const tip = notEnabled
     ? "语音未启用（设置 → Media / Audio → Voice Chat Enabled）"
-    : error ?? (listening ? "录音中…点击停止并发送" : connected ? "点击开始说话" : "语音未连接");
+    : error ?? (listening ? "录音中…点击停止，识别文本将填入输入框" : connected ? "点击开始说话" : "语音未连接");
 
   return (
     <>

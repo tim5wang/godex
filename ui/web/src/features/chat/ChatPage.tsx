@@ -19,7 +19,7 @@ import { readPersistedRefluxDismissed, writePersistedRefluxDismissed } from "./r
 import { buildTaskOutcomes } from "./taskCenterOutcome";
 import { locatorMatchesRoute, buildChatRouteForSession } from "../../lib/chatRoutes";
 import { writeClipboardText } from "../../lib/clipboard";
-import { type ComposerSubmission, Composer } from "../../components/Composer";
+import { type ComposerSubmission, Composer, type ComposerHandle } from "../../components/Composer";
 import { VoiceBar } from "../../components/VoiceBar";
 import { TaskCenterPanel } from "./TaskCenterPanel";
 import { SessionsRail } from "../chat-v2/SessionsRail";
@@ -129,6 +129,8 @@ export function ChatPage() {
   // re-entry.
   const [refluxDismissed, setRefluxDismissed] = useState<Set<string>>(() => readPersistedRefluxDismissed());
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  // 语音识别文本注入输入框（识别结果填入，用户编辑后发送）。
+  const composerRef = useRef<ComposerHandle>(null);
   // Whether the feed should keep scrolling to the newest content. When the
   // user scrolls up to read history, stickToBottom turns off and new model
   // output no longer drags the scrollbar down.
@@ -1560,7 +1562,7 @@ export function ChatPage() {
                     </Space>
                     <Space size={4}>
                       <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
-                      <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} enabled={metaQuery.data?.voice_enabled ?? false} disabled={!openQuery.data?.session_id || modelMutation.isPending} />
+                      <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} enabled={metaQuery.data?.voice_enabled ?? false} disabled={!openQuery.data?.session_id || modelMutation.isPending} onResult={(text) => composerRef.current?.setText(text)} />
                       {running ? (
                         <Segmented
                           size="small"
@@ -1588,6 +1590,7 @@ export function ChatPage() {
                   </Space>
                 </div>
                 <Composer
+                  ref={composerRef}
                   disabled={!openQuery.data?.session_id || modelMutation.isPending}
                   uploading={uploading}
                   uploadProgress={uploadProgress}

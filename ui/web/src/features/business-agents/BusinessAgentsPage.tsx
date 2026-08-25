@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -41,6 +41,7 @@ import {
   listPackages,
   listSkillsCatalog,
   resetBizKey,
+  revealBizKey,
   updateBizKey,
 } from "../../lib/api";
 import type { BizKey, ModelsView, ProviderRef } from "../../lib/types";
@@ -65,6 +66,7 @@ interface BizFormValues {
   project_dir?: string;
   budget_credits?: number;
   warning_threshold?: number;
+  pin?: string;
 }
 
 const SANDBOX_TOOL_OPTIONS = [
@@ -141,6 +143,14 @@ export function BusinessAgentsPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<BizKey | null>(null);
   const [secret, setSecret] = useState<string>("");
+  // Pin-verified plaintext secrets, kept in memory only (page session).
+  // Keyed by biz id so switching tabs keeps the unlock; refreshing re-prompts.
+  const [revealed, setRevealed] = useState<Record<string, string>>({});
+  const revealedKey = (biz: BizKey | null) => (biz ? (revealed[biz.id] ?? biz.key_prefix) : "");
+
+  const handleRevealed = (id: string, plain: string) => {
+    setRevealed((prev) => ({ ...prev, [id]: plain }));
+  };
 
   const [form] = Form.useForm<BizFormValues>();
 
@@ -163,6 +173,7 @@ export function BusinessAgentsPage() {
         project_dir: values.project_dir ?? "",
         budget_credits: values.budget_credits ?? 0,
         warning_threshold: values.warning_threshold ?? 0,
+        ...(values.pin ? { pin: values.pin } : {}),
       };
       if (editing) {
         return updateBizKey(token, editing.id, body);
@@ -227,14 +238,14 @@ export function BusinessAgentsPage() {
   const snippets = selected
     ? {
         curl: `curl -X POST ${baseUrl}/v1/agent-steps \\
-  -H "Authorization: Bearer ${firstSecret(selected)}****" \\
+  -H "Authorization: Bearer ${revealedKey(selected)}" \\
   -H "Content-Type: application/json" \\
   -d '{"prompt":"你的业务指令","inputs":{"order_id":"ORD-1"},"context":{"recall":["godex://memory"]}}'`,
         sdk: `import { createStepClient } from "godex/agent-step";
 
 const step = createStepClient({
   baseUrl: "${baseUrl}",
-  apiKey: "${firstSecret(selected)}****",
+  apiKey: "${revealedKey(selected)}",
 });
 const result = await step.createStep({
   prompt: "你的业务指令",
@@ -243,7 +254,7 @@ const result = await step.createStep({
         embed: `<script src="${baseUrl}/embed/godex-step.js"></script>
 <godex-step
   base-url="${baseUrl}"
-  api-key="${firstSecret(selected)}****"
+  api-key="${revealedKey(selected)}"
   prompt="分析订单 ORD-1234"
 ></godex-step>`,
       }
@@ -315,7 +326,7 @@ const result = await step.createStep({
               {
                 key: "overview",
                 label: t("businessAgents.tabOverview"),
-                children: <OverviewTab key={selected.id} biz={selected} onEdit={() => handleEdit(selected)} />,
+                children: <OverviewTab key={selected.id} biz={selected} onEdit={() => handleEdit(selected)} revealed={revealed} onRevealed={handleRevealed} />,
               },
               {
                 key: "capabilities",
@@ -325,12 +336,16 @@ const result = await step.createStep({
               {
                 key: "access",
                 label: t("businessAgents.tabAccess"),
-                children: snippets ? <AccessTab snippets={snippets} /> : <Empty />,
+                children: snippets ? (
+                  <AccessTab snippets={snippets} biz={selected} revealed={revealed} onRevealed={handleRevealed} />
+                ) : (
+                  <Empty />
+                ),
               },
               {
                 key: "preview",
                 label: t("businessAgents.tabPreview"),
-                children: <PreviewTab key={selected.id} biz={selected} />,
+                children: <PreviewTab key={selected.id} biz={selected} revealed={revealed} onRevealed={handleRevealed} />,
               },
             ]}
           />
@@ -396,6 +411,21 @@ const result = await step.createStep({
           <Form.Item name="project_dir" label={t("businessAgents.projectDir")}>
             <Input placeholder="~/work/sales-crm" />
           </Form.Item>
+          <Form.Item
+            name="pin"
+            label={t("businessAgents.pinLabel")}
+            rules={
+              editing
+                ? [{ pattern: /^\d{6}$/, message: t("businessAgents.pinRule") }]
+                : [
+                    { required: true, message: t("businessAgents.pinRule") },
+                    { pattern: /^\d{6}$/, message: t("businessAgents.pinRule") },
+                  ]
+            }
+            extra={t("businessAgents.pinExtra")}
+          >
+            <Input.Password maxLength={6} placeholder="123456" />
+          </Form.Item>
           <Space size="large" align="start">
             <Form.Item name="budget_credits" label={t("businessAgents.budgetCredits")} extra={t("businessAgents.budgetExtra")}>
               <InputNumber min={0} step={1} placeholder="0" addonAfter={t("businessAgents.creditsUnit")} />
@@ -427,8 +457,69 @@ const result = await step.createStep({
   );
 }
 
+// ---- Pin 解锁组件 ----
+function PinUnlock({ biz, revealed, onRevealed }: { biz: BizKey; revealed: Record<string, string>; onRevealed: (id: string, plain: string) => void }) {
+  const { t } = useI18n();
+  const { message: antMessage } = AntApp.useApp();
+  const token = useSettingsStore((state) => state.token);
+  const [open, setOpen] = useState(false);
+  const [pin, setPin] = useState("");
+  const plain = revealed[biz.id];
+
+  const revealMutation = useMutation({
+    mutationFn: () => revealBizKey(token, biz.id, pin),
+    onSuccess: (res) => {
+      onRevealed(biz.id, res.secret);
+      setOpen(false);
+      setPin("");
+      antMessage.success(t("businessAgents.revealDone"));
+    },
+    onError: (error: Error) => showError(antMessage, error, t("businessAgents.revealFailed")),
+  });
+
+  // Already unlocked this page session → show the full key, copyable.
+  if (plain) {
+    return (
+      <Space direction="vertical" size={4} style={{ width: "100%" }}>
+        <Text strong>{t("businessAgents.keyPrefix")}: </Text>
+        <Text code copyable={{ text: plain }}>
+          {plain}
+        </Text>
+      </Space>
+    );
+  }
+  return (
+    <>
+      <Button size="small" icon={<EyeOutlined />} onClick={() => setOpen(true)}>
+        {t("businessAgents.revealKey")}
+      </Button>
+      <Modal
+        title={t("businessAgents.pinPrompt")}
+        open={open}
+        onCancel={() => setOpen(false)}
+        footer={
+          <Space>
+            <Button onClick={() => setOpen(false)}>{t("businessAgents.cancel")}</Button>
+            <Button
+              type="primary"
+              loading={revealMutation.isPending}
+              disabled={!/^\d{6}$/.test(pin)}
+              onClick={() => revealMutation.mutate()}
+            >
+              {t("businessAgents.unlock")}
+            </Button>
+          </Space>
+        }
+        destroyOnClose
+      >
+        <Input.Password maxLength={6} value={pin} onChange={(e) => setPin(e.target.value)} placeholder="123456" />
+      </Modal>
+    </>
+  );
+}
+
 // ---- 概览 Tab ----
-function OverviewTab({ biz, onEdit }: { biz: BizKey; onEdit: () => void }) {
+function OverviewTab({ biz, onEdit, revealed, onRevealed }: { biz: BizKey; onEdit: () => void; revealed: Record<string, string>; onRevealed: (id: string, plain: string) => void }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const { message: antMessage } = AntApp.useApp();
@@ -476,6 +567,9 @@ function OverviewTab({ biz, onEdit }: { biz: BizKey; onEdit: () => void }) {
       <Paragraph>
         <Text strong>{t("businessAgents.keyPrefix")}: </Text>
         <Text code>{biz.key_prefix}</Text>
+      </Paragraph>
+      <Paragraph>
+        <PinUnlock biz={biz} revealed={revealed} onRevealed={onRevealed} />
       </Paragraph>
       <Paragraph>
         <Button
@@ -556,7 +650,7 @@ function CapabilitiesTab({ biz }: { biz: BizKey }) {
 }
 
 // ---- 接入指南 Tab ----
-function AccessTab({ snippets }: { snippets: Record<string, string> }) {
+function AccessTab({ snippets, biz, revealed, onRevealed }: { snippets: Record<string, string>; biz: BizKey; revealed: Record<string, string>; onRevealed: (id: string, plain: string) => void }) {
   const { t } = useI18n();
   const { message: antMessage } = AntApp.useApp();
 
@@ -566,6 +660,9 @@ function AccessTab({ snippets }: { snippets: Record<string, string> }) {
 
   return (
     <Card>
+      <Paragraph>
+        <PinUnlock biz={biz} revealed={revealed} onRevealed={onRevealed} />
+      </Paragraph>
       <Space direction="vertical" style={{ width: "100%" }} size="middle">
         {(["curl", "sdk", "embed"] as const).map((kind) => (
           <div key={kind}>
@@ -596,12 +693,18 @@ function AccessTab({ snippets }: { snippets: Record<string, string> }) {
 }
 
 // ---- 嵌入预览 Tab ----
-function PreviewTab({ biz }: { biz: BizKey }) {
+function PreviewTab({ biz, revealed, onRevealed }: { biz: BizKey; revealed: Record<string, string>; onRevealed: (id: string, plain: string) => void }) {
   const { t } = useI18n();
-  // key_prefix is masked (e.g. biz_ab12****), so the live preview needs the
-  // full secret pasted here — the prefix is just a placeholder.
-  const [apiKey, setApiKey] = useState(biz.key_prefix);
+  // key_prefix is masked (e.g. biz_ab12****); once unlocked via pin the full
+  // secret is used for live runs.
+  const [apiKey, setApiKey] = useState(revealed[biz.id] ?? biz.key_prefix);
   const [fullOpen, setFullOpen] = useState(false);
+  // Unlocking here (or in another tab) fills the live-run key automatically.
+  useEffect(() => {
+    if (revealed[biz.id]) {
+      setApiKey(revealed[biz.id]);
+    }
+  }, [revealed, biz.id]);
   const renderStep = () => <godex-step base-url={window.location.origin} api-key={apiKey} prompt="" />;
   return (
     <Card
@@ -612,6 +715,9 @@ function PreviewTab({ biz }: { biz: BizKey }) {
       }
     >
       <Alert type="info" showIcon style={{ marginBottom: 12 }} message={t("businessAgents.previewHint")} />
+      <Paragraph style={{ marginBottom: 12 }}>
+        <PinUnlock biz={biz} revealed={revealed} onRevealed={onRevealed} />
+      </Paragraph>
       <Space direction="vertical" style={{ width: "100%" }} size="small">
         <Input
           addonBefore={t("businessAgents.keyPrefix")}

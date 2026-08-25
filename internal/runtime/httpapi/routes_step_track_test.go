@@ -60,7 +60,7 @@ func TestStepTrackRequiresBizKey(t *testing.T) {
 // with a not-running status.
 func TestStepTrackGetUnknownStep(t *testing.T) {
 	handler, usageService := mustBizHandler(t)
-	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales"})
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales", Pin: "123456"})
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestStepTrackGetUnknownStep(t *testing.T) {
 // missing interaction value with 400 before touching the session.
 func TestStepTrackReplyRequiresValue(t *testing.T) {
 	handler, usageService := mustBizHandler(t)
-	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales"})
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales", Pin: "123456"})
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestStepTrackReplyRequiresValue(t *testing.T) {
 // returns 409 (nothing to cancel).
 func TestStepTrackCancelNotRunning(t *testing.T) {
 	handler, usageService := mustBizHandler(t)
-	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales"})
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales", Pin: "123456"})
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}

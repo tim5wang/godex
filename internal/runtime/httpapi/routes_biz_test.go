@@ -33,7 +33,7 @@ func TestBizKeyCreateListEndpoint(t *testing.T) {
 	defer server.Close()
 
 	// Create a biz key via the admin endpoint.
-	body := bytes.NewBufferString(`{"name":"sales","mcp_servers":["crm"],"sandbox_tools":["read_file"]}`)
+	body := bytes.NewBufferString(`{"name":"sales","pin":"123456","mcp_servers":["crm"],"sandbox_tools":["read_file"]}`)
 	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/biz/keys", body)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -81,9 +81,48 @@ func TestBizKeyCreateListEndpoint(t *testing.T) {
 	}
 }
 
+func TestBizKeyRevealRequiresPin(t *testing.T) {
+	_, usageService := mustBizHandler(t)
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales", Pin: "123456"})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	// Correct pin reveals the plaintext secret.
+	revealed, err := usageService.RevealBizKey(created.Key.ID, usage.BizKeyRevealRequest{Pin: "123456"})
+	if err != nil {
+		t.Fatalf("reveal with correct pin: %v", err)
+	}
+	if revealed.Secret != created.Secret {
+		t.Fatal("reveal must return the original plaintext secret")
+	}
+	if !strings.HasPrefix(revealed.Secret, usage.BizKeyPrefix) {
+		t.Fatalf("expected biz_ prefix, got %q", revealed.Secret[:8])
+	}
+}
+
+func TestBizKeyRevealWrongPinLocks(t *testing.T) {
+	_, usageService := mustBizHandler(t)
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales", Pin: "123456"})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	// Wrong pins fail; after maxBizPinAttempts the key locks until reset.
+	for i := 0; i < usage.MaxBizPinAttempts; i++ {
+		if _, err := usageService.RevealBizKey(created.Key.ID, usage.BizKeyRevealRequest{Pin: "000000"}); err == nil {
+			t.Fatalf("attempt %d: expected error for wrong pin", i+1)
+		}
+	}
+	// Even the correct pin is rejected once locked.
+	if _, err := usageService.RevealBizKey(created.Key.ID, usage.BizKeyRevealRequest{Pin: "123456"}); err == nil {
+		t.Fatal("expected lockout error after repeated wrong pins")
+	}
+}
+
 func TestBizKeyResetRotatesSecret(t *testing.T) {
 	_, usageService := mustBizHandler(t)
-	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales"})
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales", Pin: "123456"})
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
@@ -111,7 +150,7 @@ func TestBizKeyResetRotatesSecret(t *testing.T) {
 // handler context.
 func TestBizKeyAuthMiddlewareAcceptsValidKey(t *testing.T) {
 	_, usageService := mustBizHandler(t)
-	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "crm"})
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "crm", Pin: "123456"})
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}

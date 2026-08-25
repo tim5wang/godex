@@ -126,6 +126,11 @@ type BizAPIKey struct {
 	WarningThreshold float64       `json:"warning_threshold"`
 	CreatedAt        time.Time     `json:"created_at"`
 	UpdatedAt        time.Time     `json:"updated_at"`
+	// SecretEncrypted is the AES-GCM sealed secret (never serialized to JSON;
+	// only readable server-side for pin-verified reveal).
+	SecretEncrypted string `json:"-"`
+	// PinHash is HMAC-SHA256(masterKey, pin) (never serialized).
+	PinHash string `json:"-"`
 }
 
 // BizKeyCreateRequest is the input for creating a business API key.
@@ -142,6 +147,7 @@ type BizKeyCreateRequest struct {
 	ProjectDir       string        `json:"project_dir,omitempty"`
 	BudgetCredits    float64       `json:"budget_credits"`
 	WarningThreshold float64       `json:"warning_threshold"`
+	Pin              string        `json:"pin"`
 }
 
 // BizKeyCreateResponse is returned when a business API key is created.
@@ -165,6 +171,12 @@ type BizKeyUpdateRequest struct {
 	ProjectDir       *string        `json:"project_dir,omitempty"`
 	BudgetCredits    *float64       `json:"budget_credits,omitempty"`
 	WarningThreshold *float64       `json:"warning_threshold,omitempty"`
+	Pin              *string        `json:"pin,omitempty"`
+}
+
+// BizKeyRevealRequest is the body of POST /v1/biz/keys/{id}/reveal.
+type BizKeyRevealRequest struct {
+	Pin string `json:"pin"`
 }
 
 // ModelCreateRequest is the input for creating a new model mapping.
@@ -331,6 +343,13 @@ type Store interface {
 	CreateBizKey(key *BizAPIKey) error
 	UpdateBizKey(key *BizAPIKey) error
 	DeleteBizKey(id string) error
+
+	// Biz secret crypto (master-key backed): service delegates so the plaintext
+	// master key never leaves the store.
+	EncryptBizSecret(plain string) (string, error)
+	DecryptBizSecret(encoded string) (string, error)
+	HashBizPin(pin string) string
+	VerifyBizPin(pin, hash string) bool
 
 	RecordCall(call *UsageCall) error
 	GetCalls(date string, apiKeyID string) ([]UsageCall, error)

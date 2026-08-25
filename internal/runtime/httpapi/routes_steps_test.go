@@ -39,7 +39,7 @@ func TestStepEndpointRequiresBizKey(t *testing.T) {
 // need a valid key to reach validation).
 func TestStepEndpointRejectsBadRequest(t *testing.T) {
 	handler, usageService := mustBizHandler(t)
-	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales"})
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "sales", Pin: "123456"})
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}

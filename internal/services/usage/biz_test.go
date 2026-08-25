@@ -15,6 +15,7 @@ func TestCreateBizKeyReturnsSecret(t *testing.T) {
 
 	resp, err := svc.CreateBizKey(BizKeyCreateRequest{
 		Name:         "sales",
+		Pin:          "123456",
 		MCPServers:   []string{"crm", "order"},
 		Providers:    []ProviderRef{{Name: "kb", URL: "https://kb.internal/retrieve"}},
 		SandboxTools: []string{"read_file"},
@@ -64,7 +65,7 @@ func TestAuthenticateBizKey(t *testing.T) {
 	}
 	svc := NewService(store)
 
-	resp, err := svc.CreateBizKey(BizKeyCreateRequest{Name: "crm"})
+	resp, err := svc.CreateBizKey(BizKeyCreateRequest{Name: "crm", Pin: "123456"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +92,7 @@ func TestBizKeyUpdateAndDelete(t *testing.T) {
 	}
 	svc := NewService(store)
 
-	resp, err := svc.CreateBizKey(BizKeyCreateRequest{Name: "ops", MCPServers: []string{"old"}})
+	resp, err := svc.CreateBizKey(BizKeyCreateRequest{Name: "ops", Pin: "123456", MCPServers: []string{"old"}})
 	if err != nil {
 		t.Fatal(err)
 	}

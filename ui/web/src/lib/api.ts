@@ -719,6 +719,13 @@ export function deleteSession(token: string | null, sessionId: string) {
   return request<void>(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, token);
 }
 
+export function renameSession(token: string | null, sessionId: string, title: string) {
+  return request<ListedSession>(`/sessions/${encodeURIComponent(sessionId)}/title`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  }, token);
+}
+
 export function openSession(token: string | null, locator: SessionLocator) {
   return request<{ session_id: string; locator: SessionLocator; created_at?: string; updated_at?: string }>(
     "/sessions",
@@ -1513,6 +1520,17 @@ export function resetBizKey(token: string | null, id: string) {
   return request<BizKeyCreateResponse>(
     `/v1/biz/keys/${encodeURIComponent(id)}/reset`,
     { method: "POST" },
+    token,
+  );
+}
+
+export function revealBizKey(token: string | null, id: string, pin: string) {
+  return request<BizKeyCreateResponse>(
+    `/v1/biz/keys/${encodeURIComponent(id)}/reveal`,
+    {
+      method: "POST",
+      body: JSON.stringify({ pin }),
+    },
     token,
   );
 }

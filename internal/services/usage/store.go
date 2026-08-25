@@ -21,8 +21,9 @@ func sha256Hex(s string) string {
 
 // SQLiteStore implements Store using a local SQLite database.
 type SQLiteStore struct {
-	path string
-	db   *sql.DB
+	path      string
+	db        *sql.DB
+	masterKey []byte
 }
 
 // NewSQLiteStore creates or loads the SQLite-backed usage store under stateDir.
@@ -38,7 +39,12 @@ func NewSQLiteStore(stateDir string) (*SQLiteStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open usage sqlite store: %w", err)
 	}
-	store := &SQLiteStore{path: path, db: db}
+	masterKey, err := loadOrCreateMasterKey(stateDir)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("load master key: %w", err)
+	}
+	store := &SQLiteStore{path: path, db: db, masterKey: masterKey}
 	if err := store.init(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -77,6 +83,8 @@ func (s *SQLiteStore) init() error {
 			packages TEXT NOT NULL DEFAULT '',
 			models TEXT NOT NULL,
 			project_dir TEXT NOT NULL DEFAULT '',
+			secret_encrypted TEXT NOT NULL DEFAULT '',
+			pin_hash TEXT NOT NULL DEFAULT '',
 			budget_credits REAL NOT NULL,
 			warning_threshold REAL NOT NULL,
 			created_at TEXT NOT NULL,
@@ -160,6 +168,8 @@ func (s *SQLiteStore) migrateBizKeyColumns() error {
 		"skills TEXT NOT NULL DEFAULT ''",
 		"packages TEXT NOT NULL DEFAULT ''",
 		"project_dir TEXT NOT NULL DEFAULT ''",
+		"secret_encrypted TEXT NOT NULL DEFAULT ''",
+		"pin_hash TEXT NOT NULL DEFAULT ''",
 	}
 	for _, add := range adds {
 		col := strings.Fields(add)[0]
@@ -169,6 +179,12 @@ func (s *SQLiteStore) migrateBizKeyColumns() error {
 		if _, err := s.db.Exec(`ALTER TABLE biz_keys ADD COLUMN ` + add); err != nil {
 			return err
 		}
+	}
+	// No history to migrate: older keys were stored hash-only (one-way) and
+	// cannot gain a pin retroactively, so any key without an encrypted secret
+	// is dropped. Admin re-creates them with a pin via the console.
+	if _, err := s.db.Exec(`DELETE FROM biz_keys WHERE secret_encrypted = '' OR pin_hash = ''`); err != nil {
+		return err
 	}
 	return nil
 }
@@ -333,23 +349,23 @@ func (s *SQLiteStore) GetBizKeyByHash(hash string) (*BizAPIKey, error) {
 }
 
 func (s *SQLiteStore) getBizKey(where string, arg string) (*BizAPIKey, error) {
-	row := s.db.QueryRow(`SELECT id, name, description, default_prompt, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys WHERE `+where, arg)
+	row := s.db.QueryRow(`SELECT id, name, description, default_prompt, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, secret_encrypted, pin_hash, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys WHERE `+where, arg)
 	return scanBizKeyRow(row)
 }
 
 func (s *SQLiteStore) CreateBizKey(key *BizAPIKey) error {
-	_, err := s.db.Exec(`INSERT INTO biz_keys (id, name, description, default_prompt, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, budget_credits, warning_threshold, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO biz_keys (id, name, description, default_prompt, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, secret_encrypted, pin_hash, budget_credits, warning_threshold, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		key.ID, key.Name, key.Description, key.DefaultPrompt, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
 		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Skills), encodeStringSlice(key.Packages), encodeStringSlice(key.Models),
-		key.ProjectDir, key.BudgetCredits, key.WarningThreshold, formatTime(key.CreatedAt), formatTime(key.UpdatedAt))
+		key.ProjectDir, key.SecretEncrypted, key.PinHash, key.BudgetCredits, key.WarningThreshold, formatTime(key.CreatedAt), formatTime(key.UpdatedAt))
 	return err
 }
 
 func (s *SQLiteStore) UpdateBizKey(key *BizAPIKey) error {
-	result, err := s.db.Exec(`UPDATE biz_keys SET name = ?, description = ?, default_prompt = ?, key_hash = ?, key_prefix = ?, enabled = ?, mcp_servers = ?, providers = ?, sandbox_tools = ?, skills = ?, packages = ?, models = ?, project_dir = ?, budget_credits = ?, warning_threshold = ?, updated_at = ? WHERE id = ?`,
+	result, err := s.db.Exec(`UPDATE biz_keys SET name = ?, description = ?, default_prompt = ?, key_hash = ?, key_prefix = ?, enabled = ?, mcp_servers = ?, providers = ?, sandbox_tools = ?, skills = ?, packages = ?, models = ?, project_dir = ?, secret_encrypted = ?, pin_hash = ?, budget_credits = ?, warning_threshold = ?, updated_at = ? WHERE id = ?`,
 		key.Name, key.Description, key.DefaultPrompt, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
 		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Skills), encodeStringSlice(key.Packages), encodeStringSlice(key.Models),
-		key.ProjectDir, key.BudgetCredits, key.WarningThreshold, formatTime(key.UpdatedAt), key.ID)
+		key.ProjectDir, key.SecretEncrypted, key.PinHash, key.BudgetCredits, key.WarningThreshold, formatTime(key.UpdatedAt), key.ID)
 	return resultError(result, err, "biz key not found: "+key.ID)
 }
 
@@ -358,17 +374,41 @@ func (s *SQLiteStore) DeleteBizKey(id string) error {
 	return resultError(result, err, "biz key not found: "+id)
 }
 
+// ---- biz secret crypto (master-key backed) ----
+
+// EncryptBizSecret seals a plaintext secret with the store master key.
+func (s *SQLiteStore) EncryptBizSecret(plain string) (string, error) {
+	return encryptSecret(s.masterKey, plain)
+}
+
+// DecryptBizSecret opens an EncryptBizSecret payload.
+func (s *SQLiteStore) DecryptBizSecret(encoded string) (string, error) {
+	return decryptSecret(s.masterKey, encoded)
+}
+
+// HashBizPin returns the keyed hash of a pin for storage.
+func (s *SQLiteStore) HashBizPin(pin string) string {
+	return hashPin(s.masterKey, pin)
+}
+
+// VerifyBizPin constant-time checks a pin against its stored hash.
+func (s *SQLiteStore) VerifyBizPin(pin, hash string) bool {
+	return verifyPin(s.masterKey, pin, hash)
+}
+
 // scanBizKeyRow scans one biz_keys row. Columns must match the SELECT used by
 // every biz key query (id, name, description, default_prompt, [key_hash],
 // key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages,
-// models, project_dir, budget_credits, warning_threshold, created_at, updated_at).
+// models, project_dir, secret_encrypted, pin_hash, budget_credits,
+// warning_threshold, created_at, updated_at).
 func scanBizKeyRow(scanner interface{ Scan(dest ...any) error }) (*BizAPIKey, error) {
 	var key BizAPIKey
 	var enabled int
 	var mcpServers, providers, sandboxTools, skills, packages, models, created, updated string
 	err := scanner.Scan(&key.ID, &key.Name, &key.Description, &key.DefaultPrompt, &key.KeyHash, &key.KeyPrefix, &enabled,
 		&mcpServers, &providers, &sandboxTools, &skills, &packages, &models,
-		&key.ProjectDir, &key.BudgetCredits, &key.WarningThreshold, &created, &updated)
+		&key.ProjectDir, &key.SecretEncrypted, &key.PinHash,
+		&key.BudgetCredits, &key.WarningThreshold, &created, &updated)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("biz key not found")

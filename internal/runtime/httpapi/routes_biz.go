@@ -107,4 +107,19 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})))
+	mux.Handle("POST /v1/biz/keys/{id}/reveal", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Reveal returns the plaintext secret after pin verification (bounded
+		// wrong-pin attempts lock the reveal until a reset).
+		var req usage.BizKeyRevealRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		resp, err := usageService.RevealBizKey(r.PathValue("id"), req)
+		if err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})))
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/compress"
@@ -16,11 +17,18 @@ import (
 // Service provides business logic for managing proxy keys, models, and usage recording.
 type Service struct {
 	store Store
+
+	// bizPinAttempts tracks consecutive wrong-pin attempts per key id so a
+	// shared-screen viewer can't brute-force the reveal endpoint. It resets on
+	// a correct pin or when the server restarts. ponytail: in-memory only;
+	// per-key persistent throttling if this ever runs multi-instance.
+	bizPinAttempts map[string]int
+	bizPinMu       sync.Mutex
 }
 
 // NewService creates a usage service backed by the given store.
 func NewService(store Store) *Service {
-	return &Service{store: store}
+	return &Service{store: store, bizPinAttempts: map[string]int{}}
 }
 
 // generateKey creates a cryptographically random key with the gdx_ prefix.
@@ -221,6 +229,9 @@ func (s *Service) CreateBizKey(req BizKeyCreateRequest) (*BizKeyCreateResponse, 
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, fmt.Errorf("biz key name is required")
 	}
+	if err := validateBizPin(req.Pin); err != nil {
+		return nil, err
+	}
 	if req.BudgetCredits < 0 {
 		return nil, fmt.Errorf("budget_credits must be non-negative")
 	}
@@ -228,6 +239,10 @@ func (s *Service) CreateBizKey(req BizKeyCreateRequest) (*BizKeyCreateResponse, 
 		return nil, fmt.Errorf("warning_threshold must be non-negative")
 	}
 	secret, err := generateBizKey()
+	if err != nil {
+		return nil, err
+	}
+	encrypted, err := s.store.EncryptBizSecret(secret)
 	if err != nil {
 		return nil, err
 	}
@@ -250,6 +265,8 @@ func (s *Service) CreateBizKey(req BizKeyCreateRequest) (*BizKeyCreateResponse, 
 		ProjectDir:       req.ProjectDir,
 		BudgetCredits:    req.BudgetCredits,
 		WarningThreshold: req.WarningThreshold,
+		SecretEncrypted:  encrypted,
+		PinHash:          s.store.HashBizPin(req.Pin),
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -342,6 +359,12 @@ func (s *Service) UpdateBizKey(id string, req BizKeyUpdateRequest) (*BizAPIKey, 
 		}
 		key.WarningThreshold = *req.WarningThreshold
 	}
+	if req.Pin != nil {
+		if err := validateBizPin(*req.Pin); err != nil {
+			return nil, err
+		}
+		key.PinHash = s.store.HashBizPin(*req.Pin)
+	}
 	key.UpdatedAt = time.Now()
 	if err := s.store.UpdateBizKey(key); err != nil {
 		return nil, err
@@ -367,8 +390,13 @@ func (s *Service) ResetBizKey(id string) (*BizKeyCreateResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	encrypted, err := s.store.EncryptBizSecret(secret)
+	if err != nil {
+		return nil, err
+	}
 	key.KeyHash = sha256Hex(secret)
 	key.KeyPrefix = maskKey(secret)
+	key.SecretEncrypted = encrypted
 	key.UpdatedAt = time.Now()
 	if err := s.store.UpdateBizKey(key); err != nil {
 		return nil, err
@@ -377,6 +405,63 @@ func (s *Service) ResetBizKey(id string) (*BizKeyCreateResponse, error) {
 		Key:    *key,
 		Secret: secret,
 	}, nil
+}
+
+// MaxBizPinAttempts bounds wrong-pin tries before a key's reveal locks for the
+// process lifetime (per design: 5 consecutive misses → locked until reset).
+const MaxBizPinAttempts = 5
+
+// RevealBizKey returns the plaintext secret after verifying the pin, and the
+// masked prefix for reference. Wrong pins count toward a per-key lockout.
+func (s *Service) RevealBizKey(id string, req BizKeyRevealRequest) (*BizKeyCreateResponse, error) {
+	key, err := s.store.GetBizKey(id)
+	if err != nil {
+		return nil, err
+	}
+	if key.SecretEncrypted == "" {
+		return nil, fmt.Errorf("biz key has no retrievable secret")
+	}
+	if !s.bizPinLocked(id) {
+		if s.store.VerifyBizPin(req.Pin, key.PinHash) {
+			s.bizPinMu.Lock()
+			delete(s.bizPinAttempts, id)
+			s.bizPinMu.Unlock()
+			plain, err := s.store.DecryptBizSecret(key.SecretEncrypted)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt secret: %w", err)
+			}
+			return &BizKeyCreateResponse{Key: *key, Secret: plain}, nil
+		}
+		s.bizPinMu.Lock()
+		s.bizPinAttempts[id]++
+		remaining := MaxBizPinAttempts - s.bizPinAttempts[id]
+		s.bizPinMu.Unlock()
+		if remaining <= 0 {
+			return nil, fmt.Errorf("pin attempts exhausted; reset the key to recover")
+		}
+		return nil, fmt.Errorf("invalid pin (%d attempt(s) left)", remaining)
+	}
+	return nil, fmt.Errorf("pin locked after repeated failures; reset the key to recover")
+}
+
+// bizPinLocked reports whether a key has exhausted its wrong-pin budget.
+func (s *Service) bizPinLocked(id string) bool {
+	s.bizPinMu.Lock()
+	defer s.bizPinMu.Unlock()
+	return s.bizPinAttempts[id] >= MaxBizPinAttempts
+}
+
+// validateBizPin enforces the 6-digit numeric pin policy.
+func validateBizPin(pin string) error {
+	if len(pin) != 6 {
+		return fmt.Errorf("pin must be 6 digits")
+	}
+	for _, r := range pin {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("pin must be 6 digits")
+		}
+	}
+	return nil
 }
 
 // AuthenticateBizKey verifies a presented business key and returns its record.

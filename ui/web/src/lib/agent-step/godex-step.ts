@@ -19,6 +19,21 @@
  * the running session as follow-up messages via the SDK stream endpoint.
  */
 import { StepClient, type RuntimeStepEvent, type StepRequest, type UiCardData } from "./client";
+import { Marked } from "marked";
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Marked instance for the embed component: GFM on, soft-breaks on, and raw
+// HTML tokens escaped so agent output can't inject markup/scripts.
+const markdown = new Marked({ gfm: true, breaks: true });
+markdown.use({ renderer: { html: (token) => escapeHtml(token.text) } });
 
 const STYLES = `
 :host {
@@ -41,7 +56,15 @@ button {
 }
 button:hover { background: #0860ca; }
 button:disabled { background: #8bb3e8; cursor: default; }
-.result { white-space: pre-wrap; line-height: 1.55; }
+.history { display: flex; flex-direction: column; gap: 10px; }
+.turn { border: 1px solid #eaeef2; border-radius: 8px; padding: 10px; }
+.turn-user { background: #f6f8fa; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; color: #57606a; font-size: 13px; white-space: pre-wrap; }
+.turn-assistant { line-height: 1.6; word-break: break-word; }
+.turn-assistant pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px; overflow: auto; }
+.turn-assistant code { background: rgba(175,184,193,.2); border-radius: 4px; padding: 1px 4px; font-size: 13px; }
+.turn-assistant pre code { background: none; padding: 0; }
+.turn-assistant table { border-collapse: collapse; }
+.turn-assistant th, .turn-assistant td { border: 1px solid #d0d7de; padding: 4px 8px; }
 .meta { color: #57606a; font-size: 12px; margin-top: 8px; }
 .error { color: #cf222e; background: #ffebe9; border: 1px solid #ffcecb; border-radius: 6px; padding: 8px 10px; }
 .card { border: 1px solid #d0d7de; border-radius: 6px; padding: 12px; margin-top: 10px; background: #f6f8fa; }
@@ -82,6 +105,8 @@ export class GodexStepElement extends HTMLElement {
   private controller: AbortController | null = null;
   private currentStepId = "";
   private currentSessionId = "";
+  private currentAssistant: HTMLDivElement | null = null;
+  private turnCount = 0;
 
   constructor() {
     super();
@@ -107,7 +132,7 @@ export class GodexStepElement extends HTMLElement {
     wrap.append(this.status);
 
     this.result = document.createElement("div");
-    this.result.className = "result";
+    this.result.className = "history";
     wrap.append(this.result);
 
     this.cards = document.createElement("div");
@@ -165,8 +190,8 @@ export class GodexStepElement extends HTMLElement {
       (event) => {
         if (event.type === "assistant_text_delta") {
           const text = (event.payload as { text?: unknown } | undefined)?.text;
-          if (typeof text === "string") {
-            this.result.textContent += text;
+          if (typeof text === "string" && this.currentAssistant) {
+            this.currentAssistant.textContent += text;
           }
         }
         if (event.type === "tool_call_finished") {
@@ -200,10 +225,22 @@ export class GodexStepElement extends HTMLElement {
     this.runBtn.disabled = true;
     this.status.textContent = "运行中…";
     this.status.className = "status running";
-    this.result.textContent = "";
     this.cards.replaceChildren();
     this.meta.textContent = "";
     this.setAttribute("prompt", prompt);
+
+    // Multi-turn: keep every round on screen as its own user + assistant turn.
+    this.turnCount += 1;
+    const turnEl = document.createElement("div");
+    turnEl.className = "turn";
+    const userEl = document.createElement("div");
+    userEl.className = "turn-user";
+    userEl.textContent = prompt;
+    const assistantEl = document.createElement("div");
+    assistantEl.className = "turn-assistant";
+    turnEl.append(userEl, assistantEl);
+    this.result.append(turnEl);
+    this.currentAssistant = assistantEl;
 
     // Multi-turn: keep the same step_id across runs so the server's
     // deterministic session is reused (same conversation), and pass the
@@ -230,8 +267,11 @@ export class GodexStepElement extends HTMLElement {
         this.currentSessionId = result.session_id;
         this.status.textContent = "完成";
         this.status.className = "status done";
-        this.result.textContent = result.text || this.result.textContent;
-        this.meta.textContent = `step ${result.step_id} · session ${result.session_id}`;
+        const finalText = result.text || this.currentAssistant?.textContent || "";
+        if (this.currentAssistant) {
+          this.currentAssistant.innerHTML = this.renderMarkdown(finalText);
+        }
+        this.meta.textContent = `第 ${this.turnCount} 轮 · step ${result.step_id} · session ${result.session_id}`;
         if (result.output !== undefined) {
           this.renderStructured(result.output);
         }
@@ -262,8 +302,20 @@ export class GodexStepElement extends HTMLElement {
     this.runBtn.disabled = true;
     this.status.textContent = "处理中…";
     this.status.className = "status running";
-    this.result.textContent = "";
     this.cards.replaceChildren();
+
+    // ui_card submissions continue the same conversation; show them as a new turn.
+    this.turnCount += 1;
+    const turnEl = document.createElement("div");
+    turnEl.className = "turn";
+    const userEl = document.createElement("div");
+    userEl.className = "turn-user";
+    userEl.textContent = typeof value === "string" ? value : JSON.stringify(value);
+    const assistantEl = document.createElement("div");
+    assistantEl.className = "turn-assistant";
+    turnEl.append(userEl, assistantEl);
+    this.result.append(turnEl);
+    this.currentAssistant = assistantEl;
 
     try {
       const stream = await this.openStream(this.currentStepId);
@@ -275,8 +327,11 @@ export class GodexStepElement extends HTMLElement {
         this.currentSessionId = result.session_id || this.currentSessionId;
         this.status.textContent = "完成";
         this.status.className = "status done";
-        this.result.textContent = result.text || this.result.textContent;
-        this.meta.textContent = `step ${result.step_id} · session ${result.session_id}`;
+        const finalText = result.text || this.currentAssistant?.textContent || "";
+        if (this.currentAssistant) {
+          this.currentAssistant.innerHTML = this.renderMarkdown(finalText);
+        }
+        this.meta.textContent = `第 ${this.turnCount} 轮 · step ${result.step_id} · session ${result.session_id}`;
         if (result.output !== undefined) {
           this.renderStructured(result.output);
         }
@@ -300,7 +355,7 @@ export class GodexStepElement extends HTMLElement {
     const box = document.createElement("div");
     box.className = "error";
     box.textContent = message;
-    this.result.replaceChildren(box);
+    (this.currentAssistant ?? this.result).append(box);
     this.status.textContent = "失败";
     this.status.className = "status";
   }
@@ -382,6 +437,15 @@ export class GodexStepElement extends HTMLElement {
       // plain card: content already rendered above
     }
     this.cards.append(host);
+  }
+
+  /** Render markdown (GFM) to sanitized HTML for a finished assistant turn. */
+  private renderMarkdown(text: string): string {
+    try {
+      return markdown.parse(text) as string;
+    } catch {
+      return escapeHtml(text);
+    }
   }
 
   private parseInputs(raw: string | null): Record<string, unknown> | undefined {

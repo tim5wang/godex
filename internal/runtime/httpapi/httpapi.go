@@ -1827,7 +1827,7 @@ func NewHandlerWithRuntime(
 	registerStepTrackRoutes(mux, usageService, service)
 	registerFileRoutes(mux, protected, manager)
 	registerTerminalRoutes(mux)
-	registerVoiceRoutes(mux, service, protected)
+	registerVoiceRoutes(mux, service, protected, func() string { return manager.Current().WebToken })
 	registerPreviewRoutes(mux, manager)
 	registerGitRoutes(mux, protected, manager)
 	return withGzip(mux)

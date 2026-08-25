@@ -40,12 +40,35 @@ func newVoiceBridge(service *backend.Service) *voiceBridge {
 }
 
 // registerVoiceRoutes 注册语音桥接端点。
-func registerVoiceRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
+// 鉴权同时接受 Bearer header 与 ?token= query：浏览器 WebSocket 无法设置
+// Authorization header，必须用 query token（见 withPreviewAuthProvider 先例）。
+// tokenProvider 返回当前 web token（如 manager.Current().WebToken）。
+func registerVoiceRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler, tokenProvider func() string) {
 	if service == nil {
 		return
 	}
 	b := newVoiceBridge(service)
-	mux.Handle("GET /v1/voice", protected(http.HandlerFunc(b.handleVoice)))
+	auth := voiceQueryTokenAuth(protected, tokenProvider)
+	mux.Handle("GET /v1/voice", auth(http.HandlerFunc(b.handleVoice)))
+}
+
+// voiceQueryTokenAuth 包装 protected 鉴权，额外允许 ?token= query 通过。
+// 这是浏览器 WebSocket 客户端（无法设置 header）连接 /v1/voice 的唯一途径。
+func voiceQueryTokenAuth(protected func(http.Handler) http.Handler, tokenProvider func() string) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		base := protected(h)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tok := ""
+			if tokenProvider != nil {
+				tok = strings.TrimSpace(tokenProvider())
+			}
+			if q := strings.TrimSpace(r.URL.Query().Get("token")); q != "" && tok != "" && q == tok {
+				h.ServeHTTP(w, r)
+				return
+			}
+			base.ServeHTTP(w, r)
+		})
+	}
 }
 
 // voiceConn 是 Web UI ↔ godex 的连接状态。

@@ -1,0 +1,219 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Button, Tooltip } from "antd";
+import { AudioOutlined, AudioMutedOutlined } from "@ant-design/icons";
+
+/**
+ * VoiceBar —— push-to-talk 语音输入（M5）。
+ *
+ * 链路：麦克风 PCM(16k s16) → WS /v1/voice → godex 编排桥 → voice-engine
+ *       （VAD+ASR → agent → TTS）→ 下行 PCM(24k) → 浏览器播放。
+ *
+ * 交互：按住按钮说话，松开发送（audio_end）；服务端 VAD 负责切分与去静音。
+ */
+interface VoiceBarProps {
+  token: string | null;
+  sessionId: string | null;
+  disabled?: boolean;
+}
+
+interface VoiceMsg {
+  type: string;
+  code?: string;
+  text?: string;
+  id?: string;
+}
+
+const TARGET_RATE = 16000;
+const TTS_RATE = 24000; // Kokoro 输出采样率
+
+export function VoiceBar({ token, sessionId, disabled = false }: VoiceBarProps) {
+  const [connected, setConnected] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const ttsCtxRef = useRef<AudioContext | null>(null);
+  const playCursorRef = useRef<number>(0); // 已调度播放的累计时长(秒)
+
+  const wsUrl = useCallback(() => {
+    const base = window.location.origin.replace(/^http/, "ws");
+    const params = new URLSearchParams();
+    if (token) params.set("token", token);
+    if (sessionId) params.set("session_id", sessionId);
+    return `${base}/v1/voice?${params.toString()}`;
+  }, [token, sessionId]);
+
+  // 连接 /v1/voice
+  useEffect(() => {
+    if (disabled || !sessionId) return;
+    let closed = false;
+    const ws = new WebSocket(wsUrl());
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      if (closed) return;
+      setConnected(true);
+      setError(null);
+      ws.send(JSON.stringify({ type: "start" } satisfies VoiceMsg));
+    };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data !== "string") {
+        // 下行 TTS PCM（binary）→ 排队播放
+        void ev.data.arrayBuffer().then((buf) => playPCM(ttsCtxRef, playCursorRef, new Uint8Array(buf)));
+        return;
+      }
+      let msg: VoiceMsg;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (msg.type === "error") {
+        setError(msg.text || msg.code || "voice error");
+      }
+    };
+    ws.onclose = () => {
+      if (!closed) setConnected(false);
+    };
+    ws.onerror = () => {
+      if (!closed) setError("voice connection failed");
+    };
+
+    return () => {
+      closed = true;
+      ws.close();
+      wsRef.current = null;
+      setConnected(false);
+    };
+  }, [wsUrl, disabled, sessionId]);
+
+  // 开始录音：采集 16k s16 PCM 上行
+  const startListening = useCallback(async () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setError("voice not connected");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new Ctx();
+      audioCtxRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      sourceRef.current = source;
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      processor.onaudioprocess = (e) => {
+        const input = e.inputBuffer.getChannelData(0); // float32 @ ctx.sampleRate
+        const srcRate = ctx.sampleRate;
+        // 线性插值降采样到 16k
+        const out: number[] = [];
+        const step = srcRate / TARGET_RATE;
+        let pos = 0;
+        while (pos < input.length) {
+          const i0 = Math.floor(pos);
+          const i1 = Math.min(i0 + 1, input.length - 1);
+          const frac = pos - i0;
+          out.push(input[i0] * (1 - frac) + input[i1] * frac);
+          pos += step;
+        }
+        // 转 s16 小端 → 二进制帧
+        const pcm = new Int16Array(out.length);
+        for (let i = 0; i < out.length; i++) {
+          let v = out[i];
+          if (v > 1) v = 1;
+          if (v < -1) v = -1;
+          pcm[i] = v * 0x7fff;
+        }
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(pcm.buffer as ArrayBuffer);
+        }
+      };
+      source.connect(processor);
+      processor.connect(ctx.destination); // 保持处理器活跃（静音输出）
+      setListening(true);
+      setError(null);
+    } catch (err) {
+      setError(`mic denied: ${String(err)}`);
+    }
+  }, []);
+
+  // 结束录音
+  const stopListening = useCallback(() => {
+    try {
+      processorRef.current?.disconnect();
+      sourceRef.current?.disconnect();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* noop */
+    }
+    void audioCtxRef.current?.close();
+    processorRef.current = null;
+    sourceRef.current = null;
+    streamRef.current = null;
+    audioCtxRef.current = null;
+    setListening(false);
+    // 通知服务端一句话说完（flush VAD）
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "audio_end" } satisfies VoiceMsg));
+    }
+  }, []);
+
+  useEffect(() => () => stopListening(), [stopListening]);
+
+  return (
+    <Tooltip title={error ?? (connected ? "按住说话" : "语音未连接")}>
+      <Button
+        size="small"
+        shape="circle"
+        type={listening ? "primary" : "default"}
+        danger={listening}
+        icon={listening ? <AudioOutlined /> : <AudioMutedOutlined />}
+        disabled={disabled || !connected}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          void startListening();
+        }}
+        onPointerUp={(e) => {
+          e.preventDefault();
+          stopListening();
+        }}
+        onPointerLeave={() => {
+          if (listening) stopListening();
+        }}
+        aria-label="语音输入（按住说话）"
+      />
+    </Tooltip>
+  );
+}
+
+/** 播放一段 TTS PCM（24k s16）。按到达顺序排到已有播放之后，保证不乱序。 */
+function playPCM(
+  ctxRef: React.MutableRefObject<AudioContext | null>,
+  cursorRef: React.MutableRefObject<number>,
+  bytes: Uint8Array,
+) {
+  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  if (!ctxRef.current) {
+    ctxRef.current = new Ctx();
+  }
+  const ctx = ctxRef.current;
+  const samples = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
+  const buffer = ctx.createBuffer(1, samples.length, TTS_RATE);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < samples.length; i++) {
+    data[i] = samples[i] / 0x8000;
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  const dur = buffer.duration;
+  const when = Math.max(ctx.currentTime, cursorRef.current);
+  src.start(when);
+  cursorRef.current = when + dur;
+}

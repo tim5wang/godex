@@ -20,6 +20,7 @@ import { buildTaskOutcomes } from "./taskCenterOutcome";
 import { locatorMatchesRoute, buildChatRouteForSession } from "../../lib/chatRoutes";
 import { writeClipboardText } from "../../lib/clipboard";
 import { type ComposerSubmission, Composer } from "../../components/Composer";
+import { VoiceBar } from "../../components/VoiceBar";
 import { TaskCenterPanel } from "./TaskCenterPanel";
 import { SessionsRail } from "../chat-v2/SessionsRail";
 import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, LogoutOutlined } from "@ant-design/icons";
@@ -1559,6 +1560,7 @@ export function ChatPage() {
                     </Space>
                     <Space size={4}>
                       <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
+                      <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} disabled={!openQuery.data?.session_id || modelMutation.isPending} />
                       {running ? (
                         <Segmented
                           size="small"

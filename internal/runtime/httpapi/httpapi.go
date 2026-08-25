@@ -1827,6 +1827,7 @@ func NewHandlerWithRuntime(
 	registerStepTrackRoutes(mux, usageService, service)
 	registerFileRoutes(mux, protected, manager)
 	registerTerminalRoutes(mux)
+	registerVoiceRoutes(mux, service, protected)
 	registerPreviewRoutes(mux, manager)
 	registerGitRoutes(mux, protected, manager)
 	return withGzip(mux)

@@ -23,6 +23,7 @@ require (
 	github.com/spf13/afero/sftpfs v1.15.0
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/tim5wang/min-tui v0.5.12
+	github.com/tim5wang/voice-engine v0.0.0-00010101000000-000000000000
 	github.com/xuri/excelize/v2 v2.10.0
 	github.com/ysmood/gson v0.7.3
 	golang.org/x/crypto v0.54.0
@@ -62,3 +63,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/tim5wang/voice-engine => ../voice-engine

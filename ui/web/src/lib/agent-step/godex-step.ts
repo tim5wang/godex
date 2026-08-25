@@ -169,6 +169,21 @@ export class GodexStepElement extends HTMLElement {
             this.result.textContent += text;
           }
         }
+        if (event.type === "tool_call_finished") {
+          const payload = event.payload as { name?: unknown; output?: unknown } | undefined;
+          // The ui_card tool echoes its structured card as JSON in the tool
+          // output; render it as an interactive card (button group / form).
+          if (payload?.name === "ui_card" && typeof payload.output === "string") {
+            try {
+              const card = JSON.parse(payload.output) as UiCardData;
+              if (card && typeof card === "object") {
+                this.renderCard(card);
+              }
+            } catch {
+              // ignore malformed card payloads
+            }
+          }
+        }
       },
       this.controller?.signal,
     );

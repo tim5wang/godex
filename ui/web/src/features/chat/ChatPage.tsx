@@ -1479,6 +1479,7 @@ export function ChatPage() {
                           setFilesFocusPath(path);
                           v2SetActiveDockTab("files");
                         }}
+                        onSubmitCard={(value) => void onSend({ text: value, files: [] })}
                       />
                     </div>
                     {!stickToBottom ? (

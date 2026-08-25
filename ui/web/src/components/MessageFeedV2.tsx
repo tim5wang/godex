@@ -20,6 +20,7 @@ import { MarkdownContent } from "./MarkdownContent";
 import { SubagentCard } from "./SubagentCard";
 import { TodoCard } from "./TodoCard";
 import { ToolDetails } from "./ToolDetails";
+import { UiCardView, type UiCardData } from "../features/workflows/components/UiCardView";
 import { useI18n } from "../i18n";
 import { writeClipboardText } from "../lib/clipboard";
 import type { FeedItem, FeedSegment } from "../lib/types";
@@ -36,6 +37,8 @@ interface MessageFeedV2Props {
   token?: string | null;
   /** Opens a changed file in the Files dock panel. */
   onOpenInFiles?: (path: string) => void;
+  /** Submit a ui_card interaction value back to the running session. */
+  onSubmitCard?: (value: string) => void;
 }
 
 /**
@@ -44,7 +47,7 @@ interface MessageFeedV2Props {
  * rows and todo cards in chronological order. Tool calls render as single-line
  * rows that expand in place, keeping the conversation scannable.
  */
-export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles }: MessageFeedV2Props) {
+export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard }: MessageFeedV2Props) {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
 
@@ -80,6 +83,7 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
         workspaceDir={workspaceDir}
         token={token}
         onOpenInFiles={onOpenInFiles}
+        onSubmitCard={onSubmitCard}
       />
     ),
     header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item),
@@ -115,6 +119,7 @@ function FeedItemBody({
   workspaceDir,
   token,
   onOpenInFiles,
+  onSubmitCard,
 }: {
   item: FeedItem;
   onToggleTool: (id: string) => void;
@@ -126,6 +131,7 @@ function FeedItemBody({
   workspaceDir?: string;
   token?: string | null;
   onOpenInFiles?: (path: string) => void;
+  onSubmitCard?: (value: string) => void;
 }) {
   const { t } = useI18n();
   // Grouped assistant turn: render ordered segments, each block separated by a divider.
@@ -136,7 +142,7 @@ function FeedItemBody({
         {visible.map((segment, index) => (
           <Fragment key={segmentKey(segment, index)}>
             {shouldShowTurnDivider(visible, index) ? <hr className="chat-feed-v2-divider" /> : null}
-            <TurnSegment segment={segment} onToggleTool={onToggleTool} />
+            <TurnSegment segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCard} />
           </Fragment>
         ))}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
@@ -147,6 +153,14 @@ function FeedItemBody({
   }
 
   if (item.kind === "tool") {
+    const card = parseUiCardOutput(item);
+    if (card && onSubmitCard) {
+      return (
+        <div className="chat-feed-v2-uicard">
+          <UiCardView card={card} onSubmitCard={onSubmitCard} />
+        </div>
+      );
+    }
     return <ToolCallRow item={item} onToggle={() => onToggleTool(item.id)} />;
   }
   if (item.kind === "todo") {
@@ -212,7 +226,7 @@ function FeedItemBody({
   );
 }
 
-function TurnSegment({ segment, onToggleTool }: { segment: FeedSegment; onToggleTool: (id: string) => void }) {
+function TurnSegment({ segment, onToggleTool, onSubmitCard }: { segment: FeedSegment; onToggleTool: (id: string) => void; onSubmitCard?: (value: string) => void }) {
   if (segment.type === "text") {
     return segment.text?.trim() ? (
       <div className="chat-feed-v2-text">
@@ -221,6 +235,14 @@ function TurnSegment({ segment, onToggleTool }: { segment: FeedSegment; onToggle
     ) : null;
   }
   if (segment.type === "tool" && segment.item) {
+    const card = parseUiCardOutput(segment.item);
+    if (card && onSubmitCard) {
+      return (
+        <div className="chat-feed-v2-uicard">
+          <UiCardView card={card} onSubmitCard={onSubmitCard} />
+        </div>
+      );
+    }
     return <ToolCallRow item={segment.item} onToggle={() => onToggleTool(segment.item!.id)} />;
   }
   if (segment.type === "todo" && segment.item) {
@@ -238,6 +260,26 @@ function TurnSegment({ segment, onToggleTool }: { segment: FeedSegment; onToggle
 
 function segmentKey(segment: FeedSegment, index: number) {
   return segment.item?.id ?? `text-${index}`;
+}
+
+/**
+ * Parse a ui_card tool item's structured output (the tool echoes its card
+ * JSON as the output string). Returns null when the item isn't a ui_card call
+ * or the output isn't a valid card.
+ */
+function parseUiCardOutput(item: FeedItem): UiCardData | null {
+  if (item.title !== "ui_card" || typeof item.output !== "string" || !item.output.trim()) {
+    return null;
+  }
+  try {
+    const card = JSON.parse(item.output) as UiCardData;
+    if (card && typeof card === "object" && (card.kind === "form" || card.kind === "button_group" || card.kind === "card")) {
+      return card;
+    }
+  } catch {
+    // not a card payload
+  }
+  return null;
 }
 
 /**

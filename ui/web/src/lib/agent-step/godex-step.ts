@@ -56,7 +56,7 @@ button {
 }
 button:hover { background: #0860ca; }
 button:disabled { background: #8bb3e8; cursor: default; }
-.history { display: flex; flex-direction: column; gap: 10px; }
+.history { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .turn { border: 1px solid #eaeef2; border-radius: 8px; padding: 10px; }
 .turn-user { background: #f6f8fa; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; color: #57606a; font-size: 13px; white-space: pre-wrap; }
 .turn-assistant { line-height: 1.6; word-break: break-word; }
@@ -117,6 +117,19 @@ export class GodexStepElement extends HTMLElement {
     const wrap = document.createElement("div");
     wrap.className = "wrap";
 
+    this.status = document.createElement("span");
+    this.status.className = "status";
+    wrap.append(this.status);
+
+    // History first (scrollable), then input row pinned at the bottom — the
+    // standard chat layout: past turns stay on top, the composer stays visible.
+    this.result = document.createElement("div");
+    this.result.className = "history";
+    wrap.append(this.result);
+
+    this.cards = document.createElement("div");
+    wrap.append(this.cards);
+
     const row = document.createElement("div");
     row.className = "row";
     this.input = document.createElement("input");
@@ -126,17 +139,6 @@ export class GodexStepElement extends HTMLElement {
     this.runBtn.textContent = "运行";
     row.append(this.input, this.runBtn);
     wrap.append(row);
-
-    this.status = document.createElement("span");
-    this.status.className = "status";
-    wrap.append(this.status);
-
-    this.result = document.createElement("div");
-    this.result.className = "history";
-    wrap.append(this.result);
-
-    this.cards = document.createElement("div");
-    wrap.append(this.cards);
 
     this.meta = document.createElement("div");
     this.meta.className = "meta";

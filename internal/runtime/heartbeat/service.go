@@ -212,6 +212,9 @@ func (s *Service) SetRule(input SetRuleInput) (Rule, error) {
 	if input.PromptOverride != nil {
 		rule.PromptOverride = strings.TrimSpace(*input.PromptOverride)
 	}
+	if input.WatchdogScript != nil {
+		rule.WatchdogScript = strings.TrimSpace(*input.WatchdogScript)
+	}
 	if rule.CreatedAt.IsZero() {
 		rule.CreatedAt = s.now()
 	}
@@ -349,6 +352,41 @@ func (s *Service) runRule(ctx context.Context, rule Rule, startedAt time.Time, m
 		return run, err
 	}
 
+	// Pre-run watchdog: a non-zero exit skips this tick entirely (no agent
+	// execution, no delivery). Errors (missing script, timeout) are recorded
+	// as failed runs so the misconfiguration is visible.
+	if strings.TrimSpace(rule.WatchdogScript) != "" {
+		watchdogOut, wdErr := runWatchdog(ctx, rule.WatchdogScript, s.cfg.WorkspaceDir, 0)
+		if wdErr != nil {
+			run.Status = RuleStatusError
+			run.Error = wdErr.Error()
+			run.FinishedAt = s.now()
+			rule.LastStatus = RuleStatusError
+			rule.LastError = wdErr.Error()
+			rule.LastRunAt = run.FinishedAt
+			rule.UpdatedAt = run.FinishedAt
+			_ = s.store.AppendRunLog(run)
+			_ = s.store.SaveRule(rule)
+			return run, wdErr
+		}
+		if watchdogOut.Skipped {
+			run.Status = RuleStatusSuppressed
+			run.Suppressed = true
+			run.Error = ""
+			if strings.TrimSpace(watchdogOut.Output) != "" {
+				run.Error = "watchdog skipped: " + watchdogOut.Output
+			}
+			run.FinishedAt = s.now()
+			rule.LastStatus = RuleStatusSuppressed
+			rule.LastError = run.Error
+			rule.LastRunAt = run.FinishedAt
+			rule.UpdatedAt = run.FinishedAt
+			_ = s.store.AppendRunLog(run)
+			_ = s.store.SaveRule(rule)
+			return run, nil
+		}
+	}
+
 	opened, err := s.backend.OpenSession(ctx, s.ruleLocator(rule, run.ID))
 	if err != nil {
 		run.Status = RuleStatusError
@@ -432,7 +470,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, startedAt time.Time, m
 	}
 
 	if appendErr := s.store.AppendRunLog(run); appendErr != nil && err == nil {
-			err = appendErr
+		err = appendErr
 	}
 	if saveErr := s.store.SaveRule(rule); saveErr != nil && err == nil {
 		err = saveErr

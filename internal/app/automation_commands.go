@@ -270,6 +270,7 @@ func renderHeartbeatRule(rule automation.HeartbeatRule) string {
 		fmt.Sprintf("Session mode: %s", fallback(rule.SessionMode, "shared")),
 		fmt.Sprintf("Delivery target: %s", renderDeliveryTarget(rule.DeliveryTarget)),
 		fmt.Sprintf("Prompt override: %s", fallback(rule.PromptOverride, "-")),
+		fmt.Sprintf("Watchdog script: %s", fallback(rule.WatchdogScript, "-")),
 		fmt.Sprintf("Created by: %s", fallback(rule.CreatedBy, "unknown")),
 		fmt.Sprintf("Created from session: %s", fallback(rule.CreatedFromSession, "-")),
 		fmt.Sprintf("Last status: %s", fallback(rule.LastStatus, "pending")),

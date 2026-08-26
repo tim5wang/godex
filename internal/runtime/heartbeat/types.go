@@ -29,23 +29,26 @@ const (
 const defaultRuleID = "default"
 
 type Rule struct {
-	ID                 string                    `json:"id"`
-	Enabled            bool                      `json:"enabled"`
-	IntervalSeconds    int                       `json:"interval_seconds"`
-	Timezone           string                    `json:"timezone,omitempty"`
-	ActiveHoursStart   string                    `json:"active_hours_start,omitempty"`
-	ActiveHoursEnd     string                    `json:"active_hours_end,omitempty"`
-	SessionMode        SessionMode               `json:"session_mode,omitempty"`
-	DeliveryTarget     automation.DeliveryTarget `json:"delivery_target,omitempty"`
-	PromptOverride     string                    `json:"prompt_override,omitempty"`
-	CreatedBy          string                    `json:"created_by,omitempty"`
-	CreatedFromSession string                    `json:"created_from_session,omitempty"`
-	CreatedAt          time.Time                 `json:"created_at"`
-	UpdatedAt          time.Time                 `json:"updated_at"`
-	LastRunAt          time.Time                 `json:"last_run_at,omitempty"`
-	NextRunAt          time.Time                 `json:"next_run_at,omitempty"`
-	LastStatus         RuleStatus                `json:"last_status,omitempty"`
-	LastError          string                    `json:"last_error,omitempty"`
+	ID               string                    `json:"id"`
+	Enabled          bool                      `json:"enabled"`
+	IntervalSeconds  int                       `json:"interval_seconds"`
+	Timezone         string                    `json:"timezone,omitempty"`
+	ActiveHoursStart string                    `json:"active_hours_start,omitempty"`
+	ActiveHoursEnd   string                    `json:"active_hours_end,omitempty"`
+	SessionMode      SessionMode               `json:"session_mode,omitempty"`
+	DeliveryTarget   automation.DeliveryTarget `json:"delivery_target,omitempty"`
+	PromptOverride   string                    `json:"prompt_override,omitempty"`
+	// WatchdogScript is an optional shell script run before each heartbeat
+	// agent execution. Exit code 0 → run the agent; non-zero → skip this tick.
+	WatchdogScript     string     `json:"watchdog_script,omitempty"`
+	CreatedBy          string     `json:"created_by,omitempty"`
+	CreatedFromSession string     `json:"created_from_session,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	LastRunAt          time.Time  `json:"last_run_at,omitempty"`
+	NextRunAt          time.Time  `json:"next_run_at,omitempty"`
+	LastStatus         RuleStatus `json:"last_status,omitempty"`
+	LastError          string     `json:"last_error,omitempty"`
 }
 
 type RunLog struct {
@@ -70,6 +73,7 @@ type SetRuleInput struct {
 	SessionMode        *SessionMode
 	DeliveryTarget     *automation.DeliveryTarget
 	PromptOverride     *string
+	WatchdogScript     *string
 	CreatedBy          string
 	CreatedFromSession string
 }
@@ -83,6 +87,9 @@ type Config struct {
 	OKToken                string
 	DefaultIntervalSeconds int
 	DefaultTimezone        string
+	// DefaultWatchdogScript is used when the rule has no explicit watchdog
+	// script configured.
+	DefaultWatchdogScript string
 }
 
 func normalizeConfig(cfg Config) Config {
@@ -111,6 +118,9 @@ func (r Rule) normalize(cfg Config) Rule {
 	}
 	if r.SessionMode == "" {
 		r.SessionMode = SessionModeShared
+	}
+	if strings.TrimSpace(r.WatchdogScript) == "" {
+		r.WatchdogScript = strings.TrimSpace(cfg.DefaultWatchdogScript)
 	}
 	r.DeliveryTarget = r.DeliveryTarget.Clone()
 	return r

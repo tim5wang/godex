@@ -427,6 +427,8 @@ heartbeat:
   default_interval_seconds: {{ .Heartbeat.DefaultIntervalSeconds }}
   # Default timezone for heartbeat scheduling. Environment override: GODEX_HEARTBEAT_DEFAULT_TIMEZONE.
   default_timezone: {{ yamlString .Heartbeat.DefaultTimezone }}
+  # Default pre-run watchdog script. Exit 0 runs the agent; non-zero skips the tick. Environment override: GODEX_HEARTBEAT_DEFAULT_WATCHDOG_SCRIPT.
+  default_watchdog_script: {{ yamlString .Heartbeat.DefaultWatchdogScript }}
 
 control:
   # Human-readable runtime name in the control plane. Environment override: GODEX_CONTROL_NODE_NAME.

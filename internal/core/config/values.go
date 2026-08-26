@@ -222,6 +222,8 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Heartbeat.DefaultIntervalSeconds = asInt(value)
 	case "heartbeat.default_timezone":
 		file.Heartbeat.DefaultTimezone = asString(value)
+	case "heartbeat.default_watchdog_script":
+		file.Heartbeat.DefaultWatchdogScript = asString(value)
 	case "control.node_name":
 		file.Control.NodeName = asString(value)
 	case "control.node_id":
@@ -727,8 +729,8 @@ func storedValues(file ConfigFile) map[string]any {
 		"media.audio.whisper_cpp_path":                           file.Media.Audio.WhisperCPPPath,
 		"media.audio.whisper_model_path":                         file.Media.Audio.WhisperModelPath,
 		"media.audio.max_chars":                                  file.Media.Audio.MaxChars,
-		"media.audio.voice_enabled":                             file.Media.Audio.VoiceEnabled,
-		"media.audio.voice_engine_addr":                         file.Media.Audio.VoiceEngineAddr,
+		"media.audio.voice_enabled":                              file.Media.Audio.VoiceEnabled,
+		"media.audio.voice_engine_addr":                          file.Media.Audio.VoiceEngineAddr,
 		"media.video.enabled":                                    file.Media.Video.Enabled,
 		"media.video.keyframe_interval_seconds":                  file.Media.Video.KeyframeIntervalSeconds,
 		"media.video.max_frames":                                 file.Media.Video.MaxFrames,
@@ -937,8 +939,8 @@ func effectiveValues(cfg *Config) map[string]any {
 		"media.audio.whisper_cpp_path":                           cfg.Media.Audio.WhisperCPPPath,
 		"media.audio.whisper_model_path":                         cfg.Media.Audio.WhisperModelPath,
 		"media.audio.max_chars":                                  cfg.Media.Audio.MaxChars,
-		"media.audio.voice_enabled":                             cfg.Media.Audio.VoiceEnabled,
-		"media.audio.voice_engine_addr":                         cfg.Media.Audio.VoiceEngineAddr,
+		"media.audio.voice_enabled":                              cfg.Media.Audio.VoiceEnabled,
+		"media.audio.voice_engine_addr":                          cfg.Media.Audio.VoiceEngineAddr,
 		"media.video.enabled":                                    cfg.Media.Video.Enabled,
 		"media.video.keyframe_interval_seconds":                  cfg.Media.Video.KeyframeIntervalSeconds,
 		"media.video.max_frames":                                 cfg.Media.Video.MaxFrames,

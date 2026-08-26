@@ -12,6 +12,7 @@ type HeartbeatRule struct {
 	SessionMode        string         `json:"session_mode,omitempty"`
 	DeliveryTarget     DeliveryTarget `json:"delivery_target,omitempty"`
 	PromptOverride     string         `json:"prompt_override,omitempty"`
+	WatchdogScript     string         `json:"watchdog_script,omitempty"`
 	CreatedBy          string         `json:"created_by,omitempty"`
 	CreatedFromSession string         `json:"created_from_session,omitempty"`
 	CreatedAt          time.Time      `json:"created_at"`
@@ -44,6 +45,7 @@ type HeartbeatSetInput struct {
 	SessionMode        *string         `json:"session_mode,omitempty"`
 	DeliveryTarget     *DeliveryTarget `json:"delivery_target,omitempty"`
 	PromptOverride     *string         `json:"prompt_override,omitempty"`
+	WatchdogScript     *string         `json:"watchdog_script,omitempty"`
 	CreatedBy          string          `json:"created_by,omitempty"`
 	CreatedFromSession string          `json:"created_from_session,omitempty"`
 }

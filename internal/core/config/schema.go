@@ -87,6 +87,7 @@ func baseSchema() []SectionSchema {
 				{Path: "heartbeat.ok_token", Label: "OK Token", Description: "Suppress delivery when heartbeat output contains this token.", Type: "string", LiveApply: true, Env: "GODEX_HEARTBEAT_OK_TOKEN"},
 				{Path: "heartbeat.default_interval_seconds", Label: "Default Interval Seconds", Description: "Default interval used by the heartbeat rule.", Type: "int", LiveApply: true, Env: "GODEX_HEARTBEAT_DEFAULT_INTERVAL_SECONDS"},
 				{Path: "heartbeat.default_timezone", Label: "Default Timezone", Description: "Default timezone used by heartbeat scheduling.", Type: "string", LiveApply: true, Env: "GODEX_HEARTBEAT_DEFAULT_TIMEZONE"},
+				{Path: "heartbeat.default_watchdog_script", Label: "Default Watchdog Script", Description: "Default pre-run watchdog script: exit 0 runs the agent, non-zero skips the tick.", Type: "string", LiveApply: true, Env: "GODEX_HEARTBEAT_DEFAULT_WATCHDOG_SCRIPT"},
 			},
 		},
 		{

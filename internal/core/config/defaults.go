@@ -101,6 +101,7 @@ func defaultConfigFile() ConfigFile {
 			OKToken:                "HEARTBEAT_OK",
 			DefaultIntervalSeconds: 1800,
 			DefaultTimezone:        "Local",
+			DefaultWatchdogScript:  "",
 		},
 		Control: ControlSection{
 			NodeName:            "",

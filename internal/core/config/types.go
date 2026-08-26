@@ -169,6 +169,9 @@ type HeartbeatSection struct {
 	OKToken                string `yaml:"ok_token"`
 	DefaultIntervalSeconds int    `yaml:"default_interval_seconds"`
 	DefaultTimezone        string `yaml:"default_timezone"`
+	// DefaultWatchdogScript is the default pre-run watchdog script (shell,
+	// exit 0 runs the agent, non-zero skips the tick).
+	DefaultWatchdogScript string `yaml:"default_watchdog_script"`
 }
 
 type ControlSection struct {

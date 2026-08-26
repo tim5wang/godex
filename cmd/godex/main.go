@@ -163,6 +163,7 @@ func main() {
 		OKToken:                cfg.Heartbeat.OKToken,
 		DefaultIntervalSeconds: cfg.Heartbeat.DefaultIntervalSeconds,
 		DefaultTimezone:        cfg.Heartbeat.DefaultTimezone,
+		DefaultWatchdogScript:  cfg.Heartbeat.DefaultWatchdogScript,
 	}, rtheartbeat.NewFileStore(cfg.StateDir), service, channelManager,
 		rtheartbeat.WithIdempotencyStore(idempotency.NewSQLiteStore(cfg.StateDir, 0)))
 	heartbeatToolAdapter := rtheartbeat.NewToolAdapter(heartbeatService)
@@ -895,6 +896,7 @@ func heartbeatConfigFrom(cfg *config.Config) rtheartbeat.Config {
 		OKToken:                cfg.Heartbeat.OKToken,
 		DefaultIntervalSeconds: cfg.Heartbeat.DefaultIntervalSeconds,
 		DefaultTimezone:        cfg.Heartbeat.DefaultTimezone,
+		DefaultWatchdogScript:  cfg.Heartbeat.DefaultWatchdogScript,
 	}
 }
 

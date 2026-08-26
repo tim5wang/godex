@@ -29,6 +29,7 @@ type heartbeatArgs struct {
 	SessionMode      *string                    `json:"session_mode,omitempty"`
 	DeliveryTarget   *automation.DeliveryTarget `json:"delivery_target,omitempty"`
 	PromptOverride   *string                    `json:"prompt_override,omitempty"`
+	WatchdogScript   *string                    `json:"watchdog_script,omitempty"`
 	Limit            int                        `json:"limit,omitempty"`
 }
 
@@ -71,6 +72,10 @@ func NewHeartbeatTool(manager HeartbeatManager) Tool {
 			"prompt_override": map[string]interface{}{
 				"type":        "string",
 				"description": "Optional full prompt override for the heartbeat run",
+			},
+			"watchdog_script": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional pre-run shell script: exit 0 runs the agent, non-zero skips this tick",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
@@ -140,6 +145,7 @@ func NewHeartbeatTool(manager HeartbeatManager) Tool {
 			input.ActiveHoursEnd = args.ActiveHoursEnd
 			input.SessionMode = args.SessionMode
 			input.PromptOverride = args.PromptOverride
+			input.WatchdogScript = args.WatchdogScript
 			if args.DeliveryTarget != nil {
 				target := args.DeliveryTarget.Clone()
 				input.DeliveryTarget = &target

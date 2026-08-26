@@ -54,6 +54,9 @@ func (a *ToolAdapter) SetRule(input automation.HeartbeatSetInput) (automation.He
 	if input.PromptOverride != nil {
 		setInput.PromptOverride = input.PromptOverride
 	}
+	if input.WatchdogScript != nil {
+		setInput.WatchdogScript = input.WatchdogScript
+	}
 	rule, err := a.service.SetRule(setInput)
 	if err != nil {
 		return automation.HeartbeatRule{}, err
@@ -100,6 +103,7 @@ func toAutomationRule(rule Rule) automation.HeartbeatRule {
 		SessionMode:        string(rule.SessionMode),
 		DeliveryTarget:     rule.DeliveryTarget.Clone(),
 		PromptOverride:     rule.PromptOverride,
+		WatchdogScript:     rule.WatchdogScript,
 		CreatedBy:          rule.CreatedBy,
 		CreatedFromSession: rule.CreatedFromSession,
 		CreatedAt:          rule.CreatedAt,

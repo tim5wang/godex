@@ -327,6 +327,7 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("heartbeat.ok_token", file.Heartbeat.OKToken, "GODEX_HEARTBEAT_OK_TOKEN", func(v string) { current.Heartbeat.OKToken = v })
 	resolveInt("heartbeat.default_interval_seconds", file.Heartbeat.DefaultIntervalSeconds, "GODEX_HEARTBEAT_DEFAULT_INTERVAL_SECONDS", func(v int) { current.Heartbeat.DefaultIntervalSeconds = v })
 	resolveString("heartbeat.default_timezone", file.Heartbeat.DefaultTimezone, "GODEX_HEARTBEAT_DEFAULT_TIMEZONE", func(v string) { current.Heartbeat.DefaultTimezone = v })
+	resolveString("heartbeat.default_watchdog_script", file.Heartbeat.DefaultWatchdogScript, "GODEX_HEARTBEAT_DEFAULT_WATCHDOG_SCRIPT", func(v string) { current.Heartbeat.DefaultWatchdogScript = v })
 	resolveString("control.node_name", file.Control.NodeName, "GODEX_CONTROL_NODE_NAME", func(v string) { current.Control.NodeName = v })
 	resolveString("control.node_id", file.Control.NodeID, "GODEX_CONTROL_NODE_ID", func(v string) { current.Control.NodeID = v })
 	resolveString("control.default_node", file.Control.DefaultNode, "GODEX_CONTROL_DEFAULT_NODE", func(v string) { current.Control.DefaultNode = v })
@@ -853,6 +854,7 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			OKToken:                file.Heartbeat.OKToken,
 			DefaultIntervalSeconds: file.Heartbeat.DefaultIntervalSeconds,
 			DefaultTimezone:        file.Heartbeat.DefaultTimezone,
+			DefaultWatchdogScript:  file.Heartbeat.DefaultWatchdogScript,
 		},
 		Control: ControlConfig{
 			NodeName:            file.Control.NodeName,

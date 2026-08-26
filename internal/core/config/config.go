@@ -290,6 +290,9 @@ type HeartbeatConfig struct {
 	OKToken                string
 	DefaultIntervalSeconds int
 	DefaultTimezone        string
+	// DefaultWatchdogScript is the default pre-run watchdog script (shell,
+	// exit 0 runs the agent, non-zero skips the tick).
+	DefaultWatchdogScript string
 }
 
 // ControlConfig controls multi-runtime registration and observability.

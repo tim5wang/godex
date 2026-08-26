@@ -6,6 +6,7 @@ import {
   CloseCircleFilled,
   CopyOutlined,
   DownOutlined,
+  EditOutlined,
   ForkOutlined,
   LoadingOutlined,
   RightOutlined,
@@ -46,6 +47,8 @@ interface MessageFeedV2Props {
   voiceEnabled?: boolean;
   /** 从某条消息（turn）fork 出新 session。 */
   onForkTurn?: (item: FeedItem) => void;
+  /** 重新编辑发送某条 user 消息（stop 后编辑重发场景）。 */
+  onEditMessage?: (item: FeedItem) => void;
 }
 
 /**
@@ -54,7 +57,7 @@ interface MessageFeedV2Props {
  * rows and todo cards in chronological order. Tool calls render as single-line
  * rows that expand in place, keeping the conversation scannable.
  */
-export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false, onForkTurn }: MessageFeedV2Props) {
+export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false, onForkTurn, onEditMessage }: MessageFeedV2Props) {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
 
@@ -93,6 +96,7 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
         onSubmitCard={onSubmitCard}
         voiceEnabled={voiceEnabled}
         onForkTurn={onForkTurn}
+        onEditMessage={onEditMessage}
       />
     ),
     header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item),
@@ -131,6 +135,7 @@ function FeedItemBody({
   onSubmitCard,
   voiceEnabled,
   onForkTurn,
+  onEditMessage,
 }: {
   item: FeedItem;
   onToggleTool: (id: string) => void;
@@ -145,6 +150,7 @@ function FeedItemBody({
   onSubmitCard?: (value: string) => void;
   voiceEnabled?: boolean;
   onForkTurn?: (item: FeedItem) => void;
+  onEditMessage?: (item: FeedItem) => void;
 }) {
   const { t } = useI18n();
   // Grouped assistant turn: render ordered segments, each block separated by a divider.
@@ -185,6 +191,7 @@ function FeedItemBody({
 
   const copyable = Boolean(copyTextForItem(item));
   const canSaveToNote = Boolean(onSaveToNote && item.kind === "assistant" && item.body.trim());
+  const canEditResend = Boolean(onEditMessage && item.kind === "user" && item.body.trim());
   const inFlight = item.status === "sending" || item.status === "running";
   return (
     <div className="message-copy-frame chat-feed-v2-plain">
@@ -200,9 +207,24 @@ function FeedItemBody({
           </Space>
         ) : null}
       </Space>
-      {copyable || canSaveToNote ? (
+      {copyable || canSaveToNote || canEditResend ? (
         <Space className="message-action-buttons" size={2}>
           {voiceEnabled && item.kind === "assistant" ? <TTSPlayButton text={item.body} token={token} /> : null}
+          {canEditResend ? (
+            <Tooltip title={t("chat.editResend")}>
+              <Button
+                aria-label={t("chat.editResend")}
+                icon={<EditOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onEditMessage?.(item);
+                }}
+                shape="circle"
+                size="small"
+                type="text"
+              />
+            </Tooltip>
+          ) : null}
           {canSaveToNote ? (
             <Tooltip title={saveLabel}>
               <Button

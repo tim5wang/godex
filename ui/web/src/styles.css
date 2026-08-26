@@ -1919,6 +1919,34 @@ samp {
   padding: 12px 16px;
 }
 
+.chat-queued-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+  padding: 6px 16px;
+  max-height: 132px;
+  overflow: auto;
+}
+
+.chat-queued-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: var(--godex-card);
+}
+
+.chat-queued-item .ant-btn {
+  color: var(--godex-text-secondary, inherit);
+}
+
+.chat-queued-item .ant-btn-dangerous {
+  color: var(--godex-danger, #cf1322);
+}
+
 .command-palette {
   display: grid;
   gap: 4px;

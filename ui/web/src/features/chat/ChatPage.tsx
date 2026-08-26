@@ -1,4 +1,4 @@
-import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Segmented, Drawer, Spin } from "antd";
+import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Segmented, Drawer, Spin, Tag } from "antd";
 import { useParams, useSearchParams, useLocation, useNavigate, Link } from "react-router-dom";
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
@@ -10,7 +10,7 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useChatV2Store, type DockTab, DOCK_TABS } from "../chat-v2/chatV2Store";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -23,7 +23,7 @@ import { type ComposerSubmission, Composer, type ComposerHandle } from "../../co
 import { VoiceBar } from "../../components/VoiceBar";
 import { TaskCenterPanel } from "./TaskCenterPanel";
 import { SessionsRail } from "../chat-v2/SessionsRail";
-import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, LogoutOutlined } from "@ant-design/icons";
+import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, LogoutOutlined, BellOutlined, EditOutlined } from "@ant-design/icons";
 import { DOCK_TAB_META } from "../chat-v2/DockRail";
 import { MessageFeedV2 } from "../../components/MessageFeedV2";
 import { FilesPanel } from "../files/FilesPanel";
@@ -104,6 +104,8 @@ export function ChatPage() {
   const reviewMergeAutoLoadJobRef = useRef("");
   const [channelFilter, setChannelFilter] = useState("all");
   const [queueMode, setQueueMode] = useState<"follow_up" | "steering">("follow_up");
+  // #8 通知我：非空表示已要求 turn 完成后通知（存 turnId，"any" 表示任意完成）。
+  const [notifyArmed, setNotifyArmed] = useState<string | null>(null);
   const [pendingModelProfileID, setPendingModelProfileID] = useState<string | null>(null);
   const [pendingReasoningEffort, setPendingReasoningEffort] = useState<string | null>(null);
   const [timelineFilters, setTimelineFilters] = useState<TimelineFilterState>(() => defaultTimelineFilters());
@@ -177,6 +179,38 @@ export function ChatPage() {
       return next;
     });
   }, [v2ActiveDockTab]);
+
+  // #8 通知我：running 从 true→false（turn 完成）且已 armed 时触发浏览器通知。
+  useEffect(() => {
+    if (running || !notifyArmed) return;
+    setNotifyArmed(null);
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    try {
+      if (Notification.permission === "granted") {
+        new Notification(t("chat.notifyDone"), { body: t("chat.notifyTurnDone") });
+      }
+    } catch {
+      /* 部分环境 new Notification 会抛错，忽略 */
+    }
+  }, [running, notifyArmed, t]);
+
+  // #8 点击“通知我”：请求权限后 armed；已 armed 则取消。
+  const toggleNotifyMe = async () => {
+    if (notifyArmed) {
+      setNotifyArmed(null);
+      return;
+    }
+    if (typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "default") {
+        await Notification.requestPermission();
+      }
+      if (Notification.permission === "denied") {
+        void message.warning(t("chat.notifyDenied"));
+        return;
+      }
+    }
+    setNotifyArmed(currentTurnId || "any");
+  };
 
   // Terminal dock supports multiple live instances (multi-open tabs). Each
   // tab keeps its own xterm/PTY session mounted; switching tabs only toggles
@@ -900,6 +934,27 @@ export function ChatPage() {
     },
   });
 
+  // #5：取消排队中的 turn（任意位置），返回原文供编辑重发。edit=true 时回填输入框。
+  const cancelQueuedMutation = useMutation({
+    mutationFn: async ({ sessionId, queueId }: { sessionId: string; queueId: string; edit?: boolean }) => cancelQueuedTurn(token || null, sessionId, queueId),
+    onSuccess: async (result, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["snapshot", token, variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["timeline", token, variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions", token] }),
+      ]);
+      if (result.text && variables.edit) {
+        composerRef.current?.setText(result.text);
+        message.success(t("chat.editQueued"));
+      } else {
+        message.success(t("chat.cancelQueued"));
+      }
+    },
+    onError: (error) => {
+      message.error(error instanceof APIError ? error.message : String(error));
+    },
+  });
+
   const retryTurnMutation = useMutation({
     mutationFn: async ({ sessionId, turnId }: { sessionId: string; turnId: string }) => retrySessionTurn(token || null, sessionId, turnId),
     onSuccess: async (result) => {
@@ -1484,6 +1539,9 @@ export function ChatPage() {
                         token={token}
                         voiceEnabled={metaQuery.data?.voice_enabled ?? false}
                         onForkTurn={(item) => forkMutation.mutate({ turnId: item.turnId })}
+                        onEditMessage={(item) => {
+                          composerRef.current?.setText(item.body);
+                        }}
                         onOpenInFiles={(path) => {
                           setFilesFocusPath(path);
                           v2SetActiveDockTab("files");
@@ -1580,6 +1638,17 @@ export function ChatPage() {
                           ]}
                         />
                       ) : null}
+                      {running ? (
+                        <Tooltip title={notifyArmed ? t("chat.notifyArmed") : t("chat.notifyMeAfter")}>
+                          <Button
+                            size="small"
+                            type={notifyArmed ? "primary" : "default"}
+                            icon={<BellOutlined />}
+                            aria-label={t("chat.notifyMeAfter")}
+                            onClick={() => void toggleNotifyMe()}
+                          />
+                        </Tooltip>
+                      ) : null}
                       {running && currentTurnId ? (
                         <Tooltip title={t("chat.cancelTurn")}>
                           <Button
@@ -1595,6 +1664,41 @@ export function ChatPage() {
                     </Space>
                   </Space>
                 </div>
+                {queuedTurns.length > 0 ? (
+                  <div className="chat-queued-strip">
+                    {queuedTurns.map((queued) => (
+                      <div className="chat-queued-item" key={queued.id}>
+                        <Tag color={queued.mode === "steering" ? "purple" : "blue"} style={{ marginInlineEnd: 6 }}>
+                          {queued.mode === "steering" ? t("chat.steerTag") : t("chat.followUpTag")}
+                        </Tag>
+                        <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
+                          {queued.summary || t("chat.queuedMessage")}
+                        </Typography.Text>
+                        <Tooltip title={t("chat.editQueued")}>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EditOutlined />}
+                            aria-label={t("chat.editQueued")}
+                            disabled={cancelQueuedMutation.isPending}
+                            onClick={() => cancelQueuedMutation.mutate({ sessionId, queueId: queued.id, edit: true })}
+                          />
+                        </Tooltip>
+                        <Tooltip title={t("chat.cancelQueued")}>
+                          <Button
+                            type="text"
+                            size="small"
+                            danger
+                            icon={<CloseOutlined />}
+                            aria-label={t("chat.cancelQueued")}
+                            disabled={cancelQueuedMutation.isPending}
+                            onClick={() => cancelQueuedMutation.mutate({ sessionId, queueId: queued.id })}
+                          />
+                        </Tooltip>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <Composer
                   ref={composerRef}
                   disabled={!openQuery.data?.session_id || modelMutation.isPending}

@@ -1117,6 +1117,16 @@ export function cancelSessionTurn(token: string | null, sessionId: string, turnI
   );
 }
 
+export function cancelQueuedTurn(token: string | null, sessionId: string, queueId: string) {
+  return request<{ session_id: string; turn_id: string; status: string; updated_at: string; text?: string; attachments?: AttachmentRef[] }>(
+    `/sessions/${encodeURIComponent(sessionId)}/queued/${encodeURIComponent(queueId)}/cancel`,
+    {
+      method: "POST",
+    },
+    token,
+  );
+}
+
 export function uploadAttachments(
   token: string | null,
   sessionId: string,

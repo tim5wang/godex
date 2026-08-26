@@ -6,6 +6,7 @@ import {
   CloseCircleFilled,
   CopyOutlined,
   DownOutlined,
+  ForkOutlined,
   LoadingOutlined,
   RightOutlined,
   RobotOutlined,
@@ -43,6 +44,8 @@ interface MessageFeedV2Props {
   onSubmitCard?: (value: string) => void;
   /** 语音已启用（meta.voice_enabled），控制消息 TTS 播放按钮显隐。 */
   voiceEnabled?: boolean;
+  /** 从某条消息（turn）fork 出新 session。 */
+  onForkTurn?: (item: FeedItem) => void;
 }
 
 /**
@@ -51,7 +54,7 @@ interface MessageFeedV2Props {
  * rows and todo cards in chronological order. Tool calls render as single-line
  * rows that expand in place, keeping the conversation scannable.
  */
-export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false }: MessageFeedV2Props) {
+export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false, onForkTurn }: MessageFeedV2Props) {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
 
@@ -89,6 +92,7 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
         onOpenInFiles={onOpenInFiles}
         onSubmitCard={onSubmitCard}
         voiceEnabled={voiceEnabled}
+        onForkTurn={onForkTurn}
       />
     ),
     header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item),
@@ -126,6 +130,7 @@ function FeedItemBody({
   onOpenInFiles,
   onSubmitCard,
   voiceEnabled,
+  onForkTurn,
 }: {
   item: FeedItem;
   onToggleTool: (id: string) => void;
@@ -139,6 +144,7 @@ function FeedItemBody({
   onOpenInFiles?: (path: string) => void;
   onSubmitCard?: (value: string) => void;
   voiceEnabled?: boolean;
+  onForkTurn?: (item: FeedItem) => void;
 }) {
   const { t } = useI18n();
   // Grouped assistant turn: render ordered segments, each block separated by a divider.
@@ -154,7 +160,7 @@ function FeedItemBody({
         ))}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
         <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
-        <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} />
+        <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
       </div>
     );
   }
@@ -352,6 +358,7 @@ function TurnActions({
   savingToNote,
   token,
   voiceEnabled,
+  onForkTurn,
 }: {
   item: FeedItem;
   onCopy: () => void;
@@ -361,16 +368,34 @@ function TurnActions({
   savingToNote: boolean;
   token?: string | null;
   voiceEnabled?: boolean;
+  onForkTurn?: (item: FeedItem) => void;
 }) {
+  const { t } = useI18n();
   // Copy / save act only on the final result text, not the process.
   const hasResult = Boolean(item.finalBody?.trim());
   if (!hasResult) {
     return null;
   }
   const canSaveToNote = Boolean(onSaveToNote);
+  const canFork = Boolean(onForkTurn && item.turnId);
   return (
     <div className="chat-feed-v2-turn-actions">
       {voiceEnabled && hasResult ? <TTSPlayButton text={item.finalBody ?? ""} token={token} /> : null}
+      {canFork ? (
+        <Tooltip title={t("chat.forkTurn")}>
+          <Button
+            aria-label={t("chat.forkTurn")}
+            icon={<ForkOutlined />}
+            onClick={(event) => {
+              event.stopPropagation();
+              onForkTurn?.(item);
+            }}
+            shape="circle"
+            size="small"
+            type="text"
+          />
+        </Tooltip>
+      ) : null}
       {canSaveToNote ? (
         <Tooltip title={saveLabel}>
           <Button

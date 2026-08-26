@@ -239,7 +239,7 @@ export function NotesPage() {
         </Card>
 
         <Card
-          title={selected ? titleValue || t("notes.newNote") : t("notes.newNote")}
+          title={selected ? titleValue || selected.title || t("notes.untitled") : t("notes.newNote")}
           extra={
             <Space wrap>
               <Button type="primary" icon={<SaveOutlined />} htmlType="submit" form="note-form" aria-label={t("notes.save")} loading={saveMutation.isPending}>
@@ -263,7 +263,7 @@ export function NotesPage() {
             </Space>
           }
         >
-          <Form form={form} id="note-form" layout="vertical" onFinish={(values) => saveMutation.mutate(values)}>
+          <Form form={form} id="note-form" layout="vertical" onFinish={(values) => saveMutation.mutate({ ...values, title: values.title || selected?.title || t("notes.untitled") })}>
             <Form.Item name="id" hidden><Input /></Form.Item>
 
             {editingMeta ? (

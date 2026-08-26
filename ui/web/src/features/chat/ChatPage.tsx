@@ -977,7 +977,11 @@ export function ChatPage() {
   });
 
   const forkMutation = useMutation({
-    mutationFn: async () => forkSession(token || null, openQuery.data!.session_id, { title: `${sessionTitle} branch` }),
+    mutationFn: async ({ turnId }: { turnId?: string } = {}) =>
+      forkSession(token || null, openQuery.data!.session_id, {
+        title: `${sessionTitle}${turnId ? " (fork)" : " branch"}`,
+        ...(turnId ? { turn_id: turnId } : {}),
+      }),
     onSuccess: async (opened) => {
       reset();
       setDefaultSessionKey(opened.locator.key || makeSessionKey());
@@ -1479,6 +1483,7 @@ export function ChatPage() {
                         workspaceDir={sessionWorkspaceDir}
                         token={token}
                         voiceEnabled={metaQuery.data?.voice_enabled ?? false}
+                        onForkTurn={(item) => forkMutation.mutate({ turnId: item.turnId })}
                         onOpenInFiles={(path) => {
                           setFilesFocusPath(path);
                           v2SetActiveDockTab("files");

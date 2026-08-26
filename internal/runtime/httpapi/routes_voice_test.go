@@ -267,3 +267,94 @@ func TestHandleTTSMockEngine(t *testing.T) {
 		t.Fatalf("not wav, got %d bytes: %q", len(body), body[:min(len(body), 16)])
 	}
 }
+
+// TestHandleTTSStreamMockEngine 验证流式端点：WS 发文本 → 收到 PCM binary 帧
+// （首帧即到，边生成边播）→ tts_done 收尾。
+func TestHandleTTSStreamMockEngine(t *testing.T) {
+	ve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// 握手：等 hello → 回 ready
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var hello protocol.Message
+		if err := json.Unmarshal(data, &hello); err != nil || hello.T != protocol.KindHello {
+			return
+		}
+		ready, _ := json.Marshal(protocol.Message{T: protocol.KindReady, ProtocolVersion: protocol.ProtocolVersion})
+		_ = conn.WriteMessage(websocket.TextMessage, ready)
+		// 等 tts 请求
+		_, data, err = conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(data, &msg); err != nil || msg.T != protocol.KindTTS {
+			return
+		}
+		// 模拟分帧下发：tts_start → 3 段 PCM → tts_done（验证逐帧透传）
+		start, _ := json.Marshal(protocol.Message{T: protocol.KindTTSStart, ID: msg.ID, SampleRate: 24000})
+		_ = conn.WriteMessage(websocket.TextMessage, start)
+		for i := 0; i < 3; i++ {
+			_ = conn.WriteMessage(websocket.BinaryMessage, make([]byte, 240))
+		}
+		done, _ := json.Marshal(protocol.Message{T: protocol.KindTTSDone, ID: msg.ID})
+		_ = conn.WriteMessage(websocket.TextMessage, done)
+	}))
+	defer ve.Close()
+	t.Setenv("GODEX_VOICE_ENGINE_ADDR", strings.TrimPrefix(ve.URL, "http://"))
+
+	// manager：voice_enabled=true
+	workspace := t.TempDir()
+	mgr := newTestManager(t, &config.Config{WorkspaceDir: workspace, HomeDir: filepath.Join(workspace, "home")})
+	if _, err := mgr.Update(context.Background(), config.UpdateRequest{
+		Values: map[string]any{"media.audio.voice_enabled": true},
+	}); err != nil {
+		t.Fatalf("enable voice: %v", err)
+	}
+	b := &voiceBridge{manager: mgr}
+	srv := httptest.NewServer(http.HandlerFunc(b.handleTTSStream))
+	defer srv.Close()
+
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.WriteMessage(websocket.TextMessage, mustJSON(ttsRequest{Text: "你好"})); err != nil {
+		t.Fatalf("send text: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var pcmFrames int
+	for {
+		mt, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read: %v (pcmFrames=%d)", err, pcmFrames)
+		}
+		if mt == websocket.BinaryMessage {
+			pcmFrames++
+			continue
+		}
+		var msg voiceMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("unmarshal %s: %v", data, err)
+		}
+		if msg.Type == "tts_done" {
+			break
+		}
+		if msg.Type == "error" {
+			t.Fatalf("stream error: %s %s", msg.Code, msg.Text)
+		}
+	}
+	if pcmFrames != 3 {
+		t.Fatalf("pcm frames = %d, want 3", pcmFrames)
+	}
+}

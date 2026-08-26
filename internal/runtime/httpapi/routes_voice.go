@@ -86,6 +86,8 @@ func registerVoiceRoutes(mux *http.ServeMux, service *backend.Service, manager *
 	mux.Handle("GET /v1/voice/status", auth(http.HandlerFunc(b.handleVoiceStatus)))
 	// /v1/tts 文本合成端点：POST {"text":"..."} → WAV 音频（供消息旁播放按钮）。
 	mux.Handle("POST /v1/tts", auth(http.HandlerFunc(b.handleTTS)))
+	// /v1/tts/stream 流式合成端点：WS 发 {"text":"..."} → PCM 帧边生成边推（首帧即播）。
+	mux.Handle("GET /v1/tts/stream", auth(http.HandlerFunc(b.handleTTSStream)))
 }
 
 // ttsRequest 是 POST /v1/tts 的请求体。
@@ -126,6 +128,85 @@ func (b *voiceBridge) handleTTS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "audio/wav")
 	w.Header().Set("Content-Length", strconv.Itoa(len(wav)))
 	_, _ = w.Write(wav)
+}
+
+// handleTTSStream 处理 GET /v1/tts/stream：浏览器 WS 发文本，
+// godex 桥接 voice-engine 逐帧转发 PCM（Binary 帧），最后发 tts_done（Text 帧）。
+// 相比 POST /v1/tts 一次性等待全部合成，这里首帧即到，实现边生成边播放。
+func (b *voiceBridge) handleTTSStream(w http.ResponseWriter, r *http.Request) {
+	if !b.voiceEnabled() {
+		writeError(w, http.StatusNotFound, fmt.Errorf("voice chat disabled (media.audio.voice_enabled)"))
+		return
+	}
+	upgrader := websocket.Upgrader{
+		HandshakeTimeout: 5 * time.Second,
+		CheckOrigin:      func(*http.Request) bool { return true },
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	// 等浏览器发来的文本（首条消息）。
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	mt, data, err := conn.ReadMessage()
+	if err != nil {
+		writeVoiceError(conn, "bad_request", "missing text")
+		return
+	}
+	if mt != websocket.TextMessage {
+		writeVoiceError(conn, "bad_request", "expected text message")
+		return
+	}
+	var req ttsRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		writeVoiceError(conn, "bad_request", "invalid JSON")
+		return
+	}
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		writeVoiceError(conn, "bad_request", "empty text")
+		return
+	}
+
+	b.refreshEngineAddr()
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+	ve, err := voiceclient.Dial(ctx, b.engineAddr)
+	if err != nil {
+		writeVoiceError(conn, "engine_unreachable", err.Error())
+		return
+	}
+	defer ve.Close()
+
+	if err := ve.Synthesize("stream-tts", text); err != nil {
+		writeVoiceError(conn, "tts_error", err.Error())
+		return
+	}
+
+	var writeMu sync.Mutex
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-ve.Events():
+			switch ev.Kind {
+			case voiceclient.EventPCM:
+				writeMu.Lock()
+				_ = conn.WriteMessage(websocket.BinaryMessage, ev.PCM)
+				writeMu.Unlock()
+			case voiceclient.EventTTSDone:
+				writeMu.Lock()
+				_ = conn.WriteMessage(websocket.TextMessage, mustJSON(voiceMsg{Type: "tts_done"}))
+				writeMu.Unlock()
+				return
+			case voiceclient.EventError:
+				writeVoiceError(conn, ev.Code, ev.Text)
+				return
+			}
+		}
+	}
 }
 
 // handleVoiceStatus 处理 GET /v1/voice/status（可独立测试）。

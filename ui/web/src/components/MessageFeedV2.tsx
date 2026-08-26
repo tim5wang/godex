@@ -23,8 +23,8 @@ import { TodoCard } from "./TodoCard";
 import { ToolDetails } from "./ToolDetails";
 import { UiCardView, type UiCardData } from "../features/workflows/components/UiCardView";
 import { useI18n } from "../i18n";
-import { synthesizeSpeech } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboard";
+import { createPCMPlayer, type PCMPlayer } from "../lib/ttsPlayback";
 import type { FeedItem, FeedSegment } from "../lib/types";
 
 interface MessageFeedV2Props {
@@ -408,35 +408,71 @@ function TTSPlayButton({ text, token, voiceEnabled = true }: { text: string; tok
   const { message } = AntApp.useApp();
   const { t } = useI18n();
   const [playing, setPlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playerRef = useRef<PCMPlayer | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  const play = async () => {
+  const stop = () => {
+    wsRef.current?.close();
+    wsRef.current = null;
+    playerRef.current?.close();
+    playerRef.current = null;
+    setPlaying(false);
+  };
+
+  const play = () => {
     const trimmed = text.trim();
     if (playing || !trimmed || !voiceEnabled) return;
-    try {
-      setPlaying(true);
-      const blob = await synthesizeSpeech(token ?? null, trimmed);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => {
-        setPlaying(false);
-        URL.revokeObjectURL(url);
-      };
-      audio.onerror = () => {
-        setPlaying(false);
-        URL.revokeObjectURL(url);
-        void message.error(t("chat.playSpeechFailed"));
-      };
-      await audio.play();
-    } catch {
+    setPlaying(true);
+    // 流式端点：WS 发文本 → 收 PCM 帧边生成边播（首帧即播）→ tts_done 收尾。
+    const base = window.location.origin.replace(/^http/, "ws");
+    const params = new URLSearchParams();
+    if (token) params.set("token", token);
+    const ws = new WebSocket(`${base}/v1/tts/stream?${params.toString()}`);
+    wsRef.current = ws;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      ws.close();
+      wsRef.current = null;
+      playerRef.current?.close();
+      playerRef.current = null;
       setPlaying(false);
+    };
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ text: trimmed }));
+    };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data !== "string") {
+        // 下行 PCM（binary）→ 共享播放器排队播放（首帧即播）。
+        void ev.data.arrayBuffer().then((buf: ArrayBuffer) => {
+          if (!playerRef.current) {
+            playerRef.current = createPCMPlayer();
+          }
+          playerRef.current?.enqueue(new Uint8Array(buf));
+        });
+        return;
+      }
+      let msg: { type: string };
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (msg.type === "tts_done") {
+        finish();
+      } else if (msg.type === "error") {
+        void message.error(t("chat.playSpeechFailed"));
+        finish();
+      }
+    };
+    ws.onerror = () => {
       void message.error(t("chat.playSpeechFailed"));
-    }
+      finish();
+    };
+    ws.onclose = () => {
+      finish();
+    };
   };
 
   return (
@@ -446,7 +482,11 @@ function TTSPlayButton({ text, token, voiceEnabled = true }: { text: string; tok
         icon={playing ? <LoadingOutlined /> : <SoundOutlined />}
         onClick={(event) => {
           event.stopPropagation();
-          void play();
+          if (playing) {
+            stop();
+          } else {
+            play();
+          }
         }}
         shape="circle"
         size="small"

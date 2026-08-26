@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Tooltip } from "antd";
 import { AudioOutlined, AudioMutedOutlined } from "@ant-design/icons";
+import { createPCMPlayer, type PCMPlayer } from "../lib/ttsPlayback";
 
 /**
  * VoiceBar —— 点击式语音输入（M5）。
@@ -38,7 +39,6 @@ interface VoiceStatus {
 }
 
 const TARGET_RATE = 16000;
-const TTS_RATE = 24000; // Kokoro 输出采样率
 
 export function VoiceBar({ token, sessionId, enabled = true, disabled = false, onResult }: VoiceBarProps) {
   const [connected, setConnected] = useState(false);
@@ -56,8 +56,8 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const ttsCtxRef = useRef<AudioContext | null>(null);
-  const playCursorRef = useRef<number>(0); // 已调度播放的累计时长(秒)
+  // TTS 下行播放器（首帧即播、后续帧排队续播）。
+  const ttsPlayerRef = useRef<PCMPlayer | null>(null);
 
   const wsUrl = useCallback(() => {
     const base = window.location.origin.replace(/^http/, "ws");
@@ -82,8 +82,13 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") {
-        // 下行 TTS PCM（binary）→ 排队播放
-        void ev.data.arrayBuffer().then((buf: ArrayBuffer) => playPCM(ttsCtxRef, playCursorRef, new Uint8Array(buf)));
+        // 下行 TTS PCM（binary）→ 共享播放器排队播放（首帧即播）。
+        void ev.data.arrayBuffer().then((buf: ArrayBuffer) => {
+          if (!ttsPlayerRef.current) {
+            ttsPlayerRef.current = createPCMPlayer();
+          }
+          ttsPlayerRef.current?.enqueue(new Uint8Array(buf));
+        });
         return;
       }
       let msg: VoiceMsg;
@@ -114,6 +119,8 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
       closed = true;
       ws.close();
       wsRef.current = null;
+      ttsPlayerRef.current?.close();
+      ttsPlayerRef.current = null;
       setConnected(false);
     };
   }, [wsUrl, disabled, sessionId, enabled]);
@@ -271,30 +278,4 @@ async function diagnose(token: string | null, setError: (msg: string) => void) {
   } catch {
     setError("语音连接失败（无法访问诊断端点）");
   }
-}
-
-/** 播放一段 TTS PCM（24k s16）。按到达顺序排到已有播放之后，保证不乱序。 */
-function playPCM(
-  ctxRef: React.MutableRefObject<AudioContext | null>,
-  cursorRef: React.MutableRefObject<number>,
-  bytes: Uint8Array,
-) {
-  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  if (!ctxRef.current) {
-    ctxRef.current = new Ctx();
-  }
-  const ctx = ctxRef.current;
-  const samples = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
-  const buffer = ctx.createBuffer(1, samples.length, TTS_RATE);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < samples.length; i++) {
-    data[i] = samples[i] / 0x8000;
-  }
-  const src = ctx.createBufferSource();
-  src.buffer = buffer;
-  src.connect(ctx.destination);
-  const dur = buffer.duration;
-  const when = Math.max(ctx.currentTime, cursorRef.current);
-  src.start(when);
-  cursorRef.current = when + dur;
 }

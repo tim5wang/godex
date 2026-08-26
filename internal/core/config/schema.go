@@ -401,7 +401,7 @@ func baseSchema() []SectionSchema {
 				{Path: "media.audio.whisper_model_path", Label: "whisper.cpp Model Path", Description: "Local model file consumed by whisper.cpp.", Type: "string", LiveApply: true, Env: "GODEX_MEDIA_AUDIO_WHISPER_MODEL_PATH"},
 				{Path: "media.audio.max_chars", Label: "Max Chars", Description: "Maximum transcript characters injected into one model request before truncation.", Type: "int", LiveApply: true, Env: "GODEX_MEDIA_AUDIO_MAX_CHARS"},
 				{Path: "media.audio.voice_enabled", Label: "Voice Chat Enabled", Description: "Enable real-time voice chat (push-to-talk) via the voice-engine bridge. Requires voice-engine to be running.", Type: "bool", LiveApply: true, Env: "GODEX_MEDIA_AUDIO_VOICE_ENABLED"},
-				{Path: "media.audio.voice_engine_addr", Label: "Voice Engine Addr", Description: "voice-engine WebSocket address (e.g. 127.0.0.1:17021). Empty uses the default.", Type: "string", LiveApply: true, Env: "GODEX_MEDIA_AUDIO_VOICE_ENGINE_ADDR"},
+				{Path: "media.audio.voice_engine_addr", Label: "Voice Engine Addr", Description: "voice-engine WebSocket address (e.g. 127.0.0.1:17021). Empty uses the default. voice-engine repo: https://github.com/tim5wang/agent-local-voice-engine", Type: "string", LiveApply: true, Env: "GODEX_MEDIA_AUDIO_VOICE_ENGINE_ADDR"},
 			},
 		},
 		{

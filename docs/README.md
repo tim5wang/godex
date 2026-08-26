@@ -42,6 +42,7 @@
 | [big-file-split-plan.md](./big-file-split-plan.md) | 大文件拆分改造方案（技术债） | 2026-08-05 |
 | [cache-optimization-plan.md](./cache-optimization-plan.md) | Cache & Tool 优化计划 | |
 | [tui-bubbletea-design.md](./tui-bubbletea-design.md) | 统一多入口交互与 Bubble Tea TUI 设计 | |
+| [voice-plugin-extensibility-design.md](./voice-plugin-extensibility-design.md) | 第三方 ASR/TTS 插件化扩展设计（L2 原生语音后端插件推荐方案 + WASM 沙箱边界分析） | Draft（2026-08-26，未实施） |
 
 ## C. 已合并 / 被取代（Superseded）
 

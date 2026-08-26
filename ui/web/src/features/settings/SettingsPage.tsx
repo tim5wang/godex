@@ -935,6 +935,25 @@ function CompactConfigGroup(props: {
   );
 }
 
+/** 把 description 中的 URL 渲染成可点击链接（voice-engine 仓库地址等）。 */
+function DescriptionWithLinks({ text }: { text: string }) {
+  // 仅匹配 http(s):// 开头的完整 URL，避免误伤其他文本。
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return (
+    <>
+      {parts.map((part, i) =>
+        /^https?:\/\//.test(part) ? (
+          <a key={i} href={part} target="_blank" rel="noreferrer">
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </>
+  );
+}
+
 function FieldEditor(props: {
   field: ConfigFieldSchema;
   fieldState?: ConfigFieldState;
@@ -953,7 +972,9 @@ function FieldEditor(props: {
   const isProvidersField = field.path === "api.providers";
   return (
     <Card size="small" title={field.label} extra={<FieldTags field={field} state={fieldState} />}>
-      <Typography.Paragraph type="secondary">{field.description}</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">
+        <DescriptionWithLinks text={field.description} />
+      </Typography.Paragraph>
       <Form.Item name={field.path} valuePropName={field.type === "bool" ? "checked" : "value"} style={{ marginBottom: 8 }}>
         <ConfigFieldInput
           field={field}
@@ -1003,7 +1024,9 @@ function CompactFieldEditor(props: {
         <Typography.Text strong>{field.label}</Typography.Text>
         <FieldTags field={field} state={fieldState} />
       </div>
-      <Typography.Text type="secondary" className="config-compact-description">{field.description}</Typography.Text>
+      <Typography.Text type="secondary" className="config-compact-description">
+        <DescriptionWithLinks text={field.description} />
+      </Typography.Text>
       <Form.Item name={field.path} valuePropName={field.type === "bool" ? "checked" : "value"} style={{ marginBottom: 4 }}>
         <ConfigFieldInput
           field={field}

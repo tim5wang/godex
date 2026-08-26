@@ -64,3 +64,13 @@
 - web_fetch 对 github.com 页面应提示走 GitHub API 或 raw；对 npmjs.com 应提示 registry.npmjs.org
 - 调研 GitHub 仓库时优先 `api.github.com/repos/.../git/trees` 拿文件树，再按需取 raw 文件
 - 已知分支不确定时用 `api.github.com/repos/...` 查 default_branch，不要猜 main/HEAD
+
+## 2026-08-27 — bash 沙箱禁止 heredoc 追加写文件（background execution not allowed）
+
+**问题**：用 `cat >> 文件 << 'EOF'` 向 backend_test.go 末尾追加测试函数时，报 `background execution is not allowed` 被拦。
+
+**根因**：沙箱不仅禁命令替换/进程替换，heredoc 形式的多行写文件也走 background 通道被拒绝。
+
+**解决**：改用 `edit_file`（edits[].new_text 直接替换文件末尾锚点文本）完成追加，一次成功；测试内容可含反引号/引号等任意文本，无转义负担。
+
+**改进建议**：向文件追加/修改代码一律优先 edit_file（锚点取文件末尾几行原文），不要尝试 heredoc；`.godex/tmp/*.py` 脚本文件可用 write_file 写入。

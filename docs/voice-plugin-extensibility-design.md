@@ -1,125 +1,213 @@
-# GoDex 第三方 ASR/TTS 插件化扩展设计
+# GoDex 插件能力扩展设计：turn 中间件 + UI 插槽 + 语音后端 L2
 
-> 状态：方案设计（未实施） · 日期：2026-08-26
-> 目标：回答「godex 能否以 plugin 方式持有第三方 ASR/TTS 接口」并给出落地路径
+> 状态：Draft / Plan（未实施） · 日期：2026-08-27 · 前置调研：2026-08-26/27
+> 目标：以 plugin 方式提升 godex 灵活性，落地三块能力：
+>   A. 插件可捕获的 **turn 级中间件**（用户输入 → LLM → 回复全链路钩子）
+>   B. **UI 插槽**：插件声明 settings 配置项 + 注册聊天内 `ui_card`
+>   C. **语音后端 L2**：OpenAI 兼容 REST（先）→ Realtime（后续）
 
-## 1. 结论（TL;DR）
+## 0. 调研结论（dsh / pi → godex 借鉴）
 
-**可行，但正确形态不是「WASM 插件内嵌推理引擎」，而是「插件化语音后端适配器」。**
+### 0.1 dsh（deepseek-harness）
+- 口号 "Everything is a Plugin"，基于 Cordis（`@deepseek-ai/cordis`），插件 = **TS/JS 模块**跑在 Node Cordis Loader（plugin-loader/include/group/hmr），**不是 WASM**。
+- 核心机制：`ctx.on`（事件订阅）/ `ctx.provide`（能力提供）/ **middleware（拦截链）** / `ctx.get`（依赖注入）；依赖驱动生命周期（缺依赖保持 PENDING）；可逆注册（卸载撤销全部 effect）；事务热更新。
+- **关键结论**：dsh 官方能力边界表明确「React UI 插件 → 后端无法解决，需独立前端协议」——UI 插槽对所有后端插件系统都是独立课题。
+- godex 已落地其大部分借鉴点：`pluginrt`（manifest/graph/instance/effects/registry/manager + NativeToolPlugin）、`toolruntime`（owner/generation/disposer + before/after interceptor）、`wasmrt`（tools/prompts/policy + 受控 host）、MCP stdio、ACPHarness。
 
-- 现状语音链路（Web UI VoiceBar → godex 桥 → voice-engine 独立服务）已经是最优架构，**保留不动**；
-- 第三方 ASR/TTS（云端 API 或另一套本地引擎）以 **pluginrt 原生 Go 插件** 形式注册为 `voice:asr@1` / `voice:tts@1` 能力，voiceBridge 从能力注册表解析后端；
-- WASM 插件受沙箱限制（无 POST/WS/流式音频、内存 32MiB、超时 30s），**不适合承载 ASR/TTS 推理或流式协议**；作为「协议适配器」需要先扩展网络 host calls（L3，可选远期）。
+### 0.2 pi（pi coding agent）
+- 指向 `mariozechner/pi-coding-agent`，通过 **pi-acp**（ACP Agent Client Protocol，JSON-RPC 2.0 over stdio）供 Zed 等编辑器使用——走 **ACP 外部 agent 委派**路线，**无独立插件切面体系**可抄。
+- godex 已有 `ACPHarness` 承接（本地 DSH 文档建议：先 ACP 委派 ✅ → 再封装 PiHarness 接管完整 Turn ⏳）。
 
-## 2. 现状盘点（事实）
+### 0.3 godex 现状差距（对照表）
 
-| 层 | 现状 |
+| 诉求 | godex 现状 | 差距 |
+|---|---|---|
+| turn 级中间件 | 仅**工具级** before/after 拦截器；`events.Sink` 是 UI/Timeline 广播，**非内部 middleware 总线** | 无 turn 级中间件链（用户输入→LLM→回复） |
+| session 管理切面 | 无会话生命周期钩子 | 无 onSessionCreate/Switch/End（列为后续） |
+| ctx 可访问内容 | `HarnessTurnInput`（messages/workspace/usage/scope）已定型 | 插件无统一 ctx 访问面（DSH 有 ctx.get/provide） |
+| UI 插槽 | 前端**零**插件插槽；settings 是 schema 驱动 | 无 ui_card 机制、无插件配置声明 |
+| 语音 L2 | voice-engine 桥 + voice-engine 内 `asrbackends` | godex 侧无 speech 后端插件能力 |
+
+## 1. 范围（已与用户对齐）
+
+| 项 | 对齐结果 |
 |---|---|
-| 语音链路 | Web UI `VoiceBar` → `/v1/voice` WS → `voiceBridge`（httpapi）→ voice-engine（WS 流式 protocol）→ Silero VAD + 多后端 ASR + Kokoro TTS |
-| 协议 | voice-engine `protocol` 包：hello/start/audio_end/tts/stop + ready/asr_partial/asr_final/asr_end/tts_start/tts_done/error；`client` 公开包 Dial/StartASR/SendAudio/AudioEnd/Synthesize/SynthesizeWAV |
-| 多后端 | voice-engine `asrbackends` 注册表已支持 sensevoice/zipformer/vosk，`start.asr_model` 会话级切换 |
-| godex 插件 | `pluginrt`：Manifest(requires/provides) + 能力注册表(scope 级) + NativePlugin/ToolContributor；`wasmrt`：wazero，ABI `godex:plugin@0.1`，host calls = Log/KVGet/KVSet/WorkspaceRead/**HTTPGet**/CredentialGet |
-| WASM 沙箱限制 | 仅 `godex_http_get`（受控 GET）；无 POST/WebSocket/原始 socket；MaxMemoryPages 512（32MiB）；单次调用超时 30s |
-| 动态加载 | pluginrt **无** `plugin.Open`（原生插件编译进 godex） |
+| A. 切面 | **turn 级中间件**优先（用户输入 → LLM → 回复全链路钩子）；session 钩子/消息级钩子列入路线图后续 |
+| B. UI | **settings 配置扩展**（最便宜先做）+ **插件注册 ui_card**（聊天内卡片）；App 级面板（dock 级）列为后续 |
+| C. 语音 | **先 OpenAI 兼容 REST**（可配 base_url：Whisper ASR + TTS）→ **Realtime 后续阶段** |
 
-## 3. 可行性分析
+## 2. 设计 A：turn 级中间件（插件可捕获的新切面）
 
-### 3.1 WASM 插件内嵌 ASR/TTS 推理 → 不可行
-- ASR/TTS 需要：实时音频流双向通道（麦克风上行 16k PCM / 下行 PCM）、大模型内存（SenseVoice 228MB / Kokoro ~200MB，远超 32MiB）、长时推理（>30s 超时）。
-- 沙箱只给受控 HTTP GET，没有 POST 也没有 WS；模型要么编译进 WASM（wazero 解释执行性能不可接受），要么靠 host callback 外调——那还不如直接做原生适配器。
+### 2.1 目标
+让插件在 **agent turn 执行链路**上获得拦截/修改能力，这是当前工具级拦截器覆盖不到的层级（工具拦截器只能看到单次工具调用，看不到「用户说了什么 → LLM 回了什么」的整体回合）。
 
-### 3.2 WASM 插件做「协议适配器」→ 需先扩展网络 host（L3，可选）
-- 若未来想用 WASM 写第三方 API 适配器（把统一语音协议翻译成 OpenAI/Azure 等 HTTP API），需给 wasmrt 增加 `godex_http_post` / `godex_ws_connect` 受控 host calls（走现有 policy 引擎的 allow/deny 域与超时）。
-- 收益：插件可独立分发、热加载；成本：网络 host 面扩大 = 信任边界扩大，需与现有「WASM 只获得 manifest 明确授权」的安全模型配套。
+### 2.2 中间件链（挂载点）
 
-### 3.3 pluginrt 原生 Go 插件 → 推荐（L2）
-- pluginrt 的 `NativePlugin` / `ToolContributor` 机制天然支持「Go 组件贡献能力 + 可逆注册 + scope 级能力解析」。
-- 第三方后端以原生插件形式贡献 `voice:asr@1` / `voice:tts@1` 能力，voiceBridge 变为能力消费者——**与现有 voice-engine 桥接可以并存**（voice-engine 本身也可包成一个内置后端插件）。
-- 原生插件 = 编译进 godex（或未来支持 .so 动态加载），无沙箱限制，可自由持有 HTTP/WS client、密钥等。
-
-### 3.4 纯配置式多后端（L1，最简，可不引入插件）
-- 若第三方后端都是「HTTP/WS 服务」（如 OpenAI Realtime、Azure Speech、自建 whisper 服务），最简方案是在 `media.audio` 配置里加 `backend` 枚举 + 各后端地址/密钥，voiceBridge 按配置选择适配器。
-- 优点：零插件基建；缺点：新增后端要改 godex 代码，不满足「第三方可独立扩展」。
-
-## 4. 推荐方案 L2：语音后端插件（pluginrt 扩展）
-
-### 4.1 能力契约（新增命名空间）
-```go
-// pluginrt 能力注册表新增 voice 命名空间（沿用 parseCapability 语法 namespace:name@major）
-Provides: []string{"voice:asr@1", "voice:tts@1"}   // 插件声明提供
-Requires: []string{"godex:config@1"}              // 插件需要读配置（地址/密钥）
+```text
+用户输入(消息/附件) ──▶ [Before 中间件链] ──▶ LLM 调用 ──▶ [After 中间件链] ──▶ 回复入库/下发
+                              │                                                        │
+                         可 modify/deny/replace                                 可 modify/追加副作用
+                              ▼                                                        ▼
+                       工具调用（复用现有 toolruntime before/after 拦截器，不重复造）
 ```
 
-### 4.2 SpeechBackend 接口（新增包 internal/speech）
+- **挂载点**：`agent.RunTurn` 前后（`internal/agent/runtime.go` 的 harness 分支处插入）。
+- **显式决策语义**：沿用 wasmrt policy 的 `{"action":"continue"|"deny"|"replace"|"modify"}`，不引入 DSH 的 waterfall next()（本地 DSH 文档 §4 明确首版用显式决策更安全）。
+- **可逆注册**：走 pluginrt effects ledger（owner 可逆，卸载撤销），与 toolruntime 的 `AddBeforeInterceptorsOwned` 同构。
+
+### 2.3 接口草案（新增 `internal/agent/turnmiddleware.go`）
+
+```go
+// TurnInput 是 turn 级中间件的输入面：复用 HarnessTurnInput 已定型的
+// 消息/workspace/usage/scope，作为插件可访问的 ctx 内容（加强 ctx 可访问性）。
+type TurnInput struct {
+    Messages  func() []protocol.Message // 消息快照（提供者，不持有全量）
+    Workspace string
+    Scope     scope.Id
+    Usage     *UsageContext
+    UserText  string // 当前用户输入文本（中间件可改写）
+}
+
+// TurnReply 是 LLM 回复面。
+type TurnReply struct {
+    Text    string
+    Updates []protocol.Update // 结构化更新（text delta / tool / usage 等）
+}
+
+// TurnMiddleware 是插件可实现的 turn 级钩子接口。
+type TurnMiddleware interface {
+    // Before 在用户输入进入 turn 前调用；可修改输入、拒绝或替换。
+    Before(ctx context.Context, in *TurnInput) (*TurnAction, error)
+    // After 在 LLM 回复生成后调用；可修改回复或触发副作用。
+    After(ctx context.Context, in *TurnInput, reply *TurnReply) (*TurnAction, error)
+}
+
+// TurnAction 是显式决策结果（continue/deny/replace/modify）。
+type TurnAction struct {
+    Action string // "continue" | "deny" | "replace" | "modify"
+    Input  *TurnInput
+    Reply  *TurnReply
+    Error  *ActionError
+}
+```
+
+### 2.4 插件接入点
+- **原生插件（首选）**：pluginrt 新增 `TurnMiddlewareContributor`（仿 `ToolContributor`），插件在 Start 时注册中间件，Stop 时 effects 撤销。
+- **WASM 插件（L3 远期）**：wasmrt 扩展 `godex_turn_before` / `godex_turn_after` host calls（受控），复用显式决策 JSON。
+- **ctx 增强**：`TurnInput` 即统一 ctx 访问面；后续可扩展（session 状态、记忆快照等按需增加字段）。
+
+### 2.5 不做（列入路线图）
+- session 生命周期钩子（onSessionCreate/Switch/End）——依赖 turn 中间件先立住，再补会话级钩子。
+- 消息级钩子（每条消息收发）——turn 中间件的 Before/After 已覆盖主要诉求，消息级可后续按需补。
+
+## 3. 设计 B：UI 插槽（settings 配置扩展 + ui_card）
+
+### 3.1 结论
+**前端独立协议**（借鉴 dsh 结论）：后端插件声明 UI 契约（JSON），前端渲染层拉取并渲染；不要求插件提供 React 组件代码（那需要前端沙箱，最重）。
+
+### 3.2 B1：settings 配置扩展（最便宜，先做）
+- **插件 manifest 声明配置项**：新增 `config:` 段，复用现有 `FieldSchema` 结构（path/label/description/type/options/secret）。
+  ```yaml
+  # godex.package.yaml / plugin manifest
+  config:
+    - path: plugins.my-voice.api_key
+      label: API Key
+      type: string
+      secret: true
+    - path: plugins.my-voice.base_url
+      label: Base URL
+      type: string
+      default: https://api.openai.com/v1
+  ```
+- **后端聚合**：pluginrt 收集活跃插件的 config 声明，合并进 `/config/schema`（现有 schema 驱动渲染）。
+- **前端零改动**：SettingsPage 的 ConfigSectionFields 自动渲染新 section（schema 驱动已具备）。
+- **密钥**：secret 字段走 CredentialBroker（插件授权后读取），不进配置明文。
+
+### 3.3 B2：ui_card（聊天内卡片）
+- **插件注册卡片**：manifest 声明 `ui:` 段（card id + 渲染契约）。
+  ```yaml
+  ui:
+    cards:
+      - id: my-voice-status
+        title: My Voice Status
+        # 渲染契约：markdown | form | button_group（复用现有 ui_card 语义）
+        type: markdown
+        # 卡片数据来源：插件 tool 或专用 endpoint
+        data_from: plugin_tool
+  ```
+- **前端 PluginCardSlot**：消息流新增渲染插槽，拉取 `/plugin-ui/cards` 契约，按 type 渲染（markdown/form/button_group 都有现成渲染组件）。
+- **交互回传**：卡片按钮/表单提交 → 后端路由到插件（tool/invoke 或专用 endpoint）。
+- **复用现有 ui_card JSON 契约**：交互卡片语义已存在于前端（`ui_card` 工具的 form/button_group），插件卡片沿用，前端渲染成本低。
+
+### 3.4 落地步骤
+1. 后端：pluginrt manifest 增加 `config:` / `ui:` 声明解析 + `/plugin-ui` 聚合 API（cards + config schema）。
+2. 前端：SettingsPage 渲染插件配置（schema 驱动，基本零改）；消息流新增 PluginCardSlot。
+3. App 级面板（dock/面板级插件）列为后续（最重，不先做）。
+
+## 4. 设计 C：语音后端 L2（OpenAI 兼容 REST → Realtime）
+
+### 4.1 能力契约（沿用既有语音插件设计）
+```go
+// pluginrt 能力注册表新增 voice 命名空间
+Provides: []string{"voice:asr@1", "voice:tts@1"}
+Requires: []string{"godex:config@1"} // 读 base_url / api_key（经 CredentialBroker）
+```
+
+### 4.2 internal/speech 接口（新增包）
 ```go
 package speech
 
-// Backend 是语音后端统一接口。第三方插件实现该接口并注册到 pluginrt。
+// Backend 是语音后端统一接口。第三方插件实现并注册到 pluginrt。
 type Backend interface {
-    // ASR：流式音频输入 → 识别文本事件（复用 voice-engine 事件语义）
     ASR() ASR
-    // TTS：文本 → PCM 流（复用 voice-engine 下行语义）
     TTS() TTS
 }
 
+// ASR：流式音频输入 → 识别文本事件（复用 voice-engine 事件语义 asr_partial/final/end）
 type ASR interface {
-    Start(ctx context.Context, sampleRate int) (ASRSession, error) // 会话级：VAD 由后端自理或复用服务端 VAD
-    // 或离线式：Transcribe(ctx, audio []float32, sr int) (string, error)
-}
-
-type ASRSession interface {
-    Accept(ctx context.Context, pcm []byte) error
-    End(ctx context.Context) (string, error) // flush 后返回最终文本（含 asr_end 语义）
-    Close() error
+    Transcribe(ctx context.Context, audio []float32, sampleRate int) (string, error) // 整段
+    // 流式版本后续：Start(ctx, sr) (ASRSession, error)；Accept/End/Close
 }
 
 type TTS interface {
-    SynthesizeStream(ctx context.Context, text string) (<-chan []byte, error) // 每块 = 一段 PCM（24k s16）
+    Synthesize(ctx context.Context, text string) ([]byte, error)             // 一次性 WAV
+    SynthesizeStream(ctx context.Context, text string) (<-chan []byte, error) // 流式 PCM（后续）
 }
 ```
 
-### 4.3 voiceBridge 改造（消费能力，不硬编码）
-```
-voiceBridge.resolveBackend() :
-  1. pluginrt.Registry.Providers(scope, "voice:asr@1") / "voice:tts@1"
-  2. 命中 → 用插件 Backend（适配器模式：内部可转发到第三方 HTTP/WS 服务）
-  3. 未命中 → 回退现有 voice-engine 桥接（内置后端，保持默认行为）
-```
-- Web UI / protocol 不变：`asr_partial / asr_final / asr_end / tts_start / tts_done` 事件语义与现在完全一致，插件后端只是换了「音频/文本的实际生产者」。
-- 密钥：走现有 `CredentialBroker`（阶段 C 已就绪），插件 manifest 授权后 `godex_credential_get` 取第三方 API key。
+### 4.3 OpenAI 兼容 REST 适配器（先做）
+- **ASR**：`POST {base_url}/audio/transcriptions`（Whisper 兼容；base_url 可配 → Azure / 本地 OpenAI 兼容服务 / 第三方代理）。
+- **TTS**：`POST {base_url}/audio/speech`（可配 voice/model；模型默认 `gpt-4o-mini-tts` 或用户指定）。
+- **音频格式**：ASR 上行 16k s16 WAV（复用现有 VoiceBar 上行）；TTS 下行 24k PCM（复用现有下行播放语义）。
+- **voiceBridge 改造**：注册了语音后端插件 → 用插件（适配器内部 HTTP 调 OpenAI 兼容端点）；未注册 → 回退现有 voice-engine 桥（**默认行为不变**）。
 
-### 4.4 插件装配示例
-```go
-// 内置：voice-engine 桥后端（现有逻辑包一层，默认启用）
-pluginrt.Register(&NativeBackendPlugin{
-    ManifestValue: Manifest{ID: "builtin-voice-engine", Scope: scope.Global,
-        Provides: []string{"voice:asr@1", "voice:tts@1"}},
-    Backend: voiceenginebackend.New(addr), // 内部 = voiceclient
-})
-
-// 第三方示例：OpenAI Realtime 适配器（未来）
-pluginrt.Register(&NativeBackendPlugin{
-    ManifestValue: Manifest{ID: "openai-realtime", Scope: scope.Global,
-        Provides: []string{"voice:asr@1", "voice:tts@1"},
-        Requires: []string{"godex:credential@1"}},
-    Backend: openaibackend.New(cfg), // 内部 = HTTP/WS 转发
-})
-```
+### 4.4 Realtime（后续阶段）
+- OpenAI Realtime API（WS 双向流式实时对话）作为第二阶段。
+- 前置：wasmrt 扩展 `godex_http_post` / `godex_ws_connect` 受控 host calls（走 policy allow/deny + 超时），或继续原生 Go 插件（推荐，无沙箱限制）。
+- 插件只调供应商 API、不加载模型（与你的诉求一致）。
 
 ## 5. 路线图与工作量（估算）
 
 | 阶段 | 内容 | 工作量 |
 |---|---|---|
-| L1 | 配置式多后端（枚举 + 适配器分发，不动插件系统） | 0.5–1 人日 |
-| L2a | `internal/speech` 接口 + pluginrt 能力命名空间 + NativeBackendPlugin | 1–2 人日 |
-| L2b | voice-engine 桥包成内置后端（默认回退保持兼容） | 0.5 人日 |
-| L2c | 一个真实第三方后端示例（如 OpenAI Realtime 适配器） | 1–2 人日 |
-| L3 | wasmrt 扩展 `godex_http_post` / `godex_ws_connect`（受控）+ WASM 适配器 demo | 2–3 人日（可选） |
+| P1 | turn 级中间件（原生）：turnmiddleware 包 + agent 链路插入 + pluginrt TurnMiddlewareContributor | 2–3 人日 |
+| P2 | settings 配置扩展：manifest `config:` 解析 + /config/schema 聚合 | 1 人日 |
+| P3 | ui_card 插槽：manifest `ui:` 解析 + /plugin-ui API + 前端 PluginCardSlot | 2–3 人日 |
+| P4 | 语音 L2a：internal/speech 接口 + voice:asr@1/tts@1 能力 + NativeBackendPlugin | 1–2 人日 |
+| P5 | 语音 L2b：OpenAI REST 适配器（Whisper ASR + TTS）+ voiceBridge 改造 | 1–2 人日 |
+| P6 | 语音 Realtime 阶段（WS 双向流式） | 2–3 人日 |
+| P7 | （可选远期）wasmrt 网络 host 扩展 godex_http_post/ws + WASM 适配器 demo | 2–3 人日 |
 
 ## 6. 验收标准（可验证）
 
-1. 设置页「Voice Engine Addr」旁可见 voice-engine 仓库链接（本次已随设置页改动提交）。
-2. 无插件时：语音链路行为与现在完全一致（默认回退 voice-engine 桥）。
-3. 注册第三方后端插件后：`voice:asr@1` / `voice:tts@1` 能力在 registry 可查，voiceBridge 切到该后端，VoiceBar 交互不变、识别文本/播放音频正常。
-4. 插件停用后：效果可逆，能力注册撤销，回退默认后端。
-5. 第三方密钥经 CredentialBroker 授权读取，不进配置明文（除用户显式输入）。
+1. **turn 中间件**：注册插件后，用户输入/LLM 回复可被拦截修改（modify/deny/replace 均验证）；插件卸载后效果可逆、行为复原。
+2. **settings**：插件声明的配置项自动出现在设置页对应 section；secret 字段经 CredentialBroker 授权读取，不出明文。
+3. **ui_card**：插件注册的卡片在消息流渲染（markdown/form/button_group），按钮/表单交互回传插件。
+4. **语音**：注册 OpenAI 兼容后端插件后 VoiceBar 可用（Whisper ASR + TTS，base_url 可配）；未注册时回退 voice-engine 桥，行为与现状完全一致。
+5. **无回归**：现有语音链路（voice-engine 桥）、设置页渲染、聊天交互均不变。
+6. **安全性**：新增 host/API 面受 manifest 授权约束（config 声明 + CredentialBroker + policy）。
+
+## 7. 关联文档
+- 前置调研：`research_of_dsh_for_godex_optimize.md`（DSH 架构、pluginrt/wasmrt 落地对照）
+- 语音链路现状：`docs/voice-plugin-extensibility-design.md` 历史版本（语音 L1-L3 可行性）
+- 既有能力：`extension-runtime-user-guide.md`（Package/MCP/ACP/WASM 扩展）

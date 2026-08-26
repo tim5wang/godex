@@ -410,47 +410,84 @@ function TTSPlayButton({ text, token, voiceEnabled = true }: { text: string; tok
   const [playing, setPlaying] = useState(false);
   const playerRef = useRef<PCMPlayer | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const doneRef = useRef(false); // 本次播放是否已收尾（不再入队新帧）
+  const pendingRef = useRef(0); // 尚未 enqueue 的 PCM 帧计数
+  const playIdRef = useRef(0); // 播放代次：防旧代次异步帧串入新播放器
 
   const stop = () => {
+    playIdRef.current += 1;
+    doneRef.current = true;
     wsRef.current?.close();
     wsRef.current = null;
     playerRef.current?.close();
     playerRef.current = null;
+    pendingRef.current = 0;
     setPlaying(false);
   };
 
   const play = () => {
     const trimmed = text.trim();
     if (playing || !trimmed || !voiceEnabled) return;
+    const playId = ++playIdRef.current;
     setPlaying(true);
+    doneRef.current = false;
+    pendingRef.current = 0;
     // 流式端点：WS 发文本 → 收 PCM 帧边生成边播（首帧即播）→ tts_done 收尾。
     const base = window.location.origin.replace(/^http/, "ws");
     const params = new URLSearchParams();
     if (token) params.set("token", token);
     const ws = new WebSocket(`${base}/v1/tts/stream?${params.toString()}`);
     wsRef.current = ws;
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
+
+    const enqueueFrame = (buf: ArrayBuffer) => {
+      pendingRef.current -= 1;
+      // 旧代次（已 stop/重新播放）的残留帧 → 丢弃，不重建播放器。
+      if (playIdRef.current !== playId) return;
+      // 已收尾且播放器已释放 → 丢弃残留帧。
+      if (doneRef.current && !playerRef.current) return;
+      if (!playerRef.current) {
+        playerRef.current = createPCMPlayer(() => {
+          playerRef.current = null;
+          setPlaying(false);
+        });
+      }
+      playerRef.current?.enqueue(new Uint8Array(buf));
+      // 正常收尾且所有已接收帧都已入队 → end()（播完自动释放并复位状态）。
+      if (doneRef.current && pendingRef.current <= 0) {
+        playerRef.current?.end();
+      }
+    };
+
+    const finish = (immediate: boolean) => {
+      if (doneRef.current) return;
+      doneRef.current = true;
       ws.close();
       wsRef.current = null;
-      playerRef.current?.close();
-      playerRef.current = null;
-      setPlaying(false);
+      if (immediate) {
+        // 错误/手动停止：丢弃排队音频。
+        playerRef.current?.close();
+        playerRef.current = null;
+        pendingRef.current = 0;
+        setPlaying(false);
+      } else if (pendingRef.current <= 0) {
+        // 正常收尾：帧已全部入队 → end() 播完自动复位；无帧 → 直接复位。
+        if (playerRef.current) {
+          playerRef.current.end();
+        } else {
+          setPlaying(false);
+        }
+      }
+      // pendingRef > 0：等最后一帧 enqueueFrame 里触发 end()（避免尾部帧被拒）。
     };
+
     ws.onopen = () => {
       ws.send(JSON.stringify({ text: trimmed }));
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") {
         // 下行 PCM（binary）→ 共享播放器排队播放（首帧即播）。
-        void ev.data.arrayBuffer().then((buf: ArrayBuffer) => {
-          if (!playerRef.current) {
-            playerRef.current = createPCMPlayer();
-          }
-          playerRef.current?.enqueue(new Uint8Array(buf));
-        });
+        pendingRef.current += 1;
+        void ev.data.arrayBuffer().then(enqueueFrame);
         return;
       }
       let msg: { type: string };
@@ -460,18 +497,19 @@ function TTSPlayButton({ text, token, voiceEnabled = true }: { text: string; tok
         return;
       }
       if (msg.type === "tts_done") {
-        finish();
+        finish(false);
       } else if (msg.type === "error") {
         void message.error(t("chat.playSpeechFailed"));
-        finish();
+        finish(true);
       }
     };
     ws.onerror = () => {
       void message.error(t("chat.playSpeechFailed"));
-      finish();
+      finish(true);
     };
     ws.onclose = () => {
-      finish();
+      // 未收到 tts_done 的连接关闭（如网络中断）→ 按正常收尾处理，别砍掉已排队音频。
+      finish(false);
     };
   };
 

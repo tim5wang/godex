@@ -43,6 +43,7 @@
 | [cache-optimization-plan.md](./cache-optimization-plan.md) | Cache & Tool 优化计划 | |
 | [tui-bubbletea-design.md](./tui-bubbletea-design.md) | 统一多入口交互与 Bubble Tea TUI 设计 | |
 | [voice-plugin-extensibility-design.md](./voice-plugin-extensibility-design.md) | 插件能力扩展设计（已对齐）：A. turn 级中间件（用户输入→LLM→回复钩子）+ B. UI 插槽（settings 配置声明 + ui_card 卡片）+ C. 语音后端 L2（OpenAI 兼容 REST→Realtime），含 dsh/pi 调研结论 | Draft（2026-08-27，对齐范围后更新） |
+| [plugin-system-evolution-plan.md](./plugin-system-evolution-plan.md) | 插件系统长期主义演进方案：dsh-taskboard 适配验证（P-A 路由/P-B 前端 UI 插槽/P-C 服务注入/P-D 调度）+ 需求池子优先级排序 | Draft（2026-08-27） |
 
 ## C. 已合并 / 被取代（Superseded）
 

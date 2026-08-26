@@ -1563,7 +1563,7 @@ export function ChatPage() {
                     </Space>
                     <Space size={4}>
                       <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
-                      <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} enabled={metaQuery.data?.voice_enabled ?? false} disabled={!openQuery.data?.session_id || modelMutation.isPending} onResult={(text) => composerRef.current?.setText(text)} />
+                      <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} enabled={metaQuery.data?.voice_enabled ?? false} disabled={!openQuery.data?.session_id || modelMutation.isPending} onResult={(text) => composerRef.current?.appendText(text)} />
                       {running ? (
                         <Segmented
                           size="small"

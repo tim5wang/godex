@@ -15,6 +15,8 @@ export interface ComposerSubmission {
 /** Composer 外部控制句柄：供语音识别等场景把文本注入输入框，由用户编辑后发送。 */
 export interface ComposerHandle {
   setText: (text: string) => void;
+  /** 追加文本到输入框末尾（语音识别 append 模式，保留已有内容）。 */
+  appendText: (text: string) => void;
 }
 
 interface ComposerProps {
@@ -69,6 +71,14 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
       setText: (text: string) => {
         inputDirtyRef.current = true;
         setValue(text);
+      },
+      // append 模式：在已有内容后追加（自动补空格分隔），不清空用户输入。
+      appendText: (text: string) => {
+        inputDirtyRef.current = true;
+        setValue((prev) => {
+          if (!prev) return text;
+          return prev.endsWith(" ") || prev.endsWith("\n") ? prev + text : prev + " " + text;
+        });
       },
     }),
     [],

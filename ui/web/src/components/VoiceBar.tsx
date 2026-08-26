@@ -48,6 +48,10 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
   const [partial, setPartial] = useState<string>("");
   // 同步 ref：stopListening（空依赖 useCallback）需要读到最新累计文本。
   const partialRef = useRef<string>("");
+  // asr_end 等待标记：stopListening 后服务端 flush 完成回 asr_end 再填充。
+  const pendingEndRef = useRef(false);
+  // asr_end 兜底超时 timer（stopListening 时启动，卸载/重录时清理）。
+  const endTimerRef = useRef<number | null>(null);
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
 
@@ -106,6 +110,18 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
           partialRef.current = next;
           return next;
         });
+      } else if (msg.type === "asr_end") {
+        // 服务端 flush 完成、全部转写下发完毕 → 把累计文本交给调用方。
+        // （在 asr_end 前不填充，避免最后一段识别结果还在途时提前读取。）
+        if (pendingEndRef.current) {
+          pendingEndRef.current = false;
+          const text = partialRef.current.trim();
+          partialRef.current = "";
+          setPartial("");
+          if (text) {
+            onResultRef.current?.(text);
+          }
+        }
       }
     };
     ws.onclose = () => {
@@ -130,6 +146,12 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       setError("voice not connected");
       return;
+    }
+    // 重置上一轮 asr_end 等待状态（防迟到 asr_end 误填充新一轮录音）。
+    pendingEndRef.current = false;
+    if (endTimerRef.current !== null) {
+      window.clearTimeout(endTimerRef.current);
+      endTimerRef.current = null;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -195,17 +217,44 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
     // 通知服务端一句话说完（flush VAD）
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "audio_end" } satisfies VoiceMsg));
+      pendingEndRef.current = true;
+      // 兜底：asr_end 迟迟未到（连接中断等）时超时后也把已识别文本交给调用方。
+      endTimerRef.current = window.setTimeout(() => {
+        endTimerRef.current = null;
+        if (!pendingEndRef.current) return;
+        pendingEndRef.current = false;
+        const text = partialRef.current.trim();
+        partialRef.current = "";
+        setPartial("");
+        if (text) {
+          onResultRef.current?.(text);
+        }
+      }, 2500);
+    } else {
+      // 连接已断：直接用已累计文本（若有）。
+      const text = partialRef.current.trim();
+      partialRef.current = "";
+      setPartial("");
+      if (text) {
+        onResultRef.current?.(text);
+      }
     }
-    // 把累计识别文本交给调用方（填入输入框，用户编辑后发送）。
-    const text = partialRef.current.trim();
-    partialRef.current = "";
-    setPartial("");
-    if (text) {
-      onResultRef.current?.(text);
-    }
+    // 不再立即读 partialRef：等服务端 flush 完成回 asr_end 再填充，
+    // 避免最后一段识别结果还在途时提前读取（点击结束有时不填充）。
   }, []);
 
   useEffect(() => () => stopListening(), [stopListening]);
+
+  // 卸载时清理 asr_end 兜底 timer，避免组件销毁后回调 setState。
+  useEffect(
+    () => () => {
+      if (endTimerRef.current !== null) {
+        window.clearTimeout(endTimerRef.current);
+        endTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   // 点击 toggle：录音中 → 停止并发送；否则 → 开始录音（清空上次回显）。
   const toggle = useCallback(() => {

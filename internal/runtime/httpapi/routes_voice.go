@@ -316,6 +316,9 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 			if strings.TrimSpace(ev.Text) != "" {
 				vc.writeText(voiceMsg{Type: "asr_partial", Text: ev.Text})
 			}
+		case voiceclient.EventASREnd:
+			// 本次录音全部转写完毕（audio_end → flush → asr_end）：通知前端填充输入框。
+			vc.writeText(voiceMsg{Type: "asr_end"})
 		case voiceclient.EventPCM:
 			vc.writeBinary(ev.PCM)
 		case voiceclient.EventTTSStart, voiceclient.EventTTSDone:

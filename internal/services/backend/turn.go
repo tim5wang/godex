@@ -335,6 +335,39 @@ func (s *Service) CancelTurn(ctx context.Context, sessionID, turnID string) (*Ca
 	}, nil
 }
 
+// CancelQueuedTurn removes a still-waiting queued turn from the session queue
+// and returns its original envelope (text + attachments) so clients can offer
+// edit-and-resend. Fails when the queue is empty or the id is not queued.
+func (s *Service) CancelQueuedTurn(_ context.Context, sessionID, queueID string) (*CancelQueuedTurnResult, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	removed, ok := session.removeQueued(queueID)
+	if !ok {
+		return nil, newTurnNotFoundError(queueID)
+	}
+	if err := s.writeSessionQueue(session); err != nil {
+		return nil, err
+	}
+	session.events.Emit(events.Event{
+		SessionID: sessionID,
+		TurnID:    queueID,
+		Type:      events.EventWarningRaised,
+		Timestamp: s.now(),
+		Payload:   events.NoticePayload{Message: "Queued turn cancelled."},
+	})
+	_ = s.writeSessionTimeline(session)
+	return &CancelQueuedTurnResult{
+		SessionID:   sessionID,
+		TurnID:      queueID,
+		Status:      "cancelled",
+		UpdatedAt:   s.now(),
+		Text:        removed.Envelope.BodyText(),
+		Attachments: removed.Envelope.Attachments,
+	}, nil
+}
+
 // RetryTurnAsync replays the latest retryable turn from its persisted input and
 // continues execution on a service-owned background context.
 func (s *Service) RetryTurnAsync(ctx context.Context, sessionID, turnID string) (*SubmitResult, error) {

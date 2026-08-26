@@ -4130,3 +4130,47 @@ func TestRotateSessionEventJournalIsBestEffort(t *testing.T) {
 		t.Fatalf("expected no journal file after rotate of missing journal, err=%v", err)
 	}
 }
+
+func TestCancelQueuedTurnRemovesAnyPositionAndReturnsText(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}})
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "cancel-queued"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	session, err := service.requireSession(opened.SessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+	now := time.Now()
+	envelope := message.NewTextEnvelope(message.SourceWeb, opened.SessionID, "user-1", "queued question text", now)
+	session.seedQueue([]QueuedTurn{
+		{ID: "q-1", Mode: QueueModeFollowUp, Status: "queued", Source: string(message.SourceWeb), Sender: "user-1", Summary: "first", CreatedAt: now, UpdatedAt: now, Envelope: message.NewTextEnvelope(message.SourceWeb, opened.SessionID, "user-1", "first", now)},
+		{ID: "q-2", Mode: QueueModeSteering, Status: "queued", Source: string(message.SourceWeb), Sender: "user-1", Summary: "second", CreatedAt: now, UpdatedAt: now, Envelope: envelope},
+		{ID: "q-3", Mode: QueueModeFollowUp, Status: "queued", Source: string(message.SourceWeb), Sender: "user-1", Summary: "third", CreatedAt: now, UpdatedAt: now, Envelope: message.NewTextEnvelope(message.SourceWeb, opened.SessionID, "user-1", "third", now)},
+	})
+	if err := service.writeSessionQueue(session); err != nil {
+		t.Fatalf("write queue: %v", err)
+	}
+
+	// Remove from the middle (not the head): must succeed and return the text.
+	result, err := service.CancelQueuedTurn(context.Background(), opened.SessionID, "q-2")
+	if err != nil {
+		t.Fatalf("cancel queued: %v", err)
+	}
+	if result.TurnID != "q-2" || result.Status != "cancelled" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.Text != "queued question text" {
+		t.Fatalf("expected original text back, got %q", result.Text)
+	}
+	// The head item must remain so the queue still progresses.
+	head, ok := session.peekQueued()
+	if !ok || head.ID != "q-1" {
+		t.Fatalf("expected q-1 to remain at head, got %+v ok=%v", head, ok)
+	}
+	// Removing an unknown id must error.
+	if _, err := service.CancelQueuedTurn(context.Background(), opened.SessionID, "missing"); err == nil {
+		t.Fatal("expected error for unknown queued id")
+	}
+}

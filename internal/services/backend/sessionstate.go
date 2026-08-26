@@ -140,6 +140,27 @@ func (s *sessionState) dropQueued(id string) bool {
 	return true
 }
 
+// removeQueued removes the queued turn with the given id from any position in
+// the queue and returns a clone of it (including its full envelope) so callers
+// can surface the original text (e.g. for edit-and-resend).
+func (s *sessionState) removeQueued(id string) (QueuedTurn, bool) {
+	id = strings.TrimSpace(id)
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	for i := range s.queue {
+		if strings.TrimSpace(s.queue[i].ID) != id {
+			continue
+		}
+		removed := cloneQueuedTurn(s.queue[i])
+		next := make([]QueuedTurn, 0, len(s.queue)-1)
+		next = append(next, s.queue[:i]...)
+		next = append(next, s.queue[i+1:]...)
+		s.queue = next
+		return removed, true
+	}
+	return QueuedTurn{}, false
+}
+
 func (s *sessionState) recordTurnStarted(turnID string, envelope message.Envelope, priorMessageCount int, now time.Time) {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {

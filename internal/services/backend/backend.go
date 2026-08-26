@@ -243,6 +243,17 @@ type CancelTurnResult struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// CancelQueuedTurnResult summarizes a queued-turn cancellation and carries the
+// original text/attachments so clients can offer edit-and-resend.
+type CancelQueuedTurnResult struct {
+	SessionID   string                  `json:"session_id"`
+	TurnID      string                  `json:"turn_id"`
+	Status      string                  `json:"status"`
+	UpdatedAt   time.Time               `json:"updated_at"`
+	Text        string                  `json:"text,omitempty"`
+	Attachments []message.AttachmentRef `json:"attachments,omitempty"`
+}
+
 // TurnRecord is the persisted lifecycle state for one user turn.
 type TurnRecord struct {
 	ID                    string                 `json:"id"`

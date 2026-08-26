@@ -43,3 +43,24 @@
 
 **改进建议**：
 - 若后续要放宽：沙箱可对「只读命令替换」放行（如 `git rev-parse`、`date`），保留对高风险/嵌套命令的拦截。
+
+## 2026-08-27 — web_fetch 对 GitHub/npm/Cloudflare 页面抓取失败或截断
+
+**问题**：调研 dsh-taskboard 时 web_fetch 反复失败或拿不到正文：
+- `github.com/cloader/dsh-taskboard`：多次只返回 badge 头，README 正文缺失
+- `raw.githubusercontent.com/.../README_zh.md` 与 `README_en.md`：404（分支名不是 main/HEAD）
+- `www.npmjs.com/package/dsh-taskboard`：Cloudflare "Just a moment..." 反爬页
+- `github.com/mariozechner/pi-coding-agent`：返回 DOCTYPE 原始 HTML（GitHub 反爬）
+
+**根因**：GitHub/npm 对无浏览器 UA 的抓取有反爬（Cloudflare challenge、动态渲染）；raw 分支名不确定（用 main/HEAD 猜会 404）；只抓 README 漏掉源码结构（本次关键信息在 lib/ 目录树）。
+
+**解决**：
+- 改用 **GitHub API**：`api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1` 拿完整文件树（一次成功拿到 lib/host/*.js 结构）
+- **npm registry API**：`registry.npmjs.org/{pkg}/latest` 拿 package.json 元数据（description 揭示插件真实能力面）
+- **raw 文件直接取**：`raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}` 用确认过的分支名
+- 这轮是「GitHub API + npm registry API + raw 组合」成功，比反复 web_fetch 高效
+
+**改进建议**：
+- web_fetch 对 github.com 页面应提示走 GitHub API 或 raw；对 npmjs.com 应提示 registry.npmjs.org
+- 调研 GitHub 仓库时优先 `api.github.com/repos/.../git/trees` 拿文件树，再按需取 raw 文件
+- 已知分支不确定时用 `api.github.com/repos/...` 查 default_branch，不要猜 main/HEAD

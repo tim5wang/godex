@@ -1664,3 +1664,36 @@ export interface BizKeyCreateResponse {
   key: BizKey;
   secret: string;
 }
+
+// ---- MCP Server Registry Types ----
+
+export type MCPServerType = "filesystem" | "stdio" | "streamable-http";
+
+export interface MCPServerConfig {
+  name: string;
+  type: MCPServerType;
+  root?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  session_required?: boolean;
+}
+
+export interface MCPRegistryResponse {
+  servers: MCPServerConfig[];
+}
+
+export interface MCPServerStatus {
+  name: string;
+  type: MCPServerType;
+  online: boolean;
+  error?: string;
+  tools?: number;
+  checked_at: string;
+}
+
+export interface MCPStatusResponse {
+  statuses: MCPServerStatus[];
+}

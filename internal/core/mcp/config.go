@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 )
 
 const (
@@ -64,4 +66,25 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// SaveConfig atomically writes the MCP config file, creating its directory if
+// needed. It is the write path used by the lifecycle-management manager so a
+// newly registered server survives a process restart.
+func SaveConfig(path string, cfg Config) error {
+	if path == "" {
+		return fmt.Errorf("mcp config path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

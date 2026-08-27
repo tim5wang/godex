@@ -14,6 +14,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
+	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/scope"
@@ -65,6 +66,17 @@ func (s *SharedDependencies) snapshot() dependencies {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.deps
+}
+
+// MCPManager returns the workspace-scoped MCP server registry manager used for
+// MCP lifecycle management (list/upsert/delete/test), or nil if unavailable.
+func (s *SharedDependencies) MCPManager() *mcp.Manager {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deps.mcpMgr
 }
 
 // ApplyConfig refreshes shared workspace-scoped services for subsequent turns.

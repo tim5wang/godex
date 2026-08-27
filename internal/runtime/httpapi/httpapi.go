@@ -1842,6 +1842,7 @@ func NewHandlerWithRuntime(
 	registerBizRoutes(mux, protected, usageService)
 	registerStepRoutes(mux, usageService, service)
 	registerStepTrackRoutes(mux, usageService, service)
+	registerMCPRoutes(mux, protected, service.MCPManager())
 	registerFileRoutes(mux, protected, manager)
 	registerTerminalRoutes(mux)
 	registerVoiceRoutes(mux, service, manager, protected, func() string { return manager.Current().WebToken })

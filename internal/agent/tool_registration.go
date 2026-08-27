@@ -281,12 +281,14 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary: "configured MCP resource servers",
 	})
 	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewListMCPToolsTool(a.mcpMgr), tools.ToolMeta{
-		Bundle:  bundleMCP,
-		Summary: "configured stdio MCP tool servers",
+		Bundle:        bundleMCP,
+		Summary:       "discover MCP tools (bridge)",
+		DefaultActive: true,
 	})
 	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewCallMCPToolTool(a.mcpMgr), tools.ToolMeta{
-		Bundle:  bundleMCP,
-		Summary: "configured stdio MCP tool servers",
+		Bundle:        bundleMCP,
+		Summary:       "call MCP tools (bridge)",
+		DefaultActive: true,
 	})
 	a.registerOwnedTool(handler, builtinPluginOwnerMCP, tools.NewListMCPPromptsTool(a.mcpMgr), tools.ToolMeta{
 		Bundle:  bundleMCP,

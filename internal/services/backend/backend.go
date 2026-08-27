@@ -5,6 +5,7 @@ import (
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/insights"
+	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -449,4 +450,15 @@ func NewService(cfg *config.Config, shared *agent.SharedDependencies, commandSer
 	// --resume-run-id. Idempotent (guarded by sync.Once inside shared).
 	shared.ResumeLongTasksAfterRestart()
 	return service
+}
+
+// MCPManager returns the workspace-scoped MCP registry manager used for MCP
+// lifecycle management (list/upsert/delete/test), or nil if unavailable. It
+// delegates to the shared dependencies so the HTTP API can manage the MCP
+// server registry without opening a session.
+func (s *Service) MCPManager() *mcp.Manager {
+	if s == nil || s.shared == nil {
+		return nil
+	}
+	return s.shared.MCPManager()
 }

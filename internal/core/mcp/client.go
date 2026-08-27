@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // Resource describes one discoverable MCP resource.
@@ -78,6 +79,8 @@ type Manager struct {
 	configPath   string
 	workspaceDir string
 	tempDir      string
+
+	mu sync.RWMutex
 }
 
 // NewManager creates a new read-only MCP manager.

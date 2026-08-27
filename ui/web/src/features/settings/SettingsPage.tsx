@@ -50,6 +50,7 @@ import {
 import type { ApplyReport, ChannelStatus, CIKSummary, ConfigFieldSchema, ConfigFieldState, ConfigSectionSchema, DoctorCheck, PackageQualityReport, ProviderModelInfo, ProviderStatus, RuntimeServiceStatus, SecurityEvent, WeixinAuthStatus } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
 import { ensurePushSubscription, pushSupported, sendTestPush } from "../../lib/push";
+import { MCPSettingsPanel } from "./MCPSettingsPanel";
 
 type LocalFormValues = {
   locale: "en" | "zh";
@@ -505,6 +506,15 @@ export function SettingsPage() {
                 </Card>
                 <DoctorPanel checks={doctorQuery.data?.checks ?? []} loading={doctorQuery.isLoading} />
               </Space>
+            ),
+          },
+          {
+            key: "mcp",
+            label: t("settings.mcpTabTitle"),
+            children: authRequired && !token ? (
+              <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.mcpTabTitle") })} />
+            ) : (
+              <MCPSettingsPanel token={token || null} />
             ),
           },
         ]}

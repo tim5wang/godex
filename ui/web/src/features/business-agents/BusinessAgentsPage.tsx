@@ -38,6 +38,7 @@ import {
   deleteBizKey,
   getModels,
   listBizKeys,
+  listMCPServers,
   listPackages,
   listSkillsCatalog,
   resetBizKey,
@@ -121,6 +122,16 @@ export function BusinessAgentsPage() {
   const packageNames = useMemo(
     () => (packagesQuery.data ?? []).map((p) => ({ label: p.name, value: p.name })),
     [packagesQuery.data],
+  );
+
+  const mcpServersQuery = useQuery({
+    queryKey: ["mcp-servers", token],
+    enabled: canReach,
+    queryFn: () => listMCPServers(token),
+  });
+  const mcpServerOptions = useMemo(
+    () => (mcpServersQuery.data?.servers ?? []).map((s) => ({ label: s.name, value: s.name })),
+    [mcpServersQuery.data],
   );
 
   const modelsQuery = useQuery<ModelsView>({
@@ -387,7 +398,7 @@ const result = await step.createStep({
             <Input.TextArea rows={3} placeholder={t("businessAgents.defaultPromptPlaceholder")} />
           </Form.Item>
           <Form.Item name="mcp_servers" label={t("businessAgents.mcpServers")} extra={t("businessAgents.mcpExtra")}>
-            <Select mode="tags" placeholder={t("businessAgents.mcpPlaceholder")} />
+            <Select mode="multiple" options={mcpServerOptions} placeholder={t("businessAgents.mcpPlaceholder")} allowClear showSearch optionFilterProp="label" loading={mcpServersQuery.isLoading} />
           </Form.Item>
           <Form.Item name="sandbox_tools" label={t("businessAgents.sandboxTools")}>
             <Select mode="multiple" options={SANDBOX_TOOL_OPTIONS.map((o) => ({ label: o, value: o }))} />

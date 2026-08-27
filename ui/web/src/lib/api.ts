@@ -69,6 +69,10 @@ import type {
   BizKey,
   BizKeyCreateResponse,
   ProviderRef,
+  MCPRegistryResponse,
+  MCPStatusResponse,
+  MCPServerConfig,
+  MCPServerStatus,
 } from "./types";
 import { useNodeContextStore } from "../store/nodeContext";
 
@@ -1573,4 +1577,34 @@ export function revealBizKey(token: string | null, id: string, pin: string) {
 
 export function deleteBizKey(token: string | null, id: string) {
   return request<void>(`/v1/biz/keys/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
+}
+
+// ---- MCP Server Registry API ----
+
+export function listMCPServers(token: string | null) {
+  return request<MCPRegistryResponse>("/v1/mcp/servers", { method: "GET" }, token);
+}
+
+export function createMCPServer(token: string | null, body: MCPServerConfig) {
+  return request<MCPServerConfig>("/v1/mcp/servers", { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export function updateMCPServer(token: string | null, name: string, body: MCPServerConfig) {
+  return request<MCPServerConfig>(
+    `/v1/mcp/servers/${encodeURIComponent(name)}`,
+    { method: "PUT", body: JSON.stringify(body) },
+    token,
+  );
+}
+
+export function deleteMCPServer(token: string | null, name: string) {
+  return request<void>(`/v1/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" }, token);
+}
+
+export function testMCPServer(token: string | null, name: string) {
+  return request<MCPServerStatus>(`/v1/mcp/servers/${encodeURIComponent(name)}/test`, { method: "POST" }, token);
+}
+
+export function getMCPStatuses(token: string | null) {
+  return request<MCPStatusResponse>("/v1/mcp/status", { method: "GET" }, token);
 }

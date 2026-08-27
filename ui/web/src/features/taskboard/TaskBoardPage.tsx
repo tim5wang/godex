@@ -181,6 +181,7 @@ export function TaskBoardPage() {
     const total = (card.checklist ?? []).length;
     if (doneCount < total) {
       Modal.confirm({
+        zIndex: 1300,
         title: t("taskboard.acceptForceTitle"),
         content: t("taskboard.acceptForceContent", { done: doneCount, total }),
         okText: t("taskboard.acceptForceOk"),
@@ -194,6 +195,7 @@ export function TaskBoardPage() {
   const rejectCard = (card: TaskboardCard) => {
     let reason = "";
     Modal.confirm({
+      zIndex: 1300,
       title: t("taskboard.rejectTitle"),
       content: (
         <Input
@@ -387,6 +389,7 @@ export function TaskBoardPage() {
       <Drawer
         title={detail?.title || detailId}
         open={!!detailId}
+        zIndex={1300}
         onClose={() => setDetailId(null)}
         width={520}
       >
@@ -402,6 +405,7 @@ export function TaskBoardPage() {
               {actionButtons(detail)}
               {detail.status !== "done" && (
                 <Popconfirm
+                  zIndex={1300}
                   title={t("taskboard.deleteConfirm")}
                   onConfirm={() => deleteMutation.mutate(detail.id)}
                 >
@@ -485,6 +489,7 @@ export function TaskBoardPage() {
       <Modal
         title={t("taskboard.newCard")}
         open={createOpen}
+        zIndex={1300}
         onCancel={() => setCreateOpen(false)}
         onOk={() => {
           if (!createTitle.trim()) {

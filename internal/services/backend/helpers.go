@@ -596,16 +596,32 @@ func forkMessageIndexForTurn(records []TurnRecord, turnID string, fallback int) 
 	if turnID == "" {
 		return fallback
 	}
-	for _, record := range records {
-		if strings.TrimSpace(record.ID) == turnID {
-			if record.PriorMessageCount < 0 {
-				return 0
-			}
-			if record.PriorMessageCount > fallback {
-				return fallback
-			}
-			return record.PriorMessageCount
+	for i := range records {
+		if strings.TrimSpace(records[i].ID) != turnID {
+			continue
 		}
+		start := records[i].PriorMessageCount
+		if start < 0 {
+			return 0
+		}
+		// The forked session should end at the target turn's *completed* state
+		// (its user message + assistant reply), not at the turn's start.
+		// The turn's message count = the next turn's PriorMessageCount minus
+		// this turn's; for the last turn it is everything up to `fallback`.
+		end := fallback
+		for j := i + 1; j < len(records); j++ {
+			if records[j].PriorMessageCount > start {
+				end = records[j].PriorMessageCount
+				break
+			}
+		}
+		if end > start {
+			return end
+		}
+		if start <= fallback {
+			return start
+		}
+		return fallback
 	}
 	return fallback
 }

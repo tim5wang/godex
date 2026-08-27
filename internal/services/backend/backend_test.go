@@ -4131,6 +4131,34 @@ func TestRotateSessionEventJournalIsBestEffort(t *testing.T) {
 	}
 }
 
+func TestForkMessageIndexForTurnEndsAtTurnCompletion(t *testing.T) {
+	now := time.Now()
+	records := []TurnRecord{
+		{ID: "turn-1", PriorMessageCount: 0, Status: "completed", StartedAt: now},
+		{ID: "turn-2", PriorMessageCount: 4, Status: "completed", StartedAt: now},
+		{ID: "turn-3", PriorMessageCount: 8, Status: "completed", StartedAt: now},
+	}
+	cases := []struct {
+		name     string
+		turnID   string
+		fallback int
+		want     int
+	}{
+		{"middle turn ends at next turn start", "turn-2", 12, 8},
+		{"first turn ends at second turn start", "turn-1", 12, 4},
+		{"last turn ends at fallback", "turn-3", 12, 12},
+		{"unknown falls back", "nope", 12, 12},
+		{"empty falls back", "", 12, 12},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := forkMessageIndexForTurn(records, tc.turnID, tc.fallback); got != tc.want {
+				t.Fatalf("forkMessageIndexForTurn(%q, fallback=%d) = %d, want %d", tc.turnID, tc.fallback, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCancelQueuedTurnRemovesAnyPositionAndReturnsText(t *testing.T) {
 	cfg := newTestConfig(t)
 	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("done")}}}})

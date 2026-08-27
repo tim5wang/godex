@@ -479,6 +479,7 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
         attachments,
         summary: text.trim() ? firstSummaryLine(text) : attachmentSummary(attachments),
         turnId: syntheticTurnId,
+        messageIndex,
       });
     }
 
@@ -622,11 +623,18 @@ function persistedToolResultError(block: ProtocolBlock) {
 export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
   const result: FeedItem[] = [];
   let openGroup: FeedItem | null = null;
+  // Track the max snapshot message index inside the open turn so the turn's
+  // fork point (message_index) includes every message of that turn.
+  let openGroupMaxIndex = -1;
 
   const closeGroup = () => {
     if (openGroup) {
+      if (openGroupMaxIndex >= 0) {
+        openGroup.forkMessageIndex = openGroupMaxIndex + 1;
+      }
       result.push(openGroup);
       openGroup = null;
+      openGroupMaxIndex = -1;
     }
   };
 
@@ -651,6 +659,9 @@ export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
         segments: [],
         finalBody: "",
       };
+      openGroupMaxIndex = item.messageIndex ?? -1;
+    } else if (item.messageIndex !== undefined && item.messageIndex > openGroupMaxIndex) {
+      openGroupMaxIndex = item.messageIndex;
     }
 
     const group = openGroup;

@@ -655,6 +655,7 @@ export interface HeartbeatRule {
   session_mode?: string;
   delivery_target?: DeliveryTarget;
   prompt_override?: string;
+  watchdog_script?: string;
   created_by?: string;
   created_from_session?: string;
   created_at?: string;
@@ -673,6 +674,7 @@ export interface HeartbeatRunLog {
   status: string;
   error?: string;
   suppressed?: boolean;
+  watchdog_output?: string;
   delivery_target?: DeliveryTarget;
   started_at?: string;
   finished_at?: string;
@@ -1437,6 +1439,15 @@ export interface FeedItem {
   summary?: string;
   status?: string;
   turnId?: string;
+  /**
+   * Snapshot-source message index of this feed item (the N in the synthetic
+   * `msg-N` turnId). Used to fork at a historical turn: the grouped turn
+   * tracks the max index and forks with message_index = max+1 so the new
+   * session ends at that turn's completed state.
+   */
+  messageIndex?: number;
+  /** Fork point for a grouped historical turn (max messageIndex + 1). */
+  forkMessageIndex?: number;
   input?: Record<string, unknown>;
   output?: string;
   error?: string;

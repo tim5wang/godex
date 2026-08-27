@@ -1032,10 +1032,11 @@ export function ChatPage() {
   });
 
   const forkMutation = useMutation({
-    mutationFn: async ({ turnId }: { turnId?: string } = {}) =>
+    mutationFn: async ({ turnId, messageIndex }: { turnId?: string; messageIndex?: number } = {}) =>
       forkSession(token || null, openQuery.data!.session_id, {
-        title: `${sessionTitle}${turnId ? " (fork)" : " branch"}`,
+        title: `${sessionTitle}${turnId || messageIndex !== undefined ? " (fork)" : " branch"}`,
         ...(turnId ? { turn_id: turnId } : {}),
+        ...(messageIndex !== undefined ? { message_index: messageIndex } : {}),
       }),
     onSuccess: async (opened) => {
       reset();
@@ -1538,7 +1539,13 @@ export function ChatPage() {
                         workspaceDir={sessionWorkspaceDir}
                         token={token}
                         voiceEnabled={metaQuery.data?.voice_enabled ?? false}
-                        onForkTurn={(item) => forkMutation.mutate({ turnId: item.turnId })}
+                        onForkTurn={(item) =>
+                          forkMutation.mutate({
+                            // Historical turns carry a synthetic turnId (msg-N) that the
+                            // backend can't resolve; use the tracked message index instead.
+                            ...(item.forkMessageIndex !== undefined ? { messageIndex: item.forkMessageIndex } : item.turnId ? { turnId: item.turnId } : {}),
+                          })
+                        }
                         onEditMessage={(item) => {
                           composerRef.current?.setText(item.body);
                         }}

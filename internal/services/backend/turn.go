@@ -51,12 +51,13 @@ func (s *Service) SubmitAsync(ctx context.Context, sessionID string, envelope me
 	}
 	release, ok := session.tryAcquire()
 	if !ok {
+		// Session is busy: every inbound message goes to the queue and shows in
+		// the chat's queued strip. Steering is explicit — the user picks the
+		// "_↑" button on a queued message (SteerQueuedTurn) to inject it into
+		// the running turn; it is never done implicitly at submit time.
 		mode := QueueModeFollowUp
 		if len(options) > 0 && strings.TrimSpace(string(options[0].QueueMode)) != "" {
 			mode = normalizeQueueMode(options[0].QueueMode)
-		}
-		if result, injected, err := s.injectActiveTurn(session, envelope, mode); injected || err != nil {
-			return result, err
 		}
 		return s.enqueueTurn(session, envelope, mode)
 	}
@@ -366,6 +367,43 @@ func (s *Service) CancelQueuedTurn(_ context.Context, sessionID, queueID string)
 		Text:        removed.Envelope.BodyText(),
 		Attachments: removed.Envelope.Attachments,
 	}, nil
+}
+
+// SteerQueuedTurn lifts a queued message out of the queue and injects it into
+// the currently running turn as a steering interruption. This is the explicit
+// "_↑" action on a queued message: it is never done implicitly at submit time.
+// If the session is no longer busy, the message is simply submitted as a
+// normal turn (re-queuing is avoided so the message is not lost).
+func (s *Service) SteerQueuedTurn(ctx context.Context, sessionID, queueID string) (*SubmitResult, error) {
+	_ = ctx
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	removed, ok := session.removeQueued(queueID)
+	if !ok {
+		return nil, newTurnNotFoundError(queueID)
+	}
+	if err := s.writeSessionQueue(session); err != nil {
+		return nil, err
+	}
+	result, injected, err := s.injectActiveTurn(session, removed.Envelope, QueueModeSteering)
+	if err != nil {
+		return nil, err
+	}
+	if injected {
+		session.events.Emit(events.Event{
+			SessionID: sessionID,
+			TurnID:    queueID,
+			Type:      events.EventWarningRaised,
+			Timestamp: s.now(),
+			Payload:   events.NoticePayload{Message: "Queued turn steered into the running turn."},
+		})
+		_ = s.writeSessionTimeline(session)
+		return result, nil
+	}
+	// No active turn anymore — run it as a normal turn instead of losing it.
+	return s.SubmitAsync(ctx, sessionID, removed.Envelope)
 }
 
 // RetryTurnAsync replays the latest retryable turn from its persisted input and

@@ -1183,7 +1183,7 @@ func TestSubmitAsyncReturnsAcceptedTurnAndContinuesAfterRequestContextCanceled(t
 	}
 }
 
-func TestSubmitAsyncInjectsBusySessionFollowUp(t *testing.T) {
+func TestSubmitAsyncQueuesWhenBusy(t *testing.T) {
 	cfg := newTestConfig(t)
 	caller := &stubCaller{
 		responses: []protocol.Response{
@@ -1208,12 +1208,21 @@ func TestSubmitAsyncInjectsBusySessionFollowUp(t *testing.T) {
 		t.Fatal("timed out waiting for first async turn to start")
 	}
 
-	injected, err := service.SubmitAsync(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "second", time.Now()))
+	// Session is busy: the second message must be queued, not injected into
+	// the running turn.
+	queued, err := service.SubmitAsync(context.Background(), opened.SessionID, message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "second", time.Now()))
 	if err != nil {
-		t.Fatalf("inject second async turn: %v", err)
+		t.Fatalf("submit second async turn: %v", err)
 	}
-	if injected.Status != "injected" || injected.TurnID == "" {
-		t.Fatalf("expected injected result, got %+v", injected)
+	if queued.Status != "queued" || queued.TurnID == "" {
+		t.Fatalf("expected queued result, got %+v", queued)
+	}
+	snapshot, err := service.Snapshot(context.Background(), opened.SessionID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snapshot.QueuedTurns) != 1 || snapshot.QueuedTurns[0].ID != queued.TurnID {
+		t.Fatalf("expected one queued turn, got %+v", snapshot.QueuedTurns)
 	}
 
 	close(caller.block)
@@ -1222,7 +1231,7 @@ func TestSubmitAsyncInjectsBusySessionFollowUp(t *testing.T) {
 	})
 }
 
-func TestSubmitAsyncInjectsFollowUpForRunningSession(t *testing.T) {
+func TestSubmitAsyncFollowUpRunsAfterQueued(t *testing.T) {
 	cfg := newTestConfig(t)
 	caller := &stubCaller{
 		responses: []protocol.Response{
@@ -1247,24 +1256,24 @@ func TestSubmitAsyncInjectsFollowUpForRunningSession(t *testing.T) {
 		t.Fatal("timed out waiting for first async turn to start")
 	}
 
-	injected, err := service.SubmitAsync(
+	queued, err := service.SubmitAsync(
 		context.Background(),
 		opened.SessionID,
 		message.NewTextEnvelope(message.SourceWeb, opened.SessionID, cfg.LeadName, "second", time.Now()),
 		SubmitOptions{QueueMode: QueueModeFollowUp},
 	)
 	if err != nil {
-		t.Fatalf("inject second async turn: %v", err)
+		t.Fatalf("submit queued async turn: %v", err)
 	}
-	if injected.Status != "injected" {
-		t.Fatalf("expected injected status, got %+v", injected)
+	if queued.Status != "queued" {
+		t.Fatalf("expected queued status, got %+v", queued)
 	}
-	injectedSnapshot, err := service.Snapshot(context.Background(), opened.SessionID)
+	queuedSnapshot, err := service.Snapshot(context.Background(), opened.SessionID)
 	if err != nil {
-		t.Fatalf("snapshot injected: %v", err)
+		t.Fatalf("snapshot queued: %v", err)
 	}
-	if len(injectedSnapshot.QueuedTurns) != 0 || len(injectedSnapshot.Turns) == 0 || injectedSnapshot.Turns[len(injectedSnapshot.Turns)-1].InjectionCount != 1 {
-		t.Fatalf("expected injected turn metadata, got queued=%+v turns=%+v", injectedSnapshot.QueuedTurns, injectedSnapshot.Turns)
+	if len(queuedSnapshot.QueuedTurns) != 1 {
+		t.Fatalf("expected one queued turn, got %+v", queuedSnapshot.QueuedTurns)
 	}
 
 	close(caller.block)
@@ -1272,7 +1281,7 @@ func TestSubmitAsyncInjectsFollowUpForRunningSession(t *testing.T) {
 		return !snapshot.Running && len(snapshot.Messages) >= 4 && len(snapshot.QueuedTurns) == 0
 	})
 	if got := protocol.MessageText(finished.Messages[len(finished.Messages)-1]); got != "second done" {
-		t.Fatalf("expected injected follow-up to continue current turn, got %q", got)
+		t.Fatalf("expected queued follow-up to run after first turn, got %q", got)
 	}
 }
 
@@ -3863,14 +3872,20 @@ func TestSteeringMessageInjectedIntoRunningTurn(t *testing.T) {
 	}
 
 	// While the first model call is in-flight, submit a steering message.
+	// Under the queue-first design it lands in the queue; it is only injected
+	// into the running turn when the user explicitly steers it via
+	// SteerQueuedTurn (the "_↑" button on a queued message).
 	steer, err := service.SubmitAsync(context.Background(), sessionID,
 		message.NewTextEnvelope(message.SourceWeb, sessionID, cfg.LeadName, "now switch to task B", time.Now()),
 		SubmitOptions{QueueMode: QueueModeSteering})
 	if err != nil {
 		t.Fatalf("submit steering: %v", err)
 	}
-	if steer.Status != "injected" {
-		t.Fatalf("expected steering message to be injected into running turn, got status %q", steer.Status)
+	if steer.Status != "queued" || steer.TurnID == "" {
+		t.Fatalf("expected steering message to be queued first, got %+v", steer)
+	}
+	if _, err := service.SteerQueuedTurn(context.Background(), sessionID, steer.TurnID); err != nil {
+		t.Fatalf("steer queued turn: %v", err)
 	}
 
 	// Let the first response through; the runner should drain the injection
@@ -4157,6 +4172,191 @@ func TestForkMessageIndexForTurnEndsAtTurnCompletion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSteerQueuedTurnInjectsIntoRunningTurn(t *testing.T) {
+	cfg := newTestConfig(t)
+	caller := &stubCaller{
+		responses: []protocol.Response{
+			{Content: []protocol.Block{protocol.TextBlock("first response")}},
+			{Content: []protocol.Block{protocol.TextBlock("steered response")}},
+		},
+		started: make(chan struct{}, 2),
+		block:   make(chan struct{}),
+	}
+	service := newTestService(cfg, caller)
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "steer-queued"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	sessionID := opened.SessionID
+	if _, err := service.SubmitAsync(context.Background(), sessionID, message.NewTextEnvelope(message.SourceWeb, sessionID, cfg.LeadName, "do task A", time.Now())); err != nil {
+		t.Fatalf("submit async: %v", err)
+	}
+	select {
+	case <-caller.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for async turn to start")
+	}
+
+	// Submit a steering message while busy: it must queue first.
+	queued, err := service.SubmitAsync(context.Background(), sessionID,
+		message.NewTextEnvelope(message.SourceWeb, sessionID, cfg.LeadName, "switch to task B", time.Now()),
+		SubmitOptions{QueueMode: QueueModeSteering})
+	if err != nil {
+		t.Fatalf("submit steering: %v", err)
+	}
+	if queued.Status != "queued" {
+		t.Fatalf("expected queued status, got %+v", queued)
+	}
+	snapshot, err := service.Snapshot(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snapshot.QueuedTurns) != 1 || snapshot.QueuedTurns[0].Mode != QueueModeSteering {
+		t.Fatalf("expected one queued steering turn, got %+v", snapshot.QueuedTurns)
+	}
+
+	// Explicitly steer the queued message into the running turn.
+	if _, err := service.SteerQueuedTurn(context.Background(), sessionID, queued.TurnID); err != nil {
+		t.Fatalf("steer queued turn: %v", err)
+	}
+
+	// Let the first response through; the runner drains the injection and
+	// issues a second model request that includes the steering message.
+	close(caller.block)
+	select {
+	case <-caller.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for second model call after steering")
+	}
+
+	var secondReq protocol.Request
+	func() {
+		caller.mu.Lock()
+		defer caller.mu.Unlock()
+		if len(caller.requests) < 2 {
+			return
+		}
+		secondReq = caller.requests[1]
+	}()
+	if len(secondReq.Messages) == 0 {
+		t.Fatalf("expected second model request, got %d requests", len(caller.requests))
+	}
+	found := false
+	framed := false
+	for _, m := range secondReq.Messages {
+		if m.Role != protocol.RoleUser {
+			continue
+		}
+		var text string
+		for _, b := range m.Content {
+			if b.Type == protocol.BlockText {
+				text += b.Text + " "
+			}
+		}
+		if strings.Contains(text, "task B") {
+			found = true
+		}
+		if strings.Contains(text, "Steer") && strings.Contains(text, "task B") {
+			framed = true
+		}
+	}
+	if !found {
+		t.Fatalf("steering message missing from second model request: %+v", secondReq.Messages)
+	}
+	if !framed {
+		t.Fatalf("steering message not framed as interruption in model request: %+v", secondReq.Messages)
+	}
+
+	finished := waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		return !snapshot.Running && len(snapshot.QueuedTurns) == 0
+	})
+	seenSteer := false
+	for _, msg := range finished.Messages {
+		if strings.Contains(protocol.MessageText(msg), "task B") {
+			seenSteer = true
+		}
+	}
+	if !seenSteer {
+		t.Fatalf("steering message missing from session messages: %+v", finished.Messages)
+	}
+}
+
+func TestSteerQueuedTurnFallsBackToSubmitWhenIdle(t *testing.T) {
+	cfg := newTestConfig(t)
+	caller := &stubCaller{
+		responses: []protocol.Response{
+			{Content: []protocol.Block{protocol.TextBlock("first response")}},
+			{Content: []protocol.Block{protocol.TextBlock("idle response")}},
+		},
+		started: make(chan struct{}, 2),
+		block:   make(chan struct{}),
+	}
+	service := newTestService(cfg, caller)
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "steer-idle"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	sessionID := opened.SessionID
+	if _, err := service.SubmitAsync(context.Background(), sessionID,
+		message.NewTextEnvelope(message.SourceWeb, sessionID, cfg.LeadName, "first task", time.Now())); err != nil {
+		t.Fatalf("submit async: %v", err)
+	}
+	select {
+	case <-caller.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for async turn to start")
+	}
+	close(caller.block)
+	_ = waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		return !snapshot.Running
+	})
+
+	// Queue an item manually, then steer it after the session has gone idle:
+	// it must fall back to a normal submit instead of being lost.
+	session, err := service.requireSession(sessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+	service.enqueueTurn(session, message.NewTextEnvelope(message.SourceWeb, sessionID, cfg.LeadName, "steer after idle", time.Now()), QueueModeFollowUp)
+	queuedSnapshot, err := service.Snapshot(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(queuedSnapshot.QueuedTurns) != 1 {
+		t.Fatalf("expected one queued turn, got %+v", queuedSnapshot.QueuedTurns)
+	}
+	queueID := queuedSnapshot.QueuedTurns[0].ID
+
+	result, err := service.SteerQueuedTurn(context.Background(), sessionID, queueID)
+	if err != nil {
+		t.Fatalf("steer queued turn while idle: %v", err)
+	}
+	if result.TurnID == "" || result.Status != "running" {
+		t.Fatalf("expected a running turn fallback, got %+v", result)
+	}
+	select {
+	case <-caller.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fallback turn to start")
+	}
+	// block is already closed above, so the fallback turn runs through
+	// immediately. Wait for the steered message to appear AND the turn to
+	// finish (so no goroutine is still writing the session dir on cleanup).
+	waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		if snapshot.Running {
+			return false
+		}
+		for _, m := range snapshot.Messages {
+			if strings.Contains(protocol.MessageText(m), "steer after idle") {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func TestCancelQueuedTurnRemovesAnyPositionAndReturnsText(t *testing.T) {

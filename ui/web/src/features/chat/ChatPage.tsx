@@ -1,4 +1,4 @@
-import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Segmented, Drawer, Spin, Tag } from "antd";
+import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Drawer, Spin } from "antd";
 import { useParams, useSearchParams, useLocation, useNavigate, Link } from "react-router-dom";
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
@@ -10,7 +10,7 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useChatV2Store, type DockTab, DOCK_TABS } from "../chat-v2/chatV2Store";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -23,7 +23,7 @@ import { type ComposerSubmission, Composer, type ComposerHandle } from "../../co
 import { VoiceBar } from "../../components/VoiceBar";
 import { TaskCenterPanel } from "./TaskCenterPanel";
 import { SessionsRail } from "../chat-v2/SessionsRail";
-import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, LogoutOutlined, BellOutlined, EditOutlined } from "@ant-design/icons";
+import { VerticalRightOutlined, VerticalLeftOutlined, StopOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, LogoutOutlined, BellOutlined, EditOutlined, EnterOutlined } from "@ant-design/icons";
 import { DOCK_TAB_META } from "../chat-v2/DockRail";
 import { MessageFeedV2 } from "../../components/MessageFeedV2";
 import { FilesPanel } from "../files/FilesPanel";
@@ -103,7 +103,6 @@ export function ChatPage() {
   const reviewSubagentTargetRef = useRef<"drawer" | "center">("drawer");
   const reviewMergeAutoLoadJobRef = useRef("");
   const [channelFilter, setChannelFilter] = useState("all");
-  const [queueMode, setQueueMode] = useState<"follow_up" | "steering">("follow_up");
   // #8 通知我：非空表示已要求 turn 完成后通知（存 turnId，"any" 表示任意完成）。
   const [notifyArmed, setNotifyArmed] = useState<string | null>(null);
   const [pendingModelProfileID, setPendingModelProfileID] = useState<string | null>(null);
@@ -955,6 +954,22 @@ export function ChatPage() {
     },
   });
 
+  // #5：把排队中的消息以 steering 方式注入当前运行中的 turn（"_↑" 引导按钮）。
+  const steerQueuedMutation = useMutation({
+    mutationFn: async ({ sessionId, queueId }: { sessionId: string; queueId: string }) => steerQueuedTurn(token || null, sessionId, queueId),
+    onSuccess: async (_result, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["snapshot", token, variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["timeline", token, variables.sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions", token] }),
+      ]);
+      message.success(t("chat.steerQueued"));
+    },
+    onError: (error) => {
+      message.error(error instanceof APIError ? error.message : String(error));
+    },
+  });
+
   const retryTurnMutation = useMutation({
     mutationFn: async ({ sessionId, turnId }: { sessionId: string; turnId: string }) => retrySessionTurn(token || null, sessionId, turnId),
     onSuccess: async (result) => {
@@ -1256,7 +1271,7 @@ export function ChatPage() {
               attachments,
               metadata: noteContextMetadata(noteContextQuery.data, noteContextId),
             },
-            running ? { queueMode } : {},
+            {},
           );
           if (submitResult.turn_id) {
             setRunningTurn(submitResult.turn_id);
@@ -1635,17 +1650,6 @@ export function ChatPage() {
                       <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
                       <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} enabled={metaQuery.data?.voice_enabled ?? false} disabled={!openQuery.data?.session_id || modelMutation.isPending} onResult={(text) => composerRef.current?.appendText(text)} />
                       {running ? (
-                        <Segmented
-                          size="small"
-                          value={queueMode}
-                          onChange={(value) => setQueueMode(value as "follow_up" | "steering")}
-                          options={[
-                            { value: "follow_up", label: "Follow-up" },
-                            { value: "steering", label: "Steer" },
-                          ]}
-                        />
-                      ) : null}
-                      {running ? (
                         <Tooltip title={notifyArmed ? t("chat.notifyArmed") : t("chat.notifyMeAfter")}>
                           <Button
                             size="small"
@@ -1675,9 +1679,6 @@ export function ChatPage() {
                   <div className="chat-queued-strip">
                     {queuedTurns.map((queued) => (
                       <div className="chat-queued-item" key={queued.id}>
-                        <Tag color={queued.mode === "steering" ? "purple" : "blue"} style={{ marginInlineEnd: 6 }}>
-                          {queued.mode === "steering" ? t("chat.steerTag") : t("chat.followUpTag")}
-                        </Tag>
                         <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
                           {queued.summary || t("chat.queuedMessage")}
                         </Typography.Text>
@@ -1687,19 +1688,18 @@ export function ChatPage() {
                             size="small"
                             icon={<EditOutlined />}
                             aria-label={t("chat.editQueued")}
-                            disabled={cancelQueuedMutation.isPending}
+                            disabled={cancelQueuedMutation.isPending || steerQueuedMutation.isPending}
                             onClick={() => cancelQueuedMutation.mutate({ sessionId, queueId: queued.id, edit: true })}
                           />
                         </Tooltip>
-                        <Tooltip title={t("chat.cancelQueued")}>
+                        <Tooltip title={t("chat.steerQueued")}>
                           <Button
                             type="text"
                             size="small"
-                            danger
-                            icon={<CloseOutlined />}
-                            aria-label={t("chat.cancelQueued")}
-                            disabled={cancelQueuedMutation.isPending}
-                            onClick={() => cancelQueuedMutation.mutate({ sessionId, queueId: queued.id })}
+                            icon={<EnterOutlined />}
+                            aria-label={t("chat.steerQueued")}
+                            disabled={cancelQueuedMutation.isPending || steerQueuedMutation.isPending}
+                            onClick={() => steerQueuedMutation.mutate({ sessionId, queueId: queued.id })}
                           />
                         </Tooltip>
                       </div>

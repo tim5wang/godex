@@ -1727,6 +1727,14 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
+	mux.Handle("POST /sessions/{id}/queued/{queueID}/steer", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := service.SteerQueuedTurn(r.Context(), r.PathValue("id"), r.PathValue("queueID"))
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, result)
+	})))
 	mux.Handle("POST /sessions/{id}/turns/{turnID}/retry", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.RetryTurnAsync(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
 		if err != nil {

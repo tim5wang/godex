@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import {
   App as AntApp,
   Button,
@@ -22,6 +23,7 @@ import {
   ReloadOutlined,
 } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
+import { buildChatRoute } from "../../lib/chatRoutes";
 import { showError } from "../../lib/notifications";
 import { useSettingsStore } from "../../store/settings";
 import {
@@ -33,7 +35,7 @@ import {
   listTaskboardProjects,
   patchTaskboardCard,
 } from "../../lib/api";
-import type { TaskboardCard, TaskboardCardPatchInput, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
+import type { TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
 
 const COLUMNS: { status: TaskboardStatus; labelKey: string; dot: string }[] = [
   { status: "backlog", labelKey: "taskboard.col.backlog", dot: "#8c8c8c" },
@@ -65,6 +67,7 @@ export function TaskBoardPage() {
   const { message } = AntApp.useApp();
   const token = useSettingsStore((state) => state.token);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const [projectFilter, setProjectFilter] = useState<string>("");
   const [urgencyFilter, setUrgencyFilter] = useState<TaskboardUrgency | "">("");
@@ -216,6 +219,18 @@ export function TaskBoardPage() {
         });
       },
     });
+  };
+
+  const jumpToHost = (execution: TaskboardExecution) => {
+    if (!execution.host) return;
+    navigate(
+      buildChatRoute({
+        channel: execution.host.channel || "web",
+        key: execution.host.key || "",
+        user_id: execution.host.user_id,
+      }),
+    );
+    setDetailId(null);
   };
 
   const toggleChecklist = (card: TaskboardCard, index: number, done: boolean) => {
@@ -469,6 +484,11 @@ export function TaskBoardPage() {
                       <Space size={6}>
                         <Tag color={EXECUTION_STATUS_COLORS[execution.status] || "default"}>{execution.status}</Tag>
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>{execution.session_id}</Typography.Text>
+                        {execution.host && (
+                          <Button size="small" type="link" onClick={() => jumpToHost(execution)}>
+                            {t("taskboard.viewProgress")}
+                          </Button>
+                        )}
                       </Space>
                       {execution.summary && (
                         <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0, marginTop: 4 }} ellipsis={{ rows: 4, expandable: true }}>

@@ -23,7 +23,7 @@ type fakeExecutor struct {
 func (f *fakeExecutor) Execute(ctx context.Context, card Card) (string, string, error) {
 	executionID := fmt.Sprintf("ex-%s", card.ID)
 	sessionID := "session-fake"
-	if _, err := f.ledger.StartExecution(card.ID, executionID, sessionID, "taskboard"); err != nil {
+	if _, err := f.ledger.StartExecution(card.ID, executionID, sessionID, "taskboard", nil); err != nil {
 		return "", "", err
 	}
 	if _, err := f.ledger.FinishExecution(card.ID, executionID, ExecutionCompleted, "fake run finished"); err != nil {

@@ -58,6 +58,15 @@ type Comment struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// HostRef identifies the session hosting an execution, so the UI can link
+// to its live progress (subagent timeline in the host chat session).
+type HostRef struct {
+	SessionID string `json:"session_id"`
+	Channel   string `json:"channel,omitempty"`
+	Key       string `json:"key,omitempty"`
+	UserID    string `json:"user_id,omitempty"`
+}
+
 // Execution records one isolated session run of the task.
 type Execution struct {
 	ID        string    `json:"id"`
@@ -66,6 +75,8 @@ type Execution struct {
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at,omitempty"`
 	Summary   string    `json:"summary,omitempty"`
+	// Host is the session hosting this execution (UI jump-to-progress).
+	Host *HostRef `json:"host,omitempty"`
 }
 
 // Card is one task on the board. Version drives optimistic concurrency:

@@ -553,8 +553,9 @@ func (l *Ledger) SoftDeleteCard(id string, ifVersion int, actor string) (Card, e
 // ---- Execution records (written by the executor, M1-d) ----
 
 // StartExecution appends a running execution and claims the card
-// (in_progress + holder) on behalf of the executor session.
-func (l *Ledger) StartExecution(cardID, executionID, sessionID, actor string) (Card, error) {
+// (in_progress + holder) on behalf of the executor session. host (optional)
+// records the hosting session for UI jump-to-progress.
+func (l *Ledger) StartExecution(cardID, executionID, sessionID, actor string, host *HostRef) (Card, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.mutateCard(cardID, versionForExecution(l, cardID), actor, func(card *Card) error {
@@ -566,6 +567,7 @@ func (l *Ledger) StartExecution(cardID, executionID, sessionID, actor string) (C
 			SessionID: sessionID,
 			Status:    ExecutionRunning,
 			StartedAt: l.now(),
+			Host:      host,
 		})
 		card.Holder = sessionID
 		return nil

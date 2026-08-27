@@ -1722,6 +1722,13 @@ export interface TaskboardExecution {
   started_at: string;
   ended_at?: string;
   summary?: string;
+  /** Hosting session (jump-to-progress: subagent timeline in that chat). */
+  host?: {
+    session_id: string;
+    channel?: string;
+    key?: string;
+    user_id?: string;
+  };
 }
 
 export interface TaskboardCard {

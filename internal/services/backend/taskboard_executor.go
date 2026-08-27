@@ -65,7 +65,14 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 	}
 	executionID := "exec-" + job.IDString()
 	sessionID := job.IDString()
-	if _, err := e.ledger.StartExecution(card.ID, executionID, sessionID, "taskboard"); err != nil {
+	// Record the hosting session so the UI can jump to its live progress.
+	hostRef := &taskboard.HostRef{
+		SessionID: host.id,
+		Channel:   host.locator.Channel,
+		Key:       host.locator.Key,
+		UserID:    host.locator.UserID,
+	}
+	if _, err := e.ledger.StartExecution(card.ID, executionID, sessionID, "taskboard", hostRef); err != nil {
 		return "", "", err
 	}
 	go e.watch(card.ID, executionID, host.id, sessionID)

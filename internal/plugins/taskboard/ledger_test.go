@@ -203,7 +203,7 @@ func TestSoftDeleteGuardsRunningExecution(t *testing.T) {
 	project := seedProject(t, l)
 	card, _ := l.CreateCard(CreateCardInput{ProjectID: project.ID, Title: "busy"})
 
-	if _, err := l.StartExecution(card.ID, "ex-1", "session-1", "session-1"); err != nil {
+	if _, err := l.StartExecution(card.ID, "ex-1", "session-1", "session-1", nil); err != nil {
 		t.Fatalf("start execution: %v", err)
 	}
 	running, _ := l.GetCard(card.ID)

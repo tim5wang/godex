@@ -82,6 +82,11 @@ type Execution struct {
 	Summary   string    `json:"summary,omitempty"`
 	// Host is the session hosting this execution (UI jump-to-progress).
 	Host *HostRef `json:"host,omitempty"`
+	// JobSessionID is the isolated execution session's own id (recorded
+	// asynchronously once the durable subagent materializes it). The run's
+	// messages, tool calls and timeline live here — this is the primary
+	// jump-to-progress target; Host is only a fallback.
+	JobSessionID string `json:"job_session_id,omitempty"`
 }
 
 // Card is one task on the board. Version drives optimistic concurrency:

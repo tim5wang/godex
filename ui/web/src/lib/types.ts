@@ -1722,6 +1722,9 @@ export interface TaskboardExecution {
   started_at: string;
   ended_at?: string;
   summary?: string;
+  /** Isolated execution session's own id — the run's messages and timeline
+   * live here; primary jump-to-progress target. */
+  job_session_id?: string;
   /** Hosting session (jump-to-progress: subagent timeline in that chat). */
   host?: {
     session_id: string;

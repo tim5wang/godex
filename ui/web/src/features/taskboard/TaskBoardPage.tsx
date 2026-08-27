@@ -223,24 +223,27 @@ export function TaskBoardPage() {
   };
 
   const jumpToHost = async (execution: TaskboardExecution) => {
-    const host = execution.host;
-    if (!host) return;
-    // Session identity is hashed from the FULL locator (channel + key +
-    // user_id + metadata like workspace_dir), so a coarse channel/key route
-    // usually hashes to a different session — ChatPage then falls back to
-    // creating a new chat. Resolve the host session's complete locator from
-    // the session list instead; fall back to the stored triple if absent.
+    // Prefer the execution's OWN isolated session: the run's messages, tool
+    // calls and timeline live there. The host session may be an empty/new
+    // chat and carries none of it — job session first, host as fallback.
+    const targetIDs = [execution.job_session_id, execution.host?.session_id].filter(
+      (id): id is string => !!id,
+    );
     try {
       const sessions = await listSessions(token || null);
-      const target = sessions.find((session) => session.session_id === host.session_id);
-      if (target) {
-        navigate(buildChatRoute(target.locator));
-        setDetailId(null);
-        return;
+      for (const id of targetIDs) {
+        const target = sessions.find((session) => session.session_id === id);
+        if (target) {
+          navigate(buildChatRoute(target.locator));
+          setDetailId(null);
+          return;
+        }
       }
     } catch {
       // fall through to the coarse route below
     }
+    const host = execution.host;
+    if (!host) return;
     navigate(
       buildChatRoute({
         channel: host.channel || "web",

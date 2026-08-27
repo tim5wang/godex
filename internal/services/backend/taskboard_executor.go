@@ -126,6 +126,12 @@ func (e *TaskboardExecutor) watch(cardID, executionID, hostSessionID, jobID stri
 			continue
 		}
 		view = v
+		// Record the isolated execution session's own id as soon as it
+		// materializes: the run's messages and timeline live THERE, not in
+		// the host session (which may be an empty/new chat).
+		if view.SessionID != "" {
+			_, _ = e.ledger.SetExecutionJobSession(cardID, executionID, view.SessionID)
+		}
 		switch view.Status {
 		case "completed", "failed", "cancelled":
 			e.settle(cardID, executionID, view)

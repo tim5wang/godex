@@ -584,6 +584,40 @@ func versionForExecution(l *Ledger, cardID string) int {
 	return -1
 }
 
+// SetExecutionJobSession records the isolated execution session's own id
+// once the durable subagent materializes it (the id is not available at
+// StartExecution time). Idempotent: writing the same id again does not bump
+// the card version.
+func (l *Ledger) SetExecutionJobSession(cardID, executionID, jobSessionID string) (Card, error) {
+	jobSessionID = strings.TrimSpace(jobSessionID)
+	if jobSessionID == "" {
+		return Card{}, fmt.Errorf("taskboard: job session id is required")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	card, err := l.findCardLocked(cardID)
+	if err != nil {
+		return Card{}, err
+	}
+	for i := range card.Executions {
+		if card.Executions[i].ID != executionID {
+			continue
+		}
+		if card.Executions[i].JobSessionID == jobSessionID {
+			return *card, nil
+		}
+		card.Executions[i].JobSessionID = jobSessionID
+		card.Version++
+		card.UpdatedBy = "taskboard"
+		card.UpdatedAt = l.now()
+		if err := l.saveLocked(); err != nil {
+			return Card{}, err
+		}
+		return *card, nil
+	}
+	return Card{}, ErrCardNotFound
+}
+
 // FinishExecution closes a running execution with a status and summary.
 func (l *Ledger) FinishExecution(cardID, executionID, status, summary string) (Card, error) {
 	l.mu.Lock()

@@ -354,9 +354,11 @@ func (s *Service) runRule(ctx context.Context, rule Rule, startedAt time.Time, m
 
 	// Pre-run watchdog: a non-zero exit skips this tick entirely (no agent
 	// execution, no delivery). Errors (missing script, timeout) are recorded
-	// as failed runs so the misconfiguration is visible.
+	// as failed runs so the misconfiguration is visible. The script output is
+	// captured on the run log so the automation UI can show what it decided.
 	if strings.TrimSpace(rule.WatchdogScript) != "" {
 		watchdogOut, wdErr := runWatchdog(ctx, rule.WatchdogScript, s.cfg.WorkspaceDir, 0)
+		run.WatchdogOutput = watchdogOut.Output
 		if wdErr != nil {
 			run.Status = RuleStatusError
 			run.Error = wdErr.Error()

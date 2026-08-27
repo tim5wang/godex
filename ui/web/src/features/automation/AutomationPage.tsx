@@ -65,6 +65,7 @@ type HeartbeatFormValues = {
   activeHoursEnd?: string;
   sessionMode?: "shared" | "isolated";
   promptOverride?: string;
+  watchdogScript?: string;
   deliveryKind?: "" | "session" | "channel";
   sessionId?: string;
   channel?: string;
@@ -386,6 +387,9 @@ function HeartbeatForm({
       </Space.Compact>
       <Form.Item name="sessionMode" label="Session mode"><Select options={[{ value: "shared" }, { value: "isolated" }]} /></Form.Item>
       <Form.Item name="promptOverride" label="Prompt override"><Input.TextArea rows={4} /></Form.Item>
+      <Form.Item name="watchdogScript" label="Watchdog script" extra="Optional pre-run shell script: exit 0 runs the agent, non-zero skips this tick.">
+        <Input placeholder="/path/to/watchdog.sh" />
+      </Form.Item>
       <DeliveryTargetFields deliveryKind={deliveryKind} />
       <Button type="primary" htmlType="submit" loading={saving}>Save heartbeat</Button>
     </Form>
@@ -445,6 +449,9 @@ function RunLogsCard({ title, runs, loading, heartbeat = false }: { title: strin
             { title: "Started", dataIndex: "started_at", render: formatTime },
             { title: "Finished", dataIndex: "finished_at", render: formatTime },
             { title: "Error", dataIndex: "error", render: (value) => value || "-" },
+            ...(heartbeat
+              ? [{ title: "Watchdog output", dataIndex: "watchdog_output", ellipsis: true, render: (value?: string) => value?.trim() ? value : "-" }]
+              : []),
           ]}
         />
       )}
@@ -471,6 +478,7 @@ function defaultHeartbeatForm(): HeartbeatFormValues {
     intervalSeconds: 1800,
     timezone: "Asia/Shanghai",
     sessionMode: "shared",
+    watchdogScript: "",
     deliveryKind: "",
   };
 }
@@ -506,6 +514,7 @@ function heartbeatToForm(rule: HeartbeatRule): HeartbeatFormValues {
     activeHoursEnd: rule.active_hours_end,
     sessionMode: (rule.session_mode as HeartbeatFormValues["sessionMode"]) || "shared",
     promptOverride: rule.prompt_override,
+    watchdogScript: rule.watchdog_script,
     deliveryKind: (target.kind as HeartbeatFormValues["deliveryKind"]) || "",
     sessionId: target.session_id,
     channel: target.channel,
@@ -555,6 +564,7 @@ function buildHeartbeatPayload(values: HeartbeatFormValues) {
     active_hours_end: values.activeHoursEnd?.trim() || undefined,
     session_mode: values.sessionMode || "shared",
     prompt_override: values.promptOverride?.trim() || undefined,
+    watchdog_script: values.watchdogScript?.trim() || undefined,
     delivery_target: buildDeliveryTarget(values),
   };
 }

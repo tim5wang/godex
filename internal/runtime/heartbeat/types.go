@@ -59,6 +59,7 @@ type RunLog struct {
 	Status         RuleStatus                `json:"status"`
 	Error          string                    `json:"error,omitempty"`
 	Suppressed     bool                      `json:"suppressed,omitempty"`
+	WatchdogOutput string                    `json:"watchdog_output,omitempty"`
 	DeliveryTarget automation.DeliveryTarget `json:"delivery_target,omitempty"`
 	StartedAt      time.Time                 `json:"started_at"`
 	FinishedAt     time.Time                 `json:"finished_at,omitempty"`

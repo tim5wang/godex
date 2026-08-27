@@ -124,6 +124,7 @@ func toAutomationRunLog(run RunLog) automation.HeartbeatRunLog {
 		Status:         string(run.Status),
 		Error:          run.Error,
 		Suppressed:     run.Suppressed,
+		WatchdogOutput: run.WatchdogOutput,
 		DeliveryTarget: run.DeliveryTarget.Clone(),
 		StartedAt:      run.StartedAt,
 		FinishedAt:     run.FinishedAt,

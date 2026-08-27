@@ -79,7 +79,7 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 	if _, err := e.ledger.StartExecution(card.ID, executionID, sessionID, "taskboard", hostRef); err != nil {
 		return "", "", err
 	}
-	go e.watch(card.ID, executionID, host.id, sessionID)
+	go e.watch(card.ID, executionID, host.agent, host.id, sessionID)
 	return executionID, sessionID, nil
 }
 
@@ -105,7 +105,9 @@ func (e *TaskboardExecutor) sessionAgent(sessionID string) *agent.Agent {
 
 // watch polls the durable subagent until it settles, then closes the
 // execution and moves the card to in_review (human acceptance gate).
-func (e *TaskboardExecutor) watch(cardID, executionID, hostSessionID, jobID string) {
+// Holds the host agent reference directly: the job store lives on the agent,
+// so polling survives the host session being unloaded.
+func (e *TaskboardExecutor) watch(cardID, executionID string, hostAgent *agent.Agent, hostSessionID, jobID string) {
 	poll, timeout := e.poll, e.timeout
 	if poll <= 0 {
 		poll = 2 * time.Second
@@ -115,13 +117,9 @@ func (e *TaskboardExecutor) watch(cardID, executionID, hostSessionID, jobID stri
 	}
 	deadline := time.Now().Add(timeout)
 	var view agent.DurableSubagentJobView
-	for time.Now().Before(deadline) {
+	for hostAgent != nil && time.Now().Before(deadline) {
 		time.Sleep(poll)
-		host := e.sessionAgent(hostSessionID)
-		if host == nil {
-			continue
-		}
-		v, err := host.GetDurableSubagent(hostSessionID, jobID)
+		v, err := hostAgent.GetDurableSubagent(hostSessionID, jobID)
 		if err != nil {
 			continue
 		}
@@ -132,8 +130,12 @@ func (e *TaskboardExecutor) watch(cardID, executionID, hostSessionID, jobID stri
 		if view.SessionID != "" {
 			_, _ = e.ledger.SetExecutionJobSession(cardID, executionID, view.SessionID)
 		}
+		// Any terminal status settles — the job layer reports failures as
+		// "error", not "failed".
 		switch view.Status {
-		case "completed", "failed", "cancelled":
+		case "running", "pending", "queued", "":
+			continue
+		default:
 			e.settle(cardID, executionID, view)
 			return
 		}
@@ -146,7 +148,7 @@ func (e *TaskboardExecutor) watch(cardID, executionID, hostSessionID, jobID stri
 func (e *TaskboardExecutor) settle(cardID, executionID string, view agent.DurableSubagentJobView) {
 	status := taskboard.ExecutionCompleted
 	switch view.Status {
-	case "failed":
+	case "failed", "error":
 		status = taskboard.ExecutionFailed
 	case "cancelled":
 		status = taskboard.ExecutionCancelled

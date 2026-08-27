@@ -389,9 +389,16 @@ export function TaskBoardPage() {
         open={!!detailId}
         onClose={() => setDetailId(null)}
         width={520}
-        extra={
-          detail && (
-            <Space>
+      >
+        {detail ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <Space size={6} wrap>
+              <Tag>{detail.id}</Tag>
+              <Tag color={URGENCY_COLORS[detail.urgency]}>{t(`taskboard.urgency.${detail.urgency}`)}</Tag>
+              <Tag>{t(`taskboard.col.${detail.status === "in_progress" ? "inProgress" : detail.status === "in_review" ? "inReview" : detail.status}`)}</Tag>
+              {detail.holder && <Tag color="processing">{detail.holder}</Tag>}
+            </Space>
+            <Space size={6} wrap>
               {actionButtons(detail)}
               {detail.status !== "done" && (
                 <Popconfirm
@@ -401,17 +408,6 @@ export function TaskBoardPage() {
                   <Button size="small" danger icon={<DeleteOutlined />} />
                 </Popconfirm>
               )}
-            </Space>
-          )
-        }
-      >
-        {detail ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Space size={6} wrap>
-              <Tag>{detail.id}</Tag>
-              <Tag color={URGENCY_COLORS[detail.urgency]}>{t(`taskboard.urgency.${detail.urgency}`)}</Tag>
-              <Tag>{t(`taskboard.col.${detail.status === "in_progress" ? "inProgress" : detail.status === "in_review" ? "inReview" : detail.status}`)}</Tag>
-              {detail.holder && <Tag color="processing">{detail.holder}</Tag>}
             </Space>
             {detail.description && <Typography.Paragraph>{detail.description}</Typography.Paragraph>}
             {detail.prompt && (

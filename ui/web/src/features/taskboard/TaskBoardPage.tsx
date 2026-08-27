@@ -246,6 +246,9 @@ export function TaskBoardPage() {
         channel: host.channel || "web",
         key: host.key || "",
         user_id: host.user_id,
+        // project_dir participates in the session identity hash — without it
+        // OpenSession rebuilds a different id and ChatPage creates a new chat.
+        metadata: host.project_dir ? { project_dir: host.project_dir } : undefined,
       }),
     );
     setDetailId(null);

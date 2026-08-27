@@ -66,11 +66,15 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 	executionID := "exec-" + job.IDString()
 	sessionID := job.IDString()
 	// Record the hosting session so the UI can jump to its live progress.
+	// ProjectDir is part of the session identity hash — without it the
+	// frontend rebuilds a different session id and falls back to creating
+	// a new chat.
 	hostRef := &taskboard.HostRef{
-		SessionID: host.id,
-		Channel:   host.locator.Channel,
-		Key:       host.locator.Key,
-		UserID:    host.locator.UserID,
+		SessionID:  host.id,
+		Channel:    host.locator.Channel,
+		Key:        host.locator.Key,
+		UserID:     host.locator.UserID,
+		ProjectDir: host.locator.Metadata["project_dir"],
 	}
 	if _, err := e.ledger.StartExecution(card.ID, executionID, sessionID, "taskboard", hostRef); err != nil {
 		return "", "", err

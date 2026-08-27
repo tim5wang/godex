@@ -1728,6 +1728,8 @@ export interface TaskboardExecution {
     channel?: string;
     key?: string;
     user_id?: string;
+    /** Part of the session identity hash — required to reopen the session. */
+    project_dir?: string;
   };
 }
 

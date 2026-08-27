@@ -60,11 +60,16 @@ type Comment struct {
 
 // HostRef identifies the session hosting an execution, so the UI can link
 // to its live progress (subagent timeline in the host chat session).
+// ProjectDir is required for identity reconstruction: session ids hash
+// channel+key+user_id+project_dir, and the hash is applied AFTER the
+// platform fills a default project dir at OpenSession — so a HostRef
+// without it hashes to a different session.
 type HostRef struct {
-	SessionID string `json:"session_id"`
-	Channel   string `json:"channel,omitempty"`
-	Key       string `json:"key,omitempty"`
-	UserID    string `json:"user_id,omitempty"`
+	SessionID  string `json:"session_id"`
+	Channel    string `json:"channel,omitempty"`
+	Key        string `json:"key,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	ProjectDir string `json:"project_dir,omitempty"`
 }
 
 // Execution records one isolated session run of the task.

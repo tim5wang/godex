@@ -31,6 +31,7 @@ import {
   deleteTaskboardCard,
   executeTaskboardCard,
   getTaskboardCard,
+  listSessions,
   listTaskboardCards,
   listTaskboardProjects,
   patchTaskboardCard,
@@ -221,13 +222,30 @@ export function TaskBoardPage() {
     });
   };
 
-  const jumpToHost = (execution: TaskboardExecution) => {
-    if (!execution.host) return;
+  const jumpToHost = async (execution: TaskboardExecution) => {
+    const host = execution.host;
+    if (!host) return;
+    // Session identity is hashed from the FULL locator (channel + key +
+    // user_id + metadata like workspace_dir), so a coarse channel/key route
+    // usually hashes to a different session — ChatPage then falls back to
+    // creating a new chat. Resolve the host session's complete locator from
+    // the session list instead; fall back to the stored triple if absent.
+    try {
+      const sessions = await listSessions(token || null);
+      const target = sessions.find((session) => session.session_id === host.session_id);
+      if (target) {
+        navigate(buildChatRoute(target.locator));
+        setDetailId(null);
+        return;
+      }
+    } catch {
+      // fall through to the coarse route below
+    }
     navigate(
       buildChatRoute({
-        channel: execution.host.channel || "web",
-        key: execution.host.key || "",
-        user_id: execution.host.user_id,
+        channel: host.channel || "web",
+        key: host.key || "",
+        user_id: host.user_id,
       }),
     );
     setDetailId(null);

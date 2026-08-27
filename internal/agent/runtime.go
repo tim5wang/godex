@@ -23,6 +23,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -77,6 +78,17 @@ func (s *SharedDependencies) MCPManager() *mcp.Manager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.deps.mcpMgr
+}
+
+// PluginManager returns the shared plugin kernel that owns reversible
+// plugin registrations (routes, tools, schedules), or nil if unavailable.
+func (s *SharedDependencies) PluginManager() *pluginrt.Manager {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deps.pluginMgr
 }
 
 // ApplyConfig refreshes shared workspace-scoped services for subsequent turns.

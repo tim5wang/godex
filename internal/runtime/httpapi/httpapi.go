@@ -58,6 +58,14 @@ func NewHandlerWithRuntime(
 	controlRegistries ...controlNodeRegistry,
 ) http.Handler {
 	mux := http.NewServeMux()
+	// Plugin-contributed HTTP surfaces (P-A): mount every registered plugin
+	// prefix; plugins activated later are mounted automatically via the
+	// manager's route root.
+	if service != nil {
+		if pm := service.PluginManager(); pm != nil {
+			pm.MountRoutes(mux)
+		}
+	}
 	var controlRegistry controlNodeRegistry
 	if len(controlRegistries) > 0 {
 		controlRegistry = controlRegistries[0]

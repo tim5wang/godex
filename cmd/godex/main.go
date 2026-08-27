@@ -26,6 +26,7 @@ import (
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/platform/servicecontrol"
 	"github.com/tim5wang/godex/internal/platform/workspacefs"
+	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	rtchannels "github.com/tim5wang/godex/internal/runtime/channels"
 	"github.com/tim5wang/godex/internal/runtime/channels/feishu"
 	"github.com/tim5wang/godex/internal/runtime/channels/weixin"
@@ -144,6 +145,19 @@ func main() {
 	commandService := commands.NewService(cfg)
 	commandService.SetDoctor(manager.Doctor)
 	service := backend.NewService(cfg, shared, commandService)
+	// Taskboard plugin (需求池 #1): host-authoritative cross-session task
+	// board. Ledger + plugin activation are process-level; executions run
+	// as durable subagents from live sessions. The plugin's HTTP surface is
+	// mounted into the web mux by httpapi via PluginManager().
+	taskboardLedger, tbErr := taskboard.OpenLedger(filepath.Join(cfg.StateDir, "taskboard", "ledger.json"), cfg.WorkspaceDir)
+	if tbErr != nil {
+		logger.Warnf("taskboard ledger unavailable: %v", tbErr)
+	} else if pm := service.PluginManager(); pm != nil {
+		executor := backend.NewTaskboardExecutor(service, taskboardLedger)
+		if _, actErr := pm.Activate(context.Background(), taskboard.NewPlugin(taskboardLedger, executor, nil)); actErr != nil {
+			logger.Warnf("taskboard plugin activation failed: %v", actErr)
+		}
+	}
 	channelManager := rtchannels.NewManager(cfg, service)
 	cronService := rtcron.NewService(rtcron.Config{
 		Enabled:           cfg.Cron.Enabled,

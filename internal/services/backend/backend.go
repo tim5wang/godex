@@ -12,6 +12,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/sessiongraph"
 	"github.com/tim5wang/godex/internal/sessionstore"
@@ -461,4 +462,13 @@ func (s *Service) MCPManager() *mcp.Manager {
 		return nil
 	}
 	return s.shared.MCPManager()
+}
+
+// PluginManager exposes the shared plugin kernel for HTTP assembly (plugin
+// route mounting and activation), or nil if unavailable.
+func (s *Service) PluginManager() *pluginrt.Manager {
+	if s == nil || s.shared == nil {
+		return nil
+	}
+	return s.shared.PluginManager()
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/platform/tooling"
+	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/tools/teamtools"
 )
@@ -322,6 +323,13 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Summary:       "lightweight todo planning and progress tracking",
 		DefaultActive: true,
 	})
+	if a.taskboard != nil {
+		a.registerToolTo(handler, taskboard.NewTaskboardTool(a.taskboard), tools.ToolMeta{
+			Bundle:        bundleTaskBoard,
+			Summary:       "cross-session project task board (claim/execute/accept cards)",
+			DefaultActive: true,
+		})
+	}
 	if a.cfg.Tools.Execution.ScopeWrite {
 		handler.AddBeforeInterceptorsForTools(
 			[]string{"write_file", "edit_file"},

@@ -24,6 +24,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
 	"github.com/tim5wang/godex/internal/pluginrt"
+	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/sandbox"
 	"github.com/tim5wang/godex/internal/services/historysearch"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
@@ -36,6 +37,7 @@ type Agent struct {
 	cfg            *config.Config
 	toolHandler    *tools.ToolHandler
 	todoMgr        *todo.Manager
+	taskboard      *taskboard.Ledger
 	skillLoader    *skill.Loader
 	instrLoader    *instructions.Loader
 	memoryMgr      *memory.Manager
@@ -172,6 +174,7 @@ type dependencies struct {
 	subagentJobs   *subagentJobStore
 	workflows      *workflowStore
 	todoMgr        *todo.Manager
+	taskboard      *taskboard.Ledger
 	sandbox        sandbox.Sandbox
 	// pluginMgr, when non-nil, feeds plugin-contributed prompt sections into
 	// the runtime prompt (P4 prompt/context contributor). Optional: nil keeps

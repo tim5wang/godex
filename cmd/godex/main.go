@@ -149,9 +149,12 @@ func main() {
 	// board. Ledger + plugin activation are process-level; executions run
 	// as durable subagents from live sessions. The plugin's HTTP surface is
 	// mounted into the web mux by httpapi via PluginManager().
-	taskboardLedger, tbErr := taskboard.OpenLedger(filepath.Join(cfg.StateDir, "taskboard", "ledger.json"), cfg.WorkspaceDir)
-	if tbErr != nil {
-		logger.Warnf("taskboard ledger unavailable: %v", tbErr)
+	// Reuse the shared ledger instance so the per-session taskboard tool, the
+	// executor, and this plugin HTTP surface all serialize through one handle
+	// (no double-writer race on ledger.json).
+	taskboardLedger := service.TaskboardLedger()
+	if taskboardLedger == nil {
+		logger.Warnf("taskboard ledger unavailable; taskboard plugin disabled")
 	} else if pm := service.PluginManager(); pm != nil {
 		executor := backend.NewTaskboardExecutor(service, taskboardLedger)
 		if _, actErr := pm.Activate(context.Background(), taskboard.NewPlugin(taskboardLedger, executor, nil)); actErr != nil {

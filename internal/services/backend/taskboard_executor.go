@@ -4,33 +4,36 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
 )
 
-// TaskboardExecutor runs taskboard cards in isolated sessions by launching
-// durable subagents from a live host session's agent (M1: manual trigger;
-// host cron scheduling is M3). The subagent gets the full card content and
-// handover protocol in its prompt; on settlement the executor closes the
-// execution record and submits the card for human acceptance (in_review).
+// TaskboardExecutor handoffs a card to a host session's main agent so it
+// claims and executes the work in its own conversation flow. The run's tool
+// calls, reasoning, and file edits ARE the chat history — fully observable,
+// no durable-subagent black box, no separate LLM connection (so no
+// gateway/auth failure surface).
+//
+// Design: Execute() records the execution (running, host = target session)
+// and submits the card workload as a message into that session. The main
+// agent, which now has the taskboard tool injected per-session, is expected
+// to claim the card (taskboard action=move → in_progress), do the work, and
+// move it to in_review for human acceptance — all visible in the feed.
 type TaskboardExecutor struct {
 	service *Service
 	ledger  *taskboard.Ledger
-	poll    time.Duration
-	timeout time.Duration
 }
 
 // NewTaskboardExecutor wires the executor against the backend service and
 // the shared taskboard ledger.
 func NewTaskboardExecutor(service *Service, ledger *taskboard.Ledger) *TaskboardExecutor {
-	return &TaskboardExecutor{service: service, ledger: ledger, poll: 2 * time.Second, timeout: 6 * time.Hour}
+	return &TaskboardExecutor{service: service, ledger: ledger}
 }
 
-// hostSession returns the most recently active loaded session to host the
-// execution subagent. M1 limitation: taskboard execution needs at least one
-// live session (host-cron scheduling without sessions is M3).
+// hostSession returns the most recently active loaded session to hand the
+// card to. Taskboard execution requires at least one live session (host-cron
+// scheduling without sessions is M3).
 func (e *TaskboardExecutor) hostSession() *sessionState {
 	s := e.service
 	s.mu.Lock()
@@ -47,28 +50,16 @@ func (e *TaskboardExecutor) hostSession() *sessionState {
 	return best
 }
 
-// Execute launches one isolated session for the card. The ledger records the
-// execution start; a watcher goroutine finalizes it when the job settles.
+// Execute hands the card to the host session's main agent and records the
+// execution. Returns the execution id and the host session id (the jump-to-
+// progress target lives in that conversation).
 func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (string, string, error) {
 	host := e.hostSession()
 	if host == nil || host.agent == nil {
-		return "", "", fmt.Errorf("taskboard: no active session available to host execution; open a session first")
+		return "", "", fmt.Errorf("taskboard: 没有可执行任务的活动会话，请先打开一个会话")
 	}
 	rootDir := e.projectRoot(card.ProjectID)
-	var writeScope []string
-	if rootDir != "" {
-		writeScope = []string{rootDir}
-	}
-	job, err := host.agent.StartDurableSubagentWithContext(ctx, executionPrompt(card, rootDir), "general-purpose", writeScope)
-	if err != nil {
-		return "", "", fmt.Errorf("taskboard: start execution: %w", err)
-	}
-	executionID := "exec-" + job.IDString()
-	sessionID := job.IDString()
-	// Record the hosting session so the UI can jump to its live progress.
-	// ProjectDir is part of the session identity hash — without it the
-	// frontend rebuilds a different session id and falls back to creating
-	// a new chat.
+	executionID := "exec-" + card.ID + "-" + e.service.now().Format("20060102150405")
 	hostRef := &taskboard.HostRef{
 		SessionID:  host.id,
 		Channel:    host.locator.Channel,
@@ -76,11 +67,20 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 		UserID:     host.locator.UserID,
 		ProjectDir: host.locator.Metadata["project_dir"],
 	}
-	if _, err := e.ledger.StartExecution(card.ID, executionID, sessionID, "taskboard", hostRef); err != nil {
+	if _, err := e.ledger.StartExecution(card.ID, executionID, host.id, "taskboard", hostRef); err != nil {
 		return "", "", err
 	}
-	go e.watch(card.ID, executionID, host.agent, host.id, sessionID)
-	return executionID, sessionID, nil
+	envelope := message.NewRuntimeEnvelope(message.SourceBackground, host.id, "taskboard", executionPrompt(card, rootDir), e.service.now(), map[string]string{
+		"taskboard_card_id": card.ID,
+		"taskboard_title":   card.Title,
+	})
+	if _, err := e.service.SubmitAsync(ctx, host.id, envelope, SubmitOptions{QueueMode: QueueModeFollowUp}); err != nil {
+		// The execution record is started by the timeout path; surface the
+		// delivery failure so the card does not silently hang.
+		_, _ = e.ledger.FinishExecution(card.ID, executionID, taskboard.ExecutionCancelled, "投递到会话失败")
+		return "", "", fmt.Errorf("taskboard: 投递执行任务到会话 %s 失败: %w", host.id, err)
+	}
+	return executionID, host.id, nil
 }
 
 // projectRoot resolves the project's root dir for the write scope.
@@ -93,86 +93,18 @@ func (e *TaskboardExecutor) projectRoot(projectID string) string {
 	return ""
 }
 
-// sessionAgent returns the agent of a loaded session (nil if absent).
-func (e *TaskboardExecutor) sessionAgent(sessionID string) *agent.Agent {
-	e.service.mu.Lock()
-	defer e.service.mu.Unlock()
-	if sess := e.service.sessions[sessionID]; sess != nil {
-		return sess.agent
-	}
-	return nil
-}
-
-// watch polls the durable subagent until it settles, then closes the
-// execution and moves the card to in_review (human acceptance gate).
-// Holds the host agent reference directly: the job store lives on the agent,
-// so polling survives the host session being unloaded.
-func (e *TaskboardExecutor) watch(cardID, executionID string, hostAgent *agent.Agent, hostSessionID, jobID string) {
-	poll, timeout := e.poll, e.timeout
-	if poll <= 0 {
-		poll = 2 * time.Second
-	}
-	if timeout <= 0 {
-		timeout = 6 * time.Hour
-	}
-	deadline := time.Now().Add(timeout)
-	var view agent.DurableSubagentJobView
-	for hostAgent != nil && time.Now().Before(deadline) {
-		time.Sleep(poll)
-		v, err := hostAgent.GetDurableSubagent(hostSessionID, jobID)
-		if err != nil {
-			continue
-		}
-		view = v
-		// Record the isolated execution session's own id as soon as it
-		// materializes: the run's messages and timeline live THERE, not in
-		// the host session (which may be an empty/new chat).
-		if view.SessionID != "" {
-			_, _ = e.ledger.SetExecutionJobSession(cardID, executionID, view.SessionID)
-		}
-		// Any terminal status settles — the job layer reports failures as
-		// "error", not "failed".
-		switch view.Status {
-		case "running", "pending", "queued", "":
-			continue
-		default:
-			e.settle(cardID, executionID, view)
-			return
-		}
-	}
-	// Timed out: cancel the execution record so the card can be re-run.
-	_, _ = e.ledger.FinishExecution(cardID, executionID, taskboard.ExecutionCancelled, "execution watch timed out")
-}
-
-// settle closes the execution and submits the card for acceptance.
-func (e *TaskboardExecutor) settle(cardID, executionID string, view agent.DurableSubagentJobView) {
-	status := taskboard.ExecutionCompleted
-	switch view.Status {
-	case "failed", "error":
-		status = taskboard.ExecutionFailed
-	case "cancelled":
-		status = taskboard.ExecutionCancelled
-	}
-	summary := strings.TrimSpace(view.Result)
-	if summary == "" && strings.TrimSpace(view.Error) != "" {
-		summary = "error: " + strings.TrimSpace(view.Error)
-	}
-	card, err := e.ledger.FinishExecution(cardID, executionID, status, summary)
-	if err != nil {
-		return
-	}
-	// Submit for human acceptance: in_progress -> in_review (holder is
-	// already cleared by FinishExecution, so the move passes the hold gate).
-	if card.Status == taskboard.StatusInProgress {
-		_, _ = e.ledger.MoveCard(cardID, card.Version, taskboard.StatusInReview, "taskboard")
-	}
-}
-
-// executionPrompt builds the isolated-session opening prompt: card frame +
-// handover protocol (report back a structured summary for the ledger).
+// executionPrompt builds the message handed into the host session: the card
+// frame plus a self-contained claim-and-execute protocol. The agent is told
+// to manage the card via the taskboard tool so status transitions are visible
+// in the feed.
 func executionPrompt(card taskboard.Card, rootDir string) string {
 	var b strings.Builder
-	b.WriteString("你在独立会话中执行任务看板的一张任务卡。完成后输出结构化总结（做了什么 / 改动文件 / 自验结果 / 剩余风险），该总结会写入任务执行记录。\n\n")
+	b.WriteString("任务看板有一条任务卡需要你在当前对话中认领并执行。用 taskboard 工具：\n")
+	b.WriteString("- 先 taskboard action=get 读卡片（含评论与验收清单）\n")
+	b.WriteString("- 认领：taskboard action=move to=in_progress\n")
+	b.WriteString("- 执行：按卡片 Prompt 干活，用 taskboard action=checklist 勾选验收项（附证据）\n")
+	b.WriteString("- 完成：taskboard action=move to=in_review（提交人工验收）\n")
+	b.WriteString("完成后在对话里输出结构化总结（做了什么/改动文件/自验结果/剩余风险）。\n\n")
 	b.WriteString("# 任务 " + card.ID + "\n")
 	b.WriteString("标题: " + card.Title + "\n")
 	if card.Description != "" {

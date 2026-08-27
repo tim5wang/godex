@@ -13,6 +13,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
 	"github.com/tim5wang/godex/internal/pluginrt"
+	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/sessiongraph"
 	"github.com/tim5wang/godex/internal/sessionstore"
@@ -471,4 +472,15 @@ func (s *Service) PluginManager() *pluginrt.Manager {
 		return nil
 	}
 	return s.shared.PluginManager()
+}
+
+// TaskboardLedger returns the shared host-authoritative taskboard ledger, or
+// nil if unavailable. main, the executor, and the per-session taskboard tool
+// all share this one instance so ledger.json mutations are always serialized
+// through a single handle.
+func (s *Service) TaskboardLedger() *taskboard.Ledger {
+	if s == nil || s.shared == nil {
+		return nil
+	}
+	return s.shared.TaskboardLedger()
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/todo"
 	"github.com/tim5wang/godex/internal/pluginrt"
+	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -89,6 +90,19 @@ func (s *SharedDependencies) PluginManager() *pluginrt.Manager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.deps.pluginMgr
+}
+
+// TaskboardLedger returns the host-authoritative taskboard ledger, or nil
+// when unavailable. Both the per-session taskboard tool and the taskboard
+// plugin (HTTP surface) share this single instance so mutations are always
+// serialized through one handle (no double-writer race on ledger.json).
+func (s *SharedDependencies) TaskboardLedger() *taskboard.Ledger {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deps.taskboard
 }
 
 // ApplyConfig refreshes shared workspace-scoped services for subsequent turns.

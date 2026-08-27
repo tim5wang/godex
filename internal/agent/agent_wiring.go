@@ -26,6 +26,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
 	"github.com/tim5wang/godex/internal/pluginrt"
+	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/services/historysearch"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -103,7 +104,25 @@ func buildDependencies(cfg *config.Config) dependencies {
 		workflows:    newWorkflowStore(filepath.Join(cfg.StateDir, "workflows")),
 		todoMgr:      todo.NewManager(cfg.TodosDir),
 		sandbox:      localSandboxFromConfig(cfg),
+		taskboard:    openTaskboardLedger(cfg),
 	}
+}
+
+// openTaskboardLedger opens the host-authoritative taskboard ledger (seeded
+// with the built-in default project). It returns nil when the ledger is
+// unavailable so per-session tool registration degrades gracefully; the
+// process still activates the taskboard plugin (HTTP surface) from main with
+// its own handle.
+func openTaskboardLedger(cfg *config.Config) *taskboard.Ledger {
+	if cfg == nil {
+		return nil
+	}
+	ledger, err := taskboard.OpenLedger(filepath.Join(cfg.StateDir, "taskboard", "ledger.json"), cfg.WorkspaceDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: taskboard ledger unavailable: %v\n", err)
+		return nil
+	}
+	return ledger
 }
 
 func apiRequestTimeout(cfg *config.Config) time.Duration {
@@ -206,6 +225,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		cfg:               cfg,
 		toolHandler:       handler,
 		todoMgr:           deps.todoMgr,
+		taskboard:         deps.taskboard,
 		skillLoader:       deps.skillLoader,
 		instrLoader:       deps.instrLoader,
 		memoryMgr:         deps.memoryMgr,

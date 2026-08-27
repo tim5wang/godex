@@ -73,6 +73,11 @@ import type {
   MCPStatusResponse,
   MCPServerConfig,
   MCPServerStatus,
+  TaskboardProject,
+  TaskboardProjectCreateInput,
+  TaskboardCard,
+  TaskboardCardCreateInput,
+  TaskboardCardPatchInput,
 } from "./types";
 import { useNodeContextStore } from "../store/nodeContext";
 
@@ -1607,4 +1612,55 @@ export function testMCPServer(token: string | null, name: string) {
 
 export function getMCPStatuses(token: string | null) {
   return request<MCPStatusResponse>("/v1/mcp/status", { method: "GET" }, token);
+}
+
+// ---- Taskboard (需求池 #1) ----
+
+export function listTaskboardProjects(token: string | null) {
+  return request<{ projects: TaskboardProject[] }>("/v1/taskboard/projects", { method: "GET" }, token);
+}
+
+export function createTaskboardProject(token: string | null, input: TaskboardProjectCreateInput) {
+  return request<{ project: TaskboardProject }>("/v1/taskboard/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }, token);
+}
+
+export function listTaskboardCards(token: string | null, query?: { project?: string; status?: string; urgency?: string }) {
+  const params = new URLSearchParams();
+  if (query?.project) params.set("project", query.project);
+  if (query?.status) params.set("status", query.status);
+  if (query?.urgency) params.set("urgency", query.urgency);
+  const qs = params.toString();
+  return request<{ cards: TaskboardCard[]; count: number }>(`/v1/taskboard/cards${qs ? `?${qs}` : ""}`, { method: "GET" }, token);
+}
+
+export function createTaskboardCard(token: string | null, input: TaskboardCardCreateInput) {
+  return request<{ card: TaskboardCard }>("/v1/taskboard/cards", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }, token);
+}
+
+export function getTaskboardCard(token: string | null, id: string) {
+  return request<{ card: TaskboardCard }>(`/v1/taskboard/cards/${encodeURIComponent(id)}`, { method: "GET" }, token);
+}
+
+export function patchTaskboardCard(token: string | null, id: string, input: TaskboardCardPatchInput) {
+  return request<{ card: TaskboardCard }>(`/v1/taskboard/cards/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }, token);
+}
+
+export function deleteTaskboardCard(token: string | null, id: string) {
+  return request<{ card_id: string; deleted: boolean }>(`/v1/taskboard/cards/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
+}
+
+export function executeTaskboardCard(token: string | null, id: string) {
+  return request<{ execution_id: string; session_id: string }>(`/v1/taskboard/cards/${encodeURIComponent(id)}/execute`, { method: "POST" }, token);
 }

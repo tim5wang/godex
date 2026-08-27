@@ -95,7 +95,7 @@ func (p *Plugin) handleGetCard(w http.ResponseWriter, r *http.Request) (any, err
 
 // patchBody is the human card-mutation envelope; action picks the ledger op.
 type patchBody struct {
-	Action  string `json:"action"` // update|move|complete|reject
+	Action  string `json:"action"` // update|move|complete|reject|checklist
 	Version int    `json:"version"`
 	Actor   string `json:"actor,omitempty"`
 	// update fields
@@ -110,6 +110,11 @@ type patchBody struct {
 	Force bool `json:"force"`
 	// reject
 	Reason string `json:"reason"`
+	// checklist: add by text; check/uncheck by index
+	CheckAction string `json:"check_action"`
+	Index       *int   `json:"index"`
+	Text        string `json:"text"`
+	Evidence    string `json:"evidence"`
 }
 
 func (b patchBody) actor() string {
@@ -140,6 +145,23 @@ func (p *Plugin) handlePatchCard(w http.ResponseWriter, r *http.Request) (any, e
 		card, err = p.ledger.CompleteCard(id, body.Version, actor, body.Force)
 	case "reject":
 		card, err = p.ledger.RejectCard(id, body.Version, actor, body.Reason)
+	case "checklist":
+		switch strings.TrimSpace(body.CheckAction) {
+		case "add":
+			card, err = p.ledger.ChecklistAdd(id, body.Version, actor, body.Text)
+		case "check":
+			if body.Index == nil {
+				return nil, fmt.Errorf("taskboard: check requires item index")
+			}
+			card, err = p.ledger.ChecklistCheck(id, body.Version, actor, *body.Index, body.Evidence)
+		case "uncheck":
+			if body.Index == nil {
+				return nil, fmt.Errorf("taskboard: uncheck requires item index")
+			}
+			card, err = p.ledger.ChecklistUncheck(id, body.Version, actor, *body.Index)
+		default:
+			return nil, fmt.Errorf("taskboard: unknown checklist action %q", body.CheckAction)
+		}
 	case "":
 		return nil, fmt.Errorf("taskboard: patch action is required")
 	default:

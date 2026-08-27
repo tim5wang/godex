@@ -2,6 +2,7 @@ import { lazy, type ComponentType, type LazyExoticComponent, type ReactNode } fr
 import {
   ApartmentOutlined,
   AppstoreOutlined,
+  ProfileOutlined,
   BulbOutlined,
   CommentOutlined,
   DatabaseOutlined,
@@ -40,6 +41,7 @@ const loadNotesPage = () => import("../pages/NotesPage");
 const loadSkillsPage = () => import("../pages/SkillsPage");
 const loadMemoryPage = () => import("../pages/MemoryPage");
 const loadBusinessAgentsPage = () => import("../pages/BusinessAgentsPage");
+const loadTaskBoardPage = () => import("../pages/TaskBoardPage");
 const loadSettingsPage = () => import("../pages/SettingsPage");
 const loadUsagePage = () => import("../pages/UsagePage");
 
@@ -155,6 +157,17 @@ export const builtinApps: BuiltinAppEntry[] = [
     component: pageComponent(loadBusinessAgentsPage, "BusinessAgentsPage"),
     isActive: (pathname) => pathname.startsWith("/business-agents"),
     headerSubtitleKey: "businessAgents.pageSubtitle",
+  }),
+  entry({
+    id: "taskboard",
+    navPath: "/taskboard",
+    routePaths: ["/taskboard"],
+    icon: <ProfileOutlined />,
+    labelKey: "app.nav.taskboard",
+    load: loadTaskBoardPage,
+    component: pageComponent(loadTaskBoardPage, "TaskBoardPage"),
+    isActive: (pathname) => pathname.startsWith("/taskboard"),
+    headerSubtitleKey: "taskboard.pageSubtitle",
   }),
   entry({
     id: "usage",

@@ -1697,3 +1697,90 @@ export interface MCPServerStatus {
 export interface MCPStatusResponse {
   statuses: MCPServerStatus[];
 }
+
+// ---- Taskboard (需求池 #1) ----
+
+export type TaskboardUrgency = "urgent" | "normal" | "low";
+export type TaskboardStatus = "backlog" | "todo" | "in_progress" | "in_review" | "done";
+
+export interface TaskboardChecklistItem {
+  text: string;
+  done: boolean;
+  evidence?: string;
+}
+
+export interface TaskboardComment {
+  author: string;
+  text: string;
+  created_at: string;
+}
+
+export interface TaskboardExecution {
+  id: string;
+  session_id: string;
+  status: string;
+  started_at: string;
+  ended_at?: string;
+  summary?: string;
+}
+
+export interface TaskboardCard {
+  id: string;
+  project_id: string;
+  title: string;
+  description?: string;
+  prompt?: string;
+  urgency: TaskboardUrgency;
+  status: TaskboardStatus;
+  holder?: string;
+  blocked?: boolean;
+  checklist?: TaskboardChecklistItem[];
+  comments?: TaskboardComment[];
+  executions?: TaskboardExecution[];
+  version: number;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+  deleted?: boolean;
+}
+
+export interface TaskboardProject {
+  id: string;
+  name: string;
+  root_dir: string;
+  built_in?: boolean;
+}
+
+export interface TaskboardCardCreateInput {
+  project_id?: string;
+  title: string;
+  description?: string;
+  prompt?: string;
+  urgency?: TaskboardUrgency;
+  checklist?: string[];
+}
+
+export interface TaskboardCardPatchInput {
+  action: "update" | "move" | "complete" | "reject" | "checklist";
+  version: number;
+  actor?: string;
+  title?: string;
+  description?: string;
+  prompt?: string;
+  urgency?: TaskboardUrgency;
+  blocked?: boolean;
+  to?: TaskboardStatus;
+  force?: boolean;
+  reason?: string;
+  // checklist action fields
+  check_action?: "add" | "check" | "uncheck";
+  index?: number;
+  text?: string;
+  evidence?: string;
+}
+
+export interface TaskboardProjectCreateInput {
+  name: string;
+  root_dir: string;
+}

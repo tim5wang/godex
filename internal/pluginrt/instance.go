@@ -2,6 +2,7 @@ package pluginrt
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"sync/atomic"
 )
@@ -18,6 +19,18 @@ type Host interface {
 	// Logger returns an optional per-instance logger prefix hook (no-op by
 	// default).
 	Logger(pluginID string) func(format string, args ...any)
+	// RegisterRoutes mounts HTTP routes under prefix for this plugin. The
+	// registration is reversible: deactivation unmounts the prefix (requests
+	// fall through to 404). The register callback receives a dedicated mux;
+	// patterns use the full request path (same style as the httpapi mux).
+	RegisterRoutes(prefix string, register func(mux *http.ServeMux)) error
+	// Services returns the platform services injected at manager assembly
+	// (workspace/state/temp dirs and a config snapshot getter).
+	Services() Services
+	// RegisterSchedule registers a recurring callback (cron expression or
+	// fixed interval, exactly one of the two). Reversible: deactivation
+	// removes the schedule.
+	RegisterSchedule(name string, spec ScheduleSpec, fn func(ctx context.Context)) error
 }
 
 // NativePlugin is a builtin Go plugin: it declares its manifest and provides
@@ -41,6 +54,9 @@ type Instance struct {
 	mu         sync.Mutex
 	host       Host
 	started    bool
+	// manager is the owning kernel; it hosts the route table and scheduler
+	// shared by all instances. Injected at Activate.
+	manager *Manager
 }
 
 // ID returns the plugin id.
@@ -131,4 +147,29 @@ func (h *host) Provide(capabilityName string) {
 
 func (h *host) Logger(pluginID string) func(format string, args ...any) {
 	return func(format string, args ...any) {}
+}
+
+func (h *host) RegisterRoutes(prefix string, register func(mux *http.ServeMux)) error {
+	m := h.instance.manager
+	if err := m.registerPluginRoutes(h.instance.manifest.ID, prefix, register); err != nil {
+		return err
+	}
+	// Reversal rides the standard effect ledger: unmount on deactivation.
+	h.instance.ledger.Add(func(ctx context.Context) (func() error, error) {
+		return func() error { m.removePluginRoutes(h.instance.manifest.ID, prefix); return nil }, nil
+	})
+	return nil
+}
+
+func (h *host) Services() Services { return h.instance.manager.services }
+
+func (h *host) RegisterSchedule(name string, spec ScheduleSpec, fn func(ctx context.Context)) error {
+	m := h.instance.manager
+	if err := m.registerSchedule(h.instance.manifest.ID, name, spec, fn); err != nil {
+		return err
+	}
+	h.instance.ledger.Add(func(ctx context.Context) (func() error, error) {
+		return func() error { m.removeSchedules(h.instance.manifest.ID); return nil }, nil
+	})
+	return nil
 }

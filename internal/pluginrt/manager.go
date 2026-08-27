@@ -3,8 +3,11 @@ package pluginrt
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"sync"
+
+	cronlib "github.com/robfig/cron/v3"
 )
 
 // Manager owns plugin instances and the scope-aware capability registry. It
@@ -20,16 +23,44 @@ type Manager struct {
 	// platform itself provides a capability (so requires can be satisfied
 	// without a plugin).
 	platform func(capabilityName string) bool
+
+	// services are the platform services injected at assembly (P-C).
+	services Services
+	// route table (P-A): prefix -> plugin-owned sub-mux. The aggregate
+	// dispatcher is mounted on the root mux via MountRoutes.
+	routesMu  sync.RWMutex
+	routes    map[string]*pluginRoute
+	routeRoot *http.ServeMux
+	// schedule table (P-D): plugin id -> schedule name -> robfig entry id,
+	// served by one shared lazily-started cron instance.
+	schedMu      sync.Mutex
+	schedCron    *cronlib.Cron
+	schedEntries map[string]map[string]cronlib.EntryID
+}
+
+// ManagerOption configures the plugin kernel at assembly time.
+type ManagerOption func(*Manager)
+
+// WithServices injects the platform services plugins may consume via
+// Host.Services (workspace/state/temp dirs and a config getter).
+func WithServices(s Services) ManagerOption {
+	return func(m *Manager) { m.services = s }
 }
 
 // NewManager creates an empty plugin manager. platform may be nil.
-func NewManager(platform func(capabilityName string) bool) *Manager {
-	return &Manager{
-		graph:     NewGraph(platform),
-		registry:  NewRegistry(),
-		instances: make(map[string]*Instance),
-		platform:  platform,
+func NewManager(platform func(capabilityName string) bool, opts ...ManagerOption) *Manager {
+	m := &Manager{
+		graph:        NewGraph(platform),
+		registry:     NewRegistry(),
+		instances:    make(map[string]*Instance),
+		platform:     platform,
+		routes:       make(map[string]*pluginRoute),
+		schedEntries: make(map[string]map[string]cronlib.EntryID),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // List returns the active plugin instances sorted by id.
@@ -82,6 +113,7 @@ func (m *Manager) Activate(ctx context.Context, plugin NativePlugin) (*Instance,
 		plugin:     plugin,
 		generation: m.nextGen,
 		ledger:     NewLedger(),
+		manager:    m,
 	}
 	if err := instance.Start(ctx); err != nil {
 		return nil, fmt.Errorf("plugin %s failed to start: %w", manifest.ID, err)

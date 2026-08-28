@@ -225,6 +225,22 @@ Identity 和 Core 都有独立预算，不应该无限增长。
 - 笔记 = 人工整理、长篇、按需加载
 - 一张笔记的 tags 天然构成一个"场景（scene）"索引，无需额外构建 L2 场景聚类
 
+## 模板级记忆范围（Agent Template memory 字段）
+
+agent 模板板块（`docs/agent-role-and-bundle-design.md`）为每个会话预设记忆范围，
+字段 `AgentTemplate.Memory` 取值 `none | shared | scoped`（空 = shared）：
+
+| 值 | 注入（读取侧） | 捕获（写入侧） | 含义 |
+|---|---|---|---|
+| `none` | 不注入记忆索引消息（`buildMemoryIndexPromptMessage` 短路） | `captureMemoryCandidates` / `CaptureInsightMemoryCandidates` 短路 | 无记忆上下文，也不落盘 |
+| `shared`（默认） | 注入 workspace 级索引 | 捕获进 workspace 级 | 遵循全局 `memory.session_scope` 配置 |
+| `scoped` | 注入会话分区索引 | 捕获进会话分区 | 模板级强制隔离（`applyScopedMemory` 重建 memoryMgr 为 `NewScopedManager(MemoryDir, scope.Session(sessionID))` 并重绑 memory 工具），等价 `memory.session_scope` 开启 |
+
+要点：
+- 读侧与写侧**同步控制**：`none` 是彻底的“无记忆会话”（既不注入也不落盘），而不是只读；
+- `scoped` 让模板可以**不依赖全局配置**强制每个会话独立记忆分区，避免跨会话泄漏；
+- 记忆策略（per-turn / agent-only / consolidated）与记忆范围正交：范围管“哪一层记忆、是否参与”，策略管“候选如何积累”。
+
 ## Project Miner 原则
 
 `project miner` 当前是保守模式：

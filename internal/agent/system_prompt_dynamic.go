@@ -565,13 +565,11 @@ func formatBundleNames(items []tools.BundleCatalogItem, active bool) string {
 
 func formatActiveToolNames(catalog tools.ToolCatalog) string {
 	seen := map[string]struct{}{}
-	names := append([]string{}, catalog.AlwaysActiveTools...)
-	for _, item := range catalog.Bundles {
-		if !item.Active {
-			continue
-		}
-		names = append(names, item.Tools...)
-	}
+	// catalog.ActiveTools is the exact currently-active set. AlwaysActiveTools
+	// is a registration property (not activation state), and a bundle marked
+	// Active only means "any of its tools is active" — enumerating either
+	// would advertise tools the model cannot actually call.
+	names := append([]string{}, catalog.ActiveTools...)
 	out := make([]string, 0, len(names))
 	for _, name := range names {
 		name = strings.TrimSpace(name)

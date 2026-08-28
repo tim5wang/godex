@@ -247,3 +247,36 @@ func TestRestoreSessionStatePreservesTemplateToolSet(t *testing.T) {
 		t.Fatal("expected legacy bundle restore to keep working")
 	}
 }
+
+func TestToolAvailabilityPromptListsExactActiveTools(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "lean", Tools: []string{"edit_file", "bash"}})
+
+	// The reported scenario: the schema set is exactly 2 tools, so the
+	// tool_availability prompt's "Active tools" line must match — the old
+	// formatter listed AlwaysActiveTools (a registration property) plus every
+	// tool of bundles with any active tool, making the agent self-report 18.
+	sections, err := a.buildDynamicRuntimePromptSections("")
+	if err != nil {
+		t.Fatalf("buildDynamicRuntimePromptSections: %v", err)
+	}
+	var availability string
+	for _, s := range sections {
+		if s.Key == "tool_availability" {
+			availability = s.Text
+		}
+	}
+	if availability == "" {
+		t.Fatal("expected tool_availability section")
+	}
+	for _, line := range strings.Split(availability, "\n") {
+		if strings.HasPrefix(line, "- Active tools: ") {
+			if got := strings.TrimPrefix(line, "- Active tools: "); got != "bash, edit_file" {
+				t.Fatalf("Active tools line = %q, want \"bash, edit_file\"", got)
+			}
+			return
+		}
+	}
+	t.Fatal("no Active tools line found in tool_availability section")
+}

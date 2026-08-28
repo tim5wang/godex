@@ -30,7 +30,13 @@ type BundleCatalogItem struct {
 type ToolCatalog struct {
 	ActiveBundles     []string            `json:"active_bundles"`
 	AlwaysActiveTools []string            `json:"always_active_tools"`
-	Bundles           []BundleCatalogItem `json:"bundles"`
+	// ActiveTools is the exact set of currently-callable tool names. Note the
+	// difference from AlwaysActiveTools (a registration property, not
+	// activation state) and from ActiveBundles (any-tool-active marking):
+	// prompt rendering must use this field to avoid advertising tools the
+	// model cannot actually call.
+	ActiveTools []string            `json:"active_tools,omitempty"`
+	Bundles     []BundleCatalogItem `json:"bundles"`
 }
 
 // ToolHandler routes tool calls to appropriate tools
@@ -470,6 +476,12 @@ func (h *ToolHandler) Catalog() ToolCatalog {
 	}
 	sort.Strings(alwaysActive)
 
+	activeTools := make([]string, 0, len(h.activeTools))
+	for name := range h.activeTools {
+		activeTools = append(activeTools, name)
+	}
+	sort.Strings(activeTools)
+
 	bundleNames := make([]string, 0, len(h.bundleTools))
 	for name := range h.bundleTools {
 		bundleNames = append(bundleNames, name)
@@ -502,6 +514,7 @@ func (h *ToolHandler) Catalog() ToolCatalog {
 	return ToolCatalog{
 		ActiveBundles:     activeBundles,
 		AlwaysActiveTools: alwaysActive,
+		ActiveTools:       activeTools,
 		Bundles:           items,
 	}
 }

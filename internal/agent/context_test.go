@@ -662,6 +662,7 @@ func TestBuildContextKeepsDynamicPromptStateOutOfStableSystem(t *testing.T) {
 
 func TestBuildContextIncludesCapabilityCheckPrompt(t *testing.T) {
 	a := newTestAgent(t, 4096)
+	a.RegisterTools()
 
 	build, err := a.buildContext(context.Background())
 	if err != nil {

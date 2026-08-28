@@ -280,3 +280,70 @@ func TestToolAvailabilityPromptListsExactActiveTools(t *testing.T) {
 	}
 	t.Fatal("no Active tools line found in tool_availability section")
 }
+
+func TestPromptOmitsToolExchangeGuidanceWhenToolNotActive(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "lean", Tools: []string{"edit_file", "bash"}})
+
+	// The reported scenario: a lean template without tool_exchange in its exact
+	// active set must not be told to expand via a tool it cannot call, and must
+	// not be shown an "available bundles" list it could never activate.
+	sections, err := a.buildDynamicRuntimePromptSections("")
+	if err != nil {
+		t.Fatalf("buildDynamicRuntimePromptSections: %v", err)
+	}
+	var availability string
+	for _, s := range sections {
+		if s.Key == "tool_availability" {
+			availability = s.Text
+		}
+	}
+	if availability == "" {
+		t.Fatal("expected tool_availability section")
+	}
+	if strings.Contains(availability, "tool_exchange") {
+		t.Fatalf("tool_availability must not instruct tool_exchange when inactive: %s", availability)
+	}
+	if strings.Contains(availability, "Available bundles") {
+		t.Fatalf("tool_availability must not advertise available bundles when tool_exchange is absent: %s", availability)
+	}
+	if !strings.Contains(availability, "not available on demand") {
+		t.Fatalf("tool_availability should state the tool set is fixed: %s", availability)
+	}
+
+	dynamic, err := a.buildDynamicSystemPrompt("")
+	if err != nil {
+		t.Fatalf("buildDynamicSystemPrompt: %v", err)
+	}
+	if strings.Contains(dynamic, "tool_exchange") {
+		t.Fatalf("capability_check must not instruct tool_exchange when inactive: %s", dynamic)
+	}
+}
+
+func TestPromptKeepsToolExchangeGuidanceWhenToolActive(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	// always_on carries the host-resident meta tools including tool_exchange.
+	a.ApplyTemplate(templates.AgentTemplate{ID: "meta", Bundles: []string{"always_on"}})
+
+	sections, err := a.buildDynamicRuntimePromptSections("")
+	if err != nil {
+		t.Fatalf("buildDynamicRuntimePromptSections: %v", err)
+	}
+	var availability string
+	for _, s := range sections {
+		if s.Key == "tool_availability" {
+			availability = s.Text
+		}
+	}
+	if availability == "" {
+		t.Fatal("expected tool_availability section")
+	}
+	if !strings.Contains(availability, "tool_exchange") {
+		t.Fatalf("expected tool_exchange guidance when tool is active: %s", availability)
+	}
+	if !strings.Contains(availability, "Available bundles") {
+		t.Fatalf("expected available bundles list when tool_exchange is active: %s", availability)
+	}
+}

@@ -234,17 +234,33 @@ func buildEnvironmentDatePrompt(now time.Time) string {
 }
 
 func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
+	// tool_exchange drives on-demand bundle activation. When it is not in the
+	// exact active tool set (lean template presets), guidance must not tell
+	// the model to use it; swap those lines for an honest "not available".
+	hasToolExchange := catalogHasActiveTool(catalog, "tool_exchange")
+
 	lines := []string{
 		"# Capability Check",
 		"Check what is already configured in this workspace before calling a capability unavailable.",
-		"- Start with relevant skills and active tools, then use tool_exchange if another bundle would help.",
-		"- Keep the active tool workspace small: when calling tool_exchange, disable bundles that are clearly irrelevant to the current conversation before or after enabling new ones.",
+	}
+	if hasToolExchange {
+		lines = append(lines,
+			"- Start with relevant skills and active tools, then use tool_exchange if another bundle would help.",
+			"- Keep the active tool workspace small: when calling tool_exchange, disable bundles that are clearly irrelevant to the current conversation before or after enabling new ones.",
+			"- For obvious current-information requests such as weather, news, prices, stocks, exchange rates, scores, schedules, flights, or latest/recent status, use web_search directly when web is active; if web is inactive, call tool_exchange once with enable_bundles=[\"web\"] rather than querying for a weather/search tool.",
+			"- If tool_exchange returns no match, do not repeat similar capability queries; switch to active tools or say the capability is unavailable.",
+			"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if subagent reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
+		)
+	} else {
+		lines = append(lines,
+			"- This session's tool set is fixed; capabilities not listed below are not available on demand.",
+			"- For obvious current-information requests such as weather, news, prices, stocks, exchange rates, scores, schedules, flights, or latest/recent status, use web_search directly when web is active; if web is inactive, state that web search is not available in this session.",
+		)
+	}
+	lines = append(lines,
 		"- Prefer web for current information, browser for dynamic pages, and glob for broad file discovery.",
-		"- For obvious current-information requests such as weather, news, prices, stocks, exchange rates, scores, schedules, flights, or latest/recent status, use web_search directly when web is active; if web is inactive, call tool_exchange once with enable_bundles=[\"web\"] rather than querying for a weather/search tool.",
 		"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, consider the browser tool for dynamic pages. Do not repeat the same search query or fetch the same URL.",
-		"- If tool_exchange returns no match, do not repeat similar capability queries; switch to active tools or say the capability is unavailable.",
 		"- When the user explicitly asks you to read, inspect, review, or verify specific workspace files or code paths, use the relevant file or shell tools before giving findings.",
-		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if subagent reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
 		"- When using durable subagents, use subagent wait for any/all completion instead of repeatedly polling subagent status; use subagent logs only for bounded diagnostics.",
 		"- When a tool generates a local file such as a screenshot or export, treat it as a generated artifact. In supported runtimes the artifact may be attached automatically, so do not claim you can only provide a local path unless the user explicitly asks for the path.",
 		"- When the user wants a local file sent or attached without reading its contents, prefer attach_file instead of read_file.",
@@ -257,7 +273,7 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 		"- After deleting or renaming a symbol, check for leftover references (lsp references or grep) and fix them in the same batch before moving on.",
 		"- Run verification that mirrors the project's real build/test command (check Makefile/package.json scripts); incremental or partial checkers can miss errors that the real build catches.",
 		"- Skip canned self-introductions and stay focused on the request.",
-	}
+	)
 	if catalogHasTool(catalog, "cron") || catalogHasTool(catalog, "heartbeat") {
 		lines = append(lines, "- After changing cron or heartbeat, report the resulting schedule, timezone, and enabled state.")
 	}
@@ -268,6 +284,10 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 	if config.NormalizeAgentProfile(profile) != config.AgentProfileCoding {
 		return buildCapabilityCheckPrompt(catalog)
 	}
+	// tool_exchange drives on-demand bundle activation; when it is not in the
+	// exact active tool set (lean template presets), do not tell the model to
+	// use it — swap those lines for an honest "not available" note.
+	hasToolExchange := catalogHasActiveTool(catalog, "tool_exchange")
 	lines := []string{
 		"# Coding Profile",
 		"Default to the lean coding workflow for this turn.",
@@ -276,13 +296,27 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 		"- Read the relevant code first, make focused edits, then run the smallest useful verification.",
 		"- For precise code intelligence (symbol definitions, references, type info), prefer the lsp tool. Use grep for full-text search across files.",
 		"- Use todo tools for multi-step coding work, but keep plans short and update them as work changes. The first action of a multi-step task must be a todo_write that lists every step in order. After finishing any sub-step, immediately call todo_write again to mark that item completed and set the next pending item to in_progress before doing the next action. The list must always contain exactly one in_progress item while work is in progress; never leave a finished item as in_progress, and never advance to the next item without first marking the previous one completed.",
-		"- If the user asks for current web information, use tool_exchange to enable the web bundle, then use web_search or web_fetch. Do not use bash with curl/wget as a substitute for the web tools.",
-		"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if subagent reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
-		"- Enable browser, subagent, background, package, skill, memory, MCP, or external agent bundles only when the user explicitly asks for that capability or the active task clearly requires it.",
-		"- If tool_exchange returns no match, continue with active coding tools or state the missing capability plainly.",
+	}
+	if hasToolExchange {
+		lines = append(lines,
+			"- If the user asks for current web information, use tool_exchange to enable the web bundle, then use web_search or web_fetch. Do not use bash with curl/wget as a substitute for the web tools.",
+			"- When delegating web or current-information research to durable subagents, pass required_bundles=[\"web\"] after web is active; if subagent reports subagent_capability_required, enable the missing bundle with tool_exchange and retry once.",
+			"- Enable browser, subagent, background, package, skill, memory, MCP, or external agent bundles only when the user explicitly asks for that capability or the active task clearly requires it.",
+			"- If tool_exchange returns no match, continue with active coding tools or state the missing capability plainly.",
+		)
+	} else {
+		lines = append(lines,
+			"- This session's tool set is fixed; capabilities not listed below are not available on demand.",
+			"- If the user asks for current web information, state that web search is not available in this session; do not use bash with curl/wget as a substitute.",
+			"- Stay within the active coding tools and verified workspace files; state plainly when a requested capability is not available.",
+		)
 	}
 	if catalogHasTool(catalog, "cron") || catalogHasTool(catalog, "heartbeat") {
-		lines = append(lines, "- Automation tools may be available through tool_exchange; only use them for explicit scheduling or heartbeat requests.")
+		if hasToolExchange {
+			lines = append(lines, "- Automation tools may be available through tool_exchange; only use them for explicit scheduling or heartbeat requests.")
+		} else {
+			lines = append(lines, "- Automation tools are only usable when they appear in the active tool set; use them for explicit scheduling or heartbeat requests.")
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -335,15 +369,27 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 		return ""
 	}
 
+	// tool_exchange drives on-demand bundle activation. When it is not in the
+	// exact active tool set (lean template presets), do not instruct the model
+	// to call a tool it does not have, and omit the "available bundles" list
+	// it could never activate.
+	hasToolExchange := catalogHasActiveTool(catalog, "tool_exchange")
+
 	lines := []string{
 		"# Tool Availability",
 		"Only active tools are callable right now.",
-		"Use tool_exchange with a short query to discover or change bundle state when needed.",
-		"If a listed bundle is clearly needed by name, call tool_exchange with enable_bundles for that bundle directly; use query only when the bundle name is unclear.",
-		"Do not ask tool_exchange for tool schemas; enabled bundle tools appear in the next function list automatically.",
-		"Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.",
-		"Keep the active tool workspace tidy: use disable_bundles for active bundles that this conversation no longer needs.",
 	}
+	if hasToolExchange {
+		lines = append(lines,
+			"Use tool_exchange with a short query to discover or change bundle state when needed.",
+			"If a listed bundle is clearly needed by name, call tool_exchange with enable_bundles for that bundle directly; use query only when the bundle name is unclear.",
+			"Do not ask tool_exchange for tool schemas; enabled bundle tools appear in the next function list automatically.",
+			"Keep the active tool workspace tidy: use disable_bundles for active bundles that this conversation no longer needs.",
+		)
+	} else {
+		lines = append(lines, "This session's tool set is fixed; capabilities not listed below are not available on demand.")
+	}
+	lines = append(lines, "Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.")
 
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {
 		lines = append(lines, "- Active bundles: "+active)
@@ -351,8 +397,10 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 	if activeTools := formatActiveToolNames(catalog); activeTools != "" {
 		lines = append(lines, "- Active tools: "+activeTools)
 	}
-	if available := formatBundleSummary(catalog.Bundles, false); available != "" {
-		lines = append(lines, "- Available bundles: "+available)
+	if hasToolExchange {
+		if available := formatBundleSummary(catalog.Bundles, false); available != "" {
+			lines = append(lines, "- Available bundles: "+available)
+		}
 	}
 	lines = append(lines, "For precise code intelligence (symbol definitions, references, type info, hover docs), prefer the lsp tool over grep. Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
 
@@ -368,18 +416,31 @@ func buildToolAvailabilityPromptForProfile(catalog tools.ToolCatalog, profile st
 	}
 	lines := []string{
 		"# Tool Availability",
-		"Only active tools are callable right now. Use tool_exchange with enable_bundles for heavier capabilities when needed.",
-		"Do not ask tool_exchange for tool schemas; enabled bundle tools appear in the next function list automatically.",
-		"Do not use bash/curl/python/node to replace web_search, web_fetch, browser, package, or external-agent tools when those bundles are the right capability.",
+		"Only active tools are callable right now.",
 	}
+	// tool_exchange drives on-demand bundle activation; when it is not in the
+	// exact active set (lean template presets), do not reference it and omit
+	// the "available bundles" list the model could never activate.
+	hasToolExchange := catalogHasActiveTool(catalog, "tool_exchange")
+	if hasToolExchange {
+		lines = append(lines,
+			"Use tool_exchange with enable_bundles for heavier capabilities when needed.",
+			"Do not ask tool_exchange for tool schemas; enabled bundle tools appear in the next function list automatically.",
+		)
+	} else {
+		lines = append(lines, "This session's tool set is fixed; capabilities not listed below are not available on demand.")
+	}
+	lines = append(lines, "Do not use bash/curl/python/node to replace web_search, web_fetch, browser, package, or external-agent tools when those bundles are the right capability.")
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {
 		lines = append(lines, "- Active bundles: "+active)
 	}
 	if activeTools := formatActiveToolNames(catalog); activeTools != "" {
 		lines = append(lines, "- Active tools: "+activeTools)
 	}
-	if available := formatBundleNames(catalog.Bundles, false); available != "" {
-		lines = append(lines, "- Available bundles: "+available)
+	if hasToolExchange {
+		if available := formatBundleNames(catalog.Bundles, false); available != "" {
+			lines = append(lines, "- Available bundles: "+available)
+		}
 	}
 	lines = append(lines, "For precise code intelligence (symbol definitions, references, type info, hover docs), prefer the lsp tool over grep. Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
 	return strings.Join(lines, "\n")
@@ -597,6 +658,19 @@ func catalogHasTool(catalog tools.ToolCatalog, name string) bool {
 			if toolName == name {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// catalogHasActiveTool reports whether a tool is in the exact currently-active
+// set. Registration (catalogHasTool) is NOT activation: a lean template may
+// register tool_exchange but not activate it, so prompt guidance must not
+// tell the model to call tools it cannot actually call.
+func catalogHasActiveTool(catalog tools.ToolCatalog, name string) bool {
+	for _, n := range catalog.ActiveTools {
+		if n == name {
+			return true
 		}
 	}
 	return false

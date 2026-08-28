@@ -18,7 +18,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { DeleteOutlined, EditOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, EyeOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
 import { useSettingsStore } from "../../store/settings";
@@ -98,13 +98,9 @@ function TemplateCard(props: {
         <Button key="chat" size="small" type="link" icon={<MessageOutlined />} onClick={() => props.onChat(tpl)}>
           {t("agentTemplates.chatWith")}
         </Button>,
-        readonly ? (
-          <span key="edit" />
-        ) : (
-          <Button key="edit" size="small" type="link" icon={<EditOutlined />} onClick={() => props.onEdit(tpl)}>
-            {t("agentTemplates.edit")}
-          </Button>
-        ),
+        <Button key="edit" size="small" type="link" icon={<EyeOutlined />} onClick={() => props.onEdit(tpl)}>
+          {readonly ? t("agentTemplates.viewDetail") : t("agentTemplates.edit")}
+        </Button>,
         readonly ? (
           <span key="delete" />
         ) : (
@@ -271,24 +267,34 @@ export function AgentTemplatesPage() {
       )}
 
       <Drawer
-        title={editing ? t("agentTemplates.formEditTitle") : t("agentTemplates.formCreateTitle")}
+        title={
+          editing
+            ? editing.source !== "user"
+              ? t("agentTemplates.viewTitle")
+              : t("agentTemplates.formEditTitle")
+            : t("agentTemplates.formCreateTitle")
+        }
         open={editorOpen}
         onClose={() => setEditorOpen(false)}
         width={520}
+        zIndex={1300}
         extra={
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            loading={saveMutation.isPending}
-            onClick={() => form.submit()}
-          >
-            {t("agentTemplates.save")}
-          </Button>
+          editing && editing.source !== "user" ? null : (
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              loading={saveMutation.isPending}
+              onClick={() => form.submit()}
+            >
+              {t("agentTemplates.save")}
+            </Button>
+          )
         }
       >
         <Form<TemplateFormValues>
           form={form}
           layout="vertical"
+          disabled={!!editing && editing.source !== "user"}
           onFinish={(values) => saveMutation.mutate(values)}
         >
           <Form.Item name="id" label={t("agentTemplates.fieldName")} rules={[{ required: true }]} normalize={(v) => (v ?? "").toLowerCase()}>

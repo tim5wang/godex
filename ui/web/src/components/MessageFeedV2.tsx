@@ -49,6 +49,10 @@ interface MessageFeedV2Props {
   onForkTurn?: (item: FeedItem) => void;
   /** 重新编辑发送某条 user 消息（stop 后编辑重发场景）。 */
   onEditMessage?: (item: FeedItem) => void;
+  /** Agent template identity (talent market): assistant avatars/headers. */
+  botName?: string;
+  botAvatar?: string;
+  botColor?: string;
 }
 
 /**
@@ -57,7 +61,7 @@ interface MessageFeedV2Props {
  * rows and todo cards in chronological order. Tool calls render as single-line
  * rows that expand in place, keeping the conversation scannable.
  */
-export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false, onForkTurn, onEditMessage }: MessageFeedV2Props) {
+export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false, onForkTurn, onEditMessage, botName, botAvatar, botColor }: MessageFeedV2Props) {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
 
@@ -99,8 +103,8 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
         onEditMessage={onEditMessage}
       />
     ),
-    header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item),
-    avatar: renderAvatar(item),
+    header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item, botName),
+    avatar: renderAvatar(item, { name: botName, avatar: botAvatar, color: botColor }),
     rootClassName: `chat-feed-v2-bubble chat-feed-v2-bubble-${item.kind}${item.segments ? " chat-feed-v2-bubble-turn" : ""}`,
     variant: item.kind === "user" ? "filled" : "borderless",
     shape: "corner",
@@ -614,18 +618,19 @@ function copyTextForItem(item: FeedItem) {
   return [item.body, attachments.length ? attachments.join("\n") : ""].filter(Boolean).join("\n\n").trim();
 }
 
-function renderHeader(item: FeedItem) {
+function renderHeader(item: FeedItem, botName?: string) {
   const color = item.kind === "error" ? "red" : item.kind === "warning" ? "gold" : item.kind === "background" ? "blue" : undefined;
+  const title = item.title || (item.kind === "assistant" && botName ? botName : "");
   return (
     <Space size={8} wrap>
-      <Typography.Text strong>{item.title}</Typography.Text>
+      {title ? <Typography.Text strong>{title}</Typography.Text> : null}
       {item.status ? <Tag color={item.status === "failed" ? "red" : item.status === "running" ? "processing" : "default"}>{item.status}</Tag> : null}
       {color ? <Tag color={color}>{item.kind}</Tag> : null}
     </Space>
   );
 }
 
-function renderAvatar(item: FeedItem) {
+function renderAvatar(item: FeedItem, bot?: { name?: string; avatar?: string; color?: string }) {
   if (item.kind === "user") {
     return <Avatar icon={<UserOutlined />} style={{ background: "#0f766e" }} />;
   }
@@ -637,6 +642,16 @@ function renderAvatar(item: FeedItem) {
   }
   if (item.kind === "warning" || item.kind === "error") {
     return <Avatar icon={<WarningOutlined />} style={{ background: item.kind === "error" ? "#b42318" : "#b45309" }} />;
+  }
+  // Assistant messages carry the agent template identity (talent market):
+  // emoji or image URL avatar from the selected template, falling back to
+  // the default robot icon.
+  if (item.kind === "assistant" && bot?.avatar?.trim()) {
+    const avatar = bot.avatar.trim();
+    if (/^https?:\/\//.test(avatar)) {
+      return <Avatar src={avatar} style={{ background: bot.color || undefined }} />;
+    }
+    return <Avatar style={{ background: bot.color || "#475569" }}>{avatar}</Avatar>;
   }
   return <Avatar icon={<RobotOutlined />} />;
 }

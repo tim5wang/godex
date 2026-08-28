@@ -1,4 +1,4 @@
-import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Drawer, Spin } from "antd";
+import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Drawer, Spin, Tag } from "antd";
 import { useParams, useSearchParams, useLocation, useNavigate, Link } from "react-router-dom";
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
@@ -328,6 +328,12 @@ export function ChatPage() {
     enabled: !authRequired || !!token,
     queryFn: () => listAgentTemplates(token || null),
   });
+  // Selected agent template (talent market) for the current chat route:
+  // shown in the topbar chip and on assistant message avatars/headers.
+  const activeTemplate = useMemo(
+    () => (templatesQuery.data ?? []).find((tpl) => tpl.id === templateParam) ?? null,
+    [templatesQuery.data, templateParam],
+  );
 
   // Resolve the session's working directory from locator metadata,
   // falling back to the service-level workspace_dir from /meta.
@@ -1526,6 +1532,14 @@ export function ChatPage() {
                     {sessionTitle}
                   </Typography.Text>
                 </Tooltip>
+                {activeTemplate ? (
+                  <Tooltip title={activeTemplate.description || activeTemplate.id}>
+                    <Tag style={{ marginInlineStart: 4 }}>
+                      {activeTemplate.avatar?.trim() ? <span style={{ marginInlineEnd: 4 }}>{activeTemplate.avatar.trim()}</span> : null}
+                      {activeTemplate.name || activeTemplate.id}
+                    </Tag>
+                  </Tooltip>
+                ) : null}
               </Space>
               <Space size={4} className="chat-v2-topbar-actions">
                 {remoteNodeID ? (
@@ -1583,6 +1597,9 @@ export function ChatPage() {
                     <div className="chat-feed-inner chat-feed-v2-inner">
                       <MessageFeedV2
                         items={v2ItemsWithPending}
+                        botName={activeTemplate?.name}
+                        botAvatar={activeTemplate?.avatar}
+                        botColor={activeTemplate?.color}
                         onToggleTool={toggleTool}
                         onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
                         savingToNote={saveMessageToNoteMutation.isPending}

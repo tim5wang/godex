@@ -344,7 +344,7 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	deps := shared.snapshot()
 
 	handler := a.toolHandler
-	activeBundles := append([]string{}, handler.Catalog().ActiveBundles...)
+	activeTools := append([]string{}, handler.ActiveToolNames()...)
 	a.mu.Lock()
 	if override := strings.TrimSpace(a.workspaceOverride); override != "" && !sameWorkspaceDir(override, strings.TrimSpace(cfg.WorkspaceDir)) {
 		cfg = CloneConfigForWorkspace(cfg, override)
@@ -400,7 +400,7 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	nextHandler := tools.NewToolHandler()
 	nextHandler.AddBeforeInterceptors(tools.NewPermissionInterceptorWithReview(a.permissions, a.reviewPermissionRequest))
 	a.registerToolsWith(nextHandler)
-	nextHandler.SetActiveBundles(activeBundles...)
+	nextHandler.SetActiveToolsExact(activeTools...)
 	handler.ReplaceWith(nextHandler)
 	// tool_exchange mutates the handler it is constructed with. Rebind it to
 	// the stable session handler after registry replacement, not the temporary
@@ -494,6 +494,7 @@ type SessionState struct {
 	TranscriptRefs       []string                     `json:"transcript_refs,omitempty"`
 	ActiveSkills         []SessionSkillState          `json:"active_skills,omitempty"`
 	ActiveBundles        []string                     `json:"active_bundles,omitempty"`
+	ActiveTools          []string                     `json:"active_tools,omitempty"`
 	PermissionState      tools.PermissionSessionState `json:"permission_state,omitempty"`
 	PendingResume        *PendingResumeState          `json:"pending_resume,omitempty"`
 	HistoryVersion       int64                        `json:"history_version"`
@@ -554,6 +555,7 @@ func (a *Agent) ExportStateForSession(sessionID string) SessionState {
 		TranscriptRefs:       append([]string{}, a.transcriptRefs...),
 		ActiveSkills:         skills,
 		ActiveBundles:        append([]string{}, a.toolHandler.Catalog().ActiveBundles...),
+		ActiveTools:          a.toolHandler.ActiveToolNames(),
 		PermissionState:      exportPermissionState(a.permissions, sessionID),
 		PendingResume:        clonePendingResumeState(a.pendingResume),
 		HistoryVersion:       a.historyVersion,
@@ -618,7 +620,16 @@ func (a *Agent) RestoreStateForSession(sessionID string, state SessionState) {
 	}
 	a.usageMu.Unlock()
 
-	a.toolHandler.SetActiveBundles(state.ActiveBundles...)
+	if len(state.ActiveTools) > 0 {
+		// Tool-granularity restore: the persisted exact active set (template
+		// baseline ∪ mid-session activations). The legacy active_bundles field
+		// is a derived bundle-level marker — restoring it would re-activate
+		// whole bundles and wipe a template's precise tool preset.
+		a.toolHandler.SetActiveToolsExact(state.ActiveTools...)
+	} else {
+		// States written before active_tools existed: legacy behavior.
+		a.toolHandler.SetActiveBundles(state.ActiveBundles...)
+	}
 	restorePermissionState(a.permissions, sessionID, state.PermissionState)
 }
 

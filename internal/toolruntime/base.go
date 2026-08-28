@@ -635,6 +635,22 @@ func (h *ToolHandler) SetActiveToolsExact(names ...string) {
 	}
 }
 
+// ActiveToolNames returns the exact, sorted list of currently active tool
+// names. Unlike Catalog().ActiveBundles (a derived bundle-level marker that
+// turns "any tool active" into "whole bundle active"), this is the
+// tool-granularity truth used for session-state persistence so restoring a
+// session cannot amplify a template's precise tool preset.
+func (h *ToolHandler) ActiveToolNames() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	names := make([]string, 0, len(h.activeTools))
+	for name := range h.activeTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // AddBeforeInterceptors appends ordered before-interceptors to the handler runtime.
 func (h *ToolHandler) AddBeforeInterceptors(interceptors ...BeforeInterceptor) {
 	h.mu.Lock()

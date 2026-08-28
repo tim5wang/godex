@@ -211,3 +211,39 @@ func TestTemplateSkillsAccessorReturnsCopy(t *testing.T) {
 		t.Fatal("TemplateSkills must return a defensive copy")
 	}
 }
+
+func TestRestoreSessionStatePreservesTemplateToolSet(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "lean", Tools: []string{"edit_file", "bash"}})
+
+	state := a.ExportStateForSession("sess-restore")
+
+	// Reload path (the reported scenario): template applied again at load,
+	// then the persisted state restored. The tool-granularity active_tools
+	// snapshot must reproduce the exact preset — the legacy derived
+	// active_bundles marker would re-activate the whole core_code bundle.
+	b := newTestAgent(t, 4096)
+	b.RegisterTools()
+	b.ApplyTemplate(templates.AgentTemplate{ID: "lean", Tools: []string{"edit_file", "bash"}})
+	b.RestoreStateForSession("sess-restore", state)
+
+	if !b.toolHandler.IsActive("bash") || !b.toolHandler.IsActive("edit_file") {
+		t.Fatal("expected exact tool set preserved after restore")
+	}
+	if b.toolHandler.IsActive("memory") || b.toolHandler.IsActive("read_file") {
+		t.Fatal("expected restore to keep exact tool set (no bundle amplification)")
+	}
+
+	// Legacy states written before active_tools existed fall back to the
+	// legacy bundle-level restore.
+	legacy := state
+	legacy.ActiveTools = nil
+	legacy.ActiveBundles = []string{"core_code"}
+	c := newTestAgent(t, 4096)
+	c.RegisterTools()
+	c.RestoreStateForSession("sess-legacy", legacy)
+	if !c.toolHandler.IsActive("bash") || !c.toolHandler.IsActive("memory") {
+		t.Fatal("expected legacy bundle restore to keep working")
+	}
+}

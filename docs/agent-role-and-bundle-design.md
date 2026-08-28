@@ -192,10 +192,13 @@ AgentTemplate (YAML)
 - 后端：会话创建请求的 `mode` 字段升级为 `template`（兼容期：传 `mode=minimal` 自动映射到内置 `minimal` 模板）；
 - `ApplySessionMode` 泛化为 `ApplyTemplate(t ResolvedTemplate)`，保留 mode 常量作兼容别名。
 
-### 7.2 业务智能体（二期收敛，本期只留接口）
+### 7.2 业务智能体（M4 P1：template_id 收敛）
 
-- 本期：BizAPIKey 不动；管理台展示「可选模板」只读列表，管理员可参考模板配置 key 白名单；
-- 二期：BizAPIKey 增加 `template_id`，key 的白名单字段变为「模板 + 覆盖」两层；step 创建时走同一 Resolve 链；
+- 本期（M2 时）：BizAPIKey 不动；管理台展示「可选模板」只读列表，管理员可参考模板配置 key 白名单；
+- **M4 P1（已定）**：BizAPIKey 增加 `template_id`，key 的白名单字段变为「模板 + 覆盖」两层；step 创建时走同一 Resolve 链；
+  - **覆盖层语义（已定）**：可增可删可替换——覆盖字段相对模板能力集做字段级合并，支持 `!tool` 排除（与既有 `intersectStepTools` 的 `!x` 语义一致）；
+  - **存量迁移（已定）**：提供「从现有 key 一键生成模板」工具——读 key 白名单字段 → 生成同名模板（标记为 BizRefOnly 派生，只读）→ key 挂 template_id；
+  - **解析失败策略（已定）**：key 引用的模板不存在/被删时，**拒绝创建 step**（fail fast，暴露配置错误），不静默降级；
 - 收敛完成的判据：模板与 key 白名单字段不再出现同义双份维护。
 
 ### 7.3 任务看板 M3（基于本设计重规划）

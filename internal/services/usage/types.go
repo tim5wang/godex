@@ -112,6 +112,11 @@ type BizAPIKey struct {
 	Name             string        `json:"name"`
 	Description      string        `json:"description,omitempty"`
 	DefaultPrompt    string        `json:"default_prompt,omitempty"`
+	// TemplateID pins the agent template that defines this key's capability
+	// baseline (M4 P1 convergence). The key's own whitelist fields become an
+	// override layer on top of the template (add / remove / replace). Empty =
+	// legacy pure-whitelist mode (unchanged behavior).
+	TemplateID       string        `json:"template_id,omitempty"`
 	KeyHash          string        `json:"key_hash,omitempty"`
 	KeyPrefix        string        `json:"key_prefix"`
 	Enabled          bool          `json:"enabled"`
@@ -138,6 +143,7 @@ type BizKeyCreateRequest struct {
 	Name             string        `json:"name"`
 	Description      string        `json:"description,omitempty"`
 	DefaultPrompt    string        `json:"default_prompt,omitempty"`
+	TemplateID       string        `json:"template_id,omitempty"`
 	MCPServers       []string      `json:"mcp_servers"`
 	Providers        []ProviderRef `json:"providers"`
 	SandboxTools     []string      `json:"sandbox_tools"`
@@ -162,6 +168,7 @@ type BizKeyUpdateRequest struct {
 	Description      *string        `json:"description,omitempty"`
 	DefaultPrompt    *string        `json:"default_prompt,omitempty"`
 	Enabled          *bool          `json:"enabled,omitempty"`
+	TemplateID       *string        `json:"template_id,omitempty"`
 	MCPServers       *[]string      `json:"mcp_servers,omitempty"`
 	Providers        *[]ProviderRef `json:"providers,omitempty"`
 	SandboxTools     *[]string      `json:"sandbox_tools,omitempty"`

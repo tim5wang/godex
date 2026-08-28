@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/usage"
 )
 
@@ -43,8 +44,9 @@ func BizKeyFromContext(ctx context.Context) *usage.BizAPIKey {
 
 // registerBizRoutes registers the Agent Step Platform business-key admin API.
 // These endpoints are admin-only (web-token protected), mirroring the usage
-// key management surface in routes_usage.go.
-func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Handler, usageService *usage.Service) {
+// key management surface in routes_usage.go. The backend service is needed by
+// the M4 P1 migration endpoint (generates a template from a key's whitelist).
+func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Handler, usageService *usage.Service, service *backend.Service) {
 	if usageService == nil {
 		return
 	}
@@ -122,4 +124,37 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})))
+	mux.Handle("POST /v1/biz/keys/{id}/migrate-template", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// M4 P1 convergence: generate a template from the key's whitelist
+		// fields (single source of truth), then pin the key to it. The
+		// generated template is a normal user template so the admin can
+		// refine it afterwards; the key's whitelist fields become the
+		// override layer.
+		if service == nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("template service unavailable"))
+			return
+		}
+		key, err := usageService.GetBizKey(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if tid := strings.TrimSpace(key.TemplateID); tid != "" {
+			writeError(w, http.StatusConflict, fmt.Errorf("key already pinned to template %q", tid))
+			return
+		}
+		tpl := usage.TemplateFromBizKey(key)
+		if err := service.SaveAgentTemplate(tpl); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		tid := tpl.ID
+		updated, err := usageService.UpdateBizKey(key.ID, usage.BizKeyUpdateRequest{TemplateID: &tid})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"template": tpl, "key": updated})
+	})))
 }
+

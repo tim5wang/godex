@@ -253,6 +253,7 @@ func (s *Service) CreateBizKey(req BizKeyCreateRequest) (*BizKeyCreateResponse, 
 		Name:             strings.TrimSpace(req.Name),
 		Description:      req.Description,
 		DefaultPrompt:    req.DefaultPrompt,
+		TemplateID:       strings.TrimSpace(req.TemplateID),
 		KeyHash:          sha256Hex(secret),
 		KeyPrefix:        maskKey(secret),
 		Enabled:          true,
@@ -322,6 +323,9 @@ func (s *Service) UpdateBizKey(id string, req BizKeyUpdateRequest) (*BizAPIKey, 
 	}
 	if req.DefaultPrompt != nil {
 		key.DefaultPrompt = *req.DefaultPrompt
+	}
+	if req.TemplateID != nil {
+		key.TemplateID = strings.TrimSpace(*req.TemplateID)
 	}
 	if req.Enabled != nil {
 		key.Enabled = *req.Enabled

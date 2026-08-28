@@ -1021,6 +1021,67 @@ func (s *Service) SetActiveSessionTools(sessionID string, allowedServers []strin
 	return nil
 }
 
+// ApplyTemplateToSession applies an agent template to an already-open session
+// as the capability baseline (M4 P1 convergence). Used by the Agent Step
+// Platform when a business key pins a template_id: the template's tool set is
+// applied first, then the key's override layer and the request's narrowing
+// filters run on top. The session must already be open (OpenSession first).
+func (s *Service) ApplyTemplateToSession(sessionID, templateID string) error {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return err
+	}
+	session.mu.RLock()
+	agentRef := session.agent
+	session.mu.RUnlock()
+	if agentRef == nil {
+		return fmt.Errorf("session %s has no agent", sessionID)
+	}
+	t, _, err := s.templateManager().Resolve(templateID)
+	if err != nil {
+		return err
+	}
+	agentRef.ApplyTemplate(t)
+	return nil
+}
+
+// ApplySessionToolOverlay merges a business key's override layer onto the
+// session's active tool set (the template baseline). "!x" removes, plain
+// entries append, "*" activates everything of that category — see
+// agent.ApplyToolOverlay.
+func (s *Service) ApplySessionToolOverlay(sessionID string, allowedServers []string, allowedSandbox []string) error {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return err
+	}
+	session.mu.RLock()
+	agentRef := session.agent
+	session.mu.RUnlock()
+	if agentRef == nil {
+		return fmt.Errorf("session %s has no agent", sessionID)
+	}
+	agentRef.ApplyToolOverlay(allowedServers, allowedSandbox)
+	return nil
+}
+
+// ApplySessionStepNarrow narrows the session's active tool set (template
+// baseline + key overlay) to what the step request permits. The request can
+// only narrow — see agent.ApplyStepListNarrow.
+func (s *Service) ApplySessionStepNarrow(sessionID string, reqServers []string, reqSandbox []string) error {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return err
+	}
+	session.mu.RLock()
+	agentRef := session.agent
+	session.mu.RUnlock()
+	if agentRef == nil {
+		return fmt.Errorf("session %s has no agent", sessionID)
+	}
+	agentRef.ApplyStepListNarrow(reqServers, reqSandbox)
+	return nil
+}
+
 func (s *Service) runningState(sessionID string) bool {
 	s.mu.Lock()
 	session := s.sessions[sessionID]

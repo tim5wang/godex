@@ -37,10 +37,12 @@ import {
   createBizKey,
   deleteBizKey,
   getModels,
+  listAgentTemplates,
   listBizKeys,
   listMCPServers,
   listPackages,
   listSkillsCatalog,
+  migrateBizKeyTemplate,
   resetBizKey,
   revealBizKey,
   updateBizKey,
@@ -59,6 +61,7 @@ interface BizFormValues {
   name: string;
   description?: string;
   default_prompt?: string;
+  template_id?: string;
   mcp_servers?: string[];
   sandbox_tools?: string[];
   skills?: string[];
@@ -103,6 +106,19 @@ export function BusinessAgentsPage() {
     queryFn: () => listBizKeys(token),
   });
   const keys = useMemo(() => keysQuery.data ?? [], [keysQuery.data]);
+
+  const templatesQuery = useQuery({
+    queryKey: ["agent-templates", token],
+    enabled: canReach,
+    queryFn: () => listAgentTemplates(token),
+  });
+  const templateOptions = useMemo(
+    () =>
+      (templatesQuery.data ?? [])
+        .filter((tpl) => tpl.id?.trim())
+        .map((tpl) => ({ label: tpl.name || tpl.id, value: tpl.id })),
+    [templatesQuery.data],
+  );
 
   const skillsQuery = useQuery({
     queryKey: ["skills-catalog", token],
@@ -175,6 +191,7 @@ export function BusinessAgentsPage() {
         name: values.name,
         description: values.description ?? "",
         default_prompt: values.default_prompt ?? "",
+        template_id: values.template_id ?? "",
         mcp_servers: values.mcp_servers ?? [],
         providers: [] as ProviderRef[],
         sandbox_tools: values.sandbox_tools ?? [],
@@ -225,6 +242,7 @@ export function BusinessAgentsPage() {
       name: key.name,
       description: key.description ?? "",
       default_prompt: key.default_prompt ?? "",
+      template_id: key.template_id ?? "",
       mcp_servers: key.mcp_servers ?? [],
       sandbox_tools: key.sandbox_tools ?? [],
       skills: key.skills ?? [],
@@ -397,6 +415,9 @@ const result = await step.createStep({
           <Form.Item name="default_prompt" label={t("businessAgents.defaultPrompt")}>
             <Input.TextArea rows={3} placeholder={t("businessAgents.defaultPromptPlaceholder")} />
           </Form.Item>
+          <Form.Item name="template_id" label={t("businessAgents.templateId")} extra={t("businessAgents.templateExtra")}>
+            <Select allowClear showSearch optionFilterProp="label" loading={templatesQuery.isLoading} options={templateOptions} placeholder={t("businessAgents.templatePlaceholder")} />
+          </Form.Item>
           <Form.Item name="mcp_servers" label={t("businessAgents.mcpServers")} extra={t("businessAgents.mcpExtra")}>
             <Select mode="multiple" options={mcpServerOptions} placeholder={t("businessAgents.mcpPlaceholder")} allowClear showSearch optionFilterProp="label" loading={mcpServersQuery.isLoading} />
           </Form.Item>
@@ -556,6 +577,15 @@ function OverviewTab({ biz, onEdit, revealed, onRevealed }: { biz: BizKey; onEdi
     onError: (error: Error) => showError(antMessage, error, t("businessAgents.saveFailed")),
   });
 
+  const migrateMutation = useMutation({
+    mutationFn: () => migrateBizKeyTemplate(token, biz.id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["biz-keys", token] });
+      antMessage.success(t("businessAgents.migrateTemplateDone"));
+    },
+    onError: (error: Error) => showError(antMessage, error, t("businessAgents.migrateTemplateFailed")),
+  });
+
   return (
     <Card
       title={biz.name}
@@ -578,6 +608,18 @@ function OverviewTab({ biz, onEdit, revealed, onRevealed }: { biz: BizKey; onEdi
       <Paragraph>
         <Text strong>{t("businessAgents.keyPrefix")}: </Text>
         <Text code>{biz.key_prefix}</Text>
+      </Paragraph>
+      <Paragraph>
+        <Text strong>{t("businessAgents.templateId")}: </Text>
+        {biz.template_id ? (
+          <Tag color="geekblue">{biz.template_id}</Tag>
+        ) : (
+          <Popconfirm title={t("businessAgents.migrateTemplateConfirm")} onConfirm={() => migrateMutation.mutate()}>
+            <Button size="small" loading={migrateMutation.isPending}>
+              {t("businessAgents.migrateTemplate")}
+            </Button>
+          </Popconfirm>
+        )}
       </Paragraph>
       <Paragraph>
         <PinUnlock biz={biz} revealed={revealed} onRevealed={onRevealed} />

@@ -73,6 +73,7 @@ func (s *SQLiteStore) init() error {
 			name TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			default_prompt TEXT NOT NULL DEFAULT '',
+			template_id TEXT NOT NULL DEFAULT '',
 			key_hash TEXT NOT NULL,
 			key_prefix TEXT NOT NULL,
 			enabled INTEGER NOT NULL,
@@ -165,6 +166,7 @@ func (s *SQLiteStore) migrateBizKeyColumns() error {
 	adds := []string{
 		"description TEXT NOT NULL DEFAULT ''",
 		"default_prompt TEXT NOT NULL DEFAULT ''",
+		"template_id TEXT NOT NULL DEFAULT ''",
 		"skills TEXT NOT NULL DEFAULT ''",
 		"packages TEXT NOT NULL DEFAULT ''",
 		"project_dir TEXT NOT NULL DEFAULT ''",
@@ -311,7 +313,7 @@ func (s *SQLiteStore) UpdateModel(model *ProxyModel) error {
 // ---- biz keys ----
 
 func (s *SQLiteStore) ListBizKeys() ([]BizAPIKey, error) {
-	rows, err := s.db.Query(`SELECT id, name, description, default_prompt, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys ORDER BY created_at`)
+	rows, err := s.db.Query(`SELECT id, name, description, default_prompt, template_id, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +323,7 @@ func (s *SQLiteStore) ListBizKeys() ([]BizAPIKey, error) {
 		var key BizAPIKey
 		var enabled int
 		var mcpServers, providers, sandboxTools, skills, packages, models, created, updated string
-		if err := rows.Scan(&key.ID, &key.Name, &key.Description, &key.DefaultPrompt, &key.KeyPrefix, &enabled,
+		if err := rows.Scan(&key.ID, &key.Name, &key.Description, &key.DefaultPrompt, &key.TemplateID, &key.KeyPrefix, &enabled,
 			&mcpServers, &providers, &sandboxTools, &skills, &packages, &models,
 			&key.ProjectDir, &key.BudgetCredits, &key.WarningThreshold, &created, &updated); err != nil {
 			return nil, err
@@ -349,21 +351,21 @@ func (s *SQLiteStore) GetBizKeyByHash(hash string) (*BizAPIKey, error) {
 }
 
 func (s *SQLiteStore) getBizKey(where string, arg string) (*BizAPIKey, error) {
-	row := s.db.QueryRow(`SELECT id, name, description, default_prompt, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, secret_encrypted, pin_hash, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys WHERE `+where, arg)
+	row := s.db.QueryRow(`SELECT id, name, description, default_prompt, template_id, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, secret_encrypted, pin_hash, budget_credits, warning_threshold, created_at, updated_at FROM biz_keys WHERE `+where, arg)
 	return scanBizKeyRow(row)
 }
 
 func (s *SQLiteStore) CreateBizKey(key *BizAPIKey) error {
-	_, err := s.db.Exec(`INSERT INTO biz_keys (id, name, description, default_prompt, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, secret_encrypted, pin_hash, budget_credits, warning_threshold, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		key.ID, key.Name, key.Description, key.DefaultPrompt, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
+	_, err := s.db.Exec(`INSERT INTO biz_keys (id, name, description, default_prompt, template_id, key_hash, key_prefix, enabled, mcp_servers, providers, sandbox_tools, skills, packages, models, project_dir, secret_encrypted, pin_hash, budget_credits, warning_threshold, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key.ID, key.Name, key.Description, key.DefaultPrompt, key.TemplateID, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
 		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Skills), encodeStringSlice(key.Packages), encodeStringSlice(key.Models),
 		key.ProjectDir, key.SecretEncrypted, key.PinHash, key.BudgetCredits, key.WarningThreshold, formatTime(key.CreatedAt), formatTime(key.UpdatedAt))
 	return err
 }
 
 func (s *SQLiteStore) UpdateBizKey(key *BizAPIKey) error {
-	result, err := s.db.Exec(`UPDATE biz_keys SET name = ?, description = ?, default_prompt = ?, key_hash = ?, key_prefix = ?, enabled = ?, mcp_servers = ?, providers = ?, sandbox_tools = ?, skills = ?, packages = ?, models = ?, project_dir = ?, secret_encrypted = ?, pin_hash = ?, budget_credits = ?, warning_threshold = ?, updated_at = ? WHERE id = ?`,
-		key.Name, key.Description, key.DefaultPrompt, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
+	result, err := s.db.Exec(`UPDATE biz_keys SET name = ?, description = ?, default_prompt = ?, template_id = ?, key_hash = ?, key_prefix = ?, enabled = ?, mcp_servers = ?, providers = ?, sandbox_tools = ?, skills = ?, packages = ?, models = ?, project_dir = ?, secret_encrypted = ?, pin_hash = ?, budget_credits = ?, warning_threshold = ?, updated_at = ? WHERE id = ?`,
+		key.Name, key.Description, key.DefaultPrompt, key.TemplateID, key.KeyHash, key.KeyPrefix, boolInt(key.Enabled),
 		encodeStringSlice(key.MCPServers), encodeProviderRefs(key.Providers), encodeStringSlice(key.SandboxTools), encodeStringSlice(key.Skills), encodeStringSlice(key.Packages), encodeStringSlice(key.Models),
 		key.ProjectDir, key.SecretEncrypted, key.PinHash, key.BudgetCredits, key.WarningThreshold, formatTime(key.UpdatedAt), key.ID)
 	return resultError(result, err, "biz key not found: "+key.ID)
@@ -405,7 +407,7 @@ func scanBizKeyRow(scanner interface{ Scan(dest ...any) error }) (*BizAPIKey, er
 	var key BizAPIKey
 	var enabled int
 	var mcpServers, providers, sandboxTools, skills, packages, models, created, updated string
-	err := scanner.Scan(&key.ID, &key.Name, &key.Description, &key.DefaultPrompt, &key.KeyHash, &key.KeyPrefix, &enabled,
+	err := scanner.Scan(&key.ID, &key.Name, &key.Description, &key.DefaultPrompt, &key.TemplateID, &key.KeyHash, &key.KeyPrefix, &enabled,
 		&mcpServers, &providers, &sandboxTools, &skills, &packages, &models,
 		&key.ProjectDir, &key.SecretEncrypted, &key.PinHash,
 		&key.BudgetCredits, &key.WarningThreshold, &created, &updated)

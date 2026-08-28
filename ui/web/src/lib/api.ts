@@ -1578,6 +1578,7 @@ export function createBizKey(
     name: string;
     description?: string;
     default_prompt?: string;
+    template_id?: string;
     mcp_servers?: string[];
     providers?: ProviderRef[];
     sandbox_tools?: string[];
@@ -1607,6 +1608,7 @@ export function updateBizKey(
     description?: string;
     default_prompt?: string;
     enabled?: boolean;
+    template_id?: string;
     mcp_servers?: string[];
     providers?: ProviderRef[];
     sandbox_tools?: string[];
@@ -1643,6 +1645,14 @@ export function revealBizKey(token: string | null, id: string, pin: string) {
       method: "POST",
       body: JSON.stringify({ pin }),
     },
+    token,
+  );
+}
+
+export function migrateBizKeyTemplate(token: string | null, id: string) {
+  return request<{ template: AgentTemplate; key: BizKey }>(
+    `/v1/biz/keys/${encodeURIComponent(id)}/migrate-template`,
+    { method: "POST" },
     token,
   );
 }

@@ -144,14 +144,39 @@ func handleAgentStep(w http.ResponseWriter, r *http.Request, service *backend.Se
 		return
 	}
 
-	// Activate the per-step tool set: the business key's binding (MCP server
-	// allowlist + sandbox tools) intersected with the request's tool filters.
-	// Minimal permission: the key scope wins, the request can only narrow it.
+	// Capability assembly (M4 P1 convergence). Two modes:
+	//
+	//   template-pinned key (TemplateID set): template baseline (single
+	//   source of truth) -> key override layer (add/remove/replace) -> request
+	//   narrowing (can only remove). A missing template is a configuration
+	//   error and fails the step fast.
+	//
+	//   legacy key (no TemplateID): pure whitelist narrowing, unchanged.
 	if key := BizKeyFromContext(ctx); key != nil {
-		allowedServers, allowedSandbox := resolveStepTools(key, req.Tools)
-		if err := service.SetActiveSessionTools(sessionID, allowedServers, allowedSandbox); err != nil {
-			writeStepError(w, statusForSessionError(err), "session_error", err, stepID, sessionID)
-			return
+		if tplID := strings.TrimSpace(key.TemplateID); tplID != "" {
+			if err := service.ApplyTemplateToSession(sessionID, tplID); err != nil {
+				writeStepError(w, http.StatusUnprocessableEntity, "template_error",
+					fmt.Errorf("business key template %q unavailable: %w", tplID, err), stepID, sessionID)
+				return
+			}
+			if err := service.ApplySessionToolOverlay(sessionID, key.MCPServers, key.SandboxTools); err != nil {
+				writeStepError(w, statusForSessionError(err), "session_error", err, stepID, sessionID)
+				return
+			}
+			if req.Tools != nil {
+				if err := service.ApplySessionStepNarrow(sessionID, req.Tools.MCP, req.Tools.Sandbox); err != nil {
+					writeStepError(w, statusForSessionError(err), "session_error", err, stepID, sessionID)
+					return
+				}
+			}
+		} else {
+			// Legacy: the key whitelist is the only allowed set; the request
+			// can only narrow it further (minimal permission).
+			allowedServers, allowedSandbox := resolveStepTools(key, req.Tools)
+			if err := service.SetActiveSessionTools(sessionID, allowedServers, allowedSandbox); err != nil {
+				writeStepError(w, statusForSessionError(err), "session_error", err, stepID, sessionID)
+				return
+			}
 		}
 	}
 

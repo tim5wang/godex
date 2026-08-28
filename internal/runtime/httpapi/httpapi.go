@@ -1919,7 +1919,7 @@ func NewHandlerWithRuntime(
 		serveSessionEventStream(w, r, service, r.PathValue("id"))
 	})))
 	registerUsageRoutes(mux, protected, usageService, manager)
-	registerBizRoutes(mux, protected, usageService)
+	registerBizRoutes(mux, protected, usageService, service)
 	registerStepRoutes(mux, usageService, service)
 	registerStepTrackRoutes(mux, usageService, service)
 	registerMCPRoutes(mux, protected, service.MCPManager())

@@ -1644,6 +1644,7 @@ export interface BizKey {
   name: string;
   description?: string;
   default_prompt?: string;
+  template_id?: string;
   key_hash?: string;
   key_prefix: string;
   enabled: boolean;

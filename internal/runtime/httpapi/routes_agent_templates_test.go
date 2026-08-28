@@ -97,6 +97,42 @@ func TestAgentTemplatesListAndGet(t *testing.T) {
 	}
 }
 
+func TestAgentTemplatesOptions(t *testing.T) {
+	server := newAgentTemplatesTestServer(t)
+
+	resp, raw := doAgentTemplateJSON(t, http.MethodGet, server.URL+"/agent-templates/options", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("options status = %d", resp.StatusCode)
+	}
+	var options struct {
+		Bundles []struct {
+			Name  string   `json:"name"`
+			Tools []string `json:"tools"`
+		} `json:"bundles"`
+		Tools []string `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &options); err != nil {
+		t.Fatalf("decode options: %v", err)
+	}
+	bundles := map[string]bool{}
+	for _, b := range options.Bundles {
+		bundles[b.Name] = true
+	}
+	if !bundles["core_code"] {
+		// The catalog is config-driven (e.g. web/browser bundles only register
+		// when the corresponding tools are enabled), so assert the always-on
+		// core bundle instead of a fixed bundle set.
+		t.Fatalf("expected core_code bundle, got %v", bundles)
+	}
+	toolSet := map[string]bool{}
+	for _, name := range options.Tools {
+		toolSet[name] = true
+	}
+	if !toolSet["bash"] || !toolSet["read_file"] {
+		t.Fatalf("expected bash and read_file in tools, got %d tools", len(options.Tools))
+	}
+}
+
 func TestAgentTemplatesCRUDRoundtrip(t *testing.T) {
 	server := newAgentTemplatesTestServer(t)
 

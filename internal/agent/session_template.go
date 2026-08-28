@@ -106,3 +106,13 @@ func (a *Agent) promptTrimHeavySections() bool {
 	defer a.mu.Unlock()
 	return a.sessionMode == SessionModeMinimal || a.templateTrimHeavy
 }
+
+// RegisterBaseToolsForCatalog registers the built-in tools into a throwaway
+// handler (no package runtime activation, no session state) and returns the
+// resulting catalog. It backs the template-form options endpoint so
+// bundle/tool references can be picked from the live registration instead
+// of typed free-form.
+func (a *Agent) RegisterBaseToolsForCatalog() tools.ToolCatalog {
+	a.registerToolsWith(a.toolHandler)
+	return a.toolHandler.Catalog()
+}

@@ -25,7 +25,11 @@ import { useSettingsStore } from "../../store/settings";
 import {
   createAgentTemplate,
   deleteAgentTemplate,
+  getAgentTemplateOptions,
   listAgentTemplates,
+  listMCPServers,
+  listPackages,
+  listSkillsCatalog,
   updateAgentTemplate,
   type AgentTemplate,
 } from "../../lib/api";
@@ -41,12 +45,49 @@ type TemplateFormValues = {
   tools?: string[];
   skills?: string[];
   mcp_servers?: string[];
+  packages?: string[];
   persona?: string;
   base_prompt?: string;
   profile?: string;
   write_enabled?: boolean;
   trim_heavy_sections?: boolean;
 };
+
+const TEMPLATE_HISTORY_PREFIX = "agent-template-history:";
+
+/** Locally remembered free-form values per field so past entries reappear as
+ *  suggestions even when the backend has no authoritative list for them. */
+function useLocalOptionHistory(key: string) {
+  const [history, setHistory] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(TEMPLATE_HISTORY_PREFIX + key);
+      const parsed = raw ? (JSON.parse(raw) as string[]) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const remember = (values: string[]) => {
+    const fresh = values.filter(Boolean);
+    if (fresh.length === 0) return;
+    setHistory((prev) => {
+      const next = Array.from(new Set([...fresh, ...prev])).slice(0, 30);
+      try {
+        localStorage.setItem(TEMPLATE_HISTORY_PREFIX + key, JSON.stringify(next));
+      } catch {
+        // Ignore storage failures (private mode, quota).
+      }
+      return next;
+    });
+  };
+  return [history, remember] as const;
+}
+
+/** Backend-sourced options first, then locally remembered custom entries. */
+function mergeOptions(options: { value: string; label: string }[], history: string[]) {
+  const known = new Set(options.map((o) => o.value));
+  return [...history.filter((v) => !known.has(v)).map((v) => ({ value: v, label: v })), ...options];
+}
 
 function TemplateAvatar({ tpl, size }: { tpl: AgentTemplate; size: number }) {
   const avatar = tpl.avatar?.trim() ?? "";
@@ -143,6 +184,50 @@ export function AgentTemplatesPage() {
     queryFn: () => listAgentTemplates(token || null),
   });
 
+  // Authoritative choice lists for the form pickers: bundles/tools come from
+  // the live tool registration, skills/MCP/packages from their own endpoints.
+  const optionsQuery = useQuery({
+    queryKey: ["agent-template-options", token],
+    queryFn: () => getAgentTemplateOptions(token || null),
+  });
+  const skillsQuery = useQuery({
+    queryKey: ["skills-catalog", token],
+    queryFn: () => listSkillsCatalog(token || null),
+  });
+  const mcpQuery = useQuery({
+    queryKey: ["mcp-servers", token],
+    queryFn: () => listMCPServers(token || null),
+  });
+  const packagesQuery = useQuery({
+    queryKey: ["packages", token],
+    queryFn: () => listPackages(token || null),
+  });
+
+  const [bundleHistory, rememberBundles] = useLocalOptionHistory("bundles");
+  const [toolHistory, rememberTools] = useLocalOptionHistory("tools");
+  const [skillHistory, rememberSkills] = useLocalOptionHistory("skills");
+  const [mcpHistory, rememberMCPServers] = useLocalOptionHistory("mcp");
+  const [packageHistory, rememberPackages] = useLocalOptionHistory("packages");
+  const [scenarioHistory, rememberScenarios] = useLocalOptionHistory("scenarios");
+
+  const bundleOptions = useMemo(
+    () => (optionsQuery.data?.bundles ?? []).map((b) => ({ value: b.name, label: b.summary ? `${b.name} — ${b.summary}` : b.name })),
+    [optionsQuery.data],
+  );
+  const toolOptions = useMemo(() => (optionsQuery.data?.tools ?? []).map((n) => ({ value: n, label: n })), [optionsQuery.data]);
+  const skillOptions = useMemo(
+    () => (skillsQuery.data ?? []).filter((s) => s.name?.trim()).map((s) => ({ value: s.name, label: s.name })),
+    [skillsQuery.data],
+  );
+  const mcpOptions = useMemo(
+    () => (mcpQuery.data?.servers ?? []).filter((s) => s.name?.trim()).map((s) => ({ value: s.name, label: s.name })),
+    [mcpQuery.data],
+  );
+  const packageOptions = useMemo(
+    () => (packagesQuery.data ?? []).filter((p) => p.name?.trim()).map((p) => ({ value: p.name, label: p.name })),
+    [packagesQuery.data],
+  );
+
   const saveMutation = useMutation({
     mutationFn: async (values: TemplateFormValues) => {
       const payload: Partial<AgentTemplate> = {
@@ -155,6 +240,7 @@ export function AgentTemplatesPage() {
         tools: values.tools,
         skills: values.skills,
         mcp_servers: values.mcp_servers,
+        packages: values.packages,
         persona: values.persona,
         base_prompt: values.base_prompt,
         profile: values.profile,
@@ -166,7 +252,20 @@ export function AgentTemplatesPage() {
       }
       return createAgentTemplate(token || null, { id: values.id, ...payload });
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      // Remember custom entries (values outside the authoritative lists) so
+      // they reappear as suggestions next time.
+      const knownBundles = new Set((optionsQuery.data?.bundles ?? []).map((b) => b.name));
+      rememberBundles((variables.bundles ?? []).filter((v) => !knownBundles.has(v)));
+      const knownTools = new Set(optionsQuery.data?.tools ?? []);
+      rememberTools((variables.tools ?? []).filter((v) => !knownTools.has(v)));
+      const knownSkills = new Set((skillsQuery.data ?? []).map((s) => s.name));
+      rememberSkills((variables.skills ?? []).filter((v) => !knownSkills.has(v)));
+      const knownMCP = new Set((mcpQuery.data?.servers ?? []).map((s) => s.name));
+      rememberMCPServers((variables.mcp_servers ?? []).filter((v) => !knownMCP.has(v)));
+      const knownPackages = new Set((packagesQuery.data ?? []).map((p) => p.name));
+      rememberPackages((variables.packages ?? []).filter((v) => !knownPackages.has(v)));
+      rememberScenarios(variables.scenarios ?? []);
       setEditorOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["agent-templates", token] });
     },
@@ -207,6 +306,7 @@ export function AgentTemplatesPage() {
       tools: tpl.tools,
       skills: tpl.skills,
       mcp_servers: tpl.mcp_servers,
+      packages: tpl.packages,
       persona: tpl.persona,
       base_prompt: tpl.base_prompt,
       profile: tpl.profile,
@@ -315,19 +415,63 @@ export function AgentTemplatesPage() {
             </Form.Item>
           </Space>
           <Form.Item name="scenarios" label={t("agentTemplates.fieldScenarios")}>
-            <Select mode="tags" open={false} tokenSeparators={[","]} />
+            <Select
+              mode="tags"
+              tokenSeparators={[","]}
+              allowClear
+              placeholder="assistant, coding"
+              options={mergeOptions([], scenarioHistory)}
+            />
           </Form.Item>
           <Form.Item name="bundles" label={t("agentTemplates.fieldBundles")}>
-            <Select mode="tags" open={false} tokenSeparators={[","]} placeholder="core_code, lsp, web" />
+            <Select
+              mode="tags"
+              tokenSeparators={[","]}
+              allowClear
+              loading={optionsQuery.isLoading}
+              placeholder="core_code, lsp, web"
+              options={mergeOptions(bundleOptions, bundleHistory)}
+            />
           </Form.Item>
           <Form.Item name="tools" label={t("agentTemplates.fieldTools")}>
-            <Select mode="tags" open={false} tokenSeparators={[","]} />
+            <Select
+              mode="tags"
+              tokenSeparators={[","]}
+              allowClear
+              showSearch
+              loading={optionsQuery.isLoading}
+              options={mergeOptions(toolOptions, toolHistory)}
+            />
           </Form.Item>
           <Form.Item name="skills" label={t("agentTemplates.fieldSkills")}>
-            <Select mode="tags" open={false} tokenSeparators={[","]} />
+            <Select
+              mode="tags"
+              tokenSeparators={[","]}
+              allowClear
+              showSearch
+              loading={skillsQuery.isLoading}
+              options={mergeOptions(skillOptions, skillHistory)}
+            />
           </Form.Item>
           <Form.Item name="mcp_servers" label={t("agentTemplates.fieldMCPServers")}>
-            <Select mode="tags" open={false} tokenSeparators={[","]} />
+            <Select
+              mode="tags"
+              tokenSeparators={[","]}
+              allowClear
+              showSearch
+              loading={mcpQuery.isLoading}
+              options={mergeOptions(mcpOptions, mcpHistory)}
+            />
+          </Form.Item>
+          <Form.Item name="packages" label={t("agentTemplates.fieldPackages")}>
+            <Select
+              mode="tags"
+              tokenSeparators={[","]}
+              allowClear
+              showSearch
+              loading={packagesQuery.isLoading}
+              options={mergeOptions(packageOptions, packageHistory)}
+            />
           </Form.Item>
           <Form.Item name="persona" label={t("agentTemplates.fieldPersona")}>
             <Input.TextArea rows={4} />

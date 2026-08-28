@@ -1025,6 +1025,21 @@ export function validateAgentTemplate(token: string | null, id: string) {
   return request<{ template: AgentTemplate; warnings: string[] }>(`/agent-templates/${encodeURIComponent(id)}/validate`, { method: "POST" }, token);
 }
 
+export interface ToolBundleOption {
+  name: string;
+  summary?: string;
+  tools?: string[];
+}
+
+export interface TemplateFormOptions {
+  bundles: ToolBundleOption[];
+  tools: string[];
+}
+
+export function getAgentTemplateOptions(token: string | null) {
+  return request<TemplateFormOptions>("/agent-templates/options", { method: "GET" }, token);
+}
+
 export function listSessionSkillSources(
   token: string | null,
   sessionId: string,

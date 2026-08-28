@@ -1563,6 +1563,9 @@ func NewHandlerWithRuntime(
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
+	mux.Handle("GET /agent-templates/options", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, service.AgentTemplateFormOptions())
+	})))
 	mux.Handle("GET /agent-templates/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		item, err := service.GetAgentTemplate(r.PathValue("id"))
 		if err != nil {

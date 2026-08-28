@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/core/templates"
 )
 
@@ -38,4 +39,40 @@ func (s *Service) DeleteAgentTemplate(id string) error {
 // anything.
 func (s *Service) ValidateAgentTemplate(id string) (templates.AgentTemplate, []string, error) {
 	return s.templateManager().Resolve(id)
+}
+
+// ToolBundleOption is one registered bundle with its tool names, for the
+// template editor's bundle/tool pickers.
+type ToolBundleOption struct {
+	Name    string   `json:"name"`
+	Summary string   `json:"summary,omitempty"`
+	Tools   []string `json:"tools,omitempty"`
+}
+
+// TemplateFormOptions is the authoritative choice list for the template
+// editor form. Bundles/tools come from a throwaway agent's base tool
+// registration (live source of truth); skills, MCP servers and packages
+// come from their own list endpoints on the frontend.
+type TemplateFormOptions struct {
+	Bundles []ToolBundleOption `json:"bundles"`
+	Tools   []string           `json:"tools"`
+}
+
+// AgentTemplateFormOptions builds the bundle/tool choice lists without
+// touching session state or activating package runtimes.
+func (s *Service) AgentTemplateFormOptions() *TemplateFormOptions {
+	probe := agent.NewForSession(s.cfg, s.shared, "")
+	cat := probe.RegisterBaseToolsForCatalog()
+	out := &TemplateFormOptions{Bundles: []ToolBundleOption{}, Tools: []string{}}
+	seen := map[string]bool{}
+	for _, b := range cat.Bundles {
+		out.Bundles = append(out.Bundles, ToolBundleOption{Name: b.Name, Summary: b.Summary, Tools: b.Tools})
+		for _, name := range b.Tools {
+			if !seen[name] {
+				seen[name] = true
+				out.Tools = append(out.Tools, name)
+			}
+		}
+	}
+	return out
 }

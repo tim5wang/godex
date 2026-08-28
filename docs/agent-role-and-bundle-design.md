@@ -213,6 +213,28 @@ AgentTemplate (YAML)
 | 规划-执行分离习惯 | 典型用法：规划类卡片用 `planner` 模板（禁写），实现类卡片用 `coder` 模板（写 scope 限定在卡片涉及路径），复核类卡片用 `reviewer` 模板（禁写）——把诉求 ② 的场景习惯落到看板工作流 |
 | 原 M3 候选项去向 | SSE 变更流 / execution_report 归 M4；模板/导入导出由本设计承接 |
 
+### 7.4 看板 PJM（编排者，M5）
+
+把看板从「人驱动执行」升级为「PJM 编排 + 异步批量执行」。PJM = 项目/产品经理 agent，
+是**卡片质量的负责人 + 分派触发器**，不是执行者（执行仍走 M3 的独立执行会话）。
+
+| 项 | 设计 |
+|---|---|
+| 职责 | 根据用户意图创建/完善任务卡（update/comment_add 补 prompt/checklist/template_id）、评审待办、把卡片分派给最合适的执行会话；保持会话轻量（对话历史 = 编排决策记录，可观测） |
+| 会话 | `channel=pjm`、`key=pjm`（全局一个，复用对话历史 = 编排记忆；多项目可 `pjm-<projectID>`）；用内置 `pjm` 模板（bundles: taskboard + planning，写工具按需开） |
+| 分派 | taskboard 工具新增 `action=dispatch`（+ card_id + 可选 session_id 复用指定执行会话），内部走 `TaskboardExecutor.Execute`（M3 逻辑：按 card.TemplateID 起/复用 `card-<id>` 会话）；PJM 在对话里用工具分派，无需 HTTP 端点 |
+| 会话复用 | M3 已按 `card-<id>` 固定 key → 同卡天然复用；跨卡复用历史会话用 `session_id` 显式指定（从 `card.Executions` 历史取） |
+| 自动化 | 用既有 cron 机制（工具 AlwaysActive）：定时 job 向 pjm 会话投递「检查看板待办并分派」指令；配置项 = 自动化开关（enable）+ 定时表达式（默认每天 03:00 低峰跑，早上 review）+ 手动触发；PJM 用 taskboard 工具 list（backlog/todo）→ 完善 → dispatch |
+| UI | **复用现有 Chat UI**（不引入业务智能体 agent-step 接入——那是给外部业务系统的 HTTP/SDK 形态，PJM 需要完整 agent 能力：taskboard 工具/写工具/记忆/cron）；看板页加「与 PJM 对话」按钮 → `buildChatRoute({channel:"pjm", key:"pjm"})` 跳入 ChatPage；PJM 会话自动出现在 SessionsRail |
+
+分期：
+
+| 期 | 内容 |
+|---|---|
+| **P1** | `pjm` 内置模板 + 看板页「与 PJM 对话」入口（复用 Chat UI） |
+| **P2** | taskboard 工具加 `dispatch` action（Executor 注入 agent 侧，工具触发执行） |
+| **P3** | cron 定时唤醒（自动化开关 + 定时表达式 + 手动触发） |
+
 ---
 
 ## 八、API 与 Web UI

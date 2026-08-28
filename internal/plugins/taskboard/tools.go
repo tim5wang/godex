@@ -72,6 +72,7 @@ const (
 	actionCommentAdd = "comment_add"
 	actionDelete     = "delete"
 	actionChecklist  = "checklist"
+	actionDispatch   = "dispatch"
 )
 
 // NewTaskboardTool builds the single taskboard agent tool. All board
@@ -80,15 +81,27 @@ const (
 // compact. Protocol gates live in the ledger (done human-only, held cards
 // unstealable, no delete during execution).
 func NewTaskboardTool(ledger toolLedger) tools.Tool {
-	return tools.NewTypedTool(tools.NewToolSpec("taskboard", "Cross-session project task board. Actions: list (query board), get (read one card in full — read comments before acting), create, update, move (backlog→todo→in_progress→in_review; done is human-only), comment_add, delete (soft; refused while an execution is running), checklist (add / check with evidence / uncheck).", map[string]any{
+	return newTaskboardTool(ledger, nil)
+}
+
+// NewTaskboardToolWithExecutor is NewTaskboardTool plus the card executor for
+// the dispatch action (M5 PJM): dispatch starts (or reuses) the card's
+// execution session. executor may be nil in tool-only tests; dispatch then
+// returns a clear "unavailable" error.
+func NewTaskboardToolWithExecutor(ledger toolLedger, executor Executor) tools.Tool {
+	return newTaskboardTool(ledger, executor)
+}
+
+func newTaskboardTool(ledger toolLedger, executor Executor) tools.Tool {
+	return tools.NewTypedTool(tools.NewToolSpec("taskboard", "Cross-session project task board. Actions: list (query board), get (read one card in full — read comments before acting), create, update, move (backlog→todo→in_progress→in_review; done is human-only), comment_add, delete (soft; refused while an execution is running), checklist (add / check with evidence / uncheck), dispatch (start or reuse the card's execution session).", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"description": "list|get|create|update|move|comment_add|delete|checklist",
-				"enum":        []string{actionList, actionGet, actionCreate, actionUpdate, actionMove, actionCommentAdd, actionDelete, actionChecklist},
+				"description": "list|get|create|update|move|comment_add|delete|checklist|dispatch",
+				"enum":        []string{actionList, actionGet, actionCreate, actionUpdate, actionMove, actionCommentAdd, actionDelete, actionChecklist, actionDispatch},
 			},
-			"card_id":      map[string]string{"type": "string", "description": "Card id (get/update/move/comment_add/delete/checklist)"},
+			"card_id":      map[string]string{"type": "string", "description": "Card id (get/update/move/comment_add/delete/checklist/dispatch)"},
 			"version":      map[string]any{"type": "integer", "description": "Optimistic-concurrency version from your last read (all writes)"},
 			"project_id":   map[string]string{"type": "string", "description": "Project filter (list) or target project (create; defaults to the built-in project)"},
 			"status":       map[string]string{"type": "string", "description": "Status filter (list): backlog|todo|in_progress|in_review|done"},
@@ -107,7 +120,7 @@ func NewTaskboardTool(ledger toolLedger) tools.Tool {
 		},
 		"required": []string{"action"},
 	}, nil), func(ctx context.Context, args taskboardArgs) (tools.ToolResult, error) {
-		return dispatchTaskboard(ctx, ledger, args)
+		return dispatchTaskboard(ctx, ledger, executor, args)
 	})
 }
 
@@ -150,7 +163,8 @@ func requireCardID(args taskboardArgs) (string, error) {
 }
 
 // dispatchTaskboard routes one action to the corresponding ledger call.
-func dispatchTaskboard(ctx context.Context, ledger toolLedger, args taskboardArgs) (tools.ToolResult, error) {
+// executor is optional; only the dispatch action requires it.
+func dispatchTaskboard(ctx context.Context, ledger toolLedger, executor Executor, args taskboardArgs) (tools.ToolResult, error) {
 	actor := actorName(ctx)
 	switch strings.TrimSpace(args.Action) {
 	case actionList:
@@ -297,6 +311,24 @@ func dispatchTaskboard(ctx context.Context, ledger toolLedger, args taskboardArg
 		}
 		done, total := card.ChecklistProgress()
 		return tools.ToolResult{Structured: map[string]any{"card": compact(card), "version": card.Version, "checklist_done": done, "checklist_total": total}}, nil
+
+	case actionDispatch:
+		id, err := requireCardID(args)
+		if err != nil {
+			return tools.ToolResult{}, err
+		}
+		if executor == nil {
+			return tools.ToolResult{}, fmt.Errorf("taskboard: dispatch unavailable (no executor configured)")
+		}
+		card, err := ledger.GetCard(id)
+		if err != nil {
+			return tools.ToolResult{}, err
+		}
+		executionID, sessionID, err := executor.Execute(ctx, card)
+		if err != nil {
+			return tools.ToolResult{}, err
+		}
+		return tools.ToolResult{Structured: map[string]any{"execution_id": executionID, "session_id": sessionID}}, nil
 
 	default:
 		return tools.ToolResult{}, fmt.Errorf("taskboard: unknown action %q", args.Action)

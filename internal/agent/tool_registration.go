@@ -324,9 +324,9 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		DefaultActive: true,
 	})
 	if a.taskboard != nil {
-		a.registerToolTo(handler, taskboard.NewTaskboardTool(a.taskboard), tools.ToolMeta{
+		a.registerToolTo(handler, taskboard.NewTaskboardToolWithExecutor(a.taskboard, a.taskboardExec), tools.ToolMeta{
 			Bundle:        bundleTaskBoard,
-			Summary:       "cross-session project task board (claim/execute/accept cards)",
+			Summary:       "cross-session project task board (claim/execute/accept cards, dispatch to execution sessions)",
 			DefaultActive: true,
 		})
 	}

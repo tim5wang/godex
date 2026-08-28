@@ -38,6 +38,7 @@ type Agent struct {
 	toolHandler    *tools.ToolHandler
 	todoMgr        *todo.Manager
 	taskboard      *taskboard.Ledger
+	taskboardExec  taskboard.Executor
 	skillLoader    *skill.Loader
 	instrLoader    *instructions.Loader
 	memoryMgr      *memory.Manager
@@ -187,6 +188,7 @@ type dependencies struct {
 	workflows      *workflowStore
 	todoMgr        *todo.Manager
 	taskboard      *taskboard.Ledger
+	taskboardExec  taskboard.Executor
 	sandbox        sandbox.Sandbox
 	// pluginMgr, when non-nil, feeds plugin-contributed prompt sections into
 	// the runtime prompt (P4 prompt/context contributor). Optional: nil keeps

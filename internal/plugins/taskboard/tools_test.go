@@ -143,3 +143,45 @@ func TestTaskboardToolEndToEnd(t *testing.T) {
 		t.Fatalf("expected unknown action to fail")
 	}
 }
+
+func TestTaskboardToolDispatch(t *testing.T) {
+	ledger := openTestLedger(t)
+	exec := &fakeExecutor{ledger: ledger}
+	runner, ok := NewTaskboardToolWithExecutor(ledger, exec).(toolRunner)
+	if !ok {
+		t.Fatalf("tool does not implement Execute")
+	}
+
+	card, err := ledger.CreateCard(CreateCardInput{ProjectID: ledger.ListProjects()[0].ID, Title: "dispatch me"})
+	if err != nil {
+		t.Fatalf("create card: %v", err)
+	}
+
+	// dispatch without a configured executor is a clear error
+	bare, ok := NewTaskboardTool(openTestLedger(t)).(toolRunner)
+	if !ok {
+		t.Fatalf("bare tool does not implement Execute")
+	}
+	if _, err := bare.Execute(context.Background(), map[string]interface{}{"action": "dispatch", "card_id": card.ID}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("expected unavailable error without executor, got %v", err)
+	}
+
+	// dispatch with executor returns execution/session ids and records the run
+	res := mustExec(t, runner, map[string]interface{}{"action": "dispatch", "card_id": card.ID})
+	if res["execution_id"] != "ex-"+card.ID {
+		t.Fatalf("unexpected execution_id %v", res["execution_id"])
+	}
+	if res["session_id"] != "session-fake" {
+		t.Fatalf("unexpected session_id %v", res["session_id"])
+	}
+	if exec.lastID != card.ID {
+		t.Fatalf("expected executor to run card %q, got %q", card.ID, exec.lastID)
+	}
+	got, err := ledger.GetCard(card.ID)
+	if err != nil {
+		t.Fatalf("get card: %v", err)
+	}
+	if len(got.Executions) != 1 || got.Executions[0].Status != ExecutionCompleted {
+		t.Fatalf("expected 1 completed execution, got %+v", got.Executions)
+	}
+}

@@ -105,6 +105,7 @@ func buildDependencies(cfg *config.Config) dependencies {
 		todoMgr:      todo.NewManager(cfg.TodosDir),
 		sandbox:      localSandboxFromConfig(cfg),
 		taskboard:    openTaskboardLedger(cfg),
+		taskboardExec: nil,
 	}
 }
 
@@ -226,6 +227,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		toolHandler:       handler,
 		todoMgr:           deps.todoMgr,
 		taskboard:         deps.taskboard,
+		taskboardExec:     deps.taskboardExec,
 		skillLoader:       deps.skillLoader,
 		instrLoader:       deps.instrLoader,
 		memoryMgr:         deps.memoryMgr,

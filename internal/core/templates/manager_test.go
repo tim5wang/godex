@@ -21,7 +21,7 @@ func TestListIncludesAllBuiltins(t *testing.T) {
 	for _, tpl := range list {
 		got[tpl.ID] = tpl
 	}
-	for _, id := range []string{BuiltinDefault, BuiltinMinimal, BuiltinGeneralAssistant, BuiltinCoder, BuiltinResearcher, BuiltinReviewer, BuiltinPlanner} {
+	for _, id := range []string{BuiltinDefault, BuiltinMinimal, BuiltinGeneralAssistant, BuiltinCoder, BuiltinResearcher, BuiltinReviewer, BuiltinPlanner, BuiltinPJM} {
 		tpl, ok := got[id]
 		if !ok {
 			t.Fatalf("expected builtin template %q in list", id)

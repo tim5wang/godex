@@ -8,6 +8,7 @@ import {
   Drawer,
   Empty,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Select,
@@ -17,28 +18,35 @@ import {
   Typography,
 } from "antd";
 import {
+  CompassOutlined,
   DeleteOutlined,
   EditOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
+  ScheduleOutlined,
 } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { buildChatRoute } from "../../lib/chatRoutes";
 import { showError } from "../../lib/notifications";
 import { useSettingsStore } from "../../store/settings";
 import {
+  createCronJob,
   createTaskboardCard,
+  deleteCronJob,
   deleteTaskboardCard,
   executeTaskboardCard,
   getTaskboardCard,
   listAgentTemplates,
+  listCronJobs,
   listSessions,
   listTaskboardCards,
   listTaskboardProjects,
   patchTaskboardCard,
+  runCronJob,
+  updateCronJob,
 } from "../../lib/api";
-import type { TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
+import type { CronJob, TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
 
 const COLUMNS: { status: TaskboardStatus; labelKey: string; dot: string }[] = [
   { status: "backlog", labelKey: "taskboard.col.backlog", dot: "#8c8c8c" },
@@ -92,6 +100,13 @@ export function TaskBoardPage() {
   const [editUrgency, setEditUrgency] = useState<TaskboardUrgency>("normal");
   const [editTemplateID, setEditTemplateID] = useState<string | undefined>(undefined);
 
+  // ---- PJM automation (M5 P3): a scheduled cron job sweeps the board ----
+  const [pjmAutoOpen, setPjmAutoOpen] = useState(false);
+  const [pjmEnabled, setPjmEnabled] = useState(false);
+  const [pjmEverySeconds, setPjmEverySeconds] = useState<number>(3600);
+  const [pjmCronExpr, setPjmCronExpr] = useState("0 3 * * *");
+  const [pjmJobId, setPjmJobId] = useState<string | null>(null);
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["taskboard"] });
   };
@@ -118,6 +133,63 @@ export function TaskBoardPage() {
   const templatesQuery = useQuery({
     queryKey: ["agent-templates", token],
     queryFn: () => listAgentTemplates(token || null),
+  });
+
+  // The PJM sweep job is identified by a fixed name; at most one exists.
+  const PJM_JOB_NAME = "taskboard-pjm-sweep";
+  const pjmJobQuery = useQuery({
+    queryKey: ["cron", "pjm", token],
+    queryFn: async () => {
+      const jobs = await listCronJobs(token || null);
+      return jobs.find((job) => job.name === PJM_JOB_NAME) ?? null;
+    },
+  });
+  const pjmJob = pjmJobQuery.data;
+
+  const savePjmJob = useMutation({
+    mutationFn: async () => {
+      const body = {
+        name: PJM_JOB_NAME,
+        message: t("taskboard.pjmAutoMessage"),
+        timezone: "Asia/Shanghai",
+        schedule: {
+          type: pjmCronExpr.trim() && pjmCronExpr.trim() !== "every" ? "cron" : "every",
+          every_seconds: pjmCronExpr.trim() === "every" || !pjmCronExpr.trim() ? pjmEverySeconds : undefined,
+          cron_expr: pjmCronExpr.trim() && pjmCronExpr.trim() !== "every" ? pjmCronExpr.trim() : undefined,
+        },
+        session_mode: "shared",
+        enabled: pjmEnabled,
+      };
+      if (pjmJob) {
+        const updated = await updateCronJob(token || null, pjmJob.id, body);
+        setPjmJobId(updated.id);
+        return;
+      }
+      const created = await createCronJob(token || null, body);
+      setPjmJobId(created.id);
+    },
+    onSuccess: () => {
+      message.success(t("taskboard.pjmAutoSaved"));
+      void pjmJobQuery.refetch();
+    },
+    onError: (error) => fail(error, "taskboard.pjmAutoSaveFailed"),
+  });
+
+  const runPjmJob = useMutation({
+    mutationFn: (jobId: string) => runCronJob(token || null, jobId),
+    onSuccess: () => message.success(t("taskboard.pjmAutoRunDone")),
+    onError: (error) => fail(error, "taskboard.pjmAutoRunFailed"),
+  });
+
+  const deletePjmJob = useMutation({
+    mutationFn: (jobId: string) => deleteCronJob(token || null, jobId),
+    onSuccess: () => {
+      message.success(t("taskboard.pjmAutoDeleted"));
+      setPjmJobId(null);
+      setPjmEnabled(false);
+      void pjmJobQuery.refetch();
+    },
+    onError: (error) => fail(error, "taskboard.pjmAutoSaveFailed"),
   });
 
   const createMutation = useMutation({
@@ -396,6 +468,25 @@ export function TaskBoardPage() {
           onChange={(event) => setSearch(event.target.value)}
         />
         <Button icon={<ReloadOutlined />} onClick={() => invalidate()} />
+        <Button icon={<CompassOutlined />} onClick={() => navigate(buildChatRoute({ channel: "pjm", key: "pjm", metadata: { template: "pjm" } }))}>
+          {t("taskboard.pjmChat")}
+        </Button>
+        <Button icon={<ScheduleOutlined />} onClick={() => {
+          if (pjmJob) {
+            setPjmJobId(pjmJob.id);
+            setPjmEnabled(pjmJob.enabled);
+            const sched = pjmJob.schedule;
+            if (sched?.type === "cron" && sched.cron_expr) {
+              setPjmCronExpr(sched.cron_expr);
+            } else {
+              setPjmCronExpr("every");
+              setPjmEverySeconds(sched?.every_seconds || 3600);
+            }
+          }
+          setPjmAutoOpen(true);
+        }}>
+          {t("taskboard.pjmAuto")}
+        </Button>
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -663,6 +754,77 @@ export function TaskBoardPage() {
               .filter((tpl) => tpl.id?.trim())
               .map((tpl) => ({ value: tpl.id, label: tpl.avatar ? `${tpl.avatar} ${tpl.name || tpl.id}` : tpl.name || tpl.id }))}
           />
+        </div>
+      </Modal>
+
+      <Modal
+        title={t("taskboard.pjmAuto")}
+        open={pjmAutoOpen}
+        zIndex={1300}
+        onCancel={() => setPjmAutoOpen(false)}
+        footer={
+          <Space>
+            {pjmJob && (
+              <Popconfirm title={t("taskboard.pjmAutoDeleteConfirm")} onConfirm={() => deletePjmJob.mutate(pjmJob.id)}>
+                <Button danger loading={deletePjmJob.isPending}>
+                  {t("taskboard.pjmAutoDelete")}
+                </Button>
+              </Popconfirm>
+            )}
+            {pjmJob && (
+              <Button loading={runPjmJob.isPending} onClick={() => runPjmJob.mutate(pjmJob.id)}>
+                {t("taskboard.pjmAutoRunNow")}
+              </Button>
+            )}
+            <Button type="primary" loading={savePjmJob.isPending} onClick={() => savePjmJob.mutate()}>
+              {t("taskboard.pjmAutoSave")}
+            </Button>
+          </Space>
+        }
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Typography.Text type="secondary">{t("taskboard.pjmAutoHint")}</Typography.Text>
+          <Space>
+            <Checkbox
+              checked={pjmEnabled}
+              onChange={(e) => setPjmEnabled(e.target.checked)}
+            >
+              {t("taskboard.pjmAutoEnabled")}
+            </Checkbox>
+          </Space>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Typography.Text>{t("taskboard.pjmAutoSchedule")}</Typography.Text>
+            <Select
+              style={{ width: 130 }}
+              value={pjmCronExpr.trim() === "every" || !pjmCronExpr.trim() ? "every" : "cron"}
+              onChange={(v) => setPjmCronExpr(v === "every" ? "every" : pjmCronExpr)}
+              options={[
+                { value: "every", label: t("taskboard.pjmAutoEvery") },
+                { value: "cron", label: t("taskboard.pjmAutoCron") },
+              ]}
+            />
+            {pjmCronExpr.trim() === "every" || !pjmCronExpr.trim() ? (
+              <InputNumber
+                min={60}
+                style={{ width: 120 }}
+                value={pjmEverySeconds}
+                onChange={(v) => setPjmEverySeconds(v ?? 3600)}
+              />
+            ) : (
+              <Input
+                style={{ width: 140 }}
+                value={pjmCronExpr}
+                onChange={(e) => setPjmCronExpr(e.target.value)}
+                placeholder="0 3 * * *"
+              />
+            )}
+          </div>
+          {pjmJob && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t("taskboard.pjmAutoLast")}: {pjmJob.last_run_at ? new Date(pjmJob.last_run_at).toLocaleString() : t("taskboard.pjmAutoNever")}
+              {pjmJob.last_status ? ` · ${pjmJob.last_status}` : ""}
+            </Typography.Text>
+          )}
         </div>
       </Modal>
     </div>

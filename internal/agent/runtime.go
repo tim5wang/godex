@@ -105,6 +105,18 @@ func (s *SharedDependencies) TaskboardLedger() *taskboard.Ledger {
 	return s.deps.taskboard
 }
 
+// SetTaskboardExecutor installs the taskboard card executor (backend
+// assembly, M5 PJM dispatch) for all future agents. nil keeps the tool
+// without the dispatch action (unavailable error).
+func (s *SharedDependencies) SetTaskboardExecutor(exec taskboard.Executor) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.deps.taskboardExec = exec
+	s.mu.Unlock()
+}
+
 // ApplyConfig refreshes shared workspace-scoped services for subsequent turns.
 func (s *SharedDependencies) ApplyConfig(cfg *config.Config) {
 	if s == nil || cfg == nil {

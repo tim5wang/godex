@@ -53,6 +53,7 @@ const (
 	BuiltinResearcher       = "researcher"
 	BuiltinReviewer         = "reviewer"
 	BuiltinPlanner          = "planner"
+	BuiltinPJM              = "pjm"
 )
 
 // AgentTemplate is a named, creation-time preset of an agent's capability

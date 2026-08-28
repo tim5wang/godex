@@ -157,6 +157,10 @@ func main() {
 		logger.Warnf("taskboard ledger unavailable; taskboard plugin disabled")
 	} else if pm := service.PluginManager(); pm != nil {
 		executor := backend.NewTaskboardExecutor(service, taskboardLedger)
+		// M5 PJM: the per-session taskboard tool (dispatch action) needs the
+		// same executor so PJM can start/reuse card execution sessions from
+		// its own conversation.
+		shared.SetTaskboardExecutor(executor)
 		if _, actErr := pm.Activate(context.Background(), taskboard.NewPlugin(taskboardLedger, executor, nil)); actErr != nil {
 			logger.Warnf("taskboard plugin activation failed: %v", actErr)
 		}

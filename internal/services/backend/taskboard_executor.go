@@ -9,21 +9,30 @@ import (
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
 )
 
-// TaskboardExecutor handoffs a card to a host session's main agent so it
-// claims and executes the work in its own conversation flow. The run's tool
-// calls, reasoning, and file edits ARE the chat history — fully observable,
+// TaskboardExecutor runs one card in a dedicated execution session pinned to
+// the card's agent template (M3, design decision Q1=B). The execution session
+// is keyed by card id (channel "taskboard", key "card-<id>") so every
+// execution of the same card reuses one conversation: its messages, tool
+// calls, reasoning and file edits ARE the chat history — fully observable,
 // no durable-subagent black box, no separate LLM connection (so no
 // gateway/auth failure surface).
 //
-// Design: Execute() records the execution (running, host = target session)
-// and submits the card workload as a message into that session. The main
-// agent, which now has the taskboard tool injected per-session, is expected
-// to claim the card (taskboard action=move → in_progress), do the work, and
-// move it to in_review for human acceptance — all visible in the feed.
+// Design: Execute() opens (or reuses) the card's execution session with the
+// card's template in the locator metadata (load.go applies it via
+// ApplyTemplate), guarantees the taskboard tool stays callable on top of the
+// template's exact tool set, records the execution (running, host = the
+// execution session itself), and submits the card workload as a message into
+// that session. The agent is expected to claim the card (taskboard
+// action=move → in_progress), do the work, and move it to in_review for
+// human acceptance — all visible in the execution session feed.
 type TaskboardExecutor struct {
 	service *Service
 	ledger  *taskboard.Ledger
 }
+
+// taskboardSessionChannel is the session channel used for card execution
+// sessions so they group apart from web/local chats in the sessions rail.
+const taskboardSessionChannel = "taskboard"
 
 // NewTaskboardExecutor wires the executor against the backend service and
 // the shared taskboard ledger.
@@ -31,56 +40,60 @@ func NewTaskboardExecutor(service *Service, ledger *taskboard.Ledger) *Taskboard
 	return &TaskboardExecutor{service: service, ledger: ledger}
 }
 
-// hostSession returns the most recently active loaded session to hand the
-// card to. Taskboard execution requires at least one live session (host-cron
-// scheduling without sessions is M3).
-func (e *TaskboardExecutor) hostSession() *sessionState {
-	s := e.service
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var best *sessionState
-	for _, sess := range s.sessions {
-		if sess == nil || sess.agent == nil {
-			continue
-		}
-		if best == nil || sess.lastActive.After(best.lastActive) {
-			best = sess
-		}
-	}
-	return best
-}
-
-// Execute hands the card to the host session's main agent and records the
-// execution. Returns the execution id and the host session id (the jump-to-
-// progress target lives in that conversation).
+// Execute opens (or reuses) the card's template-pinned execution session and
+// submits the card workload into it. Returns the execution id and the
+// execution session id (the jump-to-progress target lives in that
+// conversation). Unlike the pre-M3 host dispatch, no other live session is
+// required.
 func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (string, string, error) {
-	host := e.hostSession()
-	if host == nil || host.agent == nil {
-		return "", "", fmt.Errorf("taskboard: 没有可执行任务的活动会话，请先打开一个会话")
-	}
 	rootDir := e.projectRoot(card.ProjectID)
-	executionID := "exec-" + card.ID + "-" + e.service.now().Format("20060102150405")
-	hostRef := &taskboard.HostRef{
-		SessionID:  host.id,
-		Channel:    host.locator.Channel,
-		Key:        host.locator.Key,
-		UserID:     host.locator.UserID,
-		ProjectDir: host.locator.Metadata["project_dir"],
+	templateID := strings.TrimSpace(card.TemplateID)
+	executionID := "exec-" + card.ID + "-" + e.service.now().Format("20060102150405.000")
+
+	locator := SessionLocator{
+		Channel: taskboardSessionChannel,
+		Key:     "card-" + card.ID,
+		Metadata: map[string]string{},
 	}
-	if _, err := e.ledger.StartExecution(card.ID, executionID, host.id, "taskboard", hostRef); err != nil {
+	if rootDir != "" {
+		locator.Metadata[sessionProjectDirMetadataKey] = rootDir
+	}
+	if templateID != "" {
+		locator.Metadata["template"] = templateID
+	}
+
+	opened, err := e.service.OpenSession(ctx, locator)
+	if err != nil {
+		return "", "", fmt.Errorf("taskboard: 打开执行会话失败: %w", err)
+	}
+	sessionID := opened.SessionID
+
+	// The template pins an exact tool set; guarantee the taskboard tool stays
+	// callable on top of it so the agent can claim/execute/accept the card.
+	if sess, err := e.service.requireSession(sessionID); err == nil && sess.agent != nil {
+		sess.agent.ActivateBundles("task_board")
+	}
+
+	hostRef := &taskboard.HostRef{
+		SessionID:  sessionID,
+		Channel:    taskboardSessionChannel,
+		Key:        "card-" + card.ID,
+		ProjectDir: rootDir,
+	}
+	if _, err := e.ledger.StartExecution(card.ID, executionID, sessionID, "taskboard", hostRef); err != nil {
 		return "", "", err
 	}
-	envelope := message.NewRuntimeEnvelope(message.SourceBackground, host.id, "taskboard", executionPrompt(card, rootDir), e.service.now(), map[string]string{
+	envelope := message.NewRuntimeEnvelope(message.SourceBackground, sessionID, "taskboard", executionPrompt(card, rootDir), e.service.now(), map[string]string{
 		"taskboard_card_id": card.ID,
 		"taskboard_title":   card.Title,
 	})
-	if _, err := e.service.SubmitAsync(ctx, host.id, envelope, SubmitOptions{QueueMode: QueueModeFollowUp}); err != nil {
+	if _, err := e.service.SubmitAsync(ctx, sessionID, envelope, SubmitOptions{QueueMode: QueueModeFollowUp}); err != nil {
 		// The execution record is started by the timeout path; surface the
 		// delivery failure so the card does not silently hang.
 		_, _ = e.ledger.FinishExecution(card.ID, executionID, taskboard.ExecutionCancelled, "投递到会话失败")
-		return "", "", fmt.Errorf("taskboard: 投递执行任务到会话 %s 失败: %w", host.id, err)
+		return "", "", fmt.Errorf("taskboard: 投递执行任务到会话 %s 失败: %w", sessionID, err)
 	}
-	return executionID, host.id, nil
+	return executionID, sessionID, nil
 }
 
 // projectRoot resolves the project's root dir for the write scope.

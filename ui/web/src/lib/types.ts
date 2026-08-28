@@ -1744,6 +1744,7 @@ export interface TaskboardCard {
   prompt?: string;
   urgency: TaskboardUrgency;
   status: TaskboardStatus;
+  template_id?: string;
   holder?: string;
   blocked?: boolean;
   checklist?: TaskboardChecklistItem[];
@@ -1770,6 +1771,7 @@ export interface TaskboardCardCreateInput {
   description?: string;
   prompt?: string;
   urgency?: TaskboardUrgency;
+  template_id?: string;
   checklist?: string[];
 }
 
@@ -1782,6 +1784,7 @@ export interface TaskboardCardPatchInput {
   prompt?: string;
   urgency?: TaskboardUrgency;
   blocked?: boolean;
+  template_id?: string;
   to?: TaskboardStatus;
   force?: boolean;
   reason?: string;

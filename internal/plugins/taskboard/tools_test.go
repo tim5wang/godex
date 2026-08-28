@@ -51,17 +51,21 @@ func TestTaskboardToolEndToEnd(t *testing.T) {
 
 	// create
 	res := mustExec(t, tool, map[string]interface{}{
-		"action":    "create",
-		"title":     "tool card",
-		"urgency":   "urgent",
-		"checklist": []interface{}{"step-1"},
-		"prompt":    "do the thing",
+		"action":      "create",
+		"title":       "tool card",
+		"urgency":     "urgent",
+		"checklist":   []interface{}{"step-1"},
+		"prompt":      "do the thing",
+		"template_id": "geek",
 	})
 	card := res["card"].(map[string]any)
 	cardID := card["id"].(string)
 	version := resultVersion(res)
 	if cardID == "" || version != 1 || card["title"] != "tool card" {
 		t.Fatalf("unexpected created card: %v", res)
+	}
+	if card["template_id"] != "geek" {
+		t.Fatalf("expected template_id geek through create, got %v", card["template_id"])
 	}
 
 	// create without title is refused
@@ -98,11 +102,14 @@ func TestTaskboardToolEndToEnd(t *testing.T) {
 	})
 	version = resultVersion(res)
 
-	// update title
+	// update title + template_id
 	res = mustExec(t, tool, map[string]interface{}{
-		"action": "update", "card_id": cardID, "version": version, "title": "tool card v2",
+		"action": "update", "card_id": cardID, "version": version, "title": "tool card v2", "template_id": "reviewer",
 	})
 	version = resultVersion(res)
+	if got := res["card"].(map[string]any)["template_id"]; got != "reviewer" {
+		t.Fatalf("expected template_id reviewer after update, got %v", got)
+	}
 
 	// checklist add + check
 	res = mustExec(t, tool, map[string]interface{}{

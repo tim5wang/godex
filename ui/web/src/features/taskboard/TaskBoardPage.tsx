@@ -32,6 +32,7 @@ import {
   deleteTaskboardCard,
   executeTaskboardCard,
   getTaskboardCard,
+  listAgentTemplates,
   listSessions,
   listTaskboardCards,
   listTaskboardProjects,
@@ -81,6 +82,7 @@ export function TaskBoardPage() {
   const [createPrompt, setCreatePrompt] = useState("");
   const [createUrgency, setCreateUrgency] = useState<TaskboardUrgency>("normal");
   const [createChecklist, setCreateChecklist] = useState("");
+  const [createTemplateID, setCreateTemplateID] = useState<string | undefined>(undefined);
   const [editOpen, setEditOpen] = useState(false);
   const [editId, setEditId] = useState("");
   const [editVersion, setEditVersion] = useState(0);
@@ -88,6 +90,7 @@ export function TaskBoardPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
   const [editUrgency, setEditUrgency] = useState<TaskboardUrgency>("normal");
+  const [editTemplateID, setEditTemplateID] = useState<string | undefined>(undefined);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["taskboard"] });
@@ -112,6 +115,10 @@ export function TaskBoardPage() {
     queryFn: async () => getTaskboardCard(token || null, detailId || ""),
     enabled: !!detailId,
   });
+  const templatesQuery = useQuery({
+    queryKey: ["agent-templates", token],
+    queryFn: () => listAgentTemplates(token || null),
+  });
 
   const createMutation = useMutation({
     mutationFn: async () =>
@@ -121,6 +128,7 @@ export function TaskBoardPage() {
         description: createDescription || undefined,
         prompt: createPrompt || undefined,
         urgency: createUrgency,
+        template_id: createTemplateID,
         checklist: createChecklist
           .split("\n")
           .map((line) => line.trim())
@@ -133,6 +141,7 @@ export function TaskBoardPage() {
       setCreateDescription("");
       setCreatePrompt("");
       setCreateChecklist("");
+      setCreateTemplateID(undefined);
       invalidate();
     },
     onError: (error) => fail(error, "taskboard.createFailed"),
@@ -237,6 +246,7 @@ export function TaskBoardPage() {
     setEditDescription(card.description ?? "");
     setEditPrompt(card.prompt ?? "");
     setEditUrgency(card.urgency);
+    setEditTemplateID(card.template_id);
     setEditOpen(true);
   };
 
@@ -254,6 +264,7 @@ export function TaskBoardPage() {
         description: editDescription.trim() || undefined,
         prompt: editPrompt.trim() || undefined,
         urgency: editUrgency,
+        template_id: editTemplateID,
       },
     });
     setEditOpen(false);
@@ -476,6 +487,7 @@ export function TaskBoardPage() {
               <Tag color={URGENCY_COLORS[detail.urgency]}>{t(`taskboard.urgency.${detail.urgency}`)}</Tag>
               <Tag>{t(`taskboard.col.${detail.status === "in_progress" ? "inProgress" : detail.status === "in_review" ? "inReview" : detail.status}`)}</Tag>
               {detail.holder && <Tag color="processing">{detail.holder}</Tag>}
+              {detail.template_id && <Tag color="geekblue">{detail.template_id}</Tag>}
             </Space>
             <Space size={6} wrap>
               {actionButtons(detail)}
@@ -600,6 +612,16 @@ export function TaskBoardPage() {
               { value: "low", label: t("taskboard.urgency.low") },
             ]}
           />
+          <Select
+            allowClear
+            placeholder={t("taskboard.templatePlaceholder")}
+            value={createTemplateID}
+            onChange={setCreateTemplateID}
+            loading={templatesQuery.isLoading}
+            options={(templatesQuery.data ?? [])
+              .filter((tpl) => tpl.id?.trim())
+              .map((tpl) => ({ value: tpl.id, label: tpl.avatar ? `${tpl.avatar} ${tpl.name || tpl.id}` : tpl.name || tpl.id }))}
+          />
           <Input.TextArea
             rows={3}
             placeholder={t("taskboard.checklistHint")}
@@ -630,6 +652,16 @@ export function TaskBoardPage() {
               { value: "normal", label: t("taskboard.urgency.normal") },
               { value: "low", label: t("taskboard.urgency.low") },
             ]}
+          />
+          <Select
+            allowClear
+            placeholder={t("taskboard.templatePlaceholder")}
+            value={editTemplateID}
+            onChange={setEditTemplateID}
+            loading={templatesQuery.isLoading}
+            options={(templatesQuery.data ?? [])
+              .filter((tpl) => tpl.id?.trim())
+              .map((tpl) => ({ value: tpl.id, label: tpl.avatar ? `${tpl.avatar} ${tpl.name || tpl.id}` : tpl.name || tpl.id }))}
           />
         </div>
       </Modal>

@@ -26,15 +26,16 @@ type toolLedger interface {
 
 // compactCard is the terse per-card view used by list/get results.
 type compactCard struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Status   string `json:"status"`
-	Urgency  string `json:"urgency"`
-	Project  string `json:"project"`
-	Holder   string `json:"holder,omitempty"`
-	Blocked  bool   `json:"blocked,omitempty"`
-	CheckDn  int    `json:"checklist_done,omitempty"`
-	CheckAll int    `json:"checklist_total,omitempty"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
+	Urgency    string `json:"urgency"`
+	Project    string `json:"project"`
+	Holder     string `json:"holder,omitempty"`
+	Blocked    bool   `json:"blocked,omitempty"`
+	TemplateID string `json:"template_id,omitempty"`
+	CheckDn    int    `json:"checklist_done,omitempty"`
+	CheckAll   int    `json:"checklist_total,omitempty"`
 }
 
 func compact(c Card) compactCard {
@@ -42,7 +43,8 @@ func compact(c Card) compactCard {
 	return compactCard{
 		ID: c.ID, Title: c.Title, Status: c.Status, Urgency: c.Urgency,
 		Project: c.ProjectID, Holder: c.Holder, Blocked: c.Blocked,
-		CheckDn: done, CheckAll: total,
+		TemplateID: c.TemplateID,
+		CheckDn:    done, CheckAll: total,
 	}
 }
 
@@ -94,6 +96,7 @@ func NewTaskboardTool(ledger toolLedger) tools.Tool {
 			"title":        map[string]string{"type": "string", "description": "Card title (create / update)"},
 			"description":  map[string]string{"type": "string", "description": "Card description (create / update)"},
 			"prompt":       map[string]string{"type": "string", "description": "Execution prompt for the isolated session that will run this task (create / update)"},
+			"template_id":  map[string]string{"type": "string", "description": "Agent template id for the execution session (create / update; empty = default)"},
 			"blocked":      map[string]any{"type": "boolean", "description": "Blocked flag (update)"},
 			"to":           map[string]string{"type": "string", "description": "Target status (move): todo|in_progress|in_review"},
 			"text":         map[string]string{"type": "string", "description": "Comment text (comment_add) or checklist item text (checklist add)"},
@@ -121,6 +124,7 @@ type taskboardArgs struct {
 	Description *string  `json:"description"`
 	Prompt      *string  `json:"prompt"`
 	Blocked     *bool    `json:"blocked"`
+	TemplateID  string   `json:"template_id"`
 	To          string   `json:"to"`
 	Text        string   `json:"text"`
 	CheckAction string   `json:"check_action"`
@@ -183,6 +187,7 @@ func dispatchTaskboard(ctx context.Context, ledger toolLedger, args taskboardArg
 			Description: derefString(args.Description),
 			Prompt:      derefString(args.Prompt),
 			Urgency:     args.Urgency,
+			TemplateID:  strings.TrimSpace(args.TemplateID),
 			Checklist:   args.Checklist,
 			CreatedBy:   agentActor,
 		})
@@ -204,8 +209,12 @@ func dispatchTaskboard(ctx context.Context, ledger toolLedger, args taskboardArg
 		if u := strings.TrimSpace(args.Urgency); u != "" {
 			urgencyPtr = &u
 		}
+		var templateIDPtr *string
+		if t := strings.TrimSpace(args.TemplateID); t != "" {
+			templateIDPtr = &t
+		}
 		card, err := ledger.UpdateCard(id, version, agentActor, UpdateCardInput{
-			Title: args.Title, Description: args.Description, Prompt: args.Prompt, Urgency: urgencyPtr, Blocked: args.Blocked,
+			Title: args.Title, Description: args.Description, Prompt: args.Prompt, Urgency: urgencyPtr, Blocked: args.Blocked, TemplateID: templateIDPtr,
 		})
 		if err != nil {
 			return tools.ToolResult{}, err

@@ -269,6 +269,7 @@ type CreateCardInput struct {
 	Description string
 	Prompt      string
 	Urgency     string
+	TemplateID  string
 	Checklist   []string
 	CreatedBy   string
 	// StartStatus allows human creation directly into todo (agents always
@@ -322,6 +323,7 @@ func (l *Ledger) CreateCard(input CreateCardInput) (Card, error) {
 		Description: strings.TrimSpace(input.Description),
 		Prompt:      strings.TrimSpace(input.Prompt),
 		Urgency:     normalizeUrgency(input.Urgency),
+		TemplateID:  strings.TrimSpace(input.TemplateID),
 		Status:      status,
 		Version:     1,
 		CreatedBy:   input.CreatedBy,
@@ -383,6 +385,7 @@ type UpdateCardInput struct {
 	Prompt      *string
 	Urgency     *string
 	Blocked     *bool
+	TemplateID  *string
 }
 
 // UpdateCard edits a card's text fields under optimistic concurrency.
@@ -406,6 +409,9 @@ func (l *Ledger) UpdateCard(id string, ifVersion int, actor string, input Update
 		}
 		if input.Blocked != nil {
 			card.Blocked = *input.Blocked
+		}
+		if input.TemplateID != nil {
+			card.TemplateID = strings.TrimSpace(*input.TemplateID)
 		}
 		return nil
 	})

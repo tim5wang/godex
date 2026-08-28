@@ -184,6 +184,50 @@ func TestRejectCardBouncesWithReason(t *testing.T) {
 	}
 }
 
+func TestCardTemplateIDCRUD(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+
+	// Create carries TemplateID through.
+	card, err := l.CreateCard(CreateCardInput{
+		ProjectID:  project.ID,
+		Title:      "template-pinned task",
+		TemplateID: "geek",
+	})
+	if err != nil {
+		t.Fatalf("create card: %v", err)
+	}
+	if card.TemplateID != "geek" {
+		t.Fatalf("expected template_id geek, got %q", card.TemplateID)
+	}
+
+	// Update replaces TemplateID.
+	tpl := "reviewer"
+	if _, err := l.UpdateCard(card.ID, card.Version, "human", UpdateCardInput{TemplateID: &tpl}); err != nil {
+		t.Fatalf("update template_id: %v", err)
+	}
+	got, err := l.GetCard(card.ID)
+	if err != nil {
+		t.Fatalf("get card: %v", err)
+	}
+	if got.TemplateID != "reviewer" {
+		t.Fatalf("expected template_id reviewer after update, got %q", got.TemplateID)
+	}
+
+	// Clearing (empty pointer) is preserved, not treated as "no change".
+	clear := ""
+	if _, err := l.UpdateCard(got.ID, got.Version, "human", UpdateCardInput{TemplateID: &clear}); err != nil {
+		t.Fatalf("clear template_id: %v", err)
+	}
+	got, err = l.GetCard(card.ID)
+	if err != nil {
+		t.Fatalf("get card: %v", err)
+	}
+	if got.TemplateID != "" {
+		t.Fatalf("expected empty template_id after clear, got %q", got.TemplateID)
+	}
+}
+
 func TestVersionConflict(t *testing.T) {
 	l := openTestLedger(t)
 	project := seedProject(t, l)

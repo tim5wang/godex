@@ -104,6 +104,7 @@ type patchBody struct {
 	Prompt      *string `json:"prompt"`
 	Urgency     *string `json:"urgency"`
 	Blocked     *bool   `json:"blocked"`
+	TemplateID  *string `json:"template_id"`
 	// move
 	To string `json:"to"`
 	// complete
@@ -137,7 +138,7 @@ func (p *Plugin) handlePatchCard(w http.ResponseWriter, r *http.Request) (any, e
 	case "update":
 		card, err = p.ledger.UpdateCard(id, body.Version, actor, UpdateCardInput{
 			Title: body.Title, Description: body.Description, Prompt: body.Prompt,
-			Urgency: body.Urgency, Blocked: body.Blocked,
+			Urgency: body.Urgency, Blocked: body.Blocked, TemplateID: body.TemplateID,
 		})
 	case "move":
 		card, err = p.ledger.MoveCard(id, body.Version, body.To, actor)

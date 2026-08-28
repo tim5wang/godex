@@ -99,6 +99,9 @@ type Card struct {
 	Prompt      string `json:"prompt,omitempty"`
 	Urgency     string `json:"urgency"`
 	Status      string `json:"status"`
+	// TemplateID pins the agent template used to initialize the card's
+	// execution session (M3). Empty = project default / builtin default.
+	TemplateID string `json:"template_id,omitempty"`
 	// Holder identifies who currently owns an in_progress card (execution
 	// session or claiming agent). A held card cannot be claimed by others.
 	Holder string `json:"holder,omitempty"`

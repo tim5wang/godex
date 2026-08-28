@@ -80,6 +80,14 @@ func (a *Agent) memoryMode() string {
 	return a.templateMemoryMode
 }
 
+// ActivateBundles incrementally activates the named bundles on top of the
+// current active set (no removal). The taskboard executor uses this to
+// guarantee the taskboard tool stays callable in a template-pinned execution
+// session whose exact preset may not include the task_board bundle.
+func (a *Agent) ActivateBundles(names ...string) {
+	a.toolHandler.ActivateBundles(names...)
+}
+
 // toolNamesForBundles resolves the union of tool names registered in the
 // named bundles, preserving catalog order. Unknown bundle names are ignored.
 func toolNamesForBundles(cat tools.ToolCatalog, bundles []string) []string {

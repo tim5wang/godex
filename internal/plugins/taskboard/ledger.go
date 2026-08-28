@@ -27,6 +27,11 @@ var (
 	ErrInvalidTransition = errors.New("taskboard: invalid status transition")
 )
 
+// humanActor marks a mutation from a human operator (HTTP PATCH surface). A
+// human is a superuser: they may advance a held card, clearing the holder, so
+// a stale/abandoned runtime session cannot permanently block manual curation.
+const humanActor = "human"
+
 // transition rules: linear flow forward plus in_review -> todo (rejection
 // bounce-back). done is reachable only via human acceptance (CompleteCard).
 var allowedTransitions = map[string][]string{
@@ -427,7 +432,7 @@ func (l *Ledger) MoveCard(id string, ifVersion int, to, actor string) (Card, err
 		if !allowed {
 			return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, card.Status, to)
 		}
-		if card.Status == StatusInProgress && card.Holder != "" && card.Holder != actor {
+		if card.Status == StatusInProgress && card.Holder != "" && card.Holder != actor && actor != humanActor {
 			return fmt.Errorf("%w: %s held by %q", ErrCardHeld, id, card.Holder)
 		}
 		card.Status = to
@@ -435,6 +440,10 @@ func (l *Ledger) MoveCard(id string, ifVersion int, to, actor string) (Card, err
 			card.Holder = actor
 		} else {
 			card.Holder = ""
+			// Leaving in_progress closes the run: the execution must not stay
+			// running forever (which would block future execute/delete of the
+			// card). This is the complementary half of the stuck-card bug.
+			closeRunningExecutions(card, ExecutionCompleted, "moved to "+to)
 		}
 		return nil
 	})
@@ -456,6 +465,7 @@ func (l *Ledger) CompleteCard(id string, ifVersion int, actor string, force bool
 		}
 		card.Status = StatusDone
 		card.Holder = ""
+		closeRunningExecutions(card, ExecutionCompleted, "accepted")
 		return nil
 	})
 }
@@ -646,4 +656,27 @@ func (l *Ledger) FinishExecution(cardID, executionID, status, summary string) (C
 		}
 		return fmt.Errorf("taskboard: running execution %s not found on card %s", executionID, cardID)
 	})
+}
+
+// closeRunningExecutions marks every still-running execution on the card as
+// finished with the given status/summary and clears the holder when it matches
+// an execution session. Called when a card leaves in_progress (manual move or
+// acceptance), so a run can never linger in the running state forever — which
+// would otherwise leave the card permanently un-executable and undeletable.
+func closeRunningExecutions(card *Card, status, summary string) {
+	if card == nil {
+		return
+	}
+	now := time.Now()
+	for i := range card.Executions {
+		if card.Executions[i].Status != ExecutionRunning {
+			continue
+		}
+		card.Executions[i].Status = status
+		card.Executions[i].Summary = strings.TrimSpace(summary)
+		card.Executions[i].EndedAt = now
+		if card.Holder == card.Executions[i].SessionID {
+			card.Holder = ""
+		}
+	}
 }

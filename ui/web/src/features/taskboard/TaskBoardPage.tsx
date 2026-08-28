@@ -18,6 +18,7 @@ import {
 } from "antd";
 import {
   DeleteOutlined,
+  EditOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -80,6 +81,13 @@ export function TaskBoardPage() {
   const [createPrompt, setCreatePrompt] = useState("");
   const [createUrgency, setCreateUrgency] = useState<TaskboardUrgency>("normal");
   const [createChecklist, setCreateChecklist] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editId, setEditId] = useState("");
+  const [editVersion, setEditVersion] = useState(0);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editPrompt, setEditPrompt] = useState("");
+  const [editUrgency, setEditUrgency] = useState<TaskboardUrgency>("normal");
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["taskboard"] });
@@ -220,6 +228,35 @@ export function TaskBoardPage() {
         });
       },
     });
+  };
+
+  const openEdit = (card: TaskboardCard) => {
+    setEditId(card.id);
+    setEditVersion(card.version);
+    setEditTitle(card.title);
+    setEditDescription(card.description ?? "");
+    setEditPrompt(card.prompt ?? "");
+    setEditUrgency(card.urgency);
+    setEditOpen(true);
+  };
+
+  const submitEdit = () => {
+    if (!editTitle.trim()) {
+      message.warning(t("taskboard.titleRequired"));
+      return;
+    }
+    patchMutation.mutate({
+      cardId: editId,
+      body: {
+        action: "update",
+        version: editVersion,
+        title: editTitle.trim(),
+        description: editDescription.trim() || undefined,
+        prompt: editPrompt.trim() || undefined,
+        urgency: editUrgency,
+      },
+    });
+    setEditOpen(false);
   };
 
   const jumpToHost = async (execution: TaskboardExecution) => {
@@ -443,6 +480,11 @@ export function TaskBoardPage() {
             <Space size={6} wrap>
               {actionButtons(detail)}
               {detail.status !== "done" && (
+                <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(detail)}>
+                  {t("taskboard.edit")}
+                </Button>
+              )}
+              {detail.status !== "done" && (
                 <Popconfirm
                   zIndex={1300}
                   title={t("taskboard.deleteConfirm")}
@@ -563,6 +605,31 @@ export function TaskBoardPage() {
             placeholder={t("taskboard.checklistHint")}
             value={createChecklist}
             onChange={(event) => setCreateChecklist(event.target.value)}
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        title={t("taskboard.editTitle")}
+        open={editOpen}
+        zIndex={1300}
+        onCancel={() => setEditOpen(false)}
+        onOk={submitEdit}
+        confirmLoading={patchMutation.isPending}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Input placeholder={t("taskboard.title")} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} />
+          <Input.TextArea rows={2} placeholder={t("taskboard.description")} value={editDescription} onChange={(event) => setEditDescription(event.target.value)} />
+          <Input.TextArea rows={3} placeholder={t("taskboard.prompt")} value={editPrompt} onChange={(event) => setEditPrompt(event.target.value)} />
+          <Select
+            value={editUrgency}
+            onChange={(value) => setEditUrgency(value)}
+            style={{ width: 160 }}
+            options={[
+              { value: "urgent", label: t("taskboard.urgency.urgent") },
+              { value: "normal", label: t("taskboard.urgency.normal") },
+              { value: "low", label: t("taskboard.urgency.low") },
+            ]}
           />
         </div>
       </Modal>

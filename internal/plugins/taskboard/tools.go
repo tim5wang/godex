@@ -48,6 +48,18 @@ func compact(c Card) compactCard {
 
 const agentActor = "agent"
 
+// actorName returns the actor identity for a card mutation. A card holder is
+// recorded as the hosting/execution session id (see Ledger.StartExecution), so
+// the agent running that session must present the same id to advance its own
+// held card. Falls back to agentActor for session-less callers (tests,
+// background/durable agents with no tool session context).
+func actorName(ctx context.Context) string {
+	if id := tools.SessionIDFromContext(ctx); id != "" {
+		return id
+	}
+	return agentActor
+}
+
 // tool actions
 const (
 	actionList       = "list"
@@ -92,8 +104,7 @@ func NewTaskboardTool(ledger toolLedger) tools.Tool {
 		},
 		"required": []string{"action"},
 	}, nil), func(ctx context.Context, args taskboardArgs) (tools.ToolResult, error) {
-		_ = ctx
-		return dispatchTaskboard(ledger, args)
+		return dispatchTaskboard(ctx, ledger, args)
 	})
 }
 
@@ -135,7 +146,8 @@ func requireCardID(args taskboardArgs) (string, error) {
 }
 
 // dispatchTaskboard routes one action to the corresponding ledger call.
-func dispatchTaskboard(ledger toolLedger, args taskboardArgs) (tools.ToolResult, error) {
+func dispatchTaskboard(ctx context.Context, ledger toolLedger, args taskboardArgs) (tools.ToolResult, error) {
+	actor := actorName(ctx)
 	switch strings.TrimSpace(args.Action) {
 	case actionList:
 		cards := ledger.ListCards(CardFilter{
@@ -209,7 +221,7 @@ func dispatchTaskboard(ledger toolLedger, args taskboardArgs) (tools.ToolResult,
 		if err != nil {
 			return tools.ToolResult{}, err
 		}
-		card, err := ledger.MoveCard(id, version, strings.TrimSpace(args.To), agentActor)
+		card, err := ledger.MoveCard(id, version, strings.TrimSpace(args.To), actor)
 		if err != nil {
 			return tools.ToolResult{}, err
 		}

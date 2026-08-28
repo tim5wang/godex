@@ -312,3 +312,56 @@ func TestDeleteProjectOrphanAndRecreate(t *testing.T) {
 		t.Fatalf("ledger file missing: %v", err)
 	}
 }
+
+// A card claimed by an execution holds the hosting/execution session id. The
+// same execution session must be able to advance its own held card (this is the
+// root cause of the stuck-card bug: agent tools presented a fixed "agent" actor
+// that never matched the holder, so the card could never move out of
+// in_progress).
+func TestHolderCanAdvanceOwnCardBySessionID(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	card, _ := l.CreateCard(CreateCardInput{ProjectID: project.ID, Title: "held"})
+	card, _ = l.MoveCard(card.ID, card.Version, StatusTodo, "agent-a")
+	card, _ = l.MoveCard(card.ID, card.Version, StatusInProgress, "agent-a")
+
+	// A different actor still cannot steal a held card.
+	if _, err := l.MoveCard(card.ID, card.Version, StatusInReview, "agent-b"); !errors.Is(err, ErrCardHeld) {
+		t.Fatalf("expected agent-b to be refused on held card, got %v", err)
+	}
+	// The holder (session id) can advance its own held card.
+	moved, err := l.MoveCard(card.ID, card.Version, StatusInReview, "agent-a")
+	if err != nil {
+		t.Fatalf("holder session advance: %v", err)
+	}
+	if moved.Status != StatusInReview || moved.Holder != "" {
+		t.Fatalf("expected holder cleared on in_review, got %+v", moved)
+	}
+}
+
+// A human operator is a superuser: they may advance a card even when it is
+// held by an execution session that is stuck/abandoned, clearing the holder.
+// This lets manual curation recover a card that a dead runtime session can no
+// longer release.
+func TestHumanCanUnstickHeldCard(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	card, _ := l.CreateCard(CreateCardInput{ProjectID: project.ID, Title: "stuck", StartStatus: StatusTodo})
+	card, _ = l.MoveCard(card.ID, card.Version, StatusInProgress, "session-1")
+	if card.Holder != "session-1" {
+		t.Fatalf("expected holder session-1, got %q", card.Holder)
+	}
+
+	// A non-holder agent is still blocked.
+	if _, err := l.MoveCard(card.ID, card.Version, StatusInReview, "agent-a"); !errors.Is(err, ErrCardHeld) {
+		t.Fatalf("expected non-holder agent blocked, got %v", err)
+	}
+	// Human advances and clears the holder.
+	moved, err := l.MoveCard(card.ID, card.Version, StatusInReview, humanActor)
+	if err != nil {
+		t.Fatalf("human unstick hold: %v", err)
+	}
+	if moved.Status != StatusInReview || moved.Holder != "" {
+		t.Fatalf("expected human to clear holder, got %+v", moved)
+	}
+}

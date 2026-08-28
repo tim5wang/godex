@@ -306,22 +306,6 @@ export function ChatPage() {
     };
   }, [routeChannel, routeUserId, sessionKey, workspaceDirParam, modeParam, skillsParam]);
 
-  useEffect(() => {
-    if (routeSessionKey && routeChannel) {
-      return;
-    }
-    const next = defaultSessionKey || makeSessionKey();
-    // DEBUG: delay setState to the next tick to avoid sync setState during render.
-    // React 19 production throws #185 if setState is called during render phase.
-    const basePath = "/chat";
-    setTimeout(() => {
-      if (!defaultSessionKey) {
-        setDefaultSessionKey(next);
-      }
-      navigate(`${basePath}/web/${next}`, { replace: true });
-    }, 0);
-  }, [defaultSessionKey, navigate, routeChannel, routeSessionKey, setDefaultSessionKey]);
-
   const openQuery = useQuery({
     queryKey: ["session-open", token, sessionLocator.channel, sessionLocator.key, sessionLocator.user_id],
     enabled: !!sessionKey && (!authRequired || !!token),
@@ -544,6 +528,47 @@ export function ChatPage() {
     staleTime: 5 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
   });
+
+  // 修复 bug：从其它页面（如「任务看板」）切到「聊天」不应自动新建对话。
+  // 裸 /chat（无 routeSessionKey）时，等会话列表加载完成后恢复到最近一次活跃会话；
+  // 仅当确实没有任何历史会话时才新建。用 buildChatRouteForSession 走完整 locator
+  // 身份编码，避免「跳转开成新会话」（此前 db1e687/ad9b722 修过同类根因）。
+  useEffect(() => {
+    if (routeSessionKey && routeChannel) {
+      return;
+    }
+    if (sessionsQuery.isPending || sessionsQuery.isLoading) {
+      // 列表还在拉取，先不决策，避免把「切回聊天」误判成「新建对话」。
+      return;
+    }
+    if (authRequired && !token) {
+      // 未认证时无法可靠恢复/创建会话，交给 openQuery 的 guard 处理。
+      return;
+    }
+    const sessions = sessionsQuery.data ?? [];
+    const mostRecent = [...sessions].sort(
+      (left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
+    )[0];
+    if (mostRecent) {
+      // 复用最近一次活跃会话（完整 locator 身份编码跳转，避免开成新会话）。
+      navigate(buildChatRouteForSession(mostRecent), { replace: true });
+      return;
+    }
+    // 没有任何历史会话（首次使用）才新建一个。
+    const next = makeSessionKey();
+    setDefaultSessionKey(next);
+    navigate(`/chat/web/${next}`, { replace: true });
+  }, [
+    authRequired,
+    navigate,
+    routeChannel,
+    routeSessionKey,
+    setDefaultSessionKey,
+    sessionsQuery.data,
+    sessionsQuery.isLoading,
+    sessionsQuery.isPending,
+    token,
+  ]);
 
   useEffect(() => {
     const opened = openQuery.data;

@@ -1217,7 +1217,10 @@ function LLMProvidersEditor({
         items={providers.items.map((provider, providerIndex) => {
           const apiKeyConfigured = stringsPresent(provider.api_key) || provider.api_key === SECRET_MASK;
           return {
-            key: provider.id || String(providerIndex),
+            // Use the stable index as the panel key: provider.id is editable
+            // and changes on every keystroke, so keying on it would remount
+            // the panel and reset its expand state mid-typing.
+            key: String(providerIndex),
             label: (
               <span className="llm-provider-collapse-label">
                 <Typography.Text strong>{provider.id || t("settings.unnamedProvider")}</Typography.Text>

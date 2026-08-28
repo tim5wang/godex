@@ -288,7 +288,7 @@ Chat │ Files │ Automation │ Nodes │ Notes │ Skills │ ★Agent 模板
 | **M1：模板核心** | AgentTemplate 结构 + Manager（CRUD/Resolve）+ ApplyTemplate 运行时链（persona/profile/skills/bundles/mcp 注入 system_prompt_dynamic 与 SetActiveToolsExact）+ 会话创建传 template + 7 个内置模板 | §10 验收 1-4 通过 |
 | **M2：人才市场 UI + 对话入口切换** | AgentTemplatesPage（卡片网格 + 编辑抽屉 + 校验）+ 新建对话模板选择器替换模式选择 + 兼容 mode 映射 | 用户可全程 UI 完成建模板→选模板开聊；验收 1-4 复测 |
 | **M3：任务看板模板分派（原 M3 重规划）** | 卡片 template_id + 执行器按模板起独立执行会话（Q1=B，弃用投递 host 会话）+ 执行者画像展示 + 预算联动 | §10 验收 5 通过；taskboard 文档同步更新 |
-| **M4：收敛与增强** | **P1：BizAPIKey template_id 收敛（§7.2）** → P2：项目级模板覆盖（Q2 预留启用）+ 模板导入导出/分享 → P3：自然语言生成模板（**会话中热切换模板 Q3B 本轮砍掉**，保留在路线图——与省 token 核心诉求冲突，切换清 prefix-cache） | 模板与 key 白名单无双份维护 |
+| **M4：收敛与增强** | **P1 ✅ BizAPIKey template_id 收敛（6c16fd7）** → **P2：项目级模板覆盖（Q2 预留启用）+ 模板导入导出/分享** → **P3：自然语言生成模板**（P2/P3 已完成设计并保留在此路线，**后续再完善**；会话中热切换模板 Q3B 已砍，保留路线图——与省 token 核心诉求冲突，切换清 prefix-cache） | P1 出口判据已达成（模板与 key 白名单无双份维护）；P2/P3 待后续完善 |
 
 ---
 

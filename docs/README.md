@@ -2,6 +2,7 @@
 
 > 本索引帮助快速定位每份文档的用途、状态与相互关系。
 > 修订日志：2026-08-12 首次建立索引；统一文档状态头与修订日志约定，标注被合并/被取代的旧文档。
+> 2026-08-28：补充 taskboard-plugin-design.md 条目（taskboard 插件已交付 M1/M2/M2.5）。
 
 ## 状态约定
 
@@ -26,6 +27,7 @@
 | [memory-design-principles.md](./memory-design-principles.md) | Memory 模块目标、边界、组成与约束 | |
 | [workflow-runtime.md](./workflow-runtime.md) | durable workflow runtime（长任务/多 agent） | |
 | [scope-isolation-design.md](./scope-isolation-design.md) | Scope 隔离模型设计（roadmap 6.2，M1-M5 已完成） | |
+| [taskboard-plugin-design.md](./taskboard-plugin-design.md) | taskboard 插件（需求池 #1）：设计与实现参照（M1 核心闭环/M2 看板/M2.5 执行进度跳转 ✅，M3 未开始）；含卡片死锁修复（human 越锁 + 离开 in_progress 自动终结 running execution） | |
 | [per-session-workspace-plan.md](./per-session-workspace-plan.md) | Per-Session 工作目录（已实施 2026-07-31） | |
 | [spec-of-chat-layout-optimize.md](./spec-of-chat-layout-optimize.md) | Web UI 聊天工作区升级 SPEC（M0/M1 已落地） | |
 | [p0-p4-visualization-design.md](./p0-p4-visualization-design.md) | P0-P4 可视化设计（A1/A2/B1/B2/C1 完成，A3/B3/C2 待办） | |
@@ -55,7 +57,7 @@
 | [longtask-analysis.md](./longtask-analysis.md) | 已合并入 godex-optimization-roadmap |
 | [roadmap-high-roi.md](./roadmap-high-roi.md) | 已合并入 godex-optimization-roadmap |
 | [roadmap-runtime-hardening.md](./roadmap-runtime-hardening.md) | 已合并入 godex-optimization-roadmap |
-| [agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md) | 角色/bundle 设计已纳入 godex-optimization-roadmap 与 Phase 4 |
+| [agent-template-board-design.md](./agent-template-board-design.md) | 草稿已吸收进 [agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md)（agent 模板板块主设计文档） |
 | [capability-enhancement-v1.md](./capability-enhancement-v1.md) | 已被 v2 修订取代 |
 | [capability-enhancement-v2.md](./capability-enhancement-v2.md) | 产品化规划 v2（另一条规划线，非 P0-P6 分期来源） |
 

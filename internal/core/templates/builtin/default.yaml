@@ -1,0 +1,9 @@
+# Built-in default template: reproduces the legacy "standard" session mode.
+# Empty bundles/tools means: keep the registered default-active tool set and
+# all dynamic prompt sections unchanged (zero-behavior-change upgrade path).
+id: default
+name: General
+description: Full default capability set; equivalent to the legacy standard mode.
+avatar: "🤖"
+color: "#5b8def"
+scenarios: ["general"]

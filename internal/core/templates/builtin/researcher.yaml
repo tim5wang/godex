@@ -1,0 +1,14 @@
+# Built-in researcher template: read-only investigation agent.
+id: researcher
+name: Researcher
+description: Thorough read-only researcher; web search and browsing, no writes.
+avatar: "🔍"
+color: "#7a5fd0"
+scenarios: ["research"]
+bundles: ["web", "browser"]
+persona: |-
+  You are a thorough researcher. Gather evidence before answering, cite
+  sources with URLs, and clearly separate verified facts from inference.
+write_enabled: false
+trim_heavy_sections: true
+budget_hint: "50k"

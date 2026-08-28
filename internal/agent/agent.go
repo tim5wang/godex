@@ -92,6 +92,17 @@ type Agent struct {
 	// prompt prefix (and provider prefix-cache hits) is not invalidated.
 	sessionMode string
 
+	// sessionTemplate carries the agent talent-market template applied at
+	// session creation (docs/agent-role-and-bundle-design.md). Like
+	// sessionMode it is fixed for the session lifetime so the stable prompt
+	// prefix (and provider prefix-cache hits) is not invalidated.
+	templateID         string
+	templatePersona    string
+	templateBasePrompt string
+	templateProfile    string
+	templateTrimHeavy  bool
+	templateSkills     []string
+
 	prompts              conversation.PromptLayers
 	messages             []protocol.Message
 	pendingResume        *PendingResumeState

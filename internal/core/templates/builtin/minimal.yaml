@@ -1,0 +1,10 @@
+# Built-in minimal template: reproduces the legacy "minimal" session mode
+# (only the four core tools; heavyweight background prompt sections trimmed).
+id: minimal
+name: Minimal
+description: Lean file/shell work preset; only core tools, trimmed context sections.
+avatar: "⚡"
+color: "#8f8f8f"
+scenarios: ["general", "quick"]
+tools: ["read_file", "write_file", "edit_file", "bash"]
+trim_heavy_sections: true

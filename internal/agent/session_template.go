@@ -1,0 +1,108 @@
+package agent
+
+import (
+	"strings"
+
+	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/templates"
+	"github.com/tim5wang/godex/internal/tools"
+)
+
+// ApplyTemplate applies an agent talent-market template to the session
+// (docs/agent-role-and-bundle-design.md M1). It is called once at session
+// load, after ApplySessionMode, so an explicit template wins over the legacy
+// mode mapping. Like sessionMode the template is fixed for the session
+// lifetime: the persona/base prompt live in the stable system prompt and the
+// initial tool set does not change mid-session, keeping the prompt prefix
+// (and provider prefix-cache hits) stable.
+func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
+	a.mu.Lock()
+	a.templateID = strings.TrimSpace(t.ID)
+	a.templatePersona = strings.TrimSpace(t.Persona)
+	a.templateBasePrompt = strings.TrimSpace(t.BasePrompt)
+	a.templateProfile = strings.ToLower(strings.TrimSpace(t.Profile))
+	a.templateTrimHeavy = t.TrimHeavySections
+	a.templateSkills = append([]string(nil), t.Skills...)
+	a.mu.Unlock()
+
+	switch {
+	case len(t.Tools) > 0:
+		// Explicit tool allowlist wins over bundle presets.
+		a.toolHandler.SetActiveTools(t.Tools...)
+	case len(t.Bundles) > 0:
+		if names := toolNamesForBundles(a.toolHandler.Catalog(), t.Bundles); len(names) > 0 {
+			a.toolHandler.SetActiveTools(names...)
+		}
+	}
+}
+
+// toolNamesForBundles resolves the union of tool names registered in the
+// named bundles, preserving catalog order. Unknown bundle names are ignored.
+func toolNamesForBundles(cat tools.ToolCatalog, bundles []string) []string {
+	set := make(map[string]struct{}, len(bundles))
+	for _, b := range bundles {
+		set[strings.ToLower(strings.TrimSpace(b))] = struct{}{}
+	}
+	names := make([]string, 0, 16)
+	for _, b := range cat.Bundles {
+		if _, ok := set[strings.ToLower(strings.TrimSpace(b.Name))]; !ok {
+			continue
+		}
+		names = append(names, b.Tools...)
+	}
+	return names
+}
+
+// TemplateID returns the ID of the applied template ("" when none).
+func (a *Agent) TemplateID() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.templateID
+}
+
+// TemplateSkills returns the template's preset skills; the backend loads
+// them for new sessions when no explicit per-session skill preset was
+// requested.
+func (a *Agent) TemplateSkills() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.templateSkills...)
+}
+
+// templatePersonaPrompt returns the persona prompt ("" when unset). Persona
+// is creation-time fixed, so it safely lives in the stable system prompt.
+func (a *Agent) templatePersonaPrompt() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.templatePersona
+}
+
+// templateBasePromptSection returns the template's behavioral boundary rules
+// ("" when unset), appended after the capability-check section.
+func (a *Agent) templateBasePromptSection() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.templateBasePrompt
+}
+
+// effectiveTemplateProfile returns the template's profile override when set,
+// otherwise the passed-in (context/config) profile.
+func (a *Agent) effectiveTemplateProfile(agentProfile string) string {
+	profile := config.NormalizeAgentProfile(agentProfile)
+	a.mu.Lock()
+	tp := a.templateProfile
+	a.mu.Unlock()
+	if tp != "" {
+		profile = config.NormalizeAgentProfile(tp)
+	}
+	return profile
+}
+
+// promptTrimHeavySections reports whether the heavyweight background prompt
+// sections (skill catalog / repo map / active skills) should be omitted:
+// either the legacy minimal mode or a template with trim_heavy_sections.
+func (a *Agent) promptTrimHeavySections() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.sessionMode == SessionModeMinimal || a.templateTrimHeavy
+}

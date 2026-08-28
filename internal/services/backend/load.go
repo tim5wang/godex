@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/tim5wang/godex/internal/agent"
 	coresec "github.com/tim5wang/godex/internal/core/security"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/security"
@@ -93,6 +94,17 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	if mode := strings.TrimSpace(session.locator.Metadata["mode"]); mode != "" {
 		a.ApplySessionMode(mode)
 	}
+	// Agent template ("talent market") preset: applied after the legacy mode
+	// so an explicit template wins. Like the mode it is applied before
+	// RestoreStateForSession so a resumed session's persisted state wins, and
+	// stays fixed for the session (stable prompt prefix / prefix-cache).
+	if s.cfg != nil {
+		if tmplID := strings.TrimSpace(session.locator.Metadata["template"]); tmplID != "" {
+			if t, _, err := templates.NewManager(s.cfg.StateDir, s.cfg.SkillsDir).Resolve(tmplID); err == nil {
+				a.ApplyTemplate(t)
+			}
+		}
+	}
 	if session.modelProfileID != "" {
 		if profile, ok := s.cfg.ModelProfileByID(session.modelProfileID); ok {
 			if effort := normalizeSessionReasoningEffort(session.reasoningEffort); effort != "" {
@@ -116,6 +128,8 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		// resumed sessions keep their persisted active-skill state.
 		if requested := requestedSessionSkills(session.locator); len(requested) > 0 {
 			a.LoadNamedSkills(requested)
+		} else if tmplSkills := a.TemplateSkills(); len(tmplSkills) > 0 {
+			a.LoadNamedSkills(tmplSkills)
 		} else {
 			a.LoadDefaultSkills()
 		}

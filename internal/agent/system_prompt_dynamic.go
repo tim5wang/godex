@@ -62,23 +62,25 @@ func (a *Agent) buildDynamicSystemPrompt(agentProfile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	profile := config.NormalizeAgentProfile(agentProfile)
+	profile := a.effectiveTemplateProfile(agentProfile)
 	return strings.Join(filterNonEmpty(
+		a.templatePersonaPrompt(),
 		instructionPrompt,
 		buildCodingProfilePrompt(profile),
 		buildCapabilityCheckPromptForProfile(a.toolHandler.Catalog(), profile),
+		a.templateBasePromptSection(),
 	), "\n\n"), nil
 }
 
 func (a *Agent) buildDynamicRuntimePromptSections(agentProfile string) ([]runtimePromptSection, error) {
-	profile := config.NormalizeAgentProfile(agentProfile)
+	profile := a.effectiveTemplateProfile(agentProfile)
 	sections := make([]runtimePromptSection, 0, 5)
 
 	// Minimal mode (roadmap new-chat mode): omit the heavyweight background
 	// sections (repo map / skill catalog, active skills) so the prompt stays
 	// small and focused on file/shell work. Environment and tool availability
 	// are always kept because tools must know where they run.
-	if !a.sessionModeIsMinimal() {
+	if !a.promptTrimHeavySections() {
 		if profile != config.AgentProfileCoding {
 			skillCatalogPrompt, err := a.buildSkillCatalogPrompt()
 			if err != nil {

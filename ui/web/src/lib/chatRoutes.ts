@@ -12,7 +12,7 @@ export function buildChatRoute(locator: SessionLocator) {
   // + metadata). Every identity-bearing field must survive the URL, or
   // ChatPage will re-hash a different session id, OpenSession will miss, and
   // the page falls back to creating a new chat. ChatPage reads these params
-  // back into locator metadata (project_dir/mode/requested_skills).
+  // back into locator metadata (project_dir/mode/template/requested_skills).
   const query: string[] = [];
   const userId = locator.user_id?.trim();
   if (userId) {
@@ -25,6 +25,10 @@ export function buildChatRoute(locator: SessionLocator) {
   const mode = locator.metadata?.mode?.trim();
   if (mode) {
     query.push(`mode=${encodeURIComponent(mode)}`);
+  }
+  const template = locator.metadata?.template?.trim();
+  if (template) {
+    query.push(`template=${encodeURIComponent(template)}`);
   }
   const skills = locator.metadata?.requested_skills?.trim();
   if (skills) {

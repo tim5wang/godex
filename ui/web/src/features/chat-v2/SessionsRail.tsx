@@ -16,6 +16,7 @@ import {
 } from "@ant-design/icons";
 import { useMemo, useState } from "react";
 import type { ListedSession, SkillCatalogEntry } from "../../lib/types";
+import type { AgentTemplate } from "../../lib/api";
 import { useI18n } from "../../i18n";
 import { filterSessions, groupSessionsByWorkspace, isTempDir } from "./sessionGroups";
 import type { WorkspaceGroup, WorkspaceGroupType } from "./sessionGroups";
@@ -34,8 +35,10 @@ interface SessionsRailProps {
   /** Installed-skill catalog for the new-chat skill picker (global, session-independent). */
   skillsCatalog?: SkillCatalogEntry[];
   skillsLoading?: boolean;
-  /** workspaceDir 为空/undefined 时使用服务默认运行目录；mode 为新建会话模式预设；skills 为新建会话要加载的已安装 skill 名。 */
-  onCreate: (workspaceDir?: string, mode?: string, skills?: string[]) => void;
+  templates?: AgentTemplate[];
+  templatesLoading?: boolean;
+  /** workspaceDir 为空/undefined 时使用服务默认运行目录；template 为新建会话选择的 agent 模板 ID（缺省 default）；skills 为新建会话要加载的已安装 skill 名。 */
+  onCreate: (workspaceDir?: string, template?: string, skills?: string[]) => void;
   onSelect: (session: ListedSession) => void;
   onDelete: (session: ListedSession) => void;
   onRename: (session: ListedSession, title: string) => void;
@@ -186,13 +189,15 @@ function NewChatWorkspacePopover(props: {
   sessions: ListedSession[];
   skillsCatalog?: SkillCatalogEntry[];
   skillsLoading?: boolean;
-  onCreate: (workspaceDir?: string, mode?: string, skills?: string[]) => void;
+  templates?: AgentTemplate[];
+  templatesLoading?: boolean;
+  onCreate: (workspaceDir?: string, template?: string, skills?: string[]) => void;
   children: React.ReactNode;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [dir, setDir] = useState("");
-  const [mode, setMode] = useState("default");
+  const [template, setTemplate] = useState("default");
   const [skills, setSkills] = useState<string[]>([]);
   // Distinct non-temp working directories seen in existing sessions, newest
   // first, so the picker offers real history instead of free-text only.
@@ -222,11 +227,11 @@ function NewChatWorkspacePopover(props: {
   const submit = () => {
     props.onCreate(
       dir.trim() || undefined,
-      mode === "default" ? undefined : mode,
+      template === "default" ? undefined : template,
       skills.length > 0 ? [...skills] : undefined,
     );
     setDir("");
-    setMode("default");
+    setTemplate("default");
     setSkills([]);
     setOpen(false);
   };
@@ -259,21 +264,29 @@ function NewChatWorkspacePopover(props: {
           />
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
-              {t("chat.chatV2Rail.modeLabel")}
+              {t("chat.chatV2Rail.templateLabel")}
             </Typography.Text>
             <Select
               size="small"
               style={{ flex: 1 }}
-              value={mode}
-              onChange={setMode}
+              value={template}
+              onChange={setTemplate}
+              loading={props.templatesLoading}
+              showSearch
+              optionFilterProp="label"
               options={[
-                { value: "default", label: t("chat.chatV2Rail.modeDefault") },
-                { value: "minimal", label: t("chat.chatV2Rail.modeMinimal") },
+                { value: "default", label: t("chat.chatV2Rail.templateDefault") },
+                ...(props.templates ?? [])
+                  .filter((tpl) => tpl.id?.trim() && tpl.id !== "default")
+                  .map((tpl) => ({
+                    value: tpl.id,
+                    label: tpl.avatar ? `${tpl.avatar} ${tpl.name || tpl.id}` : tpl.name || tpl.id,
+                  })),
               ]}
             />
           </div>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {t("chat.chatV2Rail.modeHint")}
+            {t("chat.chatV2Rail.templateHint")}
           </Typography.Text>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -336,7 +349,7 @@ export function SessionsRail(props: SessionsRailProps) {
             <Popover content={t("chat.chatV2Rail.expandSidebar")} trigger="hover" placement="right">
               <Button type="text" icon={<VerticalRightOutlined />} aria-label={t("chat.chatV2Rail.expandSidebar")} onClick={props.onToggleCollapsed} />
             </Popover>
-            <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} onCreate={props.onCreate}>
+            <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} templates={props.templates} templatesLoading={props.templatesLoading} onCreate={props.onCreate}>
               <Button type="text" icon={<PlusOutlined />} aria-label={t("chat.chatV2Rail.newChat")} />
             </NewChatWorkspacePopover>
           </>
@@ -348,7 +361,7 @@ export function SessionsRail(props: SessionsRailProps) {
   return (
     <div className="chat-v2-rail" data-testid="chat-v2-sessions">
       <div className="chat-v2-rail-top">
-        <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} onCreate={props.onCreate}>
+        <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} templates={props.templates} templatesLoading={props.templatesLoading} onCreate={props.onCreate}>
           <Button block type="primary" icon={<PlusOutlined />} className="chat-v2-new-chat">
             {t("chat.chatV2Rail.newChat")}
           </Button>

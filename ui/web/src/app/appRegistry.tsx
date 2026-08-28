@@ -5,6 +5,7 @@ import {
   ProfileOutlined,
   BulbOutlined,
   CommentOutlined,
+  TeamOutlined,
   DatabaseOutlined,
   FileTextOutlined,
   FolderViewOutlined,
@@ -39,6 +40,7 @@ const loadAutomationPage = () => import("../pages/AutomationPage");
 const loadNodesPage = () => import("../pages/NodesPage");
 const loadNotesPage = () => import("../pages/NotesPage");
 const loadSkillsPage = () => import("../pages/SkillsPage");
+const loadAgentTemplatesPage = () => import("../pages/AgentTemplatesPage");
 const loadMemoryPage = () => import("../pages/MemoryPage");
 const loadBusinessAgentsPage = () => import("../pages/BusinessAgentsPage");
 const loadTaskBoardPage = () => import("../pages/TaskBoardPage");
@@ -123,6 +125,17 @@ export const builtinApps: BuiltinAppEntry[] = [
     component: pageComponent(loadSkillsPage, "SkillsPage"),
     isActive: (pathname) => pathname.startsWith("/skills"),
     headerSubtitleKey: "skills.pageSubtitle",
+  }),
+  entry({
+    id: "agent-templates",
+    navPath: "/agents",
+    routePaths: ["/agents"],
+    icon: <TeamOutlined />,
+    labelKey: "app.nav.agentTemplates",
+    load: loadAgentTemplatesPage,
+    component: pageComponent(loadAgentTemplatesPage, "AgentTemplatesPage"),
+    isActive: (pathname) => pathname.startsWith("/agents"),
+    headerSubtitleKey: "agentTemplates.pageSubtitle",
   }),
   entry({
     id: "memory",

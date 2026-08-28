@@ -974,6 +974,57 @@ export function listSkillsCatalog(token: string | null) {
   return request<SkillCatalogEntry[]>("/skills/catalog", { method: "GET" }, token);
 }
 
+/** Agent template (talent market): a named preset of an agent's capability
+ *  boundary (bundles/tools, skills, MCP servers, persona, write scope)
+ *  selected at session creation time. See docs/agent-role-and-bundle-design.md. */
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  avatar?: string;
+  color?: string;
+  scenarios?: string[];
+  bundles?: string[];
+  tools?: string[];
+  write_enabled?: boolean;
+  write_scope?: string[];
+  mcp_servers?: string[];
+  skills?: string[];
+  packages?: string[];
+  persona?: string;
+  profile?: string;
+  base_prompt?: string;
+  model_hint?: string;
+  budget_hint?: string;
+  trim_heavy_sections?: boolean;
+  project_dir?: string;
+  source?: string;
+}
+
+export function listAgentTemplates(token: string | null) {
+  return request<AgentTemplate[]>("/agent-templates", { method: "GET" }, token);
+}
+
+export function getAgentTemplate(token: string | null, id: string) {
+  return request<AgentTemplate>(`/agent-templates/${encodeURIComponent(id)}`, { method: "GET" }, token);
+}
+
+export function createAgentTemplate(token: string | null, tpl: Partial<AgentTemplate>) {
+  return request<AgentTemplate>("/agent-templates", { method: "POST", body: JSON.stringify(tpl) }, token);
+}
+
+export function updateAgentTemplate(token: string | null, id: string, tpl: Partial<AgentTemplate>) {
+  return request<AgentTemplate>(`/agent-templates/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(tpl) }, token);
+}
+
+export function deleteAgentTemplate(token: string | null, id: string) {
+  return request<{ deleted: string }>(`/agent-templates/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
+}
+
+export function validateAgentTemplate(token: string | null, id: string) {
+  return request<{ template: AgentTemplate; warnings: string[] }>(`/agent-templates/${encodeURIComponent(id)}/validate`, { method: "POST" }, token);
+}
+
 export function listSessionSkillSources(
   token: string | null,
   sessionId: string,

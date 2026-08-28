@@ -15,6 +15,12 @@ import (
 // lifetime: the persona/base prompt live in the stable system prompt and the
 // initial tool set does not change mid-session, keeping the prompt prefix
 // (and provider prefix-cache hits) stable.
+//
+// Tool semantics are EXACT: the session gets precisely Tools ∪ bundle-tools
+// (SetActiveToolsExact), with no force-preserved always-active extras. Meta
+// tools that must stay reachable must be listed explicitly or via the
+// "always_on" virtual bundle. Legacy session modes keep SetActiveTools,
+// which preserves always-active tools for backward compatibility.
 func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 	a.mu.Lock()
 	a.templateID = strings.TrimSpace(t.ID)
@@ -26,12 +32,16 @@ func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 	a.mu.Unlock()
 
 	switch {
+	case len(t.Tools) > 0 && len(t.Bundles) > 0:
+		// Union: explicit tools on top of the bundle presets.
+		names := toolNamesForBundles(a.toolHandler.Catalog(), t.Bundles)
+		a.toolHandler.SetActiveToolsExact(append(names, t.Tools...)...)
 	case len(t.Tools) > 0:
-		// Explicit tool allowlist wins over bundle presets.
-		a.toolHandler.SetActiveTools(t.Tools...)
+		// Exact allowlist: the session gets exactly the listed tools.
+		a.toolHandler.SetActiveToolsExact(t.Tools...)
 	case len(t.Bundles) > 0:
 		if names := toolNamesForBundles(a.toolHandler.Catalog(), t.Bundles); len(names) > 0 {
-			a.toolHandler.SetActiveTools(names...)
+			a.toolHandler.SetActiveToolsExact(names...)
 		}
 	}
 }

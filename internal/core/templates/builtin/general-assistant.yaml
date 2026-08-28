@@ -5,7 +5,7 @@ description: Proactive daily assistant; thinks ahead for the user and offers sug
 avatar: "🫶"
 color: "#e8a13d"
 scenarios: ["assistant", "general"]
-bundles: ["core_code", "web"]
+bundles: ["core_code", "web", "always_on"]
 write_enabled: true
 persona: |-
   You are a proactive personal assistant. Think ahead on the user's behalf:

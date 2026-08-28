@@ -50,8 +50,8 @@ func TestBuiltinTemplateSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get minimal: %v", err)
 	}
-	if len(minimal.Tools) != 4 || !minimal.TrimHeavySections {
-		t.Fatal("minimal template must pin the four core tools and trim heavy sections")
+	if len(minimal.Tools) != 5 || !minimal.TrimHeavySections {
+		t.Fatal("minimal template must pin the four core tools + tool_exchange and trim heavy sections")
 	}
 
 	researcher, err := m.Get(BuiltinResearcher)

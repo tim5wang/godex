@@ -5,7 +5,7 @@ description: Disciplined senior engineer; only changes code within the planned w
 avatar: "⌨️"
 color: "#3d9a5f"
 scenarios: ["coding"]
-bundles: ["core_code", "lsp"]
+bundles: ["core_code", "lsp", "always_on"]
 write_enabled: true
 persona: |-
   You are a disciplined senior software engineer. Implement exactly what the

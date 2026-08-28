@@ -179,10 +179,23 @@ func (h *ToolHandler) RegisterOwned(owner string, tool Tool, meta ToolMeta) (*Re
 	return &Registration{handler: h, name: name, owner: owner, generation: generation}, nil
 }
 
+const (
+	// BundleAlwaysOn groups host-resident meta tools (registered with
+	// AlwaysActive) into a visible, selectable virtual bundle so templates
+	// can include them explicitly instead of them being force-preserved
+	// invisibly.
+	BundleAlwaysOn = "always_on"
+)
+
 func (h *ToolHandler) registerWithMetaLocked(tool Tool, meta ToolMeta) {
 	name := tool.Name()
 	if existing, ok := h.meta[name]; ok && existing.Bundle != "" && existing.Bundle != meta.Bundle {
 		h.bundleTools[existing.Bundle] = stringutil.Remove(h.bundleTools[existing.Bundle], name)
+	}
+	// Drop out of the virtual always_on bundle on re-registration without
+	// AlwaysActive (e.g. a component replacing its own tool metadata).
+	if prior, ok := h.meta[name]; ok && prior.AlwaysActive && !meta.AlwaysActive {
+		h.bundleTools[BundleAlwaysOn] = stringutil.Remove(h.bundleTools[BundleAlwaysOn], name)
 	}
 
 	h.tools[name] = tool
@@ -197,6 +210,10 @@ func (h *ToolHandler) registerWithMetaLocked(tool Tool, meta ToolMeta) {
 
 	if meta.AlwaysActive {
 		h.activeTools[name] = struct{}{}
+		h.bundleTools[BundleAlwaysOn] = stringutil.AppendUnique(h.bundleTools[BundleAlwaysOn], name)
+		if h.bundleSummary[BundleAlwaysOn] == "" {
+			h.bundleSummary[BundleAlwaysOn] = "Host-resident meta tools (memory, skills, compression, session management, tool exchange, ...)"
+		}
 	}
 }
 
@@ -213,6 +230,13 @@ func (h *ToolHandler) removeToolLocked(name string) {
 		if len(h.bundleTools[meta.Bundle]) == 0 {
 			delete(h.bundleTools, meta.Bundle)
 			delete(h.bundleSummary, meta.Bundle)
+		}
+	}
+	if meta.AlwaysActive {
+		h.bundleTools[BundleAlwaysOn] = stringutil.Remove(h.bundleTools[BundleAlwaysOn], name)
+		if len(h.bundleTools[BundleAlwaysOn]) == 0 {
+			delete(h.bundleTools, BundleAlwaysOn)
+			delete(h.bundleSummary, BundleAlwaysOn)
 		}
 	}
 	delete(h.meta, name)
@@ -581,6 +605,28 @@ func (h *ToolHandler) SetActiveTools(names ...string) {
 			h.activeTools[name] = struct{}{}
 			continue
 		}
+		if _, ok := desired[name]; ok {
+			h.activeTools[name] = struct{}{}
+		} else {
+			delete(h.activeTools, name)
+		}
+	}
+}
+
+// SetActiveToolsExact replaces the active tool set with exactly the named
+// tools: always-active tools are NOT force-preserved. The template chain uses
+// this so a preset like "only edit_file + bash" yields exactly that set;
+// meta tools that must stay reachable should be listed explicitly (or via the
+// "always_on" bundle). Legacy session modes keep using SetActiveTools, which
+// preserves always-active tools for backward compatibility.
+func (h *ToolHandler) SetActiveToolsExact(names ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	desired := make(map[string]struct{}, len(names))
+	for _, name := range stringutil.UniqueNonEmpty(names) {
+		desired[name] = struct{}{}
+	}
+	for name := range h.meta {
 		if _, ok := desired[name]; ok {
 			h.activeTools[name] = struct{}{}
 		} else {

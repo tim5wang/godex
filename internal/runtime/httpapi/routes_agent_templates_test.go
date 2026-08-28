@@ -87,7 +87,7 @@ func TestAgentTemplatesListAndGet(t *testing.T) {
 	if err := json.Unmarshal(raw, &minimal); err != nil {
 		t.Fatalf("decode minimal: %v", err)
 	}
-	if len(minimal.Tools) != 4 || !minimal.TrimHeavySections {
+	if len(minimal.Tools) != 5 || !minimal.TrimHeavySections {
 		t.Fatal("minimal template lost its tool preset / trim flag over the wire")
 	}
 
@@ -123,6 +123,9 @@ func TestAgentTemplatesOptions(t *testing.T) {
 		// when the corresponding tools are enabled), so assert the always-on
 		// core bundle instead of a fixed bundle set.
 		t.Fatalf("expected core_code bundle, got %v", bundles)
+	}
+	if !bundles["always_on"] {
+		t.Fatalf("expected always_on virtual bundle, got %v", bundles)
 	}
 	toolSet := map[string]bool{}
 	for _, name := range options.Tools {

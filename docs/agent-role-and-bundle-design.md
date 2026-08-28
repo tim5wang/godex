@@ -74,7 +74,7 @@ type AgentTemplate struct {
     Scenarios   []string `json:"scenarios,omitempty" yaml:"scenarios,omitempty"` // 标签：coding / writing / research / assistant ...
 
     // --- 能力边界 ---
-    Bundles      []string `json:"bundles,omitempty" yaml:"bundles,omitempty"`           // 初始激活 bundle（复用 SetActiveTools 语义，always-active 工具自动保留）
+    Bundles      []string `json:"bundles,omitempty" yaml:"bundles,omitempty"`           // 初始激活 bundle（精确集合语义：Tools ∪ bundle-tools，经 SetActiveToolsExact 应用；常驻元工具经 always_on bundle 显式选择）
     Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`               // 细粒度工具白名单（可选，优先于 bundles 全集）
     WriteEnabled bool     `json:"write_enabled,omitempty" yaml:"write_enabled,omitempty"`
     WriteScope   []string `json:"write_scope,omitempty" yaml:"write_scope,omitempty"`   // 写路径白名单（对接 4.5 解析链）
@@ -161,7 +161,7 @@ AgentTemplate (YAML)
   ├─ Profile ───────────► buildDynamicSystemPrompt(profile)（capability_check 等段）
   ├─ BasePrompt ────────► 角色指令段（行为边界规则，如"不改未规划代码"）
   ├─ Skills ────────────► skill.Loader.Load → skill_catalog + active_skills 段
-  ├─ Bundles/Tools ─────► toolHandler.SetActiveTools（复用 session_mode 骨架）
+  ├─ Bundles/Tools ─────► toolHandler.SetActiveToolsExact（精确集合：Tools ∪ bundle-tools；常驻元工具经 always_on 虚拟 bundle 显式选择，不再隐式强制保留）
   │                        └─ 仅激活场景所需 schema → tool_availability 段收窄
   ├─ MCPServers ────────► 仅白名单内 MCP server 建连，其工具进 catalog
   ├─ Packages ──────────► package roles/tools 进入可用池
@@ -278,7 +278,7 @@ Chat │ Files │ Automation │ Nodes │ Notes │ Skills │ ★Agent 模板
 
 | 期 | 内容 | 出口判据 |
 |---|---|---|
-| **M1：模板核心** | AgentTemplate 结构 + Manager（CRUD/Resolve）+ ApplyTemplate 运行时链（persona/profile/skills/bundles/mcp 注入 system_prompt_dynamic 与 SetActiveTools）+ 会话创建传 template + 7 个内置模板 | §10 验收 1-4 通过 |
+| **M1：模板核心** | AgentTemplate 结构 + Manager（CRUD/Resolve）+ ApplyTemplate 运行时链（persona/profile/skills/bundles/mcp 注入 system_prompt_dynamic 与 SetActiveToolsExact）+ 会话创建传 template + 7 个内置模板 | §10 验收 1-4 通过 |
 | **M2：人才市场 UI + 对话入口切换** | AgentTemplatesPage（卡片网格 + 编辑抽屉 + 校验）+ 新建对话模板选择器替换模式选择 + 兼容 mode 映射 | 用户可全程 UI 完成建模板→选模板开聊；验收 1-4 复测 |
 | **M3：任务看板模板分派（原 M3 重规划）** | 卡片 template_id + 执行器按模板起会话 + 执行者画像展示 + 预算联动 | §10 验收 5 通过；taskboard 文档同步更新 |
 | **M4：收敛与增强** | BizAPIKey template_id 收敛（§7.2）；项目级模板覆盖（Q2 预留启用）；模板导入导出/分享；会话中热切换模板（Q3B，复用 6.4 reset 语义，需明确缓存代价提示）；自然语言生成模板 | 模板与 key 白名单无双份维护 |

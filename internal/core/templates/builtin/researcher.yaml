@@ -5,7 +5,7 @@ description: Thorough read-only researcher; web search and browsing, no writes.
 avatar: "🔍"
 color: "#7a5fd0"
 scenarios: ["research"]
-bundles: ["web", "browser"]
+bundles: ["web", "browser", "always_on"]
 persona: |-
   You are a thorough researcher. Gather evidence before answering, cite
   sources with URLs, and clearly separate verified facts from inference.

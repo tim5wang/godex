@@ -37,9 +37,10 @@ func TestApplyTemplateActivatesBundleToolsOnly(t *testing.T) {
 	if a.toolHandler.IsActive("bash") {
 		t.Fatal("expected bash inactive for a web/browser-only template")
 	}
-	// Always-active tools survive SetActiveTools.
-	if !a.toolHandler.IsActive("memory") {
-		t.Fatal("expected always-active tools to survive template tool preset")
+	// Exact semantics: always-active meta tools are NOT force-preserved;
+	// templates that need them list them explicitly (e.g. via always_on).
+	if a.toolHandler.IsActive("memory") {
+		t.Fatal("expected exact semantics: memory not force-preserved without always_on")
 	}
 }
 
@@ -59,8 +60,54 @@ func TestApplyTemplateToolsAllowlistWins(t *testing.T) {
 	if a.toolHandler.IsActive("web_search") {
 		t.Fatal("expected web_search inactive: tools allowlist wins over nothing else")
 	}
+	if a.toolHandler.IsActive("memory") {
+		t.Fatal("expected exact semantics: memory not force-preserved by tools allowlist")
+	}
+}
+
+func TestApplyTemplateExactToolSetReproducesLeanPreset(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	// The reported scenario: a template listing only edit_file + bash must
+	// yield exactly those tools — no force-preserved always-active extras.
+	a.ApplyTemplate(templates.AgentTemplate{
+		ID:    "lean",
+		Tools: []string{"edit_file", "bash"},
+	})
+
+	for _, name := range []string{"edit_file", "bash"} {
+		if !a.toolHandler.IsActive(name) {
+			t.Fatalf("expected %s active", name)
+		}
+	}
+	for _, name := range []string{"memory", "web_search", "read_file"} {
+		if a.toolHandler.IsActive(name) {
+			t.Fatalf("expected %s inactive in exact lean preset", name)
+		}
+	}
+}
+
+func TestApplyTemplateAlwaysOnBundleAndToolUnion(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	// always_on is a selectable virtual bundle of host-resident meta tools.
+	a.ApplyTemplate(templates.AgentTemplate{ID: "meta-only", Bundles: []string{"always_on"}})
 	if !a.toolHandler.IsActive("memory") {
-		t.Fatal("expected always-active tools to survive")
+		t.Fatal("expected always_on bundle to activate meta tools (memory)")
+	}
+	if a.toolHandler.IsActive("bash") {
+		t.Fatal("expected bash inactive for always_on-only template")
+	}
+
+	// Tools and bundles combine as a union.
+	a.ApplyTemplate(templates.AgentTemplate{ID: "union", Bundles: []string{"core_code"}, Tools: []string{"memory"}})
+	if !a.toolHandler.IsActive("bash") || !a.toolHandler.IsActive("memory") {
+		t.Fatal("expected union of core_code bundle tools and explicit memory tool")
+	}
+	if a.toolHandler.IsActive("web_search") {
+		t.Fatal("expected web_search inactive for union preset")
 	}
 }
 

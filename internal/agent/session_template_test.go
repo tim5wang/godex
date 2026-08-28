@@ -347,3 +347,76 @@ func TestPromptKeepsToolExchangeGuidanceWhenToolActive(t *testing.T) {
 		t.Fatalf("expected available bundles list when tool_exchange is active: %s", availability)
 	}
 }
+
+func TestApplyTemplateMemoryNoneSkipsInjectionAndCapture(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "no-mem", Memory: "none"})
+
+	if got := a.memoryMode(); got != templates.MemoryNone {
+		t.Fatalf("memoryMode = %q, want none", got)
+	}
+	// Injection side: no durable-memory index message is produced.
+	msg, tokens, err := a.buildMemoryIndexPromptMessage()
+	if err != nil {
+		t.Fatalf("buildMemoryIndexPromptMessage: %v", err)
+	}
+	if len(msg.Content) != 0 {
+		t.Fatal("expected no memory index message for memory:none")
+	}
+	if tokens != 0 {
+		t.Fatalf("expected 0 memory tokens, got %d", tokens)
+	}
+	// Capture side: candidate extraction is a no-op.
+	if err := a.captureMemoryCandidates(); err != nil {
+		t.Fatalf("captureMemoryCandidates: %v", err)
+	}
+	if err := a.CaptureInsightMemoryCandidates(nil); err != nil {
+		t.Fatalf("CaptureInsightMemoryCandidates: %v", err)
+	}
+}
+
+func TestApplyTemplateMemoryScopedRebuildsManager(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.sessionID = "sess-memory-scoped-test"
+	a.ApplyTemplate(templates.AgentTemplate{ID: "scoped", Memory: "scoped"})
+
+	if got := a.memoryMode(); got != templates.MemoryScoped {
+		t.Fatalf("memoryMode = %q, want scoped", got)
+	}
+	// The memory index should now resolve from the session-scoped manager and
+	// name the session partition directory.
+	msg, _, err := a.buildMemoryIndexPromptMessage()
+	if err != nil {
+		t.Fatalf("buildMemoryIndexPromptMessage: %v", err)
+	}
+	if len(msg.Content) == 0 {
+		t.Fatal("expected scoped memory index message")
+	}
+	text := ""
+	for _, b := range msg.Content {
+		if b.Text != "" {
+			text += b.Text
+		}
+	}
+	if !strings.Contains(text, "sess-memory-scoped-test") {
+		t.Fatalf("expected scoped memory directory to contain session id, got: %s", text)
+	}
+	// A session-scoped memory manager must have been installed.
+	a.mu.Lock()
+	mgr := a.memoryMgr
+	a.mu.Unlock()
+	if mgr == nil {
+		t.Fatal("expected memory manager after scoped apply")
+	}
+}
+
+func TestApplyTemplateMemorySharedDefault(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "shared"})
+	if got := a.memoryMode(); got != templates.MemoryShared {
+		t.Fatalf("memoryMode = %q, want shared (default)", got)
+	}
+}

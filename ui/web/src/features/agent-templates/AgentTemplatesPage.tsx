@@ -51,6 +51,7 @@ type TemplateFormValues = {
   profile?: string;
   write_enabled?: boolean;
   trim_heavy_sections?: boolean;
+  memory?: string;
 };
 
 const TEMPLATE_HISTORY_PREFIX = "agent-template-history:";
@@ -246,6 +247,7 @@ export function AgentTemplatesPage() {
         profile: values.profile,
         write_enabled: values.write_enabled,
         trim_heavy_sections: values.trim_heavy_sections,
+        memory: values.memory,
       };
       if (editing) {
         return updateAgentTemplate(token || null, editing.id, payload);
@@ -312,6 +314,7 @@ export function AgentTemplatesPage() {
       profile: tpl.profile,
       write_enabled: tpl.write_enabled,
       trim_heavy_sections: tpl.trim_heavy_sections,
+      memory: tpl.memory,
     });
     setEditorOpen(true);
   };
@@ -495,6 +498,18 @@ export function AgentTemplatesPage() {
             </Form.Item>
             <Form.Item name="trim_heavy_sections" label={t("agentTemplates.fieldTrimHeavy")} valuePropName="checked">
               <Switch />
+            </Form.Item>
+            <Form.Item name="memory" label={t("agentTemplates.fieldMemory")}>
+              <Select
+                allowClear
+                placeholder={t("agentTemplates.memoryShared")}
+                style={{ width: 160 }}
+                options={[
+                  { value: "none", label: t("agentTemplates.memoryNone") },
+                  { value: "shared", label: t("agentTemplates.memoryShared") },
+                  { value: "scoped", label: t("agentTemplates.memoryScoped") },
+                ]}
+              />
             </Form.Item>
           </Space>
         </Form>

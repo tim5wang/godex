@@ -14,6 +14,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/instructions"
 	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/platform/textutil"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/version"
@@ -125,6 +126,10 @@ func (a *Agent) SetPluginPromptProvider(provider func() []runtimePromptSection) 
 // travels ahead of conversation history alongside the other quasi-stable
 // runtime sections instead of being rebuilt per-turn as dynamic content.
 func (a *Agent) buildMemoryIndexPromptMessage() (protocol.Message, int, error) {
+	// A template with memory: none injects no durable-memory index at all.
+	if a.memoryMode() == templates.MemoryNone {
+		return protocol.Message{}, 0, nil
+	}
 	memoryPrompt, err := a.memoryMgr.BuildPromptSection()
 	if err != nil {
 		return protocol.Message{}, 0, err

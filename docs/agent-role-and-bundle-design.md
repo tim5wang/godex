@@ -91,6 +91,9 @@ type AgentTemplate struct {
     ModelHint  string `json:"model_hint,omitempty" yaml:"model_hint,omitempty"`
     BudgetHint string `json:"budget_hint,omitempty" yaml:"budget_hint,omitempty"`
 
+    // --- 记忆范围 ---
+    Memory string `json:"memory,omitempty" yaml:"memory,omitempty"` // "none"（不注入记忆索引、不捕获候选）/ "shared"（默认，workspace 级）/ "scoped"（会话独立分区，等价 cfg.Memory.SessionScope，模板级强制）
+
     // --- 二期收敛预留 ---
     ProjectDir  string `json:"project_dir,omitempty" yaml:"project_dir,omitempty"` // Q2 预留：项目绑定
     BizRefOnly  bool   `json:"-" yaml:"-"`                                          // 内部标记：由 BizAPIKey 派生的只读模板
@@ -167,7 +170,8 @@ AgentTemplate (YAML)
   ├─ Packages ──────────► package roles/tools 进入可用池
   ├─ WriteEnabled/Scope ► 对接 Phase 4.5 写 scope 解析链
   ├─ ModelHint ─────────► 模型选择提示
-  └─ BudgetHint ────────► context_budget 按模板分配
+  ├─ BudgetHint ────────► context_budget 按模板分配
+  └─ Memory ────────────► none：注入/捕获短路；scoped：memoryMgr 重建为会话分区（memory.NewScopedManager）+ memory 工具重绑；shared：跟随全局 memory.session_scope
 ```
 
 **缓存稳定性约束（对应诉求 ①）**：

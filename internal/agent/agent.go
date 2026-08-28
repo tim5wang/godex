@@ -102,6 +102,7 @@ type Agent struct {
 	templateProfile    string
 	templateTrimHeavy  bool
 	templateSkills     []string
+	templateMemoryMode string
 
 	prompts              conversation.PromptLayers
 	messages             []protocol.Message

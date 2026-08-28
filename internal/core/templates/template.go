@@ -4,6 +4,8 @@
 // selected at session creation time. Design: docs/agent-role-and-bundle-design.md.
 package templates
 
+import "strings"
+
 // Template source markers surfaced through the API so the UI can group
 // builtin / user / package-derived cards.
 const (
@@ -17,6 +19,27 @@ const (
 	ProfileGeneral = "general"
 	ProfileCoding  = "coding"
 )
+
+// Memory scopes for AgentTemplate.Memory. Empty string means MemoryShared.
+const (
+	MemoryNone   = "none"
+	MemoryShared = "shared"
+	MemoryScoped = "scoped"
+)
+
+// NormalizeMemoryMode validates and canonicalizes a memory scope string.
+// Empty or unknown values fall back to the default shared scope. The
+// returned value is always one of MemoryNone / MemoryShared / MemoryScoped.
+func NormalizeMemoryMode(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case MemoryNone:
+		return MemoryNone
+	case MemoryScoped:
+		return MemoryScoped
+	default:
+		return MemoryShared
+	}
+}
 
 // Builtin template IDs. "default" reproduces the legacy standard mode
 // behavior (full default-active tool set), "minimal" reproduces the legacy
@@ -66,6 +89,12 @@ type AgentTemplate struct {
 	// catalog / repo map / active skills) from the runtime prompt. true on
 	// lean templates (e.g. "minimal") to keep the stable prefix small.
 	TrimHeavySections bool `json:"trim_heavy_sections,omitempty" yaml:"trim_heavy_sections,omitempty"`
+
+	// Memory scope for this template's sessions: "none" (no memory index
+	// injected, no candidate capture), "shared" (default; workspace-level
+	// durable memory), or "scoped" (per-session isolated memory partition
+	// even when the global memory.session_scope is disabled). Empty = shared.
+	Memory string `json:"memory,omitempty" yaml:"memory,omitempty"`
 
 	// Reserved (Q2, project-scope overrides): not resolved in M1.
 	ProjectDir string `json:"project_dir,omitempty" yaml:"project_dir,omitempty"`

@@ -8,6 +8,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -130,6 +131,11 @@ func (a *Agent) CompactConversationWithMode(mode string) (string, error) {
 }
 
 func (a *Agent) captureMemoryCandidates() error {
+	// A template with memory: none also skips candidate extraction so the
+	// session never writes durable memory.
+	if a.memoryMode() == templates.MemoryNone {
+		return nil
+	}
 	if a.memoryStrategy != nil {
 		messages, _ := a.messageState()
 		_, err := a.memoryStrategy.Capture(messages)
@@ -145,7 +151,7 @@ func (a *Agent) captureMemoryCandidates() error {
 
 // CaptureInsightMemoryCandidates stores durable memory suggestions derived from an insights report.
 func (a *Agent) CaptureInsightMemoryCandidates(report *insights.Report) error {
-	if a.memoryExt == nil {
+	if a.memoryMode() == templates.MemoryNone || a.memoryExt == nil {
 		return nil
 	}
 	_, err := a.memoryExt.CaptureInsightsReport(report)

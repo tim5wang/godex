@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -22,6 +24,7 @@ import (
 // "always_on" virtual bundle. Legacy session modes keep SetActiveTools,
 // which preserves always-active tools for backward compatibility.
 func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
+	memoryMode := templates.NormalizeMemoryMode(t.Memory)
 	a.mu.Lock()
 	a.templateID = strings.TrimSpace(t.ID)
 	a.templatePersona = strings.TrimSpace(t.Persona)
@@ -29,7 +32,15 @@ func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 	a.templateProfile = strings.ToLower(strings.TrimSpace(t.Profile))
 	a.templateTrimHeavy = t.TrimHeavySections
 	a.templateSkills = append([]string(nil), t.Skills...)
+	a.templateMemoryMode = memoryMode
 	a.mu.Unlock()
+
+	// Scoped template memory pins the session's durable memory to its own
+	// partition (even when the global memory.session_scope is disabled).
+	// Shared (default) keeps whatever the global config produced.
+	if memoryMode == templates.MemoryScoped {
+		a.applyScopedMemory()
+	}
 
 	switch {
 	case len(t.Tools) > 0 && len(t.Bundles) > 0:
@@ -44,6 +55,29 @@ func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 			a.toolHandler.SetActiveToolsExact(names...)
 		}
 	}
+}
+
+// applyScopedMemory rebuilds the agent's memory manager (and the memory tool)
+// against a per-session partition so durable memory never leaks across
+// sessions — the template-level equivalent of cfg.Memory.SessionScope.
+func (a *Agent) applyScopedMemory() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cfg == nil || strings.TrimSpace(a.sessionID) == "" {
+		return
+	}
+	scopedMgr := memory.NewScopedManager(a.cfg.MemoryDir, scope.Session(a.sessionID))
+	a.memoryMgr = scopedMgr
+	a.memoryExt, a.memoryStrategy = buildMemoryStack(a.cfg, a.client, scopedMgr)
+	// Rebind the memory tool so reads/writes stay inside the session partition.
+	a.registerToolTo(a.toolHandler, tools.NewMemoryTool(scopedMgr), tools.ToolMeta{AlwaysActive: true})
+}
+
+// memoryMode returns the normalized template memory scope.
+func (a *Agent) memoryMode() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.templateMemoryMode
 }
 
 // toolNamesForBundles resolves the union of tool names registered in the

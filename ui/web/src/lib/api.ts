@@ -997,6 +997,7 @@ export interface AgentTemplate {
   model_hint?: string;
   budget_hint?: string;
   trim_heavy_sections?: boolean;
+  memory?: string;
   project_dir?: string;
   source?: string;
 }

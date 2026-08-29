@@ -185,3 +185,187 @@ func TestTaskboardToolDispatch(t *testing.T) {
 		t.Fatalf("expected 1 completed execution, got %+v", got.Executions)
 	}
 }
+
+func TestTaskboardChecklistBatchAdd(t *testing.T) {
+	tool := newTool(t)
+	res := mustExec(t, tool, map[string]interface{}{
+		"action":    "create",
+		"title":     "batch card",
+		"checklist": []interface{}{"a", "b", "c"},
+	})
+	card := res["card"].(map[string]any)
+	if got := int(card["checklist_total"].(float64)); got != 3 {
+		t.Fatalf("expected 3 checklist items at create, got %v", res)
+	}
+	version := resultVersion(res)
+
+	// add several items in ONE call via the checklist array (batch)
+	res = mustExec(t, tool, map[string]interface{}{
+		"action": "checklist", "card_id": card["id"].(string), "version": version,
+		"check_action": "add", "checklist": []interface{}{"d", "e", "f"},
+	})
+	if got := int(res["checklist_total"].(float64)); got != 6 {
+		t.Fatalf("expected 6 items after batch add, got %v", res)
+	}
+	version = resultVersion(res)
+
+	// legacy single-text add still works
+	res = mustExec(t, tool, map[string]interface{}{
+		"action": "checklist", "card_id": card["id"].(string), "version": version,
+		"check_action": "add", "text": "single",
+	})
+	if got := int(res["checklist_total"].(float64)); got != 7 {
+		t.Fatalf("expected 7 items after single add, got %v", res)
+	}
+}
+
+func TestTaskboardVersionConflictRetry(t *testing.T) {
+	ledger := openTestLedger(t)
+	runner, ok := NewTaskboardTool(ledger).(toolRunner)
+	if !ok {
+		t.Fatalf("tool does not implement Execute")
+	}
+	card, err := ledger.CreateCard(CreateCardInput{ProjectID: ledger.ListProjects()[0].ID, Title: "concurrent card"})
+	if err != nil {
+		t.Fatalf("create card: %v", err)
+	}
+
+	// Simulate a concurrent write bumping the version to v2 in the background.
+	if _, err := ledger.AddComment(card.ID, card.Version, "other", "bump"); err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+
+	// Caller still holds the stale v1; the tool must auto-re-read and retry once.
+	res := mustExec(t, runner, map[string]interface{}{
+		"action": "comment_add", "card_id": card.ID, "version": card.Version, "text": "new comment",
+	})
+	if got := resultVersion(res); got != 3 {
+		t.Fatalf("expected auto-retry to land at v3, got %v", res)
+	}
+	got, err := ledger.GetCard(card.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Comments) != 2 {
+		t.Fatalf("expected both comments persisted, got %+v", got.Comments)
+	}
+}
+
+func TestTaskboardVersionConflictMessage(t *testing.T) {
+	ledger := openTestLedger(t)
+	card, err := ledger.CreateCard(CreateCardInput{ProjectID: ledger.ListProjects()[0].ID, Title: "conflict msg card"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := ledger.AddComment(card.ID, card.Version, "other", "bump"); err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+	// Bypass retry: call the ledger directly with a stale version.
+	_, err = ledger.AddComment(card.ID, card.Version, "agent", "stale")
+	if err == nil || !strings.Contains(err.Error(), "re-read the card then retry") {
+		t.Fatalf("expected retry hint in conflict error, got %v", err)
+	}
+}
+
+// observedStub is an ObservedExecutor that records the observability/recovery
+// calls for tool-level assertion without a real session.
+type observedStub struct {
+	fakeExecutor
+	lastObserveCard  string
+	lastObserveExec  string
+	lastRecoverCard  string
+	lastRecoverExec  string
+	lastRecoverText  string
+	lastRetryCard    string
+	lastRetryExec    string
+	reconcileCalls   int
+	returnedObs      ExecutionObservation
+	returnedLive     bool
+	returnedSession  string
+	returnedTurn     string
+}
+
+func (s *observedStub) Observe(ctx context.Context, cardID, executionID string) (ExecutionObservation, bool, error) {
+	s.lastObserveCard, s.lastObserveExec = cardID, executionID
+	return s.returnedObs, s.returnedLive, nil
+}
+
+func (s *observedStub) Reconcile(ctx context.Context) (ReconcileReport, error) {
+	s.reconcileCalls++
+	return ReconcileReport{Scanned: 2, Observed: 1, Finalized: 1}, nil
+}
+
+func (s *observedStub) Recover(ctx context.Context, cardID, executionID, text string) (string, error) {
+	s.lastRecoverCard, s.lastRecoverExec, s.lastRecoverText = cardID, executionID, text
+	return s.returnedSession, nil
+}
+
+func (s *observedStub) Retry(ctx context.Context, cardID, executionID string) (string, error) {
+	s.lastRetryCard, s.lastRetryExec = cardID, executionID
+	return s.returnedTurn, nil
+}
+
+func TestTaskboardToolObservabilityActions(t *testing.T) {
+	ledger := openTestLedger(t)
+	stub := &observedStub{returnedObs: ExecutionObservation{Stage: StageWaitingApproval}, returnedLive: true, returnedSession: "session-1", returnedTurn: "turn-9"}
+	runner, ok := NewTaskboardToolWithExecutor(ledger, stub).(toolRunner)
+	if !ok {
+		t.Fatalf("tool does not implement Execute")
+	}
+	card, err := ledger.CreateCard(CreateCardInput{ProjectID: ledger.ListProjects()[0].ID, Title: "obs card"})
+	if err != nil {
+		t.Fatalf("create card: %v", err)
+	}
+	if _, err := ledger.StartExecution(card.ID, "ex-1", "session-1", "session-1", nil); err != nil {
+		t.Fatalf("start execution: %v", err)
+	}
+
+	// observe returns the snapshot and live flag.
+	res := mustExec(t, runner, map[string]interface{}{"action": "observe", "card_id": card.ID, "execution_id": "ex-1"})
+	if stub.lastObserveCard != card.ID || stub.lastObserveExec != "ex-1" {
+		t.Fatalf("observe not forwarded: %+v", stub)
+	}
+	if res["live"] != true {
+		t.Fatalf("expected live=true, got %v", res)
+	}
+
+	// reconcile returns the report.
+	res = mustExec(t, runner, map[string]interface{}{"action": "reconcile"})
+	report := res["reconcile_report"].(map[string]any)
+	if int(report["finalized"].(float64)) != 1 || stub.reconcileCalls != 1 {
+		t.Fatalf("unexpected reconcile result %v", res)
+	}
+
+	// recover forwards the message text.
+	res = mustExec(t, runner, map[string]interface{}{"action": "recover", "card_id": card.ID, "execution_id": "ex-1", "text": "重试一下"})
+	if stub.lastRecoverText != "重试一下" || res["session_id"] != "session-1" {
+		t.Fatalf("recover not forwarded: %+v", stub)
+	}
+
+	// retry forverts the execution id and returns the new turn.
+	res = mustExec(t, runner, map[string]interface{}{"action": "retry", "card_id": card.ID, "execution_id": "ex-1"})
+	if stub.lastRetryExec != "ex-1" || res["turn_id"] != "turn-9" {
+		t.Fatalf("retry not forwarded: %+v", stub)
+	}
+}
+
+// A taskboard tool WITHOUT an observed executor refuses observe/recover/retry
+// with a clear "does not support observability" error (never panics).
+func TestTaskboardToolObservabilityRequiresObservedExecutor(t *testing.T) {
+	ledger := openTestLedger(t)
+	fake := &fakeExecutor{ledger: ledger}
+	runner, ok := NewTaskboardToolWithExecutor(ledger, fake).(toolRunner)
+	if !ok {
+		t.Fatalf("tool does not implement Execute")
+	}
+	card, err := ledger.CreateCard(CreateCardInput{ProjectID: ledger.ListProjects()[0].ID, Title: "no obs"})
+	if err != nil {
+		t.Fatalf("create card: %v", err)
+	}
+	if _, err := ledger.StartExecution(card.ID, "ex-1", "session-1", "session-1", nil); err != nil {
+		t.Fatalf("start execution: %v", err)
+	}
+	if _, err := runner.Execute(context.Background(), map[string]interface{}{"action": "observe", "card_id": card.ID, "execution_id": "ex-1"}); err == nil || !strings.Contains(err.Error(), "observability") {
+		t.Fatalf("expected observability-unavailable error, got %v", err)
+	}
+}

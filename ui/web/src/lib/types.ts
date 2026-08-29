@@ -1735,6 +1735,23 @@ export interface TaskboardExecution {
     /** Part of the session identity hash — required to reopen the session. */
     project_dir?: string;
   };
+  /** Where the run is currently stuck / what it is doing (thinking / tool_call
+   * / waiting_approval / error / idle). Written by the exec observability path. */
+  stage?: string;
+  /** Coarse failure bucket (provider / tool / cancelled / interrupted / unknown). */
+  error_type?: string;
+  /** Last failure detail text surfaced to the PJM without opening the session. */
+  last_error?: string;
+  /** Last tool the run invoked. */
+  last_tool?: string;
+  updated_at?: string;
+}
+
+export interface TaskboardExecutionObservation {
+  stage?: string;
+  error_type?: string;
+  last_error?: string;
+  last_tool?: string;
 }
 
 export interface TaskboardCard {
@@ -1746,6 +1763,10 @@ export interface TaskboardCard {
   urgency: TaskboardUrgency;
   status: TaskboardStatus;
   template_id?: string;
+  touched_paths?: string[];
+  observed_paths?: string[];
+  research?: TaskboardResearch;
+  merge_report?: { conflicts: TaskboardPathConflict[] };
   holder?: string;
   blocked?: boolean;
   checklist?: TaskboardChecklistItem[];
@@ -1757,6 +1778,20 @@ export interface TaskboardCard {
   created_at: string;
   updated_at: string;
   deleted?: boolean;
+}
+
+export interface TaskboardPathConflict {
+  path: string;
+  other_path: string;
+  other_card: string;
+  other_title: string;
+}
+
+export interface TaskboardResearch {
+  facts?: string[];
+  locations?: string[];
+  excluded_paths?: string[];
+  open_questions?: string[];
 }
 
 export interface TaskboardProject {
@@ -1773,6 +1808,8 @@ export interface TaskboardCardCreateInput {
   prompt?: string;
   urgency?: TaskboardUrgency;
   template_id?: string;
+  touched_paths?: string[];
+  research?: TaskboardResearch;
   checklist?: string[];
 }
 
@@ -1786,6 +1823,8 @@ export interface TaskboardCardPatchInput {
   urgency?: TaskboardUrgency;
   blocked?: boolean;
   template_id?: string;
+  touched_paths?: string[];
+  research?: TaskboardResearch;
   to?: TaskboardStatus;
   force?: boolean;
   reason?: string;

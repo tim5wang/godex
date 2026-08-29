@@ -116,11 +116,9 @@ func TestPluginHTTPSurfaceEndToEnd(t *testing.T) {
 	}
 	version = int(detail["version"].(float64))
 
-	// human acceptance from in_review
-	patched = call(t, root, "PATCH", "/v1/taskboard/cards/"+cardID, map[string]any{
-		"action": "move", "version": version, "to": StatusInProgress,
-	})["card"].(map[string]any)
-	version = int(patched["version"].(float64))
+	// human acceptance from in_review (execute already claimed the card to
+	// in_progress — StartExecution advances status to match the running
+	// execution). Move straight to in_review, then accept to done.
 	patched = call(t, root, "PATCH", "/v1/taskboard/cards/"+cardID, map[string]any{
 		"action": "move", "version": version, "to": StatusInReview,
 	})["card"].(map[string]any)

@@ -28,6 +28,7 @@
 | [workflow-runtime.md](./workflow-runtime.md) | durable workflow runtime（长任务/多 agent） | |
 | [scope-isolation-design.md](./scope-isolation-design.md) | Scope 隔离模型设计（roadmap 6.2，M1-M5 已完成） | |
 | [taskboard-plugin-design.md](./taskboard-plugin-design.md) | taskboard 插件（需求池 #1）：设计与实现参照（M1 核心闭环/M2 看板/M2.5 执行进度跳转 ✅，M3 未开始）；含卡片死锁修复（human 越锁 + 离开 in_progress 自动终结 running execution） | |
+| [taskboard-collaboration-design.md](./taskboard-collaboration-design.md) | taskboard 多智能体协作优化（M3.5 前置）：上下文传递（research 已验证/待验证分区）、并行冲突治理（四道闸门 + 串行/分区/依赖拓扑/互斥）、经验回流 | Draft（2026-08-29） |
 | [per-session-workspace-plan.md](./per-session-workspace-plan.md) | Per-Session 工作目录（已实施 2026-07-31） | |
 | [spec-of-chat-layout-optimize.md](./spec-of-chat-layout-optimize.md) | Web UI 聊天工作区升级 SPEC（M0/M1 已落地） | |
 | [p0-p4-visualization-design.md](./p0-p4-visualization-design.md) | P0-P4 可视化设计（A1/A2/B1/B2/C1 完成，A3/B3/C2 待办） | |

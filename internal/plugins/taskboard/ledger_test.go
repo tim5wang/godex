@@ -228,6 +228,65 @@ func TestCardTemplateIDCRUD(t *testing.T) {
 	}
 }
 
+func TestCardResearchCRUD(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+
+	// Create carries the structured research asset through.
+	card, err := l.CreateCard(CreateCardInput{
+		ProjectID: project.ID,
+		Title:     "planner-verified task",
+		Research: &Research{
+			Facts:         []string{"  Card 模型在 types.go  ", "Card 模型在 types.go"},
+			Locations:     []string{"types.go:141"},
+			ExcludedPaths: []string{"/internal/tools/"},
+			OpenQuestions: []string{"确认 UpdateCard 写入 research"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create card: %v", err)
+	}
+	if card.Research == nil {
+		t.Fatal("expected research set on create")
+	}
+	// Facts are trimmed and de-duplicated; excluded paths normalized (no slashes).
+	if len(card.Research.Facts) != 1 || card.Research.Facts[0] != "Card 模型在 types.go" {
+		t.Fatalf("expected 1 deduped fact, got %v", card.Research.Facts)
+	}
+	if len(card.Research.ExcludedPaths) != 1 || card.Research.ExcludedPaths[0] != "internal/tools" {
+		t.Fatalf("expected normalized excluded path, got %v", card.Research.ExcludedPaths)
+	}
+
+	// Update replaces research in full.
+	replace := &Research{Facts: []string{"v2 事实"}, OpenQuestions: []string{"新开放点"}}
+	if _, err := l.UpdateCard(card.ID, card.Version, "human", UpdateCardInput{Research: replace}); err != nil {
+		t.Fatalf("update research: %v", err)
+	}
+	got, err := l.GetCard(card.ID)
+	if err != nil {
+		t.Fatalf("get card: %v", err)
+	}
+	if got.Research == nil || len(got.Research.Facts) != 1 || got.Research.Facts[0] != "v2 事实" {
+		t.Fatalf("expected replaced research, got %+v", got.Research)
+	}
+	if len(got.Research.ExcludedPaths) != 0 {
+		t.Fatalf("old excluded_paths should be gone after replace, got %v", got.Research.ExcludedPaths)
+	}
+
+	// Clearing research (explicit empty) is not treated as "no change".
+	empty := &Research{}
+	if _, err := l.UpdateCard(got.ID, got.Version, "human", UpdateCardInput{Research: empty}); err != nil {
+		t.Fatalf("clear research: %v", err)
+	}
+	got, err = l.GetCard(card.ID)
+	if err != nil {
+		t.Fatalf("get card: %v", err)
+	}
+	if got.Research != nil {
+		t.Fatalf("expected nil research after clear, got %+v", got.Research)
+	}
+}
+
 func TestVersionConflict(t *testing.T) {
 	l := openTestLedger(t)
 	project := seedProject(t, l)
@@ -407,5 +466,122 @@ func TestHumanCanUnstickHeldCard(t *testing.T) {
 	}
 	if moved.Status != StatusInReview || moved.Holder != "" {
 		t.Fatalf("expected human to clear holder, got %+v", moved)
+	}
+}
+
+// StartExecution now advances the card to in_progress so the ledger can never
+// show a "backlog/todo card with a running execution" contradiction — the
+// disk-vs-memory inconsistency that made stuck runs look like zombies.
+func TestStartExecutionAdvancesCardToInProgress(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	card, _ := l.CreateCard(CreateCardInput{ProjectID: project.ID, Title: "exec"})
+	if card.Status != StatusBacklog {
+		t.Fatalf("expected default backlog, got %q", card.Status)
+	}
+
+	running, err := l.StartExecution(card.ID, "ex-1", "session-1", "session-1", nil)
+	if err != nil {
+		t.Fatalf("start execution: %v", err)
+	}
+	if running.Status != StatusInProgress {
+		t.Fatalf("expected StartExecution to advance card to in_progress, got %q", running.Status)
+	}
+	if running.Holder != "session-1" {
+		t.Fatalf("expected holder session-1, got %q", running.Holder)
+	}
+}
+
+// UpdateExecutionObservation writes a live stage/error snapshot onto a running
+// execution and persists it (round-trip through a reopen), so the board reflects
+// where a run is stalled without opening the conversation.
+func TestUpdateExecutionObservationPersists(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	card, _ := l.CreateCard(CreateCardInput{ProjectID: project.ID, Title: "obs"})
+	if _, err := l.StartExecution(card.ID, "ex-1", "session-1", "session-1", nil); err != nil {
+		t.Fatalf("start execution: %v", err)
+	}
+
+	updated, err := l.UpdateExecutionObservation(card.ID, "ex-1", ExecutionObservation{
+		Stage:     StageWaitingApproval,
+		ErrorType: ErrTypeProvider,
+		LastError: "LLM provider returned empty responses",
+		LastTool:  "edit_file",
+	})
+	if err != nil {
+		t.Fatalf("update observation: %v", err)
+	}
+	ex := updated.Executions[0]
+	if ex.Stage != StageWaitingApproval || ex.ErrorType != ErrTypeProvider || ex.LastTool != "edit_file" {
+		t.Fatalf("observation not written: %+v", ex)
+	}
+
+	// Round-trip through a reopened ledger (fresh in-memory).
+	reopened, err := OpenLedger(l.path, t.TempDir())
+	if err != nil {
+		t.Fatalf("reopen ledger: %v", err)
+	}
+	got, err := reopened.GetCard(card.ID)
+	if err != nil {
+		t.Fatalf("get card: %v", err)
+	}
+	if got.Executions[0].Stage != StageWaitingApproval || got.Executions[0].LastError != "LLM provider returned empty responses" {
+		t.Fatalf("observation not persisted: %+v", got.Executions[0])
+	}
+}
+
+// FinishExecutionWithObs finalizes a running execution and carries the failure
+// detail (error type / message) into the terminal record, so PJM sees "how it
+// failed" without opening the session.
+func TestFinishExecutionWithObservation(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	card, _ := l.CreateCard(CreateCardInput{ProjectID: project.ID, Title: "fin"})
+	if _, err := l.StartExecution(card.ID, "ex-1", "session-1", "session-1", nil); err != nil {
+		t.Fatalf("start execution: %v", err)
+	}
+
+	finished, err := l.FinishExecutionWithObs(card.ID, "ex-1", ExecutionFailed, "provider empty", ExecutionObservation{
+		Stage:     StageError,
+		ErrorType: ErrTypeProvider,
+		LastError: "LLM provider returned empty responses",
+	})
+	if err != nil {
+		t.Fatalf("finish with obs: %v", err)
+	}
+	ex := finished.Executions[0]
+	if ex.Status != ExecutionFailed || ex.ErrorType != ErrTypeProvider || ex.LastError != "LLM provider returned empty responses" {
+		t.Fatalf("expected failed execution carrying error detail, got %+v", ex)
+	}
+	if finished.Holder != "" {
+		t.Fatalf("expected holder cleared on finish, got %q", finished.Holder)
+	}
+}
+
+// A partial observation update never clobbers a prior non-empty field with an
+// empty string (e.g. a later idle stage must not wipe a recorded last error).
+func TestUpdateExecutionObservationDoesNotClobber(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	card, _ := l.CreateCard(CreateCardInput{ProjectID: project.ID, Title: "clobber"})
+	if _, err := l.StartExecution(card.ID, "ex-1", "session-1", "session-1", nil); err != nil {
+		t.Fatalf("start execution: %v", err)
+	}
+	if _, err := l.UpdateExecutionObservation(card.ID, "ex-1", ExecutionObservation{
+		Stage:     StageError,
+		ErrorType: ErrTypeProvider,
+		LastError: "provider empty",
+	}); err != nil {
+		t.Fatalf("update observation: %v", err)
+	}
+	// A later idle observation with an empty error must keep the recorded error.
+	updated, err := l.UpdateExecutionObservation(card.ID, "ex-1", ExecutionObservation{Stage: StageIdle})
+	if err != nil {
+		t.Fatalf("update idle observation: %v", err)
+	}
+	ex := updated.Executions[0]
+	if ex.Stage != StageIdle || ex.ErrorType != ErrTypeProvider || ex.LastError != "provider empty" {
+		t.Fatalf("idle observation clobbered error fields: %+v", ex)
 	}
 }

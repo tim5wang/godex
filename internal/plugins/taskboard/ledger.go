@@ -25,6 +25,10 @@ var (
 	ErrProjectHasCards   = errors.New("taskboard: project still has cards")
 	ErrBuiltInProject    = errors.New("taskboard: built-in project cannot be deleted")
 	ErrInvalidTransition = errors.New("taskboard: invalid status transition")
+	// ErrPathConflict is returned when dispatching/merging a card whose impact
+	// surface overlaps another active card (gate 2 dispatch intercept, gate 4
+	// merge precheck). The conflict report rides in the error text for the PJM.
+	ErrPathConflict = errors.New("taskboard: path conflict with another card")
 )
 
 // humanActor marks a mutation from a human operator (HTTP PATCH surface). A
@@ -208,6 +212,93 @@ func (l *Ledger) DeleteProject(id string) error {
 
 // ---- Cards ----
 
+// ActiveCards returns cards currently occupying workspace impact: those in
+// in_progress or in_review (a card that still needs work or is pending human
+// acceptance). Soft-deleted and done cards are excluded — they no longer hold
+// any path.
+func (l *Ledger) ActiveCards() []Card {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.activeCardsLocked()
+}
+
+// activeCardsLocked is ActiveCards without locking; callers must hold l.mu.
+func (l *Ledger) activeCardsLocked() []Card {
+	out := make([]Card, 0)
+	for _, card := range l.data.Cards {
+		if card.Deleted {
+			continue
+		}
+		if card.Status == StatusInProgress || card.Status == StatusInReview {
+			out = append(out, card)
+		}
+	}
+	return out
+}
+
+// CheckCardPathConflicts computes the cross-card overlap between a card's
+// impact surface (declared touched_paths ∪ reported observed_paths) and all
+// other active cards. It is read-only and is the shared computation behind the
+// dispatch gate (2) and the merge precheck (4).
+func (l *Ledger) CheckCardPathConflicts(card Card) ConflictReport {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return checkPathConflictsAgainst(card, l.activeCardsLocked())
+}
+
+// PrecheckDispatchConflicts returns a *PathConflictError when dispatching a
+// card would overlap another active card's impact surface (gate 2 dispatch
+// intercept). A card with no declared/reported paths (empty impact surface)
+// never triggers it, so a card that did not declare its surface still dispatches
+// (its runtime report, gate 3, is the fallback).
+func (l *Ledger) PrecheckDispatchConflicts(card Card) error {
+	report := l.CheckCardPathConflicts(card)
+	if report.HasConflicts() {
+		return &PathConflictError{Report: report}
+	}
+	return nil
+}
+
+// ReportObservedPaths records the paths an execution session observed touching
+// at runtime (gate 3 dynamic observation). It unions with the card's declared
+// TouchedPaths and bumps the card version under optimistic concurrency. From
+// the observed report onward the card's impact surface reflects reality rather
+// than the declaration.
+func (l *Ledger) ReportObservedPaths(cardID string, ifVersion int, actor string, paths []string) (Card, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.mutateCard(cardID, ifVersion, actor, func(card *Card) error {
+		newPaths := normalizeTouchedPaths(paths)
+		if len(newPaths) == 0 {
+			return nil
+		}
+		card.ObservedPaths = normalizeTouchedPaths(append(card.ObservedPaths, newPaths...))
+		return nil
+	})
+}
+
+// MergePrecheck runs the gate-4 merge precheck for a card about to enter
+// in_review: it compares the card's impact surface against other active cards
+// and stores the resulting report on the card (merge_report). It returns the
+// updated card plus the report so callers can surface conflicts. A nil report
+// (no conflict) clears any stale prior report.
+func (l *Ledger) MergePrecheck(cardID string, ifVersion int, actor string) (Card, ConflictReport, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var report ConflictReport
+	card, err := l.mutateCard(cardID, ifVersion, actor, func(card *Card) error {
+		report = checkPathConflictsAgainst(*card, l.activeCardsLocked())
+		if report.HasConflicts() {
+			cp := report
+			card.MergeReport = &cp
+		} else {
+			card.MergeReport = nil
+		}
+		return nil
+	})
+	return card, report, err
+}
+
 // ListCards returns cards matching the filter (soft-deleted excluded unless
 // requested), newest-created first within the same status order.
 func (l *Ledger) ListCards(filter CardFilter) []Card {
@@ -275,6 +366,12 @@ type CreateCardInput struct {
 	// StartStatus allows human creation directly into todo (agents always
 	// start at backlog).
 	StartStatus string
+	// TouchedPaths declares the package-level impact surface at creation time
+	// (gate 1 static declaration).
+	TouchedPaths []string
+	// Research is the structured investigation asset (方案A: 上下文传递)
+	// produced by a planner/PJM card and referenced by a coder card.
+	Research *Research
 }
 
 // CreateCard adds a card to the ledger.
@@ -325,6 +422,8 @@ func (l *Ledger) CreateCard(input CreateCardInput) (Card, error) {
 		Urgency:     normalizeUrgency(input.Urgency),
 		TemplateID:  strings.TrimSpace(input.TemplateID),
 		Status:      status,
+		TouchedPaths: normalizeTouchedPaths(input.TouchedPaths),
+		Research:    normalizeResearch(input.Research),
 		Version:     1,
 		CreatedBy:   input.CreatedBy,
 		UpdatedBy:   input.CreatedBy,
@@ -362,7 +461,7 @@ func (l *Ledger) mutateCard(id string, ifVersion int, actor string, mutate func(
 		return Card{}, err
 	}
 	if card.Version != ifVersion {
-		return Card{}, fmt.Errorf("%w: card %s at v%d, caller had v%d", ErrVersionConflict, id, card.Version, ifVersion)
+		return Card{}, fmt.Errorf("%w: card %s at v%d, caller had v%d — pass the current version from get; re-read the card then retry", ErrVersionConflict, id, card.Version, ifVersion)
 	}
 	if err := mutate(card); err != nil {
 		return Card{}, err
@@ -380,12 +479,16 @@ func (l *Ledger) mutateCard(id string, ifVersion int, actor string, mutate func(
 // this; model/execution fields are not agent-writable by design — the M1
 // ledger has no such fields yet, M3 adds them read-only to tools).
 type UpdateCardInput struct {
-	Title       *string
-	Description *string
-	Prompt      *string
-	Urgency     *string
-	Blocked     *bool
-	TemplateID  *string
+	Title        *string
+	Description  *string
+	Prompt       *string
+	Urgency      *string
+	Blocked      *bool
+	TemplateID   *string
+	TouchedPaths *[]string
+	// Research is the structured investigation asset (方案A: 上下文传递);
+	// non-nil replaces the card's research in full.
+	Research *Research
 }
 
 // UpdateCard edits a card's text fields under optimistic concurrency.
@@ -412,6 +515,12 @@ func (l *Ledger) UpdateCard(id string, ifVersion int, actor string, input Update
 		}
 		if input.TemplateID != nil {
 			card.TemplateID = strings.TrimSpace(*input.TemplateID)
+		}
+		if input.TouchedPaths != nil {
+			card.TouchedPaths = normalizeTouchedPaths(*input.TouchedPaths)
+		}
+		if input.Research != nil {
+			card.Research = normalizeResearch(input.Research)
 		}
 		return nil
 	})
@@ -450,6 +559,19 @@ func (l *Ledger) MoveCard(id string, ifVersion int, to, actor string) (Card, err
 			// running forever (which would block future execute/delete of the
 			// card). This is the complementary half of the stuck-card bug.
 			closeRunningExecutions(card, ExecutionCompleted, "moved to "+to)
+		}
+		// Gate 4 merge precheck: when a card enters in_review, compare its impact
+		// surface against other active cards and attach the merge-conflict report
+		// so a reviewer/PJM can adjudicate before acceptance. No conflict clears
+		// any stale report.
+		if to == StatusInReview {
+			report := checkPathConflictsAgainst(*card, l.activeCardsLocked())
+			if report.HasConflicts() {
+				cp := report
+				card.MergeReport = &cp
+			} else {
+				card.MergeReport = nil
+			}
 		}
 		return nil
 	})
@@ -506,19 +628,28 @@ func (l *Ledger) AddComment(id string, ifVersion int, author, text string) (Card
 	})
 }
 
-// ChecklistAdd appends one acceptance criterion.
-func (l *Ledger) ChecklistAdd(id string, ifVersion int, actor, text string) (Card, error) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return Card{}, fmt.Errorf("taskboard: checklist item text is required")
-	}
+// ChecklistAdd appends one or more acceptance criteria in a single write.
+// A slice keeps a single optimistic-concurrency check for the whole batch, so
+// callers can add several items in one call instead of round-tripping per item.
+func (l *Ledger) ChecklistAdd(id string, ifVersion int, actor string, texts []string) (Card, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.mutateCard(id, ifVersion, actor, func(card *Card) error {
-		if len(card.Checklist) >= 30 {
-			return fmt.Errorf("taskboard: checklist capped at 30 items")
+		added := 0
+		for _, text := range texts {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				continue
+			}
+			if len(card.Checklist) >= 30 {
+				return fmt.Errorf("taskboard: checklist capped at 30 items")
+			}
+			card.Checklist = append(card.Checklist, ChecklistItem{Text: text})
+			added++
 		}
-		card.Checklist = append(card.Checklist, ChecklistItem{Text: text})
+		if added == 0 {
+			return fmt.Errorf("taskboard: checklist item text is required")
+		}
 		return nil
 	})
 }
@@ -570,7 +701,10 @@ func (l *Ledger) SoftDeleteCard(id string, ifVersion int, actor string) (Card, e
 
 // StartExecution appends a running execution and claims the card
 // (in_progress + holder) on behalf of the executor session. host (optional)
-// records the hosting session for UI jump-to-progress.
+// records the hosting session for UI jump-to-progress. Executing a card is
+// also claiming it: the card transitions to in_progress so the board never
+// shows a "backlog/todo card with a running execution" contradiction (the
+// disk-vs-memory inconsistency that made stuck runs look like zombies).
 func (l *Ledger) StartExecution(cardID, executionID, sessionID, actor string, host *HostRef) (Card, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -584,8 +718,13 @@ func (l *Ledger) StartExecution(cardID, executionID, sessionID, actor string, ho
 			Status:    ExecutionRunning,
 			StartedAt: l.now(),
 			Host:      host,
+			// A freshly started execution has not produced a phase yet.
+			UpdatedAt: l.now(),
 		})
 		card.Holder = sessionID
+		// Executing a card is claiming it: reflect that in the board status so
+		// the ledger's disk state matches the "has a running execution" memory.
+		card.Status = StatusInProgress
 		return nil
 	})
 }
@@ -636,6 +775,15 @@ func (l *Ledger) SetExecutionJobSession(cardID, executionID, jobSessionID string
 
 // FinishExecution closes a running execution with a status and summary.
 func (l *Ledger) FinishExecution(cardID, executionID, status, summary string) (Card, error) {
+	return l.FinishExecutionWithObs(cardID, executionID, status, summary, ExecutionObservation{})
+}
+
+// FinishExecutionWithObs closes a running execution with a status/summary and
+// unconditionally applies an observation snapshot (stage/error/last-tool) so the
+// terminal record carries the "how did it fail" insight along with the end
+// state. Overrides every running execution with the same id (there is at most
+// one running execution per execution id).
+func (l *Ledger) FinishExecutionWithObs(cardID, executionID, status, summary string, obs ExecutionObservation) (Card, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	card, err := l.findCardLocked(cardID)
@@ -654,6 +802,8 @@ func (l *Ledger) FinishExecution(cardID, executionID, status, summary string) (C
 				card.Executions[i].Status = status
 				card.Executions[i].Summary = strings.TrimSpace(summary)
 				card.Executions[i].EndedAt = l.now()
+				card.Executions[i].UpdatedAt = l.now()
+				applyObservation(&card.Executions[i], obs)
 				if card.Holder == card.Executions[i].SessionID {
 					card.Holder = ""
 				}
@@ -662,6 +812,56 @@ func (l *Ledger) FinishExecution(cardID, executionID, status, summary string) (C
 		}
 		return fmt.Errorf("taskboard: running execution %s not found on card %s", executionID, cardID)
 	})
+}
+
+// UpdateExecutionObservation writes a live observation snapshot (stage / error
+// type / last error / last tool) onto a running execution without finalizing it.
+// This is the observability write-back the executor's observe/reconcile path
+// calls so the board reflects where the run is stuck or what it last did. It is
+// a no-op if the execution is no longer running (the terminal record keeps the
+// observation captured at finish time).
+func (l *Ledger) UpdateExecutionObservation(cardID, executionID string, obs ExecutionObservation) (Card, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	card, err := l.findCardLocked(cardID)
+	if err != nil {
+		return Card{}, err
+	}
+	version := card.Version
+	return l.mutateCard(cardID, version, "taskboard", func(card *Card) error {
+		for i := range card.Executions {
+			if card.Executions[i].ID != executionID || card.Executions[i].Status != ExecutionRunning {
+				continue
+			}
+			applyObservation(&card.Executions[i], obs)
+			card.Executions[i].UpdatedAt = l.now()
+			return nil
+		}
+		return fmt.Errorf("taskboard: running execution %s not found on card %s", executionID, cardID)
+	})
+}
+
+// applyObservation writes only the non-empty fields of a snapshot onto an
+// execution record, so a partial observation never clobbers a prior value with
+// an empty string (e.g. a later "idle" stage must not wipe a last error).
+func applyObservation(ex *Execution, obs ExecutionObservation) {
+	if ex == nil {
+		return
+	}
+	if strings.TrimSpace(obs.Stage) != "" {
+		ex.Stage = strings.TrimSpace(obs.Stage)
+	}
+	if strings.TrimSpace(obs.ErrorType) != "" {
+		ex.ErrorType = strings.TrimSpace(obs.ErrorType)
+	}
+	if strings.TrimSpace(obs.LastError) != "" {
+		ex.LastError = strings.TrimSpace(obs.LastError)
+	} else if obs.ErrorType != "" {
+		// error bucket without a message keeps the existing last error.
+	}
+	if strings.TrimSpace(obs.LastTool) != "" {
+		ex.LastTool = strings.TrimSpace(obs.LastTool)
+	}
 }
 
 // closeRunningExecutions marks every still-running execution on the card as

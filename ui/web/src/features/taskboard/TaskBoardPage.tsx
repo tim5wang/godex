@@ -23,6 +23,7 @@ import {
   EditOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  ProfileOutlined,
   ReloadOutlined,
   ScheduleOutlined,
 } from "@ant-design/icons";
@@ -42,11 +43,15 @@ import {
   listSessions,
   listTaskboardCards,
   listTaskboardProjects,
+  observeTaskboardExecution,
   patchTaskboardCard,
+  reconcileTaskboard,
+  recoverTaskboardExecution,
+  retryTaskboardExecution,
   runCronJob,
   updateCronJob,
 } from "../../lib/api";
-import type { CronJob, TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
+import type { CronJob, TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardExecutionObservation, TaskboardResearch, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
 
 const COLUMNS: { status: TaskboardStatus; labelKey: string; dot: string }[] = [
   { status: "backlog", labelKey: "taskboard.col.backlog", dot: "#8c8c8c" },
@@ -73,6 +78,37 @@ function urgencyRank(u: TaskboardUrgency): number {
   return u === "urgent" ? 0 : u === "low" ? 2 : 1;
 }
 
+/**
+ * buildResearch turns the comma-separated research form fields into the
+ * structured 方案A 上下文传递 asset. Returns undefined when every field is
+ * empty so a card submitted without research does not carry an empty block.
+ */
+function buildResearch(input: {
+  facts: string;
+  locations: string;
+  excluded: string;
+  open: string;
+}): TaskboardResearch | undefined {
+  const splitLines = (s: string) =>
+    s
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  const facts = splitLines(input.facts);
+  const locations = splitLines(input.locations);
+  const excluded = splitLines(input.excluded);
+  const open = splitLines(input.open);
+  if (!facts.length && !locations.length && !excluded.length && !open.length) {
+    return undefined;
+  }
+  return {
+    facts,
+    locations,
+    excluded_paths: excluded,
+    open_questions: open,
+  };
+}
+
 export function TaskBoardPage() {
   const { t } = useI18n();
   const { message } = AntApp.useApp();
@@ -90,7 +126,12 @@ export function TaskBoardPage() {
   const [createPrompt, setCreatePrompt] = useState("");
   const [createUrgency, setCreateUrgency] = useState<TaskboardUrgency>("normal");
   const [createChecklist, setCreateChecklist] = useState("");
+  const [createTouchedPaths, setCreateTouchedPaths] = useState("");
   const [createTemplateID, setCreateTemplateID] = useState<string | undefined>(undefined);
+  const [createResearchFacts, setCreateResearchFacts] = useState("");
+  const [createResearchLocations, setCreateResearchLocations] = useState("");
+  const [createResearchExcluded, setCreateResearchExcluded] = useState("");
+  const [createResearchOpen, setCreateResearchOpen] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [editId, setEditId] = useState("");
   const [editVersion, setEditVersion] = useState(0);
@@ -98,7 +139,13 @@ export function TaskBoardPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
   const [editUrgency, setEditUrgency] = useState<TaskboardUrgency>("normal");
+  const [editChecklist, setEditChecklist] = useState("");
+  const [editTouchedPaths, setEditTouchedPaths] = useState("");
   const [editTemplateID, setEditTemplateID] = useState<string | undefined>(undefined);
+  const [editResearchFacts, setEditResearchFacts] = useState("");
+  const [editResearchLocations, setEditResearchLocations] = useState("");
+  const [editResearchExcluded, setEditResearchExcluded] = useState("");
+  const [editResearchOpen, setEditResearchOpen] = useState("");
 
   // ---- PJM automation (M5 P3): a scheduled cron job sweeps the board ----
   const [pjmAutoOpen, setPjmAutoOpen] = useState(false);
@@ -201,6 +248,16 @@ export function TaskBoardPage() {
         prompt: createPrompt || undefined,
         urgency: createUrgency,
         template_id: createTemplateID,
+        touched_paths: createTouchedPaths
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
+        research: buildResearch({
+          facts: createResearchFacts,
+          locations: createResearchLocations,
+          excluded: createResearchExcluded,
+          open: createResearchOpen,
+        }),
         checklist: createChecklist
           .split("\n")
           .map((line) => line.trim())
@@ -213,6 +270,11 @@ export function TaskBoardPage() {
       setCreateDescription("");
       setCreatePrompt("");
       setCreateChecklist("");
+      setCreateTouchedPaths("");
+      setCreateResearchFacts("");
+      setCreateResearchLocations("");
+      setCreateResearchExcluded("");
+      setCreateResearchOpen("");
       setCreateTemplateID(undefined);
       invalidate();
     },
@@ -238,6 +300,36 @@ export function TaskBoardPage() {
       invalidate();
     },
     onError: (error) => fail(error, "taskboard.executeFailed"),
+  });
+
+  const recoverMutation = useMutation({
+    mutationFn: async ({ cardId, executionId, text }: { cardId: string; executionId: string; text: string }) =>
+      recoverTaskboardExecution(token || null, cardId, executionId, text),
+    onSuccess: () => {
+      message.success(t("taskboard.recoverySent"));
+      detailQuery.refetch();
+    },
+    onError: (error) => fail(error, "taskboard.recoveryFailed"),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async ({ cardId, executionId }: { cardId: string; executionId: string }) =>
+      retryTaskboardExecution(token || null, cardId, executionId),
+    onSuccess: () => {
+      message.success(t("taskboard.retrySubmitted"));
+      detailQuery.refetch();
+    },
+    onError: (error) => fail(error, "taskboard.retryFailed"),
+  });
+
+  const reconcileMutation = useMutation({
+    mutationFn: async () => reconcileTaskboard(token || null),
+    onSuccess: (report) => {
+      message.success(t("taskboard.reconcileDone", { scanned: report.reconcile_report.scanned, finalized: report.reconcile_report.finalized }));
+      invalidate();
+      if (detailId) detailQuery.refetch();
+    },
+    onError: (error) => fail(error, "taskboard.reconcileFailed"),
   });
 
   const deleteMutation = useMutation({
@@ -318,6 +410,11 @@ export function TaskBoardPage() {
     setEditDescription(card.description ?? "");
     setEditPrompt(card.prompt ?? "");
     setEditUrgency(card.urgency);
+    setEditTouchedPaths((card.touched_paths ?? []).join("\n"));
+    setEditResearchFacts((card.research?.facts ?? []).join("\n"));
+    setEditResearchLocations((card.research?.locations ?? []).join("\n"));
+    setEditResearchExcluded((card.research?.excluded_paths ?? []).join("\n"));
+    setEditResearchOpen((card.research?.open_questions ?? []).join("\n"));
     setEditTemplateID(card.template_id);
     setEditOpen(true);
   };
@@ -337,6 +434,16 @@ export function TaskBoardPage() {
         prompt: editPrompt.trim() || undefined,
         urgency: editUrgency,
         template_id: editTemplateID,
+        touched_paths: editTouchedPaths
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
+        research: buildResearch({
+          facts: editResearchFacts,
+          locations: editResearchLocations,
+          excluded: editResearchExcluded,
+          open: editResearchOpen,
+        }),
       },
     });
     setEditOpen(false);
@@ -488,6 +595,13 @@ export function TaskBoardPage() {
           {t("taskboard.pjmAuto")}
         </Button>
         <Button
+          icon={<ProfileOutlined />}
+          loading={reconcileMutation.isPending}
+          onClick={() => reconcileMutation.mutate()}
+        >
+          {t("taskboard.reconcile")}
+        </Button>
+        <Button
           type="primary"
           icon={<PlusOutlined />}
           onClick={() => setCreateOpen(true)}
@@ -597,6 +711,72 @@ export function TaskBoardPage() {
                 </Popconfirm>
               )}
             </Space>
+            {(detail.touched_paths ?? []).length > 0 && (
+              <div>
+                <Typography.Text strong>{t("taskboard.touchedPaths")}</Typography.Text>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                  {detail.touched_paths!.map((item) => (
+                    <Tag key={item} color="cyan">{item}</Tag>
+                  ))}
+                </div>
+              </div>
+            )}
+            {detail.research && (
+              <div>
+                <Typography.Text strong>{t("taskboard.research")}</Typography.Text>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
+                  {(detail.research.facts ?? []).length > 0 && (
+                    <div>
+                      <Typography.Text type="success" style={{ fontSize: 12 }}>{t("taskboard.researchFacts")}</Typography.Text>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                        {detail.research.facts!.map((item, i) => <li key={i}>{item}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {(detail.research.locations ?? []).length > 0 && (
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t("taskboard.researchLocations")}</Typography.Text>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                        {detail.research.locations!.map((item, i) => <Tag key={i} color="blue">{item}</Tag>)}
+                      </div>
+                    </div>
+                  )}
+                  {(detail.research.excluded_paths ?? []).length > 0 && (
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t("taskboard.researchExcluded")}</Typography.Text>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                        {detail.research.excluded_paths!.map((item, i) => <Tag key={i} color="red">{item}</Tag>)}
+                      </div>
+                    </div>
+                  )}
+                  {(detail.research.open_questions ?? []).length > 0 && (
+                    <div>
+                      <Typography.Text type="warning" style={{ fontSize: 12 }}>{t("taskboard.researchOpen")}</Typography.Text>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                        {detail.research.open_questions!.map((item, i) => <li key={i}>{item}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {(detail.merge_report?.conflicts?.length ?? 0) > 0 && detail.merge_report && (
+              <div>
+                <Typography.Text strong type="danger">{t("taskboard.mergeConflict")}</Typography.Text>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {detail.merge_report.conflicts!.map((conflict, index) => (
+                    <div key={index} style={{ background: "rgba(255,0,0,0.06)", borderRadius: 6, padding: "4px 8px" }}>
+                      <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                        {conflict.path} ↔ {conflict.other_path}
+                      </Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 12, display: "block" }}>
+                        {t("taskboard.conflictsWith")}: {conflict.other_card} ({conflict.other_title})
+                      </Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {detail.description && <Typography.Paragraph>{detail.description}</Typography.Paragraph>}
             {detail.prompt && (
               <div>
@@ -649,22 +829,15 @@ export function TaskBoardPage() {
               ) : (
                 <div style={{ display: "flex", flexDirection: "column-reverse", gap: 6, marginTop: 6 }}>
                   {detail.executions!.map((execution) => (
-                    <div key={execution.id} style={{ background: "rgba(128,128,128,0.06)", borderRadius: 6, padding: "4px 8px" }}>
-                      <Space size={6}>
-                        <Tag color={EXECUTION_STATUS_COLORS[execution.status] || "default"}>{execution.status}</Tag>
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>{execution.session_id}</Typography.Text>
-                        {execution.host && (
-                          <Button size="small" type="link" onClick={() => jumpToHost(execution)}>
-                            {t("taskboard.viewProgress")}
-                          </Button>
-                        )}
-                      </Space>
-                      {execution.summary && (
-                        <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0, marginTop: 4 }} ellipsis={{ rows: 4, expandable: true }}>
-                          {execution.summary}
-                        </Typography.Paragraph>
-                      )}
-                    </div>
+                    <ExecutionRow
+                      key={execution.id}
+                      execution={execution}
+                      card={detail}
+                      onJump={() => jumpToHost(execution)}
+                      onInvalidate={() => detailQuery.refetch()}
+                      onRecover={(text) => recoverMutation.mutate({ cardId: detail.id, executionId: execution.id, text })}
+                      onRetry={() => retryMutation.mutate({ cardId: detail.id, executionId: execution.id })}
+                    />
                   ))}
                 </div>
               )}
@@ -719,6 +892,36 @@ export function TaskBoardPage() {
             value={createChecklist}
             onChange={(event) => setCreateChecklist(event.target.value)}
           />
+          <Input.TextArea
+            rows={2}
+            placeholder={t("taskboard.touchedPathsHint")}
+            value={createTouchedPaths}
+            onChange={(event) => setCreateTouchedPaths(event.target.value)}
+          />
+          <Input.TextArea
+            rows={3}
+            placeholder={t("taskboard.researchFactsHint")}
+            value={createResearchFacts}
+            onChange={(event) => setCreateResearchFacts(event.target.value)}
+          />
+          <Input.TextArea
+            rows={2}
+            placeholder={t("taskboard.researchLocationsHint")}
+            value={createResearchLocations}
+            onChange={(event) => setCreateResearchLocations(event.target.value)}
+          />
+          <Input.TextArea
+            rows={2}
+            placeholder={t("taskboard.researchExcludedHint")}
+            value={createResearchExcluded}
+            onChange={(event) => setCreateResearchExcluded(event.target.value)}
+          />
+          <Input.TextArea
+            rows={2}
+            placeholder={t("taskboard.researchOpenHint")}
+            value={createResearchOpen}
+            onChange={(event) => setCreateResearchOpen(event.target.value)}
+          />
         </div>
       </Modal>
 
@@ -753,6 +956,36 @@ export function TaskBoardPage() {
             options={(templatesQuery.data ?? [])
               .filter((tpl) => tpl.id?.trim())
               .map((tpl) => ({ value: tpl.id, label: tpl.avatar ? `${tpl.avatar} ${tpl.name || tpl.id}` : tpl.name || tpl.id }))}
+          />
+          <Input.TextArea
+            rows={2}
+            placeholder={t("taskboard.touchedPathsHint")}
+            value={editTouchedPaths}
+            onChange={(event) => setEditTouchedPaths(event.target.value)}
+          />
+          <Input.TextArea
+            rows={3}
+            placeholder={t("taskboard.researchFactsHint")}
+            value={editResearchFacts}
+            onChange={(event) => setEditResearchFacts(event.target.value)}
+          />
+          <Input.TextArea
+            rows={2}
+            placeholder={t("taskboard.researchLocationsHint")}
+            value={editResearchLocations}
+            onChange={(event) => setEditResearchLocations(event.target.value)}
+          />
+          <Input.TextArea
+            rows={2}
+            placeholder={t("taskboard.researchExcludedHint")}
+            value={editResearchExcluded}
+            onChange={(event) => setEditResearchExcluded(event.target.value)}
+          />
+          <Input.TextArea
+            rows={2}
+            placeholder={t("taskboard.researchOpenHint")}
+            value={editResearchOpen}
+            onChange={(event) => setEditResearchOpen(event.target.value)}
           />
         </div>
       </Modal>
@@ -830,3 +1063,97 @@ export function TaskBoardPage() {
     </div>
   );
 }
+
+// ExecutionRow renders one execution record with its observability snapshot
+// (stage / error type / last error / last tool) and, when running, controls to
+// nudge the run back — append a recovery message or retry the last failed turn.
+function ExecutionRow({
+  execution,
+  card,
+  onJump,
+  onInvalidate,
+  onRecover,
+  onRetry,
+}: {
+  execution: TaskboardExecution;
+  card: TaskboardCard;
+  onJump: () => void;
+  onInvalidate: () => void;
+  onRecover: (text: string) => void;
+  onRetry: () => void;
+}) {
+  const { t } = useI18n();
+  const [recoveryText, setRecoveryText] = useState("");
+  const running = execution.status === "running";
+  const error = !!execution.error_type || !!execution.last_error || execution.status === "failed";
+
+  const submitRecover = () => {
+    const text = recoveryText.trim();
+    if (!text) return;
+    onRecover(text);
+    setRecoveryText("");
+  };
+
+  return (
+    <div style={{ background: "rgba(128,128,128,0.06)", borderRadius: 6, padding: "4px 8px" }}>
+      <Space size={6} wrap>
+        <Tag color={EXECUTION_STATUS_COLORS[execution.status] || "default"}>{execution.status}</Tag>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>{execution.session_id}</Typography.Text>
+        {execution.stage && <Tag color={STAGE_COLORS[execution.stage] || "default"}>{execution.stage}</Tag>}
+        {execution.error_type && <Tag color="error">{execution.error_type}</Tag>}
+        {execution.host && (
+          <Button size="small" type="link" onClick={onJump}>
+            {t("taskboard.viewProgress")}
+          </Button>
+        )}
+      </Space>
+      {(execution.last_tool || error) && (
+        <Space size={6} wrap style={{ marginTop: 4 }}>
+          {execution.last_tool && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t("taskboard.lastTool")}: {execution.last_tool}
+            </Typography.Text>
+          )}
+          {execution.last_error && (
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              {execution.last_error}
+            </Typography.Text>
+          )}
+        </Space>
+      )}
+      {execution.summary && (
+        <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0, marginTop: 4 }} ellipsis={{ rows: 4, expandable: true }}>
+          {execution.summary}
+        </Typography.Paragraph>
+      )}
+      {running && (
+        <div style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center" }}>
+          <Input
+            size="small"
+            placeholder={t("taskboard.recoverPlaceholder")}
+            value={recoveryText}
+            onChange={(event) => setRecoveryText(event.target.value)}
+            onPressEnter={submitRecover}
+            style={{ flex: 1 }}
+          />
+          <Button size="small" type="primary" ghost disabled={!recoveryText.trim()} onClick={submitRecover}>
+            {t("taskboard.recover")}
+          </Button>
+          <Button size="small" onClick={onRetry}>
+            {t("taskboard.retry")}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const STAGE_COLORS: Record<string, string> = {
+  thinking: "purple",
+  tool_call: "geekblue",
+  final_response: "green",
+  waiting_approval: "warning",
+  error: "error",
+  interrupted: "default",
+  idle: "default",
+};

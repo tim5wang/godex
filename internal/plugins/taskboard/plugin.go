@@ -16,9 +16,30 @@ const ManifestID = "taskboard"
 // Executor runs one card in an isolated session (the durable-subagent
 // adapter lives in the backend assembly; M1-d). Implementations must:
 // record the execution via Ledger.StartExecution, launch the isolated
-// session, and finalize via Ledger.FinishExecution when it ends.
+// session, and finalize via Ledger.FinishExecution when it ends. The
+// optional observability/recovery methods let a PJM see where a run is stuck
+// and nudge it back, without opening the execution session.
 type Executor interface {
 	Execute(ctx context.Context, card Card) (executionID, sessionID string, err error)
+}
+
+// ObservedExecutor extends Executor with execution observability + recovery
+// (taskboard tool action=observe/reconcile/recover/retry). Backend executor
+// implements it; tool-only tests may use a stub.
+type ObservedExecutor interface {
+	Executor
+	// Observe inspects the running execution and returns where the run is
+	// (stage), how it last failed (error type / message), and what it last did.
+	// The bool reports whether the run is still live.
+	Observe(ctx context.Context, cardID, executionID string) (ExecutionObservation, bool, error)
+	// Reconcile walks all running executions, finalizes ones whose session has
+	// concretely failed, and writes observation snapshots for the rest.
+	Reconcile(ctx context.Context) (ReconcileReport, error)
+	// Recover appends a message into the card's execution session to nudge a
+	// running/stalled task. Returns the session id delivered to.
+	Recover(ctx context.Context, cardID, executionID, text string) (string, error)
+	// Retry replays the last retryable turn of the execution session.
+	Retry(ctx context.Context, cardID, executionID string) (string, error)
 }
 
 // Plugin is the taskboard NativePlugin: it contributes the taskboard_*
@@ -106,4 +127,8 @@ func (p *Plugin) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("PATCH /v1/taskboard/cards/{id}", json(p.handlePatchCard))
 	mux.Handle("DELETE /v1/taskboard/cards/{id}", json(p.handleDeleteCard))
 	mux.Handle("POST /v1/taskboard/cards/{id}/execute", json(p.handleExecuteCard))
+	mux.Handle("POST /v1/taskboard/cards/{id}/executions/{executionID}/observe", json(p.handleObserveExecution))
+	mux.Handle("POST /v1/taskboard/cards/{id}/executions/{executionID}/recover", json(p.handleRecoverExecution))
+	mux.Handle("POST /v1/taskboard/cards/{id}/executions/{executionID}/retry", json(p.handleRetryExecution))
+	mux.Handle("POST /v1/taskboard/reconcile", json(p.handleReconcile))
 }

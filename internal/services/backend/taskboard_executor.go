@@ -114,9 +114,10 @@ func executionPrompt(card taskboard.Card, rootDir string) string {
 	var b strings.Builder
 	b.WriteString("任务看板有一条任务卡需要你在当前对话中认领并执行。用 taskboard 工具：\n")
 	b.WriteString("- 先 taskboard action=get 读卡片（含评论与验收清单）\n")
-	b.WriteString("- 认领：taskboard action=move to=in_progress\n")
+	b.WriteString("- 状态确认：派工时卡片已自动置为 in_progress（StartExecution 置位），无需再 move；直接执行即可\n")
 	b.WriteString("- 执行：按卡片 Prompt 干活，用 taskboard action=checklist 勾选验收项（附证据）\n")
-	b.WriteString("- 完成：taskboard action=move to=in_review（提交人工验收）\n")
+	b.WriteString("- 动态观测（闸门 3）：写文件后用 taskboard action=report_touched 上报实际改到的包路径（如 [\"internal/platform/tooling\"]），触发跨卡路径重叠告警\n")
+	b.WriteString("- 完成：taskboard action=move to=in_review（提交人工验收，自动做 merge 预检）\n")
 	b.WriteString("完成后在对话里输出结构化总结（做了什么/改动文件/自验结果/剩余风险）。\n\n")
 	b.WriteString("# 任务 " + card.ID + "\n")
 	b.WriteString("标题: " + card.Title + "\n")
@@ -140,6 +141,35 @@ func executionPrompt(card taskboard.Card, rootDir string) string {
 	}
 	if rootDir != "" {
 		b.WriteString("\n工作目录边界: " + rootDir + "\n")
+	}
+	if card.Research != nil && !card.Research.IsEmpty() {
+		b.WriteString("\n### 已由 PJM 验证（不必重复排查）\n")
+		if len(card.Research.Facts) > 0 {
+			b.WriteString("已验证事实:\n")
+			for _, f := range card.Research.Facts {
+				b.WriteString("- " + f + "\n")
+			}
+		}
+		if len(card.Research.Locations) > 0 {
+			b.WriteString("\n关键落点（文件:行号）:\n")
+			for _, loc := range card.Research.Locations {
+				b.WriteString("- " + loc + "\n")
+			}
+		}
+		if len(card.Research.ExcludedPaths) > 0 {
+			b.WriteString("\n排除路径（不必排查）:\n")
+			for _, p := range card.Research.ExcludedPaths {
+				b.WriteString("- " + p + "\n")
+			}
+		}
+		b.WriteString("\n### 执行时需自行验证的开放点\n")
+		if len(card.Research.OpenQuestions) > 0 {
+			for _, q := range card.Research.OpenQuestions {
+				b.WriteString("- " + q + "\n")
+			}
+		} else {
+			b.WriteString("（无待验证项，按已验证事实推进）\n")
+		}
 	}
 	return b.String()
 }

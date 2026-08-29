@@ -78,6 +78,7 @@ import type {
   TaskboardCard,
   TaskboardCardCreateInput,
   TaskboardCardPatchInput,
+  TaskboardExecutionObservation,
 } from "./types";
 import { useNodeContextStore } from "../store/nodeContext";
 
@@ -1740,4 +1741,36 @@ export function deleteTaskboardCard(token: string | null, id: string) {
 
 export function executeTaskboardCard(token: string | null, id: string) {
   return request<{ execution_id: string; session_id: string }>(`/v1/taskboard/cards/${encodeURIComponent(id)}/execute`, { method: "POST" }, token);
+}
+
+export function observeTaskboardExecution(token: string | null, id: string, executionId: string) {
+  return request<{ observation: TaskboardExecutionObservation; live: boolean }>(
+    `/v1/taskboard/cards/${encodeURIComponent(id)}/executions/${encodeURIComponent(executionId)}/observe`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function recoverTaskboardExecution(token: string | null, id: string, executionId: string, message: string) {
+  return request<{ session_id: string; message: string }>(
+    `/v1/taskboard/cards/${encodeURIComponent(id)}/executions/${encodeURIComponent(executionId)}/recover`,
+    { method: "POST", body: JSON.stringify({ message }) },
+    token,
+  );
+}
+
+export function retryTaskboardExecution(token: string | null, id: string, executionId: string) {
+  return request<{ turn_id: string; message: string }>(
+    `/v1/taskboard/cards/${encodeURIComponent(id)}/executions/${encodeURIComponent(executionId)}/retry`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function reconcileTaskboard(token: string | null) {
+  return request<{ reconcile_report: { scanned: number; observed: number; finalized: number } }>(
+    `/v1/taskboard/reconcile`,
+    { method: "POST" },
+    token,
+  );
 }

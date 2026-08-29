@@ -22,7 +22,7 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrVersionConflict), errors.Is(err, ErrDoneIsHumanOnly),
 		errors.Is(err, ErrCardHeld), errors.Is(err, ErrRunningExecution),
 		errors.Is(err, ErrProjectHasCards), errors.Is(err, ErrBuiltInProject),
-		errors.Is(err, ErrInvalidTransition):
+		errors.Is(err, ErrInvalidTransition), errors.Is(err, ErrPathConflict):
 		status = http.StatusConflict
 	}
 	writeJSON(w, status, map[string]any{"error": err.Error()})
@@ -99,12 +99,13 @@ type patchBody struct {
 	Version int    `json:"version"`
 	Actor   string `json:"actor,omitempty"`
 	// update fields
-	Title       *string `json:"title"`
-	Description *string `json:"description"`
-	Prompt      *string `json:"prompt"`
-	Urgency     *string `json:"urgency"`
-	Blocked     *bool   `json:"blocked"`
-	TemplateID  *string `json:"template_id"`
+	Title        *string   `json:"title"`
+	Description  *string   `json:"description"`
+	Prompt       *string   `json:"prompt"`
+	Urgency      *string   `json:"urgency"`
+	Blocked      *bool     `json:"blocked"`
+	TemplateID   *string   `json:"template_id"`
+	Research     *Research `json:"research"`
 	// move
 	To string `json:"to"`
 	// complete
@@ -139,6 +140,7 @@ func (p *Plugin) handlePatchCard(w http.ResponseWriter, r *http.Request) (any, e
 		card, err = p.ledger.UpdateCard(id, body.Version, actor, UpdateCardInput{
 			Title: body.Title, Description: body.Description, Prompt: body.Prompt,
 			Urgency: body.Urgency, Blocked: body.Blocked, TemplateID: body.TemplateID,
+			Research: body.Research,
 		})
 	case "move":
 		card, err = p.ledger.MoveCard(id, body.Version, body.To, actor)
@@ -149,7 +151,11 @@ func (p *Plugin) handlePatchCard(w http.ResponseWriter, r *http.Request) (any, e
 	case "checklist":
 		switch strings.TrimSpace(body.CheckAction) {
 		case "add":
-			card, err = p.ledger.ChecklistAdd(id, body.Version, actor, body.Text)
+			texts := []string{}
+			if body.Text != "" {
+				texts = append(texts, body.Text)
+			}
+			card, err = p.ledger.ChecklistAdd(id, body.Version, actor, texts)
 		case "check":
 			if body.Index == nil {
 				return nil, fmt.Errorf("taskboard: check requires item index")
@@ -216,9 +222,86 @@ func (p *Plugin) handleExecuteCard(w http.ResponseWriter, r *http.Request) (any,
 	if card.HasRunningExecution() {
 		return nil, ErrRunningExecution
 	}
+	// Gate 2 dispatch intercept: refuse to start a card whose impact surface
+	// overlaps another active card (P0). The PJM sees which card collides on
+	// which path and can serialise or split before dispatching.
+	if cerr := p.ledger.PrecheckDispatchConflicts(card); cerr != nil {
+		return nil, cerr
+	}
 	executionID, sessionID, err := p.executor.Execute(r.Context(), card)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"execution_id": executionID, "session_id": sessionID}, nil
+}
+
+// requireObservedExecutor returns the executor as ObservedExecutor for the
+// observability/recovery routes, or an error when it is not configured.
+func (p *Plugin) requireObservedExecutor() (ObservedExecutor, error) {
+	if p.executor == nil {
+		return nil, fmt.Errorf("taskboard: executor not configured")
+	}
+	exec, ok := p.executor.(ObservedExecutor)
+	if !ok {
+		return nil, fmt.Errorf("taskboard: executor does not support observability")
+	}
+	return exec, nil
+}
+
+func pathExecutionID(r *http.Request) string {
+	return strings.TrimSpace(r.PathValue("executionID"))
+}
+
+func (p *Plugin) handleObserveExecution(w http.ResponseWriter, r *http.Request) (any, error) {
+	exec, err := p.requireObservedExecutor()
+	if err != nil {
+		return nil, err
+	}
+	obs, live, err := exec.Observe(r.Context(), pathID(r), pathExecutionID(r))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"observation": obs, "live": live}, nil
+}
+
+func (p *Plugin) handleRecoverExecution(w http.ResponseWriter, r *http.Request) (any, error) {
+	exec, err := p.requireObservedExecutor()
+	if err != nil {
+		return nil, err
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		return nil, err
+	}
+	sessionID, err := exec.Recover(r.Context(), pathID(r), pathExecutionID(r), body.Message)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"session_id": sessionID, "message": "recovery message submitted"}, nil
+}
+
+func (p *Plugin) handleRetryExecution(w http.ResponseWriter, r *http.Request) (any, error) {
+	exec, err := p.requireObservedExecutor()
+	if err != nil {
+		return nil, err
+	}
+	turnID, err := exec.Retry(r.Context(), pathID(r), pathExecutionID(r))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"turn_id": turnID, "message": "retry submitted"}, nil
+}
+
+func (p *Plugin) handleReconcile(w http.ResponseWriter, r *http.Request) (any, error) {
+	exec, err := p.requireObservedExecutor()
+	if err != nil {
+		return nil, err
+	}
+	report, err := exec.Reconcile(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"reconcile_report": report}, nil
 }

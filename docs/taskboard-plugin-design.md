@@ -164,6 +164,7 @@ POST   /v1/taskboard/cards/{id}/execute   # 手动执行（M1）
 - [ ] host cron 定时执行（复用 P-D）+ 并发上限
 - [ ] `taskboard_execution_report` 结构化报告 + DoD 未勾高亮
 - [ ] SSE 变更流（`GET /v1/taskboard/events`）替代前端轮询
+- [x] **多智能体协作优化设计已落盘** → 见 `docs/taskboard-collaboration-design.md`（M3.5 前置：上下文传递 research + 并行冲突治理四道闸门 + 经验回流）
 
 ## 7. 全局验收（可验证）
 

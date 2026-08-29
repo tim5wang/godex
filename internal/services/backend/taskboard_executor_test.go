@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tim5wang/godex/internal/core/protocol"
@@ -150,4 +151,134 @@ func TestTaskboardExecutorReusesSessionPerCard(t *testing.T) {
 	waitForBackendSnapshot(t, executor.service, session3, func(snapshot Snapshot) bool {
 		return !snapshot.Running
 	})
+}
+
+// Observe inspects the running execution's session and writes the observation
+// snapshot back into the ledger (stage / error / last tool), so the board
+// reflects where the run is stuck without opening the conversation.
+func TestTaskboardExecutorObserveWritesObservation(t *testing.T) {
+	service, executor, card := newTestTaskboardExecutor(t)
+
+	executionID, sessionID, err := executor.Execute(context.Background(), card)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	// Let the submitted turn finish so the session is no longer running.
+	waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		return !snapshot.Running
+	})
+
+	obs, live, err := executor.Observe(context.Background(), card.ID, executionID)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	// The stub turn finished, so it is not live; the observation should still be
+	// non-empty and written back to the ledger.
+	if live {
+		t.Fatalf("expected stub turn to be finished (not live)")
+	}
+	if obs.Stage == "" {
+		t.Fatalf("expected a stage from observe, got empty: %+v", obs)
+	}
+	got, err := executor.ledger.GetCard(card.ID)
+	if err != nil {
+		t.Fatalf("get card: %v", err)
+	}
+	if got.Executions[0].Stage == "" {
+		t.Fatalf("expected observation written to ledger, got %+v", got.Executions[0])
+	}
+}
+
+// Recover appends a recovery message into the card's execution session so a
+// running/stalled task can be nudged back (break a thinking loop, apply new
+// params, give a fresh instruction). The message must land in the session.
+func TestTaskboardExecutorRecoverAppendsMessage(t *testing.T) {
+	service, executor, card := newTestTaskboardExecutor(t)
+
+	executionID, sessionID, err := executor.Execute(context.Background(), card)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if _, err := executor.ledger.FinishExecution(card.ID, executionID, taskboard.ExecutionCompleted, "done"); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		return !snapshot.Running
+	})
+
+	// Recover into the (now idle) execution session.
+	dest, err := executor.Recover(context.Background(), card.ID, executionID, "调高输出阈值后重试")
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if dest != sessionID {
+		t.Fatalf("expected recovery delivered to %q, got %q", sessionID, dest)
+	}
+
+	// The added message should appear in the session feed (search by literal text;
+	// recovery envelopes are background-sourced but may not carry KindBackground).
+	waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		return strings.Contains(protocolMessagesText(snapshot.Messages), "调高输出阈值后重试")
+	})
+	// Wait for the recovery round to finish writing checkpoint files before the
+	// tempdir is torn down (SubmitAsync runs the turn on a background goroutine), so
+	// the teardown does not race the async persist.
+	waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		return !snapshot.Running
+	})
+}
+
+// protocolMessagesText concatenates the text of protocol messages for assertion.
+func protocolMessagesText(messages []protocol.Message) string {
+	var b strings.Builder
+	for _, msg := range messages {
+		b.WriteString(protocol.MessageText(msg))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// TestExecutionPromptResearchSplit verifies 方案A 上下文传递: a card carrying
+// structured research is injected into the execution prompt as two clearly
+// split sections — verified (trust, don't re-investigate) vs open points
+// (verify yourself). This ensures the coder only verifies open questions
+// instead of re-doing the PJM/planner调研.
+func TestExecutionPromptResearchSplit(t *testing.T) {
+	card := taskboard.Card{
+		ID:    "t-x",
+		Title: "task",
+		Research: &taskboard.Research{
+			Facts:         []string{"已确认 Card 模型在 internal/plugins/taskboard/types.go"},
+			Locations:     []string{"internal/plugins/taskboard/types.go:141"},
+			ExcludedPaths: []string{"internal/tools"},
+			OpenQuestions: []string{"确认 UpdateCard 是否同步写入 research 字段"},
+		},
+	}
+	prompt := executionPrompt(card, "/workspace")
+
+	for _, want := range []string{"### 已由 PJM 验证（不必重复排查）", "### 执行时需自行验证的开放点"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing section %q\n%s", want, prompt)
+		}
+	}
+	for _, want := range []string{
+		"已确认 Card 模型在 internal/plugins/taskboard/types.go",
+		"internal/plugins/taskboard/types.go:141",
+		"internal/tools",
+		"确认 UpdateCard 是否同步写入 research 字段",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing research detail %q\n%s", want, prompt)
+		}
+	}
+}
+
+// TestExecutionPromptWithoutResearch verifies a card with no research does not
+// emit the (misleading) verified/open-points sections — so the executor never
+// sees a stale/unpopulated block on cards that were not pre-investigated.
+func TestExecutionPromptWithoutResearch(t *testing.T) {
+	prompt := executionPrompt(taskboard.Card{ID: "t-y", Title: "plain"}, "")
+	if strings.Contains(prompt, "### 已由 PJM 验证") || strings.Contains(prompt, "### 执行时需自行验证的开放点") {
+		t.Errorf("prompt should not show research sections on a card without research:\n%s", prompt)
+	}
 }

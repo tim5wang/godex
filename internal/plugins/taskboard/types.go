@@ -31,6 +31,28 @@ const (
 	ExecutionCancelled = "cancelled"
 )
 
+// Execution stages (where a run is stuck / what it is currently doing), surfaced
+// in the ledger and UI so a PJM can tell "thinking" from "tool call" from
+// "waiting approval" without opening the execution session.
+const (
+	StageThinking        = "thinking"
+	StageToolCall        = "tool_call"
+	StageFinalResponse   = "final_response"
+	StageWaitingApproval = "waiting_approval"
+	StageError           = "error"
+	StageInterrupted     = "interrupted"
+	StageIdle            = "idle"
+)
+
+// Execution error types (coarse buckets for the "how did it fail" insight).
+const (
+	ErrTypeProvider    = "provider"
+	ErrTypeTool        = "tool"
+	ErrTypeCancelled   = "cancelled"
+	ErrTypeInterrupted = "interrupted"
+	ErrTypeUnknown     = "unknown"
+)
+
 // Project is one board's workspace boundary: only sessions whose workspace
 // belongs to the project may claim or execute its tasks.
 type Project struct {
@@ -87,6 +109,54 @@ type Execution struct {
 	// messages, tool calls and timeline live here — this is the primary
 	// jump-to-progress target; Host is only a fallback.
 	JobSessionID string `json:"job_session_id,omitempty"`
+	// Execution observability: where the run is stuck, how it failed, and what
+	// it last did — written by the executor's observe/reconcile path so the
+	// ledger reflects the real session state without opening the conversation.
+	Stage     string    `json:"stage,omitempty"`
+	ErrorType string    `json:"error_type,omitempty"`
+	LastError string    `json:"last_error,omitempty"`
+	LastTool  string    `json:"last_tool,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+// ExecutionObservation is a snapshot of one execution's current live state. The
+// executor writes it back into the ledger (via UpdateExecutionObservation) so
+// the board reflects reality without opening the session.
+type ExecutionObservation struct {
+	Stage     string `json:"stage,omitempty"`
+	ErrorType string `json:"error_type,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+	LastTool  string `json:"last_tool,omitempty"`
+}
+
+// ReconcileReport summarizes one reconciliation pass over running executions.
+type ReconcileReport struct {
+	Scanned   int `json:"scanned"`
+	Observed  int `json:"observed"`
+	Finalized int `json:"finalized"`
+}
+
+// Research carries the structured investigation/verification asset produced by
+// a planner/PJM card and reused by a coder card so the调研 is done once (方案A:
+// 上下文传递). It is injected into the execution prompt in two clearly split
+// sections — verified facts (trust, don't re-investigate) vs open questions
+// (must verify yourself).
+type Research struct {
+	// Facts is the list of already-verified facts (结论文本), the trust layer.
+	Facts []string `json:"facts,omitempty"`
+	// Locations are the key landing points as "file:line" (关键落点), so the
+	// coder can jump straight to the relevant code without re-grepping.
+	Locations []string `json:"locations,omitempty"`
+	// ExcludedPaths are the paths already ruled out — do not investigate them.
+	ExcludedPaths []string `json:"excluded_paths,omitempty"`
+	// OpenQuestions are the points the executor must still verify itself.
+	OpenQuestions []string `json:"open_questions,omitempty"`
+}
+
+// IsEmpty reports whether the research asset carries nothing useful.
+func (r Research) IsEmpty() bool {
+	return len(r.Facts) == 0 && len(r.Locations) == 0 &&
+		len(r.ExcludedPaths) == 0 && len(r.OpenQuestions) == 0
 }
 
 // Card is one task on the board. Version drives optimistic concurrency:
@@ -102,6 +172,28 @@ type Card struct {
 	// TemplateID pins the agent template used to initialize the card's
 	// execution session (M3). Empty = project default / builtin default.
 	TemplateID string `json:"template_id,omitempty"`
+	// TouchedPaths declares the package-level impact surface affected by this
+	// card (gate 1 static declaration, e.g. ["internal/platform/tooling"]). It
+	// is the basis for cross-card parallel-conflict detection (gates 2/4) and
+	// is merged with paths an execution session actually reports (gate 3
+	// dynamic observation). Package granularity: coarser than file, finer than
+	// directory.
+	TouchedPaths []string `json:"touched_paths,omitempty"`
+	// Research is the structured investigation asset produced by a
+	// planner/PJM card and referenced by a coder card (方案A: 上下文传递). It
+	// splits verified-facts (trust) from open-questions (verify yourself) so
+	// the调研 is done once and the executor does not re-investigate.
+	Research *Research `json:"research,omitempty"`
+	// ObservedPaths is the paths an execution session actually reported touching
+	// at runtime (gate 3 dynamic observation). It is unioned with TouchedPaths
+	// for conflict detection so an accurate report is never lost to a stale
+	// declaration.
+	ObservedPaths []string `json:"observed_paths,omitempty"`
+	// MergeReport is the gate-4 merge-precheck result computed when the card
+	// moves to in_review: it lists any cross-card package overlaps against other
+	// active cards so a reviewer/PJM can adjudicate before acceptance. Nil means
+	// no conflict was detected.
+	MergeReport *ConflictReport `json:"merge_report,omitempty"`
 	// Holder identifies who currently owns an in_progress card (execution
 	// session or claiming agent). A held card cannot be claimed by others.
 	Holder string `json:"holder,omitempty"`

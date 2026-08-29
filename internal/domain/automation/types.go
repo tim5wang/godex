@@ -79,6 +79,7 @@ type SessionContext struct {
 	Sender          string            `json:"sender,omitempty"`
 	AgentProfile    string            `json:"agent_profile,omitempty"`
 	SecurityProfile string            `json:"security_profile,omitempty"`
+	ApprovalMode    string            `json:"approval_mode,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	ProjectLedger   string            `json:"project_ledger,omitempty"`
 	// ProjectLedgerUpdatedAt is when the ledger was last written. The agent

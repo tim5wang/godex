@@ -43,6 +43,7 @@ type WebFetchResponse struct {
 	SiteName           string          `json:"site_name,omitempty"`
 	PublishedAt        string          `json:"published_at,omitempty"`
 	NeedsBrowser       bool            `json:"needs_browser,omitempty"`
+	FallbackHint       string          `json:"fallback_hint,omitempty"`
 	ExtractionWarnings []string        `json:"extraction_warnings,omitempty"`
 	Chunks             []WebFetchChunk `json:"chunks,omitempty"`
 }
@@ -189,6 +190,10 @@ func (s *WebFetchService) Fetch(ctx context.Context, rawURL, mode string, maxCha
 			result.ExtractionWarnings = append(result.ExtractionWarnings, "re-fetched with lightpanda browser")
 		}
 	}
+	// Anti-crawl fallback hint: when the fetch is degraded (needs browser or thin content)
+	// on a known anti-crawl host, tell the caller the proven bypass route so it stops
+	// repeating web_fetch on the same URL (see docs/tools_issues.md 2026-08-24 / 08-27).
+	result.FallbackHint = fallbackHintForURL(result.URL, result.NeedsBrowser, body, len(strings.TrimSpace(result.Content)))
 	fullContent := result.Content
 	result.Chunks = selectFetchChunks(fullContent, queryText+" "+result.Title, false)
 	if len(result.Content) > maxChars {
@@ -235,7 +240,7 @@ type webFetchArgs struct {
 }
 
 func NewWebFetchTool(service *WebFetchService) Tool {
-	return NewTypedTool(NewToolSpec("web_fetch", "Fetch a web page or URL, extract readable content, metadata, browser-needed warnings, and relevant chunks; spill large responses to a temp file.", map[string]interface{}{
+	return NewTypedTool(NewToolSpec("web_fetch", "Fetch a web page or URL, extract readable content, metadata, browser-needed warnings, and relevant chunks; spill large responses to a temp file. On anti-crawl hosts (WeChat/GitHub/npm/Cloudflare) a degraded result carries a fallback_hint with a proven bypass route (curl mobile-UA / GitHub API / npm registry).", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"url": map[string]interface{}{
@@ -556,6 +561,37 @@ func extractionWarnings(body []byte, content string) []string {
 		warnings = append(warnings, "page is script-heavy and yielded little readable text")
 	}
 	return warnings
+}
+
+// fallbackHintForURL returns a proven bypass route (from docs/tools_issues.md) when a
+// fetch is degraded on a known anti-crawl host. It returns an empty string when the
+// fetch succeeded or the host is not a known anti-crawl case. This prevents callers
+// from repeatedly retrying web_fetch on the same anti-crawl URL.
+func fallbackHintForURL(rawURL string, needsBrowser bool, body []byte, contentLen int) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	// Only surface a fallback when extraction is actually degraded, so a normal
+	// successful fetch (e.g. a renderable GitHub README) is not cluttered.
+	degraded := needsBrowser || contentLen < 120
+	if !degraded {
+		return ""
+	}
+	switch {
+	case strings.HasSuffix(host, "weixin.qq.com"):
+		return `web_fetch could not get the WeChat article body (needs_browser/captcha). Fall back to bash+curl with a mobile UA to download the raw HTML, then extract the div#js_content section. See docs/tools_issues.md 2026-08-24.`
+	case host == "github.com":
+		return `web_fetch could not get the GitHub repo content. Prefer the GitHub API: GET api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1 for the file tree; if the branch is unknown, first GET api.github.com/repos/{owner}/{repo} to read the default_branch, then fetch raw files from raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}. See docs/tools_issues.md 2026-08-27.`
+	case host == "raw.githubusercontent.com":
+		return `web_fetch could not resolve the raw GitHub file. Use a confirmed branch name (query api.github.com/repos/{owner}/{repo} for default_branch if unsure) instead of guessing main/HEAD. See docs/tools_issues.md 2026-08-27.`
+	case strings.HasSuffix(host, "npmjs.com") || host == "registry.npmjs.org":
+		return `web_fetch could not get the npm page (Cloudflare anti-bot). Use the npm registry API: GET registry.npmjs.org/{pkg}/latest for package metadata (description/versions). See docs/tools_issues.md 2026-08-27.`
+	case strings.Contains(strings.ToLower(string(body)), "just a moment") || strings.Contains(strings.ToLower(string(body)), "cf-chl") || strings.Contains(strings.ToLower(string(body)), "cloudflare"):
+		return `web_fetch hit a Cloudflare challenge. Use the site's public API (e.g. api.github.com, registry.npmjs.org, or the target's JSON endpoint) or the browser tool instead of retrying web_fetch on the same URL. See docs/tools_issues.md 2026-08-27.`
+	}
+	return ""
 }
 
 func canonicalizeURLAgainst(baseURL, raw string) string {

@@ -126,6 +126,41 @@ func TestEditFileOldTextNotFoundSuggestsSimilar(t *testing.T) {
 	}
 }
 
+func TestEditFileMissingOldTextGetsActionableGuidance(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "main.go")
+	content := "func main() {}\n"
+	if err := os.WriteFile(target, []byte(content), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	tool := NewEditFileTool(workspace)
+
+	// Only path is passed (the common failure mode: agent forgets old_text/new_text).
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"path": "main.go",
+	})
+	if err == nil {
+		t.Fatal("expected error when old_text is missing")
+	}
+	msg := err.Error()
+
+	// Must contain minimal usage example.
+	if !strings.Contains(msg, "old_text") || !strings.Contains(msg, "new_text") {
+		t.Fatalf("expected usage example mentioning old_text/new_text, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "path\":\"file.go\"") {
+		t.Fatalf("expected minimal usage example with path, got:\n%s", msg)
+	}
+	// Must guide append vs create workflows.
+	if !strings.Contains(msg, "To APPEND") {
+		t.Fatalf("expected append-workflow guidance, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "write_file") || !strings.Contains(msg, "NEW file") {
+		t.Fatalf("expected create-new-file guidance pointing to write_file, got:\n%s", msg)
+	}
+}
+
 func TestEditFileBackwardCompatibleSingleEdit(t *testing.T) {
 	workspace := t.TempDir()
 	target := filepath.Join(workspace, "file.txt")

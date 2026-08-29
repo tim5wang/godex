@@ -819,6 +819,7 @@ func (s *Service) buildRuntimeContext(sessionID string, locator SessionLocator, 
 		Sender:          envelope.Sender,
 		AgentProfile:    s.effectiveAgentProfile(locator, envelope),
 		SecurityProfile: s.effectiveSecurityProfile(),
+		ApprovalMode:    s.effectiveApprovalMode(),
 		Metadata:        cloneStringMap(envelope.Metadata),
 	}
 	ctx.DefaultDelivery = defaultDeliveryTarget(sessionID, locator, envelope)
@@ -853,6 +854,13 @@ func attachSessionGraphContext(session *sessionState, ctx *automation.SessionCon
 func (s *Service) effectiveSecurityProfile() string {
 	if s != nil && s.cfg != nil {
 		return strings.TrimSpace(s.cfg.Security.Profile)
+	}
+	return ""
+}
+
+func (s *Service) effectiveApprovalMode() string {
+	if s != nil && s.cfg != nil {
+		return strings.TrimSpace(s.cfg.Tools.Permissions.InteractiveApprovalMode)
 	}
 	return ""
 }

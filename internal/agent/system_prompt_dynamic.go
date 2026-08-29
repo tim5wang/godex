@@ -264,7 +264,7 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 	}
 	lines = append(lines,
 		"- Prefer web for current information, browser for dynamic pages, and glob for broad file discovery.",
-		"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, consider the browser tool for dynamic pages. Do not repeat the same search query or fetch the same URL.",
+		"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, use the provided fallback_hint (a proven curl/GitHub-API/npm-registry bypass, see docs/tools_issues.md) or the browser tool for dynamic pages. Do not repeat the same search query or fetch the same URL.",
 		"- When the user explicitly asks you to read, inspect, review, or verify specific workspace files or code paths, use the relevant file or shell tools before giving findings.",
 		"- When using durable subagents, use subagent wait for any/all completion instead of repeatedly polling subagent status; use subagent logs only for bounded diagnostics.",
 		"- When a tool generates a local file such as a screenshot or export, treat it as a generated artifact. In supported runtimes the artifact may be attached automatically, so do not claim you can only provide a local path unless the user explicitly asks for the path.",

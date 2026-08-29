@@ -104,9 +104,9 @@ func NewReadFileToolWithExecutor(executor *tooling.WorkspaceExecutor) Tool {
 			return ToolResult{
 				Text: text,
 				Structured: map[string]interface{}{
-					"type":      "image",
-					"path":      result.Path,
-					"mime_type": result.MimeType,
+					"type":       "image",
+					"path":       result.Path,
+					"mime_type":  result.MimeType,
 					"size_bytes": len(result.Data),
 				},
 			}, nil
@@ -168,7 +168,11 @@ func NewEditFileToolWithExecutor(executor *tooling.WorkspaceExecutor) Tool {
 		}
 		// Legacy single-edit mode
 		if args.OldText == "" {
-			return ToolResult{}, fmt.Errorf("missing old_text argument: provide old_text (with optional new_text), edits[] array, or files[] array")
+			return ToolResult{}, fmt.Errorf("missing old_text argument: edit_file needs old_text and (optionally) new_text to locate text to replace.\n" +
+				"Minimal usage: {\"path\":\"file.go\",\"old_text\":\"<exact existing text>\",\"new_text\":\"<replacement>\"}\n" +
+				"- To APPEND to an existing file: pass the last line(s) of the current file verbatim as old_text, and set new_text to that anchor + your new content.\n" +
+				"- To create a NEW file: use write_file ({\"path\":\"file.go\",\"content\":\"...\"}) instead of edit_file.\n" +
+				"- Multiple replacements: use edits[] array (path + edits[]); multiple files: use files[] array.")
 		}
 		output, err := executor.EditFile(args.Path, args.OldText, args.NewText)
 		return ToolResult{Text: output}, err

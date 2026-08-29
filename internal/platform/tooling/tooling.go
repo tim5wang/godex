@@ -290,6 +290,16 @@ type ShellCommandOptions struct {
 	DenyPatterns          []string
 	DenyHighRisk          bool
 	AllowedCommands       []string
+
+	// RelaxCommandSubstitution permits $(...) command substitution whose inner
+	// command passes the normal safety chain (not high-risk, not a dangerous
+	// base command, and not nested). Blocking command substitution is the
+	// default so the hardened local/Docker/SSH paths stay strict when the
+	// caller does not opt in.
+	RelaxCommandSubstitution bool
+	// RelaxSubstitutionAll permits any $(...) substitution without inspecting
+	// the inner command. Used by yolo/trusted approval modes.
+	RelaxSubstitutionAll bool
 }
 
 const (
@@ -1023,7 +1033,10 @@ func (e *WorkspaceExecutor) EditFile(path, oldText, newText string) (string, err
 		return "", fmt.Errorf("workspace fs unavailable")
 	}
 	if oldText == "" {
-		return "", fmt.Errorf("missing old_text argument")
+		return "", fmt.Errorf("missing old_text argument: edit_file needs old_text to locate text to replace.\n" +
+			"Minimal usage: {\"path\":\"file.go\",\"old_text\":\"<exact existing text>\",\"new_text\":\"<replacement>\"}\n" +
+			"- To APPEND to an existing file: pass the last line(s) of the current file verbatim as old_text, and set new_text to that anchor + your new content.\n" +
+			"- To create a NEW file: use write_file instead of edit_file.")
 	}
 	if oldText == newText {
 		return "", fmt.Errorf("old_text and new_text must be different")
@@ -1510,6 +1523,9 @@ func validateShellCommandWithOptions(command string, options ShellCommandOptions
 			return fmt.Errorf("high-risk shell command denied: %s", risk.Reason)
 		}
 	}
+	if err := validateCommandSubstitutions(command, options); err != nil {
+		return err
+	}
 	segments, err := splitShellCommand(command)
 	if err != nil {
 		return err
@@ -1552,6 +1568,9 @@ func validateArgvCommandWithOptions(argv []string, options ShellCommandOptions) 
 		if risk := ClassifyShellCommandRisk(command); risk.Level == ShellRiskHigh {
 			return fmt.Errorf("high-risk shell command denied: %s", risk.Reason)
 		}
+	}
+	if err := validateCommandSubstitutions(command, options); err != nil {
+		return err
 	}
 	name := strings.TrimSpace(argv[0])
 	if name == "" {
@@ -2029,9 +2048,6 @@ func splitShellCommand(command string) ([]string, error) {
 		if ch == '`' {
 			return nil, fmt.Errorf("command substitution is not allowed")
 		}
-		if ch == '$' && i+1 < len(command) && command[i+1] == '(' {
-			return nil, fmt.Errorf("command substitution is not allowed")
-		}
 		if (ch == '<' || ch == '>') && i+1 < len(command) && command[i+1] == '(' {
 			return nil, fmt.Errorf("process substitution is not allowed")
 		}
@@ -2093,6 +2109,155 @@ func splitShellCommand(command string) ([]string, error) {
 
 	appendSegment()
 	return segments, nil
+}
+
+// validateCommandSubstitutions enforces the command-substitution policy for a
+// command. When RelaxSubstitutionAll is set (yolo/trusted), every $(...) is
+// allowed. Otherwise when RelaxCommandSubstitution is set (default agent bash
+// path), each substitution's inner command must pass the normal safety chain.
+// When neither flag is set, any $(...) is rejected, preserving strict behavior
+// for callers that do not opt in.
+func validateCommandSubstitutions(command string, options ShellCommandOptions) error {
+	if options.RelaxSubstitutionAll {
+		return nil
+	}
+	substitutions := extractCommandSubstitutions(command)
+	if len(substitutions) == 0 {
+		return nil
+	}
+	if !options.RelaxCommandSubstitution {
+		return fmt.Errorf("command substitution is not allowed")
+	}
+	for _, inner := range substitutions {
+		if err := validateSubstitutionInner(inner, options); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSubstitutionInner validates a single $(...) inner command. It reuses
+// the risk classifier and the dangerous-command checks so read-only commands
+// (git rev-parse, date, pwd, echo) pass while inline interpreters, downloads
+// piped to a shell, nested substitution, process substitution, and dangerous
+// base commands (sudo, rm -rf on root, sensitive URLs) are rejected.
+func validateSubstitutionInner(inner string, options ShellCommandOptions) error {
+	if risk := commandSubstitutionRisk(inner, options); risk.Level == ShellRiskHigh {
+		return fmt.Errorf("command substitution denied: %s", risk.Reason)
+	}
+	return nil
+}
+
+// commandSubstitutionRisk classifies a $(...) inner command without executing
+// it. It returns ShellRiskHigh for nested/process substitution, inline
+// interpreter code, downloads piped to a shell, and dangerous base commands.
+func commandSubstitutionRisk(inner string, options ShellCommandOptions) ShellRisk {
+	inner = strings.TrimSpace(inner)
+	if inner == "" {
+		return ShellRisk{Level: ShellRiskHigh, Reason: "empty command substitution"}
+	}
+	if strings.Contains(inner, "$(") || strings.Contains(inner, "`") ||
+		strings.Contains(inner, "<(") || strings.Contains(inner, ">(") {
+		return ShellRisk{Level: ShellRiskHigh, Reason: "nested command substitution"}
+	}
+	if risk := ClassifyShellCommandRisk(inner); risk.Level == ShellRiskHigh {
+		return risk
+	}
+	argv, err := SplitCommandLine(inner)
+	if err != nil || len(argv) == 0 {
+		return ShellRisk{Level: ShellRiskHigh, Reason: "unparseable command substitution"}
+	}
+	name := filepath.Base(strings.TrimSpace(argv[0]))
+	if err := validateCommandSafety(name, argv, options); err != nil {
+		return ShellRisk{Level: ShellRiskHigh, Reason: err.Error()}
+	}
+	return ShellRisk{Level: ShellRiskLow}
+}
+
+// extractCommandSubstitutions returns the inner command text of every $(...)
+// command substitution in source order. Arithmetic expansion $((...)) is
+// treated as non-substitution and skipped. `$(` inside single quotes is a
+// literal (not expanded by the shell) and is skipped.
+func extractCommandSubstitutions(command string) []string {
+	var out []string
+	inSingle := false
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+		if ch == '\'' && (i == 0 || command[i-1] != '\\') {
+			inSingle = !inSingle
+			continue
+		}
+		if inSingle {
+			continue
+		}
+		if ch != '$' || i+1 >= len(command) || command[i+1] != '(' {
+			continue
+		}
+		if i+2 < len(command) && command[i+2] == '(' {
+			continue // arithmetic expansion $((...))
+		}
+		inner, end := extractBalancedParen(command, i+1)
+		if end < 0 {
+			continue
+		}
+		out = append(out, inner)
+		i = end
+	}
+	return out
+}
+
+// extractBalancedParen extracts the text between the opening paren at open (the
+// index of '(') and its matching ')'. It tracks nesting, quotes, and escapes.
+// Returns the inner text and the index of the matching ')', or ("", -1) when
+// the input is unbalanced. The paren at open is the outer boundary and does not
+// count toward nesting depth.
+func extractBalancedParen(command string, open int) (string, int) {
+	depth := 0
+	var inner strings.Builder
+	inSingle := false
+	inDouble := false
+	escaped := false
+	for j := open + 1; j < len(command); j++ {
+		ch := command[j]
+		if escaped {
+			inner.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		switch {
+		case ch == '\\':
+			inner.WriteByte(ch)
+			escaped = true
+		case inSingle:
+			inner.WriteByte(ch)
+			if ch == '\'' {
+				inSingle = false
+			}
+		case ch == '\'':
+			inner.WriteByte(ch)
+			inSingle = true
+		case inDouble:
+			inner.WriteByte(ch)
+			if ch == '"' {
+				inDouble = false
+			}
+		case ch == '"':
+			inner.WriteByte(ch)
+			inDouble = true
+		case ch == '(':
+			depth++
+			inner.WriteByte(ch)
+		case ch == ')':
+			if depth == 0 {
+				return strings.TrimSpace(inner.String()), j
+			}
+			depth--
+			inner.WriteByte(ch)
+		default:
+			inner.WriteByte(ch)
+		}
+	}
+	return "", -1
 }
 
 func firstShellCommandName(segment string) (string, error) {

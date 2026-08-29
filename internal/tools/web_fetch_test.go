@@ -285,3 +285,72 @@ func TestSetLightpandaFetcher(t *testing.T) {
 	}
 	service.mu.RUnlock()
 }
+
+func TestFallbackHintForURL(t *testing.T) {
+	cases := []struct {
+		name         string
+		rawURL       string
+		needsBrowser bool
+		body         string
+		contentLen   int
+		wantContains string
+	}{
+		{
+			name:         "wechat degraded",
+			rawURL:       "https://mp.weixin.qq.com/s/GhngoUnIS7CYjnGeFA7XZA",
+			needsBrowser: true,
+			wantContains: "curl",
+		},
+		{
+			name:         "github page degraded",
+			rawURL:       "https://github.com/foo/bar",
+			contentLen:   50,
+			wantContains: "git/trees",
+		},
+		{
+			name:         "raw github degraded",
+			rawURL:       "https://raw.githubusercontent.com/foo/bar/main/README.md",
+			contentLen:   50,
+			wantContains: "default_branch",
+		},
+		{
+			name:         "npm page degraded",
+			rawURL:       "https://www.npmjs.com/package/dsh-taskboard",
+			needsBrowser: true,
+			wantContains: "registry.npmjs.org",
+		},
+		{
+			name:         "cloudflare challenge degraded",
+			rawURL:       "https://example.com/page",
+			needsBrowser: true,
+			body:         "Just a moment...",
+			wantContains: "Cloudflare",
+		},
+		{
+			name:         "successful fetch no hint",
+			rawURL:       "https://example.com/page",
+			contentLen:   5000,
+			wantContains: "",
+		},
+		{
+			name:         "unknown host no hint",
+			rawURL:       "https://docs.example.com/page",
+			contentLen:   50,
+			wantContains: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hint := fallbackHintForURL(tc.rawURL, tc.needsBrowser, []byte(tc.body), tc.contentLen)
+			if tc.wantContains == "" {
+				if hint != "" {
+					t.Fatalf("expected empty hint, got %q", hint)
+				}
+				return
+			}
+			if !strings.Contains(hint, tc.wantContains) {
+				t.Fatalf("expected hint to contain %q, got %q", tc.wantContains, hint)
+			}
+		})
+	}
+}

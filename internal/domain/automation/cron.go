@@ -20,6 +20,10 @@ type CronJob struct {
 	// Empty means "use the current default profile" (and the configured
 	// strategy / fallback chain still applies).
 	ModelProfileID     string         `json:"model_profile_id,omitempty"`
+	// WatchdogScript is an optional shell script run before each job fires.
+	// Exit 0 runs the message (agent); non-zero skips this tick (zero tokens);
+	// missing script or timeout records an error.
+	WatchdogScript     string         `json:"watchdog_script,omitempty"`
 	DeliveryTarget     DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool           `json:"enabled"`
 	CreatedBy          string         `json:"created_by,omitempty"`
@@ -39,6 +43,8 @@ type CronRunLog struct {
 	TurnID         string         `json:"turn_id,omitempty"`
 	Status         string         `json:"status"`
 	Error          string         `json:"error,omitempty"`
+	Suppressed     bool           `json:"suppressed,omitempty"`
+	WatchdogOutput string         `json:"watchdog_output,omitempty"`
 	DeliveryTarget DeliveryTarget `json:"delivery_target,omitempty"`
 	StartedAt      time.Time      `json:"started_at"`
 	FinishedAt     time.Time      `json:"finished_at,omitempty"`
@@ -53,6 +59,7 @@ type CronCreateInput struct {
 	// ModelProfileID optionally pins the job to a configured model profile.
 	// Empty means "use the current default profile".
 	ModelProfileID     string         `json:"model_profile_id,omitempty"`
+	WatchdogScript     string         `json:"watchdog_script,omitempty"`
 	DeliveryTarget     DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool           `json:"enabled"`
 	CreatedBy          string         `json:"created_by,omitempty"`
@@ -70,6 +77,7 @@ type CronUpdateInput struct {
 	// string means "clear and use the default profile", non-empty means
 	// "pin to this profile".
 	ModelProfileID *string         `json:"model_profile_id,omitempty"`
+	WatchdogScript *string         `json:"watchdog_script,omitempty"`
 	DeliveryTarget *DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled        *bool           `json:"enabled,omitempty"`
 }

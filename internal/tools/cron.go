@@ -37,6 +37,7 @@ type cronArgs struct {
 	SessionMode    *string                    `json:"session_mode,omitempty"`
 	DeliveryTarget *automation.DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled        *bool                      `json:"enabled,omitempty"`
+	WatchdogScript *string                    `json:"watchdog_script,omitempty"`
 	Limit          int                        `json:"limit,omitempty"`
 }
 
@@ -92,6 +93,10 @@ func NewCronTool(manager CronManager) Tool {
 			"enabled": map[string]interface{}{
 				"type":        "boolean",
 				"description": "Whether the job is enabled",
+			},
+			"watchdog_script": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional shell script run before the job fires: exit 0 runs the message, non-zero skips this tick (zero tokens); missing or timeout records an error.",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
@@ -219,6 +224,7 @@ func NewCronTool(manager CronManager) Tool {
 				Timezone:           timezone,
 				Schedule:           schedule,
 				SessionMode:        sessionMode,
+				WatchdogScript:     derefString(args.WatchdogScript),
 				DeliveryTarget:     deliveryTarget.Clone(),
 				Enabled:            enabled,
 				CreatedBy:          createdBy,
@@ -252,6 +258,10 @@ func NewCronTool(manager CronManager) Tool {
 			if args.Enabled != nil {
 				value := *args.Enabled
 				update.Enabled = &value
+			}
+			if args.WatchdogScript != nil {
+				value := *args.WatchdogScript
+				update.WatchdogScript = &value
 			}
 			if schedule, ok, err := parseCronScheduleArgs(args, true); err != nil {
 				return ToolResult{}, err

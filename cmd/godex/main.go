@@ -171,6 +171,7 @@ func main() {
 		TickSeconds:       cfg.Cron.TickSeconds,
 		DefaultTimezone:   cfg.Cron.DefaultTimezone,
 		MaxConcurrentRuns: cfg.Cron.MaxConcurrentRuns,
+		WorkspaceDir:      cfg.WorkspaceDir,
 	}, rtcron.NewFileStore(cfg.StateDir), rtcron.NewBackendAdapter(service), channelManager,
 		rtcron.WithIdempotencyStore(idempotency.NewSQLiteStore(cfg.StateDir, 0)))
 	cronToolAdapter := rtcron.NewToolAdapter(cronService)
@@ -904,6 +905,7 @@ func cronConfigFrom(cfg *config.Config) rtcron.Config {
 		TickSeconds:       cfg.Cron.TickSeconds,
 		DefaultTimezone:   cfg.Cron.DefaultTimezone,
 		MaxConcurrentRuns: cfg.Cron.MaxConcurrentRuns,
+		WorkspaceDir:      cfg.WorkspaceDir,
 	}
 }
 

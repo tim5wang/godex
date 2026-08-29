@@ -43,6 +43,7 @@ func (a *ToolAdapter) CreateJob(input automation.CronCreateInput) (automation.Cr
 		Schedule:           fromAutomationSchedule(input.Schedule),
 		SessionMode:        SessionMode(input.SessionMode),
 		ModelProfileID:     input.ModelProfileID,
+		WatchdogScript:     input.WatchdogScript,
 		DeliveryTarget:     input.DeliveryTarget.Clone(),
 		Enabled:            input.Enabled,
 		CreatedBy:          input.CreatedBy,
@@ -76,6 +77,10 @@ func (a *ToolAdapter) UpdateJob(input automation.CronUpdateInput) (automation.Cr
 	if input.ModelProfileID != nil {
 		profile := *input.ModelProfileID
 		update.ModelProfileID = &profile
+	}
+	if input.WatchdogScript != nil {
+		script := *input.WatchdogScript
+		update.WatchdogScript = &script
 	}
 	if input.DeliveryTarget != nil {
 		target := input.DeliveryTarget.Clone()
@@ -132,6 +137,7 @@ func toAutomationJob(job Job) automation.CronJob {
 		Schedule:           toAutomationSchedule(job.Schedule),
 		SessionMode:        string(job.SessionMode),
 		ModelProfileID:     job.ModelProfileID,
+		WatchdogScript:     job.WatchdogScript,
 		DeliveryTarget:     job.DeliveryTarget.Clone(),
 		Enabled:            job.Enabled,
 		CreatedBy:          job.CreatedBy,
@@ -171,6 +177,8 @@ func toAutomationRunLog(run RunLog) automation.CronRunLog {
 		TurnID:         run.TurnID,
 		Status:         string(run.Status),
 		Error:          run.Error,
+		Suppressed:     run.Suppressed,
+		WatchdogOutput: run.WatchdogOutput,
 		DeliveryTarget: run.DeliveryTarget.Clone(),
 		StartedAt:      run.StartedAt,
 		FinishedAt:     run.FinishedAt,

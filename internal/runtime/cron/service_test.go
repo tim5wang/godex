@@ -99,6 +99,152 @@ func (d *fakeDeliverer) Deliver(ctx context.Context, target automation.DeliveryT
 	return d.err
 }
 
+func writeScript(t *testing.T, root, body string) string {
+	t.Helper()
+	path := filepath.Join(root, "wd.sh")
+	if err := os.WriteFile(path, []byte(body), 0755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	return path
+}
+
+func createJob(t *testing.T, service *Service, script string) Job {
+	t.Helper()
+	job, err := service.CreateJob(CreateJobInput{
+		Name:           "watchdog demo",
+		Message:        "run me",
+		Schedule:       Schedule{Type: ScheduleEvery, EverySeconds: 60},
+		SessionMode:    SessionModeShared,
+		WatchdogScript: script,
+		Enabled:        true,
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	return job
+}
+
+func TestRunJobWatchdogExitZeroRuns(t *testing.T) {
+	root := t.TempDir()
+	store := NewFileStore(t.TempDir())
+	backend := &fakeBackend{}
+	deliverer := &fakeDeliverer{}
+	service := NewService(Config{Enabled: true, DefaultTimezone: "Asia/Shanghai", WorkspaceDir: root}, store, backend, deliverer)
+	job := createJob(t, service, writeScript(t, root, "#!/bin/sh\necho ready\n"))
+
+	run, err := service.RunNow(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+	if run.Status != JobStatusCompleted {
+		t.Fatalf("exit 0 must run agent, got %s", run.Status)
+	}
+	if run.Suppressed {
+		t.Fatal("exit 0 must not suppress")
+	}
+	if len(backend.locators) != 1 {
+		t.Fatalf("agent session must be opened, got %d locators", len(backend.locators))
+	}
+	if !strings.Contains(run.WatchdogOutput, "ready") {
+		t.Fatalf("expected watchdog output captured, got %q", run.WatchdogOutput)
+	}
+}
+
+func TestRunJobWatchdogExitNonZeroSkips(t *testing.T) {
+	root := t.TempDir()
+	store := NewFileStore(t.TempDir())
+	backend := &fakeBackend{}
+	deliverer := &fakeDeliverer{}
+	service := NewService(Config{Enabled: true, DefaultTimezone: "Asia/Shanghai", WorkspaceDir: root}, store, backend, deliverer)
+	job := createJob(t, service, writeScript(t, root, "#!/bin/sh\n echo skip-me\nexit 3\n"))
+
+	run, err := service.RunNow(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("non-zero exit is a skip, not an error, got %v", err)
+	}
+	if run.Status != JobStatusSuppressed {
+		t.Fatalf("non-zero exit must suppress, got %s", run.Status)
+	}
+	if !run.Suppressed {
+		t.Fatal("run must be flagged suppressed")
+	}
+	if len(backend.locators) != 0 {
+		t.Fatalf("skipped run must not open an agent session, got %d locators", len(backend.locators))
+	}
+	if len(deliverer.targets) != 0 {
+		t.Fatalf("skipped run must not deliver, got %d targets", len(deliverer.targets))
+	}
+	if !strings.Contains(run.Error, "watchdog skipped") {
+		t.Fatalf("expected skip reason captured, got %q", run.Error)
+	}
+}
+
+func TestRunJobWatchdogMissingScriptErrors(t *testing.T) {
+	root := t.TempDir()
+	store := NewFileStore(t.TempDir())
+	backend := &fakeBackend{}
+	deliverer := &fakeDeliverer{}
+	service := NewService(Config{Enabled: true, DefaultTimezone: "Asia/Shanghai", WorkspaceDir: root}, store, backend, deliverer)
+	job := createJob(t, service, filepath.Join(root, "nope.sh"))
+
+	run, err := service.RunNow(context.Background(), job.ID)
+	if err == nil {
+		t.Fatalf("missing script must error")
+	}
+	if run.Status != JobStatusError {
+		t.Fatalf("missing script must record error, got %s", run.Status)
+	}
+	if len(backend.locators) != 0 {
+		t.Fatalf("error must not open an agent session, got %d locators", len(backend.locators))
+	}
+}
+
+func TestRunJobWatchdogTimeoutErrors(t *testing.T) {
+	root := t.TempDir()
+	store := NewFileStore(t.TempDir())
+	backend := &fakeBackend{}
+	deliverer := &fakeDeliverer{}
+	service := NewService(Config{Enabled: true, DefaultTimezone: "Asia/Shanghai", WorkspaceDir: root}, store, backend, deliverer)
+	job := createJob(t, service, writeScript(t, root, "#!/bin/sh\nsleep 30\n"))
+
+	run, err := service.RunNow(context.Background(), job.ID)
+	if err == nil {
+		t.Fatalf("timeout must error")
+	}
+	if run.Status != JobStatusError {
+		t.Fatalf("timeout must record error, got %s", run.Status)
+	}
+	if len(backend.locators) != 0 {
+		t.Fatalf("error must not open an agent session, got %d locators", len(backend.locators))
+	}
+}
+
+func TestRunJobWatchdogDefaultScriptFallsBack(t *testing.T) {
+	root := t.TempDir()
+	store := NewFileStore(t.TempDir())
+	backend := &fakeBackend{}
+	deliverer := &fakeDeliverer{}
+	service := NewService(Config{Enabled: true, DefaultTimezone: "Asia/Shanghai", WorkspaceDir: root, DefaultWatchdogScript: writeScript(t, root, "exit 1\n")}, store, backend, deliverer)
+	job, err := service.CreateJob(CreateJobInput{
+		Name:        "default wd",
+		Message:     "run me",
+		Schedule:    Schedule{Type: ScheduleEvery, EverySeconds: 60},
+		SessionMode: SessionModeShared,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	run, err := service.RunNow(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("default watchdog should skip, not error, got %v", err)
+	}
+	if run.Status != JobStatusSuppressed {
+		t.Fatalf("default watchdog must suppress, got %s", run.Status)
+	}
+}
+
 func TestFileStoreRoundTrip(t *testing.T) {
 	store := NewFileStore(t.TempDir())
 	job := Job{

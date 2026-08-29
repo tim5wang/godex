@@ -32,6 +32,7 @@ const (
 	JobStatusCompleted       JobStatus = "completed"
 	JobStatusError           JobStatus = "error"
 	JobStatusDeliveryBlocked JobStatus = "delivery_blocked"
+	JobStatusSuppressed      JobStatus = "suppressed"
 )
 
 type Schedule struct {
@@ -52,6 +53,10 @@ type Job struct {
 	// Empty means "use the current default profile" — the configured
 	// strategy / fallback chain still applies to that run.
 	ModelProfileID     string                    `json:"model_profile_id,omitempty"`
+	// WatchdogScript is an optional shell script run before each job fires.
+	// Exit 0 runs the message (agent); non-zero skips this tick (zero tokens);
+	// missing script or timeout records an error.
+	WatchdogScript     string                    `json:"watchdog_script,omitempty"`
 	DeliveryTarget     automation.DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool                      `json:"enabled"`
 	CreatedBy          string                    `json:"created_by,omitempty"`
@@ -71,6 +76,8 @@ type RunLog struct {
 	TurnID         string                    `json:"turn_id,omitempty"`
 	Status         JobStatus                 `json:"status"`
 	Error          string                    `json:"error,omitempty"`
+	Suppressed     bool                      `json:"suppressed,omitempty"`
+	WatchdogOutput string                    `json:"watchdog_output,omitempty"`
 	DeliveryTarget automation.DeliveryTarget `json:"delivery_target,omitempty"`
 	StartedAt      time.Time                 `json:"started_at"`
 	FinishedAt     time.Time                 `json:"finished_at,omitempty"`
@@ -85,6 +92,7 @@ type CreateJobInput struct {
 	// ModelProfileID optionally pins the job to a configured model profile.
 	// Empty means "use the current default profile".
 	ModelProfileID     string
+	WatchdogScript     string
 	DeliveryTarget     automation.DeliveryTarget
 	Enabled            bool
 	CreatedBy          string
@@ -102,6 +110,7 @@ type UpdateJobInput struct {
 	// string means "clear and use the default profile", non-empty means
 	// "pin to this profile".
 	ModelProfileID *string
+	WatchdogScript *string
 	DeliveryTarget *automation.DeliveryTarget
 	Enabled        *bool
 }
@@ -111,6 +120,11 @@ type Config struct {
 	TickSeconds       int
 	DefaultTimezone   string
 	MaxConcurrentRuns int
+	// WorkspaceDir is the base directory used to resolve a relative
+	// watchdog_script path. Passed through to runWatchdog.
+	WorkspaceDir string
+	// DefaultWatchdogScript is used when a job has no explicit watchdog script.
+	DefaultWatchdogScript string
 }
 
 type dueJob struct {
@@ -118,14 +132,18 @@ type dueJob struct {
 	Now time.Time
 }
 
-func (j Job) normalize(defaultTZ string) Job {
+func (j Job) normalize(cfg Config) Job {
 	j.Name = strings.TrimSpace(j.Name)
 	j.Message = strings.TrimSpace(j.Message)
-	j.Timezone = normalizeTimezone(j.Timezone, defaultTZ)
+	j.Timezone = normalizeTimezone(j.Timezone, cfg.DefaultTimezone)
 	if j.SessionMode == "" {
 		j.SessionMode = SessionModeShared
 	}
 	j.ModelProfileID = strings.TrimSpace(j.ModelProfileID)
+	j.WatchdogScript = strings.TrimSpace(j.WatchdogScript)
+	if j.WatchdogScript == "" {
+		j.WatchdogScript = strings.TrimSpace(cfg.DefaultWatchdogScript)
+	}
 	j.DeliveryTarget = j.DeliveryTarget.Clone()
 	return j
 }

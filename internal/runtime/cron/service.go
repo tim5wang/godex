@@ -218,6 +218,7 @@ func (s *Service) CreateJob(input CreateJobInput) (Job, error) {
 		Schedule:           input.Schedule,
 		SessionMode:        input.SessionMode,
 		ModelProfileID:     strings.TrimSpace(input.ModelProfileID),
+		WatchdogScript:     strings.TrimSpace(input.WatchdogScript),
 		DeliveryTarget:     input.DeliveryTarget.Clone(),
 		Enabled:            input.Enabled,
 		CreatedBy:          strings.TrimSpace(input.CreatedBy),
@@ -229,7 +230,7 @@ func (s *Service) CreateJob(input CreateJobInput) (Job, error) {
 	if !input.Enabled {
 		job.Enabled = false
 	}
-	job = job.normalize(s.cfg.DefaultTimezone)
+	job = job.normalize(s.cfg)
 	if err := s.validateJob(job); err != nil {
 		return Job{}, err
 	}
@@ -268,6 +269,9 @@ func (s *Service) UpdateJob(input UpdateJobInput) (Job, error) {
 		// non-empty pins to the new profile.
 		job.ModelProfileID = strings.TrimSpace(*input.ModelProfileID)
 	}
+	if input.WatchdogScript != nil {
+		job.WatchdogScript = strings.TrimSpace(*input.WatchdogScript)
+	}
 	if input.DeliveryTarget != nil {
 		job.DeliveryTarget = input.DeliveryTarget.Clone()
 	}
@@ -277,7 +281,7 @@ func (s *Service) UpdateJob(input UpdateJobInput) (Job, error) {
 	}
 	now := s.now()
 	job.UpdatedAt = now
-	job = job.normalize(s.cfg.DefaultTimezone)
+	job = job.normalize(s.cfg)
 	if err := s.validateJob(job); err != nil {
 		return Job{}, err
 	}
@@ -375,7 +379,7 @@ func (s *Service) finishRun(jobID string) {
 }
 
 func (s *Service) runJob(ctx context.Context, job Job, startedAt time.Time) (RunLog, error) {
-	job = job.normalize(s.cfg.DefaultTimezone)
+	job = job.normalize(s.cfg)
 
 	// Idempotency guard: a committed run (same job + started timestamp) is
 	// skipped so restarts or overlapping schedulers cannot double-fire.
@@ -408,6 +412,44 @@ func (s *Service) runJob(ctx context.Context, job Job, startedAt time.Time) (Run
 	}
 	if err := s.store.SaveJob(job); err != nil {
 		return run, err
+	}
+
+	// Pre-run watchdog: a non-zero exit skips this tick entirely (no agent
+	// execution, no delivery, zero token cost). Errors (missing script,
+	// timeout) are recorded as failed runs so the misconfiguration is visible.
+	// The script output is captured on the run log so the automation UI can
+	// show what it decided.
+	if strings.TrimSpace(job.WatchdogScript) != "" {
+		watchdogOut, wdErr := runWatchdog(ctx, job.WatchdogScript, s.cfg.WorkspaceDir, 0)
+		run.WatchdogOutput = watchdogOut.Output
+		if wdErr != nil {
+			run.Status = JobStatusError
+			run.Error = wdErr.Error()
+			run.FinishedAt = s.now()
+			_ = s.store.AppendRunLog(run)
+			job.LastStatus = JobStatusError
+			job.LastError = wdErr.Error()
+			job.LastRunAt = run.FinishedAt
+			job.UpdatedAt = run.FinishedAt
+			_ = s.store.SaveJob(job)
+			return run, wdErr
+		}
+		if watchdogOut.Skipped {
+			run.Status = JobStatusSuppressed
+			run.Suppressed = true
+			run.Error = ""
+			if strings.TrimSpace(watchdogOut.Output) != "" {
+				run.Error = "watchdog skipped: " + watchdogOut.Output
+			}
+			run.FinishedAt = s.now()
+			_ = s.store.AppendRunLog(run)
+			job.LastStatus = JobStatusSuppressed
+			job.LastError = run.Error
+			job.LastRunAt = run.FinishedAt
+			job.UpdatedAt = run.FinishedAt
+			_ = s.store.SaveJob(job)
+			return run, nil
+		}
 	}
 
 	opened, err := s.backend.OpenSession(ctx, s.jobLocator(job, run.ID))

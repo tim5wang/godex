@@ -110,11 +110,19 @@ export function apiURL(path: string) {
 
 // nodeProxyPath returns the center-proxy URL for a node-scoped path when a
 // remote node is active, or null when the request should hit the local center.
-// Node-scoped paths are the ones the Chat/Terminal/Files pages use against a
-// remote node, plus node-local data pages (Usage/Notes/Settings/Memory/Skills/
-// Automation) so remote mode also reflects the node's own state. Center shell
-// paths (/meta, /control/..., /push/...) stay local so the shell itself keeps
-// working.
+//
+// This is a BLACKLIST: only the center shell's own control-plane paths stay
+// local, so the shell keeps operating while a remote node is active. Every
+// other interface/API (chat, files, terminal, taskboard, business agents,
+// agent templates, usage, notes, settings, memory, skills, automation,
+// providers, ...) is node-scoped and proxies to the active remote node so
+// remote mode reflects the node's own state.
+//
+// Center shell paths kept local:
+//   /meta       instance metadata (workspace dir, etc.) for the shell itself
+//   /control..  node management / control plane (the "nodes" app)
+//   /push..     center web-push subscriptions (VAPID keys, browser subs)
+//   /relay      relay control websocket
 function nodeProxyPath(path: string): string | null {
   const nodeID = useNodeContextStore.getState().nodeID;
   if (!nodeID) {
@@ -122,22 +130,14 @@ function nodeProxyPath(path: string): string | null {
   }
   const p = path.startsWith("/") ? path : `/${path}`;
   if (
-    p.startsWith("/sessions") ||
-    p.startsWith("/models") ||
-    p.startsWith("/v1/terminal") ||
-    p.startsWith("/files") ||
-    p.startsWith("/commands") ||
-    p.startsWith("/providers") ||
-    p.startsWith("/usage") ||
-    p.startsWith("/notes") ||
-    p.startsWith("/config") ||
-    p.startsWith("/memory") ||
-    p.startsWith("/packages") ||
-    p.startsWith("/automation")
+    p === "/meta" ||
+    p.startsWith("/control") ||
+    p.startsWith("/push") ||
+    p.startsWith("/relay")
   ) {
-    return `/control/nodes/${encodeURIComponent(nodeID)}/proxy${p}`;
+    return null;
   }
-  return null;
+  return `/control/nodes/${encodeURIComponent(nodeID)}/proxy${p}`;
 }
 
 function authHeaders(token: string | null): HeadersInit {
@@ -1704,6 +1704,18 @@ export function createTaskboardProject(token: string | null, input: TaskboardPro
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   }, token);
+}
+
+export function updateTaskboardProject(token: string | null, id: string, input: { name?: string; work_dirs?: string[] }) {
+  return request<{ project: TaskboardProject }>(`/v1/taskboard/projects/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }, token);
+}
+
+export function deleteTaskboardProject(token: string | null, id: string) {
+  return request<{ deleted: boolean }>(`/v1/taskboard/projects/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
 }
 
 export function listTaskboardCards(token: string | null, query?: { project?: string; status?: string; urgency?: string }) {

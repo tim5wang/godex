@@ -1797,12 +1797,14 @@ export interface TaskboardResearch {
 export interface TaskboardProject {
   id: string;
   name: string;
-  root_dir: string;
+  work_dirs?: string[];
+  root_dir?: string;
   built_in?: boolean;
 }
 
 export interface TaskboardCardCreateInput {
   project_id?: string;
+  work_dir?: string;
   title: string;
   description?: string;
   prompt?: string;
@@ -1814,7 +1816,7 @@ export interface TaskboardCardCreateInput {
 }
 
 export interface TaskboardCardPatchInput {
-  action: "update" | "move" | "complete" | "reject" | "checklist";
+  action: "update" | "move" | "complete" | "reject" | "checklist" | "comment";
   version: number;
   actor?: string;
   title?: string;
@@ -1824,6 +1826,7 @@ export interface TaskboardCardPatchInput {
   blocked?: boolean;
   template_id?: string;
   touched_paths?: string[];
+  checklist?: string[];
   research?: TaskboardResearch;
   to?: TaskboardStatus;
   force?: boolean;
@@ -1837,5 +1840,6 @@ export interface TaskboardCardPatchInput {
 
 export interface TaskboardProjectCreateInput {
   name: string;
-  root_dir: string;
+  root_dir?: string;
+  work_dirs?: string[];
 }

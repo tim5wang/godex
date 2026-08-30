@@ -1521,6 +1521,20 @@ samp {
   color: var(--godex-accent) !important;
 }
 
+/* Small turn-number / timestamp label left of the bottom action buttons */
+.chat-feed-v2-meta {
+  align-self: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--godex-muted) !important;
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+.message-action-buttons .chat-feed-v2-meta {
+  margin-right: 4px;
+}
+
 /* Changed-files card (turn tail) + inline diff view */
 .changes-card {
   margin: 4px 0 2px;

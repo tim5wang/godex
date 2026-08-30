@@ -21,6 +21,7 @@ import {
   CompassOutlined,
   DeleteOutlined,
   EditOutlined,
+  FolderOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ProfileOutlined,
@@ -31,11 +32,14 @@ import { useI18n } from "../../i18n";
 import { buildChatRoute } from "../../lib/chatRoutes";
 import { showError } from "../../lib/notifications";
 import { useSettingsStore } from "../../store/settings";
+import { CronExprInput } from "../../components/CronExprInput";
 import {
   createCronJob,
   createTaskboardCard,
+  createTaskboardProject,
   deleteCronJob,
   deleteTaskboardCard,
+  deleteTaskboardProject,
   executeTaskboardCard,
   getTaskboardCard,
   listAgentTemplates,
@@ -50,8 +54,9 @@ import {
   retryTaskboardExecution,
   runCronJob,
   updateCronJob,
+  updateTaskboardProject,
 } from "../../lib/api";
-import type { CronJob, TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardExecutionObservation, TaskboardResearch, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
+import type { CronJob, TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardExecutionObservation, TaskboardProject, TaskboardResearch, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
 
 const COLUMNS: { status: TaskboardStatus; labelKey: string; dot: string }[] = [
   { status: "backlog", labelKey: "taskboard.col.backlog", dot: "#8c8c8c" },
@@ -121,6 +126,8 @@ export function TaskBoardPage() {
   const [search, setSearch] = useState("");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createProjectID, setCreateProjectID] = useState<string | undefined>(undefined);
+  const [createWorkDir, setCreateWorkDir] = useState<string | undefined>(undefined);
   const [createTitle, setCreateTitle] = useState("");
   const [createDescription, setCreateDescription] = useState("");
   const [createPrompt, setCreatePrompt] = useState("");
@@ -146,6 +153,13 @@ export function TaskBoardPage() {
   const [editResearchLocations, setEditResearchLocations] = useState("");
   const [editResearchExcluded, setEditResearchExcluded] = useState("");
   const [editResearchOpen, setEditResearchOpen] = useState("");
+  const [commentText, setCommentText] = useState("");
+
+  // ---- Project management (需求池 1): bind multiple work dirs to a project ----
+  const [projectManageOpen, setProjectManageOpen] = useState(false);
+  const [projectID, setProjectID] = useState<string | undefined>(undefined);
+  const [projectName, setProjectName] = useState("");
+  const [projectWorkDirs, setProjectWorkDirs] = useState("");
 
   // ---- PJM automation (M5 P3): a scheduled cron job sweeps the board ----
   const [pjmAutoOpen, setPjmAutoOpen] = useState(false);
@@ -162,6 +176,77 @@ export function TaskBoardPage() {
   const projectsQuery = useQuery({
     queryKey: ["taskboard", "projects", token],
     queryFn: async () => listTaskboardProjects(token || null),
+  });
+
+  const projects = projectsQuery.data?.projects ?? [];
+  const workDirsFor = (projectID?: string) => {
+    const project = projects.find((p) => p.id === projectID);
+    const dirs = project?.work_dirs ?? [];
+    if (dirs.length) return dirs;
+    return project?.root_dir ? [project.root_dir] : [];
+  };
+  const openProjectManage = () => {
+    setProjectID(undefined);
+    setProjectName("");
+    setProjectWorkDirs("");
+    setProjectManageOpen(true);
+  };
+  const editProject = (project: TaskboardProject) => {
+    setProjectID(project.id);
+    setProjectName(project.name);
+    setProjectWorkDirs((project.work_dirs ?? []).join("\n"));
+    setProjectManageOpen(true);
+  };
+
+  // ---- Project management mutations (bind multiple work dirs) ----
+  const createProjectMutation = useMutation({
+    mutationFn: async () =>
+      createTaskboardProject(token || null, {
+        name: projectName,
+        work_dirs: projectWorkDirs
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
+      }),
+    onSuccess: () => {
+      message.success(t("taskboard.projectCreated"));
+      void projectsQuery.refetch();
+      setProjectManageOpen(false);
+      setProjectID(undefined);
+      setProjectName("");
+      setProjectWorkDirs("");
+    },
+    onError: (error) => fail(error, "taskboard.projectSaveFailed"),
+  });
+
+  const updateProjectMutation = useMutation({
+    mutationFn: async () =>
+      updateTaskboardProject(token || null, projectID || "", {
+        name: projectName,
+        work_dirs: projectWorkDirs
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
+      }),
+    onSuccess: () => {
+      message.success(t("taskboard.projectUpdated"));
+      void projectsQuery.refetch();
+      setProjectManageOpen(false);
+      setProjectID(undefined);
+      setProjectName("");
+      setProjectWorkDirs("");
+    },
+    onError: (error) => fail(error, "taskboard.projectSaveFailed"),
+  });
+
+  const deleteProjectMutation = useMutation({
+    mutationFn: async (id: string) => deleteTaskboardProject(token || null, id),
+    onSuccess: () => {
+      message.success(t("taskboard.projectDeleted"));
+      void projectsQuery.refetch();
+      setProjectManageOpen(false);
+    },
+    onError: (error) => fail(error, "taskboard.projectDeleteFailed"),
   });
   const cardsQuery = useQuery({
     queryKey: ["taskboard", "cards", token, projectFilter, urgencyFilter],
@@ -242,7 +327,8 @@ export function TaskBoardPage() {
   const createMutation = useMutation({
     mutationFn: async () =>
       createTaskboardCard(token || null, {
-        project_id: projectFilter || undefined,
+        project_id: createProjectID || projectFilter || undefined,
+        work_dir: createWorkDir,
         title: createTitle,
         description: createDescription || undefined,
         prompt: createPrompt || undefined,
@@ -266,6 +352,8 @@ export function TaskBoardPage() {
     onSuccess: () => {
       message.success(t("taskboard.created"));
       setCreateOpen(false);
+      setCreateProjectID(undefined);
+      setCreateWorkDir(undefined);
       setCreateTitle("");
       setCreateDescription("");
       setCreatePrompt("");
@@ -411,6 +499,7 @@ export function TaskBoardPage() {
     setEditPrompt(card.prompt ?? "");
     setEditUrgency(card.urgency);
     setEditTouchedPaths((card.touched_paths ?? []).join("\n"));
+    setEditChecklist((card.checklist ?? []).map((item) => item.text).join("\n"));
     setEditResearchFacts((card.research?.facts ?? []).join("\n"));
     setEditResearchLocations((card.research?.locations ?? []).join("\n"));
     setEditResearchExcluded((card.research?.excluded_paths ?? []).join("\n"));
@@ -438,6 +527,10 @@ export function TaskBoardPage() {
           .split("\n")
           .map((line) => line.trim())
           .filter(Boolean),
+        checklist: editChecklist
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
         research: buildResearch({
           facts: editResearchFacts,
           locations: editResearchLocations,
@@ -447,6 +540,19 @@ export function TaskBoardPage() {
       },
     });
     setEditOpen(false);
+  };
+
+  const submitComment = () => {
+    if (!commentText.trim()) {
+      return;
+    }
+    patchMutation.mutate(
+      {
+        cardId: detailId || "",
+        body: { action: "comment", version: detail?.version ?? 0, text: commentText.trim() },
+      },
+      { onSuccess: () => setCommentText("") },
+    );
   };
 
   const jumpToHost = async (execution: TaskboardExecution) => {
@@ -575,6 +681,12 @@ export function TaskBoardPage() {
           onChange={(event) => setSearch(event.target.value)}
         />
         <Button icon={<ReloadOutlined />} onClick={() => invalidate()} />
+        <Button
+          icon={<FolderOutlined />}
+          onClick={() => openProjectManage()}
+        >
+          {t("taskboard.manageProjects")}
+        </Button>
         <Button icon={<CompassOutlined />} onClick={() => navigate(buildChatRoute({ channel: "pjm", key: "pjm", metadata: { template: "pjm" } }))}>
           {t("taskboard.pjmChat")}
         </Button>
@@ -807,9 +919,9 @@ export function TaskBoardPage() {
                 </div>
               </div>
             )}
-            {(detail.comments ?? []).length > 0 && (
-              <div>
-                <Typography.Text strong>{t("taskboard.comments")}</Typography.Text>
+            <div>
+              <Typography.Text strong>{t("taskboard.comments")}</Typography.Text>
+              {(detail.comments ?? []).length > 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
                   {detail.comments!.map((comment, index) => (
                     <div key={index} style={{ background: "rgba(128,128,128,0.06)", borderRadius: 6, padding: "4px 8px" }}>
@@ -818,8 +930,19 @@ export function TaskBoardPage() {
                     </div>
                   ))}
                 </div>
+              )}
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <Input
+                  placeholder={t("taskboard.commentPlaceholder")}
+                  value={commentText}
+                  onChange={(event) => setCommentText(event.target.value)}
+                  onPressEnter={submitComment}
+                />
+                <Button type="primary" loading={patchMutation.isPending} onClick={submitComment}>
+                  {t("taskboard.commentSubmit")}
+                </Button>
               </div>
-            )}
+            </div>
             <div>
               <Typography.Text strong>{t("taskboard.executions")}</Typography.Text>
               {(detail.executions ?? []).length === 0 ? (
@@ -864,6 +987,25 @@ export function TaskBoardPage() {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Input placeholder={t("taskboard.title")} value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} />
+          <Select
+            allowClear
+            placeholder={t("taskboard.projectPlaceholder")}
+            value={createProjectID}
+            onChange={setCreateProjectID}
+            options={(projectsQuery.data?.projects ?? []).map((project) => ({
+              value: project.id,
+              label: project.name,
+            }))}
+          />
+          {workDirsFor(createProjectID).length > 0 && (
+            <Select
+              allowClear
+              placeholder={t("taskboard.workDirPlaceholder")}
+              value={createWorkDir}
+              onChange={setCreateWorkDir}
+              options={workDirsFor(createProjectID).map((dir) => ({ value: dir, label: dir }))}
+            />
+          )}
           <Input.TextArea rows={2} placeholder={t("taskboard.description")} value={createDescription} onChange={(event) => setCreateDescription(event.target.value)} />
           <Input.TextArea rows={3} placeholder={t("taskboard.prompt")} value={createPrompt} onChange={(event) => setCreatePrompt(event.target.value)} />
           <Select
@@ -958,6 +1100,12 @@ export function TaskBoardPage() {
               .map((tpl) => ({ value: tpl.id, label: tpl.avatar ? `${tpl.avatar} ${tpl.name || tpl.id}` : tpl.name || tpl.id }))}
           />
           <Input.TextArea
+            rows={3}
+            placeholder={t("taskboard.checklistHint")}
+            value={editChecklist}
+            onChange={(event) => setEditChecklist(event.target.value)}
+          />
+          <Input.TextArea
             rows={2}
             placeholder={t("taskboard.touchedPathsHint")}
             value={editTouchedPaths}
@@ -1025,7 +1173,7 @@ export function TaskBoardPage() {
               {t("taskboard.pjmAutoEnabled")}
             </Checkbox>
           </Space>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
             <Typography.Text>{t("taskboard.pjmAutoSchedule")}</Typography.Text>
             <Select
               style={{ width: 130 }}
@@ -1044,11 +1192,11 @@ export function TaskBoardPage() {
                 onChange={(v) => setPjmEverySeconds(v ?? 3600)}
               />
             ) : (
-              <Input
-                style={{ width: 140 }}
+              <CronExprInput
                 value={pjmCronExpr}
-                onChange={(e) => setPjmCronExpr(e.target.value)}
+                onChange={(v) => setPjmCronExpr(v)}
                 placeholder="0 3 * * *"
+                timezone="Asia/Shanghai"
               />
             )}
           </div>
@@ -1058,6 +1206,83 @@ export function TaskBoardPage() {
               {pjmJob.last_status ? ` · ${pjmJob.last_status}` : ""}
             </Typography.Text>
           )}
+        </div>
+      </Modal>
+
+      <Modal
+        title={t("taskboard.manageProjects")}
+        open={projectManageOpen}
+        zIndex={1300}
+        onCancel={() => setProjectManageOpen(false)}
+        onOk={() => {
+          if (!projectName.trim()) {
+            message.warning(t("taskboard.projectNameRequired"));
+            return;
+          }
+          if (projectID) {
+            updateProjectMutation.mutate();
+          } else {
+            createProjectMutation.mutate();
+          }
+        }}
+        confirmLoading={createProjectMutation.isPending || updateProjectMutation.isPending}
+        footer={
+          <Space>
+            {projectID && (
+              <Popconfirm
+                title={t("taskboard.projectDeleteConfirm")}
+                onConfirm={() => deleteProjectMutation.mutate(projectID)}
+              >
+                <Button danger loading={deleteProjectMutation.isPending}>
+                  {t("taskboard.projectDelete")}
+                </Button>
+              </Popconfirm>
+            )}
+            <Button onClick={() => setProjectManageOpen(false)}>{t("app.cancel")}</Button>
+            <Button type="primary" loading={createProjectMutation.isPending || updateProjectMutation.isPending} onClick={() => {
+              if (!projectName.trim()) {
+                message.warning(t("taskboard.projectNameRequired"));
+                return;
+              }
+              if (projectID) {
+                updateProjectMutation.mutate();
+              } else {
+                createProjectMutation.mutate();
+              }
+            }}>
+              {projectID ? t("taskboard.projectUpdate") : t("taskboard.projectCreate")}
+            </Button>
+          </Space>
+        }
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Select
+            allowClear
+            placeholder={t("taskboard.projectSelectPlaceholder")}
+            value={projectID}
+            onChange={(value) => {
+              setProjectID(value || undefined);
+              if (value) editProject(projects.find((p) => p.id === value) as TaskboardProject);
+              else {
+                setProjectName("");
+                setProjectWorkDirs("");
+              }
+            }}
+            options={projects.map((project) => ({
+              value: project.id,
+              label: project.name,
+            }))}
+          />
+          <Input placeholder={t("taskboard.projectNamePlaceholder")} value={projectName} onChange={(event) => setProjectName(event.target.value)} />
+          <Input.TextArea
+            rows={4}
+            placeholder={t("taskboard.projectWorkDirsHint")}
+            value={projectWorkDirs}
+            onChange={(event) => setProjectWorkDirs(event.target.value)}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t("taskboard.projectWorkDirsHelp")}
+          </Typography.Text>
         </div>
       </Modal>
     </div>

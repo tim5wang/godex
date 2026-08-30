@@ -23,6 +23,7 @@ import {
 import { CopyOutlined, DeleteOutlined, EditOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
+import { CronExprInput } from "../../components/CronExprInput";
 import {
   createCronJob,
   deleteCronJob,
@@ -348,6 +349,7 @@ function CronForm({
 }) {
   const scheduleType = Form.useWatch("scheduleType", form) ?? "every";
   const deliveryKind = Form.useWatch("deliveryKind", form) ?? "";
+  const timezone = Form.useWatch("timezone", form) ?? "";
   return (
     <Form form={form} layout="vertical" onFinish={onFinish} initialValues={defaultCronForm()}>
       <Form.Item name="id" hidden><Input /></Form.Item>
@@ -359,7 +361,7 @@ function CronForm({
       <Form.Item name="scheduleType" label="Schedule type"><Select options={[{ value: "at" }, { value: "every" }, { value: "cron" }]} /></Form.Item>
       {scheduleType === "at" ? <Form.Item name="at" label="Run at"><Input type="datetime-local" /></Form.Item> : null}
       {scheduleType === "every" ? <Form.Item name="everySeconds" label="Every seconds"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item> : null}
-      {scheduleType === "cron" ? <Form.Item name="cronExpr" label="Cron expression"><Input placeholder="0 9 * * *" /></Form.Item> : null}
+      {scheduleType === "cron" ? <Form.Item name="cronExpr" label="Cron expression"><CronExprInput placeholder="0 9 * * *" timezone={timezone || undefined} /></Form.Item> : null}
       <DeliveryTargetFields deliveryKind={deliveryKind} />
       <Button block type="primary" htmlType="submit" loading={saving}>Save cron job</Button>
     </Form>

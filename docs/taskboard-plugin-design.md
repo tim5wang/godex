@@ -43,10 +43,10 @@ ui/web/src/lib/api.ts   # /v1/taskboard/* 前端请求封装
 
 ```go
 type Project struct {
-    ID      string `json:"id"`
-    Name    string `json:"name"`
-    RootDir string `json:"root_dir"`
-    BuiltIn bool   `json:"built_in,omitempty"` // 默认项目（=workspace）不可删
+    ID       string   `json:"id"`
+    Name     string   `json:"name"`
+    WorkDirs []string `json:"work_dirs,omitempty"` // 一个项目可绑定多个工作目录（多代码仓库）
+    BuiltIn  bool     `json:"built_in,omitempty"`  // 默认项目（=workspace）不可删
 }
 
 type ChecklistItem struct {
@@ -130,7 +130,9 @@ type Card struct {
 
 ```
 GET    /v1/taskboard/projects          # 项目列表
-POST   /v1/taskboard/projects          # 建项目
+POST   /v1/taskboard/projects          # 建项目（name + work_dirs[]，兼容 root_dir）
+PATCH  /v1/taskboard/projects/{id}     # 改项目（name/work_dirs）
+DELETE /v1/taskboard/projects/{id}     # 删项目（须无卡片）
 GET    /v1/taskboard/cards             # 查板（?project=&status=&urgency=）
 POST   /v1/taskboard/cards             # 建卡（人工）
 GET    /v1/taskboard/cards/{id}        # 单卡
@@ -165,6 +167,7 @@ POST   /v1/taskboard/cards/{id}/execute   # 手动执行（M1）
 - [ ] `taskboard_execution_report` 结构化报告 + DoD 未勾高亮
 - [ ] SSE 变更流（`GET /v1/taskboard/events`）替代前端轮询
 - [x] **多智能体协作优化设计已落盘** → 见 `docs/taskboard-collaboration-design.md`（M3.5 前置：上下文传递 research + 并行冲突治理四道闸门 + 经验回流）
+- [x] **对账功能设计已落盘** → 见 `docs/taskboard-reconcile-design.md`（执行一致性 reconcile：现状盘点 G1-G6 + 停滞检测 G3 + 卡级一致性 G4 + 自动调度 G1 + 分阶段 P0-P3 落地）
 
 ## 7. 全局验收（可验证）
 

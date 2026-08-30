@@ -27,6 +27,7 @@ import { UiCardView, type UiCardData } from "../features/workflows/components/Ui
 import { useI18n } from "../i18n";
 import { writeClipboardText } from "../lib/clipboard";
 import { createPCMPlayer, type PCMPlayer } from "../lib/ttsPlayback";
+import { shortTurnId } from "../lib/timelineUtils";
 import type { FeedItem, FeedSegment } from "../lib/types";
 
 interface MessageFeedV2Props {
@@ -213,6 +214,13 @@ function FeedItemBody({
       </Space>
       {copyable || canSaveToNote || canEditResend ? (
         <Space className="message-action-buttons" size={2}>
+          {(item.turnId || item.timestamp) && (item.kind === "user" || item.kind === "assistant") ? (
+            <Typography.Text className="chat-feed-v2-meta" type="secondary">
+              {item.turnId ? shortTurnId(item.turnId) : ""}
+              {item.turnId && item.timestamp ? " · " : ""}
+              {shortTime(item.timestamp)}
+            </Typography.Text>
+          ) : null}
           {voiceEnabled && item.kind === "assistant" ? <TTSPlayButton text={item.body} token={token} /> : null}
           {canEditResend ? (
             <Tooltip title={t("chat.editResend")}>
@@ -406,6 +414,13 @@ function TurnActions({
   const canFork = Boolean(onForkTurn && item.turnId);
   return (
     <div className="chat-feed-v2-turn-actions">
+      {item.turnId || item.timestamp ? (
+        <Typography.Text className="chat-feed-v2-meta" type="secondary">
+          {item.turnId ? shortTurnId(item.turnId) : ""}
+          {item.turnId && item.timestamp ? " · " : ""}
+          {shortTime(item.timestamp)}
+        </Typography.Text>
+      ) : null}
       {voiceEnabled && hasResult ? <TTSPlayButton text={item.finalBody ?? ""} token={token} /> : null}
       {canFork ? (
         <Tooltip title={t("chat.forkTurn")}>
@@ -616,6 +631,14 @@ function copyTextForItem(item: FeedItem) {
   }
   const attachments = item.attachments?.map((attachment) => attachment.name || attachment.path || attachment.url).filter(Boolean) ?? [];
   return [item.body, attachments.length ? attachments.join("\n") : ""].filter(Boolean).join("\n\n").trim();
+}
+
+function shortTime(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function renderHeader(item: FeedItem, botName?: string) {

@@ -15,6 +15,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/modelcontext"
 	"github.com/tim5wang/godex/internal/core/notes"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/tools"
@@ -442,6 +443,13 @@ func formatProjectLedgerRuntimeMessage(ledger string) string {
 }
 
 func (a *Agent) collectMemoryMessages(history []protocol.Message) ([]protocol.Message, memory.ContextLayers, error) {
+	// A template with memory: none injects no live memory recall at all — the
+	// session must not read durable memory either (same semantic as
+	// buildMemoryIndexPromptMessage). Skipping here prevents BuildContextLayers
+	// from surfacing identity/core/relevant memory into the prompt.
+	if a.memoryMode() == templates.MemoryNone {
+		return nil, memory.ContextLayers{}, nil
+	}
 	query := latestPersistentUserText(history)
 	layers, err := a.memoryMgr.BuildContextLayers(query)
 	if err != nil {

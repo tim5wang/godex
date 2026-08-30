@@ -100,6 +100,61 @@ func TestPrecheckDispatchBlocksOverlap(t *testing.T) {
 	}
 }
 
+// ---- Gate 2 regression: in_review must NOT block dispatch ----
+
+// An in_review card has stopped working (its execution was closed on leaving
+// in_progress) and only awaits human acceptance, so it no longer occupies
+// workspace impact and must NOT block a path-overlapping dispatch.
+func TestPrecheckDispatchIgnoresInReviewCard(t *testing.T) {
+	l := openTestLedger(t)
+	// A card that finished its work and is awaiting human acceptance.
+	done, _ := l.CreateCard(CreateCardInput{Title: "awaiting review", TouchedPaths: []string{"internal/platform/tooling"}})
+	done = moveToInProgress(t, l, done)
+	done, err := l.MoveCard(done.ID, done.Version, StatusInReview, agentActor)
+	if err != nil {
+		t.Fatalf("move to in_review: %v", err)
+	}
+	if done.Status != StatusInReview {
+		t.Fatalf("expected card in in_review, got %q", done.Status)
+	}
+
+	// Dispatching a card over the same path must now succeed.
+	overlap, _ := l.CreateCard(CreateCardInput{Title: "overlap", TouchedPaths: []string{"internal/platform/tooling"}})
+	if err := l.PrecheckDispatchConflicts(overlap); err != nil {
+		t.Fatalf("expected no dispatch conflict against in_review card, got %v", err)
+	}
+}
+
+// An in_progress card still holds a write risk and must keep blocking a
+// path-overlapping dispatch (original protection preserved — no regression).
+func TestPrecheckDispatchStillBlocksInProgressCard(t *testing.T) {
+	l := openTestLedger(t)
+	active, _ := l.CreateCard(CreateCardInput{Title: "in-flight", TouchedPaths: []string{"internal/platform/tooling"}})
+	active = moveToInProgress(t, l, active)
+
+	overlap, _ := l.CreateCard(CreateCardInput{Title: "overlap", TouchedPaths: []string{"internal/platform/tooling"}})
+	if err := l.PrecheckDispatchConflicts(overlap); !errors.Is(err, ErrPathConflict) {
+		t.Fatalf("expected ErrPathConflict against in_progress card, got %v", err)
+	}
+}
+
+// A card with a running execution is also a live writer, even if a stale/temporary
+// status would otherwise read as inactive: it must block dispatch too.
+func TestPrecheckDispatchBlocksCardWithRunningExecution(t *testing.T) {
+	l := openTestLedger(t)
+	card, _ := l.CreateCard(CreateCardInput{Title: "executing", TouchedPaths: []string{"internal/platform/tooling"}})
+	card = moveToInProgress(t, l, card)
+	// Simulate a running execution on this card (StartExecution forces in_progress
+	// and registers the run, so the running-execution branch is exercised).
+	if _, err := l.StartExecution(card.ID, "exec-1", "sess-1", agentActor, nil); err != nil {
+		t.Fatalf("start execution: %v", err)
+	}
+	overlap, _ := l.CreateCard(CreateCardInput{Title: "overlap", TouchedPaths: []string{"internal/platform/tooling"}})
+	if err := l.PrecheckDispatchConflicts(overlap); !errors.Is(err, ErrPathConflict) {
+		t.Fatalf("expected ErrPathConflict against card with running execution, got %v", err)
+	}
+}
+
 func TestPrecheckDispatchSkipsCardsWithoutPaths(t *testing.T) {
 	l := openTestLedger(t)
 	active, _ := l.CreateCard(CreateCardInput{Title: "active", TouchedPaths: []string{"internal/platform/tooling"}})

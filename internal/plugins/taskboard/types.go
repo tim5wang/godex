@@ -4,7 +4,11 @@
 // surface. Design: docs/taskboard-plugin-design.md.
 package taskboard
 
-import "time"
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
 
 // Task statuses follow the five-column kanban. done is human-only: agent
 // tools can never move a card to done (code-level protocol gate).
@@ -54,14 +58,37 @@ const (
 )
 
 // Project is one board's workspace boundary: only sessions whose workspace
-// belongs to the project may claim or execute its tasks.
+// belongs to the project may claim or execute its tasks. A project binds one
+// or more work directories (WorkDirs) because a real project is often spread
+// across several code repositories (需求池: taskboard 项目管理).
 type Project struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	RootDir string `json:"root_dir"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// WorkDirs is the list of work directories the project spans. A card may
+	// target one of them (Card.WorkDir); empty falls back to the first.
+	WorkDirs []string `json:"work_dirs,omitempty"`
 	// BuiltIn marks the default project (rooted at the godex workspace);
 	// it cannot be deleted.
 	BuiltIn bool `json:"built_in,omitempty"`
+}
+
+// UnmarshalJSON reads a project, migrating the legacy single `root_dir` field
+// into WorkDirs so pre-this-change ledger.json files still load. New writes
+// persist only `work_dirs`.
+func (p *Project) UnmarshalJSON(data []byte) error {
+	type alias Project
+	var a struct {
+		*alias
+		RootDir string `json:"root_dir"`
+	}
+	a.alias = (*alias)(p)
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	if len(p.WorkDirs) == 0 && strings.TrimSpace(a.RootDir) != "" {
+		p.WorkDirs = []string{strings.TrimSpace(a.RootDir)}
+	}
+	return nil
 }
 
 // ChecklistItem is one acceptance-criterion (DoD) line; checking requires an
@@ -172,6 +199,10 @@ type Card struct {
 	// TemplateID pins the agent template used to initialize the card's
 	// execution session (M3). Empty = project default / builtin default.
 	TemplateID string `json:"template_id,omitempty"`
+	// WorkDir selects which of the project's work directories this card targets
+	// (a project spans multiple repos). Empty defaults to the project's first
+	// WorkDir at execution time.
+	WorkDir string `json:"work_dir,omitempty"`
 	// TouchedPaths declares the package-level impact surface affected by this
 	// card (gate 1 static declaration, e.g. ["internal/platform/tooling"]). It
 	// is the basis for cross-card parallel-conflict detection (gates 2/4) and

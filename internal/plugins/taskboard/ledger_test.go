@@ -301,6 +301,66 @@ func TestVersionConflict(t *testing.T) {
 	}
 }
 
+func TestUpdateCardReplacesChecklistPreservingDone(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	card, _ := l.CreateCard(CreateCardInput{
+		ProjectID: project.ID,
+		Title:     "checklist edit",
+		Checklist: []string{"first", "second"},
+	})
+
+	// Mark "first" done with evidence, then edit the checklist: keep "first",
+	// rename "second" -> "second renamed", add "third", drop a blank line. The
+	// done/evidence for the unchanged "first" must survive.
+	if _, err := l.ChecklistCheck(card.ID, card.Version, "human", 0, "evidence-A"); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	cur, _ := l.GetCard(card.ID)
+
+	edited := []string{"first", "second renamed", " ", "third"}
+	if _, err := l.UpdateCard(cur.ID, cur.Version, "human", UpdateCardInput{Checklist: &edited}); err != nil {
+		t.Fatalf("update checklist: %v", err)
+	}
+	got, _ := l.GetCard(cur.ID)
+	if len(got.Checklist) != 3 {
+		t.Fatalf("expected 3 checklist items, got %d: %+v", len(got.Checklist), got.Checklist)
+	}
+	if got.Checklist[0].Text != "first" || !got.Checklist[0].Done || got.Checklist[0].Evidence != "evidence-A" {
+		t.Fatalf("expected preserved done/evidence on unchanged item, got %+v", got.Checklist[0])
+	}
+	if got.Checklist[1].Text != "second renamed" || got.Checklist[1].Done {
+		t.Fatalf("expected renamed item to reset done, got %+v", got.Checklist[1])
+	}
+	if got.Checklist[2].Text != "third" {
+		t.Fatalf("expected new item third, got %+v", got.Checklist[2])
+	}
+}
+
+func TestAddCommentAppendsInOrder(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	card, _ := l.CreateCard(CreateCardInput{ProjectID: project.ID, Title: "comment"})
+
+	if _, err := l.AddComment(card.ID, card.Version, "human", "first word"); err != nil {
+		t.Fatalf("add comment: %v", err)
+	}
+	cur, _ := l.GetCard(card.ID)
+	if len(cur.Comments) != 1 || cur.Comments[0].Text != "first word" || cur.Comments[0].Author != "human" {
+		t.Fatalf("expected one comment, got %+v", cur.Comments)
+	}
+	if _, err := l.AddComment(cur.ID, cur.Version, "agent", "second word"); err != nil {
+		t.Fatalf("add second comment: %v", err)
+	}
+	got, _ := l.GetCard(cur.ID)
+	if len(got.Comments) != 2 || got.Comments[1].Text != "second word" || got.Comments[1].Author != "agent" {
+		t.Fatalf("expected appended comment, got %+v", got.Comments)
+	}
+	if !got.Comments[0].CreatedAt.Before(got.Comments[1].CreatedAt) {
+		t.Fatalf("expected chronological order, got %v then %v", got.Comments[0].CreatedAt, got.Comments[1].CreatedAt)
+	}
+}
+
 func TestSoftDeleteGuardsRunningExecution(t *testing.T) {
 	l := openTestLedger(t)
 	project := seedProject(t, l)

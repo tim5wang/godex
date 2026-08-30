@@ -46,7 +46,7 @@ func NewTaskboardExecutor(service *Service, ledger *taskboard.Ledger) *Taskboard
 // conversation). Unlike the pre-M3 host dispatch, no other live session is
 // required.
 func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (string, string, error) {
-	rootDir := e.projectRoot(card.ProjectID)
+	rootDir := e.cardWorkDir(card)
 	templateID := strings.TrimSpace(card.TemplateID)
 	executionID := "exec-" + card.ID + "-" + e.service.now().Format("20060102150405.000")
 
@@ -84,8 +84,8 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 		return "", "", err
 	}
 	envelope := message.NewRuntimeEnvelope(message.SourceBackground, sessionID, "taskboard", executionPrompt(card, rootDir), e.service.now(), map[string]string{
-		"taskboard_card_id": card.ID,
-		"taskboard_title":   card.Title,
+		taskboardCardIDMetadataKey: card.ID,
+		taskboardTitleMetadataKey:  card.Title,
 	})
 	if _, err := e.service.SubmitAsync(ctx, sessionID, envelope, SubmitOptions{QueueMode: QueueModeFollowUp}); err != nil {
 		// The execution record is started by the timeout path; surface the
@@ -96,12 +96,39 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 	return executionID, sessionID, nil
 }
 
-// projectRoot resolves the project's root dir for the write scope.
+// projectRoot resolves the project's default root dir (its first work dir) for
+// backwards-compatible callers that only know the project id.
 func (e *TaskboardExecutor) projectRoot(projectID string) string {
 	for _, project := range e.ledger.ListProjects() {
 		if project.ID == projectID {
-			return project.RootDir
+			if len(project.WorkDirs) > 0 {
+				return project.WorkDirs[0]
+			}
+			return ""
 		}
+	}
+	return ""
+}
+
+// cardWorkDir resolves the work directory an execution session should be pinned
+// to: the card's explicit WorkDir when set (validated to belong to the
+// project), else the project's first work dir.
+func (e *TaskboardExecutor) cardWorkDir(card taskboard.Card) string {
+	for _, project := range e.ledger.ListProjects() {
+		if project.ID != card.ProjectID {
+			continue
+		}
+		if wd := strings.TrimSpace(card.WorkDir); wd != "" {
+			for _, dir := range project.WorkDirs {
+				if dir == wd {
+					return wd
+				}
+			}
+		}
+		if len(project.WorkDirs) > 0 {
+			return project.WorkDirs[0]
+		}
+		return ""
 	}
 	return ""
 }

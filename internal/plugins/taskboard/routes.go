@@ -46,8 +46,9 @@ func (p *Plugin) handleListProjects(w http.ResponseWriter, r *http.Request) (any
 }
 
 type projectBody struct {
-	Name    string `json:"name"`
-	RootDir string `json:"root_dir"`
+	Name     string   `json:"name"`
+	RootDir  string   `json:"root_dir"`
+	WorkDirs []string `json:"work_dirs"`
 }
 
 func (p *Plugin) handleCreateProject(w http.ResponseWriter, r *http.Request) (any, error) {
@@ -55,11 +56,38 @@ func (p *Plugin) handleCreateProject(w http.ResponseWriter, r *http.Request) (an
 	if err := decodeBody(r, &body); err != nil {
 		return nil, err
 	}
-	project, err := p.ledger.CreateProject(body.Name, body.RootDir)
+	// Backwards-compatible path (schema A): accept root_dir as the first work
+	// dir. Schema B (multi): accept explicit work_dirs (preferred).
+	if len(body.WorkDirs) == 0 && strings.TrimSpace(body.RootDir) != "" {
+		body.WorkDirs = []string{body.RootDir}
+	}
+	if len(body.WorkDirs) == 0 {
+		return nil, fmt.Errorf("taskboard: project requires a root_dir or at least one work_dir")
+	}
+	project, err := p.ledger.CreateProject(body.Name, body.WorkDirs[0], body.WorkDirs[1:]...)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"project": project}, nil
+}
+
+func (p *Plugin) handleUpdateProject(w http.ResponseWriter, r *http.Request) (any, error) {
+	var body projectBody
+	if err := decodeBody(r, &body); err != nil {
+		return nil, err
+	}
+	project, err := p.ledger.UpdateProject(pathID(r), body.Name, body.WorkDirs)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"project": project}, nil
+}
+
+func (p *Plugin) handleDeleteProject(w http.ResponseWriter, r *http.Request) (any, error) {
+	if err := p.ledger.DeleteProject(pathID(r)); err != nil {
+		return nil, err
+	}
+	return map[string]any{"deleted": true}, nil
 }
 
 func (p *Plugin) handleListCards(w http.ResponseWriter, r *http.Request) (any, error) {
@@ -95,7 +123,7 @@ func (p *Plugin) handleGetCard(w http.ResponseWriter, r *http.Request) (any, err
 
 // patchBody is the human card-mutation envelope; action picks the ledger op.
 type patchBody struct {
-	Action  string `json:"action"` // update|move|complete|reject|checklist
+	Action  string `json:"action"` // update|move|complete|reject|checklist|comment
 	Version int    `json:"version"`
 	Actor   string `json:"actor,omitempty"`
 	// update fields
@@ -105,6 +133,9 @@ type patchBody struct {
 	Urgency      *string   `json:"urgency"`
 	Blocked      *bool     `json:"blocked"`
 	TemplateID   *string   `json:"template_id"`
+	TouchedPaths *[]string `json:"touched_paths"`
+	WorkDir      *string   `json:"work_dir"`
+	Checklist    *[]string `json:"checklist"`
 	Research     *Research `json:"research"`
 	// move
 	To string `json:"to"`
@@ -140,8 +171,11 @@ func (p *Plugin) handlePatchCard(w http.ResponseWriter, r *http.Request) (any, e
 		card, err = p.ledger.UpdateCard(id, body.Version, actor, UpdateCardInput{
 			Title: body.Title, Description: body.Description, Prompt: body.Prompt,
 			Urgency: body.Urgency, Blocked: body.Blocked, TemplateID: body.TemplateID,
+			TouchedPaths: body.TouchedPaths, WorkDir: body.WorkDir, Checklist: body.Checklist,
 			Research: body.Research,
 		})
+	case "comment":
+		card, err = p.ledger.AddComment(id, body.Version, actor, body.Text)
 	case "move":
 		card, err = p.ledger.MoveCard(id, body.Version, body.To, actor)
 	case "complete":

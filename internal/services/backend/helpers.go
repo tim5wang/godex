@@ -971,6 +971,12 @@ func deriveSessionTitle(state agent.SessionState) string {
 
 func sessionTitleFromEnvelope(envelope message.Envelope) string {
 	normalized := envelope.Normalized()
+	// Background sources (e.g. taskboard card dispatch) may carry an explicit
+	// human-facing title in metadata; prefer it over the raw prompt text so the
+	// session rail shows a meaningful title instead of the long workload prompt.
+	if title := strings.TrimSpace(normalized.Metadata[taskboardTitleMetadataKey]); title != "" {
+		return summarizeTitle(title)
+	}
 	if text := strings.TrimSpace(normalized.BodyText()); text != "" {
 		return summarizeTitle(text)
 	}

@@ -147,9 +147,9 @@ func (e *TaskboardExecutor) Recover(ctx context.Context, cardID, executionID, te
 		return "", fmt.Errorf("taskboard: reopen execution session: %w", err)
 	}
 	envelope := message.NewRuntimeEnvelope(message.SourceBackground, sessionID, taskboardRecoveryActor, text, e.service.now(), map[string]string{
-		"taskboard_card_id":   card.ID,
-		"taskboard_recovery":  "1",
-		"taskboard_execution": executionID,
+		taskboardCardIDMetadataKey:   card.ID,
+		"taskboard_recovery":     "1",
+		"taskboard_execution":    executionID,
 	})
 	if _, err := e.service.SubmitAsync(ctx, sessionID, envelope, SubmitOptions{QueueMode: QueueModeFollowUp}); err != nil {
 		return "", fmt.Errorf("taskboard: submit recovery message to %s: %w", sessionID, err)

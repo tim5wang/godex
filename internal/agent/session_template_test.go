@@ -374,6 +374,20 @@ func TestApplyTemplateMemoryNoneSkipsInjectionAndCapture(t *testing.T) {
 	if err := a.CaptureInsightMemoryCandidates(nil); err != nil {
 		t.Fatalf("CaptureInsightMemoryCandidates: %v", err)
 	}
+	// Live recall side: BuildContextLayers-driven memory messages must also be
+	// suppressed (the injected memory index gate alone used to leave this path
+	// leaking durable memory into the prompt for memory:none templates).
+	msgs, layers, err := a.collectMemoryMessages(nil)
+	if err != nil {
+		t.Fatalf("collectMemoryMessages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatal("expected no memory recall messages for memory:none")
+	}
+	if len(layers.Identity) != 0 || len(layers.Core) != 0 || len(layers.Relevant) != 0 {
+		t.Fatalf("expected empty memory layers for memory:none, got identity=%d core=%d relevant=%d",
+			len(layers.Identity), len(layers.Core), len(layers.Relevant))
+	}
 }
 
 func TestApplyTemplateMemoryScopedRebuildsManager(t *testing.T) {

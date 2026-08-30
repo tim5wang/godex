@@ -83,7 +83,9 @@ func TestTaskboardExecutorOpensTemplatePinnedSession(t *testing.T) {
 	rootDir := ""
 	for _, p := range projects {
 		if p.ID == card.ProjectID {
-			rootDir = p.RootDir
+			if len(p.WorkDirs) > 0 {
+				rootDir = p.WorkDirs[0]
+			}
 			break
 		}
 	}
@@ -100,6 +102,44 @@ func TestTaskboardExecutorOpensTemplatePinnedSession(t *testing.T) {
 	}
 	if reopened.SessionID != sessionID {
 		t.Fatalf("expected same session id on reopen, got %q != %q", reopened.SessionID, sessionID)
+	}
+}
+
+func TestTaskboardExecutorSessionTitleUsesCardTitle(t *testing.T) {
+	service, executor, card := newTestTaskboardExecutor(t)
+
+	executionID, sessionID, err := executor.Execute(context.Background(), card)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	waitForBackendSnapshot(t, service, sessionID, func(snapshot Snapshot) bool {
+		return !snapshot.Running
+	})
+
+	// The execution session's conversation title should reflect the card title,
+	// not the long claim-and-execute workload prompt.
+	sessions, err := service.ListSessions(context.Background(), SessionListFilter{Channel: taskboardSessionChannel})
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	var found *ListedSession
+	for i := range sessions {
+		if sessions[i].SessionID == sessionID {
+			found = &sessions[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("execution session %s not listed", sessionID)
+	}
+	if found.Title != card.Title {
+		t.Fatalf("expected execution session title %q, got %q", card.Title, found.Title)
+	}
+	if strings.HasPrefix(found.Title, "任务看板") {
+		t.Fatalf("execution session title must not leak the workload prompt, got %q", found.Title)
+	}
+	if _, err := executor.ledger.FinishExecution(card.ID, executionID, taskboard.ExecutionCompleted, "done"); err != nil {
+		t.Fatalf("finish execution: %v", err)
 	}
 }
 

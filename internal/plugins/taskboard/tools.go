@@ -160,6 +160,7 @@ type taskboardArgs struct {
 	Prompt      *string  `json:"prompt"`
 	Blocked     *bool    `json:"blocked"`
 	TemplateID  string   `json:"template_id"`
+	WorkDir     string   `json:"work_dir"`
 	To          string   `json:"to"`
 	Text        string   `json:"text"`
 	CheckAction string   `json:"check_action"`
@@ -227,6 +228,7 @@ func dispatchTaskboard(ctx context.Context, ledger toolLedger, executor Executor
 			Prompt:       derefString(args.Prompt),
 			Urgency:      args.Urgency,
 			TemplateID:   strings.TrimSpace(args.TemplateID),
+			WorkDir:      strings.TrimSpace(args.WorkDir),
 			Checklist:    args.Checklist,
 			TouchedPaths: args.TouchedPaths,
 			Research:     args.Research,

@@ -127,6 +127,26 @@ func normalizePath(p string) string {
 	return strings.Trim(strings.TrimSpace(p), "/")
 }
 
+// normalizeWorkDirs trims, drops empties, and de-duplicates work directories
+// while preserving first-seen order. Leading/trailing slashes are stripped via
+// normalizePath so re-loading the same dir never creates two entries.
+func normalizeWorkDirs(dirs []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		d = normalizePath(d)
+		if d == "" {
+			continue
+		}
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
+		out = append(out, d)
+	}
+	return out
+}
+
 // normalizeResearch returns a nil-safe, trimmed copy of the research asset.
 // It drops empty facts/locations/open-questions and normalizes excluded paths
 // via the same path normalization as touched_paths. A research with nothing

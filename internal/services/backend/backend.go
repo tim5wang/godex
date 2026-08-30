@@ -42,6 +42,8 @@ const (
 	sessionRequestedSkillsMetadataKey = "requested_skills"
 	sessionGraphBranchMetadataKey     = "session_graph_branch_id"
 	sessionGraphNodeMetadataKey       = "session_graph_node_id"
+	taskboardCardIDMetadataKey        = "taskboard_card_id"
+	taskboardTitleMetadataKey         = "taskboard_title"
 	latestSessionFileName             = "latest-session"
 )
 

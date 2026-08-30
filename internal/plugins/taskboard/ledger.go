@@ -108,10 +108,10 @@ func (l *Ledger) ensureDefaultProjectLocked(workspaceDir string) {
 		workspaceDir = "."
 	}
 	l.data.Projects = append(l.data.Projects, Project{
-		ID:      "p-default",
-		Name:    "Default",
-		RootDir: workspaceDir,
-		BuiltIn: true,
+		ID:       "p-default",
+		Name:     "Default",
+		WorkDirs: []string{workspaceDir},
+		BuiltIn:  true,
 	})
 }
 
@@ -157,8 +157,10 @@ func (l *Ledger) ListProjects() []Project {
 	return out
 }
 
-// CreateProject registers one board project.
-func (l *Ledger) CreateProject(name, rootDir string) (Project, error) {
+// CreateProject registers one board project. rootDir is the first work dir;
+// additional work directories can be added via UpdateProject or the variadic
+// workDirs argument.
+func (l *Ledger) CreateProject(name, rootDir string, extraWorkDirs ...string) (Project, error) {
 	name = strings.TrimSpace(name)
 	rootDir = strings.TrimSpace(rootDir)
 	if name == "" || rootDir == "" {
@@ -171,16 +173,59 @@ func (l *Ledger) CreateProject(name, rootDir string) (Project, error) {
 			return Project{}, fmt.Errorf("taskboard: project %q already exists", name)
 		}
 	}
+	workDirs := normalizeWorkDirs(append([]string{rootDir}, extraWorkDirs...))
+	if len(workDirs) == 0 {
+		return Project{}, fmt.Errorf("taskboard: project requires at least one work dir")
+	}
 	project := Project{
-		ID:      l.nextID("p"),
-		Name:    name,
-		RootDir: rootDir,
+		ID:       l.nextID("p"),
+		Name:     name,
+		WorkDirs: workDirs,
 	}
 	l.data.Projects = append(l.data.Projects, project)
 	if err := l.saveLocked(); err != nil {
 		return Project{}, err
 	}
 	return project, nil
+}
+
+// UpdateProject mutates a project's name/work_dirs. WorkDirs is accepted as
+// the authoritative replacement list (nil keeps current). Built-in projects may
+// be renamed but keep their workspace root as the first work dir.
+func (l *Ledger) UpdateProject(id, name string, workDirs []string) (Project, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	idx := -1
+	for i := range l.data.Projects {
+		if l.data.Projects[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return Project{}, ErrProjectNotFound
+	}
+	if name = strings.TrimSpace(name); name == "" {
+		name = l.data.Projects[idx].Name
+	}
+	for i, p := range l.data.Projects {
+		if i != idx && p.Name == name {
+			return Project{}, fmt.Errorf("taskboard: project %q already exists", name)
+		}
+	}
+	p := &l.data.Projects[idx]
+	p.Name = name
+	if workDirs != nil {
+		normalized := normalizeWorkDirs(workDirs)
+		if len(normalized) == 0 {
+			return Project{}, fmt.Errorf("taskboard: project requires at least one work dir")
+		}
+		p.WorkDirs = normalized
+	}
+	if err := l.saveLocked(); err != nil {
+		return Project{}, err
+	}
+	return *p, nil
 }
 
 // DeleteProject removes a project. Built-in projects and projects that still
@@ -238,21 +283,45 @@ func (l *Ledger) activeCardsLocked() []Card {
 
 // CheckCardPathConflicts computes the cross-card overlap between a card's
 // impact surface (declared touched_paths ∪ reported observed_paths) and all
-// other active cards. It is read-only and is the shared computation behind the
-// dispatch gate (2) and the merge precheck (4).
+// other active cards (in_progress ∪ in_review). It is read-only and is the
+// computation behind the merge precheck (gate 4) and the gate-3 conflict
+// surfacing on report_touched. NOTE: the dispatch intercept (gate 2) deliberately
+// uses dispatchBlockingCardsLocked (in_progress/running only) instead, so an
+// in_review card awaiting human acceptance does not block a new dispatch.
 func (l *Ledger) CheckCardPathConflicts(card Card) ConflictReport {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return checkPathConflictsAgainst(card, l.activeCardsLocked())
 }
 
+// dispatchBlockingCardsLocked is the narrow set of cards that still hold a
+// write risk and therefore must block a new dispatch (gate 2): only in_progress
+// cards and any card with a running execution. A card in in_review has stopped
+// working (its execution was closed on leaving in_progress) and only awaits
+// human acceptance, so it no longer occupies workspace impact and must NOT
+// block a path-overlapping dispatch. Callers must hold l.mu.
+func (l *Ledger) dispatchBlockingCardsLocked() []Card {
+	out := make([]Card, 0)
+	for _, card := range l.data.Cards {
+		if card.Deleted {
+			continue
+		}
+		if card.Status == StatusInProgress || card.HasRunningExecution() {
+			out = append(out, card)
+		}
+	}
+	return out
+}
+
 // PrecheckDispatchConflicts returns a *PathConflictError when dispatching a
-// card would overlap another active card's impact surface (gate 2 dispatch
-// intercept). A card with no declared/reported paths (empty impact surface)
-// never triggers it, so a card that did not declare its surface still dispatches
-// (its runtime report, gate 3, is the fallback).
+// card would overlap the impact surface of another card that is genuinely
+// running (gate 2 dispatch intercept). Only in_progress cards (including cards
+// with a running execution) block; an in_review card that merely awaits human
+// acceptance does not. A card with no declared/reported paths (empty impact
+// surface) never triggers it, so a card that did not declare its surface still
+// dispatches (its runtime report, gate 3, is the fallback).
 func (l *Ledger) PrecheckDispatchConflicts(card Card) error {
-	report := l.CheckCardPathConflicts(card)
+	report := checkPathConflictsAgainst(card, l.dispatchBlockingCardsLocked())
 	if report.HasConflicts() {
 		return &PathConflictError{Report: report}
 	}
@@ -355,23 +424,26 @@ func (l *Ledger) GetCard(id string) (Card, error) {
 
 // CreateCardInput seeds a new card.
 type CreateCardInput struct {
-	ProjectID   string
-	Title       string
-	Description string
-	Prompt      string
-	Urgency     string
-	TemplateID  string
-	Checklist   []string
-	CreatedBy   string
+	ProjectID   string   `json:"project_id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Prompt      string   `json:"prompt"`
+	Urgency     string   `json:"urgency"`
+	TemplateID  string   `json:"template_id"`
+	Checklist   []string `json:"checklist"`
+	CreatedBy   string   `json:"created_by"`
 	// StartStatus allows human creation directly into todo (agents always
 	// start at backlog).
-	StartStatus string
+	StartStatus string `json:"start_status"`
 	// TouchedPaths declares the package-level impact surface at creation time
 	// (gate 1 static declaration).
-	TouchedPaths []string
+	TouchedPaths []string `json:"touched_paths"`
+	// WorkDir selects one of the project's work directories this card targets.
+	// Empty defaults to the project's first WorkDir at execution time.
+	WorkDir string `json:"work_dir"`
 	// Research is the structured investigation asset (方案A: 上下文传递)
 	// produced by a planner/PJM card and referenced by a coder card.
-	Research *Research
+	Research *Research `json:"research"`
 }
 
 // CreateCard adds a card to the ledger.
@@ -416,6 +488,7 @@ func (l *Ledger) CreateCard(input CreateCardInput) (Card, error) {
 	card := Card{
 		ID:          l.nextID("t"),
 		ProjectID:   projectID,
+		WorkDir:     strings.TrimSpace(input.WorkDir),
 		Title:       title,
 		Description: strings.TrimSpace(input.Description),
 		Prompt:      strings.TrimSpace(input.Prompt),
@@ -479,16 +552,22 @@ func (l *Ledger) mutateCard(id string, ifVersion int, actor string, mutate func(
 // this; model/execution fields are not agent-writable by design — the M1
 // ledger has no such fields yet, M3 adds them read-only to tools).
 type UpdateCardInput struct {
-	Title        *string
-	Description  *string
-	Prompt       *string
-	Urgency      *string
-	Blocked      *bool
-	TemplateID   *string
-	TouchedPaths *[]string
+	Title        *string    `json:"title"`
+	Description  *string    `json:"description"`
+	Prompt       *string    `json:"prompt"`
+	Urgency      *string    `json:"urgency"`
+	Blocked      *bool      `json:"blocked"`
+	TemplateID   *string    `json:"template_id"`
+	TouchedPaths *[]string  `json:"touched_paths"`
+	WorkDir      *string    `json:"work_dir"`
+	// Checklist, when non-nil, replaces the card's acceptance criteria text in
+	// full. Done/evidence state is preserved for items whose text is unchanged
+	// (so editing the wording does not silently clear a DoD the executor already
+	// satisfied); new/renamed items start unchecked.
+	Checklist *[]string `json:"checklist"`
 	// Research is the structured investigation asset (方案A: 上下文传递);
 	// non-nil replaces the card's research in full.
-	Research *Research
+	Research *Research `json:"research"`
 }
 
 // UpdateCard edits a card's text fields under optimistic concurrency.
@@ -519,11 +598,41 @@ func (l *Ledger) UpdateCard(id string, ifVersion int, actor string, input Update
 		if input.TouchedPaths != nil {
 			card.TouchedPaths = normalizeTouchedPaths(*input.TouchedPaths)
 		}
+		if input.WorkDir != nil {
+			card.WorkDir = strings.TrimSpace(*input.WorkDir)
+		}
+		if input.Checklist != nil {
+			card.Checklist = replaceChecklistText(card.Checklist, *input.Checklist)
+		}
 		if input.Research != nil {
 			card.Research = normalizeResearch(input.Research)
 		}
 		return nil
 	})
+}
+
+// replaceChecklistText rebuilds a card's checklist from new texts (trimmed,
+// blanks dropped), preserving Done/Evidence for items whose text is unchanged
+// (so editing the wording does not silently clear a DoD the executor already
+// satisfied). New/renamed items start unchecked.
+func replaceChecklistText(old []ChecklistItem, texts []string) []ChecklistItem {
+	out := make([]ChecklistItem, 0, len(texts))
+	for _, raw := range texts {
+		text := strings.TrimSpace(raw)
+		if text == "" {
+			continue
+		}
+		item := ChecklistItem{Text: text}
+		for _, o := range old {
+			if o.Text == text {
+				item.Done = o.Done
+				item.Evidence = o.Evidence
+				break
+			}
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // MoveCard transitions a card along the kanban. Protocol gates: done is

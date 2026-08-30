@@ -121,6 +121,8 @@ func (p *Plugin) registerRoutes(mux *http.ServeMux) {
 
 	mux.Handle("GET /v1/taskboard/projects", json(p.handleListProjects))
 	mux.Handle("POST /v1/taskboard/projects", json(p.handleCreateProject))
+	mux.Handle("PATCH /v1/taskboard/projects/{id}", json(p.handleUpdateProject))
+	mux.Handle("DELETE /v1/taskboard/projects/{id}", json(p.handleDeleteProject))
 	mux.Handle("GET /v1/taskboard/cards", json(p.handleListCards))
 	mux.Handle("POST /v1/taskboard/cards", json(p.handleCreateCard))
 	mux.Handle("GET /v1/taskboard/cards/{id}", json(p.handleGetCard))

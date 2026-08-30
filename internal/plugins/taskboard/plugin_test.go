@@ -149,6 +149,58 @@ func TestPluginHTTPSurfaceEndToEnd(t *testing.T) {
 	}
 }
 
+func TestPluginProjectManagementAndWorkDir(t *testing.T) {
+	plugin, _ := newTestPlugin(t)
+	manager := pluginrt.NewManager(nil)
+	if _, err := manager.Activate(context.Background(), plugin); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	root := http.NewServeMux()
+	manager.MountRoutes(root)
+
+	// Create a project bound to multiple work dirs (schema B: work_dirs).
+	created := call(t, root, "POST", "/v1/taskboard/projects", map[string]any{
+		"name": "MultiRoot", "work_dirs": []string{"/repo/a", "/repo/b"},
+	})
+	project := created["project"].(map[string]any)
+	projectID := project["id"].(string)
+	dirs := project["work_dirs"].([]any)
+	if len(dirs) != 2 {
+		t.Fatalf("expected 2 work dirs, got %v", dirs)
+	}
+
+	// Create a card targeting the project + a specific work_dir. This also
+	// regression-tests that snake_case JSON keys map onto CreateCardInput.
+	card := call(t, root, "POST", "/v1/taskboard/cards", map[string]any{
+		"project_id": projectID, "work_dir": "/repo/b", "title": "multi-root card",
+	})["card"].(map[string]any)
+	if card["project_id"] != projectID {
+		t.Fatalf("project_id not persisted: %v", card["project_id"])
+	}
+	if card["work_dir"] != "/repo/b" {
+		t.Fatalf("work_dir not persisted: %v", card["work_dir"])
+	}
+
+	// Rename the project and update its work dirs.
+	updated := call(t, root, "PATCH", "/v1/taskboard/projects/"+projectID, map[string]any{
+		"name": "MultiRootRenamed", "work_dirs": []string{"/repo/a", "/repo/c"},
+	})["project"].(map[string]any)
+	if updated["name"] != "MultiRootRenamed" {
+		t.Fatalf("rename failed: %v", updated["name"])
+	}
+	if got := updated["work_dirs"].([]any); len(got) != 2 {
+		t.Fatalf("expected 2 updated work dirs, got %v", got)
+	}
+
+	// Delete a project that still has cards must be refused (409).
+	req := httptest.NewRequest("DELETE", "/v1/taskboard/projects/"+projectID, nil)
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 deleting project with cards, got %d", rec.Code)
+	}
+}
+
 func TestPluginExecuteGuards(t *testing.T) {
 	plugin, _ := newTestPlugin(t)
 	manager := pluginrt.NewManager(nil)

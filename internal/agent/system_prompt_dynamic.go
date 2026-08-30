@@ -243,6 +243,12 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 	// exact active tool set (lean template presets), guidance must not tell
 	// the model to use it; swap those lines for an honest "not available".
 	hasToolExchange := catalogHasActiveTool(catalog, "tool_exchange")
+	// Only mention web/browser tooling when those tools are actually active:
+	// naming inactive tools teaches the model to advertise them as "unavailable
+	// capabilities" in its replies (the exact noise observed in lean-template
+	// sessions' self-introductions).
+	hasWeb := catalogHasActiveTool(catalog, "web_search") || catalogHasActiveTool(catalog, "web_fetch")
+	hasBrowser := catalogHasActiveTool(catalog, "browser")
 
 	lines := []string{
 		"# Capability Check",
@@ -259,12 +265,22 @@ func buildCapabilityCheckPrompt(catalog tools.ToolCatalog) string {
 	} else {
 		lines = append(lines,
 			"- This session's tool set is fixed; capabilities not listed below are not available on demand.",
-			"- For obvious current-information requests such as weather, news, prices, stocks, exchange rates, scores, schedules, flights, or latest/recent status, use web_search directly when web is active; if web is inactive, state that web search is not available in this session.",
 		)
+		if hasWeb {
+			lines = append(lines,
+				"- For obvious current-information requests such as weather, news, prices, stocks, exchange rates, scores, schedules, flights, or latest/recent status, use web_search directly when web is active; if web is inactive, state that web search is not available in this session.",
+			)
+		}
+	}
+	if hasWeb || hasBrowser {
+		lines = append(lines,
+			"- Prefer web for current information, browser for dynamic pages, and glob for broad file discovery.",
+			"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, use the provided fallback_hint (a proven curl/GitHub-API/npm-registry bypass, see docs/tools_issues.md) or the browser tool for dynamic pages. Do not repeat the same search query or fetch the same URL.",
+		)
+	} else {
+		lines = append(lines, "- Prefer glob for broad file discovery.")
 	}
 	lines = append(lines,
-		"- Prefer web for current information, browser for dynamic pages, and glob for broad file discovery.",
-		"- After web_search or web_fetch returns useful results, synthesize from ranked results, fetched previews, metadata, and chunks; fetch one specific new URL only when more detail is needed. If web_fetch reports needs_browser, use the provided fallback_hint (a proven curl/GitHub-API/npm-registry bypass, see docs/tools_issues.md) or the browser tool for dynamic pages. Do not repeat the same search query or fetch the same URL.",
 		"- When the user explicitly asks you to read, inspect, review, or verify specific workspace files or code paths, use the relevant file or shell tools before giving findings.",
 		"- When using durable subagents, use subagent wait for any/all completion instead of repeatedly polling subagent status; use subagent logs only for bounded diagnostics.",
 		"- When a tool generates a local file such as a screenshot or export, treat it as a generated artifact. In supported runtimes the artifact may be attached automatically, so do not claim you can only provide a local path unless the user explicitly asks for the path.",
@@ -293,14 +309,18 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 	// exact active tool set (lean template presets), do not tell the model to
 	// use it — swap those lines for an honest "not available" note.
 	hasToolExchange := catalogHasActiveTool(catalog, "tool_exchange")
+	hasLSP := catalogHasActiveTool(catalog, "lsp")
 	lines := []string{
 		"# Coding Profile",
 		"Default to the lean coding workflow for this turn.",
 		"- Keep user-visible replies compact like a coding agent: lead with the result, changed files, blockers, or next action.",
 		"- Avoid narration such as \"let me check\", broad progress commentary, or restating obvious tool outputs. Mention process only when it changes the user's decision.",
 		"- Read the relevant code first, make focused edits, then run the smallest useful verification.",
-		"- For precise code intelligence (symbol definitions, references, type info), prefer the lsp tool. Use grep for full-text search across files.",
-		"- Use todo tools for multi-step coding work, but keep plans short and update them as work changes. The first action of a multi-step task must be a todo_write that lists every step in order. After finishing any sub-step, immediately call todo_write again to mark that item completed and set the next pending item to in_progress before doing the next action. The list must always contain exactly one in_progress item while work is in progress; never leave a finished item as in_progress, and never advance to the next item without first marking the previous one completed.",
+	}
+	if hasLSP {
+		lines = append(lines, "- For precise code intelligence (symbol definitions, references, type info), prefer the lsp tool. Use grep for full-text search across files.")
+	} else {
+		lines = append(lines, "- Use grep for full-text search across files.")
 	}
 	if hasToolExchange {
 		lines = append(lines,
@@ -312,7 +332,6 @@ func buildCapabilityCheckPromptForProfile(catalog tools.ToolCatalog, profile str
 	} else {
 		lines = append(lines,
 			"- This session's tool set is fixed; capabilities not listed below are not available on demand.",
-			"- If the user asks for current web information, state that web search is not available in this session; do not use bash with curl/wget as a substitute.",
 			"- Stay within the active coding tools and verified workspace files; state plainly when a requested capability is not available.",
 		)
 	}
@@ -394,7 +413,9 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 	} else {
 		lines = append(lines, "This session's tool set is fixed; capabilities not listed below are not available on demand.")
 	}
-	lines = append(lines, "Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.")
+	if catalogHasActiveTool(catalog, "web_search") || catalogHasActiveTool(catalog, "web_fetch") {
+		lines = append(lines, "Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.")
+	}
 
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {
 		lines = append(lines, "- Active bundles: "+active)
@@ -407,7 +428,11 @@ func buildToolAvailabilityPrompt(catalog tools.ToolCatalog) string {
 			lines = append(lines, "- Available bundles: "+available)
 		}
 	}
-	lines = append(lines, "For precise code intelligence (symbol definitions, references, type info, hover docs), prefer the lsp tool over grep. Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
+	if catalogHasActiveTool(catalog, "lsp") {
+		lines = append(lines, "For precise code intelligence (symbol definitions, references, type info, hover docs), prefer the lsp tool over grep. Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
+	} else {
+		lines = append(lines, "Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
+	}
 
 	return strings.Join(lines, "\n")
 }
@@ -435,7 +460,9 @@ func buildToolAvailabilityPromptForProfile(catalog tools.ToolCatalog, profile st
 	} else {
 		lines = append(lines, "This session's tool set is fixed; capabilities not listed below are not available on demand.")
 	}
-	lines = append(lines, "Do not use bash/curl/python/node to replace web_search, web_fetch, browser, package, or external-agent tools when those bundles are the right capability.")
+	if forbidden := activeReplacementForbiddenTools(catalog); forbidden != "" {
+		lines = append(lines, "Do not use bash/curl/python/node to substitute for "+forbidden+".")
+	}
 	if active := formatBundleSummary(catalog.Bundles, true); active != "" {
 		lines = append(lines, "- Active bundles: "+active)
 	}
@@ -447,7 +474,11 @@ func buildToolAvailabilityPromptForProfile(catalog tools.ToolCatalog, profile st
 			lines = append(lines, "- Available bundles: "+available)
 		}
 	}
-	lines = append(lines, "For precise code intelligence (symbol definitions, references, type info, hover docs), prefer the lsp tool over grep. Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
+	if catalogHasActiveTool(catalog, "lsp") {
+		lines = append(lines, "For precise code intelligence (symbol definitions, references, type info, hover docs), prefer the lsp tool over grep. Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
+	} else {
+		lines = append(lines, "Use grep for full-text search across files, find for file lookup, and ls for directory listing.")
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -679,6 +710,40 @@ func catalogHasActiveTool(catalog tools.ToolCatalog, name string) bool {
 		}
 	}
 	return false
+}
+
+// catalogHasAnyActiveTool reports whether any of the given tool names is in
+// the exact currently-active set.
+func catalogHasAnyActiveTool(catalog tools.ToolCatalog, names ...string) bool {
+	for _, n := range names {
+		if catalogHasActiveTool(catalog, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// activeReplacementForbiddenTools lists the capability families that are
+// actually ACTIVE and must not be replaced with bash/curl/python hacks. Only
+// active families are listed: naming inactive tools (web/browser/package/
+// external-agent in a lean template) teaches the model to advertise them as
+// "unavailable capabilities" in its replies, which is noise the user never
+// asked for.
+func activeReplacementForbiddenTools(catalog tools.ToolCatalog) string {
+	families := make([]string, 0, 4)
+	if catalogHasActiveTool(catalog, "web_search") || catalogHasActiveTool(catalog, "web_fetch") {
+		families = append(families, "web_search/web_fetch")
+	}
+	if catalogHasActiveTool(catalog, "browser") {
+		families = append(families, "browser")
+	}
+	if catalogHasAnyActiveTool(catalog, "list_packages", "install_package", "remove_package", "list_prompts", "list_package_commands", "list_package_roles") {
+		families = append(families, "package")
+	}
+	if catalogHasActiveTool(catalog, "acp_agent") {
+		families = append(families, "external-agent")
+	}
+	return strings.Join(families, ", ")
 }
 
 func promptWhenToUse(item skill.CatalogEntry) []string {

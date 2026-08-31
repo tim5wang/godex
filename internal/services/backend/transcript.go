@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // ErrTranscriptNotFound marks a transcript archive ref that is unknown to the

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // The agent_graph tests cover the four contract areas of roadmap 2.4:

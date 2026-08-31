@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // FileOperations tracks files read, written, or edited during a session segment.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // TestToolHandlerSurfacesMalformedJSONArguments verifies that when the model

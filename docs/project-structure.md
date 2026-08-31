@@ -20,11 +20,12 @@ GoDex uses a `cmd/` + `internal/` layout. New code should land in the narrowest 
 - `internal/agent`: agent loop, context building, turn runtime, and durable subagent jobs.
 - `internal/runtime`: external adapters such as HTTP/WebUI, IM channels, Cron, Heartbeat, and REPL.
 - `internal/services`: reusable services behind adapters, such as backend, commands, history search, node registry, and session admin.
+- `internal/contracts`: neutral shared wire contracts; `protocol` lives here so domain, core, and platform can depend on it without reversing layer direction.
 - `internal/domain`: shared domain types that should not depend on runtime adapters or concrete tools.
 - `internal/toolruntime`: typed tool framework, tool handler, permissions, interceptors, and tool execution context.
 - `internal/tools`: concrete tools and tool bundles. Tool factories return `toolruntime.Tool`.
-- `internal/platform`: small infrastructure utilities for filesystem, logging, workspace paths, text, browser helpers, and tooling definitions.
-- `internal/core`: core product modules such as config, protocol, conversation, compression, memory, notes, skill, media, MCP, background tasks, insights, instructions, and teammate orchestration.
+- `internal/platform`: infrastructure adapters and utilities for local repositories, filesystem, logging, workspace paths, text, browser helpers, and tooling definitions. JSON task/todo/message persistence lives in `platform/localstore` behind domain repository interfaces.
+- `internal/core`: core product modules such as config, conversation, compression, memory, notes, skill, media, MCP, background tasks, insights, instructions, and teammate orchestration.
 - `internal/tui`: Bubble Tea UI.
 - `internal/uiassets`: embedded Web UI distribution used by the single binary.
 

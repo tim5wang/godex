@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // Simulate a full resume first-round: load messages exactly as the store does,

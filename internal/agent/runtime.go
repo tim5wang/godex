@@ -16,13 +16,14 @@ import (
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/memory"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/platform/localstore"
 	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
@@ -232,7 +233,7 @@ func NewWithSharedDependencies(cfg *config.Config, shared *SharedDependencies, s
 		// never read each other's todos.json.  Without
 		// this guard the shared deps' global todo
 		// manager would carry over across sessions.
-		deps.todoMgr = todo.NewManagerForSession(cfg.SessionsDir, sessionID)
+		deps.todoMgr = localstore.NewTodoManagerForSession(cfg.SessionsDir, sessionID)
 		// Roadmap 6.2: when memory.session_scope is enabled, each session
 		// also gets its own memory manager rooted under cfg.MemoryDir so
 		// durable memory cannot leak across sessions. The default (disabled)

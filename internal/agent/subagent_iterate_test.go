@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // Phase 4.2 — review → fix → re-review 双向循环: ReopenForIteration +

@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/tim5wang/godex/internal/core/config"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/domain/events"
 )

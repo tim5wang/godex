@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // The T13 e2e tests are the top of the longtask test pyramid:

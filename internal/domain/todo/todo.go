@@ -1,15 +1,10 @@
 package todo
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/tim5wang/godex/internal/platform/fsutil"
 )
 
 // Status represents task status.
@@ -32,75 +27,50 @@ type Item struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
-// Manager handles todo items.
-type Manager struct {
-	mu      sync.RWMutex
-	items   []Item
-	nextID  int
-	dataDir string
+// Repository persists todo snapshots without exposing a storage backend to
+// the domain manager.
+type Repository interface {
+	Load() ([]Item, error)
+	Save([]Item) error
 }
 
-// NewManager creates a new todo manager.
-func NewManager(dataDir string) *Manager {
-	m := &Manager{items: []Item{}, nextID: 1, dataDir: dataDir}
+// Manager handles todo items.
+type Manager struct {
+	mu         sync.RWMutex
+	items      []Item
+	nextID     int
+	repository Repository
+}
+
+// NewManager creates a new todo manager backed by repository. A nil
+// repository creates an in-memory manager.
+func NewManager(repository Repository) *Manager {
+	m := &Manager{items: []Item{}, nextID: 1, repository: repository}
 	m.load()
 	return m
 }
 
-// NewManagerForSession creates a todo manager whose storage
-// is scoped to a single session, so that todos from one
-// session never leak into a freshly-opened web / weixin /
-// local session on the same workspace.
-//
-// The on-disk path is <sessionsDir>/<sessionID>/todos.json,
-// matching the existing per-session layout used for the
-// conversation graph, manifests, and turn records.  An empty
-// sessionID falls back to the bare <sessionsDir>/todos.json
-// so unit tests and the legacy global wiring keep working
-// without changes.
-func NewManagerForSession(sessionsDir, sessionID string) *Manager {
-	dir := strings.TrimSpace(sessionsDir)
-	id := strings.TrimSpace(sessionID)
-	if dir == "" {
-		// Without a base directory we cannot persist;
-		// return an in-memory manager so callers do not
-		// have to special-case nil.
-		return &Manager{items: []Item{}, nextID: 1}
-	}
-	if id == "" {
-		return NewManager(dir)
-	}
-	return NewManager(filepath.Join(dir, id))
-}
-
 func (m *Manager) load() {
-	path := filepath.Join(m.dataDir, "todos.json")
-	data, err := os.ReadFile(path)
+	if m.repository == nil {
+		return
+	}
+	items, err := m.repository.Load()
 	if err != nil {
 		return
 	}
-	var items []Item
-	if err := json.Unmarshal(data, &items); err == nil {
-		m.items = items
-		for _, item := range items {
-			if item.ID >= m.nextID {
-				m.nextID = item.ID + 1
-			}
+	m.items = cloneItems(items)
+	for _, item := range items {
+		if item.ID >= m.nextID {
+			m.nextID = item.ID + 1
 		}
 	}
 }
 
 func (m *Manager) persist(items []Item) error {
-	path := filepath.Join(m.dataDir, "todos.json")
-	data, err := json.MarshalIndent(items, "", "  ")
-	if err != nil {
-		return err
+	if m.repository == nil {
+		return nil
 	}
-
-	if err := os.MkdirAll(m.dataDir, 0755); err != nil {
-		return err
-	}
-	return fsutil.WriteFileAtomic(path, data, 0644)
+	return m.repository.Save(cloneItems(items))
 }
 
 // Add adds a new todo item.

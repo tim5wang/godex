@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/tim5wang/godex/internal/agent"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 func TestReadTranscriptServesSessionOwnedArchive(t *testing.T) {

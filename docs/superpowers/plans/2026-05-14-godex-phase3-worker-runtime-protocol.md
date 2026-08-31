@@ -6,7 +6,7 @@
 
 **Architecture:** Add a small `internal/workerruntime` package for stable worker/job/progress/result/review/merge contracts. Add an agent-local GoDex worker runtime adapter that maps those contracts onto the existing durable subagent store, workspace preparation, model runner, review, merge, cancel, and resume logic. Route current `task` tool and public durable-subagent methods through this runtime while preserving existing tool schemas, JSON storage compatibility, and local behavior.
 
-**Tech Stack:** Go, existing `internal/agent`, `internal/workerruntime`, `internal/domain/events`, `internal/core/conversation`, `internal/core/protocol`, `go test ./internal/workerruntime ./internal/agent ./internal/domain/events`, `go test ./...`.
+**Tech Stack:** Go, existing `internal/agent`, `internal/workerruntime`, `internal/domain/events`, `internal/core/conversation`, `internal/contracts/protocol`, `go test ./internal/workerruntime ./internal/agent ./internal/domain/events`, `go test ./...`.
 
 ---
 
@@ -814,7 +814,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/workerruntime"
 )
 

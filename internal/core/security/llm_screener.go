@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // llmScreenSystemPrompt instructs the classifier model. The supplied payload

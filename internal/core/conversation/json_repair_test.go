@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 func TestRepairJSONString(t *testing.T) {

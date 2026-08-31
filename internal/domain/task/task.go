@@ -1,16 +1,10 @@
 package task
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
-
-	"github.com/tim5wang/godex/internal/platform/fsutil"
 )
 
 // Status represents a task lifecycle state.
@@ -33,60 +27,53 @@ type FileTask struct {
 	BlockedBy   []int     `json:"blockedBy,omitempty"`
 }
 
-// Manager handles file-based tasks
-type Manager struct {
-	mu       sync.RWMutex
-	tasks    map[int]*FileTask
-	tasksDir string
+// Repository persists task snapshots without exposing a storage backend to
+// the domain manager.
+type Repository interface {
+	LoadAll() ([]FileTask, error)
+	Save(FileTask) error
+	Delete(id int) error
 }
 
-// NewManager creates a new task manager
-func NewManager(tasksDir string) *Manager {
+// Manager handles tasks.
+type Manager struct {
+	mu         sync.RWMutex
+	tasks      map[int]*FileTask
+	repository Repository
+}
+
+// NewManager creates a new task manager backed by repository. A nil
+// repository creates an in-memory manager.
+func NewManager(repository Repository) *Manager {
 	m := &Manager{
-		tasks:    make(map[int]*FileTask),
-		tasksDir: tasksDir,
+		tasks:      make(map[int]*FileTask),
+		repository: repository,
 	}
 	m.loadAll()
 	return m
 }
 
-// loadAll loads all tasks from disk
+// loadAll loads all tasks from the repository.
 func (m *Manager) loadAll() {
-	entries, err := os.ReadDir(m.tasksDir)
+	if m.repository == nil {
+		return
+	}
+	tasks, err := m.repository.LoadAll()
 	if err != nil {
 		return
 	}
-
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		if _, err := strconv.Atoi(entry.Name()[:len(entry.Name())-len(filepath.Ext(entry.Name()))]); err != nil {
-			continue
-		}
-		path := filepath.Join(m.tasksDir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var task FileTask
-		if err := json.Unmarshal(data, &task); err == nil {
-			m.tasks[task.ID] = &task
-		}
+	for i := range tasks {
+		task := cloneTask(&tasks[i])
+		m.tasks[task.ID] = task
 	}
 }
 
-// save saves a task to disk
+// save persists a task through the configured repository.
 func (m *Manager) save(task *FileTask) error {
-	filename := fmt.Sprintf("%d.json", task.ID)
-	path := filepath.Join(m.tasksDir, filename)
-
-	data, err := json.MarshalIndent(task, "", "  ")
-	if err != nil {
-		return err
+	if m.repository == nil {
+		return nil
 	}
-
-	return fsutil.WriteFileAtomic(path, data, 0644)
+	return m.repository.Save(*cloneTask(task))
 }
 
 // Create creates a new task
@@ -231,10 +218,10 @@ func (m *Manager) Delete(id int) error {
 		updatedTasks[taskID] = updated
 	}
 
-	filename := fmt.Sprintf("%d.json", id)
-	path := filepath.Join(m.tasksDir, filename)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
+	if m.repository != nil {
+		if err := m.repository.Delete(id); err != nil {
+			return err
+		}
 	}
 	m.tasks = updatedTasks
 	return nil

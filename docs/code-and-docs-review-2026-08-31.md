@@ -1,16 +1,16 @@
 # GoDex 全模块代码与文档审查（2026-08-31）
 
 > 状态：Active / Completed review（问题清单保持 Active；本文不代替产品设计文档）
-> 范围：82 个可构建 Go package（其中 78 个 `internal` package）、17 个 Web feature 目录、78 份 Markdown 文档。
+> 范围：当前 `go list` 可见 85 个 Go package（其中 81 个 `internal` package）、17 个 Web feature 目录、78 份 Markdown 文档。
 > 基线：`8acd0f60bfbb9e52def400d21eb5c8e48eb4a598`；审查开始时仅有用户未跟踪文件 `docs/cache-hitrate-analysis.md`。
 
 ## 后续修复状态（2026-08-31）
 
 审查后的确定性修复已继续落地：Agent Step allowlist 已收敛到共享 `core/toolfilter` 并以表驱动测试固定 deny-overrides-allow、通配符和空列表语义；两个空 LLM 响应测试夹具已补齐终态响应；latest persistent user message、best-effort directory size、三份语义完全相同的 rune 截断 helper 已共享。语义不同的 compress/memory 截断实现保留独立，避免错误 DRY。
 
-新增 `internal/architecture` import gate，禁止新增 `domain→core/platform`、`platform→core`、`core→tools` 依赖；8 条既有生产依赖以精确 package edge 作为迁移例外，例外消失后测试会要求删除。该门禁阻止债务增长，不代表既有分层迁移已经完成。
+新增 `internal/architecture` import gate，禁止新增 `domain→core/platform`、`platform→core`、`core→tools` 依赖。最初记录的 8 条生产依赖例外现已全部迁移并删除，`importExceptions` 为空；门禁继续阻止同类债务重新进入。
 
-后续产品决策已冻结 P0-1：`always_on` 是 Agent 模板显式可选且会话内固定的 bundle，不是宿主隐式能力；模板基线精确等于 `Tools ∪ Bundles` 展开工具，clear/reset 恢复该基线，仅 `default` 空模板保留旧标准模式兼容。相关 `internal/toolruntime`/`internal/tools` 测试已全部通过，`internal/agent` 的 activation/capability 失败已清零；当前剩余 3 项失败分别是 loop-guard 两项和 oversized tool-result stub 一项，与本决策无关，应独立修复。
+后续产品决策已冻结 P0-1：`always_on` 是 Agent 模板显式可选且会话内固定的 bundle，不是宿主隐式能力；模板基线精确等于 `Tools ∪ Bundles` 展开工具，clear/reset 恢复该基线，仅 `default` 空模板保留旧标准模式兼容。相关 `internal/toolruntime`/`internal/tools` 测试已全部通过，`internal/agent` 的 activation/capability 失败已清零；随后剩余的 2 项 loop-guard fixture 与 1 项 oversized tool-result fixture 也已按当前生产语义修复。
 
 HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 个按资源域划分的 registrar；`NewHandlerWithRuntime` 从约 1,883 行降到约 85 行，图复杂度从 266 降到 5、cognitive 从 293 降到 7。新增静态 route ownership 测试，禁止生产路由字面量被多个文件重复注册。registrar 拆分已经完成，构造参数进一步收敛为窄 `Dependencies` 可作为后续独立改进。
 
@@ -30,14 +30,14 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 
 ## 2. 结论摘要
 
-项目的功能覆盖和测试数量都很强，但当前最大的风险不是“缺功能”，而是 **能力扩张速度已经超过边界、契约和文档收敛速度**：
+项目的功能覆盖和测试数量都很强。以下是审查时的主要结论；已完成项同步标注，避免把历史基线误读成当前状态：
 
-1. 默认工具面、system prompt、README 和测试对“按需加载”的定义互相矛盾，直接影响 token 成本、权限面和 subagent capability 校验。
-2. Go 全量测试当前有 15 个失败，集中在 `internal/agent`、`internal/services/backend`、`internal/tools`；Web 原有 1 个失败是测试场景漏写 `writeScope`，本次已修正。
+1. 默认工具面、system prompt、README 和测试对“按需加载”的定义曾互相矛盾；现已冻结模板 `always_on` 与 activation baseline 语义并修复相关测试。
+2. Go 全量测试审查时有 15 个失败；确定性 lifecycle/fixture、activation policy 和最后 3 个旧 fixture 均已修复。Web 原有 1 个 `writeScope` fixture 失败也已修正。
 3. `httpapi`、配置映射和多个 Web 页面再次形成超大 composition root；先前的大文件拆分只解决了旧热点，没有建立持续阈值。
-4. `domain` 层包含文件持久化，并反向依赖 `core/protocol`/`platform/fsutil`；`platform/tooling` 又依赖 `core/protocol`，分层规则没有被测试约束。
-5. 安全相关 step allowlist 算法在 agent 与 HTTP API 各复制一份；同类重复还包括 latest-user-message、目录大小、截断、ID 和 map clone。
-6. 文档索引漏收大量文档，5 个本地 Markdown 链接失效，且 Agent Step、Responses、Workflows 的实现状态与文档相反。本次已修正这些客观状态并加入 `make docs-check`。
+4. domain storage、shared protocol contract 与 teammate tool adapter 的 8 条反向依赖已完成迁移；architecture import gate 的例外清单为空。
+5. 安全相关 step allowlist 已收敛到共享 evaluator；latest-user-message、目录大小与同语义截断 helper 也已共享，语义不同的实现继续独立。
+6. 文档索引、5 个失效链接和 Agent Step/Responses/Workflows 状态已经修正，并加入 `make docs-check`。
 
 ## 3. 优先级问题清单
 
@@ -111,11 +111,11 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 
 已有 `big-file-split-plan.md` 的旧四文件拆分基本完成，但热点已转移。现已增加 architecture test，对 `ui/web/src` 执行 1000 行默认预算；2 个既有超限文件以当前行数作为不可增长的精确例外，文件降到阈值后例外必须删除。Memory viewer、Skills analytics/package panels、Settings config/status slices、共享 types、API endpoint、中英文 locale message 与全局 stylesheet 连续区段拆分已完成；CSS 拆分前后 459 个顶层节点顺序及生产构建的 4 个 CSS 资产字节完全一致。Chat/TaskBoard 则需先确定 state/view 边界。
 
-#### P1-4 Domain 与 infrastructure 边界不纯
+#### P1-4 Domain 与 infrastructure 边界不纯（已修复）
 
-`internal/domain/message`、`task`、`todo` 直接管理 JSON/文件路径和原子写；`domain/events`、`history`、`message` 依赖 `core/protocol`。此外 `platform/tooling` 依赖 `core/protocol`，`core/teammate` 依赖具体 `internal/tools`。
+原问题是 `internal/domain/message`、`task`、`todo` 直接管理 JSON/文件路径和原子写；`domain/events`、`history`、`message` 与 `platform/tooling` 反向依赖 `core/protocol`，`core/teammate` 还依赖具体 `internal/tools`。
 
-这与 2.0 SPEC 中“domain concept 与 storage backend 解耦”相反。建议先从 task/todo/message 抽 repository interface，JSON 实现移入 `sessionstore`/platform；protocol 共享类型下沉到中立 contract 包，避免 platform→core 反向边。
+现已完成三部分迁移：task/todo/message 只依赖各自的 Repository 接口，JSON、路径和原子写实现迁入 `platform/localstore`；共享协议包物理迁入 `internal/contracts/protocol`；teammate loop 通过窄 `LoopToolContext`/`LoopToolFactory` 注入具体工具，默认 adapter 位于 `tools/teamtools`。原有文件布局与 JSON 格式保持兼容。
 
 #### P1-5 权限/allowlist 算法重复（已修复）
 
@@ -123,9 +123,9 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 
 现已新建无外部依赖的窄包 `core/toolfilter`，Agent 与 HTTP API 两侧共同调用，并以表驱动测试固定 deny-overrides-allow、通配符和空列表行为。
 
-#### P1-6 代码级模块边界只有约定，没有 enforcement（增量门禁已完成）
+#### P1-6 代码级模块边界只有约定，没有 enforcement（已完成）
 
-Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> core` 等方向错误。现已增加 architecture test，通过 `go list -json` 拒绝新增禁止层间边，并用精确例外清单记录既有迁移债务；domain storage、shared contract 和 teammate adapter 的实体迁移仍待后续完成。
+Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> core` 等方向错误。architecture test 现通过 `go list -json` 拒绝新增禁止层间边；8 条存量依赖完成实体迁移后，精确例外清单已经清空。
 
 ### P2 — 有选择地收敛重复与维护成本
 
@@ -145,7 +145,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 |---|---|---|
 | `cmd/godex` | 🟡 | `main.go` 949 行且包含 relay/CDP adapter；全局参数解析测试较好，入口仍应只做装配。 |
 | `internal/acp/server` | 🟡 | handler/agent 各 600–769 行，协议转换复杂；`numFromAny`、随机 ID 与其他入口重复。 |
-| `internal/agent` | 🔴 | 57 个源码文件仍承载 composition、context、tool registry、workflow/longtask/subagent；默认 bundle 契约导致 9 个测试失败。 |
+| `internal/agent` | 🔴 | 57 个源码文件仍承载 composition、context、tool registry、workflow/longtask/subagent；默认 bundle 与后续 3 个旧 fixture 失败均已修复，剩余问题是职责面过宽。 |
 | `internal/app` | 🟡 | CLI lifecycle 合理，但 `run.go` 1,479 行；root help 是较好的代码内事实源，应继续由 metadata 生成。 |
 | `core/auth`, `idempotency`, `lease`, `modelcontext`, `notes`, `persistence`, `scope`, `templates` | 🟢 | 小而内聚，测试覆盖基本匹配职责；保持窄接口。 |
 | `core/background`, `claudeimport`, `insights`, `llm`, `mcp`, `providers`, `security` | 🟢/🟡 | 结构可接受；`instructions` 无直接测试，`claudeimport` 单文件 666 行但职责仍单一。 |
@@ -154,13 +154,13 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 | `core/media` | 🟡 | processor 955 行同时处理格式、转录与 provider 路由，适合拆 pipeline stage。 |
 | `core/memory` | 🟡 | manager 1,245 行但已拆 sidecar/extract/layers；下一步应收窄 manager facade，而非再加新入口。 |
 | `core/packages`, `core/skill` | 🟡 | package 1,282 行、skill 多个 600–1,043 行；manifest/安装/quality/runtime activation 边界仍交叠。 |
-| `core/protocol` | 🟡 | 共享 wire/domain block 中心，fan-in 很高；应稳定，避免继续吸收业务 helper。 |
-| `core/teammate` | 🔴 | core 反向依赖具体 tools，且 707 行同时做 team state 与工具适配。 |
+| `contracts/protocol` | 🟡 | 共享 wire contract 已从 core 下沉到中立层，fan-in 很高；应稳定，避免继续吸收业务 helper。 |
+| `core/teammate` | 🟡 | 具体工具已通过窄 factory adapter 注入；文件仍约 700 行，同时处理 team state 与运行循环。 |
 | `domain/automation`, `eval`, `security` | 🟡 | 纯类型但无直接测试；需要 serialization/compatibility contract test。 |
-| `domain/events`, `history` | 🟡 | 依赖 core/protocol，说明 shared contract 层位置不清。 |
-| `domain/message`, `task`, `todo` | 🔴 | domain object 自带文件存储、目录和原子写，违反 storage backend 解耦。 |
+| `domain/events`, `history` | 🟢 | 共享 wire 类型统一依赖中立 `contracts/protocol`。 |
+| `domain/message`, `task`, `todo` | 🟢/🟡 | manager 已只依赖 Repository 接口；本地 JSON adapter 位于 `platform/localstore`。 |
 | `platform/browserutil`, `fsutil`, `logger`, `servicecontrol`, `storagegc`, `stringutil`, `textutil`, `workspacefs`, `workspacepath` | 🟢/🟡 | 多数窄而稳定；fsutil/stringutil/textutil/workspacepath 缺直接测试，storagegc 可吸收重复 dirSize。 |
-| `platform/tooling` | 🔴 | 2,544 行且 platform→core/protocol 反向依赖；shell guard、file IO、execution config 应继续拆。 |
+| `platform/tooling` | 🟡 | 共享 wire 类型已改依赖 `contracts/protocol`，反向依赖消除；2,544 行中的 shell guard、file IO、execution config 仍适合继续拆。 |
 | `pluginrt`, `plugins/taskboard`, `wasmrt` | 🟡 | 插件 ownership/lifecycle 测试较强；P-A/P-C/P-D、TaskBoard 协作 baseline 和手动 reconcile P0 已实现，但 ledger/page 仍大，通用 UI slot/自动 reconcile 仍缺。 |
 | `runtime/channels`, `feishu`, `weixin` | 🟡 | adapter 边界合理；channels.go 1,695 行，reply planning/identity/routing 应进一步分离。 |
 | `runtime/cron`, `heartbeat`, `webui` | 🟢/🟡 | cron/heartbeat 服务各约 800 行但测试充分；webui 很薄。 |
@@ -224,10 +224,10 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 
 ## 6. 建议执行顺序
 
-1. ~~冻结默认 tool activation policy，修复 activation/capability contract tests。~~ 已完成；剩余 3 个 `internal/agent` 失败按 loop-guard 与 oversized-result 两个独立批次处理。
+1. ~~冻结默认 tool activation policy，修复 activation/capability contract tests。~~ 已完成；3 个 `internal/agent` 旧 fixture 失败也已修复：loop-guard 测试显式固定阈值，oversized-result 测试改用不可被重复行压缩的大结果。
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
 3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；配置 schema/value 契约门禁与 8 个映射缺口已修复，`setStoredValue` 表驱动收敛仍待后续。
-4. architecture import test 与 Web 文件行数 budget 已完成；Go 函数复杂度 budget 与既有违规迁移仍待做。
+4. ~~完成 architecture import test 并迁移 8 条既有违规依赖。~~ 已完成，精确例外清单为空；Go 函数复杂度 budget 仍待做。
 5. 前端 i18n、styles、共享 API/types、Settings config/status、Memory viewer 与 Skills analytics/package panels 均已拆分并降到预算内。剩余 Chat/TaskBoard 的 state/view 边界需单独设计确认。
 6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)，CI 执行 `make docs-check`。
 
@@ -237,9 +237,10 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 - 通过：`go test ./internal/app ./internal/core/mcp`，以及 LongTask graph 契约定向测试；新增 root help 和 MCP 注释/文档收口没有引入回归。
 - 通过：templates、pluginrt、TaskBoard plugin、usage、httpapi、backend TaskBoard/reconcile、agent template/dynamic prompt/package runtime、conversation prompt-cache/retention 定向测试。
 - Web 测试原有 1 个失败已定位为 fixture 漏写 `writeScope` 并修正；最终重跑 32 个 test files、325 个 tests 全部通过。
-- 初始 `go test ./...` 有 15 个失败；确定性 fixture/lifecycle 修复后曾为 13 个。冻结 activation policy 后，`go test ./internal/toolruntime ./internal/tools ./internal/agent -count=1` 中前两包通过，`internal/agent` 仅剩 3 项：`TestRunWithOptionsAppendsLoopGuardFeedbackAndCheckpoint`、`TestRunWithOptionsStubsOversizedToolResult`、`TestDurableSubagentPersistsLoopGuardFeedback`。
+- 初始 `go test ./...` 有 15 个失败；确定性 fixture/lifecycle 与 activation policy 修复后曾只剩 3 个 `internal/agent` 失败。它们均为旧 fixture 与当前生产语义脱节：两个 loop-guard 测试隐式依赖旧阈值 3，而当前默认值为 8；oversized-result 测试的 4000 行重复文本会先压缩为单行。现已分别显式固定测试阈值并改用不可高度压缩的大结果，三项定向测试通过。
+- 8 条架构依赖完成迁移后，`go test ./... -count=1` 全量通过；`go vet ./...`、`make docs-check` 与 `git diff --check` 再次通过。
 - clear/reset、tool schema/prompt fixture、required tool/web capability 与 `tool_exchange` catalog/count 契约测试均已通过；没有通过删除新默认工具来迎合旧 fixture。
-- `check_index_coverage` generation `2026-08-31T06:25:58Z` 与当前 metadata 匹配；最终补查的 app/MCP/media/push/LongTask/commands/Web/docs 路径及本轮 i18n/CSS 拆分路径全部为 `no_recorded_issue`，相关 scope 无记录缺口。
+- 最终 `check_index_coverage` generation 与当前 metadata 匹配；本轮 agent fixture、domain repository、localstore、contracts/protocol、teammate adapter、architecture gate 与文档路径均为 `no_recorded_issue`，相关 domain/tooling/teammate/contracts/architecture scope 无记录缺口。报告不固化 generation 时间戳，避免后台增量索引后形成伪过期结论。
 - `internal`、`docs`、`examples` 的已知缺口仅为 embedded dist、图片、wasm 二进制、eval 结果和 `docs/superpowers/tmp`；代码/文档结论没有依赖这些二进制资产，`superpowers` 计划/spec 已用源码 heading/内容检索补查。
 - 覆盖信号仍是 best-effort；“无记录缺口”不等于数学上的完整性证明。
 - `SIMILAR_TO` 是候选证据，不等于所有重复都应抽象；示例/test helper 和三行 clone 明确排除在强制 DRY 之外。

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 )
 

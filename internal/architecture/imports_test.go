@@ -29,19 +29,11 @@ var forbiddenImportRules = []importRule{
 	{fromPrefix: modulePath + "/internal/core/", toPrefix: modulePath + "/internal/tools"},
 }
 
-// Existing migration exceptions are exact package edges. Do not broaden this
-// list: new cross-layer dependencies require moving the contract or storage
-// implementation to the correct layer.
-var importExceptions = map[string]string{
-	modulePath + "/internal/domain/events -> " + modulePath + "/internal/core/protocol":    "move shared event payload contracts out of core",
-	modulePath + "/internal/domain/history -> " + modulePath + "/internal/core/protocol":   "move shared history contracts out of core",
-	modulePath + "/internal/domain/message -> " + modulePath + "/internal/core/protocol":   "move shared message contracts out of core",
-	modulePath + "/internal/domain/message -> " + modulePath + "/internal/platform/fsutil": "move JSON message storage behind a repository",
-	modulePath + "/internal/domain/task -> " + modulePath + "/internal/platform/fsutil":    "move JSON task storage behind a repository",
-	modulePath + "/internal/domain/todo -> " + modulePath + "/internal/platform/fsutil":    "move JSON todo storage behind a repository",
-	modulePath + "/internal/platform/tooling -> " + modulePath + "/internal/core/protocol": "move tool wire contracts to a neutral contract package",
-	modulePath + "/internal/core/teammate -> " + modulePath + "/internal/tools":            "inject a narrow teammate tool adapter",
-}
+// Migration exceptions must be exact package edges. The list is intentionally
+// empty after the 2026-08-31 boundary migration; new cross-layer dependencies
+// require moving the contract, adapter, or storage implementation instead of
+// broadening a prefix rule.
+var importExceptions = map[string]string{}
 
 func TestInternalImportBoundaries(t *testing.T) {
 	packages := listInternalPackages(t)

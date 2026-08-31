@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/kaptinlin/jsonrepair"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // validJSONEscapes mirrors the JSON string escape set plus "u" for \uXXXX.

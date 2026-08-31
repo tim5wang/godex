@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/message"
-	"github.com/tim5wang/godex/internal/domain/task"
-	"github.com/tim5wang/godex/internal/tools"
+	"github.com/tim5wang/godex/internal/platform/localstore"
+	"github.com/tim5wang/godex/internal/toolruntime"
 )
 
 func TestWorkspaceBoundToolHelpers(t *testing.T) {
@@ -28,8 +28,8 @@ func TestWorkspaceBoundToolHelpers(t *testing.T) {
 		t.Fatalf("mkdir tasks dir: %v", err)
 	}
 
-	bus := message.NewBus(filepath.Join(teamDir, "inbox"))
-	manager := NewManager(workspace, teamDir, task.NewManager(tasksDir), bus, "", nil)
+	bus := localstore.NewMessageBus(filepath.Join(teamDir, "inbox"))
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
 
 	out, err := manager.tooling.RunShell(context.Background(), "pwd")
 	if err != nil {
@@ -91,8 +91,8 @@ func TestConsumeInboxMessagesResumesTeammateWork(t *testing.T) {
 		t.Fatalf("mkdir tasks dir: %v", err)
 	}
 
-	bus := message.NewBus(filepath.Join(teamDir, "inbox"))
-	manager := NewManager(workspace, teamDir, task.NewManager(tasksDir), bus, "", nil)
+	bus := localstore.NewMessageBus(filepath.Join(teamDir, "inbox"))
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
 	manager.teammates["worker"] = &Teammate{Name: "worker", Role: "builder", Status: StatusIdle, generation: 1}
 	manager.ensureWakeChannelLocked("worker")
 
@@ -138,8 +138,8 @@ func TestGetAndListReturnTeammateSnapshots(t *testing.T) {
 	workspace := t.TempDir()
 	teamDir := filepath.Join(workspace, ".team")
 	tasksDir := filepath.Join(workspace, ".tasks")
-	bus := message.NewBus(filepath.Join(teamDir, "inbox"))
-	manager := NewManager(workspace, teamDir, task.NewManager(tasksDir), bus, "", nil)
+	bus := localstore.NewMessageBus(filepath.Join(teamDir, "inbox"))
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
 
 	manager.teammates["worker"] = &Teammate{Name: "worker", Role: "builder", Status: StatusIdle, generation: 1}
 
@@ -165,19 +165,19 @@ func TestManagerLoopToolFactoriesAreConfigurable(t *testing.T) {
 	workspace := t.TempDir()
 	teamDir := filepath.Join(workspace, ".team")
 	tasksDir := filepath.Join(workspace, ".tasks")
-	bus := message.NewBus(filepath.Join(teamDir, "inbox"))
+	bus := localstore.NewMessageBus(filepath.Join(teamDir, "inbox"))
 	client := fakeCaller{}
-	manager := NewManager(workspace, teamDir, task.NewManager(tasksDir), bus, "test-model", client)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "test-model", client, testLoopToolFactories()...)
 
 	if manager.client != client {
 		t.Fatal("expected manager to keep injected conversation caller")
 	}
 
 	factories := []LoopToolFactory{
-		func(*Manager, string, int64) tools.Tool { return newFakeLoopTool("custom") },
+		func(LoopToolContext) toolruntime.Tool { return newFakeLoopTool("custom") },
 	}
 	manager.SetLoopToolFactories(factories)
-	factories[0] = func(*Manager, string, int64) tools.Tool { return newFakeLoopTool("mutated") }
+	factories[0] = func(LoopToolContext) toolruntime.Tool { return newFakeLoopTool("mutated") }
 
 	if got := manager.newLoopToolHandler("worker", 1).List(); !reflect.DeepEqual(got, []string{"custom"}) {
 		t.Fatalf("expected custom loop tools, got %v", got)
@@ -203,8 +203,8 @@ func TestIdleWaitWakesOnInboxAndShutdown(t *testing.T) {
 		t.Fatalf("mkdir tasks dir: %v", err)
 	}
 
-	bus := message.NewBus(inboxDir)
-	manager := NewManager(workspace, teamDir, task.NewManager(tasksDir), bus, "", nil)
+	bus := localstore.NewMessageBus(inboxDir)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
 	manager.teammates["worker"] = &Teammate{Name: "worker", Role: "builder", Status: StatusIdle, generation: 1}
 	manager.ensureWakeChannelLocked("worker")
 
@@ -265,7 +265,7 @@ func TestLoadAllNormalizesLegacyStatusesWithoutRuntimeResume(t *testing.T) {
 		t.Fatalf("mkdir tasks dir: %v", err)
 	}
 
-	manager := NewManager(workspace, teamDir, task.NewManager(tasksDir), message.NewBus(filepath.Join(teamDir, "inbox")), "", nil)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), localstore.NewMessageBus(filepath.Join(teamDir, "inbox")), "", nil)
 	payload, err := json.Marshal(map[string]*Teammate{
 		"worker":   {Name: "worker", Role: "builder", Prompt: "build", Status: StatusWorking},
 		"stopping": {Name: "stopping", Role: "builder", Prompt: "build", Status: StatusShuttingDown},
@@ -303,8 +303,8 @@ func TestLoadAllPreservesInboxWakeBehaviorForLoadedTeammates(t *testing.T) {
 		t.Fatalf("mkdir tasks dir: %v", err)
 	}
 
-	bus := message.NewBus(inboxDir)
-	manager := NewManager(workspace, teamDir, task.NewManager(tasksDir), bus, "", nil)
+	bus := localstore.NewMessageBus(inboxDir)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
 	payload, err := json.Marshal(map[string]*Teammate{
 		"worker": {Name: "worker", Role: "builder", Prompt: "build", Status: StatusIdle},
 	})
@@ -345,11 +345,23 @@ func (fakeCaller) Call(context.Context, protocol.Request) (*protocol.Response, e
 	return &protocol.Response{}, nil
 }
 
-func newFakeLoopTool(name string) tools.Tool {
-	return tools.NewTypedTool(tools.NewToolSpec(name, "fake", map[string]interface{}{
+func newFakeLoopTool(name string) toolruntime.Tool {
+	return toolruntime.NewTypedTool(toolruntime.NewToolSpec(name, "fake", map[string]interface{}{
 		"type":       "object",
 		"properties": map[string]interface{}{},
-	}, nil), func(context.Context, struct{}) (tools.ToolResult, error) {
-		return tools.ToolResult{Text: "ok"}, nil
+	}, nil), func(context.Context, struct{}) (toolruntime.ToolResult, error) {
+		return toolruntime.ToolResult{Text: "ok"}, nil
 	})
+}
+
+func testLoopToolFactories() []LoopToolFactory {
+	names := []string{"bash", "edit_file", "idle", "read_file", "task", "write_file"}
+	factories := make([]LoopToolFactory, 0, len(names))
+	for _, name := range names {
+		name := name
+		factories = append(factories, func(LoopToolContext) toolruntime.Tool {
+			return newFakeLoopTool(name)
+		})
+	}
+	return factories
 }

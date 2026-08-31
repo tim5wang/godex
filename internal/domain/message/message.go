@@ -1,14 +1,11 @@
 package message
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/tim5wang/godex/internal/platform/fsutil"
 )
 
 // MsgType represents message type
@@ -32,30 +29,37 @@ type Message struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// Bus handles message routing
-type Bus struct {
-	mu        sync.RWMutex
-	inbox     map[string][]Message
-	inboxDir  string
-	seen      map[string]struct{}
-	files     map[string]string
-	notifiers []func(Message)
+// Repository persists messages without exposing a storage backend to the
+// domain bus.
+type Repository interface {
+	LoadAll() ([]Message, error)
+	Save(Message) error
+	Delete(id string) error
 }
 
-// NewBus creates a new message bus
-func NewBus(inboxDir string) *Bus {
+// Bus handles message routing.
+type Bus struct {
+	mu         sync.RWMutex
+	inbox      map[string][]Message
+	seen       map[string]struct{}
+	repository Repository
+	notifiers  []func(Message)
+	nextID     uint64
+}
+
+// NewBus creates a new message bus backed by repository. A nil repository
+// creates an in-memory bus.
+func NewBus(repository Repository) *Bus {
 	return &Bus{
-		inbox:    make(map[string][]Message),
-		inboxDir: inboxDir,
-		seen:     make(map[string]struct{}),
-		files:    make(map[string]string),
+		inbox:      make(map[string][]Message),
+		seen:       make(map[string]struct{}),
+		repository: repository,
 	}
 }
 
 // Send sends a message to a teammate
 func (b *Bus) Send(msg Message) error {
 	b.normalizeMessage(&msg)
-	path := b.messagePath(msg.ID)
 
 	if err := b.saveMessage(msg); err != nil {
 		return err
@@ -64,7 +68,6 @@ func (b *Bus) Send(msg Message) error {
 	b.mu.Lock()
 	b.inbox[msg.To] = append(b.inbox[msg.To], msg)
 	b.seen[msg.ID] = struct{}{}
-	b.files[msg.ID] = path
 	b.mu.Unlock()
 
 	b.notify(msg)
@@ -89,22 +92,24 @@ func (b *Bus) Broadcast(from, content string, teammates []string) error {
 		messages = append(messages, msg)
 	}
 
-	var savedPaths []string
+	var savedIDs []string
 	for _, msg := range messages {
 		if err := b.saveMessage(msg); err != nil {
-			for _, path := range savedPaths {
-				_ = os.Remove(path)
+			rollbackErrs := []error{err}
+			for _, id := range savedIDs {
+				if deleteErr := b.deleteMessage(id); deleteErr != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback delete message %q: %w", id, deleteErr))
+				}
 			}
-			return err
+			return errors.Join(rollbackErrs...)
 		}
-		savedPaths = append(savedPaths, b.messagePath(msg.ID))
+		savedIDs = append(savedIDs, msg.ID)
 	}
 
 	b.mu.Lock()
 	for _, msg := range messages {
 		b.inbox[msg.To] = append(b.inbox[msg.To], msg)
 		b.seen[msg.ID] = struct{}{}
-		b.files[msg.ID] = b.messagePath(msg.ID)
 	}
 	b.mu.Unlock()
 
@@ -121,24 +126,16 @@ func (b *Bus) ReadInbox(name string) []Message {
 	messages := b.inbox[name]
 	b.inbox[name] = nil
 
-	paths := make([]string, 0, len(messages))
+	ids := make([]string, 0, len(messages))
 	for _, msg := range messages {
-		path := b.files[msg.ID]
-		if path == "" && msg.ID != "" {
-			path = b.messagePath(msg.ID)
+		if msg.ID != "" {
+			ids = append(ids, msg.ID)
 		}
-		if path != "" {
-			paths = append(paths, path)
-		}
-		delete(b.files, msg.ID)
 	}
 	b.mu.Unlock()
 
-	for _, path := range paths {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			// Best-effort cleanup; the in-memory queue has already been drained.
-			continue
-		}
+	for _, id := range ids {
+		b.deleteMessage(id)
 	}
 
 	return messages
@@ -173,17 +170,12 @@ func (b *Bus) AckInbox(name string, messages []Message) {
 	b.mu.Lock()
 	current := b.inbox[name]
 	kept := make([]Message, 0, len(current))
-	paths := make([]string, 0, len(messages))
+	ids := make([]string, 0, len(messages))
 	for _, msg := range current {
 		if _, ok := ackIDs[msg.ID]; ok {
-			path := b.files[msg.ID]
-			if path == "" && msg.ID != "" {
-				path = b.messagePath(msg.ID)
+			if msg.ID != "" {
+				ids = append(ids, msg.ID)
 			}
-			if path != "" {
-				paths = append(paths, path)
-			}
-			delete(b.files, msg.ID)
 			delete(b.seen, msg.ID)
 			continue
 		}
@@ -192,45 +184,29 @@ func (b *Bus) AckInbox(name string, messages []Message) {
 	b.inbox[name] = kept
 	b.mu.Unlock()
 
-	for _, path := range paths {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			continue
-		}
+	for _, id := range ids {
+		b.deleteMessage(id)
 	}
 }
 
-// Load loads persisted messages from disk
+// Load loads persisted messages from the repository.
 func (b *Bus) Load() error {
-	entries, err := os.ReadDir(b.inboxDir)
+	if b.repository == nil {
+		return nil
+	}
+	messages, err := b.repository.LoadAll()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
+	for _, msg := range messages {
+		b.normalizeMessage(&msg)
 
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".json" {
-			continue
+		b.mu.Lock()
+		if _, ok := b.seen[msg.ID]; !ok {
+			b.inbox[msg.To] = append(b.inbox[msg.To], msg)
+			b.seen[msg.ID] = struct{}{}
 		}
-		path := filepath.Join(b.inboxDir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-
-		var msg Message
-		if err := json.Unmarshal(data, &msg); err == nil {
-			b.normalizeMessage(&msg)
-
-			b.mu.Lock()
-			if _, ok := b.seen[msg.ID]; !ok {
-				b.inbox[msg.To] = append(b.inbox[msg.To], msg)
-				b.seen[msg.ID] = struct{}{}
-				b.files[msg.ID] = path
-			}
-			b.mu.Unlock()
-		}
+		b.mu.Unlock()
 	}
 	return nil
 }
@@ -248,7 +224,7 @@ func (b *Bus) RegisterNotifier(fn func(Message)) {
 
 func (b *Bus) normalizeMessage(msg *Message) {
 	if msg.ID == "" {
-		msg.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+		msg.ID = fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&b.nextID, 1))
 	}
 	if msg.Timestamp.IsZero() {
 		msg.Timestamp = time.Now()
@@ -256,17 +232,17 @@ func (b *Bus) normalizeMessage(msg *Message) {
 }
 
 func (b *Bus) saveMessage(msg Message) error {
-	data, err := json.MarshalIndent(msg, "", "  ")
-	if err != nil {
-		return err
+	if b.repository == nil {
+		return nil
 	}
-
-	return fsutil.WriteFileAtomic(b.messagePath(msg.ID), data, 0644)
+	return b.repository.Save(msg)
 }
 
-func (b *Bus) messagePath(id string) string {
-	filename := fmt.Sprintf("%s.json", id)
-	return filepath.Join(b.inboxDir, filename)
+func (b *Bus) deleteMessage(id string) error {
+	if b.repository == nil {
+		return nil
+	}
+	return b.repository.Delete(id)
 }
 
 func (b *Bus) notify(msg Message) {

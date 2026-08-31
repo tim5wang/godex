@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -366,6 +366,7 @@ func TestDurableSubagentViewIncludesStableDisplayMetadata(t *testing.T) {
 
 func TestDurableSubagentPersistsLoopGuardFeedback(t *testing.T) {
 	a := newTestAgent(t, 4096)
+	a.cfg.Tools.LoopGuard.MaxRepeatedTools = 3
 	repeated := protocol.Response{Content: []protocol.Block{
 		protocol.ToolUseBlock("tool-read", "read_file", map[string]interface{}{"path": "missing.txt"}),
 	}}

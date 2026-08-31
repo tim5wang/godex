@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/tim5wang/godex/internal/core/media"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 type AttachmentProcessor interface {

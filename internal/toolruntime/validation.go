@@ -3,7 +3,7 @@ package toolruntime
 import (
 	"sort"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 func validateToolInputSchema(tool string, args map[string]interface{}, schema map[string]interface{}) error {

@@ -1,12 +1,50 @@
 package message
 
 import (
-	"os"
+	"errors"
 	"testing"
 )
 
+type testRepository struct {
+	messages   map[string]Message
+	saveCalls  int
+	failSaveAt int
+	saveErr    error
+	deleteErr  error
+}
+
+func newTestRepository() *testRepository {
+	return &testRepository{messages: make(map[string]Message)}
+}
+
+func (r *testRepository) LoadAll() ([]Message, error) {
+	messages := make([]Message, 0, len(r.messages))
+	for _, item := range r.messages {
+		messages = append(messages, item)
+	}
+	return messages, nil
+}
+
+func (r *testRepository) Save(item Message) error {
+	r.saveCalls++
+	if r.failSaveAt > 0 && r.saveCalls == r.failSaveAt {
+		return r.saveErr
+	}
+	r.messages[item.ID] = item
+	return nil
+}
+
+func (r *testRepository) Delete(id string) error {
+	if r.deleteErr != nil {
+		return r.deleteErr
+	}
+	delete(r.messages, id)
+	return nil
+}
+
 func TestSendGeneratesUniqueIDsAndPersistsMessages(t *testing.T) {
-	bus := NewBus(t.TempDir())
+	repository := newTestRepository()
+	bus := NewBus(repository)
 
 	first := Message{
 		Type:    MsgTypeMessage,
@@ -39,18 +77,38 @@ func TestSendGeneratesUniqueIDsAndPersistsMessages(t *testing.T) {
 		t.Fatalf("expected unique message IDs, both were %q", inbox[0].ID)
 	}
 
-	entries, err := os.ReadDir(bus.inboxDir)
-	if err != nil {
-		t.Fatalf("read persisted messages: %v", err)
+	if len(repository.messages) != 2 {
+		t.Fatalf("expected 2 persisted messages, got %d", len(repository.messages))
 	}
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 persisted message files, got %d", len(entries))
+}
+
+func TestBroadcastReportsRollbackDeleteFailure(t *testing.T) {
+	saveErr := errors.New("save failed")
+	deleteErr := errors.New("delete failed")
+	repository := newTestRepository()
+	repository.failSaveAt = 2
+	repository.saveErr = saveErr
+	repository.deleteErr = deleteErr
+	bus := NewBus(repository)
+
+	err := bus.Broadcast("lead", "status", []string{"alice", "bob"})
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("expected broadcast error to include save failure, got %v", err)
+	}
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("expected broadcast error to include rollback delete failure, got %v", err)
+	}
+	if got := bus.PeekInbox("alice"); len(got) != 0 {
+		t.Fatalf("expected failed broadcast not to update in-memory inbox, got %+v", got)
+	}
+	if len(repository.messages) != 1 {
+		t.Fatalf("expected failed rollback to leave one persisted message, got %d", len(repository.messages))
 	}
 }
 
 func TestLoadIsIdempotentAndReadInboxRemovesPersistedFiles(t *testing.T) {
-	dir := t.TempDir()
-	sender := NewBus(dir)
+	repository := newTestRepository()
+	sender := NewBus(repository)
 
 	msg := Message{
 		Type:    MsgTypeMessage,
@@ -62,7 +120,7 @@ func TestLoadIsIdempotentAndReadInboxRemovesPersistedFiles(t *testing.T) {
 		t.Fatalf("send message: %v", err)
 	}
 
-	receiver := NewBus(dir)
+	receiver := NewBus(repository)
 	if err := receiver.Load(); err != nil {
 		t.Fatalf("load messages: %v", err)
 	}
@@ -80,18 +138,14 @@ func TestLoadIsIdempotentAndReadInboxRemovesPersistedFiles(t *testing.T) {
 		t.Fatalf("expected 1 read message, got %d", len(read))
 	}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read inbox dir: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("expected persisted messages to be removed after read, got %d files", len(entries))
+	if len(repository.messages) != 0 {
+		t.Fatalf("expected persisted messages to be removed after read, got %d", len(repository.messages))
 	}
 }
 
 func TestAckInboxRemovesPreviewedMessagesOnlyAfterExplicitAck(t *testing.T) {
-	dir := t.TempDir()
-	bus := NewBus(dir)
+	repository := newTestRepository()
+	bus := NewBus(repository)
 
 	if err := bus.Send(Message{
 		Type:    MsgTypeMessage,

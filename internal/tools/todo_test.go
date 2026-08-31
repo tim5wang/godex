@@ -6,10 +6,11 @@ import (
 	"testing"
 
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/platform/localstore"
 )
 
 func TestTodoWriteToolReplacesEntireList(t *testing.T) {
-	manager := todo.NewManager(t.TempDir())
+	manager := localstore.NewTodoManager(t.TempDir())
 	if _, err := manager.Add("old item", "old item"); err != nil {
 		t.Fatalf("seed todo: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestTodoWriteToolReplacesEntireList(t *testing.T) {
 }
 
 func TestTodoWriteToolAcceptsTodosAlias(t *testing.T) {
-	manager := todo.NewManager(t.TempDir())
+	manager := localstore.NewTodoManager(t.TempDir())
 	tool := NewTodoWriteTool(manager)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -64,7 +65,7 @@ func TestTodoWriteToolAcceptsTodosAlias(t *testing.T) {
 }
 
 func TestTodoWriteToolSpecEnforcesProactiveUsage(t *testing.T) {
-	manager := todo.NewManager(t.TempDir())
+	manager := localstore.NewTodoManager(t.TempDir())
 	tool := NewTodoWriteTool(manager)
 	desc := strings.ToLower(tool.Spec().Description)
 	musts := []string{
@@ -81,7 +82,7 @@ func TestTodoWriteToolSpecEnforcesProactiveUsage(t *testing.T) {
 }
 
 func TestTodoWriteToolAcceptsJSONStringArray(t *testing.T) {
-	manager := todo.NewManager(t.TempDir())
+	manager := localstore.NewTodoManager(t.TempDir())
 	tool := NewTodoWriteTool(manager)
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{

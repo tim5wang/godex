@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/background"
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
@@ -19,20 +20,20 @@ import (
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
-	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
-	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/platform/localstore"
 	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/services/historysearch"
 	"github.com/tim5wang/godex/internal/tools"
+	"github.com/tim5wang/godex/internal/tools/teamtools"
 )
 
 func buildDependencies(cfg *config.Config) dependencies {
-	taskMgr := task.NewManager(cfg.TasksDir)
+	taskMgr := localstore.NewTaskManager(cfg.TasksDir)
 	msgBus := loadMessageBus(cfg.TeamDir)
 	client := callerForConfigProfile(cfg, cfg.DefaultModelProfile())
 	skillLoader := newSkillLoader(cfg, client)
@@ -89,22 +90,22 @@ func buildDependencies(cfg *config.Config) dependencies {
 		// surfaces (PluginManager getters, plugin route mounting in httpapi,
 		// taskboard activation in main) see the same kernel; per-session
 		// agents reuse this instance via newAgentWithDependencies.
-		pluginMgr:    pluginrt.NewManager(pkgregistry.IsPlatformCapability),
-		compressor:   compressor,
-		summarizer:   sessionSummarizer,
-		bgMgr:        background.NewManagerWithStore(filepath.Join(cfg.StateDir, "background")),
-		webSearch:    webSearch,
-		webFetch:     webFetch,
-		browser:      browser,
-		permissions:  tools.NewPermissionManagerForPolicy(permissionPolicyFromConfig(cfg)),
-		history:      historysearch.NewService(cfg),
-		media:        media.NewProcessor(cfg.Media, cfg.WorkspaceDir, cfg.SessionsDir, cfg.TempDir),
-		teamMgr:      newTeamManager(cfg, taskMgr, msgBus, client),
-		subagentJobs: newSubagentJobStoreWithLease(subagentJobsDir(cfg), cfg.StateDir),
-		workflows:    newWorkflowStore(filepath.Join(cfg.StateDir, "workflows")),
-		todoMgr:      todo.NewManager(cfg.TodosDir),
-		sandbox:      localSandboxFromConfig(cfg),
-		taskboard:    openTaskboardLedger(cfg),
+		pluginMgr:     pluginrt.NewManager(pkgregistry.IsPlatformCapability),
+		compressor:    compressor,
+		summarizer:    sessionSummarizer,
+		bgMgr:         background.NewManagerWithStore(filepath.Join(cfg.StateDir, "background")),
+		webSearch:     webSearch,
+		webFetch:      webFetch,
+		browser:       browser,
+		permissions:   tools.NewPermissionManagerForPolicy(permissionPolicyFromConfig(cfg)),
+		history:       historysearch.NewService(cfg),
+		media:         media.NewProcessor(cfg.Media, cfg.WorkspaceDir, cfg.SessionsDir, cfg.TempDir),
+		teamMgr:       newTeamManager(cfg, taskMgr, msgBus, client),
+		subagentJobs:  newSubagentJobStoreWithLease(subagentJobsDir(cfg), cfg.StateDir),
+		workflows:     newWorkflowStore(filepath.Join(cfg.StateDir, "workflows")),
+		todoMgr:       localstore.NewTodoManager(cfg.TodosDir),
+		sandbox:       localSandboxFromConfig(cfg),
+		taskboard:     openTaskboardLedger(cfg),
 		taskboardExec: nil,
 	}
 }
@@ -325,7 +326,7 @@ func pluginPromptSectionsFromManager(manager *pluginrt.Manager) []runtimePromptS
 
 func loadMessageBus(teamDir string) *message.Bus {
 	inboxDir := fmt.Sprintf("%s/inbox", teamDir)
-	msgBus := message.NewBus(inboxDir)
+	msgBus := localstore.NewMessageBus(inboxDir)
 	if err := msgBus.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to load persisted inbox messages: %v\n", err)
 	}
@@ -341,7 +342,7 @@ func newSkillLoader(cfg *config.Config, client conversation.Caller) *skill.Loade
 }
 
 func newTeamManager(cfg *config.Config, taskMgr *task.Manager, msgBus *message.Bus, client conversation.Caller) *teammate.Manager {
-	teamMgr := teammate.NewManager(cfg.WorkspaceDir, cfg.TeamDir, taskMgr, msgBus, cfg.Model, client)
+	teamMgr := teammate.NewManager(cfg.WorkspaceDir, cfg.TeamDir, taskMgr, msgBus, cfg.Model, client, teamtools.NewLoopToolFactories()...)
 	teamMgr.Configure(teammate.RuntimeConfig{
 		TeamName:         cfg.TeamName,
 		WorkLoopLimit:    cfg.TeammateWorkLimit,

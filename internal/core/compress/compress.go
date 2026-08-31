@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tim5wang/godex/internal/core/modelcontext"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 const (

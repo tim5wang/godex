@@ -1,15 +1,47 @@
 package task
 
 import (
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 )
 
+type testRepository struct {
+	tasks map[int]FileTask
+}
+
+func newTestRepository(items ...FileTask) *testRepository {
+	repository := &testRepository{tasks: make(map[int]FileTask, len(items))}
+	for _, item := range items {
+		repository.tasks[item.ID] = item
+	}
+	return repository
+}
+
+func (r *testRepository) LoadAll() ([]FileTask, error) {
+	items := make([]FileTask, 0, len(r.tasks))
+	for _, item := range r.tasks {
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (r *testRepository) Save(item FileTask) error {
+	r.tasks[item.ID] = item
+	return nil
+}
+
+func (r *testRepository) Delete(id int) error {
+	delete(r.tasks, id)
+	return nil
+}
+
+func newTestManager() *Manager {
+	return NewManager(newTestRepository())
+}
+
 func TestListReturnsTasksSortedByID(t *testing.T) {
-	manager := NewManager(t.TempDir())
+	manager := newTestManager()
 
 	if _, err := manager.Create("first", ""); err != nil {
 		t.Fatalf("create first task: %v", err)
@@ -31,7 +63,7 @@ func TestListReturnsTasksSortedByID(t *testing.T) {
 }
 
 func TestGetAndListReturnSnapshots(t *testing.T) {
-	manager := NewManager(t.TempDir())
+	manager := newTestManager()
 	created, err := manager.Create("original", "")
 	if err != nil {
 		t.Fatalf("create task: %v", err)
@@ -60,7 +92,7 @@ func TestGetAndListReturnSnapshots(t *testing.T) {
 }
 
 func TestClaimPendingIsAtomic(t *testing.T) {
-	manager := NewManager(t.TempDir())
+	manager := newTestManager()
 	created, err := manager.Create("claim me", "")
 	if err != nil {
 		t.Fatalf("create task: %v", err)
@@ -93,7 +125,7 @@ func TestClaimPendingIsAtomic(t *testing.T) {
 }
 
 func TestUpdateRejectsInvalidBlockedByReferences(t *testing.T) {
-	manager := NewManager(t.TempDir())
+	manager := newTestManager()
 	first, err := manager.Create("first", "")
 	if err != nil {
 		t.Fatalf("create first task: %v", err)
@@ -123,7 +155,7 @@ func TestUpdateRejectsInvalidBlockedByReferences(t *testing.T) {
 }
 
 func TestDeleteClearsBlockedByReferencesFromOtherTasks(t *testing.T) {
-	manager := NewManager(t.TempDir())
+	manager := newTestManager()
 	first, err := manager.Create("first", "")
 	if err != nil {
 		t.Fatalf("create first task: %v", err)
@@ -149,18 +181,10 @@ func TestDeleteClearsBlockedByReferencesFromOtherTasks(t *testing.T) {
 	}
 }
 
-func TestLoadAllIgnoresNonTaskJSONFiles(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "1.json"), []byte(`{"id":1,"subject":"first","status":"pending"}`), 0644); err != nil {
-		t.Fatalf("write task file: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "todos.json"), []byte(`[]`), 0644); err != nil {
-		t.Fatalf("write todos file: %v", err)
-	}
-
-	manager := NewManager(dir)
+func TestNewManagerLoadsRepositoryTasks(t *testing.T) {
+	manager := NewManager(newTestRepository(FileTask{ID: 1, Subject: "first", Status: StatusPending}))
 	tasks := manager.List()
 	if len(tasks) != 1 || tasks[0].ID != 1 {
-		t.Fatalf("expected only task file to be loaded, got %#v", tasks)
+		t.Fatalf("expected repository task to be loaded, got %#v", tasks)
 	}
 }

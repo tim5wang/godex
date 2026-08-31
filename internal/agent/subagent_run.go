@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/sandbox"
@@ -519,8 +519,14 @@ func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEv
 		messages = []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, job.Prompt)}
 	}
 	prompts := conversation.PromptLayers{Base: strings.TrimSpace(job.BasePrompt)}
+	loopGuard := a.cfg.Tools.LoopGuard
 	result, err := conversation.Runner{
-		Caller: a.client,
+		Caller:                     a.client,
+		MaxRepeatedTools:           loopGuard.MaxRepeatedTools,
+		MaxRepeatedPollingTools:    loopGuard.MaxRepeatedPollingTools,
+		MaxStalledTaskPollingTools: loopGuard.MaxStalledTaskPollingTools,
+		MaxLoopGuardRecoveries:     loopGuard.MaxRecoveries,
+		LoopGuardMode:              conversation.LoopGuardMode(loopGuard.Mode),
 		BuildRequest: func(ctx context.Context) (protocol.Request, error) {
 			_ = ctx
 			messages = a.maybeCompactSubagentMessages(ctx, job, messages, target)

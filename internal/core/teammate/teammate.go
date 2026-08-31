@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/conversation"
-	"github.com/tim5wang/godex/internal/core/protocol"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/platform/tooling"
-	"github.com/tim5wang/godex/internal/tools"
+	"github.com/tim5wang/godex/internal/toolruntime"
 )
 
 // Status represents teammate status.
@@ -66,10 +66,24 @@ type Manager struct {
 	client       conversation.Caller
 	wakeCh       map[string]chan struct{}
 	loopTools    []LoopToolFactory
+	defaultTools []LoopToolFactory
+}
+
+// IdleSignal lets the injected idle tool update teammate loop state.
+type IdleSignal interface {
+	SetIdle(bool)
+}
+
+// LoopToolContext is the narrow set of teammate state needed by concrete
+// loop-tool adapters.
+type LoopToolContext struct {
+	WorkspaceDir string
+	TaskManager  *task.Manager
+	IdleSignal   IdleSignal
 }
 
 // LoopToolFactory creates one tool instance for a teammate loop.
-type LoopToolFactory func(*Manager, string, int64) tools.Tool
+type LoopToolFactory func(LoopToolContext) toolruntime.Tool
 
 type loopState struct {
 	name            string
@@ -83,7 +97,7 @@ type loopState struct {
 }
 
 // NewManager creates a new teammate manager.
-func NewManager(workspaceDir, teamDir string, taskMgr *task.Manager, msgBus *message.Bus, model string, client conversation.Caller) *Manager {
+func NewManager(workspaceDir, teamDir string, taskMgr *task.Manager, msgBus *message.Bus, model string, client conversation.Caller, defaultTools ...LoopToolFactory) *Manager {
 	absWorkspaceDir, err := filepath.Abs(workspaceDir)
 	if err == nil {
 		workspaceDir = absWorkspaceDir
@@ -100,36 +114,14 @@ func NewManager(workspaceDir, teamDir string, taskMgr *task.Manager, msgBus *mes
 		model:        model,
 		client:       client,
 		wakeCh:       make(map[string]chan struct{}),
-		loopTools:    defaultLoopToolFactories(),
+		loopTools:    cloneLoopToolFactories(defaultTools),
+		defaultTools: cloneLoopToolFactories(defaultTools),
 	}
 	if msgBus != nil {
 		msgBus.RegisterNotifier(m.handleMessageNotification)
 	}
 	m.loadAll()
 	return m
-}
-
-func defaultLoopToolFactories() []LoopToolFactory {
-	return []LoopToolFactory{
-		func(m *Manager, _ string, _ int64) tools.Tool {
-			return tools.NewBashTool(m.workspaceDir)
-		},
-		func(m *Manager, _ string, _ int64) tools.Tool {
-			return tools.NewReadFileTool(m.workspaceDir)
-		},
-		func(m *Manager, _ string, _ int64) tools.Tool {
-			return tools.NewWriteFileTool(m.workspaceDir)
-		},
-		func(m *Manager, _ string, _ int64) tools.Tool {
-			return tools.NewEditFileTool(m.workspaceDir)
-		},
-		func(m *Manager, _ string, _ int64) tools.Tool {
-			return tools.NewTaskTool(m.taskMgr)
-		},
-		func(m *Manager, name string, generation int64) tools.Tool {
-			return tools.NewIdleTool(teammateIdleSignal{manager: m, name: name, generation: generation})
-		},
-	}
 }
 
 func (m *Manager) loadAll() {
@@ -280,6 +272,10 @@ func (m *Manager) Configure(runtime RuntimeConfig) {
 func (m *Manager) SetLoopToolFactories(factories []LoopToolFactory) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(factories) == 0 {
+		m.loopTools = cloneLoopToolFactories(m.defaultTools)
+		return
+	}
 	m.loopTools = cloneLoopToolFactories(factories)
 }
 
@@ -518,10 +514,15 @@ func (s teammateIdleSignal) SetIdle(idle bool) {
 	_ = s.manager.updateStatusForGeneration(s.name, s.generation, status)
 }
 
-func (m *Manager) newLoopToolHandler(name string, generation int64) *tools.ToolHandler {
-	handler := tools.NewToolHandler()
+func (m *Manager) newLoopToolHandler(name string, generation int64) *toolruntime.ToolHandler {
+	handler := toolruntime.NewToolHandler()
+	context := LoopToolContext{
+		WorkspaceDir: m.workspaceDir,
+		TaskManager:  m.taskMgr,
+		IdleSignal:   teammateIdleSignal{manager: m, name: name, generation: generation},
+	}
 	for _, factory := range m.loopToolFactories() {
-		handler.Register(factory(m, name, generation))
+		handler.Register(factory(context))
 	}
 	return handler
 }
@@ -700,8 +701,5 @@ func (m *Manager) canResumeLoadedTeammates() bool {
 }
 
 func cloneLoopToolFactories(factories []LoopToolFactory) []LoopToolFactory {
-	if len(factories) == 0 {
-		return defaultLoopToolFactories()
-	}
 	return append([]LoopToolFactory(nil), factories...)
 }

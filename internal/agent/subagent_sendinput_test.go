@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // Phase 4.1 — send_input / followup_task: queue input messages for a durable

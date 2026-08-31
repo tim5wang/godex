@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/modelcontext"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // ErrMaxTurnsReached indicates the shared runner exhausted its turn budget.

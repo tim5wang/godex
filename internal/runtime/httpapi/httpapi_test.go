@@ -25,7 +25,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/memory"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/message"
 	rtchannels "github.com/tim5wang/godex/internal/runtime/channels"

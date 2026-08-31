@@ -5,13 +5,35 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/message"
-	"github.com/tim5wang/godex/internal/domain/task"
+	"github.com/tim5wang/godex/internal/platform/localstore"
+	"github.com/tim5wang/godex/internal/tools"
 )
+
+type fakeIdleSignal struct{}
+
+func (fakeIdleSignal) SetIdle(bool) {}
+
+func TestLoopToolFactoriesProvideBuiltinTeammateTools(t *testing.T) {
+	workspace := t.TempDir()
+	handler := tools.NewToolHandler()
+	ctx := teammate.LoopToolContext{
+		WorkspaceDir: workspace,
+		TaskManager:  localstore.NewTaskManager(filepath.Join(workspace, ".tasks")),
+		IdleSignal:   fakeIdleSignal{},
+	}
+	for _, factory := range NewLoopToolFactories() {
+		handler.Register(factory(ctx))
+	}
+	if got, want := handler.List(), []string{"bash", "edit_file", "idle", "read_file", "task", "write_file"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected builtin teammate tools %v, got %v", want, got)
+	}
+}
 
 func TestBroadcastToolTargetsKnownTeammates(t *testing.T) {
 	workspace := t.TempDir()
@@ -50,8 +72,8 @@ func TestBroadcastToolTargetsKnownTeammates(t *testing.T) {
 		t.Fatalf("write teammate config: %v", err)
 	}
 
-	bus := message.NewBus(inboxDir)
-	manager := teammate.NewManager(workspace, teamDir, task.NewManager(tasksDir), bus, "", nil)
+	bus := localstore.NewMessageBus(inboxDir)
+	manager := teammate.NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
 	tool := NewBroadcastTool(bus, manager, "captain")
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{"content": "hello team"})
@@ -105,8 +127,8 @@ func TestPlanApprovalTargetsRequestedTeammateOnly(t *testing.T) {
 		t.Fatalf("write teammate config: %v", err)
 	}
 
-	bus := message.NewBus(inboxDir)
-	manager := teammate.NewManager(workspace, teamDir, task.NewManager(tasksDir), bus, "", nil)
+	bus := localstore.NewMessageBus(inboxDir)
+	manager := teammate.NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
 	tool := NewPlanApprovalTool(bus, manager, "captain")
 
 	if _, err := tool.Execute(context.Background(), map[string]interface{}{

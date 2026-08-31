@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 func TestLongTaskToolCompilesStoriesToWorkflow(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/modelcontext"
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -194,6 +195,7 @@ func TestRunWithOptionsCheckpointsTranscriptAppends(t *testing.T) {
 
 func TestRunWithOptionsAppendsLoopGuardFeedbackAndCheckpoint(t *testing.T) {
 	a := newTestAgent(t, 4096)
+	a.cfg.Tools.LoopGuard.MaxRepeatedTools = 3
 	a.RegisterTools()
 	repeated := protocol.Response{Content: []protocol.Block{
 		protocol.ToolUseBlock("tool-1", "memory", map[string]interface{}{"action": "list"}),
@@ -518,7 +520,15 @@ func TestRunWithOptionsEmitsExplicitArtifactPathsFromToolResult(t *testing.T) {
 func TestRunWithOptionsStubsOversizedToolResult(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
-	largeOutput := strings.Repeat("large-output\n", 4000)
+	var largeOutputBuilder strings.Builder
+	for i := 0; i < 100; i++ {
+		largeOutputBuilder.WriteString("large-output-")
+		largeOutputBuilder.WriteString(strconv.Itoa(i))
+		largeOutputBuilder.WriteByte('-')
+		largeOutputBuilder.WriteString(strings.Repeat(strconv.Itoa(i%10), 450))
+		largeOutputBuilder.WriteByte('\n')
+	}
+	largeOutput := largeOutputBuilder.String()
 	a.registerTool(tools.NewTypedTool(tools.NewToolSpec("large_result", "Emit a large result.", map[string]interface{}{
 		"type":       "object",
 		"properties": map[string]interface{}{},
@@ -572,7 +582,7 @@ func TestRunWithOptionsStubsOversizedToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read stored large-result artifact: %v", err)
 	}
-	if !strings.Contains(string(data), "large-output") {
+	if !strings.Contains(string(data), "large-output-99") {
 		t.Fatalf("expected stored artifact to contain raw output")
 	}
 	if gotRel, wantRel := a.modelToolResultReferencePath(finished.ArtifactPaths[0]), ".godex/.tool-results/session-large/tool-large.json"; gotRel != wantRel {

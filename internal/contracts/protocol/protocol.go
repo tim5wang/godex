@@ -1,3 +1,6 @@
+// Package protocol defines neutral wire contracts shared by domain, core,
+// platform, runtime, and adapter layers. Business behavior belongs in those
+// layers rather than in this high-fan-in contract package.
 package protocol
 
 import (

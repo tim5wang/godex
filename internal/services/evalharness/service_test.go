@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	evaldomain "github.com/tim5wang/godex/internal/domain/eval"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"

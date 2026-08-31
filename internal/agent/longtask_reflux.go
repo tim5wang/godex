@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 // longTaskRefluxPayload is the structured form of a longtask assistant

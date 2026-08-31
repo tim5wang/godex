@@ -72,6 +72,10 @@ func TestStaticRoutePatternsHaveSingleOwner(t *testing.T) {
 			"POST /packages/{name}/smoke/{smoke}", "GET /prompts", "GET /commands",
 			"GET /packages/commands", "GET /packages/roles",
 		},
+		"routes_gateway.go": {
+			"POST /v1/chat/completions", "POST /v1/responses", "POST /v1/messages",
+			"POST /v1/exec", "GET /v1/models",
+		},
 	}
 	for file, patterns := range expectedOwners {
 		for _, pattern := range patterns {

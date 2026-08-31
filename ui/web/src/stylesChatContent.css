@@ -1,0 +1,880 @@
+
+/* ---- Chat V2 grouped feed ---- */
+
+.chat-feed-v2-scroll {
+  padding: 12px 12px;
+}
+
+/* V2 reuses .chat-feed as the scroll container; zero out its V1 padding so
+   the .chat-feed-v2-scroll rules above (incl. the mobile media query) are the
+   single source of truth for horizontal padding. */
+.chat-feed.chat-feed-v2-scroll {
+  padding: 0;
+}
+
+.chat-feed-v2-inner {
+  max-width: 860px;
+}
+
+/* Session-switch loading veil. Wraps the feed scrollport so the overlay can
+   sit absolutely over the whole viewport (positioning inside the scroller
+   would make it scroll with the content). The old feed stays visible and
+   dimmed underneath while the next session's snapshot loads, and the fade-in
+   keeps a fast switch from flashing. */
+.chat-feed-v2-scrollport {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-feed-switching-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(246, 248, 250, 0.55);
+  background: color-mix(in srgb, var(--godex-bg) 55%, transparent);
+  color: var(--godex-text);
+  font-size: 13px;
+  animation: chat-feed-switching-fade 0.18s ease-out;
+}
+
+@keyframes chat-feed-switching-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Floating "jump to latest" affordance shown when the user scrolled up to
+   read history (auto-scroll only sticks while near the bottom). Sticky keeps
+   it pinned to the bottom of the scrollport without disturbing layout. */
+.chat-feed-jump-latest {
+  position: sticky;
+  bottom: 12px;
+  display: block;
+  margin: 0 auto;
+  border: 1px solid var(--godex-border);
+  border-radius: 999px;
+  background: var(--godex-panel, rgba(255, 255, 255, 0.92));
+  color: var(--godex-text-primary);
+  font-size: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  z-index: 5;
+  transition: opacity 0.15s;
+}
+
+.chat-feed-jump-latest:hover {
+  border-color: var(--godex-accent);
+}
+
+/* Grouped turn bubble: no card chrome, content flows like a document. */
+.chat-feed-v2-bubble-turn .ant-bubble-content,
+.chat-feed-v2-bubble-assistant .ant-bubble-content {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.chat-feed-v2-bubble .ant-bubble-content {
+  max-width: 100%;
+}
+
+.chat-feed-v2-bubble-user .ant-bubble-content {
+  max-width: min(680px, 100%);
+  padding: 8px 12px !important;
+}
+
+.chat-feed-v2-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-feed-v2-divider {
+  border: 0;
+  border-top: 1px solid var(--godex-border);
+  margin: 4px 0;
+  opacity: 0.7;
+}
+
+.chat-feed-v2-text {
+  min-width: 0;
+}
+
+.chat-feed-v2-text + .chat-feed-v2-text {
+  margin-top: 2px;
+}
+
+.chat-feed-v2-todo {
+  margin: 4px 0;
+}
+
+.chat-feed-v2-turn-actions {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.chat-feed-v2-bubble-turn:hover .chat-feed-v2-turn-actions,
+.chat-feed-v2-bubble-turn:focus-within .chat-feed-v2-turn-actions {
+  opacity: 1;
+}
+
+.chat-feed-v2-turn-actions .ant-btn {
+  width: 26px !important;
+  height: 26px !important;
+  border: 1px solid var(--godex-border) !important;
+  background: color-mix(in oklab, var(--godex-panel) 94%, transparent) !important;
+  color: var(--godex-muted) !important;
+}
+
+.chat-feed-v2-turn-actions .ant-btn:hover {
+  color: var(--godex-accent) !important;
+}
+
+/* Small turn-number / timestamp label left of the bottom action buttons */
+.chat-feed-v2-meta {
+  align-self: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--godex-muted) !important;
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+.message-action-buttons .chat-feed-v2-meta {
+  margin-right: 4px;
+}
+
+/* Changed-files card (turn tail) + inline diff view */
+.changes-card {
+  margin: 4px 0 2px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.changes-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.changes-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.changes-card-file {
+  min-width: 0;
+}
+
+.changes-card-file-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.changes-card-file-toggle {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  min-width: 0;
+}
+
+.changes-card-file-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.changes-card-file-op {
+  flex: 0 0 auto;
+}
+
+.changes-card-file-stats {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.changes-card-file-stats .changes-stat-added {
+  color: var(--godex-diff-add-fg, #3fb950);
+}
+
+.changes-card-file-stats .changes-stat-deleted {
+  color: var(--godex-diff-del-fg, #f85149);
+}
+
+.changes-card-total-stats {
+  font-variant-numeric: tabular-nums;
+}
+
+.changes-card-file-diff {
+  margin: 4px 0 4px 22px;
+  min-width: 0;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--godex-border);
+  border-radius: 6px;
+  background: var(--godex-panel);
+  padding: 4px 6px;
+}
+
+.diff-view {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-view-truncated {
+  padding: 2px 6px;
+  color: var(--godex-muted);
+  font-size: 11px;
+}
+
+.diff-view-pre {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+}
+
+.diff-line {
+  padding: 0 6px;
+}
+
+.diff-line-meta {
+  color: var(--godex-muted);
+}
+
+.diff-line-hunk {
+  color: var(--godex-accent);
+  background: color-mix(in oklab, var(--godex-accent) 8%, transparent);
+}
+
+.diff-line-add {
+  background: color-mix(in oklab, #16a34a 14%, transparent);
+  color: #15803d;
+}
+
+.diff-line-del {
+  background: color-mix(in oklab, #dc2626 12%, transparent);
+  color: #b91c1c;
+}
+
+.diff-line-context {
+  color: var(--godex-text);
+}
+
+/* Files panel: rendered markdown preview */
+.files-markdown-render {
+  padding: 12px 16px;
+  min-height: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.files-markdown-render .markdown-body {
+  color: var(--godex-text);
+}
+
+/* Compact tool call row: single line, link-like, expands in place. */
+.tool-call-row {
+  min-width: 0;
+  border-radius: 6px;
+}
+
+.tool-call-row-header {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 3px 6px;
+  margin-left: -6px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  line-height: 1.6;
+}
+
+.tool-call-row-header:hover {
+  background: color-mix(in oklab, var(--godex-accent) 8%, transparent);
+}
+
+.tool-call-row-header:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--godex-accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.tool-call-row-status {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.tool-call-row-status-running {
+  color: var(--godex-accent);
+}
+
+.tool-call-row-status-finished {
+  color: #16a34a;
+}
+
+.tool-call-row-status-failed {
+  color: #dc2626;
+}
+
+.tool-call-row-name {
+  flex: 0 0 auto;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--godex-accent);
+}
+
+.tool-call-row-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--godex-muted);
+  font-size: 0.84rem;
+}
+
+.tool-call-row-chevron {
+  flex: 0 0 auto;
+  color: var(--godex-muted);
+  font-size: 11px;
+}
+
+.tool-call-row-details {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 8px;
+  padding: 10px 12px;
+  border-left: 2px solid color-mix(in oklab, var(--godex-accent) 30%, var(--godex-border));
+  margin-left: 6px;
+}
+
+/* Mobile: avatar takes its own row, content uses full width. */
+@media (max-width: 720px) {
+  .chat-feed-v2-scroll {
+    padding: 8px 8px;
+  }
+
+  .chat-feed-v2-bubble {
+    display: grid !important;
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr) !important;
+    row-gap: 6px;
+  }
+
+  .chat-feed-v2-bubble .ant-bubble-avatar {
+    min-width: 0;
+    justify-self: start;
+  }
+
+  .chat-feed-v2-bubble-user .ant-bubble-avatar {
+    justify-self: end;
+  }
+
+  .chat-feed-v2-bubble .ant-bubble-body,
+  .chat-feed-v2-bubble .ant-bubble-content {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* ant-bubble-list 默认给 start/end 列表项加 15% 的内联 padding（桌面对称留白）。
+     移动端宽度紧张，去掉以免 Agent 消息右侧（start）残留大块空白。 */
+  .chat-feed-v2-bubble.ant-bubble-start {
+    padding-inline-end: 0 !important;
+  }
+
+  .chat-feed-v2-bubble.ant-bubble-end {
+    padding-inline-start: 0 !important;
+  }
+
+  .chat-feed-v2-turn-actions {
+    opacity: 0.68;
+  }
+
+  .tool-call-row-name {
+    max-width: 130px;
+  }
+}
+
+.subagent-card {
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--godex-panel) 94%, var(--godex-bg));
+  padding: 12px 14px;
+}
+
+.subagent-inspector-item {
+  display: grid;
+  gap: 8px;
+}
+
+.subagent-quick-meta {
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-card);
+  padding: 10px 12px;
+}
+
+.subagent-card-error,
+.subagent-card-failed {
+  border-color: color-mix(in oklab, #dc2626 36%, var(--godex-border));
+}
+
+.subagent-card-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.subagent-card-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.subagent-card-toggle {
+  flex: 0 0 auto;
+}
+
+.subagent-card-summary {
+  margin: 8px 0 0 !important;
+  color: var(--godex-text) !important;
+  overflow-wrap: anywhere;
+}
+
+.subagent-card-activity {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.subagent-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.subagent-card-details {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--godex-border);
+  padding-top: 12px;
+}
+
+.subagent-progress-list {
+  display: grid;
+  gap: 10px;
+}
+
+.subagent-progress-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.subagent-progress-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 7px;
+  border: 2px solid var(--godex-accent);
+  border-radius: 999px;
+  background: var(--godex-panel);
+}
+
+.subagent-progress-body {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.subagent-worktree {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.subagent-worktree code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.subagent-review-diff {
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--godex-border);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.chat-composer {
+  border-top: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+  padding: 12px 16px;
+}
+
+.chat-queued-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+  padding: 6px 16px;
+  max-height: 132px;
+  overflow: auto;
+}
+
+.chat-queued-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: var(--godex-card);
+}
+
+.chat-queued-item .ant-btn {
+  color: var(--godex-text-secondary, inherit);
+}
+
+.chat-queued-item .ant-btn-dangerous {
+  color: var(--godex-danger, #cf1322);
+}
+
+.command-palette {
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-card);
+  box-shadow: var(--godex-shadow-sm);
+}
+
+.command-palette-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.command-palette-item:hover,
+.command-palette-item:focus-visible,
+.command-palette-item-active {
+  outline: none;
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.chat-mobile-action {
+  display: none;
+}
+
+.column-resize-handle {
+  position: absolute;
+  top: 0;
+  z-index: 15;
+  width: 9px;
+  height: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  padding: 0;
+}
+
+.column-resize-handle-right {
+  right: -5px;
+}
+
+.column-resize-handle-left {
+  left: -5px;
+}
+
+.column-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: transparent;
+  content: "";
+}
+
+.column-resize-handle:hover::after,
+.column-resize-handle:focus-visible::after,
+.is-resizing-column .column-resize-handle::after {
+  background: var(--godex-accent);
+}
+
+.is-resizing-column {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.panel-scroll {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.notes-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.notes-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.notes-summary-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.notes-summary-toggle-label {
+  font-size: 12px;
+}
+
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.notes-list-item {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.notes-list-item:hover,
+.notes-list-item:focus-visible,
+.notes-list-item-active {
+  border-color: var(--godex-accent);
+  outline: none;
+}
+
+.notes-list-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.notes-list-item-icon {
+  flex: none;
+  color: var(--godex-muted);
+}
+
+.notes-list-item-time {
+  flex: none;
+  font-size: 12px;
+}
+
+.notes-list-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.notes-list-item-tags .ant-tag {
+  margin-inline-end: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.notes-list-item-summary {
+  font-size: 12px;
+}
+
+.notes-meta {
+  display: flex;
+  align-items: flex-start;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+}
+
+.notes-meta-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.notes-meta-fields {
+  flex: 1;
+  min-width: 0;
+}
+
+.notes-meta-fields .ant-form-item {
+  margin-bottom: 8px;
+}
+
+.notes-meta-time {
+  font-size: 12px;
+}
+
+.notes-content-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.notes-content-toolbar .ant-segmented {
+  font-size: 12px;
+}
+
+.notes-preview {
+  min-height: 360px;
+  padding: 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+}
+
+.nowrap-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.markdown-body {
+  overflow-wrap: anywhere;
+}
+
+.whitespace-pre-wrap {
+  white-space: pre-wrap;
+}
+
+.break-words {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table,
+.markdown-body hr {
+  margin: 0 0 1rem;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5rem;
+}
+
+.markdown-body a {
+  color: var(--godex-accent);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.markdown-body code {
+  border-radius: 6px;
+  background: var(--godex-panel-muted);
+  padding: 0.12rem 0.4rem;
+  font-size: 0.92em;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  padding: 0.9rem 1rem;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+}

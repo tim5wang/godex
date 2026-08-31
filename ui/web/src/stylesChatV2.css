@@ -1,0 +1,757 @@
+
+/* ---------------------------------------------------------------------------
+ * Chat V2 layout — three-column (sessions / chat / dock) with collapsible
+ * left and right rails. Independent from the legacy .chat-page grid.
+ * ------------------------------------------------------------------------- */
+
+.chat-v2-layout {
+  display: grid;
+  grid-template-columns: var(--chat-v2-left-width, 264px) minmax(0, 1fr) var(--chat-v2-right-width, 420px);
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-v2-left {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+}
+
+.chat-v2-left[data-collapsed="true"] {
+  border-right: 0;
+  pointer-events: none;
+}
+
+.chat-v2-left[data-collapsed="true"] > * {
+  display: none;
+}
+
+.chat-v2-left-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+}
+
+.chat-v2-left-resize:hover {
+  background: var(--godex-accent, #0f766e);
+  opacity: 0.3;
+}
+
+.chat-v2-center-wrap {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--godex-bg);
+}
+
+.chat-v2-center-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-v2-right {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+}
+
+.chat-v2-right[data-collapsed="true"] {
+  border-left: 0;
+  /* When collapsed, the grid column is 48px via inline style. Children are hidden. */
+}
+
+.chat-v2-right[data-collapsed="true"] > * {
+  display: none;
+}
+
+.chat-v2-right-resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+}
+
+.chat-v2-right-resize:hover {
+  background: var(--godex-accent, #0f766e);
+  opacity: 0.3;
+}
+
+/* Dock rail (right side) */
+.chat-v2-dock {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-v2-dock-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+  gap: 4px;
+  border-right: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+  flex-shrink: 0;
+}
+
+.chat-v2-dock-tab {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-v2-dock-tab-active {
+  background: var(--godex-accent-soft, rgba(15, 118, 110, 0.12));
+  color: var(--godex-accent, #0f766e);
+}
+
+.chat-v2-dock-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--godex-error, #b42318);
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.chat-v2-dock-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-v2-dock-pane-header {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--godex-text-secondary, #666);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--godex-border);
+}
+
+.chat-v2-dock-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Dock tab panes stay mounted (keep-alive); only the active one is visible.
+   The wrapper provides the height chain for height:100% panels (xterm,
+   Files, Preview). The active pane is a flex column so terminal's tab strip
+   (flex-shrink:0) plus panes (flex:1) fill the available height; single-child
+   panels (files/tasks/preview/status) stretch via :only-child. */
+.chat-v2-dock-tab-pane {
+  display: none;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-v2-dock-tab-pane[data-active="true"] {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Single-panel tabs (files/tasks/preview/status) fill the pane height. */
+.chat-v2-dock-tab-pane[data-active="true"] > :only-child {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Terminal needs explicit height chain; override overflow since xterm.js
+   handles its own scrollback. Keyed off the active tab (not presence of
+   .terminal-panel) because keep-alive keeps every visited panel mounted. */
+.chat-v2-dock-pane-body[data-active-tab="terminal"] {
+  overflow: hidden;
+}
+
+/* Terminal dock multi-open tabs: a horizontal tab strip above the panes.
+   Panes stay mounted (keep-alive); only the active one is visible. */
+.chat-v2-terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 30px;
+}
+
+.chat-v2-terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, inherit);
+  cursor: pointer;
+}
+
+.chat-v2-terminal-tab-active {
+  background: var(--godex-accent, rgba(120, 120, 255, 0.15));
+  color: inherit;
+}
+
+.chat-v2-terminal-tab-close {
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.chat-v2-terminal-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-secondary, inherit);
+}
+
+.chat-v2-terminal-panes {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.chat-v2-terminal-pane {
+  display: none;
+  position: absolute;
+  inset: 0;
+}
+
+.chat-v2-terminal-pane[data-active="true"] {
+  display: block;
+}
+
+.chat-v2-dock-collapsed .chat-v2-dock-strip {
+  border-right: 0;
+}
+
+.godex-shell-no-header .chat-v2-layout {
+  height: auto;
+  flex: 1 1 auto;
+}
+
+/* Context popover: clean two-column label-value layout */
+.ctx-popover {
+  min-width: 240px;
+  max-width: 300px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ctx-popover-group {
+  padding: 4px 0;
+}
+
+.ctx-popover-group + .ctx-popover-group {
+  border-top: 1px solid var(--godex-border, rgba(0, 0, 0, 0.08));
+  margin-top: 2px;
+  padding-top: 6px;
+}
+
+.ctx-popover-group-title {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--godex-text-secondary, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 4px;
+  padding: 0 2px;
+}
+
+.ctx-popover-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 1px 2px;
+}
+
+.ctx-popover-row-total {
+  font-weight: 600;
+  border-top: 1px solid var(--godex-border, rgba(0, 0, 0, 0.06));
+  margin-top: 2px;
+  padding-top: 4px;
+}
+
+.ctx-popover-row-sub .ctx-popover-label {
+  padding-left: 10px;
+  opacity: 0.85;
+}
+
+.ctx-popover-hint {
+  color: var(--godex-text-secondary, #888);
+  font-size: 11px;
+}
+
+.ctx-popover-label {
+  color: var(--godex-text-secondary, #888);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ctx-popover-value {
+  color: var(--godex-text, #333);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* V2 topbar: compact bar above the feed with collapse buttons + tab switcher */
+.chat-v2-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+}
+
+.chat-v2-topbar-title {
+  font-size: 13px;
+  cursor: pointer;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Remote mode indicator + exit in topbar (mobile-optimised:
+ * label hidden below 900px, only the exit icon remains). */
+.chat-v2-topbar-remote {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-right: 1px solid var(--godex-border);
+}
+
+.chat-v2-topbar-remote-label {
+  font-size: 11px;
+  color: var(--godex-accent, #0f766e);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .chat-v2-topbar-remote-label {
+    display: none;
+  }
+}
+
+.chat-v2-topbar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chat-v2-topbar-tab {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+.chat-v2-topbar-tab-active {
+  background: var(--godex-accent-soft, rgba(15, 118, 110, 0.12));
+  color: var(--godex-accent, #0f766e);
+}
+
+.chat-v2-topbar-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 6px;
+  background: var(--godex-error, #b42318);
+  color: #fff;
+  font-size: 8px;
+  line-height: 12px;
+  text-align: center;
+}
+
+/* Collapsed left rail icon strip */
+.chat-v2-rail-collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+  gap: 4px;
+  width: 48px;
+  height: 100%;
+  background: var(--godex-panel);
+}
+
+/* 36×36 visual, transparent padding extends touch area to 48×48 */
+.chat-v2-rail-collapsed .ant-btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 6px;
+}
+
+/* Sessions rail */
+.chat-v2-rail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-v2-rail-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+}
+
+.chat-v2-new-chat {
+  flex: 1;
+}
+
+.chat-v2-search {
+  margin: 0 12px 8px;
+}
+
+.chat-v2-session-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px;
+}
+
+.chat-v2-session-group {
+  margin-bottom: 8px;
+}
+
+.chat-v2-workspace-group {
+  margin-bottom: 4px;
+}
+
+.chat-v2-workspace-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--godex-muted, #8b949e);
+  cursor: pointer;
+  border-radius: 4px;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.chat-v2-workspace-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--godex-muted, #8b949e);
+}
+
+.chat-v2-workspace-header:hover {
+  background: var(--godex-panel-strong);
+}
+
+.chat-v2-workspace-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* New-chat workspace picker: paths are shortened in JS (keep trailing
+   segments, cut the head); this class only provides a safety ellipsis for
+   very narrow rows.  The full path is available via the option title. */
+.chat-v2-dir-option {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-v2-workspace-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--godex-muted, #8b949e);
+  background: var(--godex-panel-strong);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+.chat-v2-workspace-body {
+  padding-left: 4px;
+}
+
+.chat-v2-session-group-label {
+  display: block;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--godex-text-secondary, #666);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chat-v2-session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.chat-v2-session-item:hover {
+  background: var(--godex-hover, rgba(0, 0, 0, 0.04));
+}
+
+.chat-v2-session-item-active {
+  background: var(--godex-accent-soft, rgba(15, 118, 110, 0.12));
+}
+
+.chat-v2-session-icon {
+  flex-shrink: 0;
+  color: var(--godex-text-secondary, #666);
+}
+
+.chat-v2-session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.chat-v2-session-delete {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.chat-v2-session-item:hover .chat-v2-session-delete,
+.chat-v2-session-item-active .chat-v2-session-delete {
+  opacity: 1;
+}
+
+/* Responsive: collapse v2 grid on narrow screens; right panel overlays */
+/* Narrow viewport: single-col + right overlay */
+@media (max-width: 900px) {
+  .chat-v2-topbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 80px;
+    padding: 0;
+  }
+
+  .chat-v2-topbar-session,
+  .chat-v2-topbar-actions {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    padding: 0 8px;
+  }
+
+  .chat-v2-topbar-session {
+    min-height: 40px;
+  }
+
+  .chat-v2-topbar-actions {
+    min-height: 40px;
+    justify-content: flex-end;
+    border-top: 1px solid var(--godex-border);
+  }
+
+  .chat-v2-topbar-title {
+    max-width: calc(100vw - 88px) !important;
+  }
+
+  .chat-v2-topbar-tabs {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(40px, 1fr));
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* Keep every dock action, including the rightmost Status button, fully
+     visible instead of clipping the action row on narrow screens. */
+  .chat-v2-topbar-tab.ant-btn {
+    width: 100%;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .chat-v2-topbar-actions > .ant-space-item:has(.chat-v2-topbar-tabs) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .chat-v2-topbar-actions > .ant-space-item:last-child {
+    flex: 0 0 40px;
+  }
+
+  .chat-v2-topbar-remote {
+    flex: 0 0 auto;
+  }
+
+  .chat-v2-topbar-remote-label {
+    display: none;
+  }
+
+  .chat-v2-layout {
+    grid-template-columns: var(--chat-v2-left-width, 264px) minmax(0, 1fr);
+  }
+
+  .godex-header-back-to-chat.ant-btn {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    margin-left: auto;
+    padding-inline: 10px;
+  }
+
+  .godex-header-dock-name {
+    max-width: 72px;
+    overflow: hidden;
+    color: var(--godex-text-secondary, #666);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-v2-right {
+    position: fixed;
+    inset: var(--godex-header-height) 0 0;
+    z-index: 100;
+    display: none;
+    border-left: none;
+  }
+
+  .chat-v2-right[data-collapsed="false"] {
+    display: flex;
+  }
+}
+
+/* Business Agents console: two-pane (list + detail) on wide screens, stacked
+   on narrow screens so the create button and detail pane don't crowd together. */
+.business-agents-layout {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  align-items: flex-start;
+}
+.business-agents-layout > .business-agents-list {
+  flex-shrink: 0;
+}
+.business-agents-layout > div {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .business-agents-layout {
+    flex-direction: column;
+    padding: 8px;
+  }
+  .business-agents-layout > .business-agents-list {
+    width: 100% !important;
+  }
+}
+
+/* VoiceBar 录音脉冲动效：录音中按钮外圈红色脉冲环 */
+.voice-btn-recording {
+  position: relative;
+}
+.voice-btn-recording::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid #ff4d4f;
+  animation: voice-pulse 1.2s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes voice-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+  70% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+/* VoiceBar 分段识别回显文本 */
+.voice-partial {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #fa8c16;
+  vertical-align: middle;
+}

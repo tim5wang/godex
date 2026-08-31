@@ -1,0 +1,239 @@
+
+/* Diagram blocks (mermaid / plantuml) inside markdown */
+.diagram-block {
+  margin: 0 0 1rem;
+  max-width: 100%;
+}
+
+.diagram-block svg,
+.diagram-block img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.diagram-block-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  color: var(--godex-muted);
+  font-size: 0.86rem;
+}
+
+.diagram-block-error {
+  display: grid;
+  gap: 10px;
+}
+
+.diagram-block-code {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.diagram-block-actions {
+  margin-top: 6px;
+  text-align: right;
+}
+
+.diagram-block-actions a {
+  color: var(--godex-accent);
+  font-size: 0.82rem;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid var(--godex-border);
+  margin-left: 0;
+  padding-left: 1rem;
+  color: var(--godex-muted);
+}
+
+.markdown-body table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--godex-border);
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+@media (max-width: 1180px) {
+  .chat-page {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-sessions,
+  .chat-inspector {
+    display: none;
+  }
+
+  .chat-page .column-resize-handle {
+    display: none;
+  }
+
+  .task-center-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-merge-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-mobile-action {
+    display: inline-flex;
+  }
+
+  .skill-analytics-layout,
+  .notes-layout,
+  .memory-priority-grid,
+  .memory-audit-diff {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memory-flow-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memory-flow-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+}
+
+@media (max-width: 720px) {
+  .godex-shell {
+    --godex-header-height: 40px;
+  }
+
+  .godex-header {
+    padding: 0 10px;
+  }
+
+  .godex-header .muted {
+    display: none;
+  }
+
+  .page-pad {
+    padding: 14px;
+  }
+
+  .page-title-row {
+    flex-direction: column;
+  }
+
+  .llm-strategy-row {
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+  }
+
+  .llm-model-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .skill-analytics-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memory-flow-node {
+    align-items: flex-start;
+  }
+
+  .chat-feed {
+    padding: 14px;
+  }
+
+  .chat-feed-bubble {
+    display: grid !important;
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 8px;
+  }
+
+  .chat-feed-bubble .ant-bubble-avatar {
+    min-width: 0;
+    justify-self: start;
+  }
+
+  .chat-feed-bubble-user .ant-bubble-avatar {
+    justify-self: end;
+  }
+
+  .chat-feed-bubble .ant-bubble-body,
+  .chat-feed-bubble .ant-bubble-content {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .chat-feed-bubble-tool .ant-bubble-body,
+  .chat-feed-bubble-subagent .ant-bubble-body {
+    width: 100%;
+  }
+
+  .message-copy-frame {
+    padding-right: 0;
+  }
+
+  .message-action-buttons {
+    opacity: 0.68;
+  }
+
+  .tool-card {
+    padding: 10px 12px;
+  }
+
+  .subagent-card {
+    padding: 10px 12px;
+  }
+
+  .tool-card-header {
+    align-items: flex-start;
+  }
+
+  .subagent-card-header {
+    align-items: flex-start;
+  }
+
+  .tool-card-name {
+    max-width: 160px;
+  }
+
+  .chat-session-card .ant-card-body {
+    padding: 8px 10px !important;
+  }
+
+  .chat-session-header {
+    gap: 8px;
+  }
+
+  .chat-session-actions {
+    gap: 6px !important;
+  }
+
+  .chat-session-actions .ant-tag {
+    margin-inline-end: 0;
+  }
+}

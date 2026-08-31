@@ -1,0 +1,811 @@
+
+/* ── Memory board (3-column lifecycle kanban) ─────────────────── */
+
+.memory-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+
+.memory-column {
+  min-width: 0;
+}
+
+.memory-column .ant-card-body {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  min-height: 420px;
+}
+
+.memory-column-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.memory-column-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  color: var(--godex-accent);
+  font-size: 15px;
+}
+
+.memory-column-candidate .memory-column-icon {
+  color: #2563eb;
+}
+
+.memory-column-durable .memory-column-icon {
+  color: var(--godex-accent);
+}
+
+.memory-column-suppressed .memory-column-icon {
+  color: var(--godex-warning);
+}
+
+.memory-column-subtitle {
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memory-column-count {
+  margin-left: auto;
+}
+
+.memory-column-batch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--godex-border);
+  padding-bottom: 8px;
+}
+
+.memory-column-select-bar {
+  display: flex;
+  align-items: center;
+}
+
+.memory-column-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 640px;
+  padding-right: 2px;
+}
+
+.memory-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  padding: 10px;
+}
+
+.memory-card-checked {
+  border-color: var(--godex-accent);
+  background: color-mix(in oklab, var(--godex-accent) 8%, var(--godex-panel-muted));
+}
+
+.memory-card-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.memory-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.memory-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.memory-card-summary {
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memory-card-meta {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+}
+
+.memory-card-date {
+  font-size: 11px;
+}
+
+.memory-card-core-badge {
+  margin: 0;
+}
+
+.memory-card-stale-badge {
+  margin: 0;
+}
+
+.memory-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-left: 28px;
+}
+
+.memory-source-badge {
+  font-size: 11px;
+  margin: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-reference-badge {
+  font-size: 11px;
+  margin: 0;
+}
+
+.memory-secondary-panel {
+  margin-bottom: 16px;
+}
+
+.memory-secondary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.memory-audit-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.memory-audit-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Responsive: board stacks on narrow screens */
+@media (max-width: 1280px) {
+  .memory-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .memory-secondary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+.chat-page {
+  display: grid;
+  grid-template-columns: var(--chat-sessions-width, 320px) minmax(0, 1fr) var(--chat-inspector-width, 380px);
+  height: calc(100dvh - 56px); /* desktop header height; mobile overrides below */
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-sessions,
+.chat-inspector {
+  min-height: 0;
+  overflow: hidden;
+  border-color: var(--godex-border);
+  background: var(--godex-panel);
+}
+
+.chat-sessions {
+  position: relative;
+  border-right: 1px solid var(--godex-border);
+}
+
+.chat-inspector {
+  position: relative;
+  border-left: 1px solid var(--godex-border);
+}
+
+.chat-inspector[data-collapsed="true"] {
+  border-left: 0;
+  pointer-events: none;
+}
+
+.chat-inspector[data-collapsed="true"] > * {
+  display: none;
+}
+
+.chat-main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--godex-bg);
+}
+
+.center-grid-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.center-grid-bookmarks {
+  display: flex;
+  flex: 0 0 34px;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--godex-border);
+  padding: 4px 8px;
+  background: var(--godex-panel);
+  overflow: hidden;
+}
+
+.center-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* prevent antd Splitter.Panel from collapsing below 5px (antd autoPtgSizes
+   doesn't clamp defined sizes to min, and the panel div lacks min-* CSS) */
+.center-grid .ant-splitter-panel {
+  min-width: 5px;
+  min-height: 5px;
+}
+
+.center-grid-action-feedback {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 20;
+  max-width: min(420px, calc(100% - 32px));
+  transform: translateX(-50%);
+  border: 1px solid var(--godex-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--godex-panel);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
+  color: var(--godex-text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.center-grid-panel {
+  display: flex;
+  min-width: 5px;
+  min-height: 5px;
+  height: 100%;
+  flex-direction: column;
+  overflow: visible;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  background: var(--godex-panel);
+}
+
+.center-grid-panel-empty {
+  background: var(--godex-bg);
+}
+
+.center-grid-panel-dragging {
+  opacity: 0.68;
+}
+
+.center-grid-panel-drop-target {
+  outline-color: var(--godex-accent);
+  background: color-mix(in srgb, var(--godex-accent) 8%, var(--godex-panel));
+}
+
+.center-grid-panel-titlebar {
+  display: flex;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  border-bottom: 1px solid var(--godex-border);
+  padding: 0 8px 0 10px;
+  background: var(--godex-panel-muted);
+  cursor: grab;
+  user-select: none;
+}
+
+.center-grid-panel-titlebar:active {
+  cursor: grabbing;
+}
+
+.center-grid-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--godex-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.center-grid-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
+  /* xterm.js positions its hidden textarea absolutely inside the
+     viewport; overflow:hidden/clip on a parent can clip it and
+     prevent the browser from dispatching keyboard events to it. */
+}
+
+.center-grid-cell-chat,
+.center-grid-cell-files,
+.center-grid-cell-terminal,
+.center-grid-cell-terminal-default,
+.center-grid-cell-tasks {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
+.chat-session-card {
+  border-radius: 0;
+  border-top: 0;
+  border-right: 0;
+  border-left: 0;
+}
+
+.task-center-band {
+  border-bottom: 1px solid var(--godex-border);
+  background: var(--godex-panel);
+}
+
+.task-center-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.task-center-card .ant-card-head {
+  min-height: 40px;
+  padding: 0 16px;
+}
+
+.task-center-card .ant-card-body {
+  padding: 10px 16px 12px;
+}
+
+.task-center-band-collapsed .task-center-card .ant-card-body {
+  padding-top: 8px;
+}
+
+.task-center-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.task-center-section {
+  min-width: 0;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  padding: 10px;
+}
+
+.task-center-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.task-outcome-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel);
+  padding: 8px;
+}
+
+.task-outcome-row + .task-outcome-row {
+  margin-top: 8px;
+}
+
+.task-outcome-row-compact {
+  padding: 7px;
+}
+
+.task-outcome-main {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.task-outcome-actions {
+  min-width: max-content;
+}
+
+.review-merge-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+.review-merge-queue,
+.review-merge-detail {
+  min-width: 0;
+}
+
+.review-merge-filter {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.review-merge-queue .ant-list-item {
+  cursor: pointer;
+  border-radius: 6px;
+  padding-inline: 8px;
+}
+
+.review-merge-queue-item-selected {
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.review-merge-title {
+  max-width: 220px;
+}
+
+.review-merge-row-detail {
+  width: 100%;
+  min-width: 0;
+}
+
+.review-merge-file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.review-merge-file-jump {
+  height: auto;
+  padding: 0;
+}
+
+.review-merge-safety-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-merge-trail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-merge-diff-toolbar {
+  display: flex;
+  justify-content: space-between;
+}
+
+.review-merge-diff {
+  max-height: 52vh;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 6px;
+  background: var(--godex-panel-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-merge-diff pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-merge-diff-section + .review-merge-diff-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--godex-border);
+}
+
+.chat-session-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-session-summary {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: copy;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.chat-session-summary:focus-visible {
+  outline: 2px solid var(--godex-accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.chat-session-title,
+.chat-session-subtitle {
+  max-width: 100%;
+}
+
+.timeline-summary {
+  margin-bottom: 0 !important;
+}
+
+.chat-context-status {
+  max-width: min(100%, 360px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-session-actions {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.chat-feed {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.chat-feed-inner {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.chat-note-context {
+  border-top: 1px solid var(--godex-border);
+  padding: 8px 16px;
+}
+
+.chat-feed-bubble-tool {
+  align-self: flex-start !important;
+  justify-content: flex-start;
+}
+
+.chat-feed-bubble-subagent {
+  align-self: flex-start !important;
+  justify-content: flex-start;
+}
+
+.chat-feed-bubble-tool .ant-bubble-body {
+  width: min(760px, 100%);
+  max-width: 100%;
+}
+
+.chat-feed-bubble-subagent .ant-bubble-body {
+  width: min(820px, 100%);
+  max-width: 100%;
+}
+
+.chat-feed-bubble-tool .ant-bubble-content {
+  width: 100%;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.chat-feed-bubble-subagent .ant-bubble-content {
+  width: 100%;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.message-copy-frame {
+  position: relative;
+  min-width: 0;
+  padding-right: 58px;
+}
+
+.message-action-buttons {
+  position: absolute;
+  right: -4px;
+  bottom: -6px;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.message-action-buttons .ant-btn {
+  width: 26px !important;
+  height: 26px !important;
+  border: 1px solid var(--godex-border) !important;
+  background: color-mix(in oklab, var(--godex-panel) 94%, transparent) !important;
+  color: var(--godex-muted) !important;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.chat-feed-bubble:hover .message-action-buttons,
+.chat-feed-bubble:focus-within .message-action-buttons,
+.message-action-buttons:focus-within {
+  opacity: 1;
+}
+
+.message-action-buttons .ant-btn:hover,
+.message-action-buttons .ant-btn:focus-visible {
+  color: var(--godex-accent) !important;
+}
+
+.chat-feed-bubble-user .message-action-buttons .ant-btn {
+  background: rgba(255, 255, 255, 0.92) !important;
+}
+
+.tool-card {
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--godex-panel) 96%, var(--godex-bg));
+  padding: 12px 14px;
+}
+
+.tool-card-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tool-card-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tool-card-name {
+  max-width: 220px;
+}
+
+.tool-card-toggle {
+  flex: 0 0 auto;
+}
+
+.tool-card-summary {
+  margin: 8px 0 0 !important;
+  color: var(--godex-muted) !important;
+  font-size: 0.94rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.tool-card-details {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--godex-border);
+  padding-top: 12px;
+}
+
+.tool-card-detail-block {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.tool-card-detail-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+/* ToolDetails: label row with action buttons on the right */
+.tool-card-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-card-code {
+  min-width: 0;
+}
+
+.tool-card-pre-plain {
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.tool-card-pre-error {
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--godex-error, #b42318) 40%, var(--godex-border));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--godex-error, #b42318) 8%, var(--godex-panel-muted));
+  color: var(--godex-error, #b42318);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.tool-card-pre,
+.tool-card-output {
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--godex-border);
+  border-radius: 8px;
+  background: var(--godex-panel-muted);
+}
+
+.tool-card-pre {
+  margin: 0;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.tool-card-output {
+  padding: 10px 12px;
+}

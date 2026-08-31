@@ -16,6 +16,8 @@ HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 �
 
 Web 源码新增 1000 行预算门禁；3 个既有超限文件使用精确历史上限作为迁移例外，不能继续增长，降到阈值后测试会要求删除例外。Memory 展示组件已迁入独立文件，`MemoryPage.tsx` 从 1,093 行降到 978 行并删除例外；Skills 的工具健康分析与 package/quality 表格也已拆出，`SkillsPage.tsx` 从 1,439 行降到 868 行并删除例外；Settings 的配置字段、配置模型与状态面板已按职责拆分，`SettingsPage.tsx` 从 2,280 行降到 507 行并删除例外；共享 `types.ts` 已按 channels、packages、agent、product 四个领域拆分为兼容 barrel，从 1,877 行降到 759 行；共享 `api.ts` 已拆出 client、agent/session 与 product endpoint 模块，从 1,789 行降到 870 行；共享 `messages.ts` 已按中英文各自的 core/product 连续区段拆分为 4 个消息模块，自身从 2,871 行降到 16 行并删除例外。该门禁阻止债务扩大，不代替后续 feature vertical slice 拆分。
 
+前端 `typecheck` 原先对只有 project reference 的 solution `tsconfig.json` 执行 `tsc --noEmit`，实际没有检查 app source，因而漏过 Skills 拆分时遗失的 `Metric` 引用。脚本现改为 `tsc -b`，并让 `SkillsPage` 复用已迁移到 `PackagePanels` 的同一组件；真实 project-reference 类型检查和生产构建均已通过。
+
 配置映射新增 schema/setter/stored/effective 契约测试，并修复 8 个 schema 路径的不完整映射：`security.screener.*` 5 项与 `tools.execution.scope_write` 原先无法通过 Web 配置写入，`heartbeat.default_watchdog_script` 与 `control.credential` 原先缺少 stored/effective view；credential 仍按 secret policy 掩码。大 switch 的表驱动拆分仍待后续。
 
 ## 1. 工具选择与成本控制
@@ -231,7 +233,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 
 ## 7. 验证与限制
 
-- 通过：`go vet ./...`、`make docs-check`、shell syntax check、`git diff --check`、`pnpm typecheck`。
+- 通过：`go vet ./...`、`make docs-check`、shell syntax check、`git diff --check`、基于 `tsc -b` 的 `pnpm typecheck`。
 - 通过：`go test ./internal/app ./internal/core/mcp`，以及 LongTask graph 契约定向测试；新增 root help 和 MCP 注释/文档收口没有引入回归。
 - 通过：templates、pluginrt、TaskBoard plugin、usage、httpapi、backend TaskBoard/reconcile、agent template/dynamic prompt/package runtime、conversation prompt-cache/retention 定向测试。
 - Web 测试原有 1 个失败已定位为 fixture 漏写 `writeScope` 并修正；最终重跑 32 个 test files、325 个 tests 全部通过。

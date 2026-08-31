@@ -143,12 +143,12 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 |---|---|---|
 | `cmd/godex` | 🟡 | `main.go` 949 行且包含 relay/CDP adapter；全局参数解析测试较好，入口仍应只做装配。 |
 | `internal/acp/server` | 🟡 | handler/agent 各 600–769 行，协议转换复杂；`numFromAny`、随机 ID 与其他入口重复。 |
-| `internal/agent` | 🔴 | 57 个源码文件仍承载 composition、context、tool registry、workflow/longtask/subagent；默认 bundle 契约导致 10 个测试失败。 |
+| `internal/agent` | 🔴 | 57 个源码文件仍承载 composition、context、tool registry、workflow/longtask/subagent；默认 bundle 契约导致 9 个测试失败。 |
 | `internal/app` | 🟡 | CLI lifecycle 合理，但 `run.go` 1,479 行；root help 是较好的代码内事实源，应继续由 metadata 生成。 |
 | `core/auth`, `idempotency`, `lease`, `modelcontext`, `notes`, `persistence`, `scope`, `templates` | 🟢 | 小而内聚，测试覆盖基本匹配职责；保持窄接口。 |
 | `core/background`, `claudeimport`, `insights`, `llm`, `mcp`, `providers`, `security` | 🟢/🟡 | 结构可接受；`instructions` 无直接测试，`claudeimport` 单文件 666 行但职责仍单一。 |
 | `core/compress`, `conversation` | 🟡 | runner/client/compaction 多个 1K 行文件，协议转换与恢复状态机复杂；应按 state machine/transport 分段。 |
-| `core/config` | 🔴 | resolve 1,224 行、values 1,011 行，schema/get/set/secret policy 平行维护。 |
+| `core/config` | 🔴 | resolve 1,224 行、values 1,039 行；schema/value 契约门禁与 8 个映射缺口已修复，但大 switch 和 secret policy 仍需继续收敛。 |
 | `core/media` | 🟡 | processor 955 行同时处理格式、转录与 provider 路由，适合拆 pipeline stage。 |
 | `core/memory` | 🟡 | manager 1,245 行但已拆 sidecar/extract/layers；下一步应收窄 manager facade，而非再加新入口。 |
 | `core/packages`, `core/skill` | 🟡 | package 1,282 行、skill 多个 600–1,043 行；manifest/安装/quality/runtime activation 边界仍交叠。 |
@@ -162,14 +162,14 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 | `pluginrt`, `plugins/taskboard`, `wasmrt` | 🟡 | 插件 ownership/lifecycle 测试较强；P-A/P-C/P-D、TaskBoard 协作 baseline 和手动 reconcile P0 已实现，但 ledger/page 仍大，通用 UI slot/自动 reconcile 仍缺。 |
 | `runtime/channels`, `feishu`, `weixin` | 🟡 | adapter 边界合理；channels.go 1,695 行，reply planning/identity/routing 应进一步分离。 |
 | `runtime/cron`, `heartbeat`, `webui` | 🟢/🟡 | cron/heartbeat 服务各约 800 行但测试充分；webui 很薄。 |
-| `runtime/httpapi` | 🔴 | 16 源文件/18 测试文件，但主注册函数仍 1,883 行；协议 gateway 和 UI API 同包导致依赖面 29 个 internal package。 |
+| `runtime/httpapi` | 🟡 | 30 源文件/19 测试文件；138 条路由已迁入 19 个 registrar，主注册函数约 85 行并有 ownership gate。协议 gateway 和 UI API 仍在同包，依赖面仍宽。 |
 | `sandbox` | 🟢 | 接口边界明确，后续 hardening 可在实现内演进。 |
-| `services/backend` | 🔴 | 已从旧 7K 单文件拆成 31 个文件，但仍是 30 个 internal imports 的高耦合 service；当前有 1 个 fixture 失败。 |
+| `services/backend` | 🟡/🔴 | 已从旧 7K 单文件拆成 31 个文件，测试已恢复通过；仍有 30 个 internal imports，是高耦合 facade。 |
 | `services/commands` | 🟡 | 2,150 行单文件；metadata 驱动 help 是正确方向，但执行分支尚未按命令域拆分。 |
 | `services/evalharness`, `historysearch`, `localbash`, `nodeobs`, `noderegistry`, `sessionadmin`, `sessionrepair`, `usage`, `webpush` | 🟢/🟡 | 职责基本清晰；usage store 1,046 行、history sidecar 725 行需关注增长。 |
 | `services/relay` | 🟢/🟡 | 14 源文件、20 测试文件，拆分和测试最好；协议/forward/hub 边界清楚。 |
 | `sessiongraph`, `sessionstore`, `workerruntime` | 🟢 | 接口小、测试存在，是 2.0 抽象的可复用基础。 |
-| `toolruntime` | 🔴 | permissions 1,889 行，当前 4 个 catalog/tool_exchange 测试失败；需要先固定 activation policy。 |
+| `toolruntime` | 🔴 | permissions 1,889 行；默认 activation policy 未冻结，关联的 `internal/tools` catalog/tool_exchange 仍有 4 个测试失败。 |
 | `tools`, `tools/teamtools` | 🟡 | 47 个实现文件，具体工具拆分较好；toolruntime_aliases 有高 fan-in，别继续把所有兼容 alias 堆在单文件。 |
 | `tui/mintui` | 🟡 | session 2,289 行、popup_longtask 1,157 行；UI state/update/render 仍集中。 |
 | `uiassets`, `version` | ⚪ | 嵌入资源与版本小模块，无实质架构问题。 |
@@ -222,7 +222,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 
 ## 6. 建议执行顺序
 
-1. 冻结默认 tool activation policy，修复对应 14 个 Go contract tests（其余 1 个 backend fixture 单独处理）。
+1. 冻结默认 tool activation policy，修复当前剩余的 13 个 Go contract tests（`internal/agent` 9、`internal/tools` 4）；backend fixture 已修复。
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
 3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；配置 schema/value 契约门禁与 8 个映射缺口已修复，`setStoredValue` 表驱动收敛仍待后续。
 4. architecture import test 与 Web 文件行数 budget 已完成；Go 函数复杂度 budget 与既有违规迁移仍待做。

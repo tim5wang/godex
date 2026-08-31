@@ -19,7 +19,6 @@ const frontendDefaultLineLimit = 1000
 // exception to be removed.
 var frontendLineExceptions = map[string]int{
 	"ui/web/src/features/chat/ChatPage.tsx":           1919,
-	"ui/web/src/features/memory/MemoryPage.tsx":       1093,
 	"ui/web/src/features/settings/SettingsPage.tsx":   2280,
 	"ui/web/src/features/skills/SkillsPage.tsx":       1439,
 	"ui/web/src/features/taskboard/TaskBoardPage.tsx": 1457,

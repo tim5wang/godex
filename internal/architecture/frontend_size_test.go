@@ -20,7 +20,6 @@ const frontendDefaultLineLimit = 1000
 var frontendLineExceptions = map[string]int{
 	"ui/web/src/features/chat/ChatPage.tsx":           1919,
 	"ui/web/src/features/taskboard/TaskBoardPage.tsx": 1457,
-	"ui/web/src/i18n/messages.ts":                     2871,
 	"ui/web/src/styles.css":                           3251,
 }
 

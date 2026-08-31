@@ -14,7 +14,7 @@
 
 HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 个按资源域划分的 registrar；`NewHandlerWithRuntime` 从约 1,883 行降到约 85 行，图复杂度从 266 降到 5、cognitive 从 293 降到 7。新增静态 route ownership 测试，禁止生产路由字面量被多个文件重复注册。registrar 拆分已经完成，构造参数进一步收敛为窄 `Dependencies` 可作为后续独立改进。
 
-Web 源码新增 1000 行预算门禁；3 个既有超限文件使用精确历史上限作为迁移例外，不能继续增长，降到阈值后测试会要求删除例外。Memory 展示组件已迁入独立文件，`MemoryPage.tsx` 从 1,093 行降到 978 行并删除例外；Skills 的工具健康分析与 package/quality 表格也已拆出，`SkillsPage.tsx` 从 1,439 行降到 868 行并删除例外；Settings 的配置字段、配置模型与状态面板已按职责拆分，`SettingsPage.tsx` 从 2,280 行降到 507 行并删除例外；共享 `types.ts` 已按 channels、packages、agent、product 四个领域拆分为兼容 barrel，从 1,877 行降到 759 行；共享 `api.ts` 已拆出 client、agent/session 与 product endpoint 模块，从 1,789 行降到 870 行；共享 `messages.ts` 已按中英文各自的 core/product 连续区段拆分为 4 个消息模块，自身从 2,871 行降到 16 行并删除例外。该门禁阻止债务扩大，不代替后续 feature vertical slice 拆分。
+Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历史上限作为迁移例外，不能继续增长，降到阈值后测试会要求删除例外。Memory 展示组件已迁入独立文件，`MemoryPage.tsx` 从 1,093 行降到 978 行并删除例外；Skills 的工具健康分析与 package/quality 表格也已拆出，`SkillsPage.tsx` 从 1,439 行降到 868 行并删除例外；Settings 的配置字段、配置模型与状态面板已按职责拆分，`SettingsPage.tsx` 从 2,280 行降到 507 行并删除例外；共享 `types.ts` 已按 channels、packages、agent、product 四个领域拆分为兼容 barrel，从 1,877 行降到 759 行；共享 `api.ts` 已拆出 client、agent/session 与 product endpoint 模块，从 1,789 行降到 870 行；共享 `messages.ts` 已按中英文各自的 core/product 连续区段拆分为 4 个消息模块，自身从 2,871 行降到 16 行并删除例外；`styles.css` 已按原 cascade 顺序拆为 5 个低于阈值的连续模块，自身降到 5 行并删除例外。该门禁阻止债务扩大，不代替后续 feature vertical slice 拆分。
 
 前端 `typecheck` 原先对只有 project reference 的 solution `tsconfig.json` 执行 `tsc --noEmit`，实际没有检查 app source，因而漏过 Skills 拆分时遗失的 `Metric` 引用。脚本现改为 `tsc -b`，并让 `SkillsPage` 复用已迁移到 `PackagePanels` 的同一组件；真实 project-reference 类型检查和生产构建均已通过。
 
@@ -22,7 +22,7 @@ Web 源码新增 1000 行预算门禁；3 个既有超限文件使用精确历�
 
 ## 1. 工具选择与成本控制
 
-主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，包含 16,059 个节点、104,115 条关系，`parse_partial=0`、`skipped=0`。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
+主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，包含 16,069 个节点、104,141 条关系，`parse_partial=0`、`skipped=0`。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
 
 成本策略：先用 `get_architecture`/`search_graph`/图查询做全局收敛，再对高复杂度、高 fan-in/fan-out、跨层依赖和相似实现调用 `trace_path` 与精确源码片段，最后用编译器、类型检查和测试验证。LSP 更适合单符号编辑；本任务要覆盖数百文件和跨模块关系，知识图谱单位上下文成本更低。图查询不支持的复杂 `SIMILAR_TO` 条件改为拉取边后在结果层筛选。
 
@@ -107,9 +107,9 @@ Web 源码新增 1000 行预算门禁；3 个既有超限文件使用精确历�
 
 #### P1-3 Web 页面和共享文件再次超过可维护阈值（增量门禁已完成）
 
-当前热点：`ChatPage.tsx` 1,919 行、`TaskBoardPage.tsx` 1,457、`styles.css` 3,251 行。`messages.ts` 已降到 16 行，`api.ts` 已降到 870 行，`types.ts` 已降到 759 行，`SettingsPage.tsx` 已降到 507 行，`MemoryPage.tsx` 已降到 978 行，`SkillsPage.tsx` 已降到 868 行。
+当前热点只剩 `ChatPage.tsx` 1,919 行、`TaskBoardPage.tsx` 1,457 行。`styles.css` 已降到 5 行，`messages.ts` 已降到 16 行，`api.ts` 已降到 870 行，`types.ts` 已降到 759 行，`SettingsPage.tsx` 已降到 507 行，`MemoryPage.tsx` 已降到 978 行，`SkillsPage.tsx` 已降到 868 行。
 
-已有 `big-file-split-plan.md` 的旧四文件拆分基本完成，但热点已转移。现已增加 architecture test，对 `ui/web/src` 执行 1000 行默认预算；3 个既有超限文件以当前行数作为不可增长的精确例外，文件降到阈值后例外必须删除。Memory viewer、Skills analytics/package panels、Settings config/status slices、共享 types、API endpoint 与中英文 locale message 领域拆分已完成；剩余样式热点应保持 cascade 顺序做连续区段拆分，Chat/TaskBoard 则需先确定 state/view 边界。
+已有 `big-file-split-plan.md` 的旧四文件拆分基本完成，但热点已转移。现已增加 architecture test，对 `ui/web/src` 执行 1000 行默认预算；2 个既有超限文件以当前行数作为不可增长的精确例外，文件降到阈值后例外必须删除。Memory viewer、Skills analytics/package panels、Settings config/status slices、共享 types、API endpoint、中英文 locale message 与全局 stylesheet 连续区段拆分已完成；CSS 拆分前后 459 个顶层节点顺序及生产构建的 4 个 CSS 资产字节完全一致。Chat/TaskBoard 则需先确定 state/view 边界。
 
 #### P1-4 Domain 与 infrastructure 边界不纯
 
@@ -228,7 +228,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
 3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；配置 schema/value 契约门禁与 8 个映射缺口已修复，`setStoredValue` 表驱动收敛仍待后续。
 4. architecture import test 与 Web 文件行数 budget 已完成；Go 函数复杂度 budget 与既有违规迁移仍待做。
-5. 前端 i18n 已按 locale/core-product 拆分并降到预算内；共享 API/types、Settings config/status、Memory viewer 与 Skills analytics/package panels 也已完成。剩余 `styles.css` 可按 cascade 顺序做机械拆分，Chat/TaskBoard 的 state/view 边界需单独设计确认。
+5. 前端 i18n、styles、共享 API/types、Settings config/status、Memory viewer 与 Skills analytics/package panels 均已拆分并降到预算内。剩余 Chat/TaskBoard 的 state/view 边界需单独设计确认。
 6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)，CI 执行 `make docs-check`。
 
 ## 7. 验证与限制
@@ -239,7 +239,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 - Web 测试原有 1 个失败已定位为 fixture 漏写 `writeScope` 并修正；最终重跑 32 个 test files、325 个 tests 全部通过。
 - 初始 `go test ./...` 有 15 个失败；确定性 fixture/lifecycle 修复后为 13 个：`internal/agent` 9、`internal/tools` 4。`internal/services/backend` 已全包通过；剩余失败不在未确定 activation policy 前批量修改生产逻辑或测试期望。
 - `internal/agent` 的宽匹配复跑仍命中已知 `TestClearMessagesResetsTransientPromptState` 失败；收窄到模板/cache 事实的测试通过，说明该失败仍属于 P0-1 activation policy 漂移而非本轮文档/fixture 修改回归。
-- `check_index_coverage` generation `2026-08-31T06:11:49Z` 与当前 metadata 匹配；最终补查的 app/MCP/media/push/LongTask/commands/Web/docs 路径及本轮 i18n 拆分路径全部为 `no_recorded_issue`，相关 scope 无记录缺口。
+- `check_index_coverage` generation `2026-08-31T06:25:58Z` 与当前 metadata 匹配；最终补查的 app/MCP/media/push/LongTask/commands/Web/docs 路径及本轮 i18n/CSS 拆分路径全部为 `no_recorded_issue`，相关 scope 无记录缺口。
 - `internal`、`docs`、`examples` 的已知缺口仅为 embedded dist、图片、wasm 二进制、eval 结果和 `docs/superpowers/tmp`；代码/文档结论没有依赖这些二进制资产，`superpowers` 计划/spec 已用源码 heading/内容检索补查。
 - 覆盖信号仍是 best-effort；“无记录缺口”不等于数学上的完整性证明。
 - `SIMILAR_TO` 是候选证据，不等于所有重复都应抽象；示例/test helper 和三行 clone 明确排除在强制 DRY 之外。

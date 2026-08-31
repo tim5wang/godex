@@ -252,6 +252,16 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Runtime.Recovery.AutoRepairSessions = asBool(value)
 	case "security.profile":
 		file.Security.Profile = normalizeSecurityProfileName(asString(value))
+	case "security.screener.enabled":
+		file.Security.Screener.Enabled = asBool(value)
+	case "security.screener.shadow":
+		file.Security.Screener.Shadow = asBool(value)
+	case "security.screener.provider":
+		file.Security.Screener.Provider = strings.TrimSpace(asString(value))
+	case "security.screener.timeout_ms":
+		file.Security.Screener.TimeoutMS = asInt(value)
+	case "security.screener.max_tokens":
+		file.Security.Screener.MaxTokens = asInt(value)
 	case "team.lead_name":
 		file.Team.LeadName = asString(value)
 	case "team.team_name":
@@ -386,6 +396,8 @@ func setStoredValue(file *ConfigFile, path, kind string, value any) error {
 		file.Tools.Execution.ShellAllowPatterns = asStringList(value)
 	case "tools.execution.shell_deny_patterns":
 		file.Tools.Execution.ShellDenyPatterns = asStringList(value)
+	case "tools.execution.scope_write":
+		file.Tools.Execution.ScopeWrite = asBool(value)
 	case "tools.browser.enabled":
 		file.Tools.Browser.Enabled = asBool(value)
 	case "tools.browser.headless":
@@ -590,11 +602,13 @@ func storedValues(file ConfigFile) map[string]any {
 		"heartbeat.ok_token":                                     file.Heartbeat.OKToken,
 		"heartbeat.default_interval_seconds":                     file.Heartbeat.DefaultIntervalSeconds,
 		"heartbeat.default_timezone":                             file.Heartbeat.DefaultTimezone,
+		"heartbeat.default_watchdog_script":                      file.Heartbeat.DefaultWatchdogScript,
 		"control.node_name":                                      file.Control.NodeName,
 		"control.node_id":                                        file.Control.NodeID,
 		"control.default_node":                                   file.Control.DefaultNode,
 		"control.trust_level":                                    file.Control.TrustLevel,
 		"control.center_url":                                     file.Control.CenterURL,
+		"control.credential":                                     "",
 		"control.heartbeat_seconds":                              file.Control.HeartbeatSeconds,
 		"control.offline_after_seconds":                          file.Control.OfflineAfterSeconds,
 		"control.forward_allow":                                  append([]string{}, file.Control.ForwardAllow...),
@@ -603,6 +617,11 @@ func storedValues(file ConfigFile) map[string]any {
 		"runtime.recovery.auto_resume_interrupted_turns":         file.Runtime.Recovery.AutoResumeInterruptedTurns,
 		"runtime.recovery.auto_repair_sessions":                  file.Runtime.Recovery.AutoRepairSessions,
 		"security.profile":                                       normalizeSecurityProfileName(file.Security.Profile),
+		"security.screener.enabled":                              file.Security.Screener.Enabled,
+		"security.screener.shadow":                               file.Security.Screener.Shadow,
+		"security.screener.provider":                             strings.TrimSpace(file.Security.Screener.Provider),
+		"security.screener.timeout_ms":                           file.Security.Screener.TimeoutMS,
+		"security.screener.max_tokens":                           file.Security.Screener.MaxTokens,
 		"team.lead_name":                                         file.Team.LeadName,
 		"team.team_name":                                         file.Team.TeamName,
 		"team.default_skills":                                    append([]string{}, file.Team.DefaultSkills...),
@@ -670,6 +689,7 @@ func storedValues(file ConfigFile) map[string]any {
 		"tools.execution.ssh_options":                            append([]string{}, file.Tools.Execution.SSHOptions...),
 		"tools.execution.shell_allow_patterns":                   append([]string{}, file.Tools.Execution.ShellAllowPatterns...),
 		"tools.execution.shell_deny_patterns":                    append([]string{}, file.Tools.Execution.ShellDenyPatterns...),
+		"tools.execution.scope_write":                            file.Tools.Execution.ScopeWrite,
 		"tools.browser.enabled":                                  file.Tools.Browser.Enabled,
 		"tools.browser.headless":                                 file.Tools.Browser.Headless,
 		"tools.browser.browser_path":                             file.Tools.Browser.BrowserPath,
@@ -800,11 +820,13 @@ func effectiveValues(cfg *Config) map[string]any {
 		"heartbeat.ok_token":                                     cfg.Heartbeat.OKToken,
 		"heartbeat.default_interval_seconds":                     cfg.Heartbeat.DefaultIntervalSeconds,
 		"heartbeat.default_timezone":                             cfg.Heartbeat.DefaultTimezone,
+		"heartbeat.default_watchdog_script":                      cfg.Heartbeat.DefaultWatchdogScript,
 		"control.node_name":                                      cfg.Control.NodeName,
 		"control.node_id":                                        cfg.Control.NodeID,
 		"control.default_node":                                   cfg.Control.DefaultNode,
 		"control.trust_level":                                    cfg.Control.TrustLevel,
 		"control.center_url":                                     cfg.Control.CenterURL,
+		"control.credential":                                     cfg.Control.Credential,
 		"control.heartbeat_seconds":                              cfg.Control.HeartbeatSeconds,
 		"control.offline_after_seconds":                          cfg.Control.OfflineAfterSeconds,
 		"control.forward_allow":                                  append([]string{}, cfg.Control.ForwardAllow...),
@@ -813,6 +835,11 @@ func effectiveValues(cfg *Config) map[string]any {
 		"runtime.recovery.auto_resume_interrupted_turns":         cfg.Runtime.Recovery.AutoResumeInterruptedTurns,
 		"runtime.recovery.auto_repair_sessions":                  cfg.Runtime.Recovery.AutoRepairSessions,
 		"security.profile":                                       cfg.Security.Profile,
+		"security.screener.enabled":                              cfg.Security.Screener.Enabled,
+		"security.screener.shadow":                               cfg.Security.Screener.Shadow,
+		"security.screener.provider":                             cfg.Security.Screener.Provider,
+		"security.screener.timeout_ms":                           cfg.Security.Screener.TimeoutMS,
+		"security.screener.max_tokens":                           cfg.Security.Screener.MaxTokens,
 		"team.lead_name":                                         cfg.LeadName,
 		"team.team_name":                                         cfg.TeamName,
 		"team.default_skills":                                    append([]string{}, cfg.DefaultSkills...),
@@ -880,6 +907,7 @@ func effectiveValues(cfg *Config) map[string]any {
 		"tools.execution.ssh_options":                            append([]string{}, cfg.Tools.Execution.SSHOptions...),
 		"tools.execution.shell_allow_patterns":                   append([]string{}, cfg.Tools.Execution.ShellAllowPatterns...),
 		"tools.execution.shell_deny_patterns":                    append([]string{}, cfg.Tools.Execution.ShellDenyPatterns...),
+		"tools.execution.scope_write":                            cfg.Tools.Execution.ScopeWrite,
 		"tools.browser.enabled":                                  cfg.Tools.Browser.Enabled,
 		"tools.browser.headless":                                 cfg.Tools.Browser.Headless,
 		"tools.browser.browser_path":                             cfg.Tools.Browser.BrowserPath,

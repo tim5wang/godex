@@ -16,6 +16,8 @@ HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 �
 
 Web 源码新增 1000 行预算门禁；9 个既有超限文件使用精确历史上限作为迁移例外，不能继续增长，降到阈值后测试会要求删除例外。该门禁阻止债务扩大，不代替后续 feature vertical slice 拆分。
 
+配置映射新增 schema/setter/stored/effective 契约测试，并修复 8 个 schema 路径的不完整映射：`security.screener.*` 5 项与 `tools.execution.scope_write` 原先无法通过 Web 配置写入，`heartbeat.default_watchdog_script` 与 `control.credential` 原先缺少 stored/effective view；credential 仍按 secret policy 掩码。大 switch 的表驱动拆分仍待后续。
+
 ## 1. 工具选择与成本控制
 
 主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，包含 16,003 个节点、103,544 条关系，`parse_partial=0`、`skipped=0`。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
@@ -93,11 +95,13 @@ Web 源码新增 1000 行预算门禁；9 个既有超限文件使用精确历�
 
 后续状态：138 条静态路由已迁入 19 个 registrar，route ownership 测试已落地；主函数现约 85 行、复杂度 5/cognitive 7。窄 `Dependencies` 尚未实施，避免在本轮机械迁移中同时改变构造边界。
 
-#### P1-2 配置 schema 与读写映射不是单一事实源
+#### P1-2 配置 schema 与读写映射不是单一事实源（增量契约门禁已完成）
 
 `setStoredValue` 是 446 行 switch（复杂度 215、cognitive 446），同文件还有反向的 stored/effective value 映射。新增字段必须同时修改 schema、setter、getter、mask/clear-secret 多处。
 
 建议：不是引入反射框架，而是先把字段按域拆成小 handler table；每个 schema field 绑定 get/set/secret policy，并加 round-trip property test，逐步消灭平行 switch。
+
+后续状态：新增 AST 契约测试，要求 `baseSchema` 的每个字段都能被 `setStoredValue` 处理，并要求 stored/effective map 覆盖每个 schema path；round-trip 测试覆盖本轮修复的普通字段与 secret credential。由此发现并补齐上述 8 个不完整路径。`setStoredValue` 当前仍是大 switch，按域拆小 handler table 尚未实施。
 
 #### P1-3 Web 页面和共享文件再次超过可维护阈值（增量门禁已完成）
 
@@ -220,7 +224,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 
 1. 冻结默认 tool activation policy，修复对应 14 个 Go contract tests（其余 1 个 backend fixture 单独处理）。
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
-3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；`setStoredValue` 表驱动收敛仍待后续。
+3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；配置 schema/value 契约门禁与 8 个映射缺口已修复，`setStoredValue` 表驱动收敛仍待后续。
 4. architecture import test 与 Web 文件行数 budget 已完成；Go 函数复杂度 budget 与既有违规迁移仍待做。
 5. 前端按 feature 拆 `api/types/i18n/styles`，优先 Settings/Chat/TaskBoard/Skills/Memory。
 6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)，CI 执行 `make docs-check`。

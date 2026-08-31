@@ -424,7 +424,7 @@ function PackageAppTag({
   );
 }
 
-function Metric({ title, value }: { title: string; value: number }) {
+export function Metric({ title, value }: { title: string; value: number }) {
   return (
     <Card size="small">
       <Typography.Text type="secondary">{title}</Typography.Text>

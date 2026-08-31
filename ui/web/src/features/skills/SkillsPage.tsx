@@ -54,6 +54,7 @@ import type { PackageEntry, SkillActivation, SkillCatalogEntry, SkillSourceEntry
 import { useSettingsStore } from "../../store/settings";
 import { SkillAnalyticsPanel, qualityToAnalytics } from "./SkillAnalyticsPanel";
 import {
+  Metric,
   PackageCommandTable,
   PackageQualityPanel,
   PackageRoleTable,

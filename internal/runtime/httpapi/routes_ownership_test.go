@@ -61,6 +61,17 @@ func TestStaticRoutePatternsHaveSingleOwner(t *testing.T) {
 			"GET /notes", "GET /notes/{id}", "GET /notes/{id}/related-memories",
 			"POST /notes", "DELETE /notes/{id}",
 		},
+		"routes_channels.go": {
+			"GET /channels", "GET /channels/weixin/auth",
+			"POST /channels/weixin/auth/start", "POST /channels/weixin/auth/logout",
+		},
+		"routes_packages.go": {
+			"GET /models", "GET /security/summary", "GET /security/audit",
+			"GET /packages", "GET /packages/quality", "POST /packages/install",
+			"POST /packages/remove", "POST /packages/{name}/reinstall",
+			"POST /packages/{name}/smoke/{smoke}", "GET /prompts", "GET /commands",
+			"GET /packages/commands", "GET /packages/roles",
+		},
 	}
 	for file, patterns := range expectedOwners {
 		for _, pattern := range patterns {

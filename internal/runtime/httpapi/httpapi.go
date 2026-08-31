@@ -19,7 +19,6 @@ import (
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
-	rtchannels "github.com/tim5wang/godex/internal/runtime/channels"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/localbash"
@@ -100,13 +99,7 @@ func NewHandlerWithRuntime(
 	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected)
 	registerProviderRoutes(mux, manager, protected)
 
-	mux.Handle("GET /channels", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if channels == nil {
-			writeJSON(w, http.StatusOK, rtchannels.StatusReport{GeneratedAt: time.Now(), Channels: nil})
-			return
-		}
-		writeJSON(w, http.StatusOK, channels.StatusReport())
-	})))
+	registerChannelStatusRoute(mux, channels, protected)
 	mux.Handle("POST /v1/chat/completions", gunzipBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if this is a usage gateway request (proxy key auth)
 		auth := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -254,188 +247,11 @@ func NewHandlerWithRuntime(
 		})
 	}))
 
-	mux.Handle("GET /models", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		view, err := service.Models(r.Context(), strings.TrimSpace(r.URL.Query().Get("session_id")))
-		if err != nil {
-			writeError(w, statusForSessionError(err), err)
-			return
-		}
-		writeJSON(w, http.StatusOK, view)
-	})))
-	mux.Handle("GET /security/summary", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		summary, err := service.SecuritySummary(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, summary)
-	})))
-	mux.Handle("GET /security/audit", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		limit := 50
-		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil || parsed < 0 {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("invalid audit limit"))
-				return
-			}
-			limit = parsed
-		}
-		items, err := service.SecurityAudit(r.Context(), limit)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
-	})))
-	mux.Handle("GET /packages", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		items, err := service.ListPackages(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
-	})))
-	mux.Handle("GET /packages/quality", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		report, err := service.PackageQuality(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, report)
-	})))
-	mux.Handle("POST /packages/install", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req installPackageRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		item, err := service.InstallPackage(r.Context(), strings.TrimSpace(req.Source))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, item)
-	})))
-	mux.Handle("POST /packages/remove", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req removePackageRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		item, err := service.RemovePackage(r.Context(), strings.TrimSpace(req.Name))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, item)
-	})))
-	mux.Handle("POST /packages/{name}/reinstall", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		item, err := service.ReinstallPackage(r.Context(), strings.TrimSpace(r.PathValue("name")))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, item)
-	})))
-	mux.Handle("POST /packages/{name}/smoke/{smoke}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req packageSmokeRunRequest
-		if r.Body != nil && r.ContentLength != 0 {
-			if err := decodeJSON(r, &req); err != nil {
-				writeError(w, http.StatusBadRequest, err)
-				return
-			}
-		}
-		run, err := service.RunPackageSmoke(
-			r.Context(),
-			strings.TrimSpace(r.PathValue("name")),
-			strings.TrimSpace(r.PathValue("smoke")),
-			strings.TrimSpace(req.SessionID),
-		)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, run)
-	})))
-	mux.Handle("GET /prompts", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		includeContent := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_content")), "true")
-		items, err := service.ListPrompts(r.Context(), includeContent)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
-	})))
-	mux.Handle("GET /commands", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Expose the built-in slash-command metadata so the web composer
-		// can offer the same "/" completion palette as the TUI and ACP
-		// clients without hardcoding its own copy of the command list.
-		writeJSON(w, http.StatusOK, commands.AvailableMetadata())
-	})))
-	mux.Handle("GET /packages/commands", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		includeContent := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_content")), "true")
-		items, err := service.ListPackageCommands(r.Context(), includeContent)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
-	})))
-	mux.Handle("GET /packages/roles", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		includeContent := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_content")), "true")
-		items, err := service.ListPackageRoles(r.Context(), includeContent)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
-	})))
-	mux.Handle("GET /channels/weixin/auth", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if weixinAuth == nil {
-			writeError(w, http.StatusNotFound, fmt.Errorf("weixin web auth unavailable"))
-			return
-		}
-		status, err := weixinAuth.Status(r.Context(), strings.TrimSpace(r.URL.Query().Get("account_id")))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, status)
-	})))
-	mux.Handle("POST /channels/weixin/auth/start", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if weixinAuth == nil {
-			writeError(w, http.StatusNotFound, fmt.Errorf("weixin web auth unavailable"))
-			return
-		}
-		var req accountRequest
-		if err := decodeJSONAllowEmpty(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		status, err := weixinAuth.Start(r.Context(), req.AccountID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, status)
-	})))
-	mux.Handle("POST /channels/weixin/auth/logout", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if weixinAuth == nil {
-			writeError(w, http.StatusNotFound, fmt.Errorf("weixin web auth unavailable"))
-			return
-		}
-		var req accountRequest
-		if err := decodeJSONAllowEmpty(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		status, err := weixinAuth.Logout(r.Context(), req.AccountID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, status)
-	})))
+	registerServiceCatalogRoutes(mux, service, protected)
+	registerPackageManagementRoutes(mux, service, protected)
+	registerPromptAndCommandRoutes(mux, service, protected)
+	registerPackageCatalogRoutes(mux, service, protected)
+	registerWeixinRoutes(mux, weixinAuth, protected)
 	registerAutomationRoutes(mux, cronRuntime, heartbeatRuntime, protected)
 	registerMemoryRoutes(mux, service, protected)
 	registerNoteRoutes(mux, service, protected)

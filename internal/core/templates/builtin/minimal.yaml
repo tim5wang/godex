@@ -1,5 +1,5 @@
 # Built-in minimal template: reproduces the legacy "minimal" session mode
-# (only the four core tools; heavyweight background prompt sections trimmed).
+# (four core file/shell tools plus tool_exchange; heavyweight prompt sections trimmed).
 id: minimal
 name: Minimal
 description: Lean file/shell work preset; only core tools, trimmed context sections.

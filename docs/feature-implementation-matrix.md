@@ -36,7 +36,7 @@
 | Terminal | Implemented | `routes_terminal.go`, `TerminalPanel.tsx` | Web panel | README/user-guide；PTY 与 pipe fallback 有测试。 |
 | Static/proxy Preview | Implemented | `routes_preview.go`, `PreviewPanel.tsx` | Web preview panel | workflow integration 旧文档不再是权威入口。 |
 | Provider/model 配置 | Implemented | `core/config`, `core/providers`, Settings | `providers`, `login/logout`, Settings | README/user-guide；schema/get/set 映射存在维护风险。 |
-| Tool runtime 与 bundles | Contract drift | `toolruntime`, `agent/tool_registration.go` | `tool_exchange`, runtime prompt | README/user-guide/system prompt/测试对默认 active bundle 不一致，待 P0 决策。 |
+| Tool runtime 与 bundles | Implemented baseline | `toolruntime`, `agent/tool_registration.go`, `agent/session_template.go` | `tool_exchange`, runtime prompt | 模板基线为 `Tools ∪ Bundles`；`always_on` 由模板显式选择并在会话内固定；clear 恢复精确模板基线，`default` 空模板保留兼容语义。 |
 | LSP 工具 | Implemented | `tools/lsp*.go` | `lsp` bundle/tool | README/user-guide；code graph 是本次审查工具，不是产品 LSP 的替代实现。 |
 | MCP stdio/HTTP | Implemented | `core/mcp`, `routes_mcp.go`, MCP tools | Settings、`/v1/mcp/*` | extension-runtime-user-guide；动态 server tools 会让工具总数变化。 |
 | Package / Skill | Implemented | `core/packages`, `core/skill`, `pluginrt`, SkillsPage | `/packages`, `/skills`, Web Skills | README、extension runtime guide；quality/smoke/reinstall 均存在。 |

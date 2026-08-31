@@ -87,7 +87,7 @@ type AgentTemplate struct {
 
     // --- 能力边界 ---
     Bundles      []string `json:"bundles,omitempty" yaml:"bundles,omitempty"`           // 初始激活 bundle（精确集合语义：Tools ∪ bundle-tools，经 SetActiveToolsExact 应用；常驻元工具经 always_on bundle 显式选择）
-    Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`               // 细粒度工具白名单（可选，优先于 bundles 全集）
+    Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`               // 细粒度工具白名单（可选，与 bundles 展开结果取并集）
     WriteEnabled bool     `json:"write_enabled,omitempty" yaml:"write_enabled,omitempty"`
     WriteScope   []string `json:"write_scope,omitempty" yaml:"write_scope,omitempty"`   // 写路径白名单（对接 4.5 解析链）
     MCPServers   []string `json:"mcp_servers,omitempty" yaml:"mcp_servers,omitempty"`   // 启用的 MCP server 白名单
@@ -162,7 +162,7 @@ func (m *Manager) Delete(id string) error                    // 仅 user/
 func (m *Manager) Resolve(id string) (ResolvedTemplate, error) // extends 解继承 + 引用校验（bundle/skill/mcp/package 存在性）
 ```
 
-- 内置 `default` 模板 = 现行为（全量默认激活），保证升级零感知；内置 `minimal` 模板承接旧极简模式语义（仅 4 核心工具 + 重量级 prompt 段裁剪）。
+- 内置 `default` 空模板是唯一兼容特例：恢复宿主注册的默认激活工具集，保证升级零感知；其他空能力模板表示精确空集。内置 `minimal` 承接旧极简模式（4 个核心文件/shell 工具 + `tool_exchange` + 重量级 prompt 段裁剪）。
 - Q2 预留：`ProjectDir` 字段本期不参与解析；二期引入「全局库 + 项目覆盖」时，同名项目模板优先。
 
 ---
@@ -185,6 +185,12 @@ AgentTemplate (YAML)
   ├─ BudgetHint ────────► context_budget 按模板分配
   └─ Memory ────────────► none：注入/捕获短路；scoped：memoryMgr 重建为会话分区（memory.NewScopedManager）+ memory 工具重绑；shared：跟随全局 memory.session_scope
 ```
+
+**运行时固定语义（已实现）**：
+
+- canonical catalog 始终保留 `always_on`，供 Agent 模板编辑器显式选择；它不是模板不可见的宿主隐式能力。
+- 模板选择 `always_on` 后，该 bundle 对会话是 `template-pinned`；未选择时同样不能通过 `tool_exchange` 中途开启。`tool_exchange` 的可变 catalog、推荐和计数不包含它，prompt 只在已激活时标注为 `template-pinned`。
+- 模板应用时保存精确工具基线；普通 bundle 可在会话中按需增减，但 clear/reset 会恢复当前模板的精确基线，不会放大回宿主全局 `DefaultActive/AlwaysActive` 集合。
 
 **缓存稳定性约束（对应诉求 ①）**：
 

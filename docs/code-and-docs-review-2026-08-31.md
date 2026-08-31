@@ -10,7 +10,7 @@
 
 新增 `internal/architecture` import gate，禁止新增 `domain→core/platform`、`platform→core`、`core→tools` 依赖；8 条既有生产依赖以精确 package edge 作为迁移例外，例外消失后测试会要求删除。该门禁阻止债务增长，不代表既有分层迁移已经完成。
 
-修复后 `internal/services/backend` 全包测试通过；全量 Go 失败从 15 项降到 13 项，剩余为 `internal/agent` 9 项、`internal/tools` 4 项，均与 P0-1 默认 bundle/`always_on` 契约冲突相关。本轮没有通过批量修改测试期望来替代产品决策。
+后续产品决策已冻结 P0-1：`always_on` 是 Agent 模板显式可选且会话内固定的 bundle，不是宿主隐式能力；模板基线精确等于 `Tools ∪ Bundles` 展开工具，clear/reset 恢复该基线，仅 `default` 空模板保留旧标准模式兼容。相关 `internal/toolruntime`/`internal/tools` 测试已全部通过，`internal/agent` 的 activation/capability 失败已清零；当前剩余 3 项失败分别是 loop-guard 两项和 oversized tool-result stub 一项，与本决策无关，应独立修复。
 
 HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 个按资源域划分的 registrar；`NewHandlerWithRuntime` 从约 1,883 行降到约 85 行，图复杂度从 266 降到 5、cognitive 从 293 降到 7。新增静态 route ownership 测试，禁止生产路由字面量被多个文件重复注册。registrar 拆分已经完成，构造参数进一步收敛为窄 `Dependencies` 可作为后续独立改进。
 
@@ -43,7 +43,7 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 
 ### P0 — 先恢复契约一致性
 
-#### P0-1 默认工具面存在三套互相冲突的事实源
+#### P0-1 默认工具面存在三套互相冲突的事实源（已冻结语义并修复）
 
 - `internal/agent/tool_registration.go` 把 `web`、`mcp` bridge、`planning`、`lsp`、`core_code` 设为 `DefaultActive`，taskboard 存在时也默认激活。
 - `internal/agent/system_prompt_dynamic.go` 的 coding prompt 仍要求“先用 tool_exchange 启用 web/MCP 等重能力”。
@@ -52,7 +52,7 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 
 影响：模型收到的可调用 schema 与行为指引不一致；默认 token 成本上升；required bundle 校验被默认激活绕过；清空 session 后“重置 transient bundle”的语义失效。
 
-建议：先做一次产品决策并只保留一个事实源。推荐 `ToolMeta`/catalog 为运行时事实源，profile 仅决定 activation policy；由 catalog 生成 help/runtime prompt，测试只断言 policy 而不是手写工具数组。
+决策与落地：canonical `ToolHandler.Catalog()` 保留 `always_on` 供模板编辑器选择；`tool_exchange` 使用过滤后的可变视图，显式开关 `always_on` 会返回 `template-pinned` 错误。`ApplyTemplate` 记录精确工具基线，`ClearMessages` 恢复该基线而非宿主全局默认。runtime prompt 从 canonical catalog 展示已激活的 `always_on [template-pinned]`，但不把它广告为可按需开启。required-capability 测试显式应用精简模板，不再偶然依赖会演进的注册默认集。
 
 #### P0-2 全量测试不是绿色基线
 
@@ -62,7 +62,7 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 - `internal/services/backend`：1 项模型 profile 持久化测试因 fake caller 连续空响应退出。
 - `internal/tools`：tool_exchange catalog/推荐/未知 bundle 等 4 项。
 
-这些失败不是同一种原因：多数是默认 bundle contract 漂移，少数是 fake LLM fixture/异步清理隔离。对三个失败 package 的隔离重跑还暴露了后台任务未结束导致 `t.TempDir` 清理失败的波动项。不要批量改期望；先固定 P0-1 的 activation policy，再分别修 fixture 生命周期。
+这些失败不是同一种原因：多数是默认 bundle contract 漂移，少数是 fake LLM fixture/异步清理隔离。对三个失败 package 的隔离重跑还暴露了后台任务未结束导致 `t.TempDir` 清理失败的波动项。当时的处理原则是先固定 P0-1 policy 再修 fixture；该步骤已完成，剩余 3 项已明确与 activation 无关。
 
 #### P0-3 文档实现状态倒置
 
@@ -171,7 +171,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 | `services/evalharness`, `historysearch`, `localbash`, `nodeobs`, `noderegistry`, `sessionadmin`, `sessionrepair`, `usage`, `webpush` | 🟢/🟡 | 职责基本清晰；usage store 1,046 行、history sidecar 725 行需关注增长。 |
 | `services/relay` | 🟢/🟡 | 14 源文件、20 测试文件，拆分和测试最好；协议/forward/hub 边界清楚。 |
 | `sessiongraph`, `sessionstore`, `workerruntime` | 🟢 | 接口小、测试存在，是 2.0 抽象的可复用基础。 |
-| `toolruntime` | 🔴 | permissions 1,889 行；默认 activation policy 未冻结，关联的 `internal/tools` catalog/tool_exchange 仍有 4 个测试失败。 |
+| `toolruntime` | 🟡 | permissions 1,889 行仍是大文件；模板 activation policy 已冻结，catalog/tool_exchange 契约测试通过。 |
 | `tools`, `tools/teamtools` | 🟡 | 47 个实现文件，具体工具拆分较好；toolruntime_aliases 有高 fan-in，别继续把所有兼容 alias 堆在单文件。 |
 | `tui/mintui` | 🟡 | session 2,289 行、popup_longtask 1,157 行；UI state/update/render 仍集中。 |
 | `uiassets`, `version` | ⚪ | 嵌入资源与版本小模块，无实质架构问题。 |
@@ -224,7 +224,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 
 ## 6. 建议执行顺序
 
-1. 冻结默认 tool activation policy，修复当前剩余的 13 个 Go contract tests（`internal/agent` 9、`internal/tools` 4）；backend fixture 已修复。
+1. ~~冻结默认 tool activation policy，修复 activation/capability contract tests。~~ 已完成；剩余 3 个 `internal/agent` 失败按 loop-guard 与 oversized-result 两个独立批次处理。
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
 3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；配置 schema/value 契约门禁与 8 个映射缺口已修复，`setStoredValue` 表驱动收敛仍待后续。
 4. architecture import test 与 Web 文件行数 budget 已完成；Go 函数复杂度 budget 与既有违规迁移仍待做。
@@ -237,8 +237,8 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 - 通过：`go test ./internal/app ./internal/core/mcp`，以及 LongTask graph 契约定向测试；新增 root help 和 MCP 注释/文档收口没有引入回归。
 - 通过：templates、pluginrt、TaskBoard plugin、usage、httpapi、backend TaskBoard/reconcile、agent template/dynamic prompt/package runtime、conversation prompt-cache/retention 定向测试。
 - Web 测试原有 1 个失败已定位为 fixture 漏写 `writeScope` 并修正；最终重跑 32 个 test files、325 个 tests 全部通过。
-- 初始 `go test ./...` 有 15 个失败；确定性 fixture/lifecycle 修复后为 13 个：`internal/agent` 9、`internal/tools` 4。`internal/services/backend` 已全包通过；剩余失败不在未确定 activation policy 前批量修改生产逻辑或测试期望。
-- `internal/agent` 的宽匹配复跑仍命中已知 `TestClearMessagesResetsTransientPromptState` 失败；收窄到模板/cache 事实的测试通过，说明该失败仍属于 P0-1 activation policy 漂移而非本轮文档/fixture 修改回归。
+- 初始 `go test ./...` 有 15 个失败；确定性 fixture/lifecycle 修复后曾为 13 个。冻结 activation policy 后，`go test ./internal/toolruntime ./internal/tools ./internal/agent -count=1` 中前两包通过，`internal/agent` 仅剩 3 项：`TestRunWithOptionsAppendsLoopGuardFeedbackAndCheckpoint`、`TestRunWithOptionsStubsOversizedToolResult`、`TestDurableSubagentPersistsLoopGuardFeedback`。
+- clear/reset、tool schema/prompt fixture、required tool/web capability 与 `tool_exchange` catalog/count 契约测试均已通过；没有通过删除新默认工具来迎合旧 fixture。
 - `check_index_coverage` generation `2026-08-31T06:25:58Z` 与当前 metadata 匹配；最终补查的 app/MCP/media/push/LongTask/commands/Web/docs 路径及本轮 i18n/CSS 拆分路径全部为 `no_recorded_issue`，相关 scope 无记录缺口。
 - `internal`、`docs`、`examples` 的已知缺口仅为 embedded dist、图片、wasm 二进制、eval 结果和 `docs/superpowers/tmp`；代码/文档结论没有依赖这些二进制资产，`superpowers` 计划/spec 已用源码 heading/内容检索补查。
 - 覆盖信号仍是 best-effort；“无记录缺口”不等于数学上的完整性证明。

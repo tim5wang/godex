@@ -129,6 +129,65 @@ func TestApplyTemplateDefaultKeepsStockBehavior(t *testing.T) {
 	}
 }
 
+func TestClearMessagesRestoresTemplateToolBaseline(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{
+		ID:      "coding-with-meta",
+		Bundles: []string{"core_code", "always_on"},
+	})
+
+	a.toolHandler.ActivateBundles("web")
+	if !a.toolHandler.IsActive("web_search") {
+		t.Fatal("expected web bundle to be active before clear")
+	}
+
+	a.ClearMessages()
+
+	for _, name := range []string{"bash", "memory", "tool_exchange"} {
+		if !a.toolHandler.IsActive(name) {
+			t.Fatalf("expected template baseline tool %q active after clear", name)
+		}
+	}
+	if a.toolHandler.IsActive("web_search") {
+		t.Fatal("expected transient web bundle to be removed after clear")
+	}
+}
+
+func TestClearMessagesKeepsExactToolTemplateLean(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{
+		ID:    "lean",
+		Tools: []string{"edit_file", "bash"},
+	})
+
+	a.toolHandler.ActivateBundles("web")
+	a.ClearMessages()
+
+	for _, name := range []string{"edit_file", "bash"} {
+		if !a.toolHandler.IsActive(name) {
+			t.Fatalf("expected exact template tool %q active after clear", name)
+		}
+	}
+	for _, name := range []string{"memory", "web_search", "read_file"} {
+		if a.toolHandler.IsActive(name) {
+			t.Fatalf("expected non-template tool %q inactive after clear", name)
+		}
+	}
+}
+
+func TestApplyTemplateEmptyCustomCapabilitySetIsExact(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	a.ApplyTemplate(templates.AgentTemplate{ID: "persona-only"})
+
+	if got := a.toolHandler.ActiveToolNames(); len(got) != 0 {
+		t.Fatalf("expected empty custom template capability set, got %v", got)
+	}
+}
+
 func TestTemplatePersonaAndBasePromptInSystemPrompt(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
@@ -345,6 +404,13 @@ func TestPromptKeepsToolExchangeGuidanceWhenToolActive(t *testing.T) {
 	}
 	if !strings.Contains(availability, "Available bundles") {
 		t.Fatalf("expected available bundles list when tool_exchange is active: %s", availability)
+	}
+	if !strings.Contains(availability, "always_on [template-pinned]") {
+		t.Fatalf("expected active always_on bundle to be marked template-pinned: %s", availability)
+	}
+	available := strings.SplitN(availability, "- Available bundles: ", 2)
+	if len(available) == 2 && strings.Contains(strings.SplitN(available[1], "\n", 2)[0], "always_on") {
+		t.Fatalf("always_on must not be advertised as dynamically available: %s", availability)
 	}
 }
 

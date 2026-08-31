@@ -43,6 +43,38 @@ func knownBundleNames(catalog ToolCatalog) map[string]struct{} {
 	return known
 }
 
+// dynamicToolCatalog removes template-pinned bundles from tool_exchange's
+// mutable view. The canonical ToolHandler.Catalog still exposes always_on so
+// template editors can select it.
+func dynamicToolCatalog(catalog ToolCatalog) ToolCatalog {
+	activeBundles := make([]string, 0, len(catalog.ActiveBundles))
+	for _, name := range catalog.ActiveBundles {
+		if name != BundleAlwaysOn {
+			activeBundles = append(activeBundles, name)
+		}
+	}
+	bundles := make([]BundleCatalogItem, 0, len(catalog.Bundles))
+	for _, bundle := range catalog.Bundles {
+		if bundle.Name != BundleAlwaysOn {
+			bundles = append(bundles, bundle)
+		}
+	}
+	catalog.ActiveBundles = activeBundles
+	catalog.Bundles = bundles
+	return catalog
+}
+
+func requestsTemplatePinnedBundle(names ...[]string) bool {
+	for _, group := range names {
+		for _, name := range group {
+			if strings.TrimSpace(name) == BundleAlwaysOn {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func unknownRequestedBundles(known map[string]struct{}, names []string) []string {
 	var unknown []string
 	seen := make(map[string]struct{}, len(names))
@@ -326,7 +358,13 @@ func NewToolExchangeTool(manager ToolCatalogManager) Tool {
 		},
 	}, nil), func(ctx context.Context, args toolExchangeArgs) (ToolResult, error) {
 		_ = ctx
-		catalog := manager.Catalog()
+		if requestsTemplatePinnedBundle(args.EnableBundles, args.DisableBundles) {
+			return ToolResult{}, fmt.Errorf(
+				"tool bundle %q is template-pinned and cannot be enabled or disabled with tool_exchange; select it in the Agent template before starting the session",
+				BundleAlwaysOn,
+			)
+		}
+		catalog := dynamicToolCatalog(manager.Catalog())
 		maxResults := boundedMaxResults(args.MaxResults)
 		known := knownBundleNames(catalog)
 		requested := append(append([]string{}, args.EnableBundles...), args.DisableBundles...)
@@ -340,7 +378,7 @@ func NewToolExchangeTool(manager ToolCatalogManager) Tool {
 		alreadyActive := alreadyActiveRequestedBundles(catalog.ActiveBundles, args.EnableBundles)
 		enabled := manager.ActivateBundles(args.EnableBundles...)
 		disabled, blocked := manager.DeactivateBundles(args.DisableBundles...)
-		catalog = manager.Catalog()
+		catalog = dynamicToolCatalog(manager.Catalog())
 		recommendations := recommendedBundles(catalog, args.Query, args.IncludeTools, maxResults)
 		structured := map[string]interface{}{
 			"status":                 toolExchangeStatus(args.Query, enabled, disabled, blocked, recommendations),

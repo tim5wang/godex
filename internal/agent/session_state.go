@@ -60,13 +60,22 @@ func (a *Agent) HistorySearchRuntime() tools.HistorySearchRuntime {
 // records such as timeline, turns, permissions, memory, and tasks intact.
 func (a *Agent) ClearMessages() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.messages = nil
 	a.transcriptRefs = nil
 	a.pendingResume = nil
-	a.toolHandler.ResetActiveToolsToDefaults()
 	a.historyVersion++
 	a.lastCompactedVersion = 0
+	baseline := append([]string(nil), a.templateToolBaseline...)
+	baselineSet := a.templateToolBaselineSet
+	a.mu.Unlock()
+
+	if baselineSet {
+		a.toolHandler.SetActiveToolsExact(baseline...)
+	} else {
+		// Sessions created before template baselines were introduced retain the
+		// legacy reset behavior.
+		a.toolHandler.ResetActiveToolsToDefaults()
+	}
 	a.resetCacheStats()
 }
 
@@ -198,7 +207,9 @@ func (a *Agent) RegisterHarness(id string, harness Harness) {
 	router := a.harnessRouterVal
 	a.mu.Unlock()
 	if router != nil {
-		if dynamic, ok := router.(interface{ Register(id string, harness Harness) }); ok {
+		if dynamic, ok := router.(interface {
+			Register(id string, harness Harness)
+		}); ok {
 			dynamic.Register(id, harness)
 		}
 	}

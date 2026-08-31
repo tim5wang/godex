@@ -12,6 +12,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -265,6 +266,7 @@ func TestDurableSubagentOmitsSessionGraphFieldsWithoutContext(t *testing.T) {
 func TestWorkerRuntimePreservesRequiredToolValidation(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "read-only", Tools: []string{"read_file", "tool_exchange"}})
 
 	_, err := a.startDurableSubagentWithContext(context.Background(), durableSubagentStartRequest{
 		Prompt:        "need inactive web",
@@ -1643,6 +1645,7 @@ func TestDurableSubagentInheritsActiveWebToolsForResearchPrompt(t *testing.T) {
 func TestDurableSubagentRequiresWebBundleBeforeResearchPrompt(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "local-only", Bundles: []string{"core_code", "always_on"}})
 
 	_, err := a.StartDurableSubagent("web research with source links and official pages", "general-purpose", nil)
 	if err == nil {

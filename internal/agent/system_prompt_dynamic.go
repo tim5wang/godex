@@ -641,7 +641,13 @@ func formatBundleSummary(items []tools.BundleCatalogItem, active bool) string {
 		if item.Active != active {
 			continue
 		}
+		if item.Name == tools.BundleAlwaysOn && !active {
+			continue
+		}
 		part := item.Name
+		if item.Name == tools.BundleAlwaysOn {
+			part += " [template-pinned]"
+		}
 		if strings.TrimSpace(item.Summary) != "" {
 			part += " (" + item.Summary + ")"
 		}
@@ -653,6 +659,9 @@ func formatBundleSummary(items []tools.BundleCatalogItem, active bool) string {
 func formatBundleNames(items []tools.BundleCatalogItem, active bool) string {
 	names := make([]string, 0, len(items))
 	for _, item := range items {
+		if item.Name == tools.BundleAlwaysOn && !active {
+			continue
+		}
 		if item.Active == active {
 			names = append(names, item.Name)
 		}

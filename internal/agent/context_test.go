@@ -739,9 +739,9 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 	}
 	slices.Sort(gotNames)
 	wantNames := []string{
-		"attach_file", "bash", "compress", "edit_file", "find", "glob", "grep",
-		"history_search", "ls", "lsp", "memory", "read_file", "skill",
-		"todo_list", "todo_write", "tool_exchange", "web_fetch", "web_search", "write_file",
+		"attach_file", "bash", "call_mcp_tool", "compress", "edit_file", "find", "glob", "grep",
+		"history_search", "list_mcp_tools", "ls", "lsp", "memory", "read_file", "skill",
+		"taskboard", "todo_list", "todo_write", "tool_exchange", "ui_card", "web_fetch", "web_search", "write_file",
 	}
 	if !slices.Equal(gotNames, wantNames) {
 		t.Fatalf("active tool schema set changed.\nwant: %v\ngot:  %v", wantNames, gotNames)
@@ -1073,8 +1073,8 @@ func TestBuildContextIncludesToolAvailabilityPrompt(t *testing.T) {
 		"Use tool_exchange with a short query to discover or change bundle state when needed.",
 		"Do not use bash/curl/python/node as a substitute for web_search or web_fetch when the web bundle is active.",
 		"Keep the active tool workspace tidy: use disable_bundles for active bundles that this conversation no longer needs.",
-		"- Active bundles: core_code (workspace shell commands and code file access), lsp (LSP code intelligence (definitions, references, hover, diagnostics, completions)), planning (lightweight todo planning and progress tracking), web (current information lookup and page fetching)",
-		"- Available bundles: background (long-running command execution and status checks), desktop (local desktop screenshots, clipboard, keyboard, mouse, and window inspection), external_agents (external ACP agent delegation over stdio), mcp (configured MCP resource servers), packages (declaration-only package and prompt ecosystem), subagent (isolated delegated exploration or implementation work), task_board (persistent task board operations), team (teammate inbox, messaging, and approval workflows)",
+		"- Active bundles: always_on [template-pinned] (Host-resident meta tools (memory, skills, compression, session management, tool exchange, ...)), core_code (workspace shell commands and code file access), lsp (LSP code intelligence (definitions, references, hover, diagnostics, completions)), mcp (configured MCP resource servers), planning (lightweight todo planning and progress tracking), task_board (persistent task board operations), web (current information lookup and page fetching)",
+		"- Available bundles: background (long-running command execution and status checks), desktop (local desktop screenshots, clipboard, keyboard, mouse, and window inspection), external_agents (external ACP agent delegation over stdio), packages (declaration-only package and prompt ecosystem), subagent (isolated delegated exploration or implementation work), team (teammate inbox, messaging, and approval workflows)",
 	} {
 		if strings.Contains(build.System, want) {
 			t.Fatalf("did not expect tool availability prompt %q in system prompt, got %q", want, build.System)

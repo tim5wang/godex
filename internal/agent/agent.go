@@ -104,6 +104,11 @@ type Agent struct {
 	templateTrimHeavy  bool
 	templateSkills     []string
 	templateMemoryMode string
+	// templateToolBaseline is the exact Tools ∪ expanded Bundles set fixed
+	// at template application time. ClearMessages restores this set instead
+	// of widening the session back to host registration defaults.
+	templateToolBaseline    []string
+	templateToolBaselineSet bool
 
 	prompts              conversation.PromptLayers
 	messages             []protocol.Message

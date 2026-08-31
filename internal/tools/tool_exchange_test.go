@@ -53,6 +53,75 @@ func TestToolExchangeReturnsCatalogWhenNoChangesRequested(t *testing.T) {
 	}
 }
 
+func TestToolExchangeCatalogExcludesTemplatePinnedAlwaysOnBundle(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool("bash"), ToolMeta{
+		Bundle:        "core_code",
+		Summary:       "core tools",
+		DefaultActive: true,
+	})
+	handler.RegisterWithMeta(fakeTool("compress"), ToolMeta{AlwaysActive: true})
+	handler.ActivateDefaults()
+
+	canonical := handler.Catalog()
+	if len(canonical.Bundles) != 2 || canonical.Bundles[0].Name != "always_on" {
+		t.Fatalf("expected canonical catalog to retain always_on, got %+v", canonical.Bundles)
+	}
+
+	result, err := NewToolExchangeTool(handler).Execute(context.Background(), map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("tool exchange execute: %v", err)
+	}
+	var parsed struct {
+		ActiveBundles []string            `json:"active_bundles"`
+		Bundles       []BundleCatalogItem `json:"bundles"`
+		Summary       map[string]int      `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(parsed.ActiveBundles) != 1 || parsed.ActiveBundles[0] != "core_code" {
+		t.Fatalf("expected dynamic active bundles to exclude always_on, got %v", parsed.ActiveBundles)
+	}
+	if len(parsed.Bundles) != 1 || parsed.Bundles[0].Name != "core_code" {
+		t.Fatalf("expected dynamic catalog to exclude always_on, got %+v", parsed.Bundles)
+	}
+	if parsed.Summary["active_bundle_count"] != 1 || parsed.Summary["available_bundle_count"] != 1 {
+		t.Fatalf("expected dynamic counts to exclude always_on, got %+v", parsed.Summary)
+	}
+}
+
+func TestToolExchangeRejectsEnablingTemplatePinnedAlwaysOnBundle(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool("compress"), ToolMeta{AlwaysActive: true})
+	handler.SetActiveToolsExact()
+
+	_, err := NewToolExchangeTool(handler).Execute(context.Background(), map[string]interface{}{
+		"enable_bundles": []interface{}{"always_on"},
+	})
+	if err == nil || !containsAll(err.Error(), []string{"always_on", "template-pinned", "Agent template"}) {
+		t.Fatalf("expected template-pinned enable error, got %v", err)
+	}
+	if handler.IsActive("compress") {
+		t.Fatal("tool_exchange must not enable always_on outside the template baseline")
+	}
+}
+
+func TestToolExchangeRejectsDisablingTemplatePinnedAlwaysOnBundle(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool("compress"), ToolMeta{AlwaysActive: true})
+
+	_, err := NewToolExchangeTool(handler).Execute(context.Background(), map[string]interface{}{
+		"disable_bundles": []interface{}{"always_on"},
+	})
+	if err == nil || !containsAll(err.Error(), []string{"always_on", "template-pinned", "Agent template"}) {
+		t.Fatalf("expected template-pinned disable error, got %v", err)
+	}
+	if !handler.IsActive("compress") {
+		t.Fatal("tool_exchange must not disable template-pinned always_on tools")
+	}
+}
+
 func TestToolExchangeQueryReturnsSmallRecommendations(t *testing.T) {
 	handler := NewToolHandler()
 	handler.RegisterWithMeta(fakeTool("web_search"), ToolMeta{

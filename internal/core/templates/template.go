@@ -70,7 +70,7 @@ type AgentTemplate struct {
 
 	// Capability boundary.
 	Bundles      []string `json:"bundles,omitempty" yaml:"bundles,omitempty"`     // initial active bundles (tools of these bundles)
-	Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`         // explicit tool allowlist; wins over Bundles
+	Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`         // explicit tools combined with expanded Bundles as a union
 	WriteEnabled bool     `json:"write_enabled,omitempty" yaml:"write_enabled,omitempty"`
 	WriteScope   []string `json:"write_scope,omitempty" yaml:"write_scope,omitempty"`
 	MCPServers   []string `json:"mcp_servers,omitempty" yaml:"mcp_servers,omitempty"`

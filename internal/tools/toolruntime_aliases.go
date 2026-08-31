@@ -46,6 +46,8 @@ type ErrPermissionDenied = toolruntime.ErrPermissionDenied
 type ErrPermissionPending = toolruntime.ErrPermissionPending
 
 const (
+	BundleAlwaysOn = toolruntime.BundleAlwaysOn
+
 	PermissionAbstain = toolruntime.PermissionAbstain
 	PermissionAllow   = toolruntime.PermissionAllow
 	PermissionDeny    = toolruntime.PermissionDeny

@@ -688,11 +688,11 @@ func TestClearMessagesResetsTransientPromptState(t *testing.T) {
 		t.Fatalf("expected transcript refs to be cleared, got %v", state.TranscriptRefs)
 	}
 	for _, name := range state.ActiveBundles {
-		if name == bundleBackground || name == bundleWeb {
+		if name == bundleBackground {
 			t.Fatalf("expected transient bundles to reset, got %v", state.ActiveBundles)
 		}
 	}
-	if !containsString(state.ActiveBundles, bundleCoreCode) || !containsString(state.ActiveBundles, bundlePlanning) {
+	if !containsString(state.ActiveBundles, bundleCoreCode) || !containsString(state.ActiveBundles, bundlePlanning) || !containsString(state.ActiveBundles, bundleWeb) {
 		t.Fatalf("expected default bundles to remain active, got %v", state.ActiveBundles)
 	}
 }

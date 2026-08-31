@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/protocol"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/workerruntime"
 )
 
@@ -202,6 +203,7 @@ func TestLocalWorkerRuntimeRejectsOtherWorkerIDForControlMethods(t *testing.T) {
 func TestLocalWorkerRuntimeDispatchValidatesRequiredTools(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "read-only", Tools: []string{"read_file", "tool_exchange"}})
 
 	_, err := a.WorkerRuntime().Dispatch(context.Background(), workerruntime.JobRequest{
 		WorkerID:  localGoDexWorkerID,

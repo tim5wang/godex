@@ -15,14 +15,16 @@ import (
 // load, after ApplySessionMode, so an explicit template wins over the legacy
 // mode mapping. Like sessionMode the template is fixed for the session
 // lifetime: the persona/base prompt live in the stable system prompt and the
-// initial tool set does not change mid-session, keeping the prompt prefix
-// (and provider prefix-cache hits) stable.
+// capability baseline remains fixed for the session. tool_exchange may change
+// ordinary bundles, but cannot add or remove the template-pinned always_on
+// bundle; ClearMessages restores the fixed baseline.
 //
 // Tool semantics are EXACT: the session gets precisely Tools ∪ bundle-tools
 // (SetActiveToolsExact), with no force-preserved always-active extras. Meta
 // tools that must stay reachable must be listed explicitly or via the
-// "always_on" virtual bundle. Legacy session modes keep SetActiveTools,
-// which preserves always-active tools for backward compatibility.
+// "always_on" virtual bundle. The empty built-in default template is the sole
+// compatibility exception and restores registration defaults. Legacy session
+// modes keep SetActiveTools, which preserves always-active tools.
 func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 	memoryMode := templates.NormalizeMemoryMode(t.Memory)
 	a.mu.Lock()
@@ -51,10 +53,22 @@ func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 		// Exact allowlist: the session gets exactly the listed tools.
 		a.toolHandler.SetActiveToolsExact(t.Tools...)
 	case len(t.Bundles) > 0:
-		if names := toolNamesForBundles(a.toolHandler.Catalog(), t.Bundles); len(names) > 0 {
-			a.toolHandler.SetActiveToolsExact(names...)
-		}
+		a.toolHandler.SetActiveToolsExact(toolNamesForBundles(a.toolHandler.Catalog(), t.Bundles)...)
+	case strings.TrimSpace(t.ID) == templates.BuiltinDefault:
+		// The built-in empty default template is the explicit compatibility
+		// exception: reproduce the legacy registered-default tool set.
+		a.toolHandler.ResetActiveToolsToDefaults()
+	default:
+		// Every other template has exact Tools ∪ Bundles semantics, including
+		// a deliberately empty capability set.
+		a.toolHandler.SetActiveToolsExact()
 	}
+
+	baseline := a.toolHandler.ActiveToolNames()
+	a.mu.Lock()
+	a.templateToolBaseline = baseline
+	a.templateToolBaselineSet = true
+	a.mu.Unlock()
 }
 
 // applyScopedMemory rebuilds the agent's memory manager (and the memory tool)

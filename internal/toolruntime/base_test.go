@@ -193,6 +193,28 @@ func TestToolHandlerCannotDeactivateAlwaysActiveBundles(t *testing.T) {
 	}
 }
 
+func TestToolHandlerCannotDynamicallyChangeAlwaysOnVirtualBundle(t *testing.T) {
+	handler := NewToolHandler()
+	handler.RegisterWithMeta(fakeTool{name: "compress"}, ToolMeta{AlwaysActive: true})
+	handler.SetActiveToolsExact()
+
+	if changed := handler.ActivateBundles(BundleAlwaysOn); len(changed) != 0 {
+		t.Fatalf("expected always_on activation to be ignored, got %v", changed)
+	}
+	if handler.IsActive("compress") {
+		t.Fatal("expected direct bundle activation not to bypass template pinning")
+	}
+
+	handler.SetActiveToolsExact("compress")
+	changed, blocked := handler.DeactivateBundles(BundleAlwaysOn)
+	if len(changed) != 0 || len(blocked) != 1 || blocked[0] != BundleAlwaysOn {
+		t.Fatalf("expected always_on deactivation blocked, changed=%v blocked=%v", changed, blocked)
+	}
+	if !handler.IsActive("compress") {
+		t.Fatal("expected template-pinned always_on tool to remain active")
+	}
+}
+
 func TestToolHandlerSetActiveToolsReplacesSetPreservingAlwaysActive(t *testing.T) {
 	handler := NewToolHandler()
 	handler.RegisterWithMeta(fakeTool{name: "bash"}, ToolMeta{

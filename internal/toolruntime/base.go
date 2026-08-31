@@ -28,8 +28,8 @@ type BundleCatalogItem struct {
 
 // ToolCatalog describes which bundles and tools are currently available.
 type ToolCatalog struct {
-	ActiveBundles     []string            `json:"active_bundles"`
-	AlwaysActiveTools []string            `json:"always_active_tools"`
+	ActiveBundles     []string `json:"active_bundles"`
+	AlwaysActiveTools []string `json:"always_active_tools"`
 	// ActiveTools is the exact set of currently-callable tool names. Note the
 	// difference from AlwaysActiveTools (a registration property, not
 	// activation state) and from ActiveBundles (any-tool-active marking):
@@ -52,10 +52,10 @@ type ToolHandler struct {
 	// baseBefore/baseAfter are the host-registered interceptors (never removed
 	// by owner unregister); ownedBefore/ownedAfter carry plugin/package-owned
 	// interceptors with reversible registration.
-	baseBefore   []BeforeInterceptor
-	baseAfter    []AfterInterceptor
-	ownedBefore  []ownedBeforeInterceptor
-	ownedAfter   []ownedAfterInterceptor
+	baseBefore  []BeforeInterceptor
+	baseAfter   []AfterInterceptor
+	ownedBefore []ownedBeforeInterceptor
+	ownedAfter  []ownedAfterInterceptor
 	// owners tracks the owning registration for each tool name. A non-empty
 	// owner enables reversible unregister (dynamic plugin/package uninstall).
 	owners map[string]string
@@ -525,6 +525,9 @@ func (h *ToolHandler) ActivateBundles(names ...string) []string {
 	defer h.mu.Unlock()
 	changed := make([]string, 0, len(names))
 	for _, bundle := range stringutil.UniqueNonEmpty(names) {
+		if bundle == BundleAlwaysOn {
+			continue
+		}
 		toolNames := h.bundleTools[bundle]
 		if len(toolNames) == 0 {
 			continue
@@ -549,6 +552,10 @@ func (h *ToolHandler) DeactivateBundles(names ...string) (changed []string, bloc
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, bundle := range stringutil.UniqueNonEmpty(names) {
+		if bundle == BundleAlwaysOn {
+			blocked = append(blocked, bundle)
+			continue
+		}
 		toolNames := h.bundleTools[bundle]
 		if len(toolNames) == 0 {
 			continue

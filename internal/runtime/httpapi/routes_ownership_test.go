@@ -40,6 +40,27 @@ func TestStaticRoutePatternsHaveSingleOwner(t *testing.T) {
 			"GET /providers", "POST /providers/{id}/test", "POST /providers/{id}/models",
 			"GET /providers/import/codex", "POST /providers/import/codex",
 		},
+		"routes_automation.go": {
+			"GET /automation/cron/jobs", "POST /automation/cron/jobs",
+			"GET /automation/cron/jobs/{id}", "PATCH /automation/cron/jobs/{id}",
+			"DELETE /automation/cron/jobs/{id}", "POST /automation/cron/jobs/{id}/run",
+			"GET /automation/cron/jobs/{id}/runs", "GET /automation/heartbeat",
+			"PUT /automation/heartbeat", "POST /automation/heartbeat/test",
+			"GET /automation/heartbeat/logs",
+		},
+		"routes_memory.go": {
+			"GET /memory", "GET /memory/candidates", "GET /memory/audit",
+			"POST /memory/digest", "POST /memory/mine/project", "GET /memory/suppressions",
+			"GET /memory/context", "POST /memory/remember", "POST /memory/update",
+			"POST /memory/forget", "POST /memory/archive", "POST /memory/restore",
+			"POST /memory/milestones/archive", "GET /memory/milestones",
+			"POST /memory/suppressions/remove", "POST /memory/candidates/{fingerprint}/accept",
+			"POST /memory/candidates/{fingerprint}/dismiss", "POST /memory/audit/{id}/restore",
+		},
+		"routes_notes.go": {
+			"GET /notes", "GET /notes/{id}", "GET /notes/{id}/related-memories",
+			"POST /notes", "DELETE /notes/{id}",
+		},
 	}
 	for file, patterns := range expectedOwners {
 		for _, pattern := range patterns {

@@ -76,6 +76,45 @@ func TestStaticRoutePatternsHaveSingleOwner(t *testing.T) {
 			"POST /v1/chat/completions", "POST /v1/responses", "POST /v1/messages",
 			"POST /v1/exec", "GET /v1/models",
 		},
+		"routes_sessions.go": {
+			"POST /sessions", "GET /sessions", "DELETE /sessions/{id}",
+			"PATCH /sessions/{id}/title", "POST /sessions/{id}/fork", "POST /sessions/{id}/model",
+			"GET /sessions/{id}", "GET /sessions/{id}/context-inspector",
+			"GET /sessions/{id}/transcript/{ref}", "GET /sessions/{id}/ledger",
+			"POST /sessions/{id}/ledger", "GET /sessions/{id}/timeline",
+			"GET /sessions/{id}/timeline/page", "GET /sessions/{id}/compactions",
+		},
+		"routes_workflows.go": {
+			"GET /sessions/{id}/subagents", "GET /sessions/{id}/subagents/{jobID}",
+			"GET /sessions/{id}/subagents/{jobID}/review", "POST /sessions/{id}/subagents/{jobID}/cancel",
+			"POST /sessions/{id}/subagents/{jobID}/resume", "POST /sessions/{id}/subagents/{jobID}/merge",
+			"GET /sessions/{id}/longtasks", "POST /sessions/{id}/longtasks",
+			"GET /sessions/{id}/longtasks/{workflowID}", "POST /sessions/{id}/longtasks/{workflowID}/run",
+			"POST /sessions/{id}/longtasks/{workflowID}/cancel", "POST /sessions/{id}/longtasks/{workflowID}/finalize",
+			"POST /sessions/{id}/longtasks/{workflowID}/lookup", "POST /sessions/{id}/longtasks/{workflowID}/rollback",
+			"POST /sessions/{id}/longtasks/{workflowID}/gc", "GET /sessions/{id}/permissions",
+			"POST /sessions/{id}/permissions/{requestID}/approve", "POST /sessions/{id}/permissions/{requestID}/deny",
+		},
+		"routes_templates.go": {
+			"GET /agent-templates", "GET /agent-templates/options", "GET /agent-templates/{id}",
+			"POST /agent-templates", "PUT /agent-templates/{id}", "DELETE /agent-templates/{id}",
+			"POST /agent-templates/{id}/validate",
+		},
+		"routes_skills.go": {
+			"GET /skills/catalog", "GET /sessions/{id}/skills/catalog", "GET /sessions/{id}/skills/sources",
+			"GET /sessions/{id}/skills/active", "GET /sessions/{id}/skills/{name}",
+			"POST /sessions/{id}/skills/install", "POST /sessions/{id}/skills/normalize",
+			"DELETE /sessions/{id}/skills/{name}", "POST /sessions/{id}/skills/load",
+			"POST /sessions/{id}/skills/expand", "POST /sessions/{id}/skills/unload",
+		},
+		"routes_turns.go": {
+			"POST /sessions/{id}/messages", "GET /sessions/{id}/turns/{turnID}",
+			"POST /sessions/{id}/turns/{turnID}/cancel", "POST /sessions/{id}/queued/{queueID}/cancel",
+			"POST /sessions/{id}/queued/{queueID}/steer", "POST /sessions/{id}/turns/{turnID}/retry",
+			"POST /sessions/{id}/turns/{turnID}/resume", "POST /sessions/{id}/attachments",
+			"GET /sessions/{id}/attachments/{attachmentID}", "POST /sessions/{id}/commands",
+			"GET /sessions/{id}/events",
+		},
 	}
 	for file, patterns := range expectedOwners {
 		for _, pattern := range patterns {

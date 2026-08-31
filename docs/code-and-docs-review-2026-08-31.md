@@ -12,11 +12,11 @@
 
 修复后 `internal/services/backend` 全包测试通过；全量 Go 失败从 15 项降到 13 项，剩余为 `internal/agent` 9 项、`internal/tools` 4 项，均与 P0-1 默认 bundle/`always_on` 契约冲突相关。本轮没有通过批量修改测试期望来替代产品决策。
 
-HTTP composition root 已完成四批增量拆分：config、runtime service、control node、provider、automation、memory、notes、channel/weixin、model/security、package、prompt/command、OpenAI/Anthropic gateway 共 77 条路由迁入 14 个窄 registrar；`NewHandlerWithRuntime` 从约 1,883 行降到约 863 行，图复杂度从 266 降到 123、cognitive 从 293 降到 141。新增静态 route ownership 测试，禁止生产路由字面量被多个文件重复注册；该项仍为进行中，session/turn 等域尚待继续拆分。
+HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 个按资源域划分的 registrar；`NewHandlerWithRuntime` 从约 1,883 行降到约 85 行，图复杂度从 266 降到 5、cognitive 从 293 降到 7。新增静态 route ownership 测试，禁止生产路由字面量被多个文件重复注册。registrar 拆分已经完成，构造参数进一步收敛为窄 `Dependencies` 可作为后续独立改进。
 
 ## 1. 工具选择与成本控制
 
-主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，包含 15,993 个节点、103,517 条关系，`parse_partial=0`、`skipped=0`。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
+主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，包含 16,003 个节点、103,544 条关系，`parse_partial=0`、`skipped=0`。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
 
 成本策略：先用 `get_architecture`/`search_graph`/图查询做全局收敛，再对高复杂度、高 fan-in/fan-out、跨层依赖和相似实现调用 `trace_path` 与精确源码片段，最后用编译器、类型检查和测试验证。LSP 更适合单符号编辑；本任务要覆盖数百文件和跨模块关系，知识图谱单位上下文成本更低。图查询不支持的复杂 `SIMILAR_TO` 条件改为拉取边后在结果层筛选。
 
@@ -83,13 +83,13 @@ HTTP composition root 已完成四批增量拆分：config、runtime service、c
 
 ### P1 — 收紧架构边界
 
-#### P1-1 HTTP API composition root 重新膨胀（增量拆分进行中）
+#### P1-1 HTTP API composition root 重新膨胀（registrar 拆分已完成）
 
 `NewHandlerWithRuntime` 位于 `internal/runtime/httpapi/httpapi.go`，单函数约 1,883 行，图复杂度 266、cognitive 293、outbound call edge 192；文件共 2,339 行。虽然 Files/Usage/Voice/Steps 等已拆 route 文件，大量 config/node/provider/package/automation/memory/session handlers 仍以内联闭包集中在一个函数。
 
 建议：保留同包拆分，把每个资源域收敛为 `registerConfigRoutes`、`registerControlRoutes`、`registerSessionRoutes` 等；构造参数改为窄 `Dependencies`，避免继续拉长函数签名。新增 route ownership 测试，禁止同一路径在多个注册器重复。
 
-后续状态：config、runtime service/control node、provider、automation、memory、notes、channel/weixin、model/security、package、prompt/command、gateway registrar 与 route ownership 测试已落地；剩余 session/turn 域和窄 `Dependencies` 尚未完成。
+后续状态：138 条静态路由已迁入 19 个 registrar，route ownership 测试已落地；主函数现约 85 行、复杂度 5/cognitive 7。窄 `Dependencies` 尚未实施，避免在本轮机械迁移中同时改变构造边界。
 
 #### P1-2 配置 schema 与读写映射不是单一事实源
 
@@ -218,7 +218,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 
 1. 冻结默认 tool activation policy，修复对应 14 个 Go contract tests（其余 1 个 backend fixture 单独处理）。
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
-3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成四批，累计迁移 77 条路由，其余仍进行中。
+3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；`setStoredValue` 表驱动收敛仍待后续。
 4. architecture import test 已完成；文件复杂度 budget 与既有违规迁移仍待做。
 5. 前端按 feature 拆 `api/types/i18n/styles`，优先 Settings/Chat/TaskBoard/Skills/Memory。
 6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)，CI 执行 `make docs-check`。

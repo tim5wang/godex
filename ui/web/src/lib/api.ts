@@ -79,6 +79,7 @@ import type {
   TaskboardCardCreateInput,
   TaskboardCardPatchInput,
   TaskboardExecutionObservation,
+  TaskboardReconcileReport,
 } from "./types";
 import { useNodeContextStore } from "../store/nodeContext";
 
@@ -1780,7 +1781,7 @@ export function retryTaskboardExecution(token: string | null, id: string, execut
 }
 
 export function reconcileTaskboard(token: string | null) {
-  return request<{ reconcile_report: { scanned: number; observed: number; finalized: number } }>(
+  return request<{ reconcile_report: TaskboardReconcileReport }>(
     `/v1/taskboard/reconcile`,
     { method: "POST" },
     token,

@@ -156,11 +156,64 @@ type ExecutionObservation struct {
 	LastTool  string `json:"last_tool,omitempty"`
 }
 
+// ReconcileAction is the per-execution outcome of one reconcile pass: what the
+// pass did (or recommends) for a single running execution.
+type ReconcileAction string
+
+const (
+	// ActionNone: normally running — only the observation snapshot was written.
+	ActionNone ReconcileAction = "none"
+	// ActionFinalized: the run reached a concrete terminal error/cancel and was
+	// closed to failed/cancelled on that evidence (never invented as completed).
+	ActionFinalized ReconcileAction = "finalized"
+	// ActionStalled: running but idle with no progress past the stall threshold;
+	// marked for a PJM to notice (P0/P1 only report — never auto-kill/recover).
+	ActionStalled ReconcileAction = "stalled"
+)
+
+// ReconcileResult is the per-execution detail of one reconcile pass, so a PJM
+// sees exactly which card/execution was observed, stalled, or finalized instead
+// of only aggregate counters.
+type ReconcileResult struct {
+	CardID      string `json:"card_id"`
+	CardTitle   string `json:"card_title"`
+	ExecutionID string `json:"execution_id"`
+	Stage       string `json:"stage,omitempty"`
+	ErrorType   string `json:"error_type,omitempty"`
+	LastTool    string `json:"last_tool,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+	// Stall marks a run that is idle with no progress past the threshold.
+	Stall       bool            `json:"stall,omitempty"`
+	StallReason string          `json:"stall_reason,omitempty"`
+	Action      ReconcileAction `json:"action"`
+}
+
+// CardConsistency flags a card-level ledger inconsistency (G4) that is not
+// necessarily a running-execution zombie but still leaves the board in an
+// ambiguous state (e.g. in_progress with holder residue but no running
+// execution). P0 reports these; it never auto-mutates the card (that stays with
+// a PJM/human).
+type CardConsistency struct {
+	CardID    string `json:"card_id"`
+	CardTitle string `json:"card_title"`
+	Field     string `json:"field"`
+	Problem   string `json:"problem"`
+	Suggested string `json:"suggested"`
+}
+
 // ReconcileReport summarizes one reconciliation pass over running executions.
+// Scanned/Observed/Finalized are retained for backward compatibility (and as
+// quick aggregates); Results carries the per-execution detail (G2), Signals the
+// card-level consistency findings (G4).
 type ReconcileReport struct {
-	Scanned   int `json:"scanned"`
-	Observed  int `json:"observed"`
-	Finalized int `json:"finalized"`
+	Scanned   int               `json:"scanned"`
+	Observed  int               `json:"observed"`
+	Finalized int               `json:"finalized"`
+	Stalled   int               `json:"stalled"`
+	StartedAt time.Time         `json:"started_at,omitempty"`
+	Duration  time.Duration     `json:"duration,omitempty"`
+	Signals   []CardConsistency `json:"signals,omitempty"`
+	Results   []ReconcileResult `json:"results,omitempty"`
 }
 
 // Research carries the structured investigation/verification asset produced by

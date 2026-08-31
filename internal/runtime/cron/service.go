@@ -306,12 +306,56 @@ func (s *Service) ListRunLogs(jobID string, limit int) ([]RunLog, error) {
 	return s.store.ListRunLogs(jobID, limit)
 }
 
+// RunNow triggers a job immediately and returns as soon as the run is queued.
+//
+// Historically this ran the whole agent turn synchronously, which meant a slow
+// turn blocked the HTTP handler past the client's request timeout. When the
+// client then disconnected, the request context was canceled and the agent turn
+// got aborted (recorded as "context canceled"), leaving the UI spinning forever
+// on the "立刻运行" button.
+//
+// To fix that, RunNow is now fire-and-forget: it fetches the job, guards against
+// re-entry, records a running run log for observability, and launches a
+// detached goroutine (with its own context.Background()) that runs the agent
+// turn to completion. The handler returns immediately with the running run, so a
+// client disconnect or request timeout no longer cancels the work.
 func (s *Service) RunNow(ctx context.Context, jobID string) (RunLog, error) {
 	job, err := s.store.GetJob(jobID)
 	if err != nil {
 		return RunLog{}, err
 	}
-	return s.runJob(ctx, job, s.now())
+
+	// Re-entry guard: never run two turns for the same job concurrently.
+	if !s.beginRun(job.ID) {
+		return RunLog{}, fmt.Errorf("cron job %q is already running", job.ID)
+	}
+
+	startedAt := s.now()
+	run := newRunLog(job, startedAt)
+
+	// Record a running run log immediately so the automation UI can show the
+	// run as in-progress while it executes in the background.
+	if err := s.store.AppendRunLog(run); err != nil {
+		s.finishRun(job.ID)
+		return RunLog{}, err
+	}
+
+	s.wg.Add(1)
+	go func(job Job, run RunLog) {
+		defer s.wg.Done()
+		defer func() {
+			<-s.semaphore
+			s.finishRun(job.ID)
+		}()
+		// Semaphore is acquired inside the goroutine (not the handler) so that a
+		// full global concurrency throttle never blocks the HTTP response.
+		s.semaphore <- struct{}{}
+		// Run with a detached background context so that a client disconnect or
+		// request timeout does not cancel the agent turn (the reported bug).
+		_, _ = s.runJob(context.Background(), job, run)
+	}(job, run)
+
+	return run, nil
 }
 
 func (s *Service) loop(ctx context.Context, done chan struct{}) {
@@ -356,7 +400,7 @@ func (s *Service) dispatchDue(ctx context.Context) error {
 				<-s.semaphore
 				s.finishRun(job.ID)
 			}()
-			_, _ = s.runJob(ctx, job, startedAt)
+			_, _ = s.runJob(ctx, job, newRunLog(job, startedAt))
 		}(job, now)
 	}
 	return nil
@@ -378,7 +422,8 @@ func (s *Service) finishRun(jobID string) {
 	s.mu.Unlock()
 }
 
-func (s *Service) runJob(ctx context.Context, job Job, startedAt time.Time) (RunLog, error) {
+func (s *Service) runJob(ctx context.Context, job Job, run RunLog) (RunLog, error) {
+	startedAt := run.StartedAt
 	job = job.normalize(s.cfg)
 
 	// Idempotency guard: a committed run (same job + started timestamp) is
@@ -394,13 +439,6 @@ func (s *Service) runJob(ctx context.Context, job Job, startedAt time.Time) (Run
 		}
 	}
 
-	run := RunLog{
-		ID:             newID("cronrun"),
-		JobID:          job.ID,
-		Status:         JobStatusRunning,
-		DeliveryTarget: job.DeliveryTarget.Clone(),
-		StartedAt:      startedAt,
-	}
 	job.LastStatus = JobStatusRunning
 	job.LastError = ""
 	job.UpdatedAt = startedAt
@@ -561,6 +599,16 @@ func (s *Service) runJob(ctx context.Context, job Job, startedAt time.Time) (Run
 	}
 
 	return run, err
+}
+
+func newRunLog(job Job, startedAt time.Time) RunLog {
+	return RunLog{
+		ID:             newID("cronrun"),
+		JobID:          job.ID,
+		Status:         JobStatusRunning,
+		DeliveryTarget: job.DeliveryTarget.Clone(),
+		StartedAt:      startedAt,
+	}
 }
 
 func idempotencyKey(jobID string, startedAt time.Time) string {

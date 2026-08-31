@@ -149,8 +149,13 @@ func TestRunJobAppliesModelProfileToBackend(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 
-	if _, err := service.RunNow(context.Background(), job.ID); err != nil {
+	run, err := service.RunNow(context.Background(), job.ID)
+	if err != nil {
 		t.Fatalf("run now: %v", err)
+	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
+	if run.Status != JobStatusCompleted {
+		t.Fatalf("expected completed run, got %s", run.Status)
 	}
 
 	calls := backend.SelectedCalls()
@@ -193,8 +198,13 @@ func TestRunJobSkipsSetSessionModelProfileWhenNoProfileSelected(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 
-	if _, err := service.RunNow(context.Background(), job.ID); err != nil {
+	run, err := service.RunNow(context.Background(), job.ID)
+	if err != nil {
 		t.Fatalf("run now: %v", err)
+	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
+	if run.Status != JobStatusCompleted {
+		t.Fatalf("expected completed run, got %s", run.Status)
 	}
 
 	if calls := backend.SelectedCalls(); len(calls) != 0 {
@@ -222,11 +232,12 @@ func TestRunJobRecordsErrorWhenSetSessionModelProfileFails(t *testing.T) {
 	}
 
 	run, err := service.RunNow(context.Background(), job.ID)
-	if err == nil {
-		t.Fatalf("expected run error when SetSessionModelProfile fails")
+	if err != nil {
+		t.Fatalf("run now: %v", err)
 	}
-	if !strings.Contains(err.Error(), "missing-profile") {
-		t.Fatalf("expected run error to surface missing profile, got %v", err)
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
+	if !strings.Contains(run.Error, "missing-profile") {
+		t.Fatalf("expected run error to surface missing profile, got %v", run.Error)
 	}
 	if run.Status != JobStatusError {
 		t.Fatalf("expected run status %q, got %q", JobStatusError, run.Status)

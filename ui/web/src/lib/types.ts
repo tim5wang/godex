@@ -1754,6 +1754,38 @@ export interface TaskboardExecutionObservation {
   last_tool?: string;
 }
 
+export interface TaskboardReconcileResult {
+  card_id: string;
+  card_title: string;
+  execution_id: string;
+  stage?: string;
+  error_type?: string;
+  last_tool?: string;
+  last_error?: string;
+  stall?: boolean;
+  stall_reason?: string;
+  action: string;
+}
+
+export interface TaskboardCardConsistency {
+  card_id: string;
+  card_title: string;
+  field: string;
+  problem: string;
+  suggested: string;
+}
+
+export interface TaskboardReconcileReport {
+  scanned: number;
+  observed: number;
+  finalized: number;
+  stalled: number;
+  started_at?: string;
+  duration?: number;
+  signals?: TaskboardCardConsistency[];
+  results?: TaskboardReconcileResult[];
+}
+
 export interface TaskboardCard {
   id: string;
   project_id: string;

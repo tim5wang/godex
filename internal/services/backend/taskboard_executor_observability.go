@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -58,30 +59,41 @@ func (e *TaskboardExecutor) Observe(ctx context.Context, cardID, executionID str
 	return obs, live, nil
 }
 
+// reconcileStallThreshold is how long a run may stay idle with no progress
+// before Reconcile marks it stalled. P0 uses a fixed default (30m); a future
+// phase can make it configurable.
+const reconcileStallThreshold = 30 * time.Minute
+
 // Reconcile walks every running execution across the ledger, observes its
 // session, and:
 //   - finalizes (failed/cancelled) an execution whose session already reached a
 //     terminal error — the classic "disk says running but the model errored out"
 //     zombie that left PJM with no insight;
+//   - marks as stalled a run that is idle with no progress past the threshold
+//     (G3: distinguishes a genuinely stuck/looping run from a slow-but-alive
+//     task where an active turn is still making progress);
 //   - otherwise writes the observation snapshot back so the board shows where
-//     the run is stalled (thinking / tool call / waiting approval).
+//     the run is (thinking / tool call / waiting approval);
+//   - additionally flags card-level ledger inconsistencies that are not running
+//     zombies but leave the board ambiguous (G4, e.g. in_progress with holder
+//     residue but no running execution).
 //
 // Reconcile never invents a completion: it only finalizes on concrete evidence
 // (terminal error turn or an explicit cancel), so a genuinely running task is
-// never prematurely closed.
+// never prematurely closed. Stagnation is reported, never killed — that stays
+// with a PJM/human (P0/P1 boundary).
 func (e *TaskboardExecutor) Reconcile(ctx context.Context) (taskboard.ReconcileReport, error) {
-	report := taskboard.ReconcileReport{}
+	started := e.service.now()
+	report := taskboard.ReconcileReport{StartedAt: started}
 	for _, card := range e.ledger.ListCards(taskboard.CardFilter{}) {
+		// ---- Pass 1: running executions (observe / finalize / stall) ----
 		for i := range card.Executions {
 			ex := &card.Executions[i]
 			if ex.Status != taskboard.ExecutionRunning {
 				continue
 			}
 			report.Scanned++
-			sessionID := ex.SessionID
-			if sessionID == "" && ex.Host != nil {
-				sessionID = ex.Host.SessionID
-			}
+			sessionID := executionSessionID(card, *ex)
 			if sessionID == "" {
 				continue
 			}
@@ -92,6 +104,15 @@ func (e *TaskboardExecutor) Reconcile(ctx context.Context) (taskboard.ReconcileR
 				continue
 			}
 			obs, live := observeFromSnapshot(snapshot)
+			result := taskboard.ReconcileResult{
+				CardID:      card.ID,
+				CardTitle:   card.Title,
+				ExecutionID: ex.ID,
+				Stage:       obs.Stage,
+				ErrorType:   obs.ErrorType,
+				LastTool:    obs.LastTool,
+				LastError:   obs.LastError,
+			}
 			if !live && obs.ErrorType != "" {
 				// The run is not executing a turn and the session recorded a
 				// terminal error — finalize it as failed with the insight.
@@ -105,16 +126,96 @@ func (e *TaskboardExecutor) Reconcile(ctx context.Context) (taskboard.ReconcileR
 				}
 				if _, err := e.ledger.FinishExecutionWithObs(card.ID, ex.ID, status, summary, obs); err == nil {
 					report.Finalized++
+					result.Action = taskboard.ActionFinalized
 				}
-				continue
+			} else if !live && e.isStalled(ex, snapshot) {
+				result.Stall = true
+				result.StallReason = "idle_no_progress"
+				result.Action = taskboard.ActionStalled
+				report.Stalled++
+			} else {
+				result.Action = taskboard.ActionNone
 			}
-			// Otherwise record the current stage for observability.
-			if _, err := e.ledger.UpdateExecutionObservation(card.ID, ex.ID, obs); err == nil {
-				report.Observed++
+			if result.Action != taskboard.ActionFinalized {
+				if _, err := e.ledger.UpdateExecutionObservation(card.ID, ex.ID, obs); err == nil {
+					report.Observed++
+				}
+			}
+			report.Results = append(report.Results, result)
+		}
+
+		// ---- Pass 2: card-level consistency (G4), independent of running exes ----
+		if card.Status == taskboard.StatusInProgress && !card.HasRunningExecution() && card.Holder != "" {
+			report.Signals = append(report.Signals, taskboard.CardConsistency{
+				CardID:    card.ID,
+				CardTitle: card.Title,
+				Field:     "holder/execution",
+				Problem:   "in_progress but no running execution with holder residue",
+				Suggested: "recover to finalize, or human accept",
+			})
+		}
+		if card.Status == taskboard.StatusInReview {
+			done, total := card.ChecklistProgress()
+			if !card.HasRunningExecution() && done < total {
+				report.Signals = append(report.Signals, taskboard.CardConsistency{
+					CardID:    card.ID,
+					CardTitle: card.Title,
+					Field:     "dod",
+					Problem:   "in_review but checklist not fully done (no running execution)",
+					Suggested: "complete remaining DoD items or reject the card",
+				})
 			}
 		}
 	}
+	report.Duration = e.service.now().Sub(started)
 	return report, nil
+}
+
+// isStalled reports whether a non-live running execution has made no progress
+// past the stall threshold. It is conservative: an active turn, a retryable
+// turn (waiting for a recover/retry nudge), or any recent turn activity means
+// the run is NOT stalled — so a slow-but-alive task is never mis-flagged. A
+// run that never produced a turn is measured from its start (ex.StartedAt).
+func (e *TaskboardExecutor) isStalled(ex *taskboard.Execution, snapshot Snapshot) bool {
+	if snapshot.Running || snapshot.ActiveTurnID != "" {
+		// Genuinely running a turn in-process — not stalled.
+		return false
+	}
+	if retryableTurnID(snapshot.Turns) != "" {
+		// A turn is waiting for a recover/retry nudge (terminal but retryable);
+		// treat as "paused by design", not stalled.
+		return false
+	}
+	last := lastTurnUpdatedAt(snapshot.Turns)
+	if last.IsZero() {
+		// No turn ever recorded: measure from when the execution started.
+		return e.service.now().Sub(ex.StartedAt) > reconcileStallThreshold
+	}
+	return e.service.now().Sub(last) > reconcileStallThreshold
+}
+
+// executionSessionID resolves the observe-able session for an execution (the
+// isolated execution session, falling back to the host session).
+func executionSessionID(card taskboard.Card, ex taskboard.Execution) string {
+	if ex.SessionID != "" {
+		return ex.SessionID
+	}
+	if ex.Host != nil {
+		return ex.Host.SessionID
+	}
+	return ""
+}
+
+// lastTurnUpdatedAt returns the most recent turn update time, or the zero time
+// if there are no turns (so callers can fall back to execution start time).
+func lastTurnUpdatedAt(turns []TurnRecord) time.Time {
+	var last time.Time
+	for _, t := range turns {
+		if t.UpdatedAt.After(last) {
+			last = t.UpdatedAt
+		}
+	}
+	return last
 }
 
 // Recover appends a message into the card's execution session to nudge a
@@ -147,9 +248,9 @@ func (e *TaskboardExecutor) Recover(ctx context.Context, cardID, executionID, te
 		return "", fmt.Errorf("taskboard: reopen execution session: %w", err)
 	}
 	envelope := message.NewRuntimeEnvelope(message.SourceBackground, sessionID, taskboardRecoveryActor, text, e.service.now(), map[string]string{
-		taskboardCardIDMetadataKey:   card.ID,
-		"taskboard_recovery":     "1",
-		"taskboard_execution":    executionID,
+		taskboardCardIDMetadataKey: card.ID,
+		"taskboard_recovery":       "1",
+		"taskboard_execution":      executionID,
 	})
 	if _, err := e.service.SubmitAsync(ctx, sessionID, envelope, SubmitOptions{QueueMode: QueueModeFollowUp}); err != nil {
 		return "", fmt.Errorf("taskboard: submit recovery message to %s: %w", sessionID, err)

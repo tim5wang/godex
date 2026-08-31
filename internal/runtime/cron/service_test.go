@@ -124,6 +124,30 @@ func createJob(t *testing.T, service *Service, script string) Job {
 	return job
 }
 
+// waitForRunStatus polls the store until the run identified by jobID+runID
+// reaches a terminal status (or times out). RunNow is now fire-and-forget, so
+// tests must wait for the detached goroutine to finish before asserting on the
+// final run status.
+func waitForRunStatus(t *testing.T, store Store, jobID, runID string, timeout time.Duration) RunLog {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		runs, err := store.ListRunLogs(jobID, 20)
+		if err != nil {
+			t.Fatalf("list runs: %v", err)
+		}
+		for _, r := range runs {
+			if r.ID == runID && r.Status != JobStatusRunning {
+				return r
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for run %s to reach terminal status", runID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRunJobWatchdogExitZeroRuns(t *testing.T) {
 	root := t.TempDir()
 	store := NewFileStore(t.TempDir())
@@ -136,6 +160,7 @@ func TestRunJobWatchdogExitZeroRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run now: %v", err)
 	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
 	if run.Status != JobStatusCompleted {
 		t.Fatalf("exit 0 must run agent, got %s", run.Status)
 	}
@@ -162,6 +187,7 @@ func TestRunJobWatchdogExitNonZeroSkips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("non-zero exit is a skip, not an error, got %v", err)
 	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
 	if run.Status != JobStatusSuppressed {
 		t.Fatalf("non-zero exit must suppress, got %s", run.Status)
 	}
@@ -188,9 +214,10 @@ func TestRunJobWatchdogMissingScriptErrors(t *testing.T) {
 	job := createJob(t, service, filepath.Join(root, "nope.sh"))
 
 	run, err := service.RunNow(context.Background(), job.ID)
-	if err == nil {
-		t.Fatalf("missing script must error")
+	if err != nil {
+		t.Fatalf("run now: %v", err)
 	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
 	if run.Status != JobStatusError {
 		t.Fatalf("missing script must record error, got %s", run.Status)
 	}
@@ -208,9 +235,10 @@ func TestRunJobWatchdogTimeoutErrors(t *testing.T) {
 	job := createJob(t, service, writeScript(t, root, "#!/bin/sh\nsleep 30\n"))
 
 	run, err := service.RunNow(context.Background(), job.ID)
-	if err == nil {
-		t.Fatalf("timeout must error")
+	if err != nil {
+		t.Fatalf("run now: %v", err)
 	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 40*time.Second)
 	if run.Status != JobStatusError {
 		t.Fatalf("timeout must record error, got %s", run.Status)
 	}
@@ -240,6 +268,7 @@ func TestRunJobWatchdogDefaultScriptFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default watchdog should skip, not error, got %v", err)
 	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
 	if run.Status != JobStatusSuppressed {
 		t.Fatalf("default watchdog must suppress, got %s", run.Status)
 	}
@@ -310,6 +339,7 @@ func TestRunNowUsesSharedOrIsolatedSessionLocator(t *testing.T) {
 			if err != nil {
 				t.Fatalf("run now: %v", err)
 			}
+			run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
 			if run.SessionID == "" {
 				t.Fatalf("expected run session id")
 			}
@@ -350,9 +380,10 @@ func TestRunNowPersistsBlockedDelivery(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 	run, err := service.RunNow(context.Background(), job.ID)
-	if err == nil {
-		t.Fatalf("expected blocked delivery error")
+	if err != nil {
+		t.Fatalf("run now: %v", err)
 	}
+	run = waitForRunStatus(t, store, job.ID, run.ID, 10*time.Second)
 	if run.Status != JobStatusDeliveryBlocked {
 		t.Fatalf("expected delivery_blocked, got %s", run.Status)
 	}

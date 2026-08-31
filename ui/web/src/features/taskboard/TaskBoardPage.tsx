@@ -9,6 +9,7 @@ import {
   Empty,
   Input,
   InputNumber,
+  List,
   Modal,
   Popconfirm,
   Select,
@@ -56,7 +57,7 @@ import {
   updateCronJob,
   updateTaskboardProject,
 } from "../../lib/api";
-import type { CronJob, TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardExecutionObservation, TaskboardProject, TaskboardResearch, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
+import type { CronJob, TaskboardCard, TaskboardCardPatchInput, TaskboardExecution, TaskboardExecutionObservation, TaskboardProject, TaskboardReconcileReport, TaskboardResearch, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
 
 const COLUMNS: { status: TaskboardStatus; labelKey: string; dot: string }[] = [
   { status: "backlog", labelKey: "taskboard.col.backlog", dot: "#8c8c8c" },
@@ -125,6 +126,8 @@ export function TaskBoardPage() {
   const [urgencyFilter, setUrgencyFilter] = useState<TaskboardUrgency | "">("");
   const [search, setSearch] = useState("");
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [reconcileOpen, setReconcileOpen] = useState(false);
+  const [reconcileReport, setReconcileReport] = useState<TaskboardReconcileReport | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createProjectID, setCreateProjectID] = useState<string | undefined>(undefined);
   const [createWorkDir, setCreateWorkDir] = useState<string | undefined>(undefined);
@@ -413,7 +416,9 @@ export function TaskBoardPage() {
   const reconcileMutation = useMutation({
     mutationFn: async () => reconcileTaskboard(token || null),
     onSuccess: (report) => {
-      message.success(t("taskboard.reconcileDone", { scanned: report.reconcile_report.scanned, finalized: report.reconcile_report.finalized }));
+      message.success(t("taskboard.reconcileDone", { scanned: report.reconcile_report.scanned, finalized: report.reconcile_report.finalized, stalled: report.reconcile_report.stalled }));
+      setReconcileReport(report.reconcile_report);
+      setReconcileOpen(true);
       invalidate();
       if (detailId) detailQuery.refetch();
     },
@@ -1065,6 +1070,74 @@ export function TaskBoardPage() {
             onChange={(event) => setCreateResearchOpen(event.target.value)}
           />
         </div>
+      </Modal>
+
+      <Modal
+        title={t("taskboard.reconcileDetail")}
+        open={reconcileOpen}
+        zIndex={1300}
+        footer={null}
+        onCancel={() => setReconcileOpen(false)}
+        width={720}
+      >
+        {reconcileReport && (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Space wrap>
+              <Tag>{t("taskboard.reconcileDetailScanned", { count: reconcileReport.scanned })}</Tag>
+              <Tag color="blue">{t("taskboard.reconcileDetailObserved", { count: reconcileReport.observed })}</Tag>
+              <Tag color="red">{t("taskboard.reconcileDetailFinalized", { count: reconcileReport.finalized })}</Tag>
+              <Tag color="orange">{t("taskboard.reconcileDetailStalled", { count: reconcileReport.stalled })}</Tag>
+            </Space>
+            {(reconcileReport.results?.length || 0) > 0 && (
+              <List
+                size="small"
+                header={<Typography.Text strong>{t("taskboard.reconcileDetailExecutions")}</Typography.Text>}
+                dataSource={reconcileReport.results || []}
+                renderItem={(item) => (
+                  <List.Item>
+                    <Space direction="vertical" size={0} style={{ width: "100%" }}>
+                      <Space wrap style={{ width: "100%" }}>
+                        <Typography.Text strong>{item.card_title}</Typography.Text>
+                        <Tag color={item.action === "finalized" ? "red" : item.action === "stalled" ? "orange" : "default"}>
+                          {item.action}
+                        </Tag>
+                        {item.stage && <Tag>{item.stage}</Tag>}
+                        {item.error_type && <Tag color="error">{item.error_type}</Tag>}
+                        {item.stall && <Tag color="orange">{item.stall_reason || "stalled"}</Tag>}
+                      </Space>
+                      {item.last_error && (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {item.last_error}
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            )}
+            {(reconcileReport.signals?.length || 0) > 0 && (
+              <List
+                size="small"
+                header={<Typography.Text strong>{t("taskboard.reconcileDetailSignals")}</Typography.Text>}
+                dataSource={reconcileReport.signals || []}
+                renderItem={(item) => (
+                  <List.Item>
+                    <Space wrap style={{ width: "100%" }}>
+                      <Typography.Text strong>{item.card_title}</Typography.Text>
+                      <Tag color="warning">{item.field}</Tag>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {item.problem}
+                      </Typography.Text>
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            )}
+            {(reconcileReport.results?.length || 0) === 0 && (reconcileReport.signals?.length || 0) === 0 && (
+              <Empty description={t("taskboard.reconcileDetailEmpty")} />
+            )}
+          </Space>
+        )}
       </Modal>
 
       <Modal

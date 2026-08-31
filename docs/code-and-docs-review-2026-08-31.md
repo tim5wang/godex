@@ -14,6 +14,8 @@
 
 HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 个按资源域划分的 registrar；`NewHandlerWithRuntime` 从约 1,883 行降到约 85 行，图复杂度从 266 降到 5、cognitive 从 293 降到 7。新增静态 route ownership 测试，禁止生产路由字面量被多个文件重复注册。registrar 拆分已经完成，构造参数进一步收敛为窄 `Dependencies` 可作为后续独立改进。
 
+Web 源码新增 1000 行预算门禁；9 个既有超限文件使用精确历史上限作为迁移例外，不能继续增长，降到阈值后测试会要求删除例外。该门禁阻止债务扩大，不代替后续 feature vertical slice 拆分。
+
 ## 1. 工具选择与成本控制
 
 主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，包含 16,003 个节点、103,544 条关系，`parse_partial=0`、`skipped=0`。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
@@ -97,11 +99,11 @@ HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 �
 
 建议：不是引入反射框架，而是先把字段按域拆成小 handler table；每个 schema field 绑定 get/set/secret policy，并加 round-trip property test，逐步消灭平行 switch。
 
-#### P1-3 Web 页面和共享文件再次超过可维护阈值
+#### P1-3 Web 页面和共享文件再次超过可维护阈值（增量门禁已完成）
 
 当前热点：`SettingsPage.tsx` 2,280 行、`ChatPage.tsx` 1,919、`TaskBoardPage.tsx` 1,457、`SkillsPage.tsx` 1,439、`MemoryPage.tsx` 1,093；共享 `api.ts` 1,789、`types.ts` 1,877、`messages.ts` 2,871、`styles.css` 3,251。
 
-已有 `big-file-split-plan.md` 的旧四文件拆分基本完成，但“每文件约 1000 行”没有自动 gate，热点已转移。建议按 feature vertical slice 拆 API/types/i18n/style，而不是继续维护全局桶；CI 增加可豁免的行数/复杂度预算。
+已有 `big-file-split-plan.md` 的旧四文件拆分基本完成，但热点已转移。现已增加 architecture test，对 `ui/web/src` 执行 1000 行默认预算；上述 9 个既有超限文件以当前行数作为不可增长的精确例外，文件降到阈值后例外必须删除。后续仍应按 feature vertical slice 拆 API/types/i18n/style，而不是继续维护全局桶。
 
 #### P1-4 Domain 与 infrastructure 边界不纯
 
@@ -219,7 +221,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 1. 冻结默认 tool activation policy，修复对应 14 个 Go contract tests（其余 1 个 backend fixture 单独处理）。
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
 3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；`setStoredValue` 表驱动收敛仍待后续。
-4. architecture import test 已完成；文件复杂度 budget 与既有违规迁移仍待做。
+4. architecture import test 与 Web 文件行数 budget 已完成；Go 函数复杂度 budget 与既有违规迁移仍待做。
 5. 前端按 feature 拆 `api/types/i18n/styles`，优先 Settings/Chat/TaskBoard/Skills/Memory。
 6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)，CI 执行 `make docs-check`。
 

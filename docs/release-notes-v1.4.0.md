@@ -1,5 +1,6 @@
 # godex v1.4.0 — "Protocols & Plugins"
 
+> 状态：Historical（v1.4.0 release record）
 > Release date: 2026-08-23 ｜ Base: v1.3.0 ｜ Commits: 64
 
 🇬🇧 **English**

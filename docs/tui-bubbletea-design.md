@@ -1,6 +1,22 @@
 # GoDex 统一多入口交互与 Bubble Tea TUI 设计方案
 
-> 状态：Plan（设计方案）
+> 状态：Historical / Implemented architecture record（统一 backend、Envelope/Event、CLI/TUI/Web/IM 主链已落地；旧 readline REPL 已移除）
+
+## 当前实现映射（2026-08-31）
+
+| 原设计 | 当前实现 | 状态 |
+|---|---|---|
+| Inbound Envelope | `internal/domain/message.Envelope`，被 backend/channels/cron/heartbeat/CLI 等共同消费 | Implemented |
+| Runtime Event | `internal/domain/events.Event` + recorder/sink，Web/TUI/后端共享事件语义 | Implemented |
+| Session Backend | `internal/services/backend` 的 OpenSession/Submit/SubmitAsync/Snapshot/Timeline 等 | Implemented |
+| Command Service | `internal/services/commands.AvailableMetadata()` 是 slash command 元数据事实源 | Implemented |
+| Bubble Tea TUI | `internal/tui/mintui`，通过 backend interface 打开会话、提交与订阅 | Implemented |
+| CLI | `godex ask` 支持 stdin/session；root help 与测试在代码中维护 | Implemented |
+| Web | HTTP/SSE session/chat 工作台 | Implemented |
+| IM | Feishu/Weixin channels 通过同一 backend/session envelope 接入 | Implemented baseline |
+| readline REPL | `repl` 子命令已删除，由 TUI/`ask` 替代 | Superseded |
+
+本文保留的是统一多入口架构的设计动机，不再是待执行计划；具体命令与入口以代码 help 和功能矩阵为准。
 
 ## 目标
 
@@ -21,7 +37,7 @@ GoDex 接下来不只是要把当前 `readline` REPL 升级成更好的 TUI，�
 
 Bubble Tea TUI 在这个方案里依然重要，但它只是统一交互体系里的一个前端，而不是新的内核。
 
-## 要解决的问题
+## 设计时要解决的问题（历史快照）
 
 当前系统已经从 `main.go` 中拆出了 `repl` 包，也已经有统一的 `Envelope` 雏形，但还远远没有达到“多入口共用后端”的状态。
 
@@ -566,7 +582,7 @@ type CommandSpec struct {
 
 ## 分阶段实施建议
 
-### Phase 0：统一输入输出协议
+### Phase 0：统一输入输出协议（✅ 已落地）
 
 先做：
 
@@ -577,7 +593,7 @@ type CommandSpec struct {
 
 这是后面所有入口的底座。
 
-### Phase 1：统一 session backend
+### Phase 1：统一 session backend（✅ 已落地）
 
 先做：
 
@@ -588,7 +604,7 @@ type CommandSpec struct {
 
 这一步完成后，`readline` 和 `cli` 可以先接入。
 
-### Phase 2：迁移现有 `readline`
+### Phase 2：迁移现有 `readline`（Superseded：REPL 已移除）
 
 目标：
 
@@ -596,7 +612,7 @@ type CommandSpec struct {
 - slash command 走统一 command service
 - 输出改成消费 runtime events
 
-### Phase 3：补 `cli`
+### Phase 3：补 `cli`（✅ `godex ask` 已落地）
 
 目标：
 
@@ -605,7 +621,7 @@ type CommandSpec struct {
 - `--session`
 - `--stdin`
 
-### Phase 4：实现 Bubble Tea TUI
+### Phase 4：实现 Bubble Tea TUI（✅ `mintui` 已落地）
 
 目标：
 
@@ -615,7 +631,7 @@ type CommandSpec struct {
 - sidebar
 - command palette
 
-### Phase 5：实现 `web chat`
+### Phase 5：实现 `web chat`（✅ 已落地）
 
 目标：
 
@@ -624,7 +640,7 @@ type CommandSpec struct {
 - transcript replay
 - reconnect
 
-### Phase 6：实现 `IM`
+### Phase 6：实现 `IM`（✅ Feishu/Weixin baseline 已落地）
 
 目标：
 

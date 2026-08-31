@@ -1,10 +1,10 @@
 # taskboard 插件设计方案（需求池 #1）
 
-> 状态：Approved（2026-08-27 用户拍板"全按默认"） · 关联：plugin-system-evolution-plan.md（§4 边界 P-A~P-D、§5 路径 A）
+> 状态：Active / Implemented baseline（M1/M2/M2.5 与部分 M3 已落地；worktree 隔离、SSE 事件流等仍 Planned） · 关联：plugin-system-evolution-plan.md（§4 边界 P-A~P-D、§5 路径 A）
 > 形态：godex 原生 Go 插件（能力面重写，非 JS 二进制迁移）；前端原生 React 页面（Q2=B）；
 > 项目维度走轻量注册表（Q3=B）；MVP 按三期交付（Q1=A）。
 >
-> 进度：**M1（核心闭环）✅ → M2（看板）✅ → M2.5（执行进度跳转）✅ 已完成；M3（协作增强）未开始**。
+> 进度：**M1/M2/M2.5 ✅；模板执行/PJM、M3 research+路径冲突 baseline、手动 reconcile P0 ✅；SSE、自动 reconcile/history、依赖拓扑等仍 Partial/Planned**。
 > 本文档随之从"设计"同步为"设计与实现对照"；下述 `## ` 内如与代码冲突，以 `internal/plugins/taskboard/` 为准。
 
 ## 1. 已确认决策
@@ -27,7 +27,7 @@ internal/plugins/taskboard/        # host 半（Go，pluginrt 插件）
 ├── routes.go        # /v1/taskboard HTTP 面（人工 PATCH/complete/reject/checklist）
 ├── ledger_test.go / tools_test.go / plugin_test.go   # 账本/协议闸/工具/边界 测试
 
-internal/services/backend/taskboard_executor.go   # 执行适配：hostSession + 提交卡片进入主会话（M1-d）
+internal/services/backend/taskboard_executor.go   # 执行适配：按 card key/template 打开独立执行会话并提交任务
 
 ui/web/src/features/taskboard/
 └── TaskBoardPage.tsx  # 五列看板 + 详情抽屉 + 验收/退回操作（M2）
@@ -122,8 +122,14 @@ type Card struct {
 | `comment_add` | 追加评论（交接/风险/进展） | — |
 | `delete` | 软删除 | 执行中不可删 |
 | `checklist` | 清单 add / check（附证据）/ uncheck | — |
+| `dispatch` | 经过 touched/observed path 冲突预检后启动卡片独立执行会话 | Gate 2；无 executor 时拒绝 |
+| `observe` | 读取执行会话快照并回写 observation | 不臆造完成 |
+| `reconcile` | 扫描运行执行并返回 results/stalled/signals | 当前手动触发；自动调度未实现 |
+| `recover` / `retry` | 恢复执行会话或重试可重试 turn | 依赖可观测 executor |
+| `report_touched` | 上报执行实际触达路径并做动态冲突检查 | Gate 3；显式上报 baseline |
+| `merge_precheck` | 生成 path-overlap 合并预检报告 | Gate 4 baseline；非完整 Git 三方合并 |
 
-（`taskboard_execution_report` 归 M3。）项目边界：agent 认领/移动前须项目匹配。
+项目边界：agent 认领/移动前须项目匹配。原规划的独立 `taskboard_execution_report` 没有作为第二个工具落地，观测/reconcile/merge report 已收敛到单一 `taskboard` tool actions。
 备注：写操作强制 `version`（乐观并发）；`action=move` 的 actor 用当前会话 id（见上）。
 
 ## 5. HTTP 路由（P-A 首个消费者）
@@ -151,7 +157,7 @@ POST   /v1/taskboard/cards/{id}/execute   # 手动执行（M1）
 - [x] pluginrt：`RegisterEffect`/`RegisterRoutes`（可逆）+ 服务注入 getter + 测试
 - [x] 账本 CRUD + 乐观并发 + 软删除 + 持久化 round-trip 测试
 - [x] `taskboard` 单工具注册可用；协议闸测试（move 到不了 done / 持有不可抢 / 执行中不可删）
-- [x] 手动执行拉起宿主会话，投递卡片指令进主对话；插件卸载后工具/路由全撤销无残留
+- [x] 手动执行按 `card-<id>` locator 拉起独立执行会话并应用 `template_id`；插件卸载后工具/路由全撤销无残留
 
 **M2 可视化** ✅ 完成
 - [x] `TaskBoardPage` 五列看板（紧急度色条/筛选/搜索）+ 详情抽屉（评论流/执行记录/清单）
@@ -159,15 +165,15 @@ POST   /v1/taskboard/cards/{id}/execute   # 手动执行（M1）
 - [x] 刷新：前端 15s 轮询 + 变更后 invalidateQueries；nav 注册新入口；i18n 中英文
 
 **M2.5 进度跳转** ✅ 完成
-- [x] 执行记录「查看进度」按 session_id 解析完整 locator → `buildChatRouteForSession` 跳到宿主会话（`ad9b722` 起多轮修复：完整身份编码、HostRef 补 project_dir、跳执行会话本体）
+- [x] 执行记录「查看进度」按 session_id 解析完整 locator → `buildChatRouteForSession` 跳到执行会话本体（`ad9b722` 起多轮修复：完整身份编码、HostRef 补 project_dir）
 
-**M3 协作增强**（未开始）
+**M3 协作增强**（🟡 baseline 已落地）
 - [ ] git worktree 隔离执行（非 git 项目自动降级）+ 一键合并
-- [ ] host cron 定时执行（复用 P-D）+ 并发上限
-- [ ] `taskboard_execution_report` 结构化报告 + DoD 未勾高亮
+- [x] PJM Cron 定时唤醒 + 手动触发 UI（通用并发上限仍待补）
+- [x] `observe/reconcile/merge_precheck` 结构化报告 + DoD consistency signal（未新增第二个 execution_report 工具）
 - [ ] SSE 变更流（`GET /v1/taskboard/events`）替代前端轮询
-- [x] **多智能体协作优化设计已落盘** → 见 `docs/taskboard-collaboration-design.md`（M3.5 前置：上下文传递 research + 并行冲突治理四道闸门 + 经验回流）
-- [x] **对账功能设计已落盘** → 见 `docs/taskboard-reconcile-design.md`（执行一致性 reconcile：现状盘点 G1-G6 + 停滞检测 G3 + 卡级一致性 G4 + 自动调度 G1 + 分阶段 P0-P3 落地）
+- [x] research 传递、touched/observed paths、dispatch/merge path conflict baseline → 见 `taskboard-collaboration-design.md`；depends_on/经验回流仍 Planned
+- [x] 手动 reconcile P0（明细、stall、卡级 signals、tool/HTTP/UI）→ 见 `taskboard-reconcile-design.md`；自动调度/history/dry-run 仍 Planned
 
 ## 7. 全局验收（可验证）
 

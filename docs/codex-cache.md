@@ -1,5 +1,6 @@
 # Codex 缓存命中率优化：官方 Responses API 端点
 
+> 状态：Analysis（端点与缓存行为分析；实现状态以 provider 配置和 Usage cache stats 为准）
 > 中文为主，English summary at the end.
 
 ## 问题背景

@@ -45,15 +45,9 @@ Top-level `skills/`, `temp/`, and `log/` are ignored only as protection for old 
 
 ## Web UI
 
-`ui/web/src/app/appRegistry.tsx` owns the built-in Web app registry and sidebar route declarations. `ui/web/src/pages/*` files are route wrappers only. Feature code belongs in:
+`ui/web/src/app/appRegistry.tsx` is the executable source of truth for built-in Web apps and sidebar routes. `ui/web/src/pages/*` files are route wrappers only. Feature code belongs in the matching `features/*` vertical slice. As of 2026-08-31 the registry exposes Chat, Files, Automation, Nodes, Notes, Skills, Agent Templates, Memory, Settings, Business Agents, TaskBoard, and Usage.
 
-- `features/chat`
-- `features/automation`
-- `features/nodes`
-- `features/notes`
-- `features/memory`
-- `features/settings`
-- `features/skills`
+`features/chat-v2` contains supporting state/components for the current Chat route; `/chat-v2` itself is only a compatibility redirect. `features/workflows` no longer owns a page: the removed Workflows product was superseded by Business Agents, and only the reusable `UiCardView` remains.
 
 Shared UI primitives stay in `components/`; API/SSE/types/notification helpers stay in `lib/`; truly global state stays in `store/`.
 

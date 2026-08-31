@@ -1,6 +1,6 @@
 # 工作流集成方案：以 godex 为 agent 基建的定制化对话 UI
 
-> 日期：2026-08-23 ｜ 状态：提案（调研完成）
+> 日期：2026-08-23 ｜ 状态：Superseded（接入路径已收敛到 Agent Step API、TypeScript SDK、`<godex-step>` 与 Business Agents）
 > 目标：让其他 UI 快速以 godex 为 agent 基建，实现「知识库召回 + 特定工作环境问题解决定制化」，提供比纯发消息更易用的表单/按钮对话交互（Pi 在这方面做得不错，作为参考）
 
 ## 0. 核心洞察

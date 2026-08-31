@@ -1,5 +1,6 @@
 # GoDex 节点接入手册
 
+> 状态：Active（Node Registry、relay 与 `godex node` 接入手册）
 > 版本：2026-08-06（对应节点接入产品化 + 删除闭环）
 > 适用对象：需要把内网设备上的 GoDex 接入中心服务器的使用者
 > 相关功能：中心「节点」页接入引导、`godex node join`、`godex node exec/forward`、节点删除

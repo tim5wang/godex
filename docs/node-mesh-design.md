@@ -1,9 +1,21 @@
 # GoDex 节点互联与远程开发设计（Node Mesh v2）
 
-> 状态：Draft（待确认后启动开发）
+> 状态：Active / Implemented baseline（Phase 1–3、Phase 4 relay/exec/forward、Phase 5 Web Push 已落地；PWA/Android/跨节点编排等仍 Planned）
 > 日期：2026-08-05
 > 相关代码：`internal/services/noderegistry/`、`internal/runtime/httpapi/httpapi.go`（control 路由）、`cmd/godex/main.go`（serve 装配）、`ui/web/src/features/nodes/`、`ui/web/src/app/appRegistry.tsx`
 > 参考设计：`temp/orca/`（Orca：AI Orchestrator，桌面端 + 移动 companion + SSH worktree + relay 协议）
+
+## 当前实现快照（2026-08-31）
+
+| 阶段 | 状态 | 剩余边界 |
+|---|---|---|
+| Phase 1 Relay | Implemented | 继续做版本兼容与运行可靠性加固。 |
+| Phase 2 观测聚合 | Implemented | 当前 EventStore 是内存态；长期历史/报表不是已实现能力。 |
+| Phase 3 远程控制 | Implemented | Chat/Terminal/Files、审批与 guarded-remote 已接通。 |
+| Phase 4 工作台/跳板 | Partial | TCP forward 与 `node exec` 已实现；工作台体验、跨节点编排、per-node doctor/audit 仍缺。 |
+| Phase 5 移动端 | Partial | 移动 Web 与 Web Push 已实现；完整 PWA/触屏优化、Android node 实验仍未完成。 |
+
+本文仍保留 To-Be 设计作为边界说明；分阶段清单以已勾选实现和本快照为准。
 
 ---
 
@@ -18,11 +30,13 @@
 
 ---
 
-## 1. 现状梳理（As-Is）
+## 1. 实施前现状梳理（2026-08-05 As-Is，历史快照）
 
-### 1.1 「节点」app 当前是什么
+> 本节解释方案起点，不描述 2026-08-31 的产品现状。当前能力以文首实现快照、Phase 清单和 `node-onboarding.md` 为准。
 
-当前「节点」= **只读 Control Plane Dashboard**，核心是轻量 Node Registry + 心跳，只有观测能力，没有控制能力。
+### 1.1 当时的「节点」app 是什么
+
+在方案启动时，「节点」仅是**只读 Control Plane Dashboard**：核心为轻量 Node Registry + 心跳，只有观测能力，没有控制能力。后续 Phase 1–3 已补齐 relay、远程 Chat/Terminal/Files、审批和 guarded-remote。
 
 **后端（Go）**
 
@@ -56,7 +70,7 @@ control:
       ...
 ```
 
-### 1.2 现状能力边界（gap 分析）
+### 1.2 当时的能力边界（gap 分析）
 
 | 能力 | 现状 | 缺口 |
 |---|---|---|
@@ -72,9 +86,9 @@ control:
 | 安全/信任模型 | ⚠️ 共享 web token，无 per-node 凭证 | 需要 per-node 凭证 + 信任级别 + 审计 |
 | 服务器节点自身 | ⚠️ 服务器也注册为普通节点 | 需要同等纳入管理（用户明确要求） |
 
-### 1.3 关键结论
+### 1.3 当时的关键结论
 
-- 现在的「节点」app 只完成了 **registry + observability** 这第一步。
+- 方案启动时的「节点」app 只完成了 **registry + observability** 这第一步；该判断已被后续 Phase 1–3 的实现取代。
 - 产品方向（内网设备 godex ↔ 服务器 godex 互联 → 远程控制/远程编程）需要的是一个 **双向、可路由、可流式传输的控制通道**，而不是单向心跳。
 - 内网设备**没有公网入站可达性**，因此连接模型必须是 **节点主动出站连中心（outbound）**，中心通过已建立的通道反向复用（tunnel / relay），类似 Orca 的移动 companion → 桌面端 WebSocket RPC。
 
@@ -241,7 +255,7 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 
 ## 5. 分阶段计划（建议）
 
-> 每阶段交付后可独立部署验证；用户确认整体设计后，从 Phase 1 开始。
+> 每阶段交付后可独立部署验证；Phase 1–3 已完成，当前从 Phase 4/5 的剩余项继续演进。
 
 ### Phase 1：Relay 传输层（✅ 已完成 2026-08-06）
 
@@ -257,17 +271,6 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 
 验证（2026-08-06 实测）：`curl http://127.0.0.1:3901/api/control/nodes/{id}/proxy/meta` 返回节点版本；registry 中 `relay_status=connected`。
 
-### Phase 2：远程观测聚合
-
-### Phase 2：远程观测聚合
-
-**目标**：中心能看到每个节点的运行中 session/job/审批，Nodes UI 有详情页。
-
-- [ ] 节点侧：把 session/job/approval 变更作为 `event` 帧主动推给中心（或中心按需拉取）
-- [ ] 中心：节点状态聚合存储（内存 + 可选持久化），`/control/nodes/{id}/overview`
-- [ ] Nodes UI：详情页（健康、能力、运行中 session/job、待审批、最近事件）
-- 验证：内网节点跑一个 longtask，中心 Web 能看到其 phase/turn 进度。
-
 ### Phase 2：远程观测聚合（✅ 已完成 2026-08-06）
 
 **目标**：中心能看到每个节点的运行中 session/job/审批，Nodes UI 有详情页。
@@ -280,17 +283,6 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 - [x] 端到端验证：`scripts/smoke_obs.sh` PASS（节点连中心 → 快照事件到达中心 overview）；协议级 `TestSnapshotPushEndToEnd` 验证 job phase/turn 变化在中心可见
 
 验证（2026-08-06 实测）：`curl http://127.0.0.1:3911/api/control/nodes/{id}/overview` 返回 `overview.recent_events` 含 `kind=snapshot` 事件；修复了 Observer 首轮 poll 早于 agent 连线的丢快照 bug（`TestObserverRetriesWhenAgentNotConnected` 回归测试）。
-
-### Phase 3：远程控制（chat / terminal / files）
-
-**目标**：远程编程的第一版——在中心 Web 上对节点完成「聊天 + 终端 + 文件」操作。
-
-- [ ] 中心 `nodeProxy`：sessions / terminal(WS 透传) / files 三类代理端点
-- [ ] 节点侧 relay 支持 WS 双向流（terminal）
-- [ ] Nodes UI v2：节点详情 + 「Open Chat / Terminal / Files」入口；前端 api client 支持节点前缀
-- [ ] 审批聚合：节点写操作审批出现在中心，可在中心处理
-- [ ] 安全：trust 级别生效（`guarded-remote` 节点默认审批）
-- 验证：在内网节点 workspace 里，通过中心 Web 起一个 chat turn → agent 编辑文件 → 终端跑 `go test`，全程在中心浏览器完成。
 
 ### Phase 3：远程控制（chat / terminal / files）（✅ 已完成 2026-08-06）
 
@@ -339,10 +331,6 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 
 ## 6. 风险与开放问题
 
----
-
-## 6. 风险与开放问题
-
 | # | 风险/问题 | 影响 | 对策 |
 |---|---|---|---|
 | 1 | 内网节点网络不稳定 → relay 频繁断连 | 流式体验中断 | 指数退避重连 + req_id 幂等 + 终端 session 在节点侧持久（重连后重新 attach） |
@@ -369,6 +357,6 @@ POST /control/nodes/{id}/disconnect       # 管理：踢下线（可选）
 
 ## 7. 建议的下一步
 
-1. 用户确认本设计的范围与 Phase 1 边界（开放问题已确认，见 §0）；
-2. ✅ Phase 1（Relay 传输层）已交付（2026-08-06），见 §5；
-3. 启动 Phase 2 开发（远程观测聚合）：节点把 session/job/approval 变更作为 `event` 帧推给中心，Nodes UI 详情页。
+1. 补 Phase 4 工作台体验：文件树/diff、终端多开、长任务面板；
+2. 增加 per-node doctor/audit 与必要的持久化观测，而不是把内存 EventStore 描述成历史系统；
+3. 按价值排序评估跨节点编排、PWA 完整化与 Android node 实验，分别验收，避免再用单一“Phase 完成”掩盖子项差异。

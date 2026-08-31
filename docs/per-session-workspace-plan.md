@@ -1,6 +1,6 @@
 # Per-Session 工作目录（新建对话可选设置工作目录）
 
-> 状态：已实施（2026-07-31）
+> 状态：Active / Implemented（2026-07-31）
 > 日期：2026-07-31
 > 关联：chat-v2 Web UI、backend session 管理、agent 工具执行
 

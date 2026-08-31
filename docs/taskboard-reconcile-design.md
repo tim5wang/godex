@@ -1,9 +1,23 @@
 # taskboard 对账功能设计（reconcile / 执行一致性）
 
-> 状态：Draft（本卡交付）｜ 关联：taskboard-plugin-design.md（§6 M3/可观测性）、taskboard-collaboration-design.md（闸门 3 动态观测）
+> 状态：Active（P0 手动对账语义闭环已落地；自动调度、配置化阈值、历史趋势、dry-run/自动恢复仍 Planned）｜ 关联：taskboard-plugin-design.md、taskboard-collaboration-design.md
 > 日期：2026-08-30
 > 起因：任务卡 `t-1788080801653-2` 指出「任务看板对账功能实现似乎不完整，请详细设计一下这块儿的功能」。
 > 本设计基于对现有实现的实测盘点（详见 §2），不是从零发明，而是把已零散落地的观测/恢复能力**补全为闭环的对账语义**，并给出分阶段落地路径。
+
+## 当前实现快照（2026-08-31）
+
+| 能力 | 状态 | 事实源 / 边界 |
+|---|---|---|
+| 逐卡/逐执行明细 | Implemented | `ReconcileReport.Results/Signals/Stalled/StartedAt/Duration` 已落地。 |
+| 安全终态收敛 | Implemented | `TaskboardExecutor.Reconcile` 只在非 live 且有终态错误证据时 finalize failed/cancelled，不臆造 completed。 |
+| 停滞与卡级一致性 | Implemented baseline | `isStalled`、holder/execution 与 DoD signals 已落地并有测试；阈值当前是代码常量。 |
+| Tool / HTTP / Web UI | Implemented baseline | tool `action=reconcile`、`POST /v1/taskboard/reconcile`、Web 报告展示均存在。 |
+| 自动调度与配置 | Planned | 未发现 `ReconcileConfig`、reconcile loop 或插件 schedule 接线；PJM Cron 不等于自动 reconcile。 |
+| 历史/趋势 | Planned | 未发现 reconcile history store/API/UI。 |
+| dry-run / auto-recover | Planned | 当前 HTTP handler 不解析 body，直接执行 reconcile；自动恢复策略未接线。 |
+
+下文保留设计推导。§2 的“现状/缺口”是实施前快照，§3 中的草案只有上表标为 Implemented 的部分可以作为当前产品承诺。
 
 ---
 
@@ -15,16 +29,16 @@
 
 核心主张是**不臆造完成**：对账只依据客观证据（会话终态、显式取消）收敛状态，绝不凭空把 running 翻成 completed。
 
-### 1.2 现状问题（为何"不完整"）
+### 1.2 设计时问题（为何曾经“不完整”）
 
 现有代码已有一个 `Reconcile` 函数（`taskboard_executor_observability.go:72`）和 observe/recover/retry 工具 + HTTP 面 + UI 按钮，但存在以下**结构性缺口**：
 
 | # | 缺口 | 现象 | 根因 |
 |---|---|---|---|
 | G1 | **无自动调度** | 僵尸 running 只能靠人主动点「对账」按钮触发；PJM 忘了点就一直卡在 running | Reconcile 无任何后台循环 / cron / heartbeat 挂钩 |
-| G2 | **报告无明细** | `ReconcileReport{Scanned,Observed,Finalized}` 只有计数，PJM 无法知道"哪张卡被 finalize、哪些停滞" | report 仅聚合，不携带逐卡条目 |
-| G3 | **无停滞(stall)检测** | 观测的 `stage=idle` 不区分"真在思考/长任务"与"死循环/卡死超时"；无"停滞多久算坏"的阈值语义 | 无 stall 判定逻辑，只有单次快照 |
-| G4 | **无卡级一致性核对** | 只看 running execution，不看"in_progress 但无 running execution 且 holder 残留""in_review 但执行记录未收尾" | Reconcile 只扫 running，不核对卡级状态机一致性 |
+| G2 | **报告无明细（已修复）** | 原实现只有计数；当前已有 `Results/Signals` | P0 已落地 |
+| G3 | **无停滞检测（baseline 已修复）** | 当前已有 `isStalled`，但阈值尚未配置化 | P0 已落地，P1 待做 |
+| G4 | **无卡级一致性核对（已修复）** | 当前会检查 holder/execution 与 in_review DoD 信号 | P0 已落地 |
 | G5 | **报告不持久化** | 对账结果是瞬态，无历史，无法做"这次收敛了几次""连续 3 次都卡同一张卡"的趋势分析 | 无对账记录存储 |
 | G6 | **无独立设计文档** | 对账语义散落在 plugin design 与 observability 代码，无一张权威文档 | 本文档目标 |
 
@@ -46,11 +60,11 @@
 | 能力 | 位置 | 说明 |
 |---|---|---|
 | `Observe` | `taskboard_executor_observability.go:30` | 单执行观测 → `observeFromSnapshot` 推导 stage/error/LastTool/live，并 `UpdateExecutionObservation` 写回 |
-| `Reconcile` | `observability.go:72` | 遍历所有 running execution，`!live && ErrorType!=""` → `FinishExecutionWithObs` finalize；否则 `UpdateExecutionObservation` |
+| `Reconcile` | `taskboard_executor_observability.go` | 遍历 running execution，安全 finalize failed/cancelled，更新 observation，识别 stalled，并产生卡级 consistency signals |
 | `Recover` | `observability.go:125` | 追加重启执行会话 + 提交恢复消息（QueueModeFollowUp） |
 | `Retry` | `observability.go:164` | 重放最后一个 `CanRetry` turn |
 | `observeFromSnapshot` | `observability.go:200` | 由 `ActivePhase/PendingPermissions/Turns` 推导 |
-| `ReconcileReport` | `types.go:132` | `{Scanned,Observed,Finalized}` 三计数 |
+| `ReconcileReport` | `internal/plugins/taskboard/types.go` | 计数 + `StartedAt/Duration/Stalled/Results/Signals` |
 | tool actions | `tools.go:73` | `observe/reconcile/recover/retry/report_touched/merge_precheck` |
 | HTTP routes | `plugin.go:122` | `POST .../observe|recover|retry` + `POST /v1/taskboard/reconcile` |
 | UI | `TaskBoardPage.tsx:327` | reconcile 按钮 + observe/recover/retry mutation |
@@ -72,11 +86,11 @@ live := snapshot.Running || snapshot.ActiveTurnID != ""
 
 > **关键洞察**：`live` 只依据「当前在跑 turn」，因此**"执行会话已退出（agent 已写完 final_response 但没调用工具移卡）"在盘上是 idle 而非死**——这正是 G3 停滞检测的落点。
 
-### 2.3 缺口证据
+### 2.3 历史缺口证据（G2/G3/G4 已补齐，G1/G5 仍成立）
 
 - `Reconcile` 定义在 backend 层，但**无任何 `time.NewTicker`/cron/heartbeat 调用它**（grep 全库仅工具/路由/测试引用）。
-- `ReconcileReport` 仅 `Scanned/Observed/Finalized` 三个 int，**无逐卡条目、无 stage、无 stall 标记**。
-- 无「in_progress 卡 + holder 残留 + 无 running execution」一致性修正逻辑。
+- ~~`ReconcileReport` 仅有三计数~~：已由 P0 增加逐卡条目、stage、stall 与 signals。
+- ~~无卡级一致性核对~~：已增加 in_progress holder residue 与 in_review DoD signals；当前是报告建议，不自动篡改人工状态。
 - `closeRunningExecutions`（`ledger.go:928`）只在**状态离开 in_progress** 时收尾，不覆盖"永远停在 in_progress"的场景。
 
 ---
@@ -221,7 +235,7 @@ func (e *TaskboardExecutor) isStalled(ex taskboard.Execution, snap Snapshot) boo
 
 > **为什么用"时间戳"而非只看 stage=idle**：因为执行会话的 turn 记录带 `UpdatedAt`，而持续观察只能看到"当前是否在跑"。用 `now - lastTurnUpdatedAt > threshold` 判定"长时间无新动作"，能**同时覆盖**"agent 写完 final 但没移卡"与"真死循环不出新 turn"两种停滞，且不会把"仍在思考的慢模型"（有 active turn）误判。
 
-### 3.3 配置化（G3 阈值 + G1 自动调度）
+### 3.3 配置化（G3 阈值 + G1 自动调度，Planned）
 
 在 taskboard 插件配置（或复用已有 config 结构）增加：
 
@@ -234,7 +248,7 @@ taskboard:
     auto_recover: true     # 停滞时是否自动触发 recover 引导（false = 仅标记上报）
 ```
 
-### 3.4 自动调度接线（G1 的核心）
+### 3.4 自动调度接线（G1 的核心，Planned）
 
 **设计原则**：任务看板不是全局会话能感知的实时引擎，因此不放在 turn 循环里，而是**挂到一个独立的周期性循环**。候选与结论：
 
@@ -268,7 +282,7 @@ func startReconcileLoop(ctx context.Context, exec ObservedExecutor, cfg Reconcil
 
 **可逆性**：该循环随插件 `Deactivate` 取消，符合 pluginrt 可逆注册语义；卸载后无 goroutine 泄漏。
 
-### 3.5 报告持久化 + 历史（G5）
+### 3.5 报告持久化 + 历史（G5，Planned）
 
 - 对账报告不阻塞主流程：**fire-and-forget** 追加进一个新存储（或复用既有 job store/ledger 侧文件）。
 - 持久化结构：`<StateDir>/taskboard/reconcile_history/<RFC3339>.json`，记录每次 `StartedAt/Duration/Results`。
@@ -277,7 +291,7 @@ func startReconcileLoop(ctx context.Context, exec ObservedExecutor, cfg Reconcil
 
 > **P0 快赢可先不做持久化**，仅把 `Results` 返回给 UI 即可获得明细；持久化/趋势归为 P1（见 §4）。
 
-### 3.6 工具 / HTTP / UI 增强
+### 3.6 工具 / HTTP / UI 增强（baseline 已落地，dry-run 未落地）
 
 - **tool action=reconcile**：返回结构从三计数升级为带 `results` + `signals` 的完整 report（同时保留计数字段兼容既有 parsing）。
 - **HTTP `/v1/taskboard/reconcile`**：返回体同样升级，POST body 可带 `{dry_run: bool}`，dry-run 只对账不落账（便于 PJM 预演）。
@@ -289,10 +303,10 @@ func startReconcileLoop(ctx context.Context, exec ObservedExecutor, cfg Reconcil
 
 | 级别 | 内容 | 改动面 | 验收点 |
 |---|---|---|---|
-| **P0（对账语义闭环）** | ReconcileReport 带 `Results/Stalled/Signals`；`Reconcile` 加停滞判定 + 卡级一致性核对；tool/HTTP 返回升级；UI toast 展示 stalled/finalized | types.go + observability.go + routes.go + tools.go + TaskBoardPage + api.ts + i18n | 单卡 running → 对账能报"停滞"或"finalized"，结果含逐卡明细 |
-| **P1（自动调度 + 配置）** | 独立 reconcileLoop + `reconcile.enabled/interval/stall_threshold` 配置 + 可逆关闭 | 装配处 + config | 后台定时自动跑，插件卸载无泄漏 |
-| **P2（历史/趋势）** | reconcile 历史持久化 + 前端"连续停滞"趋势视图 | 存储 + UI | 能看到某卡连续多轮停滞 |
-| **P3（自动恢复策略）** | `auto_recover`（停滞时自动 recover/retry）+ 逐步升级策略 | observability.go | 停滞执行被自动引导恢复，次数受限防风暴 |
+| **P0 ✅（对账语义闭环）** | Results/Stalled/Signals、停滞判定、卡级一致性、tool/HTTP/UI baseline | 已落地并有 backend/plugin/Web 测试 | 手动对账返回逐卡明细 |
+| **P1 ⬜（自动调度 + 配置）** | reconcileLoop + `enabled/interval/stall_threshold` + 可逆关闭 | 未实现 | 后台定时自动跑，插件卸载无泄漏 |
+| **P2 ⬜（历史/趋势）** | 历史持久化 + 连续停滞趋势 | 未实现 | 能看到某卡连续多轮停滞 |
+| **P3 ⬜（自动恢复策略）** | `auto_recover` + 逐步升级策略 | 未实现 | 次数受限、防恢复风暴 |
 
 ---
 

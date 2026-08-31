@@ -1,6 +1,18 @@
 # GoDex 插件系统演进方案（长期主义）
 
-> 状态：Draft / Plan（未实施） · 日期：2026-08-27
+> 状态：Active（P-A/P-C/P-D 与 TaskBoard 原生插件已落地；P-B 通用前端插件槽仍 Partial） · 日期：2026-08-27，核对：2026-08-31
+
+## 当前实现快照
+
+| 能力 | 状态 | 当前事实 |
+|---|---|---|
+| P-A 插件 HTTP 路由 | Implemented | `pluginrt.Host.RegisterRoutes` 按 prefix 挂载；停用时通过 effect ledger 反向卸载，`TestPluginRoutesRegisterAndRevert` 覆盖。 |
+| P-B 前端插件 UI 插槽 | Partial | TaskBoard 已有内建 React 页面、`ui_card` 有通用渲染，但尚无 manifest `ui:` 聚合协议、iframe 桥或可动态装卸的通用 Web 插件槽。 |
+| P-C 运行时服务注入 | Implemented baseline | `Host.Services()` + `WithServices(Services)` 提供 workspace/state 等受控服务，`TestPluginServicesInjection` 覆盖；它不是无限制的 service locator。 |
+| P-D 插件调度 | Implemented | `Host.RegisterSchedule` 支持 every/cron 并在停用时撤销，`TestPluginScheduleTicksAndReverts` 覆盖。 |
+| TaskBoard 路径 A | Implemented baseline | `internal/plugins/taskboard` 已作为原生插件注册 routes/tools，并由 Web TaskBoard 消费；高级协作和 reconcile 分阶段演进。 |
+
+本文保留原始差距分析以说明设计动机；后续路线与验收必须按上表区分已落地底座和剩余通用 UI 能力。
 > 目标：长期主义地完善 godex 插件边界，使 godex 能低成本承接 dsh 生态等开源插件；
 > 第一个验证案例：dsh-taskboard（跨 session 项目任务看板）适配。
 > 关联：docs/voice-plugin-extensibility-design.md（turn 中间件 / UI 插槽 / 语音 L2，本方案是其广义化）
@@ -44,31 +56,31 @@ npm 0.5.1 描述：*Agent-first task board for the DSH web GUI: host-authoritati
 | `ctx.effect`（可逆注册/卸载撤销） | pluginrt `effects.Ledger` ✅ | 无 |
 | tools 注册（`taskboard_*`） | toolruntime `RegisterOwned`（owner/disposer）✅ | 无 |
 | systemPrompt section 注入 | pluginrt `PromptSections` → agent 注入 ✅ | 无 |
-| host 侧 cron/调度 | godex cron ✅（但插件侧**无注册 API**） | 需暴露（P-D） |
-| **HTTP/SSE 路由注册**（kanban 视图） | httpapi ✅（但插件侧**无路由注册**） | ❌ 补 P-A |
-| **client 半（浏览器 UI 插件）** | 前端**零插件 UI 插槽** | ❌ 补 P-B |
-| **运行时服务注入**（`ctx.inject` workspace/llm/provider） | pluginrt `Host` 仅 RegisterEffect/Provide/Logger | ❌ 补 P-C |
+| host 侧 cron/调度 | `Host.RegisterSchedule` + 可逆撤销 ✅ | 已落地（P-D） |
+| **HTTP/SSE 路由注册**（kanban 视图） | `Host.RegisterRoutes` + prefix mount/unmount ✅ | 已落地（P-A） |
+| **client 半（浏览器 UI 插件）** | TaskBoard 内建页与 `ui_card` 已有；动态 manifest UI 插槽仍无 | 🟡 P-B Partial |
+| **运行时服务注入**（`ctx.inject` workspace/llm/provider） | `Host.Services()` + `WithServices` ✅ | P-C baseline 已落地；按能力授权仍可增强 |
 | 跨进程/独立会话执行 | longtask（session 内）/ durable subagent / ACP harness ✅ | 执行器可复用 |
 
 ## 4. godex 插件边界补齐路线（长期主义）
 
-### P-A：插件注册 HTTP 路由（host 服务面）
-- pluginrt `Host` 增加 `RegisterRoutes(prefix string, handler func(*http.ServeMux))`（可逆注册）。
+### P-A：插件注册 HTTP 路由（✅ 已落地）
+- pluginrt `Host` 已增加 `RegisterRoutes(prefix string, handler func(*http.ServeMux))`（可逆注册）。
 - 场景：taskboard 的 SSE kanban、任意插件面板数据、webhook。
 - 成本：1 天（httpapi 组装处加 manager，按 prefix 分发到插件 mux）。
 
-### P-B：前端插件 UI 插槽（client 面）
+### P-B：前端插件 UI 插槽（🟡 Partial / Planned）
 - 借鉴 dsh：插件 manifest 声明 `ui:` 段（现有设计稿 B 已有雏形），后端 `/plugin-ui` 聚合契约，前端渲染。
 - 场景：kanban 视图（可先做 iframe 桥：插件 host 路由 serve 自己的 HTML → 前端 `<iframe>` 加载，**最省**且不要求 React 组件协议）；进阶再按 ui_card/markdown/form 渲染。
 - 成本：iframe 桥 1–2 天；完整组件插槽 2–3 天（与 design B 合并推进）。
 
-### P-C：插件运行时服务注入（ctx.inject 等价物）
-- pluginrt `Host` 扩展服务面：`Workspace()`, `LLMProviders()`, `Cron()`, `Config()` 等 getter（按 manifest requires 授权）。
+### P-C：插件运行时服务注入（✅ baseline 已落地）
+- pluginrt `Host` 已通过 `Services()` 暴露受控服务集合，并由 `WithServices` 在装配处注入 workspace/state 等依赖；更细的 provider/config 能力和 manifest requires 授权仍可扩展。
 - 场景：taskboard 需要 workspace 边界 + llm provider 列表（`llm.listProviders`）。
 - 成本：1–2 天（定义 service 接口 + 装配处注入）。
 
-### P-D：插件侧 cron/调度注册
-- pluginrt `Host` 增加 `RegisterSchedule(cronExpr, fn)`（可逆注册，复用 godex cron 基建）。
+### P-D：插件侧 cron/调度注册（✅ 已落地）
+- pluginrt `Host` 已增加 `RegisterSchedule(name, ScheduleSpec, fn)`（可逆注册，支持 interval/cron）。
 - 场景：taskboard 的 host-side scheduling。
 - 成本：0.5–1 天。
 
@@ -87,7 +99,7 @@ npm 0.5.1 描述：*Agent-first task board for the DSH web GUI: host-authoritati
 2. ACP 桥接救不了 UI（kanban 视图必须 godex 前端/iframe 承载），所以 ACP 只解决"host 逻辑"不解决"UI"。
 3. **执行器可复用**：taskboard 的"每任务独立会话执行"正是 godex longtask/ACP harness 的强项，Go 重写时直接复用，不重造。
 
-**结论**：路径 A（插件适配）为长期主义正解；ACP 作为"外部执行器"补充（taskboard 执行层委托外部 agent）。建议先补 P-A~P-D 边界（2–4 天），再实现 taskboard 核心能力面（3–5 天），前端 kanban 先 iframe 桥（1–2 天）。
+**当前结论**：路径 A 已落地为 Go 原生 TaskBoard 插件，ACP 仍可作为外部执行器补充。P-A/P-C/P-D 不再是前置缺口；剩余平台级缺口主要是 P-B 通用动态 UI 插槽，TaskBoard 当前使用内建 React 页面而非 iframe/plugin manifest UI。
 
 ## 6. 与 longtask 的关系（用户 Q1 追问）
 
@@ -105,13 +117,13 @@ npm 0.5.1 描述：*Agent-first task board for the DSH web GUI: host-authoritati
 | P1 | #3 心跳 watchdog | 小功能 | 1–1.5 天 | 无 |
 | P2 | #5 Steer 交互 | 前端中 | 2–3 天 | 无 |
 | P2 | #6 MCP 服务管理 | 中 | 2–3 天 | 无 |
-| P3 | 插件边界补齐 P-A~P-D | 基建 | 2–4 天 | 无（长期主义底座） |
-| P3 | **taskboard 插件（路径 A）** | 大 | 3–5 天 + 边界 2–4 天 | P-A~P-D |
+| Done | 插件边界 P-A/P-C/P-D | 基建 | 已落地 | P-B 仍 Partial |
+| Done / evolving | **taskboard 插件（路径 A）** | 大 | baseline 已落地 | 协作/reconcile 按独立文档演进 |
 | P4 | minimind-o ASR/TTS 探索 | 探索 | 待评估 | 其他工作完成后，做进 voice-engine |
 
 ## 8. 验收标准（可验证）
 
-1. P-A~P-D 落地后：任意 godex 插件可注册 HTTP 路由、声明 ui: 段（iframe 桥可用）、经 Host 获取 workspace/llm/cron 服务、注册调度。
+1. P-A/P-C/P-D 已有可执行测试；P-B 的完成判据仍是：任意插件可声明 `ui:` 段并被 Web 动态挂载/卸载，而不是仅存在一个内建 TaskBoard 页面。
 2. taskboard 插件：跨 session 任务账本可持久化、`taskboard_*` 工具可被 agent 调用、每任务独立会话执行（复用 longtask/ACP）、kanban 视图在 Web UI 渲染（iframe 桥首版即可）。
 3. 插件卸载后：路由/工具/调度/UI 全部可逆撤销，无残留。
 4. 无回归：现有语音链路、设置页、聊天交互不变。

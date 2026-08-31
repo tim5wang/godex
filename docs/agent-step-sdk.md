@@ -1,6 +1,6 @@
 # Agent Step Platform — TypeScript SDK（Phase B）
 
-> 状态：Phase B 落地 ｜ 位置：`ui/web/src/lib/agent-step/`
+> 状态：Active / Implemented（Phase B 已落地）｜位置：`ui/web/src/lib/agent-step/`
 > 定位：自包含、零依赖的 TS 客户端，让任意业务前端把 godex 当 agent 运行时——`createStep` 跑一个业务环节，拿到结构化结果；`ui_card` 卡片数据直接复用 `UiCardView` 渲染。
 > 后端契约：`docs/agent-step-platform-details.md` §2。
 

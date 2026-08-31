@@ -1,6 +1,6 @@
 # Agent Step Platform — 细节设计（Phase A 补充）
 
-> 日期：2026-08-24 ｜ 状态：细节设计定稿（未实现）
+> 日期：2026-08-24 ｜ 状态：Active（Phase A 已实现；当前契约见 `routes_steps.go`、`routes_step_track.go` 及其测试）
 > 关联：`docs/agent-step-platform-design.md`（主设计，6 个决策冻结）
 > 本文档把 Phase A 的 6 个待定点落到可实现的细节，全部基于现状调研（godex 已有基础设施）。
 
@@ -8,7 +8,7 @@
 
 | 现状 | 位置 | 对 Phase A 的意义 |
 |---|---|---|
-| MCP stdio client：`Manager` + `stdioClient`，`CallTool` 每次 spawn 进程 | `internal/core/mcp/`（client.go/stdio.go/config.go） | JSON-RPC 桥（initialize/tools/list/tools/call）已就绪，只差 HTTP transport |
+| MCP stdio + Streamable HTTP client：`Manager` 按 server type 分派 | `internal/core/mcp/`（client.go/stdio.go/http.go/config.go） | JSON-RPC initialize/tools/prompts 主链已就绪；HTTP JSON/SSE 终态响应有测试，session id 保持仍未实现 |
 | 协议版本 `2024-11-05` | `internal/core/mcp/stdio.go` | 远端 server 需按此（或兼容）协商 |
 | 工具注册 owner 机制：`RegisterOwned(owner, tool, meta)` / `UnregisterOwner` | `internal/toolruntime/base.go` | 「每 key → 一组 MCP 工具」绑定；owner `mcp:<server>` |
 | MCP 工具命名：`mcpToolName(server, tool)` = `<server>__<tool>`（sanitized） | `internal/tools/mcp.go` | 命名空间已定，白名单解析基于它 |
@@ -48,7 +48,7 @@
 ```
 
 - `type` 新增 `"streamable-http"`（现有 `"stdio"` / `"filesystem"` 不变）。
-- `session_required`: 默认 false（无状态单 POST）；若 server 要求 session（返回 `Mcp-Session-Id`），置 true 则 godex 侧维护 session id 缓存。
+- `session_required`: 当前是为未来 `Mcp-Session-Id` 会话保持预留的兼容字段；即使设为 true，现有 client 仍按无状态单 POST 工作。不要把它当成已实现能力。
 
 ### 1.3 client 实现（与 stdio 共享 JSON-RPC 桥）
 
@@ -60,9 +60,9 @@
 
 ### 1.4 连接 / 重连 / 流式
 
-- **无状态优先（MVP 同步）**：每次 `tools/call` 是一个独立 POST，天然无连接状态；网络错误/5xx 做指数退避重试（1s/2s/4s，最多 3 次；4xx 不重试）。
-- **会话保持（如需）**：响应头带 `Mcp-Session-Id` 时缓存，后续请求带上；会话失效重走 initialize。
-- **流式（后续异步阶段）**：POST 响应若为 `text/event-stream`，解析 `message`（JSON-RPC result/notification）与 `ping`（keepalive）。MVP 同步阶段仅消费终态 result，不做增量流。
+- **无状态优先（当前实现）**：每次调用是独立 POST；网络错误、读取失败和 5xx 最多尝试 3 次，重试前等待 2s/4s；4xx 不重试，并受调用 context 取消。
+- **会话保持（Planned）**：当前不读取或回传 `Mcp-Session-Id`；若后续实现，必须新增 header/session 失效回归测试后才能把 `session_required` 标为可用。
+- **SSE 响应（当前 baseline）**：POST 返回 `text/event-stream` 时解析终态 `message`；当前不是增量事件订阅或长连接 transport。
 - **超时**：单次 `tools/call` HTTP 超时 10s；上游超时返回 `502 bad_gateway`，指明 server 名。
 
 ---

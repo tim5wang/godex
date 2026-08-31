@@ -1,5 +1,6 @@
 # Session Timeline Inspector（会话时间线详情面板）
 
+> 状态：Active（阶段 1/2 已实现）
 > 中文为主，English summary at the end。
 > 对标 DSH 的「轨迹视图」（ui-trajectory）"下探查看细节"能力。阶段 1：每行可展开看详情；阶段 2：turn/step 分组折叠 + 三 lane 概览时间线 + 窗口化虚拟化（均已实现）。
 

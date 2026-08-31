@@ -1,7 +1,16 @@
 # 业务智能体管理台（Business Agents Console）设计
 
-> 状态：设计（待评审）｜ 关联：Agent Step Platform（A/B/C 已完成）
+> 状态：Active / Implemented baseline｜ 关联：Agent Step Platform（A/B/C 已完成）
 > 本文回答三件事：① 完善 ui_card 交互闭环 ② 业务智能体管理界面（含业务/工具/skill/package/工作目录/接入指南/嵌入预览）③ 现有「工作流」去留。
+
+## 当前实现快照（2026-08-31）
+
+- Business Agents 导航、Biz key CRUD、能力/预算/工作目录配置、接入示例与嵌入预览已在 `BusinessAgentsPage.tsx` 和 `/v1/biz/keys*` 落地。
+- `POST /v1/agent-steps/{id}/reply`、SDK `replyStep`、`<godex-step>` 与 `ui_card` 续跑闭环已落地并有测试。
+- Workflows 页面已在 `c9612c1` 删除；仅保留被聊天/嵌入链路复用的 `UiCardView`，不要再把它解释成 Workflows 产品仍存在。
+- `template_id` 已加入 Biz key 并进入模板解析/迁移链；本文早期“skills/packages 仅展示”的描述是首版历史约束，当前运行时能力应以模板解析和 Agent Step 路由为准。
+
+下文作为实现基线的设计记录保留；“新增/本期/实施顺序”均是历史交付措辞，不代表仍未实现。
 
 ## 1. 形态与目标
 
@@ -29,7 +38,7 @@
 
 - 不改 Agent Step 平台核心行为（同步单环节、超时降级、追踪端点保持现状）
 - 不为「业务」引入独立实体（沿用 key = 业务智能体）
-- 不在后端消费 skill/package 白名单的**运行时**能力（本期只是配置与展示，运行时过滤仍是 key 的 mcp_servers/sandbox_tools）
+- 首版曾不消费 skill/package 白名单；当前已进入 template_id/AgentTemplate 解析链。若 key 未绑定模板，则仍需以实际 step/session 装配结果为准，不能只看表单字段推断运行时能力。
 
 ### 2.3 工作流去留评估（已与用户对齐）
 
@@ -71,7 +80,7 @@ type BizAPIKey struct {
 }
 ```
 
-> 消费说明：`project_dir` 由 routes_steps 在 OpenSession 后通过 locator 的 ProjectDir 应用（让 step 会话的工作目录落在业务配置目录）；skills/packages 本期仅作为配置展示，运行时过滤仍是 `mcp_servers` + `sandbox_tools`。
+> 消费说明：`project_dir` 由 routes_steps 通过 locator metadata 应用；skills/packages 的“仅展示”是首版历史语义。当前绑定 `template_id` 的 key 会走 AgentTemplate 解析/会话应用链，key 白名单字段作为覆盖层存在。
 
 ### 3.2 全局池数据源（前端已有端点，管理台直接复用）
 

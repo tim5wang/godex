@@ -1,6 +1,6 @@
 # OpenAI Responses 协议改造方案（usage proxy / LLM provider / 远程模式）
 
-> 日期：2026-08-23 ｜ 状态：提案（调研完成，未实施）
+> 日期：2026-08-23 ｜ 状态：Historical（方案已实施；当前契约见 `routes_responses.go`、Responses clients 与 v1.4 release notes）
 
 ## 0. 现状盘点（关键事实）
 

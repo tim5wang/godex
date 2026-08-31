@@ -1,8 +1,22 @@
 # taskboard 多智能体协作优化设计（M3.5 前置）
 
-> 状态：Draft（待评审）｜ 关联：taskboard-plugin-design.md（M3 协作增强）、docs/tools_issues.md（改进建议来源）
+> 状态：Active（research、touched_paths、dispatch 冲突拦截、observed paths 与 in_review 报告 baseline 已落地；依赖拓扑/经验回流仍 Planned）｜ 关联：taskboard-plugin-design.md、docs/tools_issues.md
 > 日期：2026-08-29
 > 起因：PJM 会话实测暴露两个协作缺陷——① PJM 花精力调研的成果没有有效传给 coder，coder 重新定位；② PJM 调度未感知并发任务的文件/语义冲突（本次 edit_file 卡与 bash 卡同碰 `internal/platform/tooling/tooling.go`）。
+
+## 当前实现快照（2026-08-31）
+
+| 设计点 | 状态 | 事实源与边界 |
+|---|---|---|
+| `research` 结构化传递 | Implemented | `Research`、CRUD、Web `buildResearch`、executor prompt 分区及测试均存在。 |
+| Gate 1 `touched_paths` | Implemented | Card/CRUD/UI 已接通。 |
+| Gate 2 dispatch 拦截 | Implemented | `PrecheckDispatchConflicts` 在 tool dispatch 前执行，静态 overlap tests 覆盖。 |
+| Gate 3 observed paths | Implemented baseline | `ReportObservedPaths` 会合并真实上报路径并检测动态冲突；当前是显式上报通道，不等于后台自动轮询 git diff。 |
+| Gate 4 in_review 报告 | Implemented baseline | 进入 in_review 会附 path-overlap merge report；当前不是完整的 Git 三方合并/语义冲突分析器。 |
+| `depends_on` / `conflicts_with` / 自动排队 | Planned | 在 TaskBoard bounded scope 内没有对应字段或调度实现。 |
+| 经验回流 | Planned | 尚无同路径历史卡自动检索与一键沉淀 memory 的完整链路。 |
+
+下文的“现状无能力”和实施分级是 2026-08-29 的设计快照；实现事实以上表为准。
 
 ## 1. 形态与目标
 
@@ -33,7 +47,7 @@
 
 ## 3. 方案 B：并行冲突治理（本设计重点）
 
-### 3.1 现状事实
+### 3.1 历史现状（设计时快照）
 - Card 已有：`ProjectID / TemplateID / Holder / Blocked / Checklist / Executions / Version` —— **全部只保护同卡并发**。
 - ledger 已有：`ErrVersionConflict` 乐观锁、holder 锁、human 越锁。
 - **缺口：无任何"不同卡之间"冲突感知。**
@@ -42,7 +56,7 @@
 
 | 类型 | 例子 | 现有机制 |
 |---|---|---|
-| 文件/代码重叠 | 两卡都改 `tooling.go` | ❌ 无 |
+| 文件/代码重叠 | 两卡都改 `tooling.go` | ✅ touched/observed path overlap baseline |
 | 包级耦合 | 一卡加新工具、一卡重构同包文件 | ❌ 无 |
 | API 契约冲突 | A 给 Card 加字段、B 重排字段/改 JSON tag | ❌ 无 |
 | 资源冲突 | 同端口 / 同 MCP server / 同 DB 迁移 | ❌ 无 |
@@ -73,14 +87,14 @@
 - **依赖拓扑**：`depends_on` 字段 + 自动排序，A 完成才派 B（不靠 PJM 记性）。
 - **互斥标记**：`conflicts_with` 显式声明不兼容卡（即使文件不重叠，语义也要互斥）。
 
-### 3.5 落地分级
+### 3.5 落地分级（当前状态）
 
 | 级别 | 内容 | 改动面 |
 |---|---|---|
-| P0 快赢 | 闸门 1+2：Card.touched_paths + dispatch 前比对告警 | types + ledger + executor + 前端建卡表单多选（小） |
-| P1 | 闸门 3 动态观测 + conflicts_with 互斥 | ledger 上报 + 告警（中） |
-| P2 | depends_on 依赖拓扑 + 自动串行排队 | ledger 调度（中） |
-| P3 | 闸门 4 合并预检 + git 冲突报告 | executor + 报告 schema（中） |
+| P0 ✅ | 闸门 1+2：Card.touched_paths + dispatch 前比对告警 | 已落地并有静态 overlap tests |
+| P1 🟡 | 闸门 3 动态 observed paths 已落地；`conflicts_with` 与自动采集仍缺 | 显式上报与动态冲突 test 已有 |
+| P2 ⬜ | `depends_on` 依赖拓扑 + 自动串行排队 | 未实现 |
+| P3 🟡 | 闸门 4 的 path-overlap report 已落地；真实 Git merge/语义冲突分析仍缺 | baseline test 已有 |
 
 ## 4. 方案 C：经验回流（长期复利）
 
@@ -90,7 +104,7 @@
 
 ## 5. 与既有设计的关系
 
-- 挂靠 taskboard-plugin-design.md **M3 协作增强**（未开始），作为其第一个落地子项（可命名为 M3.5）。
+- 挂靠 taskboard-plugin-design.md **M3 协作增强**；本页 baseline 已开始并落地，不再标“未开始”。
 - 复用已有：`executionPrompt` 注入链（扩 research 分区）、ledger 乐观锁（扩展占用表）、Holder 锁语义（扩展到卡间）。
 - 不改变：Card 基本字段语义、人工验收流程、模板分派机制。
 

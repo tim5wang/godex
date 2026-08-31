@@ -1,6 +1,7 @@
 # GoDex 扩展能力使用手册
 
-> 适用范围：当前 `main` 分支中的 Package 依赖、MCP stdio、ACP 外部 Agent 与 WASM Package Runtime。
+> 状态：Active（Package / MCP / ACP / WASM runtime 使用与信任边界）
+> 适用范围：当前 `main` 分支中的 Package 依赖、MCP filesystem/stdio/Streamable HTTP、ACP 外部 Agent 与 WASM Package Runtime。
 >
 > 重要说明：这四类能力的信任边界不同。Package 会安装声明式资源并可激活 WASM runtime；MCP/ACP 会启动本机进程；WASM 只获得 manifest 明确授权且由宿主提供的 host callback。
 
@@ -11,6 +12,7 @@
 | Package `requires` / `provides` | 可用 | 声明资源包之间的依赖和能力契约 |
 | MCP filesystem | 可用 | 向 Agent 提供只读目录资源 |
 | MCP stdio tools/prompts | 可用 | 通过独立进程扩展工具和 Prompt |
+| MCP Streamable HTTP tools/prompts | 可用（无状态 baseline） | 连接远端 MCP；JSON/SSE 终态响应可用，`Mcp-Session-Id` 保持未实现 |
 | ACP `acp_agent` 委派 | 可用 | 把一个任务交给外部 ACP Agent |
 | ACP whole-turn Harness | 后端已接线，暂无 CLI/Web 选择器 | 由集成方通过消息 metadata 指定外部引擎 |
 | WASM Runtime / Plugin Kernel | 可用 | 安装 Package 后自动加载工具和 Prompt |
@@ -156,7 +158,24 @@ paths:
 
 修改 `mcp.json` 后应重建 Agent/session 或重启 GoDex。当前直接工具目录不会热刷新。
 
-### 3.3 安全注意事项
+### 3.3 Streamable HTTP server
+
+```json
+{
+  "servers": [
+    {
+      "name": "crm",
+      "type": "streamable-http",
+      "url": "https://crm.internal/mcp",
+      "headers": { "Authorization": "Bearer <mcp-token>" }
+    }
+  ]
+}
+```
+
+HTTP client 会发送 JSON-RPC POST，并接受 `application/json` 或 `text/event-stream` 终态响应。网络错误、读取失败和 5xx 最多尝试 3 次（重试前等待 2s/4s），4xx 不重试；单次 HTTP client timeout 为 10 秒。`session_required` 当前只是兼容预留字段，不会维护 `Mcp-Session-Id`。
+
+### 3.4 安全注意事项
 
 MCP stdio 是本机原生进程，不是沙箱：
 
@@ -164,6 +183,8 @@ MCP stdio 是本机原生进程，不是沙箱：
 - MCP 程序仍是本机原生进程，可拥有操作系统用户本身具备的文件、网络和进程权限；
 - 只配置可信可执行文件，敏感 token 尽量放到专用低权限环境；
 - 不要把秘密打印到 stdout。
+
+Streamable HTTP 不启动本机进程，但会把显式配置的 headers 和工具输入发送到远端服务。只连接受信任的 HTTPS 端点；token 放在专用低权限凭据中，并避免在诊断输出里复制完整 headers。
 
 ## 4. ACP 外部 Agent
 

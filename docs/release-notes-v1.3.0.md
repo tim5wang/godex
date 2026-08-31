@@ -1,5 +1,7 @@
 🇬🇧 **English**
 
+> Status: Historical (v1.3.0 release record)
+
 **v1.3.0 is the "Agent Runtime" release.** It lands the full P0–P6 roadmap (Phases 1–6): the agent loop becomes a platform with a pluggable Harness engine abstraction and per-turn multi-engine switching; long tasks gain restart recovery, per-role context budgets and loop guards; memory grows strategy modes and dedup; scope isolation, a content security screener and a session tree harden the runtime; and the Web UI grows live DAG visualization, compaction history and a subagent timeline.
 
 ### 🚀 Agent Runtime Platform

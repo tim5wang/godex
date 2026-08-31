@@ -1,6 +1,6 @@
 # Scope 隔离模型设计（roadmap 6.2）
 
-> 状态：已完成 ✅（2026-08-12，M1-M5 全部落地，见 roadmap 6.2）
+> 状态：Active / Implemented（2026-08-12，M1-M5 全部落地，见 roadmap 6.2）
 > 日期：2026-08-12
 > 关联：roadmap 6.2（依赖 3.3 ✅）、`docs/per-session-workspace-plan.md`、4.5 写 scope 与 bundle 联动
 > 参考：`temp/qm/src/types.ts`（scopeId/parseScopeId）、`scope-storage-key.ts`、`scope-classifier.ts`、`scoped-event-sink.ts`、`memory-service.ts`
@@ -9,7 +9,9 @@
 
 ## 一、背景与问题
 
-godex 是单进程多 session 架构：`backend.Service` 持有全局 `cfg`，每个 session 创建独立 `Agent`，但共享 `cfg.WorkspaceDir`、`cfg.Paths.MemoryDir`、`SharedDependencies`。当前隔离现状：
+> 本节是 2026-08-12 实施前的问题快照，用来解释 M1–M5 的设计动机；“当前/现状”均指当时，不是完成后的运行时事实。完成态以 roadmap 6.2、`internal/core/scope`、`internal/sandbox` 和对应测试为准。
+
+godex 是单进程多 session 架构：`backend.Service` 持有全局 `cfg`，每个 session 创建独立 `Agent`，但当时共享 `cfg.WorkspaceDir`、`cfg.Paths.MemoryDir`、`SharedDependencies`。实施前隔离现状：
 
 | 维度 | 现状 | 问题 |
 |------|------|------|

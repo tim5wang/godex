@@ -1,6 +1,18 @@
 # Agent 模板板块（人才市场）与角色能力边界设计
 
-> 状态：设计定稿（决策已对齐，待实施）
+> 状态：Active（M1/M2/M3、M4 P1、M5 P1–P3 已落地；M4 P2/P3 与部分体验/预算联动仍待完善）
+
+## 当前实现快照（2026-08-31）
+
+| 范围 | 状态 | 事实源 | 尚未完成 / 与原设计的差异 |
+|---|---|---|---|
+| M1 模板核心 | Implemented | `internal/core/templates`、`internal/agent/session_template.go`、对应 manager/runtime tests | `BudgetHint` 仍主要是提示，不是统一硬预算。 |
+| M2 人才市场与对话入口 | Implemented baseline | `/v1/agent-templates*`、`AgentTemplatesPage.tsx`、`SessionsRail.NewChatWorkspacePopover` | 新建对话当前是可搜索下拉，不是原稿中的卡片式筛选器；消费侧“管理模板”快捷链接仍可补。 |
+| M3 TaskBoard 分派 | Implemented baseline | `Card.TemplateID`、`TaskboardExecutor.Execute`、`TestTaskboardExecutorOpensTemplatePinnedSession` | 卡片模板和独立会话已接通；预算硬限制、完整执行者画像仍是增强项。 |
+| M4 P1 Business Agent 收敛 | Implemented baseline | `BizAPIKey.TemplateID`、`TemplateFromBizKey`、迁移 API/测试 | 当前仍保留 key 覆盖字段，属于“模板 + 覆盖层”，不能表述为已消灭所有双份字段；P2/P3 未实现。 |
+| M5 PJM | Implemented | 内置 `pjm` 模板、TaskBoard “与 PJM 对话”、tool `action=dispatch`、Cron 配置/手动触发 UI | 跨卡复用指定 `session_id` 的产品语义仍应单独验证后再承诺。 |
+
+本文后续保留原始设计决策；出现将来时或“新增”措辞时，以本快照和可执行代码为准。
 > 本文档是 agent 模板板块的**主设计文档**，取代 2026-07 旧版「Agent 角色能力边界与工具组织设计」（旧版核心思想已由 roadmap Phase 3/4 落地），并吸收取代 `docs/agent-template-board-design.md` 草稿（该文件已标记 Superseded）。
 > 关联文档：`docs/business-agents-console-design.md`（业务智能体，二期收敛对象）、`docs/taskboard-plugin-design.md`（M3 将基于本设计重规划）、`docs/godex-optimization-roadmap.md`（Phase 4 角色机制为技术底座）。
 
@@ -35,7 +47,7 @@
 
 ---
 
-## 三、现状盘点（源码实证）
+## 三、实施前现状盘点（源码实证，历史快照）
 
 模板所需的零件已存在 80%，散落在不同包中，缺统一抽象：
 
@@ -54,7 +66,7 @@
 | 业务智能体白名单 | `internal/services/usage/types.go` BizAPIKey | MCPServers / SandboxTools / Skills / Packages / Models / ProjectDir / DefaultPrompt / AllowedModels——与模板字段几乎一一对应，是二期收敛的目标 |
 | 任务看板执行器 | taskboard 插件 M1 执行器 | 卡片认领→起执行会话；M3 重规划后按模板分派（见 §7.3） |
 
-**关键 gap**：没有一个统一的「模板」实体把上述维度打包；对话创建入口只有 default/minimal 两档；任务看板执行 agent 无能力预设。
+**当时的关键 gap（现已由 M1–M3 关闭）**：没有一个统一的「模板」实体把上述维度打包；对话创建入口只有 default/minimal 两档；任务看板执行 agent 无能力预设。当前实现见文首快照与 `internal/core/templates`、`internal/agent/session_template.go`。
 
 ---
 
@@ -186,22 +198,22 @@ AgentTemplate (YAML)
 
 ## 七、三个消费入口
 
-### 7.1 对话创建（替换标准/极简模式选择）
+### 7.1 对话创建（Implemented baseline）
 
-- Web UI 新建对话弹窗：模式选择器（标准/极简）替换为**模板选择器**（卡片式人才市场入口，支持搜索/场景标签过滤，默认选中 `default`）；
+- Web UI 新建对话弹窗已用**模板选择器**替换模式选择；当前实现是可搜索下拉并默认选中 `default`，卡片式场景标签过滤仍是体验增强项；
 - 后端：会话创建请求的 `mode` 字段升级为 `template`（兼容期：传 `mode=minimal` 自动映射到内置 `minimal` 模板）；
 - `ApplySessionMode` 泛化为 `ApplyTemplate(t ResolvedTemplate)`，保留 mode 常量作兼容别名。
 
-### 7.2 业务智能体（M4 P1：template_id 收敛）
+### 7.2 业务智能体（M4 P1：Implemented baseline）
 
 - 本期（M2 时）：BizAPIKey 不动；管理台展示「可选模板」只读列表，管理员可参考模板配置 key 白名单；
 - **M4 P1（已定）**：BizAPIKey 增加 `template_id`，key 的白名单字段变为「模板 + 覆盖」两层；step 创建时走同一 Resolve 链；
   - **覆盖层语义（已定）**：可增可删可替换——覆盖字段相对模板能力集做字段级合并，支持 `!tool` 排除（与既有 `intersectStepTools` 的 `!x` 语义一致）；
   - **存量迁移（已定）**：提供「从现有 key 一键生成模板」工具——读 key 白名单字段 → 生成同名模板（标记为 BizRefOnly 派生，只读）→ key 挂 template_id；
   - **解析失败策略（已定）**：key 引用的模板不存在/被删时，**拒绝创建 step**（fail fast，暴露配置错误），不静默降级；
-- 收敛完成的判据：模板与 key 白名单字段不再出现同义双份维护。
+- 当前实现仍保留模板与 key 覆盖字段，并按“模板 + 覆盖层”解析；因此更准确的完成判据是模板成为基线事实源、key 字段只表达显式覆盖，而不是要求物理删除全部白名单字段。
 
-### 7.3 任务看板 M3（基于本设计重规划）
+### 7.3 任务看板 M3（Implemented baseline）
 
 原 M3「协作增强」作废，重规划为**模板驱动的智能执行**：
 
@@ -211,9 +223,9 @@ AgentTemplate (YAML)
 | 执行会话预算 | 模板 BudgetHint 作为执行会话上下文预算与 token 预算上限，超额可配置自动压缩或中止 |
 | 执行者画像 | 看板卡片详情与执行进度页展示执行 agent 的模板（persona/工具边界），让「谁在干、凭什么干」可解释 |
 | 规划-执行分离习惯 | 典型用法：规划类卡片用 `planner` 模板（禁写），实现类卡片用 `coder` 模板（写 scope 限定在卡片涉及路径），复核类卡片用 `reviewer` 模板（禁写）——把诉求 ② 的场景习惯落到看板工作流 |
-| 原 M3 候选项去向 | SSE 变更流 / execution_report 归 M4；模板/导入导出由本设计承接 |
+| 原 M3 候选项去向 | SSE 仍是后续项；execution report 能力已收敛为 `observe/reconcile/merge_precheck` actions；模板/导入导出由本设计承接 |
 
-### 7.4 看板 PJM（编排者，M5）
+### 7.4 看板 PJM（P1–P3 Implemented）
 
 把看板从「人驱动执行」升级为「PJM 编排 + 异步批量执行」。PJM = 项目/产品经理 agent，
 是**卡片质量的负责人 + 分派触发器**，不是执行者（执行仍走 M3 的独立执行会话）。
@@ -307,10 +319,11 @@ Chat │ Files │ Automation │ Nodes │ Notes │ Skills │ ★Agent 模板
 
 | 期 | 内容 | 出口判据 |
 |---|---|---|
-| **M1：模板核心** | AgentTemplate 结构 + Manager（CRUD/Resolve）+ ApplyTemplate 运行时链（persona/profile/skills/bundles/mcp 注入 system_prompt_dynamic 与 SetActiveToolsExact）+ 会话创建传 template + 7 个内置模板 | §10 验收 1-4 通过 |
-| **M2：人才市场 UI + 对话入口切换** | AgentTemplatesPage（卡片网格 + 编辑抽屉 + 校验）+ 新建对话模板选择器替换模式选择 + 兼容 mode 映射 | 用户可全程 UI 完成建模板→选模板开聊；验收 1-4 复测 |
-| **M3：任务看板模板分派（原 M3 重规划）** | 卡片 template_id + 执行器按模板起独立执行会话（Q1=B，弃用投递 host 会话）+ 执行者画像展示 + 预算联动 | §10 验收 5 通过；taskboard 文档同步更新 |
-| **M4：收敛与增强** | **P1 ✅ BizAPIKey template_id 收敛（6c16fd7）** → **P2：项目级模板覆盖（Q2 预留启用）+ 模板导入导出/分享** → **P3：自然语言生成模板**（P2/P3 已完成设计并保留在此路线，**后续再完善**；会话中热切换模板 Q3B 已砍，保留路线图——与省 token 核心诉求冲突，切换清 prefix-cache） | P1 出口判据已达成（模板与 key 白名单无双份维护）；P2/P3 待后续完善 |
+| **M1：模板核心** | ✅ AgentTemplate、CRUD/Resolve、ApplyTemplate、内置模板与会话 template metadata 已落地 | 核心和运行时测试存在；token 收口的定量指标仍需持续观测。 |
+| **M2：人才市场 UI + 对话入口切换** | ✅ AgentTemplatesPage、CRUD/校验、新建对话模板选择、一键开聊已落地 | 卡片式消费选择器和“管理模板”快捷入口仍可增强。 |
+| **M3：任务看板模板分派（原 M3 重规划）** | ✅ Card.template_id 与模板固定执行会话已落地 | 预算硬限制、完整执行者画像仍 Partial。 |
+| **M4：收敛与增强** | 🟡 **P1 已落地**：BizAPIKey.template_id、派生迁移和运行时解析；**P2/P3 Planned**：项目覆盖、导入导出/分享、自然语言生成模板 | key 的白名单字段当前是覆盖层，不应写成已物理消除。 |
+| **M5：PJM** | ✅ 内置模板、Chat 入口、dispatch、Cron 配置与手动触发已落地 | 继续补强跨卡历史复用与可观测性。 |
 
 ---
 

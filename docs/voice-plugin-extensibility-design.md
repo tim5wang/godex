@@ -1,10 +1,22 @@
 # GoDex 插件能力扩展设计：turn 中间件 + UI 插槽 + 语音后端 L2
 
-> 状态：Draft / Plan（未实施） · 日期：2026-08-27 · 前置调研：2026-08-26/27
+> 状态：Active / Partial（`ui_card` 与现有 voice-engine WebSocket/TTS baseline 已落地；turn middleware、插件 config/UI 声明、OpenAI REST plugin 与 Realtime adapter 仍 Planned） · 日期：2026-08-27 · 核对：2026-08-31
 > 目标：以 plugin 方式提升 godex 灵活性，落地三块能力：
 >   A. 插件可捕获的 **turn 级中间件**（用户输入 → LLM → 回复全链路钩子）
 >   B. **UI 插槽**：插件声明 settings 配置项 + 注册聊天内 `ui_card`
 >   C. **语音后端 L2**：OpenAI 兼容 REST（先）→ Realtime（后续）
+
+## 当前实现快照
+
+| 设计项 | 状态 | 当前事实与边界 |
+|---|---|---|
+| A turn middleware | Planned | 工具级 interceptor、runtime events 与 harness input 已有，但没有本文定义的可逆 `TurnMiddleware` contributor 链。 |
+| B1 plugin settings schema | Planned | Settings 本身是 schema 驱动；plugin manifest `config:` 聚合、CredentialBroker 授权读取尚未落地。 |
+| B2 `ui_card` | Implemented baseline | `tools.NewUICardTool`、MessageFeed 解析、`UiCardView`、Agent Step reply 闭环已有；但 manifest `ui:` / `/plugin-ui` / 动态 PluginCardSlot 未实现。 |
+| C 现有语音主链 | Implemented baseline | `/v1/voice` WebSocket bridge、`/v1/tts`、`/v1/tts/stream`、VoiceBar/TTS playback 与 mock-engine tests 已落地。 |
+| C OpenAI REST / Realtime plugin | Planned | 当前依赖 voice-engine 协议，不等于本文的 `internal/speech`、OpenAI audio REST adapter 或 OpenAI Realtime adapter。 |
+
+因此，“基础语音和 ui_card 已有”与“插件化 L2 全部完成”必须分开陈述。下文草案只对 Planned 部分表达目标接口。
 
 ## 0. 调研结论（dsh / pi → godex 借鉴）
 
@@ -25,8 +37,8 @@
 | turn 级中间件 | 仅**工具级** before/after 拦截器；`events.Sink` 是 UI/Timeline 广播，**非内部 middleware 总线** | 无 turn 级中间件链（用户输入→LLM→回复） |
 | session 管理切面 | 无会话生命周期钩子 | 无 onSessionCreate/Switch/End（列为后续） |
 | ctx 可访问内容 | `HarnessTurnInput`（messages/workspace/usage/scope）已定型 | 插件无统一 ctx 访问面（DSH 有 ctx.get/provide） |
-| UI 插槽 | 前端**零**插件插槽；settings 是 schema 驱动 | 无 ui_card 机制、无插件配置声明 |
-| 语音 L2 | voice-engine 桥 + voice-engine 内 `asrbackends` | godex 侧无 speech 后端插件能力 |
+| UI 插槽 | `ui_card` 通用渲染/回传已落地；settings 是 schema 驱动 | 无 manifest `ui:`/`config:` 聚合与动态插件槽 |
+| 语音 L2 | voice-engine WebSocket + REST/streaming TTS baseline 已落地 | godex 侧仍无 `internal/speech` 与 OpenAI-compatible provider plugin |
 
 ## 1. 范围（已与用户对齐）
 
@@ -36,7 +48,7 @@
 | B. UI | **settings 配置扩展**（最便宜先做）+ **插件注册 ui_card**（聊天内卡片）；App 级面板（dock 级）列为后续 |
 | C. 语音 | **先 OpenAI 兼容 REST**（可配 base_url：Whisper ASR + TTS）→ **Realtime 后续阶段** |
 
-## 2. 设计 A：turn 级中间件（插件可捕获的新切面）
+## 2. 设计 A：turn 级中间件（Planned）
 
 ### 2.1 目标
 让插件在 **agent turn 执行链路**上获得拦截/修改能力，这是当前工具级拦截器覆盖不到的层级（工具拦截器只能看到单次工具调用，看不到「用户说了什么 → LLM 回了什么」的整体回合）。
@@ -105,7 +117,7 @@ type TurnAction struct {
 ### 3.1 结论
 **前端独立协议**（借鉴 dsh 结论）：后端插件声明 UI 契约（JSON），前端渲染层拉取并渲染；不要求插件提供 React 组件代码（那需要前端沙箱，最重）。
 
-### 3.2 B1：settings 配置扩展（最便宜，先做）
+### 3.2 B1：settings 配置扩展（Planned）
 - **插件 manifest 声明配置项**：新增 `config:` 段，复用现有 `FieldSchema` 结构（path/label/description/type/options/secret）。
   ```yaml
   # godex.package.yaml / plugin manifest
@@ -123,7 +135,7 @@ type TurnAction struct {
 - **前端零改动**：SettingsPage 的 ConfigSectionFields 自动渲染新 section（schema 驱动已具备）。
 - **密钥**：secret 字段走 CredentialBroker（插件授权后读取），不进配置明文。
 
-### 3.3 B2：ui_card（聊天内卡片）
+### 3.3 B2：ui_card（baseline 已实现；插件声明层 Planned）
 - **插件注册卡片**：manifest 声明 `ui:` 段（card id + 渲染契约）。
   ```yaml
   ui:
@@ -144,7 +156,7 @@ type TurnAction struct {
 2. 前端：SettingsPage 渲染插件配置（schema 驱动，基本零改）；消息流新增 PluginCardSlot。
 3. App 级面板（dock/面板级插件）列为后续（最重，不先做）。
 
-## 4. 设计 C：语音后端 L2（OpenAI 兼容 REST → Realtime）
+## 4. 设计 C：语音后端 L2（现有 voice-engine baseline 已实现；OpenAI adapter Planned）
 
 ### 4.1 能力契约（沿用既有语音插件设计）
 ```go
@@ -190,12 +202,12 @@ type TTS interface {
 
 | 阶段 | 内容 | 工作量 |
 |---|---|---|
-| P1 | turn 级中间件（原生）：turnmiddleware 包 + agent 链路插入 + pluginrt TurnMiddlewareContributor | 2–3 人日 |
-| P2 | settings 配置扩展：manifest `config:` 解析 + /config/schema 聚合 | 1 人日 |
-| P3 | ui_card 插槽：manifest `ui:` 解析 + /plugin-ui API + 前端 PluginCardSlot | 2–3 人日 |
-| P4 | 语音 L2a：internal/speech 接口 + voice:asr@1/tts@1 能力 + NativeBackendPlugin | 1–2 人日 |
-| P5 | 语音 L2b：OpenAI REST 适配器（Whisper ASR + TTS）+ voiceBridge 改造 | 1–2 人日 |
-| P6 | 语音 Realtime 阶段（WS 双向流式） | 2–3 人日 |
+| P1 ⬜ | turn 级中间件（原生）：turnmiddleware 包 + agent 链路插入 + pluginrt TurnMiddlewareContributor | 2–3 人日 |
+| P2 ⬜ | settings 配置扩展：manifest `config:` 解析 + /config/schema 聚合 | 1 人日 |
+| P3 🟡 | `ui_card` 渲染/回传 baseline ✅；manifest `ui:` + /plugin-ui + PluginCardSlot ⬜ | 2–3 人日 |
+| P4 🟡 | voice-engine bridge、TTS/stream baseline ✅；`internal/speech` + voice capability plugin ⬜ | 1–2 人日 |
+| P5 ⬜ | OpenAI REST 适配器（Whisper ASR + TTS）+ voiceBridge provider selection | 1–2 人日 |
+| P6 ⬜ | OpenAI Realtime adapter（不能用现有 voice-engine WS 代替验收） | 2–3 人日 |
 | P7 | （可选远期）wasmrt 网络 host 扩展 godex_http_post/ws + WASM 适配器 demo | 2–3 人日 |
 
 ## 6. 验收标准（可验证）

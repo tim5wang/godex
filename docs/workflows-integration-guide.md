@@ -1,6 +1,6 @@
 # 第三方 UI 集成指南（以 godex 为 agent 基建）
 
-> 日期：2026-08-24 ｜ 状态：Step 3 完成
+> 日期：2026-08-24 ｜ 状态：Historical（旧 Workflows 接入说明；新接入以 Agent Step SDK 与 Business Agents 为准）
 > 目标：让其他 UI（Web / Electron / IM 机器人 / 内部工具）快速以 godex 为 agent 基建，实现「知识库召回 + 特定环境问题解决定制化 + 表单/按钮对话交互」。
 
 ## 1. 对接总览

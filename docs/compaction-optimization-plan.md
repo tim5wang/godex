@@ -1,6 +1,6 @@
 # GoDex 压缩优化实施计划（对齐 DeepSeek Harness）
 
-> 状态：已落地（Phase 1/2/3/4 与 UI 同步全部完成并测试；见各阶段 ✅ 与验收标准）
+> 状态：Active / Implemented（Phase 1/2/3/4 与 UI 同步全部完成并测试；见各阶段 ✅ 与验收标准）
 > 修订日志：2026-08-16 制定本计划并实施 Phase 1-3 + UI 同步；2026-08-16 追加实施 Phase 4（模型无关 pruner、provider context-overflow 恢复、per-model 策略表）。对照 DSH `packages/compaction/compaction-basic/{index,region,config,summarizer}.ts`、`packages/compaction/compaction-tool-result-pruner/src/index.ts` 与 `packages/core/session/surface.ts`，映射到 GoDex `internal/agent/{compaction_policy,context_facade}.go`、`internal/core/compress/{compress,llm_session_summarizer,pruner}.go`、`internal/core/conversation/{runner,turn_error}.go` 与 `internal/core/config`；目标 = 修复"压缩过狠丢信息"与"压缩破坏前缀缓存"。
 
 ## 背景与目标

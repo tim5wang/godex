@@ -9,23 +9,23 @@
 
 ---
 
-## 1. 背景与现状盘点
+## 1. 背景与实现盘点
 
 ### 1.1 已完成的能力（数据已存在）
 
 | 能力 | 落地位置 | 现有 view / API |
 |------|----------|----------------|
-| longtask 动态并行 DAG | Phase 2.4 `internal/agent/agentgraph.go` | `agentGraphView`（含 `Nodes`/`Edges`），但 **HTTP 未暴露** |
+| longtask 动态并行 DAG | Phase 2.4 `internal/agent/agentgraph.go` | `LongTaskView.Graph` 已随 longtask 详情暴露 `Nodes`/`Edges`，前后端类型与回归测试均存在 |
 | 上下文预算管理 | Phase 2.3 + 4.6 `context_inspector.go` | `GET /sessions/{id}/context-inspector`（token 分层/prefix cache/压缩诊断） |
 | 子 agent 双向通信（spawn/send_input/wait/iterate） | Phase 4.1/4.2 | `TurnRecord`、timeline 事件、`SubagentReviewPanel` |
 | 角色→bundle 映射 + 子 agent bundle 继承 | Phase 4.3/4.4 | 角色配置 UI（已有部分） |
 | 记忆策略模式 + 去重（foldCapture/capTail） | Phase 3.1/3.2 | `MemoryPage`（已有列表） |
 
-### 1.2 关键数据缺口
+### 1.2 已关闭的数据缺口（历史）
 
-- `agentGraphView`（含 nodes/edges）只存在于 `internal/agent` 层，`GET /sessions/{id}/longtasks/{workflowID}` 返回的 `LongTaskView` **不含 nodes/edges**（只有 stories/status/计数）。
-- 前端 `LongTaskView` 类型同样无 graph 字段。
-- **→ 视图 A 需要一个小 API 扩展**：在 longtask 详情响应中附带 `nodes`/`edges`（或新增 `GET .../graph` 端点），其余两个视图可完全复用现有 API。
+- 后端 `longTaskView.Graph *agentGraphView` 已随 `GET /sessions/{id}/longtasks/{workflowID}` 返回；`TestLongTaskViewGraphFieldExposesNodesAndEdges` 固定 nodes/edges 契约。
+- 前端 `LongTaskView` 已有 `graph` 字段，`AgentGraphDiagram` 已接入 LongTask 视图。
+- 因而 A1 所需 API 扩展已经完成；当前剩余项是 A3 的失败路径过滤、handoff 预览与导出，不是数据缺口。
 
 ### 1.3 前端可复用基建
 
@@ -41,7 +41,7 @@
 
 | # | 视图 | 解决的问题 | 数据来源 | 新增工作量 |
 |---|------|-----------|----------|-----------|
-| A | **AgentGraph 动态 DAG 图** | longtask 运行过程黑盒：节点依赖/状态/失败点/手写 scope 不可见 | 后端 `agentGraphView`（需暴露）+ mermaid | 中（API 小扩展 + 1 组件） |
+| A | **AgentGraph 动态 DAG 图** | longtask 运行过程黑盒：节点依赖/状态/失败点/手写 scope 不可见 | 后端 `LongTaskView.Graph` + mermaid | A1/A2 已完成；A3 为交互增强 |
 | B | **上下文预算仪表盘** | token 分层/压缩历史/按角色预算对比不可见，难以诊断上下文膨胀 | `context-inspector`（已有） | 小（增强 ContextPanels） |
 | C | **子 agent 通信/迭代时序视图** | spawn→send_input→wait→iterate review 循环不可见，子 agent 生命周期黑盒 | timeline + `TurnRecord`（已有） | 小-中（1 组件） |
 

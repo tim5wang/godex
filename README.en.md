@@ -230,6 +230,8 @@ See the [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md) for the d
 
 - [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md): Agent/Sandbox, Orchestrator/Worker, Session Graph, and storage decoupling roadmap.
 - [User Guide](docs/user-guide.md): Installation, configuration, providers, Web UI, tools, Memory, API, and release checks.
+- [Feature-to-implementation Matrix](docs/feature-implementation-matrix.md): Implementation status, code source of truth, entry points, and authoritative docs.
+- [Full Code and Documentation Review (2026-08-31)](docs/code-and-docs-review-2026-08-31.md): Prioritized architecture, duplication, test-baseline, and documentation findings.
 - [Code & Design Review](docs/code-review-2026-08-15.md): Doc-vs-implementation consistency audit and code-side findings.
 - [DSH Research Notes](docs/research_of_dsh_for_godex_optimize.md): What GoDex can learn from DeepSeek Harness's plugin design (plugin kernel, WASM boundaries, roadmap).
 - [Project Structure](docs/project-structure.md): Directory responsibilities and refactoring boundaries.
@@ -278,5 +280,6 @@ It runs Go tests, builds the Go binary, and builds the Web frontend. Locally, yo
 ```bash
 go test ./...
 pnpm -C ui/web build
+make docs-check
 git diff --check
 ```

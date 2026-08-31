@@ -1,4 +1,4 @@
-[简体中文](SPEC.md) | [English](SPEC.en.md)
+[简体中文](./architecture-v2-spec.md) | [English](./architecture-v2-spec.en.md)
 
 # GoDex 2.0 Architecture SPEC
 

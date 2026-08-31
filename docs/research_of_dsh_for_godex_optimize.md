@@ -1,12 +1,19 @@
 # DeepSeek Harness 对 GoDex 的改进启示
 
-> 状态：Draft / Plan（阶段 0/A/B/C 与 P1–P4 的底层切片和集成测试已落地；**Package→WASM 自动激活、路径/符号链接边界、生命周期并发事务和依赖图完整性已加固**）
+> 状态：Active / Implemented architecture record（阶段 0/A/B 与 P1–P4 已落地；阶段 C MVP 已落地，生产 provider 语义和更高级 HMR 仍演进）
 > 目标：提炼 `temp/deepseek-harness` 中值得 GoDex 吸收的架构能力，聚焦近期可落地优化；不追求复制 Cordis，也不把 WASM 等同于插件系统。
 > 修订日志：2026-08-15 整合插件对照表、wazero 兼容性结论（协议层/桥接层）、MCP 跨运行时能力协议视角与更低起步点（阶段 0：package requires 依赖解析）。2026-08-16 阶段 0 落地：`godex.package.yaml` 支持 `requires`/`provides`、安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装与旧 digest 目录 GC（见 `internal/core/packages/{requires,deps}.go`）。同日 P1 与阶段 A 内核骨架落地：`internal/toolruntime` 注册返回可逆 `Registration`（owner/generation/draining，`RegisterOwned`/`UnregisterOwner`），新增 `internal/pluginrt` 轻量插件内核（manifest/graph/instance/effects/registry/manager，含事务式 prepare/commit/rollback 与 `NativeToolPlugin` 内建 Go 适配器）；MCP 桥接落地：`internal/core/mcp` 新增 stdio JSON-RPC client（`list_mcp_tools`/`call_mcp_tool`，任意语言 MCP server 即 GoDex 插件）。
 
-## 1. 核心结论
+## 当前实现结论（2026-08-31）
 
-GoDex 已有 ToolHandler、Harness、MCP、Package、Skill、Scope、Sandbox、配置热更新等扩展点，但它们彼此独立，尚缺统一的插件生命周期与能力注册模型。
+- Package runtime 声明、WASM 加载、安装/重装/删除/reload reconcile 与 Session 自动激活已经落地，P3 不再是纯设计。
+- pluginrt 生命周期/effect/registry、owner-aware tool runtime、WASM tools/prompts/policy/host brokers、ACP Harness 主链均有实现和集成测试。
+- 阶段 C 标为 Partial 的原因是生产 provider/streaming/credential 策略仍需长期加固，不是底层切片缺失。
+- 通用动态 Service、最小子树 HMR、完整 WASI、WASM sandbox provider 和第三方 React realm 仍明确暂缓。
+
+## 1. 核心结论（2026-08-15 方案起点）
+
+2026-08-15 的 GoDex 已有 ToolHandler、Harness、MCP、Package、Skill、Scope、Sandbox、配置热更新等扩展点，但它们彼此独立，尚缺统一的插件生命周期与能力注册模型。该缺口随后由 `pluginrt`、owner-aware `toolruntime` 与 Package runtime baseline 关闭；当前结论以文首“当前实现结论”为准。
 
 DeepSeek Harness（DSH）最值得借鉴的不是 TypeScript 动态加载，而是以下语义：
 
@@ -45,11 +52,11 @@ GoDex 可采用更简单的状态机，但应保留三个关键性质：
 - 停止时阻止新调用并清理资源；
 - 更新失败不影响旧实例。
 
-### 2.2 可逆注册
+### 2.2 可逆注册（实施前差距，现已落地）
 
 DSH 把工具、服务、事件监听、timer、连接等都视为插件 effect。卸载插件即撤销该实例的全部 effect。
 
-GoDex 当前 `ToolHandler.ReplaceWith()` 已有原子替换基础，但工具注册缺少 owner/disposer。建议注册统一返回清理函数，并记录：
+当时 `ToolHandler.ReplaceWith()` 已有原子替换基础，但工具注册缺少 owner/disposer。当前 `toolruntime.Registration`、`RegisterOwned`、generation/draining 与 plugin effect ledger 已实现这些语义；下列字段保留为设计来源：
 
 ```text
 plugin_id + instance_id + generation + scope
@@ -68,7 +75,7 @@ GoDex 已有 org/personal/session scope，可直接复用。需要明确区分�
 
 两者不能共用同一语义，否则“加载 provider”和“向模型暴露 schema”会混在一起。
 
-### 2.4 DSH 概念 → GoDex 现状 → 差距（对照）
+### 2.4 DSH 概念 → GoDex 实施前现状 → 差距（历史对照）
 
 | DSH/Cordis 概念 | GoDex 现状 | 差距 |
 |---|---|---|
@@ -95,7 +102,7 @@ GoDex 已有 org/personal/session scope，可直接复用。需要明确区分�
 | Scope | 已有 org/personal/session 隔离模型 |
 | Reload | 配置变化可重建依赖和工具 registry |
 
-### 主要缺口
+### 主要缺口（2026-08-24 历史快照，多数已由 P0–P4 补齐）
 
 1. 工具仍集中在 `Agent.registerToolsWith()` 中硬编码；
 2. `Agent`/`dependencies` 持有大量具体 manager，装配耦合较高；
@@ -106,7 +113,7 @@ GoDex 已有 org/personal/session scope，可直接复用。需要明确区分�
 
 ## 4. 优先改进方案
 
-### P0：统一插件内核，不引入第三方代码
+### P0：统一插件内核，不引入第三方代码 ✅ 已落地
 
 新增 `internal/pluginrt`，先服务内建 Go 组件：
 
@@ -155,7 +162,7 @@ type Effect func(context.Context) error
 
 ### P2：完善 Agent Engine 接入 ✅ 全部落地
 
-`agent.Harness` 抽象已经存在，但生产环境只有内建 GoDex engine。建议补齐：
+方案启动时 `agent.Harness` 抽象已经存在，但生产环境只有内建 GoDex engine；下列接入项现已逐项补齐：
 
 1. `HarnessTurnInput` 提供稳定的消息/会话访问面，而不是依赖 `*Agent` 内部状态 —— ✅ `HarnessTurnInput` 新增 `Messages func() []protocol.Message`（快照提供者）、`WorkspaceDir`、`UsageContext`；宿主在 `RunWithOptions` 填充，外部 engine 只消费这些输入（见 `internal/agent/{harness,runtime}.go`）；
 2. 由宿主统一消费 `HarnessTurnResult.Reply`、写 transcript 并 checkpoint —— ✅ harness 分支在 `RunTurn` 后把 `Reply` 追加进 transcript、触发 checkpoint 并发出 `assistant_message_completed` 事件（`internal/agent/runtime.go`）；
@@ -175,7 +182,7 @@ Pi 等外部 agent 的近期接入顺序建议是：
 
 这样可以复用现有 `acp_agent`，避免一开始改动 Agent 主循环。第一步已落地为 `ACPHarness`（见下「阶段 C」）。
 
-### P3：扩展 Package 为可执行插件包
+### P3：扩展 Package 为可执行插件包 ✅ 已落地
 
 在现有 `godex.package.yaml` 上增加可选 runtime 声明，而不破坏声明式资源包：
 
@@ -255,7 +262,7 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 1. **协议/清单层兼容（推荐，长期）**：把 DSH 的插件清单与能力协议抽象成**跨语言规范**（plugin manifest + capability contract），GoDex 实现同一规范。未来的插件可以「同一份 manifest，DSH 和 GoDex 都能装」——类似 LSP/MCP 的协议级兼容，而不是二进制兼容。这与 GoDex 已有的 package manifest、ACP 桥接、MCP 方向天然一致。
 2. **桥接层兼容（立即可做）✅ 已落地**：GoDex 已有 `acp_agent` 工具（调用外部 ACP agent）与 ACP server，也有 MCP 只读资源支持——把 DSH 插件作为**外部 ACP agent 或 MCP server** 接入，不需要 wazero 就能获得「运行时拓展」。wazero 内核则是为 GoDex 原生、沙箱化、强安全的插件准备的，两者可以并存。
 
-**MCP 作为跨运行时能力协议 ✅ 已落地（tools/prompts 面 + 动态按 server 注册）**：MCP 已从「只读文件系统资源」升级为完整 stdio client（`internal/core/mcp/stdio.go`，JSON-RPC 2.0 over stdio：initialize/tools-list/tools-call/prompts-list/prompts-get），配置 `type: stdio` + `command/args/env` 即可接入任意语言的 MCP server；其工具通过 `list_mcp_tools` / `call_mcp_tool`、prompt 通过 `list_mcp_prompts` / `get_mcp_prompt` 暴露。除通用桥接外，**每个 stdio server 的工具还会按 server 动态注册为一等工具**（命名 `<server>__<tool>`，owner `mcp:<server>`），直接进入工具目录并可独立卸载，`tools.NewMCPServerTool`/`Agent.registerMCPServerTools` 实现；bridge 与 per-server 注册均挂在 `godex:builtin:mcp` owner 体系下。任何语言实现的 MCP server 都成为 GoDex 插件——这本身就是 DSH 插件生态的通用等价物，且与 wazero 内核正交（WASM 插件跑在进程内，MCP 插件跑在进程外，共享同一能力注册表与权限/scope/审计体系）。
+**MCP 作为跨运行时能力协议 ✅ 已落地（tools/prompts 面 + 动态按 server 注册）**：MCP 已从「只读文件系统资源」升级为 stdio 与 Streamable HTTP 两种 JSON-RPC client（initialize/tools-list/tools-call/prompts-list/prompts-get）；HTTP 支持 JSON/SSE 终态响应，当前仍是无 `Mcp-Session-Id` 保持的 stateless baseline。其工具通过 `list_mcp_tools` / `call_mcp_tool`、prompt 通过 `list_mcp_prompts` / `get_mcp_prompt` 暴露。除通用桥接外，每个 stdio/HTTP server 的工具还会按 server 动态注册为一等工具（命名 `<server>__<tool>`，owner `mcp:<server>`），直接进入工具目录并可独立卸载；bridge 与 per-server 注册均挂在 `godex:builtin:mcp` owner 体系下。任何语言或远端系统实现的 MCP server 都可成为 GoDex 插件——这与 wazero 内核正交（WASM 插件跑在进程内，MCP 插件跑在进程外，共享同一能力注册表与权限/scope/审计体系）。
 
 ## 6. 建议路线图
 
@@ -313,14 +320,14 @@ GoDex 不需要复制 Cordis 的动态对象 Context。更适合 Go/WASM 的模�
 + 可选 WASM Executor
 ```
 
-近期最有价值的工作不是“支持任意 WASM”，而是先统一现有 Tool、Harness、Package 和 reload 的生命周期与注册所有权。完成这一层后：
+本轮已完成的核心工作正是统一 Tool、Harness、Package 和 reload 的生命周期与注册所有权。当前收益包括：
 
 - 内建 Go 组件更容易替换和测试；
 - Pi 等外部 Agent Engine 更容易稳定接入；
 - WASM、MCP 和未来 provider 可以共享同一权限、scope 和审计体系；
 - 配置更新失败不会破坏正在工作的 Agent。
 
-落地顺序建议：**阶段 0（package requires + 可逆卸载）→ 阶段 A（pluginrt 内核）→ 阶段 B（wazero WASM Tool）→ 阶段 C（Provider/外部 Engine）**，期间并行把 MCP 升级为完整 client 以承接进程外插件；「DSH 插件兼容」按 5.2 的协议/桥接层推进，不追求二进制互操作。
+已完成顺序：**阶段 0 → 阶段 A → 阶段 B → 阶段 C MVP**。下一步聚焦生产语义、权限审计与可观测性；「DSH 插件兼容」继续按 5.2 的协议/桥接层推进，不追求二进制互操作。
 
 ## 参考代码
 

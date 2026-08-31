@@ -1,6 +1,6 @@
 # Agent Step Platform（Agent Runtime Platform）设计文档
 
-> 日期：2026-08-24 ｜ 状态：设计冻结（头脑风暴定稿，未实现）
+> 日期：2026-08-24 ｜ 状态：Active（Phase A/B/C 已实现；本文保留产品边界与冻结决策）
 > 定位：把 godex 从「开发工具」升级为「Agent 运行时平台」——业务系统（存量、长期存在的固有系统）通过注册工具 + 上下文提供者，把 godex 当「大脑」，在既有流程的某个环节嵌入一个「智能环节」，而不是聊天框。
 >
 > 参考：Codex Harness 开源理念（AI 嵌入业务软件/看板/工作台，界面/数据/审批在业务系统侧）；MCP（工具宿主在业务侧）。
@@ -41,7 +41,7 @@
 
 | 能力 | 现状 | 复用点 |
 |---|---|---|
-| MCP | `internal/core/mcp/` 已有 **stdio client**：initialize / tools/list / tools/call / prompts（§5.2 已落地） | 扩展 HTTP/Streamable transport 即可连远程业务 MCP server |
+| MCP | `internal/core/mcp/` 已有 stdio + **Streamable HTTP client**：initialize / tools/list / tools/call / prompts | HTTP 可消费 JSON 或 SSE 终态响应；`Mcp-Session-Id` 会话保持尚未实现 |
 | 动态工具注册 | `toolruntime.ToolHandler.RegisterOwned(owner, tool, meta)` + `UnregisterOwner` | **owner 机制正好绑定「每业务系统 key → 一组工具」** |
 | 沙箱工具 | bash/glob/read/write/edit/grep/find/lsp 等（core_code bundle） | 作为「godex 侧通用工具」 |
 | 会话 | sessions / messages / events（SSE）/ permissions | 每环节独立 session |
@@ -156,7 +156,7 @@ type ContextProvider interface {
 
 ## 7. 关键取舍 / 待定
 
-- **MCP transport 选择**：godex 现只有 stdio client。业务系统在远端，需要 HTTP（Streamable HTTP / SSE）transport——这是 Phase A 的核心增量。若业务系统进程与 godex 同机，stdio 也可直接复用。
+- **MCP transport 选择（已落地）**：godex 同时支持 stdio 与 Streamable HTTP client；HTTP 响应可处理 JSON 或 SSE，远端业务系统不再受同机限制。当前契约与超时语义以 `internal/core/mcp/http.go` 及 `http_test.go` 为准。
 - **同步 vs 超时**：MVP 同步为主，但需定义超时降级策略（>N 秒转 202 + 轮询）——避免业务请求挂死。
 - **上下文注入安全**：`inputs` 必须标记为业务数据、与指令隔离，防止 prompt injection（godex 的 security.screener 可复用）。
 - **key 粒度**：一业务系统一 key（可再细分到团队/功能，用 allowed 工具集区分）。

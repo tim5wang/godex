@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+echo "[release-check] documentation contracts"
+./scripts/check_docs.sh
+
 echo "[release-check] go test ./..."
 go test ./...
 

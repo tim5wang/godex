@@ -231,6 +231,8 @@ GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的
 
 - [GoDex 2.0 架构 SPEC](docs/architecture-v2-spec.md)：Agent/Sandbox、Orchestrator/Worker、Session Graph 和存储解耦路线。
 - [用户指南](docs/user-guide.md)：安装、配置、Provider、CLI、Web UI、工具、Memory、命令、HTTP API、自动化、安全、故障排查。
+- [功能—实现矩阵](docs/feature-implementation-matrix.md)：每个功能的实现状态、代码事实源、入口与权威文档。
+- [全模块代码与文档审查（2026-08-31）](docs/code-and-docs-review-2026-08-31.md)：架构、重复、测试基线与文档漂移的优先级清单。
 - [代码与设计 Review](docs/code-review-2026-08-15.md)：文档↔实现一致性审查与代码侧发现。
 - [DSH 研究笔记](docs/research_of_dsh_for_godex_optimize.md)：DeepSeek Harness 插件设计对 GoDex 的改进启示（插件内核、WASM 边界、路线图）。
 - [项目结构](docs/project-structure.md)：目录职责和重构边界。
@@ -282,5 +284,6 @@ docs/             产品、架构、验证和部署文档
 ```bash
 go test ./...
 pnpm -C ui/web build
+make docs-check
 git diff --check
 ```

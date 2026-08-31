@@ -1,6 +1,6 @@
 # Cache & Tool 优化计划
 
-> 状态：Plan（实施计划，未全部落地）
+> 状态：Active（1.1–2.3 已落地；2.4 provider retention baseline 已落地，自适应 TTL 策略仍 Partial）
 > 日期：2026-08-05 前后
 
 ## 背景
@@ -95,13 +95,15 @@ action: run | check
 
 **改造**：`internal/agent/context.go` — `activeToolSchemas` 简化为直接返回 `a.toolHandler.ActiveSchemas()`，删除了 `deriveToolExposureHints`、`toolExposureHints`、`applyCodingProfileToolFilter`、`hasActiveSkills`、`hasMemoryCandidates` 等所有 per-turn 过滤逻辑。
 
-### 2.3 system prompt stable/dynamic 分拆 ❌ 未实现
+### 2.3 system prompt stable/dynamic 分拆 ✅ 已实现
 
-**原因**：当前 system prompt 内容在 session 内基本全稳定，独立做此优化收益有限。需要配合把部分 runtime content 移入 system prompt 的 dynamic 段才生效。优先级低，可在缓存命中率仍不达标时再排入。
+**实现**：`internal/agent/system_prompt_dynamic.go` 把 persona/instructions/profile 等创建期稳定内容与 repo map、skill catalog、active skills、environment、tool availability、plugin prompt sections 等运行时段分开；volatile date 单独放到尾部。`TestBuildContextKeepsDynamicPromptStateOutOfStableSystem` 断言日期变化不会改写 stable system，且动态段不持久化进会话历史。
 
-### 2.4 cache-ttl 保留策略 ❌ 未实现
+### 2.4 cache retention / TTL 策略 🟡 Partial
 
-**原因**：改动量和风险较高（需要 compaction 决策层配合、TTL 状态管理、loop detection 安全阀）。当前阶段一的 tool 合并 + 阶段二的 breakpoint 前移和去过滤已预期能覆盖主要收益。优先级低。
+**已实现**：协议层已有 `PromptCacheKey` / `PromptCacheRetention`；有 session ID 的标准 agent turn 使用稳定 session key 并请求 `24h` retention；OpenAI Responses/Codex client 与 `/v1/responses` 转换链会透传 retention，且有 contract tests。
+
+**仍缺**：原计划设想的“按任务生命周期在 in-memory/24h 间自适应选择”、与 compaction/loop 状态联动及可配置策略尚未实现。当前代码是固定 session 级 `24h` baseline，不能写成完整的自适应 TTL 管理。
 
 ---
 
@@ -137,12 +139,14 @@ action: run | check
           ↓
      观察缓存命中率（预期 ~95-98%）
           ↓
-     不达标 → 第六步：2.3 system prompt 分拆
-             第七步：2.4 cache-ttl
+第六步：2.3 system prompt 分拆                         ✅
+第七步：2.4 provider retention baseline                ✅
+          ↓
+     不达标 → 增加自适应 TTL / compaction 联动          Planned
 ```
 
 ## 预期最终效果
 
 - 工具数：34 → 20
-- 缓存命中率：~90% → ~95-98%
+- 缓存命中率目标：~90% → ~95-98%（需以 Usage/独立分析实测验证，不能把计划值当成当前事实）
 - 每 turn token 开销显著降低

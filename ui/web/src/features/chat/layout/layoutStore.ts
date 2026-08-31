@@ -1,20 +1,21 @@
 import { create } from "zustand";
 
-// Chat V2 layout store: left sessions rail + right dock rail state.
+// Chat layout store: left sessions rail + right dock rail state.
 // Pure state machine + a tiny localStorage persistence layer (same
 // hand-rolled pattern as store/layoutPersistence.ts, kept independent
-// so the legacy chat workspace layout is untouched).
+// so the global workspace layout is untouched).
 
 export type DockTab = "files" | "terminal" | "tasks" | "preview" | "status";
 
 export const DOCK_TABS: ReadonlyArray<DockTab> = ["files", "terminal", "tasks", "preview", "status"];
 
-export const CHAT_V2_STORAGE_KEY = "godex.web.chatV2.layout.v1";
+// Keep the persisted key stable so existing user layouts survive the module rename.
+export const CHAT_LAYOUT_STORAGE_KEY = "godex.web.chatV2.layout.v1";
 
 export const LEFT_RAIL = { min: 200, max: 600, defaultWidth: 264 } as const;
 export const RIGHT_DOCK = { min: 320, max: 1200, defaultWidth: 420 } as const;
 
-export interface ChatV2Snapshot {
+export interface ChatLayoutSnapshot {
   leftCollapsed: boolean;
   rightCollapsed: boolean;
   activeDockTab: DockTab;
@@ -22,7 +23,7 @@ export interface ChatV2Snapshot {
   rightWidth: number;
 }
 
-export interface ChatV2Actions {
+export interface ChatLayoutActions {
   toggleLeft: () => void;
   toggleRight: () => void;
   closeRight: () => void;
@@ -32,9 +33,9 @@ export interface ChatV2Actions {
   reset: () => void;
 }
 
-export type ChatV2State = ChatV2Snapshot & ChatV2Actions;
+export type ChatLayoutStoreState = ChatLayoutSnapshot & ChatLayoutActions;
 
-export const DEFAULT_CHAT_V2_SNAPSHOT: ChatV2Snapshot = {
+export const DEFAULT_CHAT_LAYOUT_SNAPSHOT: ChatLayoutSnapshot = {
   leftCollapsed: false,
   rightCollapsed: false,
   activeDockTab: "files",
@@ -57,11 +58,11 @@ export function isNarrowViewport(): boolean {
 // On phones the sessions rail and the files dock should stay out of the way:
 // opening the app straight into the files panel (the desktop default) forces
 // the user to close the dock and collapse the rail before they can chat.
-export function defaultChatV2Snapshot(): ChatV2Snapshot {
+export function defaultChatLayoutSnapshot(): ChatLayoutSnapshot {
   if (!isNarrowViewport()) {
-    return { ...DEFAULT_CHAT_V2_SNAPSHOT };
+    return { ...DEFAULT_CHAT_LAYOUT_SNAPSHOT };
   }
-  return { ...DEFAULT_CHAT_V2_SNAPSHOT, leftCollapsed: true, rightCollapsed: true };
+  return { ...DEFAULT_CHAT_LAYOUT_SNAPSHOT, leftCollapsed: true, rightCollapsed: true };
 }
 
 function isDockTab(value: unknown): value is DockTab {
@@ -73,8 +74,8 @@ function clamp(value: number, min: number, max: number, fallback: number): numbe
   return Math.min(max, Math.max(min, Math.floor(value)));
 }
 
-export const useChatV2Store = create<ChatV2State>((set) => ({
-  ...defaultChatV2Snapshot(),
+export const useConversationLayoutStore = create<ChatLayoutStoreState>((set) => ({
+  ...defaultChatLayoutSnapshot(),
 
   toggleLeft: () => set((state) => ({ leftCollapsed: !state.leftCollapsed })),
   toggleRight: () => set((state) => ({ rightCollapsed: !state.rightCollapsed })),
@@ -94,18 +95,18 @@ export const useChatV2Store = create<ChatV2State>((set) => ({
   },
 
   setLeftWidth: (width) =>
-    set(() => ({ leftWidth: clamp(width, LEFT_RAIL.min, LEFT_RAIL.max, DEFAULT_CHAT_V2_SNAPSHOT.leftWidth) })),
+    set(() => ({ leftWidth: clamp(width, LEFT_RAIL.min, LEFT_RAIL.max, DEFAULT_CHAT_LAYOUT_SNAPSHOT.leftWidth) })),
   setRightWidth: (width) =>
-    set(() => ({ rightWidth: clamp(width, RIGHT_DOCK.min, RIGHT_DOCK.max, DEFAULT_CHAT_V2_SNAPSHOT.rightWidth) })),
+    set(() => ({ rightWidth: clamp(width, RIGHT_DOCK.min, RIGHT_DOCK.max, DEFAULT_CHAT_LAYOUT_SNAPSHOT.rightWidth) })),
 
-  reset: () => set(() => ({ ...defaultChatV2Snapshot() })),
+  reset: () => set(() => ({ ...defaultChatLayoutSnapshot() })),
 }));
 
 // ---------------------------------------------------------------------------
 // Persistence (hand-rolled, same rationale as store/layoutPersistence.ts).
 // ---------------------------------------------------------------------------
 
-export function serializeSnapshot(state: ChatV2State): ChatV2Snapshot {
+export function serializeSnapshot(state: ChatLayoutStoreState): ChatLayoutSnapshot {
   return {
     leftCollapsed: state.leftCollapsed,
     rightCollapsed: state.rightCollapsed,
@@ -115,12 +116,12 @@ export function serializeSnapshot(state: ChatV2State): ChatV2Snapshot {
   };
 }
 
-export function hydrateSnapshot(raw: string | null): ChatV2Snapshot | null {
+export function hydrateSnapshot(raw: string | null): ChatLayoutSnapshot | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
-    const candidate = parsed as Partial<ChatV2Snapshot>;
+    const candidate = parsed as Partial<ChatLayoutSnapshot>;
     if (!isDockTab(candidate.activeDockTab)) return null;
     return {
       leftCollapsed: Boolean(candidate.leftCollapsed),
@@ -134,26 +135,26 @@ export function hydrateSnapshot(raw: string | null): ChatV2Snapshot | null {
   }
 }
 
-export function readPersistedSnapshot(): ChatV2Snapshot | null {
+export function readPersistedSnapshot(): ChatLayoutSnapshot | null {
   if (typeof window === "undefined") return null;
   // Mobile always starts from the conversation view; a layout persisted on a
   // desktop viewport (files dock open, rails wide) would otherwise cover the
   // whole screen with the files panel on a narrow device.
   if (isNarrowViewport()) {
-    return defaultChatV2Snapshot();
+    return defaultChatLayoutSnapshot();
   }
   try {
-    return hydrateSnapshot(window.localStorage.getItem(CHAT_V2_STORAGE_KEY));
+    return hydrateSnapshot(window.localStorage.getItem(CHAT_LAYOUT_STORAGE_KEY));
   } catch {
     return null;
   }
 }
 
-export function writePersistedSnapshot(state: ChatV2State | ChatV2Snapshot): void {
+export function writePersistedSnapshot(state: ChatLayoutStoreState | ChatLayoutSnapshot): void {
   if (typeof window === "undefined") return;
   try {
     const snapshot = "toggleLeft" in state ? serializeSnapshot(state) : state;
-    window.localStorage.setItem(CHAT_V2_STORAGE_KEY, JSON.stringify(snapshot));
+    window.localStorage.setItem(CHAT_LAYOUT_STORAGE_KEY, JSON.stringify(snapshot));
   } catch {
     // Quota / private mode — in-memory state still works.
   }

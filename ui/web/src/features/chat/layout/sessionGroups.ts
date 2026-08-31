@@ -1,6 +1,6 @@
-import type { ListedSession } from "../../lib/types";
+import type { ListedSession } from "../../../lib/types";
 
-// Session grouping helpers for the Chat V2 sessions rail. Pure functions so
+// Session grouping helpers for the chat sessions rail. Pure functions so
 // they can be unit-tested without a DOM.
 
 export type SessionDateGroupLabel = "Today" | "Yesterday" | "Previous 7 days" | "Older";

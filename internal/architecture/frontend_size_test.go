@@ -17,10 +17,7 @@ const frontendDefaultLineLimit = 1000
 // size. Do not raise these limits: split the relevant feature slice instead.
 // Once a file is at or below frontendDefaultLineLimit, the test requires its
 // exception to be removed.
-var frontendLineExceptions = map[string]int{
-	"ui/web/src/features/chat/ChatPage.tsx":           1919,
-	"ui/web/src/features/taskboard/TaskBoardPage.tsx": 1457,
-}
+var frontendLineExceptions = map[string]int{}
 
 func TestFrontendSourceLineBudget(t *testing.T) {
 	repoRoot := architectureRepoRoot(t)

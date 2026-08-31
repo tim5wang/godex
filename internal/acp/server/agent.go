@@ -2,10 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"net/url"
 	"strings"
 	"sync"
@@ -13,6 +10,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"github.com/tim5wang/godex/internal/platform/idgen"
 	"github.com/tim5wang/godex/internal/platform/workspacefs"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
@@ -608,9 +606,5 @@ func (r connectionRequester) RequestPermission(ctx context.Context, req acp.Requ
 }
 
 func randomSessionID() string {
-	var b [12]byte
-	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
-		return fmt.Sprintf("sess_%d", time.Now().UnixNano())
-	}
-	return "sess_" + hex.EncodeToString(b[:])
+	return idgen.New("sess_", 12)
 }

@@ -22,6 +22,21 @@ import (
 	"github.com/tim5wang/godex/internal/version"
 )
 
+// Dependencies is the explicit composition boundary for the HTTP runtime.
+// Route packages still receive their narrow provider interfaces; this object
+// prevents the process entrypoint from depending on constructor argument order.
+type Dependencies struct {
+	Config          *config.Manager
+	Backend         *backend.Service
+	Channels        statusProvider
+	WeixinAuth      weixinAuthProvider
+	Cron            cronAutomationProvider
+	Heartbeat       heartbeatAutomationProvider
+	ServiceRuntime  serviceRuntimeProvider
+	Usage           *usage.Service
+	ControlRegistry controlNodeRegistry
+}
+
 func NewHandler(
 	manager *config.Manager,
 	service *backend.Service,
@@ -31,7 +46,10 @@ func NewHandler(
 	heartbeatRuntime heartbeatAutomationProvider,
 	usageService *usage.Service,
 ) http.Handler {
-	return NewHandlerWithRuntime(manager, service, channels, weixinAuth, cronRuntime, heartbeatRuntime, nil, usageService)
+	return NewHandlerWithDependencies(Dependencies{
+		Config: manager, Backend: service, Channels: channels, WeixinAuth: weixinAuth,
+		Cron: cronRuntime, Heartbeat: heartbeatRuntime, Usage: usageService,
+	})
 }
 
 func NewHandlerWithRuntime(
@@ -45,6 +63,27 @@ func NewHandlerWithRuntime(
 	usageService *usage.Service,
 	controlRegistries ...controlNodeRegistry,
 ) http.Handler {
+	var controlRegistry controlNodeRegistry
+	if len(controlRegistries) > 0 {
+		controlRegistry = controlRegistries[0]
+	}
+	return NewHandlerWithDependencies(Dependencies{
+		Config: manager, Backend: service, Channels: channels, WeixinAuth: weixinAuth,
+		Cron: cronRuntime, Heartbeat: heartbeatRuntime, ServiceRuntime: serviceRuntime,
+		Usage: usageService, ControlRegistry: controlRegistry,
+	})
+}
+
+// NewHandlerWithDependencies builds the API surface from named runtime dependencies.
+func NewHandlerWithDependencies(deps Dependencies) http.Handler {
+	manager := deps.Config
+	service := deps.Backend
+	channels := deps.Channels
+	weixinAuth := deps.WeixinAuth
+	cronRuntime := deps.Cron
+	heartbeatRuntime := deps.Heartbeat
+	serviceRuntime := deps.ServiceRuntime
+	usageService := deps.Usage
 	mux := http.NewServeMux()
 	// Plugin-contributed HTTP surfaces (P-A): mount every registered plugin
 	// prefix; plugins activated later are mounted automatically via the
@@ -54,15 +93,12 @@ func NewHandlerWithRuntime(
 			pm.MountRoutes(mux)
 		}
 	}
-	var controlRegistry controlNodeRegistry
-	if len(controlRegistries) > 0 {
-		controlRegistry = controlRegistries[0]
-	}
+	controlRegistry := deps.ControlRegistry
 	// The registry object may also carry an observation store (relay.EventStore)
 	// that serves aggregated node overviews; detect it by type assertion.
 	var overviewProvider nodeOverviewProvider
-	if len(controlRegistries) > 0 {
-		if provider, ok := controlRegistries[0].(nodeOverviewProvider); ok {
+	if deps.ControlRegistry != nil {
+		if provider, ok := deps.ControlRegistry.(nodeOverviewProvider); ok {
 			overviewProvider = provider
 		}
 	}

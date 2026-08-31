@@ -23,7 +23,7 @@ import { MarkdownContent } from "./MarkdownContent";
 import { SubagentCard } from "./SubagentCard";
 import { TodoCard } from "./TodoCard";
 import { ToolDetails } from "./ToolDetails";
-import { UiCardView, type UiCardData } from "../features/workflows/components/UiCardView";
+import { UiCardView, type UiCardData } from "./UiCardView";
 import { useI18n } from "../i18n";
 import { writeClipboardText } from "../lib/clipboard";
 import { createPCMPlayer, type PCMPlayer } from "../lib/ttsPlayback";

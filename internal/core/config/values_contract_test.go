@@ -116,60 +116,65 @@ func storedValueSetterPaths(t *testing.T) (map[string]struct{}, []string) {
 	if !ok {
 		t.Fatal("resolve config test path")
 	}
-	valuesPath := filepath.Join(filepath.Dir(testFile), "values.go")
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, valuesPath, nil, 0)
-	if err != nil {
-		t.Fatalf("parse values.go: %v", err)
-	}
-
-	var function *ast.FuncDecl
-	for _, declaration := range file.Decls {
-		candidate, ok := declaration.(*ast.FuncDecl)
-		if ok && candidate.Name.Name == "setStoredValue" {
-			function = candidate
-			break
+	var functions []*ast.FuncDecl
+	foundDispatcher := false
+	for _, name := range []string{"values_setters.go", "values_tool_setters.go"} {
+		path := filepath.Join(filepath.Dir(testFile), name)
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, declaration := range file.Decls {
+			candidate, ok := declaration.(*ast.FuncDecl)
+			if !ok || !strings.HasSuffix(candidate.Name.Name, "StoredValue") {
+				continue
+			}
+			functions = append(functions, candidate)
+			foundDispatcher = foundDispatcher || candidate.Name.Name == "setStoredValue"
 		}
 	}
-	if function == nil {
+	if !foundDispatcher {
 		t.Fatal("setStoredValue function not found")
 	}
 
 	paths := make(map[string]struct{})
 	var prefixes []string
-	ast.Inspect(function.Body, func(node ast.Node) bool {
-		switch value := node.(type) {
-		case *ast.SwitchStmt:
-			identifier, ok := value.Tag.(*ast.Ident)
-			if !ok || identifier.Name != "path" {
-				return true
-			}
-			for _, statement := range value.Body.List {
-				clause, ok := statement.(*ast.CaseClause)
-				if !ok {
-					continue
+	for _, function := range functions {
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			switch value := node.(type) {
+			case *ast.SwitchStmt:
+				identifier, ok := value.Tag.(*ast.Ident)
+				if !ok || identifier.Name != "path" {
+					return true
 				}
-				for _, expression := range clause.List {
-					if path, ok := stringLiteral(expression); ok {
-						paths[path] = struct{}{}
+				for _, statement := range value.Body.List {
+					clause, ok := statement.(*ast.CaseClause)
+					if !ok {
+						continue
+					}
+					for _, expression := range clause.List {
+						if path, ok := stringLiteral(expression); ok {
+							paths[path] = struct{}{}
+						}
 					}
 				}
+			case *ast.CallExpr:
+				selector, ok := value.Fun.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "HasPrefix" || len(value.Args) != 2 {
+					return true
+				}
+				identifier, ok := value.Args[0].(*ast.Ident)
+				if !ok || identifier.Name != "path" {
+					return true
+				}
+				if prefix, ok := stringLiteral(value.Args[1]); ok {
+					prefixes = append(prefixes, prefix)
+				}
 			}
-		case *ast.CallExpr:
-			selector, ok := value.Fun.(*ast.SelectorExpr)
-			if !ok || selector.Sel.Name != "HasPrefix" || len(value.Args) != 2 {
-				return true
-			}
-			identifier, ok := value.Args[0].(*ast.Ident)
-			if !ok || identifier.Name != "path" {
-				return true
-			}
-			if prefix, ok := stringLiteral(value.Args[1]); ok {
-				prefixes = append(prefixes, prefix)
-			}
-		}
-		return true
-	})
+			return true
+		})
+	}
 	if len(paths) == 0 {
 		t.Fatal("setStoredValue path switch is empty")
 	}

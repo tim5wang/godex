@@ -29,10 +29,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
+	"github.com/tim5wang/godex/internal/platform/valueutil"
 	rtbackend "github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/localbash"
@@ -2146,20 +2147,7 @@ func readFileInputSummary(input map[string]interface{}) string {
 // numFromAny extracts an integer from an interface{} value that may
 // be int, int64, float64 (JSON), or json.Number.
 func numFromAny(v interface{}) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	case fmt.Stringer:
-		var i int
-		if _, err := fmt.Sscanf(n.String(), "%d", &i); err == nil {
-			return i, true
-		}
-	}
-	return 0, false
+	return valueutil.Int(v)
 }
 
 // countReadOutputLines returns the number of content lines in a

@@ -73,7 +73,7 @@ func TestBroadcastToolTargetsKnownTeammates(t *testing.T) {
 	}
 
 	bus := localstore.NewMessageBus(inboxDir)
-	manager := teammate.NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
+	manager := teammate.NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil, nil)
 	tool := NewBroadcastTool(bus, manager, "captain")
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{"content": "hello team"})
@@ -128,7 +128,7 @@ func TestPlanApprovalTargetsRequestedTeammateOnly(t *testing.T) {
 	}
 
 	bus := localstore.NewMessageBus(inboxDir)
-	manager := teammate.NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
+	manager := teammate.NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil, nil)
 	tool := NewPlanApprovalTool(bus, manager, "captain")
 
 	if _, err := tool.Execute(context.Background(), map[string]interface{}{

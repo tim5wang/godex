@@ -3,7 +3,7 @@
 // The LongTask reflux popup's dismiss state lives in ChatPage's
 // component state and is lost on refresh / session re-entry. This
 // module mirrors the hand-rolled localStorage pattern used by
-// chatV2Store.ts / layoutPersistence.ts so a dismissed popup stays
+// layoutStore.ts / layoutPersistence.ts so a dismissed popup stays
 // dismissed across reloads.
 //
 // We key dismissals by "<longtaskId>:<status>" — both parsed from the

@@ -2,7 +2,7 @@ import { useLayoutEffect, useState, type Key, type ReactNode } from "react";
 import { Card, Checkbox, Empty, Pagination, Spin, Table } from "antd";
 import type { TableColumnType, TableColumnsType, TablePaginationConfig, TableProps } from "antd";
 
-// Matches the responsive CSS breakpoint in styles.css and chatV2Store
+// Matches the responsive CSS breakpoint in styles.css and layout store
 // (max-width: 900px). Below this width tables render as a card grid so the
 // usage panels stay usable on phones and small tablets.
 const NARROW_VIEWPORT_QUERY = "(max-width: 900px)";

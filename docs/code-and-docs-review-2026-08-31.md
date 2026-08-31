@@ -99,11 +99,11 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 
 #### P1-2 配置 schema 与读写映射不是单一事实源（增量契约门禁已完成）
 
-`setStoredValue` 是 446 行 switch（复杂度 215、cognitive 446），同文件还有反向的 stored/effective value 映射。新增字段必须同时修改 schema、setter、getter、mask/clear-secret 多处。
+`setStoredValue` 原先是 446 行 switch（复杂度 215、cognitive 446），同文件还有反向的 stored/effective value 映射。新增字段必须同时修改 schema、setter、getter、mask/clear-secret 多处。
 
 建议：不是引入反射框架，而是先把字段按域拆成小 handler table；每个 schema field 绑定 get/set/secret policy，并加 round-trip property test，逐步消灭平行 switch。
 
-后续状态：新增 AST 契约测试，要求 `baseSchema` 的每个字段都能被 `setStoredValue` 处理，并要求 stored/effective map 覆盖每个 schema path；round-trip 测试覆盖本轮修复的普通字段与 secret credential。由此发现并补齐上述 8 个不完整路径。`setStoredValue` 当前仍是大 switch，按域拆小 handler table 尚未实施。
+后续状态：新增 AST 契约测试，要求 `baseSchema` 的每个字段都能被 `setStoredValue` 处理，并要求 stored/effective map 覆盖每个 schema path；round-trip 测试覆盖本轮修复的普通字段与 secret credential。由此发现并补齐上述 8 个不完整路径。setter 已按 17 个一级配置域拆分，tools 再拆为 10 个子域，并由 Go 复杂度增量门禁约束回退。
 
 #### P1-3 Web 页面和共享文件再次超过可维护阈值（增量门禁已完成）
 
@@ -159,7 +159,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 | `domain/automation`, `eval`, `security` | 🟡 | 纯类型但无直接测试；需要 serialization/compatibility contract test。 |
 | `domain/events`, `history` | 🟢 | 共享 wire 类型统一依赖中立 `contracts/protocol`。 |
 | `domain/message`, `task`, `todo` | 🟢/🟡 | manager 已只依赖 Repository 接口；本地 JSON adapter 位于 `platform/localstore`。 |
-| `platform/browserutil`, `fsutil`, `logger`, `servicecontrol`, `storagegc`, `stringutil`, `textutil`, `workspacefs`, `workspacepath` | 🟢/🟡 | 多数窄而稳定；fsutil/stringutil/textutil/workspacepath 缺直接测试，storagegc 可吸收重复 dirSize。 |
+| `platform/browserutil`, `fsutil`, `logger`, `servicecontrol`, `storagegc`, `stringutil`, `textutil`, `workspacefs`, `workspacepath` | 🟢/🟡 | 多数窄而稳定；目录大小已共享为 `fsutil.DirSizeBestEffort` 并有直接测试，stringutil/workspacepath 仍缺直接测试。 |
 | `platform/tooling` | 🟡 | 共享 wire 类型已改依赖 `contracts/protocol`，反向依赖消除；2,544 行中的 shell guard、file IO、execution config 仍适合继续拆。 |
 | `pluginrt`, `plugins/taskboard`, `wasmrt` | 🟡 | 插件 ownership/lifecycle 测试较强；P-A/P-C/P-D、TaskBoard 协作 baseline 和手动 reconcile P0 已实现，但 ledger/page 仍大，通用 UI slot/自动 reconcile 仍缺。 |
 | `runtime/channels`, `feishu`, `weixin` | 🟡 | adapter 边界合理；channels.go 1,695 行，reply planning/identity/routing 应进一步分离。 |
@@ -184,7 +184,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 | `automation` | 🟡 | 页面 606 行，Cron/Heartbeat 同页可接受，后续触发器增长时拆 tab controller。 |
 | `business-agents` | 🟡 | 页面 796 行，实际已替代 Workflows；文档状态此前未同步。 |
 | `chat` | 🔴 | 主页面 1,919 行且连接 session、timeline、review、task center、files/terminal；仍是前端 composition hotspot。 |
-| `chat-v2` | 🟡 | 仍以 feature 名存在但 `/chat-v2` 已重定向 `/chat`；命名会继续造成“双实现”误解，应改为 chat 子模块。 |
+| Chat layout/chrome | 🟢/🟡 | 活跃实现已归入 `features/chat/layout`；`/chat-v2`、持久化 key 与 CSS class 仅作为外部兼容协议保留。 |
 | `files` | 🟡 | panel 619 + page 421 + tree 376，编辑/浏览/diff 状态分层尚可。 |
 | `memory` | 🟡 | 页面已从 1,093 行降到 978 行，viewer/digest/audit/context/metric 展示组件已独立；inbox/suppression/restore/search 状态仍可继续按 tab 拆。 |
 | `nodes` | 🟢/🟡 | list/detail/forward/join 已拆，结构相对健康。 |
@@ -196,13 +196,13 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 | `tasks` | 🟢 | selector/chip 小模块。 |
 | `terminal` | 🟢/🟡 | 279 行，生命周期和 xterm adapter 基本清楚。 |
 | `usage` | 🟡 | 主页面 799 行但 charts/session/cache 已拆，是可复制的拆分方向。 |
-| `workflows` | ⚪/🟡 | 页面已删除，只剩 `UiCardView`；目录名保留会误导，应迁到通用 components 或 agent-step。 |
+| `workflows` | ⚪ | 页面与空壳 feature 已删除，通用 `UiCardView` 已迁入 `components`。 |
 
 ### 脚本、示例与文档
 
 | 模块 | 结论 | 主要观察 |
 |---|---|---|
-| `scripts/` | 🟡 | smoke 脚本覆盖多入口，但缺统一入口/输出协议；本次加入 `check_docs.sh`。 |
+| `scripts/` | 🟢/🟡 | `scripts/smoke.sh` 提供统一发现/执行入口与 `--json` 结果；各场景仍保留独立脚本。 |
 | `examples/wasm-*` | ⚪ | 示例与 testdata 存在可接受重复，不应和生产重复项一并抽象。 |
 | `examples/evals` | 🟡 | 多个独立 Python entry point，适合保留；结果目录已排除索引。 |
 | `docs/` | 🔴→🟡 | 56 份顶层、78 份总文档；顶层均有受控状态并进入索引，22 份 `docs/superpowers` 执行计划按 Historical 目录管理。 |
@@ -226,7 +226,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 
 1. ~~冻结默认 tool activation policy，修复 activation/capability contract tests。~~ 已完成；3 个 `internal/agent` 旧 fixture 失败也已修复：loop-guard 测试显式固定阈值，oversized-result 测试改用不可被重复行压缩的大结果。
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
-3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。HTTP registrar 已完成五批，累计迁移 138 条路由；配置 schema/value 契约门禁与 8 个映射缺口已修复，`setStoredValue` 表驱动收敛仍待后续。
+3. `NewHandlerWithRuntime` 已由命名 `Dependencies` 组合边界承接（旧签名保留兼容），`setStoredValue` 已按配置域拆分；HTTP registrar 已完成五批，累计迁移 138 条路由，配置 schema/value 契约门禁与 8 个映射缺口已修复。
 4. ~~完成 architecture import test 并迁移 8 条既有违规依赖。~~ 已完成，精确例外清单为空；Go 函数复杂度 budget 仍待做。
 5. 前端 i18n、styles、共享 API/types、Settings config/status、Memory viewer 与 Skills analytics/package panels 均已拆分并降到预算内。剩余 Chat/TaskBoard 的 state/view 边界需单独设计确认。
 6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)，CI 执行 `make docs-check`。

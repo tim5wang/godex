@@ -48,15 +48,15 @@
 | TaskBoard plugin | Implemented baseline / evolving | `plugins/taskboard`, backend executor, TaskBoardPage | `/taskboard`, `/v1/taskboard*`, tool | 模板分派、PJM、research、路径冲突闸门与手动 reconcile P0 已落地；自动 reconcile/history/依赖拓扑仍 Planned。 |
 | Agent templates / roles / bundles | Implemented baseline / evolving | `core/templates`, role registry, AgentTemplatesPage | `/agents`, template APIs、新建对话/TaskBoard/Biz key | M1–M3、M4 P1、M5 P1–P3 已落地；导入导出/NL 生成/预算硬限制仍 Planned。 |
 | Durable Memory / recall | Implemented | `core/memory`, historysearch, MemoryPage | `/memory`, tools, slash commands | memory-design-principles、user-guide。 |
-| Context compaction/inspection | Implemented baseline | `core/compress`, agent context/compaction, inspector panels | Chat Context & Recall | compaction plan；默认 tool prompt drift 会影响缓存与上下文成本。 |
+| Context compaction/inspection | Implemented baseline | `core/compress`, agent context/compaction, inspector panels | Chat Context & Recall | compaction plan；模板 activation baseline、runtime prompt 与 clear/reset 已有契约测试，后续继续演进 compaction 策略。 |
 | Notes | Implemented | `core/notes`, backend notes, NotesPage | `/notes`, `/note` | README/user-guide。 |
 | Session tree | Implemented baseline | `sessiongraph`, backend fork/rollback/merge | Chat/API | architecture-v2、roadmap；更完整 branch isolation 仍属 2.0 演进。 |
-| Storage backend abstraction | Partial | `sessionstore`, `persistence.DurableMap` | internal | architecture-v2；domain task/todo/message 仍直连文件存储。 |
+| Storage backend abstraction | Implemented baseline / evolving | `sessionstore`, `persistence.DurableMap`, domain Repository、`platform/localstore` | internal | task/todo/message 已通过 Repository 隔离本地 JSON adapter；跨后端事务与完整 2.0 storage 分离仍 Planned。 |
 | Cron / Heartbeat | Implemented | `runtime/cron`, `runtime/heartbeat` | Web Automation、slash/API | README/user-guide。 |
 | Feishu / Weixin | Implemented | `runtime/channels/*` | serve runtime、Weixin CLI | README/user-guide；channel core 文件过大。 |
 | Node Registry / Relay / remote exec-forward | Implemented baseline | noderegistry, relay, nodeobs | Web Nodes、`godex node` | Node Mesh Phase 1–3、forward/exec/Web Push 已落地；PWA、Android node、跨节点编排、doctor/audit 仍 Planned。 |
 | Web Push | Implemented baseline | `services/webpush`, `runtime/httpapi/push.go`, Web push client | `/push/public-key`, `/push/subscribe`, `/push/test` | subscribe/unsubscribe/auth 与前端 service worker 注册有测试；完整 PWA 仍 Planned。 |
-| Security / approval / sandbox / scope | Implemented baseline | core/security, toolruntime/permissions, sandbox, scope | approval UI、profiles | scope isolation/architecture docs；allowlist evaluator 重复待收敛。 |
+| Security / approval / sandbox / scope | Implemented baseline | core/security, `core/toolfilter`, toolruntime/permissions, sandbox, scope | approval UI、profiles | Agent Step/template/biz key narrowing 已共享 allowlist evaluator；sandbox hardening 继续按架构路线演进。 |
 | Usage / cache stats | Implemented | services/usage, routes_usage, UsagePage | Web Usage、`/usage/*` | codex-cache/cache analysis 是分析资料，不应覆盖运行时事实。 |
 | Voice / TTS | Implemented baseline | routes_voice, VoiceBar, TTS playback | `/v1/voice`, `/v1/tts`, `/v1/tts/stream` | voice-engine WS/TTS 主链已落地；turn middleware、plugin config/UI、OpenAI REST/Realtime adapter 仍 Planned。 |
 | Cache prompt stability / retention | Implemented baseline / evolving | agent context/system_prompt_dynamic、protocol/conversation clients | Usage/cache metrics | stable/dynamic 分拆和 session 24h retention 已落地；自适应 TTL/compaction 联动仍 Planned。 |

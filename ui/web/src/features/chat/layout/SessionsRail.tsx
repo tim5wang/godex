@@ -15,9 +15,9 @@ import {
   VerticalRightOutlined,
 } from "@ant-design/icons";
 import { useMemo, useState } from "react";
-import type { ListedSession, SkillCatalogEntry } from "../../lib/types";
-import type { AgentTemplate } from "../../lib/api";
-import { useI18n } from "../../i18n";
+import type { ListedSession, SkillCatalogEntry } from "../../../lib/types";
+import type { AgentTemplate } from "../../../lib/api";
+import { useI18n } from "../../../i18n";
 import { filterSessions, groupSessionsByWorkspace, isTempDir } from "./sessionGroups";
 import type { WorkspaceGroup, WorkspaceGroupType } from "./sessionGroups";
 
@@ -325,7 +325,7 @@ function NewChatWorkspacePopover(props: {
   );
 }
 
-/** Chat V2 left rail: brand-adjacent session list with New chat, search and
+/** Chat session left rail: brand-adjacent session list with New chat, search and
  *  workspace-grouped conversations. Collapses to a 48px icon strip. */
 export function SessionsRail(props: SessionsRailProps) {
   const { t } = useI18n();

@@ -7,7 +7,7 @@ import {
   FolderOpenOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
-import { DOCK_TABS, type DockTab } from "./chatV2Store";
+import { DOCK_TABS, type DockTab } from "./layoutStore";
 
 export const DOCK_TAB_META: Record<DockTab, { label: string; icon: ReactNode }> = {
   files: { label: "Files", icon: <FolderOpenOutlined /> },
@@ -27,7 +27,7 @@ interface DockRailProps {
   children: ReactNode;
 }
 
-/** Chat V2 right dock: a vertical icon tab strip (files / terminal / tasks /
+/** Chat right dock: a vertical icon tab strip (files / terminal / tasks /
  *  preview / status) with an expandable content pane. Selecting a tab while
  *  collapsed expands the dock; clicking the active tab collapses it. */
 export function DockRail(props: DockRailProps) {

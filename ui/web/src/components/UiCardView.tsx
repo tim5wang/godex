@@ -1,6 +1,6 @@
 import { Button, Card, Form, Input, Select, Space, Typography } from "antd";
 import { SendOutlined } from "@ant-design/icons";
-import { MarkdownContent } from "../../../components/MarkdownContent";
+import { MarkdownContent } from "./MarkdownContent";
 
 const { Paragraph } = Typography;
 

@@ -13,6 +13,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/platform/logger"
+	"github.com/tim5wang/godex/internal/platform/valueutil"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/tools"
@@ -682,8 +683,8 @@ func readFileCallTitle(name string, input map[string]interface{}) string {
 	if path == "" {
 		return name
 	}
-	off, hasOff := numFromAny(input["offset"])
-	lim, hasLim := numFromAny(input["limit"])
+	off, hasOff := valueutil.Int(input["offset"])
+	lim, hasLim := valueutil.Int(input["limit"])
 	if hasOff && hasLim && lim > 0 {
 		end := off + lim - 1
 		return fmt.Sprintf("%s: %s:%d-%d", name, truncateString(path, 80), off, end)
@@ -692,25 +693,6 @@ func readFileCallTitle(name string, input map[string]interface{}) string {
 		return fmt.Sprintf("%s: %s (from line %d)", name, truncateString(path, 80), off)
 	}
 	return name + ": " + truncateString(path, 80)
-}
-
-// numFromAny extracts an integer from an interface{} value that may
-// be int, int64, float64 (JSON), or fmt.Stringer.
-func numFromAny(v interface{}) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	case fmt.Stringer:
-		var i int
-		if _, err := fmt.Sscanf(n.String(), "%d", &i); err == nil {
-			return i, true
-		}
-	}
-	return 0, false
 }
 
 func toolKind(name string) acp.ToolKind {

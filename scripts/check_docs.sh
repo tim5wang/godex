@@ -11,6 +11,15 @@ report_error() {
   errors=$((errors + 1))
 }
 
+assert_implementation_fact() {
+  local source_path=$1
+  local doc=$2
+  local fact=$3
+  if [[ -e "$source_path" ]] && ! grep -Fq "$fact" "$doc"; then
+    report_error "$doc is missing implementation fact '$fact' backed by $source_path"
+  fi
+}
+
 # Every top-level document is part of the curated index. Historical detailed
 # plans under docs/superpowers are intentionally represented by their folder,
 # rather than by one index row per execution note.
@@ -44,6 +53,13 @@ while IFS=$'\t' read -r source target; do
     report_error "$source links to missing file $target"
   fi
 done < <(perl -ne 'while (/\[[^\]]+\]\(([^)#]+\.md)/g) { print "$ARGV\t$1\n" }' README.md README.en.md $(find docs -type f -name '*.md' | sort))
+
+# Keep a small set of high-value implementation facts tied to source paths.
+# This does not attempt to prove all prose, but prevents completed migrations
+# from regressing to the specific stale conclusions found by the audit.
+assert_implementation_fact internal/platform/localstore/localstore.go docs/feature-implementation-matrix.md '`platform/localstore`'
+assert_implementation_fact internal/core/toolfilter/toolfilter.go docs/feature-implementation-matrix.md '`core/toolfilter`'
+assert_implementation_fact internal/platform/fsutil/size.go docs/code-and-docs-review-2026-08-31.md '`fsutil.DirSizeBestEffort`'
 
 if (( errors > 0 )); then
   printf 'docs-check: failed with %d error(s)\n' "$errors" >&2

@@ -29,7 +29,7 @@ func TestWorkspaceBoundToolHelpers(t *testing.T) {
 	}
 
 	bus := localstore.NewMessageBus(filepath.Join(teamDir, "inbox"))
-	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil, nil)
 
 	out, err := manager.tooling.RunShell(context.Background(), "pwd")
 	if err != nil {
@@ -92,7 +92,7 @@ func TestConsumeInboxMessagesResumesTeammateWork(t *testing.T) {
 	}
 
 	bus := localstore.NewMessageBus(filepath.Join(teamDir, "inbox"))
-	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil, nil)
 	manager.teammates["worker"] = &Teammate{Name: "worker", Role: "builder", Status: StatusIdle, generation: 1}
 	manager.ensureWakeChannelLocked("worker")
 
@@ -139,7 +139,7 @@ func TestGetAndListReturnTeammateSnapshots(t *testing.T) {
 	teamDir := filepath.Join(workspace, ".team")
 	tasksDir := filepath.Join(workspace, ".tasks")
 	bus := localstore.NewMessageBus(filepath.Join(teamDir, "inbox"))
-	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil, nil)
 
 	manager.teammates["worker"] = &Teammate{Name: "worker", Role: "builder", Status: StatusIdle, generation: 1}
 
@@ -167,7 +167,7 @@ func TestManagerLoopToolFactoriesAreConfigurable(t *testing.T) {
 	tasksDir := filepath.Join(workspace, ".tasks")
 	bus := localstore.NewMessageBus(filepath.Join(teamDir, "inbox"))
 	client := fakeCaller{}
-	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "test-model", client, testLoopToolFactories()...)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "test-model", client, testLoopToolFactories())
 
 	if manager.client != client {
 		t.Fatal("expected manager to keep injected conversation caller")
@@ -204,7 +204,7 @@ func TestIdleWaitWakesOnInboxAndShutdown(t *testing.T) {
 	}
 
 	bus := localstore.NewMessageBus(inboxDir)
-	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil, nil)
 	manager.teammates["worker"] = &Teammate{Name: "worker", Role: "builder", Status: StatusIdle, generation: 1}
 	manager.ensureWakeChannelLocked("worker")
 
@@ -265,7 +265,7 @@ func TestLoadAllNormalizesLegacyStatusesWithoutRuntimeResume(t *testing.T) {
 		t.Fatalf("mkdir tasks dir: %v", err)
 	}
 
-	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), localstore.NewMessageBus(filepath.Join(teamDir, "inbox")), "", nil)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), localstore.NewMessageBus(filepath.Join(teamDir, "inbox")), "", nil, nil)
 	payload, err := json.Marshal(map[string]*Teammate{
 		"worker":   {Name: "worker", Role: "builder", Prompt: "build", Status: StatusWorking},
 		"stopping": {Name: "stopping", Role: "builder", Prompt: "build", Status: StatusShuttingDown},
@@ -304,7 +304,7 @@ func TestLoadAllPreservesInboxWakeBehaviorForLoadedTeammates(t *testing.T) {
 	}
 
 	bus := localstore.NewMessageBus(inboxDir)
-	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil)
+	manager := NewManager(workspace, teamDir, localstore.NewTaskManager(tasksDir), bus, "", nil, nil)
 	payload, err := json.Marshal(map[string]*Teammate{
 		"worker": {Name: "worker", Role: "builder", Prompt: "build", Status: StatusIdle},
 	})

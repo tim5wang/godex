@@ -5,7 +5,7 @@ COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -s -w -X github.com/tim5wang/godex/internal/version.Version=$(VERSION) -X github.com/tim5wang/godex/internal/version.Commit=$(COMMIT) -X github.com/tim5wang/godex/internal/version.Date=$(BUILD_DATE)
 
-.PHONY: dev dev-fast dev-frontend web web-dev web-typecheck web-clean docs-check build-linux build-minimal release release-clean deploy-linux
+.PHONY: dev dev-fast dev-frontend web web-dev web-typecheck web-clean docs-check smoke build-linux build-minimal release release-clean deploy-linux
 
 # ── Web UI build targets ───────────────────────────────────────────
 
@@ -30,6 +30,10 @@ web-clean:
 ## docs-check: Validate documentation status headers, index coverage, and local Markdown links
 docs-check:
 	./scripts/check_docs.sh
+
+## smoke: List smoke scenarios, or run one with `make smoke SCENARIO=self`
+smoke:
+	@bash scripts/smoke.sh $(if $(SCENARIO),$(SCENARIO),list)
 
 # ── Development targets ────────────────────────────────────────────
 

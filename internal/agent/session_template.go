@@ -3,6 +3,7 @@ package agent
 import (
 	"strings"
 
+	"github.com/tim5wang/godex/internal/agent/activation"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/scope"
@@ -44,24 +45,11 @@ func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 		a.applyScopedMemory()
 	}
 
-	switch {
-	case len(t.Tools) > 0 && len(t.Bundles) > 0:
-		// Union: explicit tools on top of the bundle presets.
-		names := toolNamesForBundles(a.toolHandler.Catalog(), t.Bundles)
-		a.toolHandler.SetActiveToolsExact(append(names, t.Tools...)...)
-	case len(t.Tools) > 0:
-		// Exact allowlist: the session gets exactly the listed tools.
-		a.toolHandler.SetActiveToolsExact(t.Tools...)
-	case len(t.Bundles) > 0:
-		a.toolHandler.SetActiveToolsExact(toolNamesForBundles(a.toolHandler.Catalog(), t.Bundles)...)
-	case strings.TrimSpace(t.ID) == templates.BuiltinDefault:
-		// The built-in empty default template is the explicit compatibility
-		// exception: reproduce the legacy registered-default tool set.
+	plan := activation.Resolve(t, a.toolHandler.Catalog())
+	if plan.Mode == activation.RegistrationDefaults {
 		a.toolHandler.ResetActiveToolsToDefaults()
-	default:
-		// Every other template has exact Tools ∪ Bundles semantics, including
-		// a deliberately empty capability set.
-		a.toolHandler.SetActiveToolsExact()
+	} else {
+		a.toolHandler.SetActiveToolsExact(plan.ToolNames...)
 	}
 
 	baseline := a.toolHandler.ActiveToolNames()
@@ -100,23 +88,6 @@ func (a *Agent) memoryMode() string {
 // session whose exact preset may not include the task_board bundle.
 func (a *Agent) ActivateBundles(names ...string) {
 	a.toolHandler.ActivateBundles(names...)
-}
-
-// toolNamesForBundles resolves the union of tool names registered in the
-// named bundles, preserving catalog order. Unknown bundle names are ignored.
-func toolNamesForBundles(cat tools.ToolCatalog, bundles []string) []string {
-	set := make(map[string]struct{}, len(bundles))
-	for _, b := range bundles {
-		set[strings.ToLower(strings.TrimSpace(b))] = struct{}{}
-	}
-	names := make([]string, 0, 16)
-	for _, b := range cat.Bundles {
-		if _, ok := set[strings.ToLower(strings.TrimSpace(b.Name))]; !ok {
-			continue
-		}
-		names = append(names, b.Tools...)
-	}
-	return names
 }
 
 // TemplateID returns the ID of the applied template ("" when none).

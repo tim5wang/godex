@@ -97,7 +97,7 @@ type loopState struct {
 }
 
 // NewManager creates a new teammate manager.
-func NewManager(workspaceDir, teamDir string, taskMgr *task.Manager, msgBus *message.Bus, model string, client conversation.Caller, defaultTools ...LoopToolFactory) *Manager {
+func NewManager(workspaceDir, teamDir string, taskMgr *task.Manager, msgBus *message.Bus, model string, client conversation.Caller, defaultTools []LoopToolFactory) *Manager {
 	absWorkspaceDir, err := filepath.Abs(workspaceDir)
 	if err == nil {
 		workspaceDir = absWorkspaceDir

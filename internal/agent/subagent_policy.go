@@ -2,17 +2,13 @@ package agent
 
 import (
 	"fmt"
+	"github.com/tim5wang/godex/internal/agent/subagentpolicy"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
-	"path/filepath"
-	"sort"
 	"strings"
 )
 
 func subagentToolNames(agentType string) []string {
-	if normalizeSubagentType(agentType) == "general-purpose" {
-		return []string{"bash", "read_file", "write_file", "edit_file"}
-	}
-	return []string{"read_file"}
+	return subagentpolicy.DefaultToolNames(agentType)
 }
 
 func subagentRequiredBundles(prompt string, explicit []string) []string {
@@ -160,12 +156,7 @@ func subagentToolNamesForRole(agentType string, role *pkgregistry.Role) []string
 }
 
 func supportedDurableSubagentTool(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "bash", "read_file", "write_file", "edit_file", "web_search", "web_fetch":
-		return true
-	default:
-		return false
-	}
+	return subagentpolicy.SupportedTool(name)
 }
 
 func isDurableSubagentInheritedParentTool(name string) bool {
@@ -178,34 +169,11 @@ func isDurableSubagentInheritedParentTool(name string) bool {
 }
 
 func isDurableSubagentWriteTool(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "write_file", "edit_file":
-		return true
-	default:
-		return false
-	}
+	return subagentpolicy.IsWriteTool(name)
 }
 
 func narrowSubagentWriteTools(toolNames []string, writeScope []string) []string {
-	hasWriteScope := len(normalizeWriteScope(writeScope)) > 0
-	out := make([]string, 0, len(toolNames))
-	for _, name := range toolNames {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		if name == "bash" && !hasWriteScope {
-			continue
-		}
-		if isDurableSubagentWriteTool(name) && !hasWriteScope {
-			continue
-		}
-		out = append(out, name)
-	}
-	if len(out) == 0 {
-		return []string{"read_file"}
-	}
-	return uniqueStrings(out)
+	return subagentpolicy.NarrowWriteTools(toolNames, writeScope)
 }
 
 func uniqueStrings(items []string) []string {
@@ -393,17 +361,7 @@ func cloneStringAnyMap(input map[string]interface{}) map[string]interface{} {
 }
 
 func normalizeSubagentType(agentType string) string {
-	agentType = strings.TrimSpace(agentType)
-	if agentType == "" {
-		return "Explore"
-	}
-	if agentType == "general-purpose" {
-		return "general-purpose"
-	}
-	if strings.EqualFold(agentType, "explore") {
-		return "Explore"
-	}
-	return agentType
+	return subagentpolicy.NormalizeType(agentType)
 }
 
 func durableSubagentPromptForRole(agentType string, writeScope []string) string {
@@ -456,32 +414,9 @@ func durableSubagentPrompt(writeScope []string) string {
 }
 
 func normalizeWriteScope(scope []string) []string {
-	out := make([]string, 0, len(scope))
-	seen := make(map[string]struct{}, len(scope))
-	for _, item := range scope {
-		item = strings.Trim(strings.TrimSpace(filepath.ToSlash(item)), "/")
-		if item == "" {
-			continue
-		}
-		if _, ok := seen[item]; ok {
-			continue
-		}
-		seen[item] = struct{}{}
-		out = append(out, item)
-	}
-	sort.Strings(out)
-	return out
+	return subagentpolicy.NormalizeWriteScope(scope)
 }
 
 func pathAllowedByWriteScope(path string, scope []string) bool {
-	path = strings.Trim(strings.TrimSpace(filepath.ToSlash(path)), "/")
-	if path == "" || strings.HasPrefix(path, "../") || path == ".." {
-		return false
-	}
-	for _, item := range normalizeWriteScope(scope) {
-		if path == item || strings.HasPrefix(path, item+"/") {
-			return true
-		}
-	}
-	return false
+	return subagentpolicy.PathAllowed(path, scope)
 }

@@ -29,8 +29,8 @@ import { getMeta, listProviders } from "./lib/api";
 import { useSettingsStore } from "./store/settings";
 import { useNodeContextStore } from "./store/nodeContext";
 import { useLayoutStore } from "./store/layout";
-import { DOCK_TAB_META } from "./features/chat-v2/DockRail";
-import { useChatV2Store } from "./features/chat-v2/chatV2Store";
+import { DOCK_TAB_META } from "./features/chat/layout/DockRail";
+import { useConversationLayoutStore } from "./features/chat/layout/layoutStore";
 import {
   LAYOUT_STORAGE_KEY,
   applyLayoutSnapshot,
@@ -132,9 +132,9 @@ export default function App() {
     max: 360,
   });
   const activeApp = activeBuiltinApp(location.pathname);
-  const chatDockCollapsed = useChatV2Store((state) => state.rightCollapsed);
-  const activeChatDock = useChatV2Store((state) => state.activeDockTab);
-  const closeChatDock = useChatV2Store((state) => state.closeRight);
+  const chatDockCollapsed = useConversationLayoutStore((state) => state.rightCollapsed);
+  const activeChatDock = useConversationLayoutStore((state) => state.activeDockTab);
+  const closeChatDock = useConversationLayoutStore((state) => state.closeRight);
   const showChatDockBack = activeApp.id === "chat" && !chatDockCollapsed;
   // Memoize route elements so App re-renders do not recreate
   // <PageErrorBoundary> wrappers, which could trigger React Router

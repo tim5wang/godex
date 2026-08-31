@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/automation"
@@ -92,8 +92,8 @@ func AvailableMetadata() []CommandMetadata {
 		{Name: "cron", Description: "inspect, run, or toggle cron jobs"},
 		{Name: "heartbeat", Description: "inspect, test, or toggle heartbeat"},
 		{Name: "new", Description: "create a new empty session for the current workspace"},
-	{Name: "resume", Description: "list and resume a previous session from this workspace", InputHint: "[session-id|session-name]"},
-	{Name: "help", Description: "show this help message"},
+		{Name: "resume", Description: "list and resume a previous session from this workspace", InputHint: "[session-id|session-name]"},
+		{Name: "help", Description: "show this help message"},
 	}
 	return append([]CommandMetadata(nil), items...)
 }
@@ -159,20 +159,20 @@ func CurrentSessionContext(ctx context.Context) (SessionContext, bool) {
 
 // Service executes slash commands against one session-scoped agent.
 type Service struct {
-	mu        sync.RWMutex
-	cfg       *config.Config
-	analyze   func(insights.Input) (*insights.Report, error)
-	doctor    func() config.DoctorReport
-	channels  func() string
-	cron      func(context.Context, Command) (Result, error)
-	heartbeat func(context.Context, Command) (Result, error)
-	model     func(context.Context, Command) (Result, error)
-	session   func(context.Context, *agent.Agent, Command) (Result, error)
+	mu            sync.RWMutex
+	cfg           *config.Config
+	analyze       func(insights.Input) (*insights.Report, error)
+	doctor        func() config.DoctorReport
+	channels      func() string
+	cron          func(context.Context, Command) (Result, error)
+	heartbeat     func(context.Context, Command) (Result, error)
+	model         func(context.Context, Command) (Result, error)
+	session       func(context.Context, *agent.Agent, Command) (Result, error)
 	newSession    func(context.Context, *agent.Agent, Command) (Result, error)
 	resumeSession func(context.Context, *agent.Agent, Command) (Result, error)
-	clear     func(context.Context, *agent.Agent, Command) (Result, error)
-	approve   func(context.Context, *agent.Agent, Command) (Result, error)
-	deny      func(context.Context, *agent.Agent, Command) (Result, error)
+	clear         func(context.Context, *agent.Agent, Command) (Result, error)
+	approve       func(context.Context, *agent.Agent, Command) (Result, error)
+	deny          func(context.Context, *agent.Agent, Command) (Result, error)
 }
 
 type insightsSnapshot struct {
@@ -323,115 +323,6 @@ func (s *Service) HelpText() string {
 }
 
 // Execute runs one normalized command.
-func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Result, error) {
-	_ = ctx
-	if a == nil {
-		return Result{}, fmt.Errorf("missing agent")
-	}
-	if cmd.Name == "" {
-		return Result{}, fmt.Errorf("%w: empty command", ErrUnknownCommand)
-	}
-	switch cmd.Name {
-	case "bash", "sh":
-		return s.executeLocalBash(ctx, cmd)
-	case "compact":
-		mode := a.DefaultCompactionMode()
-		for _, arg := range cmd.Args {
-			switch strings.TrimSpace(arg) {
-			case "--model", "--deep":
-				mode = "model"
-			case "--hybrid":
-				mode = "hybrid"
-			default:
-				return Result{}, fmt.Errorf("usage: /compact [--model|--deep|--hybrid]")
-			}
-		}
-		output, err := a.CompactConversationWithMode(mode)
-		return Result{Name: cmd.Name, Output: output, RefreshSnapshot: true}, err
-	case "tasks":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return Result{Name: cmd.Name, Output: fmt.Sprint(a.TaskMgr().List())}, nil
-	case "team":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return Result{Name: cmd.Name, Output: renderTeam(a.TeamMgr().List())}, nil
-	case "inbox":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return Result{Name: cmd.Name, Output: fmt.Sprint(a.MsgBus().ReadInbox(s.cfg.LeadName))}, nil
-	case "todos":
-		return s.executeTodos(a, cmd)
-	case "insights":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return s.executeInsights(a)
-	case "doctor":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return s.executeDoctor()
-	case "channels":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return s.executeChannels()
-	case "skills":
-		return s.executeSkills(a, cmd)
-	case "packages":
-		return s.executePackages(cmd)
-	case "memory":
-		return s.executeMemory(a, cmd)
-	case "note":
-		return s.executeNote(ctx, cmd)
-	case "memory-digest":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return s.executeMemoryDigest(a)
-	case "memory-log":
-		return s.executeMemoryLog(a, cmd)
-	case "memory-restore":
-		return s.executeMemoryRestore(a, cmd)
-	case "model":
-		return s.executeModel(a, ctx, cmd)
-	case "clear":
-		return s.executeClear(a, ctx, cmd)
-	case "approve":
-		return s.executeApprove(a, ctx, cmd)
-	case "deny":
-		return s.executeDeny(a, ctx, cmd)
-	case "session":
-		return s.executeSession(a, ctx, cmd)
-	case "new":
-		return s.executeNewSession(a, ctx, cmd)
-	case "resume":
-		return s.executeResumeSession(a, ctx, cmd)
-	case "history":
-		return s.executeHistory(a, ctx, cmd)
-	case "cron":
-		return s.executeCron(ctx, cmd)
-	case "heartbeat":
-		return s.executeHeartbeat(ctx, cmd)
-	case "help":
-		if len(cmd.Args) > 0 {
-			return Result{}, fmt.Errorf("command /%s does not accept arguments", cmd.Name)
-		}
-		return Result{Name: cmd.Name, Output: s.HelpText()}, nil
-	default:
-		if result, ok, err := s.executePackageCommand(cmd); ok || err != nil {
-			return result, err
-		}
-		return Result{}, fmt.Errorf("%w: /%s", ErrUnknownCommand, cmd.Name)
-	}
-}
-
-// executeLocalBash executes /bash and /sh commands via the configured
-// WorkspaceExecutor (local, SSH, or Docker).
 func (s *Service) executeLocalBash(ctx context.Context, cmd Command) (Result, error) {
 	shellCommand, ok := localbash.ParseCommand(cmd.Raw)
 	if !ok {

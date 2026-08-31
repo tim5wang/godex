@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterSessions, groupSessionsByDate } from "../src/features/chat-v2/sessionGroups";
+import { filterSessions, groupSessionsByDate } from "../src/features/chat/layout/sessionGroups";
 import type { ListedSession } from "../src/lib/types";
 
 function session(id: string, updatedAt: string, title = ""): ListedSession {

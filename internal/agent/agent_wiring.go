@@ -342,7 +342,7 @@ func newSkillLoader(cfg *config.Config, client conversation.Caller) *skill.Loade
 }
 
 func newTeamManager(cfg *config.Config, taskMgr *task.Manager, msgBus *message.Bus, client conversation.Caller) *teammate.Manager {
-	teamMgr := teammate.NewManager(cfg.WorkspaceDir, cfg.TeamDir, taskMgr, msgBus, cfg.Model, client, teamtools.NewLoopToolFactories()...)
+	teamMgr := teammate.NewManager(cfg.WorkspaceDir, cfg.TeamDir, taskMgr, msgBus, cfg.Model, client, teamtools.NewLoopToolFactories())
 	teamMgr.Configure(teammate.RuntimeConfig{
 		TeamName:         cfg.TeamName,
 		WorkLoopLimit:    cfg.TeammateWorkLimit,

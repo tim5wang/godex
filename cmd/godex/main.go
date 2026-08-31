@@ -48,41 +48,12 @@ import (
 )
 
 func main() {
-	// User service managers start GoDex with a deliberately sparse environment
-	// (on macOS launchd usually supplies only /usr/bin:/bin:/usr/sbin:/sbin).
-	// Refresh it before constructing any tools so /sh, /bash, background jobs,
-	// and Web Terminal see the same PATH and exports as the user's shell.
-	envCtx, envCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := servicecontrol.ImportUserShellEnvironment(envCtx); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-	}
-	envCancel()
-
-	configOptions, args, err := extractGlobalConfigArgs(os.Args[1:])
+	configOptions, args, done, err := prepareRuntimeArgs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Debug flags are parsed before config so an operator can recover
-	// a clean goroutine or heap dump even when the rest of the program
-	// is wedged (Loading TUI... forever, alt-screen corrupt, etc.).
-	debugArgs, args := splitDebugArgs(args)
-	debug, err := parseDebugFlags(debugArgs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	if err := startPprofServer(debug.PprofAddr); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	installSignalDumpHandlers(debug)
-	if len(args) > 0 && (args[0] == "setup" || args[0] == "init") {
-		if err := app.RunSetupCommand(context.Background(), args[1:], os.Stdout, os.Stderr); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+	if done {
 		return
 	}
 
@@ -333,10 +304,20 @@ func main() {
 				})
 			}
 
-			apiHandler := httpapi.NewHandlerWithRuntime(manager, service, channelManager, weixinAuth, cronToolAdapter, heartbeatToolAdapter, serviceRuntimeControl{
-				controller: servicecontrol.NewController(),
-				options:    serviceRuntimeOptions(manager),
-			}, usageService, &registryWithOverview{Registry: controlRegistry, EventStore: eventStore, Hub: relayHub})
+			apiHandler := httpapi.NewHandlerWithDependencies(httpapi.Dependencies{
+				Config:     manager,
+				Backend:    service,
+				Channels:   channelManager,
+				WeixinAuth: weixinAuth,
+				Cron:       cronToolAdapter,
+				Heartbeat:  heartbeatToolAdapter,
+				ServiceRuntime: serviceRuntimeControl{
+					controller: servicecontrol.NewController(),
+					options:    serviceRuntimeOptions(manager),
+				},
+				Usage:           usageService,
+				ControlRegistry: &registryWithOverview{Registry: controlRegistry, EventStore: eventStore, Hub: relayHub},
+			})
 
 			// Combine the API handler with relay endpoints. The webui strips the
 			// leading /api before delegating here, so relay paths are prefix-free:

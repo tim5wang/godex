@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/toolfilter"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/services/backend"
@@ -359,39 +360,9 @@ func resolveStepTools(key *usage.BizAPIKey, req *stepTools) (allowedServers, all
 func intersectStepTools(base, requested []string) []string {
 	var out []string
 	for _, item := range base {
-		if stepListAllows(requested, item) {
+		if toolfilter.Allows(requested, item) {
 			out = append(out, item)
 		}
 	}
 	return out
-}
-
-// stepListAllows reports whether a requested list (with "*" / "!x" / "x/*"
-// entries) permits the given item. Exclusions win over inclusions.
-func stepListAllows(list []string, item string) bool {
-	allowAll := false
-	for _, entry := range list {
-		if entry == "*" {
-			allowAll = true
-		}
-	}
-	for _, entry := range list {
-		if !strings.HasPrefix(entry, "!") {
-			continue
-		}
-		exclude := strings.TrimPrefix(entry, "!")
-		exclude = strings.TrimSuffix(exclude, "/*")
-		if exclude == item || exclude == "*" {
-			return false
-		}
-	}
-	if allowAll {
-		return true
-	}
-	for _, entry := range list {
-		if entry == item || entry == item+"/*" {
-			return true
-		}
-	}
-	return false
 }

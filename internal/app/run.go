@@ -1178,6 +1178,7 @@ func rootHelpText() string {
 		"",
 		"Global flags:",
 		"  --config path    Use an explicit godex.yaml for this process",
+		"  --session spec   Use a default session (channel:key or bare key) for this process",
 		"",
 		"Profiles:",
 		"  ACP/CLI/TUI default to the lean coding profile; Web and IM channels default to general.",

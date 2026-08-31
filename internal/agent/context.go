@@ -18,6 +18,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/message"
+	"github.com/tim5wang/godex/internal/platform/textutil"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -43,7 +44,7 @@ type BuildContextResult struct {
 func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	history, version := a.messageState()
 	history = dedupeRepeatedLargeToolResultSummaries(history)
-	query := latestPersistentUserText(history)
+	query := protocol.LatestPersistentUserText(history)
 	a.activateImplicitBundlesForQuery(query)
 	agentProfile := agentProfileFromContext(ctx)
 
@@ -450,7 +451,7 @@ func (a *Agent) collectMemoryMessages(history []protocol.Message) ([]protocol.Me
 	if a.memoryMode() == templates.MemoryNone {
 		return nil, memory.ContextLayers{}, nil
 	}
-	query := latestPersistentUserText(history)
+	query := protocol.LatestPersistentUserText(history)
 	layers, err := a.memoryMgr.BuildContextLayers(query)
 	if err != nil {
 		return nil, memory.ContextLayers{}, err
@@ -888,23 +889,6 @@ func formatBackgroundNotifications(notifs []background.Notification, now time.Ti
 	return message.FormatEnvelopes("Background task updates", envelopes)
 }
 
-func latestPersistentUserText(messages []protocol.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role != protocol.RoleUser {
-			continue
-		}
-		if msg.Metadata != nil && msg.Metadata.Ephemeral {
-			continue
-		}
-		text := strings.TrimSpace(protocol.MessageText(msg))
-		if text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
 func formatMemoryLayers(layers memory.ContextLayers) string {
 	var builder strings.Builder
 
@@ -937,19 +921,8 @@ func appendMemorySection(builder *strings.Builder, memories []memory.RelevantMem
 		builder.WriteString(fmt.Sprintf("- %s [%s] (%s): %s\n", mem.Title, mem.Type, mem.File, mem.Summary))
 		if content := strings.TrimSpace(mem.Content); includeContent && content != "" {
 			builder.WriteString("  ")
-			builder.WriteString(strings.ReplaceAll(truncateRunes(content, maxRelevantMemoryContentRunes), "\n", "\n  "))
+			builder.WriteString(strings.ReplaceAll(textutil.TruncateRunes(content, maxRelevantMemoryContentRunes), "\n", "\n  "))
 			builder.WriteString("\n")
 		}
 	}
-}
-
-func truncateRunes(input string, limit int) string {
-	if limit <= 0 {
-		return input
-	}
-	runes := []rune(input)
-	if len(runes) <= limit {
-		return input
-	}
-	return string(runes[:limit]) + "..."
 }

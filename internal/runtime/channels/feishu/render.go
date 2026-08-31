@@ -6,6 +6,7 @@ import (
 
 	larkcard "github.com/larksuite/oapi-sdk-go/v3/card"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	"github.com/tim5wang/godex/internal/platform/textutil"
 	"github.com/tim5wang/godex/internal/runtime/channels"
 )
 
@@ -199,9 +200,9 @@ func renderCardBody(plan channels.ReplyPlan) string {
 			status := localizeStatus(tool.Status)
 			line := fmt.Sprintf("- `%s` (%s)", name, status)
 			if tool.Output != "" {
-				line += " " + truncateRunesLocal(tool.Output, 180)
+				line += " " + textutil.TruncateRunes(tool.Output, 180)
 			} else if tool.Error != "" {
-				line += " " + truncateRunesLocal(tool.Error, 180)
+				line += " " + textutil.TruncateRunes(tool.Error, 180)
 			}
 			lines = append(lines, line)
 		}
@@ -264,17 +265,6 @@ func renderApprovalBodyLines(approvals []channels.ReplyApproval, markdown bool) 
 		}
 	}
 	return lines
-}
-
-func truncateRunesLocal(input string, limit int) string {
-	if limit <= 0 {
-		return input
-	}
-	runes := []rune(input)
-	if len(runes) <= limit {
-		return input
-	}
-	return string(runes[:limit]) + "..."
 }
 
 func planTitle(plan channels.ReplyPlan, continued bool) string {

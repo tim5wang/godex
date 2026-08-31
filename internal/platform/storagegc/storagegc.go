@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tim5wang/godex/internal/platform/fsutil"
 )
 
 const (
@@ -148,7 +150,7 @@ func scanBrowserCache(opts Options) []Item {
 	var items []Item
 	for _, rel := range targets {
 		path := filepath.Join(browserRoot, rel)
-		if bytes := dirSize(path); bytes > 0 {
+		if bytes := fsutil.DirSizeBestEffort(path); bytes > 0 {
 			items = append(items, Item{
 				Category: CategoryBrowserCache,
 				Path:     path,
@@ -205,7 +207,7 @@ func scanDirs(root, targetName, category, reason string) []Item {
 				continue
 			}
 			childPath := filepath.Join(path, child.Name())
-			if bytes := dirSize(childPath); bytes > 0 {
+			if bytes := fsutil.DirSizeBestEffort(childPath); bytes > 0 {
 				items = append(items, Item{Category: category, Path: childPath, Bytes: bytes, Reason: reason, Risk: "medium", Action: "delete"})
 			}
 		}
@@ -237,7 +239,7 @@ func pruneCandidatesForSession(sessionDir string, opts Options) []Item {
 			id:   entry.Name(),
 			path: path,
 			at:   checkpointTime(entry.Name()),
-			size: dirSize(path),
+			size: fsutil.DirSizeBestEffort(path),
 		})
 	}
 	sort.Slice(checkpoints, func(i, j int) bool {
@@ -340,19 +342,4 @@ func sortItems(items []Item) {
 		}
 		return items[i].Path < items[j].Path
 	})
-}
-
-func dirSize(path string) int64 {
-	var total int64
-	_ = filepath.WalkDir(path, func(_ string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		info, statErr := entry.Info()
-		if statErr == nil {
-			total += info.Size()
-		}
-		return nil
-	})
-	return total
 }

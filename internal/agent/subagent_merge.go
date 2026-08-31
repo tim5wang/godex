@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/platform/fsutil"
 	"github.com/tim5wang/godex/internal/workerruntime"
 	"os"
 	"os/exec"
@@ -187,7 +188,7 @@ func subagentWorkspaceGCEligible(job *subagentJob, opts SubagentWorkspaceGCOptio
 
 func subagentWorkspaceBytes(job *subagentJob) int64 {
 	if job != nil && (job.Isolation == subagentIsolationSharedReadOnly || job.Isolation == subagentIsolationSharedApproval) {
-		return dirSize(job.BaselineDir)
+		return fsutil.DirSizeBestEffort(job.BaselineDir)
 	}
 	var total int64
 	for _, path := range []string{job.WorktreeDir, job.BaselineDir} {
@@ -195,23 +196,8 @@ func subagentWorkspaceBytes(job *subagentJob) int64 {
 		if path == "" {
 			continue
 		}
-		total += dirSize(path)
+		total += fsutil.DirSizeBestEffort(path)
 	}
-	return total
-}
-
-func dirSize(path string) int64 {
-	var total int64
-	_ = filepath.WalkDir(path, func(_ string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err == nil {
-			total += info.Size()
-		}
-		return nil
-	})
 	return total
 }
 

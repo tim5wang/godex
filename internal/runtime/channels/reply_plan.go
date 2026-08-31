@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/tim5wang/godex/internal/domain/events"
+	"github.com/tim5wang/godex/internal/platform/textutil"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -211,10 +212,10 @@ func ReplyApprovalFromPending(pending tools.PendingPermission) ReplyApproval {
 		RequestID:    strings.TrimSpace(pending.ID),
 		ToolName:     strings.TrimSpace(req.ToolName),
 		Action:       strings.TrimSpace(req.Action),
-		Command:      truncateRunes(strings.TrimSpace(req.Command), 320),
+		Command:      textutil.TruncateRunes(strings.TrimSpace(req.Command), 320),
 		Paths:        append([]string{}, req.Paths...),
 		InputPreview: previewPermissionInput(req),
-		Reason:       truncateRunes(strings.TrimSpace(pending.Reason), 320),
+		Reason:       textutil.TruncateRunes(strings.TrimSpace(pending.Reason), 320),
 		Source:       strings.TrimSpace(req.Source),
 		Sender:       strings.TrimSpace(req.Sender),
 	}
@@ -322,15 +323,15 @@ func previewValue(key string, value interface{}) string {
 	}
 	switch typed := value.(type) {
 	case string:
-		return truncateRunes(strings.TrimSpace(typed), 320)
+		return textutil.TruncateRunes(strings.TrimSpace(typed), 320)
 	case []string:
-		return truncateRunes(strings.Join(typed, ", "), 320)
+		return textutil.TruncateRunes(strings.Join(typed, ", "), 320)
 	default:
 		data, err := json.Marshal(typed)
 		if err != nil {
-			return truncateRunes(strings.TrimSpace(fmt.Sprint(typed)), 320)
+			return textutil.TruncateRunes(strings.TrimSpace(fmt.Sprint(typed)), 320)
 		}
-		return truncateRunes(string(data), 320)
+		return textutil.TruncateRunes(string(data), 320)
 	}
 }
 
@@ -388,7 +389,7 @@ func (c *replyCollector) Emit(event events.Event) {
 				tool.Error = strings.TrimSpace(payload.Error)
 			} else {
 				tool.Status = "completed"
-				tool.Output = truncateRunes(strings.TrimSpace(payload.Output), 240)
+				tool.Output = textutil.TruncateRunes(strings.TrimSpace(payload.Output), 240)
 			}
 			for _, path := range payload.ArtifactPaths {
 				path = strings.TrimSpace(path)
@@ -491,17 +492,6 @@ func sendReply(ctx context.Context, reply ReplySender, plan ReplyPlan) error {
 		return sender.SendReplyPlan(ctx, plan)
 	}
 	return reply.SendText(ctx, plan.RenderText())
-}
-
-func truncateRunes(input string, limit int) string {
-	if limit <= 0 {
-		return input
-	}
-	runes := []rune(input)
-	if len(runes) <= limit {
-		return input
-	}
-	return string(runes[:limit]) + "..."
 }
 
 func strconvItoa(v int) string {

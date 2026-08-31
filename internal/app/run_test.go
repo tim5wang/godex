@@ -352,6 +352,7 @@ func TestRunnerRootHelpIsGroupedAndExampleDriven(t *testing.T) {
 		"acp-server",
 		"  Config",
 		"  Automation & channels",
+		"--session spec",
 		"Examples:",
 		"godex service install --scope user --addr 127.0.0.1:8088",
 	} {

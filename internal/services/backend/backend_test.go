@@ -1679,8 +1679,8 @@ func TestSetSessionModelProfilePersistsReasoningEffortOverride(t *testing.T) {
 			t.Fatalf("read LLM request body: %v", err)
 		}
 		requestBody = body
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`))
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"done\"},\"finish_reason\":\"stop\",\"index\":0}]}\n\n"))
 	}))
 	defer llmServer.Close()
 

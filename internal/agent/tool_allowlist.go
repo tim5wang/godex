@@ -2,6 +2,8 @@ package agent
 
 import (
 	"strings"
+
+	"github.com/tim5wang/godex/internal/core/toolfilter"
 )
 
 // ApplyToolAllowlist narrows the session's active tool set to the tools
@@ -155,47 +157,16 @@ func (a *Agent) ApplyStepListNarrow(reqServers, reqSandbox []string) {
 	var keep []string
 	for _, name := range a.toolHandler.ActiveToolNames() {
 		if server, _, ok := splitMCPToolName(name); ok {
-			if stepListAllowsTool(reqServers, server) {
+			if toolfilter.Allows(reqServers, server) {
 				keep = append(keep, name)
 			}
 			continue
 		}
-		if stepListAllowsTool(reqSandbox, name) {
+		if toolfilter.Allows(reqSandbox, name) {
 			keep = append(keep, name)
 		}
 	}
 	a.toolHandler.SetActiveTools(keep...)
-}
-
-// stepListAllowsTool reports whether a list (with "*" / "!x" / "x/*"
-// entries) permits the given item. Exclusions win over inclusions; an empty
-// list permits nothing.
-func stepListAllowsTool(list []string, item string) bool {
-	allowAll := false
-	for _, entry := range list {
-		if entry == "*" {
-			allowAll = true
-		}
-	}
-	for _, entry := range list {
-		if !strings.HasPrefix(entry, "!") {
-			continue
-		}
-		exclude := strings.TrimPrefix(entry, "!")
-		exclude = strings.TrimSuffix(exclude, "/*")
-		if exclude == item || exclude == "*" {
-			return false
-		}
-	}
-	if allowAll {
-		return true
-	}
-	for _, entry := range list {
-		if entry == item || entry == item+"/*" {
-			return true
-		}
-	}
-	return false
 }
 
 // splitMCPToolName splits an MCP tool name "<server>__<tool>" back into its

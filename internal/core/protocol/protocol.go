@@ -300,6 +300,25 @@ func MessageText(msg Message) string {
 	return BlocksText(msg.Content)
 }
 
+// LatestPersistentUserText returns the latest non-ephemeral user message with
+// non-blank text. It returns an empty string when no such message exists.
+func LatestPersistentUserText(messages []Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != RoleUser {
+			continue
+		}
+		if msg.Metadata != nil && msg.Metadata.Ephemeral {
+			continue
+		}
+		text := strings.TrimSpace(MessageText(msg))
+		if text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
 func BlocksText(blocks []Block) string {
 	var builder strings.Builder
 	for _, block := range blocks {

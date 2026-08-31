@@ -36,10 +36,10 @@ type ServerConfig struct {
 	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
-	// URL/Headers/SessionRequired configure a remote Streamable HTTP server.
-	// URL is required for type "streamable-http"; Headers are merged into
-	// every POST (e.g. Authorization). SessionRequired opts into maintaining
-	// the Mcp-Session-Id returned by the server.
+	// URL/Headers configure a remote Streamable HTTP server. URL is required
+	// for type "streamable-http"; Headers are merged into every POST (e.g.
+	// Authorization). SessionRequired is reserved for future Mcp-Session-Id
+	// support; the current client is stateless even when it is true.
 	URL             string            `json:"url,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	SessionRequired bool              `json:"session_required,omitempty"`

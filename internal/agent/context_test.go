@@ -1835,7 +1835,7 @@ func TestRunDoesNotAckRuntimeInputsOnCallError(t *testing.T) {
 func TestRunAcksRuntimeInputsAfterSuccessfulTurn(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.AddMessage("hello")
-	a.client = fakeCaller{resp: protocol.Response{}}
+	a.client = fakeCaller{resp: protocol.Response{Content: []protocol.Block{protocol.TextBlock("done")}}}
 
 	if err := a.msgBus.Send(message.Message{
 		Type:    message.MsgTypeMessage,
@@ -2316,6 +2316,22 @@ func newTestAgent(t *testing.T, compressThreshold int) *Agent {
 	a.now = func() time.Time {
 		return time.Date(2026, time.April, 17, 9, 30, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
 	}
+	t.Cleanup(func() {
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			a.compactionMu.Lock()
+			running := a.compactionRunning
+			a.compactionMu.Unlock()
+			if !running {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Error("timed out waiting for background compaction")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
 	return a
 }
 

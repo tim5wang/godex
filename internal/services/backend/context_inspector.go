@@ -58,7 +58,7 @@ func (s *Service) ContextInspector(ctx context.Context, sessionID string) (Sessi
 	}
 
 	messages := session.agent.GetMessages()
-	recallQuery := strings.TrimSpace(latestPersistentUserTextForInspector(messages))
+	recallQuery := strings.TrimSpace(protocol.LatestPersistentUserText(messages))
 	layers, err := s.memoryManager().BuildContextLayers(recallQuery)
 	if err != nil {
 		return SessionContextInspector{}, err
@@ -81,23 +81,6 @@ func (s *Service) ContextInspector(ctx context.Context, sessionID string) (Sessi
 	}
 
 	return result, nil
-}
-
-func latestPersistentUserTextForInspector(messages []protocol.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role != protocol.RoleUser {
-			continue
-		}
-		if msg.Metadata != nil && msg.Metadata.Ephemeral {
-			continue
-		}
-		text := strings.TrimSpace(protocol.MessageText(msg))
-		if text != "" {
-			return text
-		}
-	}
-	return ""
 }
 
 func uniqueTranscriptRefs(refs []string) []string {

@@ -28,6 +28,22 @@ func TestMessageFromResponsePreservesTextAndToolUseBlocks(t *testing.T) {
 	}
 }
 
+func TestLatestPersistentUserText(t *testing.T) {
+	messages := []Message{
+		NewTextMessage(RoleUser, "  earlier question  "),
+		NewTextMessage(RoleAssistant, "answer"),
+		NewTextMessage(RoleUser, "   "),
+		NewEphemeralTextMessage(KindInbox, "runtime-only input"),
+	}
+
+	if got := LatestPersistentUserText(messages); got != "earlier question" {
+		t.Fatalf("expected latest persistent user text, got %q", got)
+	}
+	if got := LatestPersistentUserText(nil); got != "" {
+		t.Fatalf("expected empty result for no messages, got %q", got)
+	}
+}
+
 func TestToAPIMessagesPreservesToolResults(t *testing.T) {
 	failed := ToolErrorResultBlock("tool-1", "exit status 1")
 	messages := []Message{

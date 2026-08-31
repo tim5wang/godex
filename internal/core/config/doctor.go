@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tim5wang/godex/internal/core/skill"
+	"github.com/tim5wang/godex/internal/platform/fsutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -578,7 +579,7 @@ func (m *Manager) Doctor() DoctorReport {
 		}
 	}
 
-	if bytes := configDirSize(filepath.Join(current.StateDir, "subagents")); bytes > 0 {
+	if bytes := fsutil.DirSizeBestEffort(filepath.Join(current.StateDir, "subagents")); bytes > 0 {
 		add(DoctorCheck{
 			Severity:   "info",
 			Code:       "subagent_workspace_storage",

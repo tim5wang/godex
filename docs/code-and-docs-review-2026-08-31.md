@@ -4,6 +4,14 @@
 > 范围：82 个可构建 Go package（其中 78 个 `internal` package）、17 个 Web feature 目录、78 份 Markdown 文档。
 > 基线：`8acd0f60bfbb9e52def400d21eb5c8e48eb4a598`；审查开始时仅有用户未跟踪文件 `docs/cache-hitrate-analysis.md`。
 
+## 后续修复状态（2026-08-31）
+
+审查后的确定性修复已继续落地：Agent Step allowlist 已收敛到共享 `core/toolfilter` 并以表驱动测试固定 deny-overrides-allow、通配符和空列表语义；两个空 LLM 响应测试夹具已补齐终态响应；latest persistent user message、best-effort directory size、三份语义完全相同的 rune 截断 helper 已共享。语义不同的 compress/memory 截断实现保留独立，避免错误 DRY。
+
+新增 `internal/architecture` import gate，禁止新增 `domain→core/platform`、`platform→core`、`core→tools` 依赖；8 条既有生产依赖以精确 package edge 作为迁移例外，例外消失后测试会要求删除。该门禁阻止债务增长，不代表既有分层迁移已经完成。
+
+修复后 `internal/services/backend` 全包测试通过；全量 Go 失败从 15 项降到 13 项，剩余为 `internal/agent` 9 项、`internal/tools` 4 项，均与 P0-1 默认 bundle/`always_on` 契约冲突相关。本轮没有通过批量修改测试期望来替代产品决策。
+
 ## 1. 工具选择与成本控制
 
 主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，包含 15,951 个节点、103,139 条关系，`parse_partial=0`、`skipped=0`。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
@@ -97,21 +105,21 @@
 
 这与 2.0 SPEC 中“domain concept 与 storage backend 解耦”相反。建议先从 task/todo/message 抽 repository interface，JSON 实现移入 `sessionstore`/platform；protocol 共享类型下沉到中立 contract 包，避免 platform→core 反向边。
 
-#### P1-5 权限/allowlist 算法重复
+#### P1-5 权限/allowlist 算法重复（已修复）
 
 `agent.stepListAllowsTool` 与 `httpapi.stepListAllows` 是逐字等价的 27 行实现：都处理 `*`、`!x`、`x/*`，但分别服务 runtime narrowing 与 Agent Step HTTP narrowing。图 trace 显示两条独立调用链。
 
-这是安全语义，不应复制。建议放入 `core/security` 或新建窄 `core/capability`，以表驱动测试固定 deny-overrides-allow、通配符和空列表行为，两侧共同调用。
+现已新建无外部依赖的窄包 `core/toolfilter`，Agent 与 HTTP API 两侧共同调用，并以表驱动测试固定 deny-overrides-allow、通配符和空列表行为。
 
-#### P1-6 代码级模块边界只有约定，没有 enforcement
+#### P1-6 代码级模块边界只有约定，没有 enforcement（增量门禁已完成）
 
-Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> core` 等方向错误。建议增加一个小型 architecture test，读取 `go list -json` 并拒绝禁止的层间边；允许项需带显式例外清单和迁移期限。
+Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> core` 等方向错误。现已增加 architecture test，通过 `go list -json` 拒绝新增禁止层间边，并用精确例外清单记录既有迁移债务；domain storage、shared contract 和 teammate adapter 的实体迁移仍待后续完成。
 
 ### P2 — 有选择地收敛重复与维护成本
 
-- `latestPersistentUserText` 在 agent/context 与 backend/context inspector 完全重复；应归入 protocol message query helper。
-- `dirSize` 在 subagent merge、config helper、storagegc 重复；应复用 platform/storage utility，并明确“忽略读错误”的语义。
-- `truncateRunes` 在 agent、channel、Feishu renderer 重复；可以下沉 textutil。
+- `latestPersistentUserText` 已归入 protocol message query helper。
+- `dirSize` 已收敛为 `fsutil.DirSizeBestEffort`，名称和测试明确“忽略遍历/读取错误”的语义。
+- agent、channel、Feishu renderer 三份等价 `truncateRunes` 已下沉 `textutil`；compress 与 memory 的非正 limit/trim 语义不同，继续保留独立实现。
 - `unique/clean string list` 和 `clone map` 分散在多个包。对三行 clone 不必强行跨层复用；只合并带规范化/去重语义的版本，避免为了 DRY 反而制造依赖。
 - ACP/TUI 的 `numFromAny`、ACP/terminal 的随机 ID 生成类似但前缀/字节数不同；可共享带 prefix/entropy 参数的 ID helper，优先级低于安全与契约问题。
 
@@ -205,9 +213,9 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 ## 6. 建议执行顺序
 
 1. 冻结默认 tool activation policy，修复对应 14 个 Go contract tests（其余 1 个 backend fixture 单独处理）。
-2. 抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。
+2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
 3. 拆 `NewHandlerWithRuntime` 和 `setStoredValue`，要求行为零变化、先小 registrar/table 后抽接口。
-4. 加 architecture import test 与文件复杂度 budget；先禁止新增违规，再渐进迁移旧边。
+4. architecture import test 已完成；文件复杂度 budget 与既有违规迁移仍待做。
 5. 前端按 feature 拆 `api/types/i18n/styles`，优先 Settings/Chat/TaskBoard/Skills/Memory。
 6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)，CI 执行 `make docs-check`。
 
@@ -217,7 +225,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 - 通过：`go test ./internal/app ./internal/core/mcp`，以及 LongTask graph 契约定向测试；新增 root help 和 MCP 注释/文档收口没有引入回归。
 - 通过：templates、pluginrt、TaskBoard plugin、usage、httpapi、backend TaskBoard/reconcile、agent template/dynamic prompt/package runtime、conversation prompt-cache/retention 定向测试。
 - Web 测试原有 1 个失败已定位为 fixture 漏写 `writeScope` 并修正；最终重跑 32 个 test files、325 个 tests 全部通过。
-- 最终 `go test ./...` 仍是 15 个失败：`internal/agent` 10、`internal/services/backend` 1、`internal/tools` 4，与初始基线的失败集合一致；本次审查不在未确定 activation policy 前批量修改生产逻辑或测试期望。
+- 初始 `go test ./...` 有 15 个失败；确定性 fixture/lifecycle 修复后为 13 个：`internal/agent` 9、`internal/tools` 4。`internal/services/backend` 已全包通过；剩余失败不在未确定 activation policy 前批量修改生产逻辑或测试期望。
 - `internal/agent` 的宽匹配复跑仍命中已知 `TestClearMessagesResetsTransientPromptState` 失败；收窄到模板/cache 事实的测试通过，说明该失败仍属于 P0-1 activation policy 漂移而非本轮文档/fixture 修改回归。
 - `check_index_coverage` generation `2026-08-31T03:14:43Z` 与当前 metadata 匹配；最终补查的 app/MCP/media/push/LongTask/commands/Web/docs 路径也全部为 `no_recorded_issue`，相关 scope 无记录缺口。
 - `internal`、`docs`、`examples` 的已知缺口仅为 embedded dist、图片、wasm 二进制、eval 结果和 `docs/superpowers/tmp`；代码/文档结论没有依赖这些二进制资产，`superpowers` 计划/spec 已用源码 heading/内容检索补查。

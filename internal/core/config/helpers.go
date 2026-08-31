@@ -370,21 +370,6 @@ func fileContainsSecret(cfg *Config, path string) bool {
 	return false
 }
 
-func configDirSize(path string) int64 {
-	var total int64
-	_ = filepath.WalkDir(path, func(_ string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err == nil {
-			total += info.Size()
-		}
-		return nil
-	})
-	return total
-}
-
 func (m *Manager) writeConfigFile(file ConfigFile) error {
 	rendered, err := renderConfigTemplate(file)
 	if err != nil {

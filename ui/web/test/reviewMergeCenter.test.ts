@@ -83,7 +83,9 @@ describe("reviewMergeCenter", () => {
 }
 
 {
-  const summary = buildReviewMergeSummary([worker({ jobId: "job-reviewed", status: "completed" })], { reviewedJobId: "job-reviewed" });
+  const summary = buildReviewMergeSummary([worker({ jobId: "job-reviewed", status: "completed", writeScope: ["ui/web/src"] })], {
+    reviewedJobId: "job-reviewed",
+  });
 
   assert.equal(summary.items[0]?.status, "review_loaded");
   assert.equal(reviewMergeStatusLabel("review_loaded"), "Review loaded");
@@ -92,7 +94,7 @@ describe("reviewMergeCenter", () => {
 {
   const summary = buildReviewMergeSummary([
     worker({ jobId: "job-blocked", status: "pending_approval", updatedAt: "2026-05-14T12:00:00Z" }),
-    worker({ jobId: "job-ready", status: "completed", updatedAt: "2026-05-14T10:00:00Z" }),
+    worker({ jobId: "job-ready", status: "completed", writeScope: ["ui/web/src"], updatedAt: "2026-05-14T10:00:00Z" }),
     worker({ jobId: "job-conflict", status: "completed", mergeStatus: "conflicted", updatedAt: "2026-05-14T11:00:00Z" }),
     worker({ jobId: "job-merged", status: "completed", mergeStatus: "merged", updatedAt: "2026-05-14T09:00:00Z" }),
     worker({ jobId: "job-failed", status: "failed", updatedAt: "2026-05-14T08:00:00Z" }),
@@ -106,7 +108,7 @@ describe("reviewMergeCenter", () => {
 }
 
 {
-  const summary = buildReviewMergeSummary([worker({ jobId: "job-ready", status: "completed" })]);
+  const summary = buildReviewMergeSummary([worker({ jobId: "job-ready", status: "completed", writeScope: ["ui/web/src"] })]);
   const item = summary.items[0]!;
 
   assert.equal(shouldAutoLoadReview(item, undefined, undefined), true);
@@ -158,7 +160,7 @@ describe("reviewMergeCenter", () => {
 }
 
 {
-  const summary = buildReviewMergeSummary([worker({ jobId: "job-ready", status: "completed" })]);
+  const summary = buildReviewMergeSummary([worker({ jobId: "job-ready", status: "completed", writeScope: ["ui/web/src"] })]);
   const review: DurableSubagentReview = { job_id: "job-ready", changes: [], diff: "" };
   const trail = buildReviewMergeOutcomeTrail(summary.items[0]!, [
     {
@@ -174,7 +176,7 @@ describe("reviewMergeCenter", () => {
 }
 
 {
-  const summary = buildReviewMergeSummary([worker({ jobId: "job-ready", status: "completed" })]);
+  const summary = buildReviewMergeSummary([worker({ jobId: "job-ready", status: "completed", writeScope: ["ui/web/src"] })]);
   const merge: DurableSubagentMerge = {
     job_id: "job-ready",
     status: "merged",

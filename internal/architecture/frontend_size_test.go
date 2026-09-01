@@ -11,13 +11,15 @@ import (
 	"testing"
 )
 
-const frontendDefaultLineLimit = 1000
+const frontendDefaultLineLimit = 900
 
 // Existing oversized files are migration exceptions, capped at their current
 // size. Do not raise these limits: split the relevant feature slice instead.
 // Once a file is at or below frontendDefaultLineLimit, the test requires its
 // exception to be removed.
-var frontendLineExceptions = map[string]int{}
+var frontendLineExceptions = map[string]int{
+	"ui/web/src/features/settings/SettingsConfigFields.tsx": 915,
+}
 
 func TestFrontendSourceLineBudget(t *testing.T) {
 	repoRoot := architectureRepoRoot(t)

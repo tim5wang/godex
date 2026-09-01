@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +21,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/idempotency"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
+	"github.com/tim5wang/godex/internal/platform/idgen"
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/platform/servicecontrol"
 	"github.com/tim5wang/godex/internal/platform/workspacefs"
@@ -296,7 +295,7 @@ func main() {
 			// exposed on that node over the relay channel.
 			if strings.TrimSpace(cfg.Tools.Browser.CDPRelayNode) != "" {
 				shared.SetBrowserCDPDialer(func(ctx context.Context, nodeID, target string) (net.Conn, error) {
-					stream, err := relayHub.OpenTCPStream(ctx, nodeID, "cdp-"+relayCDPConnID(), target)
+					stream, err := relayHub.OpenTCPStream(ctx, nodeID, idgen.New("cdp-", 4), target)
 					if err != nil {
 						return nil, err
 					}
@@ -919,12 +918,3 @@ func (c *relayNetConnAdapter) String() string                   { return "relay-
 func (c *relayNetConnAdapter) SetDeadline(time.Time) error      { return nil }
 func (c *relayNetConnAdapter) SetReadDeadline(time.Time) error  { return nil }
 func (c *relayNetConnAdapter) SetWriteDeadline(time.Time) error { return nil }
-
-// relayCDPConnID returns a unique conn id for a relay TCP stream.
-func relayCDPConnID() string {
-	buf := make([]byte, 4)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("cdp-%d", time.Now().UnixNano())
-	}
-	return "cdp-" + hex.EncodeToString(buf)
-}

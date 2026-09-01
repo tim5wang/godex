@@ -12,17 +12,19 @@
 
 后续产品决策已冻结 P0-1：`always_on` 是 Agent 模板显式可选且会话内固定的 bundle，不是宿主隐式能力；模板基线精确等于 `Tools ∪ Bundles` 展开工具，clear/reset 恢复该基线，仅 `default` 空模板保留旧标准模式兼容。相关 `internal/toolruntime`/`internal/tools` 测试已全部通过，`internal/agent` 的 activation/capability 失败已清零；随后剩余的 2 项 loop-guard fixture 与 1 项 oversized tool-result fixture 也已按当前生产语义修复。
 
-HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 个按资源域划分的 registrar；`NewHandlerWithRuntime` 从约 1,883 行降到约 85 行，图复杂度从 266 降到 5、cognitive 从 293 降到 7。新增静态 route ownership 测试，禁止生产路由字面量被多个文件重复注册。registrar 拆分已经完成，构造参数进一步收敛为窄 `Dependencies` 可作为后续独立改进。
+HTTP composition root 已完成五批增量拆分：共 138 条路由迁入 19 个按资源域划分的 registrar；`NewHandlerWithRuntime` 从约 1,883 行降到约 85 行，图复杂度从 266 降到 5、cognitive 从 293 降到 7。新增静态 route ownership 测试，禁止生产路由字面量被多个文件重复注册；构造边界也已由命名 `Dependencies` 承接，旧签名只保留为兼容入口。Usage 与 Anthropic gateway 已进一步分文件，避免协议转换继续挤入 usage registrar。
 
-Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历史上限作为迁移例外，不能继续增长，降到阈值后测试会要求删除例外。Memory 展示组件已迁入独立文件，`MemoryPage.tsx` 从 1,093 行降到 978 行并删除例外；Skills 的工具健康分析与 package/quality 表格也已拆出，`SkillsPage.tsx` 从 1,439 行降到 868 行并删除例外；Settings 的配置字段、配置模型与状态面板已按职责拆分，`SettingsPage.tsx` 从 2,280 行降到 507 行并删除例外；共享 `types.ts` 已按 channels、packages、agent、product 四个领域拆分为兼容 barrel，从 1,877 行降到 759 行；共享 `api.ts` 已拆出 client、agent/session 与 product endpoint 模块，从 1,789 行降到 870 行；共享 `messages.ts` 已按中英文各自的 core/product 连续区段拆分为 4 个消息模块，自身从 2,871 行降到 16 行并删除例外；`styles.css` 已按原 cascade 顺序拆为 5 个低于阈值的连续模块，自身降到 5 行并删除例外。该门禁阻止债务扩大，不代替后续 feature vertical slice 拆分。
+Web 源码默认预算已从 1000 收紧到 900 行。`ChatPage` 的提交状态机、`MemoryPage` 的卡片/表单 helper、`TaskBoardView` 的 dialogs/execution UI 均已按职责迁入同 feature 文件，三个主文件都低于默认预算；当前只保留 `SettingsConfigFields.tsx` 的 915 行精确迁移例外，不能继续增长，降到阈值后测试会要求删除。此前 Skills、Settings 主页面、共享 types/API/messages 与全局 stylesheet 的拆分继续由同一门禁保护。该门禁阻止债务扩大，不代替后续 feature vertical slice 拆分。
+
+Go 生产函数新增复杂度 40 的增量门禁。本轮已拆分 TaskBoard dispatch、ACP prompt event stream、config doctor 和 conversation runner 四个核心状态机并删除其例外；当前只剩 browser、cron、LSP 三个工具构造器以精确历史分数受限。命令服务已按 skills/packages、memory/notes、runtime 三个命令域拆分，公共 dispatch/metadata 留在 `commands.go`。
 
 前端 `typecheck` 原先对只有 project reference 的 solution `tsconfig.json` 执行 `tsc --noEmit`，实际没有检查 app source，因而漏过 Skills 拆分时遗失的 `Metric` 引用。脚本现改为 `tsc -b`，并让 `SkillsPage` 复用已迁移到 `PackagePanels` 的同一组件；真实 project-reference 类型检查和生产构建均已通过。
 
-配置映射新增 schema/setter/stored/effective 契约测试，并修复 8 个 schema 路径的不完整映射：`security.screener.*` 5 项与 `tools.execution.scope_write` 原先无法通过 Web 配置写入，`heartbeat.default_watchdog_script` 与 `control.credential` 原先缺少 stored/effective view；credential 仍按 secret policy 掩码。大 switch 的表驱动拆分仍待后续。
+配置映射新增 schema/setter/stored/effective 契约测试，并修复 8 个 schema 路径的不完整映射：`security.screener.*` 5 项与 `tools.execution.scope_write` 原先无法通过 Web 配置写入，`heartbeat.default_watchdog_script` 与 `control.credential` 原先缺少 stored/effective view；credential 仍按 secret policy 掩码。setter 已按配置域拆分，doctor 检查也已按 config/model/channel/security/storage 等阶段拆开。
 
 ## 1. 工具选择与成本控制
 
-主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，包含 16,069 个节点、104,141 条关系，`parse_partial=0`、`skipped=0`。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
+主工具选用仓库已经接入的 **codebase-memory-mcp**，不再引入第二套长期索引。最终核验时索引精确指向本仓库，状态 `ready`，且 `parse_partial=0`、`skipped=0`；节点/关系数量不写入文档，避免后台增量索引造成无意义漂移。未索引内容是 `.git`、构建产物、截图、node_modules 和 wasm 二进制，不影响源代码结构结论。
 
 成本策略：先用 `get_architecture`/`search_graph`/图查询做全局收敛，再对高复杂度、高 fan-in/fan-out、跨层依赖和相似实现调用 `trace_path` 与精确源码片段，最后用编译器、类型检查和测试验证。LSP 更适合单符号编辑；本任务要覆盖数百文件和跨模块关系，知识图谱单位上下文成本更低。图查询不支持的复杂 `SIMILAR_TO` 条件改为拉取边后在结果层筛选。
 
@@ -81,7 +83,7 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 - Cache stable/dynamic prompt 分拆和 session 24h retention baseline 已实现；自适应 TTL 未实现。
 - Bubble Tea 多入口文档已是历史实现记录；readline REPL 已被 TUI/`godex ask` 取代。
 - Voice 的 `ui_card`、voice-engine WebSocket、TTS/stream baseline 已实现；turn middleware、plugin config/UI、OpenAI REST/Realtime adapter 仍 Planned。
-- 旧四大文件拆分前三个 Go 主文件已达标，ChatPage 仍 1,919 行，且 config/backend 出现新热点。
+- 旧四大文件和后续 Chat/Memory/TaskBoard 热点均已按职责拆分，并由 Go 复杂度与前端 900 行预算门禁防止回退。
 - 可视化设计正文仍声称 LongTask API/前端类型没有 graph；实际 `LongTaskView.Graph`、前端类型、`AgentGraphDiagram` 和回归测试均已落地，现已改为“数据缺口已关闭”。
 - Agent Step/MCP 文档只写 stdio，且把 `session_required` 描述成已维护 `Mcp-Session-Id`；实际已有 Streamable HTTP JSON/SSE baseline，但 session id 保持尚未实现。代码注释、设计与两份用户手册现已对齐这一边界。
 - Node Mesh、Scope 与 AgentTemplate 文档的 As-Is 段落仍使用“当前”措辞；现已明确标成实施前历史快照，避免与文首完成态冲突。
@@ -95,7 +97,7 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 
 建议：保留同包拆分，把每个资源域收敛为 `registerConfigRoutes`、`registerControlRoutes`、`registerSessionRoutes` 等；构造参数改为窄 `Dependencies`，避免继续拉长函数签名。新增 route ownership 测试，禁止同一路径在多个注册器重复。
 
-后续状态：138 条静态路由已迁入 19 个 registrar，route ownership 测试已落地；主函数现约 85 行、复杂度 5/cognitive 7。窄 `Dependencies` 尚未实施，避免在本轮机械迁移中同时改变构造边界。
+后续状态：138 条静态路由已迁入 19 个 registrar，route ownership 测试已落地；主函数现约 85 行、复杂度 5/cognitive 7。命名 `Dependencies` 已成为组合边界，旧长参数签名保留兼容；Anthropic gateway 也已从 `routes_usage.go` 迁入独立 registrar 文件。
 
 #### P1-2 配置 schema 与读写映射不是单一事实源（增量契约门禁已完成）
 
@@ -107,9 +109,9 @@ Web 源码新增 1000 行预算门禁；2 个既有超限文件使用精确历�
 
 #### P1-3 Web 页面和共享文件再次超过可维护阈值（增量门禁已完成）
 
-当前热点只剩 `ChatPage.tsx` 1,919 行、`TaskBoardPage.tsx` 1,457 行。`styles.css` 已降到 5 行，`messages.ts` 已降到 16 行，`api.ts` 已降到 870 行，`types.ts` 已降到 759 行，`SettingsPage.tsx` 已降到 507 行，`MemoryPage.tsx` 已降到 978 行，`SkillsPage.tsx` 已降到 868 行。
+Chat、Memory、TaskBoard 的主页面现均低于 900 行默认预算：提交状态机、Memory 卡片/表单 helper、TaskBoard dialogs/execution UI 分别留在各自 feature 内独立维护。共享 styles/messages/API/types 以及 Skills、Settings 主页面也继续处于预算内；唯一例外是 `SettingsConfigFields.tsx`，以 915 行精确上限约束。
 
-已有 `big-file-split-plan.md` 的旧四文件拆分基本完成，但热点已转移。现已增加 architecture test，对 `ui/web/src` 执行 1000 行默认预算；2 个既有超限文件以当前行数作为不可增长的精确例外，文件降到阈值后例外必须删除。Memory viewer、Skills analytics/package panels、Settings config/status slices、共享 types、API endpoint、中英文 locale message 与全局 stylesheet 连续区段拆分已完成；CSS 拆分前后 459 个顶层节点顺序及生产构建的 4 个 CSS 资产字节完全一致。Chat/TaskBoard 则需先确定 state/view 边界。
+`big-file-split-plan.md` 的旧目标及后续热点拆分均已完成。architecture test 对 `ui/web/src` 执行 900 行默认预算，例外必须固定到当前大小且在文件回落后删除。拆分均保留在原 feature 或兼容 barrel 内，没有引入新的跨层状态容器；CSS 拆分前后 459 个顶层节点顺序及生产构建的 4 个 CSS 资产字节完全一致。
 
 #### P1-4 Domain 与 infrastructure 边界不纯（已修复）
 
@@ -133,7 +135,7 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 - `dirSize` 已收敛为 `fsutil.DirSizeBestEffort`，名称和测试明确“忽略遍历/读取错误”的语义。
 - agent、channel、Feishu renderer 三份等价 `truncateRunes` 已下沉 `textutil`；compress 与 memory 的非正 limit/trim 语义不同，继续保留独立实现。
 - `unique/clean string list` 和 `clone map` 分散在多个包。对三行 clone 不必强行跨层复用；只合并带规范化/去重语义的版本，避免为了 DRY 反而制造依赖。
-- ACP/TUI 的 `numFromAny`、ACP/terminal 的随机 ID 生成类似但前缀/字节数不同；可共享带 prefix/entropy 参数的 ID helper，优先级低于安全与契约问题。
+- ACP/TUI 的 `numFromAny` 仍是低优先级相似 helper；Relay/CDP/forward 的随机 ID 已统一调用带 prefix/entropy 参数的 `platform/idgen.New`，并修复重复拼接 `cdp-` 前缀的问题。
 
 ## 4. 模块审查矩阵
 
@@ -143,14 +145,14 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 
 | 模块 | 结论 | 主要观察 |
 |---|---|---|
-| `cmd/godex` | 🟡 | `main.go` 949 行且包含 relay/CDP adapter；全局参数解析测试较好，入口仍应只做装配。 |
-| `internal/acp/server` | 🟡 | handler/agent 各 600–769 行，协议转换复杂；`numFromAny`、随机 ID 与其他入口重复。 |
+| `cmd/godex` | 🟡 | 仍包含 relay/CDP adapter；连接 ID 已统一到 `platform/idgen`，入口后续仍应只做装配。 |
+| `internal/acp/server` | 🟡 | prompt event stream 已从 handler 拆为独立状态对象并进入复杂度预算；协议转换职责仍宽，`numFromAny` 与 TUI 的相似实现优先级较低。 |
 | `internal/agent` | 🔴 | 57 个源码文件仍承载 composition、context、tool registry、workflow/longtask/subagent；默认 bundle 与后续 3 个旧 fixture 失败均已修复，剩余问题是职责面过宽。 |
 | `internal/app` | 🟡 | CLI lifecycle 合理，但 `run.go` 1,479 行；root help 是较好的代码内事实源，应继续由 metadata 生成。 |
 | `core/auth`, `idempotency`, `lease`, `modelcontext`, `notes`, `persistence`, `scope`, `templates` | 🟢 | 小而内聚，测试覆盖基本匹配职责；保持窄接口。 |
 | `core/background`, `claudeimport`, `insights`, `llm`, `mcp`, `providers`, `security` | 🟢/🟡 | 结构可接受；`instructions` 无直接测试，`claudeimport` 单文件 666 行但职责仍单一。 |
-| `core/compress`, `conversation` | 🟡 | runner/client/compaction 多个 1K 行文件，协议转换与恢复状态机复杂；应按 state machine/transport 分段。 |
-| `core/config` | 🔴 | resolve 1,224 行、values 1,039 行；schema/value 契约门禁与 8 个映射缺口已修复，但大 switch 和 secret policy 仍需继续收敛。 |
+| `core/compress`, `conversation` | 🟡 | runner 的请求、模型恢复、终态与工具循环已拆出 execution slice 并消除复杂度例外；client/compaction 仍是后续状态机拆分候选。 |
+| `core/config` | 🟡 | schema/value 契约门禁与 8 个映射缺口已修复，setter 和 doctor 已按检查域拆分；resolve 与 secret policy 仍需关注增长。 |
 | `core/media` | 🟡 | processor 955 行同时处理格式、转录与 provider 路由，适合拆 pipeline stage。 |
 | `core/memory` | 🟡 | manager 1,245 行但已拆 sidecar/extract/layers；下一步应收窄 manager facade，而非再加新入口。 |
 | `core/packages`, `core/skill` | 🟡 | package 1,282 行、skill 多个 600–1,043 行；manifest/安装/quality/runtime activation 边界仍交叠。 |
@@ -161,13 +163,13 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 | `domain/message`, `task`, `todo` | 🟢/🟡 | manager 已只依赖 Repository 接口；本地 JSON adapter 位于 `platform/localstore`。 |
 | `platform/browserutil`, `fsutil`, `logger`, `servicecontrol`, `storagegc`, `stringutil`, `textutil`, `workspacefs`, `workspacepath` | 🟢/🟡 | 多数窄而稳定；目录大小已共享为 `fsutil.DirSizeBestEffort` 并有直接测试，stringutil/workspacepath 仍缺直接测试。 |
 | `platform/tooling` | 🟡 | 共享 wire 类型已改依赖 `contracts/protocol`，反向依赖消除；2,544 行中的 shell guard、file IO、execution config 仍适合继续拆。 |
-| `pluginrt`, `plugins/taskboard`, `wasmrt` | 🟡 | 插件 ownership/lifecycle 测试较强；P-A/P-C/P-D、TaskBoard 协作 baseline 和手动 reconcile P0 已实现，但 ledger/page 仍大，通用 UI slot/自动 reconcile 仍缺。 |
+| `pluginrt`, `plugins/taskboard`, `wasmrt` | 🟡 | 插件 ownership/lifecycle 测试较强；TaskBoard action dispatch 已按命令组拆分并消除复杂度例外，自动 reconcile/history/依赖拓扑与通用 UI slot 仍未实现。 |
 | `runtime/channels`, `feishu`, `weixin` | 🟡 | adapter 边界合理；channels.go 1,695 行，reply planning/identity/routing 应进一步分离。 |
 | `runtime/cron`, `heartbeat`, `webui` | 🟢/🟡 | cron/heartbeat 服务各约 800 行但测试充分；webui 很薄。 |
-| `runtime/httpapi` | 🟡 | 30 源文件/19 测试文件；138 条路由已迁入 19 个 registrar，主注册函数约 85 行并有 ownership gate。协议 gateway 和 UI API 仍在同包，依赖面仍宽。 |
+| `runtime/httpapi` | 🟡 | 138 条路由已迁入按资源域划分的 registrar，主注册函数约 85 行并有 ownership gate；命名 `Dependencies` 已承接构造边界，Anthropic gateway 与 Usage 也已分文件。协议 gateway 和 UI API 仍在同包，依赖面仍宽。 |
 | `sandbox` | 🟢 | 接口边界明确，后续 hardening 可在实现内演进。 |
 | `services/backend` | 🟡/🔴 | 已从旧 7K 单文件拆成 31 个文件，测试已恢复通过；仍有 30 个 internal imports，是高耦合 facade。 |
-| `services/commands` | 🟡 | 2,150 行单文件；metadata 驱动 help 是正确方向，但执行分支尚未按命令域拆分。 |
+| `services/commands` | 🟢/🟡 | metadata 继续驱动 help；执行逻辑已按 skills/packages、memory/notes、runtime 三个命令域拆分，公共 dispatch 与 metadata 保持集中。测试文件仍大，但不参与生产复杂度预算。 |
 | `services/evalharness`, `historysearch`, `localbash`, `nodeobs`, `noderegistry`, `sessionadmin`, `sessionrepair`, `usage`, `webpush` | 🟢/🟡 | 职责基本清晰；usage store 1,046 行、history sidecar 725 行需关注增长。 |
 | `services/relay` | 🟢/🟡 | 14 源文件、20 测试文件，拆分和测试最好；协议/forward/hub 边界清楚。 |
 | `sessiongraph`, `sessionstore`, `workerruntime` | 🟢 | 接口小、测试存在，是 2.0 抽象的可复用基础。 |
@@ -183,16 +185,16 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 | `agent-templates` | 🟡 | 页面 519 行；与 roles/biz key/template 三套模型仍处收敛期。 |
 | `automation` | 🟡 | 页面 606 行，Cron/Heartbeat 同页可接受，后续触发器增长时拆 tab controller。 |
 | `business-agents` | 🟡 | 页面 796 行，实际已替代 Workflows；文档状态此前未同步。 |
-| `chat` | 🔴 | 主页面 1,919 行且连接 session、timeline、review、task center、files/terminal；仍是前端 composition hotspot。 |
+| `chat` | 🟡 | 主控制器已低于 900 行，提交/附件/乐观消息状态机迁入 `chatSubmission.ts`；session、timeline、review、task center 的组合职责仍较多。 |
 | Chat layout/chrome | 🟢/🟡 | 活跃实现已归入 `features/chat/layout`；`/chat-v2`、持久化 key 与 CSS class 仅作为外部兼容协议保留。 |
 | `files` | 🟡 | panel 619 + page 421 + tree 376，编辑/浏览/diff 状态分层尚可。 |
-| `memory` | 🟡 | 页面已从 1,093 行降到 978 行，viewer/digest/audit/context/metric 展示组件已独立；inbox/suppression/restore/search 状态仍可继续按 tab 拆。 |
+| `memory` | 🟡 | 主页面已低于 600 行，viewer/digest/audit/context/metric 与 card/form helper 均已独立；inbox/suppression/restore/search 状态仍可继续按 tab 拆。 |
 | `nodes` | 🟢/🟡 | list/detail/forward/join 已拆，结构相对健康。 |
 | `notes` | 🟢 | 368 行，边界清楚。 |
 | `preview` | 🟢 | 159 行，窄适配器。 |
-| `settings` | 🟡 | 主页面已从 2,280 行降到 507 行；配置字段编辑器、纯配置转换模型、provider/security/channel/service 状态面板与 MCP panel 均已独立，主页面保留查询、mutation 与 tab 装配。 |
+| `settings` | 🟡 | 主页面已从 2,280 行降到 507 行；配置字段编辑器、纯配置转换模型、provider/security/channel/service 状态面板与 MCP panel 均已独立。字段编辑器是当前唯一 900 行预算例外，以 915 行精确上限约束。 |
 | `skills` | 🟡 | 主页面已从 1,439 行降到 868 行；工具健康分析和 package/quality/prompt/command/role 表格已拆入同 feature 组件，安装与 source/session 编排仍集中在主页面。 |
-| `taskboard` | 🔴 | 1,457 行；ledger/reconcile/execution/agent template 交互增长快。 |
+| `taskboard` | 🟡 | 主 view 已低于 300 行，dialogs、execution row 和 action buttons 迁入同 feature 组件；ledger/reconcile/agent template 交互仍需由后端能力边界约束。 |
 | `tasks` | 🟢 | selector/chip 小模块。 |
 | `terminal` | 🟢/🟡 | 279 行，生命周期和 xterm adapter 基本清楚。 |
 | `usage` | 🟡 | 主页面 799 行但 charts/session/cache 已拆，是可复制的拆分方向。 |
@@ -227,13 +229,13 @@ Go 编译器只防 import cycle，不防 `domain -> platform`、`platform -> cor
 1. ~~冻结默认 tool activation policy，修复 activation/capability contract tests。~~ 已完成；3 个 `internal/agent` 旧 fixture 失败也已修复：loop-guard 测试显式固定阈值，oversized-result 测试改用不可被重复行压缩的大结果。
 2. ~~抽取共享 allowlist evaluator，并让 Agent Step/template/biz key 三层 narrowing 共用一套测试。~~ 已完成共享 evaluator；两条实际 narrowing 调用链已共用。
 3. `NewHandlerWithRuntime` 已由命名 `Dependencies` 组合边界承接（旧签名保留兼容），`setStoredValue` 已按配置域拆分；HTTP registrar 已完成五批，累计迁移 138 条路由，配置 schema/value 契约门禁与 8 个映射缺口已修复。
-4. ~~完成 architecture import test 并迁移 8 条既有违规依赖。~~ 已完成，精确例外清单为空；Go 函数复杂度 budget 仍待做。
-5. 前端 i18n、styles、共享 API/types、Settings config/status、Memory viewer 与 Skills analytics/package panels 均已拆分并降到预算内。剩余 Chat/TaskBoard 的 state/view 边界需单独设计确认。
-6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)，CI 执行 `make docs-check`。
+4. ~~完成 architecture import test 并迁移 8 条既有违规依赖。~~ 已完成，精确例外清单为空；Go 函数复杂度 40 的门禁也已落地，四个核心例外已删除，只保留三个工具构造器历史上限。
+5. ~~拆分前端 Chat/Memory/TaskBoard 热点并收紧预算。~~ 已完成；默认预算为 900 行，仅 Settings 字段编辑器保留 915 行精确例外。
+6. 每次功能合并同时更新 [feature-implementation-matrix.md](./feature-implementation-matrix.md)；本地与 release 统一执行 `make verify`，其中包含 docs check。
 
 ## 7. 验证与限制
 
-- 通过：`go vet ./...`、`make docs-check`、shell syntax check、`git diff --check`、基于 `tsc -b` 的 `pnpm typecheck`。
+- 通过：统一 `make verify`（`go test ./... -count=1`、`go vet ./...`、docs-check、Web typecheck、325 项 Web unit tests 与生产构建）；`git diff --check` 与 release-check shell syntax 也单独通过。
 - 通过：`go test ./internal/app ./internal/core/mcp`，以及 LongTask graph 契约定向测试；新增 root help 和 MCP 注释/文档收口没有引入回归。
 - 通过：templates、pluginrt、TaskBoard plugin、usage、httpapi、backend TaskBoard/reconcile、agent template/dynamic prompt/package runtime、conversation prompt-cache/retention 定向测试。
 - Web 测试原有 1 个失败已定位为 fixture 漏写 `writeScope` 并修正；最终重跑 32 个 test files、325 个 tests 全部通过。

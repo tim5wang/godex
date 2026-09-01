@@ -10,7 +10,7 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useConversationLayoutStore, type DockTab, DOCK_TABS } from "./layout/layoutStore";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -19,7 +19,7 @@ import { readPersistedRefluxDismissed, writePersistedRefluxDismissed } from "./r
 import { buildTaskOutcomes } from "./taskCenterOutcome";
 import { locatorMatchesRoute, buildChatRouteForSession } from "../../lib/chatRoutes";
 import { writeClipboardText } from "../../lib/clipboard";
-import { type ComposerSubmission, Composer, type ComposerHandle } from "../../components/Composer";
+import { Composer, type ComposerHandle } from "../../components/Composer";
 import { VoiceBar } from "../../components/VoiceBar";
 import { TaskCenterPanel } from "./TaskCenterPanel";
 import { SessionsRail } from "./layout/SessionsRail";
@@ -36,6 +36,7 @@ import { InspectorTabs } from "./panels/InspectorTabs";
 import { ApprovalBanner } from "./panels/ApprovalPanels";
 import { ContextStatusInline } from "./panels/ContextPanels";
 import { SubagentReviewPanel } from "./panels/TurnSubagentPanels";
+import { createChatSubmissionHandler } from "./chatSubmission";
 
 function makeSessionKey() {
   return crypto.randomUUID();
@@ -744,89 +745,20 @@ export function useChatPageController() {
     }
   }, [items.length]);
 
-  const onSend = async (submission: ComposerSubmission) => {
-    const activeSessionId = openQuery.data?.session_id;
-    if (!activeSessionId) {
-      return;
-    }
-    const { text, files } = submission;
-    if (!text && files.length === 0) {
-      return;
-    }
-    if (text.startsWith("/") && files.length === 0) {
-      // Optimistic: surface the running command immediately so slow
-      // commands like /compact show feedback while they execute.
-      const commandName = text.trim().split(/\s+/)[0].slice(1) || "command";
-      const pendingId = `cmd:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      addPendingSend({ id: pendingId, kind: "command", commandName });
-      try {
-        const commandResult = await executeCommand(token || null, activeSessionId, text, noteContextMetadata(noteContextQuery.data, noteContextId));
-        if (commandResult.dispatched_turn_id) {
-          setRunningTurn(commandResult.dispatched_turn_id);
-        }
-      } finally {
-        removePendingSend(pendingId);
-      }
-    } else {
-      try {
-        const attachments =
-          files.length > 0
-            ? await (async () => {
-                setUploading(true);
-                setUploadProgress(0);
-                return uploadAttachments(token || null, activeSessionId, files, setUploadProgress);
-              })()
-            : [];
-        // Optimistic: show the user message as "sending" immediately; it
-        // is replaced by the real item when user_message_accepted arrives
-        // (or by the next snapshot as a backstop).
-        const pendingId = `user:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-        addPendingSend({ id: pendingId, kind: "user", text, attachments, sender: metaQuery.data?.lead_name || "web" });
-        try {
-          const submitResult = await submitMessage(
-            token || null,
-            activeSessionId,
-            {
-              source: "web",
-              sender: metaQuery.data?.lead_name || "web",
-              text,
-              content: text,
-              attachments,
-              metadata: noteContextMetadata(noteContextQuery.data, noteContextId),
-            },
-            {},
-          );
-          if (submitResult.turn_id) {
-            setRunningTurn(submitResult.turn_id);
-          }
-        } catch (error) {
-          // Network-level failure (service restart / dropped connection):
-          // keep the optimistic placeholder. Once the SSE stream reconnects,
-          // the snapshot sync confirms the message (and drops the placeholder)
-          // or the user can retry — no page reload needed. Business errors
-          // (4xx/5xx from the backend) still surface immediately.
-          if (error instanceof TypeError) {
-            message.warning(t("chat.submitNetworkError"));
-            return;
-          }
-          removePendingSend(pendingId);
-          message.error(error instanceof Error ? error.message : String(error));
-          throw error;
-        }
-      } finally {
-        setUploading(false);
-        setUploadProgress(null);
-      }
-    }
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["snapshot", token, activeSessionId] }),
-      queryClient.invalidateQueries({ queryKey: ["timeline", token, activeSessionId] }),
-      queryClient.invalidateQueries({ queryKey: ["timeline-page", token, activeSessionId] }),
-      queryClient.invalidateQueries({ queryKey: ["subagents", token, activeSessionId] }),
-      queryClient.invalidateQueries({ queryKey: ["context-inspector", token, activeSessionId] }),
-      queryClient.invalidateQueries({ queryKey: ["skills-active", token, activeSessionId] }),
-    ]);
-  };
+  const onSend = createChatSubmissionHandler({
+    activeSessionId: openQuery.data?.session_id,
+    token,
+    sender: metaQuery.data?.lead_name || "web",
+    metadata: noteContextMetadata(noteContextQuery.data, noteContextId),
+    addPendingSend,
+    removePendingSend,
+    setRunningTurn,
+    setUploading,
+    setUploadProgress,
+    message,
+    t,
+    queryClient,
+  });
 
   const createSession = (replace = false, workspaceDir?: string, template?: string, skills?: string[]) => {
     const next = makeSessionKey();

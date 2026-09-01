@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -48,295 +47,63 @@ func BackendPromptHandler(bk Backend) PromptHandler {
 // optional per-process ACP overrides.
 func BackendPromptHandlerWithOptions(bk Backend, opts BackendPromptOptions) PromptHandler {
 	return func(ctx context.Context, turn PromptTurn) (PromptResult, error) {
-		// Map ACP session to a godex session via the unified backend.
-		locator := backend.SessionLocator{
-			Channel: "acp",
-			Key:     turn.SessionID,
-		}
-		if profile := strings.TrimSpace(opts.AgentProfile); profile != "" {
-			locator.Metadata = map[string]string{"agent_profile": config.NormalizeAgentProfile(profile)}
-		}
-		opened, err := bk.OpenSession(ctx, locator)
+		return handleBackendPrompt(ctx, bk, opts, turn)
+	}
+}
+
+func handleBackendPrompt(ctx context.Context, bk Backend, opts BackendPromptOptions, turn PromptTurn) (PromptResult, error) {
+	locator := backend.SessionLocator{Channel: "acp", Key: turn.SessionID}
+	if profile := strings.TrimSpace(opts.AgentProfile); profile != "" {
+		locator.Metadata = map[string]string{"agent_profile": config.NormalizeAgentProfile(profile)}
+	}
+	opened, err := bk.OpenSession(ctx, locator)
+	if err != nil {
+		return PromptResult{}, fmt.Errorf("acp open session: %w", err)
+	}
+	sessionID := opened.SessionID
+
+	if cmd, ok := commands.Parse(turn.Prompt); ok {
+		result, err := bk.ExecuteCommand(ctx, sessionID, cmd)
 		if err != nil {
-			return PromptResult{}, fmt.Errorf("acp open session: %w", err)
+			return PromptResult{}, fmt.Errorf("acp command: %w", err)
 		}
-		sessionID := opened.SessionID
-
-		if cmd, ok := commands.Parse(turn.Prompt); ok {
-			result, err := bk.ExecuteCommand(ctx, sessionID, cmd)
-			if err != nil {
-				return PromptResult{}, fmt.Errorf("acp command: %w", err)
-			}
-			output := strings.TrimSpace(result.Output)
-			if output == "" {
-				output = fmt.Sprintf("Command /%s completed.", cmd.Name)
-			}
-			return PromptResult{
-				FinalText:  output,
-				StopReason: acp.StopReasonEndTurn,
-			}, nil
+		output := strings.TrimSpace(result.Output)
+		if output == "" {
+			output = fmt.Sprintf("Command /%s completed.", cmd.Name)
 		}
+		return PromptResult{FinalText: output, StopReason: acp.StopReasonEndTurn}, nil
+	}
 
-		// Subscribe to runtime events so we can stream text deltas back
-		// to the ACP client and collect the final reply.
-		eventCh := make(chan events.Event, 256)
-		unsubscribe, err := bk.AttachSink(sessionID, events.SinkFunc(func(event events.Event) {
-			select {
-			case <-ctx.Done():
-			case eventCh <- event:
-			default:
-			}
-		}))
-		if err != nil {
-			return PromptResult{}, fmt.Errorf("acp attach sink: %w", err)
+	eventCh := make(chan events.Event, 256)
+	unsubscribe, err := bk.AttachSink(sessionID, events.SinkFunc(func(event events.Event) {
+		select {
+		case <-ctx.Done():
+		case eventCh <- event:
+		default:
 		}
-		defer unsubscribe()
+	}))
+	if err != nil {
+		return PromptResult{}, fmt.Errorf("acp attach sink: %w", err)
+	}
+	defer unsubscribe()
 
-		// Submit the user prompt through the unified backend.
-		envelope := message.NewTextEnvelope(message.SourceACP, sessionID, "acp_user", turn.Prompt, time.Now())
-		if profile := strings.TrimSpace(opts.AgentProfile); profile != "" {
-			envelope.Metadata = map[string]string{"agent_profile": config.NormalizeAgentProfile(profile)}
-		}
-		result, err := bk.SubmitAsync(ctx, sessionID, envelope)
-		if err != nil {
-			return PromptResult{}, fmt.Errorf("acp submit: %w", err)
-		}
-		turnID := result.TurnID
-		watchedTurnIDs := map[string]struct{}{}
-		if strings.TrimSpace(turnID) != "" {
-			watchedTurnIDs[strings.TrimSpace(turnID)] = struct{}{}
-		}
-		resumeFallbackText := map[string]string{}
-		resolvedApprovalIDs := map[string]struct{}{}
-		if result.PendingApproval || strings.TrimSpace(result.PendingRequestID) != "" || strings.EqualFold(result.Status, "pending_approval") {
-			items, pendingErr := bk.PendingPermissions(ctx, sessionID)
-			if pendingErr != nil {
-				logger.Warnf("ACP pending permissions lookup: %v", pendingErr)
-			}
-			approval, ok, err := resolveNativeApproval(ctx, turn.PermissionRequester, bk, sessionID, result.PendingRequestID, items)
-			if err != nil {
-				return PromptResult{}, err
-			}
-			if ok {
-				if approval.RequestID != "" {
-					resolvedApprovalIDs[approval.RequestID] = struct{}{}
-				}
-				if approval.ContinueTurnID != "" {
-					watchedTurnIDs[approval.ContinueTurnID] = struct{}{}
-					if approval.FallbackText != "" {
-						resumeFallbackText[approval.ContinueTurnID] = approval.FallbackText
-					}
-				} else {
-					return approval.Result, nil
-				}
-			} else {
-				return PromptResult{
-					FinalText:  renderPendingApproval(result.PendingRequestID, items),
-					StopReason: acp.StopReasonEndTurn,
-				}, nil
-			}
-		}
+	envelope := message.NewTextEnvelope(message.SourceACP, sessionID, "acp_user", turn.Prompt, time.Now())
+	if profile := strings.TrimSpace(opts.AgentProfile); profile != "" {
+		envelope.Metadata = map[string]string{"agent_profile": config.NormalizeAgentProfile(profile)}
+	}
+	submit, err := bk.SubmitAsync(ctx, sessionID, envelope)
+	if err != nil {
+		return PromptResult{}, fmt.Errorf("acp submit: %w", err)
+	}
 
-		// Collect events from the backend, streaming text deltas to the
-		// ACP peer via SessionUpdater, and accumulating the final text.
-		var collected strings.Builder
-		streamed := false
-		deltaSinceComplete := false
-		var lastTodoPlan []acp.PlanEntry
-		for {
-			select {
-			case <-ctx.Done():
-				finalText := strings.TrimSpace(collected.String())
-				return PromptResult{
-					FinalText:  finalText,
-					StopReason: acp.StopReasonCancelled,
-				}, nil
-
-			case event := <-eventCh:
-				if len(watchedTurnIDs) > 0 {
-					if _, ok := watchedTurnIDs[strings.TrimSpace(event.TurnID)]; !ok {
-						continue
-					}
-				} else if event.TurnID != turnID {
-					continue
-				}
-				switch event.Type {
-				case events.EventAssistantTextDelta:
-					payload, ok := event.Payload.(events.TextPayload)
-					if !ok || payload.Text == "" {
-						continue
-					}
-					collected.WriteString(payload.Text)
-					deltaSinceComplete = true
-					if turn.Updater != nil {
-						if err := turn.Updater.Update(ctx, acp.UpdateAgentMessageText(payload.Text)); err != nil {
-							logger.Warnf("ACP session update: %v", err)
-						} else {
-							streamed = true
-						}
-					}
-
-				case events.EventAssistantMessageComplete:
-					payload, ok := event.Payload.(events.TextPayload)
-					if ok && !deltaSinceComplete && payload.Text != "" {
-						collected.WriteString(payload.Text)
-					}
-					deltaSinceComplete = false
-
-				case events.EventToolCallStarted:
-					payload, ok := event.Payload.(events.ToolCallPayload)
-					if !ok || payload.Name == "" {
-						continue
-					}
-					if turn.Updater != nil {
-						callID := strings.TrimSpace(payload.ID)
-						if callID == "" {
-							callID = fmt.Sprintf("tc_%s", payload.Name)
-						}
-						_ = turn.Updater.Update(ctx, acp.StartToolCall(
-							acp.ToolCallId(callID),
-							toolCallTitle(payload.Name, payload.Input),
-							acp.WithStartStatus(acp.ToolCallStatusInProgress),
-							acp.WithStartKind(toolKind(payload.Name)),
-							acp.WithStartRawInput(payload.Input),
-						))
-					}
-
-				case events.EventTodoListUpdated:
-					payload, ok := event.Payload.(events.TodoListPayload)
-					if !ok {
-						continue
-					}
-					if turn.Updater != nil {
-						callID := strings.TrimSpace(payload.SourceToolCallID)
-						if callID == "" {
-							callID = "tc_todo_write"
-						}
-						_ = turn.Updater.Update(ctx, acp.UpdateToolCall(
-							acp.ToolCallId(callID),
-							acp.WithUpdateTitle(todoToolTitle(payload)),
-							acp.WithUpdateStatus(acp.ToolCallStatusCompleted),
-							acp.WithUpdateRawOutput(todoRawOutput(payload)),
-							acp.WithUpdateContent([]acp.ToolCallContent{acp.ToolContent(acp.TextBlock(payload.RenderPlain()))}),
-						))
-						lastTodoPlan = todoPlanEntries(payload)
-						_ = turn.Updater.Update(ctx, acp.UpdatePlan(lastTodoPlan...))
-					}
-
-				case events.EventToolCallFinished:
-					payload, ok := event.Payload.(events.ToolCallPayload)
-					if !ok || payload.Name == "" {
-						continue
-					}
-					if payload.Name == "todo_write" && strings.TrimSpace(payload.Error) == "" {
-						continue
-					}
-					if turn.Updater != nil {
-						callID := strings.TrimSpace(payload.ID)
-						if callID == "" {
-							callID = fmt.Sprintf("tc_%s", payload.Name)
-						}
-						output := strings.TrimSpace(payload.Output)
-						if len(output) > 500 {
-							output = output[:500] + "…"
-						}
-						_ = turn.Updater.Update(ctx, acp.UpdateToolCall(
-							acp.ToolCallId(callID),
-							acp.WithUpdateTitle(toolCallTitle(payload.Name, payload.Input)),
-							acp.WithUpdateRawOutput(output),
-							acp.WithUpdateRawInput(payload.Input),
-							acp.WithUpdateStatus(acp.ToolCallStatusCompleted),
-						))
-					}
-
-				case events.EventWarningRaised:
-					payload, ok := event.Payload.(events.NoticePayload)
-					if !ok || payload.Message == "" {
-						continue
-					}
-					if turn.Updater != nil {
-						warnText := fmt.Sprintf("[warning] %s", payload.Message)
-						_ = turn.Updater.Update(ctx, acp.UpdateAgentMessageText(warnText))
-					}
-
-				case events.EventErrorRaised:
-					payload, _ := event.Payload.(events.NoticePayload)
-					finalText := strings.TrimSpace(collected.String())
-					if finalText != "" {
-						// We already streamed some text; return what we have.
-						return PromptResult{
-							FinalText:  finalText,
-							StopReason: acp.StopReasonEndTurn,
-							Streamed:   streamed,
-						}, nil
-					}
-					errMsg := strings.TrimSpace(payload.Message)
-					if errMsg == "" {
-						errMsg = "agent error"
-					}
-					return PromptResult{}, errors.New(errMsg)
-
-				case events.EventTurnCompleted:
-					payload, _ := event.Payload.(events.TurnPayload)
-					status := strings.TrimSpace(payload.Status)
-					if strings.EqualFold(status, "pending_approval") {
-						if requestID := strings.TrimSpace(result.PendingRequestID); requestID != "" {
-							if _, seen := resolvedApprovalIDs[requestID]; seen {
-								continue
-							}
-						}
-						items, pendingErr := bk.PendingPermissions(ctx, sessionID)
-						if pendingErr != nil {
-							logger.Warnf("ACP pending permissions lookup: %v", pendingErr)
-						}
-						approval, ok, err := resolveNativeApproval(ctx, turn.PermissionRequester, bk, sessionID, result.PendingRequestID, items)
-						if err != nil {
-							return PromptResult{}, err
-						}
-						if ok {
-							if approval.RequestID != "" {
-								resolvedApprovalIDs[approval.RequestID] = struct{}{}
-							}
-							if approval.ContinueTurnID != "" {
-								watchedTurnIDs[approval.ContinueTurnID] = struct{}{}
-								if approval.FallbackText != "" {
-									resumeFallbackText[approval.ContinueTurnID] = approval.FallbackText
-								}
-								continue
-							}
-							return approval.Result, nil
-						}
-						return PromptResult{
-							FinalText:  renderPendingApproval(result.PendingRequestID, items),
-							StopReason: acp.StopReasonEndTurn,
-						}, nil
-					}
-					finalText := strings.TrimSpace(collected.String())
-					if finalText == "" {
-						finalText = strings.TrimSpace(resumeFallbackText[strings.TrimSpace(event.TurnID)])
-					}
-					if strings.EqualFold(status, "canceled") || strings.EqualFold(status, "cancelled") {
-						return PromptResult{
-							FinalText:  finalText,
-							StopReason: acp.StopReasonCancelled,
-							Streamed:   streamed,
-						}, nil
-					}
-					if strings.EqualFold(status, "error") && finalText == "" {
-						return PromptResult{}, errors.New("agent turn failed")
-					}
-					if strings.EqualFold(status, "completed") && turn.Updater != nil && lastTodoPlan != nil {
-						_ = turn.Updater.Update(ctx, acp.UpdatePlan(completePlanEntries(lastTodoPlan)...))
-					}
-					return PromptResult{
-						FinalText:  finalText,
-						StopReason: acp.StopReasonEndTurn,
-						Streamed:   streamed,
-					}, nil
-				}
-			}
+	stream := newBackendPromptStream(bk, turn, sessionID, submit, eventCh)
+	if submit.PendingApproval || strings.TrimSpace(submit.PendingRequestID) != "" || strings.EqualFold(submit.Status, "pending_approval") {
+		result, done, err := stream.resolvePendingApproval(ctx, submit.PendingRequestID)
+		if err != nil || done {
+			return result, err
 		}
 	}
+	return stream.collect(ctx)
 }
 
 func renderPendingApproval(requestID string, items []tools.PendingPermission) string {

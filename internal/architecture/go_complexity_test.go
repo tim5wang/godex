@@ -18,13 +18,9 @@ const goFunctionComplexityLimit = 40
 // limits; split the function instead. Once a function reaches the default
 // limit, this test requires removing its exception.
 var goFunctionComplexityExceptions = map[string]int{
-	"internal/acp/server/handler.go:BackendPromptHandlerWithOptions": 78,
-	"internal/core/config/doctor.go:Manager.Doctor":                  110,
-	"internal/core/conversation/runner.go:Runner.Run":                72,
-	"internal/plugins/taskboard/tools.go:dispatchTaskboard":          68,
-	"internal/tools/browser_tool.go:NewBrowserTool":                  42,
-	"internal/tools/cron.go:NewCronTool":                             44,
-	"internal/tools/lsp_tool.go:NewLSPTool":                          57,
+	"internal/tools/browser_tool.go:NewBrowserTool": 42,
+	"internal/tools/cron.go:NewCronTool":            44,
+	"internal/tools/lsp_tool.go:NewLSPTool":         57,
 }
 
 func TestGoFunctionComplexityBudget(t *testing.T) {

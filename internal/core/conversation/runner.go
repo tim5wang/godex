@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/modelcontext"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/modelcontext"
 )
 
 // ErrMaxTurnsReached indicates the shared runner exhausted its turn budget.
@@ -257,290 +257,53 @@ func (r Runner) Run(ctx context.Context) (*Result, error) {
 		return nil, fmt.Errorf("missing tool executor")
 	}
 
-	maxTurns := r.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = 1
-	}
-	toolTimeout := r.ToolTimeout
-	if toolTimeout <= 0 {
-		toolTimeout = defaultToolTimeout
-	}
-	maxRepeatedTools := r.MaxRepeatedTools
-	if maxRepeatedTools <= 0 {
-		maxRepeatedTools = defaultMaxRepeatedTools
-	}
-	maxRepeatedPollingTools := r.MaxRepeatedPollingTools
-	if maxRepeatedPollingTools <= 0 {
-		maxRepeatedPollingTools = defaultMaxRepeatedPollingTools
-	}
-	maxStalledTaskPollingTools := r.MaxStalledTaskPollingTools
-	if maxStalledTaskPollingTools <= 0 {
-		maxStalledTaskPollingTools = defaultMaxStalledTaskPollingTools
-	}
-	maxEmptyResponses := r.MaxEmptyResponses
-	if maxEmptyResponses <= 0 {
-		maxEmptyResponses = defaultMaxEmptyResponses
-	}
-	maxLengthRecoveries := r.MaxLengthRecoveries
-	if maxLengthRecoveries <= 0 {
-		maxLengthRecoveries = defaultMaxLengthRecoveries
-	}
-	maxModelRetries := r.MaxModelRetries
-	if maxModelRetries <= 0 {
-		maxModelRetries = defaultMaxModelRetries
-	}
-	maxInjectionsPerTurn := r.MaxInjectionsPerTurn
-	if maxInjectionsPerTurn <= 0 {
-		maxInjectionsPerTurn = defaultMaxInjectionsPerTurn
-	}
-	maxInjectionCycles := r.MaxInjectionCycles
-	if maxInjectionCycles <= 0 {
-		maxInjectionCycles = defaultMaxInjectionCycles
-	}
-	maxLoopGuardRecoveries := r.MaxLoopGuardRecoveries
-	if maxLoopGuardRecoveries <= 0 {
-		maxLoopGuardRecoveries = defaultMaxLoopGuardRecoveries
-	}
-	maxNoMutationRounds := r.MaxNoMutationRounds
-	if maxNoMutationRounds <= 0 {
-		maxNoMutationRounds = defaultMaxNoMutationRounds
-	}
-	loopGuardMode := r.LoopGuardMode
-	if loopGuardMode == "" {
-		loopGuardMode = LoopGuardModeStrict
-	}
-	guard := newLoopGuard(loopGuardConfig{
-		MaxRepeatedTools:           maxRepeatedTools,
-		MaxRepeatedPollingTools:    maxRepeatedPollingTools,
-		MaxStalledTaskPollingTools: maxStalledTaskPollingTools,
-		MaxRecoveries:              maxLoopGuardRecoveries,
-		MaxNoMutationRounds:        maxNoMutationRounds,
-		Mode:                       loopGuardMode,
-	})
+	options := r.normalizedOptions()
+	state := &runnerState{result: &Result{}}
+	guard := options.newLoopGuard()
+	for turn := 0; turn < options.maxTurns; turn++ {
+		iteration := turn + 1
+		state.result.Turns = iteration
 
-	result := &Result{}
-	emptyResponses := 0
-	lengthRecoveries := 0
-	reasoningLengthRecoveries := 0
-	injectionCycles := 0
-	// reasoningMaxTokens, once set by the reasoning-budget recovery, caps the
-	// output budget of every subsequent request in this turn. The first
-	// overflow consumed the full max_tokens on reasoning_content; keeping the
-	// ceiling at the original value would let the model re-exhaust it the same
-	// way, so after the nudge we shrink the budget and force an answer.
-	reasoningMaxTokens := 0
-	for turn := 0; turn < maxTurns; turn++ {
-		result.Turns = turn + 1
-
-		req, err := r.BuildRequest(ctx)
+		req, err := r.buildTurnRequest(ctx, iteration, state.reasoningMaxTokens)
 		if err != nil {
-			r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Message: err.Error()})
 			return nil, err
 		}
-		if reasoningMaxTokens > 0 && (req.MaxTokens <= 0 || req.MaxTokens > reasoningMaxTokens) {
-			req.MaxTokens = reasoningMaxTokens
-		}
-		req.Messages = SanitizeMessagesForProvider(req.Messages)
-		r.emitPhase(PhaseEvent{Phase: PhaseContextSanitized, Iteration: turn + 1, Model: req.Model})
-		r.emitPhase(PhaseEvent{Phase: PhaseModelRequest, Iteration: turn + 1, Model: req.Model})
-
-		var resp *protocol.Response
-		var streamed bool
-		maxOverflowRecoveries := r.MaxContextOverflowRecoveries
-		if maxOverflowRecoveries < 0 {
-			maxOverflowRecoveries = 0
-		}
-		overflowRecoveries := 0
-		for attempt := 0; ; attempt++ {
-			var callErr error
-			resp, streamed, callErr = r.callModel(ctx, req)
-			if callErr == nil {
-				break
-			}
-			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(callErr, context.Canceled) {
-				result.Stopped = true
-				result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
-				r.emitPhase(PhaseEvent{Phase: PhaseInterrupted, Iteration: turn + 1, Model: req.Model, Message: callErr.Error(), RecoveryHint: result.RecoveryHint})
-				return result, callErr
-			}
-			// Phase 4.2 overflow recovery: the provider rejected the request
-			// for exceeding its context window. Compacting the history and
-			// retrying from the smaller prefix turns a dead end into a rescue;
-			// the request is rebuilt so the retry carries the compacted state.
-			if IsContextLengthError(callErr) && r.OnContextOverflow != nil && overflowRecoveries < maxOverflowRecoveries {
-				overflowRecoveries++
-				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: fmt.Sprintf("provider context overflow; compacting and retrying (%d/%d): %v", overflowRecoveries, maxOverflowRecoveries, callErr), RecoveryHint: "The provider rejected the request for exceeding its context window; the runner compacted history and retried."})
-				if r.OnContextOverflow(ctx) {
-					if rebuilt, rebuildErr := r.BuildRequest(ctx); rebuildErr == nil {
-						rebuilt.Messages = SanitizeMessagesForProvider(rebuilt.Messages)
-						req = rebuilt
-						continue
-					}
-				}
-			}
-			// 5.2 Turn Error routing: retryable/transient model errors get a
-			// bounded in-turn retry budget instead of failing the turn on the
-			// first provider hiccup. Non-retryable errors surface immediately.
-			// The retry loop stays inside the current turn, so retries do not
-			// consume the outer maxTurns budget.
-			class := ClassifyTurnError(callErr)
-			if (class == TurnErrorRetryable || class == TurnErrorTransient) && attempt < maxModelRetries {
-				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: fmt.Sprintf("model error classified as %s; retrying (%d/%d): %v", class, attempt+1, maxModelRetries, callErr), RecoveryHint: diagnosticRecoveryHint(turn+1, nil)})
-				continue
-			}
-			result.Stopped = true
-			result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
-			r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Model: req.Model, Message: callErr.Error(), RecoveryHint: result.RecoveryHint})
-			return result, callErr
+		resp, streamed, req, err := r.callModelForTurn(ctx, req, iteration, options, state.result)
+		if err != nil {
+			return state.result, err
 		}
 
-		assistantMsg := protocol.MessageFromResponse(*resp)
-		if !protocol.HasToolUse(resp.Content) && strings.TrimSpace(protocol.MessageText(assistantMsg)) == "" {
-			// Reasoning-budget overflow: the model (e.g. deepseek v4) spends its
-			// entire output budget on reasoning_content and stops with
-			// finish_reason=length and NO answer. Blindly retrying the same
-			// request reproduces the same overflow, so re-request with a
-			// brevity instruction instead.
-			if resp.StopReason == "length" && strings.TrimSpace(resp.ReasoningContent) != "" && reasoningLengthRecoveries < maxReasoningLengthRecoveries {
-				reasoningLengthRecoveries++
-				// Shrink the output budget so the model cannot re-burn the
-				// full ceiling on reasoning again; it must answer within the
-				// reduced budget. Halving each recovery gives it room to
-				// think a little but forces a stop with visible text.
-				budget := req.MaxTokens
-				if budget <= 0 {
-					budget = 4096
-				}
-				reasoningMaxTokens = budget / 2
-				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: fmt.Sprintf("model exhausted output budget on reasoning; requesting direct answer with reduced output budget (%d)", reasoningMaxTokens), RecoveryHint: "The provider's reasoning consumed the output token budget; the runner capped the budget and requested a direct, concise answer."})
-				if r.AppendInjectedMessages != nil {
-					r.AppendInjectedMessages([]protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "Your previous response consumed its entire output token budget on reasoning and produced no answer. The output budget has been reduced. Do NOT use it for reasoning: answer directly with the final result now, in plain text, as concisely as possible.")})
-				}
+		assistant := protocol.MessageFromResponse(*resp)
+		if !protocol.HasToolUse(resp.Content) && strings.TrimSpace(protocol.MessageText(assistant)) == "" {
+			retry, err := r.recoverEmptyResponse(ctx, req, resp, iteration, options, state)
+			if retry {
 				continue
 			}
-			if emptyResponses < maxEmptyResponses {
-				emptyResponses++
-				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: "empty model response; retrying", RecoveryHint: "Retrying the model request because the provider returned an empty response."})
-				continue
-			}
-			// Safety valve: an exhausted empty-response streak means the
-			// provider is failing (e.g. it rejects tool-result messages or is
-			// overloaded). Surface the failure as a hard error instead of
-			// fabricating a "diagnostic handoff" — a fake completion that ends
-			// the turn without doing work and invites the user to restart the
-			// same stalled loop by saying "continue".
-			result.Stopped = true
-			result.RecoveryHint = diagnosticRecoveryHint(turn+1, nil)
-			err := fmt.Errorf("LLM provider returned empty responses %d times in a row; aborting instead of producing a fake handoff (provider/gateway may reject the request shape, the model may have exhausted its output budget on reasoning, or the provider is overloaded)", emptyResponses)
-			r.emitPhase(PhaseEvent{Phase: PhaseError, Iteration: turn + 1, Model: req.Model, Message: err.Error(), RecoveryHint: result.RecoveryHint})
-			if drained := r.tryDrainInjections(ctx, maxInjectionsPerTurn, maxInjectionCycles, &injectionCycles); drained.Count > 0 {
-				result.HadInjections = true
-				continue
-			}
-			return result, err
+			return state.result, err
 		}
-		if len(assistantMsg.Content) > 0 {
-			if r.AppendAssistant != nil {
-				r.AppendAssistant(assistantMsg)
-			}
-			if text := protocol.MessageText(assistantMsg); text != "" {
-				result.LastAssistantText = text
-				if !streamed && r.OnAssistantTextDelta != nil {
-					r.OnAssistantTextDelta(text)
-				}
-				if r.OnAssistantText != nil {
-					r.OnAssistantText(text)
-				}
-			}
-		}
+		r.appendAssistantResponse(assistant, streamed, state.result)
 
 		if !protocol.HasToolUse(resp.Content) {
-			if resp.StopReason == "length" && strings.TrimSpace(protocol.MessageText(assistantMsg)) != "" && lengthRecoveries < maxLengthRecoveries {
-				lengthRecoveries++
-				r.emitPhase(PhaseEvent{Phase: PhaseRecoveryAttempt, Iteration: turn + 1, Model: req.Model, Message: "model response reached length limit; requesting continuation", RecoveryHint: "The provider stopped because of the output length limit; the runner requested continuation."})
-				if r.AppendInjectedMessages != nil {
-					r.AppendInjectedMessages([]protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "Continue exactly where the previous response stopped. Do not repeat completed content.")})
-				}
+			done, retry := r.handleFinalResponse(ctx, req, resp, assistant, iteration, options, state)
+			if retry {
 				continue
 			}
-			r.emitPhase(PhaseEvent{Phase: PhaseFinalResponse, Iteration: turn + 1, Model: req.Model})
-			if drained := r.tryDrainInjections(ctx, maxInjectionsPerTurn, maxInjectionCycles, &injectionCycles); drained.Count > 0 {
-				result.HadInjections = true
-				continue
+			if done {
+				return state.result, nil
 			}
-			if r.AfterTurn != nil {
-				r.AfterTurn()
-			}
-			result.Completed = true
-			return result, nil
 		}
 
-		r.emitPhase(PhaseEvent{Phase: PhaseAwaitingTools, Iteration: turn + 1, Model: req.Model})
-		toolResultMsg, executed, toolErr := ExecuteToolUsesWithOptions(ctx, resp.Content, r.ExecuteTool, r.OnToolStarted, r.OnToolFinished, r.ToolResultFilter, ExecuteToolOptions{
-			Timeout:           toolTimeout,
-			StuckWarningAfter: toolStuckWarningAfter(toolTimeout),
-			OnStuck:           r.OnToolStuck,
-		})
-		if len(toolResultMsg.Content) > 0 && r.AppendToolResults != nil {
-			r.AppendToolResults(toolResultMsg)
+		done, err := r.handleToolResponse(ctx, req, resp, iteration, options, state, guard)
+		if err != nil {
+			return state.result, err
 		}
-		if len(executed) > 0 && r.OnExecutedTools != nil {
-			r.OnExecutedTools(executed)
-		}
-		if r.AfterTurn != nil {
-			r.AfterTurn()
-		}
-		r.emitPhase(PhaseEvent{Phase: PhaseToolsCompleted, Iteration: turn + 1, Model: req.Model})
-		if drained := r.tryDrainInjections(ctx, maxInjectionsPerTurn, maxInjectionCycles, &injectionCycles); drained.Count > 0 {
-			result.HadInjections = true
-		}
-		decision := guard.Observe(executed, nil)
-		if decision.Action == loopGuardRecover {
-			if r.AppendRuntimeFeedback == nil {
-				decision.Action = loopGuardAbort
-				decision.AbortReason = "loop guard recovery was requested but runtime feedback is unavailable"
-			} else {
-				feedback := protocol.NewTextMessage(protocol.RoleUser, decision.Feedback)
-				r.AppendRuntimeFeedback(feedback)
-				r.emitPhase(PhaseEvent{
-					Phase:        PhaseRecoveryAttempt,
-					Iteration:    turn + 1,
-					Model:        req.Model,
-					Message:      "loop_guard_recovery: " + decision.Summary(),
-					ToolID:       decision.Tool.ID,
-					ToolName:     decision.Tool.Name,
-					RecoveryHint: decision.RecoveryHint,
-				})
-				continue
-			}
-		}
-		if decision.Action == loopGuardAbort {
-			result.Stopped = true
-			result.RecoveryHint = strings.TrimSpace(diagnosticRecoveryHint(turn+1, executed) + " " + decision.RecoveryHint)
-			return result, fmt.Errorf("%w: %s", ErrRepeatedToolCalls, decision.AbortMessage())
-		}
-		if toolErr != nil {
-			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(toolErr, context.Canceled) || shouldStopAfterTool(toolErr) {
-				result.Stopped = true
-				result.RecoveryHint = diagnosticRecoveryHint(turn+1, executed)
-				return result, toolErr
-			}
-			r.emitPhase(PhaseEvent{
-				Phase:        PhaseRecoveryAttempt,
-				Iteration:    turn + 1,
-				Model:        req.Model,
-				Message:      "tool_error_recovery: " + toolErr.Error(),
-				RecoveryHint: "The tool error was appended as a tool result so the model can choose another approach.",
-			})
-		}
-		if r.StopAfterTools != nil && r.StopAfterTools() {
-			result.Stopped = true
-			return result, nil
+		if done {
+			return state.result, nil
 		}
 	}
 
-	result.RecoveryHint = diagnosticRecoveryHint(maxTurns, nil)
-	return result, ErrMaxTurnsReached
+	state.result.RecoveryHint = diagnosticRecoveryHint(options.maxTurns, nil)
+	return state.result, ErrMaxTurnsReached
 }
 
 func (r Runner) emitPhase(event PhaseEvent) {

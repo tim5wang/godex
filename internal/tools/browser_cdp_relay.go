@@ -2,8 +2,6 @@ package tools
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -95,13 +93,4 @@ func (s *BrowserService) startRelayCDP(ctx context.Context) (*rod.Browser, error
 
 	cdpClient := cdp.New().Start(&gorillaWSAdapter{conn: wsConn})
 	return rod.New().Client(cdpClient), nil
-}
-
-// relayCDPConnID returns a unique conn id for a relay TCP stream.
-func relayCDPConnID() string {
-	buf := make([]byte, 4)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("cdp-%d", time.Now().UnixNano())
-	}
-	return "cdp-" + hex.EncodeToString(buf)
 }

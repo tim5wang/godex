@@ -71,19 +71,19 @@ func actorName(ctx context.Context) string {
 
 // tool actions
 const (
-	actionList       = "list"
-	actionGet        = "get"
-	actionCreate     = "create"
-	actionUpdate     = "update"
-	actionMove       = "move"
-	actionCommentAdd = "comment_add"
-	actionDelete     = "delete"
-	actionChecklist  = "checklist"
-	actionDispatch   = "dispatch"
-	actionObserve    = "observe"
-	actionReconcile  = "reconcile"
-	actionRecover    = "recover"
-	actionRetry      = "retry"
+	actionList          = "list"
+	actionGet           = "get"
+	actionCreate        = "create"
+	actionUpdate        = "update"
+	actionMove          = "move"
+	actionCommentAdd    = "comment_add"
+	actionDelete        = "delete"
+	actionChecklist     = "checklist"
+	actionDispatch      = "dispatch"
+	actionObserve       = "observe"
+	actionReconcile     = "reconcile"
+	actionRecover       = "recover"
+	actionRetry         = "retry"
 	actionReportTouched = "report_touched"
 	actionMergePrecheck = "merge_precheck"
 )
@@ -114,23 +114,23 @@ func newTaskboardTool(ledger toolLedger, executor Executor) tools.Tool {
 				"description": "list|get|create|update|move|comment_add|delete|checklist|dispatch|observe|reconcile|recover|retry|report_touched|merge_precheck",
 				"enum":        []string{actionList, actionGet, actionCreate, actionUpdate, actionMove, actionCommentAdd, actionDelete, actionChecklist, actionDispatch, actionObserve, actionReconcile, actionRecover, actionRetry, actionReportTouched, actionMergePrecheck},
 			},
-			"card_id":      map[string]string{"type": "string", "description": "Card id (get/update/move/comment_add/delete/checklist/dispatch/observe/reconcile/recover/retry)"},
-			"version":      map[string]any{"type": "integer", "description": "Optimistic-concurrency version: pass the CURRENT version returned by create/get (not the next one). On conflict the tool auto-re-reads and retries once."},
-			"project_id":   map[string]string{"type": "string", "description": "Project filter (list) or target project (create; defaults to the built-in project)"},
-			"status":       map[string]string{"type": "string", "description": "Status filter (list): backlog|todo|in_progress|in_review|done"},
-			"urgency":      map[string]string{"type": "string", "description": "Urgency (list filter / create): urgent|normal|low"},
-			"title":        map[string]string{"type": "string", "description": "Card title (create / update)"},
-			"description":  map[string]string{"type": "string", "description": "Card description (create / update)"},
-			"prompt":       map[string]string{"type": "string", "description": "Execution prompt for the isolated session that will run this task (create / update)"},
-			"template_id":  map[string]string{"type": "string", "description": "Agent template id for the execution session (create / update; empty = default)"},
-			"blocked":      map[string]any{"type": "boolean", "description": "Blocked flag (update)"},
-			"to":           map[string]string{"type": "string", "description": "Target status (move): todo|in_progress|in_review"},
-			"text":         map[string]string{"type": "string", "description": "Comment text (comment_add), single checklist item (checklist add), recovery message (recover), or batch via checklist array"},
-			"check_action": map[string]string{"type": "string", "description": "checklist sub-action: add|check|uncheck"},
-			"index":        map[string]any{"type": "integer", "description": "Checklist item index (checklist check/uncheck)"},
-			"evidence":     map[string]string{"type": "string", "description": "Proof note attached when checking a checklist item"},
-			"checklist":    map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Acceptance criteria lines (create), or batch items for checklist add"},
-			"touched_paths": map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Package-level impact surface (create/update): e.g. [\"internal/platform/tooling\"]. Used for cross-card parallel-conflict detection (dispatch gate + merge precheck)."},
+			"card_id":        map[string]string{"type": "string", "description": "Card id (get/update/move/comment_add/delete/checklist/dispatch/observe/reconcile/recover/retry)"},
+			"version":        map[string]any{"type": "integer", "description": "Optimistic-concurrency version: pass the CURRENT version returned by create/get (not the next one). On conflict the tool auto-re-reads and retries once."},
+			"project_id":     map[string]string{"type": "string", "description": "Project filter (list) or target project (create; defaults to the built-in project)"},
+			"status":         map[string]string{"type": "string", "description": "Status filter (list): backlog|todo|in_progress|in_review|done"},
+			"urgency":        map[string]string{"type": "string", "description": "Urgency (list filter / create): urgent|normal|low"},
+			"title":          map[string]string{"type": "string", "description": "Card title (create / update)"},
+			"description":    map[string]string{"type": "string", "description": "Card description (create / update)"},
+			"prompt":         map[string]string{"type": "string", "description": "Execution prompt for the isolated session that will run this task (create / update)"},
+			"template_id":    map[string]string{"type": "string", "description": "Agent template id for the execution session (create / update; empty = default)"},
+			"blocked":        map[string]any{"type": "boolean", "description": "Blocked flag (update)"},
+			"to":             map[string]string{"type": "string", "description": "Target status (move): todo|in_progress|in_review"},
+			"text":           map[string]string{"type": "string", "description": "Comment text (comment_add), single checklist item (checklist add), recovery message (recover), or batch via checklist array"},
+			"check_action":   map[string]string{"type": "string", "description": "checklist sub-action: add|check|uncheck"},
+			"index":          map[string]any{"type": "integer", "description": "Checklist item index (checklist check/uncheck)"},
+			"evidence":       map[string]string{"type": "string", "description": "Proof note attached when checking a checklist item"},
+			"checklist":      map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Acceptance criteria lines (create), or batch items for checklist add"},
+			"touched_paths":  map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Package-level impact surface (create/update): e.g. [\"internal/platform/tooling\"]. Used for cross-card parallel-conflict detection (dispatch gate + merge precheck)."},
 			"observed_paths": map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Paths an execution session actually touched at runtime (report_touched); unioned with touched_paths for conflict detection."},
 			"research": map[string]any{"type": "object", "description": "Structured investigation asset (方案A: 上下文传递; create/update): facts + locations(file:line) + excluded_paths + open_questions. Split into verified vs open-points in the execution prompt so the调研 is done once.", "properties": map[string]any{
 				"facts":          map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Already-verified facts (trust; don't re-investigate)."},
@@ -148,24 +148,24 @@ func newTaskboardTool(ledger toolLedger, executor Executor) tools.Tool {
 // taskboardArgs carries the union of parameters across actions; only the
 // fields relevant to the requested action are read.
 type taskboardArgs struct {
-	Action      string   `json:"action"`
-	CardID      string   `json:"card_id"`
-	ExecutionID string   `json:"execution_id"`
-	Version     *int     `json:"version"`
-	ProjectID   string   `json:"project_id"`
-	Status      string   `json:"status"`
-	Urgency     string   `json:"urgency"`
-	Title       *string  `json:"title"`
-	Description *string  `json:"description"`
-	Prompt      *string  `json:"prompt"`
-	Blocked     *bool    `json:"blocked"`
-	TemplateID  string   `json:"template_id"`
-	WorkDir     string   `json:"work_dir"`
-	To          string   `json:"to"`
-	Text        string   `json:"text"`
-	CheckAction string   `json:"check_action"`
-	Index       *int     `json:"index"`
-	Evidence    string   `json:"evidence"`
+	Action        string    `json:"action"`
+	CardID        string    `json:"card_id"`
+	ExecutionID   string    `json:"execution_id"`
+	Version       *int      `json:"version"`
+	ProjectID     string    `json:"project_id"`
+	Status        string    `json:"status"`
+	Urgency       string    `json:"urgency"`
+	Title         *string   `json:"title"`
+	Description   *string   `json:"description"`
+	Prompt        *string   `json:"prompt"`
+	Blocked       *bool     `json:"blocked"`
+	TemplateID    string    `json:"template_id"`
+	WorkDir       string    `json:"work_dir"`
+	To            string    `json:"to"`
+	Text          string    `json:"text"`
+	CheckAction   string    `json:"check_action"`
+	Index         *int      `json:"index"`
+	Evidence      string    `json:"evidence"`
 	Checklist     []string  `json:"checklist"`
 	TouchedPaths  []string  `json:"touched_paths"`
 	ObservedPaths []string  `json:"observed_paths"`
@@ -194,293 +194,25 @@ func dispatchTaskboard(ctx context.Context, ledger toolLedger, executor Executor
 	actor := actorName(ctx)
 	switch strings.TrimSpace(args.Action) {
 	case actionList:
-		cards := ledger.ListCards(CardFilter{
-			ProjectID: strings.TrimSpace(args.ProjectID),
-			Status:    strings.TrimSpace(args.Status),
-			Urgency:   strings.TrimSpace(args.Urgency),
-		})
-		out := make([]compactCard, 0, len(cards))
-		for _, card := range cards {
-			out = append(out, compact(card))
-		}
-		return tools.ToolResult{Structured: map[string]any{"cards": out, "count": len(out)}}, nil
-
+		return listTaskboardCards(ledger, args)
 	case actionGet:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		card, err := ledger.GetCard(id)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		return tools.ToolResult{Structured: map[string]any{"card": card}}, nil
-
+		return getTaskboardCard(ledger, args)
 	case actionCreate:
-		title := strings.TrimSpace(derefString(args.Title))
-		if title == "" {
-			return tools.ToolResult{}, fmt.Errorf("taskboard: title is required for create")
-		}
-		card, err := ledger.CreateCard(CreateCardInput{
-			ProjectID:    strings.TrimSpace(args.ProjectID),
-			Title:        title,
-			Description:  derefString(args.Description),
-			Prompt:       derefString(args.Prompt),
-			Urgency:      args.Urgency,
-			TemplateID:   strings.TrimSpace(args.TemplateID),
-			WorkDir:      strings.TrimSpace(args.WorkDir),
-			Checklist:    args.Checklist,
-			TouchedPaths: args.TouchedPaths,
-			Research:     args.Research,
-			CreatedBy:    agentActor,
-		})
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		return tools.ToolResult{Structured: map[string]any{"card": compact(card), "version": card.Version}}, nil
-
+		return createTaskboardCard(ledger, args)
 	case actionUpdate:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		version, err := requireVersion(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		var urgencyPtr *string
-		if u := strings.TrimSpace(args.Urgency); u != "" {
-			urgencyPtr = &u
-		}
-		var templateIDPtr *string
-		if t := strings.TrimSpace(args.TemplateID); t != "" {
-			templateIDPtr = &t
-		}
-		var touchedPathsPtr *[]string
-		if len(args.TouchedPaths) > 0 {
-			tp := args.TouchedPaths
-			touchedPathsPtr = &tp
-		}
-		card, err := writeWithRetry(ledger, id, version, func(v int) (Card, error) {
-			return ledger.UpdateCard(id, v, agentActor, UpdateCardInput{
-				Title: args.Title, Description: args.Description, Prompt: args.Prompt, Urgency: urgencyPtr, Blocked: args.Blocked, TemplateID: templateIDPtr, TouchedPaths: touchedPathsPtr, Research: args.Research,
-			})
-		})
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		return tools.ToolResult{Structured: map[string]any{"card": compact(card), "version": card.Version}}, nil
-
-	case actionMove:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		version, err := requireVersion(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		card, err := writeWithRetry(ledger, id, version, func(v int) (Card, error) {
-			return ledger.MoveCard(id, v, strings.TrimSpace(args.To), actor)
-		})
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		return tools.ToolResult{Structured: map[string]any{"card": compact(card), "version": card.Version}}, nil
-
-	case actionCommentAdd:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		version, err := requireVersion(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		card, err := writeWithRetry(ledger, id, version, func(v int) (Card, error) {
-			return ledger.AddComment(id, v, agentActor, args.Text)
-		})
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		return tools.ToolResult{Structured: map[string]any{"card": compact(card), "version": card.Version}}, nil
-
-	case actionDelete:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		version, err := requireVersion(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		card, err := writeWithRetry(ledger, id, version, func(v int) (Card, error) {
-			return ledger.SoftDeleteCard(id, v, agentActor)
-		})
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		return tools.ToolResult{Structured: map[string]any{"card_id": card.ID, "deleted": true}}, nil
-
+		return updateTaskboardCard(ledger, args)
+	case actionMove, actionCommentAdd, actionDelete:
+		return mutateTaskboardCard(ledger, actor, args)
 	case actionChecklist:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		version, err := requireVersion(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		var card Card
-		switch strings.TrimSpace(args.CheckAction) {
-		case "add":
-			card, err = ledger.ChecklistAdd(id, version, agentActor, args.ChecklistItems())
-		case "check":
-			if args.Index == nil {
-				return tools.ToolResult{}, fmt.Errorf("taskboard: check requires item index")
-			}
-			card, err = ledger.ChecklistCheck(id, version, agentActor, *args.Index, args.Evidence)
-		case "uncheck":
-			if args.Index == nil {
-				return tools.ToolResult{}, fmt.Errorf("taskboard: uncheck requires item index")
-			}
-			card, err = ledger.ChecklistUncheck(id, version, agentActor, *args.Index)
-		default:
-			return tools.ToolResult{}, fmt.Errorf("taskboard: unknown checklist action %q", args.CheckAction)
-		}
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		done, total := card.ChecklistProgress()
-		return tools.ToolResult{Structured: map[string]any{"card": compact(card), "version": card.Version, "checklist_done": done, "checklist_total": total}}, nil
-
+		return updateTaskboardChecklist(ledger, args)
 	case actionDispatch:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		if executor == nil {
-			return tools.ToolResult{}, fmt.Errorf("taskboard: dispatch unavailable (no executor configured)")
-		}
-		card, err := ledger.GetCard(id)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		// Gate 2 dispatch intercept: refuse to start a card whose impact surface
-		// overlaps another active card. A card with no declared/reported paths
-		// still dispatches (its runtime report, gate 3, is the fallback).
-		if cerr := ledger.PrecheckDispatchConflicts(card); cerr != nil {
-			return tools.ToolResult{}, cerr
-		}
-		executionID, sessionID, err := executor.Execute(ctx, card)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		return tools.ToolResult{Structured: map[string]any{"execution_id": executionID, "session_id": sessionID}}, nil
-
+		return dispatchTaskboardCard(ctx, ledger, executor, args)
 	case actionObserve, actionReconcile, actionRecover, actionRetry:
-		exec, ok := executor.(ObservedExecutor)
-		if !ok {
-			return tools.ToolResult{}, fmt.Errorf("taskboard: %s unavailable (executor does not support observability)", args.Action)
-		}
-		switch strings.TrimSpace(args.Action) {
-		case actionObserve:
-			id, err := requireCardID(args)
-			if err != nil {
-				return tools.ToolResult{}, err
-			}
-			executionID := strings.TrimSpace(args.ExecutionID)
-			if executionID == "" {
-				return tools.ToolResult{}, fmt.Errorf("taskboard: execution_id is required for observe")
-			}
-			obs, live, err := exec.Observe(ctx, id, executionID)
-			if err != nil {
-				return tools.ToolResult{}, err
-			}
-			return tools.ToolResult{Structured: map[string]any{"observation": obs, "live": live}}, nil
-		case actionReconcile:
-			report, err := exec.Reconcile(ctx)
-			if err != nil {
-				return tools.ToolResult{}, err
-			}
-			return tools.ToolResult{Structured: map[string]any{"reconcile_report": report}}, nil
-		case actionRecover:
-			id, err := requireCardID(args)
-			if err != nil {
-				return tools.ToolResult{}, err
-			}
-			executionID := strings.TrimSpace(args.ExecutionID)
-			if executionID == "" {
-				return tools.ToolResult{}, fmt.Errorf("taskboard: execution_id is required for recover")
-			}
-			sessionID, err := exec.Recover(ctx, id, executionID, args.Text)
-			if err != nil {
-				return tools.ToolResult{}, err
-			}
-			return tools.ToolResult{Structured: map[string]any{"session_id": sessionID, "message": "recovery message submitted"}}, nil
-		case actionRetry:
-			id, err := requireCardID(args)
-			if err != nil {
-				return tools.ToolResult{}, err
-			}
-			executionID := strings.TrimSpace(args.ExecutionID)
-			if executionID == "" {
-				return tools.ToolResult{}, fmt.Errorf("taskboard: execution_id is required for retry")
-			}
-			turnID, err := exec.Retry(ctx, id, executionID)
-			if err != nil {
-				return tools.ToolResult{}, err
-			}
-			return tools.ToolResult{Structured: map[string]any{"turn_id": turnID, "message": "retry submitted"}}, nil
-		}
-		return tools.ToolResult{}, fmt.Errorf("taskboard: unknown %s action %q", "execution", args.Action)
-
+		return observeTaskboardExecution(ctx, executor, args)
 	case actionReportTouched:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		version, err := requireVersion(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		if len(args.ObservedPaths) == 0 {
-			return tools.ToolResult{}, fmt.Errorf("taskboard: observed_paths is required for report_touched")
-		}
-		card, err := writeWithRetry(ledger, id, version, func(v int) (Card, error) {
-			return ledger.ReportObservedPaths(id, v, actor, args.ObservedPaths)
-		})
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		// Surface any fresh dynamic conflict the new report introduced (gate 3), so
-		// the agent sees the overlap immediately rather than at the next dispatch.
-		report := ledger.CheckCardPathConflicts(card)
-		return tools.ToolResult{Structured: map[string]any{
-			"card": compact(card), "version": card.Version, "observed_paths": card.ObservedPaths,
-			"conflict_report": report, "conflicts": report.HasConflicts(),
-		}}, nil
-
+		return reportTaskboardTouchedPaths(ledger, actor, args)
 	case actionMergePrecheck:
-		id, err := requireCardID(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		version, err := requireVersion(args)
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		card, report, err := writeWithRetryMerge(ledger, id, version, func(v int) (Card, ConflictReport, error) {
-			return ledger.MergePrecheck(id, v, actor)
-		})
-		if err != nil {
-			return tools.ToolResult{}, err
-		}
-		return tools.ToolResult{Structured: map[string]any{
-			"card": compact(card), "version": card.Version, "merge_report": report,
-			"conflicts": report.HasConflicts(),
-		}}, nil
-
+		return precheckTaskboardMerge(ledger, actor, args)
 	default:
 		return tools.ToolResult{}, fmt.Errorf("taskboard: unknown action %q", args.Action)
 	}

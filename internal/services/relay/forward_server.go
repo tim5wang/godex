@@ -2,8 +2,6 @@ package relay
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tim5wang/godex/internal/platform/idgen"
 	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
@@ -112,7 +111,7 @@ func (s *ForwardServer) Add(spec ForwardSpec) (ForwardSpec, error) {
 		return spec, err
 	}
 	if spec.ID == "" {
-		spec.ID = newForwardID()
+		spec.ID = idgen.New("fw-", 4)
 	}
 	entry := &forwardEntry{spec: spec, conns: map[net.Conn]struct{}{}}
 
@@ -226,7 +225,7 @@ func (s *ForwardServer) Check(id string) (ForwardCheckResult, error) {
 	start := time.Now()
 	probeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	stream, err := s.hub.OpenTCPStream(probeCtx, entry.spec.NodeID, newForwardID(), entry.spec.Target)
+	stream, err := s.hub.OpenTCPStream(probeCtx, entry.spec.NodeID, idgen.New("fw-", 4), entry.spec.Target)
 	dialMs := time.Since(start).Milliseconds()
 	if err != nil {
 		record("target", false, fmt.Sprintf("dial %s: %v", entry.spec.Target, err), dialMs)
@@ -315,7 +314,7 @@ func (e *forwardEntry) bridge(hub *Hub, local net.Conn) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	stream, err := hub.OpenTCPStream(ctx, e.spec.NodeID, newForwardID(), e.spec.Target)
+	stream, err := hub.OpenTCPStream(ctx, e.spec.NodeID, idgen.New("fw-", 4), e.spec.Target)
 	if err != nil {
 		// Node offline or target unreachable: surface once per connection by
 		// closing the local side immediately.
@@ -369,12 +368,4 @@ func lessForwardStatus(a, b ForwardStatus) bool {
 		return a.LocalPort < b.LocalPort
 	}
 	return a.ID < b.ID
-}
-
-func newForwardID() string {
-	buf := make([]byte, 4)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("fw-%d", time.Now().UnixNano())
-	}
-	return "fw-" + hex.EncodeToString(buf)
 }

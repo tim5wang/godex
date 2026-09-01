@@ -20,11 +20,11 @@
 | 共享 Session Runtime | Implemented | `services/backend`, `domain/events`, `sessionstore` | CLI/TUI/Web/HTTP/IM | README、user-guide；turn/session API 有大量回归测试。 |
 | CLI/TUI | Implemented | `internal/app`, `cmd/godex`, `tui/mintui` | `godex --help`, `/help` | root help 在代码中；TUI help 由 `buildHelpPages` 维护。 |
 | Web 工作台 | Implemented | `app/appRegistry.tsx` | 12 个当前导航 app | README；当前 app 是 Chat、Files、Automation、Nodes、Notes、Skills、Agents、Memory、Settings、Business Agents、TaskBoard、Usage。 |
-| HTTP/SSE session API | Implemented | `runtime/httpapi/httpapi.go` | `/sessions/*`, `/events` | user-guide；主 route registrar 过大但能力存在。 |
+| HTTP/SSE session API | Implemented | `runtime/httpapi` resource registrars | `/sessions/*`, `/events` | user-guide；命名 `Dependencies`、route ownership gate 与按资源域 registrar 共同约束装配。 |
 | Slash commands / 多入口命令 | Implemented | `services/commands.AvailableMetadata` | CLI `command`、Web `/commands`、TUI、ACP、IM | metadata 同时驱动 help 与入口注册并有测试；文档只解释复杂参数。 |
 | OpenAI Chat Completions gateway | Implemented | `httpapi.go`, `routes_openai.go` | `POST /v1/chat/completions` | user-guide、release notes。 |
 | OpenAI Responses gateway/provider | Implemented | `routes_responses.go`, conversation Responses clients | `POST /v1/responses` | `responses-protocol-plan.md` 已改为 Historical；v1.4 release notes 记录落地。 |
-| Anthropic Messages gateway | Implemented | `routes_usage.go`/gateway converters | `POST /v1/messages` | user-guide；stream/non-stream tests 存在。 |
+| Anthropic Messages gateway | Implemented | `routes_anthropic.go`/gateway converters | `POST /v1/messages` | user-guide；stream/non-stream tests 存在，与 Usage registrar 分离。 |
 | Agent Step Phase A | Implemented | `routes_steps.go`, `routes_step_track.go` | `/v1/agent-steps*` | main/details 文档已改为 Active；biz-key auth、run/get/cancel/reply/events 均有测试。 |
 | Agent Step TypeScript SDK | Implemented | `ui/web/src/lib/agent-step/client.ts` | `createStepClient` | `agent-step-sdk.md`；client tests 存在。 |
 | `<godex-step>` Web Component | Implemented | `agent-step/godex-step.ts` | HTML custom element | Agent Step Phase C；支持流式、多轮与 ui_card reply。 |
@@ -35,7 +35,7 @@
 | Attachments / media / artifacts | Implemented baseline | `core/media`, backend attachment/materialize, Web upload | Chat、Feishu、Weixin、tool `ArtifactPaths` | 图片/文档/OCR/音视频和显式 artifact 提升有测试；processor 是 955 行热点。 |
 | Terminal | Implemented | `routes_terminal.go`, `TerminalPanel.tsx` | Web panel | README/user-guide；PTY 与 pipe fallback 有测试。 |
 | Static/proxy Preview | Implemented | `routes_preview.go`, `PreviewPanel.tsx` | Web preview panel | workflow integration 旧文档不再是权威入口。 |
-| Provider/model 配置 | Implemented | `core/config`, `core/providers`, Settings | `providers`, `login/logout`, Settings | README/user-guide；schema/get/set 映射存在维护风险。 |
+| Provider/model 配置 | Implemented | `core/config`, `core/providers`, Settings | `providers`, `login/logout`, Settings | README/user-guide；schema/get/set 契约测试覆盖字段映射，doctor 检查按域组织。 |
 | Tool runtime 与 bundles | Implemented baseline | `toolruntime`, `agent/tool_registration.go`, `agent/session_template.go` | `tool_exchange`, runtime prompt | 模板基线为 `Tools ∪ Bundles`；`always_on` 由模板显式选择并在会话内固定；clear 恢复精确模板基线，`default` 空模板保留兼容语义。 |
 | LSP 工具 | Implemented | `tools/lsp*.go` | `lsp` bundle/tool | README/user-guide；code graph 是本次审查工具，不是产品 LSP 的替代实现。 |
 | MCP stdio/HTTP | Implemented | `core/mcp`, `routes_mcp.go`, MCP tools | Settings、`/v1/mcp/*` | extension-runtime-user-guide；动态 server tools 会让工具总数变化。 |
@@ -45,7 +45,7 @@
 | Subagent jobs | Implemented | `agent/subagent_*`, backend surfaces | Chat/TUI/API/tool | workflow-runtime、roadmap；review/merge/cancel/resume/iterate 存在。 |
 | Review / Merge Center | Implemented, test drift fixed | `reviewMergeCenter.ts`, panel, backend review/merge | Chat panel | superpowers plan 为历史实现记录；read-only job 应是 `no_changes`，review fixture 必须带 writeScope。 |
 | Workflow / AgentGraph / LongTask | Implemented | `agent/workflow.go`, `agentgraph.go`, `longtask_*` | tools、CLI、Web task center | workflow-runtime、roadmap；不是已删除的 Workflows 页面。 |
-| TaskBoard plugin | Implemented baseline / evolving | `plugins/taskboard`, backend executor, TaskBoardPage | `/taskboard`, `/v1/taskboard*`, tool | 模板分派、PJM、research、路径冲突闸门与手动 reconcile P0 已落地；自动 reconcile/history/依赖拓扑仍 Planned。 |
+| TaskBoard plugin | Implemented baseline / evolving | `plugins/taskboard`, backend executor, `TaskBoardView` | `/taskboard`, `/v1/taskboard*`, tool | 模板分派、PJM、research、路径冲突闸门与手动 reconcile P0 已落地；自动 reconcile/history/依赖拓扑仍 Planned。 |
 | Agent templates / roles / bundles | Implemented baseline / evolving | `core/templates`, role registry, AgentTemplatesPage | `/agents`, template APIs、新建对话/TaskBoard/Biz key | M1–M3、M4 P1、M5 P1–P3 已落地；导入导出/NL 生成/预算硬限制仍 Planned。 |
 | Durable Memory / recall | Implemented | `core/memory`, historysearch, MemoryPage | `/memory`, tools, slash commands | memory-design-principles、user-guide。 |
 | Context compaction/inspection | Implemented baseline | `core/compress`, agent context/compaction, inspector panels | Chat Context & Recall | compaction plan；模板 activation baseline、runtime prompt 与 clear/reset 已有契约测试，后续继续演进 compaction 策略。 |
@@ -82,4 +82,4 @@
 - Web app 列表以 `builtinApps` 为事实源；README 只描述产品能力，不硬编码页面数量。
 - Tool/bundle 列表以 runtime catalog 为事实源；文档避免写死动态 MCP 后的精确工具数。
 - HTTP path 以 route registrar 和 contract tests 为事实源；设计文档描述 auth、lifecycle 与错误语义。
-- 文档状态、索引和本地链接由 `make docs-check` 强制检查。
+- 文档状态、索引和本地链接由 `make docs-check` 强制检查；本地与 release 的统一质量入口是 `make verify`。

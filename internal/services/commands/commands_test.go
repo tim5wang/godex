@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"

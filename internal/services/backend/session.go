@@ -226,15 +226,20 @@ func (s *Service) ApplyConfig(cfg *config.Config) error {
 func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*OpenedSession, error) {
 	_ = ctx
 	locator = s.withDefaultLocatorMetadata(locator)
-	// A caller-supplied project_dir is validated at the boundary: resolve
-	// to an absolute, cleaned path and require it to exist as a directory
-	// before it becomes part of the session identity hash.
-	if _, ok := locator.Metadata[sessionProjectDirMetadataKey]; ok {
-		dir, err := validateSessionProjectDir(locator.Metadata[sessionProjectDirMetadataKey])
+	// A caller-supplied project_dir is normalized at the boundary: resolve
+	// to an absolute, cleaned path before it becomes part of the session
+	// identity hash. Existence is only required when the session would be
+	// created anew; reopening a persisted session whose workspace directory
+	// has since been removed (e.g. an ACP temp cwd) must still succeed, or
+	// the Web UI could never resume it.
+	projectDir := strings.TrimSpace(locator.Metadata[sessionProjectDirMetadataKey])
+	if projectDir != "" {
+		dir, err := normalizeSessionProjectDir(projectDir)
 		if err != nil {
 			return nil, err
 		}
 		locator.Metadata[sessionProjectDirMetadataKey] = dir
+		projectDir = dir
 	}
 	// Resolve "default" key to the latest session when a pointer exists.
 	if strings.TrimSpace(locator.Key) == "default" {
@@ -246,6 +251,16 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 	sessionID := stableSessionID(normalized)
 	if legacySessionID := s.legacySessionIDIfPresent(normalized, sessionID); legacySessionID != "" {
 		sessionID = legacySessionID
+	}
+
+	// New sessions must point at a real directory; a persisted session may
+	// tolerate a project_dir whose backing directory no longer exists.
+	if projectDir != "" && !s.sessionPersisted(sessionID) {
+		if info, err := os.Stat(projectDir); err != nil {
+			return nil, fmt.Errorf("%w %q: %v", ErrInvalidWorkspaceDir, projectDir, err)
+		} else if !info.IsDir() {
+			return nil, fmt.Errorf("%w %q: not a directory", ErrInvalidWorkspaceDir, projectDir)
+		}
 	}
 
 	s.mu.Lock()
@@ -364,12 +379,12 @@ func cleanProjectDir(value string) string {
 	return filepath.Clean(value)
 }
 
-// validateSessionProjectDir validates a caller-supplied per-session
-// working directory at the API boundary.  The returned path is cleaned
-// and made absolute so the same physical directory always hashes to
-// the same session id.  An empty input means "no override" and is
-// returned unchanged.
-func validateSessionProjectDir(value string) (string, error) {
+// normalizeSessionProjectDir resolves a caller-supplied project_dir to an
+// absolute, cleaned path WITHOUT requiring it to exist on disk. It keeps the
+// identity-hash behavior of validateSessionProjectDir (same directory always
+// hashes to the same session id) while letting a persisted session reopen even
+// after its workspace directory was deleted.
+func normalizeSessionProjectDir(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", nil
@@ -391,7 +406,19 @@ func validateSessionProjectDir(value string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w %q: %v", ErrInvalidWorkspaceDir, value, err)
 	}
-	abs = filepath.Clean(abs)
+	return filepath.Clean(abs), nil
+}
+
+// validateSessionProjectDir validates a caller-supplied per-session
+// working directory at the API boundary.  The returned path is cleaned
+// and made absolute so the same physical directory always hashes to
+// the same session id, and must exist as a directory.  An empty input
+// means "no override" and is returned unchanged.
+func validateSessionProjectDir(value string) (string, error) {
+	abs, err := normalizeSessionProjectDir(value)
+	if err != nil || abs == "" {
+		return "", err
+	}
 	info, err := os.Stat(abs)
 	if err != nil {
 		return "", fmt.Errorf("%w %q: %v", ErrInvalidWorkspaceDir, abs, err)
@@ -400,6 +427,26 @@ func validateSessionProjectDir(value string) (string, error) {
 		return "", fmt.Errorf("%w %q: not a directory", ErrInvalidWorkspaceDir, abs)
 	}
 	return abs, nil
+}
+
+// sessionPersisted reports whether a session with the given id has been
+// persisted on disk (session directory or SQLite store). It is used to
+// decide whether a caller-supplied project_dir must still exist: brand-new
+// sessions are checked at the boundary, while already-persisted sessions
+// may be reopened even if their workspace was deleted.
+func (s *Service) sessionPersisted(sessionID string) bool {
+	if s == nil || s.cfg == nil || strings.TrimSpace(s.cfg.SessionsDir) == "" {
+		return false
+	}
+	if info, err := os.Stat(s.sessionDir(sessionID)); err == nil && info.IsDir() {
+		return true
+	}
+	if store := s.sqliteSessionStore(); store != nil && s.storeErr == nil {
+		if _, exists, err := store.Load(context.Background(), sessionID); err == nil && exists {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) withDefaultLocatorMetadata(locator SessionLocator) SessionLocator {

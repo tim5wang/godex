@@ -11,6 +11,7 @@ import { TurnList, AvailableSubagentRoles, SubagentList, LongTaskList } from "./
 import { TimelineList } from "./TimelinePanels";
 import { CompactionHistoryPanel } from "./CompactionHistory";
 import { SubagentTimelinePanel } from "./SubagentTimeline";
+import { LlmCapturePanel } from "./LlmCapturePanel";
 
 export function InspectorTabs(props: {
   activeKey: string;
@@ -39,6 +40,7 @@ export function InspectorTabs(props: {
   contextInspector: SessionContextInspector | null;
   contextLoading: boolean;
   sessionId: string;
+  token: string | null;
   activeSkills: SkillActivation[];
   activeSkillsLoading: boolean;
   unloadingSkill: ReturnType<typeof useMutation<SkillActivation, Error, string>>;
@@ -208,6 +210,11 @@ export function InspectorTabs(props: {
                 onPreviousPage={props.onPreviousTimelinePage}
               />
             ),
+          },
+          {
+            key: "llmCapture",
+            label: t("chat.llmCaptureTitle"),
+            children: <LlmCapturePanel token={props.token} />,
           },
         ]}
       />

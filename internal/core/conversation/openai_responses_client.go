@@ -2,7 +2,6 @@ package conversation
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
-	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
 // OpenAIResponsesClient talks to any OpenAI Responses API endpoint via the
@@ -67,8 +65,6 @@ func (c *OpenAIResponsesClient) Stream(ctx context.Context, req protocol.Request
 	}()
 
 	params := c.responsesParams(req)
-	logParams, _ := json.Marshal(params)
-	logger.Debugf("OpenAI Responses Stream Call: %s", string(logParams))
 
 	stream := c.client.Responses.NewStreaming(ctx, params)
 	defer stream.Close()
@@ -100,8 +96,6 @@ func (c *OpenAIResponsesClient) Stream(ctx context.Context, req protocol.Request
 	}
 	response := codexStreamStateToProtocol(state)
 	finalResp = response
-	debug, _ := json.Marshal(response)
-	logger.Debugf("OpenAI Responses Stream Response: %s", string(debug))
 	return response, nil
 }
 

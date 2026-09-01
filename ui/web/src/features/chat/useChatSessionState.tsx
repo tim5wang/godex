@@ -203,6 +203,11 @@ export function useChatSessionState(layout: ChatLayoutState) {
     queryKey: ["session-open", token, sessionLocator.channel, sessionLocator.key, sessionLocator.user_id],
     enabled: !!sessionKey && (!authRequired || !!token),
     queryFn: async () => openSession(token || null, sessionLocator),
+    // Session identity resolves once; a short freshness window makes repeated
+    // switches back to the same session (and hover-prefetched warm-ups in
+    // ChatPageView) serve from cache instead of re-issuing the disk-loading
+    // POST /sessions on every navigation.
+    staleTime: 30 * 1000,
   });
 
   // Installed-skill catalog for the new-chat skill picker (skills install

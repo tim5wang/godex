@@ -3,6 +3,7 @@ package message
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -207,6 +208,21 @@ func (b *Bus) Load() error {
 			b.seen[msg.ID] = struct{}{}
 		}
 		b.mu.Unlock()
+
+		// Fold persisted short sequence IDs (1, 2, 3, ...) back into the
+		// counter so a restart never reuses an on-disk ID and overwrites an
+		// unread message. Legacy nanosecond-timestamp IDs (~1e18) are
+		// skipped: they live in a disjoint namespace, never collide with the
+		// short counter, and would otherwise push new IDs back to 19 digits.
+		const maxSequenceID = uint64(1_000_000_000) // far above any real inbox
+		if n, err := strconv.ParseUint(msg.ID, 10, 64); err == nil && n <= maxSequenceID {
+			for {
+				cur := atomic.LoadUint64(&b.nextID)
+				if n < cur || atomic.CompareAndSwapUint64(&b.nextID, cur, n) {
+					break
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -224,7 +240,7 @@ func (b *Bus) RegisterNotifier(fn func(Message)) {
 
 func (b *Bus) normalizeMessage(msg *Message) {
 	if msg.ID == "" {
-		msg.ID = fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&b.nextID, 1))
+		msg.ID = fmt.Sprintf("%d", atomic.AddUint64(&b.nextID, 1))
 	}
 	if msg.Timestamp.IsZero() {
 		msg.Timestamp = time.Now()

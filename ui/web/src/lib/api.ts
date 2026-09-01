@@ -80,6 +80,9 @@ import type {
   TaskboardCardPatchInput,
   TaskboardExecutionObservation,
   TaskboardReconcileReport,
+  LlmCaptureStatus,
+  LlmCaptureSummary,
+  LlmCaptureRecord,
 } from "./types";
 import { request } from "./apiClient";
 
@@ -867,4 +870,26 @@ export function denyNodePermission(
     },
     token,
   );
+}
+
+// ---- LLM Capture (request/response jsonl dump) ----
+
+export function getLlmCaptureStatus(token: string | null) {
+  return request<LlmCaptureStatus>(`/llm-capture/status`, { method: "GET" }, token);
+}
+
+export function setLlmCaptureEnabled(token: string | null, enabled: boolean) {
+  return request<{ enabled: boolean }>(`/llm-capture/${enabled ? "enable" : "disable"}`, { method: "POST" }, token);
+}
+
+export function listLlmCaptureRecords(token: string | null, limit = 100) {
+  return request<LlmCaptureSummary[]>(`/llm-capture/records?limit=${encodeURIComponent(String(limit))}`, { method: "GET" }, token);
+}
+
+export function getLlmCaptureRecord(token: string | null, id: string) {
+  return request<LlmCaptureRecord>(`/llm-capture/records/${encodeURIComponent(id)}`, { method: "GET" }, token);
+}
+
+export function clearLlmCaptureRecords(token: string | null) {
+  return request<{ cleared: boolean }>(`/llm-capture/clear`, { method: "POST" }, token);
 }

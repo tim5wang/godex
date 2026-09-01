@@ -16,7 +16,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
-	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
 // OpenAICodexClient talks to the ChatGPT Codex OAuth backend, or to the
@@ -92,8 +91,6 @@ func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, ha
 		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start), Stream: true})
 	}()
 	params := c.codexResponsesParams(req)
-	logParams, _ := json.Marshal(params)
-	logger.Debugf("OpenAI Codex Responses Stream Call: %s", string(logParams))
 
 	stream := c.client.Responses.NewStreaming(ctx, params)
 	defer stream.Close()
@@ -129,8 +126,6 @@ func (c *OpenAICodexClient) Stream(ctx context.Context, req protocol.Request, ha
 	}
 	response := codexStreamStateToProtocol(state)
 	finalResp = response
-	debug, _ := json.Marshal(response)
-	logger.Debugf("OpenAI Codex Responses Stream Response: %s", string(debug))
 	return response, nil
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/llmcapture"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/services/backend"
@@ -35,6 +36,10 @@ type Dependencies struct {
 	ServiceRuntime  serviceRuntimeProvider
 	Usage           *usage.Service
 	ControlRegistry controlNodeRegistry
+	// LlmCapture optionally injects the LLM request/response capture sink. When
+	// nil, NewHandlerWithDependencies creates one under the config StateDir so
+	// the /llm-capture endpoints always work.
+	LlmCapture *llmcapture.Capture
 }
 
 func NewHandler(
@@ -153,6 +158,11 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerVoiceRoutes(mux, service, manager, protected, func() string { return manager.Current().WebToken })
 	registerPreviewRoutes(mux, manager)
 	registerGitRoutes(mux, protected, manager)
+	capture := deps.LlmCapture
+	if capture == nil {
+		capture = llmcapture.New(llmcapture.Options{DumpDir: manager.Current().StateDir})
+	}
+	registerLlmCaptureRoutes(mux, capture, protected)
 	return withGzip(mux)
 }
 

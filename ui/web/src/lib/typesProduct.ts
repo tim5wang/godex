@@ -357,3 +357,38 @@ export interface TaskboardProjectCreateInput {
   work_dirs?: string[];
 }
 
+// ---- LLM Capture (request/response jsonl dump) ----
+
+export interface LlmCaptureStatus {
+  enabled: boolean;
+  dump_path: string;
+}
+
+export interface LlmCaptureSummary {
+  id: string;
+  timestamp: string;
+  session_id?: string;
+  turn_id?: string;
+  model?: string;
+  stream: boolean;
+  latency_ms: number;
+  error?: string;
+  has_response: boolean;
+  input_tokens: number;
+}
+
+export interface LlmCaptureRecord {
+  id: string;
+  timestamp: string;
+  session_id?: string;
+  turn_id?: string;
+  job_id?: string;
+  channel?: string;
+  model?: string;
+  stream: boolean;
+  latency_ms: number;
+  error?: string;
+  request: unknown;
+  response?: unknown;
+}
+

@@ -62,7 +62,7 @@ dev-fast: web-dev
 
 ## dev: Full rebuild + service restart (with tsc type-check, legacy)
 dev: web
-	go build -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
+	go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
 		&& mv $(APP).new $(APP) \
 		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
 

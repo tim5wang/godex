@@ -53,8 +53,20 @@ func BackendPromptHandlerWithOptions(bk Backend, opts BackendPromptOptions) Prom
 
 func handleBackendPrompt(ctx context.Context, bk Backend, opts BackendPromptOptions, turn PromptTurn) (PromptResult, error) {
 	locator := backend.SessionLocator{Channel: "acp", Key: turn.SessionID}
-	if profile := strings.TrimSpace(opts.AgentProfile); profile != "" {
-		locator.Metadata = map[string]string{"agent_profile": config.NormalizeAgentProfile(profile)}
+	if profile := strings.TrimSpace(opts.AgentProfile); profile != "" || strings.TrimSpace(turn.CWD) != "" {
+		locator.Metadata = map[string]string{}
+		if profile != "" {
+			locator.Metadata["agent_profile"] = config.NormalizeAgentProfile(profile)
+		}
+	}
+	// Forward the ACP client's working directory into the session's project_dir
+	// so slash commands like /sh and agent tools resolve relative paths against
+	// the workspace the client opened, rather than the server process cwd.
+	if dir := strings.TrimSpace(turn.CWD); dir != "" {
+		if locator.Metadata == nil {
+			locator.Metadata = map[string]string{}
+		}
+		locator.Metadata["project_dir"] = dir
 	}
 	opened, err := bk.OpenSession(ctx, locator)
 	if err != nil {

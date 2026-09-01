@@ -57,9 +57,12 @@ type fakeHandlerBackend struct {
 	approvedScope tools.PermissionGrantScope
 	deniedReason  string
 	sink          events.Sink
+
+	lastLocator backend.SessionLocator
 }
 
-func (f *fakeHandlerBackend) OpenSession(context.Context, backend.SessionLocator) (*backend.OpenedSession, error) {
+func (f *fakeHandlerBackend) OpenSession(_ context.Context, locator backend.SessionLocator) (*backend.OpenedSession, error) {
+	f.lastLocator = locator
 	sessionID := strings.TrimSpace(f.sessionID)
 	if sessionID == "" {
 		sessionID = "sess-1"
@@ -103,6 +106,47 @@ func (f *fakeHandlerBackend) DenyPermission(_ context.Context, _, requestID, rea
 	resolution.Decision = tools.PermissionDeny
 	resolution.Reason = reason
 	return resolution, nil
+}
+
+func TestBackendPromptHandlerForwardsCwdToSessionProjectDir(t *testing.T) {
+	fake := &fakeHandlerBackend{
+		submitResult: &backend.SubmitResult{SessionID: "sess-1", TurnID: "turn-1", Status: "running"},
+	}
+	handler := BackendPromptHandler(fake)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var err error
+	go func() {
+		defer wg.Done()
+		_, err = handler(ctx, PromptTurn{SessionID: "acp-1", CWD: "/workspace/proj", Prompt: "do the thing"})
+	}()
+
+	waitForSink(t, fake)
+	fake.sink.Emit(events.Event{
+		SessionID: "sess-1", TurnID: "turn-1", Type: events.EventTurnCompleted,
+		Timestamp: time.Now(), Payload: events.TurnPayload{Status: "completed"},
+	})
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("handler did not complete")
+	}
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	if got := fake.lastLocator.Metadata["project_dir"]; got != "/workspace/proj" {
+		t.Fatalf("project_dir = %q, want /workspace/proj (turn.CWD must flow into the session locator)", got)
+	}
+	if fake.lastLocator.Channel != "acp" || fake.lastLocator.Key != "acp-1" {
+		t.Fatalf("locator = %+v, want channel=acp key=acp-1", fake.lastLocator)
+	}
 }
 
 func TestBackendPromptHandlerWaitsForTurnCompletedAfterToolLoop(t *testing.T) {

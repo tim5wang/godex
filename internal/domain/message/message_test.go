@@ -2,7 +2,9 @@ package message
 
 import (
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 )
 
 type testRepository struct {
@@ -177,5 +179,104 @@ func TestAckInboxRemovesPreviewedMessagesOnlyAfterExplicitAck(t *testing.T) {
 	}
 	if remaining[0].Content != "second" {
 		t.Fatalf("expected second message to remain, got %+v", remaining[0])
+	}
+}
+
+func TestSendGeneratesShortSequenceIDs(t *testing.T) {
+	repository := newTestRepository()
+	bus := NewBus(repository)
+
+	for _, content := range []string{"one", "two", "three"} {
+		if err := bus.Send(Message{
+			Type:    MsgTypeMessage,
+			From:    "lead",
+			To:      "worker",
+			Content: content,
+		}); err != nil {
+			t.Fatalf("send %q: %v", content, err)
+		}
+	}
+
+	inbox := bus.PeekInbox("worker")
+	if len(inbox) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(inbox))
+	}
+	for i, msg := range inbox {
+		want := fmt.Sprintf("%d", i+1)
+		if msg.ID != want {
+			t.Fatalf("message %d: expected ID %q, got %q", i, want, msg.ID)
+		}
+	}
+}
+
+func TestLoadRestoresCounterSoRestartNeverCollides(t *testing.T) {
+	repository := newTestRepository()
+	first := NewBus(repository)
+	for _, content := range []string{"one", "two"} {
+		if err := first.Send(Message{
+			Type:    MsgTypeMessage,
+			From:    "lead",
+			To:      "worker",
+			Content: content,
+		}); err != nil {
+			t.Fatalf("seed message %q: %v", content, err)
+		}
+	}
+
+	// Simulate a restart: a fresh bus loads the same persisted messages.
+	restarted := NewBus(repository)
+	if err := restarted.Load(); err != nil {
+		t.Fatalf("load after restart: %v", err)
+	}
+	if err := restarted.Send(Message{
+		Type:    MsgTypeMessage,
+		From:    "lead",
+		To:      "worker",
+		Content: "after restart",
+	}); err != nil {
+		t.Fatalf("send after restart: %v", err)
+	}
+
+	inbox := restarted.PeekInbox("worker")
+	if len(inbox) != 3 {
+		t.Fatalf("expected 3 messages after restart, got %d", len(inbox))
+	}
+	if got := inbox[2].ID; got != "3" {
+		t.Fatalf("expected new message ID %q after restart, got %q", "3", got)
+	}
+}
+
+func TestLoadSkipsLegacyNanosecondIDs(t *testing.T) {
+	repository := newTestRepository()
+	// Seed legacy nanosecond-timestamp IDs (~1e18), the historical format.
+	repository.messages["1756987412345678901"] = Message{
+		ID:        "1756987412345678901",
+		Type:      MsgTypeMessage,
+		From:      "lead",
+		To:        "worker",
+		Content:   "legacy",
+		Timestamp: time.Now(),
+	}
+
+	bus := NewBus(repository)
+	if err := bus.Load(); err != nil {
+		t.Fatalf("load legacy message: %v", err)
+	}
+	if err := bus.Send(Message{
+		Type:    MsgTypeMessage,
+		From:    "lead",
+		To:      "worker",
+		Content: "fresh",
+	}); err != nil {
+		t.Fatalf("send fresh message: %v", err)
+	}
+
+	// The legacy ID must not push the counter into 19-digit territory; the
+	// new message keeps the short sequence ID "1".
+	inbox := bus.PeekInbox("worker")
+	for _, msg := range inbox {
+		if msg.Content == "fresh" && msg.ID != "1" {
+			t.Fatalf("expected fresh message ID %q, got %q (legacy ID polluted the counter)", "1", msg.ID)
+		}
 	}
 }

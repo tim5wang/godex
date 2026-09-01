@@ -30,7 +30,7 @@ import { FilesPanel } from "../files/FilesPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { PreviewPanel } from "../preview/PreviewPanel";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
-import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, buildContextStatusSummary, shortTurnId } from "../../lib/timelineUtils";
+import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, pendingSendsForFeed, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, buildContextStatusSummary, shortTurnId } from "../../lib/timelineUtils";
 import { compactWorkspaceName, noteContextMetadata, NoteContextBanner } from "./panels/NoteContextBanner";
 import { InspectorTabs } from "./panels/InspectorTabs";
 import { ApprovalBanner } from "./panels/ApprovalPanels";
@@ -213,13 +213,18 @@ export function useChatPageController() {
   const items = useMemo(() => mergeChronologicalFeedItems(historyItems, overlayItems), [historyItems, overlayItems]);
   // V2 groups the flat feed into per-turn items (text + tool + todo segments).
   const v2Items = useMemo(() => groupFeedItemsIntoTurns(items), [items]);
-  // Append optimistic placeholders (sending message / running command) at
-  // the end of the feed so in-flight sends stay visible.
+  // User messages sitting in the send queue (pending, not yet accepted by the
+  // server) are intentionally NOT rendered as bubbles in the history feed:
+  // they only appear once actually sent, when user_message_accepted fires or
+  // the next snapshot confirms them. Command placeholders (e.g. /compact)
+  // are executing on the server, not queued, so they keep an inline
+  // "running" status bubble for feedback.
   const v2ItemsWithPending = useMemo(() => {
-    if (pendingSends.length === 0) {
+    const feedPends = pendingSendsForFeed(pendingSends);
+    if (feedPends.length === 0) {
       return v2Items;
     }
-    return [...v2Items, ...pendingSends.map(pendingSendToFeedItem)];
+    return [...v2Items, ...feedPends.map(pendingSendToFeedItem)];
   }, [pendingSends, v2Items]);
   // T15: derive the list of longtask reflux bubbles from the
   // chat feed. We pick the last 5 reflux items (newest first) and

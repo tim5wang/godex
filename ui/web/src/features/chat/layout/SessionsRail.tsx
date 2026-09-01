@@ -14,7 +14,7 @@ import {
   SwapOutlined,
   VerticalRightOutlined,
 } from "@ant-design/icons";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ListedSession, SkillCatalogEntry } from "../../../lib/types";
 import type { AgentTemplate } from "../../../lib/api";
 import { useI18n } from "../../../i18n";
@@ -43,6 +43,13 @@ interface SessionsRailProps {
   onDelete: (session: ListedSession) => void;
   onRename: (session: ListedSession, title: string) => void;
   onToggleCollapsed: () => void;
+  /**
+   * Session-switch warm-up: called when the mouse hovers a session row.
+   * ChatPageView prefetches the open (POST /sessions) + snapshot requests so
+   * the multi-second cold-session load happens before the click instead of
+   * after it, making session switches feel instant.
+   */
+  onPrefetch?: (session: ListedSession) => void;
 }
 
 const GROUP_ICONS: Record<WorkspaceGroupType, React.ReactNode> = {
@@ -450,6 +457,7 @@ function WorkspaceSection(props: { workspace: WorkspaceGroup; t: ReturnType<type
                       data-testid={`chat-v2-session-${session.session_id}`}
                       className={`chat-v2-session-item${active ? " chat-v2-session-item-active" : ""}`}
                       onClick={() => props.onSelect(session)}
+                      onMouseEnter={() => props.onPrefetch?.(session)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();

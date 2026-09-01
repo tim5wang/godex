@@ -703,6 +703,18 @@ export function pendingSendToFeedItem(send: PendingSend): FeedItem {
   };
 }
 
+/**
+ * Pending sends that should be rendered as feed bubbles. User messages still
+ * sitting in the send queue (not yet accepted by the server) must NOT show a
+ * bubble in the history feed — they only appear once actually sent, when
+ * `user_message_accepted` fires or the next snapshot confirms them. Command
+ * placeholders (e.g. /compact) are executing on the server, not queued, so
+ * they keep an inline "running" status bubble for feedback.
+ */
+export function pendingSendsForFeed(sends: PendingSend[]): PendingSend[] {
+  return sends.filter((send) => send.kind === "command");
+}
+
 export function mergeChronologicalFeedItems(historyItems: FeedItem[], overlayItems: FeedItem[]) {
   return [...historyItems, ...overlayItems]
     .map((item, index) => ({ item, index, time: Date.parse(item.timestamp ?? "") }))

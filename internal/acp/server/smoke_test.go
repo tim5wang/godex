@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +74,16 @@ func TestACPSmokeEndToEnd(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, bin, "acp-server")
 	cmd.Dir = t.TempDir()
+	// Isolate the ACP server from the developer's real state directory:
+	// point GODEX_HOME at a temp home so session/store files created by this
+	// smoke test never leak into the production session list (each run would
+	// otherwise leave a junk `sess_*` session whose temp cwd is deleted as
+	// soon as the test exits). GODEX_CONFIG is also pointed into the temp dir
+	// so the binary never picks up a project godex.yaml from CWD.
+	cmd.Env = append(os.Environ(),
+		"GODEX_HOME="+t.TempDir(),
+		"GODEX_CONFIG="+filepath.Join(t.TempDir(), "godex.yaml"),
+	)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

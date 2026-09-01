@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTimelineEntry } from "./types";
-import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane } from "./timelineUtils";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed } from "./timelineUtils";
+import type { PendingSend } from "../store/chat";
 
 /**
  * NOTE: groupTimelineTurns consumes a NEWEST-FIRST list (as served by the
@@ -109,5 +110,23 @@ describe("timelineEventLane", () => {
     expect(timelineEventLane(ev("tool_call_started", undefined, "t"))).toBe("tool");
     expect(timelineEventLane(ev("tool_call_finished", undefined, "t"))).toBe("tool");
     expect(timelineEventLane(ev("error_raised", undefined, "t"))).toBe("other");
+  });
+});
+
+describe("pendingSendsForFeed", () => {
+  const userSend: PendingSend = { id: "user:1", kind: "user", text: "hello", sender: "You" };
+  const cmdSend: PendingSend = { id: "cmd:1", kind: "command", commandName: "compact" };
+
+  it("drops queued user messages (only shown once truly sent)", () => {
+    expect(pendingSendsForFeed([userSend])).toEqual([]);
+    expect(pendingSendsForFeed([userSend, cmdSend])).toEqual([cmdSend]);
+  });
+
+  it("keeps command placeholders for running feedback", () => {
+    expect(pendingSendsForFeed([cmdSend])).toEqual([cmdSend]);
+  });
+
+  it("returns [] for empty input", () => {
+    expect(pendingSendsForFeed([])).toEqual([]);
   });
 });

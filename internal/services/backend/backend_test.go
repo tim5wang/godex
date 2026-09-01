@@ -3815,6 +3815,60 @@ func TestOpenSessionRejectsInvalidWorkspaceDir(t *testing.T) {
 	}
 }
 
+// TestOpenSessionAllowsDeletedWorkspaceDirForPersistedSession asserts that a
+// session already persisted on disk can still be reopened after its
+// project_dir was deleted (e.g. an ACP temp cwd), instead of failing with
+// ErrInvalidWorkspaceDir and making the session unopenable in the Web UI.
+func TestOpenSessionAllowsDeletedWorkspaceDirForPersistedSession(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+	workspaceDir := t.TempDir()
+
+	locator := SessionLocator{
+		Channel: "web",
+		Key:     "persisted-deleted-dir",
+		Metadata: map[string]string{
+			sessionProjectDirMetadataKey: workspaceDir,
+		},
+	}
+	normalized := normalizeLocator(service.withDefaultLocatorMetadata(locator))
+	sessionID := stableSessionID(normalized)
+
+	// Persist a real session (manifest + state) under the computed id.
+	dir := filepath.Join(cfg.SessionsDir, sessionID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	stateData := mustJSON(t, agent.SessionState{Messages: []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "hello")}})
+	manifest := SessionManifest{
+		SessionID:      sessionID,
+		Locator:        normalized,
+		StateDigest:    stateDigest(stateData),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+		LastActivityAt: time.Now(),
+	}
+	if err := os.WriteFile(filepath.Join(dir, manifestFileName), mustJSON(t, manifest), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), stateData, 0644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	// The backing workspace directory is now gone.
+	if err := os.RemoveAll(workspaceDir); err != nil {
+		t.Fatalf("remove workspace dir: %v", err)
+	}
+
+	opened, err := service.OpenSession(context.Background(), locator)
+	if err != nil {
+		t.Fatalf("reopen persisted session after workspace dir deleted: %v", err)
+	}
+	if opened.SessionID != sessionID {
+		t.Fatalf("reopened session id = %q, want %q", opened.SessionID, sessionID)
+	}
+}
+
 // TestApplyConfigKeepsSessionWorkspaceOverride asserts that a global
 // config reload does not move a workspace-scoped session's tools back
 // to the service directory.

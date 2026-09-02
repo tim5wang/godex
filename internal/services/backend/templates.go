@@ -51,14 +51,16 @@ type ToolBundleOption struct {
 
 // TemplateFormOptions is the authoritative choice list for the template
 // editor form. Bundles/tools come from a throwaway agent's base tool
-// registration (live source of truth); skills, MCP servers and packages
-// come from their own list endpoints on the frontend.
+// registration (live source of truth); engines come from the same agent's
+// registered harness registry; skills, MCP servers and packages come from
+// their own list endpoints on the frontend.
 type TemplateFormOptions struct {
 	Bundles []ToolBundleOption `json:"bundles"`
 	Tools   []string           `json:"tools"`
+	Engines []string           `json:"engines"`
 }
 
-// AgentTemplateFormOptions builds the bundle/tool choice lists without
+// AgentTemplateFormOptions builds the bundle/tool/engine choice lists without
 // touching session state or activating package runtimes.
 func (s *Service) AgentTemplateFormOptions() *TemplateFormOptions {
 	probe := agent.NewForSession(s.cfg, s.shared, "")
@@ -74,5 +76,10 @@ func (s *Service) AgentTemplateFormOptions() *TemplateFormOptions {
 			}
 		}
 	}
+	// Engines: the built-in godex engine plus every harness registered on the
+	// probe agent (e.g. "acp:codex" from config.acp.agents). The probe is a
+	// fresh agent whose ACP harnesses are wired exactly like a live session's,
+	// so the dropdown mirrors the real runtime registry.
+	out.Engines = probe.RegisteredHarnessIDs()
 	return out
 }

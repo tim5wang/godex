@@ -649,14 +649,15 @@
 .message-copy-frame {
   position: relative;
   min-width: 0;
-  padding-right: 58px;
 }
 
+/* Action buttons flow below the message content (outside the bubble text),
+   right-aligned — mirror the turn-actions pattern. */
 .message-action-buttons {
-  position: absolute;
-  right: -4px;
-  bottom: -6px;
-  z-index: 2;
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+  margin-top: 4px;
   opacity: 0;
   transition: opacity 0.15s ease;
 }
@@ -673,8 +674,8 @@
     background-color 0.15s ease;
 }
 
-.chat-feed-bubble:hover .message-action-buttons,
-.chat-feed-bubble:focus-within .message-action-buttons,
+.chat-feed-v2-bubble:hover .message-action-buttons,
+.chat-feed-v2-bubble:focus-within .message-action-buttons,
 .message-action-buttons:focus-within {
   opacity: 1;
 }

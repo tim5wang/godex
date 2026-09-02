@@ -2,6 +2,7 @@ package taskboard
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -128,13 +129,15 @@ func normalizePath(p string) string {
 }
 
 // normalizeWorkDirs trims, drops empties, and de-duplicates work directories
-// while preserving first-seen order. Leading/trailing slashes are stripped via
-// normalizePath so re-loading the same dir never creates two entries.
+// while preserving first-seen order. Absolute paths keep their leading slash
+// (see normalizeWorkDir); only package-level relative paths get leading/trailing
+// slashes stripped, so re-loading the same dir never creates two entries and an
+// absolute work_dir is never re-joined onto the workspace root.
 func normalizeWorkDirs(dirs []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(dirs))
 	for _, d := range dirs {
-		d = normalizePath(d)
+		d = normalizeWorkDir(d)
 		if d == "" {
 			continue
 		}
@@ -145,6 +148,23 @@ func normalizeWorkDirs(dirs []string) []string {
 		out = append(out, d)
 	}
 	return out
+}
+
+// normalizeWorkDir trims whitespace and cleans a work directory WITHOUT
+// stripping the leading slash of absolute paths (unlike normalizePath, which
+// targets package-level relative paths such as touched_paths). Absolute paths
+// are preserved as-is via filepath.Clean so the executor's cardWorkDir returns
+// a real absolute rootDir instead of a relative path that gets joined onto the
+// workspace root.
+func normalizeWorkDir(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return strings.Trim(p, "/")
 }
 
 // normalizeResearch returns a nil-safe, trimmed copy of the research asset.

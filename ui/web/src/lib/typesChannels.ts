@@ -123,6 +123,8 @@ export interface CronJob {
   next_run_at?: string;
   last_status?: string;
   last_error?: string;
+  watchdog_script?: string;
+  watchdog_directive?: string;
 }
 
 export interface CronRunLog {

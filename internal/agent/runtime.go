@@ -401,7 +401,18 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	if a.subagentJobs == nil {
 		a.subagentJobs = newSubagentJobStore(subagentJobsDir(cfg))
 	}
-	a.todoMgr = deps.todoMgr
+	// Preserve per-session todo isolation across config reloads. A fresh
+	// shared dependency snapshot carries the workspace-global todo manager
+	// (buildDependencies: NewTodoManager(cfg.TodosDir)), so a session-scoped
+	// agent must rebuild its own per-session manager here instead of inheriting
+	// the global one — otherwise a config reload silently re-binds every live
+	// session to ~/.godex/todos/todos.json and todos from other tasks surface
+	// as this conversation's "Current todos". Mirrors NewWithSharedDependencies.
+	if sid := strings.TrimSpace(a.sessionID); sid != "" {
+		a.todoMgr = localstore.NewTodoManagerForSession(cfg.SessionsDir, sid)
+	} else {
+		a.todoMgr = deps.todoMgr
+	}
 	a.mu.Unlock()
 
 	// Package-owned registrations live in the current ToolHandler. Tear them

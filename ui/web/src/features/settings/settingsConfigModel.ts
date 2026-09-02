@@ -43,6 +43,19 @@ export type LLMStrategyFormValue = {
   candidates: string[];
 };
 
+export type ACPAgentsFormValue = {
+  items: ACPAgentFormItem[];
+};
+
+export type ACPAgentFormItem = {
+  id: string;
+  command?: string;
+  args?: string;
+  env?: string;
+  timeout_seconds?: number;
+  description?: string;
+};
+
 export type ModelOption = {
   value: string;
   label: string;
@@ -76,6 +89,10 @@ export function buildSaveValues(values: ConfigFormValues, sections: ConfigSectio
       result[field.path] = strategyFormToConfig(value);
       continue;
     }
+    if (field.path === "acp.agents") {
+      result[field.path] = acpAgentsFormToConfig(value);
+      continue;
+    }
     if (field.secret && (value === undefined || String(value).trim() === "")) {
       continue;
     }
@@ -98,6 +115,10 @@ export function formValuesFromConfig(values: Record<string, unknown>, sections: 
     }
     if (field.path === "api.model_strategy") {
       result[field.path] = strategyConfigToForm(result[field.path]);
+      continue;
+    }
+    if (field.path === "acp.agents") {
+      result[field.path] = acpAgentsConfigToForm(result[field.path]);
       continue;
     }
     if (field.type === "json" && result[field.path] !== undefined && typeof result[field.path] !== "string") {
@@ -248,6 +269,65 @@ function strategyFormToConfig(value: unknown) {
     type: strategy.type,
     candidates: strategy.candidates.map((candidate) => parseModelRef(candidate)).filter(Boolean),
   };
+}
+
+export function acpAgentsConfigToForm(value: unknown): ACPAgentsFormValue {
+  if (isACPAgentsFormValue(value)) {
+    return { items: value.items.map((item) => ({ ...item })) };
+  }
+  const raw = parseJSONValue(value);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { items: [] };
+  }
+  const items = Object.entries(raw as Record<string, Record<string, unknown>>).map(([id, agent]) => ({
+    id,
+    command: asOptionalString(agent.command),
+    args: Array.isArray(agent.args) ? agent.args.map(String).join(", ") : asOptionalString(agent.args),
+    env: envToText(agent.env),
+    timeout_seconds: asOptionalNumber(agent.timeout_seconds),
+    description: asOptionalString(agent.description),
+  }));
+  return { items };
+}
+
+function acpAgentsFormToConfig(value: unknown) {
+  const form = acpAgentsConfigToForm(value);
+  return Object.fromEntries(form.items.filter((item) => stringsPresent(item.id)).map((item) => {
+    return [item.id.trim(), {
+      command: item.command ?? "",
+      args: splitTags(item.args),
+      env: parseEnvText(item.env),
+      timeout_seconds: item.timeout_seconds ?? 0,
+      description: item.description ?? "",
+    }];
+  }));
+}
+
+function isACPAgentsFormValue(value: unknown): value is ACPAgentsFormValue {
+  return !!value && typeof value === "object" && Array.isArray((value as ACPAgentsFormValue).items);
+}
+
+function envToText(env?: unknown): string | undefined {
+  if (!env || typeof env !== "object" || Array.isArray(env)) {
+    return undefined;
+  }
+  return Object.entries(env as Record<string, unknown>).map(([key, value]) => `${key}=${value ?? ""}`).join("\n");
+}
+
+function parseEnvText(text?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of String(text ?? "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    out[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+  }
+  return out;
 }
 
 export function llmModelOptions(value: unknown): ModelOption[] {

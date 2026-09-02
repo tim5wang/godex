@@ -117,6 +117,7 @@ export interface AgentTemplate {
   budget_hint?: string;
   trim_heavy_sections?: boolean;
   memory?: string;
+  engine?: string;
   project_dir?: string;
   source?: string;
 }
@@ -154,6 +155,7 @@ export interface ToolBundleOption {
 export interface TemplateFormOptions {
   bundles: ToolBundleOption[];
   tools: string[];
+  engines: string[];
 }
 
 export function getAgentTemplateOptions(token: string | null) {

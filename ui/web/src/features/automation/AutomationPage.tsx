@@ -51,6 +51,8 @@ type CronFormValues = {
   timezone?: string;
   sessionMode?: "shared" | "isolated";
   enabled?: boolean;
+  watchdogScript?: string;
+  watchdogDirective?: string;
   deliveryKind?: "" | "session" | "channel";
   sessionId?: string;
   channel?: string;
@@ -272,6 +274,18 @@ export function AutomationPage() {
                       },
                       { title: "Schedule", render: (_value, job) => renderCronSchedule(job) },
                       { title: "Next run", dataIndex: "next_run_at", render: formatTime },
+                      {
+                        title: "Watchdog",
+                        render: (_value, job) => {
+                          if (job.watchdog_directive) {
+                            return <Tag color="blue">directive</Tag>;
+                          }
+                          if (job.watchdog_script) {
+                            return <Typography.Text type="secondary" ellipsis style={{ maxWidth: 140 }}>{job.watchdog_script}</Typography.Text>;
+                          }
+                          return <Typography.Text type="secondary">-</Typography.Text>;
+                        },
+                      },
                       { title: "Status", dataIndex: "last_status", render: (value) => <Tag color={isIssueStatus(value) ? "red" : "green"}>{value || "pending"}</Tag> },
                       {
                         title: "Actions",
@@ -362,6 +376,12 @@ function CronForm({
       {scheduleType === "at" ? <Form.Item name="at" label="Run at"><Input type="datetime-local" /></Form.Item> : null}
       {scheduleType === "every" ? <Form.Item name="everySeconds" label="Every seconds"><InputNumber min={1} style={{ width: "100%" }} /></Form.Item> : null}
       {scheduleType === "cron" ? <Form.Item name="cronExpr" label="Cron expression"><CronExprInput placeholder="0 9 * * *" timezone={timezone || undefined} /></Form.Item> : null}
+      <Form.Item name="watchdogScript" label="Watchdog script" extra="Optional pre-run shell script: exit 0 runs the agent, non-zero skips this tick.">
+        <Input placeholder="/path/to/watchdog.sh" />
+      </Form.Item>
+      <Form.Item name="watchdogDirective" label="Watchdog directive" extra="Optional declarative gate (JSON). The runtime evaluates it (e.g. taskboard status counts) and only runs the agent when a wake condition is met.">
+        <Input.TextArea rows={4} placeholder={'{"query":"taskboard","wake_when":[{"metric":"error_count","op":">","value":0}]}'} />
+      </Form.Item>
       <DeliveryTargetFields deliveryKind={deliveryKind} />
       <Button block type="primary" htmlType="submit" loading={saving}>Save cron job</Button>
     </Form>
@@ -470,6 +490,8 @@ function defaultCronForm(): CronFormValues {
     cronExpr: "0 9 * * *",
     timezone: "Asia/Shanghai",
     sessionMode: "shared",
+    watchdogScript: "",
+    watchdogDirective: "",
     deliveryKind: "",
   };
 }
@@ -498,6 +520,8 @@ function cronToForm(job: CronJob): CronFormValues {
     timezone: job.timezone || "Asia/Shanghai",
     sessionMode: (job.session_mode as CronFormValues["sessionMode"]) || "shared",
     enabled: job.enabled,
+    watchdogScript: job.watchdog_script,
+    watchdogDirective: job.watchdog_directive,
     deliveryKind: (target.kind as CronFormValues["deliveryKind"]) || "",
     sessionId: target.session_id,
     channel: target.channel,
@@ -552,6 +576,8 @@ function buildCronPayload(values: CronFormValues) {
       cron_expr: values.scheduleType === "cron" ? values.cronExpr?.trim() : undefined,
     },
     session_mode: values.sessionMode || "shared",
+    watchdog_script: values.watchdogScript?.trim() || undefined,
+    watchdog_directive: values.watchdogDirective?.trim() || undefined,
     delivery_target: buildDeliveryTarget(values),
     enabled: values.enabled ?? true,
   };

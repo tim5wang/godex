@@ -854,6 +854,43 @@ func TestApplyConfigPreservesCronToolFromSharedDependencies(t *testing.T) {
 	}
 }
 
+func TestApplyConfigPreservesPerSessionTodoIsolation(t *testing.T) {
+	// Regression: a config reload must not silently re-bind a session-scoped
+	// agent to the shared workspace-global todo manager. Before the fix,
+	// Agent.ApplyConfig set a.todoMgr = deps.todoMgr (global ~/.godex/todos),
+	// so every live session started showing other tasks' completed todos as
+	// its own "Current todos".
+	base := newTestAgent(t, 4096)
+	cfg := base.cfg.Clone()
+	cfg.SessionsDir = filepath.Join(cfg.WorkspaceDir, ".godex", "sessions")
+	cfg.TodosDir = filepath.Join(cfg.WorkspaceDir, ".godex", ".todos")
+	shared := NewSharedDependencies(cfg)
+
+	a := NewForSession(cfg, shared, "session-a")
+	a.RegisterTools()
+	if _, err := a.todoMgr.Add("session-a item", "do session a"); err != nil {
+		t.Fatalf("add session-a todo: %v", err)
+	}
+
+	// Simulate a config reload: shared deps are rebuilt (global todoMgr) and
+	// ApplyConfig is pushed to the live session agent.
+	nextCfg := cfg.Clone()
+	nextCfg.MaxTokens = cfg.MaxTokens + 1
+	shared.ApplyConfig(nextCfg)
+	a.ApplyConfig(nextCfg, shared)
+
+	got := a.todoMgr.List()
+	if len(got) != 1 || got[0].Content != "session-a item" {
+		t.Fatalf("session-a todo leaked into global after ApplyConfig: %+v", got)
+	}
+
+	// A second session must never observe session-a's todos.
+	b := NewForSession(nextCfg, shared, "session-b")
+	if leaked := b.todoMgr.List(); len(leaked) != 0 {
+		t.Fatalf("session-b leaked session-a todos: %+v", leaked)
+	}
+}
+
 func TestApplyConfigKeepsToolHandlerInstanceStable(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()

@@ -133,4 +133,5 @@ func (p *Plugin) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/taskboard/cards/{id}/executions/{executionID}/recover", json(p.handleRecoverExecution))
 	mux.Handle("POST /v1/taskboard/cards/{id}/executions/{executionID}/retry", json(p.handleRetryExecution))
 	mux.Handle("POST /v1/taskboard/reconcile", json(p.handleReconcile))
+	mux.Handle("GET /v1/taskboard/status", json(p.handleStatus))
 }

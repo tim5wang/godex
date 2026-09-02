@@ -339,3 +339,12 @@ func (p *Plugin) handleReconcile(w http.ResponseWriter, r *http.Request) (any, e
 	}
 	return map[string]any{"reconcile_report": report}, nil
 }
+
+// handleStatus returns a read-only status-counts snapshot (the query behind the
+// cron watchdog directive and the board's count display). It never mutates the
+// ledger.
+func (p *Plugin) handleStatus(w http.ResponseWriter, r *http.Request) (any, error) {
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	sc := p.ledger.StatusCounts(projectID)
+	return map[string]any{"status_counts": sc, "counts": sc.CountMap()}, nil
+}

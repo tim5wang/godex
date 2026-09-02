@@ -50,6 +50,13 @@ func WithIdempotencyStore(st idempotency.Store) ServiceOption {
 	return func(s *Service) { s.idempotency = st }
 }
 
+// WithDirectiveEvaluator wires a declarative watchdog-directive evaluator into
+// the Service. Jobs that set watchdog_directive are gated by this evaluator
+// instead of a shell script: the agent only runs when a wake condition is met.
+func WithDirectiveEvaluator(ev automation.DirectiveEvaluator) ServiceOption {
+	return func(s *Service) { s.directive = ev }
+}
+
 type Service struct {
 	cfg     Config
 	store   Store
@@ -57,6 +64,10 @@ type Service struct {
 	deliver     Deliverer
 	now         func() time.Time
 	idempotency idempotency.Store
+	// directive evaluates declarative watchdog directives (taskboard status
+	// counts etc.) when a job sets watchdog_directive. Nil means directive
+	// gates are unavailable; jobs that set one will fail their run visibly.
+	directive automation.DirectiveEvaluator
 
 	mu        sync.Mutex
 	cancel    context.CancelFunc
@@ -219,6 +230,7 @@ func (s *Service) CreateJob(input CreateJobInput) (Job, error) {
 		SessionMode:        input.SessionMode,
 		ModelProfileID:     strings.TrimSpace(input.ModelProfileID),
 		WatchdogScript:     strings.TrimSpace(input.WatchdogScript),
+		WatchdogDirective:  strings.TrimSpace(input.WatchdogDirective),
 		DeliveryTarget:     input.DeliveryTarget.Clone(),
 		Enabled:            input.Enabled,
 		CreatedBy:          strings.TrimSpace(input.CreatedBy),
@@ -271,6 +283,9 @@ func (s *Service) UpdateJob(input UpdateJobInput) (Job, error) {
 	}
 	if input.WatchdogScript != nil {
 		job.WatchdogScript = strings.TrimSpace(*input.WatchdogScript)
+	}
+	if input.WatchdogDirective != nil {
+		job.WatchdogDirective = strings.TrimSpace(*input.WatchdogDirective)
 	}
 	if input.DeliveryTarget != nil {
 		job.DeliveryTarget = input.DeliveryTarget.Clone()
@@ -425,6 +440,7 @@ func (s *Service) finishRun(jobID string) {
 func (s *Service) runJob(ctx context.Context, job Job, run RunLog) (RunLog, error) {
 	startedAt := run.StartedAt
 	job = job.normalize(s.cfg)
+	directiveSummary := ""
 
 	// Idempotency guard: a committed run (same job + started timestamp) is
 	// skipped so restarts or overlapping schedulers cannot double-fire.
@@ -490,6 +506,58 @@ func (s *Service) runJob(ctx context.Context, job Job, run RunLog) (RunLog, erro
 		}
 	}
 
+	// Declarative watchdog directive (the godex-native alternative to a shell
+	// watchdog_script): the runtime asks the injected evaluator (taskboard
+	// status counts etc.) whether to wake the agent. A non-wake decision
+	// suppresses this tick at zero token cost; an evaluation error fails the
+	// run visibly so a misconfigured directive is never silently ignored.
+	if strings.TrimSpace(job.WatchdogDirective) != "" {
+		if s.directive == nil {
+			err := fmt.Errorf("watchdog directive configured but no directive evaluator is wired")
+			run.Status = JobStatusError
+			run.Error = err.Error()
+			run.FinishedAt = s.now()
+			_ = s.store.AppendRunLog(run)
+			job.LastStatus = JobStatusError
+			job.LastError = err.Error()
+			job.LastRunAt = run.FinishedAt
+			job.UpdatedAt = run.FinishedAt
+			_ = s.store.SaveJob(job)
+			return run, err
+		}
+		decision, dirErr := s.directive.Evaluate(ctx, job.WatchdogDirective)
+		if dirErr != nil {
+			run.Status = JobStatusError
+			run.Error = dirErr.Error()
+			run.FinishedAt = s.now()
+			_ = s.store.AppendRunLog(run)
+			job.LastStatus = JobStatusError
+			job.LastError = dirErr.Error()
+			job.LastRunAt = run.FinishedAt
+			job.UpdatedAt = run.FinishedAt
+			_ = s.store.SaveJob(job)
+			return run, dirErr
+		}
+		if !decision.Wake {
+			run.Status = JobStatusSuppressed
+			run.Suppressed = true
+			run.Error = ""
+			if strings.TrimSpace(decision.Reason) != "" {
+				run.Error = "watchdog directive skipped: " + decision.Reason
+			}
+			run.WatchdogOutput = decision.Summary
+			run.FinishedAt = s.now()
+			_ = s.store.AppendRunLog(run)
+			job.LastStatus = JobStatusSuppressed
+			job.LastError = run.Error
+			job.LastRunAt = run.FinishedAt
+			job.UpdatedAt = run.FinishedAt
+			_ = s.store.SaveJob(job)
+			return run, nil
+		}
+		directiveSummary = decision.Summary
+	}
+
 	opened, err := s.backend.OpenSession(ctx, s.jobLocator(job, run.ID))
 	if err != nil {
 		run.Status = JobStatusError
@@ -538,7 +606,7 @@ func (s *Service) runJob(ctx context.Context, job Job, run RunLog) (RunLog, erro
 	}
 	defer unsubscribe()
 
-	result, err := s.backend.Submit(ctx, opened.SessionID, message.NewRuntimeEnvelope(message.SourceCron, opened.SessionID, "cron", buildCronPrompt(job), startedAt, map[string]string{
+	result, err := s.backend.Submit(ctx, opened.SessionID, message.NewRuntimeEnvelope(message.SourceCron, opened.SessionID, "cron", buildCronPrompt(job, directiveSummary), startedAt, map[string]string{
 		"job_id": job.ID,
 		"run_id": run.ID,
 	}))
@@ -701,7 +769,7 @@ func (s *Service) jobLocator(job Job, runID string) rtbackend.SessionLocator {
 	return locator
 }
 
-func buildCronPrompt(job Job) string {
+func buildCronPrompt(job Job, directiveSummary string) string {
 	lines := []string{
 		"This is a scheduled cron execution that has already been triggered.",
 		"Carry out the scheduled work now and produce the reminder, update, or result that should be delivered to the configured target.",
@@ -710,6 +778,9 @@ func buildCronPrompt(job Job) string {
 		"",
 		"Scheduled payload:",
 		strings.TrimSpace(job.Message),
+	}
+	if strings.TrimSpace(directiveSummary) != "" {
+		lines = append(lines, "", "Watchdog directive matched — current taskboard status:", directiveSummary)
 	}
 	return strings.Join(lines, "\n")
 }

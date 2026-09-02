@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/automation"
@@ -229,6 +230,23 @@ func (a *Agent) RegisterConfiguredACPHarnesses() {
 		}
 		a.RegisterHarness("acp:"+id, NewACPHarness(id, cfg))
 	}
+}
+
+// RegisteredHarnessIDs returns the ids of every engine this agent can route a
+// turn to: the built-in godex engine plus each extra harness registered via
+// RegisterHarness (e.g. "acp:codex"). It backs the template editor's engine
+// dropdown so choices mirror the actual runtime registry instead of a typed
+// list. Sorted for stable UI ordering.
+func (a *Agent) RegisteredHarnessIDs() []string {
+	a.mu.Lock()
+	ids := make([]string, 0, len(a.extraHarnesses)+1)
+	ids = append(ids, templates.EngineDefault)
+	for id := range a.extraHarnesses {
+		ids = append(ids, id)
+	}
+	a.mu.Unlock()
+	sort.Strings(ids)
+	return ids
 }
 
 // harnessRouter lazily builds the engine router used when a turn requests a

@@ -57,6 +57,11 @@ type Job struct {
 	// Exit 0 runs the message (agent); non-zero skips this tick (zero tokens);
 	// missing script or timeout records an error.
 	WatchdogScript     string                    `json:"watchdog_script,omitempty"`
+	// WatchdogDirective is an optional declarative pre-run gate. When set, the
+	// cron runtime evaluates it through the injected DirectiveEvaluator
+	// (taskboard status counts etc.); the agent only runs when a wake condition
+	// is met (zero tokens otherwise).
+	WatchdogDirective  string                    `json:"watchdog_directive,omitempty"`
 	DeliveryTarget     automation.DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool                      `json:"enabled"`
 	CreatedBy          string                    `json:"created_by,omitempty"`
@@ -93,6 +98,7 @@ type CreateJobInput struct {
 	// Empty means "use the current default profile".
 	ModelProfileID     string
 	WatchdogScript     string
+	WatchdogDirective  string
 	DeliveryTarget     automation.DeliveryTarget
 	Enabled            bool
 	CreatedBy          string
@@ -111,6 +117,7 @@ type UpdateJobInput struct {
 	// "pin to this profile".
 	ModelProfileID *string
 	WatchdogScript *string
+	WatchdogDirective *string
 	DeliveryTarget *automation.DeliveryTarget
 	Enabled        *bool
 }
@@ -141,6 +148,7 @@ func (j Job) normalize(cfg Config) Job {
 	}
 	j.ModelProfileID = strings.TrimSpace(j.ModelProfileID)
 	j.WatchdogScript = strings.TrimSpace(j.WatchdogScript)
+	j.WatchdogDirective = strings.TrimSpace(j.WatchdogDirective)
 	if j.WatchdogScript == "" {
 		j.WatchdogScript = strings.TrimSpace(cfg.DefaultWatchdogScript)
 	}

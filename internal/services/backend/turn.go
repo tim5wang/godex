@@ -681,8 +681,14 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 	})
 
 	// Roadmap 6.4: a per-turn engine request rides on envelope metadata
-	// ("harness" key). Empty means the default godex engine.
+	// ("harness" key). Empty means the template-pinned engine falls back to
+	// the session's template engine (docs/agent-template-agent-implementation-
+	// design.md), which itself defaults to the godex engine. An explicit
+	// per-turn request always wins over the template default.
 	requestedHarness := strings.TrimSpace(envelope.Metadata["harness"])
+	if requestedHarness == "" {
+		requestedHarness = session.agent.TemplateEngine()
+	}
 
 	runErr := session.agent.RunWithOptions(ctx, agent.RunOptions{
 		SessionID:        sessionID,

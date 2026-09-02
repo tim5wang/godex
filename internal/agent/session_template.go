@@ -36,6 +36,7 @@ func (a *Agent) ApplyTemplate(t templates.AgentTemplate) {
 	a.templateTrimHeavy = t.TrimHeavySections
 	a.templateSkills = append([]string(nil), t.Skills...)
 	a.templateMemoryMode = memoryMode
+	a.templateEngine = a.resolveTemplateEngine(t.Engine)
 	a.mu.Unlock()
 
 	// Scoped template memory pins the session's durable memory to its own
@@ -80,6 +81,37 @@ func (a *Agent) memoryMode() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.templateMemoryMode
+}
+
+// resolveTemplateEngine canonicalizes a template engine request against the
+// engines actually registered on this agent. Caller must hold a.mu. An empty
+// or "godex" value keeps the default engine; a non-godex id must be present
+// in extraHarnesses (e.g. "acp:codex" registered by
+// RegisterConfiguredACPHarnesses), otherwise it falls back to godex so an
+// unknown engine never rejects session creation.
+func (a *Agent) resolveTemplateEngine(raw string) string {
+	id := templates.NormalizeEngineID(raw)
+	if id == templates.EngineDefault {
+		return templates.EngineDefault
+	}
+	if a.extraHarnesses != nil {
+		if _, ok := a.extraHarnesses[id]; ok {
+			return id
+		}
+	}
+	return templates.EngineDefault
+}
+
+// TemplateEngine returns the template-pinned run kernel (harness id), or
+// "godex" when no template (or no engine) pins one. Per-turn explicit requests
+// from the caller may override this for a single turn (roadmap 6.4).
+func (a *Agent) TemplateEngine() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if strings.TrimSpace(a.templateEngine) == "" {
+		return templates.EngineDefault
+	}
+	return a.templateEngine
 }
 
 // ActivateBundles incrementally activates the named bundles on top of the

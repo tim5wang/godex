@@ -27,6 +27,24 @@ const (
 	MemoryScoped = "scoped"
 )
 
+// Engine ids for AgentTemplate.Engine. EngineDefault means the built-in
+// godex engine; any other non-empty id (e.g. "acp:<agent-id>") names a
+// harness registered via Agent.RegisterHarness
+// (docs/agent-template-agent-implementation-design.md).
+const EngineDefault = "godex"
+
+// NormalizeEngineID canonicalizes a raw template engine value. Empty or
+// "godex" yields EngineDefault; anything else is kept lowercased and is
+// resolved against the registered harness set at ApplyTemplate time (an
+// unknown id falls back to EngineDefault there, never rejecting the session).
+func NormalizeEngineID(s string) string {
+	id := strings.ToLower(strings.TrimSpace(s))
+	if id == "" || id == EngineDefault {
+		return EngineDefault
+	}
+	return id
+}
+
 // NormalizeMemoryMode validates and canonicalizes a memory scope string.
 // Empty or unknown values fall back to the default shared scope. The
 // returned value is always one of MemoryNone / MemoryShared / MemoryScoped.
@@ -97,6 +115,13 @@ type AgentTemplate struct {
 	// even when the global memory.session_scope is disabled). Empty = shared.
 	Memory string `json:"memory,omitempty" yaml:"memory,omitempty"`
 
+	// Engine selects the run kernel for this template's sessions (harness
+	// id, docs/agent-template-agent-implementation-design.md). Empty =
+	// "godex" built-in engine. A non-godex id (e.g. "acp:codex") routes
+	// whole turns to that registered harness; an unknown id falls back to
+	// godex at ApplyTemplate time (never rejecting session creation).
+	Engine string `json:"engine,omitempty" yaml:"engine,omitempty"`
+
 	// Reserved (Q2, project-scope overrides): not resolved in M1.
 	ProjectDir string `json:"project_dir,omitempty" yaml:"project_dir,omitempty"`
 
@@ -112,8 +137,10 @@ func (t AgentTemplate) IsBuiltIn() bool {
 }
 
 // IsZeroish reports whether the template carries no preset at all (used by
-// the runtime chain to skip work for the "default" template).
+// the runtime chain to skip work for the "default" template). An explicit
+// Engine counts as a preset (it changes the run kernel).
 func (t AgentTemplate) IsZeroish() bool {
 	return len(t.Bundles) == 0 && len(t.Tools) == 0 && t.Persona == "" &&
-		t.Profile == "" && !t.TrimHeavySections && len(t.Skills) == 0
+		t.Profile == "" && !t.TrimHeavySections && len(t.Skills) == 0 &&
+		NormalizeEngineID(t.Engine) == EngineDefault
 }

@@ -21,6 +21,14 @@ func listTaskboardCards(ledger toolLedger, args taskboardArgs) (tools.ToolResult
 	return tools.ToolResult{Structured: map[string]any{"cards": out, "count": len(out)}}, nil
 }
 
+// statusTaskboard returns a read-only snapshot of board / execution counts for
+// a project (the query behind the cron watchdog directive). It never mutates
+// the ledger.
+func statusTaskboard(ledger toolLedger, args taskboardArgs) (tools.ToolResult, error) {
+	sc := ledger.StatusCounts(strings.TrimSpace(args.ProjectID))
+	return tools.ToolResult{Structured: map[string]any{"status_counts": sc, "counts": sc.CountMap()}}, nil
+}
+
 func getTaskboardCard(ledger toolLedger, args taskboardArgs) (tools.ToolResult, error) {
 	id, err := requireCardID(args)
 	if err != nil {

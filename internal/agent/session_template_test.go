@@ -500,3 +500,60 @@ func TestApplyTemplateMemorySharedDefault(t *testing.T) {
 		t.Fatalf("memoryMode = %q, want shared (default)", got)
 	}
 }
+
+func TestApplyTemplatePinsRegisteredEngine(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.RegisterHarness("acp:codex", &fakeHarness{id: "acp:codex"})
+
+	a.ApplyTemplate(templates.AgentTemplate{ID: "ext", Engine: "acp:codex"})
+
+	if got := a.TemplateEngine(); got != "acp:codex" {
+		t.Fatalf("TemplateEngine = %q, want acp:codex", got)
+	}
+}
+
+func TestApplyTemplateUnknownEngineFallsBackToGodex(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+
+	a.ApplyTemplate(templates.AgentTemplate{ID: "ext", Engine: "acp:not-registered"})
+
+	if got := a.TemplateEngine(); got != templates.EngineDefault {
+		t.Fatalf("TemplateEngine = %q, want %q (unknown engine falls back, never rejects)", got, templates.EngineDefault)
+	}
+}
+
+func TestApplyTemplateEmptyEngineKeepsGodexDefault(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.ApplyTemplate(templates.AgentTemplate{ID: "plain", Name: "Plain"})
+	if got := a.TemplateEngine(); got != templates.EngineDefault {
+		t.Fatalf("TemplateEngine = %q, want %q", got, templates.EngineDefault)
+	}
+}
+
+func TestTemplateEngineDefaultsToGodexWithoutTemplate(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	if got := a.TemplateEngine(); got != templates.EngineDefault {
+		t.Fatalf("TemplateEngine = %q, want %q", got, templates.EngineDefault)
+	}
+}
+
+func TestRegisteredHarnessIDs(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.RegisterHarness("acp:codex", &fakeHarness{id: "acp:codex"})
+	a.RegisterHarness("acp:pi", &fakeHarness{id: "acp:pi"})
+
+	ids := a.RegisteredHarnessIDs()
+	if len(ids) != 3 {
+		t.Fatalf("RegisteredHarnessIDs = %v, want 3 entries (godex + 2)", ids)
+	}
+	for _, want := range []string{"godex", "acp:codex", "acp:pi"} {
+		if !containsString(ids, want) {
+			t.Fatalf("RegisteredHarnessIDs = %v, missing %q", ids, want)
+		}
+	}
+}

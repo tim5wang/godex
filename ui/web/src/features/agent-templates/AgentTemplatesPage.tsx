@@ -52,6 +52,7 @@ type TemplateFormValues = {
   write_enabled?: boolean;
   trim_heavy_sections?: boolean;
   memory?: string;
+  engine?: string;
 };
 
 const TEMPLATE_HISTORY_PREFIX = "agent-template-history:";
@@ -248,6 +249,7 @@ export function AgentTemplatesPage() {
         write_enabled: values.write_enabled,
         trim_heavy_sections: values.trim_heavy_sections,
         memory: values.memory,
+        engine: values.engine,
       };
       if (editing) {
         return updateAgentTemplate(token || null, editing.id, payload);
@@ -315,6 +317,7 @@ export function AgentTemplatesPage() {
       write_enabled: tpl.write_enabled,
       trim_heavy_sections: tpl.trim_heavy_sections,
       memory: tpl.memory,
+      engine: tpl.engine,
     });
     setEditorOpen(true);
   };
@@ -482,7 +485,7 @@ export function AgentTemplatesPage() {
           <Form.Item name="base_prompt" label={t("agentTemplates.fieldBasePrompt")}>
             <Input.TextArea rows={3} />
           </Form.Item>
-          <Space size={12} style={{ display: "flex" }}>
+          <Space size={12} style={{ display: "flex", flexWrap: "wrap", rowGap: 0 }}>
             <Form.Item name="profile" label={t("agentTemplates.fieldProfile")}>
               <Select
                 allowClear
@@ -499,6 +502,8 @@ export function AgentTemplatesPage() {
             <Form.Item name="trim_heavy_sections" label={t("agentTemplates.fieldTrimHeavy")} valuePropName="checked">
               <Switch />
             </Form.Item>
+          </Space>
+          <Space size={12} style={{ display: "flex", flexWrap: "wrap", rowGap: 0 }}>
             <Form.Item name="memory" label={t("agentTemplates.fieldMemory")}>
               <Select
                 allowClear
@@ -510,6 +515,28 @@ export function AgentTemplatesPage() {
                   { value: "scoped", label: t("agentTemplates.memoryScoped") },
                 ]}
               />
+            </Form.Item>
+            <Form.Item name="engine" label={t("agentTemplates.fieldEngine")}>
+              <Select
+                allowClear
+                placeholder={t("agentTemplates.engineGodex")}
+                style={{ width: 200 }}
+                options={(optionsQuery.data?.engines ?? []).map((e) => ({
+                  value: e,
+                  label: e === "godex" ? t("agentTemplates.engineGodex") : e,
+                }))}
+                listHeight={280}
+              />
+            </Form.Item>
+            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.engine !== cur.engine}>
+              {({ getFieldValue }) => {
+                const engine = getFieldValue("engine") as string | undefined;
+                return engine && engine !== "godex" ? (
+                  <Typography.Text type="warning" style={{ display: "block", lineHeight: "40px" }}>
+                    {t("agentTemplates.engineExternalHint")}
+                  </Typography.Text>
+                ) : null;
+              }}
             </Form.Item>
           </Space>
         </Form>

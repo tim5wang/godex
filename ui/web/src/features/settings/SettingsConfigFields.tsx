@@ -27,6 +27,7 @@ import type { ConfigFieldSchema, ConfigFieldState, ConfigSectionSchema } from ".
 import {
   API_HIDDEN_PATHS,
   SECRET_MASK,
+  acpAgentsConfigToForm,
   asOptionalString,
   formatValue,
   modelOptionsWithCurrent,
@@ -36,6 +37,8 @@ import {
   reasoningEffortOptions,
   strategyConfigToForm,
   stringsPresent,
+  type ACPAgentFormItem,
+  type ACPAgentsFormValue,
   type LLMModelFormItem,
   type LLMProviderFormItem,
   type LLMProvidersFormValue,
@@ -445,6 +448,7 @@ function FieldEditor(props: {
   const { field, fieldState, effectiveValue, clearSecret, revealPending, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, onReveal, onClearSecret } = props;
   const { t } = useI18n();
   const isProvidersField = field.path === "api.providers";
+  const isStructuredEditorField = isProvidersField || field.path === "acp.agents";
   return (
     <Card size="small" title={field.label} extra={<FieldTags field={field} state={fieldState} />}>
       <Typography.Paragraph type="secondary">
@@ -466,8 +470,8 @@ function FieldEditor(props: {
         {field.secret ? (
           <Space wrap>
             <Button size="small" icon={<EyeOutlined />} loading={revealPending} onClick={onReveal}>{t("settings.reveal")}</Button>
-            {!isProvidersField ? <Button size="small" danger onClick={onClearSecret}>{t("settings.clear")}</Button> : null}
-            {clearSecret && !isProvidersField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
+            {!isStructuredEditorField ? <Button size="small" danger onClick={onClearSecret}>{t("settings.clear")}</Button> : null}
+            {clearSecret && !isStructuredEditorField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
           </Space>
         ) : null}
         <Typography.Text type="secondary">{t("settings.effectivePrefix")}{formatValue(effectiveValue)}</Typography.Text>
@@ -492,6 +496,7 @@ function CompactFieldEditor(props: {
   const { field, fieldState, effectiveValue, clearSecret, revealPending, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, onReveal, onClearSecret } = props;
   const { t } = useI18n();
   const isProvidersField = field.path === "api.providers";
+  const isStructuredEditorField = isProvidersField || field.path === "acp.agents";
   const wide = field.type === "json" || field.path.endsWith("search_url_template") || field.path.includes("selector");
   return (
     <div className={wide ? "config-compact-field config-compact-field-wide" : "config-compact-field"}>
@@ -518,8 +523,8 @@ function CompactFieldEditor(props: {
       {field.secret ? (
         <Space wrap size={6}>
           <Button size="small" icon={<EyeOutlined />} loading={revealPending} onClick={onReveal}>{t("settings.reveal")}</Button>
-          {!isProvidersField ? <Button size="small" danger onClick={onClearSecret}>{t("settings.clear")}</Button> : null}
-          {clearSecret && !isProvidersField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
+          {!isStructuredEditorField ? <Button size="small" danger onClick={onClearSecret}>{t("settings.clear")}</Button> : null}
+          {clearSecret && !isStructuredEditorField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
         </Space>
       ) : null}
       <Typography.Text type="secondary" className="config-compact-effective">{t("settings.effectivePrefix")}{formatValue(effectiveValue)}</Typography.Text>
@@ -546,6 +551,9 @@ function ConfigFieldInput(props: {
   const isProvidersField = field.path === "api.providers";
   if (isProvidersField) {
     return <LLMProvidersEditor value={value} onChange={onChange as (value: LLMProvidersFormValue) => void} discoveringProviderID={discoveringProviderID} discoveringModels={discoveringModels} onDiscoverModels={onDiscoverModels} />;
+  }
+  if (field.path === "acp.agents") {
+    return <ACPAgentsEditor value={value} onChange={onChange as (value: ACPAgentsFormValue) => void} />;
   }
   if (field.path === "api.default_model") {
     return (
@@ -900,6 +908,96 @@ function LLMStrategyEditor({ value, onChange, modelOptions }: { value?: unknown;
         ))}
       </Space>
       <Button icon={<PlusOutlined />} onClick={addCandidate}>{t("settings.addCandidate")}</Button>
+    </Space>
+  );
+}
+
+function ACPAgentsEditor({ value, onChange }: { value?: unknown; onChange?: (value: ACPAgentsFormValue) => void }) {
+  const agents = acpAgentsConfigToForm(value);
+  const { t } = useI18n();
+  const emit = (items: ACPAgentFormItem[]) => onChange?.({ items });
+  const updateAgent = (index: number, patch: Partial<ACPAgentFormItem>) => {
+    emit(agents.items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  };
+  const removeAgent = (index: number) => emit(agents.items.filter((_, itemIndex) => itemIndex !== index));
+  const addAgent = () => {
+    emit([
+      ...agents.items,
+      {
+        id: nextUniqueID("codex", agents.items.map((item) => item.id)),
+        command: "",
+        args: "",
+        env: "",
+        timeout_seconds: 120,
+        description: "",
+      },
+    ]);
+  };
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      {agents.items.length === 0 ? <Alert type="info" showIcon message={t("settings.noACPAgents")} /> : null}
+      <Collapse
+        defaultActiveKey={[]}
+        items={agents.items.map((agent, index) => ({
+          key: String(index),
+          label: (
+            <span className="llm-provider-collapse-label">
+              <Typography.Text strong>{agent.id || t("settings.unnamedACPAgent")}</Typography.Text>
+              {agent.command ? <Typography.Text type="secondary">{agent.command}</Typography.Text> : null}
+            </span>
+          ),
+          extra: (
+            <Button
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              onClick={(event) => {
+                event.stopPropagation();
+                removeAgent(index);
+              }}
+            >
+              {t("settings.remove")}
+            </Button>
+          ),
+          children: (
+            <div className="llm-provider-panel">
+              <div className="llm-form-grid">
+                <LabelledControl label={t("settings.acpAgentIDLabel")}>
+                  <Input value={agent.id} placeholder="codex" onChange={(event) => updateAgent(index, { id: event.target.value })} />
+                </LabelledControl>
+                <LabelledControl label={t("settings.acpCommandLabel")}>
+                  <Input value={agent.command} placeholder="codex" onChange={(event) => updateAgent(index, { command: event.target.value })} />
+                </LabelledControl>
+                <LabelledControl label={t("settings.acpArgsLabel")}>
+                  <Input value={agent.args} placeholder="acp" onChange={(event) => updateAgent(index, { args: event.target.value })} />
+                </LabelledControl>
+                <LabelledControl label={t("settings.acpTimeoutLabel")}>
+                  <InputNumber
+                    min={1}
+                    style={{ width: "100%" }}
+                    value={agent.timeout_seconds}
+                    onChange={(timeout) => updateAgent(index, { timeout_seconds: numberOrUndefined(timeout) })}
+                  />
+                </LabelledControl>
+                <LabelledControl label={t("settings.acpEnvLabel")} wide>
+                  <Input.TextArea
+                    rows={3}
+                    value={agent.env}
+                    placeholder={"KEY=VALUE\nANOTHER=value"}
+                    spellCheck={false}
+                    onChange={(event) => updateAgent(index, { env: event.target.value })}
+                  />
+                </LabelledControl>
+                <LabelledControl label={t("settings.acpDescriptionLabel")} wide>
+                  <Input value={agent.description} placeholder="OpenAI Codex" onChange={(event) => updateAgent(index, { description: event.target.value })} />
+                </LabelledControl>
+              </div>
+            </div>
+          ),
+        }))}
+      />
+      <Button icon={<PlusOutlined />} onClick={addAgent}>{t("settings.addACPAgent")}</Button>
     </Space>
   );
 }

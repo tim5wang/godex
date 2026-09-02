@@ -104,6 +104,12 @@ type Agent struct {
 	templateTrimHeavy  bool
 	templateSkills     []string
 	templateMemoryMode string
+	// templateEngine is the template-pinned run kernel (harness id, see
+	// templates.EngineDefault). Empty or "godex" keeps the default engine;
+	// a non-godex id (e.g. "acp:codex") routes whole turns to that harness
+	// (docs/agent-template-agent-implementation-design.md). Fixed at
+	// template application time; per-turn explicit requests may override it.
+	templateEngine string
 	// templateToolBaseline is the exact Tools ∪ expanded Bundles set fixed
 	// at template application time. ClearMessages restores this set instead
 	// of widening the session back to host registration defaults.

@@ -476,6 +476,63 @@ func TestDeleteProjectOrphanAndRecreate(t *testing.T) {
 	}
 }
 
+// Absolute work_dir paths must survive normalization with their leading slash
+// intact. Otherwise cardWorkDir returns a relative path that the executor
+// re-joins onto the workspace root and dispatch fails with
+// ErrInvalidWorkspaceDir (the root cause of the "invalid workspace_dir" bug).
+func TestProjectWorkDirPreservesAbsolutePath(t *testing.T) {
+	l := openTestLedger(t)
+	abs := "/Users/taiwu.wang/Documents/leader_agent/tools"
+	project, err := l.CreateProject("tools", abs)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if got := project.WorkDirs[0]; got != abs {
+		t.Fatalf("CreateProject: expected absolute work_dir %q, got %q", abs, got)
+	}
+
+	// UpdateProject must keep the absolute path too (replacement list).
+	upd, err := l.UpdateProject(project.ID, "", []string{abs})
+	if err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+	if got := upd.WorkDirs[0]; got != abs {
+		t.Fatalf("UpdateProject: expected absolute work_dir %q, got %q", abs, got)
+	}
+
+	// Round-trip across reopen (what the running server sees after restart).
+	reopened, err := OpenLedger(l.path, t.TempDir())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	var got Project
+	for _, p := range reopened.ListProjects() {
+		if p.ID == project.ID {
+			got = p
+		}
+	}
+	if got.ID == "" || len(got.WorkDirs) != 1 || got.WorkDirs[0] != abs {
+		t.Fatalf("reopen: expected absolute work_dir %q for %q, got %+v", abs, project.ID, got.WorkDirs)
+	}
+}
+
+// normalizeWorkDirs treats work directories differently from package-level
+// touched_paths: absolute work_dirs keep their leading slash, while relative
+// package paths still get leading/trailing slashes stripped and de-duplicated.
+func TestNormalizeWorkDirsVsTouchedPaths(t *testing.T) {
+	abs := "/Users/taiwu.wang/Documents/leader_agent/godex"
+	wd := normalizeWorkDirs([]string{"/" + abs[1:], abs, "relative/dir/", "relative/dir"})
+	if len(wd) != 2 || wd[0] != abs || wd[1] != "relative/dir" {
+		t.Fatalf("normalizeWorkDirs: expected [%q relative/dir], got %+v", abs, wd)
+	}
+
+	// touched_paths must be unaffected: leading/trailing slashes still stripped.
+	tp := normalizeTouchedPaths([]string{"/internal/platform/tooling/", "internal/platform/tooling"})
+	if len(tp) != 1 || tp[0] != "internal/platform/tooling" {
+		t.Fatalf("normalizeTouchedPaths regressed: got %+v", tp)
+	}
+}
+
 // A card claimed by an execution holds the hosting/execution session id. The
 // same execution session must be able to advance its own held card (this is the
 // root cause of the stuck-card bug: agent tools presented a fixed "agent" actor

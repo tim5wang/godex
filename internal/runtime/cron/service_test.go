@@ -512,7 +512,7 @@ func TestBuildCronPromptMarksExecutionMode(t *testing.T) {
 		ID:      "job-1",
 		Message: "提醒：验收voice search项目",
 	}
-	prompt := buildCronPrompt(job)
+	prompt := buildCronPrompt(job, "")
 	for _, want := range []string{
 		"scheduled cron execution",
 		"Do not create, update, toggle, delete, run, or test cron or heartbeat tasks",

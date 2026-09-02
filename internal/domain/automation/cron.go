@@ -24,6 +24,11 @@ type CronJob struct {
 	// Exit 0 runs the message (agent); non-zero skips this tick (zero tokens);
 	// missing script or timeout records an error.
 	WatchdogScript     string         `json:"watchdog_script,omitempty"`
+	// WatchdogDirective is an optional declarative pre-run gate. When set, the
+	// cron runtime evaluates it through the injected DirectiveEvaluator
+	// (taskboard status counts etc.) instead of a shell script; the agent only
+	// runs when a wake condition is met (zero tokens otherwise).
+	WatchdogDirective  string         `json:"watchdog_directive,omitempty"`
 	DeliveryTarget     DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool           `json:"enabled"`
 	CreatedBy          string         `json:"created_by,omitempty"`
@@ -60,6 +65,7 @@ type CronCreateInput struct {
 	// Empty means "use the current default profile".
 	ModelProfileID     string         `json:"model_profile_id,omitempty"`
 	WatchdogScript     string         `json:"watchdog_script,omitempty"`
+	WatchdogDirective  string         `json:"watchdog_directive,omitempty"`
 	DeliveryTarget     DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled            bool           `json:"enabled"`
 	CreatedBy          string         `json:"created_by,omitempty"`
@@ -78,6 +84,7 @@ type CronUpdateInput struct {
 	// "pin to this profile".
 	ModelProfileID *string         `json:"model_profile_id,omitempty"`
 	WatchdogScript *string         `json:"watchdog_script,omitempty"`
+	WatchdogDirective *string      `json:"watchdog_directive,omitempty"`
 	DeliveryTarget *DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled        *bool           `json:"enabled,omitempty"`
 }

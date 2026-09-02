@@ -38,6 +38,7 @@ type cronArgs struct {
 	DeliveryTarget *automation.DeliveryTarget `json:"delivery_target,omitempty"`
 	Enabled        *bool                      `json:"enabled,omitempty"`
 	WatchdogScript *string                    `json:"watchdog_script,omitempty"`
+	WatchdogDirective *string                 `json:"watchdog_directive,omitempty"`
 	Limit          int                        `json:"limit,omitempty"`
 }
 
@@ -97,6 +98,10 @@ func NewCronTool(manager CronManager) Tool {
 			"watchdog_script": map[string]interface{}{
 				"type":        "string",
 				"description": "Optional shell script run before the job fires: exit 0 runs the message, non-zero skips this tick (zero tokens); missing or timeout records an error.",
+			},
+			"watchdog_directive": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional declarative pre-run gate (JSON, e.g. taskboard status counts). When set, the runtime evaluates it via the injected evaluator and only runs the agent when a wake condition is met (zero tokens otherwise).",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
@@ -225,6 +230,7 @@ func NewCronTool(manager CronManager) Tool {
 				Schedule:           schedule,
 				SessionMode:        sessionMode,
 				WatchdogScript:     derefString(args.WatchdogScript),
+				WatchdogDirective:  derefString(args.WatchdogDirective),
 				DeliveryTarget:     deliveryTarget.Clone(),
 				Enabled:            enabled,
 				CreatedBy:          createdBy,
@@ -262,6 +268,10 @@ func NewCronTool(manager CronManager) Tool {
 			if args.WatchdogScript != nil {
 				value := *args.WatchdogScript
 				update.WatchdogScript = &value
+			}
+			if args.WatchdogDirective != nil {
+				value := *args.WatchdogDirective
+				update.WatchdogDirective = &value
 			}
 			if schedule, ok, err := parseCronScheduleArgs(args, true); err != nil {
 				return ToolResult{}, err

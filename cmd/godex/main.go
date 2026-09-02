@@ -123,10 +123,12 @@ func main() {
 	// executor, and this plugin HTTP surface all serialize through one handle
 	// (no double-writer race on ledger.json).
 	taskboardLedger := service.TaskboardLedger()
+	var taskboardExecutor *backend.TaskboardExecutor
 	if taskboardLedger == nil {
 		logger.Warnf("taskboard ledger unavailable; taskboard plugin disabled")
 	} else if pm := service.PluginManager(); pm != nil {
 		executor := backend.NewTaskboardExecutor(service, taskboardLedger)
+		taskboardExecutor = executor
 		// M5 PJM: the per-session taskboard tool (dispatch action) needs the
 		// same executor so PJM can start/reuse card execution sessions from
 		// its own conversation.
@@ -136,14 +138,31 @@ func main() {
 		}
 	}
 	channelManager := rtchannels.NewManager(cfg, service)
-	cronService := rtcron.NewService(rtcron.Config{
-		Enabled:           cfg.Cron.Enabled,
-		TickSeconds:       cfg.Cron.TickSeconds,
-		DefaultTimezone:   cfg.Cron.DefaultTimezone,
-		MaxConcurrentRuns: cfg.Cron.MaxConcurrentRuns,
-		WorkspaceDir:      cfg.WorkspaceDir,
-	}, rtcron.NewFileStore(cfg.StateDir), rtcron.NewBackendAdapter(service), channelManager,
-		rtcron.WithIdempotencyStore(idempotency.NewSQLiteStore(cfg.StateDir, 0)))
+	// Wire the taskboard-backed watchdog-directive evaluator so cron jobs can
+	// gate on declarative taskboard status counts instead of a python watchdog
+	// script (需求池: cron 调用 godex 内联指令).
+	var cronService *rtcron.Service
+	if taskboardLedger != nil {
+		cronDirectiveEvaluator := backend.NewTaskboardDirectiveEvaluator(taskboardExecutor, taskboardLedger)
+		cronService = rtcron.NewService(rtcron.Config{
+			Enabled:           cfg.Cron.Enabled,
+			TickSeconds:       cfg.Cron.TickSeconds,
+			DefaultTimezone:   cfg.Cron.DefaultTimezone,
+			MaxConcurrentRuns: cfg.Cron.MaxConcurrentRuns,
+			WorkspaceDir:      cfg.WorkspaceDir,
+		}, rtcron.NewFileStore(cfg.StateDir), rtcron.NewBackendAdapter(service), channelManager,
+			rtcron.WithIdempotencyStore(idempotency.NewSQLiteStore(cfg.StateDir, 0)),
+			rtcron.WithDirectiveEvaluator(cronDirectiveEvaluator))
+	} else {
+		cronService = rtcron.NewService(rtcron.Config{
+			Enabled:           cfg.Cron.Enabled,
+			TickSeconds:       cfg.Cron.TickSeconds,
+			DefaultTimezone:   cfg.Cron.DefaultTimezone,
+			MaxConcurrentRuns: cfg.Cron.MaxConcurrentRuns,
+			WorkspaceDir:      cfg.WorkspaceDir,
+		}, rtcron.NewFileStore(cfg.StateDir), rtcron.NewBackendAdapter(service), channelManager,
+			rtcron.WithIdempotencyStore(idempotency.NewSQLiteStore(cfg.StateDir, 0)))
+	}
 	cronToolAdapter := rtcron.NewToolAdapter(cronService)
 	shared.SetCronService(cronToolAdapter)
 	heartbeatService := rtheartbeat.NewService(rtheartbeat.Config{

@@ -29,6 +29,10 @@ type toolLedger interface {
 	PrecheckDispatchConflicts(card Card) error
 	ReportObservedPaths(cardID string, ifVersion int, actor string, paths []string) (Card, error)
 	MergePrecheck(cardID string, ifVersion int, actor string) (Card, ConflictReport, error)
+	// StatusCounts returns a read-only snapshot of the board grouped by card /
+	// execution status (used by the status action and the cron watchdog
+	// directive evaluator).
+	StatusCounts(projectID string) StatusCounts
 }
 
 // compactCard is the terse per-card view used by list/get results.
@@ -86,6 +90,7 @@ const (
 	actionRetry         = "retry"
 	actionReportTouched = "report_touched"
 	actionMergePrecheck = "merge_precheck"
+	actionStatus        = "status"
 )
 
 // NewTaskboardTool builds the single taskboard agent tool. All board
@@ -111,8 +116,8 @@ func newTaskboardTool(ledger toolLedger, executor Executor) tools.Tool {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"description": "list|get|create|update|move|comment_add|delete|checklist|dispatch|observe|reconcile|recover|retry|report_touched|merge_precheck",
-				"enum":        []string{actionList, actionGet, actionCreate, actionUpdate, actionMove, actionCommentAdd, actionDelete, actionChecklist, actionDispatch, actionObserve, actionReconcile, actionRecover, actionRetry, actionReportTouched, actionMergePrecheck},
+				"description": "list|get|create|update|move|comment_add|delete|checklist|dispatch|observe|reconcile|recover|retry|report_touched|merge_precheck|status",
+				"enum":        []string{actionList, actionGet, actionCreate, actionUpdate, actionMove, actionCommentAdd, actionDelete, actionChecklist, actionDispatch, actionObserve, actionReconcile, actionRecover, actionRetry, actionReportTouched, actionMergePrecheck, actionStatus},
 			},
 			"card_id":        map[string]string{"type": "string", "description": "Card id (get/update/move/comment_add/delete/checklist/dispatch/observe/reconcile/recover/retry)"},
 			"version":        map[string]any{"type": "integer", "description": "Optimistic-concurrency version: pass the CURRENT version returned by create/get (not the next one). On conflict the tool auto-re-reads and retries once."},
@@ -213,6 +218,8 @@ func dispatchTaskboard(ctx context.Context, ledger toolLedger, executor Executor
 		return reportTaskboardTouchedPaths(ledger, actor, args)
 	case actionMergePrecheck:
 		return precheckTaskboardMerge(ledger, actor, args)
+	case actionStatus:
+		return statusTaskboard(ledger, args)
 	default:
 		return tools.ToolResult{}, fmt.Errorf("taskboard: unknown action %q", args.Action)
 	}

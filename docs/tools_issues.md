@@ -4,6 +4,23 @@
 > 用途：记录工具调用失败的日志与解决经验，供后续优化工具。
 > 约定：每次遇到工具失败/反爬/沙箱限制，在这里 **append** 一条记录（时间 + 问题 + 根因 + 解决 + 改进建议）。同步用 memory 记录一条 workflow 备忘。
 
+## 2026-09-03 — bash 前台跑长驻 ACP 子进程导致 context canceled
+
+**问题**：用 `python3 - <<EOF` 脚本 `subprocess.Popen(["dsh","--profile","acp"])` 探测 ACP 协议事件流，bash 工具长时间卡住后报 `context canceled`。
+
+**根因**：ACP 是长驻 stdio 协议，dsh 收到 prompt 后持续流式输出（思考/工具/文本块），子进程不退出；脚本读 stdout 阻塞等待，bash 工具超时被取消。
+
+**解决**：
+- 不要在前台 bash 里裸跑长驻 ACP 进程并阻塞读流。改为：
+  - 静态读 dsh 的 ACP server 源码确认它发的 `sessionUpdate` 类型（`agent_thought_chunk` 等），不启动进程；
+  - 或写 `.godex/tmp/*.py` 脚本，给子进程加 `p.kill()` + 有限行数读取 + 硬 deadline，再执行。
+- 本次根因结论：dsh 在 120s 超时前**一直在正常输出**（思考过程 + 工具调用日志），godex 侧 `unexpected EOF` 是因为**总超时杀掉进程**，不是 dsh 无响应。真正问题是「godex 未解析/未展示 dsh 的中间事件 + 120s 总超时过短」。
+
+**改进建议**：
+- ACP 长驻进程探测一律走「源码静态分析事件类型」优先；必须跑则写脚本 + kill。
+- godex ACP 集成：解析 `agent_thought_chunk` 等更多事件类型并透出；超时应按「无响应超时」而非「进程总超时」语义设计。
+
+
 ## 2026-08-24 — web_fetch 对微信公众号文章遭遇反爬
 
 **问题**：用 `web_fetch` 抓取微信文章（`https://mp.weixin.qq.com/s/<id>`）时被反爬拦截。

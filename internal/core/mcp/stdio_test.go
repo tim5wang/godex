@@ -34,6 +34,18 @@ func TestFakeMCPHelperServer(t *testing.T) {
 	if os.Getenv("GODEX_MCP_HELPER") != "1" {
 		return
 	}
+	// When GODEX_MCP_HELPER_LOG is set, the helper appends one line per event
+	// (start / list / call / prompt) so tests can assert how many processes
+	// were spawned and how many requests reached the wire.
+	mark := func(kind string) {
+		if logPath := os.Getenv("GODEX_MCP_HELPER_LOG"); logPath != "" {
+			if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+				fmt.Fprintln(f, kind)
+				_ = f.Close()
+			}
+		}
+	}
+	mark("start")
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -57,6 +69,7 @@ func TestFakeMCPHelperServer(t *testing.T) {
 				"serverInfo":      map[string]any{"name": "fake", "version": "1.0.0"},
 			}
 		case "tools/list":
+			mark("list")
 			result = map[string]any{
 				"tools": []map[string]any{
 					{
@@ -94,6 +107,7 @@ func TestFakeMCPHelperServer(t *testing.T) {
 				},
 			}
 		case "tools/call":
+			mark("call")
 			var params struct {
 				Name      string         `json:"name"`
 				Arguments map[string]any `json:"arguments"`
@@ -252,5 +266,100 @@ func TestManagerListsAndGetsPrompts(t *testing.T) {
 	}
 	if got.Messages[0].Role != "user" || !strings.Contains(got.Messages[0].Content, "review the code") {
 		t.Fatalf("unexpected first message: %+v", got.Messages[0])
+	}
+}
+
+// TestManagerCachesAndReusesStdioClient verifies the two performance fixes:
+// tools/list is cached so repeated session opens do not cold-start a stdio
+// daemon, and the stdio client is reused across calls (including tools/call)
+// so a daemon stays warm instead of being spawned per request.
+func TestManagerCachesAndReusesStdioClient(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping stdio MCP integration in short mode")
+	}
+	workspace := t.TempDir()
+	logPath := filepath.Join(workspace, "helper.log")
+
+	helper := fakeMCPHelperPath(t)
+	serverEnv := func(extra map[string]string) map[string]string {
+		env := map[string]string{
+			"GODEX_MCP_HELPER":     "1",
+			"GODEX_MCP_HELPER_LOG": logPath,
+		}
+		for k, v := range extra {
+			env[k] = v
+		}
+		return env
+	}
+	writeConfig := func(env map[string]string) string {
+		cfg := Config{Servers: []ServerConfig{{
+			Name:    "fake",
+			Type:    ServerTypeStdio,
+			Command: helper,
+			Args:    []string{"-test.run", "TestFakeMCPHelperServer", "-test.v"},
+			Env:     env,
+		}}}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatalf("marshal config: %v", err)
+		}
+		configPath := filepath.Join(workspace, ".godex", "mcp.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			t.Fatalf("mkdir config dir: %v", err)
+		}
+		if err := os.WriteFile(configPath, data, 0644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		return configPath
+	}
+
+	manager := NewManager(writeConfig(serverEnv(nil)), workspace, filepath.Join(workspace, ".godex", ".tmp"))
+	defer manager.Close()
+
+	readLog := func() string {
+		data, _ := os.ReadFile(logPath)
+		return string(data)
+	}
+
+	if _, err := manager.ListTools(context.Background()); err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	if got := readLog(); got != "start\nlist\n" {
+		t.Fatalf("after first ListTools, want one spawn + one tools/list, got %q", got)
+	}
+
+	// Second ListTools within the cache TTL must be served from cache: no new
+	// spawn and no second tools/list round-trip.
+	if _, err := manager.ListTools(context.Background()); err != nil {
+		t.Fatalf("list tools (cached): %v", err)
+	}
+	if got := readLog(); got != "start\nlist\n" {
+		t.Fatalf("cached ListTools must not re-spawn or re-list, got %q", got)
+	}
+
+	// CallTool must reuse the persistent client instead of spawning again.
+	if _, err := manager.CallTool(context.Background(), "fake", "echo", map[string]any{"message": "hi"}); err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if got := readLog(); got != "start\nlist\ncall\n" {
+		t.Fatalf("CallTool must reuse the persistent client, got %q", got)
+	}
+
+	// A config change invalidates the cache and the client: the next
+	// ListTools re-spawns the daemon with the new settings.
+	if err := manager.UpsertServer(ServerConfig{
+		Name:    "fake",
+		Type:    ServerTypeStdio,
+		Command: helper,
+		Args:    []string{"-test.run", "TestFakeMCPHelperServer", "-test.v"},
+		Env:     serverEnv(map[string]string{"EXTRA": "changed"}),
+	}); err != nil {
+		t.Fatalf("upsert server: %v", err)
+	}
+	if _, err := manager.ListTools(context.Background()); err != nil {
+		t.Fatalf("list tools after config change: %v", err)
+	}
+	if got := readLog(); strings.Count(got, "start") != 2 {
+		t.Fatalf("config change must re-spawn the stdio process, got %q", got)
 	}
 }

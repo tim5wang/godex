@@ -56,6 +56,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		session.title = strings.TrimSpace(manifest.Title)
 		session.modelProfileID = strings.TrimSpace(manifest.ModelProfileID)
 		session.reasoningEffort = normalizeSessionReasoningEffort(manifest.ReasoningEffort)
+		session.acpModel = strings.TrimSpace(manifest.AcpModel)
 		session.parentSessionID = strings.TrimSpace(manifest.ParentSessionID)
 		session.forkedFromTurnID = strings.TrimSpace(manifest.ForkedFromTurnID)
 		session.forkedFromMessageIndex = cloneIntPtr(manifest.ForkedFromMessageIndex)

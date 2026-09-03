@@ -295,6 +295,7 @@ func acpAgentsFromConfigFile(file ConfigFile) map[string]ACPAgentConfig {
 			Env:            env,
 			TimeoutSeconds: item.TimeoutSeconds,
 			Description:    strings.TrimSpace(item.Description),
+			Model:          strings.TrimSpace(item.Model),
 		}
 	}
 	return agents

@@ -64,8 +64,9 @@ func TestACPFakeServer(t *testing.T) {
 					"sessionId": "acp-fake-1",
 					"update": map[string]any{
 						"sessionUpdate": "tool_call",
-						"name":          "acp_builtin_tool",
-						"input":         map[string]any{"query": "x"},
+						"title":         "acp_builtin_tool",
+						"toolCallId":    "call-1",
+						"rawInput":      map[string]any{"query": "x"},
 					},
 				},
 			}

@@ -87,6 +87,7 @@ type ACPAgentSection struct {
 	Env            map[string]string `yaml:"env" json:"env,omitempty"`
 	TimeoutSeconds int               `yaml:"timeout_seconds" json:"timeout_seconds,omitempty"`
 	Description    string            `yaml:"description" json:"description,omitempty"`
+	Model          string            `yaml:"model" json:"model,omitempty"`
 }
 
 type AgentSection struct {

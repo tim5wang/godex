@@ -76,7 +76,13 @@ func (m *Manager) UpsertServer(server ServerConfig) error {
 	if !replaced {
 		cfg.Servers = append(cfg.Servers, server)
 	}
-	return SaveConfig(m.configPath, cfg)
+	if err := SaveConfig(m.configPath, cfg); err != nil {
+		return err
+	}
+	// The server's config changed: drop its cached tools and persistent
+	// client so the next use reconnects with the new settings.
+	m.invalidateServerLocked(server.Name)
+	return nil
 }
 
 // DeleteServer removes a server by name from the registry and persists the
@@ -96,7 +102,11 @@ func (m *Manager) DeleteServer(name string) error {
 		}
 	}
 	cfg.Servers = out
-	return SaveConfig(m.configPath, cfg)
+	if err := SaveConfig(m.configPath, cfg); err != nil {
+		return err
+	}
+	m.invalidateServerLocked(name)
+	return nil
 }
 
 // TestConnection opens a client for the named server and performs the MCP

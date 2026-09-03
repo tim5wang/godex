@@ -12,13 +12,14 @@ import {
   Form,
   Input,
   Popconfirm,
+  Popover,
   Select,
   Space,
   Switch,
   Tag,
   Typography,
 } from "antd";
-import { DeleteOutlined, EditOutlined, EyeOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, EyeOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SmileOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
 import { useSettingsStore } from "../../store/settings";
@@ -56,6 +57,13 @@ type TemplateFormValues = {
 };
 
 const TEMPLATE_HISTORY_PREFIX = "agent-template-history:";
+
+/** 常用头像 emoji，供模板表单的 emoji 选择器使用。 */
+const COMMON_AVATAR_EMOJIS = [
+  "🤖", "🧠", "🦾", "🛠️", "📚", "🔍", "💡", "🚀",
+  "🎯", "🧪", "📊", "🗂️", "🔒", "⚡", "🎨", "📝",
+  "🤝", "🌐", "🧩", "💬", "⚙️", "🔄", "🏗️", "🧭",
+];
 
 /** Locally remembered free-form values per field so past entries reappear as
  *  suggestions even when the backend has no authoritative list for them. */
@@ -414,7 +422,30 @@ export function AgentTemplatesPage() {
           </Form.Item>
           <Space size={12} style={{ display: "flex" }}>
             <Form.Item name="avatar" label={t("agentTemplates.fieldAvatar")} style={{ flex: 1 }}>
-              <Input placeholder="🤖" />
+              <Space.Compact style={{ width: "100%" }}>
+                <Input placeholder="🤖" />
+                <Popover
+                  trigger="click"
+                  placement="bottomLeft"
+                  content={
+                    <Space wrap size={4} style={{ maxWidth: 280 }}>
+                      {COMMON_AVATAR_EMOJIS.map((emoji) => (
+                        <Button
+                          key={emoji}
+                          size="small"
+                          type="text"
+                          style={{ fontSize: 18, lineHeight: 1 }}
+                          onClick={() => form.setFieldValue("avatar", emoji)}
+                        >
+                          {emoji}
+                        </Button>
+                      ))}
+                    </Space>
+                  }
+                >
+                  <Button icon={<SmileOutlined />} aria-label={t("agentTemplates.pickEmoji")} />
+                </Popover>
+              </Space.Compact>
             </Form.Item>
             <Form.Item name="color" label={t("agentTemplates.fieldColor")} style={{ flex: 1 }}>
               <Input placeholder="#5b8def" />

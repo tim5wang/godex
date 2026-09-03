@@ -1,4 +1,4 @@
-import { AutoComplete, Badge, Button, Empty, Input, Popconfirm, Popover, Select, Skeleton, Tooltip, Typography } from "antd";
+import { AutoComplete, Avatar, Badge, Button, Empty, Input, Popconfirm, Popover, Select, Skeleton, Space, Tooltip, Typography } from "antd";
 import {
   ApiOutlined,
   ClockCircleOutlined,
@@ -87,6 +87,24 @@ function shortenDirPath(path: string, maxLen = 44): string {
 function formatTime(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+}
+
+/** 渲染模板选项的头像：URL 头像显示为小图，emoji 头像直接显示，空则省略。 */
+function renderTemplateOptionLabel(tpl: AgentTemplate): React.ReactNode {
+  const avatar = tpl.avatar?.trim() ?? "";
+  const name = tpl.name || tpl.id;
+  if (!avatar) {
+    return name;
+  }
+  if (/^https?:\/\//.test(avatar)) {
+    return (
+      <Space size={4}>
+        <Avatar src={avatar} size={16} style={{ verticalAlign: "middle" }} />
+        <span>{name}</span>
+      </Space>
+    );
+  }
+  return `${avatar} ${name}`;
 }
 
 function WorkspacePopover({ w, t }: { w: WorkspaceGroup; t: ReturnType<typeof useI18n>["t"] }) {
@@ -287,7 +305,7 @@ function NewChatWorkspacePopover(props: {
                   .filter((tpl) => tpl.id?.trim() && tpl.id !== "default")
                   .map((tpl) => ({
                     value: tpl.id,
-                    label: tpl.avatar ? `${tpl.avatar} ${tpl.name || tpl.id}` : tpl.name || tpl.id,
+                    label: renderTemplateOptionLabel(tpl),
                   })),
               ]}
             />

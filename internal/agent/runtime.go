@@ -484,6 +484,10 @@ type RunOptions struct {
 	// id routes the turn through the harness router, which resets engine
 	// state when the session switches engines.
 	Harness string
+	// Model is an optional per-turn model override forwarded to external
+	// engines (e.g. the ACP session config "model" option). Empty means the
+	// engine uses its configured default.
+	Model string
 }
 
 // SessionSkillState stores one activated skill's fully loaded prompt state.
@@ -692,6 +696,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			DrainInjections:    opts.DrainInjections,
 			OnInjectionDrained: opts.OnInjectionDrained,
 			Harness:            opts.Harness,
+			Model:              opts.Model,
 			Messages: func() []protocol.Message {
 				return a.GetMessages()
 			},

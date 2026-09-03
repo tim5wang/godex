@@ -97,6 +97,22 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
+	// Sets the ACP model override for a session whose template engine routes
+	// turns to an external ACP agent (e.g. "acp:dsh"). The value is a raw ACP
+	// model id forwarded via the harness's session config "model" option.
+	mux.Handle("POST /sessions/{id}/acp-model", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req setSessionACPAgentModelRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		view, err := service.SetSessionACPAgentModel(r.Context(), r.PathValue("id"), strings.TrimSpace(req.Model))
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	})))
 	mux.Handle("GET /sessions/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		snapshot, err := service.Snapshot(r.Context(), r.PathValue("id"))
 		if err != nil {

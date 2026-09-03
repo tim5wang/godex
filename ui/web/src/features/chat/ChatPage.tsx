@@ -10,7 +10,7 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useConversationLayoutStore, type DockTab, DOCK_TABS } from "./layout/layoutStore";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, setSessionACPAgentModel, discoverACPAgentModels, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -559,6 +559,37 @@ export function useChatPageController() {
     },
   });
 
+  // ACP sessions (template engine "acp:<agent-id>") select from the external
+  // agent's own model list (its session configOptions), not godex profiles.
+  // Discovery spawns the agent process, so the list is cached aggressively.
+  const acpAgentID = activeTemplate?.engine?.startsWith("acp:") ? activeTemplate.engine.slice(4) : null;
+  const acpModelsQuery = useQuery({
+    queryKey: ["acp-models", token, acpAgentID],
+    enabled: !!acpAgentID && !!openQuery.data?.session_id,
+    staleTime: 10 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    queryFn: () => (acpAgentID ? discoverACPAgentModels(token || null, acpAgentID) : { models: [] }),
+  });
+  const acpModelOptions = useMemo(
+    () => (acpModelsQuery.data?.models ?? []).map((model) => ({ value: model.value, label: model.name || model.value })),
+    [acpModelsQuery.data],
+  );
+  const acpModelMutation = useMutation({
+    mutationFn: async ({ model }: { model: string }) =>
+      setSessionACPAgentModel(token || null, openQuery.data!.session_id, model),
+    onSuccess: async (view) => {
+      queryClient.setQueryData(["models", token, openQuery.data?.session_id], view);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["models", token, openQuery.data?.session_id] }),
+        queryClient.invalidateQueries({ queryKey: ["snapshot", token, openQuery.data?.session_id] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions", token] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof APIError ? error.message : String(error));
+    },
+  });
+
   const unloadSkillMutation = useMutation({
     mutationFn: async (skillId: string) => unloadSessionSkill(token || null, openQuery.data!.session_id, skillId),
     onSuccess: async (result) => {
@@ -864,6 +895,11 @@ export function useChatPageController() {
     retryTurnMutation,
     resumeTurnMutation,
     modelMutation,
+    acpAgentID,
+    acpModelOptions,
+    acpModelsLoading: acpModelsQuery.isLoading,
+    acpModelMutation,
+    selectedACPAgentModel: modelsQuery.data?.acp_model ?? "",
     unloadSkillMutation,
     forkMutation,
     refreshSubagentViews,

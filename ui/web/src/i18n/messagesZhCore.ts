@@ -279,6 +279,10 @@ export const zhCoreMessages = {
       acpTimeoutLabel: "超时秒数",
       acpEnvLabel: "环境变量（每行 KEY=VALUE）",
       acpDescriptionLabel: "描述",
+      acpModelLabel: "模型",
+      acpModelPlaceholder: "留空使用 agent 默认模型",
+      acpDiscoverModels: "发现",
+      acpDiscoverNeedsID: "请先填写 agent id，再发现模型",
       weixinQrAlt: "微信登录二维码",
     },
     automation: {
@@ -589,6 +593,7 @@ export const zhCoreMessages = {
       fieldLabel: "名称",
       fieldDescription: "描述",
       fieldAvatar: "头像（emoji 或图片 URL）",
+      pickEmoji: "选择一个 emoji",
       fieldColor: "主题色",
       fieldScenarios: "场景标签",
       fieldBundles: "Bundles",

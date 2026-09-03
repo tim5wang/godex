@@ -726,6 +726,7 @@ export interface ModelsView {
   default_profile_id: string;
   session_profile_id?: string;
   reasoning_effort?: string;
+  acp_model?: string;
   profiles: ModelProfile[];
 }
 

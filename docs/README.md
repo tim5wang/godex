@@ -4,6 +4,7 @@
 > 修订日志：2026-08-12 首次建立索引；统一文档状态头与修订日志约定，标注被合并/被取代的旧文档。
 > 2026-08-28：补充 taskboard-plugin-design.md 条目（taskboard 插件已交付 M1/M2/M2.5）。
 > 2026-08-31：补齐全部顶层文档索引；加入功能实现矩阵、全模块审查与自动 `docs-check`。
+> 2026-09-03：文档整理（对标 DSH）：新增「读者速查」分层导航、新增 E. 文档组织区与整理方案（documentation-organization-plan.md）、补收 agent-template-agent-implementation-design.md 并规范化其状态头。
 
 ## 状态约定
 
@@ -16,6 +17,17 @@
 | **Superseded** | 已被其他文档合并/取代，仅保留追溯 | 不要作为当前依据 |
 | **Historical** | 历史记录（修复、验证、issue），内容可能过时 | 仅作参考 |
 | **Analysis** | 实测或研究资料，不定义产品契约 | 结论需回到代码、help、测试或功能矩阵验证 |
+
+## 读者速查（Quick Start by Role）
+
+| 读者 | 入口文档 | 说明 |
+|------|---------|------|
+| 终端用户 | [user-guide.md](./user-guide.md) → [extension-runtime-user-guide.md](./extension-runtime-user-guide.md) → [vscode-acp.md](./vscode-acp.md) | 安装配置、日常使用、扩展运行时（Package/MCP/ACP/WASM）、IDE 接入 |
+| 开发者 | [feature-implementation-matrix.md](./feature-implementation-matrix.md) → [architecture-v2-spec.md](./architecture-v2-spec.md) → [project-structure.md](./project-structure.md) → [godex-optimization-roadmap.md](./godex-optimization-roadmap.md) | 先查功能矩阵（功能是否已实现），再看架构与路线图 |
+| 部署运维 | [self-deploy.md](./self-deploy.md) → [node-onboarding.md](./node-onboarding.md) → [node-mesh-design.md](./node-mesh-design.md) | 自部署、节点接入与控制面 |
+| 历史查阅 | [release-notes-v1.4.0.md](./release-notes-v1.4.0.md)、[tools_issues.md](./tools_issues.md)、下方 Superseded / Historical 区 | 发布记录、工具排障经验 |
+
+> 文档整理方案（对标 DSH 的借鉴点、读者分层、每篇处理方式）见 [documentation-organization-plan.md](./documentation-organization-plan.md)。
 
 ---
 
@@ -50,6 +62,7 @@
 | [extension-runtime-user-guide.md](./extension-runtime-user-guide.md) | Package/MCP/ACP/WASM 使用与信任边界 | Active |
 | [compaction-optimization-plan.md](./compaction-optimization-plan.md) | Compaction Phase 1-4 实施记录与验收 | 已落地 |
 | [session-timeline-inspector.md](./session-timeline-inspector.md) | Timeline inspector 数据与 UI 契约 | 阶段 1/2 已实现 |
+| [agent-template-agent-implementation-design.md](./agent-template-agent-implementation-design.md) | Agent 模板指定外部 agent 内核设计方案 | M1 已实施（2026-09-02），M2/M3 待做 |
 
 ## B. 演进设计与历史实施记录（含剩余 Planned 项）
 
@@ -94,6 +107,14 @@
 | [codex-cache.md](./codex-cache.md) | Codex/Responses 端点缓存行为分析 | Analysis |
 | [cache-hitrate-analysis.md](./cache-hitrate-analysis.md) | Cache hit-rate 实测分析 | Analysis（独立任务产物） |
 | [tools_issues.md](./tools_issues.md) | 工具失败与规避经验日志 | Historical / Operational Log |
+
+---
+
+## E. 文档组织（Documentation Governance）
+
+| 文档 | 内容 | 备注 |
+|------|------|------|
+| [documentation-organization-plan.md](./documentation-organization-plan.md) | 文档整理方案：DSH 对标、读者分层、分类目录与每篇处理方式 | 2026-09-03 建立，已落地部分见文内 |
 
 ---
 

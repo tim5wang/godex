@@ -244,6 +244,9 @@ type ACPAgentConfig struct {
 	Env            map[string]string `json:"env,omitempty"`
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 	Description    string            `json:"description,omitempty"`
+	// Model is an optional session config override applied after session/new
+	// (config id "model"), discovered from the agent's configOptions.
+	Model string `json:"model,omitempty"`
 }
 
 // LoggingConfig controls package logger initialization.

@@ -295,6 +295,10 @@ type setSessionModelRequest struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
+type setSessionACPAgentModelRequest struct {
+	Model string `json:"model"`
+}
+
 type forkSessionRequest struct {
 	TurnID       string `json:"turn_id,omitempty"`
 	MessageIndex *int   `json:"message_index,omitempty"`

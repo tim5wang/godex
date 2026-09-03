@@ -26,6 +26,7 @@ export const enProductMessages = {
       notifyDone: "Done",
       modelLoading: "Loading model...",
       modelSwitching: "switching model",
+      acpModelPlaceholder: "ACP model (empty = agent default)",
       modelScopeDefault: "default",
       modelScopeSession: "session",
       workspaceLoading: "Loading workspace...",

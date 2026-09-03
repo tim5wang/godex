@@ -1,4 +1,4 @@
-import { App as AntApp, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Drawer, Spin, Tag } from "antd";
+import { App as AntApp, Avatar, Grid, Space, Tooltip, Button, Divider, Typography, Alert, Select, Badge, Drawer, Spin, Tag } from "antd";
 import { useParams, useSearchParams, useLocation, useNavigate, Link } from "react-router-dom";
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
@@ -241,6 +241,11 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     retryTurnMutation,
     resumeTurnMutation,
     modelMutation,
+    acpAgentID,
+    acpModelOptions,
+    acpModelsLoading,
+    acpModelMutation,
+    selectedACPAgentModel,
     unloadSkillMutation,
     forkMutation,
     refreshSubagentViews,
@@ -429,7 +434,13 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                 {activeTemplate ? (
                   <Tooltip title={activeTemplate.description || activeTemplate.id}>
                     <Tag style={{ marginInlineStart: 4 }}>
-                      {activeTemplate.avatar?.trim() ? <span style={{ marginInlineEnd: 4 }}>{activeTemplate.avatar.trim()}</span> : null}
+                      {activeTemplate.avatar?.trim() ? (
+                        /^https?:\/\//.test(activeTemplate.avatar.trim()) ? (
+                          <Avatar src={activeTemplate.avatar.trim()} size={16} style={{ marginInlineEnd: 4, verticalAlign: "middle" }} />
+                        ) : (
+                          <span style={{ marginInlineEnd: 4 }}>{activeTemplate.avatar.trim()}</span>
+                        )
+                      ) : null}
                       {activeTemplate.name || activeTemplate.id}
                     </Tag>
                   </Tooltip>
@@ -556,7 +567,20 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                 <div style={{ borderTop: "1px solid var(--godex-border)", padding: "6px 12px" }}>
                   <Space style={{ width: "100%", justifyContent: "space-between" }} size={4} wrap>
                     <Space size={4}>
-                      {modelsQuery.data?.profiles.length ? (
+                      {acpAgentID ? (
+                        <Select
+                          size="small"
+                          value={selectedACPAgentModel || undefined}
+                          style={{ minWidth: 120, maxWidth: 200 }}
+                          loading={acpModelsLoading || acpModelMutation.isPending}
+                          disabled={acpModelMutation.isPending}
+                          placeholder={t("chat.acpModelPlaceholder")}
+                          onChange={(value) => acpModelMutation.mutate({ model: value || "" })}
+                          options={acpModelOptions}
+                          showSearch
+                          optionFilterProp="label"
+                        />
+                      ) : modelsQuery.data?.profiles.length ? (
                         <Select
                           size="small"
                           value={selectedProfile?.id}
@@ -567,7 +591,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                           options={modelGroupOptions}
                         />
                       ) : null}
-                      {modelsQuery.data?.profiles.length && selectedProfile?.id ? (
+                      {!acpAgentID && modelsQuery.data?.profiles.length && selectedProfile?.id ? (
                         <Select
                           allowClear
                           size="small"

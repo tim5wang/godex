@@ -26,6 +26,7 @@ export const zhProductMessages = {
       notifyDone: "完成",
       modelLoading: "模型加载中...",
       modelSwitching: "模型切换中",
+      acpModelPlaceholder: "ACP 模型（留空用 agent 默认）",
       modelScopeDefault: "默认",
       modelScopeSession: "会话",
       workspaceLoading: "工作区加载中...",

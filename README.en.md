@@ -228,19 +228,15 @@ See the [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md) for the d
 
 ## Documentation
 
-- [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md): Agent/Sandbox, Orchestrator/Worker, Session Graph, and storage decoupling roadmap.
-- [User Guide](docs/user-guide.md): Installation, configuration, providers, Web UI, tools, Memory, API, and release checks.
-- [Feature-to-implementation Matrix](docs/feature-implementation-matrix.md): Implementation status, code source of truth, entry points, and authoritative docs.
-- [Full Code and Documentation Review (2026-08-31)](docs/code-and-docs-review-2026-08-31.md): Prioritized architecture, duplication, test-baseline, and documentation findings.
-- [Code & Design Review](docs/code-review-2026-08-15.md): Doc-vs-implementation consistency audit and code-side findings.
-- [DSH Research Notes](docs/research_of_dsh_for_godex_optimize.md): What GoDex can learn from DeepSeek Harness's plugin design (plugin kernel, WASM boundaries, roadmap).
-- [Project Structure](docs/project-structure.md): Directory responsibilities and refactoring boundaries.
-- [Memory Design Principles](docs/memory-design-principles.md): Long-term memory, candidates, recall, and audit design.
-- [Workflow Runtime](docs/workflow-runtime.md): Workflow/subagent runtime design.
-- [Self-deployment Guide](docs/self-deploy.md): Deploying to a server and self-managed operations.
-- [Capability Enhancement v2](docs/capability-enhancement-v2.md): App Shell, Node Registry, Notes, Claude import, and related phase plans and progress.
-- [P0-P6 End-to-end Validation](docs/p0-p6-e2e-validation.md): Manual acceptance checklist.
-- [High-ROI Roadmap](docs/roadmap-high-roi.md): Current capability baseline and future direction.
+The full index (status, category, and relationships for every doc) lives in **[docs/README.md](docs/README.md)**; the documentation organization plan (DSH benchmark, reader layers, per-doc treatment) is in [docs/documentation-organization-plan.md](docs/documentation-organization-plan.md).
+
+Quick start by reader:
+
+- **End users**: [User Guide](docs/user-guide.md), [Extension Runtime Guide](docs/extension-runtime-user-guide.md) (Package/MCP/ACP/WASM), [VS Code ACP](docs/vscode-acp.md)
+- **Developers**: [Architecture SPEC](docs/architecture-v2-spec.en.md), [Project Structure](docs/project-structure.md), [Feature-to-implementation Matrix](docs/feature-implementation-matrix.md), [Optimization Roadmap](docs/godex-optimization-roadmap.md)
+- **Ops**: [Self-deployment Guide](docs/self-deploy.md), [Node Onboarding](docs/node-onboarding.md), [Node Mesh](docs/node-mesh-design.md)
+
+> All other design and historical docs are indexed in [docs/README.md](docs/README.md).
 
 ## Directory Structure
 

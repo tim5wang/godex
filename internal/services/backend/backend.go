@@ -73,6 +73,7 @@ type SessionManifest struct {
 	Title                  string              `json:"title,omitempty"`
 	ModelProfileID         string              `json:"model_profile_id,omitempty"`
 	ReasoningEffort        string              `json:"reasoning_effort,omitempty"`
+	AcpModel               string              `json:"acp_model,omitempty"`
 	ParentSessionID        string              `json:"parent_session_id,omitempty"`
 	ForkedFromTurnID       string              `json:"forked_from_turn_id,omitempty"`
 	ForkedFromMessageIndex *int                `json:"forked_from_message_index,omitempty"`
@@ -175,7 +176,10 @@ type ModelsView struct {
 	DefaultProfileID string         `json:"default_profile_id"`
 	SessionProfileID string         `json:"session_profile_id,omitempty"`
 	ReasoningEffort  string         `json:"reasoning_effort,omitempty"`
-	Profiles         []ModelProfile `json:"profiles"`
+	// AcpModel is the session's ACP model override (raw ACP model id) when the
+	// session routes turns to an external ACP agent; empty otherwise.
+	AcpModel string         `json:"acp_model,omitempty"`
+	Profiles []ModelProfile `json:"profiles"`
 }
 
 // SubmitResult summarizes one submitted user turn.
@@ -348,6 +352,7 @@ type sessionState struct {
 	lastActive             time.Time
 	modelProfileID         string
 	reasoningEffort        string
+	acpModel               string
 	parentSessionID        string
 	forkedFromTurnID       string
 	forkedFromMessageIndex *int

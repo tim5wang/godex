@@ -54,6 +54,7 @@ export type ACPAgentFormItem = {
   env?: string;
   timeout_seconds?: number;
   description?: string;
+  model?: string;
 };
 
 export type ModelOption = {
@@ -282,10 +283,11 @@ export function acpAgentsConfigToForm(value: unknown): ACPAgentsFormValue {
   const items = Object.entries(raw as Record<string, Record<string, unknown>>).map(([id, agent]) => ({
     id,
     command: asOptionalString(agent.command),
-    args: Array.isArray(agent.args) ? agent.args.map(String).join(", ") : asOptionalString(agent.args),
+    args: Array.isArray(agent.args) ? agent.args.map(String).join(" ") : asOptionalString(agent.args),
     env: envToText(agent.env),
     timeout_seconds: asOptionalNumber(agent.timeout_seconds),
     description: asOptionalString(agent.description),
+    model: asOptionalString(agent.model),
   }));
   return { items };
 }
@@ -295,10 +297,11 @@ function acpAgentsFormToConfig(value: unknown) {
   return Object.fromEntries(form.items.filter((item) => stringsPresent(item.id)).map((item) => {
     return [item.id.trim(), {
       command: item.command ?? "",
-      args: splitTags(item.args),
+      args: splitArgs(item.args),
       env: parseEnvText(item.env),
       timeout_seconds: item.timeout_seconds ?? 0,
       description: item.description ?? "",
+      model: item.model ?? "",
     }];
   }));
 }
@@ -422,6 +425,14 @@ export function numberOrUndefined(value: string | number | null): number | undef
 
 function splitTags(value?: string): string[] {
   return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+/** 把 ACP agent 的 args 文本按空白拆成独立参数（shell 风格），
+ *  使表单里填 "codex --profile acp" 或 "codex,--profile,acp" 都能得到
+ *  ["codex","--profile","acp"]，避免把 "a b" 当成单个带空格参数传给
+ *  exec.Command 导致 ACP 进程无法启动（EOF）。 */
+function splitArgs(value?: string): string[] {
+  return String(value ?? "").split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
 }
 
 export function nextUniqueID(base: string, ids: string[]) {

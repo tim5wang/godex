@@ -699,6 +699,10 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		Sink:             runSink,
 		RuntimeContext:   runtimeCtx,
 		Harness:          requestedHarness,
+		// Forward the session's ACP model override to external engines
+		// (godex engine ignores it). The ACP harness applies it via the
+		// session config "model" option on the live session.
+		Model: strings.TrimSpace(session.acpModel),
 		Checkpoint: func() {
 			s.checkpointRunningTurn(session, turnID)
 		},

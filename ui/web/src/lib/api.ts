@@ -429,6 +429,12 @@ export function discoverProviderModels(token: string | null, id: string) {
   return request<ProviderModelsResponse>(`/providers/${encodeURIComponent(id)}/models`, { method: "POST" }, token);
 }
 
+export type ACPModelOption = { value: string; name: string };
+
+export function discoverACPAgentModels(token: string | null, id: string) {
+  return request<{ models: ACPModelOption[] }>(`/acp/agents/${encodeURIComponent(id)}/models`, { method: "GET" }, token);
+}
+
 export function getChannelsStatus(token: string | null) {
   return request<ChannelStatusReport>("/channels", { method: "GET" }, token);
 }
@@ -444,6 +450,17 @@ export function setSessionModel(token: string | null, sessionId: string, profile
     {
       method: "POST",
       body: JSON.stringify({ profile_id: profileId, reasoning_effort: reasoningEffort || undefined }),
+    },
+    token,
+  );
+}
+
+export function setSessionACPAgentModel(token: string | null, sessionId: string, model: string) {
+  return request<ModelsView>(
+    `/sessions/${encodeURIComponent(sessionId)}/acp-model`,
+    {
+      method: "POST",
+      body: JSON.stringify({ model: model || undefined }),
     },
     token,
   );

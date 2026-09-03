@@ -22,6 +22,7 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 	session.lastActive = updatedAt
 	modelProfileID := strings.TrimSpace(session.modelProfileID)
 	reasoningEffort := normalizeSessionReasoningEffort(session.reasoningEffort)
+	acpModel := strings.TrimSpace(session.acpModel)
 	parentSessionID := strings.TrimSpace(session.parentSessionID)
 	forkedFromTurnID := strings.TrimSpace(session.forkedFromTurnID)
 	forkedFromMessageIndex := cloneIntPtr(session.forkedFromMessageIndex)
@@ -36,6 +37,7 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 		Title:                  session.title,
 		ModelProfileID:         modelProfileID,
 		ReasoningEffort:        reasoningEffort,
+		AcpModel:               acpModel,
 		ParentSessionID:        parentSessionID,
 		ForkedFromTurnID:       forkedFromTurnID,
 		ForkedFromMessageIndex: forkedFromMessageIndex,

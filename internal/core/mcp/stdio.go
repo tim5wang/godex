@@ -4,12 +4,19 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"sync"
 	"time"
 )
+
+// errConnClosed marks a dead MCP stdio transport (the server process exited or
+// its pipe was closed). Operations returning this error can be retried on a
+// fresh connection; application-level JSON-RPC errors are ordinary errors and
+// must not be retried.
+var errConnClosed = errors.New("mcp stdio connection closed")
 
 // stdioClient is a minimal MCP client for a server process speaking JSON-RPC
 // 2.0 over stdio. It implements the subset needed for the cross-runtime plugin
@@ -207,7 +214,7 @@ func (c *stdioClient) request(ctx context.Context, method string, params any) (j
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil, fmt.Errorf("mcp client closed")
+		return nil, fmt.Errorf("%w: client closed", errConnClosed)
 	}
 	c.nextID++
 	id := c.nextID
@@ -232,13 +239,13 @@ func (c *stdioClient) request(ctx context.Context, method string, params any) (j
 		return nil, err
 	}
 	if _, err := c.stdin.Write(append(line, '\n')); err != nil {
-		return nil, fmt.Errorf("mcp write %s: %w", method, err)
+		return nil, fmt.Errorf("mcp write %s: %w: %v", method, errConnClosed, err)
 	}
 
 	select {
 	case raw, ok := <-ch:
 		if !ok {
-			return nil, fmt.Errorf("mcp %s: connection closed", method)
+			return nil, fmt.Errorf("mcp %s: %w", method, errConnClosed)
 		}
 		var rpc struct {
 			Error *struct {

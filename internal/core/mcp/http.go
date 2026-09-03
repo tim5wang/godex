@@ -109,6 +109,39 @@ func (c *httpClient) callTool(ctx context.Context, name string, args map[string]
 	return call, nil
 }
 
+// listPrompts lists the prompts exposed by the remote server.
+func (c *httpClient) listPrompts(ctx context.Context) ([]mcpPrompt, error) {
+	result, err := c.request(ctx, "prompts/list", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var list struct {
+		Prompts []mcpPrompt `json:"prompts"`
+	}
+	if err := json.Unmarshal(result, &list); err != nil {
+		return nil, fmt.Errorf("mcp prompts/list: %w", err)
+	}
+	return list.Prompts, nil
+}
+
+// getPrompt renders one prompt on the remote server.
+func (c *httpClient) getPrompt(ctx context.Context, name string, arguments map[string]any) ([]mcpPromptMessage, error) {
+	result, err := c.request(ctx, "prompts/get", map[string]any{
+		"name":      name,
+		"arguments": arguments,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var call struct {
+		Messages []mcpPromptMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(result, &call); err != nil {
+		return nil, fmt.Errorf("mcp prompts/get: %w", err)
+	}
+	return call.Messages, nil
+}
+
 // request sends one JSON-RPC request and returns the result field, retrying
 // transient network/5xx failures with exponential backoff (1s, 2s). 4xx and
 // malformed responses are returned immediately and never retried.

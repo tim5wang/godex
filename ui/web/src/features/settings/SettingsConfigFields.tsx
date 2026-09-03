@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Alert,
   Button,
@@ -23,6 +23,8 @@ import {
   ReloadOutlined,
 } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
+import { discoverACPAgentModels, type ACPModelOption } from "../../lib/api";
+import { useSettingsStore } from "../../store/settings";
 import type { ConfigFieldSchema, ConfigFieldState, ConfigSectionSchema } from "../../lib/types";
 import {
   API_HIDDEN_PATHS,
@@ -915,6 +917,10 @@ function LLMStrategyEditor({ value, onChange, modelOptions }: { value?: unknown;
 function ACPAgentsEditor({ value, onChange }: { value?: unknown; onChange?: (value: ACPAgentsFormValue) => void }) {
   const agents = acpAgentsConfigToForm(value);
   const { t } = useI18n();
+  const token = useSettingsStore((state) => state.token);
+  const [discovering, setDiscovering] = useState<number | null>(null);
+  const [discovered, setDiscovered] = useState<Record<number, ACPModelOption[]>>({});
+  const [discoverError, setDiscoverError] = useState<string | undefined>(undefined);
   const emit = (items: ACPAgentFormItem[]) => onChange?.({ items });
   const updateAgent = (index: number, patch: Partial<ACPAgentFormItem>) => {
     emit(agents.items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
@@ -930,8 +936,26 @@ function ACPAgentsEditor({ value, onChange }: { value?: unknown; onChange?: (val
         env: "",
         timeout_seconds: 120,
         description: "",
+        model: "",
       },
     ]);
+  };
+  const discoverModels = async (index: number) => {
+    const agent = agents.items[index];
+    if (!agent.id) {
+      setDiscoverError(t("settings.acpDiscoverNeedsID"));
+      return;
+    }
+    setDiscovering(index);
+    setDiscoverError(undefined);
+    try {
+      const resp = await discoverACPAgentModels(token, agent.id);
+      setDiscovered((prev) => ({ ...prev, [index]: resp.models ?? [] }));
+    } catch (err) {
+      setDiscoverError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDiscovering(null);
+    }
   };
 
   return (
@@ -979,6 +1003,28 @@ function ACPAgentsEditor({ value, onChange }: { value?: unknown; onChange?: (val
                     value={agent.timeout_seconds}
                     onChange={(timeout) => updateAgent(index, { timeout_seconds: numberOrUndefined(timeout) })}
                   />
+                </LabelledControl>
+                <LabelledControl label={t("settings.acpModelLabel")} wide>
+                  <Space.Compact style={{ width: "100%" }}>
+                    <Select
+                      allowClear
+                      showSearch
+                      value={agent.model || undefined}
+                      placeholder={t("settings.acpModelPlaceholder")}
+                      onChange={(model) => updateAgent(index, { model: model ?? "" })}
+                      options={(discovered[index] ?? []).map((option) => ({ value: option.value, label: option.name || option.value }))}
+                      optionFilterProp="label"
+                      style={{ flex: 1 }}
+                    />
+                    <Button icon={<ReloadOutlined />} loading={discovering === index} onClick={() => void discoverModels(index)}>
+                      {t("settings.acpDiscoverModels")}
+                    </Button>
+                  </Space.Compact>
+                  {discoverError ? (
+                    <Typography.Text type="danger" style={{ fontSize: 12, display: "block", marginTop: 4 }}>
+                      {discoverError}
+                    </Typography.Text>
+                  ) : null}
                 </LabelledControl>
                 <LabelledControl label={t("settings.acpEnvLabel")} wide>
                   <Input.TextArea

@@ -279,6 +279,10 @@ export const enCoreMessages = {
       acpTimeoutLabel: "Timeout seconds",
       acpEnvLabel: "Environment (KEY=VALUE per line)",
       acpDescriptionLabel: "Description",
+      acpModelLabel: "Model",
+      acpModelPlaceholder: "Leave empty for agent default",
+      acpDiscoverModels: "Discover",
+      acpDiscoverNeedsID: "Set the agent id first, then discover models",
       weixinQrAlt: "Weixin login QR code",
     },
     automation: {
@@ -590,6 +594,7 @@ export const enCoreMessages = {
       fieldLabel: "Name",
       fieldDescription: "Description",
       fieldAvatar: "Avatar (emoji or URL)",
+      pickEmoji: "Pick an emoji",
       fieldColor: "Accent color",
       fieldScenarios: "Scenario tags",
       fieldBundles: "Bundles",

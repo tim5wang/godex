@@ -109,6 +109,11 @@ func (a *Agent) Initialize(context.Context, acp.InitializeRequest) (acp.Initiali
 		AgentInfo:       &info,
 		AgentCapabilities: acp.AgentCapabilities{
 			LoadSession: true,
+			SessionCapabilities: acp.SessionCapabilities{
+				Close:  &acp.SessionCloseCapabilities{},
+				List:   &acp.SessionListCapabilities{},
+				Resume: &acp.SessionResumeCapabilities{},
+			},
 			PromptCapabilities: acp.PromptCapabilities{
 				EmbeddedContext: true,
 			},
@@ -127,7 +132,6 @@ func (a *Agent) NewSession(ctx context.Context, params acp.NewSessionRequest) (a
 	a.mu.Unlock()
 	resp := acp.NewSessionResponse{SessionId: acp.SessionId(sid)}
 	if view, ok := a.modelView(ctx, sid); ok {
-		resp.Models = acpModelState(view)
 		resp.ConfigOptions = acpModelConfigOptions(view)
 	}
 	a.scheduleAvailableCommands(acp.SessionId(sid))
@@ -225,14 +229,51 @@ func (a *Agent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.
 	return acp.SetSessionModeResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetMode)
 }
 
-// UnstableSetSessionModel supports ACP clients that expose model selection as
-// the protocol's model state instead of a config option.
-func (a *Agent) UnstableSetSessionModel(ctx context.Context, req acp.UnstableSetSessionModelRequest) (acp.UnstableSetSessionModelResponse, error) {
-	_, err := a.setSessionModelProfile(ctx, string(req.SessionId), string(req.ModelId))
-	if err != nil {
-		return acp.UnstableSetSessionModelResponse{}, err
+// Logout terminates the ACP connection. godex has no ACP-level authentication,
+// so logout is a no-op success.
+func (a *Agent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, error) {
+	return acp.LogoutResponse{}, nil
+}
+
+// CloseSession cancels any in-flight prompt for the session and drops its
+// state. Unknown sessions are ignored (idempotent close).
+func (a *Agent) CloseSession(_ context.Context, params acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+	sid := string(params.SessionId)
+	a.mu.Lock()
+	st, ok := a.sessions[sid]
+	if ok {
+		delete(a.sessions, sid)
+		if st.cancel != nil {
+			st.cancel()
+		}
 	}
-	return acp.UnstableSetSessionModelResponse{}, nil
+	a.mu.Unlock()
+	return acp.CloseSessionResponse{}, nil
+}
+
+// ResumeSession re-binds a persisted session id to this agent process. Like
+// LoadSession it creates a state record for unknown ids so subsequent Prompt
+// calls succeed, but it does not return prior messages (session/resume
+// semantics). Model config options are refreshed from the backend session.
+func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	sid := string(params.SessionId)
+	a.mu.Lock()
+	if a.sessions == nil {
+		a.sessions = make(map[string]*sessionState)
+	}
+	st, ok := a.sessions[sid]
+	if !ok {
+		st = &sessionState{}
+		a.sessions[sid] = st
+	}
+	st.cwd = params.Cwd
+	a.mu.Unlock()
+	resp := acp.ResumeSessionResponse{}
+	if view, ok := a.modelView(ctx, sid); ok {
+		resp.ConfigOptions = acpModelConfigOptions(view)
+	}
+	a.scheduleAvailableCommands(acp.SessionId(sid))
+	return resp, nil
 }
 
 // EchoPromptHandler is the default PromptHandler used when none is configured.

@@ -445,6 +445,13 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                     </Tag>
                   </Tooltip>
                 ) : null}
+                {activeTemplate?.engine && activeTemplate.engine !== "godex" ? (
+                  <Tooltip title={t("chat.engineExternalTooltip")}>
+                    <Tag color="gold" style={{ marginInlineStart: 4 }}>
+                      {activeTemplate.engine}
+                    </Tag>
+                  </Tooltip>
+                ) : null}
               </Space>
               <Space size={4} className="chat-v2-topbar-actions">
                 {remoteNodeID ? (

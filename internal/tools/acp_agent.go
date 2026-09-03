@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/acp-go-sdk"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 )
 
@@ -92,16 +93,210 @@ type acpRunResult struct {
 	StopReason string   `json:"stop_reason,omitempty"`
 	Text       string   `json:"text,omitempty"`
 	Updates    []string `json:"updates,omitempty"`
+	// Usage is the per-turn token usage the agent reported in the
+	// session/prompt result (optional; only agents that implement the ACP
+	// usage reporting emit it).
+	Usage *ACPTurnUsage `json:"usage,omitempty"`
+	// SessionUsage is the latest context-window watermark (usage_update)
+	// observed during this run (nil when the agent never sent one).
+	SessionUsage *ACPSessionUsage `json:"session_usage,omitempty"`
 }
 
 // ACPRunResult is the exported result of one external ACP agent run, reused by
 // the ACP harness (阶段 C: Pi/其他 ACP agent 的 Harness adapter).
 type ACPRunResult = acpRunResult
 
+// ACPPermissionRequest / ACPPermissionResponse alias the ACP SDK permission
+// types so callers can plug decision policies without importing the SDK.
+type ACPPermissionRequest = acp.RequestPermissionRequest
+type ACPPermissionResponse = acp.RequestPermissionResponse
+
+// ACPPermissionHandler decides how to answer one session/request_permission
+// request from the external agent (M4 权限桥). It returns the chosen outcome
+// or an error — an error is answered with a JSON-RPC error and usually aborts
+// the agent's pending tool call.
+type ACPPermissionHandler func(ctx context.Context, req ACPPermissionRequest) (ACPPermissionResponse, error)
+
+// DenyACPPermissionRequest builds a deny decision for one permission request:
+// it selects the agent's "reject once" option when present, falling back to
+// "reject always". It errors when the agent offered no rejection option (the
+// request is then answered with a JSON-RPC error, which is still a denial).
+func DenyACPPermissionRequest(req ACPPermissionRequest) (ACPPermissionResponse, error) {
+	var rejectAlways *acp.PermissionOption
+	for i := range req.Options {
+		opt := &req.Options[i]
+		switch opt.Kind {
+		case acp.PermissionOptionKindRejectOnce:
+			return ACPPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(opt.OptionId)}, nil
+		case acp.PermissionOptionKindRejectAlways:
+			rejectAlways = opt
+		}
+	}
+	if rejectAlways != nil {
+		return ACPPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(rejectAlways.OptionId)}, nil
+	}
+	return ACPPermissionResponse{}, fmt.Errorf("godex ACP client: agent offered no rejection option for session/request_permission")
+}
+
+// SelectACPPermissionOption answers a permission request by selecting the
+// named option (e.g. "allow_session" chosen by an approval UI / policy
+// rules). It errors when the agent did not offer that option.
+func SelectACPPermissionOption(req ACPPermissionRequest, optionID string) (ACPPermissionResponse, error) {
+	for i := range req.Options {
+		if string(req.Options[i].OptionId) == optionID {
+			return ACPPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(req.Options[i].OptionId)}, nil
+		}
+	}
+	return ACPPermissionResponse{}, fmt.Errorf("godex ACP client: option %q not offered for session/request_permission", optionID)
+}
+
+// ACPCost carries the cumulative session cost optionally reported alongside a
+// usage_update watermark. Amount is in ISO 4217 Currency units.
+type ACPCost struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
+// ACPSessionUsage is the session context-window watermark an agent reports via
+// usage_update notifications: tokens currently in context (Used) versus the
+// total window Size, plus optional cumulative session cost. It lets a host
+// render a "context bar" for an external engine the same way it does for the
+// native one.
+type ACPSessionUsage struct {
+	Used int      `json:"used"`
+	Size int      `json:"size"`
+	Cost *ACPCost `json:"cost,omitempty"`
+}
+
+// ACPTurnUsage is the per-turn token usage an agent reports in the
+// session/prompt result. Fields mirror the ACP protocol's Usage struct; cache
+// and thought counts are optional and their exact semantics are agent
+// specific (e.g. whether cachedRead is already included in inputTokens).
+type ACPTurnUsage struct {
+	InputTokens       int `json:"input_tokens,omitempty"`
+	OutputTokens      int `json:"output_tokens,omitempty"`
+	CachedReadTokens  int `json:"cached_read_tokens,omitempty"`
+	CachedWriteTokens int `json:"cached_write_tokens,omitempty"`
+	ThoughtTokens     int `json:"thought_tokens,omitempty"`
+	TotalTokens       int `json:"total_tokens,omitempty"`
+}
+
+// acpMcpServers converts the agent's configured stdio MCP servers into ACP
+// mcpServers entries passed with session/new and session/load. Stdio is the
+// MCP transport every ACP agent MUST support, so no capability negotiation is
+// needed; the agent connects to each listed server itself (M3a).
+func acpMcpServers(cfg config.ACPAgentConfig) []acp.McpServer {
+	out := make([]acp.McpServer, 0, len(cfg.McpServers))
+	for _, server := range cfg.McpServers {
+		command := strings.TrimSpace(server.Command)
+		if command == "" {
+			continue
+		}
+		name := strings.TrimSpace(server.Name)
+		if name == "" {
+			name = filepath.Base(command)
+		}
+		env := make([]acp.EnvVariable, 0, len(server.Env))
+		for key, value := range server.Env {
+			env = append(env, acp.EnvVariable{Name: key, Value: value})
+		}
+		args := append([]string{}, server.Args...)
+		out = append(out, acp.McpServer{Stdio: &acp.McpServerStdio{
+			Name:    name,
+			Command: command,
+			Args:    args,
+			Env:     env,
+		}})
+	}
+	return out
+}
+
+// acpTurnUsage converts an SDK prompt-response usage into the exported form.
+// Every pointer field on the SDK type is optional; nil-safe.
+func acpTurnUsage(u *acp.Usage) *ACPTurnUsage {
+	if u == nil {
+		return nil
+	}
+	out := &ACPTurnUsage{
+		InputTokens:  u.InputTokens,
+		OutputTokens: u.OutputTokens,
+		TotalTokens:  u.TotalTokens,
+	}
+	if u.CachedReadTokens != nil {
+		out.CachedReadTokens = *u.CachedReadTokens
+	}
+	if u.CachedWriteTokens != nil {
+		out.CachedWriteTokens = *u.CachedWriteTokens
+	}
+	if u.ThoughtTokens != nil {
+		out.ThoughtTokens = *u.ThoughtTokens
+	}
+	return out
+}
+
+// acpSessionUsage converts an SDK usage_update into the exported form.
+func acpSessionUsage(u *acp.SessionUsageUpdate) *ACPSessionUsage {
+	if u == nil {
+		return nil
+	}
+	out := &ACPSessionUsage{Used: u.Used, Size: u.Size}
+	if u.Cost != nil {
+		out.Cost = &ACPCost{Amount: u.Cost.Amount, Currency: u.Cost.Currency}
+	}
+	return out
+}
+
+// ACPContentBlocksForMessage converts the content of one godex user message
+// into ACP session/prompt content blocks (M2: 附件/多 content-block 支持).
+// Text blocks always pass through; image blocks are included only when
+// includeImages is true (i.e. the receiving agent advertised
+// promptCapabilities.image during initialize). Anything else (tool results,
+// thinking, …) is never part of a user-authored prompt and is skipped.
+func ACPContentBlocksForMessage(msg protocol.Message, includeImages bool) []acp.ContentBlock {
+	var out []acp.ContentBlock
+	for _, block := range msg.Content {
+		switch block.Type {
+		case protocol.BlockText:
+			if strings.TrimSpace(block.Text) != "" {
+				out = append(out, acp.TextBlock(block.Text))
+			}
+		case protocol.BlockImage:
+			if !includeImages {
+				continue
+			}
+			if converted, ok := ACPImageContentBlock(block); ok {
+				out = append(out, converted)
+			}
+		}
+	}
+	return out
+}
+
+// ACPImageContentBlock converts one godex protocol image block (base64 image
+// source) into an ACP image prompt content block. ACP/MCP image content
+// expects the raw base64 payload plus a separate mimeType, so a
+// "data:<mime>;base64,<payload>" data URI is unwrapped when present.
+func ACPImageContentBlock(block protocol.Block) (acp.ContentBlock, bool) {
+	if block.Type != protocol.BlockImage || block.Source == nil {
+		return acp.ContentBlock{}, false
+	}
+	data := block.Source.Data
+	if lower := strings.ToLower(data); strings.HasPrefix(lower, "data:") {
+		if i := strings.Index(lower, ";base64,"); i >= 0 {
+			data = data[i+len(";base64,"):]
+		}
+	}
+	mime := strings.TrimSpace(block.Source.MediaType)
+	if mime == "" {
+		mime = "image/png"
+	}
+	return acp.ImageBlock(data, mime), true
+}
+
 // ACPUpdate is one structured session/update event captured from the external
 // engine, mapped onto GoDex events by the harness (P2 #4 unified event
 // mapping). Kind is one of "plan", "tool_call", "tool_call_update",
-// "thought_chunk", or "message_chunk".
+// "thought_chunk", "message_chunk", or "usage_update".
 type ACPUpdate struct {
 	Kind       string         `json:"kind"`
 	Name       string         `json:"name,omitempty"`
@@ -109,6 +304,9 @@ type ACPUpdate struct {
 	Text       string         `json:"text,omitempty"`
 	Input      map[string]any `json:"input,omitempty"`
 	Raw        string         `json:"raw,omitempty"`
+	// SessionUsage is set when Kind == "usage_update": the agent's latest
+	// context-window watermark for the session.
+	SessionUsage *ACPSessionUsage `json:"sessionUsage,omitempty"`
 }
 
 // RunACPAgent runs one prompt against a configured ACP agent over stdio and
@@ -138,10 +336,18 @@ func StreamACPAgentModel(ctx context.Context, agent config.ACPAgentConfig, works
 // godex onUpdate callback (streaming) and accumulates the reply text.
 type acpSDKClient struct {
 	onUpdate func(ACPUpdate)
+	// permissionHandler answers the agent's session/request_permission
+	// requests (M4). Nil keeps the historical behaviour: every request is
+	// answered with an error.
+	permissionHandler ACPPermissionHandler
 
 	mu      sync.Mutex
 	text    strings.Builder
 	updates []string
+	// lastSessionUsage is the most recent usage_update watermark the agent
+	// reported for the current prompt run (reset at the start of each run so
+	// a run never inherits a stale watermark from a previous turn).
+	lastSessionUsage *ACPSessionUsage
 }
 
 var _ acp.Client = (*acpSDKClient)(nil)
@@ -207,12 +413,51 @@ func (c *acpSDKClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 		})
 	case u.Plan != nil:
 		c.addUpdate(ACPUpdate{Kind: "plan", Raw: rawStr})
+	case u.UsageUpdate != nil:
+		// Context-window watermark (used/size + optional cumulative cost).
+		// Track the latest value on the client so the run result and the
+		// persistent session can surface it after the turn completes.
+		usage := acpSessionUsage(u.UsageUpdate)
+		c.mu.Lock()
+		c.lastSessionUsage = usage
+		c.mu.Unlock()
+		c.addUpdate(ACPUpdate{Kind: "usage_update", SessionUsage: usage, Raw: rawStr})
 	}
 	return nil
 }
 
+// resetSessionUsage clears the latest usage_update watermark; callers invoke
+// it at the start of each prompt run so a run only carries its own data.
+func (c *acpSDKClient) resetSessionUsage() {
+	c.mu.Lock()
+	c.lastSessionUsage = nil
+	c.mu.Unlock()
+}
+
+// takeSessionUsage snapshots the latest usage_update watermark (nil if the
+// agent has not sent one this run).
+func (c *acpSDKClient) takeSessionUsage() *ACPSessionUsage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lastSessionUsage == nil {
+		return nil
+	}
+	out := *c.lastSessionUsage
+	if c.lastSessionUsage.Cost != nil {
+		cost := *c.lastSessionUsage.Cost
+		out.Cost = &cost
+	}
+	return &out
+}
+
 func (c *acpSDKClient) RequestPermission(ctx context.Context, params acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
-	return acp.RequestPermissionResponse{}, fmt.Errorf("godex ACP client does not implement session/request_permission")
+	c.mu.Lock()
+	handler := c.permissionHandler
+	c.mu.Unlock()
+	if handler == nil {
+		return acp.RequestPermissionResponse{}, fmt.Errorf("godex ACP client does not implement session/request_permission (no permission handler configured)")
+	}
+	return handler(ctx, params)
 }
 
 func (c *acpSDKClient) ReadTextFile(ctx context.Context, params acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
@@ -331,7 +576,7 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 	}
 	newSess, err := conn.NewSession(ctx, acp.NewSessionRequest{
 		Cwd:        workspace,
-		McpServers: []acp.McpServer{},
+		McpServers: acpMcpServers(agent),
 	})
 	if err != nil {
 		_ = cmd.Process.Kill()
@@ -485,7 +730,7 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 
 	newSess, err := conn.NewSession(ctx, acp.NewSessionRequest{
 		Cwd:        workspace,
-		McpServers: []acp.McpServer{},
+		McpServers: acpMcpServers(agent),
 	})
 	if err != nil {
 		_ = cmd.Process.Kill()
@@ -537,11 +782,13 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 	}
 
 	return acpRunResult{
-		Agent:      agent.ID,
-		SessionID:  string(newSess.SessionId),
-		StopReason: string(promptResp.StopReason),
-		Text:       strings.TrimSpace(text),
-		Updates:    updates,
+		Agent:        agent.ID,
+		SessionID:    string(newSess.SessionId),
+		StopReason:   string(promptResp.StopReason),
+		Text:         strings.TrimSpace(text),
+		Updates:      updates,
+		Usage:        acpTurnUsage(promptResp.Usage),
+		SessionUsage: client.takeSessionUsage(),
 	}, nil
 }
 
@@ -556,6 +803,10 @@ type ACPSession struct {
 	workspace string
 	model     string
 	timeout   int
+	// supportsImage records whether the agent advertised
+	// promptCapabilities.image during initialize; the harness uses it to gate
+	// image content blocks in prompts (M2).
+	supportsImage bool
 
 	mu         sync.Mutex
 	cmd        *exec.Cmd
@@ -635,28 +886,32 @@ func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace,
 	s.conn = acp.NewClientSideConnection(s.client, stdin, stdout)
 
 	title := "GoDex"
-	if _, err := s.conn.Initialize(ctx, acp.InitializeRequest{
+	initResp, err := s.conn.Initialize(ctx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientCapabilities: acp.ClientCapabilities{
 			Fs:       acp.FileSystemCapabilities{},
 			Terminal: false,
 		},
 		ClientInfo: &acp.Implementation{Name: "godex", Title: &title},
-	}); err != nil {
+	})
+	if err != nil {
 		s.killProcess(cancelProc)
 		return nil, fmt.Errorf("acp initialize: %w", err)
 	}
+	// Advertised prompt capabilities gate which content blocks we may send:
+	// image/audio require an explicit capability, text/embedded context do not.
+	s.supportsImage = initResp.AgentCapabilities.PromptCapabilities.Image
 	openSession := func() (acp.SessionId, error) {
-		newSess, err := s.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: workspace, McpServers: []acp.McpServer{}})
+		newSess, err := s.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: workspace, McpServers: acpMcpServers(s.agent)})
 		if err != nil {
 			return "", err
 		}
 		return newSess.SessionId, nil
 	}
 	if resumeSessionID != "" {
-		if _, err := s.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: acp.SessionId(resumeSessionID), Cwd: workspace, McpServers: []acp.McpServer{}}); err == nil {
+		if _, err := s.conn.LoadSession(ctx, acp.LoadSessionRequest{SessionId: acp.SessionId(resumeSessionID), Cwd: workspace, McpServers: acpMcpServers(s.agent)}); err == nil {
 			s.sessionID = acp.SessionId(resumeSessionID)
-		} else if _, err := s.conn.UnstableResumeSession(ctx, acp.UnstableResumeSessionRequest{SessionId: acp.SessionId(resumeSessionID), Cwd: workspace, McpServers: []acp.McpServer{}}); err == nil {
+		} else if _, err := s.conn.ResumeSession(ctx, acp.ResumeSessionRequest{SessionId: acp.SessionId(resumeSessionID), Cwd: workspace, McpServers: acpMcpServers(s.agent)}); err == nil {
 			s.sessionID = acp.SessionId(resumeSessionID)
 		} else {
 			id, err := openSession()
@@ -700,10 +955,47 @@ func (s *ACPSession) SessionID() string {
 // unusable afterwards; callers reopen with SessionID to resume the conversation.
 func (s *ACPSession) Done() <-chan struct{} { return s.conn.Done() }
 
-// Prompt sends one prompt on the live session and streams updates. The idle
-// watchdog aborts the prompt when the agent stays silent for timeout_seconds;
-// the process and session are kept alive across prompts.
+// Prompt sends one text-only prompt on the live session and streams updates
+// (convenience wrapper over PromptBlocks).
 func (s *ACPSession) Prompt(ctx context.Context, prompt string, onUpdate func(ACPUpdate)) (acpRunResult, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return acpRunResult{}, fmt.Errorf("empty ACP prompt")
+	}
+	return s.PromptBlocks(ctx, []acp.ContentBlock{acp.TextBlock(prompt)}, onUpdate)
+}
+
+// SupportsImage reports whether the agent advertised promptCapabilities.image
+// during initialize (M2: only then may image content blocks be sent).
+func (s *ACPSession) SupportsImage() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.supportsImage
+}
+
+// SetPermissionHandler installs the decision policy used to answer the
+// agent's session/request_permission requests (M4 权限桥). Call it before the
+// first prompt; a nil handler keeps the default behaviour (every request is
+// answered with an error).
+func (s *ACPSession) SetPermissionHandler(handler ACPPermissionHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client == nil {
+		return
+	}
+	s.client.mu.Lock()
+	s.client.permissionHandler = handler
+	s.client.mu.Unlock()
+}
+
+// PromptBlocks sends one prompt (arbitrary content blocks, e.g. text plus
+// image attachments when the agent supports them) on the live session and
+// streams updates. The idle watchdog aborts the prompt when the agent stays
+// silent for timeout_seconds; the process and session are kept alive across
+// prompts.
+func (s *ACPSession) PromptBlocks(ctx context.Context, blocks []acp.ContentBlock, onUpdate func(ACPUpdate)) (acpRunResult, error) {
+	if len(blocks) == 0 {
+		return acpRunResult{}, fmt.Errorf("empty ACP prompt")
+	}
 	s.mu.Lock()
 	if s.closed || s.conn == nil {
 		s.mu.Unlock()
@@ -738,6 +1030,7 @@ func (s *ACPSession) Prompt(ctx context.Context, prompt string, onUpdate func(AC
 	client.mu.Lock()
 	client.text.Reset()
 	client.updates = nil
+	client.lastSessionUsage = nil
 	client.onUpdate = func(u ACPUpdate) {
 		lastActivity.Store(time.Now().UnixNano())
 		if onUpdate != nil {
@@ -751,7 +1044,7 @@ func (s *ACPSession) Prompt(ctx context.Context, prompt string, onUpdate func(AC
 		client.mu.Unlock()
 	}()
 
-	promptResp, err := conn.Prompt(promptCtx, acp.PromptRequest{SessionId: sessionID, Prompt: []acp.ContentBlock{acp.TextBlock(prompt)}})
+	promptResp, err := conn.Prompt(promptCtx, acp.PromptRequest{SessionId: sessionID, Prompt: blocks})
 	// Stop the idle watchdog before waiting for it to wind down (it only exits
 	// when promptCtx is cancelled; the deferred cancel runs at return, which
 	// would deadlock the wait below).
@@ -773,12 +1066,23 @@ func (s *ACPSession) Prompt(ctx context.Context, prompt string, onUpdate func(AC
 	updates := append([]string{}, client.updates...)
 	client.mu.Unlock()
 	return acpRunResult{
-		Agent:      s.agent.ID,
-		SessionID:  string(sessionID),
-		StopReason: string(promptResp.StopReason),
-		Text:       strings.TrimSpace(text),
-		Updates:    updates,
+		Agent:        s.agent.ID,
+		SessionID:    string(sessionID),
+		StopReason:   string(promptResp.StopReason),
+		Text:         strings.TrimSpace(text),
+		Updates:      updates,
+		Usage:        acpTurnUsage(promptResp.Usage),
+		SessionUsage: client.takeSessionUsage(),
 	}, nil
+}
+
+// SessionUsage returns the most recent usage_update context-window watermark
+// reported by the agent, or nil if the agent has not sent one yet. Each Prompt
+// call resets the tracked watermark, so this always reflects the latest run.
+func (s *ACPSession) SessionUsage() *ACPSessionUsage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.client.takeSessionUsage()
 }
 
 // Close kills the agent process and releases the stdio pipes.

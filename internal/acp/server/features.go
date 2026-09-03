@@ -86,12 +86,12 @@ func acpCommands(items []commands.CommandMetadata) []acp.AvailableCommand {
 	return out
 }
 
-func acpModelState(view backend.ModelsView) *acp.SessionModelState {
-	models := make([]acp.ModelInfo, 0, len(view.Profiles))
+func acpModelConfigOptions(view backend.ModelsView) []acp.SessionConfigOption {
 	current := strings.TrimSpace(view.SessionProfileID)
 	if current == "" {
 		current = strings.TrimSpace(view.DefaultProfileID)
 	}
+	options := make(acp.SessionConfigSelectOptionsUngrouped, 0, len(view.Profiles))
 	for _, profile := range view.Profiles {
 		id := strings.TrimSpace(profile.ID)
 		if id == "" {
@@ -111,45 +111,27 @@ func acpModelState(view backend.ModelsView) *acp.SessionModelState {
 			}
 			desc += strings.TrimSpace(profile.Model)
 		}
-		info := acp.ModelInfo{ModelId: acp.ModelId(id), Name: name}
+		option := acp.SessionConfigSelectOption{Name: name, Value: acp.SessionConfigValueId(id)}
 		if desc != "" {
-			info.Description = &desc
+			option.Description = &desc
 		}
-		models = append(models, info)
+		options = append(options, option)
 		if profile.Selected {
 			current = id
 		}
 	}
-	if current == "" && len(models) > 0 {
-		current = string(models[0].ModelId)
+	if current == "" && len(options) > 0 {
+		current = string(options[0].Value)
 	}
-	if len(models) == 0 && current == "" {
+	if len(options) == 0 && current == "" {
 		return nil
 	}
-	return &acp.SessionModelState{
-		AvailableModels: models,
-		CurrentModelId:  acp.ModelId(current),
-	}
-}
-
-func acpModelConfigOptions(view backend.ModelsView) []acp.SessionConfigOption {
-	state := acpModelState(view)
-	if state == nil {
-		return nil
-	}
-	options := make(acp.SessionConfigSelectOptionsUngrouped, 0, len(state.AvailableModels))
-	for _, model := range state.AvailableModels {
-		options = append(options, acp.SessionConfigSelectOption{
-			Name:  model.Name,
-			Value: acp.SessionConfigValueId(model.ModelId),
-		})
-	}
-	category := acp.SessionConfigOptionCategoryOther("model")
+	category := acp.SessionConfigOptionCategoryModel
 	desc := "Choose the GoDex model profile for this ACP session."
-	option := acp.NewSessionConfigOptionSelect(acp.SessionConfigValueId(state.CurrentModelId), acp.SessionConfigSelectOptions{Ungrouped: &options})
+	option := acp.NewSessionConfigOptionSelect(acp.SessionConfigValueId(current), acp.SessionConfigSelectOptions{Ungrouped: &options})
 	option.Select.Id = acp.SessionConfigId(modelProfileConfigID)
 	option.Select.Name = "Model"
-	option.Select.Category = &acp.SessionConfigOptionCategory{Other: &category}
+	option.Select.Category = &category
 	option.Select.Description = &desc
 	return []acp.SessionConfigOption{option}
 }

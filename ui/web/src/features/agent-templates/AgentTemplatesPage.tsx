@@ -129,6 +129,8 @@ function TemplateCard(props: {
   if (tpl.bundles?.length) stats.push(`${tpl.bundles.length} bundles`);
   if (tpl.skills?.length) stats.push(`${tpl.skills.length} skills`);
   if (tpl.mcp_servers?.length) stats.push(`${tpl.mcp_servers.length} MCP`);
+  const engine = tpl.engine?.trim();
+  const externalEngine = engine && engine !== "godex" ? engine : null;
 
   return (
     <Card
@@ -141,6 +143,7 @@ function TemplateCard(props: {
       }
       extra={
         <Space size={4}>
+          {externalEngine ? <Tag color="gold">{externalEngine}</Tag> : null}
           <Tag color={tpl.source === "user" ? "blue" : tpl.source === "package" ? "purple" : "default"}>{sourceLabel}</Tag>
           {!readonly ? null : <Tag>{t("agentTemplates.readonlyBadge")}</Tag>}
         </Space>
@@ -164,6 +167,11 @@ function TemplateCard(props: {
       <Typography.Paragraph type="secondary" style={{ marginBottom: 8, minHeight: 40 }}>
         {tpl.description?.trim() || tpl.persona?.slice(0, 120) || tpl.id}
       </Typography.Paragraph>
+      {externalEngine ? (
+        <Typography.Paragraph type="warning" style={{ fontSize: 12, marginBottom: 8 }}>
+          {t("agentTemplates.engineExternalHint")}
+        </Typography.Paragraph>
+      ) : null}
       <Space size={[4, 4]} wrap>
         {(tpl.scenarios ?? []).map((s) => (
           <Tag key={s} color="geekblue">

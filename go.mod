@@ -7,7 +7,7 @@ require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.3.0
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/bmatcuk/doublestar/v4 v4.9.1
-	github.com/coder/acp-go-sdk v0.11.7
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creack/pty v1.1.24
 	github.com/go-rod/rod v0.116.2
 	github.com/google/uuid v1.6.0

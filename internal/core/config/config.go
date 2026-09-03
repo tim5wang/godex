@@ -247,6 +247,20 @@ type ACPAgentConfig struct {
 	// Model is an optional session config override applied after session/new
 	// (config id "model"), discovered from the agent's configOptions.
 	Model string `json:"model,omitempty"`
+	// McpServers lists stdio MCP servers handed to the agent via the standard
+	// session/new (and session/load) mcpServers field. The external agent
+	// connects to these itself; this is how godex can expose local tools to
+	// the agent through an MCP bridge (M3).
+	McpServers []ACPMcpServer `json:"mcp_servers,omitempty"`
+}
+
+// ACPMcpServer describes one stdio MCP server the external ACP agent should
+// connect to. Stdio is the MCP transport every ACP agent MUST support.
+type ACPMcpServer struct {
+	Name    string            `json:"name"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 // LoggingConfig controls package logger initialization.

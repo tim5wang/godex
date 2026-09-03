@@ -32,6 +32,10 @@ import (
 type ACPHarness struct {
 	agentID string
 	cfg     config.ACPAgentConfig
+	// PermissionPolicy optionally overrides how the harness answers the
+	// external engine's session/request_permission requests (M4 权限桥). When
+	// nil the harness denies every request and surfaces it as a warning event.
+	PermissionPolicy tools.ACPPermissionHandler
 
 	mu    sync.Mutex
 	scope scope.Id // scope bound at first use; cross-scope reuse is rejected
@@ -77,8 +81,8 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 	if err := h.bindScope(input.Scope); err != nil {
 		return HarnessTurnResult{}, err
 	}
-	prompt := lastUserPrompt(input.Messages)
-	if strings.TrimSpace(prompt) == "" {
+	userMsg := lastUserMessage(input.Messages)
+	if !userMessageHasPromptContent(userMsg) {
 		return HarnessTurnResult{}, conversation.NewNonRetryableTurnError("acp harness " + h.agentID + ": no user prompt in turn input")
 	}
 	workspace := input.WorkspaceDir
@@ -90,7 +94,20 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 		h.emitErrorEvent(input, err)
 		return HarnessTurnResult{}, err
 	}
-	result, err := sess.Prompt(ctx, prompt, func(update tools.ACPUpdate) {
+	// M2: forward the whole user message as ACP content blocks — text always,
+	// image attachments only when the engine advertised promptCapabilities.image.
+	blocks := tools.ACPContentBlocksForMessage(*userMsg, sess.SupportsImage())
+	if len(blocks) == 0 {
+		// The message carried content this engine cannot consume (e.g. an
+		// image-only turn against an agent without prompt image support).
+		err := conversation.NewNonRetryableTurnError("acp harness " + h.agentID + ": engine does not support the message content")
+		h.emitErrorEvent(input, err)
+		return HarnessTurnResult{}, err
+	}
+	// M4: answer the engine's permission requests through GoDex policy instead
+	// of the default error (which aborts the engine's gated tool call).
+	sess.SetPermissionHandler(h.permissionResolver(input))
+	result, err := sess.PromptBlocks(ctx, blocks, func(update tools.ACPUpdate) {
 		// 阶段 C streaming handle + P2 #4: emit text deltas, thinking chunks
 		// and tool-call events as they arrive so downstream sinks stream
 		// instead of waiting for the full turn.
@@ -110,10 +127,42 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 		return HarnessTurnResult{}, err
 	}
 	h.rememberSession(result.SessionID)
+	h.emitUsageEvent(input, result.Usage, time.Now())
 	return HarnessTurnResult{
 		Reply:     strings.TrimSpace(result.Text),
 		Completed: true,
 	}, nil
+}
+
+// emitUsageEvent maps the external agent's per-turn token usage (when the
+// agent reports it in the session/prompt result) onto the unified
+// model_request_completed event, so timeline and cache-hit surfaces render it
+// exactly like a native model request (idea ①: 上下文用量/缓存命中展示的
+// consumption side). External engine usage is informational only — the tokens
+// are consumed by the agent's own provider — so nothing is written to the
+// GoDex usage ledger here.
+func (h *ACPHarness) emitUsageEvent(input HarnessTurnInput, usage *tools.ACPTurnUsage, completedAt time.Time) {
+	if input.Sink == nil || usage == nil {
+		return
+	}
+	total := usage.InputTokens + usage.OutputTokens + usage.CachedReadTokens + usage.CachedWriteTokens + usage.ThoughtTokens
+	if total == 0 {
+		return
+	}
+	input.Sink.Emit(events.Event{
+		SessionID: input.SessionID,
+		TurnID:    input.TurnID,
+		Type:      events.EventModelRequestCompleted,
+		Timestamp: completedAt,
+		Payload: events.ModelRequestPayload{
+			Model:            "acp:" + h.agentID,
+			InputTokens:      usage.InputTokens,
+			OutputTokens:     usage.OutputTokens,
+			CacheReadTokens:  usage.CachedReadTokens,
+			CacheWriteTokens: usage.CachedWriteTokens,
+			CompletedAt:      completedAt,
+		},
+	})
 }
 
 // liveSession returns the persistent ACP session, reopening it (resuming the
@@ -217,6 +266,56 @@ func (h *ACPHarness) emitErrorEvent(input HarnessTurnInput, err error) {
 	}
 }
 
+// permissionResolver returns the session/request_permission handler for one
+// turn: it surfaces every request as a warning event on the turn sink, then
+// applies the harness's PermissionPolicy when set, or a default deny (M4
+// 权限桥: an external engine's gated operations never run without an explicit
+// GoDex-side decision, and every request is auditable via the event stream).
+func (h *ACPHarness) permissionResolver(input HarnessTurnInput) tools.ACPPermissionHandler {
+	return func(ctx context.Context, req tools.ACPPermissionRequest) (tools.ACPPermissionResponse, error) {
+		resp, err := tools.DenyACPPermissionRequest(req)
+		if h.PermissionPolicy != nil {
+			resp, err = h.PermissionPolicy(ctx, req)
+		}
+		h.emitPermissionEvent(input, req, err == nil)
+		return resp, err
+	}
+}
+
+// emitPermissionEvent surfaces one session/request_permission decision as a
+// warning event so hosts see (and can audit) what the external engine asked
+// for and what GoDex answered.
+func (h *ACPHarness) emitPermissionEvent(input HarnessTurnInput, req tools.ACPPermissionRequest, decided bool) {
+	if input.Sink == nil {
+		return
+	}
+	title := ""
+	if req.ToolCall.Title != nil {
+		title = *req.ToolCall.Title
+	}
+	optionNames := make([]string, 0, len(req.Options))
+	for _, opt := range req.Options {
+		optionNames = append(optionNames, string(opt.OptionId))
+	}
+	message := fmt.Sprintf("external engine %s requested permission for %q (options: %s)", h.agentID, title, strings.Join(optionNames, ", "))
+	if !decided {
+		message += "; no decision policy produced an outcome (answered with an error)"
+	}
+	input.Sink.Emit(events.Event{
+		SessionID: input.SessionID,
+		TurnID:    input.TurnID,
+		Type:      events.EventWarningRaised,
+		Timestamp: time.Now(),
+		Payload: events.NoticePayload{
+			Message:      message,
+			Code:         "acp_permission_request",
+			ActorKind:    "agent",
+			ActorID:      h.agentID,
+			RecoveryHint: "The external engine's gated operation was not allowed to run on its own.",
+		},
+	})
+}
+
 // emitUpdateEvents maps captured ACP updates onto GoDex events.
 func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.ACPUpdate) {
 	sink := input.Sink
@@ -272,7 +371,9 @@ func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.AC
 }
 
 // lastUserPrompt extracts the most recent user text from the message snapshot
-// for building the external-agent prompt.
+// for building the external-agent prompt. It is kept for callers that need the
+// plain text only (and unit-tested); RunTurn uses lastUserMessage + block
+// conversion instead so attachments can be forwarded (M2).
 func lastUserPrompt(messages func() []protocol.Message) string {
 	if messages == nil {
 		return ""
@@ -293,4 +394,39 @@ func lastUserPrompt(messages func() []protocol.Message) string {
 		}
 	}
 	return ""
+}
+
+// lastUserMessage returns the most recent user-authored message in the
+// snapshot, preserving every content block (text + image) so the external
+// engine receives the whole user turn (M2). Nil when there is no user message.
+func lastUserMessage(messages func() []protocol.Message) *protocol.Message {
+	if messages == nil {
+		return nil
+	}
+	items := messages()
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].Role != protocol.RoleUser {
+			continue
+		}
+		msg := items[i]
+		return &msg
+	}
+	return nil
+}
+
+// userMessageHasPromptContent reports whether the message carries content that
+// can be forwarded to an external engine (non-empty text, or an image).
+func userMessageHasPromptContent(msg *protocol.Message) bool {
+	if msg == nil {
+		return false
+	}
+	for _, block := range msg.Content {
+		if block.Type == protocol.BlockText && strings.TrimSpace(block.Text) != "" {
+			return true
+		}
+		if block.Type == protocol.BlockImage && block.Source != nil {
+			return true
+		}
+	}
+	return false
 }

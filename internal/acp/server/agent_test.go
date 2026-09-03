@@ -554,7 +554,7 @@ func TestAgentUnsupportedMethodsReturnMethodNotFound(t *testing.T) {
 	}
 }
 
-func TestAgentNewSessionAndLoadSessionReturnModelState(t *testing.T) {
+func TestAgentNewSessionAndLoadSessionReturnModelConfigOptions(t *testing.T) {
 	features := &fakeSessionFeatures{view: backend.ModelsView{
 		DefaultProfileID: "sonnet",
 		Profiles: []backend.ModelProfile{
@@ -568,11 +568,12 @@ func TestAgentNewSessionAndLoadSessionReturnModelState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession() error = %v", err)
 	}
-	if newResp.Models == nil || newResp.Models.CurrentModelId != acp.ModelId("sonnet") {
-		t.Fatalf("unexpected new session models: %+v", newResp.Models)
+	options := modelConfigOptionValues(newResp.ConfigOptions)
+	if len(options) != 2 {
+		t.Fatalf("expected two model config options, got %+v", newResp.ConfigOptions)
 	}
-	if len(newResp.Models.AvailableModels) != 2 {
-		t.Fatalf("expected two models, got %+v", newResp.Models.AvailableModels)
+	if newResp.ConfigOptions[0].Select == nil || string(newResp.ConfigOptions[0].Select.CurrentValue) != "sonnet" {
+		t.Fatalf("unexpected new session model options: %+v", newResp.ConfigOptions[0])
 	}
 
 	features.view.SessionProfileID = "mini"
@@ -584,8 +585,12 @@ func TestAgentNewSessionAndLoadSessionReturnModelState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSession() error = %v", err)
 	}
-	if loadResp.Models == nil || loadResp.Models.CurrentModelId != acp.ModelId("mini") {
-		t.Fatalf("unexpected loaded session models: %+v", loadResp.Models)
+	options = modelConfigOptionValues(loadResp.ConfigOptions)
+	if len(options) != 2 {
+		t.Fatalf("expected two loaded model config options, got %+v", loadResp.ConfigOptions)
+	}
+	if loadResp.ConfigOptions[0].Select == nil || string(loadResp.ConfigOptions[0].Select.CurrentValue) != "mini" {
+		t.Fatalf("unexpected loaded session model options: %+v", loadResp.ConfigOptions[0])
 	}
 }
 
@@ -603,11 +608,14 @@ func TestAgentSetSessionModelAndConfigOption(t *testing.T) {
 		t.Fatalf("NewSession() error = %v", err)
 	}
 
-	if _, err := a.UnstableSetSessionModel(context.Background(), acp.UnstableSetSessionModelRequest{
-		SessionId: sessResp.SessionId,
-		ModelId:   acp.UnstableModelId("mini"),
+	if _, err := a.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{
+		ValueId: &acp.SetSessionConfigOptionValueId{
+			SessionId: sessResp.SessionId,
+			ConfigId:  acp.SessionConfigId("model_profile"),
+			Value:     acp.SessionConfigValueId("mini"),
+		},
 	}); err != nil {
-		t.Fatalf("UnstableSetSessionModel() error = %v", err)
+		t.Fatalf("SetSessionConfigOption() error = %v", err)
 	}
 	if features.setProfileID != "mini" {
 		t.Fatalf("expected set profile mini, got %q", features.setProfileID)
@@ -625,6 +633,19 @@ func TestAgentSetSessionModelAndConfigOption(t *testing.T) {
 	if features.setProfileID != "sonnet" {
 		t.Fatalf("expected set profile sonnet, got %q", features.setProfileID)
 	}
+}
+
+func modelConfigOptionValues(options []acp.SessionConfigOption) []string {
+	var out []string
+	for _, opt := range options {
+		if opt.Select == nil || opt.Select.Options.Ungrouped == nil {
+			continue
+		}
+		for _, item := range *opt.Select.Options.Ungrouped {
+			out = append(out, string(item.Value))
+		}
+	}
+	return out
 }
 
 func isMethodNotFound(err error) bool {

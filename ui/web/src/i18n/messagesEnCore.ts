@@ -614,7 +614,7 @@ export const enCoreMessages = {
       memoryScoped: "Scoped (per-session)",
       fieldEngine: "Run kernel",
       engineGodex: "godex (built-in)",
-      engineExternalHint: "External kernels bring their own tools; template tools/bundles do not apply.",
+      engineExternalHint: "External kernels bring their own tools; template tools/bundles do not apply, and the memory field only affects GoDex-side transcript and recovery.",
       fieldWriteEnabled: "Write enabled",
       save: "Save",
       cancel: "Cancel",

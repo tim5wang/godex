@@ -1,9 +1,9 @@
 # Agent 模板指定外部 agent 内核：设计方案
 
-> 状态：**Partial**（M1 已实施 2026-09-02；M2/M3 待做）
+> 状态：**Partial**（M1 已实施 2026-09-02；M2 已实施 2026-09-03；M3 待做）
 > 任务：t-1788324432299-1 · Agent模板设置agent实现
 > 日期：2026-09-02
-> 范围：设计「Agent 模板 → 外部 agent 内核」的接入方案；**M1 已按本方案落地**（模板 engine 字段 + 会话级默认引擎 + 前端内核下拉），M2/M3 见「五」。
+> 范围：设计「Agent 模板 → 外部 agent 内核」的接入方案；**M1 已按本方案落地**（模板 engine 字段 + 会话级默认引擎 + 前端内核下拉），**M2 已落地**（外部内核语义文档化 + 观测），M3 见「五」。
 
 ---
 
@@ -171,7 +171,7 @@ if requestedHarness == "" {
 | 分期 | 内容 | 验收标准 |
 |------|------|----------|
 | **M1：模板 engine 字段 + 会话级默认引擎** | ① `AgentTemplate.Engine` 字段 + 校验/归一化；② `Agent.templateEngine` + `ApplyTemplate` 写入；③ `turn.go` envelope 空时回退模板引擎；④ 前端模板表单/编辑加「内核」下拉（选项来自注册 harness） | ① 模板带 `engine: acp:codex` 建会话 → 每轮实际走 `acp:codex` harness（断言 `harnessRouter.last` 或日志）；② 不带 engine 的模板行为与现状完全一致（回归无变化）；③ envelope 显式 `harness: godex` 能覆盖模板引擎；④ 未注册 engine id 回退 godex 并记录警告、不拒绝会话创建；⑤ `go test ./internal/agent/... ./internal/services/backend/...` + `tsc -b` 全绿 |
-| **M2：外部内核语义文档化 + 观测** | ① 模板编辑/人才市场卡片展示内核徽标；② 会话状态/Status 面板显示当前引擎；③ 文档（本文档「四.4/4.5」语义）落地为模板提示文案 | ① UI 可见模板内核；② 会话内可看到引擎标识；③ 模板表单对 `engine` 非 godex 时展示「外部内核自带工具面，模板工具字段不生效」提示 |
+| **M2：外部内核语义文档化 + 观测** | ✅ ① 模板编辑/人才市场卡片展示内核徽标（`AgentTemplatesPage.tsx` `TemplateCard` 非 godex engine 显示金色 Tag + 语义提示）；② 会话状态显示当前引擎（`ChatPageView.tsx` 顶栏 activeTemplate engine 金色 Tag + tooltip）；③ 文档「四.4/4.5」语义落地为模板提示文案（`engineExternalHint` 补齐 tools/bundles + memory 语义，en/zh 双语文案） | ✅ ① UI 可见模板内核；② 会话内可看到引擎标识；③ 模板表单对 `engine` 非 godex 时展示「外部内核自带工具面，模板工具字段不生效」提示；`pnpm typecheck` 通过 |
 | **M3（可选）：外部内核失败回退与进程生命周期** | ① 定义并实现 failover 策略（外部内核失败→是否回退 godex 重试，需产品决策）；② `ACPHarness.ResetSession` 终止 stdio 子进程；③ `RecoveryHint` 填充 | ① 外部内核 down 时行为可预期（回退或明确报错）；② 会话销毁/引擎切换无残留子进程；③ error 事件带恢复建议 |
 
 ---

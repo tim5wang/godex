@@ -62,7 +62,7 @@
 | [extension-runtime-user-guide.md](./extension-runtime-user-guide.md) | Package/MCP/ACP/WASM 使用与信任边界 | Active |
 | [compaction-optimization-plan.md](./compaction-optimization-plan.md) | Compaction Phase 1-4 实施记录与验收 | 已落地 |
 | [session-timeline-inspector.md](./session-timeline-inspector.md) | Timeline inspector 数据与 UI 契约 | 阶段 1/2 已实现 |
-| [agent-template-agent-implementation-design.md](./agent-template-agent-implementation-design.md) | Agent 模板指定外部 agent 内核设计方案 | M1 已实施（2026-09-02），M2/M3 待做 |
+| [agent-template-agent-implementation-design.md](./agent-template-agent-implementation-design.md) | Agent 模板指定外部 agent 内核设计方案 | M1 已实施（2026-09-02），M2 已实施（2026-09-03），M3 待做 |
 
 ## B. 演进设计与历史实施记录（含剩余 Planned 项）
 

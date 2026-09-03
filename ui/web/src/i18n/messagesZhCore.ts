@@ -613,7 +613,7 @@ export const zhCoreMessages = {
       memoryScoped: "会话隔离",
       fieldEngine: "运行内核",
       engineGodex: "godex（内置）",
-      engineExternalHint: "外部内核自带工具面，模板的 tools/bundles 对该内核不生效。",
+      engineExternalHint: "外部内核自带工具面，模板的 tools/bundles 对该内核不生效；memory 字段仅对 GoDex 侧 transcript 与恢复生效。",
       fieldWriteEnabled: "允许写操作",
       save: "保存",
       cancel: "取消",

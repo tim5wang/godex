@@ -27,6 +27,7 @@ export const zhProductMessages = {
       modelLoading: "模型加载中...",
       modelSwitching: "模型切换中",
       acpModelPlaceholder: "ACP 模型（留空用 agent 默认）",
+      engineExternalTooltip: "本会话运行在外部内核上，模板的 tools/bundles 对该内核不生效。",
       modelScopeDefault: "默认",
       modelScopeSession: "会话",
       workspaceLoading: "工作区加载中...",

@@ -31,7 +31,6 @@ func (a *Agent) LoadSession(ctx context.Context, params acp.LoadSessionRequest) 
 	a.mu.Unlock()
 	resp := acp.LoadSessionResponse{}
 	if view, ok := a.modelView(ctx, sid); ok {
-		resp.Models = acpModelState(view)
 		resp.ConfigOptions = acpModelConfigOptions(view)
 	}
 	a.scheduleAvailableCommands(acp.SessionId(sid))

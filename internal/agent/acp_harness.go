@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/tools"
@@ -246,13 +246,13 @@ func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.AC
 			emit(events.EventAssistantThinkingDelta, events.TextPayload{Role: protocol.RoleAssistant, Text: update.Text})
 		case "tool_call":
 			emit(events.EventToolCallStarted, events.ToolCallPayload{
-				ID:    update.Name,
+				ID:    update.ToolCallID,
 				Name:  update.Name,
 				Input: update.Input,
 			})
 		case "tool_call_update":
 			emit(events.EventToolCallFinished, events.ToolCallPayload{
-				ID:    update.Name,
+				ID:    update.ToolCallID,
 				Name:  update.Name,
 				Input: update.Input,
 			})
@@ -261,10 +261,10 @@ func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.AC
 			// surface as warnings so nothing the engine reports is silently
 			// dropped.
 			emit(events.EventWarningRaised, events.NoticePayload{
-				Message:   fmt.Sprintf("external engine %s reported %s", h.agentID, update.Kind),
-				Code:      "acp_external_update",
-				ActorKind: "agent",
-				ActorID:   h.agentID,
+				Message:      fmt.Sprintf("external engine %s reported %s", h.agentID, update.Kind),
+				Code:         "acp_external_update",
+				ActorKind:    "agent",
+				ActorID:      h.agentID,
 				RecoveryHint: "The external engine continues; inspect the raw update for details.",
 			})
 		}

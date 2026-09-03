@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/domain/events"
 )
@@ -71,6 +71,23 @@ func TestACPFakeServer(t *testing.T) {
 				},
 			}
 			line, _ := json.Marshal(toolCall)
+			fmt.Fprintln(os.Stdout, string(line))
+			// Tool call update (finish) for the same call id, so the harness
+			// start/finish events can be paired by ID.
+			toolCallUpdate := map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "session/update",
+				"params": map[string]any{
+					"sessionId": "acp-fake-1",
+					"update": map[string]any{
+						"sessionUpdate": "tool_call_update",
+						"title":         "acp_builtin_tool",
+						"toolCallId":    "call-1",
+						"rawOutput":     map[string]any{"result": "ok"},
+					},
+				},
+			}
+			line, _ = json.Marshal(toolCallUpdate)
 			fmt.Fprintln(os.Stdout, string(line))
 			// Streaming text chunk.
 			update := map[string]any{
@@ -273,11 +290,17 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 		t.Fatalf("expected at least 3 mapped events, got %d", len(emitted))
 	}
 	var sawTool, sawDelta, sawPlan bool
+	var startedID, finishedID string
 	for _, event := range emitted {
 		switch event.Type {
 		case events.EventToolCallStarted:
 			if payload, ok := event.Payload.(events.ToolCallPayload); ok && payload.Name == "acp_builtin_tool" {
 				sawTool = true
+				startedID = payload.ID
+			}
+		case events.EventToolCallFinished:
+			if payload, ok := event.Payload.(events.ToolCallPayload); ok && payload.Name == "acp_builtin_tool" {
+				finishedID = payload.ID
 			}
 		case events.EventAssistantTextDelta:
 			if payload, ok := event.Payload.(events.TextPayload); ok && strings.Contains(payload.Text, "hello from acp") {
@@ -297,6 +320,14 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 	}
 	if !sawPlan {
 		t.Fatal("expected plan update surfaced as warning event")
+	}
+	// P1 regression: start and finish must share the tool call id so
+	// downstream collectors can pair them into one tool entry.
+	if startedID == "" || finishedID == "" || startedID != finishedID {
+		t.Fatalf("tool_call start/finish IDs must pair, got started=%q finished=%q", startedID, finishedID)
+	}
+	if startedID != "call-1" {
+		t.Fatalf("unexpected tool call id: %q", startedID)
 	}
 }
 

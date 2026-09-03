@@ -230,27 +230,40 @@ func withClient[T any](m *Manager, ctx context.Context, server ServerConfig, fn 
 		e.lastUsed.Store(time.Now().UnixNano())
 	}
 	e.mu.Unlock()
+	invalidated := false
 	if opErr != nil && errors.Is(opErr, errConnClosed) {
-		m.invalidateClient(server.Name)
+		invalidated = m.invalidateClient(server.Name, e)
 	}
 	// If this entry was replaced while the operation ran (rare: a concurrent
 	// caller created a fresh client after this one looked idle), close the
-	// orphaned client so its daemon does not leak.
+	// orphaned client so its daemon does not leak. When invalidateClient
+	// already removed and closed this entry, there is nothing left to close.
 	m.mu.RLock()
 	current := m.clients[server.Name]
 	m.mu.RUnlock()
-	if current != e {
+	if !invalidated && current != e {
 		go e.client.close()
 	}
 	return result, opErr
 }
 
-// invalidateClient closes and removes the persistent client for a server.
-// Callers may hold no manager lock.
-func (m *Manager) invalidateClient(name string) {
+// invalidateClient closes and removes the persistent client for server, but
+// only when the current entry is still e. This lets a caller drop a client
+// that it knows is dead without racing a concurrent caller that may have
+// replaced the entry with a fresh one. It reports whether the entry was
+// actually removed (and thus closed). Callers may hold no manager lock.
+func (m *Manager) invalidateClient(name string, e *clientEntry) bool {
 	m.mu.Lock()
-	m.invalidateServerLocked(name)
+	current, ok := m.clients[name]
+	if !ok || current != e {
+		m.mu.Unlock()
+		return false
+	}
+	delete(m.clients, name)
+	delete(m.toolsCache, name)
+	go e.client.close()
 	m.mu.Unlock()
+	return true
 }
 
 // invalidateServerLocked drops the tools cache and closes the persistent

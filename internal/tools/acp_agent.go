@@ -103,89 +103,12 @@ type ACPRunResult = acpRunResult
 // mapping). Kind is one of "plan", "tool_call", "tool_call_update",
 // "thought_chunk", or "message_chunk".
 type ACPUpdate struct {
-	Kind      string         `json:"kind"`
-	Name      string         `json:"name,omitempty"`
-	ToolCallID string        `json:"toolCallId,omitempty"`
-	Text      string         `json:"text,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
-	Raw       string         `json:"raw,omitempty"`
-}
-
-// UpdateEvents returns the structured session/update events captured during
-// the run (empty when the engine sent none).
-func (r ACPRunResult) UpdateEvents() []ACPUpdate {
-	var out []ACPUpdate
-	for _, raw := range r.Updates {
-		update, ok := parseACPUpdate(raw)
-		if ok {
-			out = append(out, update)
-		}
-	}
-	return out
-}
-
-// parseACPSessionUpdate extracts the inner `update` object from a raw
-// session/update params payload and parses it into a structured ACPUpdate.
-func parseACPSessionUpdate(raw json.RawMessage) (ACPUpdate, bool) {
-	var payload struct {
-		Update map[string]interface{} `json:"update"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return ACPUpdate{}, false
-	}
-	data, err := json.Marshal(payload.Update)
-	if err != nil {
-		return ACPUpdate{}, false
-	}
-	return parseACPUpdate(string(data))
-}
-
-// parseACPUpdate turns one raw session/update payload into a structured event.
-func parseACPUpdate(raw string) (ACPUpdate, bool) {
-	var payload struct {
-		SessionUpdate string                 `json:"sessionUpdate"`
-		Name          string                 `json:"name"`
-		Content       map[string]interface{} `json:"content"`
-		Input         map[string]any         `json:"input"`
-		ToolCallID    string                 `json:"toolCallId"`
-		ID            string                 `json:"id"`
-	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return ACPUpdate{}, false
-	}
-	switch payload.SessionUpdate {
-	case "agent_message_chunk":
-		text := ""
-		if content, ok := payload.Content["text"].(string); ok {
-			text = content
-		}
-		return ACPUpdate{Kind: "message_chunk", Text: text, Raw: raw}, true
-	case "agent_thought_chunk":
-		text := ""
-		if content, ok := payload.Content["text"].(string); ok {
-			text = content
-		}
-		return ACPUpdate{Kind: "thought_chunk", Text: text, Raw: raw}, true
-	case "plan":
-		return ACPUpdate{Kind: "plan", Raw: raw}, true
-	case "permission_request", "permission_denied":
-		return ACPUpdate{Kind: payload.SessionUpdate, Raw: raw}, true
-	case "tool_call", "tool_call_update":
-		name := payload.Name
-		if name == "" {
-			name = payload.ToolCallID
-		}
-		if name == "" {
-			name = payload.ID
-		}
-		kind := "tool_call"
-		if payload.SessionUpdate == "tool_call_update" {
-			kind = "tool_call_update"
-		}
-		return ACPUpdate{Kind: kind, Name: name, ToolCallID: payload.ToolCallID, Input: payload.Input, Raw: raw}, true
-	default:
-		return ACPUpdate{}, false
-	}
+	Kind       string         `json:"kind"`
+	Name       string         `json:"name,omitempty"`
+	ToolCallID string         `json:"toolCallId,omitempty"`
+	Text       string         `json:"text,omitempty"`
+	Input      map[string]any `json:"input,omitempty"`
+	Raw        string         `json:"raw,omitempty"`
 }
 
 // RunACPAgent runs one prompt against a configured ACP agent over stdio and
@@ -265,9 +188,19 @@ func (c *acpSDKClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 			Raw:        rawStr,
 		})
 	case u.ToolCallUpdate != nil:
+		// Prefer the update's title (the agent may refresh it as the call
+		// progresses); fall back to the call id so the event still has a
+		// stable identifier when no title is sent.
+		name := ""
+		if u.ToolCallUpdate.Title != nil {
+			name = *u.ToolCallUpdate.Title
+		}
+		if name == "" {
+			name = string(u.ToolCallUpdate.ToolCallId)
+		}
 		c.addUpdate(ACPUpdate{
 			Kind:       "tool_call_update",
-			Name:       string(u.ToolCallUpdate.ToolCallId),
+			Name:       name,
 			ToolCallID: string(u.ToolCallUpdate.ToolCallId),
 			Input:      rawToMap(u.ToolCallUpdate.RawOutput),
 			Raw:        rawStr,
@@ -311,14 +244,20 @@ func (c *acpSDKClient) WaitForTerminalExit(ctx context.Context, params acp.WaitF
 }
 
 // rawToMap converts an arbitrary JSON value into a map for tool-call payloads.
-// Non-object values come back as nil (empty input).
+// Object values pass through; string values are parsed as JSON (some agents
+// serialize rawInput/rawOutput as a JSON string); anything else is nil (empty
+// input).
 func rawToMap(v any) map[string]any {
 	switch t := v.(type) {
 	case map[string]any:
 		return t
-	default:
-		return nil
+	case string:
+		var m map[string]any
+		if json.Unmarshal([]byte(t), &m) == nil {
+			return m
+		}
 	}
+	return nil
 }
 
 // ACPModelOption is one selectable model value advertised by an ACP agent's
@@ -398,7 +337,11 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 		_ = cmd.Process.Kill()
 		return nil, fmt.Errorf("acp session/new: %w", err)
 	}
+	// Tear down the throwaway process: closing stdin signals EOF, and the
+	// explicit cancel guarantees the process is killed even if it never
+	// exits on EOF (a misbehaving agent must not hang the HTTP endpoint).
 	_ = stdin.Close()
+	cancel()
 	_ = cmd.Wait()
 	_ = <-stderrData
 
@@ -438,6 +381,15 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, prompt string, timeoutSeconds int, onUpdate func(ACPUpdate), model string) (acpRunResult, error) {
 	if strings.TrimSpace(agent.Command) == "" {
 		return acpRunResult{}, fmt.Errorf("ACP agent %q has no command", agent.ID)
+	}
+	// ACP agents (dsh included) reject relative cwd on session/new; make sure
+	// the workspace we hand to the subprocess and session is absolute.
+	if !filepath.IsAbs(workspace) {
+		abs, err := filepath.Abs(workspace)
+		if err != nil {
+			return acpRunResult{}, fmt.Errorf("resolve workspace %q: %w", workspace, err)
+		}
+		workspace = abs
 	}
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = agent.TimeoutSeconds
@@ -543,13 +495,16 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 	// Standard model selection: apply the override through the session config
 	// option the agent advertised (config id "model").
 	if model != "" {
-		_, _ = conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{
+		if _, err := conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{
 			ValueId: &acp.SetSessionConfigOptionValueId{
 				SessionId: newSess.SessionId,
 				ConfigId:  "model",
 				Value:     acp.SessionConfigValueId(model),
 			},
-		})
+		}); err != nil {
+			_ = cmd.Process.Kill()
+			return acpRunResult{}, fmt.Errorf("acp set model option %q: %w", model, err)
+		}
 	}
 
 	promptResp, err := conn.Prompt(ctx, acp.PromptRequest{
@@ -561,8 +516,15 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 		return acpRunResult{}, fmt.Errorf("acp session/prompt: %w", err)
 	}
 
+	// Normal completion: stop the idle watchdog and tear down the process.
+	// stdin EOF signals a graceful exit; the explicit cancel is the fallback
+	// that kills the process via exec.CommandContext, so Wait cannot hang
+	// even if the agent ignores the EOF (worst case today is blocking for
+	// the full watchdog timeout).
 	_ = stdin.Close()
+	cancel()
 	_ = cmd.Wait()
+	<-watchdogDone
 	stderrText := strings.TrimSpace(<-stderrData)
 
 	client.mu.Lock()
@@ -573,10 +535,6 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 	if stderrText != "" && strings.TrimSpace(text) == "" {
 		updates = append(updates, "stderr: "+stderrText)
 	}
-	// Normal completion: signal the idle watchdog to stop and wait for it to
-	// wind down before returning, so the process and pipes are fully reaped.
-	cancel()
-	<-watchdogDone
 
 	return acpRunResult{
 		Agent:      agent.ID,
@@ -599,14 +557,14 @@ type ACPSession struct {
 	model     string
 	timeout   int
 
-	mu        sync.Mutex
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	conn      *acp.ClientSideConnection
-	client    *acpSDKClient
-	sessionID acp.SessionId
-	closed    bool
-	stderr    strings.Builder
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	conn       *acp.ClientSideConnection
+	client     *acpSDKClient
+	sessionID  acp.SessionId
+	closed     bool
+	stderr     strings.Builder
 	procCancel context.CancelFunc // cancels the process lifetime context
 }
 
@@ -616,6 +574,15 @@ type ACPSession struct {
 func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace, model string, timeoutSeconds int, resumeSessionID string) (*ACPSession, error) {
 	if strings.TrimSpace(agent.Command) == "" {
 		return nil, fmt.Errorf("ACP agent %q has no command", agent.ID)
+	}
+	// ACP agents (dsh included) reject relative cwd on session/new; make sure
+	// the workspace we hand to the subprocess and session is absolute.
+	if !filepath.IsAbs(workspace) {
+		abs, err := filepath.Abs(workspace)
+		if err != nil {
+			return nil, fmt.Errorf("resolve workspace %q: %w", workspace, err)
+		}
+		workspace = abs
 	}
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = agent.TimeoutSeconds
@@ -708,13 +675,16 @@ func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace,
 		s.sessionID = id
 	}
 	if model != "" {
-		_, _ = s.conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{
+		if _, err := s.conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{
 			ValueId: &acp.SetSessionConfigOptionValueId{
 				SessionId: s.sessionID,
 				ConfigId:  "model",
 				Value:     acp.SessionConfigValueId(model),
 			},
-		})
+		}); err != nil {
+			s.killProcess(cancelProc)
+			return nil, fmt.Errorf("acp set model option %q: %w", model, err)
+		}
 	}
 	return s, nil
 }
@@ -788,6 +758,14 @@ func (s *ACPSession) Prompt(ctx context.Context, prompt string, onUpdate func(AC
 	cancelPrompt()
 	<-watchdogDone
 	if err != nil {
+		// Surface any stderr the agent produced while failing so the caller
+		// can diagnose crashes / init errors without extra plumbing.
+		s.mu.Lock()
+		stderrText := strings.TrimSpace(s.stderr.String())
+		s.mu.Unlock()
+		if stderrText != "" {
+			return acpRunResult{}, fmt.Errorf("acp session/prompt: %w (stderr: %s)", err, stderrText)
+		}
 		return acpRunResult{}, fmt.Errorf("acp session/prompt: %w", err)
 	}
 	client.mu.Lock()

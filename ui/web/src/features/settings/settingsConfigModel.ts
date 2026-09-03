@@ -283,7 +283,7 @@ export function acpAgentsConfigToForm(value: unknown): ACPAgentsFormValue {
   const items = Object.entries(raw as Record<string, Record<string, unknown>>).map(([id, agent]) => ({
     id,
     command: asOptionalString(agent.command),
-    args: Array.isArray(agent.args) ? agent.args.map(String).join(" ") : asOptionalString(agent.args),
+    args: Array.isArray(agent.args) ? joinArgs(agent.args.map(String)) : asOptionalString(agent.args),
     env: envToText(agent.env),
     timeout_seconds: asOptionalNumber(agent.timeout_seconds),
     description: asOptionalString(agent.description),
@@ -292,7 +292,7 @@ export function acpAgentsConfigToForm(value: unknown): ACPAgentsFormValue {
   return { items };
 }
 
-function acpAgentsFormToConfig(value: unknown) {
+export function acpAgentsFormToConfig(value: unknown) {
   const form = acpAgentsConfigToForm(value);
   return Object.fromEntries(form.items.filter((item) => stringsPresent(item.id)).map((item) => {
     return [item.id.trim(), {
@@ -427,12 +427,60 @@ function splitTags(value?: string): string[] {
   return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
-/** 把 ACP agent 的 args 文本按空白拆成独立参数（shell 风格），
- *  使表单里填 "codex --profile acp" 或 "codex,--profile,acp" 都能得到
- *  ["codex","--profile","acp"]，避免把 "a b" 当成单个带空格参数传给
- *  exec.Command 导致 ACP 进程无法启动（EOF）。 */
+/** 把参数数组拼成表单文本：含空白/引号/逗号的参数用引号包裹，保证 splitArgs
+ *  往返一致（form → config → form 不丢语义）。 */
+function joinArgs(args: string[]): string {
+  return args.map((arg) => {
+    if (/[\s"',]/.test(arg)) {
+      return '"' + arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+    }
+    return arg;
+  }).join(" ");
+}
+
+/** 把 ACP agent 的 args 文本拆成独立参数（shell 风格，支持引号）：
+ *  空白和逗号作为分隔符；单引号/双引号内的空白不拆分且引号被剥离，未闭合引号按
+ *  字面处理。表单里填 "codex --profile acp"、"codex,--profile,acp" 或
+ *  `codex --prompt "hello world"` 都能得到正确的参数数组，避免把含空格的
+ *  "a b" 当成单个参数传给 exec.Command 导致 ACP 进程无法启动（EOF），
+ *  也允许表达真正含空格的单参数。 */
 function splitArgs(value?: string): string[] {
-  return String(value ?? "").split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+  const text = String(value ?? "");
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  const flush = () => {
+    if (current !== "") {
+      args.push(current);
+      current = "";
+    }
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote !== null) {
+      if (ch === quote) {
+        quote = null;
+      } else if (ch === "\\" && i + 1 < text.length) {
+        // 引号内反斜杠转义：把下一个字符按字面加入
+        i += 1;
+        current += text[i];
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch) || ch === ",") {
+      flush();
+      continue;
+    }
+    current += ch;
+  }
+  flush();
+  return args;
 }
 
 export function nextUniqueID(base: string, ids: string[]) {

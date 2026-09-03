@@ -33,7 +33,27 @@ func TestACPToolFakeServer(t *testing.T) {
 		case "initialize":
 			result = map[string]any{"protocolVersion": 1}
 		case "session/new":
-			result = map[string]any{"sessionId": "tool-fake-1"}
+			// When GODEX_ACP_TOOL_HELPER_MODELS is set, advertise a model
+			// select option so DiscoverACPAgentModelOptions can read it back.
+			if os.Getenv("GODEX_ACP_TOOL_HELPER_MODELS") == "1" {
+				result = map[string]any{
+					"sessionId": "tool-fake-1",
+					"configOptions": []map[string]any{
+						{
+							"type":         "select",
+							"id":           "model",
+							"name":         "Model",
+							"currentValue": "model-a",
+							"options": []map[string]any{
+								{"name": "Model A", "value": "model-a"},
+								{"name": "Model B", "value": "model-b"},
+							},
+						},
+					},
+				}
+			} else {
+				result = map[string]any{"sessionId": "tool-fake-1"}
+			}
 		case "session/prompt":
 			result = map[string]any{"stopReason": "end_turn"}
 			update := map[string]any{
@@ -118,5 +138,43 @@ func TestStreamACPAgentInvokesOnUpdate(t *testing.T) {
 	// The aggregated result still contains the full reply.
 	if !strings.Contains(result.Text, "tool reply") {
 		t.Fatalf("expected reply text, got %q", result.Text)
+	}
+}
+
+// TestDiscoverACPAgentModelOptions verifies model discovery reads the agent's
+// session configOptions and that the throwaway process is torn down even when
+// the workspace is a relative path (the process must not leak or hang).
+func TestDiscoverACPAgentModelOptions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("executable: %v", err)
+	}
+	agent := config.ACPAgentConfig{
+		ID:      "fake",
+		Command: exe,
+		Args:    []string{"-test.run", "TestACPToolFakeServer"},
+		Env: map[string]string{
+			"GODEX_ACP_TOOL_HELPER":        "1",
+			"GODEX_ACP_TOOL_HELPER_MODELS": "1",
+		},
+	}
+	// Relative workspace: discovery must resolve it to an absolute path
+	// before handing it to the agent (dsh rejects relative cwd on
+	// session/new).
+	models, err := DiscoverACPAgentModelOptions(context.Background(), agent, ".")
+	if err != nil {
+		t.Fatalf("discover models: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 model options, got %+v", models)
+	}
+	if models[0].Value != "model-a" || models[0].Name != "Model A" {
+		t.Fatalf("unexpected first option: %+v", models[0])
+	}
+	if models[1].Value != "model-b" || models[1].Name != "Model B" {
+		t.Fatalf("unexpected second option: %+v", models[1])
 	}
 }

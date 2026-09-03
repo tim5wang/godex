@@ -28,11 +28,13 @@ func (a *Agent) LoadSession(ctx context.Context, params acp.LoadSessionRequest) 
 		a.sessions[sid] = st
 	}
 	st.cwd = params.Cwd
+	st.mcpServers = cloneMcpServers(params.McpServers)
 	a.mu.Unlock()
 	resp := acp.LoadSessionResponse{}
 	if view, ok := a.modelView(ctx, sid); ok {
 		resp.ConfigOptions = acpModelConfigOptions(view)
 	}
+	resp.Modes = a.sessionModes(ctx, sid)
 	a.scheduleAvailableCommands(acp.SessionId(sid))
 	return resp, nil
 }

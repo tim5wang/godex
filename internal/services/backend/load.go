@@ -57,6 +57,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		session.modelProfileID = strings.TrimSpace(manifest.ModelProfileID)
 		session.reasoningEffort = normalizeSessionReasoningEffort(manifest.ReasoningEffort)
 		session.acpModel = strings.TrimSpace(manifest.AcpModel)
+		session.acpSessionID = strings.TrimSpace(manifest.AcpSessionID)
 		session.parentSessionID = strings.TrimSpace(manifest.ParentSessionID)
 		session.forkedFromTurnID = strings.TrimSpace(manifest.ForkedFromTurnID)
 		session.forkedFromMessageIndex = cloneIntPtr(manifest.ForkedFromMessageIndex)
@@ -139,6 +140,16 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 
 	// Roadmap 6.1: route screener verdicts into the security audit trail.
 	s.wireScreenAudit(a, sessionID)
+
+	// Resume the external ACP conversation after a host restart: the harness
+	// starts with an empty session id, so the persisted one is primed here and
+	// the next liveSession reconnects via session/load or session/resume
+	// instead of creating a fresh session and losing the prior context.
+	if sid := strings.TrimSpace(session.acpSessionID); sid != "" {
+		if engine := strings.TrimSpace(a.TemplateEngine()); strings.HasPrefix(engine, "acp:") {
+			a.SetACPSessionResumeID(strings.TrimPrefix(engine, "acp:"), sid)
+		}
+	}
 
 	persistSession := false
 	if (strings.TrimSpace(session.title) == "" || strings.TrimSpace(session.title) == "New chat") && state != nil {

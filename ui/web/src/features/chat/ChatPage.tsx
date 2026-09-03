@@ -30,7 +30,7 @@ import { FilesPanel } from "../files/FilesPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { PreviewPanel } from "../preview/PreviewPanel";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
-import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, pendingSendsForFeed, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, buildContextStatusSummary, shortTurnId } from "../../lib/timelineUtils";
+import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, pendingSendsForFeed, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, collectToolCalls, buildContextStatusSummary, shortTurnId } from "../../lib/timelineUtils";
 import { compactWorkspaceName, noteContextMetadata, NoteContextBanner } from "./panels/NoteContextBanner";
 import { InspectorTabs } from "./panels/InspectorTabs";
 import { ApprovalBanner } from "./panels/ApprovalPanels";
@@ -210,7 +210,21 @@ export function useChatPageController() {
   } = session;
 
 
-  const items = useMemo(() => mergeChronologicalFeedItems(historyItems, overlayItems), [historyItems, overlayItems]);
+  const items = useMemo(() => {
+    // Tool events stream into the live overlay while a turn runs, but the
+    // overlay is transient (cleared on reload/snapshot). Rebuild tool items
+    // from the persisted timeline so ACP tool logs survive a re-entry; live
+    // overlay items win for the same tool call id (dedupe by id).
+    const overlayById = new Map<string, FeedItem>();
+    for (const item of overlayItems) {
+      if (item.kind === "tool" && item.id) {
+        overlayById.set(item.id, item);
+      }
+    }
+    const timelineTools = collectToolCalls(timelineItems).filter((item) => !overlayById.has(item.id));
+    const mergedOverlay = [...overlayItems, ...timelineTools];
+    return mergeChronologicalFeedItems(historyItems, mergedOverlay);
+  }, [historyItems, overlayItems, timelineItems]);
   // V2 groups the flat feed into per-turn items (text + tool + todo segments).
   const v2Items = useMemo(() => groupFeedItemsIntoTurns(items), [items]);
   // User messages sitting in the send queue (pending, not yet accepted by the

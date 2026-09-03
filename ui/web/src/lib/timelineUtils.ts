@@ -864,6 +864,62 @@ export function previewText(value: string, maxLength = 96) {
   return normalized.length <= maxLength ? normalized : `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
+// collectToolCalls rebuilds tool feed items from persisted timeline events
+// (tool_call_started / tool_call_finished). Tool events stream into the live
+// overlay while a turn runs, but the overlay is transient: after a reload the
+// feed is rebuilt from messages only, so without this the ACP tool logs
+// disappear and the conversation shows only the user input and the final
+// assistant output. The tool call id is the stable key (same as the live
+// overlay's toolItemId) so a later merge can prefer the live overlay item.
+export function collectToolCalls(items: SessionTimelineEntry[]): FeedItem[] {
+  const tools = new Map<string, FeedItem>();
+  for (const event of items) {
+    if (event.type !== "tool_call_started" && event.type !== "tool_call_finished") {
+      continue;
+    }
+    const payload = (event.payload ?? {}) as { id?: string; name?: string; input?: Record<string, unknown> };
+    const id = stringFromPayload(payload.id);
+    const turnId = event.turn_id || "";
+    const name = stringFromPayload(payload.name) || "tool";
+    const key = id ? `tool:${id}` : `tool:${turnId}:${name}`;
+    const input = (payload.input ?? {}) as Record<string, unknown>;
+    const inputSummary = previewText(JSON.stringify(input));
+    const existing = tools.get(key);
+    if (event.type === "tool_call_started") {
+      tools.set(key, {
+        id: key,
+        kind: "tool",
+        title: name,
+        body: "",
+        timestamp: event.timestamp,
+        summary: inputSummary,
+        input,
+        status: "running",
+        expanded: false,
+        turnId: turnId || undefined,
+      });
+    } else if (existing) {
+      tools.set(key, {
+        ...existing,
+        title: existing.title || name,
+        timestamp: event.timestamp,
+        summary: inputSummary || existing.summary,
+        input: input || existing.input,
+        status: "finished",
+        turnId: turnId || existing.turnId,
+      });
+    }
+  }
+  return [...tools.values()].sort((left, right) => {
+    const leftTime = Date.parse(left.timestamp ?? "");
+    const rightTime = Date.parse(right.timestamp ?? "");
+    if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime)) {
+      return leftTime - rightTime;
+    }
+    return 0;
+  });
+}
+
 export function formatCompactNumber(value: number) {
   if (!Number.isFinite(value)) {
     return "0";

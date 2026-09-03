@@ -712,3 +712,229 @@ func TestToolCallTitleReadFile(t *testing.T) {
 		t.Fatalf("write_file should still show path only, got %q", title)
 	}
 }
+
+// ── thinking delta → agent_thought_chunk ────────────────────────────
+
+func TestBackendPromptHandlerStreamsThinkingDeltaAsThoughtChunk(t *testing.T) {
+	fake := &fakeHandlerBackend{
+		submitResult: &backend.SubmitResult{SessionID: "sess-1", TurnID: "turn-1", Status: "running"},
+	}
+	handler := BackendPromptHandler(fake)
+	updater := &recordingUpdater{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var err error
+	go func() {
+		defer wg.Done()
+		_, err = handler(ctx, PromptTurn{SessionID: "acp-1", Prompt: "think", Updater: updater})
+	}()
+
+	waitForSink(t, fake)
+	fake.sink.Emit(events.Event{
+		SessionID: "sess-1", TurnID: "turn-1", Type: events.EventAssistantThinkingDelta, Timestamp: time.Now(),
+		Payload: events.TextPayload{Text: "reasoning step one"},
+	})
+	fake.sink.Emit(events.Event{
+		SessionID: "sess-1", TurnID: "turn-1", Type: events.EventAssistantMessageComplete, Timestamp: time.Now(),
+		Payload: events.TextPayload{Text: ""},
+	})
+	fake.sink.Emit(events.Event{
+		SessionID: "sess-1", TurnID: "turn-1", Type: events.EventTurnCompleted, Timestamp: time.Now(),
+		Payload: events.TurnPayload{Status: "completed"},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("handler did not complete")
+	}
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+
+	var sawThought bool
+	for _, update := range updater.updates {
+		if update.AgentThoughtChunk != nil && update.AgentThoughtChunk.Content.Text != nil && update.AgentThoughtChunk.Content.Text.Text == "reasoning step one" {
+			sawThought = true
+		}
+	}
+	if !sawThought {
+		t.Fatalf("expected agent_thought_chunk update, got %+v", updater.updates)
+	}
+}
+
+// ── tool failure status mapping ─────────────────────────────────────
+
+func TestBackendPromptHandlerMarksFailedToolCall(t *testing.T) {
+	fake := &fakeHandlerBackend{
+		submitResult: &backend.SubmitResult{SessionID: "sess-1", TurnID: "turn-1", Status: "running"},
+	}
+	handler := BackendPromptHandler(fake)
+	updater := &recordingUpdater{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var err error
+	go func() {
+		defer wg.Done()
+		_, err = handler(ctx, PromptTurn{SessionID: "acp-1", Prompt: "run", Updater: updater})
+	}()
+
+	waitForSink(t, fake)
+	fake.sink.Emit(events.Event{
+		SessionID: "sess-1", TurnID: "turn-1", Type: events.EventToolCallStarted, Timestamp: time.Now(),
+		Payload: events.ToolCallPayload{ID: "tool-fail", Name: "bash", Input: map[string]interface{}{"command": "false"}},
+	})
+	fake.sink.Emit(events.Event{
+		SessionID: "sess-1", TurnID: "turn-1", Type: events.EventToolCallFinished, Timestamp: time.Now(),
+		Payload: events.ToolCallPayload{ID: "tool-fail", Name: "bash", Output: "", Error: "exit status 1"},
+	})
+	fake.sink.Emit(events.Event{
+		SessionID: "sess-1", TurnID: "turn-1", Type: events.EventTurnCompleted, Timestamp: time.Now(),
+		Payload: events.TurnPayload{Status: "completed"},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("handler did not complete")
+	}
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+
+	var sawFailed bool
+	for _, update := range updater.updates {
+		if update.ToolCallUpdate != nil && update.ToolCallUpdate.ToolCallId == acp.ToolCallId("tool-fail") {
+			if update.ToolCallUpdate.Status != nil && *update.ToolCallUpdate.Status == acp.ToolCallStatusFailed {
+				sawFailed = true
+			}
+		}
+	}
+	if !sawFailed {
+		t.Fatalf("expected tool_call_update with failed status, got %+v", updater.updates)
+	}
+}
+
+// ── mcpServers recorded into backend session metadata ───────────────
+
+func TestBackendPromptHandlerRecordsAcpMcpServers(t *testing.T) {
+	fake := &fakeHandlerBackend{
+		submitResult: &backend.SubmitResult{SessionID: "sess-1", TurnID: "turn-1", Status: "running"},
+	}
+	handler := BackendPromptHandler(fake)
+	updater := &recordingUpdater{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var err error
+	go func() {
+		defer wg.Done()
+		_, err = handler(ctx, PromptTurn{
+			SessionID: "acp-1",
+			Prompt:    "hi",
+			Updater:   updater,
+			McpServers: []acp.McpServer{{
+				Stdio: &acp.McpServerStdio{Name: "tools", Command: "mcp-tools", Args: []string{"--serve"}},
+			}},
+		})
+	}()
+
+	waitForSink(t, fake)
+	fake.sink.Emit(events.Event{
+		SessionID: "sess-1", TurnID: "turn-1", Type: events.EventTurnCompleted, Timestamp: time.Now(),
+		Payload: events.TurnPayload{Status: "completed"},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("handler did not complete")
+	}
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+
+	meta, ok := fake.lastLocator.Metadata["acp_mcp_servers"]
+	if !ok {
+		t.Fatalf("expected acp_mcp_servers metadata, got %+v", fake.lastLocator.Metadata)
+	}
+	if !strings.Contains(meta, "tools") || !strings.Contains(meta, "mcp-tools") {
+		t.Fatalf("expected server name+command in metadata, got %q", meta)
+	}
+}
+
+// ── native approval extra options ───────────────────────────────────
+
+func TestBackendPromptHandlerNativeApprovalOffersTaskAndPattern(t *testing.T) {
+	fake := &fakeHandlerBackend{
+		submitResult: &backend.SubmitResult{
+			SessionID: "sess-1", TurnID: "turn-1", Status: "pending_approval", PendingApproval: true, PendingRequestID: "perm-1",
+		},
+		pending: []tools.PendingPermission{{
+			ID: "perm-1",
+			Request: tools.PermissionRequest{
+				ToolName: "bash",
+				Action:   "execute",
+				Command:  "npm test",
+			},
+		}},
+	}
+	requester := &recordingPermissionRequester{
+		response: acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(acp.PermissionOptionId("allow_pattern"))},
+	}
+	handler := BackendPromptHandler(fake)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := handler(ctx, PromptTurn{SessionID: "acp-1", Prompt: "run tests", PermissionRequester: requester})
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	if len(requester.requests) != 1 {
+		t.Fatalf("expected one native approval request, got %+v", requester.requests)
+	}
+	var hasTask, hasPattern bool
+	for _, opt := range requester.requests[0].Options {
+		switch opt.OptionId {
+		case acp.PermissionOptionId("allow_task"):
+			hasTask = true
+		case acp.PermissionOptionId("allow_pattern"):
+			hasPattern = true
+		}
+	}
+	if !hasTask || !hasPattern {
+		t.Fatalf("expected allow_task and allow_pattern options, got %+v", requester.requests[0].Options)
+	}
+	if !fake.approveCalled || fake.approvedScope != tools.PermissionGrantPattern {
+		t.Fatalf("expected pattern approval, called=%v scope=%q", fake.approveCalled, fake.approvedScope)
+	}
+	if result.FinalText == "" {
+		t.Fatal("expected resolution text in result")
+	}
+}

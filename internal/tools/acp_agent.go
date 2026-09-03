@@ -304,9 +304,22 @@ type ACPUpdate struct {
 	Text       string         `json:"text,omitempty"`
 	Input      map[string]any `json:"input,omitempty"`
 	Raw        string         `json:"raw,omitempty"`
+	// Plan is set when Kind == "plan": the agent's current execution plan
+	// entries (complete list, client replaces the whole plan per update).
+	// Kept structured so hosts can render the external engine's plan on the
+	// same timeline as the native todo list instead of a generic warning.
+	Plan []ACPPlanEntry `json:"plan,omitempty"`
 	// SessionUsage is set when Kind == "usage_update": the agent's latest
 	// context-window watermark for the session.
 	SessionUsage *ACPSessionUsage `json:"sessionUsage,omitempty"`
+}
+
+// ACPPlanEntry mirrors one ACP plan entry (content, priority, status) in a
+// host-facing form without importing the SDK.
+type ACPPlanEntry struct {
+	Content  string `json:"content"`
+	Priority string `json:"priority,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
 
 // RunACPAgent runs one prompt against a configured ACP agent over stdio and
@@ -341,6 +354,17 @@ type acpSDKClient struct {
 	// answered with an error.
 	permissionHandler ACPPermissionHandler
 
+	// fsBridge, when non-nil, enables fs/read_text_file and fs/write_text_file
+	// bridging: the external agent can ask godex (as host) to read/write text
+	// files inside the workspace. Nil keeps the historical "not implemented"
+	// behaviour (the agent sees fs capabilities as unsupported).
+	fsBridge *acpFSBridge
+	// terminalBridge, when non-nil, enables terminal/create, terminal/output,
+	// terminal/wait_for_exit, terminal/kill and terminal/release bridging so
+	// the external agent can run commands through the godex host. Nil keeps
+	// the historical "not implemented" behaviour.
+	terminalBridge *acpTerminalManager
+
 	mu      sync.Mutex
 	text    strings.Builder
 	updates []string
@@ -348,6 +372,11 @@ type acpSDKClient struct {
 	// reported for the current prompt run (reset at the start of each run so
 	// a run never inherits a stale watermark from a previous turn).
 	lastSessionUsage *ACPSessionUsage
+	// toolNames maps a ToolCallId to the human-readable tool name announced
+	// by the initial tool_call event, so a later tool_call_update that omits
+	// the title keeps the real tool name instead of falling back to the
+	// opaque call id (which the UI then shows as "call_xxx").
+	toolNames map[string]string
 }
 
 var _ acp.Client = (*acpSDKClient)(nil)
@@ -386,20 +415,39 @@ func (c *acpSDKClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 		}
 		c.addUpdate(ACPUpdate{Kind: "thought_chunk", Text: text, Raw: rawStr})
 	case u.ToolCall != nil:
+		name := u.ToolCall.Title
+		if name == "" {
+			name = string(u.ToolCall.ToolCallId)
+		}
+		c.mu.Lock()
+		if c.toolNames == nil {
+			c.toolNames = map[string]string{}
+		}
+		c.toolNames[string(u.ToolCall.ToolCallId)] = name
+		c.mu.Unlock()
 		c.addUpdate(ACPUpdate{
 			Kind:       "tool_call",
-			Name:       u.ToolCall.Title,
+			Name:       name,
 			ToolCallID: string(u.ToolCall.ToolCallId),
 			Input:      rawToMap(u.ToolCall.RawInput),
 			Raw:        rawStr,
 		})
 	case u.ToolCallUpdate != nil:
 		// Prefer the update's title (the agent may refresh it as the call
-		// progresses); fall back to the call id so the event still has a
-		// stable identifier when no title is sent.
+		// progresses); fall back to the name recorded by the originating
+		// tool_call so the event keeps the real tool name when the update
+		// carries no title (dsh sends updates without one, which previously
+		// made the UI display the opaque call id).
 		name := ""
 		if u.ToolCallUpdate.Title != nil {
 			name = *u.ToolCallUpdate.Title
+		}
+		if name == "" {
+			c.mu.Lock()
+			if recorded, ok := c.toolNames[string(u.ToolCallUpdate.ToolCallId)]; ok {
+				name = recorded
+			}
+			c.mu.Unlock()
 		}
 		if name == "" {
 			name = string(u.ToolCallUpdate.ToolCallId)
@@ -412,7 +460,15 @@ func (c *acpSDKClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 			Raw:        rawStr,
 		})
 	case u.Plan != nil:
-		c.addUpdate(ACPUpdate{Kind: "plan", Raw: rawStr})
+		entries := make([]ACPPlanEntry, 0, len(u.Plan.Entries))
+		for _, e := range u.Plan.Entries {
+			entries = append(entries, ACPPlanEntry{
+				Content:  strings.TrimSpace(e.Content),
+				Priority: string(e.Priority),
+				Status:   string(e.Status),
+			})
+		}
+		c.addUpdate(ACPUpdate{Kind: "plan", Plan: entries, Raw: rawStr})
 	case u.UsageUpdate != nil:
 		// Context-window watermark (used/size + optional cumulative cost).
 		// Track the latest value on the client so the run result and the
@@ -461,31 +517,52 @@ func (c *acpSDKClient) RequestPermission(ctx context.Context, params acp.Request
 }
 
 func (c *acpSDKClient) ReadTextFile(ctx context.Context, params acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
-	return acp.ReadTextFileResponse{}, fmt.Errorf("godex ACP client does not implement fs/read_text_file")
+	if c.fsBridge == nil {
+		return acp.ReadTextFileResponse{}, fmt.Errorf("godex ACP client does not implement fs/read_text_file")
+	}
+	return c.fsBridge.ReadTextFile(ctx, params)
 }
 
 func (c *acpSDKClient) WriteTextFile(ctx context.Context, params acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
-	return acp.WriteTextFileResponse{}, fmt.Errorf("godex ACP client does not implement fs/write_text_file")
+	if c.fsBridge == nil {
+		return acp.WriteTextFileResponse{}, fmt.Errorf("godex ACP client does not implement fs/write_text_file")
+	}
+	return c.fsBridge.WriteTextFile(ctx, params)
 }
 
 func (c *acpSDKClient) CreateTerminal(ctx context.Context, params acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
-	return acp.CreateTerminalResponse{}, fmt.Errorf("godex ACP client does not implement terminal/create")
+	if c.terminalBridge == nil {
+		return acp.CreateTerminalResponse{}, fmt.Errorf("godex ACP client does not implement terminal/create")
+	}
+	return c.terminalBridge.CreateTerminal(ctx, params)
 }
 
 func (c *acpSDKClient) KillTerminal(ctx context.Context, params acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
-	return acp.KillTerminalResponse{}, fmt.Errorf("godex ACP client does not implement terminal/kill")
+	if c.terminalBridge == nil {
+		return acp.KillTerminalResponse{}, fmt.Errorf("godex ACP client does not implement terminal/kill")
+	}
+	return c.terminalBridge.KillTerminal(ctx, params)
 }
 
 func (c *acpSDKClient) TerminalOutput(ctx context.Context, params acp.TerminalOutputRequest) (acp.TerminalOutputResponse, error) {
-	return acp.TerminalOutputResponse{}, fmt.Errorf("godex ACP client does not implement terminal/output")
+	if c.terminalBridge == nil {
+		return acp.TerminalOutputResponse{}, fmt.Errorf("godex ACP client does not implement terminal/output")
+	}
+	return c.terminalBridge.TerminalOutput(ctx, params)
 }
 
 func (c *acpSDKClient) ReleaseTerminal(ctx context.Context, params acp.ReleaseTerminalRequest) (acp.ReleaseTerminalResponse, error) {
-	return acp.ReleaseTerminalResponse{}, fmt.Errorf("godex ACP client does not implement terminal/release")
+	if c.terminalBridge == nil {
+		return acp.ReleaseTerminalResponse{}, fmt.Errorf("godex ACP client does not implement terminal/release")
+	}
+	return c.terminalBridge.ReleaseTerminal(ctx, params)
 }
 
 func (c *acpSDKClient) WaitForTerminalExit(ctx context.Context, params acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
-	return acp.WaitForTerminalExitResponse{}, fmt.Errorf("godex ACP client does not implement terminal/wait_for_exit")
+	if c.terminalBridge == nil {
+		return acp.WaitForTerminalExitResponse{}, fmt.Errorf("godex ACP client does not implement terminal/wait_for_exit")
+	}
+	return c.terminalBridge.WaitForTerminalExit(ctx, params)
 }
 
 // rawToMap converts an arbitrary JSON value into a map for tool-call payloads.
@@ -512,6 +589,41 @@ type ACPModelOption struct {
 	Name  string `json:"name"`
 }
 
+// ResolveACPCommand resolves the configured agent command to an absolute path.
+// ACP agents are often installed under user-local bin dirs (~/.local/bin,
+// ~/bin, /opt/homebrew/bin) that a launchd-started host does not have on its
+// PATH; without this, a service restart can fail to spawn the agent with
+// "executable file not found in $PATH" until the shell environment happens to
+// be re-imported (which is why the failure is intermittent).
+func ResolveACPCommand(command string) (string, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", fmt.Errorf("empty command")
+	}
+	if filepath.IsAbs(command) {
+		if _, err := os.Stat(command); err == nil {
+			return command, nil
+		}
+		return "", fmt.Errorf("command %q does not exist", command)
+	}
+	if resolved, err := exec.LookPath(command); err == nil {
+		return resolved, nil
+	}
+	home, _ := os.UserHomeDir()
+	for _, dir := range []string{
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, "bin"),
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+	} {
+		candidate := filepath.Join(dir, command)
+		if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("command %q not found in $PATH or common user bin dirs", command)
+}
+
 // DiscoverACPAgentModelOptions connects to a configured ACP agent, creates a
 // throwaway session, reads the agent's configOptions (the standard mechanism
 // agents use to advertise selectable models) and returns the model list. The
@@ -519,6 +631,10 @@ type ACPModelOption struct {
 func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConfig, workspace string) ([]ACPModelOption, error) {
 	if strings.TrimSpace(agent.Command) == "" {
 		return nil, fmt.Errorf("ACP agent %q has no command", agent.ID)
+	}
+	command, err := ResolveACPCommand(agent.Command)
+	if err != nil {
+		return nil, fmt.Errorf("ACP agent %q: %w", agent.ID, err)
 	}
 	// ACP agents (dsh included) reject relative cwd on session/new; make sure
 	// the workspace we hand to the subprocess is absolute.
@@ -532,7 +648,7 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, agent.Command, agent.Args...)
+	cmd := exec.CommandContext(ctx, command, agent.Args...)
 	cmd.Dir = workspace
 	cmd.Env = os.Environ()
 	for key, value := range agent.Env {
@@ -627,6 +743,10 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 	if strings.TrimSpace(agent.Command) == "" {
 		return acpRunResult{}, fmt.Errorf("ACP agent %q has no command", agent.ID)
 	}
+	command, err := ResolveACPCommand(agent.Command)
+	if err != nil {
+		return acpRunResult{}, fmt.Errorf("ACP agent %q: %w", agent.ID, err)
+	}
 	// ACP agents (dsh included) reject relative cwd on session/new; make sure
 	// the workspace we hand to the subprocess and session is absolute.
 	if !filepath.IsAbs(workspace) {
@@ -648,7 +768,7 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, agent.Command, agent.Args...)
+	cmd := exec.CommandContext(ctx, command, agent.Args...)
 	cmd.Dir = workspace
 	cmd.Env = os.Environ()
 	for key, value := range agent.Env {
@@ -675,7 +795,14 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 		stderrData <- string(data)
 	}()
 
-	client := &acpSDKClient{onUpdate: onUpdate}
+	// Bridge fs and terminal requests back to the godex host so the external
+	// agent can read/write workspace files and run commands through godex
+	// instead of only its own sandbox. The terminal manager is torn down when
+	// the run finishes so no bridged command outlives the turn.
+	fsBridge, _ := newACPFSBridge(workspace)
+	termManager := newACPTerminalManager(workspace)
+	defer termManager.Close()
+	client := &acpSDKClient{onUpdate: onUpdate, fsBridge: fsBridge, terminalBridge: termManager}
 	conn := acp.NewClientSideConnection(client, stdin, stdout)
 
 	// Idle watchdog: reset on every session/update event (via lastActivity),
@@ -712,10 +839,10 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientCapabilities: acp.ClientCapabilities{
 			Fs: acp.FileSystemCapabilities{
-				ReadTextFile:  false,
-				WriteTextFile: false,
+				ReadTextFile:  true,
+				WriteTextFile: true,
 			},
-			Terminal: false,
+			Terminal: true,
 		},
 		ClientInfo: &acp.Implementation{
 			Name:  "godex",
@@ -842,7 +969,12 @@ func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace,
 		timeoutSeconds = 600
 	}
 	procCtx, cancelProc := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(procCtx, agent.Command, agent.Args...)
+	command, err := ResolveACPCommand(agent.Command)
+	if err != nil {
+		cancelProc()
+		return nil, fmt.Errorf("ACP agent %q: %w", agent.ID, err)
+	}
+	cmd := exec.CommandContext(procCtx, command, agent.Args...)
 	cmd.Dir = workspace
 	cmd.Env = os.Environ()
 	for key, value := range agent.Env {
@@ -877,6 +1009,11 @@ func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace,
 		client:     &acpSDKClient{},
 		procCancel: cancelProc,
 	}
+	// Bridge fs and terminal requests back to the godex host so the external
+	// engine (e.g. dsh as a whole-turn engine) can read/write workspace files
+	// and run commands through godex instead of only its own sandbox.
+	s.client.fsBridge, _ = newACPFSBridge(workspace)
+	s.client.terminalBridge = newACPTerminalManager(workspace)
 	go func() {
 		data, _ := io.ReadAll(stderrPipe)
 		s.mu.Lock()
@@ -889,8 +1026,11 @@ func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace,
 	initResp, err := s.conn.Initialize(ctx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientCapabilities: acp.ClientCapabilities{
-			Fs:       acp.FileSystemCapabilities{},
-			Terminal: false,
+			Fs: acp.FileSystemCapabilities{
+				ReadTextFile:  true,
+				WriteTextFile: true,
+			},
+			Terminal: true,
 		},
 		ClientInfo: &acp.Implementation{Name: "godex", Title: &title},
 	})
@@ -1096,6 +1236,7 @@ func (s *ACPSession) Close() error {
 	cmd := s.cmd
 	stdin := s.stdin
 	cancel := s.procCancel
+	client := s.client
 	s.mu.Unlock()
 	if stdin != nil {
 		_ = stdin.Close()
@@ -1107,6 +1248,9 @@ func (s *ACPSession) Close() error {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	}
+	if client != nil && client.terminalBridge != nil {
+		client.terminalBridge.Close()
+	}
 	return nil
 }
 
@@ -1115,6 +1259,9 @@ func (s *ACPSession) killProcess(cancelProc context.CancelFunc) {
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 		_ = s.cmd.Wait()
+	}
+	if s.client != nil && s.client.terminalBridge != nil {
+		s.client.terminalBridge.Close()
 	}
 }
 

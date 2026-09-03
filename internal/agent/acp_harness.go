@@ -355,8 +355,43 @@ func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.AC
 				Name:  update.Name,
 				Input: update.Input,
 			})
-		case "plan", "permission_request", "permission_denied":
-			// P2 #4: advisory/plan/permission updates from the external engine
+		case "plan":
+			// The external engine's plan maps onto the native todo-list
+			// timeline so hosts render it like an internal todo update
+			// instead of a generic warning (P2 #4 + the todo→plan mapping
+			// godex's own ACP server already emits in the other direction).
+			if len(update.Plan) == 0 {
+				continue
+			}
+			items := make([]events.TodoItemPayload, 0, len(update.Plan))
+			total, completed, inProgress := 0, 0, 0
+			for i, entry := range update.Plan {
+				content := strings.TrimSpace(entry.Content)
+				if content == "" {
+					continue
+				}
+				status := acpPlanStatus(entry.Status)
+				switch status {
+				case "completed":
+					completed++
+				case "in_progress":
+					inProgress++
+				}
+				total++
+				items = append(items, events.TodoItemPayload{ID: i + 1, Content: content, Status: status})
+			}
+			if total == 0 {
+				continue
+			}
+			emit(events.EventTodoListUpdated, events.TodoListPayload{
+				Items:      items,
+				Total:      total,
+				Completed:  completed,
+				InProgress: inProgress,
+				Pending:    total - completed - inProgress,
+			})
+		case "permission_request", "permission_denied":
+			// P2 #4: advisory/permission updates from the external engine
 			// surface as warnings so nothing the engine reports is silently
 			// dropped.
 			emit(events.EventWarningRaised, events.NoticePayload{
@@ -367,6 +402,20 @@ func (h *ACPHarness) emitUpdateEvents(input HarnessTurnInput, updates []tools.AC
 				RecoveryHint: "The external engine continues; inspect the raw update for details.",
 			})
 		}
+	}
+}
+
+// acpPlanStatus normalizes an ACP plan entry status onto the godex todo item
+// vocabulary (pending | in_progress | completed). Unknown statuses are treated
+// as pending so a plan update never drops an entry.
+func acpPlanStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed":
+		return "completed"
+	case "in_progress", "running", "active":
+		return "in_progress"
+	default:
+		return "pending"
 	}
 }
 

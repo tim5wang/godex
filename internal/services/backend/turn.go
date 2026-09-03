@@ -765,6 +765,16 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 			}, nil
 		},
 	})
+	// Persist the external ACP session id so a later host restart can resume
+	// the same external conversation (the harness keeps it in memory only).
+	if strings.HasPrefix(requestedHarness, "acp:") {
+		agentID := strings.TrimPrefix(requestedHarness, "acp:")
+		if sid := session.agent.ACPHarnessSessionID(agentID); sid != "" {
+			session.mu.Lock()
+			session.acpSessionID = sid
+			session.mu.Unlock()
+		}
+	}
 	returnErr := runErr
 	submitStatus := "completed"
 	pendingApproval := false

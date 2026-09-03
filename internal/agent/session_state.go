@@ -232,6 +232,41 @@ func (a *Agent) RegisterConfiguredACPHarnesses() {
 	}
 }
 
+// SetACPSessionResumeID primes the ACP harness for the given agent id with a
+// previously persisted external session id, so a restarted host resumes the
+// same external conversation (session/load or session/resume) instead of
+// creating a fresh session and losing the prior context.
+func (a *Agent) SetACPSessionResumeID(agentID, sessionID string) {
+	a.mu.Lock()
+	h, ok := a.extraHarnesses["acp:"+agentID]
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	if acpH, ok := h.(*ACPHarness); ok && strings.TrimSpace(sessionID) != "" {
+		acpH.rememberSession(strings.TrimSpace(sessionID))
+	}
+}
+
+// ACPHarnessSessionID returns the live external session id recorded by the
+// ACP harness for the given agent id, or "" when the harness has no session.
+// The backend persists it so a later host restart can resume the same
+// external conversation.
+func (a *Agent) ACPHarnessSessionID(agentID string) string {
+	a.mu.Lock()
+	h, ok := a.extraHarnesses["acp:"+agentID]
+	a.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	if acpH, ok := h.(*ACPHarness); ok {
+		acpH.sessMu.Lock()
+		defer acpH.sessMu.Unlock()
+		return acpH.sessionID
+	}
+	return ""
+}
+
 // RegisteredHarnessIDs returns the ids of every engine this agent can route a
 // turn to: the built-in godex engine plus each extra harness registered via
 // RegisterHarness (e.g. "acp:codex"). It backs the template editor's engine

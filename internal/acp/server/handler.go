@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -67,6 +68,16 @@ func handleBackendPrompt(ctx context.Context, bk Backend, opts BackendPromptOpti
 			locator.Metadata = map[string]string{}
 		}
 		locator.Metadata["project_dir"] = dir
+	}
+	// Record the MCP servers the ACP client attached to this session so they
+	// are not silently dropped: they land in the backend session manifest and
+	// stay available to audit / future MCP bridging. godex does not spawn
+	// client-proposed servers itself.
+	if len(turn.McpServers) > 0 {
+		if locator.Metadata == nil {
+			locator.Metadata = map[string]string{}
+		}
+		locator.Metadata["acp_mcp_servers"] = acpMcpServersSummary(turn.McpServers)
 	}
 	opened, err := bk.OpenSession(ctx, locator)
 	if err != nil {
@@ -217,8 +228,20 @@ func resolveNativeApproval(ctx context.Context, requester PermissionRequester, b
 			return nativeApprovalResult{}, false, err
 		}
 		return approvalResultFromResolution(resolution), true, nil
+	case "allow_task":
+		resolution, err := bk.ApprovePermission(ctx, sessionID, selection.RequestID, tools.PermissionGrantTask)
+		if err != nil {
+			return nativeApprovalResult{}, false, err
+		}
+		return approvalResultFromResolution(resolution), true, nil
 	case "allow_session":
 		resolution, err := bk.ApprovePermission(ctx, sessionID, selection.RequestID, tools.PermissionGrantSession)
+		if err != nil {
+			return nativeApprovalResult{}, false, err
+		}
+		return approvalResultFromResolution(resolution), true, nil
+	case "allow_pattern":
+		resolution, err := bk.ApprovePermission(ctx, sessionID, selection.RequestID, tools.PermissionGrantPattern)
 		if err != nil {
 			return nativeApprovalResult{}, false, err
 		}
@@ -275,7 +298,9 @@ func requestNativeApproval(ctx context.Context, requester PermissionRequester, r
 		},
 		Options: []acp.PermissionOption{
 			{OptionId: acp.PermissionOptionId("allow_once"), Name: "Allow once", Kind: acp.PermissionOptionKindAllowOnce},
+			{OptionId: acp.PermissionOptionId("allow_task"), Name: "Allow for task", Kind: acp.PermissionOptionKindAllowOnce},
 			{OptionId: acp.PermissionOptionId("allow_session"), Name: "Allow for session", Kind: acp.PermissionOptionKindAllowAlways},
+			{OptionId: acp.PermissionOptionId("allow_pattern"), Name: "Allow matching pattern", Kind: acp.PermissionOptionKindAllowAlways},
 			{OptionId: acp.PermissionOptionId("deny"), Name: "Deny", Kind: acp.PermissionOptionKindRejectOnce},
 		},
 	})
@@ -425,6 +450,43 @@ func findPendingPermission(requestID string, items []tools.PendingPermission) (t
 		return items[0], true
 	}
 	return tools.PendingPermission{}, false
+}
+
+// acpMcpServersSummary renders the client-proposed MCP servers as a compact
+// JSON list (name + command) for the backend session manifest. It never fails:
+// unencodable input falls back to a plain-text listing so the metadata write
+// cannot break the prompt turn.
+func acpMcpServersSummary(servers []acp.McpServer) string {
+	type entry struct {
+		Name    string `json:"name,omitempty"`
+		Command string `json:"command,omitempty"`
+	}
+	entries := make([]entry, 0, len(servers))
+	for _, server := range servers {
+		if server.Stdio == nil {
+			continue
+		}
+		entries = append(entries, entry{Name: strings.TrimSpace(server.Stdio.Name), Command: strings.TrimSpace(server.Stdio.Command)})
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	if data, err := json.Marshal(entries); err == nil {
+		return string(data)
+	}
+	var b strings.Builder
+	for i, e := range entries {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(e.Name)
+		if e.Command != "" {
+			b.WriteString(" (")
+			b.WriteString(e.Command)
+			b.WriteString(")")
+		}
+	}
+	return b.String()
 }
 
 func toolCallTitle(name string, input map[string]interface{}) string {

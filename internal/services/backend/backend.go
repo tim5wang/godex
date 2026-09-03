@@ -74,6 +74,7 @@ type SessionManifest struct {
 	ModelProfileID         string              `json:"model_profile_id,omitempty"`
 	ReasoningEffort        string              `json:"reasoning_effort,omitempty"`
 	AcpModel               string              `json:"acp_model,omitempty"`
+	AcpSessionID           string              `json:"acp_session_id,omitempty"`
 	ParentSessionID        string              `json:"parent_session_id,omitempty"`
 	ForkedFromTurnID       string              `json:"forked_from_turn_id,omitempty"`
 	ForkedFromMessageIndex *int                `json:"forked_from_message_index,omitempty"`
@@ -353,6 +354,7 @@ type sessionState struct {
 	modelProfileID         string
 	reasoningEffort        string
 	acpModel               string
+	acpSessionID           string
 	parentSessionID        string
 	forkedFromTurnID       string
 	forkedFromMessageIndex *int

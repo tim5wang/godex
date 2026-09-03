@@ -159,7 +159,8 @@ func TestACPFakeServer(t *testing.T) {
 				usageLine, _ := json.Marshal(usageUpdate)
 				fmt.Fprintln(os.Stdout, string(usageLine))
 			}
-			// Send a plan update, a tool_call update, then a streaming chunk.
+			// Send a plan update (standard ACP entries form), a tool_call
+			// update, then a streaming chunk.
 			plan := map[string]any{
 				"jsonrpc": "2.0",
 				"method":  "session/update",
@@ -167,7 +168,10 @@ func TestACPFakeServer(t *testing.T) {
 					"sessionId": "acp-fake-1",
 					"update": map[string]any{
 						"sessionUpdate": "plan",
-						"plan":          map[string]any{"steps": []string{"analyze", "report"}},
+						"entries": []map[string]any{
+							{"content": "analyze", "priority": "high", "status": "in_progress"},
+							{"content": "report", "priority": "medium", "status": "pending"},
+						},
 					},
 				},
 			}
@@ -406,6 +410,7 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 		t.Fatalf("expected at least 3 mapped events, got %d", len(emitted))
 	}
 	var sawTool, sawDelta, sawPlan bool
+	var planTotal, planInProgress int
 	var startedID, finishedID string
 	for _, event := range emitted {
 		switch event.Type {
@@ -422,9 +427,11 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 			if payload, ok := event.Payload.(events.TextPayload); ok && strings.Contains(payload.Text, "hello from acp") {
 				sawDelta = true
 			}
-		case events.EventWarningRaised:
-			if payload, ok := event.Payload.(events.NoticePayload); ok && payload.Code == "acp_external_update" {
+		case events.EventTodoListUpdated:
+			if payload, ok := event.Payload.(events.TodoListPayload); ok && payload.Total > 0 {
 				sawPlan = true
+				planTotal = payload.Total
+				planInProgress = payload.InProgress
 			}
 		}
 	}
@@ -435,7 +442,13 @@ func TestACPHarnessMapsUpdatesToEvents(t *testing.T) {
 		t.Fatal("expected assistant_text_delta event mapped from ACP chunk")
 	}
 	if !sawPlan {
-		t.Fatal("expected plan update surfaced as warning event")
+		t.Fatal("expected plan update mapped to todo list event")
+	}
+	if planTotal != 2 {
+		t.Fatalf("expected 2 plan entries mapped, got %d", planTotal)
+	}
+	if planInProgress != 1 {
+		t.Fatalf("expected 1 in_progress plan entry, got %d", planInProgress)
 	}
 	// P1 regression: start and finish must share the tool call id so
 	// downstream collectors can pair them into one tool entry.

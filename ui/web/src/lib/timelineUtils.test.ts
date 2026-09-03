@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTimelineEntry } from "./types";
-import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed } from "./timelineUtils";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls } from "./timelineUtils";
 import type { PendingSend } from "../store/chat";
 
 /**
@@ -128,5 +128,54 @@ describe("pendingSendsForFeed", () => {
 
   it("returns [] for empty input", () => {
     expect(pendingSendsForFeed([])).toEqual([]);
+  });
+});
+
+describe("collectToolCalls", () => {
+  it("returns [] for empty input", () => {
+    expect(collectToolCalls([])).toEqual([]);
+  });
+
+  it("pairs started+finished into one finished tool item keyed by id", () => {
+    const items = [
+      ev("tool_call_started", "turn-1", "2026-01-01T00:00:01Z", { id: "tool-1", name: "bash", input: { command: "ls" } }),
+      ev("tool_call_finished", "turn-1", "2026-01-01T00:00:02Z", { id: "tool-1", name: "bash", input: { command: "ls" } }),
+    ];
+    const tools = collectToolCalls(items);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].id).toBe("tool:tool-1");
+    expect(tools[0].kind).toBe("tool");
+    expect(tools[0].title).toBe("bash");
+    expect(tools[0].status).toBe("finished");
+    expect(tools[0].turnId).toBe("turn-1");
+  });
+
+  it("leaves an unfinished tool as running", () => {
+    const items = [
+      ev("tool_call_started", "turn-1", "2026-01-01T00:00:01Z", { id: "tool-2", name: "read_file", input: { path: "/a.txt" } }),
+    ];
+    const tools = collectToolCalls(items);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].status).toBe("running");
+  });
+
+  it("falls back to turnId:name key when id is missing", () => {
+    const items = [
+      ev("tool_call_started", "turn-1", "2026-01-01T00:00:01Z", { name: "bash" }),
+      ev("tool_call_finished", "turn-1", "2026-01-01T00:00:02Z", { name: "bash" }),
+    ];
+    const tools = collectToolCalls(items);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].id).toBe("tool:turn-1:bash");
+    expect(tools[0].status).toBe("finished");
+  });
+
+  it("sorts by timestamp ascending", () => {
+    const items = [
+      ev("tool_call_started", "turn-1", "2026-01-01T00:00:05Z", { id: "b" }),
+      ev("tool_call_started", "turn-1", "2026-01-01T00:00:01Z", { id: "a" }),
+    ];
+    const tools = collectToolCalls(items);
+    expect(tools.map((t) => t.id)).toEqual(["tool:a", "tool:b"]);
   });
 });

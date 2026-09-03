@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,11 @@ type PromptTurn struct {
 	Prompt              string
 	Updater             SessionUpdater
 	PermissionRequester PermissionRequester
+	// McpServers are the MCP servers the client attached to this session via
+	// session/new, session/load or session/resume. They are forwarded so the
+	// backend prompt handler can record/audit them (godex does not spawn
+	// client-proposed MCP servers itself).
+	McpServers []acp.McpServer
 }
 
 // PromptResult is the adapter output returned from a PromptHandler.
@@ -67,6 +73,15 @@ type sessionState struct {
 	backendSessionID string
 	commandsSent     bool
 	cancel           context.CancelFunc
+	// mode is the ACP session mode ("" = default, "minimal" = lean). It is
+	// applied to the backend session on set_mode and used to build the Modes
+	// state returned on session lifecycle responses.
+	mode string
+	// mcpServers records the MCP servers the client asked this session to
+	// connect to (session/new, session/load, session/resume). godex does not
+	// spawn them itself; they are forwarded to the backend prompt handler so
+	// the session can record/audit them and optionally bridge them later.
+	mcpServers []acp.McpServer
 }
 
 var _ acp.Agent = (*Agent)(nil)
@@ -128,12 +143,13 @@ func (a *Agent) NewSession(ctx context.Context, params acp.NewSessionRequest) (a
 	if a.sessions == nil {
 		a.sessions = make(map[string]*sessionState)
 	}
-	a.sessions[sid] = &sessionState{cwd: params.Cwd}
+	a.sessions[sid] = &sessionState{cwd: params.Cwd, mcpServers: cloneMcpServers(params.McpServers)}
 	a.mu.Unlock()
 	resp := acp.NewSessionResponse{SessionId: acp.SessionId(sid)}
 	if view, ok := a.modelView(ctx, sid); ok {
 		resp.ConfigOptions = acpModelConfigOptions(view)
 	}
+	resp.Modes = a.sessionModes(ctx, sid)
 	a.scheduleAvailableCommands(acp.SessionId(sid))
 	return resp, nil
 }
@@ -172,6 +188,7 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 		Prompt:              extractPromptText(params.Prompt, state.cwd),
 		Updater:             updater,
 		PermissionRequester: a.permissionRequester(acp.SessionId(sid)),
+		McpServers:          cloneMcpServers(state.mcpServers),
 	}
 	result, err := a.handler()(promptCtx, turn)
 	if promptCtx.Err() != nil {
@@ -192,18 +209,38 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	return acp.PromptResponse{StopReason: stop}, nil
 }
 
-// ListSessions returns the in-memory ACP sessions tracked by this agent.
-func (a *Agent) ListSessions(_ context.Context, _ acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
+// ListSessions returns the ACP sessions tracked by this agent: the live
+// in-memory sessions plus, when the backend supports listing, the persisted
+// ACP-channel sessions (so a restarted agent still reports its sessions).
+// In-memory entries win on session-id collision (they carry the live cwd).
+func (a *Agent) ListSessions(ctx context.Context, _ acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
+	byID := make(map[string]acp.SessionInfo)
 	a.mu.Lock()
-	sessions := make([]acp.SessionInfo, 0, len(a.sessions))
 	for sid, st := range a.sessions {
-		info := acp.SessionInfo{
+		byID[sid] = acp.SessionInfo{
 			SessionId: acp.SessionId(sid),
 			Cwd:       st.cwd,
 		}
-		sessions = append(sessions, info)
 	}
 	a.mu.Unlock()
+	if provider, ok := a.Features.(sessionListFeatureProvider); ok {
+		if persisted, err := provider.ListSessions(ctx); err == nil {
+			for _, info := range persisted {
+				sid := string(info.SessionId)
+				if _, exists := byID[sid]; exists {
+					continue
+				}
+				byID[sid] = info
+			}
+		}
+	}
+	sessions := make([]acp.SessionInfo, 0, len(byID))
+	for _, info := range byID {
+		sessions = append(sessions, info)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		return string(sessions[i].SessionId) < string(sessions[j].SessionId)
+	})
 	return acp.ListSessionsResponse{Sessions: sessions}, nil
 }
 
@@ -224,9 +261,62 @@ func (a *Agent) SetSessionConfigOption(ctx context.Context, req acp.SetSessionCo
 	return acp.SetSessionConfigOptionResponse{ConfigOptions: options}, nil
 }
 
-// SetSessionMode is not yet supported.
-func (a *Agent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
-	return acp.SetSessionModeResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetMode)
+// SetSessionMode switches the session's creation mode ("default" or
+// "minimal"). The mode is validated against the advertised set, applied to the
+// backend session when a sessionModeFeatureProvider is configured, recorded on
+// the session state, and announced to the client via a currentModeUpdate
+// notification so its mode UI stays in sync.
+func (a *Agent) SetSessionMode(ctx context.Context, req acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
+	sid := string(req.SessionId)
+	mode := strings.TrimSpace(string(req.ModeId))
+	if !validateAcpSessionMode(mode) {
+		return acp.SetSessionModeResponse{}, fmt.Errorf("unsupported session mode %q (supported: %s, %s)", mode, acpSessionModeDefault, acpSessionModeMinimal)
+	}
+	a.mu.Lock()
+	st, ok := a.sessions[sid]
+	if ok {
+		st.mode = mode
+	}
+	a.mu.Unlock()
+	if !ok {
+		return acp.SetSessionModeResponse{}, fmt.Errorf("session %s not found", sid)
+	}
+	if provider, ok := a.Features.(sessionModeFeatureProvider); ok {
+		backendID, err := a.ensureBackendSession(ctx, sid)
+		if err != nil {
+			return acp.SetSessionModeResponse{}, err
+		}
+		if err := provider.SetSessionMode(ctx, backendID, mode); err != nil {
+			return acp.SetSessionModeResponse{}, err
+		}
+	}
+	if updater := a.updater(acp.SessionId(sid)); updater != nil {
+		_ = updater.Update(ctx, acp.SessionUpdate{CurrentModeUpdate: &acp.SessionCurrentModeUpdate{
+			CurrentModeId: acp.SessionModeId(mode),
+		}})
+	}
+	return acp.SetSessionModeResponse{}, nil
+}
+
+// sessionModes builds the ACP mode state for a session: the advertised mode
+// list with the current mode id. The current mode prefers the backend session
+// (which owns the persisted mode) and falls back to the in-memory session
+// state, then to the default mode.
+func (a *Agent) sessionModes(ctx context.Context, sid string) *acp.SessionModeState {
+	current := ""
+	a.mu.Lock()
+	if st, ok := a.sessions[sid]; ok {
+		current = st.mode
+	}
+	a.mu.Unlock()
+	if provider, ok := a.Features.(sessionModeFeatureProvider); ok {
+		if backendID, err := a.ensureBackendSession(ctx, sid); err == nil {
+			if mode, err := provider.SessionMode(ctx, backendID); err == nil && strings.TrimSpace(mode) != "" {
+				current = strings.TrimSpace(mode)
+			}
+		}
+	}
+	return acpSessionModeState(current)
 }
 
 // Logout terminates the ACP connection. godex has no ACP-level authentication,
@@ -267,11 +357,13 @@ func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionReque
 		a.sessions[sid] = st
 	}
 	st.cwd = params.Cwd
+	st.mcpServers = cloneMcpServers(params.McpServers)
 	a.mu.Unlock()
 	resp := acp.ResumeSessionResponse{}
 	if view, ok := a.modelView(ctx, sid); ok {
 		resp.ConfigOptions = acpModelConfigOptions(view)
 	}
+	resp.Modes = a.sessionModes(ctx, sid)
 	a.scheduleAvailableCommands(acp.SessionId(sid))
 	return resp, nil
 }
@@ -648,4 +740,32 @@ func (r connectionRequester) RequestPermission(ctx context.Context, req acp.Requ
 
 func randomSessionID() string {
 	return idgen.New("sess_", 12)
+}
+
+// cloneMcpServers deep-copies the slice so session state never aliases the
+// request params (which the SDK may reuse). Stdio server args/env slices are
+// copied per entry; nil input yields nil.
+func cloneMcpServers(servers []acp.McpServer) []acp.McpServer {
+	if len(servers) == 0 {
+		return nil
+	}
+	out := make([]acp.McpServer, len(servers))
+	copy(out, servers)
+	for i := range out {
+		s := out[i]
+		if s.Stdio != nil {
+			clone := *s.Stdio
+			if len(clone.Args) > 0 {
+				clone.Args = append([]string{}, clone.Args...)
+			}
+			if len(clone.Env) > 0 {
+				env := make([]acp.EnvVariable, len(clone.Env))
+				copy(env, clone.Env)
+				clone.Env = env
+			}
+			s.Stdio = &clone
+		}
+		out[i] = s
+	}
+	return out
 }

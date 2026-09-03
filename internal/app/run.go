@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -371,6 +372,9 @@ func (r *Runner) runDoctor(ctx context.Context, args []string) error {
 	if len(args) > 0 && args[0] == "sessions" {
 		return r.runDoctorSessions(ctx, args[1:])
 	}
+	if len(args) > 0 && args[0] == "acp" {
+		return r.runDoctorACP(args[1:])
+	}
 	if len(args) > 0 && isHelpArg(args[0]) {
 		fmt.Fprintln(r.Stdout, doctorHelpText())
 		return nil
@@ -535,6 +539,68 @@ func (r *Runner) runDoctorStorage() error {
 	fmt.Fprintf(r.Stdout, "Session store: backend=%s status=%s path=%s schema=%d\n", diag.Backend, status, path, diag.SchemaVersion)
 	if diag.Error != "" {
 		fmt.Fprintf(r.Stdout, "Session store error: %s\n", diag.Error)
+	}
+	return nil
+}
+
+// runDoctorACP diagnoses the ACP (Agent Client Protocol) configuration:
+// configured external agents, their command resolvability, and the workspace
+// they would run in. It is the implementation behind `godex doctor acp`.
+func (r *Runner) runDoctorACP(args []string) error {
+	fs := flag.NewFlagSet("doctor acp", flag.ContinueOnError)
+	fs.SetOutput(r.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("unexpected doctor acp arguments: %s", strings.Join(fs.Args(), " "))
+	}
+
+	cfg := r.currentConfig()
+	workspace := strings.TrimSpace(cfg.WorkspaceDir)
+	if workspace == "" {
+		workspace = "."
+	}
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		absWorkspace = workspace
+	}
+	if info, err := os.Stat(absWorkspace); err == nil && info.IsDir() {
+		fmt.Fprintf(r.Stdout, "Workspace: %s (ok)\n", absWorkspace)
+	} else {
+		fmt.Fprintf(r.Stdout, "Workspace: %s (missing or not a directory)\n", absWorkspace)
+	}
+	fmt.Fprintf(r.Stdout, "Default ACP agent profile: %s\n", cfg.DefaultAgentProfileForChannel("acp"))
+
+	agents := cfg.ACP.Agents
+	if len(agents) == 0 {
+		fmt.Fprintln(r.Stdout, "Configured ACP agents: none (acp_agent tool has no agents to call)")
+		return nil
+	}
+	fmt.Fprintf(r.Stdout, "Configured ACP agents: %d\n", len(agents))
+	ids := make([]string, 0, len(agents))
+	for id := range agents {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	anyUnresolved := false
+	for _, id := range ids {
+		agent := agents[id]
+		command := strings.TrimSpace(agent.Command)
+		if command == "" {
+			fmt.Fprintf(r.Stdout, "- %s: command is empty\n", id)
+			anyUnresolved = true
+			continue
+		}
+		if _, err := tools.ResolveACPCommand(command); err != nil {
+			fmt.Fprintf(r.Stdout, "- %s: command %q not found in PATH or common user bin dirs\n", id, command)
+			anyUnresolved = true
+			continue
+		}
+		fmt.Fprintf(r.Stdout, "- %s: command %q resolves\n", id, command)
+	}
+	if anyUnresolved {
+		fmt.Fprintln(r.Stdout, "Hint: ACP agents are often installed under ~/.local/bin, ~/bin, or /opt/homebrew/bin; ensure the command is on PATH or use an absolute path.")
 	}
 	return nil
 }
@@ -1442,8 +1508,9 @@ func doctorHelpText() string {
 		"  godex doctor              Diagnose config and runtime problems",
 		"  godex doctor sessions     Diagnose persisted session state",
 		"  godex doctor storage      Diagnose storage directories",
+		"  godex doctor acp          Diagnose ACP agent configuration",
 		"",
-		"Run health checks on configuration, channels, sessions, and storage.",
+		"Run health checks on configuration, channels, sessions, storage, and ACP agents.",
 	}, "\n")
 }
 

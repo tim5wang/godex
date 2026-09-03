@@ -77,6 +77,8 @@ func (s *backendPromptStream) handleEvent(ctx context.Context, event events.Even
 	switch event.Type {
 	case events.EventAssistantTextDelta:
 		s.handleAssistantTextDelta(ctx, event)
+	case events.EventAssistantThinkingDelta:
+		s.handleAssistantThinkingDelta(ctx, event)
 	case events.EventAssistantMessageComplete:
 		s.handleAssistantMessageComplete(event)
 	case events.EventToolCallStarted:
@@ -94,6 +96,24 @@ func (s *backendPromptStream) handleEvent(ctx context.Context, event events.Even
 		return s.handleTurnCompleted(ctx, event)
 	}
 	return PromptResult{}, false, nil
+}
+
+// handleAssistantThinkingDelta forwards godex reasoning deltas as ACP
+// agent_thought_chunk updates so clients (e.g. VS Code) can render the model's
+// thinking alongside the reply. Thinking is streamed separately from the final
+// text: it never enters s.collected, so the end-turn reply stays clean.
+func (s *backendPromptStream) handleAssistantThinkingDelta(ctx context.Context, event events.Event) {
+	payload, ok := event.Payload.(events.TextPayload)
+	if !ok || strings.TrimSpace(payload.Text) == "" {
+		return
+	}
+	if s.turn.Updater == nil {
+		return
+	}
+	if err := s.turn.Updater.Update(ctx, acp.UpdateAgentThoughtText(payload.Text)); err != nil {
+		logger.Warnf("ACP thought update: %v", err)
+		return
+	}
 }
 
 func (s *backendPromptStream) handleAssistantTextDelta(ctx context.Context, event events.Event) {
@@ -175,12 +195,18 @@ func (s *backendPromptStream) handleToolCallFinished(ctx context.Context, event 
 	if len(output) > 500 {
 		output = output[:500] + "…"
 	}
+	// A tool call that errored (or timed out) must be reported as failed so
+	// the ACP client renders a failure instead of a successful completion.
+	status := acp.ToolCallStatusCompleted
+	if strings.TrimSpace(payload.Error) != "" || payload.TimedOut {
+		status = acp.ToolCallStatusFailed
+	}
 	_ = s.turn.Updater.Update(ctx, acp.UpdateToolCall(
 		acp.ToolCallId(callID),
 		acp.WithUpdateTitle(toolCallTitle(payload.Name, payload.Input)),
 		acp.WithUpdateRawOutput(output),
 		acp.WithUpdateRawInput(payload.Input),
-		acp.WithUpdateStatus(acp.ToolCallStatusCompleted),
+		acp.WithUpdateStatus(status),
 	))
 }
 

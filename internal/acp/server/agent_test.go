@@ -162,6 +162,9 @@ func wireAgent(t *testing.T, a *Agent, rw *pipeRW) func() {
 type fakeSessionFeatures struct {
 	view         backend.ModelsView
 	setProfileID string
+	// persisted, when non-nil, is returned by ListSessions to simulate a
+	// backend that persists ACP sessions across process restarts.
+	persisted []acp.SessionInfo
 }
 
 func (f *fakeSessionFeatures) EnsureSession(context.Context, string) (string, error) {
@@ -179,6 +182,14 @@ func (f *fakeSessionFeatures) SetSessionModelProfile(_ context.Context, _ string
 		f.view.Profiles[idx].Selected = f.view.Profiles[idx].ID == profileID
 	}
 	return f.view, nil
+}
+
+// ListSessions lets the fake satisfy the optional sessionListFeatureProvider.
+func (f *fakeSessionFeatures) ListSessions(context.Context) ([]acp.SessionInfo, error) {
+	if f.persisted == nil {
+		return nil, nil
+	}
+	return append([]acp.SessionInfo{}, f.persisted...), nil
 }
 
 func TestAgentInitializeAdvertisesGodex(t *testing.T) {
@@ -537,6 +548,41 @@ func TestAgentCustomHandlerRuns(t *testing.T) {
 	}
 }
 
+func TestAgentForwardsMcpServersToPromptHandler(t *testing.T) {
+	var got []acp.McpServer
+	a := &Agent{
+		Handler: func(_ context.Context, turn PromptTurn) (PromptResult, error) {
+			got = append([]acp.McpServer{}, turn.McpServers...)
+			return PromptResult{FinalText: "ok", StopReason: acp.StopReasonEndTurn}, nil
+		},
+	}
+	servers := []acp.McpServer{{
+		Stdio: &acp.McpServerStdio{Name: "tools", Command: "mcp-tools", Args: []string{"--serve"}, Env: []acp.EnvVariable{{Name: "K", Value: "V"}}},
+	}}
+	sessResp, err := a.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/tmp", McpServers: servers})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+	if _, err := a.Prompt(context.Background(), acp.PromptRequest{
+		SessionId: sessResp.SessionId,
+		Prompt:    []acp.ContentBlock{acp.TextBlock("ping")},
+	}); err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Stdio == nil {
+		t.Fatalf("handler did not receive mcpServers, got %+v", got)
+	}
+	if got[0].Stdio.Name != "tools" || got[0].Stdio.Command != "mcp-tools" {
+		t.Fatalf("unexpected mcp server: %+v", got[0].Stdio)
+	}
+	// The turn must carry a copy, not the caller's slice (mutating one must
+	// not corrupt session state).
+	servers[0].Stdio.Args[0] = "--mutated"
+	if a.sessions[string(sessResp.SessionId)].mcpServers[0].Stdio.Args[0] != "--serve" {
+		t.Fatal("session state mutated through the request slice; expected deep copy")
+	}
+}
+
 func TestAgentUnsupportedMethodsReturnMethodNotFound(t *testing.T) {
 	a := &Agent{}
 
@@ -548,9 +594,94 @@ func TestAgentUnsupportedMethodsReturnMethodNotFound(t *testing.T) {
 	if sessResp.Sessions == nil {
 		t.Fatalf("ListSessions.Sessions = nil, want empty slice")
 	}
+}
 
-	if _, err := a.SetSessionMode(context.Background(), acp.SetSessionModeRequest{}); !isMethodNotFound(err) {
-		t.Fatalf("SetSessionMode err = %v, want method-not-found", err)
+func TestAgentSetSessionMode(t *testing.T) {
+	a := &Agent{}
+	sessResp, err := a.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/tmp", McpServers: []acp.McpServer{}})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+	if sessResp.Modes == nil {
+		t.Fatal("expected Modes on NewSession response")
+	}
+	if len(sessResp.Modes.AvailableModes) != 2 {
+		t.Fatalf("expected 2 available modes, got %+v", sessResp.Modes.AvailableModes)
+	}
+	if string(sessResp.Modes.CurrentModeId) != "default" {
+		t.Fatalf("CurrentModeId = %q, want default", sessResp.Modes.CurrentModeId)
+	}
+
+	// Switch to minimal.
+	if _, err := a.SetSessionMode(context.Background(), acp.SetSessionModeRequest{
+		SessionId: sessResp.SessionId,
+		ModeId:    acp.SessionModeId("minimal"),
+	}); err != nil {
+		t.Fatalf("SetSessionMode() error = %v", err)
+	}
+	if st := a.sessions[string(sessResp.SessionId)]; st == nil || st.mode != "minimal" {
+		t.Fatalf("session mode = %+v, want minimal", a.sessions[string(sessResp.SessionId)])
+	}
+
+	// An unknown mode id is rejected.
+	if _, err := a.SetSessionMode(context.Background(), acp.SetSessionModeRequest{
+		SessionId: sessResp.SessionId,
+		ModeId:    acp.SessionModeId("turbo"),
+	}); err == nil {
+		t.Fatal("expected error for unknown mode id")
+	}
+
+	// Resume reflects the switched mode.
+	resumeResp, err := a.ResumeSession(context.Background(), acp.ResumeSessionRequest{
+		SessionId: sessResp.SessionId,
+		Cwd:       "/tmp",
+	})
+	if err != nil {
+		t.Fatalf("ResumeSession() error = %v", err)
+	}
+	if resumeResp.Modes == nil || string(resumeResp.Modes.CurrentModeId) != "minimal" {
+		t.Fatalf("ResumeSession Modes = %+v, want current=minimal", resumeResp.Modes)
+	}
+}
+
+func TestAgentListSessionsMergesPersistedSessions(t *testing.T) {
+	features := &fakeSessionFeatures{
+		view: backend.ModelsView{DefaultProfileID: "sonnet"},
+		persisted: []acp.SessionInfo{
+			{SessionId: "sess-persisted-1", Cwd: "/old/workspace"},
+			{SessionId: "sess-persisted-2", Cwd: "/other"},
+		},
+	}
+	a := &Agent{Features: features}
+	// One in-memory session colliding with a persisted id must win with its
+	// live cwd; the other persisted id is merged in.
+	sessResp, err := a.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/live/workspace", McpServers: []acp.McpServer{}})
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+	// Re-bind the persisted id through LoadSession so it lands in memory too.
+	if _, err := a.LoadSession(context.Background(), acp.LoadSessionRequest{SessionId: acp.SessionId("sess-persisted-1"), Cwd: "/live/workspace"}); err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	listResp, err := a.ListSessions(context.Background(), acp.ListSessionsRequest{})
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	byID := map[string]acp.SessionInfo{}
+	for _, info := range listResp.Sessions {
+		byID[string(info.SessionId)] = info
+	}
+	if len(byID) != 3 {
+		t.Fatalf("expected 3 merged sessions, got %+v", listResp.Sessions)
+	}
+	if byID["sess-persisted-1"].Cwd != "/live/workspace" {
+		t.Fatalf("in-memory session should win: %+v", byID["sess-persisted-1"])
+	}
+	if byID["sess-persisted-2"].Cwd != "/other" {
+		t.Fatalf("persisted session should be merged: %+v", byID["sess-persisted-2"])
+	}
+	if _, ok := byID[string(sessResp.SessionId)]; !ok {
+		t.Fatalf("fresh in-memory session missing from list: %+v", listResp.Sessions)
 	}
 }
 

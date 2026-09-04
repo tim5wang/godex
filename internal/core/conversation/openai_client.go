@@ -754,6 +754,16 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 		}
 		if choice.Delta.ReasoningContent != "" {
 			reasoning.WriteString(choice.Delta.ReasoningContent)
+			// Forward reasoning deltas live so the frontend can show the
+			// "thinking…" stream for openai_compatible providers (mirrors the
+			// Responses client's reasoning_summary_text forwarding). Without
+			// this the reasoning is only accumulated into the final response
+			// and the runtime's OnAssistantThinkingDelta never fires, so
+			// thinking is lost from both the live feed and the persisted
+			// timeline.
+			if handler.OnThinkingDelta != nil {
+				handler.OnThinkingDelta(choice.Delta.ReasoningContent, "")
+			}
 		}
 		for _, deltaCall := range choice.Delta.ToolCalls {
 			idx := deltaCall.Index

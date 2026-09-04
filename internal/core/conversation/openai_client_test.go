@@ -446,3 +446,40 @@ func TestOpenAIClientRequestGzip(t *testing.T) {
 		t.Fatalf("expected decoded messages after gunzip, got %#v", gotBody)
 	}
 }
+
+// TestOpenAIClientStreamForwardsReasoningDeltas verifies that openai_compatible
+// providers' `reasoning_content` stream deltas are forwarded to
+// OnThinkingDelta (mirroring the Responses client). Without this forwarding
+// the runtime's OnAssistantThinkingDelta never fires, so thinking is lost from
+// both the live feed and the persisted timeline.
+func TestOpenAIClientStreamForwardsReasoningDeltas(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me check\",\"role\":\"assistant\"},\"index\":0}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" the plan first.\",\"role\":\"assistant\"},\"index\":0}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"content\":\"Done.\",\"role\":\"assistant\"},\"finish_reason\":\"stop\",\"index\":0}]}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	var gotThinking []string
+	_, err := client.Stream(context.Background(), protocol.Request{Model: "deepseek-test"}, StreamHandler{
+		OnThinkingDelta: func(thinking, _ string) {
+			if thinking != "" {
+				gotThinking = append(gotThinking, thinking)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("openai-compatible stream: %v", err)
+	}
+	if len(gotThinking) != 2 {
+		t.Fatalf("expected 2 forwarded reasoning deltas, got %d: %+v", len(gotThinking), gotThinking)
+	}
+	if gotThinking[0] != "Let me check" || gotThinking[1] != " the plan first." {
+		t.Fatalf("unexpected reasoning deltas: %+v", gotThinking)
+	}
+}

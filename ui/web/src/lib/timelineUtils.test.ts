@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTimelineEntry } from "./types";
-import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds } from "./timelineUtils";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds, collectThinkingDeltas } from "./timelineUtils";
 import type { PendingSend } from "../store/chat";
 
 /**
@@ -211,6 +211,33 @@ describe("mergeChronologicalFeedItems", () => {
     const merged = mergeChronologicalFeedItems(history, tools);
     expect(merged.map((m) => m.id)).toEqual(["h1", "t1"]);
   });
+
+  it("re-entry: thinking deltas rebuild and interleave with tools by timestamp", () => {
+    // Timeline served by the backend after my fix now includes
+    // assistant_thinking_delta events persisted between tool calls.
+    const timeline = [
+      ev("tool_call_started", "turn-1", "2026-01-01T00:00:01Z", { id: "c1", name: "bash", input: {} }),
+      ev("tool_call_finished", "turn-1", "2026-01-01T00:00:02Z", { id: "c1", name: "bash", input: {} }),
+      ev("assistant_thinking_delta", "turn-1", "2026-01-01T00:00:03Z", { text: "the first result suggests" }),
+      ev("tool_call_started", "turn-1", "2026-01-01T00:00:04Z", { id: "c2", name: "glob", input: {} }),
+      ev("tool_call_finished", "turn-1", "2026-01-01T00:00:05Z", { id: "c2", name: "glob", input: {} }),
+      ev("assistant_thinking_delta", "turn-1", "2026-01-01T00:00:06Z", { text: " I should inspect the handler" }),
+    ];
+    const rebuiltTools = collectToolCalls(timeline);
+    const rebuiltThinking = collectThinkingDeltas(timeline);
+    const merged = mergeChronologicalFeedItems([], [...rebuiltTools, ...rebuiltThinking]);
+    // collectToolCalls merges started+finished into one tool item per call:
+    // tool1, thinking1, tool2, thinking2 — the thinking↔tool alternation the
+    // user sees live is reconstructed on re-entry.
+    expect(merged.map((m) => m.kind)).toEqual(["tool", "background", "tool", "background"]);
+    const thinking = merged.filter((m) => m.kind === "background");
+    expect(thinking.map((m) => m.title)).toEqual(["Thinking…", "Thinking…"]);
+    // The two segments are NOT merged into one bubble: a tool sits between them.
+    expect(thinking[0].body).toBe("the first result suggests");
+    expect(thinking[1].body).toBe("I should inspect the handler");
+    // Chronological order restored: second thinking comes after the second tool.
+    expect(merged[merged.length - 1].timestamp).toBe("2026-01-01T00:00:06Z");
+  });
 });
 
 describe("alignAssistantTextTurnIds", () => {
@@ -252,5 +279,50 @@ describe("alignAssistantTextTurnIds", () => {
     expect(aligned[0].turnId).toBe("turn-abc-123");
     expect(aligned[1].kind).toBe("user");
     expect(aligned[1].turnId).toBeUndefined();
+  });
+});
+
+describe("collectThinkingDeltas", () => {
+  const thinking = (turnId: string, ts: string, text: string): SessionTimelineEntry =>
+    ({ type: "assistant_thinking_delta", turn_id: turnId, timestamp: ts, payload: { text } }) as SessionTimelineEntry;
+  const tool = (turnId: string, ts: string, name: string): SessionTimelineEntry =>
+    ({ type: "tool_call_started", turn_id: turnId, timestamp: ts, payload: { id: `c-${ts}`, name } }) as SessionTimelineEntry;
+
+  it("returns [] for empty input", () => {
+    expect(collectThinkingDeltas([])).toEqual([]);
+  });
+
+  it("merges consecutive same-turn thinking deltas into one bubble", () => {
+    const items = [
+      thinking("t1", "2026-01-01T00:00:01Z", "Let me think"),
+      thinking("t1", "2026-01-01T00:00:02Z", " about the plan"),
+    ];
+    const out = collectThinkingDeltas(items);
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("background");
+    expect(out[0].title).toBe("Thinking…");
+    expect(out[0].turnId).toBe("t1");
+    expect(out[0].body).toBe("Let me think about the plan");
+  });
+
+  it("starts a new bubble after a tool call (tool↔thinking alternation)", () => {
+    const items = [
+      thinking("t1", "2026-01-01T00:00:01Z", "First thought"),
+      tool("t1", "2026-01-01T00:00:02Z", "bash"),
+      thinking("t1", "2026-01-01T00:00:03Z", "Second thought"),
+    ];
+    const out = collectThinkingDeltas(items);
+    expect(out).toHaveLength(2);
+    expect(out[0].body).toBe("First thought");
+    expect(out[1].body).toBe("Second thought");
+  });
+
+  it("keeps different turns separate and sorts by timestamp", () => {
+    const items = [
+      thinking("t2", "2026-01-01T00:00:05Z", "later turn"),
+      thinking("t1", "2026-01-01T00:00:01Z", "earlier turn"),
+    ];
+    const out = collectThinkingDeltas(items);
+    expect(out.map((i) => i.turnId)).toEqual(["t1", "t2"]);
   });
 });

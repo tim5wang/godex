@@ -95,3 +95,24 @@ func TestRecorderSeedAppliesCapacityAndFiltering(t *testing.T) {
 		t.Fatalf("unexpected seeded recorder contents: %+v", got)
 	}
 }
+
+func TestRecorderPersistsThinkingDeltasButSkipsTextDeltas(t *testing.T) {
+	recorder := NewRecorder(10)
+	recorder.Emit(Event{Type: EventAssistantTextDelta})
+	recorder.Emit(Event{Type: EventAssistantThinkingDelta})
+	recorder.Emit(Event{Type: EventToolCallStarted})
+
+	got := recorder.Entries(0)
+	if len(got) != 2 {
+		t.Fatalf("expected thinking delta + tool event recorded (text delta skipped), got %d: %+v", len(got), got)
+	}
+	if got[0].Type != EventAssistantThinkingDelta || got[1].Type != EventToolCallStarted {
+		t.Fatalf("unexpected recorder contents: %+v", got)
+	}
+	if RecordableEvent(Event{Type: EventAssistantTextDelta}) {
+		t.Fatal("assistant_text_delta must stay non-recordable (final text comes from assistant_message_completed)")
+	}
+	if !RecordableEvent(Event{Type: EventAssistantThinkingDelta}) {
+		t.Fatal("assistant_thinking_delta must be recordable so re-entry can rebuild the thinking process")
+	}
+}

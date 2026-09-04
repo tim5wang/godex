@@ -80,7 +80,12 @@ func (r *Recorder) Entries(limit int) []Event {
 
 func recordableEvent(event Event) bool {
 	switch event.Type {
-	case EventAssistantTextDelta, EventAssistantThinkingDelta:
+	case EventAssistantTextDelta:
+		// Text deltas are transient streaming fragments; the final consolidated
+		// assistant text is carried by assistant_message_completed (and the
+		// snapshot messages), so persisting every delta would duplicate the
+		// answer. Thinking deltas ARE persisted so a re-entered conversation
+		// can reconstruct the reasoning that streamed between tool calls.
 		return false
 	default:
 		return true

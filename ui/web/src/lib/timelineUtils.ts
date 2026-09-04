@@ -992,6 +992,71 @@ export function collectToolCalls(items: SessionTimelineEntry[]): FeedItem[] {
   });
 }
 
+/**
+ * Rebuilds the reasoning ("Thinking…") segments of a conversation from the
+ * persisted timeline. The ACP harness streams `assistant_thinking_delta`
+ * events between tool calls; live they are shown as transient "Thinking…"
+ * overlay bubbles. Those deltas are now persisted in the timeline (they are
+ * recordable events), so on re-entry (overlay cleared) this function
+ * reconstructs the same per-turn thinking bubbles and lets
+ * `mergeChronologicalFeedItems` interleave them with the rebuilt tool log by
+ * timestamp — restoring the "thinking ↔ tool" alternation the user sees live.
+ *
+ * Consecutive deltas of the same turn merge into one bubble (mirroring the
+ * live overlay's sameStream logic); a delta that follows a tool call starts a
+ * new bubble.
+ */
+export function collectThinkingDeltas(items: SessionTimelineEntry[]): FeedItem[] {
+  const ordered = [...items].sort((a, b) => Date.parse(a.timestamp ?? "") - Date.parse(b.timestamp ?? ""));
+  const result: FeedItem[] = [];
+  let open: FeedItem | null = null;
+  let openTurnId = "";
+  let toolSinceLastThinking = false;
+  for (const event of ordered) {
+    if (event.type === "tool_call_started" || event.type === "tool_call_finished") {
+      // A tool call between thinking deltas closes the open bubble so the next
+      // reasoning segment renders AFTER that tool (live sameStream semantics:
+      // a tool item between two thinking deltas starts a new bubble).
+      toolSinceLastThinking = true;
+      open = null;
+      continue;
+    }
+    if (event.type !== "assistant_thinking_delta") {
+      continue;
+    }
+    const payload = (event.payload ?? {}) as { text?: string };
+    // Use the raw text (NOT trimmed) so consecutive chunks keep their original
+    // spacing when merged (mirrors the live overlay's `payload.text || ""`).
+    const text = typeof payload.text === "string" ? payload.text : "";
+    if (!text.trim()) {
+      continue;
+    }
+    const turnId = event.turn_id || "";
+    if (open && !toolSinceLastThinking && openTurnId === turnId) {
+      // Same turn, still reasoning (no tool between): merge into the open
+      // bubble (live sameStream semantics).
+      open.body += text;
+      open.summary = previewText(open.body);
+      open.timestamp = event.timestamp;
+    } else {
+      const body = text.trim();
+      open = {
+        id: `thinking:${turnId || "current"}:${result.length}`,
+        kind: "background",
+        title: "Thinking…",
+        body,
+        timestamp: event.timestamp,
+        summary: previewText(body),
+        turnId: turnId || undefined,
+      };
+      result.push(open);
+      openTurnId = turnId;
+      toolSinceLastThinking = false;
+    }
+  }
+  return result;
+}
+
 export function formatCompactNumber(value: number) {
   if (!Number.isFinite(value)) {
     return "0";

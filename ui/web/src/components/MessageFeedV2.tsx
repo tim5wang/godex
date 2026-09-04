@@ -54,6 +54,10 @@ interface MessageFeedV2Props {
   botName?: string;
   botAvatar?: string;
   botColor?: string;
+  /** 是否有会话正在运行（用于 turn 过程区默认展开/折叠）。 */
+  running?: boolean;
+  /** 当前正在运行的 turn id（用于判定某 turn 是否执行中）。 */
+  activeTurnId?: string;
 }
 
 /**
@@ -62,7 +66,7 @@ interface MessageFeedV2Props {
  * rows and todo cards in chronological order. Tool calls render as single-line
  * rows that expand in place, keeping the conversation scannable.
  */
-export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false, onForkTurn, onEditMessage, botName, botAvatar, botColor }: MessageFeedV2Props) {
+export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote = false, hasNoteContext = false, workspaceDir, token, onOpenInFiles, onSubmitCard, voiceEnabled = false, onForkTurn, onEditMessage, botName, botAvatar, botColor, running = false, activeTurnId }: MessageFeedV2Props) {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
 
@@ -102,6 +106,8 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
         voiceEnabled={voiceEnabled}
         onForkTurn={onForkTurn}
         onEditMessage={onEditMessage}
+        running={running}
+        activeTurnId={activeTurnId}
       />
     ),
     header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item, botName),
@@ -141,6 +147,8 @@ function FeedItemBody({
   voiceEnabled,
   onForkTurn,
   onEditMessage,
+  running = false,
+  activeTurnId,
 }: {
   item: FeedItem;
   onToggleTool: (id: string) => void;
@@ -156,19 +164,66 @@ function FeedItemBody({
   voiceEnabled?: boolean;
   onForkTurn?: (item: FeedItem) => void;
   onEditMessage?: (item: FeedItem) => void;
+  running?: boolean;
+  activeTurnId?: string;
 }) {
   const { t } = useI18n();
-  // Grouped assistant turn: render ordered segments, each block separated by a divider.
+  // Grouped assistant turn: the process (thinking + tool calls) collapses as a
+  // whole after the turn finishes (while it runs it stays expanded), and each
+  // thinking segment can additionally be collapsed to a single line. The final
+  // answer text always stays visible.
   if (item.segments?.length) {
     const visible = item.segments.filter((segment) => segment.type !== "text" || Boolean(segment.text?.trim()));
+    // The final answer is the last non-thinking text segment; everything before
+    // it is process (thinking bubbles + tool rows + todos).
+    let answerStart = -1;
+    for (let i = visible.length - 1; i >= 0; i--) {
+      const segment = visible[i];
+      if (segment.type === "text" && !segment.thinking && segment.text?.trim()) {
+        answerStart = i;
+        break;
+      }
+    }
+    const processSegments = answerStart >= 0 ? visible.slice(0, answerStart) : visible;
+    const answerSegments = answerStart >= 0 ? visible.slice(answerStart) : [];
+    const hasProcess = processSegments.some((segment) => segment.type !== "text" || segment.thinking);
+    // Plain text-only turn (no thinking/tools): render with the original
+    // divider-based layout so nothing is dropped.
+    if (!hasProcess) {
+      return (
+        <div className="chat-feed-v2-turn">
+          {visible.map((segment, index) => (
+            <Fragment key={segmentKey(segment, index)}>
+              {shouldShowTurnDivider(visible, index) ? <hr className="chat-feed-v2-divider" /> : null}
+              <TurnSegment segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCard} />
+            </Fragment>
+          ))}
+          {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
+          <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
+          <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
+        </div>
+      );
+    }
+    const toolCount = processSegments.filter((segment) => segment.type === "tool").length;
+    const messageCount = processSegments.filter((segment) => segment.type === "text" && segment.thinking).length;
     return (
       <div className="chat-feed-v2-turn">
-        {visible.map((segment, index) => (
-          <Fragment key={segmentKey(segment, index)}>
-            {shouldShowTurnDivider(visible, index) ? <hr className="chat-feed-v2-divider" /> : null}
-            <TurnSegment segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCard} />
-          </Fragment>
-        ))}
+        <TurnProcess
+          segments={processSegments}
+          toolCount={toolCount}
+          messageCount={messageCount}
+          isActive={Boolean(running && activeTurnId && item.turnId && item.turnId === activeTurnId)}
+          onToggleTool={onToggleTool}
+          onSubmitCard={onSubmitCard}
+        />
+        {answerSegments.length > 0 ? (
+          <>
+            <hr className="chat-feed-v2-divider" />
+            {answerSegments.map((segment, index) => (
+              <TurnSegment key={segmentKey(segment, index)} segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCard} />
+            ))}
+          </>
+        ) : null}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
         <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
         <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
@@ -276,11 +331,17 @@ function FeedItemBody({
 
 function TurnSegment({ segment, onToggleTool, onSubmitCard }: { segment: FeedSegment; onToggleTool: (id: string) => void; onSubmitCard?: (value: string) => void }) {
   if (segment.type === "text") {
-    return segment.text?.trim() ? (
+    if (!segment.text?.trim()) {
+      return null;
+    }
+    if (segment.thinking) {
+      return <ThinkingSegment text={segment.text} />;
+    }
+    return (
       <div className="chat-feed-v2-text">
         <MarkdownContent content={segment.text} />
       </div>
-    ) : null;
+    );
   }
   if (segment.type === "tool" && segment.item) {
     const card = parseUiCardOutput(segment.item);
@@ -308,6 +369,80 @@ function TurnSegment({ segment, onToggleTool, onSubmitCard }: { segment: FeedSeg
 
 function segmentKey(segment: FeedSegment, index: number) {
   return segment.item?.id ?? `text-${index}`;
+}
+
+/**
+ * Turn-level process block: the thinking bubbles + tool rows + todos of a turn,
+ * collapsible as a whole. While the turn is running (isActive) it stays
+ * expanded; once the turn finishes it collapses to a summary row
+ * "(xx次工具调用, yy条消息)" so re-entered conversations stay scannable.
+ * Clicking the summary toggles the process open/closed.
+ */
+function TurnProcess({
+  segments,
+  toolCount,
+  messageCount,
+  isActive,
+  onToggleTool,
+  onSubmitCard,
+}: {
+  segments: FeedSegment[];
+  toolCount: number;
+  messageCount: number;
+  isActive: boolean;
+  onToggleTool: (id: string) => void;
+  onSubmitCard?: (value: string) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState<boolean | null>(null);
+  // Default: expanded while the turn is running, collapsed after it finishes.
+  const expanded = open ?? isActive;
+  const toggle = () => setOpen(!expanded);
+  const summary = t("chat.processSummary", { tools: toolCount, messages: messageCount });
+  return (
+    <div className={`chat-feed-v2-process${expanded ? " chat-feed-v2-process-open" : ""}`}>
+      <button aria-expanded={expanded} className="chat-feed-v2-process-toggle" onClick={toggle} type="button">
+        <span className="chat-feed-v2-process-chevron">{expanded ? <DownOutlined /> : <RightOutlined />}</span>
+        <span className="chat-feed-v2-process-summary">{summary}</span>
+      </button>
+      {expanded ? (
+        <div className="chat-feed-v2-process-body">
+          {segments.map((segment, index) => (
+            <TurnSegment key={segmentKey(segment, index)} segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCard} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A single reasoning bubble ("Thinking…"). Collapsed by default: one line with
+ * a trailing ellipsis; clicking expands the full thinking text.
+ */
+function ThinkingSegment({ text }: { text: string }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const collapsedLine = text.replace(/\s+/g, " ").trim();
+  return (
+    <div className={`chat-feed-v2-thinking${open ? " chat-feed-v2-thinking-open" : ""}`}>
+      <button aria-expanded={open} className="chat-feed-v2-thinking-toggle" onClick={() => setOpen((value) => !value)} type="button">
+        <span className="chat-feed-v2-thinking-label">{t("chat.thinkingLabel")}</span>
+        {open ? (
+          <span className="chat-feed-v2-thinking-chevron">
+            <DownOutlined />
+          </span>
+        ) : (
+          <span className="chat-feed-v2-thinking-preview">{collapsedLine}</span>
+        )}
+      </button>
+      {open ? (
+        <div className="chat-feed-v2-thinking-body">
+          <MarkdownContent content={text} />
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /**

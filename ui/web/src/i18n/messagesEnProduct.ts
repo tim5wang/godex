@@ -269,6 +269,8 @@ export const enProductMessages = {
         skillsLabel: "Skills",
         skillsPlaceholder: "Pick installed skills to load (optional)",
         skillsHint: "Leave empty to use the global default skills. Selected skills load into this new session only.",
+        thinkingLabel: "Thinking…",
+        processSummary: "{tools} tool call(s), {messages} message(s)",
         loadError: "Failed to load sessions",
         retry: "Retry",
       },

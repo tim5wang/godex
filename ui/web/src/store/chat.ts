@@ -668,10 +668,15 @@ export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
     group.segments = group.segments ?? [];
     if (item.kind === "assistant" || item.kind === "background") {
       if (item.body.trim()) {
-        group.segments.push({ type: "text", text: item.body });
-        // Track the final result text (used for copy / save-to-note).
-        group.finalBody = item.body;
-        group.summary = firstSummaryLine(item.body);
+        const thinking = item.title === "Thinking…";
+        group.segments.push({ type: "text", text: item.body, thinking });
+        // Track the final result text (used for copy / save-to-note). Reasoning
+        // bubbles ("Thinking…") are process, not the answer, so they must not
+        // become the turn's finalBody.
+        if (!thinking) {
+          group.finalBody = item.body;
+          group.summary = firstSummaryLine(item.body);
+        }
       }
       group.timestamp = item.timestamp ?? group.timestamp;
       if (item.attachments?.length) {

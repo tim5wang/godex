@@ -260,6 +260,13 @@ export interface FeedSegment {
   type: FeedSegmentType;
   text?: string;
   item?: FeedItem;
+  /**
+   * True when this text segment is model reasoning ("Thinking…"), streamed
+   * between tool calls. Rendered as a collapsible one-liner in the chat feed:
+   * collapsed shows a single line with a trailing ellipsis, clicking expands
+   * the full reasoning text.
+   */
+  thinking?: boolean;
 }
 
 export interface SubagentProgressItem {

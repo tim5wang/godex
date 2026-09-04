@@ -269,6 +269,8 @@ export const zhProductMessages = {
         skillsLabel: "Skills",
         skillsPlaceholder: "选择要加载的已安装 skill（可选）",
         skillsHint: "留空则使用全局默认 skills；选中的 skills 仅对该新建会话生效。",
+        thinkingLabel: "思考过程",
+        processSummary: "{tools}次工具调用, {messages}条消息",
         loadError: "加载会话列表失败",
         retry: "重试",
       },

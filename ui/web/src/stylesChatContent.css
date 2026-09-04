@@ -878,3 +878,128 @@
   background: transparent;
   padding: 0;
 }
+
+/* Turn-level process block: thinking + tool chain, collapsible as a whole.
+   Collapsed after the turn finishes shows a summary "(xx次工具调用, yy条消息)". */
+.chat-feed-v2-process {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-feed-v2-process-toggle {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 3px 6px;
+  margin-left: -6px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  line-height: 1.6;
+}
+
+.chat-feed-v2-process-toggle:hover {
+  background: color-mix(in oklab, var(--godex-accent) 8%, transparent);
+}
+
+.chat-feed-v2-process-toggle:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--godex-accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.chat-feed-v2-process-chevron {
+  flex: 0 0 auto;
+  color: var(--godex-muted);
+  font-size: 11px;
+}
+
+.chat-feed-v2-process-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--godex-muted);
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+.chat-feed-v2-process-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 8px;
+}
+
+/* Individual thinking bubble: one line with trailing ellipsis, click to expand. */
+.chat-feed-v2-thinking {
+  min-width: 0;
+  border-left: 2px solid color-mix(in oklab, var(--godex-accent) 30%, transparent);
+  padding-left: 8px;
+}
+
+.chat-feed-v2-thinking-toggle {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 3px 6px;
+  margin-left: -6px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  line-height: 1.6;
+}
+
+.chat-feed-v2-thinking-toggle:hover {
+  background: color-mix(in oklab, var(--godex-accent) 8%, transparent);
+}
+
+.chat-feed-v2-thinking-toggle:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--godex-accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.chat-feed-v2-thinking-label {
+  flex: 0 0 auto;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--godex-accent);
+}
+
+.chat-feed-v2-thinking-chevron {
+  flex: 0 0 auto;
+  color: var(--godex-muted);
+  font-size: 11px;
+}
+
+.chat-feed-v2-thinking-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--godex-muted);
+  font-size: 0.84rem;
+}
+
+.chat-feed-v2-thinking-body {
+  min-width: 0;
+  margin-top: 2px;
+  color: var(--godex-muted);
+  font-size: 0.86rem;
+}

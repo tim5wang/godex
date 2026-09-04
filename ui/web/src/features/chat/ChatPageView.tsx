@@ -512,6 +512,8 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                         botName={activeTemplate?.name}
                         botAvatar={activeTemplate?.avatar}
                         botColor={activeTemplate?.color}
+                        running={running}
+                        activeTurnId={currentTimelineTurnId || undefined}
                         onToggleTool={toggleTool}
                         onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
                         savingToNote={saveMessageToNoteMutation.isPending}

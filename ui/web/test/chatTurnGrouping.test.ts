@@ -133,3 +133,37 @@ describe("shouldShowTurnDivider", () => {
     expect(shouldShowTurnDivider(segs, 2)).toBe(true); // second (last) text: final answer
   });
 });
+
+describe("groupFeedItemsIntoTurns with thinking segments", () => {
+  it("marks Thinking… bubbles as thinking and keeps the real answer as finalBody", () => {
+    const items: FeedItem[] = [
+      makeItem({ id: "thinking:t1", kind: "background", turnId: "t1", title: "Thinking…", body: "Let me reason step by step", timestamp: "2026-07-31T10:00:01Z" }),
+      makeItem({ id: "tool:t1", kind: "tool", turnId: "t1", title: "bash", summary: "ls", status: "finished", timestamp: "2026-07-31T10:00:02Z" }),
+      makeItem({ id: "thinking:t1#2", kind: "background", turnId: "t1", title: "Thinking…", body: "Now checking the results", timestamp: "2026-07-31T10:00:03Z" }),
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: "Here is the final answer", timestamp: "2026-07-31T10:00:04Z" }),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    expect(grouped).toHaveLength(1);
+    const turn = grouped[0];
+    expect(turn.segments?.map((s) => s.type)).toEqual(["text", "tool", "text", "text"]);
+    // Thinking bubbles carry the thinking flag.
+    expect(turn.segments?.[0].thinking).toBe(true);
+    expect(turn.segments?.[2].thinking).toBe(true);
+    // The final assistant text is NOT marked as thinking.
+    expect(turn.segments?.[3].thinking).toBeFalsy();
+    // finalBody / summary must be the final answer, not the reasoning.
+    expect(turn.finalBody).toBe("Here is the final answer");
+    expect(turn.summary).toBe("Here is the final answer");
+  });
+
+  it("does not let a trailing Thinking… bubble overwrite finalBody", () => {
+    const items: FeedItem[] = [
+      makeItem({ id: "assistant:t1", kind: "assistant", turnId: "t1", body: "Answer first", timestamp: "2026-07-31T10:00:01Z" }),
+      makeItem({ id: "thinking:t1", kind: "background", turnId: "t1", title: "Thinking…", body: "extra reasoning after the answer", timestamp: "2026-07-31T10:00:02Z" }),
+    ];
+    const grouped = groupFeedItemsIntoTurns(items);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].finalBody).toBe("Answer first");
+    expect(grouped[0].segments?.[1].thinking).toBe(true);
+  });
+});

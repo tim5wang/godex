@@ -377,6 +377,12 @@ type acpSDKClient struct {
 	// the title keeps the real tool name instead of falling back to the
 	// opaque call id (which the UI then shows as "call_xxx").
 	toolNames map[string]string
+	// toolInputs maps a ToolCallId to the raw input parameters announced by
+	// the initial tool_call event. Some ACP agents (pi-acp, dsh) emit the
+	// tool_call_update without re-sending rawInput, so the finished event
+	// would otherwise lose the parameters and the UI could no longer expand
+	// the tool call after it completes; the update falls back to this map.
+	toolInputs map[string]map[string]any
 }
 
 var _ acp.Client = (*acpSDKClient)(nil)
@@ -423,8 +429,19 @@ func (c *acpSDKClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 		if c.toolNames == nil {
 			c.toolNames = map[string]string{}
 		}
-		c.toolNames[string(u.ToolCall.ToolCallId)] = name
+		if c.toolInputs == nil {
+			c.toolInputs = map[string]map[string]any{}
+		}
+		callID := string(u.ToolCall.ToolCallId)
+		c.toolNames[callID] = name
+		if input := rawToMap(u.ToolCall.RawInput); input != nil {
+			c.toolInputs[callID] = input
+		}
 		c.mu.Unlock()
+		// pi-acp uses the full bash command as the tool title; shorten the
+		// display name (the raw input keeps the full command, expandable in
+		// the UI) so the running status bar / tool row stays single-line.
+		name = shortenToolTitle(name)
 		c.addUpdate(ACPUpdate{
 			Kind:       "tool_call",
 			Name:       name,
@@ -452,11 +469,28 @@ func (c *acpSDKClient) SessionUpdate(ctx context.Context, params acp.SessionNoti
 		if name == "" {
 			name = string(u.ToolCallUpdate.ToolCallId)
 		}
+		// pi-acp uses the full bash command as the tool title, which would
+		// otherwise make the feed row / status bar unboundedly tall. The full
+		// title is preserved in the recorded input map (below), so shorten the
+		// display name while keeping the parameters expandable.
+		name = shortenToolTitle(name)
+		// The update usually carries only the output (or nothing); fall back
+		// to the parameters recorded by the originating tool_call so the
+		// finished event keeps the input and the UI can still expand the row
+		// after the tool completes.
+		input := rawToMap(u.ToolCallUpdate.RawInput)
+		if input == nil {
+			c.mu.Lock()
+			if recorded, ok := c.toolInputs[string(u.ToolCallUpdate.ToolCallId)]; ok {
+				input = recorded
+			}
+			c.mu.Unlock()
+		}
 		c.addUpdate(ACPUpdate{
 			Kind:       "tool_call_update",
 			Name:       name,
 			ToolCallID: string(u.ToolCallUpdate.ToolCallId),
-			Input:      rawToMap(u.ToolCallUpdate.RawOutput),
+			Input:      input,
 			Raw:        rawStr,
 		})
 	case u.Plan != nil:
@@ -580,6 +614,21 @@ func rawToMap(v any) map[string]any {
 		}
 	}
 	return nil
+}
+
+// shortenToolTitle caps an ACP tool title so a single tool call cannot blow up
+// the feed row / status bar. pi-acp uses the full bash command as the tool
+// title ("cd repo && npm run build && ..."), which previously rendered as one
+// unbounded status line. The full title stays available in the recorded input
+// map (rawInput), so nothing is lost — only the display name is shortened.
+func shortenToolTitle(title string) string {
+	title = strings.TrimSpace(title)
+	const maxToolTitleRunes = 48
+	runes := []rune(title)
+	if len(runes) <= maxToolTitleRunes {
+		return title
+	}
+	return string(runes[:maxToolTitleRunes]) + "…"
 }
 
 // ACPModelOption is one selectable model value advertised by an ACP agent's

@@ -972,15 +972,32 @@ export function collectToolCalls(items: SessionTimelineEntry[]): FeedItem[] {
         expanded: false,
         turnId: turnId || undefined,
       });
-    } else if (existing) {
-      tools.set(key, {
-        ...existing,
-        title: existing.title || name,
+    } else {
+      // A tool_call_finished may arrive without a preceding started event in
+      // the window: the timeline is capped (TIMELINE_WINDOW_LIMIT) and pi-acp
+      // turns emit hundreds of text/thinking deltas that can evict the
+      // earlier started events. Create the row from the finished event alone
+      // so the tool log survives re-entry; merge input when both exist.
+      const base = existing ?? {
+        id: key,
+        kind: "tool",
+        title: name,
+        body: "",
         timestamp: event.timestamp,
-        summary: inputSummary || existing.summary,
-        input: input || existing.input,
+        summary: inputSummary,
+        input,
         status: "finished",
-        turnId: turnId || existing.turnId,
+        expanded: false,
+        turnId: turnId || undefined,
+      };
+      tools.set(key, {
+        ...base,
+        title: existing?.title || name,
+        timestamp: event.timestamp,
+        summary: inputSummary || existing?.summary,
+        input: input || existing?.input,
+        status: "finished",
+        turnId: turnId || existing?.turnId,
       });
     }
   }

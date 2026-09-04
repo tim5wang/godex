@@ -202,10 +202,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (payload.name === "todo_write") {
             break;
           }
+          const displayName = truncateToolTitle(payload.name || "tool");
           upsertItem(overlayItems, {
             id: toolItemId(event.turn_id || "", payload.id, payload.name || "tool"),
             kind: "tool",
-            title: payload.name || "tool",
+            title: displayName,
             body: "",
             timestamp: event.timestamp,
             summary: summarizeTool(payload.input, "", "", true),
@@ -214,7 +215,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             expanded: false,
             turnId: event.turn_id || undefined,
           });
-          status = `Running tool ${payload.name || "tool"}`;
+          status = `Running tool ${displayName}`;
           break;
         }
         case "tool_call_finished": {
@@ -222,21 +223,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (payload.name === "todo_write" && !payload.error) {
             break;
           }
+          // Some ACP agents (pi-acp, dsh) send the tool_call_update without a
+          // rawInput/rawOutput, so the finished payload carries only id+name.
+          // Keep the params recorded by tool_call_started so the row still
+          // expands to show them after the tool completes (previously the
+          // undefined input here overwrote the started one and the row became
+          // un-clickable).
+          const current = overlayItems.find((item) => item.id === toolItemId(event.turn_id || "", payload.id, payload.name || "tool"));
+          const input = payload.input ?? current?.input;
+          const displayName = truncateToolTitle(payload.name || "tool");
           upsertItem(overlayItems, {
             id: toolItemId(event.turn_id || "", payload.id, payload.name || "tool"),
             kind: "tool",
-            title: payload.name || "tool",
+            title: displayName,
             body: "",
             timestamp: event.timestamp,
-            summary: summarizeTool(payload.input, payload.output || "", payload.error || "", false),
-            input: payload.input,
+            summary: summarizeTool(input, payload.output || "", payload.error || "", false),
+            input,
             output: payload.output,
             error: payload.error,
             status: payload.error ? "failed" : "finished",
             expanded: false,
             turnId: event.turn_id || undefined,
           });
-          status = payload.error ? `Tool failed: ${payload.name || "tool"}` : `Finished tool ${payload.name || "tool"}`;
+          status = payload.error ? `Tool failed: ${displayName}` : `Finished tool ${displayName}`;
           break;
         }
         case "todo_list_updated": {
@@ -828,6 +838,14 @@ function summaryValue(value: unknown) {
 function truncateSummary(value: string, limit: number) {
   const text = value.trim();
   return text.length > limit ? `${text.slice(0, Math.max(0, limit - 3))}...` : text;
+}
+
+// ACP agents (pi-acp) stream the full bash command as the tool title; cap the
+// display name so the status bar / tool row stay single-line even for very
+// long commands. The full title/params remain available in the expandable
+// tool details.
+function truncateToolTitle(value: string, limit = 48) {
+  return truncateSummary(value, limit);
 }
 
 function attachmentSummary(attachments: AttachmentRef[] | undefined) {

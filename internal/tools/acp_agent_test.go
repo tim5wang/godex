@@ -410,3 +410,83 @@ func TestACPContentBlocksForMessage(t *testing.T) {
 		t.Fatal("text block must not convert to an image block")
 	}
 }
+
+// TestSessionUpdateToolCallInputFallback verifies that a tool_call_update
+// which omits rawInput keeps the parameters announced by the originating
+// tool_call (pi-acp/dsh send the completion update without re-sending the
+// input, which previously made the finished tool row un-expandable), and that
+// very long tool titles (pi-acp streams the full bash command as the title)
+// are shortened so the status bar / tool row stays single-line.
+func TestSessionUpdateToolCallInputFallbackAndTitleTruncation(t *testing.T) {
+	client := &acpSDKClient{}
+	var updates []ACPUpdate
+	client.onUpdate = func(u ACPUpdate) {
+		updates = append(updates, u)
+	}
+
+	title := "bash"
+	for i := 0; i < 20; i++ {
+		title += " --flag-with-a-very-long-name=" + string(rune('a'+i%26))
+	}
+
+	// Initial tool_call with raw input.
+	err := client.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: "s1",
+		Update: acp.SessionUpdate{
+			ToolCall: &acp.SessionUpdateToolCall{
+				Title:      title,
+				ToolCallId: "call-1",
+				RawInput:   map[string]any{"command": "echo hello", "cwd": "/repo"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("tool_call update: %v", err)
+	}
+
+	// Completion update WITHOUT rawInput (like pi-acp / dsh).
+	err = client.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: "s1",
+		Update: acp.SessionUpdate{
+			ToolCallUpdate: &acp.SessionToolCallUpdate{
+				ToolCallId: "call-1",
+				Status:     ptrTo(acp.ToolCallStatusCompleted),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("tool_call_update: %v", err)
+	}
+
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates (start + finish), got %d: %+v", len(updates), updates)
+	}
+	started := updates[0]
+	if started.Kind != "tool_call" {
+		t.Fatalf("expected first update kind tool_call, got %q", started.Kind)
+	}
+	if started.Input["command"] != "echo hello" {
+		t.Fatalf("expected started input command, got %+v", started.Input)
+	}
+	// The long bash command title must be shortened.
+	if len([]rune(started.Name)) > 60 {
+		t.Fatalf("expected shortened tool title, got %d runes: %q", len([]rune(started.Name)), started.Name)
+	}
+	finished := updates[1]
+	if finished.Kind != "tool_call_update" {
+		t.Fatalf("expected second update kind tool_call_update, got %q", finished.Kind)
+	}
+	// Input must fall back to the parameters recorded by the originating
+	// tool_call even though the update carried none.
+	if finished.Input["command"] != "echo hello" {
+		t.Fatalf("expected finished input to fall back to started input, got %+v", finished.Input)
+	}
+	if finished.Input["cwd"] != "/repo" {
+		t.Fatalf("expected finished input cwd preserved, got %+v", finished.Input)
+	}
+	if finished.Name != started.Name {
+		t.Fatalf("expected finished name to match started name, got %q vs %q", finished.Name, started.Name)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }

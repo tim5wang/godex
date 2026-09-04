@@ -178,6 +178,24 @@ describe("collectToolCalls", () => {
     const tools = collectToolCalls(items);
     expect(tools.map((t) => t.id)).toEqual(["tool:a", "tool:b"]);
   });
+
+  it("re-entry: finished-only events still rebuild tool rows (pi-acp evicts started from the 1000-event window)", () => {
+    // pi-acp turns emit hundreds of text/thinking deltas; the timeline is
+    // capped at TIMELINE_WINDOW_LIMIT, so the earliest tool_call_started
+    // events can roll out while their tool_call_finished stays. The row must
+    // still be rebuilt from the finished event alone.
+    const items = [
+      ev("tool_call_finished", "turn-1", "2026-01-01T00:00:02Z", { id: "tool-1", name: "bash", input: { command: "npm run build" } }),
+      ev("tool_call_finished", "turn-1", "2026-01-01T00:00:03Z", { id: "tool-2", name: "glob", input: {} }),
+    ];
+    const tools = collectToolCalls(items);
+    expect(tools).toHaveLength(2);
+    expect(tools[0].id).toBe("tool:tool-1");
+    expect(tools[0].status).toBe("finished");
+    expect(tools[0].input).toEqual({ command: "npm run build" });
+    expect(tools[1].id).toBe("tool:tool-2");
+    expect(tools[1].status).toBe("finished");
+  });
 });
 
 describe("mergeChronologicalFeedItems", () => {

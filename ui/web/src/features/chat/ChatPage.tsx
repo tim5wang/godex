@@ -30,7 +30,7 @@ import { FilesPanel } from "../files/FilesPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { PreviewPanel } from "../preview/PreviewPanel";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
-import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, pendingSendsForFeed, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, collectToolCalls, collectThinkingDeltas, buildContextStatusSummary, shortTurnId, alignAssistantTextTurnIds } from "../../lib/timelineUtils";
+import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, pendingSendsForFeed, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, collectToolCalls, collectThinkingDeltas, collectTextDeltas, buildContextStatusSummary, shortTurnId, alignAssistantTextTurnIds } from "../../lib/timelineUtils";
 import { compactWorkspaceName, noteContextMetadata, NoteContextBanner } from "./panels/NoteContextBanner";
 import { InspectorTabs } from "./panels/InspectorTabs";
 import { ApprovalBanner } from "./panels/ApprovalPanels";
@@ -239,12 +239,42 @@ export function useChatPageController() {
     const timelineThinking = collectThinkingDeltas(timelineItems).filter(
       (item) => !(item.turnId && overlayThinkingTurns.has(item.turnId)),
     );
-    const mergedOverlay = [...overlayItems, ...timelineTools, ...timelineThinking];
+    // Rebuild the SHORT process text the model streams between tool calls
+    // ("收到两个问题。先诊断…" before each tool). Same persistence story as
+    // thinking: assistant_text_delta events are now recordable, so re-entry
+    // (overlay cleared) reconstructs them split at tool boundaries and lets
+    // mergeChronologicalFeedItems interleave them with the tool log. During a
+    // live turn the overlay already carries the current turn's text segments,
+    // so skip any turn the overlay already has assistant text for.
+    const overlayTextTurns = new Set<string>();
+    for (const item of overlayItems) {
+      if (item.kind === "assistant" && item.title === "GoDex" && item.turnId) {
+        overlayTextTurns.add(item.turnId);
+      }
+    }
+    const timelineText = collectTextDeltas(timelineItems).filter(
+      (item) => !(item.turnId && overlayTextTurns.has(item.turnId)),
+    );
+    const mergedOverlay = [...overlayItems, ...timelineTools, ...timelineThinking, ...timelineText];
     // Re-bind snapshot assistant text to its real backend turn id (from the
     // timeline's assistant_message_completed) so re-entered ACP turns group
     // their text with the tool log instead of splitting into two big segments.
     const alignedHistory = alignAssistantTextTurnIds(historyItems, timelineItems);
-    return mergeChronologicalFeedItems(alignedHistory, mergedOverlay);
+    // For turns that have persisted text deltas, the process text is now
+    // rebuilt above (timelineText) split at tool boundaries, so drop the
+    // snapshot's consolidated full-text body for that turn to avoid showing
+    // the same narration twice (once interleaved, once concatenated). Keep
+    // messageIndex / turnId / timestamp so grouping and fork still work.
+    const textDeltaTurns = new Set<string>();
+    for (const event of timelineItems) {
+      if (event.type === "assistant_text_delta" && event.turn_id) {
+        textDeltaTurns.add(event.turn_id);
+      }
+    }
+    const deDupedHistory = alignedHistory.map((item) =>
+      item.kind === "assistant" && item.turnId && textDeltaTurns.has(item.turnId) ? { ...item, body: "" } : item,
+    );
+    return mergeChronologicalFeedItems(deDupedHistory, mergedOverlay);
   }, [historyItems, overlayItems, timelineItems]);
   // V2 groups the flat feed into per-turn items (text + tool + todo segments).
   const v2Items = useMemo(() => groupFeedItemsIntoTurns(items), [items]);

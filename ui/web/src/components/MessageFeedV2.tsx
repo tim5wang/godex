@@ -205,7 +205,9 @@ function FeedItemBody({
       );
     }
     const toolCount = processSegments.filter((segment) => segment.type === "tool").length;
-    const messageCount = processSegments.filter((segment) => segment.type === "text" && segment.thinking).length;
+    // "消息" = assistant text segments in the process (thinking bubbles + the
+    // short process-text segments streamed between tool calls).
+    const messageCount = processSegments.filter((segment) => segment.type === "text").length;
     return (
       <div className="chat-feed-v2-turn">
         <TurnProcess

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTimelineEntry } from "./types";
-import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds, collectThinkingDeltas } from "./timelineUtils";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds, collectThinkingDeltas, collectTextDeltas } from "./timelineUtils";
 import type { PendingSend } from "../store/chat";
 
 /**
@@ -323,6 +323,54 @@ describe("collectThinkingDeltas", () => {
       thinking("t1", "2026-01-01T00:00:01Z", "earlier turn"),
     ];
     const out = collectThinkingDeltas(items);
+    expect(out.map((i) => i.turnId)).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("collectTextDeltas", () => {
+  const text = (turnId: string, ts: string, body: string): SessionTimelineEntry =>
+    ({ type: "assistant_text_delta", turn_id: turnId, timestamp: ts, payload: { text: body } }) as SessionTimelineEntry;
+  const tool = (turnId: string, ts: string, name: string): SessionTimelineEntry =>
+    ({ type: "tool_call_started", turn_id: turnId, timestamp: ts, payload: { id: `c-${ts}`, name } }) as SessionTimelineEntry;
+
+  it("returns [] for empty input", () => {
+    expect(collectTextDeltas([])).toEqual([]);
+  });
+
+  it("merges consecutive same-turn text deltas into one assistant segment", () => {
+    const items = [
+      text("t1", "2026-01-01T00:00:01Z", "收到两个问题。先诊断"),
+      text("t1", "2026-01-01T00:00:02Z", " i18n 键为什么没解析"),
+    ];
+    const out = collectTextDeltas(items);
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("assistant");
+    expect(out[0].title).toBe("GoDex");
+    expect(out[0].turnId).toBe("t1");
+    expect(out[0].body).toBe("收到两个问题。先诊断 i18n 键为什么没解析");
+  });
+
+  it("starts a new segment after a tool call so process text lands before its tool", () => {
+    const items = [
+      text("t1", "2026-01-01T00:00:01Z", "先检查 i18n 插入位置"),
+      tool("t1", "2026-01-01T00:00:02Z", "grep"),
+      text("t1", "2026-01-01T00:00:03Z", "需要确认 processSummary 路径"),
+      tool("t1", "2026-01-01T00:00:04Z", "python"),
+      text("t1", "2026-01-01T00:00:05Z", "找到根因"),
+    ];
+    const out = collectTextDeltas(items);
+    expect(out).toHaveLength(3);
+    expect(out[0].body).toBe("先检查 i18n 插入位置");
+    expect(out[1].body).toBe("需要确认 processSummary 路径");
+    expect(out[2].body).toBe("找到根因");
+  });
+
+  it("keeps different turns separate and sorts by timestamp", () => {
+    const items = [
+      text("t2", "2026-01-01T00:00:05Z", "later turn"),
+      text("t1", "2026-01-01T00:00:01Z", "earlier turn"),
+    ];
+    const out = collectTextDeltas(items);
     expect(out.map((i) => i.turnId)).toEqual(["t1", "t2"]);
   });
 });

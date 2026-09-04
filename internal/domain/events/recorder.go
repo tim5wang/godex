@@ -81,12 +81,13 @@ func (r *Recorder) Entries(limit int) []Event {
 func recordableEvent(event Event) bool {
 	switch event.Type {
 	case EventAssistantTextDelta:
-		// Text deltas are transient streaming fragments; the final consolidated
-		// assistant text is carried by assistant_message_completed (and the
-		// snapshot messages), so persisting every delta would duplicate the
-		// answer. Thinking deltas ARE persisted so a re-entered conversation
-		// can reconstruct the reasoning that streamed between tool calls.
-		return false
+		// Text deltas ARE persisted (like thinking deltas): the ACP harness
+		// streams short process-text fragments between tool calls, and a
+		// re-entered conversation must rebuild them interleaved with the tool
+		// log. The final consolidated answer still comes from
+		// assistant_message_completed / snapshot messages; the frontend
+		// dedupes per-turn delta text against that consolidated text.
+		return true
 	default:
 		return true
 	}

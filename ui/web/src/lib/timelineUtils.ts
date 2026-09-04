@@ -100,9 +100,11 @@ export function shortTurnId(id: string) {
 export const TIMELINE_WINDOW_LIMIT = 1000;
 
 export function appendTimelineEvent(current: SessionTimelineEntry[], event: RuntimeEvent) {
-  if (event.type === "assistant_text_delta") {
-    return current;
-  }
+  // Text deltas are kept (not dropped): the ACP harness streams short process
+  // text between tool calls, and a re-entered conversation rebuilds those
+  // segments from the persisted timeline (see collectTextDeltas). The final
+  // consolidated answer still comes from assistant_message_completed /
+  // snapshot messages; ChatPage dedupes per-turn delta text against it.
   const next = [...current, event];
   return next.length <= TIMELINE_WINDOW_LIMIT ? next : next.slice(next.length - TIMELINE_WINDOW_LIMIT);
 }
@@ -1052,6 +1054,65 @@ export function collectThinkingDeltas(items: SessionTimelineEntry[]): FeedItem[]
       result.push(open);
       openTurnId = turnId;
       toolSinceLastThinking = false;
+    }
+  }
+  return result;
+}
+
+/**
+ * Rebuilds the short process text that the model streams BETWEEN tool calls
+ * ("收到两个问题。先诊断…" before each tool), mirroring collectThinkingDeltas:
+ * `assistant_text_delta` events are persisted in the timeline, so on re-entry
+ * (overlay cleared) this function reconstructs per-turn assistant text
+ * segments split at tool boundaries, letting `mergeChronologicalFeedItems`
+ * interleave them with the rebuilt tool log by timestamp.
+ *
+ * The FINAL consolidated answer is intentionally not rebuilt here: it comes
+ * from `assistant_message_completed` / the snapshot message, and ChatPage
+ * dedupes these process segments against that final text (see
+ * alignAssistantTextTurnIds + the per-turn skip in the feed merge).
+ */
+export function collectTextDeltas(items: SessionTimelineEntry[]): FeedItem[] {
+  const ordered = [...items].sort((a, b) => Date.parse(a.timestamp ?? "") - Date.parse(b.timestamp ?? ""));
+  const result: FeedItem[] = [];
+  let open: FeedItem | null = null;
+  let openTurnId = "";
+  let toolSinceLastText = false;
+  for (const event of ordered) {
+    if (event.type === "tool_call_started" || event.type === "tool_call_finished") {
+      // A tool call between text deltas closes the open segment so the next
+      // process text renders AFTER that tool (live sameStream semantics).
+      toolSinceLastText = true;
+      open = null;
+      continue;
+    }
+    if (event.type !== "assistant_text_delta") {
+      continue;
+    }
+    const payload = (event.payload ?? {}) as { text?: string };
+    const text = typeof payload.text === "string" ? payload.text : "";
+    if (!text.trim()) {
+      continue;
+    }
+    const turnId = event.turn_id || "";
+    if (open && !toolSinceLastText && openTurnId === turnId) {
+      open.body += text;
+      open.summary = previewText(open.body);
+      open.timestamp = event.timestamp;
+    } else {
+      const body = text.trim();
+      open = {
+        id: `text:${turnId || "current"}:${result.length}`,
+        kind: "assistant",
+        title: "GoDex",
+        body,
+        timestamp: event.timestamp,
+        summary: previewText(body),
+        turnId: turnId || undefined,
+      };
+      result.push(open);
+      openTurnId = turnId;
+      toolSinceLastText = false;
     }
   }
   return result;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTimelineEntry } from "./types";
-import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds, collectThinkingDeltas, collectTextDeltas } from "./timelineUtils";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds, collectThinkingDeltas, collectTextDeltas, appendTimelineEvent } from "./timelineUtils";
 import type { PendingSend } from "../store/chat";
 
 /**
@@ -390,5 +390,41 @@ describe("collectTextDeltas", () => {
     ];
     const out = collectTextDeltas(items);
     expect(out.map((i) => i.turnId)).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("appendTimelineEvent", () => {
+  it("merges consecutive same-turn text deltas so chatty agents cannot flood the window", () => {
+    const delta = (turnId: string | undefined, text: string): SessionTimelineEntry => ({
+      type: "assistant_text_delta",
+      turn_id: turnId,
+      session_id: "s1",
+      timestamp: "2026-01-01T00:00:01Z",
+      payload: { text },
+    });
+    let items: SessionTimelineEntry[] = [];
+    items = appendTimelineEvent(items, delta("t1", "收"));
+    items = appendTimelineEvent(items, delta("t1", "到"));
+    items = appendTimelineEvent(items, delta("t1", "两个问题"));
+    // A tool call between deltas must close the open entry.
+    items = appendTimelineEvent(items, {
+      type: "tool_call_started",
+      turn_id: "t1",
+      session_id: "s1",
+      timestamp: "2026-01-01T00:00:02Z",
+      payload: { id: "c1", name: "bash" },
+    });
+    items = appendTimelineEvent(items, delta("t1", "找到根因"));
+    // Tool + post-tool delta: [merged text, tool, new text entry]
+    expect(items).toHaveLength(3);
+    expect(items[0].type).toBe("assistant_text_delta");
+    expect((items[0].payload as { text?: string }).text).toBe("收到两个问题");
+    expect(items[1].type).toBe("tool_call_started");
+    // The post-tool delta starts a new entry (not merged across the tool).
+    expect((items[2].payload as { text?: string }).text).toBe("找到根因");
+    // A following delta in the same turn merges into that new entry.
+    items = appendTimelineEvent(items, delta("t1", "之后"));
+    expect(items).toHaveLength(3);
+    expect((items[2].payload as { text?: string }).text).toBe("找到根因之后");
   });
 });

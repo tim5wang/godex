@@ -116,3 +116,54 @@ func TestRecorderPersistsThinkingAndTextDeltas(t *testing.T) {
 		t.Fatal("assistant_thinking_delta must be recordable so re-entry can rebuild the thinking process")
 	}
 }
+
+// TestRecorderMergesConsecutiveTextDeltas verifies the anti-flood guard:
+// a chatty agent (codex-acp streams the reply in 1-10 char chunks) must not
+// flood the bounded window and evict the tool calls / thinking deltas around
+// it. Consecutive same-turn assistant_text_delta events collapse into one
+// entry with the text appended; a delta after a tool event (or a different
+// turn) starts a new entry.
+func TestRecorderMergesConsecutiveTextDeltas(t *testing.T) {
+	recorder := NewRecorder(10)
+	emit := func(turnID, text string) {
+		recorder.Emit(Event{
+			SessionID: "s1",
+			TurnID:    turnID,
+			Type:      EventAssistantTextDelta,
+			Payload:   TextPayload{Role: "assistant", Text: text},
+		})
+	}
+	emit("t1", "收到两个")
+	emit("t1", "问题。先")
+	emit("t1", "诊断 i18n")
+	// A tool call between deltas closes the open entry (mirrors the live
+	// sameStream semantics: text before a tool must not merge with text after).
+	recorder.Emit(Event{SessionID: "s1", TurnID: "t1", Type: EventToolCallStarted})
+	emit("t1", "找到根因")
+	// A different turn starts a new entry.
+	emit("t2", "next turn")
+
+	got := recorder.Entries(0)
+	if len(got) != 4 {
+		t.Fatalf("expected [merged text, tool, text, other-turn text], got %d: %+v", len(got), got)
+	}
+	if got[0].Type != EventAssistantTextDelta {
+		t.Fatalf("expected first entry text delta, got %s", got[0].Type)
+	}
+	merged, ok := got[0].Payload.(TextPayload)
+	if !ok || merged.Text != "收到两个问题。先诊断 i18n" {
+		t.Fatalf("expected merged delta text, got %+v", got[0].Payload)
+	}
+	if got[1].Type != EventToolCallStarted {
+		t.Fatalf("expected tool event at index 1, got %s", got[1].Type)
+	}
+	if got[2].Type != EventAssistantTextDelta {
+		t.Fatalf("expected post-tool text delta at index 2, got %s", got[2].Type)
+	}
+	if post, ok := got[2].Payload.(TextPayload); !ok || post.Text != "找到根因" {
+		t.Fatalf("expected post-tool delta text, got %+v", got[2].Payload)
+	}
+	if got[3].TurnID != "t2" {
+		t.Fatalf("expected different-turn delta kept separate, got %s", got[3].TurnID)
+	}
+}

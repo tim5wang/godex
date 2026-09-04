@@ -21,6 +21,13 @@ func NewRecorder(capacity int) *Recorder {
 }
 
 // Emit records one event when it is useful for timeline inspection.
+//
+// Consecutive assistant_text_delta events of the same turn are merged into a
+// single event (text appended) so a chatty agent — codex-acp streams the reply
+// in 1-10 char chunks — cannot flood the bounded window and evict the tool
+// calls / thinking deltas around it. Live streaming is unaffected: the
+// broadcaster forwards the original events; only the persisted timeline is
+// compacted.
 func (r *Recorder) Emit(event Event) {
 	if r == nil || !recordableEvent(event) {
 		return
@@ -28,6 +35,21 @@ func (r *Recorder) Emit(event Event) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if event.Type == EventAssistantTextDelta && len(r.events) > 0 {
+		last := &r.events[len(r.events)-1]
+		if last.Type == EventAssistantTextDelta && last.TurnID == event.TurnID && last.SessionID == event.SessionID {
+			// Same turn, still streaming: append the fragment to the open
+			// delta instead of creating a new entry.
+			if lastText, ok := last.Payload.(TextPayload); ok {
+				if newText, ok := event.Payload.(TextPayload); ok {
+					last.Payload = TextPayload{Role: newText.Role, Text: lastText.Text + newText.Text}
+					last.Timestamp = event.Timestamp
+					return
+				}
+			}
+		}
+	}
 
 	if len(r.events) >= r.capacity {
 		copy(r.events, r.events[1:])

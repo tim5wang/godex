@@ -105,7 +105,33 @@ export function appendTimelineEvent(current: SessionTimelineEntry[], event: Runt
   // segments from the persisted timeline (see collectTextDeltas). The final
   // consolidated answer still comes from assistant_message_completed /
   // snapshot messages; ChatPage dedupes per-turn delta text against it.
+  //
+  // Consecutive same-turn text deltas are merged into one entry (text
+  // appended), mirroring the backend recorder: a chatty agent (codex-acp
+  // streams the reply in 1-10 char chunks) would otherwise flood the
+  // TIMELINE_WINDOW_LIMIT window and evict the tool calls / thinking deltas
+  // around it, making them disappear from the rebuilt feed.
   const next = [...current, event];
+  if (event.type === "assistant_text_delta" && next.length > 1) {
+    const last = next[next.length - 2];
+    if (
+      last.type === "assistant_text_delta" &&
+      last.turn_id === event.turn_id &&
+      last.session_id === event.session_id
+    ) {
+      const prevPayload = last.payload as { text?: string } | undefined;
+      const newPayload = event.payload as { text?: string } | undefined;
+      const prevText = typeof prevPayload?.text === "string" ? prevPayload.text : "";
+      const newText = typeof newPayload?.text === "string" ? newPayload.text : "";
+      next[next.length - 2] = {
+        ...last,
+        timestamp: event.timestamp,
+        payload: { ...(prevPayload ?? {}), text: prevText + newText },
+      };
+      next.pop();
+      return next.length <= TIMELINE_WINDOW_LIMIT ? next : next.slice(next.length - TIMELINE_WINDOW_LIMIT);
+    }
+  }
   return next.length <= TIMELINE_WINDOW_LIMIT ? next : next.slice(next.length - TIMELINE_WINDOW_LIMIT);
 }
 

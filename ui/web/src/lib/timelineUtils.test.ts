@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTimelineEntry } from "./types";
-import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems } from "./timelineUtils";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds } from "./timelineUtils";
 import type { PendingSend } from "../store/chat";
 
 /**
@@ -210,5 +210,47 @@ describe("mergeChronologicalFeedItems", () => {
     ];
     const merged = mergeChronologicalFeedItems(history, tools);
     expect(merged.map((m) => m.id)).toEqual(["h1", "t1"]);
+  });
+});
+
+describe("alignAssistantTextTurnIds", () => {
+  const hist = (id: string, body: string, turnId: string) => ({
+    id,
+    kind: "assistant" as const,
+    title: "GoDex",
+    body,
+    turnId,
+  });
+  const amc = (turnId: string, text: string): SessionTimelineEntry =>
+    ({ type: "assistant_message_completed", turn_id: turnId, timestamp: "2026-01-01T00:00:00Z", payload: { text } }) as SessionTimelineEntry;
+
+  it("replaces an assistant message's synthetic msg-N turnId with the timeline's real turn id (same text)", () => {
+    const history = [
+      hist("message:3:assistant", "good, implementing fixes", "msg-3"),
+    ];
+    const timeline = [amc("turn-abc-123", "good, implementing fixes")];
+    const aligned = alignAssistantTextTurnIds(history, timeline);
+    expect(aligned[0].turnId).toBe("turn-abc-123");
+  });
+
+  it("leaves messages with no matching timeline event unchanged", () => {
+    const history = [hist("message:1:assistant", "Let me look", "msg-1")];
+    // timeline has a DIFFERENT assistant message; no text match.
+    const timeline = [amc("turn-abc-123", "unrelated text")];
+    const aligned = alignAssistantTextTurnIds(history, timeline);
+    expect(aligned[0].turnId).toBe("msg-1");
+    expect(aligned[0].body).toBe("Let me look");
+  });
+
+  it("leaves tool/todo/user items untouched and preserves order", () => {
+    const history = [
+      hist("message:3:assistant", "implementing", "msg-3"),
+      { id: "message:2:user", kind: "user" as const, title: "You", body: "go", turnId: undefined },
+    ];
+    const timeline = [amc("turn-abc-123", "implementing")];
+    const aligned = alignAssistantTextTurnIds(history, timeline);
+    expect(aligned[0].turnId).toBe("turn-abc-123");
+    expect(aligned[1].kind).toBe("user");
+    expect(aligned[1].turnId).toBeUndefined();
   });
 });

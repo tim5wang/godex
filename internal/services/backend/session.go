@@ -644,7 +644,7 @@ func (s *Service) ForkSession(ctx context.Context, sessionID string, req ForkReq
 		updatedAt:              now,
 		lastActive:             now,
 		graph:                  &sessiongraph.SessionGraph{},
-		timeline:               events.NewRecorder(200),
+		timeline:               events.NewRecorder(MaxTimelineEvents),
 	}
 	fork.graph.EnsureMainBranch()
 	fork.gate <- struct{}{}

@@ -30,7 +30,7 @@ import { FilesPanel } from "../files/FilesPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { PreviewPanel } from "../preview/PreviewPanel";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
-import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, pendingSendsForFeed, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, collectToolCalls, buildContextStatusSummary, shortTurnId } from "../../lib/timelineUtils";
+import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, pendingSendsForFeed, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, collectToolCalls, buildContextStatusSummary, shortTurnId, alignAssistantTextTurnIds } from "../../lib/timelineUtils";
 import { compactWorkspaceName, noteContextMetadata, NoteContextBanner } from "./panels/NoteContextBanner";
 import { InspectorTabs } from "./panels/InspectorTabs";
 import { ApprovalBanner } from "./panels/ApprovalPanels";
@@ -223,7 +223,11 @@ export function useChatPageController() {
     }
     const timelineTools = collectToolCalls(timelineItems).filter((item) => !overlayById.has(item.id));
     const mergedOverlay = [...overlayItems, ...timelineTools];
-    return mergeChronologicalFeedItems(historyItems, mergedOverlay);
+    // Re-bind snapshot assistant text to its real backend turn id (from the
+    // timeline's assistant_message_completed) so re-entered ACP turns group
+    // their text with the tool log instead of splitting into two big segments.
+    const alignedHistory = alignAssistantTextTurnIds(historyItems, timelineItems);
+    return mergeChronologicalFeedItems(alignedHistory, mergedOverlay);
   }, [historyItems, overlayItems, timelineItems]);
   // V2 groups the flat feed into per-turn items (text + tool + todo segments).
   const v2Items = useMemo(() => groupFeedItemsIntoTurns(items), [items]);

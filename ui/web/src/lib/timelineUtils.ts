@@ -93,9 +93,11 @@ export function shortTurnId(id: string) {
 }
 
 // Timeline window kept by the live store / fetched from the backend. Must
-// match the backend recorder capacity (200) so the tool-log reconstruction on
-// re-entry sees every tool event, not just the most recent 80.
-export const TIMELINE_WINDOW_LIMIT = 200;
+// match the backend recorder capacity (MaxTimelineEvents = 1000) so the
+// tool-log/text reconstruction on re-entry sees every turn's events instead of
+// only the most recent 200, which would evict earlier turns' text and leave the
+// feed as a text block + a tool block.
+export const TIMELINE_WINDOW_LIMIT = 1000;
 
 export function appendTimelineEvent(current: SessionTimelineEntry[], event: RuntimeEvent) {
   if (event.type === "assistant_text_delta") {
@@ -889,6 +891,58 @@ export function previewText(value: string, maxLength = 96) {
 // disappear and the conversation shows only the user input and the final
 // assistant output. The tool call id is the stable key (same as the live
 // overlay's toolItemId) so a later merge can prefer the live overlay item.
+/**
+ * Re-binds snapshot assistant messages to their REAL backend turn id so a
+ * re-entered conversation groups each turn's text with its tool log.
+ *
+ * Snapshot messages (from the server state) carry a synthetic `msg-N` turnId
+ * because the persisted state does not record the backend turn id. The timeline
+ * DOES: each `assistant_message_completed` event is emitted with the real
+ * `turn_id` and the full assistant text. The tool logs rebuilt from the
+ * timeline also use that real `turn_id`.
+ *
+ * Without this, on re-entry the assistant text (turnId `msg-N`) and its tool
+ * log (turnId `turn-...`) never match the same turn, so `groupFeedItemsIntoTurns`
+ * splits a single turn into a text block and a separate tool block (the "two big
+ * segments" ordering bug). Aligning the text to the tool's real turn_id keeps
+ * them in one group, ordered by timestamp.
+ *
+ * Matching is by exact text so it never rewrites a message that has no
+ * timeline counterpart (e.g. a turn whose events rolled out of the recorder
+ * window); those keep their snapshot turnId and remain ordered by timestamp.
+ */
+export function alignAssistantTextTurnIds(historyItems: FeedItem[], timelineItems: SessionTimelineEntry[]): FeedItem[] {
+  const byText = new Map<string, string>();
+  for (const event of timelineItems) {
+    if (event.type !== "assistant_message_completed") {
+      continue;
+    }
+    const payload = (event.payload ?? {}) as { text?: string };
+    const text = stringFromPayload(payload.text);
+    const realTurnId = event.turn_id || "";
+    if (text && realTurnId) {
+      // Last write wins if two events share the same text (unlikely); keep the
+      // first real turn id encountered so ordering stays deterministic.
+      if (!byText.has(text)) {
+        byText.set(text, realTurnId);
+      }
+    }
+  }
+  if (byText.size === 0) {
+    return historyItems;
+  }
+  return historyItems.map((item) => {
+    if (item.kind !== "assistant" || !item.body || !item.turnId || item.turnId.startsWith("turn-")) {
+      return item;
+    }
+    const realTurnId = byText.get(item.body);
+    if (!realTurnId) {
+      return item;
+    }
+    return { ...item, turnId: realTurnId };
+  });
+}
+
 export function collectToolCalls(items: SessionTimelineEntry[]): FeedItem[] {
   const tools = new Map<string, FeedItem>();
   for (const event of items) {

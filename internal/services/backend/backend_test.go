@@ -2202,8 +2202,12 @@ func TestTimelinePageReadsFullJournalAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recent timeline: %v", err)
 	}
-	if len(recent) >= 220 {
-		t.Fatalf("expected legacy timeline to stay recorder-capped, got %d", len(recent))
+	// The recorder window is MaxTimelineEvents (1000), larger than the 220
+	// events emitted here, so the whole set is retained for re-entry tool/text
+	// reconstruction instead of being capped at 200 (which would evict the
+	// earlier turns' events).
+	if len(recent) != 220 {
+		t.Fatalf("expected the full recorder window to retain all emitted events (220), got %d", len(recent))
 	}
 
 	page, err := service.TimelinePage(context.Background(), opened.SessionID, TimelinePageRequest{Limit: 5})

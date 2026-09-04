@@ -34,7 +34,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		createdAt:  now,
 		updatedAt:  now,
 		lastActive: now,
-		timeline:   events.NewRecorder(200),
+		timeline:   events.NewRecorder(MaxTimelineEvents),
 	}
 	session.gate <- struct{}{}
 

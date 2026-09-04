@@ -35,6 +35,12 @@ const (
 	checkpointsDirName                = "checkpoints"
 	securityAuditFileName             = "security/audit.jsonl"
 	attachmentsDir                    = "attachments"
+	// MaxTimelineEvents bounds the in-memory timeline recorder (and the root
+	// timeline file snapshot). ACP/tool-heavy turns emit dozens of events per
+	// turn, so a small window evicts earlier turns' assistant_text/node events
+	// and re-entry loses the ordering between text and tool logs. 1000 keeps
+	// several multi-tool turns while staying cheap to persist on every emit.
+	MaxTimelineEvents               = 1000
 	snapshotTimelineLimit             = 200
 	snapshotTurnLimit                 = 20
 	persistedTurnLimit                = 200

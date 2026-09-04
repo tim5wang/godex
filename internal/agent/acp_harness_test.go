@@ -52,6 +52,25 @@ func TestACPFakeServer(t *testing.T) {
 			}
 		case "session/new":
 			result = map[string]any{"sessionId": "acp-fake-1"}
+		case "session/load", "session/resume":
+			// By default the fake server accepts load/resume (returns an empty
+			// result, which the SDK treats as success). When the test asks it
+			// to reject, return an error so the client falls back to
+			// session/new — exercising the resume-failure path.
+			if os.Getenv("GODEX_ACP_FAKE_REJECT_RESUME") == "1" {
+				respErr := map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"error": map[string]any{
+						"code":    -32602,
+						"message": "session not found",
+					},
+				}
+				line, _ := json.Marshal(respErr)
+				fmt.Fprintln(os.Stdout, string(line))
+				continue
+			}
+			result = map[string]any{}
 		case "session/prompt":
 			result = map[string]any{"stopReason": "end_turn"}
 			if os.Getenv("GODEX_ACP_FAKE_PERMISSION") == "1" {
@@ -727,5 +746,123 @@ func TestACPHarnessMapsErrorToEvent(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected error_raised event mapped from harness failure")
+	}
+}
+
+// TestACPHarnessEmitsResumeFailedWarning verifies that when the persisted
+// external session id cannot be resumed (the engine rejects session/load and
+// session/resume), the harness records the failed id, opens a fresh session,
+// and emits a warning event instead of silently losing the prior context.
+func TestACPHarnessEmitsResumeFailedWarning(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	workspace := t.TempDir()
+	rejectCfg := acpHarnessConfig(t)
+	rejectCfg.Env = map[string]string{"GODEX_ACP_HELPER": "1", "GODEX_ACP_FAKE_REJECT_RESUME": "1"}
+	h := NewACPHarness("fake-acp", rejectCfg)
+	// Prime a persisted session id that the fake server rejects, so both
+	// session/load and session/resume fail and OpenACPSession falls back to
+	// session/new.
+	h.sessMu.Lock()
+	h.sessionID = "acp-persisted-session-that-no-longer-exists"
+	h.sessMu.Unlock()
+
+	sink := &capturingSink{}
+	result, err := h.RunTurn(context.Background(), HarnessTurnInput{
+		SessionID:    "s1",
+		TurnID:       "t1",
+		WorkspaceDir: workspace,
+		Sink:         sink,
+		Messages: func() []protocol.Message {
+			return []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "do the thing")}
+		},
+	})
+	if err != nil {
+		t.Fatalf("run turn: %v", err)
+	}
+	if !result.Completed {
+		t.Fatal("expected completed despite resume failure (fresh session)")
+	}
+	if got := h.LastSessionID(); got != "acp-persisted-session-that-no-longer-exists" {
+		t.Fatalf("expected failed resume id retained, got %q", got)
+	}
+	emitted := sink.Snapshot()
+	found := false
+	for _, event := range emitted {
+		if event.Type != events.EventWarningRaised {
+			continue
+		}
+		payload, ok := event.Payload.(events.NoticePayload)
+		if !ok {
+			continue
+		}
+		if payload.Code == "acp_resume_failed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected acp_resume_failed warning event emitted")
+	}
+}
+
+// TestACPHarnessResumeSucceedsSilently verifies that a clean resume (the fake
+// server accepts session/load with the recorded id) does NOT emit a warning:
+// the recorded id is reused and lastSessionID stays empty.
+func TestACPHarnessResumeSucceedsSilently(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	workspace := t.TempDir()
+	h := NewACPHarness("fake-acp", acpHarnessConfig(t))
+	// First turn creates the session and records its id.
+	_, err := h.RunTurn(context.Background(), HarnessTurnInput{
+		SessionID:    "s1",
+		TurnID:       "t1",
+		WorkspaceDir: workspace,
+		Messages: func() []protocol.Message {
+			return []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "first turn")}
+		},
+	})
+	if err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+	h.sessMu.Lock()
+	recorded := h.sessionID
+	h.sessMu.Unlock()
+	if recorded == "" {
+		t.Fatal("expected a session id recorded after the first turn")
+	}
+	// Force a reconnect with the recorded id: drop the live session so the
+	// next turn reopens and tries to resume.
+	h.sessMu.Lock()
+	if h.sess != nil {
+		_ = h.sess.Close()
+		h.sess = nil
+	}
+	h.sessMu.Unlock()
+
+	sink := &capturingSink{}
+	_, err = h.RunTurn(context.Background(), HarnessTurnInput{
+		SessionID:    "s1",
+		TurnID:       "t2",
+		WorkspaceDir: workspace,
+		Sink:         sink,
+		Messages: func() []protocol.Message {
+			return []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "second turn")}
+		},
+	})
+	if err != nil {
+		t.Fatalf("second turn: %v", err)
+	}
+	if got := h.LastSessionID(); got != "" {
+		t.Fatalf("expected no failed resume id on clean reconnect, got %q", got)
+	}
+	for _, event := range sink.Snapshot() {
+		if event.Type == events.EventWarningRaised {
+			if payload, ok := event.Payload.(events.NoticePayload); ok && payload.Code == "acp_resume_failed" {
+				t.Fatal("expected no acp_resume_failed warning on clean resume")
+			}
+		}
 	}
 }

@@ -40,9 +40,10 @@ type ACPHarness struct {
 	mu    sync.Mutex
 	scope scope.Id // scope bound at first use; cross-scope reuse is rejected
 
-	sessMu    sync.Mutex
-	sess      *tools.ACPSession // live persistent session (reused across turns)
-	sessionID string            // last known session id, kept for resume after reconnect
+	sessMu        sync.Mutex
+	sess          *tools.ACPSession // live persistent session (reused across turns)
+	sessionID     string            // last known session id, kept for resume after reconnect
+	lastSessionID string            // previously persisted session id that failed to resume (diagnostics)
 }
 
 // NewACPHarness wraps one configured ACP agent as a Harness.
@@ -89,10 +90,17 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 	if workspace == "" {
 		workspace = "."
 	}
-	sess, err := h.liveSession(ctx, workspace, input.Model)
+	sess, resumeFailed, err := h.liveSession(ctx, workspace, input.Model)
 	if err != nil {
 		h.emitErrorEvent(input, err)
 		return HarnessTurnResult{}, err
+	}
+	if resumeFailed {
+		// The persisted session id could not be loaded/resumed by the external
+		// engine, so a fresh conversation was created. Surface this explicitly
+		// instead of silently losing the prior context (the old id is kept in
+		// the harness and persisted by the backend for diagnostics).
+		h.emitResumeFailedEvent(input, h.lastSessionID, sess.SessionID())
 	}
 	// M2: forward the whole user message as ACP content blocks — text always,
 	// image attachments only when the engine advertised promptCapabilities.image.
@@ -166,8 +174,11 @@ func (h *ACPHarness) emitUsageEvent(input HarnessTurnInput, usage *tools.ACPTurn
 }
 
 // liveSession returns the persistent ACP session, reopening it (resuming the
-// recorded session id when available) if the previous process died.
-func (h *ACPHarness) liveSession(ctx context.Context, workspace, model string) (*tools.ACPSession, error) {
+// recorded session id when available) if the previous process died. The bool
+// reports whether a previously recorded session id could NOT be resumed and a
+// fresh external conversation was created instead (the old id is retained in
+// lastSessionID for diagnostics so a later turn can decide to recover it).
+func (h *ACPHarness) liveSession(ctx context.Context, workspace, model string) (*tools.ACPSession, bool, error) {
 	h.sessMu.Lock()
 	defer h.sessMu.Unlock()
 	if h.sess != nil {
@@ -176,16 +187,21 @@ func (h *ACPHarness) liveSession(ctx context.Context, workspace, model string) (
 			_ = h.sess.Close()
 			h.sess = nil
 		default:
-			return h.sess, nil
+			return h.sess, false, nil
 		}
 	}
-	opened, err := tools.OpenACPSession(ctx, h.cfg, workspace, model, 0, h.sessionID)
+	requestedResumeID := h.sessionID
+	opened, err := tools.OpenACPSession(ctx, h.cfg, workspace, model, 0, requestedResumeID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	resumeFailed := requestedResumeID != "" && opened.SessionID() != requestedResumeID
+	if resumeFailed {
+		h.lastSessionID = requestedResumeID
 	}
 	h.sess = opened
 	h.sessionID = opened.SessionID()
-	return opened, nil
+	return opened, resumeFailed, nil
 }
 
 // rememberSession records the live session id so a later reconnect can resume
@@ -237,14 +253,48 @@ func (h *ACPHarness) ResetSession(ctx context.Context, sessionID string) error {
 		h.sess = nil
 	}
 	h.sessionID = ""
+	h.lastSessionID = ""
 	h.sessMu.Unlock()
 	return nil
+}
+
+// LastSessionID returns the previously persisted external session id that
+// failed to resume on the most recent reconnect, or "" when the last open
+// resumed cleanly (or no prior session existed). The backend persists it so a
+// failed resume is visible in session state instead of being silently lost.
+func (h *ACPHarness) LastSessionID() string {
+	h.sessMu.Lock()
+	defer h.sessMu.Unlock()
+	return h.lastSessionID
 }
 
 // Close releases engine resources (the live session process, if any).
 func (h *ACPHarness) Close() error {
 	h.dropSession()
 	return nil
+}
+
+// emitResumeFailedEvent surfaces a failed ACP session resume as a warning so
+// hosts can see that the previous external conversation could not be restored
+// and a fresh conversation was started (context was not silently lost).
+func (h *ACPHarness) emitResumeFailedEvent(input HarnessTurnInput, oldSessionID, newSessionID string) {
+	if sink := input.Sink; sink != nil {
+		sink.Emit(events.Event{
+			SessionID: input.SessionID,
+			TurnID:    input.TurnID,
+			Type:      events.EventWarningRaised,
+			Timestamp: time.Now(),
+			Payload: events.NoticePayload{
+				Message: fmt.Sprintf(
+					"external engine %s could not resume session %q; a fresh conversation %q was created (prior context is not carried over)",
+					h.agentID, oldSessionID, newSessionID),
+				Code:         "acp_resume_failed",
+				ActorKind:    "agent",
+				ActorID:      h.agentID,
+				RecoveryHint: "The external engine did not recognize the persisted session id (it may have been cleaned up server-side). The current turn runs in a new conversation; prior GoDex transcript history remains available in this session.",
+			},
+		})
+	}
 }
 
 // emitErrorEvent maps an external-engine turn failure onto the unified

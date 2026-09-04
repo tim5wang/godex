@@ -24,6 +24,7 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 	reasoningEffort := normalizeSessionReasoningEffort(session.reasoningEffort)
 	acpModel := strings.TrimSpace(session.acpModel)
 	acpSessionID := strings.TrimSpace(session.acpSessionID)
+	lastAcpSessionID := strings.TrimSpace(session.lastAcpSessionID)
 	parentSessionID := strings.TrimSpace(session.parentSessionID)
 	forkedFromTurnID := strings.TrimSpace(session.forkedFromTurnID)
 	forkedFromMessageIndex := cloneIntPtr(session.forkedFromMessageIndex)
@@ -40,6 +41,7 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 		ReasoningEffort:        reasoningEffort,
 		AcpModel:               acpModel,
 		AcpSessionID:           acpSessionID,
+		LastAcpSessionID:       lastAcpSessionID,
 		ParentSessionID:        parentSessionID,
 		ForkedFromTurnID:       forkedFromTurnID,
 		ForkedFromMessageIndex: forkedFromMessageIndex,

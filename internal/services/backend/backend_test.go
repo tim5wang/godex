@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -4454,5 +4454,86 @@ func TestCancelQueuedTurnRemovesAnyPositionAndReturnsText(t *testing.T) {
 	// Removing an unknown id must error.
 	if _, err := service.CancelQueuedTurn(context.Background(), opened.SessionID, "missing"); err == nil {
 		t.Fatal("expected error for unknown queued id")
+	}
+}
+
+func TestMergeTimelineEvents(t *testing.T) {
+	ts := func(sec int) time.Time {
+		return time.Unix(int64(sec), 0).UTC()
+	}
+	ev := func(turn, typ string, at time.Time, payload any) events.Event {
+		return events.Event{SessionID: "s1", TurnID: turn, Type: events.EventType(typ), Timestamp: at, Payload: payload}
+	}
+
+	// base: recorder window that already evicted the oldest events (e.g. only
+	// events 3..5 survive). journal: crash delta that still holds 1..5 (0..2
+	// were rotated away).
+	base := []events.Event{
+		ev("t", "tool_call_started", ts(3), map[string]any{"id": "c3"}),
+		ev("t", "tool_call_finished", ts(4), map[string]any{"id": "c3"}),
+		ev("t", "turn_completed", ts(5), map[string]any{"status": "completed"}),
+	}
+	journal := []events.Event{
+		ev("t", "tool_call_started", ts(1), map[string]any{"id": "c1"}),
+		ev("t", "tool_call_finished", ts(2), map[string]any{"id": "c1"}),
+		// duplicate of a base event — must appear once
+		ev("t", "tool_call_started", ts(3), map[string]any{"id": "c3"}),
+		ev("t", "tool_call_started", ts(4), map[string]any{"id": "c4"}),
+	}
+
+	merged := mergeTimelineEvents(base, journal)
+	// base has 3 events, journal contributes c1-start, c1-finish, and c4-start
+	// (the c3-start duplicate is dropped) → 6 unique events total.
+	if len(merged) != 6 {
+		t.Fatalf("expected 6 deduplicated events, got %d: %+v", len(merged), merged)
+	}
+	// The merged timeline must be chronological even though the journal
+	// contains older events than the base window.
+	for i := 1; i < len(merged); i++ {
+		if merged[i].Timestamp.Before(merged[i-1].Timestamp) {
+			t.Fatalf("merged timeline out of order at %d: %v before %v", i, merged[i].Timestamp, merged[i-1].Timestamp)
+		}
+	}
+	// Verify the chronological payload sequence: c1 start/finish (journal),
+	// c3 start (base; journal duplicate dropped), c3 finish (base), c4 start
+	// (journal), turn_completed (base).
+	type kind string
+	seq := []string{}
+	for _, e := range merged {
+		switch e.Type {
+		case events.EventToolCallStarted:
+			if p, ok := e.Payload.(map[string]any); ok {
+				seq = append(seq, "start:"+fmt.Sprint(p["id"]))
+			}
+		case events.EventToolCallFinished:
+			if p, ok := e.Payload.(map[string]any); ok {
+				seq = append(seq, "finish:"+fmt.Sprint(p["id"]))
+			}
+		default:
+			seq = append(seq, string(e.Type))
+		}
+	}
+	want := []string{"start:c1", "finish:c1", "start:c3", "finish:c3", "start:c4", string(events.EventTurnCompleted)}
+	if len(seq) != len(want) {
+		t.Fatalf("unexpected event sequence: %v", seq)
+	}
+	for i := range want {
+		if seq[i] != want[i] {
+			t.Fatalf("event %d = %q, want %q", i, seq[i], want[i])
+		}
+	}
+
+	// Empty journal: base passes through unchanged.
+	if out := mergeTimelineEvents(base, nil); len(out) != len(base) {
+		t.Fatalf("expected base passthrough, got %d events", len(out))
+	}
+}
+
+func TestTimelineEventKeyDistinguishesKindsAtSameInstant(t *testing.T) {
+	at := time.Unix(100, 0).UTC()
+	a := events.Event{SessionID: "s", TurnID: "t", Type: events.EventSnapshotReady, Timestamp: at}
+	b := events.Event{SessionID: "s", TurnID: "t", Type: events.EventTurnCompleted, Timestamp: at}
+	if timelineEventKey(a) == timelineEventKey(b) {
+		t.Fatal("expected distinct keys for different event kinds at the same instant")
 	}
 }

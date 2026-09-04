@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/memory"
-	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/teammate"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
@@ -244,7 +244,10 @@ func (a *Agent) SetACPSessionResumeID(agentID, sessionID string) {
 		return
 	}
 	if acpH, ok := h.(*ACPHarness); ok && strings.TrimSpace(sessionID) != "" {
-		acpH.rememberSession(strings.TrimSpace(sessionID))
+		acpH.sessMu.Lock()
+		acpH.sessionID = strings.TrimSpace(sessionID)
+		acpH.lastSessionID = ""
+		acpH.sessMu.Unlock()
 	}
 }
 
@@ -263,6 +266,23 @@ func (a *Agent) ACPHarnessSessionID(agentID string) string {
 		acpH.sessMu.Lock()
 		defer acpH.sessMu.Unlock()
 		return acpH.sessionID
+	}
+	return ""
+}
+
+// ACPHarnessLastSessionID returns the external session id that the ACP harness
+// most recently failed to resume (the persisted id the engine rejected), or ""
+// when the last reconnect resumed cleanly. The backend persists it so a failed
+// resume is not silently lost and can be surfaced/diagnosed.
+func (a *Agent) ACPHarnessLastSessionID(agentID string) string {
+	a.mu.Lock()
+	h, ok := a.extraHarnesses["acp:"+agentID]
+	a.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	if acpH, ok := h.(*ACPHarness); ok {
+		return acpH.LastSessionID()
 	}
 	return ""
 }

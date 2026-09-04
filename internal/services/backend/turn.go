@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/insights"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -767,14 +767,7 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 	})
 	// Persist the external ACP session id so a later host restart can resume
 	// the same external conversation (the harness keeps it in memory only).
-	if strings.HasPrefix(requestedHarness, "acp:") {
-		agentID := strings.TrimPrefix(requestedHarness, "acp:")
-		if sid := session.agent.ACPHarnessSessionID(agentID); sid != "" {
-			session.mu.Lock()
-			session.acpSessionID = sid
-			session.mu.Unlock()
-		}
-	}
+	s.syncACPSessionIDs(session, requestedHarness)
 	returnErr := runErr
 	submitStatus := "completed"
 	pendingApproval := false
@@ -900,12 +893,45 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 	}, returnErr
 }
 
+// syncACPSessionIDs captures the external ACP session id (and the last id that
+// failed to resume, if any) from the ACP harness into the session state so
+// persistSession writes them into the manifest. requestedHarness is the engine
+// id the turn ran with ("acp:<agent>"), or "" to fall back to the
+// template-pinned engine. Calling it at checkpoint time (not only at turn end)
+// means a restart mid-turn still persists the live external session id.
+func (s *Service) syncACPSessionIDs(session *sessionState, requestedHarness string) {
+	if session == nil || session.agent == nil {
+		return
+	}
+	engine := strings.TrimSpace(requestedHarness)
+	if engine == "" {
+		engine = strings.TrimSpace(session.agent.TemplateEngine())
+	}
+	if !strings.HasPrefix(engine, "acp:") {
+		return
+	}
+	agentID := strings.TrimPrefix(engine, "acp:")
+	sid := session.agent.ACPHarnessSessionID(agentID)
+	lastSid := session.agent.ACPHarnessLastSessionID(agentID)
+	session.mu.Lock()
+	if sid != "" {
+		session.acpSessionID = sid
+	}
+	if lastSid != "" {
+		session.lastAcpSessionID = lastSid
+	}
+	session.mu.Unlock()
+}
+
 func (s *Service) checkpointRunningTurn(session *sessionState, turnID string) {
 	if session == nil {
 		return
 	}
 	now := s.now()
 	session.updateTurnStatus(turnID, "running", "", "", now)
+	// Persist the external ACP session id early: if the process dies mid-turn,
+	// the restart still resumes the same external conversation.
+	s.syncACPSessionIDs(session, "")
 	if err := s.persistSession(session, now); err != nil {
 		session.events.Emit(events.Event{
 			SessionID: session.id,

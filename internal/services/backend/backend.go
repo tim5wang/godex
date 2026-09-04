@@ -3,10 +3,10 @@ package backend
 import (
 	"context"
 	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/mcp"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
@@ -35,7 +35,7 @@ const (
 	checkpointsDirName                = "checkpoints"
 	securityAuditFileName             = "security/audit.jsonl"
 	attachmentsDir                    = "attachments"
-	snapshotTimelineLimit             = 80
+	snapshotTimelineLimit             = 200
 	snapshotTurnLimit                 = 20
 	persistedTurnLimit                = 200
 	sessionProjectDirMetadataKey      = "project_dir"
@@ -75,6 +75,7 @@ type SessionManifest struct {
 	ReasoningEffort        string              `json:"reasoning_effort,omitempty"`
 	AcpModel               string              `json:"acp_model,omitempty"`
 	AcpSessionID           string              `json:"acp_session_id,omitempty"`
+	LastAcpSessionID       string              `json:"last_acp_session_id,omitempty"`
 	ParentSessionID        string              `json:"parent_session_id,omitempty"`
 	ForkedFromTurnID       string              `json:"forked_from_turn_id,omitempty"`
 	ForkedFromMessageIndex *int                `json:"forked_from_message_index,omitempty"`
@@ -174,9 +175,9 @@ type ModelProfile struct {
 
 // ModelsView is returned by GET /models.
 type ModelsView struct {
-	DefaultProfileID string         `json:"default_profile_id"`
-	SessionProfileID string         `json:"session_profile_id,omitempty"`
-	ReasoningEffort  string         `json:"reasoning_effort,omitempty"`
+	DefaultProfileID string `json:"default_profile_id"`
+	SessionProfileID string `json:"session_profile_id,omitempty"`
+	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
 	// AcpModel is the session's ACP model override (raw ACP model id) when the
 	// session routes turns to an external ACP agent; empty otherwise.
 	AcpModel string         `json:"acp_model,omitempty"`
@@ -355,6 +356,7 @@ type sessionState struct {
 	reasoningEffort        string
 	acpModel               string
 	acpSessionID           string
+	lastAcpSessionID       string
 	parentSessionID        string
 	forkedFromTurnID       string
 	forkedFromMessageIndex *int

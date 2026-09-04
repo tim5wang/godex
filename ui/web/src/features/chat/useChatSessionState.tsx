@@ -326,7 +326,10 @@ export function useChatSessionState(layout: ChatLayoutState) {
   const timelineQuery = useQuery({
     queryKey: ["timeline", token, openQuery.data?.session_id],
     enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
-    queryFn: async () => getSessionTimeline(token || null, openQuery.data!.session_id, 80),
+    // Fetch the full recorder window (200, matching the backend's in-memory
+    // timeline capacity) so the tool-log reconstruction in the feed sees all
+    // tool events on re-entry instead of only the most recent 80.
+    queryFn: async () => getSessionTimeline(token || null, openQuery.data!.session_id, 200),
   });
 
   // Compaction history is fetched from a dedicated endpoint (not the 80-item

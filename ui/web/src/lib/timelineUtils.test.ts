@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTimelineEntry } from "./types";
-import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls } from "./timelineUtils";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems } from "./timelineUtils";
 import type { PendingSend } from "../store/chat";
 
 /**
@@ -177,5 +177,38 @@ describe("collectToolCalls", () => {
     ];
     const tools = collectToolCalls(items);
     expect(tools.map((t) => t.id)).toEqual(["tool:a", "tool:b"]);
+  });
+});
+
+describe("mergeChronologicalFeedItems", () => {
+  const textItem = (id: string, timestamp: string | undefined, messageIndex: number, turnId = "") => ({
+    id,
+    kind: "assistant" as const,
+    title: "GoDex",
+    body: `text-${id}`,
+    timestamp,
+    messageIndex,
+    turnId: turnId || undefined,
+  });
+
+  it("interleaves history and overlay by timestamp when present", () => {
+    const history = [textItem("h1", "2026-01-01T00:00:01Z", 0)];
+    const tools = [
+      { ...textItem("t1", "2026-01-01T00:00:02Z", 5), kind: "tool" as const, title: "bash", summary: "", input: {}, status: "finished" as const, expanded: false },
+    ];
+    const merged = mergeChronologicalFeedItems(history, tools);
+    expect(merged.map((m) => m.id)).toEqual(["h1", "t1"]);
+  });
+
+  it("keeps missing-timestamp items anchored to their message index instead of clumping at the end", () => {
+    // History text has no timestamp (old message), overlay tool has a
+    // timestamp. The tool must NOT be pushed after the text purely because of
+    // array order: both belong to the same message index.
+    const history = [textItem("h1", undefined, 2)];
+    const tools = [
+      { ...textItem("t1", "2026-01-01T00:00:02Z", 2), kind: "tool" as const, title: "bash", summary: "", input: {}, status: "finished" as const, expanded: false },
+    ];
+    const merged = mergeChronologicalFeedItems(history, tools);
+    expect(merged.map((m) => m.id)).toEqual(["h1", "t1"]);
   });
 });

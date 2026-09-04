@@ -92,12 +92,17 @@ export function shortTurnId(id: string) {
   return id.length <= 10 ? id : `${id.slice(0, 10)}…`;
 }
 
+// Timeline window kept by the live store / fetched from the backend. Must
+// match the backend recorder capacity (200) so the tool-log reconstruction on
+// re-entry sees every tool event, not just the most recent 80.
+export const TIMELINE_WINDOW_LIMIT = 200;
+
 export function appendTimelineEvent(current: SessionTimelineEntry[], event: RuntimeEvent) {
   if (event.type === "assistant_text_delta") {
     return current;
   }
   const next = [...current, event];
-  return next.length <= 80 ? next : next.slice(next.length - 80);
+  return next.length <= TIMELINE_WINDOW_LIMIT ? next : next.slice(next.length - TIMELINE_WINDOW_LIMIT);
 }
 
 export function timelineEventLabel(event: SessionTimelineEntry) {
@@ -724,8 +729,21 @@ export function mergeChronologicalFeedItems(historyItems: FeedItem[], overlayIte
       if (leftHasTime && rightHasTime && left.time !== right.time) {
         return left.time - right.time;
       }
-      if (leftHasTime !== rightHasTime) {
-        return left.index - right.index;
+      // Missing or identical timestamps: fall back to the item's own
+      // chronological anchor (messageIndex for history messages, then the
+      // turn id) instead of the flat array index. Using the array index here
+      // puts ALL history items before ALL overlay/timeline items, which makes
+      // a re-entered conversation render text and tool logs as two big
+      // segments instead of interleaved.
+      const leftMessageIndex = left.item.messageIndex ?? Number.MAX_SAFE_INTEGER;
+      const rightMessageIndex = right.item.messageIndex ?? Number.MAX_SAFE_INTEGER;
+      if (leftMessageIndex !== rightMessageIndex) {
+        return leftMessageIndex - rightMessageIndex;
+      }
+      const leftTurnId = left.item.turnId ?? "";
+      const rightTurnId = right.item.turnId ?? "";
+      if (leftTurnId !== rightTurnId) {
+        return leftTurnId < rightTurnId ? -1 : 1;
       }
       return left.index - right.index;
     })

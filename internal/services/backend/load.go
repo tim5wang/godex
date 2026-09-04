@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -58,6 +59,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		session.reasoningEffort = normalizeSessionReasoningEffort(manifest.ReasoningEffort)
 		session.acpModel = strings.TrimSpace(manifest.AcpModel)
 		session.acpSessionID = strings.TrimSpace(manifest.AcpSessionID)
+		session.lastAcpSessionID = strings.TrimSpace(manifest.LastAcpSessionID)
 		session.parentSessionID = strings.TrimSpace(manifest.ParentSessionID)
 		session.forkedFromTurnID = strings.TrimSpace(manifest.ForkedFromTurnID)
 		session.forkedFromMessageIndex = cloneIntPtr(manifest.ForkedFromMessageIndex)
@@ -149,6 +151,26 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		if engine := strings.TrimSpace(a.TemplateEngine()); strings.HasPrefix(engine, "acp:") {
 			a.SetACPSessionResumeID(strings.TrimPrefix(engine, "acp:"), sid)
 		}
+	}
+
+	// Surface a previously failed ACP resume: the manifest records the id the
+	// external engine rejected, so a user re-opening this session sees why the
+	// prior external conversation is not being continued before the next turn
+	// runs (and possibly recreates the failure).
+	if last := strings.TrimSpace(session.lastAcpSessionID); last != "" && last != strings.TrimSpace(session.acpSessionID) {
+		session.events.Emit(events.Event{
+			SessionID: session.id,
+			Type:      events.EventWarningRaised,
+			Timestamp: now,
+			Payload: events.NoticePayload{
+				Message: fmt.Sprintf(
+					"external engine session %q could not be resumed previously; the current turn may continue a fresh external conversation",
+					last),
+				Code:         "acp_resume_failed",
+				ActorKind:    "agent",
+				RecoveryHint: "Check the external engine's session store; prior GoDex transcript history remains available in this session.",
+			},
+		})
 	}
 
 	persistSession := false
@@ -630,14 +652,26 @@ func (s *Service) readSessionState(sessionID string) (*agent.SessionState, error
 }
 
 func (s *Service) readSessionTimeline(sessionID string) []events.Event {
+	// Base: the durable snapshot (store data first, then checkpoint, then the
+	// root timeline file). Journal: the append-only crash-recovery delta since
+	// the last rotate. The journal is NOT a complete timeline on its own — it is
+	// truncated after every completed turn — so it must be merged on top of the
+	// base instead of replacing it. Without the merge, a restart that finds a
+	// non-empty journal seeds the recorder with only the delta and the next
+	// writeSessionTimeline overwrites the full timeline with that truncated set,
+	// permanently losing the earlier events (tool logs / phases disappear from
+	// the conversation on re-entry).
+	return mergeTimelineEvents(s.readBaseSessionTimeline(sessionID), s.readSessionEventJournal(sessionID))
+}
+
+// readBaseSessionTimeline returns the durable timeline snapshot for a session:
+// the store copy when present, otherwise the checkpoint/root file timeline.
+func (s *Service) readBaseSessionTimeline(sessionID string) []events.Event {
 	if data, ok, err := s.readSessionStoreData(context.Background(), sessionID); err == nil && ok && len(data.Timeline) > 0 {
 		var decoded []events.Event
 		if json.Unmarshal(data.Timeline, &decoded) == nil {
 			return decoded
 		}
-	}
-	if journal := s.readSessionEventJournal(sessionID); len(journal) > 0 {
-		return journal
 	}
 	if checkpoint, ok, err := s.readSessionCheckpoint(sessionID); ok && err == nil && checkpoint != nil {
 		if s.legacyFileNewerThanCheckpoint(sessionID, timelineFileName) {
@@ -646,6 +680,50 @@ func (s *Service) readSessionTimeline(sessionID string) []events.Event {
 		return checkpoint.Timeline
 	}
 	return s.readRootSessionTimeline(sessionID)
+}
+
+// mergeTimelineEvents returns the deduplicated union of base and journal,
+// ordered chronologically by timestamp. The two sources are append-ordered but
+// their windows can overlap or be out of order relative to each other (the
+// recorder in base may have evicted the oldest events while the journal still
+// holds them, or vice versa after a rotate), so a timestamp sort is required to
+// keep the merged timeline chronological. Duplicated events (e.g. an event
+// written to both the store snapshot and the journal) appear once. Identity is
+// session+turn+type+timestamp+payload so same-instant events of different kinds
+// (snapshot_ready vs turn_completed) are both kept.
+func mergeTimelineEvents(base, journal []events.Event) []events.Event {
+	if len(journal) == 0 {
+		return base
+	}
+	seen := make(map[string]struct{}, len(base))
+	for _, event := range base {
+		seen[timelineEventKey(event)] = struct{}{}
+	}
+	merged := append([]events.Event{}, base...)
+	for _, event := range journal {
+		if !events.RecordableEvent(event) {
+			continue
+		}
+		key := timelineEventKey(event)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, event)
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		return merged[i].Timestamp.Before(merged[j].Timestamp)
+	})
+	return merged
+}
+
+func timelineEventKey(event events.Event) string {
+	payload := ""
+	if data, err := json.Marshal(event.Payload); err == nil {
+		payload = string(data)
+	}
+	return event.SessionID + "|" + event.TurnID + "|" + string(event.Type) + "|" +
+		event.Timestamp.UTC().Format(time.RFC3339Nano) + "|" + payload
 }
 
 func (s *Service) readRootSessionTimeline(sessionID string) []events.Event {

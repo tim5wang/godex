@@ -46,3 +46,8 @@ examples/evals/results/
 .rust-home/
 .cargo-home/
 examples/wasm-plugin-todo/plugin.wasm
+
+# Tauri desktop shell
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/

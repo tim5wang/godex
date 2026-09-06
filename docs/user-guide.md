@@ -990,6 +990,7 @@ godex import claude --source ~/.claude --package claude-user
 | `/note` | `list\|search [q] [--tag <tag>]\|get <id>\|create\|new <title> [--tags a,b] -- <md>\|append [id] -- <md>\|update\|edit [id] -- <md>`（裸 `/note <title> ...` 也创建） | Markdown 笔记 |
 | `/ledger` | — | 显示当前 long-task 项目 ledger |
 | `/model` | `list\|get\|use\|session <profile-id>\|default\|set <profile-or-model>\|help`（裸 `/model <profile-id>` 等价 use） | 模型管理 |
+| `/agent` | `list\|use <template-id>\|<template-id>` | 列出或切换当前 session 的 Agent 模板；模板 engine 变化时下一轮切换 Harness |
 | `/approve` | `[status\|list\|request-id] [once\|task\|session\|pattern\|count:N\|timebox:10m]` | 审批待处理权限请求 |
 | `/deny` | `[request-id] [reason...]` | 拒绝权限请求 |
 | `/session` | `current\|list [channel]\|new [key\|channel:key]\|context\|tokens\|auth` | session 管理 |

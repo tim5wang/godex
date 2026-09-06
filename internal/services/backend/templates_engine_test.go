@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/message"
+	"github.com/tim5wang/godex/internal/services/commands"
 )
 
 // TestAgentTemplateFormOptionsIncludesRegisteredEngines verifies the template
@@ -29,6 +31,42 @@ func TestAgentTemplateFormOptionsIncludesRegisteredEngines(t *testing.T) {
 	}
 	if !containsStr(opts.Engines, "acp:codex") {
 		t.Fatalf("expected engines to include acp:codex, got %v", opts.Engines)
+	}
+}
+
+func TestAgentSlashCommandSwitchesAndPersistsSessionTemplate(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{})
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "local", Key: "agent-command"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	result, err := service.ExecuteCommand(context.Background(), opened.SessionID, commands.Command{Name: "agent", Args: []string{"coder"}})
+	if err != nil {
+		t.Fatalf("switch agent template: %v", err)
+	}
+	if !result.RefreshSnapshot || !strings.Contains(result.Output, "coder") {
+		t.Fatalf("unexpected command result: %+v", result)
+	}
+
+	session, err := service.requireSession(opened.SessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+	if got := session.agent.TemplateID(); got != "coder" {
+		t.Fatalf("template id = %q, want coder", got)
+	}
+	if got := session.locator.Metadata["template"]; got != "coder" {
+		t.Fatalf("persisted locator template = %q, want coder", got)
+	}
+
+	list, err := service.ExecuteCommand(context.Background(), opened.SessionID, commands.Command{Name: "agent"})
+	if err != nil {
+		t.Fatalf("list agent templates: %v", err)
+	}
+	if !strings.Contains(list.Output, "* coder") {
+		t.Fatalf("expected coder to be marked active, got %q", list.Output)
 	}
 }
 

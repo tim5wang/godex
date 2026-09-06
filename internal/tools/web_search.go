@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	defaultSearchResults = 5
-	maxSearchResults     = 10
-	defaultSearchTTL     = 300 * time.Second
-	searchUserAgent      = "GoDex/1.0 (+https://github.com/tim5wang/godex)"
+	defaultSearchResults    = 5
+	maxSearchResults        = 10
+	defaultSearchTTL        = 300 * time.Second
+	providerFailureCooldown = 30 * time.Second
+	searchUserAgent         = "GoDex/1.0 (+https://github.com/tim5wang/godex)"
 )
 
 type SearchResult struct {
@@ -58,15 +59,16 @@ type webSearchEndpoints struct {
 
 // WebSearchService executes provider-chain current-information search.
 type WebSearchService struct {
-	mu        sync.RWMutex
-	cfg       config.WebSearchConfig
-	client    *http.Client
-	cache     map[string]webSearchCacheEntry
-	now       func() time.Time
-	endpoints webSearchEndpoints
-	preview   *WebFetchService
-	browser   BrowserSearchProvider
-	lightpanda BrowserSearchProvider
+	mu                       sync.RWMutex
+	cfg                      config.WebSearchConfig
+	client                   *http.Client
+	cache                    map[string]webSearchCacheEntry
+	providerUnavailableUntil map[string]time.Time
+	now                      func() time.Time
+	endpoints                webSearchEndpoints
+	preview                  *WebFetchService
+	browser                  BrowserSearchProvider
+	lightpanda               BrowserSearchProvider
 }
 
 type BrowserSearchProvider interface {
@@ -76,9 +78,10 @@ type BrowserSearchProvider interface {
 // NewWebSearchService creates a search service with the provided config.
 func NewWebSearchService(cfg config.WebSearchConfig) *WebSearchService {
 	service := &WebSearchService{
-		client: &http.Client{Timeout: 30 * time.Second},
-		cache:  make(map[string]webSearchCacheEntry),
-		now:    time.Now,
+		client:                   &http.Client{Timeout: 30 * time.Second},
+		cache:                    make(map[string]webSearchCacheEntry),
+		providerUnavailableUntil: make(map[string]time.Time),
+		now:                      time.Now,
 		endpoints: webSearchEndpoints{
 			Brave:      "https://api.search.brave.com/res/v1/web/search",
 			Exa:        "https://api.exa.ai/search",
@@ -118,6 +121,7 @@ func (s *WebSearchService) ApplyConfig(cfg config.WebSearchConfig) {
 	defer s.mu.Unlock()
 	s.cfg = normalizeWebSearchConfig(cfg)
 	s.cache = make(map[string]webSearchCacheEntry)
+	s.providerUnavailableUntil = make(map[string]time.Time)
 }
 
 // Search runs one provider-chain search and returns structured results.
@@ -150,18 +154,36 @@ func (s *WebSearchService) Search(ctx context.Context, query string, maxResults 
 	providers := providerOrder(cfg.ProviderOrder)
 	var providerName string
 	var lastErr error
+	attempted := make([]string, 0, len(providers))
+	coolingDown := make([]string, 0, len(providers))
 	for _, name := range providers {
+		if s.providerIsCoolingDown(name, now()) {
+			coolingDown = append(coolingDown, name)
+			continue
+		}
+		attempted = append(attempted, name)
 		var merged []SearchResult
+		providerFailed := false
 		for _, variant := range searchProviderQueryVariants(name, query) {
 			results, err := s.searchWithProvider(ctx, client, endpoints, cfg, browser, lightpanda, name, variant, maxResults, freshness)
 			if err != nil {
+				if ctx.Err() != nil {
+					return WebSearchResponse{}, ctx.Err()
+				}
 				lastErr = err
-				continue
+				providerFailed = true
+				// Provider/process failures are not query-shape failures. Retrying
+				// variants only repeats the same expensive failure.
+				break
 			}
+			s.clearProviderFailure(name)
 			merged = append(merged, results...)
 			if len(merged) >= maxResults*3 {
 				break
 			}
+		}
+		if providerFailed && len(merged) == 0 {
+			s.markProviderFailure(name, now())
 		}
 		if len(merged) == 0 {
 			continue
@@ -182,9 +204,31 @@ func (s *WebSearchService) Search(ctx context.Context, query string, maxResults 
 	}
 
 	if lastErr != nil {
-		return WebSearchResponse{}, lastErr
+		return WebSearchResponse{}, fmt.Errorf("web_search providers unavailable after trying %s: %w; next action: do not repeat the same search, use web_fetch with a known URL or continue local/offline research", strings.Join(attempted, ", "), lastErr)
+	}
+	if len(coolingDown) > 0 {
+		return WebSearchResponse{}, fmt.Errorf("web_search providers temporarily unavailable (%s); next action: use web_fetch with a known URL or continue local/offline research", strings.Join(coolingDown, ", "))
 	}
 	return WebSearchResponse{}, fmt.Errorf("no web search providers are configured")
+}
+
+func (s *WebSearchService) providerIsCoolingDown(provider string, now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	until := s.providerUnavailableUntil[provider]
+	return !until.IsZero() && now.Before(until)
+}
+
+func (s *WebSearchService) markProviderFailure(provider string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.providerUnavailableUntil[provider] = now.Add(providerFailureCooldown)
+}
+
+func (s *WebSearchService) clearProviderFailure(provider string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.providerUnavailableUntil, provider)
 }
 
 func webSearchNextAction(resultCount int) string {

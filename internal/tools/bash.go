@@ -10,6 +10,7 @@ import (
 
 type bashArgs struct {
 	Command               string `json:"command"`
+	TimeoutSeconds        int    `json:"timeout_seconds,omitempty"`
 	AllowUnlistedCommands bool   `json:"_allow_unlisted_commands,omitempty"`
 }
 
@@ -31,7 +32,9 @@ func NewBashToolWithExecution(workspace, tempDir string, execution tooling.Execu
 		options := shellCommandOptionsForContext(SessionContextFromContext(ctx), tooling.ShellCommandOptions{
 			AllowUnlistedCommands: args.AllowUnlistedCommands,
 		})
-		output, err := executor.RunShellBudgetedWithOptions(ctx, args.Command, options)
+		commandCtx, cancel := withOptionalTimeout(ctx, args.TimeoutSeconds)
+		defer cancel()
+		output, err := executor.RunShellBudgetedWithOptions(commandCtx, args.Command, options)
 		result := ToolResult{
 			Text: output.ModelText(),
 			Metadata: map[string]interface{}{

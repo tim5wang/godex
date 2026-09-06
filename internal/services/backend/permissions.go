@@ -24,6 +24,17 @@ func (s *Service) ApprovePermission(ctx context.Context, sessionID, requestID st
 	if err != nil {
 		return tools.PermissionResolution{}, err
 	}
+	if isInFlightACPPermission(session.agent.PendingPermissions(sessionID), requestID) {
+		resolution, err := session.agent.ApprovePendingPermission(sessionID, requestID, scope)
+		if err != nil {
+			return tools.PermissionResolution{}, err
+		}
+		now := s.now()
+		session.updateTurnPermissionStatus(requestID, tools.PermissionStatusApproved, now)
+		s.appendPermissionAuditEvent("approve_permission", "info", sessionID, resolution)
+		session.events.Emit(events.Event{SessionID: sessionID, Type: events.EventSnapshotReady, Timestamp: now, Payload: events.SnapshotPayload{UpdatedAt: now, Running: true}})
+		return resolution, nil
+	}
 	release, lockedHere, err := s.acquireSessionIfNeeded(ctx, sessionID, session)
 	if err != nil {
 		return tools.PermissionResolution{}, err
@@ -110,6 +121,17 @@ func (s *Service) DenyPermission(ctx context.Context, sessionID, requestID, reas
 	if err != nil {
 		return tools.PermissionResolution{}, err
 	}
+	if isInFlightACPPermission(session.agent.PendingPermissions(sessionID), requestID) {
+		resolution, err := session.agent.DenyPendingPermission(sessionID, requestID, reason)
+		if err != nil {
+			return tools.PermissionResolution{}, err
+		}
+		now := s.now()
+		session.updateTurnPermissionStatus(requestID, tools.PermissionStatusDenied, now)
+		s.appendPermissionAuditEvent("deny_permission", "warning", sessionID, resolution)
+		session.events.Emit(events.Event{SessionID: sessionID, Type: events.EventSnapshotReady, Timestamp: now, Payload: events.SnapshotPayload{UpdatedAt: now, Running: true}})
+		return resolution, nil
+	}
 	release, lockedHere, err := s.acquireSessionIfNeeded(ctx, sessionID, session)
 	if err != nil {
 		return tools.PermissionResolution{}, err
@@ -140,6 +162,16 @@ func (s *Service) DenyPermission(ctx context.Context, sessionID, requestID, reas
 		return resolution, nil
 	}
 	return resolution, nil
+}
+
+func isInFlightACPPermission(items []tools.PendingPermission, requestID string) bool {
+	requestID = strings.TrimSpace(requestID)
+	for _, item := range items {
+		if item.ID == requestID && strings.HasPrefix(strings.TrimSpace(item.Request.ToolName), "acp:") {
+			return true
+		}
+	}
+	return false
 }
 
 // ClearMessages clears the current session conversation history and persists the result.

@@ -2,12 +2,22 @@
 
 package tooling
 
-import "os/exec"
+import (
+	"os/exec"
+	"syscall"
+)
 
-// configureCommandProcessGroup is a no-op on Windows: there are no POSIX
-// process groups, so the child runs in the default job and cancellation
-// falls back to killing the direct child only.
+// configureCommandProcessGroup gives the child a distinct Windows process
+// group. Process.Kill still terminates the direct child; the group prevents
+// console-control signals from leaking to the GoDex process.
 func configureCommandProcessGroup(cmd *exec.Cmd) error {
+	if cmd == nil {
+		return nil
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= syscall.CREATE_NEW_PROCESS_GROUP
 	return nil
 }
 

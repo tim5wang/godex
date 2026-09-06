@@ -689,6 +689,19 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 	if requestedHarness == "" {
 		requestedHarness = session.agent.TemplateEngine()
 	}
+	if requestedHarness != "" {
+		available := session.agent.RegisteredHarnessIDs()
+		found := false
+		for _, id := range available {
+			if id == requestedHarness {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, conversation.NewNonRetryableTurnError(fmt.Sprintf("harness %q is unavailable (available: %s)", requestedHarness, strings.Join(available, ", ")))
+		}
+	}
 
 	runErr := session.agent.RunWithOptions(ctx, agent.RunOptions{
 		SessionID:        sessionID,
@@ -703,6 +716,10 @@ func (s *Service) finishAgentTurnLocked(ctx context.Context, session *sessionSta
 		// (godex engine ignores it). The ACP harness applies it via the
 		// session config "model" option on the live session.
 		Model: strings.TrimSpace(session.acpModel),
+		// Forward the session's ACP reasoning-effort override to external
+		// engines (godex engine ignores it). The ACP harness applies it via
+		// the session config "reasoning_effort" option on the live session.
+		ReasoningEffort: strings.TrimSpace(session.acpReasoningEffort),
 		Checkpoint: func() {
 			s.checkpointRunningTurn(session, turnID)
 		},

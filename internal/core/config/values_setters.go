@@ -85,9 +85,6 @@ func setACPStoredValue(file *ConfigFile, path string, value any) error {
 			return err
 		}
 		for id, agent := range agents {
-			if len(agent.Env) == 0 {
-				continue
-			}
 			for key, envValue := range agent.Env {
 				if strings.TrimSpace(envValue) == "********" {
 					if existing, ok := file.ACP.Agents[id]; ok && existing.Env != nil {
@@ -95,9 +92,25 @@ func setACPStoredValue(file *ConfigFile, path string, value any) error {
 					}
 				}
 			}
+			if existing, ok := file.ACP.Agents[id]; ok {
+				for serverIndex := range agent.McpServers {
+					for _, existingServer := range existing.McpServers {
+						if strings.TrimSpace(existingServer.Name) != strings.TrimSpace(agent.McpServers[serverIndex].Name) {
+							continue
+						}
+						for key, envValue := range agent.McpServers[serverIndex].Env {
+							if strings.TrimSpace(envValue) == "********" {
+								agent.McpServers[serverIndex].Env[key] = existingServer.Env[key]
+							}
+						}
+					}
+				}
+			}
 			agents[id] = agent
 		}
 		file.ACP.Agents = agents
+	case "acp.bridge_client_mcp_servers":
+		file.ACP.BridgeClientMCPServers = asBool(value)
 	default:
 		return fmt.Errorf("unknown config field: %s", path)
 	}

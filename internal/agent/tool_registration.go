@@ -82,6 +82,44 @@ func (a *Agent) registerMCPServerTools(handler *tools.ToolHandler) {
 	}
 }
 
+// RegisterTransientMCPServerTools discovers one transient MCP server and
+// exposes its tools on this session's active tool surface. Re-registering the
+// same owner replaces its prior declarations.
+func (a *Agent) RegisterTransientMCPServerTools(ctx context.Context, owner, serverName string) error {
+	if a == nil || a.mcpMgr == nil || a.toolHandler == nil {
+		return fmt.Errorf("mcp runtime is unavailable")
+	}
+	decls, err := a.mcpMgr.ListServerTools(ctx, serverName)
+	if err != nil {
+		return err
+	}
+	a.toolHandler.UnregisterOwner(owner)
+	active := a.toolHandler.ActiveToolNames()
+	for _, decl := range decls {
+		tool, err := tools.NewMCPServerTool(a.mcpMgr, serverName, decl)
+		if err != nil {
+			return err
+		}
+		if _, err := a.registerOwnedTool(a.toolHandler, owner, tool, tools.ToolMeta{
+			Bundle:  bundleMCP,
+			Summary: "ACP client MCP server " + serverName,
+		}); err != nil {
+			return err
+		}
+		active = append(active, tool.Name())
+	}
+	a.toolHandler.SetActiveTools(active...)
+	return nil
+}
+
+// UnregisterTransientMCPServerTools removes all tools contributed by one ACP
+// session-scoped MCP server.
+func (a *Agent) UnregisterTransientMCPServerTools(owner string) {
+	if a != nil && a.toolHandler != nil {
+		a.toolHandler.UnregisterOwner(owner)
+	}
+}
+
 func (a *Agent) registerTool(tool tools.Tool, meta tools.ToolMeta) *tools.Registration {
 	return a.registerToolTo(a.toolHandler, tool, meta)
 }

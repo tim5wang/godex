@@ -58,6 +58,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		session.modelProfileID = strings.TrimSpace(manifest.ModelProfileID)
 		session.reasoningEffort = normalizeSessionReasoningEffort(manifest.ReasoningEffort)
 		session.acpModel = strings.TrimSpace(manifest.AcpModel)
+		session.acpReasoningEffort = strings.TrimSpace(manifest.AcpReasoningEffort)
 		session.acpSessionID = strings.TrimSpace(manifest.AcpSessionID)
 		session.lastAcpSessionID = strings.TrimSpace(manifest.LastAcpSessionID)
 		session.parentSessionID = strings.TrimSpace(manifest.ParentSessionID)

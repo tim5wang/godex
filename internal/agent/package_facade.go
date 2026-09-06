@@ -21,11 +21,16 @@ func (a *Agent) ListPackages() ([]tools.PackageEntry, error) {
 
 // InstallPackage installs one Godex package and activates its optional runtime.
 func (a *Agent) InstallPackage(source string) (tools.PackageEntry, error) {
-	item, err := pkgregistry.NewManager(a.cfg.StateDir, a.cfg.SkillsDir).Install(source)
+	return a.InstallPackageContext(context.Background(), source)
+}
+
+// InstallPackageContext installs one package and stops source preparation when ctx expires.
+func (a *Agent) InstallPackageContext(ctx context.Context, source string) (tools.PackageEntry, error) {
+	item, err := pkgregistry.NewManager(a.cfg.StateDir, a.cfg.SkillsDir).InstallContext(ctx, source)
 	if err != nil {
 		return tools.PackageEntry{}, err
 	}
-	if err := a.ActivateInstalledPackageRuntimes(context.Background()); err != nil {
+	if err := a.ActivateInstalledPackageRuntimes(ctx); err != nil {
 		return tools.PackageEntry{}, fmt.Errorf("package %s installed but runtime activation failed: %w", item.Name, err)
 	}
 	return packageEntryFromRegistry(item), nil

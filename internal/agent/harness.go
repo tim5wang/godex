@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -44,6 +44,10 @@ type HarnessTurnInput struct {
 	DrainInjections    func(context.Context, int) (conversation.InjectionDrain, error)
 	OnInjectionDrained func(conversation.InjectionDrain)
 	Model              string // optional per-turn model override
+	// ReasoningEffort is an optional per-turn reasoning-effort override
+	// forwarded to external engines (e.g. the ACP session config
+	// "reasoning_effort" option). Empty means the engine uses its default.
+	ReasoningEffort string
 	// Harness is the engine requested for this turn (roadmap 6.4). Empty
 	// means the default godex engine.
 	Harness string
@@ -225,6 +229,19 @@ func (r *harnessRouter) Register(id string, harness Harness) {
 		r.adapters = map[string]Harness{}
 	}
 	r.adapters[id] = harness
+}
+
+func (r *harnessRouter) Unregister(id string) {
+	r.mu.Lock()
+	delete(r.adapters, id)
+	r.mu.Unlock()
+	r.sessionMu.Lock()
+	for sessionID, harnessID := range r.last {
+		if harnessID == id {
+			delete(r.last, sessionID)
+		}
+	}
+	r.sessionMu.Unlock()
 }
 
 func (r *harnessRouter) adapter(id string) Harness {

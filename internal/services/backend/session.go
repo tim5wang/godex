@@ -1068,11 +1068,9 @@ func (s *Service) SetActiveSessionTools(sessionID string, allowedServers []strin
 	return nil
 }
 
-// ApplyTemplateToSession applies an agent template to an already-open session
-// as the capability baseline (M4 P1 convergence). Used by the Agent Step
-// Platform when a business key pins a template_id: the template's tool set is
-// applied first, then the key's override layer and the request's narrowing
-// filters run on top. The session must already be open (OpenSession first).
+// ApplyTemplateToSession applies and persists an agent template on an already-open
+// session. The next turn uses the template's capability baseline and harness.
+// The session must already be open (OpenSession first).
 func (s *Service) ApplyTemplateToSession(sessionID, templateID string) error {
 	session, err := s.requireSession(sessionID)
 	if err != nil {
@@ -1089,6 +1087,12 @@ func (s *Service) ApplyTemplateToSession(sessionID, templateID string) error {
 		return err
 	}
 	agentRef.ApplyTemplate(t)
+	session.mu.Lock()
+	if session.locator.Metadata == nil {
+		session.locator.Metadata = map[string]string{}
+	}
+	session.locator.Metadata["template"] = t.ID
+	session.mu.Unlock()
 	return nil
 }
 

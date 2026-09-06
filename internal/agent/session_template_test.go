@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/templates"
 )
 
@@ -555,5 +556,26 @@ func TestRegisteredHarnessIDs(t *testing.T) {
 		if !containsString(ids, want) {
 			t.Fatalf("RegisteredHarnessIDs = %v, missing %q", ids, want)
 		}
+	}
+}
+
+func TestApplyConfigReconcilesConfiguredACPHarnessIDs(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	first := *a.cfg
+	first.ACP.Agents = map[string]config.ACPAgentConfig{
+		"codex": {ID: "codex", Command: "/bin/true"},
+	}
+	a.ApplyConfig(&first, nil)
+	if got := strings.Join(a.RegisteredHarnessIDs(), ","); got != "acp:codex,godex" {
+		t.Fatalf("harness ids after add = %q", got)
+	}
+	second := first
+	second.ACP.Agents = map[string]config.ACPAgentConfig{
+		"pi": {ID: "pi", Command: "/bin/true"},
+	}
+	a.ApplyConfig(&second, nil)
+	if got := strings.Join(a.RegisteredHarnessIDs(), ","); got != "acp:pi,godex" {
+		t.Fatalf("harness ids after reconcile = %q", got)
 	}
 }

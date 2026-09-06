@@ -49,10 +49,15 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 	rootDir := e.cardWorkDir(card)
 	templateID := strings.TrimSpace(card.TemplateID)
 	executionID := "exec-" + card.ID + "-" + e.service.now().Format("20060102150405.000")
+	if templateID != "" {
+		if _, _, err := e.service.ValidateAgentTemplate(templateID); err != nil {
+			return "", "", fmt.Errorf("taskboard: agent template %q is unavailable: %w", templateID, err)
+		}
+	}
 
 	locator := SessionLocator{
-		Channel: taskboardSessionChannel,
-		Key:     "card-" + card.ID,
+		Channel:  taskboardSessionChannel,
+		Key:      "card-" + card.ID,
 		Metadata: map[string]string{},
 	}
 	if rootDir != "" {
@@ -67,6 +72,14 @@ func (e *TaskboardExecutor) Execute(ctx context.Context, card taskboard.Card) (s
 		return "", "", fmt.Errorf("taskboard: 打开执行会话失败: %w", err)
 	}
 	sessionID := opened.SessionID
+	// A card keeps one stable execution session. If PJM explicitly changes the
+	// template on a later dispatch, apply the new template to that reused
+	// session as well as persisting it in the locator.
+	if templateID != "" && strings.TrimSpace(opened.Locator.Metadata["template"]) != templateID {
+		if err := e.service.ApplyTemplateToSession(sessionID, templateID); err != nil {
+			return "", "", fmt.Errorf("taskboard: apply agent template %q: %w", templateID, err)
+		}
+	}
 
 	// The template pins an exact tool set; guarantee the taskboard tool stays
 	// callable on top of it so the agent can claim/execute/accept the card.

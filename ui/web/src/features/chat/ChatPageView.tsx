@@ -29,6 +29,7 @@ import { MessageFeedV2 } from "../../components/MessageFeedV2";
 import { FilesPanel } from "../files/FilesPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { PreviewPanel } from "../preview/PreviewPanel";
+import { BrowserPanel } from "../browser/BrowserPanel";
 import { ReviewMergeCenterPanel } from "./ReviewMergeCenterPanel";
 import { type TimelineFilterState, defaultTimelineFilters, appendTimelineEvent, mergeChronologicalFeedItems, pendingSendToFeedItem, mergeSubagentItems, subagentJobToFeedItem, collectSubagentJobs, buildContextStatusSummary, shortTurnId } from "../../lib/timelineUtils";
 import { compactWorkspaceName, noteContextMetadata, NoteContextBanner } from "./panels/NoteContextBanner";
@@ -246,6 +247,9 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     acpModelsLoading,
     acpModelMutation,
     selectedACPAgentModel,
+    acpReasoningEffortOptions,
+    acpReasoningEffortMutation,
+    selectedACPAgentReasoningEffort,
     unloadSkillMutation,
     forkMutation,
     refreshSubagentViews,
@@ -577,18 +581,30 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                   <Space style={{ width: "100%", justifyContent: "space-between" }} size={4} wrap>
                     <Space size={4}>
                       {acpAgentID ? (
-                        <Select
-                          size="small"
-                          value={selectedACPAgentModel || undefined}
-                          style={{ minWidth: 120, maxWidth: 200 }}
-                          loading={acpModelsLoading || acpModelMutation.isPending}
-                          disabled={acpModelMutation.isPending}
-                          placeholder={t("chat.acpModelPlaceholder")}
-                          onChange={(value) => acpModelMutation.mutate({ model: value || "" })}
-                          options={acpModelOptions}
-                          showSearch
-                          optionFilterProp="label"
-                        />
+                        <>
+                          <Select
+                            size="small"
+                            value={selectedACPAgentModel || undefined}
+                            style={{ minWidth: 120, maxWidth: 200 }}
+                            loading={acpModelsLoading || acpModelMutation.isPending}
+                            disabled={acpModelMutation.isPending}
+                            placeholder={t("chat.acpModelPlaceholder")}
+                            onChange={(value) => acpModelMutation.mutate({ model: value || "" })}
+                            options={acpModelOptions}
+                            showSearch
+                            optionFilterProp="label"
+                          />
+                          <Select
+                            size="small"
+                            value={selectedACPAgentReasoningEffort || undefined}
+                            style={{ minWidth: 84, maxWidth: 110 }}
+                            loading={acpModelsLoading || acpReasoningEffortMutation.isPending}
+                            disabled={acpReasoningEffortMutation.isPending}
+                            placeholder={t("chat.acpReasoningEffortPlaceholder")}
+                            onChange={(value) => acpReasoningEffortMutation.mutate({ effort: value || "" })}
+                            options={acpReasoningEffortOptions}
+                          />
+                        </>
                       ) : modelsQuery.data?.profiles.length ? (
                         <Select
                           size="small"
@@ -778,6 +794,11 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                 {mountedDockTabs.has("preview") ? (
                   <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "preview" ? "true" : "false"}>
                     <PreviewPanel workspaceDir={sessionWorkspaceDir} token={token} />
+                  </div>
+                ) : null}
+                {mountedDockTabs.has("browser") ? (
+                  <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "browser" ? "true" : "false"}>
+                    <BrowserPanel sessionId={openQuery.data?.session_id ?? ""} token={token} workspaceDir={sessionWorkspaceDir} />
                   </div>
                 ) : null}
                 {mountedDockTabs.has("status") ? (

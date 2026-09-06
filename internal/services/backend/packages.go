@@ -25,7 +25,7 @@ func (s *Service) ListPackages(ctx context.Context) ([]pkgregistry.Entry, error)
 // InstallPackage installs one Godex package and activates its optional runtime
 // in every currently open session. Future sessions activate it at startup.
 func (s *Service) InstallPackage(ctx context.Context, source string) (pkgregistry.Entry, error) {
-	entry, err := pkgregistry.NewManager(s.cfg.StateDir, s.cfg.SkillsDir).Install(source)
+	entry, err := pkgregistry.NewManager(s.cfg.StateDir, s.cfg.SkillsDir).InstallContext(ctx, source)
 	if err != nil {
 		return pkgregistry.Entry{}, err
 	}

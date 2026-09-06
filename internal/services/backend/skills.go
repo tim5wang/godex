@@ -127,7 +127,7 @@ func (s *Service) InstallSessionSkill(ctx context.Context, sessionID, source, na
 		}
 	}()
 
-	result, err := session.agent.InstallSkill(source, name)
+	result, err := session.agent.InstallSkillContext(ctx, source, name)
 	updatedAt := s.now()
 	release()
 	released = true

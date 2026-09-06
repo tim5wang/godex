@@ -16,6 +16,7 @@ func (s *Service) Models(ctx context.Context, sessionID string) (ModelsView, err
 	sessionProfileID := ""
 	reasoningEffort := ""
 	acpModel := ""
+	acpReasoningEffort := ""
 	if strings.TrimSpace(sessionID) != "" {
 		session, err := s.requireSession(sessionID)
 		if err != nil {
@@ -25,9 +26,43 @@ func (s *Service) Models(ctx context.Context, sessionID string) (ModelsView, err
 		sessionProfileID = strings.TrimSpace(session.modelProfileID)
 		reasoningEffort = normalizeSessionReasoningEffort(session.reasoningEffort)
 		acpModel = strings.TrimSpace(session.acpModel)
+		acpReasoningEffort = strings.TrimSpace(session.acpReasoningEffort)
 		session.mu.RUnlock()
 	}
-	return s.modelsView(sessionProfileID, reasoningEffort, acpModel), nil
+	return s.modelsView(sessionProfileID, reasoningEffort, acpModel, acpReasoningEffort), nil
+}
+
+// SetSessionACPAgentReasoningEffort persists the ACP reasoning-effort override
+// for a session. The value is a raw ACP config value (e.g. "high") that the
+// ACP harness forwards via session config "reasoning_effort". Empty clears it.
+func (s *Service) SetSessionACPAgentReasoningEffort(ctx context.Context, sessionID, effort string) (ModelsView, error) {
+	_ = ctx
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return ModelsView{}, err
+	}
+	effort = strings.TrimSpace(effort)
+	session.mu.Lock()
+	session.acpReasoningEffort = effort
+	sessionProfileID := strings.TrimSpace(session.modelProfileID)
+	reasoningEffort := normalizeSessionReasoningEffort(session.reasoningEffort)
+	acpModel := strings.TrimSpace(session.acpModel)
+	session.mu.Unlock()
+	now := s.now()
+	if err := s.persistSession(session, now); err != nil {
+		return ModelsView{}, err
+	}
+	session.events.Emit(events.Event{
+		SessionID: session.id,
+		Type:      events.EventSnapshotReady,
+		Timestamp: now,
+		Payload: events.SnapshotPayload{
+			UpdatedAt: now,
+			Running:   false,
+		},
+	})
+	_ = s.writeSessionTimeline(session)
+	return s.modelsView(sessionProfileID, reasoningEffort, acpModel, effort), nil
 }
 
 // SetSessionACPAgentModel persists the ACP model override for a session. The
@@ -44,6 +79,7 @@ func (s *Service) SetSessionACPAgentModel(ctx context.Context, sessionID, model 
 	session.acpModel = model
 	sessionProfileID := strings.TrimSpace(session.modelProfileID)
 	reasoningEffort := normalizeSessionReasoningEffort(session.reasoningEffort)
+	acpReasoningEffort := strings.TrimSpace(session.acpReasoningEffort)
 	session.mu.Unlock()
 	now := s.now()
 	if err := s.persistSession(session, now); err != nil {
@@ -59,7 +95,7 @@ func (s *Service) SetSessionACPAgentModel(ctx context.Context, sessionID, model 
 		},
 	})
 	_ = s.writeSessionTimeline(session)
-	return s.modelsView(sessionProfileID, reasoningEffort, model), nil
+	return s.modelsView(sessionProfileID, reasoningEffort, model, acpReasoningEffort), nil
 }
 
 // SetSessionModelProfile persists and applies a session-specific model profile.
@@ -88,6 +124,7 @@ func (s *Service) SetSessionModelProfileWithReasoning(ctx context.Context, sessi
 	session.reasoningEffort = reasoningEffort
 	sessionProfileID := strings.TrimSpace(session.modelProfileID)
 	acpModel := strings.TrimSpace(session.acpModel)
+	acpReasoningEffort := strings.TrimSpace(session.acpReasoningEffort)
 	session.mu.Unlock()
 	session.agent.ApplyModelProfile(appliedProfile)
 	now := s.now()
@@ -118,10 +155,10 @@ func (s *Service) SetSessionModelProfileWithReasoning(ctx context.Context, sessi
 		},
 	})
 	_ = s.writeSessionTimeline(session)
-	return s.modelsView(sessionProfileID, reasoningEffort, acpModel), nil
+	return s.modelsView(sessionProfileID, reasoningEffort, acpModel, acpReasoningEffort), nil
 }
 
-func (s *Service) modelsView(sessionProfileID, reasoningEffort, acpModel string) ModelsView {
+func (s *Service) modelsView(sessionProfileID, reasoningEffort, acpModel, acpReasoningEffort string) ModelsView {
 	cfg := s.cfg
 	if cfg == nil {
 		return ModelsView{}
@@ -129,6 +166,7 @@ func (s *Service) modelsView(sessionProfileID, reasoningEffort, acpModel string)
 	defaultID := strings.TrimSpace(cfg.DefaultProfileID)
 	reasoningEffort = normalizeSessionReasoningEffort(reasoningEffort)
 	acpModel = strings.TrimSpace(acpModel)
+	acpReasoningEffort = strings.TrimSpace(acpReasoningEffort)
 	profiles := make([]ModelProfile, 0, len(cfg.ModelProfiles))
 	for id := range cfg.ModelProfiles {
 		profile, ok := cfg.ModelProfileByID(id)
@@ -158,11 +196,12 @@ func (s *Service) modelsView(sessionProfileID, reasoningEffort, acpModel string)
 		return profiles[i].ID < profiles[j].ID
 	})
 	return ModelsView{
-		DefaultProfileID: defaultID,
-		SessionProfileID: strings.TrimSpace(sessionProfileID),
-		ReasoningEffort:  reasoningEffort,
-		AcpModel:         acpModel,
-		Profiles:         profiles,
+		DefaultProfileID:   defaultID,
+		SessionProfileID:   strings.TrimSpace(sessionProfileID),
+		ReasoningEffort:    reasoningEffort,
+		AcpModel:           acpModel,
+		AcpReasoningEffort: acpReasoningEffort,
+		Profiles:           profiles,
 	}
 }
 

@@ -200,7 +200,7 @@ func newSubagentTool(agent *Agent) tools.Tool {
 			},
 			"job_timeout_ms": map[string]interface{}{
 				"type":        "integer",
-				"description": "For action='start', optional per-job runtime timeout in milliseconds. Defaults to disabled and caps at tools.subagent.max_job_timeout_ms.",
+				"description": "For action='start', optional per-job runtime timeout in milliseconds. Defaults to 240000 for detected web-research tasks and disabled otherwise; caps at tools.subagent.max_job_timeout_ms.",
 			},
 			"wait": map[string]interface{}{
 				"type":        "boolean",
@@ -237,7 +237,7 @@ func newSubagentTool(agent *Agent) tools.Tool {
 						},
 						"job_timeout_ms": map[string]interface{}{
 							"type":        "integer",
-							"description": "Optional per-job runtime timeout in milliseconds. Defaults to disabled and caps at tools.subagent.max_job_timeout_ms.",
+							"description": "Optional per-job runtime timeout in milliseconds. Defaults to 240000 for detected web-research tasks and disabled otherwise; caps at tools.subagent.max_job_timeout_ms.",
 						},
 					},
 				},

@@ -6,12 +6,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
+	platformtooling "github.com/tim5wang/godex/internal/platform/tooling"
 )
 
 // TestACPToolFakeServer is not a real test: re-exec'd with GODEX_ACP_TOOL_HELPER=1
@@ -20,6 +26,15 @@ func TestACPToolFakeServer(t *testing.T) {
 	if os.Getenv("GODEX_ACP_TOOL_HELPER") != "1" {
 		return
 	}
+	mark := func(kind string) {
+		if path := os.Getenv("GODEX_ACP_TOOL_HELPER_LOG"); path != "" {
+			if file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+				fmt.Fprintln(file, kind)
+				_ = file.Close()
+			}
+		}
+	}
+	mark("start")
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var req struct {
@@ -35,6 +50,7 @@ func TestACPToolFakeServer(t *testing.T) {
 		case "initialize":
 			result = map[string]any{"protocolVersion": 1}
 		case "session/new":
+			mark("new")
 			// When GODEX_ACP_TOOL_HELPER_MODELS is set, advertise a model
 			// select option so DiscoverACPAgentModelOptions can read it back.
 			if os.Getenv("GODEX_ACP_TOOL_HELPER_MODELS") == "1" {
@@ -125,6 +141,165 @@ func TestACPToolFakeServer(t *testing.T) {
 		line, _ := json.Marshal(resp)
 		fmt.Fprintln(os.Stdout, string(line))
 	}
+	mark("stop")
+}
+
+func TestACPAgentToolSessionReuse(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("executable: %v", err)
+	}
+	logPath := t.TempDir() + "/acp.log"
+	agent := config.ACPAgentConfig{
+		ID:                "fake",
+		Command:           exe,
+		Args:              []string{"-test.run", "TestACPToolFakeServer"},
+		Env:               map[string]string{"GODEX_ACP_TOOL_HELPER": "1", "GODEX_ACP_TOOL_HELPER_LOG": logPath},
+		ReuseToolSessions: true,
+		TimeoutSeconds:    30,
+	}
+	tool := NewACPAgentTool(map[string]config.ACPAgentConfig{"fake": agent}, t.TempDir())
+	for i := 0; i < 2; i++ {
+		if _, err := tool.Execute(context.Background(), map[string]interface{}{"action": "run", "agent": "fake", "prompt": "hello"}); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read helper log: %v", err)
+	}
+	log := string(data)
+	if strings.Count(log, "start\n") != 1 || strings.Count(log, "new\n") != 1 {
+		t.Fatalf("expected one reused process/session, log=%q", log)
+	}
+}
+
+func TestACPAgentToolSessionReuseReconnectsAndExpiresIdle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("executable: %v", err)
+	}
+	logPath := t.TempDir() + "/acp.log"
+	workspace := t.TempDir()
+	agent := config.ACPAgentConfig{
+		ID:             "fake",
+		Command:        exe,
+		Args:           []string{"-test.run", "TestACPToolFakeServer"},
+		Env:            map[string]string{"GODEX_ACP_TOOL_HELPER": "1", "GODEX_ACP_TOOL_HELPER_LOG": logPath},
+		TimeoutSeconds: 1,
+	}
+	pool := newACPToolSessionPool()
+	first, err := pool.run(context.Background(), agent, workspace, "first", 0)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	entry := pool.entries[agent.ID+"\x00"+workspace]
+	entry.mu.Lock()
+	if entry.sess == nil {
+		entry.mu.Unlock()
+		t.Fatal("expected pooled session")
+	}
+	_ = entry.sess.Close()
+	entry.mu.Unlock()
+	second, err := pool.run(context.Background(), agent, workspace, "second", 0)
+	if err != nil {
+		t.Fatalf("reconnect run: %v", err)
+	}
+	if first.SessionID == "" || second.SessionID != first.SessionID {
+		t.Fatalf("session ids first=%q second=%q", first.SessionID, second.SessionID)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		entry.mu.Lock()
+		expired := entry.sess == nil
+		entry.mu.Unlock()
+		if expired {
+			data, _ := os.ReadFile(logPath)
+			if strings.Count(string(data), "start\n") != 2 {
+				t.Fatalf("expected reconnect to start second process, log=%q", data)
+			}
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("idle pooled session did not expire")
+}
+
+func TestACPAgentToolDoesNotReuseByDefault(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("executable: %v", err)
+	}
+	logPath := t.TempDir() + "/acp.log"
+	agent := config.ACPAgentConfig{
+		ID:      "fake",
+		Command: exe,
+		Args:    []string{"-test.run", "TestACPToolFakeServer"},
+		Env:     map[string]string{"GODEX_ACP_TOOL_HELPER": "1", "GODEX_ACP_TOOL_HELPER_LOG": logPath},
+	}
+	tool := NewACPAgentTool(map[string]config.ACPAgentConfig{"fake": agent}, t.TempDir())
+	for i := 0; i < 2; i++ {
+		if _, err := tool.Execute(context.Background(), map[string]interface{}{"action": "run", "agent": "fake", "prompt": "hello"}); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read helper log: %v", err)
+	}
+	if got := strings.Count(string(data), "start\n"); got != 2 {
+		t.Fatalf("process starts = %d, want 2; log=%q", got, data)
+	}
+}
+
+func TestACPProcessTreeKill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix process-group assertion")
+	}
+	pidPath := t.TempDir() + "/child.pid"
+	cmd := exec.Command("sh", "-c", `sleep 30 & child=$!; echo "$child" > "$GODEX_ACP_CHILD_PID"; wait`)
+	cmd.Env = append(os.Environ(), "GODEX_ACP_CHILD_PID="+pidPath)
+	if err := platformtooling.ConfigureCommandProcessGroup(cmd); err != nil {
+		t.Fatalf("configure process group: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var childPID int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(pidPath); err == nil {
+			childPID, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+			if childPID > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID == 0 {
+		platformtooling.KillCommandProcessGroup(cmd)
+		_ = cmd.Wait()
+		t.Fatal("child process pid was not recorded")
+	}
+	platformtooling.KillCommandProcessGroup(cmd)
+	_ = cmd.Wait()
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(childPID, 0); err == syscall.ESRCH {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("child process %d survived process-group kill", childPID)
 }
 
 func TestRunACPAgentExportedWrapper(t *testing.T) {
@@ -365,6 +540,39 @@ func TestDenyACPPermissionRequest(t *testing.T) {
 	}
 	if _, err := SelectACPPermissionOption(req(option("deny", acp.PermissionOptionKindRejectOnce)), "nope"); err == nil {
 		t.Fatal("expected error when selecting an option the agent did not offer")
+	}
+}
+
+func TestACPPermissionMappingAndScopedDecision(t *testing.T) {
+	title := "write config"
+	kind := acp.ToolKindEdit
+	req := ACPPermissionRequest{
+		ToolCall: acp.ToolCallUpdate{
+			ToolCallId: "call-1",
+			Title:      &title,
+			Kind:       &kind,
+			RawInput:   map[string]any{"command": "apply patch"},
+			Locations:  []acp.ToolCallLocation{{Path: "/repo/config.yaml"}},
+		},
+		Options: []acp.PermissionOption{
+			{OptionId: "once", Name: "once", Kind: acp.PermissionOptionKindAllowOnce},
+			{OptionId: "always", Name: "always", Kind: acp.PermissionOptionKindAllowAlways},
+			{OptionId: "deny", Name: "deny", Kind: acp.PermissionOptionKindRejectOnce},
+		},
+	}
+	mapped := ACPPermissionRequestToGodex("codex", "session-1", "turn-1", req)
+	if mapped.ToolName != "acp:codex:write config" || mapped.Command != "apply patch" || !mapped.Mutation {
+		t.Fatalf("mapped permission = %+v", mapped)
+	}
+	if len(mapped.Paths) != 1 || mapped.Paths[0] != "/repo/config.yaml" {
+		t.Fatalf("mapped paths = %v", mapped.Paths)
+	}
+	response, err := ACPPermissionResponseForDecision(req, PermissionAllow, PermissionGrantSession)
+	if err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	if response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "always" {
+		t.Fatalf("expected allow_always response, got %+v", response.Outcome)
 	}
 }
 

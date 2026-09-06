@@ -431,8 +431,18 @@ export function discoverProviderModels(token: string | null, id: string) {
 
 export type ACPModelOption = { value: string; name: string };
 
+export type ACPReasoningEffortOption = { value: string; name: string };
+
 export function discoverACPAgentModels(token: string | null, id: string) {
   return request<{ models: ACPModelOption[] }>(`/acp/agents/${encodeURIComponent(id)}/models`, { method: "GET" }, token);
+}
+
+export function discoverACPAgentConfigOptions(token: string | null, id: string) {
+  return request<{ models: ACPModelOption[]; reasoning_efforts: ACPReasoningEffortOption[] }>(
+    `/acp/agents/${encodeURIComponent(id)}/config-options`,
+    { method: "GET" },
+    token,
+  );
 }
 
 export function getChannelsStatus(token: string | null) {
@@ -461,6 +471,17 @@ export function setSessionACPAgentModel(token: string | null, sessionId: string,
     {
       method: "POST",
       body: JSON.stringify({ model: model || undefined }),
+    },
+    token,
+  );
+}
+
+export function setSessionACPAgentReasoningEffort(token: string | null, sessionId: string, effort: string) {
+  return request<ModelsView>(
+    `/sessions/${encodeURIComponent(sessionId)}/acp-reasoning-effort`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reasoning_effort: effort || undefined }),
     },
     token,
   );

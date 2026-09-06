@@ -99,7 +99,7 @@ type SkillRuntime interface {
 	GetSkill(name string) (skill.CatalogEntry, error)
 	ActiveSkills() ([]SkillActivation, error)
 	UnloadSkill(name string) (SkillActivation, error)
-	InstallSkill(source, name string) (SkillInstallResult, error)
+	InstallSkillContext(ctx context.Context, source, name string) (SkillInstallResult, error)
 	RemoveSkill(name string) (SkillRemoveResult, error)
 }
 
@@ -447,6 +447,7 @@ type skillToolArgs struct {
 	Offset         int      `json:"offset,omitempty"`
 	Limit          int      `json:"limit,omitempty"`
 	IncludeDetails bool     `json:"include_details,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 }
 
 func NewSkillTool(runtime SkillRuntime) Tool {
@@ -462,10 +463,13 @@ func NewSkillTool(runtime SkillRuntime) Tool {
 			"offset":          map[string]string{"type": "integer"},
 			"limit":           map[string]string{"type": "integer"},
 			"include_details": map[string]string{"type": "boolean"},
+			"timeout_seconds": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional timeout for the install action in seconds. Omit to use the global tool timeout.",
+			},
 		},
 		"required": []string{"action"},
 	}, nil), func(ctx context.Context, args skillToolArgs) (ToolResult, error) {
-		_ = ctx
 		switch args.Action {
 		case "list":
 			items, err := runtime.ListSkills()
@@ -498,7 +502,9 @@ func NewSkillTool(runtime SkillRuntime) Tool {
 			if strings.TrimSpace(args.Source) == "" {
 				return ToolResult{}, fmt.Errorf("missing source for install action")
 			}
-			result, err := runtime.InstallSkill(args.Source, args.Name)
+			installCtx, cancel := withOptionalTimeout(ctx, args.TimeoutSeconds)
+			defer cancel()
+			result, err := runtime.InstallSkillContext(installCtx, args.Source, args.Name)
 			if err != nil {
 				return ToolResult{}, err
 			}

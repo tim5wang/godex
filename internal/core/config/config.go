@@ -233,7 +233,8 @@ type ModelProfileConfig struct {
 
 // ACPConfig describes external ACP-speaking agents available to tools.
 type ACPConfig struct {
-	Agents map[string]ACPAgentConfig
+	Agents                 map[string]ACPAgentConfig
+	BridgeClientMCPServers bool `json:"bridge_client_mcp_servers,omitempty"`
 }
 
 // ACPAgentConfig starts one external Agent Client Protocol process over stdio.
@@ -247,6 +248,19 @@ type ACPAgentConfig struct {
 	// Model is an optional session config override applied after session/new
 	// (config id "model"), discovered from the agent's configOptions.
 	Model string `json:"model,omitempty"`
+	// ReasoningEffort is an optional session config override applied after
+	// session/new (config id "reasoning_effort"), discovered from the agent's
+	// configOptions (dsh advertises off/low/high/max, default high). Empty
+	// leaves the agent's own default in effect.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// ForwardHistoryTurns controls how many prior user/assistant turns are
+	// supplied when an external conversation is created or cannot be resumed.
+	ForwardHistoryTurns int `json:"forward_history_turns,omitempty"`
+	// PermissionMode controls external session/request_permission decisions:
+	// deny (default), policy, or interactive.
+	PermissionMode string `json:"permission_mode,omitempty"`
+	// ReuseToolSessions keeps acp_agent tool sessions alive across calls.
+	ReuseToolSessions bool `json:"reuse_tool_sessions,omitempty"`
 	// McpServers lists stdio MCP servers handed to the agent via the standard
 	// session/new (and session/load) mcpServers field. The external agent
 	// connects to these itself; this is how godex can expose local tools to

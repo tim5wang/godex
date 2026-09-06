@@ -27,6 +27,7 @@ func NewBrowserService(cfg config.BrowserConfig, tempDir string, storage ...conf
 	if len(storage) > 0 {
 		service.storage = storage[0]
 	}
+	service.framePumps = make(map[string]*framePump)
 	service.ApplyConfig(cfg, tempDir)
 	return service
 }

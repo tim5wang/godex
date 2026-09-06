@@ -103,6 +103,9 @@ GoDex 作为 ACP agent 提供以下能力：
 - **流式输出**：文本回复实时流式展示
 - **会话管理**：支持 session load / restore
 - **slash commands**：直接在对话中执行 `/doctor`、`/approve` 等命令
+- **客户端 MCP server 审计/桥接**：默认只把 VS Code 提议的 MCP server 记录到会话 metadata；在 GoDex `godex.yaml` 中显式设置 `acp.bridge_client_mcp_servers: true` 后，可把 stdio MCP 工具临时注册到该会话。注册不写入全局 `mcp.json`，启动失败只产生 warning。
+
+> 安全提示：客户端 MCP 桥接会启动客户端提供的本机命令，必须只对可信 VS Code 配置开启。HTTP/SSE/ACP transport 当前不会被此开关桥接。
 
 ## 环境变量
 

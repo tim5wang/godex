@@ -127,7 +127,7 @@ func newTaskboardTool(ledger toolLedger, executor Executor) tools.Tool {
 			"title":          map[string]string{"type": "string", "description": "Card title (create / update)"},
 			"description":    map[string]string{"type": "string", "description": "Card description (create / update)"},
 			"prompt":         map[string]string{"type": "string", "description": "Execution prompt for the isolated session that will run this task (create / update)"},
-			"template_id":    map[string]string{"type": "string", "description": "Agent template id for the execution session (create / update; empty = default)"},
+			"template_id":    map[string]string{"type": "string", "description": "Agent template id for the execution session (create / update / dispatch; dispatch persists the choice on the card before opening the session; empty = card/default)"},
 			"blocked":        map[string]any{"type": "boolean", "description": "Blocked flag (update)"},
 			"to":             map[string]string{"type": "string", "description": "Target status (move): todo|in_progress|in_review"},
 			"text":           map[string]string{"type": "string", "description": "Comment text (comment_add), single checklist item (checklist add), recovery message (recover), or batch via checklist array"},

@@ -23,4 +23,20 @@ func registerACPAgentRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"models": models})
 	})))
+	// Full session config discovery (models + reasoning effort) for ACP
+	// template sessions. Discovery spawns the agent process, so consumers
+	// should cache the response (the chat page keeps it with a long staleTime).
+	mux.Handle("GET /acp/agents/{id}/config-options", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agent, err := service.GetACPAgent(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		opts, err := service.DiscoverACPAgentConfigOptions(r.Context(), agent)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, opts)
+	})))
 }

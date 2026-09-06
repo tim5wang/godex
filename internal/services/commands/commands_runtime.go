@@ -75,6 +75,16 @@ func modelHelpText() string {
 	}, "\n")
 }
 
+func (s *Service) executeAgentTemplate(a *agent.Agent, ctx context.Context, cmd Command) (Result, error) {
+	s.mu.RLock()
+	handler := s.agentTemplate
+	s.mu.RUnlock()
+	if handler == nil {
+		return Result{Name: "agent", Output: "Agent template runtime is unavailable in this process."}, nil
+	}
+	return handler(ctx, a, cmd)
+}
+
 func (s *Service) executeClear(a *agent.Agent, ctx context.Context, cmd Command) (Result, error) {
 	s.mu.RLock()
 	handler := s.clear

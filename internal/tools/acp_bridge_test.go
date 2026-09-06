@@ -127,6 +127,20 @@ func TestACPTerminalManagerLifecycle(t *testing.T) {
 	}
 }
 
+func TestACPTerminalManagerRejectsCWDOutsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	mgr := newACPTerminalManager(workspace)
+	defer mgr.Close()
+	_, err := mgr.CreateTerminal(context.Background(), acp.CreateTerminalRequest{
+		Command: "pwd",
+		Cwd:     &outside,
+	})
+	if err == nil || !strings.Contains(err.Error(), "escapes workspace") {
+		t.Fatalf("expected workspace escape error, got %v", err)
+	}
+}
+
 func TestACPTerminalManagerKill(t *testing.T) {
 	workspace := t.TempDir()
 	mgr := newACPTerminalManager(workspace)

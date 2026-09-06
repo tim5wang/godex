@@ -43,6 +43,43 @@ func TestBaseSchemaFieldsHaveStoredValueSetter(t *testing.T) {
 	}
 }
 
+func TestACPBridgeClientMCPServersValueRoundTrip(t *testing.T) {
+	file := ConfigFile{}
+	if err := setACPStoredValue(&file, "acp.bridge_client_mcp_servers", true); err != nil {
+		t.Fatalf("set ACP bridge value: %v", err)
+	}
+	if !file.ACP.BridgeClientMCPServers {
+		t.Fatal("expected ACP bridge setting stored")
+	}
+	if got := storedValues(file)["acp.bridge_client_mcp_servers"]; got != true {
+		t.Fatalf("stored bridge value = %#v", got)
+	}
+}
+
+func TestACPAgentMCPServerSecretsAreMaskedAndPreserved(t *testing.T) {
+	file := ConfigFile{ACP: ACPSection{Agents: map[string]ACPAgentSection{
+		"codex": {
+			Command: "codex",
+			McpServers: []ACPMcpServerSection{{
+				Name: "remote", Command: "mcp-remote", Env: map[string]string{"API_TOKEN": "secret", "MODE": "safe"},
+			}},
+		},
+	}}}
+	masked := storedValues(file)["acp.agents"].(map[string]ACPAgentSection)
+	if got := masked["codex"].McpServers[0].Env["API_TOKEN"]; got != "********" {
+		t.Fatalf("masked MCP token = %q", got)
+	}
+	maskedAgent := masked["codex"]
+	maskedAgent.McpServers[0].Env["MODE"] = "fast"
+	if err := setACPStoredValue(&file, "acp.agents", map[string]ACPAgentSection{"codex": maskedAgent}); err != nil {
+		t.Fatalf("save masked ACP agent: %v", err)
+	}
+	got := file.ACP.Agents["codex"].McpServers[0].Env
+	if got["API_TOKEN"] != "secret" || got["MODE"] != "fast" {
+		t.Fatalf("saved MCP env = %#v", got)
+	}
+}
+
 func TestSchemaStoredAndEffectiveValueRoundTrip(t *testing.T) {
 	want := map[string]any{
 		"security.screener.enabled":         true,

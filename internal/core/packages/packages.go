@@ -1,6 +1,7 @@
 package packages
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -205,11 +206,16 @@ func (m *Manager) List() ([]Entry, error) {
 }
 
 func (m *Manager) Install(source string) (Entry, error) {
+	return m.InstallContext(context.Background(), source)
+}
+
+// InstallContext installs a package and cancels remote source preparation when ctx expires.
+func (m *Manager) InstallContext(ctx context.Context, source string) (Entry, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return Entry{}, fmt.Errorf("missing package source")
 	}
-	stage, cleanup, err := prepareSource(source)
+	stage, cleanup, err := prepareSource(ctx, source)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -1096,7 +1102,7 @@ func NewSmokeRunID(packageName, smokeName string, now time.Time) string {
 	return newSmokeRunID(packageName, smokeName, now)
 }
 
-func prepareSource(source string) (string, func(), error) {
+func prepareSource(ctx context.Context, source string) (string, func(), error) {
 	if info, err := os.Stat(source); err == nil && info.IsDir() {
 		return source, func() {}, nil
 	}
@@ -1109,7 +1115,15 @@ func prepareSource(source string) (string, func(), error) {
 	if isOwnerRepo(source) {
 		cloneURL = "https://github.com/" + source + ".git"
 	}
-	cmd := exec.Command("git", "clone", "--depth", "1", cloneURL, tmp)
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", cloneURL, tmp)
+	if err := tooling.ConfigureCommandProcessGroup(cmd); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("configure package clone process: %w", err)
+	}
+	cmd.Cancel = func() error {
+		tooling.KillCommandProcessGroup(cmd)
+		return nil
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		cleanup()
 		return "", func() {}, fmt.Errorf("clone package: %w: %s", err, strings.TrimSpace(string(out)))

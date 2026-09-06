@@ -50,6 +50,19 @@ func looksLikeWebResearchPrompt(prompt string) bool {
 	return containsAny(query, "网页", "网站", "网上", "联网", "搜索", "检索", "链接", "来源", "source", "search", "web", "online", "internet", "url", "link")
 }
 
+const boundedWebResearchTimeoutMS = 4 * 60 * 1000
+
+func defaultWebResearchJobTimeout(requested int, webResearch bool) int {
+	if requested > 0 || !webResearch {
+		return requested
+	}
+	return boundedWebResearchTimeoutMS
+}
+
+func appendBoundedWebResearchInstructions(prompt string) string {
+	return strings.TrimSpace(prompt) + "\n\nBounded web-research requirements: make at most 2 web_search calls and at most 3 web_fetch calls. If search backends fail or a site is blocked/JavaScript-only, switch immediately to known official URLs, public JSON APIs, GitHub/registry metadata, or local evidence. Do not retry the same failed query or URL. Stop once evidence is sufficient. Always finish with a concise handoff containing findings and source URLs. If the task specifies an output file, checkpoint it after each completed section and cite its path in the final handoff."
+}
+
 func appendRequiredSubagentTools(base, bundles, explicitTools, writeScope []string) []string {
 	out := append([]string{}, base...)
 	for _, bundle := range bundles {

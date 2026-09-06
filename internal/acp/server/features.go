@@ -49,6 +49,10 @@ type sessionListFeatureProvider interface {
 	ListSessions(context.Context) ([]acp.SessionInfo, error)
 }
 
+type sessionMCPBridgeCloseProvider interface {
+	CloseACPMCPBridge(context.Context, string)
+}
+
 // BackendFeatures adapts *backend.Service into ACP session features. Session
 // mode methods are optional on the wrapped backend: backends that implement
 // runtime mode switching (backend.Service does) are used; others degrade to
@@ -74,6 +78,10 @@ type backendSessionLister interface {
 	ListSessions(context.Context, backend.SessionListFilter) ([]backend.ListedSession, error)
 }
 
+type backendMCPBridgeCloser interface {
+	CloseACPMCPBridge(context.Context, string)
+}
+
 func (f BackendFeatures) EnsureSession(ctx context.Context, acpSessionID string) (string, error) {
 	if f.Backend == nil {
 		return "", nil
@@ -97,6 +105,12 @@ func (f BackendFeatures) SetSessionModelProfile(ctx context.Context, sessionID, 
 		return backend.ModelsView{}, nil
 	}
 	return f.Backend.SetSessionModelProfile(ctx, sessionID, profileID)
+}
+
+func (f BackendFeatures) CloseACPMCPBridge(ctx context.Context, sessionID string) {
+	if closer, ok := f.Backend.(backendMCPBridgeCloser); ok && closer != nil {
+		closer.CloseACPMCPBridge(ctx, sessionID)
+	}
 }
 
 func (f BackendFeatures) AvailableCommands(context.Context, string) []commands.CommandMetadata {

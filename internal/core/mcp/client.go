@@ -126,6 +126,94 @@ type Manager struct {
 	// clientIdleTTL) so a stdio daemon stays warm across tool calls instead
 	// of being spawned and torn down per request.
 	clients map[string]*clientEntry
+	// transientServers contains process-local server definitions supplied by
+	// an integration such as ACP. They are deliberately never written to the
+	// user's MCP config file.
+	transientServers map[string]ServerConfig
+}
+
+// UpsertTransientServer registers a process-local MCP server. The server is
+// available to the normal discovery/call paths but is never persisted.
+func (m *Manager) UpsertTransientServer(server ServerConfig) error {
+	if err := validateServer(server); err != nil {
+		return err
+	}
+	server.Name = strings.TrimSpace(server.Name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.transientServers == nil {
+		m.transientServers = map[string]ServerConfig{}
+	}
+	if prior, ok := m.transientServers[server.Name]; !ok || serverSignature(prior) != serverSignature(server) {
+		m.invalidateServerLocked(server.Name)
+	}
+	m.transientServers[server.Name] = cloneServerConfig(server)
+	return nil
+}
+
+// DeleteTransientServer removes a process-local MCP server and closes its
+// cached client. Missing names are ignored.
+func (m *Manager) DeleteTransientServer(name string) {
+	name = strings.TrimSpace(name)
+	m.mu.Lock()
+	delete(m.transientServers, name)
+	m.invalidateServerLocked(name)
+	m.mu.Unlock()
+}
+
+// DeleteTransientServers removes every process-local server whose name has
+// prefix and returns the removed names for owner cleanup.
+func (m *Manager) DeleteTransientServers(prefix string) []string {
+	m.mu.Lock()
+	var removed []string
+	for name := range m.transientServers {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		removed = append(removed, name)
+		delete(m.transientServers, name)
+		m.invalidateServerLocked(name)
+	}
+	m.mu.Unlock()
+	sort.Strings(removed)
+	return removed
+}
+
+func cloneServerConfig(server ServerConfig) ServerConfig {
+	server.Args = append([]string(nil), server.Args...)
+	server.Env = cloneStringMap(server.Env)
+	server.Headers = cloneStringMap(server.Headers)
+	return server
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func (m *Manager) serverByName(name string) (ServerConfig, bool, error) {
+	m.mu.RLock()
+	server, ok := m.transientServers[name]
+	m.mu.RUnlock()
+	if ok {
+		return cloneServerConfig(server), true, nil
+	}
+	cfg, err := LoadConfig(m.configPath)
+	if err != nil {
+		return ServerConfig{}, false, err
+	}
+	for _, server := range cfg.Servers {
+		if server.Name == name {
+			return server, true, nil
+		}
+	}
+	return ServerConfig{}, false, nil
 }
 
 // NewManager creates a new read-only MCP manager.
@@ -437,14 +525,11 @@ func clientFor(ctx context.Context, server ServerConfig) (rpcClient, error) {
 // ListServerTools lists the tools of one MCP server by name (stdio or
 // streamable-http).
 func (m *Manager) ListServerTools(ctx context.Context, serverName string) ([]Tool, error) {
-	cfg, err := LoadConfig(m.configPath)
+	server, ok, err := m.serverByName(serverName)
 	if err != nil {
 		return nil, err
 	}
-	for _, server := range cfg.Servers {
-		if server.Name != serverName {
-			continue
-		}
+	if ok {
 		return m.listServerTools(ctx, server)
 	}
 	return nil, fmt.Errorf("mcp server not found: %s", serverName)
@@ -455,14 +540,11 @@ func (m *Manager) ListServerTools(ctx context.Context, serverName string) ([]Too
 // preserved raw. The underlying client is reused across calls (see
 // clientIdleTTL) so a stdio daemon stays warm instead of cold-starting per call.
 func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (*CallResult, error) {
-	cfg, err := LoadConfig(m.configPath)
+	server, ok, err := m.serverByName(serverName)
 	if err != nil {
 		return nil, err
 	}
-	for _, server := range cfg.Servers {
-		if server.Name != serverName {
-			continue
-		}
+	if ok {
 		return withClient(m, ctx, server, func(c rpcClient) (*CallResult, error) {
 			result, err := c.callTool(ctx, toolName, args)
 			if err != nil {

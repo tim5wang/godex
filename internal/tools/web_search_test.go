@@ -3,11 +3,13 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
 )
@@ -352,9 +354,11 @@ func TestProviderOrderLightpandaFirst(t *testing.T) {
 type mockSearchProvider struct {
 	results []SearchResult
 	err     error
+	calls   int
 }
 
 func (m *mockSearchProvider) BrowserSearch(ctx context.Context, sessionID, query string, maxResults int) ([]SearchResult, error) {
+	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -414,6 +418,55 @@ func TestSearchFallbackFromLightpanda(t *testing.T) {
 	}
 	if resp.Provider != "duckduckgo" {
 		t.Fatalf("expected provider duckduckgo after fallback, got %q", resp.Provider)
+	}
+	if lightpandaErr.calls != 1 {
+		t.Fatalf("provider failure should not be retried with query variants, got %d calls", lightpandaErr.calls)
+	}
+	if _, err := svc.Search(ctx, "different query", 5, ""); err != nil {
+		t.Fatalf("search should skip cooling-down provider: %v", err)
+	}
+	if lightpandaErr.calls != 1 {
+		t.Fatalf("cooling-down provider should be skipped, got %d calls", lightpandaErr.calls)
+	}
+}
+
+func TestWebSearchFailureReturnsBoundedFallbackGuidance(t *testing.T) {
+	failing := &mockSearchProvider{err: fmt.Errorf("signal: killed")}
+	svc := NewWebSearchService(config.WebSearchConfig{
+		Enabled:       true,
+		ProviderOrder: []string{"lightpanda"},
+	})
+	svc.SetLightpandaSearcher(failing)
+	svc.endpoints.DuckDuckGo = "http://127.0.0.1:1"
+
+	_, err := svc.Search(context.Background(), "current browser docs", 5, "")
+	if err == nil {
+		t.Fatal("expected provider failure")
+	}
+	if failing.calls != 1 {
+		t.Fatalf("expected one provider attempt, got %d", failing.calls)
+	}
+	if got := err.Error(); !strings.Contains(got, "do not repeat") || !strings.Contains(got, "web_fetch") || !strings.Contains(got, "local/offline") {
+		t.Fatalf("expected actionable fallback guidance, got %q", got)
+	}
+}
+
+func TestWebSearchCancellationDoesNotTripProviderCooldown(t *testing.T) {
+	failing := &mockSearchProvider{err: context.Canceled}
+	svc := NewWebSearchService(config.WebSearchConfig{
+		Enabled:       true,
+		ProviderOrder: []string{"lightpanda"},
+	})
+	svc.SetLightpandaSearcher(failing)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.Search(ctx, "canceled query", 5, "")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if svc.providerIsCoolingDown("lightpanda", time.Now()) {
+		t.Fatal("request cancellation must not mark the provider unavailable")
 	}
 }
 

@@ -289,16 +289,48 @@ func acpAgentsFromConfigFile(file ConfigFile) map[string]ACPAgentConfig {
 			env[key] = value
 		}
 		agents[id] = ACPAgentConfig{
-			ID:             id,
-			Command:        strings.TrimSpace(item.Command),
-			Args:           append([]string{}, item.Args...),
-			Env:            env,
-			TimeoutSeconds: item.TimeoutSeconds,
-			Description:    strings.TrimSpace(item.Description),
-			Model:          strings.TrimSpace(item.Model),
+			ID:                  id,
+			Command:             strings.TrimSpace(item.Command),
+			Args:                append([]string{}, item.Args...),
+			Env:                 env,
+			TimeoutSeconds:      item.TimeoutSeconds,
+			Description:         strings.TrimSpace(item.Description),
+			Model:               strings.TrimSpace(item.Model),
+			ForwardHistoryTurns: max(item.ForwardHistoryTurns, 0),
+			PermissionMode:      normalizeACPPermissionMode(item.PermissionMode),
+			ReuseToolSessions:   item.ReuseToolSessions,
+			McpServers:          acpMcpServersFromSections(item.McpServers),
 		}
 	}
 	return agents
+}
+
+func normalizeACPPermissionMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "policy", "interactive":
+		return mode
+	default:
+		return "deny"
+	}
+}
+
+func acpMcpServersFromSections(items []ACPMcpServerSection) []ACPMcpServer {
+	out := make([]ACPMcpServer, 0, len(items))
+	for _, item := range items {
+		command := strings.TrimSpace(item.Command)
+		if command == "" {
+			continue
+		}
+		env := make(map[string]string, len(item.Env))
+		for key, value := range item.Env {
+			if key = strings.TrimSpace(key); key != "" {
+				env[key] = value
+			}
+		}
+		out = append(out, ACPMcpServer{Name: strings.TrimSpace(item.Name), Command: command, Args: append([]string{}, item.Args...), Env: env})
+	}
+	return out
 }
 
 func uniqueNonEmptyStrings(values []string) []string {
@@ -361,6 +393,15 @@ func maskACPAgentSecrets(agents map[string]ACPAgentConfig) map[string]ACPAgentCo
 				env[key] = value
 			}
 			agent.Env = env
+		}
+		if len(agent.McpServers) > 0 {
+			servers := make([]ACPMcpServer, len(agent.McpServers))
+			for i, server := range agent.McpServers {
+				server.Args = append([]string{}, server.Args...)
+				server.Env = maskSecretEnv(server.Env)
+				servers[i] = server
+			}
+			agent.McpServers = servers
 		}
 		out[id] = agent
 	}
@@ -572,7 +613,30 @@ func maskACPAgentSections(agents map[string]ACPAgentSection) map[string]ACPAgent
 			}
 			agent.Env = env
 		}
+		if len(agent.McpServers) > 0 {
+			servers := make([]ACPMcpServerSection, len(agent.McpServers))
+			for i, server := range agent.McpServers {
+				server.Args = append([]string{}, server.Args...)
+				server.Env = maskSecretEnv(server.Env)
+				servers[i] = server
+			}
+			agent.McpServers = servers
+		}
 		out[id] = agent
+	}
+	return out
+}
+
+func maskSecretEnv(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		if looksSecretKey(key) && strings.TrimSpace(value) != "" {
+			value = "********"
+		}
+		out[key] = value
 	}
 	return out
 }

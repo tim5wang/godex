@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,5 +80,21 @@ func TestBashToolAllowsDevRepairDiagnosticCommands(t *testing.T) {
 	}
 	if strings.TrimSpace(output) == "" {
 		t.Fatalf("expected non-empty output")
+	}
+}
+
+func TestBashToolHonorsTimeoutSeconds(t *testing.T) {
+	tool := NewBashTool(t.TempDir())
+	ctx := WithSessionContext(context.Background(), automation.SessionContext{SecurityProfile: SecurityProfileDevRepair})
+	_, err := tool.Execute(ctx, map[string]interface{}{
+		"command":                  "sleep 5",
+		"timeout_seconds":          1,
+		"_allow_unlisted_commands": true,
+	})
+	if err == nil {
+		t.Fatal("expected bash timeout")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("expected deadline or killed process, got %v", err)
 	}
 }

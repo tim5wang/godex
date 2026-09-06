@@ -35,6 +35,7 @@ const (
 	EventSessionRepairFailed      EventType = "session_repair_failed"
 	EventSnapshotReady            EventType = "snapshot_ready"
 	EventTurnCompleted            EventType = "turn_completed"
+	EventBrowserView              EventType = "browser.view"
 )
 
 // Event is the shared runtime event envelope for all frontends.
@@ -44,6 +45,14 @@ type Event struct {
 	Type      EventType `json:"type"`
 	Timestamp time.Time `json:"timestamp"`
 	Payload   any       `json:"payload,omitempty"`
+}
+
+// BrowserViewPayload reports the page an agent's browser tool just operated
+// on, so frontends can auto-activate/follow the browser panel.
+type BrowserViewPayload struct {
+	SessionID string `json:"session_id,omitempty"`
+	PageID    string `json:"page_id,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 // MessagePayload carries one accepted inbound message.

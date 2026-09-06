@@ -24,23 +24,23 @@ import (
 )
 
 const (
-	manifestFileName                  = "manifest.json"
-	stateFileName                     = "state.json"
-	timelineFileName                  = "timeline.json"
-	eventJournalFileName              = "events.jsonl"
-	turnsFileName                     = "turns.json"
-	turnQueueFileName                 = "turn_queue.json"
-	sessionGraphFileName              = "graph.json"
-	checkpointPointerName             = "checkpoint.json"
-	checkpointsDirName                = "checkpoints"
-	securityAuditFileName             = "security/audit.jsonl"
-	attachmentsDir                    = "attachments"
+	manifestFileName      = "manifest.json"
+	stateFileName         = "state.json"
+	timelineFileName      = "timeline.json"
+	eventJournalFileName  = "events.jsonl"
+	turnsFileName         = "turns.json"
+	turnQueueFileName     = "turn_queue.json"
+	sessionGraphFileName  = "graph.json"
+	checkpointPointerName = "checkpoint.json"
+	checkpointsDirName    = "checkpoints"
+	securityAuditFileName = "security/audit.jsonl"
+	attachmentsDir        = "attachments"
 	// MaxTimelineEvents bounds the in-memory timeline recorder (and the root
 	// timeline file snapshot). ACP/tool-heavy turns emit dozens of events per
 	// turn, so a small window evicts earlier turns' assistant_text/node events
 	// and re-entry loses the ordering between text and tool logs. 1000 keeps
 	// several multi-tool turns while staying cheap to persist on every emit.
-	MaxTimelineEvents               = 1000
+	MaxTimelineEvents                 = 1000
 	snapshotTimelineLimit             = 200
 	snapshotTurnLimit                 = 20
 	persistedTurnLimit                = 200
@@ -80,6 +80,7 @@ type SessionManifest struct {
 	ModelProfileID         string              `json:"model_profile_id,omitempty"`
 	ReasoningEffort        string              `json:"reasoning_effort,omitempty"`
 	AcpModel               string              `json:"acp_model,omitempty"`
+	AcpReasoningEffort     string              `json:"acp_reasoning_effort,omitempty"`
 	AcpSessionID           string              `json:"acp_session_id,omitempty"`
 	LastAcpSessionID       string              `json:"last_acp_session_id,omitempty"`
 	ParentSessionID        string              `json:"parent_session_id,omitempty"`
@@ -186,8 +187,12 @@ type ModelsView struct {
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
 	// AcpModel is the session's ACP model override (raw ACP model id) when the
 	// session routes turns to an external ACP agent; empty otherwise.
-	AcpModel string         `json:"acp_model,omitempty"`
-	Profiles []ModelProfile `json:"profiles"`
+	AcpModel string `json:"acp_model,omitempty"`
+	// AcpReasoningEffort is the session's ACP reasoning-effort override (raw
+	// ACP config value, e.g. "high") when the session routes turns to an
+	// external ACP agent; empty otherwise.
+	AcpReasoningEffort string `json:"acp_reasoning_effort,omitempty"`
+	Profiles           []ModelProfile `json:"profiles"`
 }
 
 // SubmitResult summarizes one submitted user turn.
@@ -230,6 +235,7 @@ type Snapshot struct {
 	Identity                agent.AgentIdentity       `json:"identity,omitempty"`
 	ModelProfileID          string                    `json:"model_profile_id,omitempty"`
 	ReasoningEffort         string                    `json:"reasoning_effort,omitempty"`
+	HarnessIDs              []string                  `json:"harness_ids,omitempty"`
 	QueuedTurns             []QueuedTurn              `json:"queued_turns,omitempty"`
 	UpdatedAt               time.Time                 `json:"updated_at"`
 }
@@ -361,6 +367,7 @@ type sessionState struct {
 	modelProfileID         string
 	reasoningEffort        string
 	acpModel               string
+	acpReasoningEffort     string
 	acpSessionID           string
 	lastAcpSessionID       string
 	parentSessionID        string
@@ -464,6 +471,13 @@ func NewService(cfg *config.Config, shared *agent.SharedDependencies, commandSer
 	service.autoRepairSessions()
 	service.recoverQueuedSessions()
 	service.wireSlashCommandHandlers()
+	// Wire browser.view notifications into the session event stream so the Web
+	// UI can auto-activate/follow the Browser panel when the agent drives the
+	// browser tool. The notifier survives ApplyConfig rebuilds (the shared
+	// dependency set re-applies it to the fresh BrowserService).
+	if b := service.BrowserService(); b != nil {
+		shared.SetBrowserViewNotifier(service.emitBrowserView)
+	}
 	// One-time startup sweep: flip any longtask run records left "running"
 	// by a crashed process to "interrupted" so they can be resumed via
 	// --resume-run-id. Idempotent (guarded by sync.Once inside shared).
@@ -480,6 +494,34 @@ func (s *Service) MCPManager() *mcp.Manager {
 		return nil
 	}
 	return s.shared.MCPManager()
+}
+
+// BrowserService returns the workspace-scoped browser automation service used
+// by all sessions (frame streams, browser.view events), or nil if unavailable.
+func (s *Service) BrowserService() *tools.BrowserService {
+	if s == nil || s.shared == nil {
+		return nil
+	}
+	return s.shared.BrowserService()
+}
+
+// emitBrowserView routes a browser.view notification into the owning session's
+// event stream. Unknown sessions are ignored (the browser tool may run from a
+// context that is not a backend session, e.g. TUI).
+func (s *Service) emitBrowserView(sessionID, pageID, url string) {
+	if s == nil || sessionID == "" {
+		return
+	}
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return
+	}
+	session.events.Emit(events.Event{
+		SessionID: sessionID,
+		Type:      events.EventBrowserView,
+		Timestamp: time.Now(),
+		Payload:   events.BrowserViewPayload{SessionID: sessionID, PageID: pageID, URL: url},
+	})
 }
 
 // PluginManager exposes the shared plugin kernel for HTTP assembly (plugin

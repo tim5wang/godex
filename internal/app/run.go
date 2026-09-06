@@ -191,10 +191,12 @@ func (r *Runner) runAsk(ctx context.Context, args []string) error {
 	var useStdin bool
 	var profile string
 	var skillsCSV string
+	var harness string
 	fs.StringVar(&sessionSpec, "session", "", "existing session key or channel:key")
 	fs.BoolVar(&useStdin, "stdin", false, "read the prompt from stdin")
 	fs.StringVar(&profile, "profile", "", "agent profile for this prompt: general or coding")
 	fs.StringVar(&skillsCSV, "skills", "", "comma-separated installed skills to load for this new session")
+	fs.StringVar(&harness, "harness", "", "agent engine for this prompt, for example godex or acp:pi")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -234,6 +236,12 @@ func (r *Runner) runAsk(ctx context.Context, args []string) error {
 
 	envelope := message.NewCLIEnvelope(opened.SessionID, r.Cfg.LeadName, prompt, r.Now())
 	applyEnvelopeAgentProfile(&envelope, profile)
+	if selected := strings.TrimSpace(harness); selected != "" {
+		if envelope.Metadata == nil {
+			envelope.Metadata = map[string]string{}
+		}
+		envelope.Metadata["harness"] = selected
+	}
 	_, err = r.Backend.Submit(ctx, opened.SessionID, envelope)
 	if err != nil {
 		return err
@@ -304,8 +312,11 @@ func (r *Runner) runACPServer(ctx context.Context, args []string) error {
 
 	agent := &acpserver.Agent{
 		AgentInfo: acp.Implementation{Name: "godex", Version: version.Current().Version},
-		Handler:   acpserver.BackendPromptHandlerWithOptions(r.Backend, acpserver.BackendPromptOptions{AgentProfile: profile}),
-		Features:  acpserver.BackendFeatures{Backend: r.Backend},
+		Handler: acpserver.BackendPromptHandlerWithOptions(r.Backend, acpserver.BackendPromptOptions{
+			AgentProfile:           profile,
+			BridgeClientMCPServers: cfg.ACP.BridgeClientMCPServers,
+		}),
+		Features: acpserver.BackendFeatures{Backend: r.Backend},
 	}
 	if err := acpserver.Serve(ctx, acpserver.ServeConfig{
 		Agent: agent,

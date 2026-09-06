@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Button, Tooltip } from "antd";
 import {
+  ChromeOutlined,
   CodeOutlined,
   DashboardOutlined,
   EyeOutlined,
@@ -15,6 +16,7 @@ export const DOCK_TAB_META: Record<DockTab, { label: string; icon: ReactNode }> 
   tasks: { label: "Tasks", icon: <SafetyCertificateOutlined /> },
   preview: { label: "Preview", icon: <EyeOutlined /> },
   status: { label: "Status", icon: <DashboardOutlined /> },
+  browser: { label: "Browser", icon: <ChromeOutlined /> },
 };
 
 interface DockRailProps {
@@ -28,8 +30,8 @@ interface DockRailProps {
 }
 
 /** Chat right dock: a vertical icon tab strip (files / terminal / tasks /
- *  preview / status) with an expandable content pane. Selecting a tab while
- *  collapsed expands the dock; clicking the active tab collapses it. */
+ *  preview / status / browser) with an expandable content pane. Selecting a
+ *  tab while collapsed expands the dock; clicking the active tab collapses it. */
 export function DockRail(props: DockRailProps) {
   const meta = DOCK_TAB_META[props.activeTab];
   return (

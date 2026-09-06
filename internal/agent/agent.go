@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/background"
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
@@ -15,7 +16,6 @@ import (
 	"github.com/tim5wang/godex/internal/core/media"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/notes"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/security"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
@@ -153,7 +153,8 @@ type Agent struct {
 	harnessRouterVal Harness
 	// extraHarnesses holds engines registered via RegisterHarness beyond
 	// the built-in godex engine (roadmap 6.4 multi-engine switching).
-	extraHarnesses map[string]Harness
+	extraHarnesses         map[string]Harness
+	configuredACPHarnesses map[string]struct{}
 	// pluginPromptProvider feeds plugin-contributed prompt sections into the
 	// runtime prompt (P4 prompt/context contributor); nil disables it.
 	pluginPromptProvider func() []runtimePromptSection

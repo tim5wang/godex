@@ -55,6 +55,10 @@ export type ACPAgentFormItem = {
   timeout_seconds?: number;
   description?: string;
   model?: string;
+  forward_history_turns?: number;
+  permission_mode?: string;
+  reuse_tool_sessions?: boolean;
+  mcp_servers?: unknown;
 };
 
 export type ModelOption = {
@@ -288,6 +292,10 @@ export function acpAgentsConfigToForm(value: unknown): ACPAgentsFormValue {
     timeout_seconds: asOptionalNumber(agent.timeout_seconds),
     description: asOptionalString(agent.description),
     model: asOptionalString(agent.model),
+    forward_history_turns: asOptionalNumber(agent.forward_history_turns),
+    permission_mode: asOptionalString(agent.permission_mode),
+    reuse_tool_sessions: Boolean(agent.reuse_tool_sessions),
+    mcp_servers: agent.mcp_servers,
   }));
   return { items };
 }
@@ -302,6 +310,10 @@ export function acpAgentsFormToConfig(value: unknown) {
       timeout_seconds: item.timeout_seconds ?? 0,
       description: item.description ?? "",
       model: item.model ?? "",
+      forward_history_turns: item.forward_history_turns ?? 0,
+      permission_mode: item.permission_mode ?? "",
+      reuse_tool_sessions: item.reuse_tool_sessions ?? false,
+      mcp_servers: item.mcp_servers ?? [],
     }];
   }));
 }
@@ -599,4 +611,3 @@ function normalizeConfigValue(value: unknown): unknown {
   }
   return value;
 }
-

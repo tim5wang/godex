@@ -26,6 +26,7 @@ type grepArgs struct {
 	Glob            string `json:"glob,omitempty"`
 	CaseInsensitive bool   `json:"case_insensitive,omitempty"`
 	MaxResults      int    `json:"max_results,omitempty"`
+	TimeoutSeconds  int    `json:"timeout_seconds,omitempty"`
 }
 
 type grepResult struct {
@@ -147,7 +148,9 @@ func (b *GoGrepBackend) fsForSearch() workspacefs.FS {
 }
 
 func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResult, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return GrepResult{}, err
+	}
 	cacheKey := opts.Pattern
 	if opts.CaseInsensitive {
 		cacheKey = "(?i)" + cacheKey
@@ -185,7 +188,7 @@ func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResul
 	maxResults := opts.MaxResults
 
 	if info.IsDir() {
-		matches, total, err := b.searchDir(root, searchPath, re, opts.Glob, maxResults)
+		matches, total, err := b.searchDir(ctx, root, searchPath, re, opts.Glob, maxResults)
 		if err != nil {
 			return GrepResult{}, err
 		}
@@ -196,7 +199,10 @@ func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResul
 		}, nil
 	}
 
-	matches, fileTotal := grepFile(root, re, searchPath, maxResults)
+	matches, fileTotal, err := grepFile(ctx, root, re, searchPath, maxResults)
+	if err != nil {
+		return GrepResult{}, err
+	}
 	return GrepResult{
 		Matches:      matches,
 		TotalMatches: fileTotal,
@@ -206,7 +212,10 @@ func (b *GoGrepBackend) Search(ctx context.Context, opts GrepOptions) (GrepResul
 
 // searchDir walks a directory tree collecting up to maxResults regex matches.
 // Returns (collected matches, total matches found, error).
-func (b *GoGrepBackend) searchDir(root workspacefs.FS, relDir string, re *regexp.Regexp, glob string, maxResults int) ([]grepMatch, int, error) {
+func (b *GoGrepBackend) searchDir(ctx context.Context, root workspacefs.FS, relDir string, re *regexp.Regexp, glob string, maxResults int) ([]grepMatch, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	entries, err := root.ReadDir(relDir)
 	if err != nil {
 		return nil, 0, nil // skip unreadable directories
@@ -216,6 +225,9 @@ func (b *GoGrepBackend) searchDir(root workspacefs.FS, relDir string, re *regexp
 	total := 0
 
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return collected, total, err
+		}
 		if len(collected) >= maxResults {
 			break
 		}
@@ -225,7 +237,10 @@ func (b *GoGrepBackend) searchDir(root workspacefs.FS, relDir string, re *regexp
 		}
 		entryRel := filepath.Join(relDir, name)
 		if entry.IsDir() {
-			subMatches, subTotal, _ := b.searchDir(root, entryRel, re, glob, maxResults-len(collected))
+			subMatches, subTotal, err := b.searchDir(ctx, root, entryRel, re, glob, maxResults-len(collected))
+			if err != nil {
+				return collected, total, err
+			}
 			total += subTotal
 			collected = append(collected, subMatches...)
 		} else {
@@ -235,7 +250,10 @@ func (b *GoGrepBackend) searchDir(root workspacefs.FS, relDir string, re *regexp
 					continue
 				}
 			}
-			fileMatches, fileTotal := grepFile(root, re, entryRel, maxResults-len(collected))
+			fileMatches, fileTotal, err := grepFile(ctx, root, re, entryRel, maxResults-len(collected))
+			if err != nil {
+				return collected, total, err
+			}
 			total += fileTotal
 			collected = append(collected, fileMatches...)
 		}
@@ -249,10 +267,13 @@ func shouldSkipGrepEntry(name string) bool {
 
 // grepFile searches a single file for regex matches.
 // collectLimit caps how many matches are returned; total still counts all matches.
-func grepFile(root workspacefs.FS, re *regexp.Regexp, path string, collectLimit int) ([]grepMatch, int) {
+func grepFile(ctx context.Context, root workspacefs.FS, re *regexp.Regexp, path string, collectLimit int) ([]grepMatch, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	f, err := root.Open(path)
 	if err != nil {
-		return nil, 0
+		return nil, 0, nil
 	}
 	defer f.Close()
 
@@ -262,6 +283,9 @@ func grepFile(root workspacefs.FS, re *regexp.Regexp, path string, collectLimit 
 	scanner.Buffer(make([]byte, 0, 256*1024), 2*1024*1024)
 	lineNum := 0
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return matches, total, err
+		}
 		lineNum++
 		line := scanner.Text()
 		if re.MatchString(line) {
@@ -275,7 +299,7 @@ func grepFile(root workspacefs.FS, re *regexp.Regexp, path string, collectLimit 
 			}
 		}
 	}
-	return matches, total
+	return matches, total, scanner.Err()
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -324,8 +348,10 @@ func NewGrepToolWithBackend(backend GrepBackend) Tool {
 		if maxResults > maxGrepMatches {
 			maxResults = maxGrepMatches
 		}
+		searchCtx, cancel := withOptionalTimeout(ctx, args.TimeoutSeconds)
+		defer cancel()
 
-		result, err := backend.Search(ctx, GrepOptions{
+		result, err := backend.Search(searchCtx, GrepOptions{
 			Pattern:         args.Pattern,
 			Path:            args.Path,
 			Glob:            args.Glob,

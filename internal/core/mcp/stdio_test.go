@@ -204,6 +204,40 @@ func TestManagerListsAndCallsStdioTools(t *testing.T) {
 	}
 }
 
+func TestManagerTransientServerListsAndCallsWithoutPersistence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping stdio MCP integration in short mode")
+	}
+	workspace := t.TempDir()
+	configPath := filepath.Join(workspace, ".godex", "mcp.json")
+	manager := NewManager(configPath, workspace, filepath.Join(workspace, ".godex", ".tmp"))
+	server := ServerConfig{
+		Name:    "acp-mcp:session:fake",
+		Type:    ServerTypeStdio,
+		Command: fakeMCPHelperPath(t),
+		Args:    []string{"-test.run", "TestFakeMCPHelperServer", "-test.v"},
+		Env:     map[string]string{"GODEX_MCP_HELPER": "1"},
+	}
+	if err := manager.UpsertTransientServer(server); err != nil {
+		t.Fatalf("upsert transient server: %v", err)
+	}
+	tools, err := manager.ListServerTools(context.Background(), server.Name)
+	if err != nil || len(tools) != 2 {
+		t.Fatalf("list transient tools: tools=%+v err=%v", tools, err)
+	}
+	result, err := manager.CallTool(context.Background(), server.Name, "echo", map[string]any{"message": "hi"})
+	if err != nil || result.Text != "echo: hi" {
+		t.Fatalf("call transient tool: result=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("transient server must not persist config, stat err=%v", err)
+	}
+	manager.DeleteTransientServer(server.Name)
+	if _, err := manager.ListServerTools(context.Background(), server.Name); err == nil {
+		t.Fatal("expected deleted transient server to be unavailable")
+	}
+}
+
 func TestManagerStdioMissingCommand(t *testing.T) {
 	workspace := t.TempDir()
 	configPath := filepath.Join(workspace, ".godex", "mcp.json")

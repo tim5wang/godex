@@ -228,7 +228,7 @@ func TestFetchLightpandaFallback_NeedsBrowser(t *testing.T) {
 	lightpanda := &LightpandaBinary{path: mock}
 
 	service := NewWebFetchService(config.WebFetchConfig{
-		Enabled:          true,
+		Enabled:           true,
 		AllowPrivateHosts: true,
 	}, t.TempDir())
 	service.SetLightpandaFetcher(lightpanda)
@@ -260,7 +260,7 @@ func TestFetchLightpandaFallback_Unavailable(t *testing.T) {
 	defer server.Close()
 
 	service := NewWebFetchService(config.WebFetchConfig{
-		Enabled:          true,
+		Enabled:           true,
 		AllowPrivateHosts: true,
 	}, t.TempDir())
 	// Don't call SetLightpandaFetcher — lightpanda remains nil
@@ -327,6 +327,24 @@ func TestFallbackHintForURL(t *testing.T) {
 			wantContains: "Cloudflare",
 		},
 		{
+			name:         "capacitor docs degraded",
+			rawURL:       "https://capacitorjs.com/docs",
+			needsBrowser: true,
+			wantContains: "registry.npmjs.org",
+		},
+		{
+			name:         "openai docs javascript shell",
+			rawURL:       "https://developers.openai.com/codex",
+			needsBrowser: true,
+			wantContains: "browser tool",
+		},
+		{
+			name:         "generic javascript shell",
+			rawURL:       "https://docs.example.com/app",
+			needsBrowser: true,
+			wantContains: "alternate official",
+		},
+		{
 			name:         "successful fetch no hint",
 			rawURL:       "https://example.com/page",
 			contentLen:   5000,
@@ -352,5 +370,24 @@ func TestFallbackHintForURL(t *testing.T) {
 				t.Fatalf("expected hint to contain %q, got %q", tc.wantContains, hint)
 			}
 		})
+	}
+}
+
+func TestWebFetchHTTPErrorIncludesAntiCrawlFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("Just a moment... Cloudflare"))
+	}))
+	defer server.Close()
+	service := NewWebFetchService(config.WebFetchConfig{
+		Enabled:           true,
+		TimeoutSeconds:    2,
+		Policy:            "allow_all",
+		AllowPrivateHosts: true,
+	}, t.TempDir())
+
+	_, err := service.Fetch(context.Background(), server.URL, "text", 1000)
+	if err == nil || !strings.Contains(err.Error(), "Cloudflare") || !strings.Contains(err.Error(), "browser tool") {
+		t.Fatalf("expected anti-crawl fallback on HTTP error, got %v", err)
 	}
 }

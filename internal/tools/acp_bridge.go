@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
+	platformtooling "github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/platform/workspacefs"
 )
 
@@ -104,15 +106,15 @@ func selectTextFileRange(content string, line, limit *int) string {
 type acpTerminal struct {
 	id string
 
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	output   bytes.Buffer
-	limit    int
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	output    bytes.Buffer
+	limit     int
 	truncated bool
-	done     chan struct{}
-	exitCode int
-	exitErr  error
-	released bool
+	done      chan struct{}
+	exitCode  int
+	exitErr   error
+	released  bool
 }
 
 // acpTerminalManager tracks the terminals created by one ACP client so
@@ -121,8 +123,8 @@ type acpTerminal struct {
 type acpTerminalManager struct {
 	workspace string
 
-	mu       sync.Mutex
-	next     int
+	mu        sync.Mutex
+	next      int
 	terminals map[string]*acpTerminal
 }
 
@@ -144,7 +146,15 @@ func (m *acpTerminalManager) CreateTerminal(ctx context.Context, params acp.Crea
 	if cwd == "" {
 		cwd = m.workspace
 	}
+	resolvedCWD, err := acpTerminalCWD(m.workspace, cwd)
+	if err != nil {
+		return acp.CreateTerminalResponse{}, fmt.Errorf("terminal/create: %w", err)
+	}
+	cwd = resolvedCWD
 	cmd := exec.CommandContext(ctx, command, params.Args...)
+	if err := platformtooling.ConfigureCommandProcessGroup(cmd); err != nil {
+		return acp.CreateTerminalResponse{}, fmt.Errorf("terminal/create: process group: %w", err)
+	}
 	cmd.Dir = cwd
 	env := os.Environ()
 	for _, entry := range params.Env {
@@ -210,6 +220,32 @@ func (m *acpTerminalManager) CreateTerminal(ctx context.Context, params acp.Crea
 		close(term.done)
 	}()
 	return acp.CreateTerminalResponse{TerminalId: id}, nil
+}
+
+func acpTerminalCWD(workspace, cwd string) (string, error) {
+	root, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	target := cwd
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(root, target)
+	}
+	target, err = filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if evaluated, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
+		root = evaluated
+	}
+	if evaluated, evalErr := filepath.EvalSymlinks(target); evalErr == nil {
+		target = evaluated
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("cwd %q escapes workspace %q", cwd, workspace)
+	}
+	return target, nil
 }
 
 func (t *acpTerminal) append(data []byte) {
@@ -295,7 +331,7 @@ func (m *acpTerminalManager) KillTerminal(ctx context.Context, params acp.KillTe
 	cmd := term.cmd
 	term.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(cmd)
 	}
 	return acp.KillTerminalResponse{}, nil
 }
@@ -314,7 +350,7 @@ func (m *acpTerminalManager) ReleaseTerminal(ctx context.Context, params acp.Rel
 	term.released = true
 	term.mu.Unlock()
 	if !released && cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(cmd)
 		select {
 		case <-term.done:
 		case <-time.After(2 * time.Second):
@@ -339,7 +375,7 @@ func (m *acpTerminalManager) Close() {
 		cmd := term.cmd
 		term.mu.Unlock()
 		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			platformtooling.KillCommandProcessGroup(cmd)
 		}
 	}
 }

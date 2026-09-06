@@ -163,6 +163,9 @@ func (f *fakeBackend) SetSessionModelProfile(ctx context.Context, id, profileID 
 		},
 	}, nil
 }
+func (f *fakeBackend) SetSessionACPAgentReasoningEffort(ctx context.Context, id, effort string) (rtbackend.ModelsView, error) {
+	return f.Models(ctx, id)
+}
 func (f *fakeBackend) ListSessions(ctx context.Context, filter rtbackend.SessionListFilter) ([]rtbackend.ListedSession, error) {
 	return nil, nil
 }

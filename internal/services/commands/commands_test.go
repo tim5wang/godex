@@ -467,6 +467,25 @@ func TestExecuteSessionRoutesToRuntimeHandler(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentTemplateRoutesToRuntimeHandler(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := NewService(cfg)
+	service.SetAgentTemplate(func(_ context.Context, _ *agent.Agent, cmd Command) (Result, error) {
+		if !reflect.DeepEqual(cmd.Args, []string{"use", "coder"}) {
+			t.Fatalf("unexpected agent args: %#v", cmd.Args)
+		}
+		return Result{Name: "agent", Output: "switched"}, nil
+	})
+
+	result, err := service.Execute(context.Background(), newTestAgent(t, cfg), Command{Name: "agent", Args: []string{"use", "coder"}})
+	if err != nil {
+		t.Fatalf("agent use: %v", err)
+	}
+	if result.Output != "switched" {
+		t.Fatalf("unexpected agent output: %q", result.Output)
+	}
+}
+
 func TestExecuteHistoryShowAndTail(t *testing.T) {
 	cfg := newTestConfig(t)
 	service := NewService(cfg)

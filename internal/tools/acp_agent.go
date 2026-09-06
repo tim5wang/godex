@@ -16,6 +16,7 @@ import (
 	"github.com/coder/acp-go-sdk"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
+	platformtooling "github.com/tim5wang/godex/internal/platform/tooling"
 )
 
 type acpAgentArgs struct {
@@ -28,6 +29,7 @@ type acpAgentArgs struct {
 // NewACPAgentTool creates a small ACP stdio client for configured external agents.
 func NewACPAgentTool(agents map[string]config.ACPAgentConfig, workspace string) Tool {
 	runtime := cloneACPAgents(agents)
+	pool := newACPToolSessionPool()
 	return NewTypedTool(NewToolSpec("acp_agent", "Call an external Agent Client Protocol agent over stdio. Use action=list to inspect configured agents, or action=run with agent and prompt.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -72,7 +74,13 @@ func NewACPAgentTool(agents map[string]config.ACPAgentConfig, workspace string) 
 		if prompt == "" {
 			return ToolResult{}, fmt.Errorf("missing prompt argument")
 		}
-		result, err := runACPAgent(ctx, agent, workspace, prompt, args.TimeoutSeconds, nil, "")
+		var result acpRunResult
+		var err error
+		if agent.ReuseToolSessions {
+			result, err = pool.run(ctx, agent, workspace, prompt, args.TimeoutSeconds)
+		} else {
+			result, err = runACPAgent(ctx, agent, workspace, prompt, args.TimeoutSeconds, nil, "")
+		}
 		if err != nil {
 			return ToolResult{}, err
 		}
@@ -85,6 +93,88 @@ func NewACPAgentTool(agents map[string]config.ACPAgentConfig, workspace string) 
 			},
 		}, nil
 	})
+}
+
+type acpToolSessionPool struct {
+	mu      sync.Mutex
+	entries map[string]*acpToolSessionEntry
+}
+
+type acpToolSessionEntry struct {
+	mu        sync.Mutex
+	sess      *ACPSession
+	sessionID string
+	timer     *time.Timer
+}
+
+func newACPToolSessionPool() *acpToolSessionPool {
+	return &acpToolSessionPool{entries: map[string]*acpToolSessionEntry{}}
+}
+
+func (p *acpToolSessionPool) run(ctx context.Context, agent config.ACPAgentConfig, workspace, prompt string, timeoutSeconds int) (acpRunResult, error) {
+	key := agent.ID + "\x00" + workspace
+	p.mu.Lock()
+	entry := p.entries[key]
+	if entry == nil {
+		entry = &acpToolSessionEntry{}
+		p.entries[key] = entry
+	}
+	p.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.timer != nil {
+		entry.timer.Stop()
+		entry.timer = nil
+	}
+	if entry.sess != nil {
+		select {
+		case <-entry.sess.Done():
+			_ = entry.sess.Close()
+			entry.sess = nil
+		default:
+		}
+	}
+	if entry.sess == nil {
+		sess, err := OpenACPSession(ctx, agent, workspace, agent.Model, agent.ReasoningEffort, timeoutSeconds, entry.sessionID)
+		if err != nil {
+			return acpRunResult{}, err
+		}
+		entry.sess = sess
+		entry.sessionID = sess.SessionID()
+	}
+	entry.sess.SetPermissionHandler(func(_ context.Context, req ACPPermissionRequest) (ACPPermissionResponse, error) {
+		return DenyACPPermissionRequest(req)
+	})
+	result, err := entry.sess.Prompt(ctx, prompt, nil)
+	if result.SessionID != "" {
+		entry.sessionID = result.SessionID
+	}
+	if err != nil {
+		select {
+		case <-entry.sess.Done():
+			_ = entry.sess.Close()
+			entry.sess = nil
+		default:
+		}
+	}
+	idleSeconds := timeoutSeconds
+	if idleSeconds <= 0 {
+		idleSeconds = agent.TimeoutSeconds
+	}
+	if idleSeconds <= 0 {
+		idleSeconds = 600
+	}
+	entry.timer = time.AfterFunc(time.Duration(idleSeconds)*time.Second, func() {
+		entry.mu.Lock()
+		if entry.sess != nil {
+			_ = entry.sess.Close()
+			entry.sess = nil
+		}
+		entry.timer = nil
+		entry.mu.Unlock()
+	})
+	return result, err
 }
 
 type acpRunResult struct {
@@ -148,6 +238,70 @@ func SelectACPPermissionOption(req ACPPermissionRequest, optionID string) (ACPPe
 		}
 	}
 	return ACPPermissionResponse{}, fmt.Errorf("godex ACP client: option %q not offered for session/request_permission", optionID)
+}
+
+// ACPPermissionRequestToGodex maps an external agent permission request onto
+// the host permission vocabulary without losing the original raw input.
+func ACPPermissionRequestToGodex(agentID, sessionID, turnID string, req ACPPermissionRequest) PermissionRequest {
+	title := strings.TrimSpace(string(req.ToolCall.ToolCallId))
+	if req.ToolCall.Title != nil && strings.TrimSpace(*req.ToolCall.Title) != "" {
+		title = strings.TrimSpace(*req.ToolCall.Title)
+	}
+	input := rawToMap(req.ToolCall.RawInput)
+	paths := make([]string, 0, len(req.ToolCall.Locations))
+	for _, location := range req.ToolCall.Locations {
+		if path := strings.TrimSpace(location.Path); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	action := "other"
+	if req.ToolCall.Kind != nil && strings.TrimSpace(string(*req.ToolCall.Kind)) != "" {
+		action = string(*req.ToolCall.Kind)
+	}
+	command := ""
+	if value, ok := input["command"].(string); ok {
+		command = strings.TrimSpace(value)
+	}
+	mutation := action != string(acp.ToolKindRead) && action != string(acp.ToolKindSearch) && action != string(acp.ToolKindThink)
+	return PermissionRequest{
+		SessionID: sessionID,
+		TurnID:    turnID,
+		Source:    "acp",
+		Sender:    "acp:" + strings.TrimSpace(agentID),
+		ToolName:  "acp:" + strings.TrimSpace(agentID) + ":" + title,
+		Action:    action,
+		Paths:     paths,
+		Command:   command,
+		Mutation:  mutation,
+		Input:     input,
+	}
+}
+
+// ACPPermissionResponseForDecision selects the closest option offered by the
+// external agent for one host-side permission decision.
+func ACPPermissionResponseForDecision(req ACPPermissionRequest, decision PermissionDecision, scope PermissionGrantScope) (ACPPermissionResponse, error) {
+	wanted := acp.PermissionOptionKindRejectOnce
+	if decision == PermissionAllow {
+		wanted = acp.PermissionOptionKindAllowOnce
+		if scope != "" && scope != PermissionGrantOnce {
+			wanted = acp.PermissionOptionKindAllowAlways
+		}
+	} else if scope != "" && scope != PermissionGrantOnce {
+		wanted = acp.PermissionOptionKindRejectAlways
+	}
+	for _, option := range req.Options {
+		if option.Kind == wanted {
+			return ACPPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(option.OptionId)}, nil
+		}
+	}
+	if decision == PermissionAllow && wanted == acp.PermissionOptionKindAllowAlways {
+		for _, option := range req.Options {
+			if option.Kind == acp.PermissionOptionKindAllowOnce {
+				return ACPPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(option.OptionId)}, nil
+			}
+		}
+	}
+	return DenyACPPermissionRequest(req)
 }
 
 // ACPCost carries the cumulative session cost optionally reported alongside a
@@ -638,6 +792,22 @@ type ACPModelOption struct {
 	Name  string `json:"name"`
 }
 
+// ACPReasoningEffortOption is one selectable reasoning-effort value advertised
+// by an ACP agent's session config (configOptions, id "reasoning_effort").
+// dsh advertises off/low/high/max with high as the default balance.
+type ACPReasoningEffortOption struct {
+	Value string `json:"value"`
+	Name  string `json:"name"`
+}
+
+// ACPConfigOptions is the full set of selectable session config options an ACP
+// agent advertises (models + reasoning effort). It backs the chat model/
+// reasoning pickers for ACP template sessions.
+type ACPConfigOptions struct {
+	Models          []ACPModelOption          `json:"models"`
+	ReasoningEffort []ACPReasoningEffortOption `json:"reasoning_efforts"`
+}
+
 // ResolveACPCommand resolves the configured agent command to an absolute path.
 // ACP agents are often installed under user-local bin dirs (~/.local/bin,
 // ~/bin, /opt/homebrew/bin) that a launchd-started host does not have on its
@@ -678,6 +848,18 @@ func ResolveACPCommand(command string) (string, error) {
 // agents use to advertise selectable models) and returns the model list. The
 // process is torn down before returning.
 func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConfig, workspace string) ([]ACPModelOption, error) {
+	opts, err := DiscoverACPAgentConfigOptions(ctx, agent, workspace)
+	if err != nil {
+		return nil, err
+	}
+	return opts.Models, nil
+}
+
+// DiscoverACPAgentConfigOptions connects to a configured ACP agent, creates a
+// throwaway session, reads the agent's configOptions and returns every
+// selectable session config option (models + reasoning effort). The process is
+// torn down before returning.
+func DiscoverACPAgentConfigOptions(ctx context.Context, agent config.ACPAgentConfig, workspace string) (*ACPConfigOptions, error) {
 	if strings.TrimSpace(agent.Command) == "" {
 		return nil, fmt.Errorf("ACP agent %q has no command", agent.ID)
 	}
@@ -698,6 +880,9 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, command, agent.Args...)
+	if err := platformtooling.ConfigureCommandProcessGroup(cmd); err != nil {
+		return nil, err
+	}
 	cmd.Dir = workspace
 	cmd.Env = os.Environ()
 	for key, value := range agent.Env {
@@ -736,7 +921,7 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 		},
 		ClientInfo: &acp.Implementation{Name: "godex", Title: &title},
 	}); err != nil {
-		_ = cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(cmd)
 		return nil, fmt.Errorf("acp initialize: %w", err)
 	}
 	newSess, err := conn.NewSession(ctx, acp.NewSessionRequest{
@@ -744,7 +929,7 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 		McpServers: acpMcpServers(agent),
 	})
 	if err != nil {
-		_ = cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(cmd)
 		return nil, fmt.Errorf("acp session/new: %w", err)
 	}
 	// Tear down the throwaway process: closing stdin signals EOF, and the
@@ -755,17 +940,41 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 	_ = cmd.Wait()
 	_ = <-stderrData
 
-	var out []ACPModelOption
+	var out ACPConfigOptions
 	for _, opt := range newSess.ConfigOptions {
 		sel := opt.Select
-		if sel == nil || sel.Id != "model" {
+		if sel == nil {
 			continue
 		}
 		// dsh (and other agents) may advertise grouped options:
 		// [{group, name, options:[{value,name,description}]}], or a flat
 		// ungrouped list. Handle both so the settings dropdown populates.
-		if sel.Options.Ungrouped != nil {
-			for _, option := range *sel.Options.Ungrouped {
+		switch sel.Id {
+		case "model":
+			out.Models = append(out.Models, parseACPSelectOptions(sel)...)
+		case "reasoning_effort":
+			out.ReasoningEffort = append(out.ReasoningEffort, parseACPReasoningEffortOptions(sel)...)
+		}
+	}
+	return &out, nil
+}
+
+// parseACPSelectOptions flattens a configOptions select's ungrouped or grouped
+// option lists into plain model options (value + display name).
+func parseACPSelectOptions(sel *acp.SessionConfigOptionSelect) []ACPModelOption {
+	var out []ACPModelOption
+	if sel.Options.Ungrouped != nil {
+		for _, option := range *sel.Options.Ungrouped {
+			name := option.Name
+			if name == "" {
+				name = string(option.Value)
+			}
+			out = append(out, ACPModelOption{Value: string(option.Value), Name: name})
+		}
+	}
+	if sel.Options.Grouped != nil {
+		for _, group := range *sel.Options.Grouped {
+			for _, option := range group.Options {
 				name := option.Name
 				if name == "" {
 					name = string(option.Value)
@@ -773,19 +982,35 @@ func DiscoverACPAgentModelOptions(ctx context.Context, agent config.ACPAgentConf
 				out = append(out, ACPModelOption{Value: string(option.Value), Name: name})
 			}
 		}
-		if sel.Options.Grouped != nil {
-			for _, group := range *sel.Options.Grouped {
-				for _, option := range group.Options {
-					name := option.Name
-					if name == "" {
-						name = string(option.Value)
-					}
-					out = append(out, ACPModelOption{Value: string(option.Value), Name: name})
+	}
+	return out
+}
+
+// parseACPReasoningEffortOptions flattens a configOptions select's ungrouped
+// or grouped option lists into reasoning-effort options (value + display name).
+func parseACPReasoningEffortOptions(sel *acp.SessionConfigOptionSelect) []ACPReasoningEffortOption {
+	var out []ACPReasoningEffortOption
+	if sel.Options.Ungrouped != nil {
+		for _, option := range *sel.Options.Ungrouped {
+			name := option.Name
+			if name == "" {
+				name = string(option.Value)
+			}
+			out = append(out, ACPReasoningEffortOption{Value: string(option.Value), Name: name})
+		}
+	}
+	if sel.Options.Grouped != nil {
+		for _, group := range *sel.Options.Grouped {
+			for _, option := range group.Options {
+				name := option.Name
+				if name == "" {
+					name = string(option.Value)
 				}
+				out = append(out, ACPReasoningEffortOption{Value: string(option.Value), Name: name})
 			}
 		}
 	}
-	return out, nil
+	return out
 }
 
 func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, prompt string, timeoutSeconds int, onUpdate func(ACPUpdate), model string) (acpRunResult, error) {
@@ -818,6 +1043,9 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, command, agent.Args...)
+	if err := platformtooling.ConfigureCommandProcessGroup(cmd); err != nil {
+		return acpRunResult{}, err
+	}
 	cmd.Dir = workspace
 	cmd.Env = os.Environ()
 	for key, value := range agent.Env {
@@ -899,7 +1127,7 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 		},
 	})
 	if err != nil {
-		_ = cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(cmd)
 		return acpRunResult{}, fmt.Errorf("acp initialize: %w", err)
 	}
 	_ = initResp
@@ -909,7 +1137,7 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 		McpServers: acpMcpServers(agent),
 	})
 	if err != nil {
-		_ = cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(cmd)
 		return acpRunResult{}, fmt.Errorf("acp session/new: %w", err)
 	}
 
@@ -923,7 +1151,7 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 				Value:     acp.SessionConfigValueId(model),
 			},
 		}); err != nil {
-			_ = cmd.Process.Kill()
+			platformtooling.KillCommandProcessGroup(cmd)
 			return acpRunResult{}, fmt.Errorf("acp set model option %q: %w", model, err)
 		}
 	}
@@ -933,7 +1161,7 @@ func runACPAgent(ctx context.Context, agent config.ACPAgentConfig, workspace, pr
 		Prompt:    []acp.ContentBlock{acp.TextBlock(prompt)},
 	})
 	if err != nil {
-		_ = cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(cmd)
 		return acpRunResult{}, fmt.Errorf("acp session/prompt: %w", err)
 	}
 
@@ -998,7 +1226,10 @@ type ACPSession struct {
 // OpenACPSession spawns the agent process, initializes it, and creates a
 // session. When resumeSessionID is non-empty the agent's session/load is tried
 // first, then the unstable session/resume, falling back to a fresh session/new.
-func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace, model string, timeoutSeconds int, resumeSessionID string) (*ACPSession, error) {
+// Optional model and reasoningEffort overrides are applied through the
+// standard session config options ("model" / "reasoning_effort") the agent
+// advertises in configOptions.
+func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace, model, reasoningEffort string, timeoutSeconds int, resumeSessionID string) (*ACPSession, error) {
 	if strings.TrimSpace(agent.Command) == "" {
 		return nil, fmt.Errorf("ACP agent %q has no command", agent.ID)
 	}
@@ -1024,6 +1255,10 @@ func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace,
 		return nil, fmt.Errorf("ACP agent %q: %w", agent.ID, err)
 	}
 	cmd := exec.CommandContext(procCtx, command, agent.Args...)
+	if err := platformtooling.ConfigureCommandProcessGroup(cmd); err != nil {
+		cancelProc()
+		return nil, err
+	}
 	cmd.Dir = workspace
 	cmd.Env = os.Environ()
 	for key, value := range agent.Env {
@@ -1128,6 +1363,18 @@ func OpenACPSession(ctx context.Context, agent config.ACPAgentConfig, workspace,
 		}); err != nil {
 			s.killProcess(cancelProc)
 			return nil, fmt.Errorf("acp set model option %q: %w", model, err)
+		}
+	}
+	if reasoningEffort != "" {
+		if _, err := s.conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{
+			ValueId: &acp.SetSessionConfigOptionValueId{
+				SessionId: s.sessionID,
+				ConfigId:  "reasoning_effort",
+				Value:     acp.SessionConfigValueId(reasoningEffort),
+			},
+		}); err != nil {
+			s.killProcess(cancelProc)
+			return nil, fmt.Errorf("acp set reasoning_effort option %q: %w", reasoningEffort, err)
 		}
 	}
 	return s, nil
@@ -1294,7 +1541,7 @@ func (s *ACPSession) Close() error {
 		cancel()
 	}
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(cmd)
 		_ = cmd.Wait()
 	}
 	if client != nil && client.terminalBridge != nil {
@@ -1306,7 +1553,7 @@ func (s *ACPSession) Close() error {
 func (s *ACPSession) killProcess(cancelProc context.CancelFunc) {
 	cancelProc()
 	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
+		platformtooling.KillCommandProcessGroup(s.cmd)
 		_ = s.cmd.Wait()
 	}
 	if s.client != nil && s.client.terminalBridge != nil {
@@ -1326,6 +1573,21 @@ func cloneACPAgents(agents map[string]config.ACPAgentConfig) map[string]config.A
 				env[key] = value
 			}
 			agent.Env = env
+		}
+		if len(agent.McpServers) > 0 {
+			servers := make([]config.ACPMcpServer, len(agent.McpServers))
+			for index, server := range agent.McpServers {
+				server.Args = append([]string{}, server.Args...)
+				if len(server.Env) > 0 {
+					env := make(map[string]string, len(server.Env))
+					for key, value := range server.Env {
+						env[key] = value
+					}
+					server.Env = env
+				}
+				servers[index] = server
+			}
+			agent.McpServers = servers
 		}
 		out[id] = agent
 	}

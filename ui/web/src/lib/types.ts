@@ -24,7 +24,8 @@ export type EventType =
   | "message_injected"
   | "agent_identity_updated"
   | "snapshot_ready"
-  | "turn_completed";
+  | "turn_completed"
+  | "browser.view";
 
 export interface RuntimeEvent {
   session_id?: string;
@@ -692,6 +693,7 @@ export interface Snapshot {
   active_phase?: string;
   identity?: AgentIdentity;
   model_profile_id?: string;
+  harness_ids?: string[];
   updated_at: string;
 }
 
@@ -727,6 +729,7 @@ export interface ModelsView {
   session_profile_id?: string;
   reasoning_effort?: string;
   acp_model?: string;
+  acp_reasoning_effort?: string;
   profiles: ModelProfile[];
 }
 

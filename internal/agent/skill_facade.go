@@ -58,7 +58,12 @@ func (a *Agent) ActivateSkill(name string) (tools.SkillActivation, error) {
 
 // InstallSkill installs a new skill source into the workspace skills directory.
 func (a *Agent) InstallSkill(source, name string) (tools.SkillInstallResult, error) {
-	result, err := a.skillLoader.Install(source, name)
+	return a.InstallSkillContext(context.Background(), source, name)
+}
+
+// InstallSkillContext installs a skill and stops source preparation when ctx expires.
+func (a *Agent) InstallSkillContext(ctx context.Context, source, name string) (tools.SkillInstallResult, error) {
+	result, err := a.skillLoader.InstallContext(ctx, source, name)
 	if err != nil {
 		return tools.SkillInstallResult{}, err
 	}

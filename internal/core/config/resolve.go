@@ -248,6 +248,7 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	origins["api.providers"] = fieldOrigin{Source: SourceYAML, YAMLValue: maskLLMProviders(file.API.Providers), Effective: maskLLMProviders(current.LLMProviders)}
 	origins["api.model_strategy"] = fieldOrigin{Source: SourceYAML, YAMLValue: file.API.ModelStrategy, Effective: current.LLMStrategy}
 	origins["acp.agents"] = fieldOrigin{Source: SourceYAML, YAMLValue: file.ACP.Agents, Effective: maskACPAgentSecrets(acpAgentsFromConfigFile(file))}
+	origins["acp.bridge_client_mcp_servers"] = fieldOrigin{Source: SourceYAML, YAMLValue: file.ACP.BridgeClientMCPServers, Effective: file.ACP.BridgeClientMCPServers}
 	resolveInt("agent.compress_threshold", file.Agent.CompressThreshold, "COMPRESS_THRESHOLD", func(v int) { current.CompressThreshold = v })
 	resolveBool("agent.compaction.auto_enabled", file.Agent.Compaction.AutoEnabled, "GODEX_AGENT_COMPACTION_AUTO_ENABLED", func(v bool) {
 		current.Compaction.AutoEnabled = v
@@ -1107,7 +1108,8 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			},
 		},
 		ACP: ACPConfig{
-			Agents: acpAgentsFromConfigFile(file),
+			Agents:                 acpAgentsFromConfigFile(file),
+			BridgeClientMCPServers: file.ACP.BridgeClientMCPServers,
 		},
 		Feishu: FeishuConfig{
 			Enabled:   file.Channels.Feishu.Enabled,

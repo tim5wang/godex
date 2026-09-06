@@ -25,6 +25,18 @@ type WorkspaceExecutor struct {
 	fs           workspacefs.FS // optional pre-created FS; lazily created when nil
 }
 
+// ConfigureCommandProcessGroup prepares cmd so cancellation can terminate the
+// whole process tree rather than only the direct child.
+func ConfigureCommandProcessGroup(cmd *exec.Cmd) error {
+	return configureCommandProcessGroup(cmd)
+}
+
+// KillCommandProcessGroup terminates cmd and every descendant where the
+// platform supports process groups.
+func KillCommandProcessGroup(cmd *exec.Cmd) {
+	killCommandProcessGroup(cmd)
+}
+
 type ShellCommandOptions struct {
 	AllowUnlistedCommands bool
 	WorkspaceDir          string

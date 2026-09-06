@@ -100,6 +100,23 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 	// Sets the ACP model override for a session whose template engine routes
 	// turns to an external ACP agent (e.g. "acp:dsh"). The value is a raw ACP
 	// model id forwarded via the harness's session config "model" option.
+	// Sets the ACP reasoning-effort override for a session whose template
+	// engine routes turns to an external ACP agent (e.g. "acp:dsh"). The
+	// value is a raw ACP config value (e.g. "high") forwarded via the
+	// harness's session config "reasoning_effort" option.
+	mux.Handle("POST /sessions/{id}/acp-reasoning-effort", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req setSessionACPAgentReasoningEffortRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		view, err := service.SetSessionACPAgentReasoningEffort(r.Context(), r.PathValue("id"), strings.TrimSpace(req.ReasoningEffort))
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	})))
 	mux.Handle("POST /sessions/{id}/acp-model", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req setSessionACPAgentModelRequest
 		if err := decodeJSON(r, &req); err != nil {

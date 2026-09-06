@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/memory"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/scope"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/domain/automation"
@@ -39,6 +39,10 @@ type SharedDependencies struct {
 	// (distributed browser runtime). It is re-applied after ApplyConfig
 	// rebuilds the dependency set.
 	browserCDPDialer tools.CDPDialer
+	// browserViewNotifier is the browser.view event sink installed by the
+	// backend. It is re-applied after ApplyConfig rebuilds the dependency set
+	// (the rebuild creates a fresh BrowserService instance).
+	browserViewNotifier func(sessionID, pageID, url string)
 	// longTaskResumeOnce guards the one-time sweep of stale longtask run
 	// records at process startup. After a crash the previous process may
 	// leave runs marked "running"; this flips them to "interrupted" so they
@@ -130,6 +134,7 @@ func (s *SharedDependencies) ApplyConfig(cfg *config.Config) {
 	sessionAdminService := s.deps.sessionAdmin
 	subagentJobs := s.deps.subagentJobs
 	cdpDialer := s.browserCDPDialer
+	browserViewNotifier := s.browserViewNotifier
 	s.mu.RUnlock()
 	deps := buildDependencies(cfg)
 	deps.cron = cronService
@@ -144,6 +149,9 @@ func (s *SharedDependencies) ApplyConfig(cfg *config.Config) {
 	}
 	if cdpDialer != nil {
 		deps.browser.SetCDPDialer(cdpDialer)
+	}
+	if browserViewNotifier != nil {
+		deps.browser.SetViewNotifier(browserViewNotifier)
 	}
 	s.mu.Lock()
 	s.deps = deps
@@ -191,6 +199,33 @@ func (s *SharedDependencies) SetBrowserCDPDialer(dialer tools.CDPDialer) {
 	s.browserCDPDialer = dialer
 	if s.deps.browser != nil {
 		s.deps.browser.SetCDPDialer(dialer)
+	}
+	s.mu.Unlock()
+}
+
+// BrowserService returns the workspace-scoped browser automation service, or
+// nil when unavailable (e.g. before dependencies are built).
+func (s *SharedDependencies) BrowserService() *tools.BrowserService {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deps.browser
+}
+
+// SetBrowserViewNotifier installs the browser.view event sink that receives
+// (sessionID, pageID, url) whenever the browser tool operates on a page. The
+// backend wires this to the session event stream; it survives ApplyConfig
+// rebuilds (a fresh BrowserService instance is re-notified).
+func (s *SharedDependencies) SetBrowserViewNotifier(fn func(sessionID, pageID, url string)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.browserViewNotifier = fn
+	if s.deps.browser != nil {
+		s.deps.browser.SetViewNotifier(fn)
 	}
 	s.mu.Unlock()
 }
@@ -433,6 +468,7 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	if err := a.ActivateInstalledPackageRuntimes(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to activate package runtimes after config reload: %v\n", err)
 	}
+	a.RegisterConfiguredACPHarnesses()
 }
 
 // ApplyModelProfile swaps only the model caller/config for this session.
@@ -488,6 +524,10 @@ type RunOptions struct {
 	// engines (e.g. the ACP session config "model" option). Empty means the
 	// engine uses its configured default.
 	Model string
+	// ReasoningEffort is an optional per-turn reasoning-effort override
+	// forwarded to external engines (e.g. the ACP session config
+	// "reasoning_effort" option). Empty means the engine uses its default.
+	ReasoningEffort string
 }
 
 // SessionSkillState stores one activated skill's fully loaded prompt state.
@@ -697,6 +737,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			OnInjectionDrained: opts.OnInjectionDrained,
 			Harness:            opts.Harness,
 			Model:              opts.Model,
+			ReasoningEffort:    opts.ReasoningEffort,
 			Messages: func() []protocol.Message {
 				return a.GetMessages()
 			},

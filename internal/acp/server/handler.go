@@ -33,7 +33,12 @@ type Backend interface {
 
 // BackendPromptOptions tunes how ACP turns are mapped into GoDex sessions.
 type BackendPromptOptions struct {
-	AgentProfile string
+	AgentProfile           string
+	BridgeClientMCPServers bool
+}
+
+type acpMCPBridge interface {
+	BridgeACPMCPServers(context.Context, string, []acp.McpServer)
 }
 
 // BackendPromptHandler creates a PromptHandler that delegates to the godex
@@ -84,6 +89,11 @@ func handleBackendPrompt(ctx context.Context, bk Backend, opts BackendPromptOpti
 		return PromptResult{}, fmt.Errorf("acp open session: %w", err)
 	}
 	sessionID := opened.SessionID
+	if opts.BridgeClientMCPServers && len(turn.McpServers) > 0 {
+		if bridge, ok := bk.(acpMCPBridge); ok {
+			bridge.BridgeACPMCPServers(ctx, sessionID, turn.McpServers)
+		}
+	}
 
 	if cmd, ok := commands.Parse(turn.Prompt); ok {
 		result, err := bk.ExecuteCommand(ctx, sessionID, cmd)

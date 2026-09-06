@@ -129,3 +129,70 @@
 - **新建文件**：用 `write_file`（path + content）。
 - 多改同文件用 `edits[]`（path + edits[]，50 上限）；多文件用 `files[]`。
 - 工具层：`edit_file` 缺 old_text 报错须含最小用法示例与追加/新建引导（已落地）。
+
+## 2026-09-05 — web_search 后端连续失败（lightpanda killed / duckduckgo failed）
+
+**问题**：调研「Codex Browser use」竞品时，`web_search` 连续 4 次失败：
+- `lightpanda search fetch: lightpanda fetch failed: signal: killed`（3 次，不同关键词）
+- `duckduckgo search failed: If this persists ... 9318`（1 次）
+
+`web_fetch` 对部分站点也受限：OpenAI 开发者文档（developers.openai.com）返回 HTML 框架无正文（JS 渲染/反爬）；Claude 官方文档（platform.claude.com）只能抓到开头段落。
+
+**根因**：web_search 后端（lightpanda/duckduckgo 通道）当前不稳定，可能瞬时过载被 kill；OpenAI 文档站为 JS 渲染站点，静态抓取器拿不到正文。
+
+**解决**：
+- 不硬磕搜索：改用 `web_fetch` 直连已知 URL（Claude 官方文档、竞品博客）拿正文片段；竞品关键事实从已抓到的官方文档开头 + 权威博客 + 既有知识交叉确认，够写 PRD 就收口，不无限重试。
+- 本地侧（godex 现状盘点）完全不依赖网络，先做本地代码盘点，再补竞品信息——降低对不稳定 web 后端的依赖。
+
+**工具层修复**：provider 一旦返回进程/网络错误，不再用多个 query variant 重复撞同一后端，而是立即切换下一 provider；失败 provider 熔断 30 秒，连续调用会快速降级。所有 provider 都失败时，错误会明确提示停止重复搜索，改用已知 URL 的 `web_fetch` 或本地离线盘点。
+
+**改进建议**：
+- web_search 失败应快速降级（间隔重试 ≤2 次 → 改 web_fetch 直连已知 URL → 本地盘点先行），不要在同一次搜索上反复试错浪费往返。
+- 对 JS 渲染站点（OpenAI docs 等），`web_fetch` 明确返回降级提示或 fallback（如 curl 移动 UA，参照 2026-08-24 微信反爬条目）。
+
+## 2026-09-05 — 调研子代理超时无产出 + 部分站点反爬（Desktop/App wrap PRD 任务）
+
+**问题**：任务卡 t-1788517972939-2 需联网调研（Tauri/Electron/WebView/PWA 方案对比）。两次委托子代理均失败：
+- 第 1 次（general-purpose，5 分钟）：持续卡在 `web_fetch` 循环，300s 超时，无任何成果落盘。
+- 第 2 次（加了约束：web_fetch≤3、报告增量写盘、4 分钟）：标记 completed 但调研文件未落盘（.godex/tmp/desktop-wrap-research.md 不存在），成果取不到。
+- 主会话 `web_search`（duckduckgo/lightpanda 双通道）当日持续失败；`web_fetch` 对 capacitorjs.com 命中 Cloudflare challenge；tauri 的 v2.tauri.app/start/mobile 404（正确入口是 tauri.app/start）。
+
+**根因**：① 子代理做开放性联网调研时倾向反复 web_fetch 深挖，无硬上限易超时；② 子代理「completed 但无产物」说明其最终回复未被可靠回收（依赖写盘才能保底）；③ web_search 后端当日不稳定 + Cloudflare 反爬站点需要换通道。
+
+**解决**：放弃继续委托，改主会话有界取证：`web_fetch` 直连官方文档（tauri.app/start、web.dev、MDN、registry.npmjs.org 的 JSON 元数据），配合既有领域知识交叉确认，够写 PRD 即收口；PRD 直接写入 docs/prd-desktop-app-wrap.md。
+
+**工具层修复**：识别为联网调研的子代理默认设置 4 分钟任务超时，并注入硬约束（`web_search` 最多 2 次、`web_fetch` 最多 3 次、失败立即换官方 URL/API/registry/GitHub、本地证据，指定输出文件时逐节 checkpoint）。子代理没有最终 handoff 时改记为 error，不再以 completed 占位。`web_fetch` 的 HTTP 错误、JS 壳和 Cloudflare 响应会携带 browser/API/registry 等替代通道提示。
+
+**改进建议**：
+- 委托子代理做联网调研时，prompt 必须硬性约束：web_fetch 次数上限、总搜索次数上限、**必须增量写盘**（每完成一节就写一次文件），并指定报告落盘路径——不要依赖子代理最终回复回收成果。
+- 子代理调研失败（超时/无产物）超过 1 次即切换为主会话有界直取（web_fetch 官方文档 + npm registry JSON + 领域知识），避免反复委托浪费时间。
+- Cloudflare 反爬站点（capacitorjs.com 等）优先用 registry.npmjs.org JSON 或 GitHub README 代替。
+- 需要版本/体积等具体数字时优先官方文档首页/文档站，其次权威博客，最后才领域知识（标注为估计）。
+
+## 2026-09-05 — Browser use 帧流 WS 404（webui 剥离 /api 前缀 vs 路由带前缀）
+
+**问题**：Browser dock 面板（前端 P1）帧流一直走降级路径（"Frame stream unavailable"），而 `browser.view` 事件链路正常（URL 跟随生效）。WS 握手 `/api/browser/frames` 返回 Go ServeMux 默认 404。
+
+**根因**：`internal/runtime/webui/webui.go` 的 `NewHandler` 会把外部请求的 `/api/` 前缀**剥离**后再转给 API handler（`r2.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")`）。后端 `routes_browser_frames.go` 注册的路由却是 `GET /api/browser/frames`（带 `/api` 前缀）——httpapi 里唯一带 `/api` 前缀的路由。外部 `/api/browser/frames` 被剥离成 `/browser/frames` 后匹配不上 → 404。其他路由（sessions/preview/voice 等）注册时都不带 `/api` 前缀，所以正常。
+
+**解决**：`routes_browser_frames.go` 路由改为 `GET /browser/frames`（与 httpapi 其他路由一致），测试 URL 同步，并补 WebUI 外部 `/api/browser/frames` 剥离成内部 `/browser/frames` 的回归覆盖；`go test ./internal/runtime/httpapi ./internal/runtime/webui ./internal/tools` 通过。
+
+**改进建议**：
+- httpapi 内注册路由一律不带 `/api` 前缀（webui 统一剥离），新增路由时 grep 校验 `mux.Handle("GET /api/` 不得出现。
+- 排查 WS/API 404 时先用 node http 探针对比已知路由状态码：404(纯文本 ServeMux) vs 401(鉴权层) 能快速区分「路由未注册」与「鉴权拦截」。
+
+## 2026-09-06 — Browser use 帧流三层断链联调（含 headless screencast 坑）
+
+**问题**：Browser dock 面板帧流联调共修三层才通（每层都有独立根因）：① 路由 404（见上条）；② WS 握手成功但 15s 无帧（pump 卡死在 screencast）；③ WS 握手后立即 1006 关闭（pump 提前退出）。
+
+**根因②**：`runScreencast` 里 `start.Call(page)` 无 deadline，headless Chromium 接受 `Page.startScreencast` 但从不投递 `screencastFrame` 事件 → pump 永远阻塞在事件循环，注释声称的 screenshot 回退永不触发。修：调用加 5s 超时 context + 首帧守卫（3s 无帧回退）。
+
+**根因③**：headless Chrome 152 下 rod 的 `page.Event()` 事件 channel **立即关闭**（ok=false）——被误判为「页面已关闭」返回 true，`run()` 提前 return 并关闭所有订阅 channel → WS 收到 EOF 立即 1006。修：channel 关闭视为「screencast 不可用」返回 false，回退 `runScreenshotLoop`（500ms/张 JPEG 截图），帧流稳定产帧。
+
+**关键排查手段**：
+- 给 pump 所有退出路径加 `log.Printf("framePump %s: ...")` 日志（含 frameKey），重启后 `grep framePump ~/.godex/log/godex.err.log` 一条日志直接定位退出路径，不再盲猜。
+- 服务进程 stderr 在 `~/.godex/log/godex.err.log`，stdout 在 `godex.log`。
+- WS 探针用 node 脚本带 `?session=&token=` 直连，区分「OPEN 保持无帧」（pump 卡死）vs「OPEN 后立即 1006」（pump 退出）两种模式。
+- HTTP no-upgrade 探针（JSON 错误 vs 纯文本 404）先排除路由/鉴权层。
+
+**改进建议**：headless 环境下 screencast 不可靠，帧泵应「screencast 为可选增强、截图回退为默认可靠路径」；rod 事件 channel 关闭不等于页面消失，退出语义需区分「页面没了」与「功能不可用」。

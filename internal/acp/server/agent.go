@@ -327,7 +327,7 @@ func (a *Agent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, 
 
 // CloseSession cancels any in-flight prompt for the session and drops its
 // state. Unknown sessions are ignored (idempotent close).
-func (a *Agent) CloseSession(_ context.Context, params acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+func (a *Agent) CloseSession(ctx context.Context, params acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
 	sid := string(params.SessionId)
 	a.mu.Lock()
 	st, ok := a.sessions[sid]
@@ -338,6 +338,11 @@ func (a *Agent) CloseSession(_ context.Context, params acp.CloseSessionRequest) 
 		}
 	}
 	a.mu.Unlock()
+	if ok && strings.TrimSpace(st.backendSessionID) != "" {
+		if closer, supported := a.Features.(sessionMCPBridgeCloseProvider); supported {
+			closer.CloseACPMCPBridge(ctx, st.backendSessionID)
+		}
+	}
 	return acp.CloseSessionResponse{}, nil
 }
 

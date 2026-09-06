@@ -79,6 +79,8 @@ func (s *Service) executeExtended(ctx context.Context, a *agent.Agent, cmd Comma
 		return s.executeMemoryRestore(a, cmd)
 	case "model":
 		return s.executeModel(a, ctx, cmd)
+	case "agent":
+		return s.executeAgentTemplate(a, ctx, cmd)
 	case "clear":
 		return s.executeClear(a, ctx, cmd)
 	case "approve":

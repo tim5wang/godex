@@ -240,6 +240,66 @@ func (s *Service) wireSlashCommandHandlers() {
 	if s.commands == nil {
 		return
 	}
+	s.commands.SetAgentTemplate(func(ctx context.Context, a *agent.Agent, cmd commands.Command) (commands.Result, error) {
+		args := append([]string(nil), cmd.Args...)
+		if len(args) == 0 || (len(args) == 1 && strings.EqualFold(strings.TrimSpace(args[0]), "list")) {
+			items, err := s.ListAgentTemplates()
+			if err != nil {
+				return commands.Result{}, err
+			}
+			currentID := strings.TrimSpace(a.TemplateID())
+			if currentID == "" {
+				currentID = "default"
+			}
+			lines := []string{"Agent templates:"}
+			for _, item := range items {
+				marker := " "
+				if item.ID == currentID {
+					marker = "*"
+				}
+				line := fmt.Sprintf("%s %s", marker, item.ID)
+				if name := strings.TrimSpace(item.Name); name != "" && name != item.ID {
+					line += " — " + name
+				}
+				lines = append(lines, line)
+			}
+			lines = append(lines, "", "Switch with: /agent <template-id>")
+			return commands.Result{Name: "agent", Output: strings.Join(lines, "\n")}, nil
+		}
+
+		templateID := ""
+		switch {
+		case len(args) == 1:
+			templateID = strings.TrimSpace(args[0])
+		case len(args) == 2 && strings.EqualFold(strings.TrimSpace(args[0]), "use"):
+			templateID = strings.TrimSpace(args[1])
+		default:
+			return commands.Result{}, fmt.Errorf("usage: /agent [list|use <template-id>|<template-id>]")
+		}
+		if templateID == "" {
+			return commands.Result{}, fmt.Errorf("usage: /agent [list|use <template-id>|<template-id>]")
+		}
+		sessionCtx, ok := commands.CurrentSessionContext(ctx)
+		if !ok || strings.TrimSpace(sessionCtx.SessionID) == "" {
+			return commands.Result{}, fmt.Errorf("current session context is unavailable")
+		}
+		tmpl, warnings, err := s.ValidateAgentTemplate(templateID)
+		if err != nil {
+			return commands.Result{}, err
+		}
+		oldEngine := a.TemplateEngine()
+		if err := s.ApplyTemplateToSession(sessionCtx.SessionID, tmpl.ID); err != nil {
+			return commands.Result{}, err
+		}
+		lines := []string{fmt.Sprintf("Agent template switched to %s (%s).", tmpl.Name, tmpl.ID)}
+		if newEngine := a.TemplateEngine(); newEngine != oldEngine {
+			lines = append(lines, fmt.Sprintf("Harness changed from %s to %s; the new harness starts its own external context on the next turn.", oldEngine, newEngine))
+		}
+		for _, warning := range warnings {
+			lines = append(lines, "Warning: "+warning)
+		}
+		return commands.Result{Name: "agent", Output: strings.Join(lines, "\n"), RefreshSnapshot: true}, nil
+	})
 	s.commands.SetNewSession(func(ctx context.Context, a *agent.Agent, cmd commands.Command) (commands.Result, error) {
 		locator, err := s.CreateNewSession(ctx)
 		if err != nil {

@@ -5,9 +5,9 @@ import { create } from "zustand";
 // hand-rolled pattern as store/layoutPersistence.ts, kept independent
 // so the global workspace layout is untouched).
 
-export type DockTab = "files" | "terminal" | "tasks" | "preview" | "status";
+export type DockTab = "files" | "terminal" | "tasks" | "preview" | "status" | "browser";
 
-export const DOCK_TABS: ReadonlyArray<DockTab> = ["files", "terminal", "tasks", "preview", "status"];
+export const DOCK_TABS: ReadonlyArray<DockTab> = ["files", "terminal", "tasks", "preview", "status", "browser"];
 
 // Keep the persisted key stable so existing user layouts survive the module rename.
 export const CHAT_LAYOUT_STORAGE_KEY = "godex.web.chatV2.layout.v1";
@@ -28,6 +28,7 @@ export interface ChatLayoutActions {
   toggleRight: () => void;
   closeRight: () => void;
   setActiveDockTab: (tab: DockTab) => void;
+  activateDockTab: (tab: DockTab) => void;
   setLeftWidth: (width: number) => void;
   setRightWidth: (width: number) => void;
   reset: () => void;
@@ -89,6 +90,19 @@ export const useConversationLayoutStore = create<ChatLayoutStoreState>((set) => 
     set((state) => {
       if (state.activeDockTab === tab && !state.rightCollapsed) {
         return { rightCollapsed: true };
+      }
+      return { activeDockTab: tab, rightCollapsed: false };
+    });
+  },
+
+  // Programmatic activation (auto-follow, steered panels): switch to the tab
+  // and expand the dock, but never collapse it when already active — unlike
+  // setActiveDockTab whose toggle semantics belong to user clicks only.
+  activateDockTab: (tab) => {
+    if (!isDockTab(tab)) return;
+    set((state) => {
+      if (state.activeDockTab === tab && !state.rightCollapsed) {
+        return {};
       }
       return { activeDockTab: tab, rightCollapsed: false };
     });

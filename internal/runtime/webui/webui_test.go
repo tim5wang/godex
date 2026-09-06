@@ -62,7 +62,7 @@ func TestHandlerServesAssetsAndFallsBackToIndex(t *testing.T) {
 		t.Fatalf("expected bare /meta to serve SPA index, got %q", string(body))
 	}
 
-	for _, apiPath := range []string{"/api/meta", "/api/memory"} {
+	for _, apiPath := range []string{"/api/meta", "/api/memory", "/api/browser/frames"} {
 		apiResp, err := http.Get(server.URL + apiPath)
 		if err != nil {
 			t.Fatalf("get %s: %v", apiPath, err)

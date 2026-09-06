@@ -31,3 +31,15 @@ func (s *Service) DiscoverACPAgentModels(ctx context.Context, agent config.ACPAg
 	}
 	return tools.DiscoverACPAgentModelOptions(ctx, agent, workspace)
 }
+
+// DiscoverACPAgentConfigOptions connects to a configured ACP agent and returns
+// its full set of selectable session config options (models + reasoning
+// effort), from the agent's configOptions. It backs the chat model / reasoning
+// pickers for ACP template sessions.
+func (s *Service) DiscoverACPAgentConfigOptions(ctx context.Context, agent config.ACPAgentConfig) (*tools.ACPConfigOptions, error) {
+	workspace := strings.TrimSpace(s.cfg.WorkspaceDir)
+	if workspace == "" {
+		workspace = "."
+	}
+	return tools.DiscoverACPAgentConfigOptions(ctx, agent, workspace)
+}

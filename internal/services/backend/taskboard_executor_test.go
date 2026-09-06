@@ -34,7 +34,7 @@ func newTestTaskboardExecutor(t *testing.T) (*Service, *TaskboardExecutor, taskb
 	card, err := ledger.CreateCard(taskboard.CreateCardInput{
 		ProjectID:  projects[0].ID,
 		Title:      "template-pinned task",
-		TemplateID: "geek",
+		TemplateID: "coder",
 	})
 	if err != nil {
 		t.Fatalf("create card: %v", err)
@@ -102,6 +102,14 @@ func TestTaskboardExecutorOpensTemplatePinnedSession(t *testing.T) {
 	}
 	if reopened.SessionID != sessionID {
 		t.Fatalf("expected same session id on reopen, got %q != %q", reopened.SessionID, sessionID)
+	}
+}
+
+func TestTaskboardExecutorRejectsUnknownTemplate(t *testing.T) {
+	_, executor, card := newTestTaskboardExecutor(t)
+	card.TemplateID = "missing-template"
+	if _, _, err := executor.Execute(context.Background(), card); err == nil || !strings.Contains(err.Error(), "missing-template") {
+		t.Fatalf("expected unknown template error, got %v", err)
 	}
 }
 

@@ -29,6 +29,7 @@ export const enProductMessages = {
       modelLoading: "Loading model...",
       modelSwitching: "switching model",
       acpModelPlaceholder: "ACP model (empty = agent default)",
+      acpReasoningEffortPlaceholder: "Reasoning",
       engineExternalTooltip: "This session runs on an external kernel; template tools/bundles do not apply.",
       modelScopeDefault: "default",
       modelScopeSession: "session",

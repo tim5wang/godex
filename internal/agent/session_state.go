@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"reflect"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/teammate"
 	"github.com/tim5wang/godex/internal/core/templates"
@@ -221,14 +223,61 @@ func (a *Agent) RegisterHarness(id string, harness Harness) {
 // "acp:<agent-id>", so a turn may request e.g. RunOptions.Harness =
 // "acp:codex" to delegate the whole turn to that external engine.
 func (a *Agent) RegisterConfiguredACPHarnesses() {
-	if a == nil || a.cfg == nil || len(a.cfg.ACP.Agents) == 0 {
+	if a == nil || a.cfg == nil {
 		return
 	}
+	desired := make(map[string]config.ACPAgentConfig, len(a.cfg.ACP.Agents))
 	for id, cfg := range a.cfg.ACP.Agents {
 		if strings.TrimSpace(id) == "" {
 			continue
 		}
-		a.RegisterHarness("acp:"+id, NewACPHarness(id, cfg))
+		desired["acp:"+id] = cfg
+	}
+
+	a.mu.Lock()
+	if a.configuredACPHarnesses == nil {
+		a.configuredACPHarnesses = map[string]struct{}{}
+	}
+	router := a.harnessRouterVal
+	var removedIDs []string
+	var removed []Harness
+	for harnessID := range a.configuredACPHarnesses {
+		if _, ok := desired[harnessID]; ok {
+			continue
+		}
+		if prior := a.extraHarnesses[harnessID]; prior != nil {
+			removed = append(removed, prior)
+		}
+		delete(a.extraHarnesses, harnessID)
+		delete(a.configuredACPHarnesses, harnessID)
+		removedIDs = append(removedIDs, harnessID)
+	}
+	a.mu.Unlock()
+	if dynamic, ok := router.(interface{ Unregister(string) }); ok {
+		for _, harnessID := range removedIDs {
+			dynamic.Unregister(harnessID)
+		}
+	}
+	for _, harness := range removed {
+		_ = harness.Close()
+	}
+
+	for harnessID, cfg := range desired {
+		a.mu.Lock()
+		prior, tracked := a.extraHarnesses[harnessID].(*ACPHarness)
+		unchanged := tracked && reflect.DeepEqual(prior.cfg, cfg)
+		a.configuredACPHarnesses[harnessID] = struct{}{}
+		a.mu.Unlock()
+		if unchanged {
+			continue
+		}
+		harness := NewACPHarness(strings.TrimPrefix(harnessID, "acp:"), cfg)
+		harness.permissionManager = a.permissions
+		harness.permissionReviewer = a.reviewPermissionRequest
+		a.RegisterHarness(harnessID, harness)
+		if prior != nil {
+			_ = prior.Close()
+		}
 	}
 }
 

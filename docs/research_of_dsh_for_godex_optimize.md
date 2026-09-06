@@ -1,14 +1,14 @@
 # DeepSeek Harness 对 GoDex 的改进启示
 
-> 状态：Active / Implemented architecture record（阶段 0/A/B 与 P1–P4 已落地；阶段 C MVP 已落地，生产 provider 语义和更高级 HMR 仍演进）
+> 状态：Active / Implemented architecture record（阶段 0/A/B 与 P1–P4 已落地；通用 ACP Harness 生产语义已加固；PiHarness 专用策略封装与更高级 HMR 仍演进）
 > 目标：提炼 `temp/deepseek-harness` 中值得 GoDex 吸收的架构能力，聚焦近期可落地优化；不追求复制 Cordis，也不把 WASM 等同于插件系统。
 > 修订日志：2026-08-15 整合插件对照表、wazero 兼容性结论（协议层/桥接层）、MCP 跨运行时能力协议视角与更低起步点（阶段 0：package requires 依赖解析）。2026-08-16 阶段 0 落地：`godex.package.yaml` 支持 `requires`/`provides`、安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装与旧 digest 目录 GC（见 `internal/core/packages/{requires,deps}.go`）。同日 P1 与阶段 A 内核骨架落地：`internal/toolruntime` 注册返回可逆 `Registration`（owner/generation/draining，`RegisterOwned`/`UnregisterOwner`），新增 `internal/pluginrt` 轻量插件内核（manifest/graph/instance/effects/registry/manager，含事务式 prepare/commit/rollback 与 `NativeToolPlugin` 内建 Go 适配器）；MCP 桥接落地：`internal/core/mcp` 新增 stdio JSON-RPC client（`list_mcp_tools`/`call_mcp_tool`，任意语言 MCP server 即 GoDex 插件）。
 
-## 当前实现结论（2026-08-31）
+## 当前实现结论（2026-09-04）
 
 - Package runtime 声明、WASM 加载、安装/重装/删除/reload reconcile 与 Session 自动激活已经落地，P3 不再是纯设计。
 - pluginrt 生命周期/effect/registry、owner-aware tool runtime、WASM tools/prompts/policy/host brokers、ACP Harness 主链均有实现和集成测试。
-- 阶段 C 标为 Partial 的原因是生产 provider/streaming/credential 策略仍需长期加固，不是底层切片缺失。
+- 阶段 C 的通用 ACP 生产闭环已补齐：Agent 模板 engine、CLI/API Harness 覆盖、有界历史恢复、审批流、进程组治理、工具 session 复用和默认关闭的客户端 MCP 桥接均已落地。Web 会话不提供中途 Harness 热切换。PiHarness 专用 provider/credential 策略封装仍未实施。
 - 通用动态 Service、最小子树 HMR、完整 WASI、WASM sandbox provider 和第三方 React realm 仍明确暂缓。
 
 ## 1. 核心结论（2026-08-15 方案起点）
@@ -168,7 +168,7 @@ type Effect func(context.Context) error
 2. 由宿主统一消费 `HarnessTurnResult.Reply`、写 transcript 并 checkpoint —— ✅ harness 分支在 `RunTurn` 后把 `Reply` 追加进 transcript、触发 checkpoint 并发出 `assistant_message_completed` 事件（`internal/agent/runtime.go`）；
 3. 将 Harness registry 改为动态、generation-aware，移除 `sync.Once` 快照限制 —— ✅ `harnessRouter` 增加并发安全的 `Register`（`sync.RWMutex`），`Agent.RegisterHarness` 在 router 已构建后仍生效（见 `internal/agent/{harness,session_state}.go`）；
 4. 统一 text delta、tool、usage、error、permission 等事件映射 —— ✅ 已落地：ACP 外部 engine 的 session/update 事件（message chunk → `assistant_text_delta`、tool_call → `tool_call_started/finished`）由 `ACPHarness.emitUpdateEvents` 重放为 GoDex 事件（`tools.ACPUpdate`/`ACPRunResult.UpdateEvents` 结构化解析）；error 映射已落地（失败 turn 发 `error_raised`，`emitErrorEvent`）；plan/permission 类更新映射为 `warning_raised`（`acp_external_update`，`emitUpdateEvents`），外部 engine 不消耗 GoDex token（usage 映射不适用）；
-5. 明确外部 engine 的 workspace、scope 和工具权限 —— ✅ `HarnessTurnInput` 新增 `Scope`（宿主注入 `SandboxScope`）；`ACPHarness` 在首次使用时绑定 scope 并拒绝跨 scope 复用（`bindScope` + `ResetSession` 解绑，P2 #5 外部 engine scope 联动）；workspace 由宿主注入；工具权限边界以「不转发工具注册」为默认。
+5. 明确外部 engine 的 workspace、scope 和工具权限 —— ✅ `HarnessTurnInput` 新增 `Scope`（宿主注入 `SandboxScope`）；`ACPHarness` 在首次使用时绑定 scope 并拒绝跨 scope 复用；workspace 由宿主注入；`deny | policy | interactive` 将 ACP permission 请求映射到统一审批流。外部进程本身仍是原生宿主进程，不能等同于沙箱。
 
 Pi 等外部 agent 的近期接入顺序建议是：
 
@@ -292,12 +292,13 @@ DSH 插件是 TS/JS 模块（跑在 Node 的 Cordis Loader 里），wazero 无�
 - Rust/TinyGo 示例 SDK —— ✅ `examples/wasm-plugin-rust`：零依赖 Rust `cdylib` 实现 mailbox ABI（tools/prompts/policy/abi 四面），`wasm32-wasip1` 交叉编译，`internal/wasmrt` 与 `internal/pluginrt` 均有端到端集成测试（Rust 编译产物直接跑通工具/prompt/policy）；`rebuild-testdata.sh` 一键刷新 Go 测试夹具；TinyGo 示例 `examples/wasm-plugin-tinygo`（ABI 与 Rust 示例等价，零依赖，~128 KiB vs Go 工具链 ~3 MB，`wasmrt` 自动识别 `_initialize`/`_start` 两种 runtime 启动函数）
 - pluginrt Adapter / 生产装配 —— ✅ `WasmToolPlugin` 负责 wazero 加载、工具发现、owner 注册与逆序撤销；`internal/agent/package_runtime.go` 枚举已安装 Package，在 Session 启动、安装、重装、删除和配置 reload 时激活/重载/停用实例；Backend 将变更同步到全部打开 Session；权限映射覆盖 network、workspace read、KV 和逐项 credential
 
-### 阶段 C：Provider 与外部 Engine（4～8 人周）🟡 MVP 切片已落地，生产语义待加固
+### 阶段 C：Provider 与外部 Engine（4～8 人周）🟢 通用 ACP 生产语义已加固
 
 - HTTP/credential/KV broker —— ✅ 全部：`internal/pluginrt/kv_broker.go` `PluginKVBroker`（namespaced、scope-scoped、durable SQLite 或 memory 后端，key 含 plugin id 隔离，禁止 `|` 防别名）；`WasmToolPlugin.KV` 接线到 wasmrt `godex_kv_get/set` host 调用；wasmrt 新增 `godex_http_get` host 调用（受宿主 web fetch 策略控制：allow/deny 域、超时、max chars，`Agent.pluginHTTPGet` 走 `WebFetchService.Fetch`）；`internal/pluginrt/credential_broker.go` `CredentialBroker`（按插件 allowlist 授权读取命名 secret，`godex_credential_get` host 调用，未授权/未设置返回不同错误码）；Rust 示例新增 `rust_counter`（KV）、`rust_http`（HTTP）、`rust_credential`（credential）工具，均端到端测试；
 - streaming handle —— ✅ `tools.StreamACPAgent`：ACP client 的 `readResponseWithCallback` 在每个 session/update 到达时即时回调（text chunk 实时推送），`ACPHarness` 用它在流式过程中发 `assistant_text_delta`，tool_call/plan 事件仍聚合重放；返回结果保留完整回复文本与结构化更新列表（真实 wire 协议集成测试）；
-- Pi/其他 ACP agent 的 Harness adapter —— ✅ `internal/agent/acp_harness.go` `ACPHarness`：包装一个配置的 ACP agent 为 `Harness`（id `acp:<agent-id>`），`RunTurn` 从稳定输入面取最后 user 文本、经 stdio ACP（initialize/session-new/session-prompt）委托整轮，回复经 `HarnessTurnResult.Reply` 由宿主写入 transcript + checkpoint；`RegisterConfiguredACPHarnesses` 在 agent 装配时注册所有配置的 ACP agent（真实 wire 协议集成测试）；
+- Pi/其他 ACP agent 的通用 Harness adapter —— ✅ `ACPHarness` 注册为 `acp:<agent-id>`；Web 由 Agent 模板固定 engine，CLI/API 可显式覆盖；新建或恢复失败时支持有界历史补发，正常 session 只发送增量；回复、usage、tool、error 与 permission 事件由宿主统一消费。PiHarness 专用薄策略层仍按本轮范围保持 ⏳；
 - 动态 Harness registry 和统一事件映射 —— ✅ 动态 registry（P2 #3）+ 事件映射（P2 #4）：host 消费 Reply 发 `assistant_message_completed`，text/tool/error/permission 映射统一；
+- ACP 生命周期与扩展桥接 —— ✅ ACP 子进程/terminal bridge 采用进程组关闭；`acp_agent` 可显式开启按 `(agent, workspace)` 的 session 复用并在断线时恢复；ACP server 可显式开启客户端 stdio MCP 临时桥接，注册使用会话 owner、失败降级 warning、默认关闭且不污染全局 MCP 配置；
 
 ### 暂缓
 

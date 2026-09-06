@@ -16,8 +16,9 @@ import (
 // fakeExecutor closes the execution loop synchronously: record start, then
 // finish as completed (standing in for the durable-subagent adapter).
 type fakeExecutor struct {
-	ledger *Ledger
-	lastID string
+	ledger       *Ledger
+	lastID       string
+	lastTemplate string
 }
 
 func (f *fakeExecutor) Execute(ctx context.Context, card Card) (string, string, error) {
@@ -30,6 +31,7 @@ func (f *fakeExecutor) Execute(ctx context.Context, card Card) (string, string, 
 		return "", "", err
 	}
 	f.lastID = card.ID
+	f.lastTemplate = card.TemplateID
 	return executionID, sessionID, nil
 }
 

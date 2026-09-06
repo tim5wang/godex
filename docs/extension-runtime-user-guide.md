@@ -14,7 +14,7 @@
 | MCP stdio tools/prompts | 可用 | 通过独立进程扩展工具和 Prompt |
 | MCP Streamable HTTP tools/prompts | 可用（无状态 baseline） | 连接远端 MCP；JSON/SSE 终态响应可用，`Mcp-Session-Id` 保持未实现 |
 | ACP `acp_agent` 委派 | 可用 | 把一个任务交给外部 ACP Agent |
-| ACP whole-turn Harness | 后端已接线，暂无 CLI/Web 选择器 | 由集成方通过消息 metadata 指定外部引擎 |
+| ACP whole-turn Harness | 可用 | Agent 模板 `engine`、CLI `--harness` 或消息 metadata 选择外部引擎；Web 由会话模板固定 |
 | WASM Runtime / Plugin Kernel | 可用 | 安装 Package 后自动加载工具和 Prompt |
 | 安装、重装、删除 WASM Package | 可用 | 自动激活、热重载和撤销运行时能力 |
 
@@ -192,6 +192,7 @@ Streamable HTTP 不启动本机进程，但会把显式配置的 headers 和工�
 
 ```yaml
 acp:
+  bridge_client_mcp_servers: false # ACP server 是否桥接客户端提议的 stdio MCP；默认关闭
   agents:
     pi:
       command: pi-acp
@@ -199,6 +200,9 @@ acp:
       env: {}
       timeout_seconds: 600
       description: Pi coding agent
+      forward_history_turns: 0    # 新建/重建远端会话时补发的最近历史消息数
+      permission_mode: deny       # deny | policy | interactive
+      reuse_tool_sessions: false  # acp_agent 工具调用是否复用远端 session
 ```
 
 `command` 必须启动一个 ACP stdio server；普通 CLI 只有在提供 ACP adapter 时才能直接使用。
@@ -222,7 +226,7 @@ acp:
 }
 ```
 
-执行流程为：GoDex 启动外部进程 → `initialize` → `session/new` → `session/prompt` → 收集更新和最终文本 → 关闭进程。
+默认执行流程为：GoDex 启动外部进程 → `initialize` → `session/new` → `session/prompt` → 收集更新和最终文本 → 关闭进程。设置 `reuse_tool_sessions: true` 后，同一 `(agent, workspace)` 的调用串行复用 ACP 进程和 session；连接死亡时按 load/resume/new 回退，空闲达到 timeout 后自动关闭。
 
 ### 4.2 Whole-turn Harness
 
@@ -232,14 +236,15 @@ acp:
 {"harness":"acp:pi"}
 ```
 
-当前 CLI 和 Web UI 没有正式的 Harness 选择器，因此普通用户优先使用 `acp_agent` 委派。
+CLI 可用 `godex ask --harness acp:pi "..."` 做显式覆盖；Web Chat 由新建会话时选择的 Agent 模板固定引擎，不提供对话中的 Harness 热切换。非法 ID 会返回包含可用引擎列表的错误，不会静默回退到 `godex`。
 
 ### 4.3 当前语义和限制
 
-- 每次调用都会启动新进程并创建新 ACP session；目前不会跨 Turn 复用远端 session。
-- Whole-turn Harness 当前只发送最新一条用户文本，不会完整转发历史、附件和结构化内容。
-- ACP 进程继承宿主环境，并在 workspace 目录启动；它不受 GoDex 内部 Tool permission interceptor 的完整约束。
-- timeout 会取消直接子进程，但复杂 wrapper 的后代进程治理仍需加强。
+- **工具会话复用已解决（显式开启）**：`reuse_tool_sessions: true` 可跨调用复用；默认 `false` 保持旧行为和最小信任面。
+- **历史恢复已解决（有界开启）**：Whole-turn Harness 在首次创建或 resume 失败时可用 `forward_history_turns: N` 补发最近用户/助手消息；正常续跑只发增量。默认 `0` 不补发。图片仅在对端声明支持时转发，其它结构化块仍按 ACP 能力降级。
+- **权限审批已接入**：`permission_mode` 默认 `deny`；`policy` 使用 GoDex permission policy；`interactive` 把外部 `session/request_permission` 映射到 Pending Permission，并支持 once/task/session/pattern 决策回写。边界仍需明确：这约束的是遵循 ACP permission 请求的操作，外部 ACP/MCP 进程本身仍是宿主用户权限下的原生进程，只应配置可信命令。
+- **进程树治理已解决**：ACP agent 与 terminal bridge 使用独立进程组，取消、超时和关闭会终止进程组，而不只杀直接子进程；terminal 请求的 cwd 也必须位于 workspace 内。
+- **客户端 MCP 桥接为安全默认关闭**：`bridge_client_mcp_servers: true` 时，只桥接 stdio server，使用会话命名空间的临时注册，不写入全局 `mcp.json`；发现/启动失败降级为 warning，不中断对话。客户端提议的命令仍必须被视为可信本机程序。
 
 ## 5. WASM Package Runtime
 

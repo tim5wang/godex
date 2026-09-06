@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -246,6 +247,42 @@ func TestFindToolFindsFiles(t *testing.T) {
 	}
 	if strings.Contains(resultStr, "README.md") {
 		t.Fatalf("should not contain README.md: %s", resultStr)
+	}
+}
+
+func TestFindToolHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tool := NewFindTool(t.TempDir())
+	_, err := tool.Execute(ctx, map[string]interface{}{
+		"pattern":         "*.go",
+		"timeout_seconds": 1,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled find, got %v", err)
+	}
+}
+
+type deadlineGrepBackend struct {
+	hadDeadline bool
+}
+
+func (b *deadlineGrepBackend) Search(ctx context.Context, _ GrepOptions) (GrepResult, error) {
+	_, b.hadDeadline = ctx.Deadline()
+	return GrepResult{}, nil
+}
+
+func TestGrepToolAppliesTimeoutSeconds(t *testing.T) {
+	backend := &deadlineGrepBackend{}
+	tool := NewGrepToolWithBackend(backend)
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{
+		"pattern":         "match",
+		"timeout_seconds": 1,
+	}); err != nil {
+		t.Fatalf("grep: %v", err)
+	}
+	if !backend.hadDeadline {
+		t.Fatal("expected grep backend context to have a deadline")
 	}
 }
 

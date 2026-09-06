@@ -4,7 +4,7 @@ import "context"
 
 type PackageRuntime interface {
 	ListPackages() ([]PackageEntry, error)
-	InstallPackage(source string) (PackageEntry, error)
+	InstallPackageContext(ctx context.Context, source string) (PackageEntry, error)
 	RemovePackage(name string) (PackageEntry, error)
 	ListPrompts(includeContent bool) ([]PromptEntry, error)
 	ListPackageCommands(includeContent bool) ([]PackageCommandEntry, error)
@@ -113,7 +113,8 @@ func NewListPackagesTool(runtime PackageRuntime) Tool {
 }
 
 type installPackageArgs struct {
-	Source string `json:"source"`
+	Source         string `json:"source"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
 func NewInstallPackageTool(runtime PackageRuntime) Tool {
@@ -121,10 +122,16 @@ func NewInstallPackageTool(runtime PackageRuntime) Tool {
 		"type": "object",
 		"properties": map[string]interface{}{
 			"source": map[string]interface{}{"type": "string"},
+			"timeout_seconds": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional timeout for this installation in seconds. Omit to use the global tool timeout.",
+			},
 		},
 		"required": []string{"source"},
 	}, nil), func(ctx context.Context, args installPackageArgs) (ToolResult, error) {
-		item, err := runtime.InstallPackage(args.Source)
+		installCtx, cancel := withOptionalTimeout(ctx, args.TimeoutSeconds)
+		defer cancel()
+		item, err := runtime.InstallPackageContext(installCtx, args.Source)
 		if err != nil {
 			return ToolResult{}, err
 		}

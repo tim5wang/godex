@@ -18,9 +18,10 @@ const (
 )
 
 type findArgs struct {
-	Pattern    string `json:"pattern"`
-	Path       string `json:"path,omitempty"`
-	MaxResults int    `json:"max_results,omitempty"`
+	Pattern        string `json:"pattern"`
+	Path           string `json:"path,omitempty"`
+	MaxResults     int    `json:"max_results,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
 type findResult struct {
@@ -39,7 +40,6 @@ func NewFindTool(workspace string) Tool {
 // If fs is nil, a local FS is created from workspace.
 func NewFindToolWithFS(fs workspacefs.FS, workspace string) Tool {
 	return NewTypedTool(SpecFromDefinition(tooling.FindDefinition(), nil), func(ctx context.Context, args findArgs) (ToolResult, error) {
-		_ = ctx
 		pattern := strings.TrimSpace(args.Pattern)
 		if pattern == "" {
 			return ToolResult{}, fmt.Errorf("missing pattern argument")
@@ -51,6 +51,11 @@ func NewFindToolWithFS(fs workspacefs.FS, workspace string) Tool {
 		}
 		if maxResults > maxFindResults {
 			maxResults = maxFindResults
+		}
+		searchCtx, cancel := withOptionalTimeout(ctx, args.TimeoutSeconds)
+		defer cancel()
+		if err := searchCtx.Err(); err != nil {
+			return ToolResult{}, err
 		}
 
 		searchPath := "."
@@ -86,7 +91,9 @@ func NewFindToolWithFS(fs workspacefs.FS, workspace string) Tool {
 
 		var files []string
 		total := 0
-		walkFindDir(root, searchPath, entries, pattern, filePattern, &files, &total, maxResults)
+		if err := walkFindDir(searchCtx, root, searchPath, entries, pattern, filePattern, &files, &total, maxResults); err != nil {
+			return ToolResult{}, err
+		}
 		sort.Strings(files)
 
 		if len(files) > maxResults {
@@ -102,10 +109,13 @@ func NewFindToolWithFS(fs workspacefs.FS, workspace string) Tool {
 	})
 }
 
-func walkFindDir(root workspacefs.FS, relDir string, entries []fs.DirEntry, originalPattern, filePattern string, files *[]string, total *int, maxResults int) {
+func walkFindDir(ctx context.Context, root workspacefs.FS, relDir string, entries []fs.DirEntry, originalPattern, filePattern string, files *[]string, total *int, maxResults int) error {
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if len(*files) >= maxResults {
-			return
+			return nil
 		}
 		name := entry.Name()
 		if shouldSkipDirEntry(name) && entry.IsDir() {
@@ -120,7 +130,9 @@ func walkFindDir(root workspacefs.FS, relDir string, entries []fs.DirEntry, orig
 			if err != nil {
 				continue
 			}
-			walkFindDir(root, entryRel, subEntries, originalPattern, filePattern, files, total, maxResults)
+			if err := walkFindDir(ctx, root, entryRel, subEntries, originalPattern, filePattern, files, total, maxResults); err != nil {
+				return err
+			}
 		} else {
 			// Match against filename.
 			matched, _ := filepath.Match(filePattern, name)
@@ -140,6 +152,7 @@ func walkFindDir(root workspacefs.FS, relDir string, entries []fs.DirEntry, orig
 			}
 		}
 	}
+	return nil
 }
 
 func shouldSkipDirEntry(name string) bool {

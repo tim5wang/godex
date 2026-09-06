@@ -166,6 +166,14 @@ func dispatchTaskboardCard(ctx context.Context, ledger toolLedger, executor Exec
 	if err != nil {
 		return tools.ToolResult{}, err
 	}
+	if templateID := strings.TrimSpace(args.TemplateID); templateID != "" && templateID != strings.TrimSpace(card.TemplateID) {
+		card, err = writeWithRetry(ledger, id, card.Version, func(version int) (Card, error) {
+			return ledger.UpdateCard(id, version, agentActor, UpdateCardInput{TemplateID: &templateID})
+		})
+		if err != nil {
+			return tools.ToolResult{}, err
+		}
+	}
 	if err := ledger.PrecheckDispatchConflicts(card); err != nil {
 		return tools.ToolResult{}, err
 	}
@@ -173,7 +181,7 @@ func dispatchTaskboardCard(ctx context.Context, ledger toolLedger, executor Exec
 	if err != nil {
 		return tools.ToolResult{}, err
 	}
-	return tools.ToolResult{Structured: map[string]any{"execution_id": executionID, "session_id": sessionID}}, nil
+	return tools.ToolResult{Structured: map[string]any{"execution_id": executionID, "session_id": sessionID, "template_id": card.TemplateID}}, nil
 }
 
 func observeTaskboardExecution(ctx context.Context, executor Executor, args taskboardArgs) (tools.ToolResult, error) {

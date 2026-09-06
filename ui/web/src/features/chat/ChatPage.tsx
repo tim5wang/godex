@@ -10,7 +10,7 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useConversationLayoutStore, type DockTab, DOCK_TABS } from "./layout/layoutStore";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, setSessionACPAgentModel, discoverACPAgentModels, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, setSessionACPAgentModel, setSessionACPAgentReasoningEffort, discoverACPAgentConfigOptions, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -625,23 +625,57 @@ export function useChatPageController() {
   });
 
   // ACP sessions (template engine "acp:<agent-id>") select from the external
-  // agent's own model list (its session configOptions), not godex profiles.
-  // Discovery spawns the agent process, so the list is cached aggressively.
+  // agent's own session configOptions (models + reasoning effort), not godex
+  // profiles. Discovery spawns the agent process, so the list is cached
+  // aggressively.
   const acpAgentID = activeTemplate?.engine?.startsWith("acp:") ? activeTemplate.engine.slice(4) : null;
   const acpModelsQuery = useQuery({
-    queryKey: ["acp-models", token, acpAgentID],
+    queryKey: ["acp-config-options", token, acpAgentID],
     enabled: !!acpAgentID && !!openQuery.data?.session_id,
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
-    queryFn: () => (acpAgentID ? discoverACPAgentModels(token || null, acpAgentID) : { models: [] }),
+    queryFn: () => (acpAgentID ? discoverACPAgentConfigOptions(token || null, acpAgentID) : { models: [], reasoning_efforts: [] }),
   });
   const acpModelOptions = useMemo(
     () => (acpModelsQuery.data?.models ?? []).map((model) => ({ value: model.value, label: model.name || model.value })),
     [acpModelsQuery.data],
   );
+  // Reasoning-effort options advertised by the ACP agent (dsh: off/low/high/max
+  // with high as the default balance). Falls back to a fixed set when the agent
+  // does not advertise them.
+  const acpReasoningEffortOptions = useMemo(() => {
+    const advertised = (acpModelsQuery.data?.reasoning_efforts ?? []).map((effort) => ({
+      value: effort.value,
+      label: effort.name || effort.value,
+    }));
+    if (advertised.length > 0) {
+      return advertised;
+    }
+    return [
+      { value: "off", label: "Off" },
+      { value: "low", label: "Low" },
+      { value: "high", label: "High" },
+      { value: "max", label: "Max" },
+    ];
+  }, [acpModelsQuery.data]);
   const acpModelMutation = useMutation({
     mutationFn: async ({ model }: { model: string }) =>
       setSessionACPAgentModel(token || null, openQuery.data!.session_id, model),
+    onSuccess: async (view) => {
+      queryClient.setQueryData(["models", token, openQuery.data?.session_id], view);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["models", token, openQuery.data?.session_id] }),
+        queryClient.invalidateQueries({ queryKey: ["snapshot", token, openQuery.data?.session_id] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions", token] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof APIError ? error.message : String(error));
+    },
+  });
+  const acpReasoningEffortMutation = useMutation({
+    mutationFn: async ({ effort }: { effort: string }) =>
+      setSessionACPAgentReasoningEffort(token || null, openQuery.data!.session_id, effort),
     onSuccess: async (view) => {
       queryClient.setQueryData(["models", token, openQuery.data?.session_id], view);
       await Promise.all([
@@ -965,6 +999,9 @@ export function useChatPageController() {
     acpModelsLoading: acpModelsQuery.isLoading,
     acpModelMutation,
     selectedACPAgentModel: modelsQuery.data?.acp_model ?? "",
+    acpReasoningEffortOptions,
+    acpReasoningEffortMutation,
+    selectedACPAgentReasoningEffort: modelsQuery.data?.acp_reasoning_effort ?? "high",
     unloadSkillMutation,
     forkMutation,
     refreshSubagentViews,

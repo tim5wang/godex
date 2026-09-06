@@ -59,6 +59,11 @@ type fakeHandlerBackend struct {
 	sink          events.Sink
 
 	lastLocator backend.SessionLocator
+	bridgedMCP  []acp.McpServer
+}
+
+func (f *fakeHandlerBackend) BridgeACPMCPServers(_ context.Context, _ string, servers []acp.McpServer) {
+	f.bridgedMCP = append([]acp.McpServer(nil), servers...)
 }
 
 func (f *fakeHandlerBackend) OpenSession(_ context.Context, locator backend.SessionLocator) (*backend.OpenedSession, error) {
@@ -886,6 +891,21 @@ func TestBackendPromptHandlerRecordsAcpMcpServers(t *testing.T) {
 	}
 	if !strings.Contains(meta, "tools") || !strings.Contains(meta, "mcp-tools") {
 		t.Fatalf("expected server name+command in metadata, got %q", meta)
+	}
+	if len(fake.bridgedMCP) != 0 {
+		t.Fatal("default handler must not bridge client MCP servers")
+	}
+}
+
+func TestMcpBridgeEnabledInvokesBackendBridge(t *testing.T) {
+	fake := &fakeHandlerBackend{commandResult: commands.Result{Name: "help", Output: "ok"}}
+	handler := BackendPromptHandlerWithOptions(fake, BackendPromptOptions{BridgeClientMCPServers: true})
+	server := acp.McpServer{Stdio: &acp.McpServerStdio{Name: "tools", Command: "mcp-tools"}}
+	if _, err := handler(context.Background(), PromptTurn{SessionID: "acp-1", Prompt: "/help", McpServers: []acp.McpServer{server}}); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(fake.bridgedMCP) != 1 || fake.bridgedMCP[0].Stdio == nil || fake.bridgedMCP[0].Stdio.Name != "tools" {
+		t.Fatalf("bridged MCP servers = %+v", fake.bridgedMCP)
 	}
 }
 

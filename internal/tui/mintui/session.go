@@ -62,6 +62,7 @@ type Backend interface {
 	AttachSink(string, events.Sink) (func(), error)
 	Models(context.Context, string) (rtbackend.ModelsView, error)
 	SetSessionModelProfile(context.Context, string, string) (rtbackend.ModelsView, error)
+	SetSessionACPAgentReasoningEffort(context.Context, string, string) (rtbackend.ModelsView, error)
 	ListSessions(context.Context, rtbackend.SessionListFilter) ([]rtbackend.ListedSession, error)
 	CreateNewSession(context.Context) (rtbackend.SessionLocator, error)
 
@@ -477,6 +478,10 @@ func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.C
 		s.handleModelSelect(ctx)
 		return
 	}
+	if cmd.Name == "reasoning" && strings.TrimSpace(ctx.Args) == "" {
+		s.handleReasoningSelect(ctx)
+		return
+	}
 	if cmd.Name == "new" && strings.TrimSpace(ctx.Args) == "" {
 		s.handleNewSession(ctx)
 		return
@@ -625,6 +630,72 @@ func (s *Session) handleModelSelect(ctx *minitui.CommandContext) {
 	// model name on the next renderStatus call.
 	s.refreshSnapshot()
 	ctx.Write("✓ /model completed\n")
+}
+
+// handleReasoningSelect shows a secondary dropdown to pick the ACP
+// reasoning-effort level (off/low/high/max, default high). It only makes
+// sense for sessions whose template engine routes turns to an external ACP
+// agent; the choice is persisted on the session and forwarded through the
+// ACP session config "reasoning_effort" option on the next turn.
+func (s *Session) handleReasoningSelect(ctx *minitui.CommandContext) {
+	mv, err := s.backend.Models(context.Background(), s.sessionID)
+	if err != nil {
+		ctx.Write("Error: failed to list models: " + err.Error() + "\n")
+		return
+	}
+	if strings.TrimSpace(mv.AcpModel) == "" {
+		ctx.Write("Reasoning effort applies to ACP agent sessions only (template engine \"acp:<agent-id>\").\n")
+		ctx.Write("✓ /reasoning completed\n")
+		return
+	}
+	levels := []struct {
+		value, name string
+	}{
+		{"off", "Off"},
+		{"low", "Low"},
+		{"high", "High"},
+		{"max", "Max"},
+	}
+	current := strings.TrimSpace(mv.AcpReasoningEffort)
+	if current == "" {
+		current = "high"
+	}
+	options := make([]minitui.SelectOption, 0, len(levels))
+	selectedIdx := 0
+	for i, lv := range levels {
+		desc := lv.name
+		if lv.value == current {
+			selectedIdx = i
+			desc += " [active]"
+		}
+		options = append(options, minitui.SelectOption{Label: lv.name, Description: desc})
+	}
+	if selectedIdx > 0 {
+		options = append(options[selectedIdx:], options[:selectedIdx]...)
+	}
+	ctx.Write(fmt.Sprintf("Reasoning effort (current: %s):\n", current))
+	idx := ctx.Select("Choose reasoning effort · ↑↓ navigate · Enter confirm · Esc cancel", options)
+	if idx < 0 {
+		ctx.Write("Reasoning effort selection cancelled.\n")
+		return
+	}
+	actualIdx := idx + selectedIdx
+	if actualIdx >= len(levels) {
+		actualIdx -= len(levels)
+	}
+	chosen := levels[actualIdx]
+	if chosen.value == current {
+		ctx.Write(fmt.Sprintf("Already using %s reasoning.\n", chosen.name))
+		ctx.Write("✓ /reasoning completed\n")
+		return
+	}
+	if _, err := s.backend.SetSessionACPAgentReasoningEffort(context.Background(), s.sessionID, chosen.value); err != nil {
+		ctx.Write("Error: failed to set reasoning effort: " + err.Error() + "\n")
+		return
+	}
+	ctx.Write(fmt.Sprintf("Reasoning effort set to %s.\n", chosen.name))
+	s.refreshSnapshot()
+	ctx.Write("✓ /reasoning completed\n")
 }
 
 // handleResumeSelect shows a secondary dropdown to pick a session

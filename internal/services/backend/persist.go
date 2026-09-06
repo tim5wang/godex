@@ -23,6 +23,7 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 	modelProfileID := strings.TrimSpace(session.modelProfileID)
 	reasoningEffort := normalizeSessionReasoningEffort(session.reasoningEffort)
 	acpModel := strings.TrimSpace(session.acpModel)
+	acpReasoningEffort := strings.TrimSpace(session.acpReasoningEffort)
 	acpSessionID := strings.TrimSpace(session.acpSessionID)
 	lastAcpSessionID := strings.TrimSpace(session.lastAcpSessionID)
 	parentSessionID := strings.TrimSpace(session.parentSessionID)
@@ -40,6 +41,7 @@ func (s *Service) persistSession(session *sessionState, updatedAt time.Time) err
 		ModelProfileID:         modelProfileID,
 		ReasoningEffort:        reasoningEffort,
 		AcpModel:               acpModel,
+		AcpReasoningEffort:     acpReasoningEffort,
 		AcpSessionID:           acpSessionID,
 		LastAcpSessionID:       lastAcpSessionID,
 		ParentSessionID:        parentSessionID,
@@ -223,6 +225,7 @@ func (s *Service) snapshotFromSession(session *sessionState) Snapshot {
 		Identity:                identity,
 		ModelProfileID:          modelProfileID,
 		ReasoningEffort:         reasoningEffort,
+		HarnessIDs:              session.agent.RegisteredHarnessIDs(),
 		QueuedTurns:             session.snapshotQueuedTurns(snapshotTurnLimit),
 		UpdatedAt:               updatedAt,
 	}

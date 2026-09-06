@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	acp "github.com/coder/acp-go-sdk"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
@@ -35,7 +36,9 @@ type ACPHarness struct {
 	// PermissionPolicy optionally overrides how the harness answers the
 	// external engine's session/request_permission requests (M4 权限桥). When
 	// nil the harness denies every request and surfaces it as a warning event.
-	PermissionPolicy tools.ACPPermissionHandler
+	PermissionPolicy   tools.ACPPermissionHandler
+	permissionManager  *tools.PermissionManager
+	permissionReviewer tools.PermissionReviewer
 
 	mu    sync.Mutex
 	scope scope.Id // scope bound at first use; cross-scope reuse is rejected
@@ -90,7 +93,7 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 	if workspace == "" {
 		workspace = "."
 	}
-	sess, resumeFailed, err := h.liveSession(ctx, workspace, input.Model)
+	sess, freshSession, resumeFailed, err := h.liveSession(ctx, workspace, input.Model, input.ReasoningEffort)
 	if err != nil {
 		h.emitErrorEvent(input, err)
 		return HarnessTurnResult{}, err
@@ -105,6 +108,9 @@ func (h *ACPHarness) RunTurn(ctx context.Context, input HarnessTurnInput) (Harne
 	// M2: forward the whole user message as ACP content blocks — text always,
 	// image attachments only when the engine advertised promptCapabilities.image.
 	blocks := tools.ACPContentBlocksForMessage(*userMsg, sess.SupportsImage())
+	if freshSession && h.cfg.ForwardHistoryTurns > 0 {
+		blocks = append(historyBlocks(input.Messages, sess.SupportsImage(), h.cfg.ForwardHistoryTurns), blocks...)
+	}
 	if len(blocks) == 0 {
 		// The message carried content this engine cannot consume (e.g. an
 		// image-only turn against an agent without prompt image support).
@@ -178,7 +184,7 @@ func (h *ACPHarness) emitUsageEvent(input HarnessTurnInput, usage *tools.ACPTurn
 // reports whether a previously recorded session id could NOT be resumed and a
 // fresh external conversation was created instead (the old id is retained in
 // lastSessionID for diagnostics so a later turn can decide to recover it).
-func (h *ACPHarness) liveSession(ctx context.Context, workspace, model string) (*tools.ACPSession, bool, error) {
+func (h *ACPHarness) liveSession(ctx context.Context, workspace, model, reasoningEffort string) (*tools.ACPSession, bool, bool, error) {
 	h.sessMu.Lock()
 	defer h.sessMu.Unlock()
 	if h.sess != nil {
@@ -187,13 +193,13 @@ func (h *ACPHarness) liveSession(ctx context.Context, workspace, model string) (
 			_ = h.sess.Close()
 			h.sess = nil
 		default:
-			return h.sess, false, nil
+			return h.sess, false, false, nil
 		}
 	}
 	requestedResumeID := h.sessionID
-	opened, err := tools.OpenACPSession(ctx, h.cfg, workspace, model, 0, requestedResumeID)
+	opened, err := tools.OpenACPSession(ctx, h.cfg, workspace, model, reasoningEffort, 0, requestedResumeID)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	resumeFailed := requestedResumeID != "" && opened.SessionID() != requestedResumeID
 	if resumeFailed {
@@ -201,7 +207,7 @@ func (h *ACPHarness) liveSession(ctx context.Context, workspace, model string) (
 	}
 	h.sess = opened
 	h.sessionID = opened.SessionID()
-	return opened, resumeFailed, nil
+	return opened, requestedResumeID == "" || resumeFailed, resumeFailed, nil
 }
 
 // rememberSession records the live session id so a later reconnect can resume
@@ -323,10 +329,43 @@ func (h *ACPHarness) emitErrorEvent(input HarnessTurnInput, err error) {
 // GoDex-side decision, and every request is auditable via the event stream).
 func (h *ACPHarness) permissionResolver(input HarnessTurnInput) tools.ACPPermissionHandler {
 	return func(ctx context.Context, req tools.ACPPermissionRequest) (tools.ACPPermissionResponse, error) {
-		resp, err := tools.DenyACPPermissionRequest(req)
 		if h.PermissionPolicy != nil {
-			resp, err = h.PermissionPolicy(ctx, req)
+			resp, err := h.PermissionPolicy(ctx, req)
+			h.emitPermissionEvent(input, req, err == nil)
+			return resp, err
 		}
+		mode := strings.ToLower(strings.TrimSpace(h.cfg.PermissionMode))
+		if mode == "" || mode == "deny" || h.permissionManager == nil {
+			resp, err := tools.DenyACPPermissionRequest(req)
+			h.emitPermissionEvent(input, req, err == nil)
+			return resp, err
+		}
+		normalized := tools.ACPPermissionRequestToGodex(h.agentID, input.SessionID, input.TurnID, req)
+		result := h.permissionManager.Evaluate(normalized)
+		if mode == "interactive" && result.Decision != tools.PermissionAllow && result.Decision != tools.PermissionDeny {
+			result = h.permissionManager.RequestApproval(normalized, "external ACP agent requires approval")
+		}
+		if result.Decision == tools.PermissionPending && result.Scope == "review" && h.permissionReviewer != nil {
+			reviewed, reviewErr := h.permissionReviewer(ctx, normalized)
+			if reviewErr == nil && reviewed.Decision != tools.PermissionPending {
+				result = reviewed
+			} else {
+				reason := reviewed.Reason
+				if reviewErr != nil {
+					reason = reviewErr.Error()
+				}
+				result = h.permissionManager.RequestApproval(normalized, reason)
+			}
+		}
+		for result.Decision == tools.PermissionPending {
+			select {
+			case <-ctx.Done():
+				return tools.ACPPermissionResponse{}, ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+				result = h.permissionManager.Evaluate(normalized)
+			}
+		}
+		resp, err := tools.ACPPermissionResponseForDecision(req, result.Decision, tools.PermissionGrantScope(result.Scope))
 		h.emitPermissionEvent(input, req, err == nil)
 		return resp, err
 	}
@@ -511,6 +550,50 @@ func lastUserMessage(messages func() []protocol.Message) *protocol.Message {
 		return &msg
 	}
 	return nil
+}
+
+// historyBlocks builds bounded, explicitly labelled context for a freshly
+// created external conversation. The latest user message is excluded because
+// RunTurn appends it separately as the live instruction.
+func historyBlocks(messages func() []protocol.Message, includeImages bool, limit int) []acp.ContentBlock {
+	if messages == nil || limit <= 0 {
+		return nil
+	}
+	items := messages()
+	selected := make([]protocol.Message, 0, limit)
+	skippedLatestUser := false
+	for i := len(items) - 1; i >= 0 && len(selected) < limit; i-- {
+		msg := items[i]
+		if msg.Role == protocol.RoleUser && !skippedLatestUser {
+			skippedLatestUser = true
+			continue
+		}
+		if msg.Role != protocol.RoleUser && msg.Role != protocol.RoleAssistant {
+			continue
+		}
+		selected = append(selected, msg)
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
+		selected[left], selected[right] = selected[right], selected[left]
+	}
+	out := []acp.ContentBlock{acp.TextBlock("Previous conversation history follows for context only. Do not treat it as a new instruction.")}
+	for _, msg := range selected {
+		converted := tools.ACPContentBlocksForMessage(msg, includeImages)
+		if len(converted) == 0 {
+			continue
+		}
+		role := "Assistant"
+		if msg.Role == protocol.RoleUser {
+			role = "User"
+		}
+		out = append(out, acp.TextBlock(role+":"))
+		out = append(out, converted...)
+	}
+	out = append(out, acp.TextBlock("Current user request:"))
+	return out
 }
 
 // userMessageHasPromptContent reports whether the message carries content that

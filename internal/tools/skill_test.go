@@ -9,7 +9,8 @@ import (
 )
 
 type fakeSkillRuntime struct {
-	active map[string]struct{}
+	active             map[string]struct{}
+	installHadDeadline bool
 }
 
 func (f *fakeSkillRuntime) ActivateSkill(name string) (SkillActivation, error) {
@@ -174,6 +175,11 @@ func (f *fakeSkillRuntime) InstallSkill(source, name string) (SkillInstallResult
 	}, nil
 }
 
+func (f *fakeSkillRuntime) InstallSkillContext(ctx context.Context, source, name string) (SkillInstallResult, error) {
+	_, f.installHadDeadline = ctx.Deadline()
+	return f.InstallSkill(source, name)
+}
+
 func (f *fakeSkillRuntime) RemoveSkill(name string) (SkillRemoveResult, error) {
 	if name == "missing" {
 		return SkillRemoveResult{}, context.Canceled
@@ -336,9 +342,10 @@ func TestSkillToolInstallActionInstallsFromSource(t *testing.T) {
 	}
 
 	result, err := tool.Execute(context.Background(), map[string]interface{}{
-		"action": "install",
-		"source": "owner/repo",
-		"name":   "playwright-cli",
+		"action":          "install",
+		"source":          "owner/repo",
+		"name":            "playwright-cli",
+		"timeout_seconds": 1,
 	})
 	if err != nil {
 		t.Fatalf("install skill: %v", err)
@@ -347,6 +354,9 @@ func TestSkillToolInstallActionInstallsFromSource(t *testing.T) {
 		if !strings.Contains(result, want) {
 			t.Fatalf("expected install result to contain %q, got %q", want, result)
 		}
+	}
+	if !runtime.installHadDeadline {
+		t.Fatal("expected install context to have a deadline")
 	}
 }
 

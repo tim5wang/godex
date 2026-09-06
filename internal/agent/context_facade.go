@@ -76,11 +76,21 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 
 // CompactConversation manually compacts the persistent conversation history.
 func (a *Agent) CompactConversation() (string, error) {
-	return a.CompactConversationWithMode("fast")
+	return a.CompactConversationContext(context.Background())
+}
+
+// CompactConversationContext manually compacts history and honors cancellation.
+func (a *Agent) CompactConversationContext(ctx context.Context) (string, error) {
+	return a.CompactConversationWithModeContext(ctx, "fast")
 }
 
 // CompactConversationWithMode manually compacts persistent conversation history.
 func (a *Agent) CompactConversationWithMode(mode string) (string, error) {
+	return a.CompactConversationWithModeContext(context.Background(), mode)
+}
+
+// CompactConversationWithModeContext manually compacts history and honors cancellation.
+func (a *Agent) CompactConversationWithModeContext(ctx context.Context, mode string) (string, error) {
 	system, err := a.buildRuntimeSystemPrompt()
 	if err != nil {
 		return "", err
@@ -90,7 +100,7 @@ func (a *Agent) CompactConversationWithMode(mode string) (string, error) {
 		return "No messages to compress", nil
 	}
 
-	result, err := a.runCompaction(context.Background(), mode, compress.SessionSummaryRequest{
+	result, err := a.runCompaction(ctx, mode, compress.SessionSummaryRequest{
 		System:               system,
 		History:              protocol.CloneMessages(history),
 		RecentUserMessages:   recentPersistentUserMessages(history, 6),

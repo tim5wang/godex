@@ -32,6 +32,10 @@ func BashDefinition() Definition {
 			"type": "object",
 			"properties": map[string]interface{}{
 				"command": map[string]string{"type": "string"},
+				"timeout_seconds": map[string]string{
+					"type":        "integer",
+					"description": "Optional timeout for this command in seconds. Omit to use the global tool timeout.",
+				},
 			},
 			"required": []string{"command"},
 		},
@@ -167,6 +171,10 @@ func GrepDefinition() Definition {
 					"type":        "integer",
 					"description": "Maximum matches to return. Default: 100, max: 500.",
 				},
+				"timeout_seconds": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional timeout for this search in seconds. Omit to use the global tool timeout.",
+				},
 			},
 			"required": []string{"pattern"},
 		},
@@ -191,6 +199,10 @@ func FindDefinition() Definition {
 				"max_results": map[string]interface{}{
 					"type":        "integer",
 					"description": "Maximum files to return. Default: 200, max: 1000.",
+				},
+				"timeout_seconds": map[string]interface{}{
+					"type":        "integer",
+					"description": "Optional timeout for this search in seconds. Omit to use the global tool timeout.",
 				},
 			},
 			"required": []string{"pattern"},

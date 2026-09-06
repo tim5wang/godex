@@ -175,6 +175,16 @@ type BrowserService struct {
 	// remote node's Chromium CDP endpoint over the relay channel
 	// (distributed browser runtime, tools.browser.cdp_relay_node).
 	cdpDialer CDPDialer
+
+	// frameMu guards framePumps, the registry of active (session, page) frame
+	// streams created by SubscribeFrames.
+	frameMu   sync.Mutex
+	framePumps map[string]*framePump
+
+	// viewNotifier, when installed, receives browser.view notifications
+	// (sessionID, pageID, url) whenever the browser tool operates on a page.
+	// The backend wires this to the session event stream.
+	viewNotifier func(sessionID, pageID, url string)
 }
 
 // SetStateDir installs the durable state directory. When the browser is

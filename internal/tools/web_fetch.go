@@ -156,7 +156,11 @@ func (s *WebFetchService) Fetch(ctx context.Context, rawURL, mode string, maxCha
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return WebFetchResponse{}, fmt.Errorf("web_fetch failed: %s", strings.TrimSpace(string(body)))
+		hint := fallbackHintForURL(resp.Request.URL.String(), false, body, 0)
+		if hint != "" {
+			return WebFetchResponse{}, fmt.Errorf("web_fetch failed (%s): %s; %s", resp.Status, strings.TrimSpace(string(body)), hint)
+		}
+		return WebFetchResponse{}, fmt.Errorf("web_fetch failed (%s): %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	body, err := readLimitedWebFetchBody(resp.Body)
 	if err != nil {
@@ -588,8 +592,14 @@ func fallbackHintForURL(rawURL string, needsBrowser bool, body []byte, contentLe
 		return `web_fetch could not resolve the raw GitHub file. Use a confirmed branch name (query api.github.com/repos/{owner}/{repo} for default_branch if unsure) instead of guessing main/HEAD. See docs/tools_issues.md 2026-08-27.`
 	case strings.HasSuffix(host, "npmjs.com") || host == "registry.npmjs.org":
 		return `web_fetch could not get the npm page (Cloudflare anti-bot). Use the npm registry API: GET registry.npmjs.org/{pkg}/latest for package metadata (description/versions). See docs/tools_issues.md 2026-08-27.`
+	case host == "capacitorjs.com" || strings.HasSuffix(host, ".capacitorjs.com"):
+		return `web_fetch could not get the Capacitor documentation (Cloudflare/JavaScript). Use registry.npmjs.org/@capacitor/core/latest for version metadata or the ionic-team/capacitor GitHub README/docs instead of retrying this URL.`
+	case host == "developers.openai.com" || host == "platform.openai.com" || host == "platform.claude.com":
+		return `web_fetch received only a JavaScript shell or partial documentation. Use the browser tool for rendered content, or fetch a known static/official source directly; do not retry the same URL.`
 	case strings.Contains(strings.ToLower(string(body)), "just a moment") || strings.Contains(strings.ToLower(string(body)), "cf-chl") || strings.Contains(strings.ToLower(string(body)), "cloudflare"):
 		return `web_fetch hit a Cloudflare challenge. Use the site's public API (e.g. api.github.com, registry.npmjs.org, or the target's JSON endpoint) or the browser tool instead of retrying web_fetch on the same URL. See docs/tools_issues.md 2026-08-27.`
+	case needsBrowser:
+		return `web_fetch received a JavaScript-rendered or otherwise incomplete page. Use the browser tool or an alternate official static/API source instead of retrying the same URL.`
 	}
 	return ""
 }

@@ -41,7 +41,7 @@
 | MCP stdio/HTTP | Implemented | `core/mcp`, `routes_mcp.go`, MCP tools | Settings、`/v1/mcp/*` | extension-runtime-user-guide；动态 server tools 会让工具总数变化。 |
 | Package / Skill | Implemented | `core/packages`, `core/skill`, `pluginrt`, SkillsPage | `/packages`, `/skills`, Web Skills | README、extension runtime guide；quality/smoke/reinstall 均存在。 |
 | WASM plugin runtime | Implemented baseline | `wasmrt`, `pluginrt`, examples | package activation | plugin evolution/research docs；完整 marketplace/signing 仍 Planned。 |
-| ACP external agents/server | Implemented | `acp/server`, `tools/acp_agent.go` | `acp-server`, external_agents bundle | vscode-acp、extension runtime guide。 |
+| ACP external agents/server + whole-turn Harness | Implemented（PiHarness 专用封装除外） | `acp/server`, `agent/acp_harness.go`, `tools/acp_agent.go` | `acp-server`、Agent 模板 engine、CLI `--harness`、external_agents bundle | Web 会话由模板固定 engine；有界历史恢复、交互审批、进程组、工具 session 复用与 opt-in 客户端 MCP 临时桥接已覆盖；PiHarness 仍 Planned。 |
 | Subagent jobs | Implemented | `agent/subagent_*`, backend surfaces | Chat/TUI/API/tool | workflow-runtime、roadmap；review/merge/cancel/resume/iterate 存在。 |
 | Review / Merge Center | Implemented, test drift fixed | `reviewMergeCenter.ts`, panel, backend review/merge | Chat panel | superpowers plan 为历史实现记录；read-only job 应是 `no_changes`，review fixture 必须带 writeScope。 |
 | Workflow / AgentGraph / LongTask | Implemented | `agent/workflow.go`, `agentgraph.go`, `longtask_*` | tools、CLI、Web task center | workflow-runtime、roadmap；不是已删除的 Workflows 页面。 |

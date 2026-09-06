@@ -75,6 +75,7 @@ func AvailableMetadata() []CommandMetadata {
 		{Name: "memory-restore", Description: "restore a memory audit snapshot", InputHint: "<audit-id> [before|after]"},
 		{Name: "ledger", Description: "show the current long-task project ledger"},
 		{Name: "model", Description: "list models, switch this session, or update the default model", InputHint: "list|use <profile-id>|default <profile-or-model>|get"},
+		{Name: "agent", Description: "list or switch the current session's agent template", InputHint: "[list|use <template-id>|<template-id>]"},
 		{Name: "approve", Description: "approve the current pending permission request, or inspect approval blockers", InputHint: "[status|list|request-id] [once|task|session|pattern|count:N|timebox:10m]"},
 		{Name: "deny", Description: "deny a pending permission request for this session", InputHint: "[request-id] [reason...]"},
 		{Name: "session", Description: "inspect or create sessions", InputHint: "current|list [channel]|new [key|channel:key]|context|tokens|auth ..."},
@@ -157,6 +158,7 @@ type Service struct {
 	cron          func(context.Context, Command) (Result, error)
 	heartbeat     func(context.Context, Command) (Result, error)
 	model         func(context.Context, Command) (Result, error)
+	agentTemplate func(context.Context, *agent.Agent, Command) (Result, error)
 	session       func(context.Context, *agent.Agent, Command) (Result, error)
 	newSession    func(context.Context, *agent.Agent, Command) (Result, error)
 	resumeSession func(context.Context, *agent.Agent, Command) (Result, error)
@@ -238,6 +240,13 @@ func (s *Service) SetModel(handler func(context.Context, Command) (Result, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.model = handler
+}
+
+// SetAgentTemplate installs the runtime /agent template handler.
+func (s *Service) SetAgentTemplate(handler func(context.Context, *agent.Agent, Command) (Result, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentTemplate = handler
 }
 
 // SetSession installs a runtime session command handler.

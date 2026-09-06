@@ -10,6 +10,7 @@ import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useConversationLayoutStore, type DockTab, DOCK_TABS } from "./layout/layoutStore";
+import { useBrowserViewStore } from "../browser/browserViewStore";
 import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
@@ -553,6 +554,19 @@ export function useChatSessionState(layout: ChatLayoutState) {
             }
             handleEvent(event);
             setTimelineItems((current) => appendTimelineEvent(current, event));
+            // Browser use 联动（后端 P1 事件）：Agent 操作 browser 工具时记录
+            // 视图并自动激活 Browser dock 面板（follow 开启时）。
+            if (event.type === "browser.view") {
+              const payload = (event.payload ?? {}) as { sessionID?: string; pageID?: string; url?: string; title?: string };
+              useBrowserViewStore.getState().setView({
+                pageID: payload.pageID,
+                url: payload.url,
+                title: payload.title,
+              });
+              if (useBrowserViewStore.getState().follow) {
+                useConversationLayoutStore.getState().activateDockTab("browser");
+              }
+            }
             if (event.type === "user_message_accepted") {
               queryClient.setQueryData<ListedSession[]>(["sessions", token, remoteNodeID], (current) =>
                 current?.map((item) =>

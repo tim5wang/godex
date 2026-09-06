@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
@@ -678,6 +679,109 @@ func TestACPHarnessPermissionPolicyOverride(t *testing.T) {
 	}
 	if !strings.Contains(result.Reply, "permission-allow") {
 		t.Fatalf("expected the engine's permission request answered with allow, reply=%q", result.Reply)
+	}
+}
+
+func TestACPHarnessForwardHistoryBlocksAreBoundedAndLabelled(t *testing.T) {
+	messages := func() []protocol.Message {
+		return []protocol.Message{
+			protocol.NewTextMessage(protocol.RoleUser, "old user"),
+			protocol.NewTextMessage(protocol.RoleAssistant, "old assistant"),
+			protocol.NewMessage(protocol.RoleUser, protocol.TextBlock("recent user"), protocol.ImageBlock("image/png", "aGVsbG8=")),
+			protocol.NewTextMessage(protocol.RoleAssistant, "recent assistant"),
+			protocol.NewTextMessage(protocol.RoleUser, "current request"),
+		}
+	}
+	blocks := historyBlocks(messages, false, 2)
+	var texts []string
+	for _, block := range blocks {
+		if block.Image != nil {
+			t.Fatal("image must be filtered when the agent lacks image support")
+		}
+		if block.Text != nil {
+			texts = append(texts, block.Text.Text)
+		}
+	}
+	got := strings.Join(texts, "|")
+	for _, want := range []string{"context only", "User:|recent user", "Assistant:|recent assistant", "Current user request:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("history text %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "old user") || strings.Contains(got, "current request") {
+		t.Fatalf("history was not bounded or included current request: %q", got)
+	}
+	withImage := historyBlocks(messages, true, 2)
+	imageCount := 0
+	for _, block := range withImage {
+		if block.Image != nil {
+			imageCount++
+		}
+	}
+	if imageCount != 1 {
+		t.Fatalf("image blocks = %d, want 1", imageCount)
+	}
+	if got := historyBlocks(messages, true, 0); got != nil {
+		t.Fatalf("zero history must preserve incremental behavior, got %+v", got)
+	}
+}
+
+func TestACPHarnessPermissionInteractiveWaitsForApproval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ACP integration in short mode")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("executable: %v", err)
+	}
+	h := NewACPHarness("fake-acp", config.ACPAgentConfig{
+		ID:             "fake-acp",
+		Command:        exe,
+		Args:           []string{"-test.run", "TestACPFakeServer"},
+		Env:            map[string]string{"GODEX_ACP_HELPER": "1", "GODEX_ACP_FAKE_PERMISSION": "1"},
+		PermissionMode: "interactive",
+	})
+	h.permissionManager = tools.NewPermissionManager()
+	type outcome struct {
+		result HarnessTurnResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := h.RunTurn(context.Background(), HarnessTurnInput{
+			SessionID: "s1",
+			TurnID:    "t1",
+			Messages: func() []protocol.Message {
+				return []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "run")}
+			},
+		})
+		done <- outcome{result: result, err: err}
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	var pending []tools.PendingPermission
+	for time.Now().Before(deadline) {
+		pending = h.permissionManager.ListPending("s1")
+		if len(pending) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending permissions = %+v", pending)
+	}
+	if _, err := h.permissionManager.ApprovePending("s1", pending[0].ID, tools.PermissionGrantOnce); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("run: %v", got.err)
+		}
+		if !strings.Contains(got.result.Reply, "permission-allow") {
+			t.Fatalf("reply = %q", got.result.Reply)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("interactive permission did not resume")
 	}
 }
 

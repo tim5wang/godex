@@ -139,8 +139,8 @@ describe("layout store", () => {
     expect(useConversationLayoutStore.getState().rightCollapsed).toBe(true);
   });
 
-  it("exposes all five dock tabs in order", () => {
-    expect(DOCK_TABS).toEqual(["files", "terminal", "tasks", "preview", "status"]);
+  it("exposes all six dock tabs in order", () => {
+    expect(DOCK_TABS).toEqual(["files", "terminal", "tasks", "preview", "status", "browser"]);
   });
 
   it("reset restores defaults", () => {

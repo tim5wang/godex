@@ -38,4 +38,22 @@ describe("acpAgentsConfigToForm / acpAgentsFormToConfig args round-trip", () => 
     };
     expect(acpAgentsFormToConfig(commaForm)["a"].args).toEqual(["codex", "--profile", "acp"]);
   });
+
+  it("preserves ACP hardening options", () => {
+    const config = {
+      codex: {
+        command: "codex",
+        forward_history_turns: 4,
+        permission_mode: "interactive",
+        reuse_tool_sessions: true,
+        mcp_servers: [{ name: "files", command: "mcp-files" }],
+      },
+    };
+    expect(acpAgentsFormToConfig(acpAgentsConfigToForm(config))["codex"]).toMatchObject({
+      forward_history_turns: 4,
+      permission_mode: "interactive",
+      reuse_tool_sessions: true,
+      mcp_servers: [{ name: "files", command: "mcp-files" }],
+    });
+  });
 });

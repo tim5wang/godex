@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/url"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/tim5wang/godex/internal/platform/tooling"
 )
 
 // InstallResult summarizes a skill installation into the local skills directory.
@@ -49,6 +52,11 @@ type installCandidate struct {
 // Install copies a local or remote skill source into the skills directory and validates it.
 // The optional requestedName can point at a specific skill inside a multi-skill repository.
 func (l *Loader) Install(source, requestedName string) (InstallResult, error) {
+	return l.InstallContext(context.Background(), source, requestedName)
+}
+
+// InstallContext installs a skill and cancels remote source preparation when ctx expires.
+func (l *Loader) InstallContext(ctx context.Context, source, requestedName string) (InstallResult, error) {
 	source = strings.TrimSpace(source)
 	requestedName = strings.TrimSpace(requestedName)
 	source, requestedName = normalizeInstallRequest(source, requestedName)
@@ -63,7 +71,7 @@ func (l *Loader) Install(source, requestedName string) (InstallResult, error) {
 		return InstallResult{}, fmt.Errorf("create skills dir: %w", err)
 	}
 
-	sourceRoot, cleanup, err := l.prepareInstallSource(source)
+	sourceRoot, cleanup, err := l.prepareInstallSource(ctx, source)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -211,7 +219,7 @@ func buildInstallMemoryForLoader(l *Loader, source, requestedName, targetName st
 	return buildInstallMemory(items, source, requestedName, targetName, time.Now())
 }
 
-func (l *Loader) prepareInstallSource(source string) (string, func(), error) {
+func (l *Loader) prepareInstallSource(ctx context.Context, source string) (string, func(), error) {
 	if info, err := os.Stat(source); err == nil {
 		if info.IsDir() {
 			abs, absErr := filepath.Abs(source)
@@ -242,7 +250,15 @@ func (l *Loader) prepareInstallSource(source string) (string, func(), error) {
 		return "", func() {}, fmt.Errorf("create temporary source dir: %w", err)
 	}
 	repoDir := filepath.Join(tmpRoot, "repo")
-	cmd := exec.Command("git", "clone", "--depth=1", cloneURL, repoDir)
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", cloneURL, repoDir)
+	if err := tooling.ConfigureCommandProcessGroup(cmd); err != nil {
+		_ = os.RemoveAll(tmpRoot)
+		return "", func() {}, fmt.Errorf("configure skill clone process: %w", err)
+	}
+	cmd.Cancel = func() error {
+		tooling.KillCommandProcessGroup(cmd)
+		return nil
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = os.RemoveAll(tmpRoot)

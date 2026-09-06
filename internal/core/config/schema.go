@@ -20,7 +20,8 @@ func baseSchema() []SectionSchema {
 			Label:       "ACP Agents",
 			Description: "External Agent Client Protocol agents callable through the acp_agent tool.",
 			Fields: []FieldSchema{
-				{Path: "acp.agents", Label: "ACP Agents", Description: "JSON/YAML object keyed by agent id. Each agent supports command/args/env/timeout_seconds/description.", Type: "json", Secret: true, LiveApply: true},
+				{Path: "acp.agents", Label: "ACP Agents", Description: "JSON/YAML object keyed by agent id. Supports command/args/env/timeout_seconds/model/forward_history_turns/permission_mode/reuse_tool_sessions/mcp_servers.", Type: "json", Secret: true, LiveApply: true},
+				{Path: "acp.bridge_client_mcp_servers", Label: "Bridge Client MCP Servers", Description: "Allow ACP-server sessions to connect to client-proposed stdio MCP servers. Disabled by default.", Type: "bool", LiveApply: true},
 			},
 		},
 		{

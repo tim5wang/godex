@@ -157,6 +157,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerFileRoutes(mux, protected, manager)
 	registerTerminalRoutes(mux)
 	registerVoiceRoutes(mux, service, manager, protected, func() string { return manager.Current().WebToken })
+	registerBrowserFrameRoutes(mux, service, protected, func() string { return manager.Current().WebToken })
 	registerDesktopRoutes(mux, service, protected)
 	registerPreviewRoutes(mux, manager)
 	registerGitRoutes(mux, protected, manager)

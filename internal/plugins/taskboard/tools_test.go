@@ -167,7 +167,7 @@ func TestTaskboardToolDispatch(t *testing.T) {
 	}
 
 	// dispatch with executor returns execution/session ids and records the run
-	res := mustExec(t, runner, map[string]interface{}{"action": "dispatch", "card_id": card.ID})
+	res := mustExec(t, runner, map[string]interface{}{"action": "dispatch", "card_id": card.ID, "template_id": "coder"})
 	if res["execution_id"] != "ex-"+card.ID {
 		t.Fatalf("unexpected execution_id %v", res["execution_id"])
 	}
@@ -177,12 +177,18 @@ func TestTaskboardToolDispatch(t *testing.T) {
 	if exec.lastID != card.ID {
 		t.Fatalf("expected executor to run card %q, got %q", card.ID, exec.lastID)
 	}
+	if exec.lastTemplate != "coder" || res["template_id"] != "coder" {
+		t.Fatalf("expected dispatch template coder, executor=%q result=%v", exec.lastTemplate, res["template_id"])
+	}
 	got, err := ledger.GetCard(card.ID)
 	if err != nil {
 		t.Fatalf("get card: %v", err)
 	}
 	if len(got.Executions) != 1 || got.Executions[0].Status != ExecutionCompleted {
 		t.Fatalf("expected 1 completed execution, got %+v", got.Executions)
+	}
+	if got.TemplateID != "coder" {
+		t.Fatalf("expected dispatch to persist template_id coder, got %q", got.TemplateID)
 	}
 }
 

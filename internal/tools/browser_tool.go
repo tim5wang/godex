@@ -199,6 +199,12 @@ func NewBrowserTool(service *BrowserService, workspace string) Tool {
 		if err != nil {
 			return ToolResult{}, err
 		}
+		// Event linkage: report the page the agent just operated on so the
+		// frontend can auto-activate/follow the Browser panel. Skip actions
+		// without a page (status / list_pages / close / close_tab).
+		if viewPageID := browserViewPageID(action, args, payload); viewPageID != "" {
+			service.NotifyView(sessionID, viewPageID, browserViewURL(action, args, payload))
+		}
 		result := ToolResult{Structured: payload}
 		if action == "screenshot" {
 			if screenshot, ok := payload.(BrowserScreenshotResult); ok && strings.TrimSpace(screenshot.ArtifactPath) != "" {
@@ -217,4 +223,72 @@ func NewBrowserTool(service *BrowserService, workspace string) Tool {
 		}
 		return result, nil
 	})
+}
+
+// browserViewPageID extracts the page the browser tool just operated on from
+// the action result (falls back to the requested page_id).
+func browserViewPageID(action string, args browserArgs, payload any) string {
+	switch v := payload.(type) {
+	case BrowserPage:
+		if v.PageID != "" {
+			return v.PageID
+		}
+	case BrowserCaptureResult:
+		if v.Page.PageID != "" {
+			return v.Page.PageID
+		}
+	case BrowserSearchResult:
+		if v.Page.PageID != "" {
+			return v.Page.PageID
+		}
+	case BrowserScreenshotResult:
+		if v.PageID != "" {
+			return v.PageID
+		}
+	case BrowserHandoffResult:
+		if v.Page.PageID != "" {
+			return v.Page.PageID
+		}
+	case BrowserResumeResult:
+		if v.Page.PageID != "" {
+			return v.Page.PageID
+		}
+	case BrowserSnapshot:
+		if v.PageID != "" {
+			return v.PageID
+		}
+	}
+	return strings.TrimSpace(args.PageID)
+}
+
+// browserViewURL extracts the page URL for the browser.view event (falls back
+// to the requested URL when the result carries no page metadata).
+func browserViewURL(action string, args browserArgs, payload any) string {
+	switch v := payload.(type) {
+	case BrowserPage:
+		if v.URL != "" {
+			return v.URL
+		}
+	case BrowserCaptureResult:
+		if v.Page.URL != "" {
+			return v.Page.URL
+		}
+	case BrowserSearchResult:
+		if v.Page.URL != "" {
+			return v.Page.URL
+		}
+	case BrowserHandoffResult:
+		if v.Page.URL != "" {
+			return v.Page.URL
+		}
+	case BrowserResumeResult:
+		if v.Page.URL != "" {
+			return v.Page.URL
+		}
+	case BrowserSnapshot:
+		if v.URL != "" {
+			return v.URL
+		}
+	}
+	return strings.TrimSpace(args.URL)
 }

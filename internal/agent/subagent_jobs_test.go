@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/events"
@@ -1518,6 +1518,51 @@ func TestDurableSubagentDefaultTimeoutDisabled(t *testing.T) {
 		t.Fatalf("cancel no-timeout job: %v", err)
 	}
 	waitForSubagentStatus(t, a.subagentJobs, running.ID, subagentStatusCanceled)
+}
+
+func TestWebResearchSubagentGetsBoundedDefaults(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent, bundleWeb)
+	a.client = repeatedTextCaller("research handoff")
+
+	if _, err := a.handleTool(context.Background(), "subagent", map[string]interface{}{
+		"action": "start",
+		"prompt": "联网调研 Tauri 与 Electron 并给出官方来源链接",
+	}); err != nil {
+		t.Fatalf("start web research subagent: %v", err)
+	}
+	jobs := a.subagentJobs.List()
+	if len(jobs) != 1 {
+		t.Fatalf("expected one job, got %+v", jobs)
+	}
+	job := jobs[0]
+	if job.JobTimeoutMS != boundedWebResearchTimeoutMS {
+		t.Fatalf("expected bounded research timeout, got %d", job.JobTimeoutMS)
+	}
+	for _, want := range []string{"at most 2 web_search", "at most 3 web_fetch", "checkpoint it", "Always finish with a concise handoff"} {
+		if !strings.Contains(job.Prompt, want) {
+			t.Fatalf("expected research instruction %q in prompt: %q", want, job.Prompt)
+		}
+	}
+	waitForSubagentStatus(t, a.subagentJobs, job.ID, subagentStatusCompleted)
+}
+
+func TestDurableSubagentWithoutFinalHandoffIsError(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.client = repeatedTextCaller("")
+	job, err := a.subagentJobs.Start("Explore", "return no content", []string{"read_file"}, nil, 2)
+	if err != nil {
+		t.Fatalf("start subagent: %v", err)
+	}
+	a.runSubagentJob(context.Background(), job.ID, subagentEventTarget{})
+	finished, err := a.subagentJobs.Get(job.ID)
+	if err != nil {
+		t.Fatalf("get subagent: %v", err)
+	}
+	if finished.Status != subagentStatusError || strings.TrimSpace(finished.Error) == "" {
+		t.Fatalf("expected missing handoff to fail instead of completing, got %+v", finished)
+	}
 }
 
 func TestSubagentPromptRewritesWorkspaceAbsolutePaths(t *testing.T) {

@@ -78,16 +78,28 @@ type APISection struct {
 }
 
 type ACPSection struct {
-	Agents map[string]ACPAgentSection `yaml:"agents"`
+	Agents                 map[string]ACPAgentSection `yaml:"agents"`
+	BridgeClientMCPServers bool                       `yaml:"bridge_client_mcp_servers"`
 }
 
 type ACPAgentSection struct {
-	Command        string            `yaml:"command" json:"command"`
-	Args           []string          `yaml:"args" json:"args,omitempty"`
-	Env            map[string]string `yaml:"env" json:"env,omitempty"`
-	TimeoutSeconds int               `yaml:"timeout_seconds" json:"timeout_seconds,omitempty"`
-	Description    string            `yaml:"description" json:"description,omitempty"`
-	Model          string            `yaml:"model" json:"model,omitempty"`
+	Command             string                `yaml:"command" json:"command"`
+	Args                []string              `yaml:"args" json:"args,omitempty"`
+	Env                 map[string]string     `yaml:"env" json:"env,omitempty"`
+	TimeoutSeconds      int                   `yaml:"timeout_seconds" json:"timeout_seconds,omitempty"`
+	Description         string                `yaml:"description" json:"description,omitempty"`
+	Model               string                `yaml:"model" json:"model,omitempty"`
+	ForwardHistoryTurns int                   `yaml:"forward_history_turns" json:"forward_history_turns,omitempty"`
+	PermissionMode      string                `yaml:"permission_mode" json:"permission_mode,omitempty"`
+	ReuseToolSessions   bool                  `yaml:"reuse_tool_sessions" json:"reuse_tool_sessions,omitempty"`
+	McpServers          []ACPMcpServerSection `yaml:"mcp_servers" json:"mcp_servers,omitempty"`
+}
+
+type ACPMcpServerSection struct {
+	Name    string            `yaml:"name" json:"name"`
+	Command string            `yaml:"command" json:"command"`
+	Args    []string          `yaml:"args" json:"args,omitempty"`
+	Env     map[string]string `yaml:"env" json:"env,omitempty"`
 }
 
 type AgentSection struct {

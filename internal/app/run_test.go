@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
-	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/services/backend"
@@ -250,6 +250,24 @@ func TestRunnerAskUsesPromptArguments(t *testing.T) {
 	}
 	if got := stdout.String(); got != "hello back\n" {
 		t.Fatalf("unexpected ask output %q", got)
+	}
+}
+
+func TestRunnerAskHarnessFlagAnnotatesEnvelope(t *testing.T) {
+	backend := &fakeBackend{}
+	runner := &Runner{
+		Cfg:     &config.Config{LeadName: "lead"},
+		Backend: backend,
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		Stdin:   strings.NewReader(""),
+		Now:     func() time.Time { return time.Unix(123, 0) },
+	}
+	if err := runner.Run(context.Background(), []string{"ask", "--harness", "acp:codex", "hello"}); err != nil {
+		t.Fatalf("run ask: %v", err)
+	}
+	if got := backend.submitted[0].Metadata["harness"]; got != "acp:codex" {
+		t.Fatalf("harness metadata = %q, want acp:codex", got)
 	}
 }
 

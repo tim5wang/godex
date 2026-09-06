@@ -45,6 +45,10 @@ func (a *Agent) StartDurableSubagentWithContext(ctx context.Context, prompt, age
 
 func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durableSubagentStartRequest) (*subagentJob, error) {
 	prompt := a.rewriteSubagentPromptWorkspacePaths(req.Prompt)
+	webResearch := looksLikeWebResearchPrompt(prompt)
+	if webResearch {
+		prompt = appendBoundedWebResearchInstructions(prompt)
+	}
 	role, hasRole := a.resolveSubagentRole(req.AgentType)
 	target := subagentEventTargetFromContext(ctx)
 	runtimeCtx := tools.SessionContextFromContext(ctx)
@@ -81,7 +85,7 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 		SandboxID:         a.SandboxID(),
 		MaxTurns:          a.normalizeSubagentMaxTurns(req.MaxTurns),
 		MaxConcurrent:     a.subagentMaxConcurrentJobs(),
-		JobTimeoutMS:      a.normalizeSubagentJobTimeoutMS(req.JobTimeoutMS),
+		JobTimeoutMS:      a.normalizeSubagentJobTimeoutMS(defaultWebResearchJobTimeout(req.JobTimeoutMS, webResearch)),
 	}
 	if hasRole {
 		start.AgentType = role.ID
@@ -661,7 +665,10 @@ func (a *Agent) runSubagentJob(ctx context.Context, id string, target subagentEv
 		output = result.LastAssistantText
 	}
 	if strings.TrimSpace(output) == "" {
-		output = "(subagent completed with no text output)"
+		errorText := "subagent produced no final handoff; inspect its checkpointed progress/artifacts or retry once with a narrower task"
+		finished, _ := a.subagentJobs.Finish(id, subagentStatusError, "", errorText)
+		target.emit(finished, string(subagentStatusError), subagentFinishMessage(subagentStatusError), "", "", errorText, "")
+		return
 	}
 	finished, _ := a.subagentJobs.Finish(id, subagentStatusCompleted, output, "")
 	target.emit(finished, string(subagentStatusCompleted), subagentFinishMessage(subagentStatusCompleted), "", "", "", output)

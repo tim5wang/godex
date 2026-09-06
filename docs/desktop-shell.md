@@ -33,7 +33,7 @@ desktop/
 
 | 能力 | 实现 |
 |---|---|
-| **自托管 godex 服务** | 启动时 `tauri-plugin-shell` 的 `sidecar("godex")` spawn `godex serve --addr 127.0.0.1:PORT`；端口默认 17889（小众端口，避开 8080 撞车），被占用则自动选空闲端口（`GODEX_DESKTOP_PORT` 可指定）；轮询 `/meta` 就绪后 WebView 才连接；退出时 kill 子进程 |
+| **自托管 godex 服务** | 启动时 `tauri-plugin-shell` 的 `sidecar("godex")` spawn `godex serve --addr 127.0.0.1:PORT`；端口默认 17889（小众端口，避开 8080 撞车），被占用则自动选空闲端口（`GODEX_DESKTOP_PORT` 可指定）；**工作目录默认 `~/godex-desktop-workspace`（专用轻量目录，绝不用 $HOME，见下方「重要：工作目录」）**；轮询 `/meta` 就绪后 WebView 才连接；退出时 kill 子进程 |
 | 加载本地 Web UI | `WebviewWindowBuilder` + `WebviewUrl::External`，URL 为自托管端口；设 `GODEX_DESKTOP_URL` 则切外部模式（连已运行的服务，不 spawn） |
 | token 注入（R2 缓解） | 壳自动生成随机 web token 传给子进程环境变量 `GODEX_WEB_TOKEN`，并用初始化脚本写入 `localStorage['godex:web:token']`（与前端 `store/settings.ts` 的 tokenKey 一致）；`GODEX_WEB_TOKEN` 已设置时沿用 |
 | 托盘常驻 | `TrayIconBuilder` + 菜单「打开主窗口 / 退出」；左键单击托盘也唤起窗口；**托盘初始化失败仅打日志，不影响启动**（与快捷键一致，非关键能力失败降级） |
@@ -150,6 +150,18 @@ cd desktop/src-tauri && tauri build --target aarch64-apple-darwin
 - **外部模式**（设 `GODEX_DESKTOP_URL` 连已运行的服务）壳本身约 **5–12 MB**，
   满足 ≤15MB；代价是用户需自行启动 godex serve。
 - 若需两者兼得：可将 godex 二进制压缩（UPX）或按需惰性拉取，见「已知限制」。
+
+## 4.5 重要：工作目录（避免全盘扫描卡死）
+
+自托管模式下壳以**专用轻量目录** `~/godex-desktop-workspace` 作为 `godex serve` 的
+工作目录（首次运行自动创建），**默认绝不用 `$HOME`**。原因：godex 会从
+`~/.godex/mcp.json` 加载 MCP server，其中 codebase-memory-mcp 的 `auto_index=true`
+会对**工作目录**全量建索引（索引库可到数 GB）；若工作目录是数百 GB 的家目录，
+serve 启动即触发全盘扫描，CPU 打满、系统卡死（实测复现：godex.log 膨胀到 1.7GB、
+"godex serve" CPU 持续 50-80%）。
+
+- 需要指向真实项目目录时设置 `GODEX_DESKTOP_WORKSPACE=/path/to/project`
+- 或避免在该目录启用 MCP auto_index（`codebase-memory-mcp config set auto_index false`）
 
 ## 5. 后端事件桥（系统通知数据源）
 

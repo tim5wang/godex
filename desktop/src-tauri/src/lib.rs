@@ -45,6 +45,31 @@ fn hotkey_spec() -> String {
     env_or("GODEX_DESKTOP_HOTKEY", DEFAULT_HOTKEY)
 }
 
+/// Resolves the godex serve workspace directory.
+///
+/// Precedence:
+///   1. GODEX_DESKTOP_WORKSPACE (explicit user override)
+///   2. $HOME/godex-desktop-workspace (dedicated lightweight dir, created here)
+///
+/// Deliberately avoids $HOME itself: with MCP codebase-memory auto_index
+/// enabled the serve process would index the entire home directory and
+/// peg the CPU (observed system freeze). The dedicated dir is created so
+/// the first run does not fail.
+fn default_workspace() -> String {
+    if let Some(w) = std::env::var("GODEX_DESKTOP_WORKSPACE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        return w.trim().to_string();
+    }
+    let home = env_or("HOME", ".");
+    let dir = std::path::Path::new(&home).join("godex-desktop-workspace");
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    dir.to_string_lossy().into_owned()
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window(MAIN_WINDOW) {
         let _ = w.show();
@@ -95,7 +120,13 @@ fn spawn_server(app: &tauri::AppHandle) -> Result<(String, Option<String>, Comma
         None => Some(gen_token()?),
     };
 
-    let workspace = env_or("GODEX_DESKTOP_WORKSPACE", &env_or("HOME", "."));
+    // IMPORTANT: never default the workspace to $HOME. godex loads MCP servers
+    // from ~/.godex/mcp.json and codebase-memory-mcp runs with auto_index=true,
+    // which builds a full index of the *workspace*. Pointing it at a 300GB home
+    // directory pegs the CPU for minutes/hours (system freeze). Default to a
+    // dedicated, lightweight workspace dir instead; users can override with
+    // GODEX_DESKTOP_WORKSPACE to use a real project directory.
+    let workspace = default_workspace();
 
     let sidecar = app
         .shell()
@@ -104,7 +135,7 @@ fn spawn_server(app: &tauri::AppHandle) -> Result<(String, Option<String>, Comma
 
     let mut cmd = sidecar
         .args(["serve", "--addr", &addr])
-        .current_dir(workspace);
+        .current_dir(&workspace);
     if let Some(tok) = &token {
         cmd = cmd.env("GODEX_WEB_TOKEN", tok);
     }

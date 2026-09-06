@@ -34,7 +34,11 @@ func registerDesktopRoutes(mux *http.ServeMux, service *backend.Service, protect
 
 		ctx := r.Context()
 		prevRunning := map[string]bool{}
-		ticker := time.NewTicker(2 * time.Second)
+		// Poll every 10s instead of 2s: ListSessions walks the whole sessions
+		// directory on every tick, which adds measurable CPU/IO once the session
+		// count grows. 10s keeps task-completion notifications near-real-time
+		// without turning the event bridge into a scanner.
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
 		emit := func(event map[string]any) {

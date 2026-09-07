@@ -202,7 +202,7 @@ export default function App() {
               collapsedWidth={APP_NAV_ICON_WIDTH}
               trigger={null}
             >
-              <div className="godex-sider-top">
+              <div className={`godex-sider-top${appNavCollapsed ? " godex-sider-top-collapsed" : ""}`}>
                 <Brand compact={appNavCollapsed} />
                 <Button
                   type="text"

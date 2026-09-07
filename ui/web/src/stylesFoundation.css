@@ -97,6 +97,13 @@ samp {
   padding-top: var(--godex-safe-top);
 }
 
+/* Collapsed: Brand is hidden, so the lone collapse button must center
+ * horizontally to stay aligned with the icon strip below (antd inline
+ * collapsed menu icons are centered within the same 48px column). */
+.godex-sider-top-collapsed {
+  justify-content: center;
+}
+
 .godex-sider-top > .godex-brand {
   min-height: calc(56px - var(--godex-safe-top));
   padding-top: 0;

@@ -89,6 +89,9 @@ importers:
       mermaid:
         specifier: ^11.16.1
         version: 11.16.1
+      mind-elixir:
+        specifier: 6.0.0-next.4
+        version: 6.0.0-next.4
       plantuml-encoder:
         specifier: ^1.4.0
         version: 1.4.0
@@ -1942,6 +1945,9 @@ packages:
 
   micromark@4.0.2:
     resolution: {integrity: sha512-zpe98Q6kvavpCr1NPVSCMebCKfD7CA2NqZ+rykeNhONIJBpc1tFKt9hucLGwha3jNTNI8lHpctWJWoimVF4PfA==}
+
+  mind-elixir@6.0.0-next.4:
+    resolution: {integrity: sha512-CD0Uh6Y5HHxKSs80H+agnHrfJ+lKBgxew5XzAel1+7fnChYK5gM9yhoGF4me13iPSR6yo7qbLo3daoILzq8mXQ==}
 
   mlly@1.8.2:
     resolution: {integrity: sha512-d+ObxMQFmbt10sretNDytwt85VrbkhhUA/JBGm1MPaWJ65Cl4wOgLaB1NYvJSZ0Ef03MMEU/0xpPMXUIQ29UfA==}
@@ -4628,6 +4634,8 @@ snapshots:
       micromark-util-types: 2.0.2
     transitivePeerDependencies:
       - supports-color
+
+  mind-elixir@6.0.0-next.4: {}
 
   mlly@1.8.2:
     dependencies:

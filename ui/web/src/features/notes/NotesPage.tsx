@@ -5,6 +5,7 @@ import { Alert, App as AntApp, Button, Card, Empty, Form, Input, Popconfirm, Sel
 import { CheckOutlined, DatabaseOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { MindMapView } from "./MindMapView";
 import { useI18n } from "../../i18n";
 import { deleteNote, getMeta, getNoteRelatedMemories, listNotes, saveNote } from "../../lib/api";
 import { buildChatRoute } from "../../lib/chatRoutes";
@@ -20,7 +21,7 @@ type NoteFormValues = {
   content: string;
 };
 
-type ContentView = "edit" | "preview";
+type ContentView = "edit" | "preview" | "mindmap";
 
 export function NotesPage() {
   const { message } = AntApp.useApp();
@@ -316,6 +317,7 @@ export function NotesPage() {
                 options={[
                   { label: t("notes.edit"), value: "edit" },
                   { label: t("notes.preview"), value: "preview" },
+                  { label: t("notes.mindmap"), value: "mindmap" },
                 ]}
               />
             </div>
@@ -326,6 +328,14 @@ export function NotesPage() {
               <div className="notes-preview">
                 <MarkdownContent content={contentValue || ""} forceMarkdown />
               </div>
+            ) : null}
+            {contentView === "mindmap" ? (
+              <MindMapView
+                key={selected?.id ?? "new"}
+                title={titleValue || selected?.title || t("notes.untitled")}
+                content={contentValue || ""}
+                onChange={(markdown) => form.setFieldValue("content", markdown)}
+              />
             ) : null}
           </Form>
 

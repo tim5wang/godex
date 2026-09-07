@@ -131,7 +131,7 @@
   }
 
   .godex-header {
-    padding: 0 10px;
+    padding: calc(2px + var(--godex-safe-top)) 10px 2px;
   }
 
   .godex-header .muted {

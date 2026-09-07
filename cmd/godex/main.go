@@ -46,7 +46,43 @@ import (
 	"github.com/tim5wang/godex/internal/version"
 )
 
+// configureResolverFromEnv installs a custom net.Resolver when
+// GODEX_DNS_SERVERS (comma-separated DNS server addresses) is set.
+// Android app sandboxes ship an unusable /etc/resolv.conf ([::1]:53 with no
+// listener), so the pure-Go resolver needs explicit server addresses.
+func configureResolverFromEnv() {
+	servers := os.Getenv("GODEX_DNS_SERVERS")
+	if strings.TrimSpace(servers) == "" {
+		return
+	}
+	var addrs []string
+	for _, s := range strings.Split(servers, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			addrs = append(addrs, s)
+		}
+	}
+	if len(addrs) == 0 {
+		return
+	}
+	net.DefaultResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 5 * time.Second}
+			var lastErr error
+			for _, a := range addrs {
+				conn, err := d.DialContext(ctx, "udp", net.JoinHostPort(a, "53"))
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			return nil, lastErr
+		},
+	}
+}
+
 func main() {
+	configureResolverFromEnv()
 	configOptions, args, done, err := prepareRuntimeArgs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

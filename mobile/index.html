@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>godex Mobile</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #f5f6f8;
+        color: #1f2329;
+        padding: env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 24px);
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #14171a; color: #e6e8eb; }
+      }
+      h1 { font-size: 20px; margin: 24px 0 4px; }
+      p.sub { color: #8a919f; font-size: 13px; margin: 0 0 20px; }
+      .card {
+        background: #fff;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 1px 3px rgba(0,0,0,.08);
+        margin-bottom: 16px;
+      }
+      @media (prefers-color-scheme: dark) {
+        .card { background: #1e2226; }
+      }
+      label { display: block; font-size: 13px; color: #8a919f; margin: 10px 0 4px; }
+      input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #d9dce1;
+        border-radius: 8px;
+        font-size: 15px;
+        background: #fff;
+        color: inherit;
+      }
+      @media (prefers-color-scheme: dark) {
+        input { background: #14171a; border-color: #3a3f45; }
+      }
+      button {
+        width: 100%;
+        padding: 12px;
+        border: 0;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: 600;
+        background: #3478f6;
+        color: #fff;
+        margin-top: 16px;
+        cursor: pointer;
+      }
+      button:disabled { opacity: .5; }
+      .hint { font-size: 12px; color: #8a919f; margin-top: 12px; line-height: 1.5; }
+      #status { margin-top: 12px; font-size: 13px; min-height: 18px; }
+      .ok { color: #22a06b; }
+      .err { color: #e5484d; }
+    </style>
+  </head>
+  <body>
+    <h1>godex Mobile</h1>
+    <p class="sub">连接你的 godex 服务，随时查看并接收任务完成通知</p>
+
+    <div class="card">
+      <label for="server">godex 服务地址</label>
+      <input id="server" type="text" placeholder="http://192.168.1.10:9000" inputmode="url" autocomplete="url" />
+      <label for="token">访问令牌（web.token / GODEX_WEB_TOKEN）</label>
+      <input id="token" type="password" placeholder="可选，服务端启用 token 认证时填写" autocomplete="off" />
+      <label for="interval">任务轮询间隔（秒）</label>
+      <input id="interval" type="number" min="15" max="600" value="30" />
+      <button id="connect">连接并进入</button>
+      <div id="status"></div>
+      <div class="hint">
+        连接后 App 会以 WebView 加载该地址上的 godex Web UI，并在后台轮询任务状态；
+        agent 任务完成时触发本地通知（无需推送账号）。目标服务需允许移动端网络可达。
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

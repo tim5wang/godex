@@ -9,6 +9,10 @@
   --godex-accent: #0f766e;
   --godex-warning: #b45309;
   --godex-error: #b42318;
+  /* 顶部安全区（状态栏高度）：iOS/Android edge-to-edge 下为状态栏高度，
+     桌面浏览器为 0。原生壳（MainActivity）会注入真实像素值覆盖此默认值。 */
+  --godex-safe-top: env(safe-area-inset-top, 0px);
+  --godex-safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -81,9 +85,21 @@ samp {
   align-items: center;
   gap: 10px;
   min-height: 56px;
-  padding: 0 16px;
+  padding: var(--godex-safe-top) 16px 0;
   border-bottom: 1px solid var(--godex-border);
   font-weight: 700;
+}
+
+.godex-sider-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--godex-safe-top);
+}
+
+.godex-sider-top > .godex-brand {
+  min-height: calc(56px - var(--godex-safe-top));
+  padding-top: 0;
 }
 
 .godex-brand-mark {
@@ -103,12 +119,12 @@ samp {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex: 0 0 var(--godex-header-height);
+  flex: 0 0 calc(var(--godex-header-height) + var(--godex-safe-top));
   gap: 16px;
   box-sizing: border-box;
-  height: var(--godex-header-height);
-  min-height: var(--godex-header-height);
-  padding: 6px 20px;
+  height: calc(var(--godex-header-height) + var(--godex-safe-top));
+  min-height: calc(var(--godex-header-height) + var(--godex-safe-top));
+  padding: calc(6px + var(--godex-safe-top)) 20px 6px;
   line-height: normal;
   border-bottom: 1px solid var(--godex-border);
   background: color-mix(in oklab, var(--godex-panel) 94%, transparent);

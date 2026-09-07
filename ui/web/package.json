@@ -43,6 +43,7 @@
     "katex": "^0.18.4",
     "marked": "^18.0.11",
     "mermaid": "^11.16.1",
+    "mind-elixir": "6.0.0-next.4",
     "plantuml-encoder": "^1.4.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

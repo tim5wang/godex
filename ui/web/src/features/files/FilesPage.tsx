@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import { Input, Button, Modal, message, Tag, Select } from "antd";
-import { SaveOutlined, FolderOpenOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
+import { SaveOutlined, FolderOpenOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useSettingsStore } from "../../store/settings";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { readFile, writeFile, deleteFile, mkdirFile, renameFile } from "../../lib/api";
@@ -329,6 +329,13 @@ export default function FilesPage() {
         <Button size="small" onClick={handleSwitchWorkspace} disabled={!rootInput.trim()}>
           Switch
         </Button>
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          title="Refresh file tree"
+          aria-label="Refresh file tree"
+          onClick={() => setRefreshKey((k) => k + 1)}
+        />
         {recentWorkspaces.length > 0 && (
           <Select
             size="small"

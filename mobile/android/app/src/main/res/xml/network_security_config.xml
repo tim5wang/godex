@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置：本地模式下 WebView 需要加载 http://127.0.0.1:<port>（godex serve
+  本地进程）。Android 9+ 默认禁止明文流量，需显式放行 loopback 地址。
+  远程模式（https 公网地址）不受影响；其他域名保持默认（禁止明文）。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

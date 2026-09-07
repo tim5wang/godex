@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">godex Mobile</string>
+    <string name="title_activity_main">godex Mobile</string>
+    <string name="package_name">com.godex.mobile</string>
+    <string name="custom_url_scheme">com.godex.mobile</string>
+</resources>

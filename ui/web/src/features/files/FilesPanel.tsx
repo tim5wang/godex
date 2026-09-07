@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Input, Segmented, Space, Spin, Typography, message, Modal, Select } from "antd";
-import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, FolderOpenOutlined, SaveOutlined } from "@ant-design/icons";
+import { MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, UploadOutlined, FolderOpenOutlined, SaveOutlined, ReloadOutlined } from "@ant-design/icons";
 import FileTree from "./FileTree";
 import CodeEditor from "./CodeEditor";
 import { DiffView } from "../../components/DiffView";
@@ -89,6 +89,7 @@ function FilesPanelDock(props: FilesPanelProps) {
   const [editedContent, setEditedContent] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [previewReloadKey, setPreviewReloadKey] = useState(0);
   const uploadRef = useRef<HTMLInputElement | null>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -156,7 +157,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [props.cwd, selectedPath, token]);
+  }, [props.cwd, selectedPath, token, previewReloadKey]);
 
   const attachSelected = () => {
     if (!selectedPath || !props.onAttachFile) return;
@@ -270,6 +271,14 @@ function FilesPanelDock(props: FilesPanelProps) {
     }
   };
 
+  // Refresh control: reload the file tree and, when there are no unsaved
+  // edits, re-read the currently selected file from disk. Unsaved edits are
+  // never discarded by a refresh.
+  const handleRefresh = () => {
+    setRefreshKey((k) => k + 1);
+    if (!hasUnsavedChanges) setPreviewReloadKey((k) => k + 1);
+  };
+
   // The 40px collapsed strip shows the bare expand affordance.
   if (collapsed) {
     return (
@@ -352,6 +361,15 @@ function FilesPanelDock(props: FilesPanelProps) {
             onChange={(e) => setSearch(e.target.value)}
           />
         </Space.Compact>
+        <Button
+          size="small"
+          type="text"
+          icon={<ReloadOutlined />}
+          aria-label={t("files.refresh") || "Refresh"}
+          title={t("files.refresh") || "Refresh"}
+          onClick={handleRefresh}
+          data-testid="files-panel-refresh"
+        />
       </div>
       <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
         {treeCollapsed ? (
@@ -520,6 +538,19 @@ function FilePreview(props: {
       ? computeLineDiff(props.previewContent, props.editedContent)
       : "";
 
+  // Non-text previews (image/video/audio/pdf) are served by the preview
+  // static route with the token forwarded as a query param (same auth model
+  // as the markdown image resolver above).
+  const binaryKind = getBinaryPreviewKind(props.selectedPath);
+  const binaryUrl = useMemo(() => {
+    if (!binaryKind || !props.selectedPath) return "";
+    return buildPreviewStaticUrl(props.selectedPath, props.cwd ?? ".", props.token);
+  }, [binaryKind, props.selectedPath, props.cwd, props.token]);
+  const [binaryFailed, setBinaryFailed] = useState(false);
+  useEffect(() => {
+    setBinaryFailed(false);
+  }, [binaryUrl]);
+
   return (
     <div data-testid="files-panel-preview-pane" style={{ display: "flex", height: "100%", minWidth: 0, minHeight: 0, flexDirection: "column" }}>
       <div
@@ -599,6 +630,15 @@ function FilePreview(props: {
           <div className="files-markdown-render">
             <MarkdownContent content={props.previewContent} forceMarkdown resolveImageUrl={resolveImageUrl} />
           </div>
+        ) : binaryKind && binaryUrl ? (
+          <BinaryPreview
+            kind={binaryKind}
+            url={binaryUrl}
+            fileName={props.selectedPath?.split("/").pop() ?? ""}
+            failed={binaryFailed}
+            onFailed={() => setBinaryFailed(true)}
+            t={props.t}
+          />
         ) : (
           <CodeEditor
             content={props.previewContent}
@@ -616,4 +656,104 @@ function isMarkdownPath(path?: string): boolean {
   if (!path) return false;
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   return ext === "md" || ext === "mdx" || ext === "markdown";
+}
+
+type BinaryPreviewKind = "image" | "video" | "audio" | "pdf";
+
+// File extensions that map to a browser-native preview element. Text-like
+// formats are intentionally absent: they keep using the CodeEditor path.
+const BINARY_PREVIEW_EXTENSIONS: Record<string, BinaryPreviewKind> = {
+  png: "image",
+  jpg: "image",
+  jpeg: "image",
+  gif: "image",
+  webp: "image",
+  svg: "image",
+  bmp: "image",
+  ico: "image",
+  avif: "image",
+  mp4: "video",
+  webm: "video",
+  mov: "video",
+  m4v: "video",
+  mp3: "audio",
+  wav: "audio",
+  m4a: "audio",
+  aac: "audio",
+  flac: "audio",
+  opus: "audio",
+  pdf: "pdf",
+};
+
+function getBinaryPreviewKind(path?: string): BinaryPreviewKind | null {
+  if (!path) return null;
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return BINARY_PREVIEW_EXTENSIONS[ext] ?? null;
+}
+
+/** Build a token-authenticated URL for the /api/preview/static route. */
+function buildPreviewStaticUrl(path: string, cwd: string, token?: string | null): string {
+  const rel = path.split("/").map(encodeURIComponent).join("/");
+  const params = new URLSearchParams();
+  if (token) params.set("token", token);
+  if (cwd && cwd !== ".") params.set("root", cwd);
+  const qs = params.toString();
+  return `/api/preview/static/${rel}${qs ? `?${qs}` : ""}`;
+}
+
+function BinaryPreview(props: {
+  kind: BinaryPreviewKind;
+  url: string;
+  fileName: string;
+  failed: boolean;
+  onFailed: () => void;
+  t: (key: string) => string;
+}) {
+  // Degrade gracefully when the browser cannot decode the format.
+  if (props.failed) {
+    return (
+      <div style={{ padding: 16 }}>
+        <Alert
+          type="warning"
+          showIcon
+          message={props.t("files.previewUnsupported") || "This format cannot be previewed in your browser."}
+          action={
+            <Button size="small" href={props.url} target="_blank" rel="noreferrer">
+              {props.t("files.openInBrowser") || "Open in browser"}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+  if (props.kind === "image") {
+    return (
+      <div style={{ display: "grid", placeItems: "center", padding: 16, minHeight: "100%", boxSizing: "border-box" }}>
+        <img
+          src={props.url}
+          alt={props.fileName}
+          style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+          onError={props.onFailed}
+        />
+      </div>
+    );
+  }
+  if (props.kind === "video") {
+    return <video src={props.url} controls style={{ width: "100%", maxHeight: "100%" }} onError={props.onFailed} />;
+  }
+  if (props.kind === "audio") {
+    return <audio src={props.url} controls style={{ width: "100%" }} onError={props.onFailed} />;
+  }
+  // pdf: browser-native viewer inside an iframe, with an external-open
+  // fallback for browsers without a built-in PDF plugin.
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <div style={{ padding: "4px 8px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
+        <Button type="link" size="small" href={props.url} target="_blank" rel="noreferrer">
+          {props.t("files.openInBrowser") || "Open in browser"}
+        </Button>
+      </div>
+      <iframe src={props.url} title={props.fileName} style={{ flex: 1, width: "100%", border: "none" }} />
+    </div>
+  );
 }

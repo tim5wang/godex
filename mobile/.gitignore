@@ -1,0 +1,30 @@
+# 构建产物 / 依赖
+node_modules/
+www/
+dist/
+
+# 原生工程构建产物（保持骨架文件本身入库，忽略产物）
+ios/App/Pods/
+ios/App/App.xcworkspace/xcuserdata/
+ios/DerivedData/
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/capacitor-cordova-android-plugins/build/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/app/src/main/assets/cordova.js
+android/app/src/main/assets/cordova_plugins.js
+
+# 签名
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+
+# 本地模式 godex 二进制（由 mobile/scripts/build-godex-android.sh 生成，不入库）
+android/app/src/main/assets/godex/
+# 本地模式 shell/git 运行时（由 mobile/scripts/build-android-runtime.sh 生成，不入库）
+android/app/src/main/assets/runtime/

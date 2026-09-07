@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button, Checkbox, Drawer, Empty, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography } from "antd";
 import { CompassOutlined, DeleteOutlined, EditOutlined, FolderOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, ReloadOutlined, ScheduleOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
+import { MarkdownContent } from "../../components/MarkdownContent";
 import { buildChatRoute } from "../../lib/chatRoutes";
 import { CronExprInput } from "../../components/CronExprInput";
 import type { TaskboardCard, TaskboardExecution, TaskboardProject, TaskboardStatus, TaskboardUrgency } from "../../lib/types";
@@ -286,7 +287,7 @@ export function TaskBoardDialogs({ controller }: { controller: TaskBoardControll
                 </div>
               </div>
             )}
-            {detail.description && <Typography.Paragraph>{detail.description}</Typography.Paragraph>}
+            {detail.description && <MarkdownContent content={detail.description} />}
             {detail.prompt && (
               <div>
                 <Typography.Text type="secondary">{t("taskboard.prompt")}</Typography.Text>

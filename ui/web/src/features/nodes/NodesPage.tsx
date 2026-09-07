@@ -86,7 +86,10 @@ function NodesListPage() {
       onClick={() => navigate(`/nodes/${encodeURIComponent(node.id)}`)}
       title={
         <Space direction="vertical" size={2}>
-          <Typography.Text strong>{node.name || node.id}</Typography.Text>
+          <Typography.Text strong>
+            {node.name || node.id}{" "}
+            {node.source === "center" ? <Tag color="purple">{t("nodes.sourceCenter")}</Tag> : null}
+          </Typography.Text>
           <Typography.Text type="secondary" copyable={{ text: node.id }}>
             {node.id}
           </Typography.Text>
@@ -161,7 +164,10 @@ function NodesListPage() {
                 dataIndex: "name",
                 render: (_value, node) => (
                   <Space direction="vertical" size={2}>
-                    <Typography.Text strong>{node.name || node.id}</Typography.Text>
+                    <Typography.Text strong>
+                      {node.name || node.id}{" "}
+                      {node.source === "center" ? <Tag color="purple">{t("nodes.sourceCenter")}</Tag> : null}
+                    </Typography.Text>
                     <Typography.Text type="secondary" copyable={{ text: node.id }}>
                       {node.id}
                     </Typography.Text>

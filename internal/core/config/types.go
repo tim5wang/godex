@@ -193,6 +193,7 @@ type ControlSection struct {
 	DefaultNode         string               `yaml:"default_node"`
 	TrustLevel          string               `yaml:"trust_level"`
 	CenterURL           string               `yaml:"center_url"`
+	CenterToken         string               `yaml:"center_token"`
 	Credential          string               `yaml:"credential"`
 	HeartbeatSeconds    int                  `yaml:"heartbeat_seconds"`
 	OfflineAfterSeconds int                  `yaml:"offline_after_seconds"`

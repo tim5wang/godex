@@ -490,7 +490,16 @@ func (e *WorkspaceExecutor) shellCommand(ctx context.Context, command string) (*
 		shell, shellArg := shellCommand()
 		cmd := exec.CommandContext(ctx, shell, shellArg, command)
 		cmd.Dir = e.WorkspaceDir
-		cmd.Env = InheritedCommandEnv(e.WorkspaceDir)
+		// Same environment contract as the interactive terminal (see
+		// routes_terminal.go createLocal): full GoDex env + PWD plus
+		// TERM and color-force flags, so /bash /sh slash commands see
+		// the same variables a terminal shell does.
+		cmd.Env = InheritedCommandEnv(e.WorkspaceDir,
+			"TERM=xterm-256color",
+			"FORCE_COLOR=1",
+			"CLICOLOR=1",
+			"CLICOLOR_FORCE=1",
+		)
 		return cmd, nil
 	case ExecutionModeDocker:
 		return e.dockerShellCommand(ctx, cfg, command)

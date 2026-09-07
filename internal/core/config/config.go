@@ -333,6 +333,7 @@ type ControlConfig struct {
 	DefaultNode         string
 	TrustLevel          string
 	CenterURL           string
+	CenterToken         string
 	Credential          string
 	HeartbeatSeconds    int
 	OfflineAfterSeconds int

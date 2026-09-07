@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Space } from "antd";
-import { ReloadOutlined, PoweroffOutlined } from "@ant-design/icons";
+import { Button, Form, Input, Modal, Space } from "antd";
+import { DeleteOutlined, PoweroffOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -21,6 +21,12 @@ import type {
   TerminalInputRequest,
   TerminalOutputChunk,
 } from "../../lib/terminalMock";
+import {
+  createQuickScript,
+  loadQuickScripts,
+  saveQuickScripts,
+  type QuickScript,
+} from "../../lib/terminalQuickScripts";
 
 export type TerminalPanelProps = {
   createTerminal?: (workspaceDir?: string, execution?: TerminalExecutionConfig) => CreateTerminalResponse;
@@ -69,6 +75,9 @@ export function TerminalPanel(props: TerminalPanelProps) {
   const [status, setStatus] = useState<TerminalStatus>("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [initKey, setInitKey] = useState(0);
+  const [scripts, setScripts] = useState<QuickScript[]>(() => loadQuickScripts());
+  const [quickModalOpen, setQuickModalOpen] = useState(false);
+  const [quickForm] = Form.useForm();
 
   // ---- helpers ----
 
@@ -219,6 +228,34 @@ export function TerminalPanel(props: TerminalPanelProps) {
 
   const isConnected = status === "connected" || status === "connecting";
 
+  // ---- quick scripts ----
+
+  const runQuickScript = useCallback((script: QuickScript) => {
+    if (!idRef.current) return;
+    // Send the preset command followed by Enter; the PTY shell executes it
+    // like a typed command.
+    writeTerminalInput({ terminalId: idRef.current, data: `${script.command}\r` }, tickRef.current);
+    tickRef.current += 1;
+    focusXterm();
+  }, [writeTerminalInput, focusXterm]);
+
+  const handleAddQuickScript = useCallback(async () => {
+    const values = await quickForm.validateFields();
+    const next = [...scripts, createQuickScript(values.name, values.command)];
+    setScripts(next);
+    saveQuickScripts(next);
+    quickForm.resetFields();
+    setQuickModalOpen(false);
+  }, [quickForm, scripts]);
+
+  const handleRemoveQuickScript = useCallback((id: string) => {
+    setScripts((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      saveQuickScripts(next);
+      return next;
+    });
+  }, []);
+
   // ---- render ----
 
   return (
@@ -243,17 +280,84 @@ export function TerminalPanel(props: TerminalPanelProps) {
           minHeight: 28,
         }}
       >
-        <span>
-          Terminal{" "}
-          <span style={{ color: status === "error" ? "#f87171" : status === "connected" ? "#4ade80" : "#94a3b8" }}>
-            {status}
-          </span>
-          {errorMsg ? (
-            <span data-testid="terminal-error" style={{ marginLeft: 8, color: "#f87171", fontWeight: 600 }}>
-              — {errorMsg}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ whiteSpace: "nowrap" }}>
+            Terminal{" "}
+            <span style={{ color: status === "error" ? "#f87171" : status === "connected" ? "#4ade80" : "#94a3b8" }}>
+              {status}
             </span>
-          ) : null}
-        </span>
+            {errorMsg ? (
+              <span data-testid="terminal-error" style={{ marginLeft: 8, color: "#f87171", fontWeight: 600 }}>
+                — {errorMsg}
+              </span>
+            ) : null}
+          </span>
+
+          {/* quick-script bubbles — compact, no taller than the text */}
+          <div
+            className="terminal-quick-scripts"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              minWidth: 0,
+              maxWidth: "46%",
+              overflowX: "auto",
+              scrollbarWidth: "none",
+            }}
+          >
+            {scripts.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className="terminal-quick-script"
+                title={`Run: ${s.command}`}
+                aria-label={`Run quick script ${s.name}`}
+                data-testid={`terminal-quick-script-${s.name}`}
+                onClick={() => runQuickScript(s)}
+                style={{
+                  flex: "0 0 auto",
+                  maxWidth: 120,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  border: "1px solid rgba(148,163,184,0.4)",
+                  borderRadius: 999,
+                  background: "rgba(148,163,184,0.14)",
+                  color: "#cbd5e1",
+                  fontSize: 10,
+                  lineHeight: 1,
+                  padding: "3px 8px",
+                  cursor: "pointer",
+                }}
+              >
+                {s.name}
+              </button>
+            ))}
+            <button
+              type="button"
+              aria-label="New quick script"
+              data-testid="terminal-quick-script-add"
+              onClick={() => {
+                quickForm.resetFields();
+                setQuickModalOpen(true);
+              }}
+              style={{
+                flex: "0 0 auto",
+                border: "1px dashed rgba(148,163,184,0.5)",
+                borderRadius: 999,
+                background: "transparent",
+                color: "#94a3b8",
+                fontSize: 12,
+                lineHeight: 1,
+                padding: "2px 6px",
+                cursor: "pointer",
+              }}
+            >
+              +
+            </button>
+          </div>
+        </div>
 
         <Space size={4}>
           {isConnected ? (
@@ -274,6 +378,57 @@ export function TerminalPanel(props: TerminalPanelProps) {
         style={{ flex: "1 1 auto", minHeight: 0, padding: "0 4px", cursor: "text" }}
         onClick={focusXterm}
       />
+
+      {/* quick-script create/manage dialog */}
+      <Modal
+        title="Quick Script"
+        open={quickModalOpen}
+        onOk={() => quickForm.submit()}
+        onCancel={() => setQuickModalOpen(false)}
+        okText="Save"
+        cancelText="Cancel"
+        width={420}
+      >
+        <Form form={quickForm} layout="vertical" onFinish={handleAddQuickScript}>
+          <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
+            <Input placeholder="e.g. git status" maxLength={40} autoFocus />
+          </Form.Item>
+          <Form.Item name="command" label="Command" rules={[{ required: true, message: "Command is required" }]}>
+            <Input.TextArea placeholder="e.g. git status" rows={2} autoSize={{ minRows: 2, maxRows: 6 }} />
+          </Form.Item>
+        </Form>
+        {scripts.length > 0 ? (
+          <div style={{ borderTop: "1px solid rgba(148,163,184,0.2)", paddingTop: 8, marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 4 }}>Saved scripts</div>
+            {scripts.map((s) => (
+              <div
+                key={s.id}
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "2px 0" }}
+              >
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: "#cbd5e1",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <b>{s.name}</b> <code style={{ color: "#94a3b8" }}>{s.command}</code>
+                </span>
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label={`Delete quick script ${s.name}`}
+                  onClick={() => handleRemoveQuickScript(s.id)}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

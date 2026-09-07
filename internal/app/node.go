@@ -368,6 +368,14 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 	if err := r.ConfigManager.WriteHomeEnvVar("GODEX_CONTROL_CREDENTIAL", credential); err != nil {
 		return fmt.Errorf("write credential env: %w", err)
 	}
+	// The center web token is also a secret. When provided (--token) it is
+	// persisted to the home .env file so the local node can act as a center
+	// bridge client (reach other nodes through the center).
+	if token != "" {
+		if err := r.ConfigManager.WriteHomeEnvVar("GODEX_CONTROL_CENTER_TOKEN", token); err != nil {
+			return fmt.Errorf("write center token env: %w", err)
+		}
+	}
 	values := map[string]any{
 		"control.center_url":  centerURL,
 		"control.node_id":     nodeID,

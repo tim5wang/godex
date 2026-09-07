@@ -358,6 +358,7 @@ func main() {
 				})
 			}
 
+			bridge := centerBridge(cfg, selfNode)
 			apiHandler := httpapi.NewHandlerWithDependencies(httpapi.Dependencies{
 				Config:     manager,
 				Backend:    service,
@@ -370,7 +371,7 @@ func main() {
 					options:    serviceRuntimeOptions(manager),
 				},
 				Usage:           usageService,
-				ControlRegistry: &registryWithOverview{Registry: controlRegistry, EventStore: eventStore, Hub: relayHub},
+				ControlRegistry: &registryWithOverview{Registry: controlRegistry, EventStore: eventStore, Hub: relayHub, Bridge: bridge},
 			})
 
 			// Combine the API handler with relay endpoints. The webui strips the
@@ -411,7 +412,15 @@ func main() {
 				}
 				return node.TrustLevel
 			}
-			root.Handle("/control/nodes/{id}/proxy/", proxy)
+			root.Handle("/control/nodes/{id}/proxy/", httpapi.NewBridgeProxyHandler(proxy, bridge, func(nodeID string) bool {
+				// Local node: the self node (served in-process) or any node
+				// currently connected to the local relay hub. Everything else
+				// is forwarded to the center bridge.
+				if nodeID == selfNode.ID {
+					return true
+				}
+				return relayHub.IsOnline(nodeID)
+			}))
 			root.Handle("/control/nodes/{id}/forward", relay.NewForwardHandler(relayHub, relayAuthorize(cfg)))
 			// Web Push: in-memory subscriptions, VAPID keys persisted across
 			// restarts so browser subscriptions keep working. The center only
@@ -650,11 +659,62 @@ func firstNonEmpty(values ...string) string {
 // registryWithOverview combines the node registry with the relay observation
 // store so the httpapi handler can serve both node CRUD endpoints and the
 // aggregated per-node overview from a single argument. It also carries the
-// relay hub so deleting a node can drop its live relay connection.
+// relay hub so deleting a node can drop its live relay connection, and an
+// optional center bridge so the local node list is merged with the center's
+// nodes and overviews of center-reachable nodes are forwarded to the center.
 type registryWithOverview struct {
 	*noderegistry.Registry
 	*relay.EventStore
-	Hub *relay.Hub
+	Hub    *relay.Hub
+	Bridge *httpapi.CenterBridge
+}
+
+// List merges the local registry view with the center's node list when a
+// center bridge is configured. A center fetch failure degrades to the local
+// list only, so the UI keeps working when the center is unreachable.
+func (r *registryWithOverview) List(ctx context.Context) ([]noderegistry.NodeView, error) {
+	local, err := r.Registry.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if r.Bridge == nil || !r.Bridge.Enabled() {
+		return local, nil
+	}
+	remote, err := r.Bridge.ListNodes(ctx)
+	if err != nil {
+		return local, nil
+	}
+	return httpapi.MergeNodeViews(local, remote), nil
+}
+
+// Get falls back to the center bridge when the node is not in the local
+// registry, so center-reachable nodes resolve for detail/overview requests.
+func (r *registryWithOverview) Get(ctx context.Context, id string) (noderegistry.NodeView, error) {
+	n, err := r.Registry.Get(ctx, id)
+	if err == nil {
+		return n, nil
+	}
+	if r.Bridge != nil && r.Bridge.Enabled() {
+		if rn, rerr := r.Bridge.GetNode(ctx, id); rerr == nil {
+			rn.Source = "center"
+			return rn, nil
+		}
+	}
+	return noderegistry.NodeView{}, os.ErrNotExist
+}
+
+// Overview serves the local observation store first, then falls back to the
+// center's aggregated view for nodes reachable only through the bridge.
+func (r *registryWithOverview) Overview(nodeID string) (relay.NodeOverview, bool) {
+	if ov, ok := r.EventStore.Overview(nodeID); ok {
+		return ov, true
+	}
+	if r.Bridge != nil && r.Bridge.Enabled() {
+		if ov, err := r.Bridge.GetOverview(context.Background(), nodeID); err == nil {
+			return ov, true
+		}
+	}
+	return relay.NodeOverview{}, false
 }
 
 // DisconnectNode forcibly closes the node's relay connection (httpapi delete
@@ -702,6 +762,27 @@ func remoteRelayAgent(cfg *config.Config, selfNode noderegistry.NodeInput, local
 		Handler:      localHandler,
 		ForwardAllow: cfg.Control.ForwardAllow,
 	})
+}
+
+// centerBridge returns the local→center bridge client when this instance is
+// configured with a center URL and center web token (control.center_url +
+// control.center_token) that is not itself. The bridge lets the local Web UI
+// reach other nodes through the center: node-scoped requests are forwarded to
+// the center's proxy endpoint, which relays them over the target's outbound
+// relay channel.
+func centerBridge(cfg *config.Config, selfNode noderegistry.NodeInput) *httpapi.CenterBridge {
+	centerURL := strings.TrimRight(strings.TrimSpace(cfg.Control.CenterURL), "/")
+	if centerURL == "" {
+		return nil
+	}
+	if selfNode.Endpoint != "" && strings.EqualFold(centerURL, strings.TrimRight(selfNode.Endpoint, "/")) {
+		return nil
+	}
+	token := strings.TrimSpace(cfg.Control.CenterToken)
+	if token == "" {
+		return nil
+	}
+	return httpapi.NewCenterBridge(centerURL, token)
 }
 
 // relayAuthorize protects the center-side proxy endpoint with the same web

@@ -441,6 +441,8 @@ control:
   trust_level: {{ yamlString .Control.TrustLevel }}
   # Optional central Godex service URL for auto-registration. Environment override: GODEX_CONTROL_CENTER_URL.
   center_url: {{ yamlString .Control.CenterURL }}
+  # Center web token used to reach other nodes through the center bridge. Environment override: GODEX_CONTROL_CENTER_TOKEN.
+  center_token: {{ yamlString .Control.CenterToken }}
   # Node credential issued by the center (ck_...). Prefer GODEX_CONTROL_CREDENTIAL in .env;
   # kept here so a config rewrite does not drop a value placed in YAML. Environment override: GODEX_CONTROL_CREDENTIAL.
   credential: {{ yamlString .Control.Credential }}

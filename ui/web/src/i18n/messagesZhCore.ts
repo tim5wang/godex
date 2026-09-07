@@ -303,6 +303,7 @@ export const zhCoreMessages = {
       version: "版本",
       lastSeen: "最后心跳",
       capabilities: "能力",
+      sourceCenter: "经中心",
       back: "返回",
       detailLoadError: "加载节点概览失败。",
       relayStatus: "中继",

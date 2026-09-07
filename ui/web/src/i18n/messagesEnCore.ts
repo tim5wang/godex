@@ -304,6 +304,7 @@ export const enCoreMessages = {
       version: "Version",
       lastSeen: "Last seen",
       capabilities: "Capabilities",
+      sourceCenter: "via center",
       back: "Back",
       detailLoadError: "Failed to load node overview.",
       relayStatus: "Relay",

@@ -245,6 +245,8 @@ func setControlStoredValue(file *ConfigFile, path string, value any) error {
 		file.Control.TrustLevel = asString(value)
 	case "control.center_url":
 		file.Control.CenterURL = asString(value)
+	case "control.center_token":
+		file.Control.CenterToken = asString(value)
 	case "control.credential":
 		file.Control.Credential = asString(value)
 	case "control.heartbeat_seconds":

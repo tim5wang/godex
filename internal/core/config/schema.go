@@ -101,6 +101,7 @@ func baseSchema() []SectionSchema {
 				{Path: "control.default_node", Label: "Default Node", Description: "Default node id used by 'godex node exec' when --node is omitted.", Type: "string", Env: "GODEX_CONTROL_DEFAULT_NODE"},
 				{Path: "control.trust_level", Label: "Trust Level", Description: "Trust level reported when registering to a center: trusted or guarded-remote.", Type: "string", Env: "GODEX_CONTROL_TRUST_LEVEL"},
 				{Path: "control.center_url", Label: "Center URL", Description: "Optional central Godex service URL for auto-registration, relay connection, and heartbeat.", Type: "string", Env: "GODEX_CONTROL_CENTER_URL"},
+				{Path: "control.center_token", Label: "Center Token", Description: "Center web token used to reach other nodes through the center bridge (local node acts as a client of the center).", Type: "string", Secret: true, Env: "GODEX_CONTROL_CENTER_TOKEN"},
 				{Path: "control.credential", Label: "Node Credential", Description: "Per-node credential (ck_...) issued by the center for relay authentication.", Type: "string", Secret: true, Env: "GODEX_CONTROL_CREDENTIAL"},
 				{Path: "control.heartbeat_seconds", Label: "Heartbeat Seconds", Description: "Node heartbeat interval when registering to a center service.", Type: "int", Env: "GODEX_CONTROL_HEARTBEAT_SECONDS"},
 				{Path: "control.offline_after_seconds", Label: "Offline After Seconds", Description: "Mark a node offline after this many seconds without heartbeat.", Type: "int", Env: "GODEX_CONTROL_OFFLINE_AFTER_SECONDS"},

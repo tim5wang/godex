@@ -24,7 +24,9 @@ android/app/src/main/assets/cordova_plugins.js
 *.p12
 *.mobileprovision
 
-# 本地模式 godex 二进制（由 mobile/scripts/build-godex-android.sh 生成，不入库）
+# 本地模式 godex / busybox / git 运行时 so（app_lib_file 类型，SELinux 可 exec）
+# 由 mobile/scripts/build-godex-android.sh 与 build-android-runtime.sh 生成，不入库
+android/app/src/main/jniLibs/arm64-v8a/*.so
+# 兼容旧路径（assets 方案，已被 jniLibs 方案取代）
 android/app/src/main/assets/godex/
-# 本地模式 shell/git 运行时（由 mobile/scripts/build-android-runtime.sh 生成，不入库）
 android/app/src/main/assets/runtime/

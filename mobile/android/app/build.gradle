@@ -53,6 +53,39 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
+// ---- 本地模式运行时 so 自动构建 ----
+// libgodex.so / libbusybox.so / libgit.so / libgitremotehttps.so 不入库，
+// 由 mobile/scripts/build-godex-android.sh 与 build-android-runtime.sh 生成。
+// so 缺失时 preBuild 自动触发（需要 bash + 网络 + Go 工具链）。
+def ensureNativeLibs = tasks.register('ensureNativeLibs') {
+    def libsDir = file('src/main/jniLibs/arm64-v8a')
+    def required = ['libgodex.so', 'libbusybox.so', 'libgit.so', 'libgitremotehttps.so']
+    def missingNow = { required.findAll { !file("${libsDir}/${it}").exists() } }
+    doLast {
+        def missing = missingNow()
+        if (missing.isEmpty()) {
+            println 'jniLibs/arm64-v8a 运行时 so 已就绪（libgodex/libbusybox/libgit/libgitremotehttps）'
+            return
+        }
+        println "缺失本地运行时 so: ${missing}，自动执行构建脚本..."
+        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+            throw new GradleException('Windows 请使用 Git Bash / WSL 运行: ' +
+                    'bash mobile/scripts/build-godex-android.sh && bash mobile/scripts/build-android-runtime.sh')
+        }
+        def scriptsDir = file("${rootProject.projectDir.parentFile}/scripts")
+        if (!file("${scriptsDir}/build-godex-android.sh").exists() || !file("${scriptsDir}/build-android-runtime.sh").exists()) {
+            throw new GradleException("找不到构建脚本: ${scriptsDir}（应为 mobile/scripts/）")
+        }
+        exec { commandLine 'bash', "${scriptsDir}/build-godex-android.sh" }
+        exec { commandLine 'bash', "${scriptsDir}/build-android-runtime.sh" }
+        def still = missingNow()
+        if (!still.isEmpty()) {
+            throw new GradleException("本地运行时 so 生成失败，仍缺失: ${still}")
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn ensureNativeLibs }
+
 try {
     def servicesJSON = file('google-services.json')
     if (servicesJSON.text) {

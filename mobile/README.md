@@ -9,7 +9,7 @@
 
 **A. 本地运行 agent（Android，默认）** —— 仿桌面版 Tauri sidecar：
 
-- APK 内嵌 Go 交叉编译的 godex 二进制（`assets/godex/godex-arm64`，由 `scripts/build-godex-android.sh` 产出）；
+- APK 内嵌 Go 交叉编译的 godex 二进制（`jniLibs/arm64-v8a/libgodex.so`，由 `scripts/build-godex-android.sh` 产出，不入库）；
 - 启动时解压到私有目录 → spawn `godex serve --addr 127.0.0.1:PORT` → 随机生成 web token → 等 `/meta` 就绪 → WebView 加载本地服务。agent 在手机本地执行，无需外部服务器；
 - 原生层注入 `localStorage["godex:web:token"]`（Web UI 唯一读取的 token 键）+ 注入式 watcher（`public/godex-watcher.js`）轮询本地 `/api/sessions` 与 `/api/sessions/{id}/longtasks`，任务完成触发**本地通知**（零账号、零后端改动，PRD 5.2 Phase 1 策略）。
 
@@ -26,8 +26,8 @@ mobile/
 ├── public/
 │   └── godex-watcher.js     # 注入式 watcher 模板（唯一事实源，原生层读取后替换占位符）
 ├── scripts/
-│   ├── build-godex-android.sh    # 交叉编译 godex -> assets/godex/godex-arm64（本地模式必需）
-│   └── build-android-runtime.sh  # 拉取 busybox + 交叉编译静态 git -> assets/runtime/（agent shell/git 工具）
+│   ├── build-godex-android.sh    # 交叉编译 godex -> jniLibs/arm64-v8a/libgodex.so（本地模式必需）
+│   └── build-android-runtime.sh  # 拉取 busybox + 交叉编译静态 git -> jniLibs/arm64-v8a/（agent shell/git 工具）
 ├── ios/                     # cap add ios 生成 + 注入补丁（SceneDelegate.swift）
 └── android/                 # cap add android 生成 + 注入补丁（MainActivity.java + network_security_config.xml）
 ```
@@ -49,10 +49,10 @@ npm install
 # 1) 构建壳层静态页 -> www/
 npm run build
 
-# 2) 交叉编译 godex 二进制（Android 本地运行模式）-> android/app/src/main/assets/godex/
+# 2) 交叉编译 godex 二进制（Android 本地运行模式）-> android/app/src/main/jniLibs/arm64-v8a/libgodex.so
 bash scripts/build-godex-android.sh
 
-# 3) 拉取 busybox + 交叉编译静态 git -> android/app/src/main/assets/runtime/
+# 3) 拉取 busybox + 交叉编译静态 git -> android/app/src/main/jniLibs/arm64-v8a/
 bash scripts/build-android-runtime.sh
 
 # 4) 同步 www + 插件到原生工程
@@ -63,7 +63,9 @@ npm run open:android   # 需要 Android Studio；产物 APK 位于 android/app/b
 npm run open:ios       # 需要 Xcode
 ```
 
-**Android 本地运行模式（默认）**：APK 内置 godex 二进制，启动即自动拉起本地 `godex serve`（127.0.0.1:17889 或空闲端口），无需任何配置即可使用。同时内置 busybox（sh/grep/sed/awk 等）与静态 git 到 `assets/runtime/`，启动时解压并注入 PATH——agent 的 bash 工具（`sh -c`）与 git 工具（`git`，含 https 远程经 `git-remote-https`）在 Android 本地可用。
+> 步骤 2/3 的产物（`jniLibs/arm64-v8a/*.so`）**不入库**：`android/app/build.gradle` 的 `ensureNativeLibs` 任务会在 so 缺失时**自动执行**上述两个脚本，直接 `./gradlew assembleDebug` 即可；手动跑脚本可跳过自动构建。
+
+**Android 本地运行模式（默认）**：APK 内置 godex 二进制（`jniLibs/arm64-v8a/libgodex.so`），启动即自动拉起本地 `godex serve`（127.0.0.1:17889 或空闲端口），无需任何配置即可使用。同时内置 busybox（sh/grep/sed/awk 等）与静态 git（`jniLibs/arm64-v8a/libbusybox.so` / `libgit.so` / `libgitremotehttps.so`），由 `build-android-runtime.sh` 生成——agent 的 bash 工具（`sh -c`）与 git 工具（`git`，含 https 远程经 `git-remote-https`）在 Android 本地可用。
 
 **远程连接模式**：从设置页填入服务地址（assets 中无二进制时才显示设置页）：
 

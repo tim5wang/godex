@@ -24,6 +24,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/todo"
 	"github.com/tim5wang/godex/internal/platform/localstore"
+	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
@@ -353,6 +354,52 @@ func CloneConfigForWorkspace(cfg *config.Config, workspaceDir string) *config.Co
 	cloned.WorkspaceDir = workspaceDir
 	cloned.TempDir = workspaceDerivedTempDir(workspaceDir, cfg.WorkspaceDir, cfg.TempDir)
 	return cloned
+}
+
+// ConfigWithSandboxNode returns a per-session config whose tool execution runs
+// on a remote sandbox node through the center relay tunnel
+// (docs/remote-sandbox-design.md): tools.execution.mode=relay with the target
+// node id. Relay center/token are left unset so sandboxFromConfig falls back
+// to the control section (center_url + center_token). Returns the original cfg
+// untouched when nodeID is empty or cfg is nil.
+func ConfigWithSandboxNode(cfg *config.Config, nodeID string) *config.Config {
+	nodeID = strings.TrimSpace(nodeID)
+	if cfg == nil || nodeID == "" {
+		return cfg
+	}
+	cloned := cfg.Clone()
+	cloned.Tools.Execution.Mode = tooling.ExecutionModeRelay
+	cloned.Tools.Execution.RelayNode = nodeID
+	// Explicit fields win over the control fallback; keep them only when set.
+	cloned.Tools.Execution.RelayCenter = strings.TrimSpace(cfg.Tools.Execution.RelayCenter)
+	cloned.Tools.Execution.RelayToken = strings.TrimSpace(cfg.Tools.Execution.RelayToken)
+	return cloned
+}
+
+// ConfigWithExecutionMode applies a unified per-session execution mode picker
+// value to a cloned config. Accepted values (matching the new-chat picker):
+//
+//	"" / "local"            local execution (default; original cfg returned)
+//	"docker" / "ssh"        session-level execution backend override
+//	"relay:<node_id>"       remote sandbox node via the center relay tunnel
+//
+// The original cfg is never mutated; unknown values are ignored (local).
+func ConfigWithExecutionMode(cfg *config.Config, mode string) *config.Config {
+	mode = strings.TrimSpace(mode)
+	if cfg == nil || mode == "" || strings.EqualFold(mode, "local") {
+		return cfg
+	}
+	if strings.HasPrefix(mode, "relay:") {
+		return ConfigWithSandboxNode(cfg, strings.TrimPrefix(mode, "relay:"))
+	}
+	switch strings.ToLower(mode) {
+	case tooling.ExecutionModeDocker, tooling.ExecutionModeSSH:
+		cloned := cfg.Clone()
+		cloned.Tools.Execution.Mode = strings.ToLower(mode)
+		return cloned
+	default:
+		return cfg
+	}
 }
 
 // workspaceDerivedTempDir picks the temp dir for a session whose

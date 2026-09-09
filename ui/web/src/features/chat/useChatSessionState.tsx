@@ -11,7 +11,7 @@ import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge,
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useConversationLayoutStore, type DockTab, DOCK_TABS } from "./layout/layoutStore";
 import { useBrowserViewStore } from "../browser/browserViewStore";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog, listAgentTemplates, listControlNodes } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -177,6 +177,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
   const modeParam = searchParams.get("mode")?.trim() || "";
   const templateParam = searchParams.get("template")?.trim() || "";
   const skillsParam = searchParams.get("skills")?.trim() || "";
+  const execModeParam = searchParams.get("exec_mode")?.trim() || "";
   const sessionKey = routeSessionKey || defaultSessionKey || "";
   const sessionLocator = useMemo(() => {
     const metadata: Record<string, string> = {};
@@ -192,13 +193,16 @@ export function useChatSessionState(layout: ChatLayoutState) {
     if (skillsParam) {
       metadata.requested_skills = skillsParam;
     }
+    if (execModeParam) {
+      metadata.exec_mode = execModeParam;
+    }
     return {
       channel: routeChannel || "web",
       key: sessionKey,
       ...(routeUserId ? { user_id: routeUserId } : {}),
       ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
     };
-  }, [routeChannel, routeUserId, sessionKey, workspaceDirParam, modeParam, templateParam, skillsParam]);
+  }, [routeChannel, routeUserId, sessionKey, workspaceDirParam, modeParam, templateParam, skillsParam, execModeParam]);
 
   const openQuery = useQuery({
     queryKey: ["session-open", token, sessionLocator.channel, sessionLocator.key, sessionLocator.user_id],
@@ -222,6 +226,14 @@ export function useChatSessionState(layout: ChatLayoutState) {
     queryKey: ["agent-templates", token],
     enabled: !authRequired || !!token,
     queryFn: () => listAgentTemplates(token || null),
+  });
+  // Center-reachable nodes for the new-chat "execution node" picker: selecting
+  // a node id makes the new session run its tools on that remote node
+  // (RemoteSandbox, docs/remote-sandbox-design.md) instead of locally.
+  const nodesQuery = useQuery({
+    queryKey: ["control-nodes", token],
+    enabled: !authRequired || !!token,
+    queryFn: () => listControlNodes(token || null),
   });
   // Selected agent template (talent market) for the current chat route:
   // shown in the topbar chip and on assistant message avatars/headers.
@@ -645,11 +657,13 @@ export function useChatSessionState(layout: ChatLayoutState) {
     modeParam,
     templateParam,
     skillsParam,
+    execModeParam,
     sessionKey,
     sessionLocator,
     openQuery,
     skillsCatalogQuery,
     templatesQuery,
+    nodesQuery,
     activeTemplate,
     sessionWorkspaceDir,
     terminalExecution,

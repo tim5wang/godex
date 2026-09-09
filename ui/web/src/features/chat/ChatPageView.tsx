@@ -175,11 +175,13 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     modeParam,
     templateParam,
     skillsParam,
+    execModeParam,
     sessionKey,
     sessionLocator,
     openQuery,
     skillsCatalogQuery,
     templatesQuery,
+    nodesQuery,
     activeTemplate,
     sessionWorkspaceDir,
     terminalExecution,
@@ -383,7 +385,9 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
               skillsLoading={skillsCatalogQuery.isLoading}
               templates={templatesQuery.data ?? []}
               templatesLoading={templatesQuery.isLoading}
-              onCreate={(workspaceDir, template, skills) => createSession(false, workspaceDir, template, skills)}
+              nodes={nodesQuery.data ?? []}
+              nodesLoading={nodesQuery.isLoading}
+              onCreate={(workspaceDir, template, skills, execMode) => createSession(false, workspaceDir, template, skills, execMode)}
               onPrefetch={(session) => {
                 // Warm the target session before the click so a cold-session
                 // load (open POST reads session files from disk, multi-second)

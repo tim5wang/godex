@@ -88,6 +88,13 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		if dir := cleanProjectDir(session.locator.Metadata[sessionProjectDirMetadataKey]); dir != "" && baseDir != "" && dir != cleanProjectDir(baseDir) {
 			sessionCfg = agent.CloneConfigForWorkspace(s.cfg, dir)
 		}
+		// Per-session execution mode (new-chat picker, docs/remote-sandbox-design.md):
+		// a unified value of "local" / "docker" / "ssh" / "relay:<node_id>" pins
+		// where this session's bash/file tools run. The clone keeps the global
+		// config untouched; empty value keeps local execution.
+		if mode := strings.TrimSpace(session.locator.Metadata[sessionExecutionModeMetadataKey]); mode != "" {
+			sessionCfg = agent.ConfigWithExecutionMode(sessionCfg, mode)
+		}
 	}
 
 	a := agent.NewForSession(sessionCfg, s.shared, sessionID)

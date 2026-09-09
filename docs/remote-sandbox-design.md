@@ -119,6 +119,7 @@ godex node join 'https://center' --id pod-b --credential ck_xxx --trust guarded-
 - **A 侧执行层**（`internal/platform/tooling/`）：`ExecutionModeRelay` + `ExecutionConfig` 加 `RelayCenter/RelayNode/RelayToken`；`RelayClient`（POST `{center}/api/control/nodes/{node}/proxy/control/sandbox/exec|fs`，Bearer nk_）；`RunShellBudgetedWithOptions` relay 分支 `runShellRelay`。
 - **RemoteSandbox/RemoteFS**（`internal/sandbox/remote.go`）：实现 `sandbox.Sandbox` 接口，`ToolBinding()` 强制 relay mode，`FileSystem()` 返回经 relay 转发的 `workspacefs.FS` 实现；`Rebuild()` 保留身份与目标。
 - **会话级装配**：`sandboxFromConfig`（原 `localSandboxFromConfig` 改名）——`tools.execution.mode=relay` 且 `relay_node` 非空时创建 RemoteSandbox（center/token 缺省取 control 段），否则保持 LocalSandbox 行为完全不变。config 全链路（types/config/resolve/schema/template/values/setters）加 relay 字段。
+- **合一执行模式（新建对话）**：`exec_mode` metadata + `ConfigWithExecutionMode`（agent/runtime.go）统一解析 `local / docker / ssh / relay:<node_id>`：空/local 本地不变、docker/ssh 会话级 clone 设 Mode、relay:<id> 走 RemoteSandbox。前端新建对话表单下拉合一（本地/Docker/SSH/relay:<节点列表>），`useChatSessionState` 读 `exec_mode` → metadata；`ConfigWithSandboxNode` 保留为内部 helper。
 - **单测**：routes_sandbox_test（exec/fs 端点 4 例）、relay_client_test（转发/错误透传/relay 分派 4 例）、remote_test（RemoteFS 转发/绑定/Rebuild 5 例）全绿。
 
 **验证**：`go build ./...`；tooling/sandbox/httpapi/config/cmd/app 六包测试全绿。注：agent 包 3 个失败（`godex_docs` pin 测试 + 2 个 TempDir cleanup 竞态）经 git stash 基线验证为既有问题，与 M1 无关。

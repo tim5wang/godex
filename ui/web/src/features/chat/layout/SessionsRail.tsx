@@ -15,7 +15,7 @@ import {
   VerticalRightOutlined,
 } from "@ant-design/icons";
 import { useMemo, useRef, useState } from "react";
-import type { ListedSession, SkillCatalogEntry } from "../../../lib/types";
+import type { ControlNode, ListedSession, SkillCatalogEntry } from "../../../lib/types";
 import type { AgentTemplate } from "../../../lib/api";
 import { useI18n } from "../../../i18n";
 import { filterSessions, groupSessionsByWorkspace, isTempDir } from "./sessionGroups";
@@ -37,8 +37,11 @@ interface SessionsRailProps {
   skillsLoading?: boolean;
   templates?: AgentTemplate[];
   templatesLoading?: boolean;
-  /** workspaceDir 为空/undefined 时使用服务默认运行目录；template 为新建会话选择的 agent 模板 ID（缺省 default）；skills 为新建会话要加载的已安装 skill 名。 */
-  onCreate: (workspaceDir?: string, template?: string, skills?: string[]) => void;
+  /** Center-reachable nodes for the new-chat execution-node picker (optional; empty hides the picker). */
+  nodes?: ControlNode[];
+  nodesLoading?: boolean;
+  /** workspaceDir 为空/undefined 时使用服务默认运行目录；template 为新建会话选择的 agent 模板 ID（缺省 default）；skills 为新建会话要加载的已安装 skill 名；execMode 为合一执行模式（可选：local/docker/ssh/relay:<node_id>，空 = 本地）。 */
+  onCreate: (workspaceDir?: string, template?: string, skills?: string[], execMode?: string) => void;
   onSelect: (session: ListedSession) => void;
   onDelete: (session: ListedSession) => void;
   onRename: (session: ListedSession, title: string) => void;
@@ -216,7 +219,9 @@ function NewChatWorkspacePopover(props: {
   skillsLoading?: boolean;
   templates?: AgentTemplate[];
   templatesLoading?: boolean;
-  onCreate: (workspaceDir?: string, template?: string, skills?: string[]) => void;
+  nodes?: ControlNode[];
+  nodesLoading?: boolean;
+  onCreate: (workspaceDir?: string, template?: string, skills?: string[], execMode?: string) => void;
   children: React.ReactNode;
 }) {
   const { t } = useI18n();
@@ -224,6 +229,13 @@ function NewChatWorkspacePopover(props: {
   const [dir, setDir] = useState("");
   const [template, setTemplate] = useState("default");
   const [skills, setSkills] = useState<string[]>([]);
+  const [execMode, setExecMode] = useState("");
+  // ACP agent templates route whole turns to an external engine over stdio:
+  // tool calls happen inside that external process, so the local execution
+  // mode picker (local/docker/ssh/relay:<node>) does not apply — disable it
+  // and drop any stale selection when such a template is chosen.
+  const selectedTemplate = (props.templates ?? []).find((tpl) => tpl.id === template);
+  const isACPTemplate = !!selectedTemplate?.engine?.trim().toLowerCase().startsWith("acp:");
   // Distinct non-temp working directories seen in existing sessions, newest
   // first, so the picker offers real history instead of free-text only.
   const historyDirs = useMemo(() => {
@@ -254,10 +266,12 @@ function NewChatWorkspacePopover(props: {
       dir.trim() || undefined,
       template === "default" ? undefined : template,
       skills.length > 0 ? [...skills] : undefined,
+      isACPTemplate ? undefined : execMode.trim() || undefined,
     );
     setDir("");
     setTemplate("default");
     setSkills([]);
+    setExecMode("");
     setOpen(false);
   };
   return (
@@ -295,7 +309,15 @@ function NewChatWorkspacePopover(props: {
               size="small"
               style={{ flex: 1 }}
               value={template}
-              onChange={setTemplate}
+              onChange={(value) => {
+                setTemplate(value);
+                // Switching to an ACP template clears any selected exec mode
+                // (external engine owns tool execution; picker is disabled).
+                const tpl = (props.templates ?? []).find((t) => t.id === value);
+                if (tpl?.engine?.trim().toLowerCase().startsWith("acp:")) {
+                  setExecMode("");
+                }
+              }}
               loading={props.templatesLoading}
               showSearch
               optionFilterProp="label"
@@ -339,6 +361,35 @@ function NewChatWorkspacePopover(props: {
               {t("chat.chatV2Rail.skillsHint")}
             </Typography.Text>
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+              {t("chat.chatV2Rail.execModeLabel")}
+            </Typography.Text>
+            <Select
+              size="small"
+              allowClear
+              disabled={isACPTemplate}
+              style={{ flex: 1 }}
+              value={execMode || undefined}
+              onChange={(value) => setExecMode(value ?? "")}
+              loading={props.nodesLoading}
+              showSearch
+              optionFilterProp="label"
+              placeholder={t("chat.chatV2Rail.execModePlaceholder")}
+              options={[
+                { value: "local", label: t("chat.chatV2Rail.execModeLocal") },
+                { value: "docker", label: t("chat.chatV2Rail.execModeDocker") },
+                { value: "ssh", label: t("chat.chatV2Rail.execModeSSH") },
+                ...(props.nodes ?? []).map((node) => ({
+                  value: `relay:${node.id}`,
+                  label: node.name?.trim() ? `${node.name} (${node.id})` : node.id,
+                })),
+              ]}
+            />
+          </div>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            {isACPTemplate ? t("chat.chatV2Rail.execModeHintACP") : t("chat.chatV2Rail.execModeHint")}
+          </Typography.Text>
           <Button type="primary" size="small" onClick={submit}>
             {t("chat.chatV2Rail.newChat")}
           </Button>
@@ -374,7 +425,7 @@ export function SessionsRail(props: SessionsRailProps) {
             <Popover content={t("chat.chatV2Rail.expandSidebar")} trigger="hover" placement="right">
               <Button type="text" icon={<VerticalRightOutlined />} aria-label={t("chat.chatV2Rail.expandSidebar")} onClick={props.onToggleCollapsed} />
             </Popover>
-            <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} templates={props.templates} templatesLoading={props.templatesLoading} onCreate={props.onCreate}>
+            <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} templates={props.templates} templatesLoading={props.templatesLoading} nodes={props.nodes} nodesLoading={props.nodesLoading} onCreate={props.onCreate}>
               <Button type="text" icon={<PlusOutlined />} aria-label={t("chat.chatV2Rail.newChat")} />
             </NewChatWorkspacePopover>
           </>
@@ -386,7 +437,7 @@ export function SessionsRail(props: SessionsRailProps) {
   return (
     <div className="chat-v2-rail" data-testid="chat-v2-sessions">
       <div className="chat-v2-rail-top">
-        <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} templates={props.templates} templatesLoading={props.templatesLoading} onCreate={props.onCreate}>
+        <NewChatWorkspacePopover sessions={props.sessions} skillsCatalog={props.skillsCatalog} skillsLoading={props.skillsLoading} templates={props.templates} templatesLoading={props.templatesLoading} nodes={props.nodes} nodesLoading={props.nodesLoading} onCreate={props.onCreate}>
           <Button block type="primary" icon={<PlusOutlined />} className="chat-v2-new-chat">
             {t("chat.chatV2Rail.newChat")}
           </Button>

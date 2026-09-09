@@ -895,7 +895,7 @@ export function useChatPageController() {
     queryClient,
   });
 
-  const createSession = (replace = false, workspaceDir?: string, template?: string, skills?: string[]) => {
+  const createSession = (replace = false, workspaceDir?: string, template?: string, skills?: string[], execMode?: string) => {
     const next = makeSessionKey();
     setDefaultSessionKey(next);
     reset();
@@ -910,6 +910,9 @@ export function useChatPageController() {
     const pickedSkills = (skills ?? []).map((s) => s.trim()).filter(Boolean);
     if (pickedSkills.length > 0) {
       query.push(`skills=${encodeURIComponent(pickedSkills.join(","))}`);
+    }
+    if (execMode?.trim()) {
+      query.push(`exec_mode=${encodeURIComponent(execMode.trim())}`);
     }
     navigate(`${base}${query.length > 0 ? `?${query.join("&")}` : ""}`, { replace });
     setSessionsOpen(false);

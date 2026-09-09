@@ -273,7 +273,7 @@ func baseSchema() []SectionSchema {
 			Label:       "Tools / Execution",
 			Description: "Backend used by bash and background command execution tools.",
 			Fields: []FieldSchema{
-				{Path: "tools.execution.mode", Label: "Mode", Description: "local runs on the host; docker bind-mounts the workspace into a container; ssh runs commands on a configured remote target.", Type: "string", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_MODE", Options: []string{"local", "docker", "ssh"}},
+				{Path: "tools.execution.mode", Label: "Mode", Description: "local runs on the host; docker bind-mounts the workspace into a container; ssh runs commands on a configured remote target; relay runs bash/file tools on a remote godex sandbox node through the center relay tunnel.", Type: "string", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_MODE", Options: []string{"local", "docker", "ssh", "relay"}},
 				{Path: "tools.execution.docker_image", Label: "Docker Image", Description: "Container image used when mode=docker.", Type: "string", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_DOCKER_IMAGE"},
 				{Path: "tools.execution.docker_network", Label: "Docker Network", Description: "Optional Docker network name, such as none, host, bridge, or a custom network.", Type: "string", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_DOCKER_NETWORK"},
 				{Path: "tools.execution.ssh_target", Label: "SSH Target", Description: "SSH target used when mode=ssh, such as user@host.", Type: "string", LiveApply: true, Env: "GODEX_TOOLS_EXECUTION_SSH_TARGET"},

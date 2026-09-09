@@ -51,6 +51,7 @@ const (
 	persistedTurnLimit                = 200
 	sessionProjectDirMetadataKey      = "project_dir"
 	sessionRequestedSkillsMetadataKey = "requested_skills"
+	sessionExecutionModeMetadataKey   = "exec_mode"
 	sessionGraphBranchMetadataKey     = "session_graph_branch_id"
 	sessionGraphNodeMetadataKey       = "session_graph_node_id"
 	taskboardCardIDMetadataKey        = "taskboard_card_id"

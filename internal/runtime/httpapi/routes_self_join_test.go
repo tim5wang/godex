@@ -29,6 +29,8 @@ func TestSelfJoinRegistersWithCenterAndPersistsConfig(t *testing.T) {
 		case r.Method == "POST" && r.URL.Path == "/api/control/nodes/register":
 			_ = json.NewDecoder(r.Body).Decode(&gotRegisterBody)
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": gotRegisterBody["id"]})
+		case r.Method == "POST" && r.URL.Path == "/api/control/node-proxy-token":
+			_ = json.NewEncoder(w).Encode(map[string]string{"node_proxy_token": "nk_test_proxy"})
 		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/credential"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/control/nodes/"), "/credential")
 			_ = json.NewEncoder(w).Encode(map[string]string{"node_id": id, "credential": "ck_issued"})
@@ -64,7 +66,9 @@ func TestSelfJoinRegistersWithCenterAndPersistsConfig(t *testing.T) {
 		t.Fatalf("node_id = %q, want my-laptop", out.NodeID)
 	}
 
-	// The config must now carry the joined center + credential + token.
+	// The config must now carry the joined center + credential + token. The
+	// center_token must be the RESTRICTED node proxy credential (nk_...) the
+	// node exchanged for the web token — never the full web token itself.
 	cfg2 := manager.Current()
 	if cfg2.Control.CenterURL != center.URL {
 		t.Fatalf("center_url = %q, want %q", cfg2.Control.CenterURL, center.URL)
@@ -75,8 +79,8 @@ func TestSelfJoinRegistersWithCenterAndPersistsConfig(t *testing.T) {
 	if cfg2.Control.Credential != "ck_issued" {
 		t.Fatalf("credential = %q, want ck_issued", cfg2.Control.Credential)
 	}
-	if cfg2.Control.CenterToken != "tok_center" {
-		t.Fatalf("center_token = %q, want tok_center", cfg2.Control.CenterToken)
+	if cfg2.Control.CenterToken != "nk_test_proxy" {
+		t.Fatalf("center_token = %q, want restricted nk_test_proxy (not the full web token)", cfg2.Control.CenterToken)
 	}
 }
 

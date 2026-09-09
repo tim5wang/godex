@@ -147,6 +147,21 @@ godex node forward --node B --local <port> --target <host:port> --center <A 的�
 
 作为 Web UI 配置的补充（适合 A 有终端可用、想要一次性隧道的场景）。
 
+### 3.10 安全加固 P0 完成（2026-09-09）
+
+在不破坏易用性的前提下实施三项安全加固（用户确认 P0）：
+
+**P0-1 受限节点凭证（`nk_`）替代全量 web token**：
+- 中心新增 `control.node_proxy_token`（Secret，env `GODEX_CONTROL_NODE_PROXY_TOKEN`）与签发端点 `POST /control/node-proxy-token`（web token 保护，幂等生成/返回 `nk_`）。
+- 中心代理面认证拆分：节点列表/单节点/overview（读面，`nodeProxyRead`）与 proxy/forward/forwards 端点（`nodeProxyAuthorize`）接受「web token **或** nk_」；config/sessions/files 等管理面仍仅 web token。
+- `join`（CLI）与 `self/join`（Web UI）自动用 web token 换取 `nk_` 写入节点 `center_token`——节点落盘的是受限凭证，不再持有全量 web token；被入侵节点只能访问代理面，不能碰中心管理面。
+
+**P0-2 关键动作审计落盘**（logger 结构化行）：relay proxy（caller IP/target/method/path）、self/join（caller/node/center）、forward 创建/删除（caller/node/local/target/id）。
+
+**P0-3 UI 安全语义提示**：JoinCenterCard 增加「加入中心 = 授权该中心远程操作本节点」warning Alert；forward_allow 增加「最小授权原则，勿用 *:* 全开」提示（zh/en）。
+
+验证：`go build ./...`；httpapi/relay/config/cmd/app 全绿（含 self-join 换发受限凭证测试、fake center 签发端点）；前端 `tsc -b` + `vite build` 通过。注：relay_trust 测试在无 `GODEX_CONTROL_*` 环境变量时通过（本地 shell 若 export 了这些变量会污染测试 seed，非代码回归）。
+
 ### 3.9 节点侧「接入中心」自动注册 + 热生效 ✅ Implemented（2026-09-09）
 
 背景（用户确认）：Q1=自动注册、Q2=节点板块卡片 + 迁移 forward_allow、Q3=保存后热生效；保留中心侧 `JoinNodeCard`（生成接入命令+一键复制）不变。

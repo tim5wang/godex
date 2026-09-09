@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -37,6 +38,17 @@ type CommandOutputResult struct {
 	DiscardedTail bool
 	ExitCode      int
 }
+
+// ansiEscapeRegexp matches ANSI/VT escape sequences so captured command output
+// is plain text for the model. macOS ls, git diff, and other tools colorize
+// output whenever FORCE_COLOR/CLICOLOR_FORCE are set, even though stdout here
+// is a pipe rather than a terminal. Matches CSI sequences (colors, cursor
+// movement), OSC sequences (title, hyperlinks), and single-char escapes.
+var ansiEscapeRegexp = regexp.MustCompile(
+	`\x1b\[[0-9;?]*[ -/]*[@-~]` + // CSI: ESC [ params intermediate final
+		`|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)` + // OSC: ESC ] ... BEL | ST
+		`|\x1b[ -~]`, // single-char escapes (ESC 7, ESC c, ESC >, ...)
+)
 
 // ModelText returns the preview plus a pointer to any spilled full output.
 func (r CommandOutputResult) ModelText() string {
@@ -105,6 +117,8 @@ type OutputCapture struct {
 	totalBytes  int64
 	truncated   bool
 	discardTail bool
+
+	escapeCarry []byte // incomplete ANSI escape held across write chunks
 }
 
 // NewOutputCapture creates a bounded command output writer.
@@ -142,23 +156,27 @@ func (c *OutputCapture) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Strip ANSI escape sequences (colors, cursor moves, OSC) before anything
+	// is retained, so the model never sees terminal control codes. The write
+	// count still reflects the caller's bytes per io.Writer contract.
+	clean := c.stripANSI(p)
 	written := len(p)
 	start := c.totalBytes
-	c.totalBytes += int64(len(p))
-	c.appendTailLocked(p)
+	c.totalBytes += int64(len(clean))
+	c.appendTailLocked(clean)
 	if c.outputPath != "" {
 		if err := c.ensureFileLocked(); err == nil {
-			c.writeFileChunkLocked(p, start)
+			c.writeFileChunkLocked(clean, start)
 		}
 	}
 
 	if int64(c.preview.Len()) < c.previewLimit {
 		remaining := c.previewLimit - int64(c.preview.Len())
-		if remaining > int64(len(p)) {
-			remaining = int64(len(p))
+		if remaining > int64(len(clean)) {
+			remaining = int64(len(clean))
 		}
 		if remaining > 0 {
-			_, _ = c.preview.Write(p[:remaining])
+			_, _ = c.preview.Write(clean[:remaining])
 		}
 	}
 
@@ -175,13 +193,13 @@ func (c *OutputCapture) Write(p []byte) (int, error) {
 
 	if start < c.previewLimit {
 		offset := int(c.previewLimit - start)
-		if offset > len(p) {
-			offset = len(p)
+		if offset > len(clean) {
+			offset = len(clean)
 		}
-		p = p[offset:]
+		clean = clean[offset:]
 		start = c.previewLimit
 	}
-	if start >= c.spillLimit || len(p) == 0 {
+	if start >= c.spillLimit || len(clean) == 0 {
 		c.discardTail = c.discardTail || start >= c.spillLimit
 		return written, nil
 	}
@@ -190,7 +208,7 @@ func (c *OutputCapture) Write(p []byte) (int, error) {
 		c.discardTail = true
 		return written, nil
 	}
-	chunk := p
+	chunk := clean
 	if int64(len(chunk)) > remaining {
 		chunk = chunk[:remaining]
 		c.discardTail = true
@@ -201,6 +219,47 @@ func (c *OutputCapture) Write(p []byte) (int, error) {
 		}
 	}
 	return written, nil
+}
+
+// stripANSI removes ANSI escape sequences from p, holding back an incomplete
+// trailing escape until the next Write completes it (pipe reads can split a
+// sequence across chunks).
+func (c *OutputCapture) stripANSI(p []byte) []byte {
+	if len(p) == 0 {
+		return p
+	}
+	buf := make([]byte, 0, len(c.escapeCarry)+len(p))
+	buf = append(buf, c.escapeCarry...)
+	buf = append(buf, p...)
+	c.escapeCarry = c.escapeCarry[:0]
+	if i := bytes.LastIndexByte(buf, 0x1b); i >= 0 && !escapeSequenceTerminated(buf[i:]) {
+		// Trailing bytes may be the start of a sequence split across writes.
+		c.escapeCarry = append(c.escapeCarry, buf[i:]...)
+		buf = buf[:i]
+	}
+	return ansiEscapeRegexp.ReplaceAll(buf, nil)
+}
+
+// escapeSequenceTerminated reports whether seq (starting with ESC) contains a
+// complete escape terminator, so an incomplete suffix can be held for the next
+// write chunk.
+func escapeSequenceTerminated(seq []byte) bool {
+	if len(seq) < 2 {
+		return false
+	}
+	switch seq[1] {
+	case '[': // CSI: final byte in @-~ closes the sequence.
+		for _, b := range seq[2:] {
+			if b >= '@' && b <= '~' {
+				return true
+			}
+		}
+		return false
+	case ']': // OSC: closed by BEL or ST (ESC \).
+		return bytes.Contains(seq, []byte{0x07}) || bytes.Contains(seq, []byte{'\x1b', '\\'})
+	default: // Single-char escape such as ESC c or ESC 7.
+		return true
+	}
 }
 
 func (c *OutputCapture) writeFileChunkLocked(p []byte, start int64) {

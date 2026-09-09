@@ -780,25 +780,22 @@ func remoteRelayAgent(cfg *config.Config, selfNode noderegistry.NodeInput, local
 	})
 }
 
-// centerBridge returns the local→center bridge client when this instance is
-// configured with a center URL and center web token (control.center_url +
-// control.center_token) that is not itself. The bridge lets the local Web UI
-// reach other nodes through the center: node-scoped requests are forwarded to
-// the center's proxy endpoint, which relays them over the target's outbound
-// relay channel.
+// centerBridge returns the local→center bridge client for this instance. It
+// is never nil: when the center URL is unset or points at this node itself, it
+// returns a bridge with an empty endpoint (Enabled() == false) so the hot-apply
+// path can later SetEndpoint() it into life without replacing references held
+// by the registry / proxy handler / forward server. The bridge lets the local
+// Web UI reach other nodes through the center: node-scoped requests are
+// forwarded to the center's proxy endpoint, which relays them over the target's
+// outbound relay channel.
 func centerBridge(cfg *config.Config, selfNode noderegistry.NodeInput) *httpapi.CenterBridge {
 	centerURL := strings.TrimRight(strings.TrimSpace(cfg.Control.CenterURL), "/")
-	if centerURL == "" {
-		return nil
+	if centerURL == "" || (selfNode.Endpoint != "" && strings.EqualFold(centerURL, strings.TrimRight(selfNode.Endpoint, "/"))) {
+		// Not configured, or this node IS the center: an empty bridge that stays
+		// disabled until SetEndpoint points it at a real center.
+		return httpapi.NewCenterBridge("", "")
 	}
-	if selfNode.Endpoint != "" && strings.EqualFold(centerURL, strings.TrimRight(selfNode.Endpoint, "/")) {
-		return nil
-	}
-	token := strings.TrimSpace(cfg.Control.CenterToken)
-	if token == "" {
-		return nil
-	}
-	return httpapi.NewCenterBridge(centerURL, token)
+	return httpapi.NewCenterBridge(centerURL, strings.TrimSpace(cfg.Control.CenterToken))
 }
 
 // relayAuthorize protects the center-side proxy endpoint with the same web

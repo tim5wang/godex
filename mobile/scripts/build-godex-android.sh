@@ -16,8 +16,4 @@ CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -o "$OUT_DIR/libgodex.so" "$ROO
 chmod +x "$OUT_DIR/libgodex.so"
 
 ls -lh "$OUT_DIR/libgodex.so"
-echo "==> done."
-
-
-ls -lh "$OUT_DIR/godex-arm64"
-echo "==> done. 二进制已写入 $OUT_DIR/godex-arm64（cap sync 不需要，assets 直接进 APK）"
+echo "==> done. 二进制已写入 $OUT_DIR/libgodex.so（jniLibs 直接进 APK）"

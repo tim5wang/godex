@@ -199,6 +199,7 @@ type ControlSection struct {
 	HeartbeatSeconds    int                  `yaml:"heartbeat_seconds"`
 	OfflineAfterSeconds int                  `yaml:"offline_after_seconds"`
 	ForwardAllow        []string             `yaml:"forward_allow"`
+	SandboxExecOn       bool                 `yaml:"sandbox_exec_on"`
 	Nodes               []ControlNodeSection `yaml:"nodes"`
 	Forwards            []ForwardSection     `yaml:"forwards"`
 }

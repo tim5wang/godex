@@ -133,10 +133,11 @@ godex node join 'https://center' --id pod-b --credential ck_xxx --trust guarded-
 - 单测：exec/fs 端点、RemoteFS 转发、relay mode 分派
 - 手动 e2e：A 配置 sandbox_node=pod-b → A 发 `uname -a` → 输出来自 B；A 写文件 → 落在 B workspace
 
-### M2（一键 + 持久化）
-- 中心 UI「沙箱节点接入命令」卡片（复用生成/复制交互）
-- `--sandbox-exec-on` + `--data-dir`（幂等命令，pod 重建重跑即恢复）
-- 文档：node-onboarding.md 补「沙箱节点」章节
+### M2（一键 + 持久化）✅ Implemented（2026-09-10）
+- 中心 UI「接入新节点」卡片新增「执行沙箱」checkbox（`JoinNodeCard.tsx` + `joinCommand.ts` sandboxExecOn + i18n zh/en），生成的命令自动带 `--sandbox-exec-on`
+- `godex node join --sandbox-exec-on`：标记本节点为执行沙箱（`control.sandbox_exec_on=true`，config 全链路 types/config.go/values/resolve/setters/schema/template/effectiveValues 贯通）；`--data-dir <路径>` 把 state/sessions/memory 落到持久卷（幂等，pod 重建重跑同一条命令即恢复）
+- 单测：`TestRunNodeJoinSandboxExecOn`（flag 写 config + data-dir 重定向）、`TestRunNodeJoinDefaultsSandboxOff`（默认不标记）、joinCommand.test 新用例——全绿
+- 文档：node-onboarding.md 新增 3.5「沙箱节点」章节
 
 ### 验收
 1. `go build ./...` + relay/httpapi/config/cmd/app 测试全绿，`tsc -b` + `vite build` 通过

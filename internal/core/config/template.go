@@ -456,6 +456,10 @@ control:
   # TCP forward allowlist for 'godex node forward' (host:port with * wildcards). Empty denies all forwarding. Environment override: GODEX_CONTROL_FORWARD_ALLOW.
   forward_allow:
 {{ yamlValue .Control.ForwardAllow 4 }}
+  # Mark this node as an execution sandbox: enables /control/sandbox/exec|fs so
+  # other nodes can run their bash/file tools here via the relay tunnel. Set by
+  # 'godex node join --sandbox-exec-on' (remote-sandbox-design M2). Environment override: GODEX_CONTROL_SANDBOX_EXEC_ON.
+  sandbox_exec_on: {{ .Control.SandboxExecOn }}
   # Manually known nodes for the control plane dashboard.
   nodes:
 {{ yamlValue .Control.Nodes 4 }}

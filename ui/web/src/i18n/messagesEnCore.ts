@@ -349,6 +349,7 @@ export const enCoreMessages = {
       joinNamePlaceholder: "Name (optional)",
       joinTrustTrusted: "trusted (full access)",
       joinTrustGuarded: "guarded-remote (approve writes)",
+      joinSandboxLabel: "Execution sandbox (other nodes can run tools here)",
       joinGenerate: "Generate command",
       joinRegenerate: "Regenerate",
       joinCommandLabel: "Run this command on the intranet node:",

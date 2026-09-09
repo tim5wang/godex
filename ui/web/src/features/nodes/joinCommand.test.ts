@@ -26,6 +26,28 @@ describe("buildJoinCommand", () => {
     );
   });
 
+  it("adds --sandbox-exec-on when the node is an execution sandbox", () => {
+    const cmd = buildJoinCommand({
+      centerURL: "https://godex.example.com",
+      nodeID: "pod-b",
+      credential: "ck_a1b2c3",
+      sandboxExecOn: true,
+    });
+    expect(cmd).toBe(
+      "godex node join 'https://godex.example.com' --id pod-b --credential ck_a1b2c3 --trust trusted --sandbox-exec-on",
+    );
+  });
+
+  it("omits --sandbox-exec-on when not requested", () => {
+    const cmd = buildJoinCommand({
+      centerURL: "https://godex.example.com",
+      nodeID: "pod-b",
+      credential: "ck_a1b2c3",
+      sandboxExecOn: false,
+    });
+    expect(cmd).not.toContain("--sandbox-exec-on");
+  });
+
   it("quotes a center URL with a path", () => {
     const cmd = buildJoinCommand({
       centerURL: "https://hub.example.com/base",

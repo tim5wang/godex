@@ -120,6 +120,61 @@ func TestRunNodeJoinDefaultsTrustToTrusted(t *testing.T) {
 	}
 }
 
+// TestRunNodeJoinSandboxExecOn verifies --sandbox-exec-on marks the node as an
+// execution sandbox (control.sandbox_exec_on=true) and --data-dir points the
+// persistent state/sessions/memory at the durable volume (M2 idempotent
+// pod-rebuild recovery: re-running this same command restores everything).
+func TestRunNodeJoinSandboxExecOn(t *testing.T) {
+	r, manager, home := newJoinRunner(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	err := r.runNodeJoin(context.Background(), []string{
+		"https://godex.example.com",
+		"--id", "pod-b",
+		"--credential", "ck_test_abc123",
+		"--sandbox-exec-on",
+		"--data-dir", dataDir,
+	})
+	if err != nil {
+		t.Fatalf("node join: %v", err)
+	}
+	cfg := manager.Current()
+	if !cfg.Control.SandboxExecOn {
+		t.Fatal("expected sandbox_exec_on=true when --sandbox-exec-on is passed")
+	}
+	if cfg.StateDir != filepath.Join(dataDir, "state") {
+		t.Fatalf("expected state_dir %q, got %q", filepath.Join(dataDir, "state"), cfg.StateDir)
+	}
+	if cfg.SessionsDir != filepath.Join(dataDir, "sessions") {
+		t.Fatalf("expected sessions_dir %q, got %q", filepath.Join(dataDir, "sessions"), cfg.SessionsDir)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "godex.yaml"))
+	if err != nil {
+		t.Fatalf("read home godex.yaml: %v", err)
+	}
+	for _, want := range []string{"sandbox_exec_on: true", "state_dir:", "sessions_dir:"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected %q in godex.yaml, got:\n%s", want, data)
+		}
+	}
+}
+
+// TestRunNodeJoinDefaultsSandboxOff verifies a plain join never marks the node
+// as a sandbox unless the operator explicitly opts in.
+func TestRunNodeJoinDefaultsSandboxOff(t *testing.T) {
+	r, manager, _ := newJoinRunner(t)
+	err := r.runNodeJoin(context.Background(), []string{
+		"https://godex.example.com",
+		"--id", "my-laptop",
+		"--credential", "ck_test_abc123",
+	})
+	if err != nil {
+		t.Fatalf("node join: %v", err)
+	}
+	if manager.Current().Control.SandboxExecOn {
+		t.Fatal("expected sandbox_exec_on=false without --sandbox-exec-on")
+	}
+}
+
 func TestRunNodeJoinDoesNotOverwriteUnrelatedConfig(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")

@@ -8,6 +8,8 @@ export interface JoinCommandOptions {
   credential: string;
   trustLevel?: string;
   name?: string;
+  /** Mark the node as an execution sandbox (adds --sandbox-exec-on). */
+  sandboxExecOn?: boolean;
 }
 
 /** Single-quote a value for POSIX shell, escaping embedded single quotes. */
@@ -20,7 +22,7 @@ export function quoteForShell(value: string): string {
  * contain shell metacharacters, so they are single-quoted; nodeID and
  * credential are validated to be shell-safe tokens.
  */
-export function buildJoinCommand(opts: JoinCommandOptions): string {
+	export function buildJoinCommand(opts: JoinCommandOptions): string {
   const { centerURL, nodeID, credential } = opts;
   if (!centerURL || !nodeID || !credential) {
     throw new Error("centerURL, nodeID and credential are required");
@@ -33,6 +35,9 @@ export function buildJoinCommand(opts: JoinCommandOptions): string {
   const name = (opts.name ?? "").trim();
   if (name) {
     parts.push("--name", quoteForShell(name));
+  }
+  if (opts.sandboxExecOn) {
+    parts.push("--sandbox-exec-on");
   }
   return parts.join(" ");
 }

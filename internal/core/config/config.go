@@ -339,6 +339,7 @@ type ControlConfig struct {
 	HeartbeatSeconds    int
 	OfflineAfterSeconds int
 	ForwardAllow        []string
+	SandboxExecOn       bool
 	Nodes               []ControlNodeConfig
 	Forwards            []ForwardConfig
 }

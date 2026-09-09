@@ -261,6 +261,8 @@ func setControlStoredValue(file *ConfigFile, path string, value any) error {
 		file.Control.Forwards = asForwardSections(value)
 	case "control.forward_allow":
 		file.Control.ForwardAllow = asStringList(value)
+	case "control.sandbox_exec_on":
+		file.Control.SandboxExecOn = asBool(value)
 	default:
 		return fmt.Errorf("unknown config field: %s", path)
 	}

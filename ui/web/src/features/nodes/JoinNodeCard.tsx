@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, App, Button, Card, Input, Select, Space, Typography } from "antd";
+import { Alert, App, Button, Card, Checkbox, Input, Select, Space, Typography } from "antd";
 import { CheckOutlined, CopyOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { issueNodeCredential, registerControlNode } from "../../lib/api";
@@ -20,6 +20,7 @@ export function JoinNodeCard() {
   const [nodeID, setNodeID] = useState("");
   const [name, setName] = useState("");
   const [trustLevel, setTrustLevel] = useState("trusted");
+  const [sandboxExecOn, setSandboxExecOn] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [command, setCommand] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -46,6 +47,7 @@ export function JoinNodeCard() {
           credential: cred.credential,
           trustLevel,
           name: name.trim() || undefined,
+          sandboxExecOn,
         }),
       );
       setNodeID(id);
@@ -108,6 +110,9 @@ export function JoinNodeCard() {
           ]}
           style={{ width: 180 }}
         />
+        <Checkbox checked={sandboxExecOn} onChange={(e) => setSandboxExecOn(e.target.checked)}>
+          {t("nodes.joinSandboxLabel")}
+        </Checkbox>
         <Button type="primary" icon={<PlusOutlined />} loading={generating} onClick={() => void generate()}>
           {t("nodes.joinGenerate")}
         </Button>

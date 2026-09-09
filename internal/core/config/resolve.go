@@ -340,6 +340,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveCSV("control.forward_allow", file.Control.ForwardAllow, "GODEX_CONTROL_FORWARD_ALLOW", func(v []string) {
 		current.Control.ForwardAllow = append([]string{}, v...)
 	})
+	resolveBool("control.sandbox_exec_on", file.Control.SandboxExecOn, "GODEX_CONTROL_SANDBOX_EXEC_ON", func(v bool) {
+		current.Control.SandboxExecOn = v
+	})
 	resolveInt("control.heartbeat_seconds", file.Control.HeartbeatSeconds, "GODEX_CONTROL_HEARTBEAT_SECONDS", func(v int) {
 		current.Control.HeartbeatSeconds = positiveOrDefault(v, 15)
 	})

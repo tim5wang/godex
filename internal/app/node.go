@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -52,6 +53,11 @@ func nodeHelpText() string {
 		"  --credential <ck>  Center-issued node credential, ck_... (required)",
 		"  --trust <level>    trusted | guarded-remote (default trusted)",
 		"  --name <name>      Human-readable node name",
+		"  --sandbox-exec-on  Mark this node as an execution sandbox: enable",
+		"                     /control/sandbox/exec|fs so other nodes can run",
+		"                     their bash/file tools here via the relay tunnel",
+		"  --data-dir <path>  Persistent data dir (state/sessions/memory under it);",
+		"                     re-run this command after a pod rebuild to restore",
 		"  --llm-proxy [key]  Also write a local provider that routes LLM calls",
 		"                     through this center's usage gateway. Pass an existing",
 		"                     gdx_ key to use it, or omit the value (or pass 'auto')",
@@ -313,11 +319,14 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 	args = normalizeLLMProxyFlag(args)
 	fs := flag.NewFlagSet("node join", flag.ContinueOnError)
 	fs.SetOutput(r.Stderr)
-	var nodeID, credential, trustLevel, name, llmProxy, llmModels, token string
+	var nodeID, credential, trustLevel, name, llmProxy, llmModels, token, dataDir string
+	var sandboxExecOn bool
 	fs.StringVar(&nodeID, "id", "", "node id to register under (required)")
 	fs.StringVar(&credential, "credential", "", "center-issued node credential, ck_... (required)")
 	fs.StringVar(&trustLevel, "trust", "trusted", "trust level: trusted | guarded-remote")
 	fs.StringVar(&name, "name", "", "human-readable node name")
+	fs.BoolVar(&sandboxExecOn, "sandbox-exec-on", false, "mark this node as an execution sandbox (enable /control/sandbox/exec|fs so other nodes can run tools here through the center relay tunnel)")
+	fs.StringVar(&dataDir, "data-dir", "", "persistent data dir: point state/sessions/memory at <data-dir>/* so pod rebuilds keep data (re-run this command to restore)")
 	fs.StringVar(&llmProxy, "llm-proxy", "", "gdx_ key to use for the LLM proxy provider, or 'auto' to create one via the center (requires --token)")
 	fs.StringVar(&llmModels, "llm-models", "", "comma-separated model ids for the LLM proxy provider (default: fetch the center's /v1/models)")
 	fs.StringVar(&token, "token", "", "center web token (needed for --llm-proxy auto)")
@@ -334,6 +343,7 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 	llmProxy = strings.TrimSpace(llmProxy)
 	llmModels = strings.TrimSpace(llmModels)
 	token = strings.TrimSpace(token)
+	dataDir = strings.TrimSpace(dataDir)
 
 	if err := validateJoinArgs(centerURL, nodeID, credential, trustLevel); err != nil {
 		return err
@@ -363,6 +373,22 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 		"control.center_url":  centerURL,
 		"control.node_id":     nodeID,
 		"control.trust_level": trustLevel,
+	}
+	if sandboxExecOn {
+		// Mark this node as an execution sandbox: enables the B-side
+		// /control/sandbox/exec|fs endpoints so node A can run its bash/file
+		// tools here through the center relay tunnel (remote-sandbox-design
+		// M2). Persisted in config so re-running this join command (the
+		// idempotent pod-rebuild recovery path) restores the marker.
+		values["control.sandbox_exec_on"] = true
+	}
+	if dataDir != "" {
+		// Persistent data dir: keep state/sessions/memory on the durable
+		// volume so a pod rebuild (re-run of this same command) restores
+		// everything without any reconfiguration.
+		values["paths.state_dir"] = filepath.Join(dataDir, "state")
+		values["paths.sessions_dir"] = filepath.Join(dataDir, "sessions")
+		values["paths.memory_dir"] = filepath.Join(dataDir, "memory")
 	}
 	if name != "" {
 		values["control.node_name"] = name

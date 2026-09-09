@@ -348,6 +348,7 @@ export const zhCoreMessages = {
       joinNamePlaceholder: "名称（可选）",
       joinTrustTrusted: "trusted（完全访问）",
       joinTrustGuarded: "guarded-remote（写操作需审批）",
+      joinSandboxLabel: "执行沙箱（其他节点可在此运行工具）",
       joinGenerate: "生成接入命令",
       joinRegenerate: "重新生成",
       joinCommandLabel: "在内网节点上执行以下命令：",

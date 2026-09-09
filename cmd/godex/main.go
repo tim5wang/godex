@@ -36,7 +36,6 @@ import (
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/evalharness"
-	"github.com/tim5wang/godex/internal/services/nodeobs"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
@@ -262,7 +261,15 @@ func main() {
 		}
 	}
 	commandService.SetChannels(channelManager.StatusText)
+	// controlRT is captured by the config applier below so control edits
+	// (join / leave / center switch / forward_allow) hot-reload into the
+	// running node-side relay components without restarting serve. It is
+	// assigned inside Serve once the serve context and bridge exist.
+	var controlRT *controlRuntime
 	manager.SetApplier(func(ctx context.Context, oldCfg, newCfg *config.Config) config.ApplyReport {
+		if controlRT != nil {
+			controlRT.Reconcile(oldCfg, newCfg)
+		}
 		return applyRuntimeConfig(ctx, oldCfg, newCfg, service, channelManager, cronService, heartbeatService)
 	})
 
@@ -386,6 +393,13 @@ func main() {
 			// relay channel to its target (ssh -L style), so an LLM gateway on
 			// an internal node can be reached from the center as localhost.
 			forwardServer := relay.NewForwardServer(relayHub)
+			if bridge != nil {
+				// Center-bridge fallback: tunnels targeting nodes that joined the
+				// center but are not connected to the local hub are dialed
+				// through the center's forward endpoint.
+				centerURL, centerToken := bridge.Endpoint()
+				forwardServer.SetCenterBridge(centerURL, centerToken)
+			}
 			for _, fwd := range cfg.Control.Forwards {
 				if _, err := forwardServer.Add(relay.ForwardSpec{
 					ID:        fwd.ID,
@@ -445,17 +459,19 @@ func main() {
 				cronService,
 				heartbeatService,
 			}
-			if remote := remoteControlHeartbeat(cfg, selfNode, selfEndpoint); remote != nil {
-				lifecycle = append(lifecycle, remote)
+			// Node-side relay components (remote heartbeat / relay agent /
+			// observer) are owned by controlRT so config edits can hot-reload
+			// them; they are intentionally not part of the static lifecycle.
+			controlRT = &controlRuntime{
+				ctx:           ctx,
+				apiHandler:    apiHandler,
+				service:       service,
+				selfEndpoint:  selfEndpoint,
+				bridge:        bridge,
+				forwardServer: forwardServer,
 			}
-			if agent := remoteRelayAgent(cfg, selfNode, apiHandler); agent != nil {
-				lifecycle = append(lifecycle, agent)
-				// Node-side observer: periodically pushes the local observation
-				// snapshot (sessions, longtasks, approvals) to the center so the
-				// center web can show live progress.
-				provider := nodeobs.NewProvider(service, selfNode.Version, selfNode.Capabilities)
-				lifecycle = append(lifecycle, relay.NewObserver(agent, provider, 0))
-			}
+			// Initial boot: start whatever the current config wants (join or no-op).
+			controlRT.Reconcile(cfg, cfg)
 			lifecycle = append(lifecycle, servicecontrol.NewNotifyServiceFromEnv())
 			return app.ServeRuntime{
 				Server: app.BindHTTPServerContext(ctx, &http.Server{
@@ -958,7 +974,7 @@ func shouldWarnMissingAPIKey(args []string) bool {
 		return true
 	}
 	switch args[0] {
-	case "doctor", "help", "-h", "--help", "login", "logout", "migrate", "node", "providers", "repair", "service", "tui", "version", "--version":
+	case "doctor", "docs", "help", "-h", "--help", "login", "logout", "migrate", "node", "providers", "repair", "service", "tui", "version", "--version":
 		return false
 	default:
 		return true

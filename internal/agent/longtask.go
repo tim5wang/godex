@@ -1,3 +1,9 @@
+// godex-feature: longtask
+// 长任务韧性：Ralph-style LongTask story loop（动态并行 DAG）、auto-repair、
+// validation artifact、auto merge/commit、runner phase checkpoint、重启恢复
+// （--resume-run-id）、运行中 follow-up/steer、上下文预算按角色分配。
+// 入口：longtask 工具、godex longtask、Web Task Center
+// 文档：docs/roadmap、docs/longtask-analysis.md、README 核心特性
 package agent
 
 import (

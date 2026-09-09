@@ -89,6 +89,30 @@ func TestEncodeDecodeTCPCloseFrame(t *testing.T) {
 	}
 }
 
+func TestAgentSetForwardAllowHotReload(t *testing.T) {
+	agent := NewAgent(AgentConfig{ForwardAllow: nil})
+	if got := agent.currentForwardAllow(); len(got) != 0 {
+		t.Fatalf("initial forward allow = %v, want empty", got)
+	}
+	if AllowForward(agent.currentForwardAllow(), "127.0.0.1:8088") {
+		t.Fatal("empty allowlist must deny target")
+	}
+
+	agent.SetForwardAllow([]string{"127.0.0.1:8088"})
+	if !AllowForward(agent.currentForwardAllow(), "127.0.0.1:8088") {
+		t.Fatal("hot-reloaded allowlist must permit target")
+	}
+	if AllowForward(agent.currentForwardAllow(), "10.0.0.5:8088") {
+		t.Fatal("hot-reloaded allowlist must still deny other host")
+	}
+
+	// Empty hot-reload must fall back to deny-all again (no stale entries).
+	agent.SetForwardAllow(nil)
+	if AllowForward(agent.currentForwardAllow(), "127.0.0.1:8088") {
+		t.Fatal("cleared allowlist must deny target")
+	}
+}
+
 func TestAllowForward(t *testing.T) {
 	cases := []struct {
 		name   string

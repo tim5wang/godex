@@ -427,6 +427,8 @@ export interface ForwardStatus extends ForwardSpec {
   active_conns: number;
   last_checked_at?: string;
   last_latency_ms?: number;
+  /** Tunnel reaches its node through the center bridge (not the local hub). */
+  via_center?: boolean;
 }
 
 /** One leg of the end-to-end forward connectivity check. */

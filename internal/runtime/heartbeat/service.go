@@ -1,3 +1,8 @@
+// godex-feature: heartbeat
+// Heartbeat：周期自检循环（HEARTBEAT.md checklist + OK token）、watchdog 脚本门、
+// 心跳日志与开关。
+// 入口：heartbeat 工具、Web Automation 面板
+// 文档：docs/user-guide.md、README 核心特性
 package heartbeat
 
 import (

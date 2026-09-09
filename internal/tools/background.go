@@ -1,3 +1,7 @@
+// godex-feature: background
+// 后台命令：长耗时命令后台执行、状态查询与结果回收。
+// 入口：background 工具、background bundle
+// 文档：docs/user-guide.md
 package tools
 
 import (

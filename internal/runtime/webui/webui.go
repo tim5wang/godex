@@ -1,3 +1,9 @@
+// godex-feature: webui
+// Web 工作台：可拖拽多面板网格布局（Chat、Files、Terminal、Automation、Nodes、
+// Notes、Skills、Memory、Usage、Settings、审批面板、subagent、TaskBoard、Agents），
+// 移动端自适应；Web dist 嵌入单二进制（//go:embed embedded_dist）。
+// 入口：godex serve、/ 路由
+// 文档：docs/user-guide.md、docs/spec-of-chat-layout-optimize.md、README
 package webui
 
 import (

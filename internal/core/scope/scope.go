@@ -1,3 +1,9 @@
+// godex-feature: scope
+// Scope 隔离模型：session/personal/org 三类 scope，限定 memory、文件与 sandbox 状态；
+// 写路径限定与 scope_write 开关。
+// 入口：scope 工具、会话创建
+// 文档：docs/scope-isolation-design.md、docs/architecture-v2-spec.md
+
 // Package scope defines the ScopeId isolation model (roadmap 6.2): a
 // kind:ref identifier used to bound memory, files and sandbox state to a
 // session, a user, or an org. It mirrors the reference ScopeId helpers in

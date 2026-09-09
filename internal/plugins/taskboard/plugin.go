@@ -1,3 +1,8 @@
+// godex-feature: taskboard
+// 任务看板插件：跨会话任务卡（backlog/todo/in_progress/in_review）、模板分派执行、
+// PJM 编排者、research 传递与路径冲突四闸门、执行可观测性。
+// 入口：/taskboard Web 页、taskboard 工具、/v1/taskboard* API
+// 文档：docs/taskboard-plugin-design.md、docs/taskboard-collaboration-design.md
 package taskboard
 
 import (

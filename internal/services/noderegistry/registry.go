@@ -1,3 +1,8 @@
+// godex-feature: noderegistry
+// Control Plane：轻量 Node Registry 与只读 Nodes Dashboard 观测多 GoDex runtime；
+// Relay 中继（WSS 出站）、node exec/forward 跳板、guarded-remote 审批头。
+// 入口：godex node、Web Nodes 面板
+// 文档：docs/node-mesh-design.md、docs/node-onboarding.md、README 核心特性
 package noderegistry
 
 import (

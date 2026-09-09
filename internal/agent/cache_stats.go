@@ -1,3 +1,8 @@
+// godex-feature: cache
+// Prompt 缓存：Anthropic 风格 cache_control 断点、稳定/动态 prompt 分段、
+// 缓存命中统计与 retention。
+// 入口：内部（agent context）、Usage/cache 面板
+// 文档：docs/codex-cache.md、docs/cache-optimization-plan.md、README 核心特性
 package agent
 
 import (

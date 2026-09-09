@@ -105,7 +105,7 @@ func baseSchema() []SectionSchema {
 				{Path: "control.credential", Label: "Node Credential", Description: "Per-node credential (ck_...) issued by the center for relay authentication.", Type: "string", Secret: true, Env: "GODEX_CONTROL_CREDENTIAL"},
 				{Path: "control.heartbeat_seconds", Label: "Heartbeat Seconds", Description: "Node heartbeat interval when registering to a center service.", Type: "int", Env: "GODEX_CONTROL_HEARTBEAT_SECONDS"},
 				{Path: "control.offline_after_seconds", Label: "Offline After Seconds", Description: "Mark a node offline after this many seconds without heartbeat.", Type: "int", Env: "GODEX_CONTROL_OFFLINE_AFTER_SECONDS"},
-				{Path: "control.forward_allow", Label: "Forward Allow", Description: "TCP forward allowlist for this node (host:port entries, * wildcards; empty denies all forwarding).", Type: "string_list", Env: "GODEX_CONTROL_FORWARD_ALLOW"},
+				{Path: "control.forward_allow", Label: "Forward Allow", Description: "TCP forward allowlist for this node (host:port entries, * wildcards; empty denies all forwarding).", Type: "string_list", LiveApply: true, Env: "GODEX_CONTROL_FORWARD_ALLOW"},
 				{Path: "control.nodes", Label: "Manual Nodes", Description: "Optional JSON/YAML list of manually known nodes with id/name/endpoint/workspace_dir/godex_home/version/capabilities.", Type: "json"},
 				{Path: "control.forwards", Label: "Forward Tunnels", Description: "Persistent TCP forward tunnels managed by this center: {id, name, node_id, local_port, target}. The center listens on 127.0.0.1:local_port and relays to target on the node's network.", Type: "json"},
 			},

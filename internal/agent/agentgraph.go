@@ -1,3 +1,8 @@
+// godex-feature: agentgraph
+// Agent 图：动态 DAG 抽象，驱动 LongTask story loop 与 workflow 的节点编排、
+// 进度视图与上下文预算分配。
+// 入口：agent_graph 工具、Web Task Center DAG 图
+// 文档：docs/roadmap、docs/p0-p4-visualization-design.md
 package agent
 
 import (

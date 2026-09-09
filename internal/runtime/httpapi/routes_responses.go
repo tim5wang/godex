@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/usage"
 )
@@ -123,7 +124,17 @@ func responsesRequestToProtocol(req responsesGatewayRequest) (protocol.Request, 
 		return protocol.Request{}, err
 	}
 	for _, item := range items {
-		switch item.Type {
+		// Easy-input message form: the Responses spec (and the openai-go
+		// SDK used by codex-style clients) let callers omit the "type"
+		// field on plain messages ({"role":"user","content":"..."}),
+		// so an item that carries a role and no explicit type is a message.
+		// Without this, such requests parse to zero messages and fail with
+		// "at least one non-empty user or assistant message is required".
+		itemType := item.Type
+		if itemType == "" && strings.TrimSpace(item.Role) != "" {
+			itemType = "message"
+		}
+		switch itemType {
 		case "message":
 			role := strings.ToLower(strings.TrimSpace(item.Role))
 			if role == "system" || role == "developer" {
@@ -492,10 +503,37 @@ func randHex(n int) string {
 }
 
 // streamUsageGatewayResponses forwards a streaming provider response back to
-// the client as Responses SSE events. The wire shape mirrors what the official
-// Responses API emits: response.output_text.delta for text, reasoning deltas,
-// response.output_item.added / function_call_arguments.delta for tool calls,
-// then response.completed as the terminal frame.
+// the client as Responses SSE events. The wire shape mirrors the official
+// Responses API so standard Responses SDK clients (OpenAI SDK, litellm,
+// codex-style consumers) can consume the stream:
+//
+//  1. response.created (response in_progress, empty output)
+//  2. response.output_item.added for each output item (message / reasoning /
+//     function_call) the moment it first appears;
+//  3. response.content_part.added for the text item's output_text part;
+//  4. response.output_text.delta / response.reasoning_summary_text.delta /
+//     response.function_call_arguments.delta for incremental content;
+//  5. response.output_text.done / response.reasoning_summary_text.done /
+//     response.function_call_arguments.done / response.content_part.done /
+//     response.output_item.done as each item and part completes;
+//  6. response.completed carrying the fully-assembled output array (identical
+//     shape to the non-streaming response), then the [DONE] sentinel.
+//
+// Item ids stay stable across deltas: each message/reasoning/function_call
+// output item is allocated once and referenced by every subsequent delta/done
+// frame for that item, matching what Responses SDKs expect (they aggregate
+// deltas by item_id). output_index increments across items in emission order.
+
+// responsesStreamToolCall records one function_call output item announced
+// during a streaming Responses response, keyed by the upstream protocol block
+// index so deltas can reference the stable ids allocated at announcement.
+type responsesStreamToolCall struct {
+	ItemID      string
+	CallID      string
+	Name        string
+	OutputIndex int
+}
+
 func streamUsageGatewayResponses(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -521,31 +559,140 @@ func streamUsageGatewayResponses(
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	// toolCallsPerIndex tracks tool calls announced via output_item.added so
-	// the deltas reference a stable id. The protocol block carries the
-	// upstream call id; we surface it as both call_id and item id.
-	toolCallsPerIndex := map[int]string{}
+	// sequenceNumber increments on every SSE frame, mirroring the official
+	// Responses API (clients use it to detect gaps and ordering).
+	sequenceNumber := 0
+	// emit stamps sequence_number onto every frame before writing it.
+	emit := func(payload map[string]interface{}) {
+		payload["sequence_number"] = sequenceNumber
+		sequenceNumber++
+		emitResponsesSSE(w, flusher, payload)
+	}
+
+	// baseResponse is the response object carried by created/completed frames.
+	baseResponse := func(status string, output []interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"id":     responseID,
+			"object": "response",
+			"status": status,
+			"model":  req.Model,
+			"output": output,
+		}
+	}
+
+	// Emit response.created before the upstream stream starts. Some providers
+	// (e.g. the Anthropic gateway path) never invoke OnStreamStarted, so
+	// relying on that callback would drop the opening frame entirely.
+	emit(map[string]interface{}{
+		"type":     "response.created",
+		"response": baseResponse("in_progress", []interface{}{}),
+	})
+
+	// nextOutputIndex is the output_index assigned to the next item that is
+	// announced via response.output_item.added. The official API numbers
+	// output items sequentially, and Responses SDKs rely on it to correlate
+	// deltas with their owning item.
+	nextOutputIndex := 0
+
+	// The gateway emits at most one assistant text message and one reasoning
+	// item per response; deltas for them reference the ids allocated here on
+	// first appearance. The previous implementation minted a new id per delta,
+	// which made SDK clients lose every text stream because deltas never
+	// matched a known item.
+	var messageItemID, messagePartID string
+	messageOutputIndex := 0
+	messageAnnounced := false
+
+	var reasoningItemID string
+	reasoningOutputIndex := 0
+	reasoningAnnounced := false
+
+	// toolCallsPerIndex tracks function_call items announced via
+	// output_item.added, keyed by the upstream protocol block index. The
+	// protocol block carries the upstream call id; we surface it as both
+	// call_id and item id. The record remembers the item's output_index
+	// (deltas must reference the item index, not the upstream block index).
+	toolCallsPerIndex := map[int]*responsesStreamToolCall{}
 	// lastPartialArgsPerIndex tracks the previous cumulative arguments string
 	// per output index so we can emit differential deltas (same as the
 	// chat.completions streaming path).
 	lastPartialArgsPerIndex := map[int]string{}
+	// completedOutputItems accumulates the final assembled output items so the
+	// terminal response.completed frame can carry the full output array
+	// (previously it always sent an empty array). Items are appended in
+	// announcement order, so their index equals their output_index.
+	completedOutputItems := []interface{}{}
+	// Accumulated full text / reasoning, used to fill the done frames and the
+	// completed output array.
+	var textAccumulated, reasoningAccumulated strings.Builder
+
+	announceTextItem := func() {
+		if messageAnnounced {
+			return
+		}
+		messageAnnounced = true
+		messageItemID = "msg_" + randHex(8)
+		messagePartID = "cp_" + randHex(8)
+		messageOutputIndex = nextOutputIndex
+		nextOutputIndex++
+		item := map[string]interface{}{
+			"type":    "message",
+			"id":      messageItemID,
+			"role":    "assistant",
+			"status":  "in_progress",
+			"content": []interface{}{},
+		}
+		completedOutputItems = append(completedOutputItems, item)
+		emit(map[string]interface{}{
+			"type":         "response.output_item.added",
+			"output_index": messageOutputIndex,
+			"item":         item,
+		})
+		emit(map[string]interface{}{
+			"type":          "response.content_part.added",
+			"item_id":       messageItemID,
+			"output_index":  messageOutputIndex,
+			"content_index": 0,
+			"part":          map[string]interface{}{"type": "output_text", "id": messagePartID, "text": "", "annotations": []interface{}{}},
+		})
+	}
+
+	announceReasoningItem := func() {
+		if reasoningAnnounced {
+			return
+		}
+		reasoningAnnounced = true
+		reasoningItemID = "rs_" + randHex(8)
+		reasoningOutputIndex = nextOutputIndex
+		nextOutputIndex++
+		item := map[string]interface{}{
+			"type":    "reasoning",
+			"id":      reasoningItemID,
+			"summary": []interface{}{},
+		}
+		completedOutputItems = append(completedOutputItems, item)
+		emit(map[string]interface{}{
+			"type":         "response.output_item.added",
+			"output_index": reasoningOutputIndex,
+			"item":         item,
+		})
+	}
 
 	resp, err := streamer.Stream(r.Context(), providerReq, conversation.StreamHandler{
 		OnStreamStarted: func() {
-			emitResponsesSSE(w, flusher, map[string]interface{}{
-				"type":            "response.created",
-				"response":        map[string]interface{}{"id": responseID, "object": "response", "status": "in_progress", "model": req.Model, "output": []interface{}{}},
-				"sequence_number": 0,
-			})
+			// response.created is emitted above so providers that never fire
+			// this callback still produce a valid stream; nothing to do here.
 		},
 		OnTextDelta: func(delta string) {
 			if delta == "" {
 				return
 			}
-			emitResponsesSSE(w, flusher, map[string]interface{}{
+			textAccumulated.WriteString(delta)
+			announceTextItem()
+			emit(map[string]interface{}{
 				"type":          "response.output_text.delta",
-				"item_id":       "msg_" + randHex(8),
-				"output_index":  0,
+				"item_id":       messageItemID,
+				"output_index":  messageOutputIndex,
 				"content_index": 0,
 				"delta":         delta,
 			})
@@ -554,61 +701,179 @@ func streamUsageGatewayResponses(
 			if delta == "" {
 				return
 			}
-			emitResponsesSSE(w, flusher, map[string]interface{}{
+			reasoningAccumulated.WriteString(delta)
+			announceReasoningItem()
+			emit(map[string]interface{}{
 				"type":          "response.reasoning_summary_text.delta",
-				"item_id":       "rs_" + randHex(8),
-				"output_index":  0,
+				"item_id":       reasoningItemID,
+				"output_index":  reasoningOutputIndex,
 				"content_index": 0,
 				"delta":         delta,
 			})
 		},
 		OnToolUse: func(block protocol.Block, partialJSON string) {
 			idx := block.Index
-			if _, seen := toolCallsPerIndex[idx]; !seen {
+			tc, seen := toolCallsPerIndex[idx]
+			if !seen {
 				callID := strings.TrimSpace(block.ID)
 				if callID == "" {
 					callID = "call_" + randHex(8)
 				}
-				toolCallsPerIndex[idx] = callID
-				emitResponsesSSE(w, flusher, map[string]interface{}{
+				itemID := "fc_" + randHex(8)
+				outputIndex := nextOutputIndex
+				nextOutputIndex++
+				tc = &responsesStreamToolCall{
+					ItemID:      itemID,
+					CallID:      callID,
+					Name:        block.Name,
+					OutputIndex: outputIndex,
+				}
+				toolCallsPerIndex[idx] = tc
+				item := map[string]interface{}{
+					"type":      "function_call",
+					"id":        itemID,
+					"call_id":   callID,
+					"name":      block.Name,
+					"arguments": "",
+					"status":    "in_progress",
+				}
+				completedOutputItems = append(completedOutputItems, item)
+				emit(map[string]interface{}{
 					"type":         "response.output_item.added",
-					"output_index": idx,
-					"item": map[string]interface{}{
-						"type":      "function_call",
-						"id":        "fc_" + randHex(8),
-						"call_id":   callID,
-						"name":      block.Name,
-						"arguments": "",
-						"status":    "in_progress",
-					},
+					"output_index": outputIndex,
+					"item":         item,
 				})
 			}
 			// Forward the per-chunk arguments fragment (differential suffix
 			// against the last cumulative, same as the chat.completions path).
-			prev, seen := lastPartialArgsPerIndex[idx]
+			prev, prevSeen := lastPartialArgsPerIndex[tc.OutputIndex]
 			fragment := toolJSONDeltaSuffix(prev, partialJSON)
-			if seen && partialJSON == prev {
+			if prevSeen && partialJSON == prev {
 				return
 			}
-			lastPartialArgsPerIndex[idx] = partialJSON
+			lastPartialArgsPerIndex[tc.OutputIndex] = partialJSON
 			if fragment == "" {
 				return
 			}
-			emitResponsesSSE(w, flusher, map[string]interface{}{
+			emit(map[string]interface{}{
 				"type":         "response.function_call_arguments.delta",
-				"item_id":      toolCallsPerIndex[idx],
-				"output_index": idx,
+				"item_id":      tc.ItemID,
+				"output_index": tc.OutputIndex,
 				"delta":        fragment,
 			})
 		},
 	})
 	if err != nil {
-		emitResponsesSSE(w, flusher, map[string]interface{}{
+		emit(map[string]interface{}{
 			"type":    "response.error",
 			"message": err.Error(),
 		})
 		recordUsageGatewayError(usageService, start, key.ID, req.Model, modelMapping, "provider_error", err.Error())
 		return
+	}
+
+	// Finish the text item: output_text.done, content_part.done and
+	// output_item.done carry the fully accumulated text.
+	if messageAnnounced {
+		text := textAccumulated.String()
+		part := map[string]interface{}{"type": "output_text", "id": messagePartID, "text": text, "annotations": []interface{}{}}
+		emit(map[string]interface{}{
+			"type":          "response.output_text.done",
+			"item_id":       messageItemID,
+			"output_index":  messageOutputIndex,
+			"content_index": 0,
+			"text":          text,
+		})
+		emit(map[string]interface{}{
+			"type":          "response.content_part.done",
+			"item_id":       messageItemID,
+			"output_index":  messageOutputIndex,
+			"content_index": 0,
+			"part":          part,
+		})
+		item := map[string]interface{}{
+			"type":    "message",
+			"id":      messageItemID,
+			"role":    "assistant",
+			"status":  "completed",
+			"content": []interface{}{part},
+		}
+		completedOutputItems[messageOutputIndex] = item
+		emit(map[string]interface{}{
+			"type":         "response.output_item.done",
+			"output_index": messageOutputIndex,
+			"item":         item,
+		})
+	}
+
+	// Finish the reasoning item.
+	if reasoningAnnounced {
+		reasoningText := reasoningAccumulated.String()
+		summary := map[string]interface{}{"type": "summary_text", "text": reasoningText}
+		emit(map[string]interface{}{
+			"type":          "response.reasoning_summary_text.done",
+			"item_id":       reasoningItemID,
+			"output_index":  reasoningOutputIndex,
+			"content_index": 0,
+			"text":          reasoningText,
+		})
+		item := map[string]interface{}{
+			"type":    "reasoning",
+			"id":      reasoningItemID,
+			"summary": []interface{}{summary},
+		}
+		completedOutputItems[reasoningOutputIndex] = item
+		emit(map[string]interface{}{
+			"type":         "response.output_item.done",
+			"output_index": reasoningOutputIndex,
+			"item":         item,
+		})
+	}
+
+	// Finish tool call items using the final assembled arguments from the
+	// completed response: the stream callbacks do not carry an end-of-tool
+	// marker for every provider, so the assembled resp is the source of truth.
+	// Iterate in output_index order (map iteration is random, and the done
+	// frames must arrive in the same order the items were announced).
+	toolOrder := make([]*responsesStreamToolCall, 0, len(toolCallsPerIndex))
+	for _, tc := range toolCallsPerIndex {
+		toolOrder = append(toolOrder, tc)
+	}
+	sort.Slice(toolOrder, func(a, b int) bool {
+		return toolOrder[a].OutputIndex < toolOrder[b].OutputIndex
+	})
+	for _, tc := range toolOrder {
+		finalArgs := ""
+		if resp != nil {
+			for _, blk := range resp.Content {
+				if blk.Type == protocol.BlockToolUse && strings.TrimSpace(blk.ID) == tc.CallID {
+					if b, err := json.Marshal(blk.Input); err == nil {
+						finalArgs = string(b)
+					}
+					break
+				}
+			}
+		}
+		emit(map[string]interface{}{
+			"type":         "response.function_call_arguments.done",
+			"item_id":      tc.ItemID,
+			"output_index": tc.OutputIndex,
+			"arguments":    finalArgs,
+		})
+		item := map[string]interface{}{
+			"type":      "function_call",
+			"id":        tc.ItemID,
+			"call_id":   tc.CallID,
+			"name":      tc.Name,
+			"arguments": finalArgs,
+			"status":    "completed",
+		}
+		completedOutputItems[tc.OutputIndex] = item
+		emit(map[string]interface{}{
+			"type":         "response.output_item.done",
+			"output_index": tc.OutputIndex,
+			"item":         item,
+		})
 	}
 
 	// Terminal frame. Mirror responsesStatus() for the status field.
@@ -620,16 +885,11 @@ func streamUsageGatewayResponses(
 	if resp != nil && resp.Usage != nil {
 		usagePayload = protocolUsageToResponses(resp.Usage)
 	}
-	emitResponsesSSE(w, flusher, map[string]interface{}{
-		"type": "response.completed",
-		"response": map[string]interface{}{
-			"id":     responseID,
-			"object": "response",
-			"status": status,
-			"model":  req.Model,
-			"output": []interface{}{},
-			"usage":  usagePayload,
-		},
+	response := baseResponse(status, completedOutputItems)
+	response["usage"] = usagePayload
+	emit(map[string]interface{}{
+		"type":     "response.completed",
+		"response": response,
 	})
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()

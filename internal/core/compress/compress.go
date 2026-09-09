@@ -1,3 +1,8 @@
+// godex-feature: compaction
+// 上下文压缩：模型辅助压缩 + rule-based 回退、pinned continuation snapshot、
+// 按角色 token 预算、transcript archive。
+// 入口：compact 工具、/compact 命令、自动触发
+// 文档：docs/compaction-optimization-plan.md、README 核心特性
 package compress
 
 import (

@@ -1,3 +1,8 @@
+// godex-feature: session-runtime
+// 共享 Session Runtime：CLI/TUI/Web/HTTP/IM 入口共用 session、timeline、attachment、
+// permission 与 memory；会话持久化与多入口一致性。
+// 入口：godex ask/command/serve、/sessions/* API
+// 文档：docs/user-guide.md、docs/feature-implementation-matrix.md
 package backend
 
 import (

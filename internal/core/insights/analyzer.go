@@ -1,3 +1,7 @@
+// godex-feature: insights
+// Insights 报告：workspace 信号分析生成洞察报告。
+// 入口：/insights 命令
+// 文档：docs/user-guide.md
 package insights
 
 import (

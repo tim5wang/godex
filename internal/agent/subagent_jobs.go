@@ -1,3 +1,8 @@
+// godex-feature: subagent
+// Subagent jobs：durable 子 agent 任务（review/merge/cancel/resume/iterate）、
+// 角色→bundle 映射与写 scope 联动、compact handoff。
+// 入口：subagent 工具、Chat subagent 面板、CLI
+// 文档：docs/workflow-runtime.md、README 核心特性
 package agent
 
 import (

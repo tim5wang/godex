@@ -1,3 +1,8 @@
+// godex-feature: acp
+// ACP 外部 agent：external agents/server + whole-turn Harness，进程组、工具 session
+// 复用、有界历史恢复与交互审批。
+// 入口：godex acp-server、external_agents bundle、Agent 模板 engine
+// 文档：docs/vscode-acp.md、README 核心特性
 package server
 
 import (

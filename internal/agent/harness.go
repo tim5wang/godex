@@ -1,3 +1,7 @@
+// godex-feature: harness
+// 多引擎热切换：Harness 抽象（godex/acp 等）+ 每轮引擎选择，切换自动 reset session。
+// 入口：CLI --harness、Agent 模板 engine
+// 文档：docs/roadmap、README 核心特性
 package agent
 
 import (

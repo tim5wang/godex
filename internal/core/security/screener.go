@@ -1,3 +1,8 @@
+// godex-feature: security
+// 安全筛查器：LLM 分块/投票/降级分类 + shadow fire-and-forget 审计；审批
+// manual/review/yolo、安全 profile、loop guard、security audit。
+// 入口：approve/deny 命令、审批面板、godex doctor
+// 文档：docs/user-guide.md、README 核心特性
 package security
 
 import (

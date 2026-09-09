@@ -251,6 +251,7 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 	a.registerToolTo(handler, tools.NewListPackageCommandsTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package command declarations"})
 	a.registerToolTo(handler, tools.NewListPackageRolesTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package subagent role declarations"})
 	a.registerToolTo(handler, tools.NewCompressTool(a), tools.ToolMeta{AlwaysActive: true})
+	a.registerToolTo(handler, tools.NewSelfdocsTool(), tools.ToolMeta{AlwaysActive: true})
 	if a.historySearch != nil {
 		a.registerToolTo(handler, tools.NewHistorySearchTool(a.historySearch), tools.ToolMeta{AlwaysActive: true})
 	}

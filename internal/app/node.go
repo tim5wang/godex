@@ -119,7 +119,7 @@ func (r *Runner) runNodeForward(ctx context.Context, args []string) error {
 		token = strings.TrimSpace(r.Cfg.WebToken)
 	}
 
-	wsURL, err := forwardWSURL(centerURL, nodeID)
+	wsURL, err := relay.ForwardWSURL(centerURL, nodeID)
 	if err != nil {
 		return err
 	}
@@ -269,33 +269,6 @@ func bridgeForwardConn(client *relay.ForwardClient, localConn net.Conn, target s
 		_, _ = io.Copy(localConn, stream)
 	}()
 	wg.Wait()
-}
-
-// forwardWSURL converts a center base URL (http(s)://host or ws(s)://host)
-// into the forward session WebSocket URL for a node. The center serves relay
-// endpoints under /api (the webui strips the prefix), so the path mirrors the
-// external proxy URL: /api/control/nodes/{id}/forward.
-func forwardWSURL(centerURL, nodeID string) (string, error) {
-	raw := strings.TrimSpace(centerURL)
-	if raw == "" || nodeID == "" {
-		return "", fmt.Errorf("empty center URL or node id")
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("invalid center URL %q: %w", raw, err)
-	}
-	switch u.Scheme {
-	case "https":
-		u.Scheme = "wss"
-	case "http":
-		u.Scheme = "ws"
-	case "ws", "wss":
-		// keep as-is
-	default:
-		return "", fmt.Errorf("unsupported center URL scheme %q", u.Scheme)
-	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/control/nodes/" + nodeID + "/forward"
-	return u.String(), nil
 }
 
 // execURL builds the center-side proxy URL that forwards POST /v1/exec to the

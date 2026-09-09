@@ -1,3 +1,7 @@
+// godex-feature: web
+// Web 检索：web_search 与 web_fetch 获取当前信息；反爬/动态页回退到 browser。
+// 入口：web_search / web_fetch 工具、web bundle
+// 文档：docs/tools_issues.md、README 核心特性
 package tools
 
 import (

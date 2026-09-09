@@ -1,3 +1,9 @@
+// godex-feature: memory
+// 持久化记忆：durable memory（candidate inbox、suppression、audit/restore）、
+// SQLite + FTS5 召回、scope-aware recall、记忆策略（per-turn/agent-only/consolidated）、
+// foldCapture 去重、project miner。
+// 入口：memory 工具、/memory Web 页、memory slash 命令
+// 文档：docs/memory-design-principles.md、README 核心特性
 package memory
 
 import (

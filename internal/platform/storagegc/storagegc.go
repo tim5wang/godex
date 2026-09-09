@@ -1,3 +1,7 @@
+// godex-feature: storage-gc
+// 空间治理：storage doctor、browser cache / session checkpoint / artifact / subagent GC。
+// 入口：godex gc、godex doctor
+// 文档：docs/user-guide.md、README 核心特性
 package storagegc
 
 import (

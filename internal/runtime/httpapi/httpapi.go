@@ -130,6 +130,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	}, relayTrustChecker(manager))
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
+	registerSelfJoinRoute(mux, manager, protected)
 	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected)
 	registerProviderRoutes(mux, manager, protected)
 

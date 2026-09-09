@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tim5wang/godex/internal/services/noderegistry"
@@ -23,13 +24,22 @@ import (
 // center web token (control.center_token), mirroring how the CLI jump-host
 // commands reach nodes through the center.
 type CenterBridge struct {
-	CenterURL string
-	Token     string
-	Client    *http.Client
+	Client *http.Client
+
+	// ep carries the mutable endpoint (center URL + token). Replaced atomically
+	// by SetEndpoint during config hot-reload so an already-built bridge keeps
+	// working with the new center without being recreated.
+	ep atomic.Value // bridgeEndpoint
 
 	mu       sync.Mutex
 	cache    []noderegistry.NodeView
 	cachedAt time.Time
+}
+
+// bridgeEndpoint is the immutable snapshot stored in CenterBridge.ep.
+type bridgeEndpoint struct {
+	CenterURL string
+	Token     string
 }
 
 // centerBridgeCacheTTL bounds how stale the center node list may be; the UI
@@ -39,25 +49,58 @@ const centerBridgeCacheTTL = 15 * time.Second
 // NewCenterBridge creates the bridge client. centerURL is used verbatim;
 // trailing slashes are tolerated. A nil Client falls back to http.DefaultClient.
 func NewCenterBridge(centerURL, token string) *CenterBridge {
-	b := &CenterBridge{
+	b := &CenterBridge{}
+	b.ep.Store(bridgeEndpoint{
 		CenterURL: strings.TrimRight(strings.TrimSpace(centerURL), "/"),
 		Token:     strings.TrimSpace(token),
-	}
+	})
 	if b.Client == nil {
 		b.Client = http.DefaultClient
 	}
 	return b
 }
 
+// SetEndpoint hot-reloads the bridge endpoint (used by the config live-apply
+// path when control.center_url / control.center_token change).
+func (b *CenterBridge) SetEndpoint(centerURL, token string) {
+	b.ep.Store(bridgeEndpoint{
+		CenterURL: strings.TrimRight(strings.TrimSpace(centerURL), "/"),
+		Token:     strings.TrimSpace(token),
+	})
+	b.mu.Lock()
+	b.cache = nil
+	b.cachedAt = time.Time{}
+	b.mu.Unlock()
+}
+
+// Endpoint returns the current center URL and token.
+func (b *CenterBridge) Endpoint() (centerURL, token string) {
+	ep := b.endpoint()
+	return ep.CenterURL, ep.Token
+}
+
+// endpoint returns the current endpoint snapshot.
+func (b *CenterBridge) endpoint() bridgeEndpoint {
+	v := b.ep.Load()
+	if v == nil {
+		return bridgeEndpoint{}
+	}
+	return v.(bridgeEndpoint)
+}
+
 // Enabled reports whether the bridge is configured with both a center URL and
 // a center web token.
 func (b *CenterBridge) Enabled() bool {
-	return b != nil && b.CenterURL != "" && b.Token != ""
+	if b == nil {
+		return false
+	}
+	ep := b.endpoint()
+	return ep.CenterURL != "" && ep.Token != ""
 }
 
 // apiURL joins the center base URL with an /api-prefixed path.
 func (b *CenterBridge) apiURL(path string) string {
-	base := b.CenterURL
+	base := b.endpoint().CenterURL
 	if strings.HasSuffix(base, "/api") {
 		return base + path
 	}
@@ -91,7 +134,7 @@ func (b *CenterBridge) fetchNodes(ctx context.Context) ([]noderegistry.NodeView,
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+b.Token)
+	req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return nil, err
@@ -114,7 +157,7 @@ func (b *CenterBridge) GetNode(ctx context.Context, id string) (noderegistry.Nod
 	if err != nil {
 		return noderegistry.NodeView{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+b.Token)
+	req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return noderegistry.NodeView{}, err
@@ -136,7 +179,7 @@ func (b *CenterBridge) GetOverview(ctx context.Context, id string) (relay.NodeOv
 	if err != nil {
 		return relay.NodeOverview{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+b.Token)
+	req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return relay.NodeOverview{}, err
@@ -203,7 +246,7 @@ func (b *CenterBridge) ServeProxy(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
-	req.Header.Set("Authorization", "Bearer "+b.Token)
+	req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)

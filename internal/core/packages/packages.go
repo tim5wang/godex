@@ -1,3 +1,8 @@
+// godex-feature: packages
+// Package 生态：manifest（resources/app/tool_policy/smoke_tests/recommended_bundles）、
+// requires/provides 依赖声明与安装校验、事务式重装、Claude Code import。
+// 入口：packages 工具、/packages Web 页
+// 文档：docs/extension-runtime-user-guide.md、README 核心特性
 package packages
 
 import (

@@ -1,3 +1,7 @@
+// godex-feature: session-tree
+// Session 树：会话可分支（fork/rollback/merge）、session 图持久化与恢复。
+// 入口：/session 命令、Chat 会话操作
+// 文档：docs/architecture-v2-spec.md、README 核心特性
 package sessiongraph
 
 import (

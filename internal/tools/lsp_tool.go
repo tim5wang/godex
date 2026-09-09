@@ -1,3 +1,8 @@
+// godex-feature: lsp
+// LSP 代码智能：definition/references/hover/diagnostics/document_symbols/workspace_symbol，
+// 支持 gopls / typescript-language-server / pyright / rust-analyzer。
+// 入口：lsp 工具、lsp bundle
+// 文档：docs/user-guide.md、README 核心特性
 package tools
 
 import (

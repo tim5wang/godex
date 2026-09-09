@@ -1,3 +1,7 @@
+// godex-feature: workflow
+// Durable workflow：跨 turn 持久化的工作流运行时，支持子 agent 编排、重试与恢复。
+// 入口：workflow 工具、longtask
+// 文档：docs/workflow-runtime.md
 package agent
 
 import (

@@ -1,3 +1,8 @@
+// godex-feature: templates
+// Agent 模板：内置/用户/package 三类模板，ApplyTemplate 运行时链（persona、bundle、
+// 精确工具集、memory 模式），人才市场与多入口分派。
+// 入口：/agents Web 页、新建对话模板选择器、taskboard 分派
+// 文档：docs/agent-role-and-bundle-design.md、docs/agent-template-board-design.md
 package templates
 
 import (

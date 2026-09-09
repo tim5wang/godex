@@ -50,6 +50,7 @@
 | [taskboard-reconcile-design.md](./taskboard-reconcile-design.md) | 手动 reconcile P0 已实现；自动调度、历史、dry-run/auto-recover 仍 Planned | Active / Partial（2026-08-31 核对） |
 | [agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md) | AgentTemplate 人才市场、对话/TaskBoard/Biz/PJM 多入口设计与实现映射 | M1–M3、M4 P1、M5 P1–P3 已落地 |
 | [per-session-workspace-plan.md](./per-session-workspace-plan.md) | Per-Session 工作目录（已实施 2026-07-31） | |
+| [self-knowledge-design.md](./self-knowledge-design.md) | 自我认知：功能点以 `// godex-feature:` 注释为单一事实源，go:generate 提取编译进二进制，`godex_docs` 工具 / `godex docs` CLI 自查 | Implemented（v1.4 落地，36 个功能点覆盖 README 全部核心特性） |
 | [spec-of-chat-layout-optimize.md](./spec-of-chat-layout-optimize.md) | Web UI 聊天工作区升级 SPEC（M0/M1 已落地） | |
 | [p0-p4-visualization-design.md](./p0-p4-visualization-design.md) | P0-P4 可视化设计（A1/A2/B1/B2/C1 完成，A3/B3/C2 待办） | |
 | [node-onboarding.md](./node-onboarding.md) | 节点接入手册（2026-08-06） | |

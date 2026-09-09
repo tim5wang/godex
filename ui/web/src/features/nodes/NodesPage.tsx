@@ -6,6 +6,7 @@ import { useI18n } from "../../i18n";
 import { deleteControlNode, getMeta, listControlNodes } from "../../lib/api";
 import type { ControlNode } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
+import { JoinCenterCard } from "./JoinCenterCard";
 import { JoinNodeCard } from "./JoinNodeCard";
 import { NodeDetailPage } from "./NodeDetailPage";
 
@@ -128,6 +129,7 @@ function NodesListPage() {
 
   return (
     <main className="page-shell">
+      <JoinCenterCard />
       <JoinNodeCard />
       <Card
         title={t("nodes.tableTitle")}

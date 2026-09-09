@@ -1,3 +1,8 @@
+// godex-feature: browser
+// 浏览器自动化：headless Chrome 驱动、页面截图/帧流、CDP relay、下载与 handoff；
+// 动态页面与反爬站点兜底。
+// 入口：browser 工具、browser bundle
+// 文档：docs/user-guide.md、README 核心特性
 package tools
 
 import (

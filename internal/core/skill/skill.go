@@ -1,3 +1,8 @@
+// godex-feature: skills
+// Skill 生态：安装/来源/兼容性检查、按需加载（load/expand/unload）、目录注入；
+// 与 package 生态共用治理。
+// 入口：skill 工具、/skills Web 页、/skills 命令
+// 文档：docs/extension-runtime-user-guide.md、README 核心特性
 package skill
 
 import (

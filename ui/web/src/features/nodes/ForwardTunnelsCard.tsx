@@ -137,7 +137,12 @@ export function ForwardTunnelsCard({ nodeID, token }: Props) {
             title: t("nodes.forwardName"),
             dataIndex: "name",
             ellipsis: true,
-            render: (v: string | undefined, row) => v || row.id,
+            render: (v: string | undefined, row) => (
+              <Space size={4} wrap>
+                {v || row.id}
+                {row.via_center ? <Tag color="purple">{t("nodes.sourceCenter")}</Tag> : null}
+              </Space>
+            ),
           },
           {
             title: t("nodes.forwardState"),

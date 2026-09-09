@@ -1,3 +1,7 @@
+// godex-feature: desktop
+// 桌面能力：本地截图、剪贴板、键盘鼠标与窗口检查。
+// 入口：desktop 工具、desktop bundle
+// 文档：docs/desktop-shell.md、README 核心特性
 package tools
 
 import (

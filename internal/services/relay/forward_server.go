@@ -44,6 +44,9 @@ type ForwardStatus struct {
 	ActiveConns   int          `json:"active_conns"`
 	LastCheckedAt time.Time    `json:"last_checked_at,omitempty"`
 	LastLatencyMs int64        `json:"last_latency_ms,omitempty"`
+	// ViaCenter reports whether this tunnel reaches its node through the center
+	// bridge (the node is not connected to the local hub but joined the center).
+	ViaCenter bool `json:"via_center,omitempty"`
 }
 
 // ForwardCheckStep is one leg of the end-to-end connectivity check for a
@@ -71,6 +74,10 @@ type forwardEntry struct {
 	conns   map[net.Conn]struct{}
 	checked time.Time
 	latency int64
+
+	// server is the owning ForwardServer; it supplies the dial path (local hub
+	// or center bridge) and the center configuration for status reporting.
+	server *ForwardServer
 }
 
 // ForwardServer manages zero or more TCP forward tunnels inside the center.
@@ -79,6 +86,13 @@ type forwardEntry struct {
 // through the config manager when the REST API mutates them).
 type ForwardServer struct {
 	hub *Hub
+
+	// centerURL + centerToken enable the center-bridge fallback: when a target
+	// node is not connected to the local hub (it joined the center instead), the
+	// tunnel dials it through the center's forward endpoint (CLI-equivalent
+	// path). Empty centerURL keeps the server local-only.
+	centerURL  string
+	centerToken string
 
 	mu      sync.Mutex
 	entries map[string]*forwardEntry // by spec.ID
@@ -90,6 +104,62 @@ func NewForwardServer(hub *Hub) *ForwardServer {
 		return nil
 	}
 	return &ForwardServer{hub: hub, entries: map[string]*forwardEntry{}}
+}
+
+// SetCenterBridge enables fallback forwarding through a center when a target
+// node is not connected to the local hub. token is the center web token used
+// to authenticate against the center's forward endpoint.
+func (s *ForwardServer) SetCenterBridge(centerURL, token string) {
+	s.centerURL = strings.TrimRight(strings.TrimSpace(centerURL), "/")
+	s.centerToken = strings.TrimSpace(token)
+}
+
+// dialCenterForward opens a byte stream to target on nodeID through the center's
+// forward endpoint (the same path `godex node forward` uses). Each call
+// establishes its own forward session and returns a stream bound to it; closing
+// the stream closes the session.
+func dialCenterForward(ctx context.Context, centerURL, token, nodeID, target string) (io.ReadWriteCloser, error) {
+	wsURL, err := ForwardWSURL(centerURL, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	client, err := DialForward(ctx, wsURL, token)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := client.Open(target)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return &centerForwardStream{client: client, stream: stream}, nil
+}
+
+// centerForwardStream binds one node-side stream to its owning forward session
+// so closing the stream also tears down the session.
+type centerForwardStream struct {
+	client *ForwardClient
+	stream io.ReadWriteCloser
+}
+
+func (s *centerForwardStream) Read(p []byte) (int, error)  { return s.stream.Read(p) }
+func (s *centerForwardStream) Write(p []byte) (int, error) { return s.stream.Write(p) }
+func (s *centerForwardStream) Close() error {
+	_ = s.stream.Close()
+	return s.client.Close()
+}
+
+// dialStream opens one byte stream to target on nodeID, preferring the local
+// hub and falling back to the center bridge when the node is not connected
+// locally (spoke nodes that joined the center).
+func (s *ForwardServer) dialStream(ctx context.Context, nodeID, target string) (io.ReadWriteCloser, error) {
+	if s.hub != nil && s.hub.IsOnline(nodeID) {
+		return s.hub.OpenTCPStream(ctx, nodeID, idgen.New("fw-", 4), target)
+	}
+	if s.centerURL != "" && s.centerToken != "" {
+		return dialCenterForward(ctx, s.centerURL, s.centerToken, nodeID, target)
+	}
+	return nil, fmt.Errorf("node %q not reachable locally and no center bridge configured", nodeID)
 }
 
 // Start satisfies the app.LifecycleService interface. All tunnels are started
@@ -113,7 +183,7 @@ func (s *ForwardServer) Add(spec ForwardSpec) (ForwardSpec, error) {
 	if spec.ID == "" {
 		spec.ID = idgen.New("fw-", 4)
 	}
-	entry := &forwardEntry{spec: spec, conns: map[net.Conn]struct{}{}}
+	entry := &forwardEntry{spec: spec, conns: map[net.Conn]struct{}{}, server: s}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,7 +193,7 @@ func (s *ForwardServer) Add(spec ForwardSpec) (ForwardSpec, error) {
 	if existing, ok := s.entries[spec.ID]; ok {
 		existing.stop()
 	}
-	if err := entry.start(s.hub); err != nil {
+	if err := entry.start(); err != nil {
 		entry.state = ForwardStateError
 		entry.errMsg = err.Error()
 		s.entries[spec.ID] = entry
@@ -214,18 +284,26 @@ func (s *ForwardServer) Check(id string) (ForwardCheckResult, error) {
 		return result, nil
 	}
 
-	// Leg 2: the node must have a live relay connection.
-	if !s.hub.IsOnline(entry.spec.NodeID) {
-		record("node", false, fmt.Sprintf("node %q relay offline", entry.spec.NodeID), 0)
+	// Leg 2: the node must have a live relay connection — either locally or
+	// through the center bridge when this node joined a center.
+	localOnline := s.hub != nil && s.hub.IsOnline(entry.spec.NodeID)
+	viaCenter := !localOnline && s.centerURL != "" && s.centerToken != ""
+	switch {
+	case localOnline:
+		record("node", true, fmt.Sprintf("node %q relay connected", entry.spec.NodeID), 0)
+	case viaCenter:
+		record("node", true, fmt.Sprintf("node %q via center bridge", entry.spec.NodeID), 0)
+	default:
+		record("node", false, fmt.Sprintf("node %q relay offline (no local link, no center bridge)", entry.spec.NodeID), 0)
 		return result, nil
 	}
-	record("node", true, fmt.Sprintf("node %q relay connected", entry.spec.NodeID), 0)
 
-	// Leg 3: dial the target through the relay; close the probe immediately.
+	// Leg 3: dial the target through the relay path (local or center); close
+	// the probe immediately.
 	start := time.Now()
 	probeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	stream, err := s.hub.OpenTCPStream(probeCtx, entry.spec.NodeID, idgen.New("fw-", 4), entry.spec.Target)
+	stream, err := s.dialStream(probeCtx, entry.spec.NodeID, entry.spec.Target)
 	dialMs := time.Since(start).Milliseconds()
 	if err != nil {
 		record("target", false, fmt.Sprintf("dial %s: %v", entry.spec.Target, err), dialMs)
@@ -263,7 +341,7 @@ func validateForwardSpec(spec ForwardSpec) error {
 	return nil
 }
 
-func (e *forwardEntry) start(hub *Hub) error {
+func (e *forwardEntry) start() error {
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", e.spec.LocalPort))
 	if err != nil {
 		return err
@@ -273,11 +351,11 @@ func (e *forwardEntry) start(hub *Hub) error {
 	e.state = ForwardStateRunning
 	e.errMsg = ""
 	e.mu.Unlock()
-	go e.acceptLoop(hub, ln)
+	go e.acceptLoop(ln)
 	return nil
 }
 
-func (e *forwardEntry) acceptLoop(hub *Hub, ln net.Listener) {
+func (e *forwardEntry) acceptLoop(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -298,14 +376,14 @@ func (e *forwardEntry) acceptLoop(hub *Hub, ln net.Listener) {
 		e.mu.Lock()
 		e.conns[conn] = struct{}{}
 		e.mu.Unlock()
-		go e.bridge(hub, conn)
+		go e.bridge(conn)
 	}
 }
 
 // bridge relays one accepted local connection to the node-side target via the
-// hub's TCP stream channel, copying bytes in both directions until either
-// side closes.
-func (e *forwardEntry) bridge(hub *Hub, local net.Conn) {
+// owning server's dial path (local hub or center bridge), copying bytes in both
+// directions until either side closes.
+func (e *forwardEntry) bridge(local net.Conn) {
 	defer func() {
 		_ = local.Close()
 		e.mu.Lock()
@@ -314,7 +392,7 @@ func (e *forwardEntry) bridge(hub *Hub, local net.Conn) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	stream, err := hub.OpenTCPStream(ctx, e.spec.NodeID, idgen.New("fw-", 4), e.spec.Target)
+	stream, err := e.server.dialStream(ctx, e.spec.NodeID, e.spec.Target)
 	if err != nil {
 		// Node offline or target unreachable: surface once per connection by
 		// closing the local side immediately.
@@ -353,6 +431,12 @@ func (e *forwardEntry) stop() {
 func (e *forwardEntry) status() ForwardStatus {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	viaCenter := false
+	if e.server != nil && e.server.centerURL != "" {
+		// Local hub wins when the node is connected here; otherwise the tunnel
+		// reaches the node through the center bridge.
+		viaCenter = e.server.hub == nil || !e.server.hub.IsOnline(e.spec.NodeID)
+	}
 	return ForwardStatus{
 		ForwardSpec:   e.spec,
 		State:         e.state,
@@ -360,6 +444,7 @@ func (e *forwardEntry) status() ForwardStatus {
 		ActiveConns:   len(e.conns),
 		LastCheckedAt: e.checked,
 		LastLatencyMs: e.latency,
+		ViaCenter:     viaCenter,
 	}
 }
 

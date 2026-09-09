@@ -1,3 +1,7 @@
+// godex-feature: usage
+// 用量追踪：LLM token 用量记录（SQLite），Web Usage 面板与 /usage/* API。
+// 入口：/usage Web 页、/usage/* API
+// 文档：docs/user-guide.md、README 核心特性
 package usage
 
 import (

@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,6 +180,33 @@ func (s *forwardSession) replyClose(connID, reason string) {
 func mustTCPClosePayload(connID, reason string) json.RawMessage {
 	data, _ := json.Marshal(TCPClosePayload{ConnID: connID, Reason: reason})
 	return data
+}
+
+// ForwardWSURL converts a center base URL (http(s)://host or ws(s)://host)
+// into the forward session WebSocket URL for a node. The center serves relay
+// endpoints under /api (the webui strips the prefix), so the path mirrors the
+// external proxy URL: /api/control/nodes/{id}/forward.
+func ForwardWSURL(centerURL, nodeID string) (string, error) {
+	raw := strings.TrimSpace(centerURL)
+	if raw == "" || nodeID == "" {
+		return "", fmt.Errorf("empty center URL or node id")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid center URL %q: %w", raw, err)
+	}
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	case "ws", "wss":
+		// keep as-is
+	default:
+		return "", fmt.Errorf("unsupported center URL scheme %q", u.Scheme)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/control/nodes/" + nodeID + "/forward"
+	return u.String(), nil
 }
 
 // DialForward connects a CLI forward client to the center's forward endpoint.

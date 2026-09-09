@@ -1,3 +1,7 @@
+// godex-feature: mcp
+// MCP 服务：stdio/HTTP 传输、生命周期管理、业务智能体白名单与动态 server tools。
+// 入口：mcp 工具、Settings MCP 页、/v1/mcp/* API
+// 文档：docs/extension-runtime-user-guide.md、README 核心特性
 package mcp
 
 import (

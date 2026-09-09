@@ -373,6 +373,23 @@ export function issueNodeCredential(token: string | null, nodeID: string) {
   );
 }
 
+/**
+ * Join a center from this node's own Web UI (no CLI needed — required for
+ * Android / container environments). The backend registers this node with the
+ * center, receives a per-node credential, and persists the control config;
+ * the live-apply path then starts the relay agent / heartbeat immediately.
+ */
+export function joinSelfCenter(
+  token: string | null,
+  body: { center_url: string; token: string; node_id?: string; name?: string; trust_level?: string },
+) {
+  return request<{ node_id: string; credential: string; message: string }>(
+    "/control/self/join",
+    { method: "POST", body: JSON.stringify(body) },
+    token,
+  );
+}
+
 /** Delete a node: removes it from the registry and drops its relay connection. */
 export function deleteControlNode(token: string | null, nodeID: string) {
   return request<ControlNode>(

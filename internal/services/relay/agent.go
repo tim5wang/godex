@@ -50,6 +50,11 @@ type Agent struct {
 	dialsMu sync.Mutex
 	dials   map[string]net.Conn // connID → dialed TCP connection (TCP forwarding)
 
+	// forwardMu guards forwardAllow, which the config hot-reload path updates
+	// (SetForwardAllow) while the connection loop reads it for each tcp_open.
+	forwardMu    sync.RWMutex
+	forwardAllow []string
+
 	// hubGzip records whether the connected hub advertised the gzip
 	// capability in its hello_ok. The agent compresses large frame bodies sent
 	// to the hub only when set; connecting to an old hub keeps sending plain
@@ -67,7 +72,25 @@ func NewAgent(cfg AgentConfig) *Agent {
 	if cfg.ReconnectMax <= 0 {
 		cfg.ReconnectMax = 30 * time.Second
 	}
-	return &Agent{cfg: cfg, dials: make(map[string]net.Conn)}
+	a := &Agent{cfg: cfg, dials: make(map[string]net.Conn)}
+	a.forwardAllow = append([]string(nil), cfg.ForwardAllow...)
+	return a
+}
+
+// SetForwardAllow hot-reloads the node's TCP forward allowlist. The next
+// forwarded tcp_open request is validated against the new list, so operators
+// can update control.forward_allow without restarting the node.
+func (a *Agent) SetForwardAllow(allow []string) {
+	a.forwardMu.Lock()
+	a.forwardAllow = append([]string(nil), allow...)
+	a.forwardMu.Unlock()
+}
+
+// currentForwardAllow returns a copy of the live allowlist.
+func (a *Agent) currentForwardAllow() []string {
+	a.forwardMu.RLock()
+	defer a.forwardMu.RUnlock()
+	return append([]string(nil), a.forwardAllow...)
 }
 
 // Start launches the outbound connection loop. It returns immediately; the
@@ -291,7 +314,7 @@ func (a *Agent) handleTCPOpen(conn *websocket.Conn, frame Frame) {
 		a.sendTCPClose(conn, tcpConnID(frame), "invalid tcp_open payload")
 		return
 	}
-	if !AllowForward(a.cfg.ForwardAllow, payload.Target) {
+	if !AllowForward(a.currentForwardAllow(), payload.Target) {
 		a.sendTCPClose(conn, payload.ConnID, "forward target not allowed")
 		return
 	}

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tim5wang/godex/internal/services/relay"
 )
 
 func TestForwardWSURL(t *testing.T) {
@@ -19,24 +21,24 @@ func TestForwardWSURL(t *testing.T) {
 		{"wss://hub.example.com/base", "n2", "wss://hub.example.com/base/api/control/nodes/n2/forward"},
 	}
 	for _, tc := range cases {
-		got, err := forwardWSURL(tc.center, tc.nodeID)
+		got, err := relay.ForwardWSURL(tc.center, tc.nodeID)
 		if err != nil {
-			t.Fatalf("forwardWSURL(%q): %v", tc.center, err)
+			t.Fatalf("relay.ForwardWSURL(%q): %v", tc.center, err)
 		}
 		if got != tc.want {
-			t.Fatalf("forwardWSURL(%q) = %q, want %q", tc.center, got, tc.want)
+			t.Fatalf("relay.ForwardWSURL(%q) = %q, want %q", tc.center, got, tc.want)
 		}
 	}
 }
 
 func TestForwardWSURLRejectsBadInput(t *testing.T) {
-	if _, err := forwardWSURL("", "n1"); err == nil {
+	if _, err := relay.ForwardWSURL("", "n1"); err == nil {
 		t.Fatal("expected error for empty center")
 	}
-	if _, err := forwardWSURL("ftp://x", "n1"); err == nil {
+	if _, err := relay.ForwardWSURL("ftp://x", "n1"); err == nil {
 		t.Fatal("expected error for unsupported scheme")
 	}
-	if _, err := forwardWSURL("https://x", ""); err == nil {
+	if _, err := relay.ForwardWSURL("https://x", ""); err == nil {
 		t.Fatal("expected error for empty node id")
 	}
 }

@@ -1,3 +1,7 @@
+// godex-feature: cron
+// Cron 自动化：at/every/cron 三种调度、watchdog 指令门、幂等存储与审计日志。
+// 入口：cron 工具、Web Automation 面板
+// 文档：docs/user-guide.md、README 核心特性
 package cron
 
 import (

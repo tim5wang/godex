@@ -8,6 +8,9 @@ export const API_HIDDEN_PATHS = new Set([
   "api.default_profile",
   "api.auto_fallback_enabled",
   "api.timeout_seconds",
+  // Migrated to the Nodes page "Join a center" card (node-scoped egress
+  // allowlist, previously buried in Settings > Control Plane).
+  "control.forward_allow",
 ]);
 
 export type LLMProvidersFormValue = {

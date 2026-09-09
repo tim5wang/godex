@@ -1,3 +1,8 @@
+// godex-feature: session-mode
+// 会话模式预设：新建对话 default/minimal 预设，固定初始工具集与 prompt 复杂度；
+// 模式存入 locator 元数据，恢复时保持一致（stable prompt prefix）。
+// 入口：Web 新建对话对话框、/session 命令
+// 文档：docs/spec-of-chat-layout-optimize.md、README 核心特性
 package agent
 
 import "strings"

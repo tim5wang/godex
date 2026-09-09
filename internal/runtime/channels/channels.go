@@ -1,3 +1,8 @@
+// godex-feature: channels
+// IM 渠道：Feishu / Weixin channel runtime，多入口会话与审批消息摘要；
+// 与 Web/CLI/TUI 共享同一套 session runtime。
+// 入口：godex serve、weixin CLI、Feishu/Weixin 配置
+// 文档：docs/user-guide.md、README 核心特性
 package channels
 
 import (

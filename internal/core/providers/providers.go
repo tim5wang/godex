@@ -1,3 +1,8 @@
+// godex-feature: providers
+// 多 Provider 管理：Anthropic-compatible / OpenAI-compatible / OpenAI Codex provider、
+// 模型策略（primary/fallback/round_robin）、Web Settings 动态配置与 /v1/* API。
+// 入口：godex providers、godex login、Settings Web 页
+// 文档：docs/user-guide.md、README 核心特性
 package providers
 
 import (

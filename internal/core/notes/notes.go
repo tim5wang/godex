@@ -1,3 +1,7 @@
+// godex-feature: notes
+// Notes 工作台：本地 Markdown 笔记、搜索/标签、Chat 保存输出到笔记、笔记↔记忆联动。
+// 入口：note 工具、/notes Web 页、/note 命令
+// 文档：docs/user-guide.md、README 核心特性
 package notes
 
 import (

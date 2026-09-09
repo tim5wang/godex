@@ -28,6 +28,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -237,17 +238,31 @@ public class MainActivity extends BridgeActivity {
         return runtimeDir;
     }
 
-    /** 若 link 不存在，创建 link -> nativeLibraryDir/targetName。 */
+    /** 确保 link -> nativeLibraryDir/targetName，处理重装后路径漂移。 */
     private void symlinkTo(String libDir, String targetName, File link) {
-        if (link.exists()) {
-            return;
-        }
         File target = new File(libDir, targetName);
         if (!target.isFile()) {
             Log.w(TAG, "nativeLibraryDir 缺少 " + targetName);
             return;
         }
         try {
+            if (Files.isSymbolicLink(link.toPath())) {
+                // 目标漂移检测：install -r 后 nativeLibraryDir 哈希路径会变化，
+                // 旧符号链接成为 dangling link（link.exists() 返回 false）。
+                java.nio.file.Path cur = Files.readSymbolicLink(link.toPath());
+                if (cur.toString().equals(target.getAbsolutePath())) {
+                    return; // 已指向当前目标，跳过
+                }
+                if (!link.delete()) {
+                    Log.w(TAG, "删除旧符号链接失败 " + link.getName());
+                    return;
+                }
+            } else if (link.exists()) {
+                if (!link.delete()) {
+                    Log.w(TAG, "删除旧占位文件失败 " + link.getName());
+                    return;
+                }
+            }
             Os.symlink(target.getAbsolutePath(), link.getAbsolutePath());
         } catch (Exception e) {
             Log.w(TAG, "创建符号链接失败 " + link.getName() + ": " + e.getMessage());

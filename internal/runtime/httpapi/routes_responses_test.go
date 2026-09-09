@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
@@ -10,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/llm"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/usage"
@@ -172,6 +173,57 @@ func TestResponsesRequestToProtocolEmptyInputRejected(t *testing.T) {
 	req := responsesReqFromJSON(t, `{"model": "M3", "input": [{"type": "reasoning"}]}`)
 	if _, err := responsesRequestToProtocol(req); err == nil {
 		t.Fatal("expected error for input with no usable message")
+	}
+}
+
+// TestResponsesRequestToProtocolEasyInputMessage covers the openai-go SDK
+// wire form: the SDK (used by codex-style clients) omits the "type" field on
+// plain messages, sending {"role":"user","content":"..."}. The gateway must
+// treat a role-carrying item without an explicit type as a message, otherwise
+// every SDK request 400s with "at least one non-empty user or assistant
+// message is required".
+func TestResponsesRequestToProtocolEasyInputMessage(t *testing.T) {
+	req := responsesReqFromJSON(t, `{
+	"model": "M3",
+	"input": [
+			{"role": "user", "content": "hi"},
+			{"role": "user", "content": [{"type": "input_text", "text": "again"}]}
+	]
+	}`)
+	proto, err := responsesRequestToProtocol(req)
+	if err != nil {
+		t.Fatalf("convert easy-input messages: %v", err)
+	}
+	if len(proto.Messages) != 2 {
+		t.Fatalf("expected 2 user messages, got %#v", proto.Messages)
+	}
+	if got := protocol.BlocksText(proto.Messages[0].Content); got != "hi" {
+		t.Fatalf("expected first message text hi, got %q", got)
+	}
+	if got := protocol.BlocksText(proto.Messages[1].Content); got != "again" {
+		t.Fatalf("expected second message text again, got %q", got)
+	}
+}
+
+// TestResponsesRequestToProtocolEasyInputSystemMessage verifies a type-less
+// item with role system is still flattened into the system prompt.
+func TestResponsesRequestToProtocolEasyInputSystemMessage(t *testing.T) {
+	req := responsesReqFromJSON(t, `{
+	"model": "M3",
+	"input": [
+			{"role": "system", "content": "be brief"},
+			{"role": "user", "content": "ok"}
+	]
+	}`)
+	proto, err := responsesRequestToProtocol(req)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if proto.System != "be brief" {
+		t.Fatalf("expected system from easy message, got %q", proto.System)
+	}
+	if len(proto.Messages) != 1 || proto.Messages[0].Role != protocol.RoleUser {
+		t.Fatalf("expected one user message, got %#v", proto.Messages)
 	}
 }
 
@@ -558,5 +610,309 @@ func TestUsageGatewayResponsesWebTokenPath(t *testing.T) {
 	}
 	if out["object"] != "response" {
 		t.Fatalf("expected object=response, got %#v", out["object"])
+	}
+}
+
+// =============================================================================
+// Streaming protocol event-sequence tests
+// =============================================================================
+
+// parseResponsesSSEEvents decodes every `data:` SSE frame into an ordered
+// event list (skipping the [DONE] sentinel), so tests can assert on the full
+// Responses event sequence.
+func parseResponsesSSEEvents(t *testing.T, body io.Reader) []map[string]interface{} {
+	t.Helper()
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var events []map[string]interface{}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var ev map[string]interface{}
+		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+			t.Fatalf("decode SSE frame %q: %v", payload, err)
+		}
+		events = append(events, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan SSE: %v", err)
+	}
+	return events
+}
+
+// findResponsesEvent returns the first event of the given type.
+func findResponsesEvent(events []map[string]interface{}, typ string) (map[string]interface{}, bool) {
+	for _, ev := range events {
+		if ev["type"] == typ {
+			return ev, true
+		}
+	}
+	return nil, false
+}
+
+// TestUsageGatewayResponsesStreamingProtocolText verifies the text-message
+// event sequence is spec-compliant: stable item_id across deltas, done frames,
+// and a completed frame whose output array carries the assembled message.
+func TestUsageGatewayResponsesStreamingProtocolText(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `event: message_start`+"\n"+`data: {"type":"message_start","message":{"id":"msg-1","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: content_block_start`+"\n"+`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: content_block_delta`+"\n"+`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: content_block_delta`+"\n"+`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: content_block_stop`+"\n"+`data: {"type":"content_block_stop","index":0}`+"\n\n")
+		_, _ = io.WriteString(w, `event: message_delta`+"\n"+`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: message_stop`+"\n"+`data: {"type":"message_stop"}`+"\n\n")
+	}))
+	defer stubProvider.Close()
+
+	handler, _, secret := responsesStubSetup(t, stubProvider.URL)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"input":[{"type":"message","role":"user","content":"hi"}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	events := parseResponsesSSEEvents(t, resp.Body)
+
+	// 1. The stream opens with response.created (in_progress).
+	created, ok := findResponsesEvent(events, "response.created")
+	if !ok {
+		t.Fatalf("missing response.created, got events: %#v", events)
+	}
+	if status := created["response"].(map[string]interface{})["status"]; status != "in_progress" {
+		t.Fatalf("expected created status in_progress, got %#v", status)
+	}
+
+	// 2. The message item is announced once via output_item.added.
+	var itemID string
+	var outputIndex float64
+	for _, ev := range events {
+		if ev["type"] == "response.output_item.added" {
+			item, ok := ev["item"].(map[string]interface{})
+			if !ok || item["type"] != "message" {
+				continue
+			}
+			itemID, _ = item["id"].(string)
+			outputIndex, _ = ev["output_index"].(float64)
+		}
+	}
+	if itemID == "" {
+		t.Fatalf("missing message output_item.added, got events: %#v", events)
+	}
+
+	// 3. All text deltas reference the stable item_id.
+	deltaCount := 0
+	for _, ev := range events {
+		if ev["type"] != "response.output_text.delta" {
+			continue
+		}
+		deltaCount++
+		if got := ev["item_id"]; got != itemID {
+			t.Fatalf("delta item_id %v != announced %q", got, itemID)
+		}
+		if got := ev["output_index"]; got != outputIndex {
+			t.Fatalf("delta output_index %v != announced %v", got, outputIndex)
+		}
+	}
+	if deltaCount != 2 {
+		t.Fatalf("expected 2 text deltas, got %d", deltaCount)
+	}
+
+	// 4. The text part is announced via content_part.added with a stable id.
+	partAdded, ok := findResponsesEvent(events, "response.content_part.added")
+	if !ok {
+		t.Fatalf("missing content_part.added, got events: %#v", events)
+	}
+	if partAdded["item_id"] != itemID {
+		t.Fatalf("content_part.added item_id %v != %q", partAdded["item_id"], itemID)
+	}
+
+	// 5. Done frames carry the fully accumulated text.
+	textDone, ok := findResponsesEvent(events, "response.output_text.done")
+	if !ok {
+		t.Fatalf("missing output_text.done, got events: %#v", events)
+	}
+	if textDone["text"] != "hello" {
+		t.Fatalf("expected output_text.done text hello, got %#v", textDone["text"])
+	}
+	partDone, ok := findResponsesEvent(events, "response.content_part.done")
+	if !ok {
+		t.Fatalf("missing content_part.done, got events: %#v", events)
+	}
+	if p := partDone["part"].(map[string]interface{}); p["text"] != "hello" {
+		t.Fatalf("expected part text hello, got %#v", p)
+	}
+	itemDone, ok := findResponsesEvent(events, "response.output_item.done")
+	if !ok {
+		t.Fatalf("missing output_item.done, got events: %#v", events)
+	}
+	if item := itemDone["item"].(map[string]interface{}); item["status"] != "completed" {
+		t.Fatalf("expected completed message item, got %#v", item)
+	}
+
+	// 6. The completed frame carries the fully assembled output array.
+	completed, ok := findResponsesEvent(events, "response.completed")
+	if !ok {
+		t.Fatalf("missing response.completed, got events: %#v", events)
+	}
+	completedResp := completed["response"].(map[string]interface{})
+	output, ok := completedResp["output"].([]interface{})
+	if !ok || len(output) != 1 {
+		t.Fatalf("expected 1 output item in completed frame, got %#v", completedResp["output"])
+	}
+	msg := output[0].(map[string]interface{})
+	if msg["type"] != "message" || msg["status"] != "completed" {
+		t.Fatalf("expected completed message in output, got %#v", msg)
+	}
+	contentParts, _ := msg["content"].([]interface{})
+	if len(contentParts) != 1 {
+		t.Fatalf("expected 1 content part in message, got %#v", msg["content"])
+	}
+	if part := contentParts[0].(map[string]interface{}); part["text"] != "hello" {
+		t.Fatalf("expected assembled text hello, got %#v", part)
+	}
+	if _, ok := completedResp["usage"].(map[string]interface{}); !ok {
+		t.Fatalf("expected usage in completed frame, got %#v", completedResp)
+	}
+}
+
+// TestUsageGatewayResponsesStreamingProtocolToolCall verifies the function_call
+// event sequence: output_item.added with stable ids, differential argument
+// deltas, and done frames with the final assembled arguments.
+func TestUsageGatewayResponsesStreamingProtocolToolCall(t *testing.T) {
+	stubProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `event: message_start`+"\n"+`data: {"type":"message_start","message":{"id":"msg-1","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: content_block_start`+"\n"+`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_abc","name":"bash","input":{}}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: content_block_delta`+"\n"+`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"co"}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: content_block_delta`+"\n"+`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"mmand\":\"ls\"}"}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: content_block_stop`+"\n"+`data: {"type":"content_block_stop","index":0}`+"\n\n")
+		_, _ = io.WriteString(w, `event: message_delta`+"\n"+`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}`+"\n\n")
+		_, _ = io.WriteString(w, `event: message_stop`+"\n"+`data: {"type":"message_stop"}`+"\n\n")
+	}))
+	defer stubProvider.Close()
+
+	handler, _, secret := responsesStubSetup(t, stubProvider.URL)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	body := `{"model":"M3","stream":true,"input":[{"type":"message","role":"user","content":"run ls"}],"tools":[{"type":"function","name":"bash","description":"run a shell command","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}]}`
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	events := parseResponsesSSEEvents(t, resp.Body)
+
+	// 1. The function_call item is announced with the upstream call id.
+	var itemID, callID string
+	var outputIndex float64
+	for _, ev := range events {
+		if ev["type"] != "response.output_item.added" {
+			continue
+		}
+		item, ok := ev["item"].(map[string]interface{})
+		if !ok || item["type"] != "function_call" {
+			continue
+		}
+		itemID, _ = item["id"].(string)
+		callID, _ = item["call_id"].(string)
+		outputIndex, _ = ev["output_index"].(float64)
+	}
+	if itemID == "" || callID != "call_abc" {
+		t.Fatalf("expected function_call item with call_id call_abc, got itemID=%q callID=%q events=%#v", itemID, callID, events)
+	}
+
+	// 2. Argument deltas are differential fragments referencing the item.
+	var args strings.Builder
+	deltaCount := 0
+	for _, ev := range events {
+		if ev["type"] != "response.function_call_arguments.delta" {
+			continue
+		}
+		if ev["item_id"] != itemID {
+			t.Fatalf("args delta item_id %v != announced %q", ev["item_id"], itemID)
+		}
+		if ev["output_index"] != outputIndex {
+			t.Fatalf("args delta output_index %v != announced %v", ev["output_index"], outputIndex)
+		}
+		deltaCount++
+		args.WriteString(ev["delta"].(string))
+	}
+	if deltaCount != 2 {
+		t.Fatalf("expected 2 argument deltas, got %d", deltaCount)
+	}
+	if args.String() != `{"command":"ls"}` {
+		t.Fatalf("expected assembled args %q, got %q", `{"command":"ls"}`, args.String())
+	}
+
+	// 3. Done frames carry the final arguments and a completed item.
+	argsDone, ok := findResponsesEvent(events, "response.function_call_arguments.done")
+	if !ok {
+		t.Fatalf("missing function_call_arguments.done, got events: %#v", events)
+	}
+	if argsDone["arguments"] != `{"command":"ls"}` {
+		t.Fatalf("expected final arguments %q, got %#v", `{"command":"ls"}`, argsDone["arguments"])
+	}
+	itemDone, ok := findResponsesEvent(events, "response.output_item.done")
+	if !ok {
+		t.Fatalf("missing output_item.done, got events: %#v", events)
+	}
+	item := itemDone["item"].(map[string]interface{})
+	if item["type"] != "function_call" || item["status"] != "completed" {
+		t.Fatalf("expected completed function_call item, got %#v", item)
+	}
+
+	// 4. The completed frame carries the final function_call item.
+	completed, ok := findResponsesEvent(events, "response.completed")
+	if !ok {
+		t.Fatalf("missing response.completed, got events: %#v", events)
+	}
+	completedResp := completed["response"].(map[string]interface{})
+	output, ok := completedResp["output"].([]interface{})
+	if !ok || len(output) != 1 {
+		t.Fatalf("expected 1 output item in completed frame, got %#v", completedResp["output"])
+	}
+	fc := output[0].(map[string]interface{})
+	if fc["type"] != "function_call" || fc["call_id"] != "call_abc" || fc["status"] != "completed" {
+		t.Fatalf("expected completed function_call in output, got %#v", fc)
+	}
+	if fc["arguments"] != `{"command":"ls"}` {
+		t.Fatalf("expected final arguments in output, got %#v", fc["arguments"])
+	}
+	if fc["arguments"] != `{"command":"ls"}` {
+		t.Fatalf("expected final arguments in output, got %#v", fc["arguments"])
 	}
 }

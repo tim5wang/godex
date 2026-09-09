@@ -31,6 +31,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/evalharness"
 	"github.com/tim5wang/godex/internal/services/sessionrepair"
 	"github.com/tim5wang/godex/internal/sessionstore"
+	"github.com/tim5wang/godex/internal/selfdocs"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/version"
 )
@@ -148,6 +149,8 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 		return r.runService(ctx, args[1:])
 	case "weixin":
 		return r.runWeixin(ctx, args[1:])
+	case "docs":
+		return r.runDocs(ctx, args[1:])
 	case "version", "--version":
 		return r.runVersion(ctx, args[1:])
 	case "help", "-h", "--help":
@@ -181,6 +184,106 @@ func (r *Runner) runVersion(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintln(r.Stdout, version.Summary())
 	return nil
+}
+
+// runDocs implements `godex docs`: look up GoDex's own feature knowledge,
+// compiled into the binary from `// godex-feature:` source comments.
+func (r *Runner) runDocs(ctx context.Context, args []string) error {
+	_ = ctx
+	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		fmt.Fprintln(r.Stdout, docsHelpText())
+		return nil
+	}
+	switch args[0] {
+	case "list":
+		return r.runDocsList(args[1:])
+	case "get":
+		return r.runDocsGet(args[1:])
+	case "search":
+		return r.runDocsSearch(args[1:])
+	default:
+		return fmt.Errorf("unknown docs subcommand %q\n\n%s", args[0], docsHelpText())
+	}
+}
+
+func docsHelpText() string {
+	return strings.Join([]string{
+		"Usage:",
+		"  godex docs list",
+		"  godex docs get <feature-id>",
+		"  godex docs search <query>",
+		"",
+		"Look up GoDex's own features. The knowledge base is compiled into the",
+		"binary from `// godex-feature:` comments in the source tree, so it",
+		"tracks the code instead of drifting from it.",
+		"",
+		"Examples:",
+		"  godex docs list",
+		"  godex docs get longtask",
+		"  godex docs search memory",
+	}, "\n")
+}
+
+func (r *Runner) runDocsList(args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("unexpected docs list arguments: %s", strings.Join(args, " "))
+	}
+	all := selfdocs.All()
+	if len(all) == 0 {
+		fmt.Fprintln(r.Stdout, "No self-knowledge entries compiled into this binary.")
+		return nil
+	}
+	fmt.Fprintf(r.Stdout, "%d features:\n", len(all))
+	for _, f := range all {
+		fmt.Fprintf(r.Stdout, "  %-16s %s\n", f.ID, firstLine(f.Description))
+	}
+	return nil
+}
+
+func (r *Runner) runDocsGet(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: godex docs get <feature-id>")
+	}
+	f, ok := selfdocs.Get(args[0])
+	if !ok {
+		return fmt.Errorf("unknown feature id %q (godex docs list to see available ids)", args[0])
+	}
+	fmt.Fprintf(r.Stdout, "%s\n", f.ID)
+	if f.Title != "" {
+		fmt.Fprintf(r.Stdout, "标题: %s\n", f.Title)
+	}
+	fmt.Fprintf(r.Stdout, "%s\n", f.Description)
+	if len(f.EntryPoints) > 0 {
+		fmt.Fprintf(r.Stdout, "\n入口: %s\n", strings.Join(f.EntryPoints, "、"))
+	}
+	if len(f.Docs) > 0 {
+		fmt.Fprintf(r.Stdout, "文档: %s\n", strings.Join(f.Docs, "、"))
+	}
+	fmt.Fprintf(r.Stdout, "源码: %s\n", f.Location)
+	return nil
+}
+
+func (r *Runner) runDocsSearch(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: godex docs search <query>")
+	}
+	results := selfdocs.Search(args[0])
+	if len(results) == 0 {
+		fmt.Fprintf(r.Stdout, "No features match %q.\n", args[0])
+		return nil
+	}
+	fmt.Fprintf(r.Stdout, "%d match(es) for %q:\n", len(results), args[0])
+	for _, f := range results {
+		fmt.Fprintf(r.Stdout, "  %-16s %s\n", f.ID, firstLine(f.Description))
+	}
+	return nil
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func (r *Runner) runAsk(ctx context.Context, args []string) error {
@@ -1248,6 +1351,9 @@ func rootHelpText() string {
 		"    repair     Diagnose or repair persisted session state",
 		"    gc         Inspect or clean local runtime storage",
 		"    import     Import external agent ecosystem resources",
+		"",
+		"  Self-knowledge",
+		"    docs       List, get, or search GoDex's own feature knowledge",
 		"",
 		"  Automation & channels",
 		"    weixin     Setup or logout Weixin/iLink channel auth",

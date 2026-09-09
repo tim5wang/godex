@@ -121,7 +121,53 @@ func (b *CenterBridge) ServeProxy(w, r)
 
 - 中心侧零改动（proxy/registry/relay 全复用）。
 - 不做「中心管理操作经本地代理」（delete/credential 等仍在中心 UI 操作）。
-- 不做 TCP forward 经本地（forward 是中心进程能力，保持中心侧）。
+
+### 3.7 后续：A 的 Web UI 配置经中心转发隧道（ForwardServer 中心桥回退）✅ Implemented
+
+背景：用户确认「先 A 后 B」——因为 B 端不一定能执行 CLI（如 Android），A 端也不一定能执行 CLI（如 Pod 容器），所以必须在 A 的 Web UI 上直接配置到 B 的隧道。
+
+实现（`internal/services/relay/forward_server.go` + `cmd/godex/main.go` + 前端）：
+
+1. `relay.ForwardWSURL` 从 `internal/app/node.go` 提升到 relay 包导出（CLI 与中心桥共用）。
+2. `ForwardServer.SetCenterBridge(centerURL, token)`：A 的 serve 装配时若配了 center bridge 则注入（`main.go`）。
+3. `dialStream(ctx, nodeID, target)`：目标节点在本地 hub 在线 → `hub.OpenTCPStream`；否则有中心桥 → `dialCenterForward`（`DialForward` 连中心 `/api/control/nodes/{id}/forward`，CLI 同款路径）。
+4. `forwardEntry` 的 acceptLoop/bridge/Check 全部改走 `dialStream`（不再直接持 hub）；`ForwardStatus` 加 `via_center` 字段。
+5. `Check` Leg2 区分 localOnline / viaCenter / offline；Leg3 用 dialStream 探测。
+6. 前端 `ForwardTunnelsCard` 对 `via_center` 隧道显示「经中心」Tag（复用 `nodes.sourceCenter` i18n）。
+
+效果：A 的 Web UI 上打开 B 的详情页 → 转发隧道卡片 → 新增转发（本地端口 + B 内网 target）→ **A 进程本地监听，经中心 WS 中转**，与 CLI `godex node forward` 完全等价；隧道状态标记「经中心」；连通性检测/删除/持久化复用既有。
+
+### 3.8 后续：B 方案（UI 生成 CLI 命令，待做）
+
+在 B 的详情页（或 A 的转发卡片）提供「复制 CLI 命令」按钮，生成：
+
+```bash
+godex node forward --node B --local <port> --target <host:port> --center <A 的中心> --token <中心 web token>
+```
+
+作为 Web UI 配置的补充（适合 A 有终端可用、想要一次性隧道的场景）。
+
+### 3.9 节点侧「接入中心」自动注册 + 热生效 ✅ Implemented（2026-09-09）
+
+背景（用户确认）：Q1=自动注册、Q2=节点板块卡片 + 迁移 forward_allow、Q3=保存后热生效；保留中心侧 `JoinNodeCard`（生成接入命令+一键复制）不变。
+
+**A. 自动注册端点 `POST /control/self/join`**（`internal/runtime/httpapi/routes_self_join.go`）：
+- 请求 `{center_url, token(中心web token), node_id?, name?, trust_level?}`；node_id 缺省自动生成。
+- 后端调中心 `register` + `issue credential`（带中心 web token）→ 写 `.env`（GODEX_CONTROL_CREDENTIAL / GODEX_CONTROL_CENTER_TOKEN）+ yaml（center_url/node_id/trust_level/node_name）+ 同步 node.json。
+- 不依赖本地 CLI，Android / 容器环境在 Web UI 填两字段即可接入。
+
+**B. 节点板块「接入中心」卡片**（`ui/web/src/features/nodes/JoinCenterCard.tsx`）：
+- 表单：中心地址 + 中心 web token +（可选）node_id/name/trust_level；提交即自动注册。
+- 显示当前 join 状态（center_url / node_id / trust_level）。
+- 迁移 `forward_allow`（原 Settings > Control Plane）到该卡片，设置页 `API_HIDDEN_PATHS` 隐藏 `control.forward_allow` 避免双入口；其余 Control Plane 字段保留在设置页。
+
+**C. 热生效**（`cmd/godex/control_runtime.go` + `main.go` 装配）：
+- 新增 `controlRuntime` 控制器：持有 serve ctx + 当前 heartbeat/agent/observer/bridge 引用。
+- `CenterBridge` 端点改为 atomic（`SetEndpoint`），`ForwardServer` 已有 `SetCenterBridge`，agent 已有 `SetForwardAllow`。
+- `manager.SetApplier` 里调用 `controlRuntime.Reconcile(old,new)`：对比 center_url/credential/center_token/node_id/name/trust_level/forward_allow 差异 → 停旧 heartbeat/agent/observer、按新配置启新、更新 bridge 端点与 forward server。
+- 首次接入（空→配）、换中心、退出中心（清空 center_url → 停 agent/heartbeat）同一套差异逻辑覆盖，保存即生效无需重启。
+
+验证：新增 `routes_self_join_test.go`（端到端 fake center 注册+凭证+写配置、必填校验）；`go build ./...`、httpapi/relay/config/cmd/app 测试全绿；前端 `tsc -b` + `vite build` 通过。
 - 不做「本地未 join 中心时的降级 UI 引导」之外的东西：未配置 center_token 时列表仅本地节点，proxy 对非本地节点返回 503 提示。
 
 ## 4. 待确认决策点

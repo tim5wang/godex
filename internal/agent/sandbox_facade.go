@@ -1,3 +1,7 @@
+// godex-feature: sandbox
+// Agent Identity / Sandbox 解耦：Sandbox 接口 + LocalSandbox，scope 感知的执行环境。
+// 入口：内部（工具执行绑定）
+// 文档：docs/architecture-v2-spec.md、README 核心特性
 package agent
 
 import (

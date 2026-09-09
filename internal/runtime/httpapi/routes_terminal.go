@@ -1,3 +1,7 @@
+// godex-feature: terminal
+// 终端：Go PTY 原生后端 + xterm.js 前端，提供真实 Shell 体验。
+// 入口：Web Terminal 面板、/terminal 路由
+// 文档：docs/user-guide.md、README 核心特性
 package httpapi
 
 import (

@@ -197,6 +197,24 @@ function SessionPopover({ s, onDelete, isDeleting, onRename, renaming, t }: { s:
             <span className="ctx-popover-value">{s.locator.key}</span>
           </div>
         ) : null}
+        {s.locator?.metadata?.template ? (
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">{t("chat.chatV2Rail.popoverTemplate")}</span>
+            <span className="ctx-popover-value">{s.locator.metadata.template}</span>
+          </div>
+        ) : null}
+        {s.locator?.metadata?.project_dir ? (
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">{t("chat.chatV2Rail.popoverWorkspaceDir")}</span>
+            <span className="ctx-popover-value">{s.locator.metadata.project_dir}</span>
+          </div>
+        ) : null}
+        {s.locator?.metadata?.exec_mode ? (
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">{t("chat.chatV2Rail.popoverExecMode")}</span>
+            <span className="ctx-popover-value">{s.locator.metadata.exec_mode}</span>
+          </div>
+        ) : null}
       </div>
       <div className="ctx-popover-group" style={{ paddingTop: 6 }}>
         <Popconfirm title={t("chat.chatV2Rail.popoverDeleteConfirm")} onConfirm={() => onDelete(s)}>
@@ -380,10 +398,14 @@ function NewChatWorkspacePopover(props: {
                 { value: "local", label: t("chat.chatV2Rail.execModeLocal") },
                 { value: "docker", label: t("chat.chatV2Rail.execModeDocker") },
                 { value: "ssh", label: t("chat.chatV2Rail.execModeSSH") },
-                ...(props.nodes ?? []).map((node) => ({
-                  value: `relay:${node.id}`,
-                  label: node.name?.trim() ? `${node.name} (${node.id})` : node.id,
-                })),
+                // Only nodes with a live relay channel are usable as sandbox
+                // execution targets; offline nodes would fail every tool call.
+                ...(props.nodes ?? [])
+                  .filter((node) => node.relay_status === "connected")
+                  .map((node) => ({
+                    value: `relay:${node.id}`,
+                    label: node.name?.trim() ? `${node.name} (${node.id})` : node.id,
+                  })),
               ]}
             />
           </div>

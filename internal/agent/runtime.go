@@ -297,7 +297,27 @@ func NewForSession(cfg *config.Config, shared *SharedDependencies, sessionID str
 	agent := NewWithSharedDependencies(cfg, shared, sessionID)
 	agent.sessionID = strings.TrimSpace(sessionID)
 	agent.ensureWorkspaceSandbox(cfg, shared)
+	agent.ensureExecutionSandbox(cfg)
 	return agent
+}
+
+// ensureExecutionSandbox rebuilds the agent's sandbox from the session config
+// when the session carries a non-default execution mode (new-chat exec_mode
+// picker: docker / ssh / relay:<node>). The shared sandbox is built from the
+// global config and is only workspace-aware, so without this a relay/docker
+// session's bash and file tools would keep running on the shared local sandbox
+// (docs/remote-sandbox-design.md). Local (default) leaves the sandbox alone.
+func (a *Agent) ensureExecutionSandbox(cfg *config.Config) {
+	if a == nil || cfg == nil {
+		return
+	}
+	mode := strings.TrimSpace(cfg.Tools.Execution.Mode)
+	if mode == "" || mode == tooling.ExecutionModeLocal {
+		return
+	}
+	a.mu.Lock()
+	a.sandbox = sandboxFromConfig(cfg)
+	a.mu.Unlock()
 }
 
 // ensureWorkspaceSandbox detects a per-session workspace override and
@@ -443,6 +463,12 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	a.mu.Lock()
 	if override := strings.TrimSpace(a.workspaceOverride); override != "" && !sameWorkspaceDir(override, strings.TrimSpace(cfg.WorkspaceDir)) {
 		cfg = CloneConfigForWorkspace(cfg, override)
+		a.sandbox = sandboxFromConfig(cfg)
+	} else if mode := strings.TrimSpace(cfg.Tools.Execution.Mode); mode != "" && mode != tooling.ExecutionModeLocal {
+		// Session-pinned execution mode (exec_mode picker: docker/ssh/
+		// relay:<node>) must survive a global config reload: rebuild the
+		// sandbox from the session config instead of reverting to the shared
+		// local sandbox (same rule as ensureExecutionSandbox).
 		a.sandbox = sandboxFromConfig(cfg)
 	} else {
 		a.sandbox = deps.sandbox

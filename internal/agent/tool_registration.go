@@ -9,6 +9,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/platform/tooling"
+	"github.com/tim5wang/godex/internal/platform/workspacefs"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/tools/teamtools"
@@ -163,7 +164,20 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 	if sessionID := strings.TrimSpace(a.sessionID); sessionID != "" && a.cfg != nil && strings.TrimSpace(a.cfg.SessionsDir) != "" {
 		readAllowlist = append(readAllowlist, filepath.Join(a.cfg.SessionsDir, sessionID, "attachments"))
 	}
-	fileToolFS := newWorkspaceFSForExecution(workspaceDir, execution, readAllowlist...)
+	// The file tools must share the sandbox's filesystem view: relay sessions
+	// (exec_mode=relay:<node>, docs/remote-sandbox-design.md) get a RemoteFS
+	// that forwards every read/write/glob/ls to the B-side node through the
+	// center tunnel. newWorkspaceFSForExecution only remote-izes SSH, so using
+	// it for relay would silently list local files — the bug fixed here.
+	var fileToolFS workspacefs.FS
+	if execution.Mode == tooling.ExecutionModeRelay {
+		if fs, err := a.ensureSandbox().FileSystem(); err == nil && fs != nil {
+			fileToolFS = fs
+		}
+	}
+	if fileToolFS == nil {
+		fileToolFS = newWorkspaceFSForExecution(workspaceDir, execution, readAllowlist...)
+	}
 	// Attach the FS to the file executor so ReadFileLines/WriteFile/EditFile
 	// use the correct backend.
 	fileExecutor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspaceDir, tempDir, execution)

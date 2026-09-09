@@ -19,6 +19,7 @@
 .bash_history
 godex.yaml
 /godex
+/godex_back
 /bin/godex
 dist/
 /log/

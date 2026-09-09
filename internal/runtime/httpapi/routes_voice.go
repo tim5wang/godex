@@ -17,8 +17,8 @@ import (
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/services/backend"
 
-	voiceclient "github.com/tim5wang/voice-engine/client"
-	"github.com/tim5wang/voice-engine/protocol"
+	voiceclient "github.com/tim5wang/agent-local-voice-engine/client"
+	"github.com/tim5wang/agent-local-voice-engine/protocol"
 )
 
 // voiceBridge 桥接 Web UI ↔ voice-engine ↔ godex agent：

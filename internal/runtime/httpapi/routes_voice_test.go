@@ -17,7 +17,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/message"
 
-	"github.com/tim5wang/voice-engine/protocol"
+	"github.com/tim5wang/agent-local-voice-engine/protocol"
 )
 
 // TestVoiceMsgJSON 验证 voiceMsg 控制消息编解码（Web UI ↔ godex 契约）。

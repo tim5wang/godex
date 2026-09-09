@@ -12,14 +12,38 @@ import (
 	"github.com/tim5wang/godex/internal/sandbox"
 )
 
-func localSandboxFromConfig(cfg *config.Config) sandbox.Sandbox {
+// sandboxFromConfig picks the sandbox implementation from the session config:
+// the default local sandbox, or a RemoteSandbox (docs/remote-sandbox-design.md
+// M1) when tools.execution.mode=relay and a relay node is configured. Relay
+// center/token default to the control section so a joined node needs no extra
+// fields.
+func sandboxFromConfig(cfg *config.Config) sandbox.Sandbox {
 	if cfg == nil {
 		return sandbox.NewLocal(sandbox.LocalOptions{})
+	}
+	exec := executionConfigFromRuntime(cfg.Tools.Execution)
+	if exec.Mode == tooling.ExecutionModeRelay && exec.RelayNode != "" {
+		center := exec.RelayCenter
+		if center == "" {
+			center = cfg.Control.CenterURL
+		}
+		token := exec.RelayToken
+		if token == "" {
+			token = cfg.Control.CenterToken
+		}
+		return sandbox.NewRemote(sandbox.RemoteOptions{
+			WorkspaceDir: cfg.WorkspaceDir,
+			TempDir:      cfg.TempDir,
+			CenterURL:    center,
+			NodeID:       exec.RelayNode,
+			Token:        token,
+			Execution:    exec,
+		})
 	}
 	return sandbox.NewLocal(sandbox.LocalOptions{
 		WorkspaceDir: cfg.WorkspaceDir,
 		TempDir:      cfg.TempDir,
-		Execution:    executionConfigFromRuntime(cfg.Tools.Execution),
+		Execution:    exec,
 	})
 }
 
@@ -28,7 +52,7 @@ func (a *Agent) ensureSandbox() sandbox.Sandbox {
 		return sandbox.NewLocal(sandbox.LocalOptions{})
 	}
 	if a.sandbox == nil {
-		a.sandbox = localSandboxFromConfig(a.cfg)
+		a.sandbox = sandboxFromConfig(a.cfg)
 	}
 	return a.sandbox
 }

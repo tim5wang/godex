@@ -136,6 +136,12 @@ func setToolExecutionStoredValue(file *ConfigFile, path string, value any) error
 		file.Tools.Execution.SSHWorkspace = asString(value)
 	case "tools.execution.ssh_options":
 		file.Tools.Execution.SSHOptions = asStringList(value)
+	case "tools.execution.relay_center":
+		file.Tools.Execution.RelayCenter = asString(value)
+	case "tools.execution.relay_node":
+		file.Tools.Execution.RelayNode = asString(value)
+	case "tools.execution.relay_token":
+		file.Tools.Execution.RelayToken = asString(value)
 	case "tools.execution.shell_allow_patterns":
 		file.Tools.Execution.ShellAllowPatterns = asStringList(value)
 	case "tools.execution.shell_deny_patterns":

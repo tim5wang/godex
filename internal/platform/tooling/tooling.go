@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -313,6 +314,11 @@ const (
 	ExecutionModeLocal  = "local"
 	ExecutionModeDocker = "docker"
 	ExecutionModeSSH    = "ssh"
+	// ExecutionModeRelay runs shell commands on a REMOTE godex node (the
+	// sandbox node B) over the existing center relay tunnel instead of a local
+	// process. See docs/remote-sandbox-design.md. RelayCenter/RelayNode/RelayToken
+	// identify the target; RelayToken is the restricted nk_ credential.
+	ExecutionModeRelay = "relay"
 )
 
 type ExecutionConfig struct {
@@ -324,6 +330,11 @@ type ExecutionConfig struct {
 	SSHOptions         []string
 	ShellAllowPatterns []string
 	ShellDenyPatterns  []string
+	// Relay backend (ExecutionModeRelay): center URL, target node id and the
+	// restricted nk_ credential used to reach it through the center bridge.
+	RelayCenter string
+	RelayNode   string
+	RelayToken  string
 }
 
 func NewWorkspaceExecutor(workspaceDir string) *WorkspaceExecutor {
@@ -393,6 +404,9 @@ func normalizeExecutionConfig(cfg ExecutionConfig) ExecutionConfig {
 		SSHTarget:          strings.TrimSpace(cfg.SSHTarget),
 		SSHWorkspace:       strings.TrimSpace(cfg.SSHWorkspace),
 		SSHOptions:         append([]string{}, cfg.SSHOptions...),
+		RelayCenter:        strings.TrimSpace(cfg.RelayCenter),
+		RelayNode:          strings.TrimSpace(cfg.RelayNode),
+		RelayToken:         strings.TrimSpace(cfg.RelayToken),
 		ShellAllowPatterns: normalizeShellPatterns(cfg.ShellAllowPatterns),
 		ShellDenyPatterns:  normalizeShellPatterns(cfg.ShellDenyPatterns),
 	}
@@ -419,6 +433,11 @@ func (e *WorkspaceExecutor) RunShellBudgetedWithOptions(ctx context.Context, com
 	if err := validateShellCommandWithOptions(command, options); err != nil {
 		return CommandOutputResult{}, err
 	}
+	// RemoteSandbox path (ExecutionModeRelay): execute on sandbox node B via
+	// the center relay tunnel instead of a local process.
+	if normalizeExecutionConfig(e.Execution).Mode == ExecutionModeRelay {
+		return e.runShellRelay(ctx, command, options)
+	}
 
 	cmd, err := e.shellCommand(ctx, command)
 	if err != nil {
@@ -438,6 +457,26 @@ func (e *WorkspaceExecutor) RunShellBudgetedWithOptions(ctx context.Context, com
 	result := output.Result()
 	result.ExitCode = shellExitCode(err)
 	return result, err
+}
+
+// runShellRelay forwards a shell command to the configured remote sandbox node
+// via the center bridge (docs/remote-sandbox-design.md). Timeout seconds are
+// derived from the context deadline when present.
+func (e *WorkspaceExecutor) runShellRelay(ctx context.Context, command string, options ShellCommandOptions) (CommandOutputResult, error) {
+	cfg := normalizeExecutionConfig(e.Execution)
+	client := &RelayClient{CenterURL: cfg.RelayCenter, NodeID: cfg.RelayNode, Token: cfg.RelayToken}
+	timeout := 0
+	if deadline, ok := ctx.Deadline(); ok {
+		if t := int(time.Until(deadline).Seconds()); t > 0 {
+			timeout = t
+		}
+	}
+	return client.Exec(ctx, ExecRequest{
+		Command:        command,
+		Workspace:      options.WorkspaceDir,
+		TimeoutSeconds: timeout,
+		AllowUnlisted:  options.AllowUnlistedCommands,
+	})
 }
 
 func (e *WorkspaceExecutor) BuildArgvCommand(command string) (*exec.Cmd, []string, error) {

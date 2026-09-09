@@ -1,5 +1,5 @@
 import { App as AntApp, Avatar, Button, Empty, Space, Tag, Tooltip, Typography } from "antd";
-import { Fragment, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   CheckCircleFilled,
   CheckSquareOutlined,
@@ -70,52 +70,76 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
   const { message } = AntApp.useApp();
   const { t } = useI18n();
 
+  const copyItem = useCallback(
+    async (item: FeedItem) => {
+      const text = copyTextForItem(item);
+      if (!text) {
+        return;
+      }
+      try {
+        await writeClipboardText(text);
+        void message.success(t("chat.copied"));
+      } catch {
+        void message.error(t("chat.copyFailed"));
+      }
+    },
+    [message, t],
+  );
+
+  // Latest-ref indirection: ChatPageView rebuilds these callbacks on every
+  // render. Exposing stable references lets the memoized FeedItemBody/turn
+  // subtrees skip re-rendering for unchanged items, while every call still
+  // reads the newest closure through the ref (behavior stays identical).
+  const latestCallbacks = useRef({ onToggleTool, onSaveToNote, onOpenInFiles, onSubmitCard, onForkTurn, onEditMessage });
+  latestCallbacks.current = { onToggleTool, onSaveToNote, onOpenInFiles, onSubmitCard, onForkTurn, onEditMessage };
+  const stableOnToggleTool = useCallback((id: string) => latestCallbacks.current.onToggleTool(id), []);
+  const stableOnSaveToNote = useCallback((item: FeedItem) => latestCallbacks.current.onSaveToNote?.(item), []);
+  const stableOnOpenInFiles = useCallback((path: string) => latestCallbacks.current.onOpenInFiles?.(path), []);
+  const stableOnSubmitCard = useCallback((value: string) => latestCallbacks.current.onSubmitCard?.(value), []);
+  const stableOnForkTurn = useCallback((item: FeedItem) => latestCallbacks.current.onForkTurn?.(item), []);
+  const stableOnEditMessage = useCallback((item: FeedItem) => latestCallbacks.current.onEditMessage?.(item), []);
+
+  // Rebuild the bubble list only when the feed or a rendering-relevant prop
+  // actually changes; a re-render caused by unrelated props (e.g. `running`
+  // flipping) no longer recreates every bubble element.
+  const bubbleItems: BubbleItemType[] = useMemo(() => {
+    if (items.length === 0) {
+      return [];
+    }
+    return items.map((item) => ({
+      key: item.id,
+      role: item.kind === "user" ? "user" : item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? "tool" : "ai",
+      content: (
+        <FeedItemBody
+          item={item}
+          onToggleTool={stableOnToggleTool}
+          onCopyItem={copyItem}
+          copyLabel={t("chat.copyMessage")}
+          saveLabel={hasNoteContext ? t("chat.saveToCurrentNote") : t("chat.saveAsNote")}
+          onSaveToNote={stableOnSaveToNote}
+          savingToNote={savingToNote}
+          workspaceDir={workspaceDir}
+          token={token}
+          onOpenInFiles={stableOnOpenInFiles}
+          onSubmitCard={stableOnSubmitCard}
+          voiceEnabled={voiceEnabled}
+          onForkTurn={stableOnForkTurn}
+          onEditMessage={stableOnEditMessage}
+          running={running}
+          activeTurnId={activeTurnId}
+        />
+      ),
+      header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item, botName),
+      avatar: renderAvatar(item, { name: botName, avatar: botAvatar, color: botColor }),
+      rootClassName: `chat-feed-v2-bubble chat-feed-v2-bubble-${item.kind}${item.segments ? " chat-feed-v2-bubble-turn" : ""}`,
+      variant: item.kind === "user" ? "filled" : "borderless",
+      shape: "corner",
+    }));
+  }, [items, stableOnToggleTool, stableOnSaveToNote, stableOnOpenInFiles, stableOnSubmitCard, stableOnForkTurn, stableOnEditMessage, copyItem, savingToNote, hasNoteContext, workspaceDir, token, voiceEnabled, running, activeTurnId, botName, botAvatar, botColor, t]);
+
   if (items.length === 0) {
     return <Empty description="No messages yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
-
-  const copyItem = async (item: FeedItem) => {
-    const text = copyTextForItem(item);
-    if (!text) {
-      return;
-    }
-    try {
-      await writeClipboardText(text);
-      void message.success(t("chat.copied"));
-    } catch {
-      void message.error(t("chat.copyFailed"));
-    }
-  };
-
-  const bubbleItems: BubbleItemType[] = items.map((item) => ({
-    key: item.id,
-    role: item.kind === "user" ? "user" : item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? "tool" : "ai",
-    content: (
-      <FeedItemBody
-        item={item}
-        onToggleTool={onToggleTool}
-        onCopy={() => void copyItem(item)}
-        copyLabel={t("chat.copyMessage")}
-        saveLabel={hasNoteContext ? t("chat.saveToCurrentNote") : t("chat.saveAsNote")}
-        onSaveToNote={onSaveToNote}
-        savingToNote={savingToNote}
-        workspaceDir={workspaceDir}
-        token={token}
-        onOpenInFiles={onOpenInFiles}
-        onSubmitCard={onSubmitCard}
-        voiceEnabled={voiceEnabled}
-        onForkTurn={onForkTurn}
-        onEditMessage={onEditMessage}
-        running={running}
-        activeTurnId={activeTurnId}
-      />
-    ),
-    header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item, botName),
-    avatar: renderAvatar(item, { name: botName, avatar: botAvatar, color: botColor }),
-    rootClassName: `chat-feed-v2-bubble chat-feed-v2-bubble-${item.kind}${item.segments ? " chat-feed-v2-bubble-turn" : ""}`,
-    variant: item.kind === "user" ? "filled" : "borderless",
-    shape: "corner",
-  }));
 
   return (
     <Bubble.List
@@ -132,10 +156,10 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
   );
 }
 
-function FeedItemBody({
+const FeedItemBody = memo(function FeedItemBody({
   item,
   onToggleTool,
-  onCopy,
+  onCopyItem,
   copyLabel,
   saveLabel,
   onSaveToNote,
@@ -152,7 +176,7 @@ function FeedItemBody({
 }: {
   item: FeedItem;
   onToggleTool: (id: string) => void;
-  onCopy: () => void;
+  onCopyItem: (item: FeedItem) => void;
   copyLabel: string;
   saveLabel: string;
   onSaveToNote?: (item: FeedItem) => void;
@@ -200,7 +224,7 @@ function FeedItemBody({
           ))}
           {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
           <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
-          <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
+          <TurnActions item={item} onCopy={() => onCopyItem(item)} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
         </div>
       );
     }
@@ -228,7 +252,7 @@ function FeedItemBody({
         ) : null}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
         <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
-        <TurnActions item={item} onCopy={onCopy} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
+        <TurnActions item={item} onCopy={() => onCopyItem(item)} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
       </div>
     );
   }
@@ -317,7 +341,7 @@ function FeedItemBody({
                 icon={<CopyOutlined />}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onCopy();
+                  onCopyItem(item);
                 }}
                 shape="circle"
                 size="small"
@@ -329,9 +353,9 @@ function FeedItemBody({
       ) : null}
     </div>
   );
-}
+});
 
-function TurnSegment({ segment, onToggleTool, onSubmitCard }: { segment: FeedSegment; onToggleTool: (id: string) => void; onSubmitCard?: (value: string) => void }) {
+const TurnSegment = memo(function TurnSegment({ segment, onToggleTool, onSubmitCard }: { segment: FeedSegment; onToggleTool: (id: string) => void; onSubmitCard?: (value: string) => void }) {
   if (segment.type === "text") {
     if (!segment.text?.trim()) {
       return null;
@@ -367,7 +391,7 @@ function TurnSegment({ segment, onToggleTool, onSubmitCard }: { segment: FeedSeg
     return <SubagentCard item={segment.item} onToggle={() => onToggleTool(segment.item!.id)} />;
   }
   return null;
-}
+});
 
 function segmentKey(segment: FeedSegment, index: number) {
   return segment.item?.id ?? `text-${index}`;
@@ -380,7 +404,7 @@ function segmentKey(segment: FeedSegment, index: number) {
  * "(xx次工具调用, yy条消息)" so re-entered conversations stay scannable.
  * Clicking the summary toggles the process open/closed.
  */
-function TurnProcess({
+const TurnProcess = memo(function TurnProcess({
   segments,
   toolCount,
   messageCount,
@@ -416,13 +440,13 @@ function TurnProcess({
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * A single reasoning bubble ("Thinking…"). Collapsed by default: one line with
  * a trailing ellipsis; clicking expands the full thinking text.
  */
-function ThinkingSegment({ text }: { text: string }) {
+const ThinkingSegment = memo(function ThinkingSegment({ text }: { text: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const collapsedLine = text.replace(/\s+/g, " ").trim();
@@ -445,7 +469,7 @@ function ThinkingSegment({ text }: { text: string }) {
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * Parse a ui_card tool item's structured output (the tool echoes its card
@@ -492,23 +516,31 @@ export function shouldShowTurnDivider(segments: FeedSegment[], index: number): b
 }
 
 /** Compact single-line tool call row that expands in place (URL-link style). */
-export function ToolCallRow({ item, onToggle }: { item: FeedItem; onToggle: () => void }) {
-  const open = Boolean(item.expanded);
-  const hasDetails = Boolean(item.input || item.output || item.error);
-  return (
-    <div className={`tool-call-row${open ? " tool-call-row-open" : ""}`} data-status={item.status || "finished"}>
-      <button aria-expanded={open} className="tool-call-row-header" onClick={hasDetails ? onToggle : undefined} type="button">
-        <ToolStatusIcon status={item.status} />
-        <span className="tool-call-row-name">{item.title}</span>
-        {item.summary ? <span className="tool-call-row-summary">{item.summary}</span> : null}
-        {hasDetails ? <span className="tool-call-row-chevron">{open ? <DownOutlined /> : <RightOutlined />}</span> : null}
-      </button>
-      {open && hasDetails ? (
-        <ToolDetails item={item} />
-      ) : null}
-    </div>
-  );
-}
+export const ToolCallRow = memo(
+  function ToolCallRow({ item, onToggle }: { item: FeedItem; onToggle: () => void }) {
+    const open = Boolean(item.expanded);
+    const hasDetails = Boolean(item.input || item.output || item.error);
+    return (
+      <div className={`tool-call-row${open ? " tool-call-row-open" : ""}`} data-status={item.status || "finished"}>
+        <button aria-expanded={open} className="tool-call-row-header" onClick={hasDetails ? onToggle : undefined} type="button">
+          <ToolStatusIcon status={item.status} />
+          <span className="tool-call-row-name">{item.title}</span>
+          {item.summary ? <span className="tool-call-row-summary">{item.summary}</span> : null}
+          {hasDetails ? <span className="tool-call-row-chevron">{open ? <DownOutlined /> : <RightOutlined />}</span> : null}
+        </button>
+        {open && hasDetails ? (
+          <ToolDetails item={item} />
+        ) : null}
+      </div>
+    );
+  },
+  (prev, next) => {
+    // Skip the onToggle comparison: the caller derives it from a stable
+    // callback + stable item id, so recreated closures are semantically
+    // identical while the item reference is unchanged.
+    return prev.item === next.item;
+  },
+);
 
 function ToolStatusIcon({ status }: { status?: string }) {
   if (status === "running") {

@@ -132,6 +132,9 @@ func executionConfigFromRuntime(cfg config.ToolExecutionConfig) tooling.Executio
 		SSHTarget:          cfg.SSHTarget,
 		SSHWorkspace:       cfg.SSHWorkspace,
 		SSHOptions:         append([]string{}, cfg.SSHOptions...),
+		RelayCenter:        cfg.RelayCenter,
+		RelayNode:          cfg.RelayNode,
+		RelayToken:         cfg.RelayToken,
 		ShellAllowPatterns: append([]string{}, cfg.ShellAllowPatterns...),
 		ShellDenyPatterns:  append([]string{}, cfg.ShellDenyPatterns...),
 	}

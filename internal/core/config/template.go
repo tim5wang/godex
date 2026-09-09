@@ -656,6 +656,12 @@ tools:
     ssh_workspace: {{ yamlString .Tools.Execution.SSHWorkspace }}
     # Extra ssh options, such as -o BatchMode=yes. Environment override: GODEX_TOOLS_EXECUTION_SSH_OPTIONS.
     ssh_options: {{ yamlListIndent .Tools.Execution.SSHOptions 6 }}
+    # Remote sandbox backend (mode=relay): center URL + target node id. Tools run on that node. Environment override: GODEX_TOOLS_EXECUTION_RELAY_CENTER.
+    relay_center: {{ yamlString .Tools.Execution.RelayCenter }}
+    # Sandbox node id used when mode=relay. Environment override: GODEX_TOOLS_EXECUTION_RELAY_NODE.
+    relay_node: {{ yamlString .Tools.Execution.RelayNode }}
+    # Restricted nk_ credential for the relay node (control.center_token); keep in .env. Environment override: GODEX_TOOLS_EXECUTION_RELAY_TOKEN.
+    relay_token: {{ yamlString .Tools.Execution.RelayToken }}
     # Optional command glob/prefix patterns allowed for bash/background. Empty means no extra allow restriction. Environment override: GODEX_TOOLS_EXECUTION_SHELL_ALLOW_PATTERNS.
     shell_allow_patterns: {{ yamlListIndent .Tools.Execution.ShellAllowPatterns 6 }}
     # Command glob/prefix patterns denied for bash/background before execution. Environment override: GODEX_TOOLS_EXECUTION_SHELL_DENY_PATTERNS.

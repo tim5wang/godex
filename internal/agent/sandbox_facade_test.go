@@ -32,7 +32,7 @@ func TestAgentSandboxBindingClonesExecutionConfig(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.cfg.Tools.Execution.Mode = tooling.ExecutionModeDocker
 	a.cfg.Tools.Execution.ShellAllowPatterns = []string{"go test"}
-	a.sandbox = localSandboxFromConfig(a.cfg)
+	a.sandbox = sandboxFromConfig(a.cfg)
 
 	binding := a.SandboxBinding()
 	binding.Execution.ShellAllowPatterns[0] = "changed"

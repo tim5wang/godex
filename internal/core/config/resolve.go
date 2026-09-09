@@ -541,6 +541,15 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveCSV("tools.execution.ssh_options", file.Tools.Execution.SSHOptions, "GODEX_TOOLS_EXECUTION_SSH_OPTIONS", func(v []string) {
 		current.Tools.Execution.SSHOptions = append([]string{}, v...)
 	})
+	resolveString("tools.execution.relay_center", file.Tools.Execution.RelayCenter, "GODEX_TOOLS_EXECUTION_RELAY_CENTER", func(v string) {
+		current.Tools.Execution.RelayCenter = v
+	})
+	resolveString("tools.execution.relay_node", file.Tools.Execution.RelayNode, "GODEX_TOOLS_EXECUTION_RELAY_NODE", func(v string) {
+		current.Tools.Execution.RelayNode = v
+	})
+	resolveString("tools.execution.relay_token", file.Tools.Execution.RelayToken, "GODEX_TOOLS_EXECUTION_RELAY_TOKEN", func(v string) {
+		current.Tools.Execution.RelayToken = v
+	})
 	resolveBool("tools.execution.scope_write", file.Tools.Execution.ScopeWrite, "GODEX_TOOLS_EXECUTION_SCOPE_WRITE", func(v bool) {
 		current.Tools.Execution.ScopeWrite = v
 	})

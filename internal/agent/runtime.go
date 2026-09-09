@@ -321,7 +321,7 @@ func (a *Agent) ensureWorkspaceSandbox(cfg *config.Config, shared *SharedDepende
 	}
 	a.mu.Lock()
 	a.workspaceOverride = dir
-	a.sandbox = localSandboxFromConfig(cfg)
+	a.sandbox = sandboxFromConfig(cfg)
 	a.mu.Unlock()
 }
 
@@ -396,7 +396,7 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	a.mu.Lock()
 	if override := strings.TrimSpace(a.workspaceOverride); override != "" && !sameWorkspaceDir(override, strings.TrimSpace(cfg.WorkspaceDir)) {
 		cfg = CloneConfigForWorkspace(cfg, override)
-		a.sandbox = localSandboxFromConfig(cfg)
+		a.sandbox = sandboxFromConfig(cfg)
 	} else {
 		a.sandbox = deps.sandbox
 	}

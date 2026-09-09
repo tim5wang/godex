@@ -450,6 +450,9 @@ type ToolExecutionConfig struct {
 	SSHTarget          string
 	SSHWorkspace       string
 	SSHOptions         []string
+	RelayCenter        string
+	RelayNode          string
+	RelayToken         string
 	ShellAllowPatterns []string
 	ShellDenyPatterns  []string
 	ToolTimeoutSeconds int

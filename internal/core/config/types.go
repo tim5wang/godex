@@ -387,6 +387,12 @@ type ExecutionSection struct {
 	SSHTarget          string   `yaml:"ssh_target"`
 	SSHWorkspace       string   `yaml:"ssh_workspace"`
 	SSHOptions         []string `yaml:"ssh_options"`
+	// Relay backend (mode=relay): run tools on a remote godex node (sandbox
+	// node B) through the center relay tunnel. RelayToken is the restricted
+	// nk_ credential (control.center_token), kept in .env, not yaml.
+	RelayCenter        string   `yaml:"relay_center"`
+	RelayNode          string   `yaml:"relay_node"`
+	RelayToken         string   `yaml:"relay_token"`
 	ShellAllowPatterns []string `yaml:"shell_allow_patterns"`
 	ShellDenyPatterns  []string `yaml:"shell_deny_patterns"`
 	ToolTimeoutSeconds int      `yaml:"tool_timeout_seconds"`

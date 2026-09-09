@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, memo } from "react";
 
 const MarkdownRenderer = lazy(async () => ({ default: (await import("./MarkdownRenderer")).MarkdownRenderer }));
 
@@ -12,7 +12,7 @@ interface MarkdownContentProps {
   resolveImageUrl?: (url: string) => string;
 }
 
-export function MarkdownContent({ content, className, forceMarkdown = false, forcePlain = false, resolveImageUrl }: MarkdownContentProps) {
+export const MarkdownContent = memo(function MarkdownContent({ content, className, forceMarkdown = false, forcePlain = false, resolveImageUrl }: MarkdownContentProps) {
   const shouldRender = !forcePlain && (forceMarkdown || needsMarkdownRendering(content));
   if (!shouldRender) {
     return (
@@ -29,7 +29,7 @@ export function MarkdownContent({ content, className, forceMarkdown = false, for
       </Suspense>
     </div>
   );
-}
+});
 
 /**
  * Decide whether text should go through the markdown pipeline.

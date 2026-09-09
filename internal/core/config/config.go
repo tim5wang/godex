@@ -334,6 +334,7 @@ type ControlConfig struct {
 	TrustLevel          string
 	CenterURL           string
 	CenterToken         string
+	NodeProxyToken      string
 	Credential          string
 	HeartbeatSeconds    int
 	OfflineAfterSeconds int

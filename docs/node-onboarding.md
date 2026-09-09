@@ -14,7 +14,7 @@ GoDex 的「节点」能力把多台机器上的 GoDex 实例连成一张网：
 ```
 ┌─────────────────────────┐       出站 WebSocket（节点主动连中心）
 │  中心服务器（云端）        │ ◄──────────────────────┐
-│  https://godex.claw.carc.top │                        │
+│  https://godex.example.com │                        │
 │  - 节点注册表 / 心跳        │                        │
 │  - Relay 中继（跳板）       │                        │
 │  - Web 控制台（网页端）     │                        │
@@ -27,7 +27,7 @@ GoDex 的「节点」能力把多台机器上的 GoDex 实例连成一张网：
     └───────────────┘   └───────────────┘   └───────────────┘
 ```
 
-- **中心**：部署在云上的 GoDex 实例（本手册示例 `https://godex.claw.carc.top/`）。
+- **中心**：部署在云上的 GoDex 实例（本手册示例 `https://godex.example.com/`）。
 - **节点**：要接入的内网 GoDex 实例（笔记本、台式机、内网服务器等），**主动出站连接中心**，因此不需要开放内网端口、不需要公网 IP。
 - **接入的本质**：中心给节点签发一次性凭证（`ck_...`），节点配置好「中心地址 + 凭证 + 节点 ID」后，重启 `godex serve` 即自动注册并建立 Relay 通道。
 
@@ -49,7 +49,7 @@ GoDex 的「节点」能力把多台机器上的 GoDex 实例连成一张网：
 
 ### 3.1 中心侧：生成接入命令
 
-1. 浏览器打开中心控制台：`https://godex.claw.carc.top/`
+1. 浏览器打开中心控制台：`https://godex.example.com/`
 2. 左侧进入 **「节点」** 页（`/nodes`）
 3. 顶部 **「接入新节点」** 卡片：
    - **节点 ID**：填写自己易记的名字（如 `my-laptop`、`office-db`）。留空则自动生成 `node_xxxxxx`；**建议填写**，之后用这个名字操作节点
@@ -63,7 +63,7 @@ GoDex 的「节点」能力把多台机器上的 GoDex 实例连成一张网：
 生成的命令形如：
 
 ```bash
-godex node join 'https://godex.claw.carc.top' --id my-laptop --credential ck_a1b2c3d4e5 --trust trusted --name '我的笔记本'
+godex node join 'https://godex.example.com' --id my-laptop --credential ck_a1b2c3d4e5 --trust trusted --name '我的笔记本'
 ```
 
 ### 3.2 内网节点侧：执行接入命令
@@ -71,7 +71,7 @@ godex node join 'https://godex.claw.carc.top' --id my-laptop --credential ck_a1b
 在内网设备上打开终端（GoDex 所在机器），直接粘贴执行第 3.1 步复制的命令：
 
 ```bash
-godex node join 'https://godex.claw.carc.top' --id my-laptop --credential ck_a1b2c3d4e5 --trust trusted --name '我的笔记本'
+godex node join 'https://godex.example.com' --id my-laptop --credential ck_a1b2c3d4e5 --trust trusted --name '我的笔记本'
 ```
 
 命令会：
@@ -225,7 +225,7 @@ control:
   node_id: my-laptop          # 节点 ID，注册与操作时使用
   default_node: ""            # 中心侧使用；节点侧一般无需设置
   trust_level: trusted        # trusted | guarded-remote
-  center_url: https://godex.claw.carc.top
+  center_url: https://godex.example.com
   heartbeat_seconds: 15       # 心跳间隔（秒）
   offline_after_seconds: 60   # 中心判定离线阈值（秒）
   forward_allow: []           # 端口转发白名单，见 6.3
@@ -270,7 +270,7 @@ control:
 
 **Q2：节点页一直显示 offline？**
 1. 确认节点上 `godex serve` 在运行（`node join` 后需要重启一次）
-2. 确认节点能出站访问中心（可 `curl https://godex.claw.carc.top/api/meta`）
+2. 确认节点能出站访问中心（可 `curl https://godex.example.com/api/meta`）
 3. 确认 `.env` 里有 `GODEX_CONTROL_CREDENTIAL=ck_...`
 4. 等 1~2 个心跳周期（默认 15s/个）再刷新
 
@@ -278,7 +278,7 @@ control:
 未设默认节点时需显式带 `--node <id>`；或先设置 `control.default_node`（见 4.4：环境变量或中心服务器 `godex.yaml`）。
 
 **Q4：`node exec` 报 `missing center URL`？**
-在中心服务器上执行时需要指定中心：`--center https://godex.claw.carc.top`，或在该机 `godex.yaml` 配置 `control.center_url`。
+在中心服务器上执行时需要指定中心：`--center https://godex.example.com`，或在该机 `godex.yaml` 配置 `control.center_url`。
 
 **Q5：删除节点后它又出现了？**
 正常接入的节点被删除后不会复活（心跳/重连都被拒绝）。如果又出现，通常是有人**重新执行了 `node join` 并重启** —— 那是重新接入，属预期行为。

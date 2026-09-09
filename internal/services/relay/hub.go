@@ -1,3 +1,8 @@
+// godex-feature: relay
+// Relay 中继：WSS 出站接入（中心←节点）、TCP/HTTP 代理与 forward、事件存储与信任管理；
+// 支持 guarded-remote 审批头与跨节点远程执行。
+// 入口：godex node（forward/exec）、Web Nodes 面板
+// 文档：docs/node-mesh-design.md、docs/node-onboarding.md、docs/node-center-bridge-design.md
 package relay
 
 import (

@@ -17,6 +17,18 @@ func GenerateCredential() (string, error) {
 	return "ck_" + hex.EncodeToString(buf), nil
 }
 
+// GenerateNodeProxyToken creates a center-scoped restricted credential with an
+// nk_ prefix. It is what a node stores as control.center_token so it can reach
+// the center's node proxy/forward surface WITHOUT holding the full web token;
+// the center persists the plaintext in control.node_proxy_token (Secret).
+func GenerateNodeProxyToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return "nk_" + hex.EncodeToString(buf), nil
+}
+
 // HashCredential returns a deterministic non-reversible digest of a credential.
 func HashCredential(cred string) string {
 	sum := sha256.Sum256([]byte(cred))

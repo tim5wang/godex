@@ -96,7 +96,7 @@ func Search(q string) []Feature     // 大小写不敏感子串匹配（id/描�
 ## 4. 验收标准
 
 1. `go generate ./internal/selfdocs/...` 能从注释生成 `features_gen.go`；
-2. `godex docs list` 输出覆盖 README 全部核心特性（当前 36 个功能点：session-runtime、providers、longtask、agentgraph、workflow、harness、subagent、compaction、memory、notes、session-tree、templates、packages、skills、mcp、lsp、web、browser、desktop、terminal、cron、heartbeat、channels、noderegistry、security、usage、storage-gc、scope、sandbox、session-mode、webui、taskboard、acp、cache、insights、background 等）；
+2. `godex docs list` 输出覆盖 README 全部核心特性（当前 40 个功能点：session-runtime、providers、longtask、agentgraph、workflow、harness、subagent、compaction、memory、notes、session-tree、templates、packages、skills、mcp、lsp、web、browser、desktop、terminal、cron、heartbeat、channels、noderegistry、relay、nodeobs、webpush、node、security、usage、storage-gc、scope、sandbox、session-mode、webui、taskboard、acp、cache、insights、background 等）；
 3. `godex docs get <id>` 输出描述/入口/文档/源码位置；
 4. agent 会话中 `godex_docs` 工具可 list/get/search（冒烟验证）；
 5. `go test ./internal/selfdocs/...` 覆盖 All/Get/Search；

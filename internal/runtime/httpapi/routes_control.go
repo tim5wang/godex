@@ -36,8 +36,8 @@ func registerRuntimeServiceRoutes(mux *http.ServeMux, serviceRuntime serviceRunt
 	})))
 }
 
-func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRegistry, overviewProvider nodeOverviewProvider, protected func(http.Handler) http.Handler) {
-	mux.Handle("GET /control/nodes", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRegistry, overviewProvider nodeOverviewProvider, protected func(http.Handler) http.Handler, nodeProxyRead func(http.Handler) http.Handler) {
+	mux.Handle("GET /control/nodes", nodeProxyRead(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
 			writeJSON(w, http.StatusOK, []noderegistry.NodeView{})
 			return
@@ -49,7 +49,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		}
 		writeJSON(w, http.StatusOK, nodes)
 	})))
-	mux.Handle("GET /control/nodes/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /control/nodes/{id}", nodeProxyRead(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
 			return
@@ -138,7 +138,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 			"credential": credential,
 		})
 	})))
-	mux.Handle("GET /control/nodes/{id}/overview", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /control/nodes/{id}/overview", nodeProxyRead(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
 			return

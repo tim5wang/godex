@@ -1,3 +1,7 @@
+// godex-feature: nodeobs
+// 节点观测：只读 Nodes Dashboard 数据源，聚合本机与注册节点的 runtime 状态。
+// 入口：Web Nodes 面板、/v1/nodes/* API
+// 文档：docs/node-mesh-design.md、README 核心特性
 package nodeobs
 
 import (

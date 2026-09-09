@@ -411,8 +411,8 @@ func main() {
 					logger.Errorf("load forward %q: %v", fwd.ID, err)
 				}
 			}
-			registerForwardRoutes(root, forwardServer, manager, relayAuthorize(cfg))
-			proxy := relay.NewProxyHandler(relayHub, relayAuthorize(cfg))
+			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(cfg))
+			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(cfg))
 			// The center also runs as its own node: requests targeting the self
 			// node are served locally (no relay round-trip), so the server can be
 			// operated from its own web UI.
@@ -435,7 +435,7 @@ func main() {
 				}
 				return relayHub.IsOnline(nodeID)
 			}))
-			root.Handle("/control/nodes/{id}/forward", relay.NewForwardHandler(relayHub, relayAuthorize(cfg)))
+			root.Handle("/control/nodes/{id}/forward", relay.NewForwardHandler(relayHub, nodeProxyAuthorize(cfg)))
 			// Web Push: in-memory subscriptions, VAPID keys persisted across
 			// restarts so browser subscriptions keep working. The center only
 			// relays live events — no durable push history.
@@ -807,12 +807,35 @@ func relayAuthorize(cfg *config.Config) func(*http.Request) bool {
 		if token == "" {
 			return true
 		}
-		header := strings.TrimSpace(r.Header.Get("Authorization"))
-		if !strings.HasPrefix(strings.ToLower(header), "bearer ") {
-			return false
-		}
-		return strings.TrimSpace(header[len("Bearer "):]) == token
+		return bearerMatches(r, token)
 	}
+}
+
+// nodeProxyAuthorize accepts either the full web token OR the center's
+// restricted node proxy token (control.node_proxy_token, nk_...). The proxy /
+// forward surfaces are what joined nodes call through the center bridge; a
+// compromised node holding only the nk_ token can reach other nodes' proxies and
+// forward probes but NOT the center's config / sessions / files management API.
+func nodeProxyAuthorize(cfg *config.Config) func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		token := strings.TrimSpace(cfg.WebToken)
+		proxyToken := strings.TrimSpace(cfg.Control.NodeProxyToken)
+		if token == "" && proxyToken == "" {
+			return true
+		}
+		return bearerMatches(r, token) || bearerMatches(r, proxyToken)
+	}
+}
+
+func bearerMatches(r *http.Request, token string) bool {
+	if token == "" {
+		return false
+	}
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(strings.ToLower(header), "bearer ") {
+		return false
+	}
+	return strings.TrimSpace(header[len("Bearer "):]) == token
 }
 
 // registerForwardRoutes wires the managed-forward REST surface onto the root
@@ -862,6 +885,8 @@ func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, mana
 			http.Error(w, `{"error":"persist failed"}`, http.StatusInternalServerError)
 			return
 		}
+		// Audit: forward tunnel creation (P0-2).
+		logger.Infof("audit forward create: caller=%s node=%s local=%d target=%s id=%s", r.RemoteAddr, spec.NodeID, spec.LocalPort, spec.Target, spec.ID)
 		writeForwardJSON(w, http.StatusCreated, spec)
 	})))
 
@@ -875,6 +900,8 @@ func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, mana
 			http.Error(w, `{"error":"persist failed"}`, http.StatusInternalServerError)
 			return
 		}
+		// Audit: forward tunnel removal (P0-2).
+		logger.Infof("audit forward delete: caller=%s id=%s", r.RemoteAddr, id)
 		writeForwardJSON(w, http.StatusOK, map[string]bool{"removed": true})
 	})))
 

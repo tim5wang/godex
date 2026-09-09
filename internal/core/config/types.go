@@ -194,6 +194,7 @@ type ControlSection struct {
 	TrustLevel          string               `yaml:"trust_level"`
 	CenterURL           string               `yaml:"center_url"`
 	CenterToken         string               `yaml:"center_token"`
+	NodeProxyToken      string               `yaml:"node_proxy_token"`
 	Credential          string               `yaml:"credential"`
 	HeartbeatSeconds    int                  `yaml:"heartbeat_seconds"`
 	OfflineAfterSeconds int                  `yaml:"offline_after_seconds"`

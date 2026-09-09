@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
 // ProxyHandler forwards incoming center-side requests to a target node over
@@ -59,6 +62,22 @@ func isMutatingMethod(method string) bool {
 	}
 }
 
+// clientIP extracts the caller's IP for audit logging, honoring
+// X-Forwarded-For when present (center sits behind a reverse proxy).
+func clientIP(r *http.Request) string {
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		if first, _, ok := strings.Cut(xff, ","); ok {
+			return strings.TrimSpace(first)
+		}
+		return strings.TrimSpace(xff)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // NewProxyHandler creates the center-side proxy endpoint. authorize must
 // return true for requests that may forward to nodes (web token check).
 func NewProxyHandler(hub *Hub, authorize func(*http.Request) bool) *ProxyHandler {
@@ -86,6 +105,9 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid proxy path"}`, http.StatusBadRequest)
 		return
 	}
+	// Audit: who called which node proxy path (P0-2). Logged before serving so
+	// denied/guarded requests are also recorded.
+	logger.Infof("relay proxy: caller=%s target=%s %s %s", clientIP(r), nodeID, r.Method, after)
 
 	// Local direct: the center also runs as its own node. Serve the request
 	// in-process with the path the local httpapi expects (relay prefix

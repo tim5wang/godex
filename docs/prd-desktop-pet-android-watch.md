@@ -147,7 +147,7 @@ godex 是本地 AI 编程助手（Go 单二进制 + 内嵌 Web UI + 本地 HTTP 
 | **taskboard 无完成事件**（现无广播） | 桌宠/手表拿不到"完成"信号 | E1 旁路事件钩子，不动状态机 |
 | **Web Push 订阅仅内存**（重启丢失） | 通知可达性 | 轻量期可接受；W2 转 FCM 或做订阅持久化 |
 | **Wear OS 后台限制/Doze** | WS 长连失效、通知延迟 | 通知走 FCM/系统推送，WS 仅前台使用 |
-| **手表直连 godex 的网络与认证** | 不可达/401 | 内网/隧道（如已有的远程部署 godex.claw.carc.top）+ web.token；token 管理 UI 后续做 |
+| **手表直连 godex 的网络与认证** | 不可达/401 | 内网/隧道（如已有的远程部署 godex.example.com）+ web.token；token 管理 UI 后续做 |
 | **FCM 国内设备受限** | 通知必达打折 | 手机转发兜底（W3）或厂商通道；评估后定 |
 | **Live2D 授权**（Cubism 免费版商用限制） | 法律/成本 | 立项前核对 license；备选 pixi/Lottie |
 | **设备碎片化**（Wear OS 2-5 + 圆屏） | UI/兼容工作量 | 官方模板 + 最小支持 API 28/30；测试矩阵限定 1-2 款设备 |

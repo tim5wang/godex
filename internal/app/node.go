@@ -1,3 +1,8 @@
+// godex-feature: node
+// Node 跳板命令：godex node forward（端口转发，等价 ssh -L）/ exec（节点网络内执行命令）/ join；
+// 默认节点由 godex.yaml control.default_node 指定。
+// 入口：godex node、Web Nodes 面板
+// 文档：docs/node-onboarding.md、docs/node-mesh-design.md、docs/user-guide.md
 package app
 
 import (
@@ -39,7 +44,7 @@ func nodeHelpText() string {
 		"                                 Tunnel a local port to an internal database",
 		"  godex node exec --node node_x 'cd ~/proj && go test ./...'",
 		"                                 Run a command on a remote node",
-		"  godex node join https://godex.claw.carc.top --id my-laptop --credential ck_xxx",
+		"  godex node join https://godex.example.com --id my-laptop --credential ck_xxx",
 		"                                 Configure this node to join a center",
 		"",
 		"Flags (join):",
@@ -341,11 +346,16 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 	if err := r.ConfigManager.WriteHomeEnvVar("GODEX_CONTROL_CREDENTIAL", credential); err != nil {
 		return fmt.Errorf("write credential env: %w", err)
 	}
-	// The center web token is also a secret. When provided (--token) it is
-	// persisted to the home .env file so the local node can act as a center
-	// bridge client (reach other nodes through the center).
+	// The center web token is also a secret. When provided (--token) the node
+	// exchanges it for the center's RESTRICTED node proxy credential (nk_...)
+	// and persists THAT as center_token — so the node never holds the full web
+	// token; a compromised node can only reach the proxy/forward surface.
 	if token != "" {
-		if err := r.ConfigManager.WriteHomeEnvVar("GODEX_CONTROL_CENTER_TOKEN", token); err != nil {
+		proxyToken, err := exchangeNodeProxyToken(ctx, centerURL, token)
+		if err != nil {
+			return fmt.Errorf("exchange center node proxy token: %w", err)
+		}
+		if err := r.ConfigManager.WriteHomeEnvVar("GODEX_CONTROL_CENTER_TOKEN", proxyToken); err != nil {
 			return fmt.Errorf("write center token env: %w", err)
 		}
 	}
@@ -380,6 +390,44 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintln(r.Stdout, "restart 'godex serve' to complete the join")
 	return nil
+}
+
+// exchangeNodeProxyToken exchanges the center's full web token for its
+// restricted node proxy credential (nk_...) via POST /control/node-proxy-token.
+// The returned nk_ is what the node stores as control.center_token, so the
+// node never holds the full web token.
+func exchangeNodeProxyToken(ctx context.Context, centerURL, webToken string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerURL))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return "", fmt.Errorf("invalid center URL %q", centerURL)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/control/node-proxy-token"
+	u.RawQuery = ""
+	u.Fragment = ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+webToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("center returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var out struct {
+		NodeProxyToken string `json:"node_proxy_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	if out.NodeProxyToken == "" {
+		return "", fmt.Errorf("center returned empty node proxy token")
+	}
+	return out.NodeProxyToken, nil
 }
 
 // normalizeLLMProxyFlag rewrites a bare --llm-proxy (whose next token is

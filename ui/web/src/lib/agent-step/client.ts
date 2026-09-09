@@ -126,7 +126,7 @@ export class StepAPIError extends Error {
 // ---------------------------------------------------------------------------
 
 export type StepClientOptions = {
-  /** The godex server origin, e.g. "https://godex.claw.carc.top". */
+  /** The godex server origin, e.g. "https://godex.example.com". */
   baseUrl: string;
   /** Business-system API key (biz_...). */
   apiKey: string;

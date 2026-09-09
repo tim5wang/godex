@@ -128,10 +128,19 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	protected := withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
 	}, relayTrustChecker(manager))
+	// nodeProxyRead protects the node proxy READ surface (node list / single
+	// node / overview) that CenterBridge on joined nodes calls. It accepts the
+	// full web token OR the restricted node proxy token (control.node_proxy_token,
+	// nk_...) so a compromised node cannot touch config/sessions/files management
+	// endpoints — it can only list nodes and read their overview.
+	nodeProxyRead := withBearerAuthProvider(func() string {
+		return manager.Current().WebToken
+	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager))
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)
-	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected)
+	registerNodeProxyTokenRoute(mux, manager, protected)
+	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected, nodeProxyRead)
 	registerProviderRoutes(mux, manager, protected)
 
 	registerChannelStatusRoute(mux, channels, protected)
@@ -356,6 +365,21 @@ func withBearerAuthProvider(token func() string, relayTrust ...func(*http.Reques
 			}
 			handler.ServeHTTP(w, r)
 		})
+	}
+}
+
+// nodeProxyTokenChecker accepts requests carrying the center's restricted node
+// proxy token (control.node_proxy_token, nk_...) as the Bearer credential.
+// Joined nodes present this when they read the node list / overview through the
+// center bridge; it grants read-only access to the node registry surface and
+// nothing else (config / sessions / files stay behind the full web token).
+func nodeProxyTokenChecker(manager *config.Manager) func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		proxyToken := strings.TrimSpace(manager.Current().Control.NodeProxyToken)
+		if proxyToken == "" {
+			return false
+		}
+		return bearerAuthorized(r, proxyToken)
 	}
 }
 

@@ -110,7 +110,7 @@
 ### Phase C — 远程模式（✅ 已完成，零代码改动）
 - relay 链路确认**无 path 白名单**：node 侧 `Agent.serveRequest` 任意 path 直接转本地 httpapi（仅注入 relay trust 头）；center 侧 `ProxyHandler` 对 `/control/nodes/{id}/proxy/{path...}` 任意 path 透传（唯一 allowlist 是 TCP `forward_allow`，host:port 非 path）。
 - `/v1/responses` 已注册在 node httpapi（Phase B），远程 node 部署新二进制后**天然可用**；中心侧把 `POST /v1/responses` 经 `/control/nodes/{id}/proxy/v1/responses` 代理到 node 即可。
-- 远程 godex（godex.claw.carc.top）的 web.token 认证（既有 `relayTrustChecker` 机制）同样覆盖 `/v1/responses`，无需新代码。
+- 远程 godex（godex.example.com）的 web.token 认证（既有 `relayTrustChecker` 机制）同样覆盖 `/v1/responses`，无需新代码。
 
 ### Phase D — 主链 Chat UI 切 Responses（❌ YAGNI 砍掉）
 

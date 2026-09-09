@@ -42,7 +42,7 @@ func TestRunNodeJoinSyncsNodeIDFile(t *testing.T) {
 	r, manager, _ := newJoinRunner(t)
 	stateDir := manager.Current().StateDir
 	if err := r.runNodeJoin(context.Background(), []string{
-		"https://godex.claw.carc.top",
+		"https://godex.example.com",
 		"--id", "my-laptop",
 		"--credential", "ck_test_abc123",
 	}); err != nil {
@@ -60,7 +60,7 @@ func TestRunNodeJoinSyncsNodeIDFile(t *testing.T) {
 func TestRunNodeJoinWritesControlConfig(t *testing.T) {
 	r, manager, home := newJoinRunner(t)
 	err := r.runNodeJoin(context.Background(), []string{
-		"https://godex.claw.carc.top",
+		"https://godex.example.com",
 		"--id", "my-laptop",
 		"--credential", "ck_test_abc123",
 		"--trust", "guarded-remote",
@@ -70,8 +70,8 @@ func TestRunNodeJoinWritesControlConfig(t *testing.T) {
 		t.Fatalf("node join: %v", err)
 	}
 	cfg := manager.Current()
-	if cfg.Control.CenterURL != "https://godex.claw.carc.top" {
-		t.Fatalf("expected center_url %q, got %q", "https://godex.claw.carc.top", cfg.Control.CenterURL)
+	if cfg.Control.CenterURL != "https://godex.example.com" {
+		t.Fatalf("expected center_url %q, got %q", "https://godex.example.com", cfg.Control.CenterURL)
 	}
 	if cfg.Control.Credential != "ck_test_abc123" {
 		t.Fatalf("expected credential %q, got %q", "ck_test_abc123", cfg.Control.Credential)
@@ -90,7 +90,7 @@ func TestRunNodeJoinWritesControlConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read home godex.yaml: %v", err)
 	}
-	for _, want := range []string{"center_url: https://godex.claw.carc.top", "node_id: my-laptop", "trust_level: guarded-remote"} {
+	for _, want := range []string{"center_url: https://godex.example.com", "node_id: my-laptop", "trust_level: guarded-remote"} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("expected %q in godex.yaml, got:\n%s", want, data)
 		}
@@ -108,7 +108,7 @@ func TestRunNodeJoinWritesControlConfig(t *testing.T) {
 func TestRunNodeJoinDefaultsTrustToTrusted(t *testing.T) {
 	r, manager, _ := newJoinRunner(t)
 	err := r.runNodeJoin(context.Background(), []string{
-		"https://godex.claw.carc.top",
+		"https://godex.example.com",
 		"--id", "my-laptop",
 		"--credential", "ck_test_abc123",
 	})
@@ -146,7 +146,7 @@ func TestRunNodeJoinDoesNotOverwriteUnrelatedConfig(t *testing.T) {
 		Stderr:        &bytes.Buffer{},
 	}
 	if err := r.runNodeJoin(context.Background(), []string{
-		"https://godex.claw.carc.top",
+		"https://godex.example.com",
 		"--id", "my-laptop",
 		"--credential", "ck_test_abc123",
 	}); err != nil {
@@ -169,22 +169,22 @@ func TestRunNodeJoinValidatesArguments(t *testing.T) {
 	}{
 		{
 			name: "missing id",
-			args: []string{"https://godex.claw.carc.top", "--credential", "ck_x"},
+			args: []string{"https://godex.example.com", "--credential", "ck_x"},
 			want: "--id",
 		},
 		{
 			name: "missing credential",
-			args: []string{"https://godex.claw.carc.top", "--id", "n1"},
+			args: []string{"https://godex.example.com", "--id", "n1"},
 			want: "--credential",
 		},
 		{
 			name: "bad credential prefix",
-			args: []string{"https://godex.claw.carc.top", "--id", "n1", "--credential", "secret"},
+			args: []string{"https://godex.example.com", "--id", "n1", "--credential", "secret"},
 			want: "ck_",
 		},
 		{
 			name: "invalid id characters",
-			args: []string{"https://godex.claw.carc.top", "--id", "bad id!", "--credential", "ck_x"},
+			args: []string{"https://godex.example.com", "--id", "bad id!", "--credential", "ck_x"},
 			want: "node id",
 		},
 		{
@@ -219,7 +219,7 @@ func TestRunNodeJoinValidatesArguments(t *testing.T) {
 func TestRunNodeJoinLLMProxyWithExistingKey(t *testing.T) {
 	r, manager, home := newJoinRunner(t)
 	err := r.runNodeJoin(context.Background(), []string{
-		"https://godex.claw.carc.top",
+		"https://godex.example.com",
 		"--id", "my-laptop",
 		"--credential", "ck_test_abc123",
 		"--llm-proxy", "gdx_test_secret_key",
@@ -236,8 +236,8 @@ func TestRunNodeJoinLLMProxyWithExistingKey(t *testing.T) {
 	if provider.Type != "openai_compatible" {
 		t.Fatalf("expected openai_compatible provider, got %q", provider.Type)
 	}
-	if provider.BaseURL != "https://godex.claw.carc.top/api/v1" {
-		t.Fatalf("expected base_url https://godex.claw.carc.top/api/v1, got %q", provider.BaseURL)
+	if provider.BaseURL != "https://godex.example.com/api/v1" {
+		t.Fatalf("expected base_url https://godex.example.com/api/v1, got %q", provider.BaseURL)
 	}
 	if provider.APIKeyEnv != llmProxyKeyEnv {
 		t.Fatalf("expected api_key_env %q, got %q", llmProxyKeyEnv, provider.APIKeyEnv)
@@ -283,7 +283,7 @@ func TestRunNodeJoinLLMProxyPreservesExistingProviders(t *testing.T) {
 		t.Fatalf("seed provider: %v", err)
 	}
 	err := r.runNodeJoin(context.Background(), []string{
-		"https://godex.claw.carc.top",
+		"https://godex.example.com",
 		"--id", "my-laptop",
 		"--credential", "ck_test_abc123",
 		"--llm-proxy", "gdx_test_secret_key",
@@ -325,6 +325,11 @@ func TestRunNodeJoinLLMProxyAutoCreatesKey(t *testing.T) {
 				Key:    usage.ProxyAPIKey{ID: "k1", Name: req.Name, KeyPrefix: "gdx_"},
 				Secret: "gdx_auto_created_secret",
 			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/control/node-proxy-token":
+			if auth := r.Header.Get("Authorization"); auth != "Bearer web-token-123" {
+				t.Errorf("expected node-proxy-token call authenticated with web token, got auth %q", auth)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"node_proxy_token": "nk_test_proxy_123"})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/models":
 			if auth := r.Header.Get("Authorization"); !strings.HasPrefix(auth, "Bearer gdx_auto_created_secret") {
 				t.Errorf("expected models call authenticated with created key, got auth %q", auth)
@@ -389,7 +394,7 @@ func TestRunNodeJoinLLMProxyAutoCreatesKey(t *testing.T) {
 func TestRunNodeJoinLLMProxyAutoRequiresToken(t *testing.T) {
 	r, _, _ := newJoinRunner(t)
 	err := r.runNodeJoin(context.Background(), []string{
-		"https://godex.claw.carc.top",
+		"https://godex.example.com",
 		"--id", "my-laptop",
 		"--credential", "ck_test_abc123",
 		"--llm-proxy", "auto",
@@ -407,7 +412,7 @@ func TestRunNodeJoinLLMProxyAutoRequiresToken(t *testing.T) {
 func TestRunNodeJoinLLMProxyRejectsBadKey(t *testing.T) {
 	r, _, _ := newJoinRunner(t)
 	err := r.runNodeJoin(context.Background(), []string{
-		"https://godex.claw.carc.top",
+		"https://godex.example.com",
 		"--id", "my-laptop",
 		"--credential", "ck_test_abc123",
 		"--llm-proxy", "sk-not-a-gdx-key",

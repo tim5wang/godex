@@ -443,6 +443,9 @@ control:
   center_url: {{ yamlString .Control.CenterURL }}
   # Center web token used to reach other nodes through the center bridge. Environment override: GODEX_CONTROL_CENTER_TOKEN.
   center_token: {{ yamlString .Control.CenterToken }}
+  # Center-issued restricted credential (nk_...) that nodes use to reach the
+  # center's node proxy/forward surface without the full web token. Environment override: GODEX_CONTROL_NODE_PROXY_TOKEN.
+  node_proxy_token: {{ yamlString .Control.NodeProxyToken }}
   # Node credential issued by the center (ck_...). Prefer GODEX_CONTROL_CREDENTIAL in .env;
   # kept here so a config rewrite does not drop a value placed in YAML. Environment override: GODEX_CONTROL_CREDENTIAL.
   credential: {{ yamlString .Control.Credential }}

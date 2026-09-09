@@ -95,6 +95,12 @@ export function JoinCenterCard() {
       <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
         {t("nodes.joinCenterSubtitle")}
       </Typography.Paragraph>
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message={t("nodes.joinCenterTrustWarning")}
+      />
 
       {joined ? (
         <Typography.Paragraph style={{ marginBottom: 12 }}>
@@ -149,7 +155,10 @@ export function JoinCenterCard() {
           </Form.Item>
         </Form>
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          {t("nodes.forwardAllowHint")}
+          <span role="img" aria-label="hint">⚠️</span> {t("nodes.forwardAllowHint")}
+        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          <span role="img" aria-label="least">🔒</span> {t("nodes.forwardAllowLeastPrivilege")}
         </Typography.Paragraph>
       </div>
 

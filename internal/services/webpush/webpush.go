@@ -1,3 +1,9 @@
+// godex-feature: webpush
+// Web Push：VAPID 密钥管理、内存订阅注册表、标准 Web Push 协议通知；
+// 中心只中继实时事件，不持久化节点历史。
+// 入口：/push/* API、Web Push 订阅
+// 文档：docs/node-mesh-design.md、docs/node-center-bridge-design.md
+
 // Package webpush provides center-side Web Push support: VAPID key
 // management, an in-memory subscription registry, and notification sending
 // via the standard Web Push protocol. Subscriptions are intentionally NOT

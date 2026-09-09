@@ -18,7 +18,7 @@ func TestExecURL(t *testing.T) {
 		nodeID string
 		want   string
 	}{
-		{"https://godex.claw.carc.top", "node_a", "https://godex.claw.carc.top/api/control/nodes/node_a/proxy/v1/exec"},
+		{"https://godex.example.com", "node_a", "https://godex.example.com/api/control/nodes/node_a/proxy/v1/exec"},
 		{"http://127.0.0.1:3921", "n1", "http://127.0.0.1:3921/api/control/nodes/n1/proxy/v1/exec"},
 		{"http://127.0.0.1:3921/", "n1", "http://127.0.0.1:3921/api/control/nodes/n1/proxy/v1/exec"},
 	}

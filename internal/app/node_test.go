@@ -15,7 +15,7 @@ func TestForwardWSURL(t *testing.T) {
 		nodeID string
 		want   string
 	}{
-		{"https://godex.claw.carc.top", "node_a", "wss://godex.claw.carc.top/api/control/nodes/node_a/forward"},
+		{"https://godex.example.com", "node_a", "wss://godex.example.com/api/control/nodes/node_a/forward"},
 		{"http://127.0.0.1:3921", "n1", "ws://127.0.0.1:3921/api/control/nodes/n1/forward"},
 		{"http://127.0.0.1:3921/", "n1", "ws://127.0.0.1:3921/api/control/nodes/n1/forward"},
 		{"wss://hub.example.com/base", "n2", "wss://hub.example.com/base/api/control/nodes/n2/forward"},

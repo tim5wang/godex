@@ -59,7 +59,7 @@
 ```yaml
 control:
   node_name: local-project-a     # 本节点名字
-  center_url: https://godex.claw.carc.top  # 中心服务地址（可选，配置后自动注册+心跳）
+  center_url: https://godex.example.com  # 中心服务地址（可选，配置后自动注册+心跳）
   heartbeat_seconds: 15
   offline_after_seconds: 60
   nodes:                          # 手动声明的节点（可选）
@@ -128,7 +128,7 @@ control:
 ```
 ┌─────────────┐   HTTPS/WSS    ┌──────────────────────────────┐
 │  浏览器/CLI  │ ─────────────▶│        中心 godex（公网）      │
-│  (用户入口)  │                │  godex.claw.carc.top          │
+│  (用户入口)  │                │  godex.example.com          │
 └─────────────┘                │  - Web UI（含 Nodes app）     │
                                │  - Node Registry              │
 ┌─────────────┐   WSS 出站     │  - Relay Hub（新）             │

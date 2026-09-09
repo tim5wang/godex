@@ -12,7 +12,9 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/platform/idgen"
+	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/relay"
 )
 
 // selfJoinRequest is the node-side "join a center" form. The operator only
@@ -60,10 +62,20 @@ func registerSelfJoinRoute(mux *http.ServeMux, manager *config.Manager, protecte
 			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid node_id %q: use letters, digits, '_' or '-'", req.NodeID))
 			return
 		}
+		// Audit: node self-registration attempt (P0-2).
+		logger.Infof("audit self/join: caller=%s node=%s center=%s", r.RemoteAddr, req.NodeID, req.CenterURL)
 
 		// 1. Register with the center (web token auth), 2. get the per-node
-		// credential, 3. persist local config, 4. sync node.json.
+		// credential, 3. exchange the web token for the center's restricted node
+		// proxy credential (nk_...) so the node never persists the full web token,
+		// 4. persist local config, 5. sync node.json.
 		if err := registerWithCenter(r.Context(), &req); err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		var proxyToken string
+		proxyToken, err := exchangeSelfProxyToken(r.Context(), req.CenterURL, req.Token)
+		if err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
@@ -72,7 +84,7 @@ func registerSelfJoinRoute(mux *http.ServeMux, manager *config.Manager, protecte
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("write credential env: %w", err))
 			return
 		}
-		if err := manager.WriteHomeEnvVar("GODEX_CONTROL_CENTER_TOKEN", req.Token); err != nil {
+		if err := manager.WriteHomeEnvVar("GODEX_CONTROL_CENTER_TOKEN", proxyToken); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("write center token env: %w", err))
 			return
 		}
@@ -100,6 +112,24 @@ func registerSelfJoinRoute(mux *http.ServeMux, manager *config.Manager, protecte
 			"message":    fmt.Sprintf("node %q joined %s (trust=%s)", req.NodeID, req.CenterURL, req.TrustLevel),
 		})
 	})))
+}
+
+// exchangeSelfProxyToken exchanges the center's full web token for its
+// restricted node proxy credential (nk_...) via the center's
+// POST /control/node-proxy-token endpoint. The returned nk_ is what the node
+// persists as control.center_token, so the node never stores the full web token.
+func exchangeSelfProxyToken(ctx context.Context, centerURL, webToken string) (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	var out struct {
+		NodeProxyToken string `json:"node_proxy_token"`
+	}
+	if err := doCenterJSON(ctx, client, centerURL, "POST", "/control/node-proxy-token", webToken, nil, &out); err != nil {
+		return "", err
+	}
+	if out.NodeProxyToken == "" {
+		return "", fmt.Errorf("center returned empty node proxy token")
+	}
+	return out.NodeProxyToken, nil
 }
 
 // registerWithCenter registers the node and issues its per-node credential.
@@ -130,7 +160,33 @@ func registerWithCenter(ctx context.Context, req *selfJoinRequest) error {
 	return nil
 }
 
-// doCenterJSON performs one JSON request against the center's /api surface.
+// registerNodeProxyTokenRoute wires the center-side restricted credential
+// issuance endpoint. A joined node calls this with the full web token to obtain
+// the restricted nk_ credential it then stores as control.center_token; the nk_
+// only unlocks the node proxy/forward READ+PROXY surface, never the config /
+// sessions / files management API.
+func registerNodeProxyTokenRoute(mux *http.ServeMux, manager *config.Manager, protected func(http.Handler) http.Handler) {
+	mux.Handle("POST /control/node-proxy-token", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := strings.TrimSpace(manager.Current().Control.NodeProxyToken)
+		if current != "" {
+			writeJSON(w, http.StatusOK, map[string]string{"node_proxy_token": current})
+			return
+		}
+		proxyToken, err := relay.GenerateNodeProxyToken()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("generate node proxy token: %w", err))
+			return
+		}
+		if _, err := manager.Update(r.Context(), config.UpdateRequest{Values: map[string]any{
+			"control.node_proxy_token": proxyToken,
+		}}); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("persist node proxy token: %w", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"node_proxy_token": proxyToken})
+	})))
+}
+
 func doCenterJSON(ctx context.Context, client *http.Client, centerURL, method, path, token string, body []byte, out any) error {
 	base := strings.TrimRight(strings.TrimSpace(centerURL), "/")
 	if strings.HasSuffix(base, "/api") {

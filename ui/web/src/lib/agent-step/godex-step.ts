@@ -7,7 +7,7 @@
  * ```html
  * <script src="godex-step.js"></script>
  * <godex-step
- *   base-url="https://godex.claw.carc.top"
+ *   base-url="https://godex.example.com"
  *   api-key="biz_xxx"
  *   prompt="分析订单"
  * ></godex-step>

@@ -11,7 +11,7 @@ GoDex 部署到 `mycloud` 服务器的简化流程。服务安装、启动、重
 | 服务器 | `mycloud` |
 | 系统 | Ubuntu 24.04.4 LTS |
 | 部署目录 | `/opt/godex/` |
-| 域名 | `https://godex.claw.carc.top` |
+| 域名 | `https://godex.example.com` |
 | 端口 | `3801` |
 
 ## 快速更新
@@ -35,7 +35,7 @@ ssh mycloud "cd /opt/godex && mv godex godex-backup-${DATE_TAG} 2>/dev/null || t
 # 4. 验证
 ssh mycloud "/opt/godex/godex service status --scope system --name godex"
 ssh mycloud "ss -tlnp | grep 3801"
-curl -s -o /dev/null -w '%{http_code}\n' https://godex.claw.carc.top/
+curl -s -o /dev/null -w '%{http_code}\n' https://godex.example.com/
 ```
 
 ## 首次部署
@@ -56,7 +56,7 @@ ssh mycloud "/opt/godex/godex service start --scope system --name godex"
 
 # 3. 验证
 ssh mycloud "/opt/godex/godex service status --scope system --name godex"
-curl -s -o /dev/null -w '%{http_code}\n' https://godex.claw.carc.top/
+curl -s -o /dev/null -w '%{http_code}\n' https://godex.example.com/
 ```
 
 `service install` 会创建 systemd unit，并写入：

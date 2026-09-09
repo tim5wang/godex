@@ -20,7 +20,7 @@ import { createStepClient } from "./lib/agent-step"; // 或 godex 的 ui/web/src
 import { createStepClient, type UiCardData } from "./lib/agent-step";
 
 const step = createStepClient({
-  baseUrl: "https://godex.claw.carc.top", // godex 服务地址
+  baseUrl: "https://godex.example.com", // godex 服务地址
   apiKey: "biz_xxx",                      // 业务系统 key（/v1/biz/keys 创建）
 });
 

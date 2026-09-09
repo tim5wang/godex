@@ -4,25 +4,25 @@ import { buildJoinCommand, quoteForShell } from "./joinCommand";
 describe("buildJoinCommand", () => {
   it("emits the join command with defaults", () => {
     const cmd = buildJoinCommand({
-      centerURL: "https://godex.claw.carc.top",
+      centerURL: "https://godex.example.com",
       nodeID: "my-laptop",
       credential: "ck_a1b2c3",
     });
     expect(cmd).toBe(
-      "godex node join 'https://godex.claw.carc.top' --id my-laptop --credential ck_a1b2c3 --trust trusted",
+      "godex node join 'https://godex.example.com' --id my-laptop --credential ck_a1b2c3 --trust trusted",
     );
   });
 
   it("includes trust and name when provided", () => {
     const cmd = buildJoinCommand({
-      centerURL: "https://godex.claw.carc.top",
+      centerURL: "https://godex.example.com",
       nodeID: "my-laptop",
       credential: "ck_a1b2c3",
       trustLevel: "guarded-remote",
       name: "dev box",
     });
     expect(cmd).toBe(
-      "godex node join 'https://godex.claw.carc.top' --id my-laptop --credential ck_a1b2c3 --trust guarded-remote --name 'dev box'",
+      "godex node join 'https://godex.example.com' --id my-laptop --credential ck_a1b2c3 --trust guarded-remote --name 'dev box'",
     );
   });
 
@@ -37,7 +37,7 @@ describe("buildJoinCommand", () => {
 
   it("quotes a name containing a single quote safely", () => {
     const cmd = buildJoinCommand({
-      centerURL: "https://godex.claw.carc.top",
+      centerURL: "https://godex.example.com",
       nodeID: "n1",
       credential: "ck_x",
       name: "it's mine",

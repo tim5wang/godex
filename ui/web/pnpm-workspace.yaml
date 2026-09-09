@@ -1,0 +1,7 @@
+# 放行依赖的 postinstall 脚本
+# - allowBuilds: pnpm 11 语法
+# - onlyBuiltDependencies: pnpm 10 语法（11 仍兼容）
+allowBuilds:
+  esbuild: true
+onlyBuiltDependencies:
+  - esbuild

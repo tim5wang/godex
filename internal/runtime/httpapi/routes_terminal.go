@@ -105,7 +105,19 @@ func localTerminalCommand(workspaceDir string) (*exec.Cmd, string, error) {
 		if err != nil {
 			return nil, "", fmt.Errorf("resolve terminal workspace: %w", err)
 		}
-		workspaceDir = abs
+		// The requested workspace may be a remote node's path that does not
+		// exist locally (e.g. relay session with workspace_dir=/root on a
+		// macOS host). Fall back to the godex startup directory instead of
+		// failing to spawn the shell.
+		if info, statErr := os.Stat(abs); statErr != nil || !info.IsDir() {
+			if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+				workspaceDir = cwd
+			} else {
+				workspaceDir = abs
+			}
+		} else {
+			workspaceDir = abs
+		}
 	}
 
 	cmd := exec.Command(shell, shellArgs...)

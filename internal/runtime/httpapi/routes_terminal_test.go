@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +37,22 @@ func TestLocalTerminalEnvironmentPreservesHomeAndUsesWorkspacePWD(t *testing.T) 
 	}
 	if env["GODEX_CUSTOM_TERMINAL_ENV"] != "available" {
 		t.Fatalf("expected custom process environment to be inherited")
+	}
+}
+
+func TestLocalTerminalCommandFallsBackToCwdWhenWorkspaceMissing(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	missing := filepath.Join(cwd, "__definitely_missing_terminal_workspace__")
+
+	cmd, _, err := localTerminalCommand(missing)
+	if err != nil {
+		t.Fatalf("build local terminal command: %v", err)
+	}
+	if cmd.Dir != cwd {
+		t.Fatalf("expected fallback to startup dir %q, got %q", cwd, cmd.Dir)
 	}
 }
 

@@ -18,7 +18,7 @@ func (s *Service) Execute(ctx context.Context, a *agent.Agent, cmd Command) (Res
 	}
 	switch cmd.Name {
 	case "bash", "sh":
-		return s.executeLocalBash(ctx, cmd)
+		return s.executeLocalBash(ctx, a, cmd)
 	case "compact":
 		return s.executeCompact(a, cmd)
 	case "tasks":

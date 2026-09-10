@@ -322,30 +322,24 @@ func (s *Service) HelpText() string {
 }
 
 // Execute runs one normalized command.
-func (s *Service) executeLocalBash(ctx context.Context, cmd Command) (Result, error) {
+func (s *Service) executeLocalBash(ctx context.Context, a *agent.Agent, cmd Command) (Result, error) {
 	shellCommand, ok := localbash.ParseCommand(cmd.Raw)
 	if !ok {
 		return Result{}, fmt.Errorf("usage: /%s <shell command>", cmd.Name)
 	}
-	workspaceDir := s.cfg.WorkspaceDir
+	// Use the session agent's sandbox binding so /sh and /bash follow the
+	// same execution backend as the agent's bash tool — including
+	// exec_mode=relay:<node>, which must run on the remote node through the
+	// center tunnel instead of locally.
+	binding := a.SandboxBinding()
+	workspaceDir := binding.WorkspaceDir
 	if sessionCtx, ok := CurrentSessionContext(ctx); ok {
 		if dir := strings.TrimSpace(sessionCtx.Metadata["project_dir"]); dir != "" {
 			workspaceDir = dir
 		}
 	}
-	// Build execution config from the global tool execution settings so
-	// /sh and /bash respect mode=ssh / mode=docker just like the agent.
-	execution := tooling.ExecutionConfig{
-		Mode:               s.cfg.Tools.Execution.Mode,
-		DockerImage:        s.cfg.Tools.Execution.DockerImage,
-		DockerNetwork:      s.cfg.Tools.Execution.DockerNetwork,
-		SSHTarget:          s.cfg.Tools.Execution.SSHTarget,
-		SSHWorkspace:       s.cfg.Tools.Execution.SSHWorkspace,
-		SSHOptions:         append([]string{}, s.cfg.Tools.Execution.SSHOptions...),
-		ShellAllowPatterns: append([]string{}, s.cfg.Tools.Execution.ShellAllowPatterns...),
-		ShellDenyPatterns:  append([]string{}, s.cfg.Tools.Execution.ShellDenyPatterns...),
-	}
-	executor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspaceDir, "", execution)
+	execution := binding.Execution
+	executor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspaceDir, binding.TempDir, execution)
 	result := localbash.CollectWithExecutor(ctx, executor, shellCommand)
 	// Always return output (incl. stderr). Non-zero exit codes are
 	// not fatal — the caller sees the same messages a terminal user would.

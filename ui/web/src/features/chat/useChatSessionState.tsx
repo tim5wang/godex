@@ -313,6 +313,21 @@ export function useChatSessionState(layout: ChatLayoutState) {
     }
   }, [openQuery.data, sessionKey, setSession]);
 
+  // Relay sessions (exec_mode=relay:<node>) run bash/file/terminal tools on the
+  // remote node through the center tunnel. The terminal panel and node-scoped
+  // API client derive their relay target from useNodeContextStore.nodeID, so
+  // opening such a session must auto-select that node — otherwise terminal
+  // stays local and Files/Preview panels never route through the proxy.
+  useEffect(() => {
+    const execMode = openQuery.data?.locator?.metadata?.exec_mode ?? execModeParam;
+    if (execMode && execMode.startsWith("relay:")) {
+      const nodeID = execMode.slice("relay:".length).trim();
+      if (nodeID && nodeID !== useNodeContextStore.getState().nodeID) {
+        useNodeContextStore.getState().setNode(nodeID, nodeID);
+      }
+    }
+  }, [openQuery.data, execModeParam]);
+
   const snapshotQuery = useQuery({
     queryKey: ["snapshot", token, openQuery.data?.session_id],
     enabled: !!openQuery.data?.session_id && (!authRequired || !!token),

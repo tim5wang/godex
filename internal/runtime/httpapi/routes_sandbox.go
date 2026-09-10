@@ -48,6 +48,13 @@ func registerSandboxRoutes(mux *http.ServeMux, manager *config.Manager, protecte
 		if err != nil {
 			// Non-zero exit is not an error at the HTTP layer: the caller needs
 			// the bounded output (stdout/stderr) to reason about the failure.
+			// A start failure (shell missing / exec denied) surfaces as
+			// ExitCode=-1 with empty text; attach the real error so the
+			// calling side (RelayClient.Exec → bash tool) can diagnose it
+			// instead of a bare "[exit_code: -1]".
+			if strings.TrimSpace(out.Text) == "" && out.ExitCode < 0 {
+				out.Text = "sandbox exec start failed: " + err.Error()
+			}
 			writeJSON(w, http.StatusOK, out)
 			return
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,10 +37,7 @@ func registerSandboxRoutes(mux *http.ServeMux, manager *config.Manager, protecte
 			return
 		}
 		cfg := manager.Current()
-		workspace := strings.TrimSpace(req.Workspace)
-		if workspace == "" {
-			workspace = cfg.WorkspaceDir
-		}
+		workspace := resolveSandboxWorkspace(req.Workspace, cfg)
 		executor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspace, cfg.TempDir, tooling.ExecutionConfig{})
 		ctx, cancel := sandboxExecContext(r, req.TimeoutSeconds)
 		defer cancel()
@@ -63,10 +61,7 @@ func registerSandboxRoutes(mux *http.ServeMux, manager *config.Manager, protecte
 			return
 		}
 		cfg := manager.Current()
-		workspace := strings.TrimSpace(req.Workspace)
-		if workspace == "" {
-			workspace = cfg.WorkspaceDir
-		}
+		workspace := resolveSandboxWorkspace(req.Workspace, cfg)
 		fs, err := workspacefs.New(workspace)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -79,6 +74,33 @@ func registerSandboxRoutes(mux *http.ServeMux, manager *config.Manager, protecte
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
+}
+
+// resolveSandboxWorkspace picks the effective workspace directory for a
+// sandbox exec/fs operation on this node. An empty requested workspace falls
+// back to the configured workspace dir. A requested workspace that does not
+// exist on this node — e.g. a relay session carrying the caller's /root while
+// godex was started from a different directory — falls back to this node's
+// startup directory (os.Getwd), i.e. where `godex node join` was launched, so
+// exec/fs (Files) keep working instead of failing with a missing-directory
+// error.
+func resolveSandboxWorkspace(requested string, cfg *config.Config) string {
+	workspace := strings.TrimSpace(requested)
+	if workspace == "" {
+		return cfg.WorkspaceDir
+	}
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return cfg.WorkspaceDir
+	}
+	info, statErr := os.Stat(abs)
+	if statErr != nil || !info.IsDir() {
+		if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+			return cwd
+		}
+		return cfg.WorkspaceDir
+	}
+	return abs
 }
 
 // sandboxExecContext derives a context with the requested timeout (0 = no

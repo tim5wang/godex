@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
+// TestSandboxExecEndpoint verifies the B-side exec endpoint runs a shell
+// command in the workspace and returns the bounded output result.
 // TestSandboxExecEndpoint verifies the B-side exec endpoint runs a shell
 // command in the workspace and returns the bounded output result.
 func TestSandboxExecEndpoint(t *testing.T) {
@@ -43,6 +47,84 @@ func TestSandboxExecEndpoint(t *testing.T) {
 	}
 	if out.ExitCode != 0 {
 		t.Fatalf("exit_code = %d, want 0", out.ExitCode)
+	}
+}
+
+// TestSandboxExecFallsBackToStartupDir verifies that when the requested
+// workspace directory does not exist on this node (a relay session carrying
+// the caller's /root while godex was started from a different cwd), exec
+// falls back to the node's startup directory (os.Getwd) instead of failing.
+func TestSandboxExecFallsBackToStartupDir(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	mux := http.NewServeMux()
+	registerSandboxRoutes(mux, manager, func(h http.Handler) http.Handler { return h })
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	missing := filepath.Join(cwd, "__definitely_missing_sandbox_workspace__")
+	body := `{"command":"pwd","workspace":"` + missing + `"}`
+	resp, err := http.Post(server.URL+"/control/sandbox/exec", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data := make([]byte, 4096)
+		n, _ := resp.Body.Read(data)
+		t.Fatalf("exec status %d: %s", resp.StatusCode, strings.TrimSpace(string(data[:n])))
+	}
+	var out struct {
+		Text     string `json:"text"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode exec response: %v", err)
+	}
+	if out.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0 (stderr: %q)", out.ExitCode, out.Text)
+	}
+	if !strings.Contains(out.Text, cwd) {
+		t.Fatalf("exec pwd output = %q, want fallback cwd %q", out.Text, cwd)
+	}
+}
+
+// TestSandboxFSFallsBackToStartupDir verifies the fs endpoint also falls back
+// to the node startup directory when the requested workspace is missing.
+func TestSandboxFSFallsBackToStartupDir(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	mux := http.NewServeMux()
+	registerSandboxRoutes(mux, manager, func(h http.Handler) http.Handler { return h })
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	missing := filepath.Join(cwd, "__definitely_missing_sandbox_workspace__")
+	body := `{"op":"readdir","path":".","workspace":"` + missing + `"}`
+	resp, err := http.Post(server.URL+"/control/sandbox/fs", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("fs: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data := make([]byte, 4096)
+		n, _ := resp.Body.Read(data)
+		t.Fatalf("fs status %d: %s", resp.StatusCode, strings.TrimSpace(string(data[:n])))
+	}
+	var result fsOpResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode fs response: %v", err)
+	}
+	if len(result.Entries) == 0 {
+		t.Fatalf("readdir returned no entries, want fallback cwd listing")
 	}
 }
 

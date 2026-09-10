@@ -16,6 +16,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/platform/textutil"
+	"github.com/tim5wang/godex/internal/platform/tooling"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/version"
 )
@@ -197,9 +198,18 @@ func (a *Agent) environmentPromptInput() EnvironmentPromptInput {
 		shell = filepath.Base(shell)
 	}
 
+	workspaceDir := a.cfg.WorkspaceDir
+	// Relay sessions (exec_mode=relay:<node>) run their bash/file tools on a
+	// remote node through the center tunnel, not in this process's local
+	// directory. Show the remote node so the model does not mistake the local
+	// A-side path for where tools actually execute.
+	if binding := a.SandboxBinding(); binding.Execution.Mode == tooling.ExecutionModeRelay && binding.Execution.RelayNode != "" {
+		workspaceDir = "relay node " + binding.Execution.RelayNode
+	}
+
 	return EnvironmentPromptInput{
 		Version:      version.Current(),
-		WorkspaceDir: a.cfg.WorkspaceDir,
+		WorkspaceDir: workspaceDir,
 		SkillsDir:    a.cfg.SkillsDir,
 		StateDir:     a.cfg.StateDir,
 		TempDir:      a.cfg.TempDir,

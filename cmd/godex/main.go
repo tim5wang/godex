@@ -415,8 +415,17 @@ func main() {
 			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(cfg))
 			// The center also runs as its own node: requests targeting the self
 			// node are served locally (no relay round-trip), so the server can be
-			// operated from its own web UI.
-			proxy.SetLocalHandler(selfNode.ID, apiHandler)
+			// operated from its own web UI. These local-direct requests bypass the
+			// relay agent that normally injects X-Godex-Relay-Trusted, so inject
+			// the center's own web token here: sandbox/terminal endpoints behind
+			// `protected` then accept the session (the caller already passed
+			// nodeProxyAuthorize on the way in).
+			proxy.SetLocalHandler(selfNode.ID, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if token := strings.TrimSpace(manager.Current().WebToken); token != "" {
+					r.Header.Set("Authorization", "Bearer "+token)
+				}
+				apiHandler.ServeHTTP(w, r)
+			}))
 			// guarded-remote nodes require an explicit approval header on
 			// mutating requests; resolve trust level from the registry.
 			proxy.TrustLevel = func(nodeID string) string {

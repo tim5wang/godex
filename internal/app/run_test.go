@@ -271,6 +271,35 @@ func TestRunnerAskHarnessFlagAnnotatesEnvelope(t *testing.T) {
 	}
 }
 
+func TestRunnerAskExecModeAnnotatesLocator(t *testing.T) {
+	backend := &fakeBackend{}
+	runner := &Runner{
+		Cfg:     &config.Config{LeadName: "lead"},
+		Backend: backend,
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		Stdin:   strings.NewReader(""),
+		Now:     func() time.Time { return time.Unix(123, 0) },
+	}
+	if err := runner.Run(context.Background(), []string{"ask", "--exec-mode", "relay:node-abc", "hello"}); err != nil {
+		t.Fatalf("run ask: %v", err)
+	}
+	if len(backend.locators) != 1 {
+		t.Fatalf("expected one session open, got %d", len(backend.locators))
+	}
+	if got := backend.locators[0].Metadata["exec_mode"]; got != "relay:node-abc" {
+		t.Fatalf("locator exec_mode = %q, want relay:node-abc", got)
+	}
+}
+
+func TestApplyLocatorExecModeLocalIsSkipped(t *testing.T) {
+	loc := backend.SessionLocator{}
+	applyLocatorExecMode(&loc, "local")
+	if loc.Metadata != nil {
+		t.Fatalf("local exec_mode should be left untouched, got metadata %+v", loc.Metadata)
+	}
+}
+
 func TestConsolePrinterRendersTodoListUpdated(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	printer := newConsolePrinter(stdout, &bytes.Buffer{}, false)

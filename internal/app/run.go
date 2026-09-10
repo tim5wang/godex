@@ -295,11 +295,13 @@ func (r *Runner) runAsk(ctx context.Context, args []string) error {
 	var profile string
 	var skillsCSV string
 	var harness string
+	var execMode string
 	fs.StringVar(&sessionSpec, "session", "", "existing session key or channel:key")
 	fs.BoolVar(&useStdin, "stdin", false, "read the prompt from stdin")
 	fs.StringVar(&profile, "profile", "", "agent profile for this prompt: general or coding")
 	fs.StringVar(&skillsCSV, "skills", "", "comma-separated installed skills to load for this new session")
 	fs.StringVar(&harness, "harness", "", "agent engine for this prompt, for example godex or acp:pi")
+	fs.StringVar(&execMode, "exec-mode", "", "execution mode for this session: local | docker | ssh | relay:<node_id>")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -325,6 +327,7 @@ func (r *Runner) runAsk(ctx context.Context, args []string) error {
 	locator := parseSessionSpecifier(sessionSpec, "cli", oneShotKey(r.Now()))
 	applyLocatorAgentProfile(&locator, profile)
 	applyLocatorRequestedSkills(&locator, skillsCSV)
+	applyLocatorExecMode(&locator, execMode)
 	opened, err := r.Backend.OpenSession(ctx, locator)
 	if err != nil {
 		return err
@@ -458,8 +461,10 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 
 	var sessionSpec string
 	var profile string
+	var execMode string
 	fs.StringVar(&sessionSpec, "session", "", "session key or channel:key")
 	fs.StringVar(&profile, "profile", "", "agent profile for this TUI session: general or coding")
+	fs.StringVar(&execMode, "exec-mode", "", "execution mode for this session: local | docker | ssh | relay:<node_id>")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -476,6 +481,7 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 		profile = r.Cfg.DefaultAgentProfileForChannel("tui")
 	}
 	applyLocatorAgentProfile(&locator, profile)
+	applyLocatorExecMode(&locator, execMode)
 	return r.RunTUI(ctx, locator)
 }
 
@@ -1444,6 +1450,22 @@ func applyLocatorRequestedSkills(locator *backend.SessionLocator, skillsCSV stri
 		locator.Metadata = map[string]string{}
 	}
 	locator.Metadata["requested_skills"] = skillsCSV
+}
+
+// applyLocatorExecMode folds a unified execution mode picker value
+// (local / docker / ssh / relay:<node_id>) into the session locator
+// metadata so the backend can pin where bash/file tools run for this
+// session (docs/remote-sandbox-design.md). Empty value is left untouched
+// (local execution).
+func applyLocatorExecMode(locator *backend.SessionLocator, execMode string) {
+	execMode = strings.TrimSpace(execMode)
+	if execMode == "" || strings.EqualFold(execMode, "local") {
+		return
+	}
+	if locator.Metadata == nil {
+		locator.Metadata = map[string]string{}
+	}
+	locator.Metadata["exec_mode"] = execMode
 }
 
 func applyEnvelopeAgentProfile(envelope *message.Envelope, profile string) {

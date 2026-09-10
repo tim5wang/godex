@@ -3819,6 +3819,33 @@ func TestOpenSessionRejectsInvalidWorkspaceDir(t *testing.T) {
 	}
 }
 
+// TestOpenSessionRelaySkipsLocalWorkspaceDirCheck asserts that a NEW relay
+// session (exec_mode=relay:<node>) opens successfully even when its
+// workspace_dir does not exist on the A-side machine: that directory is the
+// REMOTE sandbox node's workspace path, so requiring it locally would make
+// every relay session unopenable (regression: new-chat picker choosing a
+// relay node left the composer disabled because POST /sessions failed).
+func TestOpenSessionRelaySkipsLocalWorkspaceDirCheck(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+
+	missing := filepath.Join(cfg.WorkspaceDir, "does-not-exist-remote-workspace")
+	opened, err := service.OpenSession(context.Background(), SessionLocator{
+		Channel: "web",
+		Key:     "relay-session",
+		Metadata: map[string]string{
+			sessionProjectDirMetadataKey:   missing,
+			sessionExecutionModeMetadataKey: "relay:node-remote",
+		},
+	})
+	if err != nil {
+		t.Fatalf("relay session with remote workspace_dir should open locally: %v", err)
+	}
+	if opened.SessionID == "" {
+		t.Fatal("expected a session id")
+	}
+}
+
 // TestOpenSessionAllowsDeletedWorkspaceDirForPersistedSession asserts that a
 // session already persisted on disk can still be reopened after its
 // project_dir was deleted (e.g. an ACP temp cwd), instead of failing with

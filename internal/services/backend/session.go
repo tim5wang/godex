@@ -254,8 +254,13 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 	}
 
 	// New sessions must point at a real directory; a persisted session may
-	// tolerate a project_dir whose backing directory no longer exists.
-	if projectDir != "" && !s.sessionPersisted(sessionID) {
+	// tolerate a project_dir whose backing directory no longer exists. A
+	// relay session's project_dir is the REMOTE sandbox node's workspace
+	// path, which does not exist on this (A-side) machine — skip the local
+	// existence check for relay sessions (docs/remote-sandbox-design.md).
+	mode := strings.TrimSpace(locator.Metadata[sessionExecutionModeMetadataKey])
+	relaySession := strings.HasPrefix(mode, "relay:")
+	if projectDir != "" && !s.sessionPersisted(sessionID) && !relaySession {
 		if info, err := os.Stat(projectDir); err != nil {
 			return nil, fmt.Errorf("%w %q: %v", ErrInvalidWorkspaceDir, projectDir, err)
 		} else if !info.IsDir() {

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -263,12 +264,19 @@ func (m *terminalManager) createWithPipes(cmd *exec.Cmd, _ string) (*terminalSes
 }
 
 // resolveShell picks bash, falling back to sh with -i for PTY.
+//
+// On Android the bundled busybox rarely ships a bash applet, so defaulting to
+// bash makes the terminal fail with "applet not found"; prefer sh there.
 func resolveShell() (string, []string) {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
-		shell = "bash"
-		if _, err := exec.LookPath(shell); err != nil {
+		if runtime.GOOS == "android" {
 			shell = "sh"
+		} else {
+			shell = "bash"
+			if _, err := exec.LookPath(shell); err != nil {
+				shell = "sh"
+			}
 		}
 	}
 	// With PTY we pass -i to get interactive behavior (prompts, job control).

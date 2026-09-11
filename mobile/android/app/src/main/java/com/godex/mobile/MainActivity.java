@@ -63,13 +63,21 @@ public class MainActivity extends BridgeActivity {
     private static final String NATIVE_BUSYBOX = "libbusybox.so";
     private static final String NATIVE_GIT = "libgit.so";
     private static final String NATIVE_GIT_HTTPS = "libgitremotehttps.so";
-    /** busybox 常用 applet 名：在可写目录建符号链接指向 nativeLibraryDir/libbusybox.so。 */
+    /** busybox 常用 applet 名：在可写目录建符号链接指向 nativeLibraryDir/libbusybox.so。
+     *  注意：busybox（EXALAB 静态版）没有编译 bash applet，不建 bash 链接，
+     *  否则 exec bash 报 "applet not found"（terminal 面板 resolveShell 在
+     *  Android 上已回退 sh）。 */
     private static final String[] BUSYBOX_APPLETS = {
-            "sh", "ash", "bash", "hush",
+            "sh", "ash", "hush",
             "grep", "sed", "awk", "find", "cat", "ls", "cp", "mv", "rm", "mkdir",
             "chmod", "chown", "echo", "printf", "test", "xargs", "wc", "head",
             "tail", "sort", "uniq", "date", "env", "which", "true", "false",
             "touch", "pwd", "dd", "tar", "unzip", "wget", "kill", "mount", "ps"
+    };
+    /** git 传输 helper：git clone/fetch 通过 PATH 找 git-upload-pack 等，缺则报
+     *  "git-upload-pack: inaccessible or not found"。均链接 libgit.so。 */
+    private static final String[] GIT_HELPERS = {
+            "git-upload-pack", "git-receive-pack", "git-upload-archive"
     };
     private static final int DEFAULT_PORT = 17889;
     private static final String KEY_TOKEN = "godex_token";
@@ -234,6 +242,9 @@ public class MainActivity extends BridgeActivity {
             }
         }
         symlinkTo(libDir, NATIVE_GIT, new File(runtimeDir, "git"));
+        for (String helper : GIT_HELPERS) {
+            symlinkTo(libDir, NATIVE_GIT, new File(runtimeDir, helper));
+        }
         symlinkTo(libDir, NATIVE_GIT_HTTPS, new File(runtimeDir, "git-remote-https"));
         return runtimeDir;
     }

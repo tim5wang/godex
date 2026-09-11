@@ -4,13 +4,22 @@ package tooling
 
 import (
 	"os/exec"
+	"runtime"
 	"syscall"
 )
 
 // configureCommandProcessGroup places the child in its own process group so
 // the whole tree can be killed together (POSIX process groups).
+//
+// Android seccomp (notably MIUI/HyperOS) blocks setpgid(2): cmd.Start() then
+// fails with SIGSYS ("bad system call") and every shell command reports
+// ExitCode=-1. Skip process-group setup on Android; killCommandProcessGroup
+// still falls back to killing the direct child on cancellation.
 func configureCommandProcessGroup(cmd *exec.Cmd) error {
 	if cmd == nil {
+		return nil
+	}
+	if runtime.GOOS == "android" {
 		return nil
 	}
 	if cmd.SysProcAttr == nil {

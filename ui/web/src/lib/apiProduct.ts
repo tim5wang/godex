@@ -257,22 +257,22 @@ export interface FileReadResponse {
   size: number;
 }
 
-export function listFiles(token: string | null, dir?: string, root?: string) {
+export function listFiles(token: string | null, dir?: string, root?: string, relayNode?: string) {
   const search = new URLSearchParams();
   search.set("dir", dir ?? ".");
   if (root?.trim()) {
     search.set("root", root.trim());
   }
-  return request<{ items: FileEntry[] }>(`/files/list?${search.toString()}`, { method: "GET" }, token);
+  return request<{ items: FileEntry[] }>(`${relayPrefix(relayNode)}/files/list?${search.toString()}`, { method: "GET" }, token);
 }
 
-export function readFile(token: string | null, path: string, root?: string) {
+export function readFile(token: string | null, path: string, root?: string, relayNode?: string) {
   const search = new URLSearchParams();
   search.set("path", path);
   if (root?.trim()) {
     search.set("root", root.trim());
   }
-  return request<FileReadResponse>(`/files/read?${search.toString()}`, { method: "GET" }, token);
+  return request<FileReadResponse>(`${relayPrefix(relayNode)}/files/read?${search.toString()}`, { method: "GET" }, token);
 }
 
 export interface GitDiffResponse {
@@ -294,9 +294,9 @@ export function gitDiff(token: string | null, path: string, root?: string) {
   return request<GitDiffResponse>(`/git/diff?${search.toString()}`, { method: "GET" }, token);
 }
 
-export function writeFile(token: string | null, path: string, content: string, root?: string) {
+export function writeFile(token: string | null, path: string, content: string, root?: string, relayNode?: string) {
   return request<{ path: string; size: number }>(
-    "/files/write",
+    `${relayPrefix(relayNode)}/files/write`,
     {
       method: "PUT",
       body: JSON.stringify({ path, content, ...(root?.trim() ? { root: root.trim() } : {}) }),
@@ -305,18 +305,18 @@ export function writeFile(token: string | null, path: string, content: string, r
   );
 }
 
-export function deleteFile(token: string | null, path: string, root?: string) {
+export function deleteFile(token: string | null, path: string, root?: string, relayNode?: string) {
   const search = new URLSearchParams();
   search.set("path", path);
   if (root?.trim()) {
     search.set("root", root.trim());
   }
-  return request<void>(`/files?${search.toString()}`, { method: "DELETE" }, token);
+  return request<void>(`${relayPrefix(relayNode)}/files?${search.toString()}`, { method: "DELETE" }, token);
 }
 
-export function mkdirFile(token: string | null, path: string, root?: string) {
+export function mkdirFile(token: string | null, path: string, root?: string, relayNode?: string) {
   return request<{ path: string }>(
-    "/files/mkdir",
+    `${relayPrefix(relayNode)}/files/mkdir`,
     {
       method: "POST",
       body: JSON.stringify({ path, ...(root?.trim() ? { root: root.trim() } : {}) }),
@@ -325,9 +325,9 @@ export function mkdirFile(token: string | null, path: string, root?: string) {
   );
 }
 
-export function renameFile(token: string | null, from: string, to: string, root?: string) {
+export function renameFile(token: string | null, from: string, to: string, root?: string, relayNode?: string) {
   return request<{ from: string; to: string }>(
-    "/files/rename",
+    `${relayPrefix(relayNode)}/files/rename`,
     {
       method: "POST",
       body: JSON.stringify({ from, to, ...(root?.trim() ? { root: root.trim() } : {}) }),
@@ -342,12 +342,20 @@ export interface FileSearchResult {
   size: number;
 }
 
-export function searchFiles(token: string | null, query: string, mode: "name" | "content", root?: string) {
+export function searchFiles(token: string | null, query: string, mode: "name" | "content", root?: string, relayNode?: string) {
   const params = new URLSearchParams();
   params.set("q", query);
   params.set("mode", mode);
   if (root?.trim()) params.set("root", root.trim());
-  return request<{ items: FileSearchResult[] }>(`/files/search?${params.toString()}`, { method: "GET" }, token);
+  return request<{ items: FileSearchResult[] }>(`${relayPrefix(relayNode)}/files/search?${params.toString()}`, { method: "GET" }, token);
+}
+
+/**
+ * Center-proxy prefix for node-scoped file operations (session exec_mode =
+ * relay:<node>). Empty when the request targets the local center.
+ */
+function relayPrefix(relayNode?: string): string {
+  return relayNode ? `/api/control/nodes/${encodeURIComponent(relayNode)}/proxy` : "";
 }
 
 // ---- Agent Step Platform: Business Agents (biz keys) API ----

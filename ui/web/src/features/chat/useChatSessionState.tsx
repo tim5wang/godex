@@ -252,7 +252,16 @@ export function useChatSessionState(layout: ChatLayoutState) {
 
   // Build execution config for terminal — derives from /meta which now
   // carries tools.execution.* settings. Falls back to local mode.
+  // Session-level exec_mode=relay:<node> wins: only the terminal (a tool)
+  // is routed through the center proxy to the remote node; the agent loop
+  // itself stays local (no global nodeContext is touched).
   const terminalExecution = useMemo<TerminalExecutionConfig>(() => {
+    const sessionExecMode =
+      openQuery.data?.locator?.metadata?.exec_mode?.trim() || execModeParam;
+    if (sessionExecMode?.startsWith("relay:")) {
+      const relayNode = sessionExecMode.slice("relay:".length).trim();
+      if (relayNode) return { mode: "relay", relayNode };
+    }
     const mode = metaQuery.data?.execution_mode;
     if (!mode || mode === "local") return {};
     return {
@@ -263,7 +272,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
       dockerImage: metaQuery.data?.docker_image ?? undefined,
       dockerNetwork: metaQuery.data?.docker_network ?? undefined,
     };
-  }, [metaQuery.data]);
+  }, [metaQuery.data, openQuery.data?.locator?.metadata?.exec_mode, execModeParam]);
 
   const noteContextQuery = useQuery({
     queryKey: ["note-context", token, noteContextId],

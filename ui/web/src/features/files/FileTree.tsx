@@ -9,6 +9,9 @@ import { writeClipboardText } from "../../lib/clipboard";
 
 interface FileTreeProps {
   workspaceRoot: string;
+  /** Session-scoped relay target (exec_mode=relay:<node>); file ops go through
+   * the center proxy to that node. Empty = local center. */
+  relayNode?: string;
   selectedPath: string | null;
   onSelectFile: (path: string) => void;
   onUnsavedPrompt: (path: string) => Promise<"save" | "discard" | "cancel">;
@@ -56,6 +59,7 @@ function buildTreeNodes(entries: FileEntry[], parentPath: string): DataNode[] {
 
 export default function FileTree({
   workspaceRoot,
+  relayNode,
   selectedPath,
   onSelectFile,
   onUnsavedPrompt,
@@ -81,7 +85,7 @@ export default function FileTree({
     async (dir: string) => {
       setLoading(true);
       try {
-        const res = await listFiles(token, dir, workspaceRoot);
+        const res = await listFiles(token, dir, workspaceRoot, relayNode);
         setLoadedDirs((prev) => new Set(prev).add(dir));
         const nodes = buildTreeNodes(res.items, dir);
         setTreeData((prev) => {
@@ -94,7 +98,7 @@ export default function FileTree({
         setLoading(false);
       }
     },
-    [token, workspaceRoot],
+    [token, workspaceRoot, relayNode],
   );
 
   useEffect(() => {

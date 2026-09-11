@@ -403,6 +403,7 @@ pnpm -C ui/web build
 
 - 文件树浏览、代码编辑器、diff 查看
 - 文件创建/编辑/删除/重命名/搜索（经 `/files/*` API，受 workspace 边界约束）
+- **relay 会话**（新建对话执行模式选 `relay:<node>`）：Files 面板展示**执行节点**工作目录的文件（请求经中心 `/control/nodes/{id}/proxy` 转发到远端节点，root 由节点自身 workspace 解析），不再是本机目录。
 
 ### Settings
 
@@ -430,6 +431,8 @@ Nodes 是只读 Control Plane Dashboard，展示当前中心服务已知的 GoDe
 - 远程 Chat / Terminal / Files 面板（经 relay 代理）
 
 当前阶段不做跨 node session 聚合；远程写操作按信任级别（trusted / guarded-remote）决定是否审批。
+
+**relay 会话与节点详情页远程模式的差别**：在 Chat 新建对话选择 `relay:<node>` 时，**agent loop（LLM/会话提交）仍留在本机**，只有工具（bash / Terminal / Files）经中心 proxy 转发到执行节点；而节点详情页「打开远程模式」会把整个 Web UI（含 chat/LLM provider）切到该节点。前者适合「本机起对话、远端执行」，后者适合「整机接管该节点」。
 
 ### Notes
 

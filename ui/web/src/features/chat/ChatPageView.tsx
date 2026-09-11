@@ -728,7 +728,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
               <div className="chat-v2-dock-pane-body" data-active-tab={v2ActiveDockTab}>
                 {mountedDockTabs.has("files") ? (
                   <div className="chat-v2-dock-tab-pane" data-active={v2ActiveDockTab === "files" ? "true" : "false"}>
-                    <FilesPanel mode="dock" cwd={sessionWorkspaceDir} fillContainer focusPath={filesFocusPath} onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
+                    <FilesPanel mode="dock" cwd={sessionWorkspaceDir} relayNode={terminalExecution?.relayNode} fillContainer focusPath={filesFocusPath} onAttachFile={(file) => setQueuedComposerFiles((current) => [...current, file])} />
                   </div>
                 ) : null}
                 {mountedDockTabs.has("terminal") ? (

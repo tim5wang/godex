@@ -40,6 +40,9 @@ export type FilesPanelProps = {
   mode: "dock" | "page";
   /** Initial directory to show in the tree. Defaults to "." */
   cwd?: string;
+  /** Session-scoped relay target (exec_mode=relay:<node>); file ops go
+   * through the center proxy to that node. Empty = local center. */
+  relayNode?: string;
   /** Optional currently-selected file path (highlights in tree + shows in preview). */
   selectedPath?: string;
   /** Notify parent when the user picks a different file in the tree. */
@@ -71,6 +74,12 @@ function FilesPanelPageHost({ children }: { children?: React.ReactNode }) {
 function FilesPanelDock(props: FilesPanelProps) {
   const { t } = useI18n();
   const token = useSettingsStore((state) => state.token);
+  const relayNode = props.relayNode;
+  // Relay sessions run tools on the remote node: the A-side cwd (a local
+  // path) does not exist there, so pass an empty root and let the node
+  // resolve its own workspace (resolveFileRootFromParam falls back to the
+  // node's workspace_dir). Non-relay sessions keep the caller's cwd.
+  const cwd = relayNode ? "" : (props.cwd ?? ".");
   const layoutCollapsed = useLayoutStore((state) => state.panels.files.collapsed);
   const layoutWidth = useLayoutStore((state) => state.panels.files.width ?? 320);
   const setWidth = useLayoutStore((state) => state.setWidth);
@@ -118,7 +127,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     searchTimerRef.current = setTimeout(async () => {
       setSearchLoading(true);
       try {
-        const res = await searchFiles(token || null, search, searchMode, props.cwd ?? ".");
+        const res = await searchFiles(token || null, search, searchMode, cwd, relayNode);
         if (!cancelled) setSearchResults(res.items);
       } catch {
         if (!cancelled) setSearchResults([]);
@@ -128,7 +137,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     }, 300);
     let cancelled = false;
     return () => { cancelled = true; if (searchTimerRef.current) { clearTimeout(searchTimerRef.current); searchTimerRef.current = null; } };
-  }, [search, searchMode, token, props.cwd]);
+  }, [search, searchMode, token, cwd, relayNode]);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -141,7 +150,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     setPreviewLoading(true);
     setPreviewError("");
     setEditedContent(null);
-    readFile(token || null, selectedPath, props.cwd ?? ".")
+    readFile(token || null, selectedPath, cwd, relayNode)
       .then((result) => {
         if (cancelled) return;
         setPreviewContent(result.content);
@@ -157,7 +166,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [props.cwd, selectedPath, token, previewReloadKey]);
+  }, [cwd, selectedPath, token, previewReloadKey, relayNode]);
 
   const attachSelected = () => {
     if (!selectedPath || !props.onAttachFile) return;
@@ -170,7 +179,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     if (!name) return;
     void (async () => {
       try {
-        await mkdirFile(token || null, targetDir + "/" + name, props.cwd ?? ".");
+        await mkdirFile(token || null, targetDir + "/" + name, cwd, relayNode);
         setRefreshKey((k) => k + 1);
         message.success(t("files.folderCreated") || "Folder created");
       } catch (e: any) {
@@ -184,7 +193,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     if (!name) return;
     void (async () => {
       try {
-        await writeFile(token || null, targetDir + "/" + name, "", props.cwd ?? ".");
+        await writeFile(token || null, targetDir + "/" + name, "", cwd, relayNode);
         setRefreshKey((k) => k + 1);
         message.success(t("files.fileCreated") || "File created");
       } catch (e: any) {
@@ -212,7 +221,7 @@ function FilesPanelDock(props: FilesPanelProps) {
       const dir = storedDir ?? (selectedPath && !selectedPath.endsWith("/") ? parentDir(selectedPath) : (selectedPath || "."));
       const form = new FormData();
       form.append("file", file);
-      const url = `/api/files/upload?token=${encodeURIComponent(token || "")}&path=${encodeURIComponent(dir)}&root=${encodeURIComponent(props.cwd ?? ".")}`;
+      const url = `${relayProxyPrefix(relayNode)}/files/upload?token=${encodeURIComponent(token || "")}&path=${encodeURIComponent(dir)}&root=${encodeURIComponent(cwd)}`;
       const resp = await fetch(url, { method: "POST", body: form });
       if (!resp.ok) throw new Error(await resp.text());
       setRefreshKey((k) => k + 1);
@@ -228,7 +237,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     if (!selectedPath || editedContent === null) return;
     setSaving(true);
     try {
-      await writeFile(token || null, selectedPath, editedContent, props.cwd ?? ".");
+      await writeFile(token || null, selectedPath, editedContent, cwd, relayNode);
       setPreviewContent(editedContent);
       setEditedContent(null);
       message.success(t("files.saved") || "Saved");
@@ -248,7 +257,7 @@ function FilesPanelDock(props: FilesPanelProps) {
       cancelText: t("files.cancel") || "Cancel",
       onOk: async () => {
         try {
-          await deleteFile(token || null, path, props.cwd ?? ".");
+          await deleteFile(token || null, path, cwd, relayNode);
           if (selectedPath === path) { setSelectedPath(undefined); setPreviewContent(""); setEditedContent(null); }
           setRefreshKey((k) => k + 1);
         } catch (e: any) {
@@ -263,7 +272,7 @@ function FilesPanelDock(props: FilesPanelProps) {
     if (!newName || newName === path.split("/").pop()) return;
     const to = parentDir(path) + "/" + newName;
     try {
-      await renameFile(token || null, path, to, props.cwd ?? ".");
+      await renameFile(token || null, path, to, cwd, relayNode);
       if (selectedPath === path) setSelectedPath(to);
       setRefreshKey((k) => k + 1);
     } catch (e: any) {
@@ -399,7 +408,8 @@ function FilesPanelDock(props: FilesPanelProps) {
               saving={saving}
               onContentChange={setEditedContent}
               token={token}
-              cwd={props.cwd ?? "."}
+              cwd={cwd}
+              relayNode={relayNode}
               t={t}
             />
           </div>
@@ -418,7 +428,8 @@ function FilesPanelDock(props: FilesPanelProps) {
               style={{ height: "100%", width: treeWidth, minWidth: 80, overflow: "auto", borderRight: "1px solid var(--border)", flexShrink: 0 }}
             >
               <FileTree
-                workspaceRoot={props.cwd ?? "."}
+                workspaceRoot={cwd}
+                relayNode={relayNode}
                 selectedPath={selectedPath ?? null}
                 searchQuery={search}
                 searchResults={searchResults}
@@ -485,7 +496,8 @@ function FilesPanelDock(props: FilesPanelProps) {
               saving={saving}
               onContentChange={setEditedContent}
               token={token}
-              cwd={props.cwd ?? "."}
+              cwd={cwd}
+              relayNode={relayNode}
               t={t}
             />
             </div>
@@ -494,6 +506,13 @@ function FilesPanelDock(props: FilesPanelProps) {
       </div>
     </div>
   );
+}
+
+/** Center-proxy prefix for node-scoped file ops (exec_mode=relay:<node>).
+ * The center strips /control/nodes/{id}/proxy before forwarding, so the
+ * remainder must match the node's own httpapi routes (no /api prefix). */
+function relayProxyPrefix(relayNode?: string): string {
+  return relayNode ? `/api/control/nodes/${encodeURIComponent(relayNode)}/proxy` : "";
 }
 
 function parentDir(path: string): string {
@@ -514,13 +533,15 @@ function FilePreview(props: {
   onContentChange?: (content: string) => void;
   token?: string | null;
   cwd?: string;
+  relayNode?: string;
   t: (key: string) => string;
 }) {
   const isMarkdown = isMarkdownPath(props.selectedPath);
   const [viewMode, setViewMode] = useState<"source" | "render" | "diff">("source");
-  // Rewrite relative image srcs in markdown to the preview static route so
-  // workspace images render with auth (img tags cannot attach an Authorization
-  // header, so the token is passed as a query param).
+  // Rewrite relative image srcs to the preview static route so workspace
+  // images render with auth (img tags cannot attach an Authorization header,
+  // so the token is passed as a query param). Relay sessions route through
+  // the center proxy to the remote node.
   const resolveImageUrl = useMemo(() => {
     if (!props.token || !props.selectedPath) return undefined;
     const dir = parentDir(props.selectedPath);
@@ -530,9 +551,9 @@ function FilePreview(props: {
       const rel = src.startsWith("/") ? src.slice(1) : dir === "." ? src : `${dir}/${src}`;
       const params = new URLSearchParams({ token: props.token ?? "", root });
       const encoded = rel.split("/").map(encodeURIComponent).join("/");
-      return `/api/preview/static/${encoded}${params.toString() ? `?${params.toString()}` : ""}`;
+      return `${relayProxyPrefix(props.relayNode)}/preview/static/${encoded}${params.toString() ? `?${params.toString()}` : ""}`;
     };
-  }, [props.token, props.selectedPath, props.cwd]);
+  }, [props.token, props.selectedPath, props.cwd, props.relayNode]);
   const diffText =
     props.editedContent != null && props.editedContent !== props.previewContent
       ? computeLineDiff(props.previewContent, props.editedContent)
@@ -544,8 +565,8 @@ function FilePreview(props: {
   const binaryKind = getBinaryPreviewKind(props.selectedPath);
   const binaryUrl = useMemo(() => {
     if (!binaryKind || !props.selectedPath) return "";
-    return buildPreviewStaticUrl(props.selectedPath, props.cwd ?? ".", props.token);
-  }, [binaryKind, props.selectedPath, props.cwd, props.token]);
+    return buildPreviewStaticUrl(props.selectedPath, props.cwd ?? ".", props.token, props.relayNode);
+  }, [binaryKind, props.selectedPath, props.cwd, props.token, props.relayNode]);
   const [binaryFailed, setBinaryFailed] = useState(false);
   useEffect(() => {
     setBinaryFailed(false);
@@ -692,13 +713,13 @@ function getBinaryPreviewKind(path?: string): BinaryPreviewKind | null {
 }
 
 /** Build a token-authenticated URL for the /api/preview/static route. */
-function buildPreviewStaticUrl(path: string, cwd: string, token?: string | null): string {
+function buildPreviewStaticUrl(path: string, cwd: string, token?: string | null, relayNode?: string): string {
   const rel = path.split("/").map(encodeURIComponent).join("/");
   const params = new URLSearchParams();
   if (token) params.set("token", token);
   if (cwd && cwd !== ".") params.set("root", cwd);
   const qs = params.toString();
-  return `/api/preview/static/${rel}${qs ? `?${qs}` : ""}`;
+  return `${relayProxyPrefix(relayNode)}/preview/static/${rel}${qs ? `?${qs}` : ""}`;
 }
 
 function BinaryPreview(props: {

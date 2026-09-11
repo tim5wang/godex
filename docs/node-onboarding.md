@@ -126,6 +126,7 @@ godex node join 'https://center' --id pod-b --credential ck_xxx --trust guarded-
 - **持久数据**（可选）：挂持久卷的 pod 可加 `--data-dir <持久卷路径>`，state/sessions/memory 落到该卷下；未挂卷时重跑命令 = 全新执行环境，A 的会话历史不受影响（会话在 A）。
 - **中心侧生成**：「节点」页「接入新节点」卡片勾选「执行沙箱」后生成的命令自动带 `--sandbox-exec-on`。
 - **A 侧使用**：新建对话时执行模式下拉选择该节点（`relay:pod-b`），该会话的 bash/文件工具即在 B 上执行；普通节点不会出现在执行模式下拉里（需在线且声明为沙箱）。
+- **面板行为**：relay 会话右侧的 Terminal / Files 面板同样经中心 proxy 落到执行节点 B——终端 shell 在 B 上、文件树展示 B 的 workspace（`/workspace` 等），与 agent 工具执行地一致；agent loop（LLM/会话提交）仍留在 A。
 
 ---
 

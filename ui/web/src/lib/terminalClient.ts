@@ -47,12 +47,14 @@ type TerminalState = {
 
 const terminals = new Map<string, TerminalState>();
 
-function getBaseUrl(): string {
+function getBaseUrl(relayNode?: string): string {
   // In dev the Vite proxy forwards /v1 to the Go backend.
   // In production the Go backend serves the API at the same origin.
   // When a remote node is active, terminal traffic goes through the center
   // proxy so the browser talks to the node's local PTY.
-  const nodeID = useNodeContextStore.getState().nodeID;
+  // Prefer the session-scoped relay target (from exec_mode), falling back to
+  // the global node context (node-detail remote mode).
+  const nodeID = relayNode || useNodeContextStore.getState().nodeID;
   if (nodeID) {
     return `/api/control/nodes/${encodeURIComponent(nodeID)}/proxy`;
   }
@@ -160,6 +162,9 @@ function flushPendingInput(terminalId: string): void {
  */
 export type TerminalExecutionConfig = {
   mode?: string;
+  /** Session-scoped relay target (from exec_mode=relay:<node>); routes
+   * terminal traffic through the center proxy to that node's PTY. */
+  relayNode?: string;
   sshTarget?: string;
   sshWorkspace?: string;
   sshOptions?: string[];
@@ -169,7 +174,7 @@ export type TerminalExecutionConfig = {
 
 export function createTerminal(workspaceDir?: string, execution?: TerminalExecutionConfig): CreateTerminalResponse {
   const terminalId = `term-${Math.random().toString(36).slice(2, 10)}`;
-  const baseUrl = getBaseUrl();
+  const baseUrl = getBaseUrl(execution?.relayNode);
   terminals.set(terminalId, {
     cursor: 0,
     buffer: "",

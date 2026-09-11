@@ -60,15 +60,20 @@ public class MainActivity extends BridgeActivity {
     /** nativeLibraryDir 内 godex 二进制（jniLibs/arm64-v8a/libgodex.so）。 */
     private static final String NATIVE_GODEX = "libgodex.so";
     /** nativeLibraryDir 内运行时（jniLibs/arm64-v8a/lib*.so）。 */
-    private static final String NATIVE_BUSYBOX = "libbusybox.so";
     private static final String NATIVE_GIT = "libgit.so";
     private static final String NATIVE_GIT_HTTPS = "libgitremotehttps.so";
-    /** busybox 常用 applet 名：在可写目录建符号链接指向 nativeLibraryDir/libbusybox.so。
-     *  注意：busybox（EXALAB 静态版）没有编译 bash applet，不建 bash 链接，
-     *  否则 exec bash 报 "applet not found"（terminal 面板 resolveShell 在
-     *  Android 上已回退 sh）。 */
-    private static final String[] BUSYBOX_APPLETS = {
-            "sh", "ash", "hush",
+
+    // ---- shell 运行时：用系统 bionic 工具，不用 glibc 静态 busybox ----
+    // 真机实证（小米 HyperOS）：app 进程带 seccomp filter（untrusted_app,
+    // Seccomp:2），glibc 静态 busybox 启动即被 SIGSYS 杀（"bad system call"），
+    // 而系统 bionic 的 /system/bin/sh 与 /system/bin/toybox 可正常 exec。
+    // 故 runtime 目录里的 sh/toybox applet 符号链接改指系统原生二进制。
+    private static final String SYSTEM_SH = "/system/bin/sh";
+    private static final String SYSTEM_TOYBOX = "/system/bin/toybox";
+    /** shell 类 applet：指向系统 bionic sh（busybox 无 bash applet，不建 bash）。 */
+    private static final String[] SHELL_APPLETS = {"sh", "ash", "hush"};
+    /** 工具 applet：指向系统 bionic toybox。 */
+    private static final String[] TOOLBOX_APPLETS = {
             "grep", "sed", "awk", "find", "cat", "ls", "cp", "mv", "rm", "mkdir",
             "chmod", "chown", "echo", "printf", "test", "xargs", "wc", "head",
             "tail", "sort", "uniq", "date", "env", "which", "true", "false",
@@ -224,9 +229,13 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * 在 filesDir/runtime 建符号链接指向 nativeLibraryDir 的 lib*.so：
-     *  - busybox applet（sh/grep/sed/...）→ libbusybox.so
-     *  - git → libgit.so；git-remote-https → libgitremotehttps.so
+     * 在 filesDir/runtime 建符号链接：
+     *  - shell/tool（sh/grep/sed/...）→ 系统 bionic 工具（/system/bin/sh、
+     *    /system/bin/toybox）。真机实证（小米 HyperOS）：app 进程带 seccomp
+     *    filter（untrusted_app, Seccomp:2），glibc 静态 busybox 启动即被
+     *    SIGSYS 杀（"signal: bad system call"），而 bionic 工具可正常 exec。
+     *  - git → libgit.so；git-upload-pack 等 helper → libgit.so；
+     *    git-remote-https → libgitremotehttps.so
      * 符号链接目标为 app_lib_file 类型，untrusted_app 可 exec。
      */
     private File prepareRuntimeLinks() {
@@ -235,11 +244,11 @@ public class MainActivity extends BridgeActivity {
             Log.w(TAG, "创建 runtime 目录失败: " + runtimeDir);
         }
         String libDir = nativeLibDir();
-        File busybox = new File(libDir, NATIVE_BUSYBOX);
-        if (busybox.isFile()) {
-            for (String applet : BUSYBOX_APPLETS) {
-                symlinkTo(libDir, NATIVE_BUSYBOX, new File(runtimeDir, applet));
-            }
+        for (String applet : SHELL_APPLETS) {
+            symlinkToAbsolute(new File(runtimeDir, applet), SYSTEM_SH);
+        }
+        for (String applet : TOOLBOX_APPLETS) {
+            symlinkToAbsolute(new File(runtimeDir, applet), SYSTEM_TOYBOX);
         }
         symlinkTo(libDir, NATIVE_GIT, new File(runtimeDir, "git"));
         for (String helper : GIT_HELPERS) {
@@ -256,12 +265,17 @@ public class MainActivity extends BridgeActivity {
             Log.w(TAG, "nativeLibraryDir 缺少 " + targetName);
             return;
         }
+        symlinkToAbsolute(link, target.getAbsolutePath());
+    }
+
+    /** 确保 link -> 绝对路径 target（系统工具或 nativeLibraryDir），处理重装后漂移。 */
+    private void symlinkToAbsolute(File link, String target) {
         try {
             if (Files.isSymbolicLink(link.toPath())) {
                 // 目标漂移检测：install -r 后 nativeLibraryDir 哈希路径会变化，
                 // 旧符号链接成为 dangling link（link.exists() 返回 false）。
                 java.nio.file.Path cur = Files.readSymbolicLink(link.toPath());
-                if (cur.toString().equals(target.getAbsolutePath())) {
+                if (cur.toString().equals(target)) {
                     return; // 已指向当前目标，跳过
                 }
                 if (!link.delete()) {
@@ -274,7 +288,7 @@ public class MainActivity extends BridgeActivity {
                     return;
                 }
             }
-            Os.symlink(target.getAbsolutePath(), link.getAbsolutePath());
+            Os.symlink(target, link.getAbsolutePath());
         } catch (Exception e) {
             Log.w(TAG, "创建符号链接失败 " + link.getName() + ": " + e.getMessage());
         }

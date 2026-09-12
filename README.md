@@ -1,4 +1,4 @@
-[简体中文](README.md) | [English](README.en.md)
+[Simplified Chinese](README.zh.md) | [English](README.md)
 
 # GoDex
 
@@ -6,9 +6,9 @@
   <img src="ui/web/public/brand/godex-icon.jpg" alt="GoDex icon" width="160" />
 </p>
 
-GoDex 是一个本地优先的 AI Agent 工作台。它把 CLI、TUI、Web、HTTP API、Feishu/Weixin 等入口接到同一套后端，让聊天、工具执行、文件附件、长期记忆、子 agent、审批和运行审计共享同一个 session runtime。
+GoDex is a local-first AI agent workspace. It connects CLI, TUI, Web, HTTP API, Feishu, Weixin, and other entry points to the same backend so chat, tool execution, file attachments, long-term memory, subagents, approvals, and run audits share one session runtime.
 
-## 界面速览
+## Screenshots
 
 ### tui
 ![](./docs/_images/tui.png)
@@ -18,57 +18,56 @@ GoDex 是一个本地优先的 AI Agent 工作台。它把 CLI、TUI、Web、HTT
 
 ### web ui in mobile
 ![](./docs/_images/web_ui_mobile_remote.jpg)
-图中是在执行遥测
+Running a telemetry session
 
-## 产品定位
+## Product Positioning
 
-GoDex 面向需要把 AI Agent 真正接入日常工程工作流的团队和个人：
+GoDex is built for teams and individuals who need AI agents to work inside real engineering workflows:
 
-- 在本地项目中运行，保留 workspace、配置和运行状态的可控性。
-- 支持长任务、工具调用、子 agent 和工作流，而不是只做单轮聊天。
-- 所有高风险动作都可被配置、审批、追踪和复盘。
-- Web UI 是主力管理入口，CLI/TUI/IM/API 共享同一套能力。
+- Run inside local projects while keeping control over the workspace, configuration, and runtime state.
+- Support long-running tasks, tool calls, subagents, and workflows instead of only single-turn chat.
+- Configure, approve, trace, and review high-risk actions.
+- Use the Web UI as the primary management surface while CLI, TUI, IM, and API channels share the same capabilities.
 
-适合的场景：
+Good fits include:
 
-- 代码库理解、修改、测试、部署辅助
-- 多入口团队机器人，包括 Web、TUI、Feishu、Weixin
-- 需要长期记忆、历史召回和可审计工具执行的本地 agent runtime
-- 需要将 package、skill、automation、subagent 纳入统一治理的 agent 平台原型
+- Understanding, modifying, testing, and assisting deployment work in codebases.
+- Multi-channel team bots across Web, TUI, Feishu, and Weixin.
+- Local agent runtimes that need long-term memory, historical recall, and auditable tool execution.
+- Agent platform prototypes that bring packages, skills, automation, and subagents under unified governance.
 
-## 核心特性
+## Core Features
 
-- **共享 Session Runtime**：CLI、TUI、Web、HTTP API、IM channel 共用 session、timeline、attachment、permission 和 memory。
-- **Web 工作台**：可拖拽多面板网格布局（2×2 / 3×3），Chat、Terminal、Files、Automation、Nodes、Notes、Skills、Memory、Usage、Settings、审批面板和 subagent 管理，支持移动端自适应。
-- **多 Provider 管理**：支持 Anthropic-compatible、OpenAI-compatible、OpenAI Codex provider、模型策略（primary/fallback/round_robin）、Web Settings 动态配置与 OpenAI-compatible `/v1/*` API。
-- **长任务韧性**：Ralph-style LongTask story loop（动态并行 DAG）、auto-repair、validation artifact、auto merge/commit、runner phase checkpoint、重启恢复（`--resume-run-id`）、运行中 follow-up/steer、上下文预算按角色分配。
-- **Agent 图与多引擎**：`agent_graph` 动态 DAG 抽象、`workflow` durable workflow、Harness 引擎抽象与 per-turn 多引擎热切换。
-- **Agent Identity / Sandbox 解耦**：`Sandbox` 接口 + `LocalSandbox`，scope 隔离（session/personal/org）与写路径限定。
-- **Context 与 Memory**：带 pinned continuation snapshot 的模型辅助压缩、rule-based fallback、transcript archive、history_search、durable memory、candidate inbox、audit/restore、紧凑 memory 注入和 token 估算。
-- **Agent Profile**：CLI/TUI/ACP 默认走精简 `coding` profile，Web/IM 默认保留 `general` profile；可按入口或命令覆盖工具曝光策略。
-- **工具与安全**：merge、grep（ripgrep 双后端）、edit_file 多编辑、LSP 代码智能、WorkspaceFS 文件边界、shell guard、manual/review/yolo approval、安全 profile、内容安全筛查器、loop guard、security audit。
-- **Subagent / Workflow**：durable subagent job、角色→bundle 映射与写 scope 联动、review/merge/cancel/resume/iterate、LongTask Web/CLI/API surface、能力边界、隔离 workspace 策略和 compact handoff。
-- **Package / Skill 生态**：package manifest（resources/app/tool_policy/smoke_tests/recommended_bundles）、`requires`/`provides` 依赖声明与安装时依赖图校验（缺失/冲突/环）、卸载依赖保护、事务式重装、role/command contract、tool policy、quality diagnostics、smoke run、reinstall tracking、Claude Code import。
-- **Automation 与 Channel**：Cron（at/every/cron 调度）、Heartbeat（HEARTBEAT.md checklist + OK token）、Feishu、Weixin、OpenAI-compatible chat completions API；IM 审批消息会展示 tool 和关键参数摘要。
-- **Control Plane 基础**：轻量 Node Registry 和只读 Nodes Dashboard，用于观测多个 GoDex runtime；Relay 中继（WSS 出站接入）、`node exec/forward` 跳板、`guarded-remote` 审批头。
-- **Notes 工作台**：本地 Markdown 笔记、搜索/标签、Chat 中保存 Agent 输出到笔记、笔记↔记忆双向联动。
-- **Memory 2.x**：candidate inbox、suppression、SQLite + FTS5 sidecar、scope-aware recall、project miner、记忆策略（per-turn/agent-only/consolidated）、foldCapture 去重。
-- **Session 树**：会话可分支（fork/rollback/merge）、session 图持久化。
-- **空间治理**：storage doctor、browser cache/session checkpoint/artifact/subagent GC。
-- **终端**：Go PTY 原生后端 + xterm.js 前端，提供真实 Shell 体验。
-- **用量追踪**：LLM token 用量记录（SQLite），Web Usage 面板与 `/usage/*` API。
-- **性能**：Anthropic 风格 cache_control 断点、prompt 缓存、compaction 优化。
-- **单二进制 Web UI**：Web dist 嵌入 Go binary，全平台（Linux/macOS/Windows）单文件部署。
+- **Shared Session Runtime**: CLI, TUI, Web, HTTP API, and IM channels share sessions, timelines, attachments, permissions, and memory.
+- **Web Workspace**: Draggable multi-panel grid layout (2×2 / 3×3), Chat, Terminal, Files, Automation, Nodes, Notes, Skills, Memory, Usage, Settings, approval panels, and subagent management — fully mobile-adaptive.
+- **Multi-provider Management**: Anthropic-compatible providers, OpenAI-compatible providers, the OpenAI Codex provider, model policies (primary/fallback/round_robin), dynamic Web Settings configuration, and an OpenAI-compatible `/v1/*` API.
+- **Resilient Long Tasks**: Ralph-style LongTask story loop (dynamic parallel DAG), auto-repair, validation artifacts, auto merge/commit, runner phase checkpoints, restart recovery (`--resume-run-id`), in-flight follow-up/steering, and per-role context budgets.
+- **Agent Graph and Multi-Engine**: `agent_graph` dynamic DAG abstraction, durable `workflow` runtime, Harness engine abstraction with per-turn hot engine switching.
+- **Agent Identity / Sandbox Decoupling**: `Sandbox` interface + `LocalSandbox`, scope isolation (session/personal/org) with write-path restriction.
+- **Context and Memory**: Model-assisted compression with pinned continuation snapshots, rule-based fallback, transcript archive, `history_search`, durable memory, candidate inbox, suppression, audit/restore, memory strategies (per-turn/agent-only/consolidated), compact memory injection, and token estimation.
+- **Agent Profile**: CLI/TUI/ACP default to the focused `coding` prompt policy, while Web/IM default to the broader `general` policy; tool exposure is identical and can be overridden per entry point or command.
+- **Tools and Safety**: merge, grep (ripgrep dual-backend), edit_file multi-edit, LSP code intelligence, WorkspaceFS file boundaries, shell guard, manual/review/yolo approval modes, security profiles, content security screener, loop guard, and security audit.
+- **Subagent and Workflow**: Durable subagent jobs, role→bundle mapping with write-scope linkage, review/merge/cancel/resume/iterate, LongTask surfaces for Web/CLI/API, capability boundaries, isolated workspace strategies, and compact handoff.
+- **Package and Skill Ecosystem**: Package manifests (resources/app/tool_policy/smoke_tests/recommended_bundles), `requires`/`provides` dependency declarations with install-time dependency graph validation (missing/conflict/cycle), uninstall dependency protection, transactional reinstall, role/command contracts, tool policies, quality diagnostics, smoke runs, reinstall tracking, and Claude Code import.
+- **Automation and Channels**: Cron (at/every/cron schedules), Heartbeat (HEARTBEAT.md checklist + OK token), Feishu, Weixin, and OpenAI-compatible chat completions API; IM approval messages show the tool and key parameter summary.
+- **Control Plane Foundation**: Lightweight Node Registry and read-only Nodes Dashboard for observing multiple GoDex runtimes; Relay hub (outbound WSS join), `node exec/forward` jump-host, and `guarded-remote` approval headers.
+- **Notes Workspace**: Local Markdown notes, search/tags, saving agent output from Chat into notes, and bidirectional notes↔memory linkage.
+- **Session Tree**: branchable sessions (fork/rollback/merge) with a persisted session graph.
+- **Storage Governance**: Storage doctor plus browser cache, session checkpoint, artifact, and subagent garbage collection.
+- **Terminal**: Real Go PTY backend + xterm.js frontend for a native shell experience.
+- **Usage Tracking**: LLM token usage records (SQLite), Web Usage panel, and `/usage/*` API.
+- **Performance**: Anthropic-style cache_control breakpoints, prompt caching, and compaction optimizations.
+- **Single-binary Web UI**: Web dist embedded in Go binary, cross-platform (Linux/macOS/Windows) single-file deployment.
 
-## 快速开始
+## Quick Start
 
-### 环境要求
+### Requirements
 
 - Go `1.26+`
-- Node.js + `pnpm`，仅在需要构建 Web 前端时使用
-- 至少一个可用 LLM provider
+- Node.js + `pnpm`, only required when building the Web frontend
+- At least one available LLM provider
 
-### 从源码运行
+### Run from Source
 
 ```bash
 go mod download
@@ -77,23 +76,23 @@ pnpm -C ui/web build
 go run ./cmd/godex serve --addr 127.0.0.1:8080
 ```
 
-打开：
+Open:
 
 ```text
 http://127.0.0.1:8080
 ```
 
-### 初始化项目
+### Initialize a Project
 
 ```bash
 go run ./cmd/godex setup --dir /path/to/project
 ```
 
-首次启动时，如果配置文件不存在，GoDex 会生成带注释的默认配置。
+On first startup, if the configuration file does not exist, GoDex creates a commented default configuration.
 
-### 配置模型
+### Configure Models
 
-推荐使用 Web `Settings` 管理 provider、模型和密钥引用。也可以使用 CLI 登录：
+The recommended path is to use Web `Settings` to manage providers, models, and key references. You can also log in from the CLI:
 
 ```bash
 godex login openai --mode platform-api-key
@@ -102,177 +101,185 @@ godex providers list
 godex providers test <provider-id>
 ```
 
-全局配置和默认运行态都放在 `~/.godex`：provider、skills、sessions、memory、tmp/cache、logs 等不会默认写入当前项目目录。项目目录只保留显式创建的 `godex.yaml`、`.env.example`、`AGENT.md` 等项目文件。详细配置说明见 [docs/user-guide.md](docs/user-guide.md#配置)。
+Global configuration and default runtime data live under `~/.godex`: providers, skills, sessions, memory, tmp/cache, logs, and related files are not written to the current project directory by default. Project directories only keep explicitly created project files such as `godex.yaml`, `.env.example`, and `AGENT.md`. For details, see [docs/user-guide.md](docs/user-guide.md).
 
-## 常用入口
+## Common Entry Points
 
 ```bash
-# 交互式 CLI
+# Interactive CLI
 go run ./cmd/godex
 
-# 单次提问。CLI/TUI/ACP 默认使用 coding profile
-go run ./cmd/godex ask "总结一下当前仓库结构"
-go run ./cmd/godex ask --profile general "帮我规划一个产品方案"
+# One-off questions. CLI/TUI/ACP use the coding profile by default.
+go run ./cmd/godex ask "Summarize the current repository structure"
+go run ./cmd/godex ask --profile general "Help me plan a product proposal"
 
-# 执行 slash command
+# Run a slash command
 go run ./cmd/godex command /doctor
 
-# 检查和清理本地 runtime 空间
+# Inspect and clean local runtime storage
 go run ./cmd/godex doctor storage
 go run ./cmd/godex gc --dry-run
 
-# 全屏 TUI（默认入口）
+# Full-screen TUI, also the default entry point
 go run ./cmd/godex
 
 # Web / HTTP / SSE / channel runtime
 go run ./cmd/godex serve --addr 127.0.0.1:8080
 
-# 导入 Claude Code 生态资源
+# Import Claude Code ecosystem resources
 go run ./cmd/godex import claude --source .claude --dry-run
 ```
 
-更多命令、slash commands 和 HTTP API 见 [docs/user-guide.md](docs/user-guide.md)。
+For more commands, slash commands, and HTTP API details, see [docs/user-guide.md](docs/user-guide.md).
 
-## Web 工作台
+## Web Workspace
 
-Web UI 是当前最完整的产品入口：
+The Web UI is currently the most complete product entry point:
 
-- **Chat**：多入口 session、附件、审批、模型切换、Context & Recall、timeline、subagent 进度、保存 Agent 输出到 Notes、会话分支。
-- **Files**：文件树、代码编辑器、diff 与搜索（workspace 边界内）。
-- **Settings**：全局/项目配置路径、provider/model、doctor、channel 状态、安全策略、service 运行状态。
-- **Nodes**：只读观测本机和手动/自动注册的 GoDex runtime，支持远程 Chat/Terminal/Files。
-- **Notes**：本地 Markdown 笔记、标签、搜索、编辑和 Chat 集成。
-- **Memory**：durable memory、candidate inbox、suppression、audit diff、restore/reapply。
-- **Skills**：package/skill 管理、质量诊断、smoke run、reinstall。
-- **Automation**：Cron、Heartbeat、运行日志。
-- **Usage**：LLM 用量、模型/keys 管理、缓存命中统计。
+- **Chat**: Multi-entry sessions, attachments, approvals, model switching, Context & Recall, timeline, subagent progress, saving agent output into Notes, and session forking.
+- **Files**: File tree, code editor, diff, and search (within the workspace boundary).
+- **Settings**: Global/project configuration paths, providers/models, doctor, channel status, security policies, and service runtime status.
+- **Nodes**: Read-only observation of local and manually/automatically registered GoDex runtimes, with remote Chat/Terminal/Files.
+- **Notes**: Local Markdown notes, tags, search, editing, and Chat integration.
+- **Memory**: Durable memory, candidate inbox, suppression, audit diff, and restore/reapply.
+- **Skills**: Package/skill management, quality diagnostics, smoke runs, and reinstall.
+- **Automation**: Cron, Heartbeat, and run logs.
+- **Usage**: LLM usage, model/key management, and cache hit statistics.
 
-前端构建（自动输出到 Go embed 目录）：
+Build the frontend (outputs directly to Go embed directory):
 
 ```bash
 pnpm -C ui/web build
 ```
 
-Package 开发流程可以使用示例 skill 辅助：
+The package development flow can use the example skill:
 
 ```text
 examples/skills/package-developer
 ```
 
-在 Web `Skills` 的安装入口或 Chat 中安装这个本地 skill 后加载 `package-developer`，它会指导创建 `godex.package.yaml`、测试 smoke、安装 GitHub package、重装和卸载。
+After installing this local skill from the Web `Skills` installer or Chat, load `package-developer` to get guidance for creating `godex.package.yaml`, running smoke tests, installing GitHub packages, reinstalling, and uninstalling.
 
-## 遥测（Telemetry）
+## Telemetry
 
-GoDex 本地优先：**默认不向任何外部服务上报数据**。遥测能力分两层，都只在你显式启用时工作：
+GoDex is local-first: **no data is reported to any external service by default**. Telemetry has two layers, and both only work when you explicitly enable them:
 
-- **Control Plane 节点遥测**：当节点配置了 `control.center_url` + `control.credential` 并接入中心时，节点会通过 relay 周期性把本地运行快照推送给中心——包括运行中的 session（id/title/running/updated_at）、longtask 进度（status/phase/turn/total）与待审批请求（tool/action/paths），以及节点版本与能力列表。中心「Nodes」页与 `GET /control/nodes/{id}/overview` 据此展示实时进度（如图中手机端所见的遥测面板）。**不接入中心（默认）则不会产生任何推送**；快照只含摘要级状态，完整会话历史始终保留在节点本地，中心只读观测、不存会话内容。
-- **LLM 用量追踪**：每次模型调用的 token 用量与缓存命中会记录到本地 SQLite（`usage` 服务），通过 Web `Usage` 面板与 `/usage/*` API 查看，仅用于成本与用量统计，不上传。
+- **Control Plane node telemetry**: when a node configures `control.center_url` + `control.credential` and joins a center, the node periodically pushes a local runtime snapshot to the center over the relay — running sessions (id/title/running/updated_at), longtask progress (status/phase/turn/total), pending approval requests (tool/action/paths), plus the node version and capabilities. The center's **Nodes** page and `GET /control/nodes/{id}/overview` render this live progress (as shown in the mobile telemetry screenshot above). **Without joining a center (the default) no push happens at all**; snapshots contain summary-level state only, full session history always stays on the node, and the center only observes read-only without storing session content.
+- **LLM usage tracking**: token usage and cache hits for every model call are recorded into a local SQLite store (the `usage` service) and surfaced through the Web **Usage** panel and the `/usage/*` API — for cost/usage statistics only, never uploaded.
 
-隐私边界：所有遥测数据默认落在 `~/.godex` 本地；只有显式配置中心接入时，才向该中心推送上述摘要状态，且中心不持久化完整会话历史。
+Privacy boundary: all telemetry data lives under `~/.godex` locally; only an explicitly configured center join pushes the summary state above, and the center never persists full session history.
 
 ## Agent Profile
 
-`agent.profile` 是入口/任务提示词策略（控制默认回复风格与能力使用引导），不替代 `security.profile`。默认入口策略是：
+`agent.profile` is an entry-point/task prompt policy that controls the default response style and capability-usage guidance; it does not replace `security.profile`. The default entry-point policy is:
 
-- `acp`、`cli`、`tui`：`coding`，提示词要求 agent 默认走精简编码工作流（简洁回复、先读代码再改、优先 `lsp`），并仅在用户明确要求时通过 `tool_exchange` 启用 web/browser/subagent 等重能力 bundle。
-- `web`、`weixin`、`feishu`：`general`，保留完整工作台体验（含 skill catalog 注入）。
+- `acp`, `cli`, `tui`: `coding` — the prompt directs the agent to follow a lean coding workflow (concise replies, read code before editing, prefer the `lsp` tool) and to enable heavier bundles (web/browser/subagent/etc.) via `tool_exchange` only when the user explicitly asks.
+- `web`, `weixin`, `feishu`: `general` — the full workspace experience (including skill catalog injection).
 
-说明：coding/general 的工具目录相同（always-active / default-active 工具集合一致），差异在系统提示词与运行时注入内容（coding 用 `repo_map` 替换 `skill_catalog`）。CLI/TUI/ACP 可用 `--profile general|coding` 临时覆盖；也可用 `GODEX_AGENT_PROFILE` 或 Web `Settings` 的 `agent.default_profiles.*` 修改。
+Note: the tool catalog is identical for both profiles (same always-active / default-active tool set); the difference is the system prompt and injected runtime sections (coding replaces the skill catalog with a repo map). CLI/TUI/ACP can temporarily override with `--profile general|coding`; `GODEX_AGENT_PROFILE` or Web `Settings` → `agent.default_profiles.*` also work.
 
-## 里程碑
+## Milestones
 
-### 当前基线（2026-08 已实现）
+### Recent Updates (2026-09)
 
-GoDex 1.x 已经是一个本地优先、可部署、可审计的 Agent 工作台：
+- **Android runtime restored**: git / terminal / slash-shell now work again on MIUI/HyperOS. Root cause: the app-process seccomp filter killed the bundled glibc-static busybox at startup (SIGSYS), while system bionic binaries and the musl-static git do not. The mobile runtime now symlinks shell/tool applets to the system bionic binaries (`/system/bin/sh`, `/system/bin/toybox`) and keeps git plus its transport helpers (`git-upload-pack`/`git-receive-pack`/`git-upload-archive`) on `libgit.so`.
+- **Relay-session panels**: Files/Terminal panels in relay sessions (`exec_mode=relay:<node>`) now resolve the execution node's own workspace directory instead of the local host path, routed through the center proxy (6c809ea).
+- **Taskboard plugin (M1–M3)**: five-column kanban, PJM orchestrator with a dedicated built-in template, template-based card dispatch to dedicated execution sessions, four parallel-conflict gates, and execution observability (ledger consistency + failure/blocker insights + appended-message recovery).
+- **Agent Templates marketplace (M1–M2)**: `/agents` template hub, template picker in new-chat, exact tool-set activation (`SetActiveToolsExact`), memory mode (none/shared/scoped), and form-driven options endpoints.
+- **gbash evaluation + upstream PRs**: evaluated `ewhauser/gbash` as a zero-fork shell runtime for fork-restricted Android devices; prepared upstream PRs on the tim5wang fork (large-output spilling to disk + explicit `TimedOut` result semantics).
 
-**运行时与韧性**
-- 多入口共享同一个 session runtime：CLI、TUI、Web、HTTP API、Feishu、Weixin、Cron、Heartbeat。
-- 异步 turn runtime + durable event journal + checkpoint；幂等存储（cron/heartbeat）；worker lease（崩溃标记 interrupted 不自动重跑）；重启恢复。
-- Turn Error 分层（Retryable/Transient/NonRetryable）、loop guard（no-mutation 螺旋检测）、runner phase checkpoint、空回复/`finish_reason=length` 恢复。
-- Harness 多引擎抽象与 per-turn 引擎热切换。
+### Current Baseline (implemented as of 2026-08)
 
-**多 Agent 编排**
-- durable subagent job：review / merge / cancel / resume / iterate、角色→bundle 映射、写 scope 联动、按角色上下文预算、compact handoff。
-- `workflow` 与 `agent_graph`：动态并行 DAG（data_dependency / control_flow / handoff 边）、重启可恢复。
-- LongTask story loop：按 PRD/user stories 编译动态并行 DAG、auto-repair、validation artifact、auto merge/commit、`--resume-run-id` 续跑。
-- 会话分支（fork / rollback / merge）与 session 图持久化。
+GoDex 1.x is already a local-first, deployable, auditable agent workspace:
 
-**Context 与 Memory**
-- 带 pinned continuation snapshot 的模型辅助压缩、rule-based fallback、transcript archive、`history_search`。
-- durable memory：candidate inbox、suppression、audit/restore、SQLite + FTS5 sidecar、scope-aware recall、project miner、记忆策略（per-turn / agent-only / consolidated）、foldCapture 去重。
-- 笔记 ↔ 记忆双向联动、context inspector、token 估算。
+**Runtime and Resilience**
+- One shared session runtime across CLI, TUI, Web, HTTP API, Feishu, Weixin, Cron, and Heartbeat.
+- Async turn runtime with a durable event journal and checkpoints; idempotent storage (cron/heartbeat); worker leases (crashes are marked `interrupted`, never auto-rerun); restart recovery.
+- Turn error layering (Retryable/Transient/NonRetryable), loop guard (no-mutation spiral detection), runner phase checkpoints, and empty-reply/`finish_reason=length` recovery.
+- Harness multi-engine abstraction with per-turn engine hot-switching.
 
-**工具与安全**
-- 60 个工具 / 14 个 bundle：shell/file/grep(ripgrep)/LSP/browser/desktop/web/memory/skill/package/subagent/workflow/MCP/teamtools 等，`tool_exchange` 按需启用。
-- WorkspaceFS 文件边界、shell guard、manual/review/yolo 审批、安全 profile（trusted-local … dev/repair）、内容安全筛查器、loop guard、security audit。
-- Scope 隔离（session / personal / org）与写路径限定。
+**Multi-Agent Orchestration**
+- Durable subagent jobs: review/merge/cancel/resume/iterate, role→bundle mapping with write-scope linkage, per-role context budgets, and compact handoff.
+- `workflow` and `agent_graph`: dynamic parallel DAGs (data_dependency / control_flow / handoff edges), recoverable across restarts.
+- LongTask story loop: compile PRD/user stories into dynamic parallel DAGs, auto-repair, validation artifacts, auto merge/commit, and `--resume-run-id` continuation.
+- Branchable sessions (fork/rollback/merge) with a persisted session graph.
 
-**生态与治理**
-- Package / Skill 生态：manifest（resources/app/tool_policy/smoke_tests/recommended_bundles）、quality 诊断、smoke run、reinstall、Claude Code import。
-- Automation 与 Channel：Cron（at/every/cron）、Heartbeat（HEARTBEAT.md checklist + OK token）、Feishu、Weixin、OpenAI-compatible `/v1/*` API。
-- Control Plane：Node Registry + Relay 中继（WSS 出站接入）、`node exec/forward` 跳板、`guarded-remote` 审批头。
-- Storage doctor / GC、LLM 用量追踪、单二进制 Web UI、自部署 `service install`。
+**Context and Memory**
+- Model-assisted compression with pinned continuation snapshots, rule-based fallback, transcript archive, and `history_search`.
+- Durable memory: candidate inbox, suppression, audit/restore, SQLite + FTS5 sidecar, scope-aware recall, project miner, memory strategies (per-turn/agent-only/consolidated), and foldCapture dedup.
+- Bidirectional notes↔memory linkage, context inspector, and token estimation.
 
-### 2.0 规划（进行中）
+**Tools and Safety**
+- 60 tools across 14 bundles: shell/file/grep(ripgrep)/LSP/browser/desktop/web/memory/skill/package/subagent/workflow/MCP/teamtools, with on-demand activation via `tool_exchange`.
+- WorkspaceFS file boundaries, shell guard, manual/review/yolo approval, security profiles (trusted-local … dev/repair), content security screener, loop guard, and security audit.
+- Scope isolation (session/personal/org) with write-path restriction.
 
-GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的 Agent Runtime 平台。当前进展：
+**Ecosystem and Governance**
+- Package/Skill ecosystem: manifests (resources/app/tool_policy/smoke_tests/recommended_bundles), quality diagnostics, smoke runs, reinstall, and Claude Code import.
+- Automation and channels: Cron (at/every/cron), Heartbeat (HEARTBEAT.md checklist + OK token), Feishu, Weixin, and the OpenAI-compatible `/v1/*` API.
+- Control Plane: Node Registry + Relay hub (outbound WSS join), `node exec/forward` jump-host, and `guarded-remote` approval headers.
+- Storage doctor/GC, LLM usage tracking, single-binary Web UI, and self-managed `service install`.
 
-| 方向 | 状态 | 说明 |
-|------|------|------|
-| **Agent 与 Sandbox 解耦** | ✅ 接口已落地 | `Sandbox` 接口 + `LocalSandbox` + scope 隔离已实现（roadmap 3.3/6.2）；后续方向是更多后端（WASM、远程） |
-| **Orchestrator 与 Worker 解耦** | 🚧 进行中 | 已有 durable subagent / workflow / longtask runtime；目标是更清晰的 worker runtime 协议与能力边界 |
-| **Session 记忆树** | 🚧 部分落地 | fork / rollback / merge 已实现（`sessiongraph`）；目标是更完整的版本化上下文（clone、rebuild、跨存储） |
-| **Session 与存储介质解耦** | ✅ 双后端已实现 | JSON + SQLite 镜像（`sessionstore`）；后续支持数据库、云存储等后端 |
-| **统一插件内核** | 📋 规划中 | Plugin Kernel + 可选 WASM 执行器 + MCP 完整 client；设计见 [DSH 研究笔记](docs/research_of_dsh_for_godex_optimize.md) |
+### GoDex 2.0 Planning (in progress)
 
-详细架构方向见 [GoDex 2.0 架构 SPEC](docs/architecture-v2-spec.md)。
+GoDex 2.0 aims to evolve from a single large agent workspace into an agent runtime platform that can carry heavy workloads. Current progress:
 
-## 文档
+| Direction | Status | Notes |
+|----------|--------|-------|
+| **Agent / Sandbox Decoupling** | ✅ interface landed | `Sandbox` interface + `LocalSandbox` + scope isolation (roadmap 3.3/6.2); future work is more backends (WASM, remote) |
+| **Orchestrator / Worker Decoupling** | 🚧 in progress | Durable subagent/workflow/longtask runtime exists; target is a cleaner worker runtime protocol and capability boundaries |
+| **Session Memory Tree** | 🚧 partially landed | fork/rollback/merge implemented (`sessiongraph`); target is fuller versioned context (clone, rebuild, cross-storage) |
+| **Session / Storage Decoupling** | ✅ dual backend | JSON + SQLite mirror (`sessionstore`); future: databases and cloud storage |
+| **Unified Plugin Kernel** | 📋 planned | Plugin Kernel + optional WASM executor + full MCP client; see the [DSH research notes](docs/research_of_dsh_for_godex_optimize.md) |
 
-完整索引（每篇文档的状态、分类与相互关系）见 **[docs/README.md](docs/README.md)**；文档整理方案（对标 DSH、读者分层、每篇处理方式）见 [docs/documentation-organization-plan.md](docs/documentation-organization-plan.md)。
+See the [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md) for the detailed direction.
 
-按读者快速开始：
+## Documentation
 
-- **终端用户**：[用户指南](docs/user-guide.md)（安装/配置/CLI/Web UI/工具/Memory/HTTP API/自动化/安全/排障）、[扩展运行时指南](docs/extension-runtime-user-guide.md)（Package/MCP/ACP/WASM）、[VS Code ACP 集成](docs/vscode-acp.md)
-- **开发者**：[架构 SPEC](docs/architecture-v2-spec.md)、[项目结构](docs/project-structure.md)、[功能—实现矩阵](docs/feature-implementation-matrix.md)、[优化路线图](docs/godex-optimization-roadmap.md)
-- **部署运维**：[自部署指南](docs/self-deploy.md)、[节点接入手册](docs/node-onboarding.md)、[Node Mesh](docs/node-mesh-design.md)
+The full index (status, category, and relationships for every doc) lives in **[docs/README.md](docs/README.md)**; the documentation organization plan (DSH benchmark, reader layers, per-doc treatment) is in [docs/documentation-organization-plan.md](docs/documentation-organization-plan.md).
 
-> 其余 40+ 篇设计与历史文档不再在此罗列，统一由 [docs/README.md](docs/README.md) 索引。
+Quick start by reader:
 
-## 目录结构
+- **End users**: [User Guide](docs/user-guide.md), [Extension Runtime Guide](docs/extension-runtime-user-guide.md) (Package/MCP/ACP/WASM), [VS Code ACP](docs/vscode-acp.md)
+- **Developers**: [Architecture SPEC](docs/architecture-v2-spec.en.md), [Project Structure](docs/project-structure.md), [Feature-to-implementation Matrix](docs/feature-implementation-matrix.md), [Optimization Roadmap](docs/godex-optimization-roadmap.md)
+- **Ops**: [Self-deployment Guide](docs/self-deploy.md), [Node Onboarding](docs/node-onboarding.md), [Node Mesh](docs/node-mesh-design.md)
+
+> All other design and historical docs are indexed in [docs/README.md](docs/README.md).
+
+## Directory Structure
 
 ```text
-cmd/godex/        CLI binary 入口
-internal/app/     CLI、serve、slash command 组装
-internal/agent/   agent loop、context、turn runtime、subagent、harness 引擎、agent graph
-internal/runtime/ HTTP/WebUI、IM channels、Cron、Heartbeat
-internal/services/ backend、commands、historysearch、noderegistry、relay、sessionadmin、usage、eval
-internal/tools/   bash/file/browser/web/memory/skill/package/subagent/teamtools 等工具
-internal/toolruntime/  typed tool 框架、权限、拦截器、执行上下文
-internal/sandbox/ Sandbox 接口与 LocalSandbox 实现（Agent Identity 解耦）
-internal/core/    config、conversation、compress、memory、notes、skill、package、media、mcp、security、scope
-internal/domain/  跨层共享领域类型（events、message、security、eval 等）
-internal/sessiongraph/  可分支 session 图
-internal/sessionstore/   session 存储后端（json / sqlite）
-internal/platform/  fs、logger、workspace 路径、tooling、storagegc 等基础设施
-internal/tui/     min-tui 全屏前端
-internal/uiassets/ 嵌入的 Web dist
+cmd/godex/        CLI binary entry point
+internal/app/     CLI, serve, and slash command assembly
+internal/agent/   agent loop, context, turn runtime, subagents, harness engines, agent graph
+internal/runtime/ HTTP/Web UI, IM channels, Cron, Heartbeat
+internal/services/ backend, commands, historysearch, noderegistry, relay, sessionadmin, usage, eval
+internal/tools/   bash/file/browser/web/memory/skill/package/subagent/teamtools and other tools
+internal/toolruntime/  typed tool framework, permissions, interceptors, execution context
+internal/sandbox/ Sandbox interface and LocalSandbox (Agent Identity decoupling)
+internal/core/    config, conversation, compression, memory, notes, skill, package, media, mcp, security, scope
+internal/domain/  shared cross-layer domain types (events, message, security, eval, ...)
+internal/sessiongraph/  branchable session graph
+internal/sessionstore/  session storage backends (json / sqlite)
+internal/platform/  fs, logger, workspace paths, tooling, storagegc infrastructure
+internal/tui/     min-tui fullscreen frontend
+internal/uiassets/ embedded Web dist
 internal/acp/     ACP stdio server
-ui/web/           React + Vite Web 前端
-docs/             产品、架构、验证和部署文档
+ui/web/           React + Vite Web frontend
+docs/             Product, architecture, validation, and deployment docs
 ```
 
-更完整说明见 [docs/project-structure.md](docs/project-structure.md)。
+For a fuller explanation, see [docs/project-structure.md](docs/project-structure.md).
 
 ## Release Check
 
-发布前建议运行：
+Before release, run:
 
 ```bash
 ./scripts/release_check.sh
 ```
 
-它会执行 Go 测试、Go binary 构建和 Web build。本地也可以单独运行：
+It runs Go tests, builds the Go binary, and builds the Web frontend. Locally, you can also run them separately:
 
 ```bash
 go test ./...

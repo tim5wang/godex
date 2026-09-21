@@ -71,6 +71,12 @@ func defaultConfigFile() ConfigFile {
 			},
 			MaxTurns: 1000,
 			Profile:  AgentProfileGeneral,
+			Decision: DecisionSection{
+				Enabled:   false,
+				Provider:  "llm",
+				TimeoutMS: 10000,
+				MaxTokens: 64,
+			},
 			DefaultProfiles: AgentDefaultProfilesSection{
 				ACP:    AgentProfileCoding,
 				CLI:    AgentProfileCoding,

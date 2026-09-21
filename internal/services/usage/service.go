@@ -648,6 +648,7 @@ func (s *Service) RecordLLMUsage(event conversation.UsageEvent) error {
 		SessionID:       ctx.SessionID,
 		TurnID:          ctx.TurnID,
 		JobID:           ctx.JobID,
+		Kind:            ctx.Kind,
 		Status:          "success",
 	}
 	if call.CreditWeight <= 0 {

@@ -108,6 +108,19 @@ type AgentSection struct {
 	MaxTurns          int                         `yaml:"max_turns"`
 	Profile           string                      `yaml:"profile"`
 	DefaultProfiles   AgentDefaultProfilesSection `yaml:"default_profiles"`
+	// Decision configures the low-cost structured decision model used by
+	// workflow decision nodes (Jev/Laya-class); disabled by default.
+	Decision DecisionSection `yaml:"decision"`
+}
+
+// DecisionSection configures the workflow decision-model caller. Provider
+// references an entry in the shared providers registry; no separate
+// credentials section is kept.
+type DecisionSection struct {
+	Enabled   bool   `yaml:"enabled"`
+	Provider  string `yaml:"provider"`
+	TimeoutMS int    `yaml:"timeout_ms"`
+	MaxTokens int    `yaml:"max_tokens"`
 }
 
 type AgentCompactionSection struct {
@@ -382,12 +395,12 @@ type SubagentSection struct {
 }
 
 type ExecutionSection struct {
-	Mode               string   `yaml:"mode"`
-	DockerImage        string   `yaml:"docker_image"`
-	DockerNetwork      string   `yaml:"docker_network"`
-	SSHTarget          string   `yaml:"ssh_target"`
-	SSHWorkspace       string   `yaml:"ssh_workspace"`
-	SSHOptions         []string `yaml:"ssh_options"`
+	Mode          string   `yaml:"mode"`
+	DockerImage   string   `yaml:"docker_image"`
+	DockerNetwork string   `yaml:"docker_network"`
+	SSHTarget     string   `yaml:"ssh_target"`
+	SSHWorkspace  string   `yaml:"ssh_workspace"`
+	SSHOptions    []string `yaml:"ssh_options"`
 	// Relay backend (mode=relay): run tools on a remote godex node (sandbox
 	// node B) through the center relay tunnel. RelayToken is the restricted
 	// nk_ credential (control.center_token), kept in .env, not yaml.

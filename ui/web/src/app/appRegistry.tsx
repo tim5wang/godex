@@ -44,6 +44,7 @@ const loadAgentTemplatesPage = () => import("../pages/AgentTemplatesPage");
 const loadMemoryPage = () => import("../pages/MemoryPage");
 const loadBusinessAgentsPage = () => import("../pages/BusinessAgentsPage");
 const loadTaskBoardPage = () => import("../pages/TaskBoardPage");
+const loadFlowsPage = () => import("../pages/FlowsPage");
 const loadSettingsPage = () => import("../pages/SettingsPage");
 const loadUsagePage = () => import("../pages/UsagePage");
 
@@ -192,6 +193,17 @@ export const builtinApps: BuiltinAppEntry[] = [
     component: pageComponent(loadUsagePage, "UsagePage"),
     isActive: (pathname) => pathname.startsWith("/usage"),
     headerSubtitleKey: "usage.pageSubtitle",
+  }),
+  entry({
+    id: "flows",
+    navPath: "/flows",
+    routePaths: ["/flows"],
+    icon: <ApartmentOutlined />,
+    labelKey: "app.nav.flows",
+    load: loadFlowsPage,
+    component: pageComponent(loadFlowsPage, "FlowsPage"),
+    isActive: (pathname) => pathname.startsWith("/flows"),
+    headerSubtitleKey: "flows.pageSubtitle",
   }),
 ];
 

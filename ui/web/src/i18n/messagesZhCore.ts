@@ -16,6 +16,7 @@ export const zhCoreMessages = {
         workflows: "工作流",
         businessAgents: "业务智能体",
         taskboard: "任务看板",
+        flows: "流程",
         settings: "设置",
         usage: "用量",
       },

@@ -19,6 +19,11 @@ type UsageContext struct {
 	TargetProfileID string
 	TargetModel     string
 	CreditWeight    float64
+	// Kind distinguishes metering classes beyond the source channel. Empty
+	// means an ordinary LLM call; "decision" marks workflow decision-model
+	// calls so they are metered independently (P1.6, kind=decision single
+	// line in run usage rollups).
+	Kind string
 }
 
 type UsageEvent struct {
@@ -38,7 +43,7 @@ var usageObserverState struct {
 }
 
 func WithUsageContext(ctx context.Context, usage UsageContext) context.Context {
-	if usage.APIKeyID == "" && usage.SourceChannel == "" && usage.SessionID == "" && usage.TurnID == "" && usage.JobID == "" {
+	if usage.APIKeyID == "" && usage.SourceChannel == "" && usage.SessionID == "" && usage.TurnID == "" && usage.JobID == "" && usage.Kind == "" {
 		return ctx
 	}
 	return context.WithValue(ctx, usageContextKey{}, usage)

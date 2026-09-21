@@ -57,6 +57,7 @@ type Config struct {
 	MaxTurns             int
 	AgentProfile         string
 	AgentDefaultProfiles AgentDefaultProfilesConfig
+	Decision             DecisionConfig
 	LeadName             string
 	TeamName             string
 	DefaultSkills        []string
@@ -101,6 +102,21 @@ type ScreenerConfig struct {
 	// TimeoutMS bounds one classification call (default 10000).
 	TimeoutMS int
 	// MaxTokens bounds the classifier response (default 256).
+	MaxTokens int
+}
+
+// DecisionConfig configures the workflow decision-model caller (F0 flow
+// runtime). Provider references the shared providers registry; no separate
+// credentials are kept here.
+type DecisionConfig struct {
+	// Enabled turns on decision nodes. When false (default) decision nodes
+	// fail_closed (route to the llm fallback) instead of auto-executing.
+	Enabled bool
+	// Provider names the configured provider id used for decision calls.
+	Provider string
+	// TimeoutMS bounds one decision call (default 10000).
+	TimeoutMS int
+	// MaxTokens bounds the decision response (default 64).
 	MaxTokens int
 }
 

@@ -22,6 +22,7 @@ import (
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/platform/localstore"
@@ -103,6 +104,9 @@ func buildDependencies(cfg *config.Config) dependencies {
 		teamMgr:       newTeamManager(cfg, taskMgr, msgBus, client),
 		subagentJobs:  newSubagentJobStoreWithLease(subagentJobsDir(cfg), cfg.StateDir),
 		workflows:     newWorkflowStore(filepath.Join(cfg.StateDir, "workflows")),
+		flows:         newFlowStore(filepath.Join(cfg.StateDir, "flows")),
+		humanTasks:    newHumanTaskStore(filepath.Join(cfg.StateDir, "human-tasks")),
+		templateMgr:   templates.NewManager(cfg.StateDir, cfg.SkillsDir),
 		todoMgr:       localstore.NewTodoManager(cfg.TodosDir),
 		sandbox:       sandboxFromConfig(cfg),
 		taskboard:     openTaskboardLedger(cfg),
@@ -217,6 +221,9 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 	if deps.workflows == nil {
 		deps.workflows = newWorkflowStore(filepath.Join(cfg.StateDir, "workflows"))
 	}
+	if deps.flows == nil {
+		deps.flows = newFlowStore(filepath.Join(cfg.StateDir, "flows"))
+	}
 	if deps.summarizer == nil {
 		deps.summarizer = compress.NewRuleBasedSessionSummarizer(deps.compressor)
 	}
@@ -253,6 +260,9 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		teamMgr:           deps.teamMgr,
 		subagentJobs:      deps.subagentJobs,
 		workflows:         deps.workflows,
+		flows:             deps.flows,
+		humanTasks:        deps.humanTasks,
+		templateMgr:       deps.templateMgr,
 		client:            deps.client,
 		pluginMgr:         deps.pluginMgr,
 		packageRuntimeIDs: make(map[string]struct{}),
@@ -260,6 +270,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 		sandbox:           deps.sandbox,
 		roleBundles:       newRoleBundleRegistry(),
 		screener:          buildScreener(cfg, deps.client),
+		decisionCaller:    buildDecisionCaller(cfg, deps.client),
 		messages:          []protocol.Message{},
 		activeSkills:      make(map[string]*activeSkillState),
 		transcriptRefs:    nil,

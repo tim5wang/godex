@@ -46,6 +46,10 @@ func baseSchema() []SectionSchema {
 				{Path: "agent.default_profiles.web", Label: "Web Default Profile", Description: "Default agent profile for Web UI sessions.", Type: "string", LiveApply: true, Env: "GODEX_AGENT_DEFAULT_PROFILE_WEB", Options: []string{"general", "coding"}},
 				{Path: "agent.default_profiles.weixin", Label: "Weixin Default Profile", Description: "Default agent profile for Weixin channel sessions.", Type: "string", LiveApply: true, Env: "GODEX_AGENT_DEFAULT_PROFILE_WEIXIN", Options: []string{"general", "coding"}},
 				{Path: "agent.default_profiles.feishu", Label: "Feishu Default Profile", Description: "Default agent profile for Feishu/Lark channel sessions.", Type: "string", LiveApply: true, Env: "GODEX_AGENT_DEFAULT_PROFILE_FEISHU", Options: []string{"general", "coding"}},
+				{Path: "agent.decision.enabled", Label: "Decision Model Enabled", Description: "Enable the low-cost structured decision model for workflow decision nodes (Jev/Laya-class). When off, decision nodes fail_closed and route to the LLM fallback.", Type: "bool", LiveApply: true, Env: "GODEX_AGENT_DECISION_ENABLED"},
+				{Path: "agent.decision.provider", Label: "Decision Provider", Description: "Provider id from api.providers used for structured decision calls. Reuses the shared providers registry; no separate credentials.", Type: "string", LiveApply: true, Env: "GODEX_AGENT_DECISION_PROVIDER"},
+				{Path: "agent.decision.timeout_ms", Label: "Decision Timeout MS", Description: "Timeout for one decision call in milliseconds.", Type: "int", LiveApply: true, Env: "GODEX_AGENT_DECISION_TIMEOUT_MS"},
+				{Path: "agent.decision.max_tokens", Label: "Decision Max Tokens", Description: "Token cap for one decision response (structured JSON, keep small).", Type: "int", LiveApply: true, Env: "GODEX_AGENT_DECISION_MAX_TOKENS"},
 			},
 		},
 		{

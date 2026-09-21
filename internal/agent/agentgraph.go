@@ -18,11 +18,12 @@ import (
 // executed as a subagent job; the node type is the semantic contract the
 // orchestrator uses when planning the graph and interpreting the view.
 const (
-	agentGraphNodeLLMTask    = "llm_task"     // pure reasoning prompt, no tool access
+	agentGraphNodeLLMTask    = "llm_task"      // pure reasoning prompt, no tool access
 	agentGraphNodeSubagent   = "subagent_task" // durable subagent job (default)
-	agentGraphNodeToolCall   = "tool_call"    // a single tool invocation executed by a narrow agent
-	agentGraphNodeUserInput  = "user_input"   // blocks until the orchestrator feeds input (complete_node)
-	agentGraphNodeMergePoint = "merge_point"  // waits for all deps, then completes with a merged handoff summary
+	agentGraphNodeToolCall   = "tool_call"     // a single tool invocation executed by a narrow agent
+	agentGraphNodeUserInput  = "user_input"    // blocks until the orchestrator feeds input (complete_node)
+	agentGraphNodeMergePoint = "merge_point"   // waits for all deps, then completes with a merged handoff summary
+	agentGraphNodeDecision   = "decision"      // synchronous structured decision node (F0 flow runtime)
 )
 
 // AgentGraph edge types.
@@ -77,18 +78,18 @@ type agentGraphEdgeView struct {
 // workflow view (node status/attempt/handoff/verdict/... plus node_type) and
 // adds a typed edge list.
 type agentGraphView struct {
-	WorkflowID string                `json:"workflow_id"`
-	Status     string                `json:"status"`
-	Total      int                   `json:"total"`
-	Pending    int                   `json:"pending"`
-	Running    int                   `json:"running"`
-	Completed  int                   `json:"completed"`
-	Failed     int                   `json:"failed"`
-	Nodes      []workflowNodeView    `json:"nodes"`
-	Edges      []agentGraphEdgeView  `json:"edges"`
-	Started    []string              `json:"started,omitempty"`
-	Appended   []string              `json:"appended,omitempty"`
-	Wait       *subagentWaitView     `json:"wait,omitempty"`
+	WorkflowID string               `json:"workflow_id"`
+	Status     string               `json:"status"`
+	Total      int                  `json:"total"`
+	Pending    int                  `json:"pending"`
+	Running    int                  `json:"running"`
+	Completed  int                  `json:"completed"`
+	Failed     int                  `json:"failed"`
+	Nodes      []workflowNodeView   `json:"nodes"`
+	Edges      []agentGraphEdgeView `json:"edges"`
+	Started    []string             `json:"started,omitempty"`
+	Appended   []string             `json:"appended,omitempty"`
+	Wait       *subagentWaitView    `json:"wait,omitempty"`
 }
 
 // AgentGraph is the runtime abstraction for a dynamic, parallel, adjustable
@@ -550,10 +551,10 @@ func (a *Agent) completeMergePoint(state *workflowState, node *workflowNode) err
 		return err
 	}
 	_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{
-		"event":         "agent_graph_merge_point",
-		"node_id":       node.ID,
+		"event":          "agent_graph_merge_point",
+		"node_id":        node.ID,
 		"summary_tokens": compressCountTokensForText(summary),
-		"at":            now,
+		"at":             now,
 	})
 	return nil
 }

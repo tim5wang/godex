@@ -16,6 +16,7 @@ export const enCoreMessages = {
         workflows: "Workflows",
         businessAgents: "Business Agents",
         taskboard: "Task Board",
+        flows: "Flows",
         settings: "Settings",
         usage: "Usage",
       },

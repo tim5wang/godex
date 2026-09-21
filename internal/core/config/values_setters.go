@@ -165,6 +165,14 @@ func setAgentStoredValue(file *ConfigFile, path string, value any) error {
 		file.Agent.DefaultProfiles.Weixin = NormalizeAgentProfile(asString(value))
 	case "agent.default_profiles.feishu":
 		file.Agent.DefaultProfiles.Feishu = NormalizeAgentProfile(asString(value))
+	case "agent.decision.enabled":
+		file.Agent.Decision.Enabled = asBool(value)
+	case "agent.decision.provider":
+		file.Agent.Decision.Provider = strings.TrimSpace(asString(value))
+	case "agent.decision.timeout_ms":
+		file.Agent.Decision.TimeoutMS = asInt(value)
+	case "agent.decision.max_tokens":
+		file.Agent.Decision.MaxTokens = asInt(value)
 	default:
 		return fmt.Errorf("unknown config field: %s", path)
 	}

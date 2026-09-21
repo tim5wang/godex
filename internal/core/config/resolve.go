@@ -314,6 +314,18 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("agent.default_profiles.feishu", file.Agent.DefaultProfiles.Feishu, "GODEX_AGENT_DEFAULT_PROFILE_FEISHU", func(v string) {
 		current.AgentDefaultProfiles.Feishu = NormalizeAgentProfile(v)
 	})
+	resolveBool("agent.decision.enabled", file.Agent.Decision.Enabled, "GODEX_AGENT_DECISION_ENABLED", func(v bool) {
+		current.Decision.Enabled = v
+	})
+	resolveString("agent.decision.provider", file.Agent.Decision.Provider, "GODEX_AGENT_DECISION_PROVIDER", func(v string) {
+		current.Decision.Provider = strings.TrimSpace(v)
+	})
+	resolveInt("agent.decision.timeout_ms", file.Agent.Decision.TimeoutMS, "GODEX_AGENT_DECISION_TIMEOUT_MS", func(v int) {
+		current.Decision.TimeoutMS = positiveOrDefault(v, 10000)
+	})
+	resolveInt("agent.decision.max_tokens", file.Agent.Decision.MaxTokens, "GODEX_AGENT_DECISION_MAX_TOKENS", func(v int) {
+		current.Decision.MaxTokens = positiveOrDefault(v, 64)
+	})
 	resolveString("logging.level", file.Logging.Level, "LOG_LEVEL", func(v string) { current.Logging.Level = v })
 	resolveString("logging.file_path", file.Logging.FilePath, "LOG_FILE", func(v string) { current.Logging.FilePath = resolveLogPath(m.homeDir, v) })
 	resolveBool("logging.also_stderr", file.Logging.AlsoStderr, "LOG_MIRROR_TO_STDERR", func(v bool) { current.Logging.AlsoStderr = v })
@@ -957,6 +969,12 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 		},
 		MaxTurns:     file.Agent.MaxTurns,
 		AgentProfile: NormalizeAgentProfile(file.Agent.Profile),
+		Decision: DecisionConfig{
+			Enabled:   file.Agent.Decision.Enabled,
+			Provider:  strings.TrimSpace(file.Agent.Decision.Provider),
+			TimeoutMS: positiveOrDefault(file.Agent.Decision.TimeoutMS, 10000),
+			MaxTokens: positiveOrDefault(file.Agent.Decision.MaxTokens, 64),
+		},
 		AgentDefaultProfiles: AgentDefaultProfilesConfig{
 			ACP:    NormalizeAgentProfile(file.Agent.DefaultProfiles.ACP),
 			CLI:    NormalizeAgentProfile(file.Agent.DefaultProfiles.CLI),

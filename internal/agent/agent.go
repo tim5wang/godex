@@ -11,6 +11,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
+	"github.com/tim5wang/godex/internal/core/decision"
 	"github.com/tim5wang/godex/internal/core/instructions"
 	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/media"
@@ -19,6 +20,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/security"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/core/teammate"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
@@ -63,6 +65,9 @@ type Agent struct {
 	teamMgr        *teammate.Manager
 	subagentJobs   *subagentJobStore
 	workflows      *workflowStore
+	flows          *flowStore
+	humanTasks     *humanTaskStore
+	templateMgr    *templates.Manager // resolves step agent_ref (P1.4); nil = no override
 	client         conversation.Caller
 	sandbox        sandbox.Sandbox
 	workerRuntime  workerruntime.Runtime
@@ -70,7 +75,10 @@ type Agent struct {
 	// (roadmap 6.1 content-level security screener).
 	screener    security.Screener
 	screenAudit screenAuditFn
-	roleBundles *roleBundleRegistry
+	// decisionCaller runs low-cost structured decision nodes (Jev/Laya-class
+	// System-1 models); nil means decision nodes fail_closed (F0 flow runtime).
+	decisionCaller decision.Caller
+	roleBundles    *roleBundleRegistry
 	// emitSink is the event sink of the currently running turn, set by
 	// RunWithOptions. Manual compaction (compress tool) emits snapshot_ready
 	// through it so compaction history records manual compactions too; nil
@@ -198,6 +206,11 @@ type dependencies struct {
 	teamMgr        *teammate.Manager
 	subagentJobs   *subagentJobStore
 	workflows      *workflowStore
+	flows          *flowStore
+	humanTasks     *humanTaskStore
+	// templateMgr resolves agent_ref references on flow step nodes (P1.4).
+	// It is optional: nil means agent_ref resolves to no capability override.
+	templateMgr    *templates.Manager
 	todoMgr        *todo.Manager
 	taskboard      *taskboard.Ledger
 	taskboardExec  taskboard.Executor

@@ -55,6 +55,9 @@ type UsageCall struct {
 	TurnID           string    `json:"turn_id,omitempty"`
 	JobID            string    `json:"job_id,omitempty"`
 	ErrorCode        string    `json:"error_code,omitempty"`
+	// Kind is the metering class (e.g. "decision" for workflow decision-model
+	// calls); empty means an ordinary LLM call. Rollups may single it out.
+	Kind string `json:"kind,omitempty"`
 }
 
 // UsageSummary aggregates usage data by time period and optionally by API key.

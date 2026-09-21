@@ -1,0 +1,189 @@
+// Package flow defines Flow Spec v1 (docs/business-flow-runtime-design.md §3):
+// a declarative, versioned workflow specification that compiles onto the
+// durable workflow engine. F1a implements the model, validation and the
+// compile step; the version store and /v1/flows API land in F1b/F2.
+package flow
+
+// Node kinds (Flow Spec §3.2).
+const (
+	KindStep     = "step"     // fixed step: subagent_task / tool_call
+	KindLLM      = "llm"      // pure reasoning node: llm_task
+	KindDecision = "decision" // low-cost structured decision (System-1 model)
+	KindHuman    = "human"    // manual fallback: user_input + human task store (F2)
+	KindBranch   = "branch"   // no-job gateway: evaluates cases synchronously
+	KindLoop     = "loop"     // compiled to control_flow append edges
+)
+
+// Edge types (Flow Spec §3.3).
+const (
+	EdgeDataDependency = "data_dependency" // From must complete before To starts
+	EdgeHandoff        = "handoff"         // To receives From's bounded summary
+	EdgeCondition      = "condition"       // when From matches When, To is appended
+)
+
+// Definition is one immutable version of a flow (flow.json).
+type Definition struct {
+	FlowID      string   `json:"flow_id"`
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Version     string   `json:"version"`
+	Status      string   `json:"status"` // draft | gray | published | deprecated | archived
+	TemplateID  string   `json:"template_id,omitempty"`
+	Inputs      []VarDef `json:"inputs,omitempty"`
+	Outputs     []VarDef `json:"outputs,omitempty"`
+	Nodes       []Node   `json:"nodes"`
+	Edges       []Edge   `json:"edges"`
+	// Retry is the default RetryPolicy applied to nodes that do not override it.
+	Retry *RetryPolicy `json:"retry,omitempty"`
+	// OnComplete, when set, is the webhook POSTed when a run reaches a
+	// terminal state (P1.3). The body is the FlowRunView JSON plus
+	// x-godex-signature: sha256=<HMAC-SHA256 of body with secret> when secret
+	// is non-empty.
+	OnComplete *OnCompleteSpec `json:"on_complete,omitempty"`
+}
+
+// OnCompleteSpec configures the completion webhook of a flow (P1.3).
+type OnCompleteSpec struct {
+	URL    string `json:"url"`
+	Secret string `json:"secret,omitempty"` // HMAC-SHA256 signing secret
+}
+
+// VarDef declares one typed input/output variable (Flow Spec §3.4).
+type VarDef struct {
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
+	Desc string `json:"desc,omitempty"`
+}
+
+// Node is one node in a flow definition.
+type Node struct {
+	ID         string       `json:"id"`
+	Kind       string       `json:"kind"`
+	Title      string       `json:"title,omitempty"`
+	Prompt     string       `json:"prompt,omitempty"`
+	AgentType  string       `json:"agent_type,omitempty"`
+	// AgentRef optionally pins this step node to an agent template (talent
+	// market) or business key id. At run time the referenced template's
+	// capability baseline (bundles/tools/write_scope/mcp/skills/packages) is
+	// resolved and injected into the node's subagent (P1.4). Empty = the
+	// node/flow defaults apply.
+	AgentRef   string       `json:"agent_ref,omitempty"`
+	WriteScope []string     `json:"write_scope,omitempty"`
+	Retry      *RetryPolicy `json:"retry,omitempty"`
+	Decision   *DecisionSpec `json:"decision,omitempty"`
+	Human      *HumanSpec   `json:"human,omitempty"`
+	Branch     *BranchSpec  `json:"branch,omitempty"`
+	Loop       *LoopSpec    `json:"loop,omitempty"`
+	TimeoutSec int          `json:"timeout_sec,omitempty"`
+}
+
+// RetryPolicy mirrors Temporal's RetryPolicy (Flow Spec §3.5). Semantic
+// failures (verdict=fail, permission denied, schema violations) are never
+// retried; they route through branch/repair edges instead.
+type RetryPolicy struct {
+	MaxAttempts        int      `json:"max_attempts,omitempty"` // including the first attempt; 1 = no retry
+	InitialIntervalMS  int      `json:"initial_interval_ms,omitempty"`
+	BackoffCoefficient float64  `json:"backoff_coefficient,omitempty"`
+	MaxIntervalMS      int      `json:"max_interval_ms,omitempty"`
+	Jitter             float64  `json:"jitter,omitempty"`
+	RetryOn            []string `json:"retry_on,omitempty"`
+	NonRetryable       []string `json:"non_retryable,omitempty"`
+}
+
+// DecisionSpec configures a decision node (Flow Spec §3.2).
+type DecisionSpec struct {
+	Provider      string   `json:"provider,omitempty"`
+	DecisionType  string   `json:"decision_type,omitempty"` // choice | boolean | score
+	Choices       []Choice `json:"choices,omitempty"`
+	TimeoutMS     int      `json:"timeout_ms,omitempty"`
+	OnError       string   `json:"on_error,omitempty"` // fail_closed | fail_open | fail
+	DefaultChoice string   `json:"default_choice,omitempty"`
+}
+
+// Choice is one allowed verdict of a choice-type decision.
+type Choice struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+}
+
+// HumanSpec configures a human fallback node (Flow Spec §3.2; task store F2).
+type HumanSpec struct {
+	Queue          string   `json:"queue"`
+	AssigneePolicy string   `json:"assignee_policy,omitempty"` // any | role:<id>
+	Form           any      `json:"form,omitempty"`            // ui_card card/form JSON
+	Prompt         string   `json:"prompt,omitempty"`
+	TimeoutMS      int      `json:"timeout_ms,omitempty"`
+	OnTimeout      string   `json:"on_timeout,omitempty"` // escalate:<queue> | llm | fail
+	ResultVar      string   `json:"result_var,omitempty"`
+}
+
+// BranchSpec is a no-job routing gateway (Flow Spec §3.2). Cases are matched
+// in order; the first hit routes to its target. DefaultTo is mandatory.
+type BranchSpec struct {
+	Cases     []BranchCase `json:"cases"`
+	DefaultTo string       `json:"default_to"`
+}
+
+// BranchCase is one output port of a branch.
+type BranchCase struct {
+	Name      string    `json:"name,omitempty"`
+	To        string    `json:"to"`
+	Condition Condition `json:"condition"`
+}
+
+// LoopSpec compiles to control_flow append edges (Flow Spec §3.2). F1a
+// supports a single iteration append per exit condition.
+type LoopSpec struct {
+	Body          []string  `json:"body"`
+	ExitWhen      Condition `json:"exit_when"`
+	MaxIterations int       `json:"max_iterations"`
+	IterationKey  string    `json:"iteration_key,omitempty"`
+}
+
+// Edge connects two nodes. data_dependency/handoff edges reference static
+// nodes; condition edges append their target as a template when From matches.
+type Edge struct {
+	ID            string     `json:"id,omitempty"`
+	From          string     `json:"from"`
+	To            string     `json:"to"`
+	EdgeType      string     `json:"edge_type,omitempty"` // data_dependency (default) | handoff | condition
+	When          *Condition `json:"when,omitempty"`
+	MaxIterations int        `json:"max_iterations,omitempty"`
+	IterationKey  string     `json:"iteration_key,omitempty"`
+}
+
+// Condition is a structured predicate over declared node outputs (Flow Spec
+// §3.3). No arbitrary expressions are allowed.
+type Condition struct {
+	Status     string        `json:"status,omitempty"`
+	Verdict    string        `json:"verdict,omitempty"`
+	Node       string        `json:"node,omitempty"` // predicate target; default = edge From
+	Choice     string        `json:"choice,omitempty"`
+	Confidence *NumCompare   `json:"confidence,omitempty"`
+	Output     *FieldCompare `json:"output,omitempty"`
+	// Not negates the whole sub-predicate. Loop exit_when compiles to
+	// Not(exit_when) as the continue-iterating condition (P1.5).
+	Not *Condition  `json:"not,omitempty"`
+	All []Condition `json:"all,omitempty"`
+	Any []Condition `json:"any,omitempty"`
+}
+
+// NumCompare is a numeric comparison.
+type NumCompare struct {
+	Op    string  `json:"op"` // gt|gte|lt|lte|eq
+	Value float64 `json:"value"`
+}
+
+// FieldCompare is a dotted-path field predicate.
+type FieldCompare struct {
+	Path  string `json:"path"`
+	Op    string `json:"op"` // eq|ne|in|not_in|contains|gt|gte|lt|lte
+	Value any    `json:"value"`
+}
+
+// ConditionEmpty reports whether c carries no predicate at all.
+func ConditionEmpty(c Condition) bool {
+	return c.Status == "" && c.Verdict == "" && c.Node == "" && c.Choice == "" &&
+		c.Confidence == nil && c.Output == nil && c.Not == nil &&
+		len(c.All) == 0 && len(c.Any) == 0
+}

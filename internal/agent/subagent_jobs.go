@@ -8,8 +8,8 @@ package agent
 import (
 	"context"
 	"errors"
-	"github.com/tim5wang/godex/internal/core/lease"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/lease"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"sync"
 	"time"
@@ -81,55 +81,55 @@ type subagentProgressEvent struct {
 }
 
 type subagentJob struct {
-	ID              string                    `json:"id"`
-	SessionID       string                    `json:"session_id,omitempty"`
-	ParentTurnID    string                    `json:"parent_turn_id,omitempty"`
-	Identity        AgentIdentity             `json:"identity,omitempty"`
-	AgentType       string                    `json:"agent_type"`
-	RoleID          string                    `json:"role_id,omitempty"`
-	RoleName        string                    `json:"role_name,omitempty"`
-	PackageName     string                    `json:"package_name,omitempty"`
-	Sequence        int                       `json:"sequence,omitempty"`
-	Objective       string                    `json:"objective,omitempty"`
-	DisplayTitle    string                    `json:"display_title,omitempty"`
-	RuntimeContext  automation.SessionContext `json:"runtime_context,omitempty"`
-	Prompt          string                    `json:"prompt"`
-	BasePrompt      string                    `json:"base_prompt"`
-	ToolNames       []string                  `json:"tool_names"`
-	WriteScope      []string                  `json:"write_scope,omitempty"`
-	DefaultBundles  []string                  `json:"default_bundles,omitempty"`
-	BundleOverrides  []string                 `json:"bundle_overrides,omitempty"`
-	DeactivateBundles []string                `json:"deactivate_bundles,omitempty"`
-	ToolPolicy      []string                  `json:"tool_policy,omitempty"`
-	WorkerID        string                    `json:"worker_id,omitempty"`
-	SandboxID       string                    `json:"sandbox_id,omitempty"`
-	SourceBranchID  string                    `json:"source_branch_id,omitempty"`
-	SourceNodeID    string                    `json:"source_node_id,omitempty"`
-	WorkerBranchID  string                    `json:"worker_branch_id,omitempty"`
-	WorktreeDir     string                    `json:"worktree_dir,omitempty"`
-	BaselineDir     string                    `json:"baseline_dir,omitempty"`
-	PreviewJobIDs   []string                  `json:"preview_job_ids,omitempty"`
-	Isolation       string                    `json:"isolation,omitempty"`
-	WorkspaceOrigin string                    `json:"workspace_origin,omitempty"`
-	GitBranch       string                    `json:"git_branch,omitempty"`
-	CleanupState    string                    `json:"cleanup_state,omitempty"`
-	MergeStatus     string                    `json:"merge_status,omitempty"`
-	Status          subagentJobStatus         `json:"status"`
-	Result          string                    `json:"result,omitempty"`
-	Error           string                    `json:"error,omitempty"`
-	Messages        []protocol.Message        `json:"messages,omitempty"`
-	PendingInputs   []protocol.Message        `json:"pending_inputs,omitempty"`
-	Progress        []subagentProgressEvent   `json:"progress,omitempty"`
-	MaxTurns        int                       `json:"max_turns"`
-	ContextBudget   int                       `json:"context_budget,omitempty"`
-	JobTimeoutMS    int                       `json:"job_timeout_ms,omitempty"`
-	CreatedAt       time.Time                 `json:"created_at"`
-	UpdatedAt       time.Time                 `json:"updated_at"`
-	StartedAt       time.Time                 `json:"started_at,omitempty"`
-	FinishedAt      time.Time                 `json:"finished_at,omitempty"`
-	MergedAt        time.Time                 `json:"merged_at,omitempty"`
-	LeaseToken      string                    `json:"lease_token,omitempty"`
-	LeaseExpiresAt  time.Time                 `json:"lease_expires_at,omitempty"`
+	ID                string                    `json:"id"`
+	SessionID         string                    `json:"session_id,omitempty"`
+	ParentTurnID      string                    `json:"parent_turn_id,omitempty"`
+	Identity          AgentIdentity             `json:"identity,omitempty"`
+	AgentType         string                    `json:"agent_type"`
+	RoleID            string                    `json:"role_id,omitempty"`
+	RoleName          string                    `json:"role_name,omitempty"`
+	PackageName       string                    `json:"package_name,omitempty"`
+	Sequence          int                       `json:"sequence,omitempty"`
+	Objective         string                    `json:"objective,omitempty"`
+	DisplayTitle      string                    `json:"display_title,omitempty"`
+	RuntimeContext    automation.SessionContext `json:"runtime_context,omitempty"`
+	Prompt            string                    `json:"prompt"`
+	BasePrompt        string                    `json:"base_prompt"`
+	ToolNames         []string                  `json:"tool_names"`
+	WriteScope        []string                  `json:"write_scope,omitempty"`
+	DefaultBundles    []string                  `json:"default_bundles,omitempty"`
+	BundleOverrides   []string                  `json:"bundle_overrides,omitempty"`
+	DeactivateBundles []string                  `json:"deactivate_bundles,omitempty"`
+	ToolPolicy        []string                  `json:"tool_policy,omitempty"`
+	WorkerID          string                    `json:"worker_id,omitempty"`
+	SandboxID         string                    `json:"sandbox_id,omitempty"`
+	SourceBranchID    string                    `json:"source_branch_id,omitempty"`
+	SourceNodeID      string                    `json:"source_node_id,omitempty"`
+	WorkerBranchID    string                    `json:"worker_branch_id,omitempty"`
+	WorktreeDir       string                    `json:"worktree_dir,omitempty"`
+	BaselineDir       string                    `json:"baseline_dir,omitempty"`
+	PreviewJobIDs     []string                  `json:"preview_job_ids,omitempty"`
+	Isolation         string                    `json:"isolation,omitempty"`
+	WorkspaceOrigin   string                    `json:"workspace_origin,omitempty"`
+	GitBranch         string                    `json:"git_branch,omitempty"`
+	CleanupState      string                    `json:"cleanup_state,omitempty"`
+	MergeStatus       string                    `json:"merge_status,omitempty"`
+	Status            subagentJobStatus         `json:"status"`
+	Result            string                    `json:"result,omitempty"`
+	Error             string                    `json:"error,omitempty"`
+	Messages          []protocol.Message        `json:"messages,omitempty"`
+	PendingInputs     []protocol.Message        `json:"pending_inputs,omitempty"`
+	Progress          []subagentProgressEvent   `json:"progress,omitempty"`
+	MaxTurns          int                       `json:"max_turns"`
+	ContextBudget     int                       `json:"context_budget,omitempty"`
+	JobTimeoutMS      int                       `json:"job_timeout_ms,omitempty"`
+	CreatedAt         time.Time                 `json:"created_at"`
+	UpdatedAt         time.Time                 `json:"updated_at"`
+	StartedAt         time.Time                 `json:"started_at,omitempty"`
+	FinishedAt        time.Time                 `json:"finished_at,omitempty"`
+	MergedAt          time.Time                 `json:"merged_at,omitempty"`
+	LeaseToken        string                    `json:"lease_token,omitempty"`
+	LeaseExpiresAt    time.Time                 `json:"lease_expires_at,omitempty"`
 }
 
 // IDString returns the durable job id without exposing the internal job type.
@@ -244,10 +244,10 @@ type DurableSubagentJobView struct {
 	FinishedAt        time.Time                     `json:"finished_at,omitempty"`
 	MergedAt          time.Time                     `json:"merged_at,omitempty"`
 	WriteScope        []string                      `json:"write_scope,omitempty"`
-	DefaultBundles     []string                      `json:"default_bundles,omitempty"`
-	BundleOverrides    []string                      `json:"bundle_overrides,omitempty"`
-	DeactivateBundles  []string                      `json:"deactivate_bundles,omitempty"`
-	ToolPolicy         []string                      `json:"tool_policy,omitempty"`
+	DefaultBundles    []string                      `json:"default_bundles,omitempty"`
+	BundleOverrides   []string                      `json:"bundle_overrides,omitempty"`
+	DeactivateBundles []string                      `json:"deactivate_bundles,omitempty"`
+	ToolPolicy        []string                      `json:"tool_policy,omitempty"`
 	ToolNames         []string                      `json:"tool_names,omitempty"`
 	WorkerID          string                        `json:"worker_id,omitempty"`
 	SandboxID         string                        `json:"sandbox_id,omitempty"`
@@ -308,33 +308,33 @@ type subagentJobStore struct {
 }
 
 type subagentStartOptions struct {
-	SessionID       string
-	ParentTurnID    string
-	ParentID        string
-	AgentType       string
-	RoleID          string
-	RoleName        string
-	PackageName     string
-	Prompt          string
-	BasePrompt      string
-	ToolNames       []string
-	WriteScope      []string
-	PreviewJobIDs   []string
-	RequiredBundles []string
-	RequiredTools   []string
-	DefaultBundles  []string
-	BundleOverrides  []string
+	SessionID         string
+	ParentTurnID      string
+	ParentID          string
+	AgentType         string
+	RoleID            string
+	RoleName          string
+	PackageName       string
+	Prompt            string
+	BasePrompt        string
+	ToolNames         []string
+	WriteScope        []string
+	PreviewJobIDs     []string
+	RequiredBundles   []string
+	RequiredTools     []string
+	DefaultBundles    []string
+	BundleOverrides   []string
 	DeactivateBundles []string
-	ToolPolicy      []string
-	Capabilities    []string
-	WorkerID        string
-	SandboxID       string
-	ModelHint       string
-	BudgetHint      string
-	ContextBudget   int
-	Display         map[string]string
-	RuntimeContext  automation.SessionContext
-	MaxTurns        int
-	MaxConcurrent   int
-	JobTimeoutMS    int
+	ToolPolicy        []string
+	Capabilities      []string
+	WorkerID          string
+	SandboxID         string
+	ModelHint         string
+	BudgetHint        string
+	ContextBudget     int
+	Display           map[string]string
+	RuntimeContext    automation.SessionContext
+	MaxTurns          int
+	MaxConcurrent     int
+	JobTimeoutMS      int
 }

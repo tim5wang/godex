@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
@@ -21,36 +21,36 @@ func (a *Agent) registerSubagentTool(handler *tools.ToolHandler) {
 }
 
 type subagentArgs struct {
-	Action          string              `json:"action,omitempty"`
-	JobID           string              `json:"job_id,omitempty"`
-	JobIDs          []string            `json:"job_ids,omitempty"`
-	Prompt          string              `json:"prompt,omitempty"`
-	AgentType       string              `json:"agent_type,omitempty"`
-	Mode            string              `json:"mode,omitempty"`
-	WriteScope      []string            `json:"write_scope,omitempty"`
-	RequiredBundles []string            `json:"required_bundles,omitempty"`
-	RequiredTools   []string            `json:"required_tools,omitempty"`
-	BundleOverrides []string            `json:"bundle_overrides,omitempty"`
-	DeactivateBundles []string          `json:"deactivate_bundles,omitempty"`
-	Limit           int                 `json:"limit,omitempty"`
-	TimeoutMS       int                 `json:"timeout_ms,omitempty"`
-	JobTimeoutMS    int                 `json:"job_timeout_ms,omitempty"`
-	MaxTurns        int                 `json:"max_turns,omitempty"`
-	Wait            bool                `json:"wait,omitempty"`
-	Input           string              `json:"input,omitempty"`
-	Tasks           []subagentBatchItem `json:"tasks,omitempty"`
+	Action            string              `json:"action,omitempty"`
+	JobID             string              `json:"job_id,omitempty"`
+	JobIDs            []string            `json:"job_ids,omitempty"`
+	Prompt            string              `json:"prompt,omitempty"`
+	AgentType         string              `json:"agent_type,omitempty"`
+	Mode              string              `json:"mode,omitempty"`
+	WriteScope        []string            `json:"write_scope,omitempty"`
+	RequiredBundles   []string            `json:"required_bundles,omitempty"`
+	RequiredTools     []string            `json:"required_tools,omitempty"`
+	BundleOverrides   []string            `json:"bundle_overrides,omitempty"`
+	DeactivateBundles []string            `json:"deactivate_bundles,omitempty"`
+	Limit             int                 `json:"limit,omitempty"`
+	TimeoutMS         int                 `json:"timeout_ms,omitempty"`
+	JobTimeoutMS      int                 `json:"job_timeout_ms,omitempty"`
+	MaxTurns          int                 `json:"max_turns,omitempty"`
+	Wait              bool                `json:"wait,omitempty"`
+	Input             string              `json:"input,omitempty"`
+	Tasks             []subagentBatchItem `json:"tasks,omitempty"`
 }
 
 type subagentBatchItem struct {
-	Prompt          string   `json:"prompt,omitempty"`
-	AgentType       string   `json:"agent_type,omitempty"`
-	WriteScope      []string `json:"write_scope,omitempty"`
-	RequiredBundles []string `json:"required_bundles,omitempty"`
-	RequiredTools   []string `json:"required_tools,omitempty"`
-	BundleOverrides []string `json:"bundle_overrides,omitempty"`
+	Prompt            string   `json:"prompt,omitempty"`
+	AgentType         string   `json:"agent_type,omitempty"`
+	WriteScope        []string `json:"write_scope,omitempty"`
+	RequiredBundles   []string `json:"required_bundles,omitempty"`
+	RequiredTools     []string `json:"required_tools,omitempty"`
+	BundleOverrides   []string `json:"bundle_overrides,omitempty"`
 	DeactivateBundles []string `json:"deactivate_bundles,omitempty"`
-	JobTimeoutMS    int      `json:"job_timeout_ms,omitempty"`
-	MaxTurns        int      `json:"max_turns,omitempty"`
+	JobTimeoutMS      int      `json:"job_timeout_ms,omitempty"`
+	MaxTurns          int      `json:"max_turns,omitempty"`
 }
 
 type subagentLogsView struct {
@@ -734,34 +734,34 @@ func formatSubagentJob(job *subagentJob, includeMessages bool) map[string]interf
 		return map[string]interface{}{}
 	}
 	out := map[string]interface{}{
-		"job_id":           job.ID,
-		"session_id":       job.SessionID,
-		"parent_turn_id":   job.ParentTurnID,
-		"agent_type":       job.AgentType,
-		"role_id":          job.RoleID,
-		"role_name":        job.RoleName,
-		"package_name":     job.PackageName,
-		"status":           job.Status,
-		"result":           job.Result,
-		"error":            job.Error,
-		"created_at":       job.CreatedAt,
-		"updated_at":       job.UpdatedAt,
-		"started_at":       job.StartedAt,
-		"finished_at":      job.FinishedAt,
-		"write_scope":      append([]string{}, job.WriteScope...),
-		"default_bundles":  append([]string{}, job.DefaultBundles...),
-		"bundle_overrides": append([]string{}, job.BundleOverrides...),
+		"job_id":             job.ID,
+		"session_id":         job.SessionID,
+		"parent_turn_id":     job.ParentTurnID,
+		"agent_type":         job.AgentType,
+		"role_id":            job.RoleID,
+		"role_name":          job.RoleName,
+		"package_name":       job.PackageName,
+		"status":             job.Status,
+		"result":             job.Result,
+		"error":              job.Error,
+		"created_at":         job.CreatedAt,
+		"updated_at":         job.UpdatedAt,
+		"started_at":         job.StartedAt,
+		"finished_at":        job.FinishedAt,
+		"write_scope":        append([]string{}, job.WriteScope...),
+		"default_bundles":    append([]string{}, job.DefaultBundles...),
+		"bundle_overrides":   append([]string{}, job.BundleOverrides...),
 		"deactivate_bundles": append([]string{}, job.DeactivateBundles...),
-		"tool_names":       append([]string{}, job.ToolNames...),
-		"worker_id":        firstNonEmpty(job.WorkerID, localGoDexWorkerID),
-		"sandbox_id":       job.SandboxID,
-		"source_branch_id": job.SourceBranchID,
-		"source_node_id":   job.SourceNodeID,
-		"worker_branch_id": job.WorkerBranchID,
-		"worktree_dir":     job.WorktreeDir,
-		"isolation":        job.Isolation,
-		"merge_status":     job.MergeStatus,
-		"merged_at":        job.MergedAt,
+		"tool_names":         append([]string{}, job.ToolNames...),
+		"worker_id":          firstNonEmpty(job.WorkerID, localGoDexWorkerID),
+		"sandbox_id":         job.SandboxID,
+		"source_branch_id":   job.SourceBranchID,
+		"source_node_id":     job.SourceNodeID,
+		"worker_branch_id":   job.WorkerBranchID,
+		"worktree_dir":       job.WorktreeDir,
+		"isolation":          job.Isolation,
+		"merge_status":       job.MergeStatus,
+		"merged_at":          job.MergedAt,
 	}
 	out["progress"] = cloneSubagentProgress(job.Progress)
 	return out

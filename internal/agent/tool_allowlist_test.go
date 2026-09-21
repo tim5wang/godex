@@ -161,10 +161,10 @@ func TestApplyStepListNarrowOnlyRemoves(t *testing.T) {
 
 func TestSplitMCPToolName(t *testing.T) {
 	cases := []struct {
-		name      string
-		server    string
-		tool      string
-		isMCP     bool
+		name   string
+		server string
+		tool   string
+		isMCP  bool
 	}{
 		{"crm__get_order", "crm", "get_order", true},
 		{"read_file", "", "", false},

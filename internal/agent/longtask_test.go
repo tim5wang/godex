@@ -898,10 +898,10 @@ func TestLongTaskRunResumeAfterInterrupt(t *testing.T) {
 	// US-001 (ValidationStatus=skipped). The run then proceeds to start
 	// US-002. US-001 must not be re-started.
 	resumed, err := a.RunLongTask(context.Background(), "lt_run_resume", longTaskArgs{
-		ResumeRunID:    runID,
-		SessionID:      "session_resume",
-		MaxIterations:  1,
-		WaitTimeoutMS:  2000,
+		ResumeRunID:   runID,
+		SessionID:     "session_resume",
+		MaxIterations: 1,
+		WaitTimeoutMS: 2000,
 	})
 	if err != nil {
 		t.Fatalf("resume run: %v", err)
@@ -1066,7 +1066,7 @@ func TestLongTaskCancelAllCascades(t *testing.T) {
 
 	view, err := a.cancelLongTask(context.Background(), longTaskArgs{
 		WorkflowID: "lt_cancel_all",
-		CancelAll: true,
+		CancelAll:  true,
 	})
 	if err != nil {
 		t.Fatalf("cancelLongTask: %v", err)
@@ -1447,9 +1447,9 @@ func TestLongTaskAsyncRunPersistsRunRecordBeforeGoroutineExit(t *testing.T) {
 	_ = a.workflows.dir
 
 	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
-		"action":      "run",
-		"longtask_id": "lt_async_persist",
-		"async":       true,
+		"action":          "run",
+		"longtask_id":     "lt_async_persist",
+		"async":           true,
 		"wait_timeout_ms": 100,
 	})
 
@@ -1521,9 +1521,9 @@ func TestLongTaskAsyncRunEventuallyFinalizesAndPersists(t *testing.T) {
 		},
 	})
 	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
-		"action":      "run",
-		"longtask_id": "lt_async_finalize",
-		"async":       true,
+		"action":          "run",
+		"longtask_id":     "lt_async_finalize",
+		"async":           true,
 		"wait_timeout_ms": 5000,
 	})
 
@@ -1591,9 +1591,9 @@ func TestLongTaskAsyncRunRefluxReachesChatHistory(t *testing.T) {
 		},
 	})
 	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
-		"action":      "run",
-		"longtask_id": "lt_async_reflux",
-		"async":       true,
+		"action":          "run",
+		"longtask_id":     "lt_async_reflux",
+		"async":           true,
 		"wait_timeout_ms": 5000,
 	})
 
@@ -1648,9 +1648,9 @@ func TestLongTaskAsyncRunHasSingleRunRecord(t *testing.T) {
 		},
 	})
 	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
-		"action":      "run",
-		"longtask_id": "lt_async_single",
-		"async":       true,
+		"action":          "run",
+		"longtask_id":     "lt_async_single",
+		"async":           true,
 		"wait_timeout_ms": 5000,
 	})
 
@@ -2629,4 +2629,3 @@ func TestSharedResumeLongTasksAfterRestartIsIdempotent(t *testing.T) {
 		t.Fatalf("expected exactly one interrupted record after repeated calls, got %+v", records)
 	}
 }
-

@@ -13,27 +13,27 @@ import (
 // payload metadata is what the Web / TUI clients key off of to render
 // the reflux bubble.
 type longTaskRefluxPayload struct {
-	LongTaskID       string                 `json:"longtask_id"`
-	RunID            string                 `json:"run_id"`
-	Status           string                 `json:"status"`
-	UpdatedAt        time.Time              `json:"updated_at"`
-	Iterations       int                    `json:"iterations"`
-	Stories          []longTaskRefluxStory  `json:"stories"`
+	LongTaskID       string                  `json:"longtask_id"`
+	RunID            string                  `json:"run_id"`
+	Status           string                  `json:"status"`
+	UpdatedAt        time.Time               `json:"updated_at"`
+	Iterations       int                     `json:"iterations"`
+	Stories          []longTaskRefluxStory   `json:"stories"`
 	Repaired         []longTaskRepairSummary `json:"repaired,omitempty"`
-	BlockedBy        string                 `json:"blocked_by,omitempty"`
-	Message          string                 `json:"message,omitempty"`
-	SuggestedActions []string               `json:"suggested_actions,omitempty"`
+	BlockedBy        string                  `json:"blocked_by,omitempty"`
+	Message          string                  `json:"message,omitempty"`
+	SuggestedActions []string                `json:"suggested_actions,omitempty"`
 }
 
 type longTaskRefluxStory struct {
-	StoryID         string `json:"story_id"`
-	Status          string `json:"status"`
-	Verdict         string `json:"verdict,omitempty"`
-	ValidationRef   string `json:"validation_ref,omitempty"`
-	CommitRef       string `json:"commit_ref,omitempty"`
-	CommitHash      string `json:"commit_hash,omitempty"`
-	ResultPreview   string `json:"result_preview,omitempty"`
-	Error           string `json:"error,omitempty"`
+	StoryID       string `json:"story_id"`
+	Status        string `json:"status"`
+	Verdict       string `json:"verdict,omitempty"`
+	ValidationRef string `json:"validation_ref,omitempty"`
+	CommitRef     string `json:"commit_ref,omitempty"`
+	CommitHash    string `json:"commit_hash,omitempty"`
+	ResultPreview string `json:"result_preview,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 func buildLongTaskRefluxMessage(view longTaskView, runID string) protocol.Message {

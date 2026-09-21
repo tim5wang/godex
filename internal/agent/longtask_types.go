@@ -26,25 +26,25 @@ const (
 	longTaskCommitCommitted       = "committed"
 	longTaskCommitFailed          = "failed"
 
-	longTaskDefaultRunMaxIterations       = 10
-	longTaskDefaultWaitTimeoutMS          = 60000
-	longTaskDefaultValidationTimeoutMS    = 60000
+	longTaskDefaultRunMaxIterations    = 10
+	longTaskDefaultWaitTimeoutMS       = 60000
+	longTaskDefaultValidationTimeoutMS = 60000
 )
 
 type longTaskSpec struct {
-	ID                   string               `json:"id"`
-	WorkflowID           string               `json:"workflow_id"`
-	Project              string               `json:"project,omitempty"`
-	BranchName           string               `json:"branch_name,omitempty"`
-	Description          string               `json:"description,omitempty"`
-	QualityChecks        []string             `json:"quality_checks,omitempty"`
-	ValidationTimeoutMS  int                  `json:"validation_timeout_ms,omitempty"`
-	MaxValidationBudgetMS int                 `json:"max_validation_budget_ms,omitempty"`
-	MergePolicy          string               `json:"merge_policy,omitempty"`
-	CommitPolicy         string               `json:"commit_policy,omitempty"`
-	Stories              []longTaskStoryInput `json:"stories"`
-	CreatedAt            time.Time            `json:"created_at"`
-	UpdatedAt            time.Time            `json:"updated_at"`
+	ID                    string               `json:"id"`
+	WorkflowID            string               `json:"workflow_id"`
+	Project               string               `json:"project,omitempty"`
+	BranchName            string               `json:"branch_name,omitempty"`
+	Description           string               `json:"description,omitempty"`
+	QualityChecks         []string             `json:"quality_checks,omitempty"`
+	ValidationTimeoutMS   int                  `json:"validation_timeout_ms,omitempty"`
+	MaxValidationBudgetMS int                  `json:"max_validation_budget_ms,omitempty"`
+	MergePolicy           string               `json:"merge_policy,omitempty"`
+	CommitPolicy          string               `json:"commit_policy,omitempty"`
+	Stories               []longTaskStoryInput `json:"stories"`
+	CreatedAt             time.Time            `json:"created_at"`
+	UpdatedAt             time.Time            `json:"updated_at"`
 }
 
 type longTaskStoryInput struct {
@@ -64,36 +64,36 @@ type longTaskStoryInput struct {
 }
 
 type longTaskArgs struct {
-	Action               string               `json:"action,omitempty"`
-	LongTaskID           string               `json:"longtask_id,omitempty"`
-	WorkflowID           string               `json:"workflow_id,omitempty"`
-	Project              string               `json:"project,omitempty"`
-	BranchName           string               `json:"branch_name,omitempty"`
-	Description          string               `json:"description,omitempty"`
-	QualityChecks        []string             `json:"quality_checks,omitempty"`
-	ValidationTimeoutMS  int                  `json:"validation_timeout_ms,omitempty"`
-	MergePolicy          string               `json:"merge_policy,omitempty"`
-	CommitPolicy         string               `json:"commit_policy,omitempty"`
-	Stories              []longTaskStoryInput `json:"stories,omitempty"`
-	NodeID               string               `json:"node_id,omitempty"`
-	Result               string               `json:"result,omitempty"`
-	Mode                 string               `json:"mode,omitempty"`
-	TimeoutMS            int                  `json:"timeout_ms,omitempty"`
-	MaxIterations        int                  `json:"max_iterations,omitempty"`
-	WaitTimeoutMS        int                  `json:"wait_timeout_ms,omitempty"`
-	StopOnFailure        *bool                `json:"stop_on_failure,omitempty"`
-	AutoRepair           bool                 `json:"auto_repair,omitempty"`
-	MaxRepairAttempts    int                  `json:"max_repair_attempts,omitempty"`
-	Async                bool                 `json:"async,omitempty"`
-	ResumeRunID          string               `json:"resume_run_id,omitempty"`
-	NoReflux             bool                 `json:"no_reflux,omitempty"`
-	SessionID            string               `json:"session_id,omitempty"`
-	CancelAll            bool                 `json:"cancel_all,omitempty"`
+	Action              string               `json:"action,omitempty"`
+	LongTaskID          string               `json:"longtask_id,omitempty"`
+	WorkflowID          string               `json:"workflow_id,omitempty"`
+	Project             string               `json:"project,omitempty"`
+	BranchName          string               `json:"branch_name,omitempty"`
+	Description         string               `json:"description,omitempty"`
+	QualityChecks       []string             `json:"quality_checks,omitempty"`
+	ValidationTimeoutMS int                  `json:"validation_timeout_ms,omitempty"`
+	MergePolicy         string               `json:"merge_policy,omitempty"`
+	CommitPolicy        string               `json:"commit_policy,omitempty"`
+	Stories             []longTaskStoryInput `json:"stories,omitempty"`
+	NodeID              string               `json:"node_id,omitempty"`
+	Result              string               `json:"result,omitempty"`
+	Mode                string               `json:"mode,omitempty"`
+	TimeoutMS           int                  `json:"timeout_ms,omitempty"`
+	MaxIterations       int                  `json:"max_iterations,omitempty"`
+	WaitTimeoutMS       int                  `json:"wait_timeout_ms,omitempty"`
+	StopOnFailure       *bool                `json:"stop_on_failure,omitempty"`
+	AutoRepair          bool                 `json:"auto_repair,omitempty"`
+	MaxRepairAttempts   int                  `json:"max_repair_attempts,omitempty"`
+	Async               bool                 `json:"async,omitempty"`
+	ResumeRunID         string               `json:"resume_run_id,omitempty"`
+	NoReflux            bool                 `json:"no_reflux,omitempty"`
+	SessionID           string               `json:"session_id,omitempty"`
+	CancelAll           bool                 `json:"cancel_all,omitempty"`
 	// T12 fields: lookup / rollback / gc
-	CommitHash        string `json:"commit_hash,omitempty"`
-	RollbackReason    string `json:"rollback_reason,omitempty"`
-	OlderThanSeconds  int    `json:"older_than_seconds,omitempty"`
-	ApplyGC           bool   `json:"apply_gc,omitempty"`
+	CommitHash       string `json:"commit_hash,omitempty"`
+	RollbackReason   string `json:"rollback_reason,omitempty"`
+	OlderThanSeconds int    `json:"older_than_seconds,omitempty"`
+	ApplyGC          bool   `json:"apply_gc,omitempty"`
 }
 
 type longTaskValidationCheck struct {
@@ -132,42 +132,42 @@ type longTaskCommitArtifact struct {
 }
 
 type LongTaskStoryView struct {
-	ID                 string    `json:"id"`
-	NodeID             string    `json:"node_id,omitempty"`
-	RepairAttempts     int       `json:"repair_attempts,omitempty"`
-	Title              string    `json:"title,omitempty"`
-	Description        string    `json:"description,omitempty"`
-	AcceptanceCriteria []string  `json:"acceptance_criteria,omitempty"`
-	Priority           int       `json:"priority,omitempty"`
+	ID                 string   `json:"id"`
+	NodeID             string   `json:"node_id,omitempty"`
+	RepairAttempts     int      `json:"repair_attempts,omitempty"`
+	Title              string   `json:"title,omitempty"`
+	Description        string   `json:"description,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
+	Priority           int      `json:"priority,omitempty"`
 	// DependsOn exposes the story IDs this story depends on. Empty means the
 	// story is dependency-free and runs in parallel with other free stories.
-	DependsOn []string `json:"depends_on,omitempty"`
-	Status    string    `json:"status"`
-	Passes             bool      `json:"passes"`
-	Verdict            string    `json:"verdict,omitempty"`
-	JobID              string    `json:"job_id,omitempty"`
-	HandoffRef         string    `json:"handoff_ref,omitempty"`
-	ResultPreview      string    `json:"result_preview,omitempty"`
-	Error              string    `json:"error,omitempty"`
-	ValidationStatus   string    `json:"validation_status,omitempty"`
-	ValidationRef      string    `json:"validation_ref,omitempty"`
-	MergeStatus        string    `json:"merge_status,omitempty"`
-	CommitStatus       string    `json:"commit_status,omitempty"`
-	CommitHash         string    `json:"commit_hash,omitempty"`
-	CommitRef          string    `json:"commit_ref,omitempty"`
-	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+	DependsOn        []string  `json:"depends_on,omitempty"`
+	Status           string    `json:"status"`
+	Passes           bool      `json:"passes"`
+	Verdict          string    `json:"verdict,omitempty"`
+	JobID            string    `json:"job_id,omitempty"`
+	HandoffRef       string    `json:"handoff_ref,omitempty"`
+	ResultPreview    string    `json:"result_preview,omitempty"`
+	Error            string    `json:"error,omitempty"`
+	ValidationStatus string    `json:"validation_status,omitempty"`
+	ValidationRef    string    `json:"validation_ref,omitempty"`
+	MergeStatus      string    `json:"merge_status,omitempty"`
+	CommitStatus     string    `json:"commit_status,omitempty"`
+	CommitHash       string    `json:"commit_hash,omitempty"`
+	CommitRef        string    `json:"commit_ref,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at,omitempty"`
 	// Reverted is set after a successful rollback. The story is not
 	// re-executed automatically; passes stays true because the test
 	// ran and the user is responsible for re-running if they want a
 	// different outcome. RevertHistory is appended-to, never reset.
-	Reverted      bool                    `json:"reverted,omitempty"`
-	RevertHistory []longTaskRevertEntry   `json:"revert_history,omitempty"`
+	Reverted      bool                  `json:"reverted,omitempty"`
+	RevertHistory []longTaskRevertEntry `json:"revert_history,omitempty"`
 }
 
 type longTaskRevertEntry struct {
-	Commit  string    `json:"commit"`
-	Reason  string    `json:"reason,omitempty"`
-	At      time.Time `json:"at"`
+	Commit string    `json:"commit"`
+	Reason string    `json:"reason,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 type longTaskRepairSummary struct {

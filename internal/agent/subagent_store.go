@@ -5,9 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/lease"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/platform/fsutil"
 	"os"
 	"path/filepath"
@@ -344,40 +344,40 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 		basePrompt = durableSubagentPromptForRole(agentType, normalizedScope)
 	}
 	job := &subagentJob{
-		ID:              newSubagentJobID(now),
-		SessionID:       strings.TrimSpace(opts.SessionID),
-		ParentTurnID:    strings.TrimSpace(opts.ParentTurnID),
-		AgentType:       agentType,
-		RoleID:          strings.TrimSpace(opts.RoleID),
-		RoleName:        strings.TrimSpace(opts.RoleName),
-		PackageName:     strings.TrimSpace(opts.PackageName),
-		Objective:       subagentObjectiveFromPrompt(opts.Prompt),
-		RuntimeContext:  opts.RuntimeContext.Clone(),
-		Prompt:          strings.TrimSpace(opts.Prompt),
-		BasePrompt:      basePrompt,
-		ToolNames:       append([]string{}, opts.ToolNames...),
-		WriteScope:      normalizedScope,
-		PreviewJobIDs:   normalizeWorkflowStrings(opts.PreviewJobIDs),
-		DefaultBundles:  append([]string{}, opts.DefaultBundles...),
-		BundleOverrides:  append([]string{}, opts.BundleOverrides...),
+		ID:                newSubagentJobID(now),
+		SessionID:         strings.TrimSpace(opts.SessionID),
+		ParentTurnID:      strings.TrimSpace(opts.ParentTurnID),
+		AgentType:         agentType,
+		RoleID:            strings.TrimSpace(opts.RoleID),
+		RoleName:          strings.TrimSpace(opts.RoleName),
+		PackageName:       strings.TrimSpace(opts.PackageName),
+		Objective:         subagentObjectiveFromPrompt(opts.Prompt),
+		RuntimeContext:    opts.RuntimeContext.Clone(),
+		Prompt:            strings.TrimSpace(opts.Prompt),
+		BasePrompt:        basePrompt,
+		ToolNames:         append([]string{}, opts.ToolNames...),
+		WriteScope:        normalizedScope,
+		PreviewJobIDs:     normalizeWorkflowStrings(opts.PreviewJobIDs),
+		DefaultBundles:    append([]string{}, opts.DefaultBundles...),
+		BundleOverrides:   append([]string{}, opts.BundleOverrides...),
 		DeactivateBundles: append([]string{}, opts.DeactivateBundles...),
-		ToolPolicy:      normalizeWorkflowStrings(opts.ToolPolicy),
-		WorkerID:        firstNonEmpty(strings.TrimSpace(opts.WorkerID), localGoDexWorkerID),
-		SandboxID:       strings.TrimSpace(opts.SandboxID),
-		SourceBranchID:  strings.TrimSpace(opts.RuntimeContext.Metadata[subagentSessionGraphBranchMetadataKey]),
-		SourceNodeID:    strings.TrimSpace(opts.RuntimeContext.Metadata[subagentSessionGraphNodeMetadataKey]),
-		Isolation:       subagentIsolationSnapshot,
-		WorkspaceOrigin: "snapshot",
-		CleanupState:    subagentCleanupPending,
-		MergeStatus:     subagentMergePending,
-		Status:          subagentStatusRunning,
-		Messages:        []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, strings.TrimSpace(opts.Prompt))},
-		MaxTurns:        opts.MaxTurns,
-		ContextBudget:   opts.ContextBudget,
-		JobTimeoutMS:    opts.JobTimeoutMS,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		StartedAt:       now,
+		ToolPolicy:        normalizeWorkflowStrings(opts.ToolPolicy),
+		WorkerID:          firstNonEmpty(strings.TrimSpace(opts.WorkerID), localGoDexWorkerID),
+		SandboxID:         strings.TrimSpace(opts.SandboxID),
+		SourceBranchID:    strings.TrimSpace(opts.RuntimeContext.Metadata[subagentSessionGraphBranchMetadataKey]),
+		SourceNodeID:      strings.TrimSpace(opts.RuntimeContext.Metadata[subagentSessionGraphNodeMetadataKey]),
+		Isolation:         subagentIsolationSnapshot,
+		WorkspaceOrigin:   "snapshot",
+		CleanupState:      subagentCleanupPending,
+		MergeStatus:       subagentMergePending,
+		Status:            subagentStatusRunning,
+		Messages:          []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, strings.TrimSpace(opts.Prompt))},
+		MaxTurns:          opts.MaxTurns,
+		ContextBudget:     opts.ContextBudget,
+		JobTimeoutMS:      opts.JobTimeoutMS,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		StartedAt:         now,
 	}
 	if job.SourceBranchID == "" && job.SourceNodeID != "" {
 		job.SourceBranchID = "branch:main"
@@ -696,16 +696,16 @@ func (s *subagentJobStore) ResumeWithLimit(id string, maxConcurrent int) (*subag
 // subagentReopenUpdate 携带重开（review→fix 迭代）时可选的配置更新
 // （roadmap 4.5：角色切换时写 scope / bundle 自动更新）。空值字段保持原 job 配置。
 type subagentReopenUpdate struct {
-	AgentType        string
-	RoleID           string
-	RoleName         string
-	PackageName      string
-	WriteScope       []string
-	DefaultBundles   []string
-	BundleOverrides  []string
+	AgentType         string
+	RoleID            string
+	RoleName          string
+	PackageName       string
+	WriteScope        []string
+	DefaultBundles    []string
+	BundleOverrides   []string
 	DeactivateBundles []string
-	ToolNames        []string
-	BasePrompt       string
+	ToolNames         []string
+	BasePrompt        string
 }
 
 // ReopenForIteration reopens a finished (completed or error) subagent job for

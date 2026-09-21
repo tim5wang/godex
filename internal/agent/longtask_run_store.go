@@ -19,20 +19,20 @@ const longTaskRunsDir = "runs"
 // coordination. The in-memory sync.Map (longTaskAsyncRuns) is only an
 // in-process accelerator and is not consulted after a godex restart.
 type longTaskRunRecord struct {
-	RunID         string                 `json:"run_id"`
-	WorkflowID    string                 `json:"workflow_id"`
-	SessionID     string                 `json:"session_id,omitempty"`
-	StartedAt     time.Time              `json:"started_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-	Status        string                 `json:"status"`
-	Iterations    int                    `json:"iterations"`
-	MaxIterations int                    `json:"max_iterations,omitempty"`
-	Started       []string               `json:"started,omitempty"`
-	Finalized     []string               `json:"finalized,omitempty"`
+	RunID         string                  `json:"run_id"`
+	WorkflowID    string                  `json:"workflow_id"`
+	SessionID     string                  `json:"session_id,omitempty"`
+	StartedAt     time.Time               `json:"started_at"`
+	UpdatedAt     time.Time               `json:"updated_at"`
+	Status        string                  `json:"status"`
+	Iterations    int                     `json:"iterations"`
+	MaxIterations int                     `json:"max_iterations,omitempty"`
+	Started       []string                `json:"started,omitempty"`
+	Finalized     []string                `json:"finalized,omitempty"`
 	Repaired      []longTaskRepairSummary `json:"repaired,omitempty"`
-	BlockedBy     string                 `json:"blocked_by,omitempty"`
-	Message       string                 `json:"message,omitempty"`
-	Async         bool                   `json:"async,omitempty"`
+	BlockedBy     string                  `json:"blocked_by,omitempty"`
+	Message       string                  `json:"message,omitempty"`
+	Async         bool                    `json:"async,omitempty"`
 	// LastRefluxKey is the dedupe key for T11 assistant reflux messages.
 	// Empty means no reflux has been emitted yet for this run.
 	LastRefluxKey string `json:"last_reflux_key,omitempty"`
@@ -201,9 +201,9 @@ func (s *workflowStore) sweepStaleLongTaskRuns() ([]string, error) {
 				continue
 			}
 			_ = s.appendEvent(workflowID, map[string]interface{}{
-				"event":   "longtask_run_interrupted",
-				"run_id":  rec.RunID,
-				"at":      now,
+				"event":  "longtask_run_interrupted",
+				"run_id": rec.RunID,
+				"at":     now,
 			})
 			updated = append(updated, workflowID+"/"+rec.RunID)
 		}

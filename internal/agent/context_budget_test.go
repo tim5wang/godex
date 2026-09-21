@@ -132,16 +132,16 @@ func TestRoleContextBudgetTokens(t *testing.T) {
 func TestSubagentStartWithOptionsResolvesContextBudget(t *testing.T) {
 	store := newSubagentJobStore(filepath.Join(t.TempDir(), "subagents"))
 	job, err := store.StartWithOptions(subagentStartOptions{
-		AgentType:   "general-purpose",
-		RoleID:      "researcher",
-		RoleName:    "researcher",
-		Prompt:      "research the topic",
-		ToolNames:   []string{"web_search"},
-		MaxTurns:    1,
-		WorkerID:    localGoDexWorkerID,
-		SandboxID:   "sandbox:local:test",
-		BasePrompt:  "base",
-		ParentID:    "turn-1",
+		AgentType:  "general-purpose",
+		RoleID:     "researcher",
+		RoleName:   "researcher",
+		Prompt:     "research the topic",
+		ToolNames:  []string{"web_search"},
+		MaxTurns:   1,
+		WorkerID:   localGoDexWorkerID,
+		SandboxID:  "sandbox:local:test",
+		BasePrompt: "base",
+		ParentID:   "turn-1",
 	})
 	if err != nil {
 		t.Fatalf("start subagent: %v", err)

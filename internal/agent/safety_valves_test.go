@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/tools"
 )

@@ -625,10 +625,10 @@ func (a *Agent) startLongTaskOneNode(ctx context.Context, workflowID, storyID st
 			return longTaskView{}, err
 		}
 		_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{
-			"event":     "start",
-			"started":   []string{storyID},
-			"longtask":  true,
-			"at":        timeNow(),
+			"event":    "start",
+			"started":  []string{storyID},
+			"longtask": true,
+			"at":       timeNow(),
 		})
 	}
 	view, err := a.longTaskViewForState(state)
@@ -762,10 +762,10 @@ func (a *Agent) cancelLongTaskAll(ctx context.Context, workflowID string) (longT
 		return longTaskView{}, err
 	}
 	_ = a.workflows.appendEvent(workflowID, map[string]interface{}{
-		"event":     "longtask_cancelled",
-		"nodes":     cancelled,
-		"cascade":   true,
-		"at":        now,
+		"event":   "longtask_cancelled",
+		"nodes":   cancelled,
+		"cascade": true,
+		"at":      now,
 	})
 	// If a run record exists and is in progress, mark it canceled so
 	// the run loop sees a terminal state if it polls later.

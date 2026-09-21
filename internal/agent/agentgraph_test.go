@@ -152,9 +152,9 @@ func TestAgentGraphDependencyScheduling(t *testing.T) {
 	}
 	// wait for a
 	runAgentGraphTool(t, a, ctx, map[string]interface{}{
-		"action":   "wait",
-		"graph_id": "g_sched",
-		"mode":     "all",
+		"action":     "wait",
+		"graph_id":   "g_sched",
+		"mode":       "all",
 		"timeout_ms": 2000,
 	})
 	// run again: b and c are now ready (parallel fan-out)
@@ -166,9 +166,9 @@ func TestAgentGraphDependencyScheduling(t *testing.T) {
 		t.Fatalf("expected b and c to start in parallel, got %+v", ran.Started)
 	}
 	runAgentGraphTool(t, a, ctx, map[string]interface{}{
-		"action":   "wait",
-		"graph_id": "g_sched",
-		"mode":     "all",
+		"action":     "wait",
+		"graph_id":   "g_sched",
+		"mode":       "all",
 		"timeout_ms": 2000,
 	})
 	got := runAgentGraphTool(t, a, ctx, map[string]interface{}{
@@ -312,7 +312,7 @@ func TestAgentGraphDynamicAddRemoveCancel(t *testing.T) {
 	}
 	// add node c + edge a->c
 	view = runAgentGraphTool(t, a, ctx, map[string]interface{}{
-		"action": "add_node",
+		"action":   "add_node",
 		"graph_id": "g_dyn",
 		"nodes": []map[string]interface{}{
 			{"id": "c", "node_type": "tool_call", "prompt": "run check"},
@@ -330,7 +330,7 @@ func TestAgentGraphDynamicAddRemoveCancel(t *testing.T) {
 	}
 	// add a static edge a->c again must be idempotent (dedupe)
 	runAgentGraphTool(t, a, ctx, map[string]interface{}{
-		"action": "add_edge",
+		"action":   "add_edge",
 		"graph_id": "g_dyn",
 		"edges": []map[string]interface{}{
 			{"edge_type": "data_dependency", "from": "a", "to": "c"},

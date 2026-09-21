@@ -75,9 +75,9 @@ func (a *Agent) readLongTaskIndex(workflowID string) (LongTaskIndex, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return LongTaskIndex{
-				Version:    1,
-				LongTaskID: workflowID,
-				WorkflowID: workflowID,
+				Version:     1,
+				LongTaskID:  workflowID,
+				WorkflowID:  workflowID,
 				GeneratedAt: time.Now().UTC(),
 			}, nil
 		}
@@ -404,15 +404,15 @@ type longTaskRevertHistory struct {
 }
 
 type longTaskRevertHistoryEntry struct {
-	NodeID    string                 `json:"node_id"`
-	StoryID   string                 `json:"story_id"`
-	Commit    string                 `json:"commit"`
-	Reason    string                 `json:"reason,omitempty"`
-	At        time.Time              `json:"at"`
-	ReasonLen int                    `json:"reason_len"`
-	Conflict  bool                   `json:"conflict,omitempty"`
-	Detail    string                 `json:"detail,omitempty"`
-	AtView    LongTaskStoryView      `json:"story_view"`
+	NodeID    string            `json:"node_id"`
+	StoryID   string            `json:"story_id"`
+	Commit    string            `json:"commit"`
+	Reason    string            `json:"reason,omitempty"`
+	At        time.Time         `json:"at"`
+	ReasonLen int               `json:"reason_len"`
+	Conflict  bool              `json:"conflict,omitempty"`
+	Detail    string            `json:"detail,omitempty"`
+	AtView    LongTaskStoryView `json:"story_view"`
 }
 
 func (a *Agent) appendLongTaskRevertHistory(workflowID string, story LongTaskStoryView) error {

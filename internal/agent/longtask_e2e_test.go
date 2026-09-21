@@ -93,8 +93,8 @@ func TestE2ELongTaskRunBlockedStopsOnFailure(t *testing.T) {
 	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
 
 	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
-		"action":      "create",
-		"longtask_id": "lt_e2e_03_blocked",
+		"action":         "create",
+		"longtask_id":    "lt_e2e_03_blocked",
 		"quality_checks": []string{"cat /nonexistent-file-for-e2e"},
 		"stories": []map[string]interface{}{
 			{"id": "US-001", "title": "First", "priority": 1},
@@ -249,8 +249,8 @@ func TestE2ELongTaskValidationBudgetEnforced(t *testing.T) {
 	a.client = repeatedTextCaller("Verdict: pass\nimplemented story")
 
 	runLongTaskTool(t, a, context.Background(), map[string]interface{}{
-		"action":      "create",
-		"longtask_id": "lt_e2e_07_budget",
+		"action":         "create",
+		"longtask_id":    "lt_e2e_07_budget",
 		"quality_checks": []string{"sleep 1"},
 		"stories": []map[string]interface{}{
 			{"id": "US-001", "title": "First", "priority": 1},
@@ -258,8 +258,8 @@ func TestE2ELongTaskValidationBudgetEnforced(t *testing.T) {
 	})
 	start := time.Now()
 	view := runLongTaskTool(t, a, context.Background(), map[string]interface{}{
-		"action":                  "run",
-		"longtask_id":             "lt_e2e_07_budget",
+		"action":                   "run",
+		"longtask_id":              "lt_e2e_07_budget",
 		"max_validation_budget_ms": 500,
 		"validation_timeout_ms":    5000,
 		"wait_timeout_ms":          500,
@@ -369,5 +369,3 @@ func TestE2ELongTaskGCDryRunDoesNotDelete(t *testing.T) {
 		t.Fatalf("expected the run record to be preserved by dry-run, got err=%v n=%d", err, len(records))
 	}
 }
-
-

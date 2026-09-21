@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/llm"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 )
 
 func TestCallerForConfigProfileKeepsCustomPrimaryAheadOfStrategy(t *testing.T) {

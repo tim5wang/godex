@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/conversation"
 )
 
 func TestSessionCacheStatsRecordUsage(t *testing.T) {

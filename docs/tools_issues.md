@@ -196,3 +196,41 @@
 - HTTP no-upgrade 探针（JSON 错误 vs 纯文本 404）先排除路由/鉴权层。
 
 **改进建议**：headless 环境下 screencast 不可靠，帧泵应「screencast 为可选增强、截图回退为默认可靠路径」；rod 事件 channel 关闭不等于页面消失，退出语义需区分「页面没了」与「功能不可用」。
+
+
+## 2026-09-21 — dsh web 启动失败三层根因（esbuild 平台包 + lib 产物陈旧 + profile 构建拦截）
+
+**问题**：deepseek-harness（temp/deepseek-harness）源码仓库 `dsh web --no-open` 启动失败：
+- 第一层：`dsh --version` 直接崩，报 `You installed esbuild for another platform`（TransformError）；
+- 第二层：esbuild 修复后 `dsh web` 起来但大量官方插件 `failed to import`（`lib/typert.host.js: ERR_MODULE_NOT_FOUND`、`dsh-client-ui-*` 全挂）；
+- 第三层：官方插件修好后，web profile 第三方插件 `@linxin666/dsh-web-all` 的 skin-center degraded（缺 `lightningcss.darwin-arm64.node`）。
+
+**根因**：
+1. **esbuild 平台包不匹配**：机器是 arm64（Apple Silicon），但 `node_modules/.pnpm/` 里装的是 `@esbuild+darwin-x64@*`（某次在 Rosetta/x64 环境安装），arm64 node 需要 `@esbuild+darwin-arm64`。判断：`node -p "process.arch"` + `ls node_modules/.pnpm/ | grep -i esbuild`。
+2. **lib 构建产物陈旧/缺失**：`update-dsh.sh` 里构建步骤只跑了 `tsc -b tsconfig.host.json`，但 **tsconfig.host.json 是 `noEmit: true`（纯类型检查）**，lib JS 必须由 `tsdown` 产出（`build:lib:host` = tsc + tsdown）。lib 停留在旧 commit，与最新 src 不匹配 → cordis 插件 import 失败、typert 入口缺失。
+3. **profile 依赖安装被拦截**：`~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds` 是占位符 `set this to true or false`，pnpm 12 默认拦截 build scripts → `ERR_PNPM_IGNORED_BUILDS`，lightningcss 平台二进制没装上。
+
+**解决**：
+1. 删错包重装：`rm -rf node_modules/.pnpm/@esbuild+darwin-x64@*`（对应 lockfile 里的 0.21.5/0.25.12/0.28.1）→ `CI=true pnpm install`（pnpm 不在 PATH 时用 `corepack pnpm`）。
+2. 真正重建产物：`CI=true pnpm run build:lib`（含 build:lib:host + build:lib:client），并校验关键产物存在（`packages/boot/plugin-manager/lib/typert.host.js`、`packages/client/ui-chat/lib/index.js` 等）。
+3. profile 修 allowBuilds：`cloudflared/cpu-features/ssh2: true` → `CI=true pnpm install --no-frozen-lockfile` → arm64 二进制到位。
+4. 验证：模拟浏览器完整鉴权（GET `/?token=` → 303 + Set-Cookie → 带 cookie GET `/` → 200 index.html，`<!doctype html>`）；index.html 出现 `data-dsh-skin="blue-fantasy"` 说明第三方 skin 插件恢复。
+
+**改进建议**：
+- 从源码跑 dsh：构建一律走 `pnpm run build:lib`（tsdown 产出 lib JS），别只跑 `tsc -b`（noEmit 陷阱）；`update-dsh.sh` 已改为 build:lib + 关键产物缺失校验。
+- pnpm 12 起默认拦 build scripts，workspace/profile 的 `pnpm-workspace.yaml` 若出现 `allowBuilds: xxx: set this to true or false` 占位符，先改成 true 再 install，否则平台二进制（lightningcss/ssh2 等）装不上。
+- arm64 机器排查 esbuild 平台类报错：直接对比 `process.arch` 与 `.pnpm` 里平台包后缀，删错包重装即可，无需全量删 node_modules。
+
+
+## 2026-09-21 — dsh web 启动失败第四层：web 前端 client bundle 陈旧（module table 缺 dockkit）
+
+**问题**：前三层修复后（esbuild 平台包 / lib 产物 / allowBuilds），`dsh web` 启动日志出现：
+`Failed to load plugins @deepseek-ai/dsh-client-ui-conversation ... failed to import loader entry (@deepseek-ai/dsh-client-ui-sidebar-right): client-modules: require("@deepseek-ai/dsh-client-ui-dockkit") missed the module table — not a platform seed word, not a materialized module, and no registered package factory (a build-time externals drift, or a dynamic dependency that did not arrive)`。
+
+**根因**：**web 前端 client bundle（apps/web/dist）陈旧**。`.dsh-build/client-build-environment.json` 记录的 `DSH_CLIENT_COMMIT_HASH=cd5ef81 / 0.1.2-alpha.1`（8月28日构建），而源码已更新到 `ddefc45fbc / 0.1.6-alpha.2`；`dockkit` 包恰是本次 release 新增，旧 bundle 的 client module table 里没有它 → host 加载 client 插件链（ui-conversation → ui-sidebar-right → dockkit）时查不到模块。只跑 `build:lib`（tsdown 产出 lib JS）不会重建 vite 前端 bundle。
+
+**解决**：`CI=true pnpm run build:web`（= `pnpm --filter @deepseek-ai/dsh-web-frontend run build`，vite build）重建 `apps/web/dist`；dockkit 进入新 bundle。验证：`dsh web` 完整启动日志中 dockkit/missed the module table/failed to import/degraded 全部无命中，HTTP token→303→cookie→200 正常。
+
+**改进建议**：
+- 源码更新后完整构建应跑 `pnpm run build`（native-system + lib + web 三段 + 写 client-build-record），仅跑 `build:lib` 不更新前端 bundle，会留 client 陈旧坑。
+- 排查 module table 缺包：先对比 `.dsh-build/client-build-environment.json` 的 DSH_CLIENT_COMMIT_HASH 与 `git rev-parse --short HEAD`，不一致即是 bundle 陈旧，重建 `build:web`。

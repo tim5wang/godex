@@ -45,6 +45,7 @@
 | Subagent jobs | Implemented | `agent/subagent_*`, backend surfaces | Chat/TUI/API/tool | workflow-runtime、roadmap；review/merge/cancel/resume/iterate 存在。 |
 | Review / Merge Center | Implemented, test drift fixed | `reviewMergeCenter.ts`, panel, backend review/merge | Chat panel | superpowers plan 为历史实现记录；read-only job 应是 `no_changes`，review fixture 必须带 writeScope。 |
 | Workflow / AgentGraph / LongTask | Implemented | `agent/workflow.go`, `agentgraph.go`, `longtask_*` | tools、CLI、Web task center | workflow-runtime、roadmap；不是已删除的 Workflows 页面。 |
+| Business Flow runtime F0（decision/retry 内核） | Partial（F0 内核） | `core/decision`, `agent/workflow_flow*.go`, `agent/decision_caller.go`, config `agent.decision.*` | workflow 工具 kind=decision、RetryPolicy、扩展 when | business-flow-runtime-design §13；F0 引擎原语与测试已落地，Flow 编译器/版本 store/FlowGram/独立计量仍 Planned（F1–F3）。 |
 | TaskBoard plugin | Implemented baseline / evolving | `plugins/taskboard`, backend executor, `TaskBoardView` | `/taskboard`, `/v1/taskboard*`, tool | 模板分派、PJM、research、路径冲突闸门与手动 reconcile P0 已落地；自动 reconcile/history/依赖拓扑仍 Planned。 |
 | Agent templates / roles / bundles | Implemented baseline / evolving | `core/templates`, role registry, AgentTemplatesPage | `/agents`, template APIs、新建对话/TaskBoard/Biz key | M1–M3、M4 P1、M5 P1–P3 已落地；导入导出/NL 生成/预算硬限制仍 Planned。 |
 | Durable Memory / recall | Implemented | `core/memory`, historysearch, MemoryPage | `/memory`, tools, slash commands | memory-design-principles、user-guide。 |

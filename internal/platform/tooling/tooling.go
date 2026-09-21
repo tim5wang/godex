@@ -46,6 +46,14 @@ type ShellCommandOptions struct {
 	DenyHighRisk          bool
 	AllowedCommands       []string
 
+	// AllowLocalURLs permits shell commands to target loopback and private
+	// addresses (127.0.0.1, localhost, RFC1918). Cloud metadata hosts
+	// (169.254.169.254 etc.) stay blocked regardless, so local service
+	// verification (curl http://127.0.0.1:8000/health) works without reopening
+	// the SSRF path that matters. Default off: local/private URL targets are
+	// rejected so remote and hardened backends stay strict.
+	AllowLocalURLs bool
+
 	// RelaxCommandSubstitution permits $(...) command substitution whose inner
 	// command passes the normal safety chain (not high-risk, not a dangerous
 	// base command, and not nested). Blocking command substitution is the

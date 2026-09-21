@@ -373,7 +373,7 @@ func validateCommandSafety(name string, argv []string, options ShellCommandOptio
 		}
 	}
 	for _, arg := range argv[1:] {
-		if err := validateShellURLArg(arg); err != nil {
+		if err := validateShellURLArg(arg, options.AllowLocalURLs); err != nil {
 			return err
 		}
 	}
@@ -473,7 +473,7 @@ func targetsRoot(args []string) bool {
 	return false
 }
 
-func validateShellURLArg(arg string) error {
+func validateShellURLArg(arg string, allowLocalURLs bool) error {
 	raw := strings.Trim(strings.TrimSpace(arg), `"'`)
 	if raw == "" {
 		return nil
@@ -490,6 +490,9 @@ func validateShellURLArg(arg string) error {
 	host := strings.ToLower(parsed.Hostname())
 	if isMetadataHost(host) {
 		return fmt.Errorf("shell command URL targets cloud metadata host: %s", host)
+	}
+	if allowLocalURLs {
+		return nil
 	}
 	ip := net.ParseIP(host)
 	if ip != nil && isPrivateOrLocalIP(ip) {
@@ -984,6 +987,34 @@ func appendDockerEnvArgs(args []string) []string {
 		args = append(args, "-e", item)
 	}
 	return args
+}
+
+// ApplyEnvOverrides returns env with each override applied: existing keys are
+// replaced in place (case-insensitive on Windows), new keys are appended. Used
+// to pass extra environment variables (e.g. USE_TF=0 for transformers services)
+// to a command without touching the inherited environment.
+func ApplyEnvOverrides(env []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return env
+	}
+	out := append([]string{}, env...)
+	indexes := make(map[string]int, len(out))
+	for i, item := range out {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && key != "" {
+			indexes[commandEnvKey(key)] = i
+		}
+	}
+	for key, value := range overrides {
+		pair := key + "=" + value
+		if i, ok := indexes[commandEnvKey(key)]; ok {
+			out[i] = pair
+			continue
+		}
+		indexes[commandEnvKey(key)] = len(out)
+		out = append(out, pair)
+	}
+	return out
 }
 
 // InheritedCommandEnv returns the complete GoDex process environment for a

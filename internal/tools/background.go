@@ -36,31 +36,37 @@ func backgroundRerunHint(task *background.Task) string {
 
 // NewBackgroundTool creates a unified background task tool (run / check).
 type backgroundToolArgs struct {
-	Action               string `json:"action"`
-	Command              string `json:"command,omitempty"`
-	Timeout              int    `json:"timeout,omitempty"`
-	TaskID               string `json:"task_id,omitempty"`
-	TailLines            int    `json:"tail_lines,omitempty"`
-	Offset               int64  `json:"offset,omitempty"`
-	LimitBytes           int64  `json:"limit_bytes,omitempty"`
-	Query                string `json:"query,omitempty"`
-	AllowUnlistedCommands bool  `json:"_allow_unlisted_commands,omitempty"`
+	Action                string            `json:"action"`
+	Command               string            `json:"command,omitempty"`
+	Timeout               int               `json:"timeout,omitempty"`
+	IdleTimeout           int               `json:"idle_timeout,omitempty"`
+	Env                   map[string]string `json:"env,omitempty"`
+	TaskID                string            `json:"task_id,omitempty"`
+	TailLines             int               `json:"tail_lines,omitempty"`
+	Offset                int64             `json:"offset,omitempty"`
+	LimitBytes            int64             `json:"limit_bytes,omitempty"`
+	Query                 string            `json:"query,omitempty"`
+	AllowUnlistedCommands bool              `json:"_allow_unlisted_commands,omitempty"`
+	AllowLocalURLs        bool              `json:"_allow_local_urls,omitempty"`
 }
 
 func NewBackgroundTool(mgr *background.Manager, workspace, tempDir string, execution tooling.ExecutionConfig) Tool {
 	executor := tooling.NewWorkspaceExecutorWithTempDirAndExecution(workspace, tempDir, execution)
-	return NewTypedTool(NewToolSpec("background", "Run and check long-running background tasks. action=run: start command in background. action=check: get status and output of a running or completed task.", map[string]interface{}{
+	return NewTypedTool(NewToolSpec("background", "Run and check long-running background tasks. action=run: start command in background. action=check: get status and output of a running or completed task. timeout is a total process wall-clock deadline (seconds); omit it (or set 0) for long-running services, and use idle_timeout instead: the process is only killed when it produces no output for that many seconds. env passes extra environment variables (e.g. USE_TF=0 for transformers services).", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action":                     map[string]interface{}{"type": "string", "enum": []string{"run", "check"}},
 			"command":                    map[string]string{"type": "string"},
-			"timeout":                    map[string]string{"type": "integer"},
+			"timeout":                    map[string]string{"type": "integer", "description": "Total process wall-clock deadline in seconds. 0 or omitted = no total timeout (long-running services)."},
+			"idle_timeout":               map[string]string{"type": "integer", "description": "No-response timeout: kill the process only when it stays running but produces no output for this many seconds. Zero disables. Prefer this over timeout for long-running services."},
+			"env":                        map[string]interface{}{"type": "object", "description": "Extra environment variables for the command, e.g. {\"USE_TF\": \"0\"}."},
 			"task_id":                    map[string]string{"type": "string"},
 			"tail_lines":                 map[string]string{"type": "integer"},
 			"offset":                     map[string]string{"type": "integer"},
 			"limit_bytes":                map[string]string{"type": "integer"},
 			"query":                      map[string]string{"type": "string"},
 			"_allow_unlisted_commands":   map[string]string{"type": "boolean"},
+			"_allow_local_urls":          map[string]string{"type": "boolean", "description": "Allow the command to target loopback/private addresses (127.0.0.1, localhost). Cloud metadata hosts stay blocked."},
 		},
 		"required": []string{"action"},
 	}, nil), func(ctx context.Context, args backgroundToolArgs) (ToolResult, error) {
@@ -74,21 +80,26 @@ func NewBackgroundTool(mgr *background.Manager, workspace, tempDir string, execu
 			runtimeCtx := SessionContextFromContext(ctx)
 			options := shellCommandOptionsForContext(runtimeCtx, tooling.ShellCommandOptions{
 				AllowUnlistedCommands: args.AllowUnlistedCommands,
+				AllowLocalURLs:        args.AllowLocalURLs,
 			})
 			cmd, argv, err := executor.BuildArgvCommandWithOptions(args.Command, options)
 			if err != nil {
 				return ToolResult{}, err
+			}
+			if len(args.Env) > 0 {
+				cmd.Env = tooling.ApplyEnvOverrides(cmd.Env, args.Env)
 			}
 			var timeout time.Duration
 			if args.Timeout > 0 {
 				timeout = time.Duration(args.Timeout) * time.Second
 			}
 			task, err := mgr.StartWithOptions(taskID, cmd, timeout, background.OutputOptions{
-				SpillDir:  filepath.Join(executor.TempDir, "background"),
-				SessionID: runtimeCtx.SessionID,
-				TurnID:    runtimeCtx.Metadata["turn_id"],
-				Command:   args.Command,
-				Argv:      argv,
+				SpillDir:    filepath.Join(executor.TempDir, "background"),
+				SessionID:   runtimeCtx.SessionID,
+				TurnID:      runtimeCtx.Metadata["turn_id"],
+				Command:     args.Command,
+				Argv:        argv,
+				IdleTimeout: time.Duration(args.IdleTimeout) * time.Second,
 			})
 			if err != nil {
 				return ToolResult{}, err

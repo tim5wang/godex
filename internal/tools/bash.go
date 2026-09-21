@@ -12,6 +12,7 @@ type bashArgs struct {
 	Command               string `json:"command"`
 	TimeoutSeconds        int    `json:"timeout_seconds,omitempty"`
 	AllowUnlistedCommands bool   `json:"_allow_unlisted_commands,omitempty"`
+	AllowLocalURLs        bool   `json:"_allow_local_urls,omitempty"`
 }
 
 // NewBashTool creates a new bash tool.
@@ -31,6 +32,7 @@ func NewBashToolWithExecution(workspace, tempDir string, execution tooling.Execu
 		}
 		options := shellCommandOptionsForContext(SessionContextFromContext(ctx), tooling.ShellCommandOptions{
 			AllowUnlistedCommands: args.AllowUnlistedCommands,
+			AllowLocalURLs:        args.AllowLocalURLs,
 		})
 		commandCtx, cancel := withOptionalTimeout(ctx, args.TimeoutSeconds)
 		defer cancel()

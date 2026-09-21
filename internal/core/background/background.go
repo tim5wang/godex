@@ -52,6 +52,12 @@ type Task struct {
 	ExitCode        int
 	Status          Status
 	Notified        bool
+	// IdleTimeout kills the process when it produces no output for this long
+	// while still running. Zero disables the idle watchdog. This is the
+	// no-response timeout semantic: a long-running service that keeps writing
+	// to its log is never killed, while a hung process gets reaped.
+	IdleTimeout     time.Duration
+	idleTimedOut    bool
 	cancelRequested bool
 }
 
@@ -70,6 +76,9 @@ type OutputOptions struct {
 	TurnID    string
 	Command   string
 	Argv      []string
+	// IdleTimeout enables the no-response watchdog: the process is killed when
+	// it stays running but produces no output for this duration. Zero disables.
+	IdleTimeout time.Duration
 }
 
 type OutputReadOptions struct {
@@ -269,6 +278,7 @@ func (m *Manager) StartWithOptions(id string, cmd *exec.Cmd, timeout time.Durati
 		OutputPath:    outputPath,
 		SummaryPath:   summaryPath,
 		Status:        StatusRunning,
+		IdleTimeout:   opts.IdleTimeout,
 	}
 	if task.Command == "" && len(task.Argv) > 0 {
 		task.Command = strings.Join(task.Argv, " ")
@@ -626,8 +636,51 @@ func (m *Manager) waitForTask(task *Task, output *tooling.OutputCapture) {
 		}
 	}()
 
+	// No-response (idle) watchdog: when IdleTimeout > 0, kill the process if it
+	// stays running but produces no output for that long. Long-running services
+	// that keep writing to their log are never killed; a hung process that
+	// stopped producing output gets reaped even without a total wall-clock
+	// timeout. This is the "no-response timeout" semantic, distinct from the
+	// total-process timeout applied via ctx above.
+	idleDone := make(chan struct{})
+	if task.IdleTimeout > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctxDone:
+					return
+				case <-idleDone:
+					return
+				case <-ticker.C:
+					m.mu.Lock()
+					running := task.Status == StatusRunning
+					m.mu.Unlock()
+					if !running {
+						return
+					}
+					last := output.LastWrite()
+					if !last.IsZero() && time.Since(last) >= task.IdleTimeout {
+						m.mu.Lock()
+						task.idleTimedOut = true
+						task.cancelRequested = true
+						m.mu.Unlock()
+						if task.Cmd != nil && task.Cmd.Process != nil {
+							if err := killProcessTree(task.Cmd); err != nil {
+								_ = task.Cmd.Process.Kill()
+							}
+						}
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	err := task.Cmd.Wait()
 	close(ctxDone)
+	close(idleDone)
 	_ = output.Close()
 	outputResult := output.Result()
 
@@ -644,7 +697,13 @@ func (m *Manager) waitForTask(task *Task, output *tooling.OutputCapture) {
 		task.ExitCode = task.Cmd.ProcessState.ExitCode()
 	}
 
+	if task.idleTimedOut {
+		task.Error = fmt.Errorf("background task killed: no output for %s (idle timeout)", task.IdleTimeout)
+	}
+
 	switch {
+	case task.idleTimedOut:
+		task.Status = StatusCanceled
 	case task.cancelRequested || (task.Ctx != nil && task.Ctx.Err() != nil):
 		task.Status = StatusCanceled
 	case err != nil:

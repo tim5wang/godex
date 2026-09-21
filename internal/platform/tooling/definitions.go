@@ -36,6 +36,10 @@ func BashDefinition() Definition {
 					"type":        "integer",
 					"description": "Optional timeout for this command in seconds. Omit to use the global tool timeout.",
 				},
+				"_allow_local_urls": map[string]string{
+					"type":        "boolean",
+					"description": "Allow this command to target loopback/private addresses (127.0.0.1, localhost). Cloud metadata hosts stay blocked. Use for curl health checks against a locally running service instead of python urllib.",
+				},
 			},
 			"required": []string{"command"},
 		},

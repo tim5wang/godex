@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -117,6 +118,7 @@ type OutputCapture struct {
 	totalBytes  int64
 	truncated   bool
 	discardTail bool
+	lastWrite   time.Time
 
 	escapeCarry []byte // incomplete ANSI escape held across write chunks
 }
@@ -163,6 +165,9 @@ func (c *OutputCapture) Write(p []byte) (int, error) {
 	written := len(p)
 	start := c.totalBytes
 	c.totalBytes += int64(len(clean))
+	if len(clean) > 0 {
+		c.lastWrite = time.Now()
+	}
 	c.appendTailLocked(clean)
 	if c.outputPath != "" {
 		if err := c.ensureFileLocked(); err == nil {
@@ -219,6 +224,15 @@ func (c *OutputCapture) Write(p []byte) (int, error) {
 		}
 	}
 	return written, nil
+}
+
+// LastWrite returns the most recent time output was written, or the zero time
+// if nothing has been written yet. Idle/no-response supervisors use it to
+// detect a process that has stopped producing output while still running.
+func (c *OutputCapture) LastWrite() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastWrite
 }
 
 // stripANSI removes ANSI escape sequences from p, holding back an incomplete

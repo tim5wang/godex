@@ -31,6 +31,7 @@ import {
   cancelFlowRun,
   createFlow,
   createFlowRun,
+  flowRunEvents,
   listFlowRuns,
   listFlowVersions,
   listFlows,
@@ -40,6 +41,7 @@ import {
   type FlowSummaryView,
   type FlowVersionView,
 } from "../../lib/api";
+import { FlowGramCanvas } from "./FlowGramCanvas";
 import { useSettingsStore } from "../../store/settings";
 
 const { Title, Text, Paragraph } = Typography;
@@ -280,6 +282,20 @@ function FlowDetailDrawer(props: {
   const versions = versionsQuery.data ?? [];
   const runs = runsQuery.data ?? [];
 
+  // Canvas tab state: selected version (default: latest with a definition)
+  // and optional run selection for run-state event highlight.
+  const [canvasVersion, setCanvasVersion] = useState<string>();
+  const [canvasRun, setCanvasRun] = useState<string>();
+  const canvasDef = useMemo(() => {
+    const pick = canvasVersion ?? versions.find((v) => v.definition)?.version;
+    return versions.find((v) => v.version === pick)?.definition ?? undefined;
+  }, [versions, canvasVersion]);
+  const eventsQuery = useQuery({
+    queryKey: ["flow-run-events", flow.flow_id, canvasRun],
+    queryFn: () => (canvasRun ? flowRunEvents(token, canvasRun, flow.flow_id) : Promise.resolve([])),
+    enabled: Boolean(canvasRun),
+  });
+
   return (
     <Drawer title={flow.flow_id} open onClose={onClose} width={720}>
       <Tabs
@@ -374,6 +390,43 @@ function FlowDetailDrawer(props: {
                   },
                 ]}
               />
+            ),
+          },
+          {
+            key: "canvas",
+            label: t("flows.canvas"),
+            children: (
+              <div>
+                {versions.length > 0 && (
+                  <Space wrap style={{ marginBottom: 12 }}>
+                    <Select
+                      style={{ width: 220 }}
+                      placeholder={t("flows.version")}
+                      value={canvasVersion}
+                      onChange={setCanvasVersion}
+                      options={versions.map((v) => ({ value: v.version, label: `${v.version} (${v.status})` }))}
+                    />
+                    <Select
+                      style={{ width: 260 }}
+                      placeholder={t("flows.canvasRun")}
+                      value={canvasRun}
+                      onChange={setCanvasRun}
+                      allowClear
+                      options={runs.map((r) => ({ value: r.run_id, label: `${r.run_id.slice(0, 12)}… (${r.status})` }))}
+                    />
+                  </Space>
+                )}
+                {canvasDef ? (
+                  <FlowGramCanvas def={canvasDef} events={eventsQuery.data} />
+                ) : (
+                  <Empty description={t("flows.canvasEmpty")} />
+                )}
+                {canvasRun && (
+                  <Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
+                    {t("flows.canvasRunHint")}
+                  </Paragraph>
+                )}
+              </div>
             ),
           },
           {

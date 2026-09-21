@@ -14,6 +14,7 @@ export const zhCoreMessages = {
         agentTemplates: "Agent 模板",
         memory: "记忆",
         workflows: "工作流",
+        orchestration: "业务编排",
         businessAgents: "业务智能体",
         taskboard: "任务看板",
         flows: "流程",

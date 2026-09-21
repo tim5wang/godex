@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -328,5 +329,65 @@ func TestFlowsRunEventsSSE(t *testing.T) {
 	chunk := string(buf[:n])
 	if !strings.Contains(chunk, "created") && !strings.Contains(chunk, "start") {
 		t.Fatalf("expected workflow events in SSE stream, got: %s", chunk)
+	}
+}
+
+// TestFlowsRunEventsPoll verifies the ?poll=1 snapshot mode returns the whole
+// event log as plain JSON — the data source for the FlowGram canvas run-state
+// highlight (P2.4).
+func TestFlowsRunEventsPoll(t *testing.T) {
+	server := newFlowsTestServer(t)
+
+	resp, raw := doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows", map[string]any{
+		"flow_id":    "fl_http_poll",
+		"version":    "1",
+		"status":     "draft",
+		"definition": flowHumanHTTPDef(),
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, body: %s", resp.StatusCode, raw)
+	}
+	resp, raw = doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows/fl_http_poll/versions/1/publish", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("publish status = %d, body: %s", resp.StatusCode, raw)
+	}
+	resp, raw = doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows/fl_http_poll/runs", map[string]any{
+		"inputs": map[string]any{"order_id": "o-poll"},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("run status = %d, body: %s", resp.StatusCode, raw)
+	}
+	var run agent.FlowRunView
+	if err := json.Unmarshal(raw, &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/flow-runs/"+run.RunID+"/events?flow_id=fl_http_poll&poll=1", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	respEvents, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatalf("events request: %v", err)
+	}
+	defer respEvents.Body.Close()
+	if ct := respEvents.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("expected application/json for poll=1, got %q", ct)
+	}
+	body, _ := io.ReadAll(respEvents.Body)
+	var events []map[string]any
+	if err := json.Unmarshal(body, &events); err != nil {
+		t.Fatalf("decode events: %v (body: %s)", err, body)
+	}
+	seen := false
+	for _, ev := range events {
+		if ev["event"] == "created" || ev["event"] == "start" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("expected created/start in poll events, got %s", body)
 	}
 }

@@ -119,7 +119,12 @@ type BizAPIKey struct {
 	// baseline (M4 P1 convergence). The key's own whitelist fields become an
 	// override layer on top of the template (add / remove / replace). Empty =
 	// legacy pure-whitelist mode (unchanged behavior).
-	TemplateID       string        `json:"template_id,omitempty"`
+	TemplateID string `json:"template_id,omitempty"`
+	// FlowID pins a published Business Flow (P2.1): when set, the gateway
+	// dispatches this key's calls to the multi-step flow runtime instead of
+	// the single-step agent path. Mutually exclusive with single-step
+	// binding; empty = step mode (template or whitelist).
+	FlowID string `json:"flow_id,omitempty"`
 	KeyHash          string        `json:"key_hash,omitempty"`
 	KeyPrefix        string        `json:"key_prefix"`
 	Enabled          bool          `json:"enabled"`
@@ -147,6 +152,10 @@ type BizKeyCreateRequest struct {
 	Description      string        `json:"description,omitempty"`
 	DefaultPrompt    string        `json:"default_prompt,omitempty"`
 	TemplateID       string        `json:"template_id,omitempty"`
+	// FlowID binds this key to a published Business Flow (P2.1 gateway
+	// dispatch target). When set, TemplateID/whitelist fields are ignored by
+	// the gateway (flow nodes carry their own agent_ref capabilities).
+	FlowID string `json:"flow_id,omitempty"`
 	MCPServers       []string      `json:"mcp_servers"`
 	Providers        []ProviderRef `json:"providers"`
 	SandboxTools     []string      `json:"sandbox_tools"`
@@ -172,6 +181,10 @@ type BizKeyUpdateRequest struct {
 	DefaultPrompt    *string        `json:"default_prompt,omitempty"`
 	Enabled          *bool          `json:"enabled,omitempty"`
 	TemplateID       *string        `json:"template_id,omitempty"`
+	// FlowID binds or unbinds the published-flow dispatch target. Set to a
+	// non-empty flow id to switch the key to flow mode; set to "" to return
+	// to step mode.
+	FlowID *string `json:"flow_id,omitempty"`
 	MCPServers       *[]string      `json:"mcp_servers,omitempty"`
 	Providers        *[]ProviderRef `json:"providers,omitempty"`
 	SandboxTools     *[]string      `json:"sandbox_tools,omitempty"`

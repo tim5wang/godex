@@ -417,10 +417,14 @@ export const enProductMessages = {
       rejectReasonRequired: "Reject reason is required",
       deleteConfirm: "Delete this card?",
     },
+    orchestration: {
+      pageSubtitle: "Business orchestration: agent library (Agent profiles/capabilities/budget/access) and flow library (Flow definitions/versions/runs) side by side.",
+      tabAgents: "Agent Library",
+      tabFlows: "Flow Library",
+    },
     businessAgents: {
       pageSubtitle: "Manage business agents: biz keys, tool/skill/package scopes, working dir, budget, API/SDK guides and embed preview.",
-      listTitle: "Business Agents",
-      new: "New",
+      listTitle: "Business Agents",      new: "New",
       edit: "Edit",
       loading: "Loading…",
       noKeys: "No business agents yet",
@@ -526,6 +530,10 @@ export const enProductMessages = {
       runCanceled: "Run canceled",
       runFailed: "Flow run failed",
       noDefinition: "No definition stored for this version.",
+      canvas: "Canvas",
+      canvasEmpty: "No definition available. Save a version to render the canvas.",
+      canvasRun: "Run-state highlight (select a run)",
+      canvasRunHint: "Pick a run to colour nodes by event (running/completed/failed/waiting_human) and annotate decision confidence.",
       flowgramHint: "Flow Spec v1 — 定义/版本/发布/运行已接通；FlowGram 画布适配为 F3 后续项。",
     },
     usage: {

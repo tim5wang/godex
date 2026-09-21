@@ -163,6 +163,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerBizRoutes(mux, protected, usageService, service)
 	registerStepRoutes(mux, usageService, service)
 	registerStepTrackRoutes(mux, usageService, service)
+	registerFlowGatewayRoutes(mux, usageService, service)
 	registerFlowRoutes(mux, service, protected)
 	registerMCPRoutes(mux, protected, service.MCPManager())
 	registerFileRoutes(mux, protected, manager)

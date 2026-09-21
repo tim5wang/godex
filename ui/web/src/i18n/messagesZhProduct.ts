@@ -417,10 +417,14 @@ export const zhProductMessages = {
       rejectReasonRequired: "请填写退回原因",
       deleteConfirm: "确认删除该任务？",
     },
+    orchestration: {
+      pageSubtitle: "业务编排：智能体库（Agent 档案/能力/预算/接入）与流程库（Flow 定义/版本/运行）并列分组。",
+      tabAgents: "智能体库",
+      tabFlows: "流程库",
+    },
     businessAgents: {
       pageSubtitle: "管理业务智能体：biz key、工具/skill/package 范围、工作目录、预算、API/SDK 接入指南与 URL 嵌入预览。",
-      listTitle: "业务智能体",
-      new: "新建",
+      listTitle: "业务智能体",      new: "新建",
       edit: "编辑",
       loading: "加载中…",
       noKeys: "还没有业务智能体",
@@ -526,6 +530,10 @@ export const zhProductMessages = {
       runCanceled: "运行已取消",
       runFailed: "流程运行失败",
       noDefinition: "该版本未存储定义。",
+      canvas: "画布",
+      canvasEmpty: "无可用定义。先保存一个版本以渲染画布。",
+      canvasRun: "运行态高亮（选择运行）",
+      canvasRunHint: "选择一次运行后，节点按事件着色（运行中/完成/失败/待人工）并标注 decision 置信度。",
       flowgramHint: "Flow Spec v1 —— 定义/版本/发布/运行已接通；FlowGram 画布适配为 F3 后续项。",
     },
     usage: {

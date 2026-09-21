@@ -14,6 +14,7 @@ export const enCoreMessages = {
         agentTemplates: "Agent Templates",
         memory: "Memory",
         workflows: "Workflows",
+        orchestration: "Orchestration",
         businessAgents: "Business Agents",
         taskboard: "Task Board",
         flows: "Flows",

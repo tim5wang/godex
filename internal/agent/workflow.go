@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,9 @@ type workflowSummary struct {
 	ID             string              `json:"id"`
 	SessionID      string              `json:"session_id,omitempty"`
 	Status         string              `json:"status"`
+	// RunInputs are the flow-run inputs (P2.3) available to prompt variable
+	// references {{inputs.<name>}}. Written once at CreateFlowRun.
+	RunInputs map[string]any `json:"run_inputs,omitempty"`
 	AppendKeys     map[string][]string `json:"append_keys,omitempty"`
 	EdgeIterations map[string]int      `json:"edge_iterations,omitempty"`
 	ProcessedEdges map[string]bool     `json:"processed_edges,omitempty"`
@@ -97,6 +101,10 @@ type workflowNode struct {
 	Decision     *workflowDecisionResult `json:"decision,omitempty"`
 	BranchSpec   *workflowBranchSpec     `json:"branch_spec,omitempty"`
 	HumanSpec    *workflowHumanSpec      `json:"human_spec,omitempty"`
+	// OutputSpec carries the node's declared typed outputs (P2.3) for prompt
+	// variable resolution and FlowGram metadata. Outputs (below) holds the
+	// run-time values.
+	OutputSpec []workflowVarDef `json:"output_spec,omitempty"`
 	// HumanTaskID is the human task store record registered for this node
 	// (P1.1); non-empty means the task was created (idempotent re-register).
 	HumanTaskID string             `json:"human_task_id,omitempty"`
@@ -179,6 +187,16 @@ type workflowNodeInput struct {
 	Decision        *workflowDecisionSpec `json:"decision,omitempty"`
 	Human           *workflowHumanSpec    `json:"human,omitempty"`
 	Branch          *workflowBranchSpec   `json:"branch,omitempty"`
+	// OutputSpec carries the node's declared typed outputs (P2.3) for prompt
+	// variable resolution and FlowGram metadata.
+	OutputSpec []workflowVarDef `json:"output_spec,omitempty"`
+}
+
+// workflowVarDef is the engine-side mirror of flow.VarDef (P2.3).
+type workflowVarDef struct {
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
+	Desc string `json:"desc,omitempty"`
 }
 
 // workflowHumanSpec is the engine-side mirror of flow.HumanSpec (P1.1): a
@@ -541,6 +559,7 @@ func workflowNodesFromInputs(inputs []workflowNodeInput, existing map[string]str
 			AgentRef:        strings.TrimSpace(input.AgentRef),
 			WriteScope:      normalizeWorkflowStrings(input.WriteScope),
 			Retry:           normalizeWorkflowRetryPolicy(input.Retry),
+			OutputSpec:      append([]workflowVarDef{}, input.OutputSpec...),
 			DecisionSpec:    decisionSpec,
 			BranchSpec:      branchSpec,
 			HumanSpec:       humanSpec,
@@ -1529,7 +1548,7 @@ func (a *Agent) workflowNodePrompt(state workflowState, node workflowNode) (stri
 		builder.WriteString(node.Title)
 		builder.WriteString("\n\n")
 	}
-	builder.WriteString(node.Prompt)
+	builder.WriteString(a.renderWorkflowPromptVars(state, node.Prompt))
 	if len(node.DependsOn) > 0 {
 		builder.WriteString("\n\nDependencies completed: ")
 		builder.WriteString(strings.Join(node.DependsOn, ", "))
@@ -1544,6 +1563,64 @@ func (a *Agent) workflowNodePrompt(state workflowState, node workflowNode) (stri
 	}
 	return builder.String(), nil
 }
+
+// renderWorkflowPromptVars resolves Flow Spec §3.4 variable references in a
+// node prompt at run time:
+//
+//	{{inputs.<name>}}          -> flow run input (workflowSummary.RunInputs)
+//	{{nodes.<id>.outputs.<f>}} -> completed node's declared output value
+//
+// Unknown or unresolved references are left as-is (compile-time validation
+// already rejected bad paths; a still-pending dependency simply renders
+// empty rather than failing the node).
+func (a *Agent) renderWorkflowPromptVars(state workflowState, prompt string) string {
+	if !strings.Contains(prompt, "{{") {
+		return prompt
+	}
+	return workflowVarRefRegex.ReplaceAllStringFunc(prompt, func(ref string) string {
+		inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(ref, "{{"), "}}"))
+		parts := strings.Split(inner, ".")
+		if len(parts) == 2 && parts[0] == "inputs" {
+			if v, ok := state.Summary.RunInputs[parts[1]]; ok {
+				return varRefValue(v)
+			}
+			return ref
+		}
+		if len(parts) == 4 && parts[0] == "nodes" && parts[2] == "outputs" {
+			for _, n := range state.Nodes {
+				if n.ID == parts[1] {
+					if v, ok := n.Outputs[parts[3]]; ok {
+						return varRefValue(v)
+					}
+					return ref
+				}
+			}
+			return ref
+		}
+		return ref
+	})
+}
+
+// varRefValue renders a resolved variable reference value as text.
+func varRefValue(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case bool, float64, float32, int, int64, json.Number:
+		return fmt.Sprintf("%v", t)
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return fmt.Sprintf("%v", t)
+		}
+		return string(b)
+	}
+}
+
+var workflowVarRefRegex = regexp.MustCompile(`\{\{\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*\}\}`)
 
 func (a *Agent) workflowDependencyHandoffText(state workflowState, node workflowNode) (string, error) {
 	policy := normalizeWorkflowHandoffPolicy(node.HandoffPolicy, len(node.DependsOn) > 0)

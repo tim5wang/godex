@@ -241,6 +241,14 @@ func (a *Agent) CreateFlowRun(ctx context.Context, flowID, version string, input
 	if err != nil {
 		return FlowRunView{}, err
 	}
+	// P2.3: persist the run inputs on the workflow summary so prompt variable
+	// references {{inputs.<name>}} resolve at run time.
+	if len(inputs) > 0 {
+		state.Summary.RunInputs = inputs
+		if err := a.workflows.save(state); err != nil {
+			return FlowRunView{}, err
+		}
+	}
 	now := time.Now().UTC()
 	runRec := flowRunRecord{
 		RunID:      runID,

@@ -952,4 +952,66 @@ P1 = §10 分期中的第一块运行时能力补齐（human 回注 + 事件流 
 
 **P1 明确不做（留给 P2）**：FlowGram 画布（F2a）、Flow Gateway 统一前缀 `/v1/gateway/{route}`、biz key 绑定 flow_id 快捷接入、Flow 嵌套、cron/IM 触发、变量 schema 校验、嵌套 loop/loop 与 branch 混合展开的 64 上限最坏情况校验细化。
 
+## 18. P2.1 实施状态（2026-09-21 落地）
+
+P2.1 = §16 决策 7/8 的接入面落地：**biz key 绑定 flow_id 快捷接入 + Flow Gateway 统一前缀**。
+
+**1. BizAPIKey 增加 FlowID 绑定（决策 7）**
+- `usage.BizAPIKey` / `BizKeyCreateRequest` / `BizKeyUpdateRequest` 新增 `flow_id` 字段；`biz_keys` 表加 `flow_id` 列（建表 + 自动迁移 + SELECT/INSERT/UPDATE/scan 全链路贯通）。
+- 语义：key 绑定已发布 Flow 后，网关把该 key 的调用分发到多环节 flow 运行时；未绑定则保持单环节 step 模式（TemplateID/白名单基线不变）。绑定/解绑均可通过 create/update 管理 API 完成。
+
+**2. Flow Gateway `POST /v1/gateway/{route}`（决策 8）**
+- 新增 `routes_flow_gateway.go`（独立于已存在的 usage gateway `routes_gateway.go`，避免撞名）：
+  - `withBizKeyAuth` 鉴权 + `BizKeyFromContext` 取 key；
+  - **按 key.FlowID 分发**：FlowID 非空 → `CreateFlowRun → StartFlowRun → 可选 WaitFlowRun（wait_ms）`，响应为 FlowRunView `{run_id, status, outputs, ...}`；否则 → 单环节（复用 `handleAgentStep` 逻辑，响应 `{step_id, status, output, ...}`）；
+  - **幂等键去重**（flow 模式）：同 `route|flow_id|idempotency_key` 返回同一 run（内存 TTL 10min，重启丢失但 run 持久）；
+  - **统一错误封装** `{error:{code,message,route,run_id,step_id}}`。
+- 注册：`registerFlowGatewayRoutes`（httpapi.go）。
+
+**验证**：`go test ./internal/runtime/httpapi/ -run 'TestFlowGateway|TestBizKeyFlowID'` 5 测试全绿（flow 分发 / step 分发 / 鉴权拒绝 / 幂等键去重 / FlowID 持久化 round-trip）；`go test ./internal/services/usage/` 全量通过；`go build ./...` 通过；httpapi 全量 18.5s 通过（偶发 TempDir 清理竞态为既有环境问题）。
+
+**P2.1 明确不做（后续）**：网关限流、input schema 校验（P2.3 变量 schema）、callback 模式（on_complete webhook 已有）、Flow 嵌套、cron/IM 触发。
+
+## 19. P2.3 实施状态（2026-09-22 落地）
+
+P2.3 = §3.4 变量与数据流（最小集）落地：**节点级 outputs schema 声明 + 编译期变量引用校验 + 运行时 prompt 渲染**。
+
+**1. 模型（flow 包）**
+- `flow.Node` 新增 `Outputs []VarDef`（本节点产出 schema，§3.4）；`flow.CompiledNode` 透传 `Outputs`（FlowGram 可消费同一份元数据）。
+- `flow.Definition.Inputs/Outputs []VarDef` 已有声明不变。
+
+**2. 编译期校验（validate.go）**
+- `validateVarDefs`：变量声明名非空、唯一、类型合法（string/number/boolean/object/array/any）。
+- `validateIODecls`：Flow 级 Inputs/Outputs 声明校验（Validate 入口调用）。
+- `validateVarRefs`：解析节点 prompt 中的 `{{inputs.<name>}}` 与 `{{nodes.<id>.outputs.<field>}}` 引用，校验路径存在（输入在 Definition.Inputs、节点存在、字段在节点 Outputs 或 decision 标准 choice/confidence/... 或 human result_var）；未声明引用编译期拒绝（fail-fast，不静默渲染空）。
+
+**3. 运行时渲染（agent 包）**
+- `workflowSummary` 新增 `RunInputs map[string]any`；`CreateFlowRun` 把 run inputs 持久化到 workflow summary。
+- `workflowNodeInput/workflowNode` 新增 `OutputSpec []workflowVarDef`（编译映射透传节点 outputs 声明）。
+- `workflowNodePrompt` 启动节点时经 `renderWorkflowPromptVars` 渲染 `{{inputs.*}}`（run inputs）与 `{{nodes.*.outputs.*}}`（已完成节点 outputs 值）；未解析引用原样保留（编译期已拒坏路径，运行期 pending 依赖留空不失败）。handoff 文本机制保留作为未声明变量兜底。
+
+**验证**：`go test ./internal/core/flow/ -run 'TestValidateIODecls|TestValidateRejectsUnknown|TestValidateRejectsUndeclared|TestValidateRejectsInvalidNode|TestCompileCarriesOutputs'` 8 测试全绿（输入引用/节点引用/未声明字段/未知 scope/非法类型声明/编译产物携带 outputs）；`go test ./internal/agent/ -run 'TestWorkflowRunInputsPersisted|TestRenderWorkflowPromptVarsDirect'` 2 测试全绿；flow/decision/httpapi 全量回归通过；`go build ./...` 通过。
+
+**P2.3 明确不做（后续）**：类型兼容性完整校验（目前校验路径存在；类型一致性留 FlowGram 作用域链消费）、变量表达式（Expr 除 inputs/outputs 引用外的运算）、运行时 schema 违反（outputs 未按 schema 产出时的校验，留 §3.5 schema_violation 语义）。
+
+## 20. P2.4 实施状态（2026-09-22 落地）
+
+P2.4 = F3 FlowGram 画布最小落地：**FlowsPage 详情 Drawer 新增「画布」Tab——Flow Spec → mermaid 图 + 运行态事件高亮**（不引入 FlowGram 重框架，直接复用前端既有 mermaid 能力）。
+
+**1. 后端（routes_flows.go）**
+- `GET /v1/flow-runs/{runID}/events` 新增 `?poll=1` 快照模式：一次性返回整个事件日志（JSON 数组），供画布运行态高亮拉取；原有 SSE 流不变（P1.2）。
+
+**2. 前端（ui/web）**
+- `lib/apiFlow.ts` 新增 `flowRunEvents()`（poll=1 快照）+ `FlowRunEvent` 类型。
+- 新增 `features/flows/FlowGramCanvas.tsx`：
+  - `toFlowMermaidSource(def, events)`：Flow Definition → mermaid flowchart（六类物料节点 step/llm/decision/human/branch/loop 标签 + 边类型连线 data_dependency/handoff/condition 带 when 条件标签）；
+  - 运行态：事件日志映射节点状态色（node_started→running、node_completed/handoff_written/decision_made→completed、node_failed/node_error→failed、human_task_created→waiting_human），decision 节点标注 choice + confidence；未解析引用保留；
+  - mermaid 懒加载 + 失败降级 Alert（复用 AgentGraphDiagram 渲染机制）。
+- `features/flows/FlowsPage.tsx` 详情 Drawer 新增「画布」Tab：版本选择（默认最新带 definition 版本）+ 运行选择（选中后拉事件做运行态高亮），保留 JSON 定义 Tab。
+- i18n zh/en 补 canvas 组键。
+
+**验证**：`go test ./internal/runtime/httpapi/ -run 'TestFlowsRunEventsPoll|TestFlowsRunEventsSSE'` 2 测试全绿（poll JSON 快照含 created/start + SSE 流不变）；flow/httpapi 全量回归通过；`pnpm tsc -b` + `pnpm vite build` 通过。
+
+**P2.4 明确不做（后续）**：画布内编辑（设计态仅只读渲染，编辑仍走 JSON Tab + validate/publish）、FlowGram JSON 双向 adapter（画布 JSON ⇄ Flow Spec 的直接转换）、变量作用域链面板（§9 变量面板）、decision provider 下拉（复用 Settings providers 过滤）、SSE 实时增量高亮（当前为 poll 快照，运行态刷新可手动选 run 重拉）。
+
 

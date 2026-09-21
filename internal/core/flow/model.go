@@ -75,6 +75,10 @@ type Node struct {
 	Branch     *BranchSpec  `json:"branch,omitempty"`
 	Loop       *LoopSpec    `json:"loop,omitempty"`
 	TimeoutSec int          `json:"timeout_sec,omitempty"`
+	// Outputs declares the typed fields this node produces (Flow Spec §3.4).
+	// Downstream nodes reference them as {{nodes.<id>.outputs.<field>}}.
+	// Empty = no typed outputs (prompt/handoff text only).
+	Outputs []VarDef `json:"outputs,omitempty"`
 }
 
 // RetryPolicy mirrors Temporal's RetryPolicy (Flow Spec §3.5). Semantic

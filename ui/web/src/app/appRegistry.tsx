@@ -11,7 +11,6 @@ import {
   FolderViewOutlined,
   SettingOutlined,
   DashboardOutlined,
-  ApiOutlined,
 } from "@ant-design/icons";
 import { Navigate, Route, type RouteObject, useLocation } from "react-router-dom";
 import { PageErrorBoundary } from "../components/PageErrorBoundary";
@@ -42,9 +41,8 @@ const loadNotesPage = () => import("../pages/NotesPage");
 const loadSkillsPage = () => import("../pages/SkillsPage");
 const loadAgentTemplatesPage = () => import("../pages/AgentTemplatesPage");
 const loadMemoryPage = () => import("../pages/MemoryPage");
-const loadBusinessAgentsPage = () => import("../pages/BusinessAgentsPage");
 const loadTaskBoardPage = () => import("../pages/TaskBoardPage");
-const loadFlowsPage = () => import("../pages/FlowsPage");
+const loadOrchestrationPage = () => import("../pages/OrchestrationPage");
 const loadSettingsPage = () => import("../pages/SettingsPage");
 const loadUsagePage = () => import("../pages/UsagePage");
 
@@ -162,15 +160,19 @@ export const builtinApps: BuiltinAppEntry[] = [
     headerSubtitleKey: "settings.pageSubtitle",
   }),
   entry({
-    id: "business-agents",
-    navPath: "/business-agents",
-    routePaths: ["/business-agents"],
-    icon: <ApiOutlined />,
-    labelKey: "app.nav.businessAgents",
-    load: loadBusinessAgentsPage,
-    component: pageComponent(loadBusinessAgentsPage, "BusinessAgentsPage"),
-    isActive: (pathname) => pathname.startsWith("/business-agents"),
-    headerSubtitleKey: "businessAgents.pageSubtitle",
+    id: "orchestration",
+    navPath: "/orchestration",
+    // The single business-orchestration entry (§16 决策 6): agent library +
+    // flow library as grouped tabs. Legacy /business-agents and /flows still
+    // resolve here (OrchestrationPage picks the initial tab by path).
+    routePaths: ["/orchestration", "/business-agents", "/flows"],
+    icon: <ApartmentOutlined />,
+    labelKey: "app.nav.orchestration",
+    load: loadOrchestrationPage,
+    component: pageComponent(loadOrchestrationPage, "OrchestrationPage"),
+    isActive: (pathname) =>
+      pathname.startsWith("/orchestration") || pathname.startsWith("/business-agents") || pathname.startsWith("/flows"),
+    headerSubtitleKey: "orchestration.pageSubtitle",
   }),
   entry({
     id: "taskboard",
@@ -193,17 +195,6 @@ export const builtinApps: BuiltinAppEntry[] = [
     component: pageComponent(loadUsagePage, "UsagePage"),
     isActive: (pathname) => pathname.startsWith("/usage"),
     headerSubtitleKey: "usage.pageSubtitle",
-  }),
-  entry({
-    id: "flows",
-    navPath: "/flows",
-    routePaths: ["/flows"],
-    icon: <ApartmentOutlined />,
-    labelKey: "app.nav.flows",
-    load: loadFlowsPage,
-    component: pageComponent(loadFlowsPage, "FlowsPage"),
-    isActive: (pathname) => pathname.startsWith("/flows"),
-    headerSubtitleKey: "flows.pageSubtitle",
   }),
 ];
 

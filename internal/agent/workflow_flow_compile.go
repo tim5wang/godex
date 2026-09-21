@@ -94,6 +94,11 @@ func compileFlowNode(n flow.CompiledNode, appendTemplate bool) (workflowNodeInpu
 			ResultVar:      n.Human.ResultVar,
 		}
 	}
+	// P2.3: carry the declared typed outputs so the engine can resolve
+	// {{nodes.<id>.outputs.<field>}} references at run time.
+	for _, v := range n.Outputs {
+		ni.OutputSpec = append(ni.OutputSpec, workflowVarDef{Name: v.Name, Type: v.Type, Desc: v.Desc})
+	}
 	if n.Branch != nil {
 		b := &workflowBranchSpec{
 			Source:    n.Branch.Source,

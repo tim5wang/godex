@@ -195,15 +195,25 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 	// GET /v1/flow-runs/{runID}/events — SSE stream of the run's workflow
 	// events (created/start/handoff/...). Polls the append-only events log and
 	// pushes new events incrementally until the run reaches a terminal state
-	// or the client disconnects (P1.2).
+	// or the client disconnects (P1.2). With ?poll=1 it returns a plain JSON
+	// snapshot of the whole log (used by the FlowGram canvas run-state view).
 	mux.Handle("GET /v1/flow-runs/{runID}/events", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flowID := r.URL.Query().Get("flow_id")
+		runID := r.PathValue("runID")
+		if r.URL.Query().Get("poll") == "1" {
+			events, err := service.FlowRunEvents(flowID, runID)
+			if err != nil {
+				writeError(w, statusForFlowError(err), err)
+				return
+			}
+			writeJSON(w, http.StatusOK, events)
+			return
+		}
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			writeError(w, http.StatusInternalServerError, http.ErrNotSupported)
 			return
 		}
-		flowID := r.URL.Query().Get("flow_id")
-		runID := r.PathValue("runID")
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")

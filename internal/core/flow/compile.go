@@ -38,6 +38,9 @@ type CompiledNode struct {
 	Decision    *DecisionSpec   `json:"decision,omitempty"`
 	Human       *HumanSpec      `json:"human,omitempty"`
 	Branch      *CompiledBranch `json:"branch,omitempty"`
+	// Outputs carries the node's declared typed outputs (P2.3) so the engine
+	// can resolve {{nodes.<id>.outputs.<field>}} references at run time.
+	Outputs []VarDef `json:"outputs,omitempty"`
 }
 
 // CompiledBranch is the lowered branch spec. The engine gateway evaluates
@@ -156,6 +159,7 @@ func Compile(d *Definition) (*Compiled, error) {
 			Retry:      n.Retry,
 			Decision:   n.Decision,
 			Human:      n.Human,
+			Outputs:    append([]VarDef{}, n.Outputs...),
 		}
 		if kind == KindBranch && n.Branch != nil {
 			cn.Branch = compileBranch(n.Branch, byID)
@@ -341,6 +345,7 @@ func compileTemplate(n Node) CompiledNode {
 		Retry:      n.Retry,
 		Decision:   n.Decision,
 		Human:      n.Human,
+		Outputs:    append([]VarDef{}, n.Outputs...),
 	}
 }
 

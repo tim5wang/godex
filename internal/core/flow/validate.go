@@ -2,6 +2,7 @@ package flow
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -31,6 +32,9 @@ func Validate(d *Definition) error {
 	}
 	if len(d.Nodes) == 0 {
 		return ValidationError{Path: "nodes", Msg: "flow has no nodes"}
+	}
+	if err := validateIODecls(d); err != nil {
+		return err
 	}
 	if d.OnComplete != nil {
 		if strings.TrimSpace(d.OnComplete.URL) == "" {
@@ -64,6 +68,14 @@ func Validate(d *Definition) error {
 			if err := validateRetry(n.Retry, p); err != nil {
 				return err
 			}
+		}
+		if err := validateVarDefs(n.Outputs, p+".outputs"); err != nil {
+			return err
+		}
+		// P2.3: resolve {{inputs.*}} / {{nodes.*.outputs.*}} references in the
+		// node prompt against the definition at compile time.
+		if err := validateVarRefs(n.Prompt, p+".prompt", d, byID); err != nil {
+			return err
 		}
 		switch kind {
 		case KindDecision:
@@ -169,6 +181,121 @@ func normalizeEdgeType(t string) string {
 	default:
 		return t
 	}
+}
+
+// validateVarDefs checks a typed variable declaration list (Definition
+// Inputs/Outputs or node Outputs, Flow Spec §3.4): names must be non-empty,
+// unique and carry a known type.
+func validateVarDefs(defs []VarDef, p string) error {
+	seen := make(map[string]struct{}, len(defs))
+	for i, v := range defs {
+		name := strings.TrimSpace(v.Name)
+		if name == "" {
+			return ValidationError{Path: fmt.Sprintf("%s[%d].name", p, i), Msg: "variable name is required"}
+		}
+		if _, dup := seen[name]; dup {
+			return ValidationError{Path: p, Msg: fmt.Sprintf("duplicate variable %q", name)}
+		}
+		seen[name] = struct{}{}
+		if t := strings.ToLower(strings.TrimSpace(v.Type)); t != "" {
+			switch t {
+			case "string", "number", "boolean", "object", "array", "any":
+			default:
+				return ValidationError{Path: fmt.Sprintf("%s[%d].type", p, i), Msg: fmt.Sprintf("invalid variable type %q", v.Type)}
+			}
+		}
+	}
+	return nil
+}
+
+// validateIODecls validates the Flow-level Inputs/Outputs declarations
+// (names unique + known types) used by prompt variable references.
+func validateIODecls(d *Definition) error {
+	if err := validateVarDefs(d.Inputs, "inputs"); err != nil {
+		return err
+	}
+	return validateVarDefs(d.Outputs, "outputs")
+}
+
+// validateVarRefs parses {{...}} references in a node's prompt and validates
+// each reference path against the definition (Flow Spec §3.4):
+//   - {{inputs.<name>}}             -> Flow-level Inputs declaration
+//   - {{nodes.<id>.outputs.<field>}} -> a node's declared Outputs (or the
+//     standard decision/human fields)
+//
+// Unresolvable references are rejected at compile time so a flow that reads a
+// variable that does not exist fails fast instead of silently rendering empty.
+func validateVarRefs(prompt string, p string, d *Definition, byID map[string]Node) error {
+	if strings.TrimSpace(prompt) == "" {
+		return nil
+	}
+	// {{...}} reference grammar: inputs.<name> or nodes.<id>.outputs.<field>.
+	exprRe := regexp.MustCompile(`\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}`)
+	for _, m := range exprRe.FindAllStringSubmatch(prompt, -1) {
+		if len(m) != 2 {
+			continue
+		}
+		expr := strings.TrimSpace(m[1])
+		segments := strings.Split(expr, ".")
+		if len(segments) < 2 {
+			return ValidationError{Path: p, Msg: fmt.Sprintf("invalid variable reference %q", expr)}
+		}
+		switch segments[0] {
+		case "inputs":
+			name := segments[1]
+			if !flowVarDefExists(d.Inputs, name) {
+				return ValidationError{Path: p, Msg: fmt.Sprintf("prompt references unknown input %q (declare in flow inputs)", name)}
+			}
+		case "nodes":
+			nodeID := segments[1]
+			target, ok := byID[nodeID]
+			if !ok {
+				return ValidationError{Path: p, Msg: fmt.Sprintf("prompt references unknown node %q", nodeID)}
+			}
+			if len(segments) < 4 || segments[2] != "outputs" {
+				return ValidationError{Path: p, Msg: fmt.Sprintf("prompt variable %q must reference a node output (nodes.<id>.outputs.<field>)", expr)}
+			}
+			field := segments[3]
+			if !nodeOutputsField(target, field) {
+				return ValidationError{Path: p, Msg: fmt.Sprintf("node %q does not declare output %q", nodeID, field)}
+			}
+		default:
+			return ValidationError{Path: p, Msg: fmt.Sprintf("unknown variable scope %q (expected inputs or nodes)", segments[0])}
+		}
+	}
+	return nil
+}
+
+func flowVarDefExists(defs []VarDef, name string) bool {
+	for _, v := range defs {
+		if strings.TrimSpace(v.Name) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// nodeOutputsField reports whether a node declares the given output field.
+// Decision nodes expose the standard choice/confidence/... fields and human
+// nodes expose their result_var even when not listed in Outputs.
+func nodeOutputsField(n Node, field string) bool {
+	for _, v := range n.Outputs {
+		if strings.TrimSpace(v.Name) == field {
+			return true
+		}
+	}
+	switch normalizeKind(n.Kind) {
+	case KindDecision:
+		switch field {
+		case "choice", "confidence", "calibrated", "score", "model", "latency_ms", "error":
+			return true
+		}
+	case KindHuman:
+		if n.Human != nil && strings.TrimSpace(n.Human.ResultVar) == field {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRetry(r *RetryPolicy, p string) error {

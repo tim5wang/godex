@@ -162,3 +162,25 @@ export function getFlowRun(token: string | null, runId: string, flowId: string) 
 export function cancelFlowRun(token: string | null, runId: string, flowId: string) {
   return request<FlowRunView>(`/v1/flow-runs/${encodeURIComponent(runId)}/cancel?flow_id=${encodeURIComponent(flowId)}`, { method: "POST" }, token);
 }
+
+/** Flow-run workflow event (created/start/handoff/decision_made/...). */
+export interface FlowRunEvent {
+  event: string;
+  node_id?: string;
+  at?: string;
+  choice?: string;
+  confidence?: number;
+  provider?: string;
+  latency_ms?: number;
+  error?: string;
+  [key: string]: unknown;
+}
+
+/** Fetches the full append-only event log of a run (poll=1 snapshot). */
+export function flowRunEvents(token: string | null, runId: string, flowId: string) {
+  return request<FlowRunEvent[]>(
+    `/v1/flow-runs/${encodeURIComponent(runId)}/events?flow_id=${encodeURIComponent(flowId)}&poll=1`,
+    { method: "GET" },
+    token,
+  );
+}

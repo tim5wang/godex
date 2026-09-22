@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tim5wang/godex/internal/tools"
 )
 
 // ---------------------------------------------------------------------------
@@ -169,4 +172,45 @@ func (r *FlowInspectionReport) InspectionCardMarkdown() string {
 		b.WriteString(fmt.Sprintf("| %s | %d | %.0f%% | %s |\n", f.FlowID, f.Total, f.FailureRate*100, bottlenecks))
 	}
 	return b.String()
+}
+
+// flowInspectArgs is the typed args of the flow_inspect agent tool.
+type flowInspectArgs struct {
+	Action      string `json:"action,omitempty"`
+	WindowHours int    `json:"window_hours,omitempty"`
+}
+
+// newFlowInspectTool registers the flow_inspect agent tool: an agent session
+// (e.g. a cron job) can pull the aggregated inspection report or a compact
+// markdown card without leaving the chat — the 定期巡检 leg of the P3 Agent
+// 闭环 (§22.2).
+func newFlowInspectTool(agent *Agent) tools.Tool {
+	return tools.NewTypedTool(tools.NewToolSpec("flow_inspect", "Inspect Business Flow run health across published flows over a window (default 24h): aggregate failure rate, waiting-human bottlenecks, error-node events and iteration caps. action='report' returns the structured report; action='card' returns a compact markdown inspection card for chat display.", map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"action": map[string]interface{}{
+				"type": "string",
+				"enum": []string{"report", "card"},
+			},
+			"window_hours": map[string]string{"type": "integer"},
+		},
+	}, nil), func(ctx context.Context, args flowInspectArgs) (tools.ToolResult, error) {
+		_ = ctx
+		action := strings.ToLower(strings.TrimSpace(args.Action))
+		if action == "" {
+			action = "report"
+		}
+		report, err := agent.InspectFlows(args.WindowHours)
+		if err != nil {
+			return tools.ToolResult{}, err
+		}
+		switch action {
+		case "card":
+			return tools.ToolResult{Text: report.InspectionCardMarkdown()}, nil
+		case "report":
+			return tools.ToolResult{Structured: report}, nil
+		default:
+			return tools.ToolResult{}, fmt.Errorf("unsupported flow_inspect action %q", action)
+		}
+	})
 }

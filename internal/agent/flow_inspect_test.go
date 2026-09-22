@@ -148,3 +148,56 @@ func contains(s, sub string) bool {
 		return false
 	})()
 }
+
+// TestFlowInspectToolReportAndCard verifies the flow_inspect agent tool: a
+// cron/agent session can pull the structured report (action=report) or a
+// compact markdown card (action=card) for the P3 Agent 闭环定期巡检 leg.
+func TestFlowInspectToolReportAndCard(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	// A published flow with a failing function node (2 failed runs).
+	def := functionFlowDef()
+	def.FlowID = "fl_tool_inspect"
+	def.Nodes[0].Function.Source = "function handle(ctx, event) { throw new Error('boom'); }"
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	if _, err := a.PublishFlow("fl_tool_inspect", "1"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		run, err := a.CreateFlowRun(ctx, "fl_tool_inspect", "", map[string]any{"task": "x"})
+		if err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+		if _, err := a.StartFlowRun(ctx, "fl_tool_inspect", run.RunID); err != nil {
+			t.Fatalf("start run: %v", err)
+		}
+	}
+
+	// Structured report via the tool.
+	out, err := a.handleTool(ctx, "flow_inspect", map[string]interface{}{
+		"action":       "report",
+		"window_hours": 24,
+	})
+	if err != nil {
+		t.Fatalf("flow_inspect report: %v", err)
+	}
+	if !contains(out, "fl_tool_inspect") || !contains(out, `"failed":2`) {
+		t.Fatalf("expected report with failed=2, got %s", out)
+	}
+
+	// Compact markdown card via the tool.
+	card, err := a.handleTool(ctx, "flow_inspect", map[string]interface{}{
+		"action": "card",
+	})
+	if err != nil {
+		t.Fatalf("flow_inspect card: %v", err)
+	}
+	if !contains(card, "Flow 巡检") || !contains(card, "100%") {
+		t.Fatalf("expected card markdown with 100%% failure, got %s", card)
+	}
+}

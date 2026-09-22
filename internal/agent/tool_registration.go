@@ -324,6 +324,10 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Bundle:  bundleSubagent,
 		Summary: "Ralph-style prioritized long task orchestration over durable workflow nodes",
 	})
+	a.registerToolTo(handler, newFlowInspectTool(a), tools.ToolMeta{
+		Bundle:  bundleSubagent,
+		Summary: "Business Flow inspection: aggregate run health across published flows (P3 Agent 闭环定期巡检)",
+	})
 	a.registerSubagentTool(handler)
 	a.registerToolTo(handler, tools.NewACPAgentTool(a.cfg.ACP.Agents, workspaceDir), tools.ToolMeta{
 		Bundle:  bundleExternal,

@@ -137,6 +137,13 @@ type Agent struct {
 	compactionRunning    bool
 	now                  func() time.Time
 	mu                   sync.Mutex
+	// Volatile-tail throttle state (guarded by mu): per-turn runtime context
+	// is only re-injected when its driving input changes, so identical memory
+	// recall / todos / ledger text is not re-sent on every runner iteration.
+	memoryRecallQuery       string
+	memoryRecallInjectCount int
+	lastTodoTailInjected    string
+	lastLedgerTailInjected  string
 	// cacheStatsMu guards cacheStats, the in-memory per-session aggregation
 	// of provider-reported prompt cache usage. It is fed by a conversation
 	// usage hook and surfaced through InspectContext so the UI can show the

@@ -526,7 +526,7 @@ func (a *Agent) maybeStartBackgroundCompaction(ctx context.Context) {
 			return
 		}
 		promptStateMessages := runtimePromptMessages(promptStateSections)
-		runtimeMessages, _ := a.collectRuntimeMessages()
+		runtimeMessages, _ := a.collectRuntimeMessages(false)
 		memoryIndexTokens := 0
 		if _, tokens, memErr := a.buildMemoryIndexPromptMessage(); memErr == nil {
 			memoryIndexTokens = tokens

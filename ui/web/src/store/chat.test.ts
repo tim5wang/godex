@@ -22,6 +22,16 @@ function toolStarted(turnId: string, id: string, name: string, timestamp: string
   } as RuntimeEvent;
 }
 
+function toolFinished(turnId: string, id: string, name: string, timestamp: string, durationMs: number): RuntimeEvent {
+  return {
+    session_id: "s1",
+    turn_id: turnId,
+    type: "tool_call_finished",
+    timestamp,
+    payload: { id, name, duration_ms: durationMs, output: "ok" },
+  } as RuntimeEvent;
+}
+
 describe("chat store live interleaving", () => {
   beforeEach(() => {
     useChatStore.getState().reset();
@@ -59,6 +69,30 @@ describe("chat store live interleaving", () => {
     const assistantItems = useChatStore.getState().overlayItems.filter((item) => item.kind === "assistant");
     expect(assistantItems.length).toBe(1);
     expect(assistantItems[0].body).toBe("abc");
+  });
+
+  it("records tool duration and surfaces loop guard recovery as a compact note", () => {
+    const store = useChatStore.getState();
+    store.setSession("s1", "k1");
+    store.setRunningTurn("turn-3");
+
+    store.handleEvent(toolStarted("turn-3", "call_1", "bash", "2026-08-07T01:00:03Z"));
+    store.handleEvent(toolFinished("turn-3", "call_1", "bash", "2026-08-07T01:00:33Z", 30_000));
+    store.handleEvent({
+      session_id: "s1",
+      turn_id: "turn-3",
+      type: "runner_phase_changed",
+      timestamp: "2026-08-07T01:00:34Z",
+      payload: { phase: "recovery_attempted", message: "loop_guard_recovery: no_mutation_spiral detected" },
+    } as RuntimeEvent);
+
+    const state = useChatStore.getState();
+    const tool = state.overlayItems.find((item) => item.kind === "tool");
+    expect(tool?.startedAt).toBe("2026-08-07T01:00:03Z");
+    expect(tool?.durationMs).toBe(30_000);
+    const note = state.overlayItems.find((item) => item.kind === "background" && item.title === "Loop guard");
+    expect(note?.body).toContain("loop_guard_recovery");
+    expect(note?.status).toBe("recovered");
   });
 });
 

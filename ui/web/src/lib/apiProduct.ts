@@ -247,8 +247,6 @@ export function getCacheStats(
 export interface FileEntry {
   name: string;
   isDir: boolean;
-  size: number;
-  modTime: string;
 }
 
 export interface FileReadResponse {

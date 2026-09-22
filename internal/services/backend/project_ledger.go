@@ -289,18 +289,6 @@ func renderProjectLedgerCompact(ledger ProjectLedger) string {
 	writeLedgerLine(&builder, "Goal", ledger.Goal)
 	writeLedgerLine(&builder, "Current phase", ledger.CurrentPhase)
 	writeLedgerList(&builder, "Changed files", ledger.ChangedFiles, 12)
-	var commands []string
-	for _, cmd := range ledger.Commands {
-		line := cmd.Command
-		if cmd.Status != "" {
-			line += " [" + cmd.Status + "]"
-		}
-		if cmd.Summary != "" {
-			line += " - " + cmd.Summary
-		}
-		commands = append(commands, line)
-	}
-	writeLedgerList(&builder, "Recent commands", commands, 8)
 	writeLedgerList(&builder, "Validation", ledger.Validation, 8)
 	writeLedgerList(&builder, "Decisions", ledger.Decisions, 8)
 	writeLedgerList(&builder, "Risks", ledger.Risks, 6)

@@ -30,23 +30,19 @@ func registerFileRoutes(mux *http.ServeMux, protected func(http.Handler) http.Ha
 			writeFileError(w, err)
 			return
 		}
+		// Per-entry stat (item.Info()) is deliberately avoided here: the tree
+		// UI only consumes name/isDir, and a stat() per entry is the dominant
+		// cost on large directories (and each stat is a remote round-trip on
+		// SSH/SFTP-backed workspaces), which made folder expansion feel stuck.
 		type fileEntry struct {
-			Name   string `json:"name"`
-			IsDir  bool   `json:"isDir"`
-			Size   int64  `json:"size"`
-			ModTime string `json:"modTime"`
+			Name  string `json:"name"`
+			IsDir bool   `json:"isDir"`
 		}
 		result := make([]fileEntry, 0, len(items))
 		for _, item := range items {
-			info, err := item.Info()
-			if err != nil {
-				continue
-			}
 			result = append(result, fileEntry{
-				Name:   item.Name(),
-				IsDir:  item.IsDir(),
-				Size:   info.Size(),
-				ModTime: info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+				Name:  item.Name(),
+				IsDir: item.IsDir(),
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"items": result})

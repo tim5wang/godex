@@ -161,15 +161,8 @@ func TestBuildContextIncludesStructuredRuntimeMessages(t *testing.T) {
 	if len(build.Messages) < 5 {
 		t.Fatalf("expected persistent history plus runtime prompt state, got %d messages", len(build.Messages))
 	}
-	var inboxMsg *protocol.Message
-	for i := range build.Messages {
-		if build.Messages[i].Metadata != nil && build.Messages[i].Metadata.Kind == protocol.KindInbox {
-			inboxMsg = &build.Messages[i]
-			break
-		}
-	}
-	if inboxMsg == nil {
-		t.Fatalf("expected inbox runtime message in messages list, got %v", len(build.Messages))
+	if !runtimeTailContains(build, "Inbox updates") {
+		t.Fatalf("expected inbox runtime content in volatile tail, got %q", build.RuntimeTail)
 	}
 	apiMessages := protocol.ToAPIMessages(build.Messages)
 	var toolResultAPI *protocol.APIMessage
@@ -181,9 +174,6 @@ func TestBuildContextIncludesStructuredRuntimeMessages(t *testing.T) {
 	}
 	if toolResultAPI == nil {
 		t.Fatalf("expected tool result block for tool-1, got none")
-	}
-	if got := protocol.MessageText(*inboxMsg); !strings.Contains(got, "Inbox updates") {
-		t.Fatalf("expected inbox summary text, got %q", got)
 	}
 	if got := a.msgBus.PeekInbox("lead"); len(got) != 1 {
 		t.Fatalf("expected inbox preview to remain before ack, got %d messages", len(got))
@@ -492,20 +482,11 @@ func TestBuildContextIncludesEnvironmentPrompt(t *testing.T) {
 		}
 	}
 	foundEnvironment := false
-	foundDate := false
 	for _, msg := range build.Messages {
 		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
 			continue
 		}
 		text := protocol.MessageText(msg)
-		if strings.Contains(text, "Local date: 2026-04-17") {
-			// The volatile date/weekday line lives in its own tail message,
-			// never inside the stable # Environment section.
-			foundDate = true
-			if strings.Contains(text, "# Environment") {
-				t.Fatalf("expected date to stay out of the stable environment section, got %q", text)
-			}
-		}
 		if !strings.Contains(text, "# Runtime Prompt State") || !strings.Contains(text, "# Environment") {
 			continue
 		}
@@ -528,8 +509,13 @@ func TestBuildContextIncludesEnvironmentPrompt(t *testing.T) {
 	if !foundEnvironment {
 		t.Fatalf("expected environment prompt in runtime messages, got %+v", build.Messages)
 	}
-	if !foundDate {
-		t.Fatalf("expected volatile date message in the tail, got %+v", build.Messages)
+	if !strings.Contains(build.RuntimeTail, "Local date: 2026-04-17") {
+		t.Fatalf("expected volatile date line in the runtime tail, got %q", build.RuntimeTail)
+	}
+	for _, msg := range build.Messages {
+		if strings.Contains(protocol.MessageText(msg), "Local date: 2026-04-17") {
+			t.Fatalf("expected date to stay out of stable messages, got %q", protocol.MessageText(msg))
+		}
 	}
 }
 
@@ -563,7 +549,6 @@ func TestBuildContextOrdersQuasiStableBeforeHistoryAndVolatileAfter(t *testing.T
 	historyIdx := -1
 	promptStateIdx := -1
 	memoryIndexIdx := -1
-	inboxIdx := -1
 	for i := range build.Messages {
 		msg := build.Messages[i]
 		text := protocol.MessageText(msg)
@@ -574,8 +559,6 @@ func TestBuildContextOrdersQuasiStableBeforeHistoryAndVolatileAfter(t *testing.T
 			promptStateIdx = i
 		case msg.Metadata != nil && msg.Metadata.Kind == protocol.KindMemory && strings.Contains(text, "# Memory"):
 			memoryIndexIdx = i
-		case msg.Metadata != nil && msg.Metadata.Kind == protocol.KindInbox:
-			inboxIdx = i
 		}
 	}
 	if historyIdx < 0 {
@@ -587,17 +570,14 @@ func TestBuildContextOrdersQuasiStableBeforeHistoryAndVolatileAfter(t *testing.T
 	if memoryIndexIdx < 0 {
 		t.Fatalf("expected quasi-stable memory index message, got %+v", build.Messages)
 	}
-	if inboxIdx < 0 {
-		t.Fatalf("expected volatile inbox message, got %+v", build.Messages)
-	}
 	if promptStateIdx > historyIdx {
 		t.Fatalf("expected quasi-stable prompt state (%d) before history (%d)", promptStateIdx, historyIdx)
 	}
 	if memoryIndexIdx > historyIdx {
 		t.Fatalf("expected quasi-stable memory index (%d) before history (%d)", memoryIndexIdx, historyIdx)
 	}
-	if inboxIdx < historyIdx {
-		t.Fatalf("expected volatile inbox message (%d) after history (%d)", inboxIdx, historyIdx)
+	if !runtimeTailContains(build, "volatile inbox note") && !runtimeTailContains(build, "Inbox updates") {
+		t.Fatalf("expected volatile inbox content in the runtime tail, got %q", build.RuntimeTail)
 	}
 }
 
@@ -647,10 +627,11 @@ func TestBuildContextKeepsDynamicPromptStateOutOfStableSystem(t *testing.T) {
 	if firstRuntime != secondRuntime {
 		t.Fatalf("expected runtime prompt state stable across date change (date moved to tail)\nfirst: %q\nsecond: %q", firstRuntime, secondRuntime)
 	}
-	firstDate := volatileBackgroundText(first.Messages, "Local date: 2026-04-17")
-	secondDate := volatileBackgroundText(second.Messages, "Local date: 2026-04-18")
-	if !firstDate || !secondDate {
-		t.Fatalf("expected volatile date message to track the date, first=%v second=%v", firstDate, secondDate)
+	if !strings.Contains(first.RuntimeTail, "Local date: 2026-04-17") {
+		t.Fatalf("expected volatile date line to track the date, got %q", first.RuntimeTail)
+	}
+	if !strings.Contains(second.RuntimeTail, "Local date: 2026-04-18") {
+		t.Fatalf("expected volatile date line to track the date change, got %q", second.RuntimeTail)
 	}
 
 	for _, msg := range a.GetMessages() {
@@ -1042,19 +1023,8 @@ func TestBuildContextIncludesProjectLedger(t *testing.T) {
 	if strings.Contains(build.System, "Long-task project ledger") || strings.Contains(build.System, "Goal: ship the long task") {
 		t.Fatalf("did not expect volatile project ledger in system prompt, got %q", build.System)
 	}
-	foundLedger := false
-	for _, msg := range build.Messages {
-		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
-			continue
-		}
-		text := protocol.MessageText(msg)
-		if strings.Contains(text, "Long-task project ledger") && strings.Contains(text, "Goal: ship the long task") {
-			foundLedger = true
-			break
-		}
-	}
-	if !foundLedger {
-		t.Fatalf("expected project ledger as ephemeral runtime message, got %+v", build.Messages)
+	if !strings.Contains(build.RuntimeTail, "Long-task project ledger") || !strings.Contains(build.RuntimeTail, "Goal: ship the long task") {
+		t.Fatalf("expected project ledger in the volatile runtime tail, got %q", build.RuntimeTail)
 	}
 }
 
@@ -1100,19 +1070,10 @@ func runtimePromptStateText(messages []protocol.Message) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// volatileBackgroundText reports whether any background runtime message contains
-// the given substring. Unlike runtimePromptStateText, it scans every background
-// message, including the volatile date/weekday tail message.
-func volatileBackgroundText(messages []protocol.Message, want string) bool {
-	for _, msg := range messages {
-		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
-			continue
-		}
-		if strings.Contains(protocol.MessageText(msg), want) {
-			return true
-		}
-	}
-	return false
+// runtimeTailContains reports whether the volatile runtime tail string
+// contains the given substring.
+func runtimeTailContains(build *BuildContextResult, want string) bool {
+	return build != nil && strings.Contains(build.RuntimeTail, want)
 }
 
 func TestBuildContextIncludesSkillCatalogPrompt(t *testing.T) {
@@ -1566,20 +1527,16 @@ func TestBuildContextCompactsPersistentHistoryButKeepsRuntimeMessages(t *testing
 	}
 
 	foundSummary := false
-	foundInbox := false
 	for _, msg := range build.Messages {
 		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
 			foundSummary = true
-		}
-		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindInbox {
-			foundInbox = true
 		}
 	}
 	if !foundSummary {
 		t.Fatal("expected compacted context to include summary message")
 	}
-	if !foundInbox {
-		t.Fatal("expected compacted context to keep inbox runtime message")
+	if !runtimeTailContains(build, "Inbox updates") {
+		t.Fatalf("expected compacted context to keep inbox runtime content in the tail, got %q", build.RuntimeTail)
 	}
 
 	stored := a.GetMessages()
@@ -1670,29 +1627,15 @@ func TestBuildContextInjectsRelevantMemoryForCurrentQuery(t *testing.T) {
 		t.Fatalf("build context: %v", err)
 	}
 
-	foundMemory := false
-	for _, msg := range build.Messages {
-		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindMemory {
-			continue
+	for _, want := range []string{
+		"Memory context:",
+		"Relevant recall for the current request:",
+		"Testing Workflow [workflow]",
+		"Run go test ./... and go test -race ./... after runtime changes.",
+	} {
+		if !strings.Contains(build.RuntimeTail, want) {
+			t.Fatalf("expected memory runtime tail to contain %q, got %q", want, build.RuntimeTail)
 		}
-		text := protocol.MessageText(msg)
-		if !strings.Contains(text, "Memory context:") {
-			continue
-		}
-		foundMemory = true
-		for _, want := range []string{
-			"Memory context:",
-			"Relevant recall for the current request:",
-			"Testing Workflow [workflow]",
-			"Run go test ./... and go test -race ./... after runtime changes.",
-		} {
-			if !strings.Contains(text, want) {
-				t.Fatalf("expected memory runtime message to contain %q, got %q", want, text)
-			}
-		}
-	}
-	if !foundMemory {
-		t.Fatal("expected relevant memory message to be injected")
 	}
 
 	stored := a.GetMessages()
@@ -1729,37 +1672,23 @@ func TestBuildContextInjectsStableCoreMemoryWithoutQueryMatch(t *testing.T) {
 		t.Fatalf("build context: %v", err)
 	}
 
-	foundMemory := false
-	for _, msg := range build.Messages {
-		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindMemory {
-			continue
-		}
-		text := protocol.MessageText(msg)
-		if !strings.Contains(text, "Memory context:") {
-			continue
-		}
-		foundMemory = true
-		for _, want := range []string{
-			"Memory context:",
-			"L0 identity:",
-			"Project Identity [identity]",
-			"Core project memory:",
-			"Chinese Preference [user]",
-			"Reply in concise Chinese.",
-		} {
-			if !strings.Contains(text, want) {
-				t.Fatalf("expected memory runtime message to contain %q, got %q", want, text)
-			}
-		}
-		if strings.Contains(text, "Relevant recall for the current request:") {
-			t.Fatalf("did not expect relevant recall section for unmatched query, got %q", text)
-		}
-		if strings.Contains(text, "Treat GoDex as a shared backend workspace coordinating Web, TUI, and IM channels.") {
-			t.Fatalf("did not expect identity memory full content in context, got %q", text)
+	for _, want := range []string{
+		"Memory context:",
+		"L0 identity:",
+		"Project Identity [identity]",
+		"Core project memory:",
+		"Chinese Preference [user]",
+		"Reply in concise Chinese.",
+	} {
+		if !strings.Contains(build.RuntimeTail, want) {
+			t.Fatalf("expected memory runtime tail to contain %q, got %q", want, build.RuntimeTail)
 		}
 	}
-	if !foundMemory {
-		t.Fatal("expected stable core memory message to be injected")
+	if strings.Contains(build.RuntimeTail, "Relevant recall for the current request:") {
+		t.Fatalf("did not expect relevant recall section for unmatched query, got %q", build.RuntimeTail)
+	}
+	if strings.Contains(build.RuntimeTail, "Treat GoDex as a shared backend workspace coordinating Web, TUI, and IM channels.") {
+		t.Fatalf("did not expect identity memory full content in context, got %q", build.RuntimeTail)
 	}
 }
 
@@ -1781,23 +1710,14 @@ func TestBuildContextTruncatesRelevantMemoryContent(t *testing.T) {
 		t.Fatalf("build context: %v", err)
 	}
 
-	for _, msg := range build.Messages {
-		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindMemory {
-			continue
-		}
-		text := protocol.MessageText(msg)
-		if !strings.Contains(text, "Relevant recall") {
-			continue
-		}
-		if !strings.Contains(text, "Testing Workflow") || !strings.Contains(text, "repeat detail") {
-			t.Fatalf("expected relevant memory preview, got %q", text)
-		}
-		if strings.Contains(text, "UNIQUE_TAIL_SHOULD_NOT_APPEAR") {
-			t.Fatalf("expected long relevant memory content to be truncated, got %q", text)
-		}
-		return
+	if !strings.Contains(build.RuntimeTail, "Relevant recall") ||
+		!strings.Contains(build.RuntimeTail, "Testing Workflow") ||
+		!strings.Contains(build.RuntimeTail, "repeat detail") {
+		t.Fatalf("expected relevant memory preview in runtime tail, got %q", build.RuntimeTail)
 	}
-	t.Fatal("expected memory context message")
+	if strings.Contains(build.RuntimeTail, "UNIQUE_TAIL_SHOULD_NOT_APPEAR") {
+		t.Fatalf("expected long relevant memory content to be truncated, got %q", build.RuntimeTail)
+	}
 }
 
 func TestRunDoesNotAckRuntimeInputsOnCallError(t *testing.T) {
@@ -2392,21 +2312,12 @@ func TestBuildContextIncludesTodoStatusWhenTodoListNotEmpty(t *testing.T) {
 		}
 	}
 
-	found := false
-	for _, msg := range build.Messages {
-		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
-			continue
-		}
-		text := protocol.MessageText(msg)
-		// Manager.Render() outputs Item.Content (not ActiveForm) and appends
-		// the (X/N completed) footer, so assert against Content.
-		if strings.Contains(text, "Ship C fix") && strings.Contains(text, "Verify tests") && strings.Contains(text, "Current todos:") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected todo status rendered in a KindBackground ephemeral message, got %+v", build.Messages)
+	// Manager.Render() outputs Item.Content (not ActiveForm) and appends the
+	// (X/N completed) footer, so assert against the rendered content.
+	if !strings.Contains(build.RuntimeTail, "Ship C fix") ||
+		!strings.Contains(build.RuntimeTail, "Verify tests") ||
+		!strings.Contains(build.RuntimeTail, "Current todos:") {
+		t.Fatalf("expected todo status in the volatile runtime tail, got %q", build.RuntimeTail)
 	}
 }
 
@@ -2452,6 +2363,130 @@ func TestBuildContextKeepsSystemPromptUnchangedWhenTodoStatusAdded(t *testing.T)
 
 	if empty.System != withTodo.System {
 		t.Fatalf("system prompt must be byte-identical before and after adding todos; diff: %q vs %q", empty.System, withTodo.System)
+	}
+}
+
+func TestBuildContextThrottlesMemoryRecallAcrossIdenticalQueries(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	if _, err := a.memoryMgr.Remember(memory.SaveInput{
+		Title:   "Testing Workflow",
+		Summary: "Run go test ./... after runtime changes.",
+		Content: "Run go test ./... and go test -race ./... before wrapping up.",
+		Type:    memory.TypeWorkflow,
+	}); err != nil {
+		t.Fatalf("remember memory: %v", err)
+	}
+	a.AddMessage("Please update the runtime and run the tests afterwards.")
+
+	// First request injects recall because the query is new.
+	first, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if !strings.Contains(first.RuntimeTail, "Memory context:") {
+		t.Fatalf("expected memory recall on the first request, got %q", first.RuntimeTail)
+	}
+
+	// Identical-query iterations are downsampled: builds 2..7 must not repeat
+	// the same recall.
+	for i := 0; i < memoryRecallInjectEvery-1; i++ {
+		build, err := a.buildContext(context.Background())
+		if err != nil {
+			t.Fatalf("build context iteration %d: %v", i, err)
+		}
+		if strings.Contains(build.RuntimeTail, "Memory context:") {
+			t.Fatalf("did not expect memory recall on identical query iteration %d, got %q", i+2, build.RuntimeTail)
+		}
+	}
+
+	// Every memoryRecallInjectEvery-th identical-query iteration refreshes it.
+	refresh, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context refresh: %v", err)
+	}
+	if !strings.Contains(refresh.RuntimeTail, "Memory context:") {
+		t.Fatalf("expected memory recall refresh after %d identical queries, got %q", memoryRecallInjectEvery, refresh.RuntimeTail)
+	}
+
+	// A new user query resets the throttle and injects immediately.
+	a.AddMessage("Please run go test again after the runtime changes.")
+	next, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context new query: %v", err)
+	}
+	if !strings.Contains(next.RuntimeTail, "Memory context:") {
+		t.Fatalf("expected memory recall after query change, got %q", next.RuntimeTail)
+	}
+}
+
+func TestBuildContextGatesUnchangedTodoStatus(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.RegisterTools()
+	if _, err := a.todoMgr.Add("Ship C fix", "Shipping C fix"); err != nil {
+		t.Fatalf("seed todo: %v", err)
+	}
+
+	first, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if !strings.Contains(first.RuntimeTail, "Current todos:") {
+		t.Fatalf("expected todo status on the first request, got %q", first.RuntimeTail)
+	}
+
+	unchanged, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context unchanged: %v", err)
+	}
+	if strings.Contains(unchanged.RuntimeTail, "Current todos:") {
+		t.Fatalf("did not expect unchanged todo status to be re-injected, got %q", unchanged.RuntimeTail)
+	}
+
+	if _, err := a.todoMgr.Add("Verify tests", "Verifying tests"); err != nil {
+		t.Fatalf("add todo: %v", err)
+	}
+	changed, err := a.buildContext(context.Background())
+	if err != nil {
+		t.Fatalf("build context changed: %v", err)
+	}
+	if !strings.Contains(changed.RuntimeTail, "Current todos:") || !strings.Contains(changed.RuntimeTail, "Verify tests") {
+		t.Fatalf("expected changed todo status to be re-injected, got %q", changed.RuntimeTail)
+	}
+}
+
+func TestBuildContextGatesUnchangedProjectLedger(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	ledgerCtx := func(ledger string) context.Context {
+		return tools.WithSessionContext(context.Background(), automation.SessionContext{
+			SessionID:              "session-ledger-gate",
+			ProjectLedger:          ledger,
+			ProjectLedgerUpdatedAt: time.Now(),
+		})
+	}
+
+	first, err := a.buildContext(ledgerCtx("Goal: ship the long task\nCurrent phase: active"))
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+	if !strings.Contains(first.RuntimeTail, "Long-task project ledger") {
+		t.Fatalf("expected project ledger on the first request, got %q", first.RuntimeTail)
+	}
+
+	unchanged, err := a.buildContext(ledgerCtx("Goal: ship the long task\nCurrent phase: active"))
+	if err != nil {
+		t.Fatalf("build context unchanged: %v", err)
+	}
+	if strings.Contains(unchanged.RuntimeTail, "Long-task project ledger") {
+		t.Fatalf("did not expect unchanged ledger to be re-injected, got %q", unchanged.RuntimeTail)
+	}
+
+	changed, err := a.buildContext(ledgerCtx("Goal: ship the long task\nCurrent phase: blocked\nBlockers: - flaky test"))
+	if err != nil {
+		t.Fatalf("build context changed: %v", err)
+	}
+	if !strings.Contains(changed.RuntimeTail, "Long-task project ledger") || !strings.Contains(changed.RuntimeTail, "flaky test") {
+		t.Fatalf("expected changed ledger to be re-injected, got %q", changed.RuntimeTail)
 	}
 }
 

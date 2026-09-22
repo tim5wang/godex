@@ -23,8 +23,13 @@ import (
 )
 
 type BuildContextResult struct {
-	System                string
-	Messages              []protocol.Message
+	System   string
+	Messages []protocol.Message
+	// RuntimeTail is the volatile runtime tail (memory recall, project ledger,
+	// todos, date) rendered as one string. Wire serializers attach it to the
+	// last tool result / user message so it never becomes a fresh user turn;
+	// its churn stays at the prompt tail for prefix caching.
+	RuntimeTail           string
 	ToolSchemas           []protocol.ToolSchema
 	TokenEstimate         int
 	TokenBreakdown        tools.ContextTokenBreakdown
@@ -52,7 +57,7 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	memoryMessages, memoryLayers, err := a.collectMemoryMessages(history)
+	memoryMessages, memoryLayers, err := a.collectMemoryMessagesThrottled(history)
 	if err != nil {
 		return nil, err
 	}
@@ -65,10 +70,7 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 		return nil, err
 	}
 	promptStateMessages := runtimePromptMessages(promptStateSections)
-	runtimeMessages, ackRuntime := a.collectRuntimeMessages()
-	if sc := tools.SessionContextFromContext(ctx); projectLedgerInjectionAllowed(sc) {
-		runtimeMessages = append([]protocol.Message{protocol.NewEphemeralTextMessage(protocol.KindBackground, formatProjectLedgerRuntimeMessage(sc.ProjectLedger))}, runtimeMessages...)
-	}
+	runtimeMessages, ackRuntime := a.collectRuntimeMessages(true)
 
 	// Split runtime content by stability for KV prefix caching:
 	//   quasiStableMessages = memory index + runtime prompt sections. They
@@ -85,24 +87,12 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 		quasiStableMessages = append(quasiStableMessages, memoryIndexMessage)
 	}
 	quasiStableMessages = append(quasiStableMessages, promptStateMessages...)
-	volatileMessages := append(protocol.CloneMessages(memoryMessages), protocol.CloneMessages(runtimeMessages)...)
-	// The date/weekday are volatile: they live in the tail (not the stable
-	// # Environment section before history) so the daily rollover cannot
-	// invalidate the provider prefix cache for the whole history.
-	volatileMessages = append(volatileMessages, protocol.NewEphemeralTextMessage(protocol.KindBackground, buildEnvironmentDatePrompt(a.now())))
-
-	// Repo map freshness: the stable snapshot before history never changes
-	// mid-session, so per-turn file edits are reported here as a bounded change
-	// note, plus a small query-relevance hint — both AFTER history in the
-	// volatile tail, where their churn is uncached but tiny.
-	_, snapshotEntries := a.repoMapSnapshot(false)
-	currentEntries := collectRepoMapEntries(repoMapWorkspaceDir(a))
-	if changeNote := renderRepoMapChangeNote(snapshotEntries, currentEntries); changeNote != "" {
-		volatileMessages = append(volatileMessages, protocol.NewEphemeralTextMessage(protocol.KindBackground, changeNote))
-	}
-	if focus := renderRepoMapQueryFocus(currentEntries, query); focus != "" {
-		volatileMessages = append(volatileMessages, protocol.NewEphemeralTextMessage(protocol.KindBackground, focus))
-	}
+	// Volatile runtime context: memory recall, project ledger (fresh + changed),
+	// notifications/inbox/todos (todos only when they change), and the
+	// date/weekday line. Repo-map change notes and query focus are intentionally
+	// dropped: the stable repo map already sits before history, and per-turn
+	// diff/relevance churn was repeated uncached tail noise.
+	volatileMessages := a.buildVolatileTailMessages(ctx, memoryMessages, runtimeMessages)
 
 	triggerTokens := a.compactionTriggerTokens()
 	preliminary := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), triggerTokens)
@@ -118,7 +108,6 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 		a.repoMapInvalidate()
 	}
 	combined := append(protocol.CloneMessages(quasiStableMessages), protocol.CloneMessages(compactedHistory)...)
-	combined = append(combined, volatileMessages...)
 	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), triggerTokens)
 	historyRecall := a.evaluateHistoryRecall(ctx, query, compactedHistory, memoryLayers, compacted)
 	toolSchemas := a.activeToolSchemas(agentProfile)
@@ -137,6 +126,7 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	return &BuildContextResult{
 		System:                system,
 		Messages:              combined,
+		RuntimeTail:           renderVolatileTailText(volatileMessages),
 		ToolSchemas:           toolSchemas,
 		TokenEstimate:         estimate.Breakdown.Total,
 		TokenBreakdown:        estimate.Breakdown,
@@ -373,7 +363,11 @@ func (a *Agent) buildRuntimeSystemPrompt(agentProfile ...string) (string, error)
 
 const conciseDefaultResponsePrompt = "Default response style: be concise unless the user asks for a detailed report. Do not restate stable context, raw tool output, or lengthy process notes unless they directly change the answer."
 
-func (a *Agent) collectRuntimeMessages() ([]protocol.Message, func()) {
+// collectRuntimeMessages gathers per-turn runtime notifications. When gateTodo
+// is true (the active request path), the todo status is only injected when its
+// rendered text changes, so an unchanged todo list is not re-sent on every
+// runner iteration.
+func (a *Agent) collectRuntimeMessages(gateTodo bool) ([]protocol.Message, func()) {
 	messages := make([]protocol.Message, 0, 3)
 	var inboxPreview []message.Message
 	var backgroundPreview []background.Notification
@@ -393,7 +387,11 @@ func (a *Agent) collectRuntimeMessages() ([]protocol.Message, func()) {
 	// persistent history entry. The whole runtime block is per-turn cache miss
 	// (driven by a.now() and background notifications), so adding one more
 	// ephemeral block here does not affect the stable system or history caches.
-	if todoStatus := a.collectTodoStatus(); todoStatus != "" {
+	todoStatus := a.collectTodoStatus()
+	if gateTodo {
+		todoStatus = a.gateTodoStatus(todoStatus)
+	}
+	if todoStatus != "" {
 		messages = append(messages, protocol.NewEphemeralTextMessage(protocol.KindBackground, todoStatus))
 	}
 
@@ -407,6 +405,92 @@ func (a *Agent) collectRuntimeMessages() ([]protocol.Message, func()) {
 	}
 
 	return messages, ack
+}
+
+// gateTodoStatus drops the todo render when it is byte-identical to the last
+// injected render. The agent writes todos itself, so an unchanged list is
+// already present in the model's context.
+func (a *Agent) gateTodoStatus(rendered string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if rendered == a.lastTodoTailInjected {
+		return ""
+	}
+	a.lastTodoTailInjected = rendered
+	return rendered
+}
+
+// collectMemoryMessagesThrottled wraps collectMemoryMessages with recall
+// downsampling: recall is always injected when the driving user query changes,
+// and at most once every memoryRecallInjectEvery identical-query iterations
+// afterwards. The context layers are still computed every call so downstream
+// history-recall evaluation keeps its signal.
+func (a *Agent) collectMemoryMessagesThrottled(history []protocol.Message) ([]protocol.Message, memory.ContextLayers, error) {
+	query := protocol.LatestPersistentUserText(history)
+	a.mu.Lock()
+	if query != a.memoryRecallQuery {
+		a.memoryRecallQuery = query
+		a.memoryRecallInjectCount = 0
+	}
+	inject := a.memoryRecallInjectCount%memoryRecallInjectEvery == 0
+	a.memoryRecallInjectCount++
+	a.mu.Unlock()
+
+	messages, layers, err := a.collectMemoryMessages(history)
+	if err != nil || !inject {
+		return nil, layers, err
+	}
+	return messages, layers, nil
+}
+
+// memoryRecallInjectEvery bounds how many identical-query runner iterations may
+// pass between memory recall injections. Tool loops repeat the same latest user
+// text every round; re-sending the same recall each round was uncached tail
+// noise with no new signal.
+const memoryRecallInjectEvery = 8
+
+// buildVolatileTailMessages assembles the per-turn runtime tail in its stable
+// order: memory recall, fresh+changed project ledger, notifications/inbox/
+// todos, and the date line. The rendered tail is attached to the request by the
+// wire serializer instead of being appended as separate user messages.
+func (a *Agent) buildVolatileTailMessages(ctx context.Context, memoryMessages, runtimeMessages []protocol.Message) []protocol.Message {
+	volatile := make([]protocol.Message, 0, 4)
+	volatile = append(volatile, protocol.CloneMessages(memoryMessages)...)
+	if sc := tools.SessionContextFromContext(ctx); projectLedgerInjectionAllowed(sc) {
+		if ledgerText := a.gateProjectLedger(sc.ProjectLedger); ledgerText != "" {
+			volatile = append(volatile, protocol.NewEphemeralTextMessage(protocol.KindBackground, ledgerText))
+		}
+	}
+	volatile = append(volatile, protocol.CloneMessages(runtimeMessages)...)
+	volatile = append(volatile, protocol.NewEphemeralTextMessage(protocol.KindBackground, buildEnvironmentDatePrompt(a.now())))
+	return volatile
+}
+
+// gateProjectLedger injects the ledger only when its compact text changed since
+// the last request, so an unchanged ledger (same phase/decisions) is not
+// re-sent on every runner iteration.
+func (a *Agent) gateProjectLedger(ledger string) string {
+	ledger = strings.TrimSpace(ledger)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ledger == "" || ledger == a.lastLedgerTailInjected {
+		return ""
+	}
+	a.lastLedgerTailInjected = ledger
+	return formatProjectLedgerRuntimeMessage(ledger)
+}
+
+// renderVolatileTailText joins the volatile tail messages into one string for
+// wire-level attachment. Each message is already self-describing ("Memory
+// context:", "Current todos:", "Local date: ...").
+func renderVolatileTailText(messages []protocol.Message) string {
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if text := strings.TrimSpace(protocol.MessageText(msg)); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func (a *Agent) collectTodoStatus() string {

@@ -306,6 +306,10 @@ export interface FeedItem {
   input?: Record<string, unknown>;
   output?: string;
   error?: string;
+  /** ISO timestamp when the tool call started (live elapsed timer). */
+  startedAt?: string;
+  /** Total tool execution time in milliseconds (tool_call_finished). */
+  durationMs?: number;
   todoItems?: TodoFeedItem[];
   todoStats?: TodoFeedStats;
   expanded?: boolean;
@@ -371,4 +375,3 @@ export interface TodoFeedStats {
   inProgress: number;
   pending: number;
 }
-

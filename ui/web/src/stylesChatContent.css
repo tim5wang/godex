@@ -375,6 +375,19 @@
   font-size: 11px;
 }
 
+.tool-call-row-duration {
+  flex: 0 0 auto;
+  color: var(--godex-muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tool-call-row-duration-stuck {
+  color: #b45309;
+  font-weight: 600;
+}
+
 .tool-call-row-details {
   display: grid;
   gap: 10px;

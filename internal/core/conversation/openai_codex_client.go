@@ -199,6 +199,9 @@ func normalizeCodexReasoningEffort(effort string) string {
 
 func codexInputFromProtocol(req protocol.Request) responses.ResponseInputParam {
 	items := make(responses.ResponseInputParam, 0, len(req.Messages))
+	var lastOutputCallID string
+	var lastOutputIndex int
+	var lastOutput string
 	for _, msg := range req.Messages {
 		role := codexResponsesRole(msg.Role)
 		var textParts []string
@@ -228,11 +231,27 @@ func codexInputFromProtocol(req protocol.Request) responses.ResponseInputParam {
 			case protocol.BlockToolResult:
 				flushText()
 				if strings.TrimSpace(block.ToolUseID) != "" {
+					lastOutputCallID = block.ToolUseID
+					lastOutput = block.Content
 					items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(block.ToolUseID, block.Content))
+					lastOutputIndex = len(items) - 1
 				}
 			}
 		}
 		flushText()
+	}
+	if tail := strings.TrimSpace(req.RuntimeTail); tail != "" {
+		if lastOutputCallID != "" {
+			// Ride the runtime tail on the last function_call_output item so it
+			// is not interpreted as a fresh user instruction.
+			sep := ""
+			if strings.TrimSpace(lastOutput) != "" {
+				sep = "\n\n"
+			}
+			items[lastOutputIndex] = responses.ResponseInputItemParamOfFunctionCallOutput(lastOutputCallID, lastOutput+sep+tail)
+		} else {
+			items = append(items, responses.ResponseInputItemParamOfMessage(tail, responses.EasyInputMessageRoleUser))
+		}
 	}
 	return items
 }

@@ -212,6 +212,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             summary: summarizeTool(payload.input, "", "", true),
             input: payload.input,
             status: "running",
+            startedAt: event.timestamp,
             expanded: false,
             turnId: event.turn_id || undefined,
           });
@@ -219,7 +220,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
           break;
         }
         case "tool_call_finished": {
-          const payload = event.payload as { id?: string; name?: string; input?: Record<string, unknown>; output?: string; error?: string };
+          const payload = event.payload as {
+            id?: string;
+            name?: string;
+            input?: Record<string, unknown>;
+            output?: string;
+            error?: string;
+            duration_ms?: number;
+          };
           if (payload.name === "todo_write" && !payload.error) {
             break;
           }
@@ -243,10 +251,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
             output: payload.output,
             error: payload.error,
             status: payload.error ? "failed" : "finished",
+            startedAt: current?.startedAt,
+            durationMs: payload.duration_ms,
             expanded: false,
             turnId: event.turn_id || undefined,
           });
           status = payload.error ? `Tool failed: ${displayName}` : `Finished tool ${displayName}`;
+          break;
+        }
+        case "runner_phase_changed": {
+          const payload = event.payload as { phase?: string; message?: string };
+          const message = String(payload.message || "");
+          if (payload.phase !== "recovery_attempted" || !message.startsWith("loop_guard_recovery")) {
+            break;
+          }
+          const turnId = event.turn_id || "";
+          // Compact feed note for loop-guard nudges: the full guidance stays
+          // model-visible via the runtime feedback message, but is not a user
+          // bubble that interrupts the conversation.
+          overlayItems.push({
+            id: `loopguard:${turnId || "current"}:${++assistantSegmentCounter}`,
+            kind: "background",
+            title: "Loop guard",
+            body: message,
+            timestamp: event.timestamp,
+            summary: firstSummaryLine(message),
+            status: "recovered",
+            turnId: turnId || undefined,
+          });
           break;
         }
         case "todo_list_updated": {
@@ -472,6 +504,11 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
 
   (messages ?? []).forEach((msg, messageIndex) => {
     const blocks = msg.content ?? [];
+    // Runtime guidance (loop guard recovery, permission notes) is persisted
+    // for model context but must not render as a "You" bubble after reload.
+    if (msg.role !== "assistant" && msg.metadata?.kind === "background") {
+      return;
+    }
     const text = msg.metadata?.text ?? blocks.filter((block) => block.type === "text").map((block) => block.text || "").join("");
     const attachments = msg.metadata?.attachments ?? [];
     // Synthesize a turnId for assistant messages so their text + tool blocks
@@ -504,6 +541,7 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
           summary: summarizeTool(block.input, "", "", true),
           input: block.input,
           status: "running",
+          startedAt: msg.metadata?.timestamp,
           expanded: expanded[toolSnapshotId(messageIndex, blockIndex, block)] ?? false,
           turnId: syntheticTurnId,
         };

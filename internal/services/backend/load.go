@@ -50,6 +50,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	session.timeline.Seed(s.readSessionTimeline(sessionID))
 	session.seedTurns(s.readSessionTurns(sessionID))
 	session.seedQueue(s.readSessionQueue(sessionID))
+	session.journal = newSessionEventBatcher(s, session)
 	session.events.Attach(persistentTimelineSink{service: s, session: session})
 	if manifest != nil {
 		session.locator = normalizeLocator(manifest.Locator)
@@ -824,14 +825,17 @@ func (s *Service) readSessionQueue(sessionID string) []QueuedTurn {
 }
 
 func (s *Service) appendSessionEventJournal(session *sessionState, event events.Event) error {
-	if session == nil || !events.RecordableEvent(event) {
+	return s.appendSessionEventJournalBatch(session, []events.Event{event})
+}
+
+// appendSessionEventJournalBatch appends a batch of recordable events to the
+// session's append-only journal in one open/write/close cycle, then syncs the
+// store copy once. Thinking deltas are intentionally not journaled (they are
+// redundant with the consolidated reasoning on the final assistant message).
+func (s *Service) appendSessionEventJournalBatch(session *sessionState, batch []events.Event) error {
+	if session == nil || len(batch) == 0 {
 		return nil
 	}
-	data, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
 
 	session.timelineMu.Lock()
 	defer session.timelineMu.Unlock()
@@ -843,7 +847,22 @@ func (s *Service) appendSessionEventJournal(session *sessionState, event events.
 	if err != nil {
 		return err
 	}
-	_, writeErr := file.Write(data)
+	var writeErr error
+	for _, event := range batch {
+		if !events.RecordableEvent(event) || event.Type == events.EventAssistantThinkingDelta {
+			continue
+		}
+		data, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			writeErr = marshalErr
+			break
+		}
+		data = append(data, '\n')
+		if _, err := file.Write(data); err != nil {
+			writeErr = err
+			break
+		}
+	}
 	closeErr := file.Close()
 	if writeErr != nil {
 		return writeErr
@@ -867,6 +886,9 @@ func (s *Service) appendSessionEventJournal(session *sessionState, event events.
 func (s *Service) rotateSessionEventJournal(session *sessionState) error {
 	if session == nil {
 		return nil
+	}
+	if session.journal != nil {
+		session.journal.FlushSync()
 	}
 	session.timelineMu.Lock()
 	defer session.timelineMu.Unlock()

@@ -825,9 +825,41 @@ func marshalAnthropicBody(req protocol.Request) ([]byte, error) {
 		}
 		msgs = append(msgs, m)
 	}
+	if tail := strings.TrimSpace(req.RuntimeTail); tail != "" && len(msgs) > 0 {
+		last := msgs[len(msgs)-1]
+		if content, ok := last["content"].([]interface{}); ok {
+			if !appendAnthropicRuntimeTail(content, tail) {
+				content = append(content, map[string]interface{}{"type": "text", "text": tail})
+			}
+			last["content"] = content
+			msgs[len(msgs)-1] = last
+		}
+	}
 	payload["messages"] = msgs
 
 	return json.Marshal(payload)
+}
+
+// appendAnthropicRuntimeTail attaches the volatile runtime tail to the last
+// tool_result content block so it stays part of the tool output instead of a
+// separate user turn. Returns false when there is no tool_result block to
+// attach to.
+func appendAnthropicRuntimeTail(content []interface{}, tail string) bool {
+	for i := len(content) - 1; i >= 0; i-- {
+		block, ok := content[i].(map[string]interface{})
+		if !ok || block["type"] != "tool_result" {
+			continue
+		}
+		existing, _ := block["content"].(string)
+		sep := ""
+		if strings.TrimSpace(existing) != "" {
+			sep = "\n\n"
+		}
+		block["content"] = existing + sep + tail
+		content[i] = block
+		return true
+	}
+	return false
 }
 
 // cacheControlValue returns a cache_control map based on the retention setting.

@@ -1,5 +1,5 @@
 import { App as AntApp, Avatar, Button, Empty, Space, Tag, Tooltip, Typography } from "antd";
-import { Fragment, memo, useCallback, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircleFilled,
   CheckSquareOutlined,
@@ -27,7 +27,7 @@ import { UiCardView, type UiCardData } from "./UiCardView";
 import { useI18n } from "../i18n";
 import { writeClipboardText } from "../lib/clipboard";
 import { createPCMPlayer, type PCMPlayer } from "../lib/ttsPlayback";
-import { shortTurnId } from "../lib/timelineUtils";
+import { formatDurationMs, shortTurnId } from "../lib/timelineUtils";
 import type { FeedItem, FeedSegment } from "../lib/types";
 
 interface MessageFeedV2Props {
@@ -520,12 +520,18 @@ export const ToolCallRow = memo(
   function ToolCallRow({ item, onToggle }: { item: FeedItem; onToggle: () => void }) {
     const open = Boolean(item.expanded);
     const hasDetails = Boolean(item.input || item.output || item.error);
+    const duration = item.status === "running" && item.startedAt ? (
+      <RunningToolElapsed startedAt={item.startedAt} />
+    ) : item.durationMs ? (
+      <span className="tool-call-row-duration">{formatDurationMs(item.durationMs)}</span>
+    ) : null;
     return (
       <div className={`tool-call-row${open ? " tool-call-row-open" : ""}`} data-status={item.status || "finished"}>
         <button aria-expanded={open} className="tool-call-row-header" onClick={hasDetails ? onToggle : undefined} type="button">
           <ToolStatusIcon status={item.status} />
           <span className="tool-call-row-name">{item.title}</span>
           {item.summary ? <span className="tool-call-row-summary">{item.summary}</span> : null}
+          {duration}
           {hasDetails ? <span className="tool-call-row-chevron">{open ? <DownOutlined /> : <RightOutlined />}</span> : null}
         </button>
         {open && hasDetails ? (
@@ -541,6 +547,40 @@ export const ToolCallRow = memo(
     return prev.item === next.item;
   },
 );
+
+/** Live elapsed timer for a running tool call, ticking once per second. */
+function RunningToolElapsed({ startedAt }: { startedAt: string }) {
+  const [elapsedMs, setElapsedMs] = useState(() => elapsedSince(startedAt));
+  useEffect(() => {
+    setElapsedMs(elapsedSince(startedAt));
+    const timer = window.setInterval(() => setElapsedMs(elapsedSince(startedAt)), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const stuck = seconds >= 30;
+  return (
+    <span
+      className={stuck ? "tool-call-row-duration tool-call-row-duration-stuck" : "tool-call-row-duration"}
+      title={stuck ? "Still running — check the tool log for progress" : undefined}
+    >
+      {formatElapsedSeconds(seconds)}
+    </span>
+  );
+}
+
+function elapsedSince(iso: string): number {
+  const started = Date.parse(iso);
+  return Number.isNaN(started) ? 0 : Date.now() - started;
+}
+
+function formatElapsedSeconds(seconds: number): string {
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
 
 function ToolStatusIcon({ status }: { status?: string }) {
   if (status === "running") {

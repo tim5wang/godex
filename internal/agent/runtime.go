@@ -934,6 +934,7 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 				return protocol.Request{}, err
 			}
 			req := conversation.NewRequestFromAPIMessages(a.cfg.Model, a.cfg.MaxTokens, a.cfg.ReasoningEffort, build.System, apiMessages, build.ToolSchemas)
+			req.RuntimeTail = build.RuntimeTail
 			if strings.TrimSpace(opts.SessionID) != "" {
 				req.PromptCacheKey = clampCacheKey(opts.SessionID)
 				req.PromptCacheRetention = protocol.CacheRetentionLong
@@ -949,7 +950,11 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			checkpoint()
 		},
 		AppendRuntimeFeedback: func(msg protocol.Message) {
-			a.appendMessage(msg)
+			// Runtime guidance (loop guard recovery, permission notes) is
+			// model context, not user speech: mark it ephemeral background so
+			// it does not render as a user bubble or survive as one after
+			// snapshot rebuilds.
+			a.appendMessage(protocol.NewEphemeralTextMessage(protocol.KindBackground, protocol.MessageText(msg)))
 			checkpoint()
 		},
 		ExecuteTool:      a.handleToolResult,
@@ -1032,15 +1037,6 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 			if tool.Name == "todo_write" && strings.TrimSpace(tool.Error) == "" {
 				emit(events.EventTodoListUpdated, todoListPayload(a.todoMgr.List(), tool.ID, tool.Name))
 			}
-		},
-		OnToolStuck: func(tool conversation.ToolStuckEvent) {
-			emit(events.EventWarningRaised, events.NoticePayload{
-				Message:      fmt.Sprintf("tool %s has been running for %s; hard timeout is %s", tool.Name, tool.Elapsed, tool.Timeout),
-				Code:         "tool_stuck",
-				ActorKind:    "tool",
-				ActorID:      tool.ID,
-				RecoveryHint: fmt.Sprintf("If %s keeps running, the runner will return a model-visible timeout result and continue from available context.", tool.Name),
-			})
 		},
 		OnPhase: func(phase conversation.PhaseEvent) {
 			if !opts.EmitRunnerPhases {

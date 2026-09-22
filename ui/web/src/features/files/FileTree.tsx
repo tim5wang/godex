@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Tree, Spin, message, Menu } from "antd";
 import type { MenuProps } from "antd";
 import { FolderOutlined, FolderOpenOutlined, FileOutlined, CopyOutlined, EditOutlined, DeleteOutlined, UploadOutlined } from "@ant-design/icons";
@@ -81,11 +81,28 @@ export default function FileTree({
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [contextMenu, setContextMenu] = useState<{ open: boolean; x: number; y: number; path: string; title: string; isLeaf: boolean }>({ open: false, x: 0, y: 0, path: "", title: "", isLeaf: true });
 
+  // Staleness + concurrency guards for lazy dir loads:
+  // - loadEpochRef bumps whenever the tree is reset (refreshKey / workspace
+  //   change). A response captured under an older epoch is dropped, so a stale
+  //   response can never mark a dir "loaded" without children in the new tree
+  //   (that race left folders expandable but permanently empty after refresh).
+  // - inFlightDirsRef dedupes concurrent loads of the same dir.
+  // - pendingLoadsRef keeps the spinner on until the last in-flight load settles.
+  const loadEpochRef = useRef(0);
+  const inFlightDirsRef = useRef<Set<string>>(new Set());
+  const pendingLoadsRef = useRef(0);
+
   const loadDir = useCallback(
     async (dir: string) => {
+      const inflight = inFlightDirsRef.current;
+      if (inflight.has(dir)) return;
+      inflight.add(dir);
+      const epoch = loadEpochRef.current;
+      pendingLoadsRef.current += 1;
       setLoading(true);
       try {
         const res = await listFiles(token, dir, workspaceRoot, relayNode);
+        if (epoch !== loadEpochRef.current) return; // tree was reset since this load started
         setLoadedDirs((prev) => new Set(prev).add(dir));
         const nodes = buildTreeNodes(res.items, dir);
         setTreeData((prev) => {
@@ -93,15 +110,23 @@ export default function FileTree({
           return updateTreeNodes(prev, dir, nodes);
         });
       } catch {
-        message.error("Failed to load directory");
+        if (epoch === loadEpochRef.current) message.error("Failed to load directory");
       } finally {
-        setLoading(false);
+        inflight.delete(dir);
+        pendingLoadsRef.current -= 1;
+        if (pendingLoadsRef.current <= 0) {
+          pendingLoadsRef.current = 0;
+          setLoading(false);
+        }
       }
     },
     [token, workspaceRoot, relayNode],
   );
 
   useEffect(() => {
+    // Invalidate every in-flight load from the previous tree, then start fresh.
+    loadEpochRef.current += 1;
+    inFlightDirsRef.current = new Set();
     setLoadedDirs(new Set());
     setTreeData([]);
     setExpandedKeys([]);

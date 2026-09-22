@@ -139,6 +139,7 @@ func (c *OpenAIClient) buildRequest(req protocol.Request, stream bool) ([]byte, 
 // for providers that reject the field.
 func (c *OpenAIClient) buildRequestBody(req protocol.Request, stream, includeUsage bool) ([]byte, error) {
 	msgs := openAIMessagesFromProtocol(req)
+	msgs = applyRuntimeTail(msgs, req.RuntimeTail)
 	tools := openAIToolsFromProtocol(req.Tools)
 
 	// Anthropic-style cache_control breakpoints for OpenRouter / Anthropic routing.
@@ -403,13 +404,58 @@ func openAIMessagesFromProtocol(req protocol.Request) []openAIMessage {
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case protocol.RoleAssistant:
-			out = append(out, openAIAssistantMessage(msg))
+			out = append(out, openAIAssistantMessage(msg, req.IncludeReasoningContent))
 		default:
 			out = append(out, openAIUserMessages(msg)...)
 		}
 	}
 	return out
 }
+
+// applyRuntimeTail appends the volatile runtime tail to the request instead of
+// emitting it as a fresh user turn. When the wire ends with a tool message
+// (the common in-turn case), the tail rides inside that tool result and a
+// constant continuation marker satisfies the provider's role alternation.
+// When the wire ends with a user message (new user turn), the tail merges into
+// it directly. This keeps the churn at the prompt tail for prefix caching
+// without making the model interpret runtime state as a user instruction.
+func applyRuntimeTail(msgs []openAIMessage, tail string) []openAIMessage {
+	tail = strings.TrimSpace(tail)
+	if tail == "" {
+		return msgs
+	}
+	if len(msgs) == 0 {
+		return []openAIMessage{{Role: "user", Content: tail}}
+	}
+	last := msgs[len(msgs)-1]
+	switch last.Role {
+	case "tool":
+		sep := ""
+		if strings.TrimSpace(last.Content) != "" {
+			sep = "\n\n"
+		}
+		last.Content += sep + tail
+		msgs[len(msgs)-1] = last
+		// OpenAI-compatible providers expect a user/assistant message after
+		// tool results; a constant continuation marker is byte-stable and does
+		// not read as a new instruction.
+		msgs = append(msgs, openAIMessage{Role: "user", Content: continueRuntimeTailMarker})
+	case "user":
+		sep := ""
+		if strings.TrimSpace(last.Content) != "" {
+			sep = "\n\n"
+		}
+		last.Content += sep + tail
+		msgs[len(msgs)-1] = last
+	default:
+		msgs = append(msgs, openAIMessage{Role: "user", Content: tail})
+	}
+	return msgs
+}
+
+// continueRuntimeTailMarker is the constant user message appended after a
+// tool-result tail so the request never ends on a tool role.
+const continueRuntimeTailMarker = "Continue."
 
 func openAIUserMessages(msg protocol.APIMessage) []openAIMessage {
 	out := make([]openAIMessage, 0, 1)
@@ -477,7 +523,7 @@ func normalizeOpenAIReasoningEffort(effort string) string {
 	}
 }
 
-func openAIAssistantMessage(msg protocol.APIMessage) openAIMessage {
+func openAIAssistantMessage(msg protocol.APIMessage, includeReasoning bool) openAIMessage {
 	var text strings.Builder
 	var calls []openAIToolCall
 	for _, block := range msg.Content {
@@ -505,7 +551,11 @@ func openAIAssistantMessage(msg protocol.APIMessage) openAIMessage {
 			})
 		}
 	}
-	return openAIMessage{Role: "assistant", Content: strings.TrimSpace(text.String()), ReasoningContent: msg.ReasoningContent, ToolCalls: calls}
+	assistant := openAIMessage{Role: "assistant", Content: strings.TrimSpace(text.String()), ToolCalls: calls}
+	if includeReasoning {
+		assistant.ReasoningContent = msg.ReasoningContent
+	}
+	return assistant
 }
 
 func openAIToolsFromProtocol(tools []protocol.ToolSchema) []openAITool {
@@ -705,6 +755,7 @@ func openAIToolCallToBlock(call openAIToolCall) protocol.Block {
 func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Response, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	streamStarted := false
 	var text strings.Builder
 	calls := map[int]*openAIToolCall{}
 	order := make([]int, 0)
@@ -722,6 +773,15 @@ func parseOpenAIStream(reader io.Reader, handler StreamHandler) (*protocol.Respo
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
+		}
+		if !streamStarted {
+			streamStarted = true
+			// Mirrors the Responses/codex clients: the first streamed event
+			// marks the start so TTFT is measured and the frontend can show a
+			// "thinking..." placeholder instead of a blank wait.
+			if handler.OnStreamStarted != nil {
+				handler.OnStreamStarted()
+			}
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "" || payload == "[DONE]" {

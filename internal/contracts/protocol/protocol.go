@@ -164,6 +164,18 @@ type Request struct {
 	Stream               bool         `json:"stream,omitempty"`
 	PromptCacheKey       string       `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention string       `json:"prompt_cache_retention,omitempty"`
+	// RuntimeTail carries per-turn volatile runtime context (memory recall,
+	// project ledger, todos, date). Wire serializers append it to the last
+	// tool result / user message instead of emitting it as a fresh user turn,
+	// so the model does not treat runtime state as a new instruction while the
+	// churn stays at the tail of the prompt for prefix caching.
+	RuntimeTail string `json:"-"`
+	// IncludeReasoningContent requests that assistant messages echo their
+	// previous reasoning_content back to OpenAI-compatible providers. The
+	// default (false) matches common harness request shapes: models do not
+	// need to re-read their own chain of thought, and the smaller prefix is
+	// cheaper to cache.
+	IncludeReasoningContent bool `json:"-"`
 	// AnthropicNative signals that the target provider is a native Anthropic API.
 	// When true, marshalAnthropicBody may use content-block array format with
 	// cache_control on the system prompt (which some compatible providers reject).

@@ -91,18 +91,8 @@ func TestFreshProjectLedgerInjected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	found := false
-	for _, msg := range build.Messages {
-		if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindBackground {
-			continue
-		}
-		if strings.Contains(protocol.MessageText(msg), "Long-task project ledger") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("expected fresh project ledger to be injected")
+	if !strings.Contains(build.RuntimeTail, "Long-task project ledger") {
+		t.Fatalf("expected fresh project ledger to be injected, got %q", build.RuntimeTail)
 	}
 }
 

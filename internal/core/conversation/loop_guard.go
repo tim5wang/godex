@@ -82,11 +82,11 @@ func newLoopGuard(config loopGuardConfig) *loopGuard {
 		config.MaxRecoveries = 0
 	}
 	return &loopGuard{
-		config:        config,
-		repeated:      make(map[string]int),
-		polling:       make(map[string]pollingToolRepeatState),
-		recent:        make([]string, 0, repeatedToolCycleWindow),
-		recovered:     make(map[string]int),
+		config:         config,
+		repeated:       make(map[string]int),
+		polling:        make(map[string]pollingToolRepeatState),
+		recent:         make([]string, 0, repeatedToolCycleWindow),
+		recovered:      make(map[string]int),
 		staleRecovered: make(map[int]int),
 	}
 }
@@ -374,8 +374,6 @@ func loopGuardFeedback(decision loopGuardDecision, recovery, maxRecovery int) st
 		budget,
 		"Do not repeat the same tool call, query, polling request, or tool sequence again.",
 		"Use the tool result/error already in context as evidence, change strategy, try a meaningfully different input/tool, or provide a concise diagnostic handoff to the user.",
-		"Last tool input: " + truncateLoopGuardText(marshalLoopGuardValue(decision.Tool.Input), 500),
-		"Last tool output/error: " + truncateLoopGuardText(strings.TrimSpace(decision.Tool.Output+"\n"+decision.Tool.Error), 700),
 	}, "\n")
 }
 
@@ -410,8 +408,6 @@ func noMutationFeedback(decision loopGuardDecision, recovery, maxRecovery int) s
 		"If you are doing DEEP RESEARCH, that is fine: write your findings so far to a notes file (write_file) to checkpoint progress, then continue researching.",
 		"If you have enough information, produce your final answer now without further tool calls.",
 		"If you need to implement changes, start writing them now (edit_file/write_file).",
-		"Last tool input: " + truncateLoopGuardText(marshalLoopGuardValue(decision.Tool.Input), 500),
-		"Last tool output/error: " + truncateLoopGuardText(strings.TrimSpace(decision.Tool.Output+"\n"+decision.Tool.Error), 700),
 	}, "\n")
 }
 

@@ -108,7 +108,7 @@ func TestOpenAIClientStrictToolParametersDisallowExtraFields(t *testing.T) {
 	}
 }
 
-func TestOpenAIClientPreservesReasoningContentForToolFollowUp(t *testing.T) {
+func TestOpenAIClientReasoningContentEchoIsOptIn(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","reasoning_content":"checked the tool plan","tool_calls":[{"id":"call_1","type":"function","function":{"name":"memory","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`))
@@ -148,8 +148,116 @@ func TestOpenAIClientPreservesReasoningContentForToolFollowUp(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected message object, got %#v", messages[0])
 	}
+	if got := message["reasoning_content"]; got != nil {
+		t.Fatalf("expected reasoning_content to be omitted by default, got %#v in body %s", got, string(body))
+	}
+
+	// Enabling the option echoes the previous reasoning back to providers that
+	// support reasoning_content input.
+	body, err = client.buildRequest(protocol.Request{
+		Model:                   "deepseek-reasoner",
+		Messages:                SanitizeMessagesForProvider(protocol.ToAPIMessages([]protocol.Message{assistant, resultMsg})),
+		IncludeReasoningContent: true,
+	}, false)
+	if err != nil {
+		t.Fatalf("build follow-up request with reasoning echo: %v", err)
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode follow-up request: %v", err)
+	}
+	messages, ok = decoded["messages"].([]any)
+	if !ok || len(messages) < 1 {
+		t.Fatalf("expected messages, got %#v", decoded["messages"])
+	}
+	message, ok = messages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected message object, got %#v", messages[0])
+	}
 	if got := message["reasoning_content"]; got != "checked the tool plan" {
-		t.Fatalf("expected reasoning_content to be passed back, got %#v in body %s", got, string(body))
+		t.Fatalf("expected reasoning_content when explicitly enabled, got %#v in body %s", got, string(body))
+	}
+}
+
+func TestOpenAIClientRuntimeTailMergesIntoToolResult(t *testing.T) {
+	client := NewOpenAIClient("http://example.test", "test-key", 5*time.Second)
+	assistant := protocol.NewMessage(protocol.RoleAssistant,
+		protocol.TextBlock("plan"),
+		protocol.ToolUseBlock("call_1", "read_file", map[string]interface{}{"path": "a.go"}),
+	)
+	result := protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("call_1", "file contents"))
+	body, err := client.buildRequest(protocol.Request{
+		Model:       "deepseek-chat",
+		Messages:    SanitizeMessagesForProvider(protocol.ToAPIMessages([]protocol.Message{assistant, result})),
+		RuntimeTail: "Memory context:\n- relevant memory",
+	}, false)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	messages := decoded["messages"].([]any)
+	if len(messages) != 3 {
+		t.Fatalf("expected assistant + tool + continuation, got %d messages", len(messages))
+	}
+	toolMsg := messages[1].(map[string]any)
+	if toolMsg["role"] != "tool" {
+		t.Fatalf("expected tool message, got %#v", toolMsg)
+	}
+	if content := toolMsg["content"].(string); !strings.Contains(content, "file contents") || !strings.Contains(content, "Memory context:") {
+		t.Fatalf("expected runtime tail merged into tool result, got %q", content)
+	}
+	last := messages[2].(map[string]any)
+	if last["role"] != "user" || last["content"] != continueRuntimeTailMarker {
+		t.Fatalf("expected constant continuation after tool result, got %#v", last)
+	}
+}
+
+func TestOpenAIClientRuntimeTailMergesIntoLastUserMessage(t *testing.T) {
+	client := NewOpenAIClient("http://example.test", "test-key", 5*time.Second)
+	body, err := client.buildRequest(protocol.Request{
+		Model:       "deepseek-chat",
+		Messages:    SanitizeMessagesForProvider(protocol.ToAPIMessages([]protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "fix the bug")})),
+		RuntimeTail: "Local date: 2026-04-17",
+	}, false)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	messages := decoded["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("expected a single merged user message, got %d", len(messages))
+	}
+	userMsg := messages[0].(map[string]any)
+	content := userMsg["content"].(string)
+	if !strings.Contains(content, "fix the bug") || !strings.Contains(content, "Local date: 2026-04-17") {
+		t.Fatalf("expected runtime tail merged into last user message, got %q", content)
+	}
+}
+
+func TestParseOpenAIStreamSignalsStreamStart(t *testing.T) {
+	started := 0
+	var got strings.Builder
+	_, err := parseOpenAIStream(strings.NewReader(
+		"data: {\"choices\":[{\"delta\":{\"content\":\"hel\"},\"finish_reason\":null}]}\n\n"+
+			"data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}\n\n"+
+			"data: [DONE]\n",
+	), StreamHandler{
+		OnStreamStarted: func() { started++ },
+		OnTextDelta:     func(text string) { got.WriteString(text) },
+	})
+	if err != nil {
+		t.Fatalf("parse stream: %v", err)
+	}
+	if started != 1 {
+		t.Fatalf("expected OnStreamStarted exactly once, got %d", started)
+	}
+	if got.String() != "hello" {
+		t.Fatalf("expected streamed text, got %q", got.String())
 	}
 }
 

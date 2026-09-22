@@ -91,14 +91,21 @@ export function NotesPage() {
   }, [form, selected]);
 
   const saveMutation = useMutation({
-    mutationFn: (values: NoteFormValues) =>
-      saveNote(token || null, {
+    mutationFn: (values: NoteFormValues) => {
+      // title/summary/tags 的 Form.Item 只在 editingMeta 时挂载；退出编辑（点 ✓）后字段卸载，
+      // onFinish values 不再包含它们（@rc-component/form 只收集挂载字段）。store 因 preserve
+      // 默认保留值，故从 form store 兜底读取。
+      const title = values.title || form.getFieldValue("title") || selected?.title || t("notes.untitled");
+      const summary = values.summary ?? form.getFieldValue("summary") ?? "";
+      const tags = values.tags ?? form.getFieldValue("tags") ?? [];
+      return saveNote(token || null, {
         id: values.id,
-        title: values.title,
-        summary: values.summary,
-        tags: splitTags(values.tags),
+        title,
+        summary,
+        tags: splitTags(tags),
         content: values.content,
-      }),
+      });
+    },
     onSuccess: async (note) => {
       setSelectedID(note.id);
       setEditingMeta(false);
@@ -264,7 +271,7 @@ export function NotesPage() {
             </Space>
           }
         >
-          <Form form={form} id="note-form" layout="vertical" onFinish={(values) => saveMutation.mutate({ ...values, title: values.title || selected?.title || t("notes.untitled") })}>
+          <Form form={form} id="note-form" layout="vertical" onFinish={(values) => saveMutation.mutate(values)}>
             <Form.Item name="id" hidden><Input /></Form.Item>
 
             {editingMeta ? (

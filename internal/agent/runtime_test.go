@@ -237,6 +237,9 @@ func TestRunWithOptionsAppendsLoopGuardFeedbackAndCheckpoint(t *testing.T) {
 	for _, msg := range a.GetMessages() {
 		if strings.Contains(protocol.MessageText(msg), "loop_guard_recovery") {
 			foundFeedback = true
+			if msg.Metadata == nil || !msg.Metadata.Ephemeral || msg.Metadata.Kind != protocol.KindBackground {
+				t.Fatalf("expected loop guard feedback to be ephemeral background runtime context, got %+v", msg.Metadata)
+			}
 			break
 		}
 	}

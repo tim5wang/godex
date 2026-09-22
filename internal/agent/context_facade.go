@@ -35,7 +35,7 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 		return tools.ContextInspection{}, err
 	}
 	promptStateMessages := runtimePromptMessages(promptStateSections)
-	runtimeMessages, _ := a.collectRuntimeMessages()
+	runtimeMessages, _ := a.collectRuntimeMessages(false)
 	volatileMessages := append(protocol.CloneMessages(memoryMessages), protocol.CloneMessages(runtimeMessages)...)
 
 	toolSchemas := a.toolHandler.ActiveSchemas()
@@ -184,6 +184,13 @@ func (a *Agent) storeCompactedMessages(messages []protocol.Message) {
 	a.transcriptRefs = mergeTranscriptRefs(a.transcriptRefs, extractTranscriptRefs(messages))
 	a.historyVersion++
 	a.lastCompactedVersion = a.historyVersion
+	// Compaction rewrote the prompt prefix, so the next request should re-seed
+	// the volatile tail (memory recall, todos, ledger) instead of suppressing
+	// it as "unchanged since last request".
+	a.memoryRecallQuery = ""
+	a.memoryRecallInjectCount = 0
+	a.lastTodoTailInjected = ""
+	a.lastLedgerTailInjected = ""
 }
 
 func (a *Agent) maybeAutoCompact(ctx context.Context, history []protocol.Message, version int64, system string, prefix []protocol.Message, estimate contextBudgetEstimate) ([]protocol.Message, bool, compactionRunResult, error) {

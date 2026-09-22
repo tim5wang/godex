@@ -387,6 +387,7 @@ type sessionState struct {
 	mu       sync.RWMutex
 	running  bool
 	timeline *events.Recorder
+	journal  *sessionEventBatcher
 	active   *activeTurn
 
 	timelineMu sync.Mutex
@@ -427,8 +428,13 @@ func (s persistentTimelineSink) Emit(event events.Event) {
 	if !events.RecordableEvent(event) {
 		return
 	}
-	_ = s.service.appendSessionEventJournal(s.session, event)
-	_ = s.service.writeSessionTimeline(s.session)
+	if event.Type == events.EventAssistantThinkingDelta {
+		// Thinking deltas live in the in-memory Recorder only: the final
+		// assistant message carries the consolidated reasoning, and per-delta
+		// journaling is what grew events.jsonl to tens of MB in long turns.
+		return
+	}
+	s.session.journal.Add(event)
 }
 
 type artifactCollector struct {

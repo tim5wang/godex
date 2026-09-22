@@ -653,6 +653,7 @@ func (s *Service) ForkSession(ctx context.Context, sessionID string, req ForkReq
 	}
 	fork.graph.EnsureMainBranch()
 	fork.gate <- struct{}{}
+	fork.journal = newSessionEventBatcher(s, fork)
 	fork.events.Attach(persistentTimelineSink{service: s, session: fork})
 	if err := s.persistSession(fork, now); err != nil {
 		return nil, err

@@ -31,8 +31,9 @@ func buildHelpPages() []pageHelp {
 			lines: []string{
 				"",
 				"  ↑/↓       Input History      recall previous inputs",
-				"  Shift+Enter  Newline          multi-line input",
-				"  Ctrl+J    Newline (alt)      same as Shift+Enter",
+				"  Option+Enter Newline        multi-line input",
+				"  Shift+Enter  Newline        needs kitty/CSI-u terminal",
+				"  Ctrl+J    Newline (alt)     universal fallback",
 				"  /         Slash Commands     type / then filter + Enter",
 				"  !         Local Bash         !ls, !git status, !make test",
 				"",

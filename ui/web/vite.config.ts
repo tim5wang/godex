@@ -15,6 +15,14 @@ export default defineConfig({
           if (!id.includes("node_modules")) {
             return;
           }
+          // flowgram.ai (incl. playground-react, whose package name contains
+          // "react" and would otherwise be swallowed by the vendor-react rule
+          // below, corrupting the react chunk export and causing
+          // "Cannot read properties of undefined (reading 'useLayoutEffect')").
+          // MUST be checked before the react rule.
+          if (id.includes("@flowgram.ai") || id.includes("flowgram")) {
+            return "vendor-flowgram";
+          }
           if (id.includes("react-router") || id.includes("@remix-run")) {
             return "vendor-router";
           }

@@ -7,6 +7,7 @@ import {
   ValidateTrigger,
   type WorkflowNodeRegistry,
   type WorkflowNodeRenderProps,
+  useNodeRender,
 } from "@flowgram.ai/free-layout-editor";
 import { Button, Input, InputNumber, Select, Space, Tag } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
@@ -361,7 +362,10 @@ export const FLOWGRAM_NODE_REGISTRIES: WorkflowNodeRegistry[] = [
 
 /** Default node render: flowgram's built-in node frame + the node form. */
 export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
-  const render = (node as unknown as { form?: { render?: () => React.ReactNode } }).form;
+  // Official flowgram pattern (demo base-node): useNodeRender() exposes the
+  // form when the node engine is enabled; node.form may be undefined if the
+  // preNodeCreate defineProperty did not run, so the hook is the safe path.
+  const { form } = useNodeRender(node);
   return (
     <div
       style={{
@@ -373,7 +377,7 @@ export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
         fontSize: 12,
       }}
     >
-      {render?.render?.() ?? <div style={{ padding: 8 }}>{node.id}</div>}
+      {form?.render?.() ?? <div style={{ padding: 8 }}>{node.id}</div>}
     </div>
   );
 }

@@ -41,6 +41,7 @@ import {
   listFlowVersions,
   listFlows,
   publishFlow,
+  streamFlowRunEvents,
   type FlowDefinition,
   type FlowDiagnosis,
   type FlowInspectionReport,
@@ -448,15 +449,24 @@ function FlowCanvasMain(props: {
     onError: (err) => showError(message, err, t("flows.runFailed")),
   });
 
-  // Poll the debug run's event log while it is active so the canvas highlights
-  // nodes live (borders via RunStatusProvider inside FlowGramFlowEditor).
-  const debugEventsQuery = useQuery({
-    queryKey: ["flow-run-events", flow.flow_id, debugRunId],
-    queryFn: () =>
-      debugRunId ? flowRunEvents(token, debugRunId, flow.flow_id) : Promise.resolve([]),
-    enabled: Boolean(debugRunId),
-    refetchInterval: debugStarted ? 1500 : false,
-  });
+  // Live debug events: SSE stream (P3 余项 4) — the backend pushes new
+  // workflow events incrementally (500ms tick) until the run reaches a
+  // terminal state; the canvas highlights nodes as events arrive (replaces
+  // the previous 1.5s full-log polling).
+  const [debugEvents, setDebugEvents] = useState<FlowRunEvent[]>([]);
+  useEffect(() => {
+    if (!debugRunId || !debugStarted) {
+      setDebugEvents([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    void streamFlowRunEvents(token, debugRunId, flow.flow_id, (ev) => {
+      setDebugEvents((prev) => [...prev, ev]);
+    }, ctrl.signal).catch(() => {
+      /* stream closed / aborted — snapshot queries still work */
+    });
+    return () => ctrl.abort();
+  }, [debugRunId, debugStarted, token, flow.flow_id]);
 
   const debugRunQuery = useQuery({
     queryKey: ["flow-run", flow.flow_id, debugRunId],
@@ -543,7 +553,7 @@ function FlowCanvasMain(props: {
           t={t}
           versions={versions}
           externalDef={externalDef}
-          runEvents={debugEventsQuery.data}
+          runEvents={debugEvents}
           onSaved={() => {
             message.success(t("flows.templateApplied"));
             onExternalDefConsumed();
@@ -608,7 +618,7 @@ function FlowCanvasMain(props: {
           <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 0 }}>
             {t("flows.debugHint")}
           </Paragraph>
-          {(debugEventsQuery.data ?? []).length > 0 && (
+          {(debugEvents.length > 0) && (
             <div
               style={{
                 border: "1px solid #eee",
@@ -621,7 +631,7 @@ function FlowCanvasMain(props: {
                 fontSize: 11,
               }}
             >
-              {(debugEventsQuery.data ?? []).map((ev, i) => (
+              {debugEvents.map((ev, i) => (
                 <div key={i} style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
                   {JSON.stringify(ev)}
                 </div>

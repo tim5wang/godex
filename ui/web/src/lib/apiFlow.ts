@@ -1,4 +1,4 @@
-import { request } from "./apiClient";
+import { APIError, apiURL, authHeaders, request } from "./apiClient";
 
 // ---- Flow Spec v1 types (mirrors agent.FlowVersionView / FlowRunView) ----
 
@@ -218,6 +218,74 @@ export function flowRunEvents(token: string | null, runId: string, flowId: strin
     { method: "GET" },
     token,
   );
+}
+
+/** Streams run events over the SSE endpoint (no poll=1): calls onEvent per
+ * incoming `data:` event; resolves when the server sends `event: done` or the
+ * stream closes. Abort via the passed signal. (P3 余项 4 — SSE 实时增量高亮.) */
+export function streamFlowRunEvents(
+  token: string | null,
+  runId: string,
+  flowId: string,
+  onEvent: (ev: FlowRunEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    fetch(apiURL(`/v1/flow-runs/${encodeURIComponent(runId)}/events?flow_id=${encodeURIComponent(flowId)}`), {
+      method: "GET",
+      headers: authHeaders(token),
+      signal,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new APIError(response.status, response.statusText);
+        }
+        const reader = response.body?.getReader();
+        if (!reader) {
+          return resolve();
+        }
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let eventName = "";
+        const pump = (): void => {
+          reader
+            .read()
+            .then(({ done, value }) => {
+              if (done) {
+                return resolve();
+              }
+              buffer += decoder.decode(value, { stream: true });
+              let idx: number;
+              while ((idx = buffer.indexOf("\n\n")) >= 0) {
+                const chunk = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                for (const line of chunk.split("\n")) {
+                  if (line.startsWith("event: ")) {
+                    eventName = line.slice(7).trim();
+                  } else if (line.startsWith("data: ")) {
+                    const data = line.slice(6).trim();
+                    if (!data) {
+                      continue;
+                    }
+                    if (eventName === "done") {
+                      return resolve();
+                    }
+                    try {
+                      onEvent(JSON.parse(data) as FlowRunEvent);
+                    } catch {
+                      /* skip malformed frames */
+                    }
+                  }
+                }
+              }
+              pump();
+            })
+            .catch(reject);
+        };
+        pump();
+      })
+      .catch(reject);
+  });
 }
 
 // ---- Flow diagnosis (P3 Agent 闭环 §22.2) ---------------------------------

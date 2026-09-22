@@ -243,6 +243,44 @@ export function diagnoseFlowRun(token: string | null, runId: string, flowId: str
   );
 }
 
+// ---- Flow inspection (P3 Agent 闭环 §22.2 定期巡检) -----------------------
+
+export interface FlowInspectionSummary {
+  flow_id: string;
+  published_version?: string;
+  total: number;
+  completed: number;
+  failed: number;
+  canceled: number;
+  waiting: number;
+  running: number;
+  failure_rate: number;
+  last_run_at?: string;
+  error_nodes: number;
+  human_waiting: number;
+  iteration_caps: number;
+  latest_error_runs?: string[];
+}
+
+export interface FlowInspectionReport {
+  generated_at: string;
+  window_hours: number;
+  total: number;
+  failed: number;
+  waiting: number;
+  failure_rate: number;
+  flows: FlowInspectionSummary[];
+}
+
+/** Aggregates run health across published flows over a window (hours). */
+export function inspectFlows(token: string | null, windowHours = 24) {
+  return request<FlowInspectionReport>(
+    `/v1/flow-inspection?window_hours=${windowHours}`,
+    { method: "GET" },
+    token,
+  );
+}
+
 /** Drafts a Flow Spec v1 definition from a natural-language description via
  * the LLM (P2.5). The result is validated but NOT saved; the caller previews
  * and persists it through createFlow. */

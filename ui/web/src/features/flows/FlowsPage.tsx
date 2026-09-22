@@ -36,12 +36,14 @@ import {
   diagnoseFlowRun,
   flowRunEvents,
   getFlowRun,
+  inspectFlows,
   listFlowRuns,
   listFlowVersions,
   listFlows,
   publishFlow,
   type FlowDefinition,
   type FlowDiagnosis,
+  type FlowInspectionReport,
   type FlowRunEvent,
   type FlowRunView,
   type FlowSummaryView,
@@ -88,6 +90,16 @@ export function FlowsPage() {
     queryKey: ["flows"],
     queryFn: () => listFlows(token),
   });
+
+  // P3 Agent 闭环 §22.2 定期巡检: aggregate run health across published
+  // flows; polled so the report card stays fresh while the page is open.
+  const inspectionQuery = useQuery({
+    queryKey: ["flow-inspection", 24],
+    queryFn: () => inspectFlows(token, 24),
+    refetchInterval: 60_000,
+  });
+  const inspection = inspectionQuery.data;
+  const [inspectionOpen, setInspectionOpen] = useState(false);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["flows"] });
@@ -170,6 +182,70 @@ export function FlowsPage() {
           </Button>
         </Space>
       </Space>
+
+      {inspection && inspection.total > 0 && (
+        <div
+          onClick={() => setInspectionOpen(!inspectionOpen)}
+          style={{
+            border: "1px solid #e5e5e5",
+            borderRadius: 8,
+            padding: "8px 12px",
+            marginBottom: 12,
+            background: inspection.failed > 0 ? "#fff2f0" : "#f6ffed",
+            cursor: "pointer",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          <Space style={{ justifyContent: "space-between", width: "100%" }} align="center">
+            <Space>
+              <Text strong style={{ fontSize: 12 }}>
+                {t("flows.inspectionPanel")}
+              </Text>
+              <Tag color={inspection.failed > 0 ? "red" : "green"}>
+                {t("flows.inspectionWindow", { hours: inspection.window_hours })}
+              </Tag>
+            </Space>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {new Date(inspection.generated_at).toLocaleString()}
+            </Text>
+          </Space>
+          <Space wrap size={16}>
+            <Text style={{ fontSize: 12 }}>
+              {t("flows.inspectionTotal")} <Text strong>{inspection.total}</Text>
+            </Text>
+            <Text style={{ fontSize: 12 }}>
+              {t("flows.inspectionFailed")} <Text strong type="danger">{inspection.failed}</Text>
+            </Text>
+            <Text style={{ fontSize: 12 }}>
+              {t("flows.inspectionFailureRate")}{" "}
+              <Text strong>{(inspection.failure_rate * 100).toFixed(0)}%</Text>
+            </Text>
+            {inspection.waiting > 0 && (
+              <Text style={{ fontSize: 12 }}>
+                {t("flows.inspectionWaiting")} <Text strong type="warning">{inspection.waiting}</Text>
+              </Text>
+            )}
+          </Space>
+          {inspectionOpen && (
+            <div style={{ borderTop: "1px solid #eee", paddingTop: 6 }}>
+              {inspection.flows.map((f) => (
+                <div key={f.flow_id} style={{ display: "flex", gap: 12, fontSize: 11, padding: "2px 0" }}>
+                  <Text style={{ fontFamily: "monospace" }}>{f.flow_id}</Text>
+                  <Text type="secondary">
+                    {t("flows.inspectionRun")} {f.total} · {t("flows.inspectionFail")} {f.failed} ·{" "}
+                    {t("flows.inspectionRate")} {(f.failure_rate * 100).toFixed(0)}%
+                  </Text>
+                  {f.human_waiting > 0 && <Text type="warning">{t("flows.inspectionHumanWait")} {f.human_waiting}</Text>}
+                  {f.error_nodes > 0 && <Text type="danger">{t("flows.inspectionErrorNodes")} {f.error_nodes}</Text>}
+                  {f.iteration_caps > 0 && <Text type="warning">{t("flows.inspectionIterCaps")} {f.iteration_caps}</Text>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 16, height: "calc(100vh - 180px)", minHeight: 480 }}>
         {/* Left: flow list — click to select; the main area becomes the canvas. */}

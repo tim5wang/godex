@@ -101,6 +101,7 @@ type workflowNode struct {
 	Decision     *workflowDecisionResult `json:"decision,omitempty"`
 	BranchSpec   *workflowBranchSpec     `json:"branch_spec,omitempty"`
 	HumanSpec    *workflowHumanSpec      `json:"human_spec,omitempty"`
+	FunctionSpec *workflowFunctionSpec   `json:"function_spec,omitempty"`
 	// OutputSpec carries the node's declared typed outputs (P2.3) for prompt
 	// variable resolution and FlowGram metadata. Outputs (below) holds the
 	// run-time values.
@@ -187,6 +188,7 @@ type workflowNodeInput struct {
 	Decision        *workflowDecisionSpec `json:"decision,omitempty"`
 	Human           *workflowHumanSpec    `json:"human,omitempty"`
 	Branch          *workflowBranchSpec   `json:"branch,omitempty"`
+	Function        *workflowFunctionSpec `json:"function,omitempty"`
 	// OutputSpec carries the node's declared typed outputs (P2.3) for prompt
 	// variable resolution and FlowGram metadata.
 	OutputSpec []workflowVarDef `json:"output_spec,omitempty"`
@@ -209,6 +211,15 @@ type workflowHumanSpec struct {
 	TimeoutMS      int    `json:"timeout_ms,omitempty"`
 	OnTimeout      string `json:"on_timeout,omitempty"` // fail | llm | escalate:<queue>
 	ResultVar      string `json:"result_var,omitempty"`
+}
+
+// workflowFunctionSpec is the engine projection of flow.FunctionSpec (P3): a
+// pure compute node running a js (goja) handler or a wasm (wasmrt) plugin ref.
+type workflowFunctionSpec struct {
+	Runtime string `json:"runtime,omitempty"` // js | wasm
+	Source  string `json:"source,omitempty"`  // js handler source (runtime=js)
+	Ref     string `json:"ref,omitempty"`     // node-library id (runtime=wasm)
+	Handler string `json:"handler,omitempty"` // entry function; default "handle"
 }
 
 type workflowNodeView struct {
@@ -530,11 +541,20 @@ func workflowNodesFromInputs(inputs []workflowNodeInput, existing map[string]str
 				ResultVar:      strings.TrimSpace(input.Human.ResultVar),
 			}
 		}
+		var functionSpec *workflowFunctionSpec
+		if kind == workflowNodeKindFunction && input.Function != nil {
+			functionSpec = &workflowFunctionSpec{
+				Runtime: strings.TrimSpace(input.Function.Runtime),
+				Source:  input.Function.Source,
+				Ref:     strings.TrimSpace(input.Function.Ref),
+				Handler: strings.TrimSpace(input.Function.Handler),
+			}
+		}
 		prompt := strings.TrimSpace(input.Prompt)
 		if kind == workflowNodeKindDecision && prompt == "" && decisionSpec != nil {
 			prompt = decisionSpec.Question
 		}
-		if prompt == "" && kind != workflowNodeKindBranch {
+		if prompt == "" && kind != workflowNodeKindBranch && kind != workflowNodeKindFunction {
 			return nil, fmt.Errorf("node %s missing prompt", nodeID)
 		}
 		identity := NewAgentIdentity(now, "", "workflow_node", firstNonEmpty(strings.TrimSpace(input.Title), nodeID), strings.TrimSpace(input.AgentType), "", "workflow", capabilitySummaryForTools(subagentToolNames(input.AgentType), input.WriteScope))
@@ -563,6 +583,7 @@ func workflowNodesFromInputs(inputs []workflowNodeInput, existing map[string]str
 			DecisionSpec:    decisionSpec,
 			BranchSpec:      branchSpec,
 			HumanSpec:       humanSpec,
+			FunctionSpec:    functionSpec,
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		})
@@ -862,6 +883,14 @@ func (a *Agent) startWorkflowNode(ctx context.Context, state *workflowState, nod
 		}
 		node.Status = workflowStatusWaitingHuman
 		node.UpdatedAt = now
+		return node.ID, false
+	}
+	if normalizeWorkflowNodeKind(node.Kind, node.ID) == workflowNodeKindFunction {
+		// Function (code) nodes execute synchronously in the scheduler and
+		// never start a subagent job (P3). The handler runs against the
+		// unified context (inputs + completed node outputs); its result is
+		// written to node.Outputs and finalized as a completed node.
+		a.executeWorkflowFunction(ctx, state, node)
 		return node.ID, false
 	}
 	prompt, err := a.workflowNodePrompt(*state, *node)

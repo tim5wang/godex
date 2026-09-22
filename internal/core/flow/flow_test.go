@@ -253,3 +253,70 @@ func containsStr(items []string, want string) bool {
 	}
 	return false
 }
+
+// TestValidateFunctionNodeRequiresSpec verifies a function node without a
+// spec is rejected, and js/wasm runtime requirements are enforced.
+func TestValidateFunctionNodeRequiresSpec(t *testing.T) {
+	d := &Definition{
+		FlowID: "fl_fn", Version: "1", Status: "draft",
+		Nodes: []Node{{ID: "fn", Kind: KindFunction, Prompt: ""}},
+	}
+	if err := Validate(d); err == nil || !strings.Contains(err.Error(), "missing function spec") {
+		t.Fatalf("expected missing function spec error, got %v", err)
+	}
+
+	// js runtime requires source.
+	d.Nodes[0].Function = &FunctionSpec{Runtime: "js"}
+	if err := Validate(d); err == nil || !strings.Contains(err.Error(), "requires source") {
+		t.Fatalf("expected js source error, got %v", err)
+	}
+
+	// wasm runtime requires a node-library ref.
+	d.Nodes[0].Function = &FunctionSpec{Runtime: "wasm"}
+	if err := Validate(d); err == nil || !strings.Contains(err.Error(), "requires a node-library ref") {
+		t.Fatalf("expected wasm ref error, got %v", err)
+	}
+
+	// Unknown runtime rejected.
+	d.Nodes[0].Function = &FunctionSpec{Runtime: "python"}
+	if err := Validate(d); err == nil || !strings.Contains(err.Error(), "unknown function runtime") {
+		t.Fatalf("expected unknown runtime error, got %v", err)
+	}
+}
+
+// TestValidateFunctionNodeAcceptsValidSpec verifies a valid js function node
+// passes validation without a prompt (the handler replaces the prompt).
+func TestValidateFunctionNodeAcceptsValidSpec(t *testing.T) {
+	d := &Definition{
+		FlowID: "fl_fn_ok", Version: "1", Status: "draft",
+		Nodes: []Node{{
+			ID: "fn", Kind: KindFunction, Prompt: "",
+			Function: &FunctionSpec{Runtime: "js", Source: "function handle(ctx, e) { return {}; }"},
+		}},
+	}
+	if err := Validate(d); err != nil {
+		t.Fatalf("expected valid function node to pass, got %v", err)
+	}
+}
+
+// TestCompileFunctionNodeCarriesSpec verifies the function spec survives
+// compile (CompiledNode.Function) so the engine can execute it.
+func TestCompileFunctionNodeCarriesSpec(t *testing.T) {
+	spec := &FunctionSpec{Runtime: "js", Source: "function handle(ctx, e) { return { ok: true }; }", Handler: "handle"}
+	d := &Definition{
+		FlowID: "fl_fn_compile", Version: "1", Status: "draft",
+		Nodes: []Node{{
+			ID: "fn", Kind: KindFunction, Prompt: "", Function: spec,
+		}},
+	}
+	c, err := Compile(d)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if len(c.Nodes) != 1 || c.Nodes[0].Kind != KindFunction {
+		t.Fatalf("expected one function compiled node, got %+v", c.Nodes)
+	}
+	if c.Nodes[0].Function == nil || c.Nodes[0].Function.Source != spec.Source {
+		t.Fatalf("expected function spec carried through compile, got %+v", c.Nodes[0].Function)
+	}
+}

@@ -61,7 +61,7 @@ func Validate(d *Definition) error {
 		if kind == "" {
 			return ValidationError{Path: p, Msg: fmt.Sprintf("unknown node kind %q", n.Kind)}
 		}
-		if kind != KindBranch && kind != KindLoop && strings.TrimSpace(n.Prompt) == "" {
+		if kind != KindBranch && kind != KindLoop && kind != KindFunction && strings.TrimSpace(n.Prompt) == "" {
 			return ValidationError{Path: p, Msg: "node requires prompt (branch/loop nodes carry cases/exit instead)"}
 		}
 		if n.Retry != nil {
@@ -104,6 +104,10 @@ func Validate(d *Definition) error {
 				return ValidationError{Path: p, Msg: "loop node missing loop spec"}
 			}
 			if err := validateLoop(n.Loop, p, byID); err != nil {
+				return err
+			}
+		case KindFunction:
+			if err := validateFunction(n.Function, p); err != nil {
 				return err
 			}
 		}
@@ -165,7 +169,7 @@ const MaxNodes = 64
 
 func normalizeKind(kind string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case KindStep, KindLLM, KindDecision, KindHuman, KindBranch, KindLoop:
+	case KindStep, KindLLM, KindDecision, KindHuman, KindBranch, KindLoop, KindFunction:
 		return strings.ToLower(strings.TrimSpace(kind))
 	default:
 		return ""
@@ -434,6 +438,27 @@ func validateLoop(l *LoopSpec, p string, byID map[string]Node) error {
 	}
 	if l.MaxIterations < 1 {
 		return ValidationError{Path: p + ".loop", Msg: fmt.Sprintf("loop max_iterations must be >= 1, got %d", l.MaxIterations)}
+	}
+	return nil
+}
+
+// validateFunction checks a function (code) node: runtime must be js|wasm;
+// js requires inline source, wasm requires a node-library ref.
+func validateFunction(f *FunctionSpec, p string) error {
+	if f == nil {
+		return ValidationError{Path: p, Msg: "function node missing function spec"}
+	}
+	switch strings.ToLower(strings.TrimSpace(f.Runtime)) {
+	case FunctionRuntimeJS:
+		if strings.TrimSpace(f.Source) == "" {
+			return ValidationError{Path: p + ".function", Msg: "js function node requires source"}
+		}
+	case FunctionRuntimeWasm:
+		if strings.TrimSpace(f.Ref) == "" {
+			return ValidationError{Path: p + ".function", Msg: "wasm function node requires a node-library ref"}
+		}
+	default:
+		return ValidationError{Path: p + ".function", Msg: fmt.Sprintf("unknown function runtime %q (js|wasm)", f.Runtime)}
 	}
 	return nil
 }

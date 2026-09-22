@@ -36,6 +36,11 @@ const (
 	// pending until the orchestrator feeds input via complete_node.
 	workflowNodeKindUserInput = "user_input"
 
+	// workflowNodeKindFunction is the engine node kind for a code node (P3):
+	// a pure compute step executed synchronously in the scheduler via the
+	// jsrt (goja) or wasmrt runtime — never starts a subagent job.
+	workflowNodeKindFunction = "function"
+
 	// branchDefaultRoute is the reserved route name for a branch default.
 	branchDefaultRoute = "default"
 

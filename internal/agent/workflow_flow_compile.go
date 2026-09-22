@@ -94,6 +94,14 @@ func compileFlowNode(n flow.CompiledNode, appendTemplate bool) (workflowNodeInpu
 			ResultVar:      n.Human.ResultVar,
 		}
 	}
+	if n.Function != nil {
+		ni.Function = &workflowFunctionSpec{
+			Runtime: n.Function.Runtime,
+			Source:  n.Function.Source,
+			Ref:     n.Function.Ref,
+			Handler: n.Function.Handler,
+		}
+	}
 	// P2.3: carry the declared typed outputs so the engine can resolve
 	// {{nodes.<id>.outputs.<field>}} references at run time.
 	for _, v := range n.Outputs {
@@ -131,6 +139,8 @@ func flowKindToEngine(k string) string {
 		return workflowNodeKindBranch
 	case flow.KindHuman:
 		return workflowNodeKindUserInput
+	case flow.KindFunction:
+		return workflowNodeKindFunction
 	default:
 		return k
 	}

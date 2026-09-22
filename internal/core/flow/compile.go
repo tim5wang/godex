@@ -38,6 +38,7 @@ type CompiledNode struct {
 	Decision    *DecisionSpec   `json:"decision,omitempty"`
 	Human       *HumanSpec      `json:"human,omitempty"`
 	Branch      *CompiledBranch `json:"branch,omitempty"`
+	Function    *FunctionSpec   `json:"function,omitempty"`
 	// Outputs carries the node's declared typed outputs (P2.3) so the engine
 	// can resolve {{nodes.<id>.outputs.<field>}} references at run time.
 	Outputs []VarDef `json:"outputs,omitempty"`
@@ -159,6 +160,7 @@ func Compile(d *Definition) (*Compiled, error) {
 			Retry:      n.Retry,
 			Decision:   n.Decision,
 			Human:      n.Human,
+			Function:   n.Function,
 			Outputs:    append([]VarDef{}, n.Outputs...),
 		}
 		if kind == KindBranch && n.Branch != nil {

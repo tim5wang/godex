@@ -4,6 +4,8 @@
 // compile step; the version store and /v1/flows API land in F1b/F2.
 package flow
 
+import "encoding/json"
+
 // Node kinds (Flow Spec §3.2).
 const (
 	KindStep     = "step"     // fixed step: subagent_task / tool_call
@@ -12,6 +14,7 @@ const (
 	KindHuman    = "human"    // manual fallback: user_input + human task store (F2)
 	KindBranch   = "branch"   // no-job gateway: evaluates cases synchronously
 	KindLoop     = "loop"     // compiled to control_flow append edges
+	KindFunction = "function" // code node: js (goja) or wasm (wasmrt plugin) handler (P3)
 )
 
 // Edge types (Flow Spec §3.3).
@@ -78,12 +81,13 @@ type Node struct {
 	// node/flow defaults apply.
 	AgentRef   string       `json:"agent_ref,omitempty"`
 	WriteScope []string     `json:"write_scope,omitempty"`
-	Retry      *RetryPolicy `json:"retry,omitempty"`
+	Retry      *RetryPolicy  `json:"retry,omitempty"`
 	Decision   *DecisionSpec `json:"decision,omitempty"`
-	Human      *HumanSpec   `json:"human,omitempty"`
-	Branch     *BranchSpec  `json:"branch,omitempty"`
-	Loop       *LoopSpec    `json:"loop,omitempty"`
-	TimeoutSec int          `json:"timeout_sec,omitempty"`
+	Human      *HumanSpec    `json:"human,omitempty"`
+	Branch     *BranchSpec   `json:"branch,omitempty"`
+	Loop       *LoopSpec     `json:"loop,omitempty"`
+	Function   *FunctionSpec `json:"function,omitempty"`
+	TimeoutSec int           `json:"timeout_sec,omitempty"`
 	// Outputs declares the typed fields this node produces (Flow Spec §3.4).
 	// Downstream nodes reference them as {{nodes.<id>.outputs.<field>}}.
 	// Empty = no typed outputs (prompt/handoff text only).
@@ -151,6 +155,29 @@ type LoopSpec struct {
 	ExitWhen      Condition `json:"exit_when"`
 	MaxIterations int       `json:"max_iterations"`
 	IterationKey  string    `json:"iteration_key,omitempty"`
+}
+
+// Function runtime values (P3 node library).
+const (
+	FunctionRuntimeJS   = "js"   // goja sandbox: no network/fs, ctx read/write + log + utils
+	FunctionRuntimeWasm = "wasm" // wasmrt plugin (godex:plugin@0.1 ABI), ref = node-library id
+)
+
+// FunctionSpec configures a function (code) node (Flow Spec §3.2, P3): a
+// pure compute step that runs a handler against the unified context and
+// returns events. It carries either inline JS source or a node-library ref.
+type FunctionSpec struct {
+	Runtime string `json:"runtime"` // js | wasm
+	// Source is the JS handler source for runtime=js:
+	//   export function handle(ctx, event) { return [ {...} ] }
+	Source string `json:"source,omitempty"`
+	// Ref is the node-library entry id for runtime=wasm (or a shared JS lib).
+	Ref string `json:"ref,omitempty"`
+	// Handler is the entry function name; defaults to "handle".
+	Handler string `json:"handler,omitempty"`
+	// InputSchema / OutputSchema declare the event/result shape (JSON Schema).
+	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
 }
 
 // Edge connects two nodes. data_dependency/handoff edges reference static

@@ -36,7 +36,8 @@ func (a *Agent) planLongTask(ctx context.Context, args longTaskArgs) (longTaskVi
 		return longTaskView{}, fmt.Errorf("plan: LLM client unavailable")
 	}
 	req := protocol.Request{
-		System: longTaskPlanSystemPrompt,
+		Model:     a.cfg.Model,
+		System:    longTaskPlanSystemPrompt,
 		Messages: []protocol.APIMessage{
 			{Role: protocol.RoleUser, Content: []protocol.Block{protocol.TextBlock(description)}},
 		},

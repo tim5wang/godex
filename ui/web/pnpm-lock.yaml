@@ -77,6 +77,9 @@ importers:
       cronstrue:
         specifier: ^3.24.0
         version: 3.24.0
+      cytoscape:
+        specifier: ^3.34.0
+        version: 3.34.0
       dayjs:
         specifier: ^1.11.20
         version: 1.11.20

@@ -39,6 +39,7 @@
     "antd": "^6.3.6",
     "cron-parser": "^5.10.0",
     "cronstrue": "^3.24.0",
+    "cytoscape": "^3.34.0",
     "dayjs": "^1.11.20",
     "katex": "^0.18.4",
     "marked": "^18.0.11",

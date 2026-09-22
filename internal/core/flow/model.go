@@ -55,6 +55,13 @@ type VarDef struct {
 	Desc string `json:"desc,omitempty"`
 }
 
+// CanvasPos is editor-only layout metadata stored on a node (canvas x/y).
+// It is stripped before compile and never affects runtime semantics.
+type CanvasPos struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
 // Node is one node in a flow definition.
 type Node struct {
 	ID         string       `json:"id"`
@@ -62,6 +69,8 @@ type Node struct {
 	Title      string       `json:"title,omitempty"`
 	Prompt     string       `json:"prompt,omitempty"`
 	AgentType  string       `json:"agent_type,omitempty"`
+	// CanvasPos is editor-only layout metadata (x/y on the FlowGram canvas).
+	CanvasPos *CanvasPos `json:"canvas_pos,omitempty"`
 	// AgentRef optionally pins this step node to an agent template (talent
 	// market) or business key id. At run time the referenced template's
 	// capability baseline (bundles/tools/write_scope/mcp/skills/packages) is

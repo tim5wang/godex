@@ -8,7 +8,6 @@ import {
   Empty,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Select,
   Space,
@@ -18,7 +17,6 @@ import {
   Typography,
 } from "antd";
 import {
-  DeleteOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -42,9 +40,9 @@ import {
   type FlowVersionView,
 } from "../../lib/api";
 import { FlowGramCanvas } from "./FlowGramCanvas";
+import { FlowGramEditor } from "./FlowGramEditor";
 import { FLOW_TEMPLATES, flowTemplateById } from "./flowTemplates";
 import { TemplateLibrary } from "./TemplateLibrary";
-import { FlowVisualEditor } from "./FlowVisualEditor";
 import { NaturalLanguageTab } from "./NaturalLanguageTab";
 import { useSettingsStore } from "../../store/settings";
 
@@ -70,6 +68,7 @@ export function FlowsPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [detail, setDetail] = useState<FlowSummaryView | null>(null);
+  const [detailDrawer, setDetailDrawer] = useState<FlowSummaryView | null>(null);
   const [form] = Form.useForm<FlowFormValues>();
 
   const flowsQuery = useQuery({
@@ -140,57 +139,6 @@ export function FlowsPage() {
     onError: (err) => showError(message, err, t("flows.runFailed")),
   });
 
-  const columns = useMemo(
-    () => [
-      {
-        title: t("flows.id"),
-        dataIndex: "flow_id",
-        key: "flow_id",
-        render: (id: string) => (
-          <a onClick={() => setDetail(flowsQuery.data?.find((f) => f.flow_id === id) ?? null)}>{id}</a>
-        ),
-      },
-      {
-        title: t("flows.draft"),
-        dataIndex: "draft",
-        key: "draft",
-        render: (v: string | undefined) => (v ? <Tag color="default">{v}</Tag> : <Text type="secondary">—</Text>),
-      },
-      {
-        title: t("flows.gray"),
-        dataIndex: "gray",
-        key: "gray",
-        render: (v: string | undefined) => (v ? <Tag color="orange">{v}</Tag> : <Text type="secondary">—</Text>),
-      },
-      {
-        title: t("flows.published"),
-        dataIndex: "published",
-        key: "published",
-        render: (v: string | undefined) => (v ? <Tag color="green">{v}</Tag> : <Text type="secondary">—</Text>),
-      },
-      {
-        title: t("flows.actions"),
-        key: "actions",
-        render: (_: unknown, row: FlowSummaryView) => (
-          <Space>
-            <Button
-              size="small"
-              icon={<RocketOutlined />}
-              disabled={!row.published}
-              onClick={() => runMutation.mutate({ flowId: row.flow_id, version: row.published ?? "" })}
-            >
-              {t("flows.run")}
-            </Button>
-            <Button size="small" onClick={() => setDetail(row)}>
-              {t("flows.detail")}
-            </Button>
-          </Space>
-        ),
-      },
-    ],
-    [flowsQuery.data, t, runMutation],
-  );
-
   return (
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16, justifyContent: "space-between", width: "100%" }} align="center">
@@ -210,16 +158,78 @@ export function FlowsPage() {
         </Space>
       </Space>
 
-      {flowsQuery.isLoading ? (
-        <Card loading />
-      ) : (
-        <Table<FlowSummaryView>
-          rowKey="flow_id"
-          columns={columns}
-          dataSource={flowsQuery.data ?? []}
-          locale={{ emptyText: <Empty description={t("flows.empty")} /> }}
-        />
-      )}
+      <div style={{ display: "flex", gap: 16, height: "calc(100vh - 180px)", minHeight: 480 }}>
+        {/* Left: flow list — click to select; the main area becomes the canvas. */}
+        <div style={{ width: 300, flexShrink: 0, border: "1px solid #e5e5e5", borderRadius: 8, overflowY: "auto", background: "#fff" }}>
+          {flowsQuery.isLoading ? (
+            <Card loading style={{ height: "100%" }} />
+          ) : (flowsQuery.data ?? []).length === 0 ? (
+            <Empty description={t("flows.empty")} style={{ marginTop: 48 }} />
+          ) : (
+            (flowsQuery.data ?? []).map((f) => (
+              <div
+                key={f.flow_id}
+                onClick={() => setDetail(f)}
+                style={{
+                  padding: "10px 12px",
+                  cursor: "pointer",
+                  borderBottom: "1px solid #f0f0f0",
+                  background: detail?.flow_id === f.flow_id ? "#e6f4ff" : "transparent",
+                }}
+              >
+                <Space style={{ justifyContent: "space-between", width: "100%" }}>
+                  <Text strong>{f.flow_id}</Text>
+                  <Button
+                    size="small"
+                    icon={<PlayCircleOutlined />}
+                    disabled={!f.published}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      runMutation.mutate({ flowId: f.flow_id, version: f.published ?? "" });
+                    }}
+                  />
+                </Space>
+                <Space size={4} style={{ marginTop: 4 }} wrap>
+                  {f.draft && <Tag>{`draft ${f.draft}`}</Tag>}
+                  {f.gray && <Tag color="orange">{`gray ${f.gray}`}</Tag>}
+                  {f.published && <Tag color="green">{`pub ${f.published}`}</Tag>}
+                </Space>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Right: canvas editor as the main body (no drawer to open). */}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          {detail ? (
+            <FlowCanvasMain
+              key={detail.flow_id}
+              flow={detail}
+              token={token}
+              t={t}
+              message={message}
+              onRefresh={refresh}
+              onPublish={(version) => publishMutation.mutate({ flowId: detail.flow_id, version })}
+              onRun={(version) => runMutation.mutate({ flowId: detail.flow_id, version })}
+              onOpenDetail={() => setDetailDrawer(detail)}
+            />
+          ) : (
+            <div
+              style={{
+                border: "1px solid #e5e5e5",
+                borderRadius: 8,
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "#fff",
+              }}
+            >
+              <Empty description={t("flows.selectFlowHint")} />
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Create flow drawer */}
       <Drawer
@@ -265,20 +275,97 @@ export function FlowsPage() {
         </Form>
       </Drawer>
 
-      {/* Detail drawer */}
-      {detail && (
+      {/* Detail drawer (secondary: versions/runs/templates/natural-language/json) */}
+      {detailDrawer && (
         <FlowDetailDrawer
-          flow={detail}
+          flow={detailDrawer}
           token={token}
           t={t}
           message={message}
-          onClose={() => setDetail(null)}
+          onClose={() => setDetailDrawer(null)}
           onRefresh={refresh}
-          onPublish={(version) => publishMutation.mutate({ flowId: detail.flow_id, version })}
-          onRun={(version) => runMutation.mutate({ flowId: detail.flow_id, version })}
-          onCancelRun={(runId) => cancelRunMutation.mutate({ flowId: detail.flow_id, runId })}
+          onPublish={(version) => publishMutation.mutate({ flowId: detailDrawer.flow_id, version })}
+          onRun={(version) => runMutation.mutate({ flowId: detailDrawer.flow_id, version })}
+          onCancelRun={(runId) => cancelRunMutation.mutate({ flowId: detailDrawer.flow_id, runId })}
         />
       )}
+    </div>
+  );
+}
+
+function FlowCanvasMain(props: {
+  flow: FlowSummaryView;
+  token: string | null;
+  t: (k: string, v?: Record<string, string | number>) => string;
+  message: ReturnType<typeof AntApp.useApp>["message"];
+  onRefresh: () => void;
+  onPublish: (version: string) => void;
+  onRun: (version: string) => void;
+  onOpenDetail: () => void;
+}) {
+  const { flow, token, t, message, onRefresh, onPublish, onRun, onOpenDetail } = props;
+
+  const versionsQuery = useQuery({
+    queryKey: ["flow", flow.flow_id],
+    queryFn: () => listFlowVersions(token, flow.flow_id),
+  });
+  const versions = versionsQuery.data ?? [];
+
+  const [editorVersion, setEditorVersion] = useState<string>();
+  const editorDef = useMemo(() => {
+    // Editor defaults to the latest draft with a definition.
+    const pick = editorVersion ?? [...versions].reverse().find((v) => v.definition)?.version;
+    return versions.find((v) => v.version === pick)?.definition;
+  }, [versions, editorVersion]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%" }}>
+      <Space style={{ justifyContent: "space-between", width: "100%" }} align="center" wrap>
+        <Space align="center">
+          <Title level={5} style={{ margin: 0 }}>
+            {flow.flow_id}
+          </Title>
+          {flow.published && <Tag color="green">{`pub ${flow.published}`}</Tag>}
+        </Space>
+        <Space wrap>
+          <Select
+            size="small"
+            style={{ width: 160 }}
+            placeholder={t("flows.version")}
+            value={editorVersion}
+            onChange={setEditorVersion}
+            options={versions.map((v) => ({ value: v.version, label: `${v.version} (${v.status})` }))}
+          />
+          <Popconfirm
+            title={t("flows.publishConfirm")}
+            onConfirm={() => editorDef && onPublish(editorDef.version)}
+          >
+            <Button size="small" icon={<RocketOutlined />} disabled={!editorDef}>
+              {t("flows.publish")}
+            </Button>
+          </Popconfirm>
+          <Button size="small" icon={<PlayCircleOutlined />} disabled={!editorDef} onClick={() => editorDef && onRun(editorDef.version)}>
+            {t("flows.run")}
+          </Button>
+          <Button size="small" onClick={onOpenDetail}>
+            {t("flows.detail")}
+          </Button>
+        </Space>
+      </Space>
+
+      <div style={{ flex: 1, minHeight: 420 }}>
+        <FlowGramEditor
+          flowId={flow.flow_id}
+          token={token}
+          t={t}
+          versions={versions}
+          onSaved={() => {
+            message.success(t("flows.templateApplied"));
+            onRefresh();
+          }}
+          onSaveError={(err) => showError(message, err, t("flows.saveFailed"))}
+        />
+      </div>
     </div>
   );
 }
@@ -313,7 +400,8 @@ function FlowDetailDrawer(props: {
   const [canvasVersion, setCanvasVersion] = useState<string>();
   const [canvasRun, setCanvasRun] = useState<string>();
   const canvasDef = useMemo(() => {
-    const pick = canvasVersion ?? versions.find((v) => v.definition)?.version;
+    // versions are ascending; the LATEST definition is the last match.
+    const pick = canvasVersion ?? [...versions].reverse().find((v) => v.definition)?.version;
     return versions.find((v) => v.version === pick)?.definition ?? undefined;
   }, [versions, canvasVersion]);
   const eventsQuery = useQuery({
@@ -423,19 +511,6 @@ function FlowDetailDrawer(props: {
             label: t("flows.naturalLanguage"),
             children: (
               <NaturalLanguageTab
-                flowId={flow.flow_id}
-                token={token}
-                t={t}
-                versions={versions}
-                onApplied={onRefresh}
-              />
-            ),
-          },
-          {
-            key: "editor",
-            label: t("flows.editor"),
-            children: (
-              <FlowVisualEditor
                 flowId={flow.flow_id}
                 token={token}
                 t={t}

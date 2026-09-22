@@ -57,7 +57,8 @@ func (a *Agent) GenerateFlowSpec(ctx context.Context, description string) (*flow
 		return nil, fmt.Errorf("generate flow: LLM client unavailable")
 	}
 	req := protocol.Request{
-		System: flowSpecPlanSystemPrompt,
+		Model:     a.cfg.Model,
+		System:    flowSpecPlanSystemPrompt,
 		Messages: []protocol.APIMessage{
 			{Role: protocol.RoleUser, Content: []protocol.Block{protocol.TextBlock(description)}},
 		},

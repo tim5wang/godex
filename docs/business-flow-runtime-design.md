@@ -1037,4 +1037,32 @@ P2.5 = **创建流程不再要求手写 JSON**：创建先建 flow 对象（只�
 
 **P2.5 明确不做（后续）**：decision/human/branch 节点表单级深度编辑（当前可视化编辑只覆盖通用字段 id/kind/title/prompt/edge，专有字段走模板或 JSON）、生成草稿的多轮迭代修改、模板市场的用户自定义模板。
 
+## 22. 画布主体重构 + Agent 辅助闭环（2026-09-22 落地/设计）
+
+**背景（用户反馈）**：① Flow 界面主体应为**可编辑 FlowGram 画布**，而不是右侧抽屉点开；② 之前表格版"可视化编辑"（FlowVisualEditor.tsx 两张 Table）方案走偏，已整体移除；③ 自然语言生成 403（protocol.Request 缺 Model，已修）；④ 模板应用"无效"（根因：versions 升序排列时 `find((v)=>v.definition)` 取到**最旧**带定义的版本，应用模板保存 v2 后界面仍显示 v1）。
+
+**1. 画布主体重构（落地）**
+- **布局**：FlowsPage 主体改为「左侧流程列表 + 右侧可编辑画布」。选中 flow 即进入画布编辑，不再从抽屉点开；抽屉降级为次要入口（版本/运行/模板/自然语言/JSON）。
+- **FlowGramEditor.tsx（新，cytoscape @3.34.0 直接依赖）**：
+  - 六类物料节点 step/llm/decision/human/branch/loop（按 kind 着色），点击空白添加节点、拖拽移动、节点间拖拽建边；
+  - 右侧节点属性面板：通用字段 id/kind/title/prompt + 专有表单（decision choices、human queue/assignee/result_var、branch cases/default、loop max_iterations）；
+  - **双向 adapter**：`defToCy(def)`（spec → 画布，读 `node.canvas_pos` 恢复布局）+ `cyToDef(cy)`（画布 → spec，写回 canvas_pos）；spec 字段经 cytoscape scratch `spec` 携带，保存不丢失 prompt/decision/branch 等；
+  - 保存 = createFlow 新版本（不再手写 JSON）。
+- **model.go**：Node 新增 `CanvasPos *CanvasPos`（`canvas_pos`，编辑器专用布局元数据，编译前剥离，不影响运行时语义）。
+- **版本选择修复**：FlowGramEditor / FlowCanvasMain / FlowDetailDrawer 的"最新定义"统一改 `[...versions].reverse().find(...)`（versions 升序，最后一个才是最新）。
+
+**2. Agent 辅助闭环（设计，P3 方向）**
+
+用户预期：不要指望一次 LLM 调用搞定编排。Agent 应**辅助**用户创建/修改 Flow、定位问题，并形成「运行日志回流 → 定期巡检 → Agent 优化 Flow」闭环。
+
+- **辅助创建/编辑**：自然语言 Tab 保留 /v1/flows/generate 生成草稿，但改为**多轮可迭代**：草稿落画布后可继续用自然语言追加修改（"把人工审批改成超过 1000 元才转人工"）→ 增量修改走 LLM + diff 应用，而非整表重生成。
+- **运行日志回流**：/v1/flow-runs/{id}/events 事件日志（含 node_error/node_failed/error 字段）已具备；新增「Agent 诊断」入口：把失败 run 的事件 + 定义摘要打包给 Agent，产出根因定位 + 修改建议（可直接应用为画布改动）。
+- **定期巡检**：cron 任务定期拉取在线接口（已发布 flow）的运行记录，聚合失败率/卡点（waiting_human 超时、decision 置信度低、error 节点），生成巡检报告卡片。
+- **Agent 优化 Flow**：巡检/诊断建议经用户确认后，Agent 直接修改定义生成新版本（走既有 createFlow 链路），形成 运行 → 观测 → 建议 → 优化 → 新版本 闭环。
+
+**验证**：`go build ./internal/...` 通过；`go test ./internal/core/flow/`、`./internal/runtime/httpapi/ -run Flow` 全绿（TestDurableSubagentDefaultTimeoutDisabled 为既有 TempDir 清理环境性失败，与本次改动无关）；`pnpm tsc -b` + `pnpm vite build` 通过。
+
+**本次明确不做（后续）**：Agent 诊断/巡检/优化闭环的后端实现（§22.2 为设计稿）、decision provider 下拉、变量作用域链面板（§9）、SSE 实时增量高亮。
+
+
 

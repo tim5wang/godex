@@ -100,7 +100,7 @@ func (a *Agent) CreateFlow(args FlowCreateArgs) (FlowVersionView, error) {
 		status = FlowStatusDraft
 	}
 	if def == nil {
-		def = &flow.Definition{FlowID: flowID, Version: version, Status: status}
+		def = &flow.Definition{FlowID: flowID, Version: version, Status: status, Nodes: []flow.Node{}, Edges: []flow.Edge{}}
 	}
 	now := time.Now().UTC()
 	if err := a.flows.saveVersion(flowID, flowVersionRecord{

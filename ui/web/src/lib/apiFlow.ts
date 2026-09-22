@@ -26,7 +26,17 @@ export interface FlowNode {
   decision?: FlowDecisionSpec;
   branch?: FlowBranchSpec;
   human?: FlowHumanSpec;
+  loop?: FlowLoopSpec;
   outputs?: { name: string; type?: string; desc?: string }[];
+  /** Editor-only canvas layout (x/y); stripped before compile. */
+  canvas_pos?: { x: number; y: number };
+}
+
+export interface FlowLoopSpec {
+  body?: string[];
+  exit_when?: FlowCondition;
+  max_iterations?: number;
+  iteration_key?: string;
 }
 
 export interface FlowHumanSpec {

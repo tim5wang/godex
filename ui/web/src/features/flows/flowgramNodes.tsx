@@ -16,7 +16,9 @@ import {
 } from "@flowgram.ai/free-layout-editor";
 import { Button, Input, InputNumber, Select, Space, Tag } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
-import type { FlowNode } from "../../lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { listProviders, type FlowNode } from "../../lib/api";
+import { useSettingsStore } from "../../store/settings";
 
 // ---------------------------------------------------------------------------
 // FlowGram node registries — the six Flow Spec v1 node materials mapped to
@@ -141,6 +143,7 @@ function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   // (getValueIn alone does not re-render → Add choice had no visible effect).
   const decision = useWatch<{
     decision_type?: string;
+    provider?: string;
     choices?: { id: string; label?: string }[];
   }>("decision") ?? {};
   const setDecision = (patch: Record<string, unknown>) => {
@@ -151,9 +154,32 @@ function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
     form.setValueIn("decision", { ...cur, ...patch });
   };
   const choices = decision.choices ?? [];
+  // Provider dropdown: configured providers (id) from /providers; empty =
+  // fall back to the global agent.decision.provider default.
+  const token = useSettingsStore((state) => state.token);
+  const providersQuery = useQuery({
+    queryKey: ["providers", token],
+    queryFn: () => listProviders(token),
+    enabled: Boolean(token),
+  });
+  const providerOptions = (providersQuery.data?.providers ?? []).map((p) => ({
+    value: p.id,
+    label: p.id,
+  }));
 
   return (
     <div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Provider</div>
+        <Select
+          style={{ width: "100%" }}
+          value={decision.provider ?? undefined}
+          onChange={(v) => setDecision({ provider: v })}
+          allowClear
+          placeholder="default (agent.decision.provider)"
+          options={providerOptions}
+        />
+      </div>
       <div style={{ marginBottom: 8 }}>
         <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Decision type</div>
         <Select

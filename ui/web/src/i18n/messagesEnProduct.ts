@@ -546,7 +546,7 @@ export const enProductMessages = {
       editorCanvas: "Canvas editor (main)",
       inspector: "Node inspector",
       inspectorEmpty: "Click a node on the canvas to edit it; double-click empty area to add a step node, drag between nodes to create edges.",
-      canvasEditorHint: "Canvas editing: click empty area to add nodes, drag to reposition, drag from one node to another to create edges; the right panel edits the selected node. Save generates Flow Spec JSON as a new version — no hand-written JSON.",
+      canvasEditorHint: "FlowGram canvas (bytedance/flowgram.ai): drag in or add one of the six node materials from the toolbar; every node has a built-in form to edit in place; drag from a node output port to another node input port to create an edge. Save generates Flow Spec JSON as a new version — no hand-written JSON.",
       deleteSelected: "Delete selected",
       saveVersion: "Save as new version",
       decisionType: "Decision type",

@@ -1043,13 +1043,15 @@ P2.5 = **创建流程不再要求手写 JSON**：创建先建 flow 对象（只�
 
 **1. 画布主体重构（落地）**
 - **布局**：FlowsPage 主体改为「左侧流程列表 + 右侧可编辑画布」。选中 flow 即进入画布编辑，不再从抽屉点开；抽屉降级为次要入口（版本/运行/模板/自然语言/JSON）。
-- **FlowGramEditor.tsx（新，cytoscape @3.34.0 直接依赖）**：
-  - 六类物料节点 step/llm/decision/human/branch/loop（按 kind 着色），点击空白添加节点、拖拽移动、节点间拖拽建边；
-  - 右侧节点属性面板：通用字段 id/kind/title/prompt + 专有表单（decision choices、human queue/assignee/result_var、branch cases/default、loop max_iterations）；
-  - **双向 adapter**：`defToCy(def)`（spec → 画布，读 `node.canvas_pos` 恢复布局）+ `cyToDef(cy)`（画布 → spec，写回 canvas_pos）；spec 字段经 cytoscape scratch `spec` 携带，保存不丢失 prompt/decision/branch 等；
+- **FlowGram = bytedance/flowgram.ai**（扣子 Coze 同款 AI 原生流程图编辑器框架，MIT）。首轮自建 cytoscape 画布（FlowGramEditor.tsx）理解错了方向，已废弃删除，改为直接集成官方框架：
+  - `@flowgram.ai/free-layout-editor@1.0.15`（自由连线布局，Flow Spec 是有向图）+ `@flowgram.ai/editor` + `@flowgram.ai/playground-react`；
+  - **FlowGramFlowEditor.tsx（新）**：`FreeLayoutEditorProvider` + `EditorRenderer` 主体，工具栏六类物料按钮 + 保存为新版本；
+  - **六类节点注册（flowgramNodes.tsx）**：step/llm/decision/human/branch/loop → `WorkflowNodeRegistry`，**节点自带表单**（formMeta：title/prompt + decision choices / human queue/assignee/result_var / branch cases/default / loop max_iterations），点击节点就地编辑；
+  - **双向 adapter（flowgramAdapter.ts）**：`flowSpecToWorkflow(def)`（spec → 画布，读 `node.canvas_pos` 恢复布局）+ `workflowToFlowSpec(wf)`（画布 → spec，写回 canvas_pos）；Flow Spec 专有字段（decision/human/branch/loop/edge_type/when）完整携带在 node.data.spec / edge.data.spec，round-trip 不丢失；
+  - 连线 = flowgram 原生端口拖拽（输出端口 → 输入端口），`WorkflowEdgeJSON { sourceNodeID, targetNodeID, data.spec }`；
   - 保存 = createFlow 新版本（不再手写 JSON）。
 - **model.go**：Node 新增 `CanvasPos *CanvasPos`（`canvas_pos`，编辑器专用布局元数据，编译前剥离，不影响运行时语义）。
-- **版本选择修复**：FlowGramEditor / FlowCanvasMain / FlowDetailDrawer 的"最新定义"统一改 `[...versions].reverse().find(...)`（versions 升序，最后一个才是最新）。
+- **版本选择修复**：FlowGramFlowEditor / FlowCanvasMain / FlowDetailDrawer 的"最新定义"统一改 `[...versions].reverse().find(...)`（versions 升序，最后一个才是最新）。
 
 **2. Agent 辅助闭环（设计，P3 方向）**
 

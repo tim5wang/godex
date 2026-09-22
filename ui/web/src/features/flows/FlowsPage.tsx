@@ -40,7 +40,7 @@ import {
   type FlowVersionView,
 } from "../../lib/api";
 import { FlowGramCanvas } from "./FlowGramCanvas";
-import { FlowGramEditor } from "./FlowGramEditor";
+import { FlowGramFlowEditor } from "./FlowGramFlowEditor";
 import { FLOW_TEMPLATES, flowTemplateById } from "./flowTemplates";
 import { TemplateLibrary } from "./TemplateLibrary";
 import { NaturalLanguageTab } from "./NaturalLanguageTab";
@@ -354,7 +354,7 @@ function FlowCanvasMain(props: {
       </Space>
 
       <div style={{ flex: 1, minHeight: 420 }}>
-        <FlowGramEditor
+        <FlowGramFlowEditor
           flowId={flow.flow_id}
           token={token}
           t={t}

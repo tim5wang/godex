@@ -546,7 +546,7 @@ export const zhProductMessages = {
       editorCanvas: "画布编辑（主体）",
       inspector: "节点属性",
       inspectorEmpty: "点击画布中的节点进行编辑；双击空白处添加 step 节点，拖拽节点间连线。",
-      canvasEditorHint: "画布编辑：点击空白添加节点、拖拽调整位置、从一个节点拖到另一个节点创建连线；右侧编辑选中节点属性。保存后生成 Flow Spec JSON 并保存为新版本，无需手写 JSON。",
+      canvasEditorHint: "FlowGram 画布（bytedance/flowgram.ai）：从工具栏添加六类节点，节点自带表单可直接编辑；从节点输出端口拖到另一节点输入端口创建连线；保存后生成 Flow Spec JSON 并保存为新版本，无需手写 JSON。",
       deleteSelected: "删除选中",
       saveVersion: "保存为新版本",
       decisionType: "决策类型",

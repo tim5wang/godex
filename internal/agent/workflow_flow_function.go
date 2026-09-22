@@ -62,6 +62,12 @@ func (a *Agent) workflowFunctionContext(state workflowState, node workflowNode) 
 // the result JSON is written to node.Outputs and the node is finalized; on
 // failure the node goes to error (RetryPolicy respected via the shared
 // retry gate).
+//
+// P4 streaming: a handler may return an ARRAY of objects instead of one
+// object — each element is emitted as a node_emitted event (event sourcing on
+// the flow) before the node completes. The final outputs aggregate
+// { events, count } and merge the last element's fields so downstream
+// predicates still read {{nodes.<id>.outputs.<field>}}.
 func (a *Agent) executeWorkflowFunction(ctx context.Context, state *workflowState, node *workflowNode) {
 	spec := node.FunctionSpec
 	if spec == nil {
@@ -70,7 +76,7 @@ func (a *Agent) executeWorkflowFunction(ctx context.Context, state *workflowStat
 	}
 	handlerCtx := a.workflowFunctionContext(*state, *node)
 	start := time.Now()
-	result, err := a.runWorkflowFunction(ctx, spec, handlerCtx)
+	raw, err := a.runWorkflowFunction(ctx, spec, handlerCtx)
 	latency := time.Since(start)
 	if err != nil {
 		_ = a.workflows.appendEvent(state.Summary.ID, map[string]any{
@@ -82,7 +88,40 @@ func (a *Agent) executeWorkflowFunction(ctx context.Context, state *workflowStat
 		a.failWorkflowFunctionNode(state, node, err.Error())
 		return
 	}
-	a.completeWorkflowFunction(state, node, result, latency)
+	// Multi-event output: handler returned an array → stream each element as
+	// a node_emitted event, then complete with the aggregated outputs.
+	if items, ok := raw.([]any); ok {
+		events := make([]map[string]any, 0, len(items))
+		for i, item := range items {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			events = append(events, m)
+			_ = a.workflows.appendEvent(state.Summary.ID, map[string]any{
+				"event":   "node_emitted",
+				"node_id": node.ID,
+				"index":   i,
+				"payload": m,
+				"at":      time.Now().UTC(),
+			})
+		}
+		outputs := map[string]any{"events": events, "count": len(events)}
+		if len(events) > 0 {
+			// Merge the last element so {{nodes.<id>.outputs.<field>}} and
+			// condition predicates see the latest emitted value.
+			for k, v := range events[len(events)-1] {
+				outputs[k] = v
+			}
+		}
+		a.completeWorkflowFunction(state, node, outputs, latency)
+		return
+	}
+	if m, ok := raw.(map[string]any); ok {
+		a.completeWorkflowFunction(state, node, m, latency)
+		return
+	}
+	a.completeWorkflowFunction(state, node, map[string]any{"result": raw}, latency)
 }
 
 // failWorkflowFunctionNode terminates a function node as error.
@@ -134,7 +173,9 @@ func (a *Agent) completeWorkflowFunction(state *workflowState, node *workflowNod
 }
 
 // runWorkflowFunction dispatches to the JS (goja) or WASM (wasmrt) runtime.
-func (a *Agent) runWorkflowFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (map[string]any, error) {
+// It returns the raw decoded handler result: a map (single output), an array
+// of maps (streamed events), or any other JSON value (wrapped by callers).
+func (a *Agent) runWorkflowFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (any, error) {
 	switch strings.ToLower(strings.TrimSpace(spec.Runtime)) {
 	case "js":
 		return runJSFunction(ctx, spec, handlerCtx)
@@ -175,8 +216,9 @@ func (a *Agent) workflowFunctionWasmBinary(ref string) ([]byte, error) {
 // runWasmFunction loads the ref'd wasm module, calls the handler tool with
 // { ctx, event } arguments, and decodes the JSON result. The handler tool is
 // the entry name (spec.Handler, default "handle"); the plugin ABI is
-// godex:plugin@0.1 (wasmrt).
-func (a *Agent) runWasmFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (map[string]any, error) {
+// godex:plugin@0.1 (wasmrt). The result may be an object or an array of
+// objects (streamed events, P4).
+func (a *Agent) runWasmFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (any, error) {
 	binary, err := a.workflowFunctionWasmBinary(spec.Ref)
 	if err != nil {
 		return nil, err
@@ -218,18 +260,16 @@ func (a *Agent) runWasmFunction(ctx context.Context, spec *workflowFunctionSpec,
 	if err != nil {
 		return nil, fmt.Errorf("wasm function node: %w", err)
 	}
-	// Decode the result: objects become the outputs map; other values are
-	// wrapped under "result" so downstream predicates still work.
-	if m, ok := result.(map[string]any); ok {
-		return m, nil
-	}
-	return map[string]any{"result": result}, nil
+	// Pass through the raw decoded result: map (single), []any (streamed
+	// events), or anything else (wrapped by the caller).
+	return result, nil
 }
 
 // runJSFunction evaluates the handler source in a goja sandbox and calls
-// handle(ctx, event). The return value must be a JSON object; it is decoded
-// into the node outputs map. A hard timeout interrupts runaway scripts.
-func runJSFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (map[string]any, error) {
+// handle(ctx, event). The return value may be a JSON object (single output),
+// an array of objects (streamed events), or any other value (wrapped under
+// "result"). A hard timeout interrupts runaway scripts.
+func runJSFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (any, error) {
 	source := spec.Source
 	if strings.TrimSpace(source) == "" {
 		return nil, fmt.Errorf("js function node missing source")
@@ -301,10 +341,12 @@ func runJSFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx m
 		return nil, fmt.Errorf("js handler: %v", callErr)
 	}
 
-	// Decode the result. Objects become the outputs map; arrays/values are
-	// wrapped under "result" so downstream predicates still work.
+	// Decode the result. Objects become the outputs map; ARRAYS are streamed
+	// event lists (P4); other values are wrapped under "result".
 	switch v := callRes.Export().(type) {
 	case map[string]any:
+		return v, nil
+	case []any:
 		return v, nil
 	default:
 		return map[string]any{"result": callRes.Export()}, nil

@@ -530,6 +530,26 @@ function FlowCanvasMain(props: {
           <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 0 }}>
             {t("flows.debugHint")}
           </Paragraph>
+          {(debugEventsQuery.data ?? []).length > 0 && (
+            <div
+              style={{
+                border: "1px solid #eee",
+                borderRadius: 6,
+                background: "#fff",
+                maxHeight: 120,
+                overflowY: "auto",
+                padding: 6,
+                fontFamily: "monospace",
+                fontSize: 11,
+              }}
+            >
+              {(debugEventsQuery.data ?? []).map((ev, i) => (
+                <div key={i} style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                  {JSON.stringify(ev)}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

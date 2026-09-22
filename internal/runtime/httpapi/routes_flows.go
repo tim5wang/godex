@@ -249,7 +249,7 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 		}
 
 		ctx := r.Context()
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
 		sent := 0

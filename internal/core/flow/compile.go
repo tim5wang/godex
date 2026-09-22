@@ -347,6 +347,7 @@ func compileTemplate(n Node) CompiledNode {
 		Retry:      n.Retry,
 		Decision:   n.Decision,
 		Human:      n.Human,
+		Function:   n.Function,
 		Outputs:    append([]VarDef{}, n.Outputs...),
 	}
 }

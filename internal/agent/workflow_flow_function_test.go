@@ -253,3 +253,88 @@ func TestWorkflowFunctionNodeFlowRunCarriesInputs(t *testing.T) {
 		t.Fatalf("expected doubled=10, got %+v", fn.Outputs["doubled"])
 	}
 }
+
+// TestWorkflowFunctionNodeStreamsArrayEvents verifies P4 streaming: a js
+// handler returning an ARRAY of objects emits one node_emitted event per
+// element (event sourcing on the flow), and the node completes with
+// aggregated { events, count } outputs plus the last element merged in.
+func TestWorkflowFunctionNodeStreamsArrayEvents(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runWorkflowTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"workflow_id": "wf_function_stream",
+		"nodes": []map[string]interface{}{
+			{
+				"id":    "fn",
+				"kind":  "function",
+				"title": "vad",
+				"function": map[string]interface{}{
+					"runtime": "js",
+					"handler": "handle",
+					"source":  "function handle(ctx, event) { return [ { seg: 1 }, { seg: 2 }, { seg: 3 } ]; }",
+				},
+			},
+		},
+		"edges": []map[string]interface{}{},
+	})
+	view := startCreatedWorkflow(t, a, "wf_function_stream")
+	if st := nodeStatus(view.Nodes, "fn"); st != workflowStatusCompleted {
+		t.Fatalf("expected streaming function node completed, got %q", st)
+	}
+	// Aggregated outputs: count=3 + last element (seg:3) merged in.
+	preview := nodeResultPreview(view.Nodes, "fn")
+	if !strings.Contains(preview, `"count":3`) {
+		t.Fatalf("expected count=3 in aggregated outputs, got %q", preview)
+	}
+	if !strings.Contains(preview, `"seg":3`) {
+		t.Fatalf("expected last element merged into outputs, got %q", preview)
+	}
+}
+
+// TestWorkflowFunctionNodeStreamEventsPersisted verifies the emitted events
+// land in the run's append-only event log (FlowRunEvents) so the SSE stream
+// can push them incrementally (P4).
+func TestWorkflowFunctionNodeStreamEventsPersisted(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runWorkflowTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"workflow_id": "wf_function_stream_evt",
+		"nodes": []map[string]interface{}{
+			{
+				"id":    "fn",
+				"kind":  "function",
+				"title": "gen",
+				"function": map[string]interface{}{
+					"runtime": "js",
+					"handler": "handle",
+					"source":  "function handle(ctx, event) { return [ { a: 1 }, { a: 2 } ]; }",
+				},
+			},
+		},
+		"edges": []map[string]interface{}{},
+	})
+	startCreatedWorkflow(t, a, "wf_function_stream_evt")
+
+	// The workflow's event log must contain a node_emitted event per element
+	// (source node = fn).
+	state, err := a.workflowState("wf_function_stream_evt")
+	if err != nil {
+		t.Fatalf("workflow state: %v", err)
+	}
+	events := readWorkflowEvents(filepath.Join(a.workflows.dir, state.Summary.ID, workflowEventsFile))
+	emitted := 0
+	for _, ev := range events {
+		if ev["event"] == "node_emitted" && ev["node_id"] == "fn" {
+			emitted++
+		}
+	}
+	if emitted != 2 {
+		t.Fatalf("expected 2 node_emitted events, got %d (events=%+v)", emitted, events)
+	}
+}

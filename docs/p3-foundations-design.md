@@ -96,12 +96,22 @@
 
 ## 交付顺序与验收
 
-| Phase | 内容 | 验收 |
-|---|---|---|
-| 1（本次） | ① JSON 双向同步 + versions[0] bug | JSON 可编辑、应用/获取双向生效、保存后刷新 |
-| 2 | ② 调试模式 + 生产 gateway 引导 | 画布调试单步+事件高亮；生产示例可见 |
-| 3 | ③ function 节点 + 节点库（WASM 先行，JS 引入 goja） | 库节点拖入画布、保存/复用、音频转写示例 |
-| 4 | ④ 事件流运行时 + SSE 流式 | 纯函数图事件流执行、流式音频/辅助场景 |
+> ✅ 全部完成（2026-09-23）：Phase 1-4 已落地，提交见各 Phase。
+
+| Phase | 内容 | 验收 | 状态 |
+|---|---|---|---|
+| 1 | ① JSON 双向同步 + versions[0] bug | JSON 可编辑、应用/获取双向生效、保存后刷新 | ✅ ea63c76 |
+| 2 | ② 调试模式 + 生产 gateway 引导 | 画布调试单步+事件高亮；生产示例可见 | ✅ 3839186 |
+| 3 | ③ function 节点 + 节点库（WASM+JS） | 库节点插入画布、保存/复用、音频转写示例 | ✅ 91d352c/ad0f7f5/2674097/e7b873a |
+| 4 | ④ 事件流运行时 + SSE 流式 | 函数节点多事件输出（node_emitted）+ SSE 近实时推送 | ✅ 1ea1a11 |
+
+落地细节：
+- Phase 3：`kind=function` 后端（core/flow FunctionSpec + validate/compile 透传 +
+  engine 同步执行分支）、jsrt（goja 沙箱，统一 ctx={inputs,outputs,node}）、
+  wasm 桥接（node-library ref → pkgregistry → wasmrt CallTool）、节点库 store+
+  REST（/v1/node-library，内置音频转写 5 种子）、前端 function 节点注册表+表单+节点库面板
+- Phase 4：handler 可返回对象数组 = 流式多事件（逐元素 emit node_emitted，事件
+  溯源落盘 events.jsonl）；SSE /events 轮询 2s→500ms；调试面板事件日志
 
 ## 明确不做（本次）
 - 实时 live 双向同步（画布改即改 JSON）——flowgram re-import 重挂载问题，收益低

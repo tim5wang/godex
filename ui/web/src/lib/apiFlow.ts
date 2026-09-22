@@ -220,6 +220,29 @@ export function flowRunEvents(token: string | null, runId: string, flowId: strin
   );
 }
 
+// ---- Flow diagnosis (P3 Agent 闭环 §22.2) ---------------------------------
+
+export interface FlowDiagnosis {
+  run_id: string;
+  flow_id: string;
+  version: string;
+  root_cause: string;
+  summary?: string;
+  suggestions: string[];
+  fixed_definition?: FlowDefinition;
+}
+
+/** LLM diagnosis of a failed run: event log + definition → root cause +
+ * suggestions + optional validated fixed definition (NOT saved; caller
+ * persists it as a new version via createFlow). */
+export function diagnoseFlowRun(token: string | null, runId: string, flowId: string) {
+  return request<FlowDiagnosis>(
+    `/v1/flow-runs/${encodeURIComponent(runId)}/diagnose?flow_id=${encodeURIComponent(flowId)}`,
+    { method: "POST" },
+    token,
+  );
+}
+
 /** Drafts a Flow Spec v1 definition from a natural-language description via
  * the LLM (P2.5). The result is validated but NOT saved; the caller previews
  * and persists it through createFlow. */

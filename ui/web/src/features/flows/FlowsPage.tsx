@@ -33,6 +33,7 @@ import {
   cancelFlowRun,
   createFlow,
   createFlowRun,
+  diagnoseFlowRun,
   flowRunEvents,
   getFlowRun,
   listFlowRuns,
@@ -40,6 +41,7 @@ import {
   listFlows,
   publishFlow,
   type FlowDefinition,
+  type FlowDiagnosis,
   type FlowRunEvent,
   type FlowRunView,
   type FlowSummaryView,
@@ -595,6 +597,41 @@ function FlowDetailDrawer(props: {
   const versions = versionsQuery.data ?? [];
   const runs = runsQuery.data ?? [];
 
+  // P3 Agent 闭环 §22.2: diagnosis of a failed run — LLM root cause +
+  // suggestions + optional fixed definition (NOT saved).
+  const [diagnosis, setDiagnosis] = useState<FlowDiagnosis | null>(null);
+  const diagnoseMutation = useMutation({
+    mutationFn: ({ runId }: { runId: string }) =>
+      diagnoseFlowRun(token, runId, flow.flow_id),
+    onSuccess: setDiagnosis,
+    onError: (err) => showError(message, err, t("flows.diagnoseFailed")),
+  });
+  // Applying the fixed definition saves it as a NEW version (createFlow
+  // path) — the actual 优化 → 新版本 leg of the loop.
+  const nextVersion = useMemo(() => {
+    let max = 0;
+    for (const v of versions) {
+      const n = Number.parseInt(v.version, 10);
+      if (Number.isFinite(n)) max = Math.max(max, n);
+    }
+    return max > 0 ? String(max + 1) : "1";
+  }, [versions]);
+  const applyFixedMutation = useMutation({
+    mutationFn: (def: FlowDefinition) =>
+      createFlow(token, {
+        flow_id: flow.flow_id,
+        version: nextVersion,
+        status: "draft",
+        definition: def,
+      }),
+    onSuccess: () => {
+      message.success(t("flows.fixApplied"));
+      setDiagnosis(null);
+      onRefresh();
+    },
+    onError: (err) => showError(message, err, t("flows.saveFailed")),
+  });
+
   // Canvas tab state: selected version (default: latest with a definition)
   // and optional run selection for run-state event highlight.
   const [canvasVersion, setCanvasVersion] = useState<string>();
@@ -666,7 +703,8 @@ function FlowDetailDrawer(props: {
             key: "runs",
             label: t("flows.runs"),
             children: (
-              <Table<FlowRunView>
+              <>
+                <Table<FlowRunView>
                 rowKey="run_id"
                 size="small"
                 dataSource={runs}
@@ -692,18 +730,89 @@ function FlowDetailDrawer(props: {
                     title: t("flows.actions"),
                     key: "actions",
                     render: (_: unknown, row: FlowRunView) => (
-                      <Button
-                        size="small"
-                        danger
-                        disabled={row.status === "canceled" || row.status === "completed" || row.status === "error"}
-                        onClick={() => onCancelRun(row.run_id)}
-                      >
-                        {t("flows.cancel")}
-                      </Button>
+                      <Space wrap>
+                        <Button
+                          size="small"
+                          icon={<BugOutlined />}
+                          disabled={row.status !== "error"}
+                          loading={diagnoseMutation.isPending && diagnoseMutation.variables?.runId === row.run_id}
+                          onClick={() => diagnoseMutation.mutate({ runId: row.run_id })}
+                        >
+                          {t("flows.diagnose")}
+                        </Button>
+                        <Button
+                          size="small"
+                          danger
+                          disabled={row.status === "canceled" || row.status === "completed" || row.status === "error"}
+                          onClick={() => onCancelRun(row.run_id)}
+                        >
+                          {t("flows.cancel")}
+                        </Button>
+                      </Space>
                     ),
                   },
                 ]}
               />
+              {diagnosis && (
+                <div
+                  style={{
+                    marginTop: 12,
+                    border: "1px solid #e5e5e5",
+                    borderRadius: 8,
+                    padding: 10,
+                    background: "#fafafa",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
+                    <Text strong style={{ fontSize: 12 }}>
+                      {t("flows.diagnosePanel")} · {diagnosis.run_id.slice(0, 12)}…
+                    </Text>
+                    <Button size="small" onClick={() => setDiagnosis(null)}>
+                      {t("flows.debugClear")}
+                    </Button>
+                  </Space>
+                  <div>
+                    <Text strong style={{ fontSize: 12 }}>
+                      {t("flows.diagnoseRootCause")}
+                    </Text>
+                    <Paragraph style={{ fontSize: 12, marginBottom: 0 }}>
+                      {diagnosis.root_cause || diagnosis.summary}
+                    </Paragraph>
+                  </div>
+                  {diagnosis.suggestions.length > 0 && (
+                    <div>
+                      <Text strong style={{ fontSize: 12 }}>
+                        {t("flows.diagnoseSuggestions")}
+                      </Text>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 20, fontSize: 12 }}>
+                        {diagnosis.suggestions.map((s, i) => (
+                          <li key={i}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {diagnosis.fixed_definition && (
+                    <Space>
+                      <Button
+                        size="small"
+                        type="primary"
+                        icon={<SaveOutlined />}
+                        loading={applyFixedMutation.isPending}
+                        onClick={() => applyFixedMutation.mutate(diagnosis.fixed_definition!)}
+                      >
+                        {t("flows.applyFix")} v{nextVersion}
+                      </Button>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {t("flows.applyFixHint")}
+                      </Text>
+                    </Space>
+                  )}
+                </div>
+              )}
+              </>
             ),
           },
           {

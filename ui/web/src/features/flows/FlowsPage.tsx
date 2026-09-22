@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp,
@@ -17,11 +17,13 @@ import {
   Typography,
 } from "antd";
 import {
+  DownloadOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   RocketOutlined,
   SaveOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
@@ -40,7 +42,7 @@ import {
   type FlowVersionView,
 } from "../../lib/api";
 import { FlowGramCanvas } from "./FlowGramCanvas";
-import { FlowGramFlowEditor } from "./FlowGramFlowEditor";
+import { FlowGramFlowEditor, type FlowGramFlowEditorHandle } from "./FlowGramFlowEditor";
 import { FLOW_TEMPLATES, flowTemplateById } from "./flowTemplates";
 import { TemplateLibrary } from "./TemplateLibrary";
 import { NaturalLanguageTab } from "./NaturalLanguageTab";
@@ -70,6 +72,11 @@ export function FlowsPage() {
   const [detail, setDetail] = useState<FlowSummaryView | null>(null);
   const [detailDrawer, setDetailDrawer] = useState<FlowSummaryView | null>(null);
   const [form] = Form.useForm<FlowFormValues>();
+
+  // JSON editor ⇄ canvas: an externally applied definition (JSON tab → canvas)
+  // wins over stored versions until the next save clears it.
+  const [externalDef, setExternalDef] = useState<{ def: FlowDefinition; stamp: number }>();
+  const editorHandleRef = useRef<FlowGramFlowEditorHandle>(null);
 
   const flowsQuery = useQuery({
     queryKey: ["flows"],
@@ -212,6 +219,9 @@ export function FlowsPage() {
               onPublish={(version) => publishMutation.mutate({ flowId: detail.flow_id, version })}
               onRun={(version) => runMutation.mutate({ flowId: detail.flow_id, version })}
               onOpenDetail={() => setDetailDrawer(detail)}
+              externalDef={externalDef}
+              editorHandleRef={editorHandleRef}
+              onExternalDefConsumed={() => setExternalDef(undefined)}
             />
           ) : (
             <div
@@ -287,6 +297,8 @@ export function FlowsPage() {
           onPublish={(version) => publishMutation.mutate({ flowId: detailDrawer.flow_id, version })}
           onRun={(version) => runMutation.mutate({ flowId: detailDrawer.flow_id, version })}
           onCancelRun={(runId) => cancelRunMutation.mutate({ flowId: detailDrawer.flow_id, runId })}
+          onApplyJson={(def) => setExternalDef({ def, stamp: Date.now() })}
+          editorHandleRef={editorHandleRef}
         />
       )}
     </div>
@@ -302,8 +314,23 @@ function FlowCanvasMain(props: {
   onPublish: (version: string) => void;
   onRun: (version: string) => void;
   onOpenDetail: () => void;
+  externalDef?: { def: FlowDefinition; stamp: number };
+  editorHandleRef: RefObject<FlowGramFlowEditorHandle | null>;
+  onExternalDefConsumed: () => void;
 }) {
-  const { flow, token, t, message, onRefresh, onPublish, onRun, onOpenDetail } = props;
+  const {
+    flow,
+    token,
+    t,
+    message,
+    onRefresh,
+    onPublish,
+    onRun,
+    onOpenDetail,
+    externalDef,
+    editorHandleRef,
+    onExternalDefConsumed,
+  } = props;
 
   const versionsQuery = useQuery({
     queryKey: ["flow", flow.flow_id],
@@ -355,12 +382,15 @@ function FlowCanvasMain(props: {
 
       <div style={{ flex: 1, minHeight: 420 }}>
         <FlowGramFlowEditor
+          ref={editorHandleRef}
           flowId={flow.flow_id}
           token={token}
           t={t}
           versions={versions}
+          externalDef={externalDef}
           onSaved={() => {
             message.success(t("flows.templateApplied"));
+            onExternalDefConsumed();
             onRefresh();
           }}
           onSaveError={(err) => showError(message, err, t("flows.saveFailed"))}
@@ -380,8 +410,22 @@ function FlowDetailDrawer(props: {
   onPublish: (version: string) => void;
   onRun: (version: string) => void;
   onCancelRun: (runId: string) => void;
+  onApplyJson: (def: FlowDefinition) => void;
+  editorHandleRef: RefObject<FlowGramFlowEditorHandle | null>;
 }) {
-  const { flow, token, t, onClose, onRefresh, onPublish, onRun, onCancelRun } = props;
+  const {
+    flow,
+    token,
+    t,
+    message,
+    onClose,
+    onRefresh,
+    onPublish,
+    onRun,
+    onCancelRun,
+    onApplyJson,
+    editorHandleRef,
+  } = props;
 
   const versionsQuery = useQuery({
     queryKey: ["flow", flow.flow_id],
@@ -573,29 +617,14 @@ function FlowDetailDrawer(props: {
             key: "json",
             label: t("flows.definition"),
             children: (
-              <div>
-                {versions.length > 0 && versions[0].definition ? (
-                  <pre
-                    style={{
-                      background: "#f5f5f5",
-                      padding: 12,
-                      borderRadius: 6,
-                      fontSize: 11,
-                      maxHeight: 480,
-                      overflow: "auto",
-                    }}
-                  >
-                    {JSON.stringify(versions[0].definition, null, 2)}
-                  </pre>
-                ) : (
-                  <Empty description={t("flows.noDefinition")} />
-                )}
-                <Space style={{ marginTop: 12 }}>
-                  <Button icon={<ReloadOutlined />} onClick={onRefresh}>
-                    {t("flows.refresh")}
-                  </Button>
-                </Space>
-              </div>
+              <DefinitionJsonTab
+                versions={versions}
+                t={t}
+                message={message}
+                onRefresh={onRefresh}
+                onApplyJson={onApplyJson}
+                editorHandleRef={editorHandleRef}
+              />
             ),
           },
         ]}
@@ -604,6 +633,92 @@ function FlowDetailDrawer(props: {
         {t("flows.flowgramHint")}
       </Paragraph>
     </Drawer>
+  );
+}
+
+/**
+ * Editable definition JSON tab — the advanced entry that stays in sync with
+ * the canvas: "Get from canvas" snapshots the current editor, "Apply to
+ * canvas" re-imports the text (fixes the old read-only versions[0] bug that
+ * showed the OLDEST definition).
+ */
+function DefinitionJsonTab(props: {
+  versions: FlowVersionView[];
+  t: (k: string, v?: Record<string, string | number>) => string;
+  message: ReturnType<typeof AntApp.useApp>["message"];
+  onRefresh: () => void;
+  onApplyJson: (def: FlowDefinition) => void;
+  editorHandleRef: RefObject<FlowGramFlowEditorHandle | null>;
+}) {
+  const { versions, t, message, onRefresh, onApplyJson, editorHandleRef } = props;
+  const latestDef = useMemo(
+    () => [...versions].reverse().find((v) => v.definition)?.definition,
+    [versions],
+  );
+  const [dirty, setDirty] = useState(false);
+  const [jsonText, setJsonText] = useState(() =>
+    latestDef ? JSON.stringify(latestDef, null, 2) : "",
+  );
+
+  // Refresh the text when versions reload, unless the user has unsaved edits.
+  useEffect(() => {
+    if (dirty) return;
+    setJsonText(latestDef ? JSON.stringify(latestDef, null, 2) : "");
+  }, [latestDef, dirty]);
+
+  const getFromCanvas = () => {
+    const def = editorHandleRef.current?.getCurrentDefinition();
+    if (!def) {
+      message.warning(t("flows.noDefinition"));
+      return;
+    }
+    setJsonText(JSON.stringify(def, null, 2));
+    setDirty(false);
+    message.success(t("flows.jsonFromCanvas"));
+  };
+
+  const apply = () => {
+    let parsed: FlowDefinition;
+    try {
+      parsed = JSON.parse(jsonText) as FlowDefinition;
+      if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+        throw new Error("missing nodes/edges arrays");
+      }
+    } catch (err) {
+      message.error(
+        `${t("flows.jsonInvalid")}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    onApplyJson(parsed);
+    setDirty(false);
+    message.success(t("flows.jsonApplied"));
+  };
+
+  return (
+    <div>
+      <Input.TextArea
+        rows={18}
+        style={{ fontFamily: "monospace", fontSize: 11 }}
+        value={jsonText}
+        onChange={(e) => {
+          setJsonText(e.target.value);
+          setDirty(true);
+        }}
+        placeholder={t("flows.noDefinition")}
+      />
+      <Space style={{ marginTop: 12 }} wrap>
+        <Button icon={<ReloadOutlined />} onClick={onRefresh}>
+          {t("flows.refresh")}
+        </Button>
+        <Button icon={<DownloadOutlined />} onClick={getFromCanvas}>
+          {t("flows.getFromCanvas")}
+        </Button>
+        <Button type="primary" icon={<UploadOutlined />} onClick={apply}>
+          {t("flows.applyToCanvas")}
+        </Button>
+      </Space>
+    </div>
   );
 }
 

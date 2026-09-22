@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import {
   FreeLayoutEditorProvider,
   EditorRenderer,
@@ -27,6 +27,11 @@ const { Text, Paragraph } = Typography;
 // Save persists the definition as a NEW version via createFlow.
 // ---------------------------------------------------------------------------
 
+export interface FlowGramFlowEditorHandle {
+  /** Snapshot the current canvas as a Flow Spec v1 definition (no save). */
+  getCurrentDefinition: () => FlowDefinition | null;
+}
+
 interface FlowGramFlowEditorProps {
   flowId: string;
   token: string | null;
@@ -34,6 +39,9 @@ interface FlowGramFlowEditorProps {
   versions: FlowVersionView[];
   onSaved: () => void;
   onSaveError: (err: unknown) => void;
+  /** External definition pushed from the JSON editor; stamp forces a remount. */
+  externalDef?: { def: FlowDefinition; stamp: number };
+  ref?: Ref<FlowGramFlowEditorHandle>;
 }
 
 export function FlowGramFlowEditor({
@@ -43,6 +51,8 @@ export function FlowGramFlowEditor({
   versions,
   onSaved,
   onSaveError,
+  externalDef,
+  ref,
 }: FlowGramFlowEditorProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,9 +65,12 @@ export function FlowGramFlowEditor({
   const autoLaidOutRef = useRef(false);
 
   // Latest definition with content (versions are ascending; reverse = latest).
+  // An externally applied JSON definition (JSON editor → canvas) wins over
+  // the stored versions until the next save clears it.
   const latest = useMemo(
-    () => [...versions].reverse().find((v) => v.definition)?.definition,
-    [versions],
+    () =>
+      externalDef?.def ?? [...versions].reverse().find((v) => v.definition)?.definition,
+    [versions, externalDef],
   );
 
   const nextVersion = useMemo(() => {
@@ -79,7 +92,11 @@ export function FlowGramFlowEditor({
     () => (latest ? flowSpecToWorkflow(latest) : { nodes: [], edges: [] }),
     [latest],
   );
-  const canvasKey = latest ? `${latest.flow_id}-${latest.version}` : "empty";
+  const canvasKey = externalDef
+    ? `ext-${externalDef.stamp}`
+    : latest
+      ? `${latest.flow_id}-${latest.version}`
+      : "empty";
 
   // Whether the definition carries saved canvas positions. When absent
   // (template / fresh flows get a flat cascade fallback), run a topology
@@ -88,6 +105,15 @@ export function FlowGramFlowEditor({
     () => !!latest && (latest.nodes ?? []).some((n) => n.canvas_pos),
     [latest],
   );
+
+  // Expose a snapshot handle for the JSON editor (get from canvas).
+  useImperativeHandle(ref, () => ({
+    getCurrentDefinition: () => {
+      const doc = documentRef.current as unknown as { toJSON?: () => WorkflowJSON } | null;
+      const wf = doc?.toJSON?.() ?? initialWorkflow;
+      return workflowToFlowSpec(wf, flowId, nextVersion, "draft");
+    },
+  }));
 
   // Programmatic node creation (the canvas also has its own add UX; this is
   // the toolbar fallback). Mirrors the previous editor's toolbar buttons.

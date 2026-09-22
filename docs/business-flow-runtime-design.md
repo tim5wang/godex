@@ -1055,16 +1055,20 @@ P2.5 = **创建流程不再要求手写 JSON**：创建先建 flow 对象（只�
 
 **2. Agent 辅助闭环（设计，P3 方向）**
 
+> ✅ 「Agent 诊断 + 优化为新版本」环节已落地（2026-09-23）：失败 run → 诊断面板 → 应用修复为新版本。
+
 用户预期：不要指望一次 LLM 调用搞定编排。Agent 应**辅助**用户创建/修改 Flow、定位问题，并形成「运行日志回流 → 定期巡检 → Agent 优化 Flow」闭环。
 
 - **辅助创建/编辑**：自然语言 Tab 保留 /v1/flows/generate 生成草稿，但改为**多轮可迭代**：草稿落画布后可继续用自然语言追加修改（"把人工审批改成超过 1000 元才转人工"）→ 增量修改走 LLM + diff 应用，而非整表重生成。
-- **运行日志回流**：/v1/flow-runs/{id}/events 事件日志（含 node_error/node_failed/error 字段）已具备；新增「Agent 诊断」入口：把失败 run 的事件 + 定义摘要打包给 Agent，产出根因定位 + 修改建议（可直接应用为画布改动）。
-- **定期巡检**：cron 任务定期拉取在线接口（已发布 flow）的运行记录，聚合失败率/卡点（waiting_human 超时、decision 置信度低、error 节点），生成巡检报告卡片。
-- **Agent 优化 Flow**：巡检/诊断建议经用户确认后，Agent 直接修改定义生成新版本（走既有 createFlow 链路），形成 运行 → 观测 → 建议 → 优化 → 新版本 闭环。
+- **运行日志回流** ✅：/v1/flow-runs/{id}/events 事件日志（含 node_error/node_failed/error 字段）已具备；新增「Agent 诊断」入口：把失败 run 的事件 + 定义摘要打包给 Agent，产出根因定位 + 修改建议（可直接应用为画布改动）。
+  - 后端：`internal/agent/flow_diagnose.go` `DiagnoseFlowRun`（事件 ≤300 条 + 定义 >20KB 摘要化 → LLM → FlowDiagnosis{root_cause, summary, suggestions, fixed_definition?}，fixed_definition 经 flow.Validate 校验不落盘）；REST `POST /v1/flow-runs/{runID}/diagnose?flow_id=...`（1f1836c）
+  - 前端：runs tab error 行「诊断」按钮 → 诊断面板（根因+建议）→「应用修复 v{n+1}」走 createFlow 存为新草稿版本（f386a14）
+- **定期巡检**：cron 任务定期拉取在线接口（已发布 flow）的运行记录，聚合失败率/卡点（waiting_human 超时、decision 置信度低、error 节点），生成巡检报告卡片。（未做，后续）
+- **Agent 优化 Flow** ✅（诊断环节）：巡检/诊断建议经用户确认后，Agent 直接修改定义生成新版本（走既有 createFlow 链路），形成 运行 → 观测 → 建议 → 优化 → 新版本 闭环。
 
 **验证**：`go build ./internal/...` 通过；`go test ./internal/core/flow/`、`./internal/runtime/httpapi/ -run Flow` 全绿（TestDurableSubagentDefaultTimeoutDisabled 为既有 TempDir 清理环境性失败，与本次改动无关）；`pnpm tsc -b` + `pnpm vite build` 通过。
 
-**本次明确不做（后续）**：Agent 诊断/巡检/优化闭环的后端实现（§22.2 为设计稿）、decision provider 下拉、变量作用域链面板（§9）、SSE 实时增量高亮。
+**本次明确不做（后续）**：Agent 定期巡检/巡检报告卡片（§22.2 剩余）、decision provider 下拉、变量作用域链面板（§9）、SSE 实时增量高亮。
 
 
 

@@ -2,14 +2,114 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 	"github.com/tim5wang/godex/internal/core/flow"
 )
 
-// startCreatedWorkflow starts a workflow created via the tool and returns the
-// resulting view (mirrors the decision test pattern: create, then start).
+// TestWorkflowFunctionNodeWasmRefExecutes verifies a wasm function node loads
+// its binary from a node-library ref (an installed package with a wasm runtime
+// declaration), calls the handler tool through wasmrt, and writes the result.
+func TestWorkflowFunctionNodeWasmRefExecutes(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	// Install a package whose runtime declaration points at the wasmrt test
+	// plugin (declares the wasm_echo tool).
+	source := t.TempDir()
+	binary, err := os.ReadFile(filepath.Join("..", "wasmrt", "testdata", "plugin.wasm"))
+	if err != nil {
+		t.Fatalf("read wasm test plugin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugin.wasm"), binary, 0o644); err != nil {
+		t.Fatalf("write wasm module: %v", err)
+	}
+	manifest := `name: wasm-echo
+version: 0.1.0
+description: wasm echo plugin
+runtime:
+  kind: wasm
+  module: plugin.wasm
+  abi: godex:plugin@0.1
+`
+	if err := os.WriteFile(filepath.Join(source, pkgregistry.ManifestFileName), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	packages := pkgregistry.NewManager(a.cfg.StateDir, a.cfg.SkillsDir)
+	if _, err := packages.InstallPrepared(source, "wasm-echo"); err != nil {
+		t.Fatalf("install wasm package: %v", err)
+	}
+
+	runWorkflowTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"workflow_id": "wf_function_wasm",
+		"nodes": []map[string]interface{}{
+			{
+				"id":    "fn",
+				"kind":  "function",
+				"title": "wasm-echo",
+				"function": map[string]interface{}{
+					"runtime": "wasm",
+					"ref":     "wasm-echo",
+					"handler": "wasm_echo",
+				},
+			},
+		},
+		"edges": []map[string]interface{}{},
+	})
+	view := startCreatedWorkflow(t, a, "wf_function_wasm")
+	if st := nodeStatus(view.Nodes, "fn"); st != workflowStatusCompleted {
+		t.Fatalf("expected wasm function node completed, got %q", st)
+	}
+	if preview := nodeResultPreview(view.Nodes, "fn"); !strings.Contains(preview, "wasm echo:") {
+		t.Fatalf("expected wasm handler output in preview, got %q", preview)
+	}
+}
+
+// TestWorkflowFunctionNodeWasmRefMissingFails verifies a wasm function node
+// with an unresolvable ref fails fast with a clear error.
+func TestWorkflowFunctionNodeWasmRefMissingFails(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runWorkflowTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"workflow_id": "wf_function_wasm_missing",
+		"nodes": []map[string]interface{}{
+			{
+				"id":    "fn",
+				"kind":  "function",
+				"title": "missing",
+				"function": map[string]interface{}{
+					"runtime": "wasm",
+					"ref":     "no-such-package",
+					"handler": "handle",
+				},
+			},
+		},
+		"edges": []map[string]interface{}{},
+	})
+	view := startCreatedWorkflow(t, a, "wf_function_wasm_missing")
+	if st := nodeStatus(view.Nodes, "fn"); st != workflowStatusError {
+		t.Fatalf("expected wasm function node error, got %q", st)
+	}
+	for _, n := range view.Nodes {
+		if n.ID == "fn" && n.Error != "" {
+			if !strings.Contains(n.Error, "no-such-package") {
+				t.Fatalf("expected ref error surfaced, got %q", n.Error)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected ref error surfaced on node, got nodes=%+v", view.Nodes)
+}
+
 func startCreatedWorkflow(t *testing.T, a *Agent, workflowID string) workflowView {
 	t.Helper()
 	return runWorkflowTool(t, a, context.Background(), map[string]interface{}{

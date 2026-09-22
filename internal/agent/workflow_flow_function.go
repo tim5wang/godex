@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/dop251/goja"
+	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
+	"github.com/tim5wang/godex/internal/wasmrt"
 )
 
 // ---------------------------------------------------------------------------
@@ -67,7 +70,7 @@ func (a *Agent) executeWorkflowFunction(ctx context.Context, state *workflowStat
 	}
 	handlerCtx := a.workflowFunctionContext(*state, *node)
 	start := time.Now()
-	result, err := runWorkflowFunction(ctx, spec, handlerCtx)
+	result, err := a.runWorkflowFunction(ctx, spec, handlerCtx)
 	latency := time.Since(start)
 	if err != nil {
 		_ = a.workflows.appendEvent(state.Summary.ID, map[string]any{
@@ -131,15 +134,96 @@ func (a *Agent) completeWorkflowFunction(state *workflowState, node *workflowNod
 }
 
 // runWorkflowFunction dispatches to the JS (goja) or WASM (wasmrt) runtime.
-func runWorkflowFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (map[string]any, error) {
+func (a *Agent) runWorkflowFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (map[string]any, error) {
 	switch strings.ToLower(strings.TrimSpace(spec.Runtime)) {
 	case "js":
 		return runJSFunction(ctx, spec, handlerCtx)
 	case "wasm":
-		return nil, fmt.Errorf("wasm function nodes require the node library (P3b); ref %q not loaded", spec.Ref)
+		return a.runWasmFunction(ctx, spec, handlerCtx)
 	default:
 		return nil, fmt.Errorf("unknown function runtime %q", spec.Runtime)
 	}
+}
+
+// workflowFunctionWasmBinary resolves a wasm function node's binary from its
+// node-library ref: the ref names an installed package (pkgregistry) whose
+// runtime declaration points at a .wasm module. The module bytes are read
+// once per call and loaded into a fresh wasmrt plugin (P3 single-shot).
+func (a *Agent) workflowFunctionWasmBinary(ref string) ([]byte, error) {
+	if a == nil || a.cfg == nil {
+		return nil, fmt.Errorf("wasm function node: agent runtime unavailable")
+	}
+	if strings.TrimSpace(ref) == "" {
+		return nil, fmt.Errorf("wasm function node missing ref")
+	}
+	packages := pkgregistry.NewManager(a.cfg.StateDir, a.cfg.SkillsDir)
+	item, err := packages.Get(ref)
+	if err != nil {
+		return nil, fmt.Errorf("wasm function node ref %q: %w", ref, err)
+	}
+	modulePath := packages.RuntimeModulePath(item)
+	if modulePath == "" {
+		return nil, fmt.Errorf("wasm function node ref %q: package has no wasm runtime module", ref)
+	}
+	binary, err := os.ReadFile(modulePath)
+	if err != nil {
+		return nil, fmt.Errorf("wasm function node ref %q: %w", ref, err)
+	}
+	return binary, nil
+}
+
+// runWasmFunction loads the ref'd wasm module, calls the handler tool with
+// { ctx, event } arguments, and decodes the JSON result. The handler tool is
+// the entry name (spec.Handler, default "handle"); the plugin ABI is
+// godex:plugin@0.1 (wasmrt).
+func (a *Agent) runWasmFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx map[string]any) (map[string]any, error) {
+	binary, err := a.workflowFunctionWasmBinary(spec.Ref)
+	if err != nil {
+		return nil, err
+	}
+	handler := strings.TrimSpace(spec.Handler)
+	if handler == "" {
+		handler = "handle"
+	}
+	plugin, err := wasmrt.NewPlugin(ctx, wasmrt.Config{
+		Binary:   binary,
+		PluginID: spec.Ref,
+		Host:     wasmrt.HostCallbacks{Log: func(message string) { _ = message }},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("wasm function node: load: %w", err)
+	}
+	defer plugin.Close(ctx)
+
+	// The handler tool must be declared by the plugin.
+	tools, err := plugin.ToolsList(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("wasm function node: tools list: %w", err)
+	}
+	found := false
+	for _, td := range tools {
+		if td.Name == handler {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("wasm function node: handler tool %q not declared by plugin %q", handler, spec.Ref)
+	}
+
+	result, err := plugin.CallTool(ctx, handler, map[string]any{
+		"ctx":   handlerCtx,
+		"event": map[string]any{},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("wasm function node: %w", err)
+	}
+	// Decode the result: objects become the outputs map; other values are
+	// wrapped under "result" so downstream predicates still work.
+	if m, ok := result.(map[string]any); ok {
+		return m, nil
+	}
+	return map[string]any{"result": result}, nil
 }
 
 // runJSFunction evaluates the handler source in a goja sandbox and calls

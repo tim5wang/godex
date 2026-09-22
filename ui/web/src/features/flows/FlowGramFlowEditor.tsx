@@ -1,4 +1,5 @@
 import { useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   FreeLayoutEditorProvider,
   EditorRenderer,
@@ -8,9 +9,16 @@ import {
   type WorkflowJSON,
 } from "@flowgram.ai/free-layout-editor";
 import "@flowgram.ai/free-layout-editor/index.css";
-import { Alert, Button, Space, Tag, Typography } from "antd";
-import { ApartmentOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
-import { createFlow, type FlowDefinition, type FlowRunEvent, type FlowVersionView } from "../../lib/api";
+import { Alert, Button, Empty, Space, Tag, Typography } from "antd";
+import { ApartmentOutlined, DatabaseOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import {
+  createFlow,
+  listNodeLibrary,
+  type FlowDefinition,
+  type FlowRunEvent,
+  type FlowVersionView,
+  type NodeLibraryEntry,
+} from "../../lib/api";
 import { flowSpecToWorkflow, workflowToFlowSpec, blankFlowNode } from "./flowgramAdapter";
 import {
   FLOWGRAM_NODE_REGISTRIES,
@@ -66,8 +74,17 @@ export function FlowGramFlowEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [layouting, setLayouting] = useState(false);
+  const [libOpen, setLibOpen] = useState(false);
   const documentRef = useRef<FreeLayoutPluginContext["document"] | null>(null);
   const toolsRef = useRef<FreeLayoutPluginContext["tools"] | null>(null);
+
+  // Node library (P3): reusable function-node definitions (builtin seeds +
+  // user-saved) fetched once per editor mount; clicking an entry inserts it
+  // onto the canvas as a function node carrying the entry's spec.
+  const libQuery = useQuery({
+    queryKey: ["node-library"],
+    queryFn: () => listNodeLibrary(token),
+  });
   // Run the automatic topology layout at most once per editor mount, so
   // later onAllLayersRendered firings (addNode / content change) never
   // re-arrange nodes the user already dragged by hand.
@@ -139,6 +156,27 @@ export function FlowGramFlowEditor({
     doc.createWorkflowNodeByType(kind, { x: 80 + Math.random() * 200, y: 120 }, {
       id,
       data: { ...blankFlowNode(id, kind), kind },
+    });
+  };
+
+  // Insert a node-library entry onto the canvas as a function node whose
+  // function spec comes from the saved entry (runtime/source/ref/handler).
+  const addLibraryNode = (entry: NodeLibraryEntry) => {
+    const doc = documentRef.current as unknown as {
+      createWorkflowNodeByType?: (
+        type: string,
+        position?: { x: number; y: number },
+        json?: Record<string, unknown>,
+      ) => unknown;
+    };
+    if (typeof doc?.createWorkflowNodeByType !== "function") return;
+    const id = `n${Date.now().toString(36).slice(-4)}`;
+    const node = blankFlowNode(id, "function");
+    node.function = { ...entry.function };
+    node.title = entry.name;
+    doc.createWorkflowNodeByType("function", { x: 80 + Math.random() * 200, y: 120 }, {
+      id,
+      data: { ...node, kind: "function" },
     });
   };
 
@@ -274,6 +312,14 @@ export function FlowGramFlowEditor({
         <Space>
           <Button
             size="small"
+            icon={<DatabaseOutlined />}
+            type={libOpen ? "primary" : "default"}
+            onClick={() => setLibOpen((v) => !v)}
+          >
+            {t("flows.nodeLibrary")}
+          </Button>
+          <Button
+            size="small"
             icon={<ApartmentOutlined />}
             loading={layouting}
             onClick={runAutoLayout}
@@ -294,6 +340,48 @@ export function FlowGramFlowEditor({
           </Button>
         </Space>
       </Space>
+
+      {libOpen && (
+        <div
+          style={{
+            border: "1px solid #e5e5e5",
+            borderRadius: 8,
+            padding: 10,
+            background: "#fafafa",
+            maxHeight: 180,
+            overflowY: "auto",
+          }}
+        >
+          <Text strong style={{ fontSize: 12 }}>
+            {t("flows.nodeLibraryPanel")}
+          </Text>
+          <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 8 }}>
+            {t("flows.nodeLibraryHint")}
+          </Paragraph>
+          {(libQuery.data ?? []).length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("flows.noDefinition")} />
+          ) : (
+            <Space wrap size={[4, 4]}>
+              {(libQuery.data ?? []).map((entry) => (
+                <Button
+                  key={entry.id}
+                  size="small"
+                  icon={<PlusOutlined />}
+                  title={entry.description}
+                  onClick={() => addLibraryNode(entry)}
+                >
+                  {entry.name}
+                  {entry.source === "builtin" && (
+                    <Tag style={{ marginLeft: 4, marginRight: 0 }} color="blue">
+                      builtin
+                    </Tag>
+                  )}
+                </Button>
+              ))}
+            </Space>
+          )}
+        </div>
+      )}
 
       <div
         style={{

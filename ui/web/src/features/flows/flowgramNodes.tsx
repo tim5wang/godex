@@ -37,6 +37,7 @@ export const KIND_COLOR: Record<string, string> = {
   human: "#13c2c2",
   branch: "#eb2f96",
   loop: "#52c41a",
+  function: "#2f54eb",
 };
 
 // ---- run-time status highlight -------------------------------------------
@@ -80,6 +81,7 @@ const KIND_LABEL: Record<string, string> = {
   human: "human",
   branch: "branch",
   loop: "loop",
+  function: "function",
 };
 
 // ---- small form helpers (antd + flowgram Field) ---------------------------
@@ -305,7 +307,71 @@ function LoopFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   );
 }
 
-// ---- the six node registries ----------------------------------------------
+// ---- function node fields (P3: js source / wasm ref code node) ------------
+
+function FunctionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
+  const fn = useWatch<{
+    runtime?: string;
+    source?: string;
+    ref?: string;
+    handler?: string;
+  }>("function") ?? {};
+  const setFn = (patch: Record<string, unknown>) => {
+    const cur = (form.getValueIn<Record<string, unknown>>("function") ?? {}) as Record<
+      string,
+      unknown
+    >;
+    form.setValueIn("function", { ...cur, ...patch });
+  };
+  const runtime = fn.runtime ?? "js";
+  return (
+    <div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Runtime</div>
+        <Select
+          style={{ width: "100%" }}
+          value={runtime}
+          onChange={(v) => setFn({ runtime: v })}
+          options={[
+            { value: "js", label: "js (goja sandbox)" },
+            { value: "wasm", label: "wasm (plugin ref)" },
+          ]}
+        />
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Handler</div>
+        <Input
+          value={fn.handler ?? "handle"}
+          placeholder="handle"
+          onChange={(e) => setFn({ handler: e.target.value })}
+        />
+      </div>
+      {runtime === "js" ? (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Source (JS)</div>
+          <Input.TextArea
+            rows={5}
+            style={{ fontFamily: "monospace", fontSize: 11 }}
+            value={fn.source ?? ""}
+            placeholder={'function handle(ctx, event) {\n  return { result: 1 };\n}'}
+            onChange={(e) => setFn({ source: e.target.value })}
+          />
+        </div>
+      ) : (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Node-library ref</div>
+          <Input
+            value={fn.ref ?? ""}
+            placeholder="vad_split / asr_transcribe / ..."
+            onChange={(e) => setFn({ ref: e.target.value })}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- the seven node registries ----------------------------------------------
 
 const size = { width: 300, height: 120 };
 const defaultPorts = [
@@ -373,6 +439,16 @@ const loopRegistry: WorkflowNodeRegistry = {
   } as FormMeta,
 };
 
+const functionRegistry: WorkflowNodeRegistry = {
+  type: "function",
+  meta: { size, defaultPorts },
+  info: { icon: "", description: "code node: js (goja) or wasm (plugin ref)" },
+  formMeta: {
+    render: baseForm((form) => <FunctionFields form={form} />),
+    validateTrigger: ValidateTrigger.onChange,
+  } as FormMeta,
+};
+
 export const FLOWGRAM_NODE_REGISTRIES: WorkflowNodeRegistry[] = [
   stepRegistry,
   llmRegistry,
@@ -380,6 +456,7 @@ export const FLOWGRAM_NODE_REGISTRIES: WorkflowNodeRegistry[] = [
   humanRegistry,
   branchRegistry,
   loopRegistry,
+  functionRegistry,
 ];
 
 /**

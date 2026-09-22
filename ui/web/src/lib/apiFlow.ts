@@ -17,7 +17,7 @@ export interface FlowDefinition {
 
 export interface FlowNode {
   id: string;
-  kind: string; // step | llm | decision | human | branch | loop
+  kind: string; // step | llm | decision | human | branch | loop | function
   title?: string;
   prompt?: string;
   agent_type?: string;
@@ -27,12 +27,22 @@ export interface FlowNode {
   branch?: FlowBranchSpec;
   human?: FlowHumanSpec;
   loop?: FlowLoopSpec;
+  function?: FlowFunctionSpec;
   outputs?: { name: string; type?: string; desc?: string }[];
   /** Editor-only canvas layout (x/y); stripped before compile. */
   canvas_pos?: { x: number; y: number };
   /** Pin this step node to an agent template / business key id. */
   agent_ref?: string;
   timeout_sec?: number;
+}
+
+export interface FlowFunctionSpec {
+  runtime: string; // js | wasm
+  source?: string; // js handler source (runtime=js)
+  ref?: string; // node-library id (runtime=wasm)
+  handler?: string; // entry function; default "handle"
+  input_schema?: unknown;
+  output_schema?: unknown;
 }
 
 export interface FlowLoopSpec {
@@ -217,6 +227,42 @@ export function generateFlowSpec(token: string | null, description: string) {
   return request<FlowDefinition>(
     "/v1/flows/generate",
     { method: "POST", body: JSON.stringify({ description }) },
+    token,
+  );
+}
+
+// ---- Node library (P3): reusable function-node definitions ----------------
+
+export interface NodeLibraryEntry {
+  id: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  source?: string; // builtin | user
+  function: FlowFunctionSpec;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Lists all node-library entries (builtin seeds + user-defined). */
+export function listNodeLibrary(token: string | null) {
+  return request<NodeLibraryEntry[]>("/v1/node-library", { method: "GET" }, token);
+}
+
+/** Creates or updates a user node-library entry. */
+export function saveNodeLibrary(token: string | null, entry: NodeLibraryEntry) {
+  return request<NodeLibraryEntry>(
+    "/v1/node-library",
+    { method: "POST", body: JSON.stringify(entry) },
+    token,
+  );
+}
+
+/** Deletes a user node-library entry (builtin entries are read-only). */
+export function deleteNodeLibrary(token: string | null, id: string) {
+  return request<{ deleted: string }>(
+    `/v1/node-library/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
     token,
   );
 }

@@ -214,6 +214,13 @@ export function blankFlowNode(id: string, kind: string): FlowNode {
     case "loop":
       base.loop = { body: [], exit_when: {}, max_iterations: 5 };
       break;
+    case "function":
+      base.function = {
+        runtime: "js",
+        handler: "handle",
+        source: "function handle(ctx, event) {\n  return { result: 1 };\n}",
+      };
+      break;
   }
   return base;
 }

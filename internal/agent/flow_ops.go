@@ -62,35 +62,45 @@ type FlowCreateArgs struct {
 
 // CreateFlow stores a new draft version of a flow (validated + compiled at
 // save time so validate/publish are cheap and the artifact is on disk).
+//
+// An empty draft (definition nil or nodes empty) is allowed: the flow object
+// can be created first with only flow_id/version, then filled in later via
+// the flow UI (templates / visual editor / natural language). Such a version
+// has no compiled artifact and cannot be published or run until it is.
 func (a *Agent) CreateFlow(args FlowCreateArgs) (FlowVersionView, error) {
 	if a == nil || a.flows == nil {
 		return FlowVersionView{}, fmt.Errorf("flow store unavailable")
 	}
 	def := args.Def
-	if def == nil {
-		return FlowVersionView{}, fmt.Errorf("missing flow definition")
-	}
 	flowID := strings.TrimSpace(args.FlowID)
-	if flowID == "" {
+	if flowID == "" && def != nil {
 		flowID = strings.TrimSpace(def.FlowID)
 	}
 	if flowID == "" {
 		return FlowVersionView{}, fmt.Errorf("missing flow_id")
 	}
 	version := strings.TrimSpace(args.Version)
-	if version == "" {
+	if version == "" && def != nil {
 		version = strings.TrimSpace(def.Version)
 	}
 	if version == "" {
 		return FlowVersionView{}, fmt.Errorf("missing version")
 	}
-	compiled, err := flow.Compile(def)
-	if err != nil {
-		return FlowVersionView{}, err
+	// Empty drafts (no nodes) are stored without a compiled artifact.
+	var compiled *flow.Compiled
+	if def != nil && len(def.Nodes) > 0 {
+		c, err := flow.Compile(def)
+		if err != nil {
+			return FlowVersionView{}, err
+		}
+		compiled = c
 	}
 	status := strings.TrimSpace(args.Status)
 	if status == "" {
 		status = FlowStatusDraft
+	}
+	if def == nil {
+		def = &flow.Definition{FlowID: flowID, Version: version, Status: status}
 	}
 	now := time.Now().UTC()
 	if err := a.flows.saveVersion(flowID, flowVersionRecord{
@@ -181,6 +191,11 @@ func (a *Agent) PublishFlow(flowID, version string) (FlowVersionView, error) {
 	}
 	if rec.Status != FlowStatusDraft && rec.Status != FlowStatusGray {
 		return FlowVersionView{}, fmt.Errorf("version %s status %q cannot be published", version, rec.Status)
+	}
+	// An empty draft (no compiled artifact) cannot be published: it has no
+	// runnable definition yet.
+	if rec.Compiled == nil {
+		return FlowVersionView{}, fmt.Errorf("version %s has no runnable definition (empty flow): fill in nodes first", version)
 	}
 	rec.Status = FlowStatusPublished
 	rec.UpdatedAt = time.Now().UTC()

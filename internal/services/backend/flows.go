@@ -74,6 +74,17 @@ func (s *Service) ValidateFlow(def *flow.Definition) (string, error) {
 	return a.ValidateFlow(def)
 }
 
+// GenerateFlowSpec drafts a Flow Spec v1 definition from a natural-language
+// business description via the LLM (P2.5). The result is validated but not
+// saved; the caller decides whether to persist it as a new version.
+func (s *Service) GenerateFlowSpec(ctx context.Context, description string) (*flow.Definition, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return nil, err
+	}
+	return a.GenerateFlowSpec(ctx, description)
+}
+
 // PublishFlow promotes a draft/gray version to published.
 func (s *Service) PublishFlow(flowID, version string) (agent.FlowVersionView, error) {
 	a, err := s.flowAgent()

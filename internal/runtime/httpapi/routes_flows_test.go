@@ -13,6 +13,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/flow"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
@@ -25,6 +26,18 @@ func newFlowsTestServer(t *testing.T) *httptest.Server {
 	caller := &stubCaller{responses: []protocol.Response{
 		{Content: []protocol.Block{protocol.TextBlock("done")}},
 	}}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
+	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// newFlowsTestServerWithCaller is newFlowsTestServer with a custom LLM caller
+// (used to drive the natural-language flow generation endpoint).
+func newFlowsTestServerWithCaller(t *testing.T, caller conversation.Caller) *httptest.Server {
+	t.Helper()
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
 	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
 	server := httptest.NewServer(NewHandler(manager, service, nil, nil, nil, nil, nil))
 	t.Cleanup(server.Close)
@@ -332,9 +345,97 @@ func TestFlowsRunEventsSSE(t *testing.T) {
 	}
 }
 
-// TestFlowsRunEventsPoll verifies the ?poll=1 snapshot mode returns the whole
-// event log as plain JSON — the data source for the FlowGram canvas run-state
-// highlight (P2.4).
+// TestFlowsGenerateEndpoint verifies POST /v1/flows/generate drafts a Flow
+// Spec from a natural-language description via the LLM and returns it without
+// saving (P2.5).
+func TestFlowsGenerateEndpoint(t *testing.T) {
+	flowJSON := `{"flow_id": "fl_gen", "version": "1", "status": "draft",
+	  "nodes": [
+	    {"id": "classify", "kind": "step", "prompt": "classify the request"},
+	    {"id": "decide", "kind": "decision", "prompt": "auto?",
+	      "decision": {"decision_type": "choice", "choices": [{"id": "auto"}, {"id": "manual"}]}},
+	    {"id": "br", "kind": "branch",
+	      "branch": {"cases": [{"name": "auto", "to": "done", "condition": {"choice": "auto"}}], "default_to": "done"}},
+	    {"id": "done", "kind": "step", "prompt": "finalize"}
+	  ],
+	  "edges": [
+	    {"id": "e1", "from": "classify", "to": "decide", "edge_type": "data_dependency"},
+	    {"id": "e2", "from": "decide", "to": "br", "edge_type": "data_dependency"}
+	  ]
+	}`
+	caller := &stubCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.TextBlock(flowJSON)}},
+	}}
+	server := newFlowsTestServerWithCaller(t, caller)
+
+	resp, raw := doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows/generate", map[string]any{
+		"description": "退款流程：自动退款或转人工",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("generate status = %d, body: %s", resp.StatusCode, raw)
+	}
+	var def flow.Definition
+	if err := json.Unmarshal(raw, &def); err != nil {
+		t.Fatalf("decode definition: %v", err)
+	}
+	if def.FlowID != "fl_gen" || len(def.Nodes) != 4 {
+		t.Fatalf("unexpected generated definition: %+v", def)
+	}
+
+	// The generated draft is NOT saved: the flow list stays empty.
+	listResp, listRaw := doFlowJSON(t, http.MethodGet, server.URL+"/v1/flows", nil)
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d", listResp.StatusCode)
+	}
+	var items []agent.FlowSummaryView
+	if err := json.Unmarshal(listRaw, &items); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected no flows saved after generate, got %+v", items)
+	}
+}
+
+// TestFlowsCreateEmptyDraft verifies creating a flow with only basic identity
+// (no definition) succeeds and the flow shows up in the list (P2.5 create
+// object first, fill in content later).
+func TestFlowsCreateEmptyDraft(t *testing.T) {
+	server := newFlowsTestServer(t)
+
+	resp, raw := doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows", map[string]any{
+		"flow_id": "fl_empty_http",
+		"version": "1",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create empty status = %d, body: %s", resp.StatusCode, raw)
+	}
+	var view agent.FlowVersionView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	if view.Nodes != 0 {
+		t.Fatalf("expected 0 nodes, got %d", view.Nodes)
+	}
+
+	listResp, listRaw := doFlowJSON(t, http.MethodGet, server.URL+"/v1/flows", nil)
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d", listResp.StatusCode)
+	}
+	var items []agent.FlowSummaryView
+	if err := json.Unmarshal(listRaw, &items); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	found := false
+	for _, it := range items {
+		if it.FlowID == "fl_empty_http" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected fl_empty_http in flow list, got %+v", items)
+	}
+}
+
 func TestFlowsRunEventsPoll(t *testing.T) {
 	server := newFlowsTestServer(t)
 

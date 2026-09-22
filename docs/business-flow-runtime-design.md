@@ -1014,4 +1014,27 @@ P2.4 = F3 FlowGram 画布最小落地：**FlowsPage 详情 Drawer 新增「画�
 
 **P2.4 明确不做（后续）**：画布内编辑（设计态仅只读渲染，编辑仍走 JSON Tab + validate/publish）、FlowGram JSON 双向 adapter（画布 JSON ⇄ Flow Spec 的直接转换）、变量作用域链面板（§9 变量面板）、decision provider 下拉（复用 Settings providers 过滤）、SSE 实时增量高亮（当前为 poll 快照，运行态刷新可手动选 run 重拉）。
 
+## 21. 创建/编辑 UX 改造（2026-09-22 落地）
+
+P2.5 = **创建流程不再要求手写 JSON**：创建先建 flow 对象（只填基本信息），内容按需在 flow 详情界面用**模板库 / 可视化编辑 / 自然语言**三种方式填充。
+
+**1. 后端（P2.5）**
+- `CreateFlow` 支持空草稿：definition 为 nil 或 nodes 为空时跳过 compile，直接存为 draft（Compiled=nil）；`PublishFlow` 校验必须有编译产物（"no runnable definition"），`CreateFlowRun` 对无编译产物已有拒绝。TestFlowEmptyDraft 通过。
+- 新增 `GenerateFlowSpec(ctx, description)`（flow_plan.go）：LLM 把自然语言业务描述转换为 Flow Spec v1 定义（JSON 对象，容忍 markdown fence 与前后散文），结果过 `flow.Validate`（fail-fast）但不保存。
+- 新增 `POST /v1/flows/generate`（body: {description}）→ 返回草稿 definition（不落库）；创建/更新仍走 `POST /v1/flows`。
+
+**2. 前端（ui/web）**
+- 创建表单：JSON 必填移除。只填 flow_id/version/name/description（可折叠模板选择）即可创建空 flow；definition JSON 降为可选高级项（优先级：显式 JSON > 模板 > 空 flow）。
+- `flowTemplates.ts`：预置 4 个模板（人工审批流 / 客服工单处理 / 订单售后 / 决策分流），prompt 不含 `{{...}}` 引用以直接通过 P2.3 编译期变量校验。
+- 详情 Drawer 新增 4 个 Tab：
+  - 「模板库」（TemplateLibrary.tsx）：选模板 → 输入目标版本 → 应用为新版本（createFlow）；
+  - 「可视化编辑」（FlowVisualEditor.tsx）：节点/边两张表格增删改（kind 下拉、from/to 节点下拉、edge_type 下拉），保存自动组装 JSON 为新版本；
+  - 「自然语言」（NaturalLanguageTab.tsx）：输入一句话描述 → 调 /v1/flows/generate → 画布预览草稿 → 确认保存为新版本；
+  - 「画布」（既有）：只读渲染 + 运行态事件高亮。
+- i18n zh/en 补齐 createHint/template/templates/editor/naturalLanguage 组键。
+
+**验证**：`go test ./internal/agent/ -run 'TestParseFlowSpec|TestGenerateFlowSpec|TestFlowEmptyDraft'` 9 测试全绿（plain/fence/garbage 解析容错 + 合法/非法/空草稿生成）；`go test ./internal/runtime/httpapi/ -run 'TestFlowsGenerateEndpoint|TestFlowsCreateEmptyDraft'` 2 测试全绿（生成端点不落库 + 空草稿创建上列表）；flow/httpapi 全量回归通过；`pnpm tsc -b` + `pnpm vite build` 通过。
+
+**P2.5 明确不做（后续）**：decision/human/branch 节点表单级深度编辑（当前可视化编辑只覆盖通用字段 id/kind/title/prompt/edge，专有字段走模板或 JSON）、生成草稿的多轮迭代修改、模板市场的用户自定义模板。
+
 

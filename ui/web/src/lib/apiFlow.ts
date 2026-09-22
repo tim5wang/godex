@@ -25,6 +25,18 @@ export interface FlowNode {
   retry?: FlowRetryPolicy;
   decision?: FlowDecisionSpec;
   branch?: FlowBranchSpec;
+  human?: FlowHumanSpec;
+  outputs?: { name: string; type?: string; desc?: string }[];
+}
+
+export interface FlowHumanSpec {
+  queue: string;
+  assignee_policy?: string;
+  form?: unknown;
+  prompt?: string;
+  timeout_ms?: number;
+  on_timeout?: string;
+  result_var?: string;
 }
 
 export interface FlowRetryPolicy {
@@ -118,7 +130,7 @@ export function createFlow(token: string | null, args: {
   flow_id?: string;
   version?: string;
   status?: string;
-  definition: FlowDefinition;
+  definition?: FlowDefinition;
 }) {
   return request<FlowVersionView>("/v1/flows", { method: "POST", body: JSON.stringify(args) }, token);
 }
@@ -181,6 +193,17 @@ export function flowRunEvents(token: string | null, runId: string, flowId: strin
   return request<FlowRunEvent[]>(
     `/v1/flow-runs/${encodeURIComponent(runId)}/events?flow_id=${encodeURIComponent(flowId)}&poll=1`,
     { method: "GET" },
+    token,
+  );
+}
+
+/** Drafts a Flow Spec v1 definition from a natural-language description via
+ * the LLM (P2.5). The result is validated but NOT saved; the caller previews
+ * and persists it through createFlow. */
+export function generateFlowSpec(token: string | null, description: string) {
+  return request<FlowDefinition>(
+    "/v1/flows/generate",
+    { method: "POST", body: JSON.stringify({ description }) },
     token,
   );
 }

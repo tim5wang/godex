@@ -42,17 +42,24 @@ import {
   type FlowVersionView,
 } from "../../lib/api";
 import { FlowGramCanvas } from "./FlowGramCanvas";
+import { FLOW_TEMPLATES, flowTemplateById } from "./flowTemplates";
+import { TemplateLibrary } from "./TemplateLibrary";
+import { FlowVisualEditor } from "./FlowVisualEditor";
+import { NaturalLanguageTab } from "./NaturalLanguageTab";
 import { useSettingsStore } from "../../store/settings";
 
 const { Title, Text, Paragraph } = Typography;
 
-/** The JSON editor form: nodes/edges are authored as a Flow Definition. */
+/** Create form: basic identity only; the definition is optional (a blank
+ * flow can be created first, then filled in from the detail view via
+ * templates / visual editor / natural language). */
 type FlowFormValues = {
   flow_id: string;
   version: string;
   name?: string;
   description?: string;
-  definition: string; // JSON text
+  template?: string;
+  definition?: string; // optional JSON text (advanced)
 };
 
 export function FlowsPage() {
@@ -79,7 +86,16 @@ export function FlowsPage() {
 
   const createMutation = useMutation({
     mutationFn: async (values: FlowFormValues) => {
-      const def = JSON.parse(values.definition) as FlowDefinition;
+      // Priority: explicit JSON > template > blank flow.
+      let def: FlowDefinition | undefined;
+      if (values.definition?.trim()) {
+        def = JSON.parse(values.definition) as FlowDefinition;
+      } else if (values.template) {
+        const tpl = flowTemplateById(values.template);
+        if (tpl) {
+          def = tpl.build(values.flow_id, values.version);
+        }
+      }
       return createFlow(token, {
         flow_id: values.flow_id,
         version: values.version,
@@ -214,6 +230,9 @@ export function FlowsPage() {
         destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={(v) => createMutation.mutate(v)}>
+          <Paragraph type="secondary" style={{ fontSize: 12 }}>
+            {t("flows.createHint")}
+          </Paragraph>
           <Form.Item name="flow_id" label={t("flows.id")} rules={[{ required: true }]}>
             <Input placeholder="fl_order_recovery" />
           </Form.Item>
@@ -226,11 +245,18 @@ export function FlowsPage() {
           <Form.Item name="description" label={t("flows.description")}>
             <Input.TextArea rows={2} />
           </Form.Item>
-          <Form.Item name="definition" label={t("flows.definitionJson")} rules={[{ required: true }]}>
+          <Form.Item name="template" label={t("flows.template")}>
+            <Select
+              allowClear
+              placeholder={t("flows.templatePlaceholder")}
+              options={FLOW_TEMPLATES.map((tpl) => ({ value: tpl.id, label: `${tpl.name} — ${tpl.description}` }))}
+            />
+          </Form.Item>
+          <Form.Item name="definition" label={t("flows.definitionOptional")}>
             <Input.TextArea
-              rows={18}
+              rows={8}
               style={{ fontFamily: "monospace", fontSize: 12 }}
-              placeholder={'{\n  "flow_id": "fl_...",\n  "nodes": [...],\n  "edges": [...]\n}'}
+              placeholder={'{\n  "flow_id": "fl_...",\n  "nodes": [...],\n  "edges": [...]\n}  （可选）'}
             />
           </Form.Item>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={createMutation.isPending}>
@@ -389,6 +415,45 @@ function FlowDetailDrawer(props: {
                     ),
                   },
                 ]}
+              />
+            ),
+          },
+          {
+            key: "naturallang",
+            label: t("flows.naturalLanguage"),
+            children: (
+              <NaturalLanguageTab
+                flowId={flow.flow_id}
+                token={token}
+                t={t}
+                versions={versions}
+                onApplied={onRefresh}
+              />
+            ),
+          },
+          {
+            key: "editor",
+            label: t("flows.editor"),
+            children: (
+              <FlowVisualEditor
+                flowId={flow.flow_id}
+                token={token}
+                t={t}
+                versions={versions}
+                onApplied={onRefresh}
+              />
+            ),
+          },
+          {
+            key: "templates",
+            label: t("flows.templates"),
+            children: (
+              <TemplateLibrary
+                flowId={flow.flow_id}
+                token={token}
+                t={t}
+                versions={versions}
+                onApplied={onRefresh}
               />
             ),
           },

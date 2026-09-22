@@ -19,6 +19,7 @@ type flowService interface {
 	GetFlowVersion(flowID, version string) (agent.FlowVersionView, error)
 	CreateFlow(args agent.FlowCreateArgs) (agent.FlowVersionView, error)
 	ValidateFlow(def *flow.Definition) (string, error)
+	GenerateFlowSpec(ctx context.Context, description string) (*flow.Definition, error)
 	PublishFlow(flowID, version string) (agent.FlowVersionView, error)
 	CreateFlowRun(ctx context.Context, flowID, version string, inputs map[string]any) (agent.FlowRunView, error)
 	StartFlowRun(ctx context.Context, flowID, runID string) (agent.FlowRunView, error)
@@ -46,6 +47,25 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 			return
 		}
 		writeJSON(w, http.StatusOK, items)
+	})))
+	// POST /v1/flows/generate — draft a Flow Spec v1 definition from a
+	// natural-language business description via the LLM (P2.5). The result is
+	// validated but NOT saved; the caller previews and persists it as a new
+	// version through POST /v1/flows.
+	mux.Handle("POST /v1/flows/generate", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Description string `json:"description"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		def, err := service.GenerateFlowSpec(r.Context(), req.Description)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, def)
 	})))
 	// POST /v1/flows — create/update a draft version.
 	mux.Handle("POST /v1/flows", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

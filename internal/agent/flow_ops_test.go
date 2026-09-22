@@ -104,6 +104,57 @@ func TestFlowStoreRejectsInvalidDefinition(t *testing.T) {
 	}
 }
 
+// TestFlowEmptyDraft verifies the "create the flow object first, fill in
+// content later" flow: an empty definition (no nodes) is stored as a draft,
+// cannot be published (no runnable definition), and cannot be run.
+func TestFlowEmptyDraft(t *testing.T) {
+	a := newTestAgent(t, 4096)
+
+	// 1. Create with only basic identity (no definition at all).
+	v, err := a.CreateFlow(FlowCreateArgs{FlowID: "fl_empty", Version: "1"})
+	if err != nil {
+		t.Fatalf("create empty flow: %v", err)
+	}
+	if v.Status != FlowStatusDraft || v.Nodes != 0 || v.Digest != "" {
+		t.Fatalf("unexpected empty draft view: %+v", v)
+	}
+
+	// 2. Create with an explicit empty definition (frontend sends this after
+	// the user fills only the basic form fields).
+	v2, err := a.CreateFlow(FlowCreateArgs{FlowID: "fl_empty", Version: "2", Def: &flow.Definition{FlowID: "fl_empty", Version: "2", Status: "draft"}})
+	if err != nil {
+		t.Fatalf("create empty def flow: %v", err)
+	}
+	if v2.Nodes != 0 {
+		t.Fatalf("expected empty nodes, got %d", v2.Nodes)
+	}
+
+	// 3. Publishing an empty draft must be rejected (nothing runnable yet).
+	if _, err := a.PublishFlow("fl_empty", "1"); err == nil || !strings.Contains(err.Error(), "no runnable definition") {
+		t.Fatalf("expected publish rejection for empty flow, got %v", err)
+	}
+
+	// 4. Running an empty draft must be rejected too.
+	if _, err := a.CreateFlowRun(context.Background(), "fl_empty", "1", nil); err == nil {
+		t.Fatal("expected run rejection for empty flow")
+	}
+
+	// 5. The flow object still shows up in the list (creation succeeded).
+	summaries, err := a.ListFlows()
+	if err != nil {
+		t.Fatalf("list flows: %v", err)
+	}
+	found := false
+	for _, s := range summaries {
+		if s.FlowID == "fl_empty" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected fl_empty in flow list, got %+v", summaries)
+	}
+}
+
 func TestFlowRunLifecycle(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()

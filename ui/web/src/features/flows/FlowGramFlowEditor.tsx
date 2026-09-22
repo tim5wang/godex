@@ -10,9 +10,15 @@ import {
 import "@flowgram.ai/free-layout-editor/index.css";
 import { Alert, Button, Space, Tag, Typography } from "antd";
 import { ApartmentOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
-import { createFlow, type FlowDefinition, type FlowVersionView } from "../../lib/api";
+import { createFlow, type FlowDefinition, type FlowRunEvent, type FlowVersionView } from "../../lib/api";
 import { flowSpecToWorkflow, workflowToFlowSpec, blankFlowNode } from "./flowgramAdapter";
-import { FLOWGRAM_NODE_REGISTRIES, FlowGramBaseNode, KIND_COLOR } from "./flowgramNodes";
+import {
+  FLOWGRAM_NODE_REGISTRIES,
+  FlowGramBaseNode,
+  KIND_COLOR,
+  RunStatusProvider,
+} from "./flowgramNodes";
+import { statusFromEvents } from "./FlowGramCanvas";
 
 const { Text, Paragraph } = Typography;
 
@@ -41,6 +47,8 @@ interface FlowGramFlowEditorProps {
   onSaveError: (err: unknown) => void;
   /** External definition pushed from the JSON editor; stamp forces a remount. */
   externalDef?: { def: FlowDefinition; stamp: number };
+  /** Run-time events for canvas highlight (debug mode); empty = no highlight. */
+  runEvents?: FlowRunEvent[];
   ref?: Ref<FlowGramFlowEditorHandle>;
 }
 
@@ -52,6 +60,7 @@ export function FlowGramFlowEditor({
   onSaved,
   onSaveError,
   externalDef,
+  runEvents,
   ref,
 }: FlowGramFlowEditorProps) {
   const [saving, setSaving] = useState(false);
@@ -239,6 +248,15 @@ export function FlowGramFlowEditor({
     [initialWorkflow, hasStoredLayout],
   );
 
+  // Per-node run status map derived from the debug run's event log; fed to
+  // the nodes via RunStatusProvider so borders highlight execution state.
+  const runStatusMap = useMemo(() => {
+    const full = statusFromEvents(runEvents ?? []);
+    const out = new Map<string, string>();
+    full.forEach((v, k) => out.set(k, v.status));
+    return out;
+  }, [runEvents]);
+
   const nodeCount = initialWorkflow.nodes.length;
 
   return (
@@ -289,7 +307,9 @@ export function FlowGramFlowEditor({
         }}
       >
         <FreeLayoutEditorProvider key={canvasKey} {...editorProps}>
-          <EditorRenderer className="flowgram-editor" />
+          <RunStatusProvider statuses={runStatusMap}>
+            <EditorRenderer className="flowgram-editor" />
+          </RunStatusProvider>
         </FreeLayoutEditorProvider>
       </div>
 

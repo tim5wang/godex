@@ -32,7 +32,7 @@ const STATUS_CLASS: Record<string, string> = {
 const STATUS_CLASS_FALLBACK = "gx-unknown";
 
 // Events that imply a node entered the given run-time state.
-const EVENT_TO_STATUS: Record<string, string> = {
+export const EVENT_TO_STATUS: Record<string, string> = {
   node_started: "running",
   node_completed: "completed",
   node_failed: "failed",
@@ -79,7 +79,7 @@ function nodeTitle(def: FlowDefinition, id: string): string {
 }
 
 /** Derive per-node run status + decision confidence from the event log. */
-function statusFromEvents(events: FlowRunEvent[]): Map<string, { status: string; confidence?: number; choice?: string }> {
+export function statusFromEvents(events: FlowRunEvent[]): Map<string, { status: string; confidence?: number; choice?: string }> {
   const map = new Map<string, { status: string; confidence?: number; choice?: string }>();
   for (const ev of events) {
     if (!ev.node_id) continue;

@@ -39,6 +39,40 @@ export const KIND_COLOR: Record<string, string> = {
   loop: "#52c41a",
 };
 
+// ---- run-time status highlight -------------------------------------------
+// The editor overlays per-node run status (derived from flow-run events) on
+// the canvas: FlowGramFlowEditor renders <RunStatusContext.Provider value={map}>
+// around the editor; FlowGramBaseNode colors its border accordingly.
+
+export const RUN_STATUS_BORDER: Record<string, string> = {
+  pending: "rgba(6,7,9,0.15)",
+  running: "#1677ff",
+  completed: "#52c41a",
+  failed: "#ff4d4f",
+  waiting_human: "#fa8c16",
+};
+
+const RunStatusContext = React.createContext<
+  Map<string, string> | undefined
+>(undefined);
+
+export function RunStatusProvider({
+  statuses,
+  children,
+}: {
+  statuses?: Map<string, string>;
+  children: React.ReactNode;
+}) {
+  return (
+    <RunStatusContext.Provider value={statuses}>{children}</RunStatusContext.Provider>
+  );
+}
+
+export function useRunStatus(nodeId: string): string | undefined {
+  const map = React.useContext(RunStatusContext);
+  return map?.get(nodeId);
+}
+
 const KIND_LABEL: Record<string, string> = {
   step: "step",
   llm: "llm",
@@ -368,6 +402,8 @@ export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
     readonly,
   } = useNodeRender(node);
   const dragService = useService(WorkflowDragService);
+  const runStatus = useRunStatus(node.id);
+  const statusBorder = runStatus ? RUN_STATUS_BORDER[runStatus] : undefined;
 
   // Click an OUTPUT port to start drawing a connection line; dropping on
   // another node's input port is completed natively by the core drag service.
@@ -384,7 +420,7 @@ export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
     <>
       <div
         ref={nodeRef}
-        className={`flowgram-node${selected ? " selected" : ""}`}
+        className={`flowgram-node${selected ? " selected" : ""}${runStatus ? ` run-${runStatus}` : ""}`}
         draggable
         onDragStart={(e) => startDrag(e)}
         onTouchStart={(e) => startDrag(e as unknown as React.MouseEvent)}
@@ -393,10 +429,17 @@ export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
         onBlur={onBlur}
         data-node-selected={String(selected)}
         style={{
-          border: selected ? "1px solid #4d53e8" : "1px solid rgba(6,7,9,0.15)",
+          border: selected
+            ? "1px solid #4d53e8"
+            : statusBorder
+              ? `1px solid ${statusBorder}`
+              : "1px solid rgba(6,7,9,0.15)",
           borderRadius: 8,
           background: "#fff",
-          boxShadow: "0 2px 6px 0 rgba(0,0,0,0.04), 0 4px 12px 0 rgba(0,0,0,0.02)",
+          boxShadow:
+            runStatus === "running"
+              ? "0 0 0 3px rgba(22,119,255,0.18)"
+              : "0 2px 6px 0 rgba(0,0,0,0.04), 0 4px 12px 0 rgba(0,0,0,0.02)",
           overflow: "hidden",
           fontSize: 12,
           cursor: "grab",

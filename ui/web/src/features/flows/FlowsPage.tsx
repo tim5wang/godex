@@ -17,6 +17,8 @@ import {
   Typography,
 } from "antd";
 import {
+  ApiOutlined,
+  BugOutlined,
   DownloadOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -32,11 +34,13 @@ import {
   createFlow,
   createFlowRun,
   flowRunEvents,
+  getFlowRun,
   listFlowRuns,
   listFlowVersions,
   listFlows,
   publishFlow,
   type FlowDefinition,
+  type FlowRunEvent,
   type FlowRunView,
   type FlowSummaryView,
   type FlowVersionView,
@@ -345,6 +349,73 @@ function FlowCanvasMain(props: {
     return versions.find((v) => v.version === pick)?.definition;
   }, [versions, editorVersion]);
 
+  // ---- debug mode ---------------------------------------------------------
+  // The canvas is a debugger: pick a version + test inputs, start a run, and
+  // the editor highlights per-node status from the polled event log. Production
+  // traffic goes through POST /v1/gateway/{route} (see DetailDrawer).
+  const [debugMode, setDebugMode] = useState(false);
+  const [debugVersion, setDebugVersion] = useState<string>();
+  const [debugInputsText, setDebugInputsText] = useState("{}");
+  const [debugRunId, setDebugRunId] = useState<string>();
+  const [debugStarted, setDebugStarted] = useState(false);
+
+  const debugMutation = useMutation({
+    mutationFn: ({ version, inputs }: { version: string; inputs: Record<string, unknown> }) =>
+      createFlowRun(token, flow.flow_id, { version, inputs }),
+    onSuccess: (run) => {
+      setDebugRunId(run.run_id);
+      setDebugStarted(true);
+      message.success(`${t("flows.debugStarted")} ${run.run_id}`);
+    },
+    onError: (err) => showError(message, err, t("flows.runFailed")),
+  });
+
+  // Poll the debug run's event log while it is active so the canvas highlights
+  // nodes live (borders via RunStatusProvider inside FlowGramFlowEditor).
+  const debugEventsQuery = useQuery({
+    queryKey: ["flow-run-events", flow.flow_id, debugRunId],
+    queryFn: () =>
+      debugRunId ? flowRunEvents(token, debugRunId, flow.flow_id) : Promise.resolve([]),
+    enabled: Boolean(debugRunId),
+    refetchInterval: debugStarted ? 1500 : false,
+  });
+
+  const debugRunQuery = useQuery({
+    queryKey: ["flow-run", flow.flow_id, debugRunId],
+    queryFn: () =>
+      debugRunId
+        ? getFlowRun(token, debugRunId, flow.flow_id)
+        : Promise.reject(new Error("no run")),
+    enabled: Boolean(debugRunId),
+    refetchInterval: debugStarted ? 1500 : false,
+  });
+
+  const startDebug = () => {
+    const version = debugVersion ?? editorDef?.version;
+    if (!version) {
+      message.warning(t("flows.noDefinition"));
+      return;
+    }
+    let inputs: Record<string, unknown> = {};
+    try {
+      inputs = debugInputsText.trim() ? (JSON.parse(debugInputsText) as Record<string, unknown>) : {};
+    } catch (err) {
+      message.error(
+        `${t("flows.jsonInvalid")}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    debugMutation.mutate({ version, inputs });
+  };
+
+  const clearDebug = () => {
+    setDebugRunId(undefined);
+    setDebugStarted(false);
+  };
+
+  const debugRun = debugRunQuery.data;
+  const debugStatus = debugRun?.status ?? (debugStarted ? "running" : undefined);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%" }}>
       <Space style={{ justifyContent: "space-between", width: "100%" }} align="center" wrap>
@@ -371,8 +442,14 @@ function FlowCanvasMain(props: {
               {t("flows.publish")}
             </Button>
           </Popconfirm>
-          <Button size="small" icon={<PlayCircleOutlined />} disabled={!editorDef} onClick={() => editorDef && onRun(editorDef.version)}>
-            {t("flows.run")}
+          <Button
+            size="small"
+            icon={<BugOutlined />}
+            type={debugMode ? "primary" : "default"}
+            disabled={!editorDef}
+            onClick={() => setDebugMode((v) => !v)}
+          >
+            {t("flows.debug")}
           </Button>
           <Button size="small" onClick={onOpenDetail}>
             {t("flows.detail")}
@@ -388,6 +465,7 @@ function FlowCanvasMain(props: {
           t={t}
           versions={versions}
           externalDef={externalDef}
+          runEvents={debugEventsQuery.data}
           onSaved={() => {
             message.success(t("flows.templateApplied"));
             onExternalDefConsumed();
@@ -396,6 +474,64 @@ function FlowCanvasMain(props: {
           onSaveError={(err) => showError(message, err, t("flows.saveFailed"))}
         />
       </div>
+
+      {debugMode && (
+        <div
+          style={{
+            border: "1px solid #e5e5e5",
+            borderRadius: 8,
+            padding: 10,
+            background: "#fafafa",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          <Space wrap align="center">
+            <Text strong style={{ fontSize: 12 }}>
+              {t("flows.debugPanel")}
+            </Text>
+            <Select
+              size="small"
+              style={{ width: 160 }}
+              placeholder={t("flows.version")}
+              value={debugVersion}
+              onChange={setDebugVersion}
+              options={versions.map((v) => ({ value: v.version, label: `${v.version} (${v.status})` }))}
+            />
+            <Input.TextArea
+              size="small"
+              style={{ width: 260, fontFamily: "monospace", fontSize: 11 }}
+              rows={1}
+              placeholder='{"task": "..."}'
+              value={debugInputsText}
+              onChange={(e) => setDebugInputsText(e.target.value)}
+            />
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              loading={debugMutation.isPending}
+              onClick={startDebug}
+            >
+              {t("flows.debugStart")}
+            </Button>
+            {debugRunId && (
+              <>
+                <Tag color={debugStatus === "completed" ? "green" : debugStatus === "error" ? "red" : "processing"}>
+                  {debugRunId.slice(0, 12)}… {debugStatus ?? "running"}
+                </Tag>
+                <Button size="small" onClick={clearDebug}>
+                  {t("flows.debugClear")}
+                </Button>
+              </>
+            )}
+          </Space>
+          <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 0 }}>
+            {t("flows.debugHint")}
+          </Paragraph>
+        </div>
+      )}
     </div>
   );
 }
@@ -627,6 +763,13 @@ function FlowDetailDrawer(props: {
               />
             ),
           },
+          {
+            key: "production",
+            label: t("flows.production"),
+            children: (
+              <ProductionGatewayTab flow={flow} t={t} versions={versions} />
+            ),
+          },
         ]}
       />
       <Paragraph type="secondary" style={{ marginTop: 16, fontSize: 12 }}>
@@ -718,6 +861,47 @@ function DefinitionJsonTab(props: {
           {t("flows.applyToCanvas")}
         </Button>
       </Space>
+    </div>
+  );
+}
+
+/**
+ * Production gateway tab: shows how external clients call this flow through
+ * POST /v1/gateway/{route} (biz-key auth) instead of running it from the
+ * canvas. The canvas is a debugger; production traffic goes through the API.
+ */
+function ProductionGatewayTab(props: {
+  flow: FlowSummaryView;
+  t: (k: string, v?: Record<string, string | number>) => string;
+  versions: FlowVersionView[];
+}) {
+  const { flow, t, versions } = props;
+  const published = versions.find((v) => v.status === "published")?.version;
+  const curl = `curl -X POST http://127.0.0.1:8088/v1/gateway/${encodeURIComponent(flow.flow_id)} \\
+  -H "Authorization: Bearer <biz_key>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"inputs": {"task": "..."}, "wait_ms": 60000}'`;
+  return (
+    <div>
+      <Paragraph type="secondary" style={{ fontSize: 12 }}>
+        {t("flows.productionHint")}
+      </Paragraph>
+      <pre
+        style={{
+          background: "#f5f5f5",
+          padding: 12,
+          borderRadius: 6,
+          fontSize: 11,
+          overflow: "auto",
+        }}
+      >
+        {curl}
+      </pre>
+      <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+        {published
+          ? `${t("flows.productionPublished")} ${published}`
+          : t("flows.productionNoRoute")}
+      </Paragraph>
     </div>
   );
 }

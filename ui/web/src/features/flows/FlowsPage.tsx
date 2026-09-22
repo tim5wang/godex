@@ -955,6 +955,15 @@ function FlowDetailDrawer(props: {
             ),
           },
           {
+            key: "variables",
+            label: t("flows.variables"),
+            children: canvasDef ? (
+              <VariableScopePanel def={canvasDef} t={t} />
+            ) : (
+              <Empty description={t("flows.canvasEmpty")} />
+            ),
+          },
+          {
             key: "json",
             label: t("flows.definition"),
             children: (
@@ -981,6 +990,109 @@ function FlowDetailDrawer(props: {
         {t("flows.flowgramHint")}
       </Paragraph>
     </Drawer>
+  );
+}
+
+/**
+ * VariableScopePanel — renders the Flow Spec variable scope chain (§9 变量
+ * 面板): flow-level inputs/outputs + each node's typed outputs, with the
+ * nodes that reference each variable ({{inputs.<name>}} /
+ * {{nodes.<id>.outputs.<field>}} in prompts and edge conditions).
+ */
+function VariableScopePanel(props: {
+  def: FlowDefinition;
+  t: (k: string, v?: Record<string, string | number>) => string;
+}) {
+  const { def, t } = props;
+  const nodes = def.nodes ?? [];
+  const edges = def.edges ?? [];
+
+  // Scan prompt text for {{...}} variable references.
+  const refsByVar = new Map<string, string[]>();
+  const addRef = (key: string, from: string) => {
+    const list = refsByVar.get(key) ?? [];
+    if (!list.includes(from)) list.push(from);
+    refsByVar.set(key, list);
+  };
+  const scanText = (text: string | undefined, from: string) => {
+    if (!text) return;
+    const re = /\{\{\s*([^}]+?)\s*\}\}/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      addRef(m[1].trim(), from);
+    }
+  };
+  for (const n of nodes) {
+    scanText(n.prompt, n.id);
+    if (n.branch?.cases) {
+      for (const c of n.branch.cases) scanText(c.condition ? JSON.stringify(c.condition) : undefined, n.id);
+    }
+  }
+  for (const e of edges) {
+    if (e.when) scanText(JSON.stringify(e.when), `${e.from}→${e.to}`);
+  }
+
+  const varRow = (name: string, type: string | undefined, desc: string | undefined, from: string) => {
+    const key = name;
+    const refs = refsByVar.get(key) ?? [];
+    return (
+      <div key={`${from}:${name}`} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, padding: "2px 0" }}>
+        <Text code style={{ fontSize: 11 }}>{name}</Text>
+        {type && <Tag style={{ fontSize: 10 }}>{type}</Tag>}
+        {desc && <Text type="secondary" style={{ fontSize: 11 }}>{desc}</Text>}
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          {t("flows.varRefs")} {refs.length > 0 ? refs.join(", ") : "—"}
+        </Text>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        <Text strong style={{ fontSize: 12 }}>{t("flows.varFlowInputs")}</Text>
+        <div style={{ marginTop: 4 }}>
+          {(def.inputs ?? []).length === 0 ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
+          ) : (
+            (def.inputs ?? []).map((v) => varRow(v.name, v.type, v.desc, "inputs"))
+          )}
+        </div>
+      </div>
+      <div>
+        <Text strong style={{ fontSize: 12 }}>{t("flows.varFlowOutputs")}</Text>
+        <div style={{ marginTop: 4 }}>
+          {(def.outputs ?? []).length === 0 ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
+          ) : (
+            (def.outputs ?? []).map((v) => varRow(v.name, v.type, v.desc, "outputs"))
+          )}
+        </div>
+      </div>
+      <div>
+        <Text strong style={{ fontSize: 12 }}>{t("flows.varNodeOutputs")}</Text>
+        <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 6 }}>
+          {nodes.length === 0 ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
+          ) : (
+            nodes.map((n) => {
+              const outs = n.outputs ?? [];
+              return (
+                <div key={n.id} style={{ border: "1px solid #f0f0f0", borderRadius: 6, padding: 6 }}>
+                  <Text style={{ fontSize: 11, fontFamily: "monospace" }}>{n.id}</Text>{" "}
+                  <Text type="secondary" style={{ fontSize: 11 }}>({n.kind})</Text>
+                  {outs.length === 0 ? (
+                    <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>—</Text>
+                  ) : (
+                    <div style={{ marginTop: 2 }}>{outs.map((v) => varRow(`nodes.${n.id}.outputs.${v.name}`, v.type, v.desc, n.id))}</div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

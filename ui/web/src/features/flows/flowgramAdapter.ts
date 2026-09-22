@@ -67,18 +67,32 @@ export function workflowToFlowSpec(
   version: string,
   status: string,
 ): FlowDefinition {
+  // Node spec fields live at data top-level (the form engine reads/writes
+  // them there via Field name="title" / getValueIn("decision") etc.).
   const nodes: FlowNode[] = (wf.nodes ?? []).map((n) => {
-    const spec = (n.data?.spec ?? {}) as Partial<FlowNode>;
+    const data = (n.data ?? {}) as Partial<FlowNode> & {
+      kind?: string;
+      title?: string;
+    };
     return {
-      ...spec,
       id: n.id,
-      kind: (n.data?.kind as string) ?? n.type ?? "step",
-      title: (n.data?.title as string) ?? spec.title,
-      prompt: spec.prompt,
+      kind: data.kind ?? n.type ?? "step",
+      title: data.title ?? "",
+      prompt: data.prompt,
+      decision: data.decision,
+      human: data.human,
+      branch: data.branch,
+      loop: data.loop,
+      retry: data.retry,
+      write_scope: data.write_scope,
+      agent_ref: data.agent_ref,
+      timeout_sec: data.timeout_sec,
+      outputs: data.outputs,
       canvas_pos: n.meta?.position,
     } as FlowNode;
   });
 
+  // Edge spec fields live at edge.data.spec (source/target are native).
   const edges: FlowEdge[] = (wf.edges ?? []).map((e) => {
     const spec = (e.data?.spec ?? {}) as Partial<FlowEdge>;
     return {

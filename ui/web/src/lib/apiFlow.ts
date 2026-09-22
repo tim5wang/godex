@@ -30,6 +30,9 @@ export interface FlowNode {
   outputs?: { name: string; type?: string; desc?: string }[];
   /** Editor-only canvas layout (x/y); stripped before compile. */
   canvas_pos?: { x: number; y: number };
+  /** Pin this step node to an agent template / business key id. */
+  agent_ref?: string;
+  timeout_sec?: number;
 }
 
 export interface FlowLoopSpec {

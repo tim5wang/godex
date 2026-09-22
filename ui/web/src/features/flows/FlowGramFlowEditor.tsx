@@ -9,7 +9,7 @@ import {
 } from "@flowgram.ai/free-layout-editor";
 import "@flowgram.ai/free-layout-editor/index.css";
 import { Alert, Button, Space, Tag, Typography } from "antd";
-import { PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
 import { createFlow, type FlowDefinition, type FlowVersionView } from "../../lib/api";
 import { flowSpecToWorkflow, workflowToFlowSpec, blankFlowNode } from "./flowgramAdapter";
 import { FLOWGRAM_NODE_REGISTRIES, FlowGramBaseNode, KIND_COLOR } from "./flowgramNodes";
@@ -46,7 +46,13 @@ export function FlowGramFlowEditor({
 }: FlowGramFlowEditorProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [layouting, setLayouting] = useState(false);
   const documentRef = useRef<FreeLayoutPluginContext["document"] | null>(null);
+  const toolsRef = useRef<FreeLayoutPluginContext["tools"] | null>(null);
+  // Run the automatic topology layout at most once per editor mount, so
+  // later onAllLayersRendered firings (addNode / content change) never
+  // re-arrange nodes the user already dragged by hand.
+  const autoLaidOutRef = useRef(false);
 
   // Latest definition with content (versions are ascending; reverse = latest).
   const latest = useMemo(
@@ -74,6 +80,14 @@ export function FlowGramFlowEditor({
     [latest],
   );
   const canvasKey = latest ? `${latest.flow_id}-${latest.version}` : "empty";
+
+  // Whether the definition carries saved canvas positions. When absent
+  // (template / fresh flows get a flat cascade fallback), run a topology
+  // auto-layout once on load; when present, respect the saved manual layout.
+  const hasStoredLayout = useMemo(
+    () => !!latest && (latest.nodes ?? []).some((n) => n.canvas_pos),
+    [latest],
+  );
 
   // Programmatic node creation (the canvas also has its own add UX; this is
   // the toolbar fallback). Mirrors the previous editor's toolbar buttons.
@@ -115,6 +129,24 @@ export function FlowGramFlowEditor({
     }
   };
 
+  // Topology auto-layout (dagre, LR): arranges nodes by their connection
+  // graph instead of a flat cascade — fixes "template nodes are lined up
+  // regardless of the edge topology".
+  const runAutoLayout = async () => {
+    const tools = toolsRef.current;
+    if (!tools) return;
+    setLayouting(true);
+    try {
+      await tools.autoLayout({
+        enableAnimation: true,
+        animationDuration: 600,
+        layoutConfig: { rankdir: "LR", nodesep: 100, ranksep: 100 },
+      });
+    } finally {
+      setLayouting(false);
+    }
+  };
+
   // Editor props: wired like the official demo (fixed-layout sample), but
   // without the heavy plugin set (minimap/panel/etc.) for a lean integration.
   const editorProps = useMemo<FreeLayoutProps>(
@@ -147,20 +179,38 @@ export function FlowGramFlowEditor({
       // Bidirectional adapter hooks: keep Flow Spec fields alive.
       fromNodeJSON: (_node, json) => json,
       toNodeJSON: (_node, json) => json,
-      // Keep the document handle for programmatic add/save.
+      // Keep the document/tools handles for programmatic add / layout / save.
       onInit: (ctx) => {
         documentRef.current = ctx.document;
+        toolsRef.current = ctx.tools;
       },
-      // Auto-layout the first render so newly imported definitions are readable.
-      onAllLayersRendered: (ctx) => {
-        ctx.tools.fitView?.(false);
+      // Auto-layout only when the definition has no saved canvas positions
+      // (template / fresh flows with the flat cascade fallback) — topology-
+      // aware dagre LR instead of the unreadable node list. Saved manual
+      // layouts are respected untouched.
+      onAllLayersRendered: async (ctx) => {
+        toolsRef.current = ctx.tools;
+        if (
+          !autoLaidOutRef.current &&
+          !hasStoredLayout &&
+          ctx.document.getAllNodes().length > 1
+        ) {
+          autoLaidOutRef.current = true;
+          await ctx.tools
+            .autoLayout({
+              enableAnimation: false,
+              layoutConfig: { rankdir: "LR", nodesep: 100, ranksep: 100 },
+            })
+            .catch(() => undefined);
+        }
+        await ctx.tools.fitView?.(false).catch(() => undefined);
       },
       onContentChange: () => {
         // no-op: the save path reads document.toJSON() directly, so we do not
         // need a live JSON mirror (avoids editor remount churn).
       },
     }),
-    [initialWorkflow],
+    [initialWorkflow, hasStoredLayout],
   );
 
   const nodeCount = initialWorkflow.nodes.length;
@@ -178,6 +228,14 @@ export function FlowGramFlowEditor({
           ))}
         </Space>
         <Space>
+          <Button
+            size="small"
+            icon={<ApartmentOutlined />}
+            loading={layouting}
+            onClick={runAutoLayout}
+          >
+            {t("flows.autoLayout")}
+          </Button>
           <Text type="secondary" style={{ fontSize: 12 }}>
             {nodeCount} nodes · save as v{nextVersion}
           </Text>

@@ -7,7 +7,11 @@ import {
   ValidateTrigger,
   type WorkflowNodeRegistry,
   type WorkflowNodeRenderProps,
+  type WorkflowPortEntity,
+  WorkflowPortRender,
   useNodeRender,
+  useService,
+  WorkflowDragService,
 } from "@flowgram.ai/free-layout-editor";
 import { Button, Input, InputNumber, Select, Space, Tag } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
@@ -360,24 +364,67 @@ export const FLOWGRAM_NODE_REGISTRIES: WorkflowNodeRegistry[] = [
   loopRegistry,
 ];
 
-/** Default node render: flowgram's built-in node frame + the node form. */
+/**
+ * Default node render — full interactive node wrapper (official demo pattern):
+ * - draggable + startDrag  → 节点可拖拽
+ * - WorkflowPortRender for every port → 端口渲染，拖线连线锚点
+ * - selectNode / nodeRef / onFocus / onBlur → 选中与焦点
+ * - form.render() → 节点自带表单（nodeEngine 开启时）
+ */
 export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
-  // Official flowgram pattern (demo base-node): useNodeRender() exposes the
-  // form when the node engine is enabled; node.form may be undefined if the
-  // preNodeCreate defineProperty did not run, so the hook is the safe path.
-  const { form } = useNodeRender(node);
+  const {
+    form,
+    selected,
+    startDrag,
+    ports,
+    selectNode,
+    nodeRef,
+    onFocus,
+    onBlur,
+    readonly,
+  } = useNodeRender(node);
+  const dragService = useService(WorkflowDragService);
+
+  // Click an OUTPUT port to start drawing a connection line; dropping on
+  // another node's input port is completed natively by the core drag service.
+  const onPortClick = React.useCallback(
+    (e: React.MouseEvent, port: WorkflowPortEntity) => {
+      if (readonly) return;
+      if (port.portType === "input") return;
+      void dragService.startDrawingLine(port, { clientX: e.clientX, clientY: e.clientY });
+    },
+    [dragService, readonly],
+  );
+
   return (
-    <div
-      style={{
-        border: "1px solid #d9d9d9",
-        borderRadius: 8,
-        background: "#fff",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
-        overflow: "hidden",
-        fontSize: 12,
-      }}
-    >
-      {form?.render?.() ?? <div style={{ padding: 8 }}>{node.id}</div>}
-    </div>
+    <>
+      <div
+        ref={nodeRef}
+        className={`flowgram-node${selected ? " selected" : ""}`}
+        draggable
+        onDragStart={(e) => startDrag(e)}
+        onTouchStart={(e) => startDrag(e as unknown as React.MouseEvent)}
+        onClick={(e) => selectNode(e)}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        data-node-selected={String(selected)}
+        style={{
+          border: selected ? "1px solid #4d53e8" : "1px solid rgba(6,7,9,0.15)",
+          borderRadius: 8,
+          background: "#fff",
+          boxShadow: "0 2px 6px 0 rgba(0,0,0,0.04), 0 4px 12px 0 rgba(0,0,0,0.02)",
+          overflow: "hidden",
+          fontSize: 12,
+          cursor: "grab",
+          width: 300,
+          minHeight: 60,
+        }}
+      >
+        {form?.render?.() ?? <div style={{ padding: 8 }}>{node.id}</div>}
+      </div>
+      {ports.map((p) => (
+        <WorkflowPortRender key={p.id} entity={p} onClick={!readonly ? onPortClick : undefined} />
+      ))}
+    </>
   );
 }

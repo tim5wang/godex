@@ -1055,11 +1055,11 @@ P2.5 = **创建流程不再要求手写 JSON**：创建先建 flow 对象（只�
 
 **2. Agent 辅助闭环（设计，P3 方向）**
 
-> ✅ 「Agent 诊断 + 优化为新版本」+「定期巡检」已全部落地（2026-09-23）。
+> ✅ 全部落地（2026-09-23）：Agent 诊断 + 定期巡检 + 自然语言增量修改 + decision provider 下拉 + 变量作用域链面板 + SSE 实时增量高亮。
 
 用户预期：不要指望一次 LLM 调用搞定编排。Agent 应**辅助**用户创建/修改 Flow、定位问题，并形成「运行日志回流 → 定期巡检 → Agent 优化 Flow」闭环。
 
-- **辅助创建/编辑**：自然语言 Tab 保留 /v1/flows/generate 生成草稿，但改为**多轮可迭代**：草稿落画布后可继续用自然语言追加修改（"把人工审批改成超过 1000 元才转人工"）→ 增量修改走 LLM + diff 应用，而非整表重生成。（未做，后续）
+- **辅助创建/编辑** ✅：自然语言 Tab 保留 /v1/flows/generate 生成草稿，并已支持**多轮可迭代**：草稿落画布后可继续用自然语言追加修改（"把人工审批改成超过 1000 元才转人工"）→ 增量修改走 LLM（AmendFlowSpec：当前定义 + 追加需求 → 完整修改后定义，校验不落盘；`POST /v1/flows/generate` 带 `definition` 字段走增量分支，a08b44c），前端 NaturalLanguageTab 草稿生成后按钮变「增量修改」+ placeholder 切换（0825e5f）。
 - **运行日志回流** ✅：/v1/flow-runs/{id}/events 事件日志（含 node_error/node_failed/error 字段）已具备；新增「Agent 诊断」入口：把失败 run 的事件 + 定义摘要打包给 Agent，产出根因定位 + 修改建议（可直接应用为画布改动）。
   - 后端：`internal/agent/flow_diagnose.go` `DiagnoseFlowRun`（事件 ≤300 条 + 定义 >20KB 摘要化 → LLM → FlowDiagnosis{root_cause, summary, suggestions, fixed_definition?}，fixed_definition 经 flow.Validate 校验不落盘）；REST `POST /v1/flow-runs/{runID}/diagnose?flow_id=...`（1f1836c）
   - 前端：runs tab error 行「诊断」按钮 → 诊断面板（根因+建议）→「应用修复 v{n+1}」走 createFlow 存为新草稿版本（f386a14）
@@ -1068,10 +1068,11 @@ P2.5 = **创建流程不再要求手写 JSON**：创建先建 flow 对象（只�
   - 前端：FlowsPage header 下巡检报告卡片（60s 轮询，失败红/正常绿，点击展开逐 flow 明细；f642980）
   - 定时触发：`flow_inspect` agent 工具（action=report/card，bundle subagent）——cron 会话可直接生成巡检报告卡片（6e1d572）
 - **Agent 优化 Flow** ✅（诊断环节）：巡检/诊断建议经用户确认后，Agent 直接修改定义生成新版本（走既有 createFlow 链路），形成 运行 → 观测 → 建议 → 优化 → 新版本 闭环。
+- **decision provider 下拉** ✅：decision 节点表单新增 Provider 下拉（选项来自 GET /providers 的 provider id，allowClear，空 = 默认走 agent.decision.provider 配置；DecisionSpec.Provider 后端已透传编译并在 decision_made 事件记录）。
+- **变量作用域链面板** ✅（§9 变量面板）：FlowDetailDrawer 新增「变量」tab —— Flow 级 inputs/outputs + 各节点 typed outputs（nodes.<id>.outputs.<field>），并扫描 prompts/branch cases/edge when 的 {{...}} 引用标注每个变量的引用方。
+- **SSE 实时增量高亮** ✅：后端 SSE 端点（500ms tick 增量推送 + event: done 收尾）已就绪；前端调试面板事件消费从 1.5s 全量轮询改为 fetch 流式解析 SSE（streamFlowRunEvents，逐条 data: 帧回调，AbortController 清理）——事件到达即更新画布节点高亮与事件日志（0a5cb20）。
 
 **验证**：`go build ./internal/...` 通过；`go test ./internal/core/flow/`、`./internal/runtime/httpapi/ -run Flow` 全绿（TestDurableSubagentDefaultTimeoutDisabled 为既有 TempDir 清理环境性失败，与本次改动无关）；`pnpm tsc -b` + `pnpm vite build` 通过。
-
-**本次明确不做（后续）**：自然语言增量修改（多轮迭代）、decision provider 下拉、变量作用域链面板（§9）、SSE 实时增量高亮。
 
 
 

@@ -21,6 +21,7 @@ type flowService interface {
 	CreateFlow(args agent.FlowCreateArgs) (agent.FlowVersionView, error)
 	ValidateFlow(def *flow.Definition) (string, error)
 	GenerateFlowSpec(ctx context.Context, description string) (*flow.Definition, error)
+	AmendFlowSpec(ctx context.Context, current *flow.Definition, change string) (*flow.Definition, error)
 	PublishFlow(flowID, version string) (agent.FlowVersionView, error)
 	CreateFlowRun(ctx context.Context, flowID, version string, inputs map[string]any) (agent.FlowRunView, error)
 	StartFlowRun(ctx context.Context, flowID, runID string) (agent.FlowRunView, error)
@@ -54,16 +55,25 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 	// POST /v1/flows/generate — draft a Flow Spec v1 definition from a
 	// natural-language business description via the LLM (P2.5). The result is
 	// validated but NOT saved; the caller previews and persists it as a new
-	// version through POST /v1/flows.
+	// version through POST /v1/flows. When `definition` is supplied, the
+	// request is an incremental MODIFICATION of that definition (multi-turn
+	// editing, P3 余项): the LLM returns the full amended definition.
 	mux.Handle("POST /v1/flows/generate", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Description string `json:"description"`
+			Description string           `json:"description"`
+			Definition  *flow.Definition `json:"definition,omitempty"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		def, err := service.GenerateFlowSpec(r.Context(), req.Description)
+		var def *flow.Definition
+		var err error
+		if req.Definition != nil {
+			def, err = service.AmendFlowSpec(r.Context(), req.Definition, req.Description)
+		} else {
+			def, err = service.GenerateFlowSpec(r.Context(), req.Description)
+		}
 		if err != nil {
 			writeError(w, http.StatusUnprocessableEntity, err)
 			return

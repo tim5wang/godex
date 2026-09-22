@@ -85,6 +85,17 @@ func (s *Service) GenerateFlowSpec(ctx context.Context, description string) (*fl
 	return a.GenerateFlowSpec(ctx, description)
 }
 
+// AmendFlowSpec modifies an existing Flow Spec definition per a
+// natural-language change request (multi-turn incremental editing). The FULL
+// modified definition is returned, validated but NOT saved.
+func (s *Service) AmendFlowSpec(ctx context.Context, current *flow.Definition, change string) (*flow.Definition, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return nil, err
+	}
+	return a.AmendFlowSpec(ctx, current, change)
+}
+
 // PublishFlow promotes a draft/gray version to published.
 func (s *Service) PublishFlow(flowID, version string) (agent.FlowVersionView, error) {
 	a, err := s.flowAgent()

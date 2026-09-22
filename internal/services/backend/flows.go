@@ -188,3 +188,14 @@ func (s *Service) FlowRunEvents(flowID, runID string) ([]map[string]any, error) 
 	}
 	return a.FlowRunEvents(flowID, runID)
 }
+
+// DiagnoseFlowRun packages a failed run's event log + definition, asks the
+// LLM for a diagnosis (root cause + suggestions + optional fixed definition),
+// and returns the validated result WITHOUT saving (P3 Agent 闭环 §22.2).
+func (s *Service) DiagnoseFlowRun(ctx context.Context, flowID, runID string) (*agent.FlowDiagnosis, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return nil, err
+	}
+	return a.DiagnoseFlowRun(ctx, flowID, runID)
+}

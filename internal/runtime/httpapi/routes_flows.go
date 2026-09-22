@@ -30,6 +30,7 @@ type flowService interface {
 	ListHumanTasks(queue, status string) ([]agent.HumanTaskView, error)
 	ReplyFlowRunHuman(ctx context.Context, flowID, runID, nodeID string, value any) (agent.FlowRunView, error)
 	FlowRunEvents(flowID, runID string) ([]map[string]any, error)
+	DiagnoseFlowRun(ctx context.Context, flowID, runID string) (*agent.FlowDiagnosis, error)
 }
 
 // registerFlowRoutes registers the Flow Spec v1 management API (design doc
@@ -182,6 +183,23 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 			return
 		}
 		writeJSON(w, http.StatusOK, run)
+	})))
+	// POST /v1/flow-runs/{runID}/diagnose — LLM diagnosis of a failed run
+	// (P3 Agent 闭环 §22.2): event log + definition → root cause + suggestions
+	// + optional validated fixed definition (NOT saved; caller persists via
+	// createFlow).
+	mux.Handle("POST /v1/flow-runs/{runID}/diagnose", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flowID := r.URL.Query().Get("flow_id")
+		if flowID == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("missing flow_id query param"))
+			return
+		}
+		diag, err := service.DiagnoseFlowRun(r.Context(), flowID, r.PathValue("runID"))
+		if err != nil {
+			writeError(w, statusForFlowError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, diag)
 	})))
 	// POST /v1/flow-runs/{runID}/human/{nodeID}/reply — submit a human task
 	// value, complete the blocked node and continue the run (P1.1).

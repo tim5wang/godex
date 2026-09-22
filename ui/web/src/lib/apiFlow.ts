@@ -284,10 +284,10 @@ export function inspectFlows(token: string | null, windowHours = 24) {
 /** Drafts a Flow Spec v1 definition from a natural-language description via
  * the LLM (P2.5). The result is validated but NOT saved; the caller previews
  * and persists it through createFlow. */
-export function generateFlowSpec(token: string | null, description: string) {
+export function generateFlowSpec(token: string | null, description: string, definition?: FlowDefinition) {
   return request<FlowDefinition>(
     "/v1/flows/generate",
-    { method: "POST", body: JSON.stringify({ description }) },
+    { method: "POST", body: JSON.stringify({ description, definition }) },
     token,
   );
 }

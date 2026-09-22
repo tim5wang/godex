@@ -619,6 +619,8 @@ export const enProductMessages = {
       nlPlaceholder: "e.g. Users apply for a refund; amounts under 100 are auto-refunded, otherwise route to human review",
       nlGenerate: "Generate draft",
       nlGenerated: "Flow draft generated — preview and save",
+      nlAmend: "Amend draft",
+      nlAmendPlaceholder: "e.g. amounts over 1000 need an extra human approval",
       nlGenerateFailed: "Flow draft generation failed",
       nlPreview: "Draft preview",
       flowgramHint: "Flow Spec v1 — 定义/版本/发布/运行已接通；FlowGram 画布适配为 F3 后续项。",

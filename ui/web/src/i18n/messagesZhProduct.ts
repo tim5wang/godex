@@ -619,6 +619,8 @@ export const zhProductMessages = {
       nlPlaceholder: "例如：用户申请退款，金额小于 100 自动退款，否则转人工审核",
       nlGenerate: "生成草稿",
       nlGenerated: "Flow 草稿已生成，预览确认后可保存",
+      nlAmend: "增量修改",
+      nlAmendPlaceholder: "例如：金额超过 1000 元需要额外人工审批",
       nlGenerateFailed: "Flow 草稿生成失败",
       nlPreview: "草稿预览",
       flowgramHint: "Flow Spec v1 —— 定义/版本/发布/运行已接通；FlowGram 画布适配为 F3 后续项。",

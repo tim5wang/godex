@@ -31,8 +31,8 @@ export function NaturalLanguageTab(props: {
   const [draftVersion, setDraftVersion] = useState(() => nextNumericVersion(versions));
 
   const generateMutation = useMutation({
-    mutationFn: async (desc: string) => {
-      const def = await generateFlowSpec(token, desc);
+    mutationFn: async ({ desc, base }: { desc: string; base?: FlowDefinition }) => {
+      const def = await generateFlowSpec(token, desc, base);
       // The generated flow_id is a suggestion; pin it to the current flow.
       def.flow_id = flowId;
       def.version = draftVersion || "1";
@@ -74,18 +74,30 @@ export function NaturalLanguageTab(props: {
         rows={4}
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        placeholder={t("flows.nlPlaceholder")}
+        placeholder={draft ? t("flows.nlAmendPlaceholder") : t("flows.nlPlaceholder")}
       />
       <Space style={{ marginTop: 12 }}>
-        <Button
-          type="primary"
-          icon={<ThunderboltOutlined />}
-          loading={generateMutation.isPending}
-          disabled={!description.trim()}
-          onClick={() => generateMutation.mutate(description.trim())}
-        >
-          {t("flows.nlGenerate")}
-        </Button>
+        {draft ? (
+          <Button
+            type="primary"
+            icon={<ThunderboltOutlined />}
+            loading={generateMutation.isPending}
+            disabled={!description.trim()}
+            onClick={() => generateMutation.mutate({ desc: description.trim(), base: draft })}
+          >
+            {t("flows.nlAmend")}
+          </Button>
+        ) : (
+          <Button
+            type="primary"
+            icon={<ThunderboltOutlined />}
+            loading={generateMutation.isPending}
+            disabled={!description.trim()}
+            onClick={() => generateMutation.mutate({ desc: description.trim() })}
+          >
+            {t("flows.nlGenerate")}
+          </Button>
+        )}
         {draft && (
           <>
             <Text type="secondary">{t("flows.version")}</Text>

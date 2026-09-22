@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
@@ -31,6 +32,7 @@ type flowService interface {
 	ReplyFlowRunHuman(ctx context.Context, flowID, runID, nodeID string, value any) (agent.FlowRunView, error)
 	FlowRunEvents(flowID, runID string) ([]map[string]any, error)
 	DiagnoseFlowRun(ctx context.Context, flowID, runID string) (*agent.FlowDiagnosis, error)
+	InspectFlows(windowHours int) (*agent.FlowInspectionReport, error)
 }
 
 // registerFlowRoutes registers the Flow Spec v1 management API (design doc
@@ -200,6 +202,22 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 			return
 		}
 		writeJSON(w, http.StatusOK, diag)
+	})))
+	// GET /v1/flow-inspection?window_hours=24 — aggregate run health across
+	// published flows (P3 Agent 闭环 §22.2 定期巡检).
+	mux.Handle("GET /v1/flow-inspection", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		window := 24
+		if v := r.URL.Query().Get("window_hours"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				window = n
+			}
+		}
+		report, err := service.InspectFlows(window)
+		if err != nil {
+			writeError(w, statusForFlowError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
 	})))
 	// POST /v1/flow-runs/{runID}/human/{nodeID}/reply — submit a human task
 	// value, complete the blocked node and continue the run (P1.1).

@@ -11,6 +11,7 @@ import {
   WorkflowPortRender,
   useNodeRender,
   useService,
+  useWatch,
   WorkflowDragService,
 } from "@flowgram.ai/free-layout-editor";
 import { Button, Input, InputNumber, Select, Space, Tag } from "antd";
@@ -100,13 +101,19 @@ function baseForm(extra?: (form: FormRenderProps<FlowNode>["form"]) => React.Rea
 // ---- decision node fields -------------------------------------------------
 
 function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
-  const decision =
-    form.getValueIn<{
-      decision_type?: string;
-      choices?: { id: string; label?: string }[];
-    }>("decision") ?? {};
-  const setDecision = (patch: Record<string, unknown>) =>
-    form.setValueIn("decision", { ...decision, ...patch });
+  // useWatch subscribes to form value changes so edits re-render this panel
+  // (getValueIn alone does not re-render → Add choice had no visible effect).
+  const decision = useWatch<{
+    decision_type?: string;
+    choices?: { id: string; label?: string }[];
+  }>("decision") ?? {};
+  const setDecision = (patch: Record<string, unknown>) => {
+    const cur = (form.getValueIn<Record<string, unknown>>("decision") ?? {}) as Record<
+      string,
+      unknown
+    >;
+    form.setValueIn("decision", { ...cur, ...patch });
+  };
   const choices = decision.choices ?? [];
 
   return (
@@ -167,12 +174,18 @@ function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
 // ---- human node fields ----------------------------------------------------
 
 function HumanFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
-  const human = form.getValueIn<{
+  const human = useWatch<{
     queue?: string;
     assignee_policy?: string;
     result_var?: string;
   }>("human") ?? {};
-  const setHuman = (patch: Record<string, unknown>) => form.setValueIn("human", { ...human, ...patch });
+  const setHuman = (patch: Record<string, unknown>) => {
+    const cur = (form.getValueIn<Record<string, unknown>>("human") ?? {}) as Record<
+      string,
+      unknown
+    >;
+    form.setValueIn("human", { ...cur, ...patch });
+  };
   return (
     <div>
       <div style={{ marginBottom: 8 }}>
@@ -197,12 +210,19 @@ function HumanFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
 // ---- branch node fields ---------------------------------------------------
 
 function BranchFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
-  const branch = form.getValueIn<{
+  // useWatch subscribes to form value changes so edits re-render this panel
+  // (getValueIn alone does not re-render → Add case had no visible effect).
+  const branch = useWatch<{
     cases?: { name?: string; to?: string; condition?: unknown }[];
     default_to?: string;
   }>("branch") ?? {};
-  const setBranch = (patch: Record<string, unknown>) =>
-    form.setValueIn("branch", { ...branch, ...patch });
+  const setBranch = (patch: Record<string, unknown>) => {
+    const cur = (form.getValueIn<Record<string, unknown>>("branch") ?? {}) as Record<
+      string,
+      unknown
+    >;
+    form.setValueIn("branch", { ...cur, ...patch });
+  };
   const cases = branch.cases ?? [];
 
   return (

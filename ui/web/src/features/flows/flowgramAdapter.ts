@@ -20,8 +20,10 @@ import type { FlowDefinition, FlowEdge, FlowNode } from "../../lib/api";
 //   WorkflowEdgeJSON { sourceNodeID, targetNodeID, data? }
 //
 // The spec fields that flowgram has no native shape for (decision/human/
-// branch/loop/edge_type/when) are carried verbatim inside node.data.spec and
-// edge.data.spec, so round-tripping never loses information.
+// branch/loop/edge_type/when) are carried verbatim: node fields at data
+// top-level (the form engine reads/writes them there), edge fields at
+// edge.data.spec. Branch routing is expressed on canvas as visible condition
+// edges and is re-folded into branch.cases on save.
 // ---------------------------------------------------------------------------
 
 /** Layout fallback: arrange nodes in a readable left-to-right cascade. */
@@ -43,19 +45,65 @@ export function flowSpecToWorkflow(def: FlowDefinition): WorkflowJSON {
     data: { ...specOf(n), title: n.title ?? n.prompt ?? n.id, kind: n.kind },
   }));
 
-  const edges: WorkflowEdgeJSON[] = (def.edges ?? []).map((e) => ({
-    sourceNodeID: e.from,
-    targetNodeID: e.to,
-    data: {
-      spec: {
-        id: e.id,
-        edge_type: e.edge_type ?? "data_dependency",
-        when: e.when,
-        max_iterations: e.max_iterations,
-        iteration_key: e.iteration_key,
+  // Ordinary edges: everything NOT sourced from a branch node. Branch routing
+  // is expressed on canvas as visible condition edges (see below) and is
+  // re-folded into branch.cases on save, so definition-level edges that
+  // duplicate a branch case are skipped here.
+  const branchIDs = new Set(
+    (def.nodes ?? []).filter((n) => n.kind === "branch").map((n) => n.id),
+  );
+  const edges: WorkflowEdgeJSON[] = (def.edges ?? [])
+    .filter((e) => !branchIDs.has(e.from))
+    .map((e) => ({
+      sourceNodeID: e.from,
+      targetNodeID: e.to,
+      data: {
+        spec: {
+          id: e.id,
+          edge_type: e.edge_type ?? "data_dependency",
+          when: e.when,
+          max_iterations: e.max_iterations,
+          iteration_key: e.iteration_key,
+        },
       },
-    },
-  }));
+    }));
+
+  // Branch routing → visible condition edges (one per case + one default).
+  // This makes "3 branches = 3 outgoing edges" true on the canvas.
+  for (const n of def.nodes ?? []) {
+    if (n.kind !== "branch" || !n.branch) continue;
+    const cases = n.branch.cases ?? [];
+    cases.forEach((c, i) => {
+      const route = c.name ?? c.to;
+      edges.push({
+        sourceNodeID: n.id,
+        targetNodeID: c.to,
+        data: {
+          spec: {
+            id: `${n.id}_case_${i}`,
+            edge_type: "condition",
+            when: c.condition ?? { choice: route },
+            route,
+          },
+        },
+      });
+    });
+    if (n.branch.default_to) {
+      edges.push({
+        sourceNodeID: n.id,
+        targetNodeID: n.branch.default_to,
+        data: {
+          spec: {
+            id: `${n.id}_default`,
+            edge_type: "condition",
+            when: {},
+            route: "default",
+            is_default: true,
+          },
+        },
+      });
+    }
+  }
 
   return { nodes, edges };
 }
@@ -91,17 +139,55 @@ export function workflowToFlowSpec(
       canvas_pos: n.meta?.position,
     } as FlowNode;
   });
+  const branchIDs = new Set(nodes.filter((n) => n.kind === "branch").map((n) => n.id));
 
-  // Edge spec fields live at edge.data.spec (source/target are native).
-  const edges: FlowEdge[] = (wf.edges ?? []).map((e) => {
+  // Re-fold branch-sourced edges (both loaded condition edges and edges the
+  // user drew by hand, which flowgram types as data_dependency) into the
+  // branch node's cases — the canvas edges ARE the routing truth. Non-branch
+  // edges stay as definition edges.
+  const edges: FlowEdge[] = [];
+  for (const e of wf.edges ?? []) {
+    if (branchIDs.has(e.sourceNodeID)) {
+      continue; // collected per branch below
+    }
     const spec = (e.data?.spec ?? {}) as Partial<FlowEdge>;
-    return {
+    edges.push({
       ...spec,
       from: e.sourceNodeID,
       to: e.targetNodeID,
       edge_type: spec.edge_type ?? "data_dependency",
-    } as FlowEdge;
-  });
+    } as FlowEdge);
+  }
+
+  // Rebuild branch routing from the visible canvas edges (one pass per
+  // branch): non-default edges become cases, the default edge (if any) sets
+  // default_to. Deleting an edge deletes the branch; drawing one adds it.
+  for (const br of nodes) {
+    if (br.kind !== "branch") continue;
+    const outEdges = (wf.edges ?? []).filter((e) => e.sourceNodeID === br.id);
+    const cases: NonNullable<FlowNode["branch"]>["cases"] = [];
+    let defaultTo = br.branch?.default_to ?? "";
+    for (const e of outEdges) {
+      const spec = (e.data?.spec ?? {}) as {
+        edge_type?: string;
+        when?: FlowEdge["when"];
+        route?: string;
+        is_default?: boolean;
+      };
+      if (spec.is_default === true || spec.route === "default") {
+        defaultTo = e.targetNodeID;
+        continue;
+      }
+      if (cases.some((c) => c.to === e.targetNodeID)) continue;
+      const route = spec.route ?? e.targetNodeID;
+      cases.push({
+        name: route,
+        to: e.targetNodeID,
+        condition: spec.when ?? { choice: route },
+      });
+    }
+    br.branch = { cases, default_to: defaultTo };
+  }
 
   return { flow_id: flowId, version, status, nodes, edges };
 }

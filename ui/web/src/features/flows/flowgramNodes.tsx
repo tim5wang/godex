@@ -210,8 +210,10 @@ function HumanFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
 // ---- branch node fields ---------------------------------------------------
 
 function BranchFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
-  // useWatch subscribes to form value changes so edits re-render this panel
-  // (getValueIn alone does not re-render → Add case had no visible effect).
+  // Branch routing is expressed on canvas as visible condition edges
+  // (adapter folds them back into branch.cases on save), so the case list is
+  // defined by the canvas edges — not edited here. Only the default target
+  // is configured in the form.
   const branch = useWatch<{
     cases?: { name?: string; to?: string; condition?: unknown }[];
     default_to?: string;
@@ -223,58 +225,20 @@ function BranchFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
     >;
     form.setValueIn("branch", { ...cur, ...patch });
   };
-  const cases = branch.cases ?? [];
 
   return (
     <div>
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Branch cases</div>
-        <Space direction="vertical" style={{ width: "100%" }}>
-          {cases.map((c, i) => (
-            <Space key={i} style={{ width: "100%" }}>
-              <Input
-                size="small"
-                placeholder="name"
-                style={{ width: 80 }}
-                value={c.name ?? ""}
-                onChange={(e) => {
-                  const next = [...cases];
-                  next[i] = { ...c, name: e.target.value };
-                  setBranch({ cases: next });
-                }}
-              />
-              <Input
-                size="small"
-                placeholder="to"
-                style={{ width: 100 }}
-                value={c.to ?? ""}
-                onChange={(e) => {
-                  const next = [...cases];
-                  next[i] = { ...c, to: e.target.value };
-                  setBranch({ cases: next });
-                }}
-              />
-              <Button
-                size="small"
-                type="text"
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => setBranch({ cases: cases.filter((_, j) => j !== i) })}
-              />
-            </Space>
-          ))}
-          <Button
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={() => setBranch({ cases: [...cases, { name: "", to: "", condition: {} }] })}
-          >
-            Add case
-          </Button>
-        </Space>
+      <div style={{ marginBottom: 8, fontSize: 12, color: "#888" }}>
+        Branch cases come from the canvas edges: draw an edge from this node
+        to a target to add a branch case, delete the edge to remove it.
       </div>
       <div style={{ marginBottom: 8 }}>
         <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Default target</div>
-        <Input value={branch.default_to ?? ""} onChange={(e) => setBranch({ default_to: e.target.value })} />
+        <Input
+          value={branch.default_to ?? ""}
+          placeholder="node id (or draw a default edge)"
+          onChange={(e) => setBranch({ default_to: e.target.value })}
+        />
       </div>
     </div>
   );

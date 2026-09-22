@@ -58,7 +58,9 @@ describe("flowgramAdapter round-trip", () => {
 
     expect(back.flow_id).toBe("fl_support");
     expect(back.nodes).toHaveLength(4);
-    expect(back.edges).toHaveLength(3);
+    // branch-sourced edges are folded back into branch.cases; only the two
+    // non-branch data_dependency edges survive as definition edges.
+    expect(back.edges).toHaveLength(2);
 
     // Node identity + layout survives.
     const classify = back.nodes.find((n) => n.id === "classify");
@@ -77,16 +79,48 @@ describe("flowgramAdapter round-trip", () => {
     expect(human?.human?.queue).toBe("support");
     expect(human?.human?.result_var).toBe("resolution");
 
+    // Branch routing: cases + default survive the round-trip (folded back
+    // from the visible condition edges on canvas).
     const br = back.nodes.find((n) => n.id === "br");
     expect(br?.branch?.default_to).toBe("human");
     expect(br?.branch?.cases).toHaveLength(2);
+    expect(br?.branch?.cases.map((c) => c.to)).toEqual(["decide", "human"]);
 
-    // Edges preserve edge_type + when.
-    const e3 = back.edges.find((e) => e.id === "e3");
-    expect(e3?.edge_type).toBe("condition");
-    expect(e3?.when).toEqual({ choice: "no" });
-    expect(e3?.from).toBe("br");
-    expect(e3?.to).toBe("human");
+    // Non-branch edges preserve edge_type + when.
+    const e1 = back.edges.find((e) => e.id === "e1");
+    expect(e1?.from).toBe("classify");
+    expect(e1?.to).toBe("decide");
+    expect(e1?.edge_type).toBe("data_dependency");
+  });
+
+  it("branch routing becomes visible condition edges on canvas", () => {
+    const wf = flowSpecToWorkflow(sampleDef);
+    // 2 non-branch edges + 2 branch cases + 1 default = 5 visible edges.
+    const brEdges = wf.edges.filter((e) => e.sourceNodeID === "br");
+    expect(brEdges).toHaveLength(3); // “3 个分支 = 3 条出边”
+    expect(brEdges.map((e) => e.targetNodeID).sort()).toEqual(["decide", "human", "human"]);
+    const caseEdge = brEdges.find((e) => e.data?.spec?.route === "no");
+    expect(caseEdge?.data?.spec?.edge_type).toBe("condition");
+    expect(caseEdge?.data?.spec?.when).toEqual({ choice: "no" });
+    const defEdge = brEdges.find((e) => e.data?.spec?.is_default);
+    expect(defEdge?.targetNodeID).toBe("human");
+  });
+
+  it("hand-drawn branch edges are folded into cases on save (no mixed-use error)", () => {
+    // Simulate the user drawing an extra data_dependency edge from the branch
+    // node — it must fold into branch.cases instead of being emitted as a
+    // static edge (which used to trigger the F1a mixed-use error).
+    const wf = flowSpecToWorkflow(sampleDef);
+    wf.edges.push({
+      sourceNodeID: "br",
+      targetNodeID: "human",
+      data: { spec: { id: "br_hand", edge_type: "data_dependency", route: "manual" } },
+    });
+    const back = workflowToFlowSpec(wf, "fl_support", "3", "draft");
+    // No static edge out of the branch survives.
+    expect(back.edges.some((e) => e.from === "br")).toBe(false);
+    const br = back.nodes.find((n) => n.id === "br");
+    expect(br?.branch?.cases.some((c) => c.to === "human")).toBe(true);
   });
 
   it("canvas positions cascade when absent", () => {
@@ -100,5 +134,82 @@ describe("flowgramAdapter round-trip", () => {
     const wf = flowSpecToWorkflow(def);
     expect(wf.nodes[0].meta?.position).toBeDefined();
     expect(wf.nodes[1].meta?.position).toBeDefined();
+  });
+
+  it("flow_03 real definition: branch 3 cases + default become visible edges, hand-drawn edge folds back without mixed-use error", () => {
+    // flow_03（决策分流模板）真实定义：br 有 3 个 case + 1 default。
+    // 画布上应显示 4 条出边；用户手拖 br→auto_done 静态边后保存，
+    // 必须折叠回 cases，不再产生静态出边 → Go 编译不再报
+    // “mixed use as static target and append target”。
+    const flow03: FlowDefinition = {
+      flow_id: "flow_03",
+      version: "1",
+      status: "draft",
+      nodes: [
+        { id: "handle", kind: "step", title: "任务处理", prompt: "处理任务并给出结论" },
+        {
+          id: "decide",
+          kind: "decision",
+          title: "置信度判断",
+          prompt: "处理结果是否可信？",
+          decision: {
+            decision_type: "choice",
+            choices: [{ id: "auto" }, { id: "llm" }, { id: "human" }],
+          },
+        },
+        { id: "auto_done", kind: "step", title: "自动完成", prompt: "直接采用处理结果" },
+        { id: "llm_review", kind: "llm", title: "LLM 兜底", prompt: "复核并完善处理结果" },
+        {
+          id: "human",
+          kind: "human",
+          title: "人工介入",
+          prompt: "人工处理该任务",
+          human: { queue: "ops" },
+        },
+        {
+          id: "br",
+          kind: "branch",
+          branch: {
+            cases: [
+              { name: "auto", to: "auto_done", condition: { choice: "auto" } },
+              { name: "llm", to: "llm_review", condition: { choice: "llm" } },
+              { name: "human", to: "human", condition: { choice: "human" } },
+            ],
+            default_to: "auto_done",
+          },
+        },
+      ],
+      edges: [
+        { id: "e1", from: "handle", to: "decide", edge_type: "data_dependency" },
+        { id: "e2", from: "decide", to: "br", edge_type: "data_dependency" },
+      ],
+    };
+
+    // 1. 加载：branch 出边可见（3 cases + 1 default）
+    const wf = flowSpecToWorkflow(flow03);
+    const brEdges = wf.edges.filter((e) => e.sourceNodeID === "br");
+    expect(brEdges).toHaveLength(4);
+    expect(brEdges.filter((e) => e.data?.spec?.is_default)).toHaveLength(1);
+    expect(brEdges.filter((e) => !e.data?.spec?.is_default)).toHaveLength(3);
+
+    // 2. 模拟用户手拖 br→auto_done 静态边（之前触发 mixed-use 报错）
+    wf.edges.push({
+      sourceNodeID: "br",
+      targetNodeID: "auto_done",
+      data: { spec: { id: "br_hand", edge_type: "data_dependency" } },
+    });
+
+    // 3. 保存：折叠回 cases，无静态出边
+    const back = workflowToFlowSpec(wf, "flow_03", "2", "draft");
+    expect(back.edges.some((e) => e.from === "br")).toBe(false);
+    const br = back.nodes.find((n) => n.id === "br");
+    expect(br?.branch?.default_to).toBe("auto_done");
+    expect(br?.branch?.cases.map((c) => c.to).sort()).toEqual([
+      "auto_done",
+      "human",
+      "llm_review",
+    ]);
+    // 非 branch 静态边保持原样
+    expect(back.edges).toHaveLength(2);
   });
 });

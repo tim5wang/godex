@@ -4,12 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/dop251/goja"
+	"github.com/tim5wang/godex/internal/core/flow"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
+	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/wasmrt"
 )
 
@@ -25,6 +30,101 @@ import (
 // scheduler like decision/branch gateways, writes node.Outputs and is
 // finalized through the same handoff machinery as other nodes.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Flow-level outbound network policy (E3a)
+//
+// function nodes (js/wasm) may reach external services through a controlled
+// HTTP bridge. The policy lives on the Flow Definition (network: {policy,
+// allowed_domains, blocked_domains, timeout_seconds, max_response_chars})
+// and is enforced here: blocked domains are always denied, allowlist policy
+// requires an explicit allowed match. The bridge only ever performs GET
+// requests (like the web_fetch tool); anything else is out of scope for v1.
+// ---------------------------------------------------------------------------
+
+// flowNetworkPolicyFromSpec normalizes a stored policy to a usable struct.
+func flowNetworkPolicyFromSpec(np *flow.NetworkPolicy) flowNetworkPolicy {
+	out := flowNetworkPolicy{Policy: "allow_all", TimeoutSeconds: 15, MaxResponseChars: 1 << 20}
+	if np == nil {
+		return out
+	}
+	p := strings.ToLower(strings.TrimSpace(np.Policy))
+	if p == "allowlist" {
+		out.Policy = "allowlist"
+	}
+	out.AllowedDomains = cleanDomainList(np.AllowedDomains)
+	out.BlockedDomains = cleanDomainList(np.BlockedDomains)
+	if np.TimeoutSeconds > 0 {
+		out.TimeoutSeconds = np.TimeoutSeconds
+	}
+	if np.MaxResponseChars > 0 {
+		out.MaxResponseChars = np.MaxResponseChars
+	}
+	return out
+}
+
+func cleanDomainList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// flowNetworkPolicy is the normalized, enforceable policy.
+type flowNetworkPolicy struct {
+	Policy           string   // allow_all | allowlist
+	AllowedDomains   []string
+	BlockedDomains   []string
+	TimeoutSeconds   int
+	MaxResponseChars int
+}
+
+// httpGetWithPolicy performs a controlled HTTP GET (curl-free, net/http)
+// honoring the Flow network policy. Returns body text or an error explaining
+// the denial. The request URL must be absolute http(s).
+func httpGetWithPolicy(ctx context.Context, rawURL string, pol flowNetworkPolicy) (string, error) {
+	if strings.TrimSpace(rawURL) == "" {
+		return "", fmt.Errorf("empty url")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return "", fmt.Errorf("invalid or unsupported url %q (http/https only)", rawURL)
+	}
+	host := strings.ToLower(u.Hostname())
+	if tools.MatchDomainPattern(host, pol.BlockedDomains) {
+		return "", fmt.Errorf("domain %q is blocked by flow network policy", host)
+	}
+	if pol.Policy == "allowlist" && !tools.MatchDomainPattern(host, pol.AllowedDomains) {
+		return "", fmt.Errorf("domain %q is not in the flow's allowed domains", host)
+	}
+	timeout := time.Duration(pol.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	limited := io.LimitReader(resp.Body, int64(pol.MaxResponseChars)+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return "", err
+	}
+	if len(body) > pol.MaxResponseChars {
+		return "", fmt.Errorf("response exceeds max %d chars", pol.MaxResponseChars)
+	}
+	return string(body), nil
+}
 
 // workflowFunctionContext builds the unified handler context:
 //
@@ -164,6 +264,8 @@ func (a *Agent) completeWorkflowFunction(state *workflowState, node *workflowNod
 		node.Error = err.Error()
 		return
 	}
+	// E3b: post_script after a successful function node.
+	a.runPostScript(state, node)
 	_ = a.workflows.appendEvent(state.Summary.ID, map[string]any{
 		"event":      "function_completed",
 		"node_id":    node.ID,
@@ -230,7 +332,15 @@ func (a *Agent) runWasmFunction(ctx context.Context, spec *workflowFunctionSpec,
 	plugin, err := wasmrt.NewPlugin(ctx, wasmrt.Config{
 		Binary:   binary,
 		PluginID: spec.Ref,
-		Host:     wasmrt.HostCallbacks{Log: func(message string) { _ = message }},
+		Host: wasmrt.HostCallbacks{
+			Log: func(message string) { _ = message },
+			// E3a: wasm plugins reach out through the same controlled bridge,
+			// honoring the Flow-level network policy (blocked/allowlist).
+			HTTPGet: func(pctx context.Context, rawURL string) (string, error) {
+				pol := flowNetworkPolicyFromSpec(spec.Network)
+				return httpGetWithPolicy(pctx, rawURL, pol)
+			},
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("wasm function node: load: %w", err)
@@ -305,6 +415,20 @@ func runJSFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx m
 				panic(err)
 			}
 			return v
+		},
+	})
+	// E3a: controlled outbound HTTP — http.get(url) honors the Flow network
+	// policy (blocked domains always denied; allowlist requires a match).
+	// Returns { ok: true, body } or { ok: false, error }; synchronous so the
+	// handler can branch on the result inline.
+	pol := flowNetworkPolicyFromSpec(spec.Network)
+	_ = vm.Set("http", map[string]any{
+		"get": func(rawURL string) map[string]any {
+			body, err := httpGetWithPolicy(ctx, rawURL, pol)
+			if err != nil {
+				return map[string]any{"ok": false, "error": err.Error()}
+			}
+			return map[string]any{"ok": true, "body": body}
 		},
 	})
 

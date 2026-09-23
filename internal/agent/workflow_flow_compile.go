@@ -23,6 +23,11 @@ func compileFlowToWorkflowInputs(c *flow.Compiled) ([]workflowNodeInput, []workf
 		if err != nil {
 			return nil, nil, err
 		}
+		// E3a: Flow-level network policy rides on every function node so the
+		// sandbox HTTP bridge can enforce it per-run.
+		if ni.Function != nil {
+			ni.Function.Network = c.Network
+		}
 		nodes = append(nodes, ni)
 	}
 	edges := make([]workflowEdgeInput, 0, len(c.Edges))
@@ -30,6 +35,11 @@ func compileFlowToWorkflowInputs(c *flow.Compiled) ([]workflowNodeInput, []workf
 		appendNode, err := compileFlowNode(e.Append, true)
 		if err != nil {
 			return nil, nil, fmt.Errorf("edge %s: %w", e.ID, err)
+		}
+		// E3a: append-template function nodes (condition edges / branch cases /
+		// loop bodies) enforce the same Flow-level network policy.
+		if appendNode.Function != nil {
+			appendNode.Function.Network = c.Network
 		}
 		edges = append(edges, workflowEdgeInput{
 			ID:            e.ID,
@@ -102,6 +112,9 @@ func compileFlowNode(n flow.CompiledNode, appendTemplate bool) (workflowNodeInpu
 			Handler: n.Function.Handler,
 		}
 	}
+	// E3b: optional bash scripts around the node's main work.
+	ni.PreScript = n.PreScript
+	ni.PostScript = n.PostScript
 	// P2.3: carry the declared typed outputs so the engine can resolve
 	// {{nodes.<id>.outputs.<field>}} references at run time.
 	for _, v := range n.Outputs {

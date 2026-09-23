@@ -6,10 +6,12 @@ import {
   Button,
   Card,
   Checkbox,
+  Collapse,
   Drawer,
   Empty,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Select,
@@ -65,6 +67,7 @@ import {
   type FlowDefinition,
   type FlowDiagnosis,
   type FlowInspectionReport,
+  type FlowNetworkPolicy,
   type FlowRunEvent,
   type FlowRunView,
   type NodeStepView,
@@ -76,6 +79,7 @@ import { FlowGramFlowEditor, type FlowGramFlowEditorHandle } from "./FlowGramFlo
 import { FLOW_TEMPLATES, flowTemplateById } from "./flowTemplates";
 import { TemplateLibrary } from "./TemplateLibrary";
 import { NaturalLanguageTab } from "./NaturalLanguageTab";
+import { SchemaTreeEditor, type SchemaNode } from "./SchemaTreeEditor";
 import { useSettingsStore } from "../../store/settings";
 
 const { Title, Text, Paragraph } = Typography;
@@ -1425,34 +1429,16 @@ function VariableScopePanel(props: {
   const VAR_TYPES = ["string", "number", "boolean", "object", "array", "any"];
   const [inputs, setInputs] = useState<FlowVarDef[]>(def.inputs ?? []);
   const [outputs, setOutputs] = useState<FlowVarDef[]>(def.outputs ?? []);
+  const [network, setNetwork] = useState<FlowNetworkPolicy | undefined>(def.network);
   const [targetVersion, setTargetVersion] = useState(nextVersion);
   useEffect(() => {
     setInputs(def.inputs ?? []);
     setOutputs(def.outputs ?? []);
+    setNetwork(def.network);
   }, [def]);
 
   const patchVar = (list: FlowVarDef[], setter: (v: FlowVarDef[]) => void, i: number, patch: Partial<FlowVarDef>) =>
     setter(list.map((x, j) => (j === i ? { ...x, ...patch } : x)));
-
-  // Schema text state per row key ("inputs:0" / "outputs:2"); kept local so
-  // typing in the JSON editor doesn't reformat on every keystroke.
-  const [schemaText, setSchemaText] = useState<Record<string, string>>({});
-  const schemaKey = (kind: string, i: number) => `${kind}:${i}`;
-  const schemaOf = (kind: string, i: number, v: FlowVarDef): string => {
-    const k = schemaKey(kind, i);
-    if (schemaText[k] !== undefined) return schemaText[k];
-    return v.schema ? JSON.stringify(v.schema, null, 2) : "";
-  };
-  const applySchema = (kind: string, i: number, list: FlowVarDef[], setter: (v: FlowVarDef[]) => void, text: string) => {
-    setSchemaText((prev) => ({ ...prev, [schemaKey(kind, i)]: text }));
-    let parsed: unknown;
-    try {
-      parsed = text.trim() ? JSON.parse(text) : undefined;
-    } catch {
-      return; // keep editing until valid
-    }
-    patchVar(list, setter, i, { schema: parsed });
-  };
 
   const saveMutation = useMutation({
     mutationFn: async (v: string) => {
@@ -1460,6 +1446,7 @@ function VariableScopePanel(props: {
         ...def,
         inputs,
         outputs,
+        network,
         version: v,
         status: "draft",
       };
@@ -1576,13 +1563,9 @@ function VariableScopePanel(props: {
                 <Text type="secondary" style={{ fontSize: 10 }}>
                   {t("flows.varSchema")}
                 </Text>
-                <Input.TextArea
-                  size="small"
-                  rows={3}
-                  style={{ fontFamily: "monospace", fontSize: 11 }}
-                  placeholder='{"properties": {"k": {"type": "string"}}}'
-                  value={schemaOf(kind, i, v)}
-                  onChange={(e) => applySchema(kind, i, list, setter, e.target.value)}
+                <SchemaTreeEditor
+                  value={(v.schema as SchemaNode) ?? undefined}
+                  onChange={(next) => patchVar(list, setter, i, { schema: next })}
                 />
               </div>
             )}
@@ -1602,6 +1585,97 @@ function VariableScopePanel(props: {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div
+        style={{
+          border: "1px solid #f0f0f0",
+          borderRadius: 6,
+          padding: "6px 8px",
+          background: "#fafafa",
+        }}
+      >
+        <Collapse
+          ghost
+          size="small"
+          items={[
+            {
+              key: "network",
+              label: (
+                <Space size={6}>
+                  <Text strong style={{ fontSize: 12 }}>
+                    {t("flows.networkPolicy")}
+                  </Text>
+                  <Tag color={network?.policy === "allowlist" ? "orange" : "green"} style={{ fontSize: 10 }}>
+                    {network?.policy ?? "allow_all"}
+                  </Tag>
+                </Space>
+              ),
+              children: (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 4 }}>
+                  <Space size={6} wrap>
+                    <Text style={{ fontSize: 11 }}>策略</Text>
+                    <Select
+                      size="small"
+                      style={{ width: 130 }}
+                      value={network?.policy ?? "allow_all"}
+                      onChange={(p) => setNetwork({ ...(network ?? {}), policy: p })}
+                      options={[
+                        { value: "allow_all", label: "allow_all" },
+                        { value: "allowlist", label: "allowlist" },
+                      ]}
+                    />
+                    <Text style={{ fontSize: 11 }}>超时(秒)</Text>
+                    <InputNumber
+                      size="small"
+                      style={{ width: 70 }}
+                      min={1}
+                      max={120}
+                      value={network?.timeout_seconds ?? 15}
+                      onChange={(v) => setNetwork({ ...(network ?? {}), timeout_seconds: v ?? 15 })}
+                    />
+                    <Text style={{ fontSize: 11 }}>响应上限(字符)</Text>
+                    <InputNumber
+                      size="small"
+                      style={{ width: 90 }}
+                      min={1024}
+                      value={network?.max_response_chars ?? 1048576}
+                      onChange={(v) => setNetwork({ ...(network ?? {}), max_response_chars: v ?? 1048576 })}
+                    />
+                  </Space>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {t("flows.networkAllowed")}（allowlist 时生效，支持 *.suffix）
+                    </Text>
+                    <Select
+                      mode="tags"
+                      size="small"
+                      style={{ width: "100%" }}
+                      placeholder="api.openai.com"
+                      value={network?.allowed_domains ?? []}
+                      onChange={(v: string[]) => setNetwork({ ...(network ?? {}), allowed_domains: v })}
+                      tokenSeparators={[",", " "]}
+                    />
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {t("flows.networkBlocked")}（始终拦截，两种策略都生效）
+                    </Text>
+                    <Select
+                      mode="tags"
+                      size="small"
+                      style={{ width: "100%" }}
+                      placeholder="*.internal.example"
+                      value={network?.blocked_domains ?? []}
+                      onChange={(v: string[]) => setNetwork({ ...(network ?? {}), blocked_domains: v })}
+                      tokenSeparators={[",", " "]}
+                    />
+                  </div>
+                  <Text type="secondary" style={{ fontSize: 10 }}>
+                    {t("flows.networkHint")}
+                  </Text>
+                </div>
+              ),
+            },
+          ]}
+        />
+      </div>
       <div>
         <Text strong style={{ fontSize: 12 }}>{t("flows.varFlowInputs")}</Text>
         <div style={{ marginTop: 4 }}>{editableVarList(inputs, setInputs, "inputs")}</div>

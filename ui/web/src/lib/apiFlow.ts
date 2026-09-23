@@ -13,6 +13,16 @@ export interface FlowDefinition {
   outputs?: { name: string; type?: string; desc?: string }[];
   nodes: FlowNode[];
   edges: FlowEdge[];
+  /** E3a: Flow-level outbound network policy for function nodes (js/wasm). */
+  network?: FlowNetworkPolicy;
+}
+
+export interface FlowNetworkPolicy {
+  policy?: string; // allow_all | allowlist
+  allowed_domains?: string[];
+  blocked_domains?: string[];
+  timeout_seconds?: number;
+  max_response_chars?: number;
 }
 
 export interface FlowNode {
@@ -29,6 +39,9 @@ export interface FlowNode {
   loop?: FlowLoopSpec;
   function?: FlowFunctionSpec;
   outputs?: { name: string; type?: string; desc?: string }[];
+  /** E3b: optional bash scripts run before/after the node's main work. */
+  pre_script?: string;
+  post_script?: string;
   /** Editor-only canvas layout (x/y); stripped before compile. */
   canvas_pos?: { x: number; y: number };
   /** Pin this step node to an agent template / business key id. */

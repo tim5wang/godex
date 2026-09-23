@@ -136,6 +136,9 @@ export function workflowToFlowSpec(
       agent_ref: data.agent_ref,
       timeout_sec: data.timeout_sec,
       outputs: data.outputs,
+      function: data.function,
+      pre_script: data.pre_script,
+      post_script: data.post_script,
       canvas_pos: n.meta?.position,
     } as FlowNode;
   });

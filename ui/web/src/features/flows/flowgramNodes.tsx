@@ -14,11 +14,11 @@ import {
   useWatch,
   WorkflowDragService,
 } from "@flowgram.ai/free-layout-editor";
-import { Button, Input, InputNumber, Select, Space, Tag, AutoComplete } from "antd";
+import { Button, Collapse, Input, InputNumber, Select, Space, Tag, AutoComplete, Typography } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
-import { listProviders, type FlowNode } from "../../lib/api";
+import { listProviders, type FlowDefinition, type FlowNode } from "../../lib/api";
 import { useSettingsStore } from "../../store/settings";
 
 // ---------------------------------------------------------------------------
@@ -123,6 +123,181 @@ function KindBadge({ kind }: { kind: string }) {
   return <Tag color={KIND_COLOR[kind] ?? "default"}>{KIND_LABEL[kind] ?? kind}</Tag>;
 }
 
+// ---------------------------------------------------------------------------
+// Flow definition context — the variable scope chain available to node forms.
+// The editor wraps the canvas in <FlowDefProvider def={...}> so each node's
+// variable summary can show what it consumes ({{...}} refs), what it produces
+// (declared outputs) and the scope chain it can read (flow inputs + every
+// other node's declared outputs).
+// ---------------------------------------------------------------------------
+
+const FlowDefContext = React.createContext<FlowDefinition | null>(null);
+
+export function FlowDefProvider({
+  def,
+  children,
+}: {
+  def?: FlowDefinition | null;
+  children: React.ReactNode;
+}) {
+  return <FlowDefContext.Provider value={def ?? null}>{children}</FlowDefContext.Provider>;
+}
+
+export function useFlowDef(): FlowDefinition | null {
+  return React.useContext(FlowDefContext);
+}
+
+const VAR_REF_RE = /\{\{\s*([^}]+?)\s*\}\}/g;
+
+/** Extract {{...}} variable references from a prompt/script text. */
+function scanVarRefs(text: string | undefined): string[] {
+  if (!text) return [];
+  const re = new RegExp(VAR_REF_RE.source, "g");
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) out.push(m[1].trim());
+  return out;
+}
+
+const { Text } = Typography;
+
+/**
+ * Variable handling summary for one canvas node (E2 下钻):
+ *  - consumes: {{...}} references found in the prompt/scripts
+ *  - produces: the node's declared outputs
+ *  - scope:    flow inputs + other nodes' declared outputs (作用域链)
+ */
+function VariableSummary({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
+  const prompt = useWatch<string>("prompt") ?? "";
+  const pre = useWatch<string>("pre_script") ?? "";
+  const post = useWatch<string>("post_script") ?? "";
+  const outputs = useWatch<{ name?: string; type?: string }[]>("outputs") ?? [];
+  const def = useFlowDef();
+  const nodeId = (form.getValueIn<string>("id") ?? "").trim();
+
+  const consumed = [
+    ...scanVarRefs(prompt),
+    ...scanVarRefs(pre),
+    ...scanVarRefs(post),
+  ];
+  // Scope chain: flow inputs + every OTHER node's declared outputs.
+  const scope: { path: string; type?: string }[] = [];
+  for (const inp of def?.inputs ?? []) {
+    if (inp.name) scope.push({ path: `inputs.${inp.name}`, type: inp.type });
+  }
+  for (const nd of def?.nodes ?? []) {
+    if (nd.id === nodeId) continue;
+    for (const o of nd.outputs ?? []) {
+      if (o.name) scope.push({ path: `nodes.${nd.id}.outputs.${o.name}`, type: o.type });
+    }
+  }
+
+  return (
+    <div
+      style={{
+        marginBottom: 8,
+        border: "1px dashed #d9d9d9",
+        borderRadius: 6,
+        padding: "6px 8px",
+        background: "#fafafa",
+      }}
+    >
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>变量处理</div>
+      <div style={{ fontSize: 11, marginBottom: 3 }}>
+        <Text type="secondary">消费:</Text>{" "}
+        {consumed.length === 0 ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
+        ) : (
+          consumed.map((r) => (
+            <Tag key={r} style={{ marginRight: 2, fontSize: 10 }} color="geekblue">
+              {r}
+            </Tag>
+          ))
+        )}
+      </div>
+      <div style={{ fontSize: 11, marginBottom: 3 }}>
+        <Text type="secondary">产出:</Text>{" "}
+        {outputs.length === 0 ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
+        ) : (
+          outputs.map((o, i) => (
+            <Tag key={`${o.name ?? i}`} style={{ marginRight: 2, fontSize: 10 }} color="green">
+              {o.name ?? "?"}
+              {o.type ? `: ${o.type}` : ""}
+            </Tag>
+          ))
+        )}
+      </div>
+      <div style={{ fontSize: 11 }}>
+        <Text type="secondary">作用域链:</Text>{" "}
+        {scope.length === 0 ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
+        ) : (
+          scope.slice(0, 6).map((s) => (
+            <Tag key={s.path} style={{ marginRight: 2, fontSize: 10 }} color="default">
+              {s.path}
+              {s.type ? `: ${s.type}` : ""}
+            </Tag>
+          ))
+        )}
+        {scope.length > 6 && (
+          <Text type="secondary" style={{ fontSize: 10 }}>+{scope.length - 6}</Text>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Pre/post bash script editors (E3b) — collapsed so they don't crowd the form. */
+function ScriptFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
+  const pre = useWatch<string>("pre_script") ?? "";
+  const post = useWatch<string>("post_script") ?? "";
+  return (
+    <Collapse
+      ghost
+      size="small"
+      style={{ marginTop: 4 }}
+      items={[
+        {
+          key: "scripts",
+          label: "前后置脚本 (bash)",
+          children: (
+            <div>
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+                  pre_script（节点执行前）
+                </div>
+                <Input.TextArea
+                  rows={2}
+                  style={{ fontFamily: "monospace", fontSize: 11 }}
+                  value={pre}
+                  placeholder={"echo start"}
+                  onChange={(e) => form.setValueIn("pre_script", e.target.value)}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
+                  post_script（节点完成后）
+                </div>
+                <Input.TextArea
+                  rows={2}
+                  style={{ fontFamily: "monospace", fontSize: 11 }}
+                  value={post}
+                  placeholder={"echo done"}
+                  onChange={(e) => form.setValueIn("post_script", e.target.value)}
+                />
+              </div>
+              <Text type="secondary" style={{ fontSize: 10 }}>
+                在 agent workspace 执行；环境变量 FLOW_NODE_ID / FLOW_INPUTS_JSON / FLOW_CTX_JSON
+              </Text>
+            </div>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
 /** Base render for every node: kind badge + title + prompt (+ kind-specific fields). */
 function baseForm(extra?: (form: FormRenderProps<FlowNode>["form"]) => React.ReactNode) {
   return ({ form }: FormRenderProps<FlowNode>) => (
@@ -132,7 +307,9 @@ function baseForm(extra?: (form: FormRenderProps<FlowNode>["form"]) => React.Rea
       </div>
       <TextField name="title" label="Title" />
       <TextField name="prompt" label="Prompt" rows={3} />
+      <VariableSummary form={form} />
       {extra?.(form)}
+      <ScriptFields form={form} />
     </div>
   );
 }

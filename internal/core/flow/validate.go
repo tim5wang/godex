@@ -37,6 +37,11 @@ func Validate(d *Definition) error {
 	if err := validateIODecls(d); err != nil {
 		return err
 	}
+	if d.Network != nil {
+		if err := validateNetworkPolicy(d.Network); err != nil {
+			return err
+		}
+	}
 	if d.OnComplete != nil {
 		if strings.TrimSpace(d.OnComplete.URL) == "" {
 			return ValidationError{Path: "on_complete.url", Msg: "on_complete requires a callback url"}
@@ -230,6 +235,21 @@ func validateIODecls(d *Definition) error {
 		return err
 	}
 	return validateVarDefs(d.Outputs, "outputs")
+}
+
+// validateNetworkPolicy checks the Flow-level outbound network policy (E3a):
+// policy is allow_all|allowlist, domain lists are non-empty clean strings.
+func validateNetworkPolicy(np *NetworkPolicy) error {
+	p := strings.ToLower(strings.TrimSpace(np.Policy))
+	switch p {
+	case "", "allow_all", "allowlist":
+	default:
+		return ValidationError{Path: "network.policy", Msg: fmt.Sprintf("invalid network policy %q (allow_all|allowlist)", np.Policy)}
+	}
+	if p == "allowlist" && len(np.AllowedDomains) == 0 {
+		return ValidationError{Path: "network.allowed_domains", Msg: "allowlist policy requires at least one allowed domain"}
+	}
+	return nil
 }
 
 // validateVarRefs parses {{...}} references in a node's prompt and validates

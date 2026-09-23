@@ -29,6 +29,7 @@ import {
 import { flowSpecToWorkflow, workflowToFlowSpec, blankFlowNode } from "./flowgramAdapter";
 import {
   FLOWGRAM_NODE_REGISTRIES,
+  FlowDefProvider,
   FlowGramBaseNode,
   KIND_COLOR,
   RunStatusProvider,
@@ -556,9 +557,11 @@ export function FlowGramFlowEditor({
         }}
       >
         <FreeLayoutEditorProvider key={canvasKey} {...editorProps}>
-          <RunStatusProvider statuses={runStatusMap}>
-            <EditorRenderer className="flowgram-editor" />
-          </RunStatusProvider>
+          <FlowDefProvider def={latest}>
+            <RunStatusProvider statuses={runStatusMap}>
+              <EditorRenderer className="flowgram-editor" />
+            </RunStatusProvider>
+          </FlowDefProvider>
         </FreeLayoutEditorProvider>
       </div>
 

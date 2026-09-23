@@ -25,6 +25,25 @@ const (
 )
 
 // Definition is one immutable version of a flow (flow.json).
+// NetworkPolicy is the Flow-level outbound network security policy (E3a):
+// controls what function nodes (js/wasm) may reach. Default allow_all with no
+// blocklist. Applied at run time by the sandbox HTTP bridge; also documented
+// on the definition for review.
+type NetworkPolicy struct {
+	// Policy is "allow_all" (default) or "allowlist".
+	Policy string `json:"policy,omitempty"`
+	// AllowedDomains are exact hosts or *.suffix patterns allowed when
+	// Policy == "allowlist" (e.g. "api.openai.com", "*.modelscope.cn").
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	// BlockedDomains are always denied (checked first, both policies).
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
+	// TimeoutSeconds bounds each outbound request; 0 = 15s default.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// MaxResponseChars caps each response body; 0 = 1 MiB default.
+	MaxResponseChars int `json:"max_response_chars,omitempty"`
+}
+
+// Definition is a Flow Spec v1 definition.
 type Definition struct {
 	FlowID      string   `json:"flow_id"`
 	Name        string   `json:"name,omitempty"`
@@ -36,6 +55,9 @@ type Definition struct {
 	Outputs     []VarDef `json:"outputs,omitempty"`
 	Nodes       []Node   `json:"nodes"`
 	Edges       []Edge   `json:"edges"`
+	// Network is the outbound network security policy for function nodes
+	// (js/wasm) in this flow (E3a). Empty = allow all, no blocklist.
+	Network *NetworkPolicy `json:"network,omitempty"`
 	// Retry is the default RetryPolicy applied to nodes that do not override it.
 	Retry *RetryPolicy `json:"retry,omitempty"`
 	// OnComplete, when set, is the webhook POSTed when a run reaches a
@@ -96,6 +118,13 @@ type Node struct {
 	Loop       *LoopSpec     `json:"loop,omitempty"`
 	Function   *FunctionSpec `json:"function,omitempty"`
 	TimeoutSec int           `json:"timeout_sec,omitempty"`
+	// PreScript / PostScript are optional bash scripts executed before / after
+	// the node's main work (E3b). They run in the agent's workspace with a
+	// short default timeout; stdout/stderr are captured onto the node's
+	// output map (script.pre_stdout / post_stdout) so downstream nodes can
+	// read them.
+	PreScript  string `json:"pre_script,omitempty"`
+	PostScript string `json:"post_script,omitempty"`
 	// Outputs declares the typed fields this node produces (Flow Spec §3.4).
 	// Downstream nodes reference them as {{nodes.<id>.outputs.<field>}}.
 	// Empty = no typed outputs (prompt/handoff text only).

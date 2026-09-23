@@ -16,6 +16,10 @@ type Compiled struct {
 	Nodes   []CompiledNode `json:"nodes"`
 	Edges   []CompiledEdge `json:"edges"`
 	Digest  string         `json:"digest"`
+	// Network is the Flow-level outbound network policy for function nodes
+	// (E3a); carried onto the durable workflow so sandbox HTTP bridges can
+	// enforce it at run time.
+	Network *NetworkPolicy `json:"network,omitempty"`
 }
 
 // CompiledNode is one engine node after lowering. step/llm/decision compile
@@ -42,6 +46,10 @@ type CompiledNode struct {
 	// Outputs carries the node's declared typed outputs (P2.3) so the engine
 	// can resolve {{nodes.<id>.outputs.<field>}} references at run time.
 	Outputs []VarDef `json:"outputs,omitempty"`
+	// PreScript / PostScript are optional bash scripts run before/after the
+	// node's main work (E3b).
+	PreScript  string `json:"pre_script,omitempty"`
+	PostScript string `json:"post_script,omitempty"`
 }
 
 // CompiledBranch is the lowered branch spec. The engine gateway evaluates
@@ -162,6 +170,8 @@ func Compile(d *Definition) (*Compiled, error) {
 			Human:      n.Human,
 			Function:   n.Function,
 			Outputs:    append([]VarDef{}, n.Outputs...),
+			PreScript:  n.PreScript,
+			PostScript: n.PostScript,
 		}
 		if kind == KindBranch && n.Branch != nil {
 			cn.Branch = compileBranch(n.Branch, byID)
@@ -310,7 +320,7 @@ func Compile(d *Definition) (*Compiled, error) {
 	}
 
 	sortNodes(nodes)
-	c := &Compiled{FlowID: d.FlowID, Version: d.Version, Nodes: nodes, Edges: edges}
+	c := &Compiled{FlowID: d.FlowID, Version: d.Version, Nodes: nodes, Edges: edges, Network: d.Network}
 	c.Digest = c.computeDigest()
 	return c, nil
 }
@@ -349,6 +359,8 @@ func compileTemplate(n Node) CompiledNode {
 		Human:      n.Human,
 		Function:   n.Function,
 		Outputs:    append([]VarDef{}, n.Outputs...),
+		PreScript:  n.PreScript,
+		PostScript: n.PostScript,
 	}
 }
 

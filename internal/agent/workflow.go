@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/flow"
 	"github.com/tim5wang/godex/internal/platform/fsutil"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -102,6 +103,11 @@ type workflowNode struct {
 	BranchSpec   *workflowBranchSpec     `json:"branch_spec,omitempty"`
 	HumanSpec    *workflowHumanSpec      `json:"human_spec,omitempty"`
 	FunctionSpec *workflowFunctionSpec   `json:"function_spec,omitempty"`
+	// PreScript / PostScript are optional bash scripts run before / after the
+	// node's main work (E3b); ScriptOutput captures their stdout/stderr.
+	PreScript    string         `json:"pre_script,omitempty"`
+	PostScript   string         `json:"post_script,omitempty"`
+	ScriptOutput map[string]any `json:"script_output,omitempty"`
 	// OutputSpec carries the node's declared typed outputs (P2.3) for prompt
 	// variable resolution and FlowGram metadata. Outputs (below) holds the
 	// run-time values.
@@ -189,6 +195,10 @@ type workflowNodeInput struct {
 	Human           *workflowHumanSpec    `json:"human,omitempty"`
 	Branch          *workflowBranchSpec   `json:"branch,omitempty"`
 	Function        *workflowFunctionSpec `json:"function,omitempty"`
+	// PreScript / PostScript are optional bash scripts run before / after the
+	// node's main work (E3b).
+	PreScript  string `json:"pre_script,omitempty"`
+	PostScript string `json:"post_script,omitempty"`
 	// OutputSpec carries the node's declared typed outputs (P2.3) for prompt
 	// variable resolution and FlowGram metadata.
 	OutputSpec []workflowVarDef `json:"output_spec,omitempty"`
@@ -220,6 +230,9 @@ type workflowFunctionSpec struct {
 	Source  string `json:"source,omitempty"`  // js handler source (runtime=js)
 	Ref     string `json:"ref,omitempty"`     // node-library id (runtime=wasm)
 	Handler string `json:"handler,omitempty"` // entry function; default "handle"
+	// Network is the Flow-level outbound network policy (E3a), copied from the
+	// compiled definition so sandbox HTTP bridges can enforce it per-run.
+	Network *flow.NetworkPolicy `json:"network,omitempty"`
 }
 
 type workflowNodeView struct {
@@ -584,6 +597,8 @@ func workflowNodesFromInputs(inputs []workflowNodeInput, existing map[string]str
 			BranchSpec:      branchSpec,
 			HumanSpec:       humanSpec,
 			FunctionSpec:    functionSpec,
+			PreScript:       input.PreScript,
+			PostScript:      input.PostScript,
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		})
@@ -912,6 +927,18 @@ func (a *Agent) startWorkflowNode(ctx context.Context, state *workflowState, nod
 	// node: n -> n+1), so RetryPolicy backoff advances and the attempt cap
 	// is enforced even when the attempt fails before terminal refresh.
 	node.Attempt++
+	// E3b: pre_script runs before ANY node kind starts (step/llm/decision/
+	// branch/function/…). A failing pre_script fails the node fast.
+	if err := a.runPreScript(state, node); err != nil {
+		node.Status = workflowStatusError
+		node.Error = err.Error()
+		node.FinishedAt = now
+		node.UpdatedAt = now
+		if handoffErr := a.finalizeWorkflowNodeHandoff(state, node, nil, ""); handoffErr != nil {
+			node.Error = handoffErr.Error()
+		}
+		return node.ID, false
+	}
 	if normalizeWorkflowNodeKind(node.Kind, node.ID) == workflowNodeKindDecision {
 		// Decision nodes execute synchronously in the scheduler and never
 		// start a subagent job.
@@ -1156,6 +1183,8 @@ func (a *Agent) completeWorkflowNode(id, nodeID, result string) (workflowState, 
 		if err := a.finalizeWorkflowNodeHandoff(&state, &state.Nodes[i], nil, result); err != nil {
 			return workflowState{}, err
 		}
+		// E3b: post_script after a manually completed node.
+		a.runPostScript(&state, &state.Nodes[i])
 		found = true
 	}
 	if !found {
@@ -1210,6 +1239,10 @@ func (a *Agent) refreshWorkflowNodes(state *workflowState) bool {
 		if err := a.finalizeWorkflowNodeHandoff(state, node, job, job.Result); err != nil {
 			node.Error = err.Error()
 			node.Status = workflowStatusError
+		}
+		// E3b: post_script after a successful async node completes.
+		if node.Status == workflowStatusCompleted {
+			a.runPostScript(state, node)
 		}
 		changed = true
 	}

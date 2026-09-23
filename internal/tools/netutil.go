@@ -7,6 +7,12 @@ import (
 	"strings"
 )
 
+// MatchDomainPattern reports whether hostname matches any pattern (exact or
+// *.suffix). Exported for the Flow network-policy bridge (E3a).
+func MatchDomainPattern(hostname string, patterns []string) bool {
+	return matchDomainPattern(hostname, patterns)
+}
+
 func matchDomainPattern(hostname string, patterns []string) bool {
 	hostname = strings.ToLower(strings.TrimSpace(hostname))
 	if hostname == "" {

@@ -738,6 +738,22 @@ export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
   };
   const decisionChoices = nodeType === "decision" ? (decisionData.choices ?? []) : [];
 
+  // E4 robustness: flowgram's dynamic-port mechanism only rescans
+  // [data-port-id] on node size change, so on first render and whenever the
+  // choice list changes (add/remove a branch) the labelled branch ports would
+  // go stale. Manually trigger updateDynamicPorts() after the DOM commits.
+  const choiceKey = decisionChoices.map((c) => c.id).join(",");
+  React.useEffect(() => {
+    if (nodeType !== "decision") return;
+    const t = setTimeout(() => {
+      const portsData = (node as unknown as {
+        ports?: { updateDynamicPorts?: () => void };
+      }).ports;
+      portsData?.updateDynamicPorts?.();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [choiceKey, nodeType, node]);
+
   // Click an OUTPUT port to start drawing a connection line; dropping on
   // another node's input port is completed natively by the core drag service.
   const onPortClick = React.useCallback(

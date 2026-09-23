@@ -111,15 +111,9 @@ func Test(ctx context.Context, cfg *config.Config, id string) TestResponse {
 		err := fmt.Sprintf("provider not found: %s", id)
 		return TestResponse{Status: Status{ID: strings.TrimSpace(id), LastTestError: err}, OK: false, Error: err}
 	}
-	if !status.HasCredential {
-		status.LastTestError = "credential not configured"
-		return TestResponse{Status: status, OK: false, Error: status.LastTestError}
-	}
-	if provider.Type == config.ProviderOpenAICodex {
-		return TestResponse{Status: status, OK: true}
-	}
 	if llm.NormalizeProviderType(provider.Type) == llm.ProviderLaya {
-		// Local laya service exposes /health (not /v1/models): probe it.
+		// Local laya service needs no credential and exposes /health, not
+		// /v1/models: probe health directly.
 		if strings.TrimSpace(provider.BaseURL) == "" {
 			status.LastTestError = "base_url not configured"
 			return TestResponse{Status: status, OK: false, Error: status.LastTestError}
@@ -142,6 +136,13 @@ func Test(ctx context.Context, cfg *config.Config, id string) TestResponse {
 			status.LastTestError = fmt.Sprintf("laya health failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
 			return TestResponse{Status: status, OK: false, Error: status.LastTestError}
 		}
+		return TestResponse{Status: status, OK: true}
+	}
+	if !status.HasCredential {
+		status.LastTestError = "credential not configured"
+		return TestResponse{Status: status, OK: false, Error: status.LastTestError}
+	}
+	if provider.Type == config.ProviderOpenAICodex {
 		return TestResponse{Status: status, OK: true}
 	}
 	if strings.TrimSpace(provider.BaseURL) == "" {
@@ -180,17 +181,18 @@ func DiscoverModels(ctx context.Context, cfg *config.Config, id string) ModelsRe
 		err := fmt.Sprintf("provider not found: %s", id)
 		return ModelsResponse{ProviderID: providerID, OK: false, Error: err}
 	}
+	if llm.NormalizeProviderType(provider.Type) == llm.ProviderLaya {
+		// Local laya decision service: no credential needed, single model
+		// "laya" (no /v1/models endpoint).
+		return ModelsResponse{ProviderID: providerID, Models: []ModelInfo{
+			{ID: "laya", Name: "laya", Model: "laya", SupportsStreaming: false},
+		}, OK: true}
+	}
 	if !status.HasCredential {
 		return ModelsResponse{ProviderID: providerID, OK: false, Error: "credential not configured"}
 	}
 	if provider.Type == config.ProviderOpenAICodex {
 		return ModelsResponse{ProviderID: providerID, Models: cloneModels(codexOAuthModels), OK: true}
-	}
-	if llm.NormalizeProviderType(provider.Type) == llm.ProviderLaya {
-		// Local laya decision service: single model "laya" (no /v1/models).
-		return ModelsResponse{ProviderID: providerID, Models: []ModelInfo{
-			{ID: "laya", Name: "laya", Model: "laya", SupportsStreaming: false},
-		}, OK: true}
 	}
 	if strings.TrimSpace(provider.BaseURL) == "" {
 		return ModelsResponse{ProviderID: providerID, OK: false, Error: "base_url not configured"}

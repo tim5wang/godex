@@ -120,3 +120,44 @@ func assertHasModel(t *testing.T, models []ModelInfo, id string) {
 	}
 	t.Fatalf("expected model %q in %#v", id, models)
 }
+
+// TestLayaJevProviderNoCredential verifies a local laya_jev provider works
+// without any api_key: DiscoverModels returns the single "laya" model and
+// Test probes /health instead of /v1/models (the credential gate is skipped
+// for laya_jev).
+func TestLayaJevProviderNoCredential(t *testing.T) {
+	var healthHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Fatalf("expected /health probe, got %s", r.URL.Path)
+		}
+		healthHits++
+		_, _ = w.Write([]byte(`{"status":"ok","service":"laya","version":"0.3.4"}`))
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{LLMProviders: map[string]llm.ProviderConfig{
+		"laya": {
+			ID:      "laya",
+			Type:    llm.ProviderLaya,
+			BaseURL: srv.URL,
+			// No APIKey / APIKeyEnv on purpose: local laya needs no credential.
+		},
+	}}
+
+	result := DiscoverModels(context.Background(), cfg, "laya")
+	if !result.OK {
+		t.Fatalf("discover models for laya: %s", result.Error)
+	}
+	if len(result.Models) != 1 || result.Models[0].ID != "laya" {
+		t.Fatalf("expected single laya model, got %#v", result.Models)
+	}
+
+	tr := Test(context.Background(), cfg, "laya")
+	if !tr.OK {
+		t.Fatalf("test laya provider: %s", tr.Error)
+	}
+	if healthHits != 1 {
+		t.Fatalf("expected 1 /health probe, got %d", healthHits)
+	}
+}

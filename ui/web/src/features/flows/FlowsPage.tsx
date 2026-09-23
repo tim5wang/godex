@@ -5,10 +5,12 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Drawer,
   Empty,
   Form,
   Input,
+  Modal,
   Popconfirm,
   Select,
   Space,
@@ -19,10 +21,13 @@ import {
   Typography,
 } from "antd";
 import {
+  ApartmentOutlined,
   ApiOutlined,
   BugOutlined,
+  DeleteOutlined,
   DownOutlined,
   DownloadOutlined,
+  EyeOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   PlayCircleOutlined,
@@ -31,32 +36,40 @@ import {
   RightOutlined,
   RocketOutlined,
   SaveOutlined,
+  StepForwardOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { showError } from "../../lib/notifications";
+import { CodeViewer } from "../../components/CodeViewer";
+import CodeEditor from "../files/CodeEditor";
 import {
   cancelFlowRun,
+  createBizKey,
   createFlow,
   createFlowRun,
   diagnoseFlowRun,
   flowRunEvents,
   getFlowRun,
   inspectFlows,
+  listBizKeys,
   listFlowRuns,
   listFlowVersions,
   listFlows,
   publishFlow,
+  revealBizKey,
+  stepFlowRun,
   streamFlowRunEvents,
   type FlowDefinition,
   type FlowDiagnosis,
   type FlowInspectionReport,
   type FlowRunEvent,
   type FlowRunView,
+  type NodeStepView,
+  type StepFlowView,
   type FlowSummaryView,
   type FlowVersionView,
 } from "../../lib/api";
-import { FlowGramCanvas } from "./FlowGramCanvas";
 import { FlowGramFlowEditor, type FlowGramFlowEditorHandle } from "./FlowGramFlowEditor";
 import { FLOW_TEMPLATES, flowTemplateById } from "./flowTemplates";
 import { TemplateLibrary } from "./TemplateLibrary";
@@ -526,15 +539,21 @@ function FlowCanvasMain(props: {
   // The canvas is a debugger: pick a version + test inputs, start a run, and
   // the editor highlights per-node status from the polled event log. Production
   // traffic goes through POST /v1/gateway/{route} (see DetailDrawer).
+  // Step mode (单步运行): the run is created WITHOUT auto-start (step_mode=1)
+  // and the user advances it node-by-node via POST /step; each step returns
+  // the per-node outputs/context so the debug panel shows live variable values.
   const [debugMode, setDebugMode] = useState(false);
   const [debugVersion, setDebugVersion] = useState<string>();
   const [debugInputsText, setDebugInputsText] = useState("{}");
   const [debugRunId, setDebugRunId] = useState<string>();
   const [debugStarted, setDebugStarted] = useState(false);
+  const [debugStepMode, setDebugStepMode] = useState(false);
+  const [stepView, setStepView] = useState<StepFlowView | null>(null);
+  const [stepBusy, setStepBusy] = useState(false);
 
   const debugMutation = useMutation({
     mutationFn: ({ version, inputs }: { version: string; inputs: Record<string, unknown> }) =>
-      createFlowRun(token, flow.flow_id, { version, inputs }),
+      createFlowRun(token, flow.flow_id, { version, inputs, step_mode: debugStepMode }),
     onSuccess: (run) => {
       setDebugRunId(run.run_id);
       setDebugStarted(true);
@@ -542,6 +561,22 @@ function FlowCanvasMain(props: {
     },
     onError: (err) => showError(message, err, t("flows.runFailed")),
   });
+
+  // Single-step: advance the debug run by one node and refresh per-node state.
+  const stepOnce = async () => {
+    if (!debugRunId || !debugStepMode) return;
+    setStepBusy(true);
+    try {
+      const view = await stepFlowRun(token, debugRunId, flow.flow_id);
+      setStepView(view);
+      // Terminal: stop the SSE stream and refresh the run record.
+      if (view.terminal) setDebugStarted(false);
+    } catch (err) {
+      showError(message, err, t("flows.stepFailed"));
+    } finally {
+      setStepBusy(false);
+    }
+  };
 
   // Live debug events: SSE stream (P3 余项 4) — the backend pushes new
   // workflow events incrementally (500ms tick) until the run reaches a
@@ -598,6 +633,10 @@ function FlowCanvasMain(props: {
   const debugRun = debugRunQuery.data;
   const debugStatus = debugRun?.status ?? (debugStarted ? "running" : undefined);
 
+  // 模板库（B3）：从抽屉移到主界面 — 工具栏「模板库」按钮打开 Modal，
+  // 选模板一键应用为新版本（不改动画布内容）。
+  const [tplOpen, setTplOpen] = useState(false);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%" }}>
       <Space style={{ justifyContent: "space-between", width: "100%" }} align="center" wrap>
@@ -624,6 +663,9 @@ function FlowCanvasMain(props: {
               {t("flows.publish")}
             </Button>
           </Popconfirm>
+          <Button size="small" icon={<ApartmentOutlined />} onClick={() => setTplOpen(true)}>
+            {t("flows.templates")}
+          </Button>
           <Button
             size="small"
             icon={<BugOutlined />}
@@ -639,128 +681,223 @@ function FlowCanvasMain(props: {
         </Space>
       </Space>
 
-      <div style={{ flex: 1, minHeight: 420 }}>
-        <FlowGramFlowEditor
-          ref={editorHandleRef}
-          flowId={flow.flow_id}
-          token={token}
-          t={t}
-          versions={versions}
-          externalDef={externalDef}
-          runEvents={debugEvents}
-          onSaved={(savedVersion) => {
-            message.success(t("flows.savedVersion", { v: savedVersion }));
-            onExternalDefConsumed();
-            onRefresh();
-          }}
-          onSaveError={(err) => showError(message, err, t("flows.saveFailed"))}
-        />
-      </div>
+      <div style={{ flex: 1, minHeight: 420, display: "flex", gap: 8, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <FlowGramFlowEditor
+            ref={editorHandleRef}
+            flowId={flow.flow_id}
+            token={token}
+            t={t}
+            versions={versions}
+            externalDef={externalDef}
+            runEvents={debugEvents}
+            onSaved={(savedVersion) => {
+              message.success(t("flows.savedVersion", { v: savedVersion }));
+              onExternalDefConsumed();
+              onRefresh();
+            }}
+            onSaveError={(err) => showError(message, err, t("flows.saveFailed"))}
+          />
+        </div>
 
-      {debugMode && (
-        <div
-          style={{
-            border: "1px solid #e5e5e5",
-            borderRadius: 8,
-            padding: 10,
-            background: "#fafafa",
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-          }}
-        >
-          <Space wrap align="center">
-            <Text strong style={{ fontSize: 12 }}>
-              {t("flows.debugPanel")}
-            </Text>
-            <Select
-              size="small"
-              style={{ width: 160 }}
-              placeholder={t("flows.version")}
-              value={debugVersion}
-              onChange={setDebugVersion}
-              options={versions.map((v) => ({ value: v.version, label: `${v.version} (${v.status})` }))}
-            />
+        {debugMode && (
+          <div
+            style={{
+              width: 360,
+              flexShrink: 0,
+              border: "1px solid #e5e5e5",
+              borderRadius: 8,
+              padding: 10,
+              background: "#fafafa",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              overflowY: "auto",
+              maxHeight: "100%",
+            }}
+          >
+            <Space wrap align="center">
+              <Text strong style={{ fontSize: 12 }}>
+                {t("flows.debugPanel")}
+              </Text>
+              <Select
+                size="small"
+                style={{ width: 140 }}
+                placeholder={t("flows.version")}
+                value={debugVersion}
+                onChange={setDebugVersion}
+                options={versions.map((v) => ({ value: v.version, label: `${v.version} (${v.status})` }))}
+              />
+            </Space>
             <Input.TextArea
               size="small"
-              style={{ width: 260, fontFamily: "monospace", fontSize: 11 }}
-              rows={1}
+              style={{ width: "100%", fontFamily: "monospace", fontSize: 11 }}
+              rows={2}
               placeholder='{"task": "..."}'
               value={debugInputsText}
               onChange={(e) => setDebugInputsText(e.target.value)}
             />
-            <Button
-              size="small"
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              loading={debugMutation.isPending}
-              onClick={startDebug}
-            >
-              {t("flows.debugStart")}
-            </Button>
+            <Space wrap>
+              <Checkbox
+                checked={debugStepMode}
+                onChange={(e) => setDebugStepMode(e.target.checked)}
+              >
+                <Text style={{ fontSize: 12 }}>{t("flows.debugStepMode")}</Text>
+              </Checkbox>
+              <Button
+                size="small"
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                loading={debugMutation.isPending}
+                onClick={startDebug}
+              >
+                {t("flows.debugStart")}
+              </Button>
+            </Space>
             {debugRunId && (
-              <>
+              <Space wrap>
                 <Tag color={debugStatus === "completed" ? "green" : debugStatus === "error" ? "red" : "processing"}>
                   {debugRunId.slice(0, 12)}… {debugStatus ?? "running"}
                 </Tag>
+                {debugStepMode && !stepView?.terminal && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<StepForwardOutlined />}
+                    loading={stepBusy}
+                    onClick={stepOnce}
+                  >
+                    {t("flows.stepOnce")}
+                  </Button>
+                )}
                 <Button size="small" onClick={clearDebug}>
                   {t("flows.debugClear")}
                 </Button>
-              </>
+              </Space>
             )}
-          </Space>
-          <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 0 }}>
-            {t("flows.debugHint")}
-            {debugRunId && ` · ${t("flows.debugStatus", { status: debugStatus ?? "running" })}`}
-          </Paragraph>
-          {debugRunId && debugEvents.length > 0 && (
-            <div
-              style={{
-                border: "1px solid #eee",
-                borderRadius: 6,
-                background: "#fff",
-                maxHeight: 120,
-                overflowY: "auto",
-                padding: 6,
-                fontFamily: "monospace",
-                fontSize: 11,
-              }}
-            >
+            <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 0 }}>
+              {t("flows.debugHint")}
+              {debugRunId && ` · ${t("flows.debugStatus", { status: debugStatus ?? "running" })}`}
+            </Paragraph>
+
+            {debugStepMode && stepView && (
+              <div style={{ border: "1px solid #eee", borderRadius: 6, background: "#fff", padding: 6 }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {t("flows.stepNodeContext")}
+                </Text>
+                <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 4 }}>
+                  {stepView.nodes.map((n) => (
+                    <div
+                      key={n.id}
+                      style={{
+                        border: "1px solid #f0f0f0",
+                        borderRadius: 4,
+                        padding: "4px 6px",
+                        background: n.status === "completed" ? "#f6ffed" : n.status === "error" ? "#fff2f0" : "#fafafa",
+                      }}
+                    >
+                      <Space size={6} style={{ width: "100%", justifyContent: "space-between" }}>
+                        <Text style={{ fontSize: 11, fontFamily: "monospace" }} strong>
+                          {n.id}
+                        </Text>
+                        <Tag style={{ marginRight: 0, fontSize: 10 }}>{n.status}</Tag>
+                      </Space>
+                      {n.error && (
+                        <Text type="danger" style={{ fontSize: 10, display: "block" }}>
+                          {n.error}
+                        </Text>
+                      )}
+                      {n.outputs && Object.keys(n.outputs).length > 0 && (
+                        <div style={{ marginTop: 2 }}>
+                          <pre
+                            style={{
+                              margin: 0,
+                              fontSize: 10,
+                              whiteSpace: "pre-wrap",
+                              wordBreak: "break-all",
+                              maxHeight: 90,
+                              overflowY: "auto",
+                            }}
+                          >
+                            {JSON.stringify(n.outputs, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {debugRunId && debugEvents.length > 0 && (
               <div
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 4,
+                  border: "1px solid #eee",
+                  borderRadius: 6,
+                  background: "#fff",
+                  maxHeight: 160,
+                  overflowY: "auto",
+                  padding: 6,
+                  fontFamily: "monospace",
+                  fontSize: 11,
                 }}
               >
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {t("flows.debugEvents")}
-                </Text>
-                <Button
-                  size="small"
-                  type="text"
-                  style={{ fontSize: 11, height: 20, padding: "0 4px" }}
-                  onClick={() => setDebugEvents([])}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 4,
+                  }}
                 >
-                  {t("flows.debugClearEvents")}
-                </Button>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {t("flows.debugEvents")}
+                  </Text>
+                  <Button
+                    size="small"
+                    type="text"
+                    style={{ fontSize: 11, height: 20, padding: "0 4px" }}
+                    onClick={() => setDebugEvents([])}
+                  >
+                    {t("flows.debugClearEvents")}
+                  </Button>
+                </div>
+                {debugEvents.map((ev, i) => {
+                  const at = ev.at ? new Date(ev.at as string).toLocaleTimeString() : "";
+                  const node = ev.node_id ? `[${ev.node_id}]` : "";
+                  const { event, node_id: _n, at: _a, ...rest } = ev;
+                  const payload = Object.keys(rest).length > 0 ? JSON.stringify(rest) : "";
+                  return (
+                    <div key={i} style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                      {`${at} ${event} ${node} ${payload}`.trim()}
+                    </div>
+                  );
+                })}
               </div>
-              {debugEvents.map((ev, i) => {
-                const at = ev.at ? new Date(ev.at as string).toLocaleTimeString() : "";
-                const node = ev.node_id ? `[${ev.node_id}]` : "";
-                const { event, node_id: _n, at: _a, ...rest } = ev;
-                const payload = Object.keys(rest).length > 0 ? JSON.stringify(rest) : "";
-                return (
-                  <div key={i} style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
-                    {`${at} ${event} ${node} ${payload}`.trim()}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 模板库（B3）：主界面 Modal，选模板一键应用为新版本 */}
+      <Modal
+        title={t("flows.templates")}
+        open={tplOpen}
+        onCancel={() => setTplOpen(false)}
+        footer={null}
+        width={680}
+      >
+        <TemplateLibrary
+          flowId={flow.flow_id}
+          token={token}
+          t={t}
+          versions={versions}
+          onApplied={() => {
+            onRefresh();
+            setTplOpen(false);
+          }}
+        />
+      </Modal>
     </div>
   );
 }
@@ -820,6 +957,18 @@ function FlowDetailDrawer(props: {
     onSuccess: setDiagnosis,
     onError: (err) => showError(message, err, t("flows.diagnoseFailed")),
   });
+
+  // Run detail: a selected run expands to its inputs / outputs / error /
+  // event timeline (B1) so the 运行记录 tab shows what actually happened.
+  const [runDetail, setRunDetail] = useState<FlowRunView | null>(null);
+  const runDetailEventsQuery = useQuery({
+    queryKey: ["flow-run-events", flow.flow_id, runDetail?.run_id],
+    queryFn: () =>
+      runDetail
+        ? flowRunEvents(token, runDetail.run_id, flow.flow_id)
+        : Promise.resolve([] as FlowRunEvent[]),
+    enabled: Boolean(runDetail),
+  });
   // Applying the fixed definition saves it as a NEW version (createFlow
   // path) — the actual 优化 → 新版本 leg of the loop.
   const nextVersion = useMemo(() => {
@@ -846,20 +995,11 @@ function FlowDetailDrawer(props: {
     onError: (err) => showError(message, err, t("flows.saveFailed")),
   });
 
-  // Canvas tab state: selected version (default: latest with a definition)
-  // and optional run selection for run-state event highlight.
-  const [canvasVersion, setCanvasVersion] = useState<string>();
-  const [canvasRun, setCanvasRun] = useState<string>();
-  const canvasDef = useMemo(() => {
-    // versions are ascending; the LATEST definition is the last match.
-    const pick = canvasVersion ?? [...versions].reverse().find((v) => v.definition)?.version;
-    return versions.find((v) => v.version === pick)?.definition ?? undefined;
-  }, [versions, canvasVersion]);
-  const eventsQuery = useQuery({
-    queryKey: ["flow-run-events", flow.flow_id, canvasRun],
-    queryFn: () => (canvasRun ? flowRunEvents(token, canvasRun, flow.flow_id) : Promise.resolve([])),
-    enabled: Boolean(canvasRun),
-  });
+  // Latest definition (ascending versions; the LAST match wins) — used by the
+  // variables tab for scope-chain rendering.
+  const latestDef = useMemo(() => {
+    return [...versions].reverse().find((v) => v.definition)?.definition ?? undefined;
+  }, [versions]);
 
   return (
     <Drawer title={flow.flow_id} open onClose={onClose} width={720}>
@@ -947,6 +1087,13 @@ function FlowDetailDrawer(props: {
                       <Space wrap>
                         <Button
                           size="small"
+                          icon={<EyeOutlined />}
+                          onClick={() => setRunDetail(row)}
+                        >
+                          {t("flows.detail")}
+                        </Button>
+                        <Button
+                          size="small"
                           icon={<BugOutlined />}
                           disabled={row.status !== "error"}
                           loading={diagnoseMutation.isPending && diagnoseMutation.variables?.runId === row.run_id}
@@ -971,6 +1118,94 @@ function FlowDetailDrawer(props: {
                   },
                 ]}
               />
+              {runDetail && (
+                <div
+                  style={{
+                    marginTop: 12,
+                    border: "1px solid #e5e5e5",
+                    borderRadius: 8,
+                    padding: 10,
+                    background: "#fafafa",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
+                    <Space size={6}>
+                      <Text strong style={{ fontSize: 12 }}>
+                        {t("flows.runDetail")}
+                      </Text>
+                      <Text style={{ fontFamily: "monospace", fontSize: 11 }}>{runDetail.run_id}</Text>
+                      <Tag color={runStatusColor(runDetail.status)}>{runDetail.status}</Tag>
+                    </Space>
+                    <Button size="small" onClick={() => setRunDetail(null)}>
+                      {t("flows.diagnoseClose")}
+                    </Button>
+                  </Space>
+                  {runDetail.inputs && Object.keys(runDetail.inputs).length > 0 && (
+                    <div>
+                      <Text strong style={{ fontSize: 12 }}>
+                        {t("flows.runInputs")}
+                      </Text>
+                      <CodeViewer value={JSON.stringify(runDetail.inputs, null, 2)} language="json" maxHeight={160} />
+                    </div>
+                  )}
+                  {runDetail.outputs && Object.keys(runDetail.outputs).length > 0 && (
+                    <div>
+                      <Text strong style={{ fontSize: 12 }}>
+                        {t("flows.runOutputs")}
+                      </Text>
+                      <CodeViewer value={JSON.stringify(runDetail.outputs, null, 2)} language="json" maxHeight={160} />
+                    </div>
+                  )}
+                  {runDetail.error && (
+                    <div>
+                      <Text strong type="danger" style={{ fontSize: 12 }}>
+                        {t("flows.runError")}
+                      </Text>
+                      <Paragraph type="danger" style={{ fontSize: 12, marginBottom: 0 }}>
+                        {runDetail.error}
+                      </Paragraph>
+                    </div>
+                  )}
+                  <div>
+                    <Text strong style={{ fontSize: 12 }}>
+                      {t("flows.debugEvents")}
+                    </Text>
+                    {runDetailEventsQuery.data && runDetailEventsQuery.data.length > 0 ? (
+                      <div
+                        style={{
+                          border: "1px solid #eee",
+                          borderRadius: 6,
+                          background: "#fff",
+                          maxHeight: 200,
+                          overflowY: "auto",
+                          padding: 6,
+                          fontFamily: "monospace",
+                          fontSize: 11,
+                        }}
+                      >
+                        {runDetailEventsQuery.data.map((ev, i) => {
+                          const at = ev.at ? new Date(ev.at as string).toLocaleTimeString() : "";
+                          const node = ev.node_id ? `[${ev.node_id}]` : "";
+                          const { event, node_id: _n, at: _a, ...rest } = ev;
+                          const payload = Object.keys(rest).length > 0 ? JSON.stringify(rest) : "";
+                          return (
+                            <div key={i} style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                              {`${at} ${event} ${node} ${payload}`.trim()}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 0 }}>
+                        {t("flows.noEvents")}
+                      </Paragraph>
+                    )}
+                  </div>
+                </div>
+              )}
               {diagnosis && (
                 <div
                   style={{
@@ -1047,60 +1282,18 @@ function FlowDetailDrawer(props: {
             ),
           },
           {
-            key: "templates",
-            label: t("flows.templates"),
-            children: (
-              <TemplateLibrary
-                flowId={flow.flow_id}
-                token={token}
-                t={t}
-                versions={versions}
-                onApplied={onRefresh}
-              />
-            ),
-          },
-          {
-            key: "canvas",
-            label: t("flows.canvas"),
-            children: (
-              <div>
-                {versions.length > 0 && (
-                  <Space wrap style={{ marginBottom: 12 }}>
-                    <Select
-                      style={{ width: 220 }}
-                      placeholder={t("flows.version")}
-                      value={canvasVersion}
-                      onChange={setCanvasVersion}
-                      options={versions.map((v) => ({ value: v.version, label: `${v.version} (${v.status})` }))}
-                    />
-                    <Select
-                      style={{ width: 260 }}
-                      placeholder={t("flows.canvasRun")}
-                      value={canvasRun}
-                      onChange={setCanvasRun}
-                      allowClear
-                      options={runs.map((r) => ({ value: r.run_id, label: `${r.run_id.slice(0, 12)}… (${r.status})` }))}
-                    />
-                  </Space>
-                )}
-                {canvasDef ? (
-                  <FlowGramCanvas def={canvasDef} events={eventsQuery.data} />
-                ) : (
-                  <Empty description={t("flows.canvasEmpty")} />
-                )}
-                {canvasRun && (
-                  <Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
-                    {t("flows.canvasRunHint")}
-                  </Paragraph>
-                )}
-              </div>
-            ),
-          },
-          {
             key: "variables",
             label: t("flows.variables"),
-            children: canvasDef ? (
-              <VariableScopePanel def={canvasDef} t={t} />
+            children: latestDef ? (
+              <VariableScopePanel
+                def={latestDef}
+                token={token}
+                flowId={flow.flow_id}
+                t={t}
+                message={message}
+                onRefresh={onRefresh}
+                nextVersion={nextVersion}
+              />
             ) : (
               <Empty description={t("flows.canvasEmpty")} />
             ),
@@ -1123,7 +1316,7 @@ function FlowDetailDrawer(props: {
             key: "production",
             label: t("flows.production"),
             children: (
-              <ProductionGatewayTab flow={flow} t={t} versions={versions} />
+              <ProductionGatewayTab flow={flow} token={token} t={t} versions={versions} />
             ),
           },
         ]}
@@ -1143,11 +1336,48 @@ function FlowDetailDrawer(props: {
  */
 function VariableScopePanel(props: {
   def: FlowDefinition;
+  token: string | null;
+  flowId: string;
   t: (k: string, v?: Record<string, string | number>) => string;
+  message: ReturnType<typeof AntApp.useApp>["message"];
+  onRefresh: () => void;
+  nextVersion: string;
 }) {
-  const { def, t } = props;
+  const { def, t, token, flowId, message, onRefresh, nextVersion } = props;
   const nodes = def.nodes ?? [];
   const edges = def.edges ?? [];
+
+  // Editable flow-level inputs/outputs (B5) — previously read-only. Node
+  // outputs stay read-only (they belong to the node spec on the canvas).
+  type FlowVarDef = { name: string; type?: string; desc?: string };
+  const [inputs, setInputs] = useState<FlowVarDef[]>(def.inputs ?? []);
+  const [outputs, setOutputs] = useState<FlowVarDef[]>(def.outputs ?? []);
+  const [targetVersion, setTargetVersion] = useState(nextVersion);
+  useEffect(() => {
+    setInputs(def.inputs ?? []);
+    setOutputs(def.outputs ?? []);
+  }, [def]);
+
+  const patchVar = (list: FlowVarDef[], setter: (v: FlowVarDef[]) => void, i: number, patch: Partial<FlowVarDef>) =>
+    setter(list.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+
+  const saveMutation = useMutation({
+    mutationFn: async (v: string) => {
+      const updated: FlowDefinition = {
+        ...def,
+        inputs,
+        outputs,
+        version: v,
+        status: "draft",
+      };
+      return createFlow(token, { flow_id: flowId, version: v, status: "draft", definition: updated });
+    },
+    onSuccess: () => {
+      message.success(t("flows.varSaved", { v: targetVersion }));
+      onRefresh();
+    },
+    onError: (err) => showError(message, err, t("flows.saveFailed")),
+  });
 
   // Scan prompt text for {{...}} variable references.
   const refsByVar = new Map<string, string[]>();
@@ -1189,28 +1419,87 @@ function VariableScopePanel(props: {
     );
   };
 
+  const editableVarList = (
+    list: FlowVarDef[],
+    setter: (v: FlowVarDef[]) => void,
+    kind: "inputs" | "outputs",
+  ) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {list.length === 0 && (
+        <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
+      )}
+      {list.map((v, i) => (
+        <Space key={i} size={4} style={{ width: "100%" }}>
+          <Input
+            size="small"
+            style={{ width: 130, fontFamily: "monospace", fontSize: 11 }}
+            placeholder={t("flows.varName")}
+            value={v.name}
+            onChange={(e) => patchVar(list, setter, i, { name: e.target.value })}
+          />
+          <Input
+            size="small"
+            style={{ width: 80, fontSize: 11 }}
+            placeholder="string"
+            value={v.type ?? ""}
+            onChange={(e) => patchVar(list, setter, i, { type: e.target.value })}
+          />
+          <Input
+            size="small"
+            style={{ flex: 1, minWidth: 0, fontSize: 11 }}
+            placeholder={t("flows.varDesc")}
+            value={v.desc ?? ""}
+            onChange={(e) => patchVar(list, setter, i, { desc: e.target.value })}
+          />
+          <Button
+            size="small"
+            type="text"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => setter(list.filter((_, j) => j !== i))}
+          />
+        </Space>
+      ))}
+      <Button
+        size="small"
+        type="dashed"
+        icon={<PlusOutlined />}
+        onClick={() => setter([...list, { name: "", type: "string" }])}
+      >
+        {t("flows.varAdd", { kind })}
+      </Button>
+    </div>
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div>
         <Text strong style={{ fontSize: 12 }}>{t("flows.varFlowInputs")}</Text>
-        <div style={{ marginTop: 4 }}>
-          {(def.inputs ?? []).length === 0 ? (
-            <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
-          ) : (
-            (def.inputs ?? []).map((v) => varRow(v.name, v.type, v.desc, "inputs"))
-          )}
-        </div>
+        <div style={{ marginTop: 4 }}>{editableVarList(inputs, setInputs, "inputs")}</div>
       </div>
       <div>
         <Text strong style={{ fontSize: 12 }}>{t("flows.varFlowOutputs")}</Text>
-        <div style={{ marginTop: 4 }}>
-          {(def.outputs ?? []).length === 0 ? (
-            <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
-          ) : (
-            (def.outputs ?? []).map((v) => varRow(v.name, v.type, v.desc, "outputs"))
-          )}
-        </div>
+        <div style={{ marginTop: 4 }}>{editableVarList(outputs, setOutputs, "outputs")}</div>
       </div>
+      <Space wrap>
+        <Text type="secondary">{t("flows.version")}</Text>
+        <Input
+          style={{ width: 100 }}
+          value={targetVersion}
+          onChange={(e) => setTargetVersion(e.target.value.trim())}
+          placeholder="1"
+        />
+        <Button
+          type="primary"
+          size="small"
+          icon={<SaveOutlined />}
+          loading={saveMutation.isPending}
+          onClick={() => saveMutation.mutate(targetVersion || "1")}
+        >
+          {t("flows.save")}
+        </Button>
+        <Text type="secondary" style={{ fontSize: 11 }}>{t("flows.varSaveHint")}</Text>
+      </Space>
       <div>
         <Text strong style={{ fontSize: 12 }}>{t("flows.varNodeOutputs")}</Text>
         <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -1299,16 +1588,16 @@ function DefinitionJsonTab(props: {
 
   return (
     <div>
-      <Input.TextArea
-        rows={18}
-        style={{ fontFamily: "monospace", fontSize: 11 }}
-        value={jsonText}
-        onChange={(e) => {
-          setJsonText(e.target.value);
-          setDirty(true);
-        }}
-        placeholder={t("flows.noDefinition")}
-      />
+      <div style={{ border: "1px solid #e5e5e5", borderRadius: 6, overflow: "hidden", height: 420 }}>
+        <CodeEditor
+          content={jsonText}
+          filePath="flow.json"
+          onChange={(v) => {
+            setJsonText(v);
+            setDirty(true);
+          }}
+        />
+      </div>
       <Space style={{ marginTop: 12 }} wrap>
         <Button icon={<ReloadOutlined />} onClick={onRefresh}>
           {t("flows.refresh")}
@@ -1331,20 +1620,136 @@ function DefinitionJsonTab(props: {
  */
 function ProductionGatewayTab(props: {
   flow: FlowSummaryView;
+  token: string | null;
   t: (k: string, v?: Record<string, string | number>) => string;
   versions: FlowVersionView[];
 }) {
-  const { flow, t, versions } = props;
+  const { flow, token, t, versions } = props;
+  const { message } = AntApp.useApp();
   const published = versions.find((v) => v.status === "published")?.version;
+
+  // 复用业务 agent 的 BizKey 接入机制（B7）：列出绑定此 flow 的业务 key，
+  // 支持一键创建绑定 key + PIN 解锁查看完整密钥，并用真实 key 生成调用示例。
+  const keysQuery = useQuery({
+    queryKey: ["biz-keys", token],
+    enabled: Boolean(token),
+    queryFn: () => listBizKeys(token),
+  });
+  const flowKeys = useMemo(
+    () => (keysQuery.data ?? []).filter((k) => k.flow_id === flow.flow_id),
+    [keysQuery.data, flow.flow_id],
+  );
+
+  const [newSecret, setNewSecret] = useState<string>();
+  const createKeyMutation = useMutation({
+    mutationFn: () =>
+      createBizKey(token, {
+        name: `flow-${flow.flow_id}`,
+        flow_id: flow.flow_id,
+        description: `Business Flow ${flow.flow_id} gateway key`,
+      }),
+    onSuccess: (res) => {
+      setNewSecret(res.secret);
+      void keysQuery.refetch();
+      message.success(t("flows.productionKeyCreated"));
+    },
+    onError: (err) => showError(message, err, t("flows.saveFailed")),
+  });
+
+  // PIN 解锁完整密钥（与业务 agent 管理页一致）。
+  const [revealed, setRevealed] = useState<Record<string, string>>({});
+  const [pinInput, setPinInput] = useState<Record<string, string>>({});
+  const revealMutation = useMutation({
+    mutationFn: ({ id, pin }: { id: string; pin: string }) => revealBizKey(token, id, pin),
+    onSuccess: (res, vars) => {
+      setRevealed((prev) => ({ ...prev, [vars.id]: res.secret }));
+      message.success(t("flows.productionRevealed"));
+    },
+    onError: (err) => showError(message, err, t("flows.productionRevealFailed")),
+  });
+
+  const activeKey = flowKeys[0];
+  const curlKey = (activeKey && revealed[activeKey.id]) || activeKey?.key_prefix || "<biz_key>";
   const curl = `curl -X POST http://127.0.0.1:8088/v1/gateway/${encodeURIComponent(flow.flow_id)} \\
-  -H "Authorization: Bearer <biz_key>" \\
+  -H "Authorization: Bearer ${curlKey}" \\
   -H "Content-Type: application/json" \\
   -d '{"inputs": {"task": "..."}, "wait_ms": 60000}'`;
+
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Paragraph type="secondary" style={{ fontSize: 12 }}>
         {t("flows.productionHint")}
       </Paragraph>
+
+      {/* 绑定此 flow 的业务 key */}
+      <div>
+        <Text strong style={{ fontSize: 12 }}>
+          {t("flows.productionBoundKeys")}
+        </Text>
+        {flowKeys.length === 0 ? (
+          <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 4 }}>
+            {t("flows.productionNoKey")}
+          </Paragraph>
+        ) : (
+          <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 4 }}>
+            {flowKeys.map((k) => (
+              <Space key={k.id} size={6} style={{ width: "100%" }} wrap>
+                <Tag color="blue">{k.name}</Tag>
+                <Text code style={{ fontSize: 11 }}>
+                  {k.key_prefix}
+                </Text>
+                {k.enabled ? <Tag color="green">enabled</Tag> : <Tag color="red">disabled</Tag>}
+                {revealed[k.id] ? (
+                  <Text code style={{ fontSize: 10 }}>
+                    {revealed[k.id]}
+                  </Text>
+                ) : (
+                  <Space size={4}>
+                    <Input.Password
+                      size="small"
+                      style={{ width: 110, fontSize: 11 }}
+                      placeholder={t("flows.productionPin")}
+                      value={pinInput[k.id] ?? ""}
+                      onChange={(e) => setPinInput((prev) => ({ ...prev, [k.id]: e.target.value }))}
+                    />
+                    <Button
+                      size="small"
+                      icon={<EyeOutlined />}
+                      loading={revealMutation.isPending}
+                      onClick={() => revealMutation.mutate({ id: k.id, pin: pinInput[k.id] ?? "" })}
+                    >
+                      {t("flows.productionReveal")}
+                    </Button>
+                  </Space>
+                )}
+              </Space>
+            ))}
+          </div>
+        )}
+        <Space style={{ marginTop: 8 }} wrap>
+          <Button
+            size="small"
+            type="primary"
+            icon={<PlusOutlined />}
+            loading={createKeyMutation.isPending}
+            onClick={() => createKeyMutation.mutate()}
+          >
+            {t("flows.productionCreateKey")}
+          </Button>
+          {newSecret && (
+            <Text code style={{ fontSize: 11 }}>
+              {newSecret}
+            </Text>
+          )}
+        </Space>
+        {newSecret && (
+          <Paragraph type="warning" style={{ fontSize: 11, marginTop: 4, marginBottom: 0 }}>
+            {t("flows.productionSecretOnce")}
+          </Paragraph>
+        )}
+      </div>
+
+      {/* 调用示例（真实 key） */}
       <pre
         style={{
           background: "#f5f5f5",
@@ -1352,11 +1757,12 @@ function ProductionGatewayTab(props: {
           borderRadius: 6,
           fontSize: 11,
           overflow: "auto",
+          marginBottom: 0,
         }}
       >
         {curl}
       </pre>
-      <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+      <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
         {published
           ? `${t("flows.productionPublished")} ${published}`
           : t("flows.productionNoRoute")}

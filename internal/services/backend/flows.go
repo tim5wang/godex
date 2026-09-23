@@ -211,6 +211,16 @@ func (s *Service) DiagnoseFlowRun(ctx context.Context, flowID, runID string) (*a
 	return a.DiagnoseFlowRun(ctx, flowID, runID)
 }
 
+// StepFlowRun advances a debug run by exactly one node (single-stepping) and
+// returns the refreshed per-node state with outputs/context for the debug UI.
+func (s *Service) StepFlowRun(ctx context.Context, flowID, runID string) (*agent.StepFlowView, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return nil, err
+	}
+	return a.StepFlowRun(ctx, flowID, runID)
+}
+
 // InspectFlows aggregates run health across published flows over a window
 // (P3 Agent 闭环 §22.2 定期巡检).
 func (s *Service) InspectFlows(windowHours int) (*agent.FlowInspectionReport, error) {

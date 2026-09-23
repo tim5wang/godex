@@ -307,6 +307,92 @@ func (a *Agent) StartFlowRun(ctx context.Context, flowID, runID string) (FlowRun
 	return flowRunView(rec), nil
 }
 
+// StepFlowView is the single-step debug view: run identity + the refreshed
+// workflow node states (status/outputs per node) so the UI can render the
+// per-node context variables after each step.
+type StepFlowView struct {
+	RunID      string         `json:"run_id"`
+	FlowID     string         `json:"flow_id"`
+	Status     string         `json:"status"`
+	Started    string         `json:"started,omitempty"`
+	Nodes      []NodeStepView `json:"nodes"`
+	Terminal   bool           `json:"terminal"`
+}
+
+// NodeStepView is one node's debug state.
+type NodeStepView struct {
+	ID       string         `json:"id"`
+	Kind     string         `json:"kind"`
+	Title    string         `json:"title,omitempty"`
+	Status   string         `json:"status"`
+	Outputs  map[string]any `json:"outputs,omitempty"`
+	Error    string         `json:"error,omitempty"`
+	Decision *workflowDecisionResult `json:"decision,omitempty"`
+}
+
+// StepFlowRun advances a debug run by exactly one node (single-stepping) and
+// returns the refreshed per-node state for the debug panel. Returns an error
+// when the run is terminal.
+func (a *Agent) StepFlowRun(ctx context.Context, flowID, runID string) (*StepFlowView, error) {
+	if a == nil || a.flows == nil {
+		return nil, fmt.Errorf("flow runtime unavailable")
+	}
+	rec, err := a.flows.loadRun(flowID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if rec.WorkflowID == "" {
+		return nil, fmt.Errorf("run %s has no workflow", runID)
+	}
+	view, err := a.stepWorkflow(ctx, rec.WorkflowID)
+	if err != nil {
+		return nil, err
+	}
+	rec.Status = view.Status
+	rec.UpdatedAt = time.Now().UTC()
+	if err := a.flows.saveRun(flowID, rec); err != nil {
+		return nil, err
+	}
+	out := &StepFlowView{
+		RunID:    runID,
+		FlowID:   flowID,
+		Status:   view.Status,
+		Started:  firstStarted(view.Started),
+		Terminal: workflowTerminalStatus(view.Status),
+		Nodes:    make([]NodeStepView, 0, len(view.Nodes)),
+	}
+	for _, n := range view.Nodes {
+		out.Nodes = append(out.Nodes, NodeStepView{
+			ID:       n.ID,
+			Kind:     n.Kind,
+			Title:    n.Title,
+			Status:   n.Status,
+			Outputs:  n.Outputs,
+			Error:    n.Error,
+			Decision: n.Decision,
+		})
+	}
+	return out, nil
+}
+
+// firstStarted returns the first started node id from a step run.
+func firstStarted(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
+}
+
+// workflowTerminalStatus reports whether a workflow summary status is terminal.
+func workflowTerminalStatus(status string) bool {
+	switch status {
+	case workflowStatusCompleted, workflowStatusError, workflowStatusCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
 // WaitFlowRun waits for the run's workflow to reach a terminal state.
 func (a *Agent) WaitFlowRun(ctx context.Context, flowID, runID string, timeoutMS int) (FlowRunView, error) {
 	if a == nil || a.flows == nil {

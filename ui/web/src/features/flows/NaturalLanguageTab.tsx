@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { App as AntApp, Alert, Button, Input, Space, Typography } from "antd";
-import { RocketOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { RocketOutlined, SendOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import {
   createFlow,
   generateFlowSpec,
@@ -12,10 +12,20 @@ import { FlowGramCanvas } from "./FlowGramCanvas";
 
 const { Text, Paragraph } = Typography;
 
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  /** Assistant messages carry the draft produced by that turn (for preview). */
+  draft?: FlowDefinition;
+  error?: boolean;
+}
+
 /**
  * NaturalLanguageTab — describe the business process in plain language; the
  * backend LLM drafts a Flow Spec definition; preview it on the canvas and
- * save as a new version. No hand-written JSON required (P2.5).
+ * save as a new version. Multi-turn: every follow-up message AMENDS the
+ * current draft (incremental editing, P3 余项 1) so the tab behaves like a
+ * conversation with the flow instead of a one-shot form.
  */
 export function NaturalLanguageTab(props: {
   flowId: string;
@@ -26,7 +36,8 @@ export function NaturalLanguageTab(props: {
 }) {
   const { flowId, token, t, versions, onApplied } = props;
   const { message } = AntApp.useApp();
-  const [description, setDescription] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
   const [draft, setDraft] = useState<FlowDefinition | null>(null);
   const [draftVersion, setDraftVersion] = useState(() => nextNumericVersion(versions));
 
@@ -41,12 +52,34 @@ export function NaturalLanguageTab(props: {
     },
     onSuccess: (def) => {
       setDraft(def);
-      message.success(t("flows.nlGenerated"));
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: draftSummary(def),
+          draft: def,
+        },
+      ]);
     },
     onError: (err) => {
-      message.error(err instanceof Error ? err.message : String(err));
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: err instanceof Error ? err.message : String(err),
+          error: true,
+        },
+      ]);
     },
   });
+
+  const send = () => {
+    const desc = input.trim();
+    if (!desc || generateMutation.isPending) return;
+    setMessages((prev) => [...prev, { role: "user", content: desc }]);
+    setInput("");
+    generateMutation.mutate({ desc, base: draft ?? undefined });
+  };
 
   const saveMutation = useMutation({
     mutationFn: async ({ targetVersion }: { targetVersion: string }) => {
@@ -56,8 +89,11 @@ export function NaturalLanguageTab(props: {
     },
     onSuccess: () => {
       message.success(t("flows.templateApplied"));
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: t("flows.nlSavedVersion", { v: draftVersion }) },
+      ]);
       setDraft(null);
-      setDescription("");
       onApplied();
     },
     onError: (err) => {
@@ -66,71 +102,119 @@ export function NaturalLanguageTab(props: {
   });
 
   return (
-    <div>
-      <Paragraph type="secondary" style={{ fontSize: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
         {t("flows.nlHint")}
       </Paragraph>
-      <Input.TextArea
-        rows={4}
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        placeholder={draft ? t("flows.nlAmendPlaceholder") : t("flows.nlPlaceholder")}
-      />
-      <Space style={{ marginTop: 12 }}>
-        {draft ? (
-          <Button
-            type="primary"
-            icon={<ThunderboltOutlined />}
-            loading={generateMutation.isPending}
-            disabled={!description.trim()}
-            onClick={() => generateMutation.mutate({ desc: description.trim(), base: draft })}
-          >
-            {t("flows.nlAmend")}
-          </Button>
-        ) : (
-          <Button
-            type="primary"
-            icon={<ThunderboltOutlined />}
-            loading={generateMutation.isPending}
-            disabled={!description.trim()}
-            onClick={() => generateMutation.mutate({ desc: description.trim() })}
-          >
-            {t("flows.nlGenerate")}
-          </Button>
-        )}
-        {draft && (
-          <>
-            <Text type="secondary">{t("flows.version")}</Text>
-            <Input
-              style={{ width: 100 }}
-              value={draftVersion}
-              onChange={(e) => setDraftVersion(e.target.value.trim())}
-              placeholder="1"
-            />
-            <Button
-              icon={<RocketOutlined />}
-              type="primary"
-              loading={saveMutation.isPending}
-              onClick={() => saveMutation.mutate({ targetVersion: draftVersion || "1" })}
-            >
-              {t("flows.save")}
-            </Button>
-          </>
-        )}
-      </Space>
 
-      {generateMutation.isError && (
+      {/* Conversation */}
+      <div
+        style={{
+          border: "1px solid #eee",
+          borderRadius: 8,
+          background: "#fff",
+          maxHeight: 220,
+          overflowY: "auto",
+          padding: 8,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        {messages.length === 0 && (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {t("flows.nlChatEmpty")}
+          </Text>
+        )}
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            style={{
+              alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+              maxWidth: "88%",
+              background: m.role === "user" ? "#e6f4ff" : m.error ? "#fff2f0" : "#f6f6f6",
+              borderRadius: 8,
+              padding: "6px 10px",
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {m.content}
+          </div>
+        ))}
+        {generateMutation.isPending && (
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {t("flows.nlThinking")}
+          </Text>
+        )}
+      </div>
+
+      <Space.Compact style={{ width: "100%" }}>
+        <Input.TextArea
+          rows={2}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={draft ? t("flows.nlAmendPlaceholder") : t("flows.nlPlaceholder")}
+          onPressEnter={(e) => {
+            if (!e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+        />
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          loading={generateMutation.isPending}
+          disabled={!input.trim()}
+          onClick={send}
+          style={{ height: "auto" }}
+        >
+          {t("flows.send")}
+        </Button>
+      </Space.Compact>
+
+      {draft && (
+        <Space wrap>
+          <Text type="secondary">{t("flows.version")}</Text>
+          <Input
+            style={{ width: 100 }}
+            value={draftVersion}
+            onChange={(e) => setDraftVersion(e.target.value.trim())}
+            placeholder="1"
+          />
+          <Button
+            icon={<RocketOutlined />}
+            type="primary"
+            loading={saveMutation.isPending}
+            onClick={() => saveMutation.mutate({ targetVersion: draftVersion || "1" })}
+          >
+            {t("flows.save")}
+          </Button>
+          <Button
+            icon={<ThunderboltOutlined />}
+            disabled={!draft}
+            onClick={() =>
+              generateMutation.mutate({ desc: t("flows.nlRegenerate"), base: draft })
+            }
+          >
+            {t("flows.nlRegenerate")}
+          </Button>
+        </Space>
+      )}
+
+      {generateMutation.isError && !messages.some((m) => m.error) && (
         <Alert
           type="error"
           showIcon
-          style={{ marginTop: 12 }}
           message={t("flows.nlGenerateFailed")}
           description={generateMutation.error instanceof Error ? generateMutation.error.message : String(generateMutation.error)}
         />
       )}
 
       {draft && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 4 }}>
           <Text strong>{t("flows.nlPreview")}</Text>
           <div style={{ marginTop: 8 }}>
             <FlowGramCanvas def={draft} />
@@ -139,6 +223,17 @@ export function NaturalLanguageTab(props: {
       )}
     </div>
   );
+}
+
+function draftSummary(def: FlowDefinition): string {
+  const nodes = def.nodes?.length ?? 0;
+  const edges = def.edges?.length ?? 0;
+  const kinds = new Map<string, number>();
+  for (const n of def.nodes ?? []) {
+    kinds.set(n.kind ?? "node", (kinds.get(n.kind ?? "node") ?? 0) + 1);
+  }
+  const parts = [...kinds.entries()].map(([k, c]) => `${k}×${c}`).join("、");
+  return `已生成草稿：${nodes} 节点 / ${edges} 连线${parts ? `（${parts}）` : ""}`;
 }
 
 function nextNumericVersion(versions: FlowVersionView[]): string {

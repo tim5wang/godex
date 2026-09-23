@@ -126,6 +126,8 @@ export interface BizKey {
   description?: string;
   default_prompt?: string;
   template_id?: string;
+  /** FlowID pins this key to a published Business Flow (P2.1 gateway). */
+  flow_id?: string;
   key_hash?: string;
   key_prefix: string;
   enabled: boolean;

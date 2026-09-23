@@ -369,6 +369,7 @@ export function createBizKey(
     description?: string;
     default_prompt?: string;
     template_id?: string;
+    flow_id?: string;
     mcp_servers?: string[];
     providers?: ProviderRef[];
     sandbox_tools?: string[];
@@ -399,6 +400,7 @@ export function updateBizKey(
     default_prompt?: string;
     enabled?: boolean;
     template_id?: string;
+    flow_id?: string;
     mcp_servers?: string[];
     providers?: ProviderRef[];
     sandbox_tools?: string[];

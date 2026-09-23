@@ -841,6 +841,63 @@ func (a *Agent) startWorkflowReadyNodes(ctx context.Context, id string) (workflo
 	return view, nil
 }
 
+// stepWorkflow advances the workflow by exactly one visible step: it starts
+// the NEXT ready node (single node per call — debug single-stepping), waits
+// for any async job it spawned to finish, and returns the refreshed view.
+// Synchronous nodes (decision/branch/function) complete in place, so a step
+// may transit several of those before landing on an async node or finishing.
+func (a *Agent) stepWorkflow(ctx context.Context, id string) (workflowView, error) {
+	state, err := a.workflowState(id)
+	if err != nil {
+		return workflowView{}, err
+	}
+	now := time.Now().UTC()
+	started := ""
+	for i := range state.Nodes {
+		node := &state.Nodes[i]
+		if node.Status != workflowStatusPending || !workflowDepsCompleted(state.Nodes, node.DependsOn) || !workflowNodeRetryDue(node, now) {
+			continue
+		}
+		if id, ok := a.startWorkflowNode(ctx, &state, node); ok {
+			started = id
+		}
+		break // single step: start at most ONE node per call
+	}
+	state.Summary.UpdatedAt = now
+	a.refreshWorkflowStatus(&state)
+	if _, err := a.processWorkflowEdges(&state); err != nil {
+		return workflowView{}, err
+	}
+	if err := a.workflows.save(state); err != nil {
+		return workflowView{}, err
+	}
+	_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{"event": "step", "node_id": started, "at": now})
+
+	// Wait for the async node we just started (if any) to reach a terminal
+	// state so the caller sees the node's OUTPUTS and the next ready node.
+	state, err = a.workflowState(id)
+	if err != nil {
+		return workflowView{}, err
+	}
+	var jobIDs []string
+	for _, node := range state.Nodes {
+		if node.Status == workflowStatusRunning && strings.TrimSpace(node.JobID) != "" {
+			jobIDs = append(jobIDs, node.JobID)
+		}
+	}
+	if len(jobIDs) > 0 {
+		if _, err := waitSubagents(ctx, a, subagentWaitRequest{JobIDs: jobIDs, Mode: "all", TimeoutMS: 120000}); err != nil {
+			// Surface the wait error but still return the refreshed view.
+			_ = err
+		}
+	}
+	state, err = a.workflowState(id)
+	if err != nil {
+		return workflowView{}, err
+	}
+	return workflowViewFromState(state), nil
+}
+
 // startWorkflowNode attempts to start a single workflow node. It mutates
 // state.Nodes[i] in place. Returns the started node id and a boolean
 // indicating whether the node transitioned from pending to running.

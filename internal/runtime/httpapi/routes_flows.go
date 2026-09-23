@@ -33,6 +33,7 @@ type flowService interface {
 	ReplyFlowRunHuman(ctx context.Context, flowID, runID, nodeID string, value any) (agent.FlowRunView, error)
 	FlowRunEvents(flowID, runID string) ([]map[string]any, error)
 	DiagnoseFlowRun(ctx context.Context, flowID, runID string) (*agent.FlowDiagnosis, error)
+	StepFlowRun(ctx context.Context, flowID, runID string) (*agent.StepFlowView, error)
 	InspectFlows(windowHours int) (*agent.FlowInspectionReport, error)
 }
 
@@ -134,6 +135,9 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 			Version string         `json:"version,omitempty"`
 			Inputs  map[string]any `json:"inputs,omitempty"`
 			WaitMS  int            `json:"wait_ms,omitempty"`
+			// StepMode creates the run WITHOUT auto-start so the caller can
+			// single-step it via POST /v1/flow-runs/{runID}/step (debug UI).
+			StepMode bool `json:"step_mode,omitempty"`
 		}
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -143,6 +147,11 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 		run, err := service.CreateFlowRun(ctx, r.PathValue("id"), req.Version, req.Inputs)
 		if err != nil {
 			writeError(w, http.StatusUnprocessableEntity, err)
+			return
+		}
+		if req.StepMode {
+			// Debug single-step mode: leave the run pending; the caller steps it.
+			writeJSON(w, http.StatusAccepted, run)
 			return
 		}
 		started, err := service.StartFlowRun(ctx, r.PathValue("id"), run.RunID)
@@ -212,6 +221,21 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 			return
 		}
 		writeJSON(w, http.StatusOK, diag)
+	})))
+	// POST /v1/flow-runs/{runID}/step — advance a debug run by exactly one
+	// node (single-stepping); returns per-node state with outputs/context.
+	mux.Handle("POST /v1/flow-runs/{runID}/step", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flowID := r.URL.Query().Get("flow_id")
+		if flowID == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("missing flow_id query param"))
+			return
+		}
+		view, err := service.StepFlowRun(r.Context(), flowID, r.PathValue("runID"))
+		if err != nil {
+			writeError(w, statusForFlowError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
 	})))
 	// GET /v1/flow-inspection?window_hours=24 — aggregate run health across
 	// published flows (P3 Agent 闭环 §22.2 定期巡检).

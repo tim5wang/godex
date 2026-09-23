@@ -182,6 +182,8 @@ export function createFlowRun(token: string | null, flowId: string, body: {
   version?: string;
   inputs?: Record<string, unknown>;
   wait_ms?: number;
+  /** step_mode creates the run WITHOUT auto-start so the UI can single-step it. */
+  step_mode?: boolean;
 }) {
   return request<FlowRunView>(`/v1/flows/${encodeURIComponent(flowId)}/runs`, { method: "POST", body: JSON.stringify(body) }, token);
 }
@@ -216,6 +218,37 @@ export function flowRunEvents(token: string | null, runId: string, flowId: strin
   return request<FlowRunEvent[]>(
     `/v1/flow-runs/${encodeURIComponent(runId)}/events?flow_id=${encodeURIComponent(flowId)}&poll=1`,
     { method: "GET" },
+    token,
+  );
+}
+
+// ---- Flow single-step debug (调试面板单步运行) -----------------------------
+
+export interface NodeStepView {
+  id: string;
+  kind: string;
+  title?: string;
+  status: string;
+  outputs?: Record<string, unknown>;
+  error?: string;
+  decision?: { choice?: string; confidence?: number };
+}
+
+export interface StepFlowView {
+  run_id: string;
+  flow_id: string;
+  status: string;
+  started?: string;
+  nodes: NodeStepView[];
+  terminal: boolean;
+}
+
+/** Advances a debug run by exactly one node; returns per-node state with
+ * outputs/context for the debug panel. */
+export function stepFlowRun(token: string | null, runId: string, flowId: string) {
+  return request<StepFlowView>(
+    `/v1/flow-runs/${encodeURIComponent(runId)}/step?flow_id=${encodeURIComponent(flowId)}`,
+    { method: "POST" },
     token,
   );
 }

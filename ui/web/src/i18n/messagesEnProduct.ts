@@ -604,6 +604,8 @@ export const enProductMessages = {
       debugStepMode: "Step mode",
       stepOnce: "Run one step",
       stepNodeContext: "Node context (stepped)",
+      stepCtxTitle: "Current run context (handler view)",
+      stepCtxHint: "The ctx a function node sees = { inputs, outputs }: inputs from the run, outputs from completed nodes.",
       stepFailed: "Step failed",
       debugStarted: "Debug run started:",
       debugHint: "Pick a version and test inputs, then start debugging: canvas nodes highlight by run status (blue=running, green=completed, red=failed, orange=waiting human) from the run's event log. Production traffic goes through the gateway (POST /v1/gateway/{route}).",

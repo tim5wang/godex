@@ -604,6 +604,8 @@ export const zhProductMessages = {
       debugStepMode: "单步运行",
       stepOnce: "运行一步",
       stepNodeContext: "节点上下文（单步）",
+      stepCtxTitle: "当前运行上下文（handler 视角）",
+      stepCtxHint: "即 function 节点 ctx = { inputs, outputs }：inputs 为本次运行输入，outputs 为已完成节点的产出。",
       stepFailed: "单步运行失败",
       debugStarted: "调试运行已启动：",
       debugHint: "选择版本与测试输入后启动调试：画布节点按运行状态高亮（蓝=运行中、绿=完成、红=失败、橙=待人工），事件来自该次运行的事件日志。真实生产流量请走接入生产（POST /v1/gateway/{route}）。",

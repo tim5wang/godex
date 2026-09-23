@@ -671,6 +671,21 @@ function FlowCanvasMain(props: {
   const debugRun = debugRunQuery.data;
   const debugStatus = debugRun?.status ?? (debugStarted ? "running" : undefined);
 
+  // Aggregate run context for the debug panel: the exact shape a function
+  // node handler sees as ctx = { inputs, outputs } at the current step point —
+  // inputs from the run + completed nodes' outputs keyed by node id. This is
+  // the "执行到某个节点时的上下文变量值" the user asked for in step mode.
+  const stepCtx = useMemo(() => {
+    if (!stepView) return null;
+    const outputs: Record<string, unknown> = {};
+    for (const n of stepView.nodes) {
+      if (n.status === "completed" && n.outputs && Object.keys(n.outputs).length > 0) {
+        outputs[n.id] = n.outputs;
+      }
+    }
+    return { inputs: debugRun?.inputs ?? {}, outputs };
+  }, [stepView, debugRun]);
+
   // 模板库（B3）：从抽屉移到主界面 — 工具栏「模板库」按钮打开 Modal，
   // 选模板一键应用为新版本（不改动画布内容）。
   const [tplOpen, setTplOpen] = useState(false);
@@ -817,6 +832,37 @@ function FlowCanvasMain(props: {
               {t("flows.debugHint")}
               {debugRunId && ` · ${t("flows.debugStatus", { status: debugStatus ?? "running" })}`}
             </Paragraph>
+
+            {debugStepMode && stepView && stepCtx && (
+              <div
+                style={{
+                  border: "1px solid #d9d9d9",
+                  borderRadius: 6,
+                  background: "#fffbe6",
+                  padding: 6,
+                  maxHeight: 180,
+                  overflowY: "auto",
+                }}
+              >
+                <Text strong style={{ fontSize: 11 }}>
+                  {t("flows.stepCtxTitle")}
+                </Text>
+                <pre
+                  style={{
+                    margin: "4px 0 0 0",
+                    fontSize: 10,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                    fontFamily: "monospace",
+                  }}
+                >
+                  {JSON.stringify(stepCtx, null, 2)}
+                </pre>
+                <Text type="secondary" style={{ fontSize: 10 }}>
+                  {t("flows.stepCtxHint")}
+                </Text>
+              </div>
+            )}
 
             {debugStepMode && stepView && (
               <div style={{ border: "1px solid #eee", borderRadius: 6, background: "#fff", padding: 6 }}>

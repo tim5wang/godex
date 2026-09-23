@@ -178,3 +178,79 @@ func workflowNodeViewByID(nodes []workflowNodeView, id string) *workflowNodeView
 	}
 	return nil
 }
+
+// decisionDirectConditionFlow builds the canvas model of E4: a decision node
+// routes DIRECTLY through condition edges with when.choice (one labelled
+// branch port per choice on the canvas) — no separate branch gateway node.
+func decisionDirectConditionFlow() *flow.Definition {
+	return &flow.Definition{
+		FlowID:  "fl_decision_direct",
+		Version: "1",
+		Status:  "draft",
+		Nodes: []flow.Node{
+			{ID: "decide", Kind: flow.KindDecision, Prompt: "auto or human?",
+				Decision: &flow.DecisionSpec{DecisionType: "choice",
+					Choices: []flow.Choice{{ID: "auto"}, {ID: "human"}}}},
+			{ID: "auto_run", Kind: flow.KindStep, Prompt: "handle automatically"},
+			{ID: "human_run", Kind: flow.KindStep, Prompt: "escalate to human"},
+		},
+		Edges: []flow.Edge{
+			{ID: "e_auto", From: "decide", To: "auto_run", EdgeType: flow.EdgeCondition,
+				When: &flow.Condition{Choice: "auto"}},
+			{ID: "e_human", From: "decide", To: "human_run", EdgeType: flow.EdgeCondition,
+				When: &flow.Condition{Choice: "human"}},
+		},
+	}
+}
+
+// TestFlowCompileDecisionDirectConditionRoutes verifies the E4 canvas model:
+// decision → condition edges (when.choice) — the engine writes outputs.choice
+// and appends exactly ONE target, so the labelled branch ports on canvas and
+// the runtime routing can never disagree.
+func TestFlowCompileDecisionDirectConditionRoutes(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.SetDecisionCaller(&scriptedDecisionCaller{result: decision.Result{Choice: "auto", Confidence: 0.9}})
+
+	compiled, err := flow.Compile(decisionDirectConditionFlow())
+	if err != nil {
+		t.Fatalf("flow compile: %v", err)
+	}
+	nodes, edges, err := compileFlowToWorkflowInputs(compiled)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+	nodeMaps, edgeMaps, err := flowInputsToMaps(nodes, edges)
+	if err != nil {
+		t.Fatalf("to maps: %v", err)
+	}
+
+	created := runWorkflowTool(t, a, context.Background(), map[string]interface{}{
+		"action": "create", "workflow_id": "wf_decision_direct",
+		"nodes": nodeMaps, "edges": edgeMaps,
+	})
+	// Static nodes: only decide (targets are append templates via condition
+	// edges). The decision itself is a static job node.
+	if len(created.Nodes) != 1 {
+		t.Fatalf("expected 1 static node (decide), got %d: %+v", len(created.Nodes), created.Nodes)
+	}
+
+	started := runWorkflowTool(t, a, context.Background(), map[string]interface{}{
+		"action": "start", "workflow_id": "wf_decision_direct",
+	})
+	decide := workflowNodeViewByID(started.Nodes, "decide")
+	if decide == nil || decide.Status != workflowStatusCompleted {
+		t.Fatalf("expected decision completed synchronously, got %+v", started.Nodes)
+	}
+	if decide.Decision == nil || decide.Decision.Choice != "auto" {
+		t.Fatalf("decision choice not auto: %+v", decide)
+	}
+	// Exactly the auto branch appended; human_run stays out.
+	if !nodeExists(started.Nodes, "auto_run") {
+		t.Fatalf("expected auto_run appended, got %+v", started.Nodes)
+	}
+	if nodeExists(started.Nodes, "human_run") {
+		t.Fatalf("human_run must not be appended on choice=auto: %+v", started.Nodes)
+	}
+}

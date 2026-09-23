@@ -136,6 +136,60 @@ describe("flowgramAdapter round-trip", () => {
     expect(wf.nodes[1].meta?.position).toBeDefined();
   });
 
+  it("decision condition edges snap to labelled choice ports (E4 round-trip)", () => {
+    const def: FlowDefinition = {
+      flow_id: "fl_decision_ports",
+      version: "1",
+      status: "draft",
+      nodes: [
+        {
+          id: "decide",
+          kind: "decision",
+          title: "可否自动",
+          prompt: "能否自动处理？",
+          decision: { decision_type: "choice", choices: [{ id: "yes" }, { id: "no" }] },
+        },
+        { id: "auto", kind: "step", title: "自动处理", prompt: "自动处理" },
+        { id: "human", kind: "human", title: "人工", prompt: "人工处理", human: { queue: "support" } },
+      ],
+      edges: [
+        { id: "e_yes", from: "decide", to: "auto", edge_type: "condition", when: { choice: "yes" } },
+        { id: "e_no", from: "decide", to: "human", edge_type: "condition", when: { choice: "no" } },
+      ],
+    };
+
+    // spec → canvas: each decision condition edge carries sourcePortID = choice
+    // so the line attaches to the matching labelled branch port.
+    const wf = flowSpecToWorkflow(def);
+    const yesEdge = wf.edges.find((e) => e.data?.spec?.id === "e_yes");
+    expect(yesEdge?.sourcePortID).toBe("yes");
+    expect(yesEdge?.data?.spec?.edge_type).toBe("condition");
+    const noEdge = wf.edges.find((e) => e.data?.spec?.id === "e_no");
+    expect(noEdge?.sourcePortID).toBe("no");
+
+    // canvas → spec: sourcePortID folds back into when.choice, and the edge
+    // stays a condition edge (routing exactly like the canvas showed).
+    const back = workflowToFlowSpec(wf, def.flow_id, "2", "draft");
+    const bYes = back.edges.find((e) => e.id === "e_yes");
+    expect(bYes?.edge_type).toBe("condition");
+    expect(bYes?.when?.choice).toBe("yes");
+    const bNo = back.edges.find((e) => e.id === "e_no");
+    expect(bNo?.edge_type).toBe("condition");
+    expect(bNo?.when?.choice).toBe("no");
+
+    // A hand-drawn data_dependency edge from a decision node with a port id
+    // (drawn from the labelled pill) also folds into a condition edge.
+    const drawn: FlowDefinition = {
+      ...def,
+      edges: [{ id: "e_draw", from: "decide", to: "auto", edge_type: "data_dependency" }],
+    };
+    const drawnWf = flowSpecToWorkflow(drawn);
+    drawnWf.edges[0].sourcePortID = "yes"; // simulate snapping to the pill
+    const drawnBack = workflowToFlowSpec(drawnWf, def.flow_id, "2", "draft");
+    expect(drawnBack.edges[0].edge_type).toBe("condition");
+    expect(drawnBack.edges[0].when?.choice).toBe("yes");
+  });
+
   it("flow_03 real definition: branch 3 cases + default become visible edges, hand-drawn edge folds back without mixed-use error", () => {
     // flow_03（决策分流模板）真实定义：br 有 3 个 case + 1 default。
     // 画布上应显示 4 条出边；用户手拖 br→auto_done 静态边后保存，

@@ -6,6 +6,8 @@ import {
   type FreeLayoutProps,
   type FreeLayoutPluginContext,
   type WorkflowNodeRegistry,
+  type WorkflowPortEntity,
+  type WorkflowLinesManager,
   type WorkflowJSON,
 } from "@flowgram.ai/free-layout-editor";
 import "@flowgram.ai/free-layout-editor/index.css";
@@ -276,6 +278,12 @@ export function FlowGramFlowEditor({
         error: "red",
         flowing: "#4d53e8",
       },
+      // E4: connection constraints — no self-loops, no duplicate edges between
+      // the same node pair, and each decision branch (labelled choice port,
+      // non-empty portID) accepts exactly ONE outgoing line so the canvas
+      // can never disagree with the choice→target routing.
+      canAddLine: (_ctx, fromPort, toPort, lines) =>
+        canAddWorkflowLine(fromPort, toPort, lines),
       // Bidirectional adapter hooks: keep Flow Spec fields alive.
       fromNodeJSON: (_node, json) => json,
       toNodeJSON: (_node, json) => json,
@@ -571,4 +579,41 @@ export function FlowGramFlowEditor({
       {error && <Alert type="error" showIcon message={error} />}
     </div>
   );
+}
+
+
+/**
+ * E4: connection constraints shared by the canvas canAddLine hook —
+ *  - no self-loops,
+ *  - no duplicate edge between the same node pair,
+ *  - each decision branch (labelled choice port, non-empty portID) accepts
+ *    exactly ONE outgoing line so the canvas can never disagree with the
+ *    choice → target routing (the branch list on the node form is the truth).
+ */
+function canAddWorkflowLine(
+  fromPort: WorkflowPortEntity,
+  toPort: WorkflowPortEntity,
+  lines: WorkflowLinesManager,
+): boolean {
+  if (!fromPort || !toPort) return false;
+  const fromId = fromPort.node?.id;
+  const toId = toPort.node?.id;
+  if (!fromId || !toId) return false;
+  // No self-loops.
+  if (fromId === toId) return false;
+  // No duplicate edges between the same node pair.
+  for (const line of lines.getAllLines()) {
+    const lf = line.fromPort?.node?.id;
+    const lt = line.toPort?.node?.id;
+    if (lf === fromId && lt === toId) return false;
+  }
+  // Decision branch ports (portID non-empty): one outgoing line per branch.
+  if (
+    fromPort.portID !== "" &&
+    fromPort.portID != null &&
+    fromPort.lines.length > 0
+  ) {
+    return false;
+  }
+  return true;
 }

@@ -7,6 +7,7 @@ import {
   ValidateTrigger,
   type WorkflowNodeRegistry,
   type WorkflowNodeRenderProps,
+  type WorkflowNodeEntity,
   type WorkflowPortEntity,
   WorkflowPortRender,
   useNodeRender,
@@ -641,7 +642,11 @@ const llmRegistry: WorkflowNodeRegistry = {
 
 const decisionRegistry: WorkflowNodeRegistry = {
   type: "decision",
-  meta: { size, defaultPorts },
+  // E4: dynamic ports — the node body renders one labelled pill per choice
+  // (see DecisionBranchPorts below); flowgram auto-creates a real output
+  // port per pill via the data-port-id mechanism, so every branch gets its
+  // own visible anchor and the canvas shows N branches = N ports.
+  meta: { size, defaultPorts: [{ type: "input" }], useDynamicPort: true },
   info: { icon: "", description: "low-cost structured decision (System-1 model)" },
   formMeta: {
     render: baseForm((form) => <DecisionFields form={form} />),
@@ -717,10 +722,21 @@ export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
     onFocus,
     onBlur,
     readonly,
+    data,
   } = useNodeRender(node);
   const dragService = useService(WorkflowDragService);
   const runStatus = useRunStatus(node.id);
   const statusBorder = runStatus ? RUN_STATUS_BORDER[runStatus] : undefined;
+
+  // Decision nodes: render one labelled branch pill per choice. Each pill
+  // carries data-port-id/data-port-type so flowgram's dynamic-port mechanism
+  // auto-creates a REAL output port anchored on it — the canvas shows N
+  // branches = N labelled ports, and each line starts from its own pill.
+  const nodeType = String((node as { type?: string | number }).type ?? "");
+  const decisionData = (form?.values?.decision ?? data?.decision ?? {}) as {
+    choices?: { id: string; label?: string }[];
+  };
+  const decisionChoices = nodeType === "decision" ? (decisionData.choices ?? []) : [];
 
   // Click an OUTPUT port to start drawing a connection line; dropping on
   // another node's input port is completed natively by the core drag service.
@@ -765,6 +781,44 @@ export function FlowGramBaseNode({ node }: WorkflowNodeRenderProps) {
         }}
       >
         {form?.render?.() ?? <div style={{ padding: 8 }}>{node.id}</div>}
+        {decisionChoices.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+              padding: "2px 6px 6px",
+              borderTop: "1px dashed #e8e8e8",
+            }}
+          >
+            <div style={{ fontSize: 10, color: "#999", marginBottom: 2 }}>分支（拖出连线）</div>
+            {decisionChoices.map((c) => (
+              <div
+                key={c.id}
+                data-port-id={c.id}
+                data-port-type="output"
+                data-port-location="right"
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "1px 8px",
+                  borderRadius: 10,
+                  background: "#f6f7fb",
+                  border: "1px solid #e0e3f0",
+                  fontSize: 11,
+                  color: "#333",
+                  cursor: "grab",
+                }}
+              >
+                <span style={{ fontFamily: "monospace", fontSize: 10, color: "#7a6ff0" }}>
+                  {c.label ?? c.id}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {ports.map((p) => (
         <WorkflowPortRender key={p.id} entity={p} onClick={!readonly ? onPortClick : undefined} />

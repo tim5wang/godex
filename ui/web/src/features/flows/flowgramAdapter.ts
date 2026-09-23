@@ -52,21 +52,36 @@ export function flowSpecToWorkflow(def: FlowDefinition): WorkflowJSON {
   const branchIDs = new Set(
     (def.nodes ?? []).filter((n) => n.kind === "branch").map((n) => n.id),
   );
+  // E4: decision nodes with condition edges (when.choice) — each choice gets
+  // its own labelled output port on canvas, so the line must start from the
+  // matching choice port (sourcePortID = choice id).
+  const decisionIDs = new Set(
+    (def.nodes ?? []).filter((n) => n.kind === "decision").map((n) => n.id),
+  );
   const edges: WorkflowEdgeJSON[] = (def.edges ?? [])
     .filter((e) => !branchIDs.has(e.from))
-    .map((e) => ({
-      sourceNodeID: e.from,
-      targetNodeID: e.to,
-      data: {
-        spec: {
-          id: e.id,
-          edge_type: e.edge_type ?? "data_dependency",
-          when: e.when,
-          max_iterations: e.max_iterations,
-          iteration_key: e.iteration_key,
+    .map((e) => {
+      const isDecisionCondition =
+        decisionIDs.has(e.from) &&
+        e.edge_type === "condition" &&
+        typeof e.when?.choice === "string" &&
+        e.when.choice !== "";
+      return {
+        sourceNodeID: e.from,
+        targetNodeID: e.to,
+        // The line snaps to the decision's labelled choice port.
+        sourcePortID: isDecisionCondition ? e.when!.choice : undefined,
+        data: {
+          spec: {
+            id: e.id,
+            edge_type: e.edge_type ?? "data_dependency",
+            when: e.when,
+            max_iterations: e.max_iterations,
+            iteration_key: e.iteration_key,
+          },
         },
-      },
-    }));
+      };
+    });
 
   // Branch routing → visible condition edges (one per case + one default).
   // This makes "3 branches = 3 outgoing edges" true on the canvas.
@@ -143,6 +158,10 @@ export function workflowToFlowSpec(
     } as FlowNode;
   });
   const branchIDs = new Set(nodes.filter((n) => n.kind === "branch").map((n) => n.id));
+  // E4: decision nodes — an edge snapped to a labelled choice port keeps its
+  // port id (sourcePortID); fold it back into a condition edge when.choice so
+  // the saved definition routes exactly like the canvas showed.
+  const decisionIDs = new Set(nodes.filter((n) => n.kind === "decision").map((n) => n.id));
 
   // Re-fold branch-sourced edges (both loaded condition edges and edges the
   // user drew by hand, which flowgram types as data_dependency) into the
@@ -154,11 +173,18 @@ export function workflowToFlowSpec(
       continue; // collected per branch below
     }
     const spec = (e.data?.spec ?? {}) as Partial<FlowEdge>;
+    const fromDecision = decisionIDs.has(e.sourceNodeID);
+    const portId =
+      e.sourcePortID !== undefined && e.sourcePortID !== "" ? String(e.sourcePortID) : "";
+    const when: FlowEdge["when"] | undefined =
+      spec.when ??
+      (fromDecision && portId ? { choice: portId } : undefined);
     edges.push({
       ...spec,
       from: e.sourceNodeID,
       to: e.targetNodeID,
-      edge_type: spec.edge_type ?? "data_dependency",
+      edge_type: fromDecision && portId ? "condition" : (spec.edge_type ?? "data_dependency"),
+      when,
     } as FlowEdge);
   }
 

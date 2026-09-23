@@ -831,9 +831,14 @@ function FlowCanvasMain(props: {
                       }}
                     >
                       <Space size={6} style={{ width: "100%", justifyContent: "space-between" }}>
-                        <Text style={{ fontSize: 11, fontFamily: "monospace" }} strong>
-                          {n.id}
-                        </Text>
+                        <Space size={4} style={{ minWidth: 0 }}>
+                          <Text style={{ fontSize: 11, fontFamily: "monospace" }} strong>
+                            {n.id}
+                          </Text>
+                          <Tag style={{ marginRight: 0, fontSize: 10, color: "#555", background: "#f0f0f0", border: "none" }}>
+                            {n.kind || "?"}
+                          </Tag>
+                        </Space>
                         <Tag style={{ marginRight: 0, fontSize: 10 }}>{n.status}</Tag>
                       </Space>
                       {n.error && (

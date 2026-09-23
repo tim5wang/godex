@@ -9,8 +9,15 @@ import {
   type WorkflowJSON,
 } from "@flowgram.ai/free-layout-editor";
 import "@flowgram.ai/free-layout-editor/index.css";
-import { Alert, Button, Empty, Space, Tag, Typography } from "antd";
-import { ApartmentOutlined, DatabaseOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { Alert, Button, Empty, Input, Modal, Select, Space, Tag, Tooltip, Typography } from "antd";
+import {
+  ApartmentOutlined,
+  DatabaseOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  SaveOutlined,
+  SearchOutlined,
+} from "@ant-design/icons";
 import {
   createFlow,
   listNodeLibrary,
@@ -51,7 +58,7 @@ interface FlowGramFlowEditorProps {
   token: string | null;
   t: (k: string, v?: Record<string, string | number>) => string;
   versions: FlowVersionView[];
-  onSaved: () => void;
+  onSaved: (version: string) => void;
   onSaveError: (err: unknown) => void;
   /** External definition pushed from the JSON editor; stamp forces a remount. */
   externalDef?: { def: FlowDefinition; stamp: number };
@@ -75,6 +82,9 @@ export function FlowGramFlowEditor({
   const [error, setError] = useState<string | null>(null);
   const [layouting, setLayouting] = useState(false);
   const [libOpen, setLibOpen] = useState(false);
+  const [libSearch, setLibSearch] = useState("");
+  const [libFilter, setLibFilter] = useState<string>("all"); // all | builtin | user
+  const [libPreview, setLibPreview] = useState<NodeLibraryEntry | null>(null);
   const documentRef = useRef<FreeLayoutPluginContext["document"] | null>(null);
   const toolsRef = useRef<FreeLayoutPluginContext["tools"] | null>(null);
 
@@ -85,6 +95,22 @@ export function FlowGramFlowEditor({
     queryKey: ["node-library"],
     queryFn: () => listNodeLibrary(token),
   });
+  // Scaled browsing: search + source filter over potentially dozens/hundreds
+  // of entries; each row offers insert and a preview of the function spec.
+  const libEntries = libQuery.data ?? [];
+  const filteredLib = useMemo(() => {
+    const q = libSearch.trim().toLowerCase();
+    return libEntries.filter((e) => {
+      if (libFilter !== "all" && e.source !== libFilter) return false;
+      if (!q) return true;
+      return (
+        e.id.toLowerCase().includes(q) ||
+        (e.name ?? "").toLowerCase().includes(q) ||
+        (e.description ?? "").toLowerCase().includes(q) ||
+        (e.tags ?? []).some((tag) => tag.toLowerCase().includes(q))
+      );
+    });
+  }, [libEntries, libSearch, libFilter]);
   // Run the automatic topology layout at most once per editor mount, so
   // later onAllLayersRendered firings (addNode / content change) never
   // re-arrange nodes the user already dragged by hand.
@@ -193,7 +219,7 @@ export function FlowGramFlowEditor({
         status: "draft",
         definition: def,
       });
-      onSaved();
+      onSaved(nextVersion);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       onSaveError(err);
@@ -348,40 +374,175 @@ export function FlowGramFlowEditor({
             borderRadius: 8,
             padding: 10,
             background: "#fafafa",
-            maxHeight: 180,
+            maxHeight: 260,
             overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
           }}
         >
-          <Text strong style={{ fontSize: 12 }}>
-            {t("flows.nodeLibraryPanel")}
-          </Text>
-          <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 8 }}>
+          <Space style={{ justifyContent: "space-between", width: "100%" }} align="center">
+            <Text strong style={{ fontSize: 12 }}>
+              {t("flows.nodeLibraryPanel")}
+            </Text>
+            <Tag>{libEntries.length} {t("flows.nodeLibraryCount")}</Tag>
+          </Space>
+          <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 0 }}>
             {t("flows.nodeLibraryHint")}
           </Paragraph>
-          {(libQuery.data ?? []).length === 0 ? (
+          <Space wrap>
+            <Input
+              size="small"
+              style={{ width: 200 }}
+              prefix={<SearchOutlined />}
+              placeholder={t("flows.nodeLibrarySearch")}
+              value={libSearch}
+              onChange={(e) => setLibSearch(e.target.value)}
+              allowClear
+            />
+            <Select
+              size="small"
+              style={{ width: 110 }}
+              value={libFilter}
+              onChange={setLibFilter}
+              options={[
+                { value: "all", label: t("flows.nodeLibraryAll") },
+                { value: "builtin", label: "builtin" },
+                { value: "user", label: "user" },
+              ]}
+            />
+          </Space>
+          {filteredLib.length === 0 ? (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("flows.noDefinition")} />
           ) : (
-            <Space wrap size={[4, 4]}>
-              {(libQuery.data ?? []).map((entry) => (
-                <Button
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {filteredLib.map((entry) => (
+                <Space
                   key={entry.id}
-                  size="small"
-                  icon={<PlusOutlined />}
-                  title={entry.description}
-                  onClick={() => addLibraryNode(entry)}
+                  style={{
+                    width: "100%",
+                    justifyContent: "space-between",
+                    border: "1px solid #eee",
+                    borderRadius: 6,
+                    padding: "4px 8px",
+                    background: "#fff",
+                  }}
                 >
-                  {entry.name}
-                  {entry.source === "builtin" && (
-                    <Tag style={{ marginLeft: 4, marginRight: 0 }} color="blue">
-                      builtin
-                    </Tag>
-                  )}
-                </Button>
+                  <Space size={6} style={{ minWidth: 0 }}>
+                    <Text style={{ fontSize: 12 }} strong>
+                      {entry.name}
+                    </Text>
+                    {entry.source === "builtin" && (
+                      <Tag style={{ marginRight: 0 }} color="blue">
+                        builtin
+                      </Tag>
+                    )}
+                    {(entry.tags ?? []).slice(0, 3).map((tag) => (
+                      <Tag key={tag} style={{ marginRight: 0 }}>
+                        {tag}
+                      </Tag>
+                    ))}
+                  </Space>
+                  <Space size={4}>
+                    <Tooltip title={t("flows.nodeLibraryPreview")}>
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<EyeOutlined />}
+                        onClick={() => setLibPreview(entry)}
+                      />
+                    </Tooltip>
+                    <Tooltip title={t("flows.nodeLibraryInsert")}>
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<PlusOutlined />}
+                        onClick={() => addLibraryNode(entry)}
+                      />
+                    </Tooltip>
+                  </Space>
+                </Space>
               ))}
-            </Space>
+            </div>
           )}
         </div>
       )}
+
+      <Modal
+        title={libPreview ? libPreview.name : ""}
+        open={Boolean(libPreview)}
+        onCancel={() => setLibPreview(null)}
+        footer={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              if (libPreview) addLibraryNode(libPreview);
+              setLibPreview(null);
+            }}
+          >
+            {t("flows.nodeLibraryInsert")}
+          </Button>
+        }
+        width={560}
+      >
+        {libPreview && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {libPreview.description && (
+              <Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+                {libPreview.description}
+              </Paragraph>
+            )}
+            <div>
+              <Text strong style={{ fontSize: 12 }}>
+                {t("flows.nodeRuntime")}
+              </Text>
+              <Tag style={{ marginLeft: 6 }}>{libPreview.function.runtime}</Tag>
+            </div>
+            {libPreview.function.source && (
+              <div>
+                <Text strong style={{ fontSize: 12 }}>
+                  {t("flows.nodeSourceJS")}
+                </Text>
+                <pre
+                  style={{
+                    background: "#f5f5f5",
+                    padding: 8,
+                    borderRadius: 6,
+                    fontSize: 11,
+                    overflow: "auto",
+                    maxHeight: 220,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {libPreview.function.source}
+                </pre>
+              </div>
+            )}
+            {libPreview.function.ref && (
+              <div>
+                <Text strong style={{ fontSize: 12 }}>
+                  {t("flows.nodeLibraryRef")}
+                </Text>
+                <Text code style={{ marginLeft: 6, fontSize: 11 }}>
+                  {libPreview.function.ref}
+                </Text>
+              </div>
+            )}
+            {libPreview.function.handler && libPreview.function.handler !== "handle" && (
+              <div>
+                <Text strong style={{ fontSize: 12 }}>
+                  {t("flows.nodeHandler")}
+                </Text>
+                <Text code style={{ marginLeft: 6, fontSize: 11 }}>
+                  {libPreview.function.handler}
+                </Text>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <div
         style={{

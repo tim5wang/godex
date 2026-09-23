@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp,
+  Alert,
   Button,
   Card,
   Drawer,
@@ -14,15 +15,20 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import {
   ApiOutlined,
   BugOutlined,
+  DownOutlined,
   DownloadOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RightOutlined,
   RocketOutlined,
   SaveOutlined,
   UploadOutlined,
@@ -80,6 +86,8 @@ export function FlowsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [detail, setDetail] = useState<FlowSummaryView | null>(null);
   const [detailDrawer, setDetailDrawer] = useState<FlowSummaryView | null>(null);
+  const [lastCreatedId, setLastCreatedId] = useState<string>();
+  const [listCollapsed, setListCollapsed] = useState(false);
   const [form] = Form.useForm<FlowFormValues>();
 
   // JSON editor ⇄ canvas: an externally applied definition (JSON tab → canvas)
@@ -128,8 +136,9 @@ export function FlowsPage() {
         definition: def,
       });
     },
-    onSuccess: () => {
+    onSuccess: (_data, values) => {
       message.success(t("flows.created"));
+      setLastCreatedId(values.flow_id);
       setCreateOpen(false);
       form.resetFields();
       refresh();
@@ -139,8 +148,8 @@ export function FlowsPage() {
 
   const publishMutation = useMutation({
     mutationFn: ({ flowId, version }: { flowId: string; version: string }) => publishFlow(token, flowId, version),
-    onSuccess: () => {
-      message.success(t("flows.published"));
+    onSuccess: (_data, { version }) => {
+      message.success(t("flows.publishedVersion", { v: version }));
       refresh();
     },
     onError: (err) => showError(message, err, t("flows.publishFailed")),
@@ -166,19 +175,21 @@ export function FlowsPage() {
   });
 
   return (
-    <div style={{ padding: 24 }}>
-      <Space style={{ marginBottom: 16, justifyContent: "space-between", width: "100%" }} align="center">
-        <div>
-          <Title level={4} style={{ marginBottom: 4 }}>
+    <div style={{ padding: 16, height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <Space style={{ marginBottom: 10, justifyContent: "space-between", width: "100%" }} align="center">
+        <Space align="center" size={8}>
+          <Title level={5} style={{ margin: 0 }}>
             {t("flows.pageTitle")}
           </Title>
-          <Text type="secondary">{t("flows.pageSubtitle")}</Text>
-        </div>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={refresh}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {t("flows.pageSubtitle")}
+          </Text>
+        </Space>
+        <Space size={6}>
+          <Button size="small" icon={<ReloadOutlined />} onClick={refresh}>
             {t("flows.refresh")}
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
             {t("flows.create")}
           </Button>
         </Space>
@@ -189,30 +200,27 @@ export function FlowsPage() {
           onClick={() => setInspectionOpen(!inspectionOpen)}
           style={{
             border: "1px solid #e5e5e5",
-            borderRadius: 8,
-            padding: "8px 12px",
-            marginBottom: 12,
+            borderRadius: 6,
+            padding: "4px 10px",
+            marginBottom: 8,
             background: inspection.failed > 0 ? "#fff2f0" : "#f6ffed",
             cursor: "pointer",
             display: "flex",
-            flexDirection: "column",
-            gap: 6,
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 12,
+            flexShrink: 0,
           }}
         >
-          <Space style={{ justifyContent: "space-between", width: "100%" }} align="center">
-            <Space>
-              <Text strong style={{ fontSize: 12 }}>
-                {t("flows.inspectionPanel")}
-              </Text>
-              <Tag color={inspection.failed > 0 ? "red" : "green"}>
-                {t("flows.inspectionWindow", { hours: inspection.window_hours })}
-              </Tag>
-            </Space>
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              {new Date(inspection.generated_at).toLocaleString()}
+          <Space size={6} align="center">
+            <Text strong style={{ fontSize: 12 }}>
+              {t("flows.inspectionPanel")}
             </Text>
+            <Tag color={inspection.failed > 0 ? "red" : "green"} style={{ marginRight: 0 }}>
+              {t("flows.inspectionWindow", { hours: inspection.window_hours })}
+            </Tag>
           </Space>
-          <Space wrap size={16}>
+          <Space size={12} style={{ flex: 1 }} wrap>
             <Text style={{ fontSize: 12 }}>
               {t("flows.inspectionTotal")} <Text strong>{inspection.total}</Text>
             </Text>
@@ -229,10 +237,30 @@ export function FlowsPage() {
               </Text>
             )}
           </Space>
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {formatTime(inspection.generated_at)} {inspectionOpen ? <DownOutlined /> : <RightOutlined />}
+          </Text>
           {inspectionOpen && (
-            <div style={{ borderTop: "1px solid #eee", paddingTop: 6 }}>
+            <div style={{ borderTop: "1px solid #eee", paddingTop: 6, width: "100%" }}>
               {inspection.flows.map((f) => (
-                <div key={f.flow_id} style={{ display: "flex", gap: 12, fontSize: 11, padding: "2px 0" }}>
+                <div
+                  key={f.flow_id}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const target = (flowsQuery.data ?? []).find((x) => x.flow_id === f.flow_id);
+                    if (target) setDetail(target);
+                  }}
+                  style={{
+                    display: "flex",
+                    gap: 12,
+                    fontSize: 11,
+                    padding: "4px 0",
+                    cursor: "pointer",
+                    borderRadius: 4,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f0f5ff")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
                   <Text style={{ fontFamily: "monospace" }}>{f.flow_id}</Text>
                   <Text type="secondary">
                     {t("flows.inspectionRun")} {f.total} · {t("flows.inspectionFail")} {f.failed} ·{" "}
@@ -248,13 +276,55 @@ export function FlowsPage() {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 16, height: "calc(100vh - 180px)", minHeight: 480 }}>
-        {/* Left: flow list — click to select; the main area becomes the canvas. */}
-        <div style={{ width: 300, flexShrink: 0, border: "1px solid #e5e5e5", borderRadius: 8, overflowY: "auto", background: "#fff" }}>
+      <div style={{ display: "flex", gap: 12, flex: 1, minHeight: 0 }}>
+        {/* Left: flow list — click to select; collapsible to free canvas space. */}
+        {listCollapsed ? (
+          <div
+            style={{
+              width: 36,
+              flexShrink: 0,
+              border: "1px solid #e5e5e5",
+              borderRadius: 8,
+              background: "#fff",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              padding: "8px 0",
+            }}
+          >
+            <Tooltip title={t("flows.expandList")}>
+              <Button size="small" type="text" icon={<MenuUnfoldOutlined />} onClick={() => setListCollapsed(false)} />
+            </Tooltip>
+          </div>
+        ) : (
+          <div style={{ width: 300, flexShrink: 0, display: "flex", flexDirection: "column", border: "1px solid #e5e5e5", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "6px 10px",
+                borderBottom: "1px solid #f0f0f0",
+                flexShrink: 0,
+              }}
+            >
+              <Text strong style={{ fontSize: 12 }}>
+                {t("flows.listTitle")} ({(flowsQuery.data ?? []).length})
+              </Text>
+              <Tooltip title={t("flows.collapseList")}>
+                <Button size="small" type="text" icon={<MenuFoldOutlined />} onClick={() => setListCollapsed(true)} />
+              </Tooltip>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto" }}>
           {flowsQuery.isLoading ? (
             <Card loading style={{ height: "100%" }} />
           ) : (flowsQuery.data ?? []).length === 0 ? (
-            <Empty description={t("flows.empty")} style={{ marginTop: 48 }} />
+            <div style={{ padding: 24, textAlign: "center" }}>
+              <Empty description={t("flows.empty")} style={{ marginBottom: 12 }} />
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+                {t("flows.create")}
+              </Button>
+            </div>
           ) : (
             (flowsQuery.data ?? []).map((f) => (
               <div
@@ -269,15 +339,19 @@ export function FlowsPage() {
               >
                 <Space style={{ justifyContent: "space-between", width: "100%" }}>
                   <Text strong>{f.flow_id}</Text>
-                  <Button
-                    size="small"
-                    icon={<PlayCircleOutlined />}
-                    disabled={!f.published}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      runMutation.mutate({ flowId: f.flow_id, version: f.published ?? "" });
-                    }}
-                  />
+                  <Tooltip
+                    title={f.published ? t("flows.runTooltip", { v: f.published }) : t("flows.runUnpublished")}
+                  >
+                    <Button
+                      size="small"
+                      icon={<PlayCircleOutlined />}
+                      disabled={!f.published}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        runMutation.mutate({ flowId: f.flow_id, version: f.published ?? "" });
+                      }}
+                    />
+                  </Tooltip>
                 </Space>
                 <Space size={4} style={{ marginTop: 4 }} wrap>
                   {f.draft && <Tag>{`draft ${f.draft}`}</Tag>}
@@ -287,7 +361,9 @@ export function FlowsPage() {
               </div>
             ))
           )}
-        </div>
+            </div>
+          </div>
+        )}
 
         {/* Right: canvas editor as the main body (no drawer to open). */}
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
@@ -332,11 +408,29 @@ export function FlowsPage() {
         width={640}
         destroyOnClose
       >
+        {lastCreatedId && (
+          <Alert
+            type="success"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={t("flows.lastCreated", { id: lastCreatedId })}
+          />
+        )}
         <Form form={form} layout="vertical" onFinish={(v) => createMutation.mutate(v)}>
           <Paragraph type="secondary" style={{ fontSize: 12 }}>
             {t("flows.createHint")}
           </Paragraph>
-          <Form.Item name="flow_id" label={t("flows.id")} rules={[{ required: true }]}>
+          <Form.Item
+            name="flow_id"
+            label={t("flows.id")}
+            rules={[
+              { required: true, message: t("flows.idRequired") },
+              {
+                pattern: /^[a-z][a-z0-9_]*$/,
+                message: t("flows.idPattern"),
+              },
+            ]}
+          >
             <Input placeholder="fl_order_recovery" />
           </Form.Item>
           <Form.Item name="version" label={t("flows.version")} rules={[{ required: true }]}>
@@ -554,8 +648,8 @@ function FlowCanvasMain(props: {
           versions={versions}
           externalDef={externalDef}
           runEvents={debugEvents}
-          onSaved={() => {
-            message.success(t("flows.templateApplied"));
+          onSaved={(savedVersion) => {
+            message.success(t("flows.savedVersion", { v: savedVersion }));
             onExternalDefConsumed();
             onRefresh();
           }}
@@ -617,8 +711,9 @@ function FlowCanvasMain(props: {
           </Space>
           <Paragraph type="secondary" style={{ fontSize: 11, marginBottom: 0 }}>
             {t("flows.debugHint")}
+            {debugRunId && ` · ${t("flows.debugStatus", { status: debugStatus ?? "running" })}`}
           </Paragraph>
-          {(debugEvents.length > 0) && (
+          {debugRunId && debugEvents.length > 0 && (
             <div
               style={{
                 border: "1px solid #eee",
@@ -631,11 +726,37 @@ function FlowCanvasMain(props: {
                 fontSize: 11,
               }}
             >
-              {debugEvents.map((ev, i) => (
-                <div key={i} style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
-                  {JSON.stringify(ev)}
-                </div>
-              ))}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 4,
+                }}
+              >
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {t("flows.debugEvents")}
+                </Text>
+                <Button
+                  size="small"
+                  type="text"
+                  style={{ fontSize: 11, height: 20, padding: "0 4px" }}
+                  onClick={() => setDebugEvents([])}
+                >
+                  {t("flows.debugClearEvents")}
+                </Button>
+              </div>
+              {debugEvents.map((ev, i) => {
+                const at = ev.at ? new Date(ev.at as string).toLocaleTimeString() : "";
+                const node = ev.node_id ? `[${ev.node_id}]` : "";
+                const { event, node_id: _n, at: _a, ...rest } = ev;
+                const payload = Object.keys(rest).length > 0 ? JSON.stringify(rest) : "";
+                return (
+                  <div key={i} style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                    {`${at} ${event} ${node} ${payload}`.trim()}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -678,6 +799,13 @@ function FlowDetailDrawer(props: {
   const runsQuery = useQuery({
     queryKey: ["flow-runs", flow.flow_id],
     queryFn: () => listFlowRuns(token, flow.flow_id),
+    // Auto-refresh while any run is still active so statuses update live.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((r) =>
+        ["pending", "running", "waiting_human"].includes(r.status),
+      )
+        ? 3000
+        : false,
   });
 
   const versions = versionsQuery.data ?? [];
@@ -751,7 +879,7 @@ function FlowDetailDrawer(props: {
                   {
                     title: t("flows.status"),
                     dataIndex: "status",
-                    render: (s: string) => <Tag>{s}</Tag>,
+                    render: (s: string) => <Tag color={versionStatusColor(s)}>{s}</Tag>,
                   },
                   {
                     title: t("flows.digest"),
@@ -810,7 +938,7 @@ function FlowDetailDrawer(props: {
                   {
                     title: t("flows.startedAt"),
                     dataIndex: "started_at",
-                    render: (v: string) => new Date(v).toLocaleString(),
+                    render: (v: string) => formatTime(v),
                   },
                   {
                     title: t("flows.actions"),
@@ -826,14 +954,18 @@ function FlowDetailDrawer(props: {
                         >
                           {t("flows.diagnose")}
                         </Button>
-                        <Button
-                          size="small"
-                          danger
-                          disabled={row.status === "canceled" || row.status === "completed" || row.status === "error"}
-                          onClick={() => onCancelRun(row.run_id)}
+                        <Popconfirm
+                          title={t("flows.cancelRunConfirm")}
+                          onConfirm={() => onCancelRun(row.run_id)}
                         >
-                          {t("flows.cancel")}
-                        </Button>
+                          <Button
+                            size="small"
+                            danger
+                            disabled={row.status === "canceled" || row.status === "completed" || row.status === "error"}
+                          >
+                            {t("flows.cancel")}
+                          </Button>
+                        </Popconfirm>
                       </Space>
                     ),
                   },
@@ -857,7 +989,7 @@ function FlowDetailDrawer(props: {
                       {t("flows.diagnosePanel")} · {diagnosis.run_id.slice(0, 12)}…
                     </Text>
                     <Button size="small" onClick={() => setDiagnosis(null)}>
-                      {t("flows.debugClear")}
+                      {t("flows.diagnoseClose")}
                     </Button>
                   </Space>
                   <div>
@@ -1248,4 +1380,25 @@ function runStatusColor(status: string): string {
     default:
       return "default";
   }
+}
+
+function versionStatusColor(status: string): string {
+  switch (status) {
+    case "published":
+      return "green";
+    case "gray":
+      return "orange";
+    case "draft":
+      return "blue";
+    default:
+      return "default";
+  }
+}
+
+/** Unified timestamp display across the flows UI (local date + HH:mm). */
+function formatTime(v?: string): string {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }

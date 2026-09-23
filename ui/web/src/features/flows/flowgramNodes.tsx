@@ -14,9 +14,10 @@ import {
   useWatch,
   WorkflowDragService,
 } from "@flowgram.ai/free-layout-editor";
-import { Button, Input, InputNumber, Select, Space, Tag } from "antd";
+import { Button, Input, InputNumber, Select, Space, Tag, AutoComplete } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
+import { useI18n } from "../../i18n";
 import { listProviders, type FlowNode } from "../../lib/api";
 import { useSettingsStore } from "../../store/settings";
 
@@ -139,6 +140,7 @@ function baseForm(extra?: (form: FormRenderProps<FlowNode>["form"]) => React.Rea
 // ---- decision node fields -------------------------------------------------
 
 function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
+  const { t } = useI18n();
   // useWatch subscribes to form value changes so edits re-render this panel
   // (getValueIn alone does not re-render → Add choice had no visible effect).
   const decision = useWatch<{
@@ -170,7 +172,7 @@ function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   return (
     <div>
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Provider</div>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeProvider")}</div>
         <Select
           style={{ width: "100%" }}
           value={decision.provider ?? undefined}
@@ -181,7 +183,7 @@ function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
         />
       </div>
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Decision type</div>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeDecisionType")}</div>
         <Select
           style={{ width: "100%" }}
           value={decision.decision_type ?? "choice"}
@@ -195,7 +197,7 @@ function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
       </div>
       {(decision.decision_type ?? "choice") === "choice" && (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Choices</div>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeChoices")}</div>
           <Space direction="vertical" style={{ width: "100%" }}>
             {choices.map((c, i) => (
               <Space key={i} style={{ width: "100%" }}>
@@ -224,7 +226,7 @@ function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
                 setDecision({ choices: [...choices, { id: `c${choices.length + 1}` }] })
               }
             >
-              Add choice
+              {t("flows.nodeAddChoice")}
             </Button>
           </Space>
         </div>
@@ -236,6 +238,7 @@ function DecisionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
 // ---- human node fields ----------------------------------------------------
 
 function HumanFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
+  const { t } = useI18n();
   const human = useWatch<{
     queue?: string;
     assignee_policy?: string;
@@ -251,18 +254,37 @@ function HumanFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   return (
     <div>
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Queue</div>
-        <Input value={human.queue ?? ""} onChange={(e) => setHuman({ queue: e.target.value })} />
-      </div>
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Assignee policy</div>
-        <Input
-          value={human.assignee_policy ?? ""}
-          onChange={(e) => setHuman({ assignee_policy: e.target.value })}
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeQueue")}</div>
+        <Select
+          style={{ width: "100%" }}
+          value={human.queue ?? undefined}
+          onChange={(v) => setHuman({ queue: v })}
+          allowClear
+          placeholder="ops / support / finance"
+          options={[
+            { value: "ops", label: "ops" },
+            { value: "support", label: "support" },
+            { value: "finance", label: "finance" },
+          ]}
         />
       </div>
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Result var</div>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeAssigneePolicy")}</div>
+        <AutoComplete
+          style={{ width: "100%" }}
+          value={human.assignee_policy ?? ""}
+          onChange={(v) => setHuman({ assignee_policy: v })}
+          placeholder="any / role:<id>"
+          options={[
+            { value: "any", label: "any" },
+            { value: "role:ops", label: "role:ops" },
+            { value: "role:support", label: "role:support" },
+            { value: "role:finance", label: "role:finance" },
+          ]}
+        />
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeResultVar")}</div>
         <Input value={human.result_var ?? ""} onChange={(e) => setHuman({ result_var: e.target.value })} />
       </div>
     </div>
@@ -272,6 +294,7 @@ function HumanFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
 // ---- branch node fields ---------------------------------------------------
 
 function BranchFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
+  const { t } = useI18n();
   // Branch routing is expressed on canvas as visible condition edges
   // (adapter folds them back into branch.cases on save), so the case list is
   // defined by the canvas edges — not edited here. Only the default target
@@ -291,11 +314,10 @@ function BranchFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   return (
     <div>
       <div style={{ marginBottom: 8, fontSize: 12, color: "#888" }}>
-        Branch cases come from the canvas edges: draw an edge from this node
-        to a target to add a branch case, delete the edge to remove it.
+        {t("flows.nodeBranchHint")}
       </div>
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Default target</div>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeDefaultTarget")}</div>
         <Input
           value={branch.default_to ?? ""}
           placeholder="node id (or draw a default edge)"
@@ -309,6 +331,7 @@ function BranchFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
 // ---- loop node fields -----------------------------------------------------
 
 function LoopFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
+  const { t } = useI18n();
   const loop = form.getValueIn<{
     max_iterations?: number;
     iteration_key?: string;
@@ -316,7 +339,7 @@ function LoopFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   return (
     <div>
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Max iterations</div>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeMaxIterations")}</div>
         <Field
           name="loop.max_iterations"
           render={({ field }: FieldRenderProps<number>) => (
@@ -329,6 +352,19 @@ function LoopFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
           )}
         />
       </div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeIterationKey")}</div>
+        <Field
+          name="loop.iteration_key"
+          render={({ field }: FieldRenderProps<string>) => (
+            <Input
+              value={field.value ?? ""}
+              placeholder="iteration (optional, for concurrent loop dedup)"
+              onChange={(e) => field.onChange(e.target.value)}
+            />
+          )}
+        />
+      </div>
     </div>
   );
 }
@@ -336,6 +372,7 @@ function LoopFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
 // ---- function node fields (P3: js source / wasm ref code node) ------------
 
 function FunctionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
+  const { t } = useI18n();
   const fn = useWatch<{
     runtime?: string;
     source?: string;
@@ -353,7 +390,7 @@ function FunctionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   return (
     <div>
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Runtime</div>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeRuntime")}</div>
         <Select
           style={{ width: "100%" }}
           value={runtime}
@@ -365,7 +402,7 @@ function FunctionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
         />
       </div>
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Handler</div>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeHandler")}</div>
         <Input
           value={fn.handler ?? "handle"}
           placeholder="handle"
@@ -374,7 +411,7 @@ function FunctionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
       </div>
       {runtime === "js" ? (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Source (JS)</div>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeSourceJS")}</div>
           <Input.TextArea
             rows={5}
             style={{ fontFamily: "monospace", fontSize: 11 }}
@@ -385,7 +422,7 @@ function FunctionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
         </div>
       ) : (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Node-library ref</div>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeLibraryRef")}</div>
           <Input
             value={fn.ref ?? ""}
             placeholder="vad_split / asr_transcribe / ..."

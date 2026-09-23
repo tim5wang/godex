@@ -317,6 +317,27 @@ api:
   #         model: your-model-name
   #         max_tokens: 4096
   #
+  # ── Local Jev/Laya structured decision model (decision nodes) ──
+  # Point a provider at the local laya server (laya/server.py, 127.0.0.1:8100).
+  # type: laya_jev — the workflow decision caller then talks Jev protocol
+  # directly to POST /predict (no chat round-trip, no api_key needed).
+  #   laya:
+  #     name: Laya (local decision model)
+  #     type: laya_jev
+  #     base_url: http://127.0.0.1:8100
+  #     models:
+  #       laya:
+  #         name: Laya
+  #         model: laya
+  #         max_tokens: 64
+  # Then enable decision nodes and reference it:
+  #   agent:
+  #     decision:
+  #       enabled: true
+  #       provider: laya        # <- id from api.providers above
+  #       timeout_ms: 5000
+  #       max_tokens: 64
+  #
   # ── Through a godex usage gateway (request gzip) ──
   # Point a provider at another godex instance's usage gateway and enable
   # request_gzip to gzip the LLM request body (Content-Encoding: gzip) and

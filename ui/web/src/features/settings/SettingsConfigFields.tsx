@@ -738,6 +738,7 @@ function LLMProvidersEditor({
                         { value: "openai_compatible", label: "OpenAI compatible" },
                         { value: "openai_responses", label: "OpenAI Responses" },
                         { value: "openai_codex", label: "OpenAI Codex OAuth" },
+                        { value: "laya_jev", label: "Laya / Jev (本地决策模型)" },
                       ]}
                       onChange={(type) => updateProvider(providerIndex, { type })}
                     />

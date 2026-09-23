@@ -11,6 +11,10 @@ const (
 	ProviderOpenAICompatible    = "openai_compatible"
 	ProviderOpenAICodex         = "openai_codex"
 	ProviderOpenAIResponses     = "openai_responses"
+	// ProviderLaya is a native Jev/Laya structured decision endpoint
+	// (laya server.py /predict, Jev-compatible request/response shape). It is
+	// used by workflow decision nodes through decision.NewJevCaller.
+	ProviderLaya = "laya_jev"
 
 	StrategyPrimary    = "primary"
 	StrategyFallback   = "fallback"
@@ -211,6 +215,8 @@ func NormalizeProviderType(providerType string) string {
 		return ProviderOpenAICodex
 	case ProviderOpenAIResponses:
 		return ProviderOpenAIResponses
+	case "laya", "jev", ProviderLaya:
+		return ProviderLaya
 	default:
 		return strings.ToLower(strings.TrimSpace(providerType))
 	}

@@ -118,6 +118,32 @@ func Test(ctx context.Context, cfg *config.Config, id string) TestResponse {
 	if provider.Type == config.ProviderOpenAICodex {
 		return TestResponse{Status: status, OK: true}
 	}
+	if llm.NormalizeProviderType(provider.Type) == llm.ProviderLaya {
+		// Local laya service exposes /health (not /v1/models): probe it.
+		if strings.TrimSpace(provider.BaseURL) == "" {
+			status.LastTestError = "base_url not configured"
+			return TestResponse{Status: status, OK: false, Error: status.LastTestError}
+		}
+		endpoint := strings.TrimRight(strings.TrimSpace(provider.BaseURL), "/") + "/health"
+		req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if rerr != nil {
+			status.LastTestError = rerr.Error()
+			return TestResponse{Status: status, OK: false, Error: status.LastTestError}
+		}
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, derr := client.Do(req)
+		if derr != nil {
+			status.LastTestError = derr.Error()
+			return TestResponse{Status: status, OK: false, Error: status.LastTestError}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			status.LastTestError = fmt.Sprintf("laya health failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
+			return TestResponse{Status: status, OK: false, Error: status.LastTestError}
+		}
+		return TestResponse{Status: status, OK: true}
+	}
 	if strings.TrimSpace(provider.BaseURL) == "" {
 		status.LastTestError = "base_url not configured"
 		return TestResponse{Status: status, OK: false, Error: status.LastTestError}
@@ -159,6 +185,12 @@ func DiscoverModels(ctx context.Context, cfg *config.Config, id string) ModelsRe
 	}
 	if provider.Type == config.ProviderOpenAICodex {
 		return ModelsResponse{ProviderID: providerID, Models: cloneModels(codexOAuthModels), OK: true}
+	}
+	if llm.NormalizeProviderType(provider.Type) == llm.ProviderLaya {
+		// Local laya decision service: single model "laya" (no /v1/models).
+		return ModelsResponse{ProviderID: providerID, Models: []ModelInfo{
+			{ID: "laya", Name: "laya", Model: "laya", SupportsStreaming: false},
+		}, OK: true}
 	}
 	if strings.TrimSpace(provider.BaseURL) == "" {
 		return ModelsResponse{ProviderID: providerID, OK: false, Error: "base_url not configured"}

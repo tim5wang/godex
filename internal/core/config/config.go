@@ -16,6 +16,8 @@ const (
 	ProviderOpenAICompatible    = llm.ProviderOpenAICompatible
 	ProviderOpenAICodex         = llm.ProviderOpenAICodex
 	ProviderOpenAIResponses     = llm.ProviderOpenAIResponses
+	// ProviderLaya is a native Jev/Laya structured decision endpoint.
+	ProviderLaya = llm.ProviderLaya
 )
 
 // Config holds the fully resolved runtime configuration.

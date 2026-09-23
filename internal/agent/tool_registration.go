@@ -328,6 +328,10 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Bundle:  bundleSubagent,
 		Summary: "Business Flow inspection: aggregate run health across published flows (P3 Agent 闭环定期巡检)",
 	})
+	a.registerToolTo(handler, newFlowDesignTool(a), tools.ToolMeta{
+		Bundle:  bundleSubagent,
+		Summary: "Business Flow design method set: generate/amend/validate Flow Spec v1 definitions from natural language (Agent 辅助设计)",
+	})
 	a.registerSubagentTool(handler)
 	a.registerToolTo(handler, tools.NewACPAgentTool(a.cfg.ACP.Agents, workspaceDir), tools.ToolMeta{
 		Bundle:  bundleExternal,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kaptinlin/jsonrepair"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/flow"
 )
@@ -65,7 +66,8 @@ Rules:
 
 // GenerateFlowSpec drafts a Flow Spec v1 definition from a natural-language
 // business description via the LLM (P2.5). It validates the result so a
-// malformed draft fails fast instead of being saved.
+// malformed draft fails fast instead of being saved. Transient LLM failures
+// (empty/garbage response, unparsable JSON) retry once before surfacing.
 func (a *Agent) GenerateFlowSpec(ctx context.Context, description string) (*flow.Definition, error) {
 	description = strings.TrimSpace(description)
 	if description == "" {
@@ -82,12 +84,7 @@ func (a *Agent) GenerateFlowSpec(ctx context.Context, description string) (*flow
 		},
 		MaxTokens: 4096,
 	}
-	resp, err := a.client.Call(ctx, req)
-	if err != nil || resp == nil {
-		return nil, fmt.Errorf("generate flow: LLM call failed: %w", err)
-	}
-	text := strings.TrimSpace(protocol.MessageText(protocol.MessageFromResponse(*resp)))
-	def, err := parseFlowSpecFromLLM(text)
+	def, err := callFlowSpecLLM(ctx, a, "generate flow", req)
 	if err != nil {
 		return nil, err
 	}
@@ -132,12 +129,7 @@ func (a *Agent) AmendFlowSpec(ctx context.Context, current *flow.Definition, cha
 		},
 		MaxTokens: 4096,
 	}
-	resp, err := a.client.Call(ctx, req)
-	if err != nil || resp == nil {
-		return nil, fmt.Errorf("amend flow: LLM call failed: %w", err)
-	}
-	text := strings.TrimSpace(protocol.MessageText(protocol.MessageFromResponse(*resp)))
-	def, err := parseFlowSpecFromLLM(text)
+	def, err := callFlowSpecLLM(ctx, a, "amend flow", req)
 	if err != nil {
 		return nil, err
 	}
@@ -150,8 +142,37 @@ func (a *Agent) AmendFlowSpec(ctx context.Context, current *flow.Definition, cha
 	return def, nil
 }
 
+// callFlowSpecLLM runs one LLM call for a Flow Spec draft/amendment and
+// parses the response. On a transient failure (transport error, empty text,
+// or unparsable JSON) it retries once — models intermittently return empty
+// or garbled output, and a single retry usually recovers.
+func callFlowSpecLLM(ctx context.Context, a *Agent, label string, req protocol.Request) (*flow.Definition, error) {
+	attempts := 2
+	for attempt := 1; attempt <= attempts; attempt++ {
+		resp, err := a.client.Call(ctx, req)
+		if err != nil || resp == nil {
+			if attempt == attempts {
+				return nil, fmt.Errorf("%s: LLM call failed: %w", label, err)
+			}
+			continue
+		}
+		text := strings.TrimSpace(protocol.MessageText(protocol.MessageFromResponse(*resp)))
+		def, perr := parseFlowSpecFromLLM(text)
+		if perr == nil {
+			return def, nil
+		}
+		if attempt == attempts {
+			return nil, perr
+		}
+	}
+	return nil, fmt.Errorf("%s: LLM call failed after %d attempts", label, attempts)
+}
+
 // parseFlowSpecFromLLM extracts a Flow Spec JSON object from an LLM response,
-// tolerating a markdown code fence and surrounding prose.
+// tolerating a markdown code fence and surrounding prose. It tries strict
+// JSON first, then jsonrepair (missing commas/colons, unquoted keys, single
+// quotes, Python literals, truncated input) so a slightly-malformed LLM
+// draft still parses instead of surfacing “no JSON object”.
 func parseFlowSpecFromLLM(text string) (*flow.Definition, error) {
 	text = strings.TrimSpace(text)
 	if strings.HasPrefix(text, "```") {
@@ -167,10 +188,28 @@ func parseFlowSpecFromLLM(text string) (*flow.Definition, error) {
 	start := strings.Index(text, "{")
 	end := strings.LastIndex(text, "}")
 	if start < 0 || end <= start {
+		// Level 0: no JSON object at all — try full-tolerant repair of the
+		// whole response before giving up (a model may wrap the object in
+		// prose without braces surviving extraction).
+		if repaired, err := jsonrepair.Repair(text); err == nil {
+			var def flow.Definition
+			if jerr := json.Unmarshal([]byte(repaired), &def); jerr == nil && len(def.Nodes) > 0 {
+				return &def, nil
+			}
+		}
 		return nil, fmt.Errorf("generate flow: no JSON object in LLM response")
 	}
+	body := text[start : end+1]
 	var def flow.Definition
-	if err := json.Unmarshal([]byte(text[start:end+1]), &def); err != nil {
+	if err := json.Unmarshal([]byte(body), &def); err != nil {
+		// Level 1: jsonrepair the extracted object (handles truncation,
+		// unquoted keys, single quotes, missing commas — the common failure
+		// modes of LLM-generated JSON).
+		if repaired, rerr := jsonrepair.Repair(body); rerr == nil {
+			if uerr := json.Unmarshal([]byte(repaired), &def); uerr == nil {
+				return &def, nil
+			}
+		}
 		return nil, fmt.Errorf("generate flow: parse definition JSON: %w", err)
 	}
 	return &def, nil

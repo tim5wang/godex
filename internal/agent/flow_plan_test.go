@@ -40,6 +40,33 @@ func TestParseFlowSpecFromLLMGarbage(t *testing.T) {
 	}
 }
 
+// TestParseFlowSpecFromLLMRepair verifies jsonrepair tolerance: an LLM draft
+// with malformed JSON (unquoted keys / trailing comma / truncated) still
+// parses into a usable definition instead of “no JSON object”.
+func TestParseFlowSpecFromLLMRepair(t *testing.T) {
+	// Unquoted keys + trailing comma — jsonrepair recovers both.
+	loose := `{"flow_id": "fl_repair", "version": "1", "status": "draft", nodes: [
+		{id: "a", kind: "step", prompt: "do"},
+	]}`
+	def, err := parseFlowSpecFromLLM(loose)
+	if err != nil {
+		t.Fatalf("parse loose JSON: %v", err)
+	}
+	if def.FlowID != "fl_repair" || len(def.Nodes) != 1 {
+		t.Fatalf("unexpected def: %+v", def)
+	}
+
+	// Truncated object (missing closing braces) — jsonrepair closes it.
+	trunc := `{"flow_id": "fl_trunc", "version": "1", "status": "draft", "nodes": [{"id": "a", "kind": "step", "prompt": "do"}`
+	def2, err := parseFlowSpecFromLLM(trunc)
+	if err != nil {
+		t.Fatalf("parse truncated JSON: %v", err)
+	}
+	if def2.FlowID != "fl_trunc" || len(def2.Nodes) != 1 {
+		t.Fatalf("unexpected def: %+v", def2)
+	}
+}
+
 // TestGenerateFlowSpecValid verifies the LLM-generated definition is parsed
 // and validated (a real Flow Spec with nodes passes Validate).
 func TestGenerateFlowSpecValid(t *testing.T) {

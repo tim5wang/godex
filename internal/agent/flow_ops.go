@@ -167,6 +167,62 @@ func (a *Agent) ListFlowVersions(flowID string) ([]FlowVersionView, error) {
 	return out, nil
 }
 
+// DeleteFlowVersion removes one stored version. Versions with any run that is
+// still pending/running/waiting_human are protected (they are the code that
+// produced that run); terminal runs are fine to leave behind as history.
+func (a *Agent) DeleteFlowVersion(flowID, version string) error {
+	if a == nil || a.flows == nil {
+		return fmt.Errorf("flow store unavailable")
+	}
+	if err := a.flowVersionActive(flowID, version); err != nil {
+		return err
+	}
+	return a.flows.deleteVersion(flowID, version)
+}
+
+// DeleteFlow removes a flow entirely (all versions + runs + current). Flows
+// with any active (pending/running/waiting_human) run are protected.
+func (a *Agent) DeleteFlow(flowID string) error {
+	if a == nil || a.flows == nil {
+		return fmt.Errorf("flow store unavailable")
+	}
+	runs, err := a.flows.listRuns(flowID)
+	if err != nil {
+		return err
+	}
+	for _, r := range runs {
+		if isActiveFlowRunStatus(r.Status) {
+			return fmt.Errorf("flow %s has an active run %s (%s); cancel it first", flowID, r.RunID, r.Status)
+		}
+	}
+	return a.flows.deleteFlow(flowID)
+}
+
+// flowVersionActive returns an error when the version has an active run.
+func (a *Agent) flowVersionActive(flowID, version string) error {
+	runs, err := a.flows.listRuns(flowID)
+	if err != nil {
+		return err
+	}
+	for _, r := range runs {
+		if r.Version == version && isActiveFlowRunStatus(r.Status) {
+			return fmt.Errorf("version %s has an active run %s (%s); cancel it first", version, r.RunID, r.Status)
+		}
+	}
+	return nil
+}
+
+// isActiveFlowRunStatus reports whether a run status is still in progress
+// (delete protection).
+func isActiveFlowRunStatus(status string) bool {
+	switch status {
+	case workflowStatusPending, workflowStatusRunning, workflowStatusWaitingHuman:
+		return true
+	default:
+		return false
+	}
+}
+
 // ValidateFlow re-validates a stored (or supplied) definition without saving.
 func (a *Agent) ValidateFlow(def *flow.Definition) (string, error) {
 	if def == nil {

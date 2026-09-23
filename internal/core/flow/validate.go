@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -206,6 +207,16 @@ func validateVarDefs(defs []VarDef, p string) error {
 			case "string", "number", "boolean", "object", "array", "any":
 			default:
 				return ValidationError{Path: fmt.Sprintf("%s[%d].type", p, i), Msg: fmt.Sprintf("invalid variable type %q", v.Type)}
+			}
+			// object/array may carry a nested JSON Schema fragment; anything else
+			// must be plain JSON when present (opaque but valid).
+			if len(v.Schema) > 0 {
+				if !json.Valid(v.Schema) {
+					return ValidationError{Path: fmt.Sprintf("%s[%d].schema", p, i), Msg: "variable schema must be valid JSON"}
+				}
+				if t != "object" && t != "array" && t != "any" {
+					return ValidationError{Path: fmt.Sprintf("%s[%d].schema", p, i), Msg: fmt.Sprintf("nested schema only allowed for object/array/any, got %q", t)}
+				}
 			}
 		}
 	}

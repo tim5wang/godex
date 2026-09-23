@@ -19,6 +19,8 @@ type flowService interface {
 	ListFlowVersions(flowID string) ([]agent.FlowVersionView, error)
 	GetFlowVersion(flowID, version string) (agent.FlowVersionView, error)
 	CreateFlow(args agent.FlowCreateArgs) (agent.FlowVersionView, error)
+	DeleteFlowVersion(flowID, version string) error
+	DeleteFlow(flowID string) error
 	ValidateFlow(def *flow.Definition) (string, error)
 	GenerateFlowSpec(ctx context.Context, description string) (*flow.Definition, error)
 	AmendFlowSpec(ctx context.Context, current *flow.Definition, change string) (*flow.Definition, error)
@@ -104,6 +106,25 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 			return
 		}
 		writeJSON(w, http.StatusOK, versions)
+	})))
+	// DELETE /v1/flows/{id}/versions/{ver} — remove one version (protected
+	// while it has active runs).
+	mux.Handle("DELETE /v1/flows/{id}/versions/{ver}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := service.DeleteFlowVersion(r.PathValue("id"), r.PathValue("ver")); err != nil {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"deleted": r.PathValue("ver")})
+	})))
+	// DELETE /v1/flows/{id} — remove the whole flow (protected while it has
+	// active runs).
+	mux.Handle("DELETE /v1/flows/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flowID := r.PathValue("id")
+		if err := service.DeleteFlow(flowID); err != nil {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"deleted": flowID})
 	})))
 	// POST /v1/flows/{id}/versions/{ver}/validate — compile + validate a
 	// supplied definition (body) without saving.

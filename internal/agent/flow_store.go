@@ -243,6 +243,57 @@ func (s *flowStore) setStatusLane(flowID, status, version string) error {
 	return s.saveCurrent(flowID, cur)
 }
 
+// deleteVersion removes one immutable version directory (flow.json +
+// compiled.json + meta.json). If the version currently occupies a status
+// lane (draft/gray/published), the lane is cleared so the flow keeps a
+// consistent view; no run record is touched (runs live under runs/).
+func (s *flowStore) deleteVersion(flowID, version string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir, err := s.versionsDir(flowID)
+	if err != nil {
+		return err
+	}
+	verDir := filepath.Join(dir, strings.TrimSpace(version))
+	if err := os.RemoveAll(verDir); err != nil {
+		return err
+	}
+	// Clear any status lane pointing at the removed version.
+	cur, err := s.loadCurrent(flowID)
+	if err != nil {
+		return err
+	}
+	changed := false
+	if cur.Draft == version {
+		cur.Draft = ""
+		changed = true
+	}
+	if cur.Gray == version {
+		cur.Gray = ""
+		changed = true
+	}
+	if cur.Published == version {
+		cur.Published = ""
+		changed = true
+	}
+	if changed {
+		return s.saveCurrent(flowID, cur)
+	}
+	return nil
+}
+
+// deleteFlow removes the whole flow directory (versions + runs + current).
+// Callers must guard against deleting a flow with active runs.
+func (s *flowStore) deleteFlow(flowID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir, err := s.flowDir(flowID)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
 func (s *flowStore) runsDir(flowID string) (string, error) {
 	dir, err := s.flowDir(flowID)
 	if err != nil {

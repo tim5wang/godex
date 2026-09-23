@@ -48,6 +48,8 @@ import {
   createBizKey,
   createFlow,
   createFlowRun,
+  deleteFlow,
+  deleteFlowVersion,
   diagnoseFlowRun,
   flowRunEvents,
   getFlowRun,
@@ -176,6 +178,19 @@ export function FlowsPage() {
       refresh();
     },
     onError: (err) => showError(message, err, t("flows.runFailed")),
+  });
+
+  // 删除整个 Flow（C2）：有运行中的流程后端拒绝（409）。删除后清空当前选中
+  // 与抽屉状态。
+  const deleteFlowMutation = useMutation({
+    mutationFn: ({ flowId }: { flowId: string }) => deleteFlow(token, flowId),
+    onSuccess: (_data, { flowId }) => {
+      message.success(t("flows.flowDeleted", { id: flowId }));
+      if (detail?.flow_id === flowId) setDetail(null);
+      if (detailDrawer?.flow_id === flowId) setDetailDrawer(null);
+      refresh();
+    },
+    onError: (err) => showError(message, err, t("flows.deleteFailed")),
   });
 
   const cancelRunMutation = useMutation({
@@ -352,19 +367,38 @@ export function FlowsPage() {
               >
                 <Space style={{ justifyContent: "space-between", width: "100%" }}>
                   <Text strong>{f.flow_id}</Text>
-                  <Tooltip
-                    title={f.published ? t("flows.runTooltip", { v: f.published }) : t("flows.runUnpublished")}
-                  >
-                    <Button
-                      size="small"
-                      icon={<PlayCircleOutlined />}
-                      disabled={!f.published}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        runMutation.mutate({ flowId: f.flow_id, version: f.published ?? "" });
+                  <Space size={2}>
+                    <Tooltip
+                      title={f.published ? t("flows.runTooltip", { v: f.published }) : t("flows.runUnpublished")}
+                    >
+                      <Button
+                        size="small"
+                        icon={<PlayCircleOutlined />}
+                        disabled={!f.published}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          runMutation.mutate({ flowId: f.flow_id, version: f.published ?? "" });
+                        }}
+                      />
+                    </Tooltip>
+                    <Popconfirm
+                      title={t("flows.deleteFlowConfirm", { id: f.flow_id })}
+                      okText={t("flows.delete")}
+                      okButtonProps={{ danger: true }}
+                      onConfirm={(e) => {
+                        e?.stopPropagation?.();
+                        deleteFlowMutation.mutate({ flowId: f.flow_id });
                       }}
-                    />
-                  </Tooltip>
+                    >
+                      <Button
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        loading={deleteFlowMutation.isPending}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </Popconfirm>
+                  </Space>
                 </Space>
                 <Space size={4} style={{ marginTop: 4 }} wrap>
                   {f.draft && <Tag>{`draft ${f.draft}`}</Tag>}
@@ -1001,6 +1035,18 @@ function FlowDetailDrawer(props: {
     return [...versions].reverse().find((v) => v.definition)?.definition ?? undefined;
   }, [versions]);
 
+  // 删除版本（C1）：允许删除古早/非运行中的版本；有活动 run 的版本后端会
+  // 拒绝（409）。
+  const deleteVersionMutation = useMutation({
+    mutationFn: ({ version }: { version: string }) =>
+      deleteFlowVersion(token, flow.flow_id, version),
+    onSuccess: (_data, { version }) => {
+      message.success(t("flows.versionDeleted", { v: version }));
+      onRefresh();
+    },
+    onError: (err) => showError(message, err, t("flows.deleteFailed")),
+  });
+
   return (
     <Drawer title={flow.flow_id} open onClose={onClose} width={720}>
       <Tabs
@@ -1046,6 +1092,24 @@ function FlowDetailDrawer(props: {
                         <Button size="small" icon={<PlayCircleOutlined />} onClick={() => onRun(row.version)}>
                           {t("flows.run")}
                         </Button>
+                        <Popconfirm
+                          title={t("flows.deleteVersionConfirm", { v: row.version })}
+                          okText={t("flows.delete")}
+                          okButtonProps={{ danger: true }}
+                          onConfirm={() => deleteVersionMutation.mutate({ version: row.version })}
+                        >
+                          <Button
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            loading={
+                              deleteVersionMutation.isPending &&
+                              deleteVersionMutation.variables?.version === row.version
+                            }
+                          >
+                            {t("flows.delete")}
+                          </Button>
+                        </Popconfirm>
                       </Space>
                     ),
                   },
@@ -1349,7 +1413,11 @@ function VariableScopePanel(props: {
 
   // Editable flow-level inputs/outputs (B5) — previously read-only. Node
   // outputs stay read-only (they belong to the node spec on the canvas).
-  type FlowVarDef = { name: string; type?: string; desc?: string };
+  // C3: type is a dropdown (string/number/boolean/object/array/any) and
+  // object/array/any may carry a nested JSON-Schema-ish fragment (schema)
+  // edited inline — “像定义 json schema 一样定义变量”。
+  type FlowVarDef = { name: string; type?: string; desc?: string; schema?: unknown };
+  const VAR_TYPES = ["string", "number", "boolean", "object", "array", "any"];
   const [inputs, setInputs] = useState<FlowVarDef[]>(def.inputs ?? []);
   const [outputs, setOutputs] = useState<FlowVarDef[]>(def.outputs ?? []);
   const [targetVersion, setTargetVersion] = useState(nextVersion);
@@ -1360,6 +1428,26 @@ function VariableScopePanel(props: {
 
   const patchVar = (list: FlowVarDef[], setter: (v: FlowVarDef[]) => void, i: number, patch: Partial<FlowVarDef>) =>
     setter(list.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+
+  // Schema text state per row key ("inputs:0" / "outputs:2"); kept local so
+  // typing in the JSON editor doesn't reformat on every keystroke.
+  const [schemaText, setSchemaText] = useState<Record<string, string>>({});
+  const schemaKey = (kind: string, i: number) => `${kind}:${i}`;
+  const schemaOf = (kind: string, i: number, v: FlowVarDef): string => {
+    const k = schemaKey(kind, i);
+    if (schemaText[k] !== undefined) return schemaText[k];
+    return v.schema ? JSON.stringify(v.schema, null, 2) : "";
+  };
+  const applySchema = (kind: string, i: number, list: FlowVarDef[], setter: (v: FlowVarDef[]) => void, text: string) => {
+    setSchemaText((prev) => ({ ...prev, [schemaKey(kind, i)]: text }));
+    let parsed: unknown;
+    try {
+      parsed = text.trim() ? JSON.parse(text) : undefined;
+    } catch {
+      return; // keep editing until valid
+    }
+    patchVar(list, setter, i, { schema: parsed });
+  };
 
   const saveMutation = useMutation({
     mutationFn: async (v: string) => {
@@ -1428,38 +1516,74 @@ function VariableScopePanel(props: {
       {list.length === 0 && (
         <Text type="secondary" style={{ fontSize: 11 }}>—</Text>
       )}
-      {list.map((v, i) => (
-        <Space key={i} size={4} style={{ width: "100%" }}>
-          <Input
-            size="small"
-            style={{ width: 130, fontFamily: "monospace", fontSize: 11 }}
-            placeholder={t("flows.varName")}
-            value={v.name}
-            onChange={(e) => patchVar(list, setter, i, { name: e.target.value })}
-          />
-          <Input
-            size="small"
-            style={{ width: 80, fontSize: 11 }}
-            placeholder="string"
-            value={v.type ?? ""}
-            onChange={(e) => patchVar(list, setter, i, { type: e.target.value })}
-          />
-          <Input
-            size="small"
-            style={{ flex: 1, minWidth: 0, fontSize: 11 }}
-            placeholder={t("flows.varDesc")}
-            value={v.desc ?? ""}
-            onChange={(e) => patchVar(list, setter, i, { desc: e.target.value })}
-          />
-          <Button
-            size="small"
-            type="text"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => setter(list.filter((_, j) => j !== i))}
-          />
-        </Space>
-      ))}
+      {list.map((v, i) => {
+        const nested = v.type === "object" || v.type === "array" || v.type === "any";
+        return (
+          <div
+            key={i}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              border: "1px solid #f0f0f0",
+              borderRadius: 6,
+              padding: 6,
+            }}
+          >
+            <Space size={4} style={{ width: "100%" }}>
+              <Input
+                size="small"
+                style={{ width: 120, fontFamily: "monospace", fontSize: 11 }}
+                placeholder={t("flows.varName")}
+                value={v.name}
+                onChange={(e) => patchVar(list, setter, i, { name: e.target.value })}
+              />
+              <Select
+                size="small"
+                style={{ width: 96 }}
+                value={v.type ?? "string"}
+                onChange={(val) =>
+                  patchVar(list, setter, i, {
+                    type: val,
+                    // Switching away from object/array drops the nested schema.
+                    schema: val === "object" || val === "array" || val === "any" ? v.schema : undefined,
+                  })
+                }
+                options={VAR_TYPES.map((tp) => ({ value: tp, label: tp }))}
+              />
+              <Input
+                size="small"
+                style={{ flex: 1, minWidth: 0, fontSize: 11 }}
+                placeholder={t("flows.varDesc")}
+                value={v.desc ?? ""}
+                onChange={(e) => patchVar(list, setter, i, { desc: e.target.value })}
+              />
+              <Button
+                size="small"
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => setter(list.filter((_, j) => j !== i))}
+              />
+            </Space>
+            {nested && (
+              <div>
+                <Text type="secondary" style={{ fontSize: 10 }}>
+                  {t("flows.varSchema")}
+                </Text>
+                <Input.TextArea
+                  size="small"
+                  rows={3}
+                  style={{ fontFamily: "monospace", fontSize: 11 }}
+                  placeholder='{"properties": {"k": {"type": "string"}}}'
+                  value={schemaOf(kind, i, v)}
+                  onChange={(e) => applySchema(kind, i, list, setter, e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
       <Button
         size="small"
         type="dashed"

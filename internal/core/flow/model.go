@@ -52,10 +52,18 @@ type OnCompleteSpec struct {
 }
 
 // VarDef declares one typed input/output variable (Flow Spec §3.4).
+// Type is one of string|number|boolean|object|array|any. For object/array a
+// nested JSON-Schema-ish fragment may be attached via Schema (e.g.
+// {"properties":{...}} or {"items":{...}}) to define the shape — validated
+// at save time (validate.go), passed through untouched to consumers.
 type VarDef struct {
-	Name string `json:"name"`
-	Type string `json:"type,omitempty"`
-	Desc string `json:"desc,omitempty"`
+	Name string          `json:"name"`
+	Type string          `json:"type,omitempty"`
+	Desc string          `json:"desc,omitempty"`
+	// Schema is an optional nested JSON Schema fragment for object/array
+	// variables (P2.3 变量 schema). Opaque to the engine beyond JSON validity;
+	// it documents/validates the expected shape for callers.
+	Schema json.RawMessage `json:"schema,omitempty"`
 }
 
 // CanvasPos is editor-only layout metadata stored on a node (canvas x/y).

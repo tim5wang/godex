@@ -47,6 +47,25 @@ func (s *Service) ListFlowVersions(flowID string) ([]agent.FlowVersionView, erro
 	return a.ListFlowVersions(flowID)
 }
 
+// DeleteFlowVersion removes one stored version (protected while it has
+// active runs).
+func (s *Service) DeleteFlowVersion(flowID, version string) error {
+	a, err := s.flowAgent()
+	if err != nil {
+		return err
+	}
+	return a.DeleteFlowVersion(flowID, version)
+}
+
+// DeleteFlow removes a flow entirely (protected while it has active runs).
+func (s *Service) DeleteFlow(flowID string) error {
+	a, err := s.flowAgent()
+	if err != nil {
+		return err
+	}
+	return a.DeleteFlow(flowID)
+}
+
 // GetFlowVersion returns one stored version (definition included).
 func (s *Service) GetFlowVersion(flowID, version string) (agent.FlowVersionView, error) {
 	a, err := s.flowAgent()

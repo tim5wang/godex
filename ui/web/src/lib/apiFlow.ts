@@ -178,6 +178,24 @@ export function publishFlow(token: string | null, flowId: string, version: strin
   );
 }
 
+/** Deletes one stored version (protected while it has active runs). */
+export function deleteFlowVersion(token: string | null, flowId: string, version: string) {
+  return request<{ deleted: string }>(
+    `/v1/flows/${encodeURIComponent(flowId)}/versions/${encodeURIComponent(version)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+/** Deletes a whole flow (protected while it has active runs). */
+export function deleteFlow(token: string | null, flowId: string) {
+  return request<{ deleted: string }>(
+    `/v1/flows/${encodeURIComponent(flowId)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
 export function createFlowRun(token: string | null, flowId: string, body: {
   version?: string;
   inputs?: Record<string, unknown>;

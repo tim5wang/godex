@@ -396,6 +396,46 @@ func TestFlowsGenerateEndpoint(t *testing.T) {
 	}
 }
 
+// TestFlowsGenerateInvalidDraftCarriesDraft verifies POST /v1/flows/generate
+// surfaces a *FlowSpecDraftError as a JSON body with the near-correct draft +
+// raw LLM output (8ebefd4 + 复盘 #4), so an HTTP caller can amend instead of
+// losing the work — never a bare text error.
+func TestFlowsGenerateInvalidDraftCarriesDraft(t *testing.T) {
+	// Parseable but invalid: edge targets an unknown node.
+	raw := `{"flow_id": "fl_bad", "version": "1", "status": "draft",
+	  "nodes": [{"id": "a", "kind": "step", "prompt": "do"}],
+	  "edges": [{"id": "e1", "from": "a", "to": "ghost", "edge_type": "data_dependency"}]
+	}`
+	caller := &stubCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.TextBlock(raw)}},
+	}}
+	server := newFlowsTestServerWithCaller(t, caller)
+
+	resp, body := doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows/generate", map[string]any{
+		"description": "bad flow",
+	})
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", resp.StatusCode, body)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode error body: %v (%s)", err, body)
+	}
+	if payload["stage"] != "draft" {
+		t.Fatalf("expected stage=draft in error body, got %+v", payload)
+	}
+	if payload["draft"] == nil {
+		t.Fatal("expected near-correct draft in error body, got none")
+	}
+	rawOut, _ := payload["raw_output"].(string)
+	if !strings.Contains(rawOut, "fl_bad") {
+		t.Fatalf("expected raw_output preserved in error body, got %q", rawOut)
+	}
+	if msg, _ := payload["error"].(string); !strings.Contains(msg, "unknown node") {
+		t.Fatalf("expected validation message in error body, got %q", msg)
+	}
+}
+
 // TestFlowsCreateEmptyDraft verifies creating a flow with only basic identity
 // (no definition) succeeds and the flow shows up in the list (P2.5 create
 // object first, fill in content later).

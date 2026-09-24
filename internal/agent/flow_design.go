@@ -93,10 +93,7 @@ func newFlowDesignTool(agent *Agent) tools.Tool {
 				return tools.ToolResult{}, fmt.Errorf("flow_design validate: invalid definition JSON: %w", err)
 			}
 			if err := flow.Validate(def); err != nil {
-				return tools.ToolResult{Structured: map[string]interface{}{
-					"valid": false,
-					"error": err.Error(),
-				}, Text: fmt.Sprintf("flow definition invalid: %v", err)}, nil
+				return flowInvalidResult(def, err), nil
 			}
 			return tools.ToolResult{Structured: map[string]interface{}{
 				"valid": true,
@@ -121,6 +118,62 @@ func parseFlowDefinitionJSON(raw json.RawMessage) (*flow.Definition, error) {
 		return nil, fmt.Errorf("definition has no flow_id/nodes")
 	}
 	return &def, nil
+}
+
+// flowInvalidResult converts a flow.Validate failure into a ToolResult with
+// ACTIONABLE context: the concrete error plus a compact inventory of what IS
+// declared (node kinds + edge targets) so the Agent can spot the mismatch
+// (e.g. a branch case pointing at a node id that doesn't exist) instead of
+// guessing from the error line alone.
+func flowInvalidResult(def *flow.Definition, vErr error) tools.ToolResult {
+	var nodeKinds []string
+	ids := map[string]string{} // id -> kind
+	for _, n := range def.Nodes {
+		k := n.Kind
+		if k == "" {
+			k = "step"
+		}
+		nodeKinds = append(nodeKinds, fmt.Sprintf("%s(%s)", n.ID, k))
+		ids[n.ID] = k
+	}
+	var edges []string
+	for _, e := range def.Edges {
+		et := e.EdgeType
+		if et == "" {
+			et = "data_dependency"
+		}
+		eid := e.ID
+		if eid == "" {
+			eid = "(no-id)"
+		}
+		edges = append(edges, fmt.Sprintf("%s:%s→%s:%s", eid, e.From, e.To, et))
+	}
+	hint := fmt.Sprintf(
+		"flow definition invalid: %v\n已声明节点：%s\n已声明边：%s\n提示：branch case 的 to / edge 的 from,to 必须指向上面列出的节点 id；如需补全分支目标节点请用 flow_design amend。",
+		vErr,
+		func() string {
+			if len(nodeKinds) == 0 {
+				return "（无）"
+			}
+			return strings.Join(nodeKinds, ", ")
+		}(),
+		func() string {
+			if len(edges) == 0 {
+				return "（无）"
+			}
+			return strings.Join(edges, ", ")
+		}(),
+	)
+	return tools.ToolResult{
+		Structured: map[string]interface{}{
+			"valid":       false,
+			"error":       vErr.Error(),
+			"nodes":       nodeKinds,
+			"edges":       edges,
+			"declared_ids": ids,
+		},
+		Text: hint,
+	}
 }
 
 // flowDesignResult wraps a draft definition into a ToolResult: the structured

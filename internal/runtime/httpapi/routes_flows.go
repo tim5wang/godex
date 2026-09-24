@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -78,6 +79,22 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 			def, err = service.GenerateFlowSpec(r.Context(), req.Description)
 		}
 		if err != nil {
+			// A *FlowSpecDraftError carries the near-correct draft + the raw LLM
+			// output (8ebefd4): surface them in the error body so the caller
+			// can amend instead of losing the work, instead of a bare message.
+			var draftErr *agent.FlowSpecDraftError
+			if errors.As(err, &draftErr) {
+				body := map[string]interface{}{
+					"error":     err.Error(),
+					"stage":     "draft",
+					"raw_output": draftErr.Raw,
+				}
+				if draftErr.Draft != nil {
+					body["draft"] = draftErr.Draft
+				}
+				writeJSON(w, http.StatusUnprocessableEntity, body)
+				return
+			}
 			writeError(w, http.StatusUnprocessableEntity, err)
 			return
 		}

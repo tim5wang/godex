@@ -108,11 +108,38 @@ function routingTemplate(flowId: string, version: string): FlowDefinition {
   return d;
 }
 
+/** 5. 多分支汇聚：decision → branch → 多分支处理 → condition 边汇聚到 finalize */
+function convergeTemplate(flowId: string, version: string): FlowDefinition {
+  const d = base(flowId, version, "branch-converge");
+  d.name = "多分支汇聚";
+  d.description = "判断 → 多分支并行处理 → 各分支完成后汇聚到汇总节点（branch 网关静态 + 分支/汇聚节点作 append 模板）";
+  d.inputs = [{ name: "ticket", type: "string", desc: "工单内容" }];
+  d.nodes = [
+    { id: "classify", kind: "step", title: "工单分类", prompt: "对工单进行分类并提取关键信息" },
+    { id: "decide", kind: "decision", title: "处理方式", prompt: "该工单如何处理？", decision: { decision_type: "choice", choices: [{ id: "auto" }, { id: "llm" }, { id: "human" }] } },
+    { id: "br", kind: "branch", branch: { cases: [{ name: "auto", to: "auto_run", condition: { choice: "auto" } }, { name: "llm", to: "llm_run", condition: { choice: "llm" } }, { name: "human", to: "human_run", condition: { choice: "human" } }], default_to: "auto_run" } },
+    { id: "auto_run", kind: "step", title: "自动处理", prompt: "自动处理工单并产出结论" },
+    { id: "llm_run", kind: "llm", title: "LLM 复核", prompt: "复核工单并给出结论" },
+    { id: "human_run", kind: "human", title: "人工处理", prompt: "人工处理该工单", human: { queue: "ops", assignee_policy: "any", result_var: "resolution" } },
+    { id: "finalize", kind: "step", title: "汇总输出", prompt: "汇总各分支处理结论，输出最终 resolution" },
+  ];
+  d.edges = [
+    { id: "e1", from: "classify", to: "decide", edge_type: "data_dependency" },
+    { id: "e2", from: "decide", to: "br", edge_type: "data_dependency" },
+    // 汇聚：每个分支节点完成（status=completed）时各自触发 finalize 一次。
+    { id: "e3", from: "auto_run", to: "finalize", edge_type: "condition", when: { status: "completed" } },
+    { id: "e4", from: "llm_run", to: "finalize", edge_type: "condition", when: { status: "completed" } },
+    { id: "e5", from: "human_run", to: "finalize", edge_type: "condition", when: { status: "completed" } },
+  ];
+  return d;
+}
+
 export const FLOW_TEMPLATES: FlowTemplate[] = [
   { id: "approval", name: "人工审批流", description: "step → 人工审批 → 结果处理", build: approvalTemplate },
   { id: "support-ticket", name: "客服工单处理", description: "工单分类 → 决策 → AI 回复或转人工", build: supportTemplate },
   { id: "order-refund", name: "订单售后", description: "问题分类 → 金额判断 → 自动退款或人工审核", build: refundTemplate },
   { id: "decision-routing", name: "决策分流", description: "处理 → 置信度判断 → 自动/LLM/人工", build: routingTemplate },
+  { id: "branch-converge", name: "多分支汇聚", description: "判断 → 多分支处理 → condition 边汇聚到汇总", build: convergeTemplate },
 ];
 
 export function flowTemplateById(id: string): FlowTemplate | undefined {

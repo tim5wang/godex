@@ -100,3 +100,46 @@ func TestFlowDesignGenerateUnparsableStillFails(t *testing.T) {
 		t.Fatalf("expected raw output preserved in text for diagnostics, got %q", out)
 	}
 }
+
+// TestFlowInvalidResultActionableContext verifies flow_design validate surfaces
+// the concrete error PLUS the declared node/edge inventory, so the Agent can
+// spot a dangling reference (e.g. branch case → unknown node) from the result
+// alone (复盘 #3: validate 报错需可行动上下文).
+func TestFlowInvalidResultActionableContext(t *testing.T) {
+	def := &flow.Definition{
+		FlowID: "fl_x", Version: "1",
+		Nodes: []flow.Node{
+			{ID: "a", Kind: "step", Prompt: "do"},
+			{ID: "br", Kind: "branch", Branch: &flow.BranchSpec{
+				Cases:     []flow.BranchCase{{Name: "go", To: "ghost", Condition: flow.Condition{Choice: "auto"}}},
+				DefaultTo: "a",
+			}},
+		},
+		Edges: []flow.Edge{{ID: "e1", From: "a", To: "br", EdgeType: flow.EdgeDataDependency}},
+	}
+	vErr := flow.Validate(def)
+	if vErr == nil {
+		t.Fatal("expected validation error for unknown branch target")
+	}
+	res := flowInvalidResult(def, vErr)
+	m, ok := res.Structured.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured map, got %T", res.Structured)
+	}
+	if m["valid"] != false {
+		t.Fatalf("expected valid=false, got %+v", m)
+	}
+	// 可行动上下文：已声明节点清单包含 br、已声明边清单包含 e1。
+	if !strings.Contains(res.Text, "a(step)") || !strings.Contains(res.Text, "br(branch)") {
+		t.Fatalf("expected declared node inventory in text, got %q", res.Text)
+	}
+	if !strings.Contains(res.Text, "e1") {
+		t.Fatalf("expected declared edge inventory in text, got %q", res.Text)
+	}
+	if !strings.Contains(res.Text, "ghost") {
+		t.Fatalf("expected concrete error (unknown node ghost) in text, got %q", res.Text)
+	}
+	if _, hasIDs := m["declared_ids"]; !hasIDs {
+		t.Fatalf("expected declared_ids map in structured payload, got %+v", m)
+	}
+}

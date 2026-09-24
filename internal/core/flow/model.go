@@ -46,6 +46,7 @@ type NetworkPolicy struct {
 // godex-feature: flow-spec
 // Flow Spec v1：业务流程的声明式定义模型（docs/business-flow-runtime-design.md §3）。
 // 生成器（flow_design generate）失败时，可用下面结构手工构造定义。
+// English keywords: flow spec, flow_id, nodes, edges, decision, branch, loop, human, function, network policy, pre_script, post_script, timeout, handoff, condition edge, append template, converge
 //
 // 顶层字段：
 //   flow_id: string（必填，fl_<slug>）；name/description: string
@@ -58,21 +59,57 @@ type NetworkPolicy struct {
 // Node（id 必填短 slug，kind 必填）：
 //   step|llm：需要 prompt（可引用 {{inputs.<name>}} / {{nodes.<id>.outputs.<field>}}）
 //   decision：prompt + decision.decision_type "choice" + decision.choices[{id,label}]；
-//     其后方需 data_dependency 边连到 branch 节点按 choice id 路由
+//     其后方需 data_dependency 边连到 branch 节点按 choice id 路由；
+//     标准输出字段豁免清单：choice/confidence/question 由引擎写，无需在 outputs 声明
 //   branch：branch.cases[{name,to,condition}]+branch.default_to（必填）；
-//     condition: {choice: "<choice id>"} 或 {operator,value}；case 的 to 必须指向真实节点
-//   human：prompt + human.queue（"ops"|"support"|"finance"）+ human.result_var + assignee_policy
-//   loop：loop.iterations 或 loop.until + loop.exit_var/exit_values
-//   function：function.lang（"js"|"wasm"）+ function.handler（js 源码或 wasm ref）
-//   canvas_pos（编辑器布局元数据，非运行时）；pre_script/post_script（bash，节点前后置）；
-//   outputs: [{name,type,desc}]；agent_ref（agent 模板 id）；timeout_sec；retry
+//     condition: {choice: "<choice id>"} 或 {status: "completed"} 或 {operator,value}；
+//     case 的 to 必须指向真实节点；branch 网关节点必须有且仅一条 data_dependency 入边（source）
+//   human：prompt + human.queue（"ops"|"support"|"finance"）+ human.result_var + assignee_policy；
+//     human 超时字段是 timeout_ms（毫秒），节点级超时是 timeout_sec（秒）——单位不一致，注意对照
+//   loop：loop.body + loop.exit_when（退出条件）+ max_iterations/iteration_key
+//   function：function.runtime（"js"|"wasm"）+ function.source（js 源码）或 function.ref（node-library id）；
+//     function 节点不需要 prompt（靠 handler 执行），但可带 pre_script/post_script
+//   canvas_pos（编辑器布局元数据，非运行时）；pre_script/post_script（bash，节点前后置，
+//     输出捕获到 outputs.script.pre_stdout/post_stdout）；outputs: [{name,type,desc}]；
+//     agent_ref（agent 模板 id）；timeout_sec；retry
 //
 // Edge（id/from/to 必填，edge_type 必填）：
-//   data_dependency（普通排序）、handoff（传递上游摘要）、condition（仅 loop/branch 内部）
+//   data_dependency（普通排序）、handoff（传递上游摘要）、condition（仅 loop/branch 内部；
+//     带 when 谓词，To 节点成为 append 模板——不被静态声明，运行时按需追加）
+//
+// 关键运行时语义（F1a compile）：
+//   - 分支目标（branch case.To / default_to、condition edge.To）是 append 模板，
+//     不可再有静态入边（mixed-use 拒绝）；
+//   - 多分支→汇聚的正确模式：branch 网关（静态）→ 各分支节点（append 模板）→
+//     finalize 也作 append 模板，经 when.status=completed 的 condition 边汇聚
+//     （每分支完成各自触发 finalize 一次；finalize 内用 {{nodes.<id>.outputs}} 区分分支）。
+//   - function 节点 append 模板不需要 prompt（558713b 修复）。
 //
 // 校验规则（flow.Validate）：flow_id/nodes 必填；节点 id 唯一；branch case 目标、
 // edge from/to 必须指向存在的节点；decision 必须有 decision spec；human 必须有 queue/result_var；
-// 网络策略白名单格式 host 或 *.suffix；prompt 只能引用已声明 inputs 与已存在节点输出。
+// 网络策略白名单格式 host 或 *.suffix；prompt 只能引用已声明 inputs 与已存在节点输出；
+// 分支/汇聚 condition 边目标不能有静态入边。
+//
+// 最小合法样例（decision→branch→汇聚）：
+// {"flow_id":"fl_demo","version":"1","status":"draft",
+//  "inputs":[{"name":"task","type":"string"}],
+//  "nodes":[
+//   {"id":"classify","kind":"step","prompt":"分类任务 {{inputs.task}}"},
+//   {"id":"decide","kind":"decision","prompt":"能否自动处理？",
+//    "decision":{"decision_type":"choice","choices":[{"id":"auto"},{"id":"human"}]}},
+//   {"id":"br","kind":"branch",
+//    "branch":{"cases":[{"name":"auto","to":"auto_run","condition":{"choice":"auto"}},
+//                       {"name":"human","to":"human_run","condition":{"choice":"human"}}],
+//             "default_to":"auto_run"}},
+//   {"id":"auto_run","kind":"llm","prompt":"自动回复 {{nodes.classify.outputs.result}}"},
+//   {"id":"human_run","kind":"human","prompt":"人工处理",
+//    "human":{"queue":"ops","assignee_policy":"any","result_var":"approved"}},
+//   {"id":"finalize","kind":"step","prompt":"汇总结果"}],
+//  "edges":[
+//   {"id":"e1","from":"classify","to":"decide","edge_type":"data_dependency"},
+//   {"id":"e2","from":"decide","to":"br","edge_type":"data_dependency"},
+//   {"id":"e3","from":"auto_run","to":"finalize","edge_type":"condition","when":{"status":"completed"}},
+//   {"id":"e4","from":"human_run","to":"finalize","edge_type":"condition","when":{"status":"completed"}}]}
 //
 // 入口：flow_design 工具、/v1/flows API、Web Flows 页
 // 文档：docs/business-flow-runtime-design.md

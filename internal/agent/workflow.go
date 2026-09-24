@@ -1627,6 +1627,17 @@ func validateWorkflowEdges(edges []workflowEdge, nodes []workflowNode) error {
 	for _, node := range nodes {
 		byID[node.ID] = struct{}{}
 	}
+	// Condition edges (when + append) create their Append node dynamically at
+	// run time. A later converge edge may legitimately reference that
+	// template as its From (e.g. branch case target autoreply → finalize via
+	// when.status=completed): the From node does not exist statically yet, so
+	// accept any Append.ID as a valid From source (workflowEdgeMatchesSource
+	// re-checks against the live node set at run time).
+	for _, edge := range edges {
+		if id := strings.TrimSpace(edge.Append.ID); id != "" {
+			byID[id] = struct{}{}
+		}
+	}
 	seen := make(map[string]struct{}, len(edges))
 	for _, edge := range edges {
 		if strings.TrimSpace(edge.ID) == "" {

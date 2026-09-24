@@ -336,14 +336,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
             payload.dispatched_turn_id ? `Queued turn: ${payload.dispatched_turn_id}` : "",
             payload.dispatched_job_id ? `Started subagent: ${payload.dispatched_job_id}` : "",
           ].filter(Boolean).join("\n");
-          overlayItems.push({
-            id: `command:${event.turn_id}:${payload.name}`,
-            kind: payload.error ? "error" : "command",
-            title: payload.error ? "Command error" : `/${payload.name || "command"}`,
-            body: payload.error || details || "Command completed.",
-            timestamp: event.timestamp,
-            summary: firstSummaryLine(payload.error || details || "Command completed."),
-          });
+          // A successful /compact refreshes the snapshot, which contains its
+          // dedicated summary item. Avoid showing the same long summary again
+          // as a command bubble; keep failures visible as errors.
+          const successfulCompaction = payload.name?.toLowerCase() === "compact" && !payload.error;
+          if (!successfulCompaction) {
+            overlayItems.push({
+              id: `command:${event.turn_id}:${payload.name}`,
+              kind: payload.error ? "error" : "command",
+              title: payload.error ? "Command error" : `/${payload.name || "command"}`,
+              body: payload.error || details || "Command completed.",
+              timestamp: event.timestamp,
+              summary: firstSummaryLine(payload.error || details || "Command completed."),
+            });
+          }
           status = payload.error ? "Command failed" : `/${payload.name || "command"} completed`;
           running = false;
           break;
@@ -498,11 +504,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }),
 }));
 
-function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, boolean>): FeedItem[] {
+export interface SnapshotToItemsOptions {
+  idPrefix?: string;
+  archiveOnly?: boolean;
+  sourceIndexes?: number[];
+}
+
+export function snapshotToItems(
+  messages: ProtocolMessage[],
+  expanded: Record<string, boolean>,
+  options: SnapshotToItemsOptions = {},
+): FeedItem[] {
   const items: FeedItem[] = [];
   const toolIndices = new Map<string, number>();
 
-  (messages ?? []).forEach((msg, messageIndex) => {
+  (messages ?? []).forEach((msg, localIndex) => {
+    const messageIndex = options.sourceIndexes?.[localIndex] ?? localIndex;
+    const idPrefix = options.idPrefix ?? "";
+    const feedMessageIndex = options.archiveOnly ? undefined : messageIndex;
     const blocks = msg.content ?? [];
     // Runtime guidance (loop guard recovery, permission notes) is persisted
     // for model context but must not render as a "You" bubble after reload.
@@ -514,26 +533,37 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
     // Synthesize a turnId for assistant messages so their text + tool blocks
     // group together in the V2 feed layout. History snapshots don't carry
     // backend turn ids, so the message index is the grouping boundary.
-    const syntheticTurnId = msg.role === "assistant" ? `msg-${messageIndex}` : undefined;
-    if (text.trim() || attachments.length > 0) {
-      const kind = msg.role === "assistant" ? (msg.metadata?.kind === "background" ? "background" : "assistant") : "user";
+    const isSummary = msg.metadata?.kind === "summary";
+    const syntheticTurnId = msg.role === "assistant" ? `${idPrefix}msg-${messageIndex}` : undefined;
+    if (text.trim() || attachments.length > 0 || (isSummary && msg.metadata?.transcript)) {
+      const kind = isSummary
+        ? "summary"
+        : msg.role === "assistant"
+          ? (msg.metadata?.kind === "background" ? "background" : "assistant")
+          : "user";
       items.push({
-        id: `message:${messageIndex}:${kind}`,
+        id: `${idPrefix}message:${messageIndex}:${kind}`,
         kind,
-        title: msg.role === "assistant" ? (msg.metadata?.kind === "background" ? "Background update" : "GoDex") : "You",
+        title: isSummary
+          ? "Context compacted"
+          : msg.role === "assistant"
+            ? (msg.metadata?.kind === "background" ? "Background update" : "GoDex")
+            : "You",
         body: text,
         timestamp: msg.metadata?.timestamp,
         attachments,
         summary: text.trim() ? firstSummaryLine(text) : attachmentSummary(attachments),
+        transcriptRef: isSummary ? msg.metadata?.transcript : undefined,
         turnId: syntheticTurnId,
-        messageIndex,
+        messageIndex: feedMessageIndex,
+        archiveOnly: options.archiveOnly || undefined,
       });
     }
 
     blocks.forEach((block, blockIndex) => {
       if (block.type === "tool_use") {
         const item: FeedItem = {
-          id: toolSnapshotId(messageIndex, blockIndex, block),
+          id: toolSnapshotId(messageIndex, blockIndex, block, idPrefix),
           kind: "tool",
           title: block.name || "tool",
           body: "",
@@ -542,8 +572,9 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
           input: block.input,
           status: "running",
           startedAt: msg.metadata?.timestamp,
-          expanded: expanded[toolSnapshotId(messageIndex, blockIndex, block)] ?? false,
+          expanded: expanded[toolSnapshotId(messageIndex, blockIndex, block, idPrefix)] ?? false,
           turnId: syntheticTurnId,
+          archiveOnly: options.archiveOnly || undefined,
         };
         items.push(item);
         if (block.id) {
@@ -567,7 +598,7 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
           };
         } else {
           items.push({
-            id: `tool-result:${messageIndex}:${blockIndex}`,
+            id: `${idPrefix}tool-result:${messageIndex}:${blockIndex}`,
             kind: "tool",
             title: "tool result",
             body: "",
@@ -576,8 +607,9 @@ function snapshotToItems(messages: ProtocolMessage[], expanded: Record<string, b
             output: block.content,
             error: resultError || undefined,
             status: resultError ? "failed" : "finished",
-            expanded: expanded[`tool-result:${messageIndex}:${blockIndex}`] ?? false,
+            expanded: expanded[`${idPrefix}tool-result:${messageIndex}:${blockIndex}`] ?? false,
             turnId: syntheticTurnId,
+            archiveOnly: options.archiveOnly || undefined,
           });
         }
       }
@@ -628,8 +660,105 @@ function subagentProgressKey(item: NonNullable<FeedItem["progress"]>[number]) {
   return [item.timestamp, item.phase, item.status, item.toolName, item.message, item.error, item.result].filter(Boolean).join("|");
 }
 
-function toolSnapshotId(messageIndex: number, blockIndex: number, block: ProtocolBlock) {
-  return block.id ? `tool:${block.id}` : `tool:${messageIndex}:${blockIndex}:${block.name ?? "tool"}`;
+function toolSnapshotId(messageIndex: number, blockIndex: number, block: ProtocolBlock, idPrefix = "") {
+  return block.id ? `${idPrefix}tool:${block.id}` : `${idPrefix}tool:${messageIndex}:${blockIndex}:${block.name ?? "tool"}`;
+}
+
+export interface TranscriptArchivePage {
+  ref: string;
+  messages: ProtocolMessage[];
+}
+
+export interface ArchivedProtocolMessage {
+  ref: string;
+  sourceIndex: number;
+  message: ProtocolMessage;
+}
+
+/** Stitch loaded archives in chronological order, removing their retained-tail overlap. */
+export function composeTranscriptArchives(pages: TranscriptArchivePage[]): ArchivedProtocolMessage[] {
+  const composed: ArchivedProtocolMessage[] = [];
+  const summaryKeys = new Set<string>();
+
+  for (const page of pages) {
+    const entries = page.messages.map((message, sourceIndex) => ({ ref: page.ref, sourceIndex, message }));
+    if (composed.length === 0) {
+      composed.push(...entries);
+      for (const entry of entries) {
+        if (isSummaryMessage(entry.message)) {
+          summaryKeys.add(protocolMessageKey(entry.message));
+        }
+      }
+      continue;
+    }
+
+    const summaries = entries.filter((entry) => {
+      if (!isSummaryMessage(entry.message)) return false;
+      const key = protocolMessageKey(entry.message);
+      if (summaryKeys.has(key)) return false;
+      summaryKeys.add(key);
+      return true;
+    });
+    const content = entries.filter((entry) => !isSummaryMessage(entry.message));
+    const previousContentKeys = composed.filter((entry) => !isSummaryMessage(entry.message)).map((entry) => protocolMessageKey(entry.message));
+    const contentKeys = content.map((entry) => protocolMessageKey(entry.message));
+    const overlap = suffixPrefixOverlap(previousContentKeys, contentKeys);
+    composed.push(...summaries, ...content.slice(overlap));
+  }
+
+  return composed;
+}
+
+/** Current snapshot messages repeated at the end of the newest loaded archive. */
+export function overlappingSnapshotMessageIndexes(
+  archived: ArchivedProtocolMessage[],
+  snapshot: ProtocolMessage[],
+): Set<number> {
+  const archiveKeys = archived
+    .filter((entry) => !isSummaryMessage(entry.message))
+    .map((entry) => protocolMessageKey(entry.message));
+  const snapshotContent = snapshot
+    .map((message, index) => ({ message, index }))
+    .filter((entry) => !isSummaryMessage(entry.message));
+  const overlap = suffixPrefixOverlap(archiveKeys, snapshotContent.map((entry) => protocolMessageKey(entry.message)));
+  return new Set(snapshotContent.slice(0, overlap).map((entry) => entry.index));
+}
+
+function isSummaryMessage(message: ProtocolMessage) {
+  return message.metadata?.kind === "summary";
+}
+
+function protocolMessageKey(message: ProtocolMessage) {
+  const metadata = message.metadata as (ProtocolMessage["metadata"] & { reasoning_content?: unknown }) | undefined;
+  if (!metadata) return JSON.stringify(message);
+  const visibleMetadata = { ...metadata };
+  delete visibleMetadata.reasoning_content;
+  return JSON.stringify({
+    role: message.role,
+    content: message.content,
+    ...(Object.keys(visibleMetadata).length > 0 ? { metadata: visibleMetadata } : {}),
+  });
+}
+
+function suffixPrefixOverlap(source: string[], target: string[]) {
+  if (source.length === 0 || target.length === 0) return 0;
+  const prefix = new Array<number>(target.length).fill(0);
+  for (let i = 1, matched = 0; i < target.length; i++) {
+    while (matched > 0 && target[i] !== target[matched]) {
+      matched = prefix[matched - 1];
+    }
+    if (target[i] === target[matched]) matched++;
+    prefix[i] = matched;
+  }
+
+  let matched = 0;
+  for (const key of source) {
+    while (matched > 0 && (matched === target.length || key !== target[matched])) {
+      matched = prefix[matched - 1];
+    }
+    if (key === target[matched]) matched++;
+  }
+  return matched;
 }
 
 function toolItemId(turnId: string, id: string | undefined, name: string) {
@@ -671,6 +800,7 @@ function persistedToolResultError(block: ProtocolBlock) {
 export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
   const result: FeedItem[] = [];
   let openGroup: FeedItem | null = null;
+  let openGroupIsArchive = false;
   // Track the max snapshot message index inside the open turn so the turn's
   // fork point (message_index) includes every message of that turn.
   let openGroupMaxIndex = -1;
@@ -682,11 +812,15 @@ export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
       }
       result.push(openGroup);
       openGroup = null;
+      openGroupIsArchive = false;
       openGroupMaxIndex = -1;
     }
   };
 
   for (const item of items) {
+    if (openGroup && openGroupIsArchive !== Boolean(item.archiveOnly)) {
+      closeGroup();
+    }
     const mergeable = item.kind === "assistant" || item.kind === "background" || item.kind === "tool" || item.kind === "todo";
 
     if (!mergeable) {
@@ -697,16 +831,22 @@ export function groupFeedItemsIntoTurns(items: FeedItem[]): FeedItem[] {
 
     if (!openGroup) {
       openGroup = {
-        id: item.turnId ? `turn:${item.turnId}` : `turn:group:${item.id}`,
+        id: item.archiveOnly
+          ? `turn:archive:${item.id}`
+          : item.turnId
+            ? `turn:${item.turnId}`
+            : `turn:group:${item.id}`,
         sessionId: item.sessionId,
         kind: "assistant",
         title: "GoDex",
         body: "",
         timestamp: item.timestamp,
         turnId: item.turnId,
+        archiveOnly: item.archiveOnly,
         segments: [],
         finalBody: "",
       };
+      openGroupIsArchive = Boolean(item.archiveOnly);
       openGroupMaxIndex = item.messageIndex ?? -1;
     } else if (item.messageIndex !== undefined && item.messageIndex > openGroupMaxIndex) {
       openGroupMaxIndex = item.messageIndex;

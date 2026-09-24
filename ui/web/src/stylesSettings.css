@@ -1,0 +1,80 @@
+.settings-config-form {
+  min-width: 0;
+}
+
+.settings-config-layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.settings-config-sidebar {
+  position: sticky;
+  top: 64px;
+  align-self: start;
+  max-height: calc(100dvh - 176px);
+  overflow: auto;
+  border-right: 1px solid var(--godex-border);
+  padding-right: 10px;
+}
+
+.settings-config-sidebar-title {
+  display: block;
+  padding: 8px 12px 4px;
+}
+
+.settings-config-sidebar .ant-menu {
+  border-inline-end: 0;
+  background: transparent;
+}
+
+.settings-config-sidebar .ant-menu-title-content {
+  white-space: normal;
+}
+
+.settings-config-heading {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 16px;
+}
+
+.settings-config-heading .ant-typography {
+  margin: 0;
+}
+
+.settings-config-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--godex-border);
+  background: color-mix(in oklab, var(--godex-panel) 94%, transparent);
+  padding: 10px 12px;
+  backdrop-filter: blur(12px);
+}
+
+@media (max-width: 760px) {
+  .settings-config-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .settings-config-sidebar {
+    position: static;
+    max-height: 230px;
+    border-right: 0;
+    border-bottom: 1px solid var(--godex-border);
+    padding: 0 0 8px;
+  }
+
+  .settings-config-toolbar {
+    gap: 8px;
+    padding: 8px;
+  }
+}

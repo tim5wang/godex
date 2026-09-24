@@ -29,7 +29,6 @@ import type {
   CIKSummary,
   DoctorCheck,
   PackageQualityReport,
-  ProviderStatus,
   RuntimeServiceStatus,
   SecurityEvent,
   WeixinAuthStatus,
@@ -88,42 +87,6 @@ export function NotificationsCard({ token, t }: { token: string; t: (key: string
         </Button>
       </Space>
     </Space>
-  );
-}
-
-export function ProvidersPanel({
-  providers,
-  loading,
-  testing,
-  testingID,
-  onTest,
-}: {
-  providers: ProviderStatus[];
-  loading: boolean;
-  testing: boolean;
-  testingID?: string;
-  onTest: (id: string) => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <Card title={t("settings.providersTitle")}>
-      <Table<ProviderStatus>
-        rowKey="id"
-        size="small"
-        loading={loading}
-        dataSource={providers}
-        scroll={{ x: 820 }}
-        columns={[
-          { title: t("settings.providerCol"), dataIndex: "id", render: (_value, row) => <Space><Typography.Text strong>{row.id}</Typography.Text>{row.name ? <Typography.Text type="secondary">{row.name}</Typography.Text> : null}</Space> },
-          { title: t("settings.typeCol"), dataIndex: "type", render: (value) => <Tag>{value}</Tag> },
-          { title: t("settings.credentialCol"), render: (_value, row) => <Space><Tag color={row.has_credential ? "green" : "default"}>{row.has_credential ? t("settings.credentialPresent") : t("settings.credentialMissing")}</Tag><Typography.Text type="secondary">{row.credential_kind || "-"}</Typography.Text></Space> },
-          { title: t("settings.envCol"), dataIndex: "api_key_env", render: (value) => value || "-" },
-          { title: t("settings.accountCol"), dataIndex: "account_id", render: (value) => value || "-" },
-          { title: t("settings.lastErrorCol"), dataIndex: "last_test_error", render: (value) => value ? <Typography.Text type="danger">{value}</Typography.Text> : "-" },
-          { title: t("settings.actionCol"), render: (_value, row) => <Button size="small" loading={testing && testingID === row.id} onClick={() => onTest(row.id)}>{t("settings.testAction")}</Button> },
-        ]}
-      />
-    </Card>
   );
 }
 
@@ -333,22 +296,19 @@ export function RuntimeServiceCard({
   );
 }
 
-export function ApplyReportView({ report, configInSync }: { report?: ApplyReport; configInSync?: boolean }) {
+export function ApplyReportView({ report }: { report?: ApplyReport }) {
   const { t } = useI18n();
-  if (!report && configInSync !== false) {
+  if (!report) {
     return null;
   }
   return (
     <Space direction="vertical" size={8} style={{ width: "100%", marginTop: 12 }}>
-      {configInSync === false ? <Alert type="warning" showIcon message={t("settings.configDrift")} /> : null}
-      {report ? (
-        <Alert
-          type={report.runtime_status === "failed" || report.storage_status === "save_failed" ? "error" : "info"}
-          showIcon
-          message={report.message || t("settings.lastApplyReport")}
-          description={[...(report.warnings ?? []), ...(report.errors ?? [])].join(" ")}
-        />
-      ) : null}
+      <Alert
+        type={report.runtime_status === "failed" || report.storage_status === "save_failed" ? "error" : "info"}
+        showIcon
+        message={report.message || t("settings.lastApplyReport")}
+        description={[...(report.warnings ?? []), ...(report.errors ?? [])].join(" ")}
+      />
     </Space>
   );
 }
@@ -498,4 +458,3 @@ export function formatTimestamp(value?: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
-

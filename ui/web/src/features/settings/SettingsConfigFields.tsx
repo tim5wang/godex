@@ -12,6 +12,7 @@ import {
   Space,
   Switch,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import {
@@ -31,7 +32,6 @@ import {
   SECRET_MASK,
   acpAgentsConfigToForm,
   asOptionalString,
-  formatValue,
   modelOptionsWithCurrent,
   nextUniqueID,
   numberOrUndefined,
@@ -58,9 +58,13 @@ export function ConfigSectionFields(props: {
   discoveringProviderID?: string;
   discoveringModels: boolean;
   onDiscoverModels: (id: string) => void;
+  testingProviderID?: string;
+  testingProvider?: boolean;
+  canTestProviders?: boolean;
+  onTestProvider?: (id: string) => void;
   onClearSecret: (path: string) => void;
 }) {
-  const { section, fields, effectiveValues, clearSecrets, revealMutation, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, onClearSecret } = props;
+  const { section, fields, effectiveValues, clearSecrets, revealMutation, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, testingProviderID, testingProvider, canTestProviders, onTestProvider, onClearSecret } = props;
   if (section.id === "tools-web-search") {
     return (
       <WebSearchConfigFields
@@ -130,6 +134,10 @@ export function ConfigSectionFields(props: {
           discoveringProviderID={discoveringProviderID}
           discoveringModels={discoveringModels}
           onDiscoverModels={onDiscoverModels}
+          testingProviderID={testingProviderID}
+          testingProvider={testingProvider}
+          canTestProviders={canTestProviders}
+          onTestProvider={onTestProvider}
           onReveal={() => revealMutation.mutate(field.path)}
           onClearSecret={() => onClearSecret(field.path)}
         />
@@ -444,10 +452,14 @@ function FieldEditor(props: {
   discoveringProviderID?: string;
   discoveringModels: boolean;
   onDiscoverModels: (id: string) => void;
+  testingProviderID?: string;
+  testingProvider?: boolean;
+  canTestProviders?: boolean;
+  onTestProvider?: (id: string) => void;
   onReveal: () => void;
   onClearSecret: () => void;
 }) {
-  const { field, fieldState, effectiveValue, clearSecret, revealPending, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, onReveal, onClearSecret } = props;
+  const { field, fieldState, effectiveValue, clearSecret, revealPending, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, testingProviderID, testingProvider, canTestProviders, onTestProvider, onReveal, onClearSecret } = props;
   const { t } = useI18n();
   const isProvidersField = field.path === "api.providers";
   const isStructuredEditorField = isProvidersField || field.path === "acp.agents";
@@ -466,18 +478,19 @@ function FieldEditor(props: {
           discoveringProviderID={discoveringProviderID}
           discoveringModels={discoveringModels}
           onDiscoverModels={onDiscoverModels}
+          testingProviderID={testingProviderID}
+          testingProvider={testingProvider}
+          canTestProviders={canTestProviders}
+          onTestProvider={onTestProvider}
         />
       </Form.Item>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
-        {field.secret ? (
-          <Space wrap>
-            <Button size="small" icon={<EyeOutlined />} loading={revealPending} onClick={onReveal}>{t("settings.reveal")}</Button>
-            {!isStructuredEditorField ? <Button size="small" danger onClick={onClearSecret}>{t("settings.clear")}</Button> : null}
-            {clearSecret && !isStructuredEditorField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
-          </Space>
-        ) : null}
-        <Typography.Text type="secondary">{t("settings.effectivePrefix")}{formatValue(effectiveValue)}</Typography.Text>
-      </Space>
+      {field.secret ? (
+        <Space wrap size={8}>
+          <Button size="small" icon={<EyeOutlined />} loading={revealPending} onClick={onReveal}>{t("settings.reveal")}</Button>
+          {!isStructuredEditorField ? <Button size="small" danger onClick={onClearSecret}>{t("settings.clear")}</Button> : null}
+          {clearSecret && !isStructuredEditorField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
+        </Space>
+      ) : null}
     </Card>
   );
 }
@@ -529,7 +542,6 @@ function CompactFieldEditor(props: {
           {clearSecret && !isStructuredEditorField ? <Tag color="red">{t("settings.willClearOnSave")}</Tag> : null}
         </Space>
       ) : null}
-      <Typography.Text type="secondary" className="config-compact-effective">{t("settings.effectivePrefix")}{formatValue(effectiveValue)}</Typography.Text>
     </div>
   );
 }
@@ -547,12 +559,28 @@ function ConfigFieldInput(props: {
   discoveringProviderID?: string;
   discoveringModels: boolean;
   onDiscoverModels: (id: string) => void;
+  testingProviderID?: string;
+  testingProvider?: boolean;
+  canTestProviders?: boolean;
+  onTestProvider?: (id: string) => void;
 }) {
-  const { field, fieldState, effectiveValue, clearSecret, compact, value, checked, onChange, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels } = props;
+  const { field, fieldState, effectiveValue, clearSecret, compact, value, checked, onChange, modelOptions, discoveringProviderID, discoveringModels, onDiscoverModels, testingProviderID, testingProvider, canTestProviders, onTestProvider } = props;
   const { t } = useI18n();
   const isProvidersField = field.path === "api.providers";
   if (isProvidersField) {
-    return <LLMProvidersEditor value={value} onChange={onChange as (value: LLMProvidersFormValue) => void} discoveringProviderID={discoveringProviderID} discoveringModels={discoveringModels} onDiscoverModels={onDiscoverModels} />;
+    return (
+      <LLMProvidersEditor
+        value={value}
+        onChange={onChange as (value: LLMProvidersFormValue) => void}
+        discoveringProviderID={discoveringProviderID}
+        discoveringModels={discoveringModels}
+        onDiscoverModels={onDiscoverModels}
+        testingProviderID={testingProviderID}
+        testingProvider={testingProvider}
+        canTestProviders={canTestProviders}
+        onTestProvider={onTestProvider}
+      />
+    );
   }
   if (field.path === "acp.agents") {
     return <ACPAgentsEditor value={value} onChange={onChange as (value: ACPAgentsFormValue) => void} />;
@@ -624,12 +652,20 @@ function LLMProvidersEditor({
   discoveringProviderID,
   discoveringModels,
   onDiscoverModels,
+  testingProviderID,
+  testingProvider,
+  canTestProviders,
+  onTestProvider,
 }: {
   value?: unknown;
   onChange?: (value: LLMProvidersFormValue) => void;
   discoveringProviderID?: string;
   discoveringModels: boolean;
   onDiscoverModels: (id: string) => void;
+  testingProviderID?: string;
+  testingProvider?: boolean;
+  canTestProviders?: boolean;
+  onTestProvider?: (id: string) => void;
 }) {
   const providers = providersConfigToForm(value);
   const { t } = useI18n();
@@ -709,17 +745,34 @@ function LLMProvidersEditor({
               </span>
             ),
             extra: (
-              <Button
-                danger
-                size="small"
-                icon={<DeleteOutlined />}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  removeProvider(providerIndex);
-                }}
-              >
-                {t("settings.remove")}
-              </Button>
+              <Space size={6}>
+                <Tooltip title={!canTestProviders ? t("settings.providerTestSaveFirst") : undefined}>
+                  <span>
+                    <Button
+                      size="small"
+                      disabled={!canTestProviders || !stringsPresent(provider.id)}
+                      loading={testingProvider && testingProviderID === provider.id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onTestProvider?.(provider.id);
+                      }}
+                    >
+                      {t("settings.testAction")}
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Button
+                  danger
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    removeProvider(providerIndex);
+                  }}
+                >
+                  {t("settings.remove")}
+                </Button>
+              </Space>
             ),
             children: (
               <div className="llm-provider-panel">
@@ -1057,4 +1110,3 @@ function LabelledControl({ label, wide, children }: { label: string; wide?: bool
     </label>
   );
 }
-

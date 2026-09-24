@@ -8,9 +8,11 @@ export const messages = {
   en: {
     ...enCoreMessages,
     ...enProductMessages,
+    settings: { ...enCoreMessages.settings, ...enProductMessages.settings },
   },
   zh: {
     ...zhCoreMessages,
     ...zhProductMessages,
+    settings: { ...zhCoreMessages.settings, ...zhProductMessages.settings },
   },
 } as const satisfies Record<Locale, unknown>;

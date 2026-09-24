@@ -73,6 +73,10 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     sessionId,
     historyItems,
     overlayItems,
+    canLoadEarlierHistory,
+    isLoadingEarlierHistory,
+    loadEarlierHistory,
+    toggleFeedTool,
     pendingSends,
     addPendingSend,
     removePendingSend,
@@ -84,7 +88,6 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     syncSnapshot,
     setRunningTurn,
     handleEvent,
-    toggleTool,
     setStreamConnected,
     reset,
     sessionsOpen,
@@ -274,6 +277,18 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     goToNextTimelinePage,
     goToPreviousTimelinePage,
   } = controller;
+  const requestEarlierHistory = useCallback(() => {
+    stickToBottomRef.current = false;
+    setStickToBottom(false);
+    void loadEarlierHistory();
+  }, [loadEarlierHistory, setStickToBottom, stickToBottomRef]);
+  const handleChatFeedScroll = useCallback(() => {
+    handleFeedScroll();
+    const scroller = scrollerRef.current;
+    if (scroller && scroller.scrollTop <= 64 && canLoadEarlierHistory && !isLoadingEarlierHistory) {
+      requestEarlierHistory();
+    }
+  }, [canLoadEarlierHistory, handleFeedScroll, isLoadingEarlierHistory, requestEarlierHistory, scrollerRef]);
 
   const inspectorPanel = (
     <InspectorTabs
@@ -513,8 +528,20 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
             ) : (
               <div className="chat-v2-center-body">
                 <div className="chat-feed-v2-scrollport">
-                  <div className="chat-feed chat-feed-v2-scroll" ref={scrollerRef} onScroll={handleFeedScroll} style={{ minHeight: 0 }}>
+                  <div className="chat-feed chat-feed-v2-scroll" ref={scrollerRef} onScroll={handleChatFeedScroll} style={{ minHeight: 0 }}>
                     <div className="chat-feed-inner chat-feed-v2-inner">
+                      {canLoadEarlierHistory || isLoadingEarlierHistory ? (
+                        <div className="chat-feed-v2-history-loader">
+                          <Button
+                            loading={isLoadingEarlierHistory}
+                            onClick={requestEarlierHistory}
+                            size="small"
+                            type="text"
+                          >
+                            {t(isLoadingEarlierHistory ? "chat.loadingEarlierHistory" : "chat.loadEarlierHistory")}
+                          </Button>
+                        </div>
+                      ) : null}
                       <MessageFeedV2
                         items={v2ItemsWithPending}
                         botName={activeTemplate?.name}
@@ -522,7 +549,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                         botColor={activeTemplate?.color}
                         running={running}
                         activeTurnId={currentTimelineTurnId || undefined}
-                        onToggleTool={toggleTool}
+                        onToggleTool={toggleFeedTool}
                         onSaveToNote={(item) => saveMessageToNoteMutation.mutate(item)}
                         savingToNote={saveMessageToNoteMutation.isPending}
                         hasNoteContext={!!noteContextQuery.data}

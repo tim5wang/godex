@@ -4,13 +4,13 @@ import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
-import { useChatStore, groupFeedItemsIntoTurns } from "../../store/chat";
-import { useState, useRef, useEffect, useCallback, type PointerEvent as ReactPointerEvent, useMemo, type CSSProperties } from "react";
+import { useChatStore, composeTranscriptArchives, groupFeedItemsIntoTurns, overlappingSnapshotMessageIndexes, snapshotToItems } from "../../store/chat";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, type PointerEvent as ReactPointerEvent, useMemo, type CSSProperties } from "react";
 import { useLayoutStore } from "../../store/layout";
-import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession } from "../../lib/types";
+import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession, ProtocolMessage } from "../../lib/types";
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useConversationLayoutStore, type DockTab, DOCK_TABS } from "./layout/layoutStore";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, setSessionACPAgentModel, setSessionACPAgentReasoningEffort, discoverACPAgentConfigOptions, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, getSessionTranscript, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, setSessionACPAgentModel, setSessionACPAgentReasoningEffort, discoverACPAgentConfigOptions, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, listSkillsCatalog, listAgentTemplates } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -209,8 +209,133 @@ export function useChatPageController() {
     sessionsQuery,
   } = session;
 
+  const activeHistorySessionID = openQuery.data?.session_id ?? "";
+  const [historyArchiveState, setHistoryArchiveState] = useState<{
+    sessionId: string;
+    pages: Record<string, ProtocolMessage[]>;
+  }>({ sessionId: "", pages: {} });
+  const [historyArchiveLoading, setHistoryArchiveLoading] = useState<{ sessionId: string; ref: string } | null>(null);
+  const [expandedHistoryArchiveTools, setExpandedHistoryArchiveTools] = useState<Record<string, boolean>>({});
+  const historyArchiveRequests = useRef(new Set<string>());
+  const historyScrollAnchorRef = useRef<{ sessionId: string; scrollTop: number; scrollHeight: number } | null>(null);
+  const activeHistorySessionRef = useRef(activeHistorySessionID);
+  activeHistorySessionRef.current = activeHistorySessionID;
+  const loadedHistoryArchives = historyArchiveState.sessionId === activeHistorySessionID ? historyArchiveState.pages : {};
+  // The compactions endpoint returns newest-first. Load the newest archive
+  // first (right before the current snapshot), then walk backwards on scroll.
+  const transcriptRefs = useMemo(
+    () => Array.from(new Set((compactionsQuery.data ?? []).map((record) => record.transcript_ref?.trim()).filter((ref): ref is string => Boolean(ref)))),
+    [compactionsQuery.data],
+  );
+  const canLoadEarlierHistory = transcriptRefs.some((ref) => !loadedHistoryArchives[ref]);
+  const isLoadingEarlierHistory = historyArchiveLoading?.sessionId === activeHistorySessionID;
+  useEffect(() => {
+    setHistoryArchiveState({ sessionId: activeHistorySessionID, pages: {} });
+    setHistoryArchiveLoading(null);
+    setExpandedHistoryArchiveTools({});
+    historyScrollAnchorRef.current = null;
+  }, [activeHistorySessionID]);
+
+  const loadEarlierHistory = useCallback(async () => {
+    if (!activeHistorySessionID) return;
+    const ref = transcriptRefs.find((candidate) => !loadedHistoryArchives[candidate]);
+    if (!ref) return;
+    const requestKey = `${activeHistorySessionID}\0${ref}`;
+    if (historyArchiveRequests.current.has(requestKey)) return;
+    historyArchiveRequests.current.add(requestKey);
+    setHistoryArchiveLoading({ sessionId: activeHistorySessionID, ref });
+    try {
+      const transcript = await queryClient.fetchQuery({
+        queryKey: ["session-transcript", token, activeHistorySessionID, ref],
+        queryFn: () => getSessionTranscript(token || null, activeHistorySessionID, ref),
+        staleTime: 5 * 60 * 1000,
+      });
+      if (activeHistorySessionRef.current === activeHistorySessionID) {
+        const scroller = scrollerRef.current;
+        historyScrollAnchorRef.current = scroller
+          ? { sessionId: activeHistorySessionID, scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight }
+          : null;
+        setHistoryArchiveState((current) => ({
+          sessionId: activeHistorySessionID,
+          pages: {
+            ...(current.sessionId === activeHistorySessionID ? current.pages : {}),
+            [ref]: transcript.messages,
+          },
+        }));
+      }
+    } catch (error) {
+      if (activeHistorySessionRef.current === activeHistorySessionID) {
+        message.error(error instanceof APIError ? error.message : t("chat.loadEarlierHistoryFailed"));
+      }
+    } finally {
+      historyArchiveRequests.current.delete(requestKey);
+      setHistoryArchiveLoading((current) =>
+        current?.sessionId === activeHistorySessionID && current.ref === ref ? null : current,
+      );
+    }
+  }, [activeHistorySessionID, loadedHistoryArchives, message, queryClient, t, token, transcriptRefs]);
+
+  const loadedHistoryArchivePages = useMemo(
+    () =>
+      transcriptRefs
+        .filter((ref) => loadedHistoryArchives[ref])
+        .reverse()
+        .map((ref) => ({ ref, messages: loadedHistoryArchives[ref] })),
+    [loadedHistoryArchives, transcriptRefs],
+  );
+  useLayoutEffect(() => {
+    const anchor = historyScrollAnchorRef.current;
+    if (!anchor || anchor.sessionId !== activeHistorySessionID) return;
+    historyScrollAnchorRef.current = null;
+    const scroller = scrollerRef.current;
+    if (scroller) {
+      scroller.scrollTop = anchor.scrollTop + scroller.scrollHeight - anchor.scrollHeight;
+    }
+  }, [activeHistorySessionID, loadedHistoryArchivePages.length]);
+  const archivedHistoryMessages = useMemo(
+    () => composeTranscriptArchives(loadedHistoryArchivePages),
+    [loadedHistoryArchivePages],
+  );
+  const archivedHistoryItems = useMemo(() => {
+    const groups: Array<{ ref: string; messages: ProtocolMessage[]; sourceIndexes: number[] }> = [];
+    for (const entry of archivedHistoryMessages) {
+      let group = groups[groups.length - 1];
+      if (!group || group.ref !== entry.ref) {
+        group = { ref: entry.ref, messages: [], sourceIndexes: [] };
+        groups.push(group);
+      }
+      group.messages.push(entry.message);
+      group.sourceIndexes.push(entry.sourceIndex);
+    }
+    return groups.flatMap((group) =>
+      snapshotToItems(group.messages, expandedHistoryArchiveTools, {
+        idPrefix: `archive:${group.ref}:`,
+        archiveOnly: true,
+        sourceIndexes: group.sourceIndexes,
+      }),
+    );
+  }, [archivedHistoryMessages, expandedHistoryArchiveTools]);
+  const currentSnapshotMessages = snapshotQuery.data?.display_messages ?? snapshotQuery.data?.messages ?? [];
+  const duplicateSnapshotMessageIndexes = useMemo(
+    () => overlappingSnapshotMessageIndexes(archivedHistoryMessages, currentSnapshotMessages),
+    [archivedHistoryMessages, currentSnapshotMessages],
+  );
+
 
   const items = useMemo(() => {
+    const alignedArchiveItems = alignAssistantTextTurnIds(archivedHistoryItems, timelineItems);
+    const archivedAssistantText = new Set(
+      alignedArchiveItems
+        .filter((item) => item.kind === "assistant" && item.body.trim())
+        .map((item) => `${item.turnId ?? ""}\0${item.body.trim()}`),
+    );
+    const archivedToolCallIDs = new Set(
+      archivedHistoryMessages.flatMap((entry) =>
+        (entry.message.content ?? [])
+          .filter((block) => block.type === "tool_use" && block.id)
+          .map((block) => block.id!),
+      ),
+    );
     // Tool events stream into the live overlay while a turn runs, but the
     // overlay is transient (cleared on reload/snapshot). Rebuild tool items
     // from the persisted timeline so ACP tool logs survive a re-entry; live
@@ -221,7 +346,10 @@ export function useChatPageController() {
         overlayById.set(item.id, item);
       }
     }
-    const timelineTools = collectToolCalls(timelineItems).filter((item) => !overlayById.has(item.id));
+    const timelineTools = collectToolCalls(timelineItems).filter((item) => {
+      if (overlayById.has(item.id)) return false;
+      return !(item.id.startsWith("tool:") && archivedToolCallIDs.has(item.id.slice("tool:".length)));
+    });
     // Rebuild reasoning ("Thinking…") segments from the persisted timeline the
     // same way tools are rebuilt: the ACP harness streams assistant_thinking_delta
     // events between tool calls, live shows them as overlay bubbles, and they
@@ -253,13 +381,18 @@ export function useChatPageController() {
       }
     }
     const timelineText = collectTextDeltas(timelineItems).filter(
-      (item) => !(item.turnId && overlayTextTurns.has(item.turnId)),
+      (item) =>
+        !(item.turnId && overlayTextTurns.has(item.turnId)) &&
+        !archivedAssistantText.has(`${item.turnId ?? ""}\0${item.body.trim()}`),
     );
     const mergedOverlay = [...overlayItems, ...timelineTools, ...timelineThinking, ...timelineText];
     // Re-bind snapshot assistant text to its real backend turn id (from the
     // timeline's assistant_message_completed) so re-entered ACP turns group
     // their text with the tool log instead of splitting into two big segments.
-    const alignedHistory = alignAssistantTextTurnIds(historyItems, timelineItems);
+    const alignedHistory = alignAssistantTextTurnIds(
+      historyItems.filter((item) => item.messageIndex === undefined || !duplicateSnapshotMessageIndexes.has(item.messageIndex)),
+      timelineItems,
+    );
     // For turns that have persisted text deltas, the process text is now
     // rebuilt above (timelineText) split at tool boundaries, so drop the
     // snapshot's consolidated full-text body for that turn to avoid showing
@@ -274,8 +407,18 @@ export function useChatPageController() {
     const deDupedHistory = alignedHistory.map((item) =>
       item.kind === "assistant" && item.turnId && textDeltaTurns.has(item.turnId) ? { ...item, body: "" } : item,
     );
-    return mergeChronologicalFeedItems(deDupedHistory, mergedOverlay);
-  }, [historyItems, overlayItems, timelineItems]);
+    return [...alignedArchiveItems, ...mergeChronologicalFeedItems(deDupedHistory, mergedOverlay)];
+  }, [archivedHistoryItems, archivedHistoryMessages, duplicateSnapshotMessageIndexes, historyItems, overlayItems, timelineItems]);
+  const toggleFeedTool = useCallback(
+    (id: string) => {
+      if (id.startsWith("archive:")) {
+        setExpandedHistoryArchiveTools((current) => ({ ...current, [id]: !current[id] }));
+        return;
+      }
+      toggleTool(id);
+    },
+    [toggleTool],
+  );
   // V2 groups the flat feed into per-turn items (text + tool + todo segments).
   const v2Items = useMemo(() => groupFeedItemsIntoTurns(items), [items]);
   // User messages sitting in the send queue (pending, not yet accepted by the
@@ -959,6 +1102,10 @@ export function useChatPageController() {
     items,
     v2Items,
     v2ItemsWithPending,
+    canLoadEarlierHistory,
+    isLoadingEarlierHistory,
+    loadEarlierHistory,
+    toggleFeedTool,
     refluxBubbles,
     subagentJobs,
     reviewMergeSummary,

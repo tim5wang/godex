@@ -16,6 +16,12 @@
   max-width: 860px;
 }
 
+.chat-feed-v2-history-loader {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+
 /* Session-switch loading veil. Wraps the feed scrollport so the overlay can
    sit absolutely over the whole viewport (positioning inside the scroller
    would make it scroll with the content). The old feed stays visible and
@@ -964,6 +970,30 @@
   flex-direction: column;
   gap: 6px;
   padding-left: 8px;
+}
+
+.chat-feed-v2-compaction {
+  min-width: 0;
+}
+
+.chat-feed-v2-compaction-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chat-feed-v2-compaction-actions .chat-feed-v2-process-toggle {
+  width: auto;
+  flex: 1 1 160px;
+}
+
+.chat-feed-v2-compaction-body {
+  min-width: 0;
+  margin: 4px 0 4px 8px;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in oklab, var(--godex-accent) 30%, transparent);
 }
 
 /* Individual thinking bubble: one line with trailing ellipsis, click to expand. */

@@ -3,6 +3,50 @@ import type { ConfigSectionSchema, ProviderModelInfo } from "../../lib/types";
 
 export type ConfigFormValues = Record<string, unknown>;
 
+export type ConfigSectionGroupID = "core" | "tools" | "channels" | "automation" | "system";
+
+export type ConfigSectionGroup = {
+  id: ConfigSectionGroupID;
+  sections: ConfigSectionSchema[];
+};
+
+const CONFIG_SECTION_GROUP_ORDER: ConfigSectionGroupID[] = [
+  "core",
+  "tools",
+  "channels",
+  "automation",
+  "system",
+];
+
+export function groupConfigSections(sections: ConfigSectionSchema[]): ConfigSectionGroup[] {
+  const grouped = new Map<ConfigSectionGroupID, ConfigSectionSchema[]>();
+  for (const section of sections) {
+    const group = configSectionGroup(section.id);
+    const items = grouped.get(group) ?? [];
+    items.push(section);
+    grouped.set(group, items);
+  }
+  return CONFIG_SECTION_GROUP_ORDER
+    .filter((id) => grouped.has(id))
+    .map((id) => ({ id, sections: grouped.get(id)! }));
+}
+
+function configSectionGroup(sectionID: string): ConfigSectionGroupID {
+  if (sectionID === "api" || sectionID === "acp" || sectionID === "agent") {
+    return "core";
+  }
+  if (sectionID.startsWith("tools-")) {
+    return "tools";
+  }
+  if (sectionID.startsWith("channels-")) {
+    return "channels";
+  }
+  if (sectionID === "cron" || sectionID === "heartbeat" || sectionID === "team") {
+    return "automation";
+  }
+  return "system";
+}
+
 export const SECRET_MASK = "********";
 export const API_HIDDEN_PATHS = new Set([
   "api.default_profile",
@@ -586,31 +630,4 @@ function pruneEmpty(obj: Record<string, unknown>): Record<string, unknown> {
     }
   }
   return result;
-}
-
-export function formatValue(value: unknown) {
-  if (value === undefined || value === null || value === "") {
-    return "-";
-  }
-  if (Array.isArray(value)) {
-    return value.join(", ");
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
-}
-
-export function sameConfigValue(left: unknown, right: unknown) {
-  return JSON.stringify(normalizeConfigValue(left)) === JSON.stringify(normalizeConfigValue(right));
-}
-
-function normalizeConfigValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizeConfigValue(entry));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
-  }
-  return value;
 }

@@ -516,18 +516,18 @@ export function ContextRecallPanel({
           <Typography.Text type="secondary">{t("chat.contextInspectorNoArchive")}</Typography.Text>
         )}
       </Card>
-      <TranscriptArchiveModal ref={archiveRef} sessionId={sessionId} token={token} onClose={() => setArchiveRef(null)} />
+      <TranscriptArchiveModal archiveRef={archiveRef} sessionId={sessionId} token={token} onClose={() => setArchiveRef(null)} />
     </Space>
   );
 }
 
-function TranscriptArchiveModal({
-  ref: archiveRef,
+export function TranscriptArchiveModal({
+  archiveRef,
   sessionId,
   token,
   onClose,
 }: {
-  ref: string | null;
+  archiveRef: string | null;
   sessionId: string;
   token: string | null;
   onClose: () => void;

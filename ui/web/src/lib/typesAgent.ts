@@ -248,7 +248,7 @@ export interface ProtocolMessage {
   };
 }
 
-export type FeedItemKind = "user" | "assistant" | "background" | "tool" | "todo" | "subagent" | "command" | "warning" | "error";
+export type FeedItemKind = "user" | "assistant" | "background" | "summary" | "tool" | "todo" | "subagent" | "command" | "warning" | "error";
 
 export type FeedSegmentType = "text" | "tool" | "todo" | "subagent";
 
@@ -310,6 +310,10 @@ export interface FeedItem {
   startedAt?: string;
   /** Total tool execution time in milliseconds (tool_call_finished). */
   durationMs?: number;
+  /** Pre-compaction transcript archive referenced by a summary message. */
+  transcriptRef?: string;
+  /** True for messages loaded from a pre-compaction archive. */
+  archiveOnly?: boolean;
   todoItems?: TodoFeedItem[];
   todoStats?: TodoFeedStats;
   expanded?: boolean;

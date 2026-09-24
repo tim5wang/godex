@@ -129,7 +129,7 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
           activeTurnId={activeTurnId}
         />
       ),
-      header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item, botName),
+      header: item.kind === "subagent" || item.kind === "todo" || item.kind === "tool" ? undefined : renderHeader(item, botName, t),
       avatar: renderAvatar(item, { name: botName, avatar: botAvatar, color: botColor }),
       rootClassName: `chat-feed-v2-bubble chat-feed-v2-bubble-${item.kind}${item.segments ? " chat-feed-v2-bubble-turn" : ""}`,
       variant: item.kind === "user" ? "filled" : "borderless",
@@ -192,6 +192,7 @@ const FeedItemBody = memo(function FeedItemBody({
   activeTurnId?: string;
 }) {
   const { t } = useI18n();
+  const onSubmitCardForItem = item.archiveOnly ? undefined : onSubmitCard;
   // Grouped assistant turn: the process (thinking + tool calls) collapses as a
   // whole after the turn finishes (while it runs it stays expanded), and each
   // thinking segment can additionally be collapsed to a single line. The final
@@ -219,12 +220,12 @@ const FeedItemBody = memo(function FeedItemBody({
           {visible.map((segment, index) => (
             <Fragment key={segmentKey(segment, index)}>
               {shouldShowTurnDivider(visible, index) ? <hr className="chat-feed-v2-divider" /> : null}
-              <TurnSegment segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCard} />
+              <TurnSegment segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCardForItem} />
             </Fragment>
           ))}
           {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
           <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
-          <TurnActions item={item} onCopy={() => onCopyItem(item)} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
+          <TurnActions item={item} onCopy={() => onCopyItem(item)} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={item.archiveOnly ? undefined : onForkTurn} />
         </div>
       );
     }
@@ -240,29 +241,29 @@ const FeedItemBody = memo(function FeedItemBody({
           messageCount={messageCount}
           isActive={Boolean(running && activeTurnId && item.turnId && item.turnId === activeTurnId)}
           onToggleTool={onToggleTool}
-          onSubmitCard={onSubmitCard}
+          onSubmitCard={onSubmitCardForItem}
         />
         {answerSegments.length > 0 ? (
           <>
             <hr className="chat-feed-v2-divider" />
             {answerSegments.map((segment, index) => (
-              <TurnSegment key={segmentKey(segment, index)} segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCard} />
+              <TurnSegment key={segmentKey(segment, index)} segment={segment} onToggleTool={onToggleTool} onSubmitCard={onSubmitCardForItem} />
             ))}
           </>
         ) : null}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
         <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
-        <TurnActions item={item} onCopy={() => onCopyItem(item)} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={onForkTurn} />
+        <TurnActions item={item} onCopy={() => onCopyItem(item)} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={item.archiveOnly ? undefined : onForkTurn} />
       </div>
     );
   }
 
   if (item.kind === "tool") {
     const card = parseUiCardOutput(item);
-    if (card && onSubmitCard) {
+    if (card && onSubmitCardForItem) {
       return (
         <div className="chat-feed-v2-uicard">
-          <UiCardView card={card} onSubmitCard={onSubmitCard} />
+          <UiCardView card={card} onSubmitCard={onSubmitCardForItem} />
         </div>
       );
     }
@@ -274,10 +275,13 @@ const FeedItemBody = memo(function FeedItemBody({
   if (item.kind === "subagent") {
     return <SubagentCard item={item} onToggle={() => onToggleTool(item.id)} />;
   }
+  if (item.kind === "summary") {
+    return <CompactionSummary item={item} />;
+  }
 
   const copyable = Boolean(copyTextForItem(item));
   const canSaveToNote = Boolean(onSaveToNote && item.kind === "assistant" && item.body.trim());
-  const canEditResend = Boolean(onEditMessage && item.kind === "user" && item.body.trim());
+  const canEditResend = Boolean(onEditMessage && !item.archiveOnly && item.kind === "user" && item.body.trim());
   const inFlight = item.status === "sending" || item.status === "running";
   return (
     <div className="message-copy-frame chat-feed-v2-plain">
@@ -350,6 +354,31 @@ const FeedItemBody = memo(function FeedItemBody({
             </Tooltip>
           ) : null}
         </Space>
+      ) : null}
+    </div>
+  );
+});
+
+const CompactionSummary = memo(function CompactionSummary({ item }: { item: FeedItem }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`chat-feed-v2-compaction${open ? " chat-feed-v2-compaction-open" : ""}`}>
+      <div className="chat-feed-v2-compaction-actions">
+        <button
+          aria-expanded={open}
+          className="chat-feed-v2-process-toggle"
+          onClick={() => setOpen((value) => !value)}
+          type="button"
+        >
+          <span className="chat-feed-v2-process-chevron">{open ? <DownOutlined /> : <RightOutlined />}</span>
+          <span className="chat-feed-v2-process-summary">{t("chat.compactionSummaryToggle")}</span>
+        </button>
+      </div>
+      {open ? (
+        <div className="chat-feed-v2-compaction-body">
+          <MarkdownContent content={item.body} />
+        </div>
       ) : null}
     </div>
   );
@@ -850,9 +879,11 @@ function shortTime(value?: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function renderHeader(item: FeedItem, botName?: string) {
+function renderHeader(item: FeedItem, botName: string | undefined, t: (key: string) => string) {
   const color = item.kind === "error" ? "red" : item.kind === "warning" ? "gold" : item.kind === "background" ? "blue" : undefined;
-  const title = item.title || (item.kind === "assistant" && botName ? botName : "");
+  const title = item.kind === "summary"
+    ? t("chat.compactionSummaryTitle")
+    : item.title || (item.kind === "assistant" && botName ? botName : "");
   return (
     <Space size={8} wrap>
       {title ? <Typography.Text strong>{title}</Typography.Text> : null}

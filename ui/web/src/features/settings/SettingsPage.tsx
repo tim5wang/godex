@@ -5,12 +5,12 @@ import {
   App as AntApp,
   Button,
   Card,
-  Collapse,
   Descriptions,
   Form,
   Image,
   Input,
   InputNumber,
+  Menu,
   QRCode,
   Select,
   Space,
@@ -38,7 +38,6 @@ import {
   getSecurityAudit,
   getSecuritySummary,
   getWeixinAuthStatus,
-  listProviders,
   logoutWeixinAuth,
   reloadConfigFromDisk,
   revealConfigSecret,
@@ -47,7 +46,7 @@ import {
   testProvider,
   updateConfig,
 } from "../../lib/api";
-import type { ApplyReport, ChannelStatus, CIKSummary, ConfigFieldSchema, ConfigFieldState, ConfigSectionSchema, DoctorCheck, PackageQualityReport, ProviderModelInfo, ProviderStatus, RuntimeServiceStatus, SecurityEvent, WeixinAuthStatus } from "../../lib/types";
+import type { ApplyReport, ChannelStatus, CIKSummary, ConfigFieldSchema, ConfigFieldState, ConfigSectionSchema, DoctorCheck, PackageQualityReport, ProviderModelInfo, RuntimeServiceStatus, SecurityEvent, WeixinAuthStatus } from "../../lib/types";
 import { useSettingsStore } from "../../store/settings";
 import { ensurePushSubscription, pushSupported, sendTestPush } from "../../lib/push";
 import { MCPSettingsPanel } from "./MCPSettingsPanel";
@@ -57,7 +56,6 @@ import {
   ConfigYamlCard,
   DoctorPanel,
   NotificationsCard,
-  ProvidersPanel,
   RuntimeServiceCard,
   SecurityPanel,
   WeixinPanel,
@@ -73,7 +71,8 @@ import {
   mergeDiscoveredModels,
   parseJSONValue,
   providersConfigToForm,
-  sameConfigValue,
+  groupConfigSections,
+  SECRET_MASK,
   type ConfigFormValues,
 } from "./settingsConfigModel";
 
@@ -96,6 +95,8 @@ export function SettingsPage() {
   const [configForm] = Form.useForm<ConfigFormValues>();
   const [clearSecrets, setClearSecrets] = useState<Record<string, boolean>>({});
   const [backendDirty, setBackendDirty] = useState(false);
+  const [activeTabKey, setActiveTabKey] = useState("client");
+  const [activeSectionKey, setActiveSectionKey] = useState("api");
 
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
   const authRequired = metaQuery.data?.auth_required ?? false;
@@ -119,48 +120,42 @@ export function SettingsPage() {
     queryKey: ["runtime-service", token],
     enabled: canReachConfig,
     queryFn: async () => getRuntimeServiceStatus(token || null),
-    refetchInterval: canReachConfig ? 10000 : false,
+    refetchInterval: canReachConfig && activeTabKey === "backend" ? 10000 : false,
   });
   const doctorQuery = useQuery({
     queryKey: ["config-doctor", token],
     enabled: canReachConfig,
     queryFn: async () => getConfigDoctor(token || null),
   });
-  const providersQuery = useQuery({
-    queryKey: ["providers", token],
-    enabled: canReachConfig,
-    queryFn: async () => listProviders(token || null),
-    refetchInterval: canReachConfig ? 10000 : false,
-  });
   const channelsQuery = useQuery({
     queryKey: ["channels-status", token],
     enabled: canReachConfig,
     queryFn: async () => getChannelsStatus(token || null),
-    refetchInterval: canReachConfig ? 5000 : false,
+    refetchInterval: canReachConfig && activeTabKey === "runtime" ? 5000 : false,
   });
   const securityQuery = useQuery({
     queryKey: ["security-summary", token],
     enabled: canReachConfig,
     queryFn: async () => getSecuritySummary(token || null),
-    refetchInterval: canReachConfig ? 10000 : false,
+    refetchInterval: canReachConfig && activeTabKey === "security" ? 10000 : false,
   });
   const auditQuery = useQuery({
     queryKey: ["security-audit", token],
     enabled: canReachConfig,
     queryFn: async () => getSecurityAudit(token || null, 50),
-    refetchInterval: canReachConfig ? 10000 : false,
+    refetchInterval: canReachConfig && activeTabKey === "security" ? 10000 : false,
   });
   const packageQualityQuery = useQuery({
     queryKey: ["packages-quality", token],
     enabled: canReachConfig,
     queryFn: async () => getPackageQuality(token || null),
-    refetchInterval: canReachConfig ? 10000 : false,
+    refetchInterval: canReachConfig && activeTabKey === "security" ? 10000 : false,
   });
   const weixinAuthQuery = useQuery({
     queryKey: ["weixin-auth", token],
     enabled: canReachConfig,
     queryFn: async () => getWeixinAuthStatus(token || null),
-    refetchInterval: canReachConfig ? 5000 : false,
+    refetchInterval: canReachConfig && activeTabKey === "runtime" ? 5000 : false,
   });
 
   useEffect(() => {
@@ -178,26 +173,29 @@ export function SettingsPage() {
       updateConfig(token || null, {
         values: buildSaveValues(values, configSchemaQuery.data ?? []),
         clear_secrets: Object.entries(clearSecrets).filter(([, enabled]) => enabled).map(([path]) => path),
-      }),
-    onSuccess: async (_view, values) => {
+    }),
+    onSuccess: (view, values) => {
       const rotatedToken = String(values["web.token"] ?? "").trim();
-      if (rotatedToken) {
-        setToken(rotatedToken);
+      const effectiveToken = rotatedToken && rotatedToken !== SECRET_MASK ? rotatedToken : token;
+      if (effectiveToken && effectiveToken !== token) {
+        setToken(effectiveToken);
       }
+      queryClient.setQueryData(["config-view", effectiveToken], view);
       setClearSecrets({});
       setBackendDirty(false);
       void message.success(t("settings.msgConfigSaved"));
-      await refreshAll(queryClient, token);
+      refreshAfterConfigSave(queryClient, effectiveToken);
     },
     onError: (error) => showError(message, error, t("settings.msgConfigSaveFailed")),
   });
 
   const reloadConfigMutation = useMutation({
     mutationFn: async () => reloadConfigFromDisk(token || null),
-    onSuccess: async () => {
+    onSuccess: (view) => {
+      queryClient.setQueryData(["config-view", token], view);
       setBackendDirty(false);
       void message.success(t("settings.msgConfigReloaded"));
-      await refreshAll(queryClient, token);
+      refreshAfterConfigSave(queryClient, token);
     },
     onError: (error) => showError(message, error, t("settings.msgConfigReloadFailed")),
   });
@@ -222,7 +220,12 @@ export function SettingsPage() {
 
   const testProviderMutation = useMutation({
     mutationFn: async (id: string) => testProvider(token || null, id),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      if (result.ok) {
+        void message.success(t("settings.msgProviderTestSucceeded"));
+      } else {
+        void message.error(result.error || result.status.last_test_error || t("settings.msgProviderTestFailed"));
+      }
       await queryClient.invalidateQueries({ queryKey: ["providers", token] });
     },
     onError: (error) => showError(message, error, t("settings.msgProviderTestFailed")),
@@ -271,14 +274,22 @@ export function SettingsPage() {
   });
 
   const sections = configSchemaQuery.data ?? [];
+  const sectionGroups = useMemo(() => groupConfigSections(sections), [sections]);
+  const activeConfigSection = sections.find((section) => section.id === activeSectionKey) ?? sections[0];
+  const configNavItems = useMemo(
+    () => sectionGroups.map((group) => ({
+      type: "group" as const,
+      key: group.id,
+      label: t(`settings.configSectionGroups.${group.id}`),
+      children: group.sections.map((section) => ({ key: section.id, label: section.label })),
+    })),
+    [sectionGroups, t],
+  );
   const fields = configViewQuery.data?.fields ?? {};
   const effectiveValues = configViewQuery.data?.effective_values ?? {};
   const providerFormValue = Form.useWatch("api.providers", configForm);
   const modelOptions = useMemo(() => llmModelOptions(providerFormValue), [providerFormValue]);
-  const configInSync = useMemo(
-    () => sameConfigValue(configViewQuery.data?.stored_values, configViewQuery.data?.effective_values),
-    [configViewQuery.data?.effective_values, configViewQuery.data?.stored_values],
-  );
+  const canTestProviders = !backendDirty && !saveConfigMutation.isPending;
 
   return (
     <div className="page-pad">
@@ -287,6 +298,8 @@ export function SettingsPage() {
       </div>
 
       <Tabs
+        activeKey={activeTabKey}
+        onChange={setActiveTabKey}
         items={[
           {
             key: "client",
@@ -339,56 +352,79 @@ export function SettingsPage() {
               <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.authAreaBackend") })} />
             ) : (
               <Space direction="vertical" size={16} style={{ width: "100%" }}>
-                <Card>
-                  <Descriptions
-                    bordered
-                    size="small"
-                    column={{ xs: 1, md: 2 }}
-                    items={[
-                      { key: "file", label: t("settings.configFile"), children: configMetaQuery.data?.file_path ?? "Loading..." },
-                      { key: "env", label: t("settings.envFile"), children: configMetaQuery.data?.env_file ?? "Loading..." },
-                      { key: "home", label: t("settings.home"), children: configMetaQuery.data?.home_dir ?? "-" },
-                      { key: "project", label: t("settings.project"), children: configMetaQuery.data?.project_dir ?? "-" },
-                      { key: "home-config", label: t("settings.homeConfig"), children: configMetaQuery.data?.home_config_file ?? "-" },
-                      { key: "project-config", label: t("settings.projectConfig"), children: configMetaQuery.data?.project_config_file ?? "-" },
-                      { key: "home-env", label: t("settings.homeEnv"), children: configMetaQuery.data?.home_env_file ?? "-" },
-                      { key: "project-env", label: t("settings.projectEnv"), children: configMetaQuery.data?.project_env_file ?? "-" },
-                      { key: "revision", label: t("settings.revision"), children: configMetaQuery.data?.revision ?? "-" },
-                      { key: "version", label: t("settings.version"), children: metaQuery.data?.version?.version ?? "-" },
-                      { key: "sync", label: t("settings.configSync"), children: configInSync ? t("settings.storedEqualsEffective") : t("settings.storedDiffersEffective") },
-                    ]}
+                <Form
+                  className="settings-config-form"
+                  form={configForm}
+                  layout="vertical"
+                  preserve
+                  onValuesChange={() => setBackendDirty(true)}
+                  onFinish={(values) => saveConfigMutation.mutate(values)}
+                >
+                  <div className="settings-config-toolbar">
+                    <Typography.Text type={backendDirty ? "warning" : "secondary"}>
+                      {backendDirty ? t("settings.unsavedBackendConfig") : t("settings.configSavedState")}
+                    </Typography.Text>
+                    <Button
+                      type="primary"
+                      htmlType="submit"
+                      disabled={!backendDirty}
+                      loading={saveConfigMutation.isPending}
+                      icon={<SaveOutlined />}
+                    >
+                      {t("settings.saveBackendConfig")}
+                    </Button>
+                  </div>
+                  <Card>
+                    <Descriptions
+                      bordered
+                      size="small"
+                      column={{ xs: 1, md: 2 }}
+                      items={[
+                        { key: "file", label: t("settings.configFile"), children: configMetaQuery.data?.file_path ?? "Loading..." },
+                        { key: "env", label: t("settings.envFile"), children: configMetaQuery.data?.env_file ?? "Loading..." },
+                        { key: "home", label: t("settings.home"), children: configMetaQuery.data?.home_dir ?? "-" },
+                        { key: "project", label: t("settings.project"), children: configMetaQuery.data?.project_dir ?? "-" },
+                        { key: "home-config", label: t("settings.homeConfig"), children: configMetaQuery.data?.home_config_file ?? "-" },
+                        { key: "project-config", label: t("settings.projectConfig"), children: configMetaQuery.data?.project_config_file ?? "-" },
+                        { key: "home-env", label: t("settings.homeEnv"), children: configMetaQuery.data?.home_env_file ?? "-" },
+                        { key: "project-env", label: t("settings.projectEnv"), children: configMetaQuery.data?.project_env_file ?? "-" },
+                        { key: "revision", label: t("settings.revision"), children: configMetaQuery.data?.revision ?? "-" },
+                        { key: "version", label: t("settings.version"), children: metaQuery.data?.version?.version ?? "-" },
+                      ]}
+                    />
+                    <ApplyReportView report={configMetaQuery.data?.last_apply} />
+                  </Card>
+                  <RuntimeServiceCard
+                    status={runtimeServiceQuery.data}
+                    loading={runtimeServiceQuery.isLoading}
+                    reloading={reloadConfigMutation.isPending}
+                    restarting={restartServiceMutation.isPending}
+                    onReload={() => reloadConfigMutation.mutate()}
+                    onRestart={() => restartServiceMutation.mutate()}
                   />
-                  <ApplyReportView report={configMetaQuery.data?.last_apply} configInSync={configInSync} />
-                </Card>
-                <RuntimeServiceCard
-                  status={runtimeServiceQuery.data}
-                  loading={runtimeServiceQuery.isLoading}
-                  reloading={reloadConfigMutation.isPending}
-                  restarting={restartServiceMutation.isPending}
-                  onReload={() => reloadConfigMutation.mutate()}
-                  onRestart={() => restartServiceMutation.mutate()}
-                />
-                <ProvidersPanel
-                  providers={providersQuery.data?.providers ?? []}
-                  loading={providersQuery.isLoading}
-                  testingID={testProviderMutation.variables}
-                  testing={testProviderMutation.isPending}
-                  onTest={(id) => testProviderMutation.mutate(id)}
-                />
-                <Form form={configForm} layout="vertical" onValuesChange={() => setBackendDirty(true)} onFinish={(values) => saveConfigMutation.mutate(values)}>
-                  {backendDirty ? (
-                    <Alert type="warning" showIcon style={{ marginBottom: 16 }} message={t("settings.unsavedBackendConfig")} />
-                  ) : null}
-                  <Collapse
-                    defaultActiveKey={sections.slice(0, 2).map((section) => section.id)}
-                    items={sections.map((section) => ({
-                      key: section.id,
-                      label: section.label,
-                      children: (
-                        <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                          {section.description ? <Typography.Text type="secondary">{section.description}</Typography.Text> : null}
+                  <div className="settings-config-layout">
+                    <aside className="settings-config-sidebar" aria-label={t("settings.configSections")}>
+                      <Typography.Text className="settings-config-sidebar-title" strong>
+                        {t("settings.configSections")}
+                      </Typography.Text>
+                      <Menu
+                        mode="inline"
+                        selectedKeys={activeConfigSection ? [activeConfigSection.id] : []}
+                        items={configNavItems}
+                        onClick={({ key }) => setActiveSectionKey(key)}
+                      />
+                    </aside>
+                    <section className="settings-config-panel">
+                      {activeConfigSection ? (
+                        <>
+                          <div className="settings-config-heading">
+                            <Typography.Title level={4}>{activeConfigSection.label}</Typography.Title>
+                            {activeConfigSection.description ? (
+                              <Typography.Text type="secondary">{activeConfigSection.description}</Typography.Text>
+                            ) : null}
+                          </div>
                           <ConfigSectionFields
-                            section={section}
+                            section={activeConfigSection}
                             fields={fields}
                             effectiveValues={effectiveValues}
                             clearSecrets={clearSecrets}
@@ -397,18 +433,22 @@ export function SettingsPage() {
                             discoveringProviderID={discoverModelsMutation.variables}
                             discoveringModels={discoverModelsMutation.isPending}
                             onDiscoverModels={(id) => discoverModelsMutation.mutate(id)}
+                            testingProviderID={testProviderMutation.variables}
+                            testingProvider={testProviderMutation.isPending}
+                            canTestProviders={canTestProviders}
+                            onTestProvider={(id) => testProviderMutation.mutate(id)}
                             onClearSecret={(path) => {
                               configForm.setFieldValue(path, "");
                               setClearSecrets((current) => ({ ...current, [path]: true }));
+                              setBackendDirty(true);
                             }}
                           />
-                        </Space>
-                      ),
-                    }))}
-                  />
-                  <Card style={{ marginTop: 16 }}>
-                    <Button type="primary" htmlType="submit" loading={saveConfigMutation.isPending} icon={<SaveOutlined />}>{t("settings.saveBackendConfig")}</Button>
-                  </Card>
+                        </>
+                      ) : (
+                        <Alert type="info" showIcon message={t("settings.configLoading")} />
+                      )}
+                    </section>
+                  </div>
                 </Form>
               </Space>
             ),
@@ -497,6 +537,18 @@ async function refreshAll(queryClient: ReturnType<typeof useQueryClient>, token:
     queryClient.invalidateQueries({ queryKey: ["config-meta", token] }),
     queryClient.invalidateQueries({ queryKey: ["config-schema", token] }),
     queryClient.invalidateQueries({ queryKey: ["config-view", token] }),
+    queryClient.invalidateQueries({ queryKey: ["config-doctor", token] }),
+    queryClient.invalidateQueries({ queryKey: ["providers", token] }),
+    queryClient.invalidateQueries({ queryKey: ["runtime-service", token] }),
+    queryClient.invalidateQueries({ queryKey: ["channels-status", token] }),
+    queryClient.invalidateQueries({ queryKey: ["weixin-auth", token] }),
+    queryClient.invalidateQueries({ queryKey: ["meta"] }),
+  ]);
+}
+
+function refreshAfterConfigSave(queryClient: ReturnType<typeof useQueryClient>, token: string) {
+  void Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["config-meta", token] }),
     queryClient.invalidateQueries({ queryKey: ["config-doctor", token] }),
     queryClient.invalidateQueries({ queryKey: ["providers", token] }),
     queryClient.invalidateQueries({ queryKey: ["runtime-service", token] }),

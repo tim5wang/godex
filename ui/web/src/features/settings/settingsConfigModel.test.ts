@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { acpAgentsConfigToForm, acpAgentsFormToConfig } from "./settingsConfigModel";
+import type { ConfigSectionSchema } from "../../lib/types";
+import { acpAgentsConfigToForm, acpAgentsFormToConfig, groupConfigSections } from "./settingsConfigModel";
+
+describe("groupConfigSections", () => {
+  it("groups schema sections by feature while preserving their order", () => {
+    const sections = ["api", "tools-browser", "channels-weixin", "cron", "storage"].map((id) => ({
+      id,
+      label: id,
+      fields: [],
+    })) satisfies ConfigSectionSchema[];
+
+    expect(groupConfigSections(sections)).toEqual([
+      { id: "core", sections: [sections[0]] },
+      { id: "tools", sections: [sections[1]] },
+      { id: "channels", sections: [sections[2]] },
+      { id: "automation", sections: [sections[3]] },
+      { id: "system", sections: [sections[4]] },
+    ]);
+  });
+});
 
 describe("acpAgentsConfigToForm / acpAgentsFormToConfig args round-trip", () => {
   it("preserves args containing spaces via quoting", () => {

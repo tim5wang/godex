@@ -601,6 +601,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
               void queryClient.invalidateQueries({ queryKey: ["snapshot", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["timeline", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["timeline-page", token, sessionId] });
+              void queryClient.invalidateQueries({ queryKey: ["compactions", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["subagents", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["context-inspector", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["skills-active", token, sessionId] });

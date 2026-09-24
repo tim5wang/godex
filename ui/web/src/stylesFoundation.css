@@ -226,7 +226,7 @@ samp {
 
 /* Per-provider collapse (LLM providers editor): compact header row that
    mirrors the DSH settings style — provider id/type plus model/credential
-   badges on the left, remove action on the right. */
+   badges on the left, test/remove actions on the right. */
 .llm-provider-collapse .ant-collapse-header {
   align-items: center;
   padding-block: 8px;

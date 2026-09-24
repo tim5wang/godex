@@ -636,7 +636,11 @@ func workflowEdgesFromInputs(inputs []workflowEdgeInput) ([]workflowEdge, error)
 		if workflowConditionEmpty(edge.When) {
 			return nil, fmt.Errorf("workflow edge %s missing when predicate (status/verdict/choice/confidence/output)", edge.ID)
 		}
-		if strings.TrimSpace(edge.Append.Prompt) == "" {
+		// Append templates run as normal nodes once appended. Mirror the static
+		// node rule (workflowNodesFromInputs): branch/function nodes don't
+		// require a prompt (function nodes execute via their Function spec).
+		appendKind := normalizeWorkflowNodeKind(edge.Append.Kind, edge.Append.ID)
+		if strings.TrimSpace(edge.Append.Prompt) == "" && appendKind != workflowNodeKindBranch && appendKind != workflowNodeKindFunction {
 			return nil, fmt.Errorf("workflow edge %s append node missing prompt", edge.ID)
 		}
 		edges = append(edges, edge)

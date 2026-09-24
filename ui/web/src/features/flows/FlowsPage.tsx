@@ -15,7 +15,9 @@ import {
   Modal,
   Popconfirm,
   Select,
+  Segmented,
   Space,
+  Switch,
   Table,
   Tabs,
   Tag,
@@ -669,12 +671,23 @@ function FlowCanvasMain(props: {
   // the per-node outputs/context so the debug panel shows live variable values.
   const [debugMode, setDebugMode] = useState(false);
   const [debugVersion, setDebugVersion] = useState<string>();
-  const [debugInputsText, setDebugInputsText] = useState("{}");
+  // 表单模式：声明字段值（key=name）+ 自定义字段（原始字符串，提交时解析）
+  const [debugForm, setDebugForm] = useState<Record<string, unknown>>({});
+  const [debugCustomFields, setDebugCustomFields] = useState<{ name: string; raw: string }[]>([]);
+  // JSON 模式：整块文本兑底（手工编辑复杂结构时用）
+  const [debugJsonMode, setDebugJsonMode] = useState(false);
+  const [debugJsonText, setDebugJsonText] = useState("{}");
   const [debugRunId, setDebugRunId] = useState<string>();
   const [debugStarted, setDebugStarted] = useState(false);
   const [debugStepMode, setDebugStepMode] = useState(false);
   const [stepView, setStepView] = useState<StepFlowView | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
+
+  // 调试所用版本的定义（表单字段按它的 inputs 声明生成）。
+  const debugDef = useMemo(() => {
+    const pick = debugVersion ?? [...versions].reverse().find((v) => v.definition)?.version;
+    return versions.find((v) => v.version === pick)?.definition;
+  }, [versions, debugVersion]);
 
   const debugMutation = useMutation({
     mutationFn: ({ version, inputs }: { version: string; inputs: Record<string, unknown> }) =>
@@ -739,15 +752,64 @@ function FlowCanvasMain(props: {
       return;
     }
     let inputs: Record<string, unknown> = {};
-    try {
-      inputs = debugInputsText.trim() ? (JSON.parse(debugInputsText) as Record<string, unknown>) : {};
-    } catch (err) {
-      message.error(
-        `${t("flows.jsonInvalid")}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return;
+    if (debugJsonMode) {
+      // JSON 模式：整块文本解析（兑底）。
+      try {
+        inputs = debugJsonText.trim() ? (JSON.parse(debugJsonText) as Record<string, unknown>) : {};
+      } catch (err) {
+        message.error(
+          `${t("flows.jsonInvalid")}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+    } else {
+      inputs = mergeDebugInputs();
     }
     debugMutation.mutate({ version, inputs });
+  };
+
+  // mergeDebugInputs 把表单模式的声明字段 + 自定义字段合并为提交值：
+  // 声明字段按 type 已转换（number/boolean 由控件直出）；object/array/any 与
+  // 自定义字段若是字符串则尝试 JSON.parse（失败保留字面量）。
+  const mergeDebugInputs = (): Record<string, unknown> => {
+    const merged: Record<string, unknown> = { ...debugForm };
+    for (const inp of debugDef?.inputs ?? []) {
+      const t = (inp.type ?? "string").toLowerCase();
+      if ((t === "object" || t === "array" || t === "any") && typeof merged[inp.name] === "string") {
+        const s = (merged[inp.name] as string).trim();
+        if (s !== "") {
+          try {
+            merged[inp.name] = JSON.parse(s);
+          } catch {
+            // 保留字符串字面量
+          }
+        }
+      }
+    }
+    for (const f of debugCustomFields) {
+      const name = f.name.trim();
+      if (!name) continue;
+      const raw = f.raw.trim();
+      if (raw === "") continue;
+      try {
+        merged[name] = JSON.parse(raw);
+      } catch {
+        merged[name] = raw;
+      }
+    }
+    return merged;
+  };
+
+  const switchDebugMode = (json: boolean) => {
+    setDebugJsonMode(json);
+    if (json) {
+      // 切到 JSON 模式时把当前表单值序列化进去，方便继续微调。
+      try {
+        setDebugJsonText(JSON.stringify(mergeDebugInputs(), null, 2));
+      } catch {
+        // 保留原文本
+      }
+    }
   };
 
   const clearDebug = () => {
@@ -869,14 +931,136 @@ function FlowCanvasMain(props: {
                 options={versions.map((v) => ({ value: v.version, label: `${v.version} (${v.status})` }))}
               />
             </Space>
-            <Input.TextArea
-              size="small"
-              style={{ width: "100%", fontFamily: "monospace", fontSize: 11 }}
-              rows={2}
-              placeholder='{"task": "..."}'
-              value={debugInputsText}
-              onChange={(e) => setDebugInputsText(e.target.value)}
-            />
+            <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
+              <Segmented
+                size="small"
+                value={debugJsonMode ? "json" : "form"}
+                options={[
+                  { label: t("flows.debugInputFormMode"), value: "form" },
+                  { label: t("flows.debugInputJsonMode"), value: "json" },
+                ]}
+                onChange={(v) => switchDebugMode(v === "json")}
+              />
+              <Text type="secondary" style={{ fontSize: 10 }}>
+                {t("flows.debugInputTitle")}
+              </Text>
+            </Space>
+            {debugJsonMode ? (
+              <Input.TextArea
+                size="small"
+                style={{ width: "100%", fontFamily: "monospace", fontSize: 11 }}
+                rows={4}
+                placeholder='{"task": "..."}'
+                value={debugJsonText}
+                onChange={(e) => setDebugJsonText(e.target.value)}
+              />
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  maxHeight: 220,
+                  overflowY: "auto",
+                  border: "1px solid #f0f0f0",
+                  borderRadius: 6,
+                  padding: 6,
+                  background: "#fff",
+                }}
+              >
+                {(debugDef?.inputs ?? []).length === 0 && debugCustomFields.length === 0 && (
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {t("flows.debugInputEmpty")}
+                  </Text>
+                )}
+                {(debugDef?.inputs ?? []).map((inp) => {
+                  const key = inp.name;
+                  const value = debugForm[key];
+                  const type = (inp.type ?? "string").toLowerCase();
+                  return (
+                    <div key={key} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <Text style={{ fontSize: 11, width: 96, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={inp.desc ?? inp.name}>
+                        {key}
+                      </Text>
+                      {type === "number" ? (
+                        <InputNumber
+                          size="small"
+                          style={{ width: "100%" }}
+                          placeholder={inp.desc ?? "number"}
+                          value={typeof value === "number" ? value : undefined}
+                          onChange={(v) => setDebugForm((prev) => ({ ...prev, [key]: v }))}
+                        />
+                      ) : type === "boolean" ? (
+                        <Switch
+                          size="small"
+                          checked={value === true}
+                          onChange={(v) => setDebugForm((prev) => ({ ...prev, [key]: v }))}
+                        />
+                      ) : type === "object" || type === "array" || type === "any" ? (
+                        <Input
+                          size="small"
+                          style={{ width: "100%", fontFamily: "monospace", fontSize: 11 }}
+                          placeholder={inp.desc ?? (type === "array" ? '[{"k": 1}]' : '{"k": 1}')}
+                          value={typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value)}
+                          onChange={(e) => setDebugForm((prev) => ({ ...prev, [key]: e.target.value }))}
+                        />
+                      ) : (
+                        <Input
+                          size="small"
+                          style={{ width: "100%" }}
+                          placeholder={inp.desc ?? "string"}
+                          value={typeof value === "string" ? value : value === undefined ? "" : String(value)}
+                          onChange={(e) => setDebugForm((prev) => ({ ...prev, [key]: e.target.value }))}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+                {debugCustomFields.map((f, idx) => (
+                  <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <Input
+                      size="small"
+                      style={{ width: 96, flexShrink: 0, fontSize: 11 }}
+                      placeholder={t("flows.debugInputName")}
+                      value={f.name}
+                      onChange={(e) =>
+                        setDebugCustomFields((prev) =>
+                          prev.map((x, i) => (i === idx ? { ...x, name: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <Input
+                      size="small"
+                      style={{ width: "100%", fontSize: 11 }}
+                      placeholder={t("flows.debugInputPlaceholder")}
+                      value={f.raw}
+                      onChange={(e) =>
+                        setDebugCustomFields((prev) =>
+                          prev.map((x, i) => (i === idx ? { ...x, raw: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<CloseOutlined />}
+                      onClick={() =>
+                        setDebugCustomFields((prev) => prev.filter((_, i) => i !== idx))
+                      }
+                    />
+                  </div>
+                ))}
+                <Button
+                  size="small"
+                  type="dashed"
+                  icon={<PlusOutlined />}
+                  style={{ fontSize: 11 }}
+                  onClick={() => setDebugCustomFields((prev) => [...prev, { name: "", raw: "" }])}
+                >
+                  {t("flows.debugInputAdd")}
+                </Button>
+              </div>
+            )}
             <Space wrap>
               <Checkbox
                 checked={debugStepMode}

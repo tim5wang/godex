@@ -842,3 +842,10 @@ export const zhProductMessages = {
       configLoading: "正在加载配置…",
     },
 } as const;
+      debugInputTitle: "测试输入",
+      debugInputEmpty: "该版本未声明 inputs，可直接启动（空输入）",
+      debugInputAdd: "添加自定义字段",
+      debugInputName: "字段名",
+      debugInputJsonMode: "JSON 模式",
+      debugInputFormMode: "表单模式",
+      debugInputPlaceholder: "值",

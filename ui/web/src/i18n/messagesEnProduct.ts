@@ -842,3 +842,10 @@ export const enProductMessages = {
       configLoading: "Loading configuration…",
     },
 } as const;
+      debugInputTitle: "Test inputs",
+      debugInputEmpty: "This version declares no inputs — start with empty inputs",
+      debugInputAdd: "Add custom field",
+      debugInputName: "Name",
+      debugInputJsonMode: "JSON mode",
+      debugInputFormMode: "Form mode",
+      debugInputPlaceholder: "Value",

@@ -43,6 +43,39 @@ type NetworkPolicy struct {
 	MaxResponseChars int `json:"max_response_chars,omitempty"`
 }
 
+// godex-feature: flow-spec
+// Flow Spec v1：业务流程的声明式定义模型（docs/business-flow-runtime-design.md §3）。
+// 生成器（flow_design generate）失败时，可用下面结构手工构造定义。
+//
+// 顶层字段：
+//   flow_id: string（必填，fl_<slug>）；name/description: string
+//   version: string（必填，如 "1"）；status: "draft"|"gray"|"published"|"deprecated"|"archived"
+//   inputs/outputs: [{name, type, desc}]（type: string|number|boolean|object|array|any）
+//   nodes: [Node]；edges: [Edge]；retry: RetryPolicy；on_complete: {url, secret}
+//   network: NetworkPolicy（function 节点出网策略：policy allow_all|allowlist、
+//     allowed_domains/blocked_domains、timeout_seconds、max_response_chars）
+//
+// Node（id 必填短 slug，kind 必填）：
+//   step|llm：需要 prompt（可引用 {{inputs.<name>}} / {{nodes.<id>.outputs.<field>}}）
+//   decision：prompt + decision.decision_type "choice" + decision.choices[{id,label}]；
+//     其后方需 data_dependency 边连到 branch 节点按 choice id 路由
+//   branch：branch.cases[{name,to,condition}]+branch.default_to（必填）；
+//     condition: {choice: "<choice id>"} 或 {operator,value}；case 的 to 必须指向真实节点
+//   human：prompt + human.queue（"ops"|"support"|"finance"）+ human.result_var + assignee_policy
+//   loop：loop.iterations 或 loop.until + loop.exit_var/exit_values
+//   function：function.lang（"js"|"wasm"）+ function.handler（js 源码或 wasm ref）
+//   canvas_pos（编辑器布局元数据，非运行时）；pre_script/post_script（bash，节点前后置）；
+//   outputs: [{name,type,desc}]；agent_ref（agent 模板 id）；timeout_sec；retry
+//
+// Edge（id/from/to 必填，edge_type 必填）：
+//   data_dependency（普通排序）、handoff（传递上游摘要）、condition（仅 loop/branch 内部）
+//
+// 校验规则（flow.Validate）：flow_id/nodes 必填；节点 id 唯一；branch case 目标、
+// edge from/to 必须指向存在的节点；decision 必须有 decision spec；human 必须有 queue/result_var；
+// 网络策略白名单格式 host 或 *.suffix；prompt 只能引用已声明 inputs 与已存在节点输出。
+//
+// 入口：flow_design 工具、/v1/flows API、Web Flows 页
+// 文档：docs/business-flow-runtime-design.md
 // Definition is a Flow Spec v1 definition.
 type Definition struct {
 	FlowID      string   `json:"flow_id"`

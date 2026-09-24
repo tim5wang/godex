@@ -98,12 +98,30 @@ func TestGenerateFlowSpecValid(t *testing.T) {
 // validation (unknown node reference) is rejected instead of saved.
 func TestGenerateFlowSpecInvalid(t *testing.T) {
 	a := newTestAgent(t, 4096)
-	a.client = repeatedTextCaller(`{"flow_id": "fl_bad", "version": "1", "status": "draft",
+	const raw = `{"flow_id": "fl_bad", "version": "1", "status": "draft",
 	  "nodes": [{"id": "a", "kind": "step", "prompt": "do"}],
 	  "edges": [{"id": "e1", "from": "a", "to": "ghost", "edge_type": "data_dependency"}]
-	}`)
-	if _, err := a.GenerateFlowSpec(context.Background(), "bad flow"); err == nil {
+	}`
+	a.client = repeatedTextCaller(raw)
+	_, err := a.GenerateFlowSpec(context.Background(), "bad flow")
+	if err == nil {
 		t.Fatal("expected validation error for unknown edge target")
+	}
+	// The failure must come back as a *FlowSpecDraftError carrying the
+	// near-correct draft + the raw LLM output, so flow_design can hand it
+	// back for amend instead of losing the work.
+	draftErr, ok := err.(*FlowSpecDraftError)
+	if !ok {
+		t.Fatalf("expected *FlowSpecDraftError, got %T: %v", err, err)
+	}
+	if draftErr.Draft == nil || len(draftErr.Draft.Nodes) != 1 {
+		t.Fatalf("expected near-correct draft with 1 node, got %+v", draftErr.Draft)
+	}
+	if !strings.Contains(draftErr.Raw, "fl_bad") {
+		t.Fatalf("expected raw LLM output preserved for diagnostics, got %q", draftErr.Raw)
+	}
+	if !strings.Contains(err.Error(), "unknown node") {
+		t.Fatalf("expected validation message in error, got %v", err)
 	}
 }
 
@@ -113,6 +131,29 @@ func TestGenerateFlowSpecEmpty(t *testing.T) {
 	a.client = repeatedTextCaller(`{"flow_id": "fl_empty", "version": "1", "status": "draft", "nodes": []}`)
 	if _, err := a.GenerateFlowSpec(context.Background(), "empty"); err == nil || !strings.Contains(err.Error(), "no nodes") {
 		t.Fatalf("expected no-nodes error, got %v", err)
+	}
+}
+
+// TestGenerateFlowSpecParseFailurePreservesRaw verifies that a response which
+// never parses (no JSON object at all) surfaces as a *FlowSpecDraftError with
+// the raw LLM output preserved for diagnostics — never a bare error with
+// nothing to inspect.
+func TestGenerateFlowSpecParseFailurePreservesRaw(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.client = repeatedTextCaller("I cannot do that.")
+	_, err := a.GenerateFlowSpec(context.Background(), "some flow")
+	if err == nil {
+		t.Fatal("expected error for unparsable response")
+	}
+	draftErr, ok := err.(*FlowSpecDraftError)
+	if !ok {
+		t.Fatalf("expected *FlowSpecDraftError, got %T: %v", err, err)
+	}
+	if draftErr.Draft != nil {
+		t.Fatalf("expected nil draft on parse failure, got %+v", draftErr.Draft)
+	}
+	if !strings.Contains(draftErr.Raw, "I cannot do that.") {
+		t.Fatalf("expected raw LLM output preserved, got %q", draftErr.Raw)
 	}
 }
 

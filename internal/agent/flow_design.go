@@ -60,6 +60,12 @@ func newFlowDesignTool(agent *Agent) tools.Tool {
 			}
 			def, err := agent.GenerateFlowSpec(ctx, args.Description)
 			if err != nil {
+				// A generated-but-invalid draft comes back as a draft error:
+				// hand the near-correct draft + errors to the Agent so it can
+				// amend instead of restarting.
+				if draftErr, ok := err.(*FlowSpecDraftError); ok {
+					return flowDesignDraftErrorResult(draftErr), nil
+				}
 				return tools.ToolResult{}, err
 			}
 			return flowDesignResult(def, "generated"), nil
@@ -74,6 +80,9 @@ func newFlowDesignTool(agent *Agent) tools.Tool {
 			}
 			def, err := agent.AmendFlowSpec(ctx, current, args.Change)
 			if err != nil {
+				if draftErr, ok := err.(*FlowSpecDraftError); ok {
+					return flowDesignDraftErrorResult(draftErr), nil
+				}
 				return tools.ToolResult{}, err
 			}
 			return flowDesignResult(def, "amended"), nil
@@ -144,5 +153,58 @@ func flowDesignResult(def *flow.Definition, verb string) tools.ToolResult {
 				}
 				return ""
 			}()),
+	}
+}
+
+// flowDesignDraftErrorResult converts a *FlowSpecDraftError into a ToolResult
+// the Agent can CONTINUE from. IMPORTANT: the tool-result wire format only
+// passes result.Text to the model (Structured is dropped by OutputString), so
+// the near-correct draft / raw output must be embedded in Text for amend to
+// actually receive it.
+//   - validation failure (Draft != nil): full draft JSON is embedded so amend
+//     can fix the references — the generate → validate → amend loop stays
+//     alive instead of forcing a full restart;
+//   - parse failure (Draft == nil): the raw LLM output is embedded so the
+//     Agent can judge whether a targeted re-generate is worth it.
+func flowDesignDraftErrorResult(draftErr *FlowSpecDraftError) tools.ToolResult {
+	structured := map[string]interface{}{
+		"ok":         false,
+		"stage":      "draft",
+		"attempt":    draftErr.Attempt,
+		"raw_output": draftErr.Raw,
+	}
+	if draftErr.Cause != nil {
+		structured["error"] = draftErr.Cause.Error()
+	}
+	var errorsList []string
+	if draftErr.Cause != nil {
+		errorsList = append(errorsList, draftErr.Cause.Error())
+	}
+	if draftErr.Draft != nil {
+		structured["draft"] = draftErr.Draft
+	}
+
+	var text string
+	switch {
+	case draftErr.Draft != nil:
+		// Embed the full draft JSON so the model can pass it back verbatim
+		// to action=amend without re-deriving it.
+		if raw, err := json.Marshal(draftErr.Draft); err == nil {
+			text = fmt.Sprintf("%s：草稿已生成但未通过校验（errors：%s）。\n请用 flow_design action=amend 修正，draft 如下（直接使用，无需重新生成）：\n%s",
+				draftErr.Label, strings.Join(errorsList, "；"), string(raw))
+		} else {
+			text = fmt.Sprintf("%s：草稿已生成但未通过校验（errors：%s），且 draft 序列化失败：%v",
+				draftErr.Label, strings.Join(errorsList, "；"), err)
+		}
+	case draftErr.Raw != "":
+		text = fmt.Sprintf("%s：LLM 响应未解析出 JSON（无可用草稿），errors：%s。\nraw_output 保留如下供诊断（可用它判断是重试还是手工构造定义走 validate）：\n%s",
+			draftErr.Label, strings.Join(errorsList, "；"), draftErr.Raw)
+	default:
+		text = fmt.Sprintf("%s：LLM 响应未解析出 JSON（无可用草稿），errors：%s。\n请重新 generate，或依据 Flow Spec v1 schema（godex_docs get flow-spec）手工构造定义后走 validate。",
+			draftErr.Label, strings.Join(errorsList, "；"))
+	}
+	return tools.ToolResult{
+		Structured: structured,
+		Text:       text,
 	}
 }

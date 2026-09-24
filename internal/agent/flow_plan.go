@@ -86,16 +86,10 @@ func (a *Agent) GenerateFlowSpec(ctx context.Context, description string) (*flow
 	}
 	def, err := callFlowSpecLLM(ctx, a, "generate flow", req)
 	if err != nil {
+		// Validation failures surface as *FlowSpecDraftError carrying the
+		// near-correct draft + raw output so the caller can amend instead of
+		// restarting; parse/transport failures stay bare errors.
 		return nil, err
-	}
-	if len(def.Nodes) == 0 {
-		return nil, fmt.Errorf("generate flow: LLM returned no nodes")
-	}
-	if def.FlowID == "" {
-		return nil, fmt.Errorf("generate flow: LLM returned no flow_id")
-	}
-	if err := flow.Validate(def); err != nil {
-		return nil, fmt.Errorf("generate flow: LLM produced invalid definition: %w", err)
 	}
 	return def, nil
 }
@@ -133,12 +127,6 @@ func (a *Agent) AmendFlowSpec(ctx context.Context, current *flow.Definition, cha
 	if err != nil {
 		return nil, err
 	}
-	if len(def.Nodes) == 0 {
-		return nil, fmt.Errorf("amend flow: LLM returned no nodes")
-	}
-	if err := flow.Validate(def); err != nil {
-		return nil, fmt.Errorf("amend flow: LLM produced invalid definition: %w", err)
-	}
 	return def, nil
 }
 
@@ -146,27 +134,90 @@ func (a *Agent) AmendFlowSpec(ctx context.Context, current *flow.Definition, cha
 // parses the response. On a transient failure (transport error, empty text,
 // or unparsable JSON) it retries once — models intermittently return empty
 // or garbled output, and a single retry usually recovers.
+//
+// When the response parses but FAILS flow validation, the returned error is a
+// *FlowSpecDraftError carrying the near-correct draft + the raw LLM output, so
+// callers (flow_design) can hand it back for amend instead of losing it.
 func callFlowSpecLLM(ctx context.Context, a *Agent, label string, req protocol.Request) (*flow.Definition, error) {
 	attempts := 2
+	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		resp, err := a.client.Call(ctx, req)
 		if err != nil || resp == nil {
-			if attempt == attempts {
-				return nil, fmt.Errorf("%s: LLM call failed: %w", label, err)
+			lastErr = fmt.Errorf("%s: LLM call failed: %w", label, err)
+			if attempt < attempts {
+				continue
 			}
-			continue
+			break
 		}
 		text := strings.TrimSpace(protocol.MessageText(protocol.MessageFromResponse(*resp)))
 		def, perr := parseFlowSpecFromLLM(text)
 		if perr == nil {
+			// Parsed: run validation here so an invalid-but-parseable draft
+			// surfaces as a FlowSpecDraftError (draft + raw output preserved)
+			// instead of a bare error.
+			if vErr := flow.Validate(def); vErr != nil {
+				return nil, &FlowSpecDraftError{
+					Label:   label,
+					Draft:   def,
+					Raw:     text,
+					Cause:   vErr,
+					Attempt: attempt,
+				}
+			}
 			return def, nil
 		}
+		lastErr = perr
 		if attempt == attempts {
-			return nil, perr
+			// Parse failure on the last attempt: wrap with the raw LLM output
+			// so callers (flow_design) can surface it for diagnostics instead
+			// of a bare "no JSON object" with nothing to inspect.
+			return nil, &FlowSpecDraftError{
+				Label:   label,
+				Draft:   nil,
+				Raw:     text,
+				Cause:   perr,
+				Attempt: attempt,
+			}
 		}
 	}
-	return nil, fmt.Errorf("%s: LLM call failed after %d attempts", label, attempts)
+	return nil, lastErr
 }
+
+// FlowSpecDraftError wraps a generated-but-invalid Flow Spec draft so the
+// caller can continue the generate → validate → amend loop instead of
+// restarting from scratch. It carries the near-correct definition and the raw
+// LLM output for diagnostics.
+type FlowSpecDraftError struct {
+	Label string
+	// Draft is the parsed-but-invalid definition (may be non-nil only when
+	// the LLM response parsed; otherwise nil).
+	Draft *flow.Definition
+	// Raw is the raw LLM response text (for diagnostics when parsing failed).
+	Raw string
+	// Cause is the underlying error (validation failure or parse failure).
+	Cause error
+	// Attempt is the 1-based attempt that produced this result.
+	Attempt int
+}
+
+func (e *FlowSpecDraftError) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("%s: LLM produced unusable response (attempt %d)", e.Label, e.Attempt)
+	}
+	if e.Draft != nil {
+		return fmt.Sprintf("%s: LLM produced invalid definition: %v", e.Label, e.Cause)
+	}
+	// Parse failure: keep the message compact but point at the preserved raw
+	// output (callers surface e.Raw for diagnostics).
+	if e.Raw != "" {
+		return fmt.Sprintf("%s: %v (raw LLM output preserved, %d chars)", e.Label, e.Cause, len(e.Raw))
+	}
+	return fmt.Sprintf("%s: %v", e.Label, e.Cause)
+}
+
+// Unwrap lets errors.Is/As reach the underlying validation error.
+func (e *FlowSpecDraftError) Unwrap() error { return e.Cause }
 
 // parseFlowSpecFromLLM extracts a Flow Spec JSON object from an LLM response,
 // tolerating a markdown code fence and surrounding prose. It tries strict

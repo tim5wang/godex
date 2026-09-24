@@ -43,7 +43,8 @@ interface ChatState {
   reset: () => void;
 }
 
-export const useChatStore = create<ChatState>((set, get) => ({
+export function createChatStore() {
+  return create<ChatState>((set, get) => ({
   sessionId: "",
   sessionKey: "",
   historyItems: [],
@@ -502,7 +503,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentTurnId: "",
       streamConnected: false,
     }),
-}));
+  }));
+}
+
+export const useChatStore = createChatStore();
 
 export interface SnapshotToItemsOptions {
   idPrefix?: string;

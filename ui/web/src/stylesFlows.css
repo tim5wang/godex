@@ -1,0 +1,180 @@
+/* ---------------------------------------------------------------------------
+ * Flows three-column layout — left flow list / center canvas / right detail.
+ * Mirrors chat-v2 rails: both side rails are collapsible and have a draggable
+ * 4px resize handle. The right detail column replaces the old floating Drawer.
+ * ------------------------------------------------------------------------- */
+
+.flows-layout {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+.flows-left,
+.flows-right {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #fff;
+  flex-shrink: 0;
+}
+
+.flows-left-resize,
+.flows-right-resize {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+}
+
+.flows-left-resize {
+  right: 0;
+}
+
+.flows-right-resize {
+  left: 0;
+}
+
+.flows-left-resize:hover,
+.flows-right-resize:hover {
+  background: var(--godex-accent, #0f766e);
+  opacity: 0.3;
+}
+
+.flows-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 8px;
+}
+
+.flows-left-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.flows-left-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.flows-left-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.flows-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.flows-center-empty {
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+}
+
+/* Right detail column (replaces the old floating Drawer). */
+.flow-detail-column {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.flow-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.flow-detail-column > .ant-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.flow-detail-column > .ant-tabs .ant-tabs-content-holder,
+.flow-detail-column > .ant-tabs .ant-tabs-content,
+.flow-detail-column > .ant-tabs .ant-tabs-tabpane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.flow-detail-column > .ant-tabs .ant-tabs-nav {
+  margin-bottom: 0;
+  padding: 0 10px;
+  flex-shrink: 0;
+}
+
+/* FlowChatPanel: a real chat session embedded in the detail column. */
+.flow-chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.flow-chat-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.flow-chat-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flow-chat-feed {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.flow-chat-feed .chat-feed-v2-scrollport {
+  flex: 1;
+  min-height: 0;
+}
+
+.flow-chat-composer {
+  flex-shrink: 0;
+  border-top: 1px solid #f0f0f0;
+  padding: 8px;
+}

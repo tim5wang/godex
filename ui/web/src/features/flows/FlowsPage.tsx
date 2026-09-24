@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App as AntApp,
@@ -26,6 +26,7 @@ import {
   ApartmentOutlined,
   ApiOutlined,
   BugOutlined,
+  CloseOutlined,
   DeleteOutlined,
   DownOutlined,
   DownloadOutlined,
@@ -78,7 +79,7 @@ import {
 import { FlowGramFlowEditor, type FlowGramFlowEditorHandle } from "./FlowGramFlowEditor";
 import { FLOW_TEMPLATES, flowTemplateById } from "./flowTemplates";
 import { TemplateLibrary } from "./TemplateLibrary";
-import { NaturalLanguageTab } from "./NaturalLanguageTab";
+import { FlowChatPanel } from "./FlowChatPanel";
 import { SchemaTreeEditor, type SchemaNode } from "./SchemaTreeEditor";
 import { useSettingsStore } from "../../store/settings";
 
@@ -104,10 +105,52 @@ export function FlowsPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [detail, setDetail] = useState<FlowSummaryView | null>(null);
-  const [detailDrawer, setDetailDrawer] = useState<FlowSummaryView | null>(null);
   const [lastCreatedId, setLastCreatedId] = useState<string>();
   const [listCollapsed, setListCollapsed] = useState(false);
+  const [detailCollapsed, setDetailCollapsed] = useState(false);
+  const [listWidth, setListWidth] = useState(300);
+  const [detailWidth, setDetailWidth] = useState(460);
   const [form] = Form.useForm<FlowFormValues>();
+
+  // Left/right rail drag-resize (same pointer pattern as chat-v2 rails).
+  const beginListResize = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = listWidth;
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      setListWidth(Math.min(600, Math.max(200, startWidth + (moveEvent.clientX - startX))));
+    };
+    const stopResize = () => {
+      document.body.classList.remove("is-resizing-column");
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", stopResize);
+      document.removeEventListener("pointercancel", stopResize);
+    };
+    document.body.classList.add("is-resizing-column");
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", stopResize);
+    document.addEventListener("pointercancel", stopResize);
+  };
+  const beginDetailResize = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = detailWidth;
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      setDetailWidth(Math.min(900, Math.max(320, startWidth - (moveEvent.clientX - startX))));
+    };
+    const stopResize = () => {
+      document.body.classList.remove("is-resizing-column");
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", stopResize);
+      document.removeEventListener("pointercancel", stopResize);
+    };
+    document.body.classList.add("is-resizing-column");
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", stopResize);
+    document.addEventListener("pointercancel", stopResize);
+  };
 
   // JSON editor ⇄ canvas: an externally applied definition (JSON tab → canvas)
   // wins over stored versions until the next save clears it.
@@ -185,13 +228,12 @@ export function FlowsPage() {
   });
 
   // 删除整个 Flow（C2）：有运行中的流程后端拒绝（409）。删除后清空当前选中
-  // 与抽屉状态。
+  // 与右侧详情列状态。
   const deleteFlowMutation = useMutation({
     mutationFn: ({ flowId }: { flowId: string }) => deleteFlow(token, flowId),
     onSuccess: (_data, { flowId }) => {
       message.success(t("flows.flowDeleted", { id: flowId }));
       if (detail?.flow_id === flowId) setDetail(null);
-      if (detailDrawer?.flow_id === flowId) setDetailDrawer(null);
       refresh();
     },
     onError: (err) => showError(message, err, t("flows.deleteFailed")),
@@ -309,7 +351,7 @@ export function FlowsPage() {
       )}
 
       <div style={{ display: "flex", gap: 12, flex: 1, minHeight: 0 }}>
-        {/* Left: flow list — click to select; collapsible to free canvas space. */}
+        {/* Left: flow list — click to select; collapsible + drag-resizable. */}
         {listCollapsed ? (
           <div
             style={{
@@ -329,7 +371,22 @@ export function FlowsPage() {
             </Tooltip>
           </div>
         ) : (
-          <div style={{ width: 300, flexShrink: 0, display: "flex", flexDirection: "column", border: "1px solid #e5e5e5", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+          <div style={{ width: listWidth, flexShrink: 0, display: "flex", flexDirection: "column", border: "1px solid #e5e5e5", borderRadius: 8, overflow: "hidden", background: "#fff", position: "relative" }}>
+            <div
+              onPointerDown={beginListResize}
+              role="separator"
+              aria-label="Resize list panel"
+              style={{
+                position: "absolute",
+                top: 0,
+                right: 0,
+                width: 4,
+                height: "100%",
+                cursor: "col-resize",
+                zIndex: 10,
+                background: "transparent",
+              }}
+            />
             <div
               style={{
                 display: "flex",
@@ -416,7 +473,7 @@ export function FlowsPage() {
           </div>
         )}
 
-        {/* Right: canvas editor as the main body (no drawer to open). */}
+        {/* Center: canvas editor as the main body. */}
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
           {detail ? (
             <FlowCanvasMain
@@ -428,7 +485,7 @@ export function FlowsPage() {
               onRefresh={refresh}
               onPublish={(version) => publishMutation.mutate({ flowId: detail.flow_id, version })}
               onRun={(version) => runMutation.mutate({ flowId: detail.flow_id, version })}
-              onOpenDetail={() => setDetailDrawer(detail)}
+              onOpenDetail={() => setDetailCollapsed((v) => !v)}
               externalDef={externalDef}
               editorHandleRef={editorHandleRef}
               onExternalDefConsumed={() => setExternalDef(undefined)}
@@ -449,6 +506,53 @@ export function FlowsPage() {
             </div>
           )}
         </div>
+
+        {/* Right: inline detail column (replaces the old floating Drawer). */}
+        {detail && !detailCollapsed && (
+          <div
+            style={{
+              width: detailWidth,
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              border: "1px solid #e5e5e5",
+              borderRadius: 8,
+              overflow: "hidden",
+              background: "#fff",
+              position: "relative",
+              minHeight: 0,
+            }}
+          >
+            <div
+              onPointerDown={beginDetailResize}
+              role="separator"
+              aria-label="Resize detail panel"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: 4,
+                height: "100%",
+                cursor: "col-resize",
+                zIndex: 10,
+                background: "transparent",
+              }}
+            />
+            <FlowDetailColumn
+              flow={detail}
+              token={token}
+              t={t}
+              message={message}
+              onClose={() => setDetailCollapsed(true)}
+              onRefresh={refresh}
+              onPublish={(version) => publishMutation.mutate({ flowId: detail.flow_id, version })}
+              onRun={(version) => runMutation.mutate({ flowId: detail.flow_id, version })}
+              onCancelRun={(runId) => cancelRunMutation.mutate({ flowId: detail.flow_id, runId })}
+              onApplyJson={(def) => setExternalDef({ def, stamp: Date.now() })}
+              editorHandleRef={editorHandleRef}
+            />
+          </div>
+        )}
       </div>
 
       {/* Create flow drawer */}
@@ -512,23 +616,6 @@ export function FlowsPage() {
           </Button>
         </Form>
       </Drawer>
-
-      {/* Detail drawer (secondary: versions/runs/templates/natural-language/json) */}
-      {detailDrawer && (
-        <FlowDetailDrawer
-          flow={detailDrawer}
-          token={token}
-          t={t}
-          message={message}
-          onClose={() => setDetailDrawer(null)}
-          onRefresh={refresh}
-          onPublish={(version) => publishMutation.mutate({ flowId: detailDrawer.flow_id, version })}
-          onRun={(version) => runMutation.mutate({ flowId: detailDrawer.flow_id, version })}
-          onCancelRun={(runId) => cancelRunMutation.mutate({ flowId: detailDrawer.flow_id, runId })}
-          onApplyJson={(def) => setExternalDef({ def, stamp: Date.now() })}
-          editorHandleRef={editorHandleRef}
-        />
-      )}
     </div>
   );
 }
@@ -991,7 +1078,7 @@ function FlowCanvasMain(props: {
   );
 }
 
-function FlowDetailDrawer(props: {
+function FlowDetailColumn(props: {
   flow: FlowSummaryView;
   token: string | null;
   t: (k: string, v?: Record<string, string | number>) => string;
@@ -1103,7 +1190,13 @@ function FlowDetailDrawer(props: {
   });
 
   return (
-    <Drawer title={flow.flow_id} open onClose={onClose} width={720}>
+    <div className="flow-detail-column">
+      <div className="flow-detail-head">
+        <Text strong>{flow.flow_id}</Text>
+        <Space size={2}>
+          <Button size="small" type="text" icon={<CloseOutlined />} onClick={onClose} />
+        </Space>
+      </div>
       <Tabs
         items={[
           {
@@ -1391,12 +1484,10 @@ function FlowDetailDrawer(props: {
             key: "naturallang",
             label: t("flows.naturalLanguage"),
             children: (
-              <NaturalLanguageTab
+              <FlowChatPanel
                 flowId={flow.flow_id}
                 token={token}
-                t={t}
-                versions={versions}
-                onApplied={onRefresh}
+                onVersionApplied={onRefresh}
               />
             ),
           },
@@ -1440,10 +1531,7 @@ function FlowDetailDrawer(props: {
           },
         ]}
       />
-      <Paragraph type="secondary" style={{ marginTop: 16, fontSize: 12 }}>
-        {t("flows.flowgramHint")}
-      </Paragraph>
-    </Drawer>
+    </div>
   );
 }
 

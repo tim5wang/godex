@@ -332,6 +332,10 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 		Bundle:  bundleSubagent,
 		Summary: "Business Flow design method set: generate/amend/validate Flow Spec v1 definitions from natural language (Agent 辅助设计)",
 	})
+	a.registerToolTo(handler, newCreateFlowTool(a), tools.ToolMeta{
+		Bundle:  bundleSubagent,
+		Summary: "Business Flow persistence: save an approved Flow Spec draft as a new version (closes the flow_design loop)",
+	})
 	a.registerSubagentTool(handler)
 	a.registerToolTo(handler, tools.NewACPAgentTool(a.cfg.ACP.Agents, workspaceDir), tools.ToolMeta{
 		Bundle:  bundleExternal,

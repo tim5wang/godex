@@ -81,6 +81,27 @@ func TestFlowDesignDraftErrorResultPreservesDraft(t *testing.T) {
 	}
 }
 
+func TestFlowDesignSuccessTextIncludesFullDefinition(t *testing.T) {
+	def := &flow.Definition{
+		FlowID: "fl_ready", Name: "Ready Flow", Version: "3", Status: "draft",
+		Inputs: []flow.VarDef{{Name: "task", Type: "string"}},
+		Nodes:  []flow.Node{{ID: "run", Kind: flow.KindStep, Prompt: "Process {{inputs.task}}"}},
+		Edges:  []flow.Edge{},
+	}
+	result := flowDesignResult(def, "generated")
+	for _, want := range []string{
+		"Flow Spec JSON:",
+		`"flow_id":"fl_ready"`,
+		`"name":"Ready Flow"`,
+		`"inputs":[{"name":"task","type":"string"}]`,
+		`"prompt":"Process {{inputs.task}}"`,
+	} {
+		if !strings.Contains(result.Text, want) {
+			t.Fatalf("expected model-visible output to include %q, got %q", want, result.Text)
+		}
+	}
+}
+
 // TestFlowDesignGenerateUnparsableStillFails verifies a genuinely unusable
 // LLM response (no JSON at all) surfaces as a diagnostic ToolResult (ok=false,
 // raw_output preserved) instead of a hard error that loses the output — the

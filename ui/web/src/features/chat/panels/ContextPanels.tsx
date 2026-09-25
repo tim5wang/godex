@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { SessionContextInspector, SkillActivation, ProtocolMessage } from "../../../lib/types";
+import type { SessionContextInspector, SessionContextUsage, SkillActivation, ProtocolMessage } from "../../../lib/types";
 import { useI18n } from "../../../i18n";
 import { Tag, Popover, Alert, Space, Descriptions, Card, Typography, List, Popconfirm, Button, Progress, Empty, Modal } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -8,7 +8,7 @@ import { getSessionTranscript } from "../../../lib/api";
 import { useSettingsStore } from "../../../store/settings";
 import { type ContextStatusSummary, formatCompactNumber } from "../../../lib/timelineUtils";
 
-export function ContextStatusInline({ summary, inspector }: { summary: ContextStatusSummary; inspector?: SessionContextInspector | null }) {
+export function ContextStatusInline({ summary, inspector, usage }: { summary: ContextStatusSummary; inspector?: SessionContextInspector | null; usage?: SessionContextUsage | null }) {
   const { t } = useI18n();
   const color = summary.suggestCompact || summary.budgetPercent >= 85 ? "gold" : summary.budgetPercent >= 65 ? "blue" : "default";
   const ctx = inspector?.context;
@@ -30,8 +30,11 @@ export function ContextStatusInline({ summary, inspector }: { summary: ContextSt
   const cacheable = cacheStable + historyTokens;
   const cacheRatio = promptTotal > 0 ? ((cacheable / promptTotal) * 100) : 0;
   const dynamicSections = Object.entries(cache?.dynamic_section_tokens ?? {}).sort((a, b) => b[1] - a[1]);
-  const realUsage = ctx?.cache_usage;
+  const realUsage = usage?.cache_usage ?? ctx?.cache_usage;
   const hasRealUsage = (realUsage?.calls ?? 0) > 0;
+  const cumulativeTokens = usage?.cumulative_tokens ?? ctx?.cumulative_tokens ?? 0;
+  const cumulativeInputTokens = usage?.cumulative_input_tokens ?? ctx?.cumulative_input_tokens ?? 0;
+  const cumulativeOutputTokens = usage?.cumulative_output_tokens ?? ctx?.cumulative_output_tokens ?? 0;
   const sectionLabel = (key: string) => {
     const i18nKey = "chat.ctxPopoverSection" + key.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
     const translated = t(i18nKey);
@@ -110,19 +113,19 @@ export function ContextStatusInline({ summary, inspector }: { summary: ContextSt
           <span className="ctx-popover-label">{t("chat.ctxPopoverApprovals")}</span>
           <span className="ctx-popover-value">{ctx?.pending_permission_count ?? "—"}</span>
         </div>
-        {ctx && (ctx.cumulative_tokens ?? 0) > 0 ? (
+        {cumulativeTokens > 0 ? (
           <>
             <div className="ctx-popover-row">
               <span className="ctx-popover-label">{t("chat.ctxPopoverCumulative")}</span>
-              <span className="ctx-popover-value">{formatCompactNumber(ctx.cumulative_tokens ?? 0)}</span>
+              <span className="ctx-popover-value">{formatCompactNumber(cumulativeTokens)}</span>
             </div>
             <div className="ctx-popover-row ctx-popover-row-sub">
               <span className="ctx-popover-label">{t("chat.ctxPopoverCumulativeIn")}</span>
-              <span className="ctx-popover-value">{formatCompactNumber(ctx.cumulative_input_tokens ?? 0)}</span>
+              <span className="ctx-popover-value">{formatCompactNumber(cumulativeInputTokens)}</span>
             </div>
             <div className="ctx-popover-row ctx-popover-row-sub">
               <span className="ctx-popover-label">{t("chat.ctxPopoverCumulativeOut")}</span>
-              <span className="ctx-popover-value">{formatCompactNumber(ctx.cumulative_output_tokens ?? 0)}</span>
+              <span className="ctx-popover-value">{formatCompactNumber(cumulativeOutputTokens)}</span>
             </div>
           </>
         ) : null}

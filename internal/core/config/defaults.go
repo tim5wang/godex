@@ -43,11 +43,13 @@ func defaultConfigFile() ConfigFile {
 			Agents: map[string]ACPAgentSection{},
 		},
 		Agent: AgentSection{
-			CompressThreshold: 100000,
+			// Legacy absolute threshold stays unset so the DSH-style
+			// context-window ratio is effective by default.
+			CompressThreshold: 0,
 			Compaction: AgentCompactionSection{
 				AutoEnabled:         true,
-				TriggerTokens:       60000,
-				TargetHistoryTokens: 12000,
+				TriggerTokens:       0,
+				TargetHistoryTokens: 0,
 				// Hybrid by default: LLM-backed compaction with rule-based
 				// fallback gives far better continuity than the old fast-only
 				// rule extraction (which lost too much information).

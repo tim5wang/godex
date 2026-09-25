@@ -137,6 +137,7 @@ func TestFlowAgentRefInjectsBundlesIntoRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
+	cleanupWorkflowAfterTest(t, a, run.WorkflowID)
 	if _, err := a.StartFlowRun(ctx, "fl_agentref", run.RunID); err != nil {
 		t.Fatalf("start run: %v", err)
 	}

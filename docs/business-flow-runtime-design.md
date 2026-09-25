@@ -1074,5 +1074,59 @@ P2.5 = **创建流程不再要求手写 JSON**：创建先建 flow 对象（只�
 
 **验证**：`go build ./internal/...` 通过；`go test ./internal/core/flow/`、`./internal/runtime/httpapi/ -run Flow` 全绿（TestDurableSubagentDefaultTimeoutDisabled 为既有 TempDir 清理环境性失败，与本次改动无关）；`pnpm tsc -b` + `pnpm vite build` 通过。
 
+## 23. Flow 契约、超时与 Gateway 幂等补强（2026-09-25）
 
+**Gateway 幂等**
+- `idempotency_key` 的身份摘要按 route、biz key、flow 和原始 key 计算；请求指纹按 version + inputs 计算，`wait_ms` 不参与。
+- 原始幂等 key 不落盘。身份摘要和请求指纹写入 FlowRun 记录；同 key、同请求在服务重启后重放原 run，同 key、不同 version/inputs 返回 HTTP 409。
+- 当前同 key 并发串行化只覆盖单进程；持久化目录仍是 JSON 文件存储，多个服务进程共享目录时没有跨进程事务/锁保证，不应据此宣称已支持多副本 exactly-once。
 
+**输入/输出契约**
+- 输入声明支持 `required`、变量类型及受限 JSON Schema（`type`、`properties`、`required`、`items`、`enum`、`additionalProperties`）；存在输入声明时拒绝未知字段。未声明 inputs 的历史 Flow 保持开放输入兼容。
+- 节点声明 outputs 后，运行时验证所声明字段的必填性、类型和 schema。LLM/subagent 输出必须是 JSON object；function 输入/输出 schema 在保存时校验定义、运行时校验值。
+- Flow 输出通过 `source: "nodes.<node_id>.outputs.<field>"` 映射。required Flow 输出必须配置有效来源；为兼容旧定义，未绑定的 optional Flow 输出允许保留，但运行结果中不生成该字段。
+
+**超时与取消**
+- Flow 和支持的节点可配置 `timeout_sec`，有效范围为 0–30 天；0/省略表示不设该层超时。branch/loop 控制节点不接受节点超时。
+- Flow deadline 到期后，待执行、运行中及人工等待节点被终止；人工任务同步标记 canceled。显式取消不会把已经完成的 run 改成 canceled。
+- 正常启动复用调度器返回的状态和输出，不再为“确认启动结果”立即二次加载并刷新 job；后续 Refresh/Wait/Reconciler 负责同步异步完成状态。
+
+**验证**：`go test ./internal/core/flow ./internal/agent ./internal/runtime/httpapi ./internal/services/backend` 通过；`pnpm typecheck` 与前端 production build 通过。Schema 递归边界测试验证 32 层通过、33 层在定义和值校验中均被拒绝。
+
+## 24. B 场景：HTTP JSON Service 节点（2026-09-25）
+
+Flow 新增 `service` 节点，作为在线服务编排（B）的首个通用调用节点，直接编译到 durable workflow 同步执行，不启动子 Agent 或 LLM。节点支持 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`，绝对 HTTP(S) URL、JSON 请求体、请求头、节点超时及已有 `RetryPolicy`。
+
+```json
+{
+  "id": "transcribe",
+  "kind": "service",
+  "service": {
+    "method": "POST",
+    "url": "https://api.example.com/v1/transcribe",
+    "headers": {"X-Trace": "{{inputs.trace_id}}"},
+    "body": {"audio_url": "{{inputs.audio_url}}"},
+    "auth": {"type": "bearer", "token_env": "TRANSCRIBE_API_TOKEN"}
+  },
+  "outputs": [
+    {"name": "status_code", "type": "number"},
+    {"name": "body", "type": "object"}
+  ]
+}
+```
+
+- URL、header 值和 JSON body 字符串均可引用已声明的 Flow input / 节点 output。JSON body 中独占一个字符串值的 `{{...}}` 会保留原 JSON 类型；混合文本中的引用转为文本。
+- Bearer/API key 凭据只引用 Godex 服务进程的环境变量名；Flow 定义不接受凭据值作为认证配置。成功节点输出 `{status_code, body}`；非 2xx、非 JSON 或超限响应会失败，响应体不进入 workflow event log。
+- service 请求服从 Flow 的 blocked/allowlist、超时和响应大小上限。私网 / 本机地址默认拒绝；显式开启 `allow_private_hosts` 还要求 `allowlist` 并匹配允许域名。service HTTP client 不使用环境代理、按目标 DNS 地址校验并直连已校验 IP；跨 origin redirect 不跟随，以免自定义 API key header 被转发到其他主机。
+- `service_completed` 只记录节点 ID、HTTP 状态码与耗时；失败事件只记录脱敏错误摘要，不记录 URL、请求头、认证值、请求体或响应体。超时、网络错误、HTTP 408/429/5xx 按其 failure kind 走节点 RetryPolicy；策略拒绝、契约错误、无效 JSON 和其他 4xx 不自动重试。
+- FlowGram 画布提供 method、URL、headers、认证环境变量名和 JSON body 表单；私网访问开关在 Flow 级网络策略中，并要求先启用 allowlist、配置至少一个域名。
+
+#### B 场景的独立请求入口
+
+- 业务侧将 biz key 绑定到已发布 Flow 后，每次 `POST /v1/gateway/{route}` 都创建独立的 FlowRun 和 workflow；不传 `idempotency_key` 时，每次调用均代表一个新请求。不同请求可并发执行，节点输入与输出按各自 Run 隔离。
+- 短流程可传正数 `wait_ms` 请求等待结果：Run 在等待窗口内进入终态则返回 HTTP 200 和最终 FlowRunView；仍在执行则返回 HTTP 202 与 `run_id`。不等待时，新 Run 返回 HTTP 202，调用方可轮询 Run 或使用完成回调。
+- 调用方为同一个逻辑请求的网络重试应复用同一个 `idempotency_key`；不同业务请求必须使用不同 key。复用 key 但改变 Flow 版本或 inputs 会返回 HTTP 409。
+
+审核类 Flow 可按“媒体下载/解码服务 → 语种与音频分析服务 → ASR 服务 → 文本审核服务 → Flow outputs”组织。各服务通过普通 HTTP JSON 请求处理单个媒体请求；Godex 负责变量契约、依赖顺序、分支、超时、重试、运行状态和结果汇总，不负责内置具体的下载器或模型服务。
+
+首版不包含 HTTP streaming、gRPC、非 JSON 协议及通用连接池配置。`function` 的 `http.get()` 同样默认阻止私网 / 本机地址，只有 Flow 显式配置 allowlist 与 `allow_private_hosts` 才开放。

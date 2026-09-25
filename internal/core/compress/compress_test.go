@@ -243,6 +243,21 @@ func TestLLMSessionSummarizerUsesModelSummary(t *testing.T) {
 	}
 }
 
+func TestFilterNewMessagesSinceLatestCompaction(t *testing.T) {
+	latest := protocol.NewSummaryMessage("latest compacted state", "latest.json")
+	older := protocol.NewSummaryMessage("older compacted state", "older.json")
+	recent := protocol.NewTextMessage(protocol.RoleUser, "new request after compaction")
+	tool := protocol.NewMessage(protocol.RoleAssistant, protocol.ToolUseBlock("call-1", "bash", map[string]any{"command": "pwd"}))
+
+	got := filterNewMessagesSinceLastCompaction([]protocol.Message{latest, older, recent, tool})
+	if len(got) != 2 {
+		t.Fatalf("expected only new messages after the latest summary, got %d: %+v", len(got), got)
+	}
+	if protocol.MessageText(got[0]) != "new request after compaction" || got[1].Content[0].Type != protocol.BlockToolUse {
+		t.Fatalf("unexpected incremental region: %+v", got)
+	}
+}
+
 func TestLLMSessionSummarizerFallsBackOnModelFailure(t *testing.T) {
 	dir := t.TempDir()
 	compressor := NewCompressor(dir)

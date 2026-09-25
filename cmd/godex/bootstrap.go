@@ -29,6 +29,13 @@ func prepareRuntimeArgs() (config.Options, []string, bool, error) {
 	if err != nil {
 		return config.Options{}, nil, false, err
 	}
+	if !debug.PprofAddrSet && len(args) > 0 && args[0] == "serve" {
+		serviceOpts := servicecontrol.CurrentOptions()
+		debug.PprofAddr, err = servicecontrol.LoadPprofAddr(os.Getenv("GODEX_HOME"), serviceOpts.Name)
+		if err != nil {
+			return config.Options{}, nil, false, fmt.Errorf("load service pprof setting: %w", err)
+		}
+	}
 	if err := startPprofServer(debug.PprofAddr); err != nil {
 		return config.Options{}, nil, false, err
 	}

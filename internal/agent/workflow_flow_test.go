@@ -85,6 +85,7 @@ func TestWorkflowDecisionNodeHighConfidenceAutoBranches(t *testing.T) {
 	a.SetDecisionCaller(caller)
 
 	created := decisionTestWorkflow(t, a, "wf_decision_auto", branchEdges())
+	cleanupWorkflowAfterTest(t, a, "wf_decision_auto")
 	if created.Pending != 1 {
 		t.Fatalf("expected one pending decision node, got %+v", created)
 	}
@@ -137,6 +138,7 @@ func TestWorkflowDecisionNodeConfidencePredicateRoutes(t *testing.T) {
 		},
 	}
 	decisionTestWorkflow(t, a, "wf_decision_conf", edges)
+	cleanupWorkflowAfterTest(t, a, "wf_decision_conf")
 	started := runWorkflowTool(t, a, context.Background(), map[string]interface{}{
 		"action": "start", "workflow_id": "wf_decision_conf",
 	})
@@ -152,6 +154,7 @@ func TestWorkflowDecisionFailClosedRoutesToFallbackWithoutCaller(t *testing.T) {
 	// No SetDecisionCaller: decision model is not configured.
 
 	decisionTestWorkflow(t, a, "wf_decision_closed", branchEdges())
+	cleanupWorkflowAfterTest(t, a, "wf_decision_closed")
 	started := runWorkflowTool(t, a, context.Background(), map[string]interface{}{
 		"action": "start", "workflow_id": "wf_decision_closed",
 	})
@@ -197,6 +200,7 @@ func TestWorkflowDecisionFailOpenUsesDefaultChoice(t *testing.T) {
 				"append": map[string]interface{}{"id": "auto_run", "prompt": "auto"}},
 		},
 	})
+	cleanupWorkflowAfterTest(t, a, "wf_decision_open")
 	started := runWorkflowTool(t, a, context.Background(), map[string]interface{}{
 		"action": "start", "workflow_id": "wf_decision_open",
 	})
@@ -350,6 +354,7 @@ func TestWorkflowDecisionStopsAtMaxAttemptsThenFailClosed(t *testing.T) {
 				"append": map[string]interface{}{"id": "llm_fallback", "prompt": "fallback"}},
 		},
 	})
+	cleanupWorkflowAfterTest(t, a, "wf_decision_retry_cap")
 	start := func() workflowView {
 		return runWorkflowTool(t, a, context.Background(), map[string]interface{}{
 			"action": "start", "workflow_id": "wf_decision_retry_cap",

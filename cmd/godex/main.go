@@ -464,6 +464,7 @@ func main() {
 				noderegistry.NewLocalHeartbeat(controlRegistry, selfNode, time.Duration(cfg.Control.HeartbeatSeconds)*time.Second),
 				relayHub,
 				forwardServer,
+				service,
 				channelManager,
 				cronService,
 				heartbeatService,
@@ -502,19 +503,19 @@ func main() {
 	}
 }
 
-// splitDebugArgs separates debug flags from the rest of the argv
-// before config parsing. We accept the same prefix set as
-// parseDebugFlags. Unknown debug-prefixed arguments are left in the
-// remainder so parseDebugFlags can report them with a precise error.
+// splitDebugArgs extracts leading global debug flags before the command.
+// Flags after the first command token remain available to that command's
+// own flag set.
 func splitDebugArgs(args []string) (debug []string, remainder []string) {
-	for _, arg := range args {
+	for index, arg := range args {
 		switch {
 		case strings.HasPrefix(arg, "--pprof-addr="),
 			strings.HasPrefix(arg, "--dump-dir="),
 			strings.HasPrefix(arg, "--heap-dump="):
 			debug = append(debug, arg)
 		default:
-			remainder = append(remainder, arg)
+			remainder = append(remainder, args[index:]...)
+			return debug, remainder
 		}
 	}
 	return debug, remainder

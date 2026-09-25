@@ -5,13 +5,19 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/flow"
+	"github.com/tim5wang/godex/internal/platform/idgen"
 )
+
+// ErrFlowIdempotencyConflict means a gateway idempotency key was reused for
+// a different version/inputs payload.
+var ErrFlowIdempotencyConflict = errors.New("idempotency key was already used with a different request")
 
 // FlowVersionView is the public projection of one stored flow version.
 type FlowVersionView struct {
@@ -56,12 +62,18 @@ type FlowRunView struct {
 	FinishedAt time.Time      `json:"finished_at,omitempty"`
 }
 
+// FlowRunRef identifies an auto-scheduled run for the backend reconciler.
+type FlowRunRef struct {
+	FlowID string `json:"flow_id"`
+	RunID  string `json:"run_id"`
+}
+
 // FlowCreateArgs is the body of flow creation/update.
 type FlowCreateArgs struct {
-	FlowID   string          `json:"flow_id"`
-	Version  string          `json:"version"`
-	Status   string          `json:"status,omitempty"`
-	Def      *flow.Definition `json:"definition"`
+	FlowID  string           `json:"flow_id"`
+	Version string           `json:"version"`
+	Status  string           `json:"status,omitempty"`
+	Def     *flow.Definition `json:"definition"`
 	// SessionID binds the flow to the chat session that created it
 	// (flowSessionID(ctx) from create_flow). Empty in headless/UI calls.
 	SessionID string `json:"session_id,omitempty"`
@@ -318,54 +330,82 @@ func (a *Agent) ResolveRunVersion(flowID, version string) (flowVersionRecord, er
 // inputs, creates the durable workflow and writes the run record. It returns
 // the run view with a running workflow ready for StartFlowRun.
 func (a *Agent) CreateFlowRun(ctx context.Context, flowID, version string, inputs map[string]any) (FlowRunView, error) {
+	view, _, err := a.CreateFlowRunIdempotent(ctx, flowID, version, inputs, "", "")
+	return view, err
+}
+
+// CreateFlowRunIdempotent creates or replays a FlowRun. Idempotency metadata
+// is stored in the same durable run record as the run itself. keyHash must
+// already include the caller/biz-key and route namespace; neither hash
+// exposes the caller's raw idempotency key on disk.
+func (a *Agent) CreateFlowRunIdempotent(ctx context.Context, flowID, version string, inputs map[string]any, keyHash, requestHash string) (FlowRunView, bool, error) {
 	if a == nil || a.flows == nil || a.workflows == nil {
-		return FlowRunView{}, fmt.Errorf("flow runtime unavailable")
+		return FlowRunView{}, false, fmt.Errorf("flow runtime unavailable")
+	}
+	if strings.TrimSpace(keyHash) != "" {
+		existing, found, err := a.flows.findIdempotentRun(flowID, keyHash)
+		if err != nil {
+			return FlowRunView{}, false, err
+		}
+		if found {
+			if existing.IdempotencyRequestHash != requestHash {
+				return FlowRunView{}, false, ErrFlowIdempotencyConflict
+			}
+			return flowRunView(existing), false, nil
+		}
 	}
 	rec, err := a.ResolveRunVersion(flowID, version)
 	if err != nil {
-		return FlowRunView{}, err
+		return FlowRunView{}, false, err
+	}
+	if err := flow.ValidateInputValues(rec.Flow, inputs); err != nil {
+		return FlowRunView{}, false, err
 	}
 	if rec.Compiled == nil {
-		return FlowRunView{}, fmt.Errorf("version %s has no compiled artifact", rec.Version)
+		return FlowRunView{}, false, fmt.Errorf("version %s has no compiled artifact", rec.Version)
 	}
 	nodes, edges, err := compileFlowToWorkflowInputs(rec.Compiled)
 	if err != nil {
-		return FlowRunView{}, err
+		return FlowRunView{}, false, err
 	}
 	// Each run gets its own durable workflow (unique workflow_id), so
 	// repeated runs of the same version never collide.
-	runID := "fr_" + fmt.Sprintf("%d", time.Now().UTC().UnixNano())
+	runID := idgen.New("fr_", 12)
 	workflowID := "fl_" + flowID + "_" + rec.Version + "_" + runID
 	sessionID := flowSessionID(ctx)
 	state, err := a.workflows.create(sessionID, workflowID, nodes, edges)
 	if err != nil {
-		return FlowRunView{}, err
+		return FlowRunView{}, false, err
 	}
-	// P2.3: persist the run inputs on the workflow summary so prompt variable
-	// references {{inputs.<name>}} resolve at run time.
-	if len(inputs) > 0 {
-		state.Summary.RunInputs = inputs
-		if err := a.workflows.save(state); err != nil {
-			return FlowRunView{}, err
-		}
+	state.Summary.RunInputs = inputs
+	state.Summary.RunOutputSpec = append([]flow.VarDef{}, rec.Compiled.Outputs...)
+	if rec.Compiled.TimeoutSec > 0 {
+		state.Summary.RunTimeoutAt = time.Now().UTC().Add(time.Duration(rec.Compiled.TimeoutSec) * time.Second)
+	}
+	if err := a.workflows.save(state); err != nil {
+		return FlowRunView{}, false, err
 	}
 	now := time.Now().UTC()
 	runRec := flowRunRecord{
-		RunID:      runID,
-		FlowID:     flowID,
-		Version:    rec.Version,
-		Digest:     rec.Compiled.Digest,
-		SessionID:  sessionID,
-		WorkflowID: state.Summary.ID,
-		Status:     workflowStatusPending,
-		Inputs:     inputs,
-		StartedAt:  now,
-		UpdatedAt:  now,
+		RunID:                  runID,
+		FlowID:                 flowID,
+		Version:                rec.Version,
+		Digest:                 rec.Compiled.Digest,
+		SessionID:              sessionID,
+		WorkflowID:             state.Summary.ID,
+		Status:                 workflowStatusPending,
+		Inputs:                 inputs,
+		OutputSpec:             append([]flow.VarDef{}, rec.Compiled.Outputs...),
+		RunTimeoutAt:           state.Summary.RunTimeoutAt,
+		IdempotencyKeyHash:     strings.TrimSpace(keyHash),
+		IdempotencyRequestHash: strings.TrimSpace(requestHash),
+		StartedAt:              now,
+		UpdatedAt:              now,
 	}
 	if err := a.flows.saveRun(flowID, runRec); err != nil {
-		return FlowRunView{}, err
+		return FlowRunView{}, false, err
 	}
-	return flowRunView(runRec), nil
+	return flowRunView(runRec), true, nil
 }
 
 // StartFlowRun starts the durable workflow of a run (ready nodes execute).
@@ -377,6 +417,9 @@ func (a *Agent) StartFlowRun(ctx context.Context, flowID, runID string) (FlowRun
 	if err != nil {
 		return FlowRunView{}, err
 	}
+	if workflowTerminalStatus(rec.Status) {
+		return flowRunView(rec), nil
+	}
 	if rec.WorkflowID == "" {
 		return FlowRunView{}, fmt.Errorf("run %s has no workflow", runID)
 	}
@@ -385,10 +428,98 @@ func (a *Agent) StartFlowRun(ctx context.Context, flowID, runID string) (FlowRun
 		return FlowRunView{}, err
 	}
 	rec.Status = view.Status
-	rec.UpdatedAt = time.Now().UTC()
+	rec.UpdatedAt = view.runUpdated
+	if rec.UpdatedAt.IsZero() {
+		rec.UpdatedAt = time.Now().UTC()
+	}
+	rec.Outputs = view.runOutputs
+	rec.Error = view.runError
+	rec.FinishedAt = time.Time{}
+	if workflowTerminalStatus(rec.Status) {
+		rec.FinishedAt = rec.UpdatedAt
+	}
 	if err := a.flows.saveRun(flowID, rec); err != nil {
 		return FlowRunView{}, err
 	}
+	a.maybeSendOnComplete(flowID, runID, &rec)
+	return flowRunView(rec), nil
+}
+
+// AutoScheduledFlowRuns lists non-terminal FlowRuns that were started in
+// normal (not debug single-step) mode. It is used once when the backend
+// reconciler starts, to resume runs after a process restart.
+func (a *Agent) AutoScheduledFlowRuns() ([]FlowRunRef, error) {
+	if a == nil || a.flows == nil || a.workflows == nil {
+		return nil, fmt.Errorf("flow runtime unavailable")
+	}
+	flowIDs, err := a.flows.listFlows()
+	if err != nil {
+		return nil, err
+	}
+	var refs []FlowRunRef
+	for _, flowID := range flowIDs {
+		runs, err := a.flows.listRuns(flowID)
+		if err != nil {
+			return nil, err
+		}
+		for _, rec := range runs {
+			if rec.WorkflowID == "" || workflowTerminalStatus(rec.Status) {
+				continue
+			}
+			state, err := a.workflowState(rec.WorkflowID)
+			if err != nil {
+				continue
+			}
+			if state.Summary.AutoSchedule {
+				refs = append(refs, FlowRunRef{FlowID: rec.FlowID, RunID: rec.RunID})
+			}
+		}
+	}
+	return refs, nil
+}
+
+// AdvanceFlowRun reconciles one active auto-scheduled run. It refreshes job
+// completions, evaluates dynamic edges, and starts newly-ready nodes.
+func (a *Agent) AdvanceFlowRun(ctx context.Context, flowID, runID string) (FlowRunView, error) {
+	if a == nil || a.flows == nil || a.workflows == nil {
+		return FlowRunView{}, fmt.Errorf("flow runtime unavailable")
+	}
+	rec, err := a.flows.loadRun(flowID, runID)
+	if err != nil {
+		return FlowRunView{}, err
+	}
+	if workflowTerminalStatus(rec.Status) {
+		return flowRunView(rec), nil
+	}
+	if rec.WorkflowID == "" {
+		return FlowRunView{}, fmt.Errorf("run %s has no workflow", runID)
+	}
+	state, err := a.workflowState(rec.WorkflowID)
+	if err != nil {
+		return FlowRunView{}, err
+	}
+	a.cancelHumanTasksForCanceledNodes(runID, state)
+	if state.Summary.AutoSchedule && !workflowTerminalStatus(state.Summary.Status) {
+		if _, err := a.advanceWorkflowReadyNodes(ctx, rec.WorkflowID, false, "advance"); err != nil {
+			return FlowRunView{}, err
+		}
+		state, err = a.workflowState(rec.WorkflowID)
+		if err != nil {
+			return FlowRunView{}, err
+		}
+	}
+	stateChanged := rec.Status != state.Summary.Status ||
+		!workflowTerminalStatus(rec.Status) && workflowTerminalStatus(state.Summary.Status) ||
+		state.Summary.UpdatedAt.After(rec.UpdatedAt)
+	if !stateChanged {
+		return flowRunView(rec), nil
+	}
+	a.cancelHumanTasksForCanceledNodes(runID, state)
+	syncFlowRunRecord(&rec, state)
+	if err := a.flows.saveRun(flowID, rec); err != nil {
+		return FlowRunView{}, err
+	}
+	a.maybeSendOnComplete(flowID, runID, &rec)
 	return flowRunView(rec), nil
 }
 
@@ -396,22 +527,22 @@ func (a *Agent) StartFlowRun(ctx context.Context, flowID, runID string) (FlowRun
 // workflow node states (status/outputs per node) so the UI can render the
 // per-node context variables after each step.
 type StepFlowView struct {
-	RunID      string         `json:"run_id"`
-	FlowID     string         `json:"flow_id"`
-	Status     string         `json:"status"`
-	Started    string         `json:"started,omitempty"`
-	Nodes      []NodeStepView `json:"nodes"`
-	Terminal   bool           `json:"terminal"`
+	RunID    string         `json:"run_id"`
+	FlowID   string         `json:"flow_id"`
+	Status   string         `json:"status"`
+	Started  string         `json:"started,omitempty"`
+	Nodes    []NodeStepView `json:"nodes"`
+	Terminal bool           `json:"terminal"`
 }
 
 // NodeStepView is one node's debug state.
 type NodeStepView struct {
-	ID       string         `json:"id"`
-	Kind     string         `json:"kind"`
-	Title    string         `json:"title,omitempty"`
-	Status   string         `json:"status"`
-	Outputs  map[string]any `json:"outputs,omitempty"`
-	Error    string         `json:"error,omitempty"`
+	ID       string                  `json:"id"`
+	Kind     string                  `json:"kind"`
+	Title    string                  `json:"title,omitempty"`
+	Status   string                  `json:"status"`
+	Outputs  map[string]any          `json:"outputs,omitempty"`
+	Error    string                  `json:"error,omitempty"`
 	Decision *workflowDecisionResult `json:"decision,omitempty"`
 }
 
@@ -435,6 +566,10 @@ func (a *Agent) StepFlowRun(ctx context.Context, flowID, runID string) (*StepFlo
 	}
 	rec.Status = view.Status
 	rec.UpdatedAt = time.Now().UTC()
+	rec.FinishedAt = time.Time{}
+	if workflowTerminalStatus(rec.Status) {
+		rec.FinishedAt = rec.UpdatedAt
+	}
 	if err := a.flows.saveRun(flowID, rec); err != nil {
 		return nil, err
 	}
@@ -493,10 +628,97 @@ func (a *Agent) WaitFlowRun(ctx context.Context, flowID, runID string, timeoutMS
 	if timeoutMS <= 0 {
 		timeoutMS = 60000
 	}
-	if _, err := a.waitWorkflow(ctx, rec.WorkflowID, "all", timeoutMS); err != nil {
+	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	state, err := a.workflowState(rec.WorkflowID)
+	if err != nil {
 		return FlowRunView{}, err
 	}
+	if !state.Summary.AutoSchedule {
+		waitMS := timeoutMS
+		if !state.Summary.RunTimeoutAt.IsZero() {
+			remaining := time.Until(state.Summary.RunTimeoutAt)
+			if remaining <= 0 {
+				_, _ = a.workflowState(rec.WorkflowID) // applies persisted run timeout and cancels active work
+				return a.RefreshFlowRun(flowID, runID)
+			}
+			if remaining.Milliseconds() < int64(waitMS) {
+				waitMS = max(1, int(remaining.Milliseconds()))
+			}
+		}
+		if _, err := a.waitWorkflow(ctx, rec.WorkflowID, "all", waitMS); err != nil {
+			return FlowRunView{}, err
+		}
+		return a.RefreshFlowRun(flowID, runID)
+	}
+	for !workflowTerminalStatus(state.Summary.Status) {
+		if ctx.Err() != nil || time.Until(deadline) <= 0 {
+			break
+		}
+		if _, err := a.advanceWorkflowReadyNodes(ctx, rec.WorkflowID, false, ""); err != nil {
+			return FlowRunView{}, err
+		}
+		state, err = a.workflowState(rec.WorkflowID)
+		if err != nil {
+			return FlowRunView{}, err
+		}
+		if workflowTerminalStatus(state.Summary.Status) {
+			break
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		waitFor := min(remaining, 250*time.Millisecond)
+		jobIDs := workflowRunningJobIDs(state)
+		if len(jobIDs) > 0 {
+			_, err := waitSubagents(ctx, a, subagentWaitRequest{
+				JobIDs: jobIDs, Mode: "any", TimeoutMS: max(1, int(waitFor.Milliseconds())),
+			})
+			if err != nil {
+				return FlowRunView{}, err
+			}
+		} else {
+			timer := time.NewTimer(waitFor)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+			case <-timer.C:
+			}
+		}
+	}
 	return a.RefreshFlowRun(flowID, runID)
+}
+
+func workflowRunningJobIDs(state workflowState) []string {
+	var jobIDs []string
+	for _, node := range state.Nodes {
+		if node.Status == workflowStatusRunning && strings.TrimSpace(node.JobID) != "" {
+			jobIDs = append(jobIDs, node.JobID)
+		}
+	}
+	return jobIDs
+}
+
+func syncFlowRunRecord(rec *flowRunRecord, state workflowState) {
+	if rec == nil {
+		return
+	}
+	if workflowTerminalStatus(rec.Status) {
+		timeoutOverride := state.Summary.Status == workflowStatusError &&
+			strings.HasPrefix(strings.TrimSpace(state.Summary.Error), "flow run timed out after ")
+		if !timeoutOverride {
+			return
+		}
+	}
+	rec.Status = state.Summary.Status
+	rec.UpdatedAt = time.Now().UTC()
+	rec.Outputs = state.Summary.RunOutputs
+	rec.Error = state.Summary.Error
+	rec.FinishedAt = time.Time{}
+	if workflowTerminalStatus(state.Summary.Status) {
+		rec.FinishedAt = state.Summary.UpdatedAt
+	}
 }
 
 // RefreshFlowRun re-reads the run record (status synced from the workflow).
@@ -510,9 +732,8 @@ func (a *Agent) RefreshFlowRun(flowID, runID string) (FlowRunView, error) {
 	}
 	if rec.WorkflowID != "" {
 		if state, err := a.workflowState(rec.WorkflowID); err == nil {
-			rec.Status = state.Summary.Status
-			rec.UpdatedAt = time.Now().UTC()
-			rec.FinishedAt = state.Summary.UpdatedAt
+			a.cancelHumanTasksForCanceledNodes(runID, state)
+			syncFlowRunRecord(&rec, state)
 			_ = a.flows.saveRun(flowID, rec)
 		}
 	}
@@ -531,22 +752,48 @@ func (a *Agent) CancelFlowRun(ctx context.Context, flowID, runID string) (FlowRu
 	if err != nil {
 		return FlowRunView{}, err
 	}
+	if workflowTerminalStatus(rec.Status) {
+		return flowRunView(rec), nil
+	}
 	if rec.WorkflowID != "" {
-		if _, err := a.cancelWorkflowNode(ctx, rec.WorkflowID, ""); err != nil {
+		state, err := a.cancelWorkflowNode(ctx, rec.WorkflowID, "")
+		if err != nil {
 			return FlowRunView{}, err
 		}
+		syncFlowRunRecord(&rec, state)
+		a.cancelHumanTasksForCanceledNodes(runID, state)
+	} else {
+		rec.Status = workflowStatusCanceled
+		rec.UpdatedAt = time.Now().UTC()
+		rec.FinishedAt = rec.UpdatedAt
 	}
-	rec.Status = workflowStatusCanceled
-	rec.UpdatedAt = time.Now().UTC()
-	rec.FinishedAt = rec.UpdatedAt
 	if err := a.flows.saveRun(flowID, rec); err != nil {
 		return FlowRunView{}, err
 	}
-	// Cancel is a terminal state: deliver the on_complete webhook directly
-	// (RefreshFlowRun cannot infer cancel from the workflow state because
-	// completed + canceled node mix resolves to "running").
 	a.maybeSendOnComplete(flowID, runID, &rec)
 	return flowRunView(rec), nil
+}
+
+func (a *Agent) cancelHumanTasksForCanceledNodes(runID string, state workflowState) {
+	if a == nil || a.humanTasks == nil {
+		return
+	}
+	tasks, err := a.humanTasks.listRunTasks(runID)
+	if err != nil {
+		return
+	}
+	for _, task := range tasks {
+		if task.Status != humanTaskStatusPending {
+			continue
+		}
+		node := workflowNodeByID(state.Nodes, task.NodeID)
+		if node == nil || node.Status != workflowStatusCanceled {
+			continue
+		}
+		task.Status = humanTaskStatusCanceled
+		task.UpdatedAt = time.Now().UTC()
+		_ = a.humanTasks.saveTask(task)
+	}
 }
 
 // ListFlowRuns returns all runs of one flow (newest first).
@@ -585,12 +832,12 @@ func (a *Agent) FlowRunEvents(flowID, runID string) ([]map[string]any, error) {
 
 func flowVersionView(rec flowVersionRecord) FlowVersionView {
 	v := FlowVersionView{
-		FlowID:      "",
-		Version:     rec.Version,
-		Status:      rec.Status,
-		CreatedAt:   rec.CreatedAt,
-		UpdatedAt:   rec.UpdatedAt,
-		Definition:  rec.Flow,
+		FlowID:     "",
+		Version:    rec.Version,
+		Status:     rec.Status,
+		CreatedAt:  rec.CreatedAt,
+		UpdatedAt:  rec.UpdatedAt,
+		Definition: rec.Flow,
 	}
 	if rec.Flow != nil {
 		v.FlowID = rec.Flow.FlowID

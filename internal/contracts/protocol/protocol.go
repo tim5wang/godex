@@ -42,10 +42,10 @@ const (
 )
 
 const (
-	KindSummary      MessageKind = "summary"
-	KindInbox        MessageKind = "inbox"
-	KindBackground   MessageKind = "background"
-	KindMemory       MessageKind = "memory"
+	KindSummary        MessageKind = "summary"
+	KindInbox          MessageKind = "inbox"
+	KindBackground     MessageKind = "background"
+	KindMemory         MessageKind = "memory"
 	KindLongTaskReflux MessageKind = "longtask_reflux"
 )
 
@@ -104,7 +104,7 @@ type Block struct {
 	// IsError records that a tool_result came from a failed invocation. It is
 	// persisted with the conversation so frontends can restore the correct
 	// failed state after a snapshot reload, and maps to Anthropic's is_error.
-	IsError   bool                   `json:"is_error,omitempty"`
+	IsError bool `json:"is_error,omitempty"`
 	// Signature is the opaque Anthropic thinking signature the
 	// client must echo back on the next turn to keep multi-turn
 	// reasoning context. The gateway only sets it on BlockThinking
@@ -195,8 +195,8 @@ type Usage struct {
 	// cached portion from the reported total, so downstream code can
 	// always compute the cache hit rate as
 	// CacheReadTokens / (InputTokens + CacheReadTokens).
-	InputTokens      int  `json:"input_tokens,omitempty"`
-	OutputTokens     int  `json:"output_tokens,omitempty"`
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 	// CacheReadTokens is the canonical cache-read field used by OpenAI-style
 	// providers (cached_tokens / cache_read_tokens) and is also what the
 	// usage reporting layer aggregates. The Anthropic alias
@@ -205,8 +205,8 @@ type Usage struct {
 	// CacheWriteTokens is the canonical cache-write field used by OpenAI-style
 	// providers (cache_creation_tokens). Anthropic's
 	// cache_creation_input_tokens is decoded into the same field below.
-	CacheWriteTokens int    `json:"cache_write_tokens,omitempty"`
-	Estimated        bool   `json:"estimated,omitempty"`
+	CacheWriteTokens int  `json:"cache_write_tokens,omitempty"`
+	Estimated        bool `json:"estimated,omitempty"`
 	// CacheReadTokensAnthropic / CacheWriteTokensAnthropic are alternate
 	// names that Anthropic uses; they are decoded into the canonical
 	// CacheReadTokens / CacheWriteTokens fields above. They are kept here
@@ -315,8 +315,8 @@ func MessageText(msg Message) string {
 	return BlocksText(msg.Content)
 }
 
-// LatestPersistentUserText returns the latest non-ephemeral user message with
-// non-blank text. It returns an empty string when no such message exists.
+// LatestPersistentUserText returns the latest non-ephemeral, non-summary user
+// message with non-blank text. It returns an empty string when none exists.
 func LatestPersistentUserText(messages []Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -324,6 +324,9 @@ func LatestPersistentUserText(messages []Message) string {
 			continue
 		}
 		if msg.Metadata != nil && msg.Metadata.Ephemeral {
+			continue
+		}
+		if msg.Metadata != nil && msg.Metadata.Kind == KindSummary {
 			continue
 		}
 		text := strings.TrimSpace(MessageText(msg))

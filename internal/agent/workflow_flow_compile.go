@@ -23,10 +23,13 @@ func compileFlowToWorkflowInputs(c *flow.Compiled) ([]workflowNodeInput, []workf
 		if err != nil {
 			return nil, nil, err
 		}
-		// E3a: Flow-level network policy rides on every function node so the
-		// sandbox HTTP bridge can enforce it per-run.
+		// E3a: Flow-level network policy rides on every outbound node so its
+		// HTTP client can enforce it per-run.
 		if ni.Function != nil {
 			ni.Function.Network = c.Network
+		}
+		if ni.Service != nil {
+			ni.Service.Network = c.Network
 		}
 		nodes = append(nodes, ni)
 	}
@@ -36,14 +39,17 @@ func compileFlowToWorkflowInputs(c *flow.Compiled) ([]workflowNodeInput, []workf
 		if err != nil {
 			return nil, nil, fmt.Errorf("edge %s: %w", e.ID, err)
 		}
-		// E3a: append-template function nodes (condition edges / branch cases /
-		// loop bodies) enforce the same Flow-level network policy.
+		// E3a: append-template outbound nodes enforce the same Flow policy.
 		if appendNode.Function != nil {
 			appendNode.Function.Network = c.Network
+		}
+		if appendNode.Service != nil {
+			appendNode.Service.Network = c.Network
 		}
 		edges = append(edges, workflowEdgeInput{
 			ID:            e.ID,
 			From:          e.From,
+			FromPrefix:    e.FromPrefix,
 			When:          flowConditionToWorkflow(e.When),
 			Append:        appendNode,
 			MaxIterations: e.MaxIterations,
@@ -53,21 +59,24 @@ func compileFlowToWorkflowInputs(c *flow.Compiled) ([]workflowNodeInput, []workf
 	return nodes, edges, nil
 }
 
-// compileFlowNode maps one flow.CompiledNode to a workflowNodeInput.
-// appendTemplate controls whether DependsOn/HandoffFrom are carried (append
-// templates get their deps set by the engine edge machinery, not statically).
+// compileFlowNode maps one flow.CompiledNode to a workflowNodeInput. Most
+// append templates have no dependencies; loop templates carry a {source}
+// dependency which is expanded by the workflow edge machinery.
 func compileFlowNode(n flow.CompiledNode, appendTemplate bool) (workflowNodeInput, error) {
 	ni := workflowNodeInput{
 		ID:         n.ID,
 		Kind:       flowKindToEngine(n.Kind),
 		Title:      n.Title,
 		Prompt:     n.Prompt,
+		TimeoutSec: n.TimeoutSec,
 		AgentType:  n.AgentType,
 		AgentRef:   n.AgentRef,
 		WriteScope: append([]string{}, n.WriteScope...),
 	}
-	if !appendTemplate {
+	if !appendTemplate || len(n.DependsOn) > 0 {
 		ni.DependsOn = append([]string{}, n.DependsOn...)
+	}
+	if !appendTemplate || len(n.HandoffFrom) > 0 {
 		ni.HandoffFrom = append([]string{}, n.HandoffFrom...)
 	}
 	if n.Retry != nil {
@@ -82,11 +91,18 @@ func compileFlowNode(n flow.CompiledNode, appendTemplate bool) (workflowNodeInpu
 		}
 	}
 	if n.Decision != nil {
+		timeoutMS := n.Decision.TimeoutMS
+		if n.TimeoutSec > 0 {
+			nodeTimeoutMS := n.TimeoutSec * 1000
+			if timeoutMS <= 0 || nodeTimeoutMS < timeoutMS {
+				timeoutMS = nodeTimeoutMS
+			}
+		}
 		ni.Decision = &workflowDecisionSpec{
 			Provider:      n.Decision.Provider,
 			Question:      n.Prompt,
 			DecisionType:  n.Decision.DecisionType,
-			TimeoutMS:     n.Decision.TimeoutMS,
+			TimeoutMS:     timeoutMS,
 			OnError:       n.Decision.OnError,
 			DefaultChoice: n.Decision.DefaultChoice,
 		}
@@ -95,21 +111,40 @@ func compileFlowNode(n flow.CompiledNode, appendTemplate bool) (workflowNodeInpu
 		}
 	}
 	if n.Human != nil {
+		timeoutMS := n.Human.TimeoutMS
+		if n.TimeoutSec > 0 {
+			nodeTimeoutMS := n.TimeoutSec * 1000
+			if timeoutMS <= 0 || nodeTimeoutMS < timeoutMS {
+				timeoutMS = nodeTimeoutMS
+			}
+		}
 		ni.Human = &workflowHumanSpec{
 			Queue:          n.Human.Queue,
 			AssigneePolicy: n.Human.AssigneePolicy,
 			Form:           n.Human.Form,
-			TimeoutMS:      n.Human.TimeoutMS,
+			TimeoutMS:      timeoutMS,
 			OnTimeout:      n.Human.OnTimeout,
 			ResultVar:      n.Human.ResultVar,
 		}
 	}
 	if n.Function != nil {
 		ni.Function = &workflowFunctionSpec{
-			Runtime: n.Function.Runtime,
-			Source:  n.Function.Source,
-			Ref:     n.Function.Ref,
-			Handler: n.Function.Handler,
+			Runtime:      n.Function.Runtime,
+			Source:       n.Function.Source,
+			Ref:          n.Function.Ref,
+			Handler:      n.Function.Handler,
+			TimeoutSec:   n.TimeoutSec,
+			InputSchema:  append([]byte{}, n.Function.InputSchema...),
+			OutputSchema: append([]byte{}, n.Function.OutputSchema...),
+		}
+	}
+	if n.Service != nil {
+		ni.Service = &workflowServiceSpec{
+			Method:  n.Service.Method,
+			URL:     n.Service.URL,
+			Headers: n.Service.Headers,
+			Body:    append([]byte{}, n.Service.Body...),
+			Auth:    n.Service.Auth,
 		}
 	}
 	// E3b: optional bash scripts around the node's main work.
@@ -118,7 +153,10 @@ func compileFlowNode(n flow.CompiledNode, appendTemplate bool) (workflowNodeInpu
 	// P2.3: carry the declared typed outputs so the engine can resolve
 	// {{nodes.<id>.outputs.<field>}} references at run time.
 	for _, v := range n.Outputs {
-		ni.OutputSpec = append(ni.OutputSpec, workflowVarDef{Name: v.Name, Type: v.Type, Desc: v.Desc})
+		ni.OutputSpec = append(ni.OutputSpec, workflowVarDef{
+			Name: v.Name, Type: v.Type, Desc: v.Desc, Required: v.Required,
+			Schema: append([]byte{}, v.Schema...),
+		})
 	}
 	if n.Branch != nil {
 		b := &workflowBranchSpec{
@@ -154,6 +192,8 @@ func flowKindToEngine(k string) string {
 		return workflowNodeKindUserInput
 	case flow.KindFunction:
 		return workflowNodeKindFunction
+	case flow.KindService:
+		return workflowNodeKindService
 	default:
 		return k
 	}

@@ -98,6 +98,10 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
   const stableOnSubmitCard = useCallback((value: string) => latestCallbacks.current.onSubmitCard?.(value), []);
   const stableOnForkTurn = useCallback((item: FeedItem) => latestCallbacks.current.onForkTurn?.(item), []);
   const stableOnEditMessage = useCallback((item: FeedItem) => latestCallbacks.current.onEditMessage?.(item), []);
+  const latestTurnItemID = useMemo(
+    () => [...items].reverse().find((item) => Boolean(item.segments?.length) && !item.archiveOnly)?.id ?? null,
+    [items],
+  );
 
   // Rebuild the bubble list only when the feed or a rendering-relevant prop
   // actually changes; a re-render caused by unrelated props (e.g. `running`
@@ -125,6 +129,7 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
           voiceEnabled={voiceEnabled}
           onForkTurn={stableOnForkTurn}
           onEditMessage={stableOnEditMessage}
+          isLatestTurn={item.id === latestTurnItemID}
           running={running}
           activeTurnId={activeTurnId}
         />
@@ -135,7 +140,7 @@ export function MessageFeedV2({ items, onToggleTool, onSaveToNote, savingToNote 
       variant: item.kind === "user" ? "filled" : "borderless",
       shape: "corner",
     }));
-  }, [items, stableOnToggleTool, stableOnSaveToNote, stableOnOpenInFiles, stableOnSubmitCard, stableOnForkTurn, stableOnEditMessage, copyItem, savingToNote, hasNoteContext, workspaceDir, token, voiceEnabled, running, activeTurnId, botName, botAvatar, botColor, t]);
+  }, [items, stableOnToggleTool, stableOnSaveToNote, stableOnOpenInFiles, stableOnSubmitCard, stableOnForkTurn, stableOnEditMessage, copyItem, savingToNote, hasNoteContext, workspaceDir, token, voiceEnabled, running, activeTurnId, botName, botAvatar, botColor, t, latestTurnItemID]);
 
   if (items.length === 0) {
     return <Empty description="No messages yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
@@ -171,6 +176,7 @@ const FeedItemBody = memo(function FeedItemBody({
   voiceEnabled,
   onForkTurn,
   onEditMessage,
+  isLatestTurn = false,
   running = false,
   activeTurnId,
 }: {
@@ -188,6 +194,7 @@ const FeedItemBody = memo(function FeedItemBody({
   voiceEnabled?: boolean;
   onForkTurn?: (item: FeedItem) => void;
   onEditMessage?: (item: FeedItem) => void;
+  isLatestTurn?: boolean;
   running?: boolean;
   activeTurnId?: string;
 }) {
@@ -224,7 +231,7 @@ const FeedItemBody = memo(function FeedItemBody({
             </Fragment>
           ))}
           {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
-          <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
+          <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} isLatestTurn={isLatestTurn} onOpenInFiles={onOpenInFiles} />
           <TurnActions item={item} onCopy={() => onCopyItem(item)} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={item.archiveOnly ? undefined : onForkTurn} />
         </div>
       );
@@ -252,7 +259,7 @@ const FeedItemBody = memo(function FeedItemBody({
           </>
         ) : null}
         {item.attachments?.length ? <AttachmentList attachments={item.attachments} /> : null}
-        <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} onOpenInFiles={onOpenInFiles} />
+        <ChangesCard segments={item.segments} workspaceDir={workspaceDir} token={token} isLatestTurn={isLatestTurn} onOpenInFiles={onOpenInFiles} />
         <TurnActions item={item} onCopy={() => onCopyItem(item)} copyLabel={copyLabel} saveLabel={saveLabel} onSaveToNote={onSaveToNote} savingToNote={savingToNote} token={token} voiceEnabled={voiceEnabled} onForkTurn={item.archiveOnly ? undefined : onForkTurn} />
       </div>
     );

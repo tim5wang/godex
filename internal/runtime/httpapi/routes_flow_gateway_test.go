@@ -36,8 +36,8 @@ func newFlowGatewayTestServer(t *testing.T) (*httptest.Server, *usage.Service) {
 	return server, usageService
 }
 
-// gatewayFlowDef is a tiny flow that completes without a live worker: a
-// decision node that auto-chooses "ok" then a step node.
+// gatewayFlowDef is a tiny flow that completes without a live subagent worker:
+// a decision node followed by a synchronous function node.
 func gatewayFlowDef() *flow.Definition {
 	return &flow.Definition{
 		FlowID:  "fl_gateway_e2e",
@@ -47,7 +47,10 @@ func gatewayFlowDef() *flow.Definition {
 		Nodes: []flow.Node{
 			{ID: "decide", Kind: flow.KindDecision, Prompt: "ok?",
 				Decision: &flow.DecisionSpec{DecisionType: "choice", Choices: []flow.Choice{{ID: "ok"}}}},
-			{ID: "work", Kind: flow.KindStep, Prompt: "finalize"},
+			{ID: "work", Kind: flow.KindFunction, Function: &flow.FunctionSpec{
+				Runtime: flow.FunctionRuntimeJS,
+				Source:  `function handle(ctx, event) { return {done: true}; }`,
+			}},
 		},
 		Edges: []flow.Edge{
 			{ID: "e1", From: "decide", To: "work", EdgeType: flow.EdgeDataDependency},
@@ -138,6 +141,32 @@ func TestFlowGatewayDispatchesFlowMode(t *testing.T) {
 	}
 }
 
+func TestFlowGatewayWaitReturnsTerminalRunSynchronously(t *testing.T) {
+	server, usageService := newFlowGatewayTestServer(t)
+	seedPublishedFlow(t, server)
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{
+		Name: "refund-sync", FlowID: "fl_gateway_e2e", Pin: "123456",
+	})
+	if err != nil {
+		t.Fatalf("create biz key: %v", err)
+	}
+
+	resp, body := doGateway(t, server, created.Secret, "refund", map[string]any{
+		"wait_ms": 1000,
+		"inputs":  map[string]any{"order_id": "o-sync"},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected completed synchronous call to return 200, got %d: %s", resp.StatusCode, body)
+	}
+	var view agent.FlowRunView
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatalf("decode synchronous run: %v: %s", err, body)
+	}
+	if view.RunID == "" || view.Status != "completed" {
+		t.Fatalf("expected terminal completed FlowRun, got %+v", view)
+	}
+}
+
 // TestFlowGatewayDispatchStepMode verifies a biz key without FlowID routes to
 // the single-step agent path (prompt-driven, step response envelope).
 func TestFlowGatewayDispatchStepMode(t *testing.T) {
@@ -212,6 +241,157 @@ func TestFlowGatewayIdempotencyKeyDedups(t *testing.T) {
 	}
 	if runID2, _ := v2["run_id"].(string); runID2 != runID1 {
 		t.Fatalf("expected same run_id for idempotent call: first=%s second=%s", runID1, runID2)
+	}
+
+	// A transport-only wait preference is not part of the operation identity.
+	withWait := map[string]any{
+		"idempotency_key": "dup-1",
+		"inputs":          map[string]any{"order_id": "o-1"},
+		"wait_ms":         1,
+	}
+	resp3, b3 := doGateway(t, server, created.Secret, "refund", withWait)
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("same request with a different wait_ms: %d %s", resp3.StatusCode, b3)
+	}
+	var v3 map[string]any
+	if err := json.Unmarshal(b3, &v3); err != nil {
+		t.Fatalf("unmarshal third: %v\n%s", err, b3)
+	}
+	if runID3, _ := v3["run_id"].(string); runID3 != runID1 {
+		t.Fatalf("wait_ms changed the idempotent run: first=%s third=%s", runID1, runID3)
+	}
+
+	// Reusing the same key for a different payload is a client error, not a
+	// silent replay of the first operation.
+	conflicting := map[string]any{
+		"idempotency_key": "dup-1",
+		"inputs":          map[string]any{"order_id": "o-2"},
+	}
+	resp4, b4 := doGateway(t, server, created.Secret, "refund", conflicting)
+	if resp4.StatusCode != http.StatusConflict || !strings.Contains(string(b4), "idempotency_conflict") {
+		t.Fatalf("expected idempotency conflict, got %d %s", resp4.StatusCode, b4)
+	}
+}
+
+func TestFlowGatewayConcurrentIdempotencyCreatesOneRun(t *testing.T) {
+	server, usageService := newFlowGatewayTestServer(t)
+	seedPublishedFlow(t, server)
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{
+		Name: "refund-concurrent", FlowID: "fl_gateway_e2e", Pin: "123456",
+	})
+	if err != nil {
+		t.Fatalf("create biz key: %v", err)
+	}
+
+	const requests = 4
+	type result struct {
+		status int
+		runID  string
+		err    error
+	}
+	results := make(chan result, requests)
+	for i := 0; i < requests; i++ {
+		go func() {
+			resp, body := doGateway(t, server, created.Secret, "refund", map[string]any{
+				"idempotency_key": "same-concurrent-key",
+				"inputs":          map[string]any{"order_id": "o-3"},
+			})
+			var view struct {
+				RunID string `json:"run_id"`
+			}
+			err := json.Unmarshal(body, &view)
+			results <- result{status: resp.StatusCode, runID: view.RunID, err: err}
+		}()
+	}
+	runID := ""
+	for i := 0; i < requests; i++ {
+		got := <-results
+		if got.status != http.StatusAccepted && got.status != http.StatusOK {
+			t.Fatalf("concurrent call status %d", got.status)
+		}
+		if got.err != nil || got.runID == "" {
+			t.Fatalf("decode concurrent response: run_id=%q err=%v", got.runID, got.err)
+		}
+		if runID == "" {
+			runID = got.runID
+		} else if got.runID != runID {
+			t.Fatalf("concurrent requests created different runs: %s vs %s", runID, got.runID)
+		}
+	}
+	runsResp, runsBody := doFlowJSON(t, http.MethodGet, server.URL+"/v1/flows/fl_gateway_e2e/runs", nil)
+	if runsResp.StatusCode != http.StatusOK {
+		t.Fatalf("list runs: %d %s", runsResp.StatusCode, runsBody)
+	}
+	var runs []agent.FlowRunView
+	if err := json.Unmarshal(runsBody, &runs); err != nil {
+		t.Fatalf("decode runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].RunID != runID {
+		t.Fatalf("expected exactly one run %s, got %+v", runID, runs)
+	}
+}
+
+func TestFlowGatewayConcurrentIndependentCallsCreateSeparateRuns(t *testing.T) {
+	server, usageService := newFlowGatewayTestServer(t)
+	seedPublishedFlow(t, server)
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{
+		Name: "refund-independent", FlowID: "fl_gateway_e2e", Pin: "123456",
+	})
+	if err != nil {
+		t.Fatalf("create biz key: %v", err)
+	}
+
+	requestIDs := []string{"order-a", "order-b", "order-c", "order-d"}
+	type result struct {
+		status int
+		view   agent.FlowRunView
+		err    error
+	}
+	results := make(chan result, len(requestIDs))
+	for _, requestID := range requestIDs {
+		requestID := requestID
+		go func() {
+			resp, body := doGateway(t, server, created.Secret, "refund", map[string]any{
+				"inputs": map[string]any{"order_id": requestID},
+			})
+			var view agent.FlowRunView
+			err := json.Unmarshal(body, &view)
+			results <- result{status: resp.StatusCode, view: view, err: err}
+		}()
+	}
+
+	seenRuns := make(map[string]string, len(requestIDs))
+	for range requestIDs {
+		got := <-results
+		if got.status != http.StatusAccepted {
+			t.Fatalf("independent call status %d: %+v", got.status, got.view)
+		}
+		if got.err != nil {
+			t.Fatalf("decode independent call: %v", got.err)
+		}
+		requestID, _ := got.view.Inputs["order_id"].(string)
+		if requestID == "" {
+			t.Fatalf("run did not retain its request input: %+v", got.view)
+		}
+		if previous, exists := seenRuns[got.view.RunID]; exists {
+			t.Fatalf("independent requests %q and %q shared run id %q", previous, requestID, got.view.RunID)
+		}
+		seenRuns[got.view.RunID] = requestID
+	}
+	if len(seenRuns) != len(requestIDs) {
+		t.Fatalf("expected %d distinct FlowRuns, got %d: %v", len(requestIDs), len(seenRuns), seenRuns)
+	}
+	for _, requestID := range requestIDs {
+		found := false
+		for _, gotID := range seenRuns {
+			if gotID == requestID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("request %q was lost or cross-assigned: %v", requestID, seenRuns)
+		}
 	}
 }
 

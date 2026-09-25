@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,6 +160,7 @@ func TestFlowRunLifecycle(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = blockingSubagentCaller{release: make(chan struct{})}
 	a.SetDecisionCaller(&scriptedDecisionCaller{result: decision.Result{Choice: "auto", Confidence: 0.93}})
 
 	if _, err := a.CreateFlow(FlowCreateArgs{Def: flowTestDef()}); err != nil {
@@ -173,6 +175,7 @@ func TestFlowRunLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
+	cleanupWorkflowAfterTest(t, a, run.WorkflowID)
 	if run.Status != workflowStatusPending || run.WorkflowID == "" {
 		t.Fatalf("unexpected run: %+v", run)
 	}
@@ -234,6 +237,259 @@ func TestFlowRunLifecycle(t *testing.T) {
 	}
 	if canceled.Status != workflowStatusCanceled {
 		t.Fatalf("expected canceled, got %q", canceled.Status)
+	}
+}
+
+func TestFlowRunIdempotencyPersistsAcrossAgentRecreation(t *testing.T) {
+	cfg := testFlowConfig(t.TempDir())
+	a1 := New(cfg)
+	def := &flow.Definition{
+		FlowID: "fl_idempotent", Version: "1", Status: FlowStatusDraft,
+		Nodes: []flow.Node{{ID: "work", Kind: flow.KindStep, Prompt: "do work"}},
+	}
+	if _, err := a1.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+
+	first, created, err := a1.CreateFlowRunIdempotent(
+		context.Background(), def.FlowID, "", nil, "key-hash", "request-hash",
+	)
+	if err != nil {
+		t.Fatalf("create idempotent run: %v", err)
+	}
+	if !created || first.RunID == "" {
+		t.Fatalf("expected a new run, got created=%v run=%+v", created, first)
+	}
+
+	a2 := New(cfg)
+	replayed, created, err := a2.CreateFlowRunIdempotent(
+		context.Background(), def.FlowID, "", nil, "key-hash", "request-hash",
+	)
+	if err != nil {
+		t.Fatalf("replay idempotent run after recreation: %v", err)
+	}
+	if created || replayed.RunID != first.RunID {
+		t.Fatalf("expected persisted run %q to replay, got created=%v run=%+v", first.RunID, created, replayed)
+	}
+
+	_, _, err = a2.CreateFlowRunIdempotent(
+		context.Background(), def.FlowID, "", nil, "key-hash", "different-request",
+	)
+	if !errors.Is(err, ErrFlowIdempotencyConflict) {
+		t.Fatalf("expected idempotency conflict for changed request, got %v", err)
+	}
+}
+
+func TestCreateFlowRunValidatesDeclaredInputs(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	def := &flow.Definition{
+		FlowID: "fl_typed_inputs", Version: "1", Status: FlowStatusDraft,
+		Inputs: []flow.VarDef{{Name: "request", Type: "string", Required: true}},
+		Nodes:  []flow.Node{{ID: "work", Kind: flow.KindStep, Prompt: "process {{inputs.request}}"}},
+	}
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+
+	for _, inputs := range []map[string]any{
+		nil,
+		{"request": "ticket", "unexpected": true},
+		{"request": 42},
+	} {
+		if _, err := a.CreateFlowRun(context.Background(), def.FlowID, "", inputs); err == nil {
+			t.Fatalf("expected invalid inputs to be rejected: %#v", inputs)
+		}
+	}
+	if _, err := a.CreateFlowRun(context.Background(), def.FlowID, "", map[string]any{"request": "T-42"}); err != nil {
+		t.Fatalf("create run with valid inputs: %v", err)
+	}
+}
+
+func TestLateTerminalRunIsCorrectedToTimeout(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	def := &flow.Definition{
+		FlowID: "fl_late_timeout", Version: "1", Status: FlowStatusDraft, TimeoutSec: 60,
+		Nodes: []flow.Node{{
+			ID: "finish", Kind: flow.KindFunction,
+			Function: &flow.FunctionSpec{
+				Runtime: flow.FunctionRuntimeJS,
+				Source:  `function handle(ctx, event) { return {done: true}; }`,
+			},
+		}},
+	}
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	run, err := a.CreateFlowRun(context.Background(), def.FlowID, "", nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	started, err := a.StartFlowRun(context.Background(), def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if started.Status != workflowStatusCompleted {
+		t.Fatalf("expected run to complete before forced deadline, got %+v", started)
+	}
+
+	state, err := a.workflows.load(run.WorkflowID)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	deadline := time.Now().UTC().Add(-time.Second)
+	state.Summary.RunTimeoutAt = deadline
+	state.Summary.Status = workflowStatusCompleted
+	state.Summary.Error = ""
+	state.Nodes[0].FinishedAt = time.Now().UTC()
+	if err := a.workflows.save(state); err != nil {
+		t.Fatalf("save late completion: %v", err)
+	}
+
+	refreshed, err := a.RefreshFlowRun(def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("refresh run: %v", err)
+	}
+	if refreshed.Status != workflowStatusError || !strings.Contains(refreshed.Error, "timed out") {
+		t.Fatalf("expected late completion to be corrected to timeout, got %+v", refreshed)
+	}
+}
+
+func TestWaitFlowRunAutomaticallyStartsAsyncDependents(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = repeatedTextCaller("node finished")
+	def := &flow.Definition{
+		FlowID: "fl_auto_advance", Version: "1", Status: FlowStatusDraft,
+		Nodes: []flow.Node{
+			{ID: "first", Kind: flow.KindStep, Prompt: "complete the first step"},
+			{ID: "second", Kind: flow.KindStep, Prompt: "complete the second step"},
+		},
+		Edges: []flow.Edge{
+			{ID: "first_to_second", From: "first", To: "second", EdgeType: flow.EdgeDataDependency},
+		},
+	}
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	if _, err := a.PublishFlow(def.FlowID, def.Version); err != nil {
+		t.Fatalf("publish flow: %v", err)
+	}
+	run, err := a.CreateFlowRun(context.Background(), def.FlowID, "", nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	cleanupWorkflowAfterTest(t, a, run.WorkflowID)
+	started, err := a.StartFlowRun(context.Background(), def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if started.Status != workflowStatusRunning {
+		t.Fatalf("expected first async node to be running, got %+v", started)
+	}
+
+	waited, err := a.WaitFlowRun(context.Background(), def.FlowID, run.RunID, 10000)
+	if err != nil {
+		t.Fatalf("wait run: %v", err)
+	}
+	if waited.Status != workflowStatusCompleted {
+		t.Fatalf("expected WaitFlowRun to advance through both nodes, got %+v", waited)
+	}
+	state, err := a.workflowState(run.WorkflowID)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	for _, id := range []string{"first", "second"} {
+		node := workflowNodeByID(state.Nodes, id)
+		if node == nil || node.Status != workflowStatusCompleted || node.JobID == "" {
+			t.Fatalf("expected %s to be started and completed, got %+v", id, node)
+		}
+	}
+}
+
+func TestCanceledFlowRunCannotBeRestartedOrReconciled(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	def := &flow.Definition{
+		FlowID: "fl_cancel_before_start", Version: "1", Status: FlowStatusDraft,
+		Nodes: []flow.Node{{ID: "work", Kind: flow.KindStep, Prompt: "must not start after cancellation"}},
+	}
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	run, err := a.CreateFlowRun(context.Background(), def.FlowID, "", nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	canceled, err := a.CancelFlowRun(context.Background(), def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+	if canceled.Status != workflowStatusCanceled || canceled.FinishedAt.IsZero() {
+		t.Fatalf("expected a finished canceled run, got %+v", canceled)
+	}
+
+	started, err := a.StartFlowRun(context.Background(), def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("start canceled run: %v", err)
+	}
+	advanced, err := a.AdvanceFlowRun(context.Background(), def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("reconcile canceled run: %v", err)
+	}
+	refreshed, err := a.RefreshFlowRun(def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("refresh canceled run: %v", err)
+	}
+	for _, view := range []FlowRunView{started, advanced, refreshed} {
+		if view.Status != workflowStatusCanceled {
+			t.Fatalf("canceled status was not preserved: %+v", view)
+		}
+	}
+	state, err := a.workflowState(run.WorkflowID)
+	if err != nil {
+		t.Fatalf("load canceled workflow: %v", err)
+	}
+	if state.Summary.AutoSchedule {
+		t.Fatal("starting a canceled run must not enable auto-scheduling")
+	}
+	for _, node := range state.Nodes {
+		if node.Status != workflowStatusCanceled || node.JobID != "" {
+			t.Fatalf("canceled work was restarted: %+v", node)
+		}
+	}
+}
+
+func TestAutoScheduledFlowRunsRecoversAfterAgentRecreation(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	def := &flow.Definition{
+		FlowID: "fl_resume", Version: "1", Status: FlowStatusDraft,
+		Nodes: []flow.Node{{
+			ID: "approval", Kind: flow.KindHuman, Prompt: "wait for approval",
+			Human: &flow.HumanSpec{Queue: "approvals"},
+		}},
+	}
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	run, err := a.CreateFlowRun(context.Background(), def.FlowID, "", nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	started, err := a.StartFlowRun(context.Background(), def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if started.Status != workflowStatusRunning {
+		t.Fatalf("expected human-waiting run to remain active, got %+v", started)
+	}
+
+	restartedAgent := New(a.cfg)
+	refs, err := restartedAgent.AutoScheduledFlowRuns()
+	if err != nil {
+		t.Fatalf("scan recoverable FlowRuns: %v", err)
+	}
+	if len(refs) != 1 || refs[0] != (FlowRunRef{FlowID: def.FlowID, RunID: run.RunID}) {
+		t.Fatalf("expected started run to be recoverable after agent recreation, got %+v", refs)
 	}
 }
 

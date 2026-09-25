@@ -56,6 +56,49 @@ func TestReadTranscriptServesSessionOwnedArchive(t *testing.T) {
 	}
 }
 
+func TestReadTranscriptFollowsSessionOwnedArchiveChain(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{})
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "transcript-chain-owner"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	session, err := service.requireSession(opened.SessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+	session.agent.RestoreStateForSession(opened.SessionID, agent.SessionState{
+		Messages:       []protocol.Message{protocol.NewSummaryMessage("latest summary", "transcript_newest.json")},
+		TranscriptRefs: []string{"transcript_newest.json"},
+	})
+
+	archives := map[string][]protocol.Message{
+		"transcript_newest.json": {protocol.NewSummaryMessage("previous summary", "transcript_middle.json")},
+		"transcript_middle.json": {protocol.NewSummaryMessage("earliest summary", "transcript_oldest.json")},
+		"transcript_oldest.json": {protocol.NewTextMessage(protocol.RoleUser, "earliest conversation message")},
+	}
+	for ref, messages := range archives {
+		data, err := json.Marshal(messages)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", ref, err)
+		}
+		if err := os.WriteFile(filepath.Join(cfg.TranscriptsDir, ref), data, 0644); err != nil {
+			t.Fatalf("write %s: %v", ref, err)
+		}
+	}
+
+	messages, err := service.ReadTranscript(opened.SessionID, "transcript_oldest.json")
+	if err != nil {
+		t.Fatalf("read oldest linked archive: %v", err)
+	}
+	if len(messages) != 1 || protocol.MessageText(messages[0]) != "earliest conversation message" {
+		t.Fatalf("unexpected oldest archive contents: %+v", messages)
+	}
+	if _, err := service.ReadTranscript(opened.SessionID, "transcript_foreign.json"); !errors.Is(err, ErrTranscriptNotFound) {
+		t.Fatalf("expected unrelated archive to remain inaccessible, got %v", err)
+	}
+}
+
 func TestReadTranscriptRejectsForeignOrTraversalRefs(t *testing.T) {
 	cfg := newTestConfig(t)
 	service := newTestService(cfg, &stubCaller{})

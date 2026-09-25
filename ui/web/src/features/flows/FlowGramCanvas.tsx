@@ -9,7 +9,7 @@ import type { FlowDefinition, FlowRunEvent } from "../../lib/api";
 // and, when run events are supplied, overlays the run-time node status
 // (running / completed / failed / waiting_human) plus decision confidence.
 //
-// Node material mapping (design doc §9): step/llm/decision/human/branch/loop.
+// Node material mapping: step/llm/decision/human/branch/loop/function/service.
 // Mermaid is lazy-imported so it never affects the main bundle.
 // ---------------------------------------------------------------------------
 
@@ -20,6 +20,8 @@ const KIND_LABEL: Record<string, string> = {
   human: "human",
   branch: "branch",
   loop: "loop",
+  function: "function",
+  service: "service",
 };
 
 const STATUS_CLASS: Record<string, string> = {

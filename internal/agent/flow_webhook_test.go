@@ -85,6 +85,7 @@ func TestFlowOnCompleteWebhookDeliveredOnce(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()
 	a.toolHandler.ActivateBundles(bundleSubagent)
+	a.client = blockingSubagentCaller{release: make(chan struct{})}
 	a.SetDecisionCaller(&scriptedDecisionCaller{result: decision.Result{Choice: "yes", Confidence: 0.9}})
 
 	if _, err := a.CreateFlow(FlowCreateArgs{Def: flowWebhookTestDef(srv.URL)}); err != nil {
@@ -99,6 +100,7 @@ func TestFlowOnCompleteWebhookDeliveredOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
+	cleanupWorkflowAfterTest(t, a, run.WorkflowID)
 	if _, err := a.StartFlowRun(ctx, "fl_webhook", run.RunID); err != nil {
 		t.Fatalf("start run: %v", err)
 	}

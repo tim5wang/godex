@@ -81,6 +81,23 @@ func TestExtractGlobalConfigArgsStopsAtSubcommand(t *testing.T) {
 	}
 }
 
+func TestSplitDebugArgsStopsAtSubcommand(t *testing.T) {
+	args := []string{"--pprof-addr=127.0.0.1:6060", "service", "start", "--pprof-addr=127.0.0.1:6061"}
+	debug, remainder := splitDebugArgs(args)
+	if len(debug) != 1 || debug[0] != args[0] {
+		t.Fatalf("expected only leading debug flag to be extracted, got %v", debug)
+	}
+	wantRemainder := args[1:]
+	if len(remainder) != len(wantRemainder) {
+		t.Fatalf("expected remainder %v, got %v", wantRemainder, remainder)
+	}
+	for i := range wantRemainder {
+		if remainder[i] != wantRemainder[i] {
+			t.Fatalf("expected remainder %v, got %v", wantRemainder, remainder)
+		}
+	}
+}
+
 // TestExtractGlobalConfigArgsSessionBeforeSubcommand verifies the global
 // --session form still works when placed before the subcommand (bare TUI).
 func TestExtractGlobalConfigArgsSessionBeforeSubcommand(t *testing.T) {

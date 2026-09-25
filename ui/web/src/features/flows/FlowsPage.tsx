@@ -72,6 +72,7 @@ import {
   type FlowDiagnosis,
   type FlowInspectionReport,
   type FlowNetworkPolicy,
+  type FlowVarDef,
   type FlowRunEvent,
   type FlowRunView,
   type NodeStepView,
@@ -1798,16 +1799,17 @@ function VariableScopePanel(props: {
   // C3: type is a dropdown (string/number/boolean/object/array/any) and
   // object/array/any may carry a nested JSON-Schema-ish fragment (schema)
   // edited inline — “像定义 json schema 一样定义变量”。
-  type FlowVarDef = { name: string; type?: string; desc?: string; schema?: unknown };
   const VAR_TYPES = ["string", "number", "boolean", "object", "array", "any"];
   const [inputs, setInputs] = useState<FlowVarDef[]>(def.inputs ?? []);
   const [outputs, setOutputs] = useState<FlowVarDef[]>(def.outputs ?? []);
   const [network, setNetwork] = useState<FlowNetworkPolicy | undefined>(def.network);
+  const [timeoutSec, setTimeoutSec] = useState(def.timeout_sec ?? 0);
   const [targetVersion, setTargetVersion] = useState(nextVersion);
   useEffect(() => {
     setInputs(def.inputs ?? []);
     setOutputs(def.outputs ?? []);
     setNetwork(def.network);
+    setTimeoutSec(def.timeout_sec ?? 0);
   }, [def]);
 
   const patchVar = (list: FlowVarDef[], setter: (v: FlowVarDef[]) => void, i: number, patch: Partial<FlowVarDef>) =>
@@ -1820,6 +1822,7 @@ function VariableScopePanel(props: {
         inputs,
         outputs,
         network,
+        timeout_sec: timeoutSec,
         version: v,
         status: "draft",
       };
@@ -1849,6 +1852,13 @@ function VariableScopePanel(props: {
   };
   for (const n of nodes) {
     scanText(n.prompt, n.id);
+    scanText(n.service?.url, n.id);
+    for (const value of Object.values(n.service?.headers ?? {})) {
+      scanText(value, n.id);
+    }
+    if (n.service?.body !== undefined) {
+      scanText(JSON.stringify(n.service.body), n.id);
+    }
     if (n.branch?.cases) {
       for (const c of n.branch.cases) scanText(c.condition ? JSON.stringify(c.condition) : undefined, n.id);
     }
@@ -1942,6 +1952,23 @@ function VariableScopePanel(props: {
                 />
               </div>
             )}
+            <Checkbox
+              checked={Boolean(v.required)}
+              onChange={(e) => patchVar(list, setter, i, { required: e.target.checked })}
+              style={{ fontSize: 11 }}
+            >
+              {t("flows.varRequired")}
+            </Checkbox>
+            {kind === "outputs" && (
+              <Input
+                size="small"
+                style={{ fontFamily: "monospace", fontSize: 11 }}
+                value={v.source ?? ""}
+                placeholder="nodes.finish.outputs.summary"
+                onChange={(e) => patchVar(list, setter, i, { source: e.target.value })}
+                aria-label={t("flows.varOutputSource")}
+              />
+            )}
           </div>
         );
       })}
@@ -1990,7 +2017,11 @@ function VariableScopePanel(props: {
                       size="small"
                       style={{ width: 130 }}
                       value={network?.policy ?? "allow_all"}
-                      onChange={(p) => setNetwork({ ...(network ?? {}), policy: p })}
+                      onChange={(p) => setNetwork({
+                        ...(network ?? {}),
+                        policy: p,
+                        allow_private_hosts: p === "allowlist" ? network?.allow_private_hosts : false,
+                      })}
                       options={[
                         { value: "allow_all", label: "allow_all" },
                         { value: "allowlist", label: "allowlist" },
@@ -2024,7 +2055,11 @@ function VariableScopePanel(props: {
                       style={{ width: "100%" }}
                       placeholder="api.openai.com"
                       value={network?.allowed_domains ?? []}
-                      onChange={(v: string[]) => setNetwork({ ...(network ?? {}), allowed_domains: v })}
+                      onChange={(v: string[]) => setNetwork({
+                        ...(network ?? {}),
+                        allowed_domains: v,
+                        allow_private_hosts: v.length > 0 ? network?.allow_private_hosts : false,
+                      })}
                       tokenSeparators={[",", " "]}
                     />
                     <Text type="secondary" style={{ fontSize: 11 }}>
@@ -2040,6 +2075,14 @@ function VariableScopePanel(props: {
                       tokenSeparators={[",", " "]}
                     />
                   </div>
+                  <Checkbox
+                    checked={Boolean(network?.allow_private_hosts)}
+                    disabled={network?.policy !== "allowlist" || (network?.allowed_domains?.length ?? 0) === 0}
+                    onChange={(e) => setNetwork({ ...(network ?? {}), allow_private_hosts: e.target.checked })}
+                    style={{ fontSize: 11 }}
+                  >
+                    {t("flows.networkAllowPrivate")}
+                  </Checkbox>
                   <Text type="secondary" style={{ fontSize: 10 }}>
                     {t("flows.networkHint")}
                   </Text>
@@ -2048,6 +2091,20 @@ function VariableScopePanel(props: {
             },
           ]}
         />
+      </div>
+      <div>
+        <Space size={8} wrap>
+          <Text strong style={{ fontSize: 12 }}>{t("flows.flowTimeout")}</Text>
+          <InputNumber
+            size="small"
+            min={0}
+            max={2_592_000}
+            value={timeoutSec}
+            onChange={(value) => setTimeoutSec(value ?? 0)}
+            addonAfter="s"
+          />
+          <Text type="secondary" style={{ fontSize: 11 }}>{t("flows.flowTimeoutHint")}</Text>
+        </Space>
       </div>
       <div>
         <Text strong style={{ fontSize: 12 }}>{t("flows.varFlowInputs")}</Text>

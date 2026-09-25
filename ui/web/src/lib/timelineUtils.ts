@@ -1,4 +1,4 @@
-import type { SessionTimelineEntry, RuntimeEvent, SessionContextInspector, FeedItem, DurableSubagentJob, SubagentProgressItem, PendingPermission } from "./types";
+import type { SessionTimelineEntry, RuntimeEvent, SessionContextInspector, SessionContextUsage, FeedItem, DurableSubagentJob, SubagentProgressItem, PendingPermission } from "./types";
 import type { PendingSend } from "../store/chat";
 
 export type TimelineFilterState = {
@@ -523,6 +523,7 @@ export function buildContextStatusSummary(
   inspector: SessionContextInspector | null,
   timelineItems: SessionTimelineEntry[],
   subagentJobs: FeedItem[],
+  usage?: SessionContextUsage | null,
 ): ContextStatusSummary {
   const context = inspector?.context;
   const breakdown = context?.token_breakdown;
@@ -542,10 +543,13 @@ export function buildContextStatusSummary(
   // exact per-session total of model calls (subagents share the parent
   // session id, so their calls are already included); prefer it whenever
   // the provider reported any usage.
-  const sessionCalls = context?.cache_usage?.calls ?? 0;
+  const liveCacheUsage = usage?.cache_usage ?? context?.cache_usage;
+  const sessionCalls = liveCacheUsage?.calls ?? 0;
   const calls = sessionCalls > 0 ? sessionCalls : mainCalls + subagentCalls;
   const messages = context?.message_count ?? 0;
-  const cumulative = context?.cumulative_tokens ?? 0;
+  const cumulative = usage?.cumulative_tokens ?? context?.cumulative_tokens ?? 0;
+  const cumulativeInput = usage?.cumulative_input_tokens ?? context?.cumulative_input_tokens ?? 0;
+  const cumulativeOutput = usage?.cumulative_output_tokens ?? context?.cumulative_output_tokens ?? 0;
   const cumulativeLabel = cumulative > 0 ? ` · tok ${formatCompactNumber(cumulative)}` : "";
   const tokenLabel = threshold > 0 ? `${formatCompactNumber(tokens)}/${formatCompactNumber(threshold)} ${percent}%` : formatCompactNumber(tokens);
   return {
@@ -557,7 +561,7 @@ export function buildContextStatusSummary(
         : `Model requests seen in current timeline window: ${calls}`,
       `Messages in context: ${messages}`,
       cumulative > 0
-        ? `Cumulative tokens used in this session: ${cumulative} (input ${context?.cumulative_input_tokens ?? 0} / output ${context?.cumulative_output_tokens ?? 0})`
+        ? `Cumulative tokens used in this session: ${cumulative} (input ${cumulativeInput} / output ${cumulativeOutput})`
         : "",
       context?.suggest_compact ? "Compaction is suggested." : "Compaction is not currently suggested.",
     ].filter(Boolean).join("\n"),

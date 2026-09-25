@@ -4,7 +4,7 @@ import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
-import { useChatStore, composeTranscriptArchives, groupFeedItemsIntoTurns, overlappingSnapshotMessageIndexes, snapshotToItems } from "../../store/chat";
+import { useChatStore, composeTranscriptArchives, groupFeedItemsIntoTurns, overlappingSnapshotMessageIndexes, snapshotToItems, transcriptArchiveRefs } from "../../store/chat";
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, type PointerEvent as ReactPointerEvent, useMemo, type CSSProperties } from "react";
 import { useLayoutStore } from "../../store/layout";
 import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge, FeedItem, ListedSession, ProtocolMessage } from "../../lib/types";
@@ -204,6 +204,7 @@ export function useChatPageController() {
     builtinCommandsQuery,
     packageRolesQuery,
     contextInspectorQuery,
+    contextUsageQuery,
     activeSkillsQuery,
     modelsQuery,
     sessionsQuery,
@@ -221,11 +222,19 @@ export function useChatPageController() {
   const activeHistorySessionRef = useRef(activeHistorySessionID);
   activeHistorySessionRef.current = activeHistorySessionID;
   const loadedHistoryArchives = historyArchiveState.sessionId === activeHistorySessionID ? historyArchiveState.pages : {};
+  const currentSnapshotMessages = snapshotQuery.data?.display_messages ?? snapshotQuery.data?.messages ?? [];
   // The compactions endpoint returns newest-first. Load the newest archive
-  // first (right before the current snapshot), then walk backwards on scroll.
+  // first (right before the current snapshot), then follow old summary
+  // references as each archive is loaded.
   const transcriptRefs = useMemo(
-    () => Array.from(new Set((compactionsQuery.data ?? []).map((record) => record.transcript_ref?.trim()).filter((ref): ref is string => Boolean(ref)))),
-    [compactionsQuery.data],
+    () => {
+      const snapshotRefs = currentSnapshotMessages
+        .filter((item) => item.metadata?.kind === "summary")
+        .map((item) => item.metadata?.transcript?.trim() ?? "");
+      const compactionRefs = (compactionsQuery.data ?? []).map((record) => record.transcript_ref?.trim() ?? "");
+      return transcriptArchiveRefs([...snapshotRefs, ...compactionRefs], loadedHistoryArchives);
+    },
+    [compactionsQuery.data, currentSnapshotMessages, loadedHistoryArchives],
   );
   const canLoadEarlierHistory = transcriptRefs.some((ref) => !loadedHistoryArchives[ref]);
   const isLoadingEarlierHistory = historyArchiveLoading?.sessionId === activeHistorySessionID;
@@ -315,7 +324,6 @@ export function useChatPageController() {
       }),
     );
   }, [archivedHistoryMessages, expandedHistoryArchiveTools]);
-  const currentSnapshotMessages = snapshotQuery.data?.display_messages ?? snapshotQuery.data?.messages ?? [];
   const duplicateSnapshotMessageIndexes = useMemo(
     () => overlappingSnapshotMessageIndexes(archivedHistoryMessages, currentSnapshotMessages),
     [archivedHistoryMessages, currentSnapshotMessages],
@@ -489,9 +497,10 @@ export function useChatPageController() {
     [currentTurnId, longTasksQuery.data, pendingPermissions, queuedTurns, running, snapshotQuery.data?.active_phase, snapshotQuery.data?.active_turn_id, snapshotQuery.data?.running, subagentJobs],
   );
   const contextInspector = contextInspectorQuery.data ?? null;
+  const contextUsage = contextUsageQuery.data ?? null;
   const contextStatus = useMemo(
-    () => buildContextStatusSummary(contextInspector, timelineItems, subagentJobs),
-    [contextInspector, subagentJobs, timelineItems],
+    () => buildContextStatusSummary(contextInspector, timelineItems, subagentJobs, contextUsage),
+    [contextInspector, contextUsage, subagentJobs, timelineItems],
   );
   const sortedSessions = useMemo(
     () =>
@@ -584,6 +593,7 @@ export function useChatPageController() {
         queryClient.invalidateQueries({ queryKey: ["timeline", token, openQuery.data?.session_id] }),
         queryClient.invalidateQueries({ queryKey: ["timeline-page", token, openQuery.data?.session_id] }),
         queryClient.invalidateQueries({ queryKey: ["context-inspector", token, openQuery.data?.session_id] }),
+        queryClient.invalidateQueries({ queryKey: ["context-usage", token, openQuery.data?.session_id] }),
       ]);
     },
   });
@@ -597,6 +607,7 @@ export function useChatPageController() {
         queryClient.invalidateQueries({ queryKey: ["timeline", token, openQuery.data?.session_id] }),
         queryClient.invalidateQueries({ queryKey: ["timeline-page", token, openQuery.data?.session_id] }),
         queryClient.invalidateQueries({ queryKey: ["context-inspector", token, openQuery.data?.session_id] }),
+        queryClient.invalidateQueries({ queryKey: ["context-usage", token, openQuery.data?.session_id] }),
       ]);
     },
   });
@@ -840,6 +851,7 @@ export function useChatPageController() {
         queryClient.invalidateQueries({ queryKey: ["skills-active", token, openQuery.data?.session_id] }),
         queryClient.invalidateQueries({ queryKey: ["snapshot", token, openQuery.data?.session_id] }),
         queryClient.invalidateQueries({ queryKey: ["context-inspector", token, openQuery.data?.session_id] }),
+        queryClient.invalidateQueries({ queryKey: ["context-usage", token, openQuery.data?.session_id] }),
         queryClient.invalidateQueries({ queryKey: ["timeline", token, openQuery.data?.session_id] }),
       ]);
     },
@@ -1114,6 +1126,7 @@ export function useChatPageController() {
     queuedTurns,
     taskOutcomes,
     contextInspector,
+    contextUsage,
     contextStatus,
     sortedSessions,
     channels,

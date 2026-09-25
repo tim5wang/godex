@@ -197,7 +197,7 @@ type ModelsView struct {
 	// AcpReasoningEffort is the session's ACP reasoning-effort override (raw
 	// ACP config value, e.g. "high") when the session routes turns to an
 	// external ACP agent; empty otherwise.
-	AcpReasoningEffort string `json:"acp_reasoning_effort,omitempty"`
+	AcpReasoningEffort string         `json:"acp_reasoning_effort,omitempty"`
 	Profiles           []ModelProfile `json:"profiles"`
 }
 
@@ -356,6 +356,13 @@ type Service struct {
 	sessions map[string]*sessionState
 	store    sessionstore.Store
 	storeErr error
+
+	flowRunsMu sync.Mutex
+	flowRuns   map[agent.FlowRunRef]struct{}
+
+	flowReconcilerMu     sync.Mutex
+	flowReconcilerCancel context.CancelFunc
+	flowReconcilerDone   chan struct{}
 }
 
 type sessionLockContextKey struct{}
@@ -478,6 +485,7 @@ func NewService(cfg *config.Config, shared *agent.SharedDependencies, commandSer
 		},
 		now:      time.Now,
 		sessions: make(map[string]*sessionState),
+		flowRuns: make(map[agent.FlowRunRef]struct{}),
 	}
 	service.store, service.storeErr = newSessionStore(cfg)
 	service.autoRepairSessions()

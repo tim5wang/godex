@@ -64,21 +64,25 @@ type flowCurrent struct {
 
 // flowRunRecord is the per-run record; runtime state lives in workflows/.
 type flowRunRecord struct {
-	RunID      string         `json:"run_id"`
-	FlowID     string         `json:"flow_id"`
-	Version    string         `json:"version"`
-	Digest     string         `json:"digest"`
-	SessionID  string         `json:"session_id,omitempty"`
-	WorkflowID string         `json:"workflow_id,omitempty"`
-	Status     string         `json:"status"`
-	Inputs     map[string]any `json:"inputs,omitempty"`
-	Outputs    map[string]any `json:"outputs,omitempty"`
-	Error      string         `json:"error,omitempty"`
+	RunID                  string         `json:"run_id"`
+	FlowID                 string         `json:"flow_id"`
+	Version                string         `json:"version"`
+	Digest                 string         `json:"digest"`
+	SessionID              string         `json:"session_id,omitempty"`
+	WorkflowID             string         `json:"workflow_id,omitempty"`
+	Status                 string         `json:"status"`
+	Inputs                 map[string]any `json:"inputs,omitempty"`
+	Outputs                map[string]any `json:"outputs,omitempty"`
+	OutputSpec             []flow.VarDef  `json:"output_spec,omitempty"`
+	RunTimeoutAt           time.Time      `json:"run_timeout_at,omitempty"`
+	IdempotencyKeyHash     string         `json:"idempotency_key_hash,omitempty"`
+	IdempotencyRequestHash string         `json:"idempotency_request_hash,omitempty"`
+	Error                  string         `json:"error,omitempty"`
 	// WebhookSent guards the one-time on_complete delivery (P1.3).
-	WebhookSent bool `json:"webhook_sent,omitempty"`
-	StartedAt   time.Time      `json:"started_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	FinishedAt  time.Time      `json:"finished_at,omitempty"`
+	WebhookSent bool      `json:"webhook_sent,omitempty"`
+	StartedAt   time.Time `json:"started_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	FinishedAt  time.Time `json:"finished_at,omitempty"`
 }
 
 func (s *flowStore) flowDir(flowID string) (string, error) {
@@ -378,6 +382,25 @@ func (s *flowStore) listRuns(flowID string) ([]flowRunRecord, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.Before(out[j].StartedAt) })
 	return out, nil
+}
+
+// findIdempotentRun scans durable run records for a gateway idempotency key.
+// The key metadata lives in the run record itself, so the run and its replay
+// identity become durable together in one atomic JSON replacement.
+func (s *flowStore) findIdempotentRun(flowID, keyHash string) (flowRunRecord, bool, error) {
+	if strings.TrimSpace(keyHash) == "" {
+		return flowRunRecord{}, false, nil
+	}
+	runs, err := s.listRuns(flowID)
+	if err != nil {
+		return flowRunRecord{}, false, err
+	}
+	for _, rec := range runs {
+		if rec.IdempotencyKeyHash == keyHash {
+			return rec, true, nil
+		}
+	}
+	return flowRunRecord{}, false, nil
 }
 
 // listFlows scans the store for flow ids (sorted).

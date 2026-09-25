@@ -111,6 +111,7 @@ async function invalidateSessionQueries(queryClient: QueryClient, token: string,
     queryClient.invalidateQueries({ queryKey: ["timeline-page", token, sessionId] }),
     queryClient.invalidateQueries({ queryKey: ["subagents", token, sessionId] }),
     queryClient.invalidateQueries({ queryKey: ["context-inspector", token, sessionId] }),
+    queryClient.invalidateQueries({ queryKey: ["context-usage", token, sessionId] }),
     queryClient.invalidateQueries({ queryKey: ["skills-active", token, sessionId] }),
   ]);
 }

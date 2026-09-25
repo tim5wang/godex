@@ -80,7 +80,8 @@ func flowTestHTTPDef() *flow.Definition {
 		Nodes: []flow.Node{
 			{ID: "decide", Kind: flow.KindDecision, Prompt: "auto?",
 				Decision: &flow.DecisionSpec{DecisionType: "choice", Choices: []flow.Choice{{ID: "auto"}, {ID: "llm"}}}},
-			{ID: "auto_run", Kind: flow.KindStep, Prompt: "auto refund"},
+			{ID: "auto_run", Kind: flow.KindHuman, Prompt: "approve the refund",
+				Human: &flow.HumanSpec{Queue: "ops", ResultVar: "approved"}},
 			{ID: "br", Kind: flow.KindBranch,
 				Branch: &flow.BranchSpec{
 					Cases:     []flow.BranchCase{{Name: "auto", To: "auto_run", Condition: flow.Condition{Choice: "auto"}}},
@@ -98,9 +99,9 @@ func TestFlowsCreateListPublishRuns(t *testing.T) {
 
 	// POST /v1/flows — create draft.
 	resp, raw := doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows", map[string]any{
-		"flow_id": "fl_http_e2e",
-		"version": "1",
-		"status":  "draft",
+		"flow_id":    "fl_http_e2e",
+		"version":    "1",
+		"status":     "draft",
 		"definition": flowTestHTTPDef(),
 	})
 	if resp.StatusCode != http.StatusCreated {
@@ -219,9 +220,9 @@ func TestFlowsHumanTaskListAndReply(t *testing.T) {
 
 	// Create + publish the human flow.
 	resp, raw := doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows", map[string]any{
-		"flow_id": "fl_http_human",
-		"version": "1",
-		"status":  "draft",
+		"flow_id":    "fl_http_human",
+		"version":    "1",
+		"status":     "draft",
 		"definition": flowHumanHTTPDef(),
 	})
 	if resp.StatusCode != http.StatusCreated {
@@ -292,9 +293,9 @@ func TestFlowsRunEventsSSE(t *testing.T) {
 	// Create + publish a human flow and start a run (the human node keeps the
 	// run alive while we read the event stream).
 	resp, raw := doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows", map[string]any{
-		"flow_id": "fl_http_human",
-		"version": "1",
-		"status":  "draft",
+		"flow_id":    "fl_http_human",
+		"version":    "1",
+		"status":     "draft",
 		"definition": flowHumanHTTPDef(),
 	})
 	if resp.StatusCode != http.StatusCreated {

@@ -20,8 +20,11 @@ func TestDebugFlagsParsePprofAddr(t *testing.T) {
 		wantPprof string
 		wantErr   bool
 	}{
-		{raw: "--pprof-addr=:6060", wantPprof: ":6060"},
-		{raw: "--pprof-addr=localhost:7000", wantPprof: "localhost:7000"},
+		{raw: "--pprof-addr=127.0.0.1:6060", wantPprof: "127.0.0.1:6060"},
+		{raw: "--pprof-addr=localhost:7000", wantPprof: "127.0.0.1:7000"},
+		{raw: "--pprof-addr=:6060", wantErr: true},
+		{raw: "--pprof-addr=0.0.0.0:6060", wantErr: true},
+		{raw: "--pprof-addr=192.168.1.5:6060", wantErr: true},
 		{raw: "", wantPprof: ""}, // disabled by default
 	}
 	for _, c := range cases {
@@ -42,6 +45,16 @@ func TestDebugFlagsParsePprofAddr(t *testing.T) {
 				t.Fatalf("PprofAddr: got %q, want %q", f.PprofAddr, c.wantPprof)
 			}
 		})
+	}
+}
+
+func TestDebugFlagsTrackExplicitEmptyPprofAddr(t *testing.T) {
+	f, err := parseDebugFlags([]string{"--pprof-addr="})
+	if err != nil {
+		t.Fatalf("parse explicit empty pprof address: %v", err)
+	}
+	if !f.PprofAddrSet || f.PprofAddr != "" {
+		t.Fatalf("expected explicit empty pprof setting, got %+v", f)
 	}
 }
 
@@ -141,6 +154,17 @@ func TestStartPprofServerRejectsEmptyAddr(t *testing.T) {
 
 	if err := startPprofServer(""); err != nil {
 		t.Fatalf("startPprofServer(\"\"): %v", err)
+	}
+}
+
+func TestStartPprofServerRejectsNonLoopbackAddr(t *testing.T) {
+	t.Parallel()
+
+	if err := startPprofServer(":6060"); err == nil {
+		t.Fatal("expected wildcard pprof listen address to be rejected")
+	}
+	if err := startPprofServer("192.168.1.5:6060"); err == nil {
+		t.Fatal("expected non-loopback pprof listen address to be rejected")
 	}
 }
 

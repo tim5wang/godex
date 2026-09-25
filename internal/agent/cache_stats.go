@@ -136,6 +136,20 @@ func (a *Agent) cumulativeTokenUsage() (input, output int64) {
 	return a.usage.snapshot()
 }
 
+// InspectContextUsage returns only provider usage counters. Unlike
+// InspectContext, this does not rebuild prompts, copy message history, or scan
+// memory, so it is suitable for lightweight UI polling during an active turn.
+func (a *Agent) InspectContextUsage(sessionID string) tools.ContextUsageInspection {
+	input, output := a.cumulativeTokenUsage()
+	return tools.ContextUsageInspection{
+		SessionID:              strings.TrimSpace(sessionID),
+		CacheUsage:             a.cacheUsageSnapshot(),
+		CumulativeTokens:       int(input + output),
+		CumulativeInputTokens:  int(input),
+		CumulativeOutputTokens: int(output),
+	}
+}
+
 // resetCacheStats clears the aggregation when the conversation is cleared so
 // the hit rate reflects only the current context window.
 func (a *Agent) resetCacheStats() {

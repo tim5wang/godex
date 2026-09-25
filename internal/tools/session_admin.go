@@ -77,6 +77,16 @@ type CacheUsageInspection struct {
 	HitRatePercent   float64 `json:"hit_rate_percent"`
 }
 
+// ContextUsageInspection contains provider-reported counters that can be
+// refreshed cheaply without rebuilding the full prompt/context Inspector.
+type ContextUsageInspection struct {
+	SessionID              string               `json:"session_id,omitempty"`
+	CacheUsage             CacheUsageInspection `json:"cache_usage"`
+	CumulativeTokens       int                  `json:"cumulative_tokens,omitempty"`
+	CumulativeInputTokens  int                  `json:"cumulative_input_tokens,omitempty"`
+	CumulativeOutputTokens int                  `json:"cumulative_output_tokens,omitempty"`
+}
+
 // PrefixCacheInspection describes prompt stability signals for providers that
 // cache repeated request prefixes.
 type PrefixCacheInspection struct {

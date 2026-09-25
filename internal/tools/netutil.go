@@ -88,6 +88,12 @@ func validateRemoteURL(rawURL string, allowPrivate bool) (*url.URL, error) {
 	return parsed, nil
 }
 
+// ValidateRemoteURL validates an absolute HTTP(S) URL and optionally rejects
+// localhost, private, link-local and other non-public IP destinations.
+func ValidateRemoteURL(rawURL string, allowPrivate bool) (*url.URL, error) {
+	return validateRemoteURL(rawURL, allowPrivate)
+}
+
 func disallowPrivateHost(host string) error {
 	host = strings.TrimSpace(host)
 	if host == "" {
@@ -137,4 +143,10 @@ func isPrivateOrLocalIP(ip net.IP) bool {
 		return false
 	}
 	return ip.IsPrivate()
+}
+
+// IsPrivateOrLocalIP reports whether an address is not suitable as a public
+// outbound destination. Exported for the Flow service-call network guard.
+func IsPrivateOrLocalIP(ip net.IP) bool {
+	return isPrivateOrLocalIP(ip)
 }

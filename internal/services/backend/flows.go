@@ -134,13 +134,37 @@ func (s *Service) CreateFlowRun(ctx context.Context, flowID, version string, inp
 	return a.CreateFlowRun(ctx, flowID, version, inputs)
 }
 
+// CreateFlowRunIdempotent creates or replays a gateway FlowRun using the
+// durable idempotency metadata stored with its run record.
+func (s *Service) CreateFlowRunIdempotent(ctx context.Context, flowID, version string, inputs map[string]any, keyHash, requestHash string) (agent.FlowRunView, bool, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowRunView{}, false, err
+	}
+	return a.CreateFlowRunIdempotent(ctx, flowID, version, inputs, keyHash, requestHash)
+}
+
 // StartFlowRun starts the run's durable workflow (ready nodes execute).
 func (s *Service) StartFlowRun(ctx context.Context, flowID, runID string) (agent.FlowRunView, error) {
 	a, err := s.flowAgent()
 	if err != nil {
 		return agent.FlowRunView{}, err
 	}
-	return a.StartFlowRun(ctx, flowID, runID)
+	view, err := a.StartFlowRun(ctx, flowID, runID)
+	if err == nil {
+		s.trackFlowRun(agent.FlowRunRef{FlowID: flowID, RunID: runID}, view.Status)
+	}
+	return view, err
+}
+
+// AdvanceFlowRun is used by the backend lifecycle reconciler to resume an
+// auto-scheduled run after a node completion or process restart.
+func (s *Service) AdvanceFlowRun(ctx context.Context, flowID, runID string) (agent.FlowRunView, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowRunView{}, err
+	}
+	return a.AdvanceFlowRun(ctx, flowID, runID)
 }
 
 // WaitFlowRun waits for the run's workflow to reach a terminal state.
@@ -167,7 +191,11 @@ func (s *Service) CancelFlowRun(ctx context.Context, flowID, runID string) (agen
 	if err != nil {
 		return agent.FlowRunView{}, err
 	}
-	return a.CancelFlowRun(ctx, flowID, runID)
+	view, err := a.CancelFlowRun(ctx, flowID, runID)
+	if err == nil {
+		s.untrackFlowRun(agent.FlowRunRef{FlowID: flowID, RunID: runID})
+	}
+	return view, err
 }
 
 // ListFlowRuns returns all runs of one flow (newest first).

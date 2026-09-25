@@ -31,6 +31,7 @@ func TestMessageFromResponsePreservesTextAndToolUseBlocks(t *testing.T) {
 func TestLatestPersistentUserText(t *testing.T) {
 	messages := []Message{
 		NewTextMessage(RoleUser, "  earlier question  "),
+		NewSummaryMessage("## Goal\n- An older compacted goal", "transcript.json"),
 		NewTextMessage(RoleAssistant, "answer"),
 		NewTextMessage(RoleUser, "   "),
 		NewEphemeralTextMessage(KindInbox, "runtime-only input"),
@@ -41,6 +42,9 @@ func TestLatestPersistentUserText(t *testing.T) {
 	}
 	if got := LatestPersistentUserText(nil); got != "" {
 		t.Fatalf("expected empty result for no messages, got %q", got)
+	}
+	if got := LatestPersistentUserText([]Message{NewSummaryMessage("## Goal\n- old task", "old.json")}); got != "" {
+		t.Fatalf("expected summary-only history to have no user query, got %q", got)
 	}
 }
 

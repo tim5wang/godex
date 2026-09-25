@@ -10,8 +10,8 @@ import type { FlowDefinition, FlowEdge, FlowNode } from "../../lib/api";
 //
 // Flow Spec v1 (internal model):
 //   Definition { flow_id, version, status, inputs, nodes[], edges[] }
-//   Node  { id, kind(step|llm|decision|human|branch|loop), title, prompt,
-//           decision?, human?, branch?, loop?, canvas_pos? }
+//   Node  { id, kind(step|llm|decision|human|branch|loop|function|service),
+//           title, prompt, decision?, human?, branch?, loop?, canvas_pos? }
 //   Edge  { id, from, to, edge_type(data_dependency|handoff|condition), when? }
 //
 // flowgram.ai WorkflowJSON (free-layout-editor):
@@ -129,31 +129,20 @@ export function workflowToFlowSpec(
   flowId: string,
   version: string,
   status: string,
+  baseDefinition?: FlowDefinition,
 ): FlowDefinition {
   // Node spec fields live at data top-level (the form engine reads/writes
   // them there via Field name="title" / getValueIn("decision") etc.).
   const nodes: FlowNode[] = (wf.nodes ?? []).map((n) => {
-    const data = (n.data ?? {}) as Partial<FlowNode> & {
+    const data = (n.data ?? {}) as Partial<FlowNode> & Record<string, unknown> & {
       kind?: string;
       title?: string;
     };
     return {
+      ...data,
       id: n.id,
       kind: data.kind ?? n.type ?? "step",
       title: data.title ?? "",
-      prompt: data.prompt,
-      decision: data.decision,
-      human: data.human,
-      branch: data.branch,
-      loop: data.loop,
-      retry: data.retry,
-      write_scope: data.write_scope,
-      agent_ref: data.agent_ref,
-      timeout_sec: data.timeout_sec,
-      outputs: data.outputs,
-      function: data.function,
-      pre_script: data.pre_script,
-      post_script: data.post_script,
       canvas_pos: n.meta?.position,
     } as FlowNode;
   });
@@ -218,7 +207,14 @@ export function workflowToFlowSpec(
     br.branch = { cases, default_to: defaultTo };
   }
 
-  return { flow_id: flowId, version, status, nodes, edges };
+  return {
+    ...baseDefinition,
+    flow_id: flowId,
+    version,
+    status,
+    nodes,
+    edges,
+  };
 }
 
 /** Extract the spec fields of a node (everything except canvas layout). */
@@ -248,6 +244,12 @@ export function blankFlowNode(id: string, kind: string): FlowNode {
         runtime: "js",
         handler: "handle",
         source: "function handle(ctx, event) {\n  return { result: 1 };\n}",
+      };
+      break;
+    case "service":
+      base.service = {
+        method: "GET",
+        url: "https://api.example.com/",
       };
       break;
   }

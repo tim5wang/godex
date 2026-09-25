@@ -31,6 +31,20 @@ import (
 // finalized through the same handoff machinery as other nodes.
 // ---------------------------------------------------------------------------
 
+func validateWorkflowOutputSpecs(specs []workflowVarDef, values map[string]any, path string) error {
+	if len(specs) == 0 {
+		return nil
+	}
+	defs := make([]flow.VarDef, 0, len(specs))
+	for _, spec := range specs {
+		defs = append(defs, flow.VarDef{
+			Name: spec.Name, Type: spec.Type, Desc: spec.Desc, Required: spec.Required,
+			Schema: append([]byte{}, spec.Schema...),
+		})
+	}
+	return flow.ValidateVariableValues(defs, values, path, false)
+}
+
 // ---------------------------------------------------------------------------
 // Flow-level outbound network policy (E3a)
 //
@@ -60,6 +74,7 @@ func flowNetworkPolicyFromSpec(np *flow.NetworkPolicy) flowNetworkPolicy {
 	if np.MaxResponseChars > 0 {
 		out.MaxResponseChars = np.MaxResponseChars
 	}
+	out.AllowPrivateHosts = np.AllowPrivateHosts
 	return out
 }
 
@@ -76,36 +91,36 @@ func cleanDomainList(values []string) []string {
 
 // flowNetworkPolicy is the normalized, enforceable policy.
 type flowNetworkPolicy struct {
-	Policy           string   // allow_all | allowlist
-	AllowedDomains   []string
-	BlockedDomains   []string
-	TimeoutSeconds   int
-	MaxResponseChars int
+	Policy            string // allow_all | allowlist
+	AllowedDomains    []string
+	BlockedDomains    []string
+	TimeoutSeconds    int
+	MaxResponseChars  int
+	AllowPrivateHosts bool
 }
 
 // httpGetWithPolicy performs a controlled HTTP GET (curl-free, net/http)
 // honoring the Flow network policy. Returns body text or an error explaining
 // the denial. The request URL must be absolute http(s).
 func httpGetWithPolicy(ctx context.Context, rawURL string, pol flowNetworkPolicy) (string, error) {
-	if strings.TrimSpace(rawURL) == "" {
-		return "", fmt.Errorf("empty url")
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return "", fmt.Errorf("invalid or unsupported url %q (http/https only)", rawURL)
-	}
-	host := strings.ToLower(u.Hostname())
-	if tools.MatchDomainPattern(host, pol.BlockedDomains) {
-		return "", fmt.Errorf("domain %q is blocked by flow network policy", host)
-	}
-	if pol.Policy == "allowlist" && !tools.MatchDomainPattern(host, pol.AllowedDomains) {
-		return "", fmt.Errorf("domain %q is not in the flow's allowed domains", host)
+	_, err := validateFlowHTTPURL(rawURL, pol)
+	if err != nil {
+		return "", err
 	}
 	timeout := time.Duration(pol.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			_, err := validateFlowHTTPURL(req.URL.String(), pol)
+			return err
+		},
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", err
@@ -124,6 +139,35 @@ func httpGetWithPolicy(ctx context.Context, rawURL string, pol flowNetworkPolicy
 		return "", fmt.Errorf("response exceeds max %d chars", pol.MaxResponseChars)
 	}
 	return string(body), nil
+}
+
+func validateFlowHTTPURL(rawURL string, pol flowNetworkPolicy) (*url.URL, error) {
+	if strings.TrimSpace(rawURL) == "" {
+		return nil, fmt.Errorf("empty url")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return nil, fmt.Errorf("invalid or unsupported url %q (http/https only)", rawURL)
+	}
+	host := strings.ToLower(u.Hostname())
+	if tools.MatchDomainPattern(host, pol.BlockedDomains) {
+		return nil, fmt.Errorf("domain %q is blocked by flow network policy", host)
+	}
+	if pol.Policy == "allowlist" && !tools.MatchDomainPattern(host, pol.AllowedDomains) {
+		return nil, fmt.Errorf("domain %q is not in the flow's allowed domains", host)
+	}
+	if pol.AllowPrivateHosts && (pol.Policy != "allowlist" || len(pol.AllowedDomains) == 0) {
+		return nil, fmt.Errorf("private hosts require an explicit flow allowlist")
+	}
+	if !pol.AllowPrivateHosts {
+		if _, err := tools.ValidateRemoteURL(rawURL, false); err != nil {
+			if strings.Contains(err.Error(), "private or local") || strings.Contains(err.Error(), "localhost") {
+				return nil, fmt.Errorf("private or local destination is blocked by flow network policy")
+			}
+			return nil, fmt.Errorf("could not validate outbound destination")
+		}
+	}
+	return u, nil
 }
 
 // workflowFunctionContext builds the unified handler context:
@@ -175,6 +219,15 @@ func (a *Agent) executeWorkflowFunction(ctx context.Context, state *workflowStat
 		return
 	}
 	handlerCtx := a.workflowFunctionContext(*state, *node)
+	if err := flow.ValidateJSONSchemaValue(handlerCtx, spec.InputSchema, "function input"); err != nil {
+		a.failWorkflowFunctionNode(state, node, "input contract violation: "+err.Error())
+		return
+	}
+	if node.TimeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(node.TimeoutSec)*time.Second)
+		defer cancel()
+	}
 	start := time.Now()
 	raw, err := a.runWorkflowFunction(ctx, spec, handlerCtx)
 	latency := time.Since(start)
@@ -186,6 +239,10 @@ func (a *Agent) executeWorkflowFunction(ctx context.Context, state *workflowStat
 			"at":      time.Now().UTC(),
 		})
 		a.failWorkflowFunctionNode(state, node, err.Error())
+		return
+	}
+	if err := flow.ValidateJSONSchemaValue(raw, spec.OutputSchema, "function output"); err != nil {
+		a.failWorkflowFunctionNode(state, node, "output contract violation: "+err.Error())
 		return
 	}
 	// Multi-event output: handler returned an array → stream each element as
@@ -249,6 +306,10 @@ func (a *Agent) failWorkflowFunctionNode(state *workflowState, node *workflowNod
 // becomes node.Outputs, so downstream {{nodes.<id>.outputs.<field>}} and
 // condition predicates read it directly.
 func (a *Agent) completeWorkflowFunction(state *workflowState, node *workflowNode, result map[string]any, latency time.Duration) {
+	if err := validateWorkflowOutputSpecs(node.OutputSpec, result, "node "+node.ID+" outputs"); err != nil {
+		a.failWorkflowFunctionNode(state, node, "output contract violation: "+err.Error())
+		return
+	}
 	now := time.Now().UTC()
 	node.Status = workflowStatusCompleted
 	node.Attempt = nextWorkflowAttempt(*node)
@@ -454,6 +515,9 @@ func runJSFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx m
 
 	// Hard timeout via Interrupt (goja returns *InterruptedError).
 	timeout := 10 * time.Second
+	if spec.TimeoutSec > 0 {
+		timeout = time.Duration(spec.TimeoutSec) * time.Second
+	}
 	done := make(chan struct{})
 	var callRes goja.Value
 	var callErr error
@@ -461,9 +525,15 @@ func runJSFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx m
 		defer close(done)
 		callRes, callErr = fn(goja.Undefined(), vm.ToValue(handlerCtx), vm.ToValue(map[string]any{}))
 	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-done:
-	case <-time.After(timeout):
+	case <-ctx.Done():
+		vm.Interrupt(ctx.Err())
+		<-done
+		return nil, ctx.Err()
+	case <-timer.C:
 		vm.Interrupt("function timeout")
 		<-done
 		return nil, fmt.Errorf("js function node: handler timed out after %s", timeout)

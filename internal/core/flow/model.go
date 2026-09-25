@@ -15,6 +15,7 @@ const (
 	KindBranch   = "branch"   // no-job gateway: evaluates cases synchronously
 	KindLoop     = "loop"     // compiled to control_flow append edges
 	KindFunction = "function" // code node: js (goja) or wasm (wasmrt plugin) handler (P3)
+	KindService  = "service"  // declarative HTTP(S) JSON service call
 )
 
 // Edge types (Flow Spec §3.3).
@@ -26,9 +27,9 @@ const (
 
 // Definition is one immutable version of a flow (flow.json).
 // NetworkPolicy is the Flow-level outbound network security policy (E3a):
-// controls what function nodes (js/wasm) may reach. Default allow_all with no
-// blocklist. Applied at run time by the sandbox HTTP bridge; also documented
-// on the definition for review.
+// controls what function and service nodes may reach. Default allow_all with
+// no blocklist. Applied at run time by their HTTP clients and documented on
+// the definition for review.
 type NetworkPolicy struct {
 	// Policy is "allow_all" (default) or "allowlist".
 	Policy string `json:"policy,omitempty"`
@@ -37,6 +38,9 @@ type NetworkPolicy struct {
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
 	// BlockedDomains are always denied (checked first, both policies).
 	BlockedDomains []string `json:"blocked_domains,omitempty"`
+	// AllowPrivateHosts permits localhost/private-network destinations only
+	// when the Flow also uses an explicit domain allowlist.
+	AllowPrivateHosts bool `json:"allow_private_hosts,omitempty"`
 	// TimeoutSeconds bounds each outbound request; 0 = 15s default.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 	// MaxResponseChars caps each response body; 0 = 1 MiB default.
@@ -49,33 +53,38 @@ type NetworkPolicy struct {
 // English keywords: flow spec, flow_id, nodes, edges, decision, branch, loop, human, function, network policy, pre_script, post_script, timeout, handoff, condition edge, append template, converge
 //
 // 顶层字段：
-//   flow_id: string（必填，fl_<slug>）；name/description: string
-//   version: string（必填，如 "1"）；status: "draft"|"gray"|"published"|"deprecated"|"archived"
-//   inputs/outputs: [{name, type, desc}]（type: string|number|boolean|object|array|any）
-//   nodes: [Node]；edges: [Edge]；retry: RetryPolicy；on_complete: {url, secret}
-//   network: NetworkPolicy（function 节点出网策略：policy allow_all|allowlist、
-//     allowed_domains/blocked_domains、timeout_seconds、max_response_chars）
+//
+//	flow_id: string（必填，fl_<slug>）；name/description: string
+//	version: string（必填，如 "1"）；status: "draft"|"gray"|"published"|"deprecated"|"archived"
+//	inputs/outputs: [{name, type, desc}]（type: string|number|boolean|object|array|any）
+//	nodes: [Node]；edges: [Edge]；retry: RetryPolicy；on_complete: {url, secret}
+//	network: NetworkPolicy（function/service 节点出网策略：policy allow_all|allowlist、
+//	  allowed_domains/blocked_domains、timeout_seconds、max_response_chars、
+//	  allow_private_hosts）
 //
 // Node（id 必填短 slug，kind 必填）：
-//   step|llm：需要 prompt（可引用 {{inputs.<name>}} / {{nodes.<id>.outputs.<field>}}）
-//   decision：prompt + decision.decision_type "choice" + decision.choices[{id,label}]；
-//     其后方需 data_dependency 边连到 branch 节点按 choice id 路由；
-//     标准输出字段豁免清单：choice/confidence/question 由引擎写，无需在 outputs 声明
-//   branch：branch.cases[{name,to,condition}]+branch.default_to（必填）；
-//     condition: {choice: "<choice id>"} 或 {status: "completed"} 或 {operator,value}；
-//     case 的 to 必须指向真实节点；branch 网关节点必须有且仅一条 data_dependency 入边（source）
-//   human：prompt + human.queue（"ops"|"support"|"finance"）+ human.result_var + assignee_policy；
-//     human 超时字段是 timeout_ms（毫秒），节点级超时是 timeout_sec（秒）——单位不一致，注意对照
-//   loop：loop.body + loop.exit_when（退出条件）+ max_iterations/iteration_key
-//   function：function.runtime（"js"|"wasm"）+ function.source（js 源码）或 function.ref（node-library id）；
-//     function 节点不需要 prompt（靠 handler 执行），但可带 pre_script/post_script
-//   canvas_pos（编辑器布局元数据，非运行时）；pre_script/post_script（bash，节点前后置，
-//     输出捕获到 outputs.script.pre_stdout/post_stdout）；outputs: [{name,type,desc}]；
-//     agent_ref（agent 模板 id）；timeout_sec；retry
+//
+//	step|llm：需要 prompt（可引用 {{inputs.<name>}} / {{nodes.<id>.outputs.<field>}}）
+//	decision：prompt + decision.decision_type "choice" + decision.choices[{id,label}]；
+//	  其后方需 data_dependency 边连到 branch 节点按 choice id 路由；
+//	  标准输出字段豁免清单：choice/confidence/question 由引擎写，无需在 outputs 声明
+//	branch：branch.cases[{name,to,condition}]+branch.default_to（必填）；
+//	  condition: {choice: "<choice id>"} 或 {status: "completed"} 或 {operator,value}；
+//	  case 的 to 必须指向真实节点；branch 网关节点必须有且仅一条 data_dependency 入边（source）
+//	human：prompt + human.queue（"ops"|"support"|"finance"）+ human.result_var + assignee_policy；
+//	  human 超时字段是 timeout_ms（毫秒），节点级超时是 timeout_sec（秒）——单位不一致，注意对照
+//	loop：loop.body + loop.exit_when（退出条件）+ max_iterations/iteration_key
+//	function：function.runtime（"js"|"wasm"）+ function.source（js 源码）或 function.ref（node-library id）；
+//	  function 节点不需要 prompt（靠 handler 执行），但可带 pre_script/post_script
+//	service：service.method/url + JSON headers/body，支持 bearer/api_key 环境变量引用；
+//	canvas_pos（编辑器布局元数据，非运行时）；pre_script/post_script（bash，节点前后置，
+//	  输出捕获到 outputs.script.pre_stdout/post_stdout）；outputs: [{name,type,desc}]；
+//	  agent_ref（agent 模板 id）；timeout_sec；retry
 //
 // Edge（id/from/to 必填，edge_type 必填）：
-//   data_dependency（普通排序）、handoff（传递上游摘要）、condition（仅 loop/branch 内部；
-//     带 when 谓词，To 节点成为 append 模板——不被静态声明，运行时按需追加）
+//
+//	data_dependency（普通排序）、handoff（传递上游摘要）、condition（仅 loop/branch 内部；
+//	  带 when 谓词，To 节点成为 append 模板——不被静态声明，运行时按需追加）
 //
 // 关键运行时语义（F1a compile）：
 //   - 分支目标（branch case.To / default_to、condition edge.To）是 append 模板，
@@ -92,24 +101,25 @@ type NetworkPolicy struct {
 //
 // 最小合法样例（decision→branch→汇聚）：
 // {"flow_id":"fl_demo","version":"1","status":"draft",
-//  "inputs":[{"name":"task","type":"string"}],
-//  "nodes":[
-//   {"id":"classify","kind":"step","prompt":"分类任务 {{inputs.task}}"},
-//   {"id":"decide","kind":"decision","prompt":"能否自动处理？",
-//    "decision":{"decision_type":"choice","choices":[{"id":"auto"},{"id":"human"}]}},
-//   {"id":"br","kind":"branch",
-//    "branch":{"cases":[{"name":"auto","to":"auto_run","condition":{"choice":"auto"}},
-//                       {"name":"human","to":"human_run","condition":{"choice":"human"}}],
-//             "default_to":"auto_run"}},
-//   {"id":"auto_run","kind":"llm","prompt":"自动回复 {{nodes.classify.outputs.result}}"},
-//   {"id":"human_run","kind":"human","prompt":"人工处理",
-//    "human":{"queue":"ops","assignee_policy":"any","result_var":"approved"}},
-//   {"id":"finalize","kind":"step","prompt":"汇总结果"}],
-//  "edges":[
-//   {"id":"e1","from":"classify","to":"decide","edge_type":"data_dependency"},
-//   {"id":"e2","from":"decide","to":"br","edge_type":"data_dependency"},
-//   {"id":"e3","from":"auto_run","to":"finalize","edge_type":"condition","when":{"status":"completed"}},
-//   {"id":"e4","from":"human_run","to":"finalize","edge_type":"condition","when":{"status":"completed"}}]}
+//
+//	"inputs":[{"name":"task","type":"string"}],
+//	"nodes":[
+//	 {"id":"classify","kind":"step","prompt":"分类任务 {{inputs.task}}"},
+//	 {"id":"decide","kind":"decision","prompt":"能否自动处理？",
+//	  "decision":{"decision_type":"choice","choices":[{"id":"auto"},{"id":"human"}]}},
+//	 {"id":"br","kind":"branch",
+//	  "branch":{"cases":[{"name":"auto","to":"auto_run","condition":{"choice":"auto"}},
+//	                     {"name":"human","to":"human_run","condition":{"choice":"human"}}],
+//	           "default_to":"auto_run"}},
+//	 {"id":"auto_run","kind":"llm","prompt":"自动回复 {{nodes.classify.outputs.result}}"},
+//	 {"id":"human_run","kind":"human","prompt":"人工处理",
+//	  "human":{"queue":"ops","assignee_policy":"any","result_var":"approved"}},
+//	 {"id":"finalize","kind":"step","prompt":"汇总结果"}],
+//	"edges":[
+//	 {"id":"e1","from":"classify","to":"decide","edge_type":"data_dependency"},
+//	 {"id":"e2","from":"decide","to":"br","edge_type":"data_dependency"},
+//	 {"id":"e3","from":"auto_run","to":"finalize","edge_type":"condition","when":{"status":"completed"}},
+//	 {"id":"e4","from":"human_run","to":"finalize","edge_type":"condition","when":{"status":"completed"}}]}
 //
 // 入口：flow_design 工具、/v1/flows API、Web Flows 页
 // 文档：docs/business-flow-runtime-design.md
@@ -123,10 +133,14 @@ type Definition struct {
 	TemplateID  string   `json:"template_id,omitempty"`
 	Inputs      []VarDef `json:"inputs,omitempty"`
 	Outputs     []VarDef `json:"outputs,omitempty"`
-	Nodes       []Node   `json:"nodes"`
-	Edges       []Edge   `json:"edges"`
-	// Network is the outbound network security policy for function nodes
-	// (js/wasm) in this flow (E3a). Empty = allow all, no blocklist.
+	// TimeoutSec is the wall-clock limit for one FlowRun. Zero keeps the
+	// legacy unbounded behavior; expired runs are failed and active nodes
+	// canceled by the durable workflow runtime.
+	TimeoutSec int    `json:"timeout_sec,omitempty"`
+	Nodes      []Node `json:"nodes"`
+	Edges      []Edge `json:"edges"`
+	// Network is the outbound network security policy for function (js/wasm)
+	// and service nodes in this flow (E3a). Empty = allow all, no blocklist.
 	Network *NetworkPolicy `json:"network,omitempty"`
 	// Retry is the default RetryPolicy applied to nodes that do not override it.
 	Retry *RetryPolicy `json:"retry,omitempty"`
@@ -149,12 +163,17 @@ type OnCompleteSpec struct {
 // {"properties":{...}} or {"items":{...}}) to define the shape — validated
 // at save time (validate.go), passed through untouched to consumers.
 type VarDef struct {
-	Name string          `json:"name"`
-	Type string          `json:"type,omitempty"`
-	Desc string          `json:"desc,omitempty"`
+	Name     string `json:"name"`
+	Type     string `json:"type,omitempty"`
+	Desc     string `json:"desc,omitempty"`
+	Required bool   `json:"required,omitempty"`
+	// Source is used by Flow-level outputs to map a published output to a
+	// node value, e.g. "nodes.finalize.outputs.summary". It is ignored for
+	// inputs and node-level outputs.
+	Source string `json:"source,omitempty"`
 	// Schema is an optional nested JSON Schema fragment for object/array
-	// variables (P2.3 变量 schema). Opaque to the engine beyond JSON validity;
-	// it documents/validates the expected shape for callers.
+	// variables. The runtime enforces the supported JSON Schema subset:
+	// type, properties, required, items, enum and additionalProperties.
 	Schema json.RawMessage `json:"schema,omitempty"`
 }
 
@@ -167,11 +186,11 @@ type CanvasPos struct {
 
 // Node is one node in a flow definition.
 type Node struct {
-	ID         string       `json:"id"`
-	Kind       string       `json:"kind"`
-	Title      string       `json:"title,omitempty"`
-	Prompt     string       `json:"prompt,omitempty"`
-	AgentType  string       `json:"agent_type,omitempty"`
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Title     string `json:"title,omitempty"`
+	Prompt    string `json:"prompt,omitempty"`
+	AgentType string `json:"agent_type,omitempty"`
 	// CanvasPos is editor-only layout metadata (x/y on the FlowGram canvas).
 	CanvasPos *CanvasPos `json:"canvas_pos,omitempty"`
 	// AgentRef optionally pins this step node to an agent template (talent
@@ -179,14 +198,15 @@ type Node struct {
 	// capability baseline (bundles/tools/write_scope/mcp/skills/packages) is
 	// resolved and injected into the node's subagent (P1.4). Empty = the
 	// node/flow defaults apply.
-	AgentRef   string       `json:"agent_ref,omitempty"`
-	WriteScope []string     `json:"write_scope,omitempty"`
+	AgentRef   string        `json:"agent_ref,omitempty"`
+	WriteScope []string      `json:"write_scope,omitempty"`
 	Retry      *RetryPolicy  `json:"retry,omitempty"`
 	Decision   *DecisionSpec `json:"decision,omitempty"`
 	Human      *HumanSpec    `json:"human,omitempty"`
 	Branch     *BranchSpec   `json:"branch,omitempty"`
 	Loop       *LoopSpec     `json:"loop,omitempty"`
 	Function   *FunctionSpec `json:"function,omitempty"`
+	Service    *ServiceSpec  `json:"service,omitempty"`
 	TimeoutSec int           `json:"timeout_sec,omitempty"`
 	// PreScript / PostScript are optional bash scripts executed before / after
 	// the node's main work (E3b). They run in the agent's workspace with a
@@ -232,13 +252,13 @@ type Choice struct {
 
 // HumanSpec configures a human fallback node (Flow Spec §3.2; task store F2).
 type HumanSpec struct {
-	Queue          string   `json:"queue"`
-	AssigneePolicy string   `json:"assignee_policy,omitempty"` // any | role:<id>
-	Form           any      `json:"form,omitempty"`            // ui_card card/form JSON
-	Prompt         string   `json:"prompt,omitempty"`
-	TimeoutMS      int      `json:"timeout_ms,omitempty"`
-	OnTimeout      string   `json:"on_timeout,omitempty"` // escalate:<queue> | llm | fail
-	ResultVar      string   `json:"result_var,omitempty"`
+	Queue          string `json:"queue"`
+	AssigneePolicy string `json:"assignee_policy,omitempty"` // any | role:<id>
+	Form           any    `json:"form,omitempty"`            // ui_card card/form JSON
+	Prompt         string `json:"prompt,omitempty"`
+	TimeoutMS      int    `json:"timeout_ms,omitempty"`
+	OnTimeout      string `json:"on_timeout,omitempty"` // escalate:<queue> | llm | fail
+	ResultVar      string `json:"result_var,omitempty"`
 }
 
 // BranchSpec is a no-job routing gateway (Flow Spec §3.2). Cases are matched
@@ -255,8 +275,8 @@ type BranchCase struct {
 	Condition Condition `json:"condition"`
 }
 
-// LoopSpec compiles to control_flow append edges (Flow Spec §3.2). F1a
-// supports a single iteration append per exit condition.
+// LoopSpec compiles to bounded control_flow append edges (Flow Spec §3.2).
+// The current compiler supports one non-branch node in the body.
 type LoopSpec struct {
 	Body          []string  `json:"body"`
 	ExitWhen      Condition `json:"exit_when"`
@@ -285,6 +305,23 @@ type FunctionSpec struct {
 	// InputSchema / OutputSchema declare the event/result shape (JSON Schema).
 	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
 	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
+}
+
+// ServiceSpec configures one synchronous HTTP(S) JSON service call.
+type ServiceSpec struct {
+	Method  string            `json:"method"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    json.RawMessage   `json:"body,omitempty"`
+	Auth    *ServiceAuthSpec  `json:"auth,omitempty"`
+}
+
+// ServiceAuthSpec references a credential from the Godex process environment;
+// the credential value is never stored in the Flow definition.
+type ServiceAuthSpec struct {
+	Type       string `json:"type"` // bearer | api_key
+	TokenEnv   string `json:"token_env"`
+	HeaderName string `json:"header_name,omitempty"` // required for api_key
 }
 
 // Edge connects two nodes. data_dependency/handoff edges reference static

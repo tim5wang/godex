@@ -25,6 +25,8 @@ type CompactionRecord struct {
 	AfterTokens   int       `json:"after_tokens,omitempty"`
 	Reasons       []string  `json:"reasons,omitempty"`
 	Source        string    `json:"source,omitempty"`
+	Mode          string    `json:"compaction_mode,omitempty"`
+	LatencyMS     int64     `json:"compaction_latency_ms,omitempty"`
 	TranscriptRef string    `json:"transcript_ref,omitempty"`
 }
 
@@ -55,11 +57,14 @@ func (s *Service) Compactions(ctx context.Context, sessionID string) ([]Compacti
 			continue
 		}
 		records = append(records, CompactionRecord{
-			Timestamp:    event.Timestamp,
-			BeforeTokens: intValue(payload["token_estimate_before"]),
-			AfterTokens:  intValue(payload["token_estimate_after"]),
-			Reasons:      stringSliceValue(payload["compression_reasons"]),
-			Source:       "snapshot_ready",
+			Timestamp:     event.Timestamp,
+			BeforeTokens:  intValue(payload["token_estimate_before"]),
+			AfterTokens:   intValue(payload["token_estimate_after"]),
+			Reasons:       stringSliceValue(payload["compression_reasons"]),
+			Source:        "snapshot_ready",
+			Mode:          stringValue(payload["compaction_mode"]),
+			LatencyMS:     int64Value(payload["compaction_latency_ms"]),
+			TranscriptRef: stringValue(payload["transcript_ref"]),
 		})
 	}
 
@@ -78,7 +83,8 @@ func (s *Service) Compactions(ctx context.Context, sessionID string) ([]Compacti
 		})
 	}
 
-	// Newest first, deduplicated by rounded timestamp + source.
+	// Newest first, deduplicated by archive reference when available, otherwise
+	// by rounded timestamp + source.
 	sort.SliceStable(records, func(i, j int) bool {
 		return records[i].Timestamp.After(records[j].Timestamp)
 	})
@@ -97,17 +103,60 @@ func parseCompactionTimestamp(text string) time.Time {
 }
 
 func dedupeCompactionRecords(records []CompactionRecord) []CompactionRecord {
-	seen := make(map[string]bool, len(records))
+	seen := make(map[string]int, len(records))
 	out := make([]CompactionRecord, 0, len(records))
 	for _, r := range records {
 		key := r.Source + "|" + r.Timestamp.Truncate(time.Minute).Format(time.RFC3339)
-		if seen[key] {
+		if ref := strings.TrimSpace(r.TranscriptRef); ref != "" {
+			key = "transcript|" + ref
+		}
+		if index, ok := seen[key]; ok {
+			existing := &out[index]
+			if existing.BeforeTokens == 0 {
+				existing.BeforeTokens = r.BeforeTokens
+			}
+			if existing.AfterTokens == 0 {
+				existing.AfterTokens = r.AfterTokens
+			}
+			if len(existing.Reasons) == 1 && existing.Reasons[0] == "summary" {
+				existing.Reasons = append([]string{}, r.Reasons...)
+			}
+			if existing.Source == "summary" && r.Source != "" && r.Source != "summary" {
+				existing.Source = r.Source
+			}
+			if existing.Mode == "" {
+				existing.Mode = r.Mode
+			}
+			if existing.LatencyMS == 0 {
+				existing.LatencyMS = r.LatencyMS
+			}
 			continue
 		}
-		seen[key] = true
+		seen[key] = len(out)
 		out = append(out, r)
 	}
 	return out
+}
+
+func stringValue(v any) string {
+	text, _ := v.(string)
+	return strings.TrimSpace(text)
+}
+
+func int64Value(v any) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return i
+	default:
+		return 0
+	}
 }
 
 func intValue(v any) int {

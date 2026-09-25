@@ -381,12 +381,13 @@ acp:
   agents:{{ yamlValue .ACP.Agents 4 }}
 
 agent:
-  # Approximate threshold before session compression is useful.
+  # Legacy absolute trigger. Keep at 0 to derive the trigger from the context-window ratio.
   compress_threshold: {{ .Agent.CompressThreshold }}
-  # Fast compaction is used by default to keep model calls off the hot path.
+  # Hybrid compaction uses a bounded model summary with a rule-based fallback.
   compaction:
     auto_enabled: {{ .Agent.Compaction.AutoEnabled }}
     trigger_tokens: {{ .Agent.Compaction.TriggerTokens }}
+    # Deprecated; retained for compatibility and no longer used to truncate history.
     target_history_tokens: {{ .Agent.Compaction.TargetHistoryTokens }}
     mode: {{ yamlString .Agent.Compaction.Mode }}
     model_profile_id: {{ yamlString .Agent.Compaction.ModelProfileID }}

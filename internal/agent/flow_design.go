@@ -40,7 +40,7 @@ type flowDesignArgs struct {
 // set" an Agent needs to act as a Flow designer (the natural-language tab
 // also routes through the same Agent methods).
 func newFlowDesignTool(agent *Agent) tools.Tool {
-	return tools.NewTypedTool(tools.NewToolSpec("flow_design", "Design a Business Flow Spec v1 definition as a chat agent. action='generate' drafts a new flow from a natural-language description; action='read' (flow_id) returns the current flow's draft definition; action='amend' applies a natural-language change to an existing definition (multi-turn iterative editing); action='validate' dry-runs flow.Validate on a definition and returns errors. Returns the draft definition (structured) plus a compact text summary. Iterate: generate → validate → amend until coherent, then persist via createFlow.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("flow_design", "Design a Business Flow Spec v1 definition as a chat agent. action='generate' drafts a new flow from a natural-language description; action='read' (flow_id) returns the current flow's draft definition; action='amend' applies a natural-language change to an existing definition (multi-turn iterative editing); action='validate' dry-runs flow.Validate on a definition and returns errors. Returns the complete Flow Spec JSON plus a concise summary. Iterate: generate → validate → amend until coherent, then persist via createFlow.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
@@ -182,19 +182,19 @@ func flowInvalidResult(def *flow.Definition, vErr error) tools.ToolResult {
 	)
 	return tools.ToolResult{
 		Structured: map[string]interface{}{
-			"valid":       false,
-			"error":       vErr.Error(),
-			"nodes":       nodeKinds,
-			"edges":       edges,
+			"valid":        false,
+			"error":        vErr.Error(),
+			"nodes":        nodeKinds,
+			"edges":        edges,
 			"declared_ids": ids,
 		},
 		Text: hint,
 	}
 }
 
-// flowDesignResult wraps a draft definition into a ToolResult: the structured
-// payload carries the full definition for downstream tools, and the text
-// summary keeps the chat response compact.
+// flowDesignResult wraps a draft definition into a ToolResult. Tool-result
+// serialization sends Text to the model and drops Structured, so Text must
+// carry the full definition as well as the compact summary.
 func flowDesignResult(def *flow.Definition, verb string) tools.ToolResult {
 	nodes := len(def.Nodes)
 	edges := len(def.Edges)
@@ -213,15 +213,23 @@ func flowDesignResult(def *flow.Definition, verb string) tools.ToolResult {
 		}
 	}
 	summary := strings.Join(parts, "、")
+	summaryText := fmt.Sprintf("%s Flow Spec draft %q: %d nodes / %d edges%s",
+		verb, def.FlowID, nodes, edges, func() string {
+			if summary != "" {
+				return "（" + summary + "）"
+			}
+			return ""
+		}())
+	raw, err := json.Marshal(def)
+	if err != nil {
+		return tools.ToolResult{
+			Structured: def,
+			Text:       fmt.Sprintf("%s\nFlow Spec JSON serialization failed: %v", summaryText, err),
+		}
+	}
 	return tools.ToolResult{
 		Structured: def,
-		Text: fmt.Sprintf("%s Flow Spec draft %q: %d nodes / %d edges%s",
-			verb, def.FlowID, nodes, edges, func() string {
-				if summary != "" {
-					return "（" + summary + "）"
-				}
-				return ""
-			}()),
+		Text:       summaryText + "\nFlow Spec JSON:\n" + string(raw),
 	}
 }
 

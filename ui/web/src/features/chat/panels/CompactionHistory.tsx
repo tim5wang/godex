@@ -25,7 +25,7 @@ export function CompactionHistoryPanel({
 }) {
   const { t } = useI18n();
 
-  const compactions: { timestamp: string; before: number; after: number; reasons: string; source?: string }[] = [];
+  const compactions: { timestamp: string; before: number; after: number; reasons: string; source?: string; mode?: string; latencyMs?: number }[] = [];
   if (records && records.length > 0) {
     for (const record of records) {
       compactions.push({
@@ -34,6 +34,8 @@ export function CompactionHistoryPanel({
         after: Number(record.after_tokens ?? 0),
         reasons: Array.isArray(record.reasons) ? record.reasons.join(", ") : "",
         source: record.source,
+        mode: record.compaction_mode,
+        latencyMs: record.compaction_latency_ms,
       });
     }
   } else {
@@ -54,6 +56,8 @@ export function CompactionHistoryPanel({
           reasons: Array.isArray(payload.compression_reasons)
             ? (payload.compression_reasons as unknown[]).map(String).join(", ")
             : "",
+          mode: typeof payload.compaction_mode === "string" ? payload.compaction_mode : undefined,
+          latencyMs: Number(payload.compaction_latency_ms ?? 0) || undefined,
         });
       });
   }
@@ -88,6 +92,10 @@ export function CompactionHistoryPanel({
                 <Tag color="blue" style={{ marginInlineStart: 0 }}>
                   {item.source}
                 </Tag>
+              ) : null}
+              {item.mode ? <Tag>{t("chat.compactionHistoryMode", { mode: item.mode })}</Tag> : null}
+              {item.latencyMs ? (
+                <Tag>{t("chat.compactionHistoryLatency", { latency: item.latencyMs })}</Tag>
               ) : null}
             </Space>
             {item.reasons ? (

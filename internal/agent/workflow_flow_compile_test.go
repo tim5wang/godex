@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/decision"
 	"github.com/tim5wang/godex/internal/core/flow"
@@ -95,6 +96,7 @@ func TestFlowCompileBranchRoutesEndToEnd(t *testing.T) {
 		"action": "create", "workflow_id": "wf_flow_branch_e2e",
 		"nodes": nodeMaps, "edges": edgeMaps,
 	})
+	cleanupWorkflowAfterTest(t, a, "wf_flow_branch_e2e")
 	// Static nodes only: decide + br (branch targets are append templates).
 	if len(created.Nodes) != 2 {
 		t.Fatalf("expected 2 static nodes (decide, br), got %d: %+v", len(created.Nodes), created.Nodes)
@@ -122,9 +124,14 @@ func TestFlowCompileBranchRoutesEndToEnd(t *testing.T) {
 	if br == nil || br.Outputs["choice"] != "auto" {
 		t.Fatalf("branch outputs.choice not auto: %+v", br)
 	}
-	// Exactly the auto branch appended; llm_run stays out.
-	if !nodeExists(started.Nodes, "auto_run") {
+	// The selected append target is not only durable; the scheduler starts it
+	// in the same pass. The other branch remains absent.
+	autoRun := workflowNodeViewByID(started.Nodes, "auto_run")
+	if autoRun == nil {
 		t.Fatalf("expected auto_run appended, got %+v", started.Nodes)
+	}
+	if autoRun.JobID == "" || autoRun.Status != workflowStatusRunning {
+		t.Fatalf("expected auto_run to be scheduled immediately, got %+v", autoRun)
 	}
 	if nodeExists(started.Nodes, "llm_run") {
 		t.Fatalf("llm_run must not be appended on choice=auto: %+v", started.Nodes)
@@ -155,6 +162,7 @@ func TestFlowCompileBranchDefaultRoutes(t *testing.T) {
 		"action": "create", "workflow_id": "wf_flow_branch_default",
 		"nodes": nodeMaps, "edges": edgeMaps,
 	})
+	cleanupWorkflowAfterTest(t, a, "wf_flow_branch_default")
 	started := runWorkflowTool(t, a, context.Background(), map[string]interface{}{
 		"action": "start", "workflow_id": "wf_flow_branch_default",
 	})
@@ -230,6 +238,7 @@ func TestFlowCompileDecisionDirectConditionRoutes(t *testing.T) {
 		"action": "create", "workflow_id": "wf_decision_direct",
 		"nodes": nodeMaps, "edges": edgeMaps,
 	})
+	cleanupWorkflowAfterTest(t, a, "wf_decision_direct")
 	// Static nodes: only decide (targets are append templates via condition
 	// edges). The decision itself is a static job node.
 	if len(created.Nodes) != 1 {
@@ -253,4 +262,47 @@ func TestFlowCompileDecisionDirectConditionRoutes(t *testing.T) {
 	if nodeExists(started.Nodes, "human_run") {
 		t.Fatalf("human_run must not be appended on choice=auto: %+v", started.Nodes)
 	}
+}
+
+func cleanupWorkflowAfterTest(t *testing.T, a *Agent, workflowID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		state, err := a.cancelWorkflowNode(context.Background(), workflowID, "")
+		if err != nil {
+			t.Errorf("cancel test workflow: %v", err)
+			return
+		}
+		var jobIDs []string
+		for _, node := range state.Nodes {
+			if node.JobID != "" {
+				jobIDs = append(jobIDs, node.JobID)
+			}
+		}
+		if len(jobIDs) == 0 {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, err := waitSubagents(ctx, a, subagentWaitRequest{
+			JobIDs: jobIDs, Mode: "all", TimeoutMS: 3000,
+		}); err != nil {
+			t.Errorf("wait for test workflow jobs to stop: %v", err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for _, jobID := range jobIDs {
+			for {
+				a.subagentJobs.mu.Lock()
+				_, active := a.subagentJobs.cancels[jobID]
+				a.subagentJobs.mu.Unlock()
+				if !active {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Errorf("timed out waiting for test workflow job %s goroutine to stop", jobID)
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
 }

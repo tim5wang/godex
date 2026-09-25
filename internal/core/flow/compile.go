@@ -11,14 +11,16 @@ import (
 // It mirrors the durable engine's node/edge inputs so the agent layer can map
 // it 1:1 onto workflowNodeInput/workflowEdgeInput (design doc §4/§5).
 type Compiled struct {
-	FlowID  string         `json:"flow_id"`
-	Version string         `json:"version"`
-	Nodes   []CompiledNode `json:"nodes"`
-	Edges   []CompiledEdge `json:"edges"`
-	Digest  string         `json:"digest"`
-	// Network is the Flow-level outbound network policy for function nodes
-	// (E3a); carried onto the durable workflow so sandbox HTTP bridges can
-	// enforce it at run time.
+	FlowID     string         `json:"flow_id"`
+	Version    string         `json:"version"`
+	TimeoutSec int            `json:"timeout_sec,omitempty"`
+	Inputs     []VarDef       `json:"inputs,omitempty"`
+	Outputs    []VarDef       `json:"outputs,omitempty"`
+	Nodes      []CompiledNode `json:"nodes"`
+	Edges      []CompiledEdge `json:"edges"`
+	Digest     string         `json:"digest"`
+	// Network is the Flow-level outbound network policy for function and
+	// service nodes; carried onto the durable workflow for runtime enforcement.
 	Network *NetworkPolicy `json:"network,omitempty"`
 }
 
@@ -36,6 +38,7 @@ type CompiledNode struct {
 	AgentType   string          `json:"agent_type,omitempty"`
 	AgentRef    string          `json:"agent_ref,omitempty"` // template/biz-key id (P1.4)
 	WriteScope  []string        `json:"write_scope,omitempty"`
+	TimeoutSec  int             `json:"timeout_sec,omitempty"`
 	DependsOn   []string        `json:"depends_on,omitempty"`
 	HandoffFrom []string        `json:"handoff_from,omitempty"`
 	Retry       *RetryPolicy    `json:"retry,omitempty"`
@@ -43,6 +46,7 @@ type CompiledNode struct {
 	Human       *HumanSpec      `json:"human,omitempty"`
 	Branch      *CompiledBranch `json:"branch,omitempty"`
 	Function    *FunctionSpec   `json:"function,omitempty"`
+	Service     *ServiceSpec    `json:"service,omitempty"`
 	// Outputs carries the node's declared typed outputs (P2.3) so the engine
 	// can resolve {{nodes.<id>.outputs.<field>}} references at run time.
 	Outputs []VarDef `json:"outputs,omitempty"`
@@ -79,6 +83,7 @@ const branchDefaultRoute = "default"
 type CompiledEdge struct {
 	ID            string       `json:"id,omitempty"`
 	From          string       `json:"from"`
+	FromPrefix    string       `json:"from_prefix,omitempty"`
 	When          Condition    `json:"when"`
 	Append        CompiledNode `json:"append"`
 	MaxIterations int          `json:"max_iterations,omitempty"`
@@ -97,13 +102,12 @@ type CompiledEdge struct {
 //     Append template and is NOT statically declared
 //   - branch case.To / default_to nodes  -> templates inside the branch spec,
 //     NOT statically declared
-//   - loop nodes                         -> rejected in F1a (needs exit-condition
-//     compilation, lands in F1b)
+//   - loop nodes                         -> bounded control-flow templates
 //
 // A node referenced only as an append target (condition edge or branch case)
 // is auto-demoted to a template even if declared in Nodes. A node with both a
 // static in-edge and an append-target reference is rejected (mixed use is not
-// supported in F1a).
+// supported yet).
 func Compile(d *Definition) (*Compiled, error) {
 	if err := Validate(d); err != nil {
 		return nil, err
@@ -113,9 +117,52 @@ func Compile(d *Definition) (*Compiled, error) {
 		byID[n.ID] = n
 	}
 
-	// Collect append-target references (condition edges + branch cases).
+	appendTargets, staticIn := collectCompileTargets(d)
+	nodes, nodesByID, err := compileStaticNodes(d, byID, appendTargets, staticIn)
+	if err != nil {
+		return nil, err
+	}
+	if err := foldStaticEdges(d.Edges, byID, nodesByID); err != nil {
+		return nil, err
+	}
+	syncCompiledNodes(nodes, nodesByID)
+
+	edges, err := compileConditionEdges(d, byID)
+	if err != nil {
+		return nil, err
+	}
+	branchEdges, err := compileBranchEdges(d, byID)
+	if err != nil {
+		return nil, err
+	}
+	edges = append(edges, branchEdges...)
+	loopEdges, err := compileLoopEdges(d, byID)
+	if err != nil {
+		return nil, err
+	}
+	edges = append(edges, loopEdges...)
+	if err := validateCompiledEdgeIDs(edges); err != nil {
+		return nil, err
+	}
+
+	sortNodes(nodes)
+	c := &Compiled{
+		FlowID:     d.FlowID,
+		Version:    d.Version,
+		TimeoutSec: d.TimeoutSec,
+		Inputs:     append([]VarDef{}, d.Inputs...),
+		Outputs:    append([]VarDef{}, d.Outputs...),
+		Nodes:      nodes,
+		Edges:      edges,
+		Network:    d.Network,
+	}
+	c.Digest = c.computeDigest()
+	return c, nil
+}
+
+func collectCompileTargets(d *Definition) (map[string]struct{}, map[string][]string) {
 	appendTargets := map[string]struct{}{}
-	staticIn := map[string][]string{} // static in-edges per node (data_dependency/handoff)
+	staticIn := map[string][]string{}
 	for _, e := range d.Edges {
 		et := normalizeEdgeType(e.EdgeType)
 		switch et {
@@ -126,15 +173,38 @@ func Compile(d *Definition) (*Compiled, error) {
 		}
 	}
 	for _, n := range d.Nodes {
-		if normalizeKind(n.Kind) != KindBranch || n.Branch == nil {
-			continue
+		switch normalizeKind(n.Kind) {
+		case KindBranch:
+			if n.Branch == nil {
+				continue
+			}
+			for _, c := range n.Branch.Cases {
+				appendTargets[c.To] = struct{}{}
+			}
+			appendTargets[n.Branch.DefaultTo] = struct{}{}
+		case KindLoop:
+			if n.Loop == nil {
+				continue
+			}
+			for _, id := range n.Loop.Body {
+				appendTargets[id] = struct{}{}
+			}
+			for _, edge := range d.Edges {
+				if edge.From == n.ID && normalizeEdgeType(edge.EdgeType) != EdgeCondition {
+					appendTargets[edge.To] = struct{}{}
+				}
+			}
 		}
-		for _, c := range n.Branch.Cases {
-			appendTargets[c.To] = struct{}{}
-		}
-		appendTargets[n.Branch.DefaultTo] = struct{}{}
 	}
+	return appendTargets, staticIn
+}
 
+func compileStaticNodes(
+	d *Definition,
+	byID map[string]Node,
+	appendTargets map[string]struct{},
+	staticIn map[string][]string,
+) ([]CompiledNode, map[string]CompiledNode, error) {
 	// Static nodes: everything except branches and append-target-only nodes.
 	// A node that is both a static target (has in-edges) and an append target
 	// is rejected — F1a does not support mixed use.
@@ -151,8 +221,12 @@ func Compile(d *Definition) (*Compiled, error) {
 			continue
 		default:
 			if _, isTarget := appendTargets[n.ID]; isTarget {
-				if len(staticIn[n.ID]) > 0 {
-					return nil, fmt.Errorf("node %s: mixed use as static target and append target is not supported in F1a", n.ID)
+				for _, from := range staticIn[n.ID] {
+					// A loop's outgoing edge is lowered to a dynamic exit
+					// append below; it does not make the target a static node.
+					if normalizeKind(byID[from].Kind) != KindLoop {
+						return nil, nil, fmt.Errorf("node %s: mixed use as static target and append target is not supported in F1a", n.ID)
+					}
 				}
 				continue // auto-demoted to append template
 			}
@@ -165,10 +239,12 @@ func Compile(d *Definition) (*Compiled, error) {
 			AgentType:  n.AgentType,
 			AgentRef:   n.AgentRef,
 			WriteScope: append([]string{}, n.WriteScope...),
+			TimeoutSec: n.TimeoutSec,
 			Retry:      n.Retry,
 			Decision:   n.Decision,
 			Human:      n.Human,
 			Function:   n.Function,
+			Service:    n.Service,
 			Outputs:    append([]VarDef{}, n.Outputs...),
 			PreScript:  n.PreScript,
 			PostScript: n.PostScript,
@@ -177,28 +253,32 @@ func Compile(d *Definition) (*Compiled, error) {
 			cn.Branch = compileBranch(n.Branch, byID)
 			cn.Branch.Source = branchSource(n.ID, d.Edges)
 			if cn.Branch.Source == "" {
-				return nil, fmt.Errorf("branch %s: requires exactly one data_dependency source", n.ID)
+				return nil, nil, fmt.Errorf("branch %s: requires exactly one data_dependency source", n.ID)
 			}
 		}
 		nodesByID[n.ID] = cn
 		nodes = append(nodes, cn)
 	}
+	return nodes, nodesByID, nil
+}
 
+func foldStaticEdges(edges []Edge, byID map[string]Node, nodesByID map[string]CompiledNode) error {
 	// Fold static in-edges into DependsOn/HandoffFrom. In-edges of loop nodes
 	// are not folded: a loop compiles to a control_flow append edge (its From
 	// is derived from the data_dependency source) and never becomes a static
 	// job node (P1.5).
-	for _, e := range d.Edges {
+	for _, e := range edges {
 		et := normalizeEdgeType(e.EdgeType)
 		if et == EdgeDataDependency || et == EdgeHandoff {
-			if toNode, ok := byID[e.To]; ok && normalizeKind(toNode.Kind) == KindLoop {
+			if (byID[e.To].ID != "" && normalizeKind(byID[e.To].Kind) == KindLoop) ||
+				(byID[e.From].ID != "" && normalizeKind(byID[e.From].Kind) == KindLoop) {
 				continue
 			}
 			cn, ok := nodesByID[e.To]
 			if !ok {
 				// Static edge into a node that got demoted: reject earlier via
 				// staticIn check, but guard here too.
-				return nil, fmt.Errorf("edge %s: static edge into append-only node %q", e.ID, e.To)
+				return fmt.Errorf("edge %s: static edge into append-only node %q", e.ID, e.To)
 			}
 			cn.DependsOn = appendUnique(cn.DependsOn, e.From)
 			if et == EdgeHandoff {
@@ -207,17 +287,26 @@ func Compile(d *Definition) (*Compiled, error) {
 			nodesByID[e.To] = cn
 		}
 	}
+	return nil
+}
+
+func syncCompiledNodes(nodes []CompiledNode, nodesByID map[string]CompiledNode) {
 	for i := range nodes {
-		if cn, ok := nodesByID[nodes[i].ID]; ok {
-			nodes[i] = cn
+		if node, ok := nodesByID[nodes[i].ID]; ok {
+			nodes[i] = node
 		}
 	}
+}
 
+func compileConditionEdges(d *Definition, byID map[string]Node) ([]CompiledEdge, error) {
 	// Condition edges -> CompiledEdge with To as append template.
 	var edges []CompiledEdge
 	for _, e := range d.Edges {
 		if normalizeEdgeType(e.EdgeType) != EdgeCondition {
 			continue
+		}
+		if normalizeKind(byID[e.From].Kind) == KindLoop {
+			return nil, fmt.Errorf("loop %s: condition edges from loop nodes are not supported; connect loop exits with data_dependency or handoff edges", e.From)
 		}
 		toNode, ok := byID[e.To]
 		if !ok {
@@ -236,11 +325,15 @@ func Compile(d *Definition) (*Compiled, error) {
 			IterationKey:  e.IterationKey,
 		})
 	}
+	return edges, nil
+}
 
+func compileBranchEdges(d *Definition, byID map[string]Node) ([]CompiledEdge, error) {
 	// Branch routing edges: one CompiledEdge per case + one default, all
 	// sourced from the branch gateway. The gateway writes the matched route
 	// name into outputs.choice; each edge matches on when.choice, so exactly
 	// one fires (mutual exclusion is structural).
+	var edges []CompiledEdge
 	for _, n := range d.Nodes {
 		if normalizeKind(n.Kind) != KindBranch || n.Branch == nil {
 			continue
@@ -271,58 +364,144 @@ func Compile(d *Definition) (*Compiled, error) {
 		}
 	}
 
-	// Branch nodes already carry their spec; ensure targets referenced by
-	// branch cases are demoted from static (done above). Validate branch
-	// sources resolve to static nodes.
-	for _, n := range d.Nodes {
-		if normalizeKind(n.Kind) != KindBranch || n.Branch == nil {
-			continue
-		}
-		if _, ok := nodesByID[n.ID]; !ok {
-			return nil, fmt.Errorf("branch %s: branch node was dropped during compilation", n.ID)
-		}
-	}
+	return edges, nil
+}
 
-	// Loop compilation (P1.5): a loop node compiles to one control_flow
-	// append edge — while NOT(exit_when) holds, the body's first node is
-	// appended again (engine iteration_key/max_iterations keep it bounded and
-	// idempotent). The loop node itself never becomes a static job.
+func compileLoopEdges(d *Definition, byID map[string]Node) ([]CompiledEdge, error) {
+	// Loop compilation currently supports a single-node body. The loop's
+	// incoming dependency starts body_1; subsequent body copies continue while
+	// exit_when is false. Outgoing data/handoff edges become exit templates
+	// and only run after the body satisfies exit_when.
+	loopBodyOwners := make(map[string]string)
+	loopIterationKeys := make(map[string]string)
+	var edges []CompiledEdge
 	for _, n := range d.Nodes {
 		if normalizeKind(n.Kind) != KindLoop || n.Loop == nil {
 			continue
 		}
-		if len(n.Loop.Body) == 0 {
-			return nil, fmt.Errorf("loop %s: empty body", n.ID)
+		compiled, err := compileLoop(n, d.Edges, byID, loopBodyOwners, loopIterationKeys)
+		if err != nil {
+			return nil, err
 		}
-		bodyFirst, ok := byID[n.Loop.Body[0]]
+		edges = append(edges, compiled...)
+	}
+	return edges, nil
+}
+
+func compileLoop(
+	n Node,
+	definitionEdges []Edge,
+	byID map[string]Node,
+	loopBodyOwners map[string]string,
+	loopIterationKeys map[string]string,
+) ([]CompiledEdge, error) {
+	if len(n.Loop.Body) != 1 {
+		return nil, fmt.Errorf("loop %s: currently requires exactly one body node; multi-node loop bodies are not supported yet", n.ID)
+	}
+	bodyFirst, ok := byID[n.Loop.Body[0]]
+	if !ok {
+		return nil, fmt.Errorf("loop %s: body references unknown node %q", n.ID, n.Loop.Body[0])
+	}
+	bodyKind := normalizeKind(bodyFirst.Kind)
+	if bodyKind == KindBranch || bodyKind == KindLoop {
+		return nil, fmt.Errorf("loop %s: body node %q has unsupported kind %q", n.ID, bodyFirst.ID, bodyKind)
+	}
+	if owner, ok := loopBodyOwners[bodyFirst.ID]; ok {
+		return nil, fmt.Errorf("loop %s: body node %q is already used by loop %s", n.ID, bodyFirst.ID, owner)
+	}
+	loopBodyOwners[bodyFirst.ID] = n.ID
+	for iteration := 1; iteration <= n.Loop.MaxIterations; iteration++ {
+		generatedID := fmt.Sprintf("%s_%d", bodyFirst.ID, iteration)
+		if _, collides := byID[generatedID]; collides {
+			return nil, fmt.Errorf("loop %s: node id %q conflicts with a generated loop iteration id", n.ID, generatedID)
+		}
+	}
+	from := branchSource(n.ID, definitionEdges)
+	if from == "" {
+		return nil, fmt.Errorf("loop %s: requires exactly one data_dependency source", n.ID)
+	}
+	// Continue iterating while the exit condition is NOT met. Not is a
+	// full negation of the structured predicate (P1.5).
+	exitWhen := n.Loop.ExitWhen
+	iterationKey := strings.TrimSpace(n.Loop.IterationKey)
+	if iterationKey == "" {
+		iterationKey = n.ID
+	}
+	if owner, ok := loopIterationKeys[iterationKey]; ok {
+		return nil, fmt.Errorf("loop %s: iteration_key %q is already used by loop %s", n.ID, iterationKey, owner)
+	}
+	loopIterationKeys[iterationKey] = n.ID
+	bodyTemplate := compileTemplate(bodyFirst)
+	bodyTemplate.ID = bodyFirst.ID + "_{iteration}"
+	bodyTemplate.DependsOn = []string{"{source}"}
+	edges := []CompiledEdge{{
+		ID:            fmt.Sprintf("%s_entry", n.ID),
+		From:          from,
+		When:          Condition{Status: "completed"},
+		Append:        bodyTemplate,
+		MaxIterations: n.Loop.MaxIterations,
+		IterationKey:  iterationKey,
+	}, {
+		ID:            fmt.Sprintf("%s_continue", n.ID),
+		FromPrefix:    bodyFirst.ID + "_",
+		When:          Condition{Not: &exitWhen},
+		Append:        bodyTemplate,
+		MaxIterations: n.Loop.MaxIterations,
+		IterationKey:  iterationKey,
+	}}
+	exits, err := compileLoopExitEdges(n, definitionEdges, bodyFirst, exitWhen, byID)
+	if err != nil {
+		return nil, err
+	}
+	return append(edges, exits...), nil
+}
+
+func compileLoopExitEdges(n Node, definitionEdges []Edge, body Node, exitWhen Condition, byID map[string]Node) ([]CompiledEdge, error) {
+	var edges []CompiledEdge
+	for _, e := range definitionEdges {
+		if e.From != n.ID {
+			continue
+		}
+		if normalizeEdgeType(e.EdgeType) == EdgeCondition {
+			continue // rejected above
+		}
+		target, ok := byID[e.To]
 		if !ok {
-			return nil, fmt.Errorf("loop %s: body references unknown node %q", n.ID, n.Loop.Body[0])
+			return nil, fmt.Errorf("loop %s: exit edge references unknown node %q", n.ID, e.To)
 		}
-		from := branchSource(n.ID, d.Edges)
-		if from == "" {
-			return nil, fmt.Errorf("loop %s: requires exactly one data_dependency source", n.ID)
+		if normalizeKind(target.Kind) == KindBranch || normalizeKind(target.Kind) == KindLoop {
+			return nil, fmt.Errorf("loop %s: exit target %q has unsupported kind %q", n.ID, target.ID, target.Kind)
 		}
-		// Continue iterating while the exit condition is NOT met. Not is a
-		// full negation of the structured predicate (P1.5).
-		exitWhen := n.Loop.ExitWhen
-		iterationKey := strings.TrimSpace(n.Loop.IterationKey)
-		if iterationKey == "" {
-			iterationKey = n.ID
+		exitTemplate := compileTemplate(target)
+		exitTemplate.DependsOn = []string{"{source}"}
+		if normalizeEdgeType(e.EdgeType) == EdgeHandoff {
+			exitTemplate.HandoffFrom = []string{"{source}"}
+		}
+		edgeID := e.ID
+		if strings.TrimSpace(edgeID) == "" {
+			edgeID = fmt.Sprintf("%s_to_%s", n.ID, e.To)
 		}
 		edges = append(edges, CompiledEdge{
-			ID:            fmt.Sprintf("%s_loop", n.ID),
-			From:          from,
-			When:          Condition{Not: &exitWhen},
-			Append:        compileTemplate(bodyFirst),
-			MaxIterations: n.Loop.MaxIterations,
-			IterationKey:  iterationKey,
+			ID:            fmt.Sprintf("%s_exit_%s", n.ID, edgeID),
+			FromPrefix:    body.ID + "_",
+			When:          exitWhen,
+			Append:        exitTemplate,
+			MaxIterations: 1,
+			IterationKey:  fmt.Sprintf("%s_exit_%s", n.ID, edgeID),
 		})
 	}
+	return edges, nil
+}
 
-	sortNodes(nodes)
-	c := &Compiled{FlowID: d.FlowID, Version: d.Version, Nodes: nodes, Edges: edges, Network: d.Network}
-	c.Digest = c.computeDigest()
-	return c, nil
+func validateCompiledEdgeIDs(edges []CompiledEdge) error {
+	seenEdgeIDs := make(map[string]struct{}, len(edges))
+	for _, edge := range edges {
+		if _, duplicate := seenEdgeIDs[edge.ID]; duplicate {
+			return fmt.Errorf("compiled edge id %q is duplicated", edge.ID)
+		}
+		seenEdgeIDs[edge.ID] = struct{}{}
+	}
+	return nil
 }
 
 // branchSource returns the single data_dependency source of a branch node.
@@ -354,10 +533,12 @@ func compileTemplate(n Node) CompiledNode {
 		AgentType:  n.AgentType,
 		AgentRef:   n.AgentRef,
 		WriteScope: append([]string{}, n.WriteScope...),
+		TimeoutSec: n.TimeoutSec,
 		Retry:      n.Retry,
 		Decision:   n.Decision,
 		Human:      n.Human,
 		Function:   n.Function,
+		Service:    n.Service,
 		Outputs:    append([]VarDef{}, n.Outputs...),
 		PreScript:  n.PreScript,
 		PostScript: n.PostScript,
@@ -394,9 +575,13 @@ func branchRoute(c BranchCase) string {
 
 func (c *Compiled) computeDigest() string {
 	raw, _ := json.Marshal(struct {
-		Nodes []CompiledNode `json:"nodes"`
-		Edges []CompiledEdge `json:"edges"`
-	}{c.Nodes, c.Edges})
+		TimeoutSec int            `json:"timeout_sec,omitempty"`
+		Inputs     []VarDef       `json:"inputs,omitempty"`
+		Outputs    []VarDef       `json:"outputs,omitempty"`
+		Network    *NetworkPolicy `json:"network,omitempty"`
+		Nodes      []CompiledNode `json:"nodes"`
+		Edges      []CompiledEdge `json:"edges"`
+	}{c.TimeoutSec, c.Inputs, c.Outputs, c.Network, c.Nodes, c.Edges})
 	sum := sha256.Sum256(raw)
 	return fmt.Sprintf("%x", sum[:16])
 }

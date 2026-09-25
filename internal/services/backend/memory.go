@@ -46,7 +46,7 @@ func (s *Service) ListMemoryAudit(_ context.Context, limit int) ([]memory.AuditL
 
 // PreviewMemoryContext returns the layered memory context for a candidate query.
 func (s *Service) PreviewMemoryContext(_ context.Context, query string) (memory.ContextLayers, error) {
-	layers, err := s.memoryManager().BuildContextLayers(query)
+	layers, err := s.memoryManager().PreviewContextLayers(query)
 	if err != nil {
 		return memory.ContextLayers{}, err
 	}

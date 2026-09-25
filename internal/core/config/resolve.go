@@ -254,10 +254,10 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 		current.Compaction.AutoEnabled = v
 	})
 	resolveInt("agent.compaction.trigger_tokens", file.Agent.Compaction.TriggerTokens, "GODEX_AGENT_COMPACTION_TRIGGER_TOKENS", func(v int) {
-		current.Compaction.TriggerTokens = positiveOrDefault(v, 60000)
+		current.Compaction.TriggerTokens = nonNegativeOrDefault(v, 0)
 	})
 	resolveInt("agent.compaction.target_history_tokens", file.Agent.Compaction.TargetHistoryTokens, "GODEX_AGENT_COMPACTION_TARGET_HISTORY_TOKENS", func(v int) {
-		current.Compaction.TargetHistoryTokens = positiveOrDefault(v, 12000)
+		current.Compaction.TargetHistoryTokens = nonNegativeOrDefault(v, 0)
 	})
 	resolveString("agent.compaction.mode", file.Agent.Compaction.Mode, "GODEX_AGENT_COMPACTION_MODE", func(v string) {
 		current.Compaction.Mode = NormalizeCompactionMode(v)
@@ -952,8 +952,8 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 		CompressThreshold: file.Agent.CompressThreshold,
 		Compaction: AgentCompactionConfig{
 			AutoEnabled:         file.Agent.Compaction.AutoEnabled,
-			TriggerTokens:       positiveOrDefault(file.Agent.Compaction.TriggerTokens, 60000),
-			TargetHistoryTokens: positiveOrDefault(file.Agent.Compaction.TargetHistoryTokens, 12000),
+			TriggerTokens:       nonNegativeOrDefault(file.Agent.Compaction.TriggerTokens, 0),
+			TargetHistoryTokens: nonNegativeOrDefault(file.Agent.Compaction.TargetHistoryTokens, 0),
 			Mode:                NormalizeCompactionMode(file.Agent.Compaction.Mode),
 			ModelProfileID:      strings.TrimSpace(file.Agent.Compaction.ModelProfileID),
 			MaxLatencyMS:        positiveOrDefault(file.Agent.Compaction.MaxLatencyMS, 3000),

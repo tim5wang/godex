@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 	"github.com/tim5wang/godex/internal/core/flow"
+	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 )
 
 // TestWorkflowFunctionNodeWasmRefExecutes verifies a wasm function node loads
@@ -383,5 +383,67 @@ func TestWorkflowFunctionNodeCompletedEventLatency(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected node_completed event for fn (events=%+v)", events)
+	}
+}
+
+func TestFlowRunResolvesDeclaredOutputsOnStart(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	def := &flow.Definition{
+		FlowID: "fl_run_outputs", Version: "1", Status: FlowStatusDraft,
+		Nodes: []flow.Node{{
+			ID: "finish", Kind: flow.KindFunction,
+			Function: &flow.FunctionSpec{
+				Runtime: flow.FunctionRuntimeJS,
+				Source:  `function handle(ctx, event) { return {summary: "ready"}; }`,
+			},
+			Outputs: []flow.VarDef{{Name: "summary", Type: "string", Required: true}},
+		}},
+		Outputs: []flow.VarDef{{
+			Name: "summary", Type: "string", Required: true,
+			Source: "nodes.finish.outputs.summary",
+		}},
+	}
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	run, err := a.CreateFlowRun(context.Background(), def.FlowID, "", nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	started, err := a.StartFlowRun(context.Background(), def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if started.Status != workflowStatusCompleted || started.Outputs["summary"] != "ready" {
+		t.Fatalf("expected completed run output on start response, got %+v", started)
+	}
+}
+
+func TestFunctionNodeTimeoutStopsNonTerminatingHandler(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	def := &flow.Definition{
+		FlowID: "fl_fn_timeout", Version: "1", Status: FlowStatusDraft,
+		Nodes: []flow.Node{{
+			ID: "stuck", Kind: flow.KindFunction, TimeoutSec: 1,
+			Function: &flow.FunctionSpec{
+				Runtime: flow.FunctionRuntimeJS,
+				Source:  `function handle(ctx, event) { while (true) {} }`,
+			},
+		}},
+	}
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	run, err := a.CreateFlowRun(context.Background(), def.FlowID, "", nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	started, err := a.StartFlowRun(context.Background(), def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if started.Status != workflowStatusError ||
+		!strings.Contains(started.Error, "timed out") && !strings.Contains(started.Error, "deadline exceeded") {
+		t.Fatalf("expected the function deadline to terminate the handler, got %+v", started)
 	}
 }

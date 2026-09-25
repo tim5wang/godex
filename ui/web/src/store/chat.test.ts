@@ -4,6 +4,7 @@ import {
   groupFeedItemsIntoTurns,
   overlappingSnapshotMessageIndexes,
   snapshotToItems,
+  transcriptArchiveRefs,
   useChatStore,
 } from "./chat";
 import type { ProtocolMessage, RuntimeEvent } from "../lib/types";
@@ -156,6 +157,22 @@ describe("chat store null snapshot safety", () => {
       transcriptRef: "transcript_before_compaction.json",
     });
     expect(groupFeedItemsIntoTurns(items).map((item) => item.kind)).toEqual(["user", "summary"]);
+  });
+
+  it("discovers older transcript archives across repeated compactions", () => {
+    const summary = (transcript: string): ProtocolMessage => ({
+      role: "user",
+      content: [{ type: "text", text: "compacted" }],
+      metadata: { kind: "summary", transcript },
+    });
+
+    expect(
+      transcriptArchiveRefs(["t3"], {
+        t3: [summary("t2")],
+        t2: [summary("t1")],
+        t1: [{ role: "user", content: [{ type: "text", text: "earliest message" }] }],
+      }),
+    ).toEqual(["t3", "t2", "t1"]);
   });
 
   it("stitches compaction archives by retained-tail overlap and keeps summary boundaries", () => {

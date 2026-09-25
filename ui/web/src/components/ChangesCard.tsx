@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Space, Spin, Tag, Tooltip, Typography } from "antd";
 import { DownOutlined, FolderOpenOutlined, RightOutlined } from "@ant-design/icons";
 import { DiffView } from "./DiffView";
-import { gitDiff, type GitDiffResponse } from "../lib/api";
+import { gitDiff, gitDiffStats, type GitDiffResponse, type GitDiffStatsResponse } from "../lib/api";
 import type { FeedSegment } from "../lib/types";
 
 interface ChangesCardProps {
@@ -10,6 +10,8 @@ interface ChangesCardProps {
   segments: FeedSegment[];
   workspaceDir?: string;
   token?: string | null;
+  /** Only the newest non-archived turn may show a live working-tree diff. */
+  isLatestTurn?: boolean;
   /** Called when the user asks to open a changed file in the Files panel. */
   onOpenInFiles?: (path: string) => void;
 }
@@ -29,61 +31,80 @@ const EDIT_TOOL = "edit_file";
 
 /**
  * "Changed files" summary card rendered at the tail of a finished assistant
- * turn. Scans the turn's tool segments for write_file / edit_file calls,
- * dedupes by path, and lets the user expand an inline working-tree diff
- * (backend GET /git/diff) or jump into the Files panel. Each file shows its
- * added/deleted line counts and the header shows the totals.
+ * turn. Historical turns only show tool-recorded paths: their old workspace
+ * diff cannot be reconstructed from the current working tree. The latest
+ * turn loads all line counts in one request and fetches a full diff only when
+ * the user expands a file.
  */
-export function ChangesCard({ segments, workspaceDir, token, onOpenInFiles }: ChangesCardProps) {
+export function ChangesCard({ segments, workspaceDir, token, isLatestTurn = false, onOpenInFiles }: ChangesCardProps) {
   const files = useMemo(() => collectChangedFiles(segments), [segments]);
-
-  // path -> diff state ("loading" | response). Fetched eagerly so the +/- line
-  // stats are visible without expanding; the same response is reused when the
-  // user expands the inline diff.
+  const pathsKey = JSON.stringify(files.map((file) => file.path));
+  const requestPaths = useMemo(() => JSON.parse(pathsKey) as string[], [pathsKey]);
+  const [statsState, setStatsState] = useState<{ key: string; loading: boolean; response?: GitDiffStatsResponse }>({
+    key: "",
+    loading: false,
+  });
   const [diffState, setDiffState] = useState<Record<string, GitDiffResponse | "loading">>({});
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {
     setDiffState({});
-    if (files.length === 0) return;
-    let cancelled = false;
-    for (const file of files) {
-      setDiffState((prev) => ({ ...prev, [file.path]: "loading" }));
-      gitDiff(token ?? null, file.path, workspaceDir)
-        .then((resp) => {
-          if (!cancelled) setDiffState((prev) => ({ ...prev, [file.path]: resp }));
-        })
-        .catch(() => {
-          if (!cancelled) setDiffState((prev) => ({ ...prev, [file.path]: { repo: true, error: "Failed to load diff" } }));
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, workspaceDir, token]);
+    setExpanded(null);
+  }, [pathsKey, workspaceDir, token, isLatestTurn]);
 
-  const [expanded, setExpanded] = useState<string | null>(null);
+  useEffect(() => {
+    setStatsState({ key: pathsKey, loading: false });
+    if (!isLatestTurn || requestPaths.length === 0) return;
+
+    const controller = new AbortController();
+    setStatsState({ key: pathsKey, loading: true });
+    gitDiffStats(token ?? null, requestPaths, workspaceDir, controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) setStatsState({ key: pathsKey, loading: false, response });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setStatsState({ key: pathsKey, loading: false, response: { repo: true, error: "Failed to load diff stats" } });
+        }
+      });
+    return () => controller.abort();
+  }, [isLatestTurn, pathsKey, requestPaths, token, workspaceDir]);
+
+  useEffect(() => {
+    if (!isLatestTurn || !expanded) return;
+    const controller = new AbortController();
+    const path = expanded;
+    setDiffState((prev) => ({ ...prev, [path]: "loading" }));
+    gitDiff(token ?? null, path, workspaceDir, controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) setDiffState((prev) => ({ ...prev, [path]: response }));
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setDiffState((prev) => ({ ...prev, [path]: { repo: true, error: "Failed to load diff" } }));
+        }
+      });
+    return () => controller.abort();
+  }, [expanded, isLatestTurn, token, workspaceDir]);
 
   if (files.length === 0) {
     return null;
   }
 
+  const stats = statsState.key === pathsKey ? statsState.response : undefined;
+  const statsByPath = new Map((stats?.files ?? []).map((item) => [item.path, item]));
   const totals = files.reduce<DiffStats>(
     (acc, file) => {
-      const state = diffState[file.path];
-      if (state && state !== "loading" && !state.error && state.diff) {
-        const stats = countUnifiedDiffStats(state.diff);
-        acc.added += stats.added;
-        acc.deleted += stats.deleted;
+      const item = statsByPath.get(file.path);
+      if (item) {
+        acc.added += item.added;
+        acc.deleted += item.deleted;
       }
       return acc;
     },
     { added: 0, deleted: 0 },
   );
-  const statsReady = files.every((file) => {
-    const state = diffState[file.path];
-    return state !== undefined && state !== "loading";
-  });
+  const statsReady = isLatestTurn && statsState.key === pathsKey && !statsState.loading && Boolean(stats);
 
   const toggle = (path: string) => {
     setExpanded((prev) => (prev === path ? null : path));
@@ -94,7 +115,8 @@ export function ChangesCard({ segments, workspaceDir, token, onOpenInFiles }: Ch
       <div className="changes-card-header">
         <Typography.Text strong>Changed files</Typography.Text>
         <Space size={6}>
-          {statsReady ? (
+          {isLatestTurn && statsState.key === pathsKey && statsState.loading ? <Spin size="small" /> : null}
+          {statsReady && stats?.repo ? (
             <Tag className="changes-card-total-stats">
               +{totals.added} −{totals.deleted}
             </Tag>
@@ -102,30 +124,42 @@ export function ChangesCard({ segments, workspaceDir, token, onOpenInFiles }: Ch
           <Tag>{files.length}</Tag>
         </Space>
       </div>
+      {isLatestTurn && stats?.error ? <Alert type="error" showIcon message={stats.error} /> : null}
+      {!isLatestTurn ? (
+        <Typography.Text type="secondary" className="changes-card-historical-note">
+          Historical turn: showing recorded file operations only.
+        </Typography.Text>
+      ) : null}
       <div className="changes-card-list">
         {files.map((file) => {
           const isOpen = expanded === file.path;
           const state = diffState[file.path];
           const repoUnavailable = state && state !== "loading" && !state.repo;
-          const stats = state && state !== "loading" && !state.error && state.diff ? countUnifiedDiffStats(state.diff) : null;
+          const fileStats = statsByPath.get(file.path);
           return (
             <div key={file.path} className="changes-card-file">
               <div className="changes-card-file-row">
-                <Button type="text" size="small" className="changes-card-file-toggle" onClick={() => toggle(file.path)}>
-                  {isOpen ? <DownOutlined /> : <RightOutlined />}
+                {isLatestTurn ? (
+                  <Button type="text" size="small" className="changes-card-file-toggle" onClick={() => toggle(file.path)}>
+                    {isOpen ? <DownOutlined /> : <RightOutlined />}
+                    <Typography.Text code className="changes-card-file-path">
+                      {file.path}
+                    </Typography.Text>
+                  </Button>
+                ) : (
                   <Typography.Text code className="changes-card-file-path">
                     {file.path}
                   </Typography.Text>
-                </Button>
+                )}
                 <Tag color={file.op === "write" ? "blue" : "green"} className="changes-card-file-op">
                   {file.op}
                 </Tag>
-                {state === "loading" ? (
+                {isLatestTurn && state === "loading" ? (
                   <Spin size="small" />
-                ) : stats ? (
+                ) : isLatestTurn && fileStats ? (
                   <Typography.Text className="changes-card-file-stats" type="secondary">
-                    <span className="changes-stat-added">+{stats.added}</span>
-                    <span className="changes-stat-deleted"> −{stats.deleted}</span>
+                    <span className="changes-stat-added">+{fileStats.added}</span>
+                    <span className="changes-stat-deleted"> −{fileStats.deleted}</span>
                   </Typography.Text>
                 ) : null}
                 {onOpenInFiles ? (
@@ -140,7 +174,7 @@ export function ChangesCard({ segments, workspaceDir, token, onOpenInFiles }: Ch
                   </Tooltip>
                 ) : null}
               </div>
-              {isOpen ? (
+              {isLatestTurn && isOpen ? (
                 <div className="changes-card-file-diff">
                   {state === "loading" ? (
                     <Spin size="small" />

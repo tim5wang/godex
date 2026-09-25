@@ -280,8 +280,20 @@ export interface GitDiffResponse {
   error?: string;
 }
 
+export interface GitDiffFileStats {
+  path: string;
+  added: number;
+  deleted: number;
+}
+
+export interface GitDiffStatsResponse {
+  repo: boolean;
+  files?: GitDiffFileStats[];
+  error?: string;
+}
+
 /** Working-tree diff for a local git repository (one file or whole tree). */
-export function gitDiff(token: string | null, path: string, root?: string) {
+export function gitDiff(token: string | null, path: string, root?: string, signal?: AbortSignal) {
   const search = new URLSearchParams();
   if (path) {
     search.set("path", path);
@@ -289,7 +301,19 @@ export function gitDiff(token: string | null, path: string, root?: string) {
   if (root?.trim()) {
     search.set("root", root.trim());
   }
-  return request<GitDiffResponse>(`/git/diff?${search.toString()}`, { method: "GET" }, token);
+  return request<GitDiffResponse>(`/git/diff?${search.toString()}`, { method: "GET", signal }, token);
+}
+
+/** Batched line counts for the specified changed paths in the working tree. */
+export function gitDiffStats(token: string | null, paths: string[], root?: string, signal?: AbortSignal) {
+  const search = new URLSearchParams();
+  for (const path of paths) {
+    search.append("path", path);
+  }
+  if (root?.trim()) {
+    search.set("root", root.trim());
+  }
+  return request<GitDiffStatsResponse>(`/git/diff-stats?${search.toString()}`, { method: "GET", signal }, token);
 }
 
 export function writeFile(token: string | null, path: string, content: string, root?: string, relayNode?: string) {
@@ -577,4 +601,3 @@ export function reconcileTaskboard(token: string | null) {
     token,
   );
 }
-

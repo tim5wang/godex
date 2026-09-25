@@ -9,12 +9,24 @@ export interface FlowDefinition {
   version: string;
   status?: string;
   template_id?: string;
-  inputs?: { name: string; type?: string; desc?: string }[];
-  outputs?: { name: string; type?: string; desc?: string }[];
+  inputs?: FlowVarDef[];
+  outputs?: FlowVarDef[];
+  /** Wall-clock limit for one run; zero or omitted means no Flow-level limit. */
+  timeout_sec?: number;
   nodes: FlowNode[];
   edges: FlowEdge[];
-  /** E3a: Flow-level outbound network policy for function nodes (js/wasm). */
+  /** Flow-level outbound network policy for function and service nodes. */
   network?: FlowNetworkPolicy;
+}
+
+export interface FlowVarDef {
+  name: string;
+  type?: string;
+  desc?: string;
+  required?: boolean;
+  /** Flow-level output mapping, e.g. nodes.finish.outputs.summary. */
+  source?: string;
+  schema?: unknown;
 }
 
 export interface FlowNetworkPolicy {
@@ -23,11 +35,12 @@ export interface FlowNetworkPolicy {
   blocked_domains?: string[];
   timeout_seconds?: number;
   max_response_chars?: number;
+  allow_private_hosts?: boolean;
 }
 
 export interface FlowNode {
   id: string;
-  kind: string; // step | llm | decision | human | branch | loop | function
+  kind: string; // step | llm | decision | human | branch | loop | function | service
   title?: string;
   prompt?: string;
   agent_type?: string;
@@ -38,7 +51,8 @@ export interface FlowNode {
   human?: FlowHumanSpec;
   loop?: FlowLoopSpec;
   function?: FlowFunctionSpec;
-  outputs?: { name: string; type?: string; desc?: string }[];
+  service?: FlowServiceSpec;
+  outputs?: FlowVarDef[];
   /** E3b: optional bash scripts run before/after the node's main work. */
   pre_script?: string;
   post_script?: string;
@@ -47,6 +61,20 @@ export interface FlowNode {
   /** Pin this step node to an agent template / business key id. */
   agent_ref?: string;
   timeout_sec?: number;
+}
+
+export interface FlowServiceSpec {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  /** JSON request body; exact "{{...}}" values preserve the referenced type. */
+  body?: unknown;
+  auth?: {
+    type: "bearer" | "api_key";
+    /** Name of a Godex process environment variable; never the credential. */
+    token_env: string;
+    header_name?: string;
+  };
 }
 
 export interface FlowFunctionSpec {

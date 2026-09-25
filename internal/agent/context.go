@@ -29,21 +29,22 @@ type BuildContextResult struct {
 	// todos, date) rendered as one string. Wire serializers attach it to the
 	// last tool result / user message so it never becomes a fresh user turn;
 	// its churn stays at the prompt tail for prefix caching.
-	RuntimeTail           string
-	ToolSchemas           []protocol.ToolSchema
-	TokenEstimate         int
-	TokenBreakdown        tools.ContextTokenBreakdown
-	CompressionReasons    []string
-	Compacted             bool
-	CompactionBefore      int
-	CompactionAfter       int
-	PreCompactionTotal    int
-	PostCompactionTotal   int
-	CompactionMode        string
-	CompactionLatencyMS   int64
-	LargestContextSources []tools.ContextSourcePressure
-	AckRuntime            func()
-	HistoryRecall         *tools.HistoryRecallEvaluation
+	RuntimeTail             string
+	ToolSchemas             []protocol.ToolSchema
+	TokenEstimate           int
+	TokenBreakdown          tools.ContextTokenBreakdown
+	CompressionReasons      []string
+	Compacted               bool
+	CompactionBefore        int
+	CompactionAfter         int
+	PreCompactionTotal      int
+	PostCompactionTotal     int
+	CompactionMode          string
+	CompactionLatencyMS     int64
+	CompactionTranscriptRef string
+	LargestContextSources   []tools.ContextSourcePressure
+	AckRuntime              func()
+	HistoryRecall           *tools.HistoryRecallEvaluation
 }
 
 func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
@@ -95,7 +96,8 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	volatileMessages := a.buildVolatileTailMessages(ctx, memoryMessages, runtimeMessages)
 
 	triggerTokens := a.compactionTriggerTokens()
-	preliminary := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), triggerTokens)
+	toolSchemas := a.activeToolSchemas(agentProfile)
+	preliminary := estimateContextBudget(system, history, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, toolSchemas, triggerTokens)
 	compactedHistory, compacted, compactionDiag, err := a.maybeAutoCompact(ctx, history, version, system, quasiStableMessages, preliminary)
 	if err != nil {
 		return nil, err
@@ -108,10 +110,13 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 		a.repoMapInvalidate()
 	}
 	combined := append(protocol.CloneMessages(quasiStableMessages), protocol.CloneMessages(compactedHistory)...)
-	postCompactEstimate := estimateContextBudget(system, compactedHistory, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, a.toolHandler.ActiveSchemas(), triggerTokens)
+	postCompactEstimate := preliminary
+	estimate := preliminary
+	if compacted || !sameMessageSliceBacking(compactedHistory, history) {
+		postCompactEstimate = estimateContextBudget(system, compactedHistory, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, toolSchemas, triggerTokens)
+		estimate = postCompactEstimate
+	}
 	historyRecall := a.evaluateHistoryRecall(ctx, query, compactedHistory, memoryLayers, compacted)
-	toolSchemas := a.activeToolSchemas(agentProfile)
-	estimate := estimateContextBudget(system, compactedHistory, memoryMessages, promptStateMessages, runtimeMessages, memoryIndexTokens, toolSchemas, triggerTokens)
 	reasons := estimate.Reasons
 	compactionBefore := 0
 	compactionAfter := 0
@@ -124,24 +129,35 @@ func (a *Agent) buildContext(ctx context.Context) (*BuildContextResult, error) {
 	}
 
 	return &BuildContextResult{
-		System:                system,
-		Messages:              combined,
-		RuntimeTail:           renderVolatileTailText(volatileMessages),
-		ToolSchemas:           toolSchemas,
-		TokenEstimate:         estimate.Breakdown.Total,
-		TokenBreakdown:        estimate.Breakdown,
-		CompressionReasons:    reasons,
-		Compacted:             compacted,
-		CompactionBefore:      compactionBefore,
-		CompactionAfter:       compactionAfter,
-		PreCompactionTotal:    preliminary.Breakdown.Total,
-		PostCompactionTotal:   postCompactEstimate.Breakdown.Total,
-		CompactionMode:        compactionDiag.Mode,
-		CompactionLatencyMS:   compactionDiag.LatencyMS,
-		LargestContextSources: largestContextSources(estimate.Breakdown),
-		AckRuntime:            ackRuntime,
-		HistoryRecall:         historyRecall,
+		System:                  system,
+		Messages:                combined,
+		RuntimeTail:             renderVolatileTailText(volatileMessages),
+		ToolSchemas:             toolSchemas,
+		TokenEstimate:           estimate.Breakdown.Total,
+		TokenBreakdown:          estimate.Breakdown,
+		CompressionReasons:      reasons,
+		Compacted:               compacted,
+		CompactionBefore:        compactionBefore,
+		CompactionAfter:         compactionAfter,
+		PreCompactionTotal:      preliminary.Breakdown.Total,
+		PostCompactionTotal:     postCompactEstimate.Breakdown.Total,
+		CompactionMode:          compactionDiag.Mode,
+		CompactionLatencyMS:     compactionDiag.LatencyMS,
+		CompactionTranscriptRef: compactionDiag.TranscriptRef,
+		LargestContextSources:   largestContextSources(estimate.Breakdown),
+		AckRuntime:              ackRuntime,
+		HistoryRecall:           historyRecall,
 	}, nil
+}
+
+func sameMessageSliceBacking(left, right []protocol.Message) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	if len(left) == 0 {
+		return true
+	}
+	return &left[0] == &right[0]
 }
 
 func agentProfileFromContext(ctx context.Context) string {
@@ -528,6 +544,14 @@ func formatProjectLedgerRuntimeMessage(ledger string) string {
 }
 
 func (a *Agent) collectMemoryMessages(history []protocol.Message) ([]protocol.Message, memory.ContextLayers, error) {
+	return a.collectMemoryMessagesWithReferenceTracking(history, true)
+}
+
+func (a *Agent) collectMemoryMessagesReadOnly(history []protocol.Message) ([]protocol.Message, memory.ContextLayers, error) {
+	return a.collectMemoryMessagesWithReferenceTracking(history, false)
+}
+
+func (a *Agent) collectMemoryMessagesWithReferenceTracking(history []protocol.Message, trackReferences bool) ([]protocol.Message, memory.ContextLayers, error) {
 	// A template with memory: none injects no live memory recall at all — the
 	// session must not read durable memory either (same semantic as
 	// buildMemoryIndexPromptMessage). Skipping here prevents BuildContextLayers
@@ -536,7 +560,13 @@ func (a *Agent) collectMemoryMessages(history []protocol.Message) ([]protocol.Me
 		return nil, memory.ContextLayers{}, nil
 	}
 	query := protocol.LatestPersistentUserText(history)
-	layers, err := a.memoryMgr.BuildContextLayers(query)
+	var layers memory.ContextLayers
+	var err error
+	if trackReferences {
+		layers, err = a.memoryMgr.BuildContextLayers(query)
+	} else {
+		layers, err = a.memoryMgr.PreviewContextLayers(query)
+	}
 	if err != nil {
 		return nil, memory.ContextLayers{}, err
 	}
@@ -788,6 +818,9 @@ func recentPersistentUserMessages(messages []protocol.Message, limit int) []stri
 			continue
 		}
 		if msg.Metadata != nil && msg.Metadata.Ephemeral {
+			continue
+		}
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
 			continue
 		}
 		text := strings.TrimSpace(protocol.MessageText(msg))

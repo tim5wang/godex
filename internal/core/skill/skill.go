@@ -518,12 +518,8 @@ func (l *Loader) Catalog(workspaceDir string) ([]CatalogEntry, error) {
 		return nil, err
 	}
 
-	workspaceFiles, err := collectWorkspaceFiles(workspaceDir)
-	if err != nil {
-		return nil, err
-	}
-
 	items := make([]CatalogEntry, 0, len(names))
+	needsWorkspaceMatch := false
 	for _, name := range names {
 		skill, err := l.loadUncached(name, false)
 		if err != nil {
@@ -539,11 +535,26 @@ func (l *Loader) Catalog(workspaceDir string) ([]CatalogEntry, error) {
 			continue
 		}
 		entry := l.CatalogEntryFor(skill)
-		if !matchesWorkspace(entry.Paths, workspaceFiles) {
-			continue
+		if len(entry.Paths) > 0 {
+			needsWorkspaceMatch = true
 		}
 		items = append(items, entry)
 	}
+
+	if needsWorkspaceMatch {
+		workspaceFiles, err := collectWorkspaceFiles(workspaceDir)
+		if err != nil {
+			return nil, err
+		}
+		filtered := items[:0]
+		for _, item := range items {
+			if len(item.Paths) == 0 || matchesWorkspace(item.Paths, workspaceFiles) {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Name == items[j].Name {
 			return items[i].ID < items[j].ID
@@ -925,13 +936,14 @@ func collectWorkspaceFiles(workspaceDir string) ([]string, error) {
 		return nil, nil
 	}
 
+	workspaceDir = filepath.Clean(workspaceDir)
 	relPaths := make([]string, 0, 128)
 	if err := filepath.WalkDir(workspaceDir, func(filePath string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if entry.IsDir() {
-			if filePath != workspaceDir && strings.HasPrefix(entry.Name(), ".godex") {
+			if filePath != workspaceDir && shouldSkipWorkspaceDir(entry.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -947,6 +959,16 @@ func collectWorkspaceFiles(workspaceDir string) ([]string, error) {
 		return nil, err
 	}
 	return relPaths, nil
+}
+
+func shouldSkipWorkspaceDir(name string) bool {
+	switch name {
+	case ".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build",
+		".cache", ".next", ".nuxt", ".turbo", ".venv", "venv", "coverage", "target":
+		return true
+	default:
+		return strings.HasPrefix(name, ".godex")
+	}
 }
 
 func matchesWorkspace(patterns []string, relPaths []string) bool {

@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,13 +32,15 @@ type InstallOptions struct {
 	ProjectDir string
 	LogPath    string
 
-	GOMEMLIMIT  string
-	GOGC        string
-	GOMAXPROCS  string
-	GODEBUG     string
-	WatchdogSec int
-	MemoryHigh  string
-	MemoryMax   string
+	GOMEMLIMIT   string
+	GOGC         string
+	GOMAXPROCS   string
+	GODEBUG      string
+	PprofAddr    string
+	PprofAddrSet bool
+	WatchdogSec  int
+	MemoryHigh   string
+	MemoryMax    string
 }
 
 type Status struct {
@@ -256,6 +259,18 @@ func (c *Controller) Start(ctx context.Context, opts InstallOptions) (Status, er
 	if err != nil {
 		return Status{}, err
 	}
+	if opts.PprofAddrSet {
+		if err := SavePprofAddr(opts.HomeDir, opts.Name, opts.PprofAddr); err != nil {
+			return Status{}, err
+		}
+		if status, statusErr := c.Status(ctx, opts); statusErr == nil && status.Running {
+			return c.restart(ctx, opts)
+		}
+	}
+	return c.start(ctx, opts)
+}
+
+func (c *Controller) start(ctx context.Context, opts InstallOptions) (Status, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		if _, err := c.runner.Run(ctx, "launchctl", "print", launchdServiceTarget(opts)); err != nil {
@@ -271,6 +286,7 @@ func (c *Controller) Start(ctx context.Context, opts InstallOptions) (Status, er
 			return Status{}, err
 		}
 	case "windows":
+		var err error
 		if opts.Scope == ScopeSystem {
 			_, err = c.runner.Run(ctx, "sc.exe", "start", opts.Name)
 		} else {
@@ -315,6 +331,15 @@ func (c *Controller) Restart(ctx context.Context, opts InstallOptions) (Status, 
 	if err != nil {
 		return Status{}, err
 	}
+	if opts.PprofAddrSet {
+		if err := SavePprofAddr(opts.HomeDir, opts.Name, opts.PprofAddr); err != nil {
+			return Status{}, err
+		}
+	}
+	return c.restart(ctx, opts)
+}
+
+func (c *Controller) restart(ctx context.Context, opts InstallOptions) (Status, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		if _, err := c.runner.Run(ctx, "launchctl", "kickstart", "-k", launchdServiceTarget(opts)); err != nil {
@@ -325,6 +350,7 @@ func (c *Controller) Restart(ctx context.Context, opts InstallOptions) (Status, 
 			return Status{}, err
 		}
 	case "windows":
+		var err error
 		if opts.Scope == ScopeSystem {
 			_, _ = c.runner.Run(ctx, "sc.exe", "stop", opts.Name)
 			_, err = c.runner.Run(ctx, "sc.exe", "start", opts.Name)
@@ -465,10 +491,98 @@ func NormalizeOptions(opts InstallOptions) (InstallOptions, error) {
 	opts.GOGC = defaultString(opts.GOGC, "50")
 	opts.GOMAXPROCS = defaultString(opts.GOMAXPROCS, "1")
 	opts.GODEBUG = defaultString(opts.GODEBUG, "madvdontneed=1")
+	if opts.PprofAddrSet && strings.TrimSpace(opts.PprofAddr) != "" {
+		opts.PprofAddr, err = NormalizePprofAddr(opts.PprofAddr)
+		if err != nil {
+			return opts, err
+		}
+	}
 	if opts.WatchdogSec <= 0 {
 		opts.WatchdogSec = 30
 	}
 	return opts, nil
+}
+
+// NormalizePprofAddr rejects non-loopback bind addresses because pprof has no
+// authentication and can expose sensitive process data.
+func NormalizePprofAddr(addr string) (string, error) {
+	addr = strings.TrimSpace(addr)
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("invalid pprof listen address %q: %w", addr, err)
+	}
+	if port == "" {
+		return "", fmt.Errorf("invalid pprof listen address %q: missing port", addr)
+	}
+	if strings.EqualFold(host, "localhost") {
+		host = "127.0.0.1"
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return "", fmt.Errorf("pprof listen address %q must use a loopback IP (127.0.0.1 or ::1)", addr)
+	}
+	return net.JoinHostPort(ip.String(), port), nil
+}
+
+// SavePprofAddr persists the optional pprof listener for a managed service.
+// An empty address removes the setting and disables pprof on the next start.
+func SavePprofAddr(homeDir, serviceName, addr string) error {
+	path, err := pprofAddrPath(homeDir, serviceName)
+	if err != nil {
+		return err
+	}
+	addr = strings.TrimSpace(addr)
+	if addr != "" {
+		addr, err = NormalizePprofAddr(addr)
+		if err != nil {
+			return err
+		}
+	}
+	if addr == "" {
+		err := os.Remove(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(addr+"\n"), 0600)
+}
+
+// LoadPprofAddr returns the managed service's configured pprof listener.
+// Missing service identity or config means pprof remains disabled.
+func LoadPprofAddr(homeDir, serviceName string) (string, error) {
+	if strings.TrimSpace(homeDir) == "" || strings.TrimSpace(serviceName) == "" {
+		return "", nil
+	}
+	path, err := pprofAddrPath(homeDir, serviceName)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	addr := strings.TrimSpace(string(data))
+	if addr == "" {
+		return "", nil
+	}
+	return NormalizePprofAddr(addr)
+}
+
+func pprofAddrPath(homeDir, serviceName string) (string, error) {
+	if strings.TrimSpace(homeDir) == "" {
+		return "", fmt.Errorf("missing Godex home directory for pprof service setting")
+	}
+	if strings.TrimSpace(serviceName) == "" {
+		return "", fmt.Errorf("missing service name for pprof service setting")
+	}
+	return filepath.Join(homeDir, "service-debug", sanitizeName(serviceName)+".pprof-addr"), nil
 }
 
 func RenderSystemdUnit(opts InstallOptions) ([]byte, error) {

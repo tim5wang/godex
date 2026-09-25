@@ -67,6 +67,8 @@ export interface CompactionRecord {
   after_tokens?: number;
   reasons?: string[];
   source?: string;
+  compaction_mode?: string;
+  compaction_latency_ms?: number;
   transcript_ref?: string;
 }
 
@@ -242,6 +244,14 @@ export interface SessionContextInspector {
   recall_query?: string;
   memory_preview: MemoryContextLayers;
   history_recall?: HistoryRecallDecisionSummary | null;
+}
+
+export interface SessionContextUsage {
+  session_id?: string;
+  cache_usage: CacheUsageInspection;
+  cumulative_tokens?: number;
+  cumulative_input_tokens?: number;
+  cumulative_output_tokens?: number;
 }
 
 export interface VersionInfo {

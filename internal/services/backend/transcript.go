@@ -23,7 +23,7 @@ var ErrTranscriptNotFound = errors.New("transcript archive not found")
 // another session's archives through this endpoint.
 func (s *Service) ReadTranscript(sessionID, ref string) ([]protocol.Message, error) {
 	ref = strings.TrimSpace(ref)
-	if ref == "" || filepath.Base(ref) != ref || ref == "." {
+	if !validTranscriptRef(ref) {
 		return nil, fmt.Errorf("%w: invalid ref", ErrTranscriptNotFound)
 	}
 	if strings.TrimSpace(s.cfg.TranscriptsDir) == "" {
@@ -34,18 +34,76 @@ func (s *Service) ReadTranscript(sessionID, ref string) ([]protocol.Message, err
 	if err != nil {
 		return nil, err
 	}
-	refs := uniqueTranscriptRefs(session.agent.TranscriptRefs())
-	if !slices.Contains(refs, ref) {
+	if !s.ownsTranscriptRef(session, ref) {
 		return nil, fmt.Errorf("%w: %s", ErrTranscriptNotFound, ref)
 	}
 
-	data, err := os.ReadFile(filepath.Join(s.cfg.TranscriptsDir, ref))
+	messages, err := s.readTranscriptArchiveFile(ref)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrTranscriptNotFound, ref)
+	}
+	return messages, nil
+}
+
+func (s *Service) ownsTranscriptRef(session *sessionState, target string) bool {
+	if session == nil || session.agent == nil {
+		return false
+	}
+	roots := uniqueTranscriptRefs(session.agent.TranscriptRefs())
+	if slices.Contains(roots, target) {
+		return true
+	}
+
+	pending := append([]string{}, roots...)
+	visited := make(map[string]struct{}, len(roots))
+	for len(pending) > 0 {
+		ref := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if !validTranscriptRef(ref) {
+			continue
+		}
+		if _, seen := visited[ref]; seen {
+			continue
+		}
+		visited[ref] = struct{}{}
+		messages, err := s.readTranscriptArchiveFile(ref)
+		if err != nil {
+			continue
+		}
+		for _, msg := range messages {
+			if msg.Metadata == nil || msg.Metadata.Kind != protocol.KindSummary {
+				continue
+			}
+			olderRef := strings.TrimSpace(msg.Metadata.Transcript)
+			if olderRef == target {
+				return true
+			}
+			pending = append(pending, olderRef)
+		}
+	}
+	return false
+}
+
+func (s *Service) readTranscriptArchiveFile(ref string) ([]protocol.Message, error) {
+	if !validTranscriptRef(ref) {
+		return nil, fmt.Errorf("invalid transcript ref")
+	}
+	data, err := os.ReadFile(filepath.Join(s.cfg.TranscriptsDir, ref))
+	if err != nil {
+		return nil, err
 	}
 	var messages []protocol.Message
 	if err := json.Unmarshal(data, &messages); err != nil {
 		return nil, fmt.Errorf("parse transcript %s: %w", ref, err)
 	}
 	return messages, nil
+}
+
+func validTranscriptRef(ref string) bool {
+	return ref != "" &&
+		ref != "." &&
+		ref != ".." &&
+		filepath.Base(ref) == ref &&
+		!filepath.IsAbs(ref) &&
+		!strings.ContainsAny(ref, `/\`)
 }

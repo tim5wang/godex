@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { FlowDefinition } from "../../lib/api";
-import { flowSpecToWorkflow, workflowToFlowSpec } from "./flowgramAdapter";
+import { blankFlowNode, flowSpecToWorkflow, workflowToFlowSpec } from "./flowgramAdapter";
 
 const sampleDef: FlowDefinition = {
   flow_id: "fl_support",
+  name: "Support routing",
+  description: "Classify and route support tickets",
   version: "2",
   status: "draft",
+  template_id: "support-agent",
   inputs: [{ name: "ticket", type: "string" }],
+  outputs: [{ name: "resolution", type: "string" }],
+  network: { policy: "allowlist", allowed_domains: ["api.example.com"] },
   nodes: [
     {
       id: "classify",
@@ -54,9 +59,15 @@ const sampleDef: FlowDefinition = {
 describe("flowgramAdapter round-trip", () => {
   it("spec → workflow → spec preserves every Flow Spec field", () => {
     const wf = flowSpecToWorkflow(sampleDef);
-    const back = workflowToFlowSpec(wf, sampleDef.flow_id, "2", "draft");
+    const back = workflowToFlowSpec(wf, sampleDef.flow_id, "2", "draft", sampleDef);
 
     expect(back.flow_id).toBe("fl_support");
+    expect(back.name).toBe(sampleDef.name);
+    expect(back.description).toBe(sampleDef.description);
+    expect(back.template_id).toBe(sampleDef.template_id);
+    expect(back.inputs).toEqual(sampleDef.inputs);
+    expect(back.outputs).toEqual(sampleDef.outputs);
+    expect(back.network).toEqual(sampleDef.network);
     expect(back.nodes).toHaveLength(4);
     // branch-sourced edges are folded back into branch.cases; only the two
     // non-branch data_dependency edges survive as definition edges.
@@ -91,6 +102,30 @@ describe("flowgramAdapter round-trip", () => {
     expect(e1?.from).toBe("classify");
     expect(e1?.to).toBe("decide");
     expect(e1?.edge_type).toBe("data_dependency");
+  });
+
+  it("preserves extension fields from the base definition and canvas node data", () => {
+    const extensionDef = {
+      ...sampleDef,
+      custom_metadata: { owner: "flow-platform", revision: 7 },
+      nodes: sampleDef.nodes.map((node, index) =>
+        index === 0
+          ? ({ ...node, custom_node_policy: { retries: 4 } } as FlowDefinition["nodes"][number])
+          : node,
+      ),
+    };
+    const back = workflowToFlowSpec(
+      flowSpecToWorkflow(extensionDef),
+      extensionDef.flow_id,
+      "3",
+      "draft",
+      extensionDef,
+    ) as FlowDefinition & { custom_metadata: unknown };
+
+    expect(back.custom_metadata).toEqual({ owner: "flow-platform", revision: 7 });
+    expect((back.nodes[0] as unknown as Record<string, unknown>).custom_node_policy).toEqual({
+      retries: 4,
+    });
   });
 
   it("branch routing becomes visible condition edges on canvas", () => {
@@ -134,6 +169,37 @@ describe("flowgramAdapter round-trip", () => {
     const wf = flowSpecToWorkflow(def);
     expect(wf.nodes[0].meta?.position).toBeDefined();
     expect(wf.nodes[1].meta?.position).toBeDefined();
+  });
+
+  it("service node specs survive canvas round-trip and blank nodes have usable defaults", () => {
+    const def: FlowDefinition = {
+      flow_id: "fl_service",
+      version: "1",
+      status: "draft",
+      nodes: [{
+        id: "call",
+        kind: "service",
+        service: {
+          method: "POST",
+          url: "https://api.example.com/v1/tasks",
+          headers: { "X-Trace": "{{inputs.trace}}" },
+          body: { task: "{{inputs.task}}" },
+          auth: { type: "api_key", token_env: "TASK_API_KEY", header_name: "X-Api-Key" },
+        },
+      }],
+      edges: [],
+    };
+    const back = workflowToFlowSpec(
+      flowSpecToWorkflow(def),
+      def.flow_id,
+      "1",
+      "draft",
+    );
+    expect(back.nodes[0].service).toEqual(def.nodes[0].service);
+    expect(blankFlowNode("new_call", "service").service).toEqual({
+      method: "GET",
+      url: "https://api.example.com/",
+    });
   });
 
   it("decision condition edges snap to labelled choice ports (E4 round-trip)", () => {

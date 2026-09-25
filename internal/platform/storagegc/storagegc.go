@@ -243,7 +243,6 @@ func pruneCandidatesForSession(sessionDir string, opts Options) []Item {
 			id:   entry.Name(),
 			path: path,
 			at:   checkpointTime(entry.Name()),
-			size: fsutil.DirSizeBestEffort(path),
 		})
 	}
 	sort.Slice(checkpoints, func(i, j int) bool {
@@ -267,6 +266,10 @@ func pruneCandidatesForSession(sessionDir string, opts Options) []Item {
 		if _, ok := keep[checkpoint.id]; ok {
 			continue
 		}
+		// Directory sizes are only reported for checkpoints that will be
+		// removed. Walking every retained checkpoint here made each checkpoint
+		// write recursively scan the whole session store.
+		checkpoint.size = fsutil.DirSizeBestEffort(checkpoint.path)
 		reason := "checkpoint outside latest checkpoint retention window"
 		if !checkpoint.at.IsZero() && checkpoint.at.Before(cutoff) {
 			reason = "checkpoint older than retention and outside latest checkpoint window"

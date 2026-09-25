@@ -916,6 +916,9 @@ func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
 					CompressionReasons:  append([]string{}, build.CompressionReasons...),
 					TokenEstimateBefore: build.CompactionBefore,
 					TokenEstimateAfter:  build.CompactionAfter,
+					CompactionMode:      build.CompactionMode,
+					CompactionLatencyMS: build.CompactionLatencyMS,
+					TranscriptRef:       build.CompactionTranscriptRef,
 				})
 				// Compaction rewrote the in-memory message history at this
 				// request boundary. Persist the compacted context now so a

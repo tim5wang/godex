@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	defaultCompactionTriggerTokens       = 60000
-	defaultCompactionTargetHistoryTokens = 12000
-	defaultCompactionMaxLatencyMS        = 3000
+	defaultCompactionTriggerTokens = 60000
+	defaultCompactionMaxLatencyMS  = 3000
 	// DSH-style window-scaled policy defaults: trigger ≈ 0.8×128k, verbatim
 	// retention tail ≈ 0.16×128k.
 	defaultCompactionContextWindowTokens = 128000
@@ -31,9 +30,10 @@ const (
 )
 
 type compactionRunResult struct {
-	Messages  []protocol.Message
-	Mode      string
-	LatencyMS int64
+	Messages      []protocol.Message
+	Mode          string
+	LatencyMS     int64
+	TranscriptRef string
 }
 
 type compactionCandidate struct {
@@ -246,13 +246,6 @@ func compactionRetainTokensForTarget(cfg *config.Config, provider, model string)
 	return retain
 }
 
-func (a *Agent) compactionTargetHistoryTokens() int {
-	if a == nil || a.cfg == nil || a.cfg.Compaction.TargetHistoryTokens <= 0 {
-		return defaultCompactionTargetHistoryTokens
-	}
-	return a.cfg.Compaction.TargetHistoryTokens
-}
-
 func (a *Agent) compactionMaxLatencyMS() int {
 	if a == nil || a.cfg == nil || a.cfg.Compaction.MaxLatencyMS <= 0 {
 		return defaultCompactionMaxLatencyMS
@@ -368,28 +361,37 @@ func (a *Agent) compactionSummarizerFor(mode string, compressor *compress.Compre
 }
 
 // buildLLMSummarizerFromSession constructs an LLM-backed session summarizer
-// from the agent's current client/model. It returns nil when no usable model
-// caller is configured so callers fall back to rule-based compaction.
+// from the configured compaction profile or the current session model. It
+// returns nil when no usable model caller is configured so callers fall back
+// to rule-based compaction.
 func (a *Agent) buildLLMSummarizerFromSession() compress.SessionSummarizer {
 	return a.buildLLMSummarizerFor(a.compressor)
 }
 
 func (a *Agent) buildLLMSummarizerFor(compressor *compress.Compressor) compress.SessionSummarizer {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	client := a.client
 	model := ""
 	maxTokens := 0
-	if a.cfg != nil {
-		model = strings.TrimSpace(a.cfg.Model)
-		maxTokens = a.cfg.MaxTokens
+	cfg := a.cfg
+	if cfg != nil {
+		model = strings.TrimSpace(cfg.Model)
+		maxTokens = cfg.MaxTokens
+		if profileID := strings.TrimSpace(cfg.Compaction.ModelProfileID); profileID != "" {
+			if profile, ok := cfg.ModelProfileByID(profileID); ok {
+				client = callerForConfigProfile(cfg, profile)
+				model = strings.TrimSpace(profile.Model)
+				maxTokens = profile.MaxTokens
+			}
+		}
 	}
+	a.mu.Unlock()
 	if client == nil || model == "" {
 		return nil
 	}
 	rule := compress.NewRuleBasedSessionSummarizer(compressor)
 	llmSummarizer := compress.NewLLMSessionSummarizer(client, model, min(maxTokens, 2048), compressor, rule)
-	applyCompactionPruneConfig(llmSummarizer, a.cfg)
+	applyCompactionPruneConfig(llmSummarizer, cfg)
 	return llmSummarizer
 }
 
@@ -402,10 +404,11 @@ func (a *Agent) DefaultCompactionMode() string {
 	return normalizeAgentCompactionMode(a.cfg.Compaction.Mode)
 }
 
-// extractPreviousSummary scans history for the last KindSummary and returns its text.
+// extractPreviousSummary returns the current KindSummary. Compaction places
+// the newest summary at the head; older summaries may remain in the retained
+// tail.
 func extractPreviousSummary(history []protocol.Message) string {
-	for i := len(history) - 1; i >= 0; i-- {
-		msg := history[i]
+	for _, msg := range history {
 		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
 			return strings.TrimSpace(protocol.MessageText(msg))
 		}
@@ -424,26 +427,34 @@ func (a *Agent) runCompaction(ctx context.Context, mode string, req compress.Ses
 		summarizer = compress.NewRuleBasedSessionSummarizer(a.compressor)
 		effectiveMode = "fast"
 	}
-	start := time.Now()
+	startedAt := time.Now()
 	result, err := summarizer.SummarizeSession(ctx, req)
-	latency := time.Since(start).Milliseconds()
 	if err != nil && effectiveMode != "fast" && normalizeAgentCompactionMode(mode) == "hybrid" {
 		summarizer = compress.NewRuleBasedSessionSummarizer(a.compressor)
-		start = time.Now()
 		result, err = summarizer.SummarizeSession(ctx, req)
-		latency = time.Since(start).Milliseconds()
 		effectiveMode = "fast"
 	}
 	if err != nil {
 		return compactionRunResult{}, err
 	}
+	latency := time.Since(startedAt).Milliseconds()
 	// Retention (verbatim tail + summary) is handled inside the compressor;
 	// target_history_tokens no longer crunches the retained tail down.
 	return compactionRunResult{
-		Messages:  result.Messages,
-		Mode:      effectiveMode,
-		LatencyMS: latency,
+		Messages:      result.Messages,
+		Mode:          effectiveMode,
+		LatencyMS:     latency,
+		TranscriptRef: firstTranscriptRef(result.Messages),
 	}, nil
+}
+
+func firstTranscriptRef(messages []protocol.Message) string {
+	for _, msg := range messages {
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
+			return strings.TrimSpace(msg.Metadata.Transcript)
+		}
+	}
+	return ""
 }
 
 func (a *Agent) shouldAutoCompact(estimate contextBudgetEstimate) bool {
@@ -535,7 +546,9 @@ func (a *Agent) maybeStartBackgroundCompaction(ctx context.Context) {
 		if !a.backgroundCompactionPressure(estimate) {
 			return
 		}
-		result, err := a.runCompaction(context.Background(), a.autoCompactionMode(), compress.SessionSummaryRequest{
+		runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(a.compactionMaxLatencyMS())*time.Millisecond)
+		defer cancel()
+		result, err := a.runCompaction(runCtx, a.autoCompactionMode(), compress.SessionSummaryRequest{
 			System:               system,
 			Prefix:               protocol.CloneMessages(promptStateMessages),
 			History:              protocol.CloneMessages(history),

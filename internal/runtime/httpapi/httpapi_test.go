@@ -21,11 +21,11 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
+	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/memory"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/automation"
 	"github.com/tim5wang/godex/internal/domain/message"
 	rtchannels "github.com/tim5wang/godex/internal/runtime/channels"
@@ -2181,6 +2181,28 @@ func TestSessionContextInspectorEndpoint(t *testing.T) {
 	}
 	if len(inspector.MemoryPreview.Identity) == 0 {
 		t.Fatalf("expected identity preview, got %+v", inspector.MemoryPreview)
+	}
+
+	usageReq, err := http.NewRequest(http.MethodGet, server.URL+"/sessions/"+opened.SessionID+"/context-usage", nil)
+	if err != nil {
+		t.Fatalf("new context usage request: %v", err)
+	}
+	usageReq.Header.Set("Authorization", "Bearer "+cfg.WebToken)
+	usageResp, err := http.DefaultClient.Do(usageReq)
+	if err != nil {
+		t.Fatalf("get context usage: %v", err)
+	}
+	defer usageResp.Body.Close()
+	if usageResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(usageResp.Body)
+		t.Fatalf("expected context usage 200, got %d: %s", usageResp.StatusCode, string(body))
+	}
+	var usage map[string]any
+	if err := json.NewDecoder(usageResp.Body).Decode(&usage); err != nil {
+		t.Fatalf("decode context usage: %v", err)
+	}
+	if usage["session_id"] != opened.SessionID {
+		t.Fatalf("expected context usage for session %q, got %#v", opened.SessionID, usage)
 	}
 }
 

@@ -1,12 +1,16 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/usage"
 )
@@ -26,8 +30,7 @@ import (
 //     output, ...}.
 //
 // Responsibilities implemented here: routing, biz-key auth (withBizKeyAuth),
-// idempotency-key dedup (flow mode), unified error envelope. Rate limiting
-// and input-schema validation land with P2.3 (variable schema).
+// durable idempotency-key dedup (flow mode), and a unified error envelope.
 // ---------------------------------------------------------------------------
 
 // gatewayRequest is the union of step and flow call fields. Flow mode uses
@@ -47,7 +50,7 @@ type gatewayRequest struct {
 	Version string `json:"version,omitempty"` // explicit flow version; empty = published
 	WaitMS  int    `json:"wait_ms,omitempty"` // synchronous wait for flow completion
 	// IdempotencyKey dedups flow-mode calls: a repeated key returns the same
-	// run instead of starting a second one (P2.1 flow mode).
+	// durable run instead of starting a second one.
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
@@ -74,46 +77,45 @@ func writeGatewayError(w http.ResponseWriter, status int, code string, err error
 	}})
 }
 
-// gatewayIdemStore is a small in-process dedup map (flow mode). Keyed by
-// route + biz key id + idempotency key -> run id. Entries expire to bound
-// memory; a restart simply loses dedup memory (runs are durable).
+// gatewayIdemStore serializes same-key requests inside one process. The
+// durable replay identity itself lives in the FlowRun record.
 type gatewayIdemStore struct {
 	mu    sync.Mutex
-	items map[string]gatewayIdemEntry
+	locks map[string]*gatewayIdemLock
 }
 
-type gatewayIdemEntry struct {
-	RunID string
-	Until time.Time
+type gatewayIdemLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func newGatewayIdemStore() *gatewayIdemStore {
-	return &gatewayIdemStore{items: make(map[string]gatewayIdemEntry)}
+	return &gatewayIdemStore{locks: make(map[string]*gatewayIdemLock)}
 }
 
-func (s *gatewayIdemStore) lookup(key string) (string, bool) {
+func (s *gatewayIdemStore) lock(key string) func() {
 	if s == nil {
-		return "", false
+		return func() {}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.items[key]
-	if !ok || time.Now().After(e.Until) {
-		if ok {
-			delete(s.items, key)
+	lock := s.locks[key]
+	if lock == nil {
+		lock = &gatewayIdemLock{}
+		s.locks[key] = lock
+	}
+	lock.refs++
+	s.mu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.mu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.locks, key)
 		}
-		return "", false
+		s.mu.Unlock()
 	}
-	return e.RunID, true
-}
-
-func (s *gatewayIdemStore) put(key, runID string, ttl time.Duration) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.items[key] = gatewayIdemEntry{RunID: runID, Until: time.Now().Add(ttl)}
 }
 
 // registerFlowGatewayRoutes registers POST /v1/gateway/{route} (biz-key
@@ -139,7 +141,7 @@ func handleFlowGateway(w http.ResponseWriter, r *http.Request, service *backend.
 		return
 	}
 	if flowID := strings.TrimSpace(key.FlowID); flowID != "" {
-		handleFlowGatewayFlow(w, r, service, idem, route, flowID)
+		handleFlowGatewayFlow(w, r, service, idem, route, flowID, key.ID)
 		return
 	}
 	// Single-step mode: same behavior as POST /v1/agent-steps (biz key in
@@ -151,7 +153,7 @@ func handleFlowGateway(w http.ResponseWriter, r *http.Request, service *backend.
 // run for the key-bound flow, start it, optionally wait synchronously, and
 // honor idempotency-key dedup. The response is the flow run view
 // {run_id, status, outputs, ...}.
-func handleFlowGatewayFlow(w http.ResponseWriter, r *http.Request, service *backend.Service, idem *gatewayIdemStore, route, flowID string) {
+func handleFlowGatewayFlow(w http.ResponseWriter, r *http.Request, service *backend.Service, idem *gatewayIdemStore, route, flowID, bizKeyID string) {
 	var req gatewayRequest
 	if err := decodeJSONAllowEmpty(r, &req); err != nil {
 		writeGatewayError(w, http.StatusBadRequest, "invalid_request", err, route, "", "")
@@ -160,22 +162,34 @@ func handleFlowGatewayFlow(w http.ResponseWriter, r *http.Request, service *back
 	ctx := r.Context()
 
 	idemKey := strings.TrimSpace(req.IdempotencyKey)
+	keyHash, requestHash := "", ""
 	if idemKey != "" {
-		if existing, ok := idem.lookup(route + "|" + flowID + "|" + idemKey); ok {
-			if run, err := service.RefreshFlowRun(flowID, existing); err == nil {
-				writeJSON(w, http.StatusOK, run)
-				return
-			}
-			// Stale/expired run record: fall through and start a new one.
+		keyHash = gatewayIdempotencyKeyHash(route, bizKeyID, flowID, idemKey)
+		unlock := idem.lock(keyHash)
+		defer unlock()
+		var err error
+		requestHash, err = gatewayFlowRequestHash(req.Version, req.Inputs)
+		if err != nil {
+			writeGatewayError(w, http.StatusBadRequest, "invalid_request", err, route, "", "")
+			return
 		}
 	}
 
-	run, err := service.CreateFlowRun(ctx, flowID, req.Version, req.Inputs)
+	run, created, err := service.CreateFlowRunIdempotent(ctx, flowID, req.Version, req.Inputs, keyHash, requestHash)
 	if err != nil {
+		if errors.Is(err, agent.ErrFlowIdempotencyConflict) {
+			writeGatewayError(w, http.StatusConflict, "idempotency_conflict", err, route, "", "")
+			return
+		}
 		writeGatewayError(w, statusForFlowError(err), "flow_create_failed", err, route, "", "")
 		return
 	}
-	started, err := service.StartFlowRun(ctx, flowID, run.RunID)
+	started := run
+	if created || run.Status == "pending" {
+		started, err = service.StartFlowRun(ctx, flowID, run.RunID)
+	} else {
+		started, err = service.RefreshFlowRun(flowID, run.RunID)
+	}
 	if err != nil {
 		writeGatewayError(w, statusForFlowError(err), "flow_start_failed", err, route, run.RunID, "")
 		return
@@ -187,8 +201,38 @@ func handleFlowGatewayFlow(w http.ResponseWriter, r *http.Request, service *back
 			return
 		}
 	}
-	if idemKey != "" {
-		idem.put(route+"|"+flowID+"|"+idemKey, run.RunID, 10*time.Minute)
+	status := http.StatusAccepted
+	if !created || (req.WaitMS > 0 && isTerminalFlowRunStatus(started.Status)) {
+		status = http.StatusOK
 	}
-	writeJSON(w, http.StatusAccepted, started)
+	writeJSON(w, status, started)
+}
+
+func isTerminalFlowRunStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "error", "canceled", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func gatewayIdempotencyKeyHash(route, bizKeyID, flowID, key string) string {
+	sum := sha256.Sum256([]byte(route + "\x00" + bizKeyID + "\x00" + flowID + "\x00" + key))
+	return hex.EncodeToString(sum[:])
+}
+
+func gatewayFlowRequestHash(version string, inputs map[string]any) (string, error) {
+	if inputs == nil {
+		inputs = map[string]any{}
+	}
+	raw, err := json.Marshal(struct {
+		Version string         `json:"version"`
+		Inputs  map[string]any `json:"inputs"`
+	}{strings.TrimSpace(version), inputs})
+	if err != nil {
+		return "", fmt.Errorf("encode idempotency request fingerprint: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }

@@ -673,6 +673,32 @@ export interface TranscriptArchivePage {
   messages: ProtocolMessage[];
 }
 
+/** Discover older archives through summary references in the loaded archive chain. */
+export function transcriptArchiveRefs(
+  initialRefs: string[],
+  loadedPages: Record<string, ProtocolMessage[]>,
+): string[] {
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  const pending = initialRefs.map((ref) => ref.trim()).filter(Boolean).reverse();
+
+  while (pending.length > 0) {
+    const ref = pending.pop()!;
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    refs.push(ref);
+
+    const olderRefs = (loadedPages[ref] ?? [])
+      .filter(isSummaryMessage)
+      .map((message) => message.metadata?.transcript?.trim() ?? "")
+      .filter(Boolean);
+    for (let index = olderRefs.length - 1; index >= 0; index -= 1) {
+      if (!seen.has(olderRefs[index])) pending.push(olderRefs[index]);
+    }
+  }
+  return refs;
+}
+
 export interface ArchivedProtocolMessage {
   ref: string;
   sourceIndex: number;

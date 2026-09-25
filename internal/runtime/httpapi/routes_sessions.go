@@ -138,14 +138,8 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, snapshot)
 	})))
-	mux.Handle("GET /sessions/{id}/context-inspector", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		inspector, err := service.ContextInspector(r.Context(), r.PathValue("id"))
-		if err != nil {
-			writeError(w, statusForSessionError(err), err)
-			return
-		}
-		writeJSON(w, http.StatusOK, inspector)
-	})))
+	mux.Handle("GET /sessions/{id}/context-inspector", protected(sessionContextInspectorHandler(service)))
+	mux.Handle("GET /sessions/{id}/context-usage", protected(sessionContextUsageHandler(service)))
 	mux.Handle("GET /sessions/{id}/transcript/{ref}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		messages, err := service.ReadTranscript(r.PathValue("id"), r.PathValue("ref"))
 		if err != nil {
@@ -254,4 +248,26 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
+}
+
+func sessionContextInspectorHandler(service *backend.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		inspector, err := service.ContextInspector(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, inspector)
+	}
+}
+
+func sessionContextUsageHandler(service *backend.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		usage, err := service.ContextUsage(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, usage)
+	}
 }

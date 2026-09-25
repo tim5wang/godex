@@ -300,6 +300,26 @@ godex                         启动全屏 TUI（min-tui，默认入口）
 
 > 已知行为：全局 `--session` 解析器扫描整个 argv，会覆盖 `ask/command/tui/longtask/doctor sessions/repair sessions` 各自的 `--session` flag。需要精确指定 session 时使用 `--session` 的等号形式或直接把它放在最前。
 
+### Go CPU profile
+
+pprof 默认关闭。启动服务时显式开启，并且监听地址必须是本机回环地址，避免将未认证的 profiling 接口暴露到局域网：
+
+```sh
+godex --pprof-addr=127.0.0.1:6060 serve --addr=127.0.0.1:8088
+```
+
+在另一终端复现一个典型对话并采集 30 秒 CPU profile：
+
+```sh
+make dev PPROF_ADDR=127.0.0.1:6060
+curl -fsS -o /tmp/godex-chat.cpu.pprof \
+  'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'
+go tool pprof -top ./godex /tmp/godex-chat.cpu.pprof
+go tool pprof -http=127.0.0.1:0 ./godex /tmp/godex-chat.cpu.pprof
+```
+
+`make dev-fast PPROF_ADDR=127.0.0.1:6060` 也可用于快速重建。也可以直接运行 `godex service start --pprof-addr=127.0.0.1:6060` 或 `godex service restart --pprof-addr=127.0.0.1:6060`。设置会保留在服务配置中，后续普通重启仍然生效；运行 `godex service restart --pprof-addr=` 可关闭。建议分别采集空闲和对话期间的 profile，再用 `go tool pprof -base=/tmp/godex-idle.cpu.pprof -top ./godex /tmp/godex-chat.cpu.pprof` 扣除后台常驻开销。
+
 ### 命令一览
 
 | 命令 | 子命令 / flags | 说明 |
@@ -368,7 +388,8 @@ GODEX_CONTROL_DEFAULT_NODE=<id> godex node exec 'echo hi'
 ```bash
 godex service install --scope system --name godex --addr 0.0.0.0:3801 \
   --gomemlimit 200MiB --gogc 50 --gomaxprocs 1 --memory-high 260M --memory-max 300M
-godex service start|stop|restart|status [--scope user|system] [--name <name>]
+godex service start|restart [--scope user|system] [--name <name>] [--pprof-addr 127.0.0.1:6060]
+godex service stop|status [--scope user|system] [--name <name>]
 godex service logs [--scope user|system] [--name <name>] [--follow]
 godex service uninstall [--scope user|system] [--name <name>]
 ```

@@ -27,6 +27,7 @@ func TestWorkflowDecisionInjectsKindDecisionUsageContext(t *testing.T) {
 		SessionID:     "sess-flow",
 	})
 	decisionTestWorkflow(t, a, "wf_decision_kind", branchEdges())
+	cleanupWorkflowAfterTest(t, a, "wf_decision_kind")
 	started := runWorkflowTool(t, a, ctx, map[string]interface{}{
 		"action": "start", "workflow_id": "wf_decision_kind",
 	})
@@ -85,6 +86,7 @@ func TestWorkflowDecisionUsageEventMetersKind(t *testing.T) {
 		SessionID:     "sess-usage",
 	})
 	decisionTestWorkflow(t, a, "wf_decision_usage", branchEdges())
+	cleanupWorkflowAfterTest(t, a, "wf_decision_usage")
 	started := runWorkflowTool(t, a, ctx, map[string]interface{}{
 		"action": "start", "workflow_id": "wf_decision_usage",
 	})
@@ -97,12 +99,18 @@ func TestWorkflowDecisionUsageEventMetersKind(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("expected at least one usage event from the decision call")
 	}
-	last := got[len(got)-1]
-	if last.Context.Kind != "decision" {
-		t.Fatalf("expected usage event kind=decision, got %q", last.Context.Kind)
+	foundDecisionUsage := false
+	for _, event := range got {
+		if event.Context.Kind != "decision" {
+			continue
+		}
+		foundDecisionUsage = true
+		if event.Context.SessionID == "" {
+			t.Fatal("expected session attribution on decision usage event")
+		}
 	}
-	if last.Context.SessionID == "" {
-		t.Fatal("expected session attribution on decision usage event")
+	if !foundDecisionUsage {
+		t.Fatalf("expected a decision usage event among %d events", len(got))
 	}
 }
 
@@ -117,6 +125,7 @@ func TestWorkflowDecisionDoesNotTouchBudgetOrTranscript(t *testing.T) {
 	a.SetDecisionCaller(caller)
 
 	decisionTestWorkflow(t, a, "wf_decision_clean", branchEdges())
+	cleanupWorkflowAfterTest(t, a, "wf_decision_clean")
 	started := runWorkflowTool(t, a, context.Background(), map[string]interface{}{
 		"action": "start", "workflow_id": "wf_decision_clean",
 	})

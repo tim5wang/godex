@@ -41,6 +41,9 @@ const (
 	// jsrt (goja) or wasmrt runtime — never starts a subagent job.
 	workflowNodeKindFunction = "function"
 
+	// workflowNodeKindService is a synchronous declarative HTTP JSON call.
+	workflowNodeKindService = "service"
+
 	// branchDefaultRoute is the reserved route name for a branch default.
 	branchDefaultRoute = "default"
 
@@ -412,6 +415,10 @@ func normalizeWorkflowEdgeCondition(c workflowEdgeCondition) workflowEdgeConditi
 		Confidence: c.Confidence,
 		Output:     c.Output,
 	}
+	if c.Not != nil {
+		not := normalizeWorkflowEdgeCondition(*c.Not)
+		out.Not = &not
+	}
 	for _, sub := range c.All {
 		out.All = append(out.All, normalizeWorkflowEdgeCondition(sub))
 	}
@@ -443,10 +450,8 @@ func workflowEdgeConditionMatchesState(state *workflowState, cond workflowEdgeCo
 }
 
 func workflowConditionMatchesNode(cond workflowEdgeCondition, node workflowNode) bool {
-	if cond.Not != nil {
-		// NOT predicate (loop exit_when negation, P1.5): matches when the
-		// negated sub-predicate does NOT match the same node.
-		return !workflowConditionMatchesNode(*cond.Not, node)
+	if cond.Not != nil && workflowConditionMatchesNode(*cond.Not, node) {
+		return false
 	}
 	if cond.Status != "" && cond.Status != node.Status {
 		return false

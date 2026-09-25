@@ -21,6 +21,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useI18n } from "../../i18n";
 import { listProviders, type FlowDefinition, type FlowNode } from "../../lib/api";
 import { useSettingsStore } from "../../store/settings";
+import { FunctionFields, ServiceFields } from "./flowgramServiceFields";
 
 // ---------------------------------------------------------------------------
 // FlowGram node registries — the six Flow Spec v1 node materials mapped to
@@ -42,6 +43,7 @@ export const KIND_COLOR: Record<string, string> = {
   branch: "#eb2f96",
   loop: "#52c41a",
   function: "#2f54eb",
+  service: "#389e0d",
 };
 
 // ---- run-time status highlight -------------------------------------------
@@ -86,6 +88,7 @@ const KIND_LABEL: Record<string, string> = {
   branch: "branch",
   loop: "loop",
   function: "function",
+  service: "service",
 };
 
 // ---- small form helpers (antd + flowgram Field) ---------------------------
@@ -172,6 +175,11 @@ function VariableSummary({ form }: { form: FormRenderProps<FlowNode>["form"] }) 
   const prompt = useWatch<string>("prompt") ?? "";
   const pre = useWatch<string>("pre_script") ?? "";
   const post = useWatch<string>("post_script") ?? "";
+  const service = useWatch<{
+    url?: string;
+    headers?: Record<string, string>;
+    body?: unknown;
+  }>("service") ?? {};
   const outputs = useWatch<{ name?: string; type?: string }[]>("outputs") ?? [];
   const def = useFlowDef();
   const nodeId = (form.getValueIn<string>("id") ?? "").trim();
@@ -180,6 +188,11 @@ function VariableSummary({ form }: { form: FormRenderProps<FlowNode>["form"] }) 
     ...scanVarRefs(prompt),
     ...scanVarRefs(pre),
     ...scanVarRefs(post),
+    ...scanVarRefs([
+      service.url ?? "",
+      ...Object.values(service.headers ?? {}),
+      JSON.stringify(service.body ?? ""),
+    ].join("\n")),
   ];
   // Scope chain: flow inputs + every OTHER node's declared outputs.
   const scope: { path: string; type?: string }[] = [];
@@ -299,20 +312,47 @@ function ScriptFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   );
 }
 
-/** Base render for every node: kind badge + title + prompt (+ kind-specific fields). */
-function baseForm(extra?: (form: FormRenderProps<FlowNode>["form"]) => React.ReactNode) {
-  return ({ form }: FormRenderProps<FlowNode>) => (
-    <div style={{ width: 280, padding: 10 }}>
-      <div style={{ marginBottom: 8 }}>
-        <KindBadge kind={form.getValueIn<string>("kind") ?? "step"} />
-      </div>
-      <TextField name="title" label="Title" />
-      <TextField name="prompt" label="Prompt" rows={3} />
-      <VariableSummary form={form} />
-      {extra?.(form)}
-      <ScriptFields form={form} />
+function NodeTimeoutField() {
+  const { t } = useI18n();
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeTimeout")}</div>
+      <Field
+        name="timeout_sec"
+        render={({ field }: FieldRenderProps<number>) => (
+          <InputNumber
+            style={{ width: "100%" }}
+            min={0}
+            max={2_592_000}
+            value={field.value ?? 0}
+            onChange={(value) => field.onChange(value ?? 0)}
+            addonAfter="s"
+          />
+        )}
+      />
+      <Text type="secondary" style={{ fontSize: 10 }}>{t("flows.nodeTimeoutHint")}</Text>
     </div>
   );
+}
+
+/** Base render for every node: kind badge + title + prompt (+ kind-specific fields). */
+function baseForm(extra?: (form: FormRenderProps<FlowNode>["form"]) => React.ReactNode) {
+  return ({ form }: FormRenderProps<FlowNode>) => {
+    const kind = useWatch<string>("kind") ?? "step";
+    return (
+      <div style={{ width: 280, padding: 10 }}>
+        <div style={{ marginBottom: 8 }}>
+          <KindBadge kind={kind} />
+        </div>
+        <TextField name="title" label="Title" />
+        {kind !== "service" && <TextField name="prompt" label="Prompt" rows={3} />}
+        <VariableSummary form={form} />
+        {kind !== "branch" && kind !== "loop" && <NodeTimeoutField />}
+        {extra?.(form)}
+        <ScriptFields form={form} />
+      </div>
+    );
+  };
 }
 
 // ---- decision node fields -------------------------------------------------
@@ -547,72 +587,7 @@ function LoopFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
   );
 }
 
-// ---- function node fields (P3: js source / wasm ref code node) ------------
-
-function FunctionFields({ form }: { form: FormRenderProps<FlowNode>["form"] }) {
-  const { t } = useI18n();
-  const fn = useWatch<{
-    runtime?: string;
-    source?: string;
-    ref?: string;
-    handler?: string;
-  }>("function") ?? {};
-  const setFn = (patch: Record<string, unknown>) => {
-    const cur = (form.getValueIn<Record<string, unknown>>("function") ?? {}) as Record<
-      string,
-      unknown
-    >;
-    form.setValueIn("function", { ...cur, ...patch });
-  };
-  const runtime = fn.runtime ?? "js";
-  return (
-    <div>
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeRuntime")}</div>
-        <Select
-          style={{ width: "100%" }}
-          value={runtime}
-          onChange={(v) => setFn({ runtime: v })}
-          options={[
-            { value: "js", label: "js (goja sandbox)" },
-            { value: "wasm", label: "wasm (plugin ref)" },
-          ]}
-        />
-      </div>
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeHandler")}</div>
-        <Input
-          value={fn.handler ?? "handle"}
-          placeholder="handle"
-          onChange={(e) => setFn({ handler: e.target.value })}
-        />
-      </div>
-      {runtime === "js" ? (
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeSourceJS")}</div>
-          <Input.TextArea
-            rows={5}
-            style={{ fontFamily: "monospace", fontSize: 11 }}
-            value={fn.source ?? ""}
-            placeholder={'function handle(ctx, event) {\n  return { result: 1 };\n}'}
-            onChange={(e) => setFn({ source: e.target.value })}
-          />
-        </div>
-      ) : (
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{t("flows.nodeLibraryRef")}</div>
-          <Input
-            value={fn.ref ?? ""}
-            placeholder="vad_split / asr_transcribe / ..."
-            onChange={(e) => setFn({ ref: e.target.value })}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---- the seven node registries ----------------------------------------------
+// ---- the eight node registries ----------------------------------------------
 
 const size = { width: 300, height: 120 };
 const defaultPorts = [
@@ -691,6 +666,16 @@ const functionRegistry: WorkflowNodeRegistry = {
   formMeta: {
     render: baseForm((form) => <FunctionFields form={form} />),
     validateTrigger: ValidateTrigger.onChange,
+} as FormMeta,
+};
+
+const serviceRegistry: WorkflowNodeRegistry = {
+  type: "service",
+  meta: { size, defaultPorts },
+  info: { icon: "", description: "HTTP(S) JSON service call" },
+  formMeta: {
+    render: baseForm((form) => <ServiceFields form={form} />),
+    validateTrigger: ValidateTrigger.onChange,
   } as FormMeta,
 };
 
@@ -702,6 +687,7 @@ export const FLOWGRAM_NODE_REGISTRIES: WorkflowNodeRegistry[] = [
   branchRegistry,
   loopRegistry,
   functionRegistry,
+  serviceRegistry,
 ];
 
 /**

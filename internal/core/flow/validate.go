@@ -3,9 +3,13 @@ package flow
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 )
+
+const MaxTimeoutSeconds = 30 * 24 * 60 * 60
+const MaxNetworkResponseChars = 64 << 20
 
 // ValidationError is a single rejected condition with a locator.
 type ValidationError struct {
@@ -25,6 +29,26 @@ func (e ValidationError) Error() string {
 // missing prompts, choice-set validity, branch constraints, loop closure and
 // the 64-node worst-case expansion cap.
 func Validate(d *Definition) error {
+	if err := validateDefinitionHeader(d); err != nil {
+		return err
+	}
+	byID, err := indexDefinitionNodes(d)
+	if err != nil {
+		return err
+	}
+	if err := validateFlowOutputSources(d, byID); err != nil {
+		return err
+	}
+	if err := validateStaticNodes(d, byID); err != nil {
+		return err
+	}
+	if err := validateDependencyEdges(d, byID); err != nil {
+		return err
+	}
+	return validateExpandedNodeLimit(d)
+}
+
+func validateDefinitionHeader(d *Definition) error {
 	if d == nil {
 		return ValidationError{Msg: "nil flow definition"}
 	}
@@ -37,6 +61,9 @@ func Validate(d *Definition) error {
 	if err := validateIODecls(d); err != nil {
 		return err
 	}
+	if d.TimeoutSec < 0 || d.TimeoutSec > MaxTimeoutSeconds {
+		return ValidationError{Path: "timeout_sec", Msg: fmt.Sprintf("must be between 0 and %d seconds", MaxTimeoutSeconds)}
+	}
 	if d.Network != nil {
 		if err := validateNetworkPolicy(d.Network); err != nil {
 			return err
@@ -47,116 +74,138 @@ func Validate(d *Definition) error {
 			return ValidationError{Path: "on_complete.url", Msg: "on_complete requires a callback url"}
 		}
 	}
+	return nil
+}
 
+func indexDefinitionNodes(d *Definition) (map[string]Node, error) {
 	byID := make(map[string]Node, len(d.Nodes))
 	for _, n := range d.Nodes {
 		id := strings.TrimSpace(n.ID)
 		if id == "" {
-			return ValidationError{Path: "nodes", Msg: "node with empty id"}
+			return nil, ValidationError{Path: "nodes", Msg: "node with empty id"}
 		}
 		if _, dup := byID[id]; dup {
-			return ValidationError{Path: "nodes", Msg: fmt.Sprintf("duplicate node id %q", id)}
+			return nil, ValidationError{Path: "nodes", Msg: fmt.Sprintf("duplicate node id %q", id)}
 		}
 		byID[id] = n
 	}
+	return byID, nil
+}
 
-	// Static node validation.
+func validateStaticNodes(d *Definition, byID map[string]Node) error {
 	for _, n := range d.Nodes {
-		p := "nodes[" + n.ID + "]"
-		kind := normalizeKind(n.Kind)
-		if kind == "" {
-			return ValidationError{Path: p, Msg: fmt.Sprintf("unknown node kind %q", n.Kind)}
-		}
-		if kind != KindBranch && kind != KindLoop && kind != KindFunction && strings.TrimSpace(n.Prompt) == "" {
-			return ValidationError{Path: p, Msg: "node requires prompt (branch/loop nodes carry cases/exit instead)"}
-		}
-		if n.Retry != nil {
-			if err := validateRetry(n.Retry, p); err != nil {
-				return err
-			}
-		}
-		if err := validateVarDefs(n.Outputs, p+".outputs"); err != nil {
+		if err := validateStaticNode(d, n, byID); err != nil {
 			return err
-		}
-		// P2.3: resolve {{inputs.*}} / {{nodes.*.outputs.*}} references in the
-		// node prompt against the definition at compile time.
-		if err := validateVarRefs(n.Prompt, p+".prompt", d, byID); err != nil {
-			return err
-		}
-		switch kind {
-		case KindDecision:
-			if n.Decision == nil {
-				return ValidationError{Path: p, Msg: "decision node missing decision spec"}
-			}
-			if err := validateDecision(n.Decision, p); err != nil {
-				return err
-			}
-		case KindHuman:
-			if n.Human == nil {
-				return ValidationError{Path: p, Msg: "human node missing human spec"}
-			}
-			if err := validateHuman(n.Human, p); err != nil {
-				return err
-			}
-		case KindBranch:
-			if n.Branch == nil {
-				return ValidationError{Path: p, Msg: "branch node missing branch spec"}
-			}
-			if err := validateBranch(n.Branch, p, byID); err != nil {
-				return err
-			}
-		case KindLoop:
-			if n.Loop == nil {
-				return ValidationError{Path: p, Msg: "loop node missing loop spec"}
-			}
-			if err := validateLoop(n.Loop, p, byID); err != nil {
-				return err
-			}
-		case KindFunction:
-			if err := validateFunction(n.Function, p); err != nil {
-				return err
-			}
 		}
 	}
+	return nil
+}
 
-	// Edge validation + dependency graph for cycle detection.
+func validateStaticNode(d *Definition, n Node, byID map[string]Node) error {
+	p := "nodes[" + n.ID + "]"
+	kind := normalizeKind(n.Kind)
+	if kind == "" {
+		return ValidationError{Path: p, Msg: fmt.Sprintf("unknown node kind %q", n.Kind)}
+	}
+	if n.TimeoutSec < 0 || n.TimeoutSec > MaxTimeoutSeconds {
+		return ValidationError{Path: p + ".timeout_sec", Msg: fmt.Sprintf("must be between 0 and %d seconds", MaxTimeoutSeconds)}
+	}
+	if n.TimeoutSec > 0 && (kind == KindBranch || kind == KindLoop) {
+		return ValidationError{Path: p + ".timeout_sec", Msg: "timeouts are not supported on branch and loop control nodes"}
+	}
+	if kind != KindBranch && kind != KindLoop && kind != KindFunction && kind != KindService && strings.TrimSpace(n.Prompt) == "" {
+		return ValidationError{Path: p, Msg: "node requires prompt (branch/loop nodes carry cases/exit instead)"}
+	}
+	if n.Retry != nil {
+		if err := validateRetry(n.Retry, p); err != nil {
+			return err
+		}
+	}
+	if err := validateVarDefs(n.Outputs, p+".outputs"); err != nil {
+		return err
+	}
+	if err := validateVarRefs(n.Prompt, p+".prompt", d, byID); err != nil {
+		return err
+	}
+	return validateNodeKindSpec(n, kind, p, d, byID)
+}
+
+func validateNodeKindSpec(n Node, kind, path string, d *Definition, byID map[string]Node) error {
+	switch kind {
+	case KindDecision:
+		if n.Decision == nil {
+			return ValidationError{Path: path, Msg: "decision node missing decision spec"}
+		}
+		return validateDecision(n.Decision, path)
+	case KindHuman:
+		if n.Human == nil {
+			return ValidationError{Path: path, Msg: "human node missing human spec"}
+		}
+		return validateHuman(n.Human, path)
+	case KindBranch:
+		if n.Branch == nil {
+			return ValidationError{Path: path, Msg: "branch node missing branch spec"}
+		}
+		return validateBranch(n.Branch, path, byID)
+	case KindLoop:
+		if n.Loop == nil {
+			return ValidationError{Path: path, Msg: "loop node missing loop spec"}
+		}
+		return validateLoop(n.Loop, path, byID)
+	case KindFunction:
+		return validateFunction(n.Function, path)
+	case KindService:
+		if err := validateServiceSpec(n.Service, path+".service"); err != nil {
+			return err
+		}
+		return validateServiceVarRefs(n.Service, path+".service", d, byID)
+	default:
+		return nil
+	}
+}
+
+func validateDependencyEdges(d *Definition, byID map[string]Node) error {
 	depGraph := make(map[string][]string, len(d.Nodes))
 	for _, id := range keys(byID) {
 		depGraph[id] = nil
 	}
-	for _, e := range d.Edges {
-		p := "edges[" + e.ID + "]"
-		if _, ok := byID[e.From]; !ok {
-			return ValidationError{Path: p, Msg: fmt.Sprintf("edge from unknown node %q", e.From)}
-		}
-		if _, ok := byID[e.To]; !ok {
-			return ValidationError{Path: p, Msg: fmt.Sprintf("edge to unknown node %q", e.To)}
-		}
-		et := normalizeEdgeType(e.EdgeType)
-		switch et {
-		case EdgeDataDependency, EdgeHandoff:
-			if e.When != nil && !ConditionEmpty(*e.When) {
-				return ValidationError{Path: p, Msg: "data_dependency/handoff edges must not carry a when predicate"}
-			}
-			depGraph[e.To] = append(depGraph[e.To], e.From)
-		case EdgeCondition:
-			if e.When == nil || ConditionEmpty(*e.When) {
-				return ValidationError{Path: p, Msg: "condition edge requires a when predicate"}
-			}
-			if err := validateCondition(*e.When, p, byID); err != nil {
-				return err
-			}
-		default:
-			return ValidationError{Path: p, Msg: fmt.Sprintf("unknown edge type %q", e.EdgeType)}
+	for _, edge := range d.Edges {
+		if err := validateDependencyEdge(edge, byID, depGraph); err != nil {
+			return err
 		}
 	}
-
-	if cyc := findCycle(depGraph); cyc != nil {
-		return ValidationError{Path: "edges", Msg: fmt.Sprintf("dependency cycle: %s", strings.Join(cyc, " -> "))}
+	if cycle := findCycle(depGraph); cycle != nil {
+		return ValidationError{Path: "edges", Msg: fmt.Sprintf("dependency cycle: %s", strings.Join(cycle, " -> "))}
 	}
+	return nil
+}
 
-	// 64-node worst-case expansion cap (§11.2): static nodes + loop
-	// max_iterations × body size (nested loops counted at one level).
+func validateDependencyEdge(e Edge, byID map[string]Node, depGraph map[string][]string) error {
+	path := "edges[" + e.ID + "]"
+	if _, ok := byID[e.From]; !ok {
+		return ValidationError{Path: path, Msg: fmt.Sprintf("edge from unknown node %q", e.From)}
+	}
+	if _, ok := byID[e.To]; !ok {
+		return ValidationError{Path: path, Msg: fmt.Sprintf("edge to unknown node %q", e.To)}
+	}
+	switch normalizeEdgeType(e.EdgeType) {
+	case EdgeDataDependency, EdgeHandoff:
+		if e.When != nil && !ConditionEmpty(*e.When) {
+			return ValidationError{Path: path, Msg: "data_dependency/handoff edges must not carry a when predicate"}
+		}
+		depGraph[e.To] = append(depGraph[e.To], e.From)
+	case EdgeCondition:
+		if e.When == nil || ConditionEmpty(*e.When) {
+			return ValidationError{Path: path, Msg: "condition edge requires a when predicate"}
+		}
+		return validateCondition(*e.When, path, byID)
+	default:
+		return ValidationError{Path: path, Msg: fmt.Sprintf("unknown edge type %q", e.EdgeType)}
+	}
+	return nil
+}
+
+func validateExpandedNodeLimit(d *Definition) error {
 	expanded := 0
 	for _, n := range d.Nodes {
 		expanded++
@@ -175,7 +224,7 @@ const MaxNodes = 64
 
 func normalizeKind(kind string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case KindStep, KindLLM, KindDecision, KindHuman, KindBranch, KindLoop, KindFunction:
+	case KindStep, KindLLM, KindDecision, KindHuman, KindBranch, KindLoop, KindFunction, KindService:
 		return strings.ToLower(strings.TrimSpace(kind))
 	default:
 		return ""
@@ -207,21 +256,25 @@ func validateVarDefs(defs []VarDef, p string) error {
 			return ValidationError{Path: p, Msg: fmt.Sprintf("duplicate variable %q", name)}
 		}
 		seen[name] = struct{}{}
-		if t := strings.ToLower(strings.TrimSpace(v.Type)); t != "" {
+		t := strings.ToLower(strings.TrimSpace(v.Type))
+		if t != "" {
 			switch t {
 			case "string", "number", "boolean", "object", "array", "any":
 			default:
 				return ValidationError{Path: fmt.Sprintf("%s[%d].type", p, i), Msg: fmt.Sprintf("invalid variable type %q", v.Type)}
 			}
-			// object/array may carry a nested JSON Schema fragment; anything else
-			// must be plain JSON when present (opaque but valid).
-			if len(v.Schema) > 0 {
-				if !json.Valid(v.Schema) {
-					return ValidationError{Path: fmt.Sprintf("%s[%d].schema", p, i), Msg: "variable schema must be valid JSON"}
-				}
-				if t != "object" && t != "array" && t != "any" {
-					return ValidationError{Path: fmt.Sprintf("%s[%d].schema", p, i), Msg: fmt.Sprintf("nested schema only allowed for object/array/any, got %q", t)}
-				}
+		}
+		if len(v.Schema) > 0 {
+			if t != "" && t != "object" && t != "array" && t != "any" {
+				return ValidationError{Path: fmt.Sprintf("%s[%d].schema", p, i), Msg: fmt.Sprintf("nested schema only allowed for object/array/any, got %q", t)}
+			}
+			schemaPath := fmt.Sprintf("%s[%d].schema", p, i)
+			schema, err := decodeSchemaDefinition(v.Schema, schemaPath)
+			if err != nil {
+				return ValidationError{Msg: err.Error()}
+			}
+			if schema == nil {
+				return ValidationError{Path: schemaPath, Msg: "variable schema must be a JSON object"}
 			}
 		}
 	}
@@ -234,7 +287,74 @@ func validateIODecls(d *Definition) error {
 	if err := validateVarDefs(d.Inputs, "inputs"); err != nil {
 		return err
 	}
-	return validateVarDefs(d.Outputs, "outputs")
+	if err := validateVarDefs(d.Outputs, "outputs"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateFlowOutputSources(d *Definition, byID map[string]Node) error {
+	for i, output := range d.Outputs {
+		source := strings.TrimSpace(output.Source)
+		if source == "" {
+			if output.Required {
+				return ValidationError{Path: fmt.Sprintf("outputs[%d].source", i), Msg: "required flow outputs must declare a source"}
+			}
+			// An unbound optional output is retained for backward
+			// compatibility with definitions that declared metadata before
+			// Flow-level output mapping was supported.
+			continue
+		}
+		nodeID, field, ok := ParseOutputSource(source)
+		path := fmt.Sprintf("outputs[%d].source", i)
+		if !ok {
+			return ValidationError{Path: path, Msg: `must use the form "nodes.<node_id>.outputs.<field>"`}
+		}
+		node, exists := byID[nodeID]
+		if !exists {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("unknown output node %q", nodeID)}
+		}
+		sourceType, exists := declaredNodeOutputType(node, field)
+		if !exists {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("node %q does not declare output %q", nodeID, field)}
+		}
+		outputType := strings.ToLower(strings.TrimSpace(output.Type))
+		sourceType = strings.ToLower(strings.TrimSpace(sourceType))
+		if outputType != "" && sourceType != "" && sourceType != "any" && outputType != "any" && outputType != sourceType {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("output type %q does not match source type %q", outputType, sourceType)}
+		}
+	}
+	return nil
+}
+
+func declaredNodeOutputType(node Node, field string) (string, bool) {
+	for _, output := range node.Outputs {
+		if strings.TrimSpace(output.Name) == field {
+			return output.Type, true
+		}
+	}
+	switch normalizeKind(node.Kind) {
+	case KindDecision:
+		switch field {
+		case "choice", "question", "error", "model":
+			return "string", true
+		case "confidence", "score", "latency_ms":
+			return "number", true
+		case "calibrated":
+			return "boolean", true
+		case "raw":
+			return "object", true
+		}
+	case KindBranch:
+		if field == "choice" {
+			return "string", true
+		}
+	case KindHuman:
+		if node.Human != nil && strings.TrimSpace(node.Human.ResultVar) == field {
+			return "any", true
+		}
+	}
+	return "", false
 }
 
 // validateNetworkPolicy checks the Flow-level outbound network policy (E3a):
@@ -249,7 +369,167 @@ func validateNetworkPolicy(np *NetworkPolicy) error {
 	if p == "allowlist" && len(np.AllowedDomains) == 0 {
 		return ValidationError{Path: "network.allowed_domains", Msg: "allowlist policy requires at least one allowed domain"}
 	}
+	if np.AllowPrivateHosts && (p != "allowlist" || len(np.AllowedDomains) == 0) {
+		return ValidationError{Path: "network.allow_private_hosts", Msg: "private hosts require an explicit domain allowlist"}
+	}
+	if np.TimeoutSeconds < 0 || np.TimeoutSeconds > MaxTimeoutSeconds {
+		return ValidationError{Path: "network.timeout_seconds", Msg: fmt.Sprintf("must be between 0 and %d seconds", MaxTimeoutSeconds)}
+	}
+	if np.MaxResponseChars < 0 || np.MaxResponseChars > MaxNetworkResponseChars {
+		return ValidationError{Path: "network.max_response_chars", Msg: fmt.Sprintf("must be between 0 and %d", MaxNetworkResponseChars)}
+	}
 	return nil
+}
+
+func validateServiceSpec(spec *ServiceSpec, path string) error {
+	if spec == nil {
+		return ValidationError{Path: path, Msg: "service node missing service spec"}
+	}
+	method := strings.ToUpper(strings.TrimSpace(spec.Method))
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE":
+	default:
+		return ValidationError{Path: path + ".method", Msg: "must be GET, POST, PUT, PATCH, or DELETE"}
+	}
+	rawURL := strings.TrimSpace(spec.URL)
+	if rawURL == "" {
+		return ValidationError{Path: path + ".url", Msg: "service URL is required"}
+	}
+	probeURL := workflowURLTemplate.ReplaceAllString(rawURL, "godex-value")
+	parsed, err := url.Parse(probeURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil {
+		return ValidationError{Path: path + ".url", Msg: "must be an absolute http or https URL without userinfo"}
+	}
+	seenHeaders := make(map[string]struct{}, len(spec.Headers))
+	for name, value := range spec.Headers {
+		if !validHTTPHeaderName(name) {
+			return ValidationError{Path: path + ".headers", Msg: fmt.Sprintf("invalid header name %q", name)}
+		}
+		lowerName := strings.ToLower(name)
+		if _, exists := seenHeaders[lowerName]; exists {
+			return ValidationError{Path: path + ".headers", Msg: fmt.Sprintf("duplicate header name %q", name)}
+		}
+		seenHeaders[lowerName] = struct{}{}
+		if strings.ContainsAny(value, "\r\n") {
+			return ValidationError{Path: path + ".headers." + name, Msg: "header value must not contain newlines"}
+		}
+		switch lowerName {
+		case "authorization", "proxy-authorization", "x-api-key":
+			return ValidationError{Path: path + ".headers." + name, Msg: "use service.auth environment reference for credentials"}
+		default:
+			if isServiceTransportHeader(lowerName) {
+				return ValidationError{Path: path + ".headers." + name, Msg: "transport-managed header is not allowed"}
+			}
+		}
+	}
+	if len(spec.Body) > 0 && !json.Valid(spec.Body) {
+		return ValidationError{Path: path + ".body", Msg: "must be valid JSON"}
+	}
+	if spec.Auth != nil {
+		authType := strings.ToLower(strings.TrimSpace(spec.Auth.Type))
+		tokenEnv := strings.TrimSpace(spec.Auth.TokenEnv)
+		if !validEnvironmentVariableName(tokenEnv) {
+			return ValidationError{Path: path + ".auth.token_env", Msg: "must be a valid environment variable name"}
+		}
+		switch authType {
+		case "bearer":
+			if strings.TrimSpace(spec.Auth.HeaderName) != "" {
+				return ValidationError{Path: path + ".auth.header_name", Msg: "is only valid for api_key authentication"}
+			}
+		case "api_key":
+			if !validHTTPHeaderName(spec.Auth.HeaderName) {
+				return ValidationError{Path: path + ".auth.header_name", Msg: "must be a valid HTTP header name"}
+			}
+			headerName := strings.ToLower(strings.TrimSpace(spec.Auth.HeaderName))
+			if headerName == "authorization" || headerName == "proxy-authorization" || isServiceTransportHeader(headerName) {
+				return ValidationError{Path: path + ".auth.header_name", Msg: "must not override an authorization transport header"}
+			}
+			if _, exists := seenHeaders[headerName]; exists {
+				return ValidationError{Path: path + ".auth.header_name", Msg: "must not duplicate a service header"}
+			}
+		default:
+			return ValidationError{Path: path + ".auth.type", Msg: "must be bearer or api_key"}
+		}
+	}
+	return nil
+}
+
+// ValidateServiceSpec validates a service-node request contract independently
+// of a full Flow Definition.
+func ValidateServiceSpec(spec *ServiceSpec) error {
+	return validateServiceSpec(spec, "service")
+}
+
+func isServiceTransportHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "connection", "content-length", "host", "keep-alive", "proxy-connection",
+		"te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
+}
+
+var (
+	workflowURLTemplate       = regexp.MustCompile(`\{\{\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*\}\}`)
+	environmentVariableNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+func validEnvironmentVariableName(name string) bool {
+	return environmentVariableNameRE.MatchString(name)
+}
+
+func validHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateServiceVarRefs(spec *ServiceSpec, path string, d *Definition, byID map[string]Node) error {
+	if err := validateVarRefs(spec.URL, path+".url", d, byID); err != nil {
+		return err
+	}
+	for name, value := range spec.Headers {
+		if err := validateVarRefs(value, path+".headers."+name, d, byID); err != nil {
+			return err
+		}
+	}
+	if len(spec.Body) == 0 {
+		return nil
+	}
+	var body any
+	if err := json.Unmarshal(spec.Body, &body); err != nil {
+		return ValidationError{Path: path + ".body", Msg: "must be valid JSON"}
+	}
+	var visit func(any, string) error
+	visit = func(value any, currentPath string) error {
+		switch current := value.(type) {
+		case string:
+			return validateVarRefs(current, currentPath, d, byID)
+		case map[string]any:
+			for key, child := range current {
+				if err := visit(child, currentPath+"."+key); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for i, child := range current {
+				if err := visit(child, fmt.Sprintf("%s[%d]", currentPath, i)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return visit(body, path+".body")
 }
 
 // validateVarRefs parses {{...}} references in a node's prompt and validates
@@ -490,6 +770,17 @@ func validateFunction(f *FunctionSpec, p string) error {
 		}
 	default:
 		return ValidationError{Path: p + ".function", Msg: fmt.Sprintf("unknown function runtime %q (js|wasm)", f.Runtime)}
+	}
+	for _, schema := range []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{name: "input_schema", raw: f.InputSchema},
+		{name: "output_schema", raw: f.OutputSchema},
+	} {
+		if _, err := decodeSchemaDefinition(schema.raw, p+".function."+schema.name); err != nil {
+			return ValidationError{Path: p + ".function." + schema.name, Msg: err.Error()}
+		}
 	}
 	return nil
 }

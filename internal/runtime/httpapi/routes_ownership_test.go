@@ -79,7 +79,7 @@ func TestStaticRoutePatternsHaveSingleOwner(t *testing.T) {
 		"routes_sessions.go": {
 			"POST /sessions", "GET /sessions", "DELETE /sessions/{id}",
 			"PATCH /sessions/{id}/title", "POST /sessions/{id}/fork", "POST /sessions/{id}/model",
-			"GET /sessions/{id}", "GET /sessions/{id}/context-inspector",
+			"GET /sessions/{id}", "GET /sessions/{id}/context-inspector", "GET /sessions/{id}/context-usage",
 			"GET /sessions/{id}/transcript/{ref}", "GET /sessions/{id}/ledger",
 			"POST /sessions/{id}/ledger", "GET /sessions/{id}/timeline",
 			"GET /sessions/{id}/timeline/page", "GET /sessions/{id}/compactions",

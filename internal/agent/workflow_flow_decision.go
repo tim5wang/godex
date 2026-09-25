@@ -143,6 +143,10 @@ func (a *Agent) completeWorkflowDecision(state *workflowState, node *workflowNod
 	if errText != "" {
 		outputs["error"] = errText
 	}
+	if err := validateWorkflowOutputSpecs(node.OutputSpec, outputs, "node "+node.ID+" outputs"); err != nil {
+		a.failWorkflowDecisionNode(state, node, "output contract violation: "+err.Error())
+		return
+	}
 	node.Outputs = outputs
 	node.Error = ""
 	node.JobID = ""

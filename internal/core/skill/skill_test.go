@@ -164,6 +164,63 @@ Use when frontend files are relevant.`), 0644); err != nil {
 	}
 }
 
+func TestCatalogSkipsWorkspaceScanWithoutPathScopedSkills(t *testing.T) {
+	skillsDir := t.TempDir()
+	skillPath := filepath.Join(skillsDir, "plain", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte("A skill without path filters."), 0644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+
+	// A missing workspace would make filepath.WalkDir fail; cataloging skills
+	// without path filters should not need to inspect it at all.
+	items, err := NewLoader(skillsDir).Catalog(filepath.Join(t.TempDir(), "missing-workspace"))
+	if err != nil {
+		t.Fatalf("catalog without path-scoped skills: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "plain" {
+		t.Fatalf("expected the unscoped skill to remain visible, got %+v", items)
+	}
+}
+
+func TestCollectWorkspaceFilesSkipsGeneratedTreesButKeepsUsefulHiddenPaths(t *testing.T) {
+	workspace := t.TempDir()
+	for _, rel := range []string{
+		".github/workflows/ci.yml",
+		".claude/settings.json",
+		".agents/skills/review.md",
+		"node_modules/pkg/README.md",
+		"vendor/module.go",
+		".godex/cache/state.json",
+	} {
+		path := filepath.Join(workspace, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(path, []byte("test"), 0644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	files, err := collectWorkspaceFiles(workspace)
+	if err != nil {
+		t.Fatalf("collect workspace files: %v", err)
+	}
+	got := strings.Join(files, "\n")
+	for _, want := range []string{".github/workflows/ci.yml", ".claude/settings.json", ".agents/skills/review.md"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected useful hidden path %q to remain indexed, files=%v", want, files)
+		}
+	}
+	for _, skipped := range []string{"node_modules/", "vendor/", ".godex/"} {
+		if strings.Contains(got, skipped) {
+			t.Errorf("expected generated tree %q to be skipped, files=%v", skipped, files)
+		}
+	}
+}
+
 func TestCatalogContinuesWhenOneSkillIsBrokenAndDoesNotWriteArtifacts(t *testing.T) {
 	skillsDir := t.TempDir()
 	workspaceDir := t.TempDir()

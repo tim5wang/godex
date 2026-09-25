@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/conversation"
 )
 
 const (
@@ -160,19 +160,30 @@ func (s *LLMSessionSummarizer) SummarizeSession(ctx context.Context, req Session
 	return s.fallbackSummary(ctx, req, diagnostics, hint)
 }
 
-// filterNewMessagesSinceLastCompaction returns messages that appeared after the
-// last KindSummary (compaction boundary) in the history.
+// filterNewMessagesSinceLastCompaction returns non-summary messages after the
+// newest KindSummary. New compaction summaries are inserted at the history
+// head, while older summaries may remain in the retained tail.
 func filterNewMessagesSinceLastCompaction(messages []protocol.Message) []protocol.Message {
-	lastSummaryIdx := -1
+	latestSummaryIdx := -1
 	for i, msg := range messages {
 		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
-			lastSummaryIdx = i
+			latestSummaryIdx = i
+			break
 		}
 	}
-	if lastSummaryIdx < 0 {
+	if latestSummaryIdx < 0 {
 		return messages
 	}
-	out := messages[lastSummaryIdx+1:]
+	out := make([]protocol.Message, 0, len(messages)-latestSummaryIdx-1)
+	for _, msg := range messages[latestSummaryIdx+1:] {
+		// Compaction inserts the newest summary at the history head. Older
+		// summaries can still appear in the verbatim retention tail; they are
+		// already covered by the newest summary and are not new input.
+		if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
+			continue
+		}
+		out = append(out, msg)
+	}
 	if len(out) == 0 {
 		return nil
 	}
@@ -282,7 +293,7 @@ func buildSummaryInstruction(req SessionSummaryRequest, transcript string) strin
 
 	if isIncremental {
 		builder.WriteString("<previous-summary>\n")
-		builder.WriteString(limitRunes(previousSummary, 5000))
+		builder.WriteString(limitRunes(previousSummary, maxSummaryMetadataRunes))
 		builder.WriteString("\n</previous-summary>\n\n")
 	}
 	if snapshot := strings.TrimSpace(req.ContinuationSnapshot); snapshot != "" {

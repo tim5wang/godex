@@ -10,6 +10,27 @@ import (
 	"testing"
 )
 
+type pprofTestCommandRunner struct{}
+
+func (pprofTestCommandRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	for _, arg := range args {
+		if arg == "is-active" {
+			return []byte("active\n"), nil
+		}
+		if strings.EqualFold(arg, "/Query") {
+			return []byte("running"), nil
+		}
+		if strings.EqualFold(arg, "query") {
+			return []byte("STATE : 4 RUNNING"), nil
+		}
+	}
+	return nil, nil
+}
+
+func (pprofTestCommandRunner) Start(context.Context, string, ...string) error {
+	return nil
+}
+
 func TestParseNullEnvironmentIgnoresShellStartupNoise(t *testing.T) {
 	output := []byte("startup banner\nPATH=/bad\x00" + shellEnvironmentMarker + "PATH=/usr/local/bin:/usr/bin\x00GOPATH=/home/me/go\x00MULTILINE=one\ntwo\x00")
 	env := parseNullEnvironment(output)
@@ -75,6 +96,54 @@ func TestNormalizeOptionsDefaultsToUserService(t *testing.T) {
 	}
 	if !strings.Contains(opts.LogPath, "godexweb.service.log") {
 		t.Fatalf("expected default service log path, got %q", opts.LogPath)
+	}
+}
+
+func TestSaveAndLoadPprofAddr(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := SavePprofAddr(homeDir, "GoDex Web!", "localhost:6060"); err != nil {
+		t.Fatalf("save pprof address: %v", err)
+	}
+	addr, err := LoadPprofAddr(homeDir, "GoDex Web!")
+	if err != nil {
+		t.Fatalf("load pprof address: %v", err)
+	}
+	if addr != "127.0.0.1:6060" {
+		t.Fatalf("loaded pprof address %q, want %q", addr, "127.0.0.1:6060")
+	}
+
+	if err := SavePprofAddr(homeDir, "GoDex Web!", ""); err != nil {
+		t.Fatalf("disable pprof: %v", err)
+	}
+	addr, err = LoadPprofAddr(homeDir, "GoDex Web!")
+	if err != nil {
+		t.Fatalf("load disabled pprof setting: %v", err)
+	}
+	if addr != "" {
+		t.Fatalf("expected pprof to be disabled, got %q", addr)
+	}
+}
+
+func TestSavePprofAddrRejectsNonLoopbackAddress(t *testing.T) {
+	if err := SavePprofAddr(t.TempDir(), "godex", "0.0.0.0:6060"); err == nil {
+		t.Fatal("expected non-loopback pprof address to be rejected")
+	}
+}
+
+func TestStartPersistsPprofAddrForManagedService(t *testing.T) {
+	opts := testInstallOptions(t)
+	opts.PprofAddr = "127.0.0.1:6060"
+	opts.PprofAddrSet = true
+	controller := &Controller{runner: pprofTestCommandRunner{}}
+	if _, err := controller.Start(context.Background(), opts); err != nil {
+		t.Fatalf("start service with pprof: %v", err)
+	}
+	addr, err := LoadPprofAddr(opts.HomeDir, opts.Name)
+	if err != nil {
+		t.Fatalf("load persisted pprof address: %v", err)
+	}
+	if addr != opts.PprofAddr {
+		t.Fatalf("persisted pprof address %q, want %q", addr, opts.PprofAddr)
 	}
 }
 

@@ -62,6 +62,7 @@ func TestFlowHumanTaskLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
+	cleanupWorkflowAfterTest(t, a, run.WorkflowID)
 	started, err := a.StartFlowRun(ctx, "fl_approval", run.RunID)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
@@ -126,6 +127,95 @@ func TestFlowHumanTaskLifecycle(t *testing.T) {
 	end := workflowNodeByID(state.Nodes, "end")
 	if end == nil || end.Status == workflowStatusPending || end.Status == workflowStatusError {
 		t.Fatalf("expected end node started after reply, got %+v", end)
+	}
+}
+
+func TestCancelFlowRunCancelsHumanWaitAndTask(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.SetDecisionCaller(&scriptedDecisionCaller{result: decision.Result{Choice: "yes", Confidence: 0.6}})
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: flowHumanTestDef()}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	run, err := a.CreateFlowRun(context.Background(), "fl_approval", "", nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	cleanupWorkflowAfterTest(t, a, run.WorkflowID)
+	if _, err := a.StartFlowRun(context.Background(), "fl_approval", run.RunID); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	canceled, err := a.CancelFlowRun(context.Background(), "fl_approval", run.RunID)
+	if err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+	if canceled.Status != workflowStatusCanceled {
+		t.Fatalf("expected canceled run, got %+v", canceled)
+	}
+	state, err := a.workflowState(run.WorkflowID)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	node := workflowNodeByID(state.Nodes, "approve")
+	if node == nil || node.Status != workflowStatusCanceled {
+		t.Fatalf("expected waiting human node to be canceled, got %+v", node)
+	}
+	tasks, err := a.humanTasks.listRunTasks(run.RunID)
+	if err != nil {
+		t.Fatalf("load human tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Status != humanTaskStatusCanceled {
+		t.Fatalf("expected human task canceled with its run, got %+v", tasks)
+	}
+}
+
+func TestFlowRunTimeoutCancelsHumanWaitAndTask(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.SetDecisionCaller(&scriptedDecisionCaller{result: decision.Result{Choice: "yes", Confidence: 0.6}})
+	def := flowHumanTestDef()
+	def.TimeoutSec = 60
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	run, err := a.CreateFlowRun(context.Background(), def.FlowID, "", nil)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	cleanupWorkflowAfterTest(t, a, run.WorkflowID)
+	if _, err := a.StartFlowRun(context.Background(), def.FlowID, run.RunID); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	state, err := a.workflowState(run.WorkflowID)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	state.Summary.RunTimeoutAt = time.Now().UTC().Add(-time.Second)
+	if err := a.workflows.save(state); err != nil {
+		t.Fatalf("persist expired deadline: %v", err)
+	}
+
+	expired, err := a.RefreshFlowRun(def.FlowID, run.RunID)
+	if err != nil {
+		t.Fatalf("refresh expired run: %v", err)
+	}
+	if expired.Status != workflowStatusError || !strings.Contains(expired.Error, "timed out") {
+		t.Fatalf("expected timeout error, got %+v", expired)
+	}
+	state, err = a.workflowState(run.WorkflowID)
+	if err != nil {
+		t.Fatalf("reload workflow: %v", err)
+	}
+	node := workflowNodeByID(state.Nodes, "approve")
+	if node == nil || node.Status != workflowStatusCanceled {
+		t.Fatalf("expected human wait canceled on timeout, got %+v", node)
+	}
+	tasks, err := a.humanTasks.listRunTasks(run.RunID)
+	if err != nil {
+		t.Fatalf("load human tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Status != humanTaskStatusCanceled {
+		t.Fatalf("expected timed-out human task canceled, got %+v", tasks)
 	}
 }
 
@@ -194,6 +284,7 @@ func TestFlowHumanTimeoutEscalatesToLLM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
+	cleanupWorkflowAfterTest(t, a, run.WorkflowID)
 	if _, err := a.StartFlowRun(ctx, "fl_approval", run.RunID); err != nil {
 		t.Fatalf("start run: %v", err)
 	}

@@ -44,7 +44,9 @@ Rules:
 - human nodes need human.queue ("ops"/"support"/"finance") and human.result_var
 - edges: "data_dependency" for plain ordering; "handoff" to pass the upstream summary; "condition" edges are only for loop/branch internals
 - prompts may reference declared inputs ONLY as {{inputs.<name>}}; never reference undeclared names
-- inputs: only fields the flow actually reads`
+- inputs: only fields the flow actually reads; mark required fields with required=true
+- when declaring Flow outputs, map each functional output with source="nodes.<node_id>.outputs.<field>"
+- the source field must also be declared in that node's outputs; mark an output required only when every valid path produces it`
 
 // flowSpecAmendSystemPrompt instructs the model to MODIFY an existing Flow
 // Spec v1 definition according to a natural-language change request (multi-
@@ -62,7 +64,9 @@ Rules:
 - human nodes need human.queue ("ops"/"support"/"finance") and human.result_var
 - edges: "data_dependency" for plain ordering; "handoff" to pass the upstream summary; "condition" edges are only for loop/branch internals
 - prompts may reference declared inputs ONLY as {{inputs.<name>}}; never reference undeclared names
-- inputs: only fields the flow actually reads`
+- inputs: only fields the flow actually reads; mark required fields with required=true
+- when declaring Flow outputs, map each functional output with source="nodes.<node_id>.outputs.<field>"
+- the source field must also be declared in that node's outputs; mark an output required only when every valid path produces it`
 
 // GenerateFlowSpec drafts a Flow Spec v1 definition from a natural-language
 // business description via the LLM (P2.5). It validates the result so a
@@ -77,8 +81,8 @@ func (a *Agent) GenerateFlowSpec(ctx context.Context, description string) (*flow
 		return nil, fmt.Errorf("generate flow: LLM client unavailable")
 	}
 	req := protocol.Request{
-		Model:     a.cfg.Model,
-		System:    flowSpecPlanSystemPrompt,
+		Model:  a.cfg.Model,
+		System: flowSpecPlanSystemPrompt,
 		Messages: []protocol.APIMessage{
 			{Role: protocol.RoleUser, Content: []protocol.Block{protocol.TextBlock(description)}},
 		},
@@ -116,8 +120,8 @@ func (a *Agent) AmendFlowSpec(ctx context.Context, current *flow.Definition, cha
 	}
 	userText := fmt.Sprintf("CURRENT definition:\n%s\n\nCHANGE REQUEST:\n%s", currentJSON, change)
 	req := protocol.Request{
-		Model:     a.cfg.Model,
-		System:    flowSpecAmendSystemPrompt,
+		Model:  a.cfg.Model,
+		System: flowSpecAmendSystemPrompt,
 		Messages: []protocol.APIMessage{
 			{Role: protocol.RoleUser, Content: []protocol.Block{protocol.TextBlock(userText)}},
 		},

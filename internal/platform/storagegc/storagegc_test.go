@@ -80,6 +80,9 @@ func TestPruneSessionCheckpointsKeepsPointerAndLatest(t *testing.T) {
 	if result.Candidates != 2 {
 		t.Fatalf("expected 2 pruned checkpoints, got %+v", result)
 	}
+	if result.Bytes != int64(2*len("state")) {
+		t.Fatalf("expected removed checkpoint sizes to total %d bytes, got %+v", 2*len("state"), result)
+	}
 	for _, keep := range []string{
 		"20260101T000100.000000000Z-a",
 		"20260101T000300.000000000Z-a",

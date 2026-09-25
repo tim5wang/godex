@@ -33,6 +33,17 @@ type ContextLayers struct {
 
 // BuildContextLayers returns bounded memory sections for prompt injection.
 func (m *Manager) BuildContextLayers(query string) (ContextLayers, error) {
+	return m.buildContextLayers(query, true)
+}
+
+// PreviewContextLayers returns the bounded memory sections without updating
+// LastReferencedAt. Use it for inspectors and previews that do not inject the
+// selected memories into an actual model request.
+func (m *Manager) PreviewContextLayers(query string) (ContextLayers, error) {
+	return m.buildContextLayers(query, false)
+}
+
+func (m *Manager) buildContextLayers(query string, trackReferences bool) (ContextLayers, error) {
 	if err := m.ensureStore(); err != nil {
 		return ContextLayers{}, err
 	}
@@ -99,9 +110,11 @@ func (m *Manager) BuildContextLayers(query string) (ContextLayers, error) {
 	if len(identity) == 0 && len(core) == 0 && len(relevant) == 0 {
 		return ContextLayers{}, nil
 	}
-	// Best-effort: record which memories actually reached the prompt so the
-	// UI can surface stale, never-referenced entries. Never blocks the turn.
-	m.markReferenced(referencedIDs(identity, core, relevant))
+	if trackReferences {
+		// Best-effort: record which memories actually reached the prompt so the
+		// UI can surface stale, never-referenced entries. Never blocks the turn.
+		m.markReferenced(referencedIDs(identity, core, relevant))
+	}
 	return ContextLayers{Identity: identity, Core: core, Relevant: relevant}, nil
 }
 

@@ -39,6 +39,10 @@ func (a *Agent) executeWorkflowBranch(state *workflowState, node *workflowNode) 
 func (a *Agent) completeWorkflowBranch(state *workflowState, node *workflowNode, route string) {
 	now := time.Now().UTC()
 	outputs := map[string]any{"choice": route}
+	if err := validateWorkflowOutputSpecs(node.OutputSpec, outputs, "node "+node.ID+" outputs"); err != nil {
+		a.failWorkflowBranchNode(state, node, "output contract violation: "+err.Error())
+		return
+	}
 	node.Status = workflowStatusCompleted
 	node.Attempt = nextWorkflowAttempt(*node)
 	node.Outputs = outputs

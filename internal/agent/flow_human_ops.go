@@ -187,8 +187,16 @@ func (a *Agent) ReplyFlowRunHuman(ctx context.Context, flowID, runID, nodeID str
 		return FlowRunView{}, err
 	}
 
+	humanOutputs := map[string]any{}
+	if state, err := a.workflowState(workflowID); err != nil {
+		return FlowRunView{}, err
+	} else if node := workflowNodeByID(state.Nodes, nodeID); node != nil &&
+		node.HumanSpec != nil && strings.TrimSpace(node.HumanSpec.ResultVar) != "" {
+		humanOutputs[node.HumanSpec.ResultVar] = value
+	}
+
 	// Complete the blocked user_input node (existing engine primitive).
-	if _, err := a.completeWorkflowNode(workflowID, nodeID, resultText); err != nil {
+	if _, err := a.completeWorkflowNodeWithOutputs(workflowID, nodeID, resultText, humanOutputs); err != nil {
 		return FlowRunView{}, fmt.Errorf("complete human node: %w", err)
 	}
 
@@ -204,11 +212,6 @@ func (a *Agent) ReplyFlowRunHuman(ctx context.Context, flowID, runID, nodeID str
 				t.Result = value
 				t.UpdatedAt = time.Now().UTC()
 				_ = a.humanTasks.saveTask(t)
-				// Write the submitted value into the node outputs under the
-				// declared result_var so downstream edges can read it.
-				if strings.TrimSpace(t.ResultVar) != "" {
-					_ = a.writeWorkflowNodeOutput(workflowID, nodeID, t.ResultVar, value)
-				}
 				break
 			}
 		}
@@ -232,7 +235,9 @@ func (a *Agent) ReplyFlowRunHuman(ctx context.Context, flowID, runID, nodeID str
 // writeWorkflowNodeOutput writes one key into a node's outputs map
 // (persisted with the workflow state).
 func (a *Agent) writeWorkflowNodeOutput(workflowID, nodeID, key string, value any) error {
-	state, err := a.workflowState(workflowID)
+	unlock := a.workflows.lockAdvance(workflowID)
+	defer unlock()
+	state, err := a.workflowStateUnlocked(workflowID)
 	if err != nil {
 		return err
 	}
@@ -323,26 +328,31 @@ func (a *Agent) CheckHumanTaskTimeouts(now time.Time) ([]HumanTaskView, error) {
 // rescheduleHumanNodeAsLLM flips a blocked user_input node into an llm_task
 // (pending) so the next scheduler scan starts a reasoning fallback job.
 func (a *Agent) rescheduleHumanNodeAsLLM(workflowID, nodeID string) error {
-	state, err := a.workflowState(workflowID)
-	if err != nil {
-		return err
-	}
-	found := false
-	for i := range state.Nodes {
-		if state.Nodes[i].ID != nodeID {
-			continue
+	err := func() error {
+		unlock := a.workflows.lockAdvance(workflowID)
+		defer unlock()
+		state, err := a.workflowStateUnlocked(workflowID)
+		if err != nil {
+			return err
 		}
-		state.Nodes[i].Kind = agentGraphNodeLLMTask
-		state.Nodes[i].HumanSpec = nil
-		state.Nodes[i].Status = workflowStatusPending
-		state.Nodes[i].UpdatedAt = time.Now().UTC()
-		found = true
-		break
-	}
-	if !found {
-		return fmt.Errorf("workflow node not found: %s", nodeID)
-	}
-	if err := a.workflows.save(state); err != nil {
+		found := false
+		for i := range state.Nodes {
+			if state.Nodes[i].ID != nodeID {
+				continue
+			}
+			state.Nodes[i].Kind = agentGraphNodeLLMTask
+			state.Nodes[i].HumanSpec = nil
+			state.Nodes[i].Status = workflowStatusPending
+			state.Nodes[i].UpdatedAt = time.Now().UTC()
+			found = true
+			break
+		}
+		if !found {
+			return fmt.Errorf("workflow node not found: %s", nodeID)
+		}
+		return a.workflows.save(state)
+	}()
+	if err != nil {
 		return err
 	}
 	_, err = a.startWorkflowReadyNodes(context.Background(), workflowID)
@@ -351,7 +361,9 @@ func (a *Agent) rescheduleHumanNodeAsLLM(workflowID, nodeID string) error {
 
 // failWorkflowHumanNode moves a blocked user_input node to error.
 func (a *Agent) failWorkflowHumanNode(workflowID, nodeID, reason string) error {
-	state, err := a.workflowState(workflowID)
+	unlock := a.workflows.lockAdvance(workflowID)
+	defer unlock()
+	state, err := a.workflowStateUnlocked(workflowID)
 	if err != nil {
 		return err
 	}

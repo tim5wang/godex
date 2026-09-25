@@ -58,6 +58,16 @@ func (r *recordingSessionSummarizer) SummarizeSession(_ context.Context, req com
 	}, nil
 }
 
+type deadlineSessionSummarizer struct {
+	canceled chan error
+}
+
+func (s deadlineSessionSummarizer) SummarizeSession(ctx context.Context, _ compress.SessionSummaryRequest) (compress.SessionSummaryResult, error) {
+	<-ctx.Done()
+	s.canceled <- ctx.Err()
+	return compress.SessionSummaryResult{}, ctx.Err()
+}
+
 func TestCompactConversationDefaultsToFastSummarizer(t *testing.T) {
 	a := newTestAgent(t, 100000)
 	a.AddMessage(strings.Repeat("slow model compact should be avoided ", 40))
@@ -106,6 +116,24 @@ func TestCompactConversationModelModeUsesSessionLLMWhenDefaultIsRuleBased(t *tes
 	}
 	if !strings.Contains(output, "model summary from session llm") {
 		t.Fatalf("expected session LLM summary output, got %q", output)
+	}
+}
+
+func TestHybridCompactionFallsBackToRuleSummary(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.summarizer = failingSessionSummarizer{}
+	result, err := a.runCompaction(context.Background(), "hybrid", compress.SessionSummaryRequest{
+		History: []protocol.Message{
+			protocol.NewTextMessage(protocol.RoleUser, "Keep the original implementation goal."),
+			protocol.NewTextMessage(protocol.RoleAssistant, "The implementation is complete."),
+		},
+	})
+	if err != nil {
+		t.Fatalf("hybrid compaction should fall back: %v", err)
+	}
+	if result.Mode != "fast" || len(result.Messages) == 0 || result.Messages[0].Metadata == nil ||
+		result.Messages[0].Metadata.Kind != protocol.KindSummary {
+		t.Fatalf("expected rule-based fallback summary, got %+v", result)
 	}
 }
 
@@ -261,6 +289,26 @@ func TestBuildContextUsesCompactionPolicyTrigger(t *testing.T) {
 	}
 	if len(build.LargestContextSources) == 0 {
 		t.Fatalf("expected largest context source diagnostics")
+	}
+}
+
+func TestBackgroundCompactionHonorsMaxLatency(t *testing.T) {
+	a := newTestAgent(t, 100000)
+	a.cfg.Compaction.TriggerTokens = 80
+	a.cfg.Compaction.Mode = "model"
+	a.cfg.Compaction.MaxLatencyMS = 25
+	a.AddMessage(strings.Repeat("background timeout context pressure ", 100))
+	canceled := make(chan error, 1)
+	a.summarizer = deadlineSessionSummarizer{canceled: canceled}
+
+	a.maybeStartBackgroundCompaction(context.Background())
+	select {
+	case err := <-canceled:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected deadline cancellation, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background compaction did not receive its latency deadline")
 	}
 }
 
@@ -720,7 +768,7 @@ func TestBuildContextExposesOnlyActiveToolSchemas(t *testing.T) {
 	}
 	slices.Sort(gotNames)
 	wantNames := []string{
-		"attach_file", "bash", "call_mcp_tool", "compress", "edit_file", "find", "glob", "grep",
+		"attach_file", "bash", "call_mcp_tool", "compress", "edit_file", "find", "glob", "godex_docs", "grep",
 		"history_search", "list_mcp_tools", "ls", "lsp", "memory", "read_file", "skill",
 		"taskboard", "todo_list", "todo_write", "tool_exchange", "ui_card", "web_fetch", "web_search", "write_file",
 	}
@@ -1074,6 +1122,22 @@ func runtimePromptStateText(messages []protocol.Message) string {
 // contains the given substring.
 func runtimeTailContains(build *BuildContextResult, want string) bool {
 	return build != nil && strings.Contains(build.RuntimeTail, want)
+}
+
+func TestRecentPersistentUserMessagesExcludeCompactionSummaries(t *testing.T) {
+	messages := []protocol.Message{
+		protocol.NewSummaryMessage("## Goal\n- Compacted current request", "newer.json"),
+		protocol.NewSummaryMessage("## Goal\n- Previous task goal", "older.json"),
+		protocol.NewTextMessage(protocol.RoleUser, "Current user request"),
+	}
+
+	got := recentPersistentUserMessages(messages, 6)
+	if len(got) != 1 || got[0] != "Current user request" {
+		t.Fatalf("expected only real user messages, got %#v", got)
+	}
+	if got := extractPreviousSummary(messages); !strings.Contains(got, "Compacted current request") {
+		t.Fatalf("expected the summary at the history head, got %q", got)
+	}
 }
 
 func TestBuildContextIncludesSkillCatalogPrompt(t *testing.T) {

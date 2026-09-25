@@ -8,22 +8,42 @@ import (
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/insights"
+	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/tools"
 )
 
+// ContextInspectionDetails keeps the full Inspector's related data derived
+// from one history snapshot and one read-only memory lookup.
+type ContextInspectionDetails struct {
+	Context      tools.ContextInspection
+	RecallQuery  string
+	MemoryLayers memory.ContextLayers
+}
+
 // InspectContext summarizes the current prompt budget without mutating history.
 func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.ContextInspection, error) {
-	system, err := a.buildRuntimeSystemPrompt(agentProfileFromContext(ctx))
+	details, err := a.InspectContextDetails(ctx, sessionID)
 	if err != nil {
 		return tools.ContextInspection{}, err
 	}
+	return details.Context, nil
+}
+
+// InspectContextDetails builds the full Inspector snapshot while sharing the
+// history snapshot and memory recall work with the backend's preview fields.
+func (a *Agent) InspectContextDetails(ctx context.Context, sessionID string) (ContextInspectionDetails, error) {
+	system, err := a.buildRuntimeSystemPrompt(agentProfileFromContext(ctx))
+	if err != nil {
+		return ContextInspectionDetails{}, err
+	}
 	history, _ := a.messageState()
 	history = dedupeRepeatedLargeToolResultSummaries(history)
-	memoryMessages, _, err := a.collectMemoryMessages(history)
+	recallQuery := strings.TrimSpace(protocol.LatestPersistentUserText(history))
+	memoryMessages, memoryLayers, err := a.collectMemoryMessagesReadOnly(history)
 	if err != nil {
-		return tools.ContextInspection{}, err
+		return ContextInspectionDetails{}, err
 	}
 	agentProfile := agentProfileFromContext(ctx)
 	memoryIndexTokens := 0
@@ -32,7 +52,7 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 	}
 	promptStateSections, err := a.buildDynamicRuntimePromptSections(agentProfile)
 	if err != nil {
-		return tools.ContextInspection{}, err
+		return ContextInspectionDetails{}, err
 	}
 	promptStateMessages := runtimePromptMessages(promptStateSections)
 	runtimeMessages, _ := a.collectRuntimeMessages(false)
@@ -46,31 +66,35 @@ func (a *Agent) InspectContext(ctx context.Context, sessionID string) (tools.Con
 		pendingCount = len(a.permissions.ListPending(sessionID))
 	}
 	cumInput, cumOutput := a.cumulativeTokenUsage()
-	return tools.ContextInspection{
-		SessionID:                     strings.TrimSpace(sessionID),
-		MessageCount:                  len(history),
-		TokenEstimate:                 estimate.Breakdown.Total,
-		HistoryTokenEstimate:          estimate.Breakdown.History,
-		TotalTokenEstimate:            estimate.Breakdown.Total,
-		TokenBreakdown:                estimate.Breakdown,
-		PrefixCache:                   prefixCacheInspection(system, toolSchemas, history, promptStateSections, memoryIndexTokens, volatileMessages),
-		CacheUsage:                    a.cacheUsageSnapshot(),
-		CompressThreshold:             triggerTokens,
-		ContextWindowTokens:           compactionContextWindowTokensFromConfig(a.cfg),
-		RetainTokens:                  a.compactionRetainTokens(),
-		SuggestCompact:                len(estimate.Reasons) > 0,
-		CompressionReasons:            append([]string{}, estimate.Reasons...),
-		PreCompactionTotal:            estimate.Breakdown.Total,
-		PostCompactionTotal:           estimate.Breakdown.Total,
-		CompactionMode:                normalizeAgentCompactionMode(a.cfg.Compaction.Mode),
-		LargestContextSources:         largestContextSources(estimate.Breakdown),
-		ActiveSkillCount:              len(a.ActiveSkillNames()),
-		PendingPermissionCount:        pendingCount,
-		LargeToolResultReferenceCount: estimate.LargeToolResultReferenceCount,
-		ToolResultReferences:          append([]tools.ToolResultReference{}, estimate.ToolResultReferences...),
-		CumulativeTokens:              int(cumInput + cumOutput),
-		CumulativeInputTokens:         int(cumInput),
-		CumulativeOutputTokens:        int(cumOutput),
+	return ContextInspectionDetails{
+		Context: tools.ContextInspection{
+			SessionID:                     strings.TrimSpace(sessionID),
+			MessageCount:                  len(history),
+			TokenEstimate:                 estimate.Breakdown.Total,
+			HistoryTokenEstimate:          estimate.Breakdown.History,
+			TotalTokenEstimate:            estimate.Breakdown.Total,
+			TokenBreakdown:                estimate.Breakdown,
+			PrefixCache:                   prefixCacheInspection(system, toolSchemas, history, promptStateSections, memoryIndexTokens, volatileMessages),
+			CacheUsage:                    a.cacheUsageSnapshot(),
+			CompressThreshold:             triggerTokens,
+			ContextWindowTokens:           compactionContextWindowTokensFromConfig(a.cfg),
+			RetainTokens:                  a.compactionRetainTokens(),
+			SuggestCompact:                len(estimate.Reasons) > 0,
+			CompressionReasons:            append([]string{}, estimate.Reasons...),
+			PreCompactionTotal:            estimate.Breakdown.Total,
+			PostCompactionTotal:           estimate.Breakdown.Total,
+			CompactionMode:                normalizeAgentCompactionMode(a.cfg.Compaction.Mode),
+			LargestContextSources:         largestContextSources(estimate.Breakdown),
+			ActiveSkillCount:              len(a.ActiveSkillNames()),
+			PendingPermissionCount:        pendingCount,
+			LargeToolResultReferenceCount: estimate.LargeToolResultReferenceCount,
+			ToolResultReferences:          append([]tools.ToolResultReference{}, estimate.ToolResultReferences...),
+			CumulativeTokens:              int(cumInput + cumOutput),
+			CumulativeInputTokens:         int(cumInput),
+			CumulativeOutputTokens:        int(cumOutput),
+		},
+		RecallQuery:  recallQuery,
+		MemoryLayers: memoryLayers,
 	}, nil
 }
 
@@ -127,6 +151,9 @@ func (a *Agent) CompactConversationWithModeContext(ctx context.Context, mode str
 				CompressionReasons:  []string{"manual"},
 				TokenEstimateBefore: estimateMessages(history),
 				TokenEstimateAfter:  estimateMessages(compacted),
+				CompactionMode:      result.Mode,
+				CompactionLatencyMS: result.LatencyMS,
+				TranscriptRef:       result.TranscriptRef,
 			},
 		})
 	}

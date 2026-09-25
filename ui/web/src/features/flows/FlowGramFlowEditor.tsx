@@ -45,7 +45,7 @@ const { Text, Paragraph } = Typography;
 // (free-layout-editor, the Coze-class AI-native flow editor).
 //
 // Replaces the previous self-built cytoscape canvas (FlowGramEditor.tsx).
-// The six node materials (step/llm/decision/human/branch/loop) are registered
+// The Flow Spec node materials are registered
 // with built-in forms; nodes and edges round-trip through the adapter.
 //
 // Save persists the definition as a NEW version via createFlow.
@@ -166,7 +166,7 @@ export function FlowGramFlowEditor({
     getCurrentDefinition: () => {
       const doc = documentRef.current as unknown as { toJSON?: () => WorkflowJSON } | null;
       const wf = doc?.toJSON?.() ?? initialWorkflow;
-      return workflowToFlowSpec(wf, flowId, nextVersion, "draft");
+      return workflowToFlowSpec(wf, flowId, nextVersion, "draft", latest);
     },
   }));
 
@@ -215,7 +215,7 @@ export function FlowGramFlowEditor({
     setSaving(true);
     setError(null);
     try {
-      const def: FlowDefinition = workflowToFlowSpec(wf, flowId, nextVersion, "draft");
+      const def: FlowDefinition = workflowToFlowSpec(wf, flowId, nextVersion, "draft", latest);
       await createFlow(token, {
         flow_id: flowId,
         version: nextVersion,

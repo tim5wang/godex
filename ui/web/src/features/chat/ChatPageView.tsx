@@ -203,6 +203,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     builtinCommandsQuery,
     packageRolesQuery,
     contextInspectorQuery,
+    contextUsage,
     activeSkillsQuery,
     modelsQuery,
     sessionsQuery,
@@ -674,7 +675,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                       </Typography.Text>
                     </Space>
                     <Space size={4}>
-                      <ContextStatusInline summary={contextStatus} inspector={contextInspector} />
+                      <ContextStatusInline summary={contextStatus} inspector={contextInspector} usage={contextUsage} />
                       <VoiceBar token={token} sessionId={openQuery.data?.session_id ?? null} enabled={metaQuery.data?.voice_enabled ?? false} disabled={!openQuery.data?.session_id || modelMutation.isPending} onResult={(text) => composerRef.current?.appendText(text)} />
                       {running ? (
                         <Tooltip title={notifyArmed ? t("chat.notifyArmed") : t("chat.notifyMeAfter")}>

@@ -55,6 +55,7 @@ import type {
   TimelinePage,
   CompactionRecord,
   SessionContextInspector,
+  SessionContextUsage,
   SessionLocator,
   Snapshot,
   UsageCall,
@@ -837,6 +838,14 @@ export function finalizeSessionLongTaskStory(token: string | null, sessionId: st
 export function getSessionContextInspector(token: string | null, sessionId: string) {
   return request<SessionContextInspector>(
     `/sessions/${encodeURIComponent(sessionId)}/context-inspector`,
+    { method: "GET" },
+    token,
+  );
+}
+
+export function getSessionContextUsage(token: string | null, sessionId: string) {
+  return request<SessionContextUsage>(
+    `/sessions/${encodeURIComponent(sessionId)}/context-usage`,
     { method: "GET" },
     token,
   );

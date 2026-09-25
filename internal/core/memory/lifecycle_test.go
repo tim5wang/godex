@@ -217,6 +217,33 @@ func TestLastReferencedAtTracksInjection(t *testing.T) {
 	}
 }
 
+func TestPreviewContextLayersDoesNotTrackReferences(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	if _, err := manager.Remember(SaveInput{
+		Title:   "Preview Fact",
+		Summary: "Used to verify read-only memory previews.",
+		Content: "The preview should not update the reference timestamp.",
+		Type:    TypeProject,
+		Source:  "test",
+	}); err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+
+	if _, err := manager.PreviewContextLayers("Preview Fact"); err != nil {
+		t.Fatalf("preview context layers: %v", err)
+	}
+	entries, err := manager.readEntries()
+	if err != nil {
+		t.Fatalf("read entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one entry, got %+v", entries)
+	}
+	if !entries[0].LastReferencedAt.IsZero() {
+		t.Fatalf("read-only preview changed LastReferencedAt: %s", entries[0].LastReferencedAt)
+	}
+}
+
 func TestArchivePersistsStatusHeader(t *testing.T) {
 	dir := t.TempDir()
 	manager := NewManager(dir)

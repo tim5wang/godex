@@ -101,6 +101,8 @@ func (r *Runner) parseServiceOptions(command string, args []string, includeAddr 
 	gogc := "50"
 	gomaxprocs := "1"
 	godebug := "madvdontneed=1"
+	pprofAddr := ""
+	pprofAddrSet := false
 	watchdogSec := 30
 	memoryHigh := ""
 	memoryMax := ""
@@ -108,6 +110,9 @@ func (r *Runner) parseServiceOptions(command string, args []string, includeAddr 
 	fs.StringVar(&name, "name", name, "service name")
 	if includeAddr {
 		fs.StringVar(&addr, "addr", addr, "HTTP listen address for godex serve")
+	}
+	if command == "start" || command == "restart" {
+		fs.StringVar(&pprofAddr, "pprof-addr", pprofAddr, "enable pprof on a loopback address, e.g. 127.0.0.1:6060; empty disables it")
 	}
 	if command == "install" {
 		fs.StringVar(&gomemlimit, "gomemlimit", gomemlimit, "Go runtime GOMEMLIMIT for the service")
@@ -124,9 +129,25 @@ func (r *Runner) parseServiceOptions(command string, args []string, includeAddr 
 	if len(fs.Args()) > 0 {
 		return servicecontrol.InstallOptions{}, fmt.Errorf("unexpected service %s arguments: %s", command, strings.Join(fs.Args(), " "))
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "pprof-addr" {
+			pprofAddrSet = true
+		}
+	})
+	if pprofAddrSet && strings.TrimSpace(pprofAddr) != "" {
+		normalizedAddr, err := servicecontrol.NormalizePprofAddr(pprofAddr)
+		if err != nil {
+			return servicecontrol.InstallOptions{}, err
+		}
+		pprofAddr = normalizedAddr
+	}
 	opts := r.serviceOptions(name, scope)
 	if includeAddr {
 		opts.Addr = addr
+	}
+	if pprofAddrSet {
+		opts.PprofAddr = pprofAddr
+		opts.PprofAddrSet = true
 	}
 	if command == "install" {
 		opts.GOMEMLIMIT = gomemlimit
@@ -203,13 +224,14 @@ func serviceHelpText() string {
 		"Usage:",
 		"  godex service install [--scope user|system] [--name godex] [--addr 127.0.0.1:8088]",
 		"  godex service uninstall [--scope user|system] [--name godex]",
-		"  godex service start [--scope user|system] [--name godex]",
+		"  godex service start [--scope user|system] [--name godex] [--pprof-addr 127.0.0.1:6060]",
 		"  godex service stop [--scope user|system] [--name godex]",
-		"  godex service restart [--scope user|system] [--name godex]",
+		"  godex service restart [--scope user|system] [--name godex] [--pprof-addr 127.0.0.1:6060]",
 		"  godex service status [--scope user|system] [--name godex]",
 		"  godex service logs [--scope user|system] [--name godex] [--follow]",
 		"",
 		"Default scope is user. Use --scope system for a machine-level service when the OS account has permission.",
+		"Use --pprof-addr on start/restart to enable loopback-only profiling; pass an empty value to disable it.",
 		"Install defaults include GOMEMLIMIT=220MiB, GOGC=50, GOMAXPROCS=1, GODEBUG=madvdontneed=1, and systemd WatchdogSec=30.",
 		"Use --memory-high and --memory-max on Linux to add systemd memory pressure limits.",
 	}, "\n")

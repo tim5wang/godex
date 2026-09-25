@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tim5wang/godex/internal/platform/servicecontrol"
 )
 
 // debugFlags configures optional diagnostic behaviour for the godex
@@ -21,8 +23,10 @@ import (
 // the terminal.
 type debugFlags struct {
 	// PprofAddr is the listen address for the net/http/pprof endpoint,
-	// e.g. ":6060". Empty means pprof is disabled.
-	PprofAddr string
+	// e.g. "127.0.0.1:6060". Only loopback addresses are accepted.
+	// Empty means pprof is disabled.
+	PprofAddr    string
+	PprofAddrSet bool
 
 	// DumpDir is the directory where SIGQUIT-triggered goroutine dumps
 	// are written. Empty falls back to os.TempDir()/godex-dumps at the
@@ -44,7 +48,16 @@ func parseDebugFlags(args []string) (debugFlags, error) {
 	for _, arg := range args {
 		switch {
 		case strings.HasPrefix(arg, "--pprof-addr="):
-			f.PprofAddr = strings.TrimSpace(strings.TrimPrefix(arg, "--pprof-addr="))
+			addr := strings.TrimSpace(strings.TrimPrefix(arg, "--pprof-addr="))
+			f.PprofAddrSet = true
+			if addr != "" {
+				normalized, err := normalizePprofAddr(addr)
+				if err != nil {
+					return debugFlags{}, err
+				}
+				addr = normalized
+			}
+			f.PprofAddr = addr
 		case strings.HasPrefix(arg, "--dump-dir="):
 			f.DumpDir = strings.TrimSpace(strings.TrimPrefix(arg, "--dump-dir="))
 		case strings.HasPrefix(arg, "--heap-dump="):
@@ -54,6 +67,10 @@ func parseDebugFlags(args []string) (debugFlags, error) {
 		}
 	}
 	return f, nil
+}
+
+func normalizePprofAddr(addr string) (string, error) {
+	return servicecontrol.NormalizePprofAddr(addr)
 }
 
 // defaultDumpDir joins tempDir/godex-dumps so multiple godex processes
@@ -101,6 +118,10 @@ func startPprofServer(addr string) error {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
 		return nil
+	}
+	addr, err := normalizePprofAddr(addr)
+	if err != nil {
+		return err
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

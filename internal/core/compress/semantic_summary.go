@@ -14,7 +14,6 @@ type semanticSummary struct {
 	files            map[string]struct{}
 	validation       []string
 	openItems        []string
-	previous         []string
 	recentUser       string
 	recentAssistant  string
 	recentUsers      []string
@@ -38,6 +37,14 @@ func collectSemanticSummary(messages []protocol.Message) semanticSummary {
 
 func (s *semanticSummary) collectMessage(msg protocol.Message) {
 	text := messageSemanticText(msg)
+	humanText := strings.TrimSpace(protocol.MessageText(msg))
+	if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
+		s.collectPaths(text)
+		s.collectValidation(text)
+		s.collectPreviousSummary(humanText)
+		return
+	}
+
 	s.collectPaths(text)
 	s.collectValidation(text)
 	s.collectOpenItems(text)
@@ -45,12 +52,88 @@ func (s *semanticSummary) collectMessage(msg protocol.Message) {
 		s.collectBlock(block)
 	}
 
-	humanText := strings.TrimSpace(protocol.MessageText(msg))
-	if msg.Metadata != nil && msg.Metadata.Kind == protocol.KindSummary {
-		addUniqueLimited(&s.previous, normalizeWhitespace(humanText), 3)
-		return
-	}
 	s.collectHumanMessage(msg, humanText)
+}
+
+func (s *semanticSummary) collectPreviousSummary(text string) {
+	section := ""
+	subsection := ""
+	for _, rawLine := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "## ") {
+			section = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "## ")))
+			subsection = ""
+			continue
+		}
+		if strings.HasPrefix(line, "### ") {
+			subsection = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "### ")))
+			continue
+		}
+
+		item := summaryListItem(line)
+		if item == "" || isSummaryPlaceholder(item) {
+			continue
+		}
+		switch section {
+		case "goal":
+			addUniqueLimited(&s.goals, item, 64)
+		case "constraints & preferences":
+			addUniqueLimited(&s.constraints, item, maxSummaryConstraints)
+		case "progress":
+			switch subsection {
+			case "done":
+				addUniqueLimited(&s.decisions, item, maxSummaryDecisions)
+			case "in progress", "blocked":
+				addUniqueLimited(&s.openItems, item, maxSummaryOpenItems)
+			}
+		case "key decisions":
+			if subsection == "files modified" {
+				s.collectPriorFileOperation(item)
+			} else {
+				addUniqueLimited(&s.decisions, item, maxSummaryDecisions)
+			}
+		case "next steps":
+			if strings.Contains(subsection, "validation") || strings.Contains(subsection, "command") {
+				addUniqueLimited(&s.validation, item, maxSummaryValidation)
+			} else {
+				addUniqueLimited(&s.openItems, item, maxSummaryOpenItems)
+			}
+		case "files modified":
+			s.collectPriorFileOperation(item)
+		}
+	}
+}
+
+func (s *semanticSummary) collectPriorFileOperation(item string) {
+	lower := strings.ToLower(item)
+	switch {
+	case strings.HasPrefix(lower, "(edited) "):
+		s.fileOps.Edited = addUnique(s.fileOps.Edited, strings.TrimSpace(item[len("(edited) "):]))
+	case strings.HasPrefix(lower, "(written) "):
+		s.fileOps.Written = addUnique(s.fileOps.Written, strings.TrimSpace(item[len("(written) "):]))
+	}
+}
+
+func summaryListItem(line string) string {
+	item := trimListPrefix(line)
+	lower := strings.ToLower(item)
+	for _, prefix := range []string{"[x] ", "[ ] "} {
+		if strings.HasPrefix(lower, prefix) {
+			item = strings.TrimSpace(item[len(prefix):])
+			break
+		}
+	}
+	return normalizeWhitespace(item)
+}
+
+func isSummaryPlaceholder(item string) bool {
+	lower := strings.ToLower(strings.TrimSpace(item))
+	return strings.HasPrefix(lower, "(not explicitly stated)") ||
+		strings.HasPrefix(lower, "(none explicitly stated)") ||
+		strings.HasPrefix(lower, "(no completed items") ||
+		strings.HasPrefix(lower, "(none)") ||
+		strings.HasPrefix(lower, "(see next steps)") ||
+		strings.HasPrefix(lower, "not captured in compacted history")
 }
 
 func (s *semanticSummary) collectBlock(block protocol.Block) {

@@ -4,6 +4,7 @@ DIST_DIR ?= dist
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -s -w -X github.com/tim5wang/godex/internal/version.Version=$(VERSION) -X github.com/tim5wang/godex/internal/version.Commit=$(COMMIT) -X github.com/tim5wang/godex/internal/version.Date=$(BUILD_DATE)
+PPROF_FLAG = $(if $(strip $(PPROF_ADDR)),--pprof-addr=$(PPROF_ADDR),)
 
 .PHONY: dev dev-fast dev-frontend web web-dev web-typecheck web-clean docs-check smoke verify build-linux build-minimal release release-clean deploy-linux
 
@@ -58,13 +59,13 @@ dev-frontend:
 dev-fast: web-dev
 	go build -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
 		&& mv $(APP).new $(APP) \
-		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
+		&& (./$(APP) service restart $(PPROF_FLAG) 2>/dev/null || (./$(APP) service install && ./$(APP) service start $(PPROF_FLAG)))
 
 ## dev: Full rebuild + service restart (with tsc type-check, legacy)
 dev: web
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
 		&& mv $(APP).new $(APP) \
-		&& (./$(APP) service restart 2>/dev/null || (./$(APP) service install && ./$(APP) service start))
+		&& (./$(APP) service restart $(PPROF_FLAG) 2>/dev/null || (./$(APP) service install && ./$(APP) service start $(PPROF_FLAG)))
 
 # ── Release targets ────────────────────────────────────────────────
 

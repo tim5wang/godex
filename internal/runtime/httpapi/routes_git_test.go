@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -136,6 +138,47 @@ func TestGitDiffSingleFile(t *testing.T) {
 	}
 	if !contains(resp.Diff, "app.go") {
 		t.Errorf("expected diff to reference app.go, got %q", resp.Diff)
+	}
+}
+
+func TestGitDiffStatsBatchesRequestedPaths(t *testing.T) {
+	workspace := t.TempDir()
+	initTestGitRepo(t, workspace)
+
+	cfg := newTestConfig(t)
+	cfg.WorkspaceDir = workspace
+	manager := newTestManager(t, cfg)
+	handler := NewHandlerWithRuntime(manager, nil, nil, nil, nil, nil, nil, nil)
+
+	r := httptest.NewRequest("GET", "/git/diff-stats?path=app.go&path=missing.go", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp gitDiffStatsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Repo {
+		t.Fatalf("expected repo=true, got %+v", resp)
+	}
+	if len(resp.Files) != 1 || resp.Files[0].Path != "app.go" {
+		t.Fatalf("expected only changed app.go stats, got %+v", resp.Files)
+	}
+	if resp.Files[0].Added != 1 || resp.Files[0].Deleted != 1 {
+		t.Fatalf("expected one added and one deleted line, got %+v", resp.Files[0])
+	}
+}
+
+func TestRunGitHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := runGit(ctx, t.TempDir(), "rev-parse", "--is-inside-work-tree")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled git command, got %v", err)
 	}
 }
 

@@ -91,6 +91,25 @@ func testNonAnthropicProviders() map[string]llm.ProviderConfig {
 	}
 }
 
+func TestDefaultCompactionTriggerPreservesRatioSentinel(t *testing.T) {
+	t.Setenv("GODEX_AGENT_COMPACTION_TRIGGER_TOKENS", "")
+	t.Setenv("COMPRESS_THRESHOLD", "")
+	file := defaultConfigFile()
+	if file.Agent.Compaction.TriggerTokens != 0 || file.Agent.CompressThreshold != 0 {
+		t.Fatalf("expected default absolute triggers to be unset, got compaction=%d legacy=%d",
+			file.Agent.Compaction.TriggerTokens, file.Agent.CompressThreshold)
+	}
+
+	cfg := resolveConfigFile(file, "", "", "", "", "", "", "", "")
+	if cfg.Compaction.TriggerTokens != 0 || cfg.CompressThreshold != 0 {
+		t.Fatalf("resolution must preserve 0 so trigger_ratio can apply, got compaction=%d legacy=%d",
+			cfg.Compaction.TriggerTokens, cfg.CompressThreshold)
+	}
+	if cfg.Compaction.TriggerRatio != 0.8 || cfg.Compaction.ContextWindowTokens != 128000 {
+		t.Fatalf("unexpected ratio defaults: ratio=%v window=%d", cfg.Compaction.TriggerRatio, cfg.Compaction.ContextWindowTokens)
+	}
+}
+
 func TestDefaultConfigReadsRuntimeSettingsFromEnv(t *testing.T) {
 	workspace := t.TempDir()
 	useTestHome(t, workspace)

@@ -90,8 +90,8 @@ DSH 的四条对应设计（`region.ts:98 selectCompactableRange`、`index.ts:25
 
 ## 迁移与兼容
 
-- 旧会话已有的 `KindSummary` + transcript 引用：`extractPreviousSummary` 不变，新语义可再压缩旧压缩历史。
-- `keep_recent_messages` 配置保留但不再作为保留尾主控制（保留尾按 token 预算）；`target_history_tokens` 仅作摘要节点/旧区预算参考。
+- 旧会话已有的 `KindSummary` + transcript 引用继续兼容；当前摘要从 history 头部读取，归档浏览沿 summary transcript 引用逐层回溯。
+- `keep_recent_messages` 配置保留但不再作为保留尾主控制（保留尾按 token 预算）；`target_history_tokens` 保留为旧配置兼容字段，不再截断压缩后的历史。
 - 不触碰 volatile 尾部、transcript/history_search、checkpoint 语义。
 
 ## 验收标准

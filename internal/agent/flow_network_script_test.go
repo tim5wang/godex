@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -50,6 +52,35 @@ func TestHTTPGetWithPolicyDenials(t *testing.T) {
 	_, err = httpGetWithPolicy(ctx, "file:///etc/passwd", flowNetworkPolicy{Policy: "allow_all", TimeoutSeconds: 5})
 	if err == nil || !strings.Contains(err.Error(), "http/https only") {
 		t.Fatalf("expected non-http rejection, got %v", err)
+	}
+}
+
+func TestHTTPGetWithPolicyPrivateHostsRequireExplicitAllowlist(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("private-ok"))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := httpGetWithPolicy(ctx, server.URL, flowNetworkPolicy{
+		Policy: "allow_all",
+	})
+	if err == nil || !strings.Contains(err.Error(), "private or local") {
+		t.Fatalf("expected private destination to be blocked by default, got %v", err)
+	}
+
+	got, err := httpGetWithPolicy(ctx, server.URL, flowNetworkPolicy{
+		Policy:            "allowlist",
+		AllowedDomains:    []string{"127.0.0.1"},
+		AllowPrivateHosts: true,
+		TimeoutSeconds:    5,
+		MaxResponseChars:  1024,
+	})
+	if err != nil {
+		t.Fatalf("explicitly allowlisted private destination: %v", err)
+	}
+	if got != "private-ok" {
+		t.Fatalf("unexpected response from private test server: %q", got)
 	}
 }
 

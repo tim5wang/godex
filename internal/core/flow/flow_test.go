@@ -10,7 +10,7 @@ import (
 // compile tests. n.auto / n.llm are branch targets (append templates).
 func sampleFlow() *Definition {
 	return &Definition{
-		FlowID: "fl_order_recovery",
+		FlowID:  "fl_order_recovery",
 		Version: "1",
 		Status:  "draft",
 		Nodes: []Node{
@@ -102,7 +102,7 @@ func TestCompileLoopProducesNotExitEdge(t *testing.T) {
 	d.Nodes = append(d.Nodes, Node{ID: "loop1", Kind: KindLoop, Loop: &LoopSpec{
 		Body: []string{"auto"}, ExitWhen: Condition{Choice: "done"}, MaxIterations: 3,
 	}})
-	d.Edges = append(d.Edges, Edge{ID: "loop_e", From: "decide", To: "loop1", EdgeType: EdgeDataDependency})
+	d.Edges = append(d.Edges, Edge{ID: "loop_e", From: "start", To: "loop1", EdgeType: EdgeDataDependency})
 	if err := Validate(d); err != nil {
 		t.Fatalf("Validate should allow loop structure, got %v", err)
 	}
@@ -110,35 +110,40 @@ func TestCompileLoopProducesNotExitEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile should lower loop to a control_flow edge, got %v", err)
 	}
-	// The loop compiles to one control_flow append edge whose when is the
-	// NEGATION of exit_when (continue while NOT exit), with iteration bounds.
-	found := false
+	// The loop compiles to a source-gated entry and a dynamic continuation
+	// edge whose when is the NEGATION of exit_when.
+	entryFound, continueFound := false, false
 	for _, e := range c.Edges {
-		if e.ID != "loop1_loop" {
-			continue
-		}
-		found = true
-		if e.From != "decide" {
-			t.Fatalf("loop edge From = %q, want decide", e.From)
-		}
-		if e.When.Not == nil {
-			t.Fatal("expected Not(exit_when) condition on loop edge")
-		}
-		if e.When.Not.Choice != "done" {
-			t.Fatalf("expected Not{choice: done}, got %+v", e.When)
-		}
-		if e.MaxIterations != 3 {
-			t.Fatalf("expected max_iterations 3, got %d", e.MaxIterations)
-		}
-		if e.IterationKey != "loop1" {
-			t.Fatalf("expected iteration_key loop1, got %q", e.IterationKey)
-		}
-		if e.Append.ID != "auto" {
-			t.Fatalf("expected append template for body node auto, got %+v", e.Append)
+		switch e.ID {
+		case "loop1_entry":
+			entryFound = true
+			if e.From != "start" || e.When.Status != "completed" {
+				t.Fatalf("unexpected loop entry edge: %+v", e)
+			}
+			if e.Append.ID != "auto_{iteration}" {
+				t.Fatalf("expected an iteration-specific body node id, got %+v", e.Append)
+			}
+		case "loop1_continue":
+			continueFound = true
+			if e.FromPrefix != "auto_" {
+				t.Fatalf("expected loop continuation to match body iterations, got %q", e.FromPrefix)
+			}
+			if e.When.Not == nil {
+				t.Fatal("expected Not(exit_when) condition on loop edge")
+			}
+			if e.When.Not.Choice != "done" {
+				t.Fatalf("expected Not{choice: done}, got %+v", e.When)
+			}
+			if e.MaxIterations != 3 {
+				t.Fatalf("expected max_iterations 3, got %d", e.MaxIterations)
+			}
+			if e.IterationKey != "loop1" {
+				t.Fatalf("expected iteration_key loop1, got %q", e.IterationKey)
+			}
 		}
 	}
-	if !found {
-		t.Fatalf("expected loop edge loop1_loop in compiled edges: %+v", c.Edges)
+	if !entryFound || !continueFound {
+		t.Fatalf("expected loop entry and continuation edges in compiled edges: %+v", c.Edges)
 	}
 }
 
@@ -151,6 +156,53 @@ func TestCompileLoopRequiresBodyAndSource(t *testing.T) {
 	if _, err := Compile(d); err == nil || !strings.Contains(err.Error(), "data_dependency source") {
 		t.Fatalf("expected missing source error, got %v", err)
 	}
+}
+
+func TestCompileLoopRejectsSharedBodyAndGeneratedIDCollision(t *testing.T) {
+	base := func() *Definition {
+		return &Definition{
+			FlowID: "fl_loop_collision", Version: "1", Status: "draft",
+			Nodes: []Node{
+				{ID: "start", Kind: KindStep, Prompt: "start"},
+				{ID: "body", Kind: KindStep, Prompt: "body"},
+				{ID: "loop1", Kind: KindLoop, Loop: &LoopSpec{
+					Body: []string{"body"}, ExitWhen: Condition{Status: "completed"}, MaxIterations: 2,
+				}},
+			},
+			Edges: []Edge{{ID: "enter1", From: "start", To: "loop1", EdgeType: EdgeDataDependency}},
+		}
+	}
+
+	t.Run("generated iteration id", func(t *testing.T) {
+		d := base()
+		d.Nodes = append(d.Nodes, Node{ID: "body_1", Kind: KindStep, Prompt: "independent node"})
+		if _, err := Compile(d); err == nil || !strings.Contains(err.Error(), "generated loop iteration id") {
+			t.Fatalf("expected generated ID collision error, got %v", err)
+		}
+	})
+
+	t.Run("shared loop body", func(t *testing.T) {
+		d := base()
+		d.Nodes = append(d.Nodes, Node{ID: "loop2", Kind: KindLoop, Loop: &LoopSpec{
+			Body: []string{"body"}, ExitWhen: Condition{Status: "completed"}, MaxIterations: 2,
+		}})
+		d.Edges = append(d.Edges, Edge{ID: "enter2", From: "start", To: "loop2", EdgeType: EdgeDataDependency})
+		if _, err := Compile(d); err == nil || !strings.Contains(err.Error(), "already used by loop") {
+			t.Fatalf("expected shared loop body error, got %v", err)
+		}
+	})
+
+	t.Run("compiled edge id collision", func(t *testing.T) {
+		d := base()
+		d.Nodes = append(d.Nodes, Node{ID: "extra", Kind: KindStep, Prompt: "extra"})
+		d.Edges = append(d.Edges, Edge{
+			ID: "loop1_entry", From: "start", To: "extra", EdgeType: EdgeCondition,
+			When: &Condition{Status: "completed"},
+		})
+		if _, err := Compile(d); err == nil || !strings.Contains(err.Error(), "compiled edge id") {
+			t.Fatalf("expected compiled edge ID collision error, got %v", err)
+		}
+	})
 }
 
 func TestCompileFoldStaticEdges(t *testing.T) {

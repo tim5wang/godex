@@ -134,3 +134,60 @@ func TestCompactionsDedupesSameMinuteRecords(t *testing.T) {
 		t.Fatalf("expected 1 deduplicated record, got %d: %+v", len(records), records)
 	}
 }
+
+func TestCompactionsKeepsUntimestampedArchivesAndTimelineDiagnostics(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("ok")}}}})
+
+	opened, err := service.OpenSession(context.Background(), SessionLocator{Channel: "web", Key: "compactions-archive-refs"})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	session, err := service.requireSession(opened.SessionID)
+	if err != nil {
+		t.Fatalf("require session: %v", err)
+	}
+
+	now := time.Now()
+	session.timeline.Seed([]events.Event{{
+		SessionID: opened.SessionID,
+		Type:      events.EventSnapshotReady,
+		Timestamp: now,
+		Payload: events.SnapshotPayload{
+			Compacted:           true,
+			TokenEstimateBefore: 42000,
+			TokenEstimateAfter:  14000,
+			CompactionMode:      "hybrid",
+			CompactionLatencyMS: 850,
+			TranscriptRef:       "transcript_new.json",
+		},
+	}})
+	if err := service.writeSessionTimeline(session); err != nil {
+		t.Fatalf("write timeline: %v", err)
+	}
+
+	session.agent.RestoreStateForSession(opened.SessionID, agent.SessionState{
+		Messages: []protocol.Message{
+			protocol.NewSummaryMessage("summary without a timestamp", "transcript_new.json"),
+			protocol.NewSummaryMessage("older summary without a timestamp", "transcript_old.json"),
+		},
+	})
+
+	records, err := service.Compactions(context.Background(), opened.SessionID)
+	if err != nil {
+		t.Fatalf("compactions: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected both archive refs without timestamps, got %+v", records)
+	}
+	if records[0].TranscriptRef != "transcript_new.json" ||
+		records[0].Mode != "hybrid" ||
+		records[0].LatencyMS != 850 ||
+		records[0].BeforeTokens != 42000 ||
+		records[0].AfterTokens != 14000 {
+		t.Fatalf("expected timeline diagnostics for newest archive, got %+v", records[0])
+	}
+	if records[1].TranscriptRef != "transcript_old.json" {
+		t.Fatalf("expected older transcript reference to survive dedupe, got %+v", records[1])
+	}
+}

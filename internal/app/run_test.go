@@ -486,6 +486,38 @@ func TestParseServiceInstallRuntimeOptions(t *testing.T) {
 	}
 }
 
+func TestParseServicePprofOptions(t *testing.T) {
+	root := t.TempDir()
+	runner := &Runner{
+		Cfg: &config.Config{
+			HomeDir:      filepath.Join(root, "home"),
+			ProjectDir:   filepath.Join(root, "workspace"),
+			WorkspaceDir: filepath.Join(root, "workspace"),
+		},
+		Stderr: &bytes.Buffer{},
+	}
+
+	opts, err := runner.parseServiceOptions("start", []string{"--pprof-addr=localhost:6060"}, false)
+	if err != nil {
+		t.Fatalf("parse service start options: %v", err)
+	}
+	if opts.PprofAddr != "127.0.0.1:6060" || !opts.PprofAddrSet {
+		t.Fatalf("unexpected pprof options: %+v", opts)
+	}
+
+	opts, err = runner.parseServiceOptions("restart", []string{"--pprof-addr="}, false)
+	if err != nil {
+		t.Fatalf("parse service restart disable option: %v", err)
+	}
+	if opts.PprofAddr != "" || !opts.PprofAddrSet {
+		t.Fatalf("expected explicit empty pprof address to disable pprof, got %+v", opts)
+	}
+
+	if _, err := runner.parseServiceOptions("start", []string{"--pprof-addr=0.0.0.0:6060"}, false); err == nil {
+		t.Fatal("expected non-loopback pprof address to be rejected")
+	}
+}
+
 func TestRunnerImportClaudeDryRun(t *testing.T) {
 	source := t.TempDir()
 	writeTestFile(t, filepath.Join(source, "commands", "review.md"), `---

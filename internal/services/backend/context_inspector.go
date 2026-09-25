@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/memory"
-	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/tools"
 )
@@ -52,28 +51,21 @@ func (s *Service) ContextInspector(ctx context.Context, sessionID string) (Sessi
 		return SessionContextInspector{}, err
 	}
 
-	contextSummary, err := session.agent.InspectContext(ctx, sessionID)
-	if err != nil {
-		return SessionContextInspector{}, err
-	}
-
-	messages := session.agent.GetMessages()
-	recallQuery := strings.TrimSpace(protocol.LatestPersistentUserText(messages))
-	layers, err := s.memoryManager().BuildContextLayers(recallQuery)
+	details, err := session.agent.InspectContextDetails(ctx, sessionID)
 	if err != nil {
 		return SessionContextInspector{}, err
 	}
 
 	transcriptRefs := uniqueTranscriptRefs(session.agent.TranscriptRefs())
 	result := SessionContextInspector{
-		Context:            contextSummary,
+		Context:            details.Context,
 		TranscriptRefCount: len(transcriptRefs),
 		TranscriptRefs:     recentTranscriptRefs(transcriptRefs, 3),
-		RecallQuery:        summarizeInspectorText(recallQuery, 160),
+		RecallQuery:        summarizeInspectorText(details.RecallQuery, 160),
 		MemoryPreview: MemoryContextPreview{
-			Identity: append([]memory.RelevantMemory{}, layers.Identity...),
-			Core:     append([]memory.RelevantMemory{}, layers.Core...),
-			Relevant: append([]memory.RelevantMemory{}, layers.Relevant...),
+			Identity: append([]memory.RelevantMemory{}, details.MemoryLayers.Identity...),
+			Core:     append([]memory.RelevantMemory{}, details.MemoryLayers.Core...),
+			Relevant: append([]memory.RelevantMemory{}, details.MemoryLayers.Relevant...),
 		},
 	}
 	if session.timeline != nil {
@@ -81,6 +73,16 @@ func (s *Service) ContextInspector(ctx context.Context, sessionID string) (Sessi
 	}
 
 	return result, nil
+}
+
+// ContextUsage returns live provider usage counters without constructing the
+// larger context/memory Inspector snapshot.
+func (s *Service) ContextUsage(_ context.Context, sessionID string) (tools.ContextUsageInspection, error) {
+	session, err := s.requireSession(sessionID)
+	if err != nil {
+		return tools.ContextUsageInspection{}, err
+	}
+	return session.agent.InspectContextUsage(sessionID), nil
 }
 
 func uniqueTranscriptRefs(refs []string) []string {

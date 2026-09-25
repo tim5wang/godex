@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/llm"
 )
@@ -96,5 +98,56 @@ func TestCallerForConfigProfileKeepsCustomPrimaryAheadOfStrategy(t *testing.T) {
 	}
 	if len(seenModels) != 1 || seenModels[0] != "gpt-5.5" {
 		t.Fatalf("expected selected model request, got %#v", seenModels)
+	}
+}
+
+func TestCompactionUsesConfiguredModelProfile(t *testing.T) {
+	var seenModels []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seenModels = append(seenModels, body.Model)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message":       map[string]any{"role": "assistant", "content": "summary from configured profile"},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	a := newTestAgent(t, 100000)
+	a.cfg.Compaction.ModelProfileID = "summary"
+	a.cfg.AutoFallbackEnabled = false
+	a.cfg.ModelProfiles = map[string]config.ModelProfileConfig{
+		"summary": {
+			ID:             "summary",
+			Provider:       config.ProviderOpenAICompatible,
+			Model:          "summary-model",
+			BaseURL:        server.URL,
+			APIKey:         "test-key",
+			MaxTokens:      1024,
+			TimeoutSeconds: 5,
+		},
+	}
+	a.summarizer = compress.NewRuleBasedSessionSummarizer(a.compressor)
+	a.client = fakeCaller{resp: protocol.Response{Content: []protocol.Block{protocol.TextBlock("wrong session model")}}}
+
+	result, err := a.runCompaction(context.Background(), "model", compress.SessionSummaryRequest{
+		History: []protocol.Message{protocol.NewTextMessage(protocol.RoleUser, "summarize this history")},
+	})
+	if err != nil {
+		t.Fatalf("run compaction: %v", err)
+	}
+	if len(seenModels) != 1 || seenModels[0] != "summary-model" {
+		t.Fatalf("expected configured summary profile model, got %#v", seenModels)
+	}
+	if result.Mode != "model" || !strings.Contains(protocol.MessageText(result.Messages[0]), "summary from configured profile") {
+		t.Fatalf("expected model summary from configured profile, got %+v", result)
 	}
 }

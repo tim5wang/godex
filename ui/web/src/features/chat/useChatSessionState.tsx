@@ -11,7 +11,7 @@ import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge,
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useConversationLayoutStore, type DockTab, DOCK_TABS } from "./layout/layoutStore";
 import { useBrowserViewStore } from "../browser/browserViewStore";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog, listAgentTemplates, listControlNodes } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getSessionContextUsage, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog, listAgentTemplates, listControlNodes } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -421,10 +421,15 @@ export function useChatSessionState(layout: ChatLayoutState) {
     queryKey: ["context-inspector", token, openQuery.data?.session_id],
     enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
     queryFn: async () => getSessionContextInspector(token || null, openQuery.data!.session_id),
-    // While a turn is running, poll so the real cache hit rate and cumulative
-    // token counters update live instead of only after snapshot_ready.
-    // snapshotQuery.data?.running keeps the interval in sync with the backend
-    // even when the local `running` flag lags.
+    // Rebuilding prompts and memory previews is expensive. Refresh this full
+    // snapshot initially and after explicit invalidations, not during loops.
+    staleTime: 30_000,
+  });
+  const contextUsageQuery = useQuery({
+    queryKey: ["context-usage", token, openQuery.data?.session_id],
+    enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
+    queryFn: async () => getSessionContextUsage(token || null, openQuery.data!.session_id),
+    // Provider counters are cheap to read and remain live while a turn runs.
     refetchInterval: running || snapshotQuery.data?.running ? 5000 : false,
   });
   const activeSkillsQuery = useQuery({
@@ -604,6 +609,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
               void queryClient.invalidateQueries({ queryKey: ["compactions", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["subagents", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["context-inspector", token, sessionId] });
+              void queryClient.invalidateQueries({ queryKey: ["context-usage", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["skills-active", token, sessionId] });
             }
             // Refresh list metadata once per completed turn (title, activity,
@@ -613,6 +619,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
                 current?.map((item) => (item.session_id === sessionId ? { ...item, running: false } : item)) ?? current,
               );
               void queryClient.invalidateQueries({ queryKey: ["sessions", token, remoteNodeID] });
+              void queryClient.invalidateQueries({ queryKey: ["context-usage", token, sessionId] });
             }
             if (event.type === "subagent_job_updated") {
               void queryClient.invalidateQueries({ queryKey: ["subagents", token, sessionId] });
@@ -636,6 +643,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
             void queryClient.invalidateQueries({ queryKey: ["timeline", token, sessionId] });
             void queryClient.invalidateQueries({ queryKey: ["timeline-page", token, sessionId] });
             void queryClient.invalidateQueries({ queryKey: ["context-inspector", token, sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["context-usage", token, sessionId] });
             void queryClient.invalidateQueries({ queryKey: ["sessions", token, remoteNodeID] });
           },
         );
@@ -692,6 +700,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
     builtinCommandsQuery,
     packageRolesQuery,
     contextInspectorQuery,
+    contextUsageQuery,
     activeSkillsQuery,
     modelsQuery,
     sessionsQuery,

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,17 +55,35 @@ const (
 )
 
 type workflowStore struct {
-	dir string
-	mu  sync.Mutex
+	dir          string
+	mu           sync.Mutex
+	advanceMu    sync.Mutex
+	advanceLocks map[string]*workflowAdvanceLock
+}
+
+type workflowAdvanceLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 type workflowSummary struct {
-	ID             string              `json:"id"`
-	SessionID      string              `json:"session_id,omitempty"`
-	Status         string              `json:"status"`
+	ID        string `json:"id"`
+	SessionID string `json:"session_id,omitempty"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
 	// RunInputs are the flow-run inputs (P2.3) available to prompt variable
 	// references {{inputs.<name>}}. Written once at CreateFlowRun.
 	RunInputs map[string]any `json:"run_inputs,omitempty"`
+	// RunOutputSpec and RunOutputs carry the versioned Flow output contract
+	// and its resolved values for this durable run.
+	RunOutputSpec      []flow.VarDef  `json:"run_output_spec,omitempty"`
+	RunOutputs         map[string]any `json:"run_outputs,omitempty"`
+	RunOutputsResolved bool           `json:"run_outputs_resolved,omitempty"`
+	RunTimeoutAt       time.Time      `json:"run_timeout_at,omitempty"`
+	// AutoSchedule is set by the normal start action. The backend reconciler
+	// only advances runs carrying this bit, so debug single-step runs remain
+	// under explicit user control.
+	AutoSchedule   bool                `json:"auto_schedule,omitempty"`
 	AppendKeys     map[string][]string `json:"append_keys,omitempty"`
 	EdgeIterations map[string]int      `json:"edge_iterations,omitempty"`
 	ProcessedEdges map[string]bool     `json:"processed_edges,omitempty"`
@@ -79,6 +98,7 @@ type workflowNode struct {
 	Kind            string        `json:"kind,omitempty"`
 	Title           string        `json:"title,omitempty"`
 	Prompt          string        `json:"prompt,omitempty"`
+	TimeoutSec      int           `json:"timeout_sec,omitempty"`
 	DependsOn       []string      `json:"depends_on,omitempty"`
 	HandoffPolicy   string        `json:"handoff_policy,omitempty"`
 	HandoffFrom     []string      `json:"handoff_from,omitempty"`
@@ -103,6 +123,7 @@ type workflowNode struct {
 	BranchSpec   *workflowBranchSpec     `json:"branch_spec,omitempty"`
 	HumanSpec    *workflowHumanSpec      `json:"human_spec,omitempty"`
 	FunctionSpec *workflowFunctionSpec   `json:"function_spec,omitempty"`
+	ServiceSpec  *workflowServiceSpec    `json:"service_spec,omitempty"`
 	// PreScript / PostScript are optional bash scripts run before / after the
 	// node's main work (E3b); ScriptOutput captures their stdout/stderr.
 	PreScript    string         `json:"pre_script,omitempty"`
@@ -114,17 +135,17 @@ type workflowNode struct {
 	OutputSpec []workflowVarDef `json:"output_spec,omitempty"`
 	// HumanTaskID is the human task store record registered for this node
 	// (P1.1); non-empty means the task was created (idempotent re-register).
-	HumanTaskID string             `json:"human_task_id,omitempty"`
-	AgentRef    string             `json:"agent_ref,omitempty"` // template/biz-key id (P1.4)
-	Outputs     map[string]any     `json:"outputs,omitempty"`
-	NextRetryAt time.Time          `json:"next_retry_at,omitempty"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
+	HumanTaskID string         `json:"human_task_id,omitempty"`
+	AgentRef    string         `json:"agent_ref,omitempty"` // template/biz-key id (P1.4)
+	Outputs     map[string]any `json:"outputs,omitempty"`
+	NextRetryAt time.Time      `json:"next_retry_at,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 	// StartedAt is set when the node leaves pending (first execution attempt);
 	// FinishedAt - StartedAt gives the node's wall-clock latency for the
 	// debug event log.
-	StartedAt  time.Time          `json:"started_at,omitempty"`
-	FinishedAt time.Time          `json:"finished_at,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
 }
 
 type workflowState struct {
@@ -164,6 +185,7 @@ type workflowEdgeCondition struct {
 type workflowEdge struct {
 	ID            string                `json:"id"`
 	From          string                `json:"from,omitempty"`
+	FromPrefix    string                `json:"from_prefix,omitempty"`
 	FromKind      string                `json:"from_kind,omitempty"`
 	When          workflowEdgeCondition `json:"when,omitempty"`
 	Append        workflowNodeInput     `json:"append"`
@@ -174,6 +196,7 @@ type workflowEdge struct {
 type workflowEdgeInput struct {
 	ID            string                `json:"id,omitempty"`
 	From          string                `json:"from,omitempty"`
+	FromPrefix    string                `json:"from_prefix,omitempty"`
 	FromKind      string                `json:"from_kind,omitempty"`
 	When          workflowEdgeCondition `json:"when,omitempty"`
 	Append        workflowNodeInput     `json:"append"`
@@ -186,6 +209,7 @@ type workflowNodeInput struct {
 	Kind            string                `json:"kind,omitempty"`
 	Title           string                `json:"title,omitempty"`
 	Prompt          string                `json:"prompt,omitempty"`
+	TimeoutSec      int                   `json:"timeout_sec,omitempty"`
 	DependsOn       []string              `json:"depends_on,omitempty"`
 	HandoffPolicy   string                `json:"handoff_policy,omitempty"`
 	HandoffFrom     []string              `json:"handoff_from,omitempty"`
@@ -199,6 +223,7 @@ type workflowNodeInput struct {
 	Human           *workflowHumanSpec    `json:"human,omitempty"`
 	Branch          *workflowBranchSpec   `json:"branch,omitempty"`
 	Function        *workflowFunctionSpec `json:"function,omitempty"`
+	Service         *workflowServiceSpec  `json:"service,omitempty"`
 	// PreScript / PostScript are optional bash scripts run before / after the
 	// node's main work (E3b).
 	PreScript  string `json:"pre_script,omitempty"`
@@ -210,9 +235,11 @@ type workflowNodeInput struct {
 
 // workflowVarDef is the engine-side mirror of flow.VarDef (P2.3).
 type workflowVarDef struct {
-	Name string `json:"name"`
-	Type string `json:"type,omitempty"`
-	Desc string `json:"desc,omitempty"`
+	Name     string          `json:"name"`
+	Type     string          `json:"type,omitempty"`
+	Desc     string          `json:"desc,omitempty"`
+	Required bool            `json:"required,omitempty"`
+	Schema   json.RawMessage `json:"schema,omitempty"`
 }
 
 // workflowHumanSpec is the engine-side mirror of flow.HumanSpec (P1.1): a
@@ -230,13 +257,27 @@ type workflowHumanSpec struct {
 // workflowFunctionSpec is the engine projection of flow.FunctionSpec (P3): a
 // pure compute node running a js (goja) handler or a wasm (wasmrt) plugin ref.
 type workflowFunctionSpec struct {
-	Runtime string `json:"runtime,omitempty"` // js | wasm
-	Source  string `json:"source,omitempty"`  // js handler source (runtime=js)
-	Ref     string `json:"ref,omitempty"`     // node-library id (runtime=wasm)
-	Handler string `json:"handler,omitempty"` // entry function; default "handle"
+	Runtime      string          `json:"runtime,omitempty"` // js | wasm
+	Source       string          `json:"source,omitempty"`  // js handler source (runtime=js)
+	Ref          string          `json:"ref,omitempty"`     // node-library id (runtime=wasm)
+	Handler      string          `json:"handler,omitempty"` // entry function; default "handle"
+	TimeoutSec   int             `json:"timeout_sec,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
 	// Network is the Flow-level outbound network policy (E3a), copied from the
 	// compiled definition so sandbox HTTP bridges can enforce it per-run.
 	Network *flow.NetworkPolicy `json:"network,omitempty"`
+}
+
+// workflowServiceSpec is the durable engine projection of a declarative
+// service node. Network is copied from the parent Flow at compile time.
+type workflowServiceSpec struct {
+	Method  string                `json:"method"`
+	URL     string                `json:"url"`
+	Headers map[string]string     `json:"headers,omitempty"`
+	Body    json.RawMessage       `json:"body,omitempty"`
+	Auth    *flow.ServiceAuthSpec `json:"auth,omitempty"`
+	Network *flow.NetworkPolicy   `json:"network,omitempty"`
 }
 
 type workflowNodeView struct {
@@ -284,6 +325,9 @@ type workflowView struct {
 	Appended   []string           `json:"appended,omitempty"`
 	Edges      []workflowEdge     `json:"edges,omitempty"`
 	Wait       *subagentWaitView  `json:"wait,omitempty"`
+	runOutputs map[string]any
+	runError   string
+	runUpdated time.Time
 }
 
 type workflowNodeHandoff struct {
@@ -304,6 +348,31 @@ type workflowNodeHandoff struct {
 
 func newWorkflowStore(dir string) *workflowStore {
 	return &workflowStore{dir: strings.TrimSpace(dir)}
+}
+
+func (s *workflowStore) lockAdvance(id string) func() {
+	s.advanceMu.Lock()
+	if s.advanceLocks == nil {
+		s.advanceLocks = make(map[string]*workflowAdvanceLock)
+	}
+	lock := s.advanceLocks[id]
+	if lock == nil {
+		lock = &workflowAdvanceLock{}
+		s.advanceLocks[id] = lock
+	}
+	lock.refs++
+	s.advanceMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.advanceMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.advanceLocks, id)
+		}
+		s.advanceMu.Unlock()
+	}
 }
 
 func newWorkflowTool(agent *Agent) tools.Tool {
@@ -561,17 +630,24 @@ func workflowNodesFromInputs(inputs []workflowNodeInput, existing map[string]str
 		var functionSpec *workflowFunctionSpec
 		if kind == workflowNodeKindFunction && input.Function != nil {
 			functionSpec = &workflowFunctionSpec{
-				Runtime: strings.TrimSpace(input.Function.Runtime),
-				Source:  input.Function.Source,
-				Ref:     strings.TrimSpace(input.Function.Ref),
-				Handler: strings.TrimSpace(input.Function.Handler),
+				Runtime:      strings.TrimSpace(input.Function.Runtime),
+				Source:       input.Function.Source,
+				Ref:          strings.TrimSpace(input.Function.Ref),
+				Handler:      strings.TrimSpace(input.Function.Handler),
+				TimeoutSec:   input.Function.TimeoutSec,
+				InputSchema:  append([]byte{}, input.Function.InputSchema...),
+				OutputSchema: append([]byte{}, input.Function.OutputSchema...),
 			}
+		}
+		var serviceSpec *workflowServiceSpec
+		if kind == workflowNodeKindService && input.Service != nil {
+			serviceSpec = input.Service
 		}
 		prompt := strings.TrimSpace(input.Prompt)
 		if kind == workflowNodeKindDecision && prompt == "" && decisionSpec != nil {
 			prompt = decisionSpec.Question
 		}
-		if prompt == "" && kind != workflowNodeKindBranch && kind != workflowNodeKindFunction {
+		if prompt == "" && kind != workflowNodeKindBranch && kind != workflowNodeKindFunction && kind != workflowNodeKindService {
 			return nil, fmt.Errorf("node %s missing prompt", nodeID)
 		}
 		identity := NewAgentIdentity(now, "", "workflow_node", firstNonEmpty(strings.TrimSpace(input.Title), nodeID), strings.TrimSpace(input.AgentType), "", "workflow", capabilitySummaryForTools(subagentToolNames(input.AgentType), input.WriteScope))
@@ -582,6 +658,7 @@ func workflowNodesFromInputs(inputs []workflowNodeInput, existing map[string]str
 			Kind:          kind,
 			Title:         strings.TrimSpace(input.Title),
 			Prompt:        prompt,
+			TimeoutSec:    input.TimeoutSec,
 			DependsOn:     normalizeWorkflowStrings(input.DependsOn),
 			HandoffPolicy: normalizeWorkflowHandoffPolicy(input.HandoffPolicy, len(input.DependsOn) > 0),
 			// HandoffFrom stays explicit (not defaulted from DependsOn):
@@ -601,6 +678,7 @@ func workflowNodesFromInputs(inputs []workflowNodeInput, existing map[string]str
 			BranchSpec:      branchSpec,
 			HumanSpec:       humanSpec,
 			FunctionSpec:    functionSpec,
+			ServiceSpec:     serviceSpec,
 			PreScript:       input.PreScript,
 			PostScript:      input.PostScript,
 			CreatedAt:       now,
@@ -625,6 +703,7 @@ func workflowEdgesFromInputs(inputs []workflowEdgeInput) ([]workflowEdge, error)
 		edge := workflowEdge{
 			ID:            id,
 			From:          strings.TrimSpace(input.From),
+			FromPrefix:    strings.TrimSpace(input.FromPrefix),
 			FromKind:      strings.TrimSpace(input.FromKind),
 			When:          normalizeWorkflowEdgeCondition(input.When),
 			Append:        input.Append,
@@ -634,17 +713,17 @@ func workflowEdgesFromInputs(inputs []workflowEdgeInput) ([]workflowEdge, error)
 		if edge.IterationKey == "" {
 			edge.IterationKey = edge.ID
 		}
-		if edge.From == "" && edge.FromKind == "" {
+		if edge.From == "" && edge.FromPrefix == "" && edge.FromKind == "" {
 			return nil, fmt.Errorf("workflow edge %s missing from or from_kind", edge.ID)
 		}
 		if workflowConditionEmpty(edge.When) {
 			return nil, fmt.Errorf("workflow edge %s missing when predicate (status/verdict/choice/confidence/output)", edge.ID)
 		}
 		// Append templates run as normal nodes once appended. Mirror the static
-		// node rule (workflowNodesFromInputs): branch/function nodes don't
-		// require a prompt (function nodes execute via their Function spec).
+		// node rule (workflowNodesFromInputs): branch/function/service nodes
+		// don't require a prompt.
 		appendKind := normalizeWorkflowNodeKind(edge.Append.Kind, edge.Append.ID)
-		if strings.TrimSpace(edge.Append.Prompt) == "" && appendKind != workflowNodeKindBranch && appendKind != workflowNodeKindFunction {
+		if strings.TrimSpace(edge.Append.Prompt) == "" && appendKind != workflowNodeKindBranch && appendKind != workflowNodeKindFunction && appendKind != workflowNodeKindService {
 			return nil, fmt.Errorf("workflow edge %s append node missing prompt", edge.ID)
 		}
 		edges = append(edges, edge)
@@ -806,6 +885,17 @@ func workflowHandoffRef(nodeID string, attempt int) string {
 }
 
 func (a *Agent) workflowState(id string) (workflowState, error) {
+	if a == nil || a.workflows == nil {
+		return workflowState{}, fmt.Errorf("workflow store unavailable")
+	}
+	unlock := a.workflows.lockAdvance(id)
+	defer unlock()
+	return a.workflowStateUnlocked(id)
+}
+
+// workflowStateUnlocked refreshes jobs and control edges. The caller must hold
+// the per-workflow advance lock so two readers cannot append the same node.
+func (a *Agent) workflowStateUnlocked(id string) (workflowState, error) {
 	state, err := a.workflows.load(id)
 	if err != nil {
 		return workflowState{}, err
@@ -814,6 +904,13 @@ func (a *Agent) workflowState(id string) (workflowState, error) {
 	edgeChanged, err := a.processWorkflowEdges(&state)
 	if err != nil {
 		return workflowState{}, err
+	}
+	changed = changed || edgeChanged
+	if a.expireWorkflowRun(&state, time.Now().UTC()) {
+		changed = true
+	}
+	if a.finalizeWorkflowRunOutputs(&state) {
+		changed = true
 	}
 	if changed || edgeChanged {
 		if err := a.workflows.save(state); err != nil {
@@ -824,17 +921,49 @@ func (a *Agent) workflowState(id string) (workflowState, error) {
 }
 
 func (a *Agent) startWorkflowReadyNodes(ctx context.Context, id string) (workflowView, error) {
-	state, err := a.workflowState(id)
+	return a.advanceWorkflowReadyNodes(ctx, id, true, "start")
+}
+
+// advanceWorkflowReadyNodes refreshes the workflow, starts every ready node,
+// and processes newly-created control edges until the run stops advancing.
+// Auto-scheduled callers use an empty eventType to avoid writing a heartbeat
+// event every time the reconciler checks an unchanged workflow.
+func (a *Agent) advanceWorkflowReadyNodes(ctx context.Context, id string, enableAutoSchedule bool, eventType string) (workflowView, error) {
+	if a == nil || a.workflows == nil {
+		return workflowView{}, fmt.Errorf("workflow store unavailable")
+	}
+	unlock := a.workflows.lockAdvance(id)
+	defer unlock()
+	state, err := a.workflowStateUnlocked(id)
 	if err != nil {
 		return workflowView{}, err
 	}
+	if workflowTerminalStatus(state.Summary.Status) {
+		return workflowViewFromState(state), nil
+	}
+	runCtx := ctx
+	var runCancel context.CancelFunc
+	if !state.Summary.RunTimeoutAt.IsZero() {
+		runCtx, runCancel = context.WithDeadline(ctx, state.Summary.RunTimeoutAt)
+		defer runCancel()
+	}
+	changed := false
+	if enableAutoSchedule && !state.Summary.AutoSchedule {
+		state.Summary.AutoSchedule = true
+		changed = true
+	}
 	started := []string{}
 	now := time.Now().UTC()
-	// Re-scan until no node can be advanced: synchronous nodes (decision,
-	// branch) complete in place, which may unblock their dependents within
-	// the same tick (F1a branch chains). Ordinary nodes transition to running
-	// once and are skipped on later scans.
+	// Alternate edge evaluation and node scheduling until no state can move.
+	// This makes dynamically appended branch/condition/loop targets eligible
+	// immediately and drains synchronous decision/branch chains in one pass.
 	for {
+		if workflowTerminalStatus(state.Summary.Status) {
+			break
+		}
+		if err := runCtx.Err(); err != nil {
+			break
+		}
 		advanced := false
 		for i := range state.Nodes {
 			node := &state.Nodes[i]
@@ -842,23 +971,41 @@ func (a *Agent) startWorkflowReadyNodes(ctx context.Context, id string) (workflo
 				continue
 			}
 			advanced = true
-			if id, ok := a.startWorkflowNode(ctx, &state, node); ok {
+			if id, ok := a.startWorkflowNode(runCtx, &state, node); ok {
 				started = append(started, id)
 			}
+			if runCtx.Err() != nil {
+				break
+			}
 		}
-		if !advanced {
+		edgeChanged, err := a.processWorkflowEdges(&state)
+		if err != nil {
+			return workflowView{}, err
+		}
+		changed = changed || advanced || edgeChanged
+		if !advanced && !edgeChanged {
 			break
 		}
 	}
-	state.Summary.UpdatedAt = time.Now().UTC()
+	if a.expireWorkflowRun(&state, time.Now().UTC()) {
+		changed = true
+	}
+	if changed {
+		state.Summary.UpdatedAt = time.Now().UTC()
+	}
 	a.refreshWorkflowStatus(&state)
-	if _, err := a.processWorkflowEdges(&state); err != nil {
-		return workflowView{}, err
+	if a.finalizeWorkflowRunOutputs(&state) {
+		changed = true
+		state.Summary.UpdatedAt = time.Now().UTC()
 	}
-	if err := a.workflows.save(state); err != nil {
-		return workflowView{}, err
+	if changed {
+		if err := a.workflows.save(state); err != nil {
+			return workflowView{}, err
+		}
 	}
-	_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{"event": "start", "started": started, "at": now})
+	if eventType != "" && (changed || eventType == "start") {
+		_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{"event": eventType, "started": started, "at": now})
+	}
 	view := workflowViewFromState(state)
 	view.Started = started
 	return view, nil
@@ -870,35 +1017,43 @@ func (a *Agent) startWorkflowReadyNodes(ctx context.Context, id string) (workflo
 // Synchronous nodes (decision/branch/function) complete in place, so a step
 // may transit several of those before landing on an async node or finishing.
 func (a *Agent) stepWorkflow(ctx context.Context, id string) (workflowView, error) {
-	state, err := a.workflowState(id)
+	started := ""
+	_, err := func() (workflowState, error) {
+		unlock := a.workflows.lockAdvance(id)
+		defer unlock()
+		state, err := a.workflowStateUnlocked(id)
+		if err != nil {
+			return workflowState{}, err
+		}
+		now := time.Now().UTC()
+		for i := range state.Nodes {
+			node := &state.Nodes[i]
+			if node.Status != workflowStatusPending || !workflowDepsCompleted(state.Nodes, node.DependsOn) || !workflowNodeRetryDue(node, now) {
+				continue
+			}
+			if id, ok := a.startWorkflowNode(ctx, &state, node); ok {
+				started = id
+			}
+			break // single step: start at most ONE node per call
+		}
+		state.Summary.UpdatedAt = now
+		a.refreshWorkflowStatus(&state)
+		if _, err := a.processWorkflowEdges(&state); err != nil {
+			return workflowState{}, err
+		}
+		if err := a.workflows.save(state); err != nil {
+			return workflowState{}, err
+		}
+		_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{"event": "step", "node_id": started, "at": now})
+		return state, nil
+	}()
 	if err != nil {
 		return workflowView{}, err
 	}
-	now := time.Now().UTC()
-	started := ""
-	for i := range state.Nodes {
-		node := &state.Nodes[i]
-		if node.Status != workflowStatusPending || !workflowDepsCompleted(state.Nodes, node.DependsOn) || !workflowNodeRetryDue(node, now) {
-			continue
-		}
-		if id, ok := a.startWorkflowNode(ctx, &state, node); ok {
-			started = id
-		}
-		break // single step: start at most ONE node per call
-	}
-	state.Summary.UpdatedAt = now
-	a.refreshWorkflowStatus(&state)
-	if _, err := a.processWorkflowEdges(&state); err != nil {
-		return workflowView{}, err
-	}
-	if err := a.workflows.save(state); err != nil {
-		return workflowView{}, err
-	}
-	_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{"event": "step", "node_id": started, "at": now})
 
 	// Wait for the async node we just started (if any) to reach a terminal
 	// state so the caller sees the node's OUTPUTS and the next ready node.
-	state, err = a.workflowState(id)
+	state, err := a.workflowState(id)
 	if err != nil {
 		return workflowView{}, err
 	}
@@ -927,6 +1082,13 @@ func (a *Agent) stepWorkflow(ctx context.Context, id string) (workflowView, erro
 // On failure the node is moved to error state with the failure captured in
 // node.Error and a handoff finalized.
 func (a *Agent) startWorkflowNode(ctx context.Context, state *workflowState, node *workflowNode) (string, bool) {
+	if state != nil && strings.TrimSpace(state.Summary.SessionID) != "" {
+		runtimeContext := tools.SessionContextFromContext(ctx)
+		if strings.TrimSpace(runtimeContext.SessionID) == "" {
+			runtimeContext.SessionID = state.Summary.SessionID
+		}
+		ctx = tools.WithSessionContext(ctx, runtimeContext)
+	}
 	now := time.Now().UTC()
 	if node.Status != workflowStatusPending {
 		return "", false
@@ -990,6 +1152,10 @@ func (a *Agent) startWorkflowNode(ctx context.Context, state *workflowState, nod
 		a.executeWorkflowFunction(ctx, state, node)
 		return node.ID, false
 	}
+	if normalizeWorkflowNodeKind(node.Kind, node.ID) == workflowNodeKindService {
+		a.executeWorkflowService(ctx, state, node)
+		return node.ID, false
+	}
 	prompt, err := a.workflowNodePrompt(*state, *node)
 	if err != nil {
 		node.Status = workflowStatusError
@@ -1001,11 +1167,17 @@ func (a *Agent) startWorkflowNode(ctx context.Context, state *workflowState, nod
 		}
 		return node.ID, false
 	}
+	if len(node.OutputSpec) > 0 {
+		prompt += "\nReturn the declared outputs as one JSON object. Do not wrap it in markdown fences."
+	}
 	startReq := durableSubagentStartRequest{
 		Prompt:        prompt,
 		AgentType:     node.AgentType,
 		WriteScope:    node.WriteScope,
 		PreviewJobIDs: a.workflowPreviewJobIDs(*state, *node),
+	}
+	if node.TimeoutSec > 0 {
+		startReq.JobTimeoutMS = node.TimeoutSec * 1000
 	}
 	// P1.4: resolve the node's agent_ref (template) into capability
 	// overrides (bundles/tools/write_scope) before starting the subagent. A
@@ -1072,7 +1244,9 @@ func (a *Agent) waitWorkflow(ctx context.Context, id, mode string, timeoutMS int
 }
 
 func (a *Agent) appendWorkflowNodes(id string, inputs []workflowNodeInput, edgeInputs []workflowEdgeInput, idempotencyKey, parentNodeID, reason string) (workflowView, error) {
-	state, err := a.workflowState(id)
+	unlock := a.workflows.lockAdvance(id)
+	defer unlock()
+	state, err := a.workflowStateUnlocked(id)
 	if err != nil {
 		return workflowView{}, err
 	}
@@ -1140,7 +1314,9 @@ func (a *Agent) appendWorkflowNodes(id string, inputs []workflowNodeInput, edgeI
 }
 
 func (a *Agent) cancelWorkflowNode(ctx context.Context, id, nodeID string) (workflowState, error) {
-	state, err := a.workflowState(id)
+	unlock := a.workflows.lockAdvance(id)
+	defer unlock()
+	state, err := a.workflowStateUnlocked(id)
 	if err != nil {
 		return workflowState{}, err
 	}
@@ -1161,6 +1337,9 @@ func (a *Agent) cancelWorkflowNode(ctx context.Context, id, nodeID string) (work
 			}
 			node.Status = workflowStatusCanceled
 			node.FinishedAt = now
+		case workflowStatusWaitingHuman:
+			node.Status = workflowStatusCanceled
+			node.FinishedAt = now
 		}
 		node.UpdatedAt = now
 	}
@@ -1173,7 +1352,13 @@ func (a *Agent) cancelWorkflowNode(ctx context.Context, id, nodeID string) (work
 }
 
 func (a *Agent) completeWorkflowNode(id, nodeID, result string) (workflowState, error) {
-	state, err := a.workflowState(id)
+	return a.completeWorkflowNodeWithOutputs(id, nodeID, result, nil)
+}
+
+func (a *Agent) completeWorkflowNodeWithOutputs(id, nodeID, result string, outputs map[string]any) (workflowState, error) {
+	unlock := a.workflows.lockAdvance(id)
+	defer unlock()
+	state, err := a.workflowStateUnlocked(id)
 	if err != nil {
 		return workflowState{}, err
 	}
@@ -1187,21 +1372,33 @@ func (a *Agent) completeWorkflowNode(id, nodeID, result string) (workflowState, 
 		if state.Nodes[i].ID != nodeID {
 			continue
 		}
-		state.Nodes[i].Status = workflowStatusCompleted
-		state.Nodes[i].Attempt = nextWorkflowAttempt(state.Nodes[i])
-		state.Nodes[i].ResultPreview = previewSubagentResultForModel(result)
-		state.Nodes[i].Error = ""
-		state.Nodes[i].UpdatedAt = now
-		state.Nodes[i].FinishedAt = now
-		if err := a.finalizeWorkflowNodeHandoff(&state, &state.Nodes[i], nil, result); err != nil {
+		node := &state.Nodes[i]
+		if len(outputs) > 0 {
+			if node.Outputs == nil {
+				node.Outputs = make(map[string]any, len(outputs))
+			}
+			for key, value := range outputs {
+				node.Outputs[key] = value
+			}
+		}
+		if err := validateWorkflowOutputSpecs(node.OutputSpec, node.Outputs, "node "+node.ID+" outputs"); err != nil {
+			return workflowState{}, fmt.Errorf("output contract violation: %w", err)
+		}
+		node.Status = workflowStatusCompleted
+		node.Attempt = nextWorkflowAttempt(*node)
+		node.ResultPreview = previewSubagentResultForModel(result)
+		node.Error = ""
+		node.UpdatedAt = now
+		node.FinishedAt = now
+		if err := a.finalizeWorkflowNodeHandoff(&state, node, nil, result); err != nil {
 			return workflowState{}, err
 		}
 		// E3b: post_script after a manually completed node.
-		a.runPostScript(&state, &state.Nodes[i])
+		a.runPostScript(&state, node)
 		_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{
 			"event":      "node_completed",
 			"node_id":    nodeID,
-			"latency_ms": a.workflowNodeLatency(state.Nodes[i], now),
+			"latency_ms": a.workflowNodeLatency(*node, now),
 			"source":     "human_reply",
 			"at":         now,
 		})
@@ -1233,9 +1430,25 @@ func (a *Agent) refreshWorkflowNodes(state *workflowState) bool {
 		if !subagentStatusTerminal(job.Status) {
 			continue
 		}
+		var outputContractErr error
 		switch job.Status {
 		case subagentStatusCompleted:
 			node.Status = workflowStatusCompleted
+			if len(node.OutputSpec) > 0 {
+				var outputs map[string]any
+				if err := json.Unmarshal([]byte(job.Result), &outputs); err != nil {
+					outputContractErr = fmt.Errorf("expected a JSON object: %w", err)
+					node.Status = workflowStatusError
+				} else if outputs == nil {
+					outputContractErr = fmt.Errorf("expected a non-null JSON object")
+					node.Status = workflowStatusError
+				} else if err := validateWorkflowOutputSpecs(node.OutputSpec, outputs, "node "+node.ID+" outputs"); err != nil {
+					outputContractErr = err
+					node.Status = workflowStatusError
+				} else {
+					node.Outputs = outputs
+				}
+			}
 		case subagentStatusCanceled, subagentStatusInterrupted:
 			node.Status = workflowStatusCanceled
 		default:
@@ -1254,13 +1467,16 @@ func (a *Agent) refreshWorkflowNodes(state *workflowState) bool {
 		node.Attempt = nextWorkflowAttempt(*node)
 		node.ResultPreview = previewSubagentResultForModel(job.Result)
 		node.Error = job.Error
+		if outputContractErr != nil {
+			node.Error = "output contract violation: " + outputContractErr.Error()
+		}
 		node.UpdatedAt = now
 		node.FinishedAt = now
 		if err := a.finalizeWorkflowNodeHandoff(state, node, job, job.Result); err != nil {
 			node.Error = err.Error()
 			node.Status = workflowStatusError
 		}
-	// E3b: post_script after a successfully-completed async node.
+		// E3b: post_script after a successfully-completed async node.
 		if node.Status == workflowStatusCompleted {
 			a.runPostScript(state, node)
 		}
@@ -1298,6 +1514,10 @@ func (a *Agent) workflowNodeLatency(node workflowNode, now time.Time) int64 {
 }
 
 func (a *Agent) refreshWorkflowStatus(state *workflowState) {
+	if strings.TrimSpace(state.Summary.Error) != "" {
+		state.Summary.Status = workflowStatusError
+		return
+	}
 	if len(state.Nodes) == 0 {
 		state.Summary.Status = workflowStatusPending
 		return
@@ -1324,15 +1544,115 @@ func (a *Agent) refreshWorkflowStatus(state *workflowState) {
 	switch {
 	case failed > 0:
 		state.Summary.Status = workflowStatusError
+		if strings.TrimSpace(state.Summary.Error) == "" {
+			for _, node := range state.Nodes {
+				if node.Status == workflowStatusError {
+					state.Summary.Error = fmt.Sprintf("node %s: %s", node.ID, node.Error)
+					break
+				}
+			}
+		}
 	case completed == len(state.Nodes):
 		state.Summary.Status = workflowStatusCompleted
-	case canceled == len(state.Nodes):
+	case canceled > 0 && completed+canceled == len(state.Nodes):
 		state.Summary.Status = workflowStatusCanceled
 	case running > 0 || completed > 0 || waiting > 0:
 		state.Summary.Status = workflowStatusRunning
 	default:
 		state.Summary.Status = workflowStatusPending
 	}
+}
+
+func (a *Agent) expireWorkflowRun(state *workflowState, now time.Time) bool {
+	if state == nil || state.Summary.RunTimeoutAt.IsZero() || now.Before(state.Summary.RunTimeoutAt) {
+		return false
+	}
+	if workflowTerminalStatus(state.Summary.Status) {
+		if strings.HasPrefix(strings.TrimSpace(state.Summary.Error), "flow run timed out after ") {
+			return false
+		}
+		// A run may be observed after its deadline, after a late job already
+		// moved the workflow into completed/error/canceled. Preserve the
+		// terminal result only when every node finished by the deadline.
+		for _, node := range state.Nodes {
+			if !node.FinishedAt.IsZero() && node.FinishedAt.After(state.Summary.RunTimeoutAt) {
+				state.Summary.Error = fmt.Sprintf("flow run timed out after %s", state.Summary.RunTimeoutAt.Sub(state.Summary.CreatedAt).Round(time.Second))
+				state.Summary.Status = workflowStatusError
+				state.Summary.UpdatedAt = now
+				_ = a.workflows.appendEvent(state.Summary.ID, map[string]any{
+					"event": "flow_run_timeout", "deadline": state.Summary.RunTimeoutAt, "at": now,
+				})
+				return true
+			}
+		}
+		return false
+	}
+	for i := range state.Nodes {
+		node := &state.Nodes[i]
+		switch node.Status {
+		case workflowStatusPending, workflowStatusRunning, workflowStatusWaitingHuman:
+			if node.Status == workflowStatusRunning && strings.TrimSpace(node.JobID) != "" && a.subagentJobs != nil {
+				_, _ = a.subagentJobs.Cancel(node.JobID)
+			}
+			node.Status = workflowStatusCanceled
+			node.Error = "flow run deadline exceeded"
+			node.FinishedAt = now
+			node.UpdatedAt = now
+		}
+	}
+	duration := state.Summary.RunTimeoutAt.Sub(state.Summary.CreatedAt).Round(time.Second)
+	state.Summary.Error = fmt.Sprintf("flow run timed out after %s", duration)
+	state.Summary.Status = workflowStatusError
+	state.Summary.UpdatedAt = now
+	_ = a.workflows.appendEvent(state.Summary.ID, map[string]any{
+		"event": "flow_run_timeout", "deadline": state.Summary.RunTimeoutAt, "at": now,
+	})
+	return true
+}
+
+func (a *Agent) finalizeWorkflowRunOutputs(state *workflowState) bool {
+	if state == nil || state.Summary.Status != workflowStatusCompleted || len(state.Summary.RunOutputSpec) == 0 {
+		return false
+	}
+	if state.Summary.RunOutputsResolved {
+		return false
+	}
+	values := make(map[string]any, len(state.Summary.RunOutputSpec))
+	for _, spec := range state.Summary.RunOutputSpec {
+		if strings.TrimSpace(spec.Source) == "" {
+			continue
+		}
+		nodeID, field, ok := flow.ParseOutputSource(spec.Source)
+		if !ok {
+			state.Summary.Error = fmt.Sprintf("invalid flow output source %q", spec.Source)
+			state.Summary.Status = workflowStatusError
+			return true
+		}
+		node := workflowNodeByID(state.Nodes, nodeID)
+		if node == nil {
+			state.Summary.Error = fmt.Sprintf("flow output %q source node %q was not executed", spec.Name, nodeID)
+			state.Summary.Status = workflowStatusError
+			return true
+		}
+		value, exists := node.Outputs[field]
+		if !exists {
+			if spec.Required {
+				state.Summary.Error = fmt.Sprintf("flow output %q is required but source %s has no value", spec.Name, spec.Source)
+				state.Summary.Status = workflowStatusError
+				return true
+			}
+			continue
+		}
+		values[spec.Name] = value
+	}
+	if err := flow.ValidateVariableValues(state.Summary.RunOutputSpec, values, "outputs", false); err != nil {
+		state.Summary.Error = "flow output contract violation: " + err.Error()
+		state.Summary.Status = workflowStatusError
+		return true
+	}
+	state.Summary.RunOutputs = values
+	state.Summary.RunOutputsResolved = true
+	return true
 }
 
 func workflowViewFromState(state workflowState) workflowView {
@@ -1342,6 +1662,9 @@ func workflowViewFromState(state workflowState) workflowView {
 		Total:      len(state.Nodes),
 		Nodes:      workflowNodeViews(state.Nodes),
 		Edges:      append([]workflowEdge{}, state.Edges...),
+		runOutputs: state.Summary.RunOutputs,
+		runError:   state.Summary.Error,
+		runUpdated: state.Summary.UpdatedAt,
 	}
 	for _, node := range state.Nodes {
 		switch node.Status {
@@ -1552,10 +1875,22 @@ func workflowEdgeMatchesSource(edge workflowEdge, node workflowNode) bool {
 	if edge.From != "" && edge.From != node.ID {
 		return false
 	}
+	if edge.FromPrefix != "" {
+		if !strings.HasPrefix(node.ID, edge.FromPrefix) {
+			return false
+		}
+		// Loop iterations use the stable "<template>_<positive integer>"
+		// form. Requiring a numeric suffix prevents a loop over "task" from
+		// also matching nodes such as "task_review_1".
+		iteration, err := strconv.Atoi(strings.TrimPrefix(node.ID, edge.FromPrefix))
+		if err != nil || iteration < 1 {
+			return false
+		}
+	}
 	if edge.FromKind != "" && edge.FromKind != normalizeWorkflowNodeKind(node.Kind, node.ID) {
 		return false
 	}
-	return edge.From != "" || edge.FromKind != ""
+	return edge.From != "" || edge.FromPrefix != "" || edge.FromKind != ""
 }
 
 func workflowEdgeConditionMatches(condition workflowEdgeCondition, node workflowNode) bool {
@@ -1691,6 +2026,9 @@ func validateWorkflowEdges(edges []workflowEdge, nodes []workflowNode) error {
 			if _, ok := byID[edge.From]; !ok {
 				return fmt.Errorf("workflow edge %s references unknown from node %s", edge.ID, edge.From)
 			}
+		}
+		if edge.From == "" && edge.FromPrefix == "" && edge.FromKind == "" {
+			return fmt.Errorf("workflow edge %s missing from, from_prefix or from_kind", edge.ID)
 		}
 	}
 	return nil

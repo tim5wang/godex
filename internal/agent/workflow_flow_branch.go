@@ -59,6 +59,13 @@ func (a *Agent) completeWorkflowBranch(state *workflowState, node *workflowNode,
 		"route":   route,
 		"at":      now,
 	})
+	// Unified observability event (debug log: one line per node done + latency).
+	_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{
+		"event":      "node_completed",
+		"node_id":    node.ID,
+		"latency_ms": a.workflowNodeLatency(*node, now),
+		"at":         now,
+	})
 }
 
 // failWorkflowBranchNode terminates a branch node as error (invalid spec /

@@ -65,6 +65,7 @@ import {
   listFlows,
   publishFlow,
   revealBizKey,
+  replyFlowRunHuman,
   stepFlowRun,
   streamFlowRunEvents,
   type FlowDefinition,
@@ -649,6 +650,8 @@ function FlowCanvasMain(props: {
     onExternalDefConsumed,
   } = props;
 
+  const queryClient = useQueryClient();
+
   const versionsQuery = useQuery({
     queryKey: ["flow", flow.flow_id],
     queryFn: () => listFlowVersions(token, flow.flow_id),
@@ -682,6 +685,9 @@ function FlowCanvasMain(props: {
   const [debugStepMode, setDebugStepMode] = useState(false);
   const [stepView, setStepView] = useState<StepFlowView | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
+  // 单步调试中 waiting_human 节点的回复值（提交后推进到下一步）。
+  const [humanReplyValue, setHumanReplyValue] = useState<Record<string, string>>({});
+  const [humanReplyBusy, setHumanReplyBusy] = useState(false);
 
   // 调试所用版本的定义（表单字段按它的 inputs 声明生成）。
   const debugDef = useMemo(() => {
@@ -713,6 +719,33 @@ function FlowCanvasMain(props: {
       showError(message, err, t("flows.stepFailed"));
     } finally {
       setStepBusy(false);
+    }
+  };
+
+  // Submit a value for a waiting_human node (单步调试中人工节点完成并推进).
+  const replyHuman = async (nodeId: string) => {
+    if (!debugRunId) return;
+    const value = humanReplyValue[nodeId] ?? "";
+    if (value.trim() === "") {
+      message.warning(t("flows.humanReplyEmpty"));
+      return;
+    }
+    setHumanReplyBusy(true);
+    try {
+      const view = await replyFlowRunHuman(token, debugRunId, flow.flow_id, nodeId, value.trim());
+      // 回复完成节点后刷新 step 视图（后续节点变为 ready）。
+      if (debugStepMode) {
+        const next = await stepFlowRun(token, debugRunId, flow.flow_id);
+        setStepView(next);
+        if (next.terminal) setDebugStarted(false);
+      } else {
+        void queryClient.invalidateQueries({ queryKey: ["flow-run", flow.flow_id, debugRunId] });
+      }
+      message.success(`${t("flows.humanReplied")} ${nodeId}`);
+    } catch (err) {
+      showError(message, err, t("flows.humanReplyFailed"));
+    } finally {
+      setHumanReplyBusy(false);
     }
   };
 
@@ -1182,6 +1215,27 @@ function FlowCanvasMain(props: {
                             {JSON.stringify(n.outputs, null, 2)}
                           </pre>
                         </div>
+                      )}
+                      {n.status === "waiting_human" && (
+                        <Space.Compact style={{ width: "100%", marginTop: 4 }}>
+                          <Input
+                            size="small"
+                            placeholder={t("flows.humanReplyPlaceholder")}
+                            value={humanReplyValue[n.id] ?? ""}
+                            onChange={(e) =>
+                              setHumanReplyValue((prev) => ({ ...prev, [n.id]: e.target.value }))
+                            }
+                            onPressEnter={() => replyHuman(n.id)}
+                          />
+                          <Button
+                            size="small"
+                            type="primary"
+                            loading={humanReplyBusy}
+                            onClick={() => replyHuman(n.id)}
+                          >
+                            {t("flows.humanReplySubmit")}
+                          </Button>
+                        </Space.Compact>
                       )}
                     </div>
                   ))}

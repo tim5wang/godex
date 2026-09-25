@@ -173,6 +173,13 @@ func (a *Agent) completeWorkflowDecision(state *workflowState, node *workflowNod
 		event["error"] = errText
 	}
 	_ = a.workflows.appendEvent(state.Summary.ID, event)
+	// Unified observability event (debug log: one line per node done + latency).
+	_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{
+		"event":      "node_completed",
+		"node_id":    node.ID,
+		"latency_ms": a.workflowNodeLatency(*node, now),
+		"at":         now,
+	})
 }
 
 // scheduleWorkflowNodeRetry returns a failed node to pending with a backoff

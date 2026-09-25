@@ -272,6 +272,13 @@ func (a *Agent) completeWorkflowFunction(state *workflowState, node *workflowNod
 		"latency_ms": latency.Milliseconds(),
 		"at":         now,
 	})
+	// Unified observability event (debug log: one line per node done + latency).
+	_ = a.workflows.appendEvent(state.Summary.ID, map[string]any{
+		"event":      "node_completed",
+		"node_id":    node.ID,
+		"latency_ms": a.workflowNodeLatency(*node, now),
+		"at":         now,
+	})
 }
 
 // runWorkflowFunction dispatches to the JS (goja) or WASM (wasmrt) runtime.

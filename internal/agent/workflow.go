@@ -120,7 +120,11 @@ type workflowNode struct {
 	NextRetryAt time.Time          `json:"next_retry_at,omitempty"`
 	CreatedAt   time.Time          `json:"created_at"`
 	UpdatedAt   time.Time          `json:"updated_at"`
-	FinishedAt  time.Time          `json:"finished_at,omitempty"`
+	// StartedAt is set when the node leaves pending (first execution attempt);
+	// FinishedAt - StartedAt gives the node's wall-clock latency for the
+	// debug event log.
+	StartedAt  time.Time          `json:"started_at,omitempty"`
+	FinishedAt time.Time          `json:"finished_at,omitempty"`
 }
 
 type workflowState struct {
@@ -931,6 +935,11 @@ func (a *Agent) startWorkflowNode(ctx context.Context, state *workflowState, nod
 	// node: n -> n+1), so RetryPolicy backoff advances and the attempt cap
 	// is enforced even when the attempt fails before terminal refresh.
 	node.Attempt++
+	// Mark the execution start once (latency = FinishedAt - StartedAt); retry
+	// attempts keep the original start so total node latency stays visible.
+	if node.StartedAt.IsZero() {
+		node.StartedAt = now
+	}
 	// E3b: pre_script runs before ANY node kind starts (step/llm/decision/
 	// branch/function/…). A failing pre_script fails the node fast.
 	if err := a.runPreScript(state, node); err != nil {
@@ -1189,6 +1198,13 @@ func (a *Agent) completeWorkflowNode(id, nodeID, result string) (workflowState, 
 		}
 		// E3b: post_script after a manually completed node.
 		a.runPostScript(&state, &state.Nodes[i])
+		_ = a.workflows.appendEvent(state.Summary.ID, map[string]interface{}{
+			"event":      "node_completed",
+			"node_id":    nodeID,
+			"latency_ms": a.workflowNodeLatency(state.Nodes[i], now),
+			"source":     "human_reply",
+			"at":         now,
+		})
 		found = true
 	}
 	if !found {
@@ -1244,10 +1260,20 @@ func (a *Agent) refreshWorkflowNodes(state *workflowState) bool {
 			node.Error = err.Error()
 			node.Status = workflowStatusError
 		}
-		// E3b: post_script after a successful async node completes.
+	// E3b: post_script after a successfully-completed async node.
 		if node.Status == workflowStatusCompleted {
 			a.runPostScript(state, node)
 		}
+		// Observability: emit node_completed / node_failed with latency so the
+		// debug log shows what ran, how long it took and whether it succeeded.
+		latency := a.workflowNodeLatency(*node, now)
+		evt := map[string]interface{}{"event": "node_completed", "node_id": node.ID, "latency_ms": latency, "at": now}
+		if node.Status == workflowStatusError {
+			evt = map[string]interface{}{"event": "node_failed", "node_id": node.ID, "latency_ms": latency, "error": node.Error, "at": now}
+		} else if node.Status == workflowStatusCanceled {
+			evt = map[string]interface{}{"event": "node_canceled", "node_id": node.ID, "latency_ms": latency, "at": now}
+		}
+		_ = a.workflows.appendEvent(state.Summary.ID, evt)
 		changed = true
 	}
 	if changed {
@@ -1255,6 +1281,20 @@ func (a *Agent) refreshWorkflowNodes(state *workflowState) bool {
 		a.refreshWorkflowStatus(state)
 	}
 	return changed
+}
+
+// workflowNodeLatency returns the node's wall-clock execution time in
+// milliseconds (FinishedAt - StartedAt), or 0 when the start was never
+// recorded (e.g. nodes loaded from older state files).
+func (a *Agent) workflowNodeLatency(node workflowNode, now time.Time) int64 {
+	if node.StartedAt.IsZero() {
+		return 0
+	}
+	end := node.FinishedAt
+	if end.IsZero() {
+		end = now
+	}
+	return end.Sub(node.StartedAt).Milliseconds()
 }
 
 func (a *Agent) refreshWorkflowStatus(state *workflowState) {

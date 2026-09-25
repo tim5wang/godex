@@ -284,6 +284,21 @@ export function stepFlowRun(token: string | null, runId: string, flowId: string)
   );
 }
 
+/** Submits a value for a waiting human node and continues the run (P1.1). */
+export function replyFlowRunHuman(
+  token: string | null,
+  runId: string,
+  flowId: string,
+  nodeId: string,
+  value: unknown,
+) {
+  return request<FlowRunView>(
+    `/v1/flow-runs/${encodeURIComponent(runId)}/human/${encodeURIComponent(nodeId)}/reply?flow_id=${encodeURIComponent(flowId)}`,
+    { method: "POST", body: JSON.stringify({ value }) },
+    token,
+  );
+}
+
 /** Streams run events over the SSE endpoint (no poll=1): calls onEvent per
  * incoming `data:` event; resolves when the server sends `event: done` or the
  * stream closes. Abort via the passed signal. (P3 余项 4 — SSE 实时增量高亮.) */

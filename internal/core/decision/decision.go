@@ -27,7 +27,10 @@ const (
 
 var (
 	// ErrNoCaller indicates no decision provider is configured/enabled.
-	ErrNoCaller = errors.New("decision: no decision caller configured")
+	// The trailing hint keeps the "no decision caller configured" substring
+	// (classifyDecisionFailure matches on it) while telling the operator how
+	// to enable structured decisions.
+	ErrNoCaller = errors.New("decision: no decision caller configured; enable agent.decision.enabled (+ agent.decision.provider) to use the structured decision model")
 	// ErrInvalidChoice indicates the model returned a choice outside the
 	// declared closed set, which must never auto-execute.
 	ErrInvalidChoice = errors.New("decision: model returned choice outside declared set")

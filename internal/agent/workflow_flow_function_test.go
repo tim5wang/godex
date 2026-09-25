@@ -338,3 +338,50 @@ func TestWorkflowFunctionNodeStreamEventsPersisted(t *testing.T) {
 		t.Fatalf("expected 2 node_emitted events, got %d (events=%+v)", emitted, events)
 	}
 }
+
+// TestWorkflowFunctionNodeCompletedEventLatency verifies the observability
+// fix: a completed node emits a function_completed / node_completed event
+// with latency_ms (FinishedAt - StartedAt) so the debug log shows what ran
+// and how long it took (复盘 #1).
+func TestWorkflowFunctionNodeCompletedEventLatency(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	a.RegisterTools()
+	a.toolHandler.ActivateBundles(bundleSubagent)
+
+	runWorkflowTool(t, a, context.Background(), map[string]interface{}{
+		"action":      "create",
+		"workflow_id": "wf_fn_completed_evt",
+		"nodes": []map[string]interface{}{
+			{
+				"id":    "fn",
+				"kind":  "function",
+				"title": "gen",
+				"function": map[string]interface{}{
+					"runtime": "js",
+					"handler": "handle",
+					"source":  "function handle(ctx, event) { return [ { a: 1 } ]; }",
+				},
+			},
+		},
+		"edges": []map[string]interface{}{},
+	})
+	startCreatedWorkflow(t, a, "wf_fn_completed_evt")
+
+	state, err := a.workflowState("wf_fn_completed_evt")
+	if err != nil {
+		t.Fatalf("workflow state: %v", err)
+	}
+	events := readWorkflowEvents(filepath.Join(a.workflows.dir, state.Summary.ID, workflowEventsFile))
+	found := false
+	for _, ev := range events {
+		if ev["event"] == "node_completed" && ev["node_id"] == "fn" {
+			found = true
+			if _, hasLatency := ev["latency_ms"]; !hasLatency {
+				t.Fatalf("expected latency_ms on node_completed event, got %+v", ev)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected node_completed event for fn (events=%+v)", events)
+	}
+}

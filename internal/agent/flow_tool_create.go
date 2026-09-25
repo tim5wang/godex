@@ -38,7 +38,7 @@ func newCreateFlowTool(agent *Agent) tools.Tool {
 			"definition": map[string]interface{}{"type": "object", "description": "the Flow Spec definition to persist"},
 		},
 	}, nil), func(ctx context.Context, args createFlowArgs) (tools.ToolResult, error) {
-		_ = ctx
+		sessionID := flowSessionID(ctx)
 		flowID := strings.TrimSpace(args.FlowID)
 		if flowID == "" {
 			return tools.ToolResult{}, fmt.Errorf("create_flow: missing flow_id")
@@ -52,10 +52,11 @@ func newCreateFlowTool(agent *Agent) tools.Tool {
 			status = "draft"
 		}
 		view, err := agent.CreateFlow(FlowCreateArgs{
-			FlowID:  flowID,
-			Version: strings.TrimSpace(args.Version),
-			Status:  status,
-			Def:     def,
+			FlowID:    flowID,
+			Version:   strings.TrimSpace(args.Version),
+			Status:    status,
+			Def:       def,
+			SessionID: sessionID,
 		})
 		if err != nil {
 			return tools.ToolResult{}, fmt.Errorf("create_flow: %w", err)

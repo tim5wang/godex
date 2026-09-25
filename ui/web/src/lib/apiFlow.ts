@@ -125,6 +125,8 @@ export interface FlowSummaryView {
   draft?: string;
   gray?: string;
   published?: string;
+  /** Chat session that designed this flow (create_flow pinned it). */
+  designer_session_id?: string;
 }
 
 export interface FlowVersionView {

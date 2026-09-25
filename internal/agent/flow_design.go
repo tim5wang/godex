@@ -28,6 +28,7 @@ import (
 // flowDesignArgs is the typed args of the flow_design agent tool.
 type flowDesignArgs struct {
 	Action      string          `json:"action,omitempty"`
+	FlowID      string          `json:"flow_id,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Change      string          `json:"change,omitempty"`
 	Definition  json.RawMessage `json:"definition,omitempty"`
@@ -39,14 +40,15 @@ type flowDesignArgs struct {
 // set" an Agent needs to act as a Flow designer (the natural-language tab
 // also routes through the same Agent methods).
 func newFlowDesignTool(agent *Agent) tools.Tool {
-	return tools.NewTypedTool(tools.NewToolSpec("flow_design", "Design a Business Flow Spec v1 definition as a chat agent. action='generate' drafts a new flow from a natural-language description; action='amend' applies a natural-language change to an existing definition (multi-turn iterative editing); action='validate' dry-runs flow.Validate on a definition and returns errors. Returns the draft definition (structured) plus a compact text summary. Iterate: generate → validate → amend until coherent, then persist via createFlow.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("flow_design", "Design a Business Flow Spec v1 definition as a chat agent. action='generate' drafts a new flow from a natural-language description; action='read' (flow_id) returns the current flow's draft definition; action='amend' applies a natural-language change to an existing definition (multi-turn iterative editing); action='validate' dry-runs flow.Validate on a definition and returns errors. Returns the draft definition (structured) plus a compact text summary. Iterate: generate → validate → amend until coherent, then persist via createFlow.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":     "string",
-				"enum":     []string{"generate", "amend", "validate"},
+				"enum":     []string{"generate", "read", "amend", "validate"},
 				"required": true,
 			},
+			"flow_id":     map[string]string{"type": "string", "description": "flow to read (action=read)"},
 			"description": map[string]string{"type": "string"},
 			"change":      map[string]string{"type": "string"},
 			"definition":  map[string]interface{}{"type": "object", "description": "current Flow Spec definition (action=amend/validate)"},
@@ -54,6 +56,20 @@ func newFlowDesignTool(agent *Agent) tools.Tool {
 	}, nil), func(ctx context.Context, args flowDesignArgs) (tools.ToolResult, error) {
 		action := strings.ToLower(strings.TrimSpace(args.Action))
 		switch action {
+		case "read":
+			flowID := strings.TrimSpace(args.FlowID)
+			if flowID == "" {
+				return tools.ToolResult{}, fmt.Errorf("flow_design read: missing flow_id")
+			}
+			view, err := agent.GetFlowDraft(flowID)
+			if err != nil {
+				return tools.ToolResult{}, fmt.Errorf("flow_design read: %w", err)
+			}
+			if view.Definition == nil || len(view.Definition.Nodes) == 0 {
+				return tools.ToolResult{Text: fmt.Sprintf("flow %s 还没有草稿定义（可先用 generate 生成）", flowID)}, nil
+			}
+			return flowDesignResult(view.Definition, "read"), nil
+
 		case "generate":
 			if strings.TrimSpace(args.Description) == "" {
 				return tools.ToolResult{}, fmt.Errorf("flow_design generate: missing description")

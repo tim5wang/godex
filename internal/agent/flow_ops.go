@@ -28,12 +28,16 @@ type FlowVersionView struct {
 	Definition  *flow.Definition `json:"definition,omitempty"`
 }
 
-// FlowSummaryView is the flow-level summary (id + current status lanes).
+// FlowSummaryView is the flow-level summary (id + current status lanes +
+// the designer chat session bound to this flow).
 type FlowSummaryView struct {
 	FlowID    string `json:"flow_id"`
 	Draft     string `json:"draft,omitempty"`
 	Gray      string `json:"gray,omitempty"`
 	Published string `json:"published,omitempty"`
+	// DesignerSessionID is the chat session that designed this flow (empty
+	// when created outside a designer session, e.g. by the UI directly).
+	DesignerSessionID string `json:"designer_session_id,omitempty"`
 }
 
 // FlowRunView is the public projection of a FlowRun record.
@@ -58,6 +62,9 @@ type FlowCreateArgs struct {
 	Version  string          `json:"version"`
 	Status   string          `json:"status,omitempty"`
 	Def      *flow.Definition `json:"definition"`
+	// SessionID binds the flow to the chat session that created it
+	// (flowSessionID(ctx) from create_flow). Empty in headless/UI calls.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // CreateFlow stores a new draft version of a flow (validated + compiled at
@@ -116,6 +123,11 @@ func (a *Agent) CreateFlow(args FlowCreateArgs) (FlowVersionView, error) {
 	if err := a.flows.setStatusLane(flowID, status, version); err != nil {
 		return FlowVersionView{}, err
 	}
+	if args.SessionID != "" {
+		if err := a.flows.setDesignerSessionID(flowID, args.SessionID); err != nil {
+			return FlowVersionView{}, err
+		}
+	}
 	return a.GetFlowVersion(flowID, version)
 }
 
@@ -129,6 +141,23 @@ func (a *Agent) GetFlowVersion(flowID, version string) (FlowVersionView, error) 
 		return FlowVersionView{}, err
 	}
 	return flowVersionView(rec), nil
+}
+
+// GetFlowDraft returns the current draft version's view (definition
+// included). It returns an empty view (no error) when the flow exists but
+// has no draft yet, so callers can tell "no draft" apart from "missing".
+func (a *Agent) GetFlowDraft(flowID string) (FlowVersionView, error) {
+	if a == nil || a.flows == nil {
+		return FlowVersionView{}, fmt.Errorf("flow store unavailable")
+	}
+	cur, err := a.flows.loadCurrent(flowID)
+	if err != nil {
+		return FlowVersionView{}, err
+	}
+	if strings.TrimSpace(cur.Draft) == "" {
+		return FlowVersionView{}, nil
+	}
+	return a.GetFlowVersion(flowID, cur.Draft)
 }
 
 // ListFlows returns flow ids with their status lanes.
@@ -146,7 +175,7 @@ func (a *Agent) ListFlows() ([]FlowSummaryView, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, FlowSummaryView{FlowID: id, Draft: cur.Draft, Gray: cur.Gray, Published: cur.Published})
+		out = append(out, FlowSummaryView{FlowID: id, Draft: cur.Draft, Gray: cur.Gray, Published: cur.Published, DesignerSessionID: cur.DesignerSessionID})
 	}
 	return out, nil
 }

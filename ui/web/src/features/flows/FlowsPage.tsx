@@ -1725,6 +1725,7 @@ function FlowDetailColumn(props: {
               <FlowChatPanel
                 flowId={flow.flow_id}
                 token={token}
+                designerSessionId={flow.designer_session_id}
                 onVersionApplied={onRefresh}
               />
             ),

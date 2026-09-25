@@ -146,6 +146,18 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		} else {
 			a.LoadDefaultSkills()
 		}
+		// Flow-designer sessions get the pinned flow's context injected at
+		// creation (ephemeral background message: model-visible, not shown
+		// in the chat feed), so the agent knows which flow it is designing
+		// and never has to search history for it. Persisted with the first
+		// state write, so it is injected exactly once.
+		if strings.TrimSpace(session.locator.Metadata["template"]) == flowDesignerTemplateID {
+			if flowID := flowIDFromLocatorKey(session.locator.Key); flowID != "" {
+				if ctx := flowDesignerContext(a, flowID); ctx != "" {
+					a.AppendRuntimeFeedback(ctx)
+				}
+			}
+		}
 	}
 	session.agent = a
 
@@ -1065,4 +1077,45 @@ func interruptedTurnID(items []events.Event) string {
 		}
 	}
 	return ""
+}
+
+// flowDesignerTemplateID is the agent template id that marks a
+// flow-designer session (the natural-language tab). Its locator key is
+// flow:<flow_id>.
+const flowDesignerTemplateID = "flow-designer"
+
+// flowIDFromLocatorKey extracts the flow id from a session locator key of
+// the form "flow:<flow_id>" ("" for any other key shape).
+func flowIDFromLocatorKey(key string) string {
+	key = strings.TrimSpace(key)
+	if !strings.HasPrefix(key, "flow:") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(key, "flow:"))
+}
+
+// flowDesignerContext builds the ephemeral background context injected into
+// a fresh flow-designer session: the pinned flow_id plus a compact outline
+// of the current draft (when one exists), so the agent knows which flow it
+// is designing and never has to search history for it. Returns "" when
+// there is nothing to pin.
+func flowDesignerContext(a *agent.Agent, flowID string) string {
+	if a == nil || strings.TrimSpace(flowID) == "" {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "你正在设计业务编排中的 flow %q。", flowID)
+	view, err := a.GetFlowDraft(flowID)
+	if err == nil && view.Definition != nil {
+		def := view.Definition
+		if def.Name != "" {
+			fmt.Fprintf(&b, " 名称：%s。", def.Name)
+		}
+		if def.Description != "" {
+			fmt.Fprintf(&b, " 描述：%s。", def.Description)
+		}
+		fmt.Fprintf(&b, " 当前草稿 v%s：%d 个节点 / %d 条边。", view.Version, len(def.Nodes), len(def.Edges))
+	}
+	fmt.Fprintf(&b, " 可用 flow_design action=read (flow_id=%s) 读取完整定义，或 generate/amend/validate 继续设计，最终用 create_flow 保存新版本（flow_id 固定为 %s，勿改）。", flowID, flowID)
+	return b.String()
 }

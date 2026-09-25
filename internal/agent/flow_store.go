@@ -54,6 +54,12 @@ type flowCurrent struct {
 	Draft     string `json:"draft,omitempty"`
 	Gray      string `json:"gray,omitempty"`
 	Published string `json:"published,omitempty"`
+	// DesignerSessionID is the chat session that designed/updated this flow
+	// (pinned by create_flow via flowSessionID(ctx)). The UI resumes this
+	// session when opening the flow's natural-language tab, so the
+	// conversation survives flow id changes (the session's locator key is
+	// the flow id at creation time, which may differ from the current one).
+	DesignerSessionID string `json:"designer_session_id,omitempty"`
 }
 
 // flowRunRecord is the per-run record; runtime state lives in workflows/.
@@ -240,6 +246,22 @@ func (s *flowStore) setStatusLane(flowID, status, version string) error {
 	default:
 		return nil // deprecated/archived do not occupy a lane
 	}
+	return s.saveCurrent(flowID, cur)
+}
+
+// setDesignerSessionID records the chat session that designed/updated the
+// flow (create_flow passes flowSessionID(ctx)). It persists to current.json
+// so the UI can resume the same conversation across flow renames.
+func (s *flowStore) setDesignerSessionID(flowID, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	cur, err := s.loadCurrent(flowID)
+	if err != nil {
+		return err
+	}
+	cur.DesignerSessionID = sessionID
 	return s.saveCurrent(flowID, cur)
 }
 

@@ -5,7 +5,7 @@ import { MessageOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { useSettingsStore } from "../../store/settings";
 import { createChatStore, groupFeedItemsIntoTurns } from "../../store/chat";
-import { openSession, getSnapshot, submitMessage } from "../../lib/api";
+import { openSession, getSnapshot, submitMessage, listSessions } from "../../lib/api";
 import { streamEvents } from "../../lib/sse";
 import {
   mergeChronologicalFeedItems,
@@ -36,10 +36,12 @@ const FLOW_DESIGNER_TEMPLATE = "flow-designer";
 export function FlowChatPanel(props: {
   flowId: string;
   token: string | null;
+  /** Chat session bound to this flow by create_flow (survives flow renames). */
+  designerSessionId?: string | null;
   /** Called after a turn ends (the agent may have saved a new version). */
   onVersionApplied?: () => void;
 }) {
-  const { flowId, token, onVersionApplied } = props;
+  const { flowId, token, onVersionApplied, designerSessionId } = props;
   const { t } = useI18n();
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
@@ -53,19 +55,39 @@ export function FlowChatPanel(props: {
   const effectiveToken = token ?? tokenFromStore;
 
   const sessionKey = `flow:${flowId}`;
-  const locator = {
-    channel: "web",
-    key: sessionKey,
-    metadata: { template: FLOW_DESIGNER_TEMPLATE },
-  };
+  const locator = useMemo(
+    () => ({
+      channel: "web",
+      key: sessionKey,
+      metadata: { template: FLOW_DESIGNER_TEMPLATE },
+    }),
+    [sessionKey],
+  );
   const [sessionId, setSessionId] = useState("");
+
+  // The flow's bound designer session may live under an OLDER locator key
+  // (the flow id at design time, e.g. flow:flow_kefu after a rename to
+  // fl_ticket_auto). Resolve its persisted locator so openSession hashes to
+  // the SAME conversation instead of forking an empty one. When no designer
+  // session is bound (flow created in the UI), fall back to flow:<flow_id>.
+  const designerLocatorQuery = useQuery({
+    queryKey: ["flow-designer-locator", effectiveToken, designerSessionId],
+    queryFn: () => listSessions(effectiveToken, "web"),
+    enabled: !!effectiveToken && !!designerSessionId,
+    select: (sessions) =>
+      sessions.find((s) => s.session_id === designerSessionId)?.locator ?? null,
+  });
+  const resumeLocator = designerLocatorQuery.data ?? locator;
+  // Wait for the locator lookup when a designer session is bound, so we
+  // never flash-open a fresh flow:<flow_id> session first.
+  const locatorReady = !designerSessionId || designerLocatorQuery.isSuccess;
 
   // Open (or resume) the flow's designer session once per flow.
   useEffect(() => {
     let cancelled = false;
-    if (!effectiveToken) return;
+    if (!effectiveToken || !locatorReady) return;
     setSessionId("");
-    openSession(effectiveToken, locator)
+    openSession(effectiveToken, resumeLocator)
       .then((r) => {
         if (cancelled) return;
         setSessionId(r.session_id);
@@ -79,7 +101,7 @@ export function FlowChatPanel(props: {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flowId, effectiveToken]);
+  }, [flowId, effectiveToken, locatorReady]);
 
   const snapshotQuery = useQuery({
     queryKey: ["flow-chat-snapshot", effectiveToken, sessionId],
@@ -174,7 +196,7 @@ export function FlowChatPanel(props: {
           type="text"
           size="small"
           icon={<MessageOutlined />}
-          onClick={() => navigate(buildChatRoute(locator))}
+          onClick={() => navigate(buildChatRoute(resumeLocator))}
         >
           {t("flows.openInChat")}
         </Button>

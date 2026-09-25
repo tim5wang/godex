@@ -279,5 +279,92 @@ func testFlowConfig(workspace string) *config.Config {
 	}
 }
 
+// TestCreateFlowBindsDesignerSession verifies the flow→designer-session
+// binding: create_flow passes the session id, CreateFlow persists it to
+// current.json, and ListFlows surfaces it on FlowSummaryView so the UI can
+// resume the same conversation (even after a flow id change).
+func TestCreateFlowBindsDesignerSession(t *testing.T) {
+	a := newTestAgent(t, 4096)
+
+	v, err := a.CreateFlow(FlowCreateArgs{
+		Def:       flowTestDef(),
+		SessionID: "web-session-abc",
+	})
+	if err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	if v.FlowID != "fl_order_recovery" {
+		t.Fatalf("unexpected flow: %+v", v)
+	}
+
+	summaries, err := a.ListFlows()
+	if err != nil {
+		t.Fatalf("list flows: %v", err)
+	}
+	if len(summaries) != 1 || summaries[0].DesignerSessionID != "web-session-abc" {
+		t.Fatalf("expected designer_session_id surfaced, got %+v", summaries)
+	}
+
+	// Persisted on disk: current.json carries the binding.
+	cur, err := a.flows.loadCurrent("fl_order_recovery")
+	if err != nil {
+		t.Fatalf("load current: %v", err)
+	}
+	if cur.DesignerSessionID != "web-session-abc" {
+		t.Fatalf("expected binding persisted, got %+v", cur)
+	}
+
+	// No session id (UI-created flow) leaves the field empty.
+	a2 := newTestAgent(t, 4096)
+	if _, err := a2.CreateFlow(FlowCreateArgs{Def: flowTestDef()}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+	sums, _ := a2.ListFlows()
+	if sums[0].DesignerSessionID != "" {
+		t.Fatalf("expected empty designer session for UI-created flow, got %q", sums[0].DesignerSessionID)
+	}
+}
+
+// TestFlowDesignReadAction verifies flow_design action=read returns the
+// current draft definition so the agent never has to search for it.
+func TestFlowDesignReadAction(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: flowTestDef()}); err != nil {
+		t.Fatalf("create flow: %v", err)
+	}
+
+	tool := newFlowDesignTool(a)
+	out, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "read",
+		"flow_id": "fl_order_recovery",
+	})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(out, "fl_order_recovery") {
+		t.Fatalf("expected flow id in output, got %q", out)
+	}
+
+	// Reading a flow with no draft returns guidance instead of an error.
+	if _, err := a.CreateFlow(FlowCreateArgs{FlowID: "fl_empty_read", Version: "1"}); err != nil {
+		t.Fatalf("create empty flow: %v", err)
+	}
+	out2, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":  "read",
+		"flow_id": "fl_empty_read",
+	})
+	if err != nil {
+		t.Fatalf("read empty: %v", err)
+	}
+	if !strings.Contains(out2, "还没有草稿定义") {
+		t.Fatalf("expected no-draft guidance, got %q", out2)
+	}
+
+	// Missing flow_id is rejected.
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{"action": "read"}); err == nil {
+		t.Fatal("expected error for missing flow_id")
+	}
+}
+
 var _ = time.Now
 var _ = strings.TrimSpace

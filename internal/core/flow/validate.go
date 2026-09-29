@@ -421,6 +421,7 @@ func validateSessionRegion(d *Definition, byID map[string]Node, entryID, path, d
 		targetIDs := make([]string, 0, len(branchNode.Branch.Cases)+1)
 		seenRoutes := make(map[string]struct{}, len(branchNode.Branch.Cases))
 		validatedTargets := make(map[string]struct{}, len(branchNode.Branch.Cases)+1)
+		routeChains := make(map[string]map[string]struct{}, len(branchNode.Branch.Cases)+1)
 		for _, branchCase := range branchNode.Branch.Cases {
 			route := strings.TrimSpace(branchCase.Name)
 			if route == "" {
@@ -486,13 +487,20 @@ func validateSessionRegion(d *Definition, byID map[string]Node, entryID, path, d
 					queue = append(queue, next)
 				}
 			}
-			ownerKey := branchID + "\x00" + targetID
 			for nodeID := range chain {
-				if owner, exists := branchChainOwners[nodeID]; exists && owner != ownerKey {
+				if owner, exists := branchChainOwners[nodeID]; exists && owner != branchID {
 					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chains share downstream node %q", nodeID)}
 				}
-				branchChainOwners[nodeID] = ownerKey
+				branchChainOwners[nodeID] = branchID
 				sessionRegionNodes[nodeID] = struct{}{}
+			}
+			routeChains[targetID] = chain
+		}
+		for _, targetID := range targetIDs {
+			targetID = strings.TrimSpace(targetID)
+			chain, exists := routeChains[targetID]
+			if !exists {
+				continue
 			}
 			for nodeID := range chain {
 				if nodeID != targetID {
@@ -505,6 +513,27 @@ func validateSessionRegion(d *Definition, byID map[string]Node, entryID, path, d
 						continue
 					}
 					if _, inChain := chain[source]; inChain {
+						continue
+					}
+					// A shared downstream node is an exclusive (OR) join: the
+					// selected route supplies its inputs and sibling route nodes
+					// are skipped at runtime.
+					sharedBySiblingRoute := false
+					for _, siblingTargetID := range targetIDs {
+						siblingTargetID = strings.TrimSpace(siblingTargetID)
+						if siblingTargetID == targetID {
+							continue
+						}
+						siblingChain := routeChains[siblingTargetID]
+						if _, sameJoin := siblingChain[nodeID]; !sameJoin {
+							continue
+						}
+						if _, siblingInput := siblingChain[source]; siblingInput {
+							sharedBySiblingRoute = true
+							break
+						}
+					}
+					if sharedBySiblingRoute {
 						continue
 					}
 					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain node %q depends on node %q outside its selected route", nodeID, source)}

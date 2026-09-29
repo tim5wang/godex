@@ -500,25 +500,109 @@ func TestFlowSessionBranchExecutesOnlySelectedRouteChainAndRecordsChoice(t *test
 	}
 }
 
-func TestFlowSessionBranchRejectsCrossRouteMerge(t *testing.T) {
-	def := flowSessionBranchDefinition("fl_session_branch_merge")
-	def.Nodes = append(def.Nodes, flow.Node{
-		ID:   "merge",
-		Kind: flow.KindFunction,
-		Function: &flow.FunctionSpec{
-			Runtime: flow.FunctionRuntimeJS,
-			Source:  `function handle(ctx) { return {merged: true}; }`,
-		},
-		Outputs: []flow.VarDef{{Name: "merged", Type: "boolean"}},
-	})
-	def.Edges = append(def.Edges,
-		flow.Edge{ID: "safe-merge", From: "safe", To: "merge", EdgeType: flow.EdgeDataDependency},
-		flow.Edge{ID: "fallback-merge", From: "fallback", To: "merge", EdgeType: flow.EdgeDataDependency},
-	)
-
-	_, err := flow.Compile(def)
-	if err == nil || !strings.Contains(err.Error(), "outside its selected route") {
-		t.Fatalf("expected cross-route merge rejection, got %v", err)
+func TestFlowSessionBranchMergesSelectedRoute(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		risk       string
+		wantRoute  string
+		wantTarget string
+		wantFinish string
+	}{
+		{name: "case route", risk: "low", wantRoute: "safe", wantTarget: "safe", wantFinish: "safe_finish"},
+		{name: "default route", risk: "high", wantRoute: "default", wantTarget: "fallback", wantFinish: "fallback_finish"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testFlowConfig(t.TempDir())
+			a := New(cfg)
+			def := flowSessionBranchDefinition("fl_session_branch_merge_" + strings.ReplaceAll(test.name, " ", "_"))
+			def.Nodes = append(def.Nodes, flow.Node{
+				ID:   "merge",
+				Kind: flow.KindFunction,
+				Function: &flow.FunctionSpec{
+					Runtime: flow.FunctionRuntimeJS,
+					Source: `function handle(ctx) {
+						return {
+							merged_from: ctx.session.state.after_route,
+							session_state: Object.assign({}, ctx.session.state, {after_route: "merged"})
+						};
+					}`,
+				},
+				Outputs: []flow.VarDef{
+					{Name: "merged_from", Type: "string"},
+					{Name: "session_state", Type: "object"},
+				},
+			})
+			def.Edges = append(def.Edges,
+				flow.Edge{ID: "safe-finish-merge", From: "safe_finish", To: "merge", EdgeType: flow.EdgeDataDependency},
+				flow.Edge{ID: "fallback-finish-merge", From: "fallback_finish", To: "merge", EdgeType: flow.EdgeDataDependency},
+			)
+			if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+				t.Fatalf("create session Flow: %v", err)
+			}
+			session, err := a.CreateFlowSession(def.FlowID, def.Version, nil)
+			if err != nil {
+				t.Fatalf("create FlowSession: %v", err)
+			}
+			if _, err := a.AppendFlowSessionEvent(def.FlowID, session.SessionID, FlowSessionEventInput{
+				Source: "game-adapter", Type: "turn.update",
+				Payload: json.RawMessage(`{"risk":"` + test.risk + `"}`),
+			}); err != nil {
+				t.Fatalf("append event: %v", err)
+			}
+			result, err := a.AdvanceFlowSession(t.Context(), def.FlowID, session.SessionID, 64)
+			if err != nil || result.Processed != 1 || result.Pending {
+				t.Fatalf("advance FlowSession: result=%+v err=%v", result, err)
+			}
+			view, err := a.GetFlowSession(def.FlowID, session.SessionID)
+			if err != nil {
+				t.Fatalf("get FlowSession: %v", err)
+			}
+			if view.LastBranchRoutes["route"] != test.wantRoute {
+				t.Fatalf("wrong branch route selected: %+v", view.LastBranchRoutes)
+			}
+			if view.State["after_route"] != "merged" {
+				t.Fatalf("shared join did not update state: %+v", view.State)
+			}
+			if !containsString(view.LastProcessedNodes, test.wantTarget) ||
+				!containsString(view.LastProcessedNodes, test.wantFinish) ||
+				!containsString(view.LastProcessedNodes, "merge") {
+				t.Fatalf("selected route did not reach the merge: %v", view.LastProcessedNodes)
+			}
+			mergeCount := 0
+			for _, nodeID := range view.LastProcessedNodes {
+				if nodeID == "merge" {
+					mergeCount++
+				}
+			}
+			if mergeCount != 1 {
+				t.Fatalf("shared merge must run exactly once, got %d executions: %v", mergeCount, view.LastProcessedNodes)
+			}
+			unselected := "fallback"
+			if test.wantTarget == "fallback" {
+				unselected = "safe"
+			}
+			unselectedFinish := unselected + "_finish"
+			if containsString(view.LastProcessedNodes, unselected) || containsString(view.LastProcessedNodes, unselectedFinish) {
+				t.Fatalf("unselected route ran before the merge: %v", view.LastProcessedNodes)
+			}
+			events, err := a.FlowSessionEvents(def.FlowID, session.SessionID, 0, 10)
+			if err != nil {
+				t.Fatalf("read session output: %v", err)
+			}
+			if len(events) != 2 || events[1].Type != FlowSessionOutputEventType {
+				t.Fatalf("expected one merged output, got %+v", events)
+			}
+			var output struct {
+				NodeID  string         `json:"node_id"`
+				Outputs map[string]any `json:"outputs"`
+			}
+			if err := json.Unmarshal(events[1].Payload, &output); err != nil {
+				t.Fatalf("decode merged output: %v", err)
+			}
+			if output.NodeID != "merge" || output.Outputs["merged_from"] != test.wantFinish {
+				t.Fatalf("merge did not consume selected route state: %+v", output)
+			}
+		})
 	}
 }
 

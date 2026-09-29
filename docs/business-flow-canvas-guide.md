@@ -47,6 +47,10 @@ Agent 可通过 `godex_docs get flow-spec` 查询能力索引和文档路径，�
 
 Lane 可设置 `event`、`periodic` 或 `hybrid` cadence，执行期限、`fast`/`standard`/`slow` worker class 和过载策略。周期/混合 lane 必须使用 `latest_wins`；Agent step 需要 `durable`。周期值以毫秒配置。保存后创建的是草稿版本，发布状态不会自动改变。
 
+### Branch 路由与汇合
+
+Session branch 每次只选择一个 case 或 default 路径。不同路径可以连接到同一个下游节点形成**互斥汇合（OR-join）**：运行时只执行选中的路径和共享汇合节点，汇合节点只执行一次；其他路径视为跳过，不会产生 outputs。汇合节点应使用 session state 或所选路径已有的 outputs，不要读取未选路径的节点 outputs。一个 branch route 内继续嵌套 branch 目前不支持。
+
 ## 创建与观测 Session
 
 在「Session 运行」页选择一个已保存的 Session 版本，填写 JSON inputs 并创建 Session。建议先发布后再把版本用于正式场景；草稿可用于受控测试（具体限制以服务端响应为准）。
@@ -73,8 +77,8 @@ Web UI 当前没有 WebSocket 连接器/媒体控制台；实时客户端需使�
 Session region 当前支持内联 JavaScript `function`、HTTP JSON `service`、纯 `llm`、durable Agent `step` 和确定性 `branch`。不能据此宣称 C/D 全链路已完成：
 
 - 不支持在通用事件 journal 或 Session WebSocket 中传二进制音视频帧；没有 token/partial ASR/TTS 分帧输出。
-- 不支持 Session loop、嵌套或汇合 branch、一般化的持久状态机迁移。
-- Voice adapter 能把 ASR final 接入 FlowSession，但不自动实现完整语音 Agent 决策、打断和 TTS 闭环；实时游戏的多层端到端 Agent 也未闭环。
+- 不支持 Session loop、嵌套 branch、一般化的持久状态机迁移；branch 只支持互斥路由汇合，不支持等待多个并行分支的 join。
+- Voice adapter 能把 ASR final 接入 FlowSession，并将配置好的 session 输出流式送入 voice-engine TTS；但没有预置 turn 状态机，打断不会取消正在运行的 Flow LLM/Agent 工作。实时游戏的多层端到端 Agent 也未闭环。
 - 运行时协调仍是单进程；durable event 的外部副作用按 at-least-once 处理，不是 exactly-once；输出也没有服务端消费确认。
 
 因此，当前可用于构建、测试和观测 Session 语义流程切片；正式接入实时媒体前，应由专用 adapter 负责媒体热路径、背压、取消和客户端重连，并依据运行时设计文档逐项验收。

@@ -601,6 +601,9 @@ func (a *Agent) runFlowSessionRegion(
 				if scheduled[selectedBranchTarget.ID] {
 					return nil, nodeIDs, branchRoutes, fmt.Errorf("branch route target %q was already scheduled in the session region", selectedBranchTarget.ID)
 				}
+				for _, skippedNodeID := range region.branchSkippedNodes[selectedBranchTarget.ID] {
+					done[skippedNodeID] = true
+				}
 				executionNodes = append(executionNodes, *selectedBranchTarget)
 				scheduled[selectedBranchTarget.ID] = true
 				remaining++
@@ -994,9 +997,10 @@ func flowSessionStepIdempotencyKey(rec flowSessionRecord, event FlowSessionEvent
 }
 
 type flowSessionRegion struct {
-	nodes            map[string]struct{}
-	branchTargets    map[string]map[string]flow.CompiledNode
-	branchDownstream map[string][]flow.CompiledNode
+	nodes              map[string]struct{}
+	branchTargets      map[string]map[string]flow.CompiledNode
+	branchDownstream   map[string][]flow.CompiledNode
+	branchSkippedNodes map[string][]string
 }
 
 func buildFlowSessionRegion(
@@ -1095,7 +1099,7 @@ func buildFlowSessionRegion(
 		}
 	}
 
-	branchDownstream, dynamicNodeIDs, err := collectFlowSessionBranchDownstream(compiled.Nodes, routeOwners)
+	branchDownstream, branchSkippedNodes, dynamicNodeIDs, err := collectFlowSessionBranchDownstream(compiled.Nodes, routeOwners)
 	if err != nil {
 		return flowSessionRegion{}, err
 	}
@@ -1124,6 +1128,9 @@ func buildFlowSessionRegion(
 		for _, node := range downstream {
 			routeScope[node.ID] = struct{}{}
 		}
+		for _, skippedNodeID := range branchSkippedNodes[targetID] {
+			routeScope[skippedNodeID] = struct{}{}
+		}
 		for _, node := range downstream {
 			if node.Kind == flow.KindStep && flow.EffectiveSessionDelivery(trigger.Delivery) != flow.SessionDeliveryDurable {
 				return flowSessionRegion{}, fmt.Errorf("session Agent node %q requires durable event delivery", node.ID)
@@ -1147,16 +1154,17 @@ func buildFlowSessionRegion(
 		}
 	}
 	return flowSessionRegion{
-		nodes:            regionNodes,
-		branchTargets:    branchTargets,
-		branchDownstream: branchDownstream,
+		nodes:              regionNodes,
+		branchTargets:      branchTargets,
+		branchDownstream:   branchDownstream,
+		branchSkippedNodes: branchSkippedNodes,
 	}, nil
 }
 
 func collectFlowSessionBranchDownstream(
 	nodes []flow.CompiledNode,
 	routeOwners map[string]string,
-) (map[string][]flow.CompiledNode, map[string]struct{}, error) {
+) (map[string][]flow.CompiledNode, map[string][]string, map[string]struct{}, error) {
 	chains := make(map[string]map[string]struct{}, len(routeOwners))
 	for targetID := range routeOwners {
 		chain := map[string]struct{}{targetID: {}}
@@ -1177,7 +1185,7 @@ func collectFlowSessionBranchDownstream(
 					continue
 				}
 				if node.Kind == flow.KindBranch {
-					return nil, nil, fmt.Errorf("session branch route %q does not support nested branch node %q", targetID, node.ID)
+					return nil, nil, nil, fmt.Errorf("session branch route %q does not support nested branch node %q", targetID, node.ID)
 				}
 				chain[node.ID] = struct{}{}
 				changed = true
@@ -1190,18 +1198,19 @@ func collectFlowSessionBranchDownstream(
 	dynamicNodeIDs := make(map[string]struct{})
 	branchDownstream := make(map[string][]flow.CompiledNode, len(chains))
 	for targetID, chain := range chains {
+		branchID := routeOwners[targetID]
 		dynamicNodeIDs[targetID] = struct{}{}
 		for nodeID := range chain {
 			if nodeID == targetID {
 				continue
 			}
-			if owner, exists := downstreamOwners[nodeID]; exists && owner != targetID {
-				return nil, nil, fmt.Errorf(
-					"session branch route chains cannot merge at node %q (route targets %q and %q)",
-					nodeID, owner, targetID,
+			if owner, exists := downstreamOwners[nodeID]; exists && owner != branchID {
+				return nil, nil, nil, fmt.Errorf(
+					"session branch route chains from different branches cannot merge at node %q",
+					nodeID,
 				)
 			}
-			downstreamOwners[nodeID] = targetID
+			downstreamOwners[nodeID] = branchID
 			dynamicNodeIDs[nodeID] = struct{}{}
 		}
 		for _, node := range nodes {
@@ -1210,7 +1219,25 @@ func collectFlowSessionBranchDownstream(
 			}
 		}
 	}
-	return branchDownstream, dynamicNodeIDs, nil
+	branchSkippedNodes := make(map[string][]string, len(chains))
+	for targetID, chain := range chains {
+		branchID := routeOwners[targetID]
+		for siblingTargetID, siblingBranchID := range routeOwners {
+			if siblingBranchID != branchID || siblingTargetID == targetID {
+				continue
+			}
+			for _, node := range nodes {
+				if _, inSibling := chains[siblingTargetID][node.ID]; !inSibling {
+					continue
+				}
+				if _, inSelected := chain[node.ID]; inSelected {
+					continue
+				}
+				branchSkippedNodes[targetID] = append(branchSkippedNodes[targetID], node.ID)
+			}
+		}
+	}
+	return branchDownstream, branchSkippedNodes, dynamicNodeIDs, nil
 }
 
 func addSessionRegionNode(region map[string]struct{}, node flow.CompiledNode) bool {

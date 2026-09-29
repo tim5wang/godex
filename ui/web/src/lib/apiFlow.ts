@@ -8,6 +8,8 @@ export interface FlowDefinition {
   description?: string;
   version: string;
   status?: string;
+  execution_mode?: "request" | "session";
+  session_workflow?: FlowSessionWorkflow;
   template_id?: string;
   inputs?: FlowVarDef[];
   outputs?: FlowVarDef[];
@@ -36,6 +38,27 @@ export interface FlowNetworkPolicy {
   timeout_seconds?: number;
   max_response_chars?: number;
   allow_private_hosts?: boolean;
+}
+
+export interface FlowSessionWorkflow {
+  triggers: FlowSessionTrigger[];
+  lanes?: FlowSessionLane[];
+}
+
+export interface FlowSessionTrigger {
+  event_type: string;
+  entry_node: string;
+  delivery?: "durable" | "latest_wins";
+  lane_id?: string;
+}
+
+export interface FlowSessionLane {
+  id: string;
+  cadence?: "event" | "periodic" | "hybrid";
+  interval_ms?: number;
+  deadline_ms: number;
+  class?: "fast" | "standard" | "slow";
+  overload_policy?: "coalesce_latest" | "drop_newest";
 }
 
 export interface FlowNode {
@@ -186,6 +209,107 @@ export interface FlowRunView {
   finished_at?: string;
 }
 
+export interface FlowSessionView {
+  session_id: string;
+  flow_id: string;
+  version: string;
+  digest: string;
+  status: string;
+  inputs?: Record<string, unknown>;
+  state?: Record<string, unknown>;
+  last_sequence: number;
+  processed_sequence: number;
+  state_version: number;
+  execution_generation: number;
+  last_error?: string;
+  last_processed_event_type?: string;
+  last_processed_nodes?: string[];
+  last_branch_routes?: Record<string, string>;
+  last_execution?: FlowSessionExecutionSummary;
+  in_flight?: FlowSessionInFlight;
+  in_flight_lanes?: FlowSessionInFlight[];
+  latest_signal_outputs?: FlowSessionOutputSnapshot[];
+  started_at: string;
+  updated_at: string;
+  ended_at?: string;
+}
+
+export interface FlowSessionExecutionSummary {
+  delivery: "durable" | "latest_wins";
+  lane_id?: string;
+  input_sequence?: number;
+  event_type: string;
+  source: string;
+  source_sequence?: number;
+  correlation_id?: string;
+  status: string;
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  nodes?: { node_id: string; status: string; duration_ms: number }[];
+  output_count: number;
+}
+
+export interface FlowSessionInFlight {
+  delivery: "durable" | "latest_wins";
+  lane_id?: string;
+  status: string;
+  input_sequence?: number;
+  event_type: string;
+  source: string;
+  source_sequence?: number;
+  correlation_id?: string;
+  queued_at: string;
+  started_at?: string;
+  duration_ms?: number;
+}
+
+export interface FlowSessionOutputSnapshot {
+  output_id: string;
+  input_event_type: string;
+  input_source: string;
+  input_source_sequence?: number;
+  correlation_id?: string;
+  node_id: string;
+  outputs: Record<string, unknown>;
+}
+
+export interface FlowSessionEventInput {
+  source: string;
+  source_sequence?: number;
+  type: string;
+  correlation_id?: string;
+  occurred_at?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface FlowSessionEvent {
+  flow_session_id: string;
+  flow_id: string;
+  version: string;
+  digest: string;
+  source: string;
+  source_sequence?: number;
+  sequence: number;
+  state_version: number;
+  type: string;
+  correlation_id?: string;
+  occurred_at?: string;
+  received_at: string;
+  payload: Record<string, unknown>;
+}
+
+export interface FlowSessionEventReceipt {
+  flow_session_id: string;
+  sequence: number;
+  duplicate: boolean;
+}
+
+export interface FlowSessionSignalReceipt {
+  flow_session_id: string;
+  coalesced: boolean;
+}
+
 // ---- Flow API functions ----
 
 export function listFlows(token: string | null) {
@@ -235,6 +359,103 @@ export function deleteFlow(token: string | null, flowId: string) {
   return request<{ deleted: string }>(
     `/v1/flows/${encodeURIComponent(flowId)}`,
     { method: "DELETE" },
+    token,
+  );
+}
+
+export function createFlowSession(
+  token: string | null,
+  flowId: string,
+  body: { version?: string; inputs?: Record<string, unknown> },
+) {
+  return request<FlowSessionView>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions`,
+    { method: "POST", body: JSON.stringify(body) },
+    token,
+  );
+}
+
+export function listFlowSessions(token: string | null, flowId: string) {
+  return request<FlowSessionView[]>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions`,
+    { method: "GET" },
+    token,
+  );
+}
+
+export function getFlowSession(token: string | null, flowId: string, sessionId: string) {
+  return request<FlowSessionView>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "GET" },
+    token,
+  );
+}
+
+export function pauseFlowSession(token: string | null, flowId: string, sessionId: string) {
+  return request<FlowSessionView>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions/${encodeURIComponent(sessionId)}/pause`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function resumeFlowSession(token: string | null, flowId: string, sessionId: string) {
+  return request<FlowSessionView>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions/${encodeURIComponent(sessionId)}/resume`,
+    { method: "POST" },
+    token,
+  );
+}
+
+export function endFlowSession(
+  token: string | null,
+  flowId: string,
+  sessionId: string,
+  status: "completed" | "canceled",
+) {
+  return request<FlowSessionView>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions/${encodeURIComponent(sessionId)}/end`,
+    { method: "POST", body: JSON.stringify({ status }) },
+    token,
+  );
+}
+
+export function appendFlowSessionEvent(
+  token: string | null,
+  flowId: string,
+  sessionId: string,
+  input: FlowSessionEventInput,
+) {
+  return request<FlowSessionEventReceipt>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions/${encodeURIComponent(sessionId)}/events`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function publishFlowSessionSignal(
+  token: string | null,
+  flowId: string,
+  sessionId: string,
+  input: FlowSessionEventInput,
+) {
+  return request<FlowSessionSignalReceipt>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions/${encodeURIComponent(sessionId)}/signals`,
+    { method: "POST", body: JSON.stringify(input) },
+    token,
+  );
+}
+
+export function listFlowSessionEvents(
+  token: string | null,
+  flowId: string,
+  sessionId: string,
+  afterSequence = 0,
+  limit = 100,
+) {
+  return request<FlowSessionEvent[]>(
+    `/v1/flows/${encodeURIComponent(flowId)}/sessions/${encodeURIComponent(sessionId)}/events?after_sequence=${afterSequence}&limit=${limit}`,
+    { method: "GET" },
     token,
   );
 }

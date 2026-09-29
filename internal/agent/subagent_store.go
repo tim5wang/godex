@@ -32,11 +32,12 @@ func subagentJobsDir(cfg *config.Config) string {
 
 func newSubagentJobStore(dir string) *subagentJobStore {
 	store := &subagentJobStore{
-		dir:      strings.TrimSpace(dir),
-		jobs:     make(map[string]*subagentJob),
-		cancels:  make(map[string]context.CancelFunc),
-		targets:  make(map[string]subagentEventTarget),
-		watchers: make(map[uint64]chan struct{}),
+		dir:         strings.TrimSpace(dir),
+		jobs:        make(map[string]*subagentJob),
+		idempotency: make(map[string]string),
+		cancels:     make(map[string]context.CancelFunc),
+		targets:     make(map[string]subagentEventTarget),
+		watchers:    make(map[uint64]chan struct{}),
 	}
 	store.loadAll()
 	return store
@@ -201,6 +202,7 @@ func (s *subagentJobStore) loadAll() {
 				}
 			}
 			s.jobs[job.ID] = cloneSubagentJob(job)
+			s.indexIdempotencyLocked(job)
 			continue
 		}
 		if filepath.Ext(name) != ".json" {
@@ -215,6 +217,23 @@ func (s *subagentJobStore) loadAll() {
 			_ = s.archiveLegacyJob(name)
 		}
 		s.jobs[job.ID] = cloneSubagentJob(job)
+		s.indexIdempotencyLocked(job)
+	}
+}
+
+func (s *subagentJobStore) indexIdempotencyLocked(job *subagentJob) {
+	if s == nil || job == nil {
+		return
+	}
+	key := strings.TrimSpace(job.IdempotencyKey)
+	if key == "" {
+		return
+	}
+	if s.idempotency == nil {
+		s.idempotency = make(map[string]string)
+	}
+	if _, exists := s.idempotency[key]; !exists {
+		s.idempotency[key] = job.ID
 	}
 }
 
@@ -336,6 +355,18 @@ func (s *subagentJobStore) Start(agentType, prompt string, toolNames []string, w
 }
 
 func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagentJob, error) {
+	job, _, err := s.StartOrGetWithOptions(opts)
+	return job, err
+}
+
+// StartOrGetWithOptions creates one durable job per idempotency key. The
+// created flag lets runtimes distinguish the first dispatch from a replay
+// without a check-then-create race.
+func (s *subagentJobStore) StartOrGetWithOptions(opts subagentStartOptions) (*subagentJob, bool, error) {
+	idempotencyKey := strings.TrimSpace(opts.IdempotencyKey)
+	if len(idempotencyKey) > 512 {
+		return nil, false, fmt.Errorf("subagent idempotency key exceeds 512 bytes")
+	}
 	now := time.Now().UTC()
 	normalizedScope := normalizeWriteScope(opts.WriteScope)
 	agentType := normalizeSubagentType(opts.AgentType)
@@ -345,6 +376,7 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 	}
 	job := &subagentJob{
 		ID:                newSubagentJobID(now),
+		IdempotencyKey:    idempotencyKey,
 		SessionID:         strings.TrimSpace(opts.SessionID),
 		ParentTurnID:      strings.TrimSpace(opts.ParentTurnID),
 		AgentType:         agentType,
@@ -390,7 +422,7 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 	job.Identity.BudgetHint = strings.TrimSpace(opts.BudgetHint)
 	job.Identity.Display = cloneStringMap(opts.Display)
 	if job.Prompt == "" {
-		return nil, fmt.Errorf("missing prompt")
+		return nil, false, fmt.Errorf("missing prompt")
 	}
 	if len(job.ToolNames) == 0 {
 		job.ToolNames = subagentToolNames(job.AgentType)
@@ -407,6 +439,17 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if idempotencyKey != "" {
+		if s.idempotency == nil {
+			s.idempotency = make(map[string]string)
+		}
+		if id := s.idempotency[idempotencyKey]; id != "" {
+			if existing := s.jobs[id]; existing != nil {
+				return cloneSubagentJob(existing), false, nil
+			}
+			delete(s.idempotency, idempotencyKey)
+		}
+	}
 	job.Sequence = s.nextSequenceLocked(job.SessionID, job.ParentTurnID)
 	job.DisplayTitle = subagentDisplayTitle(job)
 	if opts.MaxConcurrent > 0 && s.runningCountLocked() >= opts.MaxConcurrent {
@@ -428,10 +471,13 @@ func (s *subagentJobStore) StartWithOptions(opts subagentStartOptions) (*subagen
 	s.jobs[job.ID] = cloneSubagentJob(job)
 	if err := s.saveLocked(job); err != nil {
 		delete(s.jobs, job.ID)
-		return nil, err
+		return nil, false, err
+	}
+	if idempotencyKey != "" {
+		s.idempotency[idempotencyKey] = job.ID
 	}
 	s.notifyWatchersLocked()
-	return cloneSubagentJob(job), nil
+	return cloneSubagentJob(job), true, nil
 }
 
 func (s *subagentJobStore) RegisterTarget(id string, target subagentEventTarget) {
@@ -831,7 +877,7 @@ func (s *subagentJobStore) Cancel(id string) (*subagentJob, error) {
 	if cancel != nil {
 		cancel()
 	}
-	if job.Status == subagentStatusRunning || job.Status == subagentStatusPending {
+	if job.Status == subagentStatusRunning || job.Status == subagentStatusPending || job.Status == subagentStatusPendingApproval {
 		job.Status = subagentStatusCanceled
 		job.Error = context.Canceled.Error()
 		job.UpdatedAt = now

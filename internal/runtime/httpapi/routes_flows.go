@@ -47,6 +47,14 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 	if service == nil {
 		return
 	}
+	registerFlowDefinitionRoutes(mux, service, protected)
+	registerFlowSessionRoutes(mux, service, protected)
+	registerFlowExecutionRoutes(mux, service, protected)
+	registerFlowInspectionAndHumanTaskRoutes(mux, service, protected)
+	registerFlowRunEventRoutes(mux, service, protected)
+}
+
+func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
 	// GET /v1/flows — list flows with status lanes.
 	mux.Handle("GET /v1/flows", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ListFlows()
@@ -85,8 +93,8 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 			var draftErr *agent.FlowSpecDraftError
 			if errors.As(err, &draftErr) {
 				body := map[string]interface{}{
-					"error":     err.Error(),
-					"stage":     "draft",
+					"error":      err.Error(),
+					"stage":      "draft",
 					"raw_output": draftErr.Raw,
 				}
 				if draftErr.Draft != nil {
@@ -167,6 +175,149 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
+}
+
+func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
+	// Session-mode flows have a durable FlowSession lifecycle independent of
+	// the finite-DAG FlowRun API.
+	mux.Handle("POST /v1/flows/{id}/sessions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Version string         `json:"version,omitempty"`
+			Inputs  map[string]any `json:"inputs,omitempty"`
+		}
+		if err := decodeJSONAllowEmpty(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		session, err := service.CreateFlowSession(r.PathValue("id"), req.Version, req.Inputs)
+		if err != nil {
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, session)
+	})))
+	mux.Handle("GET /v1/flows/{id}/sessions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessions, err := service.ListFlowSessions(r.PathValue("id"))
+		if err != nil {
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, sessions)
+	})))
+	mux.Handle("GET /v1/flows/{id}/sessions/{sessionID}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session, err := service.GetFlowSession(r.PathValue("id"), r.PathValue("sessionID"))
+		if err != nil {
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, session)
+	})))
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/pause", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session, err := service.PauseFlowSession(r.PathValue("id"), r.PathValue("sessionID"))
+		if err != nil {
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, session)
+	})))
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/resume", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session, err := service.ResumeFlowSession(r.PathValue("id"), r.PathValue("sessionID"))
+		if err != nil {
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, session)
+	})))
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/end", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Status string `json:"status,omitempty"`
+		}
+		if err := decodeJSONAllowEmpty(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		session, err := service.EndFlowSession(r.PathValue("id"), r.PathValue("sessionID"), req.Status)
+		if err != nil {
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, session)
+	})))
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/events", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, agent.MaxFlowSessionEventPayloadBytes+4096)
+		var req agent.FlowSessionEventInput
+		if err := decodeJSON(r, &req); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, err)
+			} else {
+				writeError(w, http.StatusBadRequest, err)
+			}
+			return
+		}
+		receipt, err := service.AppendFlowSessionEvent(r.PathValue("id"), r.PathValue("sessionID"), req)
+		if err != nil {
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, receipt)
+	})))
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/signals", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, agent.MaxFlowSessionEventPayloadBytes+4096)
+		var req agent.FlowSessionEventInput
+		if err := decodeJSON(r, &req); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, err)
+			} else {
+				writeError(w, http.StatusBadRequest, err)
+			}
+			return
+		}
+		receipt, err := service.PublishFlowSessionSignal(r.PathValue("id"), r.PathValue("sessionID"), req)
+		if err != nil {
+			if errors.Is(err, backend.ErrFlowSessionRuntimeUnavailable) {
+				writeError(w, http.StatusServiceUnavailable, err)
+				return
+			}
+			if errors.Is(err, backend.ErrFlowSessionMailboxFull) {
+				writeError(w, http.StatusTooManyRequests, err)
+				return
+			}
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, receipt)
+	})))
+	mux.Handle("GET /v1/flows/{id}/sessions/{sessionID}/events", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		after := uint64(0)
+		if value := r.URL.Query().Get("after_sequence"); value != "" {
+			parsed, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Errorf("invalid after_sequence: %w", err))
+				return
+			}
+			after = parsed
+		}
+		limit := 100
+		if value := r.URL.Query().Get("limit"); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed < 1 {
+				writeError(w, http.StatusBadRequest, fmt.Errorf("limit must be a positive integer"))
+				return
+			}
+			limit = parsed
+		}
+		events, err := service.FlowSessionEvents(r.PathValue("id"), r.PathValue("sessionID"), after, limit)
+		if err != nil {
+			writeFlowSessionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, events)
+	})))
+}
+
+func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
 	// POST /v1/flows/{id}/runs — create + start a run.
 	mux.Handle("POST /v1/flows/{id}/runs", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -275,6 +426,9 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
+}
+
+func registerFlowInspectionAndHumanTaskRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
 	// GET /v1/flow-inspection?window_hours=24 — aggregate run health across
 	// published flows (P3 Agent 闭环 §22.2 定期巡检).
 	mux.Handle("GET /v1/flow-inspection", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -320,6 +474,9 @@ func registerFlowRoutes(mux *http.ServeMux, service *backend.Service, protected 
 		}
 		writeJSON(w, http.StatusOK, tasks)
 	})))
+}
+
+func registerFlowRunEventRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
 	// GET /v1/flow-runs/{runID}/events — SSE stream of the run's workflow
 	// events (created/start/handoff/...). Polls the append-only events log and
 	// pushes new events incrementally until the run reaches a terminal state
@@ -399,4 +556,19 @@ func statusForFlowError(err error) int {
 		return http.StatusBadRequest
 	}
 	return http.StatusUnprocessableEntity
+}
+
+func writeFlowSessionError(w http.ResponseWriter, err error) {
+	status := http.StatusUnprocessableEntity
+	switch {
+	case errors.Is(err, agent.ErrFlowSessionNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, agent.ErrFlowSessionConflict):
+		status = http.StatusConflict
+	case errors.Is(err, agent.ErrFlowSessionEventTooLarge):
+		status = http.StatusRequestEntityTooLarge
+	case errors.Is(err, agent.ErrFlowSessionPendingLimit):
+		status = http.StatusTooManyRequests
+	}
+	writeError(w, status, err)
 }

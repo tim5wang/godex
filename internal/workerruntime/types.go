@@ -31,15 +31,15 @@ func (s Status) Terminal() bool {
 }
 
 type CapabilitySet struct {
-	ToolNames          []string `json:"tool_names,omitempty"`
-	RequiredBundles    []string `json:"required_bundles,omitempty"`
-	RequiredTools      []string `json:"required_tools,omitempty"`
-	DefaultBundles     []string `json:"default_bundles,omitempty"`
-	BundleOverrides    []string `json:"bundle_overrides,omitempty"`
-	DeactivateBundles  []string `json:"deactivate_bundles,omitempty"`
-	ToolPolicy         []string `json:"tool_policy,omitempty"`
-	WriteScope         []string `json:"write_scope,omitempty"`
-	SandboxID          string   `json:"sandbox_id,omitempty"`
+	ToolNames         []string `json:"tool_names,omitempty"`
+	RequiredBundles   []string `json:"required_bundles,omitempty"`
+	RequiredTools     []string `json:"required_tools,omitempty"`
+	DefaultBundles    []string `json:"default_bundles,omitempty"`
+	BundleOverrides   []string `json:"bundle_overrides,omitempty"`
+	DeactivateBundles []string `json:"deactivate_bundles,omitempty"`
+	ToolPolicy        []string `json:"tool_policy,omitempty"`
+	WriteScope        []string `json:"write_scope,omitempty"`
+	SandboxID         string   `json:"sandbox_id,omitempty"`
 }
 
 func (c CapabilitySet) Clone() CapabilitySet {
@@ -58,6 +58,7 @@ func (c CapabilitySet) Clone() CapabilitySet {
 
 type JobRequest struct {
 	JobID          string                    `json:"job_id,omitempty"`
+	IdempotencyKey string                    `json:"idempotency_key,omitempty"`
 	WorkerID       string                    `json:"worker_id,omitempty"`
 	SessionID      string                    `json:"session_id,omitempty"`
 	ParentTurnID   string                    `json:"parent_turn_id,omitempty"`
@@ -82,6 +83,7 @@ type JobRequest struct {
 
 func (r JobRequest) Clone() JobRequest {
 	r.JobID = strings.TrimSpace(r.JobID)
+	r.IdempotencyKey = strings.TrimSpace(r.IdempotencyKey)
 	r.WorkerID = strings.TrimSpace(r.WorkerID)
 	r.SessionID = strings.TrimSpace(r.SessionID)
 	r.ParentTurnID = strings.TrimSpace(r.ParentTurnID)

@@ -4,7 +4,25 @@
 // compile step; the version store and /v1/flows API land in F1b/F2.
 package flow
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
+
+// Execution modes select the lifetime of a Flow runtime instance.
+const (
+	ExecutionModeRequest = "request"
+	ExecutionModeSession = "session"
+)
+
+// EffectiveExecutionMode returns the compatibility default for definitions
+// written before execution_mode was introduced.
+func EffectiveExecutionMode(mode string) string {
+	if strings.ToLower(strings.TrimSpace(mode)) == ExecutionModeSession {
+		return ExecutionModeSession
+	}
+	return ExecutionModeRequest
+}
 
 // Node kinds (Flow Spec §3.2).
 const (
@@ -48,14 +66,19 @@ type NetworkPolicy struct {
 }
 
 // godex-feature: flow-spec
-// Flow Spec v1：业务流程的声明式定义模型（docs/business-flow-runtime-design.md §3）。
+// Flow Spec v1：业务流程的声明式定义模型；画布操作见 docs/business-flow-canvas-guide.md，
+// 完整运行时契约见 docs/business-flow-runtime-design.md §3、§25。
 // 生成器（flow_design generate）失败时，可用下面结构手工构造定义。
-// English keywords: flow spec, flow_id, nodes, edges, decision, branch, loop, human, function, network policy, pre_script, post_script, timeout, handoff, condition edge, append template, converge
+// English keywords: flow spec, flow_id, nodes, edges, decision, branch, loop, human, function, service, network policy, pre_script, post_script, timeout, handoff, condition edge, append template, converge, execution mode, FlowSession, trigger, lane, cadence, reconnect, WebSocket
 //
 // 顶层字段：
 //
 //	flow_id: string（必填，fl_<slug>）；name/description: string
 //	version: string（必填，如 "1"）；status: "draft"|"gray"|"published"|"deprecated"|"archived"
+//	execution_mode: "request"|"session"（省略时为 request）
+//	session_workflow: {triggers: [{event_type, entry_node, delivery: durable|latest_wins, lane_id?}],
+//	  lanes: [{id, cadence: event|periodic|hybrid, interval_ms?, deadline_ms, class: fast|standard|slow,
+//	  overload_policy: coalesce_latest|drop_newest}]}
 //	inputs/outputs: [{name, type, desc}]（type: string|number|boolean|object|array|any）
 //	nodes: [Node]；edges: [Edge]；retry: RetryPolicy；on_complete: {url, secret}
 //	network: NetworkPolicy（function/service 节点出网策略：policy allow_all|allowlist、
@@ -122,17 +145,21 @@ type NetworkPolicy struct {
 //	 {"id":"e4","from":"human_run","to":"finalize","edge_type":"condition","when":{"status":"completed"}}]}
 //
 // 入口：flow_design 工具、/v1/flows API、Web Flows 页
-// 文档：docs/business-flow-runtime-design.md
+// 文档：docs/business-flow-runtime-design.md, docs/business-flow-canvas-guide.md
 // Definition is a Flow Spec v1 definition.
 type Definition struct {
-	FlowID      string   `json:"flow_id"`
-	Name        string   `json:"name,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Version     string   `json:"version"`
-	Status      string   `json:"status"` // draft | gray | published | deprecated | archived
-	TemplateID  string   `json:"template_id,omitempty"`
-	Inputs      []VarDef `json:"inputs,omitempty"`
-	Outputs     []VarDef `json:"outputs,omitempty"`
+	FlowID      string `json:"flow_id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Version     string `json:"version"`
+	Status      string `json:"status"` // draft | gray | published | deprecated | archived
+	// ExecutionMode defaults to request for backward compatibility. Session
+	// flows are started as durable FlowSessions, never as ordinary FlowRuns.
+	ExecutionMode   string               `json:"execution_mode,omitempty"`
+	SessionWorkflow *SessionWorkflowSpec `json:"session_workflow,omitempty"`
+	TemplateID      string               `json:"template_id,omitempty"`
+	Inputs          []VarDef             `json:"inputs,omitempty"`
+	Outputs         []VarDef             `json:"outputs,omitempty"`
 	// TimeoutSec is the wall-clock limit for one FlowRun. Zero keeps the
 	// legacy unbounded behavior; expired runs are failed and active nodes
 	// canceled by the durable workflow runtime.
@@ -149,6 +176,58 @@ type Definition struct {
 	// x-godex-signature: sha256=<HMAC-SHA256 of body with secret> when secret
 	// is non-empty.
 	OnComplete *OnCompleteSpec `json:"on_complete,omitempty"`
+}
+
+// SessionWorkflowSpec describes how semantic events enter a long-lived
+// session and which independently scheduled lanes consume them.
+type SessionWorkflowSpec struct {
+	Triggers []SessionTrigger `json:"triggers"`
+	Lanes    []SessionLane    `json:"lanes,omitempty"`
+}
+
+// SessionTrigger starts the static downstream region rooted at EntryNode.
+// Delivery is "durable" (default) or "latest_wins" for replaceable state.
+type SessionTrigger struct {
+	EventType string `json:"event_type"`
+	EntryNode string `json:"entry_node"`
+	Delivery  string `json:"delivery,omitempty"`
+	LaneID    string `json:"lane_id,omitempty"`
+}
+
+// SessionLane gives one trigger an independent cadence, deadline and bounded
+// worker class. Periodic/hybrid lanes use latest-wins delivery; ticks are
+// volatile and never add media or timer payloads to the durable journal.
+type SessionLane struct {
+	ID             string `json:"id"`
+	Cadence        string `json:"cadence,omitempty"` // event | periodic | hybrid
+	IntervalMS     int    `json:"interval_ms,omitempty"`
+	DeadlineMS     int    `json:"deadline_ms"`
+	Class          string `json:"class,omitempty"`           // fast | standard | slow
+	OverloadPolicy string `json:"overload_policy,omitempty"` // coalesce_latest | drop_newest
+}
+
+const (
+	SessionDeliveryDurable    = "durable"
+	SessionDeliveryLatestWins = "latest_wins"
+
+	SessionLaneCadenceEvent    = "event"
+	SessionLaneCadencePeriodic = "periodic"
+	SessionLaneCadenceHybrid   = "hybrid"
+
+	SessionLaneClassFast     = "fast"
+	SessionLaneClassStandard = "standard"
+	SessionLaneClassSlow     = "slow"
+
+	SessionLaneOverloadCoalesceLatest = "coalesce_latest"
+	SessionLaneOverloadDropNewest     = "drop_newest"
+)
+
+// EffectiveSessionDelivery returns the backward-compatible trigger policy.
+func EffectiveSessionDelivery(delivery string) string {
+	if strings.EqualFold(strings.TrimSpace(delivery), SessionDeliveryLatestWins) {
+		return SessionDeliveryLatestWins
+	}
+	return SessionDeliveryDurable
 }
 
 // OnCompleteSpec configures the completion webhook of a flow (P1.3).

@@ -26,6 +26,23 @@ func TestStaticRoutePatternsHaveSingleOwner(t *testing.T) {
 	}
 
 	expectedOwners := map[string][]string{
+		"routes_flows.go": {
+			"GET /v1/flows", "POST /v1/flows/generate", "POST /v1/flows",
+			"GET /v1/flows/{id}", "DELETE /v1/flows/{id}/versions/{ver}",
+			"DELETE /v1/flows/{id}", "POST /v1/flows/{id}/versions/{ver}/validate",
+			"POST /v1/flows/{id}/versions/{ver}/publish", "POST /v1/flows/{id}/sessions",
+			"GET /v1/flows/{id}/sessions", "GET /v1/flows/{id}/sessions/{sessionID}",
+			"POST /v1/flows/{id}/sessions/{sessionID}/pause",
+			"POST /v1/flows/{id}/sessions/{sessionID}/resume",
+			"POST /v1/flows/{id}/sessions/{sessionID}/end",
+			"POST /v1/flows/{id}/sessions/{sessionID}/events",
+			"GET /v1/flows/{id}/sessions/{sessionID}/events",
+			"POST /v1/flows/{id}/runs", "GET /v1/flows/{id}/runs",
+			"GET /v1/flow-runs/{runID}", "POST /v1/flow-runs/{runID}/cancel",
+			"POST /v1/flow-runs/{runID}/diagnose", "POST /v1/flow-runs/{runID}/step",
+			"GET /v1/flow-inspection", "POST /v1/flow-runs/{runID}/human/{nodeID}/reply",
+			"GET /v1/human-tasks", "GET /v1/flow-runs/{runID}/events",
+		},
 		"routes_config.go": {
 			"GET /config/meta", "GET /config/schema", "GET /config", "PUT /config",
 			"POST /config/reload", "POST /config/reveal", "GET /config/doctor",

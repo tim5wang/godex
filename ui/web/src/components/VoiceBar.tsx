@@ -1,23 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Tooltip } from "antd";
+import { Button, Select, Space, Tooltip, Typography } from "antd";
 import { AudioOutlined, AudioMutedOutlined } from "@ant-design/icons";
 import { createPCMPlayer, type PCMPlayer } from "../lib/ttsPlayback";
 
+const { Text } = Typography;
+
+interface FlowSessionVoiceTarget {
+  flowId: string;
+  flowSessionId: string;
+  afterSequence: number;
+  eventType: string;
+  outputField?: string;
+}
+
 /**
- * VoiceBar —— 点击式语音输入（M5）。
+ * VoiceBar supports both chat dictation and a FlowSession Realtime turn.
  *
- * 链路：麦克风 PCM(16k s16) → WS /v1/voice → godex 编排桥 → voice-engine
- *       （VAD+ASR → agent → TTS）→ 下行 PCM(24k) → 浏览器播放。
- *
- * 交互：单击开始录音（脉冲动效 + 分段识别回显），再单击停止并发送。
- * 服务端 VAD 负责切分，每个分段完成即回显 asr_partial 文本（准流式反馈）。
- *
- * 状态：未启用（media.audio.voice_enabled=false）时禁用并提示；
- * 连接失败时通过 /v1/voice/status 诊断区分「未启用 / 引擎不可达 / 鉴权失败」。
+ * FlowSession mode sends durable ASR turns into the pinned workflow and plays
+ * terminal string outputs through the same voice-engine connection.
  */
 interface VoiceBarProps {
   token: string | null;
   sessionId: string | null;
+  flowSession?: FlowSessionVoiceTarget;
   /** 后端是否启用了语音（meta.voice_enabled）。false 时禁用按钮。 */
   enabled?: boolean;
   disabled?: boolean;
@@ -30,6 +35,36 @@ interface VoiceMsg {
   code?: string;
   text?: string;
   id?: string;
+  turn_id?: string;
+  source?: string;
+  sequence?: number;
+  source_sequence?: number;
+  event_type?: string;
+  output_field?: string;
+  asr_model?: string;
+  tts_model?: string;
+  vad?: string;
+  models?: string[];
+  asr_models?: string[];
+  vad_models?: string[];
+  tts_models?: string[];
+  default_asr?: string;
+  default_vad?: string;
+  default_tts?: string;
+  event?: { type?: string; sequence?: number; source?: string; source_sequence?: number };
+}
+
+interface FlowVoiceTurn {
+  id: string;
+  source: string;
+  sourceSequence: number;
+}
+
+interface ActiveTTSSpeech {
+  id: string;
+  turnID?: string;
+  source?: string;
+  sourceSequence?: number;
 }
 
 interface VoiceStatus {
@@ -40,40 +75,144 @@ interface VoiceStatus {
 
 const TARGET_RATE = 16000;
 
-export function VoiceBar({ token, sessionId, enabled = true, disabled = false, onResult }: VoiceBarProps) {
+function readStoredSequence(key: string, fallback: number, clampToFallback = true) {
+  try {
+    const value = Number(window.localStorage.getItem(key));
+    return Number.isSafeInteger(value) && value >= 0
+      ? (clampToFallback ? Math.max(value, fallback) : value)
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function nextFlowVoiceTurn(flowId: string, flowSessionId: string) {
+  const prefix = `godex.flow-voice.${flowId}.${flowSessionId}`;
+  let source = "";
+  let sequence = 1;
+  try {
+    const sourceKey = `${prefix}.source`;
+    source = window.localStorage.getItem(sourceKey) ?? "";
+    if (!source) {
+      source = `web-${window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+      window.localStorage.setItem(sourceKey, source);
+    }
+    const sequenceKey = `${prefix}.source-sequence`;
+    sequence = Math.max(0, Number(window.localStorage.getItem(sequenceKey)) || 0) + 1;
+    window.localStorage.setItem(sequenceKey, String(sequence));
+  } catch {
+    source = source || `web-${Date.now()}`;
+    sequence = Date.now();
+  }
+  const turnID = `turn-${window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+  return { source, sequence, turnID };
+}
+
+function matchesFlowVoiceTurn(
+  message: { source?: string; source_sequence?: number; turn_id?: string },
+  turn: FlowVoiceTurn | null,
+) {
+  if (!turn) return true;
+  if (message.source !== turn.source) return true;
+  if (message.source_sequence !== undefined && message.source_sequence < turn.sourceSequence) {
+    return false;
+  }
+  return !message.turn_id || message.turn_id === turn.id;
+}
+
+function rememberAcceptedVoiceSequence(
+  sourceKey: string,
+  sequenceKey: string,
+  source: string | undefined,
+  sequence: number | undefined,
+) {
+  if (!source || !Number.isSafeInteger(sequence) || !sequence || sequence < 1) return;
+  try {
+    if (window.localStorage.getItem(sourceKey) !== source) return;
+    const current = Number(window.localStorage.getItem(sequenceKey)) || 0;
+    if (sequence > current) window.localStorage.setItem(sequenceKey, String(sequence));
+  } catch {
+    /* storage is optional; the event journal remains durable */
+  }
+}
+
+export function VoiceBar({
+  token,
+  sessionId,
+  flowSession,
+  enabled = true,
+  disabled = false,
+  onResult,
+}: VoiceBarProps) {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
+  const [awaitingResult, setAwaitingResult] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 录音期间累计的识别文本（每个 asr_partial 分段追加）。
   const [partial, setPartial] = useState<string>("");
-  // 同步 ref：stopListening（空依赖 useCallback）需要读到最新累计文本。
+  const [assistantText, setAssistantText] = useState("");
+  const [asrModels, setAsrModels] = useState<string[]>([]);
+  const [ttsModels, setTtsModels] = useState<string[]>([]);
+  const [asrModel, setAsrModel] = useState("");
+  const [ttsModel, setTtsModel] = useState("");
+  const [vadMode, setVadMode] = useState("server");
   const partialRef = useRef<string>("");
-  // asr_end 等待标记：stopListening 后服务端 flush 完成回 asr_end 再填充。
+  const finalTranscriptRef = useRef("");
   const pendingEndRef = useRef(false);
-  // asr_end 兜底超时 timer（stopListening 时启动，卸载/重录时清理）。
   const endTimerRef = useRef<number | null>(null);
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
+  const flowSessionID = flowSession?.flowSessionId ?? "";
+  const flowId = flowSession?.flowId ?? "";
+  const isFlowSession = Boolean(flowId && flowSessionID);
+  const flowVoicePrefix = `godex.flow-voice.${flowId}.${flowSessionID}`;
+  const sourceKey = `${flowVoicePrefix}.source`;
+  const sourceSequenceKey = `${flowVoicePrefix}.source-sequence`;
+  const eventCursorKey = `${flowVoicePrefix}.event-sequence`;
+  const voiceCursorKey = `${flowVoicePrefix}.voice-sequence`;
+  const initialAfterSequenceRef = useRef(flowSession?.afterSequence ?? 0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
-  // TTS 下行播放器（首帧即播、后续帧排队续播）。
   const ttsPlayerRef = useRef<PCMPlayer | null>(null);
+  const activeFlowTurnRef = useRef<FlowVoiceTurn | null>(null);
+  const activeTTSSpeechRef = useRef<ActiveTTSSpeech | null>(null);
+  const eventCursorRef = useRef(0);
+  const voiceCursorRef = useRef(0);
 
   const wsUrl = useCallback(() => {
     const base = window.location.origin.replace(/^http/, "ws");
     const params = new URLSearchParams();
     if (token) params.set("token", token);
     if (sessionId) params.set("session_id", sessionId);
+    if (isFlowSession) {
+      params.set("flow_id", flowId);
+      params.set("flow_session_id", flowSessionID);
+      eventCursorRef.current = readStoredSequence(eventCursorKey, initialAfterSequenceRef.current);
+      voiceCursorRef.current = readStoredSequence(
+        voiceCursorKey,
+        initialAfterSequenceRef.current,
+        false,
+      );
+      params.set("after_sequence", String(eventCursorRef.current));
+      params.set("voice_after_sequence", String(voiceCursorRef.current));
+    }
     return `${base}/v1/voice?${params.toString()}`;
-  }, [token, sessionId]);
+  }, [
+    token,
+    sessionId,
+    isFlowSession,
+    flowId,
+    flowSessionID,
+    eventCursorKey,
+    voiceCursorKey,
+  ]);
 
   // 连接 /v1/voice
   useEffect(() => {
-    if (disabled || !sessionId || !enabled) return;
+    if (disabled || (!sessionId && !isFlowSession) || !enabled) return;
     let closed = false;
     const ws = new WebSocket(wsUrl());
     wsRef.current = ws;
@@ -82,12 +221,28 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
       if (closed) return;
       setConnected(true);
       setError(null);
-      ws.send(JSON.stringify({ type: "start" } satisfies VoiceMsg));
+      if (!isFlowSession) {
+        ws.send(JSON.stringify({ type: "start" } satisfies VoiceMsg));
+      }
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") {
-        // 下行 TTS PCM（binary）→ 共享播放器排队播放（首帧即播）。
+        const speech = activeTTSSpeechRef.current;
+        const speechID = speech?.id;
+        if (isFlowSession && (!speech || !matchesFlowVoiceTurn(speech, activeFlowTurnRef.current))) {
+          return;
+        }
         void ev.data.arrayBuffer().then((buf: ArrayBuffer) => {
+          if (isFlowSession) {
+            const currentSpeech = activeTTSSpeechRef.current;
+            if (
+              !currentSpeech ||
+              currentSpeech.id !== speechID ||
+              !matchesFlowVoiceTurn(currentSpeech, activeFlowTurnRef.current)
+            ) {
+              return;
+            }
+          }
           if (!ttsPlayerRef.current) {
             ttsPlayerRef.current = createPCMPlayer();
           }
@@ -103,24 +258,100 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
       }
       if (msg.type === "error") {
         setError(msg.text || msg.code || "voice error");
+      } else if (msg.type === "ready") {
+        const listedASR = msg.asr_models?.length
+          ? msg.asr_models
+          : (msg.models ?? []).filter((model) => model.startsWith("asr/"));
+        const listedTTS = msg.tts_models?.length
+          ? msg.tts_models
+          : (msg.models ?? []).filter((model) => model.startsWith("tts/"));
+        setAsrModels(listedASR);
+        setTtsModels(listedTTS);
+        setAsrModel((current) =>
+          current && listedASR.includes(current) ? current : msg.default_asr || listedASR[0] || "",
+        );
+        setTtsModel((current) =>
+          current && listedTTS.includes(current) ? current : msg.default_tts || listedTTS[0] || "",
+        );
       } else if (msg.type === "asr_partial" && msg.text) {
-        // 分段识别回显：追加到累计文本。
-        setPartial((prev) => {
-          const next = prev ? `${prev}${msg.text}` : (msg.text ?? "");
-          partialRef.current = next;
-          return next;
-        });
+        const next = [finalTranscriptRef.current, msg.text].filter(Boolean).join(" ");
+        partialRef.current = next;
+        setPartial(next);
+      } else if (msg.type === "asr_final" && msg.text) {
+        finalTranscriptRef.current = [finalTranscriptRef.current, msg.text].filter(Boolean).join(" ");
+        partialRef.current = finalTranscriptRef.current;
+        setPartial(finalTranscriptRef.current);
       } else if (msg.type === "asr_end") {
-        // 服务端 flush 完成、全部转写下发完毕 → 把累计文本交给调用方。
-        // （在 asr_end 前不填充，避免最后一段识别结果还在途时提前读取。）
         if (pendingEndRef.current) {
           pendingEndRef.current = false;
-          const text = partialRef.current.trim();
-          partialRef.current = "";
-          setPartial("");
-          if (text) {
-            onResultRef.current?.(text);
+          setAwaitingResult(false);
+          if (endTimerRef.current !== null) {
+            window.clearTimeout(endTimerRef.current);
+            endTimerRef.current = null;
           }
+          const text = partialRef.current.trim();
+          if (text && !isFlowSession) {
+            onResultRef.current?.(text);
+            partialRef.current = "";
+            finalTranscriptRef.current = "";
+            setPartial("");
+          }
+        }
+      } else if (msg.type === "assistant_text") {
+        if (isFlowSession && !matchesFlowVoiceTurn(msg, activeFlowTurnRef.current)) return;
+        activeTTSSpeechRef.current = null;
+        setAssistantText(msg.text ?? "");
+        ttsPlayerRef.current?.close();
+        ttsPlayerRef.current = null;
+      } else if (msg.type === "tts_start") {
+        if (isFlowSession && !matchesFlowVoiceTurn(msg, activeFlowTurnRef.current)) return;
+        if (msg.id) {
+          activeTTSSpeechRef.current = {
+            id: msg.id,
+            turnID: msg.turn_id,
+            source: msg.source,
+            sourceSequence: msg.source_sequence,
+          };
+        }
+      } else if (msg.type === "tts_done") {
+        if (isFlowSession && activeTTSSpeechRef.current?.id !== msg.id) return;
+        ttsPlayerRef.current?.end();
+        ttsPlayerRef.current = null;
+        activeTTSSpeechRef.current = null;
+      } else if (msg.type === "tts_cancelled") {
+        if (isFlowSession && activeTTSSpeechRef.current?.id !== msg.id) return;
+        ttsPlayerRef.current?.close();
+        ttsPlayerRef.current = null;
+        activeTTSSpeechRef.current = null;
+      } else if (msg.type === "session_event") {
+        const event = msg.event;
+        if (event?.sequence && event.sequence > eventCursorRef.current) {
+          eventCursorRef.current = event.sequence;
+          try {
+            window.localStorage.setItem(eventCursorKey, String(event.sequence));
+          } catch {
+            /* storage is optional; the server journal remains durable */
+          }
+        }
+        rememberAcceptedVoiceSequence(
+          sourceKey,
+          sourceSequenceKey,
+          event?.source,
+          event?.source_sequence,
+        );
+      } else if (msg.type === "flow_event_accepted") {
+        rememberAcceptedVoiceSequence(
+          sourceKey,
+          sourceSequenceKey,
+          msg.source,
+          msg.source_sequence,
+        );
+      } else if ((msg.type === "voice_output_done" || msg.type === "voice_output_skipped") && msg.sequence) {
+        voiceCursorRef.current = Math.max(voiceCursorRef.current, msg.sequence);
+        try {
+          window.localStorage.setItem(voiceCursorKey, String(voiceCursorRef.current));
+        } catch {
+          /* storage is optional; replay may repeat a completed response */
         }
       }
     };
@@ -137,9 +368,22 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
       wsRef.current = null;
       ttsPlayerRef.current?.close();
       ttsPlayerRef.current = null;
+      activeFlowTurnRef.current = null;
+      activeTTSSpeechRef.current = null;
+      setAwaitingResult(false);
       setConnected(false);
     };
-  }, [wsUrl, disabled, sessionId, enabled]);
+  }, [
+    wsUrl,
+    disabled,
+    sessionId,
+    enabled,
+    isFlowSession,
+    sourceKey,
+    sourceSequenceKey,
+    eventCursorKey,
+    voiceCursorKey,
+  ]);
 
   // 开始录音：采集 16k s16 PCM 上行
   const startListening = useCallback(async () => {
@@ -147,12 +391,18 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
       setError("voice not connected");
       return;
     }
-    // 重置上一轮 asr_end 等待状态（防迟到 asr_end 误填充新一轮录音）。
-    pendingEndRef.current = false;
+    if (awaitingResult) return;
     if (endTimerRef.current !== null) {
       window.clearTimeout(endTimerRef.current);
       endTimerRef.current = null;
     }
+    ttsPlayerRef.current?.close();
+    ttsPlayerRef.current = null;
+    activeTTSSpeechRef.current = null;
+    finalTranscriptRef.current = "";
+    partialRef.current = "";
+    setPartial("");
+    setAssistantText("");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -163,6 +413,26 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
       sourceRef.current = source;
       const processor = ctx.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
+
+      if (isFlowSession) {
+        const turn = nextFlowVoiceTurn(flowId, flowSessionID);
+        activeFlowTurnRef.current = {
+          id: turn.turnID,
+          source: turn.source,
+          sourceSequence: turn.sequence,
+        };
+        wsRef.current.send(JSON.stringify({
+          type: "start",
+          turn_id: turn.turnID,
+          source: turn.source,
+          source_sequence: turn.sequence,
+          event_type: flowSession?.eventType,
+          output_field: flowSession?.outputField,
+          asr_model: asrModel,
+          tts_model: ttsModel,
+          vad: vadMode,
+        } satisfies VoiceMsg));
+      }
 
       processor.onaudioprocess = (e) => {
         const input = e.inputBuffer.getChannelData(0); // float32 @ ctx.sampleRate
@@ -193,11 +463,22 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
       source.connect(processor);
       processor.connect(ctx.destination); // 保持处理器活跃（静音输出）
       setListening(true);
+      pendingEndRef.current = false;
       setError(null);
     } catch (err) {
       setError(`mic denied: ${String(err)}`);
     }
-  }, []);
+  }, [
+    awaitingResult,
+    isFlowSession,
+    flowId,
+    flowSessionID,
+    flowSession?.eventType,
+    flowSession?.outputField,
+    asrModel,
+    ttsModel,
+    vadMode,
+  ]);
 
   // 结束录音：停止采集并通知服务端 flush VAD（发送本次语音）。
   const stopListening = useCallback(() => {
@@ -218,15 +499,14 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "audio_end" } satisfies VoiceMsg));
       pendingEndRef.current = true;
-      // 兜底：asr_end 迟迟未到（连接中断等）时超时后也把已识别文本交给调用方。
+      setAwaitingResult(true);
       endTimerRef.current = window.setTimeout(() => {
         endTimerRef.current = null;
         if (!pendingEndRef.current) return;
         pendingEndRef.current = false;
+        setAwaitingResult(false);
         const text = partialRef.current.trim();
-        partialRef.current = "";
-        setPartial("");
-        if (text) {
+        if (text && !isFlowSession) {
           onResultRef.current?.(text);
         }
       }, 2500);
@@ -241,7 +521,7 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
     }
     // 不再立即读 partialRef：等服务端 flush 完成回 asr_end 再填充，
     // 避免最后一段识别结果还在途时提前读取（点击结束有时不填充）。
-  }, []);
+  }, [isFlowSession]);
 
   useEffect(() => () => stopListening(), [stopListening]);
 
@@ -262,6 +542,8 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
       stopListening();
     } else {
       setPartial("");
+      finalTranscriptRef.current = "";
+      partialRef.current = "";
       void startListening();
     }
   }, [listening, startListening, stopListening]);
@@ -269,15 +551,52 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
   const notEnabled = !enabled;
   const tip = notEnabled
     ? "语音未启用（设置 → Media / Audio → Voice Chat Enabled）"
-    : error ?? (listening ? "录音中…点击停止，识别文本将填入输入框" : connected ? "点击开始说话" : "语音未连接");
+    : error ?? (listening ? "录音中…点击停止" : awaitingResult ? "正在完成语音识别…" : connected ? "点击开始说话" : "语音未连接");
 
   return (
-    <>
+    <Space wrap size={6}>
+      {isFlowSession && asrModels.length > 0 && (
+        <Select
+          size="small"
+          aria-label="ASR model"
+          value={asrModel || undefined}
+          options={asrModels.map((model) => ({ value: model, label: model.replace(/^asr\//, "") }))}
+          onChange={setAsrModel}
+          style={{ width: 170 }}
+          disabled={listening || awaitingResult}
+        />
+      )}
+      {isFlowSession && asrModel.includes("zipformer") && (
+        <Select
+          size="small"
+          aria-label="VAD mode"
+          value={vadMode}
+          options={[
+            { value: "none", label: "Push-to-talk" },
+            { value: "server", label: "Server VAD" },
+          ]}
+          onChange={setVadMode}
+          style={{ width: 125 }}
+          disabled={listening || awaitingResult}
+        />
+      )}
+      {isFlowSession && ttsModels.length > 1 && (
+        <Select
+          size="small"
+          aria-label="TTS model"
+          value={ttsModel || undefined}
+          options={ttsModels.map((model) => ({ value: model, label: model.replace(/^tts\//, "") }))}
+          onChange={setTtsModel}
+          style={{ width: 150 }}
+          disabled={listening || awaitingResult}
+        />
+      )}
       {partial && (
         <Tooltip title="已识别内容（分段实时回显）">
           <span className="voice-partial">🎙 {partial}</span>
         </Tooltip>
       )}
+      {assistantText && <Text type="secondary" style={{ maxWidth: 320 }} ellipsis>{assistantText}</Text>}
       <Tooltip title={tip}>
         <Button
           size="small"
@@ -286,12 +605,12 @@ export function VoiceBar({ token, sessionId, enabled = true, disabled = false, o
           danger={listening}
           className={listening ? "voice-btn-recording" : undefined}
           icon={listening ? <AudioOutlined /> : <AudioMutedOutlined />}
-          disabled={disabled || !connected || notEnabled}
+          disabled={disabled || !connected || !enabled || awaitingResult}
           onClick={toggle}
           aria-label={listening ? "停止录音并发送" : "开始语音输入"}
         />
       </Tooltip>
-    </>
+    </Space>
   );
 }
 

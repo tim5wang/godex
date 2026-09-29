@@ -19,6 +19,7 @@ import (
 )
 
 type durableSubagentStartRequest struct {
+	IdempotencyKey    string
 	Prompt            string
 	AgentType         string
 	WriteScope        []string
@@ -68,6 +69,7 @@ func (a *Agent) startDurableSubagentWithContext(ctx context.Context, req durable
 	// bundle 集合不含 writing/core_code 时显式 scope 也被忽略（天然只读）。
 	writeScope := resolveSubagentWriteScope(req.AgentType, req.WriteScope, role, hasRole, allBundles)
 	start := subagentStartOptions{
+		IdempotencyKey:    req.IdempotencyKey,
 		SessionID:         target.sessionID,
 		ParentTurnID:      target.turnID,
 		ParentID:          target.turnID,

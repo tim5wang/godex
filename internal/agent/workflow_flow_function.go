@@ -521,9 +521,13 @@ func runJSFunction(ctx context.Context, spec *workflowFunctionSpec, handlerCtx m
 	done := make(chan struct{})
 	var callRes goja.Value
 	var callErr error
+	eventArg := handlerCtx["event"]
+	if eventArg == nil {
+		eventArg = map[string]any{}
+	}
 	go func() {
 		defer close(done)
-		callRes, callErr = fn(goja.Undefined(), vm.ToValue(handlerCtx), vm.ToValue(map[string]any{}))
+		callRes, callErr = fn(goja.Undefined(), vm.ToValue(handlerCtx), vm.ToValue(eventArg))
 	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

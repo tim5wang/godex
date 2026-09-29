@@ -533,3 +533,128 @@ func TestFlowsRunEventsPoll(t *testing.T) {
 		t.Fatalf("expected created/start in poll events, got %s", body)
 	}
 }
+
+func TestFlowSessionHTTPAPI(t *testing.T) {
+	server := newFlowsTestServer(t)
+	def := &flow.Definition{
+		FlowID:        "fl_http_session",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: flow.ExecutionModeSession,
+		SessionWorkflow: &flow.SessionWorkflowSpec{Triggers: []flow.SessionTrigger{
+			{EventType: "turn.started", EntryNode: "respond"},
+			{EventType: "state.snapshot", EntryNode: "respond", Delivery: flow.SessionDeliveryLatestWins},
+		}},
+		Nodes: []flow.Node{
+			{ID: "respond", Kind: flow.KindFunction, Function: &flow.FunctionSpec{
+				Runtime: flow.FunctionRuntimeJS,
+				Source:  `function handle(ctx, event) { return {}; }`,
+			}},
+		},
+	}
+	resp, raw := doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows", map[string]any{
+		"flow_id":    def.FlowID,
+		"version":    def.Version,
+		"definition": def,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session flow status = %d, body: %s", resp.StatusCode, raw)
+	}
+
+	resp, raw = doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows/"+def.FlowID+"/sessions", map[string]any{
+		"version": "1",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d, body: %s", resp.StatusCode, raw)
+	}
+	var session agent.FlowSessionView
+	if err := json.Unmarshal(raw, &session); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if session.Status != "active" || session.Version != "1" || session.Digest == "" {
+		t.Fatalf("unexpected created session: %+v", session)
+	}
+	baseURL := server.URL + "/v1/flows/" + def.FlowID + "/sessions/" + session.SessionID
+	resp, raw = doFlowJSON(t, http.MethodPost, baseURL+"/signals", map[string]any{
+		"source": "voice-adapter", "type": "state.snapshot", "payload": map[string]any{"value": "x"},
+	})
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("signal should require a started runtime, status=%d body=%s", resp.StatusCode, raw)
+	}
+
+	// A session-mode definition must not be accidentally executable as a
+	// request-scoped FlowRun.
+	resp, raw = doFlowJSON(t, http.MethodPost, server.URL+"/v1/flows/"+def.FlowID+"/runs", nil)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("session FlowRun status = %d, body: %s", resp.StatusCode, raw)
+	}
+
+	eventInput := map[string]any{
+		"source":          "voice-adapter",
+		"source_sequence": 1,
+		"type":            "turn.started",
+		"payload":         map[string]any{"turn": 1},
+	}
+	eventURL := server.URL + "/v1/flows/" + def.FlowID + "/sessions/" + session.SessionID + "/events"
+	resp, raw = doFlowJSON(t, http.MethodPost, eventURL, eventInput)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("append event status = %d, body: %s", resp.StatusCode, raw)
+	}
+	var receipt agent.FlowSessionEventReceipt
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatalf("decode event receipt: %v", err)
+	}
+	if receipt.Sequence != 1 || receipt.Duplicate {
+		t.Fatalf("unexpected first receipt: %+v", receipt)
+	}
+	resp, raw = doFlowJSON(t, http.MethodPost, eventURL, eventInput)
+	if resp.StatusCode != http.StatusAccepted || json.Unmarshal(raw, &receipt) != nil || !receipt.Duplicate || receipt.Sequence != 1 {
+		t.Fatalf("expected idempotent duplicate receipt, status=%d body=%s receipt=%+v", resp.StatusCode, raw, receipt)
+	}
+
+	eventsURL := server.URL + "/v1/flows/" + def.FlowID + "/sessions/" + session.SessionID + "/events?after_sequence=0"
+	resp, raw = doFlowJSON(t, http.MethodGet, eventsURL, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list events status = %d, body: %s", resp.StatusCode, raw)
+	}
+	var events []agent.FlowSessionEvent
+	if err := json.Unmarshal(raw, &events); err != nil {
+		t.Fatalf("decode events: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != "turn.started" || events[0].Digest != session.Digest {
+		t.Fatalf("unexpected event page: %+v", events)
+	}
+
+	resp, raw = doFlowJSON(t, http.MethodPost, baseURL+"/pause", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pause status = %d, body: %s", resp.StatusCode, raw)
+	}
+	var paused agent.FlowSessionView
+	if err := json.Unmarshal(raw, &paused); err != nil || paused.Status != "paused" {
+		t.Fatalf("unexpected pause response: %+v err=%v", paused, err)
+	}
+	resp, raw = doFlowJSON(t, http.MethodPost, eventURL, map[string]any{
+		"source": "voice-adapter", "type": "turn.partial",
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("paused event status = %d, body: %s", resp.StatusCode, raw)
+	}
+	resp, raw = doFlowJSON(t, http.MethodPost, baseURL+"/resume", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resume status = %d, body: %s", resp.StatusCode, raw)
+	}
+	resp, raw = doFlowJSON(t, http.MethodPost, baseURL+"/end", map[string]any{"status": "completed"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("end status = %d, body: %s", resp.StatusCode, raw)
+	}
+	var ended agent.FlowSessionView
+	if err := json.Unmarshal(raw, &ended); err != nil || ended.Status != "completed" || ended.LastSequence != 4 {
+		t.Fatalf("unexpected end response: %+v err=%v", ended, err)
+	}
+
+	resp, raw = doFlowJSON(t, http.MethodGet, server.URL+"/v1/flows/"+def.FlowID+"/sessions", nil)
+	var sessions []agent.FlowSessionView
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(raw, &sessions) != nil || len(sessions) != 1 || sessions[0].Status != "completed" {
+		t.Fatalf("list sessions status=%d body=%s sessions=%+v", resp.StatusCode, raw, sessions)
+	}
+}

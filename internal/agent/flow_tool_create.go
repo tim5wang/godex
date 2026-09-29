@@ -29,7 +29,7 @@ type createFlowArgs struct {
 // newCreateFlowTool registers the create_flow agent tool: persist a validated
 // Flow Spec definition as a new draft version of the named flow.
 func newCreateFlowTool(agent *Agent) tools.Tool {
-	return tools.NewTypedTool(tools.NewToolSpec("create_flow", "Persist a Flow Spec v1 definition as a NEW draft version of an existing flow (validated + compiled at save). The flow_id and version are pinned by the calling page — keep them as given. Returns the saved version view (version / nodes / edges / digest). Use after flow_design generate/amend when the user approves the draft.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("create_flow", "Persist a request-mode or session-mode Flow Spec v1 definition as a NEW draft version (validated + compiled at save). The flow_id and version are pinned by the calling page — keep them as given. Returns the saved version view (version / nodes / edges / digest). Call only after the user explicitly approves the preview.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"flow_id":    map[string]string{"type": "string"},

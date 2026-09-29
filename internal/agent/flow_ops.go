@@ -98,6 +98,9 @@ func (a *Agent) CreateFlow(args FlowCreateArgs) (FlowVersionView, error) {
 	if flowID == "" {
 		return FlowVersionView{}, fmt.Errorf("missing flow_id")
 	}
+	flowLock := a.flows.flowLock(flowID)
+	flowLock.Lock()
+	defer flowLock.Unlock()
 	version := strings.TrimSpace(args.Version)
 	if version == "" && def != nil {
 		version = strings.TrimSpace(def.Version)
@@ -120,6 +123,18 @@ func (a *Agent) CreateFlow(args FlowCreateArgs) (FlowVersionView, error) {
 	}
 	if def == nil {
 		def = &flow.Definition{FlowID: flowID, Version: version, Status: status, Nodes: []flow.Node{}, Edges: []flow.Edge{}}
+	}
+	sessions, err := a.flows.listFlowSessions(flowID)
+	if err != nil {
+		return FlowVersionView{}, err
+	}
+	for _, session := range sessions {
+		if session.Version != version || !isActiveFlowSessionStatus(session.Status) {
+			continue
+		}
+		if compiled == nil || session.Digest != compiled.Digest {
+			return FlowVersionView{}, fmt.Errorf("version %s is pinned by active FlowSession %s and cannot be changed", version, session.SessionID)
+		}
 	}
 	now := time.Now().UTC()
 	if err := a.flows.saveVersion(flowID, flowVersionRecord{
@@ -215,7 +230,13 @@ func (a *Agent) DeleteFlowVersion(flowID, version string) error {
 	if a == nil || a.flows == nil {
 		return fmt.Errorf("flow store unavailable")
 	}
+	flowLock := a.flows.flowLock(flowID)
+	flowLock.Lock()
+	defer flowLock.Unlock()
 	if err := a.flowVersionActive(flowID, version); err != nil {
+		return err
+	}
+	if err := a.flowVersionHasActiveSession(flowID, version); err != nil {
 		return err
 	}
 	return a.flows.deleteVersion(flowID, version)
@@ -227,6 +248,9 @@ func (a *Agent) DeleteFlow(flowID string) error {
 	if a == nil || a.flows == nil {
 		return fmt.Errorf("flow store unavailable")
 	}
+	flowLock := a.flows.flowLock(flowID)
+	flowLock.Lock()
+	defer flowLock.Unlock()
 	runs, err := a.flows.listRuns(flowID)
 	if err != nil {
 		return err
@@ -234,6 +258,15 @@ func (a *Agent) DeleteFlow(flowID string) error {
 	for _, r := range runs {
 		if isActiveFlowRunStatus(r.Status) {
 			return fmt.Errorf("flow %s has an active run %s (%s); cancel it first", flowID, r.RunID, r.Status)
+		}
+	}
+	sessions, err := a.flows.listFlowSessions(flowID)
+	if err != nil {
+		return err
+	}
+	for _, session := range sessions {
+		if isActiveFlowSessionStatus(session.Status) {
+			return fmt.Errorf("flow %s has an active session %s (%s); end it first", flowID, session.SessionID, session.Status)
 		}
 	}
 	return a.flows.deleteFlow(flowID)
@@ -248,6 +281,19 @@ func (a *Agent) flowVersionActive(flowID, version string) error {
 	for _, r := range runs {
 		if r.Version == version && isActiveFlowRunStatus(r.Status) {
 			return fmt.Errorf("version %s has an active run %s (%s); cancel it first", version, r.RunID, r.Status)
+		}
+	}
+	return nil
+}
+
+func (a *Agent) flowVersionHasActiveSession(flowID, version string) error {
+	sessions, err := a.flows.listFlowSessions(flowID)
+	if err != nil {
+		return err
+	}
+	for _, session := range sessions {
+		if session.Version == version && isActiveFlowSessionStatus(session.Status) {
+			return fmt.Errorf("version %s has an active session %s (%s); end it first", version, session.SessionID, session.Status)
 		}
 	}
 	return nil
@@ -357,6 +403,9 @@ func (a *Agent) CreateFlowRunIdempotent(ctx context.Context, flowID, version str
 	rec, err := a.ResolveRunVersion(flowID, version)
 	if err != nil {
 		return FlowRunView{}, false, err
+	}
+	if rec.Flow != nil && flow.EffectiveExecutionMode(rec.Flow.ExecutionMode) != flow.ExecutionModeRequest {
+		return FlowRunView{}, false, fmt.Errorf("flow %s version %s uses session execution mode; create a FlowSession instead", flowID, rec.Version)
 	}
 	if err := flow.ValidateInputValues(rec.Flow, inputs); err != nil {
 		return FlowRunView{}, false, err

@@ -15,11 +15,14 @@ import {
 import { MessageFeedV2 } from "../../components/MessageFeedV2";
 import { Composer, type ComposerSubmission } from "../../components/Composer";
 import { buildChatRoute } from "../../lib/chatRoutes";
+import type { FlowDefinition } from "../../lib/apiFlow";
 import { useI18n } from "../../i18n";
 
 const { Text } = Typography;
 
 const FLOW_DESIGNER_TEMPLATE = "flow-designer";
+const FLOW_CANVAS_SNAPSHOT_METADATA_KEY = "godex_flow_canvas_snapshot";
+const MAX_FLOW_CANVAS_SNAPSHOT_BYTES = 64 * 1024;
 
 /**
  * FlowChatPanel — the natural-language flow designer as a REAL chat session.
@@ -40,8 +43,10 @@ export function FlowChatPanel(props: {
   designerSessionId?: string | null;
   /** Called after a turn ends (the agent may have saved a new version). */
   onVersionApplied?: () => void;
+  /** Reads the live editor state, including canvas changes not yet saved. */
+  getCanvasSnapshot?: () => FlowDefinition | undefined;
 }) {
-  const { flowId, token, onVersionApplied, designerSessionId } = props;
+  const { flowId, token, onVersionApplied, designerSessionId, getCanvasSnapshot } = props;
   const { t } = useI18n();
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
@@ -158,11 +163,20 @@ export function FlowChatPanel(props: {
       const pendingId = `user:${Date.now()}`;
       store.getState().addPendingSend({ id: pendingId, kind: "user", text, sender: "You" });
       try {
+        const canvasSnapshot = getCanvasSnapshot?.();
+        const snapshotText = canvasSnapshot ? JSON.stringify(canvasSnapshot) : "";
+        const snapshotBytes = new TextEncoder().encode(snapshotText).byteLength;
+        if (snapshotBytes > MAX_FLOW_CANVAS_SNAPSHOT_BYTES) {
+          throw new Error(t("flows.canvasSnapshotTooLarge"));
+        }
         const result = await submitMessage(effectiveToken, sessionId, {
           source: "web",
           sender: "You",
           text,
           content: text,
+          ...(snapshotText
+            ? { metadata: { [FLOW_CANVAS_SNAPSHOT_METADATA_KEY]: snapshotText } }
+            : {}),
         });
         if (result.turn_id) store.getState().setRunningTurn(result.turn_id);
       } catch (err) {

@@ -14,7 +14,7 @@ import (
 // flowSpecPlanSystemPrompt instructs the model to convert a natural-language
 // business description into a Flow Spec v1 definition (P2.5 natural-language
 // flow creation). The response must be a single JSON object, no fences.
-const flowSpecPlanSystemPrompt = `You are a workflow designer. Convert the user's business process description into a Flow Spec v1 JSON definition.
+const flowSpecPlanSystemPrompt = `You are the Business Flow designer. Convert the user's business process description into a Flow Spec v1 JSON definition.
 
 Respond with ONLY a JSON object (no markdown fences, no commentary) with exactly this shape:
 {
@@ -23,6 +23,7 @@ Respond with ONLY a JSON object (no markdown fences, no commentary) with exactly
   "description": "one-line summary",
   "version": "1",
   "status": "draft",
+  "execution_mode": "request",
   "inputs": [{"name": "order_id", "type": "string", "desc": "..."}],
   "nodes": [
     {"id": "classify", "kind": "step", "title": "...", "prompt": "..."},
@@ -39,14 +40,25 @@ Respond with ONLY a JSON object (no markdown fences, no commentary) with exactly
 
 Rules:
 - 2-8 nodes; ids are short slugs (letters/digits/underscore, no spaces)
-- node kinds: step | llm | decision | human | branch | loop
+- node kinds: step | llm | decision | human | branch | loop | function | service
+- execution_mode defaults to "request": use it for one independent finite DAG per request (including B's HTTP JSON service workflows). Do not split ordinary media requests into frames.
 - a decision node must be followed (via a data_dependency edge) by a branch node whose cases route by the decision's choice ids; branch default_to is mandatory
 - human nodes need human.queue ("ops"/"support"/"finance") and human.result_var
+- function nodes execute their declared handler; service nodes make one HTTP(S) JSON request and require service.method and service.url. Never put credential values in a definition; use an environment-variable reference.
 - edges: "data_dependency" for plain ordering; "handoff" to pass the upstream summary; "condition" edges are only for loop/branch internals
 - prompts may reference declared inputs ONLY as {{inputs.<name>}}; never reference undeclared names
 - inputs: only fields the flow actually reads; mark required fields with required=true
 - when declaring Flow outputs, map each functional output with source="nodes.<node_id>.outputs.<field>"
-- the source field must also be declared in that node's outputs; mark an output required only when every valid path produces it`
+- the source field must also be declared in that node's outputs; mark an output required only when every valid path produces it
+
+For C/D long-lived workflows, use execution_mode="session" and include:
+"session_workflow": {
+  "triggers": [{"event_type": "asr.final", "entry_node": "route", "delivery": "durable", "lane_id": "voice"}],
+  "lanes": [{"id": "voice", "cadence": "event", "deadline_ms": 1000, "class": "standard", "overload_policy": "coalesce_latest"}]
+}
+Trigger fields: event_type, entry_node, delivery ("durable" or "latest_wins"), optional lane_id.
+Lane fields: id, cadence ("event", "periodic", "hybrid"), interval_ms (periodic/hybrid only), deadline_ms, class ("fast", "standard", "slow"), overload_policy ("coalesce_latest", "drop_newest").
+Session Workflow is distinct from FlowRun: it pins one version and is driven by semantic events/signals. Current session regions support function, service, pure llm, durable Agent step, and deterministic branch. Agent steps require durable delivery; periodic/hybrid lanes require latest_wins. Do not design raw audio/video frame processing through the JSON event journal or generic session WebSocket. The current runtime does not support session loop regions, nested/merging branches, binary WebSocket media, or a complete Voice Agent/TTS/game-agent end-to-end flow. If the request requires unsupported behavior, state the limitation instead of inventing fields.`
 
 // flowSpecAmendSystemPrompt instructs the model to MODIFY an existing Flow
 // Spec v1 definition according to a natural-language change request (multi-
@@ -59,14 +71,20 @@ Respond with ONLY a JSON object (no markdown fences, no commentary): the FULL co
 Rules:
 - Keep flow_id/version/status unchanged unless the change explicitly requires otherwise.
 - Keep existing node ids stable unless the change renames/removes them; when removing a node, also remove its edges and fix all references.
-- node kinds: step | llm | decision | human | branch | loop | function
+- Preserve all existing top-level fields, including execution_mode and session_workflow, unless the user explicitly asks to change them.
+- node kinds: step | llm | decision | human | branch | loop | function | service
 - a decision node must be followed (via a data_dependency edge) by a branch node whose cases route by the decision's choice ids; branch default_to is mandatory
 - human nodes need human.queue ("ops"/"support"/"finance") and human.result_var
+- service nodes make one HTTP(S) JSON request; never put credential values in a definition.
 - edges: "data_dependency" for plain ordering; "handoff" to pass the upstream summary; "condition" edges are only for loop/branch internals
 - prompts may reference declared inputs ONLY as {{inputs.<name>}}; never reference undeclared names
 - inputs: only fields the flow actually reads; mark required fields with required=true
 - when declaring Flow outputs, map each functional output with source="nodes.<node_id>.outputs.<field>"
-- the source field must also be declared in that node's outputs; mark an output required only when every valid path produces it`
+- the source field must also be declared in that node's outputs; mark an output required only when every valid path produces it
+- session_workflow.triggers declare event_type, entry_node, delivery (durable|latest_wins), and optional lane_id; lanes declare cadence, interval_ms when periodic/hybrid, deadline_ms, class, and overload_policy
+- Session regions currently support function, service, pure llm, durable Agent step, and deterministic branch only; Agent steps require durable delivery and periodic/hybrid lanes require latest_wins
+- Never model raw audio/video frames as journal events or generic session WebSocket payloads; Session loops, nested/merging branches, binary media, and complete Voice Agent/TTS/game-agent flows are unsupported
+- If the user supplied a current canvas snapshot, treat it as the working definition (including unsaved changes). Return only the complete modified definition as JSON; saving and user approval are handled by the Flow Designer Agent, not this definition generator.`
 
 // GenerateFlowSpec drafts a Flow Spec v1 definition from a natural-language
 // business description via the LLM (P2.5). It validates the result so a

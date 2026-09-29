@@ -45,6 +45,9 @@ func Validate(d *Definition) error {
 	if err := validateDependencyEdges(d, byID); err != nil {
 		return err
 	}
+	if err := validateSessionWorkflow(d, byID); err != nil {
+		return err
+	}
 	return validateExpandedNodeLimit(d)
 }
 
@@ -54,6 +57,11 @@ func validateDefinitionHeader(d *Definition) error {
 	}
 	if strings.TrimSpace(d.FlowID) == "" {
 		return ValidationError{Path: "flow_id", Msg: "missing flow_id"}
+	}
+	switch mode := strings.ToLower(strings.TrimSpace(d.ExecutionMode)); mode {
+	case "", ExecutionModeRequest, ExecutionModeSession:
+	default:
+		return ValidationError{Path: "execution_mode", Msg: fmt.Sprintf("must be %q or %q", ExecutionModeRequest, ExecutionModeSession)}
 	}
 	if len(d.Nodes) == 0 {
 		return ValidationError{Path: "nodes", Msg: "flow has no nodes"}
@@ -124,7 +132,8 @@ func validateStaticNode(d *Definition, n Node, byID map[string]Node) error {
 	if err := validateVarDefs(n.Outputs, p+".outputs"); err != nil {
 		return err
 	}
-	if err := validateVarRefs(n.Prompt, p+".prompt", d, byID); err != nil {
+	allowSessionContext := EffectiveExecutionMode(d.ExecutionMode) == ExecutionModeSession
+	if err := validateVarRefs(n.Prompt, p+".prompt", d, byID, allowSessionContext); err != nil {
 		return err
 	}
 	return validateNodeKindSpec(n, kind, p, d, byID)
@@ -176,6 +185,376 @@ func validateDependencyEdges(d *Definition, byID map[string]Node) error {
 	}
 	if cycle := findCycle(depGraph); cycle != nil {
 		return ValidationError{Path: "edges", Msg: fmt.Sprintf("dependency cycle: %s", strings.Join(cycle, " -> "))}
+	}
+	return nil
+}
+
+func validateSessionWorkflow(d *Definition, byID map[string]Node) error {
+	sessionMode := EffectiveExecutionMode(d.ExecutionMode) == ExecutionModeSession
+	if !sessionMode {
+		if d.SessionWorkflow != nil {
+			return ValidationError{Path: "session_workflow", Msg: "is only valid when execution_mode is session"}
+		}
+		return nil
+	}
+	if d.SessionWorkflow == nil || len(d.SessionWorkflow.Triggers) == 0 {
+		return ValidationError{Path: "session_workflow.triggers", Msg: "session flows require at least one event trigger"}
+	}
+
+	lanesByID := make(map[string]SessionLane, len(d.SessionWorkflow.Lanes))
+	for i, lane := range d.SessionWorkflow.Lanes {
+		path := fmt.Sprintf("session_workflow.lanes[%d]", i)
+		id := strings.TrimSpace(lane.ID)
+		if id == "" || len(id) > 64 {
+			return ValidationError{Path: path + ".id", Msg: "must be between 1 and 64 characters"}
+		}
+		for _, char := range id {
+			if !(char == '_' || char == '-' || char == '.' ||
+				(char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+				(char >= '0' && char <= '9')) {
+				return ValidationError{Path: path + ".id", Msg: "may contain only letters, numbers, _, - and ."}
+			}
+		}
+		if _, exists := lanesByID[id]; exists {
+			return ValidationError{Path: path + ".id", Msg: fmt.Sprintf("duplicate lane id %q", id)}
+		}
+		lanesByID[id] = lane
+		cadence := strings.ToLower(strings.TrimSpace(lane.Cadence))
+		if cadence == "" {
+			cadence = SessionLaneCadenceEvent
+		}
+		switch cadence {
+		case SessionLaneCadenceEvent:
+			if lane.IntervalMS != 0 {
+				return ValidationError{Path: path + ".interval_ms", Msg: "is only valid for periodic or hybrid cadence"}
+			}
+		case SessionLaneCadencePeriodic, SessionLaneCadenceHybrid:
+			if lane.IntervalMS < 10 || lane.IntervalMS > 24*60*60*1000 {
+				return ValidationError{Path: path + ".interval_ms", Msg: "must be between 10 and 86400000 milliseconds"}
+			}
+		default:
+			return ValidationError{Path: path + ".cadence", Msg: `must be "event", "periodic" or "hybrid"`}
+		}
+		if lane.DeadlineMS < 10 || lane.DeadlineMS > 24*60*60*1000 {
+			return ValidationError{Path: path + ".deadline_ms", Msg: "must be between 10 and 86400000 milliseconds"}
+		}
+		class := strings.ToLower(strings.TrimSpace(lane.Class))
+		switch class {
+		case "", SessionLaneClassFast, SessionLaneClassStandard, SessionLaneClassSlow:
+		default:
+			return ValidationError{Path: path + ".class", Msg: `must be "fast", "standard" or "slow"`}
+		}
+		overload := strings.ToLower(strings.TrimSpace(lane.OverloadPolicy))
+		switch overload {
+		case "", SessionLaneOverloadCoalesceLatest, SessionLaneOverloadDropNewest:
+		default:
+			return ValidationError{Path: path + ".overload_policy", Msg: `must be "coalesce_latest" or "drop_newest"`}
+		}
+	}
+
+	seenEvents := make(map[string]struct{}, len(d.SessionWorkflow.Triggers))
+	seenLanes := make(map[string]struct{}, len(d.SessionWorkflow.Lanes))
+	for i, trigger := range d.SessionWorkflow.Triggers {
+		path := fmt.Sprintf("session_workflow.triggers[%d]", i)
+		eventType := strings.TrimSpace(trigger.EventType)
+		if eventType == "" || len(eventType) > 128 {
+			return ValidationError{Path: path + ".event_type", Msg: "must be between 1 and 128 characters"}
+		}
+		if _, exists := seenEvents[eventType]; exists {
+			return ValidationError{Path: path + ".event_type", Msg: fmt.Sprintf("duplicate trigger for event type %q", eventType)}
+		}
+		seenEvents[eventType] = struct{}{}
+		entryID := strings.TrimSpace(trigger.EntryNode)
+		if entryID == "" {
+			return ValidationError{Path: path + ".entry_node", Msg: "is required"}
+		}
+		if _, exists := byID[entryID]; !exists {
+			return ValidationError{Path: path + ".entry_node", Msg: fmt.Sprintf("unknown node %q", entryID)}
+		}
+		switch delivery := strings.ToLower(strings.TrimSpace(trigger.Delivery)); delivery {
+		case "", SessionDeliveryDurable, SessionDeliveryLatestWins:
+		default:
+			return ValidationError{Path: path + ".delivery", Msg: `must be "durable" or "latest_wins"`}
+		}
+		laneID := strings.TrimSpace(trigger.LaneID)
+		if laneID != "" {
+			lane, exists := lanesByID[laneID]
+			if !exists {
+				return ValidationError{Path: path + ".lane_id", Msg: fmt.Sprintf("unknown lane %q", laneID)}
+			}
+			if _, duplicate := seenLanes[laneID]; duplicate {
+				return ValidationError{Path: path + ".lane_id", Msg: fmt.Sprintf("lane %q may be assigned to only one trigger", laneID)}
+			}
+			seenLanes[laneID] = struct{}{}
+			cadence := strings.ToLower(strings.TrimSpace(lane.Cadence))
+			if cadence == SessionLaneCadencePeriodic || cadence == SessionLaneCadenceHybrid {
+				if EffectiveSessionDelivery(trigger.Delivery) != SessionDeliveryLatestWins {
+					return ValidationError{Path: path + ".delivery", Msg: "periodic and hybrid lanes require latest_wins delivery"}
+				}
+			}
+			if strings.EqualFold(strings.TrimSpace(lane.OverloadPolicy), SessionLaneOverloadDropNewest) &&
+				EffectiveSessionDelivery(trigger.Delivery) != SessionDeliveryLatestWins {
+				return ValidationError{Path: path + ".lane_id", Msg: "drop_newest overload requires latest_wins delivery"}
+			}
+		}
+		if err := validateSessionRegion(d, byID, entryID, path, EffectiveSessionDelivery(trigger.Delivery)); err != nil {
+			return err
+		}
+	}
+	for laneID := range lanesByID {
+		if _, used := seenLanes[laneID]; !used {
+			return ValidationError{Path: "session_workflow.lanes", Msg: fmt.Sprintf("lane %q is not assigned to a trigger", laneID)}
+		}
+	}
+	return nil
+}
+
+func validateSessionRegion(d *Definition, byID map[string]Node, entryID, path, delivery string) error {
+	incoming := make(map[string][]string)
+	outgoing := make(map[string][]string)
+	for _, edge := range d.Edges {
+		edgeType := normalizeEdgeType(edge.EdgeType)
+		if edgeType == EdgeCondition {
+			continue
+		}
+		incoming[edge.To] = append(incoming[edge.To], edge.From)
+		outgoing[edge.From] = append(outgoing[edge.From], edge.To)
+	}
+	if len(incoming[entryID]) != 0 {
+		return ValidationError{Path: path + ".entry_node", Msg: "must not have incoming data_dependency or handoff edges"}
+	}
+
+	region := map[string]struct{}{entryID: {}}
+	queue := []string{entryID}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, next := range outgoing[current] {
+			if _, exists := region[next]; exists {
+				continue
+			}
+			region[next] = struct{}{}
+			queue = append(queue, next)
+		}
+	}
+	for nodeID := range region {
+		node := byID[nodeID]
+		switch kind := normalizeKind(node.Kind); kind {
+		case KindFunction:
+			if node.Function == nil ||
+				!strings.EqualFold(strings.TrimSpace(node.Function.Runtime), FunctionRuntimeJS) ||
+				strings.TrimSpace(node.Function.Ref) != "" {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must be an inline JavaScript function", nodeID)}
+			}
+		case KindService:
+			if node.Service == nil {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must have a service configuration", nodeID)}
+			}
+		case KindLLM:
+			if len(node.Outputs) == 0 {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region LLM node %q must declare outputs", nodeID)}
+			}
+		case KindStep:
+			if delivery != SessionDeliveryDurable {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region Agent node %q requires durable event delivery", nodeID)}
+			}
+			if len(node.Outputs) == 0 {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region Agent node %q must declare outputs", nodeID)}
+			}
+		case KindBranch:
+			if node.Branch == nil {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region branch node %q must have a branch configuration", nodeID)}
+			}
+		default:
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q has unsupported kind %q; session runtime supports function, service, LLM, durable Agent, and branch nodes", nodeID, kind)}
+		}
+		if strings.TrimSpace(node.PreScript) != "" || strings.TrimSpace(node.PostScript) != "" {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must not use pre_script or post_script", nodeID)}
+		}
+		for _, source := range incoming[nodeID] {
+			if _, exists := region[source]; !exists {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q depends on node %q outside its trigger region", nodeID, source)}
+			}
+		}
+		for _, owner := range d.Nodes {
+			switch normalizeKind(owner.Kind) {
+			case KindBranch:
+				if owner.Branch == nil {
+					continue
+				}
+				for _, branchCase := range owner.Branch.Cases {
+					if branchCase.To == nodeID {
+						return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a branch append target", nodeID)}
+					}
+				}
+				if owner.Branch.DefaultTo == nodeID {
+					return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a branch append target", nodeID)}
+				}
+			case KindLoop:
+				if owner.Loop == nil {
+					continue
+				}
+				for _, bodyID := range owner.Loop.Body {
+					if bodyID == nodeID {
+						return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a loop append target", nodeID)}
+					}
+				}
+			}
+		}
+		for _, edge := range d.Edges {
+			if byID[edge.From].ID != "" && normalizeKind(byID[edge.From].Kind) == KindLoop && edge.To == nodeID {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a loop append target", nodeID)}
+			}
+		}
+	}
+	branchTargetOwners := make(map[string]string)
+	branchChainOwners := make(map[string]string)
+	sessionRegionNodes := make(map[string]struct{}, len(region))
+	for nodeID := range region {
+		sessionRegionNodes[nodeID] = struct{}{}
+	}
+	for branchID := range region {
+		branchNode := byID[branchID]
+		if normalizeKind(branchNode.Kind) != KindBranch || branchNode.Branch == nil {
+			continue
+		}
+		targetIDs := make([]string, 0, len(branchNode.Branch.Cases)+1)
+		seenRoutes := make(map[string]struct{}, len(branchNode.Branch.Cases))
+		validatedTargets := make(map[string]struct{}, len(branchNode.Branch.Cases)+1)
+		for _, branchCase := range branchNode.Branch.Cases {
+			route := strings.TrimSpace(branchCase.Name)
+			if route == "" {
+				route = strings.TrimSpace(branchCase.To)
+			}
+			if route == branchDefaultRoute {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("branch node %q case name %q is reserved", branchID, branchDefaultRoute)}
+			}
+			if _, duplicate := seenRoutes[route]; duplicate {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("branch node %q has duplicate route %q", branchID, route)}
+			}
+			seenRoutes[route] = struct{}{}
+			targetIDs = append(targetIDs, strings.TrimSpace(branchCase.To))
+		}
+		targetIDs = append(targetIDs, strings.TrimSpace(branchNode.Branch.DefaultTo))
+		for _, targetID := range targetIDs {
+			if owner, duplicate := branchTargetOwners[targetID]; duplicate && owner != branchID {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q is shared by branch nodes %q and %q", targetID, owner, branchID)}
+			}
+			branchTargetOwners[targetID] = branchID
+			target := byID[targetID]
+			targetKind := normalizeKind(target.Kind)
+			switch targetKind {
+			case KindFunction:
+				if target.Function == nil ||
+					!strings.EqualFold(strings.TrimSpace(target.Function.Runtime), FunctionRuntimeJS) ||
+					strings.TrimSpace(target.Function.Ref) != "" {
+					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q must be an inline JavaScript function", targetID)}
+				}
+			case KindService:
+			case KindLLM:
+				if len(target.Outputs) == 0 {
+					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route LLM node %q must declare outputs", targetID)}
+				}
+			case KindStep:
+				if delivery != SessionDeliveryDurable {
+					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route Agent node %q requires durable event delivery", targetID)}
+				}
+				if len(target.Outputs) == 0 {
+					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route Agent node %q must declare outputs", targetID)}
+				}
+			default:
+				return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q has unsupported kind %q", targetID, targetKind)}
+			}
+			if strings.TrimSpace(target.PreScript) != "" || strings.TrimSpace(target.PostScript) != "" {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q must not use pre_script or post_script", targetID)}
+			}
+
+			if _, alreadyValidated := validatedTargets[targetID]; alreadyValidated {
+				continue
+			}
+			validatedTargets[targetID] = struct{}{}
+			chain := map[string]struct{}{targetID: {}}
+			queue := []string{targetID}
+			for len(queue) > 0 {
+				current := queue[0]
+				queue = queue[1:]
+				for _, next := range outgoing[current] {
+					if _, exists := chain[next]; exists {
+						continue
+					}
+					chain[next] = struct{}{}
+					queue = append(queue, next)
+				}
+			}
+			ownerKey := branchID + "\x00" + targetID
+			for nodeID := range chain {
+				if owner, exists := branchChainOwners[nodeID]; exists && owner != ownerKey {
+					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chains share downstream node %q", nodeID)}
+				}
+				branchChainOwners[nodeID] = ownerKey
+				sessionRegionNodes[nodeID] = struct{}{}
+			}
+			for nodeID := range chain {
+				if nodeID != targetID {
+					if err := validateSessionRouteChainNode(byID[nodeID], nodeID, path, delivery); err != nil {
+						return err
+					}
+				}
+				for _, source := range incoming[nodeID] {
+					if _, inRegion := region[source]; inRegion {
+						continue
+					}
+					if _, inChain := chain[source]; inChain {
+						continue
+					}
+					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain node %q depends on node %q outside its selected route", nodeID, source)}
+				}
+			}
+		}
+	}
+	for _, edge := range d.Edges {
+		if normalizeEdgeType(edge.EdgeType) != EdgeCondition {
+			continue
+		}
+		_, fromInRegion := sessionRegionNodes[edge.From]
+		_, toInRegion := sessionRegionNodes[edge.To]
+		if fromInRegion || toInRegion {
+			return ValidationError{Path: path, Msg: "session regions do not support condition edges"}
+		}
+	}
+	return nil
+}
+
+func validateSessionRouteChainNode(node Node, nodeID, path, delivery string) error {
+	switch kind := normalizeKind(node.Kind); kind {
+	case KindFunction:
+		if node.Function == nil ||
+			!strings.EqualFold(strings.TrimSpace(node.Function.Runtime), FunctionRuntimeJS) ||
+			strings.TrimSpace(node.Function.Ref) != "" {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain node %q must be an inline JavaScript function", nodeID)}
+		}
+	case KindService:
+		if node.Service == nil {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain node %q must have a service configuration", nodeID)}
+		}
+	case KindLLM:
+		if len(node.Outputs) == 0 {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain LLM node %q must declare outputs", nodeID)}
+		}
+	case KindStep:
+		if delivery != SessionDeliveryDurable {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain Agent node %q requires durable event delivery", nodeID)}
+		}
+		if len(node.Outputs) == 0 {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain Agent node %q must declare outputs", nodeID)}
+		}
+	case KindBranch:
+		return ValidationError{Path: path, Msg: fmt.Sprintf("nested branch node %q is not supported in a branch route chain", nodeID)}
+	default:
+		return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain node %q has unsupported kind %q", nodeID, kind)}
+	}
+	if strings.TrimSpace(node.PreScript) != "" || strings.TrimSpace(node.PostScript) != "" {
+		return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain node %q must not use pre_script or post_script", nodeID)}
 	}
 	return nil
 }
@@ -494,11 +873,12 @@ func validHTTPHeaderName(name string) bool {
 }
 
 func validateServiceVarRefs(spec *ServiceSpec, path string, d *Definition, byID map[string]Node) error {
-	if err := validateVarRefs(spec.URL, path+".url", d, byID); err != nil {
+	allowSessionContext := EffectiveExecutionMode(d.ExecutionMode) == ExecutionModeSession
+	if err := validateVarRefs(spec.URL, path+".url", d, byID, allowSessionContext); err != nil {
 		return err
 	}
 	for name, value := range spec.Headers {
-		if err := validateVarRefs(value, path+".headers."+name, d, byID); err != nil {
+		if err := validateVarRefs(value, path+".headers."+name, d, byID, allowSessionContext); err != nil {
 			return err
 		}
 	}
@@ -513,7 +893,7 @@ func validateServiceVarRefs(spec *ServiceSpec, path string, d *Definition, byID 
 	visit = func(value any, currentPath string) error {
 		switch current := value.(type) {
 		case string:
-			return validateVarRefs(current, currentPath, d, byID)
+			return validateVarRefs(current, currentPath, d, byID, allowSessionContext)
 		case map[string]any:
 			for key, child := range current {
 				if err := visit(child, currentPath+"."+key); err != nil {
@@ -532,15 +912,18 @@ func validateServiceVarRefs(spec *ServiceSpec, path string, d *Definition, byID 
 	return visit(body, path+".body")
 }
 
-// validateVarRefs parses {{...}} references in a node's prompt and validates
+// validateVarRefs parses {{...}} references in a node's prompt or service
+// config and validates
 // each reference path against the definition (Flow Spec §3.4):
 //   - {{inputs.<name>}}             -> Flow-level Inputs declaration
 //   - {{nodes.<id>.outputs.<field>}} -> a node's declared Outputs (or the
 //     standard decision/human fields)
+//   - {{event.<field>}} / {{session.<field>}} -> ephemeral Session Workflow
+//     context, only when allowSessionContext is true
 //
 // Unresolvable references are rejected at compile time so a flow that reads a
 // variable that does not exist fails fast instead of silently rendering empty.
-func validateVarRefs(prompt string, p string, d *Definition, byID map[string]Node) error {
+func validateVarRefs(prompt string, p string, d *Definition, byID map[string]Node, allowSessionContext bool) error {
 	if strings.TrimSpace(prompt) == "" {
 		return nil
 	}
@@ -573,6 +956,25 @@ func validateVarRefs(prompt string, p string, d *Definition, byID map[string]Nod
 			field := segments[3]
 			if !nodeOutputsField(target, field) {
 				return ValidationError{Path: p, Msg: fmt.Sprintf("node %q does not declare output %q", nodeID, field)}
+			}
+		case "event":
+			if !allowSessionContext {
+				return ValidationError{Path: p, Msg: "unknown variable scope \"event\" (expected inputs or nodes)"}
+			}
+			switch segments[1] {
+			case "flow_session_id", "flow_id", "version", "source", "source_sequence",
+				"sequence", "type", "correlation_id", "occurred_at", "received_at", "payload":
+			default:
+				return ValidationError{Path: p, Msg: fmt.Sprintf("unknown session event field %q", segments[1])}
+			}
+		case "session":
+			if !allowSessionContext {
+				return ValidationError{Path: p, Msg: "unknown variable scope \"session\" (expected inputs or nodes)"}
+			}
+			switch segments[1] {
+			case "id", "state", "version":
+			default:
+				return ValidationError{Path: p, Msg: fmt.Sprintf("unknown session field %q", segments[1])}
 			}
 		default:
 			return ValidationError{Path: p, Msg: fmt.Sprintf("unknown variable scope %q (expected inputs or nodes)", segments[0])}

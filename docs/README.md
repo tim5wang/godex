@@ -61,6 +61,7 @@
 | [agent-step-sdk.md](./agent-step-sdk.md) | Agent Step TypeScript SDK | Phase B 已实现 |
 | [business-agents-console-design.md](./business-agents-console-design.md) | Business Agents 管理台设计与实现基线 | UI/API 已存在，后续项按文档标注 |
 | [business-flow-runtime-design.md](./business-flow-runtime-design.md) | Business Agents 四层混合智能 Flow 运行时设计（固定编排→低成本决策→LLM 兜底→人工），Flow Spec v1、F0–F4 分期 | F0–F2 已落地（§13/§17），P2.1–P2.5 已落地（§18–§21），画布主体重构（FlowGram = bytedance/flowgram.ai 集成）+ Agent 辅助闭环设计已落地（§22） |
+| [business-flow-canvas-guide.md](./business-flow-canvas-guide.md) | 业务编排画布操作、Flow Designer Agent 协作流程、Session/Lane 配置与运行观测指南 | Active / Partial；C/D 仍有媒体与多进程等端到端缺口 |
 | [extension-runtime-user-guide.md](./extension-runtime-user-guide.md) | Package/MCP/ACP/WASM 使用与信任边界 | Active |
 | [compaction-optimization-plan.md](./compaction-optimization-plan.md) | Compaction Phase 1-4 实施记录与验收 | 已落地 |
 | [session-timeline-inspector.md](./session-timeline-inspector.md) | Timeline inspector 数据与 UI 契约 | 阶段 1/2 已实现 |

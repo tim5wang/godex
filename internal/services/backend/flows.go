@@ -7,6 +7,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,51 @@ import (
 
 // flowsAgentMu guards the lazy workspace-scoped flow agent construction.
 var flowsAgentMu sync.Mutex
+
+var flowSessionEventWatchers = struct {
+	sync.Mutex
+	sessions map[flowSessionRef]map[chan struct{}]struct{}
+}{sessions: make(map[flowSessionRef]map[chan struct{}]struct{})}
+
+// SubscribeFlowSessionEvents returns a coalescing wakeup channel. Consumers
+// should always read the journal from their own cursor after a wakeup.
+func (s *Service) SubscribeFlowSessionEvents(flowID, sessionID string) (<-chan struct{}, func()) {
+	ref := flowSessionRef{flowID: strings.TrimSpace(flowID), sessionID: strings.TrimSpace(sessionID)}
+	changed := make(chan struct{}, 1)
+	flowSessionEventWatchers.Lock()
+	watchers := flowSessionEventWatchers.sessions[ref]
+	if watchers == nil {
+		watchers = make(map[chan struct{}]struct{})
+		flowSessionEventWatchers.sessions[ref] = watchers
+	}
+	watchers[changed] = struct{}{}
+	flowSessionEventWatchers.Unlock()
+
+	var once sync.Once
+	unsubscribe := func() {
+		once.Do(func() {
+			flowSessionEventWatchers.Lock()
+			delete(flowSessionEventWatchers.sessions[ref], changed)
+			if len(flowSessionEventWatchers.sessions[ref]) == 0 {
+				delete(flowSessionEventWatchers.sessions, ref)
+			}
+			close(changed)
+			flowSessionEventWatchers.Unlock()
+		})
+	}
+	return changed, unsubscribe
+}
+
+func notifyFlowSessionChanged(ref flowSessionRef) {
+	flowSessionEventWatchers.Lock()
+	defer flowSessionEventWatchers.Unlock()
+	for changed := range flowSessionEventWatchers.sessions[ref] {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}
+}
 
 // flowAgent returns a workspace-scoped agent used for flow management and
 // run execution. It is rebuilt when the config changes; callers never retain
@@ -122,6 +168,190 @@ func (s *Service) PublishFlow(flowID, version string) (agent.FlowVersionView, er
 		return agent.FlowVersionView{}, err
 	}
 	return a.PublishFlow(flowID, version)
+}
+
+// CreateFlowSession creates a long-lived instance of a session-mode Flow.
+func (s *Service) CreateFlowSession(flowID, version string, inputs map[string]any) (agent.FlowSessionView, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowSessionView{}, err
+	}
+	view, err := a.CreateFlowSession(flowID, version, inputs)
+	if err == nil {
+		if scheduler := s.currentFlowSessionScheduler(); scheduler != nil {
+			if spec, specErr := s.FlowSessionWorkflow(view.FlowID, view.SessionID); specErr == nil {
+				scheduler.syncPeriodicLanes(flowSessionRef{flowID: view.FlowID, sessionID: view.SessionID}, spec)
+			}
+		}
+	}
+	return view, err
+}
+
+// GetFlowSession returns the durable state and any current in-process execution
+// progress for one FlowSession.
+func (s *Service) GetFlowSession(flowID, sessionID string) (agent.FlowSessionView, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowSessionView{}, err
+	}
+	var inFlight *agent.FlowSessionInFlight
+	var inFlightLanes []agent.FlowSessionInFlight
+	if scheduler := s.currentFlowSessionScheduler(); scheduler != nil {
+		ref := flowSessionRef{flowID: flowID, sessionID: sessionID}
+		inFlightLanes = scheduler.inFlightLanes(ref)
+		if len(inFlightLanes) > 0 {
+			inFlight = &inFlightLanes[0]
+		}
+	}
+	view, err := a.GetFlowSession(flowID, sessionID)
+	if err != nil {
+		return agent.FlowSessionView{}, err
+	}
+	view.InFlightLanes = inFlightLanes
+	if inFlight != nil &&
+		(view.LastExecution == nil || view.LastExecution.CompletedAt.Before(inFlight.QueuedAt)) {
+		view.InFlight = inFlight
+	}
+	return view, nil
+}
+
+// FlowSessionWorkflow returns the version-pinned trigger/lane contract.
+func (s *Service) FlowSessionWorkflow(flowID, sessionID string) (*flow.SessionWorkflowSpec, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return nil, err
+	}
+	return a.GetFlowSessionWorkflow(flowID, sessionID)
+}
+
+// ListFlowSessions returns sessions for one Flow, newest first.
+func (s *Service) ListFlowSessions(flowID string) ([]agent.FlowSessionView, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return nil, err
+	}
+	return a.ListFlowSessions(flowID)
+}
+
+// PauseFlowSession pauses event ingress for one FlowSession.
+func (s *Service) PauseFlowSession(flowID, sessionID string) (agent.FlowSessionView, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowSessionView{}, err
+	}
+	view, err := a.PauseFlowSession(flowID, sessionID)
+	if err == nil {
+		notifyFlowSessionChanged(flowSessionRef{flowID: strings.TrimSpace(flowID), sessionID: strings.TrimSpace(sessionID)})
+		if scheduler := s.currentFlowSessionScheduler(); scheduler != nil {
+			scheduler.cancelSession(flowSessionRef{flowID: flowID, sessionID: sessionID}, true)
+			scheduler.setPeriodicActive(flowSessionRef{flowID: flowID, sessionID: sessionID}, false)
+		}
+	}
+	return view, err
+}
+
+// ResumeFlowSession resumes a paused FlowSession.
+func (s *Service) ResumeFlowSession(flowID, sessionID string) (agent.FlowSessionView, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowSessionView{}, err
+	}
+	view, err := a.ResumeFlowSession(flowID, sessionID)
+	if err == nil {
+		if scheduler := s.currentFlowSessionScheduler(); scheduler != nil {
+			scheduler.setPeriodicActive(flowSessionRef{flowID: flowID, sessionID: sessionID}, true)
+			scheduler.wake(flowSessionRef{flowID: flowID, sessionID: sessionID})
+		}
+		notifyFlowSessionChanged(flowSessionRef{flowID: strings.TrimSpace(flowID), sessionID: strings.TrimSpace(sessionID)})
+	}
+	return view, err
+}
+
+// EndFlowSession completes or cancels one FlowSession.
+func (s *Service) EndFlowSession(flowID, sessionID, outcome string) (agent.FlowSessionView, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowSessionView{}, err
+	}
+	view, err := a.EndFlowSession(flowID, sessionID, outcome)
+	if err == nil {
+		notifyFlowSessionChanged(flowSessionRef{flowID: strings.TrimSpace(flowID), sessionID: strings.TrimSpace(sessionID)})
+		if scheduler := s.currentFlowSessionScheduler(); scheduler != nil {
+			scheduler.cancelSession(flowSessionRef{flowID: flowID, sessionID: sessionID}, false)
+		}
+	}
+	return view, err
+}
+
+// AppendFlowSessionEvent durably records one ordered semantic/control event.
+func (s *Service) AppendFlowSessionEvent(flowID, sessionID string, input agent.FlowSessionEventInput) (agent.FlowSessionEventReceipt, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowSessionEventReceipt{}, err
+	}
+	receipt, err := a.AppendFlowSessionEvent(flowID, sessionID, input)
+	if err == nil {
+		notifyFlowSessionChanged(flowSessionRef{flowID: strings.TrimSpace(flowID), sessionID: strings.TrimSpace(sessionID)})
+		if scheduler := s.currentFlowSessionScheduler(); scheduler != nil {
+			scheduler.wake(flowSessionRef{flowID: flowID, sessionID: sessionID})
+		}
+	}
+	return receipt, err
+}
+
+// PublishFlowSessionSignal submits replaceable state through an in-memory
+// latest-wins slot; signal payloads are neither journaled nor replayed.
+func (s *Service) PublishFlowSessionSignal(flowID, sessionID string, input agent.FlowSessionEventInput) (agent.FlowSessionSignalReceipt, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return agent.FlowSessionSignalReceipt{}, err
+	}
+	input, err = a.PrepareFlowSessionSignal(flowID, sessionID, input)
+	if err != nil {
+		return agent.FlowSessionSignalReceipt{}, err
+	}
+	scheduler := s.currentFlowSessionScheduler()
+	if scheduler == nil {
+		return agent.FlowSessionSignalReceipt{}, ErrFlowSessionRuntimeUnavailable
+	}
+	coalesced, err := scheduler.publishSignal(flowSessionRef{flowID: flowID, sessionID: sessionID}, input)
+	if err != nil {
+		return agent.FlowSessionSignalReceipt{}, err
+	}
+	return agent.FlowSessionSignalReceipt{SessionID: sessionID, Coalesced: coalesced}, nil
+}
+
+func (s *Service) currentFlowSessionScheduler() *flowSessionScheduler {
+	if s == nil {
+		return nil
+	}
+	s.flowReconcilerMu.Lock()
+	defer s.flowReconcilerMu.Unlock()
+	return s.flowSessionScheduler
+}
+
+// FlowSessionEvents reads a page of durable session events after a sequence.
+func (s *Service) FlowSessionEvents(flowID, sessionID string, afterSequence uint64, limit int) ([]agent.FlowSessionEvent, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return nil, err
+	}
+	return a.FlowSessionEvents(flowID, sessionID, afterSequence, limit)
+}
+
+// FlowSessionEventPage returns a journal page and the byte offset for its
+// successor, avoiding repeated scans of the historical prefix in stream pumps.
+func (s *Service) FlowSessionEventPage(
+	flowID, sessionID string,
+	afterSequence uint64,
+	offset int64,
+	limit int,
+) ([]agent.FlowSessionEvent, int64, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return nil, offset, err
+	}
+	return a.FlowSessionEventPage(flowID, sessionID, afterSequence, offset, limit)
 }
 
 // CreateFlowRun starts a run: resolves the version, creates the durable

@@ -10,6 +10,7 @@ const localGoDexWorkerID = "worker:godex:local"
 
 func workerRequestFromSubagentStartOptions(start subagentStartOptions) workerruntime.JobRequest {
 	return workerruntime.JobRequest{
+		IdempotencyKey: strings.TrimSpace(start.IdempotencyKey),
 		WorkerID:       firstNonEmpty(strings.TrimSpace(start.WorkerID), localGoDexWorkerID),
 		SessionID:      strings.TrimSpace(start.SessionID),
 		ParentTurnID:   strings.TrimSpace(start.ParentTurnID),
@@ -44,6 +45,7 @@ func workerRequestFromSubagentStartOptions(start subagentStartOptions) workerrun
 func subagentStartOptionsFromWorkerRequest(req workerruntime.JobRequest, maxConcurrent int) subagentStartOptions {
 	req = req.Clone()
 	return subagentStartOptions{
+		IdempotencyKey:    req.IdempotencyKey,
 		SessionID:         req.SessionID,
 		ParentTurnID:      req.ParentTurnID,
 		ParentID:          req.ParentID,

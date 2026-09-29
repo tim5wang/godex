@@ -363,6 +363,7 @@ type Service struct {
 	flowReconcilerMu     sync.Mutex
 	flowReconcilerCancel context.CancelFunc
 	flowReconcilerDone   chan struct{}
+	flowSessionScheduler *flowSessionScheduler
 }
 
 type sessionLockContextKey struct{}

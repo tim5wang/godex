@@ -11,14 +11,16 @@ import (
 // It mirrors the durable engine's node/edge inputs so the agent layer can map
 // it 1:1 onto workflowNodeInput/workflowEdgeInput (design doc §4/§5).
 type Compiled struct {
-	FlowID     string         `json:"flow_id"`
-	Version    string         `json:"version"`
-	TimeoutSec int            `json:"timeout_sec,omitempty"`
-	Inputs     []VarDef       `json:"inputs,omitempty"`
-	Outputs    []VarDef       `json:"outputs,omitempty"`
-	Nodes      []CompiledNode `json:"nodes"`
-	Edges      []CompiledEdge `json:"edges"`
-	Digest     string         `json:"digest"`
+	FlowID          string               `json:"flow_id"`
+	Version         string               `json:"version"`
+	ExecutionMode   string               `json:"execution_mode,omitempty"`
+	SessionWorkflow *SessionWorkflowSpec `json:"session_workflow,omitempty"`
+	TimeoutSec      int                  `json:"timeout_sec,omitempty"`
+	Inputs          []VarDef             `json:"inputs,omitempty"`
+	Outputs         []VarDef             `json:"outputs,omitempty"`
+	Nodes           []CompiledNode       `json:"nodes"`
+	Edges           []CompiledEdge       `json:"edges"`
+	Digest          string               `json:"digest"`
 	// Network is the Flow-level outbound network policy for function and
 	// service nodes; carried onto the durable workflow for runtime enforcement.
 	Network *NetworkPolicy `json:"network,omitempty"`
@@ -147,17 +149,53 @@ func Compile(d *Definition) (*Compiled, error) {
 
 	sortNodes(nodes)
 	c := &Compiled{
-		FlowID:     d.FlowID,
-		Version:    d.Version,
-		TimeoutSec: d.TimeoutSec,
-		Inputs:     append([]VarDef{}, d.Inputs...),
-		Outputs:    append([]VarDef{}, d.Outputs...),
-		Nodes:      nodes,
-		Edges:      edges,
-		Network:    d.Network,
+		FlowID:          d.FlowID,
+		Version:         d.Version,
+		ExecutionMode:   EffectiveExecutionMode(d.ExecutionMode),
+		SessionWorkflow: normalizeSessionWorkflow(d.SessionWorkflow),
+		TimeoutSec:      d.TimeoutSec,
+		Inputs:          append([]VarDef{}, d.Inputs...),
+		Outputs:         append([]VarDef{}, d.Outputs...),
+		Nodes:           nodes,
+		Edges:           edges,
+		Network:         d.Network,
 	}
 	c.Digest = c.computeDigest()
 	return c, nil
+}
+
+func normalizeSessionWorkflow(spec *SessionWorkflowSpec) *SessionWorkflowSpec {
+	if spec == nil {
+		return nil
+	}
+	out := &SessionWorkflowSpec{
+		Triggers: make([]SessionTrigger, 0, len(spec.Triggers)),
+		Lanes:    make([]SessionLane, 0, len(spec.Lanes)),
+	}
+	for _, trigger := range spec.Triggers {
+		trigger.EventType = strings.TrimSpace(trigger.EventType)
+		trigger.EntryNode = strings.TrimSpace(trigger.EntryNode)
+		trigger.Delivery = EffectiveSessionDelivery(trigger.Delivery)
+		trigger.LaneID = strings.TrimSpace(trigger.LaneID)
+		out.Triggers = append(out.Triggers, trigger)
+	}
+	for _, lane := range spec.Lanes {
+		lane.ID = strings.TrimSpace(lane.ID)
+		lane.Cadence = strings.ToLower(strings.TrimSpace(lane.Cadence))
+		if lane.Cadence == "" {
+			lane.Cadence = SessionLaneCadenceEvent
+		}
+		lane.Class = strings.ToLower(strings.TrimSpace(lane.Class))
+		if lane.Class == "" {
+			lane.Class = SessionLaneClassStandard
+		}
+		lane.OverloadPolicy = strings.ToLower(strings.TrimSpace(lane.OverloadPolicy))
+		if lane.OverloadPolicy == "" {
+			lane.OverloadPolicy = SessionLaneOverloadCoalesceLatest
+		}
+		out.Lanes = append(out.Lanes, lane)
+	}
+	return out
 }
 
 func collectCompileTargets(d *Definition) (map[string]struct{}, map[string][]string) {
@@ -574,14 +612,25 @@ func branchRoute(c BranchCase) string {
 }
 
 func (c *Compiled) computeDigest() string {
+	// Keep pre-session request-flow digests stable: omitted execution_mode
+	// historically meant request mode and is semantically identical.
+	executionMode := c.ExecutionMode
+	if executionMode == ExecutionModeRequest {
+		executionMode = ""
+	}
 	raw, _ := json.Marshal(struct {
-		TimeoutSec int            `json:"timeout_sec,omitempty"`
-		Inputs     []VarDef       `json:"inputs,omitempty"`
-		Outputs    []VarDef       `json:"outputs,omitempty"`
-		Network    *NetworkPolicy `json:"network,omitempty"`
-		Nodes      []CompiledNode `json:"nodes"`
-		Edges      []CompiledEdge `json:"edges"`
-	}{c.TimeoutSec, c.Inputs, c.Outputs, c.Network, c.Nodes, c.Edges})
+		ExecutionMode   string               `json:"execution_mode,omitempty"`
+		SessionWorkflow *SessionWorkflowSpec `json:"session_workflow,omitempty"`
+		TimeoutSec      int                  `json:"timeout_sec,omitempty"`
+		Inputs          []VarDef             `json:"inputs,omitempty"`
+		Outputs         []VarDef             `json:"outputs,omitempty"`
+		Network         *NetworkPolicy       `json:"network,omitempty"`
+		Nodes           []CompiledNode       `json:"nodes"`
+		Edges           []CompiledEdge       `json:"edges"`
+	}{
+		executionMode, c.SessionWorkflow, c.TimeoutSec, c.Inputs, c.Outputs,
+		c.Network, c.Nodes, c.Edges,
+	})
 	sum := sha256.Sum256(raw)
 	return fmt.Sprintf("%x", sum[:16])
 }

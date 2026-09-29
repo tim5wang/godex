@@ -28,9 +28,12 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
+	sessionScheduler := newFlowSessionScheduler(s, runCtx)
 	s.flowReconcilerCancel = cancel
 	s.flowReconcilerDone = done
+	s.flowSessionScheduler = sessionScheduler
 	go s.runFlowRunReconciler(runCtx, done)
+	go sessionScheduler.run()
 	return nil
 }
 
@@ -42,26 +45,44 @@ func (s *Service) Stop(ctx context.Context) error {
 	s.flowReconcilerMu.Lock()
 	cancel := s.flowReconcilerCancel
 	done := s.flowReconcilerDone
+	sessionScheduler := s.flowSessionScheduler
 	s.flowReconcilerCancel = nil
 	s.flowReconcilerDone = nil
+	s.flowSessionScheduler = nil
 	s.flowReconcilerMu.Unlock()
-	if cancel == nil {
+	if cancel == nil && sessionScheduler == nil {
 		return nil
 	}
-	cancel()
-	if done == nil {
-		return nil
+	if cancel != nil {
+		cancel()
 	}
 	if ctx == nil {
-		<-done
+		if done != nil {
+			<-done
+		}
+		if sessionScheduler != nil {
+			<-sessionScheduler.done
+		}
 		return nil
 	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	for _, wait := range []<-chan struct{}{done, flowSessionSchedulerDone(sessionScheduler)} {
+		if wait == nil {
+			continue
+		}
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	return nil
+}
+
+func flowSessionSchedulerDone(scheduler *flowSessionScheduler) <-chan struct{} {
+	if scheduler == nil {
+		return nil
+	}
+	return scheduler.done
 }
 
 func (s *Service) runFlowRunReconciler(ctx context.Context, done chan struct{}) {

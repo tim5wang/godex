@@ -1116,6 +1116,6 @@ func flowDesignerContext(a *agent.Agent, flowID string) string {
 		}
 		fmt.Fprintf(&b, " 当前草稿 v%s：%d 个节点 / %d 条边。", view.Version, len(def.Nodes), len(def.Edges))
 	}
-	fmt.Fprintf(&b, " 可用 flow_design action=read (flow_id=%s) 读取完整定义，或 generate/amend/validate 继续设计，最终用 create_flow 保存新版本（flow_id 固定为 %s，勿改）。", flowID, flowID)
+	fmt.Fprintf(&b, " 可用 flow_design action=read (flow_id=%s) 读取已保存完整定义，或 generate/amend/validate 继续设计；Flow 默认 request，B 类 HTTP/JSON 服务请求不拆帧；C/D 长会话使用 session_workflow triggers/lanes 和语义事件。画布每次发送会附带当前工作快照（含未保存修改），快照优先于旧草稿且只对当前轮有效。先给出变更预览并取得明确确认，再用 create_flow 保存新草稿版本（flow_id 固定为 %s；优先沿用快照中的下一版本号）。需要操作和运行时说明时先调用 godex_docs get flow-spec，再用 read_file 阅读返回的 docs/business-flow-canvas-guide.md 或 docs/business-flow-runtime-design.md。", flowID, flowID)
 	return b.String()
 }

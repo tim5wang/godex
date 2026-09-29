@@ -74,6 +74,9 @@ type workflowSummary struct {
 	// RunInputs are the flow-run inputs (P2.3) available to prompt variable
 	// references {{inputs.<name>}}. Written once at CreateFlowRun.
 	RunInputs map[string]any `json:"run_inputs,omitempty"`
+	// TemplateVars are transient roots used while rendering session service
+	// specs. They are never persisted with a durable workflow summary.
+	TemplateVars map[string]any `json:"-"`
 	// RunOutputSpec and RunOutputs carry the versioned Flow output contract
 	// and its resolved values for this durable run.
 	RunOutputSpec      []flow.VarDef  `json:"run_output_spec,omitempty"`

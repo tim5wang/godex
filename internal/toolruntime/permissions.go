@@ -678,6 +678,29 @@ func (m *PermissionManager) DenyPending(sessionID, requestID, reason string) (Pe
 	}, nil
 }
 
+// CancelPending removes a pending request without recording an allow or deny
+// decision. It is intended for work that was canceled before a user decision.
+func (m *PermissionManager) CancelPending(sessionID, requestID string) bool {
+	if m == nil {
+		return false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	requestID = strings.TrimSpace(requestID)
+	if sessionID == "" || requestID == "" {
+		return false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pending, ok := m.pending[requestID]
+	if !ok || !sameSession(pending.Request.SessionID, sessionID) {
+		return false
+	}
+	delete(m.pending, requestID)
+	delete(m.pendingKey, permissionDecisionKey(pending.Request))
+	return true
+}
+
 // ResetSession clears all session-scoped decisions and pending requests for one session.
 func (m *PermissionManager) ResetSession(sessionID string) {
 	if m == nil {

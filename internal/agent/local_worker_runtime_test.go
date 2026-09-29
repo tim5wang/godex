@@ -96,6 +96,55 @@ func TestLocalWorkerRuntimeDispatchStartsDurableSubagent(t *testing.T) {
 	}
 }
 
+func TestLocalWorkerRuntimeDispatchResumesInterruptedIdempotentJob(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	seeded, err := a.subagentJobs.StartWithOptions(subagentStartOptions{
+		IdempotencyKey: "flow-session-step:restart",
+		SessionID:      "fs_restart",
+		AgentType:      "Explore",
+		Prompt:         "continue the checkpointed session Agent node",
+		ToolNames:      []string{"read_file"},
+		MaxTurns:       3,
+	})
+	if err != nil {
+		t.Fatalf("seed durable session job: %v", err)
+	}
+
+	reloaded := newSubagentJobStore(a.subagentJobs.dir)
+	interrupted, err := reloaded.Get(seeded.ID)
+	if err != nil || interrupted.Status != subagentStatusInterrupted {
+		t.Fatalf("reload should mark active job interrupted: job=%+v err=%v", interrupted, err)
+	}
+	a.subagentJobs = reloaded
+	a.client = repeatedTextCaller("resumed handoff")
+
+	handle, err := a.WorkerRuntime().Dispatch(context.Background(), workerruntime.JobRequest{
+		IdempotencyKey: "flow-session-step:restart",
+		WorkerID:       localGoDexWorkerID,
+		SessionID:      "fs_restart",
+		AgentType:      "Explore",
+		Prompt:         "continue the checkpointed session Agent node",
+		Capabilities: workerruntime.CapabilitySet{
+			ToolNames: []string{"read_file"},
+			SandboxID: a.SandboxID(),
+		},
+		MaxTurns: 3,
+	})
+	if err != nil {
+		t.Fatalf("dispatch replayed session job: %v", err)
+	}
+	if handle.JobID != seeded.ID {
+		t.Fatalf("replay created a new job instead of resuming %q: %+v", seeded.ID, handle)
+	}
+	completed := waitForSubagentStatus(t, a.subagentJobs, seeded.ID, subagentStatusCompleted)
+	if completed.Result != "resumed handoff" || completed.IdempotencyKey != "flow-session-step:restart" {
+		t.Fatalf("interrupted job did not resume with its durable identity: %+v", completed)
+	}
+	if got := len(a.subagentJobs.List()); got != 1 {
+		t.Fatalf("expected one durable job after recovery, got %d", got)
+	}
+}
+
 func TestLocalWorkerRuntimeReviewAndMerge(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	initGitRepo(t, a.cfg.WorkspaceDir)

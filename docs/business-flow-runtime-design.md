@@ -1130,3 +1130,175 @@ Flow 新增 `service` 节点，作为在线服务编排（B）的首个通用调
 审核类 Flow 可按“媒体下载/解码服务 → 语种与音频分析服务 → ASR 服务 → 文本审核服务 → Flow outputs”组织。各服务通过普通 HTTP JSON 请求处理单个媒体请求；Godex 负责变量契约、依赖顺序、分支、超时、重试、运行状态和结果汇总，不负责内置具体的下载器或模型服务。
 
 首版不包含 HTTP streaming、gRPC、非 JSON 协议及通用连接池配置。`function` 的 `http.get()` 同样默认阻止私网 / 本机地址，只有 Flow 显式配置 allowlist 与 `allow_private_hosts` 才开放。
+
+## 25. C/D 场景：Session Workflow 持续会话运行时方案（规划，2026-09-25）
+
+### 25.1 目标与边界
+
+C（Voice Agent Realtime）与 D（实时游戏辅助）都不是一次请求对应一个有限 DAG，而是一个长生命周期 session 持续接收事件、维护状态、运行多个不同节奏的循环并向外输出。因此建议在保留现有 Flow Spec、节点契约、版本和权限模型的基础上，新增 **Session Workflow** 运行语义；不把 C/D 伪装成无限延长的普通 `FlowRun`。
+
+运行时分成两个兼容的执行模式：
+
+| 模式 | 运行实例 | 适用场景 | 执行语义 |
+|---|---|---|---|
+| `request`（默认，现有） | `FlowRun` | A、B | 每次调用创建独立 Run，有限 DAG，完成后进入终态 |
+| `session`（新增） | `FlowSession`（暂定名） | C、D | 固定绑定 Flow 版本，持续接收事件、维护会话状态、可暂停/恢复/结束 |
+
+B 继续保持“一次独立请求创建一个 FlowRun”，不按音频帧或 64ms 时间片拆分；它现有的 HTTP JSON `service` 节点与请求契约不因 C/D 改造而变成流式节点。未声明执行模式的历史定义按 `request` 解释，FlowRun、Gateway 与现有 DAG 的兼容性优先。
+
+### 25.2 当前能力与需要补齐的缺口
+
+- 现有 loop 编译只支持单节点 body，并通过 append edge 动态复制节点；workflow 节点数上限为 64。它适用于有界业务重试/修复，不适用于永久运行的多阶段 session 循环。
+- 普通 FlowRun 的后台 reconciler 每秒推进一次；FlowRun SSE 当前按 500ms 周期读取事件日志。它们适合现有业务流程状态展示，不构成低延迟事件调度器。
+- `function` 返回数组时，当前实现是在 handler 同步返回后才逐条记录 `node_emitted`，不是一个可长期运行、可取消的流式 producer。
+- 现有 `/v1/voice` WebSocket 桥接 voice-engine 并回显 ASR 结果；当前代码将识别文本交由用户编辑后手动发送，不是 Voice Agent 的实时 Agent 闭环。
+- workflow 状态通过 `summary.json`、`nodes.json`、`edges.json` 保存，事件追加到 `events.jsonl`。该 durable 模型适合工作流控制状态，不应逐帧保存音频或游戏遥测。
+- 通用 Session `Broadcaster.Emit` 同步调用 sink。高频媒体帧若直接经过该总线，慢 sink 可能阻塞发出事件的调用路径。
+
+因此核心缺口不是再增加一个 `loop` 配置项，而是 **持久化的长生命周期实例 + 事件驱动调度 + 明确的实时数据路径和背压策略**。
+
+### 25.3 建议的运行时模型
+
+**Flow 定义**描述不可变、版本化的处理图；**FlowSession**描述一次长期运行实例；**连接**（WebSocket、游戏遥测连接等）只是可替换的输入/输出通道，不等同于 FlowSession。FlowSession 启动时固定 `flow_id/version/digest`，并持有自己的状态、事件序号、生命周期、调度状态与恢复点。
+
+建议的生命周期为：
+
+```text
+create → starting → active ↔ paused → stopping → completed | error | canceled
+                           ↘ reconnecting ↗
+```
+
+客户端或设备短暂断连时，可按 Flow 策略选择继续运行、进入暂停态或在宽限期后结束；重新连接时恢复到原 FlowSession，而不是创建一个状态无关的新 FlowRun。Flow 版本升级只影响新实例，已运行实例继续使用启动时绑定的版本。
+
+实时运行采用“**每个 FlowSession 单写者协调状态，多条有界执行通道并行工作**”：
+
+1. 入口 adapter 接收协议数据并校验 session 身份、顺序和大小。
+2. 协调器串行处理状态变更和轻量路由，保证同一实例内状态更新有序。
+3. 耗时节点投递到独立 worker；节点完成后以带有 session、loop 与状态版本信息的结果事件回到协调器。
+4. 事件消费、外部副作用和恢复采用明确的幂等键/序号；不能把进程内 goroutine 当作唯一状态真源。
+
+首版可以先单进程执行，但实例、持久化记录和调度边界要按 `session_id/flow_session_id` 隔离，为之后按 session 分片和多实例接管预留 lease/fencing 语义。
+
+### 25.4 事件、实时数据与背压
+
+统一事件 envelope 至少应包含：
+
+- `flow_session_id`、`flow_id/version/digest`、`source`、`type`；
+- session 内单调递增的序号，以及采集时间/接收时间；
+- `correlation_id`、状态版本或 loop generation；
+- 结构化 payload 或外部 artifact/buffer 引用；
+- 事件类别与队列策略（可靠控制事件、可合并状态、可丢弃中间态等）。
+
+必须分开 **媒体/遥测热路径** 与 **durable 控制事件**：
+
+- C 的 PCM/audio chunk 由连接 adapter 和有界音频缓冲区承载；Flow 消费 segment、VAD、ASR partial/final、打断等有意义的语义事件。原始媒体是否落盘由明确的隐私/诊断策略控制，默认不逐帧写 workflow 状态或 timeline。
+- D 的高频游戏状态在输入端解析并合并为最新快照或时间窗口；慢决策通常消费聚合状态，而不是积压所有旧帧。
+- session 生命周期、状态机转移、策略版本、工具/模型任务开始与完成、异常和必要检查点进入 durable 控制记录。
+- 所有队列必须有界，并为不同数据明确 `block/backpressure`、`coalesce/latest-wins`、`drop-oldest/skip` 或失败策略；不能默认无限排队。
+
+### 25.5 循环与节点执行语义
+
+Request 模式现有有界 loop 保持向后兼容。Session 模式新增持续 loop/region 概念：一个 loop 可包含多节点子图，具有入口、状态作用域、触发条件、退出/停止策略和最大并发约束；它不因每次迭代而把所有节点永久追加到 `workflowState.Nodes`。
+
+持续 loop 至少区分：
+
+- **event-driven**：有符合条件的事件时推进；
+- **periodic**：按声明周期触发；
+- **hybrid**：事件到达触发，并可用周期 tick 做超时/刷新。
+
+每个 loop/lane 应能声明 deadline、允许并发数和过载行为。对可被新状态取代的决策任务，旧任务可取消或允许完成但丢弃过期结果；对有顺序要求的音频片段或控制命令，不允许静默重排。branch/state-machine 用于确定性路由；`decision` 用于受 deadline 约束的结构化轻量判断；LLM/Agent 节点用于异步的高层推理，不得占住 session 协调器。
+
+建议的节点职责是组合现有能力而非把所有传输协议塞进 `service`：
+
+- **source/adapter**：接入 WebSocket、设备事件或外部流；协议相关逻辑与通用 Flow 调度隔离。
+- **buffer/window/transform**：维护短时流缓冲、聚合、降采样与格式转换。
+- **state/branch/decision**：执行状态迁移、确定性路由及结构化低延迟判断。
+- **function/service**：保留当前同步计算与 HTTP JSON 请求能力。
+- **agent/LLM**：异步执行复杂决策或委派任务，通过结果事件回注。
+- **sink/output**：向连接或业务服务输出文本、TTS、策略或动作建议，并显式执行背压与取消策略。
+
+### 25.6 C 与 D 的目标执行图
+
+**C：Voice Agent Realtime**
+
+```text
+WebSocket 音频
+  → voice adapter / VAD / bounded audio buffer
+  → streaming ASR（partial/final）
+  → session 状态机（turn、打断、上下文）
+  → 快速决策
+  → [可选] Agent / ACP / A2A 委派
+  → TTS streaming sink → 当前连接或可恢复输出通道
+```
+
+音频接收不能等待 LLM；partial 与 final 转写、打断和 TTS 首帧需使用可区分的事件语义。连接断开、用户打断和新 turn 应按作用域取消旧的模型/TTS 工作，避免迟到结果串入当前 turn。
+
+**D：实时异步游戏辅助 AI**
+
+```text
+游戏状态/界面观测
+  → 快速输入合并
+  → 快速状态机/规则策略 → 实时行动建议
+  ├→ 中速轻量决策（亚秒预算）→ 更新当前策略选择
+  └→ 低频 LLM 战略规划（约 10 秒级）→ 提交带版本的高层策略
+```
+
+快速路径不等待模型；中速与慢速通道消费各自适合的最新/聚合状态。战略结果须带输入状态版本或策略 generation，只有仍有效时才能应用；否则记为 stale 并丢弃/重算，不得覆盖新状态。
+
+### 25.7 分期实施路线
+
+遵循“先把功能闭环，再做性能与可靠性深化”，同时从第一期就定义清晰的隔离、取消和有界队列契约。
+
+| 阶段 | 交付 | 完成标准 |
+|---|---|---|
+| C/D-0：契约与产品语义 | 确认 `request/session` 模式、FlowSession 生命周期、事件 envelope、loop/lane、连接断开策略、状态和媒体持久化边界 | 形成可校验的 schema/API 草案；旧 Flow 默认 request；明确每类输入的排序、去重与过载规则 |
+| C/D-1：Session Workflow 最小运行时 | FlowSession store/API、版本固定、启动/恢复/暂停/结束、事件驱动单写者协调器、有界 mailbox、低频 durable 控制日志与检查点 | 模拟事件可驱动多节点状态机；服务重启后可按定义策略恢复；慢 worker 不阻塞事件接收；实例间状态隔离 |
+| C/D-2：C 语音端到端 | WebSocket 接入 adapter、ASR 语义事件、状态机、快速决策、可选 Agent 委派、TTS 流式输出、打断与重连 | 一次 session 内完成“音频输入→理解/决策→语音输出”；断连/打断后旧输出不污染新 turn；模型慢时音频 ingress 不被同步阻塞 |
+| C/D-3：D 多速率循环 | 高频状态合并、快速确定性输出、中速决策 lane、低频 LLM lane、结果版本 fencing | LLM 被阻塞或返回过期结果时快速路径继续输出；旧状态不会覆盖新策略；不同 loop 有独立 deadline、队列和可观测指标 |
+| C/D-4：容量与横向可靠性 | 基于测量完善分片、lease/fencing、重启接管、负载隔离、存储/队列容量及运行 SLO | 故障注入、突发输入和并发 session 压测通过；关键延迟、丢弃/合并、队列深度、恢复时间可观测 |
+
+### 25.8 UI、运维与验收要求
+
+设计器需能显示 session trigger、状态变量、持续 loop/region、lane 与输出连接，并在发布时校验不支持的等待依赖、无界并发、无界队列及缺少 deadline 的慢节点。运行视图除节点状态外，还应呈现 session 生命周期、各 lane 当前任务、队列深度、最近状态版本、被合并/丢弃/取消的工作、模型迟到结果和连接状态。
+
+最低验收要求：
+
+1. `request` 模式与 B 的独立请求、幂等和既有 `service` 节点行为不回归。
+2. C 的高频媒体数据不逐帧扩张 workflow 节点列表或 durable 事件日志；状态队列有界且连接/取消行为明确。
+3. D 的快速路径不等待中速/慢速模型；模型输出携带版本并能拒绝过期结果。
+4. 同一 FlowSession 状态修改有序，跨 Session 无状态串用；控制事件可追溯，恢复策略可测试。
+5. 关键耗时和拥塞均可观测：输入到决策/输出延迟、lane deadline miss、队列深度、合并/丢弃数、取消数、stale 结果数、重连和恢复结果。
+
+**本方案暂不要求**：重写 A/B durable DAG、将原始音频/视频作为普通 Flow 变量持久化、无限节点 append、由 Flow 引擎内置具体 ASR/TTS/游戏模型、首期就支持多副本 exactly-once。连接器可以调用外部媒体/模型服务；外部副作用按幂等键与可审计结果设计，不能承诺传输层 exactly-once。
+
+### 25.9 实施状态（2026-09-26）
+
+C/D-1 已有第一版可执行切片：持久化的低频事件可驱动多节点本地函数、HTTP service、纯 LLM 与 durable Agent region，latest-wins 状态信号走内存合并槽。durable handler 在 checkpoint 前崩溃后可能再次执行；当前不固定 Goja 的时钟或随机源，因此重放得到相同结果要求 handler 自身确定且无副作用，这一要求尚未由运行时强制。它仍不等于完整 C/D 实时运行时：
+
+- Flow 定义新增 `execution_mode`：省略时仍为 `request`；`session` 编译进版本 digest。普通 FlowRun 拒绝启动 session Flow，FlowSession 固定保存启动时的版本与 digest。存在 active/paused session 时，不能删除其版本或以不同 digest 覆盖该版本。
+- 已有 FlowSession 创建、列表/读取、暂停、恢复、完成/取消 API。持久化记录位于 flow 的 `sessions/{session_id}/summary.json`，事件写入同目录 `events.jsonl`；事件带 server sequence、source sequence、版本/digest、时间、correlation id 与受大小限制的 JSON object payload。按 source sequence 的最近一次输入支持重试去重。
+- 当前 Agent 会按 HTTP 请求重建；session 文件操作使用进程内共享的分段锁来协调这些 Agent，并通过事件尾部恢复 append 成功但快照尚未更新的单条记录。该协调只覆盖一个进程，不提供多进程锁、lease 或 exactly-once。
+- `session_workflow.triggers` 为每种事件声明 `event_type`、`entry_node` 和 `delivery`（`durable` 默认，或 `latest_wins`）。触发节点沿静态依赖边形成 region；当前允许无 `pre_script/post_script` 的内联 JavaScript `function`、HTTP JSON `service`、纯 `llm`、声明 outputs 的 durable Agent (`step`) 和确定性 `branch` 节点。Branch 按 case 顺序匹配其唯一 data-dependency source 的 outputs，未命中时使用 `default_to`；每次只调度选中的路由目标及其静态 `data_dependency`/`handoff` 下游链，未选路由不执行，并将最近一次 `branch_id → route` 写入 FlowSession 快照。不同路由链共享下游节点（汇合）和路由链中的嵌套 branch 会在校验阶段拒绝；普通 condition edge、loop、WASM 和更一般的动态控制流仍不支持。路由目标及下游节点限于受 session runtime 支持的 function/service/LLM/durable Agent 节点。Agent 节点只允许由 durable event 触发，不允许挂在 `latest_wins` 信号上，以免可合并信号重复创建带工具副作用的工作。JS handler 可读 `ctx.event` / 第二个 `event` 参数与 `ctx.session.state`，但不能出网；service 模板、LLM prompt 和 Agent prompt 可引用 `{{event.<field>}}`、`{{session.id|version|state.<field>}}`、inputs 与前序节点 outputs。service 节点输出仍为 `status_code` 和 JSON `body`；其出网继续受 Flow 的 allowlist、私网、timeout 和响应大小策略约束。
+- session `llm` 在 backend 的有界 slow-worker 池里调用 Agent 已配置的 `conversation.Caller`，不接入工具、不写聊天 transcript，也不阻塞 session coordinator。它是单次非流式请求，必须声明 outputs，并要求模型返回一个按该契约校验的 JSON object；节点 outputs 不会自动并入 session state，同一 region 的下游节点可读取前序 outputs，终端声明 outputs 则按 trigger delivery 写入 durable output journal 或 latest-wins 输出快照。需通过显式 `session_state` 输出更新 session 状态。请求使用 Agent 当前配置的 model/token budget，可用节点 `timeout_sec` 和 `RetryPolicy`；取消会传入 provider caller。它不提供 token/partial-result 流，也未实现 Agent/subagent 委派。
+- session `step` 在同一个有界 slow-worker 池中启动并等待现有 durable subagent job；任务使用 Flow 的 AgentType、agent_ref、write scope 与普通 subagent 工具权限检查/隔离语义，prompt 注入 event/session/inputs/前序 outputs，并要求返回声明 outputs 的 JSON object。FlowSession 尚未接入聊天 session 的人工审批/恢复桥接；若工具触发人工审批，节点会取消该 job，并仅清除该 job 对应的待审批请求（不授予权限，也不写入持久拒绝策略），记录明确错误并前移 event cursor，不会绕过权限或无限占住 worker。job 按 Flow digest、FlowSession、event sequence、execution generation、node 和 retry attempt 生成稳定 idempotency key，并随 subagent summary 持久化；事件在 FlowSession checkpoint 前重放时会复用已完成结果，或接管被进程重启标记为 interrupted 的 job。pause/resume 的 generation 变化会产生新 key，旧代结果既不能提交，也不会被新代复用；在途 job 会协作取消。该关联由 durable job key 完成，不另建 FlowSession node/attempt journal；工具副作用或模型调用在外部效果发生但 job 消息尚未 checkpoint 时仍可能重复，因此语义仍为 at-least-once，而非 exactly-once。节点 `RetryPolicy` 对可分类的瞬时失败使用独立 attempt key；输出契约错误不自动重试。
+- `POST .../events` 同步 journal append + fsync，接受后由进程级协调器异步消费；每 session 最多保留 256 条未处理 journal 事件，超限返回 429。状态、`processed_sequence` 与最后一次节点/错误信息在同一个 summary checkpoint 更新。新增 `execution_generation`：事件入队不改变它，工作/信号提交以及 pause/resume/end 会推进它；worker 结果必须同时匹配下一个事件序号和 generation 才能提交。这样前序 durable 事件不会被后来入队的事件误判为过期，但暂停/结束后的迟到结果会被拒绝。service 的节点级 `RetryPolicy` 在有界慢任务 worker 内执行，并受节点 timeout/cancel 约束；重试 attempt 尚未单独写入 durable 事件。服务调用完成前进程崩溃时，durable event 会从头重放，已发生的外部副作用可能重复；处理 durable event 的副作用型服务应使用 `{{event.flow_session_id}}:{{event.sequence}}` 等复合模板值传递幂等键并由服务端去重。latest-wins signal 没有 durable sequence，若其触发副作用应由 adapter 提供可重复的 `source_sequence`/`correlation_id` 供下游去重；否则不应让可合并信号触发有副作用的调用。handler/service 失败最终仍记录 `last_error` 并前移 cursor，不做跨事件的自动重试。
+- `POST .../signals` 只接受配置为 `latest_wins` 的事件类型，不写 durable event journal；每 session 按 `source + event_type` 保留最新值，最多 64 个不同 key，旧值被替换时返回 `coalesced=true`。它用于已经聚合的可替代状态快照，不是音频帧或未经降采样的游戏遥测通道；每个被消费信号仍会 checkpoint summary，并将其输出覆盖写入 `latest_signal_outputs`。
+- backend 启动时扫描并恢复有待处理事件的 active session。协调器为 8 个 worker；标准、fast、slow 执行池分别有 8/4/4 个 worker，各自队列有界为 256。durable journal 仍严格按 session sequence 串行执行；配置 lane 的 latest-wins 工作可在不同 lane 间并行，同一 lane 最多一个任务。各 lane 提交共享 session 状态版本 fence：并发期间已经过期的结果会被丢弃，不能覆盖较新的状态。lane deadline 通过 context 取消执行；periodic/hybrid tick 走易合并信号，跳过错过的 tick，不写 durable journal。pause 会取消在途执行、停用周期 tick 并保留可恢复输入；end 会取消执行并丢弃易变信号。进程停止后未提交 durable 事件仍在 journal，重启后按 at-least-once 重新派发。达到 journal 容量后 ingress 明确拒绝新 durable 事件。
+- 新增 fake worker 验证暂停期间迟到结果不落状态、恢复后重新执行，以及服务重启后未提交事件重新派发；新增真实 `httptest` 垂直切片验证 durable event 经异步 JS → allowlist service → JS 并将结果 checkpoint，覆盖模板、RetryPolicy 与 session/event 复合幂等键。session LLM 另有 backend worker 垂直测试、prompt/output 契约、调用取消和 pause 后迟到结果 fencing 测试。
+- FlowSession 的主恢复依据仍是“durable event + pinned Flow digest + event sequence + execution generation”；纯 `llm` 尚无独立的持久化 job/attempt 记录，provider 已完成但 session checkpoint 前崩溃时仍可能重复一次调用/费用。Agent `step` 的结果可通过 durable subagent job key 复用，但 job 内部单次模型请求与工具副作用仍是 at-least-once。LLM 仅在 sequence/generation fence 通过后更新状态；非流式完整结果可 checkpoint，部分 token 不落盘。session LLM 目前仍使用 Agent 的 configured model，尚无 Flow-level model override。
+- session 已支持单次事件 region 内的确定性 branch 路由，以及“选中路由目标 → 静态下游链”的状态处理；尚不支持分支汇合、嵌套 branch、持久化的多状态迁移定义和一般化的持续 region loop。新增的 `session_workflow.lanes` 为 trigger 提供 `event/periodic/hybrid` cadence、deadline、`fast/standard/slow` worker class 与 `coalesce_latest/drop_newest` 过载策略；一个 lane 绑定一个 trigger，周期/混合 lane 必须使用 latest-wins。未配置 lane 的历史 Flow 保持原有默认执行路径。
+- 新增 `/v1/flows/{id}/sessions/{sessionID}/ws` 语义事件适配器，支持 durable event、latest-wins signal、ping/pong、journal event 推送及最新 session snapshot。重连时客户端通过 `after_sequence` 重放 journal，服务端会分页追到当前末尾；事件输入可附带 `source_sequence` 幂等重试。断连本身不暂停或结束 FlowSession。二进制消息不由该通用事件通道接收。
+- 现有 `/v1/voice` 可通过 `flow_id` + `flow_session_id` 绑定 session。PCM 仍只经 WebSocket/voice-engine 内存热路径转发；每个录音段的 ASR final 汇总为一个 durable 语义事件。绑定 FlowSession 时，`start` 必须带稳定的 `source_sequence`；可附 `source` 区分多个 producer（默认 `voice-adapter`），重连重发时复用同一 `(source, source_sequence)`，避免断连发生在写入成功、回执丢失之后产生重复业务事件。输出事件复用 journal cursor 和 session snapshot。
+- 以上是 C/D lane 与接入闭环的增量基础，并非完整 Voice Agent 或实时游戏 Agent 闭环：voice adapter 只把 ASR 语义接入 FlowSession，不自动驱动 LLM/Agent 决策或 TTS 输出；通用 lane 仍是单进程执行，lane 间共享状态时并发迟到结果按全局 state version fence 丢弃；没有服务端 consumer ACK、跨进程 lease/接管或 exactly-once。因此不能宣称 C/D 端到端可靠性闭环可用。
+
+#### Session 节点输出事件
+
+输出投递继承触发器的 `delivery`。成功的 durable region 会把有声明 outputs 的终端节点结果追加为 `session.output`，复用 FlowSession 的 `events.jsonl` 与既有分页 events API；latest-wins region 不写 output journal，而是把完整结果覆盖写入 session snapshot 的 `latest_signal_outputs`，由既有 session GET 返回。两种模式都不把原始输入复制到输出。payload/snapshot 包含 `output_id`、输入事件类型/source/source sequence、节点 ID 和声明的 outputs；durable event 还带 `input_sequence`，correlation ID 保留在通用事件 envelope。`session_state` 是内部状态更新字段，不会作为外部输出发布。
+
+`output_id` 由 Flow/session/digest、输入序号（或 signal 的状态版本）、输入来源/类型/correlation ID 与节点 ID 确定，供消费端在重放或重试后幂等去重。durable 输出先与状态 checkpoint 一起写入 summary 的 pending outbox，再 append + fsync 到事件 journal；读取 session 或恢复运行时会补刷 outbox，避免状态已提交但输出永久丢失。若 append 已成功而 outbox 清理前崩溃，恢复会按 journal sequence 跳过已存在记录。latest-wins 输出与状态在同一个 summary checkpoint 原子覆盖，不增长 journal。单条输出最多 64 KiB，每次执行的输出批次最多 64 KiB；超限时该次 region 不提交状态，也不生成部分输出。
+
+此契约提供的是节点完成后的完整语义结果，不是 token、partial ASR 或 TTS/media 分帧流。durable 消费端可通过 `GET /v1/flows/{id}/sessions/{sessionID}/events?after_sequence=...` 拉取，也可通过 session WebSocket 订阅增量 journal event；重连后由客户端 cursor 补读，语义为 at-least-once，配合 event source sequence / output ID 在客户端去重。WebSocket 同时推送当前 session snapshot，方便恢复被 latest-wins 覆盖的状态与输出；它不是服务端持久化 consumer offset。服务端仍没有 consumer ACK，因此不能观测输出是否被客户端实际消费，也没有消费确认语义。`session.output` 占用 journal sequence，但不会触发 Flow 节点；运行时只推进它的 journal cursor。latest-wins 输出不增长 journal，但每次被消费的信号仍会同步 checkpoint summary，所以依旧不能用来承载逐帧媒体/遥测；专用热路径、checkpoint 节流尚未实现。
+
+单个 session 的 GET view 中，`last_execution` 记录最近一次已提交执行的 delivery、事件来源/序号、完成/失败/取消状态、region 总耗时、节点状态与耗时、输出数量；`in_flight` 则由 backend 从进程内 worker 调度状态临时填充，报告排队/运行/取消中状态、输入事件元数据和开始时间/已运行时长，不包含事件 payload，也不代表当前节点级进度。`in_flight` 不写入持久化 summary，进程重启后不会残留；它与持久化 session 快照是两个时间点的只读观测，状态切换瞬间可能短暂缺席。输出消费仍需客户端自管 cursor，目前无服务端 ACK 指标。
+
+后续优先补齐“输入语义 → lane 决策 → 可订阅输出”的 C/D 垂直场景验收：Voice turn 状态机、打断/取消、可选 Agent 委派与 TTS sink；D 的快/中/慢 lane 压测和 stale-result 可观测性。其后再按部署拓扑设计跨进程 FlowSession lease、客户端消费 ACK 和外部副作用幂等。原始音频/视频依旧不应逐帧写入 durable journal。

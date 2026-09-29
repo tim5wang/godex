@@ -11,6 +11,7 @@ import (
 
 func TestWorkerRequestFromSubagentStartOptions(t *testing.T) {
 	start := subagentStartOptions{
+		IdempotencyKey:  "flow-session-step:test",
 		SessionID:       "session-1",
 		ParentTurnID:    "turn-1",
 		ParentID:        "turn-1",
@@ -44,6 +45,9 @@ func TestWorkerRequestFromSubagentStartOptions(t *testing.T) {
 	if req.WorkerID != localGoDexWorkerID {
 		t.Fatalf("worker id %q", req.WorkerID)
 	}
+	if req.IdempotencyKey != "flow-session-step:test" {
+		t.Fatalf("idempotency key %q", req.IdempotencyKey)
+	}
 	if req.Capabilities.SandboxID != "sandbox:local:abc" {
 		t.Fatalf("sandbox id %q", req.Capabilities.SandboxID)
 	}
@@ -60,16 +64,17 @@ func TestWorkerRequestFromSubagentStartOptions(t *testing.T) {
 
 func TestSubagentStartOptionsFromWorkerRequest(t *testing.T) {
 	req := workerruntime.JobRequest{
-		WorkerID:     localGoDexWorkerID,
-		SessionID:    "session-1",
-		ParentTurnID: "turn-1",
-		ParentID:     "turn-1",
-		AgentType:    "general-purpose",
-		RoleID:       "role-1",
-		RoleName:     "Reviewer",
-		PackageName:  "pkg",
-		Prompt:       "inspect repo",
-		BasePrompt:   "base",
+		IdempotencyKey: "flow-session-step:test",
+		WorkerID:       localGoDexWorkerID,
+		SessionID:      "session-1",
+		ParentTurnID:   "turn-1",
+		ParentID:       "turn-1",
+		AgentType:      "general-purpose",
+		RoleID:         "role-1",
+		RoleName:       "Reviewer",
+		PackageName:    "pkg",
+		Prompt:         "inspect repo",
+		BasePrompt:     "base",
 		Capabilities: workerruntime.CapabilitySet{
 			ToolNames:       []string{"bash", "read_file"},
 			RequiredBundles: []string{"web"},
@@ -93,6 +98,9 @@ func TestSubagentStartOptionsFromWorkerRequest(t *testing.T) {
 
 	if start.MaxConcurrent != 3 {
 		t.Fatalf("max concurrent %d", start.MaxConcurrent)
+	}
+	if start.IdempotencyKey != "flow-session-step:test" {
+		t.Fatalf("idempotency key %q", start.IdempotencyKey)
 	}
 	if start.SandboxID != "sandbox:local:abc" {
 		t.Fatalf("sandbox id %q", start.SandboxID)

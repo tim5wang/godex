@@ -565,6 +565,11 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	now := s.now()
 	s.reconcileExpiredPermissionResume(session, now)
 	turnID := session.nextTurnID(now)
+	var canvasFeedback string
+	envelope, canvasFeedback, err := takeFlowCanvasSnapshot(session, envelope)
+	if err != nil {
+		return preparedUserTurn{}, nil, err
+	}
 	runtimeCtx := s.buildRuntimeContext(sessionID, session.locator, envelope)
 	if runtimeCtx.Metadata == nil {
 		runtimeCtx.Metadata = map[string]string{}
@@ -588,6 +593,9 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 		"source": string(envelope.Source),
 		"sender": envelope.Sender,
 	})
+	// The canvas snapshot is request-scoped. Replace any prior hidden snapshot
+	// so older (potentially large) canvas definitions cannot linger in context.
+	session.agent.ReplaceRuntimeFeedback(flowCanvasSnapshotFeedbackPrefix, canvasFeedback)
 	session.agent.AddEnvelope(modelEnvelope)
 	session.setTitleIfEmpty(sessionTitleFromEnvelope(envelope))
 	session.events.Emit(events.Event{

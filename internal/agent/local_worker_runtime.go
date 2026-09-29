@@ -33,13 +33,42 @@ func (r localGoDexWorkerRuntime) Dispatch(ctx context.Context, req workerruntime
 		return workerruntime.JobHandle{}, err
 	}
 	start.WorkerID = localGoDexWorkerID
-	job, err := a.subagentJobs.StartWithOptions(start)
+	job, created, err := a.subagentJobs.StartOrGetWithOptions(start)
 	if err != nil {
 		return workerruntime.JobHandle{}, err
 	}
 	target := subagentEventTargetFromContext(ctx)
 	a.subagentJobs.RegisterTarget(job.ID, target)
 	target.emitIdentity(job)
+	if !created {
+		switch job.Status {
+		case subagentStatusInterrupted, subagentStatusCanceled:
+			job, err = a.subagentJobs.ResumeWithLimit(job.ID, a.subagentMaxConcurrentJobs())
+			if err != nil {
+				current, getErr := a.subagentJobs.Get(job.ID)
+				if getErr == nil && (current.Status == subagentStatusRunning || current.Status == subagentStatusPending) {
+					return workerHandleFromSubagentJob(current), nil
+				}
+				return workerruntime.JobHandle{}, err
+			}
+			a.subagentJobs.RegisterTarget(job.ID, target)
+			if job.Status == subagentStatusPending {
+				target.emit(job, "pending", "Subagent job queued for resume.", "", "", "", "")
+				return workerHandleFromSubagentJob(job), nil
+			}
+			target.emit(job, "resumed", "Subagent job resumed.", "", "", "", "")
+			if err := a.ensureSubagentWorkspace(job); err != nil {
+				finished, _ := a.subagentJobs.Finish(job.ID, subagentStatusError, "", err.Error())
+				target.emit(finished, string(subagentStatusError), "Subagent isolated workspace is unavailable.", "", "", err.Error(), "")
+				a.startPendingSubagents(target.sink)
+				return workerruntime.JobHandle{}, err
+			}
+			a.runSubagentJobAsync(job.ID, target)
+			return workerHandleFromSubagentJob(job), nil
+		default:
+			return workerHandleFromSubagentJob(job), nil
+		}
+	}
 	if job.Status == subagentStatusPending {
 		target.emit(job, "pending", "Subagent job queued.", "", "", "", "")
 		return workerHandleFromSubagentJob(job), nil

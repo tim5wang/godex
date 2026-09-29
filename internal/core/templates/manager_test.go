@@ -66,6 +66,24 @@ func TestBuiltinTemplateSemantics(t *testing.T) {
 	}
 }
 
+func TestFlowDesignerTemplateCanReadItsGuidesWithoutWriteAccess(t *testing.T) {
+	m := newTestManager(t)
+	designer, err := m.Get("flow-designer")
+	if err != nil {
+		t.Fatalf("Get flow-designer: %v", err)
+	}
+	tools := strings.Join(designer.Tools, ",")
+	if !strings.Contains(tools, "read_file") {
+		t.Fatal("flow-designer needs read_file to consult its linked canvas/runtime guides")
+	}
+	if !strings.Contains(tools, "godex_docs") {
+		t.Fatal("flow-designer needs godex_docs to discover the authoritative schema and guide paths")
+	}
+	if designer.WriteEnabled {
+		t.Fatal("flow-designer should remain read-only except for its explicit flow creation tool")
+	}
+}
+
 func TestSaveGetDeleteUserTemplate(t *testing.T) {
 	m := newTestManager(t)
 	tpl := AgentTemplate{

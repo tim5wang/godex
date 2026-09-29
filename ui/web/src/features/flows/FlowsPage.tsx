@@ -84,6 +84,8 @@ import { FlowGramFlowEditor, type FlowGramFlowEditorHandle } from "./FlowGramFlo
 import { FLOW_TEMPLATES, flowTemplateById } from "./flowTemplates";
 import { TemplateLibrary } from "./TemplateLibrary";
 import { FlowChatPanel } from "./FlowChatPanel";
+import { FlowSessionsPanel } from "./FlowSessionsPanel";
+import { SessionWorkflowTab } from "./SessionWorkflowTab";
 import { SchemaTreeEditor, type SchemaNode } from "./SchemaTreeEditor";
 import { useSettingsStore } from "../../store/settings";
 
@@ -1728,6 +1730,37 @@ function FlowDetailColumn(props: {
                 token={token}
                 designerSessionId={flow.designer_session_id}
                 onVersionApplied={onRefresh}
+                getCanvasSnapshot={() =>
+                  editorHandleRef.current?.getCurrentDefinition() ?? undefined
+                }
+              />
+            ),
+          },
+          {
+            key: "session-config",
+            label: t("flows.sessionConfiguration"),
+            children: (
+              <SessionWorkflowTab
+                flowId={flow.flow_id}
+                token={token}
+                versions={versions}
+                getCurrentDefinition={() =>
+                  editorHandleRef.current?.getCurrentDefinition() ?? undefined
+                }
+                onSaved={onRefresh}
+                t={t}
+              />
+            ),
+          },
+          {
+            key: "session-runtime",
+            label: t("flows.sessionRuntime"),
+            children: (
+              <FlowSessionsPanel
+                flowId={flow.flow_id}
+                token={token}
+                versions={versions}
+                t={t}
               />
             ),
           },

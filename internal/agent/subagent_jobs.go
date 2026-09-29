@@ -82,6 +82,7 @@ type subagentProgressEvent struct {
 
 type subagentJob struct {
 	ID                string                    `json:"id"`
+	IdempotencyKey    string                    `json:"idempotency_key,omitempty"`
 	SessionID         string                    `json:"session_id,omitempty"`
 	ParentTurnID      string                    `json:"parent_turn_id,omitempty"`
 	Identity          AgentIdentity             `json:"identity,omitempty"`
@@ -299,6 +300,7 @@ type subagentJobStore struct {
 	mu          sync.Mutex
 	dir         string
 	jobs        map[string]*subagentJob
+	idempotency map[string]string
 	cancels     map[string]context.CancelFunc
 	targets     map[string]subagentEventTarget
 	watchers    map[uint64]chan struct{}
@@ -308,6 +310,7 @@ type subagentJobStore struct {
 }
 
 type subagentStartOptions struct {
+	IdempotencyKey    string
 	SessionID         string
 	ParentTurnID      string
 	ParentID          string

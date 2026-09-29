@@ -38,6 +38,54 @@ func (a *Agent) AppendRuntimeFeedback(text string) {
 	a.appendMessage(protocol.NewEphemeralTextMessage(protocol.KindBackground, text))
 }
 
+// ReplaceRuntimeFeedback removes an earlier ephemeral background message with
+// the same prefix and appends its replacement. It is useful for request-scoped
+// context that must not leave stale copies in the conversation history.
+func (a *Agent) ReplaceRuntimeFeedback(prefix, text string) {
+	if a == nil {
+		return
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return
+	}
+	text = strings.TrimSpace(text)
+
+	a.mu.Lock()
+	original := a.messages
+	kept := original[:0]
+	changed := false
+	for _, msg := range original {
+		isMatchingFeedback := msg.Role == protocol.RoleUser &&
+			msg.Metadata != nil &&
+			msg.Metadata.Ephemeral &&
+			msg.Metadata.Kind == protocol.KindBackground &&
+			strings.HasPrefix(strings.TrimSpace(protocol.MessageText(msg)), prefix)
+		if isMatchingFeedback {
+			changed = true
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	for i := len(kept); i < len(original); i++ {
+		original[i] = protocol.Message{}
+	}
+	a.messages = kept
+
+	if text != "" {
+		msg := protocol.NewEphemeralTextMessage(protocol.KindBackground, text)
+		if msg.Metadata != nil && strings.TrimSpace(msg.Metadata.Timestamp) == "" {
+			msg.Metadata.Timestamp = a.safeNow().UTC().Format(time.RFC3339Nano)
+		}
+		a.messages = append(a.messages, msg.Clone())
+		changed = true
+	}
+	if changed {
+		a.historyVersion++
+	}
+	a.mu.Unlock()
+}
+
 // GetMessages returns current messages.
 func (a *Agent) GetMessages() []protocol.Message {
 	a.mu.Lock()

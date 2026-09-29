@@ -44,6 +44,500 @@ func TestValidateRejectsEmptyFlowID(t *testing.T) {
 	}
 }
 
+func TestExecutionModeValidationAndDigest(t *testing.T) {
+	d := sampleFlow()
+	requestDefault, err := Compile(d)
+	if err != nil {
+		t.Fatalf("compile default request flow: %v", err)
+	}
+	d.ExecutionMode = ExecutionModeRequest
+	requestExplicit, err := Compile(d)
+	if err != nil {
+		t.Fatalf("compile explicit request flow: %v", err)
+	}
+	if requestDefault.Digest != requestExplicit.Digest {
+		t.Fatalf("omitted and explicit request modes should keep the same digest: %s != %s", requestDefault.Digest, requestExplicit.Digest)
+	}
+	if requestExplicit.ExecutionMode != ExecutionModeRequest {
+		t.Fatalf("expected compiled request mode, got %q", requestExplicit.ExecutionMode)
+	}
+
+	d.ExecutionMode = ExecutionModeSession
+	d.SessionWorkflow = &SessionWorkflowSpec{Triggers: []SessionTrigger{
+		{EventType: "state.updated", EntryNode: "update", Delivery: SessionDeliveryLatestWins},
+	}}
+	d.Nodes = []Node{
+		{ID: "update", Kind: KindFunction, Function: &FunctionSpec{
+			Runtime: FunctionRuntimeJS,
+			Source:  `function handle(ctx, event) { return {}; }`,
+		}},
+	}
+	d.Edges = nil
+	session, err := Compile(d)
+	if err != nil {
+		t.Fatalf("compile session flow: %v", err)
+	}
+	if session.ExecutionMode != ExecutionModeSession || session.Digest == requestDefault.Digest {
+		t.Fatalf("session mode must be compiled and digest-distinct: %+v", session)
+	}
+
+	d.ExecutionMode = "unknown"
+	if err := Validate(d); err == nil || !strings.Contains(err.Error(), "execution_mode") {
+		t.Fatalf("expected execution_mode validation error, got %v", err)
+	}
+}
+
+func TestSessionWorkflowTriggerValidationAndDigest(t *testing.T) {
+	d := &Definition{
+		FlowID:        "fl_session_trigger",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: ExecutionModeSession,
+		SessionWorkflow: &SessionWorkflowSpec{Triggers: []SessionTrigger{
+			{EventType: "state.updated", EntryNode: "update", LaneID: "fast"},
+		}, Lanes: []SessionLane{{
+			ID: "fast", Cadence: SessionLaneCadenceEvent, DeadlineMS: 250,
+			Class: SessionLaneClassFast,
+		}}},
+		Nodes: []Node{
+			{ID: "update", Kind: KindFunction, Function: &FunctionSpec{
+				Runtime: FunctionRuntimeJS,
+				Source:  `function handle(ctx, event) { return {}; }`,
+			}},
+			{ID: "derive", Kind: KindFunction, Function: &FunctionSpec{
+				Runtime: FunctionRuntimeJS,
+				Source:  `function handle(ctx, event) { return {}; }`,
+			}},
+		},
+		Edges: []Edge{
+			{ID: "update_to_derive", From: "update", To: "derive", EdgeType: EdgeDataDependency},
+		},
+	}
+	compiled, err := Compile(d)
+	if err != nil {
+		t.Fatalf("compile session function region: %v", err)
+	}
+	if compiled.SessionWorkflow == nil || compiled.SessionWorkflow.Triggers[0].Delivery != SessionDeliveryDurable {
+		t.Fatalf("expected normalized durable trigger: %+v", compiled.SessionWorkflow)
+	}
+	if compiled.SessionWorkflow.Triggers[0].LaneID != "fast" ||
+		compiled.SessionWorkflow.Lanes[0].Cadence != SessionLaneCadenceEvent ||
+		compiled.SessionWorkflow.Lanes[0].Class != SessionLaneClassFast ||
+		compiled.SessionWorkflow.Lanes[0].OverloadPolicy != SessionLaneOverloadCoalesceLatest {
+		t.Fatalf("expected normalized lane contract: %+v", compiled.SessionWorkflow)
+	}
+	changed := *d
+	changed.SessionWorkflow = &SessionWorkflowSpec{Triggers: []SessionTrigger{
+		{EventType: "state.updated", EntryNode: "update", Delivery: SessionDeliveryLatestWins, LaneID: "fast"},
+	}, Lanes: []SessionLane{{
+		ID: "fast", Cadence: SessionLaneCadenceEvent, DeadlineMS: 250,
+		Class: SessionLaneClassFast,
+	}}}
+	compiledChanged, err := Compile(&changed)
+	if err != nil {
+		t.Fatalf("compile latest-wins trigger: %v", err)
+	}
+	if compiled.Digest == compiledChanged.Digest {
+		t.Fatal("trigger delivery policy must participate in the compiled digest")
+	}
+
+	invalid := *d
+	invalid.SessionWorkflow = nil
+	if err := Validate(&invalid); err == nil || !strings.Contains(err.Error(), "session_workflow.triggers") {
+		t.Fatalf("expected missing session trigger rejection, got %v", err)
+	}
+	invalid = *d
+	invalid.SessionWorkflow = &SessionWorkflowSpec{Triggers: []SessionTrigger{
+		{EventType: "state.updated", EntryNode: "derive"},
+	}}
+	if err := Validate(&invalid); err == nil || !strings.Contains(err.Error(), "incoming") {
+		t.Fatalf("expected a trigger entry with dependencies to be rejected, got %v", err)
+	}
+}
+
+func TestSessionLaneValidation(t *testing.T) {
+	base := &Definition{
+		FlowID:        "fl_session_lanes",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: ExecutionModeSession,
+		SessionWorkflow: &SessionWorkflowSpec{
+			Triggers: []SessionTrigger{{EventType: "state.tick", EntryNode: "update", Delivery: SessionDeliveryLatestWins, LaneID: "fast"}},
+			Lanes: []SessionLane{{
+				ID: "fast", Cadence: SessionLaneCadenceHybrid, IntervalMS: 100,
+				DeadlineMS: 500, Class: SessionLaneClassFast,
+			}},
+		},
+		Nodes: []Node{{ID: "update", Kind: KindFunction, Function: &FunctionSpec{
+			Runtime: FunctionRuntimeJS,
+			Source:  `function handle(ctx, event) { return {}; }`,
+		}}},
+	}
+	if _, err := Compile(base); err != nil {
+		t.Fatalf("compile valid hybrid lane: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		change func(*Definition)
+		want   string
+	}{
+		{
+			name: "unknown lane reference",
+			change: func(def *Definition) {
+				def.SessionWorkflow.Triggers[0].LaneID = "missing"
+			},
+			want: "unknown lane",
+		},
+		{
+			name: "periodic lane requires latest wins",
+			change: func(def *Definition) {
+				def.SessionWorkflow.Triggers[0].Delivery = SessionDeliveryDurable
+			},
+			want: "require latest_wins",
+		},
+		{
+			name: "periodic lane requires interval",
+			change: func(def *Definition) {
+				def.SessionWorkflow.Lanes[0].IntervalMS = 0
+			},
+			want: "interval_ms",
+		},
+		{
+			name: "lane must be assigned once",
+			change: func(def *Definition) {
+				def.SessionWorkflow.Triggers = append(def.SessionWorkflow.Triggers,
+					SessionTrigger{EventType: "state.other", EntryNode: "update", Delivery: SessionDeliveryLatestWins, LaneID: "fast"})
+			},
+			want: "only one trigger",
+		},
+		{
+			name: "deadline is required",
+			change: func(def *Definition) {
+				def.SessionWorkflow.Lanes[0].DeadlineMS = 0
+			},
+			want: "deadline_ms",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			def := *base
+			spec := *base.SessionWorkflow
+			spec.Triggers = append([]SessionTrigger(nil), base.SessionWorkflow.Triggers...)
+			spec.Lanes = append([]SessionLane(nil), base.SessionWorkflow.Lanes...)
+			def.SessionWorkflow = &spec
+			test.change(&def)
+			err := Validate(&def)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected validation error containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestSessionServiceTemplateScopesAreSessionOnly(t *testing.T) {
+	d := &Definition{
+		FlowID:        "fl_session_service_templates",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: ExecutionModeSession,
+		SessionWorkflow: &SessionWorkflowSpec{Triggers: []SessionTrigger{
+			{EventType: "turn.update", EntryNode: "call"},
+		}},
+		Nodes: []Node{{
+			ID:   "call",
+			Kind: KindService,
+			Service: &ServiceSpec{
+				Method: "POST",
+				URL:    "https://api.example.com/{{event.payload.path}}",
+				Body:   []byte(`{"dialog":"{{session.state.dialog_id}}","seq":"{{event.sequence}}"}`),
+			},
+		}},
+	}
+	if _, err := Compile(d); err != nil {
+		t.Fatalf("compile session service templates: %v", err)
+	}
+
+	request := *d
+	request.ExecutionMode = ExecutionModeRequest
+	request.SessionWorkflow = nil
+	if err := Validate(&request); err == nil || !strings.Contains(err.Error(), `unknown variable scope "event"`) {
+		t.Fatalf("expected request service to reject session event template, got %v", err)
+	}
+
+	invalid := *d
+	invalid.Nodes = append([]Node(nil), d.Nodes...)
+	invalid.Nodes[0].Service = &ServiceSpec{
+		Method: "POST",
+		URL:    "https://api.example.com/{{event.missing}}",
+	}
+	if err := Validate(&invalid); err == nil || !strings.Contains(err.Error(), "unknown session event field") {
+		t.Fatalf("expected unknown event field rejection, got %v", err)
+	}
+}
+
+func TestSessionLLMNodesSupportEventAndSessionPromptScopes(t *testing.T) {
+	d := &Definition{
+		FlowID:        "fl_session_llm_prompts",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: ExecutionModeSession,
+		SessionWorkflow: &SessionWorkflowSpec{Triggers: []SessionTrigger{
+			{EventType: "turn.update", EntryNode: "answer"},
+		}},
+		Nodes: []Node{{
+			ID:      "answer",
+			Kind:    KindLLM,
+			Prompt:  "Use {{event.payload.text}} and {{session.state.dialog_id}}.",
+			Outputs: []VarDef{{Name: "answer", Type: "string"}},
+		}},
+	}
+	compiled, err := Compile(d)
+	if err != nil {
+		t.Fatalf("compile session LLM node: %v", err)
+	}
+	if len(compiled.Nodes) != 1 || compiled.Nodes[0].Kind != KindLLM {
+		t.Fatalf("expected the LLM node to remain in the compiled session region, got %+v", compiled.Nodes)
+	}
+
+	request := *d
+	request.ExecutionMode = ExecutionModeRequest
+	request.SessionWorkflow = nil
+	if err := Validate(&request); err == nil || !strings.Contains(err.Error(), `unknown variable scope "event"`) {
+		t.Fatalf("expected request-mode LLM prompt to reject session context, got %v", err)
+	}
+
+	invalid := *d
+	invalid.Nodes = append([]Node(nil), d.Nodes...)
+	invalid.Nodes[0].Outputs = nil
+	if err := Validate(&invalid); err == nil || !strings.Contains(err.Error(), "must declare outputs") {
+		t.Fatalf("expected session LLM without outputs to be rejected, got %v", err)
+	}
+}
+
+func TestSessionAgentNodesRequireDurableDeliveryAndDeclaredOutputs(t *testing.T) {
+	d := &Definition{
+		FlowID:        "fl_session_agent_nodes",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: ExecutionModeSession,
+		SessionWorkflow: &SessionWorkflowSpec{Triggers: []SessionTrigger{
+			{EventType: "turn.update", EntryNode: "agent"},
+		}},
+		Nodes: []Node{{
+			ID:      "agent",
+			Kind:    KindStep,
+			Prompt:  "Handle {{event.payload.text}} for {{inputs.locale}}",
+			Outputs: []VarDef{{Name: "answer", Type: "string", Required: true}},
+		}},
+		Inputs: []VarDef{{Name: "locale", Type: "string", Required: true}},
+	}
+	compiled, err := Compile(d)
+	if err != nil {
+		t.Fatalf("compile durable session Agent node: %v", err)
+	}
+	if len(compiled.Nodes) != 1 || compiled.Nodes[0].Kind != KindStep {
+		t.Fatalf("expected durable Agent node in compiled session region, got %+v", compiled.Nodes)
+	}
+
+	latestWins := *d
+	latestWins.SessionWorkflow = &SessionWorkflowSpec{Triggers: []SessionTrigger{
+		{EventType: "turn.update", EntryNode: "agent", Delivery: SessionDeliveryLatestWins},
+	}}
+	if err := Validate(&latestWins); err == nil || !strings.Contains(err.Error(), "requires durable event delivery") {
+		t.Fatalf("expected Agent node on latest_wins trigger to be rejected, got %v", err)
+	}
+
+	missingOutputs := *d
+	missingOutputs.Nodes = []Node{d.Nodes[0]}
+	missingOutputs.Nodes[0].Outputs = nil
+	if err := Validate(&missingOutputs); err == nil || !strings.Contains(err.Error(), "must declare outputs") {
+		t.Fatalf("expected Agent node without declared outputs to be rejected, got %v", err)
+	}
+}
+
+func TestSessionBranchRoutesRequireDurableAgentTargetsAndAllowChains(t *testing.T) {
+	d := &Definition{
+		FlowID:        "fl_session_branch_agent_targets",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: ExecutionModeSession,
+		SessionWorkflow: &SessionWorkflowSpec{Triggers: []SessionTrigger{
+			{EventType: "turn.update", EntryNode: "classify"},
+		}},
+		Nodes: []Node{
+			{
+				ID:   "classify",
+				Kind: KindFunction,
+				Function: &FunctionSpec{
+					Runtime: FunctionRuntimeJS,
+					Source:  `function handle() { return {choice: "yes"}; }`,
+				},
+				Outputs: []VarDef{{Name: "choice", Type: "string"}},
+			},
+			{
+				ID:   "route",
+				Kind: KindBranch,
+				Branch: &BranchSpec{
+					Cases: []BranchCase{{
+						Name: "agent",
+						To:   "agent",
+						Condition: Condition{Output: &FieldCompare{
+							Path: "choice", Op: "eq", Value: "yes",
+						}},
+					}},
+					DefaultTo: "agent",
+				},
+			},
+			{
+				ID:      "agent",
+				Kind:    KindStep,
+				Prompt:  "handle the turn",
+				Outputs: []VarDef{{Name: "answer", Type: "string", Required: true}},
+			},
+		},
+		Edges: []Edge{{
+			ID: "classify-route", From: "classify", To: "route", EdgeType: EdgeDataDependency,
+		}},
+	}
+	if _, err := Compile(d); err != nil {
+		t.Fatalf("compile durable branch-to-Agent route: %v", err)
+	}
+
+	latestWins := *d
+	latestWins.SessionWorkflow = &SessionWorkflowSpec{Triggers: []SessionTrigger{
+		{EventType: "turn.update", EntryNode: "classify", Delivery: SessionDeliveryLatestWins},
+	}}
+	if err := Validate(&latestWins); err == nil || !strings.Contains(err.Error(), "requires durable event delivery") {
+		t.Fatalf("expected latest-wins branch Agent target to be rejected, got %v", err)
+	}
+
+	nonTerminal := *d
+	nonTerminal.Edges = append([]Edge{}, d.Edges...)
+	nonTerminal.Edges = append(nonTerminal.Edges, Edge{
+		ID: "agent-next", From: "agent", To: "finish", EdgeType: EdgeDataDependency,
+	})
+	nonTerminal.Nodes = append([]Node{}, d.Nodes...)
+	nonTerminal.Nodes = append(nonTerminal.Nodes, Node{
+		ID: "finish", Kind: KindFunction,
+		Function: &FunctionSpec{Runtime: FunctionRuntimeJS, Source: `function handle() { return {}; }`},
+	})
+	if err := Validate(&nonTerminal); err != nil {
+		t.Fatalf("expected durable Agent branch route chains to be accepted, got %v", err)
+	}
+}
+
+func TestSessionBranchRouteValidation(t *testing.T) {
+	base := &Definition{
+		FlowID:        "fl_session_branch_route_names",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: ExecutionModeSession,
+		SessionWorkflow: &SessionWorkflowSpec{Triggers: []SessionTrigger{
+			{EventType: "turn.update", EntryNode: "classify"},
+		}},
+		Nodes: []Node{
+			{
+				ID:   "classify",
+				Kind: KindFunction,
+				Function: &FunctionSpec{
+					Runtime: FunctionRuntimeJS,
+					Source:  `function handle() { return {choice: "yes"}; }`,
+				},
+				Outputs: []VarDef{{Name: "choice", Type: "string"}},
+			},
+			{
+				ID:   "route",
+				Kind: KindBranch,
+				Branch: &BranchSpec{
+					Cases: []BranchCase{{
+						Name: "yes",
+						To:   "handle",
+						Condition: Condition{Output: &FieldCompare{
+							Path: "choice", Op: "eq", Value: "yes",
+						}},
+					}},
+					DefaultTo: "handle",
+				},
+			},
+			{
+				ID:   "handle",
+				Kind: KindFunction,
+				Function: &FunctionSpec{
+					Runtime: FunctionRuntimeJS,
+					Source:  `function handle() { return {}; }`,
+				},
+			},
+		},
+		Edges: []Edge{{
+			ID: "classify-route", From: "classify", To: "route", EdgeType: EdgeDataDependency,
+		}},
+	}
+	if _, err := Compile(base); err != nil {
+		t.Fatalf("compile valid session branch: %v", err)
+	}
+
+	for _, test := range []struct {
+		name      string
+		mutate    func(*Definition)
+		wantError string
+	}{
+		{
+			name: "duplicate route name",
+			mutate: func(definition *Definition) {
+				branch := definition.Nodes[1].Branch
+				branch.Cases = append(branch.Cases, branch.Cases[0])
+			},
+			wantError: "has duplicate route",
+		},
+		{
+			name: "default route name is reserved",
+			mutate: func(definition *Definition) {
+				branch := definition.Nodes[1].Branch
+				branch.Cases[0].Name = " default "
+			},
+			wantError: `case name "default" is reserved`,
+		},
+		{
+			name: "append target shared across branches",
+			mutate: func(definition *Definition) {
+				definition.Nodes = append(definition.Nodes, Node{
+					ID:   "route_two",
+					Kind: KindBranch,
+					Branch: &BranchSpec{
+						Cases: []BranchCase{{
+							Name: "again",
+							To:   "handle",
+							Condition: Condition{Output: &FieldCompare{
+								Path: "choice", Op: "eq", Value: "yes",
+							}},
+						}},
+						DefaultTo: "handle",
+					},
+				})
+				definition.Edges = append(definition.Edges, Edge{
+					ID: "classify-route-two", From: "classify", To: "route_two", EdgeType: EdgeDataDependency,
+				})
+			},
+			wantError: `is shared by branch nodes`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			definition := *base
+			definition.Nodes = append([]Node(nil), base.Nodes...)
+			definition.Edges = append([]Edge(nil), base.Edges...)
+			branch := *base.Nodes[1].Branch
+			branch.Cases = append([]BranchCase(nil), branch.Cases...)
+			definition.Nodes[1].Branch = &branch
+			test.mutate(&definition)
+
+			if _, err := Compile(&definition); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected %q validation error, got %v", test.wantError, err)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsDuplicateNodeID(t *testing.T) {
 	d := sampleFlow()
 	d.Nodes = append(d.Nodes, Node{ID: "start", Kind: KindStep, Prompt: "dup"})

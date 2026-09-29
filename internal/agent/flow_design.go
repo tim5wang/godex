@@ -40,7 +40,7 @@ type flowDesignArgs struct {
 // set" an Agent needs to act as a Flow designer (the natural-language tab
 // also routes through the same Agent methods).
 func newFlowDesignTool(agent *Agent) tools.Tool {
-	return tools.NewTypedTool(tools.NewToolSpec("flow_design", "Design a Business Flow Spec v1 definition as a chat agent. action='generate' drafts a new flow from a natural-language description; action='read' (flow_id) returns the current flow's draft definition; action='amend' applies a natural-language change to an existing definition (multi-turn iterative editing); action='validate' dry-runs flow.Validate on a definition and returns errors. Returns the complete Flow Spec JSON plus a concise summary. Iterate: generate → validate → amend until coherent, then persist via createFlow.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("flow_design", "Design a request-mode or session-mode Business Flow Spec v1 definition. action='generate' drafts a flow; action='read' returns a saved draft; action='amend' applies a change to a full current definition (prefer the current canvas snapshot supplied by the Flow UI); action='validate' checks flow.Validate without saving. Returns the complete definition plus a concise summary. Preview changes and get explicit user approval before persisting via create_flow.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{

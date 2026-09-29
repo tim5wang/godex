@@ -456,6 +456,11 @@ func resolveWorkflowServiceVarRef(state workflowState, expression string) (any, 
 			return workflowOutputValue(node.Outputs, strings.Join(parts[3:], "."))
 		}
 	}
+	if len(parts) >= 2 {
+		if root, ok := state.Summary.TemplateVars[parts[0]].(map[string]any); ok {
+			return workflowOutputValue(root, strings.Join(parts[1:], "."))
+		}
+	}
 	return nil, false
 }
 

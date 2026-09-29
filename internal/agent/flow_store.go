@@ -6,6 +6,8 @@
 //	  versions/{version}/compiled.json    # compile artifact (nodes/edges + digest)
 //	  current.json                        # draft/gray/published -> version
 //	  runs/{runID}.json                   # FlowRun record (runtime body lives in workflows/)
+//	  sessions/{sessionID}/summary.json   # FlowSession snapshot
+//	  sessions/{sessionID}/events.jsonl   # ordered FlowSession event journal
 package agent
 
 import (
@@ -285,10 +287,12 @@ func (s *flowStore) deleteVersion(flowID, version string) error {
 		return err
 	}
 	// Clear any status lane pointing at the removed version.
-	cur, err := s.loadCurrent(flowID)
+	currentPath, err := s.currentPath(flowID)
 	if err != nil {
 		return err
 	}
+	var cur flowCurrent
+	_ = readJSONFile(currentPath, &cur)
 	changed := false
 	if cur.Draft == version {
 		cur.Draft = ""
@@ -303,7 +307,7 @@ func (s *flowStore) deleteVersion(flowID, version string) error {
 		changed = true
 	}
 	if changed {
-		return s.saveCurrent(flowID, cur)
+		return fsutil.WriteJSONAtomic(currentPath, cur, 0644)
 	}
 	return nil
 }

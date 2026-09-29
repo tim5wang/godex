@@ -20,6 +20,62 @@ func TestParseFlowSpecFromLLMPlain(t *testing.T) {
 	}
 }
 
+func TestParseSessionFlowDefinitionPreservesAndValidatesTriggersAndLanes(t *testing.T) {
+	const raw = `{
+	  "flow_id":"fl_session_contract",
+	  "version":"1",
+	  "status":"draft",
+	  "execution_mode":"session",
+	  "session_workflow":{
+	    "triggers":[{"event_type":"game.snapshot","entry_node":"update","delivery":"latest_wins","lane_id":"fast"}],
+	    "lanes":[{"id":"fast","cadence":"hybrid","interval_ms":64,"deadline_ms":250,"class":"fast","overload_policy":"coalesce_latest"}]
+	  },
+	  "nodes":[{"id":"update","kind":"function","function":{"runtime":"js","source":"function handle(ctx, event) { return {}; }"}}],
+	  "edges":[]
+	}`
+	def, err := parseFlowSpecFromLLM(raw)
+	if err != nil {
+		t.Fatalf("parse session definition: %v", err)
+	}
+	if err := flow.Validate(def); err != nil {
+		t.Fatalf("validate session definition: %v", err)
+	}
+	if def.ExecutionMode != flow.ExecutionModeSession ||
+		len(def.SessionWorkflow.Triggers) != 1 ||
+		def.SessionWorkflow.Triggers[0].Delivery != flow.SessionDeliveryLatestWins ||
+		def.SessionWorkflow.Triggers[0].LaneID != "fast" ||
+		len(def.SessionWorkflow.Lanes) != 1 ||
+		def.SessionWorkflow.Lanes[0].Cadence != flow.SessionLaneCadenceHybrid ||
+		def.SessionWorkflow.Lanes[0].IntervalMS != 64 {
+		t.Fatalf("session contract fields were not preserved: %+v", def)
+	}
+}
+
+func TestFlowSpecPromptsPreserveSessionContractAndBoundaries(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"planner": flowSpecPlanSystemPrompt,
+		"amender": flowSpecAmendSystemPrompt,
+	} {
+		for _, want := range []string{"execution_mode", "session_workflow", "latest_wins", "periodic/hybrid"} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s prompt is missing %q", name, want)
+			}
+		}
+	}
+	for _, want := range []string{
+		"including B's HTTP JSON service workflows",
+		"Do not split ordinary media requests into frames",
+		"raw audio/video frame processing",
+	} {
+		if !strings.Contains(flowSpecPlanSystemPrompt, want) {
+			t.Errorf("planner prompt is missing boundary %q", want)
+		}
+	}
+	if strings.Contains(flowSpecAmendSystemPrompt, "ask for explicit approval") {
+		t.Fatal("JSON-only definition amender must not mix user-facing approval text into its output")
+	}
+}
+
 // TestParseFlowSpecFromLLMFence verifies a markdown-fenced + prose-wrapped
 // response still parses (LLM output tolerance).
 func TestParseFlowSpecFromLLMFence(t *testing.T) {

@@ -75,6 +75,15 @@ func (a *Agent) DenyPendingPermission(sessionID, requestID, reason string) (tool
 	return a.permissions.DenyPending(sessionID, requestID, reason)
 }
 
+// CancelPendingPermission removes a request without recording an allow or deny
+// decision. It is intended for work canceled before a user decision.
+func (a *Agent) CancelPendingPermission(sessionID, requestID string) bool {
+	if a.permissions == nil {
+		return false
+	}
+	return a.permissions.CancelPending(sessionID, requestID)
+}
+
 func (a *Agent) reviewPermissionRequest(ctx context.Context, req tools.PermissionRequest) (tools.PermissionResult, error) {
 	prompt := buildPermissionReviewPrompt(req)
 	result, err := a.runScopedSubagent(ctx, prompt, "You are a security review subagent. Review one protected tool call from a remote session. You may use read_file when file context matters. Be conservative. Reply with exactly one line beginning with ALLOW:, DENY:, or MANUAL: followed by a short reason.", []string{"read_file"}, 8)

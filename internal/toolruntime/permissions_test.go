@@ -141,6 +141,35 @@ func TestPermissionManagerExpiresPendingApproval(t *testing.T) {
 	}
 }
 
+func TestPermissionManagerCancelPendingDoesNotRecordDecision(t *testing.T) {
+	manager := NewDefaultPermissionManager()
+	req := PermissionRequest{
+		SessionID: "web-session",
+		Source:    string(message.SourceWeb),
+		Sender:    "subagent:job-1",
+		ToolName:  "bash",
+		Action:    "exec",
+		Command:   "go test ./...",
+		Mutation:  true,
+	}
+	pending := manager.Evaluate(req)
+	if pending.Decision != PermissionPending || pending.RequestID == "" {
+		t.Fatalf("expected pending approval, got %+v", pending)
+	}
+	if manager.CancelPending("another-session", pending.RequestID) {
+		t.Fatal("must not cancel a request owned by another session")
+	}
+	if !manager.CancelPending("web-session", pending.RequestID) {
+		t.Fatal("expected pending request to be canceled")
+	}
+	if got := manager.ListPending("web-session"); len(got) != 0 {
+		t.Fatalf("expected pending request to be removed, got %+v", got)
+	}
+	if got := manager.Evaluate(req); got.Decision != PermissionPending || got.RequestID == "" {
+		t.Fatalf("canceling a request must not persist an allow or deny decision, got %+v", got)
+	}
+}
+
 func TestPermissionManagerRequiresApprovalForUnlistedShellCommand(t *testing.T) {
 	manager := NewDefaultPermissionManager()
 	req := PermissionRequest{

@@ -31,6 +31,8 @@ import (
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/mcp"
+	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/platform/valueutil"
@@ -56,6 +58,9 @@ type Backend interface {
 	SubmitAsync(context.Context, string, message.Envelope, ...rtbackend.SubmitOptions) (*rtbackend.SubmitResult, error)
 	CancelTurn(context.Context, string, string) (*rtbackend.CancelTurnResult, error)
 	ExecuteCommand(context.Context, string, commands.Command) (commands.Result, error)
+	ListSessionSkills(context.Context, string) ([]skill.CatalogEntry, error)
+	ActiveSessionSkills(context.Context, string) ([]tools.SkillActivation, error)
+	ListSessionMCPServers(context.Context, string) ([]mcp.ServerConfig, error)
 	PendingPermissions(context.Context, string) ([]tools.PendingPermission, error)
 	ApprovePermission(context.Context, string, string, tools.PermissionGrantScope) (tools.PermissionResolution, error)
 	DenyPermission(context.Context, string, string, string) (tools.PermissionResolution, error)
@@ -473,6 +478,17 @@ func (s *Session) registerGlobalHotkeys() {
 // are forwarded to ExecuteCommand exactly as before.  /model and
 // /resume with no arguments open an interactive dropdown selector.
 func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.CommandMetadata) {
+	if len(cmd.Subcommands) > 0 {
+		args, proceed, err := completeSlashArguments(ctx, cmd, ctx.Args, s.slashCandidateOptions)
+		if err != nil {
+			ctx.WriteError(err.Error())
+			return
+		}
+		if !proceed {
+			return
+		}
+		ctx.Args = args
+	}
 	// /help opens the interactive help popup instead of text output.
 	if cmd.Name == "help" {
 		s.openHelp()
@@ -532,6 +548,63 @@ func (s *Session) handleSlashCommand(ctx *minitui.CommandContext, cmd commands.C
 	ctx.Write("✓ /" + cmd.Name + " completed\n")
 	s.clearActivityChip()
 	s.refreshStatusBar()
+}
+
+func (s *Session) slashCandidateOptions(source string, previousArgs []string) ([]minitui.SelectOption, error) {
+	ctx := context.Background()
+	switch source {
+	case "skills":
+		items, err := s.backend.ListSessionSkills(ctx, s.sessionID)
+		if err != nil {
+			return nil, err
+		}
+		options := make([]minitui.SelectOption, 0, len(items))
+		for _, item := range items {
+			options = append(options, minitui.SelectOption{Label: item.Name, Description: item.Description})
+		}
+		return options, nil
+	case "skill_sections":
+		if len(previousArgs) == 0 {
+			return nil, nil
+		}
+		items, err := s.backend.ListSessionSkills(ctx, s.sessionID)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if !strings.EqualFold(item.Name, previousArgs[0]) && !strings.EqualFold(item.ID, previousArgs[0]) {
+				continue
+			}
+			options := make([]minitui.SelectOption, 0, len(item.Sections))
+			for _, section := range item.Sections {
+				options = append(options, minitui.SelectOption{Label: section})
+			}
+			return options, nil
+		}
+		return nil, nil
+	case "active_skills":
+		items, err := s.backend.ActiveSessionSkills(ctx, s.sessionID)
+		if err != nil {
+			return nil, err
+		}
+		options := make([]minitui.SelectOption, 0, len(items))
+		for _, item := range items {
+			options = append(options, minitui.SelectOption{Label: item.Name, Description: item.Description})
+		}
+		return options, nil
+	case "mcp_servers":
+		items, err := s.backend.ListSessionMCPServers(ctx, s.sessionID)
+		if err != nil {
+			return nil, err
+		}
+		options := make([]minitui.SelectOption, 0, len(items))
+		for _, item := range items {
+			options = append(options, minitui.SelectOption{Label: item.Name, Description: item.Type})
+		}
+		return options, nil
+	default:
+		return nil, fmt.Errorf("unknown slash-command candidate source %q", source)
+	}
 }
 
 // handleModelSelect shows a secondary dropdown to pick a model

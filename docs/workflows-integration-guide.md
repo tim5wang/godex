@@ -184,11 +184,10 @@ stream.on("turn_completed", () => setDone());
 - [ ] 触发一个需审批工具（如写文件），验证审批按钮 approve/deny
 - [ ] `GET /memory/context?q=...` 验证知识库召回
 
-## 9. 与 Workflows 板块的关系
+## 9. 当前产品入口（历史说明）
 
-godex Web UI 的 **Workflows 板块**（`/workflows`）就是本契约的参考实现：
-- Playbooks 页签 = 剧本 CRUD（notes, tag=workflow）
-- Knowledge 页签 = 知识库召回预览（memory）
-- Launch 页签 = 表单启动 + 流式结果 + ui_card 卡片 + 审批按钮 + 工具活动
+本文最初以旧 `/workflows` 页面作为集成参考；该页面已删除，本文整体仅供历史追溯，不是当前接入契约。
 
-第三方 UI 可以直接复用同一套数据（剧本/知识库），或仅把 godex 当 agent 引擎、自建交互层。
+- 单个嵌入式 agent 环节：请使用 [Agent Step SDK](agent-step-sdk.md) 与 [Agent Step Platform 设计](agent-step-platform-design.md)。
+- 可视化、多节点流程编排：请使用 [Business Flow Runtime](business-flow-runtime-design.md) 与 Business Agents 页面。
+- `UiCardView` 仍作为共享展示组件保留；旧 Playbooks / Knowledge / Launch 页面描述不代表当前存在对应页面。

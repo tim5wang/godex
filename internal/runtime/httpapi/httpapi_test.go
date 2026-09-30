@@ -784,6 +784,24 @@ func TestListCommandsReturnsBuiltinSlashCommandMetadata(t *testing.T) {
 	if !strings.Contains(byName["mcp"].InputHint, "tools <server>") {
 		t.Fatalf("expected MCP input hint in /commands response, got %+v", byName["mcp"])
 	}
+	var skillLoadSource string
+	for _, subcommand := range byName["skills"].Subcommands {
+		if subcommand.Name == "load" {
+			skillLoadSource = subcommand.Arguments[0].CandidateSource
+		}
+	}
+	if skillLoadSource != "skills" {
+		t.Fatalf("expected /commands response to include skill argument candidates, got %+v", byName["skills"].Subcommands)
+	}
+	var mcpToolsSource string
+	for _, subcommand := range byName["mcp"].Subcommands {
+		if subcommand.Name == "tools" {
+			mcpToolsSource = subcommand.Arguments[0].CandidateSource
+		}
+	}
+	if mcpToolsSource != "mcp_servers" {
+		t.Fatalf("expected /commands response to include MCP server candidates, got %+v", byName["mcp"].Subcommands)
+	}
 }
 
 func TestMetaEndpointIsPublic(t *testing.T) {

@@ -11,7 +11,7 @@ import type { SessionTimelineEntry, DurableSubagentReview, DurableSubagentMerge,
 import { type ReviewMergeFilter, buildReviewMergeSummary, defaultReviewMergeJobId, shouldAutoLoadReview } from "./reviewMergeCenter";
 import { useConversationLayoutStore, type DockTab, DOCK_TABS } from "./layout/layoutStore";
 import { useBrowserViewStore } from "../browser/browserViewStore";
-import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getSessionContextUsage, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog, listAgentTemplates, listControlNodes } from "../../lib/api";
+import { getMeta, openSession, getNote, saveNote, getSnapshot, getSessionTimeline, getSessionTimelinePage, getSessionCompactions, listSessionSubagents, listSessionLongTasks, listPackageCommands, listCommands, listPackageRoles, getSessionContextInspector, getSessionContextUsage, getActiveSessionSkills, getModels, listSessions, approveSessionPermission, denySessionPermission, deleteSession, renameSession, APIError, cancelSessionTurn, cancelQueuedTurn, steerQueuedTurn, retrySessionTurn, resumeSessionTurn, setSessionModel, unloadSessionSkill, forkSession, reviewSessionSubagent, cancelSessionSubagent, resumeSessionSubagent, mergeSessionSubagent, runSessionLongTask, cancelSessionLongTask, finalizeSessionLongTaskStory, executeCommand, uploadAttachments, submitMessage, listSkillsCatalog, listSessionSkills, listMCPServers, listAgentTemplates, listControlNodes } from "../../lib/api";
 import type { SkillCatalogEntry } from "../../lib/types";
 import type { TerminalExecutionConfig } from "../../lib/terminalClient";
 import { streamEvents } from "../../lib/sse";
@@ -221,6 +221,12 @@ export function useChatSessionState(layout: ChatLayoutState) {
     queryKey: ["skills-catalog", token],
     enabled: !authRequired || !!token,
     queryFn: () => listSkillsCatalog(token || null),
+  });
+  const mcpServersQuery = useQuery({
+    queryKey: ["mcp-servers", token],
+    enabled: !authRequired || !!token,
+    queryFn: () => listMCPServers(token || null),
+    staleTime: 60_000,
   });
   const templatesQuery = useQuery({
     queryKey: ["agent-templates", token],
@@ -437,6 +443,12 @@ export function useChatSessionState(layout: ChatLayoutState) {
     enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
     queryFn: async () => getActiveSessionSkills(token || null, openQuery.data!.session_id),
   });
+  const sessionSkillsQuery = useQuery({
+    queryKey: ["skills-catalog", token, openQuery.data?.session_id],
+    enabled: !!openQuery.data?.session_id && (!authRequired || !!token),
+    queryFn: async () => listSessionSkills(token || null, openQuery.data!.session_id),
+    staleTime: 30_000,
+  });
 
   const modelsQuery = useQuery({
     queryKey: ["models", token, openQuery.data?.session_id],
@@ -611,6 +623,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
               void queryClient.invalidateQueries({ queryKey: ["context-inspector", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["context-usage", token, sessionId] });
               void queryClient.invalidateQueries({ queryKey: ["skills-active", token, sessionId] });
+              void queryClient.invalidateQueries({ queryKey: ["skills-catalog", token, sessionId] });
             }
             // Refresh list metadata once per completed turn (title, activity,
             // running badge), not on every snapshot/tool checkpoint.
@@ -680,6 +693,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
     sessionLocator,
     openQuery,
     skillsCatalogQuery,
+    mcpServersQuery,
     templatesQuery,
     nodesQuery,
     activeTemplate,
@@ -702,6 +716,7 @@ export function useChatSessionState(layout: ChatLayoutState) {
     contextInspectorQuery,
     contextUsageQuery,
     activeSkillsQuery,
+    sessionSkillsQuery,
     modelsQuery,
     sessionsQuery,
   };

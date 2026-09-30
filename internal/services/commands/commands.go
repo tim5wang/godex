@@ -47,9 +47,26 @@ type Result struct {
 // CommandMetadata is the shared discoverable slash-command description used by
 // CLI/TUI/Web help text and ACP command discovery.
 type CommandMetadata struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	InputHint   string `json:"input_hint,omitempty"`
+	Name        string                      `json:"name"`
+	Description string                      `json:"description"`
+	InputHint   string                      `json:"input_hint,omitempty"`
+	Subcommands []CommandSubcommandMetadata `json:"subcommands,omitempty"`
+}
+
+// CommandSubcommandMetadata describes one selectable subcommand and its
+// positional arguments.
+type CommandSubcommandMetadata struct {
+	Name        string                    `json:"name"`
+	Description string                    `json:"description"`
+	Arguments   []CommandArgumentMetadata `json:"arguments,omitempty"`
+}
+
+// CommandArgumentMetadata describes one positional argument and its optional
+// dynamic candidate source.
+type CommandArgumentMetadata struct {
+	Hint            string `json:"hint,omitempty"`
+	Required        bool   `json:"required,omitempty"`
+	CandidateSource string `json:"candidate_source,omitempty"`
 }
 
 // AvailableMetadata returns the stable list of built-in slash commands.
@@ -66,8 +83,31 @@ func AvailableMetadata() []CommandMetadata {
 		{Name: "insights", Description: "generate a workspace insights report"},
 		{Name: "doctor", Description: "diagnose the active Godex configuration"},
 		{Name: "channels", Description: "show runtime channel status"},
-		{Name: "skills", Description: "inspect, load, expand, or unload skills for this session", InputHint: "list|active|get|load|expand|unload ..."},
-		{Name: "mcp", Description: "inspect configured MCP servers and load their tools into this session", InputHint: "list|tools <server>|load <server>"},
+		{
+			Name:        "skills",
+			Description: "inspect, load, expand, or unload skills for this session",
+			InputHint:   "list|active|get|load|expand|unload ...",
+			Subcommands: []CommandSubcommandMetadata{
+				{Name: "list", Description: "list available skills"},
+				{Name: "active", Description: "list skills loaded in this session"},
+				{Name: "sources", Description: "browse skill install sources"},
+				{Name: "get", Description: "inspect a skill", Arguments: []CommandArgumentMetadata{{Hint: "<skill>", Required: true, CandidateSource: "skills"}}},
+				{Name: "install", Description: "install a skill from a source", Arguments: []CommandArgumentMetadata{{Hint: "<source>", Required: true}, {Hint: "[name]"}}},
+				{Name: "load", Description: "load a skill into this session", Arguments: []CommandArgumentMetadata{{Hint: "<skill>", Required: true, CandidateSource: "skills"}}},
+				{Name: "expand", Description: "load additional skill sections", Arguments: []CommandArgumentMetadata{{Hint: "<skill>", Required: true, CandidateSource: "skills"}, {Hint: "<section...>", Required: true, CandidateSource: "skill_sections"}}},
+				{Name: "unload", Description: "unload a skill from this session", Arguments: []CommandArgumentMetadata{{Hint: "<skill>", Required: true, CandidateSource: "active_skills"}}},
+			},
+		},
+		{
+			Name:        "mcp",
+			Description: "inspect configured MCP servers and load their tools into this session",
+			InputHint:   "list|tools <server>|load <server>",
+			Subcommands: []CommandSubcommandMetadata{
+				{Name: "list", Description: "list configured MCP servers"},
+				{Name: "tools", Description: "inspect tools exposed by a server", Arguments: []CommandArgumentMetadata{{Hint: "<server>", Required: true, CandidateSource: "mcp_servers"}}},
+				{Name: "load", Description: "load a server's tools into this session", Arguments: []CommandArgumentMetadata{{Hint: "<server>", Required: true, CandidateSource: "mcp_servers"}}},
+			},
+		},
 		{Name: "packages", Description: "inspect installed packages, package commands, roles, and prompts", InputHint: "list|commands|roles|prompts ..."},
 		{Name: "memory", Description: "browse durable memory and review memory candidates", InputHint: "list|search|candidates|accept|dismiss ..."},
 		{Name: "note", Description: "create, list, search, append, or update markdown notes", InputHint: "create <title> [--tags a,b] -- <markdown>"},

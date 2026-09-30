@@ -11,8 +11,9 @@ import (
 // Spec → engine): step → subagent_task (default), llm → llm_task; decision /
 // branch pass through. data_dependency/handoff edges are already folded into
 // CompiledNode.DependsOn/HandoffFrom; CompiledEdge entries become condition
-// edges (when + append template). This is the F1a compile adapter — the Flow
-// version store and /v1/flows API land in F1b.
+// edges (when + append template). The version store and /v1/flows APIs are
+// implemented around this adapter; see docs/business-flow-runtime-design.md
+// for current Flow capabilities and limitations.
 func compileFlowToWorkflowInputs(c *flow.Compiled) ([]workflowNodeInput, []workflowEdgeInput, error) {
 	if c == nil {
 		return nil, nil, fmt.Errorf("nil compiled flow")

@@ -104,9 +104,30 @@ func TestAvailableMetadataDrivesHelpText(t *testing.T) {
 	if !strings.Contains(seen["mcp"].InputHint, "load <server>") {
 		t.Fatalf("expected MCP usage hint, got %+v", seen["mcp"])
 	}
+	if subcommandByName(seen["skills"].Subcommands, "load").Arguments[0].CandidateSource != "skills" {
+		t.Fatalf("expected /skills load to expose skill candidates, got %+v", seen["skills"].Subcommands)
+	}
+	if subcommandByName(seen["skills"].Subcommands, "unload").Arguments[0].CandidateSource != "active_skills" {
+		t.Fatalf("expected /skills unload to expose active-skill candidates, got %+v", seen["skills"].Subcommands)
+	}
+	if subcommandByName(seen["skills"].Subcommands, "expand").Arguments[1].CandidateSource != "skill_sections" {
+		t.Fatalf("expected /skills expand to expose section candidates, got %+v", seen["skills"].Subcommands)
+	}
+	if subcommandByName(seen["mcp"].Subcommands, "tools").Arguments[0].CandidateSource != "mcp_servers" {
+		t.Fatalf("expected /mcp tools to expose server candidates, got %+v", seen["mcp"].Subcommands)
+	}
 	if strings.Count(service.HelpText(), "/model") != 1 {
 		t.Fatalf("expected HelpText to render one /model entry, got:\n%s", service.HelpText())
 	}
+}
+
+func subcommandByName(items []CommandSubcommandMetadata, name string) CommandSubcommandMetadata {
+	for _, item := range items {
+		if item.Name == name {
+			return item
+		}
+	}
+	return CommandSubcommandMetadata{}
 }
 
 func TestExecuteNoteCreatesAndListsMarkdownNotes(t *testing.T) {

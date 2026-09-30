@@ -165,10 +165,10 @@ type Request struct {
 	PromptCacheKey       string       `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention string       `json:"prompt_cache_retention,omitempty"`
 	// RuntimeTail carries per-turn volatile runtime context (memory recall,
-	// project ledger, todos, date). Wire serializers append it to the last
-	// tool result / user message instead of emitting it as a fresh user turn,
-	// so the model does not treat runtime state as a new instruction while the
-	// churn stays at the tail of the prompt for prefix caching.
+	// project ledger, todos, date). Wire serializers place it at the prompt
+	// tail using a provider-appropriate representation, keeping it out of
+	// persisted conversation history and minimizing disruption to prefix
+	// caching.
 	RuntimeTail string `json:"-"`
 	// IncludeReasoningContent requests that assistant messages echo their
 	// previous reasoning_content back to OpenAI-compatible providers. The

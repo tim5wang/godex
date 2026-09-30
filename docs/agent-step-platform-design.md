@@ -161,8 +161,8 @@ type ContextProvider interface {
 - **上下文注入安全**：`inputs` 必须标记为业务数据、与指令隔离，防止 prompt injection（godex 的 security.screener 可复用）。
 - **key 粒度**：一业务系统一 key（可再细分到团队/功能，用 allowed 工具集区分）。
 
-## 8. 与现有 Workflows 板块的关系
+## 8. 与旧 Workflows 页面及 Business Flow 的关系
 
-- 现 `Workflows 板块`（/workflows）是 godex 内部工具，**不再作为嵌入形态的载体**；保留为「本地剧本/知识库/调试工作台」。
-- 本设计是**对外嵌入层**（Agent Step Platform），二者共享底层 agent 运行时、ui_card、memory，但接口不同：板块是 godex 的 UI，Agent Step 是业务系统的环节。
-- 后续板块可反向使用 Agent Step API 作内部调试入口（一致化）。
+- 旧 `/workflows` 页面已删除，由 Business Agents 取代；目前仅保留可复用的 `UiCardView` 组件。旧 Workflows 页面设计与集成指南均为历史资料，不应视作当前产品入口。
+- 本文定义的是**对外嵌入层**（Agent Step Platform）：业务系统通过 API / SDK 接入单个 agent 环节。
+- 多节点、版本化流程编排由 Business Flow Runtime 承担；它复用 durable workflow 引擎，但不是旧 Workflows 页面。当前实现状态见 [`feature-implementation-matrix.md`](feature-implementation-matrix.md) 与 [`business-flow-runtime-design.md`](business-flow-runtime-design.md)。

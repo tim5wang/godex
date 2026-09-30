@@ -92,49 +92,14 @@ type agentGraphView struct {
 	Wait       *subagentWaitView    `json:"wait,omitempty"`
 }
 
-// AgentGraph is the runtime abstraction for a dynamic, parallel, adjustable
-// agent DAG (longtask 重构核心, roadmap 2.4). The implementation adapts to the
-// durable workflow store: nodes are subagent jobs with bounded handoffs,
-// dependencies gate scheduling, and control-flow edges append new nodes at
-// runtime. The graph is fully observable through the returned views.
-type AgentGraph interface {
-	// Create declares a graph from node/edge inputs and persists it.
-	Create(ctx context.Context, id string, nodes []agentGraphNodeInput, edges []agentGraphEdgeInput) (agentGraphView, error)
-	// GetGraph returns the current observable state of the graph.
-	GetGraph(ctx context.Context, id string) (agentGraphView, error)
-	// AddNode appends new nodes (and edges) to a live graph.
-	AddNode(ctx context.Context, id string, nodes []agentGraphNodeInput, edges []agentGraphEdgeInput, idempotencyKey, parentNodeID, reason string) (agentGraphView, error)
-	// AddEdge adds static (data_dependency/handoff) or dynamic (control_flow) edges.
-	AddEdge(ctx context.Context, id string, edges []agentGraphEdgeInput) (agentGraphView, error)
-	// RemoveNode removes a node and any edges touching it. Nodes that still
-	// depend on it block removal with an explicit error.
-	RemoveNode(ctx context.Context, id, nodeID string) (agentGraphView, error)
-	// CancelNode cancels a pending or running node.
-	CancelNode(ctx context.Context, id, nodeID string) (agentGraphView, error)
-	// Run starts every ready node (deps complete). merge_point nodes are
-	// auto-completed; user_input nodes stay pending for complete_node.
-	Run(ctx context.Context, id string) (agentGraphView, error)
-	// Wait blocks until the running nodes reach a terminal state.
-	Wait(ctx context.Context, id string, mode string, timeoutMS int) (agentGraphView, error)
-}
-
-// agentGraph implements AgentGraph on top of the Agent's durable workflow
-// store. It is a thin adapter: the graph shares the exact workflow runtime
-// (subagent jobs, bounded handoffs, edge processing) so a graph survives
-// restarts and is inspectable through the same on-disk artifacts. A wrapper
-// type is used because *Agent already declares Run(ctx) (the turn runner),
-// which would collide with AgentGraph.Run.
+// agentGraph adapts graph operations to the Agent's durable workflow store.
+// Nodes share the workflow scheduler, bounded handoffs, and on-disk artifacts.
+// A wrapper keeps graph Run(ctx, id) separate from the Agent turn runner Run(ctx).
 type agentGraph struct {
 	agent *Agent
 }
 
-// newAgentGraphRuntime binds an AgentGraph implementation to an Agent.
-func newAgentGraphRuntime(agent *Agent) AgentGraph {
-	return &agentGraph{agent: agent}
-}
 
-// compile-time assertion: *agentGraph implements AgentGraph.
-var _ AgentGraph = (*agentGraph)(nil)
 
 // agentGraphArgs is the tool argument envelope for the agent_graph tool.
 type agentGraphArgs struct {
@@ -156,9 +121,7 @@ func (args agentGraphArgs) graphWorkflowID() string {
 	return firstNonEmpty(strings.TrimSpace(args.GraphID), strings.TrimSpace(args.WorkflowID))
 }
 
-// newAgentGraphTool exposes the AgentGraph runtime as a typed tool. The
-// schema mirrors the workflow tool but speaks graph semantics: node_type /
-// edge_type + create/get/add_node/add_edge/remove_node/cancel_node/run/wait.
+// newAgentGraphTool exposes graph operations over the durable workflow runtime.
 func newAgentGraphTool(agent *Agent) tools.Tool {
 	nodeTypeEnum := []string{agentGraphNodeLLMTask, agentGraphNodeSubagent, agentGraphNodeToolCall, agentGraphNodeUserInput, agentGraphNodeMergePoint}
 	edgeTypeEnum := []string{agentGraphEdgeDataDependency, agentGraphEdgeControlFlow, agentGraphEdgeHandoff}
@@ -230,7 +193,7 @@ func newAgentGraphTool(agent *Agent) tools.Tool {
 			action = "get"
 		}
 		id := args.graphWorkflowID()
-		graph := newAgentGraphRuntime(agent)
+		graph := &agentGraph{agent: agent}
 		switch action {
 		case "create":
 			view, err := graph.Create(ctx, id, args.Nodes, args.Edges)
@@ -292,7 +255,7 @@ func newAgentGraphTool(agent *Agent) tools.Tool {
 	})
 }
 
-// Create implements AgentGraph.Create.
+// Create declares a graph from node/edge inputs and persists it.
 func (g *agentGraph) Create(ctx context.Context, id string, nodes []agentGraphNodeInput, edges []agentGraphEdgeInput) (agentGraphView, error) {
 	if len(nodes) == 0 {
 		return agentGraphView{}, fmt.Errorf("missing graph nodes")
@@ -318,7 +281,7 @@ func (g *agentGraph) Create(ctx context.Context, id string, nodes []agentGraphNo
 	return agentGraphViewFromState(state), nil
 }
 
-// GetGraph implements AgentGraph.GetGraph.
+// GetGraph returns the current observable state of the graph.
 func (g *agentGraph) GetGraph(ctx context.Context, id string) (agentGraphView, error) {
 	state, err := g.agent.workflowState(id)
 	if err != nil {
@@ -327,7 +290,7 @@ func (g *agentGraph) GetGraph(ctx context.Context, id string) (agentGraphView, e
 	return agentGraphViewFromState(state), nil
 }
 
-// AddNode implements AgentGraph.AddNode. Static edges (data_dependency /
+// AddNode appends new nodes (and edges) to a live graph. Static edges (data_dependency /
 // handoff / control_flow without append) are compiled into DependsOn /
 // HandoffFrom on their target node; dynamic control_flow edges (with append)
 // are stored as durable workflow edges.
@@ -372,7 +335,7 @@ func (g *agentGraph) AddNode(ctx context.Context, id string, nodes []agentGraphN
 	return out, nil
 }
 
-// AddEdge implements AgentGraph.AddEdge.
+// AddEdge adds static (data_dependency/handoff) or dynamic (control_flow) edges.
 func (g *agentGraph) AddEdge(ctx context.Context, id string, edges []agentGraphEdgeInput) (agentGraphView, error) {
 	if len(edges) == 0 {
 		return agentGraphView{}, fmt.Errorf("missing graph edges")
@@ -410,7 +373,7 @@ func (g *agentGraph) AddEdge(ctx context.Context, id string, edges []agentGraphE
 	return agentGraphViewFromState(state), nil
 }
 
-// RemoveNode implements AgentGraph.RemoveNode. A node that other nodes still
+// RemoveNode removes a node and any edges touching it. A node that other nodes still
 // depend on (DependsOn / HandoffFrom) blocks removal with an explicit error
 // so the orchestrator rewires first. Running jobs are canceled.
 func (g *agentGraph) RemoveNode(ctx context.Context, id, nodeID string) (agentGraphView, error) {
@@ -465,7 +428,7 @@ func (g *agentGraph) RemoveNode(ctx context.Context, id, nodeID string) (agentGr
 	return agentGraphViewFromState(state), nil
 }
 
-// CancelNode implements AgentGraph.CancelNode.
+// CancelNode cancels a pending or running node.
 func (g *agentGraph) CancelNode(ctx context.Context, id, nodeID string) (agentGraphView, error) {
 	state, err := g.agent.cancelWorkflowNode(ctx, id, nodeID)
 	if err != nil {
@@ -474,7 +437,7 @@ func (g *agentGraph) CancelNode(ctx context.Context, id, nodeID string) (agentGr
 	return agentGraphViewFromState(state), nil
 }
 
-// Run implements AgentGraph.Run. Every pending node with completed deps is
+// Run starts every pending node with completed dependencies. Merge points are
 // started; merge_point nodes are auto-completed with a merged handoff
 // summary (token-budget truncated); user_input nodes stay pending until the
 // orchestrator feeds them via complete_node.
@@ -519,7 +482,7 @@ func (g *agentGraph) Run(ctx context.Context, id string) (agentGraphView, error)
 	return view, nil
 }
 
-// Wait implements AgentGraph.Wait.
+// Wait blocks until running nodes reach a terminal state.
 func (g *agentGraph) Wait(ctx context.Context, id, mode string, timeoutMS int) (agentGraphView, error) {
 	workflow, err := g.agent.waitWorkflow(ctx, id, mode, timeoutMS)
 	if err != nil {

@@ -43,7 +43,7 @@
 | [node-center-bridge-design.md](./node-center-bridge-design.md) | Node Center Bridge 架构、relay 与节点代理设计 | Implemented（2026-09-07）；协议事实以代码和测试为准 |
 | [code-review-2026-08-15.md](./code-review-2026-08-15.md) | 代码与设计 Review 记录：文档↔实现不一致、代码侧发现、设计观察 | 2026-08-15 |
 | [code-and-docs-review-2026-08-31.md](./code-and-docs-review-2026-08-31.md) | 全模块代码/架构/文档审查，含工具证据、测试基线与优先级 | 2026-08-31 |
-| [technical-debt-audit-2026-09-30.md](./technical-debt-audit-2026-09-30.md) | 当前代码与文档技术债、验证结果及分阶段优化方案 | 基于 HEAD `2680288` 加当前工作树；含未提交改动限制说明 |
+| [technical-debt-audit-2026-09-30.md](./technical-debt-audit-2026-09-30.md) | 当前代码与文档技术债、验证结果及分阶段优化方案 | 复核基线为 HEAD `80e43f9` 加当时工作树；随后提交至 `e30bc36` |
 | [feature-implementation-matrix.md](./feature-implementation-matrix.md) | 功能—实现—入口—权威文档单一索引 | **判断功能是否已实现时先查本文** |
 | [project-structure.md](./project-structure.md) | 项目目录结构与分层规范 | |
 | [memory-design-principles.md](./memory-design-principles.md) | Memory 模块目标、边界、组成与约束 | |

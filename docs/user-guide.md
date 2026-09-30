@@ -1006,6 +1006,7 @@ godex import claude --source ~/.claude --package claude-user
 | `/doctor` | — | 诊断配置与运行时 |
 | `/channels` | — | 查看 channel 状态 |
 | `/skills` | `list\|sources [query]\|active\|get <name>\|install <source> [name]\|load <name>\|expand <name> <section...>\|unload <name>` | 会话 skill 管理 |
+| `/mcp` | `list\|tools <server>\|load <server>` | 查看已配置 MCP server、检查工具或将其加载到当前会话 |
 | `/packages` | `list\|commands\|roles\|prompts` | 查看 package 声明 |
 | `/memory` | `list\|get <id-or-title>\|search <q>\|candidates\|accept <fingerprint>\|dismiss <fingerprint>`（别名：`digest`、`log [limit]`、`restore <audit-id> [before\|after]`） | durable memory 浏览与候选审核 |
 | `/memory-digest` | — | 分析会话信号并生成候选 |

@@ -3,9 +3,9 @@
 //   - structured edge predicates (choice / confidence / output fields)
 //   - node-level RetryPolicy for transient failures (Temporal-style backoff)
 //
-// See docs/business-flow-runtime-design.md §3 (Flow Spec v1). F0 implements
-// the engine kernel; the Flow Spec compiler, version store and FlowGram
-// adapter land in F1/F3.
+// See docs/business-flow-runtime-design.md §3 (Flow Spec v1). These engine
+// primitives are reused by the implemented Flow compiler and versioned runtime;
+// current capabilities and limitations are recorded in that design document.
 package agent
 
 import (

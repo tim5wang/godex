@@ -6,6 +6,7 @@ import type { AttachmentsRef } from "@ant-design/x/es/attachments";
 import { useI18n } from "../i18n";
 import { clearDraft, draftSignature, loadDraft, loadDraftFiles, saveDraft } from "../lib/composerDraft";
 import type { CommandMetadata, PackageCommandEntry } from "../lib/types";
+import { matchSlashCommands, type SlashCommandCandidates, type SlashCommandSuggestion } from "./slashCommandSuggestions";
 
 export interface ComposerSubmission {
   text: string;
@@ -25,6 +26,7 @@ interface ComposerProps {
   uploadProgress?: number | null;
   builtinCommands?: CommandMetadata[];
   packageCommands?: PackageCommandEntry[];
+  slashCommandCandidates?: SlashCommandCandidates;
   queuedFiles?: File[];
   onQueuedFilesConsumed?: () => void;
   /** Stable per-session key used to persist the unsent draft (text + files).
@@ -35,20 +37,7 @@ interface ComposerProps {
   ref?: Ref<ComposerHandle>;
 }
 
-/** A slash-palette entry: either a built-in command (/clear, /model …)
- *  or a package command (/namespace name …) — unified so keyboard
- *  navigation and filtering work across both sources. */
-interface PaletteEntry {
-  key: string;
-  invocation: string;
-  description?: string;
-  inputHint?: string;
-  mode?: string;
-  roles?: string[];
-  bundles?: string[];
-}
-
-export function Composer({ disabled, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], queuedFiles = [], onQueuedFilesConsumed, draftScope = "", onSubmit, ref }: ComposerProps) {
+export function Composer({ disabled, uploading = false, uploadProgress = null, builtinCommands = [], packageCommands = [], slashCommandCandidates, queuedFiles = [], onQueuedFilesConsumed, draftScope = "", onSubmit, ref }: ComposerProps) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -95,8 +84,11 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
     })),
     [files],
   );
-  const paletteEntries = useMemo(() => matchSlashCommands(value, builtinCommands, packageCommands), [builtinCommands, packageCommands, value]);
-  const showCommandPalette = value.trimStart().startsWith("/") && !value.endsWith(" ") && files.length === 0 && paletteEntries.length > 0;
+  const paletteEntries = useMemo(
+    () => matchSlashCommands(value, builtinCommands, packageCommands, slashCommandCandidates),
+    [builtinCommands, packageCommands, slashCommandCandidates, value],
+  );
+  const showCommandPalette = value.trimStart().startsWith("/") && files.length === 0 && paletteEntries.length > 0;
 
   useEffect(() => {
     setActiveIndex(0);
@@ -330,39 +322,4 @@ export function Composer({ disabled, uploading = false, uploadProgress = null, b
   );
 }
 
-function matchSlashCommands(value: string, builtinCommands: CommandMetadata[], packageCommands: PackageCommandEntry[]): PaletteEntry[] {
-  const trimmed = value.trimStart();
-  if (!trimmed.startsWith("/")) {
-    return [];
-  }
-  const query = normalizeCommandQuery(trimmed.slice(1));
-  const builtins: PaletteEntry[] = builtinCommands.map((command) => ({
-    key: `builtin:${command.name}`,
-    invocation: `/${command.name}`,
-    description: command.description,
-    inputHint: command.input_hint,
-  }));
-  const packages: PaletteEntry[] = packageCommands.map((command) => ({
-    key: `pkg:${command.package_name}:${command.namespace || ""}:${command.name}:${command.path}`,
-    invocation: `/${command.namespace || command.package_name} ${command.name}`,
-    description: command.description,
-    mode: command.mode,
-    roles: command.roles,
-    bundles: command.recommended_bundles,
-  }));
-  const all = [...builtins, ...packages];
-  if (!query) {
-    return all.slice(0, 8);
-  }
-  return all
-    .filter((entry) =>
-      normalizeCommandQuery(
-        [entry.invocation, entry.description, ...(entry.roles ?? []), ...(entry.bundles ?? [])].filter(Boolean).join(" "),
-      ).includes(query),
-    )
-    .slice(0, 8);
-}
-
-function normalizeCommandQuery(value: string) {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
+type PaletteEntry = SlashCommandSuggestion;

@@ -2,7 +2,7 @@
 
 > 状态：Active（按 2026-09-30 当前工作树复核；发布状态以提交和 CI 结果为准）
 > 范围：GoDex 当前代码、顶层技术文档、架构/文档门禁、Web/Android 构建入口与 GitHub Actions 发布门禁。
-> 基线：原始审计起点为 HEAD `175b25cc320eb8654f1ff6e9d3fe534ddbe0f425`；本轮复核 HEAD 为 `80e43f9`，另有尚未提交的 FlowSession 状态目录锁、故障注入测试和文档更新。外部 CI 未核验。
+> 基线：原始审计起点为 HEAD `175b25cc320eb8654f1ff6e9d3fe534ddbe0f425`；复核时以 HEAD `80e43f9` 加当时工作树为准，其中的 FlowSession 状态目录锁、故障注入测试和文档更新随后已提交到 `e30bc36`。外部 CI 未核验。
 
 ## 结论摘要
 
@@ -52,7 +52,7 @@ FlowSession 现在明确支持一个 backend runtime 独占一个本地 `StateDi
 
 ### 阶段 1：固化 FlowSession 契约（实现和完整本地门禁已完成）
 
-1. 已复核 HEAD `80e43f9` 相对阶段基线的 Flow/Voice 状态；feature matrix 与 runtime design 已同步部署限制。
+1. 已复核 HEAD `80e43f9` 及当时工作树相对阶段基线的 Flow/Voice 状态；相关代码与文档随后已提交到 `e30bc36`，feature matrix 与 runtime design 已同步部署限制。
 2. 已固定单 runtime/本地 `StateDir` 的支持边界；`backend.Start` 获取非阻塞 OS advisory lock，锁冲突时拒绝启动。共享盘/跨主机部署仍不支持，且不提供 lease 或自动接管。
 3. 已验证服务重启后的 durable event 重放、纯 LLM checkpoint 前中断后重调、外部副作用按稳定幂等键去重、worker 迟到结果 fencing、客户端 WebSocket 重连去重，以及 Stop 超时期间保持锁。
 4. `FlowSession` region runner 已在此前变更中拆到独立文件；本轮架构预算通过，没有为指标再引入通用框架。

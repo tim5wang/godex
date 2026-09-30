@@ -108,7 +108,7 @@ func (c *OpenAIResponsesClient) responsesParams(req protocol.Request) responses.
 	params := responses.ResponseNewParams{
 		Model: req.Model,
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: codexInputFromProtocol(req),
+			OfInputItemList: openAIResponsesInputFromProtocol(req),
 		},
 		// Keep responses out of server-side storage; caching is independent.
 		Store: param.NewOpt(false),
@@ -143,4 +143,24 @@ func (c *OpenAIResponsesClient) responsesParams(req protocol.Request) responses.
 		}
 	}
 	return params
+}
+
+// openAIResponsesInputFromProtocol keeps volatile runtime context in its own
+// final message. Putting it inside a function_call_output changes that
+// historical item on every request, which can prevent prompt-cache reuse
+// through that message boundary. Keeping the tool result intact lets the cache
+// reach its message boundary, while the changing context stays at the end.
+func openAIResponsesInputFromProtocol(req protocol.Request) responses.ResponseInputParam {
+	tail := strings.TrimSpace(req.RuntimeTail)
+	req.RuntimeTail = ""
+	items := codexInputFromProtocol(req)
+	if tail == "" {
+		return items
+	}
+
+	const runtimeContextHeader = "Godex runtime context for the current task (informational, not a new user request):\n"
+	return append(items, responses.ResponseInputItemParamOfMessage(
+		runtimeContextHeader+tail,
+		responses.EasyInputMessageRoleUser,
+	))
 }

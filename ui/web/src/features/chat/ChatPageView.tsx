@@ -183,6 +183,8 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     sessionLocator,
     openQuery,
     skillsCatalogQuery,
+    mcpServersQuery,
+    sessionSkillsQuery,
     templatesQuery,
     nodesQuery,
     activeTemplate,
@@ -278,6 +280,14 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
     goToNextTimelinePage,
     goToPreviousTimelinePage,
   } = controller;
+  const slashCommandCandidates = useMemo(
+    () => ({
+      skills: sessionSkillsQuery.data ?? [],
+      activeSkills: activeSkillsQuery.data ?? [],
+      mcpServers: mcpServersQuery.data?.servers ?? [],
+    }),
+    [activeSkillsQuery.data, mcpServersQuery.data, sessionSkillsQuery.data],
+  );
   const requestEarlierHistory = useCallback(() => {
     stickToBottomRef.current = false;
     setStickToBottom(false);
@@ -741,6 +751,7 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
                   uploadProgress={uploadProgress}
                   packageCommands={packageCommandsQuery.data ?? []}
                   builtinCommands={builtinCommandsQuery.data ?? []}
+                  slashCommandCandidates={slashCommandCandidates}
                   queuedFiles={queuedComposerFiles}
                   onQueuedFilesConsumed={() => setQueuedComposerFiles([])}
                   draftScope={openQuery.data?.session_id ? `session:${openQuery.data.session_id}` : ""}

@@ -191,6 +191,19 @@ export interface CommandMetadata {
   name: string;
   description: string;
   input_hint?: string;
+  subcommands?: CommandSubcommandMetadata[];
+}
+
+export interface CommandSubcommandMetadata {
+  name: string;
+  description: string;
+  arguments?: CommandArgumentMetadata[];
+}
+
+export interface CommandArgumentMetadata {
+  hint?: string;
+  required?: boolean;
+  candidate_source?: string;
 }
 
 export interface CommandResult {
@@ -222,4 +235,3 @@ export interface PackageRoleEntry {
   display?: Record<string, string>;
   path: string;
 }
-

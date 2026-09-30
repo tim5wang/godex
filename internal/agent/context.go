@@ -26,9 +26,8 @@ type BuildContextResult struct {
 	System   string
 	Messages []protocol.Message
 	// RuntimeTail is the volatile runtime tail (memory recall, project ledger,
-	// todos, date) rendered as one string. Wire serializers attach it to the
-	// last tool result / user message so it never becomes a fresh user turn;
-	// its churn stays at the prompt tail for prefix caching.
+	// todos, date) rendered as one string. Wire serializers place it at the
+	// prompt tail without adding it to persisted conversation history.
 	RuntimeTail             string
 	ToolSchemas             []protocol.ToolSchema
 	TokenEstimate           int

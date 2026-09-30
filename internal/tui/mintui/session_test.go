@@ -11,6 +11,8 @@ import (
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/mcp"
+	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	rtbackend "github.com/tim5wang/godex/internal/services/backend"
@@ -124,6 +126,15 @@ func (f *fakeBackend) ExecuteCommand(ctx context.Context, id string, cmd command
 	f.lastCommand = cmd
 	f.executeMu.Unlock()
 	return commands.Result{Name: cmd.Name, Output: "ok"}, nil
+}
+func (f *fakeBackend) ListSessionSkills(context.Context, string) ([]skill.CatalogEntry, error) {
+	return nil, nil
+}
+func (f *fakeBackend) ActiveSessionSkills(context.Context, string) ([]tools.SkillActivation, error) {
+	return nil, nil
+}
+func (f *fakeBackend) ListSessionMCPServers(context.Context, string) ([]mcp.ServerConfig, error) {
+	return nil, nil
 }
 
 // executeCount returns the number of ExecuteCommand calls under lock

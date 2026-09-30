@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tim5wang/godex/internal/contracts/protocol"
@@ -25,6 +26,9 @@ type OpenAIClient struct {
 	// godex usage gateway) to slash cross-network traffic; plain third-party
 	// endpoints must stay off.
 	requestGzip bool
+	// maxCompletionTokens is learned from providers that explicitly reject
+	// max_tokens and require max_completion_tokens instead.
+	maxCompletionTokens atomic.Bool
 }
 
 // NewOpenAIClient creates an OpenAI-compatible conversation client.
@@ -52,20 +56,14 @@ func (c *OpenAIClient) Call(ctx context.Context, req protocol.Request) (*protoco
 	defer func() {
 		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start)})
 	}()
-	body, err := c.buildRequest(req, false)
-	if err != nil {
-		finalErr = err
-		return nil, err
-	}
-	httpResp, err := c.do(ctx, body, false)
+	httpResp, body, errorBody, err := c.doOpenAIRequest(ctx, req, false, false)
 	if err != nil {
 		finalErr = err
 		return nil, err
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(httpResp.Body)
-		finalErr = formatAPIError(httpResp.StatusCode, data)
+		finalErr = formatAPIError(httpResp.StatusCode, errorBody)
 		return nil, finalErr
 	}
 	var decoded openAIResponse
@@ -92,45 +90,78 @@ func (c *OpenAIClient) Stream(ctx context.Context, req protocol.Request, handler
 	defer func() {
 		notifyUsage(ctx, UsageEvent{Request: req, Response: finalResp, Error: finalErr, Latency: time.Since(start), Stream: true})
 	}()
-	body, err := c.buildRequest(req, true)
+	httpResp, body, errorBody, err := c.doOpenAIRequest(ctx, req, true, true)
 	if err != nil {
 		finalErr = err
 		return nil, err
 	}
-	httpResp, err := c.do(ctx, body, true)
-	if err != nil {
-		finalErr = err
-		return nil, err
-	}
-	defer httpResp.Body.Close()
 	if httpResp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(httpResp.Body)
 		// Some OpenAI-compatible providers reject stream_options with HTTP
 		// 400. Retry once without it so they keep working; the only loss is
 		// usage observability (the previous behavior) for such providers.
 		if httpResp.StatusCode == http.StatusBadRequest && bodyHasStreamOptions(body) {
 			httpResp.Body.Close()
-			if plainBody, buildErr := c.buildRequestBody(req, true, false); buildErr == nil {
-				if retried, doErr := c.do(ctx, plainBody, true); doErr == nil {
-					if retried.StatusCode == http.StatusOK {
-						defer retried.Body.Close()
-						finalResp, finalErr = parseOpenAIStream(retried.Body, handler)
-						return finalResp, finalErr
-					}
-					data, _ = io.ReadAll(retried.Body)
-					retried.Body.Close()
-				}
+			retried, _, retryErrorBody, retryErr := c.doOpenAIRequest(ctx, req, true, false)
+			if retryErr != nil {
+				finalErr = retryErr
+				return nil, retryErr
+			}
+			httpResp = retried
+			errorBody = retryErrorBody
+			if httpResp.StatusCode == http.StatusOK {
+				defer httpResp.Body.Close()
+				finalResp, finalErr = parseOpenAIStream(httpResp.Body, handler)
+				return finalResp, finalErr
 			}
 		}
-		finalErr = formatAPIError(httpResp.StatusCode, data)
+		defer httpResp.Body.Close()
+		finalErr = formatAPIError(httpResp.StatusCode, errorBody)
 		return nil, finalErr
 	}
+	defer httpResp.Body.Close()
 	finalResp, finalErr = parseOpenAIStream(httpResp.Body, handler)
 	return finalResp, finalErr
 }
 
 func (c *OpenAIClient) buildRequest(req protocol.Request, stream bool) ([]byte, error) {
 	return c.buildRequestBody(req, stream, true)
+}
+
+// doOpenAIRequest sends a request and learns the alternate token-limit field
+// only when the provider explicitly rejects max_tokens in favor of
+// max_completion_tokens. The learned choice is scoped to this client/profile.
+func (c *OpenAIClient) doOpenAIRequest(ctx context.Context, req protocol.Request, stream, includeUsage bool) (*http.Response, []byte, []byte, error) {
+	body, err := c.buildRequestBody(req, stream, includeUsage)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	httpResp, err := c.do(ctx, body, stream)
+	if err != nil {
+		return nil, body, nil, err
+	}
+	if httpResp.StatusCode == http.StatusOK {
+		return httpResp, body, nil, nil
+	}
+
+	errorBody, _ := io.ReadAll(httpResp.Body)
+	if shouldUseMaxCompletionTokens(httpResp.StatusCode, body, errorBody) {
+		httpResp.Body.Close()
+		c.maxCompletionTokens.Store(true)
+		retryBody, buildErr := c.buildRequestBody(req, stream, includeUsage)
+		if buildErr != nil {
+			return nil, nil, nil, buildErr
+		}
+		retried, doErr := c.do(ctx, retryBody, stream)
+		if doErr != nil {
+			return nil, retryBody, nil, doErr
+		}
+		if retried.StatusCode == http.StatusOK {
+			return retried, retryBody, nil, nil
+		}
+		retryErrorBody, _ := io.ReadAll(retried.Body)
+		return retried, retryBody, retryErrorBody, nil
+	}
+	return httpResp, body, errorBody, nil
 }
 
 // buildRequestBody builds the wire payload. includeUsage controls whether a
@@ -176,7 +207,6 @@ func (c *OpenAIClient) buildRequestBody(req protocol.Request, stream, includeUsa
 
 	wire := openAIRequest{
 		Model:                req.Model,
-		MaxTokens:            req.MaxTokens,
 		Stream:               stream,
 		Messages:             msgs,
 		Tools:                tools,
@@ -184,6 +214,11 @@ func (c *OpenAIClient) buildRequestBody(req protocol.Request, stream, includeUsa
 		ReasoningEffort:      normalizeOpenAIReasoningEffort(req.ReasoningEffort),
 		PromptCacheKey:       req.PromptCacheKey,
 		PromptCacheRetention: req.PromptCacheRetention,
+	}
+	if c.maxCompletionTokens.Load() {
+		wire.MaxCompletionTokens = req.MaxTokens
+	} else {
+		wire.MaxTokens = req.MaxTokens
 	}
 	if strings.TrimSpace(req.System) != "" {
 		sysMsg := openAIMessage{Role: "system", Content: req.System}
@@ -262,6 +297,7 @@ type openAIRequest struct {
 	Model                string               `json:"model"`
 	Messages             []openAIMessage      `json:"messages"`
 	MaxTokens            int                  `json:"max_tokens,omitempty"`
+	MaxCompletionTokens  int                  `json:"max_completion_tokens,omitempty"`
 	Tools                []openAITool         `json:"tools,omitempty"`
 	Stream               bool                 `json:"stream,omitempty"`
 	StreamOptions        *openAIStreamOptions `json:"stream_options,omitempty"`
@@ -294,6 +330,35 @@ func streamOptionsFor(stream, includeUsage bool) *openAIStreamOptions {
 // bodyHasStreamOptions reports whether a request body asked for stream usage.
 func bodyHasStreamOptions(body []byte) bool {
 	return bytes.Contains(body, []byte(`"stream_options"`))
+}
+
+func shouldUseMaxCompletionTokens(statusCode int, requestBody, errorBody []byte) bool {
+	if statusCode != http.StatusBadRequest || !bytes.Contains(requestBody, []byte(`"max_tokens"`)) {
+		return false
+	}
+	message := strings.ToLower(string(errorBody))
+	if !strings.Contains(message, "max_tokens") || !strings.Contains(message, "max_completion_tokens") {
+		return false
+	}
+	var apiError struct {
+		Error struct {
+			Code    string `json:"code"`
+			Param   string `json:"param"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(errorBody, &apiError) == nil &&
+		strings.EqualFold(apiError.Error.Param, "max_tokens") &&
+		strings.EqualFold(apiError.Error.Code, "unsupported_parameter") &&
+		strings.Contains(strings.ToLower(apiError.Error.Message), "max_completion_tokens") {
+		return true
+	}
+	return strings.Contains(message, "'max_tokens' is not supported") ||
+		strings.Contains(message, "`max_tokens` is not supported") ||
+		strings.Contains(message, "max_tokens is not supported") ||
+		strings.Contains(message, "unsupported parameter: 'max_tokens'") ||
+		strings.Contains(message, "unsupported parameter: max_tokens") ||
+		strings.Contains(message, "unsupported parameter max_tokens")
 }
 
 type openAIContentPart struct {

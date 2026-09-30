@@ -420,6 +420,109 @@ func TestOpenAIClientStreamFallbackWithoutStreamOptions(t *testing.T) {
 	}
 }
 
+func TestOpenAIClientFallsBackAndLearnsMaxCompletionTokens(t *testing.T) {
+	var attempts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := new(bytes.Buffer)
+		_, _ = buf.ReadFrom(r.Body)
+		body := buf.String()
+		attempts = append(attempts, body)
+		if strings.Contains(body, `"max_tokens"`) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","type":"invalid_request_error","param":"max_tokens","code":"unsupported_parameter"}}`))
+			return
+		}
+		if !strings.Contains(body, `"max_completion_tokens":512`) {
+			t.Errorf("expected fallback to max_completion_tokens, got request: %s", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	req := protocol.Request{Model: "gpt-6-luna", MaxTokens: 512}
+	if _, err := client.Call(context.Background(), req); err != nil {
+		t.Fatalf("call with max_completion_tokens fallback: %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("expected initial request and one fallback, got %d attempts", len(attempts))
+	}
+	if !strings.Contains(attempts[0], `"max_tokens":512`) ||
+		strings.Contains(attempts[0], `"max_completion_tokens"`) {
+		t.Fatalf("expected first request to use max_tokens only, got: %s", attempts[0])
+	}
+	if strings.Contains(attempts[1], `"max_tokens"`) ||
+		!strings.Contains(attempts[1], `"max_completion_tokens":512`) {
+		t.Fatalf("expected fallback request to use max_completion_tokens only, got: %s", attempts[1])
+	}
+
+	if _, err := client.Call(context.Background(), req); err != nil {
+		t.Fatalf("subsequent call using learned token parameter: %v", err)
+	}
+	if len(attempts) != 3 {
+		t.Fatalf("expected learned parameter to avoid another rejected request, got %d attempts", len(attempts))
+	}
+	if strings.Contains(attempts[2], `"max_tokens"`) ||
+		!strings.Contains(attempts[2], `"max_completion_tokens":512`) {
+		t.Fatalf("expected subsequent request to use learned max_completion_tokens, got: %s", attempts[2])
+	}
+}
+
+func TestOpenAIClientStreamTokenFallbackCombinesWithStreamOptionsFallback(t *testing.T) {
+	var attempts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := new(bytes.Buffer)
+		_, _ = buf.ReadFrom(r.Body)
+		body := buf.String()
+		attempts = append(attempts, body)
+		switch {
+		case strings.Contains(body, `"max_tokens"`):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"max_tokens is not supported; use max_completion_tokens","code":"unsupported_parameter"}}`))
+		case strings.Contains(body, `"stream_options"`):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"unknown field stream_options","type":"invalid_request_error"}}`))
+		default:
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(
+				"data: {\"choices\":[{\"delta\":{\"content\":\"ok\",\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"usage\":null}\n\n" +
+					"data: {\"choices\":[{\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":null}\n\n" +
+					"data: [DONE]\n\n",
+			))
+		}
+	}))
+	defer server.Close()
+
+	client := NewOpenAIClient(server.URL, "test-key", 5*time.Second)
+	resp, err := client.Stream(context.Background(), protocol.Request{Model: "gpt-6-luna", MaxTokens: 512}, StreamHandler{})
+	if err != nil {
+		t.Fatalf("stream with token and stream_options fallbacks: %v", err)
+	}
+	if len(attempts) != 3 {
+		t.Fatalf("expected max_tokens, max_completion_tokens, then stream_options-free retry; got %d attempts", len(attempts))
+	}
+	if !strings.Contains(attempts[0], `"max_tokens":512`) || !strings.Contains(attempts[0], `"stream_options"`) {
+		t.Fatalf("unexpected initial stream request: %s", attempts[0])
+	}
+	if strings.Contains(attempts[1], `"max_tokens"`) ||
+		!strings.Contains(attempts[1], `"max_completion_tokens":512`) ||
+		!strings.Contains(attempts[1], `"stream_options"`) {
+		t.Fatalf("unexpected token-parameter fallback request: %s", attempts[1])
+	}
+	if strings.Contains(attempts[2], `"max_tokens"`) ||
+		!strings.Contains(attempts[2], `"max_completion_tokens":512`) ||
+		strings.Contains(attempts[2], `"stream_options"`) {
+		t.Fatalf("unexpected stream_options fallback request: %s", attempts[2])
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
+		t.Fatalf("unexpected streamed response: %+v", resp.Content)
+	}
+}
+
 // TestOpenAIClientAlwaysEmitsContentField guards against a 400 class seen on
 // strict OpenAI-compatible gateways (Volcengine ARK, AIS gateway): messages
 // whose content is omitted entirely (pure tool-call assistant turns, empty

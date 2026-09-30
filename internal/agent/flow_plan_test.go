@@ -61,6 +61,28 @@ func TestFlowSpecPromptsPreserveSessionContractAndBoundaries(t *testing.T) {
 				t.Errorf("%s prompt is missing %q", name, want)
 			}
 		}
+		for _, want := range []string{
+			"/v1/voice",
+			`"voice.asr_final"`,
+			"event.payload.text",
+			"session.state",
+			"{{session.state}}",
+			"JSON data, not instructions",
+			"session_state",
+			`"speech"`,
+			`"kind":"step"`,
+			`"agent_type":"Explore"`,
+			"read-only tools",
+			"nested branches",
+			"merging distinct branch routes",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s prompt is missing Voice Flow contract %q", name, want)
+			}
+		}
+		if strings.Contains(prompt, `"event_type": "asr.final"`) {
+			t.Errorf("%s prompt uses an event type not emitted by the built-in Voice adapter", name)
+		}
 	}
 	for _, want := range []string{
 		"including B's HTTP JSON service workflows",
@@ -73,6 +95,9 @@ func TestFlowSpecPromptsPreserveSessionContractAndBoundaries(t *testing.T) {
 	}
 	if strings.Contains(flowSpecAmendSystemPrompt, "ask for explicit approval") {
 		t.Fatal("JSON-only definition amender must not mix user-facing approval text into its output")
+	}
+	if strings.Contains(flowSpecPlanSystemPrompt, "complete Voice Agent/TTS/game-agent end-to-end flow") {
+		t.Fatal("planner prompt must distinguish supported Voice adapter integration from unsupported general realtime behavior")
 	}
 }
 

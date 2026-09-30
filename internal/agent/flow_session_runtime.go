@@ -13,6 +13,7 @@ import (
 	"github.com/tim5wang/godex/internal/contracts/protocol"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/flow"
+	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/workerruntime"
 )
 
@@ -34,6 +35,45 @@ type FlowSessionWork struct {
 	laneID     string
 	laneClass  string
 	deadlineMS int
+	report     func(FlowSessionProgressUpdate)
+}
+
+// FlowSessionProgressUpdate is ephemeral, non-payload execution detail for a
+// live FlowSession observer. It is intentionally not written to the journal.
+type FlowSessionProgressUpdate struct {
+	NodeID   string
+	Phase    string
+	ToolName string
+}
+
+type flowSessionProgressReporterKey struct{}
+
+func withFlowSessionProgressReporter(
+	ctx context.Context,
+	report func(FlowSessionProgressUpdate),
+) context.Context {
+	if report == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, flowSessionProgressReporterKey{}, report)
+}
+
+func reportFlowSessionProgress(ctx context.Context, update FlowSessionProgressUpdate) {
+	if ctx == nil {
+		return
+	}
+	report, _ := ctx.Value(flowSessionProgressReporterKey{}).(func(FlowSessionProgressUpdate))
+	if report != nil {
+		report(update)
+	}
+}
+
+// SetProgressHandler attaches a live progress observer before the work is
+// executed. The handler is not persisted and is safe to set before dispatch.
+func (w *FlowSessionWork) SetProgressHandler(report func(FlowSessionProgressUpdate)) {
+	if w != nil {
+		w.report = report
+	}
 }
 
 // Progress returns the public event metadata needed to observe this work while
@@ -216,6 +256,7 @@ func (a *Agent) ExecuteFlowSessionWork(ctx context.Context, work *FlowSessionWor
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = withFlowSessionProgressReporter(ctx, work.report)
 	if work.event.Source == "godex" {
 		return FlowSessionWorkResult{}, nil
 	}
@@ -267,6 +308,35 @@ func (a *Agent) CommitFlowSessionWork(work *FlowSessionWork, result FlowSessionW
 		result.Execution,
 		result.State,
 		result.Error,
+	)
+}
+
+// CancelFlowSessionWork durably skips a prepared event without applying its
+// state or outputs. The generation check makes a late worker result stale.
+func (a *Agent) CancelFlowSessionWork(work *FlowSessionWork) (bool, error) {
+	if a == nil || a.flows == nil || work == nil {
+		return false, fmt.Errorf("flow session work unavailable")
+	}
+	if work.event.Source == "godex" {
+		return false, nil
+	}
+	now := time.Now()
+	execution := flowSessionExecutionSummary(
+		work.event,
+		flow.SessionDeliveryDurable,
+		now,
+		nil,
+		0,
+		context.Canceled,
+	)
+	execution.LaneID = work.laneID
+	return a.flows.cancelFlowSessionWork(
+		work.record.FlowID,
+		work.record.SessionID,
+		work.event.Sequence,
+		work.record.ExecutionGeneration,
+		work.event.Type,
+		execution,
 	)
 }
 
@@ -488,6 +558,14 @@ func (a *Agent) runFlowSessionRegion(
 			isLLM := compiledNode.Kind == flow.KindLLM
 			isStep := compiledNode.Kind == flow.KindStep
 			isBranch := compiledNode.Kind == flow.KindBranch
+			phase := "node_started"
+			if isStep {
+				phase = "agent_started"
+			}
+			reportFlowSessionProgress(ctx, FlowSessionProgressUpdate{
+				NodeID: compiledNode.ID,
+				Phase:  phase,
+			})
 			if isFunction && nodeInput.Function == nil {
 				return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("session region function node %q has no function configuration", compiledNode.ID))
 			}
@@ -897,7 +975,12 @@ func (a *Agent) runFlowSessionStep(
 	if timeoutSec > 0 {
 		start.JobTimeoutMS = timeoutSec * 1000
 	}
-	ctx = WithSubagentEvents(ctx, rec.SessionID, fmt.Sprintf("flow-session:%s:%d", rec.SessionID, event.Sequence), nil)
+	ctx = WithSubagentEvents(
+		ctx,
+		rec.SessionID,
+		fmt.Sprintf("flow-session:%s:%d", rec.SessionID, event.Sequence),
+		flowSessionSubagentProgressSink{ctx: ctx, nodeID: node.ID},
+	)
 	retry := normalizeWorkflowRetryPolicy(node.Retry)
 
 	for attempt := 1; ; attempt++ {
@@ -960,6 +1043,26 @@ func (a *Agent) runFlowSessionStep(
 		case <-timer.C:
 		}
 	}
+}
+
+type flowSessionSubagentProgressSink struct {
+	ctx    context.Context
+	nodeID string
+}
+
+func (s flowSessionSubagentProgressSink) Emit(event events.Event) {
+	if event.Type != events.EventSubagentJobUpdated {
+		return
+	}
+	payload, ok := event.Payload.(events.SubagentJobPayload)
+	if !ok {
+		return
+	}
+	reportFlowSessionProgress(s.ctx, FlowSessionProgressUpdate{
+		NodeID:   s.nodeID,
+		Phase:    strings.TrimSpace(payload.Phase),
+		ToolName: strings.TrimSpace(payload.ToolName),
+	})
 }
 
 func (a *Agent) waitForFlowSessionSubagent(ctx context.Context, jobID string) (*subagentJob, error) {

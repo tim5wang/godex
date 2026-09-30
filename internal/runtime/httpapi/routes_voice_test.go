@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 
+	voiceclient "github.com/tim5wang/agent-local-voice-engine/client"
 	"github.com/tim5wang/agent-local-voice-engine/protocol"
 )
 
@@ -140,14 +142,24 @@ func TestVoiceFlowSessionAdapterKeepsPCMVolatileAndReplaysASRSemantics(t *testin
 		if err != nil || messageType != websocket.BinaryMessage {
 			return
 		}
-		for _, text := range []string{"识别内容", "第二段"} {
+		emitSegment := func(text string) {
+			_ = engineConn.WriteJSON(protocol.Message{T: protocol.MessageKind("speech_started")})
 			_ = engineConn.WriteJSON(protocol.Message{T: protocol.KindASRFinal, Text: text})
 			_ = engineConn.WriteJSON(protocol.Message{T: protocol.MessageKind("asr_utterance_end")})
 		}
+		emitSegment("识别内容")
+		secondSegmentSent := false
 		for {
-			_, data, err = engineConn.ReadMessage()
+			messageType, data, err := engineConn.ReadMessage()
 			if err != nil {
 				return
+			}
+			if messageType == websocket.BinaryMessage {
+				if !secondSegmentSent {
+					secondSegmentSent = true
+					emitSegment("第二段")
+				}
+				continue
 			}
 			var request protocol.Message
 			if json.Unmarshal(data, &request) != nil {
@@ -255,8 +267,9 @@ func TestVoiceFlowSessionAdapterKeepsPCMVolatileAndReplaysASRSemantics(t *testin
 	var spokenTexts []string
 	spokenTurnIDs := make(map[string]string)
 	pcmCount := 0
+	gotFirstResponse := false
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && (len(sessionEvents) < 2 || len(spokenTexts) < 2 || pcmCount < 2) {
+	for time.Now().Before(deadline) && (!gotFirstResponse) {
 		_ = conn.SetReadDeadline(deadline)
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
@@ -271,6 +284,44 @@ func TestVoiceFlowSessionAdapterKeepsPCMVolatileAndReplaysASRSemantics(t *testin
 		var message map[string]any
 		if err := json.Unmarshal(data, &message); err != nil {
 			t.Fatalf("decode voice adapter output %s: %v", data, err)
+		}
+		switch message["type"] {
+		case "session_event":
+			event, _ := message["event"].(map[string]any)
+			if event["type"] == "voice.asr_final" {
+				sessionEvents = append(sessionEvents, event)
+			}
+		case "assistant_text":
+			if text, _ := message["text"].(string); text != "" {
+				spokenTexts = append(spokenTexts, text)
+				spokenTurnIDs[text], _ = message["turn_id"].(string)
+			}
+		case string(protocol.KindTTSDone):
+			gotFirstResponse = true
+		}
+	}
+	if !gotFirstResponse {
+		t.Fatalf("first Voice Agent response timed out: events=%d texts=%q", len(sessionEvents), spokenTexts)
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte{5, 6, 7, 8}); err != nil {
+		t.Fatalf("send second utterance PCM: %v", err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && (len(sessionEvents) < 2 || len(spokenTexts) < 2 || pcmCount < 2) {
+		_ = conn.SetReadDeadline(deadline)
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read second voice adapter output: %v", err)
+		}
+		if messageType == websocket.BinaryMessage {
+			if len(data) > 0 {
+				pcmCount++
+			}
+			continue
+		}
+		var message map[string]any
+		if err := json.Unmarshal(data, &message); err != nil {
+			t.Fatalf("decode second voice adapter output %s: %v", data, err)
 		}
 		switch message["type"] {
 		case "session_event":
@@ -314,8 +365,9 @@ func TestVoiceFlowSessionAdapterKeepsPCMVolatileAndReplaysASRSemantics(t *testin
 	if !spokenSet["Voice reply: 识别内容"] || !spokenSet["Voice reply: 第二段"] {
 		t.Fatalf("unexpected spoken outputs before audio_end: %q", spokenTexts)
 	}
-	if spokenTurnIDs["Voice reply: 识别内容"] != turnID || spokenTurnIDs["Voice reply: 第二段"] != turnID {
-		t.Fatalf("ASR utterances from one capture should retain its turn ID, got %+v", spokenTurnIDs)
+	if spokenTurnIDs["Voice reply: 识别内容"] != "voice:voice-client-a:7" ||
+		spokenTurnIDs["Voice reply: 第二段"] != "voice:voice-client-a:8" {
+		t.Fatalf("each utterance should have its own fenced turn ID, got %+v", spokenTurnIDs)
 	}
 	gotASREnd := false
 	for !gotASREnd {
@@ -344,6 +396,56 @@ func TestVoiceFlowSessionAdapterKeepsPCMVolatileAndReplaysASRSemantics(t *testin
 	if inputCount != 2 || outputCount != 2 {
 		t.Fatalf("expected two ASR inputs and two Flow outputs without audio_end duplication, got %+v", events)
 	}
+	inputSequence := func(sourceSequence uint64) uint64 {
+		for _, event := range events {
+			if event.Type == "voice.asr_final" &&
+				event.Source == "voice-client-a" &&
+				event.SourceSequence == sourceSequence {
+				return event.Sequence
+			}
+		}
+		return 0
+	}
+	firstInputSequence := inputSequence(7)
+	if firstInputSequence == 0 {
+		t.Fatalf("could not find the first accepted utterance in persisted events: %+v", events)
+	}
+	secondInputSequence := inputSequence(8)
+	if secondInputSequence == 0 {
+		t.Fatalf("could not find the second accepted utterance in persisted events: %+v", events)
+	}
+	duplicate, err := service.AppendFlowSessionEvent(def.FlowID, session.SessionID, agent.FlowSessionEventInput{
+		Source: "voice-client-a", SourceSequence: 8, Type: "voice.asr_final",
+		CorrelationID: "voice:voice-client-a:8",
+		Payload:       json.RawMessage(`{"text":"第二段"}`),
+	})
+	if err != nil {
+		t.Fatalf("replay accepted utterance after reconnect: %v", err)
+	}
+	if !duplicate.Duplicate || duplicate.Sequence != secondInputSequence {
+		t.Fatalf("reconnect replay should return the latest original accepted event: receipt=%+v second_sequence=%d", duplicate, secondInputSequence)
+	}
+	_, err = service.AppendFlowSessionEvent(def.FlowID, session.SessionID, agent.FlowSessionEventInput{
+		Source: "voice-client-a", SourceSequence: 7, Type: "voice.asr_final",
+		CorrelationID: "voice:voice-client-a:7",
+		Payload:       json.RawMessage(`{"text":"识别内容"}`),
+	})
+	if !errors.Is(err, agent.ErrFlowSessionConflict) {
+		t.Fatalf("replay of an older utterance should be rejected without allocating another event, got %v", err)
+	}
+	events, err = service.FlowSessionEvents(def.FlowID, session.SessionID, 0, 10)
+	if err != nil {
+		t.Fatalf("re-read events after reconnect replay: %v", err)
+	}
+	inputCount = 0
+	for _, event := range events {
+		if event.Type == "voice.asr_final" {
+			inputCount++
+		}
+	}
+	if inputCount != 2 {
+		t.Fatalf("replayed accepted utterance should remain a single input event, got %+v", events)
+	}
 }
 
 func TestVoiceFlowSessionStartRequiresStableReconnectKey(t *testing.T) {
@@ -361,6 +463,192 @@ func TestVoiceFlowSessionStartRequiresStableReconnectKey(t *testing.T) {
 	}
 	if vc.currentTurnID != "voice-turn:9" || vc.turnGeneration != 1 || vc.turnSourceSeq != 9 {
 		t.Fatalf("unexpected turn fence: turn_id=%q generation=%d source_sequence=%d", vc.currentTurnID, vc.turnGeneration, vc.turnSourceSeq)
+	}
+}
+
+func TestVoiceDetectedUtteranceReservesSequenceBeforeASRCompletes(t *testing.T) {
+	browser, bridge := newTestWebsocketPair(t)
+	vc := &voiceConn{
+		ws:                bridge,
+		flowID:            "flow-session",
+		flowSessionID:     "session",
+		flowVoiceSource:   "device-1",
+		flowEventType:     "voice.asr_final",
+		flowStartSeq:      7,
+		flowNextSourceSeq: 7,
+		pendingSpeech:     make(map[string]pendingVoiceSpeech),
+	}
+	b := &voiceBridge{}
+
+	b.beginDetectedVoiceTurn(vc)
+	_ = browser.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var first voiceMsg
+	if err := browser.ReadJSON(&first); err != nil {
+		t.Fatalf("read first speech_started: %v", err)
+	}
+	if first.Type != "speech_started" || first.SourceSequence != 7 {
+		t.Fatalf("first utterance turn = %+v, want sequence 7", first)
+	}
+
+	// Simulate a VAD segment with no final transcript. It must still consume a
+	// turn sequence so the next onset gets a distinct turn ID and fence.
+	vc.stateMu.Lock()
+	vc.flowSpeechActive = false
+	vc.stateMu.Unlock()
+	b.beginDetectedVoiceTurn(vc)
+
+	_ = browser.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var second voiceMsg
+	if err := browser.ReadJSON(&second); err != nil {
+		t.Fatalf("read second speech_started: %v", err)
+	}
+	if second.Type != "speech_started" || second.SourceSequence != 8 {
+		t.Fatalf("second utterance turn = %+v, want sequence 8", second)
+	}
+}
+
+func TestVoiceOnsetAcknowledgesAndForwardsASRWhileInterruptIsBlocked(t *testing.T) {
+	browser, bridge := newTestWebsocketPair(t)
+	interruptStarted := make(chan struct{}, 1)
+	releaseInterrupt := make(chan struct{})
+	engineEvents := make(chan voiceclient.Event, 2)
+	vc := &voiceConn{
+		ws:                bridge,
+		flowID:            "flow-session",
+		flowSessionID:     "session",
+		ve:                &voiceEngineConn{events: engineEvents},
+		flowVoiceSource:   "device-1",
+		flowStartSeq:      2,
+		flowNextSourceSeq: 2,
+		flowEventType:     "voice.asr_final",
+		currentSource:     "device-1",
+		currentSourceSeq:  1,
+		turnSourceSeq:     1,
+		currentEventType:  "voice.asr_final",
+		pendingSpeech:     make(map[string]pendingVoiceSpeech),
+		interruptTurn: func(string, string, string, string, uint64) (bool, error) {
+			interruptStarted <- struct{}{}
+			<-releaseInterrupt
+			return true, nil
+		},
+	}
+	b := &voiceBridge{}
+	pumpDone := make(chan struct{})
+	go func() {
+		b.pumpEngine(vc)
+		close(pumpDone)
+	}()
+	engineEvents <- voiceclient.Event{Kind: voiceclient.EventKind("speech_started")}
+	engineEvents <- voiceclient.Event{Kind: voiceclient.EventASRFinal, Text: "second turn"}
+
+	select {
+	case <-interruptStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("durable interrupt did not start")
+	}
+	_ = browser.SetReadDeadline(time.Now().Add(2 * time.Second))
+	gotSpeechStarted, gotASRFinal := false, false
+	for !gotSpeechStarted || !gotASRFinal {
+		var message voiceMsg
+		if err := browser.ReadJSON(&message); err != nil {
+			t.Fatalf("read voice event while interrupt is blocked: %v", err)
+		}
+		switch message.Type {
+		case "speech_started":
+			gotSpeechStarted = message.SourceSequence == 2
+		case "asr_final":
+			gotASRFinal = message.Text == "second turn"
+		}
+	}
+
+	close(releaseInterrupt)
+	close(engineEvents)
+	select {
+	case <-pumpDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("voice engine event pump did not stop")
+	}
+}
+
+func TestVoiceNewTurnInterruptsOnlyOlderDurableWork(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := backend.NewService(cfg, agent.NewSharedDependencies(cfg), commands.NewService(cfg))
+	def := &flow.Definition{
+		FlowID:        "fl_voice_turn_interrupt",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: flow.ExecutionModeSession,
+		SessionWorkflow: &flow.SessionWorkflowSpec{Triggers: []flow.SessionTrigger{
+			{EventType: "voice.asr_final", EntryNode: "capture"},
+		}},
+		Nodes: []flow.Node{{
+			ID: "capture", Kind: flow.KindFunction,
+			Function: &flow.FunctionSpec{
+				Runtime: flow.FunctionRuntimeJS,
+				Source:  `function handle() { return {session_state: {handled: true}}; }`,
+			},
+			Outputs: []flow.VarDef{{Name: "session_state", Type: "object"}},
+		}},
+	}
+	if _, err := service.CreateFlow(agent.FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create voice session flow: %v", err)
+	}
+	session, err := service.CreateFlowSession(def.FlowID, def.Version, nil)
+	if err != nil {
+		t.Fatalf("create voice session: %v", err)
+	}
+	if _, err := service.AppendFlowSessionEvent(def.FlowID, session.SessionID, agent.FlowSessionEventInput{
+		Source: "device-1", SourceSequence: 7, Type: "voice.asr_final",
+		Payload: json.RawMessage(`{"text":"old turn"}`),
+	}); err != nil {
+		t.Fatalf("append old turn: %v", err)
+	}
+
+	vc := &voiceConn{
+		service: service, flowID: def.FlowID, flowSessionID: session.SessionID,
+		eventType:     "voice.asr_final",
+		currentSource: "device-1", currentSourceSeq: 7, turnSourceSeq: 7,
+		currentEventType: "voice.asr_final", pendingSpeech: make(map[string]pendingVoiceSpeech),
+		currentTurnID: "turn-7", turnGeneration: 1,
+	}
+	if err := vc.prepareFlowVoice(voiceMsg{
+		Type: string(protocol.KindStart), Source: "device-1", SourceSequence: 8,
+	}); err != nil {
+		t.Fatalf("prepare voice capture: %v", err)
+	}
+	view, err := service.GetFlowSession(def.FlowID, session.SessionID)
+	if err != nil {
+		t.Fatalf("read session after enabling microphone: %v", err)
+	}
+	if view.ProcessedSequence != 0 || vc.currentTurnID != "turn-7" || vc.turnGeneration != 1 {
+		t.Fatalf("enabling the microphone must not interrupt an Agent turn: session=%+v turn=%q generation=%d",
+			view, vc.currentTurnID, vc.turnGeneration)
+	}
+	if err := vc.beginTurn(voiceMsg{
+		Type: string(protocol.KindStart), Source: "device-1", SourceSequence: 7,
+	}); err != nil {
+		t.Fatalf("begin same-sequence retry: %v", err)
+	}
+	view, err = service.GetFlowSession(def.FlowID, session.SessionID)
+	if err != nil {
+		t.Fatalf("read session after same-sequence retry: %v", err)
+	}
+	if view.ProcessedSequence != 0 {
+		t.Fatalf("same-sequence retry must not cancel durable work: %+v", view)
+	}
+
+	if err := vc.beginTurn(voiceMsg{
+		Type: string(protocol.KindStart), Source: "device-1", SourceSequence: 8,
+	}); err != nil {
+		t.Fatalf("begin newer turn: %v", err)
+	}
+	view, err = service.GetFlowSession(def.FlowID, session.SessionID)
+	if err != nil {
+		t.Fatalf("read session after newer turn: %v", err)
+	}
+	if view.ProcessedSequence != 1 || view.LastExecution == nil || view.LastExecution.Status != "canceled" ||
+		view.State["handled"] != nil {
+		t.Fatalf("newer voice turn did not skip old durable work cleanly: %+v", view)
 	}
 }
 
@@ -481,6 +769,56 @@ func TestVoiceStatusEndpoint(t *testing.T) {
 	// 引擎地址不可达 → reachable=false
 	if st.Reachable {
 		t.Error("expected reachable=false for dead port")
+	}
+}
+
+func TestVoiceStatusRequiresDefaultVADAfterWebSocketHandshake(t *testing.T) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var hello protocol.Message
+		if json.Unmarshal(data, &hello) != nil || hello.T != protocol.KindHello {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{
+			"t":          protocol.KindReady,
+			"asr_models": []string{"asr/test"}, "default_asr": "asr/test",
+			"tts_models": []string{"tts/test"}, "default_tts": "tts/test",
+			"default_vad": "vad/missing",
+		})
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer engine.Close()
+	t.Setenv("GODEX_VOICE_ENGINE_ADDR", strings.TrimPrefix(engine.URL, "http://"))
+
+	bridge := &voiceBridge{}
+	statusServer := httptest.NewServer(http.HandlerFunc(bridge.handleVoiceStatus))
+	defer statusServer.Close()
+	resp, err := http.Get(statusServer.URL)
+	if err != nil {
+		t.Fatalf("get voice status: %v", err)
+	}
+	defer resp.Body.Close()
+	var status voiceStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatalf("decode voice status: %v", err)
+	}
+	if !status.Reachable {
+		t.Fatalf("successful WebSocket handshake should be reachable: %+v", status)
+	}
+	if status.Ready {
+		t.Fatalf("Voice Agent must not be ready without its server VAD capability: %+v", status)
+	}
+	if !strings.Contains(status.Error, "default VAD model") {
+		t.Fatalf("readiness error should explain the missing VAD model: %+v", status)
 	}
 }
 

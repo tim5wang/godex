@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -406,6 +408,85 @@ func TestFlowSessionAgentNodeRunsDurableSubagentAndMapsDeclaredOutputs(t *testin
 		!strings.Contains(jobs[0].Prompt, "matching these declared outputs") {
 		t.Fatalf("Agent prompt did not render event/input context and output contract: %s", jobs[0].Prompt)
 	}
+}
+
+func TestFlowSessionAgentWorkReportsLiveNodeAndSubagentProgress(t *testing.T) {
+	cfg := testFlowConfig(t.TempDir())
+	a := New(cfg)
+	if err := os.WriteFile(filepath.Join(cfg.WorkspaceDir, "progress_fixture.txt"), []byte("progress-ok"), 0644); err != nil {
+		t.Fatalf("write Agent tool fixture: %v", err)
+	}
+	a.client = &sessionFlowProgressTestCaller{}
+	def := flowSessionAgentDefinition("fl_session_agent_progress", flow.SessionDeliveryDurable)
+	def.Nodes[0].Prompt = "Use read_file to inspect progress_fixture.txt, then answer {{event.payload.text}}."
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create session flow: %v", err)
+	}
+	session, err := a.CreateFlowSession(def.FlowID, def.Version, map[string]any{"locale": "en"})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := a.AppendFlowSessionEvent(def.FlowID, session.SessionID, FlowSessionEventInput{
+		Source: "voice-adapter", SourceSequence: 1, Type: "turn.update",
+		Payload: json.RawMessage(`{"text":"hello"}`),
+	}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	work, err := a.PrepareFlowSessionWork(def.FlowID, session.SessionID)
+	if err != nil || work == nil {
+		t.Fatalf("prepare FlowSession work: work=%v err=%v", work, err)
+	}
+	progress := make(chan FlowSessionProgressUpdate, 32)
+	work.SetProgressHandler(func(update FlowSessionProgressUpdate) {
+		progress <- update
+	})
+	if _, err := a.ExecuteFlowSessionWork(t.Context(), work); err != nil {
+		t.Fatalf("execute FlowSession work: %v", err)
+	}
+
+	seenAgentNode, seenSubagentReply := false, false
+	seenToolStart, seenToolFinish := false, false
+	for len(progress) > 0 {
+		update := <-progress
+		if update.NodeID == "agent" && update.Phase == "agent_started" {
+			seenAgentNode = true
+		}
+		if update.NodeID == "agent" && update.Phase == "assistant_message" {
+			seenSubagentReply = true
+		}
+		if update.NodeID == "agent" && update.Phase == "tool_started" && update.ToolName == "read_file" {
+			seenToolStart = true
+		}
+		if update.NodeID == "agent" && update.Phase == "tool_finished" && update.ToolName == "read_file" {
+			seenToolFinish = true
+		}
+	}
+	if !seenAgentNode || !seenSubagentReply || !seenToolStart || !seenToolFinish {
+		t.Fatalf("missing live FlowSession progress: agent_node=%t subagent_reply=%t tool_start=%t tool_finish=%t",
+			seenAgentNode, seenSubagentReply, seenToolStart, seenToolFinish)
+	}
+}
+
+type sessionFlowProgressTestCaller struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *sessionFlowProgressTestCaller) Call(_ context.Context, _ protocol.Request) (*protocol.Response, error) {
+	c.mu.Lock()
+	call := c.calls
+	c.calls++
+	c.mu.Unlock()
+	if call == 0 {
+		return &protocol.Response{
+			Content:    []protocol.Block{protocol.ToolUseBlock("progress-read", "read_file", map[string]interface{}{"path": "progress_fixture.txt"})},
+			StopReason: "tool_use",
+		}, nil
+	}
+	return &protocol.Response{
+		Content:    []protocol.Block{protocol.TextBlock(`{"answer":"progress-ok","session_state":{"seen":true}}`)},
+		StopReason: "end_turn",
+	}, nil
 }
 
 func TestFlowSessionBranchExecutesOnlySelectedRouteChainAndRecordsChoice(t *testing.T) {
@@ -1096,6 +1177,55 @@ func TestFlowSessionLLMCallCancellationLeavesDurableEventPending(t *testing.T) {
 	}
 	if view.ProcessedSequence != 0 || view.State["answer"] != nil {
 		t.Fatalf("canceled LLM work must leave its durable event recoverable: %+v", view)
+	}
+}
+
+func TestCancelFlowSessionWorkCheckpointsCanceledAndFencesLateResult(t *testing.T) {
+	cfg := testFlowConfig(t.TempDir())
+	a := New(cfg)
+	def := flowSessionLLMDefinition("fl_session_llm_interrupt")
+	if _, err := a.CreateFlow(FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create session flow: %v", err)
+	}
+	session, err := a.CreateFlowSession(def.FlowID, def.Version, map[string]any{"locale": "en"})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := a.AppendFlowSessionEvent(def.FlowID, session.SessionID, FlowSessionEventInput{
+		Source: "device-1", SourceSequence: 9, Type: "turn.update",
+		Payload: json.RawMessage(`{"text":"old turn"}`),
+	}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	work, err := a.PrepareFlowSessionWork(def.FlowID, session.SessionID)
+	if err != nil || work == nil {
+		t.Fatalf("prepare work: work=%v err=%v", work, err)
+	}
+
+	canceled, err := a.CancelFlowSessionWork(work)
+	if err != nil || !canceled {
+		t.Fatalf("cancel work: canceled=%v err=%v", canceled, err)
+	}
+	view, err := a.GetFlowSession(def.FlowID, session.SessionID)
+	if err != nil {
+		t.Fatalf("get canceled session: %v", err)
+	}
+	if view.ProcessedSequence != 1 || view.State["answer"] != nil ||
+		view.LastExecution == nil || view.LastExecution.Status != "canceled" ||
+		view.LastExecution.InputSequence != 1 || view.LastExecution.OutputCount != 0 {
+		t.Fatalf("canceled work should checkpoint without applying state or outputs: %+v", view)
+	}
+
+	if err := a.CommitFlowSessionWork(work, FlowSessionWorkResult{
+		State: map[string]any{"answer": "late result"},
+	}); !errors.Is(err, ErrFlowSessionStaleWork) {
+		t.Fatalf("late result should be fenced, got %v", err)
+	}
+	if retried, err := a.PrepareFlowSessionWork(def.FlowID, session.SessionID); err != nil || retried != nil {
+		t.Fatalf("canceled event should not be replayed: work=%v err=%v", retried, err)
+	}
+	if canceled, err := a.CancelFlowSessionWork(work); err != nil || canceled {
+		t.Fatalf("repeat cancellation should be an idempotent no-op: canceled=%v err=%v", canceled, err)
 	}
 }
 

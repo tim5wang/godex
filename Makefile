@@ -6,7 +6,7 @@ BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -s -w -X github.com/tim5wang/godex/internal/version.Version=$(VERSION) -X github.com/tim5wang/godex/internal/version.Commit=$(COMMIT) -X github.com/tim5wang/godex/internal/version.Date=$(BUILD_DATE)
 PPROF_FLAG = $(if $(strip $(PPROF_ADDR)),--pprof-addr=$(PPROF_ADDR),)
 
-.PHONY: dev dev-fast dev-frontend web web-dev web-typecheck web-clean docs-check smoke verify build-linux build-minimal release release-clean deploy-linux
+.PHONY: dev dev-fast dev-voice dev-frontend web web-dev web-typecheck web-clean docs-check smoke verify build-linux build-minimal release release-clean deploy-linux
 
 # ── Web UI build targets ───────────────────────────────────────────
 
@@ -66,6 +66,13 @@ dev: web
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
 		&& mv $(APP).new $(APP) \
 		&& (./$(APP) service restart $(PPROF_FLAG) 2>/dev/null || (./$(APP) service install && ./$(APP) service start $(PPROF_FLAG)))
+
+## dev-voice: Start local voice-engine, rebuild/restart Godex, and supervise the engine until Ctrl-C
+VOICE_ENGINE_DIR ?= ../voice-engine
+VOICE_ENGINE_ADDR ?= 127.0.0.1:17021
+VOICE_ASR_MODEL ?= asr/zipformer-small-zh-en
+dev-voice:
+	VOICE_ENGINE_DIR="$(VOICE_ENGINE_DIR)" VOICE_ENGINE_ADDR="$(VOICE_ENGINE_ADDR)" VOICE_ASR_MODEL="$(VOICE_ASR_MODEL)" PPROF_ADDR="$(PPROF_ADDR)" bash scripts/dev_voice.sh
 
 # ── Release targets ────────────────────────────────────────────────
 

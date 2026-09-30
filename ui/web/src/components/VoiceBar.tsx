@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Select, Space, Tooltip, Typography } from "antd";
 import { AudioOutlined, AudioMutedOutlined } from "@ant-design/icons";
 import { createPCMPlayer, type PCMPlayer } from "../lib/ttsPlayback";
+import { voiceFlowProgressLabel } from "../features/flows/voiceAgent";
 
 const { Text } = Typography;
 
@@ -51,7 +52,21 @@ interface VoiceMsg {
   default_asr?: string;
   default_vad?: string;
   default_tts?: string;
+  ready?: boolean;
+  reachable?: boolean;
+  enabled?: boolean;
+  error?: string;
   event?: { type?: string; sequence?: number; source?: string; source_sequence?: number };
+  in_flight?: {
+    status?: string;
+    source?: string;
+    source_sequence?: number;
+    event_type?: string;
+    lane_id?: string;
+    node_id?: string;
+    phase?: string;
+    tool_name?: string;
+  } | null;
 }
 
 interface FlowVoiceTurn {
@@ -71,6 +86,14 @@ interface VoiceStatus {
   enabled: boolean;
   engine_addr: string;
   reachable: boolean;
+  ready: boolean;
+  error?: string;
+  asr_models?: string[];
+  vad_models?: string[];
+  tts_models?: string[];
+  default_asr?: string;
+  default_vad?: string;
+  default_tts?: string;
 }
 
 const TARGET_RATE = 16000;
@@ -113,7 +136,7 @@ function matchesFlowVoiceTurn(
   turn: FlowVoiceTurn | null,
 ) {
   if (!turn) return true;
-  if (message.source !== turn.source) return true;
+  if (message.source && message.source !== turn.source) return false;
   if (message.source_sequence !== undefined && message.source_sequence < turn.sourceSequence) {
     return false;
   }
@@ -136,6 +159,27 @@ function rememberAcceptedVoiceSequence(
   }
 }
 
+function microphoneErrorMessage(error: unknown): string {
+  const name = error instanceof DOMException ? error.name : "";
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "麦克风权限被拒绝。请在浏览器地址栏的站点设置中允许麦克风，然后重新开始。";
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "没有找到可用麦克风。请连接麦克风后重试。";
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "麦克风当前不可用，可能正被其他应用占用。请关闭占用它的应用后重试。";
+  }
+  if (name === "OverconstrainedError") {
+    return "当前麦克风不支持所需的音频格式。请更换输入设备后重试。";
+  }
+  return `无法启动麦克风：${error instanceof Error ? error.message : String(error)}`;
+}
+
+function flowProgressLabel(progress: NonNullable<VoiceMsg["in_flight"]>): string {
+    return voiceFlowProgressLabel(progress);
+}
+
 export function VoiceBar({
   token,
   sessionId,
@@ -146,15 +190,21 @@ export function VoiceBar({
 }: VoiceBarProps) {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
+  const [startingMic, setStartingMic] = useState(false);
   const [awaitingResult, setAwaitingResult] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState<string>("");
   const [assistantText, setAssistantText] = useState("");
+  const [agentPhase, setAgentPhase] = useState<
+    "idle" | "transcribing" | "thinking" | "queued" | "processing" | "canceling" | "synthesizing" | "speaking"
+  >("idle");
+  const [agentProgress, setAgentProgress] = useState("");
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [asrModels, setAsrModels] = useState<string[]>([]);
   const [ttsModels, setTtsModels] = useState<string[]>([]);
   const [asrModel, setAsrModel] = useState("");
   const [ttsModel, setTtsModel] = useState("");
-  const [vadMode, setVadMode] = useState("server");
+  const vadMode = "server";
   const partialRef = useRef<string>("");
   const finalTranscriptRef = useRef("");
   const pendingEndRef = useRef(false);
@@ -176,6 +226,7 @@ export function VoiceBar({
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const startingMicRef = useRef(false);
   const ttsPlayerRef = useRef<PCMPlayer | null>(null);
   const activeFlowTurnRef = useRef<FlowVoiceTurn | null>(null);
   const activeTTSSpeechRef = useRef<ActiveTTSSpeech | null>(null);
@@ -214,6 +265,7 @@ export function VoiceBar({
   useEffect(() => {
     if (disabled || (!sessionId && !isFlowSession) || !enabled) return;
     let closed = false;
+    let reconnectTimer: number | null = null;
     const ws = new WebSocket(wsUrl());
     wsRef.current = ws;
 
@@ -258,6 +310,31 @@ export function VoiceBar({
       }
       if (msg.type === "error") {
         setError(msg.text || msg.code || "voice error");
+      } else if (msg.type === "speech_started") {
+        if (isFlowSession) {
+          if (msg.turn_id && msg.source && msg.source_sequence) {
+            activeFlowTurnRef.current = {
+              id: msg.turn_id,
+              source: msg.source,
+              sourceSequence: msg.source_sequence,
+            };
+            rememberAcceptedVoiceSequence(
+              sourceKey,
+              sourceSequenceKey,
+              msg.source,
+              msg.source_sequence,
+            );
+          }
+          finalTranscriptRef.current = "";
+          partialRef.current = "";
+          setPartial("");
+          setAssistantText("");
+          setAgentProgress("");
+          ttsPlayerRef.current?.close();
+          ttsPlayerRef.current = null;
+          activeTTSSpeechRef.current = null;
+          setAgentPhase("transcribing");
+        }
       } else if (msg.type === "ready") {
         const listedASR = msg.asr_models?.length
           ? msg.asr_models
@@ -277,14 +354,23 @@ export function VoiceBar({
         const next = [finalTranscriptRef.current, msg.text].filter(Boolean).join(" ");
         partialRef.current = next;
         setPartial(next);
+        if (isFlowSession) setAgentPhase("transcribing");
       } else if (msg.type === "asr_final" && msg.text) {
         finalTranscriptRef.current = [finalTranscriptRef.current, msg.text].filter(Boolean).join(" ");
         partialRef.current = finalTranscriptRef.current;
         setPartial(finalTranscriptRef.current);
+        if (isFlowSession) {
+          setAgentPhase("thinking");
+          setAgentProgress("识别完成，正在提交到工作流…");
+        }
       } else if (msg.type === "asr_end") {
         if (pendingEndRef.current) {
           pendingEndRef.current = false;
           setAwaitingResult(false);
+          if (isFlowSession && !finalTranscriptRef.current.trim()) {
+            setAgentPhase("idle");
+            setAgentProgress("");
+          }
           if (endTimerRef.current !== null) {
             window.clearTimeout(endTimerRef.current);
             endTimerRef.current = null;
@@ -301,10 +387,18 @@ export function VoiceBar({
         if (isFlowSession && !matchesFlowVoiceTurn(msg, activeFlowTurnRef.current)) return;
         activeTTSSpeechRef.current = null;
         setAssistantText(msg.text ?? "");
+        if (isFlowSession) {
+          setAgentPhase("synthesizing");
+          setAgentProgress("正在生成语音…");
+        }
         ttsPlayerRef.current?.close();
         ttsPlayerRef.current = null;
       } else if (msg.type === "tts_start") {
         if (isFlowSession && !matchesFlowVoiceTurn(msg, activeFlowTurnRef.current)) return;
+        if (isFlowSession) {
+          setAgentPhase("speaking");
+          setAgentProgress("正在播放回复…");
+        }
         if (msg.id) {
           activeTTSSpeechRef.current = {
             id: msg.id,
@@ -318,11 +412,19 @@ export function VoiceBar({
         ttsPlayerRef.current?.end();
         ttsPlayerRef.current = null;
         activeTTSSpeechRef.current = null;
+        if (isFlowSession) {
+          setAgentPhase("idle");
+          setAgentProgress("");
+        }
       } else if (msg.type === "tts_cancelled") {
         if (isFlowSession && activeTTSSpeechRef.current?.id !== msg.id) return;
         ttsPlayerRef.current?.close();
         ttsPlayerRef.current = null;
         activeTTSSpeechRef.current = null;
+        if (isFlowSession) {
+          setAgentPhase("idle");
+          setAgentProgress("");
+        }
       } else if (msg.type === "session_event") {
         const event = msg.event;
         if (event?.sequence && event.sequence > eventCursorRef.current) {
@@ -346,6 +448,29 @@ export function VoiceBar({
           msg.source,
           msg.source_sequence,
         );
+        if (isFlowSession) {
+          setAgentPhase("queued");
+          setAgentProgress("请求已接收，正在启动工作流…");
+        }
+      } else if (msg.type === "session_snapshot") {
+        const progress = msg.in_flight;
+        const activeTurn = activeFlowTurnRef.current;
+        if (
+          isFlowSession &&
+          progress &&
+          activeTurn &&
+          progress.source === activeTurn.source &&
+          progress.source_sequence === activeTurn.sourceSequence
+        ) {
+          setAgentPhase(
+            progress.status === "canceling"
+              ? "canceling"
+              : progress.status === "queued"
+                ? "queued"
+                : "processing",
+          );
+          setAgentProgress(flowProgressLabel(progress));
+        }
       } else if ((msg.type === "voice_output_done" || msg.type === "voice_output_skipped") && msg.sequence) {
         voiceCursorRef.current = Math.max(voiceCursorRef.current, msg.sequence);
         try {
@@ -356,7 +481,30 @@ export function VoiceBar({
       }
     };
     ws.onclose = () => {
-      if (!closed) setConnected(false);
+      if (closed) return;
+      setConnected(false);
+      setListening(false);
+      setAgentPhase("idle");
+      setAgentProgress("");
+      pendingEndRef.current = false;
+      setAwaitingResult(false);
+      if (endTimerRef.current !== null) {
+        window.clearTimeout(endTimerRef.current);
+        endTimerRef.current = null;
+      }
+      processorRef.current?.disconnect();
+      sourceRef.current?.disconnect();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      void audioCtxRef.current?.close();
+      processorRef.current = null;
+      sourceRef.current = null;
+      streamRef.current = null;
+      audioCtxRef.current = null;
+      ttsPlayerRef.current?.close();
+      ttsPlayerRef.current = null;
+      setError("语音连接已断开，正在重连；重连后请重新开启麦克风。");
+      const delay = Math.min(30_000, 1_000 * 2 ** Math.min(reconnectAttempt, 5));
+      reconnectTimer = window.setTimeout(() => setReconnectAttempt((attempt) => attempt + 1), delay);
     };
     ws.onerror = () => {
       if (!closed) void diagnose(token, setError);
@@ -364,6 +512,7 @@ export function VoiceBar({
 
     return () => {
       closed = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       ws.close();
       wsRef.current = null;
       ttsPlayerRef.current?.close();
@@ -383,6 +532,7 @@ export function VoiceBar({
     sourceSequenceKey,
     eventCursorKey,
     voiceCursorKey,
+    reconnectAttempt,
   ]);
 
   // 开始录音：采集 16k s16 PCM 上行
@@ -391,7 +541,10 @@ export function VoiceBar({
       setError("voice not connected");
       return;
     }
-    if (awaitingResult) return;
+    if (awaitingResult || startingMicRef.current) return;
+    startingMicRef.current = true;
+    setStartingMic(true);
+    setError(null);
     if (endTimerRef.current !== null) {
       window.clearTimeout(endTimerRef.current);
       endTimerRef.current = null;
@@ -404,15 +557,27 @@ export function VoiceBar({
     setPartial("");
     setAssistantText("");
     try {
+      if (!window.isSecureContext || typeof navigator.mediaDevices?.getUserMedia !== "function") {
+        setError("当前页面无法访问麦克风。请通过 localhost 或 HTTPS 使用新版浏览器。");
+        return;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        stream.getTracks().forEach((track) => track.stop());
+        setError("语音连接已断开。连接恢复后请重新开启麦克风。");
+        return;
+      }
       streamRef.current = stream;
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const ctx = new Ctx();
+      await ctx.resume();
       audioCtxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
       sourceRef.current = source;
       const processor = ctx.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
+      const muteOutput = ctx.createGain();
+      muteOutput.gain.value = 0;
 
       if (isFlowSession) {
         const turn = nextFlowVoiceTurn(flowId, flowSessionID);
@@ -437,36 +602,45 @@ export function VoiceBar({
       processor.onaudioprocess = (e) => {
         const input = e.inputBuffer.getChannelData(0); // float32 @ ctx.sampleRate
         const srcRate = ctx.sampleRate;
-        // 线性插值降采样到 16k
-        const out: number[] = [];
+        // 线性插值降采样到 16k，避免每个音频回调创建动态 number[]。
         const step = srcRate / TARGET_RATE;
+        const pcm = new Int16Array(Math.ceil(input.length / step));
         let pos = 0;
-        while (pos < input.length) {
+        let outIndex = 0;
+        while (pos < input.length && outIndex < pcm.length) {
           const i0 = Math.floor(pos);
           const i1 = Math.min(i0 + 1, input.length - 1);
           const frac = pos - i0;
-          out.push(input[i0] * (1 - frac) + input[i1] * frac);
+          let value = input[i0] * (1 - frac) + input[i1] * frac;
+          if (value > 1) value = 1;
+          if (value < -1) value = -1;
+          pcm[outIndex++] = value < 0 ? value * 0x8000 : value * 0x7fff;
           pos += step;
-        }
-        // 转 s16 小端 → 二进制帧
-        const pcm = new Int16Array(out.length);
-        for (let i = 0; i < out.length; i++) {
-          let v = out[i];
-          if (v > 1) v = 1;
-          if (v < -1) v = -1;
-          pcm[i] = v * 0x7fff;
         }
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(pcm.buffer as ArrayBuffer);
         }
       };
       source.connect(processor);
-      processor.connect(ctx.destination); // 保持处理器活跃（静音输出）
+      processor.connect(muteOutput);
+      muteOutput.connect(ctx.destination); // ScriptProcessor 需要连接 destination，但麦克风回路保持静音。
       setListening(true);
       pendingEndRef.current = false;
+      setAwaitingResult(false);
       setError(null);
     } catch (err) {
-      setError(`mic denied: ${String(err)}`);
+      processorRef.current?.disconnect();
+      sourceRef.current?.disconnect();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      void audioCtxRef.current?.close();
+      processorRef.current = null;
+      sourceRef.current = null;
+      audioCtxRef.current = null;
+      setError(microphoneErrorMessage(err));
+    } finally {
+      startingMicRef.current = false;
+      setStartingMic(false);
     }
   }, [
     awaitingResult,
@@ -551,7 +725,43 @@ export function VoiceBar({
   const notEnabled = !enabled;
   const tip = notEnabled
     ? "语音未启用（设置 → Media / Audio → Voice Chat Enabled）"
-    : error ?? (listening ? "录音中…点击停止" : awaitingResult ? "正在完成语音识别…" : connected ? "点击开始说话" : "语音未连接");
+    : error ?? (listening
+      ? isFlowSession
+        ? agentPhase === "transcribing"
+          ? "正在识别…"
+          : agentPhase === "thinking"
+            ? `${agentProgress || "Agent 正在准备处理…"}说话即可打断`
+            : agentPhase === "queued"
+              ? `${agentProgress || "工作流排队中…"}说话即可打断`
+              : agentPhase === "processing"
+                ? `${agentProgress || "Agent 正在处理…"}说话即可打断`
+                : agentPhase === "canceling"
+                  ? agentProgress || "正在停止上一轮…"
+            : agentPhase === "synthesizing"
+              ? "正在生成语音，说话即可打断"
+            : agentPhase === "speaking"
+              ? "正在回复，说话即可打断"
+              : "持续监听中…说话即可交互"
+        : "录音中…点击停止"
+      : awaitingResult
+        ? "正在完成语音识别…"
+        : startingMic
+          ? "正在等待麦克风权限…"
+          : connected
+            ? "点击开始语音对话"
+            : "语音未连接");
+  const liveStatus = isFlowSession && (listening || agentPhase !== "idle")
+    ? agentPhase === "transcribing"
+      ? `正在识别${listening ? " · 说话即可打断" : "…"}`
+      : agentPhase === "thinking" || agentPhase === "queued" || agentPhase === "processing" ||
+          agentPhase === "canceling"
+        ? `${agentProgress || "Agent 正在处理…"}${listening ? " · 可直接继续说" : ""}`
+        : agentPhase === "synthesizing"
+          ? `正在生成语音${listening ? " · 可直接继续说" : "…"}`
+          : agentPhase === "speaking"
+            ? `正在播放回复${listening ? " · 可直接继续说" : "…"}`
+            : "持续监听中 · 可直接说下一句"
+    : null;
 
   return (
     <Space wrap size={6}>
@@ -563,20 +773,6 @@ export function VoiceBar({
           options={asrModels.map((model) => ({ value: model, label: model.replace(/^asr\//, "") }))}
           onChange={setAsrModel}
           style={{ width: 170 }}
-          disabled={listening || awaitingResult}
-        />
-      )}
-      {isFlowSession && asrModel.includes("zipformer") && (
-        <Select
-          size="small"
-          aria-label="VAD mode"
-          value={vadMode}
-          options={[
-            { value: "none", label: "Push-to-talk" },
-            { value: "server", label: "Server VAD" },
-          ]}
-          onChange={setVadMode}
-          style={{ width: 125 }}
           disabled={listening || awaitingResult}
         />
       )}
@@ -597,6 +793,11 @@ export function VoiceBar({
         </Tooltip>
       )}
       {assistantText && <Text type="secondary" style={{ maxWidth: 320 }} ellipsis>{assistantText}</Text>}
+      {liveStatus && (
+        <Text role="status" aria-live="polite" type="secondary" style={{ fontSize: 12 }}>
+          {liveStatus}
+        </Text>
+      )}
       <Tooltip title={tip}>
         <Button
           size="small"
@@ -605,9 +806,9 @@ export function VoiceBar({
           danger={listening}
           className={listening ? "voice-btn-recording" : undefined}
           icon={listening ? <AudioOutlined /> : <AudioMutedOutlined />}
-          disabled={disabled || !connected || !enabled || awaitingResult}
+          disabled={disabled || !connected || !enabled || awaitingResult || startingMic}
           onClick={toggle}
-          aria-label={listening ? "停止录音并发送" : "开始语音输入"}
+          aria-label={listening ? "停止语音对话" : "开始语音对话"}
         />
       </Tooltip>
     </Space>
@@ -639,7 +840,11 @@ async function diagnose(token: string | null, setError: (msg: string) => void) {
       return;
     }
     if (!st.reachable) {
-      setError(`语音引擎不可达（${st.engine_addr}），请启动 voice-engine`);
+      setError(`语音引擎不可达（${st.engine_addr}），请在 Godex 仓库运行 make dev-voice`);
+      return;
+    }
+    if (!st.ready) {
+      setError(st.error || "语音引擎缺少 Voice Agent 所需的默认 ASR、VAD 或 TTS 模型");
       return;
     }
     setError("语音连接失败，请刷新页面重试");

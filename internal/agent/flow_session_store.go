@@ -96,6 +96,9 @@ type FlowSessionInFlight struct {
 	Source         string     `json:"source"`
 	SourceSequence uint64     `json:"source_sequence,omitempty"`
 	CorrelationID  string     `json:"correlation_id,omitempty"`
+	NodeID         string     `json:"node_id,omitempty"`
+	Phase          string     `json:"phase,omitempty"`
+	ToolName       string     `json:"tool_name,omitempty"`
 	QueuedAt       time.Time  `json:"queued_at"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	DurationMS     int64      `json:"duration_ms,omitempty"`
@@ -602,6 +605,50 @@ func (s *flowStore) checkpointFlowSessionCursor(
 		return err
 	}
 	return fsutil.WriteJSONAtomic(filepath.Join(dir, "summary.json"), rec, 0644)
+}
+
+func (s *flowStore) cancelFlowSessionWork(
+	flowID, sessionID string,
+	sequence, expectedExecutionGeneration uint64,
+	eventType string,
+	execution *FlowSessionExecutionSummary,
+) (bool, error) {
+	lock := s.sessionLock(flowID, sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	rec, err := s.loadFlowSessionLocked(flowID, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if rec.ProcessedSequence >= sequence ||
+		rec.ExecutionGeneration != expectedExecutionGeneration ||
+		rec.Status != "active" ||
+		sequence != rec.ProcessedSequence+1 ||
+		sequence > rec.LastSequence {
+		return false, nil
+	}
+	rec.ProcessedSequence = sequence
+	rec.StateVersion++
+	rec.ExecutionGeneration++
+	rec.LastError = ""
+	rec.LastProcessedEventType = eventType
+	rec.LastProcessedNodes = nil
+	rec.LastBranchRoutes = nil
+	rec.LastExecution = cloneFlowSessionExecutionSummary(execution)
+	rec.UpdatedAt = time.Now().UTC()
+
+	dir, err := s.flowSessionDir(flowID, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if err := fsutil.WriteJSONAtomic(filepath.Join(dir, "summary.json"), rec, 0644); err != nil {
+		return false, err
+	}
+	if err := s.flushPendingFlowSessionOutputEventsLocked(dir, &rec); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *flowStore) commitFlowSessionProgress(

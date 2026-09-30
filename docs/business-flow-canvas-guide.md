@@ -1,6 +1,6 @@
 # Godex 业务编排画布与 Session Workflow 使用指南
 
-> 状态：Active / Partial（2026-09-27 按代码核对）；用途：供用户和 Flow Designer Agent 查阅画布操作、Agent 保存边界及 Session 能力限制。
+> 状态：Active / Partial（2026-09-29 补充 Voice Agent 首版使用与验收流程）；用途：供用户和 Flow Designer Agent 查阅画布操作、Agent 保存边界及 Session 能力限制。
 
 本指南同时供用户和 Flow Designer Agent 使用。它说明 Web 画布的操作方式、Agent 的设计/保存边界，以及当前 Session Workflow 能做和不能做的事。完整字段定义与运行时约束见 [业务流程运行时设计](business-flow-runtime-design.md)。
 
@@ -33,6 +33,25 @@
 
 Agent 可通过 `godex_docs get flow-spec` 查询能力索引和文档路径，再用只读 `read_file` 阅读本指南及完整运行时设计。若某项能力未列入已支持范围，Agent 应说明限制，而不是虚构节点或配置字段。
 
+## Voice Agent 快速开始与浏览器验收
+
+首版 Voice Agent 是桌面 localhost 上的引导式 Voice Flow：Flow Designer 负责设计与校验，运行时只开放 Godex `Explore` 只读工具。用户显式开启/停止麦克风；服务端 VAD 自动分句；每个非空识别结果以独立 durable `voice.asr_final` 事件提交。
+
+1. 在 Godex 仓库运行 `make dev-voice`。默认从相邻的 `../voice-engine` 启动 Zipformer；`VOICE_ENGINE_DIR` 和 `VOICE_ASR_MODEL` 可覆盖。模型不会自动下载；缺失时按终端提示执行 `./scripts/fetch-models.sh --asr zipformer` 后重试。
+2. 在 Settings 启用 Voice Chat，打开「业务编排」并选择一个 Flow，进入「Voice Agent」页。先确认状态为就绪；未启用、引擎未启动或默认 ASR/VAD/TTS 缺失时，按页面提示处理。
+3. 输入业务目标并选择「让 Flow Designer 按需求创建」。设计要求会预填到自然语言面板；检查画布与校验结果后，再明确要求 Agent 保存草稿。也可以确认创建最小 Voice Agent 示例草稿直接体验。
+4. 在 Voice Agent 页明确确认发布一个草稿版本，然后创建绑定该版本的 FlowSession。
+5. 点击麦克风按钮并允许浏览器访问麦克风。说一句并等回复完成，再继续说第二句；每句都应独立进入 FlowSession 并得到语音回复。回复播放时再次说话，应立即停止旧播报并开始新 turn；点击停止后浏览器录音指示应消失，麦克风轨道和音频上下文会关闭。
+6. 手工检查异常提示：拒绝麦克风权限后按提示在站点设置中放行；关闭 voice-engine 后页面应显示断连与重启提示；模型缺失时 `make dev-voice` 应给出下载命令，不应自行下载。
+
+确定性工具调用、Flow 输出、TTS 与插话取消由模拟引擎 E2E 覆盖。可选真实模型测试要求本地 engine 地址和 16 kHz、单声道 PCM WAV 样本：
+
+```sh
+GODEX_REAL_VOICE_ENGINE_ADDR=127.0.0.1:17021 \
+GODEX_REAL_VOICE_SAMPLE_WAV=/path/to/sample-16k-mono.wav \
+go test ./internal/runtime/httpapi -run TestVoiceFlowSessionAdapterWithRealVoiceEngine -count=1
+```
+
 ## 配置 Session Workflow
 
 在 Flow 详情的「Session 配置」页选择 `request` 或 `session`。该页会用当前画布（包含未保存编辑）创建一个新的草稿版本。
@@ -62,7 +81,7 @@ Session branch 每次只选择一个 case 或 default 路径。不同路径可�
 - 按已配置触发器手动发送测试事件/信号；可填写 source、source sequence、correlation ID 和 JSON payload。
 - durable 触发器发事件；latest-wins 触发器发可合并信号。
 
-Web 页目前是管理和语义事件测试面板，不是实时音频/视频客户端。详情与事件列表通过轮询刷新。
+普通 Session Web 页是管理和语义事件测试面板；Business Flow 内的 Voice Agent 页另外提供实时语音控制。Voice Agent 支持服务端连续监听与自动分句，不支持通用的音频/视频帧编排。
 
 ## WebSocket、媒体 Adapter 与重连
 
@@ -78,7 +97,7 @@ Session region 当前支持内联 JavaScript `function`、HTTP JSON `service`、
 
 - 不支持在通用事件 journal 或 Session WebSocket 中传二进制音视频帧；没有 token/partial ASR/TTS 分帧输出。
 - 不支持 Session loop、嵌套 branch、一般化的持久状态机迁移；branch 只支持互斥路由汇合，不支持等待多个并行分支的 join。
-- Voice adapter 能把 ASR final 接入 FlowSession，并将配置好的 session 输出流式送入 voice-engine TTS；但没有预置 turn 状态机，打断不会取消正在运行的 Flow LLM/Agent 工作。实时游戏的多层端到端 Agent 也未闭环。
+- Voice Agent 首版覆盖单一 durable 语音入口和只读 Explore Agent，带有 turn generation fencing、插话取消和 TTS 取消；实时游戏的多速率、多层端到端 Agent 仍未闭环。
 - 运行时协调仍是单进程；durable event 的外部副作用按 at-least-once 处理，不是 exactly-once；输出也没有服务端消费确认。
 
-因此，当前可用于构建、测试和观测 Session 语义流程切片；正式接入实时媒体前，应由专用 adapter 负责媒体热路径、背压、取消和客户端重连，并依据运行时设计文档逐项验收。
+因此，当前 Voice Agent 可用于本地连续语音对话、只读工具调用、FlowSession 状态保留、TTS 播报和插话取消；生产多进程部署、通用实时媒体编排和游戏 Agent 仍需依据运行时设计文档逐项实现与验收。

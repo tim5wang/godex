@@ -86,6 +86,7 @@ import { TemplateLibrary } from "./TemplateLibrary";
 import { FlowChatPanel } from "./FlowChatPanel";
 import { FlowSessionsPanel } from "./FlowSessionsPanel";
 import { SessionWorkflowTab } from "./SessionWorkflowTab";
+import { VoiceAgentPanel } from "./VoiceAgentPanel";
 import { SchemaTreeEditor, type SchemaNode } from "./SchemaTreeEditor";
 import { useSettingsStore } from "../../store/settings";
 
@@ -1345,6 +1346,8 @@ function FlowDetailColumn(props: {
     onApplyJson,
     editorHandleRef,
   } = props;
+  const [activeTab, setActiveTab] = useState("versions");
+  const [designerInitialPrompt, setDesignerInitialPrompt] = useState("");
 
   const versionsQuery = useQuery({
     queryKey: ["flow", flow.flow_id],
@@ -1439,6 +1442,8 @@ function FlowDetailColumn(props: {
         </Space>
       </div>
       <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
         items={[
           {
             key: "versions",
@@ -1729,6 +1734,8 @@ function FlowDetailColumn(props: {
                 flowId={flow.flow_id}
                 token={token}
                 designerSessionId={flow.designer_session_id}
+                initialPrompt={designerInitialPrompt}
+                onInitialPromptConsumed={() => setDesignerInitialPrompt("")}
                 onVersionApplied={onRefresh}
                 getCanvasSnapshot={() =>
                   editorHandleRef.current?.getCurrentDefinition() ?? undefined
@@ -1761,6 +1768,24 @@ function FlowDetailColumn(props: {
                 token={token}
                 versions={versions}
                 t={t}
+              />
+            ),
+          },
+          {
+            key: "voice-agent",
+            label: t("flows.voiceAgentTab"),
+            children: (
+              <VoiceAgentPanel
+                flowId={flow.flow_id}
+                token={token}
+                versions={versions}
+                t={t}
+                onRefresh={onRefresh}
+                onPublish={onPublish}
+                onOpenDesigner={(prompt) => {
+                  setDesignerInitialPrompt(prompt ?? "");
+                  setActiveTab("naturallang");
+                }}
               />
             ),
           },

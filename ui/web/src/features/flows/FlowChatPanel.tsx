@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App as AntApp, Button, Empty, Space, Spin, Typography } from "antd";
 import { MessageOutlined } from "@ant-design/icons";
@@ -13,7 +13,7 @@ import {
   pendingSendsForFeed,
 } from "../../lib/timelineUtils";
 import { MessageFeedV2 } from "../../components/MessageFeedV2";
-import { Composer, type ComposerSubmission } from "../../components/Composer";
+import { Composer, type ComposerHandle, type ComposerSubmission } from "../../components/Composer";
 import { buildChatRoute } from "../../lib/chatRoutes";
 import type { FlowDefinition } from "../../lib/apiFlow";
 import { useI18n } from "../../i18n";
@@ -43,10 +43,21 @@ export function FlowChatPanel(props: {
   designerSessionId?: string | null;
   /** Called after a turn ends (the agent may have saved a new version). */
   onVersionApplied?: () => void;
+  /** Optional text to place in the composer for a guided flow-design task. */
+  initialPrompt?: string;
+  onInitialPromptConsumed?: () => void;
   /** Reads the live editor state, including canvas changes not yet saved. */
   getCanvasSnapshot?: () => FlowDefinition | undefined;
 }) {
-  const { flowId, token, onVersionApplied, designerSessionId, getCanvasSnapshot } = props;
+  const {
+    flowId,
+    token,
+    onVersionApplied,
+    designerSessionId,
+    initialPrompt,
+    onInitialPromptConsumed,
+    getCanvasSnapshot,
+  } = props;
   const { t } = useI18n();
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
@@ -56,6 +67,8 @@ export function FlowChatPanel(props: {
   // conversations would overwrite each other's feed state.
   const [store] = useState(() => createChatStore());
   const chat = store(); // subscribe: returns the current state snapshot
+  const composerRef = useRef<ComposerHandle>(null);
+  const seededPromptRef = useRef("");
   const tokenFromStore = useSettingsStore((state) => state.token);
   const effectiveToken = token ?? tokenFromStore;
 
@@ -69,6 +82,18 @@ export function FlowChatPanel(props: {
     [sessionKey],
   );
   const [sessionId, setSessionId] = useState("");
+
+  useEffect(() => {
+    const prompt = initialPrompt?.trim() ?? "";
+    if (!prompt) {
+      seededPromptRef.current = "";
+      return;
+    }
+    if (!sessionId || seededPromptRef.current === prompt) return;
+    composerRef.current?.setText(prompt);
+    seededPromptRef.current = prompt;
+    onInitialPromptConsumed?.();
+  }, [initialPrompt, sessionId, onInitialPromptConsumed]);
 
   // The flow's bound designer session may live under an OLDER locator key
   // (the flow id at design time, e.g. flow:flow_kefu after a rename to
@@ -237,7 +262,7 @@ export function FlowChatPanel(props: {
             </div>
           </div>
           <div className="flow-chat-composer">
-            <Composer onSubmit={(s) => sendMutation.mutateAsync(s)} disabled={!sessionId} />
+          <Composer ref={composerRef} onSubmit={(s) => sendMutation.mutateAsync(s)} disabled={!sessionId} />
           </div>
         </>
       )}

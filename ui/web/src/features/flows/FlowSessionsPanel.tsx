@@ -31,6 +31,7 @@ import {
 } from "../../lib/api";
 import { showError } from "../../lib/notifications";
 import { VoiceBar } from "../../components/VoiceBar";
+import { isVoiceAgentDefinition } from "./voiceAgent";
 
 const { Text, Paragraph } = Typography;
 
@@ -39,6 +40,10 @@ interface Props {
   token: string | null;
   versions: FlowVersionView[];
   t: (key: string, values?: Record<string, string | number>) => string;
+  guided?: boolean;
+  voiceEnabled?: boolean;
+  onPublishVersion?: (version: string) => void;
+  onOpenDesigner?: () => void;
 }
 
 function prettyTime(value?: string) {
@@ -54,12 +59,28 @@ function eventStatusColor(status?: string) {
   return "blue";
 }
 
-export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
+export function FlowSessionsPanel({
+  flowId,
+  token,
+  versions,
+  t,
+  guided = false,
+  voiceEnabled = true,
+  onPublishVersion,
+  onOpenDesigner,
+}: Props) {
   const { message } = AntApp.useApp();
   const queryClient = useQueryClient();
   const sessionVersions = useMemo(
-    () => versions.filter((row) => row.definition?.execution_mode === "session"),
-    [versions],
+    () => versions.filter((row) =>
+      row.definition?.execution_mode === "session" &&
+      (!guided || isVoiceAgentDefinition(row.definition)),
+    ),
+    [versions, guided],
+  );
+  const publishedSessionVersions = useMemo(
+    () => sessionVersions.filter((row) => row.status === "published"),
+    [sessionVersions],
   );
   const [selectedSessionID, setSelectedSessionID] = useState<string>();
   const [createVersion, setCreateVersion] = useState<string>();
@@ -72,13 +93,14 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
   const [voiceOutputField, setVoiceOutputField] = useState("");
 
   useEffect(() => {
-    if (!createVersion || !sessionVersions.some((row) => row.version === createVersion)) {
+    const available = guided ? publishedSessionVersions : sessionVersions;
+    if (!createVersion || !available.some((row) => row.version === createVersion)) {
       setCreateVersion(
-        sessionVersions.find((row) => row.status === "published")?.version ??
-          sessionVersions.at(-1)?.version,
+        available.find((row) => row.status === "published")?.version ??
+          (!guided ? sessionVersions.at(-1)?.version : undefined),
       );
     }
-  }, [sessionVersions, createVersion]);
+  }, [sessionVersions, publishedSessionVersions, createVersion, guided]);
 
   const sessionsQuery = useQuery({
     queryKey: ["flow-sessions", flowId],
@@ -143,9 +165,13 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
   }, [triggers, eventType]);
 
   useEffect(() => {
+    if (guided && voiceOutputFields.includes("speech")) {
+      setVoiceOutputField("speech");
+      return;
+    }
     if (voiceOutputField && voiceOutputFields.includes(voiceOutputField)) return;
     setVoiceOutputField(voiceOutputFields.length === 1 ? voiceOutputFields[0] : "");
-  }, [voiceOutputFields, voiceOutputField]);
+  }, [voiceOutputFields, voiceOutputField, guided]);
 
   const invalidateSessions = () => {
     void queryClient.invalidateQueries({ queryKey: ["flow-sessions", flowId] });
@@ -229,6 +255,35 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
     onError: (error) => showError(message, error, t("flows.sessionOperationFailed")),
   });
 
+  if (guided && publishedSessionVersions.length === 0) {
+    const draftVersions = sessionVersions.filter((row) => row.status !== "published");
+    return (
+      <Card size="small">
+        <Space direction="vertical" style={{ width: "100%" }} size={8}>
+          <Alert
+            type="info"
+            showIcon
+            message={draftVersions.length > 0 ? t("flows.voiceAgentNeedsPublish") : t("flows.voiceAgentNoPublishedVersion")}
+          />
+          {draftVersions.map((version) => (
+            <Popconfirm
+              key={version.version}
+              title={t("flows.publishConfirm")}
+              onConfirm={() => onPublishVersion?.(version.version)}
+            >
+              <Button disabled={!onPublishVersion}>
+                {t("flows.voiceAgentPublishVersion", { version: version.version })}
+              </Button>
+            </Popconfirm>
+          ))}
+          {onOpenDesigner && (
+            <Button onClick={onOpenDesigner}>{t("flows.voiceAgentDesignWithAgent")}</Button>
+          )}
+        </Space>
+      </Card>
+    );
+  }
+
   if (sessionVersions.length === 0) {
     return (
       <Empty
@@ -250,19 +305,21 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
         style={{ width: "100%" }}
         value={createVersion}
         placeholder={t("flows.sessionChooseVersion")}
-        options={sessionVersions.map((row) => ({
+        options={(guided ? publishedSessionVersions : sessionVersions).map((row) => ({
           value: row.version,
           label: `${row.version} (${row.status})`,
         }))}
         onChange={setCreateVersion}
       />
-      <Input.TextArea
-        rows={3}
-        value={inputsText}
-        onChange={(event) => setInputsText(event.target.value)}
-        placeholder='{"conversation_id":"..."}'
-        style={{ fontFamily: "monospace", fontSize: 12 }}
-      />
+      {!guided && (
+        <Input.TextArea
+          rows={3}
+          value={inputsText}
+          onChange={(event) => setInputsText(event.target.value)}
+          placeholder='{"conversation_id":"..."}'
+          style={{ fontFamily: "monospace", fontSize: 12 }}
+        />
+      )}
       <Button
         type="primary"
         loading={createMutation.isPending}
@@ -275,12 +332,14 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <Alert
-        type="info"
-        showIcon
-        message={t("flows.sessionRuntimeIntro")}
-        description={t("flows.sessionRuntimeMediaHint")}
-      />
+        {!guided && (
+          <Alert
+            type="info"
+            showIcon
+            message={t("flows.sessionRuntimeIntro")}
+            description={t("flows.sessionRuntimeMediaHint")}
+          />
+        )}
       <Card size="small" title={t("flows.sessionCreate")}>
         {createInputs}
       </Card>
@@ -388,7 +447,7 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
               <Card size="small" title={t("flows.sessionVoice")}>
                 <Space direction="vertical" size={8} style={{ width: "100%" }}>
                   <Text type="secondary">{t("flows.sessionVoiceHint")}</Text>
-                  {voiceOutputFields.length > 0 && (
+                    {!guided && voiceOutputFields.length > 0 && (
                     <Select
                       allowClear
                       value={voiceOutputField || undefined}
@@ -402,7 +461,8 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
                   <VoiceBar
                     key={session.session_id}
                     token={token}
-                    sessionId={null}
+                      sessionId={null}
+                      enabled={voiceEnabled}
                     disabled={!active || (voiceOutputFields.length > 1 && !voiceOutputField)}
                     flowSession={{
                       flowId,
@@ -449,13 +509,13 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
                 </Card>
               )}
 
-              <Card size="small" title={t("flows.sessionState")} style={{ marginBottom: 8 }}>
-                <pre style={{ margin: 0, maxHeight: 160, overflow: "auto", fontSize: 11 }}>
-                  {JSON.stringify(session.state ?? {}, null, 2)}
-                </pre>
-              </Card>
+                {!guided && <Card size="small" title={t("flows.sessionState")} style={{ marginBottom: 8 }}>
+                  <pre style={{ margin: 0, maxHeight: 160, overflow: "auto", fontSize: 11 }}>
+                    {JSON.stringify(session.state ?? {}, null, 2)}
+                  </pre>
+                </Card>}
 
-              <Card size="small" title={t("flows.sessionTestEvent")} style={{ marginBottom: 8 }}>
+                {!guided && <Card size="small" title={t("flows.sessionTestEvent")} style={{ marginBottom: 8 }}>
                 {triggers.length === 0 ? (
                   <Text type="secondary">{t("flows.sessionNoTriggers")}</Text>
                 ) : (
@@ -511,9 +571,9 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
                     </Button>
                   </Space>
                 )}
-              </Card>
+                </Card>}
 
-              <Card size="small" title={t("flows.sessionRecentEvents")}>
+                {!guided && <Card size="small" title={t("flows.sessionRecentEvents")}>
                 {events.length === 0 ? (
                   <Text type="secondary">{t("flows.sessionNoEvents")}</Text>
                 ) : (
@@ -543,7 +603,7 @@ export function FlowSessionsPanel({ flowId, token, versions, t }: Props) {
                     ))}
                   </div>
                 )}
-              </Card>
+                </Card>}
             </Card>
           ) : (
             <Empty description={t("flows.sessionSelect")} />

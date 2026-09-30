@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -39,12 +40,17 @@ type flowSessionJobKey struct {
 }
 
 type flowSessionScheduledWork struct {
-	dirty     bool
-	inFlight  bool
-	cancel    context.CancelFunc
-	signal    *agent.FlowSessionEventInput
-	execution *agent.FlowSessionInFlight
-	token     uint64
+	dirty             bool
+	inFlight          bool
+	cancel            context.CancelFunc
+	signal            *agent.FlowSessionEventInput
+	work              *agent.FlowSessionWork
+	execution         *agent.FlowSessionInFlight
+	nextSequence      uint64
+	interruptSequence uint64
+	interrupting      bool
+	interruptDone     chan struct{}
+	token             uint64
 }
 
 type flowSessionAsyncTask struct {
@@ -252,11 +258,13 @@ func (s *flowSessionScheduler) process(key flowSessionJobKey) {
 	for {
 		s.mu.Lock()
 		job := s.jobs[key]
-		if job == nil || job.inFlight {
+		if job == nil || job.inFlight || job.interrupting {
 			s.mu.Unlock()
 			return
 		}
+		expectedJob := job
 		job.dirty = false
+		job.nextSequence = 0
 		s.mu.Unlock()
 
 		a, err := s.service.flowAgent()
@@ -265,7 +273,9 @@ func (s *flowSessionScheduler) process(key flowSessionJobKey) {
 			view, err = a.GetFlowSession(ref.flowID, ref.sessionID)
 			if err == nil && view.Status != "active" {
 				s.mu.Lock()
-				delete(s.jobs, key)
+				if s.jobs[key] == expectedJob {
+					delete(s.jobs, key)
+				}
 				if view.Status == "completed" || view.Status == "canceled" {
 					for signalKey := range s.signals {
 						if signalKey.flowSessionRef == ref {
@@ -280,7 +290,9 @@ func (s *flowSessionScheduler) process(key flowSessionJobKey) {
 		if err != nil && s.ctx.Err() == nil {
 			logger.Warnf("Flow session reconciliation failed flow=%s session=%s: %v", ref.flowID, ref.sessionID, err)
 			s.mu.Lock()
-			delete(s.jobs, key)
+			if s.jobs[key] == expectedJob {
+				delete(s.jobs, key)
+			}
 			s.mu.Unlock()
 			return
 		}
@@ -289,32 +301,52 @@ func (s *flowSessionScheduler) process(key flowSessionJobKey) {
 		}
 
 		if key.laneID == flowSessionDurableLaneKey {
+			if view.LastSequence > view.ProcessedSequence {
+				s.mu.Lock()
+				if s.jobs[key] == expectedJob {
+					expectedJob.nextSequence = view.ProcessedSequence + 1
+				}
+				s.mu.Unlock()
+			}
 			work, err := a.PrepareFlowSessionWork(ref.flowID, ref.sessionID)
 			if err != nil {
 				if s.ctx.Err() == nil {
 					logger.Warnf("Flow session work preparation failed flow=%s session=%s: %v", ref.flowID, ref.sessionID, err)
 				}
 				s.mu.Lock()
-				delete(s.jobs, key)
+				if s.jobs[key] == expectedJob {
+					delete(s.jobs, key)
+				}
 				s.mu.Unlock()
 				return
 			}
 			if work != nil {
-				s.dispatch(key, a, work, nil)
+				progress := work.Progress()
+				s.mu.Lock()
+				if s.jobs[key] != expectedJob {
+					s.mu.Unlock()
+					return
+				}
+				expectedJob.work = work
+				expectedJob.nextSequence = progress.InputSequence
+				s.mu.Unlock()
+				s.dispatch(key, expectedJob, a, work, nil)
 				return
 			}
 		} else if view.LastSequence > view.ProcessedSequence {
 			// Durable journal order wins over volatile state updates. Keep the
 			// signal queued; the durable lane schedules it again after checkpoint.
 			s.mu.Lock()
-			delete(s.jobs, key)
+			if s.jobs[key] == expectedJob {
+				delete(s.jobs, key)
+			}
 			s.mu.Unlock()
 			return
 		}
 
 		if key.laneID != flowSessionDurableLaneKey {
 			if signal, ok := s.takeSignal(key); ok {
-				s.dispatch(key, a, nil, &signal)
+				s.dispatch(key, expectedJob, a, nil, &signal)
 				return
 			}
 		} else {
@@ -324,7 +356,7 @@ func (s *flowSessionScheduler) process(key flowSessionJobKey) {
 
 		s.mu.Lock()
 		job = s.jobs[key]
-		if job == nil {
+		if job == nil || job != expectedJob || job.interrupting {
 			s.mu.Unlock()
 			return
 		}
@@ -340,6 +372,7 @@ func (s *flowSessionScheduler) process(key flowSessionJobKey) {
 
 func (s *flowSessionScheduler) dispatch(
 	key flowSessionJobKey,
+	expectedJob *flowSessionScheduledWork,
 	a *agent.Agent,
 	work *agent.FlowSessionWork,
 	signal *agent.FlowSessionEventInput,
@@ -367,7 +400,7 @@ func (s *flowSessionScheduler) dispatch(
 	}
 	s.mu.Lock()
 	job := s.jobs[key]
-	if job == nil || job.inFlight || s.ctx.Err() != nil {
+	if job == nil || job != expectedJob || job.inFlight || job.interrupting || s.ctx.Err() != nil {
 		s.mu.Unlock()
 		cancel()
 		return false
@@ -376,6 +409,7 @@ func (s *flowSessionScheduler) dispatch(
 	job.inFlight = true
 	job.cancel = cancel
 	job.signal = signal
+	job.work = work
 	job.token = s.nextToken
 	var execution *agent.FlowSessionInFlight
 	switch {
@@ -413,6 +447,7 @@ func (s *flowSessionScheduler) dispatch(
 	select {
 	case queue <- task:
 		s.mu.Unlock()
+		notifyFlowSessionChanged(key.flowSessionRef)
 		return true
 	default:
 		job.inFlight = false
@@ -442,23 +477,33 @@ func (s *flowSessionScheduler) taskWorker(queue <-chan flowSessionAsyncTask) {
 
 func (s *flowSessionScheduler) runAsyncTask(task flowSessionAsyncTask) {
 	startedAt := time.Now()
+	started := false
 	s.mu.Lock()
 	if job := s.jobs[task.key]; job != nil && job.token == task.token &&
 		job.execution != nil && task.ctx.Err() == nil {
 		job.execution.Status = "running"
 		job.execution.StartedAt = &startedAt
+		started = true
 	}
 	s.mu.Unlock()
+	if started {
+		notifyFlowSessionChanged(task.key.flowSessionRef)
+	}
 
 	var err error
 	switch {
 	case task.work != nil:
-		result, runErr := s.workRunner(task.ctx, task.agent, task.work)
-		err = runErr
-		if err == nil && task.ctx.Err() == nil {
-			err = task.agent.CommitFlowSessionWork(task.work, result)
-		} else if err == nil {
-			err = task.ctx.Err()
+		task.work.SetProgressHandler(func(progress agent.FlowSessionProgressUpdate) {
+			s.reportWorkProgress(task.key, task.token, progress)
+		})
+		if err = task.ctx.Err(); err == nil {
+			result, runErr := s.workRunner(task.ctx, task.agent, task.work)
+			err = runErr
+			if err == nil && task.ctx.Err() == nil {
+				err = task.agent.CommitFlowSessionWork(task.work, result)
+			} else if err == nil {
+				err = task.ctx.Err()
+			}
 		}
 	case task.signal != nil:
 		err = task.agent.ProcessFlowSessionSignal(task.ctx, task.key.flowID, task.key.sessionID, *task.signal)
@@ -486,24 +531,119 @@ func (s *flowSessionScheduler) runAsyncTask(task flowSessionAsyncTask) {
 	}
 
 	task.cancel()
-	s.mu.Lock()
-	job := s.jobs[task.key]
-	if job == nil || job.token != task.token {
+	for {
+		s.mu.Lock()
+		job := s.jobs[task.key]
+		if job == nil || job.token != task.token {
+			s.mu.Unlock()
+			return
+		}
+		if job.interrupting {
+			done := job.interruptDone
+			s.mu.Unlock()
+			if done != nil {
+				<-done
+				continue
+			}
+		}
+		retry = retry || job.dirty
+		delete(s.jobs, task.key)
+		if retry && s.ctx.Err() == nil {
+			s.scheduleLocked(task.key)
+		}
+		if task.key.laneID == flowSessionDurableLaneKey && s.ctx.Err() == nil {
+			s.schedulePendingSignalsLocked(task.key.flowSessionRef)
+		}
 		s.mu.Unlock()
-		return
+		break
 	}
-	retry = retry || job.dirty
-	delete(s.jobs, task.key)
-	if retry && s.ctx.Err() == nil {
-		s.scheduleLocked(task.key)
-	}
-	if task.key.laneID == flowSessionDurableLaneKey && s.ctx.Err() == nil {
-		s.schedulePendingSignalsLocked(task.key.flowSessionRef)
-	}
-	s.mu.Unlock()
 	if err == nil {
 		notifyFlowSessionChanged(task.key.flowSessionRef)
 	}
+}
+
+func (s *flowSessionScheduler) reportWorkProgress(
+	key flowSessionJobKey,
+	token uint64,
+	progress agent.FlowSessionProgressUpdate,
+) {
+	s.mu.Lock()
+	job := s.jobs[key]
+	if job == nil || job.token != token || job.execution == nil {
+		s.mu.Unlock()
+		return
+	}
+	job.execution.NodeID = progress.NodeID
+	job.execution.Phase = progress.Phase
+	job.execution.ToolName = progress.ToolName
+	s.mu.Unlock()
+	notifyFlowSessionChanged(key.flowSessionRef)
+}
+
+func (s *flowSessionScheduler) interruptFlowSessionWork(
+	ref flowSessionRef,
+	a *agent.Agent,
+	work *agent.FlowSessionWork,
+) (bool, error) {
+	if a == nil || work == nil {
+		return false, fmt.Errorf("flow session work unavailable")
+	}
+	progress := work.Progress()
+	key := flowSessionJobKey{
+		flowSessionRef: ref,
+		laneID:         flowSessionDurableLaneKey,
+	}
+	s.mu.Lock()
+	job := s.jobs[key]
+	if job != nil {
+		if job.work != nil && job.work.Progress().InputSequence != progress.InputSequence {
+			s.mu.Unlock()
+			return false, nil
+		}
+		if job.work == nil && job.nextSequence != 0 && job.nextSequence != progress.InputSequence {
+			s.mu.Unlock()
+			return false, nil
+		}
+		if job.interrupting {
+			s.mu.Unlock()
+			return false, nil
+		}
+		job.interrupting = true
+		job.interruptSequence = progress.InputSequence
+		job.interruptDone = make(chan struct{})
+		job.dirty = true
+		if job.execution != nil {
+			job.execution.Status = "canceling"
+		}
+		if job.cancel != nil {
+			job.cancel()
+		}
+	}
+	s.mu.Unlock()
+	if job != nil {
+		notifyFlowSessionChanged(ref)
+	}
+
+	canceled, err := a.CancelFlowSessionWork(work)
+
+	if job != nil {
+		s.mu.Lock()
+		if job.interrupting && job.interruptSequence == progress.InputSequence {
+			job.interrupting = false
+			if job.interruptDone != nil {
+				close(job.interruptDone)
+			}
+			job.interruptDone = nil
+			if s.jobs[key] == job && !job.inFlight {
+				delete(s.jobs, key)
+				s.scheduleLocked(key)
+			} else if s.jobs[key] == job {
+				job.dirty = true
+			}
+		}
+		s.mu.Unlock()
+	}
+	return canceled, err
 }
 
 func (s *flowSessionScheduler) inFlight(ref flowSessionRef) *agent.FlowSessionInFlight {

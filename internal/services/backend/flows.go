@@ -321,6 +321,53 @@ func (s *Service) PublishFlowSessionSignal(flowID, sessionID string, input agent
 	return agent.FlowSessionSignalReceipt{SessionID: sessionID, Coalesced: coalesced}, nil
 }
 
+// InterruptFlowSessionTurn cancels the next durable event only when it belongs
+// to the same source and event type and predates the supplied source sequence.
+func (s *Service) InterruptFlowSessionTurn(
+	flowID, sessionID, source, eventType string,
+	newSourceSequence uint64,
+) (bool, error) {
+	a, err := s.flowAgent()
+	if err != nil {
+		return false, err
+	}
+	flowID = strings.TrimSpace(flowID)
+	sessionID = strings.TrimSpace(sessionID)
+	source = strings.TrimSpace(source)
+	eventType = strings.TrimSpace(eventType)
+	if flowID == "" || sessionID == "" || source == "" || eventType == "" || newSourceSequence == 0 {
+		return false, nil
+	}
+	work, err := a.PrepareFlowSessionWork(flowID, sessionID)
+	if err != nil || work == nil {
+		return false, err
+	}
+	progress := work.Progress()
+	if progress.Source != source ||
+		progress.EventType != eventType ||
+		progress.SourceSequence == 0 ||
+		progress.SourceSequence >= newSourceSequence {
+		return false, nil
+	}
+
+	ref := flowSessionRef{flowID: flowID, sessionID: sessionID}
+	scheduler := s.currentFlowSessionScheduler()
+	var canceled bool
+	if scheduler != nil {
+		canceled, err = scheduler.interruptFlowSessionWork(ref, a, work)
+	} else {
+		canceled, err = a.CancelFlowSessionWork(work)
+	}
+	if err != nil || !canceled {
+		return canceled, err
+	}
+	notifyFlowSessionChanged(ref)
+	if scheduler != nil {
+		scheduler.wake(ref)
+	}
+	return true, nil
+}
+
 func (s *Service) currentFlowSessionScheduler() *flowSessionScheduler {
 	if s == nil {
 		return nil

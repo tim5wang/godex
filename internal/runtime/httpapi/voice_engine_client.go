@@ -208,6 +208,8 @@ func (c *voiceEngineConn) readLoop() {
 		}
 		var event voiceclient.Event
 		switch string(msg.T) {
+		case "speech_started":
+			event = voiceclient.Event{Kind: voiceclient.EventKind("speech_started")}
 		case "asr_partial":
 			event = voiceclient.Event{Kind: voiceclient.EventKind("asr_partial"), Text: msg.Text}
 		case string(protocol.KindASRFinal):

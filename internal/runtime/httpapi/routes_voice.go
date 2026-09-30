@@ -215,18 +215,63 @@ func (b *voiceBridge) handleTTSStream(w http.ResponseWriter, r *http.Request) {
 // handleVoiceStatus 处理 GET /v1/voice/status（可独立测试）。
 func (b *voiceBridge) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 	b.refreshEngineAddr()
-	writeJSON(w, http.StatusOK, voiceStatus{
-		Enabled:    b.voiceEnabled(),
-		EngineAddr: b.engineAddr,
-		Reachable:  b.engineReachable(r.Context()),
-	})
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+	status := voiceStatus{Enabled: b.voiceEnabled(), EngineAddr: b.engineAddr}
+	ve, err := dialVoiceEngine(ctx, b.engineAddr)
+	if err != nil {
+		status.Error = err.Error()
+		writeJSON(w, http.StatusOK, status)
+		return
+	}
+	capabilities := ve.Capabilities()
+	_ = ve.Close()
+	status.Reachable = true
+	status.ASRModels = capabilities.ASRModels
+	status.VADModels = capabilities.VADModels
+	status.TTSModels = capabilities.TTSModels
+	status.DefaultASR = capabilities.DefaultASR
+	status.DefaultVAD = capabilities.DefaultVAD
+	status.DefaultTTS = capabilities.DefaultTTS
+	missing := make([]string, 0, 3)
+	if capabilities.DefaultASR == "" || !capabilityContains(capabilities.ASRModels, capabilities.DefaultASR) {
+		missing = append(missing, "default ASR model")
+	}
+	if capabilities.DefaultVAD == "" || !capabilityContains(capabilities.VADModels, capabilities.DefaultVAD) {
+		missing = append(missing, "default VAD model")
+	}
+	if capabilities.DefaultTTS == "" || !capabilityContains(capabilities.TTSModels, capabilities.DefaultTTS) {
+		missing = append(missing, "default TTS model")
+	}
+	status.Ready = len(missing) == 0
+	if !status.Ready {
+		status.Error = "voice-engine WebSocket handshake succeeded, but readiness is missing " + strings.Join(missing, ", ")
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 // voiceStatus 是 /v1/voice/status 的响应体。
 type voiceStatus struct {
-	Enabled    bool   `json:"enabled"`
-	EngineAddr string `json:"engine_addr"`
-	Reachable  bool   `json:"reachable"`
+	Enabled    bool     `json:"enabled"`
+	EngineAddr string   `json:"engine_addr"`
+	Reachable  bool     `json:"reachable"`
+	Ready      bool     `json:"ready"`
+	Error      string   `json:"error,omitempty"`
+	ASRModels  []string `json:"asr_models,omitempty"`
+	VADModels  []string `json:"vad_models,omitempty"`
+	TTSModels  []string `json:"tts_models,omitempty"`
+	DefaultASR string   `json:"default_asr,omitempty"`
+	DefaultVAD string   `json:"default_vad,omitempty"`
+	DefaultTTS string   `json:"default_tts,omitempty"`
+}
+
+func capabilityContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // engineReachable 探测 voice-engine 是否可达（TCP 拨号即断）。
@@ -261,28 +306,38 @@ func voiceQueryTokenAuth(protected func(http.Handler) http.Handler, tokenProvide
 
 // voiceConn 是 Web UI ↔ godex 的连接状态。
 type voiceConn struct {
-	ws               *websocket.Conn
-	writeMu          sync.Mutex
-	stateMu          sync.Mutex
-	ve               *voiceEngineConn
-	sessionID        string
-	flowID           string
-	flowSessionID    string
-	afterSequence    uint64
-	voiceAfterSeq    uint64
-	eventOffset      int64
-	currentSourceSeq uint64
-	currentSource    string
-	eventType        string
-	currentEventType string
-	outputField      string
-	ttsModel         string
-	currentTurnID    string
-	turnGeneration   uint64
-	turnSourceSeq    uint64
-	pendingSpeech    map[string]pendingVoiceSpeech
-	turnTranscript   strings.Builder
-	closeCh          chan struct{}
+	ws                *websocket.Conn
+	writeMu           sync.Mutex
+	stateMu           sync.Mutex
+	service           *backend.Service
+	interruptTurn     func(flowID, sessionID, source, eventType string, newSourceSequence uint64) (bool, error)
+	ve                *voiceEngineConn
+	sessionID         string
+	flowID            string
+	flowSessionID     string
+	afterSequence     uint64
+	voiceAfterSeq     uint64
+	eventOffset       int64
+	currentSourceSeq  uint64
+	currentSource     string
+	flowVoiceSource   string
+	flowStartSeq      uint64
+	flowNextSourceSeq uint64
+	flowSpeechSeen    bool
+	flowSpeechActive  bool
+	flowEventType     string
+	flowOutputField   string
+	flowTTSModel      string
+	eventType         string
+	currentEventType  string
+	outputField       string
+	ttsModel          string
+	currentTurnID     string
+	turnGeneration    uint64
+	turnSourceSeq     uint64
+	pendingSpeech     map[string]pendingVoiceSpeech
+	turnTranscript    strings.Builder
+	closeCh           chan struct{}
 }
 
 type pendingVoiceSpeech struct {
@@ -354,6 +409,7 @@ func (b *voiceBridge) handleVoice(w http.ResponseWriter, r *http.Request) {
 
 	vc := &voiceConn{
 		ws:            conn,
+		service:       b.service,
 		ve:            ve,
 		flowID:        flowID,
 		flowSessionID: flowSessionID,
@@ -366,6 +422,12 @@ func (b *voiceBridge) handleVoice(w http.ResponseWriter, r *http.Request) {
 		vc.sessionID = sid
 	}
 	if flowID != "" {
+		if inFlight := sessionView.InFlight; inFlight != nil {
+			vc.currentSource = inFlight.Source
+			vc.currentSourceSeq = inFlight.SourceSequence
+			vc.turnSourceSeq = inFlight.SourceSequence
+			vc.currentEventType = inFlight.EventType
+		}
 		voiceAfterSequence := sessionView.LastSequence
 		if rawVoiceSequence := strings.TrimSpace(r.URL.Query().Get("voice_after_sequence")); rawVoiceSequence != "" {
 			voiceAfterSequence, err = parseFlowSessionSequence(rawVoiceSequence)
@@ -414,11 +476,15 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 		default:
 		}
 		switch ev.Kind {
+		case voiceclient.EventKind("speech_started"):
+			b.beginDetectedVoiceTurn(vc)
 		case voiceclient.EventKind("asr_partial"):
+			b.ensureDetectedVoiceTurn(vc)
 			if strings.TrimSpace(ev.Text) != "" {
 				vc.writeText(voiceMsg{Type: "asr_partial", Text: ev.Text})
 			}
 		case voiceclient.EventASRFinal:
+			b.ensureDetectedVoiceTurn(vc)
 			if strings.TrimSpace(ev.Text) != "" {
 				vc.recordASRFinal(ev.Text)
 				vc.writeText(voiceMsg{Type: "asr_final", Text: ev.Text})
@@ -428,6 +494,9 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 				if err := b.persistFlowSessionTranscript(vc); err != nil {
 					vc.writeText(voiceMsg{Type: "error", Code: "flow_session_event", Text: err.Error()})
 				}
+				vc.stateMu.Lock()
+				vc.flowSpeechActive = false
+				vc.stateMu.Unlock()
 			}
 		case voiceclient.EventASREnd:
 			if vc.flowID != "" {
@@ -436,6 +505,9 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 				if err := b.persistFlowSessionTranscript(vc); err != nil {
 					vc.writeText(voiceMsg{Type: "error", Code: "flow_session_event", Text: err.Error()})
 				}
+				vc.stateMu.Lock()
+				vc.flowSpeechActive = false
+				vc.stateMu.Unlock()
 			}
 			// 本次录音全部转写完毕（audio_end → flush → asr_end）：通知前端填充输入框。
 			vc.writeText(voiceMsg{Type: "asr_end"})
@@ -443,7 +515,7 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 			vc.writeSpeechPCM(ev.ID, ev.PCM)
 		case voiceclient.EventTTSStart:
 			if !vc.writeSpeechMessage(ev.ID, voiceMsg{Type: string(ev.Kind), ID: ev.ID}) {
-				_ = vc.ve.CancelTTS(ev.ID)
+				go func(id string) { _ = vc.ve.CancelTTS(id) }(ev.ID)
 			}
 		case voiceclient.EventTTSDone:
 			vc.completeSpeech(ev.ID)
@@ -452,6 +524,93 @@ func (b *voiceBridge) pumpEngine(vc *voiceConn) {
 		case voiceclient.EventError:
 			vc.writeText(voiceMsg{Type: "error", Code: ev.Code, Text: ev.Text})
 		}
+	}
+}
+
+func (b *voiceBridge) beginDetectedVoiceTurn(vc *voiceConn) {
+	if vc.flowID == "" {
+		vc.writeText(voiceMsg{Type: "speech_started"})
+		return
+	}
+
+	// A prior utterance may have failed its first durable append. Retry it
+	// before switching turns so its text cannot be merged into the next one.
+	// The append key is stable (source + sequence), so an ambiguous write is
+	// safe to retry without executing an accepted event twice.
+	if err := b.persistFlowSessionTranscript(vc); err != nil {
+		vc.writeText(voiceMsg{Type: "error", Code: "flow_session_event", Text: err.Error()})
+	}
+
+	vc.stateMu.Lock()
+	sequence := vc.flowNextSourceSeq
+	if sequence == 0 && !vc.flowSpeechSeen {
+		sequence = vc.flowStartSeq
+	}
+	if sequence != 0 {
+		if sequence == ^uint64(0) {
+			vc.flowNextSourceSeq = 0
+		} else {
+			vc.flowNextSourceSeq = sequence + 1
+		}
+	}
+	msg := voiceMsg{
+		Type: "start", Source: vc.flowVoiceSource,
+		SourceSequence: sequence,
+		EventType:      vc.flowEventType,
+		OutputField:    vc.flowOutputField,
+		TTSModel:       vc.flowTTSModel,
+	}
+	vc.stateMu.Unlock()
+	if msg.SourceSequence == 0 {
+		vc.writeText(voiceMsg{
+			Type: "error", Code: "voice_sequence_missing",
+			Text: "语音轮次缺少 source_sequence，请停止后重新开始麦克风。",
+		})
+		return
+	}
+	msg.TurnID = voiceTurnID(msg.Source, msg.SourceSequence)
+	previous, err := vc.fenceTurn(msg)
+	if err != nil {
+		vc.writeText(voiceMsg{Type: "error", Code: "voice_turn_start", Text: err.Error()})
+		return
+	}
+	vc.stateMu.Lock()
+	vc.flowSpeechSeen = true
+	vc.flowSpeechActive = true
+	vc.stateMu.Unlock()
+	vc.writeText(voiceMsg{
+		Type: "speech_started", TurnID: msg.TurnID, Source: msg.Source,
+		SourceSequence: msg.SourceSequence,
+	})
+	// Fence the old turn before acknowledging the new onset, but do the
+	// durable scheduler cancellation and engine-side TTS cancellation off the
+	// event pump. Those operations may wait on worker/session locks; blocking
+	// this pump also blocks the ASR final for the utterance that just began.
+	go b.finishDetectedVoiceTurn(vc, previous, msg.Source, msg.SourceSequence)
+}
+
+func (b *voiceBridge) ensureDetectedVoiceTurn(vc *voiceConn) {
+	if vc.flowID == "" {
+		return
+	}
+	vc.stateMu.Lock()
+	active := vc.flowSpeechActive
+	vc.stateMu.Unlock()
+	if !active {
+		// Older v1 engines may not emit speech_started. Treat their first ASR
+		// event as a turn boundary so reconnect-compatible engines still work.
+		b.beginDetectedVoiceTurn(vc)
+	}
+}
+
+func (b *voiceBridge) finishDetectedVoiceTurn(vc *voiceConn, previous voiceTurnFence, source string, sequence uint64) {
+	vc.notifySkippedSpeech(previous.speech)
+	vc.cancelPreviousSpeech(previous.speech)
+	if err := vc.interruptPreviousTurn(previous, source, sequence); err != nil {
+		_ = vc.writeText(voiceMsg{
+			Type: "error", Code: "turn_interrupt_failed",
+			Text: "the previous Flow turn could not be durably interrupted: " + err.Error(),
+		})
 	}
 }
 
@@ -492,6 +651,7 @@ func (b *voiceBridge) pumpFlowSession(vc *voiceConn) {
 		snapshot, err := json.Marshal(map[string]any{
 			"type": "session_snapshot", "status": view.Status, "state": view.State,
 			"state_version": view.StateVersion, "latest_signal_outputs": view.LatestSignalOutputs,
+			"in_flight": view.InFlight,
 		})
 		if err == nil {
 			if err := vc.writeJSON(snapshot); err != nil {
@@ -510,32 +670,42 @@ func (vc *voiceConn) beginTurn(msg voiceMsg) error {
 	if vc.flowID == "" {
 		return nil
 	}
-	eventType := strings.TrimSpace(msg.EventType)
-	if eventType != "" && len(eventType) > 128 {
-		return fmt.Errorf("event_type must not exceed 128 characters")
+	previous, err := vc.fenceTurn(msg)
+	if err != nil {
+		return err
 	}
-	if msg.SourceSequence == 0 {
-		return fmt.Errorf("flow-bound voice start requires a stable source_sequence for reconnect-safe retries")
+	vc.notifySkippedSpeech(previous.speech)
+	vc.cancelPreviousSpeech(previous.speech)
+	return vc.interruptPreviousTurn(previous, msg.Source, msg.SourceSequence)
+}
+
+type voiceTurnFence struct {
+	source         string
+	sourceSequence uint64
+	eventType      string
+	speech         map[string]pendingVoiceSpeech
+}
+
+func (vc *voiceConn) fenceTurn(msg voiceMsg) (voiceTurnFence, error) {
+	if vc.flowID == "" {
+		return voiceTurnFence{}, nil
 	}
-	source := strings.TrimSpace(msg.Source)
-	if source == "" {
-		source = "voice-adapter"
+	var err error
+	msg, err = vc.normalizeFlowTurn(msg)
+	if err != nil {
+		return voiceTurnFence{}, err
 	}
-	if len(source) > 128 || source == "godex" {
-		return fmt.Errorf("source must be between 1 and 128 characters and must not be reserved")
-	}
-	turnID := strings.TrimSpace(msg.TurnID)
-	if turnID == "" {
-		turnID = fmt.Sprintf("voice-turn:%d", msg.SourceSequence)
-	}
-	if len(turnID) > 128 {
-		return fmt.Errorf("turn_id must not exceed 128 characters")
-	}
+	eventType := msg.EventType
+	source := msg.Source
+	turnID := msg.TurnID
 
 	// Serialize the generation change with outbound TTS frames. Once this
 	// returns, no PCM frame from a previous turn can be written to the browser.
 	vc.writeMu.Lock()
 	vc.stateMu.Lock()
+	oldSource := vc.currentSource
+	oldSourceSequence := vc.turnSourceSeq
+	oldEventType := vc.currentEventType
 	oldSpeech := vc.pendingSpeech
 	vc.pendingSpeech = make(map[string]pendingVoiceSpeech)
 	vc.turnGeneration++
@@ -561,19 +731,103 @@ func (vc *voiceConn) beginTurn(msg voiceMsg) error {
 		}
 	}
 	vc.stateMu.Unlock()
-	for id, speech := range oldSpeech {
-		_ = vc.writeJSONLocked(mustJSON(voiceMsg{
-			Type: "voice_output_skipped", ID: id, Sequence: speech.sequence,
-			TurnID: speech.turnID, Source: speech.source, SourceSequence: speech.sourceSequence,
-		}))
-	}
 	vc.writeMu.Unlock()
-	for id := range oldSpeech {
+	return voiceTurnFence{
+		source: oldSource, sourceSequence: oldSourceSequence,
+		eventType: oldEventType, speech: oldSpeech,
+	}, nil
+}
+
+func (vc *voiceConn) notifySkippedSpeech(speech map[string]pendingVoiceSpeech) {
+	for id, item := range speech {
+		_ = vc.writeText(voiceMsg{
+			Type: "voice_output_skipped", ID: id, Sequence: item.sequence,
+			TurnID: item.turnID, Source: item.source, SourceSequence: item.sourceSequence,
+		})
+	}
+}
+
+func (vc *voiceConn) cancelPreviousSpeech(speech map[string]pendingVoiceSpeech) {
+	for id := range speech {
 		if vc.ve != nil {
 			_ = vc.ve.CancelTTS(id)
 		}
 	}
+}
+
+func (vc *voiceConn) interruptPreviousTurn(previous voiceTurnFence, source string, newSourceSequence uint64) error {
+	interrupt := vc.interruptTurn
+	if interrupt == nil && vc.service != nil {
+		interrupt = vc.service.InterruptFlowSessionTurn
+	}
+	if interrupt != nil &&
+		previous.source == source &&
+		previous.sourceSequence > 0 &&
+		newSourceSequence > previous.sourceSequence {
+		if _, err := interrupt(
+			vc.flowID,
+			vc.flowSessionID,
+			previous.source,
+			previous.eventType,
+			newSourceSequence,
+		); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (vc *voiceConn) prepareFlowVoice(msg voiceMsg) error {
+	if vc.flowID == "" {
+		return nil
+	}
+	var err error
+	msg, err = vc.normalizeFlowTurn(msg)
+	if err != nil {
+		return err
+	}
+	// start configures the media stream only. Agent work and TTS are fenced
+	// when server-side VAD reports speech_started, not when the user merely
+	// enables the microphone.
+	vc.stateMu.Lock()
+	vc.flowVoiceSource = msg.Source
+	vc.flowStartSeq = msg.SourceSequence
+	vc.flowNextSourceSeq = msg.SourceSequence
+	vc.flowSpeechSeen = false
+	vc.flowSpeechActive = false
+	vc.flowEventType = msg.EventType
+	vc.flowOutputField = strings.TrimSpace(msg.OutputField)
+	vc.flowTTSModel = strings.TrimSpace(msg.TTSModel)
+	vc.stateMu.Unlock()
+	return nil
+}
+
+func (vc *voiceConn) normalizeFlowTurn(msg voiceMsg) (voiceMsg, error) {
+	eventType := strings.TrimSpace(msg.EventType)
+	if eventType != "" && len(eventType) > 128 {
+		return msg, fmt.Errorf("event_type must not exceed 128 characters")
+	}
+	if msg.SourceSequence == 0 {
+		return msg, fmt.Errorf("flow-bound voice start requires a stable source_sequence for reconnect-safe retries")
+	}
+	source := strings.TrimSpace(msg.Source)
+	if source == "" {
+		source = "voice-adapter"
+	}
+	if len(source) > 128 || source == "godex" {
+		return msg, fmt.Errorf("source must be between 1 and 128 characters and must not be reserved")
+	}
+	turnID := strings.TrimSpace(msg.TurnID)
+	if turnID == "" {
+		turnID = fmt.Sprintf("voice-turn:%d", msg.SourceSequence)
+	}
+	if len(turnID) > 128 {
+		return msg, fmt.Errorf("turn_id must not exceed 128 characters")
+	}
+	msg.Source = source
+	msg.EventType = eventType
+	msg.TurnID = turnID
+	return msg, nil
 }
 
 type flowVoiceOutput struct {
@@ -833,13 +1087,23 @@ func (b *voiceBridge) persistFlowSessionTranscript(vc *voiceConn) error {
 	if err != nil {
 		return err
 	}
-	receipt, err := b.service.AppendFlowSessionEvent(vc.flowID, vc.flowSessionID, agent.FlowSessionEventInput{
+	input := agent.FlowSessionEventInput{
 		Source:         source,
 		SourceSequence: sequence,
 		Type:           eventType,
 		CorrelationID:  "voice:" + source + ":" + strconv.FormatUint(sequence, 10),
 		Payload:        payload,
-	})
+	}
+	var receipt agent.FlowSessionEventReceipt
+	for attempt := 0; attempt < 3; attempt++ {
+		receipt, err = b.service.AppendFlowSessionEvent(vc.flowID, vc.flowSessionID, input)
+		if err == nil {
+			break
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * 40 * time.Millisecond)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -848,11 +1112,6 @@ func (b *voiceBridge) persistFlowSessionTranscript(vc *voiceConn) error {
 		vc.currentSourceSeq == sequence &&
 		strings.TrimSpace(vc.turnTranscript.String()) == text {
 		vc.turnTranscript.Reset()
-		if sequence == ^uint64(0) {
-			vc.currentSourceSeq = 0
-		} else {
-			vc.currentSourceSeq = sequence + 1
-		}
 	}
 	vc.stateMu.Unlock()
 	vc.writeText(voiceMsg{
@@ -901,7 +1160,7 @@ func (vc *voiceConn) serve(ctx context.Context) {
 		}
 		switch msg.Type {
 		case string(protocol.KindStart):
-			if err := vc.beginTurn(msg); err != nil {
+			if err := vc.prepareFlowVoice(msg); err != nil {
 				vc.writeText(voiceMsg{Type: "error", Code: "bad_message", Text: err.Error()})
 				return
 			}

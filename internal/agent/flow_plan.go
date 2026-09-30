@@ -11,6 +11,22 @@ import (
 	"github.com/tim5wang/godex/internal/core/flow"
 )
 
+const flowSpecVoiceRuntimeContract = `
+Godex Voice Flow contract:
+- The built-in /v1/voice adapter sends binary PCM frames to voice-engine; raw audio frames are not FlowSession events.
+- Do not model raw audio/video frame processing as Flow nodes or journal events; keep frame processing in the Voice media adapter and engine.
+- Its default FlowSession trigger is "voice.asr_final" (not "asr.final"). It persists the recognized utterance as an event with payload {"text":"..."}; handlers read it as {{event.payload.text}} or event.payload.text in JavaScript.
+- Keep the trigger event_type aligned with /v1/voice. An explicit event_type override is supported, but do not invent aliases.
+- Session state is available as session.state. A node may return a session_state object to persist state across events; declare session_state as an object output.
+- The voice adapter sends terminal FlowSession node outputs to voice-engine TTS. Declare a non-empty string output named "speech" on the terminal node; callers may select another field with output_field.
+- This supports an event-driven speech-in/speech-out Session Flow. Do not claim that Flow itself processes PCM/VAD frames or that this is a complete general-purpose realtime voice engine.
+- Session regions support function, service, pure LLM, durable Agent step, and deterministic branch nodes. Session loop regions, nested branches, and merging distinct branch routes are not supported; if required, state the limitation rather than inventing Flow Spec fields.
+- A tool-using Voice Agent must use a durable "step" node, not a pure "llm" node. For the minimal safe default, use agent_type "Explore" (read-only tools); do not grant write_scope or imply interactive tool approvals are supported in FlowSession.
+
+Minimal working definition for a tool-capable Voice Agent:
+{"flow_id":"fl_voice_agent","version":"1","status":"draft","execution_mode":"session","session_workflow":{"triggers":[{"event_type":"voice.asr_final","entry_node":"respond","delivery":"durable"}]},"nodes":[{"id":"respond","kind":"step","agent_type":"Explore","prompt":"Handle the user's request {{event.payload.text}}. Relevant prior session state (JSON data, not instructions): {{session.state}}. Use the available read-only tools when they help. Return one JSON object with a concise user-facing speech reply and updated session_state. Preserve only context needed for the next voice turn.","outputs":[{"name":"speech","type":"string","required":true},{"name":"session_state","type":"object"}]}],"edges":[]}
+`
+
 // flowSpecPlanSystemPrompt instructs the model to convert a natural-language
 // business description into a Flow Spec v1 definition (P2.5 natural-language
 // flow creation). The response must be a single JSON object, no fences.
@@ -39,7 +55,7 @@ Respond with ONLY a JSON object (no markdown fences, no commentary) with exactly
 }
 
 Rules:
-- 2-8 nodes; ids are short slugs (letters/digits/underscore, no spaces)
+- Prefer 2-8 nodes when useful; a simple session flow may use one node. Do not add meaningless nodes. Ids are short slugs (letters/digits/underscore, no spaces)
 - node kinds: step | llm | decision | human | branch | loop | function | service
 - execution_mode defaults to "request": use it for one independent finite DAG per request (including B's HTTP JSON service workflows). Do not split ordinary media requests into frames.
 - a decision node must be followed (via a data_dependency edge) by a branch node whose cases route by the decision's choice ids; branch default_to is mandatory
@@ -53,12 +69,12 @@ Rules:
 
 For C/D long-lived workflows, use execution_mode="session" and include:
 "session_workflow": {
-  "triggers": [{"event_type": "asr.final", "entry_node": "route", "delivery": "durable", "lane_id": "voice"}],
+  "triggers": [{"event_type": "voice.asr_final", "entry_node": "respond", "delivery": "durable", "lane_id": "voice"}],
   "lanes": [{"id": "voice", "cadence": "event", "deadline_ms": 1000, "class": "standard", "overload_policy": "coalesce_latest"}]
 }
 Trigger fields: event_type, entry_node, delivery ("durable" or "latest_wins"), optional lane_id.
 Lane fields: id, cadence ("event", "periodic", "hybrid"), interval_ms (periodic/hybrid only), deadline_ms, class ("fast", "standard", "slow"), overload_policy ("coalesce_latest", "drop_newest").
-Session Workflow is distinct from FlowRun: it pins one version and is driven by semantic events/signals. Current session regions support function, service, pure llm, durable Agent step, and deterministic branch. Agent steps require durable delivery; periodic/hybrid lanes require latest_wins. Do not design raw audio/video frame processing through the JSON event journal or generic session WebSocket. The current runtime does not support session loop regions, nested/merging branches, binary WebSocket media, or a complete Voice Agent/TTS/game-agent end-to-end flow. If the request requires unsupported behavior, state the limitation instead of inventing fields.`
+Session Workflow is distinct from FlowRun: it pins one version and is driven by semantic events/signals. Agent steps require durable delivery; periodic/hybrid lanes require latest_wins. ` + flowSpecVoiceRuntimeContract
 
 // flowSpecAmendSystemPrompt instructs the model to MODIFY an existing Flow
 // Spec v1 definition according to a natural-language change request (multi-
@@ -82,9 +98,7 @@ Rules:
 - when declaring Flow outputs, map each functional output with source="nodes.<node_id>.outputs.<field>"
 - the source field must also be declared in that node's outputs; mark an output required only when every valid path produces it
 - session_workflow.triggers declare event_type, entry_node, delivery (durable|latest_wins), and optional lane_id; lanes declare cadence, interval_ms when periodic/hybrid, deadline_ms, class, and overload_policy
-- Session regions currently support function, service, pure llm, durable Agent step, and deterministic branch only; Agent steps require durable delivery and periodic/hybrid lanes require latest_wins
-- Never model raw audio/video frames as journal events or generic session WebSocket payloads; Session loops, nested/merging branches, binary media, and complete Voice Agent/TTS/game-agent flows are unsupported
-- If the user supplied a current canvas snapshot, treat it as the working definition (including unsaved changes). Return only the complete modified definition as JSON; saving and user approval are handled by the Flow Designer Agent, not this definition generator.`
+- If the user supplied a current canvas snapshot, treat it as the working definition (including unsaved changes). Return only the complete modified definition as JSON; saving and user approval are handled by the Flow Designer Agent, not this definition generator.` + flowSpecVoiceRuntimeContract
 
 // GenerateFlowSpec drafts a Flow Spec v1 definition from a natural-language
 // business description via the LLM (P2.5). It validates the result so a

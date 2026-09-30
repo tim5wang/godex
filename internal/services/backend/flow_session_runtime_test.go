@@ -121,6 +121,141 @@ func TestFlowSessionLLMNodeRunsThroughBoundedAsyncWorker(t *testing.T) {
 	t.Fatal("session scheduler did not commit the asynchronous LLM result")
 }
 
+func TestFlowSessionTurnInterruptSkipsOldWorkAndFencesLateResult(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, nil)
+	def := flowSessionLLMWorkerDefinition("fl_session_turn_interrupt")
+	if _, err := service.CreateFlow(agent.FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create session flow: %v", err)
+	}
+	session, err := service.CreateFlowSession(def.FlowID, def.Version, nil)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := service.Start(ctx); err != nil {
+		cancel()
+		t.Fatalf("start service: %v", err)
+	}
+	defer func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer stopCancel()
+		if err := service.Stop(stopCtx); err != nil {
+			t.Errorf("stop service: %v", err)
+		}
+	}()
+
+	firstStarted := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
+	defer release()
+	var calls atomic.Int32
+	service.currentFlowSessionScheduler().workRunner = func(ctx context.Context, _ *agent.Agent, work *agent.FlowSessionWork) (agent.FlowSessionWorkResult, error) {
+		switch calls.Add(1) {
+		case 1:
+			close(firstStarted)
+			<-ctx.Done()
+			close(firstCanceled)
+			<-releaseFirst
+			return agent.FlowSessionWorkResult{State: map[string]any{"answer": "stale"}}, nil
+		case 2:
+			close(secondStarted)
+			progress := work.Progress()
+			now := time.Now().UTC()
+			return agent.FlowSessionWorkResult{
+				State: map[string]any{"answer": "fresh"},
+				Execution: &agent.FlowSessionExecutionSummary{
+					Delivery: progress.Delivery, InputSequence: progress.InputSequence,
+					EventType: progress.EventType, Source: progress.Source,
+					SourceSequence: progress.SourceSequence, Status: "completed",
+					StartedAt: now, CompletedAt: now,
+				},
+			}, nil
+		default:
+			return agent.FlowSessionWorkResult{}, nil
+		}
+	}
+	if _, err := service.AppendFlowSessionEvent(def.FlowID, session.SessionID, agent.FlowSessionEventInput{
+		Source: "device-1", SourceSequence: 9, Type: "turn.update",
+		Payload: json.RawMessage(`{"text":"old turn"}`),
+	}); err != nil {
+		t.Fatalf("append old turn: %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("old turn worker did not start")
+	}
+
+	if interrupted, err := service.InterruptFlowSessionTurn(def.FlowID, session.SessionID, "device-1", "turn.update", 9); err != nil || interrupted {
+		t.Fatalf("same source sequence must not interrupt a turn: interrupted=%v err=%v", interrupted, err)
+	}
+	select {
+	case <-firstCanceled:
+		t.Fatal("same-sequence retry canceled the running turn")
+	default:
+	}
+
+	if interrupted, err := service.InterruptFlowSessionTurn(def.FlowID, session.SessionID, "device-1", "turn.update", 10); err != nil || !interrupted {
+		t.Fatalf("newer turn should durably interrupt old work: interrupted=%v err=%v", interrupted, err)
+	}
+	select {
+	case <-firstCanceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("newer turn did not cancel the old worker context")
+	}
+	view, err := service.GetFlowSession(def.FlowID, session.SessionID)
+	if err != nil {
+		t.Fatalf("read interrupted session: %v", err)
+	}
+	if view.ProcessedSequence != 1 || view.State["answer"] != nil ||
+		view.LastExecution == nil || view.LastExecution.Status != "canceled" {
+		t.Fatalf("old turn was not checkpointed as canceled: %+v", view)
+	}
+
+	if _, err := service.AppendFlowSessionEvent(def.FlowID, session.SessionID, agent.FlowSessionEventInput{
+		Source: "device-1", SourceSequence: 10, Type: "turn.update",
+		Payload: json.RawMessage(`{"text":"new turn"}`),
+	}); err != nil {
+		t.Fatalf("append new turn: %v", err)
+	}
+	select {
+	case <-secondStarted:
+		t.Fatal("new turn overlapped the canceled worker before it returned")
+	default:
+	}
+	release()
+	select {
+	case <-secondStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("new turn did not run after old worker returned")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err = service.GetFlowSession(def.FlowID, session.SessionID)
+		if err != nil {
+			t.Fatalf("read new turn result: %v", err)
+		}
+		if view.ProcessedSequence == 2 {
+			if view.State["answer"] != "fresh" || view.LastExecution == nil || view.LastExecution.Status != "completed" {
+				t.Fatalf("new turn result was not committed: %+v", view)
+			}
+			if calls.Load() != 2 {
+				t.Fatalf("expected old event to be skipped rather than replayed; worker calls=%d", calls.Load())
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("new turn did not finish after the old work was released")
+}
+
 func TestGetFlowSessionReportsEphemeralInFlightExecution(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})

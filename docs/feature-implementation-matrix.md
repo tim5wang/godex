@@ -1,6 +1,6 @@
 # GoDex 功能—实现—文档矩阵
 
-> 状态：Active（功能事实索引；最后核对：2026-08-31）
+> 状态：Active（功能事实索引；最后核对：2026-09-30）
 > 维护规则：功能状态以可执行入口、实现和测试共同确认；设计文档只描述边界与决策，不能单独把功能标成“已实现”。
 
 ## 状态定义
@@ -45,7 +45,8 @@
 | Subagent jobs | Implemented | `agent/subagent_*`, backend surfaces | Chat/TUI/API/tool | workflow-runtime、roadmap；review/merge/cancel/resume/iterate 存在。 |
 | Review / Merge Center | Implemented, test drift fixed | `reviewMergeCenter.ts`, panel, backend review/merge | Chat panel | superpowers plan 为历史实现记录；read-only job 应是 `no_changes`，review fixture 必须带 writeScope。 |
 | Workflow / AgentGraph / LongTask | Implemented | `agent/workflow.go`, `agentgraph.go`, `longtask_*` | tools、CLI、Web task center | workflow-runtime、roadmap；不是已删除的 Workflows 页面。 |
-| Business Flow runtime F0（decision/retry 内核） | Partial（F0 内核） | `core/decision`, `agent/workflow_flow*.go`, `agent/decision_caller.go`, config `agent.decision.*` | workflow 工具 kind=decision、RetryPolicy、扩展 when | business-flow-runtime-design §13；F0 引擎原语与测试已落地，Flow 编译器/版本 store/FlowGram/独立计量仍 Planned（F1–F3）。 |
+| Business Flow runtime / FlowGram editor | Implemented baseline / evolving | `core/flow`, `agent/flow_ops.go`, `runtime/httpapi/routes_flows.go`, `features/flows` | Business Agents Web、`/v1/flows*`、FlowRun APIs | `business-flow-runtime-design` §§14–24、`business-flow-canvas-guide`；Flow Spec 校验/编译、版本化、Run/human task、loop 与 FlowGram 编辑器已落地；F4 自动沉淀闭环仍 Planned。 |
+| FlowSession runtime / Voice adapter | Partial（单进程、at-least-once） | `agent/flow_session_*`, `services/backend/flows.go`, `runtime/httpapi/routes_voice.go` | Session 面板、绑定 FlowSession 的 `/v1/voice` | durable event、lane、重放、输出订阅与新语音轮次取消旧 durable work 已有实现/测试；跨进程 lease、服务端 consumer ACK、exactly-once 和通用实时媒体编排仍未实现。 |
 | TaskBoard plugin | Implemented baseline / evolving | `plugins/taskboard`, backend executor, `TaskBoardView` | `/taskboard`, `/v1/taskboard*`, tool | 模板分派、PJM、research、路径冲突闸门与手动 reconcile P0 已落地；自动 reconcile/history/依赖拓扑仍 Planned。 |
 | Agent templates / roles / bundles | Implemented baseline / evolving | `core/templates`, role registry, AgentTemplatesPage | `/agents`, template APIs、新建对话/TaskBoard/Biz key | M1–M3、M4 P1、M5 P1–P3 已落地；导入导出/NL 生成/预算硬限制仍 Planned。 |
 | Durable Memory / recall | Implemented | `core/memory`, historysearch, MemoryPage | `/memory`, tools, slash commands | memory-design-principles、user-guide。 |

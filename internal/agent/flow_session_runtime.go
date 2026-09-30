@@ -473,233 +473,11 @@ func (a *Agent) runFlowSessionRegion(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-
-	payload := map[string]any{}
-	if len(event.Payload) != 0 {
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return nil, nil, nil, fmt.Errorf("decode session event payload: %w", err)
-		}
-	}
-	eventContext := map[string]any{
-		"flow_session_id": rec.SessionID,
-		"flow_id":         rec.FlowID,
-		"version":         rec.Version,
-		"source":          event.Source,
-		"source_sequence": event.SourceSequence,
-		"sequence":        event.Sequence,
-		"type":            event.Type,
-		"correlation_id":  event.CorrelationID,
-		"occurred_at":     event.OccurredAt,
-		"received_at":     event.ReceivedAt,
-		"payload":         payload,
-	}
-	sessionState, err := cloneFlowSessionState(rec.State)
+	runner, err := newFlowSessionRegionRunner(a, ctx, rec, compiled, event, trigger, region, nodeExecutions)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("copy session state: %w", err)
+		return nil, nil, nil, err
 	}
-	outputs := make(map[string]map[string]any, len(region.nodes))
-	done := make(map[string]bool, len(region.nodes))
-	scheduled := make(map[string]bool, len(region.nodes))
-	executionNodes := make([]flow.CompiledNode, 0, len(region.nodes))
-	for _, compiledNode := range compiled.Nodes {
-		if _, inRegion := region.nodes[compiledNode.ID]; !inRegion {
-			continue
-		}
-		executionNodes = append(executionNodes, compiledNode)
-		scheduled[compiledNode.ID] = true
-	}
-	nodeIDs := make([]string, 0, len(executionNodes)+1)
-	branchRoutes := make(map[string]string)
-	remaining := len(executionNodes)
-	for remaining > 0 {
-		progressed := false
-		for _, compiledNode := range executionNodes {
-			if !scheduled[compiledNode.ID] || done[compiledNode.ID] {
-				continue
-			}
-			ready := true
-			for _, dependency := range compiledNode.DependsOn {
-				if !done[dependency] {
-					ready = false
-					break
-				}
-			}
-			if !ready {
-				continue
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, nodeIDs, branchRoutes, err
-			}
-			nodeStartedAt := time.Now()
-			recordNodeExecution := func(status string) {
-				if nodeExecutions == nil {
-					return
-				}
-				*nodeExecutions = append(*nodeExecutions, FlowSessionNodeExecution{
-					NodeID:     compiledNode.ID,
-					Status:     status,
-					DurationMS: time.Since(nodeStartedAt).Milliseconds(),
-				})
-			}
-			failNode := func(err error) error {
-				status := "failed"
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					status = "canceled"
-				}
-				recordNodeExecution(status)
-				return err
-			}
-			nodeInput, err := compileFlowNode(compiledNode, false)
-			if err != nil {
-				return nil, nodeIDs, branchRoutes, failNode(err)
-			}
-			isFunction := compiledNode.Kind == flow.KindFunction
-			isService := compiledNode.Kind == flow.KindService
-			isLLM := compiledNode.Kind == flow.KindLLM
-			isStep := compiledNode.Kind == flow.KindStep
-			isBranch := compiledNode.Kind == flow.KindBranch
-			phase := "node_started"
-			if isStep {
-				phase = "agent_started"
-			}
-			reportFlowSessionProgress(ctx, FlowSessionProgressUpdate{
-				NodeID: compiledNode.ID,
-				Phase:  phase,
-			})
-			if isFunction && nodeInput.Function == nil {
-				return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("session region function node %q has no function configuration", compiledNode.ID))
-			}
-			if isService && nodeInput.Service == nil {
-				return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("session region service node %q has no service configuration", compiledNode.ID))
-			}
-			if !isFunction && !isService && !isLLM && !isStep && !isBranch {
-				return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("session region node %q has unsupported kind %q", compiledNode.ID, compiledNode.Kind))
-			}
-			node := workflowNode{ID: compiledNode.ID, Title: compiledNode.Title}
-			workflowNodes := make([]workflowNode, 0, len(outputs))
-			for _, prior := range executionNodes {
-				if priorOutputs, ok := outputs[prior.ID]; ok {
-					workflowNodes = append(workflowNodes, workflowNode{ID: prior.ID, Outputs: priorOutputs})
-				}
-			}
-			sessionContext := map[string]any{
-				"id":      rec.SessionID,
-				"state":   sessionState,
-				"version": rec.Version,
-			}
-			nodeState := workflowState{
-				Summary: workflowSummary{
-					RunInputs: rec.Inputs,
-					TemplateVars: map[string]any{
-						"event":   eventContext,
-						"session": sessionContext,
-					},
-				},
-				Nodes: workflowNodes,
-			}
-
-			var raw any
-			var selectedBranchTarget *flow.CompiledNode
-			if isBranch {
-				route, targetID, routeErr := selectFlowSessionBranch(compiledNode.Branch, outputs)
-				if routeErr != nil {
-					return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("node %s: %w", node.ID, routeErr))
-				}
-				target, exists := region.branchTargets[compiledNode.ID][targetID]
-				if !exists {
-					return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("branch node %q selected unavailable route target %q", compiledNode.ID, targetID))
-				}
-				branchRoutes[compiledNode.ID] = route
-				raw = map[string]any{"choice": route}
-				selected := target
-				selected.DependsOn = []string{compiledNode.ID}
-				selectedBranchTarget = &selected
-			} else if isFunction {
-				// Session JavaScript handlers remain local transforms and cannot
-				// inherit outbound access from the Flow's service policy.
-				nodeInput.Function.Network = &flow.NetworkPolicy{Policy: "allowlist"}
-				handlerContext := a.workflowFunctionContext(nodeState, node)
-				handlerContext["event"] = eventContext
-				handlerContext["session"] = sessionContext
-				if err := flow.ValidateJSONSchemaValue(handlerContext, nodeInput.Function.InputSchema, "function input"); err != nil {
-					return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("node %s input contract violation: %w", node.ID, err))
-				}
-				raw, err = a.runWorkflowFunction(ctx, nodeInput.Function, handlerContext)
-			} else if isService {
-				// Service calls use the Flow's normal destination allowlist,
-				// private-host, response-size, and request-timeout policy.
-				nodeInput.Service.Network = compiled.Network
-				raw, err = a.runFlowSessionService(ctx, nodeState, nodeInput.Service, nodeInput.Retry, compiledNode.TimeoutSec)
-			} else if isLLM {
-				raw, err = a.runFlowSessionLLM(ctx, nodeState, rec, nodeInput, compiledNode.TimeoutSec)
-			} else {
-				node.ID = compiledNode.ID
-				node.Title = compiledNode.Title
-				node.Prompt = nodeInput.Prompt
-				node.AgentType = nodeInput.AgentType
-				node.AgentRef = nodeInput.AgentRef
-				node.WriteScope = nodeInput.WriteScope
-				node.DependsOn = compiledNode.DependsOn
-				node.OutputSpec = nodeInput.OutputSpec
-				node.Retry = nodeInput.Retry
-				raw, err = a.runFlowSessionStep(ctx, nodeState, rec, event, node, compiledNode.TimeoutSec)
-			}
-			if err != nil {
-				return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("node %s: %w", node.ID, err))
-			}
-			result, ok := raw.(map[string]any)
-			if !ok {
-				return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("node %s must return one JSON object", node.ID))
-			}
-			if isFunction {
-				if err := flow.ValidateJSONSchemaValue(result, nodeInput.Function.OutputSchema, "function output"); err != nil {
-					return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("node %s output contract violation: %w", node.ID, err))
-				}
-			}
-			if err := validateWorkflowOutputSpecs(nodeInput.OutputSpec, result, "node "+node.ID+" outputs"); err != nil {
-				return nil, nodeIDs, branchRoutes, failNode(err)
-			}
-			if nextState, exists := result["session_state"]; exists {
-				stateMap, ok := nextState.(map[string]any)
-				if !ok {
-					return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("node %s session_state output must be an object", node.ID))
-				}
-				sessionState, err = cloneFlowSessionState(stateMap)
-				if err != nil {
-					return nil, nodeIDs, branchRoutes, failNode(fmt.Errorf("node %s session_state is not JSON-compatible: %w", node.ID, err))
-				}
-			}
-			recordNodeExecution("completed")
-			outputs[node.ID] = result
-			done[node.ID] = true
-			nodeIDs = append(nodeIDs, node.ID)
-			remaining--
-			progressed = true
-			if selectedBranchTarget != nil {
-				if scheduled[selectedBranchTarget.ID] {
-					return nil, nodeIDs, branchRoutes, fmt.Errorf("branch route target %q was already scheduled in the session region", selectedBranchTarget.ID)
-				}
-				for _, skippedNodeID := range region.branchSkippedNodes[selectedBranchTarget.ID] {
-					done[skippedNodeID] = true
-				}
-				executionNodes = append(executionNodes, *selectedBranchTarget)
-				scheduled[selectedBranchTarget.ID] = true
-				remaining++
-				for _, downstream := range region.branchDownstream[selectedBranchTarget.ID] {
-					if scheduled[downstream.ID] {
-						return nil, nodeIDs, branchRoutes, fmt.Errorf("branch route downstream node %q was already scheduled in the session region", downstream.ID)
-					}
-					executionNodes = append(executionNodes, downstream)
-					scheduled[downstream.ID] = true
-					remaining++
-				}
-			}
-		}
-		if !progressed {
-			return nil, nodeIDs, branchRoutes, fmt.Errorf("session trigger %q region did not make progress", trigger.EventType)
-		}
-	}
-	sessionOutputs, err := collectFlowSessionOutputs(rec, event, nodeIDs, executionNodes, scheduled, outputs)
+	sessionState, nodeIDs, branchRoutes, sessionOutputs, err := runner.execute()
 	if err != nil {
 		return nil, nodeIDs, branchRoutes, err
 	}
@@ -1131,75 +909,15 @@ func buildFlowSessionRegion(
 		}
 	}
 
-	expectedRoutes := make(map[string]map[string]string)
-	routeOwners := make(map[string]string)
-	for nodeID := range regionNodes {
-		node := nodes[nodeID]
-		if node.Kind != flow.KindBranch || node.Branch == nil {
-			continue
-		}
-		if _, sourceInRegion := regionNodes[node.Branch.Source]; !sourceInRegion {
-			return flowSessionRegion{}, fmt.Errorf("session branch node %q source %q is outside its trigger region", nodeID, node.Branch.Source)
-		}
-		routes := make(map[string]string, len(node.Branch.Cases)+1)
-		for _, branchCase := range node.Branch.Cases {
-			route := strings.TrimSpace(branchCase.Name)
-			if route == "" {
-				route = strings.TrimSpace(branchCase.To)
-			}
-			if _, duplicate := routes[route]; duplicate {
-				return flowSessionRegion{}, fmt.Errorf("session branch node %q has duplicate route %q", nodeID, route)
-			}
-			routes[route] = branchCase.To
-			if owner, duplicate := routeOwners[branchCase.To]; duplicate && owner != nodeID {
-				return flowSessionRegion{}, fmt.Errorf("session branch target %q is shared by branch nodes %q and %q", branchCase.To, owner, nodeID)
-			}
-			routeOwners[branchCase.To] = nodeID
-		}
-		if _, duplicate := routes[branchDefaultRoute]; duplicate {
-			return flowSessionRegion{}, fmt.Errorf("session branch node %q case name %q is reserved", nodeID, branchDefaultRoute)
-		}
-		routes[branchDefaultRoute] = node.Branch.DefaultTo
-		if owner, duplicate := routeOwners[node.Branch.DefaultTo]; duplicate && owner != nodeID {
-			return flowSessionRegion{}, fmt.Errorf("session branch target %q is shared by branch nodes %q and %q", node.Branch.DefaultTo, owner, nodeID)
-		}
-		routeOwners[node.Branch.DefaultTo] = nodeID
-		expectedRoutes[nodeID] = routes
+	expectedRoutes, routeOwners, err := collectFlowSessionExpectedRoutes(regionNodes, nodes)
+	if err != nil {
+		return flowSessionRegion{}, err
 	}
-
-	branchTargets := make(map[string]map[string]flow.CompiledNode, len(expectedRoutes))
-	foundRoutes := make(map[string]map[string]int, len(expectedRoutes))
-	allowedBranchEdges := make(map[string]struct{})
-	for _, edge := range compiled.Edges {
-		_, fromInRegion := regionNodes[edge.From]
-		if fromInRegion {
-			branchRoutes, isBranch := expectedRoutes[edge.From]
-			targetID, routeExists := branchRoutes[edge.When.Choice]
-			if !isBranch || !routeExists || targetID != edge.Append.ID || strings.TrimSpace(edge.FromPrefix) != "" {
-				return flowSessionRegion{}, fmt.Errorf("session regions do not support control-flow append edge %q", edge.ID)
-			}
-			if _, duplicate := foundRoutes[edge.From]; !duplicate {
-				foundRoutes[edge.From] = make(map[string]int)
-				branchTargets[edge.From] = make(map[string]flow.CompiledNode)
-			}
-			foundRoutes[edge.From][edge.When.Choice]++
-			if foundRoutes[edge.From][edge.When.Choice] != 1 {
-				return flowSessionRegion{}, fmt.Errorf("session branch node %q has duplicate compiled route %q", edge.From, edge.When.Choice)
-			}
-			if err := validateFlowSessionAppendNode(edge.Append, trigger.Delivery); err != nil {
-				return flowSessionRegion{}, err
-			}
-			branchTargets[edge.From][edge.Append.ID] = edge.Append
-			allowedBranchEdges[edge.ID] = struct{}{}
-			continue
-		}
-	}
-	for branchID, routes := range expectedRoutes {
-		for route := range routes {
-			if foundRoutes[branchID][route] != 1 {
-				return flowSessionRegion{}, fmt.Errorf("session branch node %q is missing compiled route %q", branchID, route)
-			}
-		}
+	branchTargets, allowedBranchEdges, err := indexFlowSessionBranchRoutes(
+		compiled, trigger, regionNodes, expectedRoutes,
+	)
+	if err != nil {
+		return flowSessionRegion{}, err
 	}
 
 	branchDownstream, branchSkippedNodes, dynamicNodeIDs, err := collectFlowSessionBranchDownstream(compiled.Nodes, routeOwners)
@@ -1213,13 +931,122 @@ func buildFlowSessionRegion(
 		delete(regionNodes, nodeID)
 	}
 
+	if err := validateFlowSessionRegionScopes(
+		regionNodes, nodes, trigger.Delivery, branchDownstream, branchSkippedNodes,
+	); err != nil {
+		return flowSessionRegion{}, err
+	}
+	if err := validateFlowSessionRegionEdges(
+		compiled.Edges, regionNodes, dynamicNodeIDs, allowedBranchEdges,
+	); err != nil {
+		return flowSessionRegion{}, err
+	}
+	return flowSessionRegion{
+		nodes:              regionNodes,
+		branchTargets:      branchTargets,
+		branchDownstream:   branchDownstream,
+		branchSkippedNodes: branchSkippedNodes,
+	}, nil
+}
+
+func collectFlowSessionExpectedRoutes(
+	regionNodes map[string]struct{},
+	nodes map[string]flow.CompiledNode,
+) (map[string]map[string]string, map[string]string, error) {
+	expectedRoutes := make(map[string]map[string]string)
+	routeOwners := make(map[string]string)
 	for nodeID := range regionNodes {
 		node := nodes[nodeID]
-		if node.Kind == flow.KindStep && flow.EffectiveSessionDelivery(trigger.Delivery) != flow.SessionDeliveryDurable {
-			return flowSessionRegion{}, fmt.Errorf("session Agent node %q requires durable event delivery", nodeID)
+		if node.Kind != flow.KindBranch || node.Branch == nil {
+			continue
+		}
+		if _, sourceInRegion := regionNodes[node.Branch.Source]; !sourceInRegion {
+			return nil, nil, fmt.Errorf("session branch node %q source %q is outside its trigger region", nodeID, node.Branch.Source)
+		}
+		routes := make(map[string]string, len(node.Branch.Cases)+1)
+		for _, branchCase := range node.Branch.Cases {
+			route := strings.TrimSpace(branchCase.Name)
+			if route == "" {
+				route = strings.TrimSpace(branchCase.To)
+			}
+			if _, duplicate := routes[route]; duplicate {
+				return nil, nil, fmt.Errorf("session branch node %q has duplicate route %q", nodeID, route)
+			}
+			routes[route] = branchCase.To
+			if owner, duplicate := routeOwners[branchCase.To]; duplicate && owner != nodeID {
+				return nil, nil, fmt.Errorf("session branch target %q is shared by branch nodes %q and %q", branchCase.To, owner, nodeID)
+			}
+			routeOwners[branchCase.To] = nodeID
+		}
+		if _, duplicate := routes[branchDefaultRoute]; duplicate {
+			return nil, nil, fmt.Errorf("session branch node %q case name %q is reserved", nodeID, branchDefaultRoute)
+		}
+		routes[branchDefaultRoute] = node.Branch.DefaultTo
+		if owner, duplicate := routeOwners[node.Branch.DefaultTo]; duplicate && owner != nodeID {
+			return nil, nil, fmt.Errorf("session branch target %q is shared by branch nodes %q and %q", node.Branch.DefaultTo, owner, nodeID)
+		}
+		routeOwners[node.Branch.DefaultTo] = nodeID
+		expectedRoutes[nodeID] = routes
+	}
+	return expectedRoutes, routeOwners, nil
+}
+
+func indexFlowSessionBranchRoutes(
+	compiled *flow.Compiled,
+	trigger *flow.SessionTrigger,
+	regionNodes map[string]struct{},
+	expectedRoutes map[string]map[string]string,
+) (map[string]map[string]flow.CompiledNode, map[string]struct{}, error) {
+	branchTargets := make(map[string]map[string]flow.CompiledNode, len(expectedRoutes))
+	foundRoutes := make(map[string]map[string]int, len(expectedRoutes))
+	allowedBranchEdges := make(map[string]struct{})
+	for _, edge := range compiled.Edges {
+		if _, fromInRegion := regionNodes[edge.From]; !fromInRegion {
+			continue
+		}
+		branchRoutes, isBranch := expectedRoutes[edge.From]
+		targetID, routeExists := branchRoutes[edge.When.Choice]
+		if !isBranch || !routeExists || targetID != edge.Append.ID || strings.TrimSpace(edge.FromPrefix) != "" {
+			return nil, nil, fmt.Errorf("session regions do not support control-flow append edge %q", edge.ID)
+		}
+		if _, exists := foundRoutes[edge.From]; !exists {
+			foundRoutes[edge.From] = make(map[string]int)
+			branchTargets[edge.From] = make(map[string]flow.CompiledNode)
+		}
+		foundRoutes[edge.From][edge.When.Choice]++
+		if foundRoutes[edge.From][edge.When.Choice] != 1 {
+			return nil, nil, fmt.Errorf("session branch node %q has duplicate compiled route %q", edge.From, edge.When.Choice)
+		}
+		if err := validateFlowSessionAppendNode(edge.Append, trigger.Delivery); err != nil {
+			return nil, nil, err
+		}
+		branchTargets[edge.From][edge.Append.ID] = edge.Append
+		allowedBranchEdges[edge.ID] = struct{}{}
+	}
+	for branchID, routes := range expectedRoutes {
+		for route := range routes {
+			if foundRoutes[branchID][route] != 1 {
+				return nil, nil, fmt.Errorf("session branch node %q is missing compiled route %q", branchID, route)
+			}
+		}
+	}
+	return branchTargets, allowedBranchEdges, nil
+}
+
+func validateFlowSessionRegionScopes(
+	regionNodes map[string]struct{},
+	nodes map[string]flow.CompiledNode,
+	delivery string,
+	branchDownstream map[string][]flow.CompiledNode,
+	branchSkippedNodes map[string][]string,
+) error {
+	for nodeID := range regionNodes {
+		node := nodes[nodeID]
+		if node.Kind == flow.KindStep && flow.EffectiveSessionDelivery(delivery) != flow.SessionDeliveryDurable {
+			return fmt.Errorf("session Agent node %q requires durable event delivery", nodeID)
 		}
 		if err := validateFlowSessionRegionNode(regionNodes, node); err != nil {
-			return flowSessionRegion{}, err
+			return err
 		}
 	}
 	for targetID, downstream := range branchDownstream {
@@ -1234,17 +1061,36 @@ func buildFlowSessionRegion(
 		for _, skippedNodeID := range branchSkippedNodes[targetID] {
 			routeScope[skippedNodeID] = struct{}{}
 		}
-		for _, node := range downstream {
-			if node.Kind == flow.KindStep && flow.EffectiveSessionDelivery(trigger.Delivery) != flow.SessionDeliveryDurable {
-				return flowSessionRegion{}, fmt.Errorf("session Agent node %q requires durable event delivery", node.ID)
-			}
-			if err := validateFlowSessionRegionNode(routeScope, node); err != nil {
-				return flowSessionRegion{}, err
-			}
+		if err := validateFlowSessionRegionNodes(routeScope, downstream, delivery); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	for _, edge := range compiled.Edges {
+func validateFlowSessionRegionNodes(
+	routeScope map[string]struct{},
+	nodes []flow.CompiledNode,
+	delivery string,
+) error {
+	for _, node := range nodes {
+		if node.Kind == flow.KindStep && flow.EffectiveSessionDelivery(delivery) != flow.SessionDeliveryDurable {
+			return fmt.Errorf("session Agent node %q requires durable event delivery", node.ID)
+		}
+		if err := validateFlowSessionRegionNode(routeScope, node); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateFlowSessionRegionEdges(
+	edges []flow.CompiledEdge,
+	regionNodes map[string]struct{},
+	dynamicNodeIDs map[string]struct{},
+	allowedBranchEdges map[string]struct{},
+) error {
+	for _, edge := range edges {
 		if _, allowed := allowedBranchEdges[edge.ID]; allowed {
 			continue
 		}
@@ -1253,15 +1099,10 @@ func buildFlowSessionRegion(
 		_, fromInDynamicRoute := dynamicNodeIDs[edge.From]
 		_, toInDynamicRoute := dynamicNodeIDs[edge.Append.ID]
 		if fromInRegion || toInRegion || fromInDynamicRoute || toInDynamicRoute {
-			return flowSessionRegion{}, fmt.Errorf("session regions do not support control-flow append edge %q", edge.ID)
+			return fmt.Errorf("session regions do not support control-flow append edge %q", edge.ID)
 		}
 	}
-	return flowSessionRegion{
-		nodes:              regionNodes,
-		branchTargets:      branchTargets,
-		branchDownstream:   branchDownstream,
-		branchSkippedNodes: branchSkippedNodes,
-	}, nil
+	return nil
 }
 
 func collectFlowSessionBranchDownstream(

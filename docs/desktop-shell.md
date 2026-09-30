@@ -1,5 +1,7 @@
 # godex 桌面壳（Tauri 2.x，自托管）
 
+> 状态：Active / Implemented（M1 桌面壳与 M2 原生能力的实现记录；具体行为以当前源码为准）
+
 > 对应 PRD：`docs/prd-desktop-app-wrap.md` 第 6.1 节推荐方案（Tauri 2.x）
 > 实现：M1 桌面壳 MVP + M2 原生能力（系统通知 / 全局快捷键 / 剪贴板）
 > 自托管：Go 编译的 godex 二进制作为 sidecar 打进 app，双击启动即自动拉起 `godex serve`

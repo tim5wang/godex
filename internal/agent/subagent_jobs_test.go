@@ -1518,6 +1518,7 @@ func TestDurableSubagentDefaultTimeoutDisabled(t *testing.T) {
 		t.Fatalf("cancel no-timeout job: %v", err)
 	}
 	waitForSubagentStatus(t, a.subagentJobs, running.ID, subagentStatusCanceled)
+	waitForSubagentInactive(t, a.subagentJobs, running.ID)
 }
 
 func TestWebResearchSubagentGetsBoundedDefaults(t *testing.T) {
@@ -1843,15 +1844,21 @@ func TestDurableSubagentViewPreservesExplicitMergeStatus(t *testing.T) {
 
 func waitForSubagentStatus(t *testing.T, store *subagentJobStore, id string, status subagentJobStatus) *subagentJob {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	updates, stopWatching := store.Watch()
+	defer stopWatching()
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	for {
 		job, err := store.Get(id)
 		if err == nil && job.Status == status {
 			return job
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-updates:
+		case <-timeout.C:
+			job, _ := store.Get(id)
+			t.Fatalf("timed out waiting for subagent %s status %s, got %+v", id, status, job)
+			return nil
+		}
 	}
-	job, _ := store.Get(id)
-	t.Fatalf("timed out waiting for subagent %s status %s, got %+v", id, status, job)
-	return nil
 }

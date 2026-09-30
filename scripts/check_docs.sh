@@ -44,6 +44,10 @@ done < <(find docs -mindepth 1 -maxdepth 1 -type f -name '*.md' ! -name README.m
 # Extract relative Markdown links from the main READMEs and all documentation.
 # Anchors are deliberately stripped: this gate checks file ownership; heading
 # anchors remain a Markdown-renderer concern.
+readme_sources=(README.md)
+if [[ -f README.en.md ]]; then
+  readme_sources+=(README.en.md)
+fi
 while IFS=$'\t' read -r source target; do
   case "$target" in
     http://*|https://*|/*) continue ;;
@@ -52,7 +56,7 @@ while IFS=$'\t' read -r source target; do
   if [[ ! -f "$resolved" ]]; then
     report_error "$source links to missing file $target"
   fi
-done < <(perl -ne 'while (/\[[^\]]+\]\(([^)#]+\.md)/g) { print "$ARGV\t$1\n" }' README.md README.en.md $(find docs -type f -name '*.md' | sort))
+done < <(perl -ne 'while (/\[[^\]]+\]\(([^)#]+\.md)/g) { print "$ARGV\t$1\n" }' "${readme_sources[@]}" $(find docs -type f -name '*.md' | sort))
 
 # Keep a small set of high-value implementation facts tied to source paths.
 # This does not attempt to prove all prose, but prevents completed migrations

@@ -1,6 +1,7 @@
 @import "./stylesFoundation.css";
 @import "./stylesWorkspace.css";
 @import "./stylesChatContent.css";
+@import "./stylesChatContentDetails.css";
 @import "./stylesChatResponsive.css";
 @import "./stylesConversation.css";
 @import "./stylesSettings.css";

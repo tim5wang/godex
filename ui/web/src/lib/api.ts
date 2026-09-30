@@ -35,8 +35,6 @@ import type {
   PackageQualityReport,
   PackageRoleEntry,
   PackageSmokeRun,
-  PendingPermission,
-  PermissionResolution,
   ProviderListResponse,
   ProviderModelsResponse,
   ProviderTestResponse,
@@ -81,13 +79,11 @@ import type {
   TaskboardCardPatchInput,
   TaskboardExecutionObservation,
   TaskboardReconcileReport,
-  LlmCaptureStatus,
-  LlmCaptureSummary,
-  LlmCaptureRecord,
 } from "./types";
 import { request } from "./apiClient";
 
 export * from "./apiAgent";
+export * from "./apiSessionPermissions";
 export * from "./apiClient";
 export * from "./apiFlow";
 export * from "./apiProduct";
@@ -862,99 +858,4 @@ export function getSessionTranscript(token: string | null, sessionId: string, re
     { method: "GET" },
     token,
   );
-}
-
-export function getSessionPermissions(token: string | null, sessionId: string) {
-  return request<PendingPermission[]>(
-    `/sessions/${encodeURIComponent(sessionId)}/permissions`,
-    { method: "GET" },
-    token,
-  );
-}
-
-export function approveSessionPermission(
-  token: string | null,
-  sessionId: string,
-  requestId: string,
-  scope: "once" | "session",
-) {
-  return request<PermissionResolution>(
-    `/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}/approve`,
-    {
-      method: "POST",
-      body: JSON.stringify({ scope }),
-    },
-    token,
-  );
-}
-
-export function denySessionPermission(token: string | null, sessionId: string, requestId: string, reason?: string) {
-  return request<PermissionResolution>(
-    `/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}/deny`,
-    {
-      method: "POST",
-      body: JSON.stringify(reason ? { reason } : {}),
-    },
-    token,
-  );
-}
-
-// Node-scoped approval endpoints: these go through the center proxy
-// (/control/nodes/{id}/proxy/...) so the center web can approve or deny a
-// pending permission that lives on a remote node.
-
-export function approveNodePermission(
-  nodeID: string,
-  token: string | null,
-  sessionId: string,
-  requestId: string,
-  scope: "once" | "session",
-) {
-  return request<PermissionResolution>(
-    `/control/nodes/${encodeURIComponent(nodeID)}/proxy/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}/approve`,
-    {
-      method: "POST",
-      body: JSON.stringify({ scope }),
-    },
-    token,
-  );
-}
-
-export function denyNodePermission(
-  nodeID: string,
-  token: string | null,
-  sessionId: string,
-  requestId: string,
-  reason?: string,
-) {
-  return request<PermissionResolution>(
-    `/control/nodes/${encodeURIComponent(nodeID)}/proxy/sessions/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(requestId)}/deny`,
-    {
-      method: "POST",
-      body: JSON.stringify(reason ? { reason } : {}),
-    },
-    token,
-  );
-}
-
-// ---- LLM Capture (request/response jsonl dump) ----
-
-export function getLlmCaptureStatus(token: string | null) {
-  return request<LlmCaptureStatus>(`/llm-capture/status`, { method: "GET" }, token);
-}
-
-export function setLlmCaptureEnabled(token: string | null, enabled: boolean) {
-  return request<{ enabled: boolean }>(`/llm-capture/${enabled ? "enable" : "disable"}`, { method: "POST" }, token);
-}
-
-export function listLlmCaptureRecords(token: string | null, limit = 100) {
-  return request<LlmCaptureSummary[]>(`/llm-capture/records?limit=${encodeURIComponent(String(limit))}`, { method: "GET" }, token);
-}
-
-export function getLlmCaptureRecord(token: string | null, id: string) {
-  return request<LlmCaptureRecord>(`/llm-capture/records/${encodeURIComponent(id)}`, { method: "GET" }, token);
-}
-
-export function clearLlmCaptureRecords(token: string | null) {
-  return request<{ cleared: boolean }>(`/llm-capture/clear`, { method: "POST" }, token);
 }

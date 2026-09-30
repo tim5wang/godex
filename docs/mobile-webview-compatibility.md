@@ -1,5 +1,7 @@
 # 移动 WebView 兼容性验证与已知问题清单（PRD R5）
 
+> 状态：Analysis（静态兼容性清单；设备验证结果待补）
+
 > 对应 `docs/prd-desktop-app-wrap.md` 第 8 节风险 R5：移动 WebView 对现有 Web UI（拖拽、快捷键、文件上传、登录态）的兼容损耗。
 > 现状：本开发机缺 Xcode/Android SDK，无法实机验证；本文档为**基于代码事实 + 平台已知限制**的静态清单，后续在有 SDK 环境按此表逐项实机验证并回填。
 

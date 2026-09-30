@@ -238,15 +238,37 @@ func TestTimeoutCancelsTask(t *testing.T) {
 
 func TestCancelKillsChildProcessesInTheSameProcessGroup(t *testing.T) {
 	manager := NewManager()
-	outputPath := filepath.Join(t.TempDir(), "late.txt")
-	command := fmt.Sprintf("(sleep 1; printf late > %q) & wait", outputPath)
+	tempDir := t.TempDir()
+	readyPath := filepath.Join(tempDir, "ready.txt")
+	outputPath := filepath.Join(tempDir, "late.txt")
+	command := fmt.Sprintf("(sleep 3 & child=$!; printf ready > %q; wait \"$child\"; printf late > %q) & wait", readyPath, outputPath)
 
 	task, err := manager.Start("task-child-cancel", exec.Command("sh", "-c", command), 0)
 	if err != nil {
 		t.Fatalf("start task: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	readyDeadline := time.Now().Add(2 * time.Second)
+	var childStartedAt time.Time
+	for time.Now().Before(readyDeadline) {
+		ready, err := os.ReadFile(readyPath)
+		if err == nil && strings.TrimSpace(string(ready)) != "" {
+			childStartedAt = time.Now()
+			break
+		} else if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("check child readiness: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childStartedAt.IsZero() {
+		t.Fatal("timed out waiting for child process to start")
+	}
+	if _, err := os.Stat(outputPath); err == nil {
+		t.Fatal("child process completed before cancellation")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("check child output before cancellation: %v", err)
+	}
+
 	if err := manager.Cancel(task.ID); err != nil {
 		t.Fatalf("cancel task: %v", err)
 	}
@@ -257,8 +279,12 @@ func TestCancelKillsChildProcessesInTheSameProcessGroup(t *testing.T) {
 		t.Fatal("timed out waiting for canceled task")
 	}
 
-	time.Sleep(1200 * time.Millisecond)
-	if _, err := exec.Command("sh", "-c", fmt.Sprintf("test ! -f %q", outputPath)).CombinedOutput(); err != nil {
-		t.Fatalf("expected child process output file to stay absent: %v", err)
+	if remaining := time.Until(childStartedAt.Add(3200 * time.Millisecond)); remaining > 0 {
+		time.Sleep(remaining)
+	}
+	if _, err := os.Stat(outputPath); err == nil {
+		t.Fatal("expected child process output file to stay absent")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("check child output after cancellation: %v", err)
 	}
 }

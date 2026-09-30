@@ -1,6 +1,6 @@
 # 业务流程运行时（Business Flow Runtime）与 Flow Spec v1 设计
 
-> 状态：Partial（F0 内核原语已落地并测试，见 §13；F1–F4 未实现）
+> 状态：Active / Partial（FlowRun 与 FlowGram 画布已有实现，见 §§14–24；F4 及 FlowSession 跨进程可靠性仍未完成，见 §25.9）
 > 关联：
 >
 > `business-agents-console-design.md`
@@ -837,9 +837,11 @@ F1a 落地了 Flow Spec 的**模型 + 校验 + 编译 + 引擎网关**，是 F1�
 
 **验证**：`go test ./internal/core/flow/`（12 测试）+ `go test ./internal/agent/ -run TestFlowCompileBranch*`（2 端到端）全绿；`go build ./...`、`go vet`（flow/decision/agent）通过；agent 全量仅 1 个既有环境失败（`TestBuildContextExposesOnlyActiveToolSchemas`，godex_docs 为 always-on 宿主工具不在测试 pin 列表，与 F1a 无关）。
 
-**F1a 明确不做（留给 F1b/F2）**：Flow 版本 store（`{StateDir}/flows/`）、`/v1/flows` CRUD/validate/publish、`FlowRun` 记录与 `/v1/flows/{id}/runs`、loop 编译、human task store。
+**F1a 阶段明确未做（后续落地状态见 §15）**：当时尚无 Flow 版本 store（`{StateDir}/flows/`）、`/v1/flows` CRUD/validate/publish、`FlowRun` 记录与 `/v1/flows/{id}/runs`、loop 编译、human task store。
 
 ## 15. F1b–F3 完整实施状态（2026-09-21 落地）
+
+> 本节原始实施表是 2026-09-21 快照；后续功能补齐见 §22–§25.9，以下分期状态已按 2026-09-30 当前实现校正。
 
 F1a（模型/校验/编译/网关）之后，本方案**前后端已完整实现**：Flow Spec v1 从「JSON 定义」到「HTTP API」到「Web 页面运行」全链路打通。
 
@@ -885,15 +887,14 @@ F1a（模型/校验/编译/网关）之后，本方案**前后端已完整实现
 | F1a | Flow 模型 + 校验 + 编译 + branch 网关 | ✅ |
 | F1b | Flow store + 版本化 + `/v1/flows` CRUD/validate/publish | ✅ |
 | F2 | runs 端点 + FlowRun 记录 + cancel | ✅（events SSE 留 F2b） |
-| F2b | human task store / reply / 超时升级 / loop 编译 | ⏳ 未做 |
-| F3 | FlowGram 画布 adapter + 六类物料 + 运行态高亮 | ⏳ 部分（管理页面已交付，画布未接） |
+| F2b | human task store / reply / 超时升级 / loop 编译 / FlowRun event SSE | ✅ 已落地并有生命周期测试 |
+| F3 | FlowGram 双向 adapter + 六类物料 + 可编辑画布 / 运行态高亮 | ✅ 已集成；后续按用户场景继续完善 |
 
-### 明确不做（后续项）
+### 当前未覆盖的后续项
 
-- `GET /v1/flow-runs/{runId}/events` SSE 事件流（复用现有事件 fanout，F2b）。
-- loop 编译（`exit_when` 需 NOT 条件编译）。
-- human 节点与 human task store（F2b，设计文档 §3.2/§6）。
-- FlowGram 画布双向编译（F3 剩余，Flow Spec 定义经 JSON 编辑器已可发布运行）。
+- F4 candidate/shadow-run 与流程挖掘闭环仍未实现。
+- Flow loop 当前仅接受单节点 body；多节点 loop body 明确拒绝，见 `internal/core/flow/compile.go`。
+- FlowRun 幂等并发与 FlowSession 协调仍不能据此宣称支持多进程 exactly-once；部署边界见 §23、§25.9。
 
 ## 16. 产品化决策（2026-09-21 拍板）
 
@@ -1289,7 +1290,7 @@ C/D-1 已有第一版可执行切片：持久化的低频事件可驱动多节�
 - session 已支持单次事件 region 内的确定性 branch 路由，以及“选中路由目标 → 静态下游链”的状态处理。互斥路由可汇合到同一个下游节点：只执行被选路径，其他路径节点跳过并仅满足汇合节点的依赖就绪判断；汇合节点执行一次，且只能依赖所选路径实际产生的 outputs 或 session state。它不是等待所有分支完成的并行 join。嵌套 branch、持久化的多状态迁移定义和一般化的持续 region loop 仍不支持。新增的 `session_workflow.lanes` 为 trigger 提供 `event/periodic/hybrid` cadence、deadline、`fast/standard/slow` worker class 与 `coalesce_latest/drop_newest` 过载策略；一个 lane 绑定一个 trigger，周期/混合 lane 必须使用 latest-wins。未配置 lane 的历史 Flow 保持原有默认执行路径。
 - 新增 `/v1/flows/{id}/sessions/{sessionID}/ws` 语义事件适配器，支持 durable event、latest-wins signal、ping/pong、journal event 推送及最新 session snapshot。重连时客户端通过 `after_sequence` 重放 journal，服务端会分页追到当前末尾；事件输入可附带 `source_sequence` 幂等重试。断连本身不暂停或结束 FlowSession。二进制消息不由该通用事件通道接收。
 - 现有 `/v1/voice` 可通过 `flow_id` + `flow_session_id` 绑定 session。PCM 仍只经 WebSocket/voice-engine 内存热路径转发；每个录音段的 ASR final 汇总为一个 durable 语义事件。绑定 FlowSession 时，`start` 必须带稳定的 `source_sequence`；可附 `source` 区分多个 producer（默认 `voice-adapter`），重连重发时复用同一 `(source, source_sequence)`，避免断连发生在写入成功、回执丢失之后产生重复业务事件。输出事件复用 journal cursor 和 session snapshot。
-- 以上是 C/D lane 与接入闭环的增量基础，并非完整 Voice Agent 或实时游戏 Agent 闭环：voice adapter 可把 ASR final 作为 durable 事件送入 FlowSession，并把配置好的 `session.output` 通过 voice-engine TTS 播放；但还没有预置的 Voice turn/state-machine 语义，用户打断时会取消旧 TTS 并 fence 旧语音输出，却不会立即取消正在运行的 Flow LLM/Agent 工作。D 仍缺少面向具体游戏协议的示例/adapter 和完整快/中/慢策略验收。通用 lane 仍是单进程执行，lane 间共享状态时并发迟到结果按全局 state version fence 丢弃；没有服务端 consumer ACK、跨进程 lease/接管或 exactly-once。因此不能宣称 C/D 端到端可靠性闭环可用。
+- 以上是 C/D lane 与接入闭环的增量基础，并非完整 Voice Agent 或实时游戏 Agent 闭环：voice adapter 可把 ASR final 作为 durable 事件送入 FlowSession，并把配置好的 `session.output` 通过 voice-engine TTS 播放。检测到更新的语音轮次时，当前实现会取消匹配的旧 durable 工作并 fence 迟到结果；同序号重试不会误取消旧轮次，相关 backend 与 HTTP API 测试覆盖该边界。D 仍缺少面向具体游戏协议的示例/adapter 和完整快/中/慢策略验收。通用 lane 仍是单进程执行，lane 间共享状态时并发迟到结果按全局 state version fence 丢弃；没有服务端 consumer ACK、跨进程 lease/接管或 exactly-once。因此不能宣称 C/D 端到端可靠性闭环可用。
 
 #### Session 节点输出事件
 
@@ -1301,4 +1302,4 @@ C/D-1 已有第一版可执行切片：持久化的低频事件可驱动多节�
 
 单个 session 的 GET view 中，`last_execution` 记录最近一次已提交执行的 delivery、事件来源/序号、完成/失败/取消状态、region 总耗时、节点状态与耗时、输出数量；`in_flight` 则由 backend 从进程内 worker 调度状态临时填充，报告排队/运行/取消中状态、输入事件元数据和开始时间/已运行时长，不包含事件 payload，也不代表当前节点级进度。`in_flight` 不写入持久化 summary，进程重启后不会残留；它与持久化 session 快照是两个时间点的只读观测，状态切换瞬间可能短暂缺席。输出消费仍需客户端自管 cursor，目前无服务端 ACK 指标。
 
-后续优先补齐“输入语义 → lane 决策 → 可订阅输出”的 C/D 垂直场景验收：Voice turn 状态机与打断时取消在途 Agent/model 工作；D 的可运行游戏状态示例、快/中/慢 lane 验收和 stale-result 可观测性。其后再按部署拓扑设计跨进程 FlowSession lease、客户端消费 ACK 和外部副作用幂等。原始音频/视频依旧不应逐帧写入 durable journal。
+后续优先补齐“输入语义 → lane 决策 → 可订阅输出”的 C/D 垂直场景验收：扩展 Voice turn 的断连/重连、重复与迟到输入故障场景；D 的可运行游戏状态示例、快/中/慢 lane 验收和 stale-result 可观测性。其后再按部署拓扑设计跨进程 FlowSession lease、客户端消费 ACK 和外部副作用幂等。原始音频/视频依旧不应逐帧写入 durable journal。

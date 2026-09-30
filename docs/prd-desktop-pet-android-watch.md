@@ -1,6 +1,6 @@
 # PRD: 桌宠（Desktop Pet）与 Android Wear OS 手表客户端
 
-> 状态：草案（调研产出，待评审）
+> 状态：Draft（调研产出，待评审）
 > 日期：2026-09-05
 > 关联：任务卡 t-1788517951199-1；godex v1.4.0
 > 调研方式：godex 本地代码盘点（internal/runtime/httpapi、internal/services/webpush、internal/plugins/taskboard）+ 官方文档核实（live2d.com、android-developers.googleblog.com）+ 领域知识交叉确认。当日 web_search 通道持续故障（见 docs/tools_issues.md 2026-09-05 条目），部分数据点以官方文档开头/既有知识为准并标注。

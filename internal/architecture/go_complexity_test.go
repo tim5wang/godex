@@ -18,8 +18,6 @@ const goFunctionComplexityLimit = 40
 // limits; split the function instead. Once a function reaches the default
 // limit, this test requires removing its exception.
 var goFunctionComplexityExceptions = map[string]int{
-	"internal/tools/browser_tool.go:NewBrowserTool": 42,
-	"internal/tools/cron.go:NewCronTool":            44,
 	"internal/tools/lsp_tool.go:NewLSPTool":         57,
 }
 

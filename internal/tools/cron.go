@@ -25,21 +25,21 @@ type CronManager interface {
 }
 
 type cronArgs struct {
-	Action         string                     `json:"action"`
-	JobID          string                     `json:"job_id,omitempty"`
-	Name           *string                    `json:"name,omitempty"`
-	Message        *string                    `json:"message,omitempty"`
-	ScheduleType   string                     `json:"schedule_type,omitempty"`
-	At             string                     `json:"at,omitempty"`
-	EverySeconds   *int                       `json:"every_seconds,omitempty"`
-	CronExpr       string                     `json:"cron_expr,omitempty"`
-	Timezone       *string                    `json:"timezone,omitempty"`
-	SessionMode    *string                    `json:"session_mode,omitempty"`
-	DeliveryTarget *automation.DeliveryTarget `json:"delivery_target,omitempty"`
-	Enabled        *bool                      `json:"enabled,omitempty"`
-	WatchdogScript *string                    `json:"watchdog_script,omitempty"`
-	WatchdogDirective *string                 `json:"watchdog_directive,omitempty"`
-	Limit          int                        `json:"limit,omitempty"`
+	Action            string                     `json:"action"`
+	JobID             string                     `json:"job_id,omitempty"`
+	Name              *string                    `json:"name,omitempty"`
+	Message           *string                    `json:"message,omitempty"`
+	ScheduleType      string                     `json:"schedule_type,omitempty"`
+	At                string                     `json:"at,omitempty"`
+	EverySeconds      *int                       `json:"every_seconds,omitempty"`
+	CronExpr          string                     `json:"cron_expr,omitempty"`
+	Timezone          *string                    `json:"timezone,omitempty"`
+	SessionMode       *string                    `json:"session_mode,omitempty"`
+	DeliveryTarget    *automation.DeliveryTarget `json:"delivery_target,omitempty"`
+	Enabled           *bool                      `json:"enabled,omitempty"`
+	WatchdogScript    *string                    `json:"watchdog_script,omitempty"`
+	WatchdogDirective *string                    `json:"watchdog_directive,omitempty"`
+	Limit             int                        `json:"limit,omitempty"`
 }
 
 // NewCronTool creates a new cron tool.
@@ -114,7 +114,6 @@ func NewCronTool(manager CronManager) Tool {
 			return ToolResult{}, fmt.Errorf("cron service is unavailable")
 		}
 		action := strings.ToLower(strings.TrimSpace(args.Action))
-		runtimeCtx := SessionContextFromContext(ctx)
 
 		switch action {
 		case "list":
@@ -198,99 +197,105 @@ func NewCronTool(manager CronManager) Tool {
 			}
 			return ToolResult{Structured: map[string]interface{}{"action": "toggle", "job": job}}, nil
 		case "create":
-			if args.Message == nil || strings.TrimSpace(*args.Message) == "" {
-				return ToolResult{}, fmt.Errorf("missing message")
-			}
-			schedule, _, err := parseCronScheduleArgs(args, false)
-			if err != nil {
-				return ToolResult{}, err
-			}
-			deliveryTarget := runtimeCtx.DefaultDelivery.Clone()
-			if args.DeliveryTarget != nil {
-				deliveryTarget = args.DeliveryTarget.Clone()
-			}
-			createdBy := strings.TrimSpace(runtimeCtx.Sender)
-			if createdBy == "" {
-				createdBy = strings.TrimSpace(runtimeCtx.Source)
-			}
-			if createdBy == "" {
-				createdBy = "agent"
-			}
-			name := derefString(args.Name)
-			timezone := derefString(args.Timezone)
-			sessionMode := derefString(args.SessionMode)
-			enabled := true
-			if args.Enabled != nil {
-				enabled = *args.Enabled
-			}
-			job, err := manager.CreateJob(automation.CronCreateInput{
-				Name:               name,
-				Message:            *args.Message,
-				Timezone:           timezone,
-				Schedule:           schedule,
-				SessionMode:        sessionMode,
-				WatchdogScript:     derefString(args.WatchdogScript),
-				WatchdogDirective:  derefString(args.WatchdogDirective),
-				DeliveryTarget:     deliveryTarget.Clone(),
-				Enabled:            enabled,
-				CreatedBy:          createdBy,
-				CreatedFromSession: runtimeCtx.SessionID,
-			})
-			if err != nil {
-				return ToolResult{}, err
-			}
-			return ToolResult{Structured: map[string]interface{}{"action": "create", "job": job}}, nil
+			return createCronToolJob(ctx, manager, args)
 		case "update":
-			if strings.TrimSpace(args.JobID) == "" {
-				return ToolResult{}, fmt.Errorf("missing job_id")
-			}
-			update := automation.CronUpdateInput{ID: args.JobID}
-			if args.Name != nil {
-				value := *args.Name
-				update.Name = &value
-			}
-			if args.Message != nil {
-				value := *args.Message
-				update.Message = &value
-			}
-			if args.Timezone != nil {
-				value := *args.Timezone
-				update.Timezone = &value
-			}
-			if args.SessionMode != nil {
-				value := *args.SessionMode
-				update.SessionMode = &value
-			}
-			if args.Enabled != nil {
-				value := *args.Enabled
-				update.Enabled = &value
-			}
-			if args.WatchdogScript != nil {
-				value := *args.WatchdogScript
-				update.WatchdogScript = &value
-			}
-			if args.WatchdogDirective != nil {
-				value := *args.WatchdogDirective
-				update.WatchdogDirective = &value
-			}
-			if schedule, ok, err := parseCronScheduleArgs(args, true); err != nil {
-				return ToolResult{}, err
-			} else if ok {
-				update.Schedule = &schedule
-			}
-			if args.DeliveryTarget != nil {
-				target := args.DeliveryTarget.Clone()
-				update.DeliveryTarget = &target
-			}
-			job, err := manager.UpdateJob(update)
-			if err != nil {
-				return ToolResult{}, err
-			}
-			return ToolResult{Structured: map[string]interface{}{"action": "update", "job": job}}, nil
+			return updateCronToolJob(manager, args)
 		default:
 			return ToolResult{}, fmt.Errorf("unsupported cron action %q", action)
 		}
 	})
+}
+
+func createCronToolJob(ctx context.Context, manager CronManager, args cronArgs) (ToolResult, error) {
+	if args.Message == nil || strings.TrimSpace(*args.Message) == "" {
+		return ToolResult{}, fmt.Errorf("missing message")
+	}
+	schedule, _, err := parseCronScheduleArgs(args, false)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	runtimeCtx := SessionContextFromContext(ctx)
+	deliveryTarget := runtimeCtx.DefaultDelivery.Clone()
+	if args.DeliveryTarget != nil {
+		deliveryTarget = args.DeliveryTarget.Clone()
+	}
+	createdBy := strings.TrimSpace(runtimeCtx.Sender)
+	if createdBy == "" {
+		createdBy = strings.TrimSpace(runtimeCtx.Source)
+	}
+	if createdBy == "" {
+		createdBy = "agent"
+	}
+	enabled := true
+	if args.Enabled != nil {
+		enabled = *args.Enabled
+	}
+	job, err := manager.CreateJob(automation.CronCreateInput{
+		Name:               derefString(args.Name),
+		Message:            *args.Message,
+		Timezone:           derefString(args.Timezone),
+		Schedule:           schedule,
+		SessionMode:        derefString(args.SessionMode),
+		WatchdogScript:     derefString(args.WatchdogScript),
+		WatchdogDirective:  derefString(args.WatchdogDirective),
+		DeliveryTarget:     deliveryTarget.Clone(),
+		Enabled:            enabled,
+		CreatedBy:          createdBy,
+		CreatedFromSession: runtimeCtx.SessionID,
+	})
+	if err != nil {
+		return ToolResult{}, err
+	}
+	return ToolResult{Structured: map[string]interface{}{"action": "create", "job": job}}, nil
+}
+
+func updateCronToolJob(manager CronManager, args cronArgs) (ToolResult, error) {
+	if strings.TrimSpace(args.JobID) == "" {
+		return ToolResult{}, fmt.Errorf("missing job_id")
+	}
+	update := automation.CronUpdateInput{ID: args.JobID}
+	if args.Name != nil {
+		value := *args.Name
+		update.Name = &value
+	}
+	if args.Message != nil {
+		value := *args.Message
+		update.Message = &value
+	}
+	if args.Timezone != nil {
+		value := *args.Timezone
+		update.Timezone = &value
+	}
+	if args.SessionMode != nil {
+		value := *args.SessionMode
+		update.SessionMode = &value
+	}
+	if args.Enabled != nil {
+		value := *args.Enabled
+		update.Enabled = &value
+	}
+	if args.WatchdogScript != nil {
+		value := *args.WatchdogScript
+		update.WatchdogScript = &value
+	}
+	if args.WatchdogDirective != nil {
+		value := *args.WatchdogDirective
+		update.WatchdogDirective = &value
+	}
+	if schedule, ok, err := parseCronScheduleArgs(args, true); err != nil {
+		return ToolResult{}, err
+	} else if ok {
+		update.Schedule = &schedule
+	}
+	if args.DeliveryTarget != nil {
+		target := args.DeliveryTarget.Clone()
+		update.DeliveryTarget = &target
+	}
+	job, err := manager.UpdateJob(update)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	return ToolResult{Structured: map[string]interface{}{"action": "update", "job": job}}, nil
 }
 
 func deliveryTargetSchema() map[string]interface{} {

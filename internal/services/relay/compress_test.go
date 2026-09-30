@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -170,23 +171,32 @@ func TestRelayGzipResponseRoundTrip(t *testing.T) {
 func TestRelayGzipAgentToOldHubPlain(t *testing.T) {
 	// Build a minimal "old hub": a websocket server that answers hello with a
 	// hello_ok carrying no caps, then issues a large request.
+	exchangeResult := make(chan error, 1)
 	oldHub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
+			exchangeResult <- err
 			return
 		}
 		defer conn.Close()
 		// hello
 		_, data, err := conn.ReadMessage()
 		if err != nil {
+			exchangeResult <- err
 			return
 		}
 		hello, err := DecodeFrame(data)
-		if err != nil || hello.Type != FrameHello {
+		if err != nil {
+			exchangeResult <- err
+			return
+		}
+		if hello.Type != FrameHello {
+			exchangeResult <- errors.New("expected hello frame")
 			return
 		}
 		if err := writeFrame(conn, Frame{Type: FrameHelloOK, Version: hello.Version}); err != nil {
+			exchangeResult <- err
 			return
 		}
 		// issue a large request (plain, as an old hub would)
@@ -199,6 +209,7 @@ func TestRelayGzipAgentToOldHubPlain(t *testing.T) {
 			BodyB64: base64.StdEncoding.EncodeToString(body),
 		}
 		if err := writeFrame(conn, req); err != nil {
+			exchangeResult <- err
 			return
 		}
 		// read the response and assert the agent did not compress it.
@@ -206,20 +217,23 @@ func TestRelayGzipAgentToOldHubPlain(t *testing.T) {
 		_ = conn.SetReadDeadline(deadline)
 		_, rdata, err := conn.ReadMessage()
 		if err != nil {
-			t.Errorf("read agent response: %v", err)
+			exchangeResult <- err
 			return
 		}
 		resp, err := DecodeFrame(rdata)
 		if err != nil {
-			t.Errorf("decode agent response: %v", err)
+			exchangeResult <- err
 			return
 		}
 		if resp.Compressed {
-			t.Error("agent must not compress responses to an old hub")
+			exchangeResult <- errors.New("agent must not compress responses to an old hub")
+			return
 		}
 		if got := decodeBodyB64(resp.BodyB64, false); !bytes.Equal(got, body) {
-			t.Error("agent response body mismatch")
+			exchangeResult <- errors.New("agent response body mismatch")
+			return
 		}
+		exchangeResult <- nil
 	}))
 	defer oldHub.Close()
 
@@ -239,8 +253,14 @@ func TestRelayGzipAgentToOldHubPlain(t *testing.T) {
 	}
 	defer agent.Stop(context.Background())
 
-	// Wait for the old hub to finish its exchange (it fails the test on mismatch).
-	time.Sleep(500 * time.Millisecond)
+	select {
+	case err := <-exchangeResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for old hub exchange")
+	}
 }
 
 // TestRelayGzipAgentRoundTrip exercises the full real-agent path: hub

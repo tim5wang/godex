@@ -204,100 +204,23 @@ func validateSessionWorkflow(d *Definition, byID map[string]Node) error {
 	lanesByID := make(map[string]SessionLane, len(d.SessionWorkflow.Lanes))
 	for i, lane := range d.SessionWorkflow.Lanes {
 		path := fmt.Sprintf("session_workflow.lanes[%d]", i)
-		id := strings.TrimSpace(lane.ID)
-		if id == "" || len(id) > 64 {
-			return ValidationError{Path: path + ".id", Msg: "must be between 1 and 64 characters"}
-		}
-		for _, char := range id {
-			if !(char == '_' || char == '-' || char == '.' ||
-				(char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
-				(char >= '0' && char <= '9')) {
-				return ValidationError{Path: path + ".id", Msg: "may contain only letters, numbers, _, - and ."}
-			}
+		id, err := validateSessionLane(lane, path)
+		if err != nil {
+			return err
 		}
 		if _, exists := lanesByID[id]; exists {
 			return ValidationError{Path: path + ".id", Msg: fmt.Sprintf("duplicate lane id %q", id)}
 		}
 		lanesByID[id] = lane
-		cadence := strings.ToLower(strings.TrimSpace(lane.Cadence))
-		if cadence == "" {
-			cadence = SessionLaneCadenceEvent
-		}
-		switch cadence {
-		case SessionLaneCadenceEvent:
-			if lane.IntervalMS != 0 {
-				return ValidationError{Path: path + ".interval_ms", Msg: "is only valid for periodic or hybrid cadence"}
-			}
-		case SessionLaneCadencePeriodic, SessionLaneCadenceHybrid:
-			if lane.IntervalMS < 10 || lane.IntervalMS > 24*60*60*1000 {
-				return ValidationError{Path: path + ".interval_ms", Msg: "must be between 10 and 86400000 milliseconds"}
-			}
-		default:
-			return ValidationError{Path: path + ".cadence", Msg: `must be "event", "periodic" or "hybrid"`}
-		}
-		if lane.DeadlineMS < 10 || lane.DeadlineMS > 24*60*60*1000 {
-			return ValidationError{Path: path + ".deadline_ms", Msg: "must be between 10 and 86400000 milliseconds"}
-		}
-		class := strings.ToLower(strings.TrimSpace(lane.Class))
-		switch class {
-		case "", SessionLaneClassFast, SessionLaneClassStandard, SessionLaneClassSlow:
-		default:
-			return ValidationError{Path: path + ".class", Msg: `must be "fast", "standard" or "slow"`}
-		}
-		overload := strings.ToLower(strings.TrimSpace(lane.OverloadPolicy))
-		switch overload {
-		case "", SessionLaneOverloadCoalesceLatest, SessionLaneOverloadDropNewest:
-		default:
-			return ValidationError{Path: path + ".overload_policy", Msg: `must be "coalesce_latest" or "drop_newest"`}
-		}
 	}
 
 	seenEvents := make(map[string]struct{}, len(d.SessionWorkflow.Triggers))
 	seenLanes := make(map[string]struct{}, len(d.SessionWorkflow.Lanes))
 	for i, trigger := range d.SessionWorkflow.Triggers {
 		path := fmt.Sprintf("session_workflow.triggers[%d]", i)
-		eventType := strings.TrimSpace(trigger.EventType)
-		if eventType == "" || len(eventType) > 128 {
-			return ValidationError{Path: path + ".event_type", Msg: "must be between 1 and 128 characters"}
-		}
-		if _, exists := seenEvents[eventType]; exists {
-			return ValidationError{Path: path + ".event_type", Msg: fmt.Sprintf("duplicate trigger for event type %q", eventType)}
-		}
-		seenEvents[eventType] = struct{}{}
-		entryID := strings.TrimSpace(trigger.EntryNode)
-		if entryID == "" {
-			return ValidationError{Path: path + ".entry_node", Msg: "is required"}
-		}
-		if _, exists := byID[entryID]; !exists {
-			return ValidationError{Path: path + ".entry_node", Msg: fmt.Sprintf("unknown node %q", entryID)}
-		}
-		switch delivery := strings.ToLower(strings.TrimSpace(trigger.Delivery)); delivery {
-		case "", SessionDeliveryDurable, SessionDeliveryLatestWins:
-		default:
-			return ValidationError{Path: path + ".delivery", Msg: `must be "durable" or "latest_wins"`}
-		}
-		laneID := strings.TrimSpace(trigger.LaneID)
-		if laneID != "" {
-			lane, exists := lanesByID[laneID]
-			if !exists {
-				return ValidationError{Path: path + ".lane_id", Msg: fmt.Sprintf("unknown lane %q", laneID)}
-			}
-			if _, duplicate := seenLanes[laneID]; duplicate {
-				return ValidationError{Path: path + ".lane_id", Msg: fmt.Sprintf("lane %q may be assigned to only one trigger", laneID)}
-			}
-			seenLanes[laneID] = struct{}{}
-			cadence := strings.ToLower(strings.TrimSpace(lane.Cadence))
-			if cadence == SessionLaneCadencePeriodic || cadence == SessionLaneCadenceHybrid {
-				if EffectiveSessionDelivery(trigger.Delivery) != SessionDeliveryLatestWins {
-					return ValidationError{Path: path + ".delivery", Msg: "periodic and hybrid lanes require latest_wins delivery"}
-				}
-			}
-			if strings.EqualFold(strings.TrimSpace(lane.OverloadPolicy), SessionLaneOverloadDropNewest) &&
-				EffectiveSessionDelivery(trigger.Delivery) != SessionDeliveryLatestWins {
-				return ValidationError{Path: path + ".lane_id", Msg: "drop_newest overload requires latest_wins delivery"}
-			}
-		}
-		if err := validateSessionRegion(d, byID, entryID, path, EffectiveSessionDelivery(trigger.Delivery)); err != nil {
+		if err := validateSessionTrigger(
+			d, byID, lanesByID, seenEvents, seenLanes, trigger, path,
+		); err != nil {
 			return err
 		}
 	}
@@ -309,21 +232,149 @@ func validateSessionWorkflow(d *Definition, byID map[string]Node) error {
 	return nil
 }
 
+func validateSessionLane(lane SessionLane, path string) (string, error) {
+	id := strings.TrimSpace(lane.ID)
+	if id == "" || len(id) > 64 {
+		return "", ValidationError{Path: path + ".id", Msg: "must be between 1 and 64 characters"}
+	}
+	for _, char := range id {
+		if !(char == '_' || char == '-' || char == '.' ||
+			(char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9')) {
+			return "", ValidationError{Path: path + ".id", Msg: "may contain only letters, numbers, _, - and ."}
+		}
+	}
+	cadence := strings.ToLower(strings.TrimSpace(lane.Cadence))
+	if cadence == "" {
+		cadence = SessionLaneCadenceEvent
+	}
+	switch cadence {
+	case SessionLaneCadenceEvent:
+		if lane.IntervalMS != 0 {
+			return "", ValidationError{Path: path + ".interval_ms", Msg: "is only valid for periodic or hybrid cadence"}
+		}
+	case SessionLaneCadencePeriodic, SessionLaneCadenceHybrid:
+		if lane.IntervalMS < 10 || lane.IntervalMS > 24*60*60*1000 {
+			return "", ValidationError{Path: path + ".interval_ms", Msg: "must be between 10 and 86400000 milliseconds"}
+		}
+	default:
+		return "", ValidationError{Path: path + ".cadence", Msg: `must be "event", "periodic" or "hybrid"`}
+	}
+	if lane.DeadlineMS < 10 || lane.DeadlineMS > 24*60*60*1000 {
+		return "", ValidationError{Path: path + ".deadline_ms", Msg: "must be between 10 and 86400000 milliseconds"}
+	}
+	switch class := strings.ToLower(strings.TrimSpace(lane.Class)); class {
+	case "", SessionLaneClassFast, SessionLaneClassStandard, SessionLaneClassSlow:
+	default:
+		return "", ValidationError{Path: path + ".class", Msg: `must be "fast", "standard" or "slow"`}
+	}
+	switch overload := strings.ToLower(strings.TrimSpace(lane.OverloadPolicy)); overload {
+	case "", SessionLaneOverloadCoalesceLatest, SessionLaneOverloadDropNewest:
+	default:
+		return "", ValidationError{Path: path + ".overload_policy", Msg: `must be "coalesce_latest" or "drop_newest"`}
+	}
+	return id, nil
+}
+
+func validateSessionTrigger(
+	d *Definition,
+	byID map[string]Node,
+	lanesByID map[string]SessionLane,
+	seenEvents map[string]struct{},
+	seenLanes map[string]struct{},
+	trigger SessionTrigger,
+	path string,
+) error {
+	eventType := strings.TrimSpace(trigger.EventType)
+	if eventType == "" || len(eventType) > 128 {
+		return ValidationError{Path: path + ".event_type", Msg: "must be between 1 and 128 characters"}
+	}
+	if _, exists := seenEvents[eventType]; exists {
+		return ValidationError{Path: path + ".event_type", Msg: fmt.Sprintf("duplicate trigger for event type %q", eventType)}
+	}
+	seenEvents[eventType] = struct{}{}
+	entryID := strings.TrimSpace(trigger.EntryNode)
+	if entryID == "" {
+		return ValidationError{Path: path + ".entry_node", Msg: "is required"}
+	}
+	if _, exists := byID[entryID]; !exists {
+		return ValidationError{Path: path + ".entry_node", Msg: fmt.Sprintf("unknown node %q", entryID)}
+	}
+	switch delivery := strings.ToLower(strings.TrimSpace(trigger.Delivery)); delivery {
+	case "", SessionDeliveryDurable, SessionDeliveryLatestWins:
+	default:
+		return ValidationError{Path: path + ".delivery", Msg: `must be "durable" or "latest_wins"`}
+	}
+	laneID := strings.TrimSpace(trigger.LaneID)
+	if laneID != "" {
+		lane, exists := lanesByID[laneID]
+		if !exists {
+			return ValidationError{Path: path + ".lane_id", Msg: fmt.Sprintf("unknown lane %q", laneID)}
+		}
+		if _, duplicate := seenLanes[laneID]; duplicate {
+			return ValidationError{Path: path + ".lane_id", Msg: fmt.Sprintf("lane %q may be assigned to only one trigger", laneID)}
+		}
+		seenLanes[laneID] = struct{}{}
+		if err := validateSessionLaneTriggerCompatibility(lane, trigger, path); err != nil {
+			return err
+		}
+	}
+	return validateSessionRegion(d, byID, entryID, path, EffectiveSessionDelivery(trigger.Delivery))
+}
+
+func validateSessionLaneTriggerCompatibility(lane SessionLane, trigger SessionTrigger, path string) error {
+	cadence := strings.ToLower(strings.TrimSpace(lane.Cadence))
+	if (cadence == SessionLaneCadencePeriodic || cadence == SessionLaneCadenceHybrid) &&
+		EffectiveSessionDelivery(trigger.Delivery) != SessionDeliveryLatestWins {
+		return ValidationError{Path: path + ".delivery", Msg: "periodic and hybrid lanes require latest_wins delivery"}
+	}
+	if strings.EqualFold(strings.TrimSpace(lane.OverloadPolicy), SessionLaneOverloadDropNewest) &&
+		EffectiveSessionDelivery(trigger.Delivery) != SessionDeliveryLatestWins {
+		return ValidationError{Path: path + ".lane_id", Msg: "drop_newest overload requires latest_wins delivery"}
+	}
+	return nil
+}
+
 func validateSessionRegion(d *Definition, byID map[string]Node, entryID, path, delivery string) error {
+	incoming, outgoing, region, err := buildSessionRegionGraph(d, entryID, path)
+	if err != nil {
+		return err
+	}
+	if err := validateSessionRegionNodes(d, byID, incoming, region, path, delivery); err != nil {
+		return err
+	}
+	branchTargetOwners := make(map[string]string)
+	branchChainOwners := make(map[string]string)
+	sessionRegionNodes := make(map[string]struct{}, len(region))
+	for nodeID := range region {
+		sessionRegionNodes[nodeID] = struct{}{}
+	}
+	if err := validateSessionBranchRoutes(
+		byID, incoming, outgoing, region, sessionRegionNodes,
+		branchTargetOwners, branchChainOwners, path, delivery,
+	); err != nil {
+		return err
+	}
+	return validateSessionRegionConditionEdges(d.Edges, sessionRegionNodes, path)
+}
+
+func buildSessionRegionGraph(
+	d *Definition,
+	entryID string,
+	path string,
+) (map[string][]string, map[string][]string, map[string]struct{}, error) {
 	incoming := make(map[string][]string)
 	outgoing := make(map[string][]string)
 	for _, edge := range d.Edges {
-		edgeType := normalizeEdgeType(edge.EdgeType)
-		if edgeType == EdgeCondition {
+		if normalizeEdgeType(edge.EdgeType) == EdgeCondition {
 			continue
 		}
 		incoming[edge.To] = append(incoming[edge.To], edge.From)
 		outgoing[edge.From] = append(outgoing[edge.From], edge.To)
 	}
 	if len(incoming[entryID]) != 0 {
-		return ValidationError{Path: path + ".entry_node", Msg: "must not have incoming data_dependency or handoff edges"}
+		return nil, nil, nil, ValidationError{Path: path + ".entry_node", Msg: "must not have incoming data_dependency or handoff edges"}
 	}
-
 	region := map[string]struct{}{entryID: {}}
 	queue := []string{entryID}
 	for len(queue) > 0 {
@@ -337,211 +388,324 @@ func validateSessionRegion(d *Definition, byID map[string]Node, entryID, path, d
 			queue = append(queue, next)
 		}
 	}
+	return incoming, outgoing, region, nil
+}
+
+func validateSessionRegionNodes(
+	d *Definition,
+	byID map[string]Node,
+	incoming map[string][]string,
+	region map[string]struct{},
+	path, delivery string,
+) error {
 	for nodeID := range region {
-		node := byID[nodeID]
-		switch kind := normalizeKind(node.Kind); kind {
-		case KindFunction:
-			if node.Function == nil ||
-				!strings.EqualFold(strings.TrimSpace(node.Function.Runtime), FunctionRuntimeJS) ||
-				strings.TrimSpace(node.Function.Ref) != "" {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must be an inline JavaScript function", nodeID)}
-			}
-		case KindService:
-			if node.Service == nil {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must have a service configuration", nodeID)}
-			}
-		case KindLLM:
-			if len(node.Outputs) == 0 {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("region LLM node %q must declare outputs", nodeID)}
-			}
-		case KindStep:
-			if delivery != SessionDeliveryDurable {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("region Agent node %q requires durable event delivery", nodeID)}
-			}
-			if len(node.Outputs) == 0 {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("region Agent node %q must declare outputs", nodeID)}
-			}
+		if err := validateSessionRegionNode(d, byID, incoming, region, nodeID, path, delivery); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSessionRegionNode(
+	d *Definition,
+	byID map[string]Node,
+	incoming map[string][]string,
+	region map[string]struct{},
+	nodeID, path, delivery string,
+) error {
+	node := byID[nodeID]
+	switch kind := normalizeKind(node.Kind); kind {
+	case KindFunction:
+		if node.Function == nil ||
+			!strings.EqualFold(strings.TrimSpace(node.Function.Runtime), FunctionRuntimeJS) ||
+			strings.TrimSpace(node.Function.Ref) != "" {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must be an inline JavaScript function", nodeID)}
+		}
+	case KindService:
+		if node.Service == nil {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must have a service configuration", nodeID)}
+		}
+	case KindLLM:
+		if len(node.Outputs) == 0 {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region LLM node %q must declare outputs", nodeID)}
+		}
+	case KindStep:
+		if delivery != SessionDeliveryDurable {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region Agent node %q requires durable event delivery", nodeID)}
+		}
+		if len(node.Outputs) == 0 {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region Agent node %q must declare outputs", nodeID)}
+		}
+	case KindBranch:
+		if node.Branch == nil {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region branch node %q must have a branch configuration", nodeID)}
+		}
+	default:
+		return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q has unsupported kind %q; session runtime supports function, service, LLM, durable Agent, and branch nodes", nodeID, kind)}
+	}
+	if strings.TrimSpace(node.PreScript) != "" || strings.TrimSpace(node.PostScript) != "" {
+		return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must not use pre_script or post_script", nodeID)}
+	}
+	for _, source := range incoming[nodeID] {
+		if _, exists := region[source]; !exists {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q depends on node %q outside its trigger region", nodeID, source)}
+		}
+	}
+	return rejectSessionRegionAppendTarget(d, byID, nodeID, path)
+}
+
+func rejectSessionRegionAppendTarget(d *Definition, byID map[string]Node, nodeID, path string) error {
+	for _, owner := range d.Nodes {
+		switch normalizeKind(owner.Kind) {
 		case KindBranch:
-			if node.Branch == nil {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("region branch node %q must have a branch configuration", nodeID)}
+			if owner.Branch == nil {
+				continue
 			}
-		default:
-			return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q has unsupported kind %q; session runtime supports function, service, LLM, durable Agent, and branch nodes", nodeID, kind)}
-		}
-		if strings.TrimSpace(node.PreScript) != "" || strings.TrimSpace(node.PostScript) != "" {
-			return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q must not use pre_script or post_script", nodeID)}
-		}
-		for _, source := range incoming[nodeID] {
-			if _, exists := region[source]; !exists {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q depends on node %q outside its trigger region", nodeID, source)}
-			}
-		}
-		for _, owner := range d.Nodes {
-			switch normalizeKind(owner.Kind) {
-			case KindBranch:
-				if owner.Branch == nil {
-					continue
-				}
-				for _, branchCase := range owner.Branch.Cases {
-					if branchCase.To == nodeID {
-						return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a branch append target", nodeID)}
-					}
-				}
-				if owner.Branch.DefaultTo == nodeID {
+			for _, branchCase := range owner.Branch.Cases {
+				if branchCase.To == nodeID {
 					return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a branch append target", nodeID)}
 				}
-			case KindLoop:
-				if owner.Loop == nil {
-					continue
-				}
-				for _, bodyID := range owner.Loop.Body {
-					if bodyID == nodeID {
-						return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a loop append target", nodeID)}
-					}
-				}
 			}
-		}
-		for _, edge := range d.Edges {
-			if byID[edge.From].ID != "" && normalizeKind(byID[edge.From].Kind) == KindLoop && edge.To == nodeID {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a loop append target", nodeID)}
+			if owner.Branch.DefaultTo == nodeID {
+				return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a branch append target", nodeID)}
 			}
-		}
-	}
-	branchTargetOwners := make(map[string]string)
-	branchChainOwners := make(map[string]string)
-	sessionRegionNodes := make(map[string]struct{}, len(region))
-	for nodeID := range region {
-		sessionRegionNodes[nodeID] = struct{}{}
-	}
-	for branchID := range region {
-		branchNode := byID[branchID]
-		if normalizeKind(branchNode.Kind) != KindBranch || branchNode.Branch == nil {
-			continue
-		}
-		targetIDs := make([]string, 0, len(branchNode.Branch.Cases)+1)
-		seenRoutes := make(map[string]struct{}, len(branchNode.Branch.Cases))
-		validatedTargets := make(map[string]struct{}, len(branchNode.Branch.Cases)+1)
-		routeChains := make(map[string]map[string]struct{}, len(branchNode.Branch.Cases)+1)
-		for _, branchCase := range branchNode.Branch.Cases {
-			route := strings.TrimSpace(branchCase.Name)
-			if route == "" {
-				route = strings.TrimSpace(branchCase.To)
-			}
-			if route == branchDefaultRoute {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("branch node %q case name %q is reserved", branchID, branchDefaultRoute)}
-			}
-			if _, duplicate := seenRoutes[route]; duplicate {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("branch node %q has duplicate route %q", branchID, route)}
-			}
-			seenRoutes[route] = struct{}{}
-			targetIDs = append(targetIDs, strings.TrimSpace(branchCase.To))
-		}
-		targetIDs = append(targetIDs, strings.TrimSpace(branchNode.Branch.DefaultTo))
-		for _, targetID := range targetIDs {
-			if owner, duplicate := branchTargetOwners[targetID]; duplicate && owner != branchID {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q is shared by branch nodes %q and %q", targetID, owner, branchID)}
-			}
-			branchTargetOwners[targetID] = branchID
-			target := byID[targetID]
-			targetKind := normalizeKind(target.Kind)
-			switch targetKind {
-			case KindFunction:
-				if target.Function == nil ||
-					!strings.EqualFold(strings.TrimSpace(target.Function.Runtime), FunctionRuntimeJS) ||
-					strings.TrimSpace(target.Function.Ref) != "" {
-					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q must be an inline JavaScript function", targetID)}
-				}
-			case KindService:
-			case KindLLM:
-				if len(target.Outputs) == 0 {
-					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route LLM node %q must declare outputs", targetID)}
-				}
-			case KindStep:
-				if delivery != SessionDeliveryDurable {
-					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route Agent node %q requires durable event delivery", targetID)}
-				}
-				if len(target.Outputs) == 0 {
-					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route Agent node %q must declare outputs", targetID)}
-				}
-			default:
-				return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q has unsupported kind %q", targetID, targetKind)}
-			}
-			if strings.TrimSpace(target.PreScript) != "" || strings.TrimSpace(target.PostScript) != "" {
-				return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q must not use pre_script or post_script", targetID)}
-			}
-
-			if _, alreadyValidated := validatedTargets[targetID]; alreadyValidated {
+		case KindLoop:
+			if owner.Loop == nil {
 				continue
 			}
-			validatedTargets[targetID] = struct{}{}
-			chain := map[string]struct{}{targetID: {}}
-			queue := []string{targetID}
-			for len(queue) > 0 {
-				current := queue[0]
-				queue = queue[1:]
-				for _, next := range outgoing[current] {
-					if _, exists := chain[next]; exists {
-						continue
-					}
-					chain[next] = struct{}{}
-					queue = append(queue, next)
-				}
-			}
-			for nodeID := range chain {
-				if owner, exists := branchChainOwners[nodeID]; exists && owner != branchID {
-					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chains share downstream node %q", nodeID)}
-				}
-				branchChainOwners[nodeID] = branchID
-				sessionRegionNodes[nodeID] = struct{}{}
-			}
-			routeChains[targetID] = chain
-		}
-		for _, targetID := range targetIDs {
-			targetID = strings.TrimSpace(targetID)
-			chain, exists := routeChains[targetID]
-			if !exists {
-				continue
-			}
-			for nodeID := range chain {
-				if nodeID != targetID {
-					if err := validateSessionRouteChainNode(byID[nodeID], nodeID, path, delivery); err != nil {
-						return err
-					}
-				}
-				for _, source := range incoming[nodeID] {
-					if _, inRegion := region[source]; inRegion {
-						continue
-					}
-					if _, inChain := chain[source]; inChain {
-						continue
-					}
-					// A shared downstream node is an exclusive (OR) join: the
-					// selected route supplies its inputs and sibling route nodes
-					// are skipped at runtime.
-					sharedBySiblingRoute := false
-					for _, siblingTargetID := range targetIDs {
-						siblingTargetID = strings.TrimSpace(siblingTargetID)
-						if siblingTargetID == targetID {
-							continue
-						}
-						siblingChain := routeChains[siblingTargetID]
-						if _, sameJoin := siblingChain[nodeID]; !sameJoin {
-							continue
-						}
-						if _, siblingInput := siblingChain[source]; siblingInput {
-							sharedBySiblingRoute = true
-							break
-						}
-					}
-					if sharedBySiblingRoute {
-						continue
-					}
-					return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain node %q depends on node %q outside its selected route", nodeID, source)}
+			for _, bodyID := range owner.Loop.Body {
+				if bodyID == nodeID {
+					return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a loop append target", nodeID)}
 				}
 			}
 		}
 	}
 	for _, edge := range d.Edges {
+		if byID[edge.From].ID != "" && normalizeKind(byID[edge.From].Kind) == KindLoop && edge.To == nodeID {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("region node %q cannot be a loop append target", nodeID)}
+		}
+	}
+	return nil
+}
+
+func validateSessionBranchRoutes(
+	byID map[string]Node,
+	incoming, outgoing map[string][]string,
+	region, sessionRegionNodes map[string]struct{},
+	branchTargetOwners, branchChainOwners map[string]string,
+	path, delivery string,
+) error {
+	for branchID := range region {
+		branchNode := byID[branchID]
+		if normalizeKind(branchNode.Kind) != KindBranch || branchNode.Branch == nil {
+			continue
+		}
+		if err := validateSessionBranchNode(
+			byID, incoming, outgoing, region, sessionRegionNodes,
+			branchTargetOwners, branchChainOwners, branchID, branchNode, path, delivery,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSessionBranchNode(
+	byID map[string]Node,
+	incoming, outgoing map[string][]string,
+	region, sessionRegionNodes map[string]struct{},
+	branchTargetOwners, branchChainOwners map[string]string,
+	branchID string,
+	branchNode Node,
+	path, delivery string,
+) error {
+	targetIDs, err := sessionBranchTargetIDs(branchID, branchNode.Branch, path)
+	if err != nil {
+		return err
+	}
+	routeChains := make(map[string]map[string]struct{}, len(targetIDs))
+	validatedTargets := make(map[string]struct{}, len(targetIDs))
+	for _, targetID := range targetIDs {
+		if err := claimSessionBranchTarget(branchID, targetID, branchTargetOwners, path); err != nil {
+			return err
+		}
+		if err := validateSessionBranchTarget(byID[targetID], targetID, path, delivery); err != nil {
+			return err
+		}
+		if _, alreadyValidated := validatedTargets[targetID]; alreadyValidated {
+			continue
+		}
+		validatedTargets[targetID] = struct{}{}
+		chain := sessionRouteChain(targetID, outgoing)
+		if err := claimSessionBranchChain(
+			branchID, chain, branchChainOwners, sessionRegionNodes, path,
+		); err != nil {
+			return err
+		}
+		routeChains[targetID] = chain
+	}
+	return validateSessionBranchDependencies(
+		byID, incoming, region, targetIDs, routeChains, path, delivery,
+	)
+}
+
+func sessionBranchTargetIDs(branchID string, branch *BranchSpec, path string) ([]string, error) {
+	targetIDs := make([]string, 0, len(branch.Cases)+1)
+	seenRoutes := make(map[string]struct{}, len(branch.Cases))
+	for _, branchCase := range branch.Cases {
+		route := strings.TrimSpace(branchCase.Name)
+		if route == "" {
+			route = strings.TrimSpace(branchCase.To)
+		}
+		if route == branchDefaultRoute {
+			return nil, ValidationError{Path: path, Msg: fmt.Sprintf("branch node %q case name %q is reserved", branchID, branchDefaultRoute)}
+		}
+		if _, duplicate := seenRoutes[route]; duplicate {
+			return nil, ValidationError{Path: path, Msg: fmt.Sprintf("branch node %q has duplicate route %q", branchID, route)}
+		}
+		seenRoutes[route] = struct{}{}
+		targetIDs = append(targetIDs, strings.TrimSpace(branchCase.To))
+	}
+	targetIDs = append(targetIDs, strings.TrimSpace(branch.DefaultTo))
+	return targetIDs, nil
+}
+
+func claimSessionBranchTarget(
+	branchID, targetID string,
+	owners map[string]string,
+	path string,
+) error {
+	if owner, duplicate := owners[targetID]; duplicate && owner != branchID {
+		return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q is shared by branch nodes %q and %q", targetID, owner, branchID)}
+	}
+	owners[targetID] = branchID
+	return nil
+}
+
+func validateSessionBranchTarget(target Node, targetID, path, delivery string) error {
+	targetKind := normalizeKind(target.Kind)
+	switch targetKind {
+	case KindFunction:
+		if target.Function == nil ||
+			!strings.EqualFold(strings.TrimSpace(target.Function.Runtime), FunctionRuntimeJS) ||
+			strings.TrimSpace(target.Function.Ref) != "" {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q must be an inline JavaScript function", targetID)}
+		}
+	case KindService:
+	case KindLLM:
+		if len(target.Outputs) == 0 {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route LLM node %q must declare outputs", targetID)}
+		}
+	case KindStep:
+		if delivery != SessionDeliveryDurable {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route Agent node %q requires durable event delivery", targetID)}
+		}
+		if len(target.Outputs) == 0 {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route Agent node %q must declare outputs", targetID)}
+		}
+	default:
+		return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q has unsupported kind %q", targetID, targetKind)}
+	}
+	if strings.TrimSpace(target.PreScript) != "" || strings.TrimSpace(target.PostScript) != "" {
+		return ValidationError{Path: path, Msg: fmt.Sprintf("branch route target %q must not use pre_script or post_script", targetID)}
+	}
+	return nil
+}
+
+func sessionRouteChain(targetID string, outgoing map[string][]string) map[string]struct{} {
+	chain := map[string]struct{}{targetID: {}}
+	queue := []string{targetID}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, next := range outgoing[current] {
+			if _, exists := chain[next]; exists {
+				continue
+			}
+			chain[next] = struct{}{}
+			queue = append(queue, next)
+		}
+	}
+	return chain
+}
+
+func claimSessionBranchChain(
+	branchID string,
+	chain map[string]struct{},
+	branchChainOwners map[string]string,
+	sessionRegionNodes map[string]struct{},
+	path string,
+) error {
+	for nodeID := range chain {
+		if owner, exists := branchChainOwners[nodeID]; exists && owner != branchID {
+			return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chains share downstream node %q", nodeID)}
+		}
+		branchChainOwners[nodeID] = branchID
+		sessionRegionNodes[nodeID] = struct{}{}
+	}
+	return nil
+}
+
+func validateSessionBranchDependencies(
+	byID map[string]Node,
+	incoming map[string][]string,
+	region map[string]struct{},
+	targetIDs []string,
+	routeChains map[string]map[string]struct{},
+	path, delivery string,
+) error {
+	for _, targetID := range targetIDs {
+		targetID = strings.TrimSpace(targetID)
+		chain, exists := routeChains[targetID]
+		if !exists {
+			continue
+		}
+		for nodeID := range chain {
+			if nodeID != targetID {
+				if err := validateSessionRouteChainNode(byID[nodeID], nodeID, path, delivery); err != nil {
+					return err
+				}
+			}
+			for _, source := range incoming[nodeID] {
+				if _, inRegion := region[source]; inRegion {
+					continue
+				}
+				if _, inChain := chain[source]; inChain {
+					continue
+				}
+				if sessionBranchSiblingSuppliesInput(targetID, nodeID, source, targetIDs, routeChains) {
+					continue
+				}
+				return ValidationError{Path: path, Msg: fmt.Sprintf("branch route chain node %q depends on node %q outside its selected route", nodeID, source)}
+			}
+		}
+	}
+	return nil
+}
+
+func sessionBranchSiblingSuppliesInput(
+	targetID, nodeID, source string,
+	targetIDs []string,
+	routeChains map[string]map[string]struct{},
+) bool {
+	for _, siblingTargetID := range targetIDs {
+		siblingTargetID = strings.TrimSpace(siblingTargetID)
+		if siblingTargetID == targetID {
+			continue
+		}
+		siblingChain := routeChains[siblingTargetID]
+		if _, sameJoin := siblingChain[nodeID]; !sameJoin {
+			continue
+		}
+		if _, siblingInput := siblingChain[source]; siblingInput {
+			return true
+		}
+	}
+	return false
+}
+
+func validateSessionRegionConditionEdges(edges []Edge, sessionRegionNodes map[string]struct{}, path string) error {
+	for _, edge := range edges {
 		if normalizeEdgeType(edge.EdgeType) != EdgeCondition {
 			continue
 		}

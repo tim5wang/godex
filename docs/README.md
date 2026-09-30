@@ -39,6 +39,8 @@
 | [godex-optimization-roadmap.md](./godex-optimization-roadmap.md) | **优化路线图（统一版）**，含 P0-P6 分期定义、Phase 0-6 任务与完成状态 | **P0-P6 分期以本文档为准**；合并自 qm-roadmap / longtask-analysis / roadmap-high-roi / roadmap-runtime-hardening / architecture-v2-spec / agent-role-and-bundle-design |
 | [architecture-v2-spec.md](./architecture-v2-spec.md) | GoDex 2.0 架构 SPEC（中文） | 含英文版 [architecture-v2-spec.en.md](./architecture-v2-spec.en.md) |
 | [user-guide.md](./user-guide.md) | 用户指南：安装运行、配置、Provider、CLI、Web UI、工具、Memory、命令、HTTP API、自动化、安全、故障排查 | README 的补充细节；2026-08-15 全量重写对齐实现 |
+| [desktop-shell.md](./desktop-shell.md) | Tauri 桌面壳的自托管结构与原生能力实现记录 | Active / Implemented；具体行为以当前源码为准 |
+| [node-center-bridge-design.md](./node-center-bridge-design.md) | Node Center Bridge 架构、relay 与节点代理设计 | Implemented（2026-09-07）；协议事实以代码和测试为准 |
 | [code-review-2026-08-15.md](./code-review-2026-08-15.md) | 代码与设计 Review 记录：文档↔实现不一致、代码侧发现、设计观察 | 2026-08-15 |
 | [code-and-docs-review-2026-08-31.md](./code-and-docs-review-2026-08-31.md) | 全模块代码/架构/文档审查，含工具证据、测试基线与优先级 | 2026-08-31 |
 | [technical-debt-audit-2026-09-30.md](./technical-debt-audit-2026-09-30.md) | 当前代码与文档技术债、验证结果及分阶段优化方案 | 基于 HEAD `2680288` 加当前工作树；含未提交改动限制说明 |
@@ -74,12 +76,19 @@
 | 文档 | 内容 | 备注 |
 |------|------|------|
 | [research_of_dsh_for_godex_optimize.md](./research_of_dsh_for_godex_optimize.md) | DSH/Cordis → pluginrt/toolruntime/WASM/ACP 演进记录 | 阶段 0/A/B 与 P1–P4 已落地，C 为 MVP/演进 |
+| [p3-foundations-design.md](./p3-foundations-design.md) | Flow 画布、执行可观测性、节点库与运行时上下文的前置设计 | Draft；落地情况以功能矩阵与源码为准 |
 | [node-mesh-design.md](./node-mesh-design.md) | Node Mesh v2 实现与剩余路线 | Phase 1–3 已完成，Phase 4/5 Partial |
+| [remote-sandbox-design.md](./remote-sandbox-design.md) | A 会话 + B 工具执行的远程沙箱设计 | Draft（待确认后实施） |
 | [big-file-split-plan.md](./big-file-split-plan.md) | 四个大文件拆分的历史方案与当前结果 | Go 三项完成，ChatPage Partial |
 | [cache-optimization-plan.md](./cache-optimization-plan.md) | Cache & Tool 优化实施记录 | 1.1–2.3 完成，adaptive TTL Planned |
 | [tui-bubbletea-design.md](./tui-bubbletea-design.md) | 统一多入口架构设计记录 | Historical / Implemented |
 | [voice-plugin-extensibility-design.md](./voice-plugin-extensibility-design.md) | turn middleware + plugin UI/config + voice L2 | 基础 ui_card/voice 已实现，插件化部分 Planned |
 | [plugin-system-evolution-plan.md](./plugin-system-evolution-plan.md) | 插件 routes/services/schedule/UI 演进 | P-A/P-C/P-D 已实现，P-B Partial |
+| [prd-asl-engine.md](./prd-asl-engine.md) | Agent 流程固化语言/引擎调研 PRD | Draft，待评审；不包含实现承诺 |
+| [prd-browser-use-inside.md](./prd-browser-use-inside.md) | Agent 浏览器实时画面内嵌方案调研 | Draft，待评审 |
+| [prd-desktop-app-wrap.md](./prd-desktop-app-wrap.md) | 桌面版与 App 版 WebView 容器调研 | Draft，待评审 |
+| [prd-desktop-pet-android-watch.md](./prd-desktop-pet-android-watch.md) | 桌宠与 Android Wear OS 客户端调研 | Draft，待评审 |
+| [release-notes-v1.5.0.md](./release-notes-v1.5.0.md) | v1.5.0 发布草案 | Draft；版本号与发布内容待 release 前核验 |
 
 ## C. 已合并 / 被取代（Superseded）
 
@@ -102,6 +111,7 @@
 | 文档 | 内容 | 备注 |
 |------|------|------|
 | [p0-p6-e2e-validation.md](./p0-p6-e2e-validation.md) | 旧迭代的端到端验证清单 | **旧迭代遗留，P0-P6 定义以 roadmap 为准，勿以此文档为准** |
+| [mobile-webview-compatibility.md](./mobile-webview-compatibility.md) | iOS/Android WebView 静态兼容性清单与实机验证项 | Analysis；实机结果待补 |
 | [ui-ux-p0-p6-e2e-cases.md](./ui-ux-p0-p6-e2e-cases.md) | UI UX 优化测试用例（覆盖 Phase 0-6，基于 roadmap 分期） | Active（2026-08-12 按 roadmap Phase 0-6 重写） |
 | [tui-hang-fix-2026-05-27.md](./tui-hang-fix-2026-05-27.md) | TUI 卡死问题排查修复记录 | |
 | [issues.md](./issues.md) | issue 清单（多数已解决） | |

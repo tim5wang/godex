@@ -109,98 +109,7 @@ func NewBrowserTool(service *BrowserService, workspace string) Tool {
 			sessionID = strings.TrimSpace(SessionContextFromContext(ctx).SessionID)
 		}
 		action := strings.TrimSpace(args.Action)
-		locator := locatorFromArgs(args)
-
-		var (
-			payload any
-			err     error
-		)
-		switch action {
-		case "status":
-			payload = service.Status()
-		case "list_pages":
-			payload = service.ListPages(sessionID)
-		case "open":
-			payload, err = service.Open(ctx, sessionID, args.URL)
-		case "open_tab":
-			// Explicit tab semantics: open a new tab in the shared browser
-			// window (same as open, kept as a distinct action for models).
-			payload, err = service.Open(ctx, sessionID, args.URL)
-		case "switch_tab":
-			if strings.TrimSpace(args.PageID) == "" {
-				return ToolResult{}, fmt.Errorf("switch_tab requires page_id")
-			}
-			payload, err = service.ActivatePage(ctx, sessionID, args.PageID)
-		case "close_tab":
-			if strings.TrimSpace(args.PageID) == "" {
-				return ToolResult{}, fmt.Errorf("close_tab requires page_id")
-			}
-			if err = service.Close(sessionID, args.PageID); err == nil {
-				payload = service.ListPages(sessionID)
-			}
-		case "navigate":
-			payload, err = service.Navigate(ctx, sessionID, args.PageID, args.URL)
-		case "snapshot":
-			payload, err = service.Snapshot(ctx, sessionID, args.PageID, args.MaxChars)
-		case "click":
-			err = service.ClickTarget(ctx, sessionID, args.PageID, locator)
-			payload = map[string]string{"status": "ok"}
-		case "type":
-			err = service.TypeTarget(ctx, sessionID, args.PageID, locator, args.Text)
-			payload = map[string]string{"status": "ok"}
-		case "press":
-			err = service.Press(ctx, sessionID, args.PageID, args.Key)
-			payload = map[string]string{"status": "ok"}
-		case "wait":
-			err = service.Wait(ctx, sessionID, args.PageID, args.Text, args.TimeMS)
-			payload = map[string]string{"status": "ok"}
-		case "find":
-			payload, err = service.Find(ctx, sessionID, args.PageID, locator, args.MaxEntries)
-		case "fill_form":
-			payload, err = service.FillForm(ctx, sessionID, args.PageID, args.Fields)
-		case "upload_file":
-			paths, resolveErr := resolveBrowserUploadPaths(workspace, args.Path, args.Paths)
-			if resolveErr != nil {
-				return ToolResult{}, resolveErr
-			}
-			err = service.UploadFiles(ctx, sessionID, args.PageID, locator, paths)
-			payload = map[string]interface{}{
-				"status":      "ok",
-				"uploaded":    len(paths),
-				"source_path": paths,
-			}
-		case "wait_network_idle":
-			err = service.WaitNetworkIdle(ctx, sessionID, args.PageID, args.NetworkIdleMS)
-			payload = map[string]string{"status": "ok"}
-		case "network_snapshot":
-			payload, err = service.NetworkSnapshot(ctx, sessionID, args.PageID, args.MaxEntries)
-		case "download":
-			payload, err = service.Download(ctx, sessionID, args.PageID, locator, args.URL, args.FileName)
-		case "screenshot":
-			var path string
-			path, err = service.Screenshot(ctx, sessionID, args.PageID, args.FullPage)
-			if err == nil {
-				payload = BrowserScreenshotResult{
-					PageID:                     strings.TrimSpace(args.PageID),
-					ArtifactPath:               path,
-					Kind:                       "image",
-					AutoAttachInSupportedReply: true,
-				}
-			}
-		case "capture_page":
-			payload, err = service.CapturePage(ctx, sessionID, args.PageID, args.URL, args.Text, args.TimeMS, args.NetworkIdleMS, args.FullPage, args.MaxChars)
-		case "search_and_open":
-			payload, err = service.SearchAndOpen(ctx, sessionID, args.PageID, args.URL, args.Query, args.NetworkIdleMS, args.MaxChars)
-		case "handoff":
-			payload, err = service.Handoff(ctx, sessionID, args.PageID, args.URL, args.Reason, args.MaxChars)
-		case "resume":
-			payload, err = service.ResumeHandoff(ctx, sessionID, args.PageID, args.MaxChars)
-		case "close":
-			err = service.Close(sessionID, args.PageID)
-			payload = map[string]string{"status": "ok"}
-		default:
-			return ToolResult{}, fmt.Errorf("unknown browser action %q", action)
-		}
+		payload, err := executeBrowserAction(ctx, service, sessionID, workspace, action, args)
 		if err != nil {
 			return ToolResult{}, err
 		}
@@ -228,6 +137,105 @@ func NewBrowserTool(service *BrowserService, workspace string) Tool {
 		}
 		return result, nil
 	})
+}
+
+func executeBrowserAction(
+	ctx context.Context,
+	service *BrowserService,
+	sessionID, workspace, action string,
+	args browserArgs,
+) (any, error) {
+	locator := locatorFromArgs(args)
+	var (
+		payload any
+		err     error
+	)
+	switch action {
+	case "status":
+		payload = service.Status()
+	case "list_pages":
+		payload = service.ListPages(sessionID)
+	case "open":
+		payload, err = service.Open(ctx, sessionID, args.URL)
+	case "open_tab":
+		// Explicit tab semantics: open a new tab in the shared browser window.
+		payload, err = service.Open(ctx, sessionID, args.URL)
+	case "switch_tab":
+		if strings.TrimSpace(args.PageID) == "" {
+			return nil, fmt.Errorf("switch_tab requires page_id")
+		}
+		payload, err = service.ActivatePage(ctx, sessionID, args.PageID)
+	case "close_tab":
+		if strings.TrimSpace(args.PageID) == "" {
+			return nil, fmt.Errorf("close_tab requires page_id")
+		}
+		if err = service.Close(sessionID, args.PageID); err == nil {
+			payload = service.ListPages(sessionID)
+		}
+	case "navigate":
+		payload, err = service.Navigate(ctx, sessionID, args.PageID, args.URL)
+	case "snapshot":
+		payload, err = service.Snapshot(ctx, sessionID, args.PageID, args.MaxChars)
+	case "click":
+		err = service.ClickTarget(ctx, sessionID, args.PageID, locator)
+		payload = map[string]string{"status": "ok"}
+	case "type":
+		err = service.TypeTarget(ctx, sessionID, args.PageID, locator, args.Text)
+		payload = map[string]string{"status": "ok"}
+	case "press":
+		err = service.Press(ctx, sessionID, args.PageID, args.Key)
+		payload = map[string]string{"status": "ok"}
+	case "wait":
+		err = service.Wait(ctx, sessionID, args.PageID, args.Text, args.TimeMS)
+		payload = map[string]string{"status": "ok"}
+	case "find":
+		payload, err = service.Find(ctx, sessionID, args.PageID, locator, args.MaxEntries)
+	case "fill_form":
+		payload, err = service.FillForm(ctx, sessionID, args.PageID, args.Fields)
+	case "upload_file":
+		paths, resolveErr := resolveBrowserUploadPaths(workspace, args.Path, args.Paths)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		err = service.UploadFiles(ctx, sessionID, args.PageID, locator, paths)
+		payload = map[string]interface{}{
+			"status":      "ok",
+			"uploaded":    len(paths),
+			"source_path": paths,
+		}
+	case "wait_network_idle":
+		err = service.WaitNetworkIdle(ctx, sessionID, args.PageID, args.NetworkIdleMS)
+		payload = map[string]string{"status": "ok"}
+	case "network_snapshot":
+		payload, err = service.NetworkSnapshot(ctx, sessionID, args.PageID, args.MaxEntries)
+	case "download":
+		payload, err = service.Download(ctx, sessionID, args.PageID, locator, args.URL, args.FileName)
+	case "screenshot":
+		var path string
+		path, err = service.Screenshot(ctx, sessionID, args.PageID, args.FullPage)
+		if err == nil {
+			payload = BrowserScreenshotResult{
+				PageID:                     strings.TrimSpace(args.PageID),
+				ArtifactPath:               path,
+				Kind:                       "image",
+				AutoAttachInSupportedReply: true,
+			}
+		}
+	case "capture_page":
+		payload, err = service.CapturePage(ctx, sessionID, args.PageID, args.URL, args.Text, args.TimeMS, args.NetworkIdleMS, args.FullPage, args.MaxChars)
+	case "search_and_open":
+		payload, err = service.SearchAndOpen(ctx, sessionID, args.PageID, args.URL, args.Query, args.NetworkIdleMS, args.MaxChars)
+	case "handoff":
+		payload, err = service.Handoff(ctx, sessionID, args.PageID, args.URL, args.Reason, args.MaxChars)
+	case "resume":
+		payload, err = service.ResumeHandoff(ctx, sessionID, args.PageID, args.MaxChars)
+	case "close":
+		err = service.Close(sessionID, args.PageID)
+		payload = map[string]string{"status": "ok"}
+	default:
+		return nil, fmt.Errorf("unknown browser action %q", action)
+	}
+	return payload, err
 }
 
 // browserViewPageID extracts the page the browser tool just operated on from

@@ -5,6 +5,9 @@ COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -s -w -X github.com/tim5wang/godex/internal/version.Version=$(VERSION) -X github.com/tim5wang/godex/internal/version.Commit=$(COMMIT) -X github.com/tim5wang/godex/internal/version.Date=$(BUILD_DATE)
 PPROF_FLAG = $(if $(strip $(PPROF_ADDR)),--pprof-addr=$(PPROF_ADDR),)
+GO_PACKAGES := ./cmd/... ./examples/... ./internal/...
+GO_TEST_PARALLEL ?= 4
+WEB_TEST_MAX_WORKERS ?= 4
 
 .PHONY: dev dev-fast dev-voice dev-frontend web web-dev web-typecheck web-clean docs-check smoke verify build-linux build-minimal release release-clean deploy-linux
 
@@ -12,15 +15,15 @@ PPROF_FLAG = $(if $(strip $(PPROF_ADDR)),--pprof-addr=$(PPROF_ADDR),)
 
 ## web:     Full production build (tsc type-check + vite bundle)
 web:
-	pnpm --dir ui/web build
+	cd ui/web && corepack pnpm build
 
 ## web-dev: Quick build for development (skip tsc, vite bundle only)
 web-dev:
-	pnpm --dir ui/web run dev:build
+	cd ui/web && corepack pnpm run dev:build
 
 ## web-typecheck: Run TypeScript type-checking only (CI gate)
 web-typecheck:
-	pnpm --dir ui/web run typecheck
+	cd ui/web && corepack pnpm run typecheck
 
 ## web-clean: Remove all web build artifacts
 web-clean:
@@ -38,18 +41,18 @@ smoke:
 
 ## verify: Run the local release-quality test, lint, docs, and Web UI gates
 verify:
-	go test ./... -count=1
-	go vet ./...
+	go test -p $(GO_TEST_PARALLEL) $(GO_PACKAGES) -count=1
+	go vet $(GO_PACKAGES)
 	$(MAKE) docs-check
-	pnpm --dir ui/web run typecheck
-	pnpm --dir ui/web test
-	pnpm --dir ui/web run dev:build
+	cd ui/web && corepack pnpm run typecheck
+	cd ui/web && corepack pnpm exec vitest run --maxWorkers=$(WEB_TEST_MAX_WORKERS)
+	cd ui/web && corepack pnpm run dev:build
 
 # ── Development targets ────────────────────────────────────────────
 
 ## dev-frontend: Start Vite dev server with HMR (standalone, use with a separate Go backend)
 dev-frontend:
-	cd ui/web && pnpm dev
+	cd ui/web && corepack pnpm dev
 
 ## dev-fast: Quick rebuild + service restart (skip tsc type-check, uses web-dev)
 # NOTE: use `mv` (atomic rename) to publish the binary, never `cp`/in-place
@@ -107,7 +110,7 @@ release: release-clean web
 		mkdir -p "$$stage"; \
 		echo "[release] build $$platform ($$goos/$$goarch)"; \
 		CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch go build -trimpath -ldflags "$(LDFLAGS)" -o "$$stage/$(APP)$$ext" ./cmd/godex; \
-		cp README.md README.en.md "$$stage/"; \
+		cp README.md "$$stage/"; \
 		tar -cf - -C "$(DIST_DIR)/.stage" "$$pkg" | gzip -9 > "$(DIST_DIR)/$$pkg.tar.gz"; \
 	}; \
 	build win-x86-64 windows amd64 .exe; \

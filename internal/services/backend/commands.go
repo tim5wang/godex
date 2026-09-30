@@ -240,173 +240,182 @@ func (s *Service) wireSlashCommandHandlers() {
 	if s.commands == nil {
 		return
 	}
-	s.commands.SetAgentTemplate(func(ctx context.Context, a *agent.Agent, cmd commands.Command) (commands.Result, error) {
-		args := append([]string(nil), cmd.Args...)
-		if len(args) == 0 || (len(args) == 1 && strings.EqualFold(strings.TrimSpace(args[0]), "list")) {
-			items, err := s.ListAgentTemplates()
-			if err != nil {
-				return commands.Result{}, err
-			}
-			currentID := strings.TrimSpace(a.TemplateID())
-			if currentID == "" {
-				currentID = "default"
-			}
-			lines := []string{"Agent templates:"}
-			for _, item := range items {
-				marker := " "
-				if item.ID == currentID {
-					marker = "*"
-				}
-				line := fmt.Sprintf("%s %s", marker, item.ID)
-				if name := strings.TrimSpace(item.Name); name != "" && name != item.ID {
-					line += " — " + name
-				}
-				lines = append(lines, line)
-			}
-			lines = append(lines, "", "Switch with: /agent <template-id>")
-			return commands.Result{Name: "agent", Output: strings.Join(lines, "\n")}, nil
-		}
+	s.commands.SetAgentTemplate(s.handleAgentTemplateSlashCommand)
+	s.commands.SetNewSession(s.handleNewSessionSlashCommand)
+	s.commands.SetResumeSession(s.handleResumeSessionSlashCommand)
+}
 
-		templateID := ""
-		switch {
-		case len(args) == 1:
-			templateID = strings.TrimSpace(args[0])
-		case len(args) == 2 && strings.EqualFold(strings.TrimSpace(args[0]), "use"):
-			templateID = strings.TrimSpace(args[1])
-		default:
-			return commands.Result{}, fmt.Errorf("usage: /agent [list|use <template-id>|<template-id>]")
-		}
-		if templateID == "" {
-			return commands.Result{}, fmt.Errorf("usage: /agent [list|use <template-id>|<template-id>]")
-		}
-		sessionCtx, ok := commands.CurrentSessionContext(ctx)
-		if !ok || strings.TrimSpace(sessionCtx.SessionID) == "" {
-			return commands.Result{}, fmt.Errorf("current session context is unavailable")
-		}
-		tmpl, warnings, err := s.ValidateAgentTemplate(templateID)
+func (s *Service) handleAgentTemplateSlashCommand(
+	ctx context.Context,
+	a *agent.Agent,
+	cmd commands.Command,
+) (commands.Result, error) {
+	args := append([]string(nil), cmd.Args...)
+	if len(args) == 0 || (len(args) == 1 && strings.EqualFold(strings.TrimSpace(args[0]), "list")) {
+		items, err := s.ListAgentTemplates()
 		if err != nil {
 			return commands.Result{}, err
 		}
-		oldEngine := a.TemplateEngine()
-		if err := s.ApplyTemplateToSession(sessionCtx.SessionID, tmpl.ID); err != nil {
-			return commands.Result{}, err
+		currentID := strings.TrimSpace(a.TemplateID())
+		if currentID == "" {
+			currentID = "default"
 		}
-		lines := []string{fmt.Sprintf("Agent template switched to %s (%s).", tmpl.Name, tmpl.ID)}
-		if newEngine := a.TemplateEngine(); newEngine != oldEngine {
-			lines = append(lines, fmt.Sprintf("Harness changed from %s to %s; the new harness starts its own external context on the next turn.", oldEngine, newEngine))
+		lines := []string{"Agent templates:"}
+		for _, item := range items {
+			marker := " "
+			if item.ID == currentID {
+				marker = "*"
+			}
+			line := fmt.Sprintf("%s %s", marker, item.ID)
+			if name := strings.TrimSpace(item.Name); name != "" && name != item.ID {
+				line += " — " + name
+			}
+			lines = append(lines, line)
 		}
-		for _, warning := range warnings {
-			lines = append(lines, "Warning: "+warning)
-		}
-		return commands.Result{Name: "agent", Output: strings.Join(lines, "\n"), RefreshSnapshot: true}, nil
-	})
-	s.commands.SetNewSession(func(ctx context.Context, a *agent.Agent, cmd commands.Command) (commands.Result, error) {
-		locator, err := s.CreateNewSession(ctx)
-		if err != nil {
-			return commands.Result{}, err
-		}
+		lines = append(lines, "", "Switch with: /agent <template-id>")
+		return commands.Result{Name: "agent", Output: strings.Join(lines, "\n")}, nil
+	}
 
-		projectDir := ""
-		if s.cfg != nil {
-			projectDir = strings.TrimSpace(s.cfg.WorkspaceDir)
-			if projectDir == "" {
-				projectDir = strings.TrimSpace(s.cfg.ProjectDir)
-			}
-		}
+	templateID := ""
+	switch {
+	case len(args) == 1:
+		templateID = strings.TrimSpace(args[0])
+	case len(args) == 2 && strings.EqualFold(strings.TrimSpace(args[0]), "use"):
+		templateID = strings.TrimSpace(args[1])
+	default:
+		return commands.Result{}, fmt.Errorf("usage: /agent [list|use <template-id>|<template-id>]")
+	}
+	if templateID == "" {
+		return commands.Result{}, fmt.Errorf("usage: /agent [list|use <template-id>|<template-id>]")
+	}
+	sessionCtx, ok := commands.CurrentSessionContext(ctx)
+	if !ok || strings.TrimSpace(sessionCtx.SessionID) == "" {
+		return commands.Result{}, fmt.Errorf("current session context is unavailable")
+	}
+	tmpl, warnings, err := s.ValidateAgentTemplate(templateID)
+	if err != nil {
+		return commands.Result{}, err
+	}
+	oldEngine := a.TemplateEngine()
+	if err := s.ApplyTemplateToSession(sessionCtx.SessionID, tmpl.ID); err != nil {
+		return commands.Result{}, err
+	}
+	lines := []string{fmt.Sprintf("Agent template switched to %s (%s).", tmpl.Name, tmpl.ID)}
+	if newEngine := a.TemplateEngine(); newEngine != oldEngine {
+		lines = append(lines, fmt.Sprintf("Harness changed from %s to %s; the new harness starts its own external context on the next turn.", oldEngine, newEngine))
+	}
+	for _, warning := range warnings {
+		lines = append(lines, "Warning: "+warning)
+	}
+	return commands.Result{Name: "agent", Output: strings.Join(lines, "\n"), RefreshSnapshot: true}, nil
+}
 
-		output := fmt.Sprintf("✓ New session created.\n\nSession: %s:%s", locator.Channel, locator.Key)
-		if projectDir != "" {
-			output += fmt.Sprintf("\nWorkspace: %s", projectDir)
+func (s *Service) handleNewSessionSlashCommand(
+	ctx context.Context,
+	_ *agent.Agent,
+	_ commands.Command,
+) (commands.Result, error) {
+	locator, err := s.CreateNewSession(ctx)
+	if err != nil {
+		return commands.Result{}, err
+	}
+	projectDir := ""
+	if s.cfg != nil {
+		projectDir = strings.TrimSpace(s.cfg.WorkspaceDir)
+		if projectDir == "" {
+			projectDir = strings.TrimSpace(s.cfg.ProjectDir)
 		}
-		output += "\n\nSwitched to the new session. Next time you run godex in this directory, it will open this session."
+	}
+	output := fmt.Sprintf("✓ New session created.\n\nSession: %s:%s", locator.Channel, locator.Key)
+	if projectDir != "" {
+		output += fmt.Sprintf("\nWorkspace: %s", projectDir)
+	}
+	output += "\n\nSwitched to the new session. Next time you run godex in this directory, it will open this session."
+	return commands.Result{Name: "new", Output: output}, nil
+}
 
-		return commands.Result{
-			Name:   "new",
-			Output: output,
-		}, nil
-	})
+func (s *Service) handleResumeSessionSlashCommand(
+	ctx context.Context,
+	_ *agent.Agent,
+	cmd commands.Command,
+) (commands.Result, error) {
+	allSessions, err := s.ListSessions(ctx, SessionListFilter{})
+	if err != nil {
+		return commands.Result{}, err
+	}
+	query := strings.TrimSpace(strings.Join(cmd.Args, " "))
+	if query != "" {
+		return resumeSessionSearchResult(allSessions, query), nil
+	}
+	return resumeSessionListResult(allSessions, s.currentProjectDir()), nil
+}
 
-	s.commands.SetResumeSession(func(ctx context.Context, a *agent.Agent, cmd commands.Command) (commands.Result, error) {
-		allSessions, err := s.ListSessions(ctx, SessionListFilter{})
-		if err != nil {
-			return commands.Result{}, err
+func resumeSessionSearchResult(allSessions []ListedSession, query string) commands.Result {
+	var matched []ListedSession
+	queryLower := strings.ToLower(query)
+	for _, session := range allSessions {
+		if strings.HasPrefix(strings.ToLower(session.SessionID), queryLower) ||
+			strings.EqualFold(session.Locator.Key, query) ||
+			strings.Contains(strings.ToLower(session.Title), queryLower) {
+			matched = append(matched, session)
 		}
+	}
+	if len(matched) == 0 {
+		return commands.Result{Name: "resume", Output: fmt.Sprintf("No session found matching %q.", query)}
+	}
+	lines := []string{fmt.Sprintf("Sessions matching %q:", query)}
+	for _, session := range matched {
+		lines = append(lines, formatSessionLine(session))
+	}
+	lines = append(lines, "", "To resume a session, restart godex with: godex tui --session <channel:key>")
+	return commands.Result{Name: "resume", Output: strings.Join(lines, "\n")}
+}
 
-		// If args are provided, filter by session ID or name/key
-		query := strings.TrimSpace(strings.Join(cmd.Args, " "))
-		if query != "" {
-			var matched []ListedSession
-			queryLower := strings.ToLower(query)
-			for _, session := range allSessions {
-				if strings.HasPrefix(strings.ToLower(session.SessionID), queryLower) ||
-					strings.EqualFold(session.Locator.Key, query) ||
-					strings.Contains(strings.ToLower(session.Title), queryLower) {
-					matched = append(matched, session)
-				}
-			}
-			if len(matched) == 0 {
-				return commands.Result{Name: "resume", Output: fmt.Sprintf("No session found matching %q.", query)}, nil
-			}
-			var lines []string
-			lines = append(lines, fmt.Sprintf("Sessions matching %q:", query))
-			for _, session := range matched {
-				lines = append(lines, formatSessionLine(session))
-			}
-			lines = append(lines, "", "To resume a session, restart godex with: godex tui --session <channel:key>")
-			return commands.Result{
-				Name:   "resume",
-				Output: strings.Join(lines, "\n"),
-			}, nil
+func resumeSessionListResult(allSessions []ListedSession, currentProjectDir string) commands.Result {
+	var current, others []ListedSession
+	for _, session := range allSessions {
+		sessionProjectDir := ""
+		if session.Locator.Metadata != nil {
+			sessionProjectDir = cleanProjectDir(session.Locator.Metadata[sessionProjectDirMetadataKey])
 		}
+		if currentProjectDir != "" && sessionProjectDir == currentProjectDir {
+			current = append(current, session)
+		} else {
+			others = append(others, session)
+		}
+	}
+	var lines []string
+	if len(current) > 0 {
+		lines = append(lines, fmt.Sprintf("Sessions for %s:", currentProjectDir))
+		for _, session := range current {
+			lines = append(lines, formatSessionLine(session))
+		}
+	}
+	if len(others) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "Other sessions:")
+		for _, session := range others {
+			lines = append(lines, formatSessionLine(session))
+		}
+	}
+	if len(lines) == 0 {
+		return commands.Result{Name: "resume", Output: "No saved sessions found."}
+	}
+	lines = append(lines, "", "To resume a session, restart godex with: godex tui --session <channel:key>")
+	return commands.Result{Name: "resume", Output: strings.Join(lines, "\n")}
+}
 
-		currentProjectDir := ""
-		if s.cfg != nil {
-			currentProjectDir = strings.TrimSpace(s.cfg.WorkspaceDir)
-			if currentProjectDir == "" {
-				currentProjectDir = strings.TrimSpace(s.cfg.ProjectDir)
-			}
-		}
-		currentProjectDir = cleanProjectDir(currentProjectDir)
-
-		var current, others []ListedSession
-		for _, session := range allSessions {
-			sessionProjectDir := ""
-			if session.Locator.Metadata != nil {
-				sessionProjectDir = cleanProjectDir(session.Locator.Metadata[sessionProjectDirMetadataKey])
-			}
-			if currentProjectDir != "" && sessionProjectDir == currentProjectDir {
-				current = append(current, session)
-			} else {
-				others = append(others, session)
-			}
-		}
-
-		var lines []string
-		if len(current) > 0 {
-			lines = append(lines, fmt.Sprintf("Sessions for %s:", currentProjectDir))
-			for _, session := range current {
-				lines = append(lines, formatSessionLine(session))
-			}
-		}
-		if len(others) > 0 {
-			if len(lines) > 0 {
-				lines = append(lines, "")
-			}
-			lines = append(lines, "Other sessions:")
-			for _, session := range others {
-				lines = append(lines, formatSessionLine(session))
-			}
-		}
-		if len(lines) == 0 {
-			return commands.Result{Name: "resume", Output: "No saved sessions found."}, nil
-		}
-		lines = append(lines, "", "To resume a session, restart godex with: godex tui --session <channel:key>")
-
-		return commands.Result{
-			Name:   "resume",
-			Output: strings.Join(lines, "\n"),
-		}, nil
-	})
+func (s *Service) currentProjectDir() string {
+	if s.cfg == nil {
+		return ""
+	}
+	projectDir := strings.TrimSpace(s.cfg.WorkspaceDir)
+	if projectDir == "" {
+		projectDir = strings.TrimSpace(s.cfg.ProjectDir)
+	}
+	return cleanProjectDir(projectDir)
 }
 
 // formatSessionLine renders one listed session as: name · date · ID · working-dir.

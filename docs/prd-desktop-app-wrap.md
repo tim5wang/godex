@@ -1,6 +1,6 @@
 # PRD: godex 桌面版 + App 版（轻量级系统浏览器内核包装）
 
-> 状态：草案（调研产出，待评审）
+> 状态：Draft（调研产出，待评审）
 > 日期：2026-09-05
 > 关联：任务卡 t-1788517972939-2；godex v1.4.0
 > 调研方式：官方文档核实（tauri.app、web.dev、MDN、npm registry）+ 领域知识交叉确认；当日 web_search 通道故障（见 docs/tools_issues.md），部分数据点以官方文档/既有知识为准

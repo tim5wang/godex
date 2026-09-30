@@ -9,7 +9,7 @@ GO_PACKAGES := ./cmd/... ./examples/... ./internal/...
 GO_TEST_PARALLEL ?= 4
 WEB_TEST_MAX_WORKERS ?= 4
 
-.PHONY: dev dev-fast dev-voice dev-frontend web web-dev web-typecheck web-clean docs-check smoke verify build-linux build-minimal release release-clean deploy-linux
+.PHONY: dev dev-fast dev-voice dev-frontend web web-dev web-typecheck web-bundle-check web-clean docs-check smoke verify build-linux build-minimal release release-clean deploy-linux
 
 # ── Web UI build targets ───────────────────────────────────────────
 
@@ -24,6 +24,11 @@ web-dev:
 ## web-typecheck: Run TypeScript type-checking only (CI gate)
 web-typecheck:
 	cd ui/web && corepack pnpm run typecheck
+
+## web-bundle-check: Build the embedded Web UI and enforce cold-route gzip budgets
+web-bundle-check:
+	cd ui/web && corepack pnpm exec vite build --manifest
+	node scripts/check_web_bundle.mjs
 
 ## web-clean: Remove all web build artifacts
 web-clean:
@@ -46,7 +51,7 @@ verify:
 	$(MAKE) docs-check
 	cd ui/web && corepack pnpm run typecheck
 	cd ui/web && corepack pnpm exec vitest run --maxWorkers=$(WEB_TEST_MAX_WORKERS)
-	cd ui/web && corepack pnpm run dev:build
+	$(MAKE) web-bundle-check
 
 # ── Development targets ────────────────────────────────────────────
 
@@ -111,6 +116,14 @@ release: release-clean web
 		echo "[release] build $$platform ($$goos/$$goarch)"; \
 		CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch go build -trimpath -ldflags "$(LDFLAGS)" -o "$$stage/$(APP)$$ext" ./cmd/godex; \
 		cp README.md "$$stage/"; \
+		node scripts/release_manifest.mjs package \
+			--stage-dir "$$stage" \
+			--app "$(APP)" \
+			--version "$(VERSION)" \
+			--commit "$(COMMIT)" \
+			--build-date "$(BUILD_DATE)" \
+			--platform "$$platform" \
+			--binary "$(APP)$$ext"; \
 		tar -cf - -C "$(DIST_DIR)/.stage" "$$pkg" | gzip -9 > "$(DIST_DIR)/$$pkg.tar.gz"; \
 	}; \
 	build win-x86-64 windows amd64 .exe; \
@@ -118,6 +131,12 @@ release: release-clean web
 	build mac-apple darwin arm64 ""; \
 	build linux-x86-64 linux amd64 ""; \
 	rm -rf "$(DIST_DIR)/.stage"; \
+	node scripts/release_manifest.mjs index \
+		--dist-dir "$(DIST_DIR)" \
+		--app "$(APP)" \
+		--version "$(VERSION)" \
+		--commit "$(COMMIT)" \
+		--build-date "$(BUILD_DATE)"; \
 	ls -lh "$(DIST_DIR)"/*.tar.gz
 
 release-clean:

@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
-	minitui "github.com/tim5wang/min-tui"
 	rtbackend "github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/tools"
+	minitui "github.com/tim5wang/min-tui"
 )
 
 // waitForExecute polls until the fake backend has observed the given
@@ -61,13 +61,14 @@ type fakeBackend struct {
 	snap rtbackend.Snapshot
 	ctx  tools.ContextInspection
 
-	executeMu    sync.Mutex
-	submitCalls  int
-	asyncCalls   int
-	executeCalls int
-	cancelCalls  int
+	executeMu     sync.Mutex
+	submitCalls   int
+	asyncCalls    int
+	executeCalls  int
+	cancelCalls   int
 	lastSubmitted string
 	lastCancelled string
+	lastCommand   commands.Command
 
 	// longtask surface — tests populate these to drive the
 	// Ctrl+B popup scenarios.  Errors are checked first so a
@@ -120,6 +121,7 @@ func (f *fakeBackend) CancelTurn(ctx context.Context, id, turnID string) (*rtbac
 func (f *fakeBackend) ExecuteCommand(ctx context.Context, id string, cmd commands.Command) (commands.Result, error) {
 	f.executeMu.Lock()
 	f.executeCalls++
+	f.lastCommand = cmd
 	f.executeMu.Unlock()
 	return commands.Result{Name: cmd.Name, Output: "ok"}, nil
 }
@@ -270,7 +272,7 @@ func TestDispatchRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	b := newFakeBackend()
 	s := New(&config.Config{LeadName: "lead"}, b, &strings.Builder{}, &strings.Builder{})
 
-	if err := s.dispatchInput(context.Background(), b.sess.SessionID, "/help"); err != nil {
+	if err := s.dispatchInput(context.Background(), b.sess.SessionID, "/mcp list"); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	// dispatchInput runs slash commands asynchronously; wait for the
@@ -278,6 +280,12 @@ func TestDispatchRoutesSlashCommandToExecuteCommand(t *testing.T) {
 	waitForExecute(t, b, 1)
 	if b.asyncCalls != 0 {
 		t.Fatalf("SubmitAsync should not have been called for slash commands")
+	}
+	b.executeMu.Lock()
+	dispatched := b.lastCommand
+	b.executeMu.Unlock()
+	if dispatched.Name != "mcp" || len(dispatched.Args) != 1 || dispatched.Args[0] != "list" {
+		t.Fatalf("expected /mcp list to reach ExecuteCommand, got %+v", dispatched)
 	}
 }
 
@@ -324,10 +332,10 @@ func TestSlashCommandDoesNotOverwriteStatusBar(t *testing.T) {
 // "128.0k/512k 25%" which cluttered the status bar.
 func TestCtxPctFormatsAsIntegerK(t *testing.T) {
 	cases := []struct {
-		name   string
-		used   int
-		total  int
-		want   string
+		name  string
+		used  int
+		total int
+		want  string
 	}{
 		{"evenly_divisible", 128000, 512000, "128k/512k 25%"},
 		{"rounds_up", 128500, 512000, "129k/512k 25%"},
@@ -699,6 +707,7 @@ func TestWriteUserTurnUsesBlockquoteSyntax(t *testing.T) {
 type capturingTUI struct {
 	buf bytes.Buffer
 
+	commands    []minitui.SlashCommand
 	popups      []minitui.Popup
 	globalKeyFn func(minitui.KeyEvent) bool
 }
@@ -706,7 +715,9 @@ type capturingTUI struct {
 func (c *capturingTUI) WriteString(s string) (int, error) { return c.buf.WriteString(s) }
 func (c *capturingTUI) SetStatus(string, minitui.StatusStyle) {
 }
-func (c *capturingTUI) RegisterCommand(minitui.SlashCommand) {}
+func (c *capturingTUI) RegisterCommand(cmd minitui.SlashCommand) {
+	c.commands = append(c.commands, cmd)
+}
 
 func (c *capturingTUI) PushPopup(p minitui.Popup) { c.popups = append(c.popups, p) }
 func (c *capturingTUI) PopPopup()                 { /* no-op; tests do not model a real stack */ }
@@ -722,6 +733,31 @@ func newSessionWithCapturingTUI() (*Session, *capturingTUI) {
 	tui := &capturingTUI{}
 	s.tui = tui
 	return s, tui
+}
+
+func TestRegisterSlashCommandsIncludesSkillAndMCPUsage(t *testing.T) {
+	s, tui := newSessionWithCapturingTUI()
+	s.registerSlashCommands()
+
+	byName := make(map[string]minitui.SlashCommand, len(tui.commands))
+	for _, cmd := range tui.commands {
+		byName[cmd.Name] = cmd
+	}
+	for name, usage := range map[string]string{
+		"skills": "usage: /skills",
+		"mcp":    "usage: /mcp list|tools <server>|load <server>",
+	} {
+		cmd, ok := byName[name]
+		if !ok {
+			t.Fatalf("expected /%s to be registered with TUI", name)
+		}
+		if !strings.Contains(cmd.Description, usage) {
+			t.Fatalf("expected /%s usage in TUI description, got %q", name, cmd.Description)
+		}
+		if cmd.Handler == nil {
+			t.Fatalf("expected /%s handler", name)
+		}
+	}
 }
 
 // TestWriteUserTurnLiveHasLeadingBlank pins the live-rendering

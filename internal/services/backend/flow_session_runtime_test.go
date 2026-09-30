@@ -56,6 +56,130 @@ func flowSessionLLMWorkerDefinition(flowID string) *flow.Definition {
 	}
 }
 
+func TestFlowSessionRuntimeRejectsSecondServiceForSharedStateDirectory(t *testing.T) {
+	cfg := newTestConfig(t)
+	firstService := newTestService(cfg, nil)
+	secondService := newTestService(cfg, nil)
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	if err := firstService.Start(firstCtx); err != nil {
+		cancelFirst()
+		t.Fatalf("start first service: %v", err)
+	}
+
+	if err := secondService.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "already owned") {
+		cancelFirst()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer stopCancel()
+		_ = firstService.Stop(stopCtx)
+		t.Fatalf("expected shared state directory ownership error, got %v", err)
+	}
+
+	cancelFirst()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer stopCancel()
+	if err := firstService.Stop(stopCtx); err != nil {
+		t.Fatalf("stop first service: %v", err)
+	}
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	if err := secondService.Start(secondCtx); err != nil {
+		cancelSecond()
+		t.Fatalf("start second service after first stopped: %v", err)
+	}
+	cancelSecond()
+	if err := secondService.Stop(stopCtx); err != nil {
+		t.Fatalf("stop second service: %v", err)
+	}
+}
+
+func TestFlowSessionRuntimeKeepsLockUntilWorkersExitAfterStopTimeout(t *testing.T) {
+	cfg := newTestConfig(t)
+	firstService := newTestService(cfg, nil)
+	secondService := newTestService(cfg, nil)
+	def := flowSessionWorkerDefinition("fl_session_stop_timeout_lock")
+	if _, err := firstService.CreateFlow(agent.FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create session flow: %v", err)
+	}
+	session, err := firstService.CreateFlowSession(def.FlowID, def.Version, nil)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := firstService.Start(ctx); err != nil {
+		cancel()
+		t.Fatalf("start first service: %v", err)
+	}
+	workerStarted := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	var workerStartedOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseWorker) }) }
+	t.Cleanup(func() {
+		release()
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer stopCancel()
+		if err := firstService.Stop(stopCtx); err != nil {
+			t.Errorf("stop first service: %v", err)
+		}
+	})
+	firstService.currentFlowSessionScheduler().workRunner = func(
+		_ context.Context,
+		_ *agent.Agent,
+		_ *agent.FlowSessionWork,
+	) (agent.FlowSessionWorkResult, error) {
+		workerStartedOnce.Do(func() { close(workerStarted) })
+		<-releaseWorker
+		return agent.FlowSessionWorkResult{}, nil
+	}
+	if _, err := firstService.AppendFlowSessionEvent(def.FlowID, session.SessionID, agent.FlowSessionEventInput{
+		Source: "test-adapter",
+		Type:   "tick",
+	}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	select {
+	case <-workerStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("blocking worker did not start")
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err = firstService.Stop(stopCtx)
+	stopCancel()
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected stop timeout while worker remains active, got %v", err)
+	}
+	if err := secondService.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "already owned") {
+		release()
+		t.Fatalf("expected state lock to remain held while worker exits, got %v", err)
+	}
+
+	release()
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		err := secondService.Start(secondCtx)
+		if err == nil {
+			cancelSecond()
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer stopCancel()
+			if err := secondService.Stop(stopCtx); err != nil {
+				t.Fatalf("stop second service: %v", err)
+			}
+			return
+		}
+		if !strings.Contains(err.Error(), "already owned") && !strings.Contains(err.Error(), "still stopping") {
+			t.Fatalf("unexpected retry after old worker exit: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("state lock was not released after all FlowSession workers exited")
+}
+
 func TestFlowSessionLLMNodeRunsThroughBoundedAsyncWorker(t *testing.T) {
 	cfg := newTestConfig(t)
 	caller := &stubCaller{responses: []protocol.Response{{
@@ -119,6 +243,122 @@ func TestFlowSessionLLMNodeRunsThroughBoundedAsyncWorker(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("session scheduler did not commit the asynchronous LLM result")
+}
+
+func TestFlowSessionLLMResultBeforeCheckpointReplaysAfterRestart(t *testing.T) {
+	cfg := newTestConfig(t)
+	caller := &stubCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.TextBlock(`{"answer":"first","session_state":{"answer":"first"}}`)}},
+		{Content: []protocol.Block{protocol.TextBlock(`{"answer":"replayed","session_state":{"answer":"replayed"}}`)}},
+	}}
+	firstService := newTestService(cfg, caller)
+	def := flowSessionLLMWorkerDefinition("fl_session_llm_checkpoint_restart")
+	if _, err := firstService.CreateFlow(agent.FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create session flow: %v", err)
+	}
+	session, err := firstService.CreateFlowSession(def.FlowID, def.Version, nil)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := firstService.Start(ctx); err != nil {
+		cancel()
+		t.Fatalf("start first service: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer stopCancel()
+		if err := firstService.Stop(stopCtx); err != nil {
+			t.Errorf("stop first service: %v", err)
+		}
+	})
+	resultReady := make(chan struct{})
+	var firstResult atomic.Bool
+	firstService.currentFlowSessionScheduler().workRunner = func(
+		ctx context.Context,
+		a *agent.Agent,
+		work *agent.FlowSessionWork,
+	) (agent.FlowSessionWorkResult, error) {
+		result, err := a.ExecuteFlowSessionWork(ctx, work)
+		if err == nil && firstResult.CompareAndSwap(false, true) {
+			close(resultReady)
+			<-ctx.Done()
+		}
+		return result, err
+	}
+	if _, err := firstService.AppendFlowSessionEvent(def.FlowID, session.SessionID, agent.FlowSessionEventInput{
+		Source:  "test-adapter",
+		Type:    "turn.update",
+		Payload: json.RawMessage(`{"text":"hello"}`),
+	}); err != nil {
+		cancel()
+		t.Fatalf("append event: %v", err)
+	}
+	select {
+	case <-resultReady:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("LLM result did not reach the pre-checkpoint fault boundary")
+	}
+
+	view, err := firstService.GetFlowSession(def.FlowID, session.SessionID)
+	if err != nil {
+		cancel()
+		t.Fatalf("read uncommitted session: %v", err)
+	}
+	if view.ProcessedSequence != 0 {
+		cancel()
+		t.Fatalf("LLM result should not be checkpointed before the injected crash: %+v", view)
+	}
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer stopCancel()
+	if err := firstService.Stop(stopCtx); err != nil {
+		t.Fatalf("stop first service: %v", err)
+	}
+
+	restartedService := newTestService(cfg, caller)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	if err := restartedService.Start(ctx2); err != nil {
+		cancel2()
+		t.Fatalf("start restarted service: %v", err)
+	}
+	defer func() {
+		cancel2()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cleanupCancel()
+		if err := restartedService.Stop(cleanupCtx); err != nil {
+			t.Errorf("stop restarted service: %v", err)
+		}
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := restartedService.GetFlowSession(def.FlowID, session.SessionID)
+		if err != nil {
+			t.Fatalf("read recovered session: %v", err)
+		}
+		if view.ProcessedSequence >= 1 && view.State["answer"] != nil {
+			if view.State["answer"] != "replayed" {
+				t.Fatalf("expected replayed LLM result, got %#v", view.State)
+			}
+			caller.mu.Lock()
+			calls := caller.calls
+			caller.mu.Unlock()
+			if calls != 2 {
+				t.Fatalf("expected provider result to be requested again after pre-checkpoint crash, got %d calls", calls)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	view, viewErr := restartedService.GetFlowSession(def.FlowID, session.SessionID)
+	caller.mu.Lock()
+	calls := caller.calls
+	caller.mu.Unlock()
+	t.Fatalf("restarted service did not replay the uncheckpointed LLM result: view=%+v view_error=%v calls=%d", view, viewErr, calls)
 }
 
 func TestFlowSessionTurnInterruptSkipsOldWorkAndFencesLateResult(t *testing.T) {
@@ -555,6 +795,175 @@ func TestFlowSessionAsyncServiceRegionUsesEventSessionContextAndCommitsDownstrea
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("async service region did not commit the event")
+}
+
+func TestFlowSessionServiceSideEffectReplayUsesStableIdempotencyKey(t *testing.T) {
+	var requests atomic.Int32
+	var effects atomic.Int32
+	var invalidKey atomic.Bool
+	var seenKeys sync.Map
+	var expectedKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("Idempotency-Key")
+		if key != expectedKey {
+			invalidKey.Store(true)
+		}
+		requests.Add(1)
+		if _, loaded := seenKeys.LoadOrStore(key, struct{}{}); !loaded {
+			effects.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"answer":"accepted"}`))
+	}))
+	defer server.Close()
+
+	cfg := newTestConfig(t)
+	firstService := newTestService(cfg, nil)
+	def := &flow.Definition{
+		FlowID:        "fl_session_service_checkpoint_restart",
+		Version:       "1",
+		Status:        "draft",
+		ExecutionMode: flow.ExecutionModeSession,
+		SessionWorkflow: &flow.SessionWorkflowSpec{Triggers: []flow.SessionTrigger{
+			{EventType: "turn.update", EntryNode: "dispatch"},
+		}},
+		Network: &flow.NetworkPolicy{
+			Policy:            "allowlist",
+			AllowedDomains:    []string{"127.0.0.1"},
+			AllowPrivateHosts: true,
+			TimeoutSeconds:    2,
+		},
+		Nodes: []flow.Node{
+			{
+				ID:         "dispatch",
+				Kind:       flow.KindService,
+				TimeoutSec: 5,
+				Service: &flow.ServiceSpec{
+					Method: "POST",
+					URL:    server.URL + "/effects",
+					Headers: map[string]string{
+						"Idempotency-Key": "{{event.flow_session_id}}:{{event.sequence}}",
+					},
+					Body: json.RawMessage(`{"text":"{{event.payload.text}}"}`),
+				},
+				Outputs: []flow.VarDef{
+					{Name: "status_code", Type: "number"},
+					{Name: "body", Type: "object"},
+				},
+			},
+			{
+				ID:   "finish",
+				Kind: flow.KindFunction,
+				Function: &flow.FunctionSpec{
+					Runtime: flow.FunctionRuntimeJS,
+					Source:  `function handle(ctx) { return {session_state: {answer: ctx.outputs.dispatch.body.answer}}; }`,
+				},
+				Outputs: []flow.VarDef{{Name: "session_state", Type: "object"}},
+			},
+		},
+		Edges: []flow.Edge{
+			{ID: "dispatch-finish", From: "dispatch", To: "finish", EdgeType: flow.EdgeDataDependency},
+		},
+	}
+	if _, err := firstService.CreateFlow(agent.FlowCreateArgs{Def: def}); err != nil {
+		t.Fatalf("create session flow: %v", err)
+	}
+	session, err := firstService.CreateFlowSession(def.FlowID, def.Version, nil)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	expectedKey = session.SessionID + ":1"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := firstService.Start(ctx); err != nil {
+		cancel()
+		t.Fatalf("start first service: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer stopCancel()
+		if err := firstService.Stop(stopCtx); err != nil {
+			t.Errorf("stop first service: %v", err)
+		}
+	})
+
+	resultReady := make(chan struct{})
+	var firstResult atomic.Bool
+	firstService.currentFlowSessionScheduler().workRunner = func(
+		ctx context.Context,
+		a *agent.Agent,
+		work *agent.FlowSessionWork,
+	) (agent.FlowSessionWorkResult, error) {
+		result, err := a.ExecuteFlowSessionWork(ctx, work)
+		if err == nil && firstResult.CompareAndSwap(false, true) {
+			close(resultReady)
+			<-ctx.Done()
+		}
+		return result, err
+	}
+	if _, err := firstService.AppendFlowSessionEvent(def.FlowID, session.SessionID, agent.FlowSessionEventInput{
+		Source:  "test-adapter",
+		Type:    "turn.update",
+		Payload: json.RawMessage(`{"text":"hello"}`),
+	}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	select {
+	case <-resultReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("side-effect result did not reach the pre-checkpoint fault boundary")
+	}
+	if requests.Load() != 1 || effects.Load() != 1 {
+		t.Fatalf("first execution should make one request and one effect, got requests=%d effects=%d", requests.Load(), effects.Load())
+	}
+	view, err := firstService.GetFlowSession(def.FlowID, session.SessionID)
+	if err != nil {
+		t.Fatalf("read uncommitted session: %v", err)
+	}
+	if view.ProcessedSequence != 0 {
+		t.Fatalf("service result should not be checkpointed before the injected crash: %+v", view)
+	}
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer stopCancel()
+	if err := firstService.Stop(stopCtx); err != nil {
+		t.Fatalf("stop first service: %v", err)
+	}
+
+	restartedService := newTestService(cfg, nil)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	if err := restartedService.Start(ctx2); err != nil {
+		cancel2()
+		t.Fatalf("start restarted service: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel2()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer stopCancel()
+		if err := restartedService.Stop(stopCtx); err != nil {
+			t.Errorf("stop restarted service: %v", err)
+		}
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := restartedService.GetFlowSession(def.FlowID, session.SessionID)
+		if err != nil {
+			t.Fatalf("read recovered session: %v", err)
+		}
+		if view.ProcessedSequence >= 1 && view.State["answer"] != nil {
+			if view.State["answer"] != "accepted" {
+				t.Fatalf("expected replayed side-effect result, got %#v", view.State)
+			}
+			if invalidKey.Load() || requests.Load() != 2 || effects.Load() != 1 {
+				t.Fatalf("replay must reuse the idempotency key and avoid a duplicate effect: invalid_key=%t requests=%d effects=%d", invalidKey.Load(), requests.Load(), effects.Load())
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("restarted service did not replay the uncommitted service result")
 }
 
 func TestFlowSessionSlowFunctionDoesNotBlockDurableIngress(t *testing.T) {

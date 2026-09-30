@@ -62,6 +62,8 @@ func (s *Service) executeExtended(ctx context.Context, a *agent.Agent, cmd Comma
 	switch cmd.Name {
 	case "skills":
 		return s.executeSkills(a, cmd)
+	case "mcp":
+		return s.executeMCP(ctx, a, cmd)
 	case "packages":
 		return s.executePackages(cmd)
 	case "memory":

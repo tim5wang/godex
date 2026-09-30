@@ -17,6 +17,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
 	"github.com/tim5wang/godex/internal/domain/todo"
+	"github.com/tim5wang/godex/internal/platform/processlock"
 	"github.com/tim5wang/godex/internal/pluginrt"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/services/commands"
@@ -364,6 +365,8 @@ type Service struct {
 	flowReconcilerCancel context.CancelFunc
 	flowReconcilerDone   chan struct{}
 	flowSessionScheduler *flowSessionScheduler
+	flowSessionStateLock *processlock.Lock
+	flowSessionStopping  bool
 }
 
 type sessionLockContextKey struct{}

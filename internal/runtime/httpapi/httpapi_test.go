@@ -773,13 +773,16 @@ func TestListCommandsReturnsBuiltinSlashCommandMetadata(t *testing.T) {
 	// The web composer slash palette depends on these core commands being
 	// discoverable; pin a representative subset so a refactor of
 	// AvailableMetadata cannot silently drop them.
-	for _, name := range []string{"bash", "clear", "compact", "skills", "model", "help"} {
+	for _, name := range []string{"bash", "clear", "compact", "skills", "mcp", "model", "help"} {
 		if _, ok := byName[name]; !ok {
 			t.Fatalf("expected builtin command %q in /commands response", name)
 		}
 	}
 	if byName["bash"].InputHint == "" {
 		t.Fatalf("expected input hint for /bash, got %+v", byName["bash"])
+	}
+	if !strings.Contains(byName["mcp"].InputHint, "tools <server>") {
+		t.Fatalf("expected MCP input hint in /commands response, got %+v", byName["mcp"])
 	}
 }
 

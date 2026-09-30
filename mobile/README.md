@@ -27,7 +27,8 @@ mobile/
 │   └── godex-watcher.js     # 注入式 watcher 模板（唯一事实源，原生层读取后替换占位符）
 ├── scripts/
 │   ├── build-godex-android.sh    # 交叉编译 godex -> jniLibs/arm64-v8a/libgodex.so（本地模式必需）
-│   └── build-android-runtime.sh  # 拉取 busybox + 交叉编译静态 git -> jniLibs/arm64-v8a/（agent shell/git 工具）
+│   ├── build-android-runtime.sh  # 拉取 busybox + 交叉编译静态 git -> jniLibs/arm64-v8a/（agent shell/git 工具）
+│   └── build-and-install-android.sh # 显式准备 native runtime、构建 APK 并可选安装
 ├── ios/                     # cap add ios 生成 + 注入补丁（SceneDelegate.swift）
 └── android/                 # cap add android 生成 + 注入补丁（MainActivity.java + network_security_config.xml）
 ```
@@ -49,21 +50,24 @@ npm install
 # 1) 构建壳层静态页 -> www/
 npm run build
 
-# 2) 交叉编译 godex 二进制（Android 本地运行模式）-> android/app/src/main/jniLibs/arm64-v8a/libgodex.so
-bash scripts/build-godex-android.sh
+# 2) 显式准备缺失的 Android native runtime 产物
+cd android
+./gradlew prepareGodexNativeRuntime
 
-# 3) 拉取 busybox + 交叉编译静态 git -> android/app/src/main/jniLibs/arm64-v8a/
-bash scripts/build-android-runtime.sh
-
-# 4) 同步 www + 插件到原生工程
+# 3) 同步 www + 插件到原生工程
+cd ..
 npx cap sync
 
-# 5) 打开原生 IDE 构建运行
+# 4) 普通 Gradle 构建只检查产物，不会联网或启动本机工具链
+cd android
+./gradlew assembleDebug
+
+# 5) 打开原生 IDE
 npm run open:android   # 需要 Android Studio；产物 APK 位于 android/app/build/outputs/apk/
 npm run open:ios       # 需要 Xcode
 ```
 
-> 步骤 2/3 的产物（`jniLibs/arm64-v8a/*.so`）**不入库**：`android/app/build.gradle` 的 `ensureNativeLibs` 任务会在 so 缺失时**自动执行**上述两个脚本，直接 `./gradlew assembleDebug` 即可；手动跑脚本可跳过自动构建。
+> `jniLibs/arm64-v8a/*.so` **不入库**。`prepareGodexNativeRuntime` 只在显式调用时运行本机工具链或下载依赖；普通 Gradle 构建在产物缺失时会快速失败并提示准备命令。更新 Web UI 后重新交叉编译 `libgodex.so`，可执行 `./gradlew prepareGodexNativeRuntime -PforceGodexBuild`，或使用 `bash scripts/build-and-install-android.sh --no-install` 完成完整构建。
 
 **Android 本地运行模式（默认）**：APK 内置 godex 二进制（`jniLibs/arm64-v8a/libgodex.so`），启动即自动拉起本地 `godex serve`（127.0.0.1:17889 或空闲端口），无需任何配置即可使用。同时内置 busybox（sh/grep/sed/awk 等）与静态 git（`jniLibs/arm64-v8a/libbusybox.so` / `libgit.so` / `libgitremotehttps.so`），由 `build-android-runtime.sh` 生成——agent 的 bash 工具（`sh -c`）与 git 工具（`git`，含 https 远程经 `git-remote-https`）在 Android 本地可用。
 

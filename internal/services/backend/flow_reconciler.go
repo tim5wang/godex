@@ -2,18 +2,23 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/platform/logger"
+	"github.com/tim5wang/godex/internal/platform/processlock"
 )
 
 const flowRunReconcileInterval = time.Second
 
-// Start owns the backend's durable FlowRun reconciler. The reconciler is
-// lifecycle-bound to the serving process and resumes only runs explicitly
-// started in auto-schedule mode.
+const flowSessionStateLockFilename = ".flow-session-runtime.lock"
+
+// Start acquires exclusive ownership of the local state directory before
+// starting the FlowRun reconciler and FlowSession scheduler.
 func (s *Service) Start(ctx context.Context) error {
 	if s == nil {
 		return fmt.Errorf("backend service unavailable")
@@ -26,9 +31,23 @@ func (s *Service) Start(ctx context.Context) error {
 	if s.flowReconcilerCancel != nil {
 		return nil
 	}
+	if s.flowSessionStopping {
+		return fmt.Errorf("FlowSession runtime is still stopping")
+	}
+	if s.cfg == nil || strings.TrimSpace(s.cfg.StateDir) == "" {
+		return fmt.Errorf("missing state directory for FlowSession runtime")
+	}
+	stateLock, err := processlock.Acquire(filepath.Join(s.cfg.StateDir, flowSessionStateLockFilename))
+	if err != nil {
+		if errors.Is(err, processlock.ErrLocked) {
+			return fmt.Errorf("state directory %q is already owned by another GoDex runtime; only one backend runtime per local state directory is supported: %w", s.cfg.StateDir, err)
+		}
+		return fmt.Errorf("acquire FlowSession runtime lock for state directory %q: %w", s.cfg.StateDir, err)
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	sessionScheduler := newFlowSessionScheduler(s, runCtx)
+	s.flowSessionStateLock = stateLock
 	s.flowReconcilerCancel = cancel
 	s.flowReconcilerDone = done
 	s.flowSessionScheduler = sessionScheduler
@@ -46,34 +65,58 @@ func (s *Service) Stop(ctx context.Context) error {
 	cancel := s.flowReconcilerCancel
 	done := s.flowReconcilerDone
 	sessionScheduler := s.flowSessionScheduler
+	if cancel == nil && sessionScheduler == nil {
+		s.flowReconcilerMu.Unlock()
+		return nil
+	}
 	s.flowReconcilerCancel = nil
 	s.flowReconcilerDone = nil
 	s.flowSessionScheduler = nil
+	s.flowSessionStopping = true
+	stateLock := s.flowSessionStateLock
 	s.flowReconcilerMu.Unlock()
-	if cancel == nil && sessionScheduler == nil {
-		return nil
-	}
 	if cancel != nil {
 		cancel()
 	}
-	if ctx == nil {
-		if done != nil {
-			<-done
-		}
-		if sessionScheduler != nil {
-			<-sessionScheduler.done
-		}
-		return nil
-	}
-	for _, wait := range []<-chan struct{}{done, flowSessionSchedulerDone(sessionScheduler)} {
+	waits := []<-chan struct{}{done, flowSessionSchedulerDone(sessionScheduler)}
+	for _, wait := range waits {
 		if wait == nil {
+			continue
+		}
+		if ctx == nil {
+			<-wait
 			continue
 		}
 		select {
 		case <-wait:
 		case <-ctx.Done():
+			go func() {
+				for _, pending := range waits {
+					if pending != nil {
+						<-pending
+					}
+				}
+				if err := s.finishFlowSessionStop(stateLock); err != nil {
+					logger.Warnf("release FlowSession runtime lock: %v", err)
+				}
+			}()
 			return ctx.Err()
 		}
+	}
+	return s.finishFlowSessionStop(stateLock)
+}
+
+func (s *Service) finishFlowSessionStop(stateLock *processlock.Lock) error {
+	s.flowReconcilerMu.Lock()
+	defer s.flowReconcilerMu.Unlock()
+	if stateLock != nil && s.flowSessionStateLock == stateLock {
+		err := stateLock.Close()
+		s.flowSessionStateLock = nil
+		s.flowSessionStopping = false
+		return err
+	}
+	if s.flowSessionStateLock == nil {
+		s.flowSessionStopping = false
 	}
 	return nil
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 一键构建并部署 Android：Web UI → godex 交叉编译 → APK → adb 安装。
 #
-# 关键点：godex serve 的 Web UI 通过 go:embed 内嵌在 libgodex.so 里，
-# 只跑 gradlew assembleDebug 不会重编 libgodex.so（ensureNativeLibs 仅在
-# so 缺失时构建），UI 改动必须走完整链路——本脚本一次性完成。
+# 关键点：godex serve 的 Web UI 通过 go:embed 内嵌在 libgodex.so 里。
+# 普通 assembleDebug 只检查 native 产物；本脚本显式准备 runtime 并重编 libgodex.so，
+# 确保 APK 包含当前 Web UI。
 #
 # 用法:
 #   bash mobile/scripts/build-and-install-android.sh            # 全流程 + 安装
@@ -34,14 +34,14 @@ command -v go >/dev/null || { echo "缺少 go，请安装 Go ≥ 1.22"; exit 1; 
 # ---- 1) Web UI（输出到 internal/uiassets/embedded_dist）----
 if [ "$SKIP_WEB" = "0" ]; then
   echo "==> [1/4] 构建 Web UI (vite build → embedded_dist)"
-  (cd "$ROOT/ui/web" && npx vite build)
+  (cd "$ROOT/ui/web" && corepack pnpm exec vite build)
 else
   echo "==> [1/4] 跳过 Web UI 构建（--skip-web）"
 fi
 
-# ---- 2) godex 交叉编译（内嵌最新 UI → jniLibs/libgodex.so）----
-echo "==> [2/4] 交叉编译 godex (android/arm64) → libgodex.so"
-bash "$ROOT/mobile/scripts/build-godex-android.sh"
+# ---- 2) 显式准备 runtime 并交叉编译最新 godex UI ----
+echo "==> [2/4] 准备 Android native runtime 并构建 libgodex.so"
+(cd "$ROOT/mobile/android" && ./gradlew prepareGodexNativeRuntime --no-daemon -PforceGodexBuild)
 
 # ---- 3) APK ----
 echo "==> [3/4] 构建 APK (gradle assembleDebug)"

@@ -53,38 +53,76 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-// ---- 本地模式运行时 so 自动构建 ----
-// libgodex.so / libbusybox.so / libgit.so / libgitremotehttps.so 不入库，
-// 由 mobile/scripts/build-godex-android.sh 与 build-android-runtime.sh 生成。
-// so 缺失时 preBuild 自动触发（需要 bash + 网络 + Go 工具链）。
-def ensureNativeLibs = tasks.register('ensureNativeLibs') {
-    def libsDir = file('src/main/jniLibs/arm64-v8a')
-    def required = ['libgodex.so', 'libbusybox.so', 'libgit.so', 'libgitremotehttps.so']
-    def missingNow = { required.findAll { !file("${libsDir}/${it}").exists() } }
+// ---- 本地模式 native runtime ----
+// 普通 Gradle 构建只检查产物；工具链和网络操作必须显式调用 prepare task。
+def nativeLibsDir = file('src/main/jniLibs/arm64-v8a')
+def godexLibrary = file("${nativeLibsDir}/libgodex.so")
+def runtimeLibraries = ['libbusybox.so', 'libgit.so', 'libgitremotehttps.so']
+def requiredNativeLibraries = ['libgodex.so'] + runtimeLibraries
+def missingNativeLibraries = {
+    requiredNativeLibraries.findAll { !file("${nativeLibsDir}/${it}").isFile() }
+}
+def missingRuntimeLibraries = {
+    runtimeLibraries.findAll { !file("${nativeLibsDir}/${it}").isFile() }
+}
+def nativeBuildScripts = file("${rootProject.projectDir.parentFile}/scripts")
+
+tasks.register('prepareGodexNativeRuntime') {
+    group = 'build setup'
+    description = 'Explicitly build missing Godex Android native runtime libraries.'
     doLast {
-        def missing = missingNow()
-        if (missing.isEmpty()) {
-            println 'jniLibs/arm64-v8a 运行时 so 已就绪（libgodex/libbusybox/libgit/libgitremotehttps）'
+        def missingRuntime = missingRuntimeLibraries()
+        def forceGodexBuild = project.hasProperty('forceGodexBuild')
+        def needsGodexBuild = !godexLibrary.isFile() || forceGodexBuild
+        if (missingRuntime.isEmpty() && !needsGodexBuild) {
+            println 'jniLibs/arm64-v8a native libraries are ready'
             return
         }
-        println "缺失本地运行时 so: ${missing}，自动执行构建脚本..."
+
         if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
-            throw new GradleException('Windows 请使用 Git Bash / WSL 运行: ' +
-                    'bash mobile/scripts/build-godex-android.sh && bash mobile/scripts/build-android-runtime.sh')
+            throw new GradleException('Run native preparation from Git Bash / WSL: ' +
+                    'bash mobile/scripts/build-android-runtime.sh && ' +
+                    'bash mobile/scripts/build-godex-android.sh')
         }
-        def scriptsDir = file("${rootProject.projectDir.parentFile}/scripts")
-        if (!file("${scriptsDir}/build-godex-android.sh").exists() || !file("${scriptsDir}/build-android-runtime.sh").exists()) {
-            throw new GradleException("找不到构建脚本: ${scriptsDir}（应为 mobile/scripts/）")
+
+        if (!missingRuntime.isEmpty()) {
+            def runtimeScript = file("${nativeBuildScripts}/build-android-runtime.sh")
+            if (!runtimeScript.isFile()) {
+                throw new GradleException("Android runtime build script not found: ${runtimeScript}")
+            }
+            println "Preparing missing Android runtime libraries: ${missingRuntime}"
+            exec { commandLine 'bash', runtimeScript.absolutePath }
         }
-        exec { commandLine 'bash', "${scriptsDir}/build-godex-android.sh" }
-        exec { commandLine 'bash', "${scriptsDir}/build-android-runtime.sh" }
-        def still = missingNow()
-        if (!still.isEmpty()) {
-            throw new GradleException("本地运行时 so 生成失败，仍缺失: ${still}")
+
+        if (needsGodexBuild) {
+            def godexScript = file("${nativeBuildScripts}/build-godex-android.sh")
+            if (!godexScript.isFile()) {
+                throw new GradleException("Godex Android build script not found: ${godexScript}")
+            }
+            println 'Building libgodex.so for Android arm64'
+            exec { commandLine 'bash', godexScript.absolutePath }
+        }
+
+        def stillMissing = missingNativeLibraries()
+        if (!stillMissing.isEmpty()) {
+            throw new GradleException("Native libraries are still missing: ${stillMissing}")
         }
     }
 }
-tasks.named('preBuild').configure { dependsOn ensureNativeLibs }
+
+tasks.register('verifyGodexNativeRuntime') {
+    group = 'verification'
+    description = 'Fail fast when required Android native runtime libraries are missing.'
+    doLast {
+        def missing = missingNativeLibraries()
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                    "Missing Android native libraries: ${missing}. " +
+                    "Run './gradlew prepareGodexNativeRuntime' explicitly before building.")
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn tasks.named('verifyGodexNativeRuntime') }
 
 try {
     def servicesJSON = file('google-services.json')

@@ -419,9 +419,13 @@ func (s *Session) Run(ctx context.Context, locator rtbackend.SessionLocator) err
 func (s *Session) registerSlashCommands() {
 	for _, item := range commands.AvailableMetadata() {
 		cmd := item // capture for the closure
+		description := cmd.Description
+		if cmd.InputHint != "" {
+			description += fmt.Sprintf(" (usage: /%s %s)", cmd.Name, cmd.InputHint)
+		}
 		s.tui.RegisterCommand(minitui.SlashCommand{
 			Name:        cmd.Name,
-			Description: cmd.Description,
+			Description: description,
 			Handler: func(ctx *minitui.CommandContext) {
 				s.handleSlashCommand(ctx, cmd)
 			},

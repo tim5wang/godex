@@ -89,7 +89,7 @@ func TestAvailableMetadataDrivesHelpText(t *testing.T) {
 	for _, item := range metadata {
 		seen[item.Name] = item
 	}
-	for _, name := range []string{"help", "model", "approve", "deny", "todos"} {
+	for _, name := range []string{"help", "model", "approve", "deny", "todos", "skills", "mcp"} {
 		item, ok := seen[name]
 		if !ok {
 			t.Fatalf("missing command metadata for %q", name)
@@ -100,6 +100,9 @@ func TestAvailableMetadataDrivesHelpText(t *testing.T) {
 		if !strings.Contains(service.HelpText(), "/"+name) {
 			t.Fatalf("HelpText() does not include /%s:\n%s", name, service.HelpText())
 		}
+	}
+	if !strings.Contains(seen["mcp"].InputHint, "load <server>") {
+		t.Fatalf("expected MCP usage hint, got %+v", seen["mcp"])
 	}
 	if strings.Count(service.HelpText(), "/model") != 1 {
 		t.Fatalf("expected HelpText to render one /model entry, got:\n%s", service.HelpText())

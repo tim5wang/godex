@@ -67,6 +67,7 @@ func AvailableMetadata() []CommandMetadata {
 		{Name: "doctor", Description: "diagnose the active Godex configuration"},
 		{Name: "channels", Description: "show runtime channel status"},
 		{Name: "skills", Description: "inspect, load, expand, or unload skills for this session", InputHint: "list|active|get|load|expand|unload ..."},
+		{Name: "mcp", Description: "inspect configured MCP servers and load their tools into this session", InputHint: "list|tools <server>|load <server>"},
 		{Name: "packages", Description: "inspect installed packages, package commands, roles, and prompts", InputHint: "list|commands|roles|prompts ..."},
 		{Name: "memory", Description: "browse durable memory and review memory candidates", InputHint: "list|search|candidates|accept|dismiss ..."},
 		{Name: "note", Description: "create, list, search, append, or update markdown notes", InputHint: "create <title> [--tags a,b] -- <markdown>"},

@@ -5,6 +5,7 @@
 > 2026-08-28：补充 taskboard-plugin-design.md 条目（taskboard 插件已交付 M1/M2/M2.5）。
 > 2026-08-31：补齐全部顶层文档索引；加入功能实现矩阵、全模块审查与自动 `docs-check`。
 > 2026-09-03：文档整理（对标 DSH）：新增「读者速查」分层导航、新增 E. 文档组织区与整理方案（documentation-organization-plan.md）、补收 agent-template-agent-implementation-design.md 并规范化其状态头。
+> 2026-09-30：新增当前技术债审计与分阶段优化方案。
 
 ## 状态约定
 
@@ -40,6 +41,7 @@
 | [user-guide.md](./user-guide.md) | 用户指南：安装运行、配置、Provider、CLI、Web UI、工具、Memory、命令、HTTP API、自动化、安全、故障排查 | README 的补充细节；2026-08-15 全量重写对齐实现 |
 | [code-review-2026-08-15.md](./code-review-2026-08-15.md) | 代码与设计 Review 记录：文档↔实现不一致、代码侧发现、设计观察 | 2026-08-15 |
 | [code-and-docs-review-2026-08-31.md](./code-and-docs-review-2026-08-31.md) | 全模块代码/架构/文档审查，含工具证据、测试基线与优先级 | 2026-08-31 |
+| [technical-debt-audit-2026-09-30.md](./technical-debt-audit-2026-09-30.md) | 当前代码与文档技术债、验证结果及分阶段优化方案 | 基于 HEAD `2680288` 加当前工作树；含未提交改动限制说明 |
 | [feature-implementation-matrix.md](./feature-implementation-matrix.md) | 功能—实现—入口—权威文档单一索引 | **判断功能是否已实现时先查本文** |
 | [project-structure.md](./project-structure.md) | 项目目录结构与分层规范 | |
 | [memory-design-principles.md](./memory-design-principles.md) | Memory 模块目标、边界、组成与约束 | |

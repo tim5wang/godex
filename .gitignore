@@ -29,6 +29,9 @@ CLAUDE.md
 ui/web/node_modules/
 ui/web/dist/
 ui/web/*.tsbuildinfo
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 
 # ignore files that changed erery time we build the ui
 internal/uiassets/embedded_dist/assets

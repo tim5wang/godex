@@ -236,7 +236,7 @@ See the [GoDex 2.0 Architecture SPEC](docs/architecture-v2-spec.en.md) for the d
 
 ## Documentation
 
-The full index (status, category, and relationships for every doc) lives in **[docs/README.md](docs/README.md)**; the documentation organization plan (DSH benchmark, reader layers, per-doc treatment) is in [docs/documentation-organization-plan.md](docs/documentation-organization-plan.md).
+Start at the **[documentation site home](docs/index.md)** and browse by Guide, Development, Reference, or Operations. The full status index lives in [docs/README.md](docs/README.md). Run `make docs-dev` for a local preview.
 
 Quick start by reader:
 

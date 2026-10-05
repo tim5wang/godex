@@ -237,7 +237,7 @@ GoDex 2.0 的目标是从单个大 Agent 工作台升级为可承载重任务的
 
 ## 文档
 
-完整索引（每篇文档的状态、分类与相互关系）见 **[docs/README.md](docs/README.md)**；文档整理方案（对标 DSH、读者分层、每篇处理方式）见 [docs/documentation-organization-plan.md](docs/documentation-organization-plan.md)。
+文档站入口见 **[docs/index.md](docs/index.md)**，按「入门 / 开发 / 参考 / 部署」浏览；完整状态索引（每篇文档的状态、分类与相互关系）见 [docs/README.md](docs/README.md)。本地预览运行 `make docs-dev`。
 
 按读者快速开始：
 

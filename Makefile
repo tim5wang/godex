@@ -9,7 +9,7 @@ GO_PACKAGES := ./cmd/... ./examples/... ./internal/...
 GO_TEST_PARALLEL ?= 4
 WEB_TEST_MAX_WORKERS ?= 4
 
-.PHONY: dev dev-fast dev-voice dev-frontend web web-dev web-typecheck web-bundle-check web-clean docs-check smoke verify build-linux build-minimal release release-clean deploy-linux
+.PHONY: dev dev-fast dev-voice dev-frontend web web-dev web-typecheck web-bundle-check web-clean docs-dev docs-build docs-check smoke verify build-linux build-minimal release release-clean deploy-linux
 
 # ── Web UI build targets ───────────────────────────────────────────
 
@@ -36,6 +36,14 @@ web-clean:
 	rm -rf internal/uiassets/embedded_dist/assets
 	rm -f internal/uiassets/embedded_dist/index.html
 
+## docs-dev: Run the VitePress documentation site locally
+docs-dev:
+	cd docs && corepack pnpm install --frozen-lockfile && corepack pnpm dev
+
+## docs-build: Build the VitePress documentation site
+docs-build:
+	cd docs && corepack pnpm install --frozen-lockfile && corepack pnpm build
+
 ## docs-check: Validate documentation status headers, index coverage, and local Markdown links
 docs-check:
 	./scripts/check_docs.sh
@@ -49,6 +57,7 @@ verify:
 	go test -p $(GO_TEST_PARALLEL) $(GO_PACKAGES) -count=1
 	go vet $(GO_PACKAGES)
 	$(MAKE) docs-check
+	$(MAKE) docs-build
 	cd ui/web && corepack pnpm run typecheck
 	cd ui/web && corepack pnpm exec vitest run --maxWorkers=$(WEB_TEST_MAX_WORKERS)
 	$(MAKE) web-bundle-check

@@ -6,6 +6,7 @@
 > 2026-08-31：补齐全部顶层文档索引；加入功能实现矩阵、全模块审查与自动 `docs-check`。
 > 2026-09-03：文档整理（对标 DSH）：新增「读者速查」分层导航、新增 E. 文档组织区与整理方案（documentation-organization-plan.md）、补收 agent-template-agent-implementation-design.md 并规范化其状态头。
 > 2026-09-30：新增当前技术债审计与分阶段优化方案。
+> 2026-09-30：新增 VitePress 文档站，按「入门 / 开发 / 参考 / 部署」组织当前权威内容；本页继续作为完整状态索引。
 
 ## 状态约定
 
@@ -21,11 +22,13 @@
 
 ## 读者速查（Quick Start by Role）
 
+> 推荐使用 [VitePress 文档站首页](./index.md) 浏览；运行 `make docs-dev` 可在本地预览。下表保留 Markdown 直达入口。
+
 | 读者 | 入口文档 | 说明 |
 |------|---------|------|
-| 终端用户 | [user-guide.md](./user-guide.md) → [extension-runtime-user-guide.md](./extension-runtime-user-guide.md) → [vscode-acp.md](./vscode-acp.md) | 安装配置、日常使用、扩展运行时（Package/MCP/ACP/WASM）、IDE 接入 |
-| 开发者 | [feature-implementation-matrix.md](./feature-implementation-matrix.md) → [architecture-v2-spec.md](./architecture-v2-spec.md) → [project-structure.md](./project-structure.md) → [godex-optimization-roadmap.md](./godex-optimization-roadmap.md) | 先查功能矩阵（功能是否已实现），再看架构与路线图 |
-| 部署运维 | [self-deploy.md](./self-deploy.md) → [node-onboarding.md](./node-onboarding.md) → [node-mesh-design.md](./node-mesh-design.md) | 自部署、节点接入与控制面 |
+| 终端用户 | [快速开始](./guide/getting-started.md) → [user-guide.md](./user-guide.md) → [extension-runtime-user-guide.md](./extension-runtime-user-guide.md) | 安装配置、日常使用与扩展运行时 |
+| 开发者 | [开发指南](./develop/index.md) → [feature-implementation-matrix.md](./feature-implementation-matrix.md) → [架构参考](./reference/index.md) | 先查功能事实，再看架构与实现边界 |
+| 部署运维 | [运维入口](./operations/index.md) → [self-deploy.md](./self-deploy.md) → [node-onboarding.md](./node-onboarding.md) | 自部署、节点接入与控制面 |
 | 历史查阅 | [release-notes-v1.4.0.md](./release-notes-v1.4.0.md)、[tools_issues.md](./tools_issues.md)、下方 Superseded / Historical 区 | 发布记录、工具排障经验 |
 
 > 文档整理方案（对标 DSH 的借鉴点、读者分层、每篇处理方式）见 [documentation-organization-plan.md](./documentation-organization-plan.md)。

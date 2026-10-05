@@ -33,6 +33,9 @@ done < <(find docs -mindepth 1 -maxdepth 1 -type f -name '*.md' ! -name README.m
 # Status belongs near the title so a document cannot be mistaken for a current
 # contract after its implementation state changes.
 while IFS= read -r doc; do
+  case "$doc" in
+    docs/index.md|docs/guide/*.md|docs/develop/*.md|docs/reference/*.md|docs/operations/*.md) continue ;;
+  esac
   status_line=$(sed -n '1,8p' "$doc" | grep -Em1 '状态[：:]|Status[：:]' || true)
   if [[ -z "$status_line" ]]; then
     report_error "$doc has no status marker in its first 8 lines"
@@ -56,7 +59,28 @@ while IFS=$'\t' read -r source target; do
   if [[ ! -f "$resolved" ]]; then
     report_error "$source links to missing file $target"
   fi
-done < <(perl -ne 'while (/\[[^\]]+\]\(([^)#]+\.md)/g) { print "$ARGV\t$1\n" }' "${readme_sources[@]}" $(find docs -type f -name '*.md' | sort))
+done < <(perl -ne 'while (/\[[^\]]+\]\(([^)#]+\.md)/g) { print "$ARGV\t$1\n" }' "${readme_sources[@]}" $(find docs -path docs/node_modules -prune -o -path docs/.vitepress -prune -o -type f -name '*.md' -print | sort))
+
+# VitePress navigation uses extensionless routes, so verify every local link in
+# the site config resolves to a Markdown source. Static assets and external
+# links are intentionally ignored here and are validated by the site build.
+while IFS= read -r target; do
+  case "$target" in
+    http://*|https://*|mailto:*|\#*) continue ;;
+  esac
+  route=${target%%#*}
+  route=${route#/}
+  if [[ -z "$route" ]]; then
+    resolved=docs/index.md
+  elif [[ "$route" == */ ]]; then
+    resolved="docs/${route}index.md"
+  else
+    resolved="docs/${route}.md"
+  fi
+  if [[ ! -f "$resolved" ]]; then
+    report_error "docs/.vitepress/config.mts links to missing route $target"
+  fi
+done < <(grep -Eo "link: '[^']+'" docs/.vitepress/config.mts | sed -E "s/^link: '([^']+)'$/\\1/")
 
 # Keep a small set of high-value implementation facts tied to source paths.
 # This does not attempt to prove all prose, but prevents completed migrations

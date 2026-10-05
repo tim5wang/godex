@@ -1,11 +1,18 @@
-# godex v1.5.0 — "Agent Templates, Business Agents & Taskboard"
+# godex v1.5.0 — "Agent Platform, Business Flow & Voice"
 
-> 状态：Draft（发布草案，待 release 前核验）｜ 主题版本号可按实际发布调整（Makefile `VERSION` 现为 v1.4.0）
-> Release date: 2026-09-04 ｜ Base: v1.4.0 ｜ Commits: 134
+> 状态：Release notes（发布前仍需通过 release check）
+> Release date: 2026-10-06 ｜ Base: v1.4.0 ｜ Commits: 240
 
 🇬🇧 **English**
 
-**v1.5.0 is the "Agent Templates, Business Agents & Taskboard" release.** It turns one-off agent sessions into reusable, role-preset templates — a template marketplace ("人才市场") pins a session's capability boundary (exact tool set / skills / MCP / persona / write & memory scope) and can even select an external agent kernel via the Agent Client Protocol (ACP harness); business agents grow from raw `biz_` keys into a managed console backed by the Agent Step Platform (single-step API, TypeScript SDK, embeddable `<godex-step>` component and ui_card reply closure) with the Agent Template as the single source of truth for their capability boundary; and the task board becomes a multi-agent collaboration scheduler — cards open template-pinned execution sessions, PJM-style orchestration dispatches work with structured research handoff and four conflict gates, and a reconcile ledger keeps card state honest with real execution evidence.
+**v1.5.0 is the "Agent Platform, Business Flow & Voice" release.** It brings together reusable Agent Templates and ACP-backed agent engines, managed Business Agents and the Agent Step Platform, and a multi-agent Taskboard. It also adds Business Flow from authoring through runtime: a visual FlowGram editor, versioned FlowRun and long-lived FlowSession execution, durable event and lane processing, Agent-assisted design/diagnosis/inspection, and a guided Voice Agent connected to FlowSession. Relay sandboxing, chat/MCP improvements, and broad runtime, mobile, and Web UI refinements round out the release.
+
+### 🔀 Business Flow & Voice Sessions
+- Flow Spec v1 adds versioned request flows (`FlowRun`) and long-lived event-driven sessions (`FlowSession`), with draft/publish lifecycle, production gateway integration, and API access.
+- The FlowGram canvas supports visual node/edge editing, JSON round-tripping, schema-based variables, templates, natural-language generation and iterative edits. Nodes cover agent/LLM steps, decisions and branches, human tasks, JS/WASM functions, and HTTP services.
+- Session runtime adds durable events and `latest_wins` signals, event lanes, branch routing with exclusive joins, SSE progress, single-step debugging, runtime context inspection, and event logs.
+- The Flow Designer can validate and amend definitions; failed runs can be diagnosed and repaired into a new draft version, and published flows can be inspected through health reports.
+- Guided Voice Agent connects continuous ASR, durable FlowSession events, and streaming TTS, with interruption cancellation. The first version is a local, user-controlled voice workflow with read-only Explore tools; it is not a general-purpose real-time media or multi-process orchestration runtime.
 
 ### 🧩 Agent Templates & ACP Kernel (Marketplace)
 - Template model `AgentTemplate`: a creation-time preset of the capability boundary — `Bundles/Tools` (exact activation via `SetActiveToolsExact`), `Skills`, `MCPServers`, `Packages`, `Persona`, `Profile`, `BasePrompt`, `WriteEnabled/WriteScope`, `Memory` (`none`/`shared`/`scoped`), `ModelHint/BudgetHint`, `TrimHeavySections`, `ProjectDir` (reserved), and `Engine` (run kernel, see below). Sources: builtin / user / package-derived, with builtin override + delete protection.
@@ -44,7 +51,14 @@
 
 🇨🇳 **中文**
 
-**v1.5.0 是「Agent 模板、业务智能体与任务看板」版本。** 一次性会话进化为可复用的角色预设——Agent 模板人才市场把会话的能力边界（精确工具集 / skills / MCP / persona / 读写与记忆范围）固化成模板，还能通过 ACP harness 把整轮委托给外部 agent 内核；业务智能体从裸 `biz_` key 升级为可视化管理台，底层是 Agent Step 平台（单步 API、TS SDK、可嵌入 `<godex-step>` 组件与 ui_card 交互闭环），并以 Agent 模板作为能力边界的单一事实源；任务看板进化为多智能体协作调度器——卡片按模板开独立执行会话、PJM 式编排带结构化调研传递与四道冲突闸门、对账账本用真实执行证据保持卡片状态诚实。
+**v1.5.0 是「Agent 平台、业务流程与语音」版本。** 本次发布整合了可复用 Agent 模板与 ACP 外部内核、业务智能体管理台与 Agent Step 平台、多智能体任务看板；并将 Business Flow 从设计带到运行时：FlowGram 可视化画布、版本化 FlowRun 与长会话 FlowSession、durable 事件与 lane 调度、Agent 辅助设计/诊断/巡检，以及接入 FlowSession 的引导式 Voice Agent。Relay 沙箱、Chat/MCP 改进，以及运行时、移动端和 Web UI 的多项完善也一并交付。
+
+### 🔀 Business Flow 与 Voice Session
+- Flow Spec v1 支持版本化请求流程（`FlowRun`）与长生命周期事件驱动会话（`FlowSession`），包含草稿/发布生命周期、生产 Gateway 接入和 API。
+- FlowGram 画布支持节点/连线可视化编辑、JSON 双向同步、Schema 变量、模板、自然语言生成与多轮修改。节点覆盖 Agent/LLM step、decision/branch、human、JS/WASM function 和 HTTP service。
+- Session 运行时支持 durable 事件与 `latest_wins` 信号、事件 lane、带互斥汇合的分支路由、SSE 进度、单步调试、运行上下文查看和事件日志。
+- Flow Designer 可校验并修改定义；失败运行可由 Agent 诊断并将修复应用为新草稿，已发布流程可通过健康报告巡检。
+- 引导式 Voice Agent 将连续 ASR、durable FlowSession 事件和流式 TTS 连通，并支持插话取消。首版定位为本地、用户主动控制的语音流程，运行时只开放只读 Explore 工具；它不是通用实时媒体或多进程编排运行时。
 
 ### 🧩 Agent 模板与 ACP 内核（人才市场）
 - 模板模型 `AgentTemplate`：一次性能力边界预设——`Bundles/Tools`（`SetActiveToolsExact` 精确激活）、`Skills`、`MCPServers`、`Packages`、`Persona`、`Profile`、`BasePrompt`、`WriteEnabled/WriteScope`、`Memory`（`none`/`shared`/`scoped` 记忆范围）、`ModelHint/BudgetHint`、`TrimHeavySections`、`ProjectDir`（预留）、`Engine`（运行内核，见下）。来源：builtin / user / package 派生，内置模板防覆盖、防删除。
@@ -82,9 +96,8 @@
 * * *
 
 几点说明：
-- 内容基于 `v1.4.0..HEAD` 的 134 个 commit 与设计文档（agent-role-and-bundle-design / business-agents-console-design / taskboard-plugin-design / taskboard-collaboration-design / taskboard-reconcile-design / agent-template-agent-implementation-design）整理，未夸大；各小节实现状态以上述文档中的「当前实现快照」与源码为准。
-- 本版本号与标题为草案：v1.4.0 之后尚未打 tag，发布前请确认最终版本号并更新 Makefile `VERSION`。
-- 发布前请先跑 `./scripts/release_check.sh` 与 `make release`。
+- 内容按 `v1.4.0..HEAD` 的 240 个 commit 与对应设计文档整理；功能边界以运行时设计文档和代码实现为准。
+- 发布前运行 `./scripts/release_check.sh`；打 `v1.5.0` tag 后，CI 会构建并校验四个平台的 release archives。
 
 ### 📦 Assets
 - `godex-v1.5.0-linux-x86-64.tar.gz` — Linux amd64

@@ -274,23 +274,20 @@ export function NotesPage() {
           <Form form={form} id="note-form" layout="vertical" onFinish={(values) => saveMutation.mutate(values)}>
             <Form.Item name="id" hidden><Input /></Form.Item>
 
-            {editingMeta ? (
-              <div className="notes-meta">
-                <div className="notes-meta-fields">
-                  <Form.Item name="title" label={t("notes.title")} rules={[{ required: true }]}>
-                    <Input />
-                  </Form.Item>
-                  <Form.Item name="summary" label={t("notes.summary")}>
-                    <Input.TextArea rows={2} />
-                  </Form.Item>
-                  <Form.Item name="tags" label={t("notes.tags")}>
-                    <Select mode="tags" open={false} tokenSeparators={[","]} placeholder={t("notes.tagsPlaceholder")} />
-                  </Form.Item>
-                </div>
+            <div className="notes-meta">
+              <div className="notes-meta-fields" style={{ display: editingMeta ? undefined : "none" }}>
+                <Form.Item name="title" label={t("notes.title")} rules={[{ required: true }]}>
+                  <Input />
+                </Form.Item>
+                <Form.Item name="summary" label={t("notes.summary")}>
+                  <Input.TextArea rows={2} />
+                </Form.Item>
+                <Form.Item name="tags" label={t("notes.tags")}>
+                  <Select mode="tags" open={false} tokenSeparators={[","]} placeholder={t("notes.tagsPlaceholder")} />
+                </Form.Item>
                 <Button type="text" icon={<CheckOutlined />} aria-label={t("notes.doneEditMeta")} onClick={() => void finishEditingMeta()} />
               </div>
-            ) : (
-              <div className="notes-meta">
+              {!editingMeta ? (
                 <div className="notes-meta-preview">
                   <Space direction="vertical" size={6} style={{ flex: 1, minWidth: 0 }}>
                     {summaryValue ? (
@@ -313,8 +310,8 @@ export function NotesPage() {
                   </Space>
                   <Button type="text" icon={<EditOutlined />} aria-label={t("notes.editMeta")} onClick={() => setEditingMeta(true)} />
                 </div>
-              </div>
-            )}
+              ) : null}
+            </div>
 
             <div className="notes-content-toolbar">
               <Segmented

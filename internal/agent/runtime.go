@@ -479,6 +479,7 @@ func (a *Agent) ApplyConfig(cfg *config.Config, shared *SharedDependencies) {
 	a.client = deps.client
 	a.screener = buildScreener(cfg, deps.client)
 	a.decisionCaller = buildDecisionCaller(cfg, deps.client)
+	a.jevCompactionCaller = buildJevCompactionCaller(cfg)
 	a.skillLoader = deps.skillLoader
 	a.instrLoader = deps.instrLoader
 	a.memoryMgr = deps.memoryMgr

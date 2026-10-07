@@ -279,6 +279,7 @@ func newAgentWithDependencies(cfg *config.Config, deps dependencies) *Agent {
 			Base: "You are a helpful AI agent working inside this workspace. Use available tools and skills to solve tasks.",
 		},
 	}
+	agent.jevCompactionCaller = buildJevCompactionCaller(cfg)
 	if deps.sessionAdmin != nil {
 		agent.sessionAdmin = deps.sessionAdmin.Bind(agent)
 	}

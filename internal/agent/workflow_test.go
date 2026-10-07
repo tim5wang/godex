@@ -9,6 +9,38 @@ import (
 	"testing"
 )
 
+func TestWorkflowToolDeclaresDynamicObjectSchemas(t *testing.T) {
+	properties := newWorkflowTool(newTestAgent(t, 4096)).Spec().InputSchema["properties"].(map[string]interface{})
+	edges := properties["edges"].(map[string]interface{})
+	edgeItem := edges["items"].(map[string]interface{})
+	edgeProperties := edgeItem["properties"].(map[string]interface{})
+	when := edgeProperties["when"].(map[string]interface{})
+	whenProperties := when["properties"].(map[string]interface{})
+
+	assertOpenObject := func(name string, value interface{}) {
+		t.Helper()
+		schema, ok := value.(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s: expected schema object, got %#v", name, value)
+		}
+		if schema["type"] != "object" {
+			t.Errorf("%s: expected type object, got %#v", name, schema["type"])
+		}
+		if _, ok := schema["properties"].(map[string]interface{}); !ok {
+			t.Errorf("%s: expected properties object, got %#v", name, schema["properties"])
+		}
+		if schema["additionalProperties"] != true {
+			t.Errorf("%s: expected additionalProperties=true, got %#v", name, schema["additionalProperties"])
+		}
+	}
+
+	assertOpenObject("append", edgeProperties["append"])
+	for _, key := range []string{"all", "any"} {
+		arraySchema := whenProperties[key].(map[string]interface{})
+		assertOpenObject(key+" item", arraySchema["items"])
+	}
+}
+
 func TestWorkflowToolStartsReadyNodesAndWaits(t *testing.T) {
 	a := newTestAgent(t, 4096)
 	a.RegisterTools()

@@ -1,14 +1,60 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/compress"
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/decision"
 	"github.com/tim5wang/godex/internal/core/llm"
 )
+
+// jevCompactionAdapter maps one shared state and a question batch to Jev's
+// structured boolean endpoint.
+type jevCompactionAdapter struct {
+	caller decision.BatchCaller
+}
+
+func (a jevCompactionAdapter) DecideToolHistory(ctx context.Context, state string, questions []string) ([]float64, error) {
+	reqs := make([]decision.Request, len(questions))
+	for i, question := range questions {
+		reqs[i] = decision.Request{State: state, Question: question, DecisionType: decision.TypeBoolean}
+	}
+	results, err := a.caller.DecideBatch(ctx, reqs)
+	if err != nil {
+		return nil, err
+	}
+	scores := make([]float64, len(results))
+	for i, result := range results {
+		scores[i] = result.Score
+	}
+	return scores, nil
+}
+
+func buildJevCompactionCaller(cfg *config.Config) compress.JevToolHistoryCaller {
+	if cfg == nil {
+		return nil
+	}
+	provider := strings.TrimSpace(cfg.Decision.Provider)
+	if provider == "" {
+		provider = "llm"
+	}
+	p, ok := cfg.LLMProviders[provider]
+	if !ok || llm.NormalizeProviderType(p.Type) != llm.ProviderLaya {
+		return nil
+	}
+	caller := decision.NewJevCaller(decision.JevCallerOptions{
+		BaseURL: p.BaseURL,
+		Timeout: time.Duration(cfg.Decision.TimeoutMS) * time.Millisecond,
+	})
+	if caller == nil {
+		return nil
+	}
+	return jevCompactionAdapter{caller: caller}
+}
 
 // buildDecisionCaller constructs the decision-model caller used by decision
 // nodes. Disabled config or a missing chat client yields nil; decision nodes

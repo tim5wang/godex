@@ -50,6 +50,9 @@ type Request struct {
 	// Question is the decision prompt; it may carry the rendered task
 	// context. It is data for the model, never executed.
 	Question string
+	// State is the shared context sent alongside Question. Empty keeps the
+	// legacy behavior where the question text is also the Jev state body.
+	State string
 	// DecisionType is one of TypeChoice|TypeBoolean|TypeScore.
 	DecisionType string
 	// Choices is the closed candidate set for TypeChoice. Required there;
@@ -95,4 +98,10 @@ func (r Result) Outputs() map[string]any {
 // safe for concurrent use.
 type Caller interface {
 	Decide(ctx context.Context, req Request) (Result, error)
+}
+
+// BatchCaller executes multiple decisions against one shared context in one
+// provider request when supported by the backend.
+type BatchCaller interface {
+	DecideBatch(ctx context.Context, reqs []Request) ([]Result, error)
 }

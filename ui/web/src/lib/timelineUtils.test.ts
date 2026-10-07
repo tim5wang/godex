@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTimelineEntry } from "./types";
-import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds, collectThinkingDeltas, collectTextDeltas, appendTimelineEvent } from "./timelineUtils";
+import { groupTimelineTurns, flattenTimelineEvents, timelineEventLane, pendingSendsForFeed, collectToolCalls, mergeChronologicalFeedItems, alignAssistantTextTurnIds, collectThinkingDeltas, collectTextDeltas, appendTimelineEvent, buildContextStatusSummary } from "./timelineUtils";
 import type { PendingSend } from "../store/chat";
 
 /**
@@ -11,6 +11,50 @@ import type { PendingSend } from "../store/chat";
 function ev(type: SessionTimelineEntry["type"], turnId: string | undefined, ts: string, payload: Record<string, unknown> = {}): SessionTimelineEntry {
   return { type, turn_id: turnId, timestamp: ts, payload };
 }
+
+describe("buildContextStatusSummary", () => {
+  it("shows the latest model output speed without including time to first token", () => {
+    const summary = buildContextStatusSummary(
+      null,
+      [
+        ev("model_request_completed", "turn-2", "2026-01-01T00:00:05Z", {
+          output_tokens: 30,
+          first_token_at: "2026-01-01T00:00:03Z",
+          completed_at: "2026-01-01T00:00:05Z",
+        }),
+        ev("model_request_completed", "turn-1", "2026-01-01T00:00:01Z", {
+          output_tokens: 10,
+          first_token_at: "2026-01-01T00:00:00Z",
+          completed_at: "2026-01-01T00:00:01Z",
+        }),
+      ],
+      [],
+    );
+
+    expect(summary.modelSpeedTokensPerSecond).toBe(15);
+  });
+
+  it("hides speed when the latest model request has no usage timing", () => {
+    const summary = buildContextStatusSummary(
+      null,
+      [
+        ev("model_request_completed", "turn-1", "2026-01-01T00:00:01Z", {
+          output_tokens: 10,
+          first_token_at: "2026-01-01T00:00:00Z",
+          completed_at: "2026-01-01T00:00:01Z",
+        }),
+        ev("model_request_completed", "turn-2", "2026-01-01T00:00:02Z", {
+          output_tokens: 12,
+          completed_at: "2026-01-01T00:00:02Z",
+        }),
+      ],
+      [],
+    );
+
+    expect(summary.modelSpeedTokensPerSecond).toBeUndefined();
+    expect(summary.text).not.toContain("t/s");
+  });
+});
 
 describe("groupTimelineTurns", () => {
   it("returns [] for empty input", () => {

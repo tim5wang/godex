@@ -13,6 +13,19 @@ import (
 	"github.com/tim5wang/godex/internal/platform/tooling"
 )
 
+func TestBackgroundEnvironmentSchemaAllowsStringProperties(t *testing.T) {
+	tool := NewBackgroundTool(background.NewManager(), t.TempDir(), "", tooling.ExecutionConfig{})
+	properties := tool.Spec().InputSchema["properties"].(map[string]interface{})
+	env := properties["env"].(map[string]interface{})
+	if _, ok := env["properties"].(map[string]interface{}); !ok {
+		t.Fatalf("expected env properties object, got %#v", env["properties"])
+	}
+	additionalProperties, ok := env["additionalProperties"].(map[string]interface{})
+	if !ok || additionalProperties["type"] != "string" {
+		t.Fatalf("expected env values to be strings, got %#v", env["additionalProperties"])
+	}
+}
+
 func TestBackgroundToolRunActionExecutesArgvCommandInWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	manager := background.NewManager()

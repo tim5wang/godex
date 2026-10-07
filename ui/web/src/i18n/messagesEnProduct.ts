@@ -54,6 +54,7 @@ export const enProductMessages = {
       ctxPopoverMessages: "Messages",
       ctxPopoverSkills: "Skills",
       ctxPopoverApprovals: "Approvals",
+      ctxPopoverModelSpeed: "Last model speed",
       ctxPopoverCumulative: "Tokens used (cumulative)",
       ctxPopoverCumulativeIn: "Input",
       ctxPopoverCumulativeOut: "Output",

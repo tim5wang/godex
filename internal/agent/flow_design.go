@@ -44,15 +44,20 @@ func newFlowDesignTool(agent *Agent) tools.Tool {
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
-				"type":     "string",
-				"enum":     []string{"generate", "read", "amend", "validate"},
-				"required": true,
+				"type": "string",
+				"enum": []string{"generate", "read", "amend", "validate"},
 			},
 			"flow_id":     map[string]string{"type": "string", "description": "flow to read (action=read)"},
 			"description": map[string]string{"type": "string"},
 			"change":      map[string]string{"type": "string"},
-			"definition":  map[string]interface{}{"type": "object", "description": "current Flow Spec definition (action=amend/validate)"},
+			"definition": map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{},
+				"additionalProperties": true,
+				"description":          "current Flow Spec definition (action=amend/validate)",
+			},
 		},
+		"required": []string{"action"},
 	}, nil), func(ctx context.Context, args flowDesignArgs) (tools.ToolResult, error) {
 		action := strings.ToLower(strings.TrimSpace(args.Action))
 		switch action {

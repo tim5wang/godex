@@ -113,6 +113,12 @@ export function ContextStatusInline({ summary, inspector, usage }: { summary: Co
           <span className="ctx-popover-label">{t("chat.ctxPopoverApprovals")}</span>
           <span className="ctx-popover-value">{ctx?.pending_permission_count ?? "—"}</span>
         </div>
+        {summary.modelSpeedTokensPerSecond !== undefined ? (
+          <div className="ctx-popover-row">
+            <span className="ctx-popover-label">{t("chat.ctxPopoverModelSpeed")}</span>
+            <span className="ctx-popover-value">{summary.modelSpeedTokensPerSecond.toFixed(1)} t/s</span>
+          </div>
+        ) : null}
         {cumulativeTokens > 0 ? (
           <>
             <div className="ctx-popover-row">
@@ -202,9 +208,20 @@ export function ContextStatusInline({ summary, inspector, usage }: { summary: Co
 
   return (
     <Popover content={content} trigger="hover" placement="top" overlayStyle={{ maxWidth: 360 }}>
-      <Tag color={color} className="chat-context-status" style={{ cursor: "pointer" }}>
-        {summary.text}
-      </Tag>
+      <Space size={4}>
+        <Tag color={color} className="chat-context-status" style={{ cursor: "pointer", margin: 0 }}>
+          {summary.text}
+        </Tag>
+        {summary.modelSpeedTokensPerSecond !== undefined ? (
+          <Tag
+            color="blue"
+            title={t("chat.ctxPopoverModelSpeed")}
+            style={{ flexShrink: 0, margin: 0, whiteSpace: "nowrap" }}
+          >
+            {summary.modelSpeedTokensPerSecond.toFixed(1)} t/s
+          </Tag>
+        ) : null}
+      </Space>
     </Popover>
   );
 }

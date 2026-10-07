@@ -122,6 +122,49 @@ func TestFlowDesignGenerateUnparsableStillFails(t *testing.T) {
 	}
 }
 
+func TestFlowToolsDeclareProviderCompatibleSchemas(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	for _, test := range []struct {
+		name   string
+		schema map[string]interface{}
+	}{
+		{name: "flow_design", schema: newFlowDesignTool(a).Spec().InputSchema},
+		{name: "create_flow", schema: newCreateFlowTool(a).Spec().InputSchema},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			properties, ok := test.schema["properties"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected properties object, got %#v", test.schema["properties"])
+			}
+			definition, ok := properties["definition"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("expected definition schema object, got %#v", properties["definition"])
+			}
+			if definition["type"] != "object" {
+				t.Fatalf("expected definition type object, got %#v", definition["type"])
+			}
+			if _, ok := definition["properties"].(map[string]interface{}); !ok {
+				t.Fatalf("expected definition properties object, got %#v", definition["properties"])
+			}
+			if definition["additionalProperties"] != true {
+				t.Fatalf("expected definition to accept Flow Spec fields, got %#v", definition["additionalProperties"])
+			}
+			if test.name == "flow_design" {
+				requiredAction := false
+				switch required := test.schema["required"].(type) {
+				case []string:
+					requiredAction = len(required) == 1 && required[0] == "action"
+				case []interface{}:
+					requiredAction = len(required) == 1 && required[0] == "action"
+				}
+				if !requiredAction {
+					t.Fatalf("expected root required=[action], got %#v", test.schema["required"])
+				}
+			}
+		})
+	}
+}
+
 // TestFlowInvalidResultActionableContext verifies flow_design validate surfaces
 // the concrete error PLUS the declared node/edge inventory, so the Agent can
 // spot a dangling reference (e.g. branch case → unknown node) from the result

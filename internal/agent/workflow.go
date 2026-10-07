@@ -474,12 +474,18 @@ func newWorkflowTool(agent *Agent) tools.Tool {
 									"op":    map[string]interface{}{"type": "string", "enum": []string{"eq", "ne", "in", "not_in", "contains", "gt", "gte", "lt", "lte"}},
 									"value": map[string]string{"type": "string"},
 								}},
-								"all": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object"}},
-								"any": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object"}},
+								"all": map[string]interface{}{"type": "array", "items": map[string]interface{}{
+									"type": "object", "properties": map[string]interface{}{}, "additionalProperties": true,
+								}},
+								"any": map[string]interface{}{"type": "array", "items": map[string]interface{}{
+									"type": "object", "properties": map[string]interface{}{}, "additionalProperties": true,
+								}},
 							},
 						},
 						"append": map[string]interface{}{
-							"type": "object",
+							"type":                 "object",
+							"properties":           map[string]interface{}{},
+							"additionalProperties": true,
 						},
 					},
 				},

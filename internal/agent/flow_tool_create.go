@@ -32,10 +32,15 @@ func newCreateFlowTool(agent *Agent) tools.Tool {
 	return tools.NewTypedTool(tools.NewToolSpec("create_flow", "Persist a request-mode or session-mode Flow Spec v1 definition as a NEW draft version (validated + compiled at save). The flow_id and version are pinned by the calling page — keep them as given. Returns the saved version view (version / nodes / edges / digest). Call only after the user explicitly approves the preview.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"flow_id":    map[string]string{"type": "string"},
-			"version":    map[string]string{"type": "string"},
-			"status":     map[string]string{"type": "string", "description": "default draft"},
-			"definition": map[string]interface{}{"type": "object", "description": "the Flow Spec definition to persist"},
+			"flow_id": map[string]string{"type": "string"},
+			"version": map[string]string{"type": "string"},
+			"status":  map[string]string{"type": "string", "description": "default draft"},
+			"definition": map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{},
+				"additionalProperties": true,
+				"description":          "the Flow Spec definition to persist",
+			},
 		},
 	}, nil), func(ctx context.Context, args createFlowArgs) (tools.ToolResult, error) {
 		sessionID := flowSessionID(ctx)

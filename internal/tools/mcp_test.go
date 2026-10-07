@@ -139,6 +139,25 @@ func (f *fakeMCPPromptRunner) GetPrompt(ctx context.Context, serverName, promptN
 	return f.got, nil
 }
 
+func TestMCPArgumentSchemasAllowDynamicProperties(t *testing.T) {
+	for _, tool := range []Tool{
+		NewCallMCPToolTool(nil),
+		NewGetMCPPromptTool(nil),
+	} {
+		properties := tool.Spec().InputSchema["properties"].(map[string]interface{})
+		arguments := properties["arguments"].(map[string]interface{})
+		if arguments["type"] != "object" {
+			t.Fatalf("%s: expected arguments type object, got %#v", tool.Name(), arguments["type"])
+		}
+		if _, ok := arguments["properties"].(map[string]interface{}); !ok {
+			t.Fatalf("%s: expected arguments properties object, got %#v", tool.Name(), arguments["properties"])
+		}
+		if arguments["additionalProperties"] != true {
+			t.Fatalf("%s: expected additionalProperties=true, got %#v", tool.Name(), arguments["additionalProperties"])
+		}
+	}
+}
+
 func TestListMCPPromptsTool(t *testing.T) {
 	runner := &fakeMCPPromptRunner{prompts: []mcp.Prompt{{
 		Server: "fake",
@@ -219,10 +238,10 @@ func TestMCPServerToolNamespacingAndCall(t *testing.T) {
 
 func TestMCPToolName(t *testing.T) {
 	tests := map[[2]string]string{
-		{"my-server", "echo"}:     "my_server__echo",
-		{"server", "My Tool"}:     "server__mytool",
-		{"", "bare"}:              "bare",
-		{"srv", "!!!"}:            "srv",
+		{"my-server", "echo"}: "my_server__echo",
+		{"server", "My Tool"}: "server__mytool",
+		{"", "bare"}:          "bare",
+		{"srv", "!!!"}:        "srv",
 	}
 	for in, want := range tests {
 		if got := mcpToolName(in[0], in[1]); got != want {

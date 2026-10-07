@@ -338,6 +338,15 @@ func (a *Agent) compactionSummarizer(mode string) (compress.SessionSummarizer, s
 // retention tail).
 func (a *Agent) compactionSummarizerFor(mode string, compressor *compress.Compressor) (compress.SessionSummarizer, string) {
 	normalized := normalizeAgentCompactionMode(mode)
+	if normalized == "jev" {
+		a.mu.Lock()
+		caller := a.jevCompactionCaller
+		a.mu.Unlock()
+		if caller == nil {
+			return compress.NewRuleBasedSessionSummarizer(compressor), "fast"
+		}
+		return compress.NewJevSessionSummarizer(caller, compressor), "jev"
+	}
 	if normalized != "model" && normalized != "hybrid" {
 		return compress.NewRuleBasedSessionSummarizer(compressor), "fast"
 	}
@@ -429,7 +438,7 @@ func (a *Agent) runCompaction(ctx context.Context, mode string, req compress.Ses
 	}
 	startedAt := time.Now()
 	result, err := summarizer.SummarizeSession(ctx, req)
-	if err != nil && effectiveMode != "fast" && normalizeAgentCompactionMode(mode) == "hybrid" {
+	if err != nil && effectiveMode != "fast" && (normalizeAgentCompactionMode(mode) == "hybrid" || normalizeAgentCompactionMode(mode) == "jev") {
 		summarizer = compress.NewRuleBasedSessionSummarizer(a.compressor)
 		result, err = summarizer.SummarizeSession(ctx, req)
 		effectiveMode = "fast"

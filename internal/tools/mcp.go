@@ -103,9 +103,11 @@ func NewCallMCPToolTool(runner MCPToolRunner) Tool {
 	return NewTypedTool(NewToolSpec("call_mcp_tool", "Call one tool on a configured stdio MCP server", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"server":    map[string]string{"type": "string"},
-			"tool":      map[string]string{"type": "string"},
-			"arguments": map[string]interface{}{"type": "object"},
+			"server": map[string]string{"type": "string"},
+			"tool":   map[string]string{"type": "string"},
+			"arguments": map[string]interface{}{
+				"type": "object", "properties": map[string]interface{}{}, "additionalProperties": true,
+			},
 		},
 		"required": []string{"server", "tool"},
 	}, nil), func(ctx context.Context, args callMCPToolArgs) (ToolResult, error) {
@@ -154,9 +156,11 @@ func NewGetMCPPromptTool(runner MCPPromptRunner) Tool {
 	return NewTypedTool(NewToolSpec("get_mcp_prompt", "Render one prompt on a configured stdio MCP server", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"server":    map[string]string{"type": "string"},
-			"prompt":    map[string]string{"type": "string"},
-			"arguments": map[string]interface{}{"type": "object"},
+			"server": map[string]string{"type": "string"},
+			"prompt": map[string]string{"type": "string"},
+			"arguments": map[string]interface{}{
+				"type": "object", "properties": map[string]interface{}{}, "additionalProperties": true,
+			},
 		},
 		"required": []string{"server", "prompt"},
 	}, nil), func(ctx context.Context, args getMCPPromptArgs) (ToolResult, error) {

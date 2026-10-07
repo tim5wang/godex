@@ -40,6 +40,7 @@ export type ContextStatusSummary = {
   tooltip: string;
   budgetPercent: number;
   suggestCompact: boolean;
+  modelSpeedTokensPerSecond?: number;
 };
 
 export const timelineEventTypeOptions = [
@@ -553,6 +554,27 @@ export function buildContextStatusSummary(
   const cumulative = usage?.cumulative_tokens ?? context?.cumulative_tokens ?? 0;
   const cumulativeInput = usage?.cumulative_input_tokens ?? context?.cumulative_input_tokens ?? 0;
   const cumulativeOutput = usage?.cumulative_output_tokens ?? context?.cumulative_output_tokens ?? 0;
+  let latestModelRequest: SessionTimelineEntry | undefined;
+  let latestModelRequestAt = Number.NEGATIVE_INFINITY;
+  for (const event of timelineItems) {
+    if (event.type !== "model_request_completed") {
+      continue;
+    }
+    const eventAt = Date.parse(event.timestamp);
+    if (Number.isFinite(eventAt) && eventAt >= latestModelRequestAt) {
+      latestModelRequest = event;
+      latestModelRequestAt = eventAt;
+    }
+  }
+  const modelRequestPayload = (latestModelRequest?.payload ?? {}) as Record<string, unknown>;
+  const outputTokens = numberFromPayload(modelRequestPayload.output_tokens);
+  const firstTokenAt = Date.parse(stringFromPayload(modelRequestPayload.first_token_at));
+  const completedAt = Date.parse(stringFromPayload(modelRequestPayload.completed_at));
+  const generationSeconds = (completedAt - firstTokenAt) / 1000;
+  const modelSpeedTokensPerSecond =
+    !stringFromPayload(modelRequestPayload.error) && outputTokens > 0 && generationSeconds > 0
+      ? outputTokens / generationSeconds
+      : undefined;
   const cumulativeLabel = cumulative > 0 ? ` · tok ${formatCompactNumber(cumulative)}` : "";
   const tokenLabel = threshold > 0 ? `${formatCompactNumber(tokens)}/${formatCompactNumber(threshold)} ${percent}%` : formatCompactNumber(tokens);
   return {
@@ -566,10 +588,14 @@ export function buildContextStatusSummary(
       cumulative > 0
         ? `Cumulative tokens used in this session: ${cumulative} (input ${cumulativeInput} / output ${cumulativeOutput})`
         : "",
+      modelSpeedTokensPerSecond === undefined
+        ? ""
+        : `Latest model output speed: ${modelSpeedTokensPerSecond.toFixed(1)} tokens/s (from first token to completion).`,
       context?.suggest_compact ? "Compaction is suggested." : "Compaction is not currently suggested.",
     ].filter(Boolean).join("\n"),
     budgetPercent: percent,
     suggestCompact: Boolean(context?.suggest_compact),
+    modelSpeedTokensPerSecond,
   };
 }
 

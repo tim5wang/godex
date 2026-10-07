@@ -21,9 +21,15 @@ const builtinCommands: CommandMetadata[] = [
       { name: "load", description: "load server tools", arguments: [{ hint: "<server>", candidate_source: "mcp_servers" }] },
     ],
   },
+  { name: "clear", description: "clear current prompt state" },
+  { name: "compact", description: "compact current session" },
+  { name: "new", description: "create a new session" },
+  { name: "resume", description: "resume a session", input_hint: "[session-id|session-name]" },
 ];
 
-const packageCommands: PackageCommandEntry[] = [];
+const packageCommands: PackageCommandEntry[] = [
+  { package_name: "browser-tools", name: "search", path: "commands/search.md" },
+];
 const candidates = {
   skills: [
     { name: "playwright", description: "Browser automation", sections: ["browser", "testing"] },
@@ -44,10 +50,21 @@ describe("matchSlashCommands", () => {
       "/skills expand",
       "/skills unload",
     ]);
+    expect(matchSlashCommands("/mcp ", builtinCommands, packageCommands).map((item) => item.invocation)).toEqual([
+      "/mcp tools",
+      "/mcp load",
+    ]);
     expect(matchSlashCommands("/skills lo", builtinCommands, packageCommands).map((item) => item.invocation)).toEqual([
       "/skills load",
       "/skills unload",
     ]);
+  });
+
+  it("closes an exact root-command suggestion after its invocation is completed", () => {
+    for (const command of ["clear", "compact", "new", "resume"]) {
+      expect(matchSlashCommands(`/${command} `, builtinCommands, packageCommands)).toEqual([]);
+    }
+    expect(matchSlashCommands("/browser-tools search ", builtinCommands, packageCommands)).toEqual([]);
   });
 
   it("suggests available skill names for skill arguments", () => {

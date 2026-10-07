@@ -328,6 +328,24 @@ func TestOpenAICodexClientToolParametersAreObjects(t *testing.T) {
 	}
 }
 
+func TestCodexFunctionParametersPreserveOpenObjects(t *testing.T) {
+	params := codexFunctionParameters(map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"definition": map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{},
+				"additionalProperties": true,
+			},
+		},
+	})
+	properties := params["properties"].(map[string]interface{})
+	definition := properties["definition"].(map[string]interface{})
+	if definition["additionalProperties"] != true {
+		t.Fatalf("expected dynamic object schema to remain open, got %#v", definition)
+	}
+}
+
 func TestOpenAICodexClientStreamSurfacesReasoningDeltas(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

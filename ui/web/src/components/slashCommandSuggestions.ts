@@ -88,6 +88,13 @@ export function matchSlashCommands(
   }));
   const all = [...builtins, ...packages];
 
+  if (
+    /\s$/.test(query) &&
+    all.some((entry) => normalizeCommandQuery(entry.invocation.slice(1)) === normalizeCommandQuery(query))
+  ) {
+    return [];
+  }
+
   if (commandSeparator < 0 && !commandName) {
     return all.slice(0, 8);
   }

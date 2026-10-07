@@ -62,6 +62,27 @@ func TestOpenAIClientToolParametersAreObjects(t *testing.T) {
 	}
 }
 
+func TestOpenAIFunctionParametersPreserveOpenObjects(t *testing.T) {
+	params := openAIFunctionParameters(map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"definition": map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{},
+				"additionalProperties": true,
+			},
+		},
+	})
+	properties := params["properties"].(map[string]interface{})
+	definition := properties["definition"].(map[string]interface{})
+	if definition["additionalProperties"] != true {
+		t.Fatalf("expected dynamic object schema to remain open, got %#v", definition)
+	}
+	if openAIJSONSchemaStrictCompatible(params) {
+		t.Fatal("expected open object schema to disable strict mode")
+	}
+}
+
 func TestOpenAIClientStrictToolParametersDisallowExtraFields(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

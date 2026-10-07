@@ -13,15 +13,7 @@ import (
 
 // JevCallerOptions configures the native Jev/Laya decision caller. It talks
 // to a laya server.py /predict endpoint (Jev-compatible request/response
-// shape):
-//
-//	POST {BaseURL}/predict
-//	{"state": {...}, "questions": {qid: {"type": "choice"|"score"|"noul",
-//	 "instructions": ..., "criteria": ...}}}
-//	→ {"model": "rl-agent", "answers": {qid: {"type": ..., "choice": ...,
-//	   "confidence": ..., "probabilities": ...}}, "usage": {...}}
-//
-// A single decision.Request maps to one question under the fixed key "q1".
+// shape). DecideBatch sends multiple boolean questions against one shared state.
 type JevCallerOptions struct {
 	// BaseURL is the laya service root (e.g. http://127.0.0.1:8100). The
 	// caller appends /predict.
@@ -30,22 +22,22 @@ type JevCallerOptions struct {
 	Timeout time.Duration
 }
 
-type jevCaller struct {
+// JevCaller calls a Jev-compatible Laya /predict endpoint.
+type JevCaller struct {
 	baseURL string
 	timeout time.Duration
 	client  *http.Client
 }
 
-// NewJevCaller builds a Caller that drives a native Jev/Laya structured
-// decision endpoint (no chat round-trip, no JSON-repair gamble).
-func NewJevCaller(opts JevCallerOptions) Caller {
+// NewJevCaller builds a structured decision caller without a chat round-trip.
+func NewJevCaller(opts JevCallerOptions) *JevCaller {
 	if strings.TrimSpace(opts.BaseURL) == "" {
 		return nil
 	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 10 * time.Second
 	}
-	return &jevCaller{
+	return &JevCaller{
 		baseURL: strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		timeout: opts.Timeout,
 		client:  &http.Client{Timeout: opts.Timeout},
@@ -61,30 +53,114 @@ type jevQuestion struct {
 
 // jevRequest is the /predict body.
 type jevRequest struct {
-	State     map[string]any   `json:"state"`
-	Questions map[string]any   `json:"questions"` // qid -> jevQuestion
+	State     map[string]any `json:"state"`
+	Questions map[string]any `json:"questions"` // qid -> jevQuestion
 }
 
 // jevAnswer is one answer entry of the /predict response.
 type jevAnswer struct {
-	Type         string         `json:"type"`
-	Choice       string         `json:"choice,omitempty"`
-	Score        float64        `json:"score,omitempty"`
-	Noul         float64        `json:"noul,omitempty"`
-	Confidence   float64        `json:"confidence,omitempty"`
+	Type          string         `json:"type"`
+	Choice        string         `json:"choice,omitempty"`
+	Score         float64        `json:"score,omitempty"`
+	Noul          *float64       `json:"noul,omitempty"`
+	Confidence    float64        `json:"confidence,omitempty"`
 	Probabilities map[string]any `json:"probabilities,omitempty"`
 }
 
 // jevResponse is the /predict response envelope.
 type jevResponse struct {
-	Model   string              `json:"model,omitempty"`
+	Model   string               `json:"model,omitempty"`
 	Answers map[string]jevAnswer `json:"answers"`
-	Usage   map[string]any      `json:"usage,omitempty"`
+	Usage   map[string]any       `json:"usage,omitempty"`
 }
 
-const jevQuestionKey = "q1"
+const (
+	jevQuestionKey       = "q1"
+	jevMaxBatchQuestions = 32
+)
 
-func (c *jevCaller) Decide(ctx context.Context, req Request) (Result, error) {
+func (c *JevCaller) DecideBatch(ctx context.Context, reqs []Request) ([]Result, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	if c == nil || c.baseURL == "" {
+		return nil, ErrNoCaller
+	}
+	if len(reqs) > jevMaxBatchQuestions {
+		return nil, fmt.Errorf("jev: batch exceeds %d questions", jevMaxBatchQuestions)
+	}
+	state := strings.TrimSpace(reqs[0].State)
+	questions := make(map[string]any, len(reqs))
+	for i, req := range reqs {
+		if normalizeType(req.DecisionType) != TypeBoolean {
+			return nil, fmt.Errorf("jev: batch supports boolean decisions only")
+		}
+		if strings.TrimSpace(req.State) != state {
+			return nil, fmt.Errorf("jev: batch decisions must share one state")
+		}
+		key := fmt.Sprintf("q%d", i+1)
+		questions[key] = jevQuestion{
+			Type:         "noul",
+			Instructions: strings.TrimSpace(req.Question),
+			Criteria: map[string]any{
+				"false": "no, the statement does not hold",
+				"true":  "yes, the statement holds",
+			},
+		}
+	}
+	if state == "" {
+		return nil, fmt.Errorf("jev: batch state is required")
+	}
+	body := jevRequest{
+		State:     map[string]any{"from": "godex-compaction", "subject": "tool history", "body": state},
+		Questions: questions,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("jev: marshal batch request: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/predict", bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("jev: build batch request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	start := time.Now()
+	resp, err := c.client.Do(httpReq)
+	latency := time.Since(start)
+	if err != nil {
+		return nil, fmt.Errorf("jev: call laya: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, fmt.Errorf("jev: laya status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var parsed jevResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("jev: decode batch response: %w", err)
+	}
+	results := make([]Result, len(reqs))
+	for i := range reqs {
+		key := fmt.Sprintf("q%d", i+1)
+		answer, ok := parsed.Answers[key]
+		if !ok || answer.Noul == nil || (answer.Type != "" && answer.Type != "noul") || *answer.Noul < 0 || *answer.Noul > 1 {
+			return nil, fmt.Errorf("jev: invalid batch answer %q", key)
+		}
+		results[i] = Result{
+			Choice:     boolChoice(*answer.Noul >= 0.5),
+			Score:      *answer.Noul,
+			Confidence: answer.Confidence,
+			Calibrated: answer.Confidence > 0,
+			Model:      firstNonEmpty(parsed.Model, "laya"),
+			Latency:    latency,
+		}
+	}
+	return results, nil
+}
+
+func (c *JevCaller) Decide(ctx context.Context, req Request) (Result, error) {
 	if c == nil || c.baseURL == "" {
 		return Result{}, ErrNoCaller
 	}
@@ -125,13 +201,14 @@ func (c *jevCaller) Decide(ctx context.Context, req Request) (Result, error) {
 	}
 	q.Criteria = crit
 
-	// The Jev state carries the question text as body; from/subject stay
-	// generic so the model judges the instruction against the content.
+	// State is shared context; each request's question remains its own
+	// instruction. An empty State preserves the legacy question-as-body shape.
+	stateBody := firstNonEmpty(req.State, req.Question)
 	body := jevRequest{
 		State: map[string]any{
 			"from":    "godex-flow",
 			"subject": "decision",
-			"body":    strings.TrimSpace(req.Question),
+			"body":    stateBody,
 		},
 		Questions: map[string]any{jevQuestionKey: q},
 	}
@@ -171,15 +248,18 @@ func (c *jevCaller) Decide(ctx context.Context, req Request) (Result, error) {
 		Model:      firstNonEmpty(parsed.Model, "laya"),
 		Latency:    latency,
 		Raw: map[string]any{
-			"jev":           answer,
-			"latency_ms":    latency.Milliseconds(),
-			"usage":         parsed.Usage,
+			"jev":        answer,
+			"latency_ms": latency.Milliseconds(),
+			"usage":      parsed.Usage,
 		},
 	}
 	switch decisionType {
 	case TypeBoolean:
-		result.Choice = boolChoice(answer.Noul >= 0.5)
-		result.Score = answer.Noul
+		if answer.Noul == nil || *answer.Noul < 0 || *answer.Noul > 1 {
+			return Result{}, fmt.Errorf("jev: invalid noul score for %q", jevQuestionKey)
+		}
+		result.Choice = boolChoice(*answer.Noul >= 0.5)
+		result.Score = *answer.Noul
 	case TypeScore:
 		result.Score = answer.Score
 		result.Choice = ""

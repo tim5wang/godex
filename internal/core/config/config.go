@@ -187,6 +187,8 @@ func NormalizeAgentProfile(profile string) string {
 
 func NormalizeCompactionMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "jev":
+		return "jev"
 	case "model", "deep":
 		return "model"
 	case "hybrid":

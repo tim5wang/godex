@@ -54,6 +54,7 @@ export const zhProductMessages = {
       ctxPopoverMessages: "消息数",
       ctxPopoverSkills: "技能",
       ctxPopoverApprovals: "待审批",
+      ctxPopoverModelSpeed: "最近模型速度",
       ctxPopoverCumulative: "累计消耗 Tokens",
       ctxPopoverCumulativeIn: "输入",
       ctxPopoverCumulativeOut: "输出",

@@ -279,39 +279,51 @@ func retentionBoundary(messages []protocol.Message, retainTokens, fallbackKeep i
 	if cutoff <= 0 {
 		cutoff = 1
 	}
-	// Tool-pair alignment: while the first tail message is a tool_result whose
-	// tool_use sits in the compacted region, pull the boundary back so the
-	// whole pair lands in the verbatim tail.
-	for cutoff < len(messages) && toolResultNeedsEarlierUse(messages[cutoff], messages[:cutoff]) {
-		cutoff--
+	// A boundary may not split a tool exchange. For each call/result pair,
+	// every boundary strictly after the call and at/before its last result is
+	// invalid. Search the closest safe boundary, preferring a longer verbatim
+	// tail; if no non-empty tail is possible, compact all messages together.
+	callIndex := make(map[string]int)
+	lastResult := make(map[string]int)
+	for i, msg := range messages {
+		for _, block := range msg.Content {
+			if block.Type == protocol.BlockToolUse && strings.TrimSpace(block.ID) != "" {
+				callIndex[block.ID] = i
+			}
+			if block.Type == protocol.BlockToolResult {
+				if _, ok := lastResult[block.ToolUseID]; !ok || lastResult[block.ToolUseID] < i {
+					lastResult[block.ToolUseID] = i
+				}
+			}
+		}
+	}
+	isSafe := func(boundary int) bool {
+		for id, call := range callIndex {
+			if result, ok := lastResult[id]; ok && call < boundary && result >= boundary {
+				return false
+			}
+		}
+		return true
+	}
+	if !isSafe(cutoff) {
+		left := cutoff - 1
+		for left >= 1 && !isSafe(left) {
+			left--
+		}
+		if left >= 1 {
+			cutoff = left
+		} else {
+			right := cutoff + 1
+			for right < len(messages) && !isSafe(right) {
+				right++
+			}
+			cutoff = right
+		}
 	}
 	if cutoff < 1 {
 		cutoff = 1
 	}
 	return cutoff
-}
-
-// toolResultNeedsEarlierUse reports whether msg is a pure tool-result message
-// whose tool_use blocks appear in earlier (i.e. the pair is split across the
-// compaction boundary and should be pulled into the verbatim tail).
-func toolResultNeedsEarlierUse(msg protocol.Message, earlier []protocol.Message) bool {
-	uses := map[string]struct{}{}
-	for _, m := range earlier {
-		for _, block := range m.Content {
-			if block.Type == protocol.BlockToolUse && strings.TrimSpace(block.ID) != "" {
-				uses[block.ID] = struct{}{}
-			}
-		}
-	}
-	for _, block := range msg.Content {
-		if block.Type != protocol.BlockToolResult {
-			return false
-		}
-		if _, ok := uses[block.ToolUseID]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 // estimateMessageTokens approximates one message's token cost, mirroring the

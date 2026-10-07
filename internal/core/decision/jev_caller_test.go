@@ -110,7 +110,65 @@ func TestJevCallerScore(t *testing.T) {
 	}
 }
 
-// TestJevCallerBadStatus verifies non-200 responses surface as errors.
+func TestJevCallerBatch(t *testing.T) {
+	var got struct {
+		State struct {
+			Body string `json:"body"`
+		} `json:"state"`
+		Questions map[string]jevQuestion `json:"questions"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/predict" {
+			t.Errorf("expected /predict, got %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode batch request: %v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"rl-agent","answers":{"q1":{"type":"noul","noul":0.2},"q2":{"type":"noul","noul":0.8}}}`))
+	}))
+	defer srv.Close()
+
+	caller := NewJevCaller(JevCallerOptions{BaseURL: srv.URL, Timeout: 5 * time.Second})
+	results, err := caller.DecideBatch(context.Background(), []Request{
+		{State: "shared task state", Question: "first?", DecisionType: TypeBoolean},
+		{State: "shared task state", Question: "second?", DecisionType: TypeBoolean},
+	})
+	if err != nil {
+		t.Fatalf("DecideBatch: %v", err)
+	}
+	if got.State.Body != "shared task state" || len(got.Questions) != 2 {
+		t.Fatalf("unexpected request body: %+v", got)
+	}
+	if got.Questions["q2"].Instructions != "second?" || len(results) != 2 || results[0].Score != 0.2 || results[1].Choice != "true" {
+		t.Fatalf("unexpected batch request/results: req=%+v results=%+v", got, results)
+	}
+}
+
+func TestJevCallerBatchRejectsMissingAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"answers":{"q1":{"type":"noul","noul":0.5}}}`))
+	}))
+	defer srv.Close()
+	caller := NewJevCaller(JevCallerOptions{BaseURL: srv.URL, Timeout: time.Second})
+	_, err := caller.DecideBatch(context.Background(), []Request{
+		{State: "state", Question: "first", DecisionType: TypeBoolean},
+		{State: "state", Question: "second", DecisionType: TypeBoolean},
+	})
+	if err == nil {
+		t.Fatal("expected error for missing q2 answer")
+	}
+}
+
+func TestJevCallerBatchRejectsTooManyQuestions(t *testing.T) {
+	caller := NewJevCaller(JevCallerOptions{BaseURL: "http://localhost"})
+	reqs := make([]Request, jevMaxBatchQuestions+1)
+	if _, err := caller.DecideBatch(context.Background(), reqs); err == nil {
+		t.Fatal("expected batch size validation error")
+	}
+}
+
 func TestJevCallerBadStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "inference error: oom", http.StatusInternalServerError)

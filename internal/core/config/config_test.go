@@ -11,6 +11,23 @@ import (
 	"github.com/tim5wang/godex/internal/core/llm"
 )
 
+func TestNormalizeCompactionModeJev(t *testing.T) {
+	if got := NormalizeCompactionMode(" JeV "); got != "jev" {
+		t.Fatalf("NormalizeCompactionMode = %q, want jev", got)
+	}
+	var options []string
+	for _, section := range baseSchema() {
+		for _, field := range section.Fields {
+			if field.Path == "agent.compaction.mode" {
+				options = field.Options
+			}
+		}
+	}
+	if !strings.Contains(strings.Join(options, ","), "jev") {
+		t.Fatalf("compaction mode options omitted jev: %v", options)
+	}
+}
+
 func testHomeForWorkspace(workspace string) string {
 	return filepath.Join(workspace, "home")
 }

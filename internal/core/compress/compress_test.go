@@ -570,6 +570,71 @@ func TestRetentionBoundaryNeverSplitsToolPair(t *testing.T) {
 	}
 }
 
+func TestRetentionBoundaryKeepsMixedToolResultPairTogether(t *testing.T) {
+	cases := []struct {
+		name    string
+		history []protocol.Message
+		keep    int
+		wantCut int
+	}{
+		{
+			name: "tool call in retained suffix, mixed result beyond first tail message",
+			history: []protocol.Message{
+				protocol.NewTextMessage(protocol.RoleUser, "first"),
+				protocol.NewMessage(protocol.RoleAssistant, protocol.ToolUseBlock("mixed", "read_file", nil)),
+				protocol.NewTextMessage(protocol.RoleAssistant, "intervening"),
+				protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("mixed", "result"), protocol.TextBlock("also text")),
+				protocol.NewTextMessage(protocol.RoleUser, "latest"),
+			},
+			keep:    2,
+			wantCut: 1,
+		},
+		{
+			name: "tool call in first compacted message",
+			history: []protocol.Message{
+				protocol.NewMessage(protocol.RoleAssistant, protocol.ToolUseBlock("first", "bash", nil)),
+				protocol.NewTextMessage(protocol.RoleAssistant, "intervening"),
+				protocol.NewMessage(protocol.RoleUser, protocol.ToolResultBlock("first", "result"), protocol.TextBlock("also text")),
+				protocol.NewTextMessage(protocol.RoleUser, "latest"),
+			},
+			keep:    2,
+			wantCut: 3,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := retentionBoundary(tc.history, 0, tc.keep)
+			if got != tc.wantCut {
+				t.Fatalf("retentionBoundary = %d, want %d", got, tc.wantCut)
+			}
+			if !toolPairsStayOnOneSide(tc.history, got) {
+				t.Fatalf("boundary %d split a tool pair", got)
+			}
+		})
+	}
+}
+
+func toolPairsStayOnOneSide(history []protocol.Message, cutoff int) bool {
+	uses := map[string]int{}
+	results := map[string]int{}
+	for i, msg := range history {
+		for _, block := range msg.Content {
+			if block.Type == protocol.BlockToolUse {
+				uses[block.ID] = i
+			}
+			if block.Type == protocol.BlockToolResult {
+				results[block.ToolUseID] = i
+			}
+		}
+	}
+	for id, use := range uses {
+		if result, ok := results[id]; ok && (use < cutoff) != (result < cutoff) {
+			return false
+		}
+	}
+	return true
+}
+
 func TestCompactRetentionTailVerbatim(t *testing.T) {
 	dir := t.TempDir()
 	compressor := NewCompressor(dir)

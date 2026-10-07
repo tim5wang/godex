@@ -77,8 +77,9 @@ type Agent struct {
 	screenAudit screenAuditFn
 	// decisionCaller runs low-cost structured decision nodes (Jev/Laya-class
 	// System-1 models); nil means decision nodes fail_closed (F0 flow runtime).
-	decisionCaller decision.Caller
-	roleBundles    *roleBundleRegistry
+	decisionCaller      decision.Caller
+	jevCompactionCaller compress.JevToolHistoryCaller
+	roleBundles         *roleBundleRegistry
 	// emitSink is the event sink of the currently running turn, set by
 	// RunWithOptions. Manual compaction (compress tool) emits snapshot_ready
 	// through it so compaction history records manual compactions too; nil
@@ -217,11 +218,11 @@ type dependencies struct {
 	humanTasks     *humanTaskStore
 	// templateMgr resolves agent_ref references on flow step nodes (P1.4).
 	// It is optional: nil means agent_ref resolves to no capability override.
-	templateMgr    *templates.Manager
-	todoMgr        *todo.Manager
-	taskboard      *taskboard.Ledger
-	taskboardExec  taskboard.Executor
-	sandbox        sandbox.Sandbox
+	templateMgr   *templates.Manager
+	todoMgr       *todo.Manager
+	taskboard     *taskboard.Ledger
+	taskboardExec taskboard.Executor
+	sandbox       sandbox.Sandbox
 	// pluginMgr, when non-nil, feeds plugin-contributed prompt sections into
 	// the runtime prompt (P4 prompt/context contributor). Optional: nil keeps
 	// the default prompt unchanged.

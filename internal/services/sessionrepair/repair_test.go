@@ -190,3 +190,29 @@ func hasAction(report Report, code string) bool {
 	}
 	return false
 }
+
+func TestRepairHealthySessionDoesNotWriteAuditOrTimeline(t *testing.T) {
+	root := t.TempDir()
+	session := filepath.Join(root, "healthy")
+	writeValidRoot(t, session)
+	writeJSON(t, filepath.Join(session, timelineFile), []any{map[string]any{"type": "existing"}})
+	before, err := os.ReadFile(filepath.Join(session, timelineFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(filepath.Join(session, timelineFile))
+	for i := 0; i < 2; i++ {
+		report, err := Repair(Request{SessionsDir: root})
+		if err != nil || report.Changed {
+			t.Fatalf("healthy repair changed state: %+v %v", report, err)
+		}
+	}
+	after, _ := os.ReadFile(filepath.Join(session, timelineFile))
+	afterInfo, _ := os.Stat(filepath.Join(session, timelineFile))
+	if string(before) != string(after) || !info.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatal("healthy timeline rewritten")
+	}
+	if _, err := os.Stat(filepath.Join(session, eventJournalFile)); !os.IsNotExist(err) {
+		t.Fatalf("healthy audit created: %v", err)
+	}
+}

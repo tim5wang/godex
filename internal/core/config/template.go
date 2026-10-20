@@ -496,7 +496,7 @@ runtime:
   recovery:
     # Automatically queue a recovery turn after detecting an interrupted turn. Environment override: GODEX_RUNTIME_RECOVERY_AUTO_RESUME_INTERRUPTED_TURNS.
     auto_resume_interrupted_turns: {{ .Runtime.Recovery.AutoResumeInterruptedTurns }}
-    # Automatically repair low-risk session JSON/checkpoint inconsistencies on startup/open. Environment override: GODEX_RUNTIME_RECOVERY_AUTO_REPAIR_SESSIONS.
+    # Repair low-risk session JSON/checkpoint inconsistencies on failed open (no startup-wide repair). Environment override: GODEX_RUNTIME_RECOVERY_AUTO_REPAIR_SESSIONS.
     auto_repair_sessions: {{ .Runtime.Recovery.AutoRepairSessions }}
 
 security:
@@ -568,7 +568,7 @@ tools:
   web_search:
     # Enable the built-in web_search tool. Environment override: GODEX_WEB_SEARCH_ENABLED.
     enabled: {{ .Tools.WebSearch.Enabled }}
-    # Provider order. Supported values: brave, exa, tavily, browser, duckduckgo. Environment override: GODEX_WEB_SEARCH_PROVIDER_ORDER.
+    # Provider order. Supported values: brave, exa, tavily, serpapi, deepseek, browser, duckduckgo. Environment override: GODEX_WEB_SEARCH_PROVIDER_ORDER.
     provider_order: {{ yamlListIndent .Tools.WebSearch.ProviderOrder 6 }}
     # Search cache lifetime in seconds. Environment override: GODEX_WEB_SEARCH_CACHE_TTL_SECONDS.
     cache_ttl_seconds: {{ .Tools.WebSearch.CacheTTLSeconds }}

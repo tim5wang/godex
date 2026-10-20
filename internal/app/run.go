@@ -26,12 +26,12 @@ import (
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/platform/storagegc"
+	"github.com/tim5wang/godex/internal/selfdocs"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/evalharness"
 	"github.com/tim5wang/godex/internal/services/sessionrepair"
 	"github.com/tim5wang/godex/internal/sessionstore"
-	"github.com/tim5wang/godex/internal/selfdocs"
 	"github.com/tim5wang/godex/internal/tools"
 	"github.com/tim5wang/godex/internal/version"
 )
@@ -89,7 +89,16 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 		if r.RunTUI == nil {
 			return fmt.Errorf("tui mode unavailable")
 		}
-		locator := parseSessionSpecifier(r.DefaultSessionSpec, "local", "default")
+		var locator backend.SessionLocator
+		if strings.TrimSpace(r.DefaultSessionSpec) == "" {
+			var err error
+			locator, err = r.defaultTUILocator(ctx)
+			if err != nil {
+				return err
+			}
+		} else {
+			locator = parseSessionSpecifier(r.DefaultSessionSpec, "local", "default")
+		}
 		profile := ""
 		if r.Cfg != nil {
 			profile = r.Cfg.DefaultAgentProfileForChannel("tui")
@@ -476,13 +485,111 @@ func (r *Runner) runTUI(ctx context.Context, args []string) error {
 		return fmt.Errorf("tui mode unavailable")
 	}
 
-	locator := parseSessionSpecifier(sessionSpec, "local", "default")
+	if strings.TrimSpace(sessionSpec) == "" {
+		sessionSpec = strings.TrimSpace(r.DefaultSessionSpec)
+	}
+	var locator backend.SessionLocator
+	if strings.TrimSpace(sessionSpec) == "" {
+		var err error
+		locator, err = r.defaultTUILocator(ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		locator = parseSessionSpecifier(sessionSpec, "local", "default")
+	}
 	if strings.TrimSpace(profile) == "" && r.Cfg != nil {
 		profile = r.Cfg.DefaultAgentProfileForChannel("tui")
 	}
 	applyLocatorAgentProfile(&locator, profile)
 	applyLocatorExecMode(&locator, execMode)
 	return r.RunTUI(ctx, locator)
+}
+
+type sessionLister interface {
+	ListSessions(context.Context, backend.SessionListFilter) ([]backend.ListedSession, error)
+}
+
+func (r *Runner) defaultTUILocator(ctx context.Context) (backend.SessionLocator, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return backend.SessionLocator{}, fmt.Errorf("resolve current directory for TUI session: %w", err)
+	}
+	cwd, err = filepath.Abs(cwd)
+	if err != nil {
+		return backend.SessionLocator{}, fmt.Errorf("resolve current directory for TUI session: %w", err)
+	}
+	cwd = filepath.Clean(cwd)
+
+	lister, ok := r.Backend.(sessionLister)
+	if !ok {
+		return parseSessionSpecifier(r.DefaultSessionSpec, "local", "default"), nil
+	}
+	sessions, err := lister.ListSessions(ctx, backend.SessionListFilter{Channel: "local"})
+	if err != nil {
+		return backend.SessionLocator{}, fmt.Errorf("list local sessions for current directory: %w", err)
+	}
+	if locator, found := mostRecentLocalSession(sessions, cwd); found {
+		locator.SkipLatestSessionLookup = true
+		return locator, nil
+	}
+
+	return backend.SessionLocator{
+		Channel: "local",
+		Key:     "default",
+		Metadata: map[string]string{
+			"project_dir": cwd,
+		},
+		SkipLatestSessionLookup: true,
+	}, nil
+}
+
+func mostRecentLocalSession(sessions []backend.ListedSession, currentDir string) (backend.SessionLocator, bool) {
+	currentDir = comparableProjectDir(currentDir)
+	var latest *backend.ListedSession
+	for i := range sessions {
+		item := &sessions[i]
+		if !strings.EqualFold(strings.TrimSpace(item.Locator.Channel), "local") {
+			continue
+		}
+		projectDir := ""
+		if item.Locator.Metadata != nil {
+			projectDir = item.Locator.Metadata["project_dir"]
+		}
+		if currentDir == "" || comparableProjectDir(projectDir) != currentDir {
+			continue
+		}
+		if latest == nil || sessionActivityTime(*item).After(sessionActivityTime(*latest)) ||
+			(sessionActivityTime(*item).Equal(sessionActivityTime(*latest)) && item.SessionID < latest.SessionID) {
+			latest = item
+		}
+	}
+	if latest == nil {
+		return backend.SessionLocator{}, false
+	}
+	return latest.Locator, true
+}
+
+func comparableProjectDir(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return filepath.Clean(value)
+	}
+	return filepath.Clean(abs)
+}
+
+func sessionActivityTime(session backend.ListedSession) time.Time {
+	if !session.LastActivityAt.IsZero() {
+		return session.LastActivityAt
+	}
+	if !session.UpdatedAt.IsZero() {
+		return session.UpdatedAt
+	}
+	return session.CreatedAt
 }
 
 func (r *Runner) runDoctor(ctx context.Context, args []string) error {

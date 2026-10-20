@@ -859,9 +859,10 @@ func (s *Session) handleResumeSelect(ctx *minitui.CommandContext) {
 	ctx.Write(fmt.Sprintf("Switching to session %s:%s...\n", chosen.Locator.Channel, chosen.Locator.Key))
 
 	locator := rtbackend.SessionLocator{
-		Channel:  chosen.Locator.Channel,
-		Key:      chosen.Locator.Key,
-		Metadata: chosen.Locator.Metadata,
+		Channel:                 chosen.Locator.Channel,
+		Key:                     chosen.Locator.Key,
+		Metadata:                chosen.Locator.Metadata,
+		SkipLatestSessionLookup: true,
 	}
 	if err := s.switchSession(context.Background(), locator); err != nil {
 		ctx.Write("Error: failed to switch session: " + err.Error() + "\n")
@@ -914,9 +915,10 @@ func (s *Session) handleResumeArgs(ctx *minitui.CommandContext, query string) {
 		chosen := matches[0]
 		ctx.Write(fmt.Sprintf("Switching to %s:%s...\n", chosen.Locator.Channel, chosen.Locator.Key))
 		locator := rtbackend.SessionLocator{
-			Channel:  chosen.Locator.Channel,
-			Key:      chosen.Locator.Key,
-			Metadata: chosen.Locator.Metadata,
+			Channel:                 chosen.Locator.Channel,
+			Key:                     chosen.Locator.Key,
+			Metadata:                chosen.Locator.Metadata,
+			SkipLatestSessionLookup: true,
 		}
 		if err := s.switchSession(context.Background(), locator); err != nil {
 			ctx.Write("Error: " + err.Error() + "\n")

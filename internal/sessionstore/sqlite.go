@@ -57,6 +57,15 @@ func (s *SQLiteStore) LoadManifest(ctx context.Context, id string) (json.RawMess
 	return raw(manifest), true, nil
 }
 
+func (s *SQLiteStore) LoadQueue(ctx context.Context, id string) (json.RawMessage, bool, error) {
+	var queue []byte
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(queue, checkpoint_queue) FROM sessions WHERE session_id = ?`, id).Scan(&queue)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	return raw(queue), err == nil, err
+}
+
 func (s *SQLiteStore) Load(ctx context.Context, id string) (SessionData, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT session_id, manifest, state, timeline, turns, queue, event_journal, graph,

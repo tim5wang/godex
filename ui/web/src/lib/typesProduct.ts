@@ -170,6 +170,7 @@ export interface MCPRegistryResponse {
 }
 
 export interface MCPServerStatus {
+  state?: "discovering" | "ready" | "unavailable";
   name: string;
   type: MCPServerType;
   online: boolean;

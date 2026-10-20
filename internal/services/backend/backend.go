@@ -76,6 +76,9 @@ type SessionLocator struct {
 	Key      string            `json:"key,omitempty"`
 	UserID   string            `json:"user_id,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
+	// SkipLatestSessionLookup selects this exact key without consulting the
+	// process-wide latest-session pointer. It is consumed by OpenSession.
+	SkipLatestSessionLookup bool `json:"-"`
 }
 
 // SessionManifest is the persisted session metadata file.
@@ -353,8 +356,13 @@ type Service struct {
 	analyze  func(insights.Input) (*insights.Report, error)
 	now      func() time.Time
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// configMu excludes config replacement during session construction, without
+	// holding the session-map mutex across disk I/O or runtime initialization.
+	configMu sync.RWMutex
 	sessions map[string]*sessionState
+	loading  map[string]*sessionLoad
+	deleting map[string]bool
 	store    sessionstore.Store
 	storeErr error
 
@@ -370,6 +378,12 @@ type Service struct {
 }
 
 type sessionLockContextKey struct{}
+
+type sessionLoad struct {
+	done    chan struct{}
+	session *sessionState
+	err     error
+}
 
 type sessionState struct {
 	id                     string
@@ -492,7 +506,8 @@ func NewService(cfg *config.Config, shared *agent.SharedDependencies, commandSer
 		flowRuns: make(map[agent.FlowRunRef]struct{}),
 	}
 	service.store, service.storeErr = newSessionStore(cfg)
-	service.autoRepairSessions()
+	// Repair only sessions that fail to open. Full-store repair remains an
+	// explicit maintenance operation, never a prerequisite for a CLI first frame.
 	service.recoverQueuedSessions()
 	service.wireSlashCommandHandlers()
 	// Wire browser.view notifications into the session event stream so the Web

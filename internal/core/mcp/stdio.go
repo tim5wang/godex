@@ -62,7 +62,9 @@ func startStdioClient(ctx context.Context, server ServerConfig) (*stdioClient, e
 	if err := validateStdioServer(server); err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, server.Command, server.Args...)
+	// A pooled process outlives the initialize request's deadline. The manager
+	// owns its lifetime; failed initialization closes it below.
+	cmd := exec.Command(server.Command, server.Args...)
 	cmd.Env = envForServer(server)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -87,6 +89,7 @@ func startStdioClient(ctx context.Context, server ServerConfig) (*stdioClient, e
 
 	protocol, err := client.initialize(ctx)
 	if err != nil {
+		_ = cmd.Process.Kill()
 		_ = client.close()
 		return nil, err
 	}

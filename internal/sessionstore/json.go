@@ -41,6 +41,32 @@ func (s *JSONStore) LoadManifest(ctx context.Context, id string) (json.RawMessag
 	return readOptional(filepath.Join(s.root, id, manifestFile))
 }
 
+func (s *JSONStore) LoadQueue(ctx context.Context, id string) (json.RawMessage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	dir := filepath.Join(s.root, id)
+	rootPath := filepath.Join(dir, turnQueueFile)
+	pointerPath := filepath.Join(dir, checkpointPointer)
+	rootInfo, rootErr := os.Stat(rootPath)
+	pointerInfo, pointerErr := os.Stat(pointerPath)
+	// Root queue writes happen between checkpoints too (enqueue/cancel). Never
+	// replay an old checkpoint queue over a newer root, including an empty [].
+	if rootErr == nil && (pointerErr != nil || rootInfo.ModTime().After(pointerInfo.ModTime())) {
+		if raw, ok, err := readOptional(rootPath); err == nil && ok && json.Valid(raw) {
+			return raw, true, nil
+		}
+	}
+	if pointer, ok, err := readOptional(pointerPath); err == nil && ok {
+		if cpID := checkpointID(pointer); cpID != "" && cpID != "." && cpID != ".." && filepath.Base(cpID) == cpID {
+			if raw, ok, err := readOptional(filepath.Join(dir, checkpointsDir, cpID, turnQueueFile)); err == nil && ok && json.Valid(raw) {
+				return raw, true, nil
+			}
+		}
+	}
+	return readOptional(rootPath)
+}
+
 func (s *JSONStore) Load(ctx context.Context, id string) (SessionData, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return SessionData{}, false, err

@@ -143,7 +143,6 @@ func (r *sessionRepair) run() SessionReport {
 		r.report.Error = err.Error()
 		return r.report
 	}
-	r.emitRepairEvent(events.EventSessionRepairStarted, "started")
 	if err := r.repairCheckpointPointer(); err != nil {
 		r.fail(err)
 		return r.report
@@ -407,6 +406,11 @@ func (r *sessionRepair) removeFile(rel, code, message string) error {
 }
 
 func (r *sessionRepair) backup(rel string) error {
+	// A healthy inspection must be read-only, including its timeline. Start
+	// an audit trail only when the first actual repair is about to be applied.
+	if len(r.backedUp) == 0 && r.backupDir == "" {
+		r.emitRepairEvent(events.EventSessionRepairStarted, "started")
+	}
 	if r.backedUp[rel] {
 		return nil
 	}

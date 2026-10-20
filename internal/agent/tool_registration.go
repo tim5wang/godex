@@ -63,13 +63,29 @@ func (a *Agent) registerMCPServerTools(handler *tools.ToolHandler) {
 	if a.mcpMgr == nil {
 		return
 	}
-	for _, serverName := range a.mcpMgr.ListToolServers() {
-		owner := "mcp:" + serverName
-		decls, err := a.mcpMgr.ListServerTools(context.Background(), serverName)
-		if err != nil {
-			// Keep going; other servers may still register.
+	servers := a.mcpMgr.ListToolServers()
+	configured := make(map[string]bool, len(servers))
+	for _, name := range servers {
+		configured["mcp:"+name] = true
+	}
+	for _, bundle := range handler.Catalog().Bundles {
+		if bundle.Name != bundleMCP {
 			continue
 		}
+		for _, name := range bundle.Tools {
+			if owner := handler.OwnerFor(name); strings.HasPrefix(owner, "mcp:") && !configured[owner] {
+				handler.UnregisterOwner(owner)
+			}
+		}
+	}
+	for _, serverName := range servers {
+		owner := "mcp:" + serverName
+		decls, _ := a.mcpMgr.CachedServerTools(serverName)
+		if decls == nil {
+			continue
+		} // No successful schema snapshot yet.
+		active := handler.ActiveToolNames()
+		handler.UnregisterOwner(owner)
 		for _, decl := range decls {
 			tool, toolErr := tools.NewMCPServerTool(a.mcpMgr, serverName, decl)
 			if toolErr != nil {
@@ -80,6 +96,22 @@ func (a *Agent) registerMCPServerTools(handler *tools.ToolHandler) {
 				Summary: "first-class tool from MCP server " + serverName,
 			})
 		}
+		handler.SetActiveToolsExact(active...)
+	}
+	if handler == a.toolHandler {
+		a.mu.Lock()
+		active := handler.ActiveToolNames()
+		pending := a.pendingMCPActiveTools[:0]
+		for _, name := range a.pendingMCPActiveTools {
+			if strings.HasPrefix(handler.OwnerFor(name), "mcp:") {
+				active = append(active, name)
+			} else {
+				pending = append(pending, name)
+			}
+		}
+		a.pendingMCPActiveTools = pending
+		handler.SetActiveToolsExact(active...)
+		a.mu.Unlock()
 	}
 }
 

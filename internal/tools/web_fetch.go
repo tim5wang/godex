@@ -64,6 +64,7 @@ type WebFetchService struct {
 	cache      map[string]webFetchCacheEntry
 	now        func() time.Time
 	lightpanda *LightpandaBinary
+	deepseek   *DeepSeekToolsClient
 }
 
 func NewWebFetchService(cfg config.WebFetchConfig, tempDir string) *WebFetchService {
@@ -94,6 +95,18 @@ func (s *WebFetchService) SetLightpandaFetcher(binary *LightpandaBinary) {
 	s.cache = make(map[string]webFetchCacheEntry)
 }
 
+// SetDeepSeekTools enables the DeepSeek Fetch fallback: pages whose local
+// extraction comes back degraded (needs_browser or a near-empty body) are
+// re-fetched as Markdown through POST /v1/tools/fetch. It is billed per
+// successful request and runs only on the degraded path, so ordinary static
+// pages never leave the machine.
+func (s *WebFetchService) SetDeepSeekTools(client *DeepSeekToolsClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deepseek = client
+	s.cache = make(map[string]webFetchCacheEntry)
+}
+
 func (s *WebFetchService) Fetch(ctx context.Context, rawURL, mode string, maxChars int, query ...string) (WebFetchResponse, error) {
 	s.mu.RLock()
 	cfg := s.cfg
@@ -101,6 +114,7 @@ func (s *WebFetchService) Fetch(ctx context.Context, rawURL, mode string, maxCha
 	client := s.client
 	tempDir := s.tempDir
 	lightpanda := s.lightpanda
+	deepseek := s.deepseek
 	s.mu.RUnlock()
 
 	if !cfg.Enabled {
@@ -192,6 +206,26 @@ func (s *WebFetchService) Fetch(ctx context.Context, rawURL, mode string, maxCha
 			result.Content = lpContent
 			result.NeedsBrowser = false
 			result.ExtractionWarnings = append(result.ExtractionWarnings, "re-fetched with lightpanda browser")
+		}
+	}
+	// DeepSeek Fetch fallback: the local extractor cannot render anti-crawl pages
+	// (WeChat/GitHub/Cloudflare, see docs/tools_issues.md), so a degraded result is
+	// re-fetched as Markdown by DeepSeek. Runs after lightpanda so the free local
+	// paths win.
+	if deepseekFallbackNeeded(result) && deepseek.configured() && deepseek.remoteFetchAllowed(result.URL) {
+		remoteContent, remoteTitle, remoteErr := deepseek.fetchPage(ctx, result.URL)
+		switch {
+		case remoteErr != nil:
+			// Soft fail: a paid fallback that could not help must not turn a
+			// usable local fetch into an error.
+			result.ExtractionWarnings = append(result.ExtractionWarnings, "deepseek fetch fallback failed: "+remoteErr.Error())
+		case strings.TrimSpace(remoteContent) != "":
+			result.Content = remoteContent
+			result.NeedsBrowser = false
+			if result.Title == "" && remoteTitle != "" {
+				result.Title = remoteTitle
+			}
+			result.ExtractionWarnings = append(result.ExtractionWarnings, "re-fetched with deepseek fetch")
 		}
 	}
 	// Anti-crawl fallback hint: when the fetch is degraded (needs browser or thin content)
@@ -571,6 +605,16 @@ func extractionWarnings(body []byte, content string) []string {
 // fetch is degraded on a known anti-crawl host. It returns an empty string when the
 // fetch succeeded or the host is not a known anti-crawl case. This prevents callers
 // from repeatedly retrying web_fetch on the same anti-crawl URL.
+// deepseekFallbackNeeded reports whether local extraction came back degraded
+// enough to justify a paid remote re-fetch. The thresholds intentionally match
+// fallbackHintForURL's degraded definition so both agree on what "degraded" means.
+func deepseekFallbackNeeded(result WebFetchResponse) bool {
+	if result.NeedsBrowser {
+		return true
+	}
+	return len(strings.TrimSpace(result.Content)) < 120
+}
+
 func fallbackHintForURL(rawURL string, needsBrowser bool, body []byte, contentLen int) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Hostname() == "" {

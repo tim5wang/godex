@@ -89,6 +89,7 @@ export const zhCoreMessages = {
       mcpOnline: "在线",
       mcpOffline: "离线",
       mcpUnknown: "未知",
+      mcpDiscovering: "正在连接",
       mcpDeleteConfirm: "删除 MCP 服务 “{name}”？",
       mcpTestOk: "“{name}” 已连接 · {tools} 个工具",
       mcpTestFailed: "MCP 服务测试失败。",
@@ -231,6 +232,7 @@ export const zhCoreMessages = {
       notSetTag: "未设置",
       placeholderProviderModel: "provider.model",
       placeholderCommaValues: "逗号分隔的值",
+      placeholderSelectOrType: "下拉选择，或输入回车新增",
       configuredReplace: "已配置（输入以更新）",
       notConfigured: "未配置",
       // --- LLM 提供商编辑器 ---

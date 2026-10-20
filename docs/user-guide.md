@@ -2,6 +2,7 @@
 
 > 状态：Active（用户手册）
 > 修订日志：
+> - 2026-10-13 启动与会话切换：MCP 后台发现、按需会话修复、轻量队列恢复扫描。
 > - 2026-08-15 全量 review 后重写：修正 CLI 命令面（移除不存在的 `repl`）、补充完整命令行参考、配置参考、工具清单、Slash Command 清单、HTTP API 路由表、自动化（cron/heartbeat）、安全模型与故障排查；对齐 Agent Profile 真实语义（提示词策略而非工具过滤）。
 
 本文档承接 README 中不适合放在产品总览里的细节，覆盖安装运行、配置、Provider、CLI、Web UI、工具、Channel、自动化、安全、Memory、Subagent/Workflow/Package、Slash Commands、HTTP API、Eval 和发布检查。Package 依赖、MCP、ACP 与 WASM 的可运行示例和成熟度边界另见 [`extension-runtime-user-guide.md`](extension-runtime-user-guide.md)。
@@ -67,6 +68,8 @@ go run ./cmd/godex gc --dry-run
 # 导入 Claude Code 生态资源
 go run ./cmd/godex import claude --source .claude --dry-run
 ```
+
+未指定 `--session` 时，TUI 会恢复当前工作目录下最近活动的本地会话；该目录还没有会话时，会创建目录专属的默认会话。
 
 > 注意：`godex repl` 命令**不存在**（旧 readline REPL 已移除）。交互式终端统一使用 TUI（`godex` / `godex tui`）。
 
@@ -234,6 +237,8 @@ agent:
 - **外部 ACP engine（`acp:<id>`）**：每个配置的 ACP agent（`acp.agents`）自动注册为 `acp:<agent-id>` 引擎；`metadata.harness: "acp:codex"` 可把整轮委托给外部 Agent Client Protocol agent（stdio）。外部 engine 只消费宿主注入的稳定输入面（消息快照、工作区目录），回复由宿主统一写入 transcript 并 checkpoint；不转发 GoDex 工具注册（外部引擎在自己的进程内使用自己的工具面）。
 - **Turn 错误分层**：模型调用错误分类为 Retryable / Transient / NonRetryable；Retryable/Transient 在同一 turn 内有限重试（`agent.max_turns` 之外的独立预算），NonRetryable 立即失败并透出明确 message。
 - **Runner 韧性**：统一 phase checkpoint、active turn follow-up 注入、空回复/`finish_reason=length` 恢复、`runtime.recovery.auto_resume_interrupted_turns`（默认 false）与 `auto_repair_sessions`（默认 true）。
+- **启动与恢复**：启动不再自动修复整个会话库，只轻量读取待执行队列。`auto_repair_sessions` 在目标会话打开失败时执行低风险修复并重试；健康会话检查不写修复事件。需要全库检查/修复时显式使用 `godex repair`（先查看 `godex repair --help`）。同一会话的并发打开合并为一次加载，其他会话无需等待该会话的磁盘读取。
+- **MCP 就绪**：打开会话及 `/resume` 不等待外部 MCP 握手；已有工具声明缓存立即可用，缺失/过期缓存后台刷新（单次最多 5 秒，失败冷却 30 秒）。后台结果在下次 turn 开始时安装，不修改执行中模型看到的工具列表。冷启动首轮尚未发现的工具可通过 `list_mcp_tools` / `call_mcp_tool` 桥接使用。Settings MCP 状态显示“正在连接”或具体失败原因，“测试连接”可主动重试。
 - **Loop guard**：见「安全模型 → Loop Guard」。
 
 ### 常见环境变量

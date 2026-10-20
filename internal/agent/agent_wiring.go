@@ -59,6 +59,17 @@ func buildDependencies(cfg *config.Config) dependencies {
 	webSearch.SetPreviewFetcher(webFetch)
 	webSearch.SetBrowserSearcher(tools.NewBrowserSearchProvider(browser, cfg.Tools.WebSearch.Browser))
 
+	// DeepSeek Search/Fetch integration: reuse the account API key already
+	// resolved for the DeepSeek LLM provider, so no extra credential is needed.
+	// Search is opt-in through provider_order; the Fetch fallback follows the
+	// same opt-in because it is billed per request.
+	if ds := deepseekToolsClientForConfig(cfg); ds != nil {
+		webSearch.SetDeepSeekTools(ds)
+		if providerOrderIncludes(cfg.Tools.WebSearch.ProviderOrder, "deepseek") {
+			webFetch.SetDeepSeekTools(ds)
+		}
+	}
+
 	// Lightpanda integration: initialize binary and inject into search/fetch.
 	if cfg.Tools.Lightpanda.Enabled {
 		lpBin := tools.NewLightpandaBinary()
@@ -173,6 +184,33 @@ func memoryConsolidationOneShot(client conversation.Caller, cfg *config.Config) 
 		}
 		return protocol.BlocksText(resp.Content), nil
 	}
+}
+
+// deepseekToolsClientForConfig builds the DeepSeek Search/Fetch client from the
+// DeepSeek LLM provider credential. Returns nil when no key is configured, which
+// keeps the "deepseek" search provider and the Fetch fallback inert.
+func deepseekToolsClientForConfig(cfg *config.Config) *tools.DeepSeekToolsClient {
+	if cfg == nil {
+		return nil
+	}
+	provider, ok := cfg.LLMProviders["deepseek"]
+	if !ok {
+		return nil
+	}
+	key := strings.TrimSpace(provider.APIKey)
+	if key == "" {
+		return nil
+	}
+	return tools.NewDeepSeekToolsClient(key)
+}
+
+func providerOrderIncludes(order []string, name string) bool {
+	for _, item := range order {
+		if strings.EqualFold(strings.TrimSpace(item), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func callerForConfigProfile(cfg *config.Config, primary config.ModelProfileConfig) conversation.Caller {

@@ -147,6 +147,11 @@ func main() {
 	defer conversation.SetUsageObserver(nil)
 
 	shared := agent.NewSharedDependencies(cfg)
+	defer func() {
+		if manager := shared.MCPManager(); manager != nil {
+			manager.Close()
+		}
+	}()
 	commandService := commands.NewService(cfg)
 	commandService.SetDoctor(manager.Doctor)
 	service := backend.NewService(cfg, shared, commandService)

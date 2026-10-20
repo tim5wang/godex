@@ -136,7 +136,7 @@ func baseSchema() []SectionSchema {
 			Description: "Recovery and long-running runtime behavior.",
 			Fields: []FieldSchema{
 				{Path: "runtime.recovery.auto_resume_interrupted_turns", Label: "Auto Resume Interrupted Turns", Description: "Queue a recovery turn after detecting an interrupted turn on restart.", Type: "bool", LiveApply: true, Env: "GODEX_RUNTIME_RECOVERY_AUTO_RESUME_INTERRUPTED_TURNS"},
-				{Path: "runtime.recovery.auto_repair_sessions", Label: "Auto Repair Sessions", Description: "Repair low-risk session JSON and checkpoint inconsistencies on startup/open.", Type: "bool", LiveApply: true, Env: "GODEX_RUNTIME_RECOVERY_AUTO_REPAIR_SESSIONS"},
+				{Path: "runtime.recovery.auto_repair_sessions", Label: "Auto Repair Sessions", Description: "Repair low-risk JSON/checkpoint inconsistencies when a session fails to open; startup does not repair the entire store.", Type: "bool", LiveApply: true, Env: "GODEX_RUNTIME_RECOVERY_AUTO_REPAIR_SESSIONS"},
 			},
 		},
 		{
@@ -202,7 +202,7 @@ func baseSchema() []SectionSchema {
 			Description: "Built-in current-information search providers and cache policy.",
 			Fields: []FieldSchema{
 				{Path: "tools.web_search.enabled", Label: "Enabled", Description: "Enable the built-in web_search tool.", Type: "bool", LiveApply: true, Env: "GODEX_WEB_SEARCH_ENABLED"},
-				{Path: "tools.web_search.provider_order", Label: "Provider Order", Description: "Comma-separated provider order. Supported: brave, exa, tavily, serpapi, browser, lightpanda, duckduckgo.", Type: "string_list", LiveApply: true, Env: "GODEX_WEB_SEARCH_PROVIDER_ORDER"},
+				{Path: "tools.web_search.provider_order", Label: "Provider Order", Description: "Provider preference order: the first provider that returns results wins, and the rest are fallbacks. deepseek uses the DeepSeek Search API (billed per request, key reused from the DeepSeek LLM provider).", Type: "string_list", LiveApply: true, Env: "GODEX_WEB_SEARCH_PROVIDER_ORDER", Options: WebSearchProviderNames},
 				{Path: "tools.web_search.cache_ttl_seconds", Label: "Cache TTL Seconds", Description: "In-memory cache lifetime for repeated searches.", Type: "int", LiveApply: true, Env: "GODEX_WEB_SEARCH_CACHE_TTL_SECONDS"},
 				{Path: "tools.web_search.browser.engine", Label: "Browser Engine", Description: "Browser search engine preset: duckduckgo, bing, brave, or custom.", Type: "string", LiveApply: true, Env: "GODEX_WEB_SEARCH_BROWSER_ENGINE", Options: []string{"duckduckgo", "bing", "brave", "custom"}},
 				{Path: "tools.web_search.browser.engine_fallback", Label: "Browser Engine Fallback", Description: "Comma-separated browser engines to try when the primary engine fails or returns no results.", Type: "string_list", LiveApply: true, Env: "GODEX_WEB_SEARCH_BROWSER_ENGINE_FALLBACK"},

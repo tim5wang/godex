@@ -39,6 +39,11 @@ type SearchResult struct {
 	FetchedPreview string `json:"fetched_preview,omitempty"`
 	PublishedAt    string `json:"published_at,omitempty"`
 	FetchError     string `json:"fetch_error,omitempty"`
+
+	// providerScore carries the provider's own relevance signal (DeepSeek
+	// rerank_score) as a ranking nudge. Not serialized: it is an input to
+	// scoreSearchResult, not part of the tool contract.
+	providerScore float64
 }
 
 type WebSearchResponse struct {
@@ -73,6 +78,7 @@ type WebSearchService struct {
 	preview                  *WebFetchService
 	browser                  BrowserSearchProvider
 	lightpanda               BrowserSearchProvider
+	deepseek                 *DeepSeekToolsClient
 }
 
 type BrowserSearchProvider interface {
@@ -119,6 +125,16 @@ func (s *WebSearchService) SetLightpandaSearcher(searcher BrowserSearchProvider)
 	s.cache = make(map[string]webSearchCacheEntry)
 }
 
+// SetDeepSeekTools points the "deepseek" provider at the shared Search/Fetch
+// client. It is not in the default provider order: both endpoints are billed
+// per request against an account-level QPS budget, so opting in is explicit.
+func (s *WebSearchService) SetDeepSeekTools(client *DeepSeekToolsClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deepseek = client
+	s.cache = make(map[string]webSearchCacheEntry)
+}
+
 // ApplyConfig swaps runtime configuration and clears search cache.
 func (s *WebSearchService) ApplyConfig(cfg config.WebSearchConfig) {
 	s.mu.Lock()
@@ -143,6 +159,7 @@ func (s *WebSearchService) Search(ctx context.Context, query string, maxResults 
 	preview := s.preview
 	browser := s.browser
 	lightpanda := s.lightpanda
+	deepseek := s.deepseek
 	s.mu.RUnlock()
 
 	if !cfg.Enabled {
@@ -169,7 +186,7 @@ func (s *WebSearchService) Search(ctx context.Context, query string, maxResults 
 		var merged []SearchResult
 		providerFailed := false
 		for _, variant := range searchProviderQueryVariants(name, query) {
-			results, err := s.searchWithProvider(ctx, client, endpoints, cfg, browser, lightpanda, name, variant, maxResults, freshness)
+			results, err := s.searchWithProvider(ctx, client, endpoints, cfg, browser, lightpanda, deepseek, name, variant, maxResults, freshness)
 			if err != nil {
 				if ctx.Err() != nil {
 					return WebSearchResponse{}, ctx.Err()
@@ -262,7 +279,11 @@ func searchQueryVariants(query string) []string {
 }
 
 func searchProviderQueryVariants(provider, query string) []string {
-	if strings.EqualFold(strings.TrimSpace(provider), "browser") {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "browser", "lightpanda", "deepseek":
+		// DeepSeek bills per successful request regardless of result count, so
+		// variant fan-out costs money without buying extra coverage; its own
+		// rerank already handles relevance.
 		query = strings.TrimSpace(query)
 		if query == "" {
 			return nil
@@ -342,7 +363,10 @@ func searchPreferredHosts(provider string, cfg config.WebSearchConfig) []string 
 
 func scoreSearchResult(item SearchResult, query string, preferredHosts []string) (int, string, string) {
 	text := strings.ToLower(item.Title + " " + item.Snippet + " " + item.CanonicalURL)
-	score := 0
+	// DeepSeek rerank_score is 0-3; fold it in as a bounded nudge so the local
+	// heuristics still decide, while the provider's own relevance ordering
+	// breaks ties and demotes items it already ranked as irrelevant.
+	score := int(item.providerScore * 4)
 	reasons := make([]string, 0, 4)
 	for _, keyword := range queryKeywords(query) {
 		if strings.Contains(text, keyword) {
@@ -405,6 +429,11 @@ func addSearchPreviews(ctx context.Context, preview *WebFetchService, query stri
 					return
 				}
 				results[idx].FetchError = err.Error()
+				return
+			}
+			// A provider-supplied summary (DeepSeek) is already model-ready, and a
+			// local fetch would only replace it with a differently-truncated body.
+			if results[idx].FetchedPreview != "" {
 				return
 			}
 			if fetched.CanonicalURL != "" {
@@ -470,8 +499,15 @@ func (s *WebSearchService) storeCache(key string, entry webSearchCacheEntry) {
 	s.cache[key] = entry
 }
 
-func (s *WebSearchService) searchWithProvider(ctx context.Context, client *http.Client, endpoints webSearchEndpoints, cfg config.WebSearchConfig, browser BrowserSearchProvider, lightpanda BrowserSearchProvider, provider, query string, maxResults int, freshness string) ([]SearchResult, error) {
+func (s *WebSearchService) searchWithProvider(ctx context.Context, client *http.Client, endpoints webSearchEndpoints, cfg config.WebSearchConfig, browser BrowserSearchProvider, lightpanda BrowserSearchProvider, deepseek *DeepSeekToolsClient, provider, query string, maxResults int, freshness string) ([]SearchResult, error) {
 	switch provider {
+	case "deepseek":
+		if !deepseek.configured() {
+			return nil, fmt.Errorf("deepseek api key not configured")
+		}
+		// freshness has no DeepSeek equivalent: it only accepts operators
+		// (site:/after:/lang:) inside the query string.
+		return deepseek.searchResults(ctx, query, maxResults)
 	case "brave":
 		if strings.TrimSpace(cfg.BraveAPIKey) == "" {
 			return nil, fmt.Errorf("brave api key not configured")
@@ -565,19 +601,28 @@ func normalizeWebSearchConfig(cfg config.WebSearchConfig) config.WebSearchConfig
 	return cfg
 }
 
+// webSearchProviderSet mirrors config.WebSearchProviderNames as a lookup set.
+var webSearchProviderSet = func() map[string]struct{} {
+	set := make(map[string]struct{}, len(config.WebSearchProviderNames))
+	for _, name := range config.WebSearchProviderNames {
+		set[name] = struct{}{}
+	}
+	return set
+}()
+
 func providerOrder(order []string) []string {
 	seen := make(map[string]struct{}, len(order))
 	out := make([]string, 0, len(order)+1)
 	for _, item := range order {
 		item = strings.ToLower(strings.TrimSpace(item))
-		switch item {
-		case "brave", "exa", "tavily", "serpapi", "browser", "lightpanda", "duckduckgo":
-			if _, ok := seen[item]; ok {
-				continue
-			}
-			seen[item] = struct{}{}
-			out = append(out, item)
+		if _, ok := webSearchProviderSet[item]; !ok {
+			continue
 		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
 	}
 	if _, ok := seen["duckduckgo"]; !ok {
 		out = append(out, "duckduckgo")

@@ -2,10 +2,12 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/tim5wang/godex/internal/core/mcp"
@@ -45,6 +47,46 @@ func TestMCPToolsRegisteredWithBuiltinOwner(t *testing.T) {
 	}
 }
 
+func TestAsyncMCPDiscoveryPreservesExactRestoredActivations(t *testing.T) {
+	a := newTestAgent(t, 4096)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.SaveConfig(a.cfg.MCPConfigPath, mcp.Config{Servers: []mcp.ServerConfig{{
+		Name: "fake", Type: mcp.ServerTypeStdio, Command: exe,
+		Args: []string{"-test.run", "TestMCPFakeServerHelper"}, Env: map[string]string{"GODEX_MCP_HELPER": "1"},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.mcpMgr.Close)
+	a.RegisterTools()
+	a.RestoreState(SessionState{ActiveTools: []string{"read_file", "fake__echo"}})
+	if !slices.Contains(a.ExportState().ActiveTools, "fake__echo") {
+		t.Fatal("pending activation lost before schemas arrived")
+	}
+	if _, err := a.mcpMgr.ListServerTools(context.Background(), "fake"); err != nil {
+		t.Fatal(err)
+	}
+	if a.toolHandler.Get("fake__echo") != nil {
+		t.Fatal("background discovery changed live tools")
+	}
+	a.registerMCPServerTools(a.toolHandler) // The same safe boundary used by RunWithOptions.
+	if !a.toolHandler.IsActive("fake__echo") || a.toolHandler.IsActive("fake__boom") {
+		t.Fatalf("exact activation widened/lost: %v", a.toolHandler.ActiveToolNames())
+	}
+	if !slices.Contains(a.ExportState().ActiveTools, "fake__echo") {
+		t.Fatal("activation lost after refresh")
+	}
+	if err := a.mcpMgr.DeleteServer("fake"); err != nil {
+		t.Fatal(err)
+	}
+	a.registerMCPServerTools(a.toolHandler)
+	if a.toolHandler.Get("fake__echo") != nil {
+		t.Fatal("removed server still advertised")
+	}
+}
+
 func TestMCPServerToolsRegisteredPerServer(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping stdio MCP integration in short mode")
@@ -77,6 +119,11 @@ func TestMCPServerToolsRegisteredPerServer(t *testing.T) {
 	}
 	a.cfg.MCPConfigPath = configPath
 	a.mcpMgr = mcp.NewManager(configPath, workspace, filepath.Join(workspace, ".godex", ".tmp"))
+	t.Cleanup(a.mcpMgr.Close)
+	// Eager discovery is now explicit; registration itself only reads a cache.
+	if _, err := a.mcpMgr.ListServerTools(context.Background(), "fake"); err != nil {
+		t.Fatal(err)
+	}
 
 	a.RegisterTools()
 	a.toolHandler.ActivateBundles(bundleMCP)

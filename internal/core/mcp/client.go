@@ -100,7 +100,7 @@ type toolsCacheEntry struct {
 	sig string
 }
 
-// clientEntry is a persistent per-server rpcClient shared across calls. mu
+// clientEntry is a persistent per-server rpcClient shared across calls. gate
 // serializes operations on the underlying client so concurrent callers never
 // interleave writes on the same stdio pipe.
 type clientEntry struct {
@@ -108,7 +108,7 @@ type clientEntry struct {
 	client rpcClient
 	// lastUsed is the unix-nano timestamp of the last completed operation.
 	lastUsed atomic.Int64
-	mu       sync.Mutex
+	gate     chan struct{}
 }
 
 // Manager is the read-only MCP resource entrypoint.
@@ -121,7 +121,10 @@ type Manager struct {
 	// toolsCache caches the tools/list result per server (see
 	// toolsListCacheTTL) so session open / tool registration do not spawn a
 	// stdio daemon on every call.
-	toolsCache map[string]*toolsCacheEntry
+	toolsCache      map[string]*toolsCacheEntry
+	toolDiscoveries map[string]*toolDiscovery
+	toolFailures    map[string]*toolDiscoveryFailure
+	closed          bool
 	// clients holds persistent per-server rpcClient instances (see
 	// clientIdleTTL) so a stdio daemon stays warm across tool calls instead
 	// of being spawned and torn down per request.
@@ -266,6 +269,10 @@ func (m *Manager) acquireClient(ctx context.Context, server ServerConfig) (*clie
 	now := time.Now()
 
 	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
+		return nil, fmt.Errorf("mcp manager closed")
+	}
 	e := m.clients[server.Name]
 	m.mu.RUnlock()
 	if e != nil && e.sig == sig && now.Sub(time.Unix(0, e.lastUsed.Load())) < clientIdleTTL {
@@ -280,6 +287,11 @@ func (m *Manager) acquireClient(ctx context.Context, server ServerConfig) (*clie
 		return nil, err
 	}
 	m.mu.Lock()
+	if m.closed || ctx.Err() != nil {
+		m.mu.Unlock()
+		_ = client.close()
+		return nil, fmt.Errorf("mcp client initialization cancelled or manager closed")
+	}
 	// Another goroutine may have created a matching, non-idle entry meanwhile;
 	// prefer it and discard ours.
 	if existing, ok := m.clients[server.Name]; ok && existing.sig == sig && time.Since(time.Unix(0, existing.lastUsed.Load())) < clientIdleTTL {
@@ -295,7 +307,7 @@ func (m *Manager) acquireClient(ctx context.Context, server ServerConfig) (*clie
 	if m.clients == nil {
 		m.clients = map[string]*clientEntry{}
 	}
-	e = &clientEntry{sig: sig, client: client}
+	e = &clientEntry{sig: sig, client: client, gate: make(chan struct{}, 1)}
 	e.lastUsed.Store(now.UnixNano())
 	m.clients[server.Name] = e
 	m.mu.Unlock()
@@ -312,12 +324,16 @@ func withClient[T any](m *Manager, ctx context.Context, server ServerConfig, fn 
 	if err != nil {
 		return zero, err
 	}
-	e.mu.Lock()
+	select {
+	case e.gate <- struct{}{}:
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
 	result, opErr := fn(e.client)
 	if opErr == nil {
 		e.lastUsed.Store(time.Now().UnixNano())
 	}
-	e.mu.Unlock()
+	<-e.gate
 	invalidated := false
 	if opErr != nil && errors.Is(opErr, errConnClosed) {
 		invalidated = m.invalidateClient(server.Name, e)
@@ -358,6 +374,11 @@ func (m *Manager) invalidateClient(name string, e *clientEntry) bool {
 // client for one server. The manager lock must be held.
 func (m *Manager) invalidateServerLocked(name string) {
 	delete(m.toolsCache, name)
+	delete(m.toolFailures, name)
+	if flight := m.toolDiscoveries[name]; flight != nil {
+		flight.cancel()
+		delete(m.toolDiscoveries, name)
+	}
 	if e, ok := m.clients[name]; ok {
 		delete(m.clients, name)
 		go e.client.close()
@@ -366,15 +387,31 @@ func (m *Manager) invalidateServerLocked(name string) {
 
 // Close closes every persistent MCP client (stdio processes / http clients),
 // letting daemons that stop on last-committed-client-disconnect exit. It is
-// safe to call multiple times and while operations are in flight; in-flight
-// operations finish against the client they already hold.
+// safe to call multiple times. Discovery is cancelled and child processes are
+// reaped before returning, so a short-lived TUI cannot orphan a starting MCP.
 func (m *Manager) Close() {
 	m.mu.Lock()
+	m.closed = true
+	var flights []*toolDiscovery
+	for _, flight := range m.toolDiscoveries {
+		flight.cancel()
+		flights = append(flights, flight)
+	}
+	var clients []rpcClient
 	for name, e := range m.clients {
 		delete(m.clients, name)
-		go e.client.close()
+		clients = append(clients, e.client)
 	}
 	m.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, client := range clients {
+		wg.Add(1)
+		go func(c rpcClient) { defer wg.Done(); _ = c.close() }(client)
+	}
+	for _, flight := range flights {
+		<-flight.done
+	}
+	wg.Wait()
 }
 
 // HasConfiguredServers reports whether the local MCP config contains any servers.
@@ -577,17 +614,35 @@ func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, arg
 // opens / tool registrations do not spawn a stdio daemon on every call; the
 // cache is keyed by the server config signature so a config change refetches.
 func (m *Manager) listServerTools(ctx context.Context, server ServerConfig) ([]Tool, error) {
-	sig := serverSignature(server)
-	m.mu.RLock()
-	entry := m.toolsCache[server.Name]
-	m.mu.RUnlock()
-	if entry != nil && entry.sig == sig && time.Since(entry.fetchedAt) < toolsListCacheTTL {
-		out := make([]Tool, len(entry.tools))
-		copy(out, entry.tools)
-		return out, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	m.mu.Lock()
+	flight, err := m.discoverToolsLocked(server)
+	if flight == nil {
+		var items []Tool
+		if entry := m.toolsCache[server.Name]; err == nil && entry != nil {
+			items = cloneTools(entry.tools)
+		}
+		m.mu.Unlock()
+		return items, err
+	}
+	m.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-flight.done:
+		return cloneTools(flight.tools), flight.err
+	}
+}
 
-	items, err := withClient(m, ctx, server, func(c rpcClient) ([]Tool, error) {
+func (m *Manager) fetchServerTools(ctx context.Context, server ServerConfig) ([]Tool, error) {
+	return withClient(m, ctx, server, func(c rpcClient) ([]Tool, error) {
+		if server.Type == ServerTypeHTTP {
+			if _, err := c.initialize(ctx); err != nil {
+				return nil, err
+			}
+		}
 		raw, err := c.listTools(ctx)
 		if err != nil {
 			return nil, err
@@ -603,17 +658,6 @@ func (m *Manager) listServerTools(ctx context.Context, server ServerConfig) ([]T
 		}
 		return out, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	m.mu.Lock()
-	if m.toolsCache == nil {
-		m.toolsCache = map[string]*toolsCacheEntry{}
-	}
-	m.toolsCache[server.Name] = &toolsCacheEntry{tools: items, fetchedAt: time.Now(), sig: sig}
-	m.mu.Unlock()
-	return items, nil
 }
 
 // ListPrompts lists prompts exposed by all configured stdio MCP servers via

@@ -14,6 +14,15 @@ import (
 // prepareRuntimeArgs imports the interactive environment and handles the
 // startup-only argument paths before long-lived services are constructed.
 func prepareRuntimeArgs() (config.Options, []string, bool, error) {
+	// Pure informational commands must work even with a broken config or a
+	// slow login shell; they need neither environment import nor session state.
+	if args := os.Args[1:]; len(args) > 0 {
+		switch args[0] {
+		case "version", "--version", "help", "--help", "-h":
+			runner := app.Runner{Stdout: os.Stdout, Stderr: os.Stderr}
+			return config.Options{}, args, true, runner.Run(context.Background(), args)
+		}
+	}
 	envCtx, envCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := servicecontrol.ImportUserShellEnvironment(envCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
@@ -28,6 +37,13 @@ func prepareRuntimeArgs() (config.Options, []string, bool, error) {
 	debug, err := parseDebugFlags(debugArgs)
 	if err != nil {
 		return config.Options{}, nil, false, err
+	}
+	if len(args) > 0 {
+		switch args[0] {
+		case "version", "--version", "help", "--help", "-h":
+			runner := app.Runner{Stdout: os.Stdout, Stderr: os.Stderr}
+			return configOptions, args, true, runner.Run(context.Background(), args)
+		}
 	}
 	if !debug.PprofAddrSet && len(args) > 0 && args[0] == "serve" {
 		serviceOpts := servicecontrol.CurrentOptions()

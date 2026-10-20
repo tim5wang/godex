@@ -59,6 +59,12 @@ type ManifestLoader interface {
 	LoadManifest(ctx context.Context, id string) (json.RawMessage, bool, error)
 }
 
+// QueueLoader is the startup recovery probe; it never reads conversation,
+// timeline, graph or checkpoint state blobs.
+type QueueLoader interface {
+	LoadQueue(ctx context.Context, id string) (json.RawMessage, bool, error)
+}
+
 func CopySession(ctx context.Context, dst Store, src Store, sessionID string) error {
 	data, ok, err := src.Load(ctx, sessionID)
 	if err != nil {

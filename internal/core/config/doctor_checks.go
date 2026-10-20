@@ -254,8 +254,11 @@ func (d *doctorRun) checkWeixin() {
 
 func (d *doctorRun) checkWebTools() {
 	current := d.current
-	if current.Tools.WebSearch.Enabled && strings.TrimSpace(current.Tools.WebSearch.BraveAPIKey) == "" && strings.TrimSpace(current.Tools.WebSearch.ExaAPIKey) == "" && strings.TrimSpace(current.Tools.WebSearch.TavilyAPIKey) == "" && strings.TrimSpace(current.Tools.WebSearch.SerpAPIKey) == "" && !webSearchBrowserProviderEnabled(current) {
+	if current.Tools.WebSearch.Enabled && strings.TrimSpace(current.Tools.WebSearch.BraveAPIKey) == "" && strings.TrimSpace(current.Tools.WebSearch.ExaAPIKey) == "" && strings.TrimSpace(current.Tools.WebSearch.TavilyAPIKey) == "" && strings.TrimSpace(current.Tools.WebSearch.SerpAPIKey) == "" && !webSearchBrowserProviderEnabled(current) && !webSearchDeepSeekProviderEnabled(current) {
 		d.add(DoctorCheck{Severity: "warning", Code: "web_search_fallback_only", Path: "tools.web_search", Message: "web_search is enabled, but only the fallback provider is configured.", Suggestion: "Add one of the provider API keys for higher quality current-information search."})
+	}
+	if webSearchProviderOrderMissingCredential(current, "deepseek") {
+		d.add(DoctorCheck{Severity: "warning", Code: "web_search_deepseek_no_key", Path: "tools.web_search.provider_order", Message: "The deepseek search provider is selected, but no DeepSeek API key was resolved.", Suggestion: "Set the DeepSeek LLM provider API key (api_key or api_key_env, e.g. GODEX_LLM_DEEPSEEK_API_KEY) or remove deepseek from provider_order."})
 	}
 	if current.Tools.WebFetch.Enabled && strings.EqualFold(strings.TrimSpace(current.Tools.WebFetch.Policy), "allowlist") && len(current.Tools.WebFetch.AllowedDomains) == 0 {
 		d.add(DoctorCheck{Severity: "error", Code: "web_fetch_empty_allowlist", Path: "tools.web_fetch.allowed_domains", Message: "web_fetch allowlist mode is enabled, but allowed_domains is empty.", Suggestion: "Add allowed domains or switch tools.web_fetch.policy back to allow_all."})

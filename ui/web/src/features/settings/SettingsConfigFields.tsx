@@ -606,7 +606,7 @@ function ConfigFieldInput(props: {
   if (field.type === "bool") {
     return <Switch checked={!!checked} onChange={onChange} />;
   }
-  if (field.options?.length) {
+  if (field.options?.length && field.type !== "string_list") {
     return <Select value={value as string | undefined} onChange={onChange} options={field.options.map((option) => ({ value: option, label: option }))} />;
   }
   if (field.type === "int") {
@@ -617,7 +617,20 @@ function ConfigFieldInput(props: {
   }
   if (field.type === "string_list") {
     const values = Array.isArray(value) ? value.map(String) : String(value ?? "").split(",").map((part) => part.trim()).filter(Boolean);
-    return <Select mode="tags" value={values} onChange={onChange} tokenSeparators={[","]} open={compact ? false : undefined} placeholder={t("settings.placeholderCommaValues")} />;
+    // A known option set (e.g. web_search provider order) offers a dropdown of
+    // valid values while keeping free text and the entered order intact.
+    const options = field.options?.map((option) => ({ value: option, label: option }));
+    return (
+      <Select
+        mode="tags"
+        value={values}
+        onChange={onChange}
+        tokenSeparators={[","]}
+        options={options}
+        open={compact && !options?.length ? false : undefined}
+        placeholder={options?.length ? t("settings.placeholderSelectOrType") : t("settings.placeholderCommaValues")}
+      />
+    );
   }
   return <Input value={value as string | undefined} onChange={onChange} />;
 }

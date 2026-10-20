@@ -698,7 +698,7 @@ func (a *Agent) ExportStateForSession(sessionID string) SessionState {
 		TranscriptRefs:       append([]string{}, a.transcriptRefs...),
 		ActiveSkills:         skills,
 		ActiveBundles:        append([]string{}, a.toolHandler.Catalog().ActiveBundles...),
-		ActiveTools:          a.toolHandler.ActiveToolNames(),
+		ActiveTools:          append(a.toolHandler.ActiveToolNames(), a.pendingMCPActiveTools...),
 		PermissionState:      exportPermissionState(a.permissions, sessionID),
 		PendingResume:        clonePendingResumeState(a.pendingResume),
 		HistoryVersion:       a.historyVersion,
@@ -769,6 +769,14 @@ func (a *Agent) RestoreStateForSession(sessionID string, state SessionState) {
 		// is a derived bundle-level marker — restoring it would re-activate
 		// whole bundles and wipe a template's precise tool preset.
 		a.toolHandler.SetActiveToolsExact(state.ActiveTools...)
+		a.mu.Lock()
+		a.pendingMCPActiveTools = nil
+		for _, name := range state.ActiveTools {
+			if strings.Contains(name, "__") && a.toolHandler.Get(name) == nil {
+				a.pendingMCPActiveTools = append(a.pendingMCPActiveTools, name)
+			}
+		}
+		a.mu.Unlock()
 	} else {
 		// States written before active_tools existed: legacy behavior.
 		a.toolHandler.SetActiveBundles(state.ActiveBundles...)
@@ -792,6 +800,9 @@ func restorePermissionState(manager *tools.PermissionManager, sessionID string, 
 
 // RunWithOptions runs the agent loop without assuming any specific frontend.
 func (a *Agent) RunWithOptions(ctx context.Context, opts RunOptions) error {
+	// Background MCP discovery only updates the shared cache. Install its
+	// latest declarations here, before the turn snapshots its tool catalog.
+	a.registerMCPServerTools(a.toolHandler)
 	// Roadmap 6.4: a per-turn engine request routes through the harness
 	// router (which resets engine state when the session switches engines).
 	// Empty or "godex" keeps the default loop below.

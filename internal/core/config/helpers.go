@@ -255,12 +255,57 @@ func cloneOrigins(input map[string]fieldOrigin) map[string]fieldOrigin {
 	return out
 }
 
+// WebSearchProviderNames lists the built-in web_search providers in their
+// default preference order. It is the single source of truth for both the
+// provider chain in internal/tools and the Settings dropdown, so a provider can
+// never be offered in the UI while the runtime silently drops it.
+var WebSearchProviderNames = []string{
+	"brave", "exa", "tavily", "serpapi", "deepseek", "browser", "lightpanda", "duckduckgo",
+}
+
 func webSearchBrowserProviderEnabled(cfg *Config) bool {
 	if cfg == nil || !cfg.Tools.Browser.Enabled {
 		return false
 	}
 	for _, item := range cfg.Tools.WebSearch.ProviderOrder {
 		if strings.EqualFold(strings.TrimSpace(item), "browser") {
+			return true
+		}
+	}
+	return false
+}
+
+// webSearchDeepSeekProviderEnabled reports whether the billed DeepSeek Search
+// provider is selected and has a usable credential. The key is shared with the
+// DeepSeek LLM provider, so this reads the resolved LLM credential.
+func webSearchDeepSeekProviderEnabled(cfg *Config) bool {
+	if !webSearchProviderOrderIncludes(cfg, "deepseek") {
+		return false
+	}
+	provider, ok := cfg.LLMProviders["deepseek"]
+	return ok && strings.TrimSpace(provider.APIKey) != ""
+}
+
+// webSearchProviderOrderMissingCredential reports whether name is selected in
+// the provider order but has no resolvable credential. Only deepseek is
+// meaningful here: the other providers carry their own keys in a schema field.
+func webSearchProviderOrderMissingCredential(cfg *Config, name string) bool {
+	if cfg == nil || !strings.EqualFold(strings.TrimSpace(name), "deepseek") {
+		return false
+	}
+	if !webSearchProviderOrderIncludes(cfg, name) {
+		return false
+	}
+	provider, ok := cfg.LLMProviders["deepseek"]
+	return !ok || strings.TrimSpace(provider.APIKey) == ""
+}
+
+func webSearchProviderOrderIncludes(cfg *Config, name string) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, item := range cfg.Tools.WebSearch.ProviderOrder {
+		if strings.EqualFold(strings.TrimSpace(item), name) {
 			return true
 		}
 	}

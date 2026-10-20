@@ -28,6 +28,37 @@ func TestNormalizeCompactionModeJev(t *testing.T) {
 	}
 }
 
+func TestWebSearchProviderOrderFieldExposesProviderOptions(t *testing.T) {
+	var options []string
+	for _, section := range baseSchema() {
+		for _, field := range section.Fields {
+			if field.Path == "tools.web_search.provider_order" {
+				options = field.Options
+			}
+		}
+	}
+	// Settings renders this field as a dropdown from Options; without them it
+	// degrades to a bare free-text tags input and providers are undiscoverable.
+	if len(options) != len(WebSearchProviderNames) {
+		t.Fatalf("provider_order options = %v, want %v", options, WebSearchProviderNames)
+	}
+	for _, want := range WebSearchProviderNames {
+		found := false
+		for _, option := range options {
+			if option == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("provider_order options %v omitted %q", options, want)
+		}
+	}
+	if !strings.Contains(strings.Join(options, ","), "deepseek") {
+		t.Fatalf("expected deepseek to be selectable, got %v", options)
+	}
+}
+
 func testHomeForWorkspace(workspace string) string {
 	return filepath.Join(workspace, "home")
 }

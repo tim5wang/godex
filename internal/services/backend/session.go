@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tim5wang/godex/internal/agent"
-	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/security"
 	"github.com/tim5wang/godex/internal/platform/stringutil"
@@ -111,16 +111,6 @@ func (s *Service) ImportSessionFromStore(ctx context.Context, sessionID string, 
 	return nil
 }
 
-func (s *Service) autoRepairSessions() {
-	if s == nil || s.cfg == nil || !s.cfg.Runtime.Recovery.AutoRepairSessions || strings.TrimSpace(s.cfg.SessionsDir) == "" {
-		return
-	}
-	_, _ = sessionrepair.Repair(sessionrepair.Request{
-		SessionsDir: s.cfg.SessionsDir,
-		Now:         s.now(),
-	})
-}
-
 // DiagnoseSessions inspects persisted session state and reports low-risk
 // deterministic repairs without mutating files.
 func (s *Service) DiagnoseSessions(ctx context.Context, req sessionrepair.Request) (sessionrepair.Report, error) {
@@ -159,23 +149,11 @@ func (s *Service) recoverQueuedSessions() {
 		if !entry.IsDir() || len(s.readSessionQueue(entry.Name())) == 0 {
 			continue
 		}
-		manifest, _, err := s.readSessionFiles(entry.Name())
+		manifest, err := s.readSessionListManifest(context.Background(), entry.Name())
 		if err != nil || manifest == nil {
 			continue
 		}
-		s.mu.Lock()
-		if s.sessions[entry.Name()] != nil {
-			s.mu.Unlock()
-			continue
-		}
-		loaded, err := s.loadSession(entry.Name(), normalizeLocator(manifest.Locator))
-		if err != nil {
-			s.mu.Unlock()
-			continue
-		}
-		s.sessions[entry.Name()] = loaded
-		s.mu.Unlock()
-		s.startQueuedTurns(loaded)
+		_, _ = s.OpenSession(context.Background(), manifest.Locator)
 	}
 }
 
@@ -190,10 +168,13 @@ func (s *Service) ApplyConfig(cfg *config.Config) error {
 		return err
 	}
 
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	store, storeErr := newSessionStore(cfg)
+	s.shared.ApplyConfig(cfg)
 	s.mu.Lock()
 	s.cfg = cfg
-	s.store, s.storeErr = newSessionStore(cfg)
-	s.shared.ApplyConfig(cfg)
+	s.store, s.storeErr = store, storeErr
 	sessions := make([]*sessionState, 0, len(s.sessions))
 	for _, session := range s.sessions {
 		sessions = append(sessions, session)
@@ -224,7 +205,11 @@ func (s *Service) ApplyConfig(cfg *config.Config) error {
 
 // OpenSession opens or resumes a persistent session for the locator.
 func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*OpenedSession, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
 	locator = s.withDefaultLocatorMetadata(locator)
 	// A caller-supplied project_dir is normalized at the boundary: resolve
 	// to an absolute, cleaned path before it becomes part of the session
@@ -242,7 +227,9 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 		projectDir = dir
 	}
 	// Resolve "default" key to the latest session when a pointer exists.
-	if strings.TrimSpace(locator.Key) == "default" {
+	skipLatestLookup := locator.SkipLatestSessionLookup
+	locator.SkipLatestSessionLookup = false
+	if strings.TrimSpace(locator.Key) == "default" && !skipLatestLookup {
 		if latestKey := s.readLatestSessionKey(); latestKey != "" {
 			locator.Key = latestKey
 		}
@@ -269,6 +256,10 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 	}
 
 	s.mu.Lock()
+	if s.deleting[sessionID] {
+		s.mu.Unlock()
+		return nil, newSessionBusyError(sessionID)
+	}
 	if existing := s.sessions[sessionID]; existing != nil {
 		if profile := strings.TrimSpace(normalized.Metadata["agent_profile"]); profile != "" {
 			existing.mu.Lock()
@@ -281,6 +272,24 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 		s.mu.Unlock()
 		return s.describeSession(existing), nil
 	}
+	if pending := s.loading[sessionID]; pending != nil {
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-pending.done:
+			if pending.err != nil {
+				return nil, pending.err
+			}
+			return s.describeSession(pending.session), nil
+		}
+	}
+	if s.loading == nil {
+		s.loading = make(map[string]*sessionLoad)
+	}
+	pending := &sessionLoad{done: make(chan struct{})}
+	s.loading[sessionID] = pending
+	s.mu.Unlock()
 
 	loaded, err := s.loadSession(sessionID, normalized)
 	if err != nil {
@@ -289,13 +298,18 @@ func (s *Service) OpenSession(ctx context.Context, locator SessionLocator) (*Ope
 				loaded, err = s.loadSession(sessionID, normalized)
 			}
 		}
-		if err != nil {
-			s.mu.Unlock()
-			return nil, err
-		}
 	}
-	s.sessions[sessionID] = loaded
+	s.mu.Lock()
+	if err == nil {
+		s.sessions[sessionID] = loaded
+	}
+	pending.session, pending.err = loaded, err
+	delete(s.loading, sessionID)
+	close(pending.done)
 	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	s.startQueuedTurns(loaded)
 	return s.describeSession(loaded), nil
 }
@@ -447,6 +461,10 @@ func (s *Service) sessionPersisted(sessionID string) bool {
 		return true
 	}
 	if store := s.sqliteSessionStore(); store != nil && s.storeErr == nil {
+		if loader, ok := store.(sessionstore.ManifestLoader); ok {
+			_, exists, err := loader.LoadManifest(context.Background(), sessionID)
+			return err == nil && exists
+		}
 		if _, exists, err := store.Load(context.Background(), sessionID); err == nil && exists {
 			return true
 		}
@@ -883,18 +901,34 @@ func (s *Service) RenameSession(ctx context.Context, sessionID, title string) (*
 		}
 	}
 	return &ListedSession{
-		SessionID:       manifest.SessionID,
-		Locator:         manifest.Locator,
-		Title:           manifest.Title,
-		BranchTitle:     strings.TrimSpace(manifest.BranchTitle),
-		CreatedAt:       manifest.CreatedAt,
-		UpdatedAt:       manifest.UpdatedAt,
-		LastActivityAt:  manifest.LastActivityAt,
+		SessionID:      manifest.SessionID,
+		Locator:        manifest.Locator,
+		Title:          manifest.Title,
+		BranchTitle:    strings.TrimSpace(manifest.BranchTitle),
+		CreatedAt:      manifest.CreatedAt,
+		UpdatedAt:      manifest.UpdatedAt,
+		LastActivityAt: manifest.LastActivityAt,
 	}, nil
 }
 
 func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
-	_ = ctx
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	s.mu.Lock()
+	if s.loading[sessionID] != nil || s.deleting[sessionID] {
+		s.mu.Unlock()
+		return newSessionBusyError(sessionID)
+	}
+	if s.deleting == nil {
+		s.deleting = make(map[string]bool)
+	}
+	s.deleting[sessionID] = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.deleting, sessionID)
+		s.mu.Unlock()
+	}()
 	dir := s.sessionDir(sessionID)
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {

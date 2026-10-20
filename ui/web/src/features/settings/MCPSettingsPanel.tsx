@@ -94,6 +94,7 @@ export function MCPSettingsPanel({ token }: { token: string | null }) {
     queryKey: ["mcp-statuses", token],
     queryFn: () => getMCPStatuses(token),
     enabled: Boolean(token),
+    refetchInterval: (query) => query.state.data?.statuses.some((status) => status.state === "discovering") ? 1000 : false,
   });
 
   const invalidate = async () => {
@@ -190,6 +191,7 @@ export function MCPSettingsPanel({ token }: { token: string | null }) {
       render: (_: unknown, server: MCPServerConfig) => {
         const status = statusByName.get(server.name);
         if (!status) return <Tag>{t("settings.mcpUnknown")}</Tag>;
+        if (status.state === "discovering") return <Tag color="processing">{t("settings.mcpDiscovering")}</Tag>;
         return status.online ? (
           <Tag color="green">{t("settings.mcpOnline")}{status.tools !== undefined ? ` · ${status.tools}` : ""}</Tag>
         ) : (

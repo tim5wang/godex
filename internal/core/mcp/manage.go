@@ -15,6 +15,7 @@ import (
 
 // ServerStatus describes the runtime health of one configured MCP server.
 type ServerStatus struct {
+	State     string    `json:"state,omitempty"`
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
 	Online    bool      `json:"online"`
@@ -118,8 +119,6 @@ func (m *Manager) DeleteServer(name string) error {
 // latency. stdio servers validate the command; http servers validate the URL
 // and reachability. Filesystem servers are checked for the directory.
 func (m *Manager) TestConnection(ctx context.Context, name string) (*ServerStatus, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	name = strings.TrimSpace(name)
 	cfg, err := LoadConfig(m.configPath)
 	if err != nil {
@@ -157,24 +156,12 @@ func (m *Manager) TestConnection(ctx context.Context, name string) (*ServerStatu
 		status.Online = true
 		return &status, nil
 	default:
-		client, err := clientFor(ctx, server)
-		if err != nil {
-			status.Error = err.Error()
-			return &status, err
-		}
-		defer client.close()
-		if _, err := client.initialize(ctx); err != nil {
-			status.Error = err.Error()
-			return &status, err
-		}
-		tools, err := client.listTools(ctx)
-		if err != nil {
-			status.Error = err.Error()
-			return &status, err
-		}
-		status.Tools = len(tools)
-		status.Online = true
-		return &status, nil
+		// Explicit retry bypasses the cooldown, and publishes the result to the
+		// same cache the session and status page use.
+		m.mu.Lock()
+		m.invalidateServerLocked(server.Name)
+		m.mu.Unlock()
+		return m.testConnection(ctx, server)
 	}
 }
 
@@ -182,8 +169,6 @@ func (m *Manager) TestConnection(ctx context.Context, name string) (*ServerStatu
 // that fail to handshake are reported as offline with a reason (they never
 // abort the batch — one broken server does not hide the rest).
 func (m *Manager) Statuses(ctx context.Context) ([]ServerStatus, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	cfg, err := LoadConfig(m.configPath)
 	if err != nil {
 		return nil, err
@@ -210,8 +195,7 @@ func (m *Manager) Statuses(ctx context.Context) ([]ServerStatus, error) {
 	return out, nil
 }
 
-// testConnection is the unexported, lock-free probe used by Statuses (which
-// already holds the read lock) and by TestConnection.
+// testConnection probes without holding a manager lock over external I/O.
 func (m *Manager) testConnection(ctx context.Context, server ServerConfig) (*ServerStatus, error) {
 	start := time.Now()
 	status := ServerStatus{Name: server.Name, Type: server.Type, CheckedAt: start}
@@ -230,17 +214,7 @@ func (m *Manager) testConnection(ctx context.Context, server ServerConfig) (*Ser
 		status.Online = true
 		return &status, nil
 	default:
-		client, err := clientFor(ctx, server)
-		if err != nil {
-			status.Error = err.Error()
-			return &status, err
-		}
-		defer client.close()
-		if _, err := client.initialize(ctx); err != nil {
-			status.Error = err.Error()
-			return &status, err
-		}
-		tools, err := client.listTools(ctx)
+		tools, err := m.listServerTools(ctx, server)
 		if err != nil {
 			status.Error = err.Error()
 			return &status, err

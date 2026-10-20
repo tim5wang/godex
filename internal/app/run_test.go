@@ -30,6 +30,16 @@ type fakeBackend struct {
 	submitErr     error
 }
 
+type sessionListFakeBackend struct {
+	*fakeBackend
+	sessions []backend.ListedSession
+	err      error
+}
+
+func (f *sessionListFakeBackend) ListSessions(context.Context, backend.SessionListFilter) ([]backend.ListedSession, error) {
+	return f.sessions, f.err
+}
+
 type fakeEvalCommandBackend struct{}
 
 func (f fakeEvalCommandBackend) OpenSession(ctx context.Context, locator backend.SessionLocator) (*backend.OpenedSession, error) {
@@ -801,6 +811,121 @@ func TestRunnerDefaultsToTUI(t *testing.T) {
 	}
 	if got.Channel != "local" || got.Key != "default" {
 		t.Fatalf("unexpected default tui locator: %+v", got)
+	}
+}
+
+func TestRunnerTUIDefaultSelectsMostRecentlyActiveSessionInCurrentDirectory(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	listed := &sessionListFakeBackend{
+		fakeBackend: &fakeBackend{},
+		sessions: []backend.ListedSession{
+			{
+				SessionID: "current-updated-recently",
+				Locator: backend.SessionLocator{Channel: "local", Key: "current-updated-recently", Metadata: map[string]string{
+					"project_dir": cwd,
+				}},
+				UpdatedAt:      now,
+				LastActivityAt: now.Add(-time.Hour),
+			},
+			{
+				SessionID: "current-active-recently",
+				Locator: backend.SessionLocator{Channel: "local", Key: "current-active-recently", Metadata: map[string]string{
+					"project_dir": filepath.Join(cwd, "."),
+				}},
+				UpdatedAt:      now.Add(-time.Hour),
+				LastActivityAt: now.Add(-time.Minute),
+			},
+			{
+				SessionID: "other-project",
+				Locator: backend.SessionLocator{Channel: "local", Key: "other-project", Metadata: map[string]string{
+					"project_dir": filepath.Dir(cwd),
+				}},
+				LastActivityAt: now.Add(time.Hour),
+			},
+			{
+				SessionID:      "unscoped",
+				Locator:        backend.SessionLocator{Channel: "local", Key: "unscoped"},
+				LastActivityAt: now.Add(2 * time.Hour),
+			},
+		},
+	}
+	for _, args := range [][]string{nil, {"tui"}} {
+		var got backend.SessionLocator
+		runner := &Runner{
+			Cfg:     &config.Config{},
+			Backend: listed,
+			Stdout:  &bytes.Buffer{},
+			Stderr:  &bytes.Buffer{},
+			RunTUI: func(_ context.Context, locator backend.SessionLocator) error {
+				got = locator
+				return nil
+			},
+		}
+		if err := runner.Run(context.Background(), args); err != nil {
+			t.Fatalf("run %v: %v", args, err)
+		}
+		if got.Key != "current-active-recently" || !got.SkipLatestSessionLookup {
+			t.Fatalf("run %v selected unexpected locator: %+v", args, got)
+		}
+	}
+}
+
+func TestRunnerTUIDefaultCreatesWorkspaceScopedSessionWhenNoMatch(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := &sessionListFakeBackend{
+		fakeBackend: &fakeBackend{},
+		sessions: []backend.ListedSession{{
+			SessionID: "other-project",
+			Locator: backend.SessionLocator{Channel: "local", Key: "other-project", Metadata: map[string]string{
+				"project_dir": filepath.Dir(cwd),
+			}},
+		}},
+	}
+	var got backend.SessionLocator
+	runner := &Runner{
+		Cfg:     &config.Config{},
+		Backend: listed,
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		RunTUI: func(_ context.Context, locator backend.SessionLocator) error {
+			got = locator
+			return nil
+		},
+	}
+	if err := runner.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.Key != "default" || got.Metadata["project_dir"] != cwd || !got.SkipLatestSessionLookup {
+		t.Fatalf("unexpected new workspace locator: %+v", got)
+	}
+}
+
+func TestRunnerExplicitDefaultSessionSpecSkipsWorkspaceDiscovery(t *testing.T) {
+	listed := &sessionListFakeBackend{fakeBackend: &fakeBackend{}}
+	var got backend.SessionLocator
+	runner := &Runner{
+		Cfg:                &config.Config{},
+		Backend:            listed,
+		DefaultSessionSpec: "local:explicit",
+		Stdout:             &bytes.Buffer{},
+		Stderr:             &bytes.Buffer{},
+		RunTUI: func(_ context.Context, locator backend.SessionLocator) error {
+			got = locator
+			return nil
+		},
+	}
+	if err := runner.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.Key != "explicit" || got.SkipLatestSessionLookup {
+		t.Fatalf("explicit session was altered: %+v", got)
 	}
 }
 

@@ -118,7 +118,15 @@ func registerMCPRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 	})))
 
 	mux.Handle("GET /v1/mcp/status", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		statuses, err := mgr.Statuses(r.Context())
+		var statuses []mcp.ServerStatus
+		var err error
+		if cached, ok := mgr.(interface {
+			CachedStatuses() ([]mcp.ServerStatus, error)
+		}); ok {
+			statuses, err = cached.CachedStatuses()
+		} else {
+			statuses, err = mgr.Statuses(r.Context())
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return

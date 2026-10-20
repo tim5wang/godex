@@ -89,6 +89,7 @@ export const enCoreMessages = {
       mcpOnline: "Online",
       mcpOffline: "Offline",
       mcpUnknown: "Unknown",
+      mcpDiscovering: "Connecting",
       mcpDeleteConfirm: "Delete MCP server “{name}”?",
       mcpTestOk: "“{name}” connected · {tools} tools",
       mcpTestFailed: "MCP server test failed.",
@@ -231,6 +232,7 @@ export const enCoreMessages = {
       notSetTag: "not set",
       placeholderProviderModel: "provider.model",
       placeholderCommaValues: "comma,separated,values",
+      placeholderSelectOrType: "select a value, or type to add",
       configuredReplace: "configured (replace to update)",
       notConfigured: "not configured",
       // --- LLM providers editor ---

@@ -71,6 +71,9 @@ type Agent struct {
 	client         conversation.Caller
 	sandbox        sandbox.Sandbox
 	workerRuntime  workerruntime.Runtime
+	// Persist exact activations of MCP tools whose schemas are still being
+	// discovered. They are restored at a turn boundary, never from a callback.
+	pendingMCPActiveTools []string
 	// screener classifies untrusted content before it reaches the model
 	// (roadmap 6.1 content-level security screener).
 	screener    security.Screener

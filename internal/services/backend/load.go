@@ -38,18 +38,15 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 	}
 	session.gate <- struct{}{}
 
-	manifest, state, err := s.readSessionFiles(sessionID)
+	snapshot, err := s.readSessionForOpen(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	graph, err := s.loadSessionGraph(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	session.graph = graph
-	session.timeline.Seed(s.readSessionTimeline(sessionID))
-	session.seedTurns(s.readSessionTurns(sessionID))
-	session.seedQueue(s.readSessionQueue(sessionID))
+	manifest, state := snapshot.Manifest, snapshot.State
+	session.graph = snapshot.Graph
+	session.timeline.Seed(snapshot.Timeline)
+	session.seedTurns(snapshot.Turns)
+	session.seedQueue(snapshot.Queue)
 	session.journal = newSessionEventBatcher(s, session)
 	session.events.Attach(persistentTimelineSink{service: s, session: session})
 	if manifest != nil {
@@ -194,7 +191,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 		})
 	}
 
-	persistSession := false
+	persistSession := snapshot.QueueRecovered
 	if (strings.TrimSpace(session.title) == "" || strings.TrimSpace(session.title) == "New chat") && state != nil {
 		if derived := deriveSessionTitle(*state); derived != "" {
 			session.title = derived
@@ -230,8 +227,15 @@ func (s *Service) readSessionFiles(sessionID string) (*SessionManifest, *agent.S
 			checkpointErr = err
 		}
 	}
+	return s.readSessionFilesWithCheckpoint(sessionID, checkpoint, checkpointErr)
+}
+
+func (s *Service) readSessionFilesWithCheckpoint(sessionID string, checkpoint *sessionCheckpointSnapshot, checkpointErr error) (*SessionManifest, *agent.SessionState, error) {
 	manifest, state, err := s.readLegacySessionFiles(sessionID)
 	if err == nil {
+		if manifest == nil && checkpoint != nil {
+			return checkpoint.Manifest, checkpoint.State, nil
+		}
 		if checkpoint != nil && manifest != nil && checkpoint.Manifest != nil &&
 			strings.TrimSpace(manifest.StateDigest) != strings.TrimSpace(checkpoint.Manifest.StateDigest) &&
 			!s.legacySessionFilesNewerThanCheckpoint(sessionID) {
@@ -538,6 +542,10 @@ func (s *Service) readSessionCheckpoint(sessionID string) (*sessionCheckpointSna
 	} else if ok && data.Checkpoint != nil && len(data.Checkpoint.Manifest) > 0 && len(data.Checkpoint.State) > 0 {
 		return decodeStoredSessionCheckpoint(sessionID, data.Checkpoint)
 	}
+	return s.readFileSessionCheckpoint(sessionID)
+}
+
+func (s *Service) readFileSessionCheckpoint(sessionID string) (*sessionCheckpointSnapshot, bool, error) {
 	dir := s.sessionDir(sessionID)
 	pointerData, exists, err := readOptionalFile(filepath.Join(dir, checkpointPointerName))
 	if err != nil || !exists {
@@ -822,10 +830,23 @@ func (s *Service) readSessionTurns(sessionID string) []TurnRecord {
 }
 
 func (s *Service) readSessionQueue(sessionID string) []QueuedTurn {
-	if checkpoint, ok, err := s.readSessionCheckpoint(sessionID); ok && err == nil && checkpoint != nil {
-		return checkpoint.Queue
+	var loader sessionstore.QueueLoader = sessionstore.NewJSONStore(s.cfg.SessionsDir)
+	if store := s.sqliteSessionStore(); store != nil {
+		if lightweight, ok := store.(sessionstore.QueueLoader); ok {
+			loader = lightweight
+		} else {
+			data, ok, err := s.readSessionStoreData(context.Background(), sessionID)
+			if err != nil || !ok {
+				return nil
+			}
+			var queue []QueuedTurn
+			if json.Unmarshal(data.Queue, &queue) == nil {
+				return normalizeQueuedTurns(queue)
+			}
+			return nil
+		}
 	}
-	data, exists, err := readOptionalFile(filepath.Join(s.sessionDir(sessionID), turnQueueFileName))
+	data, exists, err := loader.LoadQueue(context.Background(), sessionID)
 	if err != nil || !exists {
 		return nil
 	}

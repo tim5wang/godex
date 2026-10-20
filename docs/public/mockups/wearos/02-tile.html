@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · Tile 卡片（瞥一眼即得）</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .tile-tag { position: absolute; top: 62px; left: 0; right: 0; text-align: center; font-size: 11px; color: var(--wg-dim); letter-spacing: 0.6px; }
+  .pager { position: absolute; bottom: 40px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+  .pager span { width: 6px; height: 6px; border-radius: 50%; background: var(--wg-border-strong); }
+  .pager span.on { background: var(--wg-accent); }
+  .arc { transform: rotate(-90deg); transform-origin: 228 228; }
+</style>
+</head>
+<body class="watch">
+<div style="position:absolute;inset:0">
+  <svg viewBox="0 0 456 456" width="456" height="456">
+    <circle cx="228" cy="228" r="212" fill="none" stroke="#101a1e" stroke-width="8"/>
+    <circle class="arc" cx="228" cy="228" r="212" fill="none" stroke="#38bdf8" stroke-width="8"
+            stroke-linecap="round" stroke-dasharray="280 1052"/>
+  </svg>
+
+  <div class="tile-tag">GoDex · 运行中</div>
+
+  <div style="position:absolute;left:0;right:0;top:104px;display:flex;flex-direction:column;align-items:center;gap:2px">
+    <div class="chip busy" style="background:rgba(56,189,248,.14);color:#38bdf8">
+      <span class="dot busy"></span> 2 个任务运行中
+    </div>
+    <div class="num-xl" style="margin-top:8px">47<span style="font-size:20px;color:var(--wg-muted)">%</span></div>
+    <div class="t-cap">重构 auth 中间件 · PC-01</div>
+  </div>
+
+  <div style="position:absolute;left:0;right:0;top:266px;display:flex;justify-content:center;gap:8px">
+    <span class="chip danger"><span class="dot danger"></span> 1 待审批</span>
+    <span class="chip ok"><span class="dot ok"></span> 4 节点</span>
+  </div>
+
+  <div style="position:absolute;left:0;right:0;top:322px;display:flex;flex-direction:column;align-items:center;gap:10px">
+    <div class="btn accent" style="padding:9px 22px">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      查看详情
+    </div>
+    <div class="mini">点按进入 · 圆环=总体进度</div>
+  </div>
+
+  <div class="pager"><span></span><span class="on"></span><span></span><span></span></div>
+</div>
+</body>
+</html>

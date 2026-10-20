@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 会话切换（置顶 + 跨设备最近会话）</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .hdr { display:flex; align-items:center; justify-content:space-between; width:100%; max-width:316px; }
+  .crown { display:flex; align-items:center; gap:4px; font-size:10.5px; color:var(--wg-dim); }
+</style>
+</head>
+<body class="watch">
+<div class="screen" style="padding:24px 22px 22px">
+  <div class="hdr">
+    <div class="t-sm">切换会话</div>
+    <div class="crown">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4h10v16H7zm-4 9 2.5-3v6z"/></svg>
+      旋表冠浏览
+    </div>
+  </div>
+
+  <div class="center" style="justify-content:flex-start;gap:8px;margin-top:11px">
+    <div class="pin-head">
+      <svg class="pin-ico" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2 8 8l-4 1 6 6-1 6 6-6 5 5 1-1-5-5 6-6-1-4z"/></svg>
+      置顶（长按置顶 / 取消）
+    </div>
+
+    <div class="list">
+      <div class="row active pinned">
+        <span class="dot busy"></span>
+        <div class="grow">
+          <div class="r-title truncate">重构 auth 中间件</div>
+          <div class="r-sub"><span class="dev pc"><i></i>PC-01</span> · 12 分钟前</div>
+        </div>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="#14b8a6"><path d="M9 6l6 6-6 6"/></svg>
+      </div>
+
+      <div class="row pinned">
+        <span class="dot ok"></span>
+        <div class="grow">
+          <div class="r-title truncate">发布 v1.5.0 收尾</div>
+          <div class="r-sub"><span class="dev cloud"><i></i>云端</span> · 1 小时前</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pin-head" style="margin-top:3px">
+      <span>最近（跨设备）</span>
+      <span class="bar-dim" style="flex:1;height:1px;background:var(--wg-border)"></span>
+    </div>
+
+    <div class="list">
+      <div class="row">
+        <span class="dot busy"></span>
+        <div class="grow">
+          <div class="r-title truncate">跑一遍单元测试</div>
+          <div class="r-sub"><span class="dev phone"><i></i>手机</span> · 2 分钟前</div>
+        </div>
+      </div>
+      <div class="row">
+        <span class="dot off"></span>
+        <div class="grow">
+          <div class="r-title truncate">给 office-db 加索引</div>
+          <div class="r-sub"><span class="dev"><i></i>office-db</span> · 2 小时前 · 离线</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="mini">点按即切换当前会话 · 语音默认进这个会话</div>
+  </div>
+</div>
+</body>
+</html>

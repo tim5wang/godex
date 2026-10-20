@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 跨设备统一列表（设备筛选是视图，不是模式）</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="watch">
+<div class="screen" style="padding:24px 20px 22px">
+  <div style="display:flex;align-items:center;justify-content:space-between;width:100%;max-width:316px">
+    <div class="t-sm">全部任务 <span class="mini">· 6</span></div>
+    <div class="chip accent" style="padding:3px 10px"><span class="dot ok"></span> 3 端</div>
+  </div>
+
+  <div class="center" style="justify-content:flex-start;gap:9px;margin-top:10px">
+    <div class="filters">
+      <span class="on">全部</span>
+      <span>PC-01</span>
+      <span>云端</span>
+      <span>手机</span>
+    </div>
+
+    <div class="list">
+      <div class="row active">
+        <span class="dot busy"></span>
+        <div class="grow">
+          <div class="r-title truncate">重构 auth 中间件</div>
+          <div class="r-sub"><span class="dev pc"><i></i>PC-01</span> 47% · 12 分钟</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <span class="dot busy"></span>
+        <div class="grow">
+          <div class="r-title truncate">夜间巡检 · Flow 健康报告</div>
+          <div class="r-sub"><span class="dev cloud"><i></i>云端</span> cron · 还有 3 小时</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <span class="dot busy"></span>
+        <div class="grow">
+          <div class="r-title truncate">跑一遍单元测试</div>
+          <div class="r-sub"><span class="dev phone"><i></i>手机</span> 18% · 2 分钟</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <span class="dot ok"></span>
+        <div class="grow">
+          <div class="r-title truncate">补 release notes v1.5.0</div>
+          <div class="r-sub"><span class="dev pc"><i></i>PC-01</span> 完成 · 3 分钟前</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note-bar">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 1 21h22L12 2Zm1 15h-2v2h2v-2Zm0-7h-2v5h2V10Z"/></svg>
+      office-db 离线，读不到它的会话（中心不缓存历史）
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="mini">筛选只影响列表，不改变「指令默认发给谁」</div>
+  </div>
+</div>
+</body>
+</html>

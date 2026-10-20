@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 表盘与 Complications</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .wf { position: absolute; inset: 0; }
+  .slot { position: absolute; width: 78px; height: 78px; }
+  .slot.tl { left: 62px; top: 74px; }
+  .slot.tr { right: 62px; top: 74px; }
+  .slot.bl { left: 62px; bottom: 74px; }
+  .slot.br { right: 62px; bottom: 74px; }
+  .slot .v { font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .slot .k { font-size: 10px; color: var(--wg-dim); letter-spacing: 0.4px; }
+  .slot .st { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--wg-accent); font-weight: 600; }
+  .clock { position: absolute; left: 0; right: 0; top: 176px; text-align: center; }
+  .clock .hm { font-size: 60px; font-weight: 300; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+  .clock .d { font-size: 13px; color: var(--wg-muted); margin-top: 2px; }
+  .pulse { animation: none; }
+  .ring { transform: rotate(-90deg); transform-origin: 228px 228px; }
+</style>
+</head>
+<body class="watch">
+<div class="wf">
+  <svg viewBox="0 0 456 456" width="456" height="456">
+    <!-- 刻度 -->
+    <g stroke="#2b3940" stroke-width="1.5">
+      <line x1="228" y1="26" x2="228" y2="38"/>
+      <line x1="228" y1="418" x2="228" y2="430"/>
+      <line x1="26" y1="228" x2="38" y2="228"/>
+      <line x1="418" y1="228" x2="430" y2="228"/>
+    </g>
+    <!-- 组合进度环：运行中任务 -->
+    <circle cx="228" cy="228" r="196" fill="none" stroke="#101a1e" stroke-width="6"/>
+    <circle class="ring" cx="228" cy="228" r="196" fill="none" stroke="#14b8a6" stroke-width="6"
+            stroke-linecap="round" stroke-dasharray="742 1232"/>
+  </svg>
+
+  <!-- complications 四角布局（圆屏安全区：距边缘 62px 起） -->
+  <div class="slot tl">
+    <div class="slot-head"><span class="dot busy"></span></div>
+    <div class="v">2</div>
+    <div class="k">运行中</div>
+  </div>
+  <div class="slot tr">
+    <div class="dot danger" style="margin-bottom:3px"></div>
+    <div class="v" style="color:#ef4444">1</div>
+    <div class="k">待审批</div>
+  </div>
+  <div class="slot bl">
+    <div class="st"><span class="dot ok"></span>4 / 5</div>
+    <div class="k">节点在线</div>
+  </div>
+  <div class="slot br">
+    <div class="st"><span class="dot busy"></span>PC-01</div>
+    <div class="k">当前设备</div>
+  </div>
+
+  <div class="clock">
+    <div class="hm">10:09</div>
+    <div class="d">周二 10月20日</div>
+  </div>
+</div>
+</body>
+</html>

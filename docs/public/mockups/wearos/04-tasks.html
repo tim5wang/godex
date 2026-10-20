@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 任务列表</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .scr-head { display:flex; align-items:center; justify-content:space-between; width:100%; max-width:316px; }
+  .seg { display:flex; gap:6px; }
+  .seg span { font-size:12px; padding:3px 10px; border-radius:999px; background:var(--wg-surface-2); color:var(--wg-muted); }
+  .seg span.on { background:var(--wg-accent-soft); color:var(--wg-accent); font-weight:700; }
+  .bar { height:4px; border-radius:2px; background:var(--wg-surface-3); overflow:hidden; margin-top:7px; }
+  .bar i { display:block; height:100%; background:var(--wg-busy); }
+</style>
+</head>
+<body class="watch">
+<div class="screen" style="padding:26px 22px 24px">
+  <div class="scr-head">
+    <div class="t-sm">任务 <span class="mini">· 7</span></div>
+    <div class="seg"><span class="on">进行中</span><span>全部</span></div>
+  </div>
+
+  <div class="center" style="justify-content:flex-start;gap:9px;margin-top:14px">
+    <div class="list">
+      <div class="row active">
+        <span class="dot busy"></span>
+        <div class="grow">
+          <div class="r-title truncate">重构 auth 中间件</div>
+          <div class="r-sub">PC-01 · 12 分钟 · 编辑第 4 个文件</div>
+          <div class="bar"><i style="width:47%"></i></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <span class="dot danger"></span>
+        <div class="grow">
+          <div class="r-title truncate">等待审批：rm -rf ./build</div>
+          <div class="r-sub" style="color:#ef4444">需你确认才能继续</div>
+        </div>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="#ef4444"><path d="M9 6l6 6-6 6"/></svg>
+      </div>
+
+      <div class="row">
+        <span class="dot busy"></span>
+        <div class="grow">
+          <div class="r-title truncate">跑一遍单元测试</div>
+          <div class="r-sub">云端实例 · 2 分钟</div>
+          <div class="bar"><i style="width:18%;background:#14b8a6"></i></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <span class="dot ok"></span>
+        <div class="grow">
+          <div class="r-title truncate">补 release notes v1.5.0</div>
+          <div class="r-sub">已完成 · 3 分钟前</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="mini">旋转表冠滚动 · 点按看详情</div>
+  </div>
+</div>
+</body>
+</html>

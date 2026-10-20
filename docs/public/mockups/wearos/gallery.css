@@ -1,0 +1,65 @@
+/* 设计稿画廊（非设备 UI，仅用于并排评审） */
+body.gallery {
+  margin: 0;
+  padding: 32px 28px 56px;
+  background: #0b0f12;
+  color: #e7eef2;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", sans-serif;
+}
+.g-head { max-width: 1100px; margin: 0 auto 26px; }
+.g-head h1 { margin: 0 0 8px; font-size: 24px; }
+.g-head p { margin: 0 0 6px; color: #9aa9b1; font-size: 14px; line-height: 1.6; }
+.g-head code { background: #161d21; padding: 1px 6px; border-radius: 6px; font-size: 13px; }
+.g-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 34px 22px;
+  max-width: 1140px;
+  margin: 0 auto;
+}
+.g-item { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.g-item > figcaption { font-size: 13px; color: #9aa9b1; text-align: center; line-height: 1.5; }
+.g-item > figcaption b { color: #e7eef2; display: block; font-size: 14px; margin-bottom: 2px; }
+
+/* 手表外壳：金属圈 + 表冠 */
+.device {
+  position: relative;
+  width: 512px;
+  height: 512px;
+  border-radius: 50%;
+  background: linear-gradient(160deg, #3a444a 0%, #171d21 42%, #2c353b 100%);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55), inset 0 0 0 2px rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.device::before {
+  content: "";
+  position: absolute;
+  right: -13px;
+  top: 176px;
+  width: 12px;
+  height: 92px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #4a555c, #232a2f);
+}
+.device::after {
+  content: "";
+  position: absolute;
+  right: -8px;
+  top: 300px;
+  width: 8px;
+  height: 40px;
+  border-radius: 4px;
+  background: #39434a;
+}
+.device iframe {
+  width: 456px;
+  height: 456px;
+  border: 0;
+  border-radius: 50%;
+  background: #04070a;
+}
+.g-note { max-width: 1140px; margin: 42px auto 0; color: #9aa9b1; font-size: 13px; line-height: 1.7; }
+.g-note h2 { color: #e7eef2; font-size: 16px; margin: 0 0 8px; }
+.g-note ul { margin: 6px 0 0; padding-left: 20px; }

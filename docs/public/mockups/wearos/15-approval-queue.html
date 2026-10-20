@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 待审批队列（跨设备统一，不可筛选）</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .q-head { display:flex; align-items:center; justify-content:space-between; width:100%; max-width:316px; }
+  .lock { display:flex; align-items:center; gap:4px; font-size:10.5px; color:var(--wg-dim); }
+</style>
+</head>
+<body class="watch">
+<div class="screen" style="padding:24px 20px 22px">
+  <div class="q-head">
+    <div class="t-sm" style="color:#ef4444">待审批 <span class="mini">· 2</span></div>
+    <div class="lock">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M6 10V7a6 6 0 1 1 12 0v3h1v11H5V10zm2 0h8V7a4 4 0 1 0-8 0z"/></svg>
+      跨设备统一 · 不可筛选
+    </div>
+  </div>
+
+  <div class="center" style="justify-content:flex-start;gap:9px;margin-top:11px">
+    <div class="grp">
+      <span>高危 · 需长按确认</span><span class="bar-red"></span>
+    </div>
+
+    <div class="list">
+      <div class="row" style="border-color:rgba(239,68,68,.45);background:rgba(239,68,68,.07)">
+        <span class="dot danger"></span>
+        <div class="grow">
+          <div class="r-title truncate">rm -rf ./build &amp;&amp; npm run build</div>
+          <div class="r-sub" style="color:#ef4444"><span class="dev pc" style="background:rgba(239,68,68,.14);color:#ef4444"><i></i>PC-01</span> 12 秒前 · 5 分钟后超时</div>
+        </div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="#ef4444"><path d="M9 6l6 6-6 6"/></svg>
+      </div>
+    </div>
+
+    <div class="grp" style="margin-top:4px">
+      <span>常规</span><span class="bar-dim"></span>
+    </div>
+
+    <div class="list">
+      <div class="row">
+        <span class="dot warn"></span>
+        <div class="grow">
+          <div class="r-title truncate">Flow 人工卡点：确认发布渠道</div>
+          <div class="r-sub"><span class="dev cloud"><i></i>云端</span> 3 分钟前</div>
+        </div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b"><path d="M9 6l6 6-6 6"/></svg>
+      </div>
+    </div>
+
+    <div class="note-bar info">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9 10 18H2z"/></svg>
+      无论当前遥控哪台，待你决定的事都会出现在这里
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="mini">长按一条 → 批准 / 拒绝（高危需长按 1 秒）</div>
+  </div>
+</div>
+</body>
+</html>

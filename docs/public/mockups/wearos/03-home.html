@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 主屏（遥控器）</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .hero {
+    width: 168px; height: 168px; border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    background: radial-gradient(circle at 50% 40%, rgba(20,184,166,.22), rgba(20,184,166,.04) 70%);
+    border: 1px solid rgba(20,184,166,.35);
+    position: relative;
+  }
+  .hero .label { font-size: 11px; letter-spacing: 1px; color: var(--wg-accent); }
+  .hero .big { font-size: 30px; font-weight: 700; }
+  .hero .sub { font-size: 11.5px; color: var(--wg-muted); }
+  .hold { position: absolute; inset: -11px; border-radius: 50%; border: 2px dashed rgba(20,184,166,.28); }
+</style>
+</head>
+<body class="watch">
+<div class="screen">
+  <div class="st-top" style="width:236px">
+    <span>10:09</span>
+    <span class="chip" style="padding:2px 9px;font-size:11px"><span class="dot ok"></span> PC-01
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+    </span>
+  </div>
+
+  <div class="center" style="gap:14px">
+    <div class="hero">
+      <div class="hold"></div>
+      <div class="label">HOLD TO TALK</div>
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="#14b8a6" style="margin:4px 0">
+        <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/>
+      </svg>
+      <div class="big">语音</div>
+      <div class="sub">按住说话 → 发给 godex</div>
+    </div>
+
+    <div class="actions3" style="margin-top:2px">
+      <button class="btn btn-round" aria-label="任务列表">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>
+        <span class="badge">2</span>
+      </button>
+      <button class="btn btn-round" aria-label="待审批">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 2 20h20L12 2Zm1 14h-2v2h2v-2Zm0-6h-2v5h2V10Z"/></svg>
+        <span class="badge">1</span>
+      </button>
+      <button class="btn btn-round" aria-label="设备">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h18v10H3zm0 12h18v2H3z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="cur" style="margin-bottom:2px">
+      <span class="dot busy"></span>
+      <span class="mini">会话</span>
+      <span class="t">重构 auth 中间件</span>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="#9aa9b1"><path d="M7 10l5 5 5-5z"/></svg>
+    </div>
+    <div class="mini">顶部 = 发给哪台 · 这里 = 落哪条会话</div>
+  </div>
+</div>
+</body>
+</html>

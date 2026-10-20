@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 审批（遥控器最关键的一屏）</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .q {
+    width: 58px; height: 58px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(239,68,68,.16); border: 1px solid rgba(239,68,68,.4);
+    font-size: 27px; font-weight: 800; color: #ef4444;
+  }
+  .hold-ring { stroke-dasharray: 176; stroke-dashoffset: 44; transform: rotate(-90deg); transform-origin: 31px 31px; }
+</style>
+</head>
+<body class="watch">
+<div class="screen" style="padding:26px 20px 22px">
+  <div class="st-top" style="width:190px">
+    <span class="chip danger" style="padding:3px 10px"><span class="dot danger"></span> 待审批 1/1</span>
+    <span class="mini">12 秒前</span>
+  </div>
+
+  <div class="center" style="gap:12px">
+    <div class="q">!</div>
+    <div class="t-sm">agent 请求执行高危命令</div>
+
+    <div class="panel danger">
+      <div class="mini" style="margin-bottom:6px;color:#ef4444">BASH · PC-01 · 会话「重构 auth 中间件」</div>
+      <div class="cmdline mono">rm -rf ./build &amp;&amp; npm run build</div>
+    </div>
+
+    <div class="t-cap" style="max-width:290px">
+      风险：删除构建产物目录（项目内，非系统路径）。<br>批准后该命令将立即在 PC-01 执行。
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="actions2">
+      <button class="btn danger lg">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v2H6zm0 5h12v2H6zm0 5h12v2H6z"/></svg>
+        拒绝
+      </button>
+      <button class="btn ok lg">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
+        批准
+      </button>
+    </div>
+    <div class="hold-hint">批准后可选择「本会话全部允许」（长按批准）</div>
+  </div>
+</div>
+</body>
+</html>

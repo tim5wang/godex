@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoDex Wear OS 客户端 · UI 设计稿</title>
+<link rel="stylesheet" href="gallery.css">
+</head>
+<body class="gallery">
+<div class="g-head">
+  <h1>GoDex Wear OS 客户端 · UI 设计稿</h1>
+  <p>圆屏 456×456（Pixel Watch 3 45mm；Galaxy Watch 7 为 480×480，同比例）。深色优先，强调色沿用 godex Web UI 的 teal 家族（<code>#0f766e</code> → 小屏提亮 <code>#14b8a6</code>）。</p>
+  <p>定位：<b>腕上遥控器 + 通知硬件</b>——不在手表上跑 agent；输入是「按几个按钮 + 说一句话」，输出是「瞥一眼就知道」。</p>
+  <p>两个正交状态：<b>当前目标设备</b>（发给哪台，顶部 chip）× <b>当前会话</b>（落哪条，底部胶囊）。切换入口分别见 09 与 13。</p>
+</div>
+
+<div class="g-grid">
+  <figure class="g-item">
+    <div class="device"><iframe src="01-watchface.html" title="表盘"></iframe></div>
+    <figcaption><b>01 · 表盘与 Complications</b>四角挂载：运行中 / 待审批 / 节点在线 / 当前设备。进度环为总体任务进度。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="02-tile.html" title="Tile"></iframe></div>
+    <figcaption><b>02 · Tile 卡片</b>表盘左滑第一屏。不可滚动、单主操作、外圈进度环，是「不解锁也能看一眼」的主入口。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="03-home.html" title="主屏"></iframe></div>
+    <figcaption><b>03 · 主屏（遥控器）</b>中央超大「按住说话」，下排三颗圆钮 = 任务 / 审批 / 设备，各自带未读角标。顶部 = <b>发给哪台</b>，底部胶囊 = <b>落哪条会话</b>。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="04-tasks.html" title="任务列表"></iframe></div>
+    <figcaption><b>04 · 任务列表</b>状态点 + 一句话副标题（设备 / 耗时 / 当前动作）+ 细进度条。待审批项用红色插队置顶。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="05-task-detail.html" title="任务详情"></iframe></div>
+    <figcaption><b>05 · 任务详情</b>进度环居中，下面三行关键事实（设备 / 已用时 / 当前工具），底部只留暂停与停止（水平滑动被系统手势占用）。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="06-approval.html" title="审批"></iframe></div>
+    <figcaption><b>06 · 审批</b>整屏只有一个决定。原命令 + 风险解释 + 批准/拒绝；高危命令可要求长按确认。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="07-voice.html" title="语音"></iframe></div>
+    <figcaption><b>07 · 语音输入</b>波形 + 实时转写回显 + 明确的目标设备。转写在本机完成，上滑取消。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="08-notification.html" title="通知"></iframe></div>
+    <figcaption><b>08 · 通知</b>完成通知带「看摘要 / 让它提交」；审批通知直接把批准·拒绝放在腕上，无需进 App。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="09-devices.html" title="设备"></iframe></div>
+    <figcaption><b>09 · 设备切换</b>同一账号下的手机 / 云端 / PC 一张列表，点按切换「当前遥控目标」，每台带待审批角标与 trusted/guarded 标记。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="10-pairing.html" title="配对"></iframe></div>
+    <figcaption><b>10 · 配对绑定</b>手表出码 / 出码 + 8 位配对码，手机扫码授权。三步进度条表明后续还有权限确认。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="11-settings.html" title="设置"></iframe></div>
+    <figcaption><b>11 · 设置</b>通知 / 省电 / 安全三组。审批请求标记为「不可关闭」，并显式写出本表权限范围。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="12-ongoing-activity.html" title="常驻活动"></iframe></div>
+    <figcaption><b>12 · 常驻活动</b>长任务在腕上有持续入口：通知栏常驻项 + 表盘底部小胶囊，点按直达详情。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="13-session-switcher.html" title="会话切换"></iframe></div>
+    <figcaption><b>13 · 会话切换 <span style="color:#14b8a6">NEW</span></b>置顶（手表本地，跨设备可用）+ 最近（服务端排序，带设备徽标）。旋表冠浏览，点按即成为「当前会话」。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="14-cross-device-list.html" title="跨设备统一列表"></iframe></div>
+    <figcaption><b>14 · 跨设备统一列表 <span style="color:#14b8a6">NEW</span></b>设备筛选 chips 是<b>视图</b>不是模式；离线端点显式说明「读不到它的会话」（中心不缓存历史）。</figcaption>
+  </figure>
+
+  <figure class="g-item">
+    <div class="device"><iframe src="15-approval-queue.html" title="待审批队列"></iframe></div>
+    <figcaption><b>15 · 待审批队列 <span style="color:#14b8a6">NEW</span></b>跨设备统一、<b>不可筛选</b>（谁能拦住我才是最要紧的）；按「高危（需长按）/ 常规」分组。</figcaption>
+  </figure>
+</div>
+
+<div class="g-note">
+  <h2>圆屏安全区（15 张稿统一遵守）</h2>
+  <ul>
+    <li>外圈 24px 内不放可点元素（表壳遮挡 + 防误触）；正文左右各留 22–24px。</li>
+    <li>顶部 26–30px 为时间/状态行，底部 22–26px 为操作行；中间为唯一滚动区。</li>
+    <li>点击目标 ≥ 48×48dp：圆钮 62dp，主按钮 78dp。</li>
+    <li>可滚动列表均支持旋转表冠 / 表圈（rotary input），不依赖精确点按。</li>
+    <li><b>不使用水平滑动承载业务语义</b>——系统右滑 = 退出/返回，手势冲突见 PRD §7.7。</li>
+  </ul>
+
+  <h2>怎么打开</h2>
+  <ul>
+    <li>直接双击 <code>index.html</code>（无需构建、无外部依赖，纯 HTML + 内联 SVG）。</li>
+    <li>每张稿也能单独打开，例如 <code>06-approval.html</code>，方便截图进需求文档。</li>
+    <li>也可在文档站访问：<code>/mockups/wearos/</code>（<code>docs/public/</code> 已自动静态托管）。</li>
+  </ul>
+</div>
+</body>
+</html>

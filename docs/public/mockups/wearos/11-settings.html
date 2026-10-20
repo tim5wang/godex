@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 设置（通知 / 省电 / 权限范围）</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .srow {
+    display:flex; align-items:center; gap:11px; width:100%; max-width:316px;
+    background:var(--wg-surface); border:1px solid var(--wg-border);
+    border-radius:16px; padding:10px 13px;
+  }
+  .srow .grow { flex:1; min-width:0; }
+  .srow .ttl { font-size:13.5px; font-weight:600; }
+  .srow .sub { font-size:11.5px; color:var(--wg-dim); margin-top:2px; }
+  .sw { width:38px; height:21px; border-radius:999px; background:var(--wg-surface-3); position:relative; flex:0 0 auto; }
+  .sw i { position:absolute; top:2.5px; left:3px; width:16px; height:16px; border-radius:50%; background:#5b6a72; }
+  .sw.on { background:var(--wg-accent-soft); border:1px solid rgba(20,184,166,.5); }
+  .sw.on i { left:19px; background:var(--wg-accent); }
+  .group-label { width:100%; max-width:316px; font-size:11px; color:var(--wg-dim); letter-spacing:.6px; margin:2px 0 -3px 4px; }
+</style>
+</head>
+<body class="watch">
+<div class="screen" style="padding:24px 22px 22px">
+  <div class="t-sm" style="width:100%;max-width:316px">设置</div>
+
+  <div class="center" style="justify-content:flex-start;gap:8px;margin-top:12px">
+    <div class="group-label">通知</div>
+    <div class="srow">
+      <span class="dot ok"></span>
+      <div class="grow">
+        <div class="ttl">任务完成提醒</div>
+        <div class="sub">含结果摘要，点按看详情</div>
+      </div>
+      <div class="sw on"><i></i></div>
+    </div>
+    <div class="srow">
+      <span class="dot danger"></span>
+      <div class="grow">
+        <div class="ttl">审批请求（强制）</div>
+        <div class="sub">不可关闭 · 震动手腕 + 响铃</div>
+      </div>
+      <div class="sw on"><i></i></div>
+    </div>
+
+    <div class="group-label">省电</div>
+    <div class="srow">
+      <span class="dot busy"></span>
+      <div class="grow">
+        <div class="ttl">只在需要时联网</div>
+        <div class="sub">无任务时断开 · 靠推送唤醒</div>
+      </div>
+      <div class="sw on"><i></i></div>
+    </div>
+    <div class="srow">
+      <span class="dot"></span>
+      <div class="grow">
+        <div class="ttl">常亮显示</div>
+        <div class="sub">仅显示运行中任务数（AMOLED 低亮）</div>
+      </div>
+      <div class="sw"><i></i></div>
+    </div>
+
+    <div class="group-label">安全</div>
+    <div class="srow">
+      <span class="dot warn"></span>
+      <div class="grow">
+        <div class="ttl">审批需二次确认</div>
+        <div class="sub">高危命令长按 1 秒才生效</div>
+      </div>
+      <div class="sw on"><i></i></div>
+    </div>
+    <div class="srow">
+      <div class="grow">
+        <div class="ttl">本表权限范围</div>
+        <div class="sub">读写任务 · 审批 · 发语音；不含文件/终端</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="mini">解绑在手机端「我的 → 设备」操作</div>
+  </div>
+</div>
+</body>
+</html>

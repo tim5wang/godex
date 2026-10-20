@@ -90,7 +90,9 @@
 | [prd-asl-engine.md](./prd-asl-engine.md) | Agent 流程固化语言/引擎调研 PRD | Draft，待评审；不包含实现承诺 |
 | [prd-browser-use-inside.md](./prd-browser-use-inside.md) | Agent 浏览器实时画面内嵌方案调研 | Draft，待评审 |
 | [prd-desktop-app-wrap.md](./prd-desktop-app-wrap.md) | 桌面版与 App 版 WebView 容器调研 | Draft，待评审 |
-| [prd-desktop-pet-android-watch.md](./prd-desktop-pet-android-watch.md) | 桌宠与 Android Wear OS 客户端调研 | Draft，待评审 |
+| [prd-desktop-pet-android-watch.md](./prd-desktop-pet-android-watch.md) | 桌宠与 Android Wear OS 客户端调研 | Draft，待评审；手表部分已被 prd-wearos-watch-client.md 取代 |
+| [prd-wearos-watch-client.md](./prd-wearos-watch-client.md) | Wear OS 手表客户端（腕上遥控器）调研 + 设计：同类应用拆解、绑定/多端互操作、低功耗约束、分期验收；UI 设计稿见 [docs/public/mockups/wearos/](./public/mockups/wearos/README.md) | Draft，待评审；含 15 张圆屏 HTML/SVG 设计稿 |
+| [prd-xiaomi-watch5-compat.md](./prd-xiaomi-watch5-compat.md) | 小米 Watch 5 兼容性分析：国行 HyperOS 3 与海外 Wear OS 6 均为 Android 底子（统一按 Wear OS 栈开发）、无 GMS 影响（FCM 作废/侧载分发）、操作手势对照、15 稿逐条判定 | Draft，待评审；结论优先读 §1 |
 | [release-notes-v1.5.0.md](./release-notes-v1.5.0.md) | v1.5.0 发布草案 | Draft；版本号与发布内容待 release 前核验 |
 
 ## C. 已合并 / 被取代（Superseded）

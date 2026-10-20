@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>GoDex Wear · 设备 / 节点切换（多端可见性）</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .node-ico { width:30px; height:30px; border-radius:10px; display:flex; align-items:center; justify-content:center; background:var(--wg-surface-3); }
+  .live { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--wg-ok); }
+  .hrmini { width:100%; max-width:316px; height:1px; background:var(--wg-border); }
+  .scope { font-size:11px; color:var(--wg-dim); }
+</style>
+</head>
+<body class="watch">
+<div class="screen" style="padding:24px 22px 22px">
+  <div style="display:flex;align-items:center;justify-content:space-between;width:100%;max-width:316px">
+    <div class="t-sm">设备</div>
+    <div class="chip accent"><span class="dot ok"></span> 4/5 在线</div>
+  </div>
+
+  <div class="center" style="justify-content:flex-start;gap:9px;margin-top:13px">
+    <div class="list">
+      <div class="row active">
+        <div class="node-ico">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="#14b8a6"><path d="M3 5h18v10H3zm0 12h18v2H3z"/></svg>
+        </div>
+        <div class="grow">
+          <div class="r-title">PC-01 · 本机 <span class="chip accent" style="padding:1px 7px;font-size:10px;margin-left:2px">当前目标</span></div>
+          <div class="r-sub">2 任务运行 · 2 待审批 · 12 秒前</div>
+        </div>
+        <span class="dot busy"></span>
+      </div>
+
+      <div class="row">
+        <div class="node-ico">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="#9aa9b1"><path d="M4 4h16v12H4zm3 14h10v2H7z"/></svg>
+        </div>
+        <div class="grow">
+          <div class="r-title">phone-android</div>
+          <div class="r-sub">1 任务 · 通知已开</div>
+        </div>
+        <span class="dot ok"></span>
+      </div>
+
+      <div class="row">
+        <div class="node-ico">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="#9aa9b1"><path d="M3 4h18v14H3z"/></svg>
+        </div>
+        <div class="grow">
+          <div class="r-title">cloud (godex.example.com)</div>
+          <div class="r-sub">常驻 · 3 任务 · 0 待审批</div>
+        </div>
+        <span class="dot busy"></span>
+      </div>
+
+      <div class="row">
+        <div class="node-ico">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="#9aa9b1"><path d="M12 3 2 8v12h20V8z"/></svg>
+        </div>
+        <div class="grow">
+          <div class="r-title">office-db <span class="chip warn" style="padding:1px 7px;font-size:10px;margin-left:2px">guarded</span></div>
+          <div class="r-sub">离线 · 2 小时前</div>
+        </div>
+        <span class="dot off"></span>
+      </div>
+    </div>
+
+    <div class="scope">同一账号下的所有端共享同一份任务与审批队列</div>
+  </div>
+
+  <div class="bottom">
+    <div class="mini">点按切换「当前遥控目标」· 长按看节点诊断</div>
+    <div class="mini" style="color:#f59e0b">guarded-remote 设备：给它的写指令会先生成一条待审批</div>
+  </div>
+</div>
+</body>
+</html>

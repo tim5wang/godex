@@ -68,6 +68,10 @@ fun DevicesScreen(
                     Text(
                         text = buildString {
                             append(if (node.isOnline) "在线" else "离线")
+                            // What the target is matters more than when it was last
+                            // seen: "which computer am I driving?" is this screen's
+                            // question, and a phone is not a desktop.
+                            node.kindLabel.takeIf { it.isNotEmpty() }?.let { append(" · ").append(it) }
                             if (selected) append(" · 当前")
                             when_.takeIf { it.isNotEmpty() }?.let { append(" · ").append(it) }
                         },

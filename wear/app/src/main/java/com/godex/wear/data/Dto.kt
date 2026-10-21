@@ -69,8 +69,28 @@ data class WatchNode(
     val name: String = "",
     val status: String = "",
     @SerialName("last_seen") val lastSeen: String? = null,
+    // What the target is (pc | cloud | phone), so the remote-control screen can
+    // label it instead of showing every node as an interchangeable box. Empty
+    // means a node that never declared a kind, which the node side defaults to pc.
+    val kind: String = "",
 ) {
     val isOnline: Boolean get() = status.equals("online", ignoreCase = true)
+
+    /**
+     * Short label for the node kind, or empty when there is nothing to say.
+     *
+     * An unrecognised kind (a newer node type this build does not know) returns
+     * the raw value rather than hiding it: showing the truth is better than
+     * silently presenting a phone as a desktop.
+     */
+    val kindLabel: String
+        get() = when (kind.lowercase()) {
+            "" -> ""
+            "pc" -> "电脑"
+            "cloud" -> "云服务器"
+            "phone" -> "手机"
+            else -> kind
+        }
 }
 
 @Serializable

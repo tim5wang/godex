@@ -249,7 +249,7 @@ control:
 ```
 
 凭证 `ck_...` 不写入 yaml，而是存于该机器 home 目录 `.env`：
-`GODEX_CONTROL_CREDENTIAL=ck_...`（也可用环境变量 `GODEX_CONTROL_CENTER_URL` / `GODEX_CONTROL_NODE_ID` / `GODEX_CONTROL_TRUST_LEVEL` 覆盖）。
+`GODEX_CONTROL_CREDENTIAL=ck_...`（也可用环境变量 `GODEX_CONTROL_CENTER_URL` / `GODEX_CONTROL_NODE_ID` / `GODEX_CONTROL_TRUST_LEVEL` / `GODEX_CONTROL_KIND` 覆盖）。
 
 ### 6.2 中心侧「节点」能力
 

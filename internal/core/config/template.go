@@ -461,6 +461,9 @@ control:
   default_node: {{ yamlString .Control.DefaultNode }}
   # Trust level reported when registering to a center. Environment override: GODEX_CONTROL_TRUST_LEVEL.
   trust_level: {{ yamlString .Control.TrustLevel }}
+  # What this runtime is: pc, cloud, or phone. Reported when registering to a center.
+  # Environment override: GODEX_CONTROL_KIND.
+  kind: {{ yamlString .Control.Kind }}
   # Optional central Godex service URL for auto-registration. Environment override: GODEX_CONTROL_CENTER_URL.
   center_url: {{ yamlString .Control.CenterURL }}
   # Center web token used to reach other nodes through the center bridge. Environment override: GODEX_CONTROL_CENTER_TOKEN.

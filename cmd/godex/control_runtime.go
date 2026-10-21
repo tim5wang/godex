@@ -98,10 +98,14 @@ func controlConfigChanged(oldCfg, newCfg *config.Config) bool {
 		return true
 	}
 	o, n := oldCfg.Control, newCfg.Control
+	// Kind is included because it is reported on registration: without it, editing
+	// the node's type would leave the center labelling it with the old one until
+	// some unrelated field changed.
 	return o.CenterURL != n.CenterURL ||
 		o.Credential != n.Credential ||
 		o.CenterToken != n.CenterToken ||
 		o.NodeID != n.NodeID ||
 		o.NodeName != n.NodeName ||
-		o.TrustLevel != n.TrustLevel
+		o.TrustLevel != n.TrustLevel ||
+		o.Kind != n.Kind
 }

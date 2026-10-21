@@ -116,6 +116,7 @@ func defaultConfigFile() ConfigFile {
 			NodeID:              "",
 			DefaultNode:         "",
 			TrustLevel:          "",
+			Kind:                "",
 			CenterURL:           "",
 			HeartbeatSeconds:    15,
 			OfflineAfterSeconds: 60,

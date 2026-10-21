@@ -91,6 +91,9 @@ type watchNodeItem struct {
 	Name     string    `json:"name"`
 	Status   string    `json:"status"`
 	LastSeen time.Time `json:"last_seen,omitempty"`
+	// Kind distinguishes a desktop agent host from a server or phone bridge, so
+	// the wrist can label the target instead of showing every node identically.
+	Kind string `json:"kind,omitempty"`
 }
 
 // watchStep is one entry of the agent's own plan, trimmed for a wrist (mockup 05).
@@ -399,7 +402,7 @@ func registerWatchReadRoutes(mux *http.ServeMux, api watchAPI, read func(http.Ha
 		items := make([]watchNodeItem, 0, len(nodes))
 		for _, n := range nodes {
 			items = append(items, watchNodeItem{
-				ID: n.ID, Name: n.Name, Status: n.Status, LastSeen: n.LastSeen,
+				ID: n.ID, Name: n.Name, Status: n.Status, LastSeen: n.LastSeen, Kind: n.Kind,
 			})
 		}
 		writeJSON(w, http.StatusOK, items)

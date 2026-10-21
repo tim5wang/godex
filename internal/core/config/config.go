@@ -348,10 +348,13 @@ type HeartbeatConfig struct {
 
 // ControlConfig controls multi-runtime registration and observability.
 type ControlConfig struct {
-	NodeName            string
-	NodeID              string
-	DefaultNode         string
-	TrustLevel          string
+	NodeName    string
+	NodeID      string
+	DefaultNode string
+	TrustLevel  string
+	// Kind is the node type reported to a center: pc, cloud, or phone. Empty
+	// resolves to pc (see noderegistry.NormalizeKind).
+	Kind                string
 	CenterURL           string
 	CenterToken         string
 	NodeProxyToken      string

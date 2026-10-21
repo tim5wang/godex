@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
@@ -16,6 +18,7 @@ import (
 	"github.com/tim5wang/godex/internal/domain/todo"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
+	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/watchauth"
 )
 
@@ -666,6 +669,74 @@ func TestWatchApprovalExposesCommandAndRiskForDetailScreen(t *testing.T) {
 	waitForHTTPSnapshot(t, service, opened.SessionID, func(s backend.Snapshot) bool {
 		return !s.Running
 	})
+}
+
+// TestWatchNodesCarryKind covers the wrist-side half of W1: the point of storing a
+// node kind is that a client can label a target, so the field has to survive the
+// registry → /watch/nodes round trip. A registry-level test alone would not catch a
+// handler that builds its response item field-by-field and forgets to copy it.
+func TestWatchNodesCarryKind(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := newTestManager(t, cfg)
+	caller := &stubCaller{responses: []protocol.Response{
+		{Content: []protocol.Block{protocol.TextBlock("done")}},
+	}}
+	service := backend.NewService(cfg, agent.NewSharedDependenciesWithCaller(cfg, caller), commands.NewService(cfg))
+
+	registry, err := noderegistry.New(filepath.Join(t.TempDir(), "nodes.json"), time.Minute)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	// One node of each kind, plus one that declares nothing (defaulted).
+	for _, input := range []noderegistry.NodeInput{
+		{ID: "node-pc", Name: "desktop", Kind: noderegistry.KindPC},
+		{ID: "node-cloud", Name: "server", Kind: noderegistry.KindCloud},
+		{ID: "node-phone", Name: "phone-bridge", Kind: noderegistry.KindPhone},
+		{ID: "node-unspecified", Name: "legacy"},
+	} {
+		if _, err := registry.Register(context.Background(), input); err != nil {
+			t.Fatalf("register %s: %v", input.ID, err)
+		}
+	}
+
+	auth, err := watchauth.New(filepath.Join(cfg.StateDir, "watch", "devices.json"))
+	if err != nil {
+		t.Fatalf("watchauth.New: %v", err)
+	}
+	server := httptest.NewServer(NewHandlerWithDependencies(Dependencies{
+		Config:          manager,
+		Backend:         service,
+		WatchAuth:       auth,
+		ControlRegistry: registry,
+	}))
+	t.Cleanup(server.Close)
+	token := pairWatch(t, server, "")
+
+	resp, body := getWatch(t, server.URL+"/watch/nodes", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("nodes status=%d body=%s", resp.StatusCode, body)
+	}
+	var nodes []struct {
+		ID   string `json:"id"`
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		t.Fatalf("decode nodes: %v body=%s", err, body)
+	}
+	if len(nodes) != 4 {
+		t.Fatalf("expected 4 nodes, got %d (%s)", len(nodes), body)
+	}
+	want := map[string]string{
+		"node-pc":          noderegistry.KindPC,
+		"node-cloud":       noderegistry.KindCloud,
+		"node-phone":       noderegistry.KindPhone,
+		"node-unspecified": noderegistry.DefaultKind,
+	}
+	for _, node := range nodes {
+		if want[node.ID] != node.Kind {
+			t.Errorf("node %s kind = %q, want %q", node.ID, node.Kind, want[node.ID])
+		}
+	}
 }
 
 // TestWatchApprovalRiskLevelMapsEveryVerdict keeps the wrist label aligned with

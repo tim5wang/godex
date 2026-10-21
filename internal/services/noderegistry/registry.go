@@ -21,12 +21,45 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
 const (
 	StatusOnline  = "online"
 	StatusOffline = "offline"
 )
+
+// Node kinds. A node declares what it is so a client can tell a desktop agent
+// host from a server or a phone bridge instead of inferring it from capabilities
+// (which describe what a node can do, not what it is).
+const (
+	KindPC    = "pc"
+	KindCloud = "cloud"
+	KindPhone = "phone"
+
+	// DefaultKind applies when a node declares nothing. "pc" is the honest
+	// default: godex is a desktop-hosted agent, and a node that has not said
+	// otherwise is almost always one.
+	DefaultKind = KindPC
+)
+
+// NormalizeKind lowercases and validates a declared node kind, falling back to
+// DefaultKind for anything unrecognised.
+//
+// An unknown value is treated as a typo rather than a new kind: keeping the set
+// closed lets consumers switch on it exhaustively, and the warning makes the
+// typo visible instead of silently persisting as a status no client recognises.
+func NormalizeKind(kind string) string {
+	switch normalized := strings.ToLower(strings.TrimSpace(kind)); normalized {
+	case KindPC, KindCloud, KindPhone:
+		return normalized
+	case "":
+		return DefaultKind
+	default:
+		logger.Warnf("noderegistry: unknown node kind %q, using %q", kind, DefaultKind)
+		return DefaultKind
+	}
+}
 
 type NodeInput struct {
 	ID           string            `json:"id"`
@@ -38,6 +71,9 @@ type NodeInput struct {
 	Capabilities []string          `json:"capabilities,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
 	TrustLevel   string            `json:"trust_level,omitempty"`
+	// Kind is what this node IS (pc | cloud | phone), as opposed to
+	// Capabilities which describe what it can do. Empty normalises to pc.
+	Kind string `json:"kind,omitempty"`
 }
 
 type NodeView struct {
@@ -58,6 +94,9 @@ type NodeView struct {
 	RelayStatus    string            `json:"relay_status,omitempty"`
 	LastHealth     time.Time         `json:"last_health,omitempty"`
 	TrustLevel     string            `json:"trust_level,omitempty"`
+	// Kind is the node's declared type (pc | cloud | phone). Normalised on write
+	// and defaulted on read, so a view never carries an empty kind.
+	Kind string `json:"kind,omitempty"`
 }
 
 type Registry struct {
@@ -319,6 +358,16 @@ func (r *Registry) mergeLocked(input NodeInput, now time.Time) NodeView {
 	if v := strings.TrimSpace(input.TrustLevel); v != "" {
 		node.TrustLevel = v
 	}
+	// A heartbeat that omits kind (an older node, or one whose config has no
+	// value) must not erase a kind already declared: only an explicit value
+	// updates it. The default is applied once, so re-normalising an unknown
+	// stored value does not re-log on every poll.
+	if v := strings.TrimSpace(input.Kind); v != "" {
+		node.Kind = NormalizeKind(v)
+	}
+	if node.Kind == "" {
+		node.Kind = DefaultKind
+	}
 	return node
 }
 
@@ -328,6 +377,14 @@ func (r *Registry) viewLocked(node NodeView) NodeView {
 	}
 	if node.Status == "" {
 		node.Status = StatusOffline
+	}
+	// Applied here, not only on write: a snapshot written before Kind existed
+	// (or by an older node) loads without one, and a view that can be empty
+	// would force every consumer to re-derive the default. No warning on this
+	// path — a legacy record is expected, not a typo, and logging per read
+	// would be noise.
+	if node.Kind == "" {
+		node.Kind = DefaultKind
 	}
 	node.Capabilities = append([]string{}, node.Capabilities...)
 	node.Metadata = cleanMap(node.Metadata)
@@ -482,6 +539,7 @@ func SelfNodeWithVersion(cfg *config.Config, endpoint, godexVersion string) (Nod
 		Version:      firstNonEmpty(godexVersion, "dev"),
 		TrustLevel:   strings.TrimSpace(cfg.Control.TrustLevel),
 		Capabilities: RuntimeCapabilities(cfg),
+		Kind:         NormalizeKind(cfg.Control.Kind),
 	}, nil
 }
 

@@ -205,6 +205,7 @@ type ControlSection struct {
 	NodeID              string               `yaml:"node_id"`
 	DefaultNode         string               `yaml:"default_node"`
 	TrustLevel          string               `yaml:"trust_level"`
+	Kind                string               `yaml:"kind"`
 	CenterURL           string               `yaml:"center_url"`
 	CenterToken         string               `yaml:"center_token"`
 	NodeProxyToken      string               `yaml:"node_proxy_token"`

@@ -46,6 +46,15 @@ type Dependencies struct {
 	// config StateDir, so the watch pairing surface exists on every node without
 	// requiring new configuration.
 	WatchAuth *watchauth.Service
+	// WatchTTS optionally injects the wrist speech-synthesis bridge (B7). When nil
+	// it is built from the config, behind media.audio.voice_enabled — the same
+	// switch the ASR bridge uses. Injectable so the route can be tested without a
+	// running voice-engine.
+	WatchTTS watchTTSProvider
+	// WatchASR optionally injects the wrist transcription bridge (W9). Same rationale
+	// as WatchTTS: injectable so the route's error mapping can be tested without a
+	// running voice-engine.
+	WatchASR watchASRProvider
 }
 
 func NewHandler(
@@ -195,7 +204,19 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	if manager != nil && manager.Current().Media.Audio.VoiceEnabled {
 		watchASR = newWatchASRBridge(manager)
 	}
-	registerWatchRoutes(mux, watchAuth, service, protected, controlRegistry, watchASR)
+	// An injected provider (tests) takes precedence over the config-derived one, so
+	// the route can be driven without voice-engine running.
+	if deps.WatchASR != nil {
+		watchASR = deps.WatchASR
+	}
+	// B7: speech synthesis shares the same enable switch. Both are optional, and a
+	// node with voice disabled must still serve the rest of the watch surface.
+	// An injected provider (tests) takes precedence over the config-derived one.
+	watchTTS := deps.WatchTTS
+	if watchTTS == nil && manager != nil && manager.Current().Media.Audio.VoiceEnabled {
+		watchTTS = newWatchTTSBridge(manager)
+	}
+	registerWatchRoutes(mux, watchAuth, service, protected, controlRegistry, watchASR, watchTTS)
 	capture := deps.LlmCapture
 	if capture == nil {
 		capture = llmcapture.New(llmcapture.Options{DumpDir: manager.Current().StateDir})

@@ -6,6 +6,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -186,6 +187,7 @@ type watchAPI struct {
 	service         *backend.Service
 	controlRegistry controlNodeRegistry
 	asr             watchASRProvider
+	tts             watchTTSProvider
 }
 
 // registerWatchRoutes wires the whole watch surface. The work lives in the
@@ -197,8 +199,9 @@ func registerWatchRoutes(
 	protected func(http.Handler) http.Handler,
 	controlRegistry controlNodeRegistry,
 	asr watchASRProvider,
+	tts watchTTSProvider,
 ) {
-	api := watchAPI{auth: auth, service: service, controlRegistry: controlRegistry, asr: asr}
+	api := watchAPI{auth: auth, service: service, controlRegistry: controlRegistry, asr: asr, tts: tts}
 
 	read := withWatchScope(auth, watchauth.ScopeRead)
 	command := withWatchScope(auth, watchauth.ScopeCommand)
@@ -215,6 +218,7 @@ func registerWatchRoutes(
 	registerWatchApprovalRoutes(mux, api, read, approve)
 	registerWatchCommandRoutes(mux, api, command)
 	registerWatchPushRoutes(mux, api, pushQueue, protected)
+	registerWatchTTSRoute(mux, api, command)
 }
 
 // registerWatchPairingRoutes covers device authorization (plan W2).
@@ -710,6 +714,13 @@ func registerWatchCommandRoutes(mux *http.ServeMux, api watchAPI, command func(h
 		}
 		text, confidence, err := asr.Transcribe(r.Context(), audio, mimeType)
 		if err != nil {
+			// A caller-side rejection (unsupported container) is a 400, not a 502:
+			// a 502 tells the watch the node is broken and invites a retry, but the
+			// retry would re-send the same unsupported bytes forever.
+			if errors.Is(err, errUnsupportedAudioType) {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}

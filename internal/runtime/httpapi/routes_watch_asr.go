@@ -10,6 +10,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -124,6 +125,12 @@ func (b *watchASRBridge) Transcribe(ctx context.Context, audio []byte, mimeType 
 // The watch records in whatever the platform offers, so the bridge accepts the
 // common containers and strips the header rather than forcing the watch — a
 // battery-constrained client — to do format conversion.
+// errUnsupportedAudioType marks a rejection caused by the CALLER's input, not by
+// the engine. The route maps it to 400 instead of 502: a 502 tells the watch the
+// node or engine is broken and invites a retry, but retrying re-sends the same
+// unsupported container forever. The watch needs to be told to fix its upload.
+var errUnsupportedAudioType = errors.New("unsupported audio type")
+
 func toEnginePCM(audio []byte, mimeType string) ([]byte, error) {
 	mt := strings.ToLower(strings.TrimSpace(mimeType))
 	if i := strings.Index(mt, ";"); i >= 0 {
@@ -140,7 +147,7 @@ func toEnginePCM(audio []byte, mimeType string) ([]byte, error) {
 	case "audio/pcm", "audio/l16", "audio/raw":
 		return audio, nil
 	default:
-		return nil, fmt.Errorf("unsupported audio type %q (send audio/wav or audio/pcm)", mimeType)
+		return nil, fmt.Errorf("%w %q (send audio/wav or audio/pcm)", errUnsupportedAudioType, mimeType)
 	}
 }
 

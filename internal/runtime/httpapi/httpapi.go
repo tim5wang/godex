@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/tim5wang/godex/internal/agent"
@@ -20,6 +21,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/usage"
+	"github.com/tim5wang/godex/internal/services/watchauth"
 	"github.com/tim5wang/godex/internal/version"
 )
 
@@ -40,6 +42,10 @@ type Dependencies struct {
 	// nil, NewHandlerWithDependencies creates one under the config StateDir so
 	// the /llm-capture endpoints always work.
 	LlmCapture *llmcapture.Capture
+	// WatchAuth holds paired wrist devices. When nil it is created under the
+	// config StateDir, so the watch pairing surface exists on every node without
+	// requiring new configuration.
+	WatchAuth *watchauth.Service
 }
 
 func NewHandler(
@@ -176,12 +182,33 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerDesktopRoutes(mux, service, protected)
 	registerPreviewRoutes(mux, manager)
 	registerGitRoutes(mux, protected, manager)
+	// Watch surface (wrist remote control). The device registry is created on
+	// demand so pairing works out of the box; a failure to open it must not take
+	// the whole API surface down, so it degrades to "pairing disabled".
+	watchAuth := deps.WatchAuth
+	if watchAuth == nil && manager != nil {
+		if created, err := watchauth.New(watchStatePath(manager.Current().StateDir)); err == nil {
+			watchAuth = created
+		}
+	}
+	var watchASR watchASRProvider
+	if manager != nil && manager.Current().Media.Audio.VoiceEnabled {
+		watchASR = newWatchASRBridge(manager)
+	}
+	registerWatchRoutes(mux, watchAuth, service, protected, controlRegistry, watchASR)
 	capture := deps.LlmCapture
 	if capture == nil {
 		capture = llmcapture.New(llmcapture.Options{DumpDir: manager.Current().StateDir})
 	}
 	registerLlmCaptureRoutes(mux, capture, protected)
 	return withGzip(mux)
+}
+
+// watchStatePath returns the on-disk location of the paired-watch registry.
+// It follows the existing stateDir-bound layout (see noderegistry paths) so a
+// node's watch pairings travel with the rest of its state.
+func watchStatePath(stateDir string) string {
+	return filepath.Join(stateDir, "watch", "devices.json")
 }
 
 // gzipResponseWriter compresses responses when the client accepts gzip.

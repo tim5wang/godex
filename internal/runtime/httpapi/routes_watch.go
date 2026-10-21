@@ -809,6 +809,13 @@ func watchSessionDetail(snapshot backend.Snapshot) map[string]any {
 	if tool := lastToolName(snapshot.Timeline); tool != "" {
 		out["current_tool"] = tool
 	}
+	// A bounded sequence of recent tool calls, so the wrist can show what the agent
+	// has been doing rather than only the single most recent tool name. Bounded
+	// because a watch screen holds a handful of lines and a long turn can contain
+	// hundreds of calls; the full log belongs on a larger screen.
+	if tools := recentToolEvents(snapshot.Timeline, maxWatchToolEvents); len(tools) > 0 {
+		out["recent_tools"] = tools
+	}
 	if len(snapshot.Messages) > 0 {
 		// One-line preview of the newest message only.
 		last := snapshot.Messages[len(snapshot.Messages)-1]
@@ -856,6 +863,125 @@ func lastToolName(timeline []events.Event) string {
 		}
 	}
 	return ""
+}
+
+// maxWatchToolEvents bounds the tool sequence sent to the wrist. A watch screen
+// holds a few lines, and a long turn can contain hundreds of calls, so sending
+// the whole timeline would bloat every poll for data that cannot be displayed.
+const maxWatchToolEvents = 5
+
+// watchToolEvent is one tool call, trimmed for a wrist (mockup 05).
+//
+// Only the tool name, outcome and duration are included: the watch answers "what
+// is it doing and did it work", and any richer detail belongs on a larger screen.
+//
+// A call with no outcome yet is one still in flight, which is what the wrist
+// should present as the current activity.
+type watchToolEvent struct {
+	Name       string `json:"name"`
+	Failed     bool   `json:"failed,omitempty"`
+	TimedOut   bool   `json:"timed_out,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	// Pending marks a call whose finish event has not arrived, i.e. the current
+	// activity. Stated explicitly because the client cannot infer it: a tool that
+	// finishes in under a millisecond also reports duration_ms 0, and rendering
+	// that as "still running" would be a visible lie about state.
+	Pending bool `json:"pending,omitempty"`
+
+	// settled is internal bookkeeping: true once a finish event has been folded in,
+	// so a second finish for the same tool cannot overwrite an already-reported
+	// outcome. Not serialised.
+	settled bool
+}
+
+// recentToolEvents returns the most recent tool calls, newest last.
+//
+// Started and finished events are folded by tool name so a call appears once
+// with its outcome, instead of twice with only half the information each time.
+// A started event with no matching finish is a call still in flight, which is
+// exactly what the wrist should show as the current activity.
+func recentToolEvents(timeline []events.Event, limit int) []watchToolEvent {
+	out := make([]watchToolEvent, 0, limit)
+	for _, ev := range timeline {
+		switch ev.Type {
+		case events.EventToolCallStarted:
+			name := toolNameFromPayload(ev.Payload)
+			if name == "" {
+				continue
+			}
+			out = append(out, watchToolEvent{Name: name})
+		case events.EventToolCallFinished:
+			payload, ok := toolCallPayload(ev.Payload)
+			if !ok {
+				continue
+			}
+			// Attach the outcome to the newest still-pending call of the same name:
+			// searching from the end picks the current invocation when one tool is
+			// used repeatedly within a single turn.
+			matched := false
+			for i := len(out) - 1; i >= 0; i-- {
+				if out[i].Name != payload.Name || out[i].settled {
+					continue
+				}
+				out[i].Failed = payload.Error != ""
+				out[i].TimedOut = payload.TimedOut
+				out[i].DurationMS = payload.DurationMS
+				out[i].settled = true
+				matched = true
+				break
+			}
+			if !matched {
+				// A finish whose start was not seen (events replayed from mid-turn)
+				// must still be shown rather than silently dropped.
+				out = append(out, watchToolEvent{
+					Name:       payload.Name,
+					Failed:     payload.Error != "",
+					TimedOut:   payload.TimedOut,
+					DurationMS: payload.DurationMS,
+					settled:    true,
+				})
+			}
+		}
+	}
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	// A call with no folded outcome is still in flight. Computed once at the end so
+	// the flag cannot drift from the settled bookkeeping.
+	for i := range out {
+		out[i].Pending = !out[i].settled
+	}
+	return out
+}
+
+// toolCallPayload tolerates both the in-process struct and the JSON-decoded map
+// shape, because a snapshot may have been rehydrated from disk.
+func toolCallPayload(payload any) (events.ToolCallPayload, bool) {
+	switch v := payload.(type) {
+	case events.ToolCallPayload:
+		return v, true
+	case *events.ToolCallPayload:
+		if v != nil {
+			return *v, true
+		}
+	case map[string]any:
+		name, _ := v["name"].(string)
+		if name == "" {
+			return events.ToolCallPayload{}, false
+		}
+		out := events.ToolCallPayload{Name: name}
+		if s, ok := v["error"].(string); ok {
+			out.Error = s
+		}
+		if b, ok := v["timed_out"].(bool); ok {
+			out.TimedOut = b
+		}
+		if f, ok := v["duration_ms"].(float64); ok {
+			out.DurationMS = int64(f)
+		}
+		return out, true
+	}
+	return events.ToolCallPayload{}, false
 }
 
 // toolNameFromPayload tolerates both the in-process struct and the JSON-decoded

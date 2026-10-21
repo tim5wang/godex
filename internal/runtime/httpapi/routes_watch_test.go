@@ -500,6 +500,65 @@ func TestWatchSessionDetailProjectsStepsAndProgress(t *testing.T) {
 	}
 }
 
+// TestRecentToolEventsFoldsStartAndFinish covers the data behind mockup 05's tool
+// log. Started and finished events for one call must collapse into a single entry
+// carrying the outcome, and a started event with no finish must be reported as
+// still pending — otherwise the wrist would show a finished tool as running, or
+// the same call twice with only half the information each time.
+func TestRecentToolEventsFoldsStartAndFinish(t *testing.T) {
+	timeline := []events.Event{
+		{Type: events.EventToolCallStarted, Payload: events.ToolCallPayload{Name: "read_file"}},
+		{Type: events.EventToolCallFinished, Payload: events.ToolCallPayload{Name: "read_file", DurationMS: 12}},
+		{Type: events.EventToolCallStarted, Payload: events.ToolCallPayload{Name: "bash"}},
+		{Type: events.EventToolCallFinished, Payload: events.ToolCallPayload{Name: "bash", Error: "exit 1", DurationMS: 800}},
+		{Type: events.EventToolCallStarted, Payload: events.ToolCallPayload{Name: "edit_file"}},
+	}
+
+	got := recentToolEvents(timeline, maxWatchToolEvents)
+	if len(got) != 3 {
+		t.Fatalf("want 3 folded entries, got %d: %+v", len(got), got)
+	}
+
+	if got[0].Name != "read_file" || got[0].Failed || got[0].Pending || got[0].DurationMS != 12 {
+		t.Fatalf("read_file entry wrong: %+v", got[0])
+	}
+	if got[1].Name != "bash" || !got[1].Failed || got[1].Pending {
+		t.Fatalf("failed bash entry wrong: %+v", got[1])
+	}
+	if got[2].Name != "edit_file" || !got[2].Pending {
+		t.Fatalf("edit_file should be pending: %+v", got[2])
+	}
+}
+
+// TestRecentToolEventsKeepsMostRecentAndHandlesLoneFinish pins the two bounds a
+// wrist depends on: the list is capped to the newest entries (a long turn can hold
+// hundreds of calls) and a finish event without a recorded start is still shown
+// rather than quietly dropped.
+func TestRecentToolEventsKeepsMostRecentAndHandlesLoneFinish(t *testing.T) {
+	timeline := []events.Event{{Type: events.EventToolCallFinished, Payload: events.ToolCallPayload{Name: "orphan", DurationMS: 5}}}
+	for _, name := range []string{"t1", "t2", "t3", "t4", "t5", "t6"} {
+		timeline = append(timeline, events.Event{Type: events.EventToolCallStarted, Payload: events.ToolCallPayload{Name: name}})
+	}
+
+	got := recentToolEvents(timeline, 3)
+	if len(got) != 3 {
+		t.Fatalf("want 3 entries after limit, got %d", len(got))
+	}
+	// The newest three started calls survive; the older ones and the orphan fall off.
+	for i, want := range []string{"t4", "t5", "t6"} {
+		if got[i].Name != want {
+			t.Fatalf("entry %d = %q, want %q", i, got[i].Name, want)
+		}
+	}
+
+	lone := recentToolEvents([]events.Event{
+		{Type: events.EventToolCallFinished, Payload: events.ToolCallPayload{Name: "orphan", DurationMS: 5}},
+	}, maxWatchToolEvents)
+	if len(lone) != 1 || lone[0].Name != "orphan" || lone[0].Pending {
+		t.Fatalf("lone finish should be kept as settled: %+v", lone)
+	}
+}
+
 func TestToolNameFromPayloadHandlesBothShapes(t *testing.T) {
 	// In-process snapshots carry the struct; rehydrated ones carry a map.
 	if got := toolNameFromPayload(events.ToolCallPayload{Name: "edit_file"}); got != "edit_file" {
@@ -597,6 +656,16 @@ func TestWatchApprovalExposesCommandAndRiskForDetailScreen(t *testing.T) {
 	if got.ToolName != "bash" {
 		t.Fatalf("tool_name = %q, want bash", got.ToolName)
 	}
+
+	// Drain the turn before returning. The stub caller finishes its second response
+	// asynchronously and the session store keeps writing checkpoints into
+	// cfg.StateDir; without this wait those writes race t.TempDir()'s cleanup and the
+	// test fails intermittently with "RemoveAll cleanup: directory not empty" (seen in
+	// ~4 of 5 isolated runs). Waiting for the turn to end synchronises them, which is
+	// how the rest of this package does it.
+	waitForHTTPSnapshot(t, service, opened.SessionID, func(s backend.Snapshot) bool {
+		return !s.Running
+	})
 }
 
 // TestWatchApprovalRiskLevelMapsEveryVerdict keeps the wrist label aligned with

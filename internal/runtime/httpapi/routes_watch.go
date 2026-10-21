@@ -829,7 +829,30 @@ func watchSessionDetail(snapshot backend.Snapshot) map[string]any {
 			"text": truncateRunes(protocol.MessageText(last), 140),
 		}
 	}
+	// B4: a wrist-shortened form of the agent's last reply.
+	//
+	// last_message above is a raw 140-rune cut, which is fine as a list preview but
+	// is not a summary: opening it on a watch showed the first two lines of a
+	// markdown reply, often a heading or the opening of a code fence. This field is
+	// the shaper output, so the detail screen can show a sentence instead.
+	if summary := watchReplySummary(lastAssistantText(snapshot.Messages)); summary != "" {
+		out["reply_summary"] = summary
+	}
 	return out
+}
+
+// lastAssistantText returns the most recent assistant reply, so the summary
+// describes what the agent said rather than the user's own instruction.
+func lastAssistantText(messages []protocol.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != protocol.RoleAssistant {
+			continue
+		}
+		if text := protocol.MessageText(messages[i]); strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 // watchSteps projects the todo list into the shape a wrist renders. The

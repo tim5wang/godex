@@ -112,7 +112,11 @@ fun SessionDetailScreen(
 
             item {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    val title = d.lastMessage?.text?.takeIf { it.isNotBlank() }
+                    // Prefer the node's shortened reply (B4) and fall back to the raw
+                    // preview: an older node does not send reply_summary, and the
+                    // screen must still show something in that case.
+                    val title = (d.replySummary?.takeIf { it.isNotBlank() }
+                        ?: d.lastMessage?.text?.takeIf { it.isNotBlank() })
                     if (title != null) {
                         Text(
                             text = title,

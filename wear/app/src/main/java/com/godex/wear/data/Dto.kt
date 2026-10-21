@@ -145,6 +145,10 @@ data class WatchSessionDetail(
     @SerialName("started_at") val startedAt: String? = null,
     @SerialName("last_turn") val lastTurn: LastTurn? = null,
     @SerialName("last_message") val lastMessage: LastMessage? = null,
+    // B4: the node's wrist-shortened form of the agent's last reply. Preferred over
+    // lastMessage.text, which is only a raw 140-rune cut and so often showed a
+    // markdown heading or the opening of a code fence instead of a sentence.
+    @SerialName("reply_summary") val replySummary: String? = null,
     @SerialName("current_tool") val currentTool: String? = null,
     // The recent tool sequence (mockup 05's "what has it been doing"), bounded
     // server-side. Distinct from currentTool, which is only the most recent name.

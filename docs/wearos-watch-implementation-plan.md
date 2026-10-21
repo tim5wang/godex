@@ -354,23 +354,29 @@ GET /watch/push/pending?since=<cursor>&device_id=<watch>   [watch:read]
 
 ### W6 · 事件钩子（旁路，不动账本）
 
-**已实证结论（2026-10-21 读码）**：4 类事件中**只有 1 类需要真钩子**，其余 3 类可从既有聚合/轮询派生，**进一步压低侵入面**。
+**已实证结论（2026-10-21 读码；同日 B2 落地复核后修订）**：4 类事件**全部走差异派生**，无一处真钩子（原判定的「唯一真钩子」经复核不成立，见下）。
 
 | 事件 | 触发点 | 实现方式 |
 |---|---|---|
-| `card_finished` | **`plugin.go` handler 层**：`routes.go:160 handlePatchCard` 的 `case "move"`（`:180` → `ledger.MoveCard`）与 `case "complete"`（`:182` → `ledger.CompleteCard`） | **唯一需要的钩子**：handler 内先 `GetCard` 取旧状态 → 调用后比对 → 旧 `in_progress` 且新为 `in_review`/`done` 时发射。**不碰 `Ledger`** |
+| `card_finished` | 看板卡片离开 `in_progress`（进入 `in_review`，或经验收进入 `done`） | ✅ **已落地（B2）= 派生**：`collectFinishedCards` 读 `ledger.ListCards` 取 `in_review`/`done` 卡片。**未按原计划挂 handler 钩子**，原因见下 |
 | `approval_requested` | 工具权限闸：`toolruntime/permissions.go:784 ensurePendingLocked`（新 pending 注册点） | ✅ **不用钩子**：直接从 W4 的 `/watch/approvals` 聚合结果做**前后差异**派生（`ListPending` `:477`） |
 | `flow_waiting_human` | Flow 人工卡点 | ✅ **不用钩子**：与 `ListHumanTasks`（`routes_flows.go:466`）同源，同样差异派生 |
 | `turn_finished` | 会话 turn 结束 | ✅ **不用钩子**：复用 `mobile/` 现有 `running true→false` 轮询判定 |
 
 **为何选择「派生」而非「钩子」**：`ensurePendingLocked` 在 `PermissionManager` 的互斥锁内（`m.mu.Lock()`，见 `permissions.go:784`），在其中发射外部事件有阻塞与重入风险；而 W5 本就是**拉取型队列**，差异派生零侵入、无锁竞争、可测试。
 
-**`card_finished` 钩子落地细节（已核对 `ledger.go:641-685`）**：
-- 状态迁移与收尾在同一临界区内：`card.Status = to` → 离开 `in_progress` 时置空 `Holder` 并 `closeRunningExecutions(card, ExecutionCompleted, "moved to "+to)`（`:670`）；
-- `to == StatusDone` 被 `MoveCard` 拒绝（`ErrDoneIsHumanOnly`），`done` 只能经 `CompleteCard`（`:695+`，收尾在 `:705`）→ **两个入口都要挂**；
-- handler 层先读旧状态即可，**无需改动 `Ledger` 签名**。
+**为何 `card_finished` 也改为派生（原计划的「唯一真钩子」不成立，2026-10-21 复核）**：
+- 原计划称 `routes.go:160 handlePatchCard` 是「唯一插入点」。**不成立**：`MoveCard` 在生产代码有**两个**调用者——`routes.go:180`（Web handler）与 `tool_actions.go:107`（agent 的 taskboard 工具）。后者正是看板主路径（执行会话收尾自己的卡），只挂 handler 会漏掉**最该通知**的迁移；
+- 插件（`cmd/godex` 装配）到推送队列（`registerWatchRoutes` 内部创建）**不存在接线缝**，这正是另外 3 类事件当初选「派生」的同一原因；
+- 派生是**精确**而非近似：`in_review` 只能由 `in_progress` 进入，`done` 只能由 `in_review` 进入（`allowedTransitions` + `CompleteCard`），故「当前是 `in_review`/`done`」等价于「已离开 `in_progress`」——无需记录前态，**不改账本状态机**。
 
-统一发到 W5 队列 + 记入既有 `relay.EventStore`（如适用）。
+**`card_finished` 落地边界（均有测试锚点）**：
+- `in_progress`（含执行**失败**：`FinishExecution` 只关掉执行，卡片仍停在 `in_progress`）不算完成，不通知；
+- 评审活动（评论 / 勾选清单）会 bump 版本，**不重复通知**；
+- 验收（`in_review → done`）是**第二次**完成、另一套文案。此处落地时修掉一个真缺陷：该步执行 id 不变（离开 `in_progress` 时执行已收尾），故 `finishAnchor` 把**状态**纳入身份，否则验收会被静默吞掉、且「已完成」文案永不可达；
+- 重新派发（新执行）是新完成，会再次通知。
+
+统一发到 W5 队列（内存 + 有界）；**未**记入 `relay.EventStore`——该 store 聚合的是节点观测快照，与通知队列语义不同。
 
 > ✅ 原「待确认的两处代码点」已全部实证完毕，锚点见 §11。**始终不得改动账本状态机**。
 
@@ -576,7 +582,7 @@ adb shell am start -n com.godex.wear/.MainActivity
 | 3 | **手机桥接需与 `mobile/` 协同** | M2 关键路径 | 优先锁定该改造的责任人与时间 |
 | 4 | `SpeechRecognizer` 在无谷歌/厂商语音服务环境无 provider（**仿真器已实证**） | 稿件 07 | **W9 服务端 ASR 已定为语音主路径**；`SpeechRecognizer` 仅作运行时探测的快路径 |
 | 5 | `guarded-remote` 节点写操作需审批头 | 腕上动作 403 | W4 转发时带头；并在 UI 提前提示（PRD §7.5） |
-| 6 | ~~待确认代码点：`Ledger.MoveCard` 函数体、agent 权限请求创建点~~ | W6 钩子位置 | ✅ **已实证解除**（2026-10-21）：4 事件中仅 `card_finished` 需钩子，其余改为差异派生（§4 W6），锚点见 §11 |
+| 6 | ~~待确认代码点：`Ledger.MoveCard` 函数体、agent 权限请求创建点~~ | W6 钩子位置 | ✅ **已实证解除并落地**（2026-10-21）：4 事件**全部**改为差异派生。原判定「仅 `card_finished` 需钩子」经复核**不成立**（`MoveCard` 另有 agent 工具调用点，且插件无到队列的接线缝），`card_finished` 亦改为派生（§4 W6），锚点见 §11 |
 | 7 | 配置项需按 schema/setter/stored/effective 契约登记 | Web 配置面板 | W2 落地时一并登记，勿遗漏 |
 | 8 | 手表 App 放 `wear/` 顶层（待确认） | 仓库结构 | 如需与 `mobile/` 合并可调整 |
 
@@ -622,7 +628,8 @@ adb shell am start -n com.godex.wear/.MainActivity
 | 会话消息（发送） | `routes_turns.go:128`（`POST /sessions/{id}/messages`） |
 | 排队引导/取消 | `POST /sessions/{id}/queued/{queueID}/steer\|cancel` |
 | 卡片状态迁移（钩子位） | `internal/plugins/taskboard/ledger.go:641`（`MoveCard(id, ifVersion, to, actor)`） |
-| **`card_finished` 钩子插入点（已实证）** | `internal/plugins/taskboard/routes.go:160`（`handlePatchCard`）：`case "move"` `:180`、`case "complete"` `:182` |
+| **`card_finished` 派生锚点（已落地，B2）** | `internal/runtime/httpapi/routes_watch_push.go`：`collectFinishedCards`（读 `ledger.ListCards` 取 `in_review`/`done`）、`finishAnchor`（身份＝执行 id + 状态）、`watchPushEventForCard` |
+| ~~`card_finished` 钩子插入点（原计划，已废弃）~~ | ~~`routes.go:160 handlePatchCard`：`case "move"` `:180`、`case "complete"` `:182`~~——原称「唯一插入点」，实际 `MoveCard` 另有 `tool_actions.go:107`（agent 工具）调用点 |
 | **卡片收尾/`done` 闸（已实证）** | `ledger.go:665-671`（离开 in_progress → `closeRunningExecutions`）、`:705`（CompleteCard 收尾）、`to==done` 被 `ErrDoneIsHumanOnly` 拒绝（`:647`） |
 | **权限 pending 注册点（已实证）** | `internal/toolruntime/permissions.go:784`（`ensurePendingLocked`，持锁内 → **不在此发事件**） |
 | 权限 pending 读取 | `internal/toolruntime/permissions.go:477`（`ListPending`）、`internal/agent/permission_facade.go:55`（`PendingPermissions`） |
@@ -639,17 +646,19 @@ adb shell am start -n com.godex.wear/.MainActivity
 
 > 2026-10-21 补齐稿 06 后，按点名方向逐项核实的结果。每条只写**已实证的现状**：
 > 说"未做"的都有证据（文件不存在 / 路由 404 / grep 0 命中），不凭印象。
+> **同日第三批补齐后**：§12.2/§12.4 的 B1–B4、B6/B7、C1/C2、D1 状态行已改为实测结论；被推翻的旧判定（§4 W6 的"唯一真钩子"）也已就地更正，而非只追加一句。
 
 ### 12.1 六个方向的总览
 
 > **2026-10-21 第二批更新**：A1 / A2 / A3 / B5 已补齐并实证，下表即为更新后的状态。
+> **2026-10-21 第三批更新**：C1 / B1+D1 / B4 / B6+B7 / B2 / B3 已补齐并实证；上表与 §12.2–§12.4 已按落地结果改写。剩余：A5（表盘）、C2 的真机体验、B8（token 续期）、D2（可选）。
 
 | 方向 | 现状 | 证据 | 缺口定位 |
 |---|---|---|---|
-| **配对逻辑** | 🟡 后端齐备，**无任何客户端 UI** | `/watch/pair/start\|approve\|token` 已实现；`webui/src` 与 `mobile/` grep `watch/pair` **0 命中** | §12.4 C1/C2 |
-| **腕上精简回复** | ⬜ **无** | 无腕上提示词/整形逻辑；详情屏只截 `last_message` 140 rune | §12.2 B4 |
-| **语音模块** | 🟡 ASR 有（单向上行），**TTS 无**；ASR 无端到端测试 | `POST /watch/asr` 存在；无 `/watch/tts`；`e2e_watch.py` 中 `asr` **0 命中** | §12.2 B6/B7 |
-| **通知跨设备传递** | 🟡 **App 关闭时可达**（A2 已补）；仍无手机桥接队列 | A2 已实证：进程不在时 worker 投递成功；`GET /watch/push/pending` 仍 **404** | §12.2 B1、§12.4 D1 |
+| **配对逻辑** | ✅ **已补（C1）**：后端 + Web 配对页齐备 | `ui/web/src/features/watch/WatchPage.tsx`（输入 8 位码 → 选 scope → 批准）+ `lib/apiWatch.ts` | — |
+| **腕上精简回复** | ✅ **已补（B4）** | 服务端 `watch_reply_summary.go` 产出 `reply_summary`，详情屏渲染摘要 | — |
+| **语音模块** | ✅ **已补（B6/B7）**：ASR 有端到端测试，TTS 已双向 | 真实引擎跑 `b6b7_verify.py` **18/18**；`POST /watch/tts` 骰下可朗读（腕上 `b7_wrist_verify.py` **12/12**） | — |
+| **通知跨设备传递** | ✅ **已补（B1/D1）**：推送队列 + 手机桥接 | `GET /watch/push/pending` 已实测可用；`mobile/public/godex-watcher.js` 新增队列轮询 + 深链 data | — |
 | **腕上工具日志** | ✅ **已补**（B5） | `watchSessionDetail` 新增 `recent_tools`（名称/结果/耗时，有界 5 条） | — |
 | **审批消息** | ✅ 稿 06/08/15 + 深链分流已完成并实证 | 见下方 A1 | — |
 
@@ -657,13 +666,13 @@ adb shell am start -n com.godex.wear/.MainActivity
 
 | # | 待办 | 现状与证据 | 落点 | 验收 |
 |---|---|---|---|---|
-| B1 | **W5 推送队列**（无 FCM 时的唯一通路） | 未实现：`/watch/push/pending` 实测 **404**。施工图 §W5 已定契约（内存+有界 200 条/24h，`[watch:read]`，`POST /watch/push/ack`） | `routes_watch.go` 新增 `registerWatchPushRoutes`；事件源复用§4 的**前后差异派生**（不需要改账本） | 造一条真实待审批 → `GET /watch/push/pending` 返回该事件；越界/越权返回 403 |
-| B2 | **W6 `card_finished` 钩子** | 未做。施工图已实证唯一插入点：`internal/plugins/taskboard/routes.go:160 handlePatchCard` 的 `case "move"`(`:180`)/`case "complete"`(`:182`) | 同施工图§W6；**不动 `Ledger` 状态机** | 看板卡片离 `in_progress` → 队列出现 `card_finished` |
-| B3 | **W1 `noderegistry` 加 `kind`** | 未做；当前手表经 `control` 节点注册表识别（`httpapi.go:40 ControlRegistry`） | `noderegistry.NodeInput/NodeView` 加字段 + `controlNodeRegistry` 透传 | 设备列表能区分 `pc`/`phone`/`watch` |
-| B4 | **腕上精简回复** | 无。已具备识别条件：指令 envelope 带 `source=voice\|web` 与 `metadata.watch_device_id`（`routes_watch.go` `NewTextEnvelope` 处），但服务端**未据此整形回复** | 二选一：(a) 腕上来源时注入"简短回复"指令；(b) 新增服务端摘要字段（如 `reply_summary`）供腕上渲染 | 同一问题从腕上发 → 详情屏拿到 ≤2 行摘要而非整段 |
+| B1 | **W5 推送队列**（无 FCM 时的唯一通路） | ✅ **已补**（b3448d3）：`registerWatchPushRoutes` + 内存有界队列（200 条 / 24h TTL，游标 + `ack`），`[watch:read]`；`/watch/push/pending` 已实测返回事件 | `routes_watch_push.go` | 造一条真实待审批 → 返回该事件；越权 401/403（已有测试） |
+| B2 | **W6 `card_finished`** | ✅ **已补**（44c2be5），**改为派生而非钩子**（原施工图的「唯一插入点」经复核不成立，见 §4 W6） | `routes_watch_push.go`：`collectFinishedCards` / `finishAnchor` / `watchPushEventForCard` | 看板卡片离 `in_progress` → 队列出现 `card_finished`。实测：`b2_verify.py` **17/17** |
+| B3 | **W1 `noderegistry` 加 `kind`** | ✅ **已补**（545860d）：`NodeInput/NodeView.Kind`（pc\|cloud\|phone，空→pc，未知值告警回退）+ `control.kind` 配置登记 + `/watch/nodes` 透传 + 腕上行标注 | `registry.go`、`config/*`、`routes_watch.go`、`Dto.kt`、`DevicesScreen.kt` | 设备列表能区分：实测 `e2e-node · 在线 · 云服务器`（`b3_wrist_verify.py` **5/5**） |
+| B4 | **腕上精简回复** | ✅ **已补**（8cfab65）：服务端按来源整形，新增 `reply_summary` 字段（`watch_reply_summary.go`），腕上渲染摘要而非整段 | `routes_watch.go` + `SessionDetailScreen` | 同一问题从腕上发 → 详情屏拿到 ≤2 行摘要 |
 | B5 | **腕上工具日志** | ✅ **已补**：`watchSessionDetail` 新增 `recent_tools`（`recentToolEvents`，started/finished 折叠、有界 5 条、`pending` 显式声明）。回归：`TestRecentToolEvents*` | `routes_watch.go` + `SessionDetailScreen.ToolRow` | 跑一个多工具 turn → 详情屏列出序列（已实测显示 `当前工具 · bash`） |
-| B6 | **ASR 端到端测试** | W9 代码已存在，但 `e2e_watch.py` 无 `asr` 用例（35/35 不含它） | 扩 `e2e_watch.py`（需 voice-engine 在跑） | 上传 WAV → 200 + 文本 |
-| B7 | **TTS（可选）** | 无。当前语音是**单向上行**（说→文本→指令） | 复用 voice-engine 的 TTS 能力新增路由 | 腕上能朗读最后一条回复 |
+| B6 | **ASR 端到端测试** | ✅ **已补**：`b6b7_verify.py` 对真实 voice-engine 跑 18/18（真语音样本、转写内容比对、只读凭证 403、空音频/不支持类型 400）；路由层回归 4 例 | `.godex/tmp/e2e/b6b7_verify.py` + `routes_watch_asr_route_test.go` | 上传 WAV → 200 + 文本（已实测：『请帮我检查一下构建结果。』） |
+| B7 | **TTS** | ✅ **已补**：`POST /watch/tts`（`{"text"}` 或 `{"session_id"}` 读回复，复用既有 voice-engine 合成路径）+ 腕上 `AudioTrack` 朗读（无外部依赖） | `routes_watch_tts.go` + `VoicePlayback.kt` + 详情屏「朗读回复」 | 腕上能朗读：实测设备侧写入 **32004 帧** vs 节点 **31968 帧**（偏差 0.1%，`b7_wrist_verify.py` **12/12**） |
 | B8 | **token 续期/轮换** | `watchauth` 有 `ExpiresAt`/`Revoked`/吊销路由，但无续期 | 可暂不做；长期需考虑 1 年有效期到期后的体验 | 到期前可续；失效后 App 能引导重配对 |
 
 ### 12.3 Android（`wear/`）
@@ -680,22 +689,24 @@ adb shell am start -n com.godex.wear/.MainActivity
 
 | # | 待办 | 现状与证据 | 落点 | 验收 |
 |---|---|---|---|---|
-| **C1** | **Web 配对审批页**（稿 10 的另一半） | `webui/src` grep `watch` **0 命中**。当前只能用带 web token 的 curl 调 `/watch/pair/approve` | Web UI 新增页面：输入 8 位配对码 → 选权限范围 → 批准 | 手表生成码 → Web 页输入即可完成配对 |
-| **C2** | **Web 手表设备管理页** | 同上；`/watch/devices` 只能 curl | Web UI 列出设备/权限/最后在线 + 吊销 | 吊销后手表立即失效并回到配对屏 |
-| **D1** | **手机桥接推送**（W5 的消费端） | `mobile/public/godex-watcher.js` 仍只轮询 `/api/sessions`（`running true→false` → 本地通知），**未接 `/watch/push/pending`** | 保留现有逻辑，新增队列轮询 + 通知带深链 data | 电脑端审批 → 手机出通知 → 点开桥接到手表 |
+| **C1** | **Web 配对审批页**（稿 10 的另一半） | ✅ **已补**（a92e04f）：`ui/web/src/features/watch/WatchPage.tsx` + `lib/apiWatch.ts`，输入 8 位配对码 → 选权限范围 → 批准 | `ui/web/src/features/watch/` | 手表生成码 → Web 页输入即可完成配对 |
+| **C2** | **Web 手表设备管理页** | ✅ **已补**（同页）：设备列表（权限 / 最后在线 / 已吊销）+ 吊销确认 | `ui/web/src/features/watch/WatchPage.tsx` | 吊销后手表立即失效并回到配对屏 |
+| **D1** | **手机桥接推送**（W5 的消费端） | ✅ **已补**（b3448d3）：`godex-watcher.js` 新增 `pushPoll`，轮询 `/api/watch/push/pending` 并投递本地通知（带 `godex_session_id` / `godex_approval_key` / `godex_event_kind` 深链 data）；含游标回退保护 | `mobile/public/godex-watcher.js` | 电脑端审批 → 手机出通知 → 点开桥接到手表 |
 | D2 | 手机配对入口 | `mobile/` grep `watch/pair` 0 命中 | 可选：手机端也提供配对入口 | 手机可直接给手表配对 |
 
 ### 12.5 依赖与建议顺序
 
-**外部依赖**：B6/B7 需 `voice-engine` 可运行（ASR 主路径所依赖，见 `routes_watch_asr.go` 顶部注释）；A4/A5 与 C1/C2 的最终形态受**真机门禁 0.4–0.6** 结论影响。
+**外部依赖**：B6/B7 需 `voice-engine` 可运行（已完成并实测，见 `routes_watch_asr.go` 顶部注释）；A4/A5 **真正待真机门禁 0.4–0.6** 结论。
 
-**建议顺序**（按"解锁最多、依赖最少"排；1–4 中的 A1/A2/A3/B5 已完成）：
+**建议顺序**（按"解锁最多、依赖最少"排；1–5 已全部完成）：
 
 1. ~~**A2 后台拉取** + **A1 深链分流**~~ ✅ 已完成（见 §12.3）
-2. **C1 Web 配对页** —— 当前配对手表必须 curl，这是阻塞"给别人用"的最硬门槛。**下一个建议项。**
-3. **B1 W5 队列** + **D1 手机端** —— 与已完成的 A2 配合才是完整的"跨设备通知"。
-4. ~~**B4 精简回复**~~ + ~~**B5 工具日志**~~ —— B5 已完成；B4 仍待做（纯体验）。
-5. **B6/B7 语音补测与 TTS**、**B2/B3**、**A5** —— 收尾项。
+2. ~~**C1 Web 配对页**~~ ✅ 已完成（C2 设备管理页同页落地）
+3. ~~**B1 W5 队列** + **D1 手机端**~~ ✅ 已完成
+4. ~~**B4 精简回复**~~ + ~~**B5 工具日志**~~ ✅ 均已完成
+5. ~~**B6/B7 语音补测与 TTS**、**B2/B3**~~ ✅ 已完成
+
+**仅剩 A5**：表盘 + Complication（需先定 WFF 与数据源形态，受 0.5 门禁影响）；D2（手机配对入口）为可选。
 
 ### 12.6 本轮补齐的实现要点（供后续维护）
 
@@ -703,4 +714,7 @@ adb shell am start -n com.godex.wear/.MainActivity
 - **验证 A2 不能用 `cmd jobscheduler run -f`**：该命令会拉起 `SystemJobService`，但 WorkManager 仍会因**周期未到**而拒绝执行 worker（逐个强制 `SystemIdInfo` 里的权威 id 也只看到 `system_id` 递增、`period_count` 不变且无 worker 日志）。必须等真实周期到达，且**确认 godex 不是 resumed**——否则系统会把 MainActivity 拉回前台，worker 正确地 `skip: app is visible`，而通知其实来自前台轮询。
 - **A1 的验证方式**：该模拟器的通知栏点击目标无法稳定脚本化（点正文只展开，`在手表上打开` 按钮在收起态可见、展开后消失）。因此分两半验证：**分流**用真实 Activity + 深链 extras 走通；**载荷**断言 `notifyApproval` 传入 `approval.key` 且 `MainActivity` 读取 `EXTRA_APPROVAL_KEY`。
 - **B5 的 `pending` 为何显式下发**：客户端无法从 `duration_ms == 0` 推断"进行中"——亚毫秒完成的调用同样是 0，据此渲染会误报状态。
+- **B2 为何最终没走钩子**：原计划的"唯一插入点"经复核不成立——`MoveCard` 在生产代码有两个调用者（Web handler 与 agent 工具），而 agent 工具才是看板主路径；且插件到推送队列无接线缝。派生是**精确**的：`in_review` 只能由 `in_progress` 进入、`done` 只能由 `in_review` 进入，故"当前是 `in_review`/`done`"等价于"已离开 `in_progress`"。
+- **B7 的验证坑（值得复用）**：1 秒间隔轮询 `dumpsys audio` 会**漏掉**约 1.3s 的短音频，产生假 FAIL；改用 logcat 的 `AudioTrack: stop(N): called with M frames delivered`，并拿 M 与节点返回的 WAV 帧数**交叉核对**（32004 vs 31968），才真正证明"HTTP 取到的字节到了扬声器"而非"构造了播放器对象"。
+- **B3 的验证注意**：测试配置故意声明 `kind: cloud`（**非**默认 `pc`）——若用默认值，"字段被丢掉"与"工作正常"在断言上不可区分。
 

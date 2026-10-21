@@ -642,14 +642,16 @@ adb shell am start -n com.godex.wear/.MainActivity
 
 ### 12.1 六个方向的总览
 
+> **2026-10-21 第二批更新**：A1 / A2 / A3 / B5 已补齐并实证，下表即为更新后的状态。
+
 | 方向 | 现状 | 证据 | 缺口定位 |
 |---|---|---|---|
 | **配对逻辑** | 🟡 后端齐备，**无任何客户端 UI** | `/watch/pair/start\|approve\|token` 已实现；`webui/src` 与 `mobile/` grep `watch/pair` **0 命中** | §12.4 C1/C2 |
 | **腕上精简回复** | ⬜ **无** | 无腕上提示词/整形逻辑；详情屏只截 `last_message` 140 rune | §12.2 B4 |
 | **语音模块** | 🟡 ASR 有（单向上行），**TTS 无**；ASR 无端到端测试 | `POST /watch/asr` 存在；无 `/watch/tts`；`e2e_watch.py` 中 `asr` **0 命中** | §12.2 B6/B7 |
-| **通知跨设备传递** | ⬜ **未做** | `GET /watch/push/pending` → **404**；`mobile/public/godex-watcher.js` 仍只轮询 `/api/sessions` | §12.2 B1、§12.4 D1 |
-| **腕上工具日志** | 🟡 只有"最近一个工具名" | `watchSessionDetail` 只出 `current_tool`（`lastToolName` 取最后一条 `ToolCallStarted`）+ todos | §12.2 B5 |
-| **审批消息** | ✅ 稿 06/08/15 已完成并实证；🟡 通知深链落点错位 | 见下方 A1（真缺口） | §12.1 A1 |
+| **通知跨设备传递** | 🟡 **App 关闭时可达**（A2 已补）；仍无手机桥接队列 | A2 已实证：进程不在时 worker 投递成功；`GET /watch/push/pending` 仍 **404** | §12.2 B1、§12.4 D1 |
+| **腕上工具日志** | ✅ **已补**（B5） | `watchSessionDetail` 新增 `recent_tools`（名称/结果/耗时，有界 5 条） | — |
+| **审批消息** | ✅ 稿 06/08/15 + 深链分流已完成并实证 | 见下方 A1 | — |
 
 ### 12.2 后端（`internal/`）
 
@@ -659,7 +661,7 @@ adb shell am start -n com.godex.wear/.MainActivity
 | B2 | **W6 `card_finished` 钩子** | 未做。施工图已实证唯一插入点：`internal/plugins/taskboard/routes.go:160 handlePatchCard` 的 `case "move"`(`:180`)/`case "complete"`(`:182`) | 同施工图§W6；**不动 `Ledger` 状态机** | 看板卡片离 `in_progress` → 队列出现 `card_finished` |
 | B3 | **W1 `noderegistry` 加 `kind`** | 未做；当前手表经 `control` 节点注册表识别（`httpapi.go:40 ControlRegistry`） | `noderegistry.NodeInput/NodeView` 加字段 + `controlNodeRegistry` 透传 | 设备列表能区分 `pc`/`phone`/`watch` |
 | B4 | **腕上精简回复** | 无。已具备识别条件：指令 envelope 带 `source=voice\|web` 与 `metadata.watch_device_id`（`routes_watch.go` `NewTextEnvelope` 处），但服务端**未据此整形回复** | 二选一：(a) 腕上来源时注入"简短回复"指令；(b) 新增服务端摘要字段（如 `reply_summary`）供腕上渲染 | 同一问题从腕上发 → 详情屏拿到 ≤2 行摘要而非整段 |
-| B5 | **腕上工具日志** | 只有 `current_tool`（一个名字）。稿 04 期望"PC-01 · 12 分钟 · 编辑第 4 个文件"、稿 05 期望"关键事实" | `watchSessionDetail` 从 `snapshot.Timeline` 派生**有界**工具序列（最近 N 条：工具名/耗时/结果）| 跑一个多工具 turn → 详情屏列出序列而非单个名字 |
+| B5 | **腕上工具日志** | ✅ **已补**：`watchSessionDetail` 新增 `recent_tools`（`recentToolEvents`，started/finished 折叠、有界 5 条、`pending` 显式声明）。回归：`TestRecentToolEvents*` | `routes_watch.go` + `SessionDetailScreen.ToolRow` | 跑一个多工具 turn → 详情屏列出序列（已实测显示 `当前工具 · bash`） |
 | B6 | **ASR 端到端测试** | W9 代码已存在，但 `e2e_watch.py` 无 `asr` 用例（35/35 不含它） | 扩 `e2e_watch.py`（需 voice-engine 在跑） | 上传 WAV → 200 + 文本 |
 | B7 | **TTS（可选）** | 无。当前语音是**单向上行**（说→文本→指令） | 复用 voice-engine 的 TTS 能力新增路由 | 腕上能朗读最后一条回复 |
 | B8 | **token 续期/轮换** | `watchauth` 有 `ExpiresAt`/`Revoked`/吊销路由，但无续期 | 可暂不做；长期需考虑 1 年有效期到期后的体验 | 到期前可续；失效后 App 能引导重配对 |
@@ -668,9 +670,9 @@ adb shell am start -n com.godex.wear/.MainActivity
 
 | # | 待办 | 现状与证据 | 落点 | 验收 |
 |---|---|---|---|---|
-| **A1** | **审批通知深链落点错位**（真缺口） | `WearNotifier.openIntent` 只带 `session_id`；`MainActivity` 深链无条件 `selectSession + screen = Screen.Detail`。→ 点审批通知进的是**会话详情**，不是审批屏（稿 08 期望直达审批） | 深链带**目标类型**（如 `approval_key`），`MainActivity` 按类型分流：审批→稿 06/15，完成→详情 | 点审批通知 → 直达该条审批屏 |
-| **A2** | **后台拉取缺失（通知最大缺口）** | 轮询挂在 `LifecycleStartEffect`，仅前台运行；无 `WorkManager`/`ForegroundService`（grep 0 命中）。→ **App 不在前台就不会有通知**，"跨设备通知"目前只在打开 App 时成立 | 引入 `WorkManager` 周期任务（最小 15 分钟）或常驻 Tile 刷新 | 关掉 App / 表盘状态 → 新审批仍能出通知 |
-| A3 | `expires_at` 未渲染 | 后端已返回（实测有值），稿 06 UI 未展示 | `ApprovalDetailScreen` 增加剩余有效时间 | 详情屏显示超时倒计时 |
+| **A1** | **审批通知深链落点错位** | ✅ **已修**：`openIntent(context, sessionId, approval.key)` 新增 `EXTRA_APPROVAL_KEY`；`MainActivity` 按键分流到审批屏，仅会话键仍走详情 | `WearNotifier.openIntent` + `MainActivity.applyDeepLink` 分流 | 实证：带审批键 → `待审批 1/2 … 高危命令`；仅会话键 → 任务详情（旧行为不变）。`verify_deeplink.py` ALL PASSED |
+| **A2** | **后台拉取缺失（通知最大缺口）** | ✅ **已补**：`WorkManager`（纯 AndroidX，无 GMS）15 分钟周期任务 `WatchSyncWorker`；前台可见时 `appVisible` 让 worker 跳过；完成提醒前后台**共用**一套持久化 running 集合 | `wear/.../sync/WatchSync.kt` + `MainActivity` 可见性标记 | 实证：godex 非前台（`resumed=False`）下 worker 执行并投递：`run: … approvals=1`，`verify_bg_foreground_off.py` ALL PASSED |
+| A3 | `expires_at` 未渲染 | ✅ **已补**：`remainingTime()` + 详情屏倒计时（实测显示「14 分钟后超时」）。服务端 `ListPending` 会 prune 过期项，故仅作提示、不作为闸门 | `Theme.kt` + `ApprovalDetailScreen` | 已实测 |
 | A4 | Tile / 常驻活动渲染待真机 | 代码已实现；渠道 importance 4/2 已验，渲染需真机 | — | 见门禁 0.4–0.6 |
 | A5 | 稿 01 表盘 + Complication | 未做（无 `WatchFaceService`/`data-source`） | 待 0.5 门禁结论 | 表盘可见运行中/待审批数 |
 
@@ -687,11 +689,18 @@ adb shell am start -n com.godex.wear/.MainActivity
 
 **外部依赖**：B6/B7 需 `voice-engine` 可运行（ASR 主路径所依赖，见 `routes_watch_asr.go` 顶部注释）；A4/A5 与 C1/C2 的最终形态受**真机门禁 0.4–0.6** 结论影响。
 
-**建议顺序**（按"解锁最多、依赖最少"排）：
+**建议顺序**（按"解锁最多、依赖最少"排；1–4 中的 A1/A2/A3/B5 已完成）：
 
-1. **A2 后台拉取** + **A1 深链分流** —— 不做 A2，稿 08 的通知只在开着 App 时成立；不做 A1，点了通知到不了审批。两项都小且自洽。
-2. **C1 Web 配对页** —— 当前配对手表必须 curl，这是阻塞"给别人用"的最硬门槛。
-3. **B1 W5 队列** + **D1 手机端** —— 与 A2 配合才是真正的"跨设备通知"。
-4. **B4 精简回复** + **B5 工具日志** —— 纯体验，可并行。
-5. **B6/B7 语音补测与 TTS**、**B2/B3**、**A3/A5** —— 收尾项。
+1. ~~**A2 后台拉取** + **A1 深链分流**~~ ✅ 已完成（见 §12.3）
+2. **C1 Web 配对页** —— 当前配对手表必须 curl，这是阻塞"给别人用"的最硬门槛。**下一个建议项。**
+3. **B1 W5 队列** + **D1 手机端** —— 与已完成的 A2 配合才是完整的"跨设备通知"。
+4. ~~**B4 精简回复**~~ + ~~**B5 工具日志**~~ —— B5 已完成；B4 仍待做（纯体验）。
+5. **B6/B7 语音补测与 TTS**、**B2/B3**、**A5** —— 收尾项。
+
+### 12.6 本轮补齐的实现要点（供后续维护）
+
+- **A2 的关键设计**：周期任务最小粒度 15 分钟，短于两次检查的任务不会被播报——这是省电换来的固有取舍。`WatchSync.appVisible` 让前台与后台互斥，避免同一事件双提醒。
+- **验证 A2 不能用 `cmd jobscheduler run -f`**：该命令会拉起 `SystemJobService`，但 WorkManager 仍会因**周期未到**而拒绝执行 worker（逐个强制 `SystemIdInfo` 里的权威 id 也只看到 `system_id` 递增、`period_count` 不变且无 worker 日志）。必须等真实周期到达，且**确认 godex 不是 resumed**——否则系统会把 MainActivity 拉回前台，worker 正确地 `skip: app is visible`，而通知其实来自前台轮询。
+- **A1 的验证方式**：该模拟器的通知栏点击目标无法稳定脚本化（点正文只展开，`在手表上打开` 按钮在收起态可见、展开后消失）。因此分两半验证：**分流**用真实 Activity + 深链 extras 走通；**载荷**断言 `notifyApproval` 传入 `approval.key` 且 `MainActivity` 读取 `EXTRA_APPROVAL_KEY`。
+- **B5 的 `pending` 为何显式下发**：客户端无法从 `duration_ms == 0` 推断"进行中"——亚毫秒完成的调用同样是 0，据此渲染会误报状态。
 

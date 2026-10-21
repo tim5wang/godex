@@ -223,3 +223,51 @@
 > ① `background` 新增 `idle_timeout`（no-response 超时，无输出超时才杀进程），`timeout` 明确 0/省略 = 无总超时（`internal/core/background` + `internal/tools/background.go`）；
 > ② `bash`/`background` 新增 `_allow_local_urls` 参数放行 127.0.0.1/localhost（metadata 主机仍硬拦截，`internal/platform/tooling` ShellCommandOptions + validateShellURLArg）；
 > ③ `background` 新增 `env` 参数传环境变量（如 `{"USE_TF": "0"}`，`tooling.ApplyEnvOverrides`）。
+
+## 2026-10-21 — 手表无线调试配对失败（企业 VPN 劫持 LAN 路由 + 套接字过滤扩展拦截 TCP）
+
+**问题**：小米 Watch 5 开启「无线调试」后，`adb pair 192.168.0.123:<port> <code>` 连续三次失败，
+报错恒为 `protocol fault (couldn't read status message): Undefined error: 0`。
+
+**根因**（两层，按发现顺序）：
+
+① **企业 VPN 接管了局域网路由**。本机 `en0 = 192.168.0.181/24`，与手表同网段，
+但路由表里 `192.168.0`（整段）与 `192.168.0.1/32` 均指向隧道 `utun4`（Cisco AnyConnect），
+`route -n get <手表IP>` 返回 `interface: utun4`。表现为 ping 100% 丢包、TCP 超时、
+`adb pair` 报 protocol fault。偶有 `192.168.0.1` 一条 `UHLSr`（r = reject）路由。
+**关闭 VPN 后 `utun4` 消失、默认路由回到 `en0`，ping 恢复 8ms。**
+
+② **关闭 VPN 后仍不可配 → 套接字过滤扩展仍激活**。对照实验暴露特征：
+
+| 目标 | ICMP | TCP |
+|---|---|---|
+| 网关 `192.168.0.1:80` | 通 | **OK（5ms）** |
+| 同网段设备 `.62` | 通（6ms） | **全部 errno 65，0ms 秒回** |
+| 手表 `.123` | 时通时断 | **errno 65，0–9ms 秒回** |
+| 本机自身 `:22` | — | errno 61（正常 TCP 语义） |
+
+即「**ICMP 通、TCP 对非网关 LAN 主机秒回 EHOSTUNREACH**」——不是超时（超时说明包出去了），
+而是**本地策略在 connect 阶段直接拒绝**。同时 `systemextensionsctl list` 显示
+`com.cisco.anyconnect.macos.acsockext` 在 VPN 关闭后**仍为 `[activated enabled]`**。
+另需怀疑 macOS 15+ 的「本地网络」隐私权限未授予终端。
+
+③ **叠加因素：配对窗口极短**。小米手表的「使用配对码配对设备」弹窗约 5 分钟内失效，
+关闭后配对端口立刻停止监听（`net` 诊断表现为 ping 通、端口 closed）。
+我在诊断上耗时过久，赶不上窗口。
+
+**解决**：
+
+- 先跑 `bash scripts/watch-adb.sh net <IP:端口>` 判定「路由是否被隧道劫持 / 端口是否还在监听」，
+  不要盲试 `adb pair`（同一个报错对应至少三种根因）。
+- 网络层隔离优先用**手机热点**（Mac 与手表同连热点，换到 VPN 与套接字过滤都不覆盖的子网）。
+- 配对**必须**用「使用配对码配对设备」弹窗里的 `IP:端口`（配对端口），
+  **不是**「无线调试」主页面的端口（那是连接端口）；两者不同，混用必报 protocol fault。
+- 拿到码后**先配对再诊断**：`bash scripts/watch-adb.sh up <弹窗IP:端口> <码> [主页面IP:端口]`。
+
+**改进建议**：
+
+- 企业 MDM 环境（Cisco AnyConnect / Workspace ONE / CrowdStrike 同机）下，
+  VPN 关闭 ≠ 套接字过滤扩展卸载；遇「ICMP 通但 TCP 秒回 EHOSTUNREACH」先怀疑本地套接字过滤。
+- 无线调试排查顺序固定为：`net` 诊断 → 热点换网 → 再配对，避免消耗 5 分钟配对窗口。
+- 本机 Homebrew 为 x86_64 版且 Rosetta 不可用（`Bad CPU type in executable`），
+  任何 `brew install` 都会失败；装工具改用上游预编译包（如 scrcpy `macos-aarch64`）。

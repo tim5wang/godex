@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/platform/idgen"
+	"github.com/tim5wang/godex/internal/plugins/taskboard"
+	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/watchauth"
 )
 
@@ -27,11 +29,15 @@ const (
 	// long since timed out is worse than no notification.
 	watchPushTTL = 24 * time.Hour
 
-	// Event kinds. Only the two derivable kinds are emitted here; `card_finished`
-	// needs the taskboard hook tracked separately as B2, and `turn_finished` is
-	// judged client-side from the running flag that mobile/ already polls.
-	watchPushKindApproval = "approval_requested"
-	watchPushKindFlowTask = "flow_waiting_human"
+	// Event kinds. Three are derived on poll rather than emitted from a hook: the
+	// sources either sit inside another component's mutex (the permission gate) or
+	// live in a component with no path to this queue (the taskboard plugin), so
+	// derivation is both lower-risk and the only option that does not invent a new
+	// cross-assembly seam. `turn_finished` is judged client-side from the running
+	// flag mobile/ already polls.
+	watchPushKindApproval     = "approval_requested"
+	watchPushKindFlowTask     = "flow_waiting_human"
+	watchPushKindCardFinished = "card_finished"
 )
 
 // watchPushEvent is one notification to deliver. It stays flat and small because
@@ -122,6 +128,114 @@ func watchPushEventFor(item watchApprovalItem, seq int64, now time.Time) watchPu
 	return event
 }
 
+// watchFinishedCard is one taskboard card that has left in_progress, as reported
+// by the ledger.
+//
+// Unlike an approval, this is informational: there is nothing for the wrist to
+// decide, it only needs to learn that the work stopped and is waiting for a human.
+type watchFinishedCard struct {
+	CardID string
+	Title  string
+	// Status is in_review or done — the two states a card can only reach after
+	// leaving in_progress.
+	Status string
+	// Anchor identifies this particular finish; see finishAnchor.
+	Anchor string
+}
+
+// collectFinishedCards reports taskboard cards that have left in_progress.
+//
+// "Currently in_review or done" is exactly "has left in_progress": in_review is
+// only reachable from in_progress and done only from in_review (allowedTransitions
+// and CompleteCard), so no previous-state tracking is needed to detect the
+// transition. A failed or cancelled run does NOT qualify — FinishExecution closes
+// the execution but leaves the card in_progress, so the work is not finished and
+// there is nothing to tell a human about.
+//
+// One consequence of deriving rather than hooking: on a node restart every card
+// still sitting in_review/done is "new" to the queue and produces one event. That
+// is bounded by the same 200-event cap and 24h TTL as every other kind, and is the
+// same behaviour the approval derivation already has.
+func collectFinishedCards(service *backend.Service) []watchFinishedCard {
+	if service == nil {
+		return nil
+	}
+	ledger := service.TaskboardLedger()
+	if ledger == nil {
+		return nil
+	}
+	out := make([]watchFinishedCard, 0)
+	for _, card := range ledger.ListCards(taskboard.CardFilter{}) {
+		if card.Status != taskboard.StatusInReview && card.Status != taskboard.StatusDone {
+			continue
+		}
+		out = append(out, watchFinishedCard{
+			CardID: card.ID,
+			Title:  card.Title,
+			Status: card.Status,
+			Anchor: finishAnchor(card),
+		})
+	}
+	return out
+}
+
+// finishAnchor identifies one finish so that the queue notifies once per finish
+// and stays quiet while a card sits still.
+//
+// The execution that leaving in_progress ended is the anchor when there is one: it
+// does not change while a reviewer adds comments or ticks checklist items (which
+// bump the card version), and a re-dispatched card gets a new execution id, so a
+// second finish notifies again — the board's core loop.
+//
+// The status is part of the identity because in_review → done is a SECOND finish,
+// not a continuation of the first: the execution id does not change there (the run
+// was already closed when the card left in_progress), so omitting the status would
+// silently swallow the acceptance and leave the "已完成" wording unreachable.
+//
+// A card finished by hand has no execution, and "manual" is used rather than the
+// card version for the same stability reason: a version-based key would re-notify
+// on every review edit, which is routine and would spam the wrist.
+//
+// Known limit of this key: a card that is moved back to in_progress by hand and
+// finished again without a new execution (no re-dispatch) keeps its key and stays
+// quiet. Suppressing that is preferred to the alternative above, since a
+// re-dispatch — the normal path — does start a new execution.
+func finishAnchor(card taskboard.Card) string {
+	execID := ""
+	if n := len(card.Executions); n > 0 {
+		execID = strings.TrimSpace(card.Executions[n-1].ID)
+	}
+	if execID == "" {
+		execID = "manual"
+	}
+	return execID + ":" + card.Status
+}
+
+// watchPushKeyForCard identifies one finish across polls.
+func watchPushKeyForCard(card watchFinishedCard) string {
+	return "card_finished:" + card.CardID + ":" + card.Anchor
+}
+
+// watchPushEventForCard renders one finished card into a deliverable event. The
+// title distinguishes "awaiting acceptance" from "accepted", because those ask
+// different things of the reader.
+func watchPushEventForCard(card watchFinishedCard, seq int64, now time.Time) watchPushEvent {
+	title := "任务待验收"
+	if card.Status == taskboard.StatusDone {
+		title = "任务已完成"
+	}
+	return watchPushEvent{
+		ID:        idgen.New("pe_", 8),
+		Seq:       seq,
+		Kind:      watchPushKindCardFinished,
+		Title:     title,
+		Body:      truncateRunes(card.Title, 140),
+		CreatedAt: now,
+		// RequestID is deliberately left empty: clients use it to route a tap to
+		// the approval screen, and there is no approval behind this event.
+	}
+}
+
 func (q *watchPushQueue) pruneLocked(now time.Time) {
 	cutoff := now.Add(-watchPushTTL)
 	kept := q.events[:0]
@@ -145,8 +259,9 @@ func (q *watchPushQueue) trimLocked() {
 	q.events = append([]watchPushEvent(nil), q.events[len(q.events)-maxWatchPushEvents:]...)
 }
 
-// observeLocked turns newly appeared approvals into queued events.
-func (q *watchPushQueue) observeLocked(approvals []watchApprovalItem, now time.Time) {
+// observeLocked turns newly appeared approvals and finished cards into queued
+// events.
+func (q *watchPushQueue) observeLocked(approvals []watchApprovalItem, finished []watchFinishedCard, now time.Time) {
 	for _, item := range approvals {
 		key := watchPushKey(item)
 		if key == "" {
@@ -159,17 +274,29 @@ func (q *watchPushQueue) observeLocked(approvals []watchApprovalItem, now time.T
 		q.seq++
 		q.events = append(q.events, watchPushEventFor(item, q.seq, now))
 	}
+	for _, card := range finished {
+		if strings.TrimSpace(card.CardID) == "" {
+			continue
+		}
+		key := watchPushKeyForCard(card)
+		if _, ok := q.seen[key]; ok {
+			continue
+		}
+		q.seen[key] = now
+		q.seq++
+		q.events = append(q.events, watchPushEventForCard(card, q.seq, now))
+	}
 	q.trimLocked()
 }
 
 // snapshot derives any new events, then returns everything after the cursor.
-func (q *watchPushQueue) snapshot(approvals []watchApprovalItem, since int64, deviceID string) (int64, []watchPushEvent) {
+func (q *watchPushQueue) snapshot(approvals []watchApprovalItem, finished []watchFinishedCard, since int64, deviceID string) (int64, []watchPushEvent) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	now := q.now()
 	q.pruneLocked(now)
-	q.observeLocked(approvals, now)
+	q.observeLocked(approvals, finished, now)
 
 	out := make([]watchPushEvent, 0, len(q.events))
 	for _, e := range q.events {
@@ -260,7 +387,8 @@ func registerWatchPushRoutes(
 		// Derivation reads the same aggregation the wrist's approval queue shows,
 		// so a notification can never advertise something the queue does not hold.
 		approvals := collectWatchApprovals(r.Context(), api.service)
-		cursor, events := queue.snapshot(approvals, since, deviceID)
+		finished := collectFinishedCards(api.service)
+		cursor, events := queue.snapshot(approvals, finished, since, deviceID)
 		writeJSON(w, http.StatusOK, watchPushPendingResponse{Cursor: cursor, Events: events})
 	})))
 

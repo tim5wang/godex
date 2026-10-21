@@ -12,6 +12,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/agent"
 	"github.com/tim5wang/godex/internal/contracts/protocol"
+	"github.com/tim5wang/godex/internal/plugins/taskboard"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/watchauth"
@@ -288,15 +289,15 @@ func TestWatchPushQueuePrunesByTTL(t *testing.T) {
 	current := base
 	q.now = func() time.Time { return current }
 
-	q.snapshot([]watchApprovalItem{{Kind: "permission", SessionID: "s1", RequestID: "r1"}}, 0, "")
-	if _, events := q.snapshot(nil, 0, ""); len(events) != 1 {
+	q.snapshot([]watchApprovalItem{{Kind: "permission", SessionID: "s1", RequestID: "r1"}}, nil, 0, "")
+	if _, events := q.snapshot(nil, nil, 0, ""); len(events) != 1 {
 		t.Fatalf("event should be present initially, got %d", len(events))
 	}
 
 	// Past the TTL the event must be gone, and its key forgotten so a later
 	// reappearance notifies again instead of being silently swallowed.
 	current = base.Add(watchPushTTL + time.Minute)
-	if _, events := q.snapshot(nil, 0, ""); len(events) != 0 {
+	if _, events := q.snapshot(nil, nil, 0, ""); len(events) != 0 {
 		t.Fatalf("expired event must be pruned, got %+v", events)
 	}
 }
@@ -309,13 +310,236 @@ func TestWatchPushQueueIsBounded(t *testing.T) {
 	for i := 0; i < maxWatchPushEvents+50; i++ {
 		q.snapshot([]watchApprovalItem{{
 			Kind: "permission", SessionID: "s", RequestID: "req-" + strconv.Itoa(i),
-		}}, 0, "")
+		}}, nil, 0, "")
 	}
-	_, events := q.snapshot(nil, 0, "")
+	_, events := q.snapshot(nil, nil, 0, "")
 	if len(events) > maxWatchPushEvents {
 		t.Fatalf("queue exceeds its bound: %d events", len(events))
 	}
 	if len(events) == 0 {
 		t.Fatal("newest events must survive trimming")
+	}
+}
+
+// ---- card_finished derivation (B2) ----
+
+// mustTaskboardLedger returns the service's real taskboard ledger.
+//
+// The B2 tests drive this ledger rather than hand-building watchFinishedCard
+// values: the event is derived from ledger state, so a fixture would agree with
+// the derivation by construction and could not catch a wrong source query.
+func mustTaskboardLedger(t *testing.T, service *backend.Service) *taskboard.Ledger {
+	t.Helper()
+	ledger := service.TaskboardLedger()
+	if ledger == nil {
+		t.Fatal("test setup: taskboard ledger unavailable")
+	}
+	return ledger
+}
+
+// cardInReview walks a card through the real transitions: create → todo →
+// in_progress (with a running execution) → in_review.
+func cardInReview(t *testing.T, ledger *taskboard.Ledger, title, execID string) taskboard.Card {
+	t.Helper()
+	card, err := ledger.CreateCard(taskboard.CreateCardInput{Title: title})
+	if err != nil {
+		t.Fatalf("create card: %v", err)
+	}
+	if card, err = ledger.MoveCard(card.ID, card.Version, taskboard.StatusTodo, "human"); err != nil {
+		t.Fatalf("move to todo: %v", err)
+	}
+	// Starting an execution claims the card: it goes to in_progress with a holder.
+	if card, err = ledger.StartExecution(card.ID, execID, "sess-"+execID, "agent", nil); err != nil {
+		t.Fatalf("start execution: %v", err)
+	}
+	if card.Status != taskboard.StatusInProgress {
+		t.Fatalf("expected execution start to claim the card, got %q", card.Status)
+	}
+	// The execution session releases its own card.
+	if card, err = ledger.MoveCard(card.ID, card.Version, taskboard.StatusInReview, "sess-"+execID); err != nil {
+		t.Fatalf("move to in_review: %v", err)
+	}
+	return card
+}
+
+// cardEventTitles returns the (kind,title) pairs the queue would deliver.
+func cardEventTitles(events []watchPushEvent) []string {
+	out := make([]string, 0, len(events))
+	for _, e := range events {
+		out = append(out, e.Kind+":"+e.Title)
+	}
+	return out
+}
+
+// TestWatchPushReportsFinishedCard is the acceptance criterion from §12.2 B2: a
+// card leaving in_progress must surface in the queue. It also pins the two
+// follow-on behaviours that make the event usable rather than merely present:
+// review activity must not re-notify, and acceptance (in_review → done) is a
+// second, differently-worded notification.
+func TestWatchPushReportsFinishedCard(t *testing.T) {
+	server, service, token := newWatchPushTestServer(t, "")
+	ledger := mustTaskboardLedger(t, service)
+
+	if _, events := getPendingPush(t, server.URL, token, 0); len(events) != 0 {
+		t.Fatalf("queue must start empty, got %+v", events)
+	}
+
+	card := cardInReview(t, ledger, "ship the wrist client", "exec-1")
+	cursor, events := getPendingPush(t, server.URL, token, 0)
+	if len(events) != 1 {
+		t.Fatalf("expected exactly one event, got %+v", cardEventTitles(events))
+	}
+	got := events[0]
+	if got.Kind != watchPushKindCardFinished {
+		t.Fatalf("kind = %q, want %q", got.Kind, watchPushKindCardFinished)
+	}
+	if got.Title != "任务待验收" {
+		t.Fatalf("title = %q, want 任务待验收 (in_review awaits a human)", got.Title)
+	}
+	if got.Body != card.Title {
+		t.Fatalf("body = %q, want the card title %q", got.Body, card.Title)
+	}
+	// RequestID routes a tap to the approval screen; there is no approval behind
+	// this event, so leaving it set would send the wrist to the wrong screen.
+	if got.RequestID != "" {
+		t.Fatalf("request_id = %q, want empty for an informational event", got.RequestID)
+	}
+
+	// Review activity bumps the card version. That must not re-notify: a reviewer
+	// commenting or ticking a checklist item is routine, and the wrist would spam.
+	commented, err := ledger.AddComment(card.ID, card.Version, "reviewer", "looks close")
+	if err != nil {
+		t.Fatalf("add comment: %v", err)
+	}
+	if _, more := getPendingPush(t, server.URL, token, cursor); len(more) != 0 {
+		t.Fatalf("review activity must not re-notify, got %+v", cardEventTitles(more))
+	}
+
+	// Acceptance is a second finish with its own wording. The version comes from
+	// the comment above: editing is an optimistic-concurrency write, and reusing
+	// the stale version would be rejected rather than silently applied.
+	accepted, err := ledger.CompleteCard(commented.ID, commented.Version, "human", true)
+	if err != nil {
+		t.Fatalf("complete card: %v", err)
+	}
+	if accepted.Status != taskboard.StatusDone {
+		t.Fatalf("expected done, got %q", accepted.Status)
+	}
+	cursor, more := getPendingPush(t, server.URL, token, cursor)
+	if len(more) != 1 {
+		t.Fatalf("acceptance must notify separately, got %+v", cardEventTitles(more))
+	}
+	if more[0].Title != "任务已完成" {
+		t.Fatalf("title = %q, want 任务已完成", more[0].Title)
+	}
+
+	// And it settles: repeated polls must not emit anything further.
+	if _, settled := getPendingPush(t, server.URL, token, cursor); len(settled) != 0 {
+		t.Fatalf("done card must not re-notify, got %+v", cardEventTitles(settled))
+	}
+}
+
+// TestFinishedCardsExcludeUnfinishedWork guards the boundary: "left in_progress"
+// must not be approximated by "has an execution" or "is active". A stopped run
+// leaves the card in_progress — the work stopped, it did not finish — and a failed
+// run likewise must not be announced as ready for acceptance.
+func TestFinishedCardsExcludeUnfinishedWork(t *testing.T) {
+	_, service, _ := newWatchPushTestServer(t, "")
+	ledger := mustTaskboardLedger(t, service)
+
+	// in_progress with a running execution: still working.
+	inProgress, err := ledger.CreateCard(taskboard.CreateCardInput{Title: "still running"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if inProgress, err = ledger.MoveCard(inProgress.ID, inProgress.Version, taskboard.StatusTodo, "human"); err != nil {
+		t.Fatalf("todo: %v", err)
+	}
+	if inProgress, err = ledger.StartExecution(inProgress.ID, "exec-run", "sess-run", "agent", nil); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// in_progress whose execution failed: the card did not advance, so the human
+	// has nothing to accept. FinishExecution closes the run but deliberately leaves
+	// the card's status alone.
+	failed, err := ledger.CreateCard(taskboard.CreateCardInput{Title: "failed run"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if failed, err = ledger.MoveCard(failed.ID, failed.Version, taskboard.StatusTodo, "human"); err != nil {
+		t.Fatalf("todo: %v", err)
+	}
+	if failed, err = ledger.StartExecution(failed.ID, "exec-fail", "sess-fail", "agent", nil); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if failed, err = ledger.FinishExecution(failed.ID, "exec-fail", taskboard.ExecutionFailed, "boom"); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if failed.Status != taskboard.StatusInProgress {
+		t.Fatalf("a failed run must leave the card in_progress, got %q", failed.Status)
+	}
+
+	finished := collectFinishedCards(service)
+	if len(finished) != 0 {
+		t.Fatalf("unfinished work must not qualify, got %+v", finished)
+	}
+}
+
+// TestFinishedCardIdentityDistinguishesReDispatch covers the anchor: the same card
+// finished twice must notify twice, and a re-dispatched card (new execution) is a
+// new finish rather than a suppressed repeat.
+func TestFinishedCardIdentityDistinguishesReDispatch(t *testing.T) {
+	_, service, _ := newWatchPushTestServer(t, "")
+	ledger := mustTaskboardLedger(t, service)
+
+	card := cardInReview(t, ledger, "rework me", "exec-a")
+	first := collectFinishedCards(service)
+	if len(first) != 1 {
+		t.Fatalf("expected the card to qualify once, got %+v", first)
+	}
+
+	// Send it back and finish it again through a NEW execution.
+	var err error
+	if card, err = ledger.MoveCard(card.ID, card.Version, taskboard.StatusTodo, "human"); err != nil {
+		t.Fatalf("back to todo: %v", err)
+	}
+	if card, err = ledger.StartExecution(card.ID, "exec-b", "sess-b", "agent", nil); err != nil {
+		t.Fatalf("start again: %v", err)
+	}
+	if card, err = ledger.MoveCard(card.ID, card.Version, taskboard.StatusInReview, "sess-b"); err != nil {
+		t.Fatalf("in_review again: %v", err)
+	}
+
+	second := collectFinishedCards(service)
+	if len(second) != 1 {
+		t.Fatalf("expected one finished card, got %+v", second)
+	}
+	if watchPushKeyForCard(first[0]) == watchPushKeyForCard(second[0]) {
+		t.Fatalf("a re-dispatch must produce a distinct identity, both were %q",
+			watchPushKeyForCard(first[0]))
+	}
+}
+
+// TestWatchPushQueueDeduplicatesFinishedCards pins once-per-finish at the queue
+// level, where the seen-key bookkeeping actually lives.
+func TestWatchPushQueueDeduplicatesFinishedCards(t *testing.T) {
+	q := newWatchPushQueue()
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	card := watchFinishedCard{CardID: "t1", Title: "ship it", Status: taskboard.StatusInReview, Anchor: "exec-1:in_review"}
+	if _, events := q.snapshot(nil, []watchFinishedCard{card}, 0, ""); len(events) != 1 {
+		t.Fatalf("first observation must queue an event, got %d", len(events))
+	}
+	if _, events := q.snapshot(nil, []watchFinishedCard{card}, 0, ""); len(events) != 1 {
+		t.Fatalf("re-observing the same finish must not queue a second event, got %d", len(events))
+	}
+
+	// The same card accepted is a different finish and must notify.
+	accepted := card
+	accepted.Status = taskboard.StatusDone
+	accepted.Anchor = "exec-1:done"
+	if _, events := q.snapshot(nil, []watchFinishedCard{accepted}, 0, ""); len(events) != 2 {
+		t.Fatalf("acceptance must add an event, got %d", len(events))
 	}
 }

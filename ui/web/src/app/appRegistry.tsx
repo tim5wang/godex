@@ -3,6 +3,7 @@ import {
   ApartmentOutlined,
   AppstoreOutlined,
   ProfileOutlined,
+  ClockCircleOutlined,
   BulbOutlined,
   CommentOutlined,
   TeamOutlined,
@@ -45,6 +46,7 @@ const loadTaskBoardPage = () => import("../pages/TaskBoardPage");
 const loadOrchestrationPage = () => import("../pages/OrchestrationPage");
 const loadSettingsPage = () => import("../pages/SettingsPage");
 const loadUsagePage = () => import("../pages/UsagePage");
+const loadWatchPage = () => import("../pages/WatchPage");
 
 function pageComponent(loader: PageLoader, exportName: string) {
   return lazy(async () => ({ default: (await loader())[exportName] }));
@@ -195,6 +197,18 @@ export const builtinApps: BuiltinAppEntry[] = [
     component: pageComponent(loadUsagePage, "UsagePage"),
     isActive: (pathname) => pathname.startsWith("/usage"),
     headerSubtitleKey: "usage.pageSubtitle",
+  }),
+  entry({
+    id: "watch",
+    navPath: "/watch",
+    routePaths: ["/watch"],
+    // No watch glyph in the icon set; a clock reads closest to a wrist device.
+    icon: <ClockCircleOutlined />,
+    labelKey: "app.nav.watch",
+    load: loadWatchPage,
+    component: pageComponent(loadWatchPage, "WatchPage"),
+    isActive: (pathname) => pathname.startsWith("/watch"),
+    headerSubtitleKey: "watch.pageSubtitle",
   }),
 ];
 

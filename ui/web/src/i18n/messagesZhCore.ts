@@ -22,6 +22,7 @@ export const zhCoreMessages = {
         flows: "流程",
         settings: "设置",
         usage: "用量",
+        watch: "手表",
       },
       loading: "页面加载中…",
       cancel: "取消",

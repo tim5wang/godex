@@ -262,6 +262,17 @@ func (s *Service) ExchangeToken(deviceCode string) (ExchangeResult, error) {
 	if !ok {
 		return ExchangeResult{Status: "expired"}, nil
 	}
+	// Revocation must win over a pairing that is still mid-exchange. Without
+	// this, a device revoked between approval and its first poll is still handed
+	// its credential: the watch would report itself paired and then fail every
+	// request, and a live token would sit in memory for a device the user has
+	// already cut off.
+	if device.Revoked {
+		delete(s.pendingToken, p.DeviceID)
+		delete(s.pairings, p.DeviceCode)
+		delete(s.byUser, p.UserCode)
+		return ExchangeResult{Status: "expired"}, nil
+	}
 	token := s.pendingToken[p.DeviceID]
 	if token == "" {
 		// Already collected once: the code is single-use.

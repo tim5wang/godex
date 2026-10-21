@@ -22,6 +22,7 @@ export const enCoreMessages = {
         flows: "Flows",
         settings: "Settings",
         usage: "Usage",
+        watch: "Watch",
       },
       loading: "Loading page…",
       cancel: "Cancel",

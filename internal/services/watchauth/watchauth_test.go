@@ -134,6 +134,44 @@ func TestPairingCodeExpires(t *testing.T) {
 	}
 }
 
+// Revoking a device between approval and the watch's first poll must not issue
+// the credential. Otherwise the watch reports itself paired and then fails every
+// request, because the revoked token stops authenticating.
+func TestRevokeBeforeCollectionStopsTokenIssue(t *testing.T) {
+	s := newTestService(t)
+	p, err := s.StartPairing("Watch", "watch")
+	if err != nil {
+		t.Fatalf("StartPairing: %v", err)
+	}
+	device, err := s.ApprovePairing(p.UserCode, nil)
+	if err != nil {
+		t.Fatalf("ApprovePairing: %v", err)
+	}
+	// Revoke while the token is still waiting to be collected.
+	if _, err := s.Revoke(device.DeviceID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	res, err := s.ExchangeToken(p.DeviceCode)
+	if err != nil {
+		t.Fatalf("ExchangeToken: %v", err)
+	}
+	if res.Status != "expired" {
+		t.Fatalf("revoked device must not be handed a credential, got status=%q", res.Status)
+	}
+	if res.Token != "" {
+		t.Fatal("revoked device must not receive a token")
+	}
+	// The code must not stay valid: a later poll must not mint anything either.
+	again, err := s.ExchangeToken(p.DeviceCode)
+	if err != nil {
+		t.Fatalf("second ExchangeToken: %v", err)
+	}
+	if again.Token != "" {
+		t.Fatal("pairing code must be consumed once revocation is observed")
+	}
+}
+
 func TestExchangeTokenIsSingleUse(t *testing.T) {
 	s := newTestService(t)
 	p, err := s.StartPairing("Watch", "watch")

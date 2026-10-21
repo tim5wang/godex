@@ -204,12 +204,17 @@ func registerWatchRoutes(
 	command := withWatchScope(auth, watchauth.ScopeCommand)
 	approve := withWatchScope(auth, watchauth.ScopeApprove)
 
+	// The push queue is derived state, so it is created here (once per handler,
+	// shared by every request) rather than stored on the node.
+	pushQueue := newWatchPushQueue()
+
 	registerWatchPairingRoutes(mux, api, protected)
 	registerWatchDeviceRoutes(mux, api, protected)
 	registerWatchReadRoutes(mux, api, read)
 	registerWatchOverviewRoute(mux, api, read)
 	registerWatchApprovalRoutes(mux, api, read, approve)
 	registerWatchCommandRoutes(mux, api, command)
+	registerWatchPushRoutes(mux, api, pushQueue, protected)
 }
 
 // registerWatchPairingRoutes covers device authorization (plan W2).

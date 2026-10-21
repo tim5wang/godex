@@ -102,6 +102,36 @@ class WatchApi(
         }
     }
 
+    /**
+     * Executes a request whose response is a binary payload (audio).
+     *
+     * A third path alongside [call]/[execute]: [call] would try to decode the body
+     * as JSON, and [execute] discards it. Kept separate so neither grows a
+     * "sometimes binary" branch.
+     */
+    private suspend inline fun rawBytes(
+        crossinline block: () -> Request.Builder,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val request = block().apply {
+            if (token.isNotEmpty()) header("Authorization", "Bearer $token")
+        }.build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                // Errors from this surface are JSON, so read them as text for the
+                // message the UI shows.
+                val body = response.body?.string().orEmpty()
+                val detail = runCatching { json.decodeFromString<ErrorBody>(body).error }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: "request failed"
+                throw WatchApiException(response.code, detail)
+            }
+            response.body?.bytes()
+                ?: throw WatchApiException(response.code, "empty audio response")
+        }
+    }
+
     // ---- pairing (no credential required) ----
 
     suspend fun startPairing(name: String, kind: String = "watch"): PairingStart {
@@ -207,6 +237,26 @@ class WatchApi(
             .post("".toRequestBody(JSON_MEDIA))
     }
 
+    /**
+     * Fetches spoken audio for a session's latest reply (B7).
+     *
+     * Returns raw WAV bytes, so it needs its own path rather than [call] (which
+     * string-decodes the body to JSON). The node derives the text using its own
+     * wrist-shortened summary, so the watch does not re-implement that shaping.
+     *
+     * A session with nothing to read back answers 404, which surfaces here as a
+     * normal [WatchApiException] the UI can explain instead of playing silence.
+     */
+    suspend fun synthesizeSession(sessionId: String): ByteArray = rawBytes {
+        val payload = json.encodeToString(
+            kotlinx.serialization.json.JsonObject.serializer(),
+            kotlinx.serialization.json.buildJsonObject {
+                put("session_id", kotlinx.serialization.json.JsonPrimitive(sessionId))
+            },
+        )
+        Request.Builder().url(url("/watch/tts")).post(payload.toRequestBody(JSON_MEDIA))
+    }
+
     suspend fun sendCommand(sessionId: String, text: String, source: String = "text"): CommandAccepted =
         call {
             val payload = json.encodeToString(CommandRequest.serializer(), CommandRequest(sessionId, text, source))
@@ -220,8 +270,7 @@ class WatchApi(
      * or vendor speech service exposes no `RecognitionService` at all, so the
      * on-device recogniser cannot be relied on.
      */
-    suspend fun transcribe(audio: File): TranscribeResult = call {
-        val body = MultipartBody.Builder()
+    suspend fun transcribe(audio: File): TranscribeResult = call {        val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart(
                 "audio",

@@ -154,6 +154,7 @@ fun SmallAction(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     highlight: Boolean = false,
+    enabled: Boolean = true,
 ) {
     androidx.wear.compose.material.Chip(
         label = {
@@ -166,6 +167,9 @@ fun SmallAction(
             )
         },
         onClick = onClick,
+        // Disabled is rendered by the chip itself so the label stays legible: a
+        // hidden control would leave no clue that the action exists at all.
+        enabled = enabled,
         colors = ChipDefaults.secondaryChipColors(
             backgroundColor = if (highlight) GodexColors.Attention else GodexColors.SurfaceHigh,
             contentColor = if (highlight) androidx.compose.ui.graphics.Color.Black else GodexColors.TextSecondary,

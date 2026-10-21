@@ -48,6 +48,8 @@ fun SessionDetailScreen(
     onStop: () -> Unit,
     onBack: () -> Unit,
     onTalk: () -> Unit,
+    speaking: Boolean = false,
+    onSpeak: () -> Unit = {},
 ) {
     val listState = rememberScalingLazyListState()
 
@@ -214,6 +216,16 @@ fun SessionDetailScreen(
                             onClick = onTalk,
                         )
                     }
+                    // Read the reply back (B7). Enabled only when there is a reply
+                    // to speak, so a tap is never a dead end; while speaking the same
+                    // control stops playback instead of stacking a second clip.
+                    val canSpeak = !d.replySummary.isNullOrBlank() || !d.lastMessage?.text.isNullOrBlank()
+                    SmallAction(
+                        label = if (speaking) "停止朗读" else "朗读回复",
+                        onClick = onSpeak,
+                        enabled = speaking || canSpeak,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     SmallAction("返回", onBack, Modifier.fillMaxWidth())
                 }
             }

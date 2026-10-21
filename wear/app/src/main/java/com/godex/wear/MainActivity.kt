@@ -120,6 +120,10 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
     val state by vm.state.collectAsState()
     val recording by vm.recording.collectAsState()
     val notice by vm.notice.collectAsState()
+    // Read-back playback state (B7). Hoisted for the same reason as the approval
+    // key below: the detail screen renders it, and collecting inside a navigation
+    // branch makes the subscription depend on which screen is showing.
+    val speaking by vm.speaking.collectAsState()
     // Hoisted rather than collected inside the navigation branch: collecting state
     // conditionally is fragile (the subscription depends on which screen is
     // showing) and the approval detail screen re-resolves against it.
@@ -261,6 +265,8 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     onStop = vm::stopCurrentSession,
                     onBack = { screen = Screen.Home },
                     onTalk = { screen = Screen.Talk },
+                    speaking = speaking,
+                    onSpeak = vm::speakLatestReply,
                 )
 
                 Screen.CrossDevice -> CrossDeviceScreen(

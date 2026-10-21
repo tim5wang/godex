@@ -18,6 +18,7 @@ import com.godex.wear.notify.WearNotifier
 import com.godex.wear.sync.WatchSync
 import com.godex.wear.sync.announceFinishedSessions
 import com.godex.wear.voice.VoiceCapture
+import com.godex.wear.voice.VoicePlayback
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,9 +44,16 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     /** Recording + transcription (main dictation path; see VoiceCapture). */
     val voice = VoiceCapture(app)
 
+    /** Speech playback for reading a reply back (B7; see VoicePlayback). */
+    private val playback = VoicePlayback()
+
     /** True while the user is holding the talk button. */
     private val _recording = MutableStateFlow(false)
     val recording: StateFlow<Boolean> = _recording.asStateFlow()
+
+    /** True while a reply is being spoken, so the button can offer to stop it. */
+    private val _speaking = MutableStateFlow(false)
+    val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
 
     data class UiState(
         val loading: Boolean = false,
@@ -503,6 +511,55 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun closeApproval() {
         _openApprovalKey.value = null
+    }
+
+    /**
+     * Speaks the current session's latest reply (B7).
+     *
+     * The node derives the text (its own wrist-shortened summary), so the watch
+     * does not re-implement that shaping and speaks exactly what it displays.
+     *
+     * A session with nothing to read back answers 404, which is reported as a plain
+     * notice rather than an error: "nothing to hear yet" is information, not a
+     * failure.
+     */
+    fun speakLatestReply() {
+        val sessionId = _state.value.currentSessionId
+        if (sessionId.isEmpty()) {
+            _notice.value = Notice("先选一个会话", isError = true)
+            return
+        }
+        if (_speaking.value) {
+            stopSpeaking()
+            return
+        }
+        viewModelScope.launch {
+            _speaking.value = true
+            try {
+                val wav = api.synthesizeSession(sessionId)
+                val played = playback.play(wav)
+                if (!played) {
+                    _notice.value = Notice("这段回复无法朗读", isError = true)
+                }
+            } catch (err: WatchApiException) {
+                if (err.isAuthFailure) {
+                    handleApiError(err)
+                    return@launch
+                }
+                val msg = if (err.statusCode == 404) "还没有可朗读的回复" else err.message
+                _notice.value = Notice(msg, isError = err.statusCode != 404)
+            } catch (err: Exception) {
+                _notice.value = Notice(err.message ?: "朗读失败", isError = true)
+            } finally {
+                _speaking.value = false
+            }
+        }
+    }
+
+    /** Stops playback early (the user tapped again, or left the screen). */
+    fun stopSpeaking() {
+        playback.stop()
+        _speaking.value = false
     }
     /**
      * Begins push-to-talk capture.

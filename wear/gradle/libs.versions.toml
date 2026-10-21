@@ -18,6 +18,10 @@ concurrentFutures = "1.1.0"
 # OngoingActivity lets the watch show a live "task running" card on the watch face
 # (mockup 12). It is a plain platform library with no Play services dependency.
 wearOngoing = "1.1.0"
+# WorkManager drives the background pull that lets a notification arrive while the
+# app is closed. Pure AndroidX (no Play services), so it works on the target
+# China-market watch, and it inherits the system's doze/reboot handling.
+workManager = "2.9.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -46,6 +50,7 @@ androidx-wear-protolayout = { module = "androidx.wear.protolayout:protolayout", 
 androidx-wear-protolayout-expression = { module = "androidx.wear.protolayout:protolayout-expression", version.ref = "wearTiles" }
 androidx-wear-tiles-material = { module = "androidx.wear.tiles:tiles-material", version.ref = "wearTiles" }
 androidx-wear-ongoing = { module = "androidx.wear:wear-ongoing", version.ref = "wearOngoing" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "workManager" }
 androidx-concurrent-futures = { module = "androidx.concurrent:concurrent-futures", version.ref = "concurrentFutures" }
 
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }

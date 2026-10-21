@@ -15,6 +15,8 @@ import com.godex.wear.data.WatchSessionDetail
 import com.godex.wear.data.WatchStore
 import com.godex.wear.data.WatchPreferences
 import com.godex.wear.notify.WearNotifier
+import com.godex.wear.sync.WatchSync
+import com.godex.wear.sync.announceFinishedSessions
 import com.godex.wear.voice.VoiceCapture
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -82,12 +84,6 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pollingJob: Job? = null
 
-    /**
-     * Last observed running state of the selected session, used to detect the
-     * running→idle edge that triggers a "task finished" notification.
-     */
-    private var lastRunningKey: String? = null
-
     init {
         viewModelScope.launch { bootstrap() }
     }
@@ -109,8 +105,26 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             preferences = store.preferences(),
         )
 
-        if (!creds.isUsable) return
+        if (!creds.isUsable) {
+            // Not paired: a background pull would have nothing to read. Cancelling
+            // here (rather than only on unpair) also cleans up after a credential
+            // that was revoked while the app was closed.
+            WatchSync.cancel(getApplication())
+            return
+        }
+        ensureBackgroundSync()
         refresh()
+    }
+
+    /**
+     * Keeps the background pull in step with the pairing state.
+     *
+     * Idempotent by construction ([WatchSync.schedule] keeps any existing work), so
+     * it is safe to call on every start and after every pairing rather than
+     * tracking whether it was already scheduled.
+     */
+    private fun ensureBackgroundSync() {
+        WatchSync.schedule(getApplication())
     }
 
     /**
@@ -216,6 +230,10 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 credentials = store.credentials(),
                 error = null,
             )
+            // A freshly paired watch is exactly when the background pull matters:
+            // approving from the wrist is only useful if the request reaches it
+            // while the app is closed.
+            ensureBackgroundSync()
             refresh()
         }
     }
@@ -253,6 +271,17 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 // (mockup 08). Driven from the same refresh that fills the screens,
                 // so the notification and the in-app queue cannot disagree.
                 syncWearSurfaces(approvals, current)
+                // "Task finished" (mockup 08) is detected from the same session list
+                // this refresh just read, via the helper shared with the background
+                // worker. Both sides compare against one persisted running set, so a
+                // task that ends while the app is open is not announced again by the
+                // next background run.
+                announceFinishedSessions(
+                    context = getApplication(),
+                    sessions = sessions,
+                    store = store,
+                    notifyEnabled = _state.value.preferences.notifyOnComplete,
+                )
             } catch (err: WatchApiException) {
                 handleApiError(err)
             } catch (err: Exception) {
@@ -334,8 +363,6 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun loadDetail(sessionId: String) {
         try {
             val detail = api.sessionDetail(sessionId)
-            val previous = _state.value.detail
-            noteRunningState(sessionId, detail.running)
             _state.value = _state.value.copy(detail = detail)
             // The ongoing-activity card (mockup 12) is derived from the same
             // detail the detail screen renders, for the same reason as the
@@ -345,7 +372,6 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 if (_state.value.preferences.ambient) detail else null,
                 sessionTitleFor(sessionId),
             )
-            notifyIfJustFinished(sessionId, previous, detail)
         } catch (err: WatchApiException) {
             // A vanished session is not worth an error banner: the list refresh
             // will drop it and the user just sees the newer list.
@@ -355,43 +381,6 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 handleApiError(err)
             }
         }
-    }
-
-    /**
-     * Posts the "task finished" notification (mockup 08) on the running→idle
-     * edge.
-     *
-     * Edge-triggered rather than level-triggered: without the transition check the
-     * same finished task would re-notify on every poll, which on a wrist means a
-     * buzz every 20 seconds forever.
-     */
-    private fun notifyIfJustFinished(
-        sessionId: String,
-        previous: WatchSessionDetail?,
-        current: WatchSessionDetail,
-    ) {
-        // Only compare the same session, and only once per transition. The key
-        // records which session's transition was already reported.
-        if (previous?.sessionId != sessionId) return
-        if (!previous.running || current.running) return
-        if (lastRunningKey == sessionId) return
-        lastRunningKey = sessionId
-        if (!_state.value.preferences.notifyOnComplete) return
-        WearNotifier.notifyComplete(
-            getApplication(),
-            sessionTitleFor(sessionId).ifBlank { current.title },
-            current.sessionId,
-        )
-    }
-
-    /**
-     * Clears the "already reported" marker once the session runs again.
-     *
-     * Without this a second run of the same session would be silent: the
-     * transition guard would still hold the session id from the first run.
-     */
-    private fun noteRunningState(sessionId: String, running: Boolean) {
-        if (running && lastRunningKey == sessionId) lastRunningKey = null
     }
 
     /**
@@ -497,6 +486,21 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         _openApprovalKey.value = item.key
     }
 
+    /**
+     * Opens an approval by raw key, for notification deep links (mockups 06/08).
+     *
+     * The alert carries a key rather than an item, and it may be tapped after the
+     * queue has already been refreshed (or before the first refresh completes), so
+     * this cannot look the request up in local state. Setting the key alone is
+     * enough: [openApprovalKey] is re-resolved against the latest queue on every
+     * recomposition, so the screen shows the request as soon as it is loaded and
+     * falls back to its "no longer pending" state when it is gone.
+     */
+    fun openApprovalByKey(key: String) {
+        if (key.isBlank()) return
+        _openApprovalKey.value = key
+    }
+
     fun closeApproval() {
         _openApprovalKey.value = null
     }
@@ -567,6 +571,10 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun unpair() {        viewModelScope.launch {
             store.clearCredentials()
             api.token = ""
+            // Stop the background pull: there is no credential left to read with,
+            // and leaving it scheduled would keep waking the radio on a watch that
+            // has been deliberately unpaired.
+            WatchSync.cancel(getApplication())
             _state.value = UiState(loading = false, credentials = store.credentials())
         }
     }

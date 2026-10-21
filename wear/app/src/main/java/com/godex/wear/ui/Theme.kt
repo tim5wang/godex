@@ -58,14 +58,7 @@ fun GodexWearTheme(content: @Composable () -> Unit) {
 
 /** Relative "x 分钟前" rendering; a wrist glance cares about recency, not clocks. */
 fun relativeTime(iso: String?): String {
-    if (iso.isNullOrBlank()) return ""
-    val parsed = runCatching {
-        java.time.Instant.parse(iso)
-    }.getOrElse {
-        // Go's time.Time marshals with fractional seconds and an offset; try the
-        // offset form before giving up so we do not silently drop timestamps.
-        runCatching { java.time.OffsetDateTime.parse(iso).toInstant() }.getOrNull()
-    } ?: return ""
+    val parsed = parseInstant(iso) ?: return ""
 
     val minutes = java.time.Duration.between(parsed, java.time.Instant.now()).toMinutes()
     return when {
@@ -73,5 +66,39 @@ fun relativeTime(iso: String?): String {
         minutes < 60 -> "${minutes} 分钟前"
         minutes < 60 * 24 -> "${minutes / 60} 小时前"
         else -> "${minutes / (60 * 24)} 天前"
+    }
+}
+
+/**
+ * Countdown to a deadline, e.g. "14 分钟后超时".
+ *
+ * Approvals expire (the server sends expires_at) and how long is left changes
+ * whether the request is worth acting on from the wrist at all: one about to time
+ * out is better handled natively than answered with seconds to spare. Returns
+ * empty for an unparseable or already-passed deadline rather than rendering a
+ * negative duration.
+ */
+fun remainingTime(iso: String?): String {
+    val deadline = parseInstant(iso) ?: return ""
+    val minutes = java.time.Duration.between(java.time.Instant.now(), deadline).toMinutes()
+    return when {
+        minutes < 0 -> ""
+        minutes < 1 -> "即将超时"
+        minutes < 60 -> "${minutes} 分钟后超时"
+        minutes < 60 * 24 -> "${minutes / 60} 小时后超时"
+        else -> "${minutes / (60 * 24)} 天后超时"
+    }
+}
+
+/**
+ * Parses a server timestamp.
+ *
+ * Go marshals time.Time with fractional seconds and an offset, which
+ * Instant.parse alone rejects, so the offset form is tried before giving up.
+ */
+private fun parseInstant(iso: String?): java.time.Instant? {
+    if (iso.isNullOrBlank()) return null
+    return runCatching { java.time.Instant.parse(iso) }.getOrElse {
+        runCatching { java.time.OffsetDateTime.parse(iso).toInstant() }.getOrNull()
     }
 }

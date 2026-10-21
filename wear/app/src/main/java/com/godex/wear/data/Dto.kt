@@ -146,6 +146,9 @@ data class WatchSessionDetail(
     @SerialName("last_turn") val lastTurn: LastTurn? = null,
     @SerialName("last_message") val lastMessage: LastMessage? = null,
     @SerialName("current_tool") val currentTool: String? = null,
+    // The recent tool sequence (mockup 05's "what has it been doing"), bounded
+    // server-side. Distinct from currentTool, which is only the most recent name.
+    @SerialName("recent_tools") val recentTools: List<ToolEvent> = emptyList(),
     val steps: List<Step> = emptyList(),
     @SerialName("step_done") val stepDone: Int = 0,
     @SerialName("step_total") val stepTotal: Int = 0,
@@ -157,6 +160,30 @@ data class WatchSessionDetail(
         val status: String = "",
         @SerialName("updated_at") val updatedAt: String? = null,
     )
+
+    /**
+     * One tool call the agent made, as reported by the node.
+     *
+     * `pending` comes from the server rather than being inferred from a zero
+     * duration: a call that finishes in under a millisecond also reports 0ms, and
+     * showing that as still running would misstate the agent's state.
+     */
+    @Serializable
+    data class ToolEvent(
+        val name: String = "",
+        val failed: Boolean = false,
+        @SerialName("timed_out") val timedOut: Boolean = false,
+        @SerialName("duration_ms") val durationMs: Long = 0,
+        val pending: Boolean = false,
+    ) {
+        /** "1.2s" / "340ms" — a wrist needs scale, not precision. */
+        val durationText: String
+            get() = when {
+                durationMs <= 0 -> ""
+                durationMs < 1000 -> "${durationMs}ms"
+                else -> "%.1fs".format(durationMs / 1000.0)
+            }
+    }
 
     @Serializable
     data class LastMessage(

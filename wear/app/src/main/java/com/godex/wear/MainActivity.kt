@@ -25,6 +25,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.SwipeToDismissBox
 import androidx.wear.compose.material.Text
+import com.godex.wear.sync.WatchSync
 import com.godex.wear.ui.ApprovalDetailScreen
 import com.godex.wear.ui.ApprovalsScreen
 import com.godex.wear.ui.CrossDeviceScreen
@@ -43,9 +44,10 @@ import com.godex.wear.ui.WatchViewModel
 /**
  * Single activity hosting every screen.
  *
- * Navigation is a plain sealed state rather than a nav library: the graph is
- * seven flat destinations with no deep links, so a state enum is fewer moving
- * parts (and fewer dependencies) than a router — which matters on a watch.
+ * Navigation is a plain sealed state rather than a nav library: the graph is a
+ * handful of flat destinations with only notification deep links reaching into
+ * it, so a state enum is fewer moving parts (and fewer dependencies) than a
+ * router — which matters on a watch.
  */
 class MainActivity : ComponentActivity() {
 
@@ -58,16 +60,32 @@ class MainActivity : ComponentActivity() {
      */
     private var deepLinkSessionId by mutableStateOf("")
 
+    /**
+     * Approval key carried by an approval deep link (mockups 06/08), if any.
+     *
+     * Separate from the session id because the two alerts open different
+     * screens: a completion alert opens the session detail, an approval alert
+     * opens the pending decision itself. Carrying only the session id sent both
+     * to the detail screen, so tapping "needs approval" did not reach the
+     * approval.
+     */
+    private var deepLinkApprovalKey by mutableStateOf("")
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        deepLinkSessionId = intent?.getStringExtra(com.godex.wear.notify.WearNotifier.EXTRA_SESSION_ID).orEmpty()
-        setContent { GodexWearTheme { GodexWearRoot(deepLinkSessionId) } }
+        applyDeepLink(intent)
+        setContent { GodexWearTheme { GodexWearRoot(deepLinkSessionId, deepLinkApprovalKey) } }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        deepLinkSessionId = intent.getStringExtra(com.godex.wear.notify.WearNotifier.EXTRA_SESSION_ID).orEmpty()
+        applyDeepLink(intent)
+    }
+
+    private fun applyDeepLink(intent: Intent?) {
+        deepLinkSessionId = intent?.getStringExtra(com.godex.wear.notify.WearNotifier.EXTRA_SESSION_ID).orEmpty()
+        deepLinkApprovalKey = intent?.getStringExtra(com.godex.wear.notify.WearNotifier.EXTRA_APPROVAL_KEY).orEmpty()
     }
 }
 
@@ -97,7 +115,7 @@ private sealed interface Screen {
 }
 
 @Composable
-private fun GodexWearRoot(deepLinkSessionId: String = "") {
+private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: String = "") {
     val vm: WatchViewModel = viewModel()
     val state by vm.state.collectAsState()
     val recording by vm.recording.collectAsState()
@@ -151,13 +169,30 @@ private fun GodexWearRoot(deepLinkSessionId: String = "") {
      */
     LifecycleStartEffect(paired) {
         if (paired) vm.startPolling()
-        onStopOrDispose { vm.stopPolling() }
+        // Claim the notification surface for the foreground while the UI is up.
+        // The in-app poller posts the same alerts and runs far more often (10-90s
+        // versus the worker's 15min), so letting the background worker post as well
+        // would double-alert for an event the user is already looking at.
+        WatchSync.appVisible = true
+        onStopOrDispose {
+            WatchSync.appVisible = false
+            vm.stopPolling()
+        }
     }
 
-    // Notification deep link (mockup 08): open the session the alert referred to
-    // rather than whichever session happens to be selected.
-    LaunchedEffect(deepLinkSessionId, paired) {
-        if (!paired || deepLinkSessionId.isEmpty()) return@LaunchedEffect
+    // Notification deep link (mockup 08). Two targets, because the two alerts ask
+    // for different things: an approval alert must open the decision itself
+    // (mockup 06), a completion alert opens the session it refers to.
+    LaunchedEffect(deepLinkApprovalKey, paired) {
+        if (!paired || deepLinkApprovalKey.isEmpty()) return@LaunchedEffect
+        vm.openApprovalByKey(deepLinkApprovalKey)
+        screen = Screen.ApprovalDetail
+    }
+
+    LaunchedEffect(deepLinkSessionId, deepLinkApprovalKey, paired) {
+        // An approval link carries a session id too; that path is handled above,
+        // and routing it here as well would hijack the approval screen.
+        if (!paired || deepLinkSessionId.isEmpty() || deepLinkApprovalKey.isNotEmpty()) return@LaunchedEffect
         vm.selectSession(deepLinkSessionId)
         screen = Screen.Detail
     }
@@ -262,6 +297,10 @@ private fun GodexWearRoot(deepLinkSessionId: String = "") {
                         approval = approvals.getOrNull(index),
                         index = if (index >= 0) index + 1 else 0,
                         total = approvals.size,
+                        // A notification tap can land here before the first refresh
+                        // has returned, and an empty queue then means "not loaded",
+                        // not "handled".
+                        loading = state.loading,
                         onApprove = { item, scope ->
                             vm.approve(item, scope)
                             vm.closeApproval()

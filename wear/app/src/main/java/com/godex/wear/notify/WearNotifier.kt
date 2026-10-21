@@ -107,8 +107,10 @@ object WearNotifier {
             // blocked until you answer". CATEGORY_REMOTE_INPUT does not exist in
             // androidx.core (verified against the compiled artifact).
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
-            // Tapping opens the app straight on the approval surface (deep link).
-            .setContentIntent(openIntent(context, sessionId))
+            // Tapping opens the app straight on the approval screen (deep link).
+            // The key lets the app find this exact request in the queue after a
+            // refresh, and lets it say "already handled" when it is gone.
+            .setContentIntent(openIntent(context, sessionId, approval.key))
             .addAction(action(context, R.drawable.ic_godex, "批准", WatchActionReceiver.ACTION_APPROVE, sessionId, requestId, 1))
             .addAction(action(context, R.drawable.ic_godex, "拒绝", WatchActionReceiver.ACTION_DENY, sessionId, requestId, 2))
             .setAutoCancel(true)
@@ -240,17 +242,30 @@ object WearNotifier {
      *
      * The notification action buttons must not depend on an app-visible service,
      * so they are broadcast intents (see [WatchActionReceiver]); this content
-     * intent, by contrast, simply opens the UI on the right session.
+     * intent, by contrast, simply opens the UI.
+     *
+     * [approvalKey] is set for approval alerts so the tap can land on the approval
+     * screen itself (mockup 08). Carrying only a session id used to send every
+     * alert — including approval alerts — to the session detail screen, which is
+     * not where the pending decision lives.
      */
-    private fun openIntent(context: Context, sessionId: String): PendingIntent {
+    private fun openIntent(
+        context: Context,
+        sessionId: String,
+        approvalKey: String? = null,
+    ): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             putExtra(EXTRA_SESSION_ID, sessionId)
+            if (!approvalKey.isNullOrEmpty()) putExtra(EXTRA_APPROVAL_KEY, approvalKey)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
+        // Distinct request codes per target: a shared code would make two pending
+        // intents collide, so the approval link could overwrite the session link.
+        val requestCode = (sessionId + (approvalKey ?: "")).hashCode()
         return PendingIntent.getActivity(
             context,
-            sessionId.hashCode(),
+            requestCode,
             intent,
             // FLAG_IMMUTABLE is mandatory from API 31.
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -284,4 +299,7 @@ object WearNotifier {
 
     /** Session id carried by a deep link, if any. */
     const val EXTRA_SESSION_ID = "godex_session_id"
+
+    /** Approval key carried by an approval deep link, if any (mockup 06/08). */
+    const val EXTRA_APPROVAL_KEY = "godex_approval_key"
 }

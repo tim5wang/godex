@@ -45,12 +45,18 @@ import com.godex.wear.data.WatchApproval
  * request can never commit another, and it also gates the broader grant — if
  * approving once needs confirmation, approving for a whole session cannot be the
  * easier action.
+ *
+ * [loading] distinguishes "not fetched yet" from "no longer pending". A
+ * notification tap opens this screen directly, often during a cold start, when
+ * the queue is legitimately still empty — without this the screen would announce
+ * 已处理 for a request the user has not answered.
  */
 @Composable
 fun ApprovalDetailScreen(
     approval: WatchApproval?,
     index: Int,
     total: Int,
+    loading: Boolean = false,
     onApprove: (WatchApproval, String) -> Unit,
     onDeny: (WatchApproval) -> Unit,
     onBack: () -> Unit,
@@ -66,11 +72,18 @@ fun ApprovalDetailScreen(
         modifier = Modifier.fillMaxSize(),
     ) {
         if (approval == null) {
-            // The request left the queue between opening this screen and reading
-            // it — most likely resolved from another client. Saying so is better
-            // than rendering a frozen copy the user cannot act on.
+            // Two different reasons for an absent request, and conflating them
+            // would mislead: still loading (cold start after a notification tap)
+            // versus actually gone (resolved from another client). Saying
+            // "handled" while the first fetch is in flight would be a lie, and on
+            // an approval screen a lie about state is the one thing that must not
+            // happen.
             item {
-                ScreenTitle("已处理", "该请求已不在队列中")
+                if (loading) {
+                    ScreenTitle("加载中…", "正在读取待批准项")
+                } else {
+                    ScreenTitle("已处理", "该请求已不在队列中")
+                }
             }
             item {
                 SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
@@ -184,6 +197,28 @@ fun ApprovalDetailScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+
+        // Time left before the request expires. Purely informational: the server
+        // prunes expired requests before listing them (PermissionManager.ListPending),
+        // so one that is gone never reaches this screen at all. It is shown because
+        // how long is left changes whether answering from the wrist is worth it — a
+        // request with seconds remaining is better handled natively than answered
+        // in a hurry. Rendered in the danger colour once it is nearly out of time.
+        if (approval.isPermission) {
+            val remaining = remainingTime(approval.expiresAt)
+            if (remaining.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = remaining,
+                        style = MaterialTheme.typography.caption1,
+                        color = GodexColors.TextMuted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
 
         // Only a tool permission can be decided here. A flow human task needs a

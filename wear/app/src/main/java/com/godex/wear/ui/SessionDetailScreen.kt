@@ -170,6 +170,25 @@ fun SessionDetailScreen(
                 }
             }
 
+            // What the agent has actually been doing (mockup 05). Ordered and
+            // bounded by the server; the wrist shows a few lines rather than
+            // inventing a summary of its own.
+            if (d.recentTools.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "最近工具",
+                        style = MaterialTheme.typography.caption1,
+                        color = GodexColors.TextSecondary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                items(d.recentTools) { tool ->
+                    ToolRow(tool)
+                }
+            }
+
             item {
                 Spacer(Modifier.height(6.dp))
                 Column(
@@ -223,6 +242,53 @@ private fun StepRow(content: String, marker: String, color: Color) {
             style = MaterialTheme.typography.caption1,
             color = if (color == GodexColors.TextMuted) GodexColors.TextSecondary else GodexColors.TextPrimary,
             maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * One tool call: marker, name, and how it went.
+ *
+ * The outcome is drawn as a marker rather than written as a word because a wrist
+ * line is narrow, and the three states that matter to a user deciding whether to
+ * intervene are "working", "done" and "failed" — not the tool's own vocabulary.
+ */
+@Composable
+private fun ToolRow(tool: com.godex.wear.data.WatchSessionDetail.ToolEvent) {
+    val color = when {
+        tool.timedOut || tool.failed -> GodexColors.Danger
+        tool.pending -> GodexColors.Attention
+        else -> GodexColors.Accent
+    }
+    val marker = when {
+        tool.timedOut -> "⏱"
+        tool.failed -> "✕"
+        tool.pending -> "◐"
+        else -> "●"
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+    ) {
+        Text(
+            text = marker,
+            style = MaterialTheme.typography.caption1,
+            color = color,
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = buildString {
+                append(tool.name)
+                if (tool.pending) {
+                    append(" · 进行中")
+                } else if (tool.durationText.isNotEmpty()) {
+                    append(" · ").append(tool.durationText)
+                }
+            },
+            style = MaterialTheme.typography.caption1,
+            color = if (tool.failed || tool.timedOut) GodexColors.Danger else GodexColors.TextPrimary,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }

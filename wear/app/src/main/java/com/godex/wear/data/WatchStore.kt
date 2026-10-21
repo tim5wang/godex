@@ -50,6 +50,16 @@ class WatchStore(private val context: Context) {
         val NOTIFY_ON_COMPLETE = booleanPreferencesKey("notify_on_complete")
         val POWER_SAVING = booleanPreferencesKey("power_saving")
         val AMBIENT = booleanPreferencesKey("ambient")
+
+        /**
+         * Sessions observed running at the last check, newline separated.
+         *
+         * Persisted rather than held in memory because the background worker runs
+         * in a process that may be started fresh for it: an in-memory set would
+         * always look empty on a cold start, and every session would then appear to
+         * have just finished.
+         */
+        val RUNNING_SESSIONS = stringPreferencesKey("running_sessions")
     }
 
     val baseUrlFlow: Flow<String> = context.dataStore.data.map { it[Keys.BASE_URL].orEmpty() }
@@ -127,6 +137,26 @@ class WatchStore(private val context: Context) {
             .split('\n')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+    }
+
+    /**
+     * Sessions observed running at the last check.
+     *
+     * Used by both the app's poller and the background worker, so a task that
+     * finishes while the app is open is not announced again later in the
+     * background (and vice versa).
+     */
+    suspend fun runningSessions(): Set<String> {
+        val prefs = context.dataStore.data.first()
+        return prefs[Keys.RUNNING_SESSIONS].orEmpty()
+            .split('\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+    }
+
+    suspend fun setRunningSessions(ids: Set<String>) {
+        context.dataStore.edit { it[Keys.RUNNING_SESSIONS] = ids.joinToString("\n") }
     }
 
     /**

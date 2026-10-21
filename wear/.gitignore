@@ -1,0 +1,23 @@
+# Wear OS 手表客户端构建产物 / 依赖
+#
+# 与 mobile/.gitignore 同一惯例：保留工程骨架（gradle wrapper、源码、资源）入库，
+# 忽略构建产物与本机配置。
+
+# Gradle 守护进程/缓存/增量构建状态
+.gradle/
+.kotlin/
+build/
+app/build/
+
+# 本机 Android SDK 路径（每台机器不同，gradlew 会自动生成）
+local.properties
+
+# 签名材料
+*.keystore
+*.jks
+*.p12
+
+# IDE
+.idea/
+*.iml
+captures/

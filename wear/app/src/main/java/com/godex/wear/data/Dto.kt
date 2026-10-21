@@ -1,0 +1,245 @@
+package com.godex.wear.data
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+/**
+ * Wire DTOs for the godex watch surface (`/watch/...`).
+ *
+ * Field names are snake_case on the wire and are mapped explicitly rather than
+ * relying on a global naming strategy, so a server-side rename shows up here as
+ * a compile-time-ish failure in one file instead of silent nulls everywhere.
+ */
+
+@Serializable
+data class PairingStart(
+    @SerialName("device_code") val deviceCode: String,
+    @SerialName("user_code") val userCode: String,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    val interval: Int = 5,
+    val approved: Boolean = false,
+)
+
+@Serializable
+data class WatchDevice(
+    @SerialName("device_id") val deviceId: String,
+    val name: String = "",
+    val kind: String = "watch",
+    val scopes: List<String> = emptyList(),
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("last_seen") val lastSeen: String? = null,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    val revoked: Boolean = false,
+) {
+    fun canRead(): Boolean = scopes.contains(SCOPE_READ)
+    fun canCommand(): Boolean = scopes.contains(SCOPE_COMMAND)
+    fun canApprove(): Boolean = scopes.contains(SCOPE_APPROVE)
+
+    companion object {
+        const val SCOPE_READ = "watch:read"
+        const val SCOPE_COMMAND = "watch:command"
+        const val SCOPE_APPROVE = "watch:approve"
+    }
+}
+
+@Serializable
+data class PairingToken(
+    val status: String,
+    val device: WatchDevice? = null,
+    val token: String? = null,
+    @SerialName("expires_at") val expiresAt: String? = null,
+) {
+    val isPending: Boolean get() = status == "pending"
+    val isApproved: Boolean get() = status == "approved"
+    val isExpired: Boolean get() = status == "expired"
+}
+
+@Serializable
+data class WatchSession(
+    @SerialName("session_id") val sessionId: String,
+    val title: String = "",
+    val running: Boolean = false,
+    @SerialName("parent_session_id") val parentSessionId: String? = null,
+    @SerialName("last_activity_at") val lastActivityAt: String? = null,
+)
+
+@Serializable
+data class WatchNode(
+    val id: String,
+    val name: String = "",
+    val status: String = "",
+    @SerialName("last_seen") val lastSeen: String? = null,
+) {
+    val isOnline: Boolean get() = status.equals("online", ignoreCase = true)
+}
+
+@Serializable
+data class WatchApproval(
+    val kind: String,
+    @SerialName("session_id") val sessionId: String? = null,
+    @SerialName("session_title") val sessionTitle: String? = null,
+    @SerialName("node_name") val nodeName: String? = null,
+    @SerialName("request_id") val requestId: String? = null,
+    @SerialName("tool_name") val toolName: String? = null,
+    val summary: String = "",
+    @SerialName("created_at") val createdAt: String? = null,
+    // Approval-detail fields (mockup 06): the single-approval screen must show
+    // what will actually run, so the list's 140-rune summary is not enough.
+    val command: String? = null,
+    val risk: String? = null,
+    @SerialName("risk_level") val riskLevel: String? = null,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    @SerialName("task_id") val taskId: String? = null,
+    @SerialName("run_id") val runId: String? = null,
+    val queue: String? = null,
+    val prompt: String? = null,
+) {
+    val isPermission: Boolean get() = kind == "permission"
+    val isFlowTask: Boolean get() = kind == "flow_task"
+
+    /** True when the risk verdict says an irreversible command is about to run. */
+    val isHighRisk: Boolean get() = riskLevel == "high"
+
+    /** The command to echo verbatim, falling back to the truncated summary. */
+    val commandText: String get() = command?.takeIf { it.isNotBlank() } ?: summary
+
+    /**
+     * Stable identity for this request, used to re-find it after a refresh.
+     *
+     * The detail screen holds a key rather than the item itself: the approval
+     * list is re-read by the refresh loop, so a captured item would show stale
+     * contents and could keep offering buttons for a request another client
+     * already resolved.
+     */
+    val key: String get() = if (isPermission) {
+        "perm:${sessionId.orEmpty()}:${requestId.orEmpty()}"
+    } else {
+        "task:${taskId.orEmpty()}"
+    }
+}
+
+/**
+ * Aggregated home-screen payload.
+ *
+ * The watch is a battery-constrained client, so the home screen prefers one
+ * round-trip over four independent calls.
+ */
+@Serializable
+data class WatchOverview(
+    val devices: List<WatchNode> = emptyList(),
+    @SerialName("current_session") val currentSession: WatchSession? = null,
+    @SerialName("active_sessions") val activeSessions: Int = 0,
+    @SerialName("pending_approvals") val pendingApprovals: Int = 0,
+    @SerialName("server_time") val serverTime: String? = null,
+)
+
+@Serializable
+data class WatchSessionDetail(
+    @SerialName("session_id") val sessionId: String,
+    val title: String = "",
+    val running: Boolean = false,
+    @SerialName("active_phase") val activePhase: String? = null,
+    @SerialName("active_turn_id") val activeTurnId: String? = null,
+    @SerialName("pending_approvals") val pendingApprovals: Int = 0,
+    @SerialName("updated_at") val updatedAt: String? = null,
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("last_turn") val lastTurn: LastTurn? = null,
+    @SerialName("last_message") val lastMessage: LastMessage? = null,
+    @SerialName("current_tool") val currentTool: String? = null,
+    val steps: List<Step> = emptyList(),
+    @SerialName("step_done") val stepDone: Int = 0,
+    @SerialName("step_total") val stepTotal: Int = 0,
+    @SerialName("progress_percent") val progressPercent: Int = 0,
+) {
+    @Serializable
+    data class LastTurn(
+        @SerialName("turn_id") val turnId: String = "",
+        val status: String = "",
+        @SerialName("updated_at") val updatedAt: String? = null,
+    )
+
+    @Serializable
+    data class LastMessage(
+        val role: String = "",
+        val text: String = "",
+    )
+
+    /**
+     * One entry of the agent's own plan.
+     *
+     * The server derives this from the session todo list; the watch does not
+     * invent progress, it only renders what the agent actually recorded.
+     */
+    @Serializable
+    data class Step(
+        val content: String = "",
+        val status: String = "",
+    ) {
+        val isDone: Boolean get() = status == "completed"
+        val isActive: Boolean get() = status == "in_progress"
+    }
+
+    /** True when the server reported a live step list worth rendering. */
+    val hasSteps: Boolean get() = steps.isNotEmpty()
+
+    /**
+     * True when there is a turn to stop. Drives whether "stop" is offered at
+     * all — a permanently visible dead button is worse than no button.
+     */
+    val hasRunningTurn: Boolean get() = !activeTurnId.isNullOrEmpty()
+}
+
+/**
+ * One session tagged with the node it lives on (mockup 14).
+ *
+ * Flattened rather than nested so the same list rendering path handles both the
+ * local session list and the cross-device one.
+ */
+@Serializable
+data class WatchCrossDeviceSession(
+    @SerialName("session_id") val sessionId: String,
+    val title: String = "",
+    val running: Boolean = false,
+    @SerialName("parent_session_id") val parentSessionId: String? = null,
+    @SerialName("last_activity_at") val lastActivityAt: String? = null,
+    @SerialName("node_id") val nodeId: String = "",
+    @SerialName("node_name") val nodeName: String = "",
+    val online: Boolean = true,
+    val remote: Boolean = false,
+)
+
+@Serializable
+data class CommandRequest(
+    @SerialName("session_id") val sessionId: String,
+    val text: String,
+    val source: String = "text",
+    val metadata: Map<String, String> = emptyMap(),
+)
+
+@Serializable
+data class CommandAccepted(
+    @SerialName("session_id") val sessionId: String = "",
+    @SerialName("turn_id") val turnId: String = "",
+    val status: String = "",
+    @SerialName("pending_approval") val pendingApproval: Boolean = false,
+)
+
+@Serializable
+data class ApprovalResponse(
+    val scope: String? = null,
+)
+
+@Serializable
+data class DenyResponse(
+    val reason: String? = null,
+)
+
+@Serializable
+data class TranscribeResult(
+    val text: String = "",
+    val confidence: Double = 0.0,
+)
+
+/** Server error envelope; godex returns `{"error": "..."}` on failures. */
+@Serializable
+data class ErrorBody(val error: String = "")

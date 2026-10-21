@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext policy for the GoDex watch client.
+
+  Android 9+ (API 28) blocks cleartext HTTP by default, which made every pairing
+  attempt fail with "CLEARTEXT communication to 10.0.2.2 not permitted by
+  network security policy" — found by driving the app on an emulator rather than
+  by unit tests, since the restriction is enforced by the platform, not by our code.
+
+  Cleartext has to be allowed: this app is a remote control for a self-hosted
+  godex node. Users point it at an address on their own LAN or at a local
+  `godex serve` instance, typically `http://<lan-ip>:8080`. A network security
+  config cannot express "private address ranges only" (it matches domains, not
+  CIDR), and enumerating the user's LAN is impossible, so the base config permits
+  cleartext and the user is responsible for the address they enter.
+
+  This is a deliberate, documented tradeoff rather than an oversight: the traffic
+  carries a scoped watch token (watch:read / command / approve) that a trusted
+  endpoint can revoke at any time, and the node is on the user's own network.
+  When a node is reachable over TLS, use an https:// address so the token is not
+  exposed on the wire.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

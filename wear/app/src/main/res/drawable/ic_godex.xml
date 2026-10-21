@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tiny monochrome mark used as the notification and ongoing-activity icon.
+
+  A vector rather than a raster mipmap: the app ships a single dp size, so there
+  is no reason to carry one PNG per density on a device with limited storage.
+  Monochrome on purpose — Wear OS tints status icons itself, and a coloured icon
+  would render as a grey blob.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2ZM12,4.2A7.8,7.8 0 1,1 4.2,12A7.8,7.8 0 0,1 12,4.2Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,6.6A5.4,5.4 0 1,0 17.4,12H12Z" />
+</vector>

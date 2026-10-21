@@ -1,0 +1,173 @@
+package com.godex.wear.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.wear.compose.material.MaterialTheme
+import androidx.wear.compose.material.Text
+import com.godex.wear.data.PairingStart
+import com.godex.wear.data.WatchApi
+import com.godex.wear.data.WatchApiException
+import com.godex.wear.data.WatchDevice
+import kotlinx.coroutines.delay
+
+/**
+ * Device-authorization pairing (plan §4 W2).
+ *
+ * The watch shows a short code; the user confirms it on an already-trusted
+ * endpoint. The watch never receives the node's web token, only its own
+ * scope-restricted credential — so a lost watch cannot be used to reconfigure
+ * the node.
+ */
+@Composable
+fun PairingScreen(
+    api: WatchApi,
+    serverUrl: String,
+    onServerUrlChange: (String) -> Unit,
+    onPaired: (WatchDevice, String) -> Unit,
+    onSettings: () -> Unit,
+) {
+    var pairing by remember { mutableStateOf<PairingStart?>(null) }
+    var status by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    // Poll loop: created only once a pairing exists, and cancelled automatically
+    // when the composable leaves or `pairing` changes, so a watch that is put
+    // down stops polling instead of draining the battery.
+    LaunchedEffect(pairing?.deviceCode) {
+        val current = pairing ?: return@LaunchedEffect
+        repeat(PAIR_POLL_ATTEMPTS) {
+            delay(PAIR_POLL_INTERVAL_MS)
+            try {
+                val result = api.exchangeToken(current.deviceCode)
+                when {
+                    result.isApproved -> {
+                        val device = result.device
+                        val token = result.token
+                        if (device != null && !token.isNullOrEmpty()) {
+                            onPaired(device, token)
+                        } else {
+                            error = "配对响应不完整，请重试"
+                        }
+                        return@LaunchedEffect
+                    }
+                    result.isExpired -> {
+                        error = "配对码已过期，请重新生成"
+                        pairing = null
+                        status = ""
+                        return@LaunchedEffect
+                    }
+                    else -> { /* still pending: keep waiting */ }
+                }
+            } catch (err: WatchApiException) {
+                error = err.message
+                return@LaunchedEffect
+            } catch (err: Exception) {
+                error = err.message ?: "网络不可达"
+                return@LaunchedEffect
+            }
+        }
+        error = "等待超时，请重试"
+    }
+
+    RoundScreen {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            val shown = pairing
+            if (shown == null) {
+                ScreenTitle("配对", "在已信任的端确认")
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = serverUrl,
+                    style = MaterialTheme.typography.caption1,
+                    color = GodexColors.TextMuted,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(10.dp))
+                RoundAction(
+                    label = if (busy) "生成中…" else "生成配对码",
+                    enabled = !busy,
+                    onClick = {
+                        busy = true
+                        error = null
+                    },
+                )
+                Spacer(Modifier.height(6.dp))
+                RoundAction(
+                    label = "服务器地址",
+                    color = GodexColors.SurfaceHigh,
+                    onClick = onSettings,
+                )
+            } else {
+                ScreenTitle("配对码", "在手机或网页端输入")
+                Spacer(Modifier.height(6.dp))
+                // Digits are grouped 4-4: an 8-digit run is easy to misread on a
+                // small display, and the server normalises separators anyway.
+                Text(
+                    text = formatUserCode(shown.userCode),
+                    style = MaterialTheme.typography.display3,
+                    color = GodexColors.Accent,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(6.dp))
+                status.ifEmpty { "等待确认" }.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.caption1,
+                        color = GodexColors.TextSecondary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+
+            error?.let {
+                Spacer(Modifier.height(6.dp))
+                MessageBlock(title = it, tint = GodexColors.Danger)
+            }
+        }
+    }
+
+    // Starting the pairing is a side effect, so it runs in a keyed effect rather
+    // than inside onClick: a recomposition cannot mint a second code.
+    LaunchedEffect(busy) {
+        if (!busy || pairing != null) return@LaunchedEffect
+        try {
+            pairing = api.startPairing(name = "Wear Watch")
+            status = "等待确认"
+            error = null
+        } catch (err: WatchApiException) {
+            error = err.message
+        } catch (err: Exception) {
+            error = err.message ?: "无法连接服务器"
+        }
+    }
+}
+
+/** Renders 8 digits as `1234 5678` for legibility on a small round display. */
+fun formatUserCode(code: String): String {
+    val digits = code.filter { it.isDigit() }
+    if (digits.length != 8) return code
+    return digits.substring(0, 4) + " " + digits.substring(4)
+}
+
+private const val PAIR_POLL_INTERVAL_MS = 3000L
+
+// 5 minutes at 3s intervals matches the server-side pairing window, so the watch
+// gives up at roughly the same moment the code stops being valid.
+private const val PAIR_POLL_ATTEMPTS = 100

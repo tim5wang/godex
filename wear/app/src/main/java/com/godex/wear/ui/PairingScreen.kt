@@ -155,6 +155,12 @@ fun PairingScreen(
             error = err.message
         } catch (err: Exception) {
             error = err.message ?: "无法连接服务器"
+        } finally {
+            // Reset on failure as well as success. Leaving it true pinned the button
+            // at "生成中…" and disabled, so after a connection error the user could
+            // not retry even once the address was fixed — the failure looked like a
+            // hang (found on the emulator).
+            busy = false
         }
     }
 }

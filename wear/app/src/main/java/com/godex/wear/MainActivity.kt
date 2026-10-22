@@ -203,7 +203,14 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
 
     Box(modifier = Modifier.fillMaxSize()) {
         when {
-            !paired -> PairingScreen(
+            // Settings stays reachable while unpaired. A failed pairing is nearly
+            // always a wrong address (the node moved, or the watch is pointed at a
+            // different port), so the one screen that fixes it must not be the one
+            // screen the guard hides: routing purely on `paired` made the error a
+            // dead end, with no way back to the address field (found on the
+            // emulator). Only Settings is exempt — every other screen drives a
+            // paired node and has nothing to control without a credential.
+            !paired && screen != Screen.Settings -> PairingScreen(
                 api = vm.api,
                 serverUrl = credentials?.baseUrl?.takeIf { it.isNotEmpty() }
                     ?: com.godex.wear.data.WatchApi.DEFAULT_EMULATOR_URL,
@@ -340,7 +347,10 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     preferences = state.preferences,
                     onSaveUrl = {
                         vm.setServerUrl(it)
-                        screen = Screen.Home
+                        // While unpaired, editing the address exists solely to retry
+                        // pairing, so return there rather than to a remote control
+                        // that has no credential yet.
+                        screen = if (paired) Screen.Home else Screen.Pairing
                     },
                     onNotifyOnComplete = vm::setNotifyOnComplete,
                     onPowerSaving = vm::setPowerSaving,

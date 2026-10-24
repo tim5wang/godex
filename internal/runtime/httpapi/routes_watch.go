@@ -84,6 +84,14 @@ type watchSessionItem struct {
 	Running         bool      `json:"running,omitempty"`
 	ParentSessionID string    `json:"parent_session_id,omitempty"`
 	LastActivityAt  time.Time `json:"last_activity_at,omitempty"`
+	// Turn-level identity, so a poller can tell "the same turn is still running"
+	// from "a different turn finished". Without it the only signal was
+	// running→not-running, which cannot see a turn that starts and ends between two
+	// polls — exactly the common case on a watch, whose background cadence is
+	// minutes apart.
+	LastTurnID          string    `json:"last_turn_id,omitempty"`
+	LastTurnStatus      string    `json:"last_turn_status,omitempty"`
+	LastTurnCompletedAt time.Time `json:"last_turn_completed_at,omitempty"`
 }
 
 type watchNodeItem struct {
@@ -154,6 +162,26 @@ type watchDenyRequest struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// watchCreateSessionRequest creates a session from the wrist.
+//
+// TemplateID is optional and falls back to the watch preset: the whole point of
+// creating a conversation on a watch is that it must not require configuration.
+type watchCreateSessionRequest struct {
+	TemplateID string `json:"template_id,omitempty"`
+	Title      string `json:"title,omitempty"`
+}
+
+// watchTemplateItem is the narrow template shape the wrist can render: an avatar,
+// a name and a one-line description. The full AgentTemplate is far too large for a
+// notification-sized list and exposes fields (bundles, tools, MCP servers) that a
+// watch cannot meaningfully choose between.
+type watchTemplateItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Avatar      string `json:"avatar,omitempty"`
+}
+
 type watchOverviewResponse struct {
 	Devices          []watchNodeItem   `json:"devices"`
 	CurrentSession   *watchSessionItem `json:"current_session,omitempty"`
@@ -217,6 +245,7 @@ func registerWatchRoutes(
 	registerWatchPairingRoutes(mux, api, protected)
 	registerWatchDeviceRoutes(mux, api, protected)
 	registerWatchReadRoutes(mux, api, read)
+	registerWatchSessionCreateRoutes(mux, api, read, command)
 	registerWatchOverviewRoute(mux, api, read)
 	registerWatchApprovalRoutes(mux, api, read, approve)
 	registerWatchCommandRoutes(mux, api, command)
@@ -372,6 +401,13 @@ func registerWatchReadRoutes(mux *http.ServeMux, api watchAPI, read func(http.Ha
 				ParentSessionID: s.ParentSessionID,
 				LastActivityAt:  s.LastActivityAt,
 			})
+			// In-memory only (see LastTurnSummary): a disk load per session per poll
+			// would make this cheap listing the most expensive endpoint on the node.
+			if turn, ok := service.LastTurnSummary(s.SessionID); ok {
+				items[len(items)-1].LastTurnID = turn.TurnID
+				items[len(items)-1].LastTurnStatus = turn.Status
+				items[len(items)-1].LastTurnCompletedAt = turn.CompletedAt
+			}
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))

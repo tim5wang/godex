@@ -256,12 +256,20 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     currentSessionId = state.currentSessionId,
                     pinned = state.pinned,
                     loading = state.loading,
+                    templates = state.templates,
                     onSelect = {
                         vm.selectSession(it)
                         screen = Screen.Home
                     },
                     onTogglePin = vm::togglePin,
                     onCrossDevice = { screen = Screen.CrossDevice },
+                    onCreate = { templateId ->
+                        vm.createSession(templateId)
+                        // Stay on the session list: the new conversation appears at
+                        // the top of it, which is better feedback than jumping to a
+                        // Home screen that still reads "no reply yet".
+                    },
+                    onOpenCreate = vm::loadTemplates,
                     onBack = { screen = Screen.Home },
                 )
 

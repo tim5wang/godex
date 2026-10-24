@@ -196,6 +196,31 @@ class WatchApi(
         Request.Builder().url(url("/watch/cross-device")).get()
     }
 
+    /**
+     * Presets the wrist may start a conversation with.
+     *
+     * Curated server-side: the node can hold dozens of templates, most of which
+     * assume a full-size screen.
+     */
+    suspend fun templates(): List<WatchTemplate> = call {
+        Request.Builder().url(url("/watch/templates")).get()
+    }
+
+    /**
+     * Starts a new conversation.
+     *
+     * An empty [templateId] means "the node's watch preset", which is why the
+     * signature does not require one: creating from a wrist must not be a
+     * configuration exercise.
+     */
+    suspend fun createSession(templateId: String = "", title: String = ""): WatchSession = call {
+        val payload = json.encodeToString(
+            CreateSessionRequest.serializer(),
+            CreateSessionRequest(templateId = templateId, title = title),
+        )
+        Request.Builder().url(url("/watch/sessions")).post(payload.toRequestBody(JSON_MEDIA))
+    }
+
     // ---- actions ----
 
     suspend fun approve(sessionId: String, requestId: String, scope: String = "once") =

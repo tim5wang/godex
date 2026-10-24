@@ -8,6 +8,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -22,6 +26,7 @@ import androidx.wear.compose.material.CompactChip
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import com.godex.wear.data.WatchSession
+import com.godex.wear.data.WatchTemplate
 
 /**
  * Session switcher (mockups 04 / 13).
@@ -46,12 +51,20 @@ fun SessionsScreen(
     currentSessionId: String,
     pinned: Set<String>,
     loading: Boolean,
+    templates: List<WatchTemplate> = emptyList(),
     onSelect: (String) -> Unit,
     onTogglePin: (String) -> Unit,
     onCrossDevice: () -> Unit,
+    onCreate: (String) -> Unit = {},
+    onOpenCreate: () -> Unit = {},
     onBack: () -> Unit,
 ) {
     val listState = rememberScalingLazyListState()
+
+    // Creating a conversation is a mode of this screen rather than a separate
+    // destination: it is a two-tap action from a list of at most three presets, and
+    // a whole screen for it would be more navigation than decision.
+    var showCreate by remember { mutableStateOf(false) }
 
     val pinnedSessions = sessions.filter { pinned.contains(it.sessionId) }
     val restSessions = sessions.filterNot { pinned.contains(it.sessionId) }
@@ -65,6 +78,70 @@ fun SessionsScreen(
     ) {
         item {
             ScreenTitle("会话", "共 ${sessions.size} 个")
+        }
+
+        if (showCreate) {
+            // One tap per preset. No confirm step: the user can create another one in
+            // the same number of taps, so a wrong choice costs nothing.
+            item {
+                Text(
+                    text = "选择预设",
+                    style = MaterialTheme.typography.caption1,
+                    color = GodexColors.TextMuted,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            items(templates, key = { "tpl-${it.id}" }) { tpl ->
+                Chip(
+                    label = {
+                        Text(
+                            text = if (tpl.avatar.isBlank()) tpl.name else "${tpl.avatar} ${tpl.name}",
+                            style = MaterialTheme.typography.body1,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    secondaryLabel = {
+                        if (tpl.description.isNotBlank()) {
+                            Text(
+                                text = tpl.description,
+                                style = MaterialTheme.typography.caption1,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    },
+                    onClick = {
+                        showCreate = false
+                        onCreate(tpl.id)
+                    },
+                    colors = ChipDefaults.secondaryChipColors(
+                        backgroundColor = GodexColors.Surface,
+                        contentColor = GodexColors.TextPrimary,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                Spacer(Modifier.height(ChipSpacing))
+                SmallAction(
+                    label = "取消",
+                    onClick = { showCreate = false },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        } else {
+            item {
+                SmallAction(
+                    label = "＋ 新建对话",
+                    highlight = true,
+                    onClick = {
+                        onOpenCreate()
+                        showCreate = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
 
         if (sessions.isEmpty()) {

@@ -1184,3 +1184,44 @@ func (s *Service) runningState(sessionID string) bool {
 	defer session.mu.RUnlock()
 	return session.running
 }
+
+// LastTurnSummary describes the newest turn of an in-memory session, in the form a
+// poller needs to notice that a turn finished.
+type LastTurnSummary struct {
+	TurnID      string
+	Status      string
+	CompletedAt time.Time
+}
+
+// LastTurnSummary exposes the newest turn without loading the session from disk.
+//
+// It reads only in-memory state on purpose: the watch polls this for every session
+// in the list, and a disk load per session per poll would turn a cheap listing into
+// the most expensive endpoint on the node. A session that is not resident returns
+// ok=false — the caller then simply has no turn information for it, which is
+// correct, because a non-resident session cannot be producing turns either.
+//
+// Finalised turns are what matter here: the watch uses the turn id to distinguish
+// "same turn, still going" from "a different turn finished", which is what makes
+// it possible to alert on a turn that started and ended between two polls.
+func (s *Service) LastTurnSummary(sessionID string) (LastTurnSummary, bool) {
+	if s == nil {
+		return LastTurnSummary{}, false
+	}
+	s.mu.Lock()
+	session := s.sessions[sessionID]
+	s.mu.Unlock()
+	if session == nil {
+		return LastTurnSummary{}, false
+	}
+	records := session.turnRecords(1)
+	if len(records) == 0 {
+		return LastTurnSummary{}, false
+	}
+	last := records[len(records)-1]
+	summary := LastTurnSummary{TurnID: last.ID, Status: last.Status}
+	if last.CompletedAt != nil {
+		summary.CompletedAt = *last.CompletedAt
+	}
+	return summary, true
+}

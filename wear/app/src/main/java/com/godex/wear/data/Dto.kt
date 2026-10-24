@@ -61,7 +61,19 @@ data class WatchSession(
     val running: Boolean = false,
     @SerialName("parent_session_id") val parentSessionId: String? = null,
     @SerialName("last_activity_at") val lastActivityAt: String? = null,
-)
+    // Turn-level identity. running→not-running is too coarse to alert on: a turn
+    // that starts and ends between two polls leaves the flag exactly as it was, so
+    // the only turns ever announced were the long ones. Comparing the last turn id
+    // and its terminal status instead makes short turns visible. Both are absent
+    // from older nodes, which degrades to the old running-based behaviour.
+    @SerialName("last_turn_id") val lastTurnId: String? = null,
+    @SerialName("last_turn_status") val lastTurnStatus: String? = null,
+    @SerialName("last_turn_completed_at") val lastTurnCompletedAt: String? = null,
+) {
+    /** True when the newest turn has reached a state the user would want to know about. */
+    val lastTurnFinished: Boolean
+        get() = lastTurnStatus == "completed" || lastTurnStatus == "failed"
+}
 
 @Serializable
 data class WatchNode(
@@ -289,6 +301,27 @@ data class DenyResponse(
 data class TranscribeResult(
     val text: String = "",
     val confidence: Double = 0.0,
+)
+
+/**
+ * A preset the wrist may start a conversation with.
+ *
+ * Deliberately narrower than the node's full AgentTemplate: bundles, tools and
+ * MCP servers are not things anyone can meaningfully choose between on a watch,
+ * and shipping them would bloat a list meant to fit on one screen.
+ */
+@Serializable
+data class WatchTemplate(
+    val id: String,
+    val name: String = "",
+    val description: String = "",
+    val avatar: String = "",
+)
+
+@Serializable
+data class CreateSessionRequest(
+    @SerialName("template_id") val templateId: String = "",
+    val title: String = "",
 )
 
 /** Server error envelope; godex returns `{"error": "..."}` on failures. */

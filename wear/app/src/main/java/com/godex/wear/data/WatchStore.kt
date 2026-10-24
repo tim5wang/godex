@@ -60,6 +60,17 @@ class WatchStore(private val context: Context) {
          * have just finished.
          */
         val RUNNING_SESSIONS = stringPreferencesKey("running_sessions")
+
+        /**
+         * The last turn already announced, as `sessionId\u001FturnId` lines.
+         *
+         * Turn-level because the running flag is too coarse: a turn that starts
+         * and finishes between two checks leaves running exactly as it was, so a
+         * completion alert could only ever fire for long turns. Comparing turn ids
+         * instead means a short turn is still announced once — and only once,
+         * because the id is remembered after it is announced.
+         */
+        val ANNOUNCED_TURNS = stringPreferencesKey("announced_turns")
     }
 
     val baseUrlFlow: Flow<String> = context.dataStore.data.map { it[Keys.BASE_URL].orEmpty() }
@@ -157,6 +168,33 @@ class WatchStore(private val context: Context) {
 
     suspend fun setRunningSessions(ids: Set<String>) {
         context.dataStore.edit { it[Keys.RUNNING_SESSIONS] = ids.joinToString("\n") }
+    }
+
+    /**
+     * Turn ids already announced, keyed by session.
+     *
+     * Bounded by [limit]: this is only ever consulted to answer "have I already
+     * alerted for this turn?", so remembering an unbounded history would grow a
+     * preferences file on a watch with no benefit.
+     */
+    suspend fun announcedTurns(limit: Int = 200): Map<String, String> {
+        val raw = context.dataStore.data.first()[Keys.ANNOUNCED_TURNS].orEmpty()
+        val pairs = raw.split('\n')
+            .mapNotNull { line ->
+                val idx = line.indexOf('\u001F')
+                if (idx <= 0 || idx >= line.length - 1) null
+                else line.substring(0, idx) to line.substring(idx + 1)
+            }
+        // Keep the most recent entries when the cap is exceeded: an old turn will
+        // never be re-read anyway, so dropping those loses nothing.
+        return pairs.takeLast(limit).toMap()
+    }
+
+    suspend fun setAnnouncedTurns(seen: Map<String, String>, limit: Int = 200) {
+        val encoded = seen.toList()
+            .takeLast(limit)
+            .joinToString("\n") { "${it.first}\u001F${it.second}" }
+        context.dataStore.edit { it[Keys.ANNOUNCED_TURNS] = encoded }
     }
 
     /**

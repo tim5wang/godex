@@ -180,28 +180,30 @@ class WatchSyncWorker(
 }
 
 /**
- * Announces sessions that stopped running since the last check.
+ * Announces turns that finished since the last check.
  *
  * Shared by the foreground poller and the background worker on purpose. Both
  * observe the same transitions from opposite sides of the app's visibility, so
  * with separate bookkeeping a task finishing while the app was open would be
  * announced by the in-app poller and then announced again by the next background
- * run — on a wrist, a second buzz for something already read. The previous
- * running set is persisted rather than kept in memory because the worker's process
- * may be started fresh, and an empty in-memory set would make every idle session
- * look like it had just finished.
+ * run — on a wrist, a second buzz for something already read. The bookkeeping is
+ * persisted rather than kept in memory because the worker's process may be started
+ * fresh, and empty in-memory state would make every idle session look new.
  *
- * Edge-triggered: only sessions that *were* running and now are not. A session that
- * is merely idle is the normal case and must not alert.
+ * **Turn-level, not running-level.** The previous rule was "was running, now is
+ * not". That cannot see a turn that starts and ends between two checks: the node
+ * reports running=false both times, so the transition never appears. On a watch the
+ * background cadence is tens of minutes, so that silently excluded most turns —
+ * precisely the case the user asked about (a reply arrives while the app is in the
+ * background and nothing alerts). The node now sends the newest turn id and its
+ * status, so a turn is announced when it reaches a terminal status and its id has
+ * not been announced before. This also fixes the opposite error: a turn that is
+ * already finished the first time the watch ever sees a session is not announced,
+ * because there is no evidence the user was waiting for it.
  *
  * A session that dropped out of the list is deliberately NOT announced: the list is
- * paginated, so absence proves nothing about whether the task finished or merely
- * aged out. Announcing from absence would be inventing a fact, so the id is simply
- * forgotten and only an observed running→idle transition is reported.
- *
- * A task that starts and finishes entirely between two checks is not announced — an
- * inherent limit of a battery-safe cadence, and preferable to polling hard enough
- * to catch every short task.
+ * paginated, so absence proves nothing about whether the turn finished or merely
+ * aged out. Announcing from absence would be inventing a fact.
  */
 suspend fun announceFinishedSessions(
     context: Context,
@@ -209,22 +211,52 @@ suspend fun announceFinishedSessions(
     store: WatchStore,
     notifyEnabled: Boolean,
 ) {
-    // Only ids present in this read can be classified, so both sets are derived from
-    // the same list.
-    val runningNow = sessions.filter { it.running }.map { it.sessionId }.toSet()
     val previouslyRunning = store.runningSessions()
+    val announced = store.announcedTurns().toMutableMap()
 
-    if (notifyEnabled) {
-        (previouslyRunning - runningNow).forEach { finishedId ->
-            val session = sessions.firstOrNull { it.sessionId == finishedId } ?: return@forEach
-            WearNotifier.notifyComplete(context, session.title, finishedId)
+    // Sessions whose turn we have never seen are only recorded, never announced:
+    // a session appearing in the list for the first time may well have finished
+    // hours ago, and buzzing for that would be inventing a fact. A session counts
+    // as "known" if it was running at the last check or if we already recorded a
+    // turn for it.
+    val known = previouslyRunning + announced.keys
+    var announcedChanged = false
+
+    sessions.forEach { session ->
+        val turnId = session.lastTurnId?.takeIf { it.isNotBlank() } ?: return@forEach
+        val previousTurn = announced[session.sessionId]
+
+        if (session.lastTurnFinished && turnId != previousTurn) {
+            // Only alert for a turn we watched in flight — i.e. the session was
+            // running at the last check, or we had already seen one of its turns.
+            val watched = session.sessionId in known
+            if (notifyEnabled && watched) {
+                val failed = session.lastTurnStatus == "failed"
+                WearNotifier.notifyTurnFinished(
+                    context = context,
+                    sessionTitle = session.title,
+                    sessionId = session.sessionId,
+                    failed = failed,
+                )
+            }
+            announced[session.sessionId] = turnId
+            announcedChanged = true
+        } else if (session.running && turnId != previousTurn) {
+            // Remember the turn as soon as it is in flight, so that a turn which
+            // finishes before the next check is still recognised as one we saw
+            // start. This is what makes short turns announceable at all.
+            announced[session.sessionId] = turnId
+            announcedChanged = true
         }
     }
 
-    // Recorded whether or not the user wants completion alerts: the running set is
-    // state, not a notification preference, and skipping it would make the next
-    // check treat a still-running task as newly finished. Written only when it
-    // actually changed, because the foreground poller calls this every 10–90s and
-    // an unconditional DataStore write per poll is needless flash I/O on a watch.
+    // Recorded whether or not the user wants completion alerts: this is state, not
+    // a notification preference, and skipping it would make the next check treat
+    // an already-announced turn as new. Written only when it actually changed,
+    // because the foreground poller calls this every 10–90s and an unconditional
+    // DataStore write per poll is needless flash I/O on a watch.
+    if (announcedChanged) store.setAnnouncedTurns(announced)
+
+    val runningNow = sessions.filter { it.running }.map { it.sessionId }.toSet()
     if (runningNow != previouslyRunning) store.setRunningSessions(runningNow)
 }

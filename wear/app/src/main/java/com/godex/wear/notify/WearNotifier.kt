@@ -37,6 +37,17 @@ object WearNotifier {
     /** The ongoing "a task is running" card. Silent: it is ambient, not an alert. */
     const val CHANNEL_TASK = "godex_task"
 
+    /**
+     * Turn finished / failed.
+     *
+     * Separate from [CHANNEL_TASK] because that one is IMPORTANCE_LOW, and a
+     * completion posted there never vibrated or made a sound — so "the reply came
+     * back" was silent unless the user happened to be looking at the screen. A
+     * completion is the one event the watch exists to deliver, so it gets its own
+     * alerting channel.
+     */
+    const val CHANNEL_COMPLETE = "godex_complete"
+
     private const val ONGOING_NOTIFICATION_ID = 41
     private const val APPROVAL_NOTIFICATION_ID = 42
     private const val COMPLETE_NOTIFICATION_ID = 43
@@ -73,8 +84,23 @@ object WearNotifier {
             setShowBadge(false)
         }
 
+        // IMPORTANCE_DEFAULT + vibration: a finished turn is what the user is
+        // waiting for, so it must reach the wrist even with the app in the
+        // background. Not HIGH — it is informational, and the approval channel
+        // stays the only interrupting one.
+        val complete = NotificationChannel(
+            CHANNEL_COMPLETE,
+            "任务完成",
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = "对话返回、任务完成或失败"
+            enableVibration(true)
+            setShowBadge(true)
+        }
+
         manager.createNotificationChannel(approvals)
         manager.createNotificationChannel(task)
+        manager.createNotificationChannel(complete)
     }
 
     // ---- mockup 08: approval notification with executable actions ----
@@ -129,21 +155,36 @@ object WearNotifier {
         runCatching { NotificationManagerCompat.from(context).cancel(APPROVAL_NOTIFICATION_ID) }
     }
 
-    // ---- mockup 08: "task finished" notification ----
+    // ---- mockup 08: "turn finished" notification ----
 
     /**
-     * Tells the user a task they were waiting on has finished.
+     * Tells the user a turn they were waiting on has finished.
      *
-     * Separate id from the approval ducement so a completion never silently
+     * Distinct id from the approval notification so a completion never silently
      * replaces a pending approval — the approval is the actionable one.
+     *
+     * Posted on [CHANNEL_COMPLETE], not [CHANNEL_TASK]: the latter is
+     * IMPORTANCE_LOW, so a completion there was delivered silently and the watch
+     * never buzzed — which is precisely the "app in the background, reply came
+     * back, nothing happened" complaint.
+     *
+     * A failed turn is announced as a failure rather than folded into "完成": the
+     * user needs to know to look, and on a wrist the title is often all that is read.
      */
-    fun notifyComplete(context: Context, sessionTitle: String, sessionId: String) {
+    fun notifyTurnFinished(
+        context: Context,
+        sessionTitle: String,
+        sessionId: String,
+        failed: Boolean = false,
+    ) {
         val title = sessionTitle.ifBlank { "会话" }
-        val notification = NotificationCompat.Builder(context, CHANNEL_TASK)
+        val notification = NotificationCompat.Builder(context, CHANNEL_COMPLETE)
             .setSmallIcon(R.drawable.ic_godex)
-            .setContentTitle("任务完成")
+            .setContentTitle(if (failed) "任务失败" else "任务完成")
             .setContentText("$title · 点按看详情")
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(
+                if (failed) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT,
+            )
             // CATEGORY_STATUS: informational, not a call to action that must
             // interrupt. The approval channel remains the interrupting one.
             .setCategory(NotificationCompat.CATEGORY_STATUS)

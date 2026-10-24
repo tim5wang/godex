@@ -13,6 +13,7 @@ import com.godex.wear.data.WatchNode
 import com.godex.wear.data.WatchSession
 import com.godex.wear.data.WatchSessionDetail
 import com.godex.wear.data.WatchStore
+import com.godex.wear.data.WatchTemplate
 import com.godex.wear.data.WatchPreferences
 import com.godex.wear.notify.WearNotifier
 import com.godex.wear.sync.WatchSync
@@ -69,6 +70,8 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         val crossDevice: List<WatchCrossDeviceSession> = emptyList(),
         /** Session ids the user pinned (mockup 13). Order is local, not server. */
         val pinned: Set<String> = emptySet(),
+        /** Presets offered when creating a conversation from the wrist. */
+        val templates: List<WatchTemplate> = emptyList(),
         /** Settings switches (mockup 11). */
         val preferences: WatchPreferences = WatchPreferences(),
     )
@@ -320,6 +323,56 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             store.setTargetDevice(deviceId)
             _state.value = _state.value.copy(targetDeviceId = deviceId)
+        }
+    }
+
+    /**
+     * Loads the presets offered when creating a conversation on the wrist.
+     *
+     * Fetched lazily when the create sheet opens rather than on every refresh:
+     * these are static presets, and a watch should not spend radio time on a list
+     * nobody has asked to see.
+     */
+    fun loadTemplates() {
+        if (_state.value.templates.isNotEmpty()) return
+        viewModelScope.launch {
+            runCatching { api.templates() }
+                .onSuccess { list ->
+                    _state.value = _state.value.copy(templates = list)
+                }
+                .onFailure { err ->
+                    // Not surfaced as an error: the create sheet still works with the
+                    // default preset, and a failed catalogue fetch is not something
+                    // the user can act on.
+                    if (err is WatchApiException && err.isAuthFailure) handleApiError(err)
+                }
+        }
+    }
+
+    /**
+     * Creates a conversation from the wrist and points the remote at it.
+     *
+     * Selecting it immediately is the point: the user tapped "新建" to talk to
+     * something, so leaving the remote on the previous session would make the
+     * next utterance go to the wrong conversation.
+     */
+    fun createSession(templateId: String = "") {
+        viewModelScope.launch {
+            try {
+                val created = api.createSession(templateId = templateId)
+                store.rememberSession(api.baseUrl, created.sessionId)
+                _state.value = _state.value.copy(
+                    currentSessionId = created.sessionId,
+                    detail = null,
+                )
+                _notice.value = Notice("已新建对话")
+                refresh()
+            } catch (err: WatchApiException) {
+                if (err.isAuthFailure) handleApiError(err)
+                else _notice.value = Notice(err.message, isError = true)
+            } catch (err: Exception) {
+                _notice.value = Notice(err.message ?: "新建失败", isError = true)
+            }
         }
     }
 

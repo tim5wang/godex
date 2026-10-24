@@ -40,6 +40,11 @@ import androidx.wear.compose.material.Text
  * Press-and-hold is the primary interaction because it is the only one that works
  * reliably with a gloved or moving hand — but typing stays available for quiet
  * settings, so the screen never becomes a dead end when dictation fails.
+ *
+ * Quick phrases sit alongside both. They exist because the most common things a
+ * user says to an agent on a wrist are one or two words, and saying them out loud
+ * is slower and less reliable than one tap — especially on a noisy street or when
+ * the node's ASR is unavailable.
  */
 @Composable
 fun TalkScreen(
@@ -53,6 +58,7 @@ fun TalkScreen(
 ) {
     var typed by remember { mutableStateOf("") }
     var showKeyboard by remember { mutableStateOf(false) }
+    var showPhrases by remember { mutableStateOf(false) }
 
     RoundScreen {
         // Scrollable for the same reason as Home: on a 227dp round display this
@@ -73,7 +79,26 @@ fun TalkScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            if (showKeyboard) {
+            if (showPhrases) {
+                // Sending is immediate: a two-tap flow (pick, then confirm) would be
+                // slower than simply saying it, which defeats the point of a shortcut.
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(ChipSpacing),
+                ) {
+                    QuickPhrases.forEach { phrase ->
+                        SmallAction(
+                            label = phrase,
+                            highlight = true,
+                            onClick = {
+                                onSendText(phrase)
+                                showPhrases = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            } else if (showKeyboard) {
                 BasicTextField(
                     value = typed,
                     onValueChange = { typed = it },
@@ -141,7 +166,18 @@ fun TalkScreen(
             ) {
                 SmallAction(
                     label = if (showKeyboard) "改回语音" else "改打字",
-                    onClick = { showKeyboard = !showKeyboard },
+                    onClick = {
+                        showKeyboard = !showKeyboard
+                        showPhrases = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                SmallAction(
+                    label = if (showPhrases) "收起常用语" else "常用语",
+                    onClick = {
+                        showPhrases = !showPhrases
+                        showKeyboard = false
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
@@ -149,3 +185,17 @@ fun TalkScreen(
         }
     }
 }
+
+/**
+ * One-tap phrases for the things a user says to an agent most often.
+ *
+ * Kept short and imperative so they read as commands rather than as options, and
+ * fixed rather than configurable: four presets fit on a wrist, and a settings
+ * screen for editing them would cost more taps than typing the phrase.
+ */
+private val QuickPhrases = listOf(
+    "OK",
+    "实施方案",
+    "继续",
+    "继续完成剩余工作",
+)

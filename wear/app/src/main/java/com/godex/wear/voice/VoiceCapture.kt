@@ -6,8 +6,6 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -19,25 +17,22 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Dictation on a watch that may have no on-device speech service.
+ * Dictation capture on a watch.
  *
- * Two paths, in this order:
+ * There is exactly one path: raw [AudioRecord] capture uploaded to the node, which
+ * transcribes it with the voice-engine ASR.
  *
- *  1. **Fast path** — the platform [SpeechRecognizer], used only when the device
- *     actually advertises a recognition service. It keeps audio on-device, which
- *     saves a round-trip and battery.
- *  2. **Main path** — raw capture via [AudioRecord] uploaded to the node, which
- *     transcribes it with the existing voice-engine ASR.
+ * A platform [SpeechRecognizer] "fast path" used to live here behind
+ * hasSpeechRecognizer()/recognitionIntent(). It was removed: nothing called it, so
+ * it could never be taken, and on the target watch it could never work either —
+ * `cmd package query-services -a android.speech.RecognitionService` returns no
+ * services, so no recogniser exists. Keeping it advertised a fallback that both
+ * was unreachable in code and impossible on the device.
  *
- * Why the fallback is the *main* path: the Wear OS emulator used for verification
- * exposes no `RecognitionService` at all, so `SpeechRecognizer` is unusable
- * there and equally absent on any device without a Google or vendor speech
- * stack. [AudioRecord] only needs the microphone hardware, which is always
- * present.
- *
- * [AudioRecord] is used rather than `MediaRecorder` because the engine expects
- * 16 kHz mono PCM, and `MediaRecorder` can only emit container formats
- * (MP4/3GP) that would then need decoding on the node.
+ * [AudioRecord] only needs the microphone hardware, which is always present. It is
+ * used rather than `MediaRecorder` because the engine expects 16 kHz mono PCM, and
+ * `MediaRecorder` can only emit container formats (MP4/3GP) that would then need
+ * decoding on the node.
  */
 class VoiceCapture(private val context: Context) {
 
@@ -57,26 +52,10 @@ class VoiceCapture(private val context: Context) {
 
     private var reader: Thread? = null
 
-    /** True when a platform recogniser exists and can be preferred. */
-    fun hasSpeechRecognizer(): Boolean =
-        runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false)
-
+    /** True when the user has granted the microphone permission. */
     fun hasMicrophonePermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
-
-    /**
-     * Intent for the fast path. Returns null when no recogniser is available so
-     * the caller can go straight to recording.
-     */
-    fun recognitionIntent(): android.content.Intent? {
-        if (!hasSpeechRecognizer()) return null
-        return android.content.Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-        }
-    }
 
     /**
      * Starts capture. Returns false when the microphone is unavailable or the

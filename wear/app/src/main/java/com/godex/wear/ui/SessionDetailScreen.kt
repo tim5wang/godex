@@ -1,6 +1,7 @@
 package com.godex.wear.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -53,6 +56,14 @@ fun SessionDetailScreen(
 ) {
     val listState = rememberScalingLazyListState()
 
+    // The reply preview is capped at 3 lines, which on a round 227dp display is the
+    // whole readable area — so a long answer was permanently unreadable on the wrist.
+    // Tapping it opens the full text on its own scrollable screen. A separate screen
+    // rather than an inline expansion because ScalingLazyColumn would have to
+    // re-layout every following item mid-scroll, which jumps the list under the
+    // user's finger.
+    var fullText by remember { mutableStateOf<String?>(null) }
+
     // Elapsed time ticks locally once per second. The server sends one start
     // timestamp rather than a counter, so a watch that wakes up mid-run still
     // shows the right value without polling for it.
@@ -69,6 +80,43 @@ fun SessionDetailScreen(
         }
     }
 
+    // Full-text reader (see fullText above). Rendered instead of the list rather
+    // than over it: a scrollable overlay on top of a scrollable list makes it
+    // ambiguous which one a rotary turn should move.
+    val openText = fullText
+    if (openText != null) {
+        FullTextScreen(text = openText, onBack = { fullText = null })
+    } else {
+        FullTextBody(
+            listState = listState,
+            detail = detail,
+            sessionId = sessionId,
+            loading = loading,
+            onStop = onStop,
+            onBack = onBack,
+            onTalk = onTalk,
+            speaking = speaking,
+            onSpeak = onSpeak,
+            elapsed = elapsed,
+            onOpenFullText = { fullText = it },
+        )
+    }
+}
+
+@Composable
+private fun FullTextBody(
+    listState: androidx.wear.compose.foundation.lazy.ScalingLazyListState,
+    detail: WatchSessionDetail?,
+    sessionId: String,
+    loading: Boolean,
+    onStop: () -> Unit,
+    onBack: () -> Unit,
+    onTalk: () -> Unit,
+    speaking: Boolean,
+    onSpeak: () -> Unit,
+    elapsed: String,
+    onOpenFullText: (String) -> Unit,
+) {
     ScalingLazyColumn(
         state = listState,
         // See rememberGodexRotaryBehavior: the default behaviour crashes on
@@ -130,8 +178,24 @@ fun SessionDetailScreen(
                             maxLines = 3,
                             overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenFullText(title) },
                         )
+                        // Only offered when there is actually more to see: a
+                        // "read full text" hint on a 2-line reply opens a screen
+                        // identical to what the user is already looking at.
+                        if (title.length > FullTextHintThreshold) {
+                            Text(
+                                text = "点按查看全文",
+                                style = MaterialTheme.typography.caption1,
+                                color = GodexColors.Accent,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onOpenFullText(title) },
+                            )
+                        }
                         Spacer(Modifier.height(4.dp))
                     }
                     val tool = d.currentTool
@@ -242,6 +306,48 @@ fun SessionDetailScreen(
         }
     }
 }
+
+/**
+ * Read a long reply in full.
+ *
+ * Scrollable rather than paginated: a reply can be any length, and paging would
+ * need a "next" tap per screenful on a display that already struggles for room.
+ *
+ * Selection is deliberately not enabled — Wear has no clipboard affordance worth
+ * the gesture conflicts it introduces on a list-free screen.
+ */
+@Composable
+private fun FullTextScreen(text: String, onBack: () -> Unit) {
+    RoundScreen {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+        ) {
+            ScreenTitle("全文", "点按底部返回")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.body1,
+                color = GodexColors.TextPrimary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            SmallAction("返回", onBack, Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/**
+ * Roughly the length at which the 3-line preview certainly truncates.
+ *
+ * A conservative number on purpose: it decides whether to advertise "点按查看全文",
+ * and showing that hint on a reply already fully visible would open a screen with
+ * nothing new on it.
+ */
+private const val FullTextHintThreshold = 60
 
 /** One plan entry: marker + text, wrapped so long steps stay readable. */
 @Composable

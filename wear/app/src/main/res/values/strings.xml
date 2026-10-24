@@ -214,6 +214,10 @@
     <string name="tile_active">%1$d running</string>
     <string name="tile_tap_open">Tap to open</string>
     <string name="tile_observed_at">as of %1$s</string>
+    <string name="wf_running">Running</string>
+    <string name="wf_pending">Approvals</string>
+    <string name="wf_nodes">Nodes</string>
+    <string name="wf_device">Device</string>
 
     <!-- One-shot notices raised by the ViewModel. -->
     <string name="vm_created">New chat created</string>

@@ -36,6 +36,7 @@ import com.godex.wear.ui.HomeScreen
 import com.godex.wear.ui.PairingScreen
 import com.godex.wear.ui.RoundScreen
 import com.godex.wear.ui.ScreenTitle
+import com.godex.wear.ui.WatchFaceScreen
 import com.godex.wear.ui.SessionDetailScreen
 import com.godex.wear.ui.SessionsScreen
 import com.godex.wear.ui.SettingsScreen
@@ -110,6 +111,16 @@ private sealed interface Screen {
      * transcript into it would push the controls off the first screen.
      */
     data object History : Screen
+
+    /**
+     * Full mockup 01 face: ring, four complications, big clock.
+     *
+     * Its own screen rather than a Home section: the complete design does not fit
+     * a 227dp round display alongside the remote-control buttons, and those
+     * buttons are the reason the app exists. Home keeps a compact clock for the
+     * glance; this is the design itself, one tap away.
+     */
+    data object WatchFace : Screen
 
     /** Unified list across every node this center can see (mockup 14). */
     data object CrossDevice : Screen
@@ -256,6 +267,16 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     onRefresh = vm::refresh,
                     onDetail = { screen = Screen.Detail },
                     onSettings = { screen = Screen.Settings },
+                    onWatchFace = { screen = Screen.WatchFace },
+                )
+
+                Screen.WatchFace -> WatchFaceScreen(
+                    detail = state.detail,
+                    sessions = state.sessions,
+                    approvals = state.approvals,
+                    nodes = state.nodes,
+                    targetDeviceId = state.targetDeviceId,
+                    onBack = { screen = Screen.Home },
                 )
 
                 Screen.Talk -> TalkScreen(

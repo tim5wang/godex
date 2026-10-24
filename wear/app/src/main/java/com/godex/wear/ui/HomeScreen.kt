@@ -40,6 +40,7 @@ fun HomeScreen(
     onRefresh: () -> Unit,
     onDetail: () -> Unit,
     onSettings: () -> Unit,
+    onWatchFace: () -> Unit = {},
 ) {
     val detail = state.detail
     val session = state.sessions.firstOrNull { it.sessionId == state.currentSessionId }
@@ -61,13 +62,12 @@ fun HomeScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            // The clock face lives at the top of Home rather than on its own
-            // screen: a wrist glance is "what time is it, and is anything waiting
-            // for me?" — answering the first question should not cost a tap, and
-            // splitting them would mean the user opens GoDex and still has to
-            // find a clock. The app name it replaces was already obvious from the
-            // icon the user just tapped.
-            ClockFace()
+            // Compact clock at the top of Home: a wrist glance is "what time is it,
+            // and is anything waiting for me?", so the first question must not cost
+            // a tap. The full mockup 01 face (ring + four complications) is one tap
+            // away — it does not fit here alongside the remote-control buttons, and
+            // those buttons are the reason the app exists.
+            ClockCompact(onOpenFace = onWatchFace)
 
             Spacer(Modifier.height(6.dp))
             when {

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -270,14 +271,29 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     onWatchFace = { screen = Screen.WatchFace },
                 )
 
-                Screen.WatchFace -> WatchFaceScreen(
-                    detail = state.detail,
-                    sessions = state.sessions,
-                    approvals = state.approvals,
-                    nodes = state.nodes,
-                    targetDeviceId = state.targetDeviceId,
-                    onBack = { screen = Screen.Home },
-                )
+                Screen.WatchFace -> {
+                    // The dial has no visible back button, so the system gesture has to
+                    // land somewhere sensible. Without this, back from the face fell
+                    // straight through to the shell and dropped the user out of the
+                    // app entirely (measured on the device: back resumed
+                    // com.xiaomi.miwear.home, not Home). One level back, not exit.
+                    BackHandler { screen = Screen.Home }
+                    WatchFaceScreen(
+                        detail = state.detail,
+                        sessions = state.sessions,
+                        approvals = state.approvals,
+                        nodes = state.nodes,
+                        targetDeviceId = state.targetDeviceId,
+                        onBack = { screen = Screen.Home },
+                        // Each corner opens exactly what it counts. Wiring them to real
+                        // destinations rather than letting them all fall through to
+                        // "back": a widget that shows "1 运行中" and then just leaves
+                        // the screen would be a dead control pretending to be a button.
+                        onRunning = { screen = Screen.Detail },
+                        onPending = { screen = Screen.Approvals },
+                        onDevice = { screen = Screen.Devices },
+                    )
+                }
 
                 Screen.Talk -> TalkScreen(
                     sessionTitle = state.sessions

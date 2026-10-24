@@ -203,6 +203,12 @@
     <string name="wf_pending">待审批</string>
     <string name="wf_nodes">节点在线</string>
     <string name="wf_device">当前设备</string>
+    <!-- 表盘隐形点击区的无障碍标签 -->
+    <string name="wf_action_running">打开运行中任务</string>
+    <string name="wf_action_pending">打开待审批</string>
+    <string name="wf_action_nodes">打开设备列表</string>
+    <string name="wf_action_device">打开设备列表</string>
+    <string name="wf_action_back">返回首页</string>
 
     <!-- 一次性提示（ViewModel） -->
     <string name="vm_created">已新建对话</string>

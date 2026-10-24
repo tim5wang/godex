@@ -2,6 +2,7 @@ package com.godex.wear.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -137,6 +139,11 @@ fun WatchFace(
     progress: Int = 0,
     hasRunning: Boolean = false,
     read: Boolean = false,
+    onRunning: (() -> Unit)? = null,
+    onPending: (() -> Unit)? = null,
+    onNodes: (() -> Unit)? = null,
+    onDevice: (() -> Unit)? = null,
+    onClock: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val (time, date) = rememberClock()
@@ -185,9 +192,23 @@ fun WatchFace(
             drawLine(tick, Offset(center.x + inner, center.y), Offset(center.x + outer, center.y), tickWidth)
         }
 
-        // Centre: big time over the date.
+        // Centre: big time over the date. Tapping it leaves the face, so a hidden
+        // target exists even for the "go back" action that used to be a visible
+        // button under the dial.
         Column(
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .then(
+                    if (onClock != null) {
+                        Modifier.hiddenTap(
+                            label = stringResource(R.string.wf_action_back),
+                            onClick = onClock,
+                        )
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
@@ -206,32 +227,62 @@ fun WatchFace(
             }
         }
 
-        // Four corner complications, matching the mockup's slot positions.
+        // Four corner complications, matching the mockup's slot positions. Each is
+        // also a hidden tap target: the dial carries no visible chrome, so these
+        // corners are how the face becomes navigable (see the mockup's own
+        // interaction notes — the widgets there are tappable too).
         ComplicationSlot(
             value = if (read) running.toString() else "–",
             label = stringResource(R.string.wf_running),
             accent = if (read && running > 0) Color(0xFF38BDF8) else GodexColors.TextMuted,
+            action = stringResource(R.string.wf_action_running),
+            onClick = onRunning,
             modifier = Modifier.align(Alignment.TopStart).padding(start = 18.dp, top = 30.dp),
         )
         ComplicationSlot(
             value = if (read) pending.toString() else "–",
             label = stringResource(R.string.wf_pending),
             accent = if (read && pending > 0) Color(0xFFEF4444) else GodexColors.TextMuted,
+            action = stringResource(R.string.wf_action_pending),
+            onClick = onPending,
             modifier = Modifier.align(Alignment.TopEnd).padding(end = 18.dp, top = 30.dp),
         )
         ComplicationSlot(
             value = if (read) "$nodesOnline/$nodesTotal" else "–",
             label = stringResource(R.string.wf_nodes),
             accent = if (read && nodesOnline > 0) Color(0xFF22C55E) else GodexColors.TextMuted,
+            action = stringResource(R.string.wf_action_nodes),
+            onClick = onNodes,
             modifier = Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 30.dp),
         )
         ComplicationSlot(
             value = if (read) deviceName.ifBlank { "–" } else "–",
             label = stringResource(R.string.wf_device),
             accent = if (read) Color(0xFF38BDF8) else GodexColors.TextMuted,
+            action = stringResource(R.string.wf_action_device),
+            onClick = onDevice,
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 30.dp),
         )
     }
+}
+
+/**
+ * A tap target with nothing drawn for it.
+ *
+ * `indication = null` removes the ripple, which is the whole point: the dial keeps
+ * its clean look and the zones are found by tapping the widget that already
+ * carries the information. The interaction source is still supplied so the click
+ * behaves normally, and [label] is delivered to accessibility services — an
+ * invisible button with no label would be unusable with a screen reader.
+ */
+private fun Modifier.hiddenTap(label: String, onClick: () -> Unit): Modifier = composed {
+    val interaction = remember { MutableInteractionSource() }
+    clickable(
+        interactionSource = interaction,
+        indication = null,
+        onClickLabel = label,
+        onClick = onClick,
+    )
 }
 
 /**
@@ -245,10 +296,19 @@ private fun ComplicationSlot(
     value: String,
     label: String,
     accent: Color,
+    action: String? = null,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier,
+        modifier = modifier
+            .then(
+                if (onClick != null && action != null) Modifier.hiddenTap(action, onClick)
+                else Modifier
+            )
+            // Inside the tap target, so the padding enlarges what can be hit
+            // without moving the widget away from the mockup's slot position.
+            .padding(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -291,6 +351,9 @@ fun WatchFaceScreen(
     nodes: List<com.godex.wear.data.WatchNode>,
     targetDeviceId: String,
     onBack: () -> Unit,
+    onRunning: () -> Unit = onBack,
+    onPending: () -> Unit = onBack,
+    onDevice: () -> Unit = onBack,
 ) {
     val device = nodes.firstOrNull { it.id == targetDeviceId }?.name.orEmpty()
     val online = nodes.count { it.status.equals("online", ignoreCase = true) }
@@ -299,27 +362,27 @@ fun WatchFaceScreen(
     // refresh every slot shows a dash instead of claiming zero.
     val read = nodes.isNotEmpty() || sessions.isNotEmpty() || approvals.isNotEmpty()
 
+    // The dial fills the screen with no chrome, per the mockup. Every action is a
+    // hidden tap zone on the widget that already carries the information: centre
+    // leaves, corners open what they count. This replaces the visible 返回 button
+    // that used to sit under the dial — it broke the illusion the face is trying to
+    // create, and a watch face has no buttons in the first place.
     RoundScreen {
-        Column(
+        WatchFace(
+            running = running,
+            pending = approvals.size,
+            nodesOnline = online,
+            nodesTotal = nodes.size,
+            deviceName = device,
+            progress = if (detail?.running == true) detail.progressPercent else 0,
+            hasRunning = running > 0,
+            read = read,
+            onRunning = onRunning,
+            onPending = onPending,
+            onNodes = onDevice,
+            onDevice = onDevice,
+            onClock = onBack,
             modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            WatchFace(
-                running = running,
-                pending = approvals.size,
-                nodesOnline = online,
-                nodesTotal = nodes.size,
-                deviceName = device,
-                progress = if (detail?.running == true) detail.progressPercent else 0,
-                hasRunning = running > 0,
-                read = read,
-            )
-            Spacer(Modifier.height(4.dp))
-            SmallAction(
-                stringResource(R.string.common_back),
-                onBack,
-                Modifier.fillMaxWidth(),
-            )
-        }
+        )
     }
 }

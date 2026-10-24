@@ -190,13 +190,13 @@ case "$cmd" in
       echo "  接口: ${iface:-?}   网关: ${gw:-直连}"
       case "$iface" in
         utun*|ppp*|ipsec*)
-          echo "  ✘ 流量被 VPN 隧道（$iface）劫持 → adb 无法到达设备。"
+          echo "  ✘ 流量被 VPN 隧道（${iface}）劫持 → adb 无法到达设备。"
           echo "    解法：① 改用手机热点（Mac+手表同热点，绕开被抢占网段）"
           echo "          ② sudo route add -host $host -interface en0（需密码，VPN 重连后失效）"
           echo "          ③ 临时断开公司 VPN"
           ;;
         en*|bridge*)
-          echo "  ✔ 走本机网卡 $iface（路由正常）"
+          echo "  ✔ 走本机网卡 ${iface}（路由正常）"
           ;;
         "")
           echo "  ? 未取到接口（主机名解析或网络不可用）"

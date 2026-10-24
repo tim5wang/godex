@@ -185,15 +185,23 @@ object WearNotifier {
             .setOnlyAlertOnce(true)
             .setSilent(true)
 
-        val ongoing = OngoingActivity.Builder(context, ONGOING_NOTIFICATION_ID, notification)
-            .setStaticIcon(R.drawable.ic_godex)
-            .setTitle(title)
-            .setTouchIntent(openIntent(context, detail.sessionId))
-            .setContentDescription(progressText(detail))
-            .setStatus(statusFor(detail))
-            .build()
-
-        runCatching { ongoing.apply(context) }
+        // build() validates its own inputs and throws IllegalArgumentException when a
+        // static icon or touch intent is missing, and openIntent ultimately calls
+        // PendingIntent.getActivity, which can fail on an overloaded intent. This
+        // runs inside a ViewModel coroutine whose catch handles only
+        // WatchApiException, so an escaping throw here would take the screen down
+        // over a cosmetic live card. The card is advisory: failing to post it must
+        // never be fatal.
+        runCatching {
+            OngoingActivity.Builder(context, ONGOING_NOTIFICATION_ID, notification)
+                .setStaticIcon(R.drawable.ic_godex)
+                .setTitle(title)
+                .setTouchIntent(openIntent(context, detail.sessionId))
+                .setContentDescription(progressText(detail))
+                .setStatus(statusFor(detail))
+                .build()
+                .apply(context)
+        }
     }
 
     /**

@@ -98,25 +98,33 @@ class VoicePlayback {
         if (minBuffer <= 0) return@withContext false
 
         val bufferSize = maxOf(minBuffer, format.dataOffset.let { format.dataSize })
-        val player = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    // SPEECH + ASSISTANCE_SONIFICATION: this is spoken feedback, not
-                    // media, so the system routes/ducks it as such.
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(encoding)
-                    .setSampleRate(format.sampleRate)
-                    .setChannelMask(channelMask)
-                    .build(),
-            )
-            .setBufferSizeInBytes(bufferSize)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
+        // Construction must be inside the guard: AudioTrack.Builder.build() throws
+        // IllegalArgumentException / UnsupportedOperationException when the device
+        // cannot honour the requested sample rate, channel mask or encoding — a
+        // 48 kHz stereo reply from a different node is enough. Building it outside
+        // the try turned an unplayable reply into a crash of the whole screen,
+        // where the correct behaviour is simply to stay silent.
+        val player = runCatching {
+            AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        // SPEECH + ASSISTANCE_SONIFICATION: this is spoken feedback, not
+                        // media, so the system routes/ducks it as such.
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(encoding)
+                        .setSampleRate(format.sampleRate)
+                        .setChannelMask(channelMask)
+                        .build(),
+                )
+                .setBufferSizeInBytes(bufferSize)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+        }.getOrNull() ?: return@withContext false
 
         try {
             track = player

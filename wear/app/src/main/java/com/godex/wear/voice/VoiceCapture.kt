@@ -42,7 +42,20 @@ import kotlin.math.min
 class VoiceCapture(private val context: Context) {
 
     private var recorder: AudioRecord? = null
-    private var recording = false
+
+    /**
+     * True while the user is holding the button.
+     *
+     * Volatile because the reader thread spins on it: the UI thread clears it on
+     * release, and without visibility the reader can keep blocking in read() with a
+     * stale value and never observe the release.
+     */
+    @Volatile private var recording = false
+
+    /** Filled by the reader thread; published when that thread exits. */
+    @Volatile private var capturedPcm: ByteArray = ByteArray(0)
+
+    private var reader: Thread? = null
 
     /** True when a platform recogniser exists and can be preferred. */
     fun hasSpeechRecognizer(): Boolean =
@@ -91,9 +104,51 @@ class VoiceCapture(private val context: Context) {
             record.startRecording()
             recorder = record
             recording = true
+            // Start consuming immediately. AudioRecord holds only a small ring buffer
+            // (minBuffer * 4 ≈ 160-320ms at 16kHz mono s16); with nobody reading it
+            // overflows and silently discards the oldest audio, so a 3-second press
+            // left well under the 0.25s minimum and was reported as "没有听到声音".
+            // The previous design only read at stop() time, which is far too late.
+            startReader(record)
             true
         }.getOrDefault(false).also { ok ->
             if (!ok) runCatching { record.release() }
+        }
+    }
+
+    /**
+     * Drains the microphone for as long as the button is held.
+     *
+     * This is the only reader: AudioRecord refuses interleaved readers, and the
+     * level meter is not wired to any screen, so there is no second consumer to
+     * coordinate with.
+     */
+    private fun startReader(record: AudioRecord) {
+        capturedPcm = ByteArray(0)
+        reader = Thread({
+            val buffer = ByteArrayOutputStream()
+            val chunk = ByteArray(4096)
+            try {
+                while (recording) {
+                    val read = record.read(chunk, 0, chunk.size)
+                    if (read <= 0) break
+                    buffer.write(chunk, 0, read)
+                }
+                // stop() unblocks read(); take whatever is still queued so the tail
+                // of the utterance is not cut off mid-word.
+                while (true) {
+                    val read = record.read(chunk, 0, chunk.size)
+                    if (read <= 0) break
+                    buffer.write(chunk, 0, read)
+                }
+            } catch (_: Exception) {
+                // Fall through: a partial recording is still worth transcribing.
+            } finally {
+                capturedPcm = buffer.toByteArray()
+            }
+        }, "godex-voice-reader").apply {
+            isDaemon = true
+            start()
         }
     }
 
@@ -106,24 +161,20 @@ class VoiceCapture(private val context: Context) {
         recorder = null
         recording = false
 
-        val pcm = ByteArrayOutputStream()
-        val chunk = ByteArray(4096)
-        try {
-            // Drain whatever is buffered before stopping, otherwise the tail of
-            // the utterance is lost.
-            while (true) {
-                val read = record.read(chunk, 0, chunk.size)
-                if (read <= 0) break
-                pcm.write(chunk, 0, read)
-            }
-        } catch (_: Exception) {
-            // Fall through: a partial recording is still worth transcribing.
-        } finally {
-            runCatching { record.stop() }
-            runCatching { record.release() }
-        }
+        // Release the reader first: record.stop() makes its blocked read() return, so
+        // it can flush the queue and publish capturedPcm. The old implementation
+        // drained here instead, with `while (true) { read() }` while capture was still
+        // running — read() keeps returning >0 as long as the microphone hears
+        // anything, so that loop never ended, stop() never returned, and nothing was
+        // ever uploaded. On the watch this looked like "press starts recording,
+        // releasing does nothing at all" (the AudioRecord threads stayed alive).
+        runCatching { record.stop() }
+        runCatching { reader?.join(1500) }
+        reader = null
+        runCatching { record.release() }
 
-        val bytes = pcm.toByteArray()
+        val bytes = capturedPcm
+        capturedPcm = ByteArray(0)
         // ~0.25s at 16 kHz mono s16; below that it is almost certainly a
         // mis-tap and uploading it would just waste the radio.
         if (bytes.size < SAMPLE_RATE * 2 / 4) return@withContext null
@@ -156,7 +207,10 @@ class VoiceCapture(private val context: Context) {
         val record = recorder ?: return
         recorder = null
         runCatching { record.stop() }
+        runCatching { reader?.join(600) }
+        reader = null
         runCatching { record.release() }
+        capturedPcm = ByteArray(0)
     }
 
     /** Standard 44-byte RIFF/WAVE header for s16 mono PCM. */

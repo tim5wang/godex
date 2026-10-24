@@ -156,6 +156,56 @@ func TestWatchCreateSessionRequiresCommandScope(t *testing.T) {
 	}
 }
 
+// TestWatchCreatedSessionIsListed pins the bug that made "新建对话" look broken.
+//
+// OpenSession deliberately keeps a conversation-less session in memory only, and
+// the list is built from persisted manifests. So POST returned 201 with an id the
+// very next GET could not find. The watch remembers that id as its current
+// session and re-resolves it against the list, so the miss silently fell back to
+// the previous conversation: "已新建对话" and then the old chat still on screen.
+//
+// Both halves are asserted because either alone can pass while the feature is
+// broken: create must answer 201, and the returned id must be listable.
+//
+// ListSessions enumerates only persisted manifests (SessionsDir + the SQLite
+// store), so this passing is itself the proof that the session reached disk — no
+// separate "survives restart" assertion is needed or wanted.
+func TestWatchCreatedSessionIsListed(t *testing.T) {
+	server, _, _ := newWatchTestServer(t)
+	token := pairWatch(t, server, "")
+
+	created := createWatchSession(t, server.URL, token, map[string]any{})
+
+	listed := listWatchSessionIDs(t, server.URL, token)
+	found := false
+	for _, id := range listed {
+		if id == created.SessionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("created session %q missing from list %v", created.SessionID, listed)
+	}
+}
+
+func listWatchSessionIDs(t *testing.T, baseURL, token string) []string {
+	t.Helper()
+	resp, body := getWatch(t, baseURL+"/watch/sessions", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("watch/sessions status=%d body=%s", resp.StatusCode, body)
+	}
+	var items []watchSessionItem
+	if err := json.Unmarshal(body, &items); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.SessionID)
+	}
+	return ids
+}
+
 func createWatchSession(t *testing.T, baseURL, token string, payload map[string]any) watchSessionItem {
 	t.Helper()
 	resp, body := postWatchJSON(t, baseURL+"/watch/sessions", payload, token)

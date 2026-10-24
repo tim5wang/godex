@@ -14,6 +14,56 @@ import (
 	"time"
 )
 
+// EnsureSessionPersisted writes an open session's manifest to disk even when it
+// has no conversation yet.
+//
+// godex normally keeps an empty session in memory only: OpenSession does not
+// touch the disk until the first message arrives, and ListSessions reads
+// persisted manifests, so an empty session stays out of every list. That is
+// deliberate and load-bearing (TestOpenSessionDoesNotListOrPersistEmptySession
+// pins it), so it is not changed here.
+//
+// A caller that has just told the user "session created" needs the opposite
+// property: the thing it returned an id for must be findable. Without this, a
+// create-then-list round trip loses the new session and any client that resolves
+// its selection against the list silently falls back to an older one — the user
+// sees "created" and then lands in the previous conversation.
+//
+// Only the manifest (plus the empty state written by persistSession) is stored:
+// a zero-message session has no timeline, turns or queue to record. The state
+// file still matters — ListSessions backfills titles for untitled sessions and
+// reports a corrupt session when state is absent, so a manifest without state
+// would poison the whole list, not just this entry.
+func (s *Service) EnsureSessionPersisted(ctx context.Context, sessionID string) error {
+	if s == nil {
+		return newSessionNotFoundError(sessionID)
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return newSessionNotFoundError(sessionID)
+	}
+
+	// An in-memory session is the live one; persisting through persistSession keeps
+	// its manifest and identity consistent with what the process holds.
+	s.mu.Lock()
+	session := s.sessions[sessionID]
+	s.mu.Unlock()
+	if session != nil {
+		return s.persistSession(session, s.now())
+	}
+
+	// Not loaded (e.g. created by another process): patch the stored manifest.
+	manifest, err := s.readSessionListManifest(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if manifest == nil {
+		return newSessionNotFoundError(sessionID)
+	}
+	manifest.UpdatedAt = s.now()
+	return s.writeManifest(*manifest)
+}
+
 func (s *Service) persistSession(session *sessionState, updatedAt time.Time) error {
 	state := session.agent.ExportStateForSession(session.id)
 

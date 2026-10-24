@@ -103,6 +103,22 @@ func registerWatchSessionCreateRoutes(mux *http.ServeMux, api watchAPI, read, co
 			return
 		}
 
+		// Persist the empty session before answering 201.
+		//
+		// godex keeps a conversation-less session in memory only, which means
+		// GET /watch/sessions (built from persisted manifests) would not contain the
+		// id we are about to return. The watch stores that id as its current session
+		// and then re-resolves it against the list, so a missing entry silently
+		// redirected the user to the previous conversation — "已新建对话" followed by
+		// the old chat still on screen.
+		//
+		// Failing here is reported as an error rather than swallowed: returning 201
+		// for a session that cannot be listed is exactly the lie being fixed.
+		if err := service.EnsureSessionPersisted(r.Context(), opened.SessionID); err != nil {
+			writeError(w, statusForSessionError(err), err)
+			return
+		}
+
 		// A title is optional: an untitled session is derived from its first user
 		// message, which on a watch is exactly what the user is about to send. Only
 		// an explicit title needs writing.

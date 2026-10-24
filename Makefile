@@ -79,10 +79,22 @@ dev-fast: web-dev
 		&& (./$(APP) service restart $(PPROF_FLAG) 2>/dev/null || (./$(APP) service install && ./$(APP) service start $(PPROF_FLAG)))
 
 ## dev: Full rebuild + service restart (with tsc type-check, legacy)
+# DEV_ADDR defaults to all interfaces so a watch on the same network can reach the
+# node without an adb reverse tunnel. Override to keep it loopback-only:
+#   make dev DEV_ADDR=127.0.0.1:8088
+DEV_ADDR ?= 0.0.0.0:8088
+## NOTE: the reload is install -> stop -> start, not `service restart`.
+# `service restart` only runs `launchctl kickstart -k`, which re-launches the
+# already-loaded job and therefore reuses the OLD plist — changing --addr would
+# silently not take effect. `install` rewrites the plist, but launchd caches the
+# loaded definition, so it also has to be booted out and bootstrapped again for
+# the new listen address to apply.
 dev: web
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(APP).new ./cmd/godex \
 		&& mv $(APP).new $(APP) \
-		&& (./$(APP) service restart $(PPROF_FLAG) 2>/dev/null || (./$(APP) service install && ./$(APP) service start $(PPROF_FLAG)))
+		&& (./$(APP) service install --addr $(DEV_ADDR) \
+			&& (./$(APP) service stop 2>/dev/null || true) \
+			&& ./$(APP) service start $(PPROF_FLAG))
 
 ## dev-voice: Start local voice-engine, rebuild/restart Godex, and supervise the engine until Ctrl-C
 VOICE_ENGINE_DIR ?= ../voice-engine

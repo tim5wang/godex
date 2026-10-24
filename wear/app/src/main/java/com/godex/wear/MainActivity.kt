@@ -31,6 +31,7 @@ import com.godex.wear.ui.ApprovalsScreen
 import com.godex.wear.ui.CrossDeviceScreen
 import com.godex.wear.ui.DevicesScreen
 import com.godex.wear.ui.GodexWearTheme
+import com.godex.wear.ui.HistoryScreen
 import com.godex.wear.ui.HomeScreen
 import com.godex.wear.ui.PairingScreen
 import com.godex.wear.ui.RoundScreen
@@ -101,6 +102,15 @@ private sealed interface Screen {
     /** Task detail for the session the remote control is pointed at (mockup 05). */
     data object Detail : Screen
 
+    /**
+     * Multi-turn conversation history for the current session.
+     *
+     * A separate screen rather than a section inside Detail: Detail is the
+     * at-a-glance view (progress, plan, stop), and mixing a long scrollable
+     * transcript into it would push the controls off the first screen.
+     */
+    data object History : Screen
+
     /** Unified list across every node this center can see (mockup 14). */
     data object CrossDevice : Screen
 
@@ -124,6 +134,11 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
     // key below: the detail screen renders it, and collecting inside a navigation
     // branch makes the subscription depend on which screen is showing.
     val speaking by vm.speaking.collectAsState()
+    // Conversation history. Hoisted for the same reason as `speaking`: the
+    // navigation branch reads it, and collecting inside a branch makes the
+    // subscription depend on which screen is showing.
+    val history by vm.history.collectAsState()
+    val historyLoading by vm.historyLoading.collectAsState()
     // Hoisted rather than collected inside the navigation branch: collecting state
     // conditionally is fragile (the subscription depends on which screen is
     // showing) and the approval detail screen re-resolves against it.
@@ -282,6 +297,19 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     onTalk = { screen = Screen.Talk },
                     speaking = speaking,
                     onSpeak = vm::speakLatestReply,
+                    onHistory = {
+                        // Load on navigation, not on composition of the history
+                        // screen itself: keeping the fetch with the action that
+                        // requests it means the screen stays a pure renderer.
+                        vm.loadHistory(state.currentSessionId)
+                        screen = Screen.History
+                    },
+                )
+
+                Screen.History -> HistoryScreen(
+                    messages = history,
+                    loading = historyLoading,
+                    onBack = { screen = Screen.Detail },
                 )
 
                 Screen.CrossDevice -> CrossDeviceScreen(

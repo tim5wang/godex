@@ -92,6 +92,15 @@
     <string name="detail_full_text_title">全文</string>
     <string name="detail_full_text_hint">点按底部返回</string>
     <string name="detail_in_progress"> · 进行中</string>
+    <string name="detail_history">历史消息</string>
+    <string name="history_title">历史消息</string>
+    <string name="history_count">%1$d 条消息</string>
+    <string name="history_loading_detail">正在读取对话</string>
+    <string name="history_empty">暂无历史</string>
+    <string name="history_empty_detail">还没开始对话</string>
+    <string name="history_you">我</string>
+    <string name="history_agent">助手</string>
+    <string name="history_truncated">点按查看全文</string>
 
     <!-- 审批 -->
     <string name="approvals_title">待批准</string>
@@ -217,4 +226,5 @@
     <string name="vm_no_transcript">没有识别出内容</string>
     <string name="vm_transcribe_failed">转写失败</string>
     <string name="vm_credential_revoked">配对已失效，请重新配对</string>
+    <string name="vm_history_failed">历史消息加载失败</string>
 </resources>

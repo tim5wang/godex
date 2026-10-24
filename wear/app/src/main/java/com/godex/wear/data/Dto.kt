@@ -314,3 +314,33 @@ data class CreateSessionRequest(
 /** Server error envelope; godex returns `{"error": "..."}` on failures. */
 @Serializable
 data class ErrorBody(val error: String = "")
+
+/**
+ * One turn of the conversation, as returned by `GET /watch/sessions/{id}/messages`.
+ *
+ * `truncated` means the node cut the text to fit a wrist. It is carried rather
+ * than inferred from a trailing ellipsis because the message itself may end in
+ * one, and showing a cut reply as if it were complete is the one thing a
+ * history view must not do.
+ */
+@Serializable
+data class WatchHistoryMessage(
+    val role: String = "",
+    val text: String = "",
+    val timestamp: String? = null,
+    val truncated: Boolean = false,
+) {
+    val isUser: Boolean get() = role == "user"
+}
+
+/**
+ * The recent conversation, oldest first.
+ *
+ * `messages` defaults to an empty list so a node that omits the field for a
+ * brand-new session still decodes instead of failing the whole screen.
+ */
+@Serializable
+data class WatchHistory(
+    @SerialName("session_id") val sessionId: String = "",
+    val messages: List<WatchHistoryMessage> = emptyList(),
+)

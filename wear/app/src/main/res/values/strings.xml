@@ -107,6 +107,15 @@
     <string name="detail_full_text_title">Full text</string>
     <string name="detail_full_text_hint">Tap Back below</string>
     <string name="detail_in_progress"> · in progress</string>
+    <string name="detail_history">History</string>
+    <string name="history_title">History</string>
+    <string name="history_count">%1$d messages</string>
+    <string name="history_loading_detail">Reading the conversation</string>
+    <string name="history_empty">No history</string>
+    <string name="history_empty_detail">Nothing has been said yet</string>
+    <string name="history_you">You</string>
+    <string name="history_agent">Agent</string>
+    <string name="history_truncated">Tap to read in full</string>
 
     <!-- Approvals. -->
     <string name="approvals_title">Approvals</string>
@@ -232,4 +241,5 @@
     <string name="vm_no_transcript">Could not make out any words</string>
     <string name="vm_transcribe_failed">Transcription failed</string>
     <string name="vm_credential_revoked">Pairing is no longer valid, pair again</string>
+    <string name="vm_history_failed">Could not load history</string>
 </resources>

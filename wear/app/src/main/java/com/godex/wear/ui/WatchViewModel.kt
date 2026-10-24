@@ -9,6 +9,7 @@ import com.godex.wear.data.WatchApiException
 import com.godex.wear.data.WatchApproval
 import com.godex.wear.data.WatchCrossDeviceSession
 import com.godex.wear.data.WatchDevice
+import com.godex.wear.data.WatchHistoryMessage
 import com.godex.wear.data.WatchNode
 import com.godex.wear.data.WatchSession
 import com.godex.wear.data.WatchSessionDetail
@@ -56,6 +57,20 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     /** True while a reply is being spoken, so the button can offer to stop it. */
     private val _speaking = MutableStateFlow(false)
     val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
+
+    /**
+     * Recent conversation, loaded on demand when the user opens history.
+     *
+     * Not part of [UiState]: that object is replaced wholesale on every
+     * background poll, and folding the conversation into it would either get
+     * cleared by each refresh or force the poll to carry it. History only changes
+     * when a turn completes, so it is fetched when asked for.
+     */
+    private val _history = MutableStateFlow<List<WatchHistoryMessage>>(emptyList())
+    val history: StateFlow<List<WatchHistoryMessage>> = _history.asStateFlow()
+
+    private val _historyLoading = MutableStateFlow(false)
+    val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
 
     /**
      * Resolves a UI string.
@@ -561,6 +576,38 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openApproval(item: WatchApproval) {
         _openApprovalKey.value = item.key
+    }
+
+    /**
+     * Loads the recent conversation for the current session.
+     *
+     * Re-reads even when the list is already populated rather than trusting the
+     * cached copy: the user opening history usually does so right after a turn
+     * finished, which is exactly when the cache is stale. An empty result is kept
+     * as an empty list (not an error) so the screen can say "nothing yet" instead
+     * of showing a failure for a brand-new session.
+     */
+    fun loadHistory(sessionId: String) {
+        if (sessionId.isBlank()) return
+        viewModelScope.launch {
+            _historyLoading.value = true
+            try {
+                val loaded = api.sessionHistory(sessionId)
+                _history.value = loaded.messages
+            } catch (err: WatchApiException) {
+                if (err.isAuthFailure) {
+                    handleApiError(err)
+                } else {
+                    _history.value = emptyList()
+                    _notice.value = Notice(err.message, isError = true)
+                }
+            } catch (err: Exception) {
+                _history.value = emptyList()
+                _notice.value = Notice(err.message ?: string(R.string.vm_history_failed), isError = true)
+            } finally {
+                _historyLoading.value = false
+            }
+        }
     }
 
     /**

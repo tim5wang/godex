@@ -178,6 +178,18 @@ class WatchApi(
         Request.Builder().url(url("/watch/sessions/$sessionId")).get()
     }
 
+    /**
+     * The recent conversation for a session.
+     *
+     * A separate call from sessionDetail rather than a field on it: detail is
+     * polled in the background, and re-shipping the whole history on every poll
+     * would cost battery for content nobody is looking at. History is fetched
+     * only when the user opens it.
+     */
+    suspend fun sessionHistory(sessionId: String, limit: Int = 12): WatchHistory = call {
+        Request.Builder().url(url("/watch/sessions/$sessionId/messages?limit=$limit")).get()
+    }
+
     suspend fun nodes(): List<WatchNode> = call {
         Request.Builder().url(url("/watch/nodes")).get()
     }

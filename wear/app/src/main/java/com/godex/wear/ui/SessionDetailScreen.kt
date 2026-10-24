@@ -55,6 +55,8 @@ fun SessionDetailScreen(
     onTalk: () -> Unit,
     speaking: Boolean = false,
     onSpeak: () -> Unit = {},
+    /** Opens the multi-turn conversation (see HistoryScreen). */
+    onHistory: () -> Unit = {},
 ) {
     val listState = rememberScalingLazyListState()
 
@@ -104,6 +106,7 @@ fun SessionDetailScreen(
             onSpeak = onSpeak,
             elapsed = elapsed,
             onOpenFullText = { fullText = it },
+            onHistory = onHistory,
         )
     }
 }
@@ -121,6 +124,7 @@ private fun FullTextBody(
     onSpeak: () -> Unit,
     elapsed: String,
     onOpenFullText: (String) -> Unit,
+    onHistory: () -> Unit,
 ) {
     ScalingLazyColumn(
         state = listState,
@@ -297,6 +301,18 @@ private fun FullTextBody(
                             onClick = onTalk,
                         )
                     }
+                    // Multiple turns are usually why the user picks the watch back
+                    // up: the detail only shows the newest reply, so the earlier
+                    // context is otherwise unreachable from the wrist. Enabled
+                    // whenever a session is selected — an empty history is answered
+                    // by the history screen itself, which reads better than a dead
+                    // button.
+                    SmallAction(
+                        label = stringResource(R.string.detail_history),
+                        onClick = onHistory,
+                        enabled = sessionId.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     // Read the reply back (B7). Enabled only when there is a reply
                     // to speak, so a tap is never a dead end; while speaking the same
                     // control stops playback instead of stacking a second clip.
@@ -340,7 +356,7 @@ private fun FullTextBody(
  * the gesture conflicts it introduces on a list-free screen.
  */
 @Composable
-private fun FullTextScreen(text: String, onBack: () -> Unit) {
+internal fun FullTextScreen(text: String, onBack: () -> Unit) {
     RoundScreen {
         Column(
             modifier = Modifier

@@ -245,6 +245,7 @@ func registerWatchRoutes(
 	registerWatchPairingRoutes(mux, api, protected)
 	registerWatchDeviceRoutes(mux, api, protected)
 	registerWatchReadRoutes(mux, api, read)
+	registerWatchHistoryRoute(mux, api, read)
 	registerWatchSessionCreateRoutes(mux, api, read, command)
 	registerWatchOverviewRoute(mux, api, read)
 	registerWatchApprovalRoutes(mux, api, read, approve)

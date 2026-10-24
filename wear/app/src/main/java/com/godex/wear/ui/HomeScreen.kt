@@ -1,6 +1,8 @@
 package com.godex.wear.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,8 +47,17 @@ fun HomeScreen(
     val running = detail?.running ?: session?.running ?: false
 
     RoundScreen {
+        // Scrollable, not a plain Column: this content is taller than a 227dp round
+        // display, and an overflowing Column does not become scrollable — the
+        // children past the bottom edge are never laid out at all, so 设备 / 刷新 /
+        // 设置 were absent from the view hierarchy and no gesture could reach them
+        // (measured on the 454x454 @320dpi emulator = 227dp, which is smaller than
+        // the 240dp target watch). An implemented control the user cannot reach is
+        // indistinguishable from a missing feature.
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {

@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,8 +55,14 @@ fun TalkScreen(
     var showKeyboard by remember { mutableStateOf(false) }
 
     RoundScreen {
+        // Scrollable for the same reason as Home: on a 227dp round display this
+        // content is taller than the viewport, and an overflowing Column never lays
+        // out the children past the bottom edge — 返回 was absent from the view
+        // hierarchy, leaving the system back gesture as the only way off the screen.
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {

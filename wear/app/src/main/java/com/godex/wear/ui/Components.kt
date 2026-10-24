@@ -12,12 +12,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.wear.compose.foundation.lazy.ScalingLazyListState
+import androidx.wear.compose.foundation.rotary.RotaryScrollableBehavior
+import androidx.wear.compose.foundation.rotary.RotaryScrollableDefaults
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.MaterialTheme
@@ -30,6 +34,45 @@ import androidx.wear.compose.material.Text
  * are defined exactly once: on a 454px circular display, a component that works
  * on a rectangular phone silently clips at the edges.
  */
+
+/**
+ * Rotary-scroll behaviour for the list screens.
+ *
+ * `androidx.wear.compose:compose-foundation` 1.4.0 resolves its rotary haptics
+ * constants through `com.google.wear.input.WearHapticFeedbackConstants`, a class
+ * that ships with Google Play services. On a watch without GMS — the target
+ * China-market device — that class is absent, so the first `ScalingLazyColumn`
+ * composition throws `NoClassDefFoundError` and the screen dies. That is every
+ * list screen in this app (7 of them), which is why the app looked broken on
+ * hardware while it ran fine in the emulator: the emulator is API 30 and takes a
+ * different constants branch, the watch is API 34 and reaches the GMS-backed one.
+ *
+ * Passing a behaviour with haptics disabled routes through
+ * `rememberDisabledRotaryHapticHandler`, which never touches that class, so the
+ * list still scrolls (just without the tick feedback) where the constants are
+ * unavailable. Devices that do provide them keep the stock feel, so this does not
+ * trade away the emulator/GMS experience to fix the GMS-less one.
+ */
+@Composable
+fun rememberGodexRotaryBehavior(state: ScalingLazyListState): RotaryScrollableBehavior {
+    val hapticsAvailable = remember {
+        try {
+            Class.forName("com.google.wear.input.WearHapticFeedbackConstants")
+            true
+        } catch (_: ClassNotFoundException) {
+            false
+        } catch (_: LinkageError) {
+            // Present but its own dependencies are not: treat as unavailable
+            // rather than letting the failure surface on first scroll.
+            false
+        }
+    }
+    return RotaryScrollableDefaults.behavior(
+        scrollableState = state,
+        flingBehavior = null,
+        hapticFeedbackEnabled = hapticsAvailable,
+    )
+}
 
 /** Screen scaffold with the padding a round display actually needs. */
 @Composable

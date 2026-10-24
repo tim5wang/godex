@@ -58,6 +58,9 @@ fun SettingsScreen(
 
     ScalingLazyColumn(
         state = listState,
+        // See rememberGodexRotaryBehavior: the default behaviour crashes on
+        // watches without GMS.
+        rotaryScrollableBehavior = rememberGodexRotaryBehavior(listState),
         modifier = Modifier
             .fillMaxSize()
             .background(GodexColors.Background),

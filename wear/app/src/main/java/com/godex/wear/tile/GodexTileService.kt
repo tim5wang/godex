@@ -94,6 +94,11 @@ class GodexTileService : TileService() {
                     ?: getString(R.string.common_unnamed_session),
                 hasSession = current != null,
                 running = current?.running == true,
+                // Formatted with the platform formatter so the 12/24-hour setting
+                // and locale the user chose in system settings are honoured.
+                observedAt = android.text.format.DateFormat
+                    .getTimeFormat(this)
+                    .format(java.util.Date()),
             )
         } catch (err: Exception) {
             TileSummary.Unreachable
@@ -161,6 +166,26 @@ class GodexTileService : TileService() {
                 .build(),
         )
 
+        // Observation time, so a 15-minute-old task status is not read as live.
+        // Only for Ready: the unpaired/unreachable states have no data to date.
+        if (summary is TileSummary.Ready) {
+            column.addContent(
+                LayoutElementBuilders.Text.Builder()
+                    .setText(
+                        androidx.wear.tiles.TypeBuilders.StringProp.Builder()
+                            .setValue(getString(R.string.tile_observed_at, summary.observedAt))
+                            .build(),
+                    )
+                    .setFontStyle(
+                        LayoutElementBuilders.FontStyle.Builder()
+                            .setSize(DimensionBuilders.sp(11f))
+                            .build(),
+                    )
+                    .setMaxLines(1)
+                    .build(),
+            )
+        }
+
         return LayoutElementBuilders.Box.Builder()
             .setWidth(DimensionBuilders.expand())
             .setHeight(DimensionBuilders.expand())
@@ -190,6 +215,17 @@ class GodexTileService : TileService() {
             val sessionTitle: String,
             val hasSession: Boolean,
             val running: Boolean,
+            /**
+             * When these numbers were read, formatted for display.
+             *
+             * The shell will not ask again for [freshnessMillis] (15 minutes), so
+             * the task status on this Tile can be a quarter of an hour old. Showing
+             * a live clock here would be the one thing a glanceable surface must
+             * never do — state it cannot update. Naming the observation time
+             * instead makes the staleness legible: "as of 14:02" is honest, a clock
+             * frozen at 14:02 is a lie.
+             */
+            val observedAt: String,
         ) : TileSummary
     }
 

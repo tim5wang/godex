@@ -61,7 +61,13 @@ fun HomeScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            ScreenTitle(stringResource(R.string.app_name))
+            // The clock face lives at the top of Home rather than on its own
+            // screen: a wrist glance is "what time is it, and is anything waiting
+            // for me?" — answering the first question should not cost a tap, and
+            // splitting them would mean the user opens GoDex and still has to
+            // find a clock. The app name it replaces was already obvious from the
+            // icon the user just tapped.
+            ClockFace()
 
             Spacer(Modifier.height(6.dp))
             when {

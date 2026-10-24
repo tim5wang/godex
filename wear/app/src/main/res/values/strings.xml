@@ -213,6 +213,7 @@
     <string name="tile_tap_view">Tap to view</string>
     <string name="tile_active">%1$d running</string>
     <string name="tile_tap_open">Tap to open</string>
+    <string name="tile_observed_at">as of %1$s</string>
 
     <!-- One-shot notices raised by the ViewModel. -->
     <string name="vm_created">New chat created</string>

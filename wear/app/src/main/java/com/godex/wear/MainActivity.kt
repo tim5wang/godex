@@ -146,6 +146,15 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
 
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
 
+    // Where the compose screen was opened from, so a successful send returns
+    // there instead of always landing on Home.
+    //
+    // Talk has two entry points (Home's 说话, and Detail's 说话 when nothing is
+    // running) and the user's mental model is "I stepped aside to say something,
+    // now put me back". Sending from the detail screen and being dropped on Home
+    // loses the task view they were watching; this keeps the exit reversible.
+    var talkReturnTo by remember { mutableStateOf<Screen>(Screen.Home) }
+
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -237,7 +246,10 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
             else -> when (val current = screen) {
                 Screen.Home -> HomeScreen(
                     state = state,
-                    onTalk = { screen = Screen.Talk },
+                    onTalk = {
+                        talkReturnTo = Screen.Home
+                        screen = Screen.Talk
+                    },
                     onSessions = { screen = Screen.Sessions },
                     onApprovals = { screen = Screen.Approvals },
                     onDevices = { screen = Screen.Devices },
@@ -260,10 +272,18 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                             false
                         }
                     },
-                    onStopRecording = vm::stopRecordingAndSend,
+                    onStopRecording = {
+                        // Leaving the compose screen is tied to the send succeeding:
+                        // a clip that failed to upload or transcribe keeps the user
+                        // where they are, with the error, instead of dropping them
+                        // on a screen that looks like nothing happened.
+                        vm.stopRecordingAndSend(onSent = { screen = talkReturnTo })
+                    },
                     onCancelRecording = vm::cancelRecording,
-                    onSendText = { vm.sendCommand(it) },
-                    onBack = { screen = Screen.Home },
+                    onSendText = { vm.sendCommand(it, onSent = { screen = talkReturnTo }) },
+                    // Explicit back stays explicit: it returns where the user came
+                    // from, but never reports anything as sent.
+                    onBack = { screen = talkReturnTo },
                 )
 
                 Screen.Sessions -> SessionsScreen(
@@ -294,7 +314,10 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     loading = state.loading,
                     onStop = vm::stopCurrentSession,
                     onBack = { screen = Screen.Home },
-                    onTalk = { screen = Screen.Talk },
+                    onTalk = {
+                        talkReturnTo = Screen.Detail
+                        screen = Screen.Talk
+                    },
                     speaking = speaking,
                     onSpeak = vm::speakLatestReply,
                     onHistory = {

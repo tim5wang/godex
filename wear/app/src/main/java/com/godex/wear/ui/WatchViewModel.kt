@@ -494,8 +494,15 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     private fun sessionTitleFor(sessionId: String): String =
         _state.value.sessions.firstOrNull { it.sessionId == sessionId }?.title.orEmpty()
 
-    /** Sends a dictation or typed instruction to the currently selected session. */
-    fun sendCommand(text: String, source: String = "text") {
+    /**
+     * Sends a dictation or typed instruction to the currently selected session.
+     *
+     * [onSent] runs only after the node accepted the instruction. The caller uses
+     * it to leave the compose screen; calling it on failure would dismiss the
+     * screen and take the error with it, leaving the user with no way to retry
+     * the text they just spoke or typed.
+     */
+    fun sendCommand(text: String, source: String = "text", onSent: (() -> Unit)? = null) {
         val sessionId = _state.value.currentSessionId
         if (sessionId.isEmpty()) {
             _notice.value = Notice(string(R.string.vm_select_session_first), isError = true)
@@ -510,6 +517,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 else string(R.string.vm_queued_suffix)
                 _notice.value = Notice(string(R.string.vm_sent, suffix))
                 loadDetail(sessionId)
+                onSent?.invoke()
             } catch (err: WatchApiException) {
                 if (err.isAuthFailure) handleApiError(err) else _notice.value = Notice(err.message, isError = true)
             } catch (err: Exception) {
@@ -697,8 +705,15 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    /** Stops capture, uploads the clip, and sends the transcript as a command. */
-    fun stopRecordingAndSend() {
+    /**
+     * Stops capture, uploads the clip, and sends the transcript as a command.
+     *
+     * [onSent] is threaded through to [sendCommand] rather than invoked here, so
+     * it fires only when the node actually accepted the instruction. A capture
+     * that produced no audio, failed to transcribe, or was rejected must leave the
+     * compose screen in place so the user can try again.
+     */
+    fun stopRecordingAndSend(onSent: (() -> Unit)? = null) {
         if (!_recording.value) return
         _recording.value = false
         viewModelScope.launch {
@@ -719,7 +734,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     // Provenance stays "voice" end-to-end so the transcript can
                     // be analysed separately from typed input later.
-                    sendCommand(result.text, source = "voice")
+                    sendCommand(result.text, source = "voice", onSent = onSent)
                 }
             } catch (err: WatchApiException) {
                 if (err.isAuthFailure) {

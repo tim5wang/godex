@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -25,6 +26,7 @@ import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.CompactChip
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.godex.wear.R
 import com.godex.wear.data.WatchSession
 import com.godex.wear.data.WatchTemplate
 
@@ -77,7 +79,10 @@ fun SessionsScreen(
         modifier = Modifier.fillMaxSize(),
     ) {
         item {
-            ScreenTitle("会话", "共 ${sessions.size} 个")
+            ScreenTitle(
+                stringResource(R.string.common_session),
+                stringResource(R.string.sessions_count, sessions.size),
+            )
         }
 
         if (showCreate) {
@@ -85,7 +90,7 @@ fun SessionsScreen(
             // the same number of taps, so a wrong choice costs nothing.
             item {
                 Text(
-                    text = "选择预设",
+                    text = stringResource(R.string.sessions_pick_preset),
                     style = MaterialTheme.typography.caption1,
                     color = GodexColors.TextMuted,
                     modifier = Modifier.fillMaxWidth(),
@@ -125,7 +130,7 @@ fun SessionsScreen(
             item {
                 Spacer(Modifier.height(ChipSpacing))
                 SmallAction(
-                    label = "取消",
+                    label = stringResource(R.string.common_cancel),
                     onClick = { showCreate = false },
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -133,7 +138,7 @@ fun SessionsScreen(
         } else {
             item {
                 SmallAction(
-                    label = "＋ 新建对话",
+                    label = stringResource(R.string.sessions_new),
                     highlight = true,
                     onClick = {
                         onOpenCreate()
@@ -147,14 +152,15 @@ fun SessionsScreen(
         if (sessions.isEmpty()) {
             item {
                 MessageBlock(
-                    title = if (loading) "加载中…" else "没有会话",
-                    detail = if (loading) null else "在电脑端开始一个",
+                    title = if (loading) stringResource(R.string.common_loading)
+                    else stringResource(R.string.common_no_sessions),
+                    detail = if (loading) null else stringResource(R.string.home_empty_detail),
                 )
             }
         }
 
         if (pinnedSessions.isNotEmpty()) {
-            item { GroupLabel("置顶") }
+            item { GroupLabel(stringResource(R.string.sessions_pinned)) }
             items(pinnedSessions, key = { "pin-${it.sessionId}" }) { session ->
                 SessionRow(
                     session = session,
@@ -168,7 +174,7 @@ fun SessionsScreen(
 
         if (restSessions.isNotEmpty()) {
             if (pinnedSessions.isNotEmpty()) {
-                item { GroupLabel("全部") }
+                item { GroupLabel(stringResource(R.string.common_all)) }
             }
             items(restSessions, key = { it.sessionId }) { session ->
                 SessionRow(
@@ -185,12 +191,16 @@ fun SessionsScreen(
             Spacer(Modifier.height(6.dp))
             Column(modifier = Modifier.fillMaxWidth()) {
                 SmallAction(
-                    label = "跨设备会话",
+                    label = stringResource(R.string.sessions_cross_device),
                     onClick = onCrossDevice,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(ChipSpacing))
-                SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
+                SmallAction(
+                    label = stringResource(R.string.common_back),
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }
@@ -211,7 +221,7 @@ private fun SessionRow(
         Chip(
             label = {
                 Text(
-                    text = session.title.ifBlank { "未命名会话" },
+                    text = session.title.ifBlank { stringResource(R.string.common_unnamed_session) },
                     style = MaterialTheme.typography.body1,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -220,8 +230,8 @@ private fun SessionRow(
             secondaryLabel = {
                 val when_ = relativeTime(session.lastActivityAt)
                 val mark = when {
-                    session.running -> "运行中"
-                    selected -> "当前"
+                    session.running -> stringResource(R.string.common_running)
+                    selected -> stringResource(R.string.common_current)
                     else -> ""
                 }
                 val parts = listOfNotNull(mark.takeIf { it.isNotEmpty() }, when_.takeIf { it.isNotEmpty() })

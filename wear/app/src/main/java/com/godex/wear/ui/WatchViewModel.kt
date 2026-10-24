@@ -15,6 +15,7 @@ import com.godex.wear.data.WatchSessionDetail
 import com.godex.wear.data.WatchStore
 import com.godex.wear.data.WatchTemplate
 import com.godex.wear.data.WatchPreferences
+import com.godex.wear.R
 import com.godex.wear.notify.WearNotifier
 import com.godex.wear.sync.WatchSync
 import com.godex.wear.sync.announceFinishedSessions
@@ -55,6 +56,16 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     /** True while a reply is being spoken, so the button can offer to stop it. */
     private val _speaking = MutableStateFlow(false)
     val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
+
+    /**
+     * Resolves a UI string.
+     *
+     * Not a composable, so stringResource is unavailable; the application context
+     * carries the same locale configuration, which keeps a notice in whatever
+     * language the watch is set to.
+     */
+    private fun string(resId: Int, vararg args: Any): String =
+        getApplication<Application>().getString(resId, *args)
 
     data class UiState(
         val loading: Boolean = false,
@@ -365,13 +376,13 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                     currentSessionId = created.sessionId,
                     detail = null,
                 )
-                _notice.value = Notice("已新建对话")
+                _notice.value = Notice(string(R.string.vm_created))
                 refresh()
             } catch (err: WatchApiException) {
                 if (err.isAuthFailure) handleApiError(err)
                 else _notice.value = Notice(err.message, isError = true)
             } catch (err: Exception) {
-                _notice.value = Notice(err.message ?: "新建失败", isError = true)
+                _notice.value = Notice(err.message ?: string(R.string.vm_create_failed), isError = true)
             }
         }
     }
@@ -399,22 +410,23 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun stopCurrentSession() {
         val sessionId = _state.value.currentSessionId
         if (sessionId.isEmpty()) {
-            _notice.value = Notice("先选一个会话", isError = true)
+            _notice.value = Notice(string(R.string.vm_select_session_first), isError = true)
             return
         }
         viewModelScope.launch {
             try {
                 api.stopSession(sessionId)
-                _notice.value = Notice("已停止")
+                _notice.value = Notice(string(R.string.vm_stopped))
             } catch (err: WatchApiException) {
                 if (err.isAuthFailure) {
                     handleApiError(err)
                     return@launch
                 }
-                val msg = if (err.statusCode == 409) "没有正在运行的任务" else err.message
+                val msg = if (err.statusCode == 409) string(R.string.vm_nothing_running)
+                else err.message
                 _notice.value = Notice(msg, isError = err.statusCode != 409)
             } catch (err: Exception) {
-                _notice.value = Notice(err.message ?: "停止失败", isError = true)
+                _notice.value = Notice(err.message ?: string(R.string.vm_stop_failed), isError = true)
                 return@launch
             }
             refresh()
@@ -471,7 +483,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun sendCommand(text: String, source: String = "text") {
         val sessionId = _state.value.currentSessionId
         if (sessionId.isEmpty()) {
-            _notice.value = Notice("先选一个会话", isError = true)
+            _notice.value = Notice(string(R.string.vm_select_session_first), isError = true)
             return
         }
         if (text.isBlank()) return
@@ -479,13 +491,14 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val accepted = api.sendCommand(sessionId, text.trim(), source)
-                val suffix = if (accepted.pendingApproval) "（需审批）" else "（已排队）"
-                _notice.value = Notice("已发送$suffix")
+                val suffix = if (accepted.pendingApproval) string(R.string.vm_needs_approval_suffix)
+                else string(R.string.vm_queued_suffix)
+                _notice.value = Notice(string(R.string.vm_sent, suffix))
                 loadDetail(sessionId)
             } catch (err: WatchApiException) {
                 if (err.isAuthFailure) handleApiError(err) else _notice.value = Notice(err.message, isError = true)
             } catch (err: Exception) {
-                _notice.value = Notice(err.message ?: "发送失败", isError = true)
+                _notice.value = Notice(err.message ?: string(R.string.vm_send_failed), isError = true)
             }
         }
     }
@@ -498,7 +511,10 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 // A wrist tap grants the narrowest authority by default; the user
                 // can re-grant from a fuller client if they want more.
                 api.approve(sessionId, requestId, scope)
-                _notice.value = Notice(if (scope == "session") "本会话已全部允许" else "已批准")
+                _notice.value = Notice(
+                    if (scope == "session") string(R.string.vm_approved_session)
+                    else string(R.string.vm_approved),
+                )
                 // Leaving the detail screen is the caller's job: the request may
                 // already be gone from the next list read, and a detail screen
                 // for a resolved request would keep offering dead buttons.
@@ -506,11 +522,11 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             } catch (err: WatchApiException) {
                 // 409 means someone (or another client) already resolved it. That
                 // is a normal race on a shared queue, so it gets a plain notice.
-                val msg = if (err.statusCode == 409) "已被其他端处理" else err.message
+                val msg = if (err.statusCode == 409) string(R.string.vm_already_handled) else err.message
                 _notice.value = Notice(msg, isError = err.statusCode != 409)
                 refresh()
             } catch (err: Exception) {
-                _notice.value = Notice(err.message ?: "批准失败", isError = true)
+                _notice.value = Notice(err.message ?: string(R.string.vm_approve_failed), isError = true)
             }
         }
     }
@@ -521,13 +537,13 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 api.deny(sessionId, requestId)
-                _notice.value = Notice("已拒绝")
+                _notice.value = Notice(string(R.string.vm_denied))
                 refresh()
             } catch (err: WatchApiException) {
                 _notice.value = Notice(err.message, isError = true)
                 refresh()
             } catch (err: Exception) {
-                _notice.value = Notice(err.message ?: "拒绝失败", isError = true)
+                _notice.value = Notice(err.message ?: string(R.string.vm_deny_failed), isError = true)
             }
         }
     }
@@ -579,7 +595,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun speakLatestReply() {
         val sessionId = _state.value.currentSessionId
         if (sessionId.isEmpty()) {
-            _notice.value = Notice("先选一个会话", isError = true)
+            _notice.value = Notice(string(R.string.vm_select_session_first), isError = true)
             return
         }
         if (_speaking.value) {
@@ -592,17 +608,17 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 val wav = api.synthesizeSession(sessionId)
                 val played = playback.play(wav)
                 if (!played) {
-                    _notice.value = Notice("这段回复无法朗读", isError = true)
+                    _notice.value = Notice(string(R.string.vm_speak_unsupported), isError = true)
                 }
             } catch (err: WatchApiException) {
                 if (err.isAuthFailure) {
                     handleApiError(err)
                     return@launch
                 }
-                val msg = if (err.statusCode == 404) "还没有可朗读的回复" else err.message
+                val msg = if (err.statusCode == 404) string(R.string.vm_no_reply_to_speak) else err.message
                 _notice.value = Notice(msg, isError = err.statusCode != 404)
             } catch (err: Exception) {
-                _notice.value = Notice(err.message ?: "朗读失败", isError = true)
+                _notice.value = Notice(err.message ?: string(R.string.vm_speak_failed), isError = true)
             } finally {
                 _speaking.value = false
             }
@@ -622,12 +638,12 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun startRecording(): Boolean {
         if (!voice.hasMicrophonePermission()) {
-            _notice.value = Notice("需要麦克风权限", isError = true)
+            _notice.value = Notice(string(R.string.vm_mic_permission), isError = true)
             return false
         }
         val started = voice.start()
         if (!started) {
-            _notice.value = Notice("无法开始录音", isError = true)
+            _notice.value = Notice(string(R.string.vm_record_start_failed), isError = true)
             return false
         }
         _recording.value = true
@@ -642,17 +658,17 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             val file = try {
                 voice.stop()
             } catch (err: Exception) {
-                _notice.value = Notice(err.message ?: "录音失败", isError = true)
+                _notice.value = Notice(err.message ?: string(R.string.vm_record_failed), isError = true)
                 return@launch
             }
             if (file == null) {
-                _notice.value = Notice("没有听到声音", isError = true)
+                _notice.value = Notice(string(R.string.vm_no_audio), isError = true)
                 return@launch
             }
             try {
                 val result = api.transcribe(file)
                 if (result.text.isBlank()) {
-                    _notice.value = Notice("没有识别出内容", isError = true)
+                    _notice.value = Notice(string(R.string.vm_no_transcript), isError = true)
                 } else {
                     // Provenance stays "voice" end-to-end so the transcript can
                     // be analysed separately from typed input later.
@@ -665,7 +681,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                     _notice.value = Notice(err.message, isError = true)
                 }
             } catch (err: Exception) {
-                _notice.value = Notice(err.message ?: "转写失败", isError = true)
+                _notice.value = Notice(err.message ?: string(R.string.vm_transcribe_failed), isError = true)
             } finally {
                 file.delete()
             }
@@ -696,7 +712,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 store.clearCredentials()
                 api.token = ""
                 _state.value = UiState(loading = false, credentials = store.credentials())
-                _notice.value = Notice("配对已失效，请重新配对", isError = true)
+                _notice.value = Notice(string(R.string.vm_credential_revoked), isError = true)
             }
             return
         }

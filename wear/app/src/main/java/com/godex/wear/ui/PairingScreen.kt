@@ -13,10 +13,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.godex.wear.R
 import com.godex.wear.data.PairingStart
 import com.godex.wear.data.WatchApi
 import com.godex.wear.data.WatchApiException
@@ -44,6 +47,11 @@ fun PairingScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
 
+    // Needed because the polling and startup effects below are not composable scopes:
+    // status/error text is built there, and stringResource is only callable from
+    // composition.
+    val context = LocalContext.current
+
     // Poll loop: created only once a pairing exists, and cancelled automatically
     // when the composable leaves or `pairing` changes, so a watch that is put
     // down stops polling instead of draining the battery.
@@ -60,12 +68,12 @@ fun PairingScreen(
                         if (device != null && !token.isNullOrEmpty()) {
                             onPaired(device, token)
                         } else {
-                            error = "配对响应不完整，请重试"
+                            error = context.getString(R.string.pairing_incomplete)
                         }
                         return@LaunchedEffect
                     }
                     result.isExpired -> {
-                        error = "配对码已过期，请重新生成"
+                        error = context.getString(R.string.pairing_expired)
                         pairing = null
                         status = ""
                         return@LaunchedEffect
@@ -76,11 +84,11 @@ fun PairingScreen(
                 error = err.message
                 return@LaunchedEffect
             } catch (err: Exception) {
-                error = err.message ?: "网络不可达"
+                error = err.message ?: context.getString(R.string.pairing_network_unreachable)
                 return@LaunchedEffect
             }
         }
-        error = "等待超时，请重试"
+        error = context.getString(R.string.pairing_timeout)
     }
 
     RoundScreen {
@@ -91,7 +99,10 @@ fun PairingScreen(
         ) {
             val shown = pairing
             if (shown == null) {
-                ScreenTitle("配对", "在已信任的端确认")
+                ScreenTitle(
+                    stringResource(R.string.pairing_title),
+                    stringResource(R.string.pairing_confirm_hint),
+                )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = serverUrl,
@@ -101,7 +112,8 @@ fun PairingScreen(
                 )
                 Spacer(Modifier.height(10.dp))
                 RoundAction(
-                    label = if (busy) "生成中…" else "生成配对码",
+                    label = if (busy) stringResource(R.string.pairing_generating)
+                    else stringResource(R.string.pairing_generate),
                     enabled = !busy,
                     onClick = {
                         busy = true
@@ -110,12 +122,15 @@ fun PairingScreen(
                 )
                 Spacer(Modifier.height(6.dp))
                 RoundAction(
-                    label = "服务器地址",
+                    label = stringResource(R.string.settings_server_url),
                     color = GodexColors.SurfaceHigh,
                     onClick = onSettings,
                 )
             } else {
-                ScreenTitle("配对码", "在手机或网页端输入")
+                ScreenTitle(
+                    stringResource(R.string.pairing_code_title),
+                    stringResource(R.string.pairing_enter_code),
+                )
                 Spacer(Modifier.height(6.dp))
                 // Digits are grouped 4-4: an 8-digit run is easy to misread on a
                 // small display, and the server normalises separators anyway.
@@ -126,7 +141,7 @@ fun PairingScreen(
                     textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(6.dp))
-                status.ifEmpty { "等待确认" }.let {
+                status.ifEmpty { stringResource(R.string.pairing_waiting) }.let {
                     Text(
                         text = it,
                         style = MaterialTheme.typography.caption1,
@@ -149,12 +164,12 @@ fun PairingScreen(
         if (!busy || pairing != null) return@LaunchedEffect
         try {
             pairing = api.startPairing(name = "Wear Watch")
-            status = "等待确认"
+            status = context.getString(R.string.pairing_waiting)
             error = null
         } catch (err: WatchApiException) {
             error = err.message
         } catch (err: Exception) {
-            error = err.message ?: "无法连接服务器"
+            error = err.message ?: context.getString(R.string.pairing_cannot_connect)
         } finally {
             // Reset on failure as well as success. Leaving it true pinned the button
             // at "生成中…" and disabled, so after a connection error the user could

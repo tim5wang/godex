@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -23,6 +24,7 @@ import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.godex.wear.R
 import com.godex.wear.data.WatchCrossDeviceSession
 
 /**
@@ -73,7 +75,10 @@ fun CrossDeviceScreen(
         modifier = Modifier.fillMaxSize(),
     ) {
         item {
-            ScreenTitle("全部任务", "${visible.size} 个 · ${nodeFilters.size} 端")
+            ScreenTitle(
+                stringResource(R.string.cross_title),
+                stringResource(R.string.cross_summary, visible.size, nodeFilters.size),
+            )
         }
 
         if (nodeFilters.size > 1) {
@@ -83,7 +88,7 @@ fun CrossDeviceScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     FilterChip(
-                        label = "全部",
+                        label = stringResource(R.string.common_all),
                         selected = activeFilter == null,
                         onClick = { selectedNode = null },
                         modifier = Modifier.weight(1f),
@@ -105,7 +110,10 @@ fun CrossDeviceScreen(
         if (offlineNodes.isNotEmpty()) {
             item {
                 Text(
-                    text = "${offlineNodes.joinToString("、")} 离线，读不到它的会话（中心不缓存历史）",
+                    text = stringResource(
+                        R.string.cross_offline_note,
+                        offlineNodes.joinToString(", "),
+                    ),
                     style = MaterialTheme.typography.caption1,
                     color = GodexColors.TextMuted,
                     modifier = Modifier.fillMaxWidth(),
@@ -116,8 +124,9 @@ fun CrossDeviceScreen(
         if (visible.isEmpty()) {
             item {
                 MessageBlock(
-                    title = if (loading) "加载中…" else "没有会话",
-                    detail = if (loading) null else "所有已知设备都没有活跃任务",
+                    title = if (loading) stringResource(R.string.common_loading)
+                    else stringResource(R.string.common_no_sessions),
+                    detail = if (loading) null else stringResource(R.string.cross_empty_detail),
                 )
             }
         }
@@ -127,7 +136,7 @@ fun CrossDeviceScreen(
             Chip(
                 label = {
                     Text(
-                        text = session.title.ifBlank { "未命名会话" },
+                        text = session.title.ifBlank { stringResource(R.string.common_unnamed_session) },
                         style = MaterialTheme.typography.body1,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -137,8 +146,11 @@ fun CrossDeviceScreen(
                     val when_ = relativeTime(session.lastActivityAt)
                     val parts = listOfNotNull(
                         session.nodeName.ifBlank { session.nodeId }.takeIf { it.isNotEmpty() },
-                        (if (!session.online) "离线" else if (session.running) "运行中" else "")
-                            .takeIf { it.isNotEmpty() },
+                        (
+                            if (!session.online) stringResource(R.string.common_offline)
+                            else if (session.running) stringResource(R.string.common_running)
+                            else ""
+                            ).takeIf { it.isNotEmpty() },
                         when_.takeIf { it.isNotEmpty() },
                     )
                     if (parts.isNotEmpty()) {
@@ -171,7 +183,11 @@ fun CrossDeviceScreen(
 
         item {
             Spacer(Modifier.height(6.dp))
-            SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
+            SmallAction(
+                label = stringResource(R.string.common_back),
+                onClick = onBack,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

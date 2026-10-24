@@ -65,9 +65,17 @@ fun HomeScreen(
 
             Spacer(Modifier.height(6.dp))
             when {
-                state.error != null -> MessageBlock("连接失败", state.error, GodexColors.Danger)
-                state.loading && state.sessions.isEmpty() -> MessageBlock("加载中…")
-                session == null -> MessageBlock("没有会话", "在电脑端开始一个")
+                state.error != null -> MessageBlock(
+                    stringResource(R.string.home_connect_failed),
+                    state.error,
+                    GodexColors.Danger,
+                )
+                state.loading && state.sessions.isEmpty() ->
+                    MessageBlock(stringResource(R.string.common_loading))
+                session == null -> MessageBlock(
+                    stringResource(R.string.common_no_sessions),
+                    stringResource(R.string.home_empty_detail),
+                )
                 else -> {
                     // Tapping the session name opens the detail screen (mockup 05):
                     // the home screen answers "anything waiting?", the detail screen
@@ -78,7 +86,7 @@ fun HomeScreen(
                     // 刷新 off the bottom of the round display entirely (caught by
                     // driving the emulator, not by the compiler).
                     Text(
-                        text = session.title.ifBlank { "未命名会话" },
+                        text = session.title.ifBlank { stringResource(R.string.common_unnamed_session) },
                         style = MaterialTheme.typography.body1,
                         color = GodexColors.TextPrimary,
                         textAlign = TextAlign.Center,
@@ -106,9 +114,12 @@ fun HomeScreen(
                             else -> GodexColors.TextMuted
                         },
                         label = buildString {
-                            append(if (running) "运行中" else "空闲")
-                            if (pending > 0) append(" · $pending 项待批准")
-                            append(" · 点按看详情")
+                            append(
+                                if (running) stringResource(R.string.common_running)
+                                else stringResource(R.string.common_idle),
+                            )
+                            if (pending > 0) append(stringResource(R.string.home_pending_suffix, pending))
+                            append(stringResource(R.string.home_tap_suffix))
                         },
                     )
                 }
@@ -121,7 +132,7 @@ fun HomeScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RoundAction(
-                    label = if (running) "说话" else "说话",
+                    label = stringResource(R.string.home_talk),
                     onClick = onTalk,
                     modifier = Modifier.weight(1f),
                     enabled = state.currentSessionId.isNotEmpty(),
@@ -132,9 +143,14 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(ChipSpacing),
             ) {
-                SmallAction("会话", onSessions, Modifier.weight(1f))
                 SmallAction(
-                    label = if (pending > 0) "审批 $pending" else "审批",
+                    label = stringResource(R.string.common_session),
+                    onClick = onSessions,
+                    modifier = Modifier.weight(1f),
+                )
+                SmallAction(
+                    label = if (pending > 0) stringResource(R.string.home_approvals_count, pending)
+                    else stringResource(R.string.home_approvals),
                     onClick = onApprovals,
                     modifier = Modifier.weight(1f),
                     highlight = pending > 0,
@@ -145,14 +161,26 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(ChipSpacing),
             ) {
-                SmallAction("设备", onDevices, Modifier.weight(1f))
-                SmallAction("刷新", onRefresh, Modifier.weight(1f))
+                SmallAction(
+                    stringResource(R.string.devices_title),
+                    onDevices,
+                    Modifier.weight(1f),
+                )
+                SmallAction(
+                    stringResource(R.string.home_refresh),
+                    onRefresh,
+                    Modifier.weight(1f),
+                )
                 // Settings lives in this existing row rather than a new one: this
                 // Column does not scroll, and an added row pushed 设备/刷新 off the
                 // round display (seen on the emulator). A third chip changes no
                 // height. Before this, 设置 was only reachable from the pairing
                 // screen, so a paired watch could never open mockup 11 at all.
-                SmallAction("设置", onSettings, Modifier.weight(1f))
+                SmallAction(
+                    stringResource(R.string.settings_title),
+                    onSettings,
+                    Modifier.weight(1f),
+                )
             }
         }
     }

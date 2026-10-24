@@ -1,4 +1,235 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Default (English) strings.
+
+  This file is the fallback for every locale the app does not translate, so an
+  unknown system language still produces readable UI rather than raw resource
+  names. Chinese lives in values-zh/strings.xml and is a full translation, not a
+  partial one: a half-translated screen mixing scripts reads worse than either
+  language alone.
+
+  Everything user-visible lives here. Before this, all of it was Chinese string
+  literals inside Kotlin, which meant the app could not follow the system
+  language at all.
+-->
 <resources>
     <string name="app_name">GoDex</string>
+
+    <!-- Shared vocabulary. Reused across screens on purpose: one term per concept
+         keeps a watch UI predictable when only two or three words fit. -->
+    <string name="common_back">Back</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_loading">Loading…</string>
+    <string name="common_session">Sessions</string>
+    <string name="common_no_sessions">No sessions</string>
+    <string name="common_unnamed_session">Untitled session</string>
+    <string name="common_running">Running</string>
+    <string name="common_idle">Idle</string>
+    <string name="common_online">Online</string>
+    <string name="common_offline">Offline</string>
+    <string name="common_all">All</string>
+    <string name="common_approve">Approve</string>
+    <string name="common_deny">Deny</string>
+    <string name="common_tool">Tool</string>
+    <string name="common_flow_task">Workflow task</string>
+    <string name="common_current">current</string>
+    <string name="common_on">On</string>
+    <string name="common_off">Off</string>
+    <string name="common_dismiss_hint">Tap or swipe to dismiss</string>
+
+    <!-- Node kinds (Dto.kindLabel). -->
+    <string name="node_kind_pc">Desktop</string>
+    <string name="node_kind_cloud">Cloud server</string>
+    <string name="node_kind_phone">Phone</string>
+
+    <!-- Relative time and countdowns. -->
+    <string name="time_just_now">just now</string>
+    <string name="time_minutes_ago">%1$d min ago</string>
+    <string name="time_hours_ago">%1$d h ago</string>
+    <string name="time_days_ago">%1$d d ago</string>
+    <string name="time_expiring">expiring now</string>
+    <string name="time_expires_minutes">expires in %1$d min</string>
+    <string name="time_expires_hours">expires in %1$d h</string>
+    <string name="time_expires_days">expires in %1$d d</string>
+    <string name="time_seconds">%1$d s</string>
+    <string name="time_minutes_seconds">%1$d min %2$s s</string>
+    <string name="time_hours_minutes">%1$d h %2$d min</string>
+
+    <!-- Home. -->
+    <string name="home_connect_failed">Connection failed</string>
+    <string name="home_empty_detail">Start one on your computer</string>
+    <string name="home_pending_suffix"> · %1$d awaiting approval</string>
+    <string name="home_tap_suffix"> · Tap for details</string>
+    <string name="home_talk">Talk</string>
+    <string name="home_approvals">Approvals</string>
+    <string name="home_approvals_count">Approvals %1$d</string>
+    <string name="home_refresh">Refresh</string>
+
+    <!-- Sessions. -->
+    <string name="sessions_count">%1$d total</string>
+    <string name="sessions_pinned">Pinned</string>
+    <string name="sessions_pick_preset">Choose a preset</string>
+    <string name="sessions_new">＋ New chat</string>
+    <string name="sessions_cross_device">All devices</string>
+
+    <!-- Talk / dictation. -->
+    <string name="talk_hold">Hold to talk</string>
+    <string name="talk_release">Release to send</string>
+    <string name="talk_no_session">No session selected</string>
+    <string name="talk_send">Send</string>
+    <string name="talk_hint">Hold to start · drag away to cancel</string>
+    <string name="talk_recording">Recording</string>
+    <string name="talk_to_voice">Back to voice</string>
+    <string name="talk_to_text">Type instead</string>
+    <string name="talk_phrases">Quick phrases</string>
+    <string name="talk_phrases_hide">Hide phrases</string>
+    <!-- Presets are sent as instructions, so they stay in the language the agent
+         is prompted in rather than being translated. -->
+    <string name="phrase_ok" translatable="false">OK</string>
+    <string name="phrase_plan" translatable="false">实施方案</string>
+    <string name="phrase_continue" translatable="false">继续</string>
+    <string name="phrase_continue_rest" translatable="false">继续完成剩余工作</string>
+
+    <!-- Session detail. -->
+    <string name="detail_title">Task detail</string>
+    <string name="detail_unreadable">Cannot read session</string>
+    <string name="detail_unreadable_detail">It may have been deleted</string>
+    <string name="detail_steps">Step %1$d/%2$d</string>
+    <string name="detail_open_full_text">Tap to read in full</string>
+    <string name="detail_current_tool">Current tool · %1$s</string>
+    <string name="detail_executing">Working</string>
+    <string name="detail_elapsed">Elapsed %1$s</string>
+    <string name="detail_plan">Plan</string>
+    <string name="detail_recent_tools">Recent tools</string>
+    <string name="detail_stop">Stop</string>
+    <string name="detail_speak">Read reply</string>
+    <string name="detail_stop_speak">Stop reading</string>
+    <string name="detail_full_text_title">Full text</string>
+    <string name="detail_full_text_hint">Tap Back below</string>
+    <string name="detail_in_progress"> · in progress</string>
+
+    <!-- Approvals. -->
+    <string name="approvals_title">Approvals</string>
+    <string name="approvals_all_done">All handled</string>
+    <string name="approvals_count">%1$d pending</string>
+    <string name="approvals_empty">Nothing to approve</string>
+    <string name="approvals_form_hint">Fill in the form on your computer</string>
+    <string name="approval_loading_detail">Reading pending requests</string>
+    <string name="approval_resolved">Handled</string>
+    <string name="approval_resolved_detail">This request is no longer queued</string>
+    <string name="approval_counter">Pending %1$d/%2$d</string>
+    <string name="approval_danger_title">Agent asks to run a high-risk command</string>
+    <string name="approval_tool_title">Agent asks to approve a tool call</string>
+    <string name="approval_session_prefix"> · session 「</string>
+    <string name="approval_risk">Risk: %1$s</string>
+    <string name="approval_effect_after">Once approved</string>
+    <string name="approval_effect_action">this action</string>
+    <string name="approval_effect_command">this command</string>
+    <string name="approval_effect_run_at">will run immediately in </string>
+    <string name="approval_effect_run">will run immediately</string>
+    <string name="approval_confirm">Confirm approval</string>
+    <string name="approval_danger_rearm">High-risk · tap again to run</string>
+    <string name="approval_danger_hint">High-risk · needs two taps</string>
+    <string name="approval_allow_session">Allow all in this session</string>
+    <string name="approval_flow_form_hint">Workflow checkpoints need a form on your computer</string>
+
+    <!-- Devices. -->
+    <string name="devices_title">Devices</string>
+    <string name="devices_count">%1$d registered</string>
+    <string name="devices_empty">No registered devices</string>
+    <string name="devices_empty_detail">Start godex on your computer</string>
+    <string name="devices_current"> · current</string>
+
+    <!-- Cross-device sessions. -->
+    <string name="cross_title">All tasks</string>
+    <string name="cross_summary">%1$d · %2$d devices</string>
+    <string name="cross_offline_note">%1$s offline; its sessions cannot be read (the center keeps no history)</string>
+    <string name="cross_empty_detail">No active task on any known device</string>
+
+    <!-- Settings. -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_server_url">Server address</string>
+    <string name="settings_save_url">Save address</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_notify_complete">Completion alerts</string>
+    <string name="settings_notify_complete_desc">Includes the reply summary; tap for details</string>
+    <string name="settings_approvals_forced">Approvals (required)\nCannot be disabled · vibrates</string>
+    <string name="settings_power">Battery saver</string>
+    <string name="settings_power_desc">Go online only when needed</string>
+    <string name="settings_power_desc2">Polls less often when nothing is running</string>
+    <string name="settings_ambient">Always-on display</string>
+    <string name="settings_ambient_desc">Keep the running task on the watch face</string>
+    <string name="settings_security">Security</string>
+    <string name="settings_scopes">This watch\'s scopes\n</string>
+    <string name="settings_unpair">Unpair</string>
+
+    <!-- Pairing. -->
+    <string name="pairing_title">Pair</string>
+    <string name="pairing_code_title">Pairing code</string>
+    <string name="pairing_confirm_hint">Confirm on a trusted device</string>
+    <string name="pairing_generate">Generate code</string>
+    <string name="pairing_generating">Generating…</string>
+    <string name="pairing_enter_code">Enter on your phone or the web UI</string>
+    <string name="pairing_waiting">Waiting for confirmation</string>
+    <string name="pairing_incomplete">Incomplete pairing response, try again</string>
+    <string name="pairing_expired">Code expired, generate a new one</string>
+    <string name="pairing_network_unreachable">Network unreachable</string>
+    <string name="pairing_timeout">Timed out waiting, try again</string>
+    <string name="pairing_cannot_connect">Cannot reach the server</string>
+
+    <!-- Notifications. -->
+    <string name="notif_channel_approvals">Approval requests</string>
+    <string name="notif_channel_approvals_desc">Operations the agent is waiting to be approved</string>
+    <string name="notif_channel_task">Task running</string>
+    <string name="notif_channel_task_desc">Persistent status of the current task</string>
+    <string name="notif_channel_complete">Task finished</string>
+    <string name="notif_channel_complete_desc">A reply arrived, or a task finished or failed</string>
+    <string name="notif_approval_title">Approval needed</string>
+    <string name="notif_approval_tool">Tool call</string>
+    <string name="notif_approval_session">\nSession: </string>
+    <string name="notif_done_title">Task finished</string>
+    <string name="notif_failed_title">Task failed</string>
+    <string name="notif_tap_for_detail">%1$s · Tap for details</string>
+    <string name="notif_ongoing_progress">#progress# · #elapsed# elapsed</string>
+    <string name="notif_ongoing_steps">Step %1$d/%2$d · %3$d%%</string>
+    <string name="notif_ongoing_tool">Using %1$s</string>
+    <string name="notif_ongoing_running">Working</string>
+
+    <!-- Tile. -->
+    <string name="tile_unpaired">Not paired</string>
+    <string name="tile_unpaired_detail">Open the app to pair</string>
+    <string name="tile_unreachable">Unreachable</string>
+    <string name="tile_unreachable_detail">Your computer may not be running</string>
+    <string name="tile_pending">%1$d awaiting approval</string>
+    <string name="tile_tap_view">Tap to view</string>
+    <string name="tile_active">%1$d running</string>
+    <string name="tile_tap_open">Tap to open</string>
+
+    <!-- One-shot notices raised by the ViewModel. -->
+    <string name="vm_created">New chat created</string>
+    <string name="vm_create_failed">Could not create chat</string>
+    <string name="vm_select_session_first">Pick a session first</string>
+    <string name="vm_stopped">Stopped</string>
+    <string name="vm_nothing_running">Nothing is running</string>
+    <string name="vm_stop_failed">Could not stop</string>
+    <string name="vm_queued_suffix"> (queued)</string>
+    <string name="vm_needs_approval_suffix"> (needs approval)</string>
+    <string name="vm_sent">Sent%1$s</string>
+    <string name="vm_send_failed">Send failed</string>
+    <string name="vm_approved">Approved</string>
+    <string name="vm_approved_session">All allowed in this session</string>
+    <string name="vm_already_handled">Already handled elsewhere</string>
+    <string name="vm_approve_failed">Approval failed</string>
+    <string name="vm_denied">Denied</string>
+    <string name="vm_deny_failed">Denial failed</string>
+    <string name="vm_speak_unsupported">This reply cannot be read aloud</string>
+    <string name="vm_no_reply_to_speak">No reply to read yet</string>
+    <string name="vm_speak_failed">Playback failed</string>
+    <string name="vm_mic_permission">Microphone permission required</string>
+    <string name="vm_record_start_failed">Cannot start recording</string>
+    <string name="vm_record_failed">Recording failed</string>
+    <string name="vm_no_audio">Nothing was recorded</string>
+    <string name="vm_no_transcript">Could not make out any words</string>
+    <string name="vm_transcribe_failed">Transcription failed</string>
+    <string name="vm_credential_revoked">Pairing is no longer valid, pair again</string>
 </resources>

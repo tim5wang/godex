@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -24,6 +25,7 @@ import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.godex.wear.R
 import com.godex.wear.data.WatchApproval
 
 /**
@@ -67,6 +69,11 @@ fun ApprovalDetailScreen(
     var armedKey by remember(approval?.key) { mutableStateOf<String?>(null) }
     val armed = approval != null && armedKey == approval.key
 
+    // Resolved here rather than inside the lazy-list content: remainingTime() reads
+    // string resources and is therefore @Composable, and the item{} builder is not
+    // a composable scope.
+    val remaining = if (approval?.isPermission == true) remainingTime(approval.expiresAt) else ""
+
     ScalingLazyColumn(
         state = listState,
         // See rememberGodexRotaryBehavior: the default behaviour crashes on
@@ -83,13 +90,23 @@ fun ApprovalDetailScreen(
             // happen.
             item {
                 if (loading) {
-                    ScreenTitle("加载中…", "正在读取待批准项")
+                    ScreenTitle(
+                        stringResource(R.string.common_loading),
+                        stringResource(R.string.approval_loading_detail),
+                    )
                 } else {
-                    ScreenTitle("已处理", "该请求已不在队列中")
+                    ScreenTitle(
+                        stringResource(R.string.approval_resolved),
+                        stringResource(R.string.approval_resolved_detail),
+                    )
                 }
             }
             item {
-                SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
+                SmallAction(
+                    label = stringResource(R.string.common_back),
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
             return@ScalingLazyColumn
         }
@@ -102,7 +119,8 @@ fun ApprovalDetailScreen(
             ) {
                 StatusDot(
                     color = if (approval.isHighRisk) GodexColors.Danger else GodexColors.Attention,
-                    label = if (total > 1) "待审批 $index/$total" else "待审批 $index/$index",
+                    label = if (total > 1) stringResource(R.string.approval_counter, index, total)
+                    else stringResource(R.string.approval_counter, index, index),
                 )
                 relativeTime(approval.createdAt).takeIf { it.isNotEmpty() }?.let {
                     Text(
@@ -127,7 +145,8 @@ fun ApprovalDetailScreen(
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    text = if (approval.isHighRisk) "agent 请求执行高危命令" else "agent 请求批准工具调用",
+                    text = if (approval.isHighRisk) stringResource(R.string.approval_danger_title)
+                    else stringResource(R.string.approval_tool_title),
                     style = MaterialTheme.typography.body1,
                     color = GodexColors.TextPrimary,
                     textAlign = TextAlign.Center,
@@ -151,7 +170,10 @@ fun ApprovalDetailScreen(
                         append(approval.toolName?.uppercase().orEmpty().ifBlank { "TOOL" })
                         approval.nodeName?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
                         approval.sessionTitle?.takeIf { it.isNotBlank() }
-                            ?.let { append(" · 会话「").append(it).append("」") }
+                            ?.let {
+                                append(stringResource(R.string.approval_session_prefix))
+                                    .append(it).append("」")
+                            }
                     },
                     style = MaterialTheme.typography.caption1,
                     color = if (approval.isHighRisk) GodexColors.Danger else GodexColors.TextSecondary,
@@ -176,7 +198,7 @@ fun ApprovalDetailScreen(
             item {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "风险：$risk",
+                    text = stringResource(R.string.approval_risk, risk),
                     style = MaterialTheme.typography.caption1,
                     color = if (approval.isHighRisk) GodexColors.Danger else GodexColors.TextSecondary,
                     textAlign = TextAlign.Center,
@@ -189,11 +211,17 @@ fun ApprovalDetailScreen(
             Spacer(Modifier.height(4.dp))
             Text(
                 text = buildString {
-                    append("批准后")
-                    append(if (approval.toolName.isNullOrBlank()) "该操作" else "该命令")
+                    append(stringResource(R.string.approval_effect_after))
+                    append(
+                        if (approval.toolName.isNullOrBlank()) stringResource(R.string.approval_effect_action)
+                        else stringResource(R.string.approval_effect_command),
+                    )
                     val node = approval.nodeName?.takeIf { it.isNotBlank() }
-                    if (node != null) append("将立即在 ").append(node).append(" 执行") else append("将立即执行")
-                    append("。")
+                    if (node != null) {
+                        append(stringResource(R.string.approval_effect_run_at)).append(node)
+                    } else {
+                        append(stringResource(R.string.approval_effect_run))
+                    }
                 },
                 style = MaterialTheme.typography.caption1,
                 color = GodexColors.TextMuted,
@@ -208,19 +236,16 @@ fun ApprovalDetailScreen(
         // how long is left changes whether answering from the wrist is worth it — a
         // request with seconds remaining is better handled natively than answered
         // in a hurry. Rendered in the danger colour once it is nearly out of time.
-        if (approval.isPermission) {
-            val remaining = remainingTime(approval.expiresAt)
-            if (remaining.isNotEmpty()) {
-                item {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = remaining,
-                        style = MaterialTheme.typography.caption1,
-                        color = GodexColors.TextMuted,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
+        if (approval.isPermission && remaining.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = remaining,
+                    style = MaterialTheme.typography.caption1,
+                    color = GodexColors.TextMuted,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
 
@@ -235,12 +260,13 @@ fun ApprovalDetailScreen(
                 horizontalArrangement = Arrangement.spacedBy(ChipSpacing),
             ) {
                 SmallAction(
-                    label = "拒绝",
+                    label = stringResource(R.string.common_deny),
                     onClick = { onDeny(approval) },
                     modifier = Modifier.weight(1f),
                 )
                 RoundAction(
-                    label = if (approval.isHighRisk && armed) "确认批准" else "批准",
+                    label = if (approval.isHighRisk && armed) stringResource(R.string.approval_confirm)
+                    else stringResource(R.string.common_approve),
                     color = if (approval.isHighRisk) GodexColors.Danger else GodexColors.Accent,
                     onClick = {
                         // High-risk needs two taps; the first only arms.
@@ -256,7 +282,8 @@ fun ApprovalDetailScreen(
             item {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = if (armed) "高危命令 · 再点一次即执行" else "高危命令 · 需点两次确认",
+                    text = if (armed) stringResource(R.string.approval_danger_rearm)
+                    else stringResource(R.string.approval_danger_hint),
                     style = MaterialTheme.typography.caption1,
                     color = if (armed) GodexColors.Danger else GodexColors.TextMuted,
                     textAlign = TextAlign.Center,
@@ -273,7 +300,7 @@ fun ApprovalDetailScreen(
                 Chip(
                     label = {
                         Text(
-                            text = "本会话全部允许",
+                            text = stringResource(R.string.approval_allow_session),
                             style = MaterialTheme.typography.caption1,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth(),
@@ -297,7 +324,7 @@ fun ApprovalDetailScreen(
             item {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "流程人工卡点需在电脑端填写表单",
+                    text = stringResource(R.string.approval_flow_form_hint),
                     style = MaterialTheme.typography.caption1,
                     color = GodexColors.TextMuted,
                     textAlign = TextAlign.Center,
@@ -308,7 +335,11 @@ fun ApprovalDetailScreen(
 
         item {
             Spacer(Modifier.height(6.dp))
-            SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
+            SmallAction(
+                label = stringResource(R.string.common_back),
+                onClick = onBack,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

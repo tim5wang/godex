@@ -66,10 +66,10 @@ object WearNotifier {
         // is answered, and a quiet notification would be read hours later.
         val approvals = NotificationChannel(
             CHANNEL_APPROVALS,
-            "审批请求",
+            context.getString(R.string.notif_channel_approvals),
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "智能体等待批准的操作"
+            description = context.getString(R.string.notif_channel_approvals_desc)
             enableVibration(true)
         }
 
@@ -77,10 +77,10 @@ object WearNotifier {
         // every poll would make the watch unusable.
         val task = NotificationChannel(
             CHANNEL_TASK,
-            "任务运行中",
+            context.getString(R.string.notif_channel_task),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "当前任务的常驻状态"
+            description = context.getString(R.string.notif_channel_task_desc)
             setShowBadge(false)
         }
 
@@ -90,10 +90,10 @@ object WearNotifier {
         // stays the only interrupting one.
         val complete = NotificationChannel(
             CHANNEL_COMPLETE,
-            "任务完成",
+            context.getString(R.string.notif_channel_complete),
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-            description = "对话返回、任务完成或失败"
+            description = context.getString(R.string.notif_channel_complete_desc)
             enableVibration(true)
             setShowBadge(true)
         }
@@ -118,13 +118,22 @@ object WearNotifier {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_APPROVALS)
             .setSmallIcon(R.drawable.ic_godex)
-            .setContentTitle("需要批准")
-            .setContentText(approval.summary.ifBlank { approval.toolName ?: "工具调用" })
+            .setContentTitle(context.getString(R.string.notif_approval_title))
+            .setContentText(approval.summary.ifBlank {
+                approval.toolName ?: context.getString(R.string.notif_approval_tool)
+            })
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
                     buildString {
-                        append(approval.summary.ifBlank { approval.toolName ?: "工具调用" })
-                        if (sessionTitle.isNotBlank()) append("\n会话：").append(sessionTitle)
+                        append(
+                            approval.summary.ifBlank {
+                                approval.toolName ?: context.getString(R.string.notif_approval_tool)
+                            },
+                        )
+                        if (sessionTitle.isNotBlank()) {
+                            append(context.getString(R.string.notif_approval_session))
+                                .append(sessionTitle)
+                        }
                     },
                 ),
             )
@@ -137,8 +146,28 @@ object WearNotifier {
             // The key lets the app find this exact request in the queue after a
             // refresh, and lets it say "already handled" when it is gone.
             .setContentIntent(openIntent(context, sessionId, approval.key))
-            .addAction(action(context, R.drawable.ic_godex, "批准", WatchActionReceiver.ACTION_APPROVE, sessionId, requestId, 1))
-            .addAction(action(context, R.drawable.ic_godex, "拒绝", WatchActionReceiver.ACTION_DENY, sessionId, requestId, 2))
+            .addAction(
+                action(
+                    context,
+                    R.drawable.ic_godex,
+                    context.getString(R.string.common_approve),
+                    WatchActionReceiver.ACTION_APPROVE,
+                    sessionId,
+                    requestId,
+                    1,
+                ),
+            )
+            .addAction(
+                action(
+                    context,
+                    R.drawable.ic_godex,
+                    context.getString(R.string.common_deny),
+                    WatchActionReceiver.ACTION_DENY,
+                    sessionId,
+                    requestId,
+                    2,
+                ),
+            )
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
             .build()
@@ -177,11 +206,15 @@ object WearNotifier {
         sessionId: String,
         failed: Boolean = false,
     ) {
-        val title = sessionTitle.ifBlank { "会话" }
+        val title = sessionTitle.ifBlank { context.getString(R.string.common_session) }
         val notification = NotificationCompat.Builder(context, CHANNEL_COMPLETE)
             .setSmallIcon(R.drawable.ic_godex)
-            .setContentTitle(if (failed) "任务失败" else "任务完成")
-            .setContentText("$title · 点按看详情")
+            .setContentTitle(
+                context.getString(
+                    if (failed) R.string.notif_failed_title else R.string.notif_done_title,
+                ),
+            )
+            .setContentText(context.getString(R.string.notif_tap_for_detail, title))
             .setPriority(
                 if (failed) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT,
             )
@@ -220,7 +253,7 @@ object WearNotifier {
         val notification = NotificationCompat.Builder(context, CHANNEL_TASK)
             .setSmallIcon(R.drawable.ic_godex)
             .setContentTitle(title)
-            .setContentText(progressText(detail))
+            .setContentText(progressText(context, detail))
             .setContentIntent(openIntent(context, detail.sessionId))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -238,8 +271,8 @@ object WearNotifier {
                 .setStaticIcon(R.drawable.ic_godex)
                 .setTitle(title)
                 .setTouchIntent(openIntent(context, detail.sessionId))
-                .setContentDescription(progressText(detail))
-                .setStatus(statusFor(detail))
+                .setContentDescription(progressText(context, detail))
+                .setStatus(statusFor(context, detail))
                 .build()
                 .apply(context)
         }
@@ -253,12 +286,12 @@ object WearNotifier {
      * no further network traffic. Without a timestamp it degrades to static text
      * rather than showing a timer started at an arbitrary moment.
      */
-    private fun statusFor(detail: WatchSessionDetail): Status {
-        val text = progressText(detail)
+    private fun statusFor(context: Context, detail: WatchSessionDetail): Status {
+        val text = progressText(context, detail)
         val started = parseInstant(detail.startedAt)
         return if (started != null) {
             Status.Builder()
-                .addTemplate("#progress# · 已用时 #elapsed#")
+                .addTemplate(context.getString(R.string.notif_ongoing_progress))
                 .addPart("progress", Status.TextPart(text))
                 .addPart("elapsed", Status.StopwatchPart(started.toEpochMilli()))
                 .build()
@@ -271,10 +304,16 @@ object WearNotifier {
     }
 
     /** One-line progress summary, preferring the agent's own step count. */
-    private fun progressText(detail: WatchSessionDetail): String = when {
-        detail.hasSteps -> "第 ${detail.stepDone}/${detail.stepTotal} 步 · ${detail.progressPercent}%"
-        !detail.currentTool.isNullOrBlank() -> "正在使用 ${detail.currentTool}"
-        else -> "正在执行"
+    private fun progressText(context: Context, detail: WatchSessionDetail): String = when {
+        detail.hasSteps -> context.getString(
+            R.string.notif_ongoing_steps,
+            detail.stepDone,
+            detail.stepTotal,
+            detail.progressPercent,
+        )
+        !detail.currentTool.isNullOrBlank() ->
+            context.getString(R.string.notif_ongoing_tool, detail.currentTool)
+        else -> context.getString(R.string.notif_ongoing_running)
     }
 
     private fun parseInstant(raw: String?): Instant? {

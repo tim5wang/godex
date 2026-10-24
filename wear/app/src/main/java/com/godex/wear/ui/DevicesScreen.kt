@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -16,6 +17,7 @@ import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.godex.wear.R
 import com.godex.wear.data.WatchNode
 
 /**
@@ -43,14 +45,18 @@ fun DevicesScreen(
         modifier = Modifier.fillMaxSize(),
     ) {
         item {
-            ScreenTitle("设备", "共 ${nodes.size} 台")
+            ScreenTitle(
+                stringResource(R.string.devices_title),
+                stringResource(R.string.devices_count, nodes.size),
+            )
         }
 
         if (nodes.isEmpty()) {
             item {
                 MessageBlock(
-                    title = if (loading) "加载中…" else "没有已注册设备",
-                    detail = if (loading) null else "在电脑端启动 godex",
+                    title = if (loading) stringResource(R.string.common_loading)
+                    else stringResource(R.string.devices_empty),
+                    detail = if (loading) null else stringResource(R.string.devices_empty_detail),
                 )
             }
         }
@@ -70,12 +76,16 @@ fun DevicesScreen(
                     val when_ = relativeTime(node.lastSeen)
                     Text(
                         text = buildString {
-                            append(if (node.isOnline) "在线" else "离线")
+                            append(
+                                if (node.isOnline) stringResource(R.string.common_online)
+                                else stringResource(R.string.common_offline),
+                            )
                             // What the target is matters more than when it was last
                             // seen: "which computer am I driving?" is this screen's
                             // question, and a phone is not a desktop.
-                            node.kindLabel.takeIf { it.isNotEmpty() }?.let { append(" · ").append(it) }
-                            if (selected) append(" · 当前")
+                            nodeKindLabel(node.kind).takeIf { it.isNotEmpty() }
+                                ?.let { append(" · ").append(it) }
+                            if (selected) append(stringResource(R.string.devices_current))
                             when_.takeIf { it.isNotEmpty() }?.let { append(" · ").append(it) }
                         },
                         style = MaterialTheme.typography.caption1,
@@ -93,7 +103,11 @@ fun DevicesScreen(
 
         item {
             Spacer(Modifier.height(6.dp))
-            SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
+            SmallAction(
+                label = stringResource(R.string.common_back),
+                onClick = onBack,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

@@ -9,6 +9,7 @@ import androidx.wear.tiles.TileBuilders
 import androidx.wear.tiles.TileService
 import androidx.wear.tiles.TimelineBuilders
 import androidx.concurrent.futures.ResolvableFuture
+import com.godex.wear.R
 import com.godex.wear.data.Credentials
 import com.godex.wear.data.WatchApi
 import com.godex.wear.data.WatchStore
@@ -89,7 +90,8 @@ class GodexTileService : TileService() {
             TileSummary.Ready(
                 pending = overview.pendingApprovals,
                 active = overview.activeSessions,
-                sessionTitle = current?.title?.takeIf { it.isNotBlank() } ?: "未命名会话",
+                sessionTitle = current?.title?.takeIf { it.isNotBlank() }
+                    ?: getString(R.string.common_unnamed_session),
                 hasSession = current != null,
                 running = current?.running == true,
             )
@@ -105,25 +107,25 @@ class GodexTileService : TileService() {
         val detail: String
         when (summary) {
             is TileSummary.Unpaired -> {
-                headline = "未配对"
-                detail = "打开应用完成配对"
+                headline = getString(R.string.tile_unpaired)
+                detail = getString(R.string.tile_unpaired_detail)
             }
             is TileSummary.Unreachable -> {
-                headline = "读不到"
-                detail = "电脑端可能未启动"
+                headline = getString(R.string.tile_unreachable)
+                detail = getString(R.string.tile_unreachable_detail)
             }
             is TileSummary.Ready -> {
                 headline = when {
-                    summary.pending > 0 -> "${summary.pending} 项待批准"
+                    summary.pending > 0 -> getString(R.string.tile_pending, summary.pending)
                     summary.running -> summary.sessionTitle
                     summary.hasSession -> summary.sessionTitle
-                    else -> "没有会话"
+                    else -> getString(R.string.common_no_sessions)
                 }
                 detail = when {
-                    summary.pending > 0 -> "点按查看"
-                    summary.running -> "运行中"
-                    summary.active > 0 -> "${summary.active} 个运行中"
-                    else -> "点按打开"
+                    summary.pending > 0 -> getString(R.string.tile_tap_view)
+                    summary.running -> getString(R.string.common_running)
+                    summary.active > 0 -> getString(R.string.tile_active, summary.active)
+                    else -> getString(R.string.tile_tap_open)
                 }
             }
         }

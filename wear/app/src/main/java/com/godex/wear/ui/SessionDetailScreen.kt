@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,6 +31,7 @@ import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.godex.wear.R
 import com.godex.wear.data.WatchSessionDetail
 import kotlinx.coroutines.delay
 
@@ -64,6 +66,9 @@ fun SessionDetailScreen(
     // user's finger.
     var fullText by remember { mutableStateOf<String?>(null) }
 
+    // Needed by elapsedSince, which is not @Composable: it ticks inside LaunchedEffect.
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     // Elapsed time ticks locally once per second. The server sends one start
     // timestamp rather than a counter, so a watch that wakes up mid-run still
     // shows the right value without polling for it.
@@ -75,7 +80,7 @@ fun SessionDetailScreen(
             return@LaunchedEffect
         }
         while (true) {
-            elapsed = elapsedSince(started)
+            elapsed = elapsedSince(context, started)
             delay(1000)
         }
     }
@@ -126,14 +131,19 @@ private fun FullTextBody(
     ) {
         item {
             val running = detail?.running == true
-            ScreenTitle("任务详情", if (running) "运行中" else "空闲")
+            ScreenTitle(
+                stringResource(R.string.detail_title),
+                if (running) stringResource(R.string.common_running)
+                else stringResource(R.string.common_idle),
+            )
         }
 
         if (detail == null) {
             item {
                 MessageBlock(
-                    title = if (loading) "加载中…" else "读不到会话",
-                    detail = if (loading) null else "可能已被删除",
+                    title = if (loading) stringResource(R.string.common_loading)
+                    else stringResource(R.string.detail_unreadable),
+                    detail = if (loading) null else stringResource(R.string.detail_unreadable_detail),
                 )
             }
         }
@@ -151,7 +161,7 @@ private fun FullTextBody(
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
-                            text = "第 ${d.stepDone}/${d.stepTotal} 步",
+                            text = stringResource(R.string.detail_steps, d.stepDone, d.stepTotal),
                             style = MaterialTheme.typography.caption1,
                             color = GodexColors.TextSecondary,
                             textAlign = TextAlign.Center,
@@ -187,7 +197,7 @@ private fun FullTextBody(
                         // identical to what the user is already looking at.
                         if (title.length > FullTextHintThreshold) {
                             Text(
-                                text = "点按查看全文",
+                                text = stringResource(R.string.detail_open_full_text),
                                 style = MaterialTheme.typography.caption1,
                                 color = GodexColors.Accent,
                                 textAlign = TextAlign.Center,
@@ -200,17 +210,21 @@ private fun FullTextBody(
                     }
                     val tool = d.currentTool
                     if (!tool.isNullOrBlank()) {
-                        StatusDot(color = GodexColors.Accent, label = "当前工具 · $tool")
+                        StatusDot(
+                            color = GodexColors.Accent,
+                            label = stringResource(R.string.detail_current_tool, tool),
+                        )
                     } else {
                         StatusDot(
                             color = if (d.running) GodexColors.Accent else GodexColors.TextMuted,
-                            label = if (d.running) "执行中" else "空闲",
+                            label = if (d.running) stringResource(R.string.detail_executing)
+                            else stringResource(R.string.common_idle),
                         )
                     }
                     if (elapsed.isNotEmpty()) {
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "已用时 $elapsed",
+                            text = stringResource(R.string.detail_elapsed, elapsed),
                             style = MaterialTheme.typography.caption1,
                             color = GodexColors.TextMuted,
                             textAlign = TextAlign.Center,
@@ -223,7 +237,7 @@ private fun FullTextBody(
             if (d.hasSteps) {
                 item {
                     Text(
-                        text = "执行计划",
+                        text = stringResource(R.string.detail_plan),
                         style = MaterialTheme.typography.caption1,
                         color = GodexColors.TextSecondary,
                         textAlign = TextAlign.Center,
@@ -250,7 +264,7 @@ private fun FullTextBody(
                 item {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "最近工具",
+                        text = stringResource(R.string.detail_recent_tools),
                         style = MaterialTheme.typography.caption1,
                         color = GodexColors.TextSecondary,
                         textAlign = TextAlign.Center,
@@ -272,13 +286,13 @@ private fun FullTextBody(
                     // permanently visible dead button is worse than none.
                     if (d.hasRunningTurn) {
                         RoundAction(
-                            label = "停止",
+                            label = stringResource(R.string.detail_stop),
                             color = GodexColors.Danger,
                             onClick = onStop,
                         )
                     } else {
                         RoundAction(
-                            label = "说话",
+                            label = stringResource(R.string.home_talk),
                             enabled = sessionId.isNotEmpty(),
                             onClick = onTalk,
                         )
@@ -288,12 +302,17 @@ private fun FullTextBody(
                     // control stops playback instead of stacking a second clip.
                     val canSpeak = !d.replySummary.isNullOrBlank() || !d.lastMessage?.text.isNullOrBlank()
                     SmallAction(
-                        label = if (speaking) "停止朗读" else "朗读回复",
+                        label = if (speaking) stringResource(R.string.detail_stop_speak)
+                        else stringResource(R.string.detail_speak),
                         onClick = onSpeak,
                         enabled = speaking || canSpeak,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    SmallAction("返回", onBack, Modifier.fillMaxWidth())
+                    SmallAction(
+                        stringResource(R.string.common_back),
+                        onBack,
+                        Modifier.fillMaxWidth(),
+                    )
                 }
             }
         }
@@ -301,7 +320,11 @@ private fun FullTextBody(
         if (detail == null && !loading) {
             item {
                 Spacer(Modifier.height(6.dp))
-                SmallAction("返回", onBack, Modifier.fillMaxWidth())
+                SmallAction(
+                    stringResource(R.string.common_back),
+                    onBack,
+                    Modifier.fillMaxWidth(),
+                )
             }
         }
     }
@@ -325,7 +348,10 @@ private fun FullTextScreen(text: String, onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
         ) {
-            ScreenTitle("全文", "点按底部返回")
+            ScreenTitle(
+                stringResource(R.string.detail_full_text_title),
+                stringResource(R.string.detail_full_text_hint),
+            )
             Spacer(Modifier.height(6.dp))
             Text(
                 text = text,
@@ -335,7 +361,7 @@ private fun FullTextScreen(text: String, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(10.dp))
-            SmallAction("返回", onBack, Modifier.fillMaxWidth())
+            SmallAction(stringResource(R.string.common_back), onBack, Modifier.fillMaxWidth())
         }
     }
 }
@@ -406,7 +432,7 @@ private fun ToolRow(tool: com.godex.wear.data.WatchSessionDetail.ToolEvent) {
             text = buildString {
                 append(tool.name)
                 if (tool.pending) {
-                    append(" · 进行中")
+                    append(stringResource(R.string.detail_in_progress))
                 } else if (tool.durationText.isNotEmpty()) {
                     append(" · ").append(tool.durationText)
                 }
@@ -446,8 +472,12 @@ private fun ProgressBar(percent: Int) {
     }
 }
 
-/** Formats a duration as `12 分 04 秒`, matching the mockup's reading order. */
-internal fun elapsedSince(startedIso: String, now: java.time.Instant = java.time.Instant.now()): String {
+/** Formats a duration as `12 min 04 s`, matching the mockup's reading order. */
+internal fun elapsedSince(
+    context: android.content.Context,
+    startedIso: String,
+    now: java.time.Instant = java.time.Instant.now(),
+): String {
     val started = runCatching { java.time.Instant.parse(startedIso) }.getOrElse {
         runCatching { java.time.OffsetDateTime.parse(startedIso).toInstant() }.getOrNull()
     } ?: return ""
@@ -455,8 +485,12 @@ internal fun elapsedSince(startedIso: String, now: java.time.Instant = java.time
     val minutes = total / 60
     val seconds = total % 60
     return when {
-        minutes >= 60 -> "${minutes / 60} 小时 ${minutes % 60} 分"
-        minutes > 0 -> "$minutes 分 ${"%02d".format(seconds)} 秒"
-        else -> "$seconds 秒"
+        minutes >= 60 -> context.getString(R.string.time_hours_minutes, minutes / 60, minutes % 60)
+        minutes > 0 -> context.getString(
+            R.string.time_minutes_seconds,
+            minutes,
+            "%02d".format(seconds),
+        )
+        else -> context.getString(R.string.time_seconds, seconds)
     }
 }

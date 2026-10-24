@@ -5,6 +5,8 @@ import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.Colors
 import androidx.wear.compose.material.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
+import com.godex.wear.R
 
 /**
  * Dark-first palette.
@@ -56,21 +58,22 @@ fun GodexWearTheme(content: @Composable () -> Unit) {
     )
 }
 
-/** Relative "x 分钟前" rendering; a wrist glance cares about recency, not clocks. */
+/** Relative "x min ago" rendering; a wrist glance cares about recency, not clocks. */
+@Composable
 fun relativeTime(iso: String?): String {
     val parsed = parseInstant(iso) ?: return ""
 
     val minutes = java.time.Duration.between(parsed, java.time.Instant.now()).toMinutes()
     return when {
-        minutes < 1 -> "刚刚"
-        minutes < 60 -> "${minutes} 分钟前"
-        minutes < 60 * 24 -> "${minutes / 60} 小时前"
-        else -> "${minutes / (60 * 24)} 天前"
+        minutes < 1 -> stringResource(R.string.time_just_now)
+        minutes < 60 -> stringResource(R.string.time_minutes_ago, minutes)
+        minutes < 60 * 24 -> stringResource(R.string.time_hours_ago, minutes / 60)
+        else -> stringResource(R.string.time_days_ago, minutes / (60 * 24))
     }
 }
 
 /**
- * Countdown to a deadline, e.g. "14 分钟后超时".
+ * Countdown to a deadline, e.g. "expires in 14 min".
  *
  * Approvals expire (the server sends expires_at) and how long is left changes
  * whether the request is worth acting on from the wrist at all: one about to time
@@ -78,16 +81,34 @@ fun relativeTime(iso: String?): String {
  * empty for an unparseable or already-passed deadline rather than rendering a
  * negative duration.
  */
+@Composable
 fun remainingTime(iso: String?): String {
     val deadline = parseInstant(iso) ?: return ""
     val minutes = java.time.Duration.between(java.time.Instant.now(), deadline).toMinutes()
     return when {
         minutes < 0 -> ""
-        minutes < 1 -> "即将超时"
-        minutes < 60 -> "${minutes} 分钟后超时"
-        minutes < 60 * 24 -> "${minutes / 60} 小时后超时"
-        else -> "${minutes / (60 * 24)} 天后超时"
+        minutes < 1 -> stringResource(R.string.time_expiring)
+        minutes < 60 -> stringResource(R.string.time_expires_minutes, minutes)
+        minutes < 60 * 24 -> stringResource(R.string.time_expires_hours, minutes / 60)
+        else -> stringResource(R.string.time_expires_days, minutes / (60 * 24))
     }
+}
+
+/**
+ * Human label for a node kind ("pc" / "cloud" / "phone").
+ *
+ * Lives here rather than on the DTO because the label is a translation, and a DTO
+ * cannot reach resources. An unrecognised kind still returns the raw value: a
+ * newer node type this build does not know is better shown honestly than silently
+ * presented as a desktop.
+ */
+@Composable
+fun nodeKindLabel(kind: String): String = when (kind.lowercase()) {
+    "" -> ""
+    "pc" -> stringResource(R.string.node_kind_pc)
+    "cloud" -> stringResource(R.string.node_kind_cloud)
+    "phone" -> stringResource(R.string.node_kind_phone)
+    else -> kind
 }
 
 /**

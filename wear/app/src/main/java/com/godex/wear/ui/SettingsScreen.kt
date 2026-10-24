@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -29,6 +30,7 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.ToggleChip
 import androidx.wear.compose.material.ToggleChipDefaults
+import com.godex.wear.R
 import com.godex.wear.data.Credentials
 import com.godex.wear.data.WatchApi
 import com.godex.wear.data.WatchPreferences
@@ -65,12 +67,12 @@ fun SettingsScreen(
             .fillMaxSize()
             .background(GodexColors.Background),
     ) {
-        item { ScreenTitle("设置") }
+        item { ScreenTitle(stringResource(R.string.settings_title)) }
 
         item {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "服务器地址",
+                    text = stringResource(R.string.settings_server_url),
                     style = MaterialTheme.typography.caption1,
                     color = GodexColors.TextSecondary,
                     textAlign = TextAlign.Center,
@@ -91,7 +93,7 @@ fun SettingsScreen(
                 )
                 Spacer(Modifier.height(6.dp))
                 SmallAction(
-                    label = "保存地址",
+                    label = stringResource(R.string.settings_save_url),
                     highlight = true,
                     onClick = { onSaveUrl(url) },
                     modifier = Modifier.fillMaxWidth(),
@@ -102,7 +104,7 @@ fun SettingsScreen(
         // ---- 通知 ----
         item {
             Text(
-                text = "通知",
+                text = stringResource(R.string.settings_notifications),
                 style = MaterialTheme.typography.caption1,
                 color = GodexColors.TextSecondary,
                 textAlign = TextAlign.Center,
@@ -113,8 +115,8 @@ fun SettingsScreen(
         item {
             SettingToggle(
                 checked = preferences.notifyOnComplete,
-                label = "任务完成提醒",
-                secondary = "含结果摘要，点按看详情",
+                label = stringResource(R.string.settings_notify_complete),
+                secondary = stringResource(R.string.settings_notify_complete_desc),
                 onCheckedChange = onNotifyOnComplete,
             )
         }
@@ -125,7 +127,7 @@ fun SettingsScreen(
         // turned off while an agent is blocked on it.
         item {
             Text(
-                text = "审批请求（强制）\n不可关闭 · 震动手腕",
+                text = stringResource(R.string.settings_approvals_forced),
                 style = MaterialTheme.typography.caption1,
                 color = GodexColors.TextMuted,
                 textAlign = TextAlign.Center,
@@ -136,7 +138,7 @@ fun SettingsScreen(
         // ---- 省电 ----
         item {
             Text(
-                text = "省电",
+                text = stringResource(R.string.settings_power),
                 style = MaterialTheme.typography.caption1,
                 color = GodexColors.TextSecondary,
                 textAlign = TextAlign.Center,
@@ -147,8 +149,8 @@ fun SettingsScreen(
         item {
             SettingToggle(
                 checked = preferences.powerSaving,
-                label = "只在需要时联网",
-                secondary = "无任务时降低轮询频率",
+                label = stringResource(R.string.settings_power_desc),
+                secondary = stringResource(R.string.settings_power_desc2),
                 onCheckedChange = onPowerSaving,
             )
         }
@@ -156,8 +158,8 @@ fun SettingsScreen(
         item {
             SettingToggle(
                 checked = preferences.ambient,
-                label = "常亮显示",
-                secondary = "表盘常驻运行中任务状态",
+                label = stringResource(R.string.settings_ambient),
+                secondary = stringResource(R.string.settings_ambient_desc),
                 onCheckedChange = onAmbient,
             )
         }
@@ -165,7 +167,7 @@ fun SettingsScreen(
         // ---- 安全 ----
         item {
             Text(
-                text = "安全",
+                text = stringResource(R.string.settings_security),
                 style = MaterialTheme.typography.caption1,
                 color = GodexColors.TextSecondary,
                 textAlign = TextAlign.Center,
@@ -178,8 +180,9 @@ fun SettingsScreen(
             // diagnosable on the wrist instead of needing server logs.
             val scopes = credentials?.scopes.orEmpty()
             Text(
-                text = "本表权限范围\n" +
-                    if (scopes.isEmpty()) "未配对" else scopes.sorted().joinToString(" · "),
+                text = stringResource(R.string.settings_scopes) +
+                    if (scopes.isEmpty()) stringResource(R.string.tile_unpaired)
+                    else scopes.sorted().joinToString(" · "),
                 style = MaterialTheme.typography.caption1,
                 color = GodexColors.TextMuted,
                 textAlign = TextAlign.Center,
@@ -191,9 +194,17 @@ fun SettingsScreen(
 
         item {
             Column(modifier = Modifier.fillMaxWidth()) {
-                SmallAction(label = "取消配对", onClick = onUnpair, modifier = Modifier.fillMaxWidth())
+                SmallAction(
+                    label = stringResource(R.string.settings_unpair),
+                    onClick = onUnpair,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Spacer(Modifier.height(6.dp))
-                SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
+                SmallAction(
+                    label = stringResource(R.string.common_back),
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }
@@ -230,7 +241,8 @@ private fun SettingToggle(
         toggleControl = {
             Icon(
                 imageVector = ToggleChipDefaults.switchIcon(checked),
-                contentDescription = if (checked) "已开启" else "已关闭",
+                contentDescription = if (checked) stringResource(R.string.common_on)
+                else stringResource(R.string.common_off),
             )
         },
         secondaryLabel = {

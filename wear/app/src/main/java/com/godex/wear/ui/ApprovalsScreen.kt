@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -16,6 +17,7 @@ import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.godex.wear.R
 import com.godex.wear.data.WatchApproval
 
 /**
@@ -44,13 +46,18 @@ fun ApprovalsScreen(
         modifier = Modifier.fillMaxSize(),
     ) {
         item {
-            ScreenTitle("待批准", if (approvals.isEmpty()) "全部已处理" else "共 ${approvals.size} 项")
+            ScreenTitle(
+                stringResource(R.string.approvals_title),
+                if (approvals.isEmpty()) stringResource(R.string.approvals_all_done)
+                else stringResource(R.string.approvals_count, approvals.size),
+            )
         }
 
         if (approvals.isEmpty()) {
             item {
                 MessageBlock(
-                    title = if (loading) "加载中…" else "没有待批准项",
+                    title = if (loading) stringResource(R.string.common_loading)
+                    else stringResource(R.string.approvals_empty),
                     tint = if (loading) GodexColors.TextSecondary else GodexColors.Accent,
                 )
             }
@@ -65,7 +72,9 @@ fun ApprovalsScreen(
                 Chip(
                     label = {
                         Text(
-                            text = item.summary.ifBlank { item.toolName ?: "待批准" },
+                            text = item.summary.ifBlank {
+                                item.toolName ?: stringResource(R.string.approvals_title)
+                            },
                             style = MaterialTheme.typography.body1,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
@@ -74,7 +83,10 @@ fun ApprovalsScreen(
                     secondaryLabel = {
                         Text(
                             text = buildString {
-                                append(if (item.isPermission) "工具" else "流程任务")
+                                append(
+                                    if (item.isPermission) stringResource(R.string.common_tool)
+                                    else stringResource(R.string.common_flow_task),
+                                )
                                 item.toolName?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
                                 relativeTime(item.createdAt).takeIf { it.isNotEmpty() }
                                     ?.let { append(" · ").append(it) }
@@ -97,13 +109,13 @@ fun ApprovalsScreen(
                         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(ChipSpacing),
                     ) {
                         SmallAction(
-                            label = "批准",
+                            label = stringResource(R.string.common_approve),
                             highlight = true,
                             onClick = { onApprove(item) },
                             modifier = Modifier.weight(1f),
                         )
                         SmallAction(
-                            label = "拒绝",
+                            label = stringResource(R.string.common_deny),
                             onClick = { onDeny(item) },
                             modifier = Modifier.weight(1f),
                         )
@@ -111,7 +123,7 @@ fun ApprovalsScreen(
                 } else {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "需在电脑端填写表单",
+                        text = stringResource(R.string.approvals_form_hint),
                         style = MaterialTheme.typography.caption1,
                         color = GodexColors.TextMuted,
                     )
@@ -121,7 +133,11 @@ fun ApprovalsScreen(
         }
 
         item {
-            SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
+            SmallAction(
+                label = stringResource(R.string.common_back),
+                onClick = onBack,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

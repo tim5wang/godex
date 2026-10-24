@@ -409,7 +409,7 @@ private fun NoticeOverlay(text: String, isError: Boolean, onDismiss: () -> Unit)
         RoundScreen {
             ScreenTitle(
                 text = text,
-                subtitle = if (isError) "点按或滑动关闭" else null,
+                subtitle = if (isError) stringResource(R.string.common_dismiss_hint) else null,
             )
         }
     }

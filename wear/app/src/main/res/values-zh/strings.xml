@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Chinese translation.
+
+  A complete translation rather than a partial one: on a watch only a handful of
+  words are visible at once, and a screen mixing scripts reads worse than either
+  language on its own.
+-->
+<resources>
+    <!-- 共用词。一个概念只用一个词，腕上同时只显示两三个词时尤其重要。 -->
+    <string name="common_back">返回</string>
+    <string name="common_cancel">取消</string>
+    <string name="common_loading">加载中…</string>
+    <string name="common_session">会话</string>
+    <string name="common_no_sessions">没有会话</string>
+    <string name="common_unnamed_session">未命名会话</string>
+    <string name="common_running">运行中</string>
+    <string name="common_idle">空闲</string>
+    <string name="common_online">在线</string>
+    <string name="common_offline">离线</string>
+    <string name="common_all">全部</string>
+    <string name="common_approve">批准</string>
+    <string name="common_deny">拒绝</string>
+    <string name="common_tool">工具</string>
+    <string name="common_flow_task">流程任务</string>
+    <string name="common_current">当前</string>
+    <string name="common_on">已开启</string>
+    <string name="common_off">已关闭</string>
+    <string name="common_dismiss_hint">点按或滑动关闭</string>
+
+    <!-- 节点类型 -->
+    <string name="node_kind_pc">电脑</string>
+    <string name="node_kind_cloud">云服务器</string>
+    <string name="node_kind_phone">手机</string>
+
+    <!-- 相对时间与倒计时 -->
+    <string name="time_just_now">刚刚</string>
+    <string name="time_minutes_ago">%1$d 分钟前</string>
+    <string name="time_hours_ago">%1$d 小时前</string>
+    <string name="time_days_ago">%1$d 天前</string>
+    <string name="time_expiring">即将超时</string>
+    <string name="time_expires_minutes">%1$d 分钟后超时</string>
+    <string name="time_expires_hours">%1$d 小时后超时</string>
+    <string name="time_expires_days">%1$d 天后超时</string>
+    <string name="time_seconds">%1$d 秒</string>
+    <string name="time_minutes_seconds">%1$d 分 %2$s 秒</string>
+    <string name="time_hours_minutes">%1$d 小时 %2$d 分</string>
+
+    <!-- 主页 -->
+    <string name="home_connect_failed">连接失败</string>
+    <string name="home_empty_detail">在电脑端开始一个</string>
+    <string name="home_pending_suffix"> · %1$d 项待批准</string>
+    <string name="home_tap_suffix"> · 点按看详情</string>
+    <string name="home_talk">说话</string>
+    <string name="home_approvals">审批</string>
+    <string name="home_approvals_count">审批 %1$d</string>
+    <string name="home_refresh">刷新</string>
+
+    <!-- 会话列表 -->
+    <string name="sessions_count">共 %1$d 个</string>
+    <string name="sessions_pinned">置顶</string>
+    <string name="sessions_pick_preset">选择预设</string>
+    <string name="sessions_new">＋ 新建对话</string>
+    <string name="sessions_cross_device">跨设备会话</string>
+
+    <!-- 说话 / 听写 -->
+    <string name="talk_hold">按住说话</string>
+    <string name="talk_release">松开发送</string>
+    <string name="talk_no_session">未选择会话</string>
+    <string name="talk_send">发送</string>
+    <string name="talk_hint">按住开始 · 拖开取消</string>
+    <string name="talk_recording">正在录音</string>
+    <string name="talk_to_voice">改回语音</string>
+    <string name="talk_to_text">改打字</string>
+    <string name="talk_phrases">常用语</string>
+    <string name="talk_phrases_hide">收起常用语</string>
+
+    <!-- 任务详情 -->
+    <string name="detail_title">任务详情</string>
+    <string name="detail_unreadable">读不到会话</string>
+    <string name="detail_unreadable_detail">可能已被删除</string>
+    <string name="detail_steps">第 %1$d/%2$d 步</string>
+    <string name="detail_open_full_text">点按查看全文</string>
+    <string name="detail_current_tool">当前工具 · %1$s</string>
+    <string name="detail_executing">执行中</string>
+    <string name="detail_elapsed">已用时 %1$s</string>
+    <string name="detail_plan">执行计划</string>
+    <string name="detail_recent_tools">最近工具</string>
+    <string name="detail_stop">停止</string>
+    <string name="detail_speak">朗读回复</string>
+    <string name="detail_stop_speak">停止朗读</string>
+    <string name="detail_full_text_title">全文</string>
+    <string name="detail_full_text_hint">点按底部返回</string>
+    <string name="detail_in_progress"> · 进行中</string>
+
+    <!-- 审批 -->
+    <string name="approvals_title">待批准</string>
+    <string name="approvals_all_done">全部已处理</string>
+    <string name="approvals_count">共 %1$d 项</string>
+    <string name="approvals_empty">没有待批准项</string>
+    <string name="approvals_form_hint">需在电脑端填写表单</string>
+    <string name="approval_loading_detail">正在读取待批准项</string>
+    <string name="approval_resolved">已处理</string>
+    <string name="approval_resolved_detail">该请求已不在队列中</string>
+    <string name="approval_counter">待审批 %1$d/%2$d</string>
+    <string name="approval_danger_title">agent 请求执行高危命令</string>
+    <string name="approval_tool_title">agent 请求批准工具调用</string>
+    <string name="approval_session_prefix"> · 会话「</string>
+    <string name="approval_risk">风险：%1$s</string>
+    <string name="approval_effect_after">批准后</string>
+    <string name="approval_effect_action">该操作</string>
+    <string name="approval_effect_command">该命令</string>
+    <string name="approval_effect_run_at">将立即在 </string>
+    <string name="approval_effect_run">将立即执行</string>
+    <string name="approval_confirm">确认批准</string>
+    <string name="approval_danger_rearm">高危命令 · 再点一次即执行</string>
+    <string name="approval_danger_hint">高危命令 · 需点两次确认</string>
+    <string name="approval_allow_session">本会话全部允许</string>
+    <string name="approval_flow_form_hint">流程人工卡点需在电脑端填写表单</string>
+
+    <!-- 设备 -->
+    <string name="devices_title">设备</string>
+    <string name="devices_count">共 %1$d 台</string>
+    <string name="devices_empty">没有已注册设备</string>
+    <string name="devices_empty_detail">在电脑端启动 godex</string>
+    <string name="devices_current"> · 当前</string>
+
+    <!-- 跨设备 -->
+    <string name="cross_title">全部任务</string>
+    <string name="cross_summary">%1$d 个 · %2$d 端</string>
+    <string name="cross_offline_note">%1$s 离线，读不到它的会话（中心不缓存历史）</string>
+    <string name="cross_empty_detail">所有已知设备都没有活跃任务</string>
+
+    <!-- 设置 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_server_url">服务器地址</string>
+    <string name="settings_save_url">保存地址</string>
+    <string name="settings_notifications">通知</string>
+    <string name="settings_notify_complete">任务完成提醒</string>
+    <string name="settings_notify_complete_desc">含结果摘要，点按看详情</string>
+    <string name="settings_approvals_forced">审批请求（强制）\n不可关闭 · 震动手腕</string>
+    <string name="settings_power">省电</string>
+    <string name="settings_power_desc">只在需要时联网</string>
+    <string name="settings_power_desc2">无任务时降低轮询频率</string>
+    <string name="settings_ambient">常亮显示</string>
+    <string name="settings_ambient_desc">表盘常驻运行中任务状态</string>
+    <string name="settings_security">安全</string>
+    <string name="settings_scopes">本表权限范围\n</string>
+    <string name="settings_unpair">取消配对</string>
+
+    <!-- 配对 -->
+    <string name="pairing_title">配对</string>
+    <string name="pairing_code_title">配对码</string>
+    <string name="pairing_confirm_hint">在已信任的端确认</string>
+    <string name="pairing_generate">生成配对码</string>
+    <string name="pairing_generating">生成中…</string>
+    <string name="pairing_enter_code">在手机或网页端输入</string>
+    <string name="pairing_waiting">等待确认</string>
+    <string name="pairing_incomplete">配对响应不完整，请重试</string>
+    <string name="pairing_expired">配对码已过期，请重新生成</string>
+    <string name="pairing_network_unreachable">网络不可达</string>
+    <string name="pairing_timeout">等待超时，请重试</string>
+    <string name="pairing_cannot_connect">无法连接服务器</string>
+
+    <!-- 通知 -->
+    <string name="notif_channel_approvals">审批请求</string>
+    <string name="notif_channel_approvals_desc">智能体等待批准的操作</string>
+    <string name="notif_channel_task">任务运行中</string>
+    <string name="notif_channel_task_desc">当前任务的常驻状态</string>
+    <string name="notif_channel_complete">任务完成</string>
+    <string name="notif_channel_complete_desc">对话返回、任务完成或失败</string>
+    <string name="notif_approval_title">需要批准</string>
+    <string name="notif_approval_tool">工具调用</string>
+    <string name="notif_approval_session">\n会话：</string>
+    <string name="notif_done_title">任务完成</string>
+    <string name="notif_failed_title">任务失败</string>
+    <string name="notif_tap_for_detail">%1$s · 点按看详情</string>
+    <string name="notif_ongoing_progress">#progress# · 已用时 #elapsed#</string>
+    <string name="notif_ongoing_steps">第 %1$d/%2$d 步 · %3$d%%</string>
+    <string name="notif_ongoing_tool">正在使用 %1$s</string>
+    <string name="notif_ongoing_running">正在执行</string>
+
+    <!-- 表盘卡片 -->
+    <string name="tile_unpaired">未配对</string>
+    <string name="tile_unpaired_detail">打开应用完成配对</string>
+    <string name="tile_unreachable">读不到</string>
+    <string name="tile_unreachable_detail">电脑端可能未启动</string>
+    <string name="tile_pending">%1$d 项待批准</string>
+    <string name="tile_tap_view">点按查看</string>
+    <string name="tile_active">%1$d 个运行中</string>
+    <string name="tile_tap_open">点按打开</string>
+
+    <!-- 一次性提示（ViewModel） -->
+    <string name="vm_created">已新建对话</string>
+    <string name="vm_create_failed">新建失败</string>
+    <string name="vm_select_session_first">先选一个会话</string>
+    <string name="vm_stopped">已停止</string>
+    <string name="vm_nothing_running">没有正在运行的任务</string>
+    <string name="vm_stop_failed">停止失败</string>
+    <string name="vm_queued_suffix">（已排队）</string>
+    <string name="vm_needs_approval_suffix">（需审批）</string>
+    <string name="vm_sent">已发送%1$s</string>
+    <string name="vm_send_failed">发送失败</string>
+    <string name="vm_approved">已批准</string>
+    <string name="vm_approved_session">本会话已全部允许</string>
+    <string name="vm_already_handled">已被其他端处理</string>
+    <string name="vm_approve_failed">批准失败</string>
+    <string name="vm_denied">已拒绝</string>
+    <string name="vm_deny_failed">拒绝失败</string>
+    <string name="vm_speak_unsupported">这段回复无法朗读</string>
+    <string name="vm_no_reply_to_speak">还没有可朗读的回复</string>
+    <string name="vm_speak_failed">朗读失败</string>
+    <string name="vm_mic_permission">需要麦克风权限</string>
+    <string name="vm_record_start_failed">无法开始录音</string>
+    <string name="vm_record_failed">录音失败</string>
+    <string name="vm_no_audio">没有听到声音</string>
+    <string name="vm_no_transcript">没有识别出内容</string>
+    <string name="vm_transcribe_failed">转写失败</string>
+    <string name="vm_credential_revoked">配对已失效，请重新配对</string>
+</resources>

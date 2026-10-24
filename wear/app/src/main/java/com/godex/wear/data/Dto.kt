@@ -88,21 +88,8 @@ data class WatchNode(
 ) {
     val isOnline: Boolean get() = status.equals("online", ignoreCase = true)
 
-    /**
-     * Short label for the node kind, or empty when there is nothing to say.
-     *
-     * An unrecognised kind (a newer node type this build does not know) returns
-     * the raw value rather than hiding it: showing the truth is better than
-     * silently presenting a phone as a desktop.
-     */
-    val kindLabel: String
-        get() = when (kind.lowercase()) {
-            "" -> ""
-            "pc" -> "电脑"
-            "cloud" -> "云服务器"
-            "phone" -> "手机"
-            else -> kind
-        }
+    // The display label for `kind` lives in ui/Theme.kt as nodeKindLabel(): it is a
+    // translation, and a DTO cannot reach string resources.
 }
 
 @Serializable

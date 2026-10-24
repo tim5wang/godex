@@ -28,11 +28,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
+import com.godex.wear.R
 
 /**
  * Push-to-talk (mockup 07), with a typed fallback.
@@ -73,8 +75,9 @@ fun TalkScreen(
             verticalArrangement = Arrangement.Center,
         ) {
             ScreenTitle(
-                text = if (recording) "松开发送" else "按住说话",
-                subtitle = sessionTitle.ifBlank { "未选择会话" },
+                text = if (recording) stringResource(R.string.talk_release)
+                else stringResource(R.string.talk_hold),
+                subtitle = sessionTitle.ifBlank { stringResource(R.string.talk_no_session) },
             )
 
             Spacer(Modifier.height(12.dp))
@@ -86,7 +89,8 @@ fun TalkScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(ChipSpacing),
                 ) {
-                    QuickPhrases.forEach { phrase ->
+                    QuickPhrases.forEach { phraseRes ->
+                        val phrase = stringResource(phraseRes)
                         SmallAction(
                             label = phrase,
                             highlight = true,
@@ -111,7 +115,7 @@ fun TalkScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 SmallAction(
-                    label = "发送",
+                    label = stringResource(R.string.talk_send),
                     highlight = typed.isNotBlank(),
                     onClick = {
                         if (typed.isNotBlank()) {
@@ -152,7 +156,8 @@ fun TalkScreen(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = if (recording) "正在录音" else "按住开始 · 拖开取消",
+                    text = if (recording) stringResource(R.string.talk_recording)
+                    else stringResource(R.string.talk_hint),
                     style = MaterialTheme.typography.caption1,
                     color = GodexColors.TextMuted,
                     textAlign = TextAlign.Center,
@@ -165,7 +170,8 @@ fun TalkScreen(
                 verticalArrangement = Arrangement.spacedBy(ChipSpacing),
             ) {
                 SmallAction(
-                    label = if (showKeyboard) "改回语音" else "改打字",
+                    label = if (showKeyboard) stringResource(R.string.talk_to_voice)
+                    else stringResource(R.string.talk_to_text),
                     onClick = {
                         showKeyboard = !showKeyboard
                         showPhrases = false
@@ -173,14 +179,19 @@ fun TalkScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 SmallAction(
-                    label = if (showPhrases) "收起常用语" else "常用语",
+                    label = if (showPhrases) stringResource(R.string.talk_phrases_hide)
+                    else stringResource(R.string.talk_phrases),
                     onClick = {
                         showPhrases = !showPhrases
                         showKeyboard = false
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                SmallAction(label = "返回", onClick = onBack, modifier = Modifier.fillMaxWidth())
+                SmallAction(
+                    label = stringResource(R.string.common_back),
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }
@@ -194,8 +205,8 @@ fun TalkScreen(
  * screen for editing them would cost more taps than typing the phrase.
  */
 private val QuickPhrases = listOf(
-    "OK",
-    "实施方案",
-    "继续",
-    "继续完成剩余工作",
+    R.string.phrase_ok,
+    R.string.phrase_plan,
+    R.string.phrase_continue,
+    R.string.phrase_continue_rest,
 )

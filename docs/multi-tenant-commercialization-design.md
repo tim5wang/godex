@@ -78,6 +78,16 @@ GET /api/control/nodes/win-min/proxy/meta     -> 200  泄漏 model / workspace_d
 **后果**：任一已加入的节点持有 `nk_` 即可**枚举所有节点并代理进入任意节点**。
 这是多租户隔离的**直接对立面**，必须改为 per-node 凭据 + 目标节点授权。
 
+**进展（如实分开记）**：
+
+| 子项 | 状态 |
+|---|---|
+| **目标节点授权**（读面遮蔽 + 代理闸门） | ✅ **已做**：`GET /control/nodes` 按 `VisibleNodeIDs` 遮蔽；`GET /control/nodes/{id}` 与 `/{id}/overview` 跨租户 403；`/control/nodes/{id}/proxy/...` 走 `ProxyHandler.AuthorizeNode` |
+| **`nk_` 改 per-node 凭据** | ⏳ **未做**：仍是全局单凭据。即当前 `nk_` 持有者仍可**探测**任意节点是否存在（拿 403 而非 200），但拿不到数据、也代理不进去 |
+
+> 遮罩后 `nk_` 的“枚举”仍会泄漏一个信息：某个 id 是否存在（403 vs 404）。
+> 彻底消除需 per-node 凭据（每个节点只能拿自己的 `nk_`），属 P1。
+
 ### 1.4 阻断项 D：中心正在跑 agent（收窄到单一账号）
 
 中心实为**中继 + 执行体**：`cron.enabled: true`，`/root/.godex/sessions` 有 **18 个会话**。

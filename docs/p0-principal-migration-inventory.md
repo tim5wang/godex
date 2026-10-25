@@ -76,7 +76,7 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 | watch `read` | **8** | watch device token + scope | 已 per-device → 补 `TenantID` 归属 |
 | `withBizKeyAuth` | **6** | biz key | → 从 key 解析 `TenantID`/`UserID` |
 | watch `command` | **5** | watch device token + scope | 同上 |
-| `nodeProxyRead` | **3** | web token **或** `nk_` | → 绑定 `(NodeID, TenantID)` 的 per-node 凭据 |
+| `nodeProxyRead` | **3** | web token **或** `nk_` | → 绑定 `(NodeID, TenantID)` 的 per-node 凭据（**`nk_` 本身仍全局，未改**）|
 | gateway 双认证（`gunzipBody` 内层） | **3** | `gdx_` proxy key **或** web token | 两条路径都要落 Principal |
 | inline `gdx_`（`/v1/models`、`/v1/usage/cache-stats`） | **2** | `gdx_` proxy key | → 从 key 解析租户与额度 |
 | watch `approve` | **2** | watch device token + scope | 同上 |
@@ -108,7 +108,7 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 | 族 | 改造前 | 改造后行为 |
 |---|---|---|
 | `protected` | 有 token 即放行全部 | ① 无有效 Principal → **401**；② 有 Principal 但**非本租户资源** → **403**（`NodeAccess`）；③ 执行入口另需 `center_execution`（§3.3 决策⑨）→ 否则 **403** |
-| `nodeProxyRead` | 全通（§1.3 已复现跨节点） | 仅返回**本租户可见**节点；跨租户 → **403** |
+| `nodeProxyRead` | 全通（§1.3 已复现跨节点） | ✅ 仅返回**本租户可见**节点；跨租户 → **403**（列表遮蔽 + 按 id/概览 403）|
 | watch scope | 设备维度，无租户 | 设备绑定租户；跨租户节点 → **403** |
 | bizKey | 仅校验 key 存在 | key → 租户；跨租户 → **403** |
 | query-token | 同 `protected` | 同 `protected`（注意 WS 无法设 header，保留 `?token=`） |

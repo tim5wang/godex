@@ -47,7 +47,11 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, nodes)
+		// NodeAccess (§1.3): the list must be masked to the nodes this caller may
+		// reach. Without this the nk_ credential enumerated every node on the
+		// platform — the registry itself is global, so filtering has to happen
+		// here rather than in List.
+		writeJSON(w, http.StatusOK, filterVisibleNodes(r, nodes))
 	})))
 	mux.Handle("GET /control/nodes/{id}", nodeProxyRead(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
@@ -57,6 +61,13 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		node, err := controlRegistry.Get(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		// Same seam as the list: reading one node by id must not leak a node the
+		// caller cannot see, otherwise masking the list would be cosmetic. The
+		// node is passed whole so the decision sees its tenant/owner/visibility.
+		if decision := authorizeNodeAccess(r, node.NodeRef()); !decision.Allowed {
+			writeError(w, http.StatusForbidden, fmt.Errorf("node access denied: %s", decision.Reason))
 			return
 		}
 		writeJSON(w, http.StatusOK, node)
@@ -147,6 +158,13 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		node, err := controlRegistry.Get(r.Context(), id)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		// Same seam as GET /control/nodes/{id}: the overview carries the node and
+		// its activity, so it must not be readable for a node the caller cannot
+		// reach.
+		if decision := authorizeNodeAccess(r, node.NodeRef()); !decision.Allowed {
+			writeError(w, http.StatusForbidden, fmt.Errorf("node access denied: %s", decision.Reason))
 			return
 		}
 		var overview relay.NodeOverview

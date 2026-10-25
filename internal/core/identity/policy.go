@@ -46,6 +46,11 @@ const (
 	// delegation rather than tenant membership. Recorded so the audit trail
 	// shows WHY access was granted.
 	ReasonPlatformAdmin = "platform_admin"
+	// ReasonSingleTenant — neither side carries a tenant, i.e. a deployment
+	// with no tenant system in use. Recorded separately from ReasonAllowed so
+	// the legacy path is visible in audit rather than looking like a normal
+	// same-tenant match.
+	ReasonSingleTenant = "single_tenant"
 )
 
 // Decision is the result of an authorization check.
@@ -116,10 +121,12 @@ func (p Policy) sharingAllowed(tenantID string) bool {
 //
 // Rules, in order:
 //  1. no identity            → denied (no_principal)
-//  2. different tenant       → denied (cross_tenant)
-//  3. same tenant, node private and caller is not the owner → denied (node_not_shared)
-//  4. sharing disabled by the superadmin → denied (sharing_disabled)
-//  5. otherwise              → allowed
+//  2. both sides unscoped    → allowed for the platform operator only
+//     (single_tenant); denied otherwise
+//  3. different/unscoped tenant → denied (cross_tenant)
+//  4. same tenant, node private and caller is not the owner → denied (node_not_shared)
+//  5. sharing disabled by the superadmin → denied (sharing_disabled)
+//  6. otherwise              → allowed
 //
 // A platform admin does NOT bypass these rules: cross-tenant access is read
 // access to another tenant's data, which requires an explicit delegation, not a
@@ -132,6 +139,28 @@ func (p Policy) Authorize(principal Principal, node NodeRef) Decision {
 
 	principalTenant := strings.TrimSpace(principal.TenantID)
 	nodeTenant := strings.TrimSpace(node.TenantID)
+
+	// Single-tenant deployment: neither side carries a tenant. Nodes registered
+	// before the tenant system exists (and nodes not yet claimed, §4.4) have no
+	// tenant, so this is the common case today. Gated on the platform operator
+	// rather than allowed outright: if a tenant member's tenant id ever failed
+	// to load, an unconditional allow would turn that bug into "reaches every
+	// node on the platform".
+	if principalTenant == "" && nodeTenant == "" {
+		if principal.IsPlatformAdmin() {
+			return Decision{
+				Allowed: true, Reason: ReasonSingleTenant,
+				UserID: principal.UserID, Method: principal.AuthMethod,
+				Detail: "node " + node.ID + " (no tenant scoping)",
+			}
+		}
+		return Decision{
+			Allowed: false, Reason: ReasonCrossTenant,
+			UserID: principal.UserID, Method: principal.AuthMethod,
+			Detail: "node " + node.ID + " (unscoped principal that is not the operator)",
+		}
+	}
+
 	if principalTenant == "" || nodeTenant == "" || principalTenant != nodeTenant {
 		return Decision{
 			Allowed: false, Reason: ReasonCrossTenant,

@@ -158,6 +158,27 @@ func TestAuthorizeNodeAccess(t *testing.T) {
 			policy: Policy{}, principal: tenantPeer, node: nodelessTenant,
 			wantReason: ReasonNodeNotShared,
 		},
+		{
+			// Deployment with no tenant system in use: the operator must still
+			// reach unclaimed nodes, otherwise every existing installation would
+			// break the moment this policy is wired in.
+			name: "operator reaches an unscoped node", policy: Policy{}, principal: admin,
+			node: NodeRef{ID: "node-legacy"}, wantAllow: true, wantReason: ReasonSingleTenant,
+		},
+		{
+			// An unscoped principal that is NOT the operator must not inherit that
+			// reach: if a tenant member's tenant id ever failed to load, an
+			// unconditional allow would turn the bug into platform-wide access.
+			name: "non-operator unscoped principal is refused", policy: Policy{},
+			principal:  NewPrincipal("", "nobody", "", KindUser),
+			node:       NodeRef{ID: "node-legacy", OwnerUserID: "nobody"},
+			wantReason: ReasonCrossTenant,
+		},
+		{
+			name: "tenant member does not reach an unscoped node", policy: Policy{},
+			principal: tenantUser, node: NodeRef{ID: "node-legacy", OwnerUserID: "user-a"},
+			wantReason: ReasonCrossTenant,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -313,19 +313,37 @@ SaaS 下这等于把主密钥给了每个用户，**必须替换**：改为**租
 
 ## 4. 节点归属与可见性（P1）
 
-### 4.1 注册表字段扩展
+### 4.1 注册表字段扩展 ✅ 已落地（`78cb3fc` 身份底座 + 本增量）
+
+原设计把字段加在 `NodeInput` 上、再「解码后忽略」。**实现时改成加在 `NodeView` 上，
+`NodeInput` 完全不设这三个字段**——因为 `POST /control/nodes/register` 与
+`/heartbeat` 是直接把请求体解码进 `NodeInput` 的：字段只要存在于该 DTO，
+就多一条「忘了忽略」的路；字段不存在，自报在**结构上不可能**，且可被测试钉住。
 
 ```go
-type NodeInput struct {
+// NodeView（持久化 + 出参）
+type NodeView struct {
     // ... 既有字段 ...
-    TenantID    string // 由中心从 join token 解析，不接受请求体自报
-    OwnerUserID string // 由中心从 join token 解析
-    Visibility  string // "private" | "tenant"，节点主可改（决策④）
+    TenantID    string `json:"tenant_id,omitempty"`
+    OwnerUserID string `json:"owner_user_id,omitempty"`
+    Visibility  string `json:"visibility,omitempty"` // "private"(默认) | "tenant"
 }
+
+// NodeInput（请求体 DTO）：刻意不含以上三字段。
 ```
 
-**必须由中心推导、忽略请求体**：`TenantID`/`OwnerUserID`。
-这直接修掉 §1.2 的「可自报身份」问题。
+**唯一可信写入面**：`Registry.SetOwnership(ctx, id, tenantID, ownerUserID, visibility)`。
+只有它写 `TenantID`/`OwnerUserID`，供 §4.4 的 admin claim 操作使用；
+`mergeLocked`（register/heartbeat 路径）一律不碰这三个字段。
+
+`Visibility` 的归一化委托给 `identity.NormalizeVisibility`，
+保证注册表与授权策略不会漂移（否则可出现「存成 tenant 可见、策略读成 private」
+或反过来的错配）；读路径统一补默认值，故历史 `nodes.json` 记录加载后不会是空值。
+
+**这直接修掉 §1.2 的「可自报身份」问题**，并由
+`TestNodeInputDoesNotAcceptOwnership` / `TestRegistryRegisterCannotOverwriteOwnership`
+两个测试钉住（前者断言字段不在 DTO 上，后者断言已 claim 的节点不被
+后续 register 冲掉）。
 
 ### 4.2 可见性与共享开关（决策④⑥）
 

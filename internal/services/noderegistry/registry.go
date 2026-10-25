@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
@@ -61,6 +62,17 @@ func NormalizeKind(kind string) string {
 	}
 }
 
+// NormalizeVisibility validates a node's declared visibility, defaulting to
+// private (design §4.2, decision ⑥).
+//
+// Delegates to identity.NormalizeVisibility so the registry and the
+// authorization policy cannot drift apart: if they disagreed, a node could be
+// stored as tenant-visible while the policy read it as private (or worse, the
+// reverse).
+func NormalizeVisibility(value string) string {
+	return identity.NormalizeVisibility(value)
+}
+
 type NodeInput struct {
 	ID           string            `json:"id"`
 	Name         string            `json:"name,omitempty"`
@@ -97,6 +109,17 @@ type NodeView struct {
 	// Kind is the node's declared type (pc | cloud | phone). Normalised on write
 	// and defaulted on read, so a view never carries an empty kind.
 	Kind string `json:"kind,omitempty"`
+
+	// TenantID and OwnerUserID are the node's ownership (design §4.1). They are
+	// deliberately absent from NodeInput: the register/heartbeat DTO is decoded
+	// straight from the request body, so a field there would be an
+	// attacker-controlled identity claim (§1.2). Ownership is written only by
+	// the trusted paths — SetOwnership (admin claim) and config seeding.
+	TenantID    string `json:"tenant_id,omitempty"`
+	OwnerUserID string `json:"owner_user_id,omitempty"`
+	// Visibility is "private" (default) or "tenant" (design §4.2, decision ⑥).
+	// Normalised on read so a legacy record without it is never empty.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 type Registry struct {
@@ -295,6 +318,67 @@ func (r *Registry) SetRelayStatus(ctx context.Context, id, status string) error 
 	return r.saveLocked()
 }
 
+// Normalized returns the view with visibility defaulted, so callers never see
+// an empty value.
+func (v NodeView) Normalized() NodeView {
+	v.Visibility = NormalizeVisibility(v.Visibility)
+	return v
+}
+
+// NodeRef projects the view onto the authorization policy's input, so registry
+// consumers can call identity.Policy.Authorize without the policy importing
+// this package.
+func (v NodeView) NodeRef() identity.NodeRef {
+	return identity.NodeRef{
+		ID:          v.ID,
+		TenantID:    v.TenantID,
+		OwnerUserID: v.OwnerUserID,
+		Visibility:  NormalizeVisibility(v.Visibility),
+	}
+}
+
+// NodeRefs projects a list of views for identity.Policy.VisibleNodeIDs.
+func NodeRefs(views []NodeView) []identity.NodeRef {
+	refs := make([]identity.NodeRef, 0, len(views))
+	for _, view := range views {
+		refs = append(refs, view.NodeRef())
+	}
+	return refs
+}
+
+// SetOwnership assigns a node to a tenant/user and optionally sets its
+// visibility. This is the ONLY trusted writer for NodeView.TenantID /
+// OwnerUserID, so a node cannot claim an identity over the register/heartbeat
+// DTO (design §4.1, fixing the §1.2 self-reported-identity finding).
+//
+// Used by the admin claim operation (POST /admin/nodes/{id}/claim, decision ③)
+// that points existing nodes at a tenant.
+func (r *Registry) SetOwnership(ctx context.Context, id, tenantID, ownerUserID, visibility string) (NodeView, error) {
+	_ = ctx
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return NodeView{}, fmt.Errorf("missing node id")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return NodeView{}, os.ErrNotExist
+	}
+	// Ownership is a center-side decision, so it is set as a whole rather than
+	// merged: an empty value explicitly clears, which is how a node is returned
+	// to "unclaimed" after a mistaken assignment.
+	node.TenantID = strings.TrimSpace(tenantID)
+	node.OwnerUserID = strings.TrimSpace(ownerUserID)
+	if strings.TrimSpace(visibility) != "" {
+		node.Visibility = NormalizeVisibility(visibility)
+	}
+	node.Visibility = NormalizeVisibility(node.Visibility)
+	node.UpdatedAt = r.now()
+	r.nodes[id] = node
+	return r.viewLocked(node), r.saveLocked()
+}
+
 func (r *Registry) List(ctx context.Context) ([]NodeView, error) {
 	_ = ctx
 	r.mu.Lock()
@@ -386,6 +470,9 @@ func (r *Registry) viewLocked(node NodeView) NodeView {
 	if node.Kind == "" {
 		node.Kind = DefaultKind
 	}
+	// Same reasoning as Kind: a record written before ownership existed loads
+	// with an empty visibility, and "private" is the safe reading of that.
+	node.Visibility = NormalizeVisibility(node.Visibility)
 	node.Capabilities = append([]string{}, node.Capabilities...)
 	node.Metadata = cleanMap(node.Metadata)
 	return node

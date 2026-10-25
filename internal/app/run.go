@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -449,6 +450,9 @@ func (r *Runner) runServe(ctx context.Context, args []string) error {
 
 	addr := "127.0.0.1:8080"
 	fs.StringVar(&addr, "addr", addr, "HTTP listen address")
+	allowAnonymousRemote := false
+	fs.BoolVar(&allowAnonymousRemote, "allow-anonymous-remote", false,
+		"Serve on a non-loopback address without a web token (unsafe; refused by default)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -459,9 +463,55 @@ func (r *Runner) runServe(ctx context.Context, args []string) error {
 	if r.Serve == nil {
 		return fmt.Errorf("serve mode unavailable")
 	}
+	if err := r.checkAnonymousRemoteExposure(addr, allowAnonymousRemote); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(r.Stdout, "Serving GoDex API on http://%s\n", addr)
 	return r.Serve(ctx, addr)
+}
+
+// checkAnonymousRemoteExposure refuses to start when the API would listen on a
+// non-loopback address without a web token.
+//
+// With no token configured the auth middleware lets every request through, which
+// is convenient for a loopback developer instance but means the whole management
+// API — including the surfaces that spawn shells — silently becomes
+// unauthenticated. Combined with a reachable listen address that is a silent,
+// network-exposed misconfiguration, so fail fast instead of serving an open API.
+func (r *Runner) checkAnonymousRemoteExposure(addr string, allowAnonymousRemote bool) error {
+	if allowAnonymousRemote || bindsOnlyLoopback(addr) {
+		return nil
+	}
+	var token string
+	if cfg := r.currentConfig(); cfg != nil {
+		token = strings.TrimSpace(cfg.WebToken)
+	}
+	if token != "" {
+		return nil
+	}
+	return fmt.Errorf("refusing to serve on %s without a web token: a non-loopback "+
+		"listener with no token disables authentication for the whole API "+
+		"(set web.token / GODEX_WEB_TOKEN, or pass --allow-anonymous-remote to override)", addr)
+}
+
+// bindsOnlyLoopback reports whether addr can only be reached from this host.
+func bindsOnlyLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// No port separator: treat the whole value as the host.
+		host = addr
+	}
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if host == "" {
+		// ":8080" binds every interface.
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	// A hostname resolves elsewhere; only the conventional loopback name is safe.
+	return strings.EqualFold(host, "localhost")
 }
 
 func (r *Runner) runTUI(ctx context.Context, args []string) error {

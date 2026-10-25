@@ -779,14 +779,100 @@ func TestRunnerServeUsesInjectedServeFunction(t *testing.T) {
 		},
 	}
 
-	if err := runner.Run(context.Background(), []string{"serve", "--addr", ":9090"}); err != nil {
+	if err := runner.Run(context.Background(), []string{"serve", "--addr", "127.0.0.1:9090"}); err != nil {
 		t.Fatalf("run serve: %v", err)
 	}
-	if servedAddr != ":9090" {
+	if servedAddr != "127.0.0.1:9090" {
 		t.Fatalf("unexpected served addr %q", servedAddr)
 	}
-	if !strings.Contains(stdout.String(), "http://:9090") {
+	if !strings.Contains(stdout.String(), "http://127.0.0.1:9090") {
 		t.Fatalf("expected serve output to mention address, got %q", stdout.String())
+	}
+}
+
+// TestRunnerRefusesAnonymousNonLoopbackServe guards the fail-open posture: with
+// no web token configured the auth middleware lets every request through, so a
+// non-loopback listener would silently expose the whole API (including the
+// surfaces that spawn shells). serve must fail fast instead.
+func TestRunnerRefusesAnonymousNonLoopbackServe(t *testing.T) {
+	newRunner := func(token string, served *bool) *Runner {
+		return &Runner{
+			Cfg:     &config.Config{WebToken: token},
+			Backend: &fakeBackend{},
+			Stdout:  &bytes.Buffer{},
+			Stderr:  &bytes.Buffer{},
+			Stdin:   strings.NewReader(""),
+			Now:     time.Now,
+			Serve: func(context.Context, string) error {
+				*served = true
+				return nil
+			},
+		}
+	}
+
+	cases := []struct {
+		name      string
+		addr      string
+		token     string
+		extraArgs []string
+		wantErr   bool
+	}{
+		{name: "non-loopback without token is refused", addr: "0.0.0.0:3801", wantErr: true},
+		{name: "wildcard host without token is refused", addr: ":3801", wantErr: true},
+		{name: "resolve-elsewhere hostname without token is refused", addr: "example.com:3801", wantErr: true},
+		{name: "non-loopback with token is allowed", addr: "0.0.0.0:3801", token: "secret"},
+		{name: "loopback without token is allowed", addr: "127.0.0.1:3801"},
+		{name: "localhost without token is allowed", addr: "localhost:3801"},
+		{name: "ipv6 loopback without token is allowed", addr: "[::1]:3801"},
+		{name: "explicit override is allowed", addr: "0.0.0.0:3801", extraArgs: []string{"--allow-anonymous-remote"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			served := false
+			runner := newRunner(tc.token, &served)
+			args := append([]string{"serve", "--addr", tc.addr}, tc.extraArgs...)
+			err := runner.Run(context.Background(), args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected refusal for addr %q with no token", tc.addr)
+				}
+				if !strings.Contains(err.Error(), "web token") {
+					t.Fatalf("expected an actionable error mentioning the web token, got %q", err)
+				}
+				if served {
+					t.Error("serve must not be reached when the guard refuses")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !served {
+				t.Error("expected serve to be reached")
+			}
+		})
+	}
+}
+
+func TestBindsOnlyLoopback(t *testing.T) {
+	cases := map[string]bool{
+		"127.0.0.1:8080":    true,
+		"127.0.0.1":         true,
+		"localhost:8080":    true,
+		"LOCALHOST:8080":    true,
+		"[::1]:8080":        true,
+		":8080":             false,
+		"0.0.0.0:8080":      false,
+		"0.0.0.0":           false,
+		"::":                false,
+		"[::]:8080":         false,
+		"192.168.1.10:8080": false,
+		"example.com:80":    false,
+	}
+	for addr, want := range cases {
+		if got := bindsOnlyLoopback(addr); got != want {
+			t.Errorf("bindsOnlyLoopback(%q) = %v, want %v", addr, got, want)
+		}
 	}
 }
 

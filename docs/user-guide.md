@@ -1046,7 +1046,7 @@ IM channel 中审批消息会直接给出 `/approve <id>`、`/approve <id> sessi
 Authorization: Bearer <token>
 ```
 
-- `protected` 路由：读取 `web.token`（`GODEX_WEB_TOKEN`）；token 为空时全部放行，否则必须携带匹配的 Bearer token
+- `protected` 路由：读取 `web.token`（`GODEX_WEB_TOKEN`）；token 为空时全部放行（便于回环开发），否则必须携带匹配的 Bearer token。为防误配置，`godex serve` 在**非回环地址 + 无 token** 时会**拒绝启动**（可用 `--allow-anonymous-remote` 显式越过）
 - 公开路由：`GET /meta`、`POST /v1/chat/completions` 在未配置 web token 时的回退路径
 - Terminal 路由（`/v1/terminal/*`）：**同样受 `protected` 保护**。它们会拉起真实 shell（bash / ssh / docker exec），原先按“本地开发工具”设计为不鉴权，但那使任何监听非回环地址的实例把未授权 shell 暴露到网络（已在中心实测复现），故已收口
 - `gdx_` proxy-key 路由（usage 网关）：`POST /v1/chat/completions`（Bearer `gdx_...`）、`POST /v1/messages`（Bearer **或** `x-api-key`）、`GET /v1/models`、`GET /v1/usage/cache-stats`（仅 Bearer）——**`/v1/messages` 始终要求 key，即使未配置 web token 也会 401**

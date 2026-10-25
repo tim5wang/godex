@@ -30,7 +30,8 @@
 |---|---|---|
 | 1 | `/v1/terminal/*` 无鉴权且公网可达 → 未授权远程命令执行（§4.1） | ✅ **已修**（`413436a`）+ 回归测试 |
 | 2 | `DELETE /v1/terminal/{id}` 谎报成功、shell 未被回收（§4.1.3） | ✅ **已修**（`413436a`）+ 回归测试 |
-| 3 | `web.token` 为空时全部放行（fail-open，§5） | ⏳ **未修**：涉及部署策略决策，且现有多处测试依赖该行为 |
+| 3 | `web.token` 为空时全部放行（fail-open，§5） | ✅ **已加启动守卫**（§5.1）：
+  非回环 + 无 token ⇒ 拒绝启动；中间件语义本身仍待 P0 改造 |
 
 > 本清单原稿记的是「修复前」状态；上表已标注修复结果。
 > 生产中心当时仍跑旧二进制，**修复需重新部署才生效**。
@@ -248,7 +249,10 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 
 ---
 
-## 5. ⚠️ 系统性 posture：`web.token` 为空 ⇒ 全部放行（fail-open）
+## 5. ✅ 已加启动守卫：`web.token` 为空 ⇒ 全部放行（fail-open）
+
+> 本节描述的是**中间件层的既有语义**（代码仍如此，未改）；
+> 针对危险部署组合的拦截见 §5.1。
 
 **三处实现一致地 fail-open**：
 
@@ -263,8 +267,34 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 **不会报错，而是静默移除全部鉴权**——多租户隔离随之整体失效，且无任何告警。
 `/meta` 的 `auth_required` 会让前端显示「无需登录」，进一步掩盖问题。
 
-**处置建议**：改为「非回环监听且无 token ⇒ 启动失败」，本地开发用显式开关
-（如 `--allow-anonymous-local`）保留便利性。
+### 5.1 实际处置（守卫加在启动层，而非改中间件语义）
+
+**没改** `withBearerAuthProvider` 的 fail-open 语义（改它会影响约 10 个
+依赖该行为的测试与回环开发体验），而是**在 `runServe` 入口拦截危险的组合**：
+
+```
+非回环监听 + 无 web.token  ⇒  拒绝启动（可行动的错误信息）
+```
+
+- 新增 `(*Runner).checkAnonymousRemoteExposure`（`internal/app/run.go`）
+- 新增 `bindsOnlyLoopback`：只有回环 IP / `localhost` 算安全；
+  `:8080`、`0.0.0.0`、`::`、普通主机名一律视为对外可达
+- 保留显式退路 `--allow-anonymous-remote`（有意关闭鉴权者自担风险）
+- 回归测试：`TestRunnerRefusesAnonymousNonLoopbackServe`（8 个具名场景）
+  + `TestBindsOnlyLoopback`
+
+**为什么选启动层**：中心与节点都用 `serve` 启动（`service install` 生成的
+`ExecStart` 也是 `serve --addr ...`），故**一处拦截覆盖全部部署形态**，
+且不会改变单机/回环开发的现有行为。
+
+**已核实的其余监听点均只绑回环**，不属本守卫范围：
+`dead debug.go:126`（pprof，限回环）、`internal/app/node.go:144`（`127.0.0.1:localPort`）、
+`internal/core/auth/auth.go:76`（OAuth 回调 `localhost:1455` / `127.0.0.1:0`）、
+`internal/services/relay/forward_server.go:345`（`127.0.0.1:LocalPort`）。
+
+> **重要**：这三处 fail-open **代码仍存在**（守卫只是不让危险的部署组合启动）。
+> 真正的多租户改造（P0）仍需把它们改为 fail-closed + Principal 判定，
+> 因为守卫拦不住“有 token 但 token 泄露”或“反代后真实远端地址”等情形。
 
 ---
 
@@ -337,8 +367,10 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 | 「未包裹」路由 | 约 40 条 | **实际 8 条**（5 terminal 缺陷 + 2 有意匿名 + 1 公开），其中 5 条已收口；其余是脚本误判 |
 | 鉴权族 | 6 类 | **10 个受鉴权族 + 3 类无鉴权**（原漏 watch `access`、query-token、inline `gdx_`） |
 | 中心 agent 面 | 仅 `sessions*`/`gateway*` | 另含 **workflows(18) + skills(10)**，共 66 处 |
-| 未列出的风险 | — | **`/v1/terminal/*` 公网无鉴权**（✅ 已修）、**DELETE 谎报成功**（✅ 已修）、**fail-open 姿势**（⏳ 未修）（§4.1/§5） |
+| 未列出的风险 | — | **`/v1/terminal/*` 公网无鉴权**（✅ 已修）、**DELETE 谎报成功**（✅ 已修）、**fail-open 姿势**（✅ 已加启动守卫）（§4.1/§5） |
 
 > 前四项是口径修正；**后三项是新发现的安全问题**，不在原设计范围内。
-> 其中 terminal 两项已在本轮修复（`413436a`，含回归测试 + 本地 8/8 端到端验证）；
-> fail-open 需单独的部署策略决策。
+> 三项均已在本轮处理（terminal 两项在 `413436a`，fail-open 在启动层加守卫），
+> 均含回归测试；但 **fail-open 的中间件语义本身仍未改**，待 P0 一并处理。
+>
+> ⚠️ **两项修复都需重新部署才在生产生效**（中心当时跑的是 13:45 的旧二进制）。

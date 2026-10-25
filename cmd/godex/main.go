@@ -312,6 +312,11 @@ func main() {
 			LeadName: cfg.LeadName,
 		},
 		Serve: func(ctx context.Context, addr string) error {
+			// One NodeAccess policy for every seam in this process (registry reads in
+			// the API handler, the relay proxy below, and the TCP forward server that
+			// reuses proxy.AuthorizeNode), carrying the superadmin's tenant sharing
+			// switch. Defined once here so those paths cannot drift apart.
+			nodeAccessPolicy := httpapi.NewNodeAccessPolicy(accountsService)
 			controlRegistry, err := noderegistry.New(
 				filepath.Join(cfg.HomeDir, "control", "nodes.json"),
 				time.Duration(cfg.Control.OfflineAfterSeconds)*time.Second,
@@ -478,7 +483,11 @@ func main() {
 					// so let it through and let the transport answer.
 					return identity.AllowedDecision(identity.ReasonAllowed)
 				}
-				return identity.Policy{}.Authorize(principal, node.NodeRef())
+				// The SAME policy the HTTP read surface uses, including the superadmin's
+				// tenant sharing switch: building a bare Policy here would let a proxied
+				// request reach a node that the direct read path just refused, which is
+				// exactly the silent bypass this seam exists to prevent.
+				return nodeAccessPolicy.Authorize(principal, node.NodeRef())
 			}
 			bridgeProxy := httpapi.NewBridgeProxyHandler(proxy, bridge, func(nodeID string) bool {
 				// Local node: the self node (served in-process) or any node

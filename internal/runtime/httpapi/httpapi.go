@@ -130,6 +130,11 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 			accountsService = created
 		}
 	}
+	// One policy instance for every NodeAccess seam in this process, carrying the
+	// superadmin's tenant sharing switch (decision ④). Built here rather than inline
+	// at each call site so the registry reads and the relay proxy cannot end up with
+	// differently shaped policies.
+	nodeAccessPolicy := NewNodeAccessPolicy(accountsService)
 	mux := http.NewServeMux()
 	// Plugin-contributed HTTP surfaces (P-A): mount every registered plugin
 	// prefix; plugins activated later are mounted automatically via the
@@ -181,11 +186,12 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 		return manager.Current().WebToken
 	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), nil))
 	registerAuthRoutes(mux, accountsService, protected)
+	registerAdminRoutes(mux, accountsService, protected)
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)
 	registerNodeProxyTokenRoute(mux, manager, protected)
-	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected, nodeProxyRead)
+	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected, nodeProxyRead, nodeAccessPolicy, accountsService)
 	registerProviderRoutes(mux, manager, protected)
 
 	registerChannelStatusRoute(mux, channels, protected)

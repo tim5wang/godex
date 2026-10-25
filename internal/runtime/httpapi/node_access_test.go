@@ -50,6 +50,12 @@ func tenantScopedNodes() []noderegistry.NodeView {
 }
 
 func controlMux(registry controlNodeRegistry) *http.ServeMux {
+	return controlMuxWithPolicy(registry, identity.Policy{})
+}
+
+// controlMuxWithPolicy is controlMux with an explicit policy, so tests can drive
+// the superadmin's tenant sharing switch through the same wiring production uses.
+func controlMuxWithPolicy(registry controlNodeRegistry, policy identity.Policy) *http.ServeMux {
 	mux := http.NewServeMux()
 	// Identity standing in for the protected middleware: the point under test is
 	// the masking, not authentication.
@@ -59,7 +65,7 @@ func controlMux(registry controlNodeRegistry) *http.ServeMux {
 			handler.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 		})
 	}
-	registerControlNodeRoutes(mux, registry, nil, attach, attach)
+	registerControlNodeRoutes(mux, registry, nil, attach, attach, policy, nil)
 	return mux
 }
 

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/identity"
+	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
 )
@@ -37,7 +39,7 @@ func registerRuntimeServiceRoutes(mux *http.ServeMux, serviceRuntime serviceRunt
 	})))
 }
 
-func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRegistry, overviewProvider nodeOverviewProvider, protected func(http.Handler) http.Handler, nodeProxyRead func(http.Handler) http.Handler) {
+func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRegistry, overviewProvider nodeOverviewProvider, protected func(http.Handler) http.Handler, nodeProxyRead func(http.Handler) http.Handler, policy identity.Policy, accountsService *accounts.Service) {
 	mux.Handle("GET /control/nodes", nodeProxyRead(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
 			writeJSON(w, http.StatusOK, []noderegistry.NodeView{})
@@ -52,7 +54,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		// reach. Without this the nk_ credential enumerated every node on the
 		// platform — the registry itself is global, so filtering has to happen
 		// here rather than in List.
-		writeJSON(w, http.StatusOK, filterVisibleNodes(r, nodes))
+		writeJSON(w, http.StatusOK, filterVisibleNodes(policy, r, nodes))
 	})))
 	mux.Handle("GET /control/nodes/{id}", nodeProxyRead(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
@@ -67,7 +69,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		// Same seam as the list: reading one node by id must not leak a node the
 		// caller cannot see, otherwise masking the list would be cosmetic. The
 		// node is passed whole so the decision sees its tenant/owner/visibility.
-		if decision := authorizeNodeAccess(r, node.NodeRef()); !decision.Allowed {
+		if decision := authorizeNodeAccess(policy, r, node.NodeRef()); !decision.Allowed {
 			writeError(w, http.StatusForbidden, fmt.Errorf("node access denied: %s", decision.Reason))
 			return
 		}
@@ -164,7 +166,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		// Same seam as GET /control/nodes/{id}: the overview carries the node and
 		// its activity, so it must not be readable for a node the caller cannot
 		// reach.
-		if decision := authorizeNodeAccess(r, node.NodeRef()); !decision.Allowed {
+		if decision := authorizeNodeAccess(policy, r, node.NodeRef()); !decision.Allowed {
 			writeError(w, http.StatusForbidden, fmt.Errorf("node access denied: %s", decision.Reason))
 			return
 		}
@@ -220,5 +222,56 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 			return
 		}
 		writeJSON(w, http.StatusOK, node)
+	})))
+
+	// POST /control/nodes/{id}/visibility — the OWNER flips their own node between
+	// private and tenant-visible (design §4.2, decisions ④⑥).
+	//
+	// Separate from /admin/nodes/{id}/claim on purpose: claiming assigns ownership
+	// (platform administration), while this is the node owner's own control. A
+	// tenant peer that can REACH a tenant-visible node must not be able to change
+	// how far it is exposed — reach and ownership are different questions, which is
+	// why maySetNodeVisibility checks ownership rather than reachability.
+	mux.Handle("POST /control/nodes/{id}/visibility", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if controlRegistry == nil {
+			writeError(w, http.StatusNotFound, fmt.Errorf("control node registry is unavailable"))
+			return
+		}
+		setter, ok := controlRegistry.(nodeOwnerSetter)
+		if !ok {
+			writeError(w, http.StatusNotImplemented, fmt.Errorf("node registry does not support visibility changes"))
+			return
+		}
+		node, err := controlRegistry.Get(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if !maySetNodeVisibility(r, node) {
+			writeError(w, http.StatusForbidden, fmt.Errorf("only the node owner may change its visibility"))
+			return
+		}
+		var req struct {
+			Visibility string `json:"visibility"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		visibility := identity.NormalizeVisibility(req.Visibility)
+		// The superadmin's sharing switch governs exposure to peers: turning a node
+		// tenant-visible while sharing is off would advertise a node nobody may
+		// reach, so refuse it with the reason instead of storing a misleading state.
+		if visibility == identity.VisibilityTenant && !policy.TenantSharingAllowed(node.TenantID) {
+			writeError(w, http.StatusForbidden, fmt.Errorf(
+				"tenant sharing is disabled by the platform administrator, so this node cannot be made tenant-visible"))
+			return
+		}
+		updated, err := setter.SetOwnership(r.Context(), node.ID, node.TenantID, node.OwnerUserID, visibility)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
 	})))
 }

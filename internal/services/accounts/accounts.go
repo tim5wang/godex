@@ -122,6 +122,16 @@ func (s *Service) init() error {
 			PRIMARY KEY (tenant_id, user_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_memberships_tenant ON memberships(tenant_id)`,
+		// tenant_policies holds platform-level knobs the superadmin sets per tenant
+		// (decision ④). A separate table rather than columns on tenants: these are
+		// policy decisions, not tenant identity, and they get their own audit trail
+		// as features are added.
+		`CREATE TABLE IF NOT EXISTS tenant_policies (
+			tenant_id TEXT PRIMARY KEY,
+			sharing_enabled INTEGER NOT NULL DEFAULT 1,
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			token_hash TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL,
@@ -419,6 +429,137 @@ func (s *Service) User(id string) (identity.User, bool) {
 		return identity.User{}, false
 	}
 	return user, true
+}
+
+// TenantPolicy is the superadmin's per-tenant policy (decision ④).
+// SharingEnabled gates whether a tenant's members may expose nodes to each other.
+type TenantPolicy struct {
+	TenantID       string
+	SharingEnabled bool
+	UpdatedAt      string
+}
+
+// TenantSharingEnabled reports whether tenant members may expose their nodes to
+// peers. A tenant with no stored policy defaults to ENABLED, which preserves the
+// pre-policy behaviour (node visibility alone decided reach) and keeps this
+// switch purely additive: the superadmin turns it OFF, nodes default to private
+// on their own (decision ⑥).
+func (s *Service) TenantSharingEnabled(tenantID string) bool {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tenantSharingEnabledLocked(tenantID)
+}
+
+// SetTenantSharing sets the sharing switch for a tenant. It does not require the
+// tenant to exist: a superadmin may set policy before any node is claimed, and
+// refusing that would force an ordering nobody needs.
+func (s *Service) SetTenantSharing(tenantID string, enabled bool) (TenantPolicy, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return TenantPolicy{}, fmt.Errorf("missing tenant id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	flag := 0
+	if enabled {
+		flag = 1
+	}
+	now := s.timestamp()
+	if _, err := s.db.Exec(
+		`INSERT INTO tenant_policies (tenant_id, sharing_enabled, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(tenant_id) DO UPDATE SET sharing_enabled = excluded.sharing_enabled, updated_at = excluded.updated_at`,
+		tenantID, flag, now,
+	); err != nil {
+		return TenantPolicy{}, fmt.Errorf("set tenant sharing: %w", err)
+	}
+	return TenantPolicy{TenantID: tenantID, SharingEnabled: enabled, UpdatedAt: now}, nil
+}
+
+// TenantSummary is one row of the superadmin tenant list: the tenant plus the
+// counts an operator needs to decide what to do with it.
+type TenantSummary struct {
+	Tenant         identity.Tenant
+	SharingEnabled bool
+	MemberCount    int
+}
+
+// ListTenants returns every tenant with its member count and sharing state.
+//
+// This is a platform-admin surface (design §3.6): it crosses tenant boundaries by
+// design, so the route that exposes it must be operator-only.
+func (s *Service) ListTenants() ([]TenantSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query(`SELECT id, name, plan, created_at FROM tenants ORDER BY created_at ASC, id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list tenants: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []TenantSummary{}
+	for rows.Next() {
+		var tenant identity.Tenant
+		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Plan, &tenant.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan tenant: %w", err)
+		}
+		out = append(out, TenantSummary{Tenant: tenant, SharingEnabled: true})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenants: %w", err)
+	}
+
+	// Counts and policies are fetched per tenant rather than joined: the tenant
+	// count on a single center is small (one per signup) and a correlated query
+	// keeps the "no policy row means enabled" default in one place — the same
+	// method the authorization seam uses.
+	for i := range out {
+		id := out[i].Tenant.ID
+		var count int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM memberships WHERE tenant_id = ?`, id).Scan(&count); err != nil {
+			return nil, fmt.Errorf("count members for %s: %w", id, err)
+		}
+		out[i].MemberCount = count
+		out[i].SharingEnabled = s.tenantSharingEnabledLocked(id)
+	}
+	return out, nil
+}
+
+// tenantSharingEnabledLocked is the shared default logic. Caller holds s.mu.
+func (s *Service) tenantSharingEnabledLocked(tenantID string) bool {
+	var enabled int
+	if err := s.db.QueryRow(`SELECT sharing_enabled FROM tenant_policies WHERE tenant_id = ?`, tenantID).Scan(&enabled); err != nil {
+		return true
+	}
+	return enabled != 0
+}
+
+// Members lists a tenant's memberships. Operator-only surface, like ListTenants.
+func (s *Service) Members(tenantID string) ([]identity.Membership, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return nil, fmt.Errorf("missing tenant id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT tenant_id, user_id, role, joined_at FROM memberships WHERE tenant_id = ? ORDER BY joined_at ASC, user_id ASC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list members: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []identity.Membership{}
+	for rows.Next() {
+		var m identity.Membership
+		if err := rows.Scan(&m.TenantID, &m.UserID, &m.Role, &m.JoinedAt); err != nil {
+			return nil, fmt.Errorf("scan member: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // dummyHash is a valid bcrypt hash used to equalize timing on unknown emails.

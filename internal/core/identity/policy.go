@@ -117,6 +117,18 @@ func (p Policy) sharingAllowed(tenantID string) bool {
 	return p.TenantSharingEnabled(tenantID)
 }
 
+// TenantSharingAllowed reports whether peer exposure is currently permitted for a
+// tenant.
+//
+// Exported alongside Authorize because callers need the same answer for a
+// different question: Authorize asks "may this caller reach this node", while the
+// visibility endpoint asks "may this node be EXPOSED to peers at all". Routing
+// both through one method keeps a node from being stored as tenant-visible while
+// the switch that decides reach says no.
+func (p Policy) TenantSharingAllowed(tenantID string) bool {
+	return p.sharingAllowed(tenantID)
+}
+
 // Authorize decides whether principal may reach the node (design §4.3).
 //
 // Rules, in order:

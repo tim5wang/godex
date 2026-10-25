@@ -528,3 +528,21 @@ type nodeOverviewProvider interface {
 type nodeOwnerSetter interface {
 	SetOwnership(ctx context.Context, id, tenantID, ownerUserID, visibility string) (noderegistry.NodeView, error)
 }
+
+// nodeOwnerSetterWithin is the same capability plus the tenant's node allowance
+// (design §7, basic tier), detected alongside nodeOwnerSetter for the same
+// reason: a fake that only cares about ownership should not have to implement a
+// quota. The tenant enrolment seam prefers it when available and falls back to
+// the plain setter, so a registry without the capability keeps working (it just
+// enforces no quota).
+type nodeOwnerSetterWithin interface {
+	SetOwnershipWithin(ctx context.Context, id, tenantID, ownerUserID, visibility string, maxNodes int) (noderegistry.NodeView, error)
+}
+
+// nodeEnroller registers a node together with its ownership in one operation, so a
+// refusal (allowance reached, id taken) cannot leave a registered-but-unowned node
+// behind. Optional like the setters above: enrolment falls back to register-then-
+// assign when the registry does not provide it.
+type nodeEnroller interface {
+	RegisterOwned(ctx context.Context, input noderegistry.NodeInput, tenantID, ownerUserID, visibility string, maxNodes int) (noderegistry.NodeView, error)
+}

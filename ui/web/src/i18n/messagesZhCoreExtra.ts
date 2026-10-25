@@ -150,6 +150,11 @@ export const zhCoreExtraMessages = {
         workflow: "工作流",
         project: "项目",
         warning: "警告",
+        // 与英文侧 "Work Method" / "Work Fact" 对齐：类型标签会单独出现在筛选器与
+        // Tag 里，脱离上下文后「事实」过于笼统，而英文侧同样带了 Work 限定。
+        // 设计文档 docs/memory-design-principles.md 给出这两个类型的定义。
+        work_method: "工作方法",
+        work_fact: "工作事实",
       },
       notice: {
         saved: "已保存长期记忆：{title}",

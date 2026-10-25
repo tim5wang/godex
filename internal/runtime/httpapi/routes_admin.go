@@ -26,6 +26,12 @@ type adminTenantResponse struct {
 	SharingEnabled bool   `json:"sharing_enabled"`
 	MemberCount    int    `json:"member_count"`
 	CreatedAt      string `json:"created_at,omitempty"`
+	// MaxNodes is the tenant's node allowance (design §7); 0 means unlimited.
+	MaxNodes int `json:"max_nodes"`
+	// NodeCount is how many nodes the tenant currently owns, so the operator sees
+	// "3 of 5" rather than having to count /admin/nodes themselves. It is reported
+	// even when MaxNodes is 0, because the count is useful on its own.
+	NodeCount int `json:"node_count"`
 }
 
 type adminMemberResponse struct {
@@ -51,6 +57,20 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 			return
 		}
 		out := make([]adminTenantResponse, 0, len(tenants))
+		// Node counts come from the registry because this store does not own it. A
+		// registry read failure is tolerated (counts stay 0) rather than failing the
+		// whole list: the tenant/membership data is still correct, and an operator
+		// who cannot see any tenant because the node registry hiccuped is worse off.
+		nodeCounts := map[string]int{}
+		if controlRegistry != nil {
+			if nodes, err := controlRegistry.List(r.Context()); err == nil {
+				for _, node := range nodes {
+					if tenantID := strings.TrimSpace(node.TenantID); tenantID != "" {
+						nodeCounts[tenantID]++
+					}
+				}
+			}
+		}
 		for _, summary := range tenants {
 			out = append(out, adminTenantResponse{
 				ID:             summary.Tenant.ID,
@@ -59,6 +79,8 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 				SharingEnabled: summary.SharingEnabled,
 				MemberCount:    summary.MemberCount,
 				CreatedAt:      summary.Tenant.CreatedAt,
+				MaxNodes:       summary.MaxNodes,
+				NodeCount:      nodeCounts[summary.Tenant.ID],
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"tenants": out})
@@ -118,6 +140,47 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 			"tenant_id":       policy.TenantID,
 			"sharing_enabled": policy.SharingEnabled,
 			"updated_at":      policy.UpdatedAt,
+		})
+	})))
+
+	// PUT /admin/tenants/{id}/max-nodes — the tenant's node allowance (design §7,
+	// basic tier).
+	//
+	// Separate from /sharing because the two answer different questions: sharing is
+	// "may my nodes see each other", the allowance is "how many may I have".
+	// Writing only the one field means setting an allowance cannot silently reset
+	// the sharing switch an operator set separately.
+	mux.Handle("PUT /admin/tenants/{id}/max-nodes", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminAccountsAvailable(w, accountsService) {
+			return
+		}
+		var req struct {
+			// A pointer so an omitted field is distinguishable from an explicit 0:
+			// 0 means "unlimited", so defaulting a malformed request to 0 would
+			// silently lift the limit the operator was trying to enforce.
+			MaxNodes *int `json:"max_nodes"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.MaxNodes == nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_nodes is required"))
+			return
+		}
+		if *req.MaxNodes < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("max_nodes must not be negative"))
+			return
+		}
+		policy, err := accountsService.SetTenantMaxNodes(strings.TrimSpace(r.PathValue("id")), *req.MaxNodes)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":  policy.TenantID,
+			"max_nodes":  policy.MaxNodes,
+			"updated_at": policy.UpdatedAt,
 		})
 	})))
 

@@ -35,6 +35,7 @@ import {
 import { AdminJoinTokensCard } from "./AdminJoinTokensCard";
 import { AdminRelayUsageCard } from "../usage/relay/RelayUsage";
 import { OperatorGrantsCard } from "./OperatorGrantsCard";
+import { TenantNodeLimitCell } from "./TenantNodeLimitCell";
 
 /** AdminSettingsPanel is the superadmin's tenant management surface (design §3.6).
  *
@@ -288,6 +289,18 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
                     {enabled ? t("settings.adminSharingOn") : t("settings.adminSharingOff")}
                   </Tag>
                 </Space>
+              ),
+            },
+            {
+              title: t("settings.adminNodesLimitCol"),
+              dataIndex: "max_nodes",
+              render: (_value: number | undefined, tenant) => (
+                <TenantNodeLimitCell
+                  token={token}
+                  tenantID={tenant.id}
+                  maxNodes={tenant.max_nodes ?? 0}
+                  nodeCount={tenant.node_count ?? 0}
+                />
               ),
             },
             {

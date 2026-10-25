@@ -13,6 +13,11 @@ export interface AdminTenant {
   sharing_enabled: boolean;
   member_count: number;
   created_at?: string;
+  /** The tenant's node allowance (design §7). 0 means unlimited. */
+  max_nodes?: number;
+  /** How many nodes the tenant currently owns, so the operator sees "3 of 5"
+   *  without counting /admin/nodes themselves. */
+  node_count?: number;
 }
 
 /** AdminMember is a user's membership inside a tenant. Carries the email but
@@ -56,6 +61,23 @@ export function setTenantSharing(
   return request<{ tenant_id: string; sharing_enabled: boolean; updated_at: string }>(
     `/admin/tenants/${encodeURIComponent(tenantID)}/sharing`,
     { method: "PUT", body: JSON.stringify({ enabled }) },
+    token,
+  );
+}
+
+/** setTenantMaxNodes sets a tenant's node allowance (design §7, basic tier).
+ *
+ *  0 means unlimited, and lowering the number does NOT evict existing nodes: it
+ *  only refuses new enrolments, so a policy change never silently orphans
+ *  machines that are already running. */
+export function setTenantMaxNodes(
+  token: string | null,
+  tenantID: string,
+  maxNodes: number,
+): Promise<{ tenant_id: string; max_nodes: number; updated_at: string }> {
+  return request<{ tenant_id: string; max_nodes: number; updated_at: string }>(
+    `/admin/tenants/${encodeURIComponent(tenantID)}/max-nodes`,
+    { method: "PUT", body: JSON.stringify({ max_nodes: maxNodes }) },
     token,
   );
 }

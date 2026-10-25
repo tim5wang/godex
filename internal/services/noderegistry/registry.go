@@ -346,25 +346,64 @@ func NodeRefs(views []NodeView) []identity.NodeRef {
 	return refs
 }
 
-// SetOwnership assigns a node to a tenant/user and optionally sets its
-// visibility. This is the ONLY trusted writer for NodeView.TenantID /
-// OwnerUserID, so a node cannot claim an identity over the register/heartbeat
-// DTO (design §4.1, fixing the §1.2 self-reported-identity finding).
+// ErrNodeLimitReached is returned when assigning a node to a tenant would push
+// that tenant past its node allowance (design §7, basic tier).
 //
-// Used by the admin claim operation (POST /admin/nodes/{id}/claim, decision ③)
-// that points existing nodes at a tenant.
-func (r *Registry) SetOwnership(ctx context.Context, id, tenantID, ownerUserID, visibility string) (NodeView, error) {
-	_ = ctx
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return NodeView{}, fmt.Errorf("missing node id")
+// A sentinel rather than a bare message so the HTTP seam can map it onto a
+// distinct status: "this tenant is at its limit" is an actionable refusal, not a
+// malformed request.
+var ErrNodeLimitReached = errors.New("tenant node limit reached")
+
+// ErrNodeAlreadyRegistered is returned by RegisterOwned when the id is taken.
+//
+// The enrolment route checks this before spending a one-time join token, but that
+// check cannot be the only one: between the check and the write, another request
+// can register the same id. Re-checking under the lock closes that window, and a
+// distinct sentinel lets the seam answer 409 rather than blaming the request.
+var ErrNodeAlreadyRegistered = errors.New("node is already registered")
+
+// countTenantNodesLocked counts the nodes tenantID currently owns. Caller holds
+// r.mu.
+//
+// An empty tenantID counts nothing: unowned nodes are not a tenant's occupancy,
+// so raising an allowance can never be blocked by nodes nobody has claimed.
+func (r *Registry) countTenantNodesLocked(tenantID string) int {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return 0
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	node, ok := r.nodes[id]
-	if !ok {
-		return NodeView{}, os.ErrNotExist
+	count := 0
+	for _, node := range r.nodes {
+		if strings.TrimSpace(node.TenantID) == tenantID {
+			count++
+		}
 	}
+	return count
+}
+
+// checkAllowanceLocked refuses an assignment that would ADD an occupant to a
+// tenant already at its allowance. Caller holds r.mu; maxNodes <= 0 means
+// unlimited.
+//
+// A node that already belongs to the tenant is not a new occupant, so re-saving
+// one never counts against the limit.
+func (r *Registry) checkAllowanceLocked(id, tenantID string, maxNodes int) error {
+	tenantID = strings.TrimSpace(tenantID)
+	if maxNodes <= 0 || tenantID == "" {
+		return nil
+	}
+	if existing, ok := r.nodes[strings.TrimSpace(id)]; ok && strings.TrimSpace(existing.TenantID) == tenantID {
+		return nil
+	}
+	if used := r.countTenantNodesLocked(tenantID); used >= maxNodes {
+		return fmt.Errorf("%w: tenant %s already owns %d of %d allowed nodes",
+			ErrNodeLimitReached, tenantID, used, maxNodes)
+	}
+	return nil
+}
+
+// applyOwnershipLocked writes ownership onto a node. Caller holds r.mu.
+func (r *Registry) applyOwnershipLocked(node NodeView, tenantID, ownerUserID, visibility string) NodeView {
 	// Ownership is a center-side decision, so it is set as a whole rather than
 	// merged: an empty value explicitly clears, which is how a node is returned
 	// to "unclaimed" after a mistaken assignment.
@@ -375,6 +414,90 @@ func (r *Registry) SetOwnership(ctx context.Context, id, tenantID, ownerUserID, 
 	}
 	node.Visibility = NormalizeVisibility(node.Visibility)
 	node.UpdatedAt = r.now()
+	return node
+}
+
+// RegisterOwned registers a node AND assigns its ownership under one lock,
+// checking the tenant's allowance before anything is written.
+//
+// This exists because doing it as two calls is not equivalent. Register-then-assign
+// leaves a registered but unowned node behind whenever the assignment is refused —
+// and because the id is then taken, the same device can never retry: it gets
+// "already registered" for a node no tenant ever owned. That phantom is worth
+// avoiding, so the refusal has to happen before the write.
+//
+// Unlike Register, an id that is already taken is REFUSED rather than upserted:
+// the enrolment contract is "a new device joins", and letting it take over an
+// existing node is exactly the tenant-A-claims-tenant-B's-machine hole the join
+// route guards against.
+func (r *Registry) RegisterOwned(ctx context.Context, input NodeInput, tenantID, ownerUserID, visibility string, maxNodes int) (NodeView, error) {
+	_ = ctx
+	input.ID = strings.TrimSpace(input.ID)
+	if input.ID == "" {
+		return NodeView{}, fmt.Errorf("missing node id")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.nodes[input.ID]; ok && existing.ID != "" {
+		return NodeView{}, fmt.Errorf("%w: %s", ErrNodeAlreadyRegistered, input.ID)
+	}
+	if err := r.checkAllowanceLocked(input.ID, tenantID, maxNodes); err != nil {
+		return NodeView{}, err
+	}
+	now := r.now()
+	// Re-registering clears the delete tombstone, mirroring Register: a genuinely
+	// re-onboarded node may join again.
+	delete(r.deleted, input.ID)
+	node := r.mergeLocked(input, now)
+	node.Status = StatusOnline
+	node.LastSeen = now
+	node.Source = firstNonEmpty(node.Source, "registered")
+	node = r.applyOwnershipLocked(node, tenantID, ownerUserID, visibility)
+	r.nodes[node.ID] = node
+	return r.viewLocked(node), r.saveLocked()
+}
+
+// SetOwnership assigns ownership with no allowance check.
+//
+// Kept as the plain entry point for the admin repair path
+// (POST /admin/nodes/{id}/claim): an operator fixing a mis-assigned node must not
+// be blocked by the very quota they may be repairing. Tenant-facing enrolment
+// uses SetOwnershipWithin instead.
+func (r *Registry) SetOwnership(ctx context.Context, id, tenantID, ownerUserID, visibility string) (NodeView, error) {
+	return r.SetOwnershipWithin(ctx, id, tenantID, ownerUserID, visibility, 0)
+}
+
+// SetOwnershipWithin is SetOwnership plus the tenant's node allowance, checked
+// and applied under ONE lock.
+//
+// maxNodes <= 0 means unlimited. The check has to happen inside the same critical
+// section as the write: two concurrent enrolments that each read "4 of 5" would
+// both succeed and land the tenant at 6, which is exactly what a quota must not
+// allow.
+//
+// Only an assignment that ADDS an occupant is refused:
+//
+//   - re-saving a node that already belongs to the tenant costs nothing;
+//   - lowering an allowance never evicts existing nodes. It only refuses new
+//     enrolments, so a policy change cannot silently orphan machines that are
+//     already running — the operator decides what to do with the excess.
+func (r *Registry) SetOwnershipWithin(ctx context.Context, id, tenantID, ownerUserID, visibility string, maxNodes int) (NodeView, error) {
+	_ = ctx
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return NodeView{}, fmt.Errorf("missing node id")
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return NodeView{}, os.ErrNotExist
+	}
+	if err := r.checkAllowanceLocked(id, tenantID, maxNodes); err != nil {
+		return NodeView{}, err
+	}
+	node = r.applyOwnershipLocked(node, tenantID, ownerUserID, visibility)
 	r.nodes[id] = node
 	return r.viewLocked(node), r.saveLocked()
 }

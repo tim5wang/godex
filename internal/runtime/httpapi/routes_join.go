@@ -97,49 +97,48 @@ func registerJoinRoute(mux *http.ServeMux, manager *config.Manager, controlRegis
 			return
 		}
 
-		node, err := controlRegistry.Register(r.Context(), noderegistry.NodeInput{
-			ID:         req.NodeID,
-			Name:       req.Name,
-			TrustLevel: req.TrustLevel,
-		})
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("register node: %w", err))
-			return
-		}
-
 		// Ownership comes from the TOKEN, never from the request body: the body is
 		// attacker-controlled, and self-reported ownership is the §1.2 hole.
-		owner := strings.TrimSpace(record.OwnerUserID)
-		// Validate the requested owner against the tenant's membership. An owner id
-		// that belongs to no member produces a node nobody in the tenant can reach
-		// (private by default), which looks like a successful enrolment until someone
-		// tries to use it.
-		if owner != "" && !accountsService.IsMember(record.TenantID, owner) {
-			writeError(w, http.StatusBadRequest, fmt.Errorf(
-				"owner_user_id is not a member of this tenant"))
+		//
+		// Everything is resolved BEFORE anything is written. Combining register and
+		// assign into one call (see enrollNode) is what keeps a refusal — at the
+		// allowance, or against an id taken in the meantime — from leaving a
+		// registered but unowned node behind, which would both look enrolled and make
+		// the id unusable for the device's retry.
+		owner, err := resolveJoinOwner(accountsService, record.TenantID, record.OwnerUserID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
 			return
-		}
-		if owner == "" {
-			// Fall back to the tenant's OWNER member, not to the token's creator:
-			// the creator is the platform operator whenever an operator issued the
-			// code, and the operator is not a member of that tenant, so the node would
-			// end up owned by nobody reachable.
-			if tenantOwner, ok := accountsService.TenantOwnerUserID(record.TenantID); ok {
-				owner = tenantOwner
-			} else {
-				// A tenant with no owner member (delete path, or a manually seeded
-				// tenant): enroll the node unowned and visible to the tenant, so it is
-				// usable and the operator can claim it precisely later.
-				owner = ""
-			}
 		}
 		visibility := identity.VisibilityPrivate
 		if owner == "" {
 			visibility = identity.VisibilityTenant
 		}
-		node, err = setter.SetOwnership(r.Context(), node.ID, record.TenantID, owner, visibility)
+		// The tenant's node allowance is read here and enforced inside the registry's
+		// lock (see RegisterOwned). It is deliberately NOT enforced on the admin repair
+		// path: an operator fixing a mis-assigned node must not be blocked by the quota
+		// they may be repairing.
+		maxNodes := accountsService.TenantMaxNodes(record.TenantID)
+		node, err := enrollNode(r.Context(), controlRegistry, setter, noderegistry.NodeInput{
+			ID:         req.NodeID,
+			Name:       req.Name,
+			TrustLevel: req.TrustLevel,
+		}, record.TenantID, owner, visibility, maxNodes)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("assign node ownership: %w", err))
+			switch {
+			case errors.Is(err, noderegistry.ErrNodeLimitReached):
+				// 409 rather than 400: the request is well-formed and the caller is
+				// authorized; the tenant is simply at its allowance. The message names the
+				// allowance so the operator need not go read the console.
+				writeError(w, http.StatusConflict, err)
+			case errors.Is(err, noderegistry.ErrNodeAlreadyRegistered):
+				// The pre-check above covers the ordinary case; a concurrent enrolment
+				// can still win the race, and 409 keeps the answer honest rather than
+				// blaming the request.
+				writeError(w, http.StatusConflict, err)
+			default:
+				writeError(w, http.StatusBadRequest, fmt.Errorf("register node: %w", err))
+			}
 			return
 		}
 
@@ -167,6 +166,65 @@ func registerJoinRoute(mux *http.ServeMux, manager *config.Manager, controlRegis
 			"visibility":       visibility,
 		})
 	}))
+}
+
+// assignNodeOwnership applies ownership, using the limit-aware setter when the
+// registry provides one.
+//
+// The capability is optional on purpose: /control/join is wired against the
+// controlNodeRegistry interface, and requiring the quota everywhere would force
+// every implementer (including test fakes) to grow a method for a rule that only
+// tenant enrolment cares about.
+func assignNodeOwnership(ctx context.Context, setter nodeOwnerSetter, id, tenantID, owner, visibility string, maxNodes int) (noderegistry.NodeView, error) {
+	if within, ok := setter.(nodeOwnerSetterWithin); ok {
+		return within.SetOwnershipWithin(ctx, id, tenantID, owner, visibility, maxNodes)
+	}
+	return setter.SetOwnership(ctx, id, tenantID, owner, visibility)
+}
+
+// resolveJoinOwner turns the token's optional owner into the owner the node will be
+// written with, validating it against the tenant's membership.
+//
+// An owner id that belongs to no member produces a node nobody in the tenant can
+// reach (private by default), which looks like a successful enrolment until someone
+// tries to use it.
+func resolveJoinOwner(accountsService *accounts.Service, tenantID, requested string) (string, error) {
+	owner := strings.TrimSpace(requested)
+	if owner != "" {
+		if !accountsService.IsMember(tenantID, owner) {
+			return "", fmt.Errorf("owner_user_id is not a member of this tenant")
+		}
+		return owner, nil
+	}
+	// Fall back to the tenant's OWNER member, not to the token's creator: the creator
+	// is the platform operator whenever an operator issued the code, and the operator
+	// is not a member of that tenant, so the node would end up owned by nobody
+	// reachable.
+	if tenantOwner, ok := accountsService.TenantOwnerUserID(tenantID); ok {
+		return tenantOwner, nil
+	}
+	// A tenant with no owner member (delete path, or a manually seeded tenant):
+	// enroll the node unowned and visible to the tenant, so it is usable and the
+	// operator can claim it precisely later.
+	return "", nil
+}
+
+// enrollNode registers a node and assigns its ownership as one operation.
+//
+// The atomic capability is preferred when the registry provides it. Registering
+// first and assigning afterwards leaves a registered, unowned node behind whenever
+// the assignment is refused — and because the id is then taken, the same device can
+// never retry. The fallback exists only so a registry without the capability keeps
+// working; it enforces no allowance, which is why the real registry implements it.
+func enrollNode(ctx context.Context, registry controlNodeRegistry, setter nodeOwnerSetter, input noderegistry.NodeInput, tenantID, owner, visibility string, maxNodes int) (noderegistry.NodeView, error) {
+	if enroller, ok := registry.(nodeEnroller); ok {
+		return enroller.RegisterOwned(ctx, input, tenantID, owner, visibility, maxNodes)
+	}
+	node, err := registry.Register(ctx, input)
+	if err != nil {
+		return noderegistry.NodeView{}, err
+	}
+	return assignNodeOwnership(ctx, setter, node.ID, tenantID, owner, visibility, maxNodes)
 }
 
 // ensureNodeProxyToken returns the center's restricted nk_ credential, creating

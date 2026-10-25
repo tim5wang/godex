@@ -142,9 +142,14 @@ func (s *Service) init() error {
 		// (decision ④). A separate table rather than columns on tenants: these are
 		// policy decisions, not tenant identity, and they get their own audit trail
 		// as features are added.
+		//
+		// max_nodes is the tenant's node allowance (design §7, basic tier); 0 means
+		// unlimited, which is the same "absence is permissive" default sharing_enabled
+		// uses.
 		`CREATE TABLE IF NOT EXISTS tenant_policies (
 			tenant_id TEXT PRIMARY KEY,
 			sharing_enabled INTEGER NOT NULL DEFAULT 1,
+			max_nodes INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
@@ -222,6 +227,51 @@ func (s *Service) init() error {
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("init accounts schema: %w", err)
+		}
+	}
+	// CREATE TABLE IF NOT EXISTS covers fresh databases; this covers upgrades of
+	// existing ones, where the table already exists without the newer column.
+	if err := s.migrateTenantPolicyColumns(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateTenantPolicyColumns adds tenant_policies columns introduced after the
+// table first shipped.
+//
+// This matters for the allowance in particular: an upgraded center must default
+// to unlimited (0) rather than to zero nodes, because "unlimited" is the
+// behaviour it had before the column existed. Getting this backwards would
+// silently stop every existing tenant from enrolling any node.
+func (s *Service) migrateTenantPolicyColumns() error {
+	rows, err := s.db.Query(`PRAGMA table_info(tenant_policies)`)
+	if err != nil {
+		return fmt.Errorf("inspect tenant_policies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan tenant_policies column: %w", err)
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate tenant_policies columns: %w", err)
+	}
+	adds := []string{"max_nodes INTEGER NOT NULL DEFAULT 0"}
+	for _, add := range adds {
+		col := strings.Fields(add)[0]
+		if have[col] {
+			continue
+		}
+		if _, err := s.db.Exec(`ALTER TABLE tenant_policies ADD COLUMN ` + add); err != nil {
+			return fmt.Errorf("add tenant_policies.%s: %w", col, err)
 		}
 	}
 	return nil
@@ -510,10 +560,17 @@ func (s *Service) User(id string) (identity.User, bool) {
 
 // TenantPolicy is the superadmin's per-tenant policy (decision ④).
 // SharingEnabled gates whether a tenant's members may expose nodes to each other.
+// MaxNodes is the tenant's node allowance (design §7, basic tier).
 type TenantPolicy struct {
 	TenantID       string
 	SharingEnabled bool
-	UpdatedAt      string
+	// MaxNodes caps how many nodes this tenant may own. 0 means UNLIMITED, which
+	// is also the default for a tenant with no stored policy row: absence is
+	// permissive here for the same reason it is for SharingEnabled — the limit is
+	// an additive commercial control, and defaulting it to "no nodes allowed"
+	// would break every tenant that existed before the column did.
+	MaxNodes  int
+	UpdatedAt string
 }
 
 // TenantSharingEnabled reports whether tenant members may expose their nodes to
@@ -553,7 +610,51 @@ func (s *Service) SetTenantSharing(tenantID string, enabled bool) (TenantPolicy,
 	); err != nil {
 		return TenantPolicy{}, fmt.Errorf("set tenant sharing: %w", err)
 	}
-	return TenantPolicy{TenantID: tenantID, SharingEnabled: enabled, UpdatedAt: now}, nil
+	return TenantPolicy{TenantID: tenantID, SharingEnabled: enabled, MaxNodes: s.tenantMaxNodesLocked(tenantID), UpdatedAt: now}, nil
+}
+
+// TenantMaxNodes returns the tenant's node allowance (design §7). 0 means
+// unlimited. An unknown tenant returns 0 for the same reason SetTenantSharing
+// accepts one: policy may be set before the tenant exists.
+func (s *Service) TenantMaxNodes(tenantID string) int {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tenantMaxNodesLocked(tenantID)
+}
+
+// SetTenantMaxNodes sets the tenant's node allowance. maxNodes <= 0 clears the
+// limit rather than meaning "no nodes": the operator expresses "unlimited" by
+// the same value the default uses, so there is one encoding rather than two.
+func (s *Service) SetTenantMaxNodes(tenantID string, maxNodes int) (TenantPolicy, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return TenantPolicy{}, fmt.Errorf("missing tenant id")
+	}
+	if maxNodes < 0 {
+		maxNodes = 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.timestamp()
+	// Only max_nodes is written, so this cannot silently reset the sharing
+	// switch an operator set separately.
+	if _, err := s.db.Exec(
+		`INSERT INTO tenant_policies (tenant_id, max_nodes, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(tenant_id) DO UPDATE SET max_nodes = excluded.max_nodes, updated_at = excluded.updated_at`,
+		tenantID, maxNodes, now,
+	); err != nil {
+		return TenantPolicy{}, fmt.Errorf("set tenant node limit: %w", err)
+	}
+	return TenantPolicy{
+		TenantID:       tenantID,
+		SharingEnabled: s.tenantSharingEnabledLocked(tenantID),
+		MaxNodes:       maxNodes,
+		UpdatedAt:      now,
+	}, nil
 }
 
 // TenantSummary is one row of the superadmin tenant list: the tenant plus the
@@ -562,6 +663,10 @@ type TenantSummary struct {
 	Tenant         identity.Tenant
 	SharingEnabled bool
 	MemberCount    int
+	// MaxNodes is the tenant's node allowance; 0 means unlimited. The node count
+	// itself is not here because this store does not own the node registry — the
+	// admin route pairs the two.
+	MaxNodes int
 }
 
 // ListTenants returns every tenant with its member count and sharing state.
@@ -602,6 +707,7 @@ func (s *Service) ListTenants() ([]TenantSummary, error) {
 		}
 		out[i].MemberCount = count
 		out[i].SharingEnabled = s.tenantSharingEnabledLocked(id)
+		out[i].MaxNodes = s.tenantMaxNodesLocked(id)
 	}
 	return out, nil
 }
@@ -613,6 +719,22 @@ func (s *Service) tenantSharingEnabledLocked(tenantID string) bool {
 		return true
 	}
 	return enabled != 0
+}
+
+// tenantMaxNodesLocked is the shared default logic. Caller holds s.mu.
+//
+// A read failure (no row for this tenant) returns 0 = unlimited, matching the
+// column default, so the enforcement seam cannot accidentally turn a missing
+// policy row into "this tenant may own nothing".
+func (s *Service) tenantMaxNodesLocked(tenantID string) int {
+	var maxNodes int
+	if err := s.db.QueryRow(`SELECT max_nodes FROM tenant_policies WHERE tenant_id = ?`, tenantID).Scan(&maxNodes); err != nil {
+		return 0
+	}
+	if maxNodes < 0 {
+		return 0
+	}
+	return maxNodes
 }
 
 // Members lists a tenant's memberships. Operator-only surface, like ListTenants.

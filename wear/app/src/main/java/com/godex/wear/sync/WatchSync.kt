@@ -16,6 +16,7 @@ import com.godex.wear.data.WatchSession
 import com.godex.wear.data.WatchStore
 import com.godex.wear.notify.WearNotifier
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.first
 
 /**
  * Background pull, so a notification can arrive while the app is closed.
@@ -117,10 +118,25 @@ class WatchSyncWorker(
             token = credentials.token
         }
 
+        // Follow the device selected in the app, not just the paired node.
+        //
+        // Without this the wrist kept announcing approvals and finished turns from
+        // the paired node even while the app was driving another machine: the two
+        // surfaces disagreed about which computer they described, and an approval
+        // waiting on the selected device could never reach the wrist at all. The
+        // value read here is the same selection the foreground poller uses, so both
+        // paths act on one source of truth.
+        val target = store.targetDeviceFlow.first()
+        val nodeId = if (target == WatchStore.LOCAL_DEVICE_ID || target.isBlank()) "" else target
+
         return try {
-            val sessions = api.sessions()
-            val approvals = api.approvals()
-            Log.i(TAG, "run: base=${api.baseUrl} sessions=${sessions.size} approvals=${approvals.size}")
+            val sessions = api.sessions(nodeId = nodeId)
+            val approvals = api.approvals(nodeId = nodeId)
+            Log.i(
+                TAG,
+                "run: base=${api.baseUrl} target=${target.ifEmpty { WatchStore.LOCAL_DEVICE_ID }} " +
+                    "forwarded=$nodeId sessions=${sessions.size} approvals=${approvals.size}",
+            )
             announceApproval(approvals, sessions)
             announceFinishedSessions(
                 context = applicationContext,

@@ -46,11 +46,12 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         /**
          * Node id the node itself uses for sessions it serves locally.
          *
-         * Matches the server's own value (`collectWatchCrossDevice` tags local
-         * sessions `"local"`), so the device list and the session list agree on
-         * which entries are local without a second round-trip to identify "self".
+         * Aliased from [WatchStore] rather than re-declared: the background sync
+         * worker needs the same value, and two independent literals would eventually
+         * drift — a drift that silently turns a local request into a forwarded one
+         * (or the reverse) without any test noticing.
          */
-        const val LOCAL_DEVICE_ID = "local"
+        const val LOCAL_DEVICE_ID = WatchStore.LOCAL_DEVICE_ID
     }
 
     private val store = WatchStore(app)

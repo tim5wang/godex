@@ -260,8 +260,19 @@ class WatchStore(private val context: Context) {
     private fun encodePairs(map: Map<String, String>): String =
         map.entries.joinToString("\n") { it.key + SEPARATOR + it.value }
 
-    private companion object {
-        const val SEPARATOR = "\u001F" // unit separator: never occurs in ids
+    companion object {
+        private const val SEPARATOR = "\u001F" // unit separator: never occurs in ids
+
+        /**
+         * Node id this node uses for its own sessions.
+         *
+         * The node reports this same value in its cross-device list, so "the
+         * computer I am paired with" has exactly one spelling everywhere — the
+         * foreground poller, the background worker and the device screen. A second
+         * literal would sooner or later diverge, and a divergent value silently
+         * turns a local request into a forwarded one (or the reverse).
+         */
+        const val LOCAL_DEVICE_ID = "local"
     }
 }
 

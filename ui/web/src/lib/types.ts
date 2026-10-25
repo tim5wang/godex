@@ -374,6 +374,14 @@ export interface ControlNode {
   relay_status?: string;
   last_health?: string;
   trust_level?: string;
+  kind?: string;
+  // Ownership (design §4.1). Read-only in this view: the server never accepts
+  // them from a node's own register/heartbeat payload, so they only ever appear
+  // here as the result of an operator claim.
+  tenant_id?: string;
+  owner_user_id?: string;
+  // visibility is "private" (default) or "tenant" (design §4.2).
+  visibility?: string;
 }
 
 export interface NodeSessionInfo {

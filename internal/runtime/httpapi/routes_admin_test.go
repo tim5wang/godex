@@ -96,6 +96,42 @@ func TestAdminTenantsListsAcrossTenants(t *testing.T) {
 	}
 }
 
+// TestNodeProxyReadAcceptsSessionWithoutEscalation locks the two halves of the
+// node-read surface together.
+//
+// The Web UI's node pages authenticate with a login session, so this surface must
+// accept one — a tenant user has to see their own nodes. But classification falls
+// through to the platform operator when no checker claims the request, so merely
+// ACCEPTING the token would classify every signed-in user as the superadmin.
+// These two assertions must therefore hold at the same time; either one alone is a
+// bug (401 for a legitimate user, or a privilege escalation).
+func TestNodeProxyReadAcceptsSessionWithoutEscalation(t *testing.T) {
+	server, _ := newAdminServer(t, "web-secret")
+	_, session := postAuth(t, server.URL+"/auth/register", map[string]any{
+		"email": "founder@example.com", "password": "correct-horse",
+	})
+	sessionToken, _ := session["token"].(string)
+	if sessionToken == "" {
+		t.Fatal("no session token issued")
+	}
+
+	resp, _ := doJSON(t, http.MethodGet, server.URL+"/control/nodes", sessionToken, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("session cannot read /control/nodes: status = %d (the Web UI's node pages use this route)", resp.StatusCode)
+	}
+
+	// The session must resolve to the tenant user, NOT the operator. Asserted via
+	// /auth/me, which reports the resolved principal itself.
+	_, profile := doJSON(t, http.MethodGet, server.URL+"/auth/me", sessionToken, nil)
+	principal, _ := profile["principal"].(map[string]any)
+	if principal["platform_role"] != nil {
+		t.Fatalf("session was classified as a platform admin: %v", principal)
+	}
+	if principal["auth_method"] != AuthMethodSession {
+		t.Fatalf("auth_method = %v, want %q", principal["auth_method"], AuthMethodSession)
+	}
+}
+
 // TestAdminRoutesRefuseTenantUser is the boundary that matters: the
 // administration surface crosses tenant boundaries, so a signed-in tenant user
 // must not reach it — not even their own tenant's row.

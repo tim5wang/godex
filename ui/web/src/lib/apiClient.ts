@@ -39,6 +39,9 @@ export function apiURL(path: string) {
 // Center shell paths kept local:
 //   /meta       instance metadata (workspace dir, etc.) for the shell itself
 //   /control..  node management / control plane (the "nodes" app)
+//   /admin..    platform administration (tenants, sharing) — the superadmin
+//               manages THIS center's tenants, so proxying it to a remote node
+//               would answer from the wrong instance (or 403 there)
 //   /push..     center web-push subscriptions (VAPID keys, browser subs)
 //   /relay      relay control websocket
 function nodeProxyPath(path: string): string | null {
@@ -50,6 +53,7 @@ function nodeProxyPath(path: string): string | null {
   if (
     p === "/meta" ||
     p.startsWith("/control") ||
+    p.startsWith("/admin") ||
     p.startsWith("/push") ||
     p.startsWith("/relay")
   ) {

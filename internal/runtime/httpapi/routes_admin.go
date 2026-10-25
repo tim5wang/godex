@@ -7,6 +7,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/services/accounts"
+	"github.com/tim5wang/godex/internal/services/noderegistry"
 )
 
 // Platform administration surface (design §3.6). Everything here crosses tenant
@@ -38,7 +39,7 @@ type adminMemberResponse struct {
 // A nil accounts service registers the same patterns with a 503 inside the
 // handler rather than a second registration branch: the route-ownership gate
 // requires exactly one registration site per pattern.
-func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, protected func(http.Handler) http.Handler) {
+func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, controlRegistry controlNodeRegistry, protected func(http.Handler) http.Handler) {
 	mux.Handle("GET /admin/tenants", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !adminAccountsAvailable(w, accountsService) {
 			return
@@ -117,6 +118,27 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 			"sharing_enabled": policy.SharingEnabled,
 			"updated_at":      policy.UpdatedAt,
 		})
+	})))
+
+	// GET /admin/nodes — every node with its ownership, unfiltered.
+	//
+	// The tenant-scoped read path (/control/nodes) applies the NodeAccess policy,
+	// which deliberately does NOT let a platform admin cross a tenant boundary
+	// (design §4.3: cross-tenant reads need an explicit delegation, not a role).
+	// Administration therefore needs its own explicitly cross-tenant surface rather
+	// than a weakening of the general one — otherwise the superadmin could not even
+	// see the nodes whose ownership they are supposed to manage.
+	mux.Handle("GET /admin/nodes", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if controlRegistry == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"nodes": []noderegistry.NodeView{}})
+			return
+		}
+		nodes, err := controlRegistry.List(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
 	})))
 
 	// GET /admin/policy — the effective platform policy, so the superadmin UI can

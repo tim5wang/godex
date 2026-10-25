@@ -162,8 +162,26 @@ func principalForRequest(manager *config.Manager, relayTrust, nodeProxyToken fun
 // and therefore cannot import this package (httpapi imports relay). Resolving
 // identity in one place keeps the relay path and the HTTP path from drifting on
 // questions like "is the nk_ credential the operator?" (it is not).
-func NewPrincipalResolver(manager *config.Manager) func(*http.Request) identity.Principal {
-	return principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), nil)
+//
+// The session resolver is part of the same call for a security reason, not just
+// for tidiness: classification falls through to the platform operator when no
+// checker claims the request, so a caller that ACCEPTS a session token but
+// resolves without this resolver would classify every signed-in tenant user as
+// the superadmin. Accepting the credential and naming it must therefore be wired
+// together, which is why this is one constructor rather than two knobs.
+func NewPrincipalResolver(manager *config.Manager, accountsService *accounts.Service) func(*http.Request) identity.Principal {
+	return principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService))
+}
+
+// NewSessionTokenChecker exposes the login-session credential check for callers
+// outside this package.
+//
+// cmd/godex's relay proxy gate needs the same answer to "is this a valid login
+// session?", and duplicating the check there would let the two paths drift: one
+// accepting a token the other rejects turns a working sign-in into an
+// intermittent 401 that depends on which surface the request happened to hit.
+func NewSessionTokenChecker(accountsService *accounts.Service) func(*http.Request) bool {
+	return sessionTokenChecker(accountsService)
 }
 
 // sessionTokenChecker accepts a valid login-session token as an authentication

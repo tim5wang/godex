@@ -442,8 +442,8 @@ func main() {
 					logger.Errorf("load forward %q: %v", fwd.ID, err)
 				}
 			}
-			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(cfg))
-			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(cfg))
+			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(cfg, accountsService))
+			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(cfg, accountsService))
 			// The center also runs as its own node: requests targeting the self
 			// node are served locally (no relay round-trip), so the server can be
 			// operated from its own web UI. These local-direct requests bypass the
@@ -473,7 +473,7 @@ func main() {
 			//
 			// Both halves are needed: with tenants in play, credential validity
 			// alone would let a member of tenant A drive tenant B's nodes.
-			resolvePrincipal := httpapi.NewPrincipalResolver(manager)
+			resolvePrincipal := httpapi.NewPrincipalResolver(manager, accountsService)
 			proxy.AuthorizeNode = func(r *http.Request, nodeID string) identity.Decision {
 				principal := resolvePrincipal(r)
 				node, err := controlRegistry.Get(context.Background(), nodeID)
@@ -507,7 +507,7 @@ func main() {
 			// TCP forward surface: same NodeAccess seam as the HTTP proxy. Without
 			// it a valid credential could open forward streams into any node's
 			// network services, which is the §1.3 hole on a second surface.
-			forwardHandler := relay.NewForwardHandler(relayHub, nodeProxyAuthorize(cfg))
+			forwardHandler := relay.NewForwardHandler(relayHub, nodeProxyAuthorize(cfg, accountsService))
 			forwardHandler.AuthorizeNode = proxy.AuthorizeNode
 			root.Handle("/control/nodes/{id}/forward", forwardHandler)
 			// Web Push: in-memory subscriptions, VAPID keys persisted across
@@ -903,19 +903,31 @@ func relayAuthorize(cfg *config.Config) func(*http.Request) bool {
 	}
 }
 
-// nodeProxyAuthorize accepts either the full web token OR the center's
-// restricted node proxy token (control.node_proxy_token, nk_...). The proxy /
-// forward surfaces are what joined nodes call through the center bridge; a
+// nodeProxyAuthorize accepts the full web token, the center's restricted node
+// proxy token (control.node_proxy_token, nk_...), or a valid login session. The
+// proxy / forward surfaces are what joined nodes call through the center bridge; a
 // compromised node holding only the nk_ token can reach other nodes' proxies and
 // forward probes but NOT the center's config / sessions / files management API.
-func nodeProxyAuthorize(cfg *config.Config) func(*http.Request) bool {
+//
+// A login session is accepted because these are the surfaces the Web UI uses once
+// a remote node is selected (design §3.5: a tenant forwards to its OWN nodes).
+// Accepting it here is only safe because the caller resolves identity the same way
+// and AuthorizeNode then applies NodeAccess — this gate answers "is there a valid
+// credential", not "may this caller reach this node".
+func nodeProxyAuthorize(cfg *config.Config, accountsService *accounts.Service) func(*http.Request) bool {
+	sessionChecker := httpapi.NewSessionTokenChecker(accountsService)
 	return func(r *http.Request) bool {
 		token := strings.TrimSpace(cfg.WebToken)
 		proxyToken := strings.TrimSpace(cfg.Control.NodeProxyToken)
 		if token == "" && proxyToken == "" {
+			// No operator credential configured: this deployment is open, which is
+			// the pre-existing behaviour, and a session must not be the only way in.
 			return true
 		}
-		return bearerMatches(r, token) || bearerMatches(r, proxyToken)
+		if bearerMatches(r, token) || bearerMatches(r, proxyToken) {
+			return true
+		}
+		return sessionChecker != nil && sessionChecker(r)
 	}
 }
 

@@ -180,13 +180,17 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// nk_...) so a compromised node cannot touch config/sessions/files management
 	// endpoints — it can only list nodes and read their overview.
 	//
-	// Deliberately does NOT accept a login session: this surface is what a JOINED
-	// NODE calls, and a browser session is not a node credential.
+	// It also accepts a login session: this surface is what the Web UI's node
+	// pages call, and a signed-in tenant user must be able to see (and, per
+	// design §3.5, forward to) the nodes in their own tenant. Accepting the
+	// credential is only safe together with sessionPrincipal below — the identity
+	// would otherwise fall through to the platform operator, which is a privilege
+	// escalation rather than a display detail.
 	nodeProxyRead := withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), nil))
+	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService)))
 	registerAuthRoutes(mux, accountsService, protected)
-	registerAdminRoutes(mux, accountsService, protected)
+	registerAdminRoutes(mux, accountsService, controlRegistry, protected)
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)

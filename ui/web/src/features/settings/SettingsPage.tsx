@@ -50,6 +50,7 @@ import type { ApplyReport, ChannelStatus, CIKSummary, ConfigFieldSchema, ConfigF
 import { useSettingsStore } from "../../store/settings";
 import { ensurePushSubscription, pushSupported, sendTestPush } from "../../lib/push";
 import { MCPSettingsPanel } from "./MCPSettingsPanel";
+import { AdminSettingsPanel } from "./AdminSettingsPanel";
 import { ConfigSectionFields } from "./SettingsConfigFields";
 import {
   ApplyReportView,
@@ -524,6 +525,18 @@ export function SettingsPage() {
               <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.mcpTabTitle") })} />
             ) : (
               <MCPSettingsPanel token={token || null} />
+            ),
+          },
+          {
+            key: "admin",
+            label: t("settings.adminTabTitle"),
+            // No tab is hidden for a non-operator: the server answers 403 and the
+            // panel explains it. Hiding the tab would make the surface appear not
+            // to exist, which is worse for an operator who was told to look here.
+            children: authRequired && !token ? (
+              <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.adminTabTitle") })} />
+            ) : (
+              <AdminSettingsPanel token={token || null} />
             ),
           },
         ]}

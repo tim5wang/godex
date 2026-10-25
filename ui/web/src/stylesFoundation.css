@@ -584,3 +584,13 @@ samp {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
+
+/* Email + password sign-in gate. Centered on the viewport because it replaces
+   the whole workspace shell: there is nothing useful to render behind it. */
+.godex-auth-gate {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: #f5f6f8;
+}

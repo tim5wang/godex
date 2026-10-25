@@ -1,4 +1,4 @@
-import { Suspense, useLayoutEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   Alert,
@@ -26,6 +26,8 @@ import { WorkspaceShell, buildWorkspaceShellClassName } from "./components/works
 import { useResizableWidth } from "./hooks/useResizableWidth";
 import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
+import { getAuthProfile } from "./lib/apiAuth";
+import { LoginPage } from "./pages/LoginPage";
 import { useSettingsStore } from "./store/settings";
 import { useNodeContextStore } from "./store/nodeContext";
 import { useLayoutStore } from "./store/layout";
@@ -46,6 +48,12 @@ export default function App() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const token = useSettingsStore((state) => state.token);
+  // authMode distinguishes a revocable login session from the shared web token,
+  // which decides whether expiry detection and logout are even meaningful.
+  const authMode = useSettingsStore((state) => state.authMode);
+  const setSessionToken = useSettingsStore((state) => state.setSessionToken);
+  const setWebToken = useSettingsStore((state) => state.setToken);
+  const clearToken = useSettingsStore((state) => state.clearToken);
   const screens = Grid.useBreakpoint();
   // The legacy layout drawer flag is now only used for the mobile
   // AppNav drawer. PC TaskCenter lives inside ChatPage's shared
@@ -141,9 +149,31 @@ export default function App() {
   // to unmount/remount lazy-loaded route components.
   const memoizedRoutes = useMemo(() => renderBuiltinAppRoutes(), []);
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
+  const authRequired = metaQuery.data?.auth_required ?? false;
+  // A session token can expire, so its validity is checked against the server. A
+  // failed check clears the credential and returns to the gate with a reason,
+  // instead of leaving the user in a shell where every panel errors.
+  const profileQuery = useQuery({
+    queryKey: ["auth-profile", token],
+    enabled: authRequired && authMode === "session" && token.trim().length > 0,
+    queryFn: () => getAuthProfile(token),
+    retry: false,
+  });
+  const sessionRejected = authRequired && authMode === "session" && profileQuery.isError;
+  // Show the gate when the instance requires auth and no usable credential is
+  // present. A stale session is cleared by the effect below.
+  const showLoginGate = authRequired && (token.trim().length === 0 || sessionRejected);
+  // Clear a rejected session. Doing it in an effect (not during render) keeps the
+  // render free of store writes; the gate is already showing, so there is no flash
+  // of the workspace in between.
+  useEffect(() => {
+    if (sessionRejected) {
+      clearToken();
+    }
+  }, [sessionRejected, clearToken]);
   const providersQuery = useQuery({
     queryKey: ["providers", token],
-    enabled: !(metaQuery.data?.auth_required ?? false) || token.trim().length > 0,
+    enabled: !authRequired || (token.trim().length > 0 && !showLoginGate),
     queryFn: () => listProviders(token || null),
   });
   const needsProviderSetup =
@@ -174,6 +204,28 @@ export default function App() {
       }}
     />
   );
+
+  // The gate replaces the whole shell: there is nothing useful to render behind
+  // it, and every panel would just surface the same 401.
+  if (showLoginGate) {
+    return (
+      <ConfigProvider locale={locale === "zh" ? zhCN : enUS} theme={{ algorithm: theme.defaultAlgorithm }}>
+        <AntApp>
+          <LoginPage
+            notice={sessionRejected ? t("auth.sessionExpired") : undefined}
+            onSessionToken={(next) => {
+              setSessionToken(next);
+              void queryClient.invalidateQueries();
+            }}
+            onWebToken={(next) => {
+              setWebToken(next);
+              void queryClient.invalidateQueries();
+            }}
+          />
+        </AntApp>
+      </ConfigProvider>
+    );
+  }
 
   return (
     <ConfigProvider

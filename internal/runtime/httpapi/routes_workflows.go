@@ -43,7 +43,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, item)
 	})))
-	mux.Handle("POST /sessions/{id}/subagents/{jobID}/resume", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/subagents/{jobID}/resume", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		item, err := service.ResumeSubagent(r.Context(), r.PathValue("id"), r.PathValue("jobID"))
 		if err != nil {
 			writeError(w, statusForSubagentActionError(err), err)
@@ -67,7 +67,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("POST /sessions/{id}/longtasks", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req agent.LongTaskArgs
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -88,7 +88,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/run", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/run", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req agent.LongTaskArgs
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -122,7 +122,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/finalize", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/finalize", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req longTaskNodeRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -154,7 +154,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		writeJSON(w, http.StatusOK, out)
 	})))
 	// T12: rollback. Empty reason is allowed; >1024 bytes is rejected.
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/rollback", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/rollback", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req longTaskRollbackRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)

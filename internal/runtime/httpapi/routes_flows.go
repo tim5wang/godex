@@ -180,7 +180,7 @@ func registerFlowDefinitionRoutes(mux *http.ServeMux, service *backend.Service, 
 func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
 	// Session-mode flows have a durable FlowSession lifecycle independent of
 	// the finite-DAG FlowRun API.
-	mux.Handle("POST /v1/flows/{id}/sessions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/{id}/sessions", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Version string         `json:"version,omitempty"`
 			Inputs  map[string]any `json:"inputs,omitempty"`
@@ -220,7 +220,7 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		writeJSON(w, http.StatusOK, session)
 	})))
-	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/resume", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/resume", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session, err := service.ResumeFlowSession(r.PathValue("id"), r.PathValue("sessionID"))
 		if err != nil {
 			writeFlowSessionError(w, err)
@@ -319,7 +319,7 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 
 func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
 	// POST /v1/flows/{id}/runs — create + start a run.
-	mux.Handle("POST /v1/flows/{id}/runs", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/{id}/runs", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Version string         `json:"version,omitempty"`
 			Inputs  map[string]any `json:"inputs,omitempty"`
@@ -413,7 +413,7 @@ func registerFlowExecutionRoutes(mux *http.ServeMux, service *backend.Service, p
 	})))
 	// POST /v1/flow-runs/{runID}/step — advance a debug run by exactly one
 	// node (single-stepping); returns per-node state with outputs/context.
-	mux.Handle("POST /v1/flow-runs/{runID}/step", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flow-runs/{runID}/step", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flowID := r.URL.Query().Get("flow_id")
 		if flowID == "" {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("missing flow_id query param"))
@@ -447,7 +447,7 @@ func registerFlowInspectionAndHumanTaskRoutes(mux *http.ServeMux, service *backe
 	})))
 	// POST /v1/flow-runs/{runID}/human/{nodeID}/reply — submit a human task
 	// value, complete the blocked node and continue the run (P1.1).
-	mux.Handle("POST /v1/flow-runs/{runID}/human/{nodeID}/reply", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flow-runs/{runID}/human/{nodeID}/reply", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Value any `json:"value"`
 		}

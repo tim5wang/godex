@@ -126,8 +126,26 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 
 - **本机 / 单用户场景**：Principal 可退化为「本机单一 admin 主体」，行为不变
 - **relay 信任路径**（`X-Godex-Relay-Trusted`）：签名只含 `node_id` + `credential`，
-  **不含用户身份**（`relayTrustChecker`，`httpapi.go:480`）。中心代节点转发时会**丢失主体**，
-  这是 P0 的结构性障碍：需在 relay 帧上加 `Principal` 或让中心按目标节点重新授权。
+  **不含用户身份**（`relayTrustChecker`，`httpapi.go:480`）。中心代节点转发时会**丢失主体**。
+
+  ### ✅ 已解决（本轮）：在中心侧按目标节点重新授权
+
+  两个候选方案里选了后者（中心重新授权），不选「在 relay 帧上加 Principal」：
+  后者需要跨进程协商密钥且帧格式变更，且判定仍得回到中心——而不如直接在中心做，
+  因为**只有中心同时知道调用者身份与节点归属**（节点自己不知道其他租户的归属）。
+
+  ```
+  ProxyHandler.AuthorizeNode func(r, nodeID) identity.Decision   // nil = 不检查
+  ```
+
+  - relay 包不能 import httpapi（httpapi → relay），故由 httpapi 导出
+    `NewPrincipalResolver(manager)`，main.go 用它解析身份，再调
+    `identity.Policy{}.Authorize(principal, node.NodeRef())`——判定仍是唯一入口。
+  - **顺序**：查在 local-direct 分派与 hub 转发**之前**，否则 self node
+    的本地直通会绕过判定（有测试 `...RunsBeforeLocalDispatch` 钉住）。
+  - **未知节点放行**：registry 无此 id 时不臆造归属，交给传输层报 offline
+    （授权层不应对自己看不见的节点发施拒绝）。
+  - **nil 即不检查**：保持所有现有调用方行为不变（有测试钉住）。
 
 ---
 
@@ -344,12 +362,16 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 **建议的迁移顺序**（先小后大，每步可独立验证）：
 
 1. ✅ **修两个安全缺口**：§4.1 terminal 无鉴权 + DELETE 谎报 → **已完成**（`413436a`）；
-   §5 fail-open 未做（需部署策略决策）。原计划含 `protected` 各自审计，与第 4 项合并
+   §5 fail-open → **已加启动守卫**（`339b67c`）
 2. **§4.2 `/meta` 与 pairing 保持**（明确不动，避免误伤）
-3. **relay 信任路径补主体**（§3.3 结构性障碍，先解决它再动 `protected`）
-4. **`protected` 改为解析 Principal**（224 处，最大工作量）
-5. **抽 `NodeAccess`**、收敛 6 类解析点（§7）
-6. **加两条新判定**（403a 跨租户、403b `center_execution`）
+3. ✅ **relay 信任路径补主体**（§3.3 结构性障碍）→ **已完成**：改为中心侧
+   按目标节点重新授权（`ProxyHandler.AuthorizeNode` + `NewPrincipalResolver`）
+4. **`protected` 改为解析 Principal**（224 处）→ **身份底座 + 解析已就位**
+   （`78cb3fc`/`eda3393`/`13e0786`），逐接缝消费进行中
+5. **抽 `NodeAccess`**、收敛 6 类解析点（§7）→ `identity.Policy` 已建，
+   首个接缝（relay proxy）已接入
+6. **加两条新判定**（403a 跨租户、403b `center_execution`）→ 判据已就位
+   （`Policy.Authorize` / `AuthorizeCenterExecution`），待逐路由接线
 7. **落地其余族**（watch scope / bizKey / query-token / `gdx_`）
 
 > 第 1 项已完成一半，剩下的 fail-open（§5）建议作为第 3 项的前置：

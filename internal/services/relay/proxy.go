@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
@@ -35,6 +36,15 @@ type ProxyHandler struct {
 	// registry). guarded-remote nodes require an explicit approval header on
 	// mutating requests; nil TrustLevel skips the check entirely.
 	TrustLevel func(nodeID string) string
+	// AuthorizeNode, when set, decides whether the CALLER may reach the target
+	// node (identity.Policy.Authorize). This is the P0 NodeAccess seam on the
+	// relay path: authorize above only proves "some valid credential", while
+	// this decides "this caller may touch THIS node".
+	//
+	// Without it the center forwarded to any node on behalf of any credential —
+	// so once tenants exist, a member of tenant A could drive tenant B's nodes.
+	// nil skips the check, which keeps every existing caller working unchanged.
+	AuthorizeNode func(r *http.Request, nodeID string) identity.Decision
 }
 
 const trustApprovedHeader = "X-Godex-Trust-Approved"
@@ -125,6 +135,18 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Audit: who called which node proxy path (P0-2). Logged before serving so
 	// denied/guarded requests are also recorded.
 	logger.Infof("relay proxy: caller=%s target=%s %s %s", clientIP(r), nodeID, r.Method, after)
+
+	// NodeAccess (P0): the caller must be allowed to reach THIS node. Checked
+	// before any local/hub dispatch so a denial short-circuits whether the
+	// target is the center itself or a remote node.
+	if p.AuthorizeNode != nil {
+		if decision := p.AuthorizeNode(r, nodeID); !decision.Allowed {
+			logger.Warnf("relay proxy: denied caller=%s target=%s reason=%s user=%s",
+				clientIP(r), nodeID, decision.Reason, decision.UserID)
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+	}
 
 	// Local direct: the center also runs as its own node. Serve the request
 	// in-process with the path the local httpapi expects (relay prefix

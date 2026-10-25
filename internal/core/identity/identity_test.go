@@ -179,6 +179,20 @@ func TestAuthorizeNodeAccess(t *testing.T) {
 			principal: tenantUser, node: NodeRef{ID: "node-legacy", OwnerUserID: "user-a"},
 			wantReason: ReasonCrossTenant,
 		},
+		{
+			// Node-to-node forwarding through the center runs as a node actor,
+			// which has no tenant. Refusing it here would silently break the
+			// documented multi-node capability.
+			name: "node actor reaches an unscoped node", policy: Policy{},
+			principal: NewPrincipal("", "relay-node", "", KindNode, EntitlementRelayOnly),
+			node:      NodeRef{ID: "node-legacy"},
+			wantAllow: true, wantReason: ReasonSingleTenant,
+		},
+		{
+			name: "watch principal is not a node actor", policy: Policy{},
+			principal: NewPrincipal("", "wrist-1", "", KindWatch),
+			node:      NodeRef{ID: "node-legacy"}, wantReason: ReasonCrossTenant,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,6 +204,33 @@ func TestAuthorizeNodeAccess(t *testing.T) {
 				t.Errorf("Reason = %q, want %q", got.Reason, tc.wantReason)
 			}
 		})
+	}
+}
+
+func TestNodeActorIsNotOperator(t *testing.T) {
+	node := NewPrincipal("", "relay-node", "", KindNode, EntitlementRelayOnly)
+	if !node.IsNodeActor() {
+		t.Fatal("KindNode must be a node actor")
+	}
+	if node.IsPlatformAdmin() {
+		t.Fatal("a node actor must not be the platform admin")
+	}
+	if node.CanExecuteOnCenter() {
+		t.Fatal("a node actor must not hold center_execution")
+	}
+	// The other kinds must not be mistaken for a node actor.
+	for _, p := range []Principal{
+		NewPrincipal("", "admin", RolePlatformAdmin, KindPlatform, EntitlementCenterExecution),
+		NewPrincipal("", "wrist", "", KindWatch),
+		NewPrincipal("t1", "u1", "", KindUser, EntitlementRelayOnly),
+		NewPrincipal("t1", "biz", "", KindBizKey),
+	} {
+		if p.IsNodeActor() {
+			t.Errorf("kind %q must not be a node actor", p.Kind)
+		}
+	}
+	if (Principal{}).IsNodeActor() {
+		t.Error("empty kind must not be a node actor")
 	}
 }
 

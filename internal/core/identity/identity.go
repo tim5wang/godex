@@ -147,6 +147,19 @@ func (p Principal) IsPlatformAdmin() bool {
 	return strings.EqualFold(strings.TrimSpace(p.PlatformRole), RolePlatformAdmin)
 }
 
+// IsNodeActor reports whether the principal is a joined node acting on its own
+// behalf (nk_ node proxy credential, or a request arriving over an
+// authenticated relay channel).
+//
+// A node actor has no tenant of its own today, which is why the single-tenant
+// branch of Authorize has to admit it: node-to-node forwarding through the
+// center runs as a node actor, and refusing it would silently break multi-node
+// operation. It is NOT interchangeable with the operator — a node actor never
+// holds center_execution.
+func (p Principal) IsNodeActor() bool {
+	return p.Kind == KindNode
+}
+
 // CanExecuteOnCenter reports whether this principal may run an agent on the
 // center instance (decision ⑨).
 //

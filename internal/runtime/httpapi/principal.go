@@ -110,3 +110,15 @@ func principalForRequest(manager *config.Manager, relayTrust, nodeProxyToken fun
 		)
 	}
 }
+
+// NewPrincipalResolver returns a resolver that maps an already-authenticated
+// request onto its Principal, using this instance's relay-trust and node-proxy
+// checkers.
+//
+// Exported for the center's relay proxy, which lives in internal/services/relay
+// and therefore cannot import this package (httpapi imports relay). Resolving
+// identity in one place keeps the relay path and the HTTP path from drifting on
+// questions like "is the nk_ credential the operator?" (it is not).
+func NewPrincipalResolver(manager *config.Manager) func(*http.Request) identity.Principal {
+	return principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager))
+}

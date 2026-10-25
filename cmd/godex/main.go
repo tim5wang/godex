@@ -20,6 +20,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/conversation"
 	"github.com/tim5wang/godex/internal/core/idempotency"
+	"github.com/tim5wang/godex/internal/core/identity"
 	pkgregistry "github.com/tim5wang/godex/internal/core/packages"
 	"github.com/tim5wang/godex/internal/platform/idgen"
 	"github.com/tim5wang/godex/internal/platform/logger"
@@ -451,6 +452,25 @@ func main() {
 					return ""
 				}
 				return node.TrustLevel
+			}
+			// NodeAccess seam (P0 §4.3/§5): the credential check above only proves
+			// "some valid credential"; this decides whether THAT caller may reach
+			// THIS node. Resolve the caller's identity with the same resolver the
+			// HTTP layer uses, then apply the single authorization entry point.
+			//
+			// Both halves are needed: with tenants in play, credential validity
+			// alone would let a member of tenant A drive tenant B's nodes.
+			resolvePrincipal := httpapi.NewPrincipalResolver(manager)
+			proxy.AuthorizeNode = func(r *http.Request, nodeID string) identity.Decision {
+				principal := resolvePrincipal(r)
+				node, err := controlRegistry.Get(context.Background(), nodeID)
+				if err != nil {
+					// Unknown node: the hub will report it as offline. Authorizing
+					// here would mean inventing ownership for a node we cannot see,
+					// so let it through and let the transport answer.
+					return identity.AllowedDecision(identity.ReasonAllowed)
+				}
+				return identity.Policy{}.Authorize(principal, node.NodeRef())
 			}
 			bridgeProxy := httpapi.NewBridgeProxyHandler(proxy, bridge, func(nodeID string) bool {
 				// Local node: the self node (served in-process) or any node

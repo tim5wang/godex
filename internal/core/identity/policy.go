@@ -142,22 +142,27 @@ func (p Policy) Authorize(principal Principal, node NodeRef) Decision {
 
 	// Single-tenant deployment: neither side carries a tenant. Nodes registered
 	// before the tenant system exists (and nodes not yet claimed, §4.4) have no
-	// tenant, so this is the common case today. Gated on the platform operator
-	// rather than allowed outright: if a tenant member's tenant id ever failed
-	// to load, an unconditional allow would turn that bug into "reaches every
-	// node on the platform".
+	// tenant, so this is the common case today.
+	//
+	// Two unscoped actors must keep working:
+	//   - the platform operator (the single web token holder);
+	//   - a joined node acting through the center (nk_ / relay identity), because
+	//     node-to-node forwarding over the center is a documented capability.
+	// Everything else is refused rather than allowed outright: if a tenant
+	// member's tenant id ever failed to load, an unconditional allow would turn
+	// that bug into "reaches every node on the platform".
 	if principalTenant == "" && nodeTenant == "" {
-		if principal.IsPlatformAdmin() {
+		if principal.IsPlatformAdmin() || principal.IsNodeActor() {
 			return Decision{
 				Allowed: true, Reason: ReasonSingleTenant,
 				UserID: principal.UserID, Method: principal.AuthMethod,
-				Detail: "node " + node.ID + " (no tenant scoping)",
+				Detail: "node " + node.ID + " (no tenant scoping; " + string(principal.Kind) + ")",
 			}
 		}
 		return Decision{
 			Allowed: false, Reason: ReasonCrossTenant,
 			UserID: principal.UserID, Method: principal.AuthMethod,
-			Detail: "node " + node.ID + " (unscoped principal that is not the operator)",
+			Detail: "node " + node.ID + " (unscoped principal that is neither the operator nor a node)",
 		}
 	}
 

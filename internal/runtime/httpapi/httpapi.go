@@ -178,9 +178,14 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 			VoiceEnabled:  cfg.Media.Audio.VoiceEnabled,
 		})
 	}))
-	protected := withPrincipalAuth(withBearerAuthProvider(func() string {
+	// rejectProxiedAnonymous wraps both authenticated surfaces: with no web token
+	// an anonymous caller IS the operator, so a proxied anonymous request must be
+	// refused (design §5 — the case the startup guard cannot see, because a tunnel
+	// or nginx makes the exposed instance look loopback).
+	anonymousGuard := rejectProxiedAnonymous(manager)
+	protected := anonymousGuard(withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService)))
+	}, relayTrustChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService))))
 	// nodeProxyRead protects the node proxy READ surface (node list / single
 	// node / overview) that CenterBridge on joined nodes calls. It accepts the
 	// full web token OR the restricted node proxy token (control.node_proxy_token,
@@ -193,9 +198,9 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// credential is only safe together with sessionPrincipal below — the identity
 	// would otherwise fall through to the platform operator, which is a privilege
 	// escalation rather than a display detail.
-	nodeProxyRead := withPrincipalAuth(withBearerAuthProvider(func() string {
+	nodeProxyRead := anonymousGuard(withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService)))
+	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService))))
 	registerAuthRoutes(mux, accountsService, protected)
 	registerAdminRoutes(mux, accountsService, controlRegistry, protected)
 	// Relay metering (design §7 basic tier). Tenant-scoped and operator-wide views

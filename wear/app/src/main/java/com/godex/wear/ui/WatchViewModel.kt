@@ -27,6 +27,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** One-shot user-visible message (snackbar / inline notice). */
@@ -40,6 +41,17 @@ data class Notice(val text: String, val isError: Boolean = false)
  * session list.
  */
 class WatchViewModel(app: Application) : AndroidViewModel(app) {
+
+    private companion object {
+        /**
+         * Node id the node itself uses for sessions it serves locally.
+         *
+         * Matches the server's own value (`collectWatchCrossDevice` tags local
+         * sessions `"local"`), so the device list and the session list agree on
+         * which entries are local without a second round-trip to identify "self".
+         */
+        const val LOCAL_DEVICE_ID = "local"
+    }
 
     private val store = WatchStore(app)
     val api = WatchApi()
@@ -140,6 +152,10 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             credentials = creds,
             loading = false,
             preferences = store.preferences(),
+            // Restore the device the user last chose. Without this the selection
+            // was written to DataStore and never read back, so every cold start
+            // silently re-pointed the remote control at the first device.
+            targetDeviceId = store.targetDeviceFlow.first(),
         )
 
         if (!creds.isUsable) {
@@ -282,13 +298,42 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 // The overview carries node + session + approval counts, so the
                 // home screen needs exactly one round-trip.
                 val overview = api.overview()
-                val nodes = api.nodes()
-                val sessions = api.sessions()
-                val approvals = api.approvals()
+                // A node's own entry is renamed to the local sentinel here, once, so
+                // every downstream decision sees a single representation. The device
+                // list carries real node ids while the session list labels this node
+                // "local"; keeping both spellings would make picking your own node
+                // off the list indistinguishable from picking a peer.
+                val nodes = normalizeSelf(api.nodes())
+                val devices = normalizeSelf(overview.devices)
                 val pinned = store.pinnedSessions().toSet()
                 // Signalled separately so a cross-node read failure never blanks
                 // the local list: the home screen must survive a dead peer.
                 val crossDevice = runCatching { api.crossDeviceSessions() }.getOrDefault(emptyList())
+                // Reconcile the target device BEFORE reading sessions: the two are
+                // coupled now that a wrist can drive several nodes. Reading first
+                // would fetch the list for the previously selected device, so the
+                // selection would change while the contents stayed behind.
+                val target = reconcileTargetDevice(
+                    devices = devices,
+                    current = _state.value.targetDeviceId,
+                )
+                val remoteNode = remoteNodeIdFor(target)
+                // The local list is always read: it is the richer payload (turn
+                // identity drives the completion notification) and it is the
+                // fallback when a chosen peer turns out to be unreachable — showing
+                // the device the user was already driving beats a blank screen.
+                val localSessions = api.sessions()
+                val sessions = if (remoteNode.isEmpty()) {
+                    localSessions
+                } else {
+                    runCatching { api.sessions(nodeId = remoteNode) }.getOrNull() ?: localSessions
+                }
+                val approvals = if (remoteNode.isEmpty()) {
+                    api.approvals()
+                } else {
+                    runCatching { api.approvals(nodeId = remoteNode) }.getOrNull() ?: api.approvals()
+                }
+                _state.value = _state.value.copy(targetDeviceId = target)
                 val current = resolveCurrentSession(sessions)
                 _state.value = _state.value.copy(
                     loading = false,
@@ -298,8 +343,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                     crossDevice = crossDevice,
                     pinned = pinned,
                     currentSessionId = current,
-                    targetDeviceId = overview.devices.firstOrNull()?.id
-                        ?: _state.value.targetDeviceId,
+                    targetDeviceId = target,
                     error = null,
                 )
                 if (current.isNotEmpty()) loadDetail(current)
@@ -328,18 +372,26 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Picks the session the remote control points at: the remembered one for this
-     * node when still present, else the most recent.
+     * Picks the session the remote control points at: the remembered one for the
+     * selected device when still present, else the most recent on that device.
+     *
+     * Remembered per device rather than per server URL. With multi-node control a
+     * single base URL now spans several devices, so keying by URL would let a
+     * session remembered on node B be "restored" while the wrist is pointed at
+     * node C, where it does not exist.
      */
     private suspend fun resolveCurrentSession(sessions: List<WatchSession>): String {
-        val remembered = store.sessionForDevice(api.baseUrl)
+        val remembered = store.sessionForDevice(deviceKey())
         if (remembered.isNotEmpty() && sessions.any { it.sessionId == remembered }) return remembered
         return sessions.firstOrNull()?.sessionId.orEmpty()
     }
 
+    /** Stable key for "which device owns the session I am looking at". */
+    private fun deviceKey(): String = remoteNodeId().ifEmpty { LOCAL_DEVICE_ID }
+
     fun selectSession(sessionId: String) {
         viewModelScope.launch {
-            store.rememberSession(api.baseUrl, sessionId)
+            store.rememberSession(deviceKey(), sessionId)
             _state.value = _state.value.copy(currentSessionId = sessionId)
             loadDetail(sessionId)
         }
@@ -348,9 +400,111 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
     fun setTargetDevice(deviceId: String) {
         viewModelScope.launch {
             store.setTargetDevice(deviceId)
-            _state.value = _state.value.copy(targetDeviceId = deviceId)
+            // Clear before refetching: the session and detail on screen belong to the
+            // old device, and leaving them visible would let the user send a command
+            // to a session that is not on the newly selected device.
+            _state.value = _state.value.copy(
+                targetDeviceId = deviceId,
+                currentSessionId = "",
+                detail = null,
+            )
+            // Refetch rather than filtering the list already in hand: refresh now
+            // reads the selected device's sessions from the node, which is the only
+            // way to see a peer's sessions that were not in the previous payload.
+            refresh()
         }
     }
+
+    /**
+     * Maps this node's own entry onto the local sentinel.
+     *
+     * The node marks its own registry entry with `self`; the session list calls the
+     * same machine `local`. Collapsing them here means one representation flows
+     * through target selection, request routing and the device screen, so "the
+     * computer I am paired with" can never be mistaken for a remote peer.
+     */
+    private fun normalizeSelf(nodes: List<WatchNode>): List<WatchNode> =
+        nodes.map { if (it.self) it.copy(id = LOCAL_DEVICE_ID) else it }
+
+    /**
+     * Keeps the stored target device honest across refreshes.
+     *
+     * The previous code unconditionally reset the selection to the first device on
+     * every refresh, which made the "which device am I driving?" screen
+     * decorative: picking a device survived only until the next poll. Rules kept
+     * deliberately narrow:
+     *
+     *  * a selection that is still present is preserved, always;
+     *  * an empty selection defaults to THIS node, not to `devices.first()`;
+     *  * a selection that disappeared (device removed) falls back the same way.
+     *
+     * Defaulting to the first entry looked natural but is unsafe the moment the
+     * list can contain other machines: whichever node happens to sort first would
+     * silently become the destination for every instruction, and the user's first
+     * command after pairing could run on a different computer than the one they
+     * paired with. The paired node is the only defensible default — it is the one
+     * device the user has explicitly authorised.
+     */
+    private fun reconcileTargetDevice(devices: List<WatchNode>, current: String): String {
+        if (current == LOCAL_DEVICE_ID) return current
+        if (devices.any { it.id == current }) return current
+        return LOCAL_DEVICE_ID
+    }
+
+    /**
+     * Sessions that live on one device.
+     *
+     * Sourced from the cross-device list because it is the only surface carrying
+     * `node_id` per session; the plain session list only ever describes the node
+     * this watch is paired with. The local device keeps using [localSessions],
+     * which is the richer payload (it carries turn identity used for notifications)
+     * and is also the only list that works against an older node without the
+     * cross-device endpoint.
+     *
+     * Takes its inputs as parameters rather than reading state so callers can use
+     * the values they just fetched. Reading `_state` here would race with the
+     * assignment that follows, and a stale device list would silently produce an
+     * empty session list for a device that does have sessions.
+     */
+    private fun sessionsForTarget(
+        deviceId: String,
+        localSessions: List<WatchSession>,
+        crossDevice: List<WatchCrossDeviceSession>,
+    ): List<WatchSession> {
+        if (deviceId.isBlank() || deviceId == LOCAL_DEVICE_ID) return localSessions
+        return crossDevice
+            .filter { it.nodeId == deviceId }
+            .map {
+                WatchSession(
+                    sessionId = it.sessionId,
+                    title = it.title,
+                    running = it.running,
+                    parentSessionId = it.parentSessionId,
+                    lastActivityAt = it.lastActivityAt,
+                )
+            }
+    }
+
+    /**
+     * The node id to attach to remote-control requests.
+     *
+     * Empty means "the node this watch is paired with", which is also what the
+     * node itself uses for its own sessions. Sending the id explicitly for the
+     * local case would work too, but keeping it empty means an older node that
+     * does not know `node_id` still serves the request instead of erroring, so a
+     * watch stays usable against a node that was not upgraded.
+     */
+    private fun remoteNodeId(): String = remoteNodeIdFor(_state.value.targetDeviceId)
+
+    /**
+     * Node id to attach to requests, for a target the caller already resolved.
+     *
+     * Separate from [remoteNodeId] because refresh computes the target from the
+     * freshly fetched device list before it is committed to state; reading state
+     * there would use the previous target and send the read to the wrong device.
+     */
+    private fun remoteNodeIdFor(target: String): String =
+        if (target.isBlank() || target == LOCAL_DEVICE_ID) "" else target
 
     /**
      * Loads the presets offered when creating a conversation on the wrist.
@@ -430,7 +584,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             try {
-                api.stopSession(sessionId)
+                api.stopSession(sessionId, remoteNodeId())
                 _notice.value = Notice(string(R.string.vm_stopped))
             } catch (err: WatchApiException) {
                 if (err.isAuthFailure) {
@@ -450,7 +604,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun loadDetail(sessionId: String) {
         try {
-            val detail = api.sessionDetail(sessionId)
+            val detail = api.sessionDetail(sessionId, remoteNodeId())
             _state.value = _state.value.copy(detail = detail)
             // The ongoing-activity card (mockup 12) is derived from the same
             // detail the detail screen renders, for the same reason as the
@@ -512,7 +666,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             try {
-                val accepted = api.sendCommand(sessionId, text.trim(), source)
+                val accepted = api.sendCommand(sessionId, text.trim(), source, remoteNodeId())
                 val suffix = if (accepted.pendingApproval) string(R.string.vm_needs_approval_suffix)
                 else string(R.string.vm_queued_suffix)
                 _notice.value = Notice(string(R.string.vm_sent, suffix))
@@ -533,7 +687,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 // A wrist tap grants the narrowest authority by default; the user
                 // can re-grant from a fuller client if they want more.
-                api.approve(sessionId, requestId, scope)
+                api.approve(sessionId, requestId, scope, remoteNodeId())
                 _notice.value = Notice(
                     if (scope == "session") string(R.string.vm_approved_session)
                     else string(R.string.vm_approved),
@@ -559,7 +713,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         val requestId = item.requestId ?: return
         viewModelScope.launch {
             try {
-                api.deny(sessionId, requestId)
+                api.deny(sessionId, requestId, nodeId = remoteNodeId())
                 _notice.value = Notice(string(R.string.vm_denied))
                 refresh()
             } catch (err: WatchApiException) {
@@ -600,7 +754,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _historyLoading.value = true
             try {
-                val loaded = api.sessionHistory(sessionId)
+                val loaded = api.sessionHistory(sessionId, nodeId = remoteNodeId())
                 _history.value = loaded.messages
             } catch (err: WatchApiException) {
                 if (err.isAuthFailure) {

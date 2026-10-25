@@ -102,6 +102,15 @@ type watchNodeItem struct {
 	// Kind distinguishes a desktop agent host from a server or phone bridge, so
 	// the wrist can label the target instead of showing every node identically.
 	Kind string `json:"kind,omitempty"`
+	// Self marks the node answering this request.
+	//
+	// The wrist needs it because a node's own sessions are labelled "local" in the
+	// cross-device list, while this list carries the real node id. Without the flag
+	// the client cannot tell that "the desktop I am paired with" and "local" are
+	// the same machine, so picking your own node from the list would look like a
+	// remote target and be forwarded through the center — a pointless hop that
+	// fails outright on a node with no center configured.
+	Self bool `json:"self,omitempty"`
 }
 
 // watchStep is one entry of the agent's own plan, trimmed for a wrist (mockup 05).
@@ -219,6 +228,18 @@ type watchAPI struct {
 	controlRegistry controlNodeRegistry
 	asr             watchASRProvider
 	tts             watchTTSProvider
+	// proxy forwards remote-control requests aimed at another node over the
+	// center. Non-nil even when no center is configured; forward() reports the
+	// missing center as a clear 503 instead of panicking.
+	proxy *watchProxyForwarder
+	// trust identifies requests that arrived over this node's authenticated
+	// relay channel, so a node that has never seen the wrist can still act for it
+	// (see routes_watch_proxy.go).
+	trust func(*http.Request) bool
+	// selfNodeID is this node's own id, so the device list can mark which entry is
+	// the machine the watch is paired with. Empty when unknown; the list then just
+	// omits the flag rather than guessing.
+	selfNodeID string
 }
 
 // registerWatchRoutes wires the whole watch surface. The work lives in the
@@ -231,12 +252,27 @@ func registerWatchRoutes(
 	controlRegistry controlNodeRegistry,
 	asr watchASRProvider,
 	tts watchTTSProvider,
+	bridge *CenterBridge,
+	trust func(*http.Request) bool,
+	selfNodeID string,
 ) {
-	api := watchAPI{auth: auth, service: service, controlRegistry: controlRegistry, asr: asr, tts: tts}
+	api := watchAPI{
+		auth:            auth,
+		service:         service,
+		controlRegistry: controlRegistry,
+		asr:             asr,
+		tts:             tts,
+		proxy:           &watchProxyForwarder{bridge: bridge},
+		trust:           trust,
+		selfNodeID:      selfNodeID,
+	}
 
-	read := withWatchScope(auth, watchauth.ScopeRead)
-	command := withWatchScope(auth, watchauth.ScopeCommand)
-	approve := withWatchScope(auth, watchauth.ScopeApprove)
+	// Scope guards accept a watch credential OR a scope-vouched forward from the
+	// node this watch is paired with, which is what makes one pairing usable
+	// against every node the center can reach.
+	read := withWatchScopeOrRelay(auth, watchauth.ScopeRead, trust)
+	command := withWatchScopeOrRelay(auth, watchauth.ScopeCommand, trust)
+	approve := withWatchScopeOrRelay(auth, watchauth.ScopeApprove, trust)
 
 	// The push queue is derived state, so it is created here (once per handler,
 	// shared by every request) rather than stored on the node.
@@ -372,7 +408,7 @@ func registerWatchReadRoutes(mux *http.ServeMux, api watchAPI, read func(http.Ha
 	service := api.service
 	controlRegistry := api.controlRegistry
 
-	mux.Handle("GET /watch/sessions", read(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /watch/sessions", read(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeJSON(w, http.StatusOK, []watchSessionItem{})
 			return
@@ -411,9 +447,9 @@ func registerWatchReadRoutes(mux *http.ServeMux, api watchAPI, read func(http.Ha
 			}
 		}
 		writeJSON(w, http.StatusOK, items)
-	})))
+	}))))
 
-	mux.Handle("GET /watch/sessions/{id}", read(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /watch/sessions/{id}", read(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("session service unavailable"))
 			return
@@ -424,7 +460,7 @@ func registerWatchReadRoutes(mux *http.ServeMux, api watchAPI, read func(http.Ha
 			return
 		}
 		writeJSON(w, http.StatusOK, watchSessionDetail(snapshot))
-	})))
+	}))))
 
 	mux.Handle("GET /watch/nodes", read(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
@@ -440,6 +476,7 @@ func registerWatchReadRoutes(mux *http.ServeMux, api watchAPI, read func(http.Ha
 		for _, n := range nodes {
 			items = append(items, watchNodeItem{
 				ID: n.ID, Name: n.Name, Status: n.Status, LastSeen: n.LastSeen, Kind: n.Kind,
+				Self: api.selfNodeID != "" && n.ID == api.selfNodeID,
 			})
 		}
 		writeJSON(w, http.StatusOK, items)
@@ -551,6 +588,7 @@ func registerWatchOverviewRoute(mux *http.ServeMux, api watchAPI, read func(http
 				for _, n := range nodes {
 					resp.Devices = append(resp.Devices, watchNodeItem{
 						ID: n.ID, Name: n.Name, Status: n.Status, LastSeen: n.LastSeen,
+						Self: api.selfNodeID != "" && n.ID == api.selfNodeID,
 					})
 				}
 			}
@@ -592,12 +630,12 @@ func registerWatchApprovalRoutes(
 ) {
 	service := api.service
 
-	mux.Handle("GET /watch/approvals", read(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /watch/approvals", read(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items := collectWatchApprovals(r.Context(), service)
 		writeJSON(w, http.StatusOK, items)
-	})))
+	}))))
 
-	mux.Handle("POST /watch/approvals/{sessionID}/{requestID}/approve", approve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /watch/approvals/{sessionID}/{requestID}/approve", approve(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("session service unavailable"))
 			return
@@ -616,9 +654,9 @@ func registerWatchApprovalRoutes(
 			return
 		}
 		writeJSON(w, http.StatusOK, resolution)
-	})))
+	}))))
 
-	mux.Handle("POST /watch/approvals/{sessionID}/{requestID}/deny", approve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /watch/approvals/{sessionID}/{requestID}/deny", approve(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("session service unavailable"))
 			return
@@ -638,7 +676,7 @@ func registerWatchApprovalRoutes(
 			return
 		}
 		writeJSON(w, http.StatusOK, resolution)
-	})))
+	}))))
 }
 
 // registerWatchCommandRoutes covers instruction intake and dictation (W8/W9).
@@ -646,7 +684,7 @@ func registerWatchCommandRoutes(mux *http.ServeMux, api watchAPI, command func(h
 	service := api.service
 	asr := api.asr
 
-	mux.Handle("POST /watch/command", command(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /watch/command", command(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		device, _ := watchDeviceFromContext(r.Context())
 		if service == nil {
 			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("session service unavailable"))
@@ -689,12 +727,12 @@ func registerWatchCommandRoutes(mux *http.ServeMux, api watchAPI, command func(h
 			return
 		}
 		writeJSON(w, http.StatusAccepted, result)
-	})))
+	}))))
 
 	// Stop the running turn (mockup 05). The watch cannot know a turn id, so it
 	// stops whatever is active; when nothing is running this returns 409 instead
 	// of silently reporting success.
-	mux.Handle("POST /watch/sessions/{id}/stop", command(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /watch/sessions/{id}/stop", command(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("session service unavailable"))
 			return
@@ -715,7 +753,7 @@ func registerWatchCommandRoutes(mux *http.ServeMux, api watchAPI, command func(h
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
-	})))
+	}))))
 
 	// ---- W9: dictation (watch:command) ----
 	//

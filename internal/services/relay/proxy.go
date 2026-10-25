@@ -39,6 +39,23 @@ type ProxyHandler struct {
 
 const trustApprovedHeader = "X-Godex-Trust-Approved"
 
+// WatchScopesHeader carries the watch scopes the origin node has already
+// verified, so a node that has never seen this wrist can still act on its
+// behalf (center-proxy multi-node remote control). Exported because the
+// receiving side in httpapi reads it.
+const WatchScopesHeader = "X-Godex-Watch-Scopes"
+
+// relayForwardedHeaders is the allowlist of caller headers that survive the
+// center hop. Everything else is dropped, so a caller cannot influence the
+// target node beyond these fields. RelayTrustHeader is deliberately absent: the
+// target's own relay agent generates it, and honouring a forwarded copy would
+// let any caller claim relay trust.
+var relayForwardedHeaders = []string{
+	"Content-Type",
+	"Authorization",
+	WatchScopesHeader,
+}
+
 // defaultForwardTimeout bounds non-streaming forwarded requests when the
 // handler has no explicit Timeout. Without it a node that silently stops
 // answering (half-open relay, wedged process) would hang the proxy forever;
@@ -147,6 +164,18 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		req.Headers["Authorization"] = auth
+	}
+	// Relay-internal headers that must survive the hop. This is a deliberately
+	// short allowlist: the center decides what the target node is allowed to
+	// believe about a request, so a caller cannot smuggle arbitrary headers
+	// through. Without the watch-scope header a wrist request forwarded from the
+	// node it paired with would arrive at the target node with no authority at
+	// all and be rejected — the multi-node remote control would fail at runtime
+	// even though every individual piece looked correct.
+	for _, h := range relayForwardedHeaders {
+		if v := r.Header.Get(h); v != "" {
+			req.Headers[h] = v
+		}
 	}
 
 	timeout := p.Timeout

@@ -48,7 +48,7 @@ type watchHistoryResponse struct {
 func registerWatchHistoryRoute(mux *http.ServeMux, api watchAPI, read func(http.Handler) http.Handler) {
 	service := api.service
 
-	mux.Handle("GET /watch/sessions/{id}/messages", read(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /watch/sessions/{id}/messages", read(api.proxy.withForwardToNode(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sessionID := r.PathValue("id")
 		if service == nil {
 			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("session service unavailable"))
@@ -70,7 +70,7 @@ func registerWatchHistoryRoute(mux *http.ServeMux, api watchAPI, read func(http.
 			SessionID: snapshot.SessionID,
 			Messages:  watchConversation(snapshot.Messages, limit),
 		})
-	})))
+	}))))
 }
 
 // watchConversation keeps the last `limit` user/assistant messages.

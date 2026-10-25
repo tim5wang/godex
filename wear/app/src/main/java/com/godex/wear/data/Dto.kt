@@ -85,6 +85,14 @@ data class WatchNode(
     // label it instead of showing every node as an interchangeable box. Empty
     // means a node that never declared a kind, which the node side defaults to pc.
     val kind: String = "",
+    // True for the node this watch is paired with.
+    //
+    // Needed because this list carries real node ids while the node's own sessions
+    // are tagged "local" in the cross-device list. Without the flag, picking your
+    // own node off the list looks identical to picking a peer, so the request would
+    // be sent through the center back to the same machine — pointless at best, and
+    // a hard failure on a node with no center configured.
+    val self: Boolean = false,
 ) {
     val isOnline: Boolean get() = status.equals("online", ignoreCase = true)
 

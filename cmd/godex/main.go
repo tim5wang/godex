@@ -384,6 +384,9 @@ func main() {
 				},
 				Usage:           usageService,
 				ControlRegistry: &registryWithOverview{Registry: controlRegistry, EventStore: eventStore, Hub: relayHub, Bridge: bridge},
+				// Same bridge the proxy handler above uses: the watch surface forwards
+				// remote-control requests for other nodes through the center.
+				CenterBridge: bridge,
 			})
 
 			// Combine the API handler with relay endpoints. The webui strips the

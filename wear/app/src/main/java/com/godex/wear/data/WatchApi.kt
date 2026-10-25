@@ -46,6 +46,17 @@ class WatchApi(
     private fun url(path: String): String = baseUrl.trimEnd('/') + path
 
     /**
+     * Query suffix that scopes a call to one node.
+     *
+     * Empty means "the node I am paired with" — the existing behaviour, so every
+     * old caller keeps working against an old node that ignores the parameter.
+     * Non-empty is a node id from the device list, which the paired node forwards
+     * to over the center proxy (the same route the web/Android clients use).
+     */
+    private fun nodeQuery(nodeId: String): String =
+        if (nodeId.isBlank()) "" else "?node_id=" + java.net.URLEncoder.encode(nodeId, "UTF-8")
+
+    /**
      * Runs [block] and converts transport/HTTP problems into [WatchApiException].
      * Every public call funnels through here so error handling stays uniform.
      */
@@ -170,12 +181,12 @@ class WatchApi(
         Request.Builder().url(url("/watch/overview")).get()
     }
 
-    suspend fun sessions(limit: Int = 20): List<WatchSession> = call {
-        Request.Builder().url(url("/watch/sessions?limit=$limit")).get()
+    suspend fun sessions(limit: Int = 20, nodeId: String = ""): List<WatchSession> = call {
+        Request.Builder().url(url("/watch/sessions?limit=$limit" + nodeQuery(nodeId).replaceFirst("?", "&"))).get()
     }
 
-    suspend fun sessionDetail(sessionId: String): WatchSessionDetail = call {
-        Request.Builder().url(url("/watch/sessions/$sessionId")).get()
+    suspend fun sessionDetail(sessionId: String, nodeId: String = ""): WatchSessionDetail = call {
+        Request.Builder().url(url("/watch/sessions/$sessionId" + nodeQuery(nodeId))).get()
     }
 
     /**
@@ -186,16 +197,16 @@ class WatchApi(
      * would cost battery for content nobody is looking at. History is fetched
      * only when the user opens it.
      */
-    suspend fun sessionHistory(sessionId: String, limit: Int = 12): WatchHistory = call {
-        Request.Builder().url(url("/watch/sessions/$sessionId/messages?limit=$limit")).get()
+    suspend fun sessionHistory(sessionId: String, limit: Int = 12, nodeId: String = ""): WatchHistory = call {
+        Request.Builder().url(url("/watch/sessions/$sessionId/messages?limit=$limit" + nodeQuery(nodeId).replaceFirst("?", "&"))).get()
     }
 
     suspend fun nodes(): List<WatchNode> = call {
         Request.Builder().url(url("/watch/nodes")).get()
     }
 
-    suspend fun approvals(): List<WatchApproval> = call {
-        Request.Builder().url(url("/watch/approvals")).get()
+    suspend fun approvals(nodeId: String = ""): List<WatchApproval> = call {
+        Request.Builder().url(url("/watch/approvals" + nodeQuery(nodeId))).get()
     }
 
     /**
@@ -235,7 +246,7 @@ class WatchApi(
 
     // ---- actions ----
 
-    suspend fun approve(sessionId: String, requestId: String, scope: String = "once") =
+    suspend fun approve(sessionId: String, requestId: String, scope: String = "once", nodeId: String = "") =
         execute {
             val payload = json.encodeToString(
                 kotlinx.serialization.json.JsonObject.serializer(),
@@ -244,11 +255,11 @@ class WatchApi(
                 },
             )
             Request.Builder()
-                .url(url("/watch/approvals/$sessionId/$requestId/approve"))
+                .url(url("/watch/approvals/$sessionId/$requestId/approve" + nodeQuery(nodeId)))
                 .post(payload.toRequestBody(JSON_MEDIA))
         }
 
-    suspend fun deny(sessionId: String, requestId: String, reason: String = "denied from watch") =
+    suspend fun deny(sessionId: String, requestId: String, reason: String = "denied from watch", nodeId: String = "") =
         execute {
             val payload = json.encodeToString(
                 kotlinx.serialization.json.JsonObject.serializer(),
@@ -257,7 +268,7 @@ class WatchApi(
                 },
             )
             Request.Builder()
-                .url(url("/watch/approvals/$sessionId/$requestId/deny"))
+                .url(url("/watch/approvals/$sessionId/$requestId/deny" + nodeQuery(nodeId)))
                 .post(payload.toRequestBody(JSON_MEDIA))
         }
 
@@ -268,9 +279,9 @@ class WatchApi(
      * active; the server answers 409 when nothing is running rather than
      * pretending the request did something.
      */
-    suspend fun stopSession(sessionId: String) = execute {
+    suspend fun stopSession(sessionId: String, nodeId: String = "") = execute {
         Request.Builder()
-            .url(url("/watch/sessions/$sessionId/stop"))
+            .url(url("/watch/sessions/$sessionId/stop" + nodeQuery(nodeId)))
             .post("".toRequestBody(JSON_MEDIA))
     }
 
@@ -294,10 +305,15 @@ class WatchApi(
         Request.Builder().url(url("/watch/tts")).post(payload.toRequestBody(JSON_MEDIA))
     }
 
-    suspend fun sendCommand(sessionId: String, text: String, source: String = "text"): CommandAccepted =
+    suspend fun sendCommand(
+        sessionId: String,
+        text: String,
+        source: String = "text",
+        nodeId: String = "",
+    ): CommandAccepted =
         call {
             val payload = json.encodeToString(CommandRequest.serializer(), CommandRequest(sessionId, text, source))
-            Request.Builder().url(url("/watch/command")).post(payload.toRequestBody(JSON_MEDIA))
+            Request.Builder().url(url("/watch/command" + nodeQuery(nodeId))).post(payload.toRequestBody(JSON_MEDIA))
         }
 
     /**

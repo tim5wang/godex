@@ -55,6 +55,11 @@ type Dependencies struct {
 	// as WatchTTS: injectable so the route's error mapping can be tested without a
 	// running voice-engine.
 	WatchASR watchASRProvider
+	// CenterBridge optionally injects the local→center bridge. The watch surface
+	// uses it to forward remote-control requests aimed at other nodes, so a wrist
+	// paired with one node can drive every node the center can reach. Nil means
+	// "no center configured", which the forwarder reports as a clear 503.
+	CenterBridge *CenterBridge
 }
 
 func NewHandler(
@@ -216,7 +221,8 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	if watchTTS == nil && manager != nil && manager.Current().Media.Audio.VoiceEnabled {
 		watchTTS = newWatchTTSBridge(manager)
 	}
-	registerWatchRoutes(mux, watchAuth, service, protected, controlRegistry, watchASR, watchTTS)
+	registerWatchRoutes(mux, watchAuth, service, protected, controlRegistry, watchASR, watchTTS,
+		deps.CenterBridge, relayTrustChecker(manager), selfNodeID(manager))
 	capture := deps.LlmCapture
 	if capture == nil {
 		capture = llmcapture.New(llmcapture.Options{DumpDir: manager.Current().StateDir})
@@ -230,6 +236,28 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 // node's watch pairings travel with the rest of its state.
 func watchStatePath(stateDir string) string {
 	return filepath.Join(stateDir, "watch", "devices.json")
+}
+
+// selfNodeID resolves this instance's own node id.
+//
+// Mirrors relayTrustChecker: the configured control.node_id wins, otherwise the
+// persisted auto-generated id is used. The watch surface needs it to mark which
+// entry of the device list is the machine the wrist is paired with, because that
+// list carries real node ids while the node's own sessions are labelled "local".
+// Returns "" when neither source is available; callers then omit the flag rather
+// than mislabelling a peer as self.
+func selfNodeID(manager *config.Manager) string {
+	if manager == nil {
+		return ""
+	}
+	cfg := manager.Current()
+	if id := strings.TrimSpace(cfg.Control.NodeID); id != "" {
+		return id
+	}
+	if id, err := noderegistry.EnsureNodeID(cfg.StateDir, ""); err == nil {
+		return id
+	}
+	return ""
 }
 
 // gzipResponseWriter compresses responses when the client accepts gzip.

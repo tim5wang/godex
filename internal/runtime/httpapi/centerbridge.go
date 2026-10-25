@@ -246,6 +246,15 @@ func (b *CenterBridge) ServeProxy(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
+	// Relay-internal watch authority must survive this hop. Without it the center
+	// forwards an anonymous-looking watch request to the target node, which then
+	// rejects it for having no scopes — the multi-node remote control would fail
+	// at runtime even though every individual piece looked correct. Deliberately a
+	// single named header rather than copying the caller's headers wholesale: the
+	// target must only receive authority this node explicitly vouched for.
+	if scopes := r.Header.Get(WatchScopesHeader); scopes != "" {
+		req.Header.Set(WatchScopesHeader, scopes)
+	}
 	req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
 	resp, err := b.Client.Do(req)
 	if err != nil {

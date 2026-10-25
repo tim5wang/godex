@@ -23,12 +23,26 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import com.godex.wear.R
 
+// Scroll slack at the bottom of Home.
+//
+// The display is a circle, so the window rectangle is not the usable area: the
+// mask cuts the corners, and a row sitting at the bottom edge is only partly
+// drawn. Extra travel is what lets the last row reach the wide band in the
+// middle. Measured on the 454x454 @320dpi emulator (227dp — smaller than the
+// 240dp target watch) with the content built from real sessions: at maximum
+// scroll the 设备/刷新/设置 row stopped at y=382..422 of 454, leaving its outer
+// chips only 56.2% inside the mask — the "只能展示一小半" report. Its bottom edge
+// has to reach y≈376 for the outermost chip to fit, i.e. ~46px (23dp) more
+// travel; 32dp leaves margin for a two-line title. Padding is the right fix
+// because the clipping is geometric: no font or chip change moves the row up.
+private val HomeBottomSlack = 32.dp
+
 /**
  * Home: the one screen that answers "is anything waiting for me?".
  *
- * Layout mirrors mockup 03 — a status line, the current target, and two large
- * actions. Everything else is one tap away, because a wrist glance lasts a
- * couple of seconds.
+ * Layout mirrors mockup 03 — a status line, the current target, and the actions.
+ * Everything else is one tap away, because a wrist glance lasts a couple of
+ * seconds.
  */
 @Composable
 fun HomeScreen(
@@ -59,7 +73,10 @@ fun HomeScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                // Applied inside the scroll container, so it becomes scrollable
+                // travel rather than a visual gap. See HomeBottomSlack.
+                .padding(bottom = HomeBottomSlack),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -133,27 +150,25 @@ fun HomeScreen(
             }
 
             Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RoundAction(
-                    label = stringResource(R.string.home_talk),
-                    onClick = onTalk,
-                    modifier = Modifier.weight(1f),
-                    enabled = state.currentSessionId.isNotEmpty(),
-                )
-            }
-            Spacer(Modifier.height(6.dp))
+            // 说话 shares a row with 会话 / 审批 instead of owning one. A full-width
+            // primary chip cost a whole row at 227dp, and everything below paid for
+            // it. It keeps the accent colour, so it still reads as the primary
+            // action — the wrist does not need it physically larger than the rest.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(ChipSpacing),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 SmallAction(
                     label = stringResource(R.string.common_session),
                     onClick = onSessions,
                     modifier = Modifier.weight(1f),
+                )
+                RoundAction(
+                    label = stringResource(R.string.home_talk),
+                    onClick = onTalk,
+                    modifier = Modifier.weight(1f),
+                    enabled = state.currentSessionId.isNotEmpty(),
                 )
                 SmallAction(
                     label = if (pending > 0) stringResource(R.string.home_approvals_count, pending)
@@ -162,14 +177,25 @@ fun HomeScreen(
                     modifier = Modifier.weight(1f),
                     highlight = pending > 0,
                 )
-                // "Link phone" sits in this existing two-chip row rather than a new
-                // one: this Column scrolls only within what fits the round display,
-                // and earlier additions pushed 设备/刷新 off-screen entirely (seen on
-                // the emulator). A third chip in an existing row costs no height.
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(ChipSpacing),
+            ) {
+                // "Link phone" sits in this existing row rather than a new one: this
+                // Column scrolls only within what fits the round display, and
+                // earlier additions pushed 设备/刷新 off-screen entirely (seen on
+                // the emulator). A chip in an existing row costs no height.
                 SmallAction(
                     label = stringResource(R.string.home_pair_phone),
                     onClick = onLinkPhone,
                     modifier = Modifier.weight(1f),
+                )
+                SmallAction(
+                    stringResource(R.string.devices_title),
+                    onDevices,
+                    Modifier.weight(1f),
                 )
             }
             Spacer(Modifier.height(6.dp))
@@ -177,21 +203,16 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(ChipSpacing),
             ) {
-                SmallAction(
-                    stringResource(R.string.devices_title),
-                    onDevices,
-                    Modifier.weight(1f),
-                )
+                // Two per row, not three. Seven controls do not fit in two rows at
+                // this size, so three rows are unavoidable; the split is 3+2+2 so
+                // that the last row holds two chips rather than one. A lone chip
+                // would stretch to the full row width and read as the primary
+                // action, competing with 说话.
                 SmallAction(
                     stringResource(R.string.home_refresh),
                     onRefresh,
                     Modifier.weight(1f),
                 )
-                // Settings lives in this existing row rather than a new one: this
-                // Column does not scroll, and an added row pushed 设备/刷新 off the
-                // round display (seen on the emulator). A third chip changes no
-                // height. Before this, 设置 was only reachable from the pairing
-                // screen, so a paired watch could never open mockup 11 at all.
                 SmallAction(
                     stringResource(R.string.settings_title),
                     onSettings,

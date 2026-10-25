@@ -271,3 +271,39 @@
 - 无线调试排查顺序固定为：`net` 诊断 → 热点换网 → 再配对，避免消耗 5 分钟配对窗口。
 - 本机 Homebrew 为 x86_64 版且 Rosetta 不可用（`Bad CPU type in executable`），
   任何 `brew install` 都会失败；装工具改用上游预编译包（如 scrcpy `macos-aarch64`）。
+
+## 2026-10-25 — `command -v tesseract` 显示存在但实为 x86_64，OCR 验证路线整条报废
+
+**问题**：为验证手表界面文案与图注一致，写了一个“截图 + OCR”的验证脚本
+（`tesseract <png> stdout --psm 11 tsv` 取文字与坐标，再用坐标点击）。脚本运行时立即失败：
+
+```
+OSError: [Errno 86] Bad CPU type in executable: 'tesseract'
+```
+
+**根因**：本机架构为 `arm64`，但 `/usr/local/bin/tesseract` 是 **x86_64** Mach-O
+（`file` 确认：`Mach-O 64-bit executable x86_64`），且 Rosetta 不可用，故完全无法执行。
+这是 2026-10-21 那条“Homebrew 为 x86_64”经验的**具体化后果**，但表现形式不同：
+那条说的是 `brew install` 会失败，这条是**工具已在 PATH 上、看似可用，实则一跑就崩**。
+
+**踩坑点**：`command -v tesseract` 返回成功路径，早期探测因此判定“OCR 可用”，
+导致先写了整套 OCR 脚本才在首次运行时发现不可用，白跑一轮。
+
+**解决**：
+
+- 放弃 OCR 路线。改用两条不依赖它的验证手段：
+  1. `uiautomator dump` 取节点树（Compose 在部分屏可用；整屏列表页会返回
+     `null root node`，需按屏选择性地用）；
+  2. 服务端日志交叉验证（如中心侧 `relay proxy: ... target=...`），
+     用**独立证据源**证明界面数据来自正确来源，而不是只靠截图。
+- 最终截图验证用 `screencap -p` + 逐张校验字节数/像素多样性（排除黑屏），
+  并把截图与同屏 UI 文案一起落盘，避免“图不对文”。
+
+**改进建议**：
+
+- **`command -v <tool>` 只证明“在 PATH 上”，不证明“能执行”。** 在本机这类
+  “x86_64 Homebrew + arm64 硬件”的混合环境下，依赖任何 CLI 工具前应先实跑一次
+  （`<tool> --version`）或 `file` 检查架构，再决定是否写基于它的脚本。
+- 需要 OCR 时，不要假设 `tesseract` 可用：要么装 arm64 版
+  （上游预编译包 / conda），要么直接改用 `uiautomator dump` 等平台原生手段
+  ——对 Android/Wear 场景后者更可靠，且带坐标，本就更适合做点击自动化。

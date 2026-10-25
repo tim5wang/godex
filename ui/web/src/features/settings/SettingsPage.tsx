@@ -1,3 +1,4 @@
+import { useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -51,6 +52,7 @@ import { useSettingsStore } from "../../store/settings";
 import { ensurePushSubscription, pushSupported, sendTestPush } from "../../lib/push";
 import { MCPSettingsPanel } from "./MCPSettingsPanel";
 import { AdminSettingsPanel } from "./AdminSettingsPanel";
+import { TenantAccessCard } from "./TenantAccessCard";
 import { ConfigSectionFields } from "./SettingsConfigFields";
 import {
   ApplyReportView,
@@ -98,6 +100,16 @@ export function SettingsPage() {
   const [backendDirty, setBackendDirty] = useState(false);
   const [activeTabKey, setActiveTabKey] = useState("client");
   const [activeSectionKey, setActiveSectionKey] = useState("api");
+  // Deep link (?tab=access) so a notice elsewhere in the app can send the user to
+  // the exact panel — the access banner does this, and without it "manage access"
+  // would drop the tenant on a tab they then have to hunt through.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab") ?? "";
+  useEffect(() => {
+    if (requestedTab) {
+      setActiveTabKey(requestedTab);
+    }
+  }, [requestedTab]);
 
   const metaQuery = useQuery({ queryKey: ["meta"], queryFn: getMeta });
   const authRequired = metaQuery.data?.auth_required ?? false;
@@ -300,7 +312,14 @@ export function SettingsPage() {
 
       <Tabs
         activeKey={activeTabKey}
-        onChange={setActiveTabKey}
+        onChange={(key) => {
+          setActiveTabKey(key);
+          // Mirror the selection into the URL so a refresh (or a shared link) keeps
+          // the panel the user was on.
+          const next = new URLSearchParams(searchParams);
+          next.set("tab", key);
+          setSearchParams(next, { replace: true });
+        }}
         items={[
           {
             key: "client",
@@ -538,6 +557,21 @@ export function SettingsPage() {
             ) : (
               <AdminSettingsPanel token={token || null} />
             ),
+          },
+          {
+            // The tenant's OWN surface (design §3.6). Deliberately a separate tab
+            // from "admin": that one crosses tenant boundaries and is
+            // operator-only, while this one is where the tenant authorizes being
+            // looked at. Merging them would put "who may look at me" next to "look
+            // at everyone", which reads as the same power.
+            key: "access",
+            label: t("settings.accessTabTitle"),
+            children:
+              authRequired && !token ? (
+                <Alert type="warning" showIcon message={t("settings.authRequired", { area: t("settings.accessTabTitle") })} />
+              ) : (
+                <TenantAccessCard token={token || null} />
+              ),
           },
         ]}
       />

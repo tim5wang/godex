@@ -33,6 +33,8 @@ import {
 } from "../../lib/apiAdmin";
 
 import { AdminJoinTokensCard } from "./AdminJoinTokensCard";
+import { AdminRelayUsageCard } from "../usage/relay/RelayUsage";
+import { OperatorGrantsCard } from "./OperatorGrantsCard";
 
 /** AdminSettingsPanel is the superadmin's tenant management surface (design §3.6).
  *
@@ -249,8 +251,7 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
         />
       </Card>
 
-      <Card title={t("settings.adminTabTitle")} loading={tenantsQuery.isLoading}>
-        <Table<AdminTenant>
+      <Card title={t("settings.adminTabTitle")} loading={tenantsQuery.isLoading}>        <Table<AdminTenant>
           rowKey="id"
           size="small"
           dataSource={tenantsQuery.data?.tenants ?? []}
@@ -339,6 +340,13 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
           />
         </Card>
       ) : null}
+
+      {/* Reconciliation (design §7): the rows and the total must agree, and the
+          card states the verdict rather than leaving the comparison to the eye. */}
+      <AdminRelayUsageCard token={token} />
+
+      {/* What THIS operator may read (design §3.6). Scoped to the caller server-side. */}
+      <OperatorGrantsCard token={token} />
 
       <Modal
         open={claimTarget !== null}

@@ -48,6 +48,7 @@ import { useSettingsStore } from "../../store/settings";
 import { OverviewTab } from "./overview/OverviewTab";
 import { SessionTab } from "./sessions/SessionTab";
 import { CacheStatsTab } from "./cache/CacheStatsTab";
+import { RelayUsagePanel } from "./relay/RelayUsage";
 import { ResponsiveTable } from "../../components/ResponsiveTable";
 
 const { Title, Text, Paragraph } = Typography;
@@ -624,6 +625,14 @@ export function UsagePage() {
               onKeyIdChange={setCacheKeyId}
             />
           ),
+        },
+        {
+          // Relay metering (design §7, basic tier) sits beside the LLM usage tabs
+          // because it answers the same question for the other half of the
+          // service: what this tenant consumed.
+          key: "relay",
+          label: t("usage.relayTitle"),
+          children: <RelayUsagePanel token={token} />,
         },
       ]} />
 

@@ -422,6 +422,7 @@ export const zhCoreMessages = {
       visibilityUpdateSuccess: "节点可见性已更新。",
       visibilityUpdateFailed: "更新节点可见性失败。",
       visibilityOwnerOnly: "只有节点拥有者可以修改可见性。",
+      visibilityPeerNote: "你可以访问这个节点，但可见性是拥有者的决定——可访问不等于可改动。",
       unclaimed: "未归属",
       tenantID: "租户",
       ownerID: "拥有者",

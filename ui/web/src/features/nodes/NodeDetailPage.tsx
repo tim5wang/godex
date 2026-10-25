@@ -8,6 +8,7 @@ import type { NodeApprovalInfo, NodeJobInfo, NodeSessionInfo, NodeStoredEvent } 
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
 import { ForwardTunnelsCard } from "./ForwardTunnelsCard";
+import { NodeVisibilityCard } from "./NodeVisibilityCard";
 
 export function NodeDetailPage() {
   const { t } = useI18n();
@@ -159,6 +160,11 @@ export function NodeDetailPage() {
             </Space>
           </div>
         </Card>
+
+        {/* Exposure control (design §4.2): the OWNER's own decision. Placed beside
+            the forward tunnels because both answer "what have I opened up on this
+            machine", one for ports and one for peers. */}
+        <NodeVisibilityCard node={node} token={token} />
 
         <ForwardTunnelsCard nodeID={id} token={token} />
 

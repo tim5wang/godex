@@ -423,6 +423,7 @@ export const enCoreMessages = {
       visibilityUpdateSuccess: "Node visibility updated.",
       visibilityUpdateFailed: "Failed to update node visibility.",
       visibilityOwnerOnly: "Only the node owner can change its visibility.",
+      visibilityPeerNote: "You can reach this node, but visibility is the owner's decision — being able to reach it is not the same as being able to change it.",
       unclaimed: "Unclaimed",
       tenantID: "Tenant",
       ownerID: "Owner",

@@ -28,6 +28,7 @@ import { useTerminalShortcut } from "./hooks/useGlobalKey";
 import { getMeta, listProviders } from "./lib/api";
 import { getAuthProfile } from "./lib/apiAuth";
 import { LoginPage } from "./pages/LoginPage";
+import { TenantAccessBanner } from "./features/settings/TenantAccessBanner";
 import { useSettingsStore } from "./store/settings";
 import { useNodeContextStore } from "./store/nodeContext";
 import { useLayoutStore } from "./store/layout";
@@ -324,6 +325,10 @@ export default function App() {
                   }
                 />
               ) : null}
+              {/* The tenant-side notice that operating access is in effect (design
+                  §3.6, 不做隐蔽访问). Renders nothing unless an active grant
+                  exists, so it costs the common case nothing. */}
+              {!showLoginGate && token.trim().length > 0 ? <TenantAccessBanner token={token} /> : null}
               {needsProviderSetup ? (
                 <FirstRunProviderGuide
                   onOpenSettings={() => navigate("/settings")}

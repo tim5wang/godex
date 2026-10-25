@@ -82,7 +82,7 @@ GET /api/control/nodes/win-min/proxy/meta     -> 200  泄漏 model / workspace_d
 
 | 子项 | 状态 |
 |---|---|
-| **目标节点授权**（读面遮蔽 + 代理闸门） | ✅ **已做**：`GET /control/nodes` 按 `VisibleNodeIDs` 遮蔽；`GET /control/nodes/{id}` 与 `/{id}/overview` 跨租户 403；`/control/nodes/{id}/proxy/...` 走 `ProxyHandler.AuthorizeNode` |
+| **目标节点授权**（读面遮蔽 + 代理/转发闸门） | ✅ **已做**：`GET /control/nodes` 按 `VisibleNodeIDs` 遮蔽；`GET /control/nodes/{id}` 与 `/{id}/overview` 跨租户 403；`/control/nodes/{id}/proxy/...` 走 `ProxyHandler.AuthorizeNode`；`/control/nodes/{id}/forward`（TCP 转发，同一漏洞的第二个面）走 `ForwardHandler.AuthorizeNode` |
 | **`nk_` 改 per-node 凭据** | ⏳ **未做**：仍是全局单凭据。即当前 `nk_` 持有者仍可**探测**任意节点是否存在（拿 403 而非 200），但拿不到数据、也代理不进去 |
 
 > 遮罩后 `nk_` 的“枚举”仍会泄漏一个信息：某个 id 是否存在（403 vs 404）。

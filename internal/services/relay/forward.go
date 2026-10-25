@@ -15,6 +15,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/tim5wang/godex/internal/core/identity"
+	"github.com/tim5wang/godex/internal/platform/logger"
 )
 
 // ForwardHandler serves the center-side forward session endpoint. A CLI client
@@ -24,6 +27,13 @@ import (
 type ForwardHandler struct {
 	hub       *Hub
 	authorize func(*http.Request) bool
+	// AuthorizeNode, when set, decides whether the CALLER may reach the target
+	// node (identity.Policy.Authorize) — the same NodeAccess seam the HTTP proxy
+	// uses. authorize above only proves "some valid credential"; without this a
+	// valid credential could open TCP forward streams into ANY node, which once
+	// tenants exist means reaching another tenant's network services.
+	// nil skips the check, keeping existing callers unchanged.
+	AuthorizeNode func(r *http.Request, nodeID string) identity.Decision
 }
 
 // NewForwardHandler creates the center-side forward endpoint. authorize may be
@@ -43,6 +53,17 @@ func (h *ForwardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok || nodeID == "" {
 		http.Error(w, `{"error":"invalid forward path"}`, http.StatusBadRequest)
 		return
+	}
+
+	// NodeAccess (P0): checked before the WebSocket upgrade so a denial is an
+	// ordinary HTTP 403 rather than an upgraded-then-closed socket.
+	if h.AuthorizeNode != nil {
+		if decision := h.AuthorizeNode(r, nodeID); !decision.Allowed {
+			logger.Warnf("relay forward: denied caller=%s target=%s reason=%s user=%s",
+				clientIP(r), nodeID, decision.Reason, decision.UserID)
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 	}
 
 	upgrader := websocket.Upgrader{

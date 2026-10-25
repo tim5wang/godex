@@ -487,7 +487,12 @@ func main() {
 			// center_url of its own, so its bridge is disabled and the old code
 			// answered 503 — while the target was reachable one hop away.
 			watchRelay.Set(bridgeProxy)
-			root.Handle("/control/nodes/{id}/forward", relay.NewForwardHandler(relayHub, nodeProxyAuthorize(cfg)))
+			// TCP forward surface: same NodeAccess seam as the HTTP proxy. Without
+			// it a valid credential could open forward streams into any node's
+			// network services, which is the §1.3 hole on a second surface.
+			forwardHandler := relay.NewForwardHandler(relayHub, nodeProxyAuthorize(cfg))
+			forwardHandler.AuthorizeNode = proxy.AuthorizeNode
+			root.Handle("/control/nodes/{id}/forward", forwardHandler)
 			// Web Push: in-memory subscriptions, VAPID keys persisted across
 			// restarts so browser subscriptions keep working. The center only
 			// relays live events — no durable push history.

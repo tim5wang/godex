@@ -324,8 +324,21 @@ func withWatchScopeOrRelay(
 	return func(next http.Handler) http.Handler {
 		// record tags the request with the scope that was just verified, so a
 		// forward advertises only this and not the device's whole grant.
+		//
+		// It also attaches the caller's identity (P0 §7). Two cases: a watch device
+		// on the direct path (already attached by withWatchScope; re-derived here
+		// to the same value, so the two paths cannot disagree), or a relay-vouched
+		// forward when the wrist is paired with a different node than the one
+		// serving the request — that path carries scopes rather than a device id,
+		// so the wrist cannot be named and the principal records the forward.
 		record := func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), watchGrantedScopeKey{}, scope)))
+			principal := watchRelayPrincipal()
+			if device, ok := watchDeviceFromContext(r.Context()); ok {
+				principal = watchDevicePrincipal(device)
+			}
+			ctx := context.WithValue(r.Context(), watchGrantedScopeKey{}, scope)
+			ctx = WithPrincipal(ctx, principal)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		}
 		withDevice := withWatchScope(auth, scope)(http.HandlerFunc(record))
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

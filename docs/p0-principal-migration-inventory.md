@@ -73,14 +73,14 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 |---|---|---|---|
 | `protected` | **224** | **单一共享 web token** | → `Principal{TenantID, UserID, Entitlements}` |
 | query-token（`auth` 6 + `previewAuth` 4） | **10** | web token（`?token=` 形式） | 同 `protected`，另需处理 WS 无 header |
-| watch `read` | **8** | watch device token + scope | 已 per-device → 补 `TenantID` 归属 |
-| `withBizKeyAuth` | **6** | biz key | → 从 key 解析 `TenantID`/`UserID` |
-| watch `command` | **5** | watch device token + scope | 同上 |
+| watch `read` | **8** | watch device token + scope | ✅ 已落 `watchDevicePrincipal`（`KindWatch`，零权限位）；`TenantID` 归属待 P1 |
+| `withBizKeyAuth` | **6** | biz key | ✅ 已落 `bizKeyPrincipal`；key → `TenantID` 待 P1 |
+| watch `command` | **5** | watch device token + scope | ✅ 同上 |
 | `nodeProxyRead` | **3** | web token **或** `nk_` | → 绑定 `(NodeID, TenantID)` 的 per-node 凭据（**`nk_` 本身仍全局，未改**）|
 | gateway 双认证（`gunzipBody` 内层） | **3** | `gdx_` proxy key **或** web token | ✅ **两条路径都已落 Principal**：`gdx_` → `proxyKeyPrincipal`；web token → `operatorPrincipal`（`/v1/responses`、`/v1/messages` 走操作员；`/v1/chat/completions` 因**会起 agent 会话**另接 `center_execution`）|
 | inline `gdx_`（`/v1/models`、`/v1/usage/cache-stats`） | **2** | `gdx_` proxy key | ✅ 已落 `proxyKeyPrincipal`；key → 租户待 P1 |
-| watch `approve` | **2** | watch device token + scope | 同上 |
-| `withWatchOrWebRead`（`access`） | **2** | watch(read) **或** web token | 双路径，两条都要落 Principal |
+| watch `approve` | **2** | watch device token + scope | ✅ 同上 |
+| `withWatchOrWebRead`（`access`） | **2** | watch(read) **或** web token | ✅ **两条路径都已落 Principal**：watch → `watchDevicePrincipal`；web token → `operatorPrincipal`（由 `protected` 附带）|
 | **受鉴权合计** | **265** | — | — |
 
 ### 2.2 未受鉴权（3 处，修复后）
@@ -109,7 +109,7 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 |---|---|---|
 | `protected` | 有 token 即放行全部 | ① 无有效 Principal → **401**；② 有 Principal 但**非本租户资源** → **403**（`NodeAccess`）；③ 执行入口另需 `center_execution`（§3.3 决策⑨）→ 否则 **403** |
 | `nodeProxyRead` | 全通（§1.3 已复现跨节点） | ✅ 仅返回**本租户可见**节点；跨租户 → **403**（列表遮蔽 + 按 id/概览 403）|
-| watch scope | 设备维度，无租户 | 设备绑定租户；跨租户节点 → **403** |
+| watch scope | 设备维度，无租户 | ✅ **已补身份**（`watchDevicePrincipal`，`KindWatch`，零权限位；未定租户 → 不可达节点）；设备绑定租户待 P1 |
 | bizKey | 仅校验 key 存在 | ✅ **已补身份**（`bizKeyPrincipal`，`KindBizKey`，零权限位）；key → 租户待 P1（`BizAPIKey` 暂无租户字段），此时按未定租户处理（不可达租户节点）|
 | query-token | 同 `protected` | ✅ **已补身份**：`?token=` 与预览 cookie 两条路径现在都附加操作员 Principal（经 `operatorPrincipal()`，与 header 路径同一构造函数）；保留 `?token=`（WS/iframe 无法设 header）|
 | inline `gdx_` | 仅校验格式 | ✅ **已补身份**（`proxyKeyPrincipal`，`KindProxyKey`，零权限位；未定租户 → 不可达节点）；key → 租户/额度待 P1 |
@@ -387,9 +387,10 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 6. **加两条新判定**（403a 跨租户、403b `center_execution`）→ 判据已就位
    （`Policy.Authorize` / `AuthorizeCenterExecution`）；403b 已接线 **18 处**执行入口
    （`requireCenterExecution`，按「会启动/推进一次 agent 执行」筛），余待下推
-7. **落地其余族**（watch scope / bizKey / query-token / `gdx_`）
-   —— bizKey / query-token / `gdx_` ✅ 已补身份（均为零权限位的机器/设备主体，
-   详见 §3.1）；**剩 watch scope** 与各族的 `TenantID` 绑定（待 P1 租户表）
+7. **落地其余族**（watch scope / bizKey / query-token / `gdx_`）—— ✅ **四族均已补身份**
+   （watch → `watchDevicePrincipal`；bizKey → `bizKeyPrincipal`；query-token →
+   `operatorPrincipal`；`gdx_` → `proxyKeyPrincipal`）。均为**零权限位**，
+   故失败方向是关；剩 `TenantID` 绑定（待 P1 租户表）与 §5 fail-open
 
 > 第 1 项已完成一半，剩下的 fail-open（§5）建议作为第 3 项的前置：
 > 只要 fail-closed 未生效，任何访问者在中心上拿不到正确 401 语义，

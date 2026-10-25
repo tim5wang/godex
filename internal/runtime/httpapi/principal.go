@@ -23,6 +23,9 @@ const (
 	// reason as the biz key: so the audit entry names the credential instead of
 	// leaving the caller anonymous.
 	AuthMethodProxyKey = "proxy_key"
+	// AuthMethodWatch is a paired watch device credential. Same reason again:
+	// name the device rather than record an anonymous caller.
+	AuthMethodWatch = "watch_device"
 )
 
 // principalContextKey carries the authenticated Principal down the handler

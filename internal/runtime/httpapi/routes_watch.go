@@ -64,6 +64,9 @@ func withWatchScope(auth *watchauth.Service, scope string) func(http.Handler) ht
 			// Best-effort activity stamp so the device list shows liveness.
 			auth.Touch(device.DeviceID)
 			ctx := context.WithValue(r.Context(), watchDeviceContextKey{}, device)
+			// Attach the device's identity (P0 §7): these routes authenticated but
+			// carried no Principal, so identity-based decisions saw nobody.
+			ctx = WithPrincipal(ctx, watchDevicePrincipal(device))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

@@ -360,6 +360,9 @@ func withWatchOrWebRead(auth *watchauth.Service, protected func(http.Handler) ht
 				}
 				auth.Touch(device.DeviceID)
 				ctx := context.WithValue(r.Context(), watchDeviceContextKey{}, device)
+				// Attach the device's identity (P0 §7). The web-token branch below is
+				// covered by `protected`, which attaches the operator itself.
+				ctx = WithPrincipal(ctx, watchDevicePrincipal(device))
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}

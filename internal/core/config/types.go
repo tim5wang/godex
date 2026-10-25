@@ -538,6 +538,11 @@ type FieldSchema struct {
 	LiveApply   bool     `json:"live_apply,omitempty"`
 	Env         string   `json:"env,omitempty"`
 	Options     []string `json:"options,omitempty"`
+	// PlatformAdmin marks a setting that only a platform admin may change
+	// (design §3.3 / decision ⑫). Declared here, next to the field it guards,
+	// so the restriction cannot drift from the schema the UI renders and the
+	// gate reads from one source.
+	PlatformAdmin bool `json:"platform_admin,omitempty"`
 }
 
 // SectionSchema groups a set of config fields for UI rendering.

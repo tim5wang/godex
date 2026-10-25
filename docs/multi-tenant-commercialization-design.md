@@ -282,9 +282,41 @@ requireCenterExecution(protected)(handler)   // 鉴权 → 能力位 → handler
 | settings UI 已能渲染 | `SettingsConfigFields.tsx:618` 已处理 `string_list`（tags Select） |
 | ⚠️ **但无角色闸门** | `PUT /config` 仅受 `protected`（WebToken）保护（`routes_config.go:19`），任何持 token 者均可改 |
 
-**所以决策⑫ 的前置是 P0**：先把 `protected` 改为解析 `Principal`，
-并给超管专属配置项（含 `allow_from`）加**平台角色级闸门**，否则「超管身份管理」
-只是一句口号（详见 §3.2）。
+**所以决策⑫ 的前置是 P0**：先把 `protected` 改为解析 `Principal`（✅ 已做，§3.2），
+并给超管专属配置项（含 `allow_from`）加**平台角色级闸门**（✅ 已做，下节），
+否则「超管身份管理」只是一句口号。
+
+#### ⚠️ 实现前必须知道的坑：闸门要按**配置项**加，不能按**路由**加
+
+`/config` 在 Web UI 里是**节点作用域**的：`apiClient.ts` 的 `nodeProxyPath`
+只把 `/meta`、`/control..`、`/push..`、`/relay` 留在中心，**其余全部**（含 settings）
+转发到当前选中的远程节点。所以「选中了远程节点」时，Settings 页的
+`GET /config`、`PUT /config` 实际打的是 `/control/nodes/{id}/proxy/config`。
+
+后果：若把 **`PUT /config` 整个路由**用 `requirePlatformAdmin` 包起来，
+远程节点上的编辑会全部 403——因为请求经 relay 到达目标节点时身份是
+`KindNode`（relay-trust），`IsPlatformAdmin()` 为假。这与 `center_execution`
+那次需要节点行动者豁免是**同一类陷阱**。
+
+正确的形状（✅ 已实现，`config_admin_gate.go`）：
+
+- 闸门加在**配置项粒度**：只对超管专属项（`web.token`、
+  `channels.weixin.allow_from`）要求平台角色；其余节点本地设置
+  （model、workspace 等）保持可改。
+- 清单**从 schema 派生**，不硬编码：`FieldSchema` 新增 `PlatformAdmin bool`，
+  标记与字段定义同处一处，因此新加的限制项不可能被闸门漏掉，
+  且渲染同一 schema 的 UI 可据此禁用控件。
+  （我们遇到的一个真实陷阱：`channels.weixin.allow_from` 在 base schema
+  与 weixin 包的 `ConfigSchema()` 里**各声明一份**，两处都已标记。）
+- `clear_secrets` **同样检查**：清掉一个受限 secret 与写入它同样是一次变更，
+  否则可以不清就绕开闸门（如直接抹掉 `web.token`）。
+- 路径比较先归一化（大小写/空白），避免用 `" Web.Token "` 绕过。
+- 无 Principal → **401**（而非 403）：把一个未认证的调用者报成 "forbidden"
+  会把客户端引向用同样缺失的凭据重试。
+
+**节点行动者在此处放行**（与 `center_execution` 的豁免同一道理）：
+节点被中心驱动时写的是**它自己的**配置，就是远程 Settings 页要做的事。
+多租户下的限制靠 delegation 收紧（尚未做）；单租户下节点行动者即操作员。
 
 ### 3.4 历史 cron 任务不迁移；但 cron 功能保留（决策⑩）
 

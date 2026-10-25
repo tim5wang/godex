@@ -22,6 +22,13 @@ func registerConfigRoutes(mux *http.ServeMux, manager *config.Manager, protected
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		// Platform-admin-only settings are gated per ITEM, not per route (design
+		// §3.3): /config is node-scoped in the Web UI, so a route-level gate
+		// would 403 every remote node's own settings editing.
+		if err := authorizeConfigWrite(r, manager, req.Values, req.ClearSecrets); err != nil {
+			writeError(w, statusForConfigAuthError(err), err)
+			return
+		}
 		view, err := manager.Update(r.Context(), config.UpdateRequest{
 			Values:       req.Values,
 			ClearSecrets: append([]string{}, req.ClearSecrets...),

@@ -39,7 +39,7 @@ func (Factory) ConfigSchema() config.SectionSchema {
 			{Path: "channels.weixin.base_url", Label: "Base URL", Description: "Weixin iLink HTTP API base URL.", Type: "string", LiveApply: true, Env: "WEIXIN_BASE_URL"},
 			{Path: "channels.weixin.cdn_base_url", Label: "CDN Base URL", Description: "Weixin CDN base URL used for media upload and download.", Type: "string", LiveApply: true, Env: "WEIXIN_CDN_BASE_URL"},
 			{Path: "channels.weixin.account_id", Label: "Account ID", Description: "Logical local account bucket used for persisted iLink credentials.", Type: "string", LiveApply: true, Env: "WEIXIN_ACCOUNT_ID"},
-			{Path: "channels.weixin.allow_from", Label: "Allow From", Description: "Optional allowlist of iLink user IDs. Empty or * allows all senders.", Type: "string_list", LiveApply: true, Env: "WEIXIN_ALLOW_FROM"},
+			{Path: "channels.weixin.allow_from", Label: "Allow From", Description: "Optional allowlist of iLink user IDs. Empty or * allows all senders. Platform-admin only (decision ⑫): it decides who may drive an agent here.", Type: "string_list", LiveApply: true, PlatformAdmin: true, Env: "WEIXIN_ALLOW_FROM"},
 			{Path: "channels.weixin.route_tag", Label: "Route Tag", Description: "Optional metadata tag attached to inbound Weixin sessions.", Type: "string", LiveApply: true, Env: "WEIXIN_ROUTE_TAG"},
 			{Path: "channels.weixin.long_poll_timeout_ms", Label: "Long Poll Timeout Ms", Description: "Requested long-poll timeout in milliseconds.", Type: "int", LiveApply: true, Env: "WEIXIN_LONG_POLL_TIMEOUT_MS"},
 			{Path: "channels.weixin.proxy", Label: "Proxy", Description: "Optional HTTP(S) proxy used for iLink requests.", Type: "string", LiveApply: true, Env: "WEIXIN_PROXY"},

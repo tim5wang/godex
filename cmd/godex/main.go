@@ -34,6 +34,7 @@ import (
 	rtheartbeat "github.com/tim5wang/godex/internal/runtime/heartbeat"
 	"github.com/tim5wang/godex/internal/runtime/httpapi"
 	"github.com/tim5wang/godex/internal/runtime/webui"
+	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/evalharness"
@@ -139,6 +140,12 @@ func main() {
 	}
 	defer usageStore.Close()
 	usageService := usage.NewService(usageStore)
+	// Multi-tenant accounts (design §3.1). Extracted to a helper so main's branch
+	// count stays within the complexity budget, and so the cleanup is returned
+	// rather than deferred inside the helper (a defer there would close the store
+	// the moment the helper returned).
+	accountsService, closeAccounts := openAccountsStore(cfg)
+	defer closeAccounts()
 	conversation.SetUsageObserver(func(ctx context.Context, event conversation.UsageEvent) {
 		_ = ctx
 		if err := usageService.RecordLLMUsage(event); err != nil {
@@ -388,6 +395,7 @@ func main() {
 					options:    serviceRuntimeOptions(manager),
 				},
 				Usage:           usageService,
+				Accounts:        accountsService,
 				ControlRegistry: &registryWithOverview{Registry: controlRegistry, EventStore: eventStore, Hub: relayHub, Bridge: bridge},
 				// Same bridge the proxy handler above uses: the watch surface forwards
 				// remote-control requests for other nodes through the center.
@@ -549,6 +557,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// openAccountsStore opens the multi-tenant account store (tenants, users,
+// memberships, login sessions).
+//
+// A failure must not take the whole process down: the shared web token still
+// works and every existing deployment keeps functioning, so sign-in simply
+// degrades to unavailable and the reason is logged rather than swallowed. The
+// cleanup is returned instead of deferred here, because a defer inside this
+// helper would close the store the instant it returned.
+func openAccountsStore(cfg *config.Config) (*accounts.Service, func()) {
+	service, err := accounts.New(cfg.StateDir)
+	if err != nil {
+		logger.Warnf("accounts store unavailable, email/password sign-in disabled: %v", err)
+		return nil, func() {}
+	}
+	return service, func() { _ = service.Close() }
 }
 
 // splitDebugArgs extracts leading global debug flags before the command.

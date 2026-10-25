@@ -7,6 +7,7 @@ import (
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/identity"
+	"github.com/tim5wang/godex/internal/services/accounts"
 )
 
 // Auth method labels recorded on the resolved Principal. They are what the
@@ -26,6 +27,10 @@ const (
 	// AuthMethodWatch is a paired watch device credential. Same reason again:
 	// name the device rather than record an anonymous caller.
 	AuthMethodWatch = "watch_device"
+	// AuthMethodSession is a browser/app login session (email + password). Recorded
+	// so the audit trail distinguishes a signed-in person from the shared web token,
+	// which grants a very different set of capabilities.
+	AuthMethodSession = "session"
 )
 
 // principalContextKey carries the authenticated Principal down the handler
@@ -66,10 +71,15 @@ func withPrincipalAuth(next func(http.Handler) http.Handler, principalFor func(*
 // a Principal.
 //
 // Pure (no manager/HTTP side effects) so the capability boundaries that matter
-// are directly testable. Order is significant: a node-originated credential
-// must be classified before the operator default, otherwise a node would
-// inherit the center operator's capabilities.
-func classifyPrincipal(r *http.Request, nodeProxyToken string, trustedRelay bool) identity.Principal {
+// are directly testable. Order is significant, and in two ways:
+//
+//  1. a node-originated credential must be classified before the operator
+//     default, otherwise a node would inherit the center operator's capabilities;
+//  2. a session token must ALSO be classified before the operator default —
+//     otherwise every signed-in tenant user would be classified as the platform
+//     superadmin. That is a privilege escalation, not a display bug, which is why
+//     the session resolver is consulted before the default rather than after.
+func classifyPrincipal(r *http.Request, nodeProxyToken string, trustedRelay bool, session func(*http.Request) (identity.Principal, bool)) identity.Principal {
 	if trustedRelay {
 		return identity.Principal{
 			UserID:       "relay-node",
@@ -88,6 +98,11 @@ func classifyPrincipal(r *http.Request, nodeProxyToken string, trustedRelay bool
 			Kind:         identity.KindNode,
 			Entitlements: identity.NormalizeEntitlements([]string{identity.EntitlementRelayOnly}),
 			AuthMethod:   AuthMethodNodeProxyToken,
+		}
+	}
+	if session != nil {
+		if principal, ok := session(r); ok {
+			return principal
 		}
 	}
 	// Single-tenant default (decision ⑨): the holder of the single web token IS
@@ -122,7 +137,11 @@ func operatorPrincipal() identity.Principal {
 //
 // The relay-trust and node-proxy checkers are the same functions the auth
 // middleware uses, so "was this credential accepted?" has one implementation.
-func principalForRequest(manager *config.Manager, relayTrust, nodeProxyToken func(*http.Request) bool) func(*http.Request) identity.Principal {
+//
+// session resolves a login-session token, or nil when multi-tenant sign-in is not
+// wired (single-tenant nodes, the relay proxy). Passing it here rather than
+// checking sessions elsewhere keeps "who is calling?" in exactly one function.
+func principalForRequest(manager *config.Manager, relayTrust, nodeProxyToken func(*http.Request) bool, session func(*http.Request) (identity.Principal, bool)) func(*http.Request) identity.Principal {
 	return func(r *http.Request) identity.Principal {
 		cfg := manager.Current()
 		trustedRelay := relayTrust != nil && relayTrust(r)
@@ -130,6 +149,7 @@ func principalForRequest(manager *config.Manager, relayTrust, nodeProxyToken fun
 			r,
 			strings.TrimSpace(cfg.Control.NodeProxyToken),
 			trustedRelay,
+			session,
 		)
 	}
 }
@@ -143,5 +163,34 @@ func principalForRequest(manager *config.Manager, relayTrust, nodeProxyToken fun
 // identity in one place keeps the relay path and the HTTP path from drifting on
 // questions like "is the nk_ credential the operator?" (it is not).
 func NewPrincipalResolver(manager *config.Manager) func(*http.Request) identity.Principal {
-	return principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager))
+	return principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), nil)
+}
+
+// sessionTokenChecker accepts a valid login-session token as an authentication
+// credential, for use as an additional checker in withBearerAuthProvider.
+//
+// It only decides "may this request in?"; the identity it yields is resolved by
+// sessionPrincipal via classifyPrincipal. Both consult the same service, so a
+// token cannot be accepted by one and unrecognized by the other.
+func sessionTokenChecker(accountsService *accounts.Service) func(*http.Request) bool {
+	if accountsService == nil {
+		return nil
+	}
+	return func(r *http.Request) bool {
+		_, ok := accountsService.Authenticate(extractProxyKeySecret(r))
+		return ok
+	}
+}
+
+// sessionPrincipal resolves a login-session token into its Principal.
+//
+// Returns ok=false for anything that is not a valid session, which lets
+// classifyPrincipal fall through to its other branches.
+func sessionPrincipal(accountsService *accounts.Service) func(*http.Request) (identity.Principal, bool) {
+	if accountsService == nil {
+		return nil
+	}
+	return func(r *http.Request) (identity.Principal, bool) {
+		return accountsService.Authenticate(extractProxyKeySecret(r))
+	}
 }

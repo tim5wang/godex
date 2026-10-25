@@ -43,7 +43,7 @@ func registerGatewayRoutes(
 		// still pass via the node-actor exemption.
 		webTokenAuth := withPrincipalAuth(withBearerAuthProvider(func() string {
 			return manager.Current().WebToken
-		}, relayTrustChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager)))
+		}, relayTrustChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), nil))
 		requireCenterExecution(webTokenAuth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleOpenAIChatCompletions(w, r, service)
 		})).ServeHTTP(w, r)

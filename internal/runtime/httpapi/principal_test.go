@@ -22,7 +22,7 @@ func bearerRequest(token string) *http.Request {
 // web token holder is the platform superadmin and the only principal allowed to
 // execute an agent on the center.
 func TestClassifyPrincipalOperatorHoldsCenterExecution(t *testing.T) {
-	p := classifyPrincipal(bearerRequest("web-secret"), "", false)
+	p := classifyPrincipal(bearerRequest("web-secret"), "", false, nil)
 	if p.AuthMethod != AuthMethodWebToken {
 		t.Errorf("AuthMethod = %q, want %q", p.AuthMethod, AuthMethodWebToken)
 	}
@@ -41,7 +41,7 @@ func TestClassifyPrincipalOperatorHoldsCenterExecution(t *testing.T) {
 // joined node from gaining center execution: presenting the nk_ credential must
 // not be mistaken for the operator.
 func TestClassifyPrincipalNodeProxyTokenIsNotOperator(t *testing.T) {
-	p := classifyPrincipal(bearerRequest("nk_node"), "nk_node", false)
+	p := classifyPrincipal(bearerRequest("nk_node"), "nk_node", false, nil)
 	if p.AuthMethod != AuthMethodNodeProxyToken {
 		t.Errorf("AuthMethod = %q, want %q", p.AuthMethod, AuthMethodNodeProxyToken)
 	}
@@ -63,7 +63,7 @@ func TestClassifyPrincipalNodeProxyTokenIsNotOperator(t *testing.T) {
 // relay-originated call must be classified as a node even if it also carries a
 // Bearer header, otherwise the node could inherit operator capabilities.
 func TestClassifyPrincipalRelayTrustWinsOverBearerOrder(t *testing.T) {
-	p := classifyPrincipal(bearerRequest("nk_node"), "nk_node", true)
+	p := classifyPrincipal(bearerRequest("nk_node"), "nk_node", true, nil)
 	if p.AuthMethod != AuthMethodRelayTrust {
 		t.Errorf("AuthMethod = %q, want %q", p.AuthMethod, AuthMethodRelayTrust)
 	}
@@ -75,7 +75,7 @@ func TestClassifyPrincipalRelayTrustWinsOverBearerOrder(t *testing.T) {
 func TestClassifyPrincipalNodeProxyTokenRejectsWrongBearer(t *testing.T) {
 	// A request that presents a bearer that does NOT match the nk_ token must
 	// not be classified as a node on the strength of the token merely existing.
-	p := classifyPrincipal(bearerRequest("something-else"), "nk_node", false)
+	p := classifyPrincipal(bearerRequest("something-else"), "nk_node", false, nil)
 	if p.AuthMethod != AuthMethodWebToken {
 		t.Errorf("AuthMethod = %q, want %q (unmatched bearer falls through)", p.AuthMethod, AuthMethodWebToken)
 	}
@@ -142,7 +142,7 @@ func TestProtectedChainAttachesOperatorPrincipal(t *testing.T) {
 	protected := withPrincipalAuth(
 		withBearerAuthProvider(func() string { return "web-secret" }),
 		func(*http.Request) identity.Principal {
-			return classifyPrincipal(bearerRequest("web-secret"), "", false)
+			return classifyPrincipal(bearerRequest("web-secret"), "", false, nil)
 		},
 	)
 	var got identity.Principal
@@ -164,7 +164,7 @@ func TestRelayTrustCheckerAndPrincipalAgree(t *testing.T) {
 	if !relay.ValidateRelayTrust(r.Header.Get(relay.RelayTrustHeader), "node-x", "ck_secret") {
 		t.Fatal("test fixture signature should validate")
 	}
-	p := classifyPrincipal(r, "", true)
+	p := classifyPrincipal(r, "", true, nil)
 	if p.AuthMethod != AuthMethodRelayTrust || p.CanExecuteOnCenter() {
 		t.Fatalf("relay-trusted request classified as %#v", p)
 	}

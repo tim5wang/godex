@@ -16,6 +16,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/llmcapture"
 	"github.com/tim5wang/godex/internal/core/skill"
 	"github.com/tim5wang/godex/internal/domain/events"
+	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
@@ -66,6 +67,10 @@ type Dependencies struct {
 	// including the case where THIS instance is the center and therefore has no
 	// center_url to forward to.
 	WatchRelay *WatchRelayHolder
+	// Accounts holds tenants, users, memberships and login sessions (design §3.1).
+	// When nil it is created under the config StateDir, so email+password sign-in
+	// exists on every node without new configuration.
+	Accounts *accounts.Service
 }
 
 func NewHandler(
@@ -115,6 +120,16 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	heartbeatRuntime := deps.Heartbeat
 	serviceRuntime := deps.ServiceRuntime
 	usageService := deps.Usage
+	// Multi-tenant accounts (design §3.1). Created on demand so email+password
+	// sign-in works out of the box; like the watch registry, a failure to open the
+	// store must not take the whole API down, so it degrades to "sign-in disabled"
+	// (the web token keeps working).
+	accountsService := deps.Accounts
+	if accountsService == nil && manager != nil {
+		if created, err := accounts.New(manager.Current().StateDir); err == nil {
+			accountsService = created
+		}
+	}
 	mux := http.NewServeMux()
 	// Plugin-contributed HTTP surfaces (P-A): mount every registered plugin
 	// prefix; plugins activated later are mounted automatically via the
@@ -153,15 +168,19 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	}))
 	protected := withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager)))
+	}, relayTrustChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService)))
 	// nodeProxyRead protects the node proxy READ surface (node list / single
 	// node / overview) that CenterBridge on joined nodes calls. It accepts the
 	// full web token OR the restricted node proxy token (control.node_proxy_token,
 	// nk_...) so a compromised node cannot touch config/sessions/files management
 	// endpoints — it can only list nodes and read their overview.
+	//
+	// Deliberately does NOT accept a login session: this surface is what a JOINED
+	// NODE calls, and a browser session is not a node credential.
 	nodeProxyRead := withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager)))
+	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), nil))
+	registerAuthRoutes(mux, accountsService, protected)
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)

@@ -13,8 +13,8 @@
 | 项 | 数量 | 备注 |
 |---|---|---|
 | 路由注册（非测试） | **268 处 / 39 文件** | 附录 A 原写「284 / 41」，口径偏大（见 §9） |
-| **受鉴权包裹** | **260 处** | 见 §2（10 个鉴权族，合计可核对） |
-| **完全无鉴权** | **5 处** ⚠️ | `/v1/terminal/*`，且公网可达（§4.1） |
+| **受鉴权包裹** | **265 处**（修复后） | 见 §2（10 个鉴权族，合计可核对）。修复前 260 |
+| **完全无鉴权** | **0 处** ✅ | `/v1/terminal/*` 已收口（§4.1，提交 `413436a`） |
 | 有意匿名 | **2 处** | watch 配对（设计如此，§4.2） |
 | 低风险公开 | **1 处** | `GET /meta`（§4.2） |
 | `WebToken` 引用 | **35 处**（非测试）/ 85（测试） | 附录 A 原写「123」，含测试 |
@@ -22,14 +22,18 @@
 | 节点目标解析点（§5 收敛对象） | **6 类 / 35 处** | §7 |
 | 主测试爆炸半径 | `httpapi_test.go` **3436 行** | §8 |
 
-> 全部数字可用 `python3 scripts/p0_auth_inventory.py` 复现（含 260+8=268 口径自检）。
+> 全部数字可用 `python3 scripts/p0_auth_inventory.py` 复现（含 265+3=268 口径自检）。
 
 **三个必须先处理的问题**（P0 之外，但阻塞 SaaS 化）：
 
-1. **`/v1/terminal/*` 无鉴权且公网可达** → 未授权远程命令执行（§4.1，**已实测复现**）
-2. **`DELETE /v1/terminal/{id}` 谎报成功**：响应硬编码 `exited: true`，但进程可能存活
-   （§4.1.3，实测）——给出「已终止」的假保证，掩盖残留 shell
-3. **`web.token` 为空时全部放行（fail-open）** → 一次误配置即静默失去所有鉴权（§5）
+| # | 问题 | 状态 |
+|---|---|---|
+| 1 | `/v1/terminal/*` 无鉴权且公网可达 → 未授权远程命令执行（§4.1） | ✅ **已修**（`413436a`）+ 回归测试 |
+| 2 | `DELETE /v1/terminal/{id}` 谎报成功、shell 未被回收（§4.1.3） | ✅ **已修**（`413436a`）+ 回归测试 |
+| 3 | `web.token` 为空时全部放行（fail-open，§5） | ⏳ **未修**：涉及部署策略决策，且现有多处测试依赖该行为 |
+
+> 本清单原稿记的是「修复前」状态；上表已标注修复结果。
+> 生产中心当时仍跑旧二进制，**修复需重新部署才生效**。
 
 ---
 
@@ -62,11 +66,11 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 
 ## 2. 鉴权族 × 凭据类型（迁移难度来源）
 
-### 2.1 受鉴权（260 处）
+### 2.1 受鉴权（265 处，修复后）
 
 | 鉴权族 | 注册数 | 当前凭据 | 改为 Principal 的映射 |
 |---|---|---|---|
-| `protected` | **219** | **单一共享 web token** | → `Principal{TenantID, UserID, Entitlements}` |
+| `protected` | **224** | **单一共享 web token** | → `Principal{TenantID, UserID, Entitlements}` |
 | query-token（`auth` 6 + `previewAuth` 4） | **10** | web token（`?token=` 形式） | 同 `protected`，另需处理 WS 无 header |
 | watch `read` | **8** | watch device token + scope | 已 per-device → 补 `TenantID` 归属 |
 | `withBizKeyAuth` | **6** | biz key | → 从 key 解析 `TenantID`/`UserID` |
@@ -76,23 +80,23 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 | inline `gdx_`（`/v1/models`、`/v1/usage/cache-stats`） | **2** | `gdx_` proxy key | → 从 key 解析租户与额度 |
 | watch `approve` | **2** | watch device token + scope | 同上 |
 | `withWatchOrWebRead`（`access`） | **2** | watch(read) **或** web token | 双路径，两条都要落 Principal |
-| **受鉴权合计** | **260** | — | — |
+| **受鉴权合计** | **265** | — | — |
 
-### 2.2 未受鉴权（8 处）
+### 2.2 未受鉴权（3 处，修复后）
 
 | 端点 | 数 | 性质 |
 |---|---|---|
-| `/v1/terminal/*` | **5** ⚠️ | **缺陷**：注释声称“本地开发工具”，但中心公网可达 |
+| ~~`/v1/terminal/*`~~ | ~~5~~ | ✅ **已收口**（提交 `413436a`）——原先无鉴权且公网可达 |
 | `/watch/pair/start`、`/watch/pair/token` | **2** | **有意匿名**（设备尚无凭据，设备码即轮询凭据） |
 | `GET /meta` | **1** | 公开元信息（`auth_required` 等），可保持 |
-| **未受鉴权合计** | **8** | — |
+| **未受鉴权合计** | **3** | — |
 
-> **口径自检**：260 + 8 = **268**（与 §0 总数一致）。
+> **口径自检**：265 + 3 = **268**（与 §0 总数一致）。修复前为 260 + 8。
 > 另注：`/watch/pair/approve` **不在**上表匿名项——它是 `protected`。
 >
 > **清点踩坑（务必避免）**：包裹器常以**变量**形式在注册行**之前**定义
 > （如 `auth := voiceQueryTokenAuth(...)`），只看注册行会把它们误报为“无鉴权”。
-> 初版脚本因此瞖报了 40 条假阳性。
+> 初版脚本因此误报了 40 条假阳性。
 
 ---
 
@@ -128,17 +132,20 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 
 ## 4. 未受保护端点（逐条核实）
 
-### 4.1 ⚠️ 严重：`/v1/terminal/*` 5 个端点完全无鉴权，且公网可达
+### 4.1 ✅ 已修：`/v1/terminal/*` 5 个端点曾完全无鉴权且公网可达
 
-| 端点 | 方法 | 鉴权 |
+> **修复（`413436a`）**：`registerTerminalRoutes(mux, protected)`，5 个端点全部走
+> web token 闸门；新增 `TestTerminalRoutesRequireAuth` 防复发。
+
+| 端点 | 方法 | 修复前鉴权 |
 |---|---|---|
-| `/v1/terminal/create` | POST | **无** |
-| `/v1/terminal/{id}/output` | GET | **无** |
-| `/v1/terminal/{id}/input` | POST | **无** |
-| `/v1/terminal/{id}/resize` | POST | **无** |
-| `/v1/terminal/{id}` | DELETE | **无** |
+| `/v1/terminal/create` | POST | **无** → 已收口 |
+| `/v1/terminal/{id}/output` | GET | **无** → 已收口 |
+| `/v1/terminal/{id}/input` | POST | **无** → 已收口 |
+| `/v1/terminal/{id}/resize` | POST | **无** → 已收口 |
+| `/v1/terminal/{id}` | DELETE | **无** → 已收口 |
 
-**源码依据**（`httpapi.go:680-690`）：注册函数 `registerTerminalRoutes(mux *http.ServeMux)`
+**修复前源码依据**（`httpapi.go:683`）：注册函数 `registerTerminalRoutes(mux *http.ServeMux)`
 **不接收 `protected` 参数**，注释明确写
 "These endpoints are unprotected (no web-token check) because the terminal is a
 local development tool spawned inside the same process."
@@ -185,7 +192,9 @@ Oct 25 18:12:01 godex[318033]: routes_terminal.go:97: [INFO]
 （**真的起 shell**，`routes_terminal.go:create`）。且 `create` 支持
 `execution_mode` 分支（`ssh`/`docker`/本地），即未授权者亦可借中心做**横向移动**。
 
-#### 4.1.3 附带缺陷：DELETE 谎报 `exited: true`
+#### 4.1.3 ✅ 已修：DELETE 曾谎报 `exited: true`
+
+**修复前**：
 
 ```go
 // routes_terminal.go handleTerminalDelete
@@ -206,14 +215,29 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 运维据此认为 shell 已回收，实际残留进程会继续持有凭据/文件句柄。
 属独立的资源泄漏与可观测性缺陷。
 
-#### 4.1.4 处置建议（按优先级）
+> **修复（`413436a`）**：新增 `(*terminalSession).terminate()` ——
+> `cancel` + `Close(PTY)` + `Process.Kill()`，并等待 waiter goroutine（上限 3s）；
+> `kill` 签名改为 `(bool, error)` 返回真实退出状态，DELETE 直接回传它。
+> 新增 `TestTerminalKillReapsProcess` 防复发（断言 `ProcessState != nil`，
+> 刻意不断言 `Exited()`——被信号终止的 shell 报 `signal: hangup`，
+> 用 `Exited()` 会因错误理由通过/失败）。
 
-1. 立即把 `registerTerminalRoutes(mux)` 改为 `registerTerminalRoutes(mux, protected)`
-2. 加部署护栏：非回环监听 + 无 token ⇒ 拒绝启动（与 §5 合并处理）
-3. 修 `kill()`：改用 `exec.CommandContext` 或显式 `Process.Kill()`，
-   并让 `exited` 读真实状态（对齐 `session.exited.Load()`）
-4. 前端 `terminalClient.ts` 已带 `Authorization`（`:22-31` 注释就写着
-   "Terminal endpoints are unprotected when..."），故加鉴权**不会破坏前端**
+#### 4.1.4 处置建议与实际处置
+
+| # | 建议 | 实际 |
+|---|---|---|
+| 1 | `registerTerminalRoutes(mux)` → 传 `protected` | ✅ **已做**（`413436a`） |
+| 2 | 加部署护栏：非回环监听 + 无 token ⇒ 拒绝启动 | ⏳ 与 §5 合并，**未做**（需决策） |
+| 3 | 修 `kill()` 真杀进程，并让 `exited` 读真实状态 | ✅ **已做**（`413436a`） |
+| 4 | 前端已带 `Authorization`，加鉴权不破坏前端 | ✅ 已验证：`tsc -b` 通过；
+  并已更正 `terminalClient.ts` 里「endpoints are unprotected」的过时注释 |
+
+> **本地端到端验证（修复后二进制，`127.0.0.1`）**：8/8 通过——
+> 5 个端点无凭据均 401；带 token 读路径到达 handler（404）；
+> 带 token create → DELETE 后 `exited: true` 且**服务端无残留子 shell**。
+>
+> ⚠️ **生产中心尚未生效**：当时仍跑 `2026-10-25 13:45` 的旧二进制，
+> 修复需**重新部署**后才对外生效。
 
 ### 4.2 有意公开 / 低风险
 
@@ -289,13 +313,18 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 
 **建议的迁移顺序**（先小后大，每步可独立验证）：
 
-1. **修两个安全缺口**（§4.1 terminal、§5 fail-open）——独立于多租户，可立即做
+1. ✅ **修两个安全缺口**：§4.1 terminal 无鉴权 + DELETE 谎报 → **已完成**（`413436a`）；
+   §5 fail-open 未做（需部署策略决策）。原计划含 `protected` 各自审计，与第 4 项合并
 2. **§4.2 `/meta` 与 pairing 保持**（明确不动，避免误伤）
 3. **relay 信任路径补主体**（§3.3 结构性障碍，先解决它再动 `protected`）
-4. **`protected` 改为解析 Principal**（219 处，最大工作量）
+4. **`protected` 改为解析 Principal**（224 处，最大工作量）
 5. **抽 `NodeAccess`**、收敛 6 类解析点（§7）
 6. **加两条新判定**（403a 跨租户、403b `center_execution`）
 7. **落地其余族**（watch scope / bizKey / query-token / `gdx_`）
+
+> 第 1 项已完成一半，剩下的 fail-open（§5）建议作为第 3 项的前置：
+> 只要 fail-closed 未生效，任何访问者在中心上拿不到正确 401 语义，
+> 多租户判定就没有可信的基础。
 
 ---
 
@@ -305,10 +334,11 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 |---|---|---|
 | 路由总数 | 284 / 41 文件 | **268 / 39**（原口径含测试与重复计数） |
 | `WebToken` 引用 | 123 处 | **35 处非测试** + 85 测试（原数含测试） |
-| 「未包裹」路由 | 约 40 条 | **实际 8 条**（5 terminal 缺陷 + 2 有意匿名 + 1 公开）；其余是脚本误判 |
+| 「未包裹」路由 | 约 40 条 | **实际 8 条**（5 terminal 缺陷 + 2 有意匿名 + 1 公开），其中 5 条已收口；其余是脚本误判 |
 | 鉴权族 | 6 类 | **10 个受鉴权族 + 3 类无鉴权**（原漏 watch `access`、query-token、inline `gdx_`） |
 | 中心 agent 面 | 仅 `sessions*`/`gateway*` | 另含 **workflows(18) + skills(10)**，共 66 处 |
-| 未列出的风险 | — | **`/v1/terminal/*` 公网无鉴权**、**DELETE 谎报成功**、**fail-open 姿势**（§4.1/§5） |
+| 未列出的风险 | — | **`/v1/terminal/*` 公网无鉴权**（✅ 已修）、**DELETE 谎报成功**（✅ 已修）、**fail-open 姿势**（⏳ 未修）（§4.1/§5） |
 
-> 前四项是口径修正；**后三项是新发现的安全问题**，不在原设计范围内，
-> 建议独立于 P0 先行处理（改动小、风险明确）。
+> 前四项是口径修正；**后三项是新发现的安全问题**，不在原设计范围内。
+> 其中 terminal 两项已在本轮修复（`413436a`，含回归测试 + 本地 8/8 端到端验证）；
+> fail-open 需单独的部署策略决策。

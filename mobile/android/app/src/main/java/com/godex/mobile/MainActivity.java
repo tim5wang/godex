@@ -177,11 +177,26 @@ public class MainActivity extends BridgeActivity {
     /**
      * Honours `godex://mode/remote` / `godex://mode/local` from a launcher shortcut.
      *
-     * Returns true when the intent carried a mode, so the caller can decide whether
-     * a restart is needed. Switching to remote also clears the persisted local-mode
-     * flag: the setup page treats that flag as "the native layer is bringing up a
-     * local server and will navigate for me", so leaving it set would strand the
-     * user on a permanent "starting local agent…" message with no way forward.
+     * Returns true only when the request actually *changed* the stored mode, so the
+     * caller can decide whether a restart is needed.
+     *
+     * Both halves of that contract matter:
+     *
+     *  * The intent is consumed (`setData(null)`) before anything else. Capacitor's
+     *    `BridgeActivity.load()` ends by re-delivering the launch intent through
+     *    `onNewIntent()`, so an intent that stays intact is acted on again during
+     *    the very `onCreate` that was already handling it.
+     *  * The return value is "changed", not "recognised". Together with the consume
+     *    above, this is what stops the restart loop: `onNewIntent` -> recreate() ->
+     *    onCreate -> load() -> onNewIntent would otherwise spin forever, which on
+     *    screen is a screen flashing black and white (measured: 194 `mode -> local`
+     *    lines in ~1s before the process was killed).
+     *
+     * Switching to remote also clears the persisted local-mode flag and the stored
+     * server: the setup page treats the flag as "a local server is starting and will
+     * navigate for me" (so leaving it set strands the user on a permanent
+     * "starting…" message), and the stored server is normally the loopback address
+     * of that local server, which the page would auto-navigate to.
      */
     private boolean applyModeIntent(Intent intent) {
         Uri data = intent == null ? null : intent.getData();
@@ -197,21 +212,22 @@ public class MainActivity extends BridgeActivity {
         } else {
             return false;
         }
+        // Consume first: this intent must not be able to trigger a second switch.
+        intent.setData(null);
+
         SharedPreferences prefs = getSharedPreferences("CapacitorStorage", MODE_PRIVATE);
-        SharedPreferences.Editor edit = prefs.edit().putBoolean(KEY_REMOTE_MODE, remote);
-        if (remote) {
-            edit.remove(KEY_LOCAL_MODE);
-            // The stored server is almost always the local one (127.0.0.1:PORT) left
-            // over from a previous local run. The setup page auto-navigates whenever
-            // a server is stored, so keeping it would send the WebView straight to a
-            // port nothing is listening on — the user would see a dead page with no
-            // way back to the form. Clearing it keeps them on the setup page, which
-            // is where they must type the computer's LAN address anyway.
-            edit.remove(KEY_SERVER);
+        boolean current = prefs.getBoolean(KEY_REMOTE_MODE, false);
+        boolean changed = current != remote;
+        if (changed) {
+            SharedPreferences.Editor edit = prefs.edit().putBoolean(KEY_REMOTE_MODE, remote);
+            if (remote) {
+                edit.remove(KEY_LOCAL_MODE);
+                edit.remove(KEY_SERVER);
+            }
+            edit.apply();
         }
-        edit.apply();
-        Log.i(TAG, "mode -> " + (remote ? "remote" : "local"));
-        return true;
+        Log.i(TAG, "mode -> " + (remote ? "remote" : "local") + (changed ? " (changed)" : " (already)"));
+        return changed;
     }
 
     private boolean isRemoteMode() {

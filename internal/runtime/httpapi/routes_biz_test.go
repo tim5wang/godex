@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tim5wang/godex/internal/core/config"
+	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/usage"
 )
@@ -175,6 +176,61 @@ func TestBizKeyAuthMiddlewareAcceptsValidKey(t *testing.T) {
 	}
 }
 
+// TestBizKeyAuthAttachesPrincipal closes the identity hole on the biz-key
+// family: these routes are execution entry points, but they used to carry no
+// Principal at all, so no gate could ever be applied to them.
+func TestBizKeyAuthAttachesPrincipal(t *testing.T) {
+	_, usageService := mustBizHandler(t)
+	created, err := usageService.CreateBizKey(usage.BizKeyCreateRequest{Name: "crm", Pin: "123456"})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	var got identity.Principal
+	var ok bool
+	wrapped := withBizKeyAuth(usageService, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, ok = PrincipalFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent-steps", nil)
+	req.Header.Set("Authorization", "Bearer "+created.Secret)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !ok {
+		t.Fatal("no principal attached for an authenticated biz key")
+	}
+	if got.Kind != identity.KindBizKey {
+		t.Errorf("Kind = %q, want %q", got.Kind, identity.KindBizKey)
+	}
+	if got.AuthMethod != AuthMethodBizKey {
+		t.Errorf("AuthMethod = %q, want %q", got.AuthMethod, AuthMethodBizKey)
+	}
+	if got.UserID != created.Key.ID {
+		t.Errorf("UserID = %q, want the key id %q (not a human identity)", got.UserID, created.Key.ID)
+	}
+	// A machine credential must not inherit operator capabilities: a future gate
+	// requiring an entitlement has to deny it by default.
+	if got.CanExecuteOnCenter() {
+		t.Error("a biz key must not hold center_execution")
+	}
+	if got.IsPlatformAdmin() {
+		t.Error("a biz key must not be the platform admin")
+	}
+	if len(got.Entitlements) != 0 {
+		t.Errorf("Entitlements = %v, want none", got.Entitlements)
+	}
+	// Unscoped on purpose (BizAPIKey has no tenant binding yet), which authorizes
+	// it as cross-tenant rather than silently granting reach.
+	if decision := (identity.Policy{}).Authorize(got, identity.NodeRef{ID: "node-a"}); decision.Allowed {
+		t.Errorf("an unscoped biz key must not reach a node, got %q", decision.Reason)
+	}
+}
+
 func TestBizKeyAuthMiddlewareRejectsBadKey(t *testing.T) {
 	_, usageService := mustBizHandler(t)
 
@@ -183,9 +239,9 @@ func TestBizKeyAuthMiddlewareRejectsBadKey(t *testing.T) {
 	}))
 
 	cases := []string{
-		"",                          // missing
-		"gdx_abc123",                // wrong prefix
-		"biz_doesnotexist",          // unknown
+		"",                 // missing
+		"gdx_abc123",       // wrong prefix
+		"biz_doesnotexist", // unknown
 	}
 	for _, secret := range cases {
 		req := httptest.NewRequest(http.MethodGet, "/v1/agent-steps", nil)

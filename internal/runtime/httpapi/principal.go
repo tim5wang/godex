@@ -15,6 +15,10 @@ const (
 	AuthMethodWebToken       = "web_token"
 	AuthMethodNodeProxyToken = "node_proxy_token"
 	AuthMethodRelayTrust     = "relay_trust"
+	// AuthMethodBizKey is a machine credential issued by the operator for the
+	// Agent Step Platform surface. Recorded so audit entries name the key rather
+	// than implying a human caller.
+	AuthMethodBizKey = "biz_key"
 )
 
 // principalContextKey carries the authenticated Principal down the handler

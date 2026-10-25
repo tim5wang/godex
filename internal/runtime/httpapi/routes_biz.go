@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/usage"
 )
@@ -18,6 +19,15 @@ type bizKeyContextKey struct{}
 // presented `Authorization: Bearer biz_xxx` is verified against the usage
 // service; on success the resolved BizAPIKey is stored in the request context
 // (via BizKeyFromContext) for downstream handlers.
+//
+// A Principal is attached as well, so the biz-key family stops being an identity
+// hole in the model: the key's OWN whitelist (MCP servers, tools, models, budget)
+// remains the authorization mechanism for these routes, but anything reading the
+// caller's identity now sees one instead of "unknown".
+//
+// The principal deliberately holds NO entitlements, so any future gate that
+// requires one denies it by default rather than inheriting the operator's
+// capabilities.
 func withBizKeyAuth(usageService *usage.Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secret := extractProxyKeySecret(r)
@@ -31,8 +41,31 @@ func withBizKeyAuth(usageService *usage.Service, next http.Handler) http.Handler
 			return
 		}
 		ctx := context.WithValue(r.Context(), bizKeyContextKey{}, key)
+		ctx = WithPrincipal(ctx, bizKeyPrincipal(key))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// bizKeyPrincipal builds the Principal for an authenticated business key.
+//
+// UserID is the key id (not a human identity): a biz key is a machine credential
+// the operator issued, and naming it as its own subject keeps audit entries
+// honest instead of attributing the key's calls to the operator who created it.
+//
+// TenantID stays empty because BizAPIKey has no tenant binding yet (§3.1
+// requires "key → 租户" eventually). Leaving it empty is the fail-safe reading:
+// Authorize treats an unscoped non-operator principal as cross-tenant, so a key
+// cannot reach tenant-scoped nodes by omission.
+func bizKeyPrincipal(key *usage.BizAPIKey) identity.Principal {
+	id := "biz-key"
+	if key != nil && strings.TrimSpace(key.ID) != "" {
+		id = key.ID
+	}
+	return identity.Principal{
+		UserID:     id,
+		Kind:       identity.KindBizKey,
+		AuthMethod: AuthMethodBizKey,
+	}
 }
 
 // BizKeyFromContext returns the authenticated business key stored by
@@ -157,4 +190,3 @@ func registerBizRoutes(mux *http.ServeMux, protected func(http.Handler) http.Han
 		writeJSON(w, http.StatusOK, map[string]any{"template": tpl, "key": updated})
 	})))
 }
-

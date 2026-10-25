@@ -110,7 +110,7 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 | `protected` | 有 token 即放行全部 | ① 无有效 Principal → **401**；② 有 Principal 但**非本租户资源** → **403**（`NodeAccess`）；③ 执行入口另需 `center_execution`（§3.3 决策⑨）→ 否则 **403** |
 | `nodeProxyRead` | 全通（§1.3 已复现跨节点） | ✅ 仅返回**本租户可见**节点；跨租户 → **403**（列表遮蔽 + 按 id/概览 403）|
 | watch scope | 设备维度，无租户 | 设备绑定租户；跨租户节点 → **403** |
-| bizKey | 仅校验 key 存在 | key → 租户；跨租户 → **403** |
+| bizKey | 仅校验 key 存在 | ✅ **已补身份**（`bizKeyPrincipal`，`KindBizKey`，零权限位）；key → 租户待 P1（`BizAPIKey` 暂无租户字段），此时按未定租户处理（不可达租户节点）|
 | query-token | 同 `protected` | 同 `protected`（注意 WS 无法设 header，保留 `?token=`） |
 | inline `gdx_` | 仅校验格式 | key → 租户/额度；跨租户 → **403** |
 
@@ -338,8 +338,9 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 > 只读查询、取消、审批回复、配置写入（skills 装配、flow publish/validate、diagnose）
 > 都不接——接了会把“查看/撤销”也变成中心执行专属，属于过度收紧。
 > 共接线 **17 处**（66 口径内 10 + `routes_flows.go` 7）。
-> 注 1：gateway 的 `gdx_` proxy-key 分支与整个 biz-key 族不经过 `protected`
-> （无 Principal），不在本表口径内，需单独设计。
+> 注 1：gateway 的 `gdx_` proxy-key 分支不经过 `protected`（无 Principal），
+> 不在本表口径内，需单独设计；biz-key 族同属此列，**已补身份**（零权限位，
+> 不能用 `center_execution` 闸——它靠 key 自身白名单授权，闸掉等于砍产品面）。
 > 注 2：`routes_flows.go` 是业务流程落地晚于原清点，故不在原 66 内，一并计入执行入口。
 > 其余 202 处（配置/文件/记忆/技能目录等）只需租户隔离，不需 `center_execution`。
 

@@ -519,3 +519,12 @@ type nodeDisconnector interface {
 type nodeOverviewProvider interface {
 	Overview(string) (relay.NodeOverview, bool)
 }
+
+// nodeOwnerSetter is an optional capability on the control registry: the admin
+// claim operation (design §4.4) points existing nodes at a tenant. Detected via
+// type assertion for the same reason as nodeDisconnector — adding a method to
+// controlNodeRegistry would break every implementer, including test fakes,
+// for a capability only the real registry provides.
+type nodeOwnerSetter interface {
+	SetOwnership(ctx context.Context, id, tenantID, ownerUserID, visibility string) (noderegistry.NodeView, error)
+}

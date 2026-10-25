@@ -406,16 +406,42 @@ allow(principal, targetNodeID) ⟺
    AND (写操作时) 目标节点信任级允许
 ```
 
-### 4.4 现有节点迁移（决策③：手动）
+### 4.4 现有节点迁移（决策③：手动）✅ 已落地
 
 不写脚本。提供一个**管理操作**把存量节点指认到租户：
 
 ```
-POST /admin/nodes/{id}/claim   {tenant_id, owner_user_id}
+POST /admin/nodes/{id}/claim   {tenant_id, owner_user_id, visibility?}
 ```
 
 实测存量 6 个节点（`node_8ae51969bb5cc3bb` / `mac` / `win-min` /
 `node-153f6098` / `node-podman-test` / `win-pc`）由你按需指认。
+
+**实现要点（几个刻意的选择）**：
+
+- **闸门用 `requirePlatformAdmin`，不用 `requireCenterExecution`**：后者对
+  节点行动者有豁免（为了保留中心驱动远程执行），复用它会让已加入的节点
+  能认领（即改属）其他节点。改归属是管理动作，因此**无任何豁免**。
+- **`tenant_id` 与 `owner_user_id` 必须同时给**：只给一个会造出无人可及的
+  节点（策略首先比租户），故在入口就 400 拒绝，而不是落盘一条无法解读的归属。
+- **通过可选能力（`nodeOwnerSetter`）接入**，而非扩 `controlNodeRegistry` 接口：
+  后者会打断每个实现者（包括测试 fake），而这是只有真实 registry 才提供的能力；
+  不支持时答 501 而不是 panic。
+
+**为何这个路由是必需的而不是锦上添花**：`SetOwnership` 是 `TenantID`/
+`OwnerUserID` 的**唯一**写入面（节点不能自报，§4.1），所以没有这个路由，
+归属字段就永远是死的——`visibility` 也无法从默认 `private` 改开。
+
+#### 实测行为（真实二进制，务必知晓）
+
+claim 到租户后，**超管自己也看不到该节点了**（E2E 实测 `still_listed=False`）。
+这与决策③「代看默认走用户主动授权」一致——租户数据不因超管身份自动可见。
+两个后果需注意：
+
+1. **迁移顺序**：把节点 claim 给某租户后超管就管不到它了；误 claim 需该租户
+   配合，或直接改 `nodes.json`。建议 claim 放在最后、且逐个确认。
+2. **「超管代看」目前未实现**（delegation 属 P1）。在此之前平台侧无法查看
+   已 claim 节点的状态。
 
 ---
 

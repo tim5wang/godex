@@ -41,7 +41,22 @@ var (
 	ErrInvalidEmail = errors.New("invalid email address")
 	// ErrWeakPassword is returned when a password is too short to store.
 	ErrWeakPassword = errors.New("password must be at least 8 characters")
+	// ErrInvalidJoinToken covers unknown, expired, already-used, and revoked join
+	// tokens. One error for all four on purpose: a caller holding an invalid code
+	// gains nothing from learning WHICH way it is invalid, and distinguishing them
+	// would let someone probe for issued codes.
+	ErrInvalidJoinToken = errors.New("invalid, expired, or already used join token")
 )
+
+// JoinTokenPrefix marks tenant enrolment codes so a token can be recognized by
+// shape before it is looked up, mirroring the other credential families
+// (gxs_ sessions, ck_ node credentials, nk_ node proxy tokens).
+const JoinTokenPrefix = "gjt_"
+
+// joinTokenTTL is how long an unused join token stays valid. Short by design:
+// an enrolment code is handed to a device that is expected to redeem it now, and
+// a leaked one should stop working without anyone remembering to revoke it.
+const joinTokenTTL = 24 * time.Hour
 
 // minPasswordLength is the shortest password we will hash. Long enough to matter
 // for online guessing, short enough not to fight the user.
@@ -141,6 +156,25 @@ func (s *Service) init() error {
 			expires_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
+		// join_tokens are one-time, tenant-scoped enrolment codes (design §3.5).
+		// Only the hash is stored: the plaintext is shown once at creation, so a
+		// database leak does not hand out the ability to enrol nodes. SHA-256 is
+		// enough here because the value is 32 random bytes (unlike a password, which
+		// is low-entropy and needs a slow hash).
+		`CREATE TABLE IF NOT EXISTS join_tokens (
+			token_hash TEXT PRIMARY KEY,
+			id TEXT NOT NULL UNIQUE,
+			tenant_id TEXT NOT NULL,
+			owner_user_id TEXT NOT NULL DEFAULT '',
+			label TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			used_at TEXT NOT NULL DEFAULT '',
+			used_by_node TEXT NOT NULL DEFAULT '',
+			revoked_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_join_tokens_tenant ON join_tokens(tenant_id)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -560,6 +594,259 @@ func (s *Service) Members(tenantID string) ([]identity.Membership, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// JoinToken is a tenant-scoped, one-time enrolment code (design §3.5).
+//
+// It exists to replace the previous self-join credential — the center's FULL web
+// token — which meant a SaaS tenant could not add a node without being handed the
+// platform master key.
+//
+// Serialised with explicit snake_case tags: without them Go emits the Go field
+// names (ID, TenantID, ...), which no client in this codebase expects. There is
+// deliberately NO plaintext field here, so a listed record can never carry a
+// reusable code.
+type JoinToken struct {
+	ID          string `json:"id"`
+	TenantID    string `json:"tenant_id"`
+	OwnerUserID string `json:"owner_user_id,omitempty"`
+	Label       string `json:"label,omitempty"`
+	CreatedBy   string `json:"created_by,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	ExpiresAt   string `json:"expires_at,omitempty"`
+	// UsedAt/UsedByNode record redemption. A token is one-time: once used_at is
+	// set it can never be redeemed again, so a leaked code is useless after the
+	// legitimate device has enrolled.
+	UsedAt     string `json:"used_at,omitempty"`
+	UsedByNode string `json:"used_by_node,omitempty"`
+	RevokedAt  string `json:"revoked_at,omitempty"`
+}
+
+// Usable reports whether the token can still redeem a node.
+func (t JoinToken) Usable(now time.Time) bool {
+	if t.UsedAt != "" || t.RevokedAt != "" {
+		return false
+	}
+	expires := parseTime(t.ExpiresAt)
+	return expires.IsZero() || now.Before(expires)
+}
+
+// CreateJoinToken issues a one-time enrolment code for a tenant.
+//
+// Returns the PLAINTEXT token, which exists only in this return value: the store
+// keeps a hash. A caller that loses it must issue a new one, which is the correct
+// trade for an enrolment credential.
+func (s *Service) CreateJoinToken(input CreateJoinTokenInput) (JoinToken, string, error) {
+	tenantID := strings.TrimSpace(input.TenantID)
+	if tenantID == "" {
+		return JoinToken{}, "", fmt.Errorf("missing tenant id")
+	}
+	ownerUserID := strings.TrimSpace(input.OwnerUserID)
+	// Validate the requested owner BEFORE the code exists. Redemption is one-time,
+	// so discovering a bad owner at redeem time would burn the operator's code and
+	// force them to issue another; failing at issuance keeps the code reusable-free
+	// and tells the operator immediately.
+	if ownerUserID != "" && !s.IsMember(tenantID, ownerUserID) {
+		return JoinToken{}, "", fmt.Errorf("owner_user_id is not a member of tenant %s", tenantID)
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return JoinToken{}, "", fmt.Errorf("generate join token: %w", err)
+	}
+	token := JoinTokenPrefix + hex.EncodeToString(raw)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now().UTC()
+	ttl := input.TTL
+	if ttl <= 0 {
+		ttl = joinTokenTTL
+	}
+	record := JoinToken{
+		ID:          idgen.New("jt_", 8),
+		TenantID:    tenantID,
+		OwnerUserID: ownerUserID,
+		Label:       strings.TrimSpace(input.Label),
+		CreatedBy:   strings.TrimSpace(input.CreatedBy),
+		CreatedAt:   now.Format(time.RFC3339Nano),
+		ExpiresAt:   now.Add(ttl).Format(time.RFC3339Nano),
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO join_tokens (token_hash, id, tenant_id, owner_user_id, label, created_by, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		hashToken(token), record.ID, record.TenantID, record.OwnerUserID, record.Label,
+		record.CreatedBy, record.CreatedAt, record.ExpiresAt,
+	); err != nil {
+		return JoinToken{}, "", fmt.Errorf("create join token: %w", err)
+	}
+	return record, token, nil
+}
+
+// CreateJoinTokenInput describes a join-token issuance request.
+//
+// OwnerUserID is optional: empty means the redeeming node is registered to the
+// tenant but left unowned, for the operator to claim later. Requiring an owner up
+// front would force the operator to already know which user will present the
+// code, which is exactly the case a join code exists to avoid.
+type CreateJoinTokenInput struct {
+	TenantID    string
+	OwnerUserID string
+	Label       string
+	CreatedBy   string
+	// TTL overrides the default lifetime; zero uses joinTokenTTL.
+	TTL time.Duration
+}
+
+// RedeemJoinToken validates a one-time code and marks it used, returning the
+// tenant and owner the node must be registered under.
+//
+// Validation and the mark-used write happen under one lock so two concurrent
+// redemptions cannot both succeed: the second sees used_at already set. Without
+// that, "one-time" would be a comment rather than a property.
+func (s *Service) RedeemJoinToken(token, nodeID string) (JoinToken, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return JoinToken{}, ErrInvalidJoinToken
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, err := s.lookupJoinTokenLocked(token)
+	if err != nil {
+		return JoinToken{}, err
+	}
+	if !record.Usable(s.now().UTC()) {
+		return JoinToken{}, ErrInvalidJoinToken
+	}
+	if _, err := s.db.Exec(
+		`UPDATE join_tokens SET used_at = ?, used_by_node = ? WHERE token_hash = ?`,
+		s.timestamp(), strings.TrimSpace(nodeID), hashToken(token),
+	); err != nil {
+		return JoinToken{}, fmt.Errorf("redeem join token: %w", err)
+	}
+	return record, nil
+}
+
+// lookupJoinTokenLocked fetches a token by its hash. Caller holds s.mu.
+func (s *Service) lookupJoinTokenLocked(token string) (JoinToken, error) {
+	var record JoinToken
+	err := s.db.QueryRow(
+		`SELECT id, tenant_id, owner_user_id, label, created_by, created_at, expires_at, used_at, used_by_node, revoked_at
+		 FROM join_tokens WHERE token_hash = ?`, hashToken(token),
+	).Scan(&record.ID, &record.TenantID, &record.OwnerUserID, &record.Label, &record.CreatedBy,
+		&record.CreatedAt, &record.ExpiresAt, &record.UsedAt, &record.UsedByNode, &record.RevokedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return JoinToken{}, ErrInvalidJoinToken
+	}
+	if err != nil {
+		return JoinToken{}, fmt.Errorf("lookup join token: %w", err)
+	}
+	return record, nil
+}
+
+// ListJoinTokens returns a tenant's issued codes for the admin surface. Hashes are
+// never selected, so a caller cannot replay a listed record.
+func (s *Service) ListJoinTokens(tenantID string) ([]JoinToken, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return nil, fmt.Errorf("missing tenant id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT id, tenant_id, owner_user_id, label, created_by, created_at, expires_at, used_at, used_by_node, revoked_at
+		 FROM join_tokens WHERE tenant_id = ? ORDER BY created_at DESC, id DESC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list join tokens: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []JoinToken{}
+	for rows.Next() {
+		var record JoinToken
+		if err := rows.Scan(&record.ID, &record.TenantID, &record.OwnerUserID, &record.Label, &record.CreatedBy,
+			&record.CreatedAt, &record.ExpiresAt, &record.UsedAt, &record.UsedByNode, &record.RevokedAt); err != nil {
+			return nil, fmt.Errorf("scan join token: %w", err)
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
+}
+
+// RevokeJoinToken invalidates an unused code. Idempotent: revoking an already
+// revoked or used token reports not-found only when the id is unknown, so a
+// double-click does not surface as an error.
+func (s *Service) RevokeJoinToken(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("missing join token id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.db.Exec(
+		`UPDATE join_tokens SET revoked_at = ? WHERE id = ? AND revoked_at = ''`, s.timestamp(), id)
+	if err != nil {
+		return fmt.Errorf("revoke join token: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		// Distinguish "unknown id" from "already revoked/used": only the former is
+		// an error, so a retry stays quiet while a typo still fails loudly.
+		var exists int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM join_tokens WHERE id = ?`, id).Scan(&exists); err != nil {
+			return fmt.Errorf("revoke join token: %w", err)
+		}
+		if exists == 0 {
+			return fmt.Errorf("join token not found: %s", id)
+		}
+	}
+	return nil
+}
+
+// TenantOwnerUserID returns the user who owns the tenant (its "owner" membership).
+//
+// Used as the join token's owner fallback. Falling back to the token's CREATOR
+// instead would hand the node to the platform operator whenever an operator issued
+// the code — a user who is not a member of that tenant, so the node would be owned
+// by nobody reachable and, being private by default, would be usable by nobody.
+func (s *Service) TenantOwnerUserID(tenantID string) (string, bool) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var userID string
+	err := s.db.QueryRow(
+		`SELECT user_id FROM memberships WHERE tenant_id = ? AND role = ? ORDER BY joined_at ASC, user_id ASC LIMIT 1`,
+		tenantID, identity.RoleTenantOwner,
+	).Scan(&userID)
+	if err != nil {
+		return "", false
+	}
+	return userID, true
+}
+
+// IsMember reports whether a user belongs to a tenant.
+//
+// The join path validates the requested owner against this before writing
+// ownership: an owner id that matches no membership produces a node nobody in the
+// tenant can reach, which looks like a successful enrolment until someone tries to
+// use it.
+func (s *Service) IsMember(tenantID, userID string) bool {
+	tenantID = strings.TrimSpace(tenantID)
+	userID = strings.TrimSpace(userID)
+	if tenantID == "" || userID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var count int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM memberships WHERE tenant_id = ? AND user_id = ?`, tenantID, userID,
+	).Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
 }
 
 // dummyHash is a valid bcrypt hash used to equalize timing on unknown emails.

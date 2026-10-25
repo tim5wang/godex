@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/services/accounts"
@@ -141,6 +142,73 @@ func registerAdminRoutes(mux *http.ServeMux, accountsService *accounts.Service, 
 		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
 	})))
 
+	// GET /admin/tenants/{id}/join-tokens — issued enrolment codes for a tenant.
+	//
+	// Token hashes are never returned, so a listed record cannot be replayed; only
+	// the issuance metadata is shown. The plaintext exists once, in the create
+	// response.
+	mux.Handle("GET /admin/tenants/{id}/join-tokens", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminAccountsAvailable(w, accountsService) {
+			return
+		}
+		tokens, err := accountsService.ListJoinTokens(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"join_tokens": tokens})
+	})))
+
+	// POST /admin/tenants/{id}/join-tokens — issue a one-time enrolment code
+	// (design §3.5). This is what replaces handing out the center's full web token.
+	mux.Handle("POST /admin/tenants/{id}/join-tokens", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminAccountsAvailable(w, accountsService) {
+			return
+		}
+		var req struct {
+			OwnerUserID string `json:"owner_user_id,omitempty"`
+			Label       string `json:"label,omitempty"`
+			TTLHours    int    `json:"ttl_hours,omitempty"`
+		}
+		if err := decodeJSONAllowEmpty(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.TTLHours < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("ttl_hours must not be negative"))
+			return
+		}
+		record, plaintext, err := accountsService.CreateJoinToken(accounts.CreateJoinTokenInput{
+			TenantID:    r.PathValue("id"),
+			OwnerUserID: req.OwnerUserID,
+			Label:       req.Label,
+			CreatedBy:   callerUserID(r),
+			TTL:         time.Duration(req.TTLHours) * time.Hour,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// The plaintext token is returned here and NOWHERE else: the store keeps only
+		// a hash, so the operator must copy it now or issue another.
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"join_token": record,
+			"token":      plaintext,
+		})
+	})))
+
+	// DELETE /admin/join-tokens/{id} — revoke an unused code.
+	mux.Handle("DELETE /admin/join-tokens/{id}", requirePlatformAdmin(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !adminAccountsAvailable(w, accountsService) {
+			return
+		}
+		if err := accountsService.RevokeJoinToken(r.PathValue("id")); err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
+	})))
+
 	// GET /admin/policy — the effective platform policy, so the superadmin UI can
 	// render switches from the same source the authorization seam reads instead of
 	// guessing defaults on the client.
@@ -167,4 +235,17 @@ func adminAccountsAvailable(w http.ResponseWriter, service *accounts.Service) bo
 	writeError(w, http.StatusServiceUnavailable, fmt.Errorf(
 		"tenant administration is unavailable on this instance (account store could not be opened)"))
 	return false
+}
+
+// callerUserID returns the authenticated principal's user id, or empty when the
+// route is not behind authentication.
+//
+// Used as the join token's creator so the record names who issued it. Empty is
+// acceptable rather than an error: the enrolment path falls back to assigning the
+// node to the tenant without an owner, which the operator can claim later.
+func callerUserID(r *http.Request) string {
+	if principal, ok := PrincipalFromContext(r.Context()); ok {
+		return strings.TrimSpace(principal.UserID)
+	}
+	return ""
 }

@@ -121,3 +121,57 @@ export function setNodeVisibility(
     token,
   );
 }
+
+/** JoinToken is a one-time tenant enrolment code (design §3.5). The plaintext is
+ *  never included: it exists once, in the create response. */
+export interface JoinToken {
+  id: string;
+  tenant_id: string;
+  owner_user_id?: string;
+  label?: string;
+  created_by?: string;
+  created_at?: string;
+  expires_at?: string;
+  used_at?: string;
+  used_by_node?: string;
+  revoked_at?: string;
+}
+
+export function listJoinTokens(token: string | null, tenantID: string): Promise<{ join_tokens: JoinToken[] }> {
+  return request<{ join_tokens: JoinToken[] }>(
+    `/admin/tenants/${encodeURIComponent(tenantID)}/join-tokens`,
+    { method: "GET" },
+    token,
+  );
+}
+
+/** createJoinToken issues an enrolment code and returns its plaintext ONCE.
+ *
+ *  The server stores only a hash, so this is the only moment the code can be
+ *  read; a lost code is replaced by issuing another, never recovered. */
+export function createJoinToken(
+  token: string | null,
+  tenantID: string,
+  input: { ownerUserID?: string; label?: string; ttlHours?: number },
+): Promise<{ join_token: JoinToken; token: string }> {
+  return request<{ join_token: JoinToken; token: string }>(
+    `/admin/tenants/${encodeURIComponent(tenantID)}/join-tokens`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        owner_user_id: input.ownerUserID ?? "",
+        label: input.label ?? "",
+        ttl_hours: input.ttlHours ?? 0,
+      }),
+    },
+    token,
+  );
+}
+
+export function revokeJoinToken(token: string | null, id: string): Promise<{ revoked: boolean }> {
+  return request<{ revoked: boolean }>(
+    `/admin/join-tokens/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    token,
+  );
+}

@@ -194,6 +194,10 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)
+	// Tenant enrolment (design §3.5): NOT behind `protected` — the one-time join
+	// token is the credential. Requiring the web token as well would reintroduce
+	// exactly the master-key-per-tenant problem this replaces.
+	registerJoinRoute(mux, manager, controlRegistry, accountsService)
 	registerNodeProxyTokenRoute(mux, manager, protected)
 	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected, nodeProxyRead, nodeAccessPolicy, accountsService)
 	registerProviderRoutes(mux, manager, protected)

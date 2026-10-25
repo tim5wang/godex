@@ -13,8 +13,8 @@ import (
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/platform/idgen"
 	"github.com/tim5wang/godex/internal/platform/logger"
+	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
-	"github.com/tim5wang/godex/internal/services/relay"
 )
 
 // selfJoinRequest is the node-side "join a center" form. The operator only
@@ -65,19 +65,36 @@ func registerSelfJoinRoute(mux *http.ServeMux, manager *config.Manager, protecte
 		// Audit: node self-registration attempt (P0-2).
 		logger.Infof("audit self/join: caller=%s node=%s center=%s", r.RemoteAddr, req.NodeID, req.CenterURL)
 
-		// 1. Register with the center (web token auth), 2. get the per-node
-		// credential, 3. exchange the web token for the center's restricted node
-		// proxy credential (nk_...) so the node never persists the full web token,
-		// 4. persist local config, 5. sync node.json.
-		if err := registerWithCenter(r.Context(), &req); err != nil {
-			writeError(w, http.StatusBadGateway, err)
-			return
-		}
+		// Two credential shapes are accepted (design §3.5):
+		//
+		//   - a tenant join token (gjt_): ONE call to /control/join, which the center
+		//     turns into ownership plus credentials. This is what lets a SaaS tenant
+		//     add a node without ever being handed the platform web token.
+		//   - the center's full web token: the legacy path, kept for existing
+		//     single-operator deployments.
 		var proxyToken string
-		proxyToken, err := exchangeSelfProxyToken(r.Context(), req.CenterURL, req.Token)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, err)
-			return
+		if strings.HasPrefix(req.Token, accounts.JoinTokenPrefix) {
+			token, err := enrollWithJoinToken(r.Context(), &req)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			proxyToken = token
+		} else {
+			// 1. Register with the center (web token auth), 2. get the per-node
+			// credential, 3. exchange the web token for the center's restricted node
+			// proxy credential (nk_...) so the node never persists the full web token,
+			// 4. persist local config, 5. sync node.json.
+			if err := registerWithCenter(r.Context(), &req); err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			token, err := exchangeSelfProxyToken(r.Context(), req.CenterURL, req.Token)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			proxyToken = token
 		}
 		cfg := manager.Current()
 		if err := manager.WriteHomeEnvVar("GODEX_CONTROL_CREDENTIAL", req.Credential); err != nil {
@@ -112,6 +129,45 @@ func registerSelfJoinRoute(mux *http.ServeMux, manager *config.Manager, protecte
 			"message":    fmt.Sprintf("node %q joined %s (trust=%s)", req.NodeID, req.CenterURL, req.TrustLevel),
 		})
 	})))
+}
+
+// enrollWithJoinToken redeems a tenant join token in ONE center round-trip and
+// fills req with the center-issued identifiers.
+//
+// Separate from registerWithCenter because the two differ in more than shape: the
+// legacy path authenticates as the OPERATOR (so the node may register any id,
+// fetch any credential), while this one authenticates as a TENANT, and the center
+// derives the node's ownership from the token rather than from anything the node
+// sent. Collapsing them would make it easy to reintroduce an operator-only call
+// on the tenant path.
+func enrollWithJoinToken(ctx context.Context, req *selfJoinRequest) (string, error) {
+	body, err := json.Marshal(map[string]string{
+		"token":       req.Token,
+		"node_id":     req.NodeID,
+		"name":        req.Name,
+		"trust_level": req.TrustLevel,
+	})
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		NodeID         string `json:"node_id"`
+		Credential     string `json:"credential"`
+		NodeProxyToken string `json:"node_proxy_token"`
+	}
+	if err := doCenterJSON(ctx, &http.Client{Timeout: 15 * time.Second}, req.CenterURL, "POST", "/control/join", "", body, &out); err != nil {
+		return "", fmt.Errorf("center join: %w", err)
+	}
+	if out.Credential == "" || out.NodeProxyToken == "" {
+		return "", fmt.Errorf("center returned an incomplete enrolment (credential or proxy token missing)")
+	}
+	// The center may normalize the id; keep the node's local state consistent with
+	// what the center recorded, or heartbeats would arrive under an unknown id.
+	if out.NodeID != "" {
+		req.NodeID = out.NodeID
+	}
+	req.Credential = out.Credential
+	return out.NodeProxyToken, nil
 }
 
 // exchangeSelfProxyToken exchanges the center's full web token for its
@@ -167,20 +223,9 @@ func registerWithCenter(ctx context.Context, req *selfJoinRequest) error {
 // sessions / files management API.
 func registerNodeProxyTokenRoute(mux *http.ServeMux, manager *config.Manager, protected func(http.Handler) http.Handler) {
 	mux.Handle("POST /control/node-proxy-token", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		current := strings.TrimSpace(manager.Current().Control.NodeProxyToken)
-		if current != "" {
-			writeJSON(w, http.StatusOK, map[string]string{"node_proxy_token": current})
-			return
-		}
-		proxyToken, err := relay.GenerateNodeProxyToken()
+		proxyToken, err := ensureNodeProxyToken(r.Context(), manager)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("generate node proxy token: %w", err))
-			return
-		}
-		if _, err := manager.Update(r.Context(), config.UpdateRequest{Values: map[string]any{
-			"control.node_proxy_token": proxyToken,
-		}}); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("persist node proxy token: %w", err))
+			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"node_proxy_token": proxyToken})

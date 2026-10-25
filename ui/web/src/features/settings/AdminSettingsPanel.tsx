@@ -32,6 +32,8 @@ import {
   type AdminTenant,
 } from "../../lib/apiAdmin";
 
+import { AdminJoinTokensCard } from "./AdminJoinTokensCard";
+
 /** AdminSettingsPanel is the superadmin's tenant management surface (design §3.6).
  *
  *  Every endpoint behind it crosses tenant boundaries by design, so the server
@@ -59,6 +61,10 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
   // One members query key serves both the members card and the claim dialog's
   // owner picker, so selecting a tenant twice does not fetch twice.
   const [selectedTenant, setSelectedTenant] = useState("");
+  // The join-token card needs the tenant's NAME as well as its id (the id alone
+  // makes an unreadable card title), so it keeps the whole row rather than just
+  // the id like the members card does.
+  const [joinTokenTenant, setJoinTokenTenant] = useState<AdminTenant | null>(null);
   const membersQuery = useQuery({
     queryKey: ["admin-members", selectedTenant, token],
     enabled: selectedTenant !== "",
@@ -290,16 +296,29 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
             },
             {
               title: "",
-              width: 110,
+              width: 170,
               render: (_value, tenant) => (
-                <Button size="small" onClick={() => setSelectedTenant(tenant.id)}>
-                  {t("settings.adminMembersCol")}
-                </Button>
+                <Space size={4}>
+                  <Button size="small" onClick={() => setSelectedTenant(tenant.id)}>
+                    {t("settings.adminMembersCol")}
+                  </Button>
+                  <Button size="small" onClick={() => setJoinTokenTenant(tenant)}>
+                    {t("settings.adminJoinTokensButton")}
+                  </Button>
+                </Space>
               ),
             },
           ]}
         />
       </Card>
+
+      {joinTokenTenant ? (
+        <AdminJoinTokensCard
+          token={token}
+          tenant={{ id: joinTokenTenant.id, name: joinTokenTenant.name }}
+          onClose={() => setJoinTokenTenant(null)}
+        />
+      ) : null}
 
       {selectedTenant ? (
         <Card

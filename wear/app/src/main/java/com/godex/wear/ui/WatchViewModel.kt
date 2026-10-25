@@ -320,19 +320,31 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 val remoteNode = remoteNodeIdFor(target)
                 // The local list is always read: it is the richer payload (turn
-                // identity drives the completion notification) and it is the
-                // fallback when a chosen peer turns out to be unreachable — showing
-                // the device the user was already driving beats a blank screen.
+                // identity drives the completion notification).
                 val localSessions = api.sessions()
-                val sessions = if (remoteNode.isEmpty()) {
-                    localSessions
+                // A remote read failure must NOT fall back to this node's list.
+                //
+                // It used to, on the theory that showing something beats a blank
+                // screen. That was wrong in the one case it matters: with "mac"
+                // selected but the mac unreachable, the wrist showed the *paired
+                // node's* conversations under the mac's name, which reads as "the
+                // device switch did nothing". An empty list plus a visible error
+                // says what actually happened, and it cannot be mistaken for the
+                // wrong machine's data.
+                var remoteError: String? = null
+                val sessions: List<WatchSession>
+                val approvals: List<WatchApproval>
+                if (remoteNode.isEmpty()) {
+                    sessions = localSessions
+                    approvals = api.approvals()
                 } else {
-                    runCatching { api.sessions(nodeId = remoteNode) }.getOrNull() ?: localSessions
-                }
-                val approvals = if (remoteNode.isEmpty()) {
-                    api.approvals()
-                } else {
-                    runCatching { api.approvals(nodeId = remoteNode) }.getOrNull() ?: api.approvals()
+                    val fetched = runCatching { api.sessions(nodeId = remoteNode) }
+                    sessions = fetched.getOrElse { err ->
+                        remoteError = err.message ?: string(R.string.vm_remote_unreachable)
+                        emptyList()
+                    }
+                    approvals = runCatching { api.approvals(nodeId = remoteNode) }
+                        .getOrElse { emptyList() }
                 }
                 _state.value = _state.value.copy(targetDeviceId = target)
                 val current = resolveCurrentSession(sessions)
@@ -345,7 +357,7 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
                     pinned = pinned,
                     currentSessionId = current,
                     targetDeviceId = target,
-                    error = null,
+                    error = remoteError,
                 )
                 if (current.isNotEmpty()) loadDetail(current)
                 // Surface the queue on the wrist: an approval is the one event that
@@ -394,6 +406,36 @@ class WatchViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             store.rememberSession(deviceKey(), sessionId)
             _state.value = _state.value.copy(currentSessionId = sessionId)
+            loadDetail(sessionId)
+        }
+    }
+
+    /**
+     * Opens a session picked from the cross-device list.
+     *
+     * Moves the remote control to that session's node first. A session on another
+     * device is only reachable by naming that device on every request, so without
+     * this the tap selected an id the paired node had never heard of, and the next
+     * refresh replaced the list with the node actually being driven — the switch
+     * looked like it did nothing.
+     *
+     * The target is persisted before the refetch so a crash mid-switch still comes
+     * back pointed at the device the user chose.
+     */
+    fun selectCrossDeviceSession(nodeId: String, sessionId: String) {
+        val target = nodeId.ifBlank { LOCAL_DEVICE_ID }
+        viewModelScope.launch {
+            store.setTargetDevice(target)
+            store.rememberSession(target, sessionId)
+            _state.value = _state.value.copy(
+                targetDeviceId = target,
+                currentSessionId = sessionId,
+                detail = null,
+            )
+            // Refetch before loading the detail: the detail request carries the new
+            // node id, and the list must reflect the new device before the UI can
+            // render a coherent pair of screens.
+            refresh()
             loadDetail(sessionId)
         }
     }

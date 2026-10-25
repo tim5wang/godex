@@ -176,9 +176,10 @@ func TestForwardServesLocallyWhenNoTarget(t *testing.T) {
 }
 
 func TestForwardWithoutCenterAnswers503(t *testing.T) {
-	// A standalone node has no center, so it genuinely cannot reach other nodes.
-	// It must say so instead of falling back to running the command locally —
-	// a wrist command aimed at node B running on node A is a wrong-machine bug.
+	// A standalone node has no center and no proxy handler, so it genuinely cannot
+	// reach other nodes. It must say so instead of falling back to running the
+	// command locally — a wrist command aimed at node B running on node A is a
+	// wrong-machine bug.
 	for _, f := range []*watchProxyForwarder{nil, {}, {bridge: NewCenterBridge("", "")}} {
 		r := httptest.NewRequest(http.MethodPost, "/watch/command?node_id=nodeb", strings.NewReader("{}"))
 		w := httptest.NewRecorder()
@@ -191,5 +192,73 @@ func TestForwardWithoutCenterAnswers503(t *testing.T) {
 		if !strings.Contains(w.Body.String(), "nodeb") {
 			t.Fatalf("error should name the unreachable node: %s", w.Body.String())
 		}
+	}
+}
+
+// TestForwardUsesLocalProxyHandlerWhenPresent covers the case that made a wrist
+// paired with the CENTER fail: the center has no center_url (it *is* the center),
+// so its center bridge is disabled and the old code answered 503 even though the
+// target node was connected to the center and reachable in-process. The
+// instance's own node proxy handler already implements that decision, so it must
+// be preferred over the bridge.
+func TestForwardUsesLocalProxyHandlerWhenPresent(t *testing.T) {
+	holder := NewWatchRelayHolder()
+	var gotPath, gotScopes, gotQuery, gotAuth string
+	holder.Set(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		gotScopes = r.Header.Get(WatchScopesHeader)
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+
+	forwarder := &watchProxyForwarder{
+		local:    holder,
+		bridge:   NewCenterBridge("", ""), // center-shaped: no bridge
+		webToken: func() string { return "center-web-token" },
+		selfID:   "node-self",
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/watch/sessions?node_id=mac&limit=5", nil)
+	r.Header.Set("Authorization", "Bearer wch_watchcredential")
+	w := httptest.NewRecorder()
+	if !forwarder.forward(w, r, []string{watchauth.ScopeRead}) {
+		t.Fatal("remote target should be forwarded via the local proxy handler")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 (must not answer 503 when a proxy handler exists)", w.Code)
+	}
+	if want := "/control/nodes/mac/proxy/watch/sessions"; gotPath != want {
+		t.Fatalf("path=%q want %q", gotPath, want)
+	}
+	if strings.Contains(gotQuery, watchNodeQuery) {
+		t.Fatalf("node selector leaked: %q", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "limit=5") {
+		t.Fatalf("unrelated query dropped: %q", gotQuery)
+	}
+	if gotScopes != watchauth.ScopeRead {
+		t.Fatalf("%s=%q want %q", WatchScopesHeader, gotScopes, watchauth.ScopeRead)
+	}
+	// The proxy handler guards itself with the web token; the watch credential is
+	// meaningless there and must be replaced, not passed through.
+	if gotAuth != "Bearer center-web-token" {
+		t.Fatalf("Authorization=%q want the web token", gotAuth)
+	}
+}
+
+// TestForwardServesLocallyForOwnNodeID pins the loop guard: a client that sends
+// this node's real id (instead of the "local" sentinel) must be served locally.
+// Forwarding it would re-enter the same API handler through the proxy forever.
+func TestForwardServesLocallyForOwnNodeID(t *testing.T) {
+	forwarder := &watchProxyForwarder{
+		local:  NewWatchRelayHolder(),
+		bridge: NewCenterBridge("http://center.invalid", "token"),
+		selfID: "node-self",
+	}
+	r := httptest.NewRequest(http.MethodGet, "/watch/sessions?node_id=node-self", nil)
+	if forwarder.forward(httptest.NewRecorder(), r, nil) {
+		t.Fatal("a request naming this node must be served locally, not forwarded")
 	}
 }

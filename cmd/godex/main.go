@@ -371,6 +371,10 @@ func main() {
 			}
 
 			bridge := centerBridge(cfg, selfNode)
+			// The watch surface needs the node proxy handler that is created further
+			// down, but that handler wraps apiHandler, which needs this holder — hence
+			// a holder installed after both exist.
+			watchRelay := httpapi.NewWatchRelayHolder()
 			apiHandler := httpapi.NewHandlerWithDependencies(httpapi.Dependencies{
 				Config:     manager,
 				Backend:    service,
@@ -387,6 +391,11 @@ func main() {
 				// Same bridge the proxy handler above uses: the watch surface forwards
 				// remote-control requests for other nodes through the center.
 				CenterBridge: bridge,
+				// Reuse this instance's own node proxy handler for wrist forwarding. It
+				// already knows the local-vs-center rule, so a watch paired with the
+				// center still drives nodes connected to it (the center has no
+				// center_url of its own to forward through).
+				WatchRelay: watchRelay,
 			})
 
 			// Combine the API handler with relay endpoints. The webui strips the
@@ -443,7 +452,7 @@ func main() {
 				}
 				return node.TrustLevel
 			}
-			root.Handle("/control/nodes/{id}/proxy/", httpapi.NewBridgeProxyHandler(proxy, bridge, func(nodeID string) bool {
+			bridgeProxy := httpapi.NewBridgeProxyHandler(proxy, bridge, func(nodeID string) bool {
 				// Local node: the self node (served in-process) or any node
 				// currently connected to the local relay hub. Everything else
 				// is forwarded to the center bridge.
@@ -451,7 +460,13 @@ func main() {
 					return true
 				}
 				return relayHub.IsOnline(nodeID)
-			}))
+			})
+			root.Handle("/control/nodes/{id}/proxy/", bridgeProxy)
+			// Hand the same handler to the watch surface. This is what lets a wrist
+			// paired with the CENTER drive a node connected to it: the center has no
+			// center_url of its own, so its bridge is disabled and the old code
+			// answered 503 — while the target was reachable one hop away.
+			watchRelay.Set(bridgeProxy)
 			root.Handle("/control/nodes/{id}/forward", relay.NewForwardHandler(relayHub, nodeProxyAuthorize(cfg)))
 			// Web Push: in-memory subscriptions, VAPID keys persisted across
 			// restarts so browser subscriptions keep working. The center only

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/watchauth"
@@ -66,12 +67,60 @@ func watchNodeTarget(r *http.Request) string {
 	return target
 }
 
-// watchProxyForwarder forwards a watch request to another node through the
-// center. It is nil when this instance has no center configured, which is the
-// normal case for a standalone node — callers must treat nil as "cannot reach
-// other nodes" and answer 503 rather than pretending.
+// WatchRelayHolder gives the watch forwarder access to this instance's own node
+// proxy handler, which is the same handler mounted at
+// /control/nodes/{id}/proxy/ for the web and Android clients.
+//
+// A holder rather than a constructor argument because of an ordering cycle: the
+// proxy handler wraps the API handler, while the watch routes live inside that
+// API handler. The handler is therefore installed after both exist.
+type WatchRelayHolder struct {
+	v atomic.Value // http.Handler
+}
+
+// NewWatchRelayHolder returns an empty holder; callers must Set it before use.
+func NewWatchRelayHolder() *WatchRelayHolder { return &WatchRelayHolder{} }
+
+// Set installs the proxy handler.
+func (h *WatchRelayHolder) Set(handler http.Handler) {
+	if h != nil && handler != nil {
+		h.v.Store(handler)
+	}
+}
+
+// Handler returns the installed proxy handler, or nil when none was set.
+func (h *WatchRelayHolder) Handler() http.Handler {
+	if h == nil {
+		return nil
+	}
+	v := h.v.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(http.Handler)
+}
+
+// watchProxyForwarder forwards a watch request aimed at another node.
+//
+// It prefers the instance's own node proxy handler, because that handler already
+// implements the local-vs-center decision exactly once: the node is served
+// in-process when it is the self node or is connected to this relay hub, and
+// otherwise relayed through the configured center. Re-implementing that here is
+// what made "watch paired with the center" fail: the center IS the center, so it
+// has no center_url to forward to, and the old code answered 503 even though the
+// target node was connected to it and reachable one hop away.
+//
+// The center bridge remains as a fallback for wiring without a local handler
+// (tests, and any instance that mounts the watch surface on its own).
 type watchProxyForwarder struct {
+	local  *WatchRelayHolder
 	bridge *CenterBridge
+	// webToken authorises the in-process hop: the relay proxy handler mounted on
+	// this instance expects the same web token the browser sends.
+	webToken func() string
+	// selfID is this node's own id; a request naming it is served locally, which
+	// also prevents the forwarder from relaying into itself.
+	selfID string
 }
 
 // forward sends the request to nodeID over the center proxy and returns true.
@@ -85,14 +134,60 @@ func (f *watchProxyForwarder) forward(w http.ResponseWriter, r *http.Request, sc
 	if target == "" {
 		return false
 	}
-	if f == nil || f.bridge == nil || !f.bridge.Enabled() {
+	// Naming this node explicitly is the same as naming none: serve locally. This
+	// also breaks what would otherwise be an infinite relay loop (api handler ->
+	// proxy handler -> same api handler) for a client that sends our real node id
+	// instead of the local sentinel.
+	if f != nil && f.selfID != "" && target == f.selfID {
+		return false
+	}
+	if f == nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf(
+			"无法访问节点 %q：当前节点未配置中继能力", target))
+		return true
+	}
+
+	// Preferred path: hand the request to this instance's own node proxy handler.
+	if handler := f.local.Handler(); handler != nil {
+		f.serveViaProxy(handler, w, r, target, scopes)
+		return true
+	}
+
+	if f.bridge == nil || !f.bridge.Enabled() {
 		writeError(w, http.StatusServiceUnavailable, fmt.Errorf(
 			"无法访问节点 %q：当前节点未配置中心（control.center_url / control.center_token）", target))
 		return true
 	}
 
-	// Build the proxied path and hand the request to the existing bridge, which
-	// already knows how to authenticate to the center and stream the reply back.
+	// Fallback path: go straight to the center's proxy endpoint. ServeProxy sets
+	// the center Authorization header itself, so the clone is handed over as-is
+	// (its path is already the /control/nodes/{id}/proxy/... form it expects).
+	f.bridge.ServeProxy(w, f.proxiedRequest(r, target, scopes))
+	return true
+}
+
+// serveViaProxy runs the request through this instance's node proxy handler.
+func (f *watchProxyForwarder) serveViaProxy(
+	handler http.Handler,
+	w http.ResponseWriter,
+	r *http.Request,
+	target string,
+	scopes []string,
+) {
+	clone := f.proxiedRequest(r, target, scopes)
+	// The proxy handler guards itself with the instance web token — the same
+	// credential the browser sends. The watch credential is meaningless there
+	// (it is a wch_ token, not a web token), so it is replaced rather than kept.
+	if f.webToken != nil {
+		if token := strings.TrimSpace(f.webToken()); token != "" {
+			clone.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
+	handler.ServeHTTP(w, clone)
+}
+
+// proxiedRequest builds the /control/nodes/{id}/proxy/... clone of a watch call.
+func (f *watchProxyForwarder) proxiedRequest(r *http.Request, target string, scopes []string) *http.Request {
 	clone := r.Clone(r.Context())
 	clone.URL.Path = "/control/nodes/" + target + "/proxy" + r.URL.Path
 	clone.RequestURI = ""
@@ -103,13 +198,11 @@ func (f *watchProxyForwarder) forward(w http.ResponseWriter, r *http.Request, sc
 		q.Del(watchNodeQuery)
 		clone.URL.RawQuery = q.Encode()
 	}
-	// The incoming watch credential is meaningless to the center and to B, so it
-	// is dropped; authority is carried by the scopes header instead.
+	// Authority travels as scopes; the watch credential does not (the target has
+	// never seen this wrist and could not validate it).
 	clone.Header.Del("Authorization")
 	clone.Header.Set(WatchScopesHeader, strings.Join(scopes, ","))
-
-	f.bridge.ServeProxy(w, clone)
-	return true
+	return clone
 }
 
 // withForwardToNode makes a watch handler able to serve a request aimed at a

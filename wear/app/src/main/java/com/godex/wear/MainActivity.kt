@@ -388,8 +388,10 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     sessions = state.crossDevice,
                     currentSessionId = state.currentSessionId,
                     loading = state.loading,
-                    onSelect = {
-                        vm.selectSession(it)
+                    onSelect = { nodeId, sessionId ->
+                        // Also re-points the remote control at that node; selecting a
+                        // session on another device is inherently a device switch.
+                        vm.selectCrossDeviceSession(nodeId, sessionId)
                         screen = Screen.Home
                     },
                     onBack = { screen = Screen.Sessions },

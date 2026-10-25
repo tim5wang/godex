@@ -255,6 +255,8 @@ func registerWatchRoutes(
 	bridge *CenterBridge,
 	trust func(*http.Request) bool,
 	selfNodeID string,
+	localProxy *WatchRelayHolder,
+	webToken func() string,
 ) {
 	api := watchAPI{
 		auth:            auth,
@@ -262,9 +264,14 @@ func registerWatchRoutes(
 		controlRegistry: controlRegistry,
 		asr:             asr,
 		tts:             tts,
-		proxy:           &watchProxyForwarder{bridge: bridge},
-		trust:           trust,
-		selfNodeID:      selfNodeID,
+		proxy: &watchProxyForwarder{
+			local:    localProxy,
+			bridge:   bridge,
+			webToken: webToken,
+			selfID:   selfNodeID,
+		},
+		trust:      trust,
+		selfNodeID: selfNodeID,
 	}
 
 	// Scope guards accept a watch credential OR a scope-vouched forward from the

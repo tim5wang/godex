@@ -255,4 +255,5 @@
     <string name="vm_transcribe_failed">Transcription failed</string>
     <string name="vm_credential_revoked">Pairing is no longer valid, pair again</string>
     <string name="vm_history_failed">Could not load history</string>
+    <string name="vm_remote_unreachable">That device is unreachable, check it is online</string>
 </resources>

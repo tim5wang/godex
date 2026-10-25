@@ -240,4 +240,5 @@
     <string name="vm_transcribe_failed">转写失败</string>
     <string name="vm_credential_revoked">配对已失效，请重新配对</string>
     <string name="vm_history_failed">历史消息加载失败</string>
+    <string name="vm_remote_unreachable">该设备不可达，请确认它在线</string>
 </resources>

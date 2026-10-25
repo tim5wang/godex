@@ -30,10 +30,10 @@ import com.godex.wear.data.WatchCrossDeviceSession
 /**
  * Cross-device unified list (mockup 14).
  *
- * Filtering is a *view*, not a mode: it narrows what is shown and never changes
- * which session commands go to. That distinction is the whole reason this screen
- * can be a pure client-side concern — the server returns one unfiltered list and
- * the watch narrows it locally, so tapping a filter costs no round-trip.
+ * Filtering is a *view*, not a mode: it narrows what is shown. What commands follow
+ * is decided by which session is tapped, and tapping one always names both the
+ * node and the session — so the selection can move the remote control to another
+ * machine instead of silently staying where it was.
  *
  * A node that is offline contributes no sessions (the center does not cache a
  * peer's history), and its missing sessions are reported rather than silently
@@ -44,7 +44,7 @@ fun CrossDeviceScreen(
     sessions: List<WatchCrossDeviceSession>,
     currentSessionId: String,
     loading: Boolean,
-    onSelect: (String) -> Unit,
+    onSelect: (nodeId: String, sessionId: String) -> Unit,
     onBack: () -> Unit,
 ) {
     val listState = rememberScalingLazyListState()
@@ -161,10 +161,12 @@ fun CrossDeviceScreen(
                         )
                     }
                 },
-                // A remote session is shown for awareness but cannot be driven
-                // from here: the remote-control credential is scoped to this node,
-                // so pretending otherwise would fail at the first command.
-                onClick = { if (!session.remote) onSelect(session.sessionId) },
+                // Tapping carries the owning node too: a remote-control credential is
+                // scoped to one node, but the paired node forwards for other machines,
+                // so a remote session IS drivable. Passing only the session id would
+                // leave the target on the previous device, and the next refresh would
+                // read that device's list back — undoing the tap.
+                onClick = { onSelect(session.nodeId, session.sessionId) },
                 colors = ChipDefaults.secondaryChipColors(
                     backgroundColor = when {
                         selected -> GodexColors.Accent

@@ -60,6 +60,12 @@ type Dependencies struct {
 	// paired with one node can drive every node the center can reach. Nil means
 	// "no center configured", which the forwarder reports as a clear 503.
 	CenterBridge *CenterBridge
+	// WatchRelay optionally injects this instance's own node proxy handler, which
+	// the watch surface reuses to reach other nodes. Preferred over CenterBridge
+	// because that handler already implements the local-vs-center decision once —
+	// including the case where THIS instance is the center and therefore has no
+	// center_url to forward to.
+	WatchRelay *WatchRelayHolder
 }
 
 func NewHandler(
@@ -222,7 +228,8 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 		watchTTS = newWatchTTSBridge(manager)
 	}
 	registerWatchRoutes(mux, watchAuth, service, protected, controlRegistry, watchASR, watchTTS,
-		deps.CenterBridge, relayTrustChecker(manager), selfNodeID(manager))
+		deps.CenterBridge, relayTrustChecker(manager), selfNodeID(manager),
+		deps.WatchRelay, func() string { return manager.Current().WebToken })
 	capture := deps.LlmCapture
 	if capture == nil {
 		capture = llmcapture.New(llmcapture.Options{DumpDir: manager.Current().StateDir})

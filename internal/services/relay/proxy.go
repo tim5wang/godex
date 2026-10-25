@@ -1,8 +1,10 @@
 package relay
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -45,6 +47,35 @@ type ProxyHandler struct {
 	// so once tenants exist, a member of tenant A could drive tenant B's nodes.
 	// nil skips the check, which keeps every existing caller working unchanged.
 	AuthorizeNode func(r *http.Request, nodeID string) identity.Decision
+	// UsageRecorder, when set, receives one record per FORWARDED request (design
+	// §7 basic tier: forward requests/bytes, for reconciliation).
+	//
+	// nil skips metering, keeping every existing caller unchanged.
+	UsageRecorder func(ForwardUsage)
+}
+
+// ForwardUsage is one forwarded request's metering record.
+//
+// A local type rather than the metering package's struct so this package stays
+// free of a storage dependency: the relay's job is to move bytes, and a caller
+// that wants counters adapts this at the wiring point.
+//
+// Carries no request or response CONTENT, only sizes: the center forwards tenant
+// data without storing it (decision ②), so a metering record must not become the
+// place that data accumulates.
+type ForwardUsage struct {
+	// TenantID/UserID come from the NodeAccess decision, not from headers — the
+	// caller cannot choose which tenant its usage is billed to.
+	TenantID string
+	UserID   string
+	NodeID   string
+	Method   string
+	Path     string
+	// Status is the status the target returned (0 when the forward failed before
+	// any response arrived, e.g. node offline).
+	Status        int
+	RequestBytes  int
+	ResponseBytes int
 }
 
 const trustApprovedHeader = "X-Godex-Trust-Approved"
@@ -139,8 +170,10 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// NodeAccess (P0): the caller must be allowed to reach THIS node. Checked
 	// before any local/hub dispatch so a denial short-circuits whether the
 	// target is the center itself or a remote node.
+	var decision identity.Decision
 	if p.AuthorizeNode != nil {
-		if decision := p.AuthorizeNode(r, nodeID); !decision.Allowed {
+		decision = p.AuthorizeNode(r, nodeID)
+		if !decision.Allowed {
 			logger.Warnf("relay proxy: denied caller=%s target=%s reason=%s user=%s",
 				clientIP(r), nodeID, decision.Reason, decision.UserID)
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
@@ -155,7 +188,13 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		clone := r.Clone(r.Context())
 		clone.URL.Path = "/" + after
 		clone.RequestURI = ""
-		p.localHandler.ServeHTTP(w, clone)
+		// Metered like a forward, even though no relay hop happens: it is still a
+		// tenant's traffic through the center's proxy surface, and omitting it
+		// would make a tenant's reported usage depend on where its node happened to
+		// be attached.
+		counter := &countingWriter{ResponseWriter: w, status: http.StatusOK}
+		p.localHandler.ServeHTTP(counter, clone)
+		p.recordUsage(decision, r, nodeID, counter.status, requestBodySize(r), counter.written)
 		return
 	}
 
@@ -216,6 +255,8 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// SSE responses this keeps chat events flowing to the browser in real
 	// time instead of buffering until the node finishes.
 	wroteHeader := false
+	responseStatus := 0
+	responseBytes := 0
 	err = p.hub.ForwardStream(ctx, nodeID, req, func(status int, headers map[string]string, chunk []byte, final bool) error {
 		if !wroteHeader {
 			for key, value := range headers {
@@ -223,11 +264,13 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			w.WriteHeader(status)
 			wroteHeader = true
+			responseStatus = status
 		}
 		if len(chunk) > 0 {
 			if _, werr := w.Write(chunk); werr != nil {
 				return werr
 			}
+			responseBytes += len(chunk)
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
@@ -235,14 +278,100 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
+		failureStatus := http.StatusBadGateway
 		switch {
 		case errors.Is(err, ErrNodeOffline):
-			http.Error(w, `{"error":"node offline"}`, http.StatusServiceUnavailable)
+			failureStatus = http.StatusServiceUnavailable
+			http.Error(w, `{"error":"node offline"}`, failureStatus)
 		case errors.Is(err, context.DeadlineExceeded):
-			http.Error(w, `{"error":"node timeout"}`, http.StatusGatewayTimeout)
+			failureStatus = http.StatusGatewayTimeout
+			http.Error(w, `{"error":"node timeout"}`, failureStatus)
 		default:
-			http.Error(w, `{"error":"forward failed"}`, http.StatusBadGateway)
+			http.Error(w, `{"error":"forward failed"}`, failureStatus)
 		}
+		// Metered even though it failed: a tenant repeatedly hammering an offline
+		// node is exactly the pattern reconciliation should surface, and recording
+		// only successes would hide it. Status is the failure code, not 0, so the
+		// row is self-describing.
+		p.recordUsage(decision, r, nodeID, failureStatus, len(body), responseBytes)
 		return
 	}
+	p.recordUsage(decision, r, nodeID, responseStatus, len(body), responseBytes)
+}
+
+// recordUsage reports one proxied request to the meter, if one is wired.
+//
+// Tenant and user come from the NodeAccess decision rather than from request
+// headers: a caller must not be able to choose whose usage it is billed to.
+func (p *ProxyHandler) recordUsage(decision identity.Decision, r *http.Request, nodeID string, status, requestBytes, responseBytes int) {
+	if p.UsageRecorder == nil {
+		return
+	}
+	p.UsageRecorder(ForwardUsage{
+		TenantID:      decision.TenantID,
+		UserID:        decision.UserID,
+		NodeID:        nodeID,
+		Method:        r.Method,
+		Path:          r.URL.Path,
+		Status:        status,
+		RequestBytes:  requestBytes,
+		ResponseBytes: responseBytes,
+	})
+}
+
+// countingWriter records the status and body size served by the local handler.
+//
+// Needed because the local path writes straight to the ResponseWriter: without
+// counting here, a self-node request would be metered as zero bytes.
+//
+// It forwards Flush and Hijack and exposes Unwrap, because the local handler
+// serves the SAME surface as the API server — including WebSocket upgrades
+// (terminal, watch frames). A wrapper that hides http.Hijacker would break those
+// paths, which is the same hazard httpapi's gzipResponseWriter documents.
+type countingWriter struct {
+	http.ResponseWriter
+	status  int
+	written int
+}
+
+func (c *countingWriter) WriteHeader(status int) {
+	c.status = status
+	c.ResponseWriter.WriteHeader(status)
+}
+
+func (c *countingWriter) Write(data []byte) (int, error) {
+	written, err := c.ResponseWriter.Write(data)
+	c.written += written
+	return written, err
+}
+
+// Flush forwards to the wrapped writer so SSE streaming still works through it.
+func (c *countingWriter) Flush() {
+	if flusher, ok := c.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack forwards to the wrapped writer so protocol upgrades (WebSocket) keep
+// working. Returning an error rather than panicking matches the interface: the
+// upgrade code reports "not supported" the same way it would without a wrapper.
+func (c *countingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := c.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+// Unwrap lets http.ResponseController (Go 1.20+) reach the underlying writer, so
+// handlers that use the controller instead of type assertions are unaffected.
+func (c *countingWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
+
+// requestBodySize returns the request body length when already known, for the
+// local path (which does not read the body itself).
+func requestBodySize(r *http.Request) int {
+	if r.ContentLength > 0 {
+		return int(r.ContentLength)
+	}
+	return 0
 }

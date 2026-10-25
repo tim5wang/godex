@@ -38,6 +38,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
 	"github.com/tim5wang/godex/internal/services/evalharness"
+	"github.com/tim5wang/godex/internal/services/metering"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/sessionadmin"
@@ -146,6 +147,11 @@ func main() {
 	// the moment the helper returned).
 	accountsService, closeAccounts := openAccountsStore(cfg)
 	defer closeAccounts()
+	// Relay metering (design §7). Opened before the proxy is built because the
+	// proxy records into it; a failure degrades to "no metering" rather than
+	// refusing to start, since the forwarding itself must keep working.
+	meteringService, closeMetering := openMeteringStore(cfg)
+	defer closeMetering()
 	conversation.SetUsageObserver(func(ctx context.Context, event conversation.UsageEvent) {
 		_ = ctx
 		if err := usageService.RecordLLMUsage(event); err != nil {
@@ -401,6 +407,7 @@ func main() {
 				},
 				Usage:           usageService,
 				Accounts:        accountsService,
+				Metering:        meteringService,
 				ControlRegistry: &registryWithOverview{Registry: controlRegistry, EventStore: eventStore, Hub: relayHub, Bridge: bridge},
 				// Same bridge the proxy handler above uses: the watch surface forwards
 				// remote-control requests for other nodes through the center.
@@ -444,6 +451,9 @@ func main() {
 			}
 			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(cfg, accountsService))
 			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(cfg, accountsService))
+			// Meter every forwarded request (design §7 basic tier). Extracted to a
+			// helper so this nil check does not push main over its complexity budget.
+			wireMetering(proxy, meteringService)
 			// The center also runs as its own node: requests targeting the self
 			// node are served locally (no relay round-trip), so the server can be
 			// operated from its own web UI. These local-direct requests bypass the
@@ -580,6 +590,43 @@ func openAccountsStore(cfg *config.Config) (*accounts.Service, func()) {
 	service, err := accounts.New(cfg.StateDir)
 	if err != nil {
 		logger.Warnf("accounts store unavailable, email/password sign-in disabled: %v", err)
+		return nil, func() {}
+	}
+	return service, func() { _ = service.Close() }
+}
+
+// wireMetering points the relay proxy's usage hook at the metering store.
+//
+// The adaptation lives here, at the composition point, so package relay keeps no
+// storage dependency and does not need to know the metering package's types.
+func wireMetering(proxy *relay.ProxyHandler, meteringService *metering.Service) {
+	if proxy == nil || meteringService == nil {
+		return
+	}
+	proxy.UsageRecorder = func(usage relay.ForwardUsage) {
+		meteringService.RecordQuiet(metering.Record{
+			TenantID:      usage.TenantID,
+			UserID:        usage.UserID,
+			NodeID:        usage.NodeID,
+			Method:        usage.Method,
+			Path:          usage.Path,
+			Status:        usage.Status,
+			RequestBytes:  usage.RequestBytes,
+			ResponseBytes: usage.ResponseBytes,
+		})
+	}
+}
+
+// openMeteringStore opens the relay metering store (design §7).
+//
+// Degrades to nil rather than failing: metering is accounting, and an instance
+// that cannot open the counter store should still forward traffic (the same shape
+// as the accounts store above). The reconciliation routes answer 503 in that case,
+// so the absence is visible instead of silently reporting zero usage.
+func openMeteringStore(cfg *config.Config) (*metering.Service, func()) {
+	service, err := metering.New(cfg.StateDir)
+	if err != nil {
+		logger.Warnf("metering store unavailable, relay usage reconciliation disabled: %v", err)
 		return nil, func() {}
 	}
 	return service, func() { _ = service.Close() }

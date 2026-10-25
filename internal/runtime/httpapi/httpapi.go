@@ -19,6 +19,7 @@ import (
 	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/backend"
 	"github.com/tim5wang/godex/internal/services/commands"
+	"github.com/tim5wang/godex/internal/services/metering"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
 	"github.com/tim5wang/godex/internal/services/usage"
@@ -71,6 +72,11 @@ type Dependencies struct {
 	// When nil it is created under the config StateDir, so email+password sign-in
 	// exists on every node without new configuration.
 	Accounts *accounts.Service
+	// Metering records forwarded-request counters for tenant reconciliation
+	// (design §7). When nil the reconciliation routes answer 503; the proxy path
+	// simply does not meter, which is why a missing store degrades rather than
+	// refusing to start.
+	Metering *metering.Service
 }
 
 func NewHandler(
@@ -120,6 +126,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	heartbeatRuntime := deps.Heartbeat
 	serviceRuntime := deps.ServiceRuntime
 	usageService := deps.Usage
+	meteringService := deps.Metering
 	// Multi-tenant accounts (design §3.1). Created on demand so email+password
 	// sign-in works out of the box; like the watch registry, a failure to open the
 	// store must not take the whole API down, so it degrades to "sign-in disabled"
@@ -191,6 +198,9 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService)))
 	registerAuthRoutes(mux, accountsService, protected)
 	registerAdminRoutes(mux, accountsService, controlRegistry, protected)
+	// Relay metering (design §7 basic tier). Tenant-scoped and operator-wide views
+	// live in one file because they must agree on the window semantics.
+	registerMeteringRoutes(mux, meteringService, protected)
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)

@@ -58,11 +58,17 @@ func withPreviewAuthProvider(token func() string) func(http.Handler) http.Handle
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tok := strings.TrimSpace(token())
 			if tok == "" {
-				handler.ServeHTTP(w, r)
+				// No token configured: this is the same fail-open posture as
+				// `protected` (bounded by the serve-time guard). Attach the identity
+				// anyway so the route is not an identity hole.
+				handler.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), operatorPrincipal())))
 				return
 			}
+			// Header or cookie: the caller is the operator. The cookie is only ever
+			// set below, after a successful token check, so accepting it is
+			// equivalent to accepting the token itself.
 			if bearerAuthorized(r, tok) || previewCookieAuthorized(r, tok) {
-				handler.ServeHTTP(w, r)
+				handler.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), operatorPrincipal())))
 				return
 			}
 			if strings.TrimSpace(r.URL.Query().Get("token")) == tok {
@@ -73,7 +79,10 @@ func withPreviewAuthProvider(token func() string) func(http.Handler) http.Handle
 					SameSite: http.SameSiteLaxMode,
 					Secure:   r.TLS != nil,
 				})
-				handler.ServeHTTP(w, r)
+				// iframe subresources cannot set an Authorization header, so the
+				// query token is the only way in — but it proves the same thing, so
+				// the identity is the same.
+				handler.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), operatorPrincipal())))
 				return
 			}
 			writeError(w, http.StatusUnauthorized, fmt.Errorf("missing or invalid bearer token"))
@@ -92,7 +101,6 @@ func previewCookieAuthorized(r *http.Request, token string) bool {
 // withPreviewAuthProvider is like withBearerAuthProvider but also accepts the
 // token via a ?token= query parameter, which is required for iframe-based
 // consumers (a preview iframe cannot attach an Authorization header).
-
 
 // servePreviewStatic serves files from the resolved workspace FS. If the
 // requested path does not exist, it falls back to index.html (SPA support).

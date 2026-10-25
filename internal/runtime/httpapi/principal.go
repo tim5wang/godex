@@ -87,6 +87,18 @@ func classifyPrincipal(r *http.Request, nodeProxyToken string, trustedRelay bool
 	// the platform superadmin, and is the only principal that may execute an
 	// agent on the center. This preserves today's single-operator behaviour
 	// exactly; multi-tenant sign-in replaces this branch with a real lookup.
+	return operatorPrincipal()
+}
+
+// operatorPrincipal is the principal for the single web-token holder.
+//
+// Extracted because three authentication paths converge on "the operator
+// presented the web token": the header path (classifyPrincipal), the
+// query-parameter path used by WebSocket/iframe clients, and the preview cookie.
+// Keeping one constructor means the capability set cannot drift between them — a
+// drift here would silently grant or remove center execution on one entry point
+// only, which is exactly the kind of bug that is invisible until it matters.
+func operatorPrincipal() identity.Principal {
 	return identity.Principal{
 		UserID:       "local-operator",
 		PlatformRole: identity.RolePlatformAdmin,

@@ -111,7 +111,7 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 | `nodeProxyRead` | 全通（§1.3 已复现跨节点） | ✅ 仅返回**本租户可见**节点；跨租户 → **403**（列表遮蔽 + 按 id/概览 403）|
 | watch scope | 设备维度，无租户 | 设备绑定租户；跨租户节点 → **403** |
 | bizKey | 仅校验 key 存在 | ✅ **已补身份**（`bizKeyPrincipal`，`KindBizKey`，零权限位）；key → 租户待 P1（`BizAPIKey` 暂无租户字段），此时按未定租户处理（不可达租户节点）|
-| query-token | 同 `protected` | 同 `protected`（注意 WS 无法设 header，保留 `?token=`） |
+| query-token | 同 `protected` | ✅ **已补身份**：`?token=` 与预览 cookie 两条路径现在都附加操作员 Principal（经 `operatorPrincipal()`，与 header 路径同一构造函数）；保留 `?token=`（WS/iframe 无法设 header）|
 | inline `gdx_` | 仅校验格式 | key → 租户/额度；跨租户 → **403** |
 
 ### 3.2 三条必须新增的判定（当前完全不存在）

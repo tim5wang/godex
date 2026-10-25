@@ -287,6 +287,10 @@ func (b *voiceBridge) engineReachable(ctx context.Context) bool {
 
 // voiceQueryTokenAuth 包装 protected 鉴权，额外允许 ?token= query 通过。
 // 这是浏览器 WebSocket 客户端（无法设置 header）连接 /v1/voice 的唯一途径。
+//
+// 走 query 这条路时绕过了 protected，因此**必须自己附加 Principal**：
+// 否则该路由在身份模型里是盲区（相同的 web token 走 header 是操作员，
+// 走 query 却"没有身份"），任何基于身份的门都会在此失效。
 func voiceQueryTokenAuth(protected func(http.Handler) http.Handler, tokenProvider func() string) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		base := protected(h)
@@ -296,7 +300,7 @@ func voiceQueryTokenAuth(protected func(http.Handler) http.Handler, tokenProvide
 				tok = strings.TrimSpace(tokenProvider())
 			}
 			if q := strings.TrimSpace(r.URL.Query().Get("token")); q != "" && tok != "" && q == tok {
-				h.ServeHTTP(w, r)
+				h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), operatorPrincipal())))
 				return
 			}
 			base.ServeHTTP(w, r)

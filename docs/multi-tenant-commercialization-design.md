@@ -521,8 +521,10 @@ type Decision struct {
 | 节点目标解析点 | 5 类（§5） | `NewBridgeProxyHandler`(9)、`/control/nodes/{id}/proxy`(18)、`forward handler/server`(22)、`watchNodeTarget`(13)、`withForwardToNode`(15) |
 | 执行入口（超管独占的闸点） | `sessions*`、`turns*`、`v1/chat/completions`、`v1/responses`、`v1/messages`、`v1/agent-steps` | `routes_sessions.go`(17)、`routes_turns.go`(11)、`routes_openai/responses/anthropic/steps` |
 
-> 本表是**初版**（grep 计数 + 人工分类）。P0 开工前应补一份「逐入口 → 改为 Principal 后行为」的清单，
-> 这才是 P0 的真实工作量。
+> 本表是**初版**（grep 计数 + 人工分类）。⚠️ 部分口径已过时：
+> 精确值见 **[p0-principal-migration-inventory.md](./p0-principal-migration-inventory.md)**
+> （268 处 / 39 文件；`WebToken` 非测试仅 35 处）。该清单同时给出「逐入口 →
+> 改为 Principal 后行为」与迁移顺序，并附带 3 个安全发现（含 `/v1/terminal/*` 公网无鉴权）。
 
 ## 附录 B. 复现命令（实测）
 

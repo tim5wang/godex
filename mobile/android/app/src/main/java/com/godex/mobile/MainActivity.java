@@ -103,14 +103,28 @@ public class MainActivity extends BridgeActivity {
      * cannot see each other's sessions.
      */
     private static final String KEY_REMOTE_MODE = "godex_remote_mode";
+    /**
+     * Set when the user deliberately returns to the setup page.
+     *
+     * The setup page auto-navigates to the saved node on load (so a paired phone
+     * skips the form). Without this flag, "back to settings" would immediately
+     * bounce forward to the node again and the user could never edit the address —
+     * the screen would appear to ignore the back press entirely.
+     */
+    private static final String KEY_SKIP_AUTONAV = "godex_skip_autonav";
 
     private Process godexProcess;
     private volatile boolean destroyed = false;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Must happen before super.onCreate(): BridgeActivity builds its plugin
+        // list from `initialPlugins` while creating the bridge there, so a plugin
+        // registered afterwards is never exposed to the WebView.
+        registerPlugin(GodexNavPlugin.class);
         super.onCreate(savedInstanceState);
         installCrashHandler();
+        installWebViewClient();
         // Read the mode from the launch intent before deciding anything: a launcher
         // shortcut carries godex://mode/remote|local, and the choice must apply to
         // this very cold start, not the next one.
@@ -136,6 +150,29 @@ public class MainActivity extends BridgeActivity {
     }
 
     // ---- 本地模式：后台线程执行符号链接 + spawn + 就绪等待 ----
+
+    /**
+     * Swaps in a WebViewClient that keeps our node's redirects in-app.
+     *
+     * Capacitor's default sends any URL outside the app's own origin to the system
+     * browser. The node answers http with a 308 to its https origin and that
+     * redirect goes through the same code path, so the UI opened in Chrome even
+     * after a native loadUrl (measured: the plugin resolved with the http URL and
+     * the browser immediately opened the https one).
+     */
+    private void installWebViewClient() {
+        try {
+            if (getBridge() == null) {
+                Log.w(TAG, "bridge 未就绪，跳过 WebViewClient 安装");
+                return;
+            }
+            getBridge().setWebViewClient(new GodexWebViewClient(getBridge()));
+        } catch (Throwable t) {
+            // Not fatal: without it the app still works for nodes that do not
+            // redirect, and every page still loads through the default client.
+            Log.e(TAG, "安装 WebViewClient 失败", t);
+        }
+    }
 
     /**
      * Honours `godex://mode/remote` / `godex://mode/local` from a launcher shortcut.
@@ -192,6 +229,39 @@ public class MainActivity extends BridgeActivity {
         if (applyModeIntent(intent)) {
             recreate();
         }
+    }
+
+    /**
+     * Keeps the setup page reachable once the node's UI is loaded.
+     *
+     * Before this change "连接并进入" handed the URL to the system browser, so the
+     * app's own WebView stayed on the setup page and editing the address was always
+     * one back-press away. Now the node really loads in-app, which means the only
+     * way back to the address field is this handler — without it, back exits the
+     * app and a wrong address can only be fixed by clearing app data.
+     *
+     * Behaviour: on the setup page, back leaves the app as usual. Anywhere else it
+     * returns to the setup page.
+     *
+     * Not `webView.goBack()`: the setup page is the first document in this
+     * WebView's history, so going back lands on it — and it auto-navigates to the
+     * saved node on load, so the user would be thrown forward again and the back
+     * press would look like it did nothing. openSetupPage() sets the one-shot flag
+     * that stops that bounce, so the result is deterministic.
+     */
+    @Override
+    public void onBackPressed() {
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            WebView webView = getBridge().getWebView();
+            String current = webView.getUrl();
+            String setupUrl = getBridge().getLocalUrl();
+            boolean onSetup = current != null && setupUrl != null && current.startsWith(setupUrl);
+            if (!onSetup) {
+                openSetupPage();
+                return;
+            }
+        }
+        super.onBackPressed();
     }
 
     private String nativeLibDir() {
@@ -505,8 +575,96 @@ public class MainActivity extends BridgeActivity {
         return prefs.getString(KEY_TOKEN, "");
     }
 
-    private void injectWatcherScript(String token) {
+    /**
+     * Loads the godex Web UI served by a remote node, inside this WebView.
+     *
+     * Called from GodexNavPlugin rather than by the setup page setting
+     * `window.location.href`: a page-initiated navigation to a foreign host is
+     * intercepted by Capacitor's `Bridge.launchIntent()` and handed to the system
+     * browser, so the app could never display the node it was pointed at.
+     * `WebView.loadUrl()` does not pass through `shouldOverrideUrlLoading`, so it
+     * stays in-app — the same call local mode already used.
+     *
+     * The token is persisted and re-injected because the document-start script is
+     * what authorises the Web UI's API calls; without this, a token edited on the
+     * setup page would only take effect after a cold start.
+     */
+    void openServerUrl(String url, String token) {
+        SharedPreferences prefs = getSharedPreferences("CapacitorStorage", MODE_PRIVATE);
+        prefs.edit().putString(KEY_SERVER, url).apply();
+        if (token != null && !token.isEmpty()) {
+            prefs.edit().putString(KEY_TOKEN, token).apply();
+        }
+        // Register the host before loading: the node answers http with a 308 to its
+        // https origin, and that redirect arrives through shouldOverrideUrlLoading.
+        // Without the host known, Capacitor would send the redirected load to the
+        // system browser (measured on the public node).
+        rememberNodeHost(url);
+        // An explicit connect supersedes an earlier "show me the setup page".
+        prefs.edit().remove(KEY_SKIP_AUTONAV).apply();
+        final String useToken = (token != null && !token.isEmpty()) ? token : loadToken();
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    injectWatcherScript(useToken);
+                    if (getBridge() == null) {
+                        return;
+                    }
+                    WebView webView = getBridge().getWebView();
+                    if (webView != null) {
+                        webView.loadUrl(url);
+                    }
+                } catch (Throwable t) {
+                    Log.e(TAG, "加载远程 godex 失败: " + url, t);
+                }
+            }
+        });
+    }
+
+    /** Records which host counts as "our node" for in-app navigation. */
+    private void rememberNodeHost(String url) {
         try {
+            String host = android.net.Uri.parse(url).getHost();
+            NodeHostHolder.set(host);
+        } catch (Throwable t) {
+            Log.w(TAG, "解析节点 host 失败: " + url);
+        }
+    }
+
+    /**
+     * Returns to the bundled setup page.
+     *
+     * Used when the remote node cannot be reached: the WebView is showing an error
+     * page (or worse, a blank one), and the only useful action is to get back to
+     * the screen that lets the user fix the address.
+     */
+    void openSetupPage() {
+        // Tells the setup page not to bounce straight back to the node it has saved.
+        getSharedPreferences("CapacitorStorage", MODE_PRIVATE)
+                .edit().putBoolean(KEY_SKIP_AUTONAV, true).apply();
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (getBridge() == null) {
+                        return;
+                    }
+                    WebView webView = getBridge().getWebView();
+                    if (webView != null) {
+                        // getLocalUrl() is Capacitor's own origin for the bundled
+                        // assets; hard-coding https://localhost would break as soon
+                        // as androidScheme changes.
+                        webView.loadUrl(getBridge().getLocalUrl());
+                    }
+                } catch (Throwable t) {
+                    Log.e(TAG, "返回设置页失败", t);
+                }
+            }
+        });
+    }
+
+    private void injectWatcherScript(String token) {        try {
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 return;
             }

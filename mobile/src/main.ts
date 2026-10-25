@@ -1,7 +1,57 @@
 import { Preferences } from "@capacitor/preferences";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import { StatusBar } from "@capacitor/status-bar";
-import { CapacitorHttp } from "@capacitor/core";
+import { CapacitorHttp, Capacitor, registerPlugin } from "@capacitor/core";
+
+/**
+ * Native navigation bridge (GodexNavPlugin).
+ *
+ * Needed because Capacitor intercepts page-initiated navigations in
+ * `Bridge.launchIntent()`: any URL whose host is neither the app's own host nor in
+ * `server.allowNavigation` is handed to the system browser via ACTION_VIEW. That is
+ * exactly what `window.location.href = server` did — the button opened Chrome
+ * instead of loading the node's UI in the app.
+ *
+ * `allowNavigation` is not an alternative: those entries are also registered as
+ * authorities of Capacitor's local asset server, so `/` (which exists in www/)
+ * would be answered with the bundled setup page instead of the node's Web UI.
+ */
+interface GodexNavPlugin {
+  open(options: { url: string; token?: string }): Promise<{ url: string }>;
+  openSetup(): Promise<void>;
+}
+
+const GodexNav = registerPlugin<GodexNavPlugin>("GodexNav");
+
+/**
+ * True only when the native navigation plugin is actually installed.
+ *
+ * Checked via `isPluginAvailable` rather than `isNativePlatform()`: the plugin is
+ * Android-only, and the iOS project shares this entry point. On iOS a
+ * platform-only check would return true and every connect attempt would fail on a
+ * missing plugin — worse than the browser hand-off it replaced.
+ */
+function hasNativeNav(): boolean {
+  try {
+    return Capacitor.isNativePlatform() && Capacitor.isPluginAvailable("GodexNav");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Loads the godex Web UI in the app's WebView.
+ *
+ * Falls back to a plain location change when the native side is unavailable
+ * (browser dev server), where the CORS/navigation interception does not apply.
+ */
+async function navigateToServer(server: string, token: string) {
+  if (hasNativeNav()) {
+    await GodexNav.open({ url: server, token });
+    return;
+  }
+  window.location.href = server;
+}
 
 const K = {
   server: "godex_server_url",
@@ -9,6 +59,15 @@ const K = {
   pollMs: "godex_poll_ms",
   localMode: "godex_local_mode",
   localError: "godex_local_error",
+  /**
+   * One-shot flag set by the native side before showing this page.
+   *
+   * The page normally auto-navigates to the saved node so a configured phone skips
+   * the form. When the user deliberately comes back here to change the address
+   * (system back from the node), that auto-jump would bounce them straight out
+   * again and the page would look broken. Consumed on read.
+   */
+  skipAutonav: "godex_skip_autonav",
 } as const;
 
 function $(id: string): HTMLInputElement {
@@ -31,10 +90,20 @@ function setStatus(text: string, ok?: boolean) {
 
 function normalizeServer(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//i.test(trimmed)) {
-    return `http://${trimmed}`;
+  if (!trimmed) {
+    return "";
   }
-  return trimmed;
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  // A scheme with no host ("http://", which is what an emptied field collapses to
+  // after the trailing-slash strip) parses as a URL but points nowhere: navigating
+  // to it yields a blank page, and it is worse than useless as a saved value.
+  // Measured on the device: the field ended up persisting "http://" and every cold
+  // start then auto-navigated to it.
+  const host = withScheme.replace(/^https?:\/\//i, "").split("/")[0].trim();
+  if (!host) {
+    return "";
+  }
+  return withScheme;
 }
 
 async function loadStored() {
@@ -45,7 +114,7 @@ async function loadStored() {
       Preferences.get({ key: K.pollMs }),
       Preferences.get({ key: K.localError }),
     ]);
-    if (server.value) serverInput.value = server.value;
+    if (server.value && normalizeServer(server.value)) serverInput.value = server.value;
     if (token.value) tokenInput.value = token.value;
     if (pollMs.value) intervalInput.value = String(Math.round(Number(pollMs.value) / 1000));
     if (localError.value) {
@@ -99,9 +168,18 @@ async function onConnect() {
   } catch {
     /* 非必须 */
   }
-  // 导航到目标 godex Web UI；原生 WKUserScript / document-start 脚本会在
-  // 目标页 origin 注入 token + 任务完成轮询 watcher。
-  window.location.href = server;
+  try {
+    // Native loadUrl, not `window.location.href`: the latter is intercepted by
+    // Capacitor and handed to the system browser (see navigateToServer).
+    await navigateToServer(server, token);
+  } catch (e) {
+    setStatus(
+      `加载失败：${e instanceof Error ? e.message : String(e)}。请确认服务地址可达。`,
+      false,
+    );
+  } finally {
+    connectBtn.disabled = false;
+  }
 }
 
 connectBtn.addEventListener("click", onConnect);
@@ -209,6 +287,24 @@ pairCodeInput.addEventListener("input", () => {
   pairCodeInput.value = digits.length > 4 ? `${digits.slice(0, 4)} ${digits.slice(4)}` : digits;
 });
 
+//
+// The status line is written when a connect attempt starts ("正在连接 <addr> …"),
+// so it kept naming the address of the *previous* attempt after the field was
+// edited. On a small screen that reads as "the app is still using the old
+// address", which is exactly what it looked like. Clearing it as soon as the
+// input diverges keeps the line describing the current attempt only.
+//
+// Only informational states are cleared: an active error or the "local agent
+// starting…" notice stays, because those describe conditions that still hold.
+function clearStaleStatus() {
+  const text = statusEl.textContent || "";
+  if (text.startsWith("正在连接") || text.startsWith("连接成功")) {
+    setStatus("");
+  }
+}
+serverInput.addEventListener("input", clearStaleStatus);
+tokenInput.addEventListener("input", clearStaleStatus);
+
 // 已配置过时自动进入（避免每次冷启动都停在设置页）。
 // 注意：本地模式下 MainActivity 会在 godex serve 就绪后自行 loadUrl 导航，
 // 设置页不应抢先跳转（服务未就绪会连不上），故本地模式只显示启动状态。
@@ -223,8 +319,34 @@ loadStored().then(async () => {
     /* 非本地模式，走远程逻辑 */
   }
   const server = serverInput.value;
-  if (server) {
-    await requestNotifyPermission();
-    window.location.href = server;
+  if (!server) {
+    return;
+  }
+  // Honour the "I came back to edit the address" flag before auto-navigating.
+  let skipAutonav = false;
+  try {
+    const flag = await Preferences.get({ key: K.skipAutonav });
+    skipAutonav = flag.value === "true";
+    if (skipAutonav) {
+      // One-shot: a later cold start should go straight to the node again.
+      await Preferences.remove({ key: K.skipAutonav });
+    }
+  } catch {
+    /* flag is advisory; fall through to the normal behaviour */
+  }
+  if (skipAutonav) {
+    setStatus("已回到设置页，可修改地址后重新连接");
+    return;
+  }
+  await requestNotifyPermission();
+  // Same native path as the button. A plain location change here would open the
+  // system browser on every cold start, not just on the first connect.
+  try {
+    await navigateToServer(server, tokenInput.value.trim());
+  } catch (e) {
+    setStatus(
+      `加载失败：${e instanceof Error ? e.message : String(e)}。请确认服务地址可达。`,
+      false,
+    );
   }
 });

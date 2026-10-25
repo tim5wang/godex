@@ -59,6 +59,7 @@
       button:disabled { opacity: .5; }
       .hint { font-size: 12px; color: #8a919f; margin-top: 12px; line-height: 1.5; }
       #status { margin-top: 12px; font-size: 13px; min-height: 18px; }
+      #pairstatus { margin-top: 12px; font-size: 13px; min-height: 18px; }
       .ok { color: #22a06b; }
       .err { color: #e5484d; }
     </style>
@@ -80,6 +81,21 @@
         连接后 App 会以 WebView 加载该地址上的 godex Web UI，并在后台轮询任务状态；
         agent 任务完成时触发本地通知（无需推送账号）。目标服务需允许移动端网络可达。
       </div>
+    </div>
+
+    <!--
+      Watch pairing (trusted side).
+
+      The watch can only display a code; approving has to happen on a client that
+      already holds the node's token, which is this app. Kept in the same setup
+      page as the connection fields because it uses the same server + token, and
+      splitting it across screens would make the user type both twice.
+    -->
+    <div class="card">
+      <label for="paircode">手表配对码（手表上点「连手机」得到）</label>
+      <input id="paircode" type="text" placeholder="1234 5678" inputmode="numeric" autocomplete="off" maxlength="9" />
+      <button id="pairapprove">批准这台手表</button>
+      <div id="pairstatus"></div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

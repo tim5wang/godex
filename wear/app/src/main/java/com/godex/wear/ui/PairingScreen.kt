@@ -41,16 +41,37 @@ fun PairingScreen(
     onServerUrlChange: (String) -> Unit,
     onPaired: (WatchDevice, String) -> Unit,
     onSettings: () -> Unit,
+    autoStart: Boolean = false,
 ) {
     var pairing by remember { mutableStateOf<PairingStart?>(null) }
     var status by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
 
+    /**
+     * Nonce that asks the minting effect below to run. A counter, not a boolean,
+     * because the previous version keyed the effect on [busy] and then set
+     * `busy = false` inside its own `finally` — the key changed while the effect
+     * was still executing, so it cancelled itself and Compose threw
+     * "The coroutine scope left the composition". The screen then sat on
+     * 生成配对码 and no code was ever minted (reproduced on the device via
+     * Home → 连手机).
+     */
+    var mintRequest by remember { mutableStateOf(0) }
+
     // Needed because the polling and startup effects below are not composable scopes:
     // status/error text is built there, and stringResource is only callable from
     // composition.
     val context = LocalContext.current
+
+    // "Link phone" on Home lands here with a code already on screen: making the
+    // user tap 生成配对码 first turned a one-tap action into two, and the code is
+    // the only thing they came for.
+    LaunchedEffect(Unit) {
+        if (autoStart && pairing == null && mintRequest == 0) {
+            mintRequest = 1
+        }
+    }
 
     // Poll loop: created only once a pairing exists, and cancelled automatically
     // when the composable leaves or `pairing` changes, so a watch that is put
@@ -116,7 +137,9 @@ fun PairingScreen(
                     else stringResource(R.string.pairing_generate),
                     enabled = !busy,
                     onClick = {
-                        busy = true
+                        // Raise the request; the effect does the work and owns the
+                        // busy flag, so nothing cancels itself.
+                        mintRequest++
                         error = null
                     },
                 )
@@ -129,7 +152,14 @@ fun PairingScreen(
             } else {
                 ScreenTitle(
                     stringResource(R.string.pairing_code_title),
-                    stringResource(R.string.pairing_enter_code),
+                    // When the code came from "Link phone", say where to type it
+                    // instead of the generic "confirm on a trusted endpoint": the
+                    // user's next step is on the phone, and naming it saves them
+                    // guessing which client to open.
+                    stringResource(
+                        if (autoStart) R.string.pairing_phone_hint
+                        else R.string.pairing_enter_code
+                    ),
                 )
                 Spacer(Modifier.height(6.dp))
                 // Digits are grouped 4-4: an 8-digit run is easy to misread on a
@@ -159,9 +189,12 @@ fun PairingScreen(
     }
 
     // Starting the pairing is a side effect, so it runs in a keyed effect rather
-    // than inside onClick: a recomposition cannot mint a second code.
-    LaunchedEffect(busy) {
-        if (!busy || pairing != null) return@LaunchedEffect
+    // than inside onClick: a recomposition cannot mint a second code. Keyed on the
+    // request nonce, never on the state it writes (see [mintRequest]).
+    LaunchedEffect(mintRequest) {
+        if (mintRequest == 0 || pairing != null) return@LaunchedEffect
+        busy = true
+        error = null
         try {
             pairing = api.startPairing(name = "Wear Watch")
             status = context.getString(R.string.pairing_waiting)

@@ -18,9 +18,30 @@
             android:launchMode="singleTask"
             android:exported="true">
 
+            <!-- Long-press launcher menu: pick local agent vs connect to a computer. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              Mode switch via launcher shortcut (see res/xml/shortcuts.xml).
+
+              The APK bundles libgodex.so, so the app used to be local-only with no
+              way out; connecting to the same node the watch is paired to needs a
+              remote mode, and switching it has to be possible without a rebuild.
+              godex://mode/remote and godex://mode/local are read in
+              applyModeIntent().
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="godex" />
             </intent-filter>
 
         </activity>

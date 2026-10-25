@@ -52,6 +52,7 @@
     <string name="home_pending_suffix"> · %1$d 项待批准</string>
     <string name="home_tap_suffix"> · 点按看详情</string>
     <string name="home_talk">说话</string>
+    <string name="home_pair_phone">连手机</string>
     <string name="home_approvals">审批</string>
     <string name="home_approvals_count">审批 %1$d</string>
     <string name="home_refresh">刷新</string>
@@ -161,6 +162,7 @@
     <string name="pairing_title">配对</string>
     <string name="pairing_code_title">配对码</string>
     <string name="pairing_confirm_hint">在已信任的端确认</string>
+    <string name="pairing_phone_hint">在手机打开 godex → 手表，输入此配对码</string>
     <string name="pairing_generate">生成配对码</string>
     <string name="pairing_generating">生成中…</string>
     <string name="pairing_enter_code">在手机或网页端输入</string>

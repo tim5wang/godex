@@ -158,6 +158,11 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
 
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
 
+    // Set by Home's "Link phone" so the pairing screen mints a code immediately
+    // instead of waiting for 生成配对码. Cleared once consumed, so arriving at
+    // Pairing any other way keeps the manual step.
+    var linkPhoneAutoStart by remember { mutableStateOf(false) }
+
     // Where the compose screen was opened from, so a successful send returns
     // there instead of always landing on Home.
     //
@@ -269,6 +274,13 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     onDetail = { screen = Screen.Detail },
                     onSettings = { screen = Screen.Settings },
                     onWatchFace = { screen = Screen.WatchFace },
+                    // Straight to the pairing screen with a code already showing:
+                    // the whole point of "Link phone" is that the user has the watch
+                    // in hand and the phone app open, so it must not stop at a menu.
+                    onLinkPhone = {
+                        linkPhoneAutoStart = true
+                        screen = Screen.Pairing
+                    },
                 )
 
                 Screen.WatchFace -> {
@@ -463,8 +475,20 @@ private fun GodexWearRoot(deepLinkSessionId: String = "", deepLinkApprovalKey: S
                     serverUrl = credentials?.baseUrl?.takeIf { it.isNotEmpty() }
                         ?: com.godex.wear.data.WatchApi.DEFAULT_EMULATOR_URL,
                     onServerUrlChange = vm::setServerUrl,
-                    onPaired = vm::onPaired,
+                    onPaired = { device, token ->
+                        vm.onPaired(device, token)
+                        // Navigate explicitly instead of relying on the `paired`
+                        // LaunchedEffect above: that effect only fires when `paired`
+                        // *changes*, and 连手机 is reached from Home while already
+                        // paired — so `paired` stays true, the effect never re-runs,
+                        // and the watch sat on the pairing screen forever with a
+                        // successful pairing stored behind it (measured end-to-end:
+                        // the credential was saved while the UI never moved).
+                        linkPhoneAutoStart = false
+                        screen = Screen.Home
+                    },
                     onSettings = { screen = Screen.Settings },
+                    autoStart = linkPhoneAutoStart,
                 )
             }
         }

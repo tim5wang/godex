@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Launcher shortcuts to pick the app's operating mode.
+
+  The APK bundles libgodex.so, and the old rule was "binary present => always run
+  a local agent". That makes the remote path unreachable, so the phone could never
+  join the node the watch is paired to — two separate agents cannot see each
+  other's sessions. These shortcuts are the user-facing switch; the intent is
+  decoded in MainActivity.applyModeIntent().
+
+  Keep the labels short: a launcher shows them truncated to roughly 10 characters
+  on a long-press menu.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="mode_remote"
+        android:shortcutLongLabel="@string/shortcut_remote_long"
+        android:shortcutShortLabel="@string/shortcut_remote_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="godex://mode/remote"
+            android:targetClass="com.godex.mobile.MainActivity"
+            android:targetPackage="com.godex.mobile" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="mode_local"
+        android:shortcutLongLabel="@string/shortcut_local_long"
+        android:shortcutShortLabel="@string/shortcut_local_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="godex://mode/local"
+            android:targetClass="com.godex.mobile.MainActivity"
+            android:targetPackage="com.godex.mobile" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

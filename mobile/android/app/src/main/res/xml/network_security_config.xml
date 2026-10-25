@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  网络安全配置：本地模式下 WebView 需要加载 http://127.0.0.1:<port>（godex serve
-  本地进程）。Android 9+ 默认禁止明文流量，需显式放行 loopback 地址。
-  远程模式（https 公网地址）不受影响；其他域名保持默认（禁止明文）。
+  网络安全配置。
+
+  本地模式：WebView 加载 http://127.0.0.1:<port>（App 内置 godex serve）。
+  远程模式（方案 A）：WebView 加载用户填写的 godex 服务地址，绝大多数是局域网
+  明文 http（如 http://192.168.1.10:9000、http://10.160.55.22:8088）。
+
+  因此 base-config 必须允许明文：远程地址由用户在设置页自由填写，无法预先枚举成
+  domain-config 白名单条目；只放行 127.0.0.1 会让「连电脑」必然被系统拦成
+  ERR_CLEARTEXT_NOT_PERMITTED（设置页本身也提示可填 http 局域网地址，规则与提示
+  必须一致）。这是局域网自托管客户端的标准取舍，本 App 的流量全部指向用户自己
+  运维的 godex 节点。
+
+  若将来只支持 https 公网节点，应收紧为 cleartextTrafficPermitted="false"。
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">127.0.0.1</domain>
-        <domain includeSubdomains="false">localhost</domain>
-    </domain-config>
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

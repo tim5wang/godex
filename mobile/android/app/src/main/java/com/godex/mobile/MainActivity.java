@@ -1,10 +1,12 @@
 package com.godex.mobile;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
+import android.net.Uri;
 import android.os.Bundle;
 import android.system.Os;
 import android.util.Log;
@@ -90,6 +92,17 @@ public class MainActivity extends BridgeActivity {
     private static final String KEY_SERVER = "godex_server_url";
     private static final String KEY_LOCAL_MODE = "godex_local_mode";
     private static final String KEY_LOCAL_ERROR = "godex_local_error";
+    /**
+     * When true the app skips spawning its own godex and behaves as a remote
+     * client, exactly as if no binary were bundled.
+     *
+     * This exists because "local agent" and "connect to my computer" are both
+     * legitimate and the APK ships the binary, so the old rule (binary present →
+     * always local) made the remote path unreachable. Reaching the same node as
+     * the watch is the whole point of the interop flow: two agents on two devices
+     * cannot see each other's sessions.
+     */
+    private static final String KEY_REMOTE_MODE = "godex_remote_mode";
 
     private Process godexProcess;
     private volatile boolean destroyed = false;
@@ -98,7 +111,11 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         installCrashHandler();
-        if (nativeGodexExists()) {
+        // Read the mode from the launch intent before deciding anything: a launcher
+        // shortcut carries godex://mode/remote|local, and the choice must apply to
+        // this very cold start, not the next one.
+        applyModeIntent(getIntent());
+        if (nativeGodexExists() && !isRemoteMode()) {
             // 本地模式：后台线程解压符号链接 + spawn + 等就绪，主线程立即返回。
             Thread worker = new Thread(new Runnable() {
                 @Override
@@ -119,6 +136,63 @@ public class MainActivity extends BridgeActivity {
     }
 
     // ---- 本地模式：后台线程执行符号链接 + spawn + 就绪等待 ----
+
+    /**
+     * Honours `godex://mode/remote` / `godex://mode/local` from a launcher shortcut.
+     *
+     * Returns true when the intent carried a mode, so the caller can decide whether
+     * a restart is needed. Switching to remote also clears the persisted local-mode
+     * flag: the setup page treats that flag as "the native layer is bringing up a
+     * local server and will navigate for me", so leaving it set would strand the
+     * user on a permanent "starting local agent…" message with no way forward.
+     */
+    private boolean applyModeIntent(Intent intent) {
+        Uri data = intent == null ? null : intent.getData();
+        if (data == null || !"godex".equals(data.getScheme())) {
+            return false;
+        }
+        String path = data.getPath();
+        boolean remote;
+        if (path != null && path.endsWith("remote")) {
+            remote = true;
+        } else if (path != null && path.endsWith("local")) {
+            remote = false;
+        } else {
+            return false;
+        }
+        SharedPreferences prefs = getSharedPreferences("CapacitorStorage", MODE_PRIVATE);
+        SharedPreferences.Editor edit = prefs.edit().putBoolean(KEY_REMOTE_MODE, remote);
+        if (remote) {
+            edit.remove(KEY_LOCAL_MODE);
+            // The stored server is almost always the local one (127.0.0.1:PORT) left
+            // over from a previous local run. The setup page auto-navigates whenever
+            // a server is stored, so keeping it would send the WebView straight to a
+            // port nothing is listening on — the user would see a dead page with no
+            // way back to the form. Clearing it keeps them on the setup page, which
+            // is where they must type the computer's LAN address anyway.
+            edit.remove(KEY_SERVER);
+        }
+        edit.apply();
+        Log.i(TAG, "mode -> " + (remote ? "remote" : "local"));
+        return true;
+    }
+
+    private boolean isRemoteMode() {
+        return getSharedPreferences("CapacitorStorage", MODE_PRIVATE)
+                .getBoolean(KEY_REMOTE_MODE, false);
+    }
+
+    @Override
+    public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // singleTask: the shortcut arrives here while the activity is alive, so the
+        // new mode only takes effect after a recreate (onCreate spawns or skips the
+        // local server).
+        if (applyModeIntent(intent)) {
+            recreate();
+        }
+    }
 
     private String nativeLibDir() {
         return getApplicationInfo().nativeLibraryDir;

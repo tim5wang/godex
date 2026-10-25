@@ -41,6 +41,7 @@ fun HomeScreen(
     onDetail: () -> Unit,
     onSettings: () -> Unit,
     onWatchFace: () -> Unit = {},
+    onLinkPhone: () -> Unit = {},
 ) {
     val detail = state.detail
     val session = state.sessions.firstOrNull { it.sessionId == state.currentSessionId }
@@ -160,6 +161,15 @@ fun HomeScreen(
                     onClick = onApprovals,
                     modifier = Modifier.weight(1f),
                     highlight = pending > 0,
+                )
+                // "Link phone" sits in this existing two-chip row rather than a new
+                // one: this Column scrolls only within what fits the round display,
+                // and earlier additions pushed 设备/刷新 off-screen entirely (seen on
+                // the emulator). A third chip in an existing row costs no height.
+                SmallAction(
+                    label = stringResource(R.string.home_pair_phone),
+                    onClick = onLinkPhone,
+                    modifier = Modifier.weight(1f),
                 )
             }
             Spacer(Modifier.height(6.dp))

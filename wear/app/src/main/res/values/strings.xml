@@ -61,6 +61,7 @@
     <string name="home_pending_suffix"> · %1$d awaiting approval</string>
     <string name="home_tap_suffix"> · Tap for details</string>
     <string name="home_talk">Talk</string>
+    <string name="home_pair_phone">Link phone</string>
     <string name="home_approvals">Approvals</string>
     <string name="home_approvals_count">Approvals %1$d</string>
     <string name="home_refresh">Refresh</string>
@@ -176,6 +177,7 @@
     <string name="pairing_title">Pair</string>
     <string name="pairing_code_title">Pairing code</string>
     <string name="pairing_confirm_hint">Confirm on a trusted device</string>
+    <string name="pairing_phone_hint">On the phone: open godex → Watch, then enter this code</string>
     <string name="pairing_generate">Generate code</string>
     <string name="pairing_generating">Generating…</string>
     <string name="pairing_enter_code">Enter on your phone or the web UI</string>

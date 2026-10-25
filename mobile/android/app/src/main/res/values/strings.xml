@@ -4,4 +4,8 @@
     <string name="title_activity_main">godex Mobile</string>
     <string name="package_name">com.godex.mobile</string>
     <string name="custom_url_scheme">com.godex.mobile</string>
+    <string name="shortcut_remote_short">连电脑</string>
+    <string name="shortcut_remote_long">连接电脑上的 godex</string>
+    <string name="shortcut_local_short">本机</string>
+    <string name="shortcut_local_long">在本机运行 agent</string>
 </resources>

@@ -112,13 +112,39 @@ tasks.register('prepareGodexNativeRuntime') {
 
 tasks.register('verifyGodexNativeRuntime') {
     group = 'verification'
-    description = 'Fail fast when required Android native runtime libraries are missing.'
+    description = 'Fail fast when required Android native runtime libraries are missing or stale.'
     doLast {
         def missing = missingNativeLibraries()
         if (!missing.isEmpty()) {
             throw new GradleException(
                     "Missing Android native libraries: ${missing}. " +
                     "Run './gradlew prepareGodexNativeRuntime' explicitly before building.")
+        }
+
+        // Staleness check, not just presence.
+        //
+        // libgodex.so carries the whole `godex serve` runtime *including the Web UI,
+        // which is embedded into it via go:embed*. It is a gitignored build product,
+        // so a checkout (or simply forgetting to rebuild) keeps an old binary that
+        // assembleDebug happily packages. Measured consequence: the phone shipped a
+        // byte-identical 10-06 binary for three weeks, and every UI page added since
+        // was invisible in local mode — the 手表 entry simply was not there, while
+        // the same Web UI in the repo did have it.
+        //
+        // Comparing the binary against the embedded UI and the Go sources is the
+        // cheapest reliable signal: both feed the binary, so either being newer
+        // means the binary no longer reflects this tree.
+        def embedded = file("${rootProject.projectDir.parentFile}/../internal/uiassets/embedded_dist/index.html")
+        def watchRoutes = file("${rootProject.projectDir.parentFile}/../internal/runtime/httpapi/routes_watch.go")
+        def binary = godexLibrary
+        def references = [embedded, watchRoutes].findAll { it.isFile() }
+        def newest = references.max { it.lastModified() }
+        if (binary.isFile() && newest != null && newest.lastModified() > binary.lastModified()) {
+            throw new GradleException(
+                    "libgodex.so is older than ${newest.name} and would ship a stale " +
+                    "embedded runtime (its Web UI is compiled in via go:embed, so new " +
+                    "pages — such as the watch pairing screen — are missing).\n" +
+                    "Rebuild it first: bash mobile/scripts/build-godex-android.sh")
         }
     }
 }

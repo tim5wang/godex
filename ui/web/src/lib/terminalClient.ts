@@ -19,10 +19,10 @@ import { useSettingsStore } from "../store/settings";
 
 export type TerminalStatus = "idle" | "connecting" | "connected" | "error" | "exited";
 
-// Bearer token for center API auth. Terminal endpoints are unprotected when
-// called directly (/v1/terminal/*), but in remote mode requests go through the
-// center proxy (/api/control/nodes/{id}/proxy/...) which enforces the web
-// token via relayAuthorize — without this header the proxy returns 401.
+// Bearer token for center API auth. Terminal endpoints are protected by the same
+// web token as the rest of the management API, so this header is required when
+// calling them directly (/v1/terminal/*) as well as through the center proxy
+// (/api/control/nodes/{id}/proxy/...) — without it the request returns 401.
 function authHeaders(): HeadersInit {
   const token = useSettingsStore.getState().token;
   if (!token) {

@@ -365,7 +365,7 @@ func TestTerminalManager_Lifecycle(t *testing.T) {
 		}
 
 		// Kill the terminal.
-		if err := mgr.kill(id); err != nil {
+		if _, err := mgr.kill(id); err != nil {
 			t.Fatal(err)
 		}
 
@@ -387,4 +387,89 @@ func TestTerminalManager_Lifecycle(t *testing.T) {
 			t.Error("expected error for killed terminal")
 		}
 	})
+}
+
+// TestTerminalRoutesRequireAuth guards the regression where the terminal surface
+// (a real shell: bash / ssh / docker exec) was registered WITHOUT the web-token
+// gate. The endpoints used to be unprotected on the theory that the terminal is
+// only a local development tool, which made unauthenticated shell access
+// reachable from the network on any instance listening on a non-loopback
+// address (observed live on the center: unauthenticated POST /v1/terminal/create
+// answered 201 and spawned bash).
+func TestTerminalRoutesRequireAuth(t *testing.T) {
+	const token = "test-web-token"
+	mux := http.NewServeMux()
+	registerTerminalRoutes(mux, withBearerAuthProvider(func() string { return token }))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Every terminal route must reject an unauthenticated request. The auth gate
+	// runs before the handler, so no shell is spawned by these probes.
+	cases := []struct{ method, path string }{
+		{http.MethodPost, "/v1/terminal/create"},
+		{http.MethodGet, "/v1/terminal/term-x/output"},
+		{http.MethodPost, "/v1/terminal/term-x/input"},
+		{http.MethodPost, "/v1/terminal/term-x/resize"},
+		{http.MethodDelete, "/v1/terminal/term-x"},
+	}
+	for _, tc := range cases {
+		req, err := http.NewRequest(tc.method, srv.URL+tc.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", tc.method, tc.path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s %s without token: expected 401, got %d", tc.method, tc.path, resp.StatusCode)
+		}
+	}
+
+	// With the token the gate opens: reading a non-existent terminal reaches the
+	// handler and answers 404. The read path is used deliberately so this
+	// assertion cannot spawn a shell.
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/v1/terminal/term-missing/output", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("with token: expected 404 from handler, got %d", resp.StatusCode)
+	}
+}
+
+// TestTerminalKillReapsProcess guards the regression where kill() only cancelled
+// and closed the PTY. Local shells are started with exec.Command (not
+// CommandContext), so the session's context cancel never signalled the process:
+// the shell outlived the request while DELETE answered a hardcoded
+// `exited: true`, giving operators a false guarantee that the shell was gone.
+func TestTerminalKillReapsProcess(t *testing.T) {
+	mgr := newTerminalManager()
+	session, err := mgr.create(t.Context(), createTerminalRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exited, err := mgr.kill(session.id)
+	if err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	if !exited {
+		t.Error("kill reported exited=false for a shell it just terminated")
+	}
+	// The process must actually be reaped, not merely detached. A non-nil
+	// ProcessState proves cmd.Wait() returned, i.e. the shell is gone. Deliberately
+	// not asserting Exited(): that reports true only for a normal exit, whereas a
+	// terminated shell typically reports a signal (e.g. "signal: hangup") and would
+	// make this check pass/fail for the wrong reason.
+	if session.cmd.ProcessState == nil {
+		t.Error("shell process was not reaped after kill (still running)")
+	}
 }

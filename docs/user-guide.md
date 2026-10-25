@@ -1047,7 +1047,8 @@ Authorization: Bearer <token>
 ```
 
 - `protected` 路由：读取 `web.token`（`GODEX_WEB_TOKEN`）；token 为空时全部放行，否则必须携带匹配的 Bearer token
-- 公开路由：`GET /meta`、terminal 路由（`/v1/terminal/*`，设计上不鉴权）、`POST /v1/chat/completions` 在未配置 web token 时的回退路径
+- 公开路由：`GET /meta`、`POST /v1/chat/completions` 在未配置 web token 时的回退路径
+- Terminal 路由（`/v1/terminal/*`）：**同样受 `protected` 保护**。它们会拉起真实 shell（bash / ssh / docker exec），原先按“本地开发工具”设计为不鉴权，但那使任何监听非回环地址的实例把未授权 shell 暴露到网络（已在中心实测复现），故已收口
 - `gdx_` proxy-key 路由（usage 网关）：`POST /v1/chat/completions`（Bearer `gdx_...`）、`POST /v1/messages`（Bearer **或** `x-api-key`）、`GET /v1/models`、`GET /v1/usage/cache-stats`（仅 Bearer）——**`/v1/messages` 始终要求 key，即使未配置 web token 也会 401**
 - 节点 relay 请求可通过 `X-Godex-Relay-Trusted: <hex>` 头（HMAC-SHA256(nodeID, control.credential)）绕过 web token（仅节点侧 relay agent 能伪造，center 无 credential 时永不信任）
 - `/preview/*` 支持 Bearer 或 `?token=` query 两种鉴权
@@ -1074,7 +1075,7 @@ Authorization: Bearer <token>
 - `POST /v1/exec`（在节点上执行 shell 命令并 SSE 流式输出 `{output, final, exit_code}`）
 - `GET /v1/models`（gdx_ key 专属）、`GET /v1/usage/cache-stats`（gdx_ key 专属，绑定该 key 的缓存统计）
 - `GET /models`（`?session_id=` 查询模型 profiles）
-- Terminal（设计上不鉴权）：`POST /v1/terminal/create`、`GET /v1/terminal/{id}/output`、`POST /v1/terminal/{id}/input`、`POST /v1/terminal/{id}/resize`、`DELETE /v1/terminal/{id}`
+- Terminal（受 `protected` 保护，会拉起真实 shell）：`POST /v1/terminal/create`、`GET /v1/terminal/{id}/output`、`POST /v1/terminal/{id}/input`、`POST /v1/terminal/{id}/resize`、`DELETE /v1/terminal/{id}`
 
 ### Channels
 

@@ -354,22 +354,43 @@ func (m *terminalManager) resize(terminalID string, cols, rows int) error {
 	return pty.Setsize(f, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 }
 
-// kill terminates the terminal session.
-func (m *terminalManager) kill(terminalID string) error {
+// kill terminates the terminal session, reporting whether the shell process was
+// actually observed exiting before returning.
+//
+// The caller must be able to trust that return value: DELETE used to answer
+// `exited: true` as a hardcoded literal while the shell could still be alive.
+func (m *terminalManager) kill(terminalID string) (bool, error) {
 	m.mu.Lock()
 	session, ok := m.terminals[terminalID]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("terminal %s not found", terminalID)
+		return false, fmt.Errorf("terminal %s not found", terminalID)
 	}
 	delete(m.terminals, terminalID)
 	m.mu.Unlock()
 
-	session.cancel()
-	if session.ptyFile != nil {
-		session.ptyFile.Close()
+	session.terminate()
+	return session.exited.Load(), nil
+}
+
+// terminate stops the shell and waits (bounded) for the process to be reaped.
+//
+// Closing the PTY alone is not sufficient: local shells are started with
+// exec.Command (not CommandContext), so the session's context cancel never
+// signals the process and the shell can outlive the request. Kill explicitly,
+// then wait on the waiter goroutine so exited reflects reality.
+func (s *terminalSession) terminate() {
+	s.cancel()
+	if s.ptyFile != nil {
+		_ = s.ptyFile.Close()
 	}
-	return nil
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Kill()
+	}
+	select {
+	case <-s.done:
+	case <-time.After(terminalKillTimeout):
+	}
 }
 
 // readLoop continuously reads output from the PTY into the buffer.
@@ -536,11 +557,12 @@ func (m *terminalManager) handleTerminalDelete(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, fmt.Errorf("missing terminal id"))
 		return
 	}
-	if err := m.kill(terminalID); err != nil {
+	exited, err := m.kill(terminalID)
+	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": true})
+	writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": exited})
 }
 
 func randomTerminalID() string {
@@ -558,4 +580,7 @@ func isEOFish(err error) bool {
 const (
 	defaultTerminalBufferSize = 64 * 1024       // 64 KB initial
 	maxTerminalBufferSize     = 1 * 1024 * 1024 // 1 MB cap
+	// terminalKillTimeout bounds how long kill waits for the shell to be reaped
+	// before reporting its (possibly still false) exit state.
+	terminalKillTimeout = 3 * time.Second
 )

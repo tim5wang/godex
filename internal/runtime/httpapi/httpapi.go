@@ -196,7 +196,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerMCPRoutes(mux, protected, service.MCPManager())
 	registerFileRoutes(mux, protected, manager)
 	registerSandboxRoutes(mux, manager, protected)
-	registerTerminalRoutes(mux)
+	registerTerminalRoutes(mux, protected)
 	registerVoiceRoutes(mux, service, manager, protected, func() string { return manager.Current().WebToken })
 	registerBrowserFrameRoutes(mux, service, protected, func() string { return manager.Current().WebToken })
 	registerDesktopRoutes(mux, service, protected)
@@ -678,13 +678,17 @@ func statusForSubagentActionError(err error) int {
 }
 
 // registerTerminalRoutes adds v2.0 terminal endpoints to the mux.
-// These endpoints are unprotected (no web-token check) because the
-// terminal is a local development tool spawned inside the same process.
-func registerTerminalRoutes(mux *http.ServeMux) {
+//
+// These endpoints spawn a real shell (PTY bash / ssh / docker exec), so they are
+// behind the same web-token gate as the rest of the management API. They used to
+// be unprotected on the theory that the terminal is only a local development
+// tool — but a godex instance that listens on a non-loopback address exposes
+// them to the network, which made unauthenticated shell access reachable.
+func registerTerminalRoutes(mux *http.ServeMux, protected func(http.Handler) http.Handler) {
 	tm := globalTerminalManager
-	mux.HandleFunc("POST /v1/terminal/create", tm.handleCreateTerminal)
-	mux.HandleFunc("GET /v1/terminal/{id}/output", tm.handleTerminalOutput)
-	mux.HandleFunc("POST /v1/terminal/{id}/input", tm.handleTerminalInput)
-	mux.HandleFunc("POST /v1/terminal/{id}/resize", tm.handleTerminalResize)
-	mux.HandleFunc("DELETE /v1/terminal/{id}", tm.handleTerminalDelete)
+	mux.Handle("POST /v1/terminal/create", protected(http.HandlerFunc(tm.handleCreateTerminal)))
+	mux.Handle("GET /v1/terminal/{id}/output", protected(http.HandlerFunc(tm.handleTerminalOutput)))
+	mux.Handle("POST /v1/terminal/{id}/input", protected(http.HandlerFunc(tm.handleTerminalInput)))
+	mux.Handle("POST /v1/terminal/{id}/resize", protected(http.HandlerFunc(tm.handleTerminalResize)))
+	mux.Handle("DELETE /v1/terminal/{id}", protected(http.HandlerFunc(tm.handleTerminalDelete)))
 }

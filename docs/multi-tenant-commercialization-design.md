@@ -186,20 +186,31 @@ weixin/poller.go:170   轮询到入站消息
 > `platform_role`（全局）与 `Membership.role`（租户内）**分离**：
 > 一个是平台员工，一个是租户成员，混在一起必然出现「A 租户管理员能管 B 租户」的越权。
 
-### 3.2 Principal 传递
-
-把 `protected` 从「比对常量」改为「解析身份」：
+### 3.2 Principal 传递 ✅ 已落地（`internal/runtime/httpapi/principal.go`）
 
 ```
 Authorization: Bearer <token>
-        ↓
-Principal{TenantID, UserID, PlatformRole, TenantRole, Entitlements}
+        ↓  withBearerAuthProvider：先做放/拒判定（不变）
+        ↓  withPrincipalAuth：仅对已被放行的请求附加身份
+Principal{TenantID, UserID, PlatformRole, Kind, Entitlements, AuthMethod}
         ↓  context
 handler / NodeAccess
 ```
 
-`withBearerAuthProvider(func() string)` 现签名只返回字符串
-（`httpapi.go:154`），需扩展为返回 `Principal`。
+**分层而非改写中间件**：`withBearerAuthProvider(func() string)` 签名未改（改它会影响
+若干依赖该行为的测试与回环开发体验），而是在它**外层**包一层 `withPrincipalAuth`，
+职责严格分开——内层决定“能不能进”，外层只记录“谁进了”。
+因此身份分类**不可能扩大访问**：分类出错只会写错审计记录，
+而不会放行一个本应被拒的请求（`TestWithPrincipalAuthDoesNotRunHandlerWhenDenied` 钉住这点）。
+
+分类顺序（有序性有测试保护）：`relay_trust` → `node_proxy_token(nk_)` → web token 默认。
+节点凭证**必须**先于操作员默认分类，否则节点会继承操作员的 `center_execution`
+（`TestClassifyPrincipalNodeProxyTokenIsNotOperator` / `...RelayTrustWinsOverBearerOrder`）。
+
+**单租户兼容（决策⑨）**：当前 `web token` 持有者 = 平台超管，是唯一带
+`center_execution` 的主体；`nk_`/relay 身份一律只给 `relay_only`。
+这与现有单操作员行为完全一致；多租户登录上线后，仅需替换默认分支里的
+“取配置”为“真实查库”。
 
 ### 3.3 中心执行能力的归属（决策⑤⑧⑨ 的落地）
 

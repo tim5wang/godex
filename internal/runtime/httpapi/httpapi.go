@@ -151,17 +151,17 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 			VoiceEnabled:  cfg.Media.Audio.VoiceEnabled,
 		})
 	}))
-	protected := withBearerAuthProvider(func() string {
+	protected := withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager))
+	}, relayTrustChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager)))
 	// nodeProxyRead protects the node proxy READ surface (node list / single
 	// node / overview) that CenterBridge on joined nodes calls. It accepts the
 	// full web token OR the restricted node proxy token (control.node_proxy_token,
 	// nk_...) so a compromised node cannot touch config/sessions/files management
 	// endpoints — it can only list nodes and read their overview.
-	nodeProxyRead := withBearerAuthProvider(func() string {
+	nodeProxyRead := withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager))
+	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager)))
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)

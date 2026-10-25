@@ -175,6 +175,49 @@ func (s *Service) init() error {
 			revoked_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_join_tokens_tenant ON join_tokens(tenant_id)`,
+		// delegations are a tenant's explicit, time-bounded grant for a platform
+		// operator to read its data (design §3.6). Stored apart from any role: the
+		// grant is an act by the TENANT, so it must be revocable and expire without
+		// touching the operator's account.
+		`CREATE TABLE IF NOT EXISTS delegations (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			operator_user_id TEXT NOT NULL DEFAULT '',
+			granted_by TEXT NOT NULL DEFAULT '',
+			scope TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			revoked_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_delegations_tenant ON delegations(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_delegations_operator ON delegations(operator_user_id)`,
+		// Every use of a delegation is audited, so "we looked" is answerable after
+		// the fact: who looked, at which tenant, when, and what they asked for.
+		`CREATE TABLE IF NOT EXISTS delegation_audit (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			at TEXT NOT NULL,
+			delegation_id TEXT NOT NULL DEFAULT '',
+			tenant_id TEXT NOT NULL DEFAULT '',
+			operator_user_id TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			target TEXT NOT NULL DEFAULT '',
+			allowed INTEGER NOT NULL DEFAULT 0,
+			reason TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_delegation_audit_tenant ON delegation_audit(tenant_id, at)`,
+		// The user-agreement trail (design §3.6 "用户协议"): what a tenant agreed to
+		// and when, recorded at signup so it does not depend on the operator
+		// remembering to ask later.
+		`CREATE TABLE IF NOT EXISTS consent_records (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id TEXT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT '',
+			terms_version TEXT NOT NULL,
+			accepted_at TEXT NOT NULL,
+			source_ip TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_consent_records_tenant ON consent_records(tenant_id)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {

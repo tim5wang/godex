@@ -314,6 +314,33 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 > 真正的多租户改造（P0）仍需把它们改为 fail-closed + Principal 判定，
 > 因为守卫拦不住“有 token 但 token 泄露”或“反代后真实远端地址”等情形。
 
+### 5.2 请求层守卫（补上「反代后匿名可达」）✅ 已落地
+
+§5.1 的启动守卫看不见的一类：绑 `127.0.0.1` 却挂在 nginx / 隧道 / 云 LB 后面。
+从内核视角「只绑回环」，实际公网可达；启动守卫放行，
+于是管理面（包括会开 shell 的接口）以操作员身份对公网开放。
+
+`internal/runtime/httpapi/anonymous_guard.go` 的 `rejectProxiedAnonymous`：
+
+```
+无 web.token 且请求带转发头  ⇒  403（报出是哪个头证明它被代理）
+```
+
+- 判据：转发头说明「有东西认为自己在代转别人的连接」，
+  此时「调用者就是本机用户」不再成立
+- 检查 7 个头：`X-Forwarded-For/Host/Proto`、`X-Real-Ip`、`Forwarded`、
+  `Cf-Connecting-Ip`、`X-Client-Ip`
+- 以**中间件包裹中间件**形式套在 `protected` 与 `nodeProxyRead` 上：
+  无 token 时匿名者在**所有**受保护面都拿到操作员能力位，只守一部分等于留着其余
+- 本地直连不带这些头，**回环开发体验不受影响**
+
+**测试**（5 个）：7 个头逐一 403；直接调用者仍 200（fail-open 语义存在的原因）；
+配了 token 时带转发头正常放行（否则反代后的正确部署会全挂）；拒绝文案含头名；nil manager 安全。
+
+**仍未改**：三处中间件的 fail-open 语义本身（改它影响约 10 个测试与回环开发）。
+请求层守卫已把「匿名 + 可达」这条真实攻击路径关掉；
+「有 token 但 token 泄露」属凭据管理问题，不在本项范围。
+
 ---
 
 ## 6. 执行入口子集（决策⑨ 的闸点，66 处 / 8 文件）

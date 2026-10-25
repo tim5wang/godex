@@ -497,7 +497,13 @@ func main() {
 				// tenant sharing switch: building a bare Policy here would let a proxied
 				// request reach a node that the direct read path just refused, which is
 				// exactly the silent bypass this seam exists to prevent.
-				return nodeAccessPolicy.Authorize(principal, node.NodeRef())
+				decision := nodeAccessPolicy.Authorize(principal, node.NodeRef())
+				// Audit the delegated case HERE as well as on the read routes (§3.6):
+				// this proxy is the surface the web UI drives, so auditing only the
+				// direct read routes would leave the trail empty in precisely the
+				// scenario it exists for.
+				httpapi.RecordDelegatedRead(accountsService, r, decision, "proxy "+nodeID)
+				return decision
 			}
 			bridgeProxy := httpapi.NewBridgeProxyHandler(proxy, bridge, func(nodeID string) bool {
 				// Local node: the self node (served in-process) or any node

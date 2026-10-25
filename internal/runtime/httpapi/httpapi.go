@@ -206,6 +206,9 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// Relay metering (design §7 basic tier). Tenant-scoped and operator-wide views
 	// live in one file because they must agree on the window semantics.
 	registerMeteringRoutes(mux, meteringService, protected)
+	// Operating-access grants (design §3.6): the tenant's grant/revoke/audit view
+	// and the operator's own view of what it may read.
+	registerTenantDelegationRoutes(mux, accountsService, protected)
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)

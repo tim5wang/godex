@@ -54,7 +54,7 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		// reach. Without this the nk_ credential enumerated every node on the
 		// platform — the registry itself is global, so filtering has to happen
 		// here rather than in List.
-		writeJSON(w, http.StatusOK, filterVisibleNodes(policy, r, nodes))
+		writeJSON(w, http.StatusOK, filterVisibleNodes(policy, r, nodes, accountsService))
 	})))
 	mux.Handle("GET /control/nodes/{id}", nodeProxyRead(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if controlRegistry == nil {
@@ -72,6 +72,8 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		if decision := authorizeNodeAccess(policy, r, node.NodeRef()); !decision.Allowed {
 			writeError(w, http.StatusForbidden, fmt.Errorf("node access denied: %s", decision.Reason))
 			return
+		} else {
+			recordDelegatedRead(accountsService, r, decision, "node "+node.ID)
 		}
 		writeJSON(w, http.StatusOK, node)
 	})))
@@ -169,6 +171,8 @@ func registerControlNodeRoutes(mux *http.ServeMux, controlRegistry controlNodeRe
 		if decision := authorizeNodeAccess(policy, r, node.NodeRef()); !decision.Allowed {
 			writeError(w, http.StatusForbidden, fmt.Errorf("node access denied: %s", decision.Reason))
 			return
+		} else {
+			recordDelegatedRead(accountsService, r, decision, "overview "+node.ID)
 		}
 		var overview relay.NodeOverview
 		if overviewProvider != nil {

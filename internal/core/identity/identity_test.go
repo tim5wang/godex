@@ -3,6 +3,7 @@ package identity
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestPrincipalValidityAndEntitlements(t *testing.T) {
@@ -80,6 +81,147 @@ func TestNormalizeVisibilityDefaultsToPrivate(t *testing.T) {
 		if got := NormalizeVisibility(in); got != want {
 			t.Errorf("NormalizeVisibility(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestDelegationActiveRequiresUnrevokedUnexpiredGrant(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	base := Delegation{
+		ID: "dlg_1", TenantID: "t1", OperatorUserID: "local-operator",
+		Scope: ScopeReadNodes, ExpiresAt: now.Add(time.Hour).Format(time.RFC3339Nano),
+	}
+
+	cases := []struct {
+		name       string
+		mutate     func(Delegation) Delegation
+		wantActive bool
+	}{
+		{name: "live grant", mutate: func(d Delegation) Delegation { return d }, wantActive: true},
+		{
+			name: "expired grant",
+			mutate: func(d Delegation) Delegation {
+				d.ExpiresAt = now.Add(-time.Minute).Format(time.RFC3339Nano)
+				return d
+			},
+		},
+		{
+			name: "revoked grant",
+			mutate: func(d Delegation) Delegation {
+				d.RevokedAt = now.Add(-time.Minute).Format(time.RFC3339Nano)
+				return d
+			},
+		},
+		{
+			// An unparseable expiry must mean "no access", not "never expires":
+			// reading garbage as perpetual access is the one direction that cannot
+			// be recovered from.
+			name:   "unparseable expiry is treated as expired",
+			mutate: func(d Delegation) Delegation { d.ExpiresAt = "not-a-time"; return d },
+		},
+		{
+			name:   "missing expiry is treated as expired",
+			mutate: func(d Delegation) Delegation { d.ExpiresAt = ""; return d },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.mutate(base).Active(now); got != tc.wantActive {
+				t.Errorf("Active = %v, want %v", got, tc.wantActive)
+			}
+		})
+	}
+}
+
+func TestNormalizeScopeDefaultsToReadOnly(t *testing.T) {
+	// An unknown scope must collapse to the read-only default rather than being
+	// stored verbatim: a stored scope the authorization code does not understand
+	// would be a grant whose limits nobody can reason about.
+	for _, in := range []string{"", ScopeReadNodes, "READ_NODES", "  read_nodes  ", "write_everything", "admin"} {
+		if got := NormalizeScope(in); got != ScopeReadNodes {
+			t.Errorf("NormalizeScope(%q) = %q, want %q", in, got, ScopeReadNodes)
+		}
+	}
+}
+
+// TestAuthorizeDelegationCoversOnlyActiveReadGrants pins the §3.6 seam: a platform
+// operator crosses a tenant boundary ONLY through an active, tenant-granted,
+// read-scoped delegation, and never merely by holding the platform role.
+func TestAuthorizeDelegationCoversOnlyActiveReadGrants(t *testing.T) {
+	admin := NewPrincipal("", "local-operator", RolePlatformAdmin, KindPlatform, EntitlementCenterExecution)
+	tenantNode := NodeRef{ID: "node-b", TenantID: "tenant-b", OwnerUserID: "user-c", Visibility: VisibilityTenant}
+
+	live := Policy{DelegatedRead: func(operatorUserID, tenantID string) (string, bool) {
+		if operatorUserID == "local-operator" && tenantID == "tenant-b" {
+			return "dlg_live", true
+		}
+		return "", false
+	}}
+
+	cases := []struct {
+		name       string
+		policy     Policy
+		principal  Principal
+		node       NodeRef
+		wantAllow  bool
+		wantReason string
+		wantID     string
+	}{
+		{
+			name: "active grant permits cross-tenant read", policy: live, principal: admin, node: tenantNode,
+			wantAllow: true, wantReason: ReasonPlatformAdmin, wantID: "dlg_live",
+		},
+		{
+			// The default posture: a platform role is not a read license.
+			name:   "no delegation system means no cross-tenant read",
+			policy: Policy{}, principal: admin, node: tenantNode, wantReason: ReasonCrossTenant,
+		},
+		{
+			name:      "a lookup that finds nothing denies",
+			policy:    Policy{DelegatedRead: func(string, string) (string, bool) { return "", false }},
+			principal: admin, node: tenantNode, wantReason: ReasonCrossTenant,
+		},
+		{
+			// A grant names one operator. Another operator must not ride along on it.
+			name:   "a grant issued to one operator does not cover another",
+			policy: live, principal: NewPrincipal("", "someone-else", RolePlatformAdmin, KindPlatform, EntitlementCenterExecution),
+			node: tenantNode, wantReason: ReasonCrossTenant,
+		},
+		{
+			// Granting read to tenant B must not leak tenant A.
+			name:   "a grant for another tenant does not apply",
+			policy: live, principal: admin,
+			node:       NodeRef{ID: "node-a", TenantID: "tenant-a", OwnerUserID: "user-a", Visibility: VisibilityTenant},
+			wantReason: ReasonCrossTenant,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.policy.Authorize(tc.principal, tc.node)
+			if got.Allowed != tc.wantAllow {
+				t.Fatalf("Allowed = %v, want %v (reason=%q)", got.Allowed, tc.wantAllow, got.Reason)
+			}
+			if got.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", got.Reason, tc.wantReason)
+			}
+			if got.DelegationID != tc.wantID {
+				t.Errorf("DelegationID = %q, want %q (the audit seam reads this field)", got.DelegationID, tc.wantID)
+			}
+		})
+	}
+}
+
+// TestAuthorizeDelegationDoesNotExtendToNonAdmins: a tenant member cannot use
+// someone else's delegation to reach a third tenant.
+func TestAuthorizeDelegationDoesNotExtendToNonAdmins(t *testing.T) {
+	policy := Policy{DelegatedRead: func(string, string) (string, bool) { return "dlg_live", true }}
+	member := NewPrincipal("tenant-a", "user-a", "", KindUser, EntitlementRelayOnly)
+
+	got := policy.Authorize(member, NodeRef{ID: "node-b", TenantID: "tenant-b", Visibility: VisibilityTenant})
+	if got.Allowed {
+		t.Fatalf("a tenant member reached another tenant through a delegation: %+v", got)
+	}
+	if got.Reason != ReasonCrossTenant {
+		t.Errorf("Reason = %q, want %q", got.Reason, ReasonCrossTenant)
 	}
 }
 

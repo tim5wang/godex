@@ -65,6 +65,11 @@ type Decision struct {
 	TenantID string
 	UserID   string
 	Method   string // auth method that produced the principal
+	// DelegationID names the tenant grant that permitted a cross-tenant read, if
+	// any. A structured field rather than text inside Detail: the audit seam must
+	// record WHICH grant was used, and parsing prose to find that out would break
+	// the first time the wording changed.
+	DelegationID string
 	// Detail is optional human-readable context (e.g. which node, which
 	// delegation). Never contains credentials.
 	Detail string
@@ -106,6 +111,18 @@ type Policy struct {
 	// its own visibility setting. Expressed as a predicate so a deployment can
 	// scope it per tenant later without changing this signature.
 	TenantSharingEnabled func(tenantID string) bool
+	// DelegatedRead reports whether a platform operator holds an ACTIVE,
+	// tenant-granted delegation over the given tenant (design §3.6, decision ⑪).
+	//
+	// Seeded with the operator and tenant, and expected to apply expiry and
+	// revocation itself: the policy deliberately does not re-implement the clock, so
+	// there is exactly one answer to "is this grant live?" and no seam can honour a
+	// grant the tenant already withdrew.
+	//
+	// nil means no delegation system is wired, so a platform admin gets NO
+	// cross-tenant read. That is the correct failure direction: the absence of the
+	// mechanism must not be read as "granted".
+	DelegatedRead func(operatorUserID, tenantID string) (delegationID string, ok bool)
 }
 
 func (p Policy) sharingAllowed(tenantID string) bool {
@@ -179,6 +196,26 @@ func (p Policy) Authorize(principal Principal, node NodeRef) Decision {
 	}
 
 	if principalTenant == "" || nodeTenant == "" || principalTenant != nodeTenant {
+		// A platform operator may cross into a tenant ONLY through that tenant's
+		// explicit, active delegation (design §3.6). The check sits HERE, at the
+		// point that would otherwise refuse, so a reader sees the grant is the
+		// exception to the rule rather than a hole in it.
+		//
+		// Note what is NOT consulted: the operator's role. A role says who someone
+		// is, not which tenant agreed to be looked at, and deriving cross-tenant
+		// read from it is how "allowed to look" silently becomes "allowed to look
+		// at anyone, always".
+		if principal.IsPlatformAdmin() && nodeTenant != "" && p.DelegatedRead != nil {
+			if delegationID, ok := p.DelegatedRead(principal.UserID, nodeTenant); ok {
+				return Decision{
+					Allowed: true, Reason: ReasonPlatformAdmin,
+					TenantID: nodeTenant, UserID: principal.UserID,
+					Method:       principal.AuthMethod,
+					DelegationID: delegationID,
+					Detail:       "node " + node.ID + " (tenant-granted delegation " + delegationID + ")",
+				}
+			}
+		}
 		return Decision{
 			Allowed: false, Reason: ReasonCrossTenant,
 			TenantID: principalTenant, UserID: principal.UserID,

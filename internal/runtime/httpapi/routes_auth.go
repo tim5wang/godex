@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tim5wang/godex/internal/core/identity"
+	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/accounts"
 )
 
@@ -81,6 +82,19 @@ func registerAuthRoutes(mux *http.ServeMux, accountsService *accounts.Service, p
 		if err != nil {
 			writeError(w, statusForAuthError(err), err)
 			return
+		}
+		// Consent trail (design §3.6 "用户协议"): signup is where the disclosure is
+		// shown, so it is where acceptance is recorded. Written after the account
+		// exists — the row needs the tenant id — and deliberately NOT fatal: failing
+		// a signup over an audit row would deny service for an accounting problem.
+		// The error is logged so a missing trail is visible rather than silent.
+		if err := accountsService.RecordConsent(identity.ConsentRecord{
+			TenantID:     result.Tenant.ID,
+			UserID:       result.User.ID,
+			TermsVersion: identity.CurrentTermsVersion,
+			SourceIP:     requestSourceIP(r),
+		}); err != nil {
+			logger.Warnf("record signup consent for tenant %s: %v", result.Tenant.ID, err)
 		}
 		writeJSON(w, http.StatusCreated, authSessionResponse{
 			Token:     result.Token,

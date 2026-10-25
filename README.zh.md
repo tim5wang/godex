@@ -20,6 +20,12 @@ GoDex 是一个本地优先的 AI Agent 工作台。它把 CLI、TUI、Web、HTT
 ![](./docs/_images/web_ui_mobile_remote.jpg)
 图中是在执行遥测
 
+### wear os 手表（腕上遥控器）
+![](./docs/_images/wear_screens.png)
+上排：表盘 · 主屏 · 会话列表；下排：任务详情 · 语音输入 · 设备列表。
+手表不跑 agent，只做遥控与通知：配对一次即可看会话、批审批、发语音；
+经中心代理还能遥控任意在线节点，与 Android / PC 端访问远程的方式一致。
+
 ## 产品定位
 
 GoDex 面向需要把 AI Agent 真正接入日常工程工作流的团队和个人：

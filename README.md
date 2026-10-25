@@ -20,6 +20,13 @@ GoDex is a local-first AI agent workspace. It connects CLI, TUI, Web, HTTP API, 
 ![](./docs/_images/web_ui_mobile_remote.jpg)
 Running a telemetry session
 
+### wear os watch (wrist remote)
+![](./docs/_images/wear_screens.png)
+Top row: watch face, home, sessions. Bottom row: task detail, voice input, devices.
+The watch runs no agent: it pairs once, then reads sessions, approves requests, and
+takes voice input. Through the center proxy it can drive any online node, the same
+way the Android and PC clients reach remote nodes.
+
 ## Product Positioning
 
 GoDex is built for teams and individuals who need AI agents to work inside real engineering workflows:

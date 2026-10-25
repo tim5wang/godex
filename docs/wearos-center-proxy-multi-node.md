@@ -1,7 +1,25 @@
 # 手表端「中心代理」多节点遥控 — 调研记录 + 实施设计
 
+> 状态：Implemented（2026-10-25 交付，含真机验证）
+
 日期：2026-10-25
 目标：watch 端能选「设备」列表里任意在线设备遥控，机制与 Android/PC 端访问远程节点**一致**（复用中心代理，不自创一套）。
+
+## 交付状态（2026-10-25）
+
+| 里程碑 | 提交 | 结果 |
+|---|---|---|
+| Step 1 手表端「选得住」 | `4baa29e` | 选择会持久化并驱动后续所有请求 |
+| Step 2 后端接受 `node_id` 并分流 | `4baa29e` | `routes_watch_proxy.go` |
+| Step 3 目标节点内部入口放行 | `4baa29e` | `withWatchScopeOrRelay` |
+| 后台同步跟随所选设备 | `85b9a2f` | `WatchSyncWorker` 读 `targetDeviceFlow` |
+| **修复：手表配对中心时 503** | `1982daa` | 中心自己即中心 → `center_url` 为空 → bridge 禁用；改复用本实例 proxy handler |
+
+真机验证（小米 Watch 5，`base_url=https://godex.claw.carc.top/api`，`target_device_id=mac`）：
+
+- 中心日志出现 `relay proxy: caller=… target=mac GET watch/sessions`（修复前是 503，不会进 proxy）
+- `node_id=mac` 返回 **20** 条，中心自身 **17** 条，**overlap = 0**（首条即当前对话 `web-9d803b21676da467`）
+- 客户端同时撤销了「远端读取失败静默回落到本机列表」的兜底（那正是「选了 mac 却显示中心列表」的直接原因），改为显式报错 `vm_remote_unreachable`
 
 ## 一、现状核实（代码为证）
 
@@ -121,7 +139,14 @@
 3. B 的 relay agent 注入 relay trust 头，B 的 watch 路由据此放行
 4. **scope 必须显式传递并取交集**：A 在头里带 `X-Godex-Watch-Scopes`（A 已从 wch_ token 校验出的 scope），B 只接受其中列出的 scope；头缺失一律拒绝（不隐式放大到全量）
 
-## 四、待确认
+## 五、遗留与已了结的待确认项
 
-- 目标节点内部入口的放行，是否能直接复用 `withBearerAuthProvider` 的 relayTrust 检查器（需确认 relay trust 头在 watch 路由处可获取，且不需要 wch_）。
-- `guarded-remote` 信任级下写操作需 `trustApprovedHeader`：手表发指令是否要额外确认，需产品决策（倾向：手表端 `watch:command` 已是一次显式点按，视为批准，但要在 UI 明示）。
+原两项待确认均已落地：
+
+- ~~目标节点内部入口的放行，是否能直接复用 relayTrust 检查器~~ → ✅ 已实现：`withWatchScopeOrRelay` 同时接受 watch 凭证或「中继到达且携带所需 scope」的请求。
+- ~~`guarded-remote` 下写操作是否需额外确认~~ → 保持现状：`watch:command` 已是一次显式点按，视为批准；未额外加确认闸门。
+
+尚存遗留：
+
+- **scope 交叉验证只在 header 层**：若调用方能伪造 `X-Godex-Watch-Scopes` 且同时通过中心鉴权，就等价于放大权限。当前依赖「中心鉴权 + relay trust 头」两道门，未对 scope 值本身做签名。
+- **多跳未定义**：中心 → B 是一跳；若 B 自己也是中心形态（链式），本方案未定义行为。

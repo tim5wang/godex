@@ -1,5 +1,7 @@
 # 真机表盘能力探测（2026-10-25，Xiaomi Watch 5 eSIM）
 
+> 状态：Analysis（实测记录，不定义产品契约；结论已回写 `wearos-watch-implementation-plan.md`）
+
 设备：`M2505W1` / brand=xiaomi / Android 14 (SDK 34) / `480x480 @320dpi`
 OS：**小米 MIWEAR**，`ro.mi.os.flavor=wearable`、`persist.miwear.region=CN`
 

@@ -1,53 +1,118 @@
 # GoDex 手表客户端（腕上遥控器）实施方案
 
-> 状态：Draft（实施方案，待评审）
-> 日期：2026-10-21
-> 关联：`docs/prd-wearos-watch-client.md`（需求与交互设计）、`docs/prd-xiaomi-watch5-compat.md`（设备兼容性）、`docs/public/mockups/wearos/`（15 张 UI 稿）
+> 状态：Implemented（主体已交付并在真机验证；剩余项见 §12）
+> 日期：2026-10-25（初稿 2026-10-21）
+> 关联：`docs/prd-wearos-watch-client.md`（需求与交互设计）、`docs/prd-xiaomi-watch5-compat.md`（设备兼容性）、`docs/wearos-center-proxy-multi-node.md`（多节点遥控）、`docs/wearos-watchface-capability.md`（表盘能力实测）、`docs/public/mockups/wearos/`（15 张 UI 稿）
 > 目标设备：小米 Watch 5 国行（Android 底子 / HyperOS 3，**无 GMS**），实现栈按 Wear OS 走，同时覆盖海外 Wear OS 6
-> 本文定位：**可直接开工的施工图** —— 契约、文件、签名、分期、验收、验证命令。
+> 本文定位：**施工图 + 交付记录** —— 契约、文件、分期、验收、验证命令，以及已落地成果。
+
+### 界面截图（模拟器 454×454 @320dpi；与真机同一份代码）
+
+![手表端主要界面](./_images/wear_screens.png)
+
+上排：表盘 · 主屏 · 会话列表；下排：任务详情 · 语音输入 · 设备列表。
+逐屏更新：`python3 .godex/tmp/wear_shots_verify.py`（截图与屏上文案一并落盘，避免图不对文）。
 
 ---
 
-## 0. 当前交付状态（实证，2026-10-21）
+## 0. 当前交付状态（实证，2026-10-25）
 
-后端与手表 App 主体已落地并通过验证；**仅剩真机门禁 0.4–0.6 需在小米 Watch 5 上确认**。
+后端与手表 App 均已落地。**门禁 0.4/0.5 已有结论；0.6（常驻活动）仍未验证**，有降级路径。
+
+| 门禁 | 结论 | 依据 |
+|---|---|---|
+| 0.4 Tile 渲染 | ✅ 已验证：`GodexTileService` 被系统解析并展示（含任务状态 + 观测时间） | `wearos-watchface-capability.md` §五 |
+| 0.5 Complication 渲染 | ✅ 已有结论：**系统表盘槽位对第三方不可行**（小米按签名/特权白名单过滤）→ 按降级路径交付为 **app 内表盘屏** | 同上 §一–§三 |
+| 0.6 Ongoing Activity | ⬜ **未验证**：代码已实现（`WearNotifier` 用 `OngoingActivity.Builder`），真机渲染未测；未生效则降级为常驻通知 | §12.3 A4 |
+| 0.7 语音识别 | ✅ 已定：仿真器无 `RecognitionService` → W9（录音 + 服务端 ASR）为主路径，已实测（B6/B7） | §3.1 |
+| 0.8 网络可达 | ✅ 已验：真机经中心（`godex.claw.carc.top`）读写成功 | §12 多节点真机验证 |
 
 | 面 | 状态 | 证据 |
 |---|---|---|
-| 后端 `/watch/*`（W2/W3/W4/W7/W8/W9/W10） | ✅ 已实现 | `internal/runtime/httpapi/routes_watch.go`、`routes_watch_asr.go` |
+| 后端 `/watch/*`（W2/W3/W4/W7/W8/W9/W10 + push/tts/history/create/templates） | ✅ 已实现 | `internal/runtime/httpapi/routes_watch*.go` |
 | 配对与受限 token | ✅ 已实现 | `internal/services/watchauth/watchauth.go` |
 | 端到端接口测试（真实 `godex serve`，非 mock） | ✅ **35/35 通过** | `.godex/tmp/e2e/e2e_watch.py` |
-| 手表 App（8 屏，圆屏 Compose） | ✅ 已实现并可跑 | `wear/app/src/main/java/com/godex/wear/` |
+| 手表 App（12 屏，圆屏 Compose） | ✅ 已实现并可跑 | `wear/app/src/main/java/com/godex/wear/` |
 | 仿真器实机联调（配对→首页→各屏） | ✅ 通过，0 崩溃 | `.godex/tmp/e2e/pair_drive.py`、`verify_screens.py` |
-| **稿 06 单条审批屏**（完整命令/风险/两次确认） | ✅ 已实现 + **真实待审批端到端验证** | `wear/.../ui/ApprovalDetailScreen.kt`、`.godex/tmp/e2e/verify_approval_detail.py` |
-| **稿 08 通知**（BigText + 拒绝/批准动作） | ✅ 已实现 + **实机通知已验** | `wear/.../notify/WearNotifier.kt`、`WatchActionReceiver.kt` |
-| **稿 02 Tile / 稿 12 常驻活动** | 🟡 已实现（渠道/组件已验，渲染待真机 0.4–0.6） | `wear/.../tile/GodexTileService.kt`、`notify/WearNotifier.kt` |
-| 稿 01 表盘 + Complication | ⬜ 未做（待真机 0.4–0.6 定形态） | — |
-| W1（`noderegistry` 加 `kind`） | ⬜ 未做（当前用 `control` 节点注册表） | — |
-| W5/W6（手机桥接推送、事件钩子） | ⬜ 未做（M2 范围）→ 见 §12.4 | — |
-| **跨端配套能力（配对 UI / 精简回复 / TTS / 通知投递 / 工具日志）** | ⬜ 未做 → **见 §12** | — |
+| **稿 06 单条审批屏**（完整命令/风险/两次确认） | ✅ 已实现 + **真实待审批端到端验证** | `wear/.../ui/ApprovalDetailScreen.kt` |
+| **稿 08 通知**（BigText + 拒绝/批准动作） | ✅ 已实现 + **真机通知已验** | `wear/.../notify/WearNotifier.kt`、`WatchActionReceiver.kt` |
+| **稿 02 Tile** | ✅ 已实现 + **已验证**（系统解析并展示） | `wear/.../tile/GodexTileService.kt` |
+| **稿 12 常驻活动** | 🟡 代码已实现（`OngoingActivity`）；**真机渲染未验**，降级为常驻通知 | `wear/.../notify/WearNotifier.kt` |
+| **稿 01 表盘 + Complication** | ✅ **app 内已实现**（系统表盘对第三方不可行，实测见 `wearos-watchface-capability.md`） | `wear/.../ui/ClockFace.kt` |
+| W1（`noderegistry` 加 `kind`） | ✅ 已实现（`545860d`，B3） | `registry.go`、`Dto.kt`、`DevicesScreen.kt` |
+| W5/W6（手机桥接推送、事件钩子） | ✅ 已实现（`b3448d3`、`44c2be5`，B1/B2/D1） | `routes_watch_push.go`、`mobile/public/godex-watcher.js` |
+| **跨端配套能力（配对 UI / 精简回复 / TTS / 通知投递 / 工具日志）** | ✅ 已实现 → 见 §12 | — |
+| **多节点遥控（中心代理，与 Android/PC 端一致）** | ✅ 已实现 + **真机验证**（`4baa29e`、`1982daa`） | `routes_watch_proxy.go`、`WatchRelayHolder` |
+| **后台同步跟随所选设备** | ✅ 已实现（`85b9a2f`） | `wear/.../sync/WatchSync.kt` |
+| **主屏布局：底部按钮完整进圆屏** | ✅ 已实现（`43dacd6`，实测修复） | `wear/.../ui/HomeScreen.kt` |
 
-### 0.1 联调中发现并修复的两个真实缺陷
-
-两者都是**单元测试测不到、只有把 App 跑在 Android 上才会暴露**的问题，已修复并回归：
+### 0.1 联调中发现并修复的真实缺陷（单元测试测不到）
 
 1. **Android 9+ 默认禁明文 HTTP** → 配对直接失败
    （`CLEARTEXT communication to 10.0.2.2 not permitted`）。
    修复：新增 `res/xml/network_security_config.xml` 并在 manifest 挂载；
-   同时把默认地址与用户输入统一补 `/api` 前缀
-   （外部请求必须带 `/api`，webui 会剥离后转给 API handler；
-   不带则落到 Web UI 返回 SPA HTML）。
-2. **配对成功后 `base_url` 未持久化** → 重启后永远卡在配对页。
-   `Credentials.isUsable` 要求 `paired && token && baseUrl` 三者齐备，
-   而 `savePairedDevice` 原先只写 token/scopes/paired，漏了 base URL。
+   同时把默认地址与用户输入统一补 `/api` 前缀。
+2. **配对成功后 `base_url` 未持久化** → 重启后永远卡在配对屏。
    修复：`savePairedDevice` 接收并归一化写回 `base_url`。
-   实证方式为 `adb shell run-as com.godex.wear cat files/datastore/godex_wear.preferences_pb`。
+3. **手表配对到「中心」后遥控其他节点返回 503**（2026-10-25 真机发现）→
+   中心自己即中心，`control.center_url` 为空 → bridge 禁用。
+   修复：新增 `WatchRelayHolder`，复用本实例自己的 `/control/nodes/{id}/proxy/`
+   handler（它已实现「本地 or 经中心」的唯一判断）。
+4. **上述 503 被客户端静默吞掉** → 回落到本机列表，表现为「选了 mac 却显示
+   中心的会话」。修复：远端读取失败改为显式报错，宁可空列表也不显示错机器的
+   数据（`vm_remote_unreachable`）。
 
 ### 0.2 已知限制（非缺陷）
 
 - 测试服务上 `GET /watch/sessions` 对「已建但无 turn」的会话返回空列表：
   **主 API `GET /sessions` 行为一致**，属会话存储层语义，非 watch 路由问题。
 - 无会话时「说话」按钮按设计为禁用态（`enabled = currentSessionId.isNotEmpty()`）。
+- **健康数据（心率/步数）当前不支持**：需 `BODY_SENSORS`/`ACTIVITY_RECOGNITION`，
+  且本机无 GMS → Health Services 不可用，只能走 `SensorManager` 直读；
+  而 MIWEAR 是否向第三方开放这两个传感器**尚未实测**（模拟器无此 feature，
+  无法替代真机结论）。属待探测项，不是已承诺功能。
+- 表盘按分钟刷新（对齐分钟边界），非秒级。
+
+### 0.3 已实现特性清单（用户可见能力）
+
+| 能力 | 落地状态 |
+|---|---|
+| 配对（8 位码 + Web 端批准 + scope 选择） | ✅ |
+| 主屏（状态 / 当前会话 / 动作，圆屏布局） | ✅ |
+| 表盘屏（app 内：环形进度 + 四角 + 大字时钟） | ✅ |
+| 会话列表 / 会话切换（含置顶） | ✅ |
+| 跨设备统一列表（筛选为视图，点击可跨节点切换遥控目标） | ✅ |
+| 任务详情（进度 / 当前工具 / 最近工具 / 用时 / 停止） | ✅ |
+| 对话历史（多轮） | ✅ |
+| 审批队列 + 单条审批屏（完整命令 / 风险 / 倒计时 / 批准·拒绝） | ✅ |
+| 语音录入 → 服务端 ASR | ✅ |
+| TTS 朗读回复（腕上播放） | ✅ |
+| 通知（完成提醒 / 待审批，BigText + 腕上动作按钮，深链分流） | ✅ |
+| 后台同步（WorkManager 15 分钟周期，无 GMS 可用） | ✅ |
+| Tile（任务状态 + 数据观测时间） | ✅ |
+| **多节点遥控（经中心代理，与 Android/PC 端一致）** | ✅ 真机验证 |
+| 手机桥接推送（`godex-watcher.js` 轮询 + 通知） | ✅ |
+| 设置（服务器地址 / 通知开关 / 省电 / 常亮显示 / 权限范围 / 取消配对） | ✅ |
+| Web 端 Watch 管理页（配对批准 / 设备列表 / 吊销） | ✅ |
+
+后端契约面：`/watch/pair/*`、`/watch/sessions*`、`/watch/approvals*`、`/watch/command`、
+`/watch/asr`、`/watch/tts`、`/watch/push/*`、`/watch/nodes`、`/watch/devices`、
+`/watch/templates`、`/watch/overview`。
+
+### 0.4 待完善工作
+
+| # | 项 | 现状 | 为何未做 |
+|---|---|---|---|
+| 1 | **门禁 0.6：常驻活动真机渲染** | 代码已实现，未真机验证 | 需保持长任务运行后抬腕观察；未生效则降级为常驻通知 |
+| 2 | **健康数据（心率 / 步数）** | **未实现，未探测** | 本机无 GMS → Health Services 不可用，只能 `SensorManager` 直读；而 MIWEAR 是否向第三方开放这两个传感器尚未实测（模拟器无此 feature，无法替代真机结论） |
+| 3 | **token 续期 / 轮换（B8）** | 有 `ExpiresAt`/`Revoked`/吊销路由，无续期 | 1 年有效期，短期不影响；长期需避免到期后突然失效 |
+| 4 | **手机端配对入口（D2）** | `mobile/` 无 `watch/pair` 调用 | 可选增强；当前手表出码 + Web 批准已闭环 |
+| 5 | **多节点 scope 交叉验证加固** | scope 仅在 header 层传递并取交集 | 依赖「中心鉴权 + relay trust 头」两道门，未对 scope 值本身签名 |
+| 6 | **多跳（中心→中心）** | 未定义 | 当前只支持一跳；链式中心行为未定义 |
+| 7 | 会话列表「已建但无 turn」返回空 | 与主 API 行为一致 | 会话存储层语义，非 watch 缺陷 |
+
+**优先级建议**：1（真机一次即可定论）> 2（先探测再决定是否投入）> 3/4（体验与可选）。
+5/6 属安全加固，在只遥控自己节点的当前场景下风险可控。
 
 ---
 
@@ -201,9 +266,9 @@ bash scripts/watch-emulator.sh --help
 | 0.1 | **有无 GMS** | **已定基线：无 GMS** | `bash scripts/watch-emulator.sh gates` | 推送只走手机桥接（**已定为基线**）；仿真器需先跑 `nogms` |
 | 0.2 | **API level / Wear 版本** | ✅ **仿真器已验：API 30 / circular=true** | `bash scripts/watch-emulator.sh gates` | **`minSdk 30` 已由仿真器验证**（Wear OS 3 基线）；真机待复核 |
 | 0.3 | **侧载通路** | ✅ **仿真器已验：可用** | `bash scripts/watch-emulator.sh gates` | 实测装 112MB APK 成功（1.8s）；真机待复核 |
-| 0.4 | **Tile 渲染** | 待验（需真机） | 装官方 Wear Tile 示例，表盘左滑轮播查看 | 不渲染 → 稿件 02 降级为「表冠直达首页」 |
-| 0.5 | **Complication 渲染** | 待验（需真机） | 官方示例挂 complication 到表盘 | 不渲染 → 稿件 01 降级为应用内聚合页 |
-| 0.6 | **Ongoing Activity** | 待验（需真机） | 官方示例实测 | 不生效 → 稿件 12 降级为常驻通知 |
+| 0.4 | **Tile 渲染** | ✅ **已验证**（系统解析并展示） | 装官方 Wear Tile 示例，表盘左滑轮播查看 | 不渲染 → 稿件 02 降级为「表冠直达首页」 |
+| 0.5 | **Complication 渲染** | ✅ **已有结论：系统表盘对第三方不可行** | 官方示例挂 complication 到表盘 | 已按降级路径交付：**app 内表盘屏**（稿件 01 形态） |
+| 0.6 | **Ongoing Activity** | ⬜ **未验证**（代码已实现） | 官方示例实测 | 不生效 → 稿件 12 降级为常驻通知 |
 | 0.7 | **语音识别可用性** | ⚠️ **仿真器已验：无 provider** | `bash scripts/watch-emulator.sh gates` | **仿真器无 `RecognitionService`** → **W9（录音 + 服务端 ASR）定为语音主路径**；真机若自带厂商语音则可作快路径 |
 | 0.8 | **网络可达** | ✅ **仿真器：宿主 `10.0.2.2` 可达** | 仿真器内访问宿主 godex 服务 | 真机需另验（WiFi/蜂窝/eSIM） |
 
@@ -682,8 +747,8 @@ adb shell am start -n com.godex.wear/.MainActivity
 | **A1** | **审批通知深链落点错位** | ✅ **已修**：`openIntent(context, sessionId, approval.key)` 新增 `EXTRA_APPROVAL_KEY`；`MainActivity` 按键分流到审批屏，仅会话键仍走详情 | `WearNotifier.openIntent` + `MainActivity.applyDeepLink` 分流 | 实证：带审批键 → `待审批 1/2 … 高危命令`；仅会话键 → 任务详情（旧行为不变）。`verify_deeplink.py` ALL PASSED |
 | **A2** | **后台拉取缺失（通知最大缺口）** | ✅ **已补**：`WorkManager`（纯 AndroidX，无 GMS）15 分钟周期任务 `WatchSyncWorker`；前台可见时 `appVisible` 让 worker 跳过；完成提醒前后台**共用**一套持久化 running 集合 | `wear/.../sync/WatchSync.kt` + `MainActivity` 可见性标记 | 实证：godex 非前台（`resumed=False`）下 worker 执行并投递：`run: … approvals=1`，`verify_bg_foreground_off.py` ALL PASSED |
 | A3 | `expires_at` 未渲染 | ✅ **已补**：`remainingTime()` + 详情屏倒计时（实测显示「14 分钟后超时」）。服务端 `ListPending` 会 prune 过期项，故仅作提示、不作为闸门 | `Theme.kt` + `ApprovalDetailScreen` | 已实测 |
-| A4 | Tile / 常驻活动渲染待真机 | 代码已实现；渠道 importance 4/2 已验，渲染需真机 | — | 见门禁 0.4–0.6 |
-| A5 | 稿 01 表盘 + Complication | 未做（无 `WatchFaceService`/`data-source`） | 待 0.5 门禁结论 | 表盘可见运行中/待审批数 |
+| A4 | Tile / 常驻活动渲染 | **Tile ✅ 已验证**；**常驻活动 ⬜ 未验**（渠道 importance 4/2 已验，渲染需真机） | — | Tile 已闭环；常驻活动见门禁 0.6 |
+| A5 | 稿 01 表盘 + Complication | ✅ **已交付**（形态已定）：系统表盘槽位对第三方不可行 → app 内整屏表盘（环形 + 四角 + 大字时钟），真机可见 | `ui/ClockFace.kt` | 表盘可见运行中/待审批数（已真机截图确认） |
 
 ### 12.4 Web / Mobile
 
@@ -696,7 +761,7 @@ adb shell am start -n com.godex.wear/.MainActivity
 
 ### 12.5 依赖与建议顺序
 
-**外部依赖**：B6/B7 需 `voice-engine` 可运行（已完成并实测，见 `routes_watch_asr.go` 顶部注释）；A4/A5 **真正待真机门禁 0.4–0.6** 结论。
+**外部依赖**：B6/B7 需 `voice-engine` 可运行（已完成并实测，见 `routes_watch_asr.go` 顶部注释）；**只剩门禁 0.6（常驻活动渲染）需真机确认**，其余均有结论。
 
 **建议顺序**（按"解锁最多、依赖最少"排；1–5 已全部完成）：
 
@@ -706,7 +771,7 @@ adb shell am start -n com.godex.wear/.MainActivity
 4. ~~**B4 精简回复**~~ + ~~**B5 工具日志**~~ ✅ 均已完成
 5. ~~**B6/B7 语音补测与 TTS**、**B2/B3**~~ ✅ 已完成
 
-**仅剩 A5**：表盘 + Complication（需先定 WFF 与数据源形态，受 0.5 门禁影响）；D2（手机配对入口）为可选。
+**剩余项**：门禁 0.6（常驻活动真机渲染）；B8（token 续期）、D2（手机配对入口）、健康数据（心率/步数，需真机探测厂商是否开放传感器）为可选。
 
 ### 12.6 本轮补齐的实现要点（供后续维护）
 

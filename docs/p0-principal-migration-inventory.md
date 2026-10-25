@@ -320,19 +320,23 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 
 这批路由是「超管独占 `center_execution`」的检查点：
 
-| 文件 | 数量 | 说明 |
-|---|---|---|
-| `routes_workflows.go` | 18 | 工作流 = 执行路径 |
-| `routes_sessions.go` | 17 | 会话 = 执行入口 |
-| `routes_turns.go` | 11 | turn = 执行单元 |
-| `routes_skills.go` | 10 | 会话级 skill 装配 |
-| `routes_gateway.go` | 4 | `/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/models` |
-| `routes_step_track.go` | 4 | agent-steps 轮询/取消/回复/事件 |
-| `routes_flow_gateway.go` | 1 | `/v1/gateway/{route}` |
-| `routes_steps.go` | 1 | `POST /v1/agent-steps` |
-| **合计** | **66** | |
+| 文件 | 数量 | 说明 | 已接线 |
+|---|---|---|---|
+| `routes_workflows.go` | 18 | 工作流 = 执行路径 | 0 |
+| `routes_sessions.go` | 17 | 会话 = 执行入口 | 1（`POST /sessions`）|
+| `routes_turns.go` | 11 | turn = 执行单元 | 3（messages / retry / resume）|
+| `routes_skills.go` | 10 | 会话级 skill 装配 | 0 |
+| `routes_gateway.go` | 4 | `/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/models` | 1（`/v1/exec`）|
+| `routes_step_track.go` | 4 | agent-steps 轮询/取消/回复/事件 | 0 |
+| `routes_flow_gateway.go` | 1 | `/v1/gateway/{route}` | 0 |
+| `routes_steps.go` | 1 | `POST /v1/agent-steps` | 0 |
+| **合计** | **66** | | **5** |
 
 > 判据：这 66 处是「租户用户必须 403、超管放行」的判定点。
+> 已接线的 5 处走 `requireCenterExecution(protected)`（设计 §3.3）；
+> **其余 61 处仍走 `protected`，即当前对租户用户尚未 403**，接完再依次下推。
+> 注：gateway 的 `gdx_` proxy-key 分支不经过 `protected`（无 Principal），
+> 不在本表口径内，需单独设计。
 > 其余 202 处（配置/文件/记忆/技能目录等）只需租户隔离，不需 `center_execution`。
 
 ---
@@ -371,7 +375,8 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 5. **抽 `NodeAccess`**、收敛 6 类解析点（§7）→ `identity.Policy` 已建，
    首个接缝（relay proxy）已接入
 6. **加两条新判定**（403a 跨租户、403b `center_execution`）→ 判据已就位
-   （`Policy.Authorize` / `AuthorizeCenterExecution`），待逐路由接线
+   （`Policy.Authorize` / `AuthorizeCenterExecution`）；403b 已接线 5 处执行入口
+   （`requireCenterExecution`），余 61 处待下推
 7. **落地其余族**（watch scope / bizKey / query-token / `gdx_`）
 
 > 第 1 项已完成一半，剩下的 fail-open（§5）建议作为第 3 项的前置：

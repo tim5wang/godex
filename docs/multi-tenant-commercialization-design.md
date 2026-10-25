@@ -233,6 +233,25 @@ handler / NodeAccess
 无此能力的主体在中心任何执行入口（`POST /sessions`、`POST /sessions/{id}/messages`、
 `POST /v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/agent-steps`）一律 403。
 
+**落地形态（`internal/runtime/httpapi/center_execution.go`）**：
+
+```go
+requireCenterExecution(protected)(handler)   // 鉴权 → 能力位 → handler
+```
+
+- **包装顺序有实质意义**：它包在 `protected` **外面**，因为闸门要读鉴权已附加的
+  Principal（反过来的话读不到）。未带身份时**失败关闭**（401），而非默认当操作员
+  ——一个忘记挂鉴权的路由必须是不可用，不是全开。
+- **已接线的执行入口（5 处）**：`POST /sessions`、`POST /sessions/{id}/messages`、
+  `POST /sessions/{id}/turns/{turnID}/retry|resume`、`POST /v1/exec`。
+  余下 61 处（workflows 18 / skills 10 / step-track 4 / gateway 3 / flow-gateway 1 / steps 1）
+  仍走 `protected`，待后续接线；清单 §6 已同步逐文件计数。
+- **节点行动者豁免**（否则会打断已有能力）：relay-originated 请求以 `KindNode` 到达，
+  无 `center_execution`；若闸门只认能力位，「从中心驱动远程节点执行」这条文档化能力
+  会被 403 打死。故 `canExecuteOnCenter = IsNodeActor() || CanExecuteOnCenter()`。
+  这是**豁免而非授权**：节点行动者仍不持有 `center_execution`，故在
+  `AuthorizeCenterExecution` 等其他地方仍被拒（两侧各有测试钉住）。
+
 **为什么不用「特殊租户」**：那会导致授权判断里到处出现
 `if tenant == "system"` 特例，是越权的温床。能力位是正交的，检查点只有一处。
 

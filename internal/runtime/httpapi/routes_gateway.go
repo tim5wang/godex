@@ -98,7 +98,11 @@ func registerGatewayRoutes(
 	// POST /v1/exec - Run a shell command on this node and stream its output
 	// as SSE events ({output, final, exit_code}). Used by the center-side
 	// "godex node exec" jump-host command through the relay proxy.
-	mux.Handle("POST /v1/exec", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	//
+	// Center-execution gated: executing here is exactly the capability that is
+	// restricted to the operator. A relay-originated call still passes (node
+	// actor exemption) — that IS the jump-host path this endpoint exists for.
+	mux.Handle("POST /v1/exec", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Command      string `json:"command"`
 			WorkspaceDir string `json:"workspace_dir"`

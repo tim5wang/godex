@@ -20,7 +20,7 @@ func registerTurnRoutes(
 	service *backend.Service,
 	protected func(http.Handler) http.Handler,
 ) {
-	mux.Handle("POST /sessions/{id}/messages", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/messages", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req submitMessageRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -84,7 +84,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	})))
-	mux.Handle("POST /sessions/{id}/turns/{turnID}/retry", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/turns/{turnID}/retry", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.RetryTurnAsync(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -92,7 +92,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	})))
-	mux.Handle("POST /sessions/{id}/turns/{turnID}/resume", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/turns/{turnID}/resume", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.ResumeTurnAsync(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)

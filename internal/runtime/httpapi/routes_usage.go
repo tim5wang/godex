@@ -171,6 +171,9 @@ func registerUsageRoutes(mux *http.ServeMux, protected func(http.Handler) http.H
 			writeError(w, http.StatusUnauthorized, fmt.Errorf("Invalid API Key."))
 			return
 		}
+		// Attach the key's identity (P0 §7): this route authenticated but carried
+		// no Principal, so it was invisible to any identity-based decision.
+		r = withProxyKeyPrincipal(r, key)
 		// Pin to the authenticated key. We deliberately
 		// ignore any api_key_id the caller may have
 		// passed in the query string; otherwise a proxy
@@ -252,6 +255,7 @@ func handleUsageGatewayChatCompletions(w http.ResponseWriter, r *http.Request, u
 		writeUsageGatewayError(w, http.StatusUnauthorized, "invalid_api_key", "Invalid API Key. Please provide a valid proxy key.")
 		return
 	}
+	r = withProxyKeyPrincipal(r, key)
 
 	var req openAIChatCompletionRequest
 	if err := decodeJSON(r, &req); err != nil {

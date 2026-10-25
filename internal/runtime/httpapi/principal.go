@@ -19,6 +19,10 @@ const (
 	// Agent Step Platform surface. Recorded so audit entries name the key rather
 	// than implying a human caller.
 	AuthMethodBizKey = "biz_key"
+	// AuthMethodProxyKey is a gdx_ usage-gateway key. Recorded for the same
+	// reason as the biz key: so the audit entry names the credential instead of
+	// leaving the caller anonymous.
+	AuthMethodProxyKey = "proxy_key"
 )
 
 // principalContextKey carries the authenticated Principal down the handler

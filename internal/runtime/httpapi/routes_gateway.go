@@ -31,11 +31,20 @@ func registerGatewayRoutes(
 			}
 			return
 		}
-		// Otherwise use existing web-token-protected handler
-		protected := withBearerAuthProvider(func() string {
+		// Otherwise use existing web-token-protected handler.
+		//
+		// Principal is attached on this branch too (P0 §7, gateway dual auth):
+		// the bare bearer middleware let the caller through without recording who
+		// they are, so this path was invisible to identity-based decisions.
+		//
+		// Gated as well: unlike the two pure LLM-gateway endpoints, this branch
+		// starts a real agent session (resolve session → run turn), which is the
+		// capability the operator restriction exists for. Relay-originated calls
+		// still pass via the node-actor exemption.
+		webTokenAuth := withPrincipalAuth(withBearerAuthProvider(func() string {
 			return manager.Current().WebToken
-		}, relayTrustChecker(manager))
-		protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		}, relayTrustChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager)))
+		requireCenterExecution(webTokenAuth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleOpenAIChatCompletions(w, r, service)
 		})).ServeHTTP(w, r)
 	})))
@@ -53,8 +62,12 @@ func registerGatewayRoutes(
 		}
 		// Web-token auth: dispatch through the same LLM gateway so Responses
 		// SDK clients see the full streaming + tools experience.
+		//
+		// Identity is attached (P0 §7): this is a pure LLM-gateway dispatch, so it
+		// stays ungated, but the caller must no longer be anonymous.
 		webToken := manager.Current().WebToken
 		if webToken != "" && bearerAuthorized(r, webToken) {
+			r = r.WithContext(WithPrincipal(r.Context(), operatorPrincipal()))
 			handleResponsesWebToken(w, r, usageService, manager)
 			return
 		}
@@ -88,6 +101,10 @@ func registerGatewayRoutes(
 			// experience. The previous implementation routed to the
 			// godex agent backend, which doesn't support streaming
 			// or tool calls and never worked for Pi.
+			//
+			// Identity is attached (P0 §7): a pure LLM-gateway dispatch, so it
+			// stays ungated, but the caller must not be anonymous.
+			r = r.WithContext(WithPrincipal(r.Context(), operatorPrincipal()))
 			handleAnthropicWebTokenMessages(w, r, usageService, manager)
 			return
 		}

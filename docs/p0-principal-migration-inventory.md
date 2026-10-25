@@ -77,8 +77,8 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 | `withBizKeyAuth` | **6** | biz key | → 从 key 解析 `TenantID`/`UserID` |
 | watch `command` | **5** | watch device token + scope | 同上 |
 | `nodeProxyRead` | **3** | web token **或** `nk_` | → 绑定 `(NodeID, TenantID)` 的 per-node 凭据（**`nk_` 本身仍全局，未改**）|
-| gateway 双认证（`gunzipBody` 内层） | **3** | `gdx_` proxy key **或** web token | 两条路径都要落 Principal |
-| inline `gdx_`（`/v1/models`、`/v1/usage/cache-stats`） | **2** | `gdx_` proxy key | → 从 key 解析租户与额度 |
+| gateway 双认证（`gunzipBody` 内层） | **3** | `gdx_` proxy key **或** web token | ✅ **两条路径都已落 Principal**：`gdx_` → `proxyKeyPrincipal`；web token → `operatorPrincipal`（`/v1/responses`、`/v1/messages` 走操作员；`/v1/chat/completions` 因**会起 agent 会话**另接 `center_execution`）|
+| inline `gdx_`（`/v1/models`、`/v1/usage/cache-stats`） | **2** | `gdx_` proxy key | ✅ 已落 `proxyKeyPrincipal`；key → 租户待 P1 |
 | watch `approve` | **2** | watch device token + scope | 同上 |
 | `withWatchOrWebRead`（`access`） | **2** | watch(read) **或** web token | 双路径，两条都要落 Principal |
 | **受鉴权合计** | **265** | — | — |
@@ -112,7 +112,7 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 | watch scope | 设备维度，无租户 | 设备绑定租户；跨租户节点 → **403** |
 | bizKey | 仅校验 key 存在 | ✅ **已补身份**（`bizKeyPrincipal`，`KindBizKey`，零权限位）；key → 租户待 P1（`BizAPIKey` 暂无租户字段），此时按未定租户处理（不可达租户节点）|
 | query-token | 同 `protected` | ✅ **已补身份**：`?token=` 与预览 cookie 两条路径现在都附加操作员 Principal（经 `operatorPrincipal()`，与 header 路径同一构造函数）；保留 `?token=`（WS/iframe 无法设 header）|
-| inline `gdx_` | 仅校验格式 | key → 租户/额度；跨租户 → **403** |
+| inline `gdx_` | 仅校验格式 | ✅ **已补身份**（`proxyKeyPrincipal`，`KindProxyKey`，零权限位；未定租户 → 不可达节点）；key → 租户/额度待 P1 |
 
 ### 3.2 三条必须新增的判定（当前完全不存在）
 
@@ -337,10 +337,15 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 > **实际接线按「会不会启动/推进一次 agent 执行」筛，而不是按文件全量接**：
 > 只读查询、取消、审批回复、配置写入（skills 装配、flow publish/validate、diagnose）
 > 都不接——接了会把“查看/撤销”也变成中心执行专属，属于过度收紧。
-> 共接线 **17 处**（66 口径内 10 + `routes_flows.go` 7）。
+> 共接线 **18 处**（66 口径内 10 + `routes_flows.go` 7 + `routes_gateway.go` 的
+> `/v1/chat/completions` web-token 分支 1）。
 > 注 1：gateway 的 `gdx_` proxy-key 分支不经过 `protected`（无 Principal），
-> 不在本表口径内，需单独设计；biz-key 族同属此列，**已补身份**（零权限位，
-> 不能用 `center_execution` 闸——它靠 key 自身白名单授权，闸掉等于砍产品面）。
+> 不在本表口径内，需单独设计；**已补身份**（`proxyKeyPrincipal`，零权限位；
+> 不能用 `center_execution` 闸——它靠 key 自身额度/模型白名单授权，闸掉等于砍产品面）。
+> biz-key 族同属此列，同样**已补身份**。
+> 另：`/v1/chat/completions` 的 **web token 分支**虽然挂着 bearer 中间件，
+> 但它会**起 agent 会话**，因此除补身份外还接了 `center_execution`
+> （即上方的第 18 处）。
 > 注 2：`routes_flows.go` 是业务流程落地晚于原清点，故不在原 66 内，一并计入执行入口。
 > 其余 202 处（配置/文件/记忆/技能目录等）只需租户隔离，不需 `center_execution`。
 
@@ -380,9 +385,11 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 5. **抽 `NodeAccess`**、收敛 6 类解析点（§7）→ `identity.Policy` 已建，
    首个接缝（relay proxy）已接入
 6. **加两条新判定**（403a 跨租户、403b `center_execution`）→ 判据已就位
-   （`Policy.Authorize` / `AuthorizeCenterExecution`）；403b 已接线 **17 处**执行入口
+   （`Policy.Authorize` / `AuthorizeCenterExecution`）；403b 已接线 **18 处**执行入口
    （`requireCenterExecution`，按「会启动/推进一次 agent 执行」筛），余待下推
 7. **落地其余族**（watch scope / bizKey / query-token / `gdx_`）
+   —— bizKey / query-token / `gdx_` ✅ 已补身份（均为零权限位的机器/设备主体，
+   详见 §3.1）；**剩 watch scope** 与各族的 `TenantID` 绑定（待 P1 租户表）
 
 > 第 1 项已完成一半，剩下的 fail-open（§5）建议作为第 3 项的前置：
 > 只要 fail-closed 未生效，任何访问者在中心上拿不到正确 401 语义，

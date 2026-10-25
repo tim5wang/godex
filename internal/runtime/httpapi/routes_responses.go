@@ -300,6 +300,7 @@ func handleUsageGatewayResponses(w http.ResponseWriter, r *http.Request, usageSe
 		writeUsageGatewayError(w, http.StatusUnauthorized, "invalid_api_key", "Invalid API Key. Please provide a valid proxy key.")
 		return
 	}
+	r = withProxyKeyPrincipal(r, key)
 	dispatchUsageGatewayResponses(w, r, usageService, manager, key)
 }
 

@@ -158,6 +158,9 @@ func handleAnthropicGatewayMessages(w http.ResponseWriter, r *http.Request, usag
 		writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", "Invalid API Key.")
 		return
 	}
+	// Attach the key's identity (P0 §7) before dispatch so downstream sees who
+	// called; this route authenticated but attached no Principal.
+	r = withProxyKeyPrincipal(r, key)
 	dispatchAnthropicMessages(w, r, usageService, manager, key)
 }
 

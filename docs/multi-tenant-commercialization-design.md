@@ -252,13 +252,15 @@ requireCenterExecution(protected)(handler)   // 鉴权 → 能力位 → handler
 - **包装顺序有实质意义**：它包在 `protected` **外面**，因为闸门要读鉴权已附加的
   Principal（反过来的话读不到）。未带身份时**失败关闭**（401），而非默认当操作员
   ——一个忘记挂鉴权的路由必须是不可用，不是全开。
-- **已接线的执行入口（17 处）**：`POST /sessions`、`POST /sessions/{id}/messages`、
+- **已接线的执行入口（18 处）**：`POST /sessions`、`POST /sessions/{id}/messages`、
   `POST /sessions/{id}/turns/{turnID}/retry|resume`、`POST /v1/exec`、
   `POST /sessions/{id}/subagents/{jobID}/resume`、`POST /sessions/{id}/longtasks`、
   `POST /sessions/{id}/longtasks/{workflowID}/run|finalize|rollback`、
   `POST /v1/flows/{id}/sessions`、`.../sessions/{sessionID}/resume`、`POST /v1/flows/{id}/runs`、
   `POST /v1/flow-runs/{runID}/step`、`POST /v1/flow-runs/{runID}/human/{nodeID}/reply`、
   `POST /v1/flows/{id}/sessions/{sessionID}/events|signals`。
+  另含 `POST /v1/chat/completions` 的 **web token 分支**：它不是纯 LLM 网关，
+  而是**起 agent 会话**（该端点的 `gdx_` 网关分支不闸，因为它只按 key 额度纯转发）。
   选择判据：**会启动/推进一次 agent 执行**的写路由；只读查询、取消、审批回复、
   配置写入（如 skills install/load、flow publish/validate、diagnose）不在内。
   `events|signals` 算在内是因为它们经 `scheduler.wake(...)` **确实会唤醒等待中的

@@ -243,7 +243,10 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		writeJSON(w, http.StatusOK, session)
 	})))
-	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/events", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Flow-session inbound event delivery. Waking a waiting session is
+	// advancing execution (scheduler.wake below), so it is gated like step/reply:
+	// without it a non-operator could drive a flow already running on the center.
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/events", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, agent.MaxFlowSessionEventPayloadBytes+4096)
 		var req agent.FlowSessionEventInput
 		if err := decodeJSON(r, &req); err != nil {
@@ -262,7 +265,7 @@ func registerFlowSessionRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		writeJSON(w, http.StatusAccepted, receipt)
 	})))
-	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/signals", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/flows/{id}/sessions/{sessionID}/signals", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, agent.MaxFlowSessionEventPayloadBytes+4096)
 		var req agent.FlowSessionEventInput
 		if err := decodeJSON(r, &req); err != nil {

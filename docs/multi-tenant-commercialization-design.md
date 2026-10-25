@@ -252,14 +252,17 @@ requireCenterExecution(protected)(handler)   // 鉴权 → 能力位 → handler
 - **包装顺序有实质意义**：它包在 `protected` **外面**，因为闸门要读鉴权已附加的
   Principal（反过来的话读不到）。未带身份时**失败关闭**（401），而非默认当操作员
   ——一个忘记挂鉴权的路由必须是不可用，不是全开。
-- **已接线的执行入口（15 处）**：`POST /sessions`、`POST /sessions/{id}/messages`、
+- **已接线的执行入口（17 处）**：`POST /sessions`、`POST /sessions/{id}/messages`、
   `POST /sessions/{id}/turns/{turnID}/retry|resume`、`POST /v1/exec`、
   `POST /sessions/{id}/subagents/{jobID}/resume`、`POST /sessions/{id}/longtasks`、
   `POST /sessions/{id}/longtasks/{workflowID}/run|finalize|rollback`、
   `POST /v1/flows/{id}/sessions`、`.../sessions/{sessionID}/resume`、`POST /v1/flows/{id}/runs`、
-  `POST /v1/flow-runs/{runID}/step`、`POST /v1/flow-runs/{runID}/human/{nodeID}/reply`。
+  `POST /v1/flow-runs/{runID}/step`、`POST /v1/flow-runs/{runID}/human/{nodeID}/reply`、
+  `POST /v1/flows/{id}/sessions/{sessionID}/events|signals`。
   选择判据：**会启动/推进一次 agent 执行**的写路由；只读查询、取消、审批回复、
   配置写入（如 skills install/load、flow publish/validate、diagnose）不在内。
+  `events|signals` 算在内是因为它们经 `scheduler.wake(...)` **确实会唤醒等待中的
+  flow 会话**（已读实现确认）；不接则可被非操作者驱动中心上已在跑的流程。
   余下仍走 `protected` 的待后续接线；清单 §6 已同步逐文件计数。
 - **节点行动者豁免**（否则会打断已有能力）：relay-originated 请求以 `KindNode` 到达，
   无 `center_execution`；若闸门只认能力位，「从中心驱动远程节点执行」这条文档化能力

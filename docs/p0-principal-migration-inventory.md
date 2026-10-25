@@ -331,13 +331,13 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 | `routes_flow_gateway.go` | 1 | `/v1/gateway/{route}` | 0（biz-key 族）|
 | `routes_steps.go` | 1 | `POST /v1/agent-steps` | 0（biz-key 族）|
 | **合计** | **66** | | **10** |
-| `routes_flows.go` | +5 | **业务流程执行（不在原 66 口径内）**：flows/{id}/sessions、sessions/{id}/resume、flows/{id}/runs、flow-runs/{runID}/step、flow-runs/{runID}/human/{nodeID}/reply | 5 |
+| `routes_flows.go` | +7 | **业务流程执行（不在原 66 口径内）**：flows/{id}/sessions、sessions/{id}/resume、flows/{id}/runs、flow-runs/{runID}/step、flow-runs/{runID}/human/{nodeID}/reply、flows/{id}/sessions/{sessionID}/events|signals | 7 |
 
 > 判据：这 66 处是「租户用户必须 403、超管放行」的判定点；
 > **实际接线按「会不会启动/推进一次 agent 执行」筛，而不是按文件全量接**：
 > 只读查询、取消、审批回复、配置写入（skills 装配、flow publish/validate、diagnose）
 > 都不接——接了会把“查看/撤销”也变成中心执行专属，属于过度收紧。
-> 共接线 **15 处**（66 口径内 10 + `routes_flows.go` 5）。
+> 共接线 **17 处**（66 口径内 10 + `routes_flows.go` 7）。
 > 注 1：gateway 的 `gdx_` proxy-key 分支与整个 biz-key 族不经过 `protected`
 > （无 Principal），不在本表口径内，需单独设计。
 > 注 2：`routes_flows.go` 是业务流程落地晚于原清点，故不在原 66 内，一并计入执行入口。
@@ -379,7 +379,7 @@ writeJSON(w, http.StatusOK, map[string]any{"terminalId": terminalID, "exited": t
 5. **抽 `NodeAccess`**、收敛 6 类解析点（§7）→ `identity.Policy` 已建，
    首个接缝（relay proxy）已接入
 6. **加两条新判定**（403a 跨租户、403b `center_execution`）→ 判据已就位
-   （`Policy.Authorize` / `AuthorizeCenterExecution`）；403b 已接线 **15 处**执行入口
+   （`Policy.Authorize` / `AuthorizeCenterExecution`）；403b 已接线 **17 处**执行入口
    （`requireCenterExecution`，按「会启动/推进一次 agent 执行」筛），余待下推
 7. **落地其余族**（watch scope / bizKey / query-token / `gdx_`）
 

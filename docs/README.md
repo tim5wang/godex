@@ -100,7 +100,6 @@
 | [wearos-watch-implementation-plan.md](./wearos-watch-implementation-plan.md) | 手表客户端实施方案 + 交付记录：门禁结论、后端 W1–W10 契约、App 架构、手机桥接推送、分期与验收、已实现/待完善清单；含 6 屏截图 | Implemented；仅剩门禁 0.6（常驻活动真机渲染），其余有结论 |
 | [wearos-center-proxy-multi-node.md](./wearos-center-proxy-multi-node.md) | 手表端「中心代理」多节点遥控：调研 + 实施记录（与 Android/PC 端远程方式一致）；含 503 根因修复 | Implemented（2026-10-25，真机验证） |
 | [wearos-watchface-capability.md](./wearos-watchface-capability.md) | 真机表盘能力探测：小米 MIWEAR 表盘槽位形态、第三方不可行结论、实际交付的三张「面」 | Analysis（实测记录；结论已回写实施方案） |
-| [release-notes-v1.5.0.md](./release-notes-v1.5.0.md) | v1.5.0 发布草案 | Draft；版本号与发布内容待 release 前核验 |
 
 ## C. 已合并 / 被取代（Superseded）
 
@@ -131,6 +130,7 @@
 | [workflows-integration-guide.md](./workflows-integration-guide.md) | 旧 Workflows 第三方接入说明 | Historical |
 | [release-notes-v1.3.0.md](./release-notes-v1.3.0.md) | v1.3.0 release record | Historical |
 | [release-notes-v1.4.0.md](./release-notes-v1.4.0.md) | v1.4.0 release record | Historical |
+| [release-notes-v1.5.0.md](./release-notes-v1.5.0.md) | v1.5.0 release record | Historical（已发布；tag `v1.5.0` 已推送） |
 | [codex-cache.md](./codex-cache.md) | Codex/Responses 端点缓存行为分析 | Analysis |
 | [cache-hitrate-analysis.md](./cache-hitrate-analysis.md) | Cache hit-rate 实测分析 | Analysis（独立任务产物） |
 | [tools_issues.md](./tools_issues.md) | 工具失败与规避经验日志 | Historical / Operational Log |

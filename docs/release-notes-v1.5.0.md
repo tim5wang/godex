@@ -1,6 +1,6 @@
 # godex v1.5.0 — "Agent Platform, Business Flow & Voice"
 
-> 状态：Release notes（发布前仍需通过 release check）
+> 状态：Historical（v1.5.0 release record）
 > Release date: 2026-10-06 ｜ Base: v1.4.0 ｜ Commits: 240
 
 🇬🇧 **English**

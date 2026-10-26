@@ -29,6 +29,7 @@
 | 终端用户 | [快速开始](./guide/getting-started.md) → [user-guide.md](./user-guide.md) → [extension-runtime-user-guide.md](./extension-runtime-user-guide.md) | 安装配置、日常使用与扩展运行时 |
 | 开发者 | [开发指南](./develop/index.md) → [feature-implementation-matrix.md](./feature-implementation-matrix.md) → [架构参考](./reference/index.md) | 先查功能事实，再看架构与实现边界 |
 | 部署运维 | [运维入口](./operations/index.md) → [self-deploy.md](./self-deploy.md) → [node-onboarding.md](./node-onboarding.md) | 自部署、节点接入与控制面 |
+| 平台超管 | [admin-console-guide.md](./admin-console-guide.md) | 多租户控制台操作手册：租户管理、加入码、配额强制、代看授权、计量对账 |
 | 历史查阅 | [release-notes-v1.4.0.md](./release-notes-v1.4.0.md)、[tools_issues.md](./tools_issues.md)、下方 Superseded / Historical 区 | 发布记录、工具排障经验 |
 
 > 文档整理方案（对标 DSH 的借鉴点、读者分层、每篇处理方式）见 [documentation-organization-plan.md](./documentation-organization-plan.md)。
@@ -61,6 +62,7 @@
 | [spec-of-chat-layout-optimize.md](./spec-of-chat-layout-optimize.md) | Web UI 聊天工作区升级 SPEC（M0/M1 已落地） | |
 | [p0-p4-visualization-design.md](./p0-p4-visualization-design.md) | P0-P4 可视化设计（A1/A2/B1/B2/C1 完成，A3/B3/C2 待办） | |
 | [node-onboarding.md](./node-onboarding.md) | 节点接入手册（2026-08-06） | |
+| [admin-console-guide.md](./admin-console-guide.md) | **平台超管控制台使用手册**：租户管理、加入码、节点可见性与配额强制、代看授权、转发计量与对账；含十分钟上手、手把手验收路径与 curl 速查 | Active（2026-10-26；文档内命令均在真实实例上实测，可用 `scripts/smoke_admin_console.py` 复验） |
 | [self-deploy.md](./self-deploy.md) | 自部署指南（mycloud） | |
 | [vscode-acp.md](./vscode-acp.md) | VS Code ACP Client 集成指南 | |
 | [agent-step-platform-design.md](./agent-step-platform-design.md) | Agent Step 产品边界与冻结决策 | Phase A/B/C 已实现 |

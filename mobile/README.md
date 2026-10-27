@@ -102,10 +102,11 @@ npm run open:ios       # 需要 Xcode
 2. **只读 MVP**：移动端定位「随时查看 + 接收完成通知」。Web UI 中桌面交互（拖拽、快捷键、右键、大文件上传）在移动 WebView 有兼容损耗，见 `docs/mobile-webview-compatibility.md`。
 3. **Android 本地运行的 agent 工具链**：已内置 busybox（sh/ash/bash + 常用命令）与静态 git（含 git-remote-https）。bash 工具默认调用 `sh`（busybox ash）；如需完整 bash 特性（`[[ ]]`、`source` 等），后续可静态编译 bash 一并打包。git 为 musl 静态构建，https 远程可用；未打包 `git-lfs` 等可选组件。
 4. **token 变更**：远程模式修改 token 后重新连接即可；原生注入读取的是 Preferences 中的最新值。
-5. **cleartext**：`capacitor.config.ts` 开发期开放 `cleartext`，生产环境应收紧（https）；`network_security_config.xml` 仅放行 127.0.0.1/localhost。
-6. **原生代码编译状态**：Android 补丁（`MainActivity.java`、`network_security_config.xml`、`build.gradle`）已在本机编译验证通过（JDK 21 + Android SDK 36，APK 产出正常）；iOS 补丁（`SceneDelegate.swift`）因缺 Xcode 未编译，需在 Xcode 环境验证。
-7. **godex 二进制体积**：本地模式 APK 约 67MB（godex-arm64 86MB + busybox 2.7MB + git-arm64 33MB + git-remote-https-arm64 31MB，assets zip 压缩后）。
-8. **runtime 二进制下载/编译源**：busybox 取自 EXALAB/Busybox-static（GitHub），git 用 zig 0.16 交叉编译（musl 静态，见 `build-android-runtime.sh`）；两者均由脚本生成、不入库。
+5. **token 权限决定哪些通知可用**：watcher 的两段任务完成轮询读 `/api/sessions`，该端点受中心闸门（`center_execution`）保护。**超管共享令牌**（本地模式自动生成的那个）正常；若粘贴的是**租户账号的 session token**，`/api/sessions` 会 403，任务完成提醒不会弹——此时页面底部会显示一条可见提示说明原因与改法（而非静默无通知）。审批 / Flow 人工卡点的推送走 `/api/watch/push/pending`，不受该闸门影响（实测租户令牌下为 200），仍照常投递。
+6. **cleartext**：`capacitor.config.ts` 开发期开放 `cleartext`，生产环境应收紧（https）；`network_security_config.xml` 仅放行 127.0.0.1/localhost。
+7. **原生代码编译状态**：Android 补丁（`MainActivity.java`、`network_security_config.xml`、`build.gradle`）已在本机编译验证通过（JDK 21 + Android SDK 36，APK 产出正常）；iOS 补丁（`SceneDelegate.swift`）因缺 Xcode 未编译，需在 Xcode 环境验证。
+8. **godex 二进制体积**：本地模式 APK 约 67MB（godex-arm64 86MB + busybox 2.7MB + git-arm64 33MB + git-remote-https-arm64 31MB，assets zip 压缩后）。
+9. **runtime 二进制下载/编译源**：busybox 取自 EXALAB/Busybox-static（GitHub），git 用 zig 0.16 交叉编译（musl 静态，见 `build-android-runtime.sh`）；两者均由脚本生成、不入库。
 
 ## 验收对照（PRD 第 9 节第 6 条）
 

@@ -23,6 +23,8 @@ export const zhCoreMessages = {
         settings: "设置",
         usage: "用量",
         watch: "手表",
+        account: "用户中心",
+        members: "成员管理",
       },
       loading: "页面加载中…",
       cancel: "取消",

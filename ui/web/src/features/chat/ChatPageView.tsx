@@ -54,6 +54,9 @@ const reasoningEffortOptions = [
 import type { ChatPageController } from "./ChatPage";
 
 export function ChatPageView({ controller }: { controller: ChatPageController }) {
+  // Used by the rail's "this workspace belongs to the operator" prompt: clearing the
+  // credential returns to the gate, where the shared token can be chosen instead.
+  const clearToken = useSettingsStore((state) => state.clearToken);
   const {
     message,
     routeChannel,
@@ -402,6 +405,13 @@ export function ChatPageView({ controller }: { controller: ChatPageController })
               sessions={filteredSessions}
               loading={sessionsQuery.isLoading}
               error={sessionsQuery.isError}
+              // A 403 here is a stable fact, not a hiccup: this credential may not use
+              // this instance's own workspace. Distinguished from a transient load
+              // failure so the rail can explain it instead of offering a retry that
+              // would fail identically forever.
+              refused={sessionsQuery.error instanceof APIError && sessionsQuery.error.status === 403}
+              onPickNode={() => navigate("/nodes")}
+              onUseSharedToken={() => clearToken()}
               onRetry={() => void queryClient.invalidateQueries({ queryKey: ["sessions", token, remoteNodeID] })}
               activeSessionId={openQuery.data?.session_id ?? ""}
               searchQuery={v2SessionSearch ?? ""}

@@ -26,7 +26,17 @@ interface SessionsRailProps {
   sessions: ListedSession[];
   loading?: boolean;
   error?: boolean;
+  /** onRetry reloads the session list. */
   onRetry?: () => void;
+  /** refusedShows why the list was refused when it is not a transient failure.
+   *
+   *  A 403 here means the caller may not use this instance's own workspace (a
+   *  relay-identity account), which is a stable fact rather than a hiccup — so the
+   *  rail explains it and offers the two ways out instead of showing "retry",
+   *  which would fail identically forever. */
+  refused?: boolean;
+  onPickNode?: () => void;
+  onUseSharedToken?: () => void;
   activeSessionId: string;
   searchQuery: string;
   deletingSessionId?: string;
@@ -477,10 +487,33 @@ export function SessionsRail(props: SessionsRailProps) {
       <div className="chat-v2-session-scroll">
         {props.error ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: 24 }}>
-            <Typography.Text type="danger">{t("chat.chatV2Rail.loadError")}</Typography.Text>
-            <Button icon={<ReloadOutlined />} onClick={props.onRetry} size="small">
-              {t("chat.chatV2Rail.retry")}
-            </Button>
+            {props.refused ? (
+              // Not a transient error: the credential is valid but this workspace is
+              // not its own, so retrying cannot help. Explain and offer the exits.
+              <>
+                <Typography.Text strong>{t("sessionGate.title")}</Typography.Text>
+                <Typography.Text type="secondary" style={{ textAlign: "center" }}>
+                  {t("sessionGate.body")}
+                </Typography.Text>
+                {props.onPickNode ? (
+                  <Button size="small" onClick={props.onPickNode}>
+                    {t("sessionGate.pickNode")}
+                  </Button>
+                ) : null}
+                {props.onUseSharedToken ? (
+                  <Button size="small" type="primary" onClick={props.onUseSharedToken}>
+                    {t("sessionGate.useSharedToken")}
+                  </Button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <Typography.Text type="danger">{t("chat.chatV2Rail.loadError")}</Typography.Text>
+                <Button icon={<ReloadOutlined />} onClick={props.onRetry} size="small">
+                  {t("chat.chatV2Rail.retry")}
+                </Button>
+              </>
+            )}
           </div>
         ) : props.loading ? (
           <div className="chat-v2-rail-loading" data-testid="chat-v2-sessions-loading">

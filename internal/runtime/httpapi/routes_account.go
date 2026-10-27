@@ -427,6 +427,40 @@ func registerMemberRoutes(mux *http.ServeMux, accountsService *accounts.Service,
 		writeJSON(w, http.StatusOK, map[string]any{"invites": invites})
 	})))
 
+	// The invite id is checked against THIS tenant's list before revoking, exactly
+	// like the tenant surface above. RevokeUserInvite resolves the tenant from the id
+	// itself and would happily revoke another tenant's code under this URL, which
+	// would make `/admin/tenants/A/invites/<B's id>` silently mean B — the admin may
+	// revoke anything, but the route must still mean what it says.
+	mux.Handle("DELETE /admin/tenants/{id}/invites/{inviteID}", tenantAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authServiceAvailable(w, accountsService) {
+			return
+		}
+		tenantID := r.PathValue("id")
+		invites, err := accountsService.ListUserInvites(tenantID, accounts.MemberActor{PlatformAdmin: true})
+		if err != nil {
+			writeError(w, statusForMemberError(err), err)
+			return
+		}
+		id := strings.TrimSpace(r.PathValue("inviteID"))
+		found := false
+		for _, invite := range invites {
+			if invite.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, fmt.Errorf("invite not found: %s", id))
+			return
+		}
+		if err := accountsService.RevokeUserInvite(id, accounts.MemberActor{PlatformAdmin: true}); err != nil {
+			writeError(w, statusForMemberError(err), err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
+	})))
+
 	mux.Handle("DELETE /admin/tenants/{id}/members/{userID}", tenantAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !authServiceAvailable(w, accountsService) {
 			return

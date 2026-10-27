@@ -346,6 +346,39 @@ func TestPlatformAdminCanManageAnyTenant(t *testing.T) {
 	}
 }
 
+// TestAdminCanRevokeInviteOnAnyTenant pins the admin-scoped invite revoke. The
+// tenant surface had DELETE /tenant/invites/{id} but the admin surface had only
+// create and list, so an operator revoking a code from the superadmin member page
+// got a 404 while the button looked identical — the two surfaces must offer the
+// same operations or the UI silently lies about what it can do.
+func TestAdminCanRevokeInviteOnAnyTenant(t *testing.T) {
+	server, _ := newAuthServer(t, "web-secret")
+	_, tenantID, _ := registerTenantOwner(t, server, "owner@example.com")
+
+	_, body := doJSON(t, http.MethodPost, server.URL+"/admin/tenants/"+tenantID+"/invites", "web-secret",
+		map[string]any{"role": "member"})
+	invite, _ := body["invite"].(map[string]any)
+	inviteID, _ := invite["id"].(string)
+	if inviteID == "" {
+		t.Fatalf("no invite id in %v", body)
+	}
+
+	resp, body := doJSON(t, http.MethodDelete,
+		server.URL+"/admin/tenants/"+tenantID+"/invites/"+inviteID, "web-secret", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin revoke invite: status = %d, want 200: %v", resp.StatusCode, body)
+	}
+
+	// The revoked code must no longer be redeemable — the point of revoking.
+	_, created := doJSON(t, http.MethodPost, server.URL+"/admin/tenants/"+tenantID+"/invites", "web-secret",
+		map[string]any{"role": "member"})
+	code, _ := created["code"].(string)
+	if resp, _ := doJSON(t, http.MethodDelete,
+		server.URL+"/admin/tenants/"+tenantID+"/invites/"+code, "web-secret", nil); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("revoking an unknown invite id: status = %d, want 404", resp.StatusCode)
+	}
+}
+
 // TestTenantSurfaceRefusesCallersWithoutATenant pins the operator's behaviour on
 // the tenant surface: a plain 400 saying this is a tenant surface, not a 403.
 func TestTenantSurfaceRefusesCallersWithoutATenant(t *testing.T) {

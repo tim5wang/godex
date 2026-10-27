@@ -12,6 +12,7 @@ import {
   FolderViewOutlined,
   SettingOutlined,
   DashboardOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import { Navigate, Route, type RouteObject, useLocation } from "react-router-dom";
 import { PageErrorBoundary } from "../components/PageErrorBoundary";
@@ -47,6 +48,8 @@ const loadOrchestrationPage = () => import("../pages/OrchestrationPage");
 const loadSettingsPage = () => import("../pages/SettingsPage");
 const loadUsagePage = () => import("../pages/UsagePage");
 const loadWatchPage = () => import("../pages/WatchPage");
+const loadAccountPage = () => import("../pages/AccountPage");
+const loadMembersPage = () => import("../pages/MembersPage");
 
 function pageComponent(loader: PageLoader, exportName: string) {
   return lazy(async () => ({ default: (await loader())[exportName] }));
@@ -209,6 +212,30 @@ export const builtinApps: BuiltinAppEntry[] = [
     component: pageComponent(loadWatchPage, "WatchPage"),
     isActive: (pathname) => pathname.startsWith("/watch"),
     headerSubtitleKey: "watch.pageSubtitle",
+  }),
+  entry({
+    id: "members",
+    navPath: "/members",
+    // /members/:tenantID is the same page scoped to one tenant, which is how the
+    // superadmin reaches a tenant's member list from the tenant table.
+    routePaths: ["/members", "/members/:tenantID"],
+    icon: <TeamOutlined />,
+    labelKey: "app.nav.members",
+    load: loadMembersPage,
+    component: pageComponent(loadMembersPage, "MembersPage"),
+    isActive: (pathname) => pathname.startsWith("/members"),
+    headerSubtitleKey: "members.subtitle",
+  }),
+  entry({
+    id: "account",
+    navPath: "/account",
+    routePaths: ["/account"],
+    icon: <UserOutlined />,
+    labelKey: "app.nav.account",
+    load: loadAccountPage,
+    component: pageComponent(loadAccountPage, "AccountPage"),
+    isActive: (pathname) => pathname.startsWith("/account"),
+    headerSubtitleKey: "account.subtitle",
   }),
 ];
 

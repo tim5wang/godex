@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -47,6 +48,7 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
   const { t } = useI18n();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const tenantsQuery = useQuery({
     queryKey: ["admin-tenants", token],
@@ -310,11 +312,16 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
             },
             {
               title: "",
-              width: 170,
+              width: 250,
               render: (_value, tenant) => (
                 <Space size={4}>
                   <Button size="small" onClick={() => setSelectedTenant(tenant.id)}>
                     {t("settings.adminMembersCol")}
+                  </Button>
+                  {/* The inline card above is a quick look; this opens the full
+                      surface (roles, removal, invite codes) for one tenant. */}
+                  <Button size="small" onClick={() => navigate(`/members/${encodeURIComponent(tenant.id)}`)}>
+                    {t("members.navLabel")}
                   </Button>
                   <Button size="small" onClick={() => setJoinTokenTenant(tenant)}>
                     {t("settings.adminJoinTokensButton")}

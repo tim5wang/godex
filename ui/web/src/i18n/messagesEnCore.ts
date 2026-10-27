@@ -23,6 +23,8 @@ export const enCoreMessages = {
         settings: "Settings",
         usage: "Usage",
         watch: "Watch",
+        account: "Account",
+        members: "Members",
       },
       loading: "Loading page…",
       cancel: "Cancel",

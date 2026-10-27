@@ -3,8 +3,9 @@ import { Alert, App as AntApp, Button, Card, Form, Input, Segmented, Space, Typo
 import { useMutation } from "@tanstack/react-query";
 import { useI18n } from "../i18n";
 import { loginAccount, registerAccount } from "../lib/apiAuth";
+import { acceptMemberInvite } from "../lib/apiAccount";
 
-type Mode = "login" | "register" | "token";
+type Mode = "login" | "register" | "invite" | "token";
 
 /**
  * LoginPage is the gate shown when the instance requires authentication and the
@@ -13,6 +14,9 @@ type Mode = "login" | "register" | "token";
  * Three ways in, because three real cases exist:
  *   - login: an existing SaaS account (email + password);
  *   - register: a new tenant (design §3.5 self-service signup);
+ *   - invite: join an EXISTING tenant with a one-time code (design §3.6). Without
+ *     this mode a second person could never join a tenant, because register
+ *     always creates a new one;
  *   - token: the shared web token, which is what every deployment used before
  *     accounts existed. Keeping it avoids locking an existing single-operator
  *     instance out of its own machine.
@@ -52,6 +56,18 @@ export function LoginPage(props: {
     },
   });
 
+  const inviteMutation = useMutation({
+    mutationFn: (values: { code: string; email: string; password: string }) =>
+      acceptMemberInvite({ code: values.code.trim(), email: values.email, password: values.password }),
+    onSuccess: (session) => {
+      void message.success(t("auth.inviteSuccess"));
+      props.onSessionToken(session.token);
+    },
+    onError: (error: unknown) => {
+      void message.error(t("auth.inviteFailed") + ": " + errorText(error));
+    },
+  });
+
   const tokenMutation = useMutation({
     mutationFn: (values: { token: string }) => Promise.resolve(values.token.trim()),
     onSuccess: (token) => {
@@ -63,7 +79,11 @@ export function LoginPage(props: {
     },
   });
 
-  const pending = loginMutation.isPending || registerMutation.isPending || tokenMutation.isPending;
+  const pending =
+    loginMutation.isPending ||
+    registerMutation.isPending ||
+    inviteMutation.isPending ||
+    tokenMutation.isPending;
 
   return (
     <div className="godex-auth-gate">
@@ -85,6 +105,7 @@ export function LoginPage(props: {
             options={[
               { value: "login", label: t("auth.modeLogin") },
               { value: "register", label: t("auth.modeRegister") },
+              { value: "invite", label: t("auth.modeInvite") },
               { value: "token", label: t("auth.modeToken") },
             ]}
           />
@@ -146,6 +167,46 @@ export function LoginPage(props: {
               </Button>
               <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>
                 {t("auth.registerScopeNote")}
+              </Typography.Paragraph>
+            </Form>
+          ) : null}
+
+          {mode === "invite" ? (
+            <Form
+              layout="vertical"
+              requiredMark={false}
+              onFinish={(values: { code: string; email: string; password: string }) =>
+                inviteMutation.mutate(values)
+              }
+            >
+              <Form.Item
+                name="code"
+                label={t("auth.inviteCode")}
+                extra={t("auth.inviteCodeHint")}
+                rules={[{ required: true, message: t("auth.inviteCodeRequired") }]}
+              >
+                <Input placeholder="gui_..." />
+              </Form.Item>
+              <Form.Item
+                name="email"
+                label={t("auth.email")}
+                rules={[{ required: true, message: t("auth.emailRequired") }]}
+              >
+                <Input autoComplete="username" placeholder="you@example.com" />
+              </Form.Item>
+              <Form.Item
+                name="password"
+                label={t("auth.password")}
+                extra={t("auth.passwordHint")}
+                rules={[{ required: true, message: t("auth.passwordRequired") }]}
+              >
+                <Input.Password autoComplete="current-password" />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" loading={pending} block>
+                {t("auth.acceptInvite")}
+              </Button>
+              <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>
+                {t("auth.inviteScopeNote")}
               </Typography.Paragraph>
             </Form>
           ) : null}

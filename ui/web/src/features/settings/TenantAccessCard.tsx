@@ -61,15 +61,13 @@ export function TenantAccessCard({ token }: { token: string | null }) {
     retry: false,
   });
 
-  // The operator holds no tenant, and this instance may have no account store at
-  // all. Both are "this surface does not apply to you", which is worth saying
-  // plainly instead of rendering an empty list that looks like "no grants".
-  if (delegationsQuery.error instanceof APIError && delegationsQuery.error.status === 400) {
-    return <Alert type="info" showIcon message={t("delegation.tenantNoTenant")} />;
-  }
-  if (delegationsQuery.error instanceof APIError && delegationsQuery.error.status === 503) {
-    return <Alert type="warning" showIcon message={t("delegation.tenantUnavailable")} />;
-  }
+  // Whether this surface applies to the caller at all. Computed here but acted on
+  // only AFTER every hook below has run: an early return placed between hooks makes
+  // React render fewer hooks than the previous pass and throws #300. A platform
+  // operator is the common case that triggers it — it holds no tenant, so this
+  // query answers 400 once it settles.
+  const noTenant = delegationsQuery.error instanceof APIError && delegationsQuery.error.status === 400;
+  const unavailable = delegationsQuery.error instanceof APIError && delegationsQuery.error.status === 503;
 
   const refresh = () =>
     Promise.all([
@@ -119,6 +117,16 @@ export function TenantAccessCard({ token }: { token: string | null }) {
 
   const rows = delegationsQuery.data?.delegations ?? [];
   const maxTTL = delegationsQuery.data?.max_ttl_hours ?? 24;
+
+  // "This surface does not apply to you" is worth saying plainly instead of
+  // rendering an empty list that looks like "no grants". Both cases are reported
+  // after the hooks above, which is what keeps the hook count stable.
+  if (noTenant) {
+    return <Alert type="info" showIcon message={t("delegation.tenantNoTenant")} />;
+  }
+  if (unavailable) {
+    return <Alert type="warning" showIcon message={t("delegation.tenantUnavailable")} />;
+  }
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>

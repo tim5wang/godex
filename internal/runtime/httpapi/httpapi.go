@@ -209,6 +209,12 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// Operating-access grants (design §3.6): the tenant's grant/revoke/audit view
 	// and the operator's own view of what it may read.
 	registerTenantDelegationRoutes(mux, accountsService, protected)
+	// User centre (design §3.6): the caller's own account, sessions and sign-in
+	// history. Self-scoped, so no platform gate applies.
+	registerAccountRoutes(mux, accountsService, protected)
+	// Member management (design §3.6): a tenant owner/admin manages their tenant,
+	// the platform superadmin any tenant. One implementation, two actor paths.
+	registerMemberRoutes(mux, accountsService, protected)
 	registerConfigRoutes(mux, manager, protected)
 	registerRuntimeServiceRoutes(mux, serviceRuntime, protected)
 	registerSelfJoinRoute(mux, manager, protected)

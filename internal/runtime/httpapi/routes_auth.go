@@ -96,6 +96,9 @@ func registerAuthRoutes(mux *http.ServeMux, accountsService *accounts.Service, p
 		}); err != nil {
 			logger.Warnf("record signup consent for tenant %s: %v", result.Tenant.ID, err)
 		}
+		// The sign-in history (user centre) starts with the first sign-in, so signup
+		// records its own event. Same best-effort trade as the consent trail.
+		recordLoginEvent(accountsService, identity.Principal{UserID: result.User.ID, TenantID: result.Tenant.ID}, accounts.LoginEventRegister, r)
 		writeJSON(w, http.StatusCreated, authSessionResponse{
 			Token:     result.Token,
 			ExpiresAt: result.Expires.UTC().Format(time.RFC3339Nano),
@@ -127,6 +130,7 @@ func registerAuthRoutes(mux *http.ServeMux, accountsService *accounts.Service, p
 			writeError(w, statusForAuthError(err), err)
 			return
 		}
+		recordLoginEvent(accountsService, principal, accounts.LoginEventLogin, r)
 		writeJSON(w, http.StatusOK, authSessionResponse{
 			Token:     token,
 			ExpiresAt: expires.UTC().Format(time.RFC3339Nano),
@@ -149,6 +153,11 @@ func registerAuthRoutes(mux *http.ServeMux, accountsService *accounts.Service, p
 		if err := accountsService.Logout(token); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
+		}
+		// Recorded AFTER the logout succeeds: an audit row saying "logged out" for a
+		// logout that did not happen would be worse than no row.
+		if principal, ok := PrincipalFromContext(r.Context()); ok {
+			recordLoginEvent(accountsService, principal, accounts.LoginEventLogout, r)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})))

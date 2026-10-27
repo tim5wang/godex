@@ -223,6 +223,46 @@ func (s *Service) init() error {
 			source_ip TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_consent_records_tenant ON consent_records(tenant_id)`,
+		// Login history for the user centre (design §3.6 "用户中心"). A separate
+		// append-only table because the `sessions` table is NOT a history: it holds
+		// live tokens and Logout DELETEs the row, so once a session ends there is no
+		// record it ever existed. Answering "when did I last sign in, and from
+		// where?" requires recording the event itself.
+		//
+		// source_ip is recorded for the same reason the consent trail records it: it
+		// is the part a user can act on ("that wasn't me"). No user-agent string: it
+		// is low-value for the user and high-value to an attacker correlating clients.
+		`CREATE TABLE IF NOT EXISTS login_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			tenant_id TEXT NOT NULL DEFAULT '',
+			at TEXT NOT NULL,
+			event TEXT NOT NULL,
+			source_ip TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events(user_id, at)`,
+		// user_invites let a tenant owner/admin add a PERSON (design §3.6), mirroring
+		// join_tokens for nodes (§3.5). Reusing the invite-code shape rather than
+		// adding email delivery keeps this offline-first and consistent with how
+		// nodes already enrol; the code is handed over out of band.
+		//
+		// role is the membership the redeemer gets. Stored explicitly rather than
+		// implied: an invite that silently granted owner would be a privilege
+		// escalation, so the role is chosen at issuance and validated against what
+		// the issuer may grant.
+		`CREATE TABLE IF NOT EXISTS user_invites (
+			token_hash TEXT PRIMARY KEY,
+			id TEXT NOT NULL UNIQUE,
+			tenant_id TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'member',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			used_at TEXT NOT NULL DEFAULT '',
+			used_by_user TEXT NOT NULL DEFAULT '',
+			revoked_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_invites_tenant ON user_invites(tenant_id)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {

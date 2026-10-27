@@ -9,6 +9,15 @@ import (
 )
 
 func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
+	// Center-local workspace gate (design decision ⑨). Everything under
+	// /sessions operates on THIS instance's own workspace: the operator's local
+	// conversations and the agent runs inside them. A tenant principal holds
+	// relay_only, so it is refused here — consistently, rather than the previous
+	// split where the list and single-session reads were merely `protected` (any
+	// authenticated caller) while only create was gated, letting a tenant read and
+	// even DELETE sessions it does not own. Node actors stay exempt inside
+	// requireCenterExecution, so driving a remote node from the center still works.
+	gated := requireCenterExecution(protected)
 	mux.Handle("GET /skills/catalog", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ListGlobalSkillCatalog(r.Context())
 		if err != nil {
@@ -17,7 +26,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("GET /sessions/{id}/skills/catalog", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/skills/catalog", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ListSessionSkills(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -25,7 +34,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("GET /sessions/{id}/skills/sources", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/skills/sources", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := strings.TrimSpace(r.URL.Query().Get("q"))
 		mode := strings.TrimSpace(r.URL.Query().Get("mode"))
 		var (
@@ -45,7 +54,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("GET /sessions/{id}/skills/active", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/skills/active", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ActiveSessionSkills(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -53,7 +62,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("GET /sessions/{id}/skills/{name}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/skills/{name}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		item, err := service.GetSessionSkill(r.Context(), r.PathValue("id"), r.PathValue("name"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -61,7 +70,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, item)
 	})))
-	mux.Handle("POST /sessions/{id}/skills/install", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/skills/install", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req skillInstallRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -74,7 +83,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("POST /sessions/{id}/skills/normalize", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/skills/normalize", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req skillLoadRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -87,7 +96,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("DELETE /sessions/{id}/skills/{name}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("DELETE /sessions/{id}/skills/{name}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.RemoveSessionSkill(r.Context(), r.PathValue("id"), r.PathValue("name"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -95,7 +104,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("POST /sessions/{id}/skills/load", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/skills/load", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req skillLoadRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -108,7 +117,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("POST /sessions/{id}/skills/expand", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/skills/expand", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req skillExpandRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -121,7 +130,7 @@ func registerSkillRoutes(mux *http.ServeMux, service *backend.Service, protected
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("POST /sessions/{id}/skills/unload", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/skills/unload", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req skillLoadRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)

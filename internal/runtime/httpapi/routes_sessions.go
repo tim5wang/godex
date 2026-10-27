@@ -13,7 +13,16 @@ import (
 )
 
 func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
-	mux.Handle("POST /sessions", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Center-local workspace gate (design decision ⑨). Everything under
+	// /sessions operates on THIS instance's own workspace: the operator's local
+	// conversations and the agent runs inside them. A tenant principal holds
+	// relay_only, so it is refused here — consistently, rather than the previous
+	// split where the list and single-session reads were merely `protected` (any
+	// authenticated caller) while only create was gated, letting a tenant read and
+	// even DELETE sessions it does not own. Node actors stay exempt inside
+	// requireCenterExecution, so driving a remote node from the center still works.
+	gated := requireCenterExecution(protected)
+	mux.Handle("POST /sessions", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req openSessionRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -37,7 +46,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, opened)
 	})))
-	mux.Handle("GET /sessions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		list, err := service.ListSessions(r.Context(), backend.SessionListFilter{
 			Channel: strings.TrimSpace(r.URL.Query().Get("channel")),
 		})
@@ -47,14 +56,14 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, list)
 	})))
-	mux.Handle("DELETE /sessions/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("DELETE /sessions/{id}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := service.DeleteSession(r.Context(), r.PathValue("id")); err != nil {
 			writeError(w, statusForSessionError(err), err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})))
-	mux.Handle("PATCH /sessions/{id}/title", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("PATCH /sessions/{id}/title", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req renameSessionRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -67,7 +76,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, item)
 	})))
-	mux.Handle("POST /sessions/{id}/fork", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/fork", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req forkSessionRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -84,7 +93,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, opened)
 	})))
-	mux.Handle("POST /sessions/{id}/model", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/model", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req setSessionModelRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -104,7 +113,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 	// engine routes turns to an external ACP agent (e.g. "acp:dsh"). The
 	// value is a raw ACP config value (e.g. "high") forwarded via the
 	// harness's session config "reasoning_effort" option.
-	mux.Handle("POST /sessions/{id}/acp-reasoning-effort", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/acp-reasoning-effort", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req setSessionACPAgentReasoningEffortRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -117,7 +126,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
-	mux.Handle("POST /sessions/{id}/acp-model", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/acp-model", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req setSessionACPAgentModelRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -130,7 +139,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
-	mux.Handle("GET /sessions/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		snapshot, err := service.Snapshot(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -138,9 +147,9 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, snapshot)
 	})))
-	mux.Handle("GET /sessions/{id}/context-inspector", protected(sessionContextInspectorHandler(service)))
-	mux.Handle("GET /sessions/{id}/context-usage", protected(sessionContextUsageHandler(service)))
-	mux.Handle("GET /sessions/{id}/transcript/{ref}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/context-inspector", gated(sessionContextInspectorHandler(service)))
+	mux.Handle("GET /sessions/{id}/context-usage", gated(sessionContextUsageHandler(service)))
+	mux.Handle("GET /sessions/{id}/transcript/{ref}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		messages, err := service.ReadTranscript(r.PathValue("id"), r.PathValue("ref"))
 		if err != nil {
 			if errors.Is(err, backend.ErrSessionNotFound) || errors.Is(err, backend.ErrTranscriptNotFound) {
@@ -155,7 +164,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 			"messages": messages,
 		})
 	})))
-	mux.Handle("GET /sessions/{id}/ledger", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/ledger", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ledger, err := service.ProjectLedger(r.PathValue("id"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -163,7 +172,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, ledger)
 	})))
-	mux.Handle("POST /sessions/{id}/ledger", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/ledger", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req updateProjectLedgerRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, err)
@@ -185,7 +194,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, ledger)
 	})))
-	mux.Handle("GET /sessions/{id}/timeline", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/timeline", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		limit := 0
 		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 			parsed, err := strconv.Atoi(raw)
@@ -202,7 +211,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("GET /sessions/{id}/timeline/page", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/timeline/page", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		limit := 50
 		if raw := strings.TrimSpace(query.Get("limit")); raw != "" {
@@ -240,7 +249,7 @@ func registerSessionRoutes(mux *http.ServeMux, service *backend.Service, protect
 		}
 		writeJSON(w, http.StatusOK, page)
 	})))
-	mux.Handle("GET /sessions/{id}/compactions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/compactions", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.Compactions(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)

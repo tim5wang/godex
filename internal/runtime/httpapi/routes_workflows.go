@@ -11,7 +11,16 @@ import (
 )
 
 func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protected func(http.Handler) http.Handler) {
-	mux.Handle("GET /sessions/{id}/subagents", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Center-local workspace gate (design decision ⑨). Everything under
+	// /sessions operates on THIS instance's own workspace: the operator's local
+	// conversations and the agent runs inside them. A tenant principal holds
+	// relay_only, so it is refused here — consistently, rather than the previous
+	// split where the list and single-session reads were merely `protected` (any
+	// authenticated caller) while only create was gated, letting a tenant read and
+	// even DELETE sessions it does not own. Node actors stay exempt inside
+	// requireCenterExecution, so driving a remote node from the center still works.
+	gated := requireCenterExecution(protected)
+	mux.Handle("GET /sessions/{id}/subagents", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ListSubagents(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -19,7 +28,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("GET /sessions/{id}/subagents/{jobID}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/subagents/{jobID}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		item, err := service.GetSubagent(r.Context(), r.PathValue("id"), r.PathValue("jobID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -27,7 +36,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, item)
 	})))
-	mux.Handle("GET /sessions/{id}/subagents/{jobID}/review", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/subagents/{jobID}/review", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		review, err := service.ReviewSubagent(r.Context(), r.PathValue("id"), r.PathValue("jobID"))
 		if err != nil {
 			writeError(w, statusForSubagentActionError(err), err)
@@ -35,7 +44,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, review)
 	})))
-	mux.Handle("POST /sessions/{id}/subagents/{jobID}/cancel", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/subagents/{jobID}/cancel", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		item, err := service.CancelSubagent(r.Context(), r.PathValue("id"), r.PathValue("jobID"))
 		if err != nil {
 			writeError(w, statusForSubagentActionError(err), err)
@@ -43,7 +52,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, item)
 	})))
-	mux.Handle("POST /sessions/{id}/subagents/{jobID}/resume", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/subagents/{jobID}/resume", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		item, err := service.ResumeSubagent(r.Context(), r.PathValue("id"), r.PathValue("jobID"))
 		if err != nil {
 			writeError(w, statusForSubagentActionError(err), err)
@@ -51,7 +60,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusAccepted, item)
 	})))
-	mux.Handle("POST /sessions/{id}/subagents/{jobID}/merge", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/subagents/{jobID}/merge", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.MergeSubagent(r.Context(), r.PathValue("id"), r.PathValue("jobID"))
 		if err != nil {
 			writeError(w, statusForSubagentActionError(err), err)
@@ -59,7 +68,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("GET /sessions/{id}/longtasks", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/longtasks", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.ListLongTasks(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -67,7 +76,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("POST /sessions/{id}/longtasks", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req agent.LongTaskArgs
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -80,7 +89,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusCreated, view)
 	})))
-	mux.Handle("GET /sessions/{id}/longtasks/{workflowID}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/longtasks/{workflowID}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		view, err := service.GetLongTask(r.Context(), r.PathValue("id"), r.PathValue("workflowID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -88,7 +97,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/run", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/run", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req agent.LongTaskArgs
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -101,7 +110,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/cancel", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/cancel", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req longTaskNodeRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -122,7 +131,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, view)
 	})))
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/finalize", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/finalize", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req longTaskNodeRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -136,7 +145,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		writeJSON(w, http.StatusOK, view)
 	})))
 	// T12: commit-hash reverse lookup.
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/lookup", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/lookup", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req longTaskLookupRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -154,7 +163,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		writeJSON(w, http.StatusOK, out)
 	})))
 	// T12: rollback. Empty reason is allowed; >1024 bytes is rejected.
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/rollback", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/rollback", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req longTaskRollbackRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -173,7 +182,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 	})))
 	// T12: explicit lazy GC. Default dry-run; older_than_seconds=0
 	// means permanent retention (T12 default).
-	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/gc", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/longtasks/{workflowID}/gc", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req longTaskGCRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -186,7 +195,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("GET /sessions/{id}/permissions", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/permissions", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		items, err := service.PendingPermissions(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -194,7 +203,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, items)
 	})))
-	mux.Handle("POST /sessions/{id}/permissions/{requestID}/approve", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/permissions/{requestID}/approve", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req permissionApproveRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -208,7 +217,7 @@ func registerWorkflowRoutes(mux *http.ServeMux, service *backend.Service, protec
 		}
 		writeJSON(w, http.StatusOK, resolution)
 	})))
-	mux.Handle("POST /sessions/{id}/permissions/{requestID}/deny", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/permissions/{requestID}/deny", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req permissionDenyRequest
 		if err := decodeJSONAllowEmpty(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)

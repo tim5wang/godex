@@ -20,7 +20,16 @@ func registerTurnRoutes(
 	service *backend.Service,
 	protected func(http.Handler) http.Handler,
 ) {
-	mux.Handle("POST /sessions/{id}/messages", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Center-local workspace gate (design decision ⑨). Everything under
+	// /sessions operates on THIS instance's own workspace: the operator's local
+	// conversations and the agent runs inside them. A tenant principal holds
+	// relay_only, so it is refused here — consistently, rather than the previous
+	// split where the list and single-session reads were merely `protected` (any
+	// authenticated caller) while only create was gated, letting a tenant read and
+	// even DELETE sessions it does not own. Node actors stay exempt inside
+	// requireCenterExecution, so driving a remote node from the center still works.
+	gated := requireCenterExecution(protected)
+	mux.Handle("POST /sessions/{id}/messages", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req submitMessageRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -52,7 +61,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	})))
-	mux.Handle("GET /sessions/{id}/turns/{turnID}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/turns/{turnID}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		record, err := service.GetTurn(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -60,7 +69,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusOK, record)
 	})))
-	mux.Handle("POST /sessions/{id}/turns/{turnID}/cancel", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/turns/{turnID}/cancel", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.CancelTurn(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -68,7 +77,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("POST /sessions/{id}/queued/{queueID}/cancel", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/queued/{queueID}/cancel", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.CancelQueuedTurn(r.Context(), r.PathValue("id"), r.PathValue("queueID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -76,7 +85,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("POST /sessions/{id}/queued/{queueID}/steer", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/queued/{queueID}/steer", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.SteerQueuedTurn(r.Context(), r.PathValue("id"), r.PathValue("queueID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -84,7 +93,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	})))
-	mux.Handle("POST /sessions/{id}/turns/{turnID}/retry", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/turns/{turnID}/retry", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.RetryTurnAsync(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -92,7 +101,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	})))
-	mux.Handle("POST /sessions/{id}/turns/{turnID}/resume", requireCenterExecution(protected)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/turns/{turnID}/resume", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := service.ResumeTurnAsync(r.Context(), r.PathValue("id"), r.PathValue("turnID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -100,7 +109,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusAccepted, result)
 	})))
-	mux.Handle("POST /sessions/{id}/attachments", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/attachments", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, backend.MaxAttachmentUploadBytes()+(1<<20))
 		if err := r.ParseMultipartForm(64 << 20); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -145,7 +154,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusOK, attachmentListResponse{Attachments: uploaded})
 	})))
-	mux.Handle("GET /sessions/{id}/attachments/{attachmentID}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/attachments/{attachmentID}", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attachment, absolutePath, err := service.ResolveAttachment(r.PathValue("id"), r.PathValue("attachmentID"))
 		if err != nil {
 			writeError(w, statusForSessionError(err), err)
@@ -159,7 +168,7 @@ func registerTurnRoutes(
 		}
 		http.ServeFile(w, r, absolutePath)
 	})))
-	mux.Handle("POST /sessions/{id}/commands", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /sessions/{id}/commands", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req commandRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -184,7 +193,7 @@ func registerTurnRoutes(
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
-	mux.Handle("GET /sessions/{id}/events", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /sessions/{id}/events", gated(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serveSessionEventStream(w, r, service, r.PathValue("id"))
 	})))
 }

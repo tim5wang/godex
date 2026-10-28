@@ -165,9 +165,35 @@ mac  godex.yaml  control.center_token           len=32（另一个值，被 .env
 
 ### P4 — 收尾
 
-- 超管确认无节点再使用全局值后，清空 `control.node_proxy_token`（`clear_secrets` 路径已受平台角色闸门保护）。
-- 文档：设计 §1.3 / §9 R2、授权矩阵第 82 行、`admin-console-guide.md:162/172/333` 同步为 per-node。
+- 超管确认无节点再使用全局值后，清空 `control.node_proxy_token`。
+
+  > **⚠️ 实测修正（2026-10-28）**：本节原文写「`clear_secrets` 路径已受平台角色闸门保护」，
+  > **这句是错的**。核查发现 `control.node_proxy_token` **未标记 `PlatformAdmin`**，
+  > 因此它是**非受限键**，`authorizeConfigWrite` 对租户用户直接放行——既可改写也可清空。
+  > 而该值就是解锁节点代理面的凭据：能写它的人可以自选一个 nk_、自己出示，
+  > 解析器便报 legacy 命中（无节点、无租户），在单租户下被策略放行——
+  > 等于拿到 per-node 迁移正要消除的那份访问。已补 `PlatformAdmin: true`
+  > （fail-first 证实：修前租户用户对「改写」与「清空」均未被拒）。
+  > 教训：**「已受闸门保护」必须用 `platformAdminOnlyPaths` 实测，不能凭印象写**。
+- 文档：设计 §1.3 / §9 R2、授权矩阵第 82 行、`admin-console-guide.md:162/172/333` 同步为 per-node（✅ 已做，P4b）。
 - 全局值字段标记 deprecated，后续版本删除。
+
+### P4a 前置条件：实测**尚未满足**（2026-10-28）
+
+清空全局值前必须满足方案 §4 的完成判据「中心不再观测到全局值命中」。实测：
+
+| 检查项 | 实况 | 结论 |
+|---|---|---|
+| 生产中心二进制 | `godex v1.5.0 commit b70a5d1040e3 built 2026-10-27T15:37:41Z`——**早于** P1（`bdd7ac9`） | **旧代码**，无 per-node 解析/存储（已用 `git show 2306511:...` 核验：`NodeByProxyTokenHash`、`ProxyTokenHash` 命中数均为 0） |
+| 节点换发状态 | 6 个节点的 `proxy_token_hash` **全部为空** | **零个节点已换发** |
+| 完成判据 | 全部节点仍在用全局值 | **不成立** |
+
+⇒ 此时清空会让 6 个节点集体失能（旧中心会退回 401）。
+**正确顺序**：先部署 P1+P2 到中心（存量节点零中断）→ 节点逐步换发（CLI 或 401 自愈）
+→ 确认 `proxy_token_hash` 全部就位且中心不再命中全局值 → 备份原值后清空。
+
+> 注意：401 自愈的代码在**节点自己的二进制**里，旧节点不会自愈；未升级的节点需显式跑
+> `godex node rotate-proxy-token`。因此「节点侧升级」是这一步的真实工作量，不是零成本。
 
 ---
 
@@ -201,8 +227,10 @@ mac  godex.yaml  control.center_token           len=32（另一个值，被 .env
 
 - P1/P3：纯加法（新字段 `omitempty`，新解析器**先查 per-node 再退回全局**）。回滚 = 还原二进制，
   全局值从未被删 → 存量节点无感。
-- P4 清空全局值：**不可逆点**。故设两道前置：V6/V7 通过；清空前先备份 `control.node_proxy_token` 原值。
+- P4 清空全局值：**不可逆点**。故设两道前置：完成判据成立（全部节点已换发）；
+  清空前先备份 `control.node_proxy_token` 原值。
   万一回滚，重新写回备份值即可（`Update` 会热重载，无需重启）。
+  清空操作本身要求平台角色：该键已补 `PlatformAdmin: true`（见 §3 P4 的实测修正）。
 
 ---
 

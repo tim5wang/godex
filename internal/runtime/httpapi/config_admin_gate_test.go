@@ -142,6 +142,55 @@ func TestStatusForConfigAuthErrorIsNotForbiddenByDefault(t *testing.T) {
 	}
 }
 
+// TestSchemaMarksCenterNodeProxyTokenPlatformAdmin pins the tag for the setting
+// P4a clears.
+//
+// The center-wide nk_ is a credential that unlocks the node proxy surface, so
+// whoever may write it can choose a node credential of their own: set the value,
+// present it, and the resolver reports a legacy match with no node and no tenant —
+// which the single-tenant policy branch allows through. Leaving it unrestricted
+// hands a tenant user the access the per-node migration exists to remove.
+func TestSchemaMarksCenterNodeProxyTokenPlatformAdmin(t *testing.T) {
+	manager := configGateManager(t)
+	if restricted := platformAdminOnlyPaths(manager); !restricted["control.node_proxy_token"] {
+		t.Errorf("control.node_proxy_token must be platform-admin-only; restricted set = %v", restricted)
+	}
+}
+
+// TestAuthorizeConfigWriteRefusesTenantUserRewritingCenterNodeProxyToken is the
+// behavioural half: a tenant user must be refused both when setting the
+// center-wide nk_ and when CLEARING it (clearing ends the legacy path, so it
+// changes the same setting and must be gated identically).
+func TestAuthorizeConfigWriteRefusesTenantUserRewritingCenterNodeProxyToken(t *testing.T) {
+	manager := configGateManager(t)
+	tenantUser := identity.NewPrincipal("tenant-1", "user-a", "", identity.KindUser, identity.EntitlementRelayOnly)
+
+	err := authorizeConfigWrite(reqWithPrincipal(tenantUser), manager,
+		map[string]interface{}{"control.node_proxy_token": "nk_attacker_chosen"}, nil)
+	if err == nil {
+		t.Fatal("a tenant user must not choose the center-wide node proxy credential")
+	}
+	if status := statusForConfigAuthError(err); status != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", status)
+	}
+	if !strings.Contains(err.Error(), "control.node_proxy_token") {
+		t.Errorf("error should name the offending setting, got %q", err.Error())
+	}
+
+	if err := authorizeConfigWrite(reqWithPrincipal(tenantUser), manager, nil,
+		[]string{"control.node_proxy_token"}); err == nil {
+		t.Fatal("a tenant user must not be able to clear the center-wide node proxy credential")
+	}
+
+	// The operator still manages it — P4a is exactly this call.
+	operator := identity.NewPrincipal("", "local-operator", identity.RolePlatformAdmin, identity.KindPlatform,
+		identity.EntitlementCenterExecution)
+	if err := authorizeConfigWrite(reqWithPrincipal(operator), manager, nil,
+		[]string{"control.node_proxy_token"}); err != nil {
+		t.Errorf("the operator must be able to clear the legacy credential: %v", err)
+	}
+}
+
 // The Feishu bot has no QR-binding endpoint: its app credentials ARE the binding,
 // so whoever may write them decides which Feishu app drives an agent here. They
 // were not marked platform-admin-only, which left the same class of hole the

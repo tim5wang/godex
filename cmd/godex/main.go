@@ -453,7 +453,14 @@ func main() {
 					logger.Errorf("load forward %q: %v", fwd.ID, err)
 				}
 			}
-			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(cfg, accountsService))
+			// NodeAccess seam (P0 §4.3/§5): every seam below asks the same "may THIS
+			// caller reach THAT node" question, so one factory builds the decision
+			// function and tags it with the surface for the audit trail. Writing it
+			// per surface is how §1.3's hardening landed on the relay proxy while the
+			// managed-forward CRUD kept answering to any signed-in tenant user.
+			resolvePrincipal := httpapi.NewPrincipalResolver(manager, accountsService)
+			authorizeNodeFor := newNodeAccessAuthorizer(resolvePrincipal, controlRegistry, nodeAccessPolicy, accountsService)
+			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(cfg, accountsService), authorizeNodeFor("forward"))
 			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(cfg, accountsService))
 			// Meter every forwarded request (design §7 basic tier). Extracted to a
 			// helper so this nil check does not push main over its complexity budget.
@@ -480,35 +487,7 @@ func main() {
 				}
 				return node.TrustLevel
 			}
-			// NodeAccess seam (P0 §4.3/§5): the credential check above only proves
-			// "some valid credential"; this decides whether THAT caller may reach
-			// THIS node. Resolve the caller's identity with the same resolver the
-			// HTTP layer uses, then apply the single authorization entry point.
-			//
-			// Both halves are needed: with tenants in play, credential validity
-			// alone would let a member of tenant A drive tenant B's nodes.
-			resolvePrincipal := httpapi.NewPrincipalResolver(manager, accountsService)
-			proxy.AuthorizeNode = func(r *http.Request, nodeID string) identity.Decision {
-				principal := resolvePrincipal(r)
-				node, err := controlRegistry.Get(context.Background(), nodeID)
-				if err != nil {
-					// Unknown node: the hub will report it as offline. Authorizing
-					// here would mean inventing ownership for a node we cannot see,
-					// so let it through and let the transport answer.
-					return identity.AllowedDecision(identity.ReasonAllowed)
-				}
-				// The SAME policy the HTTP read surface uses, including the superadmin's
-				// tenant sharing switch: building a bare Policy here would let a proxied
-				// request reach a node that the direct read path just refused, which is
-				// exactly the silent bypass this seam exists to prevent.
-				decision := nodeAccessPolicy.Authorize(principal, node.NodeRef())
-				// Audit the delegated case HERE as well as on the read routes (§3.6):
-				// this proxy is the surface the web UI drives, so auditing only the
-				// direct read routes would leave the trail empty in precisely the
-				// scenario it exists for.
-				httpapi.RecordDelegatedRead(accountsService, r, decision, "proxy "+nodeID)
-				return decision
-			}
+			proxy.AuthorizeNode = authorizeNodeFor("proxy")
 			bridgeProxy := httpapi.NewBridgeProxyHandler(proxy, bridge, func(nodeID string) bool {
 				// Local node: the self node (served in-process) or any node
 				// currently connected to the local relay hub. Everything else
@@ -999,14 +978,63 @@ func bearerMatches(r *http.Request, token string) bool {
 	return strings.TrimSpace(header[len("Bearer "):]) == token
 }
 
+// nodeGetter is the slice of the node registry the authorization seam needs.
+// Narrow on purpose so the decision function can be tested without a registry.
+type nodeGetter interface {
+	Get(ctx context.Context, id string) (noderegistry.NodeView, error)
+}
+
+// newNodeAccessAuthorizer builds the single "may this caller reach that node"
+// decision every seam in this process shares (design §4.3/§5).
+//
+// The surface argument only labels the delegated-read audit row, so the trail
+// names the path that was exercised (proxy vs forward) rather than a generic
+// entry. Everything security-relevant is identical across surfaces on purpose:
+// one policy, one principal resolver, one decision.
+func newNodeAccessAuthorizer(
+	resolvePrincipal func(*http.Request) identity.Principal,
+	registry nodeGetter,
+	policy identity.Policy,
+	accountsService *accounts.Service,
+) func(surface string) func(*http.Request, string) identity.Decision {
+	return func(surface string) func(*http.Request, string) identity.Decision {
+		return func(r *http.Request, nodeID string) identity.Decision {
+			principal := resolvePrincipal(r)
+			node, err := registry.Get(context.Background(), nodeID)
+			if err != nil {
+				// Unknown node: the hub will report it as offline. Authorizing
+				// here would mean inventing ownership for a node we cannot see,
+				// so let it through and let the transport answer.
+				return identity.AllowedDecision(identity.ReasonAllowed)
+			}
+			// The SAME policy the HTTP read surface uses, including the superadmin's
+			// tenant sharing switch: building a bare Policy here would let a proxied
+			// request reach a node that the direct read path just refused, which is
+			// exactly the silent bypass this seam exists to prevent.
+			decision := policy.Authorize(principal, node.NodeRef())
+			// Audit the delegated case HERE as well as on the read routes (§3.6):
+			// these are the surfaces the web UI drives, so auditing only the
+			// direct read routes would leave the trail empty in precisely the
+			// scenario it exists for.
+			httpapi.RecordDelegatedRead(accountsService, r, decision, surface+" "+nodeID)
+			return decision
+		}
+	}
+}
+
 // registerForwardRoutes wires the managed-forward REST surface onto the root
 // mux (external paths carry the /api prefix the webui strips):
 //
-//	GET    /control/forwards           list tunnels (with runtime status)
+//	GET    /control/forwards           list tunnels (masked to reachable nodes)
 //	POST   /control/forwards           create a tunnel (persisted to config)
 //	DELETE /control/forwards/{id}      remove a tunnel (persisted)
 //	POST   /control/forwards/{id}/check  probe the tunnel end to end
-func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, manager *config.Manager, authorize func(*http.Request) bool) {
+//
+// The credential gate alone is not enough: it accepts any login session, so
+// without the per-target node check a member of tenant A could open a tunnel
+// into tenant B's node (design §1.3). authorizeNode is the SAME NodeAccess
+// decision the relay proxy uses, so the two surfaces cannot disagree.
+func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, manager *config.Manager, authorize func(*http.Request) bool, authorizeNode func(*http.Request, string) identity.Decision) {
 	guard := func(next http.HandlerFunc) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if authorize != nil && !authorize(r) {
@@ -1016,9 +1044,32 @@ func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, mana
 			next(w, r)
 		})
 	}
+	// denyNode writes 403 and reports true when the caller may not reach nodeID.
+	// A nil authorizeNode keeps the previous behaviour (no node scoping).
+	// denyNode writes a refusal and reports true when the caller may not reach nodeID.
+	//
+	// A nil authorizeNode DENIES rather than allows. "No node check configured"
+	// must not degrade into "every node is reachable": that fail-open shape is
+	// precisely how this surface lost tenant isolation in the first place, so the
+	// wiring mistake must be loud and safe instead of silent and permissive.
+	denyNode := func(w http.ResponseWriter, r *http.Request, nodeID string) bool {
+		if authorizeNode == nil {
+			http.Error(w, `{"error":"node authorization is not configured"}`, http.StatusServiceUnavailable)
+			return true
+		}
+		decision := authorizeNode(r, nodeID)
+		if decision.Allowed {
+			return false
+		}
+		http.Error(w, `{"error":"`+jsonEscape("node access denied: "+decision.Reason)+`"}`, http.StatusForbidden)
+		return true
+	}
 
 	mux.Handle("GET /control/forwards", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeForwardJSON(w, http.StatusOK, server.List())
+		// Mask rather than refuse: a caller sees the tunnels they may reach, which
+		// is the same shape the node list uses. Refusing the whole list would make
+		// the page unusable for a tenant that manages its own nodes.
+		writeForwardJSON(w, http.StatusOK, visibleForwards(server.List(), authorizeNode, r))
 	})))
 
 	mux.Handle("POST /control/forwards", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1032,9 +1083,15 @@ func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, mana
 			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 			return
 		}
+		nodeID := strings.TrimSpace(req.NodeID)
+		// Authorize BEFORE Add: otherwise the listener is already bound to the
+		// other tenant's node by the time the response says no.
+		if denyNode(w, r, nodeID) {
+			return
+		}
 		spec, err := server.Add(relay.ForwardSpec{
 			Name:      strings.TrimSpace(req.Name),
-			NodeID:    strings.TrimSpace(req.NodeID),
+			NodeID:    nodeID,
 			LocalPort: req.LocalPort,
 			Target:    strings.TrimSpace(req.Target),
 		})
@@ -1053,6 +1110,11 @@ func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, mana
 
 	mux.Handle("DELETE /control/forwards/{id}", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		// Resolve the tunnel's node BEFORE removing it: deleting is a write to that
+		// node's exposure, so it needs the same decision as creating one.
+		if status, ok := server.Get(id); ok && denyNode(w, r, status.NodeID) {
+			return
+		}
 		if !server.Remove(id) {
 			http.Error(w, `{"error":"forward not found"}`, http.StatusNotFound)
 			return
@@ -1067,13 +1129,38 @@ func registerForwardRoutes(mux *http.ServeMux, server *relay.ForwardServer, mana
 	})))
 
 	mux.Handle("POST /control/forwards/{id}/check", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		result, err := server.Check(r.PathValue("id"))
+		id := r.PathValue("id")
+		// A probe opens a real connection to the target over the node's network,
+		// so it is a reach into that node and is authorized the same way.
+		if status, ok := server.Get(id); ok && denyNode(w, r, status.NodeID) {
+			return
+		}
+		result, err := server.Check(id)
 		if err != nil {
 			http.Error(w, `{"error":"forward not found"}`, http.StatusNotFound)
 			return
 		}
 		writeForwardJSON(w, http.StatusOK, result)
 	})))
+}
+
+// visibleForwards returns the tunnels the caller may reach. A nil authorizeNode
+// means node scoping is not configured, so every tunnel is visible (the
+// pre-existing behaviour).
+// visibleForwards returns the tunnels the caller may reach. A nil authorizeNode
+// yields an empty list for the same reason denyNode refuses: listing what could
+// not be reached would leak the node ids the decision exists to withhold.
+func visibleForwards(list []relay.ForwardStatus, authorizeNode func(*http.Request, string) identity.Decision, r *http.Request) []relay.ForwardStatus {
+	out := make([]relay.ForwardStatus, 0, len(list))
+	if authorizeNode == nil {
+		return out
+	}
+	for _, status := range list {
+		if authorizeNode(r, status.NodeID).Allowed {
+			out = append(out, status)
+		}
+	}
+	return out
 }
 
 // persistForwards writes the currently running tunnel set back into the

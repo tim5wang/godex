@@ -82,8 +82,17 @@ GET /api/control/nodes/win-min/proxy/meta     -> 200  泄漏 model / workspace_d
 
 | 子项 | 状态 |
 |---|---|
-| **目标节点授权**（读面遮蔽 + 代理/转发闸门） | ✅ **已做**：`GET /control/nodes` 按 `VisibleNodeIDs` 遮蔽；`GET /control/nodes/{id}` 与 `/{id}/overview` 跨租户 403；`/control/nodes/{id}/proxy/...` 走 `ProxyHandler.AuthorizeNode`；`/control/nodes/{id}/forward`（TCP 转发，同一漏洞的第二个面）走 `ForwardHandler.AuthorizeNode` |
+| **目标节点授权**（读面遮蔽 + 代理/转发闸门） | ✅ **已做**：`GET /control/nodes` 按 `VisibleNodeIDs` 遮蔽；`GET /control/nodes/{id}` 与 `/{id}/overview` 跨租户 403；`/control/nodes/{id}/proxy/...` 走 `ProxyHandler.AuthorizeNode`；`/control/nodes/{id}/forward`（TCP 转发，同一漏洞的第二个面）走 `ForwardHandler.AuthorizeNode`；`/control/forwards`（托管隧道 CRUD，**第三个面**）走同一 NodeAccess 决策 |
 | **`nk_` 改 per-node 凭据** | ⏳ **未做**：仍是全局单凭据。即当前 `nk_` 持有者仍可**探测**任意节点是否存在（拿 403 而非 200），但拿不到数据、也代理不进去 |
+
+> **第三个面（本补充实测发现并修复）**：`/control/forwards` 的凭据闸门（`nodeProxyAuthorize`）
+> 接受**任意登录会话**，而 `registerForwardRoutes` 当时不接收 registry/policy，结构性无法判节点归属。
+> 结果：租户 A 的登录用户可 `POST /control/forwards` 指定租户 B 的节点，在中心
+> `127.0.0.1:<port>` 起监听并桥进 B 节点网络；**创建时没有闸门，授权发生在 `Add` 之后**，
+> 所以「响应说不行」时监听已经建好了。已修为：`POST`/`DELETE`/`{id}/check` 都先判目标节点，
+> `GET` 按可达性遮蔽（与节点列表同形），并把 `nil` 决策函数改为**拒绝**（503）而非放行——
+> 「没配检查」绝不能退化成「所有节点都可达」，那正是这个面最初失去隔离的形状。
+> 两个面现由**同一个** `newNodeAccessAuthorizer` 工厂产出，避免再各自漂移。
 
 > 遮罩后 `nk_` 的“枚举”仍会泄漏一个信息：某个 id 是否存在（403 vs 404）。
 > 彻底消除需 per-node 凭据（每个节点只能拿自己的 `nk_`），属 P1。
@@ -763,7 +772,7 @@ httpapi 8 个（加入超限 409 且不留幽灵、默认不限、超管修复�
 |---|---|---|---|
 | **P0 身份底座** | Tenant/User/Membership/Principal；`protected` 改为解析身份；自助注册改 join token | 两个租户各登录 → 互不可见；节点注册无法自报 `tenant_id` | ✅ 已落地 |
 | **P1 归属 + NodeAccess** | 注册表加归属/可见性；抽 `NodeAccess`；5 个消费点收敛 | 跨租户代理返回 403（✅ 见 §1.3，四个面均已加闸门）；`nk_` 改为 per-node | ✅ 主体已落地；**子项 `nk_` per-node ⏳ 未做**（§1.3） |
-| **P2 隔离硬化** | 越权测试矩阵；观测投影去标题；**中心执行收窄到超管一个账号**（§3.3）；**清理历史 cron 任务**（§3.4，功能保留） | 租户账号在任何执行入口 403；超管照常工作；历史 `cron-*` 已清理，超管仍可新建定时任务 | ⚠️ 部分：中心执行收窄 ✅；**观测投影去标题 ✅**（`relay.observation.include_titles` 默认 false，摄入点剥离 + 事件日志改用 id + UI 明说）；跨租户 403 已有自动化测试（`node_access_test.go`、`proxy_key_identity_test.go` 等，未收敛为单份矩阵文档）；历史 `cron-*` 清理需在中心机核对 |
+| **P2 隔离硬化** | 越权测试矩阵；观测投影去标题；**中心执行收窄到超管一个账号**（§3.3）；**清理历史 cron 任务**（§3.4，功能保留） | 租户账号在任何执行入口 403；超管照常工作；历史 `cron-*` 已清理，超管仍可新建定时任务 | ⚠️ 部分：中心执行收窄 ✅；**观测投影去标题 ✅**（`relay.observation.include_titles` 默认 false，摄入点剥离 + 事件日志改用 id + UI 明说）；**越权面硬化 ✅ 六个面**（节点列表遮蔽 / 单节点 / overview / proxy / forward / `/control/forwards`，各自有回归测试；新增 `cmd/godex/forward_authz_test.go` 钉住第三个面，未收敛为单份矩阵文档）；历史 `cron-*` 清理需在中心机核对 |
 | **P3 订阅** | **只做基础档**（纯转发）+ 计量（决策⑬；进阶档以后） | 无 `center_execution` 的账号在执行入口 403；计量可对账 | ✅ 已落地 |
 
 **P3 验收现状**：

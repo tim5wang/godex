@@ -178,29 +178,67 @@ mac  godex.yaml  control.center_token           len=32（另一个值，被 .env
 - 文档：设计 §1.3 / §9 R2、授权矩阵第 82 行、`admin-console-guide.md:162/172/333` 同步为 per-node（✅ 已做，P4b）。
 - 全局值字段标记 deprecated，后续版本删除。
 
-### P4a 前置条件：部署已完成且观测已就位，但**完成判据仍未满足**（2026-10-28）
+### P4a 前置条件：节点换发已完成，但**完成判据仍不能据以清空**（2026-10-29）
 
 清空全局值前必须满足方案 §4 的完成判据「中心不再观测到全局值命中」。实测：
 
 | 检查项 | 实况 | 结论 |
 |---|---|---|
-| 生产中心二进制 | ✅ **已部署** `v1.5.0 commit 9b5508762cf0 built 2026-10-28T15:17:46Z`（P1+P2+P4b+观测计数器全部在内） | 新代码已生效（`/api/meta` 200、服务 active、6 节点仍在） |
+| 生产中心二进制 | ✅ **已部署** `v1.5.0 commit 68be30aa58c5 built 2026-10-28T16:38:21Z`（P1+P2+P4b+观测+**两处修复**） | 新代码已生效（`/api/meta` 200、服务 active、6 节点仍在） |
 | **双认零中断**（生产实测） | ✅ 旧全局 nk_ 调 `/control/nodes` → **200**；伪造 nk_ → **401** | 存量节点未被断 |
-| 新端点就位 | ✅ `POST /control/self/proxy-credential` 无凭据 → 401（符合预期）；`/control/node-proxy-token` 不带 `node_id` 仍返回全局值 | 自助换发通道可用 |
-| **观测已生效**（生产实测） | ✅ 探测后日志出现 `[WARN] ... legacy center-wide nk_ (count=1)` | 判据**在生产上可测量** |
-| 节点换发状态 | 6 个节点 `proxy_token_hash` **全部为空** | **零个节点已换发** |
-| 完成判据 | 仍全部节点在用全局值 | **不成立 → 不执行清空** |
+| **per-node 走通代理面**（生产实测） | ✅ mac 的 per-node nk_ 调 `/control/nodes/{win-min,中心自身}/proxy/meta` → **200** | 修复前此处为 **401**（见下） |
+| **完成判据**（本次部署以来） | ✅ legacy 命中 **0** | 无任何主体在用全局值 |
+| 离线节点状态 | ⏸ 3 个节点离线（`last_seen` 9–10 月），其 `center_token` 实值**未知** | **不能排除它们仍持全局值** |
 
-**❗ 本次核查发现我自己方案的一处漏洞（已补）**：判据是「中心不再观测到全局值命中」，
-但 legacy 命中分支**没有任何可观测输出**——收敛的中心与仍被旧 token 驱动的中心
-在观测上**完全一样**。⇒ 判据当时**无法测量**，清空只能靠猜，而猜错就会打断未换发的节点。
-已补 `NodeProxyLegacyMatchCount()` + 每次命中一条 WARN（含累计值），
-并加测试锁住「per-node / web token / 伪造 nk_ 均不得计入」。
+#### 换发实况：只有 1 个节点真的需要换发
 
-> 部署教训：「修复在部署之后才提交」= 生产拿不到该修复。
-> 首次部署（`23bd99cdf41c`）后核验发现**观测计数器不在二进制里**（`strings` 验得 0 命中），
-> 已重新部署为 `9b5508762cf0` 并复核（`strings` 1 命中 + 日志 WARN 落地）。
-> **部署后必须验证「你要的那段代码真的在二进制里」，而不是只看部署命令返回成功。**
+关键区分：**只有持 `center_token`（充当中心客户端）的节点才有东西可换**。逐一实测：
+
+| 节点 | `center_token` | 结论 |
+|---|---|---|
+| **mac** | 换发前 = **中心完整 web token**（sha `ee0f5887…`）；现 = per-node `nk_` | ✅ **已换发**（`godex node rotate-proxy-token`，`.env` 热重载生效，未重启） |
+| win-min | **无**（env/yaml 均空） | ⛔ 无凭据可换（`bridge.Enabled()` 恒 false） |
+| node_8ae5…（中心自身） | **无** | ⛔ 无凭据可换（设计如此：中心无 `center_url`） |
+| win-pc / node-podman-test / node-153f6098 | 未知（离线） | ⏸ 无法操作 |
+
+> ⚠️ **意外发现（安全收益）**：mac 换发前持有的不是 `nk_`，而是**中心完整 web token**
+> （可访问中心全部管理面）。本轮换发对它是**权限降级**，消除了一个长期存在的越权持有。
+> 这也使本节早期「mac 会被清空打断」的推断失效——它压根没有 `nk_`。
+
+#### ❗ 换发过程中暴露我自己引入的两处缺陷（已修 + 已部署）
+
+**缺陷 1：代理面不认 per-node nk_——换发即打断（“零中断”在代理面上是假的）**
+
+节点侧有**两个独立闸门**：读面走 httpapi 的 `nodeProxyRead`（P1 已接 per-node），
+代理/转发面走 `cmd/godex` 的 `nodeProxyAuthorize`（**仍只做字面比较**）。生产对照：
+
+| 凭据 | `/control/nodes`（读面） | `/control/nodes/{id}/proxy/meta`（代理面） |
+|---|---|---|
+| 中心 web token | 200 | 200 |
+| 全局 nk_ | 200 | 200 |
+| **per-node nk_** | 200 | **401** ← |
+
+最恶劣的形态：换发后节点**看起来健康**（列表 200、relay connected），bridge 却已打不通任何节点。
+已修为两面共用同一个 `nodeProxyTokenChecker`；并顺带修掉同处的**启动快照**问题
+（原签名吃 `*config.Config`，改为经 manager 读实时配置——否则 P4a 清空后闸门仍会接受旧值）。
+
+**缺陷 2：`clear_secrets` 清空 `control.node_proxy_token` 是无声 no-op**
+
+`applyStoredValues` 对 Secret 有空值跳过分支，只有显式 per-path switch 才真正清空字段；
+该键不在 switch 里 ⇒ 清空请求被**接受但值原样保留**，重启后依旧有效。
+⇒ P4a 的收尾动作会**报成功而毫无效果**。已在 switch 中显式清空。
+
+两处均 fail-first 验证（5 项新测试），回归全绿。**教训**：
+「同一个凭据问题在几个面上被回答」必须逐一核对；本次是换发真机才暴露，单测覆盖的只是读面。
+
+#### 为何现在仍不清空
+
+- 3 个离线节点的 `center_token` 未知，可能在下次上线时用全局值（清空会让它们 401）。
+- `mac` 运行旧二进制（`b70a5d1`，无 401 自愈）；且其 `serve` 由 launchd 托管
+  **正是本会话的宿主进程**，重启它会终止当前会话——升级需用户在场操作。
+
+> 若确认这 3 个节点已废弃（可 `DELETE /control/nodes/{id}` 退册），则完成判据成立，
+> 可按下方顺序备份并清空。
 
 #### 清空的影响面（不是「全部 6 个节点」）
 
@@ -210,17 +248,19 @@ mac  godex.yaml  control.center_token           len=32（另一个值，被 .env
 |---|---|---|
 | 中心**驱动**节点（proxy / exec / forward） | 目标节点的 `ck_`（注册表 `credential_hash`） | **否**——主链走 ck_，与 nk_ 无关 |
 | 节点**作为中心客户端**（bridge / forward / 远端沙箱） | 自己的 `center_token` | **仅当其 `center_token` == 全局 nk_** 时受影响 |
-| 本机 `mac` | **中心完整 web token**（sha256 `ee0f5887…`，与中心 `web.token` 一致；**不等于**全局 nk_，后者 `6ef7645e…`） | **否** |
+| `mac`（已换发后） | **per-node nk_**（不再持中心 web token） | **否**——已是 per-node，与全局值无关 |
+| `win-min` / 中心自身 | 无 `center_token` | **否**——bridge 恒禁用 |
 
 ⇒ 精确说法：只有「`center_token` 恰为全局 nk_ 且在跑」的节点会被打断。
-其余 5 个节点的 `center_token` 实值未逐一探测（多为离线），
+已核实 mac / win-min / 中心自身**均不属此类**；剩 3 个离线节点无法核实，
 **故清空前必须以中心日志确认「再无 legacy 命中 WARN」，不能靠节点数量推断**。
 
 #### 下一步顺序
 
-1. 节点逐步换发：已升级的节点遇 401 自愈；**旧节点必须显式跑 `godex node rotate-proxy-token`**
-2. 观察中心日志的 legacy 命中 WARN **归零**（这就是可测量的完成判据）
-3. 备份原值后清空 `control.node_proxy_token`（该键已补 `PlatformAdmin`，仅超管可改）
+1. ✅ 节点换发：真实的只有 mac，已完成（其余无凭据可换）
+2. 观察中心日志 legacy 命中 WARN **归零**（可测量的完成判据）——本次部署以来已为 0
+3. 决定 3 个离线节点的去留（退册或上线换发）
+4. 备份原值后清空 `control.node_proxy_token`（该键已补 `PlatformAdmin`，仅超管可改）
 
 > 注意：401 自愈的代码在**节点自己的二进制**里，旧节点不会自愈；未升级的节点需显式跑
 > `godex node rotate-proxy-token`。因此「节点侧升级」是这一步的真实工作量，不是零成本。

@@ -22,6 +22,7 @@ var storedValueSetters = map[string]storedValueSetter{
 	"paths":     setPathsStoredValue,
 	"storage":   setStorageStoredValue,
 	"memory":    setMemoryStoredValue,
+	"relay":     setRelayStoredValue,
 	"tools":     setToolsStoredValue,
 	"media":     setMediaStoredValue,
 	"channels":  setChannelsStoredValue,
@@ -395,6 +396,16 @@ func setMemoryStoredValue(file *ConfigFile, path string, value any) error {
 		file.Memory.ConsolidateAfter = asInt(value)
 	case "memory.session_scope":
 		file.Memory.SessionScope = asBool(value)
+	default:
+		return fmt.Errorf("unknown config field: %s", path)
+	}
+	return nil
+}
+
+func setRelayStoredValue(file *ConfigFile, path string, value any) error {
+	switch path {
+	case "relay.observation.include_titles":
+		file.Relay.Observation.IncludeTitles = asBool(value)
 	default:
 		return fmt.Errorf("unknown config field: %s", path)
 	}

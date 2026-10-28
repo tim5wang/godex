@@ -177,7 +177,18 @@ export function NodeDetailPage() {
             locale={{ emptyText: <Empty description={t("nodes.noSessions")} /> }}
             columns={[
               { title: "ID", dataIndex: "id" },
-              { title: t("nodes.sessionTitle"), dataIndex: "title", render: (v?: string) => v || "-" },
+              {
+                title: (
+                  // Design §7/R4: with titles stripped at the center (the default), every
+                  // row would render "-" and look broken. The tooltip states that this is
+                  // deliberate rather than a load failure.
+                  <Tooltip title={t("nodes.sessionTitlePrivateHint")}>
+                    <span>{t("nodes.sessionTitle")}</span>
+                  </Tooltip>
+                ),
+                dataIndex: "title",
+                render: (v?: string) => v || "-",
+              },
               {
                 title: t("nodes.status"),
                 dataIndex: "running",

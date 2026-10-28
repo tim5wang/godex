@@ -495,6 +495,15 @@ control:
   forwards:
 {{ yamlValue .Control.Forwards 4 }}
 
+# What the relay layer may persist on the CENTER side.
+relay:
+  observation:
+    # Retain session titles in the center-side node observation. Off (default) keeps
+    # user content off the center (design §6/§7): the Nodes panel and the watch home
+    # screen still work from session id + running state. Turn on only for a
+    # self-hosted center you fully control. Environment override: GODEX_RELAY_OBSERVATION_INCLUDE_TITLES.
+    include_titles: {{ .Relay.Observation.IncludeTitles }}
+
 runtime:
   recovery:
     # Automatically queue a recovery turn after detecting an interrupted turn. Environment override: GODEX_RUNTIME_RECOVERY_AUTO_RESUME_INTERRUPTED_TURNS.

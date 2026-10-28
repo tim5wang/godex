@@ -331,6 +331,7 @@ export const enCoreMessages = {
       jobPhase: "Phase",
       progress: "Progress",
       sessionTitle: "Title",
+      sessionTitlePrivateHint: "The center does not keep session titles by default: a title is user content, so only the session id and running state are retained. To see titles, open the session on the node itself, or enable relay.observation.include_titles (only for a center you fully control).",
       running: "running",
       idle: "idle",
       updatedAt: "Updated",

@@ -72,6 +72,7 @@ type Config struct {
 	Logging              LoggingConfig
 	Security             SecurityConfig
 	Cron                 CronConfig
+	Relay                RelayConfig
 	Heartbeat            HeartbeatConfig
 	Control              ControlConfig
 	Runtime              RuntimeConfig
@@ -365,6 +366,18 @@ type ControlConfig struct {
 	SandboxExecOn       bool
 	Nodes               []ControlNodeConfig
 	Forwards            []ForwardConfig
+}
+
+// RelayConfig controls what the relay layer persists on the center side.
+type RelayConfig struct {
+	Observation RelayObservationConfig
+}
+
+// RelayObservationConfig configures the center-side observation projection.
+type RelayObservationConfig struct {
+	// IncludeTitles retains session titles in the center's observation store.
+	// False (default) keeps user content off the center (design §6/§7).
+	IncludeTitles bool
 }
 
 // ControlNodeConfig describes a manually configured runtime node.

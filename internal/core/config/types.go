@@ -29,6 +29,7 @@ type ConfigFile struct {
 	Cron      CronSection      `yaml:"cron"`
 	Heartbeat HeartbeatSection `yaml:"heartbeat"`
 	Control   ControlSection   `yaml:"control"`
+	Relay     RelaySection     `yaml:"relay"`
 	Runtime   RuntimeSection   `yaml:"runtime"`
 	Security  SecuritySection  `yaml:"security"`
 	Storage   StorageSection   `yaml:"storage"`
@@ -216,6 +217,21 @@ type ControlSection struct {
 	SandboxExecOn       bool                 `yaml:"sandbox_exec_on"`
 	Nodes               []ControlNodeSection `yaml:"nodes"`
 	Forwards            []ForwardSection     `yaml:"forwards"`
+}
+
+// RelaySection configures what the relay layer is allowed to persist on the
+// CENTER side (design §6/§7).
+type RelaySection struct {
+	Observation RelayObservationSection `yaml:"observation"`
+}
+
+type RelayObservationSection struct {
+	// IncludeTitles, when true, lets the center retain session titles pushed by
+	// nodes. Default false: a session title is user content, and requirement ② is
+	// that the center stores no user data. With it off the center keeps only
+	// session id + running state, which still supports the Nodes panel and the
+	// watch home screen.
+	IncludeTitles bool `yaml:"include_titles"`
 }
 
 type ControlNodeSection struct {

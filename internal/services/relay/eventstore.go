@@ -92,11 +92,32 @@ type nodeObservation struct {
 type EventStore struct {
 	mu    sync.Mutex
 	nodes map[string]*nodeObservation
+	// includeTitles retains session titles in the center-side projection. It is
+	// OFF by default: a session title is user content, and requirement ② is that
+	// the center stores no user data (design §6/§7). With it off the center keeps
+	// only session id + running state, which is enough for the Nodes panel, the
+	// watch home screen and the tile.
+	//
+	// The knob exists for self-hosted setups that prefer a richer node list and
+	// accept center-side titles; it is not meant to be turned on for a shared
+	// center.
+	includeTitles bool
 }
 
-// NewEventStore creates an empty event store.
+// NewEventStore creates an empty event store with titles stripped (the privacy
+// default). Call SetIncludeTitles to opt in to retaining them.
 func NewEventStore() *EventStore {
 	return &EventStore{nodes: make(map[string]*nodeObservation)}
+}
+
+// SetIncludeTitles turns retention of session titles on or off. Stripping happens
+// at ingest, so a node that keeps sending titles cannot make the center retain
+// them — the enforcing side is this one, which also means no node upgrade is
+// needed to make the default effective.
+func (s *EventStore) SetIncludeTitles(include bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.includeTitles = include
 }
 
 // RecordSnapshot stores the latest observation snapshot for nodeID, appending
@@ -109,13 +130,45 @@ func (s *EventStore) RecordSnapshot(nodeID string, snap NodeSnapshot) {
 		obs = &nodeObservation{}
 		s.nodes[nodeID] = obs
 	}
+	stored := snap
+	if !s.includeTitles {
+		stored = stripSessionTitles(snap)
+	}
 	now := time.Now()
-	obs.events = append(obs.events, diffEvents(obs.snapshot, snap, now)...)
-	obs.snapshot = snap
+	obs.events = append(obs.events, diffEvents(obs.snapshot, stored, now, s.includeTitles)...)
+	obs.snapshot = stored
 	obs.updated = now
 	if len(obs.events) > maxRecentEvents {
 		obs.events = obs.events[len(obs.events)-maxRecentEvents:]
 	}
+}
+
+// stripSessionTitles drops session titles so the center retains no user content
+// (design §7). Session ids stay: the center needs them to correlate events, and
+// "which session is running" is observable without knowing what it is about.
+func stripSessionTitles(snap NodeSnapshot) NodeSnapshot {
+	if len(snap.Sessions) == 0 {
+		return snap
+	}
+	// Copy the slice before mutating: the caller may still hold the snapshot it
+	// passed in (StoreEvents decodes a fresh one, but RecordSnapshot is public and
+	// tests call it directly).
+	out := snap
+	out.Sessions = make([]SessionInfo, len(snap.Sessions))
+	copy(out.Sessions, snap.Sessions)
+	for i := range out.Sessions {
+		out.Sessions[i].Title = ""
+	}
+	return out
+}
+
+// sessionLabel renders how a session is named in a derived event. Without titles
+// the id is used, so the event log still identifies the session.
+func sessionLabel(session SessionInfo, includeTitles bool) string {
+	if includeTitles && strings.TrimSpace(session.Title) != "" {
+		return session.Title
+	}
+	return session.ID
 }
 
 // RecordEvent appends a single explicit event without touching the snapshot.
@@ -170,8 +223,10 @@ func (s *EventStore) Nodes() []string {
 	return ids
 }
 
-// diffEvents derives human-readable change events between two snapshots.
-func diffEvents(prev, next NodeSnapshot, now time.Time) []StoredEvent {
+// diffEvents derives human-readable change events between two snapshots. When
+// includeTitles is false the session id is used in place of the title, so no user
+// content reaches the event log either.
+func diffEvents(prev, next NodeSnapshot, now time.Time, includeTitles bool) []StoredEvent {
 	var events []StoredEvent
 	for _, job := range next.Jobs {
 		if old, ok := findJob(prev.Jobs, job.ID); ok {
@@ -197,14 +252,14 @@ func diffEvents(prev, next NodeSnapshot, now time.Time) []StoredEvent {
 				events = append(events, StoredEvent{
 					Kind:   EventKindSession,
 					Time:   now,
-					Detail: fmt.Sprintf("session %s running=%v", session.Title, session.Running),
+					Detail: fmt.Sprintf("session %s running=%v", sessionLabel(session, includeTitles), session.Running),
 				})
 			}
 		} else if session.Running {
 			events = append(events, StoredEvent{
 				Kind:   EventKindSession,
 				Time:   now,
-				Detail: fmt.Sprintf("session running: %s", session.Title),
+				Detail: fmt.Sprintf("session running: %s", sessionLabel(session, includeTitles)),
 			})
 		}
 	}

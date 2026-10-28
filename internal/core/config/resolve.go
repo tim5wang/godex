@@ -362,6 +362,9 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveInt("control.offline_after_seconds", file.Control.OfflineAfterSeconds, "GODEX_CONTROL_OFFLINE_AFTER_SECONDS", func(v int) {
 		current.Control.OfflineAfterSeconds = positiveOrDefault(v, 60)
 	})
+	resolveBool("relay.observation.include_titles", file.Relay.Observation.IncludeTitles, "GODEX_RELAY_OBSERVATION_INCLUDE_TITLES", func(v bool) {
+		current.Relay.Observation.IncludeTitles = v
+	})
 	origins["control.nodes"] = fieldOrigin{Source: SourceYAML, YAMLValue: file.Control.Nodes, Effective: controlNodesFromConfigFile(file)}
 	resolveBool("runtime.recovery.auto_resume_interrupted_turns", file.Runtime.Recovery.AutoResumeInterruptedTurns, "GODEX_RUNTIME_RECOVERY_AUTO_RESUME_INTERRUPTED_TURNS", func(v bool) {
 		current.Runtime.Recovery.AutoResumeInterruptedTurns = v
@@ -899,6 +902,11 @@ func resolveConfigFile(file ConfigFile, homeDir, projectDir, configFile, envFile
 			ForwardAllow:        file.Control.ForwardAllow,
 			Nodes:               controlNodesFromConfigFile(file),
 			Forwards:            forwardsFromConfigFile(file),
+		},
+		Relay: RelayConfig{
+			Observation: RelayObservationConfig{
+				IncludeTitles: file.Relay.Observation.IncludeTitles,
+			},
 		},
 		Runtime: RuntimeConfig{
 			Recovery: RuntimeRecoveryConfig{

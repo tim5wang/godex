@@ -330,6 +330,7 @@ export const zhCoreMessages = {
       jobPhase: "阶段",
       progress: "进度",
       sessionTitle: "标题",
+      sessionTitlePrivateHint: "中心默认不保存会话标题（标题属于用户内容，只保留会话 ID 与运行状态）。需要看标题请在本机或节点侧查看，或将 relay.observation.include_titles 打开（仅限你完全自控的中心）。",
       running: "运行中",
       idle: "空闲",
       updatedAt: "更新时间",

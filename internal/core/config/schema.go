@@ -198,6 +198,14 @@ func baseSchema() []SectionSchema {
 			},
 		},
 		{
+			ID:          "relay",
+			Label:       "Relay",
+			Description: "What the relay layer may persist on the center side. The defaults keep user content off the center.",
+			Fields: []FieldSchema{
+				{Path: "relay.observation.include_titles", Label: "Observation Include Titles", Description: "Retain session titles in the center-side node observation. Off (default) keeps user content off the center (design §6/§7): the Nodes panel and watch home still work from session id + running state. Turn on only for a self-hosted center you fully control.", Type: "bool", Env: "GODEX_RELAY_OBSERVATION_INCLUDE_TITLES"},
+			},
+		},
+		{
 			ID:          "tools-web-search",
 			Label:       "Tools / Web Search",
 			Description: "Built-in current-information search providers and cache policy.",

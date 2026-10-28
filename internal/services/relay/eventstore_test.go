@@ -23,6 +23,84 @@ func sampleSnapshot() NodeSnapshot {
 	}
 }
 
+func TestEventStoreStripsSessionTitlesByDefault(t *testing.T) {
+	// Design §7: the center stores no user data. A session title is user content,
+	// so it must not survive into the center-side projection even though the node
+	// still sends it — the enforcing side is the store, so no node change is needed.
+	store := NewEventStore()
+	store.RecordSnapshot("node-a", sampleSnapshot())
+
+	overview, ok := store.Overview("node-a")
+	if !ok {
+		t.Fatal("expected overview")
+	}
+	if len(overview.Sessions) != 1 {
+		t.Fatalf("sessions = %+v, want 1", overview.Sessions)
+	}
+	if overview.Sessions[0].Title != "" {
+		t.Errorf("session title = %q, want stripped", overview.Sessions[0].Title)
+	}
+	// The id must survive: the center needs it to correlate events, and "which
+	// session is running" is observable without knowing what it is about.
+	if overview.Sessions[0].ID != "s1" {
+		t.Errorf("session id = %q, want s1", overview.Sessions[0].ID)
+	}
+	if !overview.Sessions[0].Running {
+		t.Error("expected running flag to survive title stripping")
+	}
+}
+
+func TestEventStoreStrippedTitleNeverReachesEventLog(t *testing.T) {
+	// The derived event log is the other place a title could leak: it is built from
+	// the snapshot, and the detail strings are served straight to the UI.
+	store := NewEventStore()
+	store.RecordSnapshot("node-a", sampleSnapshot())
+
+	overview, ok := store.Overview("node-a")
+	if !ok {
+		t.Fatal("expected overview")
+	}
+	joined := joinEventDetails(overview.RecentEvents)
+	if strings.Contains(joined, "fix bug") {
+		t.Errorf("recent events leaked the session title: %q", joined)
+	}
+	// The session must still be identifiable by id.
+	if !strings.Contains(joined, "s1") {
+		t.Errorf("recent events should identify the session by id, got %q", joined)
+	}
+}
+
+func TestEventStoreIncludeTitlesOptIn(t *testing.T) {
+	// The knob exists for self-hosted setups that accept center-side titles. It has
+	// to actually work, otherwise the config key would be a lie.
+	store := NewEventStore()
+	store.SetIncludeTitles(true)
+	store.RecordSnapshot("node-a", sampleSnapshot())
+
+	overview, ok := store.Overview("node-a")
+	if !ok {
+		t.Fatal("expected overview")
+	}
+	if overview.Sessions[0].Title != "fix bug" {
+		t.Errorf("session title = %q, want retained", overview.Sessions[0].Title)
+	}
+	if joined := joinEventDetails(overview.RecentEvents); !strings.Contains(joined, "fix bug") {
+		t.Errorf("recent events should name the session by title when opted in, got %q", joined)
+	}
+}
+
+func TestEventStoreTitleStrippingDoesNotMutateCallerSnapshot(t *testing.T) {
+	// RecordSnapshot is public and takes the snapshot by value, but Sessions is a
+	// slice: stripping in place would blank the caller's own copy as a side effect.
+	store := NewEventStore()
+	snap := sampleSnapshot()
+	store.RecordSnapshot("node-a", snap)
+
+	if snap.Sessions[0].Title != "fix bug" {
+		t.Errorf("caller snapshot was mutated: title = %q", snap.Sessions[0].Title)
+	}
+}
+
 func TestEventStoreRecordsSnapshotAndOverview(t *testing.T) {
 	store := NewEventStore()
 	snap := sampleSnapshot()

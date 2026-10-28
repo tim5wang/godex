@@ -123,6 +123,11 @@ func defaultConfigFile() ConfigFile {
 			Nodes:               []ControlNodeSection{},
 			Forwards:            []ForwardSection{},
 		},
+		Relay: RelaySection{
+			Observation: RelayObservationSection{
+				IncludeTitles: false,
+			},
+		},
 		Runtime: RuntimeSection{
 			Recovery: RuntimeRecoverySection{
 				AutoResumeInterruptedTurns: false,

@@ -374,6 +374,10 @@ func main() {
 			// latest snapshot + bounded recent events in memory; session history
 			// itself stays on each node.
 			eventStore := relay.NewEventStore()
+			// Titles are user content: the center keeps them only when the operator
+			// explicitly opts in (design §6/§7). The default keeps the observation
+			// projection to session id + running state.
+			eventStore.SetIncludeTitles(cfg.Relay.Observation.IncludeTitles)
 			relayHub.SetEventSink(relay.StoreEvents(eventStore))
 
 			// Distributed browser runtime: when the center's browser tool is

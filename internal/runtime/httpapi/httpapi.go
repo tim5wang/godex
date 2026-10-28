@@ -520,6 +520,18 @@ func withBearerAuthProvider(token func() string, relayTrust ...func(*http.Reques
 	}
 }
 
+// NewNodeProxyTokenChecker exposes the node-proxy credential check for callers
+// outside this package.
+//
+// cmd/godex's proxy/forward gate needs the same answer to "is this a node
+// credential?", and it is a DIFFERENT gate from the read surface above
+// (nodeProxyRead). Wiring only the read surface left a rotated node able to list
+// nodes (200) while its own bridge proxy path answered 401 — healthy-looking on
+// one URL and cut off on the one it actually uses.
+func NewNodeProxyTokenChecker(manager *config.Manager, lookup nodeProxyTokenLookup) func(*http.Request) bool {
+	return nodeProxyTokenChecker(manager, lookup)
+}
+
 // nodeProxyTokenChecker accepts requests carrying a node proxy credential as the
 // Bearer credential: a per-node nk_ token, or (during the migration) the
 // center-wide legacy value in control.node_proxy_token. Joined nodes present

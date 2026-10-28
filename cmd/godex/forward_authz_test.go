@@ -99,8 +99,14 @@ func newForwardTestEnv(t *testing.T) forwardTestEnv {
 
 	// A configured web token makes the credential gate real (it is skipped
 	// entirely when no credential exists), so the node check is what the
-	// cross-tenant cases actually exercise.
-	cfg := &config.Config{WebToken: "web-secret", Control: config.ControlConfig{}}
+	// cross-tenant cases actually exercise. Seeded through the manager (not a
+	// struct literal) because the gate reads live config now — a snapshot would
+	// keep honouring a credential that was since cleared.
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"web.token": "web-secret",
+	}}); err != nil {
+		t.Fatalf("seed web token: %v", err)
+	}
 	authorizeNode := newNodeAccessAuthorizer(
 		httpapi.NewPrincipalResolver(manager, accountsService, registry),
 		registry,
@@ -109,7 +115,7 @@ func newForwardTestEnv(t *testing.T) forwardTestEnv {
 	)
 
 	mux := http.NewServeMux()
-	registerForwardRoutes(mux, forwardServer, manager, nodeProxyAuthorize(cfg, accountsService), authorizeNode("forward"))
+	registerForwardRoutes(mux, forwardServer, manager, nodeProxyAuthorize(manager, nil, accountsService), authorizeNode("forward"))
 
 	return forwardTestEnv{
 		mux:       mux,

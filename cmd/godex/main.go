@@ -460,8 +460,13 @@ func main() {
 			// managed-forward CRUD kept answering to any signed-in tenant user.
 			resolvePrincipal := httpapi.NewPrincipalResolver(manager, accountsService, controlRegistry)
 			authorizeNodeFor := newNodeAccessAuthorizer(resolvePrincipal, controlRegistry, nodeAccessPolicy, accountsService)
-			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(cfg, accountsService), authorizeNodeFor("forward"))
-			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(cfg, accountsService))
+			// One credential checker for every node-credential surface: the read
+			// surface (nodeProxyRead, inside httpapi) and the proxy / forward gate here.
+			// Two authenticators answering the same question is how a rotated node could
+			// list nodes but not use its own bridge.
+			nodeProxyToken := httpapi.NewNodeProxyTokenChecker(manager, httpapi.NodeProxyTokenLookupFrom(controlRegistry))
+			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(manager, nodeProxyToken, accountsService), authorizeNodeFor("forward"))
+			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(manager, nodeProxyToken, accountsService))
 			// Meter every forwarded request (design §7 basic tier). Extracted to a
 			// helper so this nil check does not push main over its complexity budget.
 			wireMetering(proxy, meteringService)
@@ -506,7 +511,7 @@ func main() {
 			// TCP forward surface: same NodeAccess seam as the HTTP proxy. Without
 			// it a valid credential could open forward streams into any node's
 			// network services, which is the §1.3 hole on a second surface.
-			forwardHandler := relay.NewForwardHandler(relayHub, nodeProxyAuthorize(cfg, accountsService))
+			forwardHandler := relay.NewForwardHandler(relayHub, nodeProxyAuthorize(manager, nodeProxyToken, accountsService))
 			forwardHandler.AuthorizeNode = proxy.AuthorizeNode
 			root.Handle("/control/nodes/{id}/forward", forwardHandler)
 			// Web Push: in-memory subscriptions, VAPID keys persisted across
@@ -940,20 +945,33 @@ func relayAuthorize(cfg *config.Config) func(*http.Request) bool {
 	}
 }
 
-// nodeProxyAuthorize accepts the full web token, the center's restricted node
-// proxy token (control.node_proxy_token, nk_...), or a valid login session. The
-// proxy / forward surfaces are what joined nodes call through the center bridge; a
-// compromised node holding only the nk_ token can reach other nodes' proxies and
-// forward probes but NOT the center's config / sessions / files management API.
+// nodeProxyAuthorize accepts the full web token, a node proxy credential
+// (a per-node nk_..., or the center-wide value while the migration is in flight),
+// or a valid login session. The proxy / forward surfaces are what joined nodes
+// call through the center bridge; a compromised node holding only an nk_ can reach
+// other nodes' proxies and forward probes but NOT the center's config / sessions /
+// files management API.
 //
 // A login session is accepted because these are the surfaces the Web UI uses once
 // a remote node is selected (design §3.5: a tenant forwards to its OWN nodes).
 // Accepting it here is only safe because the caller resolves identity the same way
 // and AuthorizeNode then applies NodeAccess — this gate answers "is there a valid
 // credential", not "may this caller reach this node".
-func nodeProxyAuthorize(cfg *config.Config, accountsService *accounts.Service) func(*http.Request) bool {
+//
+// Two things are deliberate here rather than in the read-surface authenticator:
+//
+//  1. nodeProxyToken is the SAME checker the read surface uses, handed in by the
+//     caller. This gate is a separate code path (cmd/godex) from nodeProxyRead
+//     (httpapi), and wiring only the latter is how a rotated node ended up able to
+//     list nodes (200) while its own bridge proxy path answered 401.
+//  2. The config is read LIVE through the manager, not from a boot-time snapshot.
+//     Retiring the center-wide value (migration plan P4a) has to take effect
+//     without a restart; a snapshot would keep honouring the credential just
+//     cleared, which is the one outcome clearing it is supposed to prevent.
+func nodeProxyAuthorize(manager *config.Manager, nodeProxyToken func(*http.Request) bool, accountsService *accounts.Service) func(*http.Request) bool {
 	sessionChecker := httpapi.NewSessionTokenChecker(accountsService)
 	return func(r *http.Request) bool {
+		cfg := manager.Current()
 		token := strings.TrimSpace(cfg.WebToken)
 		proxyToken := strings.TrimSpace(cfg.Control.NodeProxyToken)
 		if token == "" && proxyToken == "" {
@@ -962,6 +980,12 @@ func nodeProxyAuthorize(cfg *config.Config, accountsService *accounts.Service) f
 			return true
 		}
 		if bearerMatches(r, token) || bearerMatches(r, proxyToken) {
+			return true
+		}
+		// Per-node credentials live in the registry, not the config: a rotated node's
+		// nk_ is not the center-wide value, so without this check rotating would cut
+		// the node off from every other node.
+		if nodeProxyToken != nil && nodeProxyToken(r) {
 			return true
 		}
 		return sessionChecker != nil && sessionChecker(r)

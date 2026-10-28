@@ -77,6 +77,13 @@ func applyStoredValues(file *ConfigFile, req UpdateRequest) error {
 			file.Channels.Feishu.AppID = ""
 		case "channels.feishu.app_secret":
 			file.Channels.Feishu.AppSecret = ""
+		case "control.node_proxy_token":
+			// The per-node migration retires the center-wide nk_ by clearing it, and
+			// this switch is the only path that can: the loop above skips a Secret whose
+			// value came out empty, so a Secret missing from here accepts a clear
+			// request and silently keeps its value — leaving the retired credential
+			// live while the operator believes the migration is done.
+			file.Control.NodeProxyToken = ""
 		}
 	}
 	return nil

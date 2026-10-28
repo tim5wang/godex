@@ -543,6 +543,7 @@ func main() {
 				selfEndpoint:  selfEndpoint,
 				bridge:        bridge,
 				forwardServer: forwardServer,
+				manager:       manager,
 			}
 			// Initial boot: start whatever the current config wants (join or no-op).
 			controlRT.Reconcile(cfg, cfg)

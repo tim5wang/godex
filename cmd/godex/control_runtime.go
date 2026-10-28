@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/tim5wang/godex/internal/app"
 	"github.com/tim5wang/godex/internal/core/config"
@@ -28,6 +30,9 @@ type controlRuntime struct {
 	selfEndpoint  string
 	bridge        *httpapi.CenterBridge
 	forwardServer *relay.ForwardServer
+	// manager persists a rotated credential. Without it the bridge could rotate
+	// in memory only, and the next restart would restore the refused token.
+	manager *config.Manager
 
 	heartbeat app.LifecycleService
 	agent     *relay.Agent
@@ -68,6 +73,9 @@ func (r *controlRuntime) Reconcile(oldCfg, newCfg *config.Config) {
 	// Point the bridge / forward server at the (possibly new) center.
 	if r.bridge != nil {
 		r.bridge.SetEndpoint(newCfg.Control.CenterURL, newCfg.Control.CenterToken)
+		// Self-heal: if the center ever refuses our nk_ (e.g. it was minted per-node
+		// and ours is still the legacy shared value), re-issue ours on the spot.
+		r.bridge.SetUnauthorizedHandler(r.rotateProxyCredential)
 	}
 	if r.forwardServer != nil {
 		r.forwardServer.SetCenterBridge(newCfg.Control.CenterURL, newCfg.Control.CenterToken)
@@ -90,6 +98,34 @@ func (r *controlRuntime) Reconcile(oldCfg, newCfg *config.Config) {
 		_ = obs.Start(r.ctx)
 		r.observer = obs
 	}
+}
+
+// rotateProxyCredential re-issues this node's per-node nk_ credential and
+// persists it, so the self-heal survives a restart.
+//
+// Reads the center URL and credential from the live config rather than capturing
+// them earlier: a config edit between boot and the first 401 must be honoured,
+// and a stale URL would send the rotation to the wrong center.
+func (r *controlRuntime) rotateProxyCredential(ctx context.Context) (string, error) {
+	if r.manager == nil {
+		return "", fmt.Errorf("config manager unavailable: cannot rotate the proxy credential")
+	}
+	cfg := r.manager.Current()
+	centerURL := strings.TrimSpace(cfg.Control.CenterURL)
+	credential := strings.TrimSpace(cfg.Control.Credential)
+	if centerURL == "" || credential == "" {
+		return "", fmt.Errorf("this node is not joined to a center")
+	}
+	rotated, err := relay.RotateProxyCredential(ctx, centerURL, credential)
+	if err != nil {
+		return "", err
+	}
+	// Persisted to the home .env because env overrides godex.yaml for
+	// control.center_token, so writing it elsewhere would be invisible.
+	if err := r.manager.WriteHomeEnvVar("GODEX_CONTROL_CENTER_TOKEN", rotated.Token); err != nil {
+		return "", fmt.Errorf("persist rotated credential: %w", err)
+	}
+	return rotated.Token, nil
 }
 
 // controlConfigChanged reports whether any join-relevant control field changed.

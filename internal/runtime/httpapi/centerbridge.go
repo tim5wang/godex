@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
 )
@@ -34,6 +35,12 @@ type CenterBridge struct {
 	mu       sync.Mutex
 	cache    []noderegistry.NodeView
 	cachedAt time.Time
+
+	// rotate re-issues this node's own nk_ credential when the center rejects the
+	// current one. Installed by the node runtime; nil on a center-side bridge (a
+	// center has no credential to rotate) and in tests that do not exercise it.
+	rotate     func(context.Context) (string, error)
+	lastRotate time.Time
 }
 
 // bridgeEndpoint is the immutable snapshot stored in CenterBridge.ep.
@@ -45,6 +52,25 @@ type bridgeEndpoint struct {
 // centerBridgeCacheTTL bounds how stale the center node list may be; the UI
 // refreshes on a 15s cadence, so a matching TTL keeps the merged list fresh.
 const centerBridgeCacheTTL = 15 * time.Second
+
+// centerBridgeRotateCooldown bounds how often a rejected credential triggers a
+// rotation. Without it, a center that rejects the freshly rotated token (wrong
+// node, revoked credential) would make every proxied request mint another one,
+// turning a broken credential into a request storm against the center.
+const centerBridgeRotateCooldown = 30 * time.Second
+
+// SetUnauthorizedHandler installs the self-healing rotation used when the center
+// answers 401 to this node's control.center_token.
+//
+// This is what lets the per-node migration converge without an operator visiting
+// every machine: a not-yet-rotated node keeps working on the legacy token until
+// that token stops being accepted, and then re-issues its own per-node token on
+// the spot rather than failing until someone notices.
+func (b *CenterBridge) SetUnauthorizedHandler(handler func(context.Context) (string, error)) {
+	b.mu.Lock()
+	b.rotate = handler
+	b.mu.Unlock()
+}
 
 // NewCenterBridge creates the bridge client. centerURL is used verbatim;
 // trailing slashes are tolerated. A nil Client falls back to http.DefaultClient.
@@ -98,6 +124,36 @@ func (b *CenterBridge) Enabled() bool {
 	return ep.CenterURL != "" && ep.Token != ""
 }
 
+// rotateOnUnauthorized handles a 401 from the center by re-issuing this node's
+// credential once, then reporting whether the caller should retry.
+//
+// Deliberately called only from the callers that already hold a 401 — never
+// preemptively — so the happy path costs nothing. The cooldown means a center
+// that keeps rejecting still produces one attempt per window instead of one per
+// request.
+func (b *CenterBridge) rotateOnUnauthorized(ctx context.Context) bool {
+	b.mu.Lock()
+	handler := b.rotate
+	if handler == nil || time.Since(b.lastRotate) < centerBridgeRotateCooldown {
+		b.mu.Unlock()
+		return false
+	}
+	b.lastRotate = time.Now()
+	b.mu.Unlock()
+
+	token, err := handler(ctx)
+	if err != nil || strings.TrimSpace(token) == "" {
+		logger.Warnf("center bridge: credential rotation failed: %v", err)
+		return false
+	}
+	// Swap the endpoint token in place. The center URL is unchanged, and the
+	// cached node list is dropped because the previous read was refused.
+	centerURL, _ := b.Endpoint()
+	b.SetEndpoint(centerURL, token)
+	logger.Infof("center bridge: rotated the per-node credential after a 401")
+	return true
+}
+
 // apiURL joins the center base URL with an /api-prefixed path.
 func (b *CenterBridge) apiURL(path string) string {
 	base := b.endpoint().CenterURL
@@ -129,13 +185,46 @@ func (b *CenterBridge) ListNodes(ctx context.Context) ([]noderegistry.NodeView, 
 	return nodes, nil
 }
 
-func (b *CenterBridge) fetchNodes(ctx context.Context) ([]noderegistry.NodeView, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.apiURL("/control/nodes"), nil)
+// doAuthed issues a request built by build (which must attach the current
+// Bearer credential) and, on a 401, rotates this node's credential once and
+// retries.
+//
+// The build callback is re-invoked for the retry rather than the first request
+// being reused: the credential is part of the request's headers, so retrying the
+// original object would send the very token the center just refused. Callers
+// keep their own status handling, so this only removes the duplicate "and retry
+// after rotating" step from each one.
+func (b *CenterBridge) doAuthed(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+	req, err := build()
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
 	resp, err := b.Client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusUnauthorized || !b.rotateOnUnauthorized(ctx) {
+		return resp, nil
+	}
+	// Rotated: close the refused response and try once with the fresh credential.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	_ = resp.Body.Close()
+	retry, err := build()
+	if err != nil {
+		return nil, err
+	}
+	return b.Client.Do(retry)
+}
+
+func (b *CenterBridge) fetchNodes(ctx context.Context) ([]noderegistry.NodeView, error) {
+	resp, err := b.doAuthed(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.apiURL("/control/nodes"), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -153,12 +242,14 @@ func (b *CenterBridge) fetchNodes(ctx context.Context) ([]noderegistry.NodeView,
 
 // GetNode fetches a single node view from the center.
 func (b *CenterBridge) GetNode(ctx context.Context, id string) (noderegistry.NodeView, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.apiURL("/control/nodes/"+id), nil)
-	if err != nil {
-		return noderegistry.NodeView{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
-	resp, err := b.Client.Do(req)
+	resp, err := b.doAuthed(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.apiURL("/control/nodes/"+id), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
+		return req, nil
+	})
 	if err != nil {
 		return noderegistry.NodeView{}, err
 	}
@@ -175,12 +266,14 @@ func (b *CenterBridge) GetNode(ctx context.Context, id string) (noderegistry.Nod
 
 // GetOverview fetches the center's aggregated observation view for one node.
 func (b *CenterBridge) GetOverview(ctx context.Context, id string) (relay.NodeOverview, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.apiURL("/control/nodes/"+id+"/overview"), nil)
-	if err != nil {
-		return relay.NodeOverview{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
-	resp, err := b.Client.Do(req)
+	resp, err := b.doAuthed(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.apiURL("/control/nodes/"+id+"/overview"), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+b.endpoint().Token)
+		return req, nil
+	})
 	if err != nil {
 		return relay.NodeOverview{}, err
 	}

@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -39,6 +40,7 @@ func nodeHelpText() string {
 		"  forward   Forward a local TCP port to a target on a node's network",
 		"  exec      Run a shell command on a node and stream its output",
 		"  join      Configure this node to join a center (one-command onboarding)",
+		"  rotate-proxy-token  Re-issue this node's own per-node center credential (nk_)",
 		"",
 		"Examples:",
 		"  godex node forward --node node_x --local 3306 --target 10.0.0.5:3306",
@@ -47,6 +49,9 @@ func nodeHelpText() string {
 		"                                 Run a command on a remote node",
 		"  godex node join https://godex.example.com --id my-laptop --credential ck_xxx",
 		"                                 Configure this node to join a center",
+		"  godex node rotate-proxy-token",
+		"                                 Re-issue this node's own nk_ credential without",
+		"                                 an operator visiting the machine",
 		"",
 		"Flags (join):",
 		"  --id <id>          Node id to register under (required)",
@@ -83,6 +88,7 @@ func nodeHelpText() string {
 		"More help:",
 		"  godex node forward --help",
 		"  godex node exec --help",
+		"  godex node rotate-proxy-token --help",
 	}, "\n")
 }
 
@@ -97,6 +103,8 @@ func (r *Runner) runNodeCommand(ctx context.Context, args []string) error {
 		return r.runNodeExec(ctx, args[1:])
 	case "join":
 		return r.runNodeJoin(ctx, args[1:])
+	case "rotate-proxy-token":
+		return r.runNodeRotateProxyToken(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown node subcommand %q\n\n%s", args[0], nodeHelpText())
 	}
@@ -415,6 +423,64 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 		fmt.Fprintf(r.Stdout, "llm proxy provider %q written (base_url %s, key in %s)\n", llmProxyProviderID, baseURL, llmProxyKeyEnv)
 	}
 	fmt.Fprintln(r.Stdout, "restart 'godex serve' to complete the join")
+	return nil
+}
+
+// runNodeRotateProxyToken re-issues this node's own per-node nk_ credential
+// (control.center_token) using the ck_ credential it already holds.
+//
+// This exists so the per-node migration converges WITHOUT an operator visiting
+// every machine: the node authenticates as itself, and the center derives the
+// target from the presented credential — so the command takes NO node id. A flag
+// there would turn "rotate my token" into "rotate an arbitrary node's token"
+// for anyone who knows a ck_, which is precisely the property the per-node
+// credential exists to remove.
+func (r *Runner) runNodeRotateProxyToken(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("node rotate-proxy-token", flag.ContinueOnError)
+	fs.SetOutput(r.Stderr)
+	var centerURL string
+	fs.StringVar(&centerURL, "center", "", "center base URL (default: control.center_url)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if r.Cfg == nil {
+		return fmt.Errorf("configuration unavailable")
+	}
+	if centerURL == "" {
+		centerURL = strings.TrimSpace(r.Cfg.Control.CenterURL)
+	}
+	if centerURL == "" {
+		return fmt.Errorf("missing center URL: pass --center or set control.center_url")
+	}
+	credential := strings.TrimSpace(r.Cfg.Control.Credential)
+	if credential == "" {
+		return fmt.Errorf("this node holds no control credential (ck_); run 'godex node join' first")
+	}
+	if r.ConfigManager == nil {
+		return fmt.Errorf("config manager unavailable: cannot persist the rotated credential")
+	}
+
+	rotated, err := relay.RotateProxyCredential(ctx, centerURL, credential)
+	if err != nil {
+		switch {
+		case errors.Is(err, relay.ErrProxyRotationUnsupported):
+			// Named separately because the operator action differs: upgrade the
+			// center rather than re-check this node's credential.
+			return fmt.Errorf("this center does not support per-node credential rotation yet: %w", err)
+		case errors.Is(err, relay.ErrProxyRotationRejected):
+			return fmt.Errorf("the center rejected this node's credential: %w", err)
+		default:
+			return fmt.Errorf("rotate proxy credential: %w", err)
+		}
+	}
+	// Persisted to the home .env because that is where control.center_token is
+	// read from (the env var overrides godex.yaml), so writing it anywhere else
+	// would be invisible to the running process.
+	if err := r.ConfigManager.WriteHomeEnvVar("GODEX_CONTROL_CENTER_TOKEN", rotated.Token); err != nil {
+		return fmt.Errorf("persist rotated credential: %w", err)
+	}
+	fmt.Fprintf(r.Stdout, "rotated proxy credential for node %q (%s)\n", rotated.NodeID, maskSecret(rotated.Token))
+	fmt.Fprintln(r.Stdout, "restart 'godex serve' to pick up the new credential")
 	return nil
 }
 

@@ -458,7 +458,7 @@ func main() {
 			// function and tags it with the surface for the audit trail. Writing it
 			// per surface is how §1.3's hardening landed on the relay proxy while the
 			// managed-forward CRUD kept answering to any signed-in tenant user.
-			resolvePrincipal := httpapi.NewPrincipalResolver(manager, accountsService)
+			resolvePrincipal := httpapi.NewPrincipalResolver(manager, accountsService, controlRegistry)
 			authorizeNodeFor := newNodeAccessAuthorizer(resolvePrincipal, controlRegistry, nodeAccessPolicy, accountsService)
 			registerForwardRoutes(root, forwardServer, manager, nodeProxyAuthorize(cfg, accountsService), authorizeNodeFor("forward"))
 			proxy := relay.NewProxyHandler(relayHub, nodeProxyAuthorize(cfg, accountsService))

@@ -103,6 +103,13 @@ type NodeView struct {
 	UpdatedAt      time.Time         `json:"updated_at,omitempty"`
 	Source         string            `json:"source,omitempty"`
 	CredentialHash string            `json:"credential_hash,omitempty"`
+	// ProxyTokenHash is the digest of this node's per-node nk_ credential
+	// (design §9 R2). Node-scoped, so the center can tell WHICH node a presented
+	// nk_ belongs to — the global credential could not, which is why a node's
+	// identity carried no id and no tenant. Like CredentialHash it is
+	// deliberately absent from NodeInput: that DTO is decoded straight from the
+	// request body, so a field there would let a node declare its own digest.
+	ProxyTokenHash string `json:"proxy_token_hash,omitempty"`
 	RelayStatus    string            `json:"relay_status,omitempty"`
 	LastHealth     time.Time         `json:"last_health,omitempty"`
 	TrustLevel     string            `json:"trust_level,omitempty"`
@@ -292,6 +299,77 @@ func (r *Registry) SetCredentialHash(ctx context.Context, id, hash string) error
 	node.UpdatedAt = r.now()
 	r.nodes[id] = node
 	return r.saveLocked()
+}
+
+// SetProxyTokenHash stores the digest of a node's per-node nk_ credential.
+//
+// Mirrors SetCredentialHash: only the digest is persisted, and the plaintext is
+// returned to the caller exactly once. An empty hash is refused rather than
+// stored, because a node with an empty digest would otherwise be matchable by
+// an empty credential.
+func (r *Registry) SetProxyTokenHash(ctx context.Context, id, hash string) error {
+	_ = ctx
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("missing node id")
+	}
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return fmt.Errorf("missing proxy token hash")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	node, ok := r.nodes[id]
+	if !ok {
+		return os.ErrNotExist
+	}
+	node.ProxyTokenHash = hash
+	node.UpdatedAt = r.now()
+	r.nodes[id] = node
+	return r.saveLocked()
+}
+
+// NodeByProxyTokenHash resolves a presented per-node nk_ digest back to its node.
+//
+// This is the whole point of the per-node migration: it is what turns "some node
+// presented a valid nk_" into "node X of tenant T presented it", from which the
+// principal's id and tenant are derived.
+//
+// An empty hash never matches, so a node that has no per-node token yet cannot be
+// resolved by an empty credential.
+func (r *Registry) NodeByProxyTokenHash(hash string) (NodeView, bool) {
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return NodeView{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, node := range r.nodes {
+		if node.ProxyTokenHash != "" && node.ProxyTokenHash == hash {
+			return r.viewLocked(node), true
+		}
+	}
+	return NodeView{}, false
+}
+
+// NodeByCredentialHash resolves a presented ck_ node credential back to its node.
+//
+// Used by the node-authenticated token rotation endpoint: a node proves who it is
+// with the credential it already holds, and the digest names the node, so the
+// request body never carries a node id it could lie about.
+func (r *Registry) NodeByCredentialHash(hash string) (NodeView, bool) {
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return NodeView{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, node := range r.nodes {
+		if node.CredentialHash != "" && node.CredentialHash == hash {
+			return r.viewLocked(node), true
+		}
+	}
+	return NodeView{}, false
 }
 
 // SetRelayStatus updates the relay channel state and health timestamp for a node.

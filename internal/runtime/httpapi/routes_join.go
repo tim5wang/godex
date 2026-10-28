@@ -151,7 +151,7 @@ func registerJoinRoute(mux *http.ServeMux, manager *config.Manager, controlRegis
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		proxyToken, err := ensureNodeProxyToken(r.Context(), manager)
+		proxyToken, err := issueNodeProxyToken(r.Context(), controlRegistry, node.ID, manager)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -225,6 +225,30 @@ func enrollNode(ctx context.Context, registry controlNodeRegistry, setter nodeOw
 		return noderegistry.NodeView{}, err
 	}
 	return assignNodeOwnership(ctx, setter, node.ID, tenantID, owner, visibility, maxNodes)
+}
+
+// issueNodeProxyToken returns the nk_ credential a node should be given at
+// enrolment: a per-node token when the registry can store its digest, otherwise
+// the center-wide legacy value.
+//
+// The fallback is explicit rather than silent. A registry that CAN store
+// per-node digests must not quietly degrade to the shared credential on a
+// persistence error — that would look like a successful enrolment while leaving
+// the node indistinguishable, which is the property this migration removes. So
+// the capability is detected first, and only its absence triggers the fallback.
+func issueNodeProxyToken(ctx context.Context, registry controlNodeRegistry, nodeID string, manager *config.Manager) (string, error) {
+	setter, ok := registry.(nodeProxyTokenSetter)
+	if !ok {
+		return ensureNodeProxyToken(ctx, manager)
+	}
+	token, err := relay.GenerateNodeProxyToken()
+	if err != nil {
+		return "", fmt.Errorf("generate node proxy token: %w", err)
+	}
+	if err := setter.SetProxyTokenHash(ctx, nodeID, relay.HashCredential(token)); err != nil {
+		return "", fmt.Errorf("persist node proxy token: %w", err)
+	}
+	return token, nil
 }
 
 // ensureNodeProxyToken returns the center's restricted nk_ credential, creating

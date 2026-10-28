@@ -102,7 +102,7 @@ func newForwardTestEnv(t *testing.T) forwardTestEnv {
 	// cross-tenant cases actually exercise.
 	cfg := &config.Config{WebToken: "web-secret", Control: config.ControlConfig{}}
 	authorizeNode := newNodeAccessAuthorizer(
-		httpapi.NewPrincipalResolver(manager, accountsService),
+		httpapi.NewPrincipalResolver(manager, accountsService, registry),
 		registry,
 		httpapi.NewNodeAccessPolicy(accountsService),
 		accountsService,

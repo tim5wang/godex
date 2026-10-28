@@ -509,6 +509,32 @@ type controlNodeRegistry interface {
 	Delete(context.Context, string) (noderegistry.NodeView, error)
 }
 
+// nodeProxyTokenLookup resolves a presented per-node nk_ digest back to its node.
+//
+// An optional capability (detected by type assertion, like nodeOverviewProvider)
+// rather than a method on controlNodeRegistry: only the real registry can do
+// this, while test fakes and narrow wrappers have no business carrying node
+// credential lookup. A registry that does not implement it simply keeps the
+// center-wide behaviour, which is what makes the migration safe in both
+// directions.
+type nodeProxyTokenLookup interface {
+	NodeByProxyTokenHash(hash string) (noderegistry.NodeView, bool)
+}
+
+// nodeProxyTokenSetter persists a node's per-node nk_ digest. Optional for the
+// same reason as nodeProxyTokenLookup.
+type nodeProxyTokenSetter interface {
+	SetProxyTokenHash(context.Context, string, string) error
+}
+
+// nodeCredentialLookup resolves a presented per-node ck_ digest back to its node.
+// Used by the node-authenticated rotation endpoint: the node proves who it is
+// with the credential it already holds, so the request body never carries a node
+// id the caller could lie about.
+type nodeCredentialLookup interface {
+	NodeByCredentialHash(hash string) (noderegistry.NodeView, bool)
+}
+
 // nodeDisconnector is an optional capability on the control registry: when the
 // registry is wired to the relay hub (center server), deleting a node also
 // forcibly drops its live relay connection. Handlers detect it via type

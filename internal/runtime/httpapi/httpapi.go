@@ -184,9 +184,14 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// refused (design §5 — the case the startup guard cannot see, because a tunnel
 	// or nginx makes the exposed instance look loopback).
 	anonymousGuard := rejectProxiedAnonymous(manager)
+	// The per-node nk_ resolver is threaded through both the authenticator and the
+	// classifier so a credential that names a node is both ACCEPTED and NAMED by
+	// one implementation. A nil lookup (registry cannot resolve per-node tokens)
+	// degrades to the center-wide value, i.e. the pre-migration behaviour.
+	nkLookup := NodeProxyTokenLookupFrom(controlRegistry)
 	protected := anonymousGuard(withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService))))
+	}, relayTrustChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nkLookup, sessionPrincipal(accountsService))))
 	// nodeProxyRead protects the node proxy READ surface (node list / single
 	// node / overview) that CenterBridge on joined nodes calls. It accepts the
 	// full web token OR the restricted node proxy token (control.node_proxy_token,
@@ -201,7 +206,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// escalation rather than a display detail.
 	nodeProxyRead := anonymousGuard(withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
-	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService))))
+	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager, nkLookup), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nkLookup, sessionPrincipal(accountsService))))
 	registerAuthRoutes(mux, manager, accountsService, protected)
 	registerAdminRoutes(mux, accountsService, controlRegistry, protected)
 	// Relay metering (design §7 basic tier). Tenant-scoped and operator-wide views
@@ -223,12 +228,13 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	// token is the credential. Requiring the web token as well would reintroduce
 	// exactly the master-key-per-tenant problem this replaces.
 	registerJoinRoute(mux, manager, controlRegistry, accountsService)
-	registerNodeProxyTokenRoute(mux, manager, protected)
+	registerNodeProxyTokenRoute(mux, manager, protected, controlRegistry)
+	registerSelfProxyCredentialRoute(mux, manager, controlRegistry)
 	registerControlNodeRoutes(mux, controlRegistry, overviewProvider, protected, nodeProxyRead, nodeAccessPolicy, accountsService)
 	registerProviderRoutes(mux, manager, protected)
 
 	registerChannelStatusRoute(mux, channels, protected)
-	registerGatewayRoutes(mux, manager, service, usageService, protected)
+	registerGatewayRoutes(mux, manager, service, usageService, protected, nkLookup)
 	registerServiceCatalogRoutes(mux, service, protected)
 	registerPackageManagementRoutes(mux, service, protected)
 	registerPromptAndCommandRoutes(mux, service, protected)
@@ -514,18 +520,20 @@ func withBearerAuthProvider(token func() string, relayTrust ...func(*http.Reques
 	}
 }
 
-// nodeProxyTokenChecker accepts requests carrying the center's restricted node
-// proxy token (control.node_proxy_token, nk_...) as the Bearer credential.
-// Joined nodes present this when they read the node list / overview through the
-// center bridge; it grants read-only access to the node registry surface and
-// nothing else (config / sessions / files stay behind the full web token).
-func nodeProxyTokenChecker(manager *config.Manager) func(*http.Request) bool {
+// nodeProxyTokenChecker accepts requests carrying a node proxy credential as the
+// Bearer credential: a per-node nk_ token, or (during the migration) the
+// center-wide legacy value in control.node_proxy_token. Joined nodes present
+// this when they read the node list / overview through the center bridge; it
+// grants read-only access to the node registry surface and nothing else
+// (config / sessions / files stay behind the full web token).
+//
+// Delegates the decision to resolveNodeProxyToken, the same function the
+// classifier uses, so "this credential was accepted" and "whose credential was
+// it" cannot drift apart.
+func nodeProxyTokenChecker(manager *config.Manager, lookup nodeProxyTokenLookup) func(*http.Request) bool {
 	return func(r *http.Request) bool {
-		proxyToken := strings.TrimSpace(manager.Current().Control.NodeProxyToken)
-		if proxyToken == "" {
-			return false
-		}
-		return bearerAuthorized(r, proxyToken)
+		legacy := strings.TrimSpace(manager.Current().Control.NodeProxyToken)
+		return resolveNodeProxyToken(r, legacy, lookup).Matched
 	}
 }
 

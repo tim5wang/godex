@@ -19,6 +19,7 @@ func registerGatewayRoutes(
 	service *backend.Service,
 	usageService *usage.Service,
 	protected func(http.Handler) http.Handler,
+	nkLookup nodeProxyTokenLookup,
 ) {
 	mux.Handle("POST /v1/chat/completions", gunzipBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if this is a usage gateway request (proxy key auth)
@@ -43,7 +44,7 @@ func registerGatewayRoutes(
 		// still pass via the node-actor exemption.
 		webTokenAuth := withPrincipalAuth(withBearerAuthProvider(func() string {
 			return manager.Current().WebToken
-		}, relayTrustChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), nil))
+		}, relayTrustChecker(manager)), principalForRequest(manager, relayTrustChecker(manager), nkLookup, nil))
 		requireCenterExecution(webTokenAuth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleOpenAIChatCompletions(w, r, service)
 		})).ServeHTTP(w, r)

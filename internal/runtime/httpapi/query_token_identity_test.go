@@ -163,7 +163,7 @@ func TestVoiceQueryTokenWrongTokenFallsThroughToProtected(t *testing.T) {
 // three paths that converge on "the operator presented the web token" must not
 // drift in capabilities.
 func TestOperatorPrincipalIsTheSameEverywhere(t *testing.T) {
-	fromHeader := classifyPrincipal(bearerRequest("web-secret"), "", false, nil)
+	fromHeader := classifyPrincipal(bearerRequest("web-secret"), nodeProxyMatch{}, false, nil)
 	direct := operatorPrincipal()
 	if fromHeader.UserID != direct.UserID ||
 		fromHeader.PlatformRole != direct.PlatformRole ||

@@ -15,6 +15,7 @@ import (
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
+	"github.com/tim5wang/godex/internal/services/relay"
 )
 
 // selfJoinRequest is the node-side "join a center" form. The operator only
@@ -221,15 +222,86 @@ func registerWithCenter(ctx context.Context, req *selfJoinRequest) error {
 // the restricted nk_ credential it then stores as control.center_token; the nk_
 // only unlocks the node proxy/forward READ+PROXY surface, never the config /
 // sessions / files management API.
-func registerNodeProxyTokenRoute(mux *http.ServeMux, manager *config.Manager, protected func(http.Handler) http.Handler) {
+//
+// A node_id in the body yields a PER-NODE token (the migration target). Without
+// one — an older node, or a caller that does not know its id — the center-wide
+// value is returned so the deployment keeps working; that dual behaviour is what
+// makes the migration interrupt-free.
+func registerNodeProxyTokenRoute(mux *http.ServeMux, manager *config.Manager, protected func(http.Handler) http.Handler, registry controlNodeRegistry) {
 	mux.Handle("POST /control/node-proxy-token", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyToken, err := ensureNodeProxyToken(r.Context(), manager)
+		var req struct {
+			NodeID string `json:"node_id"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		nodeID := strings.TrimSpace(req.NodeID)
+		if nodeID == "" {
+			proxyToken, err := ensureNodeProxyToken(r.Context(), manager)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"node_proxy_token": proxyToken})
+			return
+		}
+		if _, err := registry.Get(r.Context(), nodeID); err != nil {
+			writeError(w, http.StatusNotFound, fmt.Errorf("node not found: %s", nodeID))
+			return
+		}
+		proxyToken, err := issueNodeProxyToken(r.Context(), registry, nodeID, manager)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"node_proxy_token": proxyToken})
+		writeJSON(w, http.StatusOK, map[string]string{"node_id": nodeID, "node_proxy_token": proxyToken})
 	})))
+}
+
+// registerSelfProxyCredentialRoute wires node-AUTHENTICATED rotation of a node's
+// own nk_ credential (design §9 R2, "重下发").
+//
+// The node proves who it is with the per-node ck_ credential it already holds,
+// and the digest names the node — so the request body carries NO node id to
+// trust. That is what lets a node re-issue itself without an operator visiting
+// every machine, which is the difference between a migration that converges and
+// one that stalls on manual work.
+//
+// Deliberately NOT behind `protected`: the node credential IS the credential
+// here, exactly as the join token is for /control/join. Requiring the web token
+// would put the platform master key back into every node.
+//
+// The ck_ credential is honoured on THIS route only, never added to the shared
+// authenticator set, so nothing else in the process widens its acceptance.
+func registerSelfProxyCredentialRoute(mux *http.ServeMux, manager *config.Manager, registry controlNodeRegistry) {
+	mux.Handle("POST /control/self/proxy-credential", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lookup, ok := registry.(nodeCredentialLookup)
+		if !ok {
+			// A nil registry fails this assertion too: an interface holding nothing
+			// implements no methods, so there is no separate nil check to make.
+			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("per-node credential rotation is unavailable on this instance"))
+			return
+		}
+		credential := bearerValue(r)
+		if credential == "" {
+			writeError(w, http.StatusUnauthorized, fmt.Errorf("missing node credential"))
+			return
+		}
+		node, ok := lookup.NodeByCredentialHash(relay.HashCredential(credential))
+		if !ok {
+			// One message for unknown/revoked: a caller learns nothing about which
+			// node ids exist.
+			writeError(w, http.StatusUnauthorized, fmt.Errorf("unknown node credential"))
+			return
+		}
+		proxyToken, err := issueNodeProxyToken(r.Context(), registry, node.ID, manager)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"node_id": node.ID, "node_proxy_token": proxyToken})
+	}))
 }
 
 func doCenterJSON(ctx context.Context, client *http.Client, centerURL, method, path, token string, body []byte, out any) error {

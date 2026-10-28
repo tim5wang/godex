@@ -4,12 +4,46 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/identity"
+	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/accounts"
 	"github.com/tim5wang/godex/internal/services/relay"
 )
+
+// legacyNodeProxyMatches counts requests that authenticated with the CENTER-WIDE
+// nk_ credential rather than a per-node one.
+//
+// It exists because the per-node migration needs a completion criterion it can
+// actually measure. The design says "clear the global value once no node still
+// uses it", but before this counter the legacy branch was silent — there was no
+// way to tell a converged center from one the old token still drives, and
+// clearing on that guess would take every not-yet-migrated node offline. Kept as
+// a counter (not just a log) so a test can assert it, and exported so an operator
+// can read the number without scraping the journal.
+var legacyNodeProxyMatches atomic.Int64
+
+// NodeProxyLegacyMatchCount reports how many requests have used the center-wide
+// nk_ credential since this process started.
+//
+// Zero is the precondition for retiring that credential (migration plan §4/§6
+// P4a). A non-zero value names a deployment that still has nodes on the old path.
+func NodeProxyLegacyMatchCount() int64 { return legacyNodeProxyMatches.Load() }
+
+// recordLegacyNodeProxyMatch counts and reports one legacy match.
+//
+// The volume is bounded by design: a legacy hit requires presenting the
+// center-wide value, so only nodes that have not rotated yet can produce one, at
+// their poll cadence — not once per proxied request. Logging each hit is
+// therefore affordable, and it is what makes "has this deployment converged?"
+// answerable from the journal.
+func recordLegacyNodeProxyMatch() {
+	n := legacyNodeProxyMatches.Add(1)
+	logger.Warnf("node proxy credential: request authenticated with the legacy center-wide nk_ (count=%d); "+
+		"a node has not rotated to its per-node credential yet", n)
+}
 
 // Auth method labels recorded on the resolved Principal. They are what the
 // audit trail shows, so they name the credential, not the route.
@@ -226,6 +260,9 @@ func principalForRequest(manager *config.Manager, relayTrust func(*http.Request)
 		cfg := manager.Current()
 		trustedRelay := relayTrust != nil && relayTrust(r)
 		match := resolveNodeProxyToken(r, strings.TrimSpace(cfg.Control.NodeProxyToken), lookup)
+		if match.Legacy {
+			recordLegacyNodeProxyMatch()
+		}
 		return classifyPrincipal(r, match, trustedRelay, session)
 	}
 }

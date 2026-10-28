@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/services/noderegistry"
 	"github.com/tim5wang/godex/internal/services/relay"
@@ -221,5 +222,80 @@ func TestNodeProxyReadAcceptsPerNodeTokenThroughFullChain(t *testing.T) {
 	handler.ServeHTTP(rec, bearerRequest(token))
 	if rec.Code == http.StatusUnauthorized {
 		t.Fatalf("a valid per-node token must not be rejected by the full middleware chain: %s", rec.Body.String())
+	}
+}
+
+// legacyCountingManager builds a manager whose center-wide nk_ value is set, so
+// the legacy branch can actually be exercised.
+func legacyCountingManager(t *testing.T, legacyToken string) *config.Manager {
+	t.Helper()
+	manager := newTestManager(t, newTestConfig(t))
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: map[string]any{
+		"control.node_proxy_token": legacyToken,
+	}}); err != nil {
+		t.Fatalf("seed legacy nk_: %v", err)
+	}
+	return manager
+}
+
+// TestLegacyNodeProxyMatchIsObservable pins the measurement the migration's own
+// completion criterion depends on.
+//
+// The plan says "clear the center-wide value once no node still uses it", but the
+// legacy branch was previously silent: a converged center and one still driven by
+// the old token looked identical, so the clear step could only be taken on a
+// guess — and a wrong guess takes every un-migrated node offline.
+func TestLegacyNodeProxyMatchIsObservable(t *testing.T) {
+	legacy := "nk_legacy_value"
+	manager := legacyCountingManager(t, legacy)
+
+	before := NodeProxyLegacyMatchCount()
+	resolver := NewPrincipalResolver(manager, nil, nil)
+
+	// A legacy hit is counted and classified as the historical placeholder.
+	p := resolver(bearerRequest(legacy))
+	if p.AuthMethod != AuthMethodNodeProxyToken {
+		t.Fatalf("AuthMethod = %q, want %q", p.AuthMethod, AuthMethodNodeProxyToken)
+	}
+	if got := NodeProxyLegacyMatchCount(); got != before+1 {
+		t.Errorf("legacy match count = %d, want %d (the clear step cannot be gated on an uncounted path)", got, before+1)
+	}
+
+	// A per-node hit must NOT be counted as legacy: otherwise the count would
+	// never reach zero and the credential could never be retired.
+	perNode := "nk_per_node_value"
+	lookup := fakeProxyLookup{byHash: map[string]noderegistry.NodeView{
+		relay.HashCredential(perNode): {ID: "node-a", TenantID: "tenant-1"},
+	}}
+	if got := NewPrincipalResolver(manager, nil, lookup)(bearerRequest(perNode)).UserID; got != "node-a" {
+		t.Fatalf("per-node credential resolved to %q, want node-a", got)
+	}
+	if got := NodeProxyLegacyMatchCount(); got != before+1 {
+		t.Errorf("per-node match changed the legacy count to %d, want it unchanged at %d", got, before+1)
+	}
+
+	// Nor may ordinary web-token traffic or a forged nk_ be counted.
+	resolver(bearerRequest("web-secret"))
+	resolver(bearerRequest("nk_forged"))
+	if got := NodeProxyLegacyMatchCount(); got != before+1 {
+		t.Errorf("non-legacy traffic changed the legacy count to %d, want %d", got, before+1)
+	}
+}
+
+// TestPerNodeOnlyTrafficLeavesLegacyCountUnchanged is the other half of the
+// criterion: a deployment where every node has rotated must stay at zero, or the
+// operator can never conclude the migration is finished.
+func TestPerNodeOnlyTrafficLeavesLegacyCountUnchanged(t *testing.T) {
+	manager := legacyCountingManager(t, "nk_legacy_value")
+	perNode := "nk_per_node_only"
+	lookup := fakeProxyLookup{byHash: map[string]noderegistry.NodeView{
+		relay.HashCredential(perNode): {ID: "node-a"},
+	}}
+	resolver := NewPrincipalResolver(manager, nil, lookup)
+
+	before := NodeProxyLegacyMatchCount()
+	resolver(bearerRequest(perNode))
+	if got := NodeProxyLegacyMatchCount(); got != before {
+		t.Errorf("per-node-only traffic moved the legacy count: %d -> %d", before, got)
 	}
 }

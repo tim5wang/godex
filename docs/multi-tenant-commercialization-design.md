@@ -1,6 +1,6 @@
 # GoDex 商业化多租户设计（SaaS 中继 · 订阅制）
 
-> 状态：Active / Partial（P0–P3 主体已落地：身份底座、节点归属与可见性、中心执行收窄、基础档计量、账号面与成员管理；未完成项集中在 §8 状态表与 §9 开放问题，其中 `nk_` 改 per-node 仍为 ⏳ 未做）
+> 状态：Active / Partial（P0–P3 主体已落地：身份底座、节点归属与可见性、中心执行收窄、基础档计量、账号面与成员管理；`nk_` 改 per-node 已实现 P1+P2，剩余 P4 收尾见 §9 R2）
 > 日期：2026-10-25
 > 关联：[node-mesh-design.md](./node-mesh-design.md)、[node-center-bridge-design.md](./node-center-bridge-design.md)、[node-onboarding.md](./node-onboarding.md)、[remote-sandbox-design.md](./remote-sandbox-design.md)
 > 决策输入（用户拍板，2026-10-25）：
@@ -83,7 +83,7 @@ GET /api/control/nodes/win-min/proxy/meta     -> 200  泄漏 model / workspace_d
 | 子项 | 状态 |
 |---|---|
 | **目标节点授权**（读面遮蔽 + 代理/转发闸门） | ✅ **已做**：`GET /control/nodes` 按 `VisibleNodeIDs` 遮蔽；`GET /control/nodes/{id}` 与 `/{id}/overview` 跨租户 403；`/control/nodes/{id}/proxy/...` 走 `ProxyHandler.AuthorizeNode`；`/control/nodes/{id}/forward`（TCP 转发，同一漏洞的第二个面）走 `ForwardHandler.AuthorizeNode`；`/control/forwards`（托管隧道 CRUD，**第三个面**）走同一 NodeAccess 决策 |
-| **`nk_` 改 per-node 凭据** | ⏳ **未做**：仍是全局单凭据。即当前 `nk_` 持有者仍可**探测**任意节点是否存在（拿 403 而非 200），但拿不到数据、也代理不进去 |
+| **`nk_` 改 per-node 凭据** | ✅ **已实现（P1+P2，2026-10-28）**：签发改为 per-node（join / self-join / `/control/node-proxy-token` 带 `node_id`），解析**先查 per-node 再退回全局**（双认，零中断）；节点侧自助换发（`godex node rotate-proxy-token` + CenterBridge 401 自愈）。主体据此拿到**节点 id + tenant**，见下「仍存在的一处泄漏」。剩余 P4（清空全局值 + 文档同步）见 §9 R2 |
 
 > **第三个面（本补充实测发现并修复）**：`/control/forwards` 的凭据闸门（`nodeProxyAuthorize`）
 > 接受**任意登录会话**，而 `registerForwardRoutes` 当时不接收 registry/policy，结构性无法判节点归属。
@@ -94,8 +94,12 @@ GET /api/control/nodes/win-min/proxy/meta     -> 200  泄漏 model / workspace_d
 > 「没配检查」绝不能退化成「所有节点都可达」，那正是这个面最初失去隔离的形状。
 > 两个面现由**同一个** `newNodeAccessAuthorizer` 工厂产出，避免再各自漂移。
 
-> 遮罩后 `nk_` 的“枚举”仍会泄漏一个信息：某个 id 是否存在（403 vs 404）。
-> 彻底消除需 per-node 凭据（每个节点只能拿自己的 `nk_`），属 P1。
+> **仍存在的一处泄漏（如实记录，勿当作已消除）**：per-node 带来的是**归属与粒度**，
+> 即主体首次带上 `(NodeID, TenantID)`，于是**多租户下**节点只能触达自己租户的节点（跨租户 403）。
+> 但**单租户下**（当前生产 6 个节点均无 tenant）按 `Policy.Authorize` 的无租户分支，
+> 节点行动者仍被放行，因此「403 vs 404 探测某 id 是否存在」**在这一形态下依然存在**。
+> 任何注册表查询天然会区分存在/不存在；要彻底消除需再加「节点只能读自己」的可达性策略，
+> 而该策略会把既有的节点间转发变成需配置的功能——决策 #3 明确**本期不做**。
 
 ### 1.4 阻断项 D：中心正在跑 agent（收窄到单一账号）
 
@@ -831,7 +835,7 @@ httpapi 8 个（加入超限 409 且不留幽灵、默认不限、超管修复�
 | 阶段 | 内容 | 验收 | 状态 |
 |---|---|---|---|
 | **P0 身份底座** | Tenant/User/Membership/Principal；`protected` 改为解析身份；自助注册改 join token | 两个租户各登录 → 互不可见；节点注册无法自报 `tenant_id` | ✅ 已落地 |
-| **P1 归属 + NodeAccess** | 注册表加归属/可见性；抽 `NodeAccess`；5 个消费点收敛 | 跨租户代理返回 403（✅ 见 §1.3，四个面均已加闸门）；`nk_` 改为 per-node | ✅ 主体已落地；**子项 `nk_` per-node ⏳ 未做**（§1.3） |
+| **P1 归属 + NodeAccess** | 注册表加归属/可见性；抽 `NodeAccess`；5 个消费点收敛 | 跨租户代理返回 403（✅ 见 §1.3，四个面均已加闸门）；`nk_` 改为 per-node | ✅ 已落地（`nk_` per-node：P1+P2 2026-10-28；P4 收尾见 §9 R2） |
 | **P2 隔离硬化** | 越权测试矩阵；观测投影去标题；**中心执行收窄到超管一个账号**（§3.3）；**清理历史 cron 任务**（§3.4，功能保留） | 租户账号在任何执行入口 403；超管照常工作；历史 `cron-*` 已清理，超管仍可新建定时任务 | ⚠️ 部分：中心执行收窄 ✅；**观测投影去标题 ✅**（`relay.observation.include_titles` 默认 false，摄入点剥离 + 事件日志改用 id + UI 明说）；**越权面硬化 ✅ 六个面**（节点列表遮蔽 / 单节点 / overview / proxy / forward / `/control/forwards`）；**越权限测试矩阵 ✅ 已收敛**为 [multi-tenant-authorization-matrix.md](./multi-tenant-authorization-matrix.md)（逐面闸门 + 对应回归测试 + 已知缺口）；历史 `cron-*` 清理需在中心机核对 |
 | **P3 订阅** | **只做基础档**（纯转发）+ 计量（决策⑬；进阶档以后） | 无 `center_execution` 的账号在执行入口 403；计量可对账 | ✅ 已落地 |
 
@@ -858,7 +862,7 @@ httpapi 8 个（加入超限 409 且不留幽灵、默认不限、超管修复�
 | # | 风险 | 说明 |
 |---|---|---|
 | R1 | **P0 爆炸半径大** | 鉴权路径贯穿全部路由；建议先做一次全量入口清点（附录 A 为初版） |
-| R2 | `nk_` 现为全局单凭据 | 改 per-node 会**打断现存已加入节点**（含你本机 `mac`），需一次性重新下发 |
+| R2 | ~~`nk_` 现为全局单凭据~~ **已实现 per-node（P1+P2）** | 设计预期「会打断现存节点，需一次性重新下发」**经实现证伪**：双认（先查 per-node、未命中退回全局）+ 节点自助换发 ⇒ 存量节点零中断，按自己节奏收敛。完成判据从「某天统一切换」变为「中心不再观测到全局值命中」。剩余 P4：确认无节点再用全局值后清空 `control.node_proxy_token` |
 | R3 | 中心侧 agent 收窄范围 | 决策⑨⑩ 已定：**微信保留、历史 cron 不迁移但功能保留**（§1.4 / §3.4）。需收窄的是「租户借中心算力」与**微信 bot 发送者**（§1.4：`allow_from: []` 已由方案 A 改为「只放行绑定者」，不再放行全部） |
 | R4 | 「不存数据」与可用性冲突 | 已落地默认去标题（§6）：中心侧列表不再有标题，`Nodes` 节点详情标题列已加提示明说。「从目标节点实时取」未做——节点 `GET /sessions` 在 `requireCenterExecution` 下，需另开只读代理面；离线节点无标题可显示，与预期一致 |
 | R5 | ~~容器编排是全新子系统~~ | **不再适用**（决策⑨：本轮不做容器隔离，§1.5 已降级）。将来若重启该方向，风险包括逃逸隔离与配额 |

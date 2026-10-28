@@ -76,7 +76,7 @@ v4 改为「同时向前 40 行 / 向后 60 行」并在 §9 记录该陷阱。
 | watch `read` | **8** | watch device token + scope | ✅ 已落 `watchDevicePrincipal`（`KindWatch`，零权限位）；`TenantID` 归属待 P1 |
 | `withBizKeyAuth` | **6** | biz key | ✅ 已落 `bizKeyPrincipal`；key → `TenantID` 待 P1 |
 | watch `command` | **5** | watch device token + scope | ✅ 同上 |
-| `nodeProxyRead` | **3** | web token **或** `nk_` | → 绑定 `(NodeID, TenantID)` 的 per-node 凭据（**`nk_` 本身仍全局，未改**）|
+| `nodeProxyRead` | **3** | web token **或** `nk_` | ✅ 已落 per-node：`nk_` 现为 per-node 凭据（2026-10-28，P1+P2），主体带 `(NodeID, TenantID)`；双认过渡期内全局值仍被接受 |
 | gateway 双认证（`gunzipBody` 内层） | **3** | `gdx_` proxy key **或** web token | ✅ **两条路径都已落 Principal**：`gdx_` → `proxyKeyPrincipal`；web token → `operatorPrincipal`（`/v1/responses`、`/v1/messages` 走操作员；`/v1/chat/completions` 因**会起 agent 会话**另接 `center_execution`）|
 | inline `gdx_`（`/v1/models`、`/v1/usage/cache-stats`） | **2** | `gdx_` proxy key | ✅ 已落 `proxyKeyPrincipal`；key → 租户待 P1 |
 | watch `approve` | **2** | watch device token + scope | ✅ 同上 |

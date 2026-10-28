@@ -1,6 +1,6 @@
 # `nk_` 改 per-node：迁移与重下发方案
 
-> 状态：Draft（方案，尚未实现；实现前需方首「待决策」三项拍板）
+> 状态：Implemented / Partial（P1+P2 已落地并提交：per-node 签发 + 双认 + 身份接线 + 节点自助换发；P4 收尾待部署后执行）
 > 日期：2026-10-28
 > 关联：[multi-tenant-commercialization-design.md](./multi-tenant-commercialization-design.md) §1.3 / §9 R2、[multi-tenant-authorization-matrix.md](./multi-tenant-authorization-matrix.md)
 > 用途：把设计 §9 R2「`nk_` 现为全局单凭据」从风险条目变成**可执行的迁移 + 重下发步骤**，
@@ -206,13 +206,20 @@ mac  godex.yaml  control.center_token           len=32（另一个值，被 .env
 
 ---
 
-## 7. 待决策（实现前需拍板）
+## 7. 决策（已批准 2026-10-28）
 
-1. **双认窗口**：按 §4 保留全局值直到收敛（推荐），还是直接硬切（一次性中断、需同步重下发所有节点）？
-2. **自助换发触发**：CLI + 401 自愈（推荐）／仅 CLI（运维可控，但每台都要碰）／仅 401 自愈（最省事，但节点静默换 token 对运维不透明）？
-3. **是否同时做 per-node 可达性策略**（如「节点 A 只允许代理到白名单节点」）：
-   本方案**建议不做**——它会把「节点间转发」这一既有能力变成需要配置的功能，
-   超出本次「修身份/吊销」的目标。若要，另立一项，与本节分开评审。
+1. **双认窗口**：✅ 按 §4 **保留全局值直到收敛**（不硬切）。已实现：解析器先查 per-node、
+   未命中退回全局。
+2. **自助换发触发**：✅ **CLI + 401 自愈**（两者都做）。已实现：
+   `godex node rotate-proxy-token` 与 `CenterBridge.SetUnauthorizedHandler`。
+3. **per-node 可达性策略**：✅ **不做**。理由：它会把「节点间转发」这一既有能力
+   变成需要配置的功能，超出本次「修身份/吊销」的目标。
+   （仍存在的一处泄漏如实记录于设计 §1.3：「403 vs 404 探测 id 是否存在」
+   在单租户形态下依然存在，本期不试图消除。）
+
+> 实现记录：P1+P2 已提交（`bdd7ac9`、`8f5668a`）。剩余 P4：
+> 确认无节点再用全局值后清空 `control.node_proxy_token`，并同步文档。
+> 本文档状态已从 Draft 改为 Implemented/Partial。
 
 ---
 

@@ -159,7 +159,7 @@ godex node join 'http://<中心地址>' --id my-laptop --credential <ck_...> --t
 > | **中心 web token** | 平台超管凭证 | **只有你（超管）**。节点页那个「接入中心」表单需要它，因此它是**超管给本机做接入**用的 |
 > | **加入码 `gjt_...`** | 一次性租户入网码 | 发给要接入的机器/租户 |
 > | **节点凭证 `ck_...`** | 中心签发的**单节点**凭证 | 由接入流程自动写入该节点的 `.env`，你不需要手抄 |
-> | **`nk_...`** | 受限的节点代理凭证 | 同上，自动下发 |
+> | **`nk_...`** | 受限的**单节点**代理凭证（已改为 per-node） | 同上，自动下发；每个节点只能拿自己的 `nk_`，中心据此得知「是哪个节点」（含其租户） |
 >
 > 换句话说：**加入码是给「不是超管的人」用的那条路**；节点页表单是「超管在本机操作」的便捷路径。
 
@@ -169,7 +169,7 @@ godex node join 'http://<中心地址>' --id my-laptop --credential <ck_...> --t
 {
   "node_id": "node-a1",
   "credential": "ck_...",          // 该节点的凭证
-  "node_proxy_token": "nk_...",     // 受限代理凭证
+  "node_proxy_token": "nk_...",     // 该节点的受限代理凭证（per-node）
   "tenant_id": "tnt_xxx",
   "owner_user_id": "usr_xxx",
   "visibility": "private"
@@ -330,7 +330,7 @@ curl -s -X POST http://127.0.0.1:8080/api/control/join \
   -d '{"token":"gjt_你的码","node_id":"node-a1","name":"车间笔记本"}'
 ```
 
-✅ 返回 `201`，含 `credential`（`ck_...`）、`node_proxy_token`（`nk_...`）、`tenant_id`、`owner_user_id`、`visibility: private`
+✅ 返回 `201`，含 `credential`（`ck_...`）、`node_proxy_token`（`nk_...`，**per-node**：中心据此得知是哪个节点及其租户）、`tenant_id`、`owner_user_id`、`visibility: private`
 
 3. 重复签第二个码，接入 `node-a2` → 同样 `201`
 

@@ -86,7 +86,7 @@
 | [remote-sandbox-design.md](./remote-sandbox-design.md) | A 会话 + B 工具执行的远程沙箱设计 | Draft（待确认后实施） |
 | [multi-tenant-commercialization-design.md](./multi-tenant-commercialization-design.md) | 商业化多租户设计（SaaS 中继 · 订阅制）：身份/租户模型、节点归属与可见性、NodeAccess 重构、只转发边界、两档订阅、账号面（§3.7）；含 5 处阻断项实证 | Active / Partial（P0–P3 主体已落地；未完成项见 §8 状态表与 §9）；§1 为可复现现状 |
 | [multi-tenant-authorization-matrix.md](./multi-tenant-authorization-matrix.md) | 多租户越权面与测试矩阵：六类「到某节点」面 + 策略层 + 中心/平台面 + 数据面的闸门与对应回归测试；新增面时的维护约定 | Active / Implemented（2026-10-28 核对） |
-| [nk-per-node-migration-plan.md](./nk-per-node-migration-plan.md) | `nk_` 改 per-node 的迁移与重下发方案：现状实测（全局单凭据解锁哪些面）、双认零中断迁移、节点自助重下发、验收与回滚、三项待决策 | Draft（方案；实现前需拍板 §7） |
+| [nk-per-node-migration-plan.md](./nk-per-node-migration-plan.md) | `nk_` 改 per-node 的迁移与重下发方案：现状实测（全局单凭据解锁哪些面）、双认零中断迁移、节点自助重下发、验收与回滚；§7 三项决策已批准 | Implemented / Partial（P1+P2 已落地；P4 清空全局值待部署后执行） |
 | [p0-principal-migration-inventory.md](./p0-principal-migration-inventory.md) | P0 鉴权迁移入口清点：268 处路由 × 8 鉴权族、逐入口改为 Principal 后的行为、迁移顺序；附带 3 个安全发现（terminal 无鉴权、DELETE 谎报成功、fail-open） | Historical（P0 已完工，本文件为当时的启工清点）；§4.1 为实测复现 |
 | [big-file-split-plan.md](./big-file-split-plan.md) | 四个大文件拆分的历史方案与当前结果 | Go 三项完成，ChatPage Partial |
 | [cache-optimization-plan.md](./cache-optimization-plan.md) | Cache & Tool 优化实施记录 | 1.1–2.3 完成，adaptive TTL Planned |

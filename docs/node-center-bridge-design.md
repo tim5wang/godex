@@ -153,6 +153,11 @@ godex node forward --node B --local <port> --target <host:port> --center <A 的�
 
 **P0-1 受限节点凭证（`nk_`）替代全量 web token**：
 - 中心新增 `control.node_proxy_token`（Secret，env `GODEX_CONTROL_NODE_PROXY_TOKEN`）与签发端点 `POST /control/node-proxy-token`（web token 保护，幂等生成/返回 `nk_`）。
+  > **⚠️ 后续演进（2026-10-28，设计 §1.3 / §9 R2）**：请示的 `nk_` 已改为 **per-node**——
+  > 带 `node_id` 的签发请求会得到属于该节点的 `nk_`（存 `ProxyTokenHash`）；不带 `node_id` 时
+  > 仍返回全局值（双认过渡期）。另新增节点自助轮换 `POST /control/self/proxy-credential`
+  > （Bearer = 节点自己的 `ck_`，只能换自己）。`control.node_proxy_token` 全局值将作为 P4 逐步废弃。
+  > 因此下文「幂等返回同一个 `nk_`」只适用于过渡期的全局值路径。
 - 中心代理面认证拆分：节点列表/单节点/overview（读面，`nodeProxyRead`）与 proxy/forward/forwards 端点（`nodeProxyAuthorize`）接受「web token **或** nk_」；config/sessions/files 等管理面仍仅 web token。
 - `join`（CLI）与 `self/join`（Web UI）自动用 web token 换取 `nk_` 写入节点 `center_token`——节点落盘的是受限凭证，不再持有全量 web token；被入侵节点只能访问代理面，不能碰中心管理面。
 

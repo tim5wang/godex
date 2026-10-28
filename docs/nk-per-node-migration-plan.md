@@ -255,15 +255,31 @@ mac  godex.yaml  control.center_token           len=32（另一个值，被 .env
 已核实 mac / win-min / 中心自身**均不属此类**；剩 3 个离线节点无法核实，
 **故清空前必须以中心日志确认「再无 legacy 命中 WARN」，不能靠节点数量推断**。
 
+#### 节点升级实况（2026-10-29）
+
+| 节点 | 升级前 | 动作 | 状态 |
+|---|---|---|---|
+| **mac** | `b70a5d1`（无 401 自愈） | 构建 `68be30a` darwin/arm64，隔离冒烟（独立 home+端口，`/api/meta` 200），同盘 `mv` 原子替换 | ✅ **磁盘已升级**；运行进程仍持旧 inode（PID 40941，`lstart` 10-27 23:33），**待重启生效** |
+| **win-min** | `v1.3.0`（2026-08-23） | 未动 | ⛔ **无凭据可换**（`center_token` 空、`bridge.Enabled()` 恒 false），升级与否都不影响本次迁移；且其启动条件为 `systemctl --user`，远程重启风险高于收益 |
+| node_8ae5…（中心自身） | `68be30a` | — | ⛔ 无凭据可换（设计如此） |
+| win-pc / node-podman-test / node-153f6098 | 未知 | 未动 | ⏸ 离线，无法操作 |
+
+> **mac 重启为何未做**：其 `serve` 由 launchd 托管（`KeepAlive=true`），
+> 而**该进程正是本会话的宿主**（本 shell 的父进程）——重启它会终止当前会话。
+> 二进制已就位，重启即生效；重启动作需用户在会话外执行：
+> `launchctl kickstart -k gui/$(id -u)/com.godex.godex`
+
 #### 下一步顺序
 
 1. ✅ 节点换发：真实的只有 mac，已完成（其余无凭据可换）
-2. 观察中心日志 legacy 命中 WARN **归零**（可测量的完成判据）——本次部署以来已为 0
-3. 决定 3 个离线节点的去留（退册或上线换发）
-4. 备份原值后清空 `control.node_proxy_token`（该键已补 `PlatformAdmin`，仅超管可改）
+2. ✅ 节点升级：mac 二进制已就位（重启生效）；win-min 无需升级
+3. 观察中心日志 legacy 命中 WARN **归零**——本次部署以来已为 0
+4. 决定 3 个离线节点的去留（退册或上线换发）
+5. 备份原值后清空 `control.node_proxy_token`（该键已补 `PlatformAdmin`，仅超管可改）
 
 > 注意：401 自愈的代码在**节点自己的二进制**里，旧节点不会自愈；未升级的节点需显式跑
 > `godex node rotate-proxy-token`。因此「节点侧升级」是这一步的真实工作量，不是零成本。
+> mac 已完成换发，故在重启前也不需要自愈。
 
 ---
 

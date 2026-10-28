@@ -34,6 +34,7 @@ type Config struct {
 	LLMProviders         map[string]llm.ProviderConfig
 	LLMStrategy          llm.StrategyConfig
 	WebToken             string
+	WebAllowSelfSignup   bool
 	MaxTokens            int
 	APITimeoutSeconds    int
 	HomeDir              string

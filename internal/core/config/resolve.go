@@ -330,6 +330,7 @@ func (m *Manager) resolve(file ConfigFile) (*Config, map[string]fieldOrigin, err
 	resolveString("logging.file_path", file.Logging.FilePath, "LOG_FILE", func(v string) { current.Logging.FilePath = resolveLogPath(m.homeDir, v) })
 	resolveBool("logging.also_stderr", file.Logging.AlsoStderr, "LOG_MIRROR_TO_STDERR", func(v bool) { current.Logging.AlsoStderr = v })
 	resolveString("web.token", file.Web.Token, "GODEX_WEB_TOKEN", func(v string) { current.WebToken = v })
+	resolveBool("web.allow_self_signup", file.Web.AllowSelfSignup, "GODEX_WEB_ALLOW_SELF_SIGNUP", func(v bool) { current.WebAllowSelfSignup = v })
 	resolveBool("cron.enabled", file.Cron.Enabled, "GODEX_CRON_ENABLED", func(v bool) { current.Cron.Enabled = v })
 	resolveInt("cron.tick_seconds", file.Cron.TickSeconds, "GODEX_CRON_TICK_SECONDS", func(v int) { current.Cron.TickSeconds = v })
 	resolveString("cron.default_timezone", file.Cron.DefaultTimezone, "GODEX_CRON_DEFAULT_TIMEZONE", func(v string) { current.Cron.DefaultTimezone = v })

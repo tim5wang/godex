@@ -138,6 +138,21 @@ weixin/poller.go:170   轮询到入站消息
 由超管在 **settings 界面**维护（见 §3.3）。
 若不做，决策⑨ 的「只有一个用户能跑」在微信入口上就是假的。
 
+**绑定的闸门（2026-10-28 决策）**：`allow_from` 只管「谁能发消息来驱动 agent」，
+**不管「bot 归谁」**；后者由**扫码绑定**决定，而绑定接口原先只挂 `protected`，
+即**任何登录租户用户都能扫码把 bot 绑给自己**。已修为
+`requirePlatformAdminOrNodeActor`（`httpapi/admin_gate.go`）：
+
+| 调用方 | 结果 |
+|---|---|
+| 超管（web token） | ✅ 可绑定 |
+| 租户用户（登录会话） | ❌ **403** |
+| 节点身份（经中心代理的远端节点） | ✅ 放行——`/channels/*` 是节点作用域的，
+远端节点激活时请求被代理过去，只卡平台角色会让**远端节点无法绑定**（已用证伪测试钉住） |
+
+测试：`TestWeixinAuthBindingRequiresPlatformAdmin`、
+`TestWeixinAuthBindingStillAllowsRelayNodeActor`（`signup_and_channel_gate_test.go`）。
+
 ### 1.5 阻断项 E（**已降级为“不属本轮”**）：容器编排底座不存在
 
 > **决策⑨ 已把容器部署隔离排到以后**，故本节**不再是本轮阻断项**，
@@ -377,6 +392,23 @@ requireCenterExecution(protected)(handler)   // 鉴权 → 能力位 → handler
 现状自助加入需要**中心的完整 web token**（`routes_self_join.go:24-25`：`req.Token` 用 full web token）。
 SaaS 下这等于把主密钥给了每个用户，**必须替换**：改为**租户内一次性 join token**，
 注册时由中心解析出 `tenant_id` 并写入节点归属（§4）。
+
+**自助注册默认关闭（2026-10-28 决策）**：`POST /auth/register` 会**新建一个租户**，
+所以开着它 = 任何能访问该实例的人都能自建租户。现由 `web.allow_self_signup`
+（默认 `false`，env `GODEX_WEB_ALLOW_SELF_SIGNUP`）控制：
+
+| 场景 | 行为 |
+|---|---|
+| 开关关闭（默认） | 匿名调用 **403**；**持 web token 的超管仍可创建租户**（能力不丢，只去掉匿名敞口） |
+| 开关打开 | 匿名可注册（SaaS 形态），行为与收紧前一致 |
+
+`/meta` 返回 `allow_self_signup`，登录页据此隐藏会 403 的「注册」页签。
+拒绝发生在解析请求体之前，避免借错误差异探测邮箱是否已存在。
+测试：`TestSelfSignupRefusedByDefaultWithoutOperatorCredential`、
+`TestSelfSignupOpenWhenOperatorOptsIn`（`signup_and_channel_gate_test.go`）。
+
+**加入既有租户仍走 `/auth/accept-invite`**（一次性邀请码，未改动），所以关闭自助注册
+不影响「第二个人加入同一个租户」。
 
 ### 3.6 运营代看（决策⑪：默认用户主动授权）✅ 已落地
 

@@ -167,7 +167,8 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 			LeadName:      cfg.LeadName,
 			Model:         cfg.Model,
 			WorkspaceDir:  cfg.WorkspaceDir,
-			AuthRequired:  strings.TrimSpace(cfg.WebToken) != "",
+			AuthRequired:    strings.TrimSpace(cfg.WebToken) != "",
+			AllowSelfSignup: selfSignupAllowed(manager, r),
 			Version:       version.Current(),
 			ExecutionMode: exec.Mode,
 			SSHTarget:     exec.SSHTarget,
@@ -201,7 +202,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	nodeProxyRead := anonymousGuard(withPrincipalAuth(withBearerAuthProvider(func() string {
 		return manager.Current().WebToken
 	}, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionTokenChecker(accountsService)), principalForRequest(manager, relayTrustChecker(manager), nodeProxyTokenChecker(manager), sessionPrincipal(accountsService))))
-	registerAuthRoutes(mux, accountsService, protected)
+	registerAuthRoutes(mux, manager, accountsService, protected)
 	registerAdminRoutes(mux, accountsService, controlRegistry, protected)
 	// Relay metering (design §7 basic tier). Tenant-scoped and operator-wide views
 	// live in one file because they must agree on the window semantics.

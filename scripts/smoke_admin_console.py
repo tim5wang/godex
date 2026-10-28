@@ -54,7 +54,13 @@ class Center:
         self.log_path = os.path.join(home, "serve.log")
 
     def start(self) -> bool:
-        env = dict(os.environ, GODEX_HOME=self.home, GODEX_WEB_TOKEN=WEB_TOKEN)
+        # GODEX_WEB_ALLOW_SELF_SIGNUP opts this throwaway instance into the SaaS
+        # surface this scenario exercises: step 1 signs two tenants up through
+        # /auth/register. The shipped default is CLOSED (signup mints a new tenant,
+        # so an open instance lets anyone create one), which is what a real
+        # single-operator deployment wants.
+        env = dict(os.environ, GODEX_HOME=self.home, GODEX_WEB_TOKEN=WEB_TOKEN,
+                   GODEX_WEB_ALLOW_SELF_SIGNUP="true")
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen(
             [self.binary, "serve", "--addr", f"127.0.0.1:{self.port}"],

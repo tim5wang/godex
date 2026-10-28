@@ -214,6 +214,7 @@ export default function App() {
         <AntApp>
           <LoginPage
             notice={sessionRejected ? t("auth.sessionExpired") : undefined}
+            allowSelfSignup={metaQuery.data?.allow_self_signup ?? false}
             onSessionToken={(next) => {
               setSessionToken(next);
               void queryClient.invalidateQueries();

@@ -180,6 +180,12 @@ type LoggingSection struct {
 
 type WebSection struct {
 	Token string `yaml:"token"`
+	// AllowSelfSignup opens POST /auth/register to anonymous callers. Closed by
+	// default: self-service signup mints a NEW tenant, so leaving it open lets
+	// anyone who can reach the instance create one of their own. The platform
+	// admin can always create a tenant by presenting the web token, so closing
+	// this removes exposure without removing the capability.
+	AllowSelfSignup bool `yaml:"allow_self_signup"`
 }
 
 type CronSection struct {

@@ -20,7 +20,16 @@ func registerChannelStatusRoute(mux *http.ServeMux, channels statusProvider, pro
 }
 
 func registerWeixinRoutes(mux *http.ServeMux, weixinAuth weixinAuthProvider, protected func(http.Handler) http.Handler) {
-	mux.Handle("GET /channels/weixin/auth", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Binding the bot decides which WeChat identity drives an agent on this
+	// instance, so it is platform administration, not a per-user setting. Without
+	// this gate any signed-in tenant user could scan the QR and hand the bot to
+	// themselves — the same class of hole as editing channels.weixin.allow_from.
+	//
+	// Node actors are admitted because /channels/* is node-scoped: with a remote
+	// node active the request is proxied there and arrives as the relay-trust node
+	// identity, so a platform-only gate would make remote bot setup impossible.
+	operatorOnly := requirePlatformAdminOrNodeActor(protected)
+	mux.Handle("GET /channels/weixin/auth", operatorOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if weixinAuth == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("weixin web auth unavailable"))
 			return
@@ -32,7 +41,7 @@ func registerWeixinRoutes(mux *http.ServeMux, weixinAuth weixinAuthProvider, pro
 		}
 		writeJSON(w, http.StatusOK, status)
 	})))
-	mux.Handle("POST /channels/weixin/auth/start", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /channels/weixin/auth/start", operatorOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if weixinAuth == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("weixin web auth unavailable"))
 			return
@@ -49,7 +58,7 @@ func registerWeixinRoutes(mux *http.ServeMux, weixinAuth weixinAuthProvider, pro
 		}
 		writeJSON(w, http.StatusOK, status)
 	})))
-	mux.Handle("POST /channels/weixin/auth/logout", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /channels/weixin/auth/logout", operatorOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if weixinAuth == nil {
 			writeError(w, http.StatusNotFound, fmt.Errorf("weixin web auth unavailable"))
 			return

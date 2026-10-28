@@ -828,6 +828,13 @@ func TestMetaEndpointIsPublic(t *testing.T) {
 	if meta["auth_required"] != true {
 		t.Fatalf("expected auth_required=true, got %#v", meta["auth_required"])
 	}
+	// /meta must report the signup policy so the sign-in page can hide a
+	// "create account" tab the server would refuse. newTestManager enables
+	// self-signup, so it reads true here; the closed default is covered by
+	// TestSelfSignupRefusedByDefaultWithoutOperatorCredential.
+	if meta["allow_self_signup"] != true {
+		t.Fatalf("expected allow_self_signup=true, got %#v", meta["allow_self_signup"])
+	}
 }
 
 func TestProtectedEndpointsRequireBearerToken(t *testing.T) {
@@ -3401,15 +3408,17 @@ func newTestManager(t *testing.T, cfg *config.Config) *config.Manager {
 	if err != nil {
 		t.Fatalf("new test manager: %v", err)
 	}
+	values := map[string]interface{}{}
 	if cfg.WebToken != "" {
-		_, err = manager.Update(context.Background(), config.UpdateRequest{
-			Values: map[string]interface{}{
-				"web.token": cfg.WebToken,
-			},
-		})
-		if err != nil {
-			t.Fatalf("seed manager token: %v", err)
-		}
+		values["web.token"] = cfg.WebToken
+	}
+	// Tests exercise a SaaS-style instance where self-service signup is open, so
+	// the many cases that register a tenant to obtain a session token keep
+	// working. The CLOSED default is what production runs and is covered
+	// explicitly by TestSelfSignupRefusedByDefaultWithoutOperatorCredential.
+	values["web.allow_self_signup"] = true
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{Values: values}); err != nil {
+		t.Fatalf("seed manager values: %v", err)
 	}
 	return manager
 }

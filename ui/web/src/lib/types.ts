@@ -268,6 +268,9 @@ export interface MetaResponse {
   model: string;
   workspace_dir: string;
   auth_required: boolean;
+  /** Whether POST /auth/register accepts anonymous callers. False (the default)
+   *  means the sign-in page must not offer a "create account" tab. */
+  allow_self_signup?: boolean;
   version: VersionInfo;
   execution_mode?: string;
   ssh_target?: string;

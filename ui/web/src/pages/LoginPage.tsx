@@ -13,7 +13,9 @@ type Mode = "login" | "register" | "invite" | "token";
  *
  * Three ways in, because three real cases exist:
  *   - login: an existing SaaS account (email + password);
- *   - register: a new tenant (design §3.5 self-service signup);
+ *   - register: a new tenant (design §3.5 self-service signup). Offered only when
+ *     the instance accepts anonymous signup (web.allow_self_signup); otherwise the
+ *     server refuses it and the tab would be a dead end, so it is hidden;
  *   - invite: join an EXISTING tenant with a one-time code (design §3.6). Without
  *     this mode a second person could never join a tenant, because register
  *     always creates a new one;
@@ -27,10 +29,16 @@ export function LoginPage(props: {
   onWebToken: (token: string) => void;
   /** Optional message, e.g. "your session expired". */
   notice?: string;
+  /**
+   * Whether this instance accepts anonymous signup. False (the server default)
+   * hides the register tab, since POST /auth/register would answer 403.
+   */
+  allowSelfSignup?: boolean;
 }) {
   const { t } = useI18n();
   const { message } = AntApp.useApp();
   const [mode, setMode] = useState<Mode>("login");
+  const signupOpen = props.allowSelfSignup ?? false;
 
   const loginMutation = useMutation({
     mutationFn: (values: { email: string; password: string }) => loginAccount(values),
@@ -104,7 +112,7 @@ export function LoginPage(props: {
             onChange={setMode}
             options={[
               { value: "login", label: t("auth.modeLogin") },
-              { value: "register", label: t("auth.modeRegister") },
+              ...(signupOpen ? [{ value: "register" as Mode, label: t("auth.modeRegister") }] : []),
               { value: "invite", label: t("auth.modeInvite") },
               { value: "token", label: t("auth.modeToken") },
             ]}

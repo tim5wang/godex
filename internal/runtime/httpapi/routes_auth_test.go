@@ -317,7 +317,7 @@ func TestAuthLogoutRejectsWebToken(t *testing.T) {
 // simply omitting Dependencies.Accounts.
 func TestAuthRoutesUnavailableWithoutAccountStore(t *testing.T) {
 	mux := http.NewServeMux()
-	registerAuthRoutes(mux, nil, allowAll)
+	registerAuthRoutes(mux, nil, nil, allowAll)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 

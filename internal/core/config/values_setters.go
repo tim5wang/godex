@@ -198,6 +198,8 @@ func setWebStoredValue(file *ConfigFile, path string, value any) error {
 	switch path {
 	case "web.token":
 		file.Web.Token = asString(value)
+	case "web.allow_self_signup":
+		file.Web.AllowSelfSignup = asBool(value)
 	default:
 		return fmt.Errorf("unknown config field: %s", path)
 	}

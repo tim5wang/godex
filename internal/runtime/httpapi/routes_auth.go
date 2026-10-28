@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tim5wang/godex/internal/core/config"
 	"github.com/tim5wang/godex/internal/core/identity"
 	"github.com/tim5wang/godex/internal/platform/logger"
 	"github.com/tim5wang/godex/internal/services/accounts"
@@ -64,9 +65,22 @@ type authTenantResponse struct {
 // Each pattern is registered exactly once, with availability decided INSIDE the
 // handlers: the route-ownership gate requires one registration site per pattern,
 // and a separate "service unavailable" branch would register every pattern twice.
-func registerAuthRoutes(mux *http.ServeMux, accountsService *accounts.Service, protected func(http.Handler) http.Handler) {
+func registerAuthRoutes(mux *http.ServeMux, manager *config.Manager, accountsService *accounts.Service, protected func(http.Handler) http.Handler) {
 	mux.Handle("POST /auth/register", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !authServiceAvailable(w, accountsService) {
+			return
+		}
+		// Self-service signup mints a NEW tenant, so leaving it open lets anyone
+		// who can reach this instance create their own. It is therefore closed by
+		// default and opened only by the operator (web.allow_self_signup). The
+		// platform admin can still create a tenant by presenting the web token,
+		// which is what keeps single-operator deployments working unchanged.
+		//
+		// Checked BEFORE decoding the body so an unauthenticated caller learns
+		// nothing about which emails exist.
+		if !selfSignupAllowed(manager, r) {
+			writeError(w, http.StatusForbidden, fmt.Errorf(
+				"self-service signup is disabled on this instance; ask the platform administrator for an invite (set web.allow_self_signup to enable it)"))
 			return
 		}
 		var req registerRequest
@@ -218,6 +232,25 @@ func principalResponseBody(principal identity.Principal) authPrincipalResponse {
 // Bad credentials are 401, not 403: the caller is unauthenticated rather than
 // authenticated-but-forbidden, and 403 would push a client to retry with the same
 // wrong credentials.
+// selfSignupAllowed reports whether this caller may create a NEW tenant through
+// /auth/register.
+//
+// Two ways to be allowed: the setting is on (the operator opted in), or the
+// caller presents the web token (the platform admin creating a tenant). The
+// second is what lets a fresh instance bootstrap without enabling anonymous
+// signup for everyone.
+func selfSignupAllowed(manager *config.Manager, r *http.Request) bool {
+	if manager == nil {
+		return true
+	}
+	current := manager.Current()
+	if current.WebAllowSelfSignup {
+		return true
+	}
+	token := strings.TrimSpace(current.WebToken)
+	return token != "" && bearerAuthorized(r, token)
+}
+
 func statusForAuthError(err error) int {
 	switch {
 	case err == nil:

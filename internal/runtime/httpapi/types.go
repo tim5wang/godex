@@ -352,6 +352,10 @@ type metaResponse struct {
 	Model         string       `json:"model"`
 	WorkspaceDir  string       `json:"workspace_dir"`
 	AuthRequired  bool         `json:"auth_required"`
+	// AllowSelfSignup reports whether POST /auth/register accepts anonymous
+	// callers. The sign-in page uses it to hide a "create account" tab that the
+	// server would refuse anyway.
+	AllowSelfSignup bool `json:"allow_self_signup"`
 	Version       version.Info `json:"version"`
 	ExecutionMode string       `json:"execution_mode,omitempty"`
 	SSHTarget     string       `json:"ssh_target,omitempty"`

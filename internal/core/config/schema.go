@@ -69,6 +69,7 @@ func baseSchema() []SectionSchema {
 			Description: "Built-in Web UI and HTTP API configuration.",
 			Fields: []FieldSchema{
 				{Path: "web.token", Label: "Shared Bearer Token", Description: "Protects chat and config HTTP APIs.", Type: "string", Secret: true, LiveApply: true, PlatformAdmin: true, Env: "GODEX_WEB_TOKEN"},
+				{Path: "web.allow_self_signup", Label: "Allow Self Signup", Description: "Open POST /auth/register to anonymous callers. Closed by default: signup mints a new tenant, so leaving it open lets anyone who can reach this instance create their own. The platform admin can always create a tenant with the web token.", Type: "bool", LiveApply: true, Env: "GODEX_WEB_ALLOW_SELF_SIGNUP"},
 			},
 		},
 		{

@@ -425,6 +425,10 @@ logging:
 web:
   # Shared bearer token for HTTP chat + config APIs. Environment override: GODEX_WEB_TOKEN.
   token: {{ yamlString .Web.Token }}
+  # Allow anonymous POST /auth/register. Closed by default: signup creates a NEW
+  # tenant, so an open instance lets anyone who can reach it create their own.
+  # Environment override: GODEX_WEB_ALLOW_SELF_SIGNUP.
+  allow_self_signup: {{ .Web.AllowSelfSignup }}
 
 cron:
   # Enable the background cron scheduler in serve mode. Environment override: GODEX_CRON_ENABLED.

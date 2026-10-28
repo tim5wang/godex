@@ -1,6 +1,6 @@
 import { request } from "./apiClient";
 
-// User centre, member management and person invites (design §3.6). Its own module
+// User centre, member management and person invites (design §3.7). Its own module
 // rather than an append to api.ts, which is already against the source line budget.
 
 /** AccountProfile is the caller's own view of their account.

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The user centre, member management and person invites (design §3.6).
+// The user centre, member management and person invites (design §3.7).
 //
 // Focused on the properties that would be dangerous to get wrong rather than on
 // every field: self-scoping (no id in the request can address another account),

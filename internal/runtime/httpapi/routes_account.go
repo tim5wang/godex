@@ -1,10 +1,10 @@
 // godex-feature: accounts
-// 用户中心 + 成员管理 + 人员邀请码（设计 §3.6）。
+// 用户中心 + 成员管理 + 人员邀请码（设计 §3.7）。
 // 入口：/account/*（本人账户）、/tenant/members|invites（租户管理员）、
 //
 //	/admin/tenants/{id}/members|invites（超管）、/auth/accept-invite（凭码加入）
 //
-// 文档：docs/multi-tenant-commercialization-design.md §3.6
+// 文档：docs/multi-tenant-commercialization-design.md §3.7
 package httpapi
 
 import (
@@ -43,7 +43,7 @@ type memberResponse struct {
 	JoinedAt string `json:"joined_at,omitempty"`
 }
 
-// registerAccountRoutes wires the self-service account surface (design §3.6
+// registerAccountRoutes wires the self-service account surface (design §3.7
 // "用户中心"). Every route is scoped to the CALLER: the user id comes from the
 // authenticated principal, never from the request, so there is no id to tamper
 // with and no way to address another account.
@@ -239,7 +239,7 @@ func accountUserID(principal identity.Principal) string {
 	return strings.TrimSpace(principal.UserID)
 }
 
-// registerMemberRoutes wires member management (design §3.6).
+// registerMemberRoutes wires member management (design §3.7).
 //
 // Two route families, one implementation: a tenant owner/admin manages their own
 // tenant through /tenant/*, and the platform superadmin manages any tenant through

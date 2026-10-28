@@ -84,8 +84,8 @@
 | [p3-foundations-design.md](./p3-foundations-design.md) | Flow 画布、执行可观测性、节点库与运行时上下文的前置设计 | Draft；落地情况以功能矩阵与源码为准 |
 | [node-mesh-design.md](./node-mesh-design.md) | Node Mesh v2 实现与剩余路线 | Phase 1–3 已完成，Phase 4/5 Partial |
 | [remote-sandbox-design.md](./remote-sandbox-design.md) | A 会话 + B 工具执行的远程沙箱设计 | Draft（待确认后实施） |
-| [multi-tenant-commercialization-design.md](./multi-tenant-commercialization-design.md) | 商业化多租户设计（SaaS 中继 · 订阅制）：身份/租户模型、节点归属与可见性、NodeAccess 重构、只转发边界、两档订阅；含 5 处阻断项实证 | Draft（设计待评审，尚未实施）；§1 为可复现现状 |
-| [p0-principal-migration-inventory.md](./p0-principal-migration-inventory.md) | P0 鉴权迁移入口清点：268 处路由 × 8 鉴权族、逐入口改为 Principal 后的行为、迁移顺序；附带 3 个安全发现（terminal 无鉴权、DELETE 谎报成功、fail-open） | Draft（P0 开工前的入口清点）；§4.1 为实测复现 |
+| [multi-tenant-commercialization-design.md](./multi-tenant-commercialization-design.md) | 商业化多租户设计（SaaS 中继 · 订阅制）：身份/租户模型、节点归属与可见性、NodeAccess 重构、只转发边界、两档订阅、账号面（§3.7）；含 5 处阻断项实证 | Active / Partial（P0–P3 主体已落地；未完成项见 §8 状态表与 §9）；§1 为可复现现状 |
+| [p0-principal-migration-inventory.md](./p0-principal-migration-inventory.md) | P0 鉴权迁移入口清点：268 处路由 × 8 鉴权族、逐入口改为 Principal 后的行为、迁移顺序；附带 3 个安全发现（terminal 无鉴权、DELETE 谎报成功、fail-open） | Historical（P0 已完工，本文件为当时的启工清点）；§4.1 为实测复现 |
 | [big-file-split-plan.md](./big-file-split-plan.md) | 四个大文件拆分的历史方案与当前结果 | Go 三项完成，ChatPage Partial |
 | [cache-optimization-plan.md](./cache-optimization-plan.md) | Cache & Tool 优化实施记录 | 1.1–2.3 完成，adaptive TTL Planned |
 | [tui-bubbletea-design.md](./tui-bubbletea-design.md) | 统一多入口架构设计记录 | Historical / Implemented |

@@ -1,6 +1,6 @@
 # P0 鉴权迁移入口清点（逐入口 → 改为 Principal 后行为）
 
-> 状态：Draft（P0 开工前的入口清点，待评审）
+> 状态：Historical（P0 已完工；本文件是当时的启工清点，保留作为迁移依据与实测记录）
 > 日期：2026-10-25
 > 关联：[multi-tenant-commercialization-design.md](./multi-tenant-commercialization-design.md)（§3 身份模型、附录 A）
 > 用途：把设计文档附录 A 的「grep 计数」替换为**可执行的逐入口清单**——

@@ -22,7 +22,7 @@ import { changePassword, getAccountProfile, listAccountSessions, listLoginEvents
 import { eventLabel, roleLabel } from "../../lib/accountLabels";
 import { useSettingsStore } from "../../store/settings";
 
-/** AccountPage is the user centre (design §3.6): the caller's own profile, their
+/** AccountPage is the user centre (design §3.7): the caller's own profile, their
  *  signed-in devices, and their sign-in history.
  *
  *  Every call is self-scoped by the server — the user id comes from the

@@ -33,7 +33,7 @@ import {
 } from "../../lib/apiAccount";
 import { roleLabel } from "../../lib/accountLabels";
 
-/** MembersPage is tenant member management (design §3.6).
+/** MembersPage is tenant member management (design §3.7).
  *
  *  One component serves both surfaces: a tenant owner/admin manages their own
  *  tenant (`scope.kind === "tenant"`), and the platform superadmin manages any

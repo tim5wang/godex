@@ -241,12 +241,58 @@ type Manager struct {
 	statuses  map[string]ChannelStatus
 	active    bool
 
+	// inboundOwners records, per channel, the platform identity that owns the
+	// channel's binding (for WeChat: the iLink user id that scanned the QR).
+	//
+	// It exists so the inbound gate can default to "only the bound owner may drive
+	// this channel" without the operator having to hand-copy their own id into
+	// channels.weixin.allow_from. The value is PUSHED by the channel runtime
+	// (weixin/poller.go) rather than read here, because runtime/channels/weixin
+	// imports this package and the reverse edge would be an import cycle.
+	ownerMu       sync.RWMutex
+	inboundOwners map[string]string
+
 	recentInbound   map[string]time.Time
 	inboundDedupTTL time.Duration
 	slowAckDelay    time.Duration
 	deliverySeq     atomic.Uint64
 	deliveryDelay   time.Duration
 	deliveries      []DeliveryRecord
+}
+
+// SetInboundOwner records which platform identity owns a channel's binding.
+//
+// Pushed by the channel runtime (for WeChat: the iLink user id that completed the
+// QR login) so the inbound gate can default to "only the bound owner may drive
+// this channel". An empty owner clears it, which is what happens when the
+// binding goes away (logout, cleared session, no credentials on disk) — and
+// clearing must be explicit, because a stale owner would keep admitting someone
+// whose binding no longer exists.
+func (m *Manager) SetInboundOwner(channel, ownerID string) {
+	if m == nil {
+		return
+	}
+	channel = strings.ToLower(strings.TrimSpace(channel))
+	if channel == "" {
+		return
+	}
+	m.ownerMu.Lock()
+	defer m.ownerMu.Unlock()
+	if strings.TrimSpace(ownerID) == "" {
+		delete(m.inboundOwners, channel)
+		return
+	}
+	m.inboundOwners[channel] = strings.TrimSpace(ownerID)
+}
+
+// InboundOwner returns the platform identity bound to a channel, or "".
+func (m *Manager) InboundOwner(channel string) string {
+	if m == nil {
+		return ""
+	}
+	m.ownerMu.RLock()
+	defer m.ownerMu.RUnlock()
+	return m.inboundOwners[strings.ToLower(strings.TrimSpace(channel))]
 }
 
 var channelsLog = logger.New("channels")
@@ -258,6 +304,7 @@ func NewManager(cfg *config.Config, backend Backend) *Manager {
 		backend:         backend,
 		channels:        make(map[string]Channel),
 		statuses:        make(map[string]ChannelStatus),
+		inboundOwners:   make(map[string]string),
 		recentInbound:   make(map[string]time.Time),
 		inboundDedupTTL: defaultInboundDedupTTL,
 		slowAckDelay:    defaultSlowAckDelay,
@@ -799,11 +846,35 @@ func (m *Manager) checkInboundAccess(inbound InboundMessage) AccessDecision {
 	}
 	switch strings.ToLower(strings.TrimSpace(inbound.Channel)) {
 	case "weixin":
-		if !senderAllowed(m.cfg.Weixin.AllowFrom, decision.SenderID) {
+		// Decision ⑫ follow-up: an explicitly configured allowlist always decides.
+		// What changed is the EMPTY case. It used to mean "allow every sender"
+		// (`len(allow)==0 → true`), which is the hole: anyone who could message the
+		// bot could drive an agent holding the operator's capabilities. Empty now
+		// means "only the account that bound the bot", which is the identity the QR
+		// login recorded — so the secure behaviour is what you get by not configuring
+		// anything at all.
+		if len(m.cfg.Weixin.AllowFrom) > 0 {
+			if !senderAllowed(m.cfg.Weixin.AllowFrom, decision.SenderID) {
+				decision.Action = AccessActionDeny
+				decision.Reason = "sender outside channels.weixin.allow_from"
+			} else {
+				decision.Reason = "sender allowed by channels.weixin.allow_from"
+			}
+			break
+		}
+		owner := m.InboundOwner(inbound.Channel)
+		switch {
+		case owner == "":
+			// Fail closed. With no allowlist and no recorded owner, nothing states
+			// that this sender may drive the channel; admitting them would silently
+			// restore the open-by-default behaviour this branch exists to remove.
 			decision.Action = AccessActionDeny
-			decision.Reason = "sender outside channels.weixin.allow_from"
-		} else {
-			decision.Reason = "sender allowed by channels.weixin.allow_from"
+			decision.Reason = "no bound Weixin owner and channels.weixin.allow_from is empty"
+		case owner == decision.SenderID:
+			decision.Reason = "sender is the bound Weixin account owner"
+		default:
+			decision.Action = AccessActionDeny
+			decision.Reason = "sender is not the bound Weixin account owner"
 		}
 	case "feishu":
 		decision.Reason = "no channels.feishu.allow_from policy configured"

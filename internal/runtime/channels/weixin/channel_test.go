@@ -379,7 +379,7 @@ func TestChannelPollsTextMessagesAndUsesTypingAck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new channel: %v", err)
 	}
-	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL}); err != nil {
+	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL, ILinkUserID: "user-1@im.wechat"}); err != nil {
 		t.Fatalf("save account state: %v", err)
 	}
 
@@ -474,7 +474,7 @@ func TestChannelRoutesImageAttachmentsIntoBackendSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new channel: %v", err)
 	}
-	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL, CDNBaseURL: cfg.Weixin.CDNBaseURL}); err != nil {
+	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL, CDNBaseURL: cfg.Weixin.CDNBaseURL, ILinkUserID: "user-1@im.wechat"}); err != nil {
 		t.Fatalf("save account state: %v", err)
 	}
 
@@ -656,7 +656,7 @@ func TestChannelSessionExpiryClearsStateAndReauths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new channel: %v", err)
 	}
-	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL}); err != nil {
+	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL, ILinkUserID: "user-1@im.wechat"}); err != nil {
 		t.Fatalf("save account state: %v", err)
 	}
 	if err := channel.store.SaveCursor("cursor-1"); err != nil {
@@ -745,7 +745,7 @@ func TestChannelAutoResumesAfterExternalSetup(t *testing.T) {
 		return false
 	})
 
-	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL}); err != nil {
+	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL, ILinkUserID: "user-1@im.wechat"}); err != nil {
 		t.Fatalf("save account state: %v", err)
 	}
 
@@ -792,7 +792,7 @@ func TestChannelPollContinuesWhileInboundTurnRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new channel: %v", err)
 	}
-	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL}); err != nil {
+	if err := channel.store.SaveAccount(&accountState{BotToken: "token", BaseURL: cfg.Weixin.BaseURL, ILinkUserID: "user-1@im.wechat"}); err != nil {
 		t.Fatalf("save account state: %v", err)
 	}
 
@@ -820,6 +820,42 @@ func TestChannelPollContinuesWhileInboundTurnRuns(t *testing.T) {
 		defer fake.mu.Unlock()
 		return len(fake.sendMessages) > 0
 	})
+}
+
+// The inbound gate defaults to "only the bound owner", and the owner comes from
+// here: the poll loop publishes the iLink user id recorded by the QR login. If
+// this push stops happening, the gate fails closed and the real owner would be
+// locked out — so it is asserted rather than assumed.
+func TestChannelPublishesBoundOwnerForInboundGate(t *testing.T) {
+	cfg := newWeixinTestConfig(t)
+	service := newWeixinTestService(cfg, &stubCaller{responses: []protocol.Response{{Content: []protocol.Block{protocol.TextBlock("assistant reply")}}}})
+	manager := channels.NewManager(cfg, service)
+	manager.RegisterFactory(channelsStubFactory{name: channelName})
+
+	fake := &fakeTransport{
+		updates: []getUpdatesResponse{{apiStatus: apiStatus{Ret: 0}, GetUpdatesBuf: "cursor-2"}},
+	}
+	channel, err := New(cfg, manager, WithTransport(fake))
+	if err != nil {
+		t.Fatalf("new channel: %v", err)
+	}
+	if err := channel.store.SaveAccount(&accountState{
+		BotToken: "token", BaseURL: cfg.Weixin.BaseURL, ILinkUserID: "owner@im.wechat",
+	}); err != nil {
+		t.Fatalf("save account state: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := channel.Start(ctx); err != nil {
+		t.Fatalf("start channel: %v", err)
+	}
+	defer channel.Stop(context.Background())
+
+	waitFor(t, 2*time.Second, func() bool { return manager.InboundOwner(channelName) != "" })
+	if got := manager.InboundOwner(channelName); got != "owner@im.wechat" {
+		t.Fatalf("bound owner = %q, want the iLink user id from the login", got)
+	}
 }
 
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {

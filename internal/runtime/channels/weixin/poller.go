@@ -49,18 +49,28 @@ func (c *Channel) run(ctx context.Context, done chan struct{}) {
 			continue
 		}
 		if account == nil || transport == nil {
+			// No binding on disk: clear the recorded owner as well, so the inbound
+			// gate cannot keep admitting an identity whose binding is gone.
+			c.manager.SetInboundOwner(channelName, "")
 			c.enterReauth("weixin login state missing", nil)
 			if !sleepContext(ctx, reauthRetryDelay) {
 				return
 			}
 			continue
 		}
+		// Record who bound this bot (the iLink user id captured by the QR login).
+		// The inbound gate defaults to "only this identity may drive the channel"
+		// when channels.weixin.allow_from is empty, which is what makes the safe
+		// behaviour the default instead of something the operator must remember to
+		// configure by hand.
+		c.manager.SetInboundOwner(channelName, account.ILinkUserID)
 		if err := c.pollAccount(ctx, accountID, account, transport); err != nil {
 			if isSessionExpired(err) {
 				_ = c.store.ClearAccount()
 				_ = c.store.ClearCursor()
 				_ = c.store.ClearContextTokens()
 				c.setTransport(nil)
+				c.manager.SetInboundOwner(channelName, "")
 				c.enterReauth("weixin session expired", nil)
 				weixinLog.Warnf("weixin session expired for account=%s", accountID)
 				if !sleepContext(ctx, reauthRetryDelay) {

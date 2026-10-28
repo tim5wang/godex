@@ -605,6 +605,17 @@ go run ./cmd/godex weixin logout
 
 账号状态保存在 `<stateDir>/channels/weixin/<accountID>/`（`account.json`、`cursor.json`、`context_tokens.json`）。
 
+**谁能驱动这个 bot（入站闸门）**：默认只放行**扫码绑定该 bot 的那个微信账号**
+（绑定身份在扫码登录时已记入 `account.json` 的 `ilink_user_id`，无需手工配置）：
+
+| `channels.weixin.allow_from` | 行为 |
+|---|---|
+| 未设置（默认） | 只有**绑定者本人**能驱动 bot；未绑定/已登出时**拒绝全部**（fail closed） |
+| `['*']` | 放行全部发送者（显式选择，仅在确定风险可接受时用） |
+| `['id1','id2']` | 只放行这些 iLink 用户 ID（可同时包含绑定者） |
+
+该配置只能由**超管**修改（决策⑫）；扫码绑定本身也仅限超管。
+
 ## 自动化
 
 ### Cron

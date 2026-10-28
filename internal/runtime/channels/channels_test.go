@@ -469,6 +469,11 @@ func TestManagerRouteInboundApproveCommandResumesPendingTurn(t *testing.T) {
 		{Content: []protocol.Block{protocol.TextBlock("command output")}},
 	}})
 	manager := NewManager(cfg, service)
+	// The bot is bound to wx-user-1, and the messages below come from that same
+	// identity. With no channels.weixin.allow_from configured, the inbound gate
+	// defaults to "only the bound owner may drive this channel", so this is what a
+	// real deployment looks like: the person who scanned the QR talking to their bot.
+	manager.SetInboundOwner("weixin", "wx-user-1")
 
 	inbound := InboundMessage{
 		Channel:    "weixin",
@@ -1024,6 +1029,87 @@ func TestManagerDeliverRecordsFailedStatus(t *testing.T) {
 	}
 	if len(report.Channels) != 1 || report.Channels[0].LastDelivery == nil || report.Channels[0].LastDelivery.Status != DeliveryStatusFailed {
 		t.Fatalf("expected failed last delivery on channel status, got %#v", report.Channels)
+	}
+}
+
+// The empty-allowlist case is the whole point of decision ⑫'s follow-up: it used
+// to mean "allow every sender", so anyone who could message the bot could drive an
+// agent holding the operator's capabilities. These pin the replacement semantics.
+func TestWeixinInboundGateDefaultsToTheBoundOwner(t *testing.T) {
+	cfg := newTestConfig(t)
+	// No channels.weixin.allow_from: the default case, which must be the secure one.
+	manager := NewManager(cfg, newTestService(cfg, &stubCaller{}))
+	manager.SetInboundOwner("weixin", "owner@im.wechat")
+
+	cases := []struct {
+		name   string
+		sender string
+		want   string
+	}{
+		{"bound owner is admitted", "owner@im.wechat", AccessActionAllow},
+		{"any other sender is refused", "stranger@im.wechat", AccessActionDeny},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := manager.checkInboundAccess(InboundMessage{Channel: "weixin", Sender: tc.sender})
+			if decision.Action != tc.want {
+				t.Fatalf("sender %q = %q (%s), want %q", tc.sender, decision.Action, decision.Reason, tc.want)
+			}
+		})
+	}
+}
+
+// With no allowlist AND no recorded owner nothing establishes that anyone may
+// drive the channel, so the gate must refuse rather than fall back to open.
+func TestWeixinInboundGateFailsClosedWithoutBoundOwner(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := NewManager(cfg, newTestService(cfg, &stubCaller{}))
+
+	decision := manager.checkInboundAccess(InboundMessage{Channel: "weixin", Sender: "anyone@im.wechat"})
+	if decision.Action != AccessActionDeny {
+		t.Fatalf("unbound weixin channel = %q, want deny (fail closed)", decision.Action)
+	}
+}
+
+// Clearing the owner is what logout / an expired session does, and it must
+// actually close the gate again.
+func TestWeixinInboundGateClosesWhenOwnerCleared(t *testing.T) {
+	cfg := newTestConfig(t)
+	manager := NewManager(cfg, newTestService(cfg, &stubCaller{}))
+	manager.SetInboundOwner("weixin", "owner@im.wechat")
+	if got := manager.checkInboundAccess(InboundMessage{Channel: "weixin", Sender: "owner@im.wechat"}).Action; got != AccessActionAllow {
+		t.Fatalf("before clearing = %q, want allow", got)
+	}
+
+	manager.SetInboundOwner("weixin", "")
+	if got := manager.checkInboundAccess(InboundMessage{Channel: "weixin", Sender: "owner@im.wechat"}).Action; got != AccessActionDeny {
+		t.Fatalf("after clearing = %q, want deny", got)
+	}
+}
+
+// An explicitly configured allowlist still wins, including '*' to deliberately
+// restore the open behaviour, so the escape hatch remains available.
+func TestWeixinInboundGateHonoursExplicitAllowList(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Weixin.AllowFrom = []string{"guest@im.wechat"}
+	manager := NewManager(cfg, newTestService(cfg, &stubCaller{}))
+	manager.SetInboundOwner("weixin", "owner@im.wechat")
+
+	if got := manager.checkInboundAccess(InboundMessage{Channel: "weixin", Sender: "guest@im.wechat"}).Action; got != AccessActionAllow {
+		t.Fatalf("listed guest = %q, want allow", got)
+	}
+	if got := manager.checkInboundAccess(InboundMessage{Channel: "weixin", Sender: "owner@im.wechat"}).Action; got != AccessActionDeny {
+		t.Fatalf("an explicit list must decide even for the owner = %q, want deny", got)
+	}
+}
+
+func TestWeixinInboundGateAllowAllWildcardStillOpens(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Weixin.AllowFrom = []string{"*"}
+	manager := NewManager(cfg, newTestService(cfg, &stubCaller{}))
+
+	if got := manager.checkInboundAccess(InboundMessage{Channel: "weixin", Sender: "anyone@im.wechat"}).Action; got != AccessActionAllow {
+		t.Fatalf("explicit '*' = %q, want allow", got)
 	}
 }
 

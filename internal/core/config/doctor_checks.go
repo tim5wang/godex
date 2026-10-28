@@ -234,7 +234,7 @@ func (d *doctorRun) checkWeixin() {
 		d.add(DoctorCheck{Severity: "error", Code: "weixin_base_url_invalid", Path: "channels.weixin.base_url", Message: fmt.Sprintf("Weixin base_url %q is invalid.", current.Weixin.BaseURL), Suggestion: "Use a full HTTP(S) URL such as https://ilinkai.weixin.qq.com."})
 	}
 	if len(current.Weixin.AllowFrom) == 0 {
-		d.add(DoctorCheck{Severity: "warning", Code: "weixin_allow_from_empty", Path: "channels.weixin.allow_from", Message: "Weixin allow_from is empty, so any sender who can reach the bot may use it.", Suggestion: "Set channels.weixin.allow_from to one or more ilink user IDs for safer operation."})
+		d.add(DoctorCheck{Severity: "info", Code: "weixin_allow_from_empty", Path: "channels.weixin.allow_from", Message: "Weixin allow_from is empty, so only the account that scanned the login QR code may drive the bot.", Suggestion: "This is the secure default. Add iLink user IDs if other people should also drive the bot, or * to admit everyone."})
 	}
 	if err := ensureParentWritable(accountPath); err != nil {
 		d.add(DoctorCheck{Severity: "warning", Code: "weixin_state_not_writable", Path: "channels.weixin.account_id", Message: fmt.Sprintf("Weixin state directory is not writable: %v", err), Suggestion: "Fix permissions for the Godex state directory before running `godex weixin setup`."})

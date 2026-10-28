@@ -885,7 +885,8 @@ channels:
     cdn_base_url: {{ yamlString .Channels.Weixin.CDNBaseURL }}
     # Logical local account bucket for persisted credentials. Environment override: WEIXIN_ACCOUNT_ID.
     account_id: {{ yamlString .Channels.Weixin.AccountID }}
-    # Optional allowlist of iLink user IDs. Empty or * allows all senders. Environment override: WEIXIN_ALLOW_FROM.
+    # Optional allowlist of iLink user IDs. Empty (the default) admits only the account
+    # that scanned the login QR code. Set * to admit every sender. Environment override: WEIXIN_ALLOW_FROM.
     allow_from: {{ yamlListIndent .Channels.Weixin.AllowFrom 6 }}
     # Optional metadata route tag attached to inbound sessions. Environment override: WEIXIN_ROUTE_TAG.
     route_tag: {{ yamlString .Channels.Weixin.RouteTag }}

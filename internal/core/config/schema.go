@@ -443,8 +443,8 @@ func baseSchema() []SectionSchema {
 			Description: "First-party Feishu/Lark runtime configuration.",
 			Fields: []FieldSchema{
 				{Path: "channels.feishu.enabled", Label: "Enabled", Description: "Enable the Feishu/Lark channel.", Type: "bool", LiveApply: true, Env: "FEISHU_ENABLED"},
-				{Path: "channels.feishu.app_id", Label: "App ID", Description: "Feishu/Lark app ID.", Type: "string", Secret: true, LiveApply: true, Env: "FEISHU_APP_ID"},
-				{Path: "channels.feishu.app_secret", Label: "App Secret", Description: "Feishu/Lark app secret.", Type: "string", Secret: true, LiveApply: true, Env: "FEISHU_APP_SECRET"},
+				{Path: "channels.feishu.app_id", Label: "App ID", Description: "Feishu/Lark app ID. Platform-admin only: the Feishu bot has no separate binding step, so these credentials ARE which bot drives an agent on the center.", Type: "string", Secret: true, LiveApply: true, PlatformAdmin: true, Env: "FEISHU_APP_ID"},
+				{Path: "channels.feishu.app_secret", Label: "App Secret", Description: "Feishu/Lark app secret. Platform-admin only for the same reason as app_id.", Type: "string", Secret: true, LiveApply: true, PlatformAdmin: true, Env: "FEISHU_APP_SECRET"},
 				{Path: "channels.feishu.domain", Label: "Domain", Description: "Use lark or feishu API domain.", Type: "string", LiveApply: true, Env: "FEISHU_DOMAIN", Options: []string{"lark", "feishu"}},
 			},
 		},

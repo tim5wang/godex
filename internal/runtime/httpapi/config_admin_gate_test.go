@@ -20,10 +20,18 @@ func configGateManager(t *testing.T) *config.Manager {
 // enforceable. Without it the allowlist could be edited by anyone holding the web
 // token, and "only the superadmin decides who may drive the bot" would be a
 // slogan.
+//
+// The Feishu credentials are in the same list for the same reason: that bot has
+// no separate binding step, so its app id/secret ARE which bot runs here.
 func TestSchemaMarksWeixinAllowFromPlatformAdmin(t *testing.T) {
 	manager := configGateManager(t)
 	restricted := platformAdminOnlyPaths(manager)
-	for _, path := range []string{"channels.weixin.allow_from", "web.token"} {
+	for _, path := range []string{
+		"channels.weixin.allow_from",
+		"channels.feishu.app_id",
+		"channels.feishu.app_secret",
+		"web.token",
+	} {
 		if !restricted[path] {
 			t.Errorf("%s must be marked platform-admin-only; restricted set = %v", path, restricted)
 		}
@@ -131,6 +139,51 @@ func TestStatusForConfigAuthErrorIsNotForbiddenByDefault(t *testing.T) {
 	}
 	if status := statusForConfigAuthError(nil); status != http.StatusOK {
 		t.Errorf("nil error status = %d, want 200", status)
+	}
+}
+
+// The Feishu bot has no QR-binding endpoint: its app credentials ARE the binding,
+// so whoever may write them decides which Feishu app drives an agent here. They
+// were not marked platform-admin-only, which left the same class of hole the
+// WeChat binding gate just closed — a tenant user could repoint the bot at their
+// own app and then message it with an operator-capability agent behind it.
+func TestAuthorizeConfigWriteRefusesTenantUserWritingChannelCredentials(t *testing.T) {
+	manager := configGateManager(t)
+	tenantUser := identity.NewPrincipal("tenant-1", "user-a", "", identity.KindUser, identity.EntitlementRelayOnly)
+
+	for _, key := range []string{"channels.feishu.app_id", "channels.feishu.app_secret"} {
+		err := authorizeConfigWrite(reqWithPrincipal(tenantUser), manager,
+			map[string]interface{}{key: "attacker-supplied"}, nil)
+		if err == nil {
+			t.Errorf("a tenant user must not be able to rebind a bot through %s", key)
+			continue
+		}
+		if status := statusForConfigAuthError(err); status != http.StatusForbidden {
+			t.Errorf("%s status = %d, want 403", key, status)
+		}
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error should name %s, got %q", key, err.Error())
+		}
+	}
+
+	// Clearing the credential is the same act as replacing it.
+	err := authorizeConfigWrite(reqWithPrincipal(tenantUser), manager, nil,
+		[]string{"channels.feishu.app_secret"})
+	if err == nil {
+		t.Error("a tenant user must not be able to clear the bot credential")
+	}
+
+	// The operator and a node acting for it still manage their own channel config.
+	operator := identity.NewPrincipal("", "local-operator", identity.RolePlatformAdmin, identity.KindPlatform,
+		identity.EntitlementCenterExecution)
+	if err := authorizeConfigWrite(reqWithPrincipal(operator), manager,
+		map[string]interface{}{"channels.feishu.app_id": "cli_x"}, nil); err != nil {
+		t.Errorf("operator refused: %v", err)
+	}
+	node := identity.NewPrincipal("", "relay-node", "", identity.KindNode, identity.EntitlementRelayOnly)
+	if err := authorizeConfigWrite(reqWithPrincipal(node), manager,
+		map[string]interface{}{"channels.feishu.app_id": "cli_x"}, nil); err != nil {
+		t.Errorf("node actor refused: %v", err)
 	}
 }
 

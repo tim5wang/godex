@@ -352,8 +352,14 @@ requireCenterExecution(protected)(handler)   // 鉴权 → 能力位 → handler
 正确的形状（✅ 已实现，`config_admin_gate.go`）：
 
 - 闸门加在**配置项粒度**：只对超管专属项（`web.token`、
-  `channels.weixin.allow_from`）要求平台角色；其余节点本地设置
-  （model、workspace 等）保持可改。
+  `channels.weixin.allow_from`、`channels.feishu.app_id/app_secret`）要求平台角色；
+  其余节点本地设置（model、workspace 等）保持可改。
+
+  > **飞书为何也在列（2026-10-28 补充）**：微信 bot 的绑定另有扫码接口（已单独收紧），
+  > 而**飞书没有绑定步骤**——app_id/app_secret **就是**「哪个 bot 在这里跑」。
+  > 它们原先未标记，即租户用户可把自己的飞书应用写进去，
+  > 再把消息发给带操作员能力的 agent。已补 `PlatformAdmin: true`，
+  > 测试 `TestAuthorizeConfigWriteRefusesTenantUserWritingChannelCredentials`。
 - 清单**从 schema 派生**，不硬编码：`FieldSchema` 新增 `PlatformAdmin bool`，
   标记与字段定义同处一处，因此新加的限制项不可能被闸门漏掉，
   且渲染同一 schema 的 UI 可据此禁用控件。

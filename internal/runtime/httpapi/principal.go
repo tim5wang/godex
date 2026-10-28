@@ -21,8 +21,8 @@ import (
 // uses it", but before this counter the legacy branch was silent — there was no
 // way to tell a converged center from one the old token still drives, and
 // clearing on that guess would take every not-yet-migrated node offline. Kept as
-// a counter (not just a log) so a test can assert it, and exported so an operator
-// can read the number without scraping the journal.
+// a counter (not just a log) so a test can assert the transitions, and exported
+// so a future status endpoint can surface it without re-deriving anything.
 var legacyNodeProxyMatches atomic.Int64
 
 // NodeProxyLegacyMatchCount reports how many requests have used the center-wide
@@ -30,6 +30,9 @@ var legacyNodeProxyMatches atomic.Int64
 //
 // Zero is the precondition for retiring that credential (migration plan §4/§6
 // P4a). A non-zero value names a deployment that still has nodes on the old path.
+//
+// Today an operator reads the progress from the journal, where each match logs a
+// WARN with this running count; nothing exposes the number over HTTP yet.
 func NodeProxyLegacyMatchCount() int64 { return legacyNodeProxyMatches.Load() }
 
 // recordLegacyNodeProxyMatch counts and reports one legacy match.

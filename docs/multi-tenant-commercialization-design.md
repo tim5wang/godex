@@ -772,7 +772,7 @@ httpapi 8 个（加入超限 409 且不留幽灵、默认不限、超管修复�
 |---|---|---|---|
 | **P0 身份底座** | Tenant/User/Membership/Principal；`protected` 改为解析身份；自助注册改 join token | 两个租户各登录 → 互不可见；节点注册无法自报 `tenant_id` | ✅ 已落地 |
 | **P1 归属 + NodeAccess** | 注册表加归属/可见性；抽 `NodeAccess`；5 个消费点收敛 | 跨租户代理返回 403（✅ 见 §1.3，四个面均已加闸门）；`nk_` 改为 per-node | ✅ 主体已落地；**子项 `nk_` per-node ⏳ 未做**（§1.3） |
-| **P2 隔离硬化** | 越权测试矩阵；观测投影去标题；**中心执行收窄到超管一个账号**（§3.3）；**清理历史 cron 任务**（§3.4，功能保留） | 租户账号在任何执行入口 403；超管照常工作；历史 `cron-*` 已清理，超管仍可新建定时任务 | ⚠️ 部分：中心执行收窄 ✅；**观测投影去标题 ✅**（`relay.observation.include_titles` 默认 false，摄入点剥离 + 事件日志改用 id + UI 明说）；**越权面硬化 ✅ 六个面**（节点列表遮蔽 / 单节点 / overview / proxy / forward / `/control/forwards`，各自有回归测试；新增 `cmd/godex/forward_authz_test.go` 钉住第三个面，未收敛为单份矩阵文档）；历史 `cron-*` 清理需在中心机核对 |
+| **P2 隔离硬化** | 越权测试矩阵；观测投影去标题；**中心执行收窄到超管一个账号**（§3.3）；**清理历史 cron 任务**（§3.4，功能保留） | 租户账号在任何执行入口 403；超管照常工作；历史 `cron-*` 已清理，超管仍可新建定时任务 | ⚠️ 部分：中心执行收窄 ✅；**观测投影去标题 ✅**（`relay.observation.include_titles` 默认 false，摄入点剥离 + 事件日志改用 id + UI 明说）；**越权面硬化 ✅ 六个面**（节点列表遮蔽 / 单节点 / overview / proxy / forward / `/control/forwards`）；**越权限测试矩阵 ✅ 已收敛**为 [multi-tenant-authorization-matrix.md](./multi-tenant-authorization-matrix.md)（逐面闸门 + 对应回归测试 + 已知缺口）；历史 `cron-*` 清理需在中心机核对 |
 | **P3 订阅** | **只做基础档**（纯转发）+ 计量（决策⑬；进阶档以后） | 无 `center_execution` 的账号在执行入口 403；计量可对账 | ✅ 已落地 |
 
 **P3 验收现状**：

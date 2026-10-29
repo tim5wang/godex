@@ -30,19 +30,32 @@ export interface AuthProfile {
   tenant?: AuthTenant;
 }
 
-export function registerAccount(input: {
-  email: string;
-  password: string;
-  tenantName?: string;
-}): Promise<AuthSession> {
-  return request<AuthSession>("/auth/register", {
-    method: "POST",
-    body: JSON.stringify({
-      email: input.email,
-      password: input.password,
-      tenant_name: input.tenantName ?? "",
-    }),
-  });
+/** registerAccount creates a NEW tenant together with its owner account (design
+ *  §3.5).
+ *
+ *  Anonymous callers are refused while self-service signup is closed, so the
+ *  superadmin surface passes the shared web token: that is the operator's
+ *  documented way to create a tenant without opening signup to everyone. */
+export function registerAccount(
+  input: {
+    email: string;
+    password: string;
+    tenantName?: string;
+  },
+  token: string | null = null,
+): Promise<AuthSession> {
+  return request<AuthSession>(
+    "/auth/register",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        email: input.email,
+        password: input.password,
+        tenant_name: input.tenantName ?? "",
+      }),
+    },
+    token,
+  );
 }
 
 export function loginAccount(input: { email: string; password: string }): Promise<AuthSession> {

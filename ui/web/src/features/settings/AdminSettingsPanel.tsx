@@ -33,6 +33,7 @@ import {
   type AdminTenant,
 } from "../../lib/apiAdmin";
 
+import { AdminCreateTenantCard } from "./AdminCreateTenantCard";
 import { AdminJoinTokensCard } from "./AdminJoinTokensCard";
 import { AdminRelayUsageCard } from "../usage/relay/RelayUsage";
 import { OperatorGrantsCard } from "./OperatorGrantsCard";
@@ -332,6 +333,8 @@ export function AdminSettingsPanel({ token }: { token: string | null }) {
           ]}
         />
       </Card>
+
+      <AdminCreateTenantCard token={token} />
 
       {joinTokenTenant ? (
         <AdminJoinTokensCard

@@ -136,6 +136,50 @@ func TestSelfSignupRefusedByDefaultWithoutOperatorCredential(t *testing.T) {
 	}
 }
 
+// The closed-signup refusal must not point at a route that cannot exist.
+//
+// It used to say "ask the platform administrator for an invite", but every invite
+// code is a code to JOIN an existing tenant (design §3.6): there is no code that
+// creates one. Following that advice reached a dead end, which is how the
+// operator came to ask where the tenant-invite codes were issued.
+func TestClosedSignupRefusalNamesAReachableRoute(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.WebToken = "web-secret"
+	manager := newTestManager(t, cfg)
+	if _, err := manager.Update(context.Background(), config.UpdateRequest{
+		Values: map[string]any{"web.allow_self_signup": false},
+	}); err != nil {
+		t.Fatalf("disable self-signup: %v", err)
+	}
+
+	handler := NewHandlerWithDependencies(Dependencies{
+		Config:  manager,
+		Backend: backend.NewService(cfg, nil, nil),
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	resp := doJSONWithToken(t, http.MethodPost, server.URL+"/auth/register", map[string]any{
+		"email": "anyone@example.com", "password": "correct-horse-battery",
+	}, "")
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("anonymous signup = %d, want 403 (body=%s)", resp.StatusCode, string(raw))
+	}
+	message := strings.ToLower(string(raw))
+
+	// The wrong advice: an invite cannot create a tenant, so the caller must not be
+	// sent looking for one.
+	if strings.Contains(message, "for an invite") {
+		t.Errorf("refusal still points at an invite code, which cannot create a tenant: %s", string(raw))
+	}
+	// The right advice: a route that exists.
+	if !strings.Contains(message, "create a tenant") {
+		t.Errorf("refusal should say the administrator can create the tenant, got %s", string(raw))
+	}
+}
+
 // The operator can opt back in; when enabled, anonymous signup works exactly as
 // it did before (a SaaS surface needs this).
 func TestSelfSignupOpenWhenOperatorOptsIn(t *testing.T) {

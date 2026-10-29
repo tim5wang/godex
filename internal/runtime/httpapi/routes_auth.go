@@ -79,8 +79,14 @@ func registerAuthRoutes(mux *http.ServeMux, manager *config.Manager, accountsSer
 		// Checked BEFORE decoding the body so an unauthenticated caller learns
 		// nothing about which emails exist.
 		if !selfSignupAllowed(manager, r) {
+			// The refusal must name a route the caller can actually take. It used to
+			// say "ask the platform administrator for an invite", which is a dead end:
+			// no invite code can create a tenant, because an invite only ever joins an
+			// existing one (design §3.6) and there is no per-tenant code for this.
+			// What the operator CAN do is create the tenant (their credential works
+			// here) or open signup outright, so the message says that instead.
 			writeError(w, http.StatusForbidden, fmt.Errorf(
-				"self-service signup is disabled on this instance; ask the platform administrator for an invite (set web.allow_self_signup to enable it)"))
+				"self-service signup is disabled on this instance; the platform administrator can create a tenant for you, or enable self-service signup with web.allow_self_signup"))
 			return
 		}
 		var req registerRequest

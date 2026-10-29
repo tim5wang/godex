@@ -444,6 +444,52 @@ func TestRunNodeJoinLLMProxyAutoCreatesKey(t *testing.T) {
 	}
 }
 
+// TestRunNodeJoinRequestsItsOwnProxyCredential pins the enrolment half of the
+// per-node migration.
+//
+// The center has been able to mint a per-node nk_ since P1, but only when the
+// caller names the node — and this path sent no body at all. So every newly joined
+// node received the CENTER-WIDE value instead, which means the migration could
+// never converge: clearing that value (P4a) would look like a no-op while fresh
+// nodes kept arriving on it, and each new node would stay indistinguishable.
+func TestRunNodeJoinRequestsItsOwnProxyCredential(t *testing.T) {
+	var mu sync.Mutex
+	var proxyBody map[string]any
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/control/node-proxy-token" {
+			var got map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			mu.Lock()
+			proxyBody = got
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"node_id": "my-laptop", "node_proxy_token": "nk_per_node_1"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer center.Close()
+
+	r, manager, _ := newJoinRunner(t)
+	if err := r.runNodeJoin(context.Background(), []string{
+		center.URL,
+		"--id", "my-laptop",
+		"--credential", "ck_test_abc123",
+		"--token", "web-token-123",
+	}); err != nil {
+		t.Fatalf("node join: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got, _ := proxyBody["node_id"].(string); got != "my-laptop" {
+		t.Fatalf("join asked for a proxy credential with node_id=%q, want my-laptop (body=%v); "+
+			"without the id the center can only issue the center-wide value", got, proxyBody)
+	}
+	if got := manager.Current().Control.CenterToken; got != "nk_per_node_1" {
+		t.Fatalf("center_token = %q, want the per-node credential", got)
+	}
+}
+
 // TestRunNodeJoinLLMProxyAutoRequiresToken verifies that --llm-proxy auto
 // without a web token fails with a clear error.
 func TestRunNodeJoinLLMProxyAutoRequiresToken(t *testing.T) {

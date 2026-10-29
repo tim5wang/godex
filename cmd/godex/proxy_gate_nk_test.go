@@ -136,6 +136,44 @@ func TestProxyGateAgreesWithReadSurfaceOnNodeCredentials(t *testing.T) {
 	}
 }
 
+// TestProxyGateAcceptsLegacyEvenWithNoNodesRegistered pins the fact that retiring
+// nodes does NOT retire the credential.
+//
+// This is the property that decides whether the migration can be finished by
+// deleting stale nodes: it cannot. The legacy branch is a string comparison against
+// the configured value — it never consults the registry — so an empty registry is
+// indistinguishable from a full one as far as the center-wide credential is
+// concerned. A retired node that still holds the value keeps authenticating, and
+// deleting it also destroys the record that would have shown it did.
+func TestProxyGateAcceptsLegacyEvenWithNoNodesRegistered(t *testing.T) {
+	ctx := context.Background()
+	empty, err := noderegistry.New(filepath.Join(t.TempDir(), "nodes.json"), 0)
+	if err != nil {
+		t.Fatalf("noderegistry.New: %v", err)
+	}
+	// Deliberately no Register calls: this is the "all stale nodes retired" state.
+	if nodes, err := empty.List(ctx); err != nil || len(nodes) != 0 {
+		t.Fatalf("expected an empty registry, got %d nodes (err=%v)", len(nodes), err)
+	}
+
+	manager, err := config.NewManager(config.Options{WorkspaceDir: t.TempDir(), HomeDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.NewManager: %v", err)
+	}
+	if _, err := manager.Update(ctx, config.UpdateRequest{Values: map[string]any{
+		"web.token":                gateWebToken,
+		"control.node_proxy_token": gateLegacyNK,
+	}}); err != nil {
+		t.Fatalf("seed manager: %v", err)
+	}
+
+	checker := httpapi.NewNodeProxyTokenChecker(manager, httpapi.NodeProxyTokenLookupFrom(empty))
+	gate := nodeProxyAuthorize(manager, checker, nil)
+	if !gate(gateRequest(gateLegacyNK)) {
+		t.Fatal("the center-wide credential must still be checked against the value alone, not the registry")
+	}
+}
+
 // TestProxyGateReadsLiveConfigNotABootSnapshot pins the other half: P4a clears the
 // center-wide value, and that must take effect without a restart. A gate holding a
 // boot-time *config.Config would keep accepting the retired credential.

@@ -90,7 +90,7 @@ func registerSelfJoinRoute(mux *http.ServeMux, manager *config.Manager, protecte
 				writeError(w, http.StatusBadGateway, err)
 				return
 			}
-			token, err := exchangeSelfProxyToken(r.Context(), req.CenterURL, req.Token)
+			token, err := exchangeSelfProxyToken(r.Context(), req.CenterURL, req.Token, req.NodeID)
 			if err != nil {
 				writeError(w, http.StatusBadGateway, err)
 				return
@@ -175,18 +175,76 @@ func enrollWithJoinToken(ctx context.Context, req *selfJoinRequest) (string, err
 // restricted node proxy credential (nk_...) via the center's
 // POST /control/node-proxy-token endpoint. The returned nk_ is what the node
 // persists as control.center_token, so the node never stores the full web token.
-func exchangeSelfProxyToken(ctx context.Context, centerURL, webToken string) (string, error) {
+//
+// nodeID is sent so the center mints a PER-NODE credential. Sending no id is what
+// made the migration non-convergent: an unnamed caller can only be given the
+// center-wide value, so every newly joined node kept arriving on the shared
+// credential the migration is meant to retire.
+func exchangeSelfProxyToken(ctx context.Context, centerURL, webToken, nodeID string) (string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
+	token, retry, err := postSelfProxyToken(ctx, client, centerURL, webToken, nodeID)
+	if err == nil {
+		return token, nil
+	}
+	if !retry {
+		return "", err
+	}
+	// The center does not know this node (an older center, or an id it normalised
+	// away): fall back to the center-wide value rather than failing the whole join.
+	token, _, err = postSelfProxyToken(ctx, client, centerURL, webToken, "")
+	return token, err
+}
+
+// postSelfProxyToken performs one exchange. The bool reports whether the caller
+// should retry without a node id (only the "node not found" answer).
+//
+// Deliberately not doCenterJSON: detecting 404 requires the status code, which
+// that helper collapses into an error string.
+func postSelfProxyToken(ctx context.Context, client *http.Client, centerURL, webToken, nodeID string) (string, bool, error) {
+	base := strings.TrimRight(strings.TrimSpace(centerURL), "/")
+	if strings.HasSuffix(base, "/api") {
+		base = strings.TrimSuffix(base, "/api")
+	}
+	var body []byte
+	if strings.TrimSpace(nodeID) != "" {
+		payload, err := json.Marshal(map[string]string{"node_id": nodeID})
+		if err != nil {
+			return "", false, err
+		}
+		body = payload
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/control/node-proxy-token", bytes.NewReader(body))
+	if err != nil {
+		return "", false, err
+	}
+	if webToken != "" {
+		req.Header.Set("Authorization", "Bearer "+webToken)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound && strings.TrimSpace(nodeID) != "" {
+		return "", true, fmt.Errorf("center does not know node %q", nodeID)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", false, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
 	var out struct {
 		NodeProxyToken string `json:"node_proxy_token"`
 	}
-	if err := doCenterJSON(ctx, client, centerURL, "POST", "/control/node-proxy-token", webToken, nil, &out); err != nil {
-		return "", err
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", false, err
 	}
 	if out.NodeProxyToken == "" {
-		return "", fmt.Errorf("center returned empty node proxy token")
+		return "", false, fmt.Errorf("center returned empty node proxy token")
 	}
-	return out.NodeProxyToken, nil
+	return out.NodeProxyToken, false, nil
 }
 
 // registerWithCenter registers the node and issues its per-node credential.

@@ -369,7 +369,7 @@ func (r *Runner) runNodeJoin(ctx context.Context, args []string) error {
 	// and persists THAT as center_token — so the node never holds the full web
 	// token; a compromised node can only reach the proxy/forward surface.
 	if token != "" {
-		proxyToken, err := exchangeNodeProxyToken(ctx, centerURL, token)
+		proxyToken, err := exchangeNodeProxyToken(ctx, centerURL, token, nodeID)
 		if err != nil {
 			return fmt.Errorf("exchange center node proxy token: %w", err)
 		}
@@ -488,38 +488,74 @@ func (r *Runner) runNodeRotateProxyToken(ctx context.Context, args []string) err
 // restricted node proxy credential (nk_...) via POST /control/node-proxy-token.
 // The returned nk_ is what the node stores as control.center_token, so the
 // node never holds the full web token.
-func exchangeNodeProxyToken(ctx context.Context, centerURL, webToken string) (string, error) {
+//
+// nodeID is sent in the body so the center mints a PER-NODE credential. Omitting
+// it is what made the migration non-convergent: the center can only answer with the
+// center-wide value when it does not know which node is asking, so every new node
+// kept arriving on the shared credential that P4a is supposed to retire.
+//
+// A center that does not know this node (404) is retried once without the id: the
+// node may be joining before it is registered, and falling back keeps that working
+// instead of turning it into an enrolment failure.
+func exchangeNodeProxyToken(ctx context.Context, centerURL, webToken, nodeID string) (string, error) {
+	if token, retry, err := postNodeProxyToken(ctx, centerURL, webToken, nodeID); err == nil {
+		return token, nil
+	} else if !retry {
+		return "", err
+	}
+	// Unknown node: fall back to the center-wide value (the dual-accept window).
+	token, _, err := postNodeProxyToken(ctx, centerURL, webToken, "")
+	return token, err
+}
+
+// postNodeProxyToken performs one exchange. The bool result reports whether the
+// caller should retry without a node id (only the "node not found" answer).
+func postNodeProxyToken(ctx context.Context, centerURL, webToken, nodeID string) (string, bool, error) {
 	u, err := url.Parse(strings.TrimSpace(centerURL))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return "", fmt.Errorf("invalid center URL %q", centerURL)
+		return "", false, fmt.Errorf("invalid center URL %q", centerURL)
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/api/control/node-proxy-token"
 	u.RawQuery = ""
 	u.Fragment = ""
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
+	var body io.Reader
+	if strings.TrimSpace(nodeID) != "" {
+		payload, err := json.Marshal(map[string]string{"node_id": nodeID})
+		if err != nil {
+			return "", false, err
+		}
+		body = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), body)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+webToken)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound && strings.TrimSpace(nodeID) != "" {
+		return "", true, fmt.Errorf("center does not know node %q", nodeID)
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("center returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return "", false, fmt.Errorf("center returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	var out struct {
 		NodeProxyToken string `json:"node_proxy_token"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if out.NodeProxyToken == "" {
-		return "", fmt.Errorf("center returned empty node proxy token")
+		return "", false, fmt.Errorf("center returned empty node proxy token")
 	}
-	return out.NodeProxyToken, nil
+	return out.NodeProxyToken, false, nil
 }
 
 // normalizeLLMProxyFlag rewrites a bare --llm-proxy (whose next token is

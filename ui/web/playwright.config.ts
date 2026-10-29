@@ -38,6 +38,8 @@ export default defineConfig({
       name: "chromium-tablet",
       use: {
         ...devices["iPad Mini"],
+        // This project is explicitly Chromium; the device preset defaults to WebKit.
+        browserName: "chromium",
         viewport: { width: 768, height: 1024 },
       },
     },

@@ -179,6 +179,7 @@ export default function App() {
   });
   const needsProviderSetup =
     activeApp.id !== "settings" &&
+    activeApp.id !== "workDesktop" &&
     providersQuery.isSuccess &&
     !providersQuery.data.providers.some((provider) => provider.has_credential || provider.token_present);
   const shellClassName = buildWorkspaceShellClassName(activeApp.shellClassName);

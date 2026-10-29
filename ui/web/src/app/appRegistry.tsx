@@ -12,6 +12,7 @@ import {
   FolderViewOutlined,
   SettingOutlined,
   DashboardOutlined,
+  DesktopOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { Navigate, Route, type RouteObject, useLocation } from "react-router-dom";
@@ -44,6 +45,7 @@ const loadSkillsPage = () => import("../pages/SkillsPage");
 const loadAgentTemplatesPage = () => import("../pages/AgentTemplatesPage");
 const loadMemoryPage = () => import("../pages/MemoryPage");
 const loadTaskBoardPage = () => import("../pages/TaskBoardPage");
+const loadWorkDesktopPage = () => import("../pages/WorkDesktopPage");
 const loadOrchestrationPage = () => import("../pages/OrchestrationPage");
 const loadSettingsPage = () => import("../pages/SettingsPage");
 const loadUsagePage = () => import("../pages/UsagePage");
@@ -74,6 +76,17 @@ export const builtinApps: BuiltinAppEntry[] = [
     isActive: (pathname) => pathname === "/" || pathname.startsWith("/chat"),
     shellClassName: "chat-shell",
     headerTitleKey: "",
+  }),
+  entry({
+    id: "workDesktop",
+    navPath: "/work-desktop",
+    routePaths: ["/work-desktop"],
+    icon: <DesktopOutlined />,
+    labelKey: "workDesktop.title",
+    load: loadWorkDesktopPage,
+    component: pageComponent(loadWorkDesktopPage, "WorkDesktopPage"),
+    isActive: (pathname) => pathname === "/work-desktop",
+    headerSubtitleKey: "workDesktop.subtitle",
   }),
   entry({
     id: "files",

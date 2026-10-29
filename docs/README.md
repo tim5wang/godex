@@ -56,6 +56,7 @@
 | [taskboard-plugin-design.md](./taskboard-plugin-design.md) | taskboard 插件设计与实现参照：核心看板、模板执行/PJM、协作与 reconcile 分文档演进 | baseline 已实现，剩余项查功能矩阵 |
 | [taskboard-collaboration-design.md](./taskboard-collaboration-design.md) | research 传递与路径冲突四闸门 baseline；依赖拓扑/经验回流仍 Planned | Active / Partial（2026-08-31 核对） |
 | [taskboard-reconcile-design.md](./taskboard-reconcile-design.md) | 手动 reconcile P0 已实现；自动调度、历史、dry-run/auto-recover 仍 Planned | Active / Partial（2026-08-31 核对） |
+| [work-context-desktop-design.md](./work-context-desktop-design.md) | 长期工作主线、工作桌面与委派/记忆治理完整方案，SQLite 优先与 PG 迁移边界；可交互原型 `/work-desktop` | Draft / UI Prototype（WD0）；后端持久化与真实委派尚未接通 |
 | [agent-role-and-bundle-design.md](./agent-role-and-bundle-design.md) | AgentTemplate 人才市场、对话/TaskBoard/Biz/PJM 多入口设计与实现映射 | M1–M3、M4 P1、M5 P1–P3 已落地 |
 | [per-session-workspace-plan.md](./per-session-workspace-plan.md) | Per-Session 工作目录（已实施 2026-07-31） | |
 | [self-knowledge-design.md](./self-knowledge-design.md) | 自我认知：功能点以 `// godex-feature:` 注释为单一事实源，go:generate 提取编译进二进制，`godex_docs` 工具 / `godex docs` CLI 自查 | Implemented（v1.4 落地，40 个功能点覆盖 README 全部核心特性） |

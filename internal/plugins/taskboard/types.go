@@ -263,6 +263,13 @@ type Card struct {
 	// dynamic observation). Package granularity: coarser than file, finer than
 	// directory.
 	TouchedPaths []string `json:"touched_paths,omitempty"`
+	// ExternalRequestID is the caller-supplied idempotency key for a create
+	// request originating outside the ledger (e.g. a cross-store compensation
+	// flow that must not double-create the card when a retry replays the same
+	// request). When non-empty, (ExternalRequestID, CreatedBy) uniquely
+	// identifies one create: a replay returns the original card, while a replay
+	// carrying a different payload for the same key is rejected.
+	ExternalRequestID string `json:"external_request_id,omitempty"`
 	// Research is the structured investigation asset produced by a
 	// planner/PJM card and referenced by a coder card (方案A: 上下文传递). It
 	// splits verified-facts (trust) from open-questions (verify yourself) so

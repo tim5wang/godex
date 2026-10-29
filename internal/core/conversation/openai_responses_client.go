@@ -139,7 +139,9 @@ func (c *OpenAIResponsesClient) responsesParams(req protocol.Request) responses.
 		case "24h":
 			params.PromptCacheRetention = responses.ResponseNewParamsPromptCacheRetention24h
 		default:
-			params.PromptCacheRetention = responses.ResponseNewParamsPromptCacheRetentionInMemory
+			// Short retention is the API default. Omit it rather than sending
+			// the SDK's "in-memory" enum: compatible gateways disagree on its
+			// spelling (some only accept "in_memory").
 		}
 	}
 	return params

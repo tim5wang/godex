@@ -243,6 +243,7 @@ func NewHandlerWithDependencies(deps Dependencies) http.Handler {
 	registerAutomationRoutes(mux, cronRuntime, heartbeatRuntime, protected)
 	registerMemoryRoutes(mux, service, protected)
 	registerNoteRoutes(mux, service, protected)
+	registerWorkContextRoutes(mux, service, protected)
 	registerSessionRoutes(mux, service, protected)
 	registerWorkflowRoutes(mux, service, protected)
 	registerAgentTemplateRoutes(mux, service, protected)

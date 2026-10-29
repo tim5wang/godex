@@ -491,10 +491,9 @@ func (s *Service) withDefaultLocatorMetadata(locator SessionLocator) SessionLoca
 	if projectDir == "" {
 		return locator
 	}
+	locator.Metadata = cloneStringMap(locator.Metadata)
 	if locator.Metadata == nil {
 		locator.Metadata = map[string]string{}
-	} else {
-		locator.Metadata = cloneStringMap(locator.Metadata)
 	}
 	if strings.TrimSpace(locator.Metadata[sessionProjectDirMetadataKey]) == "" {
 		locator.Metadata[sessionProjectDirMetadataKey] = projectDir

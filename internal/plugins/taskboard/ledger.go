@@ -1,6 +1,8 @@
 package taskboard
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +31,11 @@ var (
 	// surface overlaps another active card (gate 2 dispatch intercept, gate 4
 	// merge precheck). The conflict report rides in the error text for the PJM.
 	ErrPathConflict = errors.New("taskboard: path conflict with another card")
+	// ErrCreateCardConflict is returned when an idempotent create replay reuses
+	// the same (ExternalRequestID, CreatedBy) key but carries a different
+	// payload. Returning the original card would silently satisfy a request the
+	// caller never made, so the mismatch is surfaced instead.
+	ErrCreateCardConflict = errors.New("taskboard: external request id already used with a different payload")
 )
 
 // humanActor marks a mutation from a human operator (HTTP PATCH surface). A
@@ -59,6 +66,21 @@ type CardFilter struct {
 type ledgerData struct {
 	Projects []Project `json:"projects"`
 	Cards    []Card    `json:"cards"`
+	// CreateRequests persists the idempotent-create ledger so a replayed
+	// external request (same request id + created-by) returns the same card
+	// even after the ledger is closed and reopened.
+	CreateRequests []createRequestRecord `json:"create_requests,omitempty"`
+}
+
+// createRequestRecord is one idempotent create's identity: which external
+// request it satisfies, who issued it, which card it produced, and the
+// normalized payload hash used to reject a conflicting replay.
+type createRequestRecord struct {
+	ExternalRequestID string    `json:"external_request_id"`
+	CreatedBy         string    `json:"created_by"`
+	CardID            string    `json:"card_id"`
+	PayloadHash       string    `json:"payload_hash"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 // Ledger is the host-authoritative task ledger. All mutations are serialized
@@ -444,16 +466,90 @@ type CreateCardInput struct {
 	// Research is the structured investigation asset (方案A: 上下文传递)
 	// produced by a planner/PJM card and referenced by a coder card.
 	Research *Research `json:"research"`
+	// ExternalRequestID is an optional caller-supplied idempotency key. When
+	// non-empty, CreateCard de-duplicates on (ExternalRequestID, CreatedBy):
+	// a replay returns the card created by the first call, and a replay whose
+	// payload differs from the original is rejected with ErrCreateCardConflict.
+	ExternalRequestID string `json:"external_request_id"`
 }
 
-// CreateCard adds a card to the ledger.
+// createCardFingerprint is the canonical normalized shape of a create request,
+// used both to reject a same-key/different-payload replay and as the persisted
+// ExternalRequestHash record. Card identity (id/version/timestamps) and all
+// mutable state (status, holder, executions, comments) are deliberately
+// excluded so a replay still matches after the card has been advanced.
+type createCardFingerprint struct {
+	ProjectID    string    `json:"project_id"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	Prompt       string    `json:"prompt"`
+	Urgency      string    `json:"urgency"`
+	TemplateID   string    `json:"template_id"`
+	WorkDir      string    `json:"work_dir"`
+	StartStatus  string    `json:"start_status"`
+	Checklist    []string  `json:"checklist"`
+	TouchedPaths []string  `json:"touched_paths"`
+	Research     *Research `json:"research"`
+}
+
+// hash renders the fingerprint as a stable hex digest. The struct only holds
+// plain JSON types, so marshalling cannot fail; an empty string is returned in
+// the unreachable error case and simply never matches a recorded hash.
+func (f createCardFingerprint) hash() string {
+	data, err := json.Marshal(f)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// normalizeChecklistTexts trims each acceptance-criterion line and drops
+// empties, preserving order. It is the single normalization point for the
+// checklist at create time and mirrors the persisted card.Checklist lines.
+func normalizeChecklistTexts(texts []string) []string {
+	out := make([]string, 0, len(texts))
+	for _, text := range texts {
+		if text = strings.TrimSpace(text); text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+// CreateCard adds a card to the ledger. When input.ExternalRequestID is
+// non-empty the create is idempotent on (ExternalRequestID, CreatedBy): a
+// replay returns the original card untouched, and a replay carrying a
+// different payload for the same key fails with ErrCreateCardConflict. The
+// lookup, the conflict check and the record write all happen under l.mu, so
+// concurrent retries cannot double-create.
 func (l *Ledger) CreateCard(input CreateCardInput) (Card, error) {
 	title := strings.TrimSpace(input.Title)
 	if title == "" {
 		return Card{}, fmt.Errorf("taskboard: card title is required")
 	}
+	requestID := strings.TrimSpace(input.ExternalRequestID)
+	createdBy := strings.TrimSpace(input.CreatedBy)
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// Idempotency short-circuit: resolve the normalized payload hash once so
+	// both the replay lookup and the record write agree on the fingerprint.
+	var payloadHash string
+	if requestID != "" {
+		payloadHash = createCardPayloadHash(input, title, createdBy, l)
+		if rec, ok := l.findCreateRequestLocked(requestID, createdBy); ok {
+			card, err := l.findCardLocked(rec.CardID)
+			if err != nil {
+				return Card{}, fmt.Errorf("taskboard: idempotent create %q lost its card %q: %w", requestID, rec.CardID, err)
+			}
+			if rec.PayloadHash != payloadHash {
+				return Card{}, fmt.Errorf("%w: request %q", ErrCreateCardConflict, requestID)
+			}
+			return *card, nil
+		}
+	}
+
 	projectID := strings.TrimSpace(input.ProjectID)
 	if projectID == "" {
 		if len(l.data.Projects) == 0 {
@@ -486,33 +582,89 @@ func (l *Ledger) CreateCard(input CreateCardInput) (Card, error) {
 		status = StatusTodo
 	}
 	card := Card{
-		ID:          l.nextID("t"),
-		ProjectID:   projectID,
-		WorkDir:     strings.TrimSpace(input.WorkDir),
-		Title:       title,
-		Description: strings.TrimSpace(input.Description),
-		Prompt:      strings.TrimSpace(input.Prompt),
-		Urgency:     normalizeUrgency(input.Urgency),
-		TemplateID:  strings.TrimSpace(input.TemplateID),
-		Status:      status,
-		TouchedPaths: normalizeTouchedPaths(input.TouchedPaths),
-		Research:    normalizeResearch(input.Research),
-		Version:     1,
-		CreatedBy:   input.CreatedBy,
-		UpdatedBy:   input.CreatedBy,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:                l.nextID("t"),
+		ProjectID:         projectID,
+		WorkDir:           strings.TrimSpace(input.WorkDir),
+		Title:             title,
+		Description:       strings.TrimSpace(input.Description),
+		Prompt:            strings.TrimSpace(input.Prompt),
+		Urgency:           normalizeUrgency(input.Urgency),
+		TemplateID:        strings.TrimSpace(input.TemplateID),
+		Status:            status,
+		TouchedPaths:      normalizeTouchedPaths(input.TouchedPaths),
+		ExternalRequestID: requestID,
+		Research:          normalizeResearch(input.Research),
+		Version:           1,
+		CreatedBy:         input.CreatedBy,
+		UpdatedBy:         input.CreatedBy,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
-	for _, text := range input.Checklist {
-		if text = strings.TrimSpace(text); text != "" {
-			card.Checklist = append(card.Checklist, ChecklistItem{Text: text})
-		}
+	for _, text := range normalizeChecklistTexts(input.Checklist) {
+		card.Checklist = append(card.Checklist, ChecklistItem{Text: text})
 	}
 	l.data.Cards = append(l.data.Cards, card)
+	if requestID != "" {
+		l.data.CreateRequests = append(l.data.CreateRequests, createRequestRecord{
+			ExternalRequestID: requestID,
+			CreatedBy:         createdBy,
+			CardID:            card.ID,
+			PayloadHash:       payloadHash,
+			CreatedAt:         now,
+		})
+	}
 	if err := l.saveLocked(); err != nil {
 		return Card{}, err
 	}
 	return card, nil
+}
+
+// createCardPayloadHash canonicalizes a create request into the persisted
+// conflict-detection fingerprint. ProjectID is resolved the same way the create
+// path resolves it (explicit value or the built-in/first project default) so a
+// replay that omits a now-redundant project_id still matches its original.
+func createCardPayloadHash(input CreateCardInput, title, createdBy string, l *Ledger) string {
+	projectID := strings.TrimSpace(input.ProjectID)
+	if projectID == "" {
+		for _, p := range l.data.Projects {
+			if p.BuiltIn {
+				projectID = p.ID
+				break
+			}
+		}
+		if projectID == "" && len(l.data.Projects) > 0 {
+			projectID = l.data.Projects[0].ID
+		}
+	}
+	startStatus := StatusBacklog
+	if input.StartStatus == StatusTodo {
+		startStatus = StatusTodo
+	}
+	return createCardFingerprint{
+		ProjectID:    projectID,
+		Title:        title,
+		Description:  strings.TrimSpace(input.Description),
+		Prompt:       strings.TrimSpace(input.Prompt),
+		Urgency:      normalizeUrgency(input.Urgency),
+		TemplateID:   strings.TrimSpace(input.TemplateID),
+		WorkDir:      strings.TrimSpace(input.WorkDir),
+		StartStatus:  startStatus,
+		Checklist:    normalizeChecklistTexts(input.Checklist),
+		TouchedPaths: normalizeTouchedPaths(input.TouchedPaths),
+		Research:     normalizeResearch(input.Research),
+	}.hash()
+}
+
+// findCreateRequestLocked locates a recorded idempotent create by its
+// (request id, created-by) key. Callers must hold l.mu.
+func (l *Ledger) findCreateRequestLocked(requestID, createdBy string) (createRequestRecord, bool) {
+	for i := range l.data.CreateRequests {
+		if l.data.CreateRequests[i].ExternalRequestID == requestID &&
+			l.data.CreateRequests[i].CreatedBy == createdBy {
+			return l.data.CreateRequests[i], true
+		}
+	}
+	return createRequestRecord{}, false
 }
 
 // findCardLocked locates a card by id. Callers must hold l.mu.
@@ -552,14 +704,14 @@ func (l *Ledger) mutateCard(id string, ifVersion int, actor string, mutate func(
 // this; model/execution fields are not agent-writable by design — the M1
 // ledger has no such fields yet, M3 adds them read-only to tools).
 type UpdateCardInput struct {
-	Title        *string    `json:"title"`
-	Description  *string    `json:"description"`
-	Prompt       *string    `json:"prompt"`
-	Urgency      *string    `json:"urgency"`
-	Blocked      *bool      `json:"blocked"`
-	TemplateID   *string    `json:"template_id"`
-	TouchedPaths *[]string  `json:"touched_paths"`
-	WorkDir      *string    `json:"work_dir"`
+	Title        *string   `json:"title"`
+	Description  *string   `json:"description"`
+	Prompt       *string   `json:"prompt"`
+	Urgency      *string   `json:"urgency"`
+	Blocked      *bool     `json:"blocked"`
+	TemplateID   *string   `json:"template_id"`
+	TouchedPaths *[]string `json:"touched_paths"`
+	WorkDir      *string   `json:"work_dir"`
 	// Checklist, when non-nil, replaces the card's acceptance criteria text in
 	// full. Done/evidence state is preserved for items whose text is unchanged
 	// (so editing the wording does not silently clear a DoD the executor already

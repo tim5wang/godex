@@ -577,6 +577,7 @@ func (s *Service) startUserTurnLocked(session *sessionState, envelope message.En
 	runtimeCtx.Metadata["turn_id"] = turnID
 	attachSessionGraphContext(session, &runtimeCtx)
 	runtimeCtx.ProjectLedger, runtimeCtx.ProjectLedgerUpdatedAt = s.projectLedgerForRuntimeContext(sessionID)
+	s.refreshWorkContextFeedback(session)
 	priorMessageCount := len(session.agent.GetMessages())
 	if envelope.Timestamp.IsZero() {
 		envelope.Timestamp = now

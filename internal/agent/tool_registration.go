@@ -292,6 +292,9 @@ func (a *Agent) registerToolsWith(handler *tools.ToolHandler) {
 	})
 
 	a.registerToolTo(handler, tools.NewMemoryTool(a.memoryMgr), tools.ToolMeta{AlwaysActive: true})
+	if a.workContextTool != nil {
+		a.registerToolTo(handler, a.workContextTool, tools.ToolMeta{AlwaysActive: true})
+	}
 	a.registerToolTo(handler, tools.NewSkillTool(a), tools.ToolMeta{AlwaysActive: true})
 	a.registerToolTo(handler, tools.NewListPackagesTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package and prompt ecosystem"})
 	a.registerToolTo(handler, tools.NewInstallPackageTool(a), tools.ToolMeta{Bundle: bundlePackages, Summary: "declaration-only package and prompt ecosystem"})

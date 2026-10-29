@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,22 @@ const (
 	candidateSuppressionTTL  = 30 * 24 * time.Hour
 	maxInsightBridgeAdds     = 4
 	maxTimelineBridgeAdds    = 2
+
+	// maxProposedCandidateTitleRunes bounds an externally proposed candidate
+	// title so a single proposal cannot flood the inbox with a wall of text.
+	maxProposedCandidateTitleRunes = 200
+	// maxProposedCandidateSummaryRunes bounds a proposed candidate summary and is
+	// also the truncation limit used when a summary is derived from the content.
+	maxProposedCandidateSummaryRunes = 400
+	// maxProposedCandidateContentRunes bounds the body of a proposed candidate.
+	maxProposedCandidateContentRunes = 8000
+	// maxProposedCandidateSourceRunes bounds the provenance label of a proposal.
+	maxProposedCandidateSourceRunes = 120
 )
+
+// ErrInvalidCandidate marks a candidate proposal rejected by ProposeCandidate
+// validation. Callers can test it with errors.Is.
+var ErrInvalidCandidate = errors.New("memory: invalid candidate")
 
 // Candidate is a suggested durable memory extracted from a completed turn.
 type Candidate struct {
@@ -167,6 +183,83 @@ func (e *Extractor) CaptureInsightsReport(report *insights.Report) ([]Candidate,
 // CaptureTimeline extracts durable memory suggestions from recent runtime timeline events.
 func (e *Extractor) CaptureTimeline(items []events.Event) ([]Candidate, error) {
 	return e.captureCandidates(extractCandidatesFromTimeline(items))
+}
+
+// ProposeCandidate validates and queues one externally proposed memory
+// candidate into the pending candidate inbox, then returns the candidates that
+// were actually added.
+//
+// It is the audited public entry point for candidate proposals: the proposal
+// goes through the same dedupe (against durable memory and pending candidates)
+// and suppression checks as the turn-end extractor, and it NEVER writes durable
+// memory directly. Promotion into durable memory stays an explicit, audited
+// decision taken later via Manager.AcceptCandidate.
+//
+// Title, content, type and source are required and length-bounded. CreatedAt is
+// filled when unset and the fingerprint is always recomputed so retrying the
+// same proposal is stable and idempotent. An empty result with a nil error means
+// the proposal was accepted as valid but was already present, already durable,
+// or still suppressed.
+func (e *Extractor) ProposeCandidate(candidate Candidate) ([]Candidate, error) {
+	normalized, err := normalizeProposedCandidate(candidate)
+	if err != nil {
+		return nil, err
+	}
+	return e.captureCandidates([]Candidate{normalized})
+}
+
+func normalizeProposedCandidate(candidate Candidate) (Candidate, error) {
+	title := strings.Join(strings.Fields(strings.TrimSpace(candidate.Title)), " ")
+	if title == "" {
+		return Candidate{}, fmt.Errorf("%w: title is required", ErrInvalidCandidate)
+	}
+	if len([]rune(title)) > maxProposedCandidateTitleRunes {
+		return Candidate{}, fmt.Errorf("%w: title exceeds %d characters", ErrInvalidCandidate, maxProposedCandidateTitleRunes)
+	}
+
+	content := strings.TrimSpace(candidate.Content)
+	if content == "" {
+		return Candidate{}, fmt.Errorf("%w: content is required", ErrInvalidCandidate)
+	}
+	if len([]rune(content)) > maxProposedCandidateContentRunes {
+		return Candidate{}, fmt.Errorf("%w: content exceeds %d characters", ErrInvalidCandidate, maxProposedCandidateContentRunes)
+	}
+
+	if !validCandidateType(candidate.Type) {
+		return Candidate{}, fmt.Errorf("%w: unsupported type %q", ErrInvalidCandidate, string(candidate.Type))
+	}
+
+	source := strings.Join(strings.Fields(strings.TrimSpace(candidate.Source)), " ")
+	if source == "" {
+		return Candidate{}, fmt.Errorf("%w: source is required", ErrInvalidCandidate)
+	}
+	if len([]rune(source)) > maxProposedCandidateSourceRunes {
+		return Candidate{}, fmt.Errorf("%w: source exceeds %d characters", ErrInvalidCandidate, maxProposedCandidateSourceRunes)
+	}
+
+	summary := strings.Join(strings.Fields(strings.TrimSpace(candidate.Summary)), " ")
+	if summary == "" {
+		summary = truncateRunes(content, maxProposedCandidateSummaryRunes)
+	} else if len([]rune(summary)) > maxProposedCandidateSummaryRunes {
+		return Candidate{}, fmt.Errorf("%w: summary exceeds %d characters", ErrInvalidCandidate, maxProposedCandidateSummaryRunes)
+	}
+
+	// newCandidate derives a stable sha1 fingerprint from
+	// type+title+summary+content, so identical retries collapse into one entry.
+	normalized := newCandidate(title, summary, content, candidate.Type, source)
+	if !candidate.CreatedAt.IsZero() {
+		normalized.CreatedAt = candidate.CreatedAt.UTC()
+	}
+	return normalized, nil
+}
+
+func validCandidateType(candidateType Type) bool {
+	switch candidateType {
+	case TypeIdentity, TypeUser, TypeWorkflow, TypeProject, TypeWarning, TypeWorkMethod, TypeWorkFact:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Extractor) captureCandidates(candidates []Candidate) ([]Candidate, error) {

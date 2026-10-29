@@ -36,41 +36,42 @@ import (
 
 // Agent is the main agent orchestrator.
 type Agent struct {
-	cfg            *config.Config
-	toolHandler    *tools.ToolHandler
-	todoMgr        *todo.Manager
-	taskboard      *taskboard.Ledger
-	taskboardExec  taskboard.Executor
-	skillLoader    *skill.Loader
-	instrLoader    *instructions.Loader
-	memoryMgr      *memory.Manager
-	memoryExt      *memory.Extractor
-	memoryStrategy memory.Strategy
-	notesMgr       *notes.Manager
-	mcpMgr         *mcp.Manager
-	compressor     *compress.Compressor
-	summarizer     compress.SessionSummarizer
-	taskMgr        *task.Manager
-	bgMgr          *background.Manager
-	webSearch      *tools.WebSearchService
-	webFetch       *tools.WebFetchService
-	browser        *tools.BrowserService
-	permissions    *tools.PermissionManager
-	historySearch  tools.HistorySearchRuntime
-	sessionAdmin   tools.SessionAdminRuntime
-	cron           tools.CronManager
-	heartbeat      tools.HeartbeatManager
-	media          *media.Processor
-	msgBus         *message.Bus
-	teamMgr        *teammate.Manager
-	subagentJobs   *subagentJobStore
-	workflows      *workflowStore
-	flows          *flowStore
-	humanTasks     *humanTaskStore
-	templateMgr    *templates.Manager // resolves step agent_ref (P1.4); nil = no override
-	client         conversation.Caller
-	sandbox        sandbox.Sandbox
-	workerRuntime  workerruntime.Runtime
+	cfg             *config.Config
+	toolHandler     *tools.ToolHandler
+	todoMgr         *todo.Manager
+	taskboard       *taskboard.Ledger
+	taskboardExec   taskboard.Executor
+	skillLoader     *skill.Loader
+	instrLoader     *instructions.Loader
+	memoryMgr       *memory.Manager
+	memoryExt       *memory.Extractor
+	memoryStrategy  memory.Strategy
+	notesMgr        *notes.Manager
+	mcpMgr          *mcp.Manager
+	compressor      *compress.Compressor
+	summarizer      compress.SessionSummarizer
+	taskMgr         *task.Manager
+	bgMgr           *background.Manager
+	webSearch       *tools.WebSearchService
+	webFetch        *tools.WebFetchService
+	browser         *tools.BrowserService
+	permissions     *tools.PermissionManager
+	historySearch   tools.HistorySearchRuntime
+	sessionAdmin    tools.SessionAdminRuntime
+	workContextTool tools.Tool
+	cron            tools.CronManager
+	heartbeat       tools.HeartbeatManager
+	media           *media.Processor
+	msgBus          *message.Bus
+	teamMgr         *teammate.Manager
+	subagentJobs    *subagentJobStore
+	workflows       *workflowStore
+	flows           *flowStore
+	humanTasks      *humanTaskStore
+	templateMgr     *templates.Manager // resolves step agent_ref (P1.4); nil = no override
+	client          conversation.Caller
+	sandbox         sandbox.Sandbox
+	workerRuntime   workerruntime.Runtime
 	// Persist exact activations of MCP tools whose schemas are still being
 	// discovered. They are restored at a turn boundary, never from a callback.
 	pendingMCPActiveTools []string

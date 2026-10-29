@@ -97,6 +97,7 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 
 	a := agent.NewForSession(sessionCfg, s.shared, sessionID)
 	a.RegisterTools()
+	a.SetWorkContextTool(s.newWorkContextTool(sessionID))
 	// New-chat mode (locator metadata "mode", e.g. "minimal") pins the
 	// initial active tool set and prompt complexity at creation time. It is
 	// applied before RestoreStateForSession so a resumed session's persisted

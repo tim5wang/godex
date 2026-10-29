@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -700,5 +701,222 @@ func TestUpdateExecutionObservationDoesNotClobber(t *testing.T) {
 	ex := updated.Executions[0]
 	if ex.Stage != StageIdle || ex.ErrorType != ErrTypeProvider || ex.LastError != "provider empty" {
 		t.Fatalf("idle observation clobbered error fields: %+v", ex)
+	}
+}
+
+// ---- Idempotent external create (ExternalRequestID) ----
+
+// openTestLedgerAt opens a ledger at a fixed path so a test can close it and
+// reopen the same file, mirroring a process restart against durable state.
+func openTestLedgerAt(t *testing.T, path, workspace string) *Ledger {
+	t.Helper()
+	l, err := OpenLedger(path, workspace)
+	if err != nil {
+		t.Fatalf("open ledger at %s: %v", path, err)
+	}
+	return l
+}
+
+func idempotentInput(projectID string) CreateCardInput {
+	return CreateCardInput{
+		ProjectID:         projectID,
+		Title:             "reserve and complete",
+		Description:       "cross-store compensation",
+		Prompt:            "do the thing",
+		Urgency:           UrgencyUrgent,
+		Checklist:         []string{" one ", "two", "  "},
+		TouchedPaths:      []string{"internal/plugins/taskboard"},
+		CreatedBy:         "sqlite-compensator",
+		ExternalRequestID: "req-1",
+	}
+}
+
+// A replay with the same (request id, created-by) must return the original card
+// and never add a second one, even after the card has been advanced and had
+// unrelated state (comments) attached.
+func TestCreateCardExternalRequestIDReplayReturnsSameCard(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+
+	first, err := l.CreateCard(idempotentInput(project.ID))
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	if first.ExternalRequestID != "req-1" {
+		t.Fatalf("expected ExternalRequestID recorded, got %q", first.ExternalRequestID)
+	}
+
+	// Mutate the card so a naive "replay must look identical" check would break.
+	moved, _ := l.MoveCard(first.ID, first.Version, StatusTodo, agentActor)
+	moved, _ = l.MoveCard(moved.ID, moved.Version, StatusInProgress, agentActor)
+	if _, err := l.AddComment(moved.ID, moved.Version, agentActor, "progressing"); err != nil {
+		t.Fatalf("add comment: %v", err)
+	}
+
+	replay, err := l.CreateCard(idempotentInput(project.ID))
+	if err != nil {
+		t.Fatalf("replay create: %v", err)
+	}
+	if replay.ID != first.ID {
+		t.Fatalf("replay returned a different card: %q vs %q", replay.ID, first.ID)
+	}
+	if replay.Status != StatusInProgress || len(replay.Comments) != 1 {
+		t.Fatalf("replay should reflect the live card state, got status=%q comments=%d", replay.Status, len(replay.Comments))
+	}
+	if cards := l.ListCards(CardFilter{ProjectID: project.ID, IncludeDeleted: true}); len(cards) != 1 {
+		t.Fatalf("expected exactly one card after replay, got %d", len(cards))
+	}
+}
+
+// The dedupe record is durable: a retry issued after the ledger is closed and
+// reopened must still resolve to the original card instead of creating a new one.
+func TestCreateCardExternalRequestIDSurvivesLedgerReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "taskboard", "ledger.json")
+
+	l := openTestLedgerAt(t, path, dir)
+	project := seedProject(t, l)
+	first, err := l.CreateCard(idempotentInput(project.ID))
+	if err != nil {
+		t.Fatalf("create before reopen: %v", err)
+	}
+
+	reopened := openTestLedgerAt(t, path, dir)
+	replay, err := reopened.CreateCard(idempotentInput(project.ID))
+	if err != nil {
+		t.Fatalf("replay after reopen: %v", err)
+	}
+	if replay.ID != first.ID {
+		t.Fatalf("replay after reopen returned a different card: %q vs %q", replay.ID, first.ID)
+	}
+	if !replay.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("replay after reopen should keep original timestamps: %v vs %v", replay.CreatedAt, first.CreatedAt)
+	}
+	if cards := reopened.ListCards(CardFilter{ProjectID: project.ID, IncludeDeleted: true}); len(cards) != 1 {
+		t.Fatalf("expected exactly one card after reopen replay, got %d", len(cards))
+	}
+
+	// A conflicting payload for the same key is still rejected after reopen.
+	conflicting := idempotentInput(project.ID)
+	conflicting.Title = "a different task entirely"
+	if _, err := reopened.CreateCard(conflicting); !errors.Is(err, ErrCreateCardConflict) {
+		t.Fatalf("expected ErrCreateCardConflict after reopen, got %v", err)
+	}
+}
+
+// Same request id but a different payload is a caller bug: the mismatch is
+// surfaced instead of silently returning a card the caller never asked for.
+func TestCreateCardExternalRequestIDConflictingPayloadRejected(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+	if _, err := l.CreateCard(idempotentInput(project.ID)); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+
+	cases := map[string]func(*CreateCardInput){
+		"title":       func(in *CreateCardInput) { in.Title = "other" },
+		"description": func(in *CreateCardInput) { in.Description = "changed" },
+		"prompt":      func(in *CreateCardInput) { in.Prompt = "changed" },
+		"urgency":     func(in *CreateCardInput) { in.Urgency = UrgencyLow },
+		"checklist":   func(in *CreateCardInput) { in.Checklist = []string{"one", "three"} },
+		"paths":       func(in *CreateCardInput) { in.TouchedPaths = []string{"internal/tools"} },
+	}
+	for name, mutate := range cases {
+		input := idempotentInput(project.ID)
+		mutate(&input)
+		if _, err := l.CreateCard(input); !errors.Is(err, ErrCreateCardConflict) {
+			t.Fatalf("case %s: expected ErrCreateCardConflict, got %v", name, err)
+		}
+	}
+	if cards := l.ListCards(CardFilter{ProjectID: project.ID, IncludeDeleted: true}); len(cards) != 1 {
+		t.Fatalf("conflicting replays must not create cards, got %d", len(cards))
+	}
+
+	// Whitespace-only differences are normalized away and still count as a match.
+	whitespace := idempotentInput(project.ID)
+	whitespace.Title = "  reserve and complete  "
+	whitespace.Checklist = []string{"one", " two "}
+	if _, err := l.CreateCard(whitespace); err != nil {
+		t.Fatalf("normalized replay should match the original, got %v", err)
+	}
+}
+
+// Concurrent retries of the same request (the real cross-store compensation
+// race) must yield exactly one card and one consistent card id for every caller.
+func TestCreateCardExternalRequestIDConcurrentRetry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "taskboard", "ledger.json")
+	l := openTestLedgerAt(t, path, dir)
+	project := seedProject(t, l)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	ids := make([]string, workers)
+	errs := make([]error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+			card, err := l.CreateCard(idempotentInput(project.ID))
+			ids[idx], errs[idx] = card.ID, err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("worker %d failed: %v", i, err)
+		}
+	}
+	for i := 1; i < workers; i++ {
+		if ids[i] != ids[0] {
+			t.Fatalf("worker %d got card %q, want %q", i, ids[i], ids[0])
+		}
+	}
+	if cards := l.ListCards(CardFilter{ProjectID: project.ID, IncludeDeleted: true}); len(cards) != 1 {
+		t.Fatalf("concurrent retry created %d cards, want 1", len(cards))
+	}
+
+	// The dedupe decision is durable: a reopen still resolves to that one card.
+	reopened := openTestLedgerAt(t, path, dir)
+	card, err := reopened.CreateCard(idempotentInput(project.ID))
+	if err != nil {
+		t.Fatalf("replay after reopen: %v", err)
+	}
+	if card.ID != ids[0] {
+		t.Fatalf("reopen replay got %q, want %q", card.ID, ids[0])
+	}
+}
+
+// The key is scoped by created-by identity, and an empty request id disables
+// dedupe entirely so ordinary creates keep minting new cards.
+func TestCreateCardExternalRequestIDScopeAndOptOut(t *testing.T) {
+	l := openTestLedger(t)
+	project := seedProject(t, l)
+
+	base := idempotentInput(project.ID)
+	first, err := l.CreateCard(base)
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	otherActor := base
+	otherActor.CreatedBy = "another-compensator"
+	second, err := l.CreateCard(otherActor)
+	if err != nil {
+		t.Fatalf("create for a different identity: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatal("the same request id under a different created-by must be a distinct create")
+	}
+
+	plainA := CreateCardInput{ProjectID: project.ID, Title: "no key", CreatedBy: "agent"}
+	plainB := plainA
+	cardA, _ := l.CreateCard(plainA)
+	cardB, _ := l.CreateCard(plainB)
+	if cardA.ID == cardB.ID || cardA.ExternalRequestID != "" {
+		t.Fatalf("creates without an external request id must not dedupe: %q vs %q", cardA.ID, cardB.ID)
 	}
 }

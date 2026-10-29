@@ -5,7 +5,12 @@
   color: var(--godex-text);
 }
 
-.wd-prototype { margin-bottom: 16px; }
+/* .wd-store is the persistent "personal SQLite store" banner; it replaced the old
+   prototype banner and keeps the same bottom spacing. */
+.wd-store { margin-bottom: 16px; }
+.wd-center { display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; min-height: 320px; text-align: center; }
+.wd-empty-card { max-width: 720px; }
+.wd-fact-line { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--godex-border); }
 .wd-layout { display: grid; grid-template-columns: 238px minmax(0, 1fr) 282px; gap: 18px; align-items: start; }
 .wd-streams { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 14px; min-width: 0; }
 .wd-stream-list { display: flex; flex-direction: column; gap: 10px; }
@@ -62,6 +67,7 @@
 .wd-relation .ant-btn-link { padding: 6px 0; height: auto; white-space: normal; text-align: left; }
 .wd-task { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--godex-border); border-radius: 8px; background: var(--godex-panel); }
 .wd-topic-select .ant-select { width: 300px; max-width: 100%; }
+.wd-task .ant-card-head-title { white-space: normal; overflow-wrap: anywhere; }
 .wd-topic-records { display: flex; flex-direction: column; gap: 12px; }
 .wd-recall-tools { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 12px; }
 .wd-knowledge .ant-card-head-title { white-space: normal; padding: 10px 0; overflow-wrap: anywhere; }

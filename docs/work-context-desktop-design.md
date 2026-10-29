@@ -1,7 +1,7 @@
 # 工作桌面与工作委派设计（Work Context Desktop）
 
-> 状态：Draft / UI Prototype（WD0）；除 §2 已存在能力外，后端与 SQLite 结构均为待实施设计，不代表已落地。
-> 日期：2026-10-29
+> 状态：Implemented（WD1–WD3 已落地：个人 SQLite 持久化 + 真实委派/知识回流联动；团队共享与 PG 迁移仍为 WD4 待评估）。
+> 日期：2026-10-29（WD0 草案）/ 2026-10-30（WD1–WD3 实现）
 > 关联：[taskboard-plugin-design.md](./taskboard-plugin-design.md)、[taskboard-collaboration-design.md](./taskboard-collaboration-design.md)、[memory-design-principles.md](./memory-design-principles.md)、[scope-isolation-design.md](./scope-isolation-design.md)
 > 定位：长期工作主线是对象，工作桌面是视图，任务看板是委派执行器，记忆是可治理的知识，不引入第二套 Agent Runtime。
 
@@ -345,7 +345,21 @@ ui/web/src/pages/WorkDesktopPage.tsx    # 与既有页面同样的 re-export
 - 截图产物：`.godex/tmp/work-desktop-wide.png`、`work-desktop-chromium-mobile.png`、`work-desktop-recovery.png`。截图来自 Mock Backend + 演示数据，不是正式后端功能验收。
 - 没有 Go 代码、依赖或数据库变更；因此不宣称已验证 WD1-WD3，也没有运行整个仓库的 Go 发布门禁。
 
-### 11.2 后续实现门禁
+### 11.2 WD1–WD3 实际验证记录（2026-10-30）
+
+- 后端 `internal/core/workcontext`：真实 `modernc.org/sqlite`，有序 migration + reopen 持久化、`if_version` CAS、检查点/事件同事务、`(tenant_id, owner_id)` 双键隔离、依赖环拒绝、委派 `request_id` 幂等保留 pack、候选确认须有来源与 `observed_at`、替代（supersedes）延后到确认阶段并在事务内校验前任。`gofmt`/`go vet` 通过。
+- 个人 Scope 由身份派生：HTTP 层从 `PrincipalFromContext` 生成 `Scope{TenantID, OwnerID}`，请求体里的伪造 `tenant_id`/`owner_id` 被忽略；跨 owner/跨租户读取返回 404；relay-only 账号在 `/v1/work-contexts` 与宿主执行面一样被 `requireCenterExecution` 拒绝。
+- 会话上下文注入：`refreshWorkContextFeedback` 在每个用户轮次边界按**已持久化的 session→context 绑定**刷新临时背景消息，多 owner 绑定同一 session 时拒绝猜测，未绑定/失效时清空而不留陈旧快照；不改动 locator 身份。
+- 真实委派：`DelegateWork` 冻结不变 ContextPack → 校验既有项目/工作目录/模板 → SQL reserve → 用 `ExternalRequestID` 建真实任务卡 → SQL complete；跨存储无事务，靠看板侧持久化幂等键补偿，重放不再重复建卡。任务卡状态由 ledger 实时投影，卡缺失显式 `source_missing`。
+- 知识回流：`CaptureWorkResult` 要求任务已 `in_review`/`done` 且存在真实证据，产出的始终是候选事实，需人工确认；`ProposeWorkMemory` 只把已确认事实写入**既有** memory 候选箱，不直接写 durable memory。
+- 前端生产页不再加载任何 demo：空库是正常首态，loading/error/409/归档只读显式；委派建真实卡但**不自动执行**，执行/验收严格手动；未知主线改为「提示 + 展示第一条」而非静默清空。
+- 验证命令：
+  - `go test ./internal/core/workcontext ./internal/services/backend ./internal/runtime/httpapi ./internal/plugins/taskboard ./internal/core/memory ./internal/core/conversation -count=1`：通过。
+  - `cd ui/web && pnpm build`（`tsc -b` + Vite 生产构建）、`pnpm test`：48 文件 / 489 测试通过。
+  - `pnpm exec playwright test e2e/work-desktop.spec.ts`：14 passed / 4 skipped（深交互用例在小屏跳过）。
+- 已知的仓库既有失败（与本次改动无关，基线同样失败）：`internal/architecture` 的 `TestFrontendSourceLineBudget`（`ChatPageView.tsx` 920 行）与 `TestGoFunctionComplexityBudget`（`routes_account.go:registerMemberRoutes` score 45）；另有 `internal/runtime/cron`、`internal/core/background`、`services/backend` TempDir 清理在满负载下的偶发 flake，单测隔离运行通过。
+
+### 11.3 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。
 - 前端：i18n 全量对齐、视图模型测试、真实 `pnpm build`（tsc -b + Vite）、现有单测。

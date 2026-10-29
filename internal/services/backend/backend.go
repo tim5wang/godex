@@ -13,6 +13,7 @@ import (
 	"github.com/tim5wang/godex/internal/core/insights"
 	"github.com/tim5wang/godex/internal/core/mcp"
 	"github.com/tim5wang/godex/internal/core/teammate"
+	"github.com/tim5wang/godex/internal/core/workcontext"
 	"github.com/tim5wang/godex/internal/domain/events"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/domain/task"
@@ -365,6 +366,11 @@ type Service struct {
 	deleting map[string]bool
 	store    sessionstore.Store
 	storeErr error
+
+	workContextOnce     sync.Once
+	workContextStore    *workcontext.Store
+	workContextErr      error
+	workContextBridgeMu sync.Mutex
 
 	flowRunsMu sync.Mutex
 	flowRuns   map[agent.FlowRunRef]struct{}

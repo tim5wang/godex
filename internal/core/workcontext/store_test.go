@@ -557,6 +557,51 @@ func TestRecordEventDedup(t *testing.T) {
 	}
 }
 
+// TestReopenRebuildsFactIndex verifies reopening a database that already holds
+// facts succeeds and repopulates the FTS projection. The initial projection is
+// written in-transaction, but a reopen must rebuild cleanly — a mismatch between
+// the rebuild SELECT and its scan targets took the whole store offline here.
+func TestReopenRebuildsFactIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "work-contexts.sqlite")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+	a := mustCreate(t, store, testScope(), "语音服务")
+	if _, err := store.CreateFact(ctx, testScope(), a.ID, FactInput{
+		Title: "短句回归", Content: "解码参数疑似主因", Scope: `{"service":"asr"}`,
+		Source: "artifact://eval/r12", ObservedAt: "2026-10-29T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("CreateFact: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The reopen path must not fail just because facts already exist.
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen with existing facts: %v", err)
+	}
+	defer reopened.Close()
+	var indexed int
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM wc_facts_fts`).Scan(&indexed); err != nil {
+		t.Fatalf("count facts_fts: %v", err)
+	}
+	if indexed != 1 {
+		t.Fatalf("rebuilt facts_fts rows = %d, want 1", indexed)
+	}
+	got, err := reopened.Recall(ctx, testScope(), a.ID, "current", "短句")
+	if err != nil {
+		t.Fatalf("Recall after reopen: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("recall after reopen = %d, want 1", len(got))
+	}
+}
+
 // TestOpenRejectsEmptyPath guards the constructor.
 func TestOpenRejectsEmptyPath(t *testing.T) {
 	if _, err := Open("  "); !errors.Is(err, ErrInvalid) {

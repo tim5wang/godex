@@ -169,7 +169,7 @@ func (s *Store) applyMigration(version int, statements []string) error {
 // does not fail Open once the tables exist.
 func (s *Store) rebuildSearchIndexes() error {
 	rows, err := s.db.Query(`
-		SELECT tenant_id, id, context_id, title, content, kind, scope, subject, predicate,
+		SELECT tenant_id, id, context_id, title, content, kind, status, scope, subject, predicate,
 		       source, source_excerpt, source_revision, observed_at, verified_at,
 		       provenance, supersedes_id, memory_candidate_id, version, created_at
 		FROM wc_facts`)

@@ -168,4 +168,40 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 		}
 		return detail.Events, nil
 	})
+	// Plan items: a table, so each row is editable in place and queryable.
+	handle("GET /v1/work-contexts/{id}/todos", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.ListTodos(r.Context(), scope, id(r))
+	})
+	handle("POST /v1/work-contexts/{id}/todos", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		var input workcontext.TodoInput
+		if err := decodeJSON(r, &input); err != nil {
+			return nil, invalidJSON(err)
+		}
+		return s.CreateTodo(r.Context(), scope, id(r), input)
+	})
+	handle("PATCH /v1/work-contexts/{id}/todos/{todoID}", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		var input workcontext.TodoPatch
+		if err := decodeJSON(r, &input); err != nil {
+			return nil, invalidJSON(err)
+		}
+		return s.PatchTodo(r.Context(), scope, id(r), r.PathValue("todoID"), input)
+	})
+	handle("DELETE /v1/work-contexts/{id}/todos/{todoID}", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		if err := s.DeleteTodo(r.Context(), scope, id(r), r.PathValue("todoID")); err != nil {
+			return nil, err
+		}
+		return map[string]any{"deleted": true}, nil
+	})
+	// Focus: what changed since this stream was last seen, plus the plan items.
+	// Marking seen is separate and explicit (viewing is not an edit).
+	handle("GET /v1/work-contexts/{id}/focus", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return s.Focus(r.Context(), scope, id(r))
+	})
+	handle("POST /v1/work-contexts/{id}/seen", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		previous, err := s.MarkSeen(r.Context(), scope, id(r))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"previous_last_seen_at": previous}, nil
+	})
 }

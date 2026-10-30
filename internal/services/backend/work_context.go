@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tim5wang/godex/internal/core/memory"
+	"github.com/tim5wang/godex/internal/core/templates"
 	"github.com/tim5wang/godex/internal/core/workcontext"
 	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
@@ -274,7 +275,11 @@ func (s *Service) LinkWorkSession(ctx context.Context, scope workcontext.Scope, 
 			return workcontext.SessionLink{}, err
 		}
 	} else {
-		metadata := map[string]string{}
+		// A session created from the desktop carries the work-desk template so the
+		// Agent runs with the desktop persona and the (gated) work_context tool from
+		// its first turn, and the embedded chat is pre-wired to this stream. The
+		// template is resolved at session load time; an unknown id falls back safely.
+		metadata := map[string]string{"template": templates.BuiltinWorkDesk}
 		if dir := strings.TrimSpace(input.WorkspaceDir); dir != "" {
 			metadata["project_dir"] = dir
 		}

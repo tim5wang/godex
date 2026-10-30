@@ -72,6 +72,10 @@ const (
 	BuiltinReviewer         = "reviewer"
 	BuiltinPlanner          = "planner"
 	BuiltinPJM              = "pjm"
+	// BuiltinWorkDesk is the embedded Work Desktop conversation agent. Only
+	// sessions opened from a work desktop carry it, so the desktop's application
+	// tool (work_context) is not offered to unrelated Agents.
+	BuiltinWorkDesk = "work-desk"
 )
 
 // AgentTemplate is a named, creation-time preset of an agent's capability
@@ -87,8 +91,8 @@ type AgentTemplate struct {
 	Scenarios   []string `json:"scenarios,omitempty" yaml:"scenarios,omitempty"`
 
 	// Capability boundary.
-	Bundles      []string `json:"bundles,omitempty" yaml:"bundles,omitempty"`     // initial active bundles (tools of these bundles)
-	Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`         // explicit tools combined with expanded Bundles as a union
+	Bundles      []string `json:"bundles,omitempty" yaml:"bundles,omitempty"` // initial active bundles (tools of these bundles)
+	Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`     // explicit tools combined with expanded Bundles as a union
 	WriteEnabled bool     `json:"write_enabled,omitempty" yaml:"write_enabled,omitempty"`
 	WriteScope   []string `json:"write_scope,omitempty" yaml:"write_scope,omitempty"`
 	MCPServers   []string `json:"mcp_servers,omitempty" yaml:"mcp_servers,omitempty"`
@@ -96,8 +100,8 @@ type AgentTemplate struct {
 	Packages     []string `json:"packages,omitempty" yaml:"packages,omitempty"`
 
 	// Persona and habits.
-	Persona    string `json:"persona,omitempty" yaml:"persona,omitempty"`       // personality prompt, prepended to the dynamic system prompt
-	Profile    string `json:"profile,omitempty" yaml:"profile,omitempty"`       // "general" / "coding" agent profile override
+	Persona    string `json:"persona,omitempty" yaml:"persona,omitempty"`         // personality prompt, prepended to the dynamic system prompt
+	Profile    string `json:"profile,omitempty" yaml:"profile,omitempty"`         // "general" / "coding" agent profile override
 	BasePrompt string `json:"base_prompt,omitempty" yaml:"base_prompt,omitempty"` // behavioral boundary rules
 
 	// Resource hints.

@@ -24,6 +24,27 @@ import (
 	"time"
 )
 
+// workContextToolEnabled reports whether this session should get the desktop's
+// work_context tool. A session qualifies when it was opened as the desktop agent
+// (template=work-desk) or is already linked to a stream. The lookup is read-only
+// and fails closed when the store is unavailable.
+func (s *Service) workContextToolEnabled(sessionID, templateID string) bool {
+	if strings.TrimSpace(templateID) == templates.BuiltinWorkDesk {
+		return true
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	store, err := s.WorkContexts()
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, id, err := store.SessionBinding(ctx, sessionID)
+	return err == nil && id != ""
+}
+
 func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessionState, error) {
 	now := s.now()
 	session := &sessionState{
@@ -97,7 +118,12 @@ func (s *Service) loadSession(sessionID string, locator SessionLocator) (*sessio
 
 	a := agent.NewForSession(sessionCfg, s.shared, sessionID)
 	a.RegisterTools()
-	a.SetWorkContextTool(s.newWorkContextTool(sessionID))
+	// work_context is a work-desktop capability. Mount it only for sessions that
+	// are actually attached to a stream (or opened as the desktop agent), so
+	// unrelated Agents neither see it in the catalog nor can activate it later.
+	if s.workContextToolEnabled(sessionID, session.locator.Metadata["template"]) {
+		a.SetWorkContextTool(s.newWorkContextTool(sessionID))
+	}
 	// New-chat mode (locator metadata "mode", e.g. "minimal") pins the
 	// initial active tool set and prompt complexity at creation time. It is
 	// applied before RestoreStateForSession so a resumed session's persisted

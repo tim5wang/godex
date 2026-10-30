@@ -367,6 +367,18 @@ export function createWorkDelegation(token: string | null, contextId: string, in
   );
 }
 
+// organizeWorkContext asks the Agent to sweep the stream now (update the
+// checkpoint, consolidate facts, flag stale/conflicting items). It enqueues one
+// turn on the stream's linked session; the maintenance itself is real Agent work,
+// not a client-side button that pretends to reorganize.
+export function organizeWorkContext(token: string | null, contextId: string) {
+  return request<{ queued: boolean; session_id?: string }>(
+    `/v1/work-contexts/${encodeURIComponent(contextId)}/organize`,
+    { method: "POST" },
+    token,
+  );
+}
+
 // workContextQueryKey keeps the token and active node in the key so switching the active
 // remote node (or logging out) refetches instead of serving another node's desktop from
 // cache — node-scoped data must not leak across the node context store.

@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, App as AntApp, Badge, Button, Card, Descriptions, Drawer, Empty, Form, Input, Modal, Select, Space, Spin, Tabs, Tag, Timeline, Typography } from "antd";
-import { ApartmentOutlined, ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, CommentOutlined, CopyOutlined, EditOutlined, FileTextOutlined, FolderOutlined, LinkOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, SearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { Alert, App as AntApp, Badge, Button, Card, Descriptions, Drawer, Empty, Form, Input, Modal, Select, Space, Spin, Tabs, Tag, Timeline, Tooltip, Typography } from "antd";
+import { ApartmentOutlined, ArrowRightOutlined, CheckCircleOutlined, ClockCircleOutlined, CodeOutlined, CommentOutlined, CopyOutlined, EditOutlined, FileTextOutlined, FolderOutlined, LinkOutlined, MessageOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ProfileOutlined, SearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useI18n } from "../../i18n";
 import { useSettingsStore } from "../../store/settings";
 import { useNodeContextStore } from "../../store/nodeContext";
@@ -22,6 +22,7 @@ import {
   linkWorkSession,
   listWorkContexts,
   listWorkResources,
+  organizeWorkContext,
   patchWorkContext,
   promoteWorkFactMemoryCandidate,
   recallWorkFacts,
@@ -40,6 +41,9 @@ import {
   type WorkResource,
 } from "../../lib/apiWorkContext";
 import { writeClipboardText } from "../../lib/clipboard";
+import { InfoHint } from "./workDesktopHints";
+import { WorkChatDock } from "./WorkChatDock";
+import { FilesPanel } from "../files/FilesPanel";
 import { delegationsNeedingReview, formatTimestamp, isExternalLink, isReadOnly, joinLines, otherSide, splitLines } from "./workDesktopView";
 import "./workDesktop.css";
 
@@ -99,7 +103,7 @@ const statusColor: Record<string, string> = { active: "processing", paused: "ora
 const cardStatusColor: Record<string, string> = { backlog: "default", todo: "blue", in_progress: "processing", in_review: "gold", done: "green" };
 const factStatusColor: Record<string, string> = { candidate: "gold", confirmed: "green", stale: "orange", superseded: "default", rejected: "default" };
 const nonBlank = { required: true, whitespace: true };
-const tabs = ["overview", "conversations", "tasks", "knowledge", "timeline"] as const;
+const tabs = ["overview", "chat", "conversations", "tasks", "knowledge", "files", "timeline"] as const;
 const resourceKinds = ["web", "directory", "repository", "note", "document", "dashboard", "service", "model", "artifact"];
 
 export function WorkDesktopPage() {
@@ -296,6 +300,14 @@ export function WorkDesktopPage() {
     onError: (error) => fail(error, "saveFailed"),
   });
 
+  const organizeMutation = useMutation({
+    // On-demand AI maintenance: a real queued turn on the linked session, not a
+    // client-side shuffle. Files inside the sweep stay maintenance-only.
+    mutationFn: () => organizeWorkContext(token || null, contextId!),
+    onSuccess: () => { invalidateDetail(); void message.success(tr("organized")); },
+    onError: (error) => fail(error, "saveFailed"),
+  });
+
   const sessionMutation = useMutation({
     mutationFn: (values: EditorValues) => linkWorkSession(token || null, contextId!, { topic: values.topic!.trim(), workspace_dir: values.workspaceDir?.trim() ?? "", session_id: values.sessionId?.trim() ?? "" }),
     onSuccess: () => { invalidateDetail(); setEditor(undefined); void message.success(tr("saved")); },
@@ -394,6 +406,14 @@ export function WorkDesktopPage() {
   const delegations = detail?.delegations ?? [];
   const events = detail?.events ?? [];
   const pendingReview = delegationsNeedingReview(delegations);
+  // The chat dock and file browser reuse the stream's linked session and its
+  // project directory, so opening either one keeps the working context instead
+  // of navigating away to the Chat or Files page.
+  const chatSessionId = sessions[0]?.session_id ?? "";
+  const filesRoot = useMemo(
+    () => contextResources.find((resource) => resource.kind === "directory" && resource.locator.trim())?.locator.trim() ?? "",
+    [contextResources],
+  );
 
   if (contextsQuery.isLoading) {
     return <div className="wd-page wd-center"><Spin /> <Typography.Text type="secondary">{tr("loading")}</Typography.Text></div>;
@@ -413,8 +433,7 @@ export function WorkDesktopPage() {
   }
 
   return <div className="wd-page">
-    <Alert className="wd-store" type="info" showIcon title={tr("store")} description={tr("storeHint")} />
-    {invalidContext && <Alert className="wd-store" type="warning" showIcon title={tr("invalidContext")} />}
+    {invalidContext && <Alert className="wd-notice" type="warning" showIcon title={tr("invalidContext")} />}
     <div className="wd-layout">
       <aside className="wd-streams" aria-label={tr("contexts")}>
         <div className="wd-item-heading"><Typography.Text strong>{tr("contexts")}</Typography.Text><Badge count={contexts.length} color="var(--godex-accent)" /></div>
@@ -426,19 +445,24 @@ export function WorkDesktopPage() {
           <span><Tag color={statusColor[item.status] ?? "default"}>{trLabel("", item.status)}</Tag><span className="wd-muted">{tr("revision", { revision: item.checkpoint.revision })}</span></span>
         </button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("emptyContexts")} />}</nav>
         <Button block icon={<PlusOutlined aria-hidden="true" />} onClick={() => openEditor("create")}>{tr("newContext")}</Button>
-        <Typography.Paragraph type="secondary" className="wd-focus-hint">{tr("focusHint")}</Typography.Paragraph>
       </aside>
       <main className="wd-main">
         <header className="wd-context-header">
-          <Space wrap><Tag>{tr("owner")}</Tag><Tag color={statusColor[selected!.status] ?? "default"}>{trLabel("", selected!.status)}</Tag>{pendingReview > 0 && <Tag color="gold" icon={<CheckCircleOutlined aria-hidden="true" />}>{tr("pendingCount", { count: pendingReview })}</Tag>}</Space>
-          <Typography.Title level={3} className="wd-title">{selected!.title}</Typography.Title>
-          <Typography.Paragraph type="secondary">{selected!.goal || selected!.background}</Typography.Paragraph>
-          <Space wrap>
-            <Button icon={<PlayCircleOutlined aria-hidden="true" />} type="primary" onClick={() => setBriefOpen(true)}>{tr("continueWork")}</Button>
-            <Button icon={<EditOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("checkpoint")}>{tr("checkpoint")}</Button>
-            <Button icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("delegate")}>{tr("delegate")}</Button>
-            <Button icon={<EditOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("editContext")}>{tr("editContext")}</Button>
-          </Space>
+          <div className="wd-title-row">
+            <Space size={8} align="center" wrap>
+              <Typography.Title level={4} className="wd-title">{selected!.title}</Typography.Title>
+              <Tag color={statusColor[selected!.status] ?? "default"}>{trLabel("", selected!.status)}</Tag>
+              {pendingReview > 0 && <Tag color="gold" icon={<CheckCircleOutlined aria-hidden="true" />}>{tr("pendingCount", { count: pendingReview })}</Tag>}
+            </Space>
+            <Space size={6} wrap>
+              <InfoHint title={tr("maintain")} text={tr("maintainHint")} />
+              <Button size="small" type="primary" icon={<PlayCircleOutlined aria-hidden="true" />} onClick={() => setBriefOpen(true)}>{tr("continueWork")}</Button>
+              <Button size="small" icon={<EditOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("checkpoint")}>{tr("checkpoint")}</Button>
+              <Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("delegate")}>{tr("delegate")}</Button>
+              <Button size="small" icon={<EditOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("editContext")}>{tr("editContext")}</Button>
+            </Space>
+          </div>
+          <Typography.Paragraph type="secondary" className="wd-subtitle">{selected!.goal || selected!.background}</Typography.Paragraph>
         </header>
         <div className="wd-stat-row">
           <span><FolderOutlined aria-hidden="true" /> {tr("resourcesCount", { count: contextResources.length })}</span>
@@ -446,10 +470,12 @@ export function WorkDesktopPage() {
           <span><ProfileOutlined aria-hidden="true" /> {tr("tasksCount", { count: delegations.length })}</span>
           <span><ClockCircleOutlined aria-hidden="true" /> {tr("savedAt")} · {formatTimestamp(selected!.checkpoint.created_at) || tr("noItems")}</span>
         </div>
-        {readOnly && <Alert className="wd-store" type="warning" showIcon title={tr("readOnly")} />}
-        {detailQuery.isError && <Alert className="wd-store" type="error" showIcon title={tr("loadFailed")} action={<Button size="small" onClick={() => void detailQuery.refetch()}>{tr("retry")}</Button>} />}
+        {readOnly && <Alert className="wd-notice" type="warning" showIcon title={tr("readOnly")} />}
+        {detailQuery.isError && <Alert className="wd-notice" type="error" showIcon title={tr("loadFailed")} action={<Button size="small" onClick={() => void detailQuery.refetch()}>{tr("retry")}</Button>} />}
         <Tabs activeKey={tab} onChange={(key) => setParams({ context: selected!.id, tab: key })} items={[
           { key: "overview", label: tr("overview"), children: overviewView() },
+          { key: "chat", label: <Space size={4}><MessageOutlined aria-hidden="true" />{tr("chatTab")}</Space>, children: chatView() },
+          { key: "files", label: <Space size={4}><CodeOutlined aria-hidden="true" />{tr("filesTab")}</Space>, children: filesView() },
           { key: "conversations", label: <Space size={4}><CommentOutlined aria-hidden="true" />{tr("conversations")}</Space>, children: conversationsView() },
           { key: "tasks", label: tr("tasks"), children: tasksView() },
           { key: "knowledge", label: tr("knowledge"), children: knowledgeView() },
@@ -457,12 +483,10 @@ export function WorkDesktopPage() {
         ]} />
       </main>
       <aside className="wd-sidebar" aria-label={tr("resourcesTitle")}>
-        <Card size="small" title={<Space><LinkOutlined aria-hidden="true" />{tr("resourcesTitle")}</Space>} extra={<Button size="small" type="link" disabled={readOnly} onClick={() => openEditor("resource")}>{tr("addResource")}</Button>}>
-          <Typography.Paragraph type="secondary">{tr("resourceHint")}</Typography.Paragraph>
+        <Card size="small" title={<Space size={6}><LinkOutlined aria-hidden="true" />{tr("resourcesTitle")}<InfoHint title={tr("showHint")} text={tr("resourceHint")} /></Space>} extra={<Button size="small" type="link" disabled={readOnly} onClick={() => openEditor("resource")}>{tr("addResource")}</Button>}>
           {resourceList()}
         </Card>
-        <Card size="small" title={<Space><ApartmentOutlined aria-hidden="true" />{tr("relationsTitle")}</Space>} extra={<Button size="small" type="link" disabled={readOnly || contexts.length < 2} onClick={() => openEditor("relation")}>{tr("addRelation")}</Button>}>
-          <Typography.Paragraph type="secondary">{tr("relationHint")}</Typography.Paragraph>
+        <Card size="small" title={<Space size={6}><ApartmentOutlined aria-hidden="true" />{tr("relationsTitle")}<InfoHint title={tr("showHint")} text={tr("relationHint")} /></Space>} extra={<Button size="small" type="link" disabled={readOnly || contexts.length < 2} onClick={() => openEditor("relation")}>{tr("addRelation")}</Button>}>
           {relationList()}
         </Card>
         <Card size="small"><Space wrap>{readOnly
@@ -544,19 +568,44 @@ export function WorkDesktopPage() {
       </div>
       <div className="wd-overview-grid">
         <Card size="small" title={<Space><PauseCircleOutlined aria-hidden="true" />{tr("blockers")}</Space>}>{bullets("", checkpoint.blockers)}{bullets("", checkpoint.open_questions)}</Card>
-        <Card size="small" title={<Space><ClockCircleOutlined aria-hidden="true" />{tr("changes")}</Space>}>
-          <Typography.Paragraph type="secondary">{tr("changesHint")}</Typography.Paragraph>
+        <Card size="small" title={<Space size={6}><ClockCircleOutlined aria-hidden="true" />{tr("changes")}<InfoHint title={tr("showHint")} text={tr("changesHint")} /></Space>}>
           {events.length ? <div className="wd-stack">{events.slice(0, 3).map((event) => <div key={event.id}><Typography.Text>{event.title}</Typography.Text><div className="wd-muted">{formatTimestamp(event.created_at)}</div></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr("noChanges")} />}
         </Card>
       </div>
-      <Alert type="warning" showIcon title={tr("currentUnknown")} description={tr("currentUnknownHint")} />
+      <Typography.Paragraph type="secondary" className="wd-foot-note">
+        <InfoHint title={tr("currentUnknown")} text={tr("currentUnknownHint")} /> {tr("currentUnknown")}
+      </Typography.Paragraph>
     </div>;
+  }
+
+  function chatView() {
+    return <div className="wd-stack wd-chat-view">
+      <div className="wd-inline-head">
+        <Space size={6} align="center"><MessageOutlined aria-hidden="true" /><Typography.Text strong>{tr("chatTab")}</Typography.Text></Space>
+        <Space size={8} align="center">
+          <InfoHint title={tr("showHint")} text={tr("chatIntro")} />
+          {!readOnly && <Button size="small" loading={organizeMutation.isPending} onClick={() => organizeMutation.mutate()}>{tr("organize")}</Button>}
+        </Space>
+      </div>
+      {chatSessionId
+        ? <WorkChatDock sessionId={chatSessionId} token={token || null} onTurnEnd={invalidateDetail} />
+        : <div className="wd-center wd-chat-empty"><Empty description={tr("chatNoTopic")} />{!readOnly && <Button type="primary" icon={<PlusOutlined aria-hidden="true" />} onClick={() => openEditor("session")}>{tr("chatNewTopic")}</Button>}</div>}
+    </div>;
+  }
+
+  function filesView() {
+    if (!filesRoot) {
+      return <div className="wd-center wd-chat-empty"><Empty description={tr("filesNoRoot")} />{!readOnly && <Button icon={<PlusOutlined aria-hidden="true" />} onClick={() => openEditor("resource")}>{tr("addResource")}</Button>}</div>;
+    }
+    return <div className="wd-files-view"><FilesPanel mode="dock" cwd={filesRoot} fillContainer /></div>;
   }
 
   function conversationsView() {
     return <div className="wd-stack">
-      <Alert type="info" showIcon title={tr("topicHint")} />
-      <Space wrap><Button type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("session")}>{tr("newSession")}</Button></Space>
+      <div className="wd-inline-head">
+        <Space size={6} align="center"><CommentOutlined aria-hidden="true" /><Typography.Text strong>{tr("conversations")}</Typography.Text><InfoHint title={tr("showHint")} text={tr("topicHint")} /></Space>
+        <Button size="small" type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("session")}>{tr("newSession")}</Button>
+      </div>
       {sessions.length ? <div className="wd-topic-records">{sessions.map((link) => <Card key={link.id} size="small" title={link.topic || tr("topicName")} extra={<Typography.Text type="secondary">{formatTimestamp(link.created_at)}</Typography.Text>}>
         <div className="wd-muted wd-wrap">{link.session_id}</div>
         <Space wrap style={{ marginTop: 12 }}>
@@ -569,8 +618,10 @@ export function WorkDesktopPage() {
 
   function tasksView() {
     return <div className="wd-stack">
-      <Alert type="info" showIcon title={tr("taskBoundary")} description={tr("delegationHint")} />
-      <Space wrap><Button type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("delegate")}>{tr("delegate")}</Button><Button icon={<ProfileOutlined aria-hidden="true" />} onClick={() => navigate("/taskboard")}>{tr("actualBoard")}</Button></Space>
+      <div className="wd-inline-head">
+        <Space size={6} align="center"><ProfileOutlined aria-hidden="true" /><Typography.Text strong>{tr("tasks")}</Typography.Text><InfoHint title={tr("taskBoundary")} text={tr("delegationHint")} /></Space>
+        <Space size={6}><Button size="small" type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("delegate")}>{tr("delegate")}</Button><Button size="small" icon={<ProfileOutlined aria-hidden="true" />} onClick={() => navigate("/taskboard")}>{tr("actualBoard")}</Button></Space>
+      </div>
       {delegations.length ? delegations.map((delegation) => {
         const card = delegation.card ?? undefined;
         return <Card size="small" className="wd-task" key={delegation.id} title={<Space wrap><span>{delegation.title}</span>{card && <Tag color={cardStatusColor[card.status] ?? "default"}>{trLabel("cardStatus", card.status)}</Tag>}</Space>}>
@@ -593,12 +644,14 @@ export function WorkDesktopPage() {
 
   function knowledgeView() {
     return <div className="wd-stack">
-      <Alert type="info" showIcon title={tr("recallHint")} description={tr("governanceHint")} />
+      <div className="wd-inline-head">
+        <Space size={6} align="center"><FileTextOutlined aria-hidden="true" /><Typography.Text strong>{tr("knowledge")}</Typography.Text><InfoHint title={tr("showHint")} text={`${tr("recallHint")} ${tr("governanceHint")}`} /></Space>
+        <Space size={6}><Typography.Text type="secondary">{tr("searchCount", { count: facts.length })}</Typography.Text><Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("fact")}>{tr("addFact")}</Button></Space>
+      </div>
       <div className="wd-recall-tools">
         <Input prefix={<SearchOutlined aria-hidden="true" />} aria-label={tr("recallPlaceholder")} placeholder={tr("recallPlaceholder")} value={recallQuery} allowClear onChange={(event) => setRecallQuery(event.target.value)} />
         <Select aria-label={tr("recallScope")} value={recallScope} onChange={setRecallScope} options={[{ value: "current", label: tr("scopeCurrent") }, { value: "related", label: tr("scopeRelated") }, { value: "all", label: tr("scopeAll") }]} />
       </div>
-      <Space wrap><Typography.Text type="secondary">{tr("searchCount", { count: facts.length })}</Typography.Text><Button size="small" icon={<PlusOutlined aria-hidden="true" />} disabled={readOnly} onClick={() => openEditor("fact")}>{tr("addFact")}</Button></Space>
       {recallResult.isLoading ? <Spin /> : facts.length ? facts.map((fact) => <Card key={fact.id} size="small" className="wd-knowledge" title={<Space wrap><Tag>{trLabel("factKind", fact.kind)}</Tag><span>{fact.title}</span></Space>} extra={<Tag color={factStatusColor[fact.status] ?? "default"}>{trLabel("factStatus", fact.status)}</Tag>}>
         <Typography.Paragraph>{fact.content}</Typography.Paragraph>
         <div className="wd-muted">{tr("factScopeLabel")} · {fact.scope || tr("noItems")}</div>
@@ -622,7 +675,9 @@ export function WorkDesktopPage() {
 
   function timelineView() {
     return <div className="wd-stack">
-      <Typography.Paragraph type="secondary">{tr("timelineHint")}</Typography.Paragraph>
+      <div className="wd-inline-head">
+        <Space size={6} align="center"><ClockCircleOutlined aria-hidden="true" /><Typography.Text strong>{tr("timeline")}</Typography.Text><InfoHint title={tr("showHint")} text={tr("timelineHint")} /></Space>
+      </div>
       {events.length ? <Timeline items={events.map((event) => ({ content: <div><Typography.Text strong>{event.title}</Typography.Text><div className="wd-muted">{event.source || tr("noItems")} · {formatTimestamp(event.created_at)}</div></div> }))} /> : <Empty description={tr("noChanges")} />}
     </div>;
   }

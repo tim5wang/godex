@@ -14,16 +14,17 @@ import (
 // caller-supplied tenant or desktop ID. Knowing an ID grants no extra access.
 func (s *Service) newWorkContextTool(sessionID string) tools.Tool {
 	type args struct {
-		Action     string                 `json:"action"`
-		Query      string                 `json:"query"`
-		Scope      string                 `json:"scope"`
-		IfVersion  int                    `json:"if_version"`
-		Checkpoint workcontext.Checkpoint `json:"checkpoint"`
-		Fact       workcontext.FactInput  `json:"fact"`
+		Action       string                 `json:"action"`
+		Query        string                 `json:"query"`
+		Scope        string                 `json:"scope"`
+		IfVersion    int                    `json:"if_version"`
+		Checkpoint   workcontext.Checkpoint `json:"checkpoint"`
+		Fact         workcontext.FactInput  `json:"fact"`
+		SupersedesID string                 `json:"supersedes_id"`
 	}
-	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the explicitly linked work stream, recall related knowledge, save a checkpoint or propose evidence-backed knowledge. Cannot confirm facts, accept tasks, change permissions or query production automatically.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall related knowledge, save the checkpoint, and record evidence-backed facts. Use it proactively while working: update the checkpoint as progress happens, propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. It cannot confirm facts, accept tasks, change permissions or query production automatically.", map[string]interface{}{
 		"type": "object", "properties": map[string]interface{}{
-			"action":     map[string]interface{}{"type": "string", "enum": []string{"get", "brief", "recall", "checkpoint", "propose_fact"}},
+			"action":     map[string]interface{}{"type": "string", "enum": []string{"get", "brief", "recall", "checkpoint", "propose_fact", "supersede"}},
 			"query":      map[string]string{"type": "string"},
 			"scope":      map[string]interface{}{"type": "string", "enum": []string{"current", "related", "all"}},
 			"if_version": map[string]string{"type": "integer"},
@@ -65,6 +66,16 @@ func (s *Service) newWorkContextTool(sessionID string) tools.Tool {
 			out, err = store.SaveCheckpoint(ctx, scope, id, input.IfVersion, input.Checkpoint)
 		case "propose_fact":
 			input.Fact.Provenance = "derived"
+			out, err = store.CreateFact(ctx, scope, id, input.Fact)
+		case "supersede":
+			// Replace an outdated fact by referencing it: the predecessor is only
+			// retired once the replacement is reviewed and confirmed, so this is a
+			// proposal, not a silent overwrite.
+			if strings.TrimSpace(input.SupersedesID) == "" {
+				return tools.ToolResult{}, fmt.Errorf("supersede requires supersedes_id")
+			}
+			input.Fact.Provenance = "derived"
+			input.Fact.SupersedesID = strings.TrimSpace(input.SupersedesID)
 			out, err = store.CreateFact(ctx, scope, id, input.Fact)
 		default:
 			return tools.ToolResult{}, fmt.Errorf("unknown work_context action")

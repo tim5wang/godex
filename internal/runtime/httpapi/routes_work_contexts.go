@@ -158,6 +158,9 @@ func registerWorkContextRoutes(mux *http.ServeMux, service *backend.Service, pro
 	handle("POST /v1/work-contexts/{id}/delegations/{delegationID}/capture", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		return service.CaptureWorkResult(r.Context(), scope, id(r), r.PathValue("delegationID"))
 	})
+	handle("POST /v1/work-contexts/{id}/organize", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
+		return service.OrganizeWorkContext(r.Context(), scope, id(r))
+	})
 	handle("GET /v1/work-contexts/{id}/events", func(r *http.Request, s *workcontext.Store, scope workcontext.Scope) (any, error) {
 		detail, err := s.Get(r.Context(), scope, id(r))
 		if err != nil {

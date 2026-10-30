@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tim5wang/godex/internal/core/memory"
 	"github.com/tim5wang/godex/internal/core/workcontext"
+	"github.com/tim5wang/godex/internal/domain/message"
 	"github.com/tim5wang/godex/internal/plugins/taskboard"
 )
 
@@ -287,6 +288,51 @@ func (s *Service) LinkWorkSession(ctx context.Context, scope workcontext.Scope, 
 		}
 	}
 	return store.LinkSession(ctx, scope, id, workcontext.SessionLink{SessionID: sessionID, Topic: input.Topic})
+}
+
+// workMaintenancePrompt is the maintenance sweep task. It is deliberately
+// maintenance-only: it must not run delegated work or touch production, so it
+// cannot be mistaken for a work turn.
+const workMaintenancePrompt = `[工作记忆维护 · 维护任务，不是工作请求]
+
+请只基于本主线已存在的信息完成一次巡检，不要调用任何执行类工具，不要运行命令，不要查询生产环境：
+1. 读取本主线上下文（work_context action=get）与已保存事实（action=recall）。
+2. 更新检查点（work_context action=checkpoint）：把已完成项移入 completed，更新 next_actions、blockers、open_questions，summary 反映当前真实进展。改写前先取当前 version，冲突则重读再来。
+3. 沉淀知识：把已经确认、仍需保留的事实用 work_context action=propose_fact 记录；每条都要带 scope、source 与 observed_at。
+4. 解决冲突：若同一对象的旧事实与新事实矛盾，提出用带 supersedes_id 的新事实替代，不要直接覆盖；无法核实的一律保留为待确认。
+5. 用中文简短汇报：更新了什么、发现哪些冲突或过期项、需要我确认什么。
+
+无法确认为当前生产事实的内容，标注为未核实，不要断言。`
+
+// OrganizeWorkContext runs an on-demand maintenance sweep: it enqueues one
+// maintenance-only turn on the stream's linked session so the Agent (with the
+// work_context tool) actually reorganizes the checkpoint and facts. A stream
+// with no linked conversation is refused instead of silently creating one.
+func (s *Service) OrganizeWorkContext(ctx context.Context, scope workcontext.Scope, id string) (map[string]any, error) {
+	store, err := s.WorkContexts()
+	if err != nil {
+		return nil, err
+	}
+	detail, err := store.Get(ctx, scope, id)
+	if err != nil {
+		return nil, err
+	}
+	if detail.Context.Status == "archived" {
+		return nil, workcontext.ErrArchived
+	}
+	if len(detail.Sessions) == 0 {
+		return nil, fmt.Errorf("%w: link a topic conversation first", workcontext.ErrInvalid)
+	}
+	sessionID := detail.Sessions[0].SessionID
+	envelope := message.NewRuntimeEnvelope(message.SourceBackground, sessionID, "work-maintenance", workMaintenancePrompt, s.now(), map[string]string{"work_context_id": id})
+	result, err := s.SubmitAsync(ctx, sessionID, envelope, SubmitOptions{QueueMode: QueueModeFollowUp})
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RecordEvent(ctx, scope, id, "maintenance_queued", "已提交 AI 记忆整理", "desktop", "maintenance:"+s.now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return nil, err
+	}
+	return map[string]any{"queued": true, "session_id": sessionID, "turn_id": result.TurnID}, nil
 }
 
 // ProposeWorkMemory only bridges an explicitly reviewed item to the existing

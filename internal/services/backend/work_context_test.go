@@ -173,3 +173,32 @@ func TestWorkContextSessionFeedbackRefreshesWithoutChangingIdentity(t *testing.T
 		}
 	}
 }
+
+func TestOrganizeWorkContextRefusesUnlinkedStream(t *testing.T) {
+	cfg := newTestConfig(t)
+	service := newTestService(cfg, &stubCaller{})
+	store, err := service.WorkContexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.CloseWorkContexts()
+	ctx := context.Background()
+	scope := workcontext.Scope{OwnerID: "local-operator"}
+	stream, err := store.Create(ctx, scope, workcontext.ContextInput{Title: "未绑定对话", Goal: "巡检"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// On-demand maintenance runs ON the linked conversation; a stream without one
+	// must be refused rather than silently creating or picking a session.
+	if _, err := service.OrganizeWorkContext(ctx, scope, stream.ID); err == nil {
+		t.Fatal("organize accepted a stream with no linked session")
+	}
+	archivedStatus := "archived"
+	archived, err := store.Patch(ctx, scope, stream.ID, workcontext.ContextPatch{IfVersion: stream.Version, Status: &archivedStatus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.OrganizeWorkContext(ctx, scope, archived.ID); err == nil {
+		t.Fatal("organize accepted an archived stream")
+	}
+}

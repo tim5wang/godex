@@ -402,7 +402,10 @@ test("delegates to a real card without auto-running it, then executes and review
   test.skip((page.viewportSize()?.width ?? 0) < 1024);
   const store = await install(page, seededStore());
   await page.goto("/work-desktop?context=ctx-1&tab=tasks");
-  await expect(page.getByText("委派会创建真实任务卡，但不会自动执行；执行、验收与退回都由你手动触发，代理不得自行完成。", { exact: true })).toBeVisible();
+  // The delegation boundary is a hover hint now (it used to occupy a full-width alert);
+  // the icon still carries the full explanation as its accessible name.
+  const delegHint = page.getByRole("note", { name: /委派会创建真实任务卡/ });
+  await expect(delegHint).toHaveAttribute("aria-label", /委派保存即时输入快照（检查点版本、资源与开放点），任务状态以看板卡为准。$/);
   await expect(page.getByText("能从部署记录定位回滚目标", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: rx("委派工作") }).first().click();
@@ -462,5 +465,8 @@ test("opens without a configured provider and honours the English locale", async
   await expect(page.getByRole("heading", { name: "Speech service · operations", exact: false })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "语音服务 · 长期维护", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: rx("Restore context") })).toBeVisible();
-  await expect(page.getByText("Personal SQLite store", { exact: true })).toBeVisible();
+  // The permanent store banner was removed to reclaim vertical space; the English
+  // locale is now proven by the localized tab labels and the work-memory hint.
+  await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("note", { name: /AI maintenance/ })).toBeVisible();
 });

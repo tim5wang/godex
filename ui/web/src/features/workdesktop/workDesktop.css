@@ -8,6 +8,27 @@
 /* .wd-store is the persistent "personal SQLite store" banner; it replaced the old
    prototype banner and keeps the same bottom spacing. */
 .wd-store { margin-bottom: 16px; }
+/* .wd-notice is the compact notice used inside the working layout (invalid
+   stream, read-only, load error): it keeps the warning visible without the
+   banner's vertical cost. */
+.wd-notice { margin-bottom: 10px; }
+.wd-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.wd-title-row .wd-title { margin: 0; overflow-wrap: anywhere; }
+.wd-subtitle { margin: 2px 0 0; }
+/* .wd-inline-head is the compact header each tab uses instead of a full-width
+   Alert: icon + title + a hover info hint on the left, actions on the right. */
+.wd-inline-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.wd-hint { cursor: help; font-size: 13px; }
+.wd-foot-note { margin: 0; display: flex; align-items: center; gap: 6px; }
+/* Embedded chat + files keep the working context inside the desktop instead of
+   navigating to the Chat / Files pages. */
+.wd-chat-view, .wd-files-view { min-width: 0; }
+.wd-chat-dock { display: flex; flex-direction: column; border: 1px solid var(--godex-border); border-radius: 8px; background: var(--godex-panel); min-height: 420px; height: min(72vh, 760px); }
+.wd-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--godex-border); }
+.wd-chat-feed { flex: 1; min-height: 0; overflow: hidden; }
+.wd-chat-empty { min-height: 220px; gap: 12px; }
+.wd-chat-composer { border-top: 1px solid var(--godex-border); padding: 6px 8px; }
+.wd-files-view { height: min(76vh, 820px); }
 .wd-center { display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; min-height: 320px; text-align: center; }
 .wd-empty-card { max-width: 720px; }
 .wd-fact-line { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--godex-border); }
@@ -40,11 +61,10 @@
 .wd-status-paused { background: var(--godex-warning); }
 .wd-focus-hint { font-size: 12px; line-height: 1.7; margin-top: 0; }
 .wd-main { min-width: 0; }
-.wd-context-header { display: flex; flex-direction: column; gap: 4px; padding-bottom: 16px; }
+.wd-context-header { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; }
 .wd-context-header .wd-title { margin: 12px 0 8px; overflow-wrap: anywhere; }
-.wd-context-header .ant-typography { margin-bottom: 8px; }
-.wd-stat-row { display: flex; gap: 20px; flex-wrap: wrap; color: var(--godex-muted); font-size: 12px; padding: 14px 0; border-block: 1px solid var(--godex-border); }
-.wd-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.wd-stat-row { display: flex; gap: 20px; flex-wrap: wrap; color: var(--godex-muted); font-size: 12px; padding: 8px 0; border-bottom: 1px solid var(--godex-border); }
+.wd-stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .wd-next-card { border-top: 3px solid var(--godex-accent); }
 .wd-next-list { margin: 6px 0 16px; padding-left: 22px; }
 .wd-next-list li { padding: 4px 0; line-height: 1.6; }

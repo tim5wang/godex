@@ -269,7 +269,13 @@ FTS5 是可重建投影，只索引允许检索的标题/背景/检查点/授权
 
 统一错误：400 输入、401 未登录、403/404 按现有防枚举策略、409 版本/依赖冲突、422 来源/环境缺失、503 节点或连接器不可达。请求大小、分页、超时和检索上限均受控。
 
-Agent 先新增一个 `work_context` 工具，actions 按实际阶段开放：list/get/checkpoint/brief/recall/link/delegate/propose_fact。不会因为知道 context ID 就获得文件或生产权限；已有 taskboard 工具仍是执行状态的权威入口。
+Agent 的 `work_context` 工具（桌面联动会话默认激活）：actions = get/brief/recall/checkpoint/propose_fact/supersede。`propose_fact` 只在有 scope/source/observed_at 时写入候选事实；`supersede` 通过 `supersedes_id` 引用旧事实提出替代（前任只在替代被确认后才作废，不静默覆盖）。工作记忆由 Agent 随工作过程主动维护，而不是靠人逐项填表单：
+
+- **工具层（Agent 主动维护）**：会话与主线绑定时注入维护规约提示（何时更新检查点、何时沉淀事实、冲突时如何替代、何类内容标为未核实），Agent 在轮次边界调用 `work_context` 完成更新。
+- **按需整理**：`POST /v1/work-contexts/{id}/organize` 在主线已绑定的会话上排入一个**仅维护**轮次（`source=background`，提示明确要求不执行、不查生产），由 Agent 巡检并报告；无绑定会话或已归档时拒绝，不静默新建会话。
+- **定期整理/冲突解决**：由既有 cron/heartbeat 周期性触发同一 organize 入口，不在桌面里另造定时器。
+
+`work_context` 不会因为知道 context ID 就获得文件或生产权限；已有 taskboard 工具仍是执行状态的权威入口。
 
 ## 8. 代码落点与依赖
 
@@ -326,6 +332,12 @@ ui/web/src/pages/WorkDesktopPage.tsx    # 与既有页面同样的 re-export
 - 先连接 Git/评测/部署等高信号只读来源；Screenpipe 无强依赖。
 - 验收：真实问题集区分“当时”与“现在”；冲突不静默覆盖；过期标记不能误作 false；拒绝来源注入。
 
+### WD3.5：桌面密度与 Agent 主动记忆维护（2026-10-30）
+
+- 移除占用纵向空间的常驻说明（存储 banner、各 Tab 的整宽提示），改为悬浮 info 图标（`InfoHint`，`role="note"` 带完整 `aria-label`）；头部合并为标题行 + 小尺寸按钮，统计行压缩。
+- 在每个桌面内嵌两个面板，避免跳转聊天路由打断工作上下文：`chat`（复用桌面会话本身的 snapshot + SSE + MessageFeedV2 + Composer，独立 chat store 实例）与 `files`（复用 `FilesPanel mode="dock" fillContainer`，root 取主线绑定的 directory 资源）。两个 Tab 都指向**已绑定会话/目录**，不新建。
+- AI 维护入口按上文 §7：`supersede` action + `POST .../organize`。
+
 ### WD4：按实际效果增强
 
 - 团队共享、增量推送、更好中文/语义召回、可选采集器、PG 迁移。
@@ -359,7 +371,13 @@ ui/web/src/pages/WorkDesktopPage.tsx    # 与既有页面同样的 re-export
   - `pnpm exec playwright test e2e/work-desktop.spec.ts`：14 passed / 4 skipped（深交互用例在小屏跳过）。
 - 已知的仓库既有失败（与本次改动无关，基线同样失败）：`internal/architecture` 的 `TestFrontendSourceLineBudget`（`ChatPageView.tsx` 920 行）与 `TestGoFunctionComplexityBudget`（`routes_account.go:registerMemberRoutes` score 45）；另有 `internal/runtime/cron`、`internal/core/background`、`services/backend` TempDir 清理在满负载下的偶发 flake，单测隔离运行通过。
 
-### 11.3 后续实现门禁
+### 11.3 WD3.5 实际验证记录（2026-10-30）
+
+- 后端：`work_context` 工具新增 `supersede`（缺 `supersedes_id` 拒绝）；`OrganizeWorkContext` 在无绑定会话时报错、归档主线报 `ErrArchived`；新增路由 `POST /v1/work-contexts/{id}/organize`；新增单测 `TestOrganizeWorkContextRefusesUnlinkedStream`。
+- 前端：移除顶部常驻 banner 与各 Tab 整宽提示，改 `InfoHint` 悬浮；新增 `chat`/`files` 内嵌 Tab 与 `WorkChatDock`；`pnpm typecheck`、`pnpm build`、`pnpm vitest run src/i18n test/accountSurfacesI18n.test.ts`（9 通过）、`src/features/workdesktop`（12 通过）均通过；`playwright test e2e/work-desktop.spec.ts --project=chromium-desktop` 6 passed。
+- 无新增依赖（复用 antd `Tooltip`、既有 `FilesPanel`/`MessageFeedV2`/`Composer`/`FilesPanel`）。
+
+### 11.4 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。
 - 前端：i18n 全量对齐、视图模型测试、真实 `pnpm build`（tsc -b + Vite）、现有单测。

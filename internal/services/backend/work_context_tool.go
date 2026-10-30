@@ -22,9 +22,9 @@ func (s *Service) newWorkContextTool(sessionID string) tools.Tool {
 		Fact         workcontext.FactInput  `json:"fact"`
 		SupersedesID string                 `json:"supersedes_id"`
 	}
-	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall related knowledge, save the checkpoint, and record evidence-backed facts. Use it proactively while working: update the checkpoint as progress happens, propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. It cannot confirm facts, accept tasks, change permissions or query production automatically.", map[string]interface{}{
+	return tools.NewTypedTool(tools.NewToolSpec("work_context", "Read the work stream this session is linked to, recall related knowledge, save the checkpoint, and record evidence-backed facts. list_streams searches your other streams by keyword when you need to find or reference a different one. Use it proactively while working: update the checkpoint as progress happens, propose facts for conclusions with sources, and supersede an outdated fact by id instead of editing it. It cannot confirm facts, accept tasks, change permissions or query production automatically.", map[string]interface{}{
 		"type": "object", "properties": map[string]interface{}{
-			"action":     map[string]interface{}{"type": "string", "enum": []string{"get", "brief", "recall", "checkpoint", "propose_fact", "supersede"}},
+			"action":     map[string]interface{}{"type": "string", "enum": []string{"list_streams", "get", "brief", "recall", "checkpoint", "propose_fact", "supersede"}},
 			"query":      map[string]string{"type": "string"},
 			"scope":      map[string]interface{}{"type": "string", "enum": []string{"current", "related", "all"}},
 			"if_version": map[string]string{"type": "integer"},
@@ -49,11 +49,15 @@ func (s *Service) newWorkContextTool(sessionID string) tools.Tool {
 		if err != nil {
 			return tools.ToolResult{}, err
 		}
-		if id == "" {
+		// list_streams searches the caller's own streams and does not need this
+		// session to be bound; every other action is scoped to the bound stream.
+		if strings.TrimSpace(input.Action) != "list_streams" && id == "" {
 			return tools.ToolResult{}, fmt.Errorf("this session is not linked to a work desktop; link it in Work Desktop first")
 		}
 		var out any
 		switch strings.TrimSpace(input.Action) {
+		case "list_streams":
+			out, err = store.SearchContexts(ctx, scope, input.Query)
 		case "get", "brief":
 			out, err = store.Get(ctx, scope, id)
 		case "recall":

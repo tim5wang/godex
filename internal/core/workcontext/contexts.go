@@ -33,6 +33,40 @@ func (s *Store) List(ctx context.Context, scope Scope) ([]Context, error) {
 	return out, nil
 }
 
+// SearchContexts returns the caller's non-archived streams whose indexed text
+// (title, background, checkpoint) matches the query. An empty query is List. The
+// projection is pre-segmented (see indexingText), so a two-character CJK query
+// can match checkpoint text, not just the stream title.
+func (s *Store) SearchContexts(ctx context.Context, scope Scope, query string) ([]Context, error) {
+	terms := recallTerms(query)
+	if len(terms) == 0 {
+		return s.List(ctx, scope)
+	}
+	tenantID, ownerID := scopeArgs(scope)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.title, c.background, c.goal, c.status, c.version, c.checkpoint_json, c.created_at, c.updated_at
+		FROM wc_contexts_fts f
+		JOIN wc_contexts c ON c.tenant_id = f.tenant_id AND c.id = f.id
+		WHERE f.tenant_id = ? AND f.owner_id = ? AND c.status <> 'archived' AND wc_contexts_fts MATCH ?
+		ORDER BY c.updated_at DESC, c.id`, tenantID, ownerID, ftsMatchExpr(terms))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Context{}
+	for rows.Next() {
+		item, err := scanContextRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // Create inserts a new active work context owned by scope.
 func (s *Store) Create(ctx context.Context, scope Scope, input ContextInput) (Context, error) {
 	if err := requiredText("title", input.Title); err != nil {
@@ -385,10 +419,13 @@ func indexContextTx(ctx context.Context, tx *sql.Tx, tenantID, ownerID, id, titl
 		// Archived contexts are excluded from recall.
 		return nil
 	}
-	text := strings.Join([]string{title, background, cp.Summary,
+	text := indexingText(title, background, cp.Summary,
 		strings.Join(cp.Completed, " "), strings.Join(cp.InProgress, " "),
 		strings.Join(cp.NextActions, " "), strings.Join(cp.Blockers, " "),
-		strings.Join(cp.OpenQuestions, " ")}, "\n")
+		strings.Join(cp.OpenQuestions, " "))
+	if text == "" {
+		return nil
+	}
 	_, _ = tx.ExecContext(ctx, `INSERT INTO wc_contexts_fts(tenant_id, id, owner_id, text) VALUES(?, ?, ?, ?)`,
 		tenantID, id, ownerID, text)
 	return nil

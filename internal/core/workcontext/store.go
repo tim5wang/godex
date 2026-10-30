@@ -18,7 +18,7 @@ import (
 )
 
 // schemaVersion is the current ordered migration version.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // statusArkid is the terminal read-only status.
 const statusArchived = "archived"
@@ -105,6 +105,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.rebuildSearchIndexes(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -156,6 +160,112 @@ func (s *Store) applyMigration(version int, statements []string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// rebuildSearchIndexes regenerates the FTS projections from the fact rows. The
+// projections are rebuildable derived data, so this healing pass runs on every
+// open: it repairs facts written before the facts index existed, and re-indexes
+// rows whose projection write failed. It is best-effort after the first pass and
+// does not fail Open once the tables exist.
+func (s *Store) rebuildSearchIndexes() error {
+	rows, err := s.db.Query(`
+		SELECT tenant_id, id, context_id, title, content, kind, scope, subject, predicate,
+		       source, source_excerpt, source_revision, observed_at, verified_at,
+		       provenance, supersedes_id, memory_candidate_id, version, created_at
+		FROM wc_facts`)
+	if err != nil {
+		return err
+	}
+	items := []struct {
+		tenantID string
+		fact     Fact
+	}{}
+	for rows.Next() {
+		var tenantID string
+		var item Fact
+		err := rows.Scan(&tenantID, &item.ID, &item.ContextID, &item.Title, &item.Content, &item.Kind, &item.Status,
+			&item.Scope, &item.Subject, &item.Predicate, &item.Source, &item.SourceExcerpt, &item.SourceRevision,
+			&item.ObservedAt, &item.VerifiedAt, &item.Provenance, &item.SupersedesID, &item.MemoryCandidateID,
+			&item.Version, &item.CreatedAt)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, struct {
+			tenantID string
+			fact     Fact
+		}{tenantID, item})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, entry := range items {
+		item := entry.fact
+		if item.Status == "superseded" || item.Status == "rejected" {
+			_, _ = s.db.Exec(`DELETE FROM wc_facts_fts WHERE tenant_id=? AND fact_id=?`, entry.tenantID, item.ID)
+			continue
+		}
+		text := indexingText(item.Title, item.Subject, item.Predicate, item.Content, item.Scope)
+		if _, err := s.db.Exec(`DELETE FROM wc_facts_fts WHERE tenant_id=? AND fact_id=?`, entry.tenantID, item.ID); err != nil {
+			continue
+		}
+		if text == "" {
+			continue
+		}
+		_, _ = s.db.Exec(`INSERT INTO wc_facts_fts(tenant_id, context_id, fact_id, text) VALUES(?, ?, ?, ?)`,
+			entry.tenantID, item.ContextID, item.ID, text)
+	}
+	// Contexts projection is also derived data; rebuild it so a stream saved before
+	// this index existed is searchable. Archived streams stay out.
+	return s.rebuildContextIndexes()
+}
+
+// rebuildContextIndexes regenerates the wc_contexts_fts projection from the
+// context rows (checkpoint text included). Best-effort per row, like the facts pass.
+func (s *Store) rebuildContextIndexes() error {
+	rows, err := s.db.Query(`
+		SELECT tenant_id, id, owner_id, title, background, checkpoint_json, status FROM wc_contexts`)
+	if err != nil {
+		return err
+	}
+	type ctxEntry struct {
+		tenantID, id, ownerID, title, background, checkpointJSON, status string
+	}
+	items := []ctxEntry{}
+	for rows.Next() {
+		var e ctxEntry
+		if err := rows.Scan(&e.tenantID, &e.id, &e.ownerID, &e.title, &e.background, &e.checkpointJSON, &e.status); err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, e)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, e := range items {
+		if _, err := s.db.Exec(`DELETE FROM wc_contexts_fts WHERE tenant_id=? AND id=?`, e.tenantID, e.id); err != nil {
+			continue
+		}
+		if e.status == statusArchived {
+			continue
+		}
+		cp := decodeCheckpoint(e.checkpointJSON)
+		text := indexingText(e.title, e.background, cp.Summary,
+			strings.Join(cp.Completed, " "), strings.Join(cp.InProgress, " "),
+			strings.Join(cp.NextActions, " "), strings.Join(cp.Blockers, " "),
+			strings.Join(cp.OpenQuestions, " "))
+		if text == "" {
+			continue
+		}
+		_, _ = s.db.Exec(`INSERT INTO wc_contexts_fts(tenant_id, id, owner_id, text) VALUES(?, ?, ?, ?)`,
+			e.tenantID, e.id, e.ownerID, text)
+	}
+	return nil
 }
 
 // migrations holds the ordered DDL. Each version is applied in one transaction.
@@ -296,6 +406,18 @@ var migrations = map[int][]string{
 			tokenize='unicode61'
 		)`,
 	},
+	2: {
+		// Facts gain their own FTS projection so knowledge recall ranks candidates
+		// with MATCH instead of a full LIKE scan. Seeded text is pre-segmented (see
+		// indexingText); the table is a rebuildable projection.
+		`CREATE VIRTUAL TABLE IF NOT EXISTS wc_facts_fts USING fts5(
+			tenant_id UNINDEXED,
+			context_id UNINDEXED,
+			fact_id UNINDEXED,
+			text,
+			tokenize='unicode61'
+		)`,
+	},
 }
 
 // --- generation ---
@@ -396,8 +518,9 @@ func nonNil(values []string) []string {
 var cjkTokenRE = regexp.MustCompile(`[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]+`)
 
 // recallTerms splits a query into lowercase terms. CJK runs are segmented into
-// unigrams and bigrams so SQLite's unicode61 tokenizer (which does not segment
-// CJK) can still match Chinese text; the raw run is also kept for LIKE recall.
+// unigrams, bigrams and the whole run so SQLite's unicode61 tokenizer (which
+// does not segment CJK on its own) can still match Chinese text. The caller uses
+// the same list for both the FTS MATCH expression and the LIKE fallback.
 func recallTerms(query string) []string {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
@@ -431,6 +554,20 @@ func recallTerms(query string) []string {
 		add(tok)
 	}
 	return out
+}
+
+// indexingText normalizes text for the FTS projection by pre-segmenting CJK
+// runs with recallTerms and joining the terms with spaces. unicode61 cannot
+// tokenize CJK, so without this step a whole Chinese run becomes one token and
+// short substrings never match; pre-segmenting writes "\u77ed\u53e5" as its own token so
+// a two-character CJK query can match. Latin text is passed through lowercased.
+func indexingText(parts ...string) string {
+	joined := strings.Join(parts, "\n")
+	terms := recallTerms(joined)
+	if len(terms) == 0 {
+		return ""
+	}
+	return strings.Join(terms, " ")
 }
 
 var tokenRE = regexp.MustCompile(`[\p{L}\p{N}_]+`)

@@ -79,6 +79,7 @@ func (s *Store) CreateFact(ctx context.Context, scope Scope, contextID string, i
 	if err := insertFactTx(ctx, tx, tenantID, ownerID, item); err != nil {
 		return Fact{}, err
 	}
+	indexFactTx(ctx, tx, tenantID, item)
 	if err := recordEventTx(ctx, tx, tenantID, contextID, "fact_created",
 		"新增事实："+item.Title, "store", "fact:"+item.ID, now); err != nil {
 		return Fact{}, err
@@ -166,6 +167,13 @@ func (s *Store) ReviewFact(ctx context.Context, scope Scope, contextID, factID s
 		if err := supersedeFactTx(ctx, tx, tenantID, contextID, item.SupersedesID); err != nil {
 			return Fact{}, err
 		}
+	}
+	// Retired facts leave the search projection so recall never surfaces them;
+	// confirmed facts stay indexed.
+	if status == "rejected" {
+		_, _ = tx.ExecContext(ctx, `DELETE FROM wc_facts_fts WHERE tenant_id=? AND fact_id=?`, tenantID, factID)
+	} else {
+		indexFactTx(ctx, tx, tenantID, item)
 	}
 	if err := recordEventTx(ctx, tx, tenantID, contextID, "fact_reviewed",
 		fmt.Sprintf("事实审阅：%s -> %s", item.Title, status), "store", fmt.Sprintf("fact_review:%s:%d", factID, item.Version), now); err != nil {
@@ -312,8 +320,13 @@ func (s *Store) recallScopeContexts(ctx context.Context, tenantID, ownerID, cont
 	}
 }
 
+// recallStatusFilterSQL excludes retired facts (superseded/rejected) from recall.
+// Stale facts are kept but marked, per the governance rule that stale means
+// "needs recheck", not false.
+const recallStatusFilterSQL = `status NOT IN ('superseded','rejected')`
+
 // factsForContexts returns all facts in the given contexts when no query is
-// provided.
+// provided, excluding retired (superseded/rejected) facts.
 func (s *Store) factsForContexts(ctx context.Context, tenantID string, contextIDs []string) ([]Fact, error) {
 	out := []Fact{}
 	for _, cid := range contextIDs {
@@ -321,14 +334,70 @@ func (s *Store) factsForContexts(ctx context.Context, tenantID string, contextID
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, items...)
+		for _, item := range items {
+			if item.Status != "superseded" && item.Status != "rejected" {
+				out = append(out, item)
+			}
+		}
 	}
 	return out, nil
 }
 
-// searchFacts ranks facts in the given contexts by term overlap using FTS plus
-// a LIKE fallback (important for CJK text).
+// searchFacts ranks facts in the given contexts by term overlap. Candidates are
+// chosen by the FTS projection (with a LIKE fallback for CJK and short terms),
+// then scored in Go by field weight; retired facts are excluded.
 func (s *Store) searchFacts(ctx context.Context, tenantID string, contextIDs, terms []string) ([]Fact, error) {
+	ids := s.ftsCandidateIDs(ctx, tenantID, contextIDs, terms)
+	likeCandidates := s.likeCandidateIDs(ctx, tenantID, contextIDs, terms)
+	for id := range likeCandidates {
+		ids[id] = struct{}{}
+	}
+	if len(ids) == 0 {
+		return []Fact{}, nil
+	}
+	return s.factsByIDs(ctx, tenantID, ids, terms)
+}
+
+// ftsCandidateIDs runs the FTS5 MATCH expression over the indexed projection and
+// returns the matching fact ids. A malformed expression (user text is quoted, so
+// this should not happen) degrades to no FTS candidates, never an error.
+func (s *Store) ftsCandidateIDs(ctx context.Context, tenantID string, contextIDs, terms []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	if len(terms) == 0 || len(contextIDs) == 0 {
+		return out
+	}
+	placeholders := make([]string, 0, len(contextIDs))
+	args := make([]any, 0, len(contextIDs)+1)
+	args = append(args, tenantID)
+	for _, cid := range contextIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, cid)
+	}
+	args = append(args, ftsMatchExpr(terms))
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT context_id, fact_id FROM wc_facts_fts
+		WHERE tenant_id=? AND context_id IN (`+strings.Join(placeholders, ",")+`)
+		  AND wc_facts_fts MATCH ?`, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, fid string
+		if rows.Scan(&cid, &fid) == nil {
+			out[fid] = struct{}{}
+		}
+	}
+	return out
+}
+
+// likeCandidateIDs is the substring fallback, important for CJK text and for
+// terms shorter than the FTS tokenizer can index.
+func (s *Store) likeCandidateIDs(ctx context.Context, tenantID string, contextIDs, terms []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	if len(terms) == 0 || len(contextIDs) == 0 {
+		return out
+	}
 	placeholders := make([]string, 0, len(contextIDs))
 	args := make([]any, 0, len(contextIDs)+len(terms))
 	args = append(args, tenantID)
@@ -342,15 +411,42 @@ func (s *Store) searchFacts(ctx context.Context, tenantID string, contextIDs, te
 		pattern := "%" + escapeLike(term) + "%"
 		args = append(args, pattern, pattern)
 	}
-	query := `
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id FROM wc_facts
+		WHERE tenant_id=? AND context_id IN (`+strings.Join(placeholders, ",")+`)
+		  AND `+recallStatusFilterSQL+`
+		  AND (`+strings.Join(likeClauses, " OR ")+`)`, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			out[id] = struct{}{}
+		}
+	}
+	return out
+}
+
+// factsByIDs loads candidate facts (excluding retired statuses), scores them
+// against the query terms and returns them ranked.
+func (s *Store) factsByIDs(ctx context.Context, tenantID string, ids map[string]struct{}, terms []string) ([]Fact, error) {
+	placeholders := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, tenantID)
+	for id := range ids {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, context_id, title, content, kind, status, scope, subject, predicate,
 		       source, source_excerpt, source_revision, observed_at, verified_at,
 		       provenance, supersedes_id, memory_candidate_id, version, created_at
 		FROM wc_facts
-		WHERE tenant_id=? AND context_id IN (` + strings.Join(placeholders, ",") + `)
-		  AND (` + strings.Join(likeClauses, " OR ") + `)
-		ORDER BY created_at DESC, id`
-	rows, err := s.db.QueryContext(ctx, query, args...)
+		WHERE tenant_id=? AND id IN (`+strings.Join(placeholders, ",")+`)
+		  AND `+recallStatusFilterSQL+`
+		ORDER BY created_at DESC, id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -430,6 +526,21 @@ func insertFactTx(ctx context.Context, tx *sql.Tx, tenantID, ownerID string, ite
 		item.Subject, item.Predicate, item.Source, item.SourceExcerpt, item.SourceRevision, item.ObservedAt, item.VerifiedAt,
 		item.Provenance, item.SupersedesID, item.MemoryCandidateID, item.Version, item.CreatedAt)
 	return err
+}
+
+// indexFactTx refreshes the FTS projection for one fact. It is a rebuildable
+// projection, so a failure must not roll back the fact write and errors are
+// intentionally swallowed (mirrors indexContextTx).
+func indexFactTx(ctx context.Context, tx *sql.Tx, tenantID string, item Fact) {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM wc_facts_fts WHERE tenant_id=? AND fact_id=?`, tenantID, item.ID); err != nil {
+		return
+	}
+	text := indexingText(item.Title, item.Subject, item.Predicate, item.Content, item.Scope)
+	if text == "" {
+		return
+	}
+	_, _ = tx.ExecContext(ctx, `INSERT INTO wc_facts_fts(tenant_id, context_id, fact_id, text) VALUES(?, ?, ?, ?)`,
+		tenantID, item.ContextID, item.ID, text)
 }
 
 // validatedPredecessorTx loads the fact a new candidate supersedes and rejects

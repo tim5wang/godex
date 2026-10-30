@@ -564,3 +564,114 @@ func TestOpenRejectsEmptyPath(t *testing.T) {
 	}
 	_ = strings.TrimSpace("")
 }
+
+// TestRecallMatchesShortChineseAndHidesRetiredFacts covers the two recall
+// upgrades: the FTS projection is pre-segmented so a two-character Chinese query
+// matches, and superseded/rejected facts never surface while stale does.
+func TestRecallMatchesShortChineseAndHidesRetiredFacts(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	a := mustCreate(t, store, testScope(), "语音服务")
+
+	retired, err := store.CreateFact(ctx, testScope(), a.ID, FactInput{
+		Title: "短句回归", Content: "旧结论：解码参数导致", Scope: `{"service":"asr"}`,
+		Source: "artifact://eval/r11", ObservedAt: "2026-10-01T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("CreateFact retired: %v", err)
+	}
+	replacement, err := store.CreateFact(ctx, testScope(), a.ID, FactInput{
+		Title: "短句回归", Content: "新结论：权重差异导致", Scope: `{"service":"asr"}`,
+		Source: "artifact://eval/r12", ObservedAt: "2026-10-29T00:00:00Z", SupersedesID: retired.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateFact replacement: %v", err)
+	}
+	if _, err := store.ReviewFact(ctx, testScope(), a.ID, replacement.ID, FactReview{Status: "confirmed", IfVersion: replacement.Version}); err != nil {
+		t.Fatalf("confirm replacement: %v", err)
+	}
+	if got := factStatus(t, store, a.ID, retired.ID); got != "superseded" {
+		t.Fatalf("predecessor status = %q, want superseded", got)
+	}
+
+	// A two-character CJK token ("短句") only matches when the index is segmented.
+	got, err := store.Recall(ctx, testScope(), a.ID, "current", "短句")
+	if err != nil {
+		t.Fatalf("Recall 短句: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("recall 短句 = %d facts, want 1 (retired hidden)", len(got))
+	}
+	if got[0].ID != replacement.ID {
+		t.Fatalf("recall 短句 returned %s, want the replacement %s", got[0].ID, replacement.ID)
+	}
+
+	// The retired text must not be reachable through its own wording either.
+	got, err = store.Recall(ctx, testScope(), a.ID, "current", "解码参数")
+	if err != nil {
+		t.Fatalf("Recall 解码参数: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("superseded fact is still recallable: %+v", got)
+	}
+
+	// Stale means "needs recheck", not false: it stays recallable.
+	stale, err := store.CreateFact(ctx, testScope(), a.ID, FactInput{
+		Title: "版本核对", Content: "待重核", Scope: `{"service":"asr"}`,
+		Source: "artifact://eval/r13", ObservedAt: "2026-10-29T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("CreateFact stale: %v", err)
+	}
+	if _, err := store.ReviewFact(ctx, testScope(), a.ID, stale.ID, FactReview{Status: "stale", IfVersion: stale.Version}); err != nil {
+		t.Fatalf("mark stale: %v", err)
+	}
+	got, err = store.Recall(ctx, testScope(), a.ID, "current", "版本核对")
+	if err != nil {
+		t.Fatalf("Recall 版本核对: %v", err)
+	}
+	if len(got) != 1 || got[0].Status != "stale" {
+		t.Fatalf("stale fact recall = %+v, want the stale fact", got)
+	}
+}
+
+// TestSearchContextsMatchesCheckpointText verifies the context FTS projection
+// is pre-segmented and readable: a two-character CJK term that only appears in
+// the checkpoint (not the title) finds the stream, and archived streams are out.
+func TestSearchContextsMatchesCheckpointText(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	a := mustCreate(t, store, testScope(), "语音服务")
+	if _, err := store.SaveCheckpoint(ctx, testScope(), a.ID, a.Version, Checkpoint{Summary: "短句回归排查完成，等待回滚清单"}); err != nil {
+		t.Fatalf("SaveCheckpoint: %v", err)
+	}
+	b := mustCreate(t, store, testScope(), "无关主线")
+
+	// "短句" appears only in A's checkpoint text.
+	got, err := store.SearchContexts(ctx, testScope(), "短句")
+	if err != nil {
+		t.Fatalf("SearchContexts: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != a.ID {
+		t.Fatalf("search 短句 = %+v, want only stream A", got)
+	}
+
+	// Empty query is List (everything, latest first).
+	all, err := store.SearchContexts(ctx, testScope(), "")
+	if err != nil || len(all) != 2 {
+		t.Fatalf("empty search = %d (%v), want 2", len(all), err)
+	}
+
+	// Archived streams are excluded from search.
+	archived := "archived"
+	if _, err := store.Patch(ctx, testScope(), b.ID, ContextPatch{Status: &archived, IfVersion: b.Version}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	got, err = store.SearchContexts(ctx, testScope(), "无关")
+	if err != nil {
+		t.Fatalf("SearchContexts archived: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("archived stream is searchable: %+v", got)
+	}
+}

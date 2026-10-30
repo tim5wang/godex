@@ -226,7 +226,7 @@ ContextPack 固定一次执行使用的背景版本、checkpoint revision、资�
 
 索引：contexts(tenant_id, owner_id, status, updated_at)、events(tenant_id, context_id, created_at, id)、facts(tenant_id, subject_ref, predicate, scope_key, status, observed_at)、双向 relation 索引、各外部引用唯一键。
 
-FTS5 是可重建投影，只索引允许检索的标题/背景/检查点/授权摘要，并携带 tenant_id/context_id 映射。参数绑定、限制长度和 token 数，不允许用户文本直接变成任意 MATCH 表达式。
+FTS5 是可重建投影，只索引允许检索的标题/背景/检查点/授权摘要，并携带 tenant_id/context_id 映射。参数绑定、限制长度和 token 数，不允许用户文本直接变成任意 MATCH 表达式。现有两张投影：`wc_contexts_fts`（主线，供 `list_streams` 检索）与 `wc_facts_fts`（事实，供 recall 选候选）。unicode61 不切分中文，因此索引文本先经应用层分词（CJK 切 unigram+bigram+整串，见 `indexingText`）再写入；投影在保存事务内增量维护，并在每次 `Open` 时按行重建（可修复早期写入或损坏的投影），与 §6.3「索引失败可重建」一致。
 
 ### 6.3 并发与跨存储一致性
 
@@ -269,7 +269,7 @@ FTS5 是可重建投影，只索引允许检索的标题/背景/检查点/授权
 
 统一错误：400 输入、401 未登录、403/404 按现有防枚举策略、409 版本/依赖冲突、422 来源/环境缺失、503 节点或连接器不可达。请求大小、分页、超时和检索上限均受控。
 
-Agent 的 `work_context` 工具（桌面联动会话默认激活）：actions = get/brief/recall/checkpoint/propose_fact/supersede。`propose_fact` 只在有 scope/source/observed_at 时写入候选事实；`supersede` 通过 `supersedes_id` 引用旧事实提出替代（前任只在替代被确认后才作废，不静默覆盖）。工作记忆由 Agent 随工作过程主动维护，而不是靠人逐项填表单：
+Agent 的 `work_context` 工具（桌面联动会话默认激活）：actions = list_streams/get/brief/recall/checkpoint/propose_fact/supersede。`list_streams` 按关键词检索本人其它主线（含检查点文本、排除归档），不需要当前会话已绑定；其余 action 都作用于已绑定主线。`propose_fact` 只在有 scope/source/observed_at 时写入候选事实；`supersede` 通过 `supersedes_id` 引用旧事实提出替代（前任只在替代被确认后才作废，不静默覆盖）。工作记忆由 Agent 随工作过程主动维护，而不是靠人逐项填表单：
 
 - **工具层（Agent 主动维护）**：会话与主线绑定时注入维护规约提示（何时更新检查点、何时沉淀事实、冲突时如何替代、何类内容标为未核实），Agent 在轮次边界调用 `work_context` 完成更新。
 - **按需整理**：`POST /v1/work-contexts/{id}/organize` 在主线已绑定的会话上排入一个**仅维护**轮次（`source=background`，提示明确要求不执行、不查生产），由 Agent 巡检并报告；无绑定会话或已归档时拒绝，不静默新建会话。
@@ -377,7 +377,17 @@ ui/web/src/pages/WorkDesktopPage.tsx    # 与既有页面同样的 re-export
 - 前端：移除顶部常驻 banner 与各 Tab 整宽提示，改 `InfoHint` 悬浮；新增 `chat`/`files` 内嵌 Tab 与 `WorkChatDock`；`pnpm typecheck`、`pnpm build`、`pnpm vitest run src/i18n test/accountSurfacesI18n.test.ts`（9 通过）、`src/features/workdesktop`（12 通过）均通过；`playwright test e2e/work-desktop.spec.ts --project=chromium-desktop` 6 passed。
 - 无新增依赖（复用 antd `Tooltip`、既有 `FilesPanel`/`MessageFeedV2`/`Composer`/`FilesPanel`）。
 
-### 11.4 后续实现门禁
+### 11.4 WD3.6 工作记忆存储与召回完善（2026-10-30）
+
+- 状态过滤：recall（有 query 与无 query 两条路径）都排除 `superseded`/`rejected`，`stale` 保留（stale 是「需重核」而非 false，符合 §5.2）。历史仍在桌面详情可见，只是不进入召回。
+- FTS 接线：`wc_facts_fts` 新投影（migration v2）承接事实候选匹配，外加 LIKE 兜底；`wc_contexts_fts` 引出 `SearchContexts` 并接入 `work_context` 的 `list_streams`，使主线索引真正可读（此前只写不读）。
+- 中文：沿用 §5.4 的「应用层分词」，索引文本预分词（探测确认 unicode61 对中文无效、trigram 仅 ≥3 字，故预分词是唯一稳妥路径）。
+- 关系跳转保持**一跳**（§5.4 明确默认一跳、有上限）；多跳 `relationWalkDepth` 仅用于写时 `wouldCycleTx` 环检测，不作为召回扩展。
+- 测试：`TestRecallMatchesShortChineseAndHidesRetiredFacts`（2 字中文命中、退役不可召回、stale 保留）、`TestSearchContextsMatchesCheckpointText`（检查点文本命中、归档排除、空串=List）。
+- 门禁：`go vet`/`go test ./internal/core/workcontext ./internal/runtime/httpapi ./internal/services/backend` 通过（`services/backend` 的 `TestHarnessMetadataRejectsUnavailableHarness` 为既有 TempDir 清理 flake，隔离复跑通过）；`make docs-check`、`git diff --check` 通过。
+- 未做（有意）：资源侧检索（资源是有界的手工清单，`ListResources` 全量返回即可）、关系多跳召回（与 §5.4 冲突）。
+
+### 11.5 后续实现门禁
 
 - 后端：SQLite migrations/reopen/version CAS、同事务事件、租户与来源鉴权、依赖环、幂等补偿、来源删除、事实时间范围；使用实际 modernc SQLite，不只 mock。
 - 前端：i18n 全量对齐、视图模型测试、真实 `pnpm build`（tsc -b + Vite）、现有单测。
